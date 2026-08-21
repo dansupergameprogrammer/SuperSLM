@@ -101,6 +101,7 @@ static_assert(alignof(t2141_gate_c_t2138_suite_side::sslm_decode_params) ==
 	              "sslm_decode_params::" #FIELD ": offsetof diverges (tests/t2138-abi-red-suite/"   \
 	              "sslm_abi.h vs include/superslm/sslm_abi.h)")
 T2141_GATE_C_T2138_PARAMS_OFFSET_CHECK(layer_budget);
+T2141_GATE_C_T2138_PARAMS_OFFSET_CHECK(struct_size);  // D-SLM3797, T-2199 Phase D review addendum
 T2141_GATE_C_T2138_PARAMS_OFFSET_CHECK(mode);
 T2141_GATE_C_T2138_PARAMS_OFFSET_CHECK(alpha_q15);
 T2141_GATE_C_T2138_PARAMS_OFFSET_CHECK(anti_lm_max_order);

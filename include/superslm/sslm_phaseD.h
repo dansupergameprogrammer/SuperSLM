@@ -1,16 +1,32 @@
 // sslm_phaseD.h -- T-2199 Phase D production surface: the artifact-carried scale constants
-// (D1), the mode-aware decode-step wrapper (D2), the free-text decode-loop wrapper (D3), and
-// the shared params-validation function D2/D3/D4 all route through.
+// (D1), the mode selector + validation (D2), the free-text decode-loop wrapper (D3), and the
+// shared params-validation function D2/D3/D4 all route through.
 //
-// This is the production copy of the interface Curie's own Phase D red suite declares
-// (tests/t2199-damped-greedy-red-suite/sslm_phaseD_stub.h) -- signatures and namespaces match
-// exactly (that is what makes the suite link, per that header's own comment: "the build seat's
-// own production copy supersedes this file exactly the way include/superslm/
-// sslm_damped_greedy.h superseded this directory's Phase A/C stub"). The two artifact functions
-// and the two decode-loop functions below therefore live in `namespace superslm_test_phaseD`,
-// matching the stub's own choice -- a naming quirk inherited from the suite's own scaffolding,
-// not a design decision this build made; a records-only rename is open for a later pass if
-// wanted, without any functional change.
+// T-2199 Phase D review fix S5 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md), 2026-08-20: this
+// surface now lives in `namespace superslm` -- the real production namespace, not the
+// suite-scaffolding `superslm_test_phaseD` this file previously matched (the review: "production
+// C-ABI surface ships under a test-named namespace and header ... on a repo that is a public
+// portfolio artifact, that should not be what ships"). The suite's own
+// `tests/t2199-damped-greedy-red-suite/sslm_phaseD_stub.h` simply `#include`s this header and
+// every suite `.cpp` file brings both `using namespace superslm;` and
+// `using namespace superslm_test_phaseD;` into scope (verified: no suite file qualifies any
+// symbol as `superslm_test_phaseD::`), so relocating here needs no suite-side edit to keep
+// linking -- an empty `namespace superslm_test_phaseD {}` is kept at the bottom of this file
+// purely so that `using namespace superslm_test_phaseD;` remains valid syntax.
+//
+// `sslm_decode_step_damped_greedy`/`sslm_decode_params_damped_greedy` (below) are KEPT, not
+// deleted, even though S5 also flags them as "precisely the versioned successor struct plus
+// parallel entry point Sec8 D1 ruled against, now shipping alongside the additive-field shape
+// the ruling chose. Only one was ruled." -- correct, and NOT fixed here: `phaseD2_wiring_red.cpp`
+// / `phaseD2a_cost_ratio_red.cpp` / `phaseD3_teardown_red.cpp` (test files, outside this build's
+// writable scope) construct their own primary cells by calling
+// `sslm_decode_step_damped_greedy(...)` directly -- deleting it would be red-by-link across three
+// suite files, not a build-time fix. The wrapper below is now explicitly a thin, suite-
+// compatibility SHIM over the real, additive-field `sslm_decode_step`/`sslm_decode_params`
+// (which IS the production-recommended path -- see `tools/sslm_generate.cpp`'s own S4 CLI wiring,
+// which calls the real ABI directly, never this wrapper). Routed to the suite owner: migrate
+// those three cells onto `sslm_decode_step`/`sslm_decode_params` directly, then this wrapper and
+// `sslm_decode_params_damped_greedy` can be deleted in the same pass.
 //
 // Design of record: Claude/Plans/superslm-1p2-fsd-plan-2026-08-19.md Sec8 Phase D, Sec9
 // dimensions 1-3/5/6/7/9/10. Binding rulings: D-SLM3794 (Decision A mechanism -- additive
@@ -30,17 +46,12 @@
 #include "superslm/model.h"
 #include "superslm/sslm_abi.h"
 
-namespace superslm_test_phaseD {
+namespace superslm {
 
 // --- D1: Decision A's artifact-carried scale constants (plan Sec8 B1, Sec3 Option 1) ---------
 //
-// The real flag value lives at superslm::kDampedGreedyConstantsScaleFlag (include/superslm/
-// artifact.h) -- not re-declared here under this namespace, since the suite's own
-// sslm_phaseD_stub.h already declares a same-named PRESUMPTIVE constant in THIS namespace
-// (superslm_test_phaseD) for the suite's own use; a second declaration of the same name here
-// would collide with it (and with superslm::'s own copy) the moment a translation unit's
-// `using namespace superslm; using namespace superslm_test_phaseD;` brings both into one
-// unqualified scope, exactly the ambiguity this comment exists to head off.
+// The real flag value lives at superslm::kDampedGreedyArtifactConstantsFlag (include/superslm/
+// artifact.h).
 
 struct DampedGreedyScaleConstants {
 	int64_t scale_mantissa_m;
@@ -85,7 +96,7 @@ enum class DampedGreedyMode : int32_t { kGreedy = 0, kDampedGreedy = 1 };
 struct sslm_decode_params_damped_greedy {
 	int32_t layer_budget;
 	DampedGreedyMode mode;
-	int64_t alpha_q15;
+	int32_t alpha_q15;  // C2 fix: int32_t per plan Sec2.5, matches sslm_decode_params (sslm_abi.h)
 	int32_t anti_lm_max_order;
 	int32_t top_k;
 	int64_t q_ln2;
@@ -96,7 +107,7 @@ struct sslm_decode_params_damped_greedy {
 // --- D2/D3 shared: params validation (plan Sec9 dim2) -----------------------------------------
 struct DampedGreedyValidationParams {
 	DampedGreedyMode mode;
-	int64_t alpha_q15;
+	int32_t alpha_q15;  // C2 fix: int32_t, see sslm_decode_params_damped_greedy's own comment
 	int32_t anti_lm_max_order;
 	int32_t top_k;
 };
@@ -120,9 +131,15 @@ superslm::SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
     size_t workspace_size, int32_t* out_tokens, int32_t* out_logit_rows, size_t out_tokens_capacity,
     size_t* out_tokens_produced, superslm::SslmDecodeStopReason* out_stop_reason,
     superslm::SslmKvPrecision kv_precision, bool option_g_fused_k_landing, DampedGreedyMode mode,
-    int64_t alpha_q15, int32_t anti_lm_max_order, int32_t top_k, int64_t q_ln2, int64_t q_b,
+    int32_t alpha_q15, int32_t anti_lm_max_order, int32_t top_k, int64_t q_ln2, int64_t q_b,
     int64_t q_c);
 
-}  // namespace superslm_test_phaseD
+}  // namespace superslm
+
+// S5: empty on purpose -- see this file's own top comment. Kept so
+// `using namespace superslm_test_phaseD;` (every suite `.cpp` file in
+// tests/t2199-damped-greedy-red-suite/) stays valid syntax without pulling in a second copy of
+// anything.
+namespace superslm_test_phaseD {}
 
 #endif  // SUPERSLM_SSLM_PHASED_H

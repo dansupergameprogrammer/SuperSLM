@@ -105,6 +105,9 @@ int main(int argc, char** argv) {
 	}
 	std::vector<int32_t> decoded;
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
+	// new field the library now validates -- an unrecognized size is a loud rejection.
+	params.struct_size = sizeof(params);
 	params.layer_budget = 28;
 	sslm_seq seqs[1] = {seq};
 	for (int step = 0; step < 8 && decoded.size() < 3; ++step) {

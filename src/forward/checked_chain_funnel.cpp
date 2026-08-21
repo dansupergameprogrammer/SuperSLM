@@ -63,6 +63,7 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 		case SslmForwardStatus::GpuAllocationFailed: return "GpuAllocationFailed";
 		case SslmForwardStatus::GpuDeviceRemoved: return "GpuDeviceRemoved";
 		case SslmForwardStatus::GpuGemmGroupArithmeticInvalid: return "GpuGemmGroupArithmeticInvalid";
+		case SslmForwardStatus::InvalidDecodeParams: return "InvalidDecodeParams";
 	}
 	return "?";
 }

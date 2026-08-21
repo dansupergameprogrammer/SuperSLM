@@ -44,10 +44,23 @@ for %%f in (phaseD1_artifact_flag_red phaseD2_wiring_red phaseD2a_cost_ratio_red
         rem TestD3_TeardownDuringFlight_ConcurrentReleaseDoesNotCorruptSurvivor crashes
         rem (0xC0000005/0xC0000409, reproduced 5/5 at kTrials=1) against a real checkpoint --
         rem see Claude/Curie/t2199-phaseD-red-2026-08-20.md for the full reproduction.
-        findstr /R "^checks=[0-9]* failures=[0-9]* skips=[0-9]*$" "obj_green_D\%%f.runlog" >nul
-        if errorlevel 1 (
+        set SUMMARY_LINE=
+        for /f "delims=" %%s in ('findstr /R "^checks=[0-9]* failures=[0-9]* skips=[0-9]*$" "obj_green_D\%%f.runlog"') do set SUMMARY_LINE=%%s
+        if "!SUMMARY_LINE!"=="" (
             if not "!RUN_EC!"=="0" (
                 echo    CRASHED -- exit code !RUN_EC!, no checks=/failures=/skips= summary line
+                set OVERALL_OK=0
+            )
+        ) else (
+            rem BRUNEL FIX, T-2199 Phase D review S8 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md):
+            rem this script previously NEVER gated on a nonzero failures= count -- true even after
+            rem every §4 fixture dispute this comment used to cite was resolved by the merged
+            rem curie/t2199-phaseD-red@2a33e14 dispute round, so the "known, routed-not-fixed"
+            rem justification no longer held and a real failures>0 count was passing silently.
+            rem Now: any failures= value other than 0 fails this script exactly like a crash does.
+            echo !SUMMARY_LINE! | findstr /R "failures=0 " >nul
+            if errorlevel 1 (
+                echo    FAILURES: !SUMMARY_LINE!
                 set OVERALL_OK=0
             )
         )
@@ -56,11 +69,11 @@ for %%f in (phaseD1_artifact_flag_red phaseD2_wiring_red phaseD2a_cost_ratio_red
 
 echo.
 echo Per-cell checks=/failures=/skips= lines are above; obj_green_D\*.runlog carries each
-echo transcript. This script does NOT gate on a nonzero failures= count (unlike build_green.bat
-echo for Phase A/C) -- Phase D's own known, routed-not-fixed fixture disputes (build log Sec4)
-echo make a hard pass/fail exit code misleading here; read the transcripts. It DOES gate on a
-echo crash (a nonzero process exit with no checks=/failures=/skips= summary line) -- that is
-echo never a fixture dispute, always a real defect.
+echo transcript. This script gates on BOTH a crash (a nonzero process exit with no
+echo checks=/failures=/skips= summary line) AND a nonzero failures= count in that summary line --
+echo neither is a fixture dispute at this build's own tip (every §4 dispute this ticket routed was
+echo resolved by the merged curie/t2199-phaseD-red@2a33e14/7a3b10a rounds; a failures^>0 count from
+echo here forward is always a real regression).
 if !OVERALL_OK! == 1 (
     exit /b 0
 ) else (

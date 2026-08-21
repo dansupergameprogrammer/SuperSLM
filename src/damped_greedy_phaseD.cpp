@@ -8,7 +8,9 @@
 
 #include "superslm/intmath.h"
 
-namespace superslm_test_phaseD {
+// T-2199 Phase D review fix S5: relocated into namespace superslm (see sslm_phaseD.h's own top
+// comment for the full reasoning and the suite-link argument).
+namespace superslm {
 
 namespace {
 
@@ -93,10 +95,22 @@ bool ReadDampedGreedyScaleConstants(const superslm::SslmArtifact& art,
 }
 
 // --- D2/D3 shared params validation (plan Sec9 dim2) -------------------------------------------
+// T-2199 Phase D review fix, S2 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): `mode` is now
+// checked against the closed set of defined values -- plan Sec8 D1 states the mode selector
+// "follows the same reject-unknown convention Sec2.6 documents for the artifact format's own
+// flags bit," and the prior build inverted that: any mode that was not literally kDampedGreedy
+// silently ran greedy, including garbage/uninitialized mode words. An unknown mode now rejects.
 bool ValidateDampedGreedyParams(const DampedGreedyValidationParams& p,
                                  int32_t vocab_size) noexcept {
-	if (p.mode != DampedGreedyMode::kDampedGreedy) return true;  // greedy: nothing to validate
+	if (p.mode != DampedGreedyMode::kGreedy && p.mode != DampedGreedyMode::kDampedGreedy) {
+		return false;
+	}
+	if (p.mode != DampedGreedyMode::kDampedGreedy) return true;  // greedy: nothing further to validate
 	if (p.alpha_q15 < 0) return false;
+	// T-2199 Phase D review fix, C2: the plan's own two-sided sanity ceiling (Sec9 dim2:
+	// "alpha_q15 is rejected outside [0, 2^20)") -- a defense-in-depth bound on top of the
+	// field's own int32_t width (sslm_abi.h's own C2 comment), not a substitute for it.
+	if (p.alpha_q15 >= (int32_t{1} << 20)) return false;
 	if (p.anti_lm_max_order < 1) return false;
 	if (p.top_k < 1 || p.top_k > vocab_size) return false;
 	return true;
@@ -112,6 +126,9 @@ extern "C" sslm_status sslm_decode_step_damped_greedy(sslm_model model, sslm_seq
                                                         sslm_workspace ws, int32_t* out_tokens) {
 	if (!params) return SSLM_INVALID_ARGUMENT;
 	sslm_decode_params plain{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
+	// new field the library now validates -- an unrecognized size is a loud rejection.
+	plain.struct_size = sizeof(plain);
 	plain.layer_budget = params->layer_budget;
 	plain.mode = static_cast<int32_t>(params->mode);
 	plain.alpha_q15 = params->alpha_q15;
@@ -123,4 +140,4 @@ extern "C" sslm_status sslm_decode_step_damped_greedy(sslm_model model, sslm_seq
 	return sslm_decode_step(model, seqs, n, &plain, ws, out_tokens);
 }
 
-}  // namespace superslm_test_phaseD
+}  // namespace superslm

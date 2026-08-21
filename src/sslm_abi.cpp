@@ -346,9 +346,40 @@ struct sslm_seq_s {
 // so the two operations that must never interleave are themselves mutually exclusive, and a
 // decode call PROVES a sequence is still live (a lookup, not a dereference) before it ever
 // touches it. `static`, not a class member: process-wide is a deliberately coarser scope than
-// per-model (this file's only registry of live `sslm_seq_s*` handles), acceptable because this
-// section is held only for a lookup plus a small number of already-cheap mutex acquisitions, not
-// for a call's actual forward-pass work.
+// per-model (this file's only registry of live `sslm_seq_s*` handles).
+//
+// T-2199 Phase D review fix S7 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): this comment
+// USED TO also claim the registry section below "is held only for a lookup plus a small number
+// of already-cheap mutex acquisitions, not for a call's actual forward-pass work" -- false,
+// unconditionally, and the finding is right to name it as its own defect distinct from the code.
+// `sslm_decode_stepImpl` holds every acquired `lifecycle_mutex` for its ENTIRE per-sequence body
+// (the full forward pass, by design -- `sslm_seq_s::lifecycle_mutex`'s own comment), and that
+// acquisition happens INSIDE this registry lock's own critical section (below). So when two
+// concurrent batched decode calls name the same sequence, the second genuinely blocks inside the
+// registry section for as long as the first's forward pass takes, while holding the one
+// process-wide lock every `sslm_seq_create`/`sslm_seq_release` must also acquire -- an unrelated
+// sequence's create/release can stall behind an unrelated sequence's decode. Confirmed correct
+// as a claim about CORRECTNESS (proven: `sslm_seq_release` cannot slip past a decode call that
+// already holds this lock) but wrong as a claim about COST, which is the part this correction
+// fixes.
+//
+// The finding's own SUGGESTED reordering -- "prove liveness and copy the survivor list under
+// the registry lock, release it, then acquire the per-sequence locks ... the sort already there
+// makes that safe on its own" -- was evaluated and is NOT safe as literally stated, by a
+// counter-example: release the registry lock after proving `X` live but before locking
+// `X->lifecycle_mutex`; a concurrent `sslm_seq_release(X)` can then acquire the now-free registry
+// lock, erase `X`, win the UNCONTENDED barrier lock on `X->lifecycle_mutex` (this decode call has
+// not reached it yet), and `delete X` -- all before this decode call's own deferred lock attempt
+// runs, which then dereferences freed memory. This is the SAME class of use-after-free the two
+// earlier, already-failed D3 fix attempts hit (this section's own header comment, above),
+// reproduced by construction rather than by execution: the per-sequence lock can only be safely
+// acquired while SOME lock already prevents the object's deletion, and once the registry lock is
+// released, nothing does. Closing this while ALSO shrinking the critical section's true cost
+// needs a different mechanism than a reorder (e.g. a refcounted/generation-checked handle, so a
+// decode call can hold a lightweight "this sequence will outlive my touch of it" token without
+// holding the registry lock for its own decode work) -- a genuine design question, not fixed
+// here, and NOT worked around with an unsound reorder that would reintroduce the exact crash
+// class this whole D3 fix exists to close. Routed.
 static std::mutex g_seq_registry_mutex;
 static std::unordered_set<sslm_seq_s*> g_live_seqs;
 
@@ -1264,6 +1295,22 @@ void ReturnBlock(sslm_kv_pool_s* pool, uint32_t block_index, uint8_t* kv_block, 
 // citation, since Sec6's own text does not name this mapping. Never observed on any real
 // artifact this build tested against (see this ticket's own build log).
 sslm_status MapForwardStatus(superslm::SslmForwardStatus st) {
+	// T-2199 Phase D review fix S6 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): ONE
+	// special-cased member, not a rewrite of the blanket collapse above (that collapse's own
+	// reasoning -- no dedicated status exists for most of these causes -- still holds for every
+	// other member). SoftmaxKernelRefusedAfterGateAccepted is the one cause among them that is
+	// NOT an artifact defect: it fires on a valid model and valid params, when a per-step
+	// numeric gate (TopKRenormalizeQ15) declines -- SSLM_ARTIFACT_REJECTED's own documented
+	// remedy ("discard the model") is wrong advice for a retry-safe, per-step condition. Mapped
+	// to the new SSLM_NUMERIC_STEP_REFUSED (sslm_abi.h) instead.
+	if (st == superslm::SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted) {
+		return SSLM_NUMERIC_STEP_REFUSED;
+	}
+	// T-2199 Phase D review fix S3: symmetric with sslm_decode_stepImpl's own direct
+	// SSLM_INVALID_ARGUMENT return for the identical invalid-parameter set (above, this file).
+	if (st == superslm::SslmForwardStatus::InvalidDecodeParams) {
+		return SSLM_INVALID_ARGUMENT;
+	}
 	return st == superslm::SslmForwardStatus::Ok ? SSLM_OK : SSLM_ARTIFACT_REJECTED;
 }
 
@@ -1881,19 +1928,29 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
                                          int32_t* out_tokens) {
 	if (!model || !seqs || !params || !out_tokens) return SSLM_INVALID_ARGUMENT;
 	if (n < 1) return SSLM_INVALID_ARGUMENT;
+	// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is validated FIRST, ahead of
+	// every other field -- a caller whose header/library are skewed relative to this struct's own
+	// 1.2 shape gets a loud, defined SSLM_INVALID_ARGUMENT here rather than a partial read of
+	// fields it never agreed to the layout of (this struct's own top comment, sslm_abi.h, has the
+	// full rationale). No separate "legacy struct_size==0" exemption: D-SLM3797 states the field
+	// is free to add only while 1.2's own shape is unshipped, so every in-tree caller (this
+	// repo's own tools/pins) was updated to set it in the SAME commit as this check, per the
+	// standing rule.
+	if (params->struct_size != sizeof(sslm_decode_params)) return SSLM_INVALID_ARGUMENT;
 	if (params->layer_budget < 1 ||
 	    static_cast<uint32_t>(params->layer_budget) > model->view.config.num_hidden_layers) {
 		return SSLM_INVALID_ARGUMENT;
 	}
 	// T-2199 Phase D2 (plan Sec9 dim2): the SAME shared validation D3/D4 route through
-	// (superslm_test_phaseD::ValidateDampedGreedyParams) -- checked before any sequence is
-	// touched, matching this function's own "reject leaves state unperturbed" discipline. A
-	// no-op (returns true unconditionally) when mode is greedy.
+	// (superslm::ValidateDampedGreedyParams, relocated out of the test-scaffolding namespace by
+	// the Phase D review's S5 fix) -- checked before any sequence is touched, matching this
+	// function's own "reject leaves state unperturbed" discipline. S2 fix: an unknown `mode`
+	// (neither GREEDY nor DAMPED_GREEDY) now rejects instead of silently degrading to greedy.
 	{
-		const superslm_test_phaseD::DampedGreedyValidationParams vp{
-		    static_cast<superslm_test_phaseD::DampedGreedyMode>(params->mode), params->alpha_q15,
+		const superslm::DampedGreedyValidationParams vp{
+		    static_cast<superslm::DampedGreedyMode>(params->mode), params->alpha_q15,
 		    params->anti_lm_max_order, params->top_k};
-		if (!superslm_test_phaseD::ValidateDampedGreedyParams(
+		if (!superslm::ValidateDampedGreedyParams(
 		        vp, static_cast<int32_t>(model->view.config.vocab_size))) {
 			return SSLM_INVALID_ARGUMENT;
 		}
@@ -2025,7 +2082,14 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 		// (a pointer VALUE sitting in the caller's own array) is always safe to read; it is
 		// dereferencing the sequence it points to (`seq->...`) that would be a use-after-free.
 		if (!live[i]) {
-			out_tokens[i] = -1;
+			// T-2199 Phase D review fix S1 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): -3, NOT
+			// -1 -- -1 is the documented "pending, call again with the same state" sentinel, and
+			// writing it here made a genuinely dead sequence indistinguishable from one mid-token,
+			// so a caller honouring that contract retried forever. -3 is a new, non-colliding
+			// sentinel reserved specifically for "this index named a sequence that is not
+			// currently live" (sslm_abi_functions_g5_comparable.inc's own updated contract,
+			// above sslm_decode_step's declaration).
+			out_tokens[i] = -3;
 			continue;
 		}
 		sslm_seq_s* seq = seqs[i];
@@ -2128,9 +2192,20 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 			// ApplyMaskAndArgmax's own masking half exactly (superslm::ApplyMaskAndArgmax,
 			// forward_sites.cpp) -- damped greedy never sees a row this step has not already
 			// applied.
-			for (int32_t t = 0; t < c.vocab_size; ++t) {
-				if (!((mask_bits[static_cast<size_t>(t) >> 3] >> (t & 7)) & 1u)) {
-					logit_row[t] = INT32_MIN;
+			//
+			// T-2199 Phase D review fix M3 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): free-
+			// text's mask is all-ones by construction (immediately above) -- every bit test in
+			// this loop is provably false in that case, so the loop narrows nothing while still
+			// paying a full O(vocab_size) bit-test pass per sequence per token (~151,936 tests at
+			// the real target vocab). Skipped entirely when `seq->bound_schema` is null; run only
+			// when a real, possibly-non-all-ones schema mask page is in play. `mask_bits` itself
+			// (the ~19 KB free-text allocation above) is kept unconditionally -- it is still a
+			// required argument to DampedGreedyScoreAndArgmax below, whichever branch built it.
+			if (seq->bound_schema) {
+				for (int32_t t = 0; t < c.vocab_size; ++t) {
+					if (!((mask_bits[static_cast<size_t>(t) >> 3] >> (t & 7)) & 1u)) {
+						logit_row[t] = INT32_MIN;
+					}
 				}
 			}
 			if (!seq->damped_greedy_antilm ||
@@ -2146,6 +2221,16 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 			    logit_row, mask_bits, static_cast<int32_t>(c.vocab_size), params->top_k,
 			    seq->damped_greedy_antilm, params->alpha_q15, params->q_ln2, params->q_b,
 			    params->q_c, &produced_dg, &refused);
+			// T-2199 Phase D review fix M4 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): this
+			// return (and `refused` below) fires from INSIDE the per-sequence loop, after earlier
+			// sequences in this same batch may already have had current_token/state.layer_index/
+			// dfa_walk_state written -- this function's own "reject leaves state unperturbed"
+			// language (this function's top, above the pre-loop validation block) was never a
+			// promise this deep in the loop: every pre-existing `MapForwardStatus`-routed return in
+			// this same per-sequence body (EmbedEntry/RunLayerLoop/RmsNormSite/LogitsSite failures,
+			// above) already breaks it identically -- this is that SAME pre-existing pattern, not a
+			// new one Phase D introduced. Named per the review because the surrounding comments
+			// assert the contract more broadly than this function has ever actually delivered it.
 			if (!ok) return SSLM_INVALID_ARGUMENT;  // domain rejection (k/vocab_size), plan Sec8 D1
 			if (refused) {
 				// Plan Sec7.5's own adopted refusal policy: abort this sequence's generation for
@@ -2635,6 +2720,21 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 		h->ready_for_logits = (layer_index == 0 && context_length > 0);
 	}
 	model->live_refs.fetch_add(1, std::memory_order_acq_rel);
+	// T-2199 Phase D review fix, C1 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): the D3
+	// registry fix's `g_live_seqs.insert` was written at `sslm_seq_create`'s own return point
+	// only -- this is the SECOND `sslm_seq_s` allocation site (the first is `sslm_seq_create`,
+	// above) and it was never registered, so `sslm_decode_stepImpl`'s own liveness check
+	// (`g_live_seqs.count`) always read a restored sequence as dead: skipped before validation,
+	// skipped before locking, `out_tokens[i] = -1` forever, `SSLM_OK` forever -- a silent,
+	// unconditional (greedy mode included) regression on save/restore, proven by execution
+	// (`tools/t2139_dim9_current_token_pin.cpp`, FAIL at this delta's own base commit, PASS
+	// once this insert is added). Registered at the SAME point `sslm_seq_create` registers --
+	// after the handle is fully constructed, before `*out = h` makes it observable to any other
+	// thread (no ordering hazard, identical reasoning to `sslm_seq_create`'s own comment).
+	{
+		std::lock_guard<std::mutex> registry_lock(g_seq_registry_mutex);
+		g_live_seqs.insert(h);
+	}
 	*out = h;
 	return SSLM_OK;
 }

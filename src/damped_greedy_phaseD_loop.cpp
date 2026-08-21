@@ -16,9 +16,11 @@
 
 #include "superslm/sslm_damped_greedy.h"
 
-namespace superslm_test_phaseD {
+// T-2199 Phase D review fix S5: relocated into namespace superslm (see sslm_phaseD.h's own top
+// comment for the full reasoning and the suite-link argument).
+namespace superslm {
 
-superslm::SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
+SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
     superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
     uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
     size_t intermediate_size, int64_t context_cap, const superslm::SslmTensorManifest& rope_tables,
@@ -29,7 +31,7 @@ superslm::SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
     size_t workspace_size, int32_t* out_tokens, int32_t* out_logit_rows, size_t out_tokens_capacity,
     size_t* out_tokens_produced, superslm::SslmDecodeStopReason* out_stop_reason,
     superslm::SslmKvPrecision kv_precision, bool option_g_fused_k_landing, DampedGreedyMode mode,
-    int64_t alpha_q15, int32_t anti_lm_max_order, int32_t top_k, int64_t q_ln2, int64_t q_b,
+    int32_t alpha_q15, int32_t anti_lm_max_order, int32_t top_k, int64_t q_ln2, int64_t q_b,
     int64_t q_c) {
 	using superslm::SslmForwardStatus;
 
@@ -44,7 +46,11 @@ superslm::SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
 	if (mode == DampedGreedyMode::kDampedGreedy) {
 		const DampedGreedyValidationParams vp{mode, alpha_q15, anti_lm_max_order, top_k};
 		if (!ValidateDampedGreedyParams(vp, vocab_size)) {
-			return SslmForwardStatus::TokenIdOutOfRange;  // domain rejection, no dedicated status
+			// T-2199 Phase D review fix S3: InvalidDecodeParams, not TokenIdOutOfRange -- gives
+			// this entry point's rejection the SAME outcome as sslm_decode_stepImpl's identical
+			// invalid-parameter check (both map to SSLM_INVALID_ARGUMENT, see MapForwardStatus,
+			// sslm_abi.cpp), and names the actual cause instead of borrowing an unrelated status.
+			return SslmForwardStatus::InvalidDecodeParams;
 		}
 	}
 
@@ -193,4 +199,4 @@ superslm::SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
 	return SslmForwardStatus::Ok;
 }
 
-}  // namespace superslm_test_phaseD
+}  // namespace superslm

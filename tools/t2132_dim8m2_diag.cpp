@@ -252,6 +252,9 @@ int main(int argc, char** argv) {
 				Fail("scratch seed prefill", -1);
 			}
 			sslm_decode_params params{};
+			// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
+			// new field the library now validates -- an unrecognized size is a loud rejection.
+			params.struct_size = sizeof(params);
 			params.layer_budget = 28;
 			int32_t forced[3];
 			for (int i = 0; i < 3; ++i) {

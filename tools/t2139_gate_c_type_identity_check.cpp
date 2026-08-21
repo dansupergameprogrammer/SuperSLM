@@ -84,6 +84,10 @@ typedef enum sslm_status {
 	// Mirrored in at 25 (curie/t2130-g5-red-suite@52dc6cd, executing the T-2133 Sec6 ruling:
 	// sslm_g5.h mirrors the complete registry verbatim; next-free is 26, a Sec6 fact).
 	SSLM_ALLOCATION_FAILED = 25,
+	// T-2199 Phase D review fix S6 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): mirrored here
+	// in the SAME commit -- see tests/t2130-g5-red-suite/sslm_g5.h's own identical addition for
+	// the full rationale.
+	SSLM_NUMERIC_STEP_REFUSED = 26,
 	// SSLM_STATUS_NEXT_FREE -- CONFIRMED (M1, Claude/Poirot/3bcbe43-t2139-fourth-confirmation-
 	// review.md), not re-derived: the real tests/t2130-g5-red-suite/sslm_g5.h now carries this
 	// same sentinel, landed by curie/t2130-g5-red-suite@beb2355 (this line's own prior comment
@@ -111,8 +115,9 @@ typedef struct sslm_decode_params {
 	int32_t layer_budget;
 	// T-2199 Phase D1 (D-SLM3794): mirrored in lockstep with the real production struct,
 	// conductor's dispute-resolution commission, mirror-copy defect class closure, 2026-08-20.
+	uint32_t struct_size;  // D-SLM3797 (Phase D review addendum): FIRST new field, caller-set/library-validated
 	int32_t mode;
-	int64_t alpha_q15;
+	int32_t alpha_q15;  // T-2199 Phase D review fix C2: int32_t, matches the real header now
 	int32_t anti_lm_max_order;
 	int32_t top_k;
 	int64_t q_ln2;

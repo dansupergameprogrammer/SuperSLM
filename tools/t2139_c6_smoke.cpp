@@ -138,6 +138,9 @@ int main(int argc, char** argv) {
 
 	// decode a real step through the adapted path -- real LoRA delta composition, no crash.
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
+	// new field the library now validates -- an unrecognized size is a loud rejection.
+	params.struct_size = sizeof(params);
 	params.layer_budget = 1;  // bounded, to force a genuine mid-token state on the SECOND call
 	                          // below (the FIRST call after a completed prefill is always the
 	                          // free ready_for_logits step, sslm_seq_s's own header comment --

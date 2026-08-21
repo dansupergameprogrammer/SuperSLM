@@ -128,6 +128,9 @@ DiagStepResult RunCpuDiagStep(const uint8_t* bytes, size_t byte_count, const std
 		// unmodified production path, exactly RunCpuGates' own loop (t2132_g5_gpu_parity_cpu.cpp)
 		// -- reaching the state right before the bisected step. ----
 		sslm_decode_params full_params{};
+		// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
+		// new field the library now validates -- an unrecognized size is a loud rejection.
+		full_params.struct_size = sizeof(full_params);
 		full_params.layer_budget = static_cast<int32_t>(num_hidden_layers);
 		for (int32_t step = 0; step < target_step; ++step) {
 			int32_t out_token = -1;
@@ -162,6 +165,9 @@ DiagStepResult RunCpuDiagStep(const uint8_t* bytes, size_t byte_count, const std
 			// final state one full-budget call would. Snapshot the REAL production sslm_seq's
 			// hidden state after EVERY call via the temporary bench accessors. ----
 			sslm_decode_params one_layer{};
+			// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
+			// new field the library now validates -- an unrecognized size is a loud rejection.
+			one_layer.struct_size = sizeof(one_layer);
 			one_layer.layer_budget = 1;
 			for (uint32_t l = 0; l < num_hidden_layers; ++l) {
 				int32_t out_token = -1;

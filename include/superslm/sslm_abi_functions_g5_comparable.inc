@@ -100,15 +100,28 @@ size_t      sslm_adapter_residency(sslm_adapter adapter);
 sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_t* tokens, int32_t count,
                           int32_t chunk_budget, sslm_span_kind kind, sslm_workspace ws,
                           int32_t* consumed);
-/* design Sec14.1: out_tokens[i]
- * reserves TWO sentinels, not one -- the existing -1 ("pending, mid-token, call again with the
- * same layer_budget-carried state") and -2 ("this sequence's schema-bound walk reached a state
- * with NO legal continuation at all -- the argmax-selected token has no matching CSR transition
- * entry, which Sec13.2 permits at an accepting state with a legitimately all-zero mask page").
- * -2 is a per-sequence outcome, not a call fault: the call's own return status stays SSLM_OK,
- * and nothing schema-related advances for that sequence (dfa_walk_state/current_token/
- * layer_index all stay exactly as this call found them) -- calling again on the same sequence
- * deterministically returns -2 again. No new sslm_status ordinal. */
+/* design Sec14.1, extended by the T-2199 Phase D review fix S1
+ * (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): out_tokens[i] reserves THREE sentinels, not
+ * two -- the existing -1 ("pending, mid-token, call again with the same layer_budget-carried
+ * state"), -2 ("this sequence's schema-bound walk reached a state with NO legal continuation at
+ * all -- the argmax-selected token has no matching CSR transition entry, which Sec13.2 permits
+ * at an accepting state with a legitimately all-zero mask page"), and -3 ("this index named a
+ * sequence that is NOT CURRENTLY LIVE -- concurrently released by another thread, per the T-2199
+ * Phase D3 teardown-during-flight registry fix, sslm_abi.cpp's own g_seq_registry_mutex/
+ * g_live_seqs -- before this call's own liveness check ran"). -2 and -3 are BOTH per-sequence
+ * outcomes, not a call fault: the call's own return status stays SSLM_OK for either. -2 leaves
+ * that sequence's own state exactly as this call found it and is safe to retry (a schema-bound
+ * dead end is a stable, defined stop). -3 is NOT safe to retry the way -1 is: unlike -1
+ * ("this call's own work on this sequence is unfinished, call again with the SAME state"), -3
+ * names a sequence the caller no longer owns a live handle to at all -- calling again on the
+ * same index cannot make it live again, and a caller must not loop on -3 the way the documented
+ * -1 contract says to loop on -1. -1 was, before this fix, ALSO written for a dead sequence
+ * (the D3 registry fix's own original defect, C1/S1) -- indistinguishable from genuine
+ * "pending", which is why a caller honouring -1's OWN documented retry contract never
+ * terminated. -3 exists specifically so that never happens again: a dead entry now writes a
+ * value no legitimate "pending" state can ever produce. No new sslm_status ordinal for either
+ * -2 or -3 -- both are per-sequence outcomes inside an otherwise-SSLM_OK call, the same shape
+ * Sec14.1 already established for -2. */
 sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_t n,
                               const sslm_decode_params* params, sslm_workspace ws,
                               int32_t* out_tokens);

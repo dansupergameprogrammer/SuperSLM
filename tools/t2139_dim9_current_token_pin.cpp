@@ -83,6 +83,9 @@ int main(int argc, char** argv) {
 	// decode step (embed + run) so the saved state is genuinely the "produced a token, not yet
 	// embedded the next one" shape design commit 9e2995f4e7's own finding names.
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
+	// new field the library now validates -- an unrecognized size is a loud rejection.
+	params.struct_size = sizeof(params);
 	params.layer_budget = 8;  // a real, bounded budget -- exercises the ordinary embed+RunLayerLoop
 	                          // path for the second step, not just the free first-call shortcut.
 	sslm_seq seqs[1] = {seq};

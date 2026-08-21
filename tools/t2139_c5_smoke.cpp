@@ -82,6 +82,9 @@ int main(int argc, char** argv) {
 	}
 
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
+	// new field the library now validates -- an unrecognized size is a loud rejection.
+	params.struct_size = sizeof(params);
 	// A small bounded layer_budget so the saved state is genuinely "mid-generation" (design's
 	// own smoke shape) rather than always resting between tokens.
 	params.layer_budget = 1;

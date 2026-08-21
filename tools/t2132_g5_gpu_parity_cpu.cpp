@@ -103,6 +103,9 @@ G5ParityPathResult RunCpuGates(const uint8_t* bytes, size_t byte_count, const st
 		Check(r, st == SSLM_OK && consumed == token_count, "sslm_prefill (Gate 1, prompt) failed");
 
 		sslm_decode_params params{};
+		// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
+		// new field the library now validates -- an unrecognized size is a loud rejection.
+		params.struct_size = sizeof(params);
 		params.layer_budget = kNumHiddenLayers;
 		for (int32_t step = 0; step < num_decode_steps; ++step) {
 			int32_t out_token = -1;
@@ -145,6 +148,9 @@ G5ParityPathResult RunCpuGates(const uint8_t* bytes, size_t byte_count, const st
 			r.forced_consumed = forced_consumed;
 
 			sslm_decode_params params{};
+			// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
+			// new field the library now validates -- an unrecognized size is a loud rejection.
+			params.struct_size = sizeof(params);
 			params.layer_budget = kNumHiddenLayers;
 			int32_t next_token = -1;
 			sslm_seq seqs2[1] = {seq2};
@@ -250,6 +256,9 @@ G5Gate3Result RunCpuGate3(const uint8_t* bytes, size_t byte_count,
 		// call finishes the last ADMITTED token's already-computed residual directly, no
 		// re-embed. This is the reference behaviour the GPU side (below) must match.
 		sslm_decode_params params{};
+		// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
+		// new field the library now validates -- an unrecognized size is a loud rejection.
+		params.struct_size = sizeof(params);
 		params.layer_budget = kNumHiddenLayers;
 		int32_t next_token = -1;
 		sslm_seq seqs[1] = {seq};

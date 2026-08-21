@@ -268,6 +268,19 @@ enum class SslmForwardStatus {
 	                                          // routed through the SAME generic catch as
 	                                          // `GpuAllocationFailed`, discarding the diagnostic string
 	                                          // and reporting a permanent bug as a recoverable one.
+	InvalidDecodeParams,                     // T-2199 Phase D review fix S3
+	                                          // (Claude/Poirot/7a3b10a-t2199-phaseD-review.md):
+	                                          // RunGreedyOrDampedGreedyDecodeLoop's own
+	                                          // ValidateDampedGreedyParams failure used to return
+	                                          // TokenIdOutOfRange -- a real status, but the wrong
+	                                          // one (no token id was ever examined), and
+	                                          // disagreeing with sslm_decode_stepImpl's own
+	                                          // identical-invalid-set rejection (SSLM_INVALID_
+	                                          // ARGUMENT directly, plan Sec9 dim2's "validation-
+	                                          // symmetry" cell). MapForwardStatus (sslm_abi.cpp)
+	                                          // maps this one member to SSLM_INVALID_ARGUMENT,
+	                                          // giving the two entry points the same outcome for
+	                                          // the same bad input.
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,

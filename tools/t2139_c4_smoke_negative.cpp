@@ -71,6 +71,9 @@ int main(int argc, char** argv) {
 	}
 	// The hostile call: a negative layer_budget.
 	sslm_decode_params hostile_params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
+	// new field the library now validates -- an unrecognized size is a loud rejection.
+	hostile_params.struct_size = sizeof(hostile_params);
 	hostile_params.layer_budget = -1;
 	int32_t out_token = 0;
 	sslm_seq batch[1] = {seq};

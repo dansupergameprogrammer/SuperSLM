@@ -46,7 +46,9 @@
 
 #include "superslm/artifact.h"
 #include "superslm/forward_sites.h"
+#include "superslm/intmath.h"
 #include "superslm/model.h"
+#include "superslm/sslm_phaseD.h"  // T-2199 Phase D review fix S4: --decode-mode damped-greedy
 #include "superslm/tokenizer.h"
 #include "sslm_marshal.h"
 #include "sslm_adapter_loader.h"
@@ -69,7 +71,8 @@ namespace {
 void PrintUsage(const char* argv0) {
 	std::fprintf(stderr,
 	             "usage: %s <model.sslm> <tokenizer.sslm> \"<prompt>\" [--max-new N] [--stop "
-	             "a,b,c] [--dump-logits <path>] [--adapter <adapter.sslm>]\n",
+	             "a,b,c] [--dump-logits <path>] [--adapter <adapter.sslm>] [--decode-mode "
+	             "greedy|damped-greedy --alpha-q15 N --anti-lm-order N --top-k N]\n",
 	             argv0);
 }
 
@@ -113,11 +116,58 @@ int main(int argc, char** argv) {
 	std::vector<int32_t> stop_ids;
 	std::string dump_logits_path;
 	std::string adapter_path;  // T-2102: --adapter <path> -- runtime LoRA, empty means base-only
+	// T-2199 Phase D review fix S4/S3 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): the CLI's
+	// own damped-greedy selector -- plan Sec8 D3's stated deliverable ("so tools/sslm_generate.cpp
+	// ... can select damped greedy mode too"), previously unmet (the engine wiring existed with
+	// no caller). Defaults to greedy (bit-identical to this driver's pre-Phase-D behavior, this
+	// flag block a pure addition, nothing existing re-parses differently).
+	superslm::DampedGreedyMode decode_mode = superslm::DampedGreedyMode::kGreedy;
+	bool have_alpha_q15 = false, have_anti_lm_order = false, have_top_k = false;
+	int32_t alpha_q15 = 0, anti_lm_max_order = 0, top_k = 0;
 	for (int i = 4; i < argc; ++i) {
 		if (std::strcmp(argv[i], "--dump-logits") == 0 && i + 1 < argc) {
 			dump_logits_path = argv[++i];
 		} else if (std::strcmp(argv[i], "--adapter") == 0 && i + 1 < argc) {
 			adapter_path = argv[++i];
+		} else if (std::strcmp(argv[i], "--decode-mode") == 0 && i + 1 < argc) {
+			const std::string val = argv[++i];
+			if (val == "greedy") {
+				decode_mode = superslm::DampedGreedyMode::kGreedy;
+			} else if (val == "damped-greedy") {
+				decode_mode = superslm::DampedGreedyMode::kDampedGreedy;
+			} else {
+				std::fprintf(stderr, "invalid --decode-mode value: \"%s\" (expected \"greedy\" or "
+				                      "\"damped-greedy\")\n", val.c_str());
+				PrintUsage(argv[0]);
+				return 2;
+			}
+		} else if (std::strcmp(argv[i], "--alpha-q15") == 0 && i + 1 < argc) {
+			try {
+				alpha_q15 = static_cast<int32_t>(std::stol(argv[++i]));
+				have_alpha_q15 = true;
+			} catch (const std::exception&) {
+				std::fprintf(stderr, "invalid --alpha-q15 value: \"%s\"\n", argv[i]);
+				PrintUsage(argv[0]);
+				return 2;
+			}
+		} else if (std::strcmp(argv[i], "--anti-lm-order") == 0 && i + 1 < argc) {
+			try {
+				anti_lm_max_order = static_cast<int32_t>(std::stol(argv[++i]));
+				have_anti_lm_order = true;
+			} catch (const std::exception&) {
+				std::fprintf(stderr, "invalid --anti-lm-order value: \"%s\"\n", argv[i]);
+				PrintUsage(argv[0]);
+				return 2;
+			}
+		} else if (std::strcmp(argv[i], "--top-k") == 0 && i + 1 < argc) {
+			try {
+				top_k = static_cast<int32_t>(std::stol(argv[++i]));
+				have_top_k = true;
+			} catch (const std::exception&) {
+				std::fprintf(stderr, "invalid --top-k value: \"%s\"\n", argv[i]);
+				PrintUsage(argv[0]);
+				return 2;
+			}
 		} else if (std::strcmp(argv[i], "--max-new") == 0 && i + 1 < argc) {
 			const std::string val = argv[++i];
 			try {
@@ -150,6 +200,14 @@ int main(int argc, char** argv) {
 			PrintUsage(argv[0]);
 			return 2;
 		}
+	}
+	if (decode_mode == superslm::DampedGreedyMode::kDampedGreedy &&
+	    !(have_alpha_q15 && have_anti_lm_order && have_top_k)) {
+		std::fprintf(stderr, "FAILED at stage=arg_parse: --decode-mode damped-greedy requires "
+		                      "--alpha-q15, --anti-lm-order, and --top-k all supplied (no default "
+		                      "is defined for a decode-mode hyperparameter)\n");
+		PrintUsage(argv[0]);
+		return 2;
 	}
 
 	const auto t_start = std::chrono::steady_clock::now();
@@ -212,6 +270,64 @@ int main(int argc, char** argv) {
 	            model_view.config.head_dim, model_view.config.intermediate_size,
 	            model_view.config.vocab_size, model_view.config.context_cap,
 	            model_view.config.tie_word_embeddings ? 1 : 0);
+
+	// T-2199 Phase D review fix S3 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): "an artifact
+	// missing the Decision-A scale field under damped greedy mode must be a defined rejection,
+	// not a silent fallback to garbage constants" (plan Sec9 dim2) -- unreachable before this fix
+	// because ArtifactHasDampedGreedyConstants/ReadDampedGreedyScaleConstants had no production
+	// caller anywhere (q_ln2/q_b/q_c are CALLER-supplied ABI parameters by design, sslm_abi.h's
+	// own comment -- the engine itself never reads the artifact for them; this driver is the one
+	// production caller that has both the artifact bytes and the mode selector, so this is where
+	// the rejection belongs). A second, separate SslmArtifact::OpenFromMemory over model_bytes --
+	// matching this file's own tok_artifact precedent above -- rather than threading a container
+	// handle through SslmModel::Load's own view, which does not carry one.
+	int64_t q_ln2 = 0, q_b = 0, q_c = 0;
+	if (decode_mode == superslm::DampedGreedyMode::kDampedGreedy) {
+		SslmArtifact model_artifact;
+		SslmError model_open_err;
+		if (SslmArtifact::OpenFromMemory(model_bytes.data(), model_bytes.size(), model_artifact,
+		                                  &model_open_err) != SslmStatus::Ok) {
+			std::fprintf(stderr, "FAILED at stage=damped_greedy_constants: could not re-open model "
+			                      "artifact for the DampedGreedyConstants section: status=%s\n",
+			             SslmStatusName(model_open_err.code));
+			return 1;
+		}
+		if (!superslm::ArtifactHasDampedGreedyConstants(model_artifact)) {
+			std::fprintf(stderr, "FAILED at stage=damped_greedy_constants: --decode-mode "
+			                      "damped-greedy requires the artifact's own DampedGreedyConstants "
+			                      "(DGC1) section and its flag bit -- neither is present on this "
+			                      "artifact. No forward pass was attempted.\n");
+			return 1;
+		}
+		superslm::DampedGreedyScaleConstants scale{};
+		if (!superslm::ReadDampedGreedyScaleConstants(model_artifact, &scale)) {
+			std::fprintf(stderr, "FAILED at stage=damped_greedy_constants: the artifact's "
+			                      "DampedGreedyConstants section is present but out of domain\n");
+			return 1;
+		}
+		// Phase B3's own derivation (plan Sec2.3/Sec8 B3): the artifact carries the raw (m, e)
+		// source pair; the runtime (q_ln2, q_b, q_c) triple this decode step actually needs is
+		// derived ONCE per model load through the certified IExpScaleConstants primitive --
+		// exactly the recipe the suite's own shared fixture (sslm_phaseD_fixture.h) documents,
+		// reused here rather than re-derived ad hoc.
+		if (superslm::IExpScaleConstants(scale.scale_mantissa_m, scale.scale_exponent_e,
+		                                  superslm::kIExpLn2Q, 30, superslm::kIExpBQ, 30,
+		                                  superslm::kIExpCaQ, 30, &q_ln2, &q_b,
+		                                  &q_c) != superslm::IExpScaleDomain::kOk) {
+			std::fprintf(stderr, "FAILED at stage=damped_greedy_constants: the artifact's (m, e) "
+			                      "scale pair is out of the certified i-exp domain\n");
+			return 1;
+		}
+		const superslm::DampedGreedyValidationParams vp{decode_mode, alpha_q15, anti_lm_max_order,
+		                                                 top_k};
+		if (!superslm::ValidateDampedGreedyParams(
+		        vp, static_cast<int32_t>(model_view.config.vocab_size))) {
+			std::fprintf(stderr, "FAILED at stage=damped_greedy_constants: --alpha-q15/"
+			                      "--anti-lm-order/--top-k failed domain validation "
+			                      "(ValidateDampedGreedyParams)\n");
+			return 1;
+		}
+	}
 
 	const uint32_t num_heads = model_view.config.num_attention_heads;
 	const uint32_t num_kv_heads = model_view.config.num_key_value_heads;
@@ -347,14 +463,34 @@ int main(int argc, char** argv) {
 	// RunGreedyDecodeLoop's own new trailing parameter, mirroring exactly how
 	// this call already passes `model_view.config.kv_precision` as its
 	// previous last argument.
-	const SslmForwardStatus decode_status = RunGreedyDecodeLoop(
-	    seq, layers.data(), num_hidden_layers, hidden_size, model_view.config.head_dim, num_kv_heads,
-	    model_view.config.intermediate_size, context_cap, model_view.rope_tables, prompt_tokens.data(),
-	    prompt_tokens.size(), embed_weights, embed_site_constant, final_norm_gain.data(),
-	    final_norm_site_constant, head_weights, static_cast<int32_t>(model_view.config.vocab_size),
-	    stop_ids.empty() ? nullptr : stop_ids.data(), stop_ids.size(), max_new_tokens, workspace.data(), workspace.size(),
-	    out_tokens.data(), out_logit_rows.data(), out_tokens.size(), &out_tokens_produced, &stop_reason,
-	    model_view.config.kv_precision, model_view.option_g_fused_k_landing);
+	// T-2199 Phase D review fix S4: damped-greedy is a SEPARATE call to the parallel loop
+	// (RunGreedyOrDampedGreedyDecodeLoop), never a branch inside this existing call -- the
+	// greedy path below is byte-for-byte the pre-Phase-D call, zero regression risk, matching
+	// this loop function's own "new, parallel function rather than an edit to RunGreedyDecodeLoop
+	// itself" design (damped_greedy_phaseD_loop.cpp's header comment).
+	SslmForwardStatus decode_status;
+	if (decode_mode == superslm::DampedGreedyMode::kDampedGreedy) {
+		decode_status = superslm::RunGreedyOrDampedGreedyDecodeLoop(
+		    seq, layers.data(), num_hidden_layers, hidden_size, model_view.config.head_dim,
+		    num_kv_heads, model_view.config.intermediate_size, context_cap, model_view.rope_tables,
+		    prompt_tokens.data(), prompt_tokens.size(), embed_weights, embed_site_constant,
+		    final_norm_gain.data(), final_norm_site_constant, head_weights,
+		    static_cast<int32_t>(model_view.config.vocab_size),
+		    stop_ids.empty() ? nullptr : stop_ids.data(), stop_ids.size(), max_new_tokens,
+		    workspace.data(), workspace.size(), out_tokens.data(), out_logit_rows.data(),
+		    out_tokens.size(), &out_tokens_produced, &stop_reason, model_view.config.kv_precision,
+		    model_view.option_g_fused_k_landing, decode_mode, alpha_q15, anti_lm_max_order, top_k,
+		    q_ln2, q_b, q_c);
+	} else {
+		decode_status = RunGreedyDecodeLoop(
+		    seq, layers.data(), num_hidden_layers, hidden_size, model_view.config.head_dim, num_kv_heads,
+		    model_view.config.intermediate_size, context_cap, model_view.rope_tables, prompt_tokens.data(),
+		    prompt_tokens.size(), embed_weights, embed_site_constant, final_norm_gain.data(),
+		    final_norm_site_constant, head_weights, static_cast<int32_t>(model_view.config.vocab_size),
+		    stop_ids.empty() ? nullptr : stop_ids.data(), stop_ids.size(), max_new_tokens, workspace.data(), workspace.size(),
+		    out_tokens.data(), out_logit_rows.data(), out_tokens.size(), &out_tokens_produced, &stop_reason,
+		    model_view.config.kv_precision, model_view.option_g_fused_k_landing);
+	}
 
 	if (decode_status != SslmForwardStatus::Ok) {
 		std::fprintf(stderr, "FAILED at stage=decode: status=%s\n",

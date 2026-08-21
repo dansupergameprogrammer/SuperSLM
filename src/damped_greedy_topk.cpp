@@ -257,8 +257,16 @@ bool ScoreAndSelect(const int32_t* masked_row, const uint8_t* mask_bits, int32_t
 		const std::size_t si = static_cast<std::size_t>(i);
 		int64_t score;
 		if (MaskBitSet(mask_bits, out->idx[si])) {
-			const int64_t alpha_eff =
-			    (static_cast<int64_t>(alpha_q15) * out->p_omega[si]) >> kProbFracBits;
+			// T-2199 Phase D review fix O2 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): the
+			// plan's own formula (Sec7.5) narrows alpha_eff through static_cast<int32_t>
+			// before the subtraction -- omitted here previously (kept int64_t throughout).
+			// Value-preserving, not merely spec-matching: C2's fix bounds alpha_q15 to
+			// [0, 2^20) and p_omega to [0, 2^15] by construction (Sec7.2), so alpha_eff's own
+			// true range is [0, 2^20) -- always representable in int32_t, so this cast changes
+			// no computed value under the now-corrected domain, only makes the width the
+			// design specifies explicit in code.
+			const int32_t alpha_eff = static_cast<int32_t>(
+			    (static_cast<int64_t>(alpha_q15) * out->p_omega[si]) >> kProbFracBits);
 			score = out->q_theta[si] - alpha_eff;
 		} else {
 			score = INT64_MIN;

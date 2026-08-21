@@ -117,6 +117,7 @@ static_assert(alignof(t2139_gate_c_real_suite_side::sslm_decode_params) ==
 	              "sslm_decode_params::" #FIELD ": offsetof diverges (REAL "                       \
 	              "tests/t2130-g5-red-suite/sslm_g5.h vs REAL include/superslm/sslm_abi.h)")
 T2139_GATE_C_REAL_PARAMS_OFFSET_CHECK(layer_budget);
+T2139_GATE_C_REAL_PARAMS_OFFSET_CHECK(struct_size);  // D-SLM3797, T-2199 Phase D review addendum
 T2139_GATE_C_REAL_PARAMS_OFFSET_CHECK(mode);
 T2139_GATE_C_REAL_PARAMS_OFFSET_CHECK(alpha_q15);
 T2139_GATE_C_REAL_PARAMS_OFFSET_CHECK(anti_lm_max_order);

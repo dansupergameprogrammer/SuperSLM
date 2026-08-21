@@ -1211,6 +1211,33 @@ if not %probe_ec%==0 (
 	popd & exit /b 1
 )
 
+rem T-2199 Phase D review fix S8 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md), 2026-08-20:
+rem "nothing gates Phase D" -- neither build_green.bat (Phase A/C) nor build_green_phaseD.bat
+rem (Phase D) was ever CALLED from this file, so a hand-mutated guard or a broken declaration in
+rem either suite failed nothing but a script nobody in this build's own gate invokes. Wired here
+rem as a real build-time gate, the SAME shape as the T-2112 probe immediately above (a suite
+rem that fails to build/link/run fails THIS build, not a separately-run script). Both suites'
+rem own scripts `cd /d` internally (matching build_probe.bat's own documented behavior) --
+rem wrapped in the same pushd/popd discipline. Set T2199_PHASED_MODEL=path\to\real.sslm to
+rem exercise D2/D2a/D3's own product cells and t2139_dim9_current_token_pin's own C1 pin below;
+rem absent it, D1 still runs and gates (needs no model), and D2/D2a/D3 SKIP honestly (their own
+rem script's own established convention, matching every T2139_MODEL-gated pin elsewhere in this
+rem file) rather than failing for want of a checkpoint this CI environment may not have.
+pushd .
+call tests\t2199-damped-greedy-red-suite\build_green.bat
+set phaseAC_ec=%errorlevel%
+popd
+if not %phaseAC_ec%==0 (
+	popd & exit /b 1
+)
+pushd .
+call tests\t2199-damped-greedy-red-suite\build_green_phaseD.bat %T2199_PHASED_MODEL%
+set phaseD_ec=%errorlevel%
+popd
+if not %phaseD_ec%==0 (
+	popd & exit /b 1
+)
+
 rem NON-ZERO-EXIT PATHS (O2, Claude/Poirot/aea6116-t2139-seventh-confirmation-review.md; RoPE
 rem baseline retired T-2153, Claude/Curie/t2153-rope-fix-2026-08-17.md): this build's own
 rem non-zero-exit paths, named so "build.bat exits 1" is never read as "no code defect" without

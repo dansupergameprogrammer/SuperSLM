@@ -140,7 +140,16 @@ typedef struct sslm_detok_state {
      * true, unconditional boundary and returns SSLM_ARTIFACT_REJECTED instead (no new ordinal
      * minted for it -- MapForwardStatus's own existing "no dedicated status" mapping, extended
      * here on the record). */ \
-    X(SSLM_ALLOCATION_FAILED) /* 25 */
+    X(SSLM_ALLOCATION_FAILED) /* 25 */ \
+    /* T-2199 Phase D review fix S6 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): a per-step
+     * NUMERIC gate declining on a VALID model and VALID params (TopKRenormalizeQ15's own
+     * refusal surface, plan Sec7.5) is not an artifact defect -- MapForwardStatus's blanket
+     * non-Ok -> SSLM_ARTIFACT_REJECTED collapse (src/sslm_abi.cpp) told a caller with a
+     * perfectly good model and params to discard it, which is the wrong remedy for a
+     * retry-safe, per-step numeric condition. Appended at the END of this list (never inserted
+     * into the "numeric/domain rejections" block above, ordinals 15-17) so no already-shipped
+     * ordinal renumbers -- this ABI's own additive-only discipline for a public C surface. */ \
+    X(SSLM_NUMERIC_STEP_REFUSED) /* 26 */
 
 typedef enum sslm_status {
 #define SSLM_STATUS_ENUM_VALUE_(name) name,
@@ -161,9 +170,16 @@ typedef enum sslm_span_kind {
     SSLM_SPAN_SCHEMA_CONTENT = 1
 } sslm_span_kind;
 
-/* T-2199 Phase D1 (plan Sec8 D1, D-SLM3794/D-SLM3794A-precedent RULING: an ADDITIVE FIELD, not a
- * versioned successor struct -- grounded against this same struct family's own sslm_stats_out/
- * schema_accepting precedent, D-SLM3476A, T-2132). `mode` selects the decode-step's own
+/* T-2199 Phase D1 (plan Sec8 D1 RULING: an ADDITIVE FIELD, not a versioned successor struct --
+ * grounded against this same struct family's own sslm_stats_out/schema_accepting precedent,
+ * D-SLM3476, T-2132). T-2199 Phase D review fix M2 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md):
+ * this comment previously cited "D-SLM3794/D-SLM3794A-precedent" and "D-SLM3476A" -- neither
+ * "D-SLM3794A" nor "D-SLM3476A" exists in Claude/Decisions/DecisionLog.md (only D-SLM3794 and
+ * D-SLM3476 do), and separately, D-SLM3794's own text rules the ARTIFACT flags-bit mechanism
+ * (Decision A, artifact.h's kDampedGreedyArtifactConstantsFlag) and says nothing about this C
+ * struct -- the additive-field ABI decision this comment describes is the plan's own (Sec8 D1),
+ * not D-SLM3794's, so that citation is dropped here rather than corrected to a decision entry
+ * that does not actually make this ruling. `mode` selects the decode-step's own
  * selection mechanism: 0 (SSLM_DECODE_MODE_GREEDY, the default under zero-init, so every
  * EXISTING caller of sslm_decode_step -- which never sets these new fields -- is bit-unchanged)
  * or 1 (SSLM_DECODE_MODE_DAMPED_GREEDY). alpha_q15/anti_lm_max_order/top_k/q_ln2/q_b/q_c are
@@ -176,10 +192,31 @@ typedef enum sslm_span_kind {
 #define SSLM_DECODE_MODE_GREEDY 0
 #define SSLM_DECODE_MODE_DAMPED_GREEDY 1
 
+/* T-2199 Phase D review addendum (D-SLM3797, Dan, 2026-08-20): sslm_decode_params' FIRST new
+ * field is `struct_size` -- caller-SET, library-VALIDATED. Supersedes the no-size-field reading
+ * of the additive-field ruling above for THIS struct specifically (D-SLM3797's own text): this
+ * struct is an IN parameter crossing the ABI trust boundary, and a silent partial/garbage read
+ * on header/library version skew contradicts this codebase's own boundary discipline (the
+ * loader's hostile-input model, applied here to a decode-time struct instead of an artifact).
+ * The field is free to add only while 1.2's own shape is unshipped -- sslm_stats_out and every
+ * other OUT struct in this ABI keep the pre-existing version-implied convention unchanged; this
+ * is a scoped exception for this ONE struct, not a new blanket rule. A caller sets
+ * `struct_size = sizeof(sslm_decode_params)`; sslm_decode_stepImpl rejects any other value with
+ * SSLM_INVALID_ARGUMENT (checked before layer_budget/mode/anything else -- see that function's
+ * own comment, sslm_abi.cpp) -- a wrong size is a defined, loud rejection, never a partial read
+ * of a struct shape the library and the caller disagree about. */
 typedef struct sslm_decode_params {
     int32_t layer_budget;
+    uint32_t struct_size;        /* caller sets sizeof(sslm_decode_params); library validates */
     int32_t mode;               /* SSLM_DECODE_MODE_GREEDY (0, default) or _DAMPED_GREEDY (1) */
-    int64_t alpha_q15;          /* damped-greedy only: Q15-scaled anti-repetition weight, >= 0 */
+    /* T-2199 Phase D review fix, C2 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): int32_t per
+     * plan Sec2.5's own stated field type -- the prior build shipped this as int64_t, which
+     * removed the width-bound half of the overflow argument Sec2.5/Sec9 dim2 rest on
+     * ("an int32_t field's own representable range already bounds alpha_q15 far below any
+     * int64 overflow risk"). Restored, plus the domain check below (ValidateDampedGreedyParams,
+     * damped_greedy_phaseD.cpp) enforcing the plan's own two-sided [0, 2^20) sanity ceiling --
+     * both defenses, not one, matching the plan's own explicit "two independent bounds" framing. */
+    int32_t alpha_q15;          /* damped-greedy only: Q15-scaled anti-repetition weight, [0, 2^20) */
     int32_t anti_lm_max_order;  /* damped-greedy only: the anti-LM's own n, >= 1 */
     int32_t top_k;              /* damped-greedy only: candidates scored per step, 1 <= k <= vocab_size */
     int64_t q_ln2;              /* damped-greedy only: runtime i-exp scale constant (plan Sec2.3/B3) */

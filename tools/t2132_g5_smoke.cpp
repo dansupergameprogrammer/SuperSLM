@@ -152,6 +152,9 @@ int main(int argc, char** argv) {
 	const int32_t kMaxNewTokens = 40;
 	std::vector<int32_t> generated;
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
+	// new field the library now validates -- an unrecognized size is a loud rejection.
+	params.struct_size = sizeof(params);
 	params.layer_budget = kNumHiddenLayers;
 	sslm_seq seqs[1] = {seq};
 	for (int32_t t = 0; t < kMaxNewTokens; ++t) {

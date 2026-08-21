@@ -205,6 +205,9 @@ int main(int argc, char** argv) {
 	// nothing about the sequence's own schema state (checkable: calling again returns -2 again,
 	// deterministically -- a torn/advancing state would not).
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
+	// new field the library now validates -- an unrecognized size is a loud rejection.
+	params.struct_size = sizeof(params);
 	params.layer_budget = 28;
 	sslm_seq seqs[1] = {seq};
 	int32_t out_token = -1;

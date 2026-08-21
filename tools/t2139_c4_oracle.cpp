@@ -143,6 +143,9 @@ int main(int argc, char** argv) {
 
 	std::vector<int32_t> abi_tokens;
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
+	// new field the library now validates -- an unrecognized size is a loud rejection.
+	params.struct_size = sizeof(params);
 	params.layer_budget = forced_layer_budget > 0 ? forced_layer_budget
 	                                               : static_cast<int32_t>(oracle.num_hidden_layers);
 	sslm_seq seqs[1] = {seq};

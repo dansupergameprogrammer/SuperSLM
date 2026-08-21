@@ -172,6 +172,9 @@ int main(int argc, char** argv) {
 	// a just-reset, never-reprefilled sequence.
 	{
 		sslm_decode_params params{};
+		// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
+		// new field the library now validates -- an unrecognized size is a loud rejection.
+		params.struct_size = sizeof(params);
 		params.layer_budget = 1;
 		int32_t out_token = 0;
 		sslm_seq batch[1] = {seq};

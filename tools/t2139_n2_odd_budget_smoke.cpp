@@ -132,6 +132,9 @@ int main(int argc, char** argv) {
 	// carve N3's own sibling round fixed), then a real, complete decode_step through
 	// wide_logits/logit_row at the SAME odd-budget offsets.
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
+	// new field the library now validates -- an unrecognized size is a loud rejection.
+	params.struct_size = sizeof(params);
 	params.layer_budget = 28;
 	int32_t out_token = 0;
 	sslm_seq batch[1] = {seq};

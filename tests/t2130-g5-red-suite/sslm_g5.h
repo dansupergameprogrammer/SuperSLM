@@ -220,6 +220,13 @@ typedef enum sslm_status {
     SSLM_ALLOCATION_FAILED = 25,                /* see catch-split above; the resource-exhaustion
                                                 * cause alone, never a wrapper for a cause that
                                                 * already has its own status */
+    /* T-2199 Phase D review fix S6 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md, 2026-08-20):
+     * MapForwardStatus's blanket non-Ok -> SSLM_ARTIFACT_REJECTED collapse told a caller with a
+     * valid model and valid params to discard it, on a per-step numeric refusal
+     * (SoftmaxKernelRefusedAfterGateAccepted) that has nothing to do with the artifact -- the
+     * wrong remedy. Mirrored here in the SAME commit per this header's own standing "every
+     * duplicate header copy grows together" discipline. */
+    SSLM_NUMERIC_STEP_REFUSED = 26,
 
     /* Sentinel, FOLD RULING 2026-08-17 (design Sec6, on F1) -- the enum's own final member, no
      * explicit value, so it auto-values to one past whichever entry above it is this header's own
@@ -255,7 +262,9 @@ typedef enum sslm_span_kind {
 /* --- decode-time configuration, plan Sec12 (schema field REMOVED this design, Sec5: "is
  * superseded by this per-sequence binding" -- what remains is the field the plan's own Sec12
  * comment names alongside it). --- */
-/* T-2199 Phase D1 (plan Sec8 D1 ruling, D-SLM3476A precedent): sslm_decode_params gained 7
+/* T-2199 Phase D1 (plan Sec8 D1 ruling, D-SLM3476 precedent -- M2 fix,
+ * Claude/Poirot/7a3b10a-t2199-phaseD-review.md: "D-SLM3476A" cited previously does not exist in
+ * Claude/Decisions/DecisionLog.md): sslm_decode_params gained 7
  * additive fields directly on the real ABI header (include/superslm/sslm_abi.h). Widened here,
  * same shape, as a STRUCTURAL SAFETY FIX (this suite's own fixture_common.h includes this
  * LOCAL mirror and passes its address to the REAL, external sslm_decode_step, which now reads
@@ -271,8 +280,9 @@ typedef struct sslm_decode_params {
      * directly (conductor's dispute-resolution commission, mirror-copy defect class closure,
      * 2026-08-20 -- the same class this suite's own S10 first found for sslm_damped_greedy.h,
      * and the builder's battery sweep found again here). */
+    uint32_t struct_size;  // D-SLM3797 (Phase D review addendum): FIRST new field, caller-set/library-validated
     int32_t mode;
-    int64_t alpha_q15;
+    int32_t alpha_q15;  // T-2199 Phase D review fix C2: int32_t, matches the real header now
     int32_t anti_lm_max_order;
     int32_t top_k;
     int64_t q_ln2;

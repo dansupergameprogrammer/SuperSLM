@@ -161,6 +161,10 @@ typedef enum sslm_status {
      * instead (no new ordinal). Distinct from SSLM_KV_POOL_EXHAUSTED (caller-supplied-memory
      * exhaustion, an entirely different cause). */
     SSLM_ALLOCATION_FAILED,
+    /* T-2199 Phase D review fix S6 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): mirrored here
+     * in the SAME commit -- see tests/t2130-g5-red-suite/sslm_g5.h's own identical addition for
+     * the full rationale. */
+    SSLM_NUMERIC_STEP_REFUSED,
 
     /* Sentinel, FOLD RULING 2026-08-17 (design Sec6, F1) -- the enum's own final member, no
      * explicit value, auto-valuing to one past this header's own last explicit member and moving
@@ -184,7 +188,9 @@ typedef enum sslm_span_kind {
     SSLM_SPAN_SCHEMA_CONTENT = 1
 } sslm_span_kind;
 
-// T-2199 Phase D1 (plan Sec8 D1 ruling, D-SLM3476A precedent): sslm_decode_params gained 7
+// T-2199 Phase D1 (plan Sec8 D1 ruling, D-SLM3476 precedent -- M2 fix,
+// Claude/Poirot/7a3b10a-t2199-phaseD-review.md: "D-SLM3476A" cited previously does not exist in
+// Claude/Decisions/DecisionLog.md): sslm_decode_params gained 7
 // additive fields directly on the real ABI header (include/superslm/sslm_abi.h). Widened here,
 // in the SAME shape, as a STRUCTURAL SAFETY FIX rather than a test-content edit: this suite's
 // own fixture_common.h includes this LOCAL mirror via a bare `#include "sslm_abi.h"`
@@ -204,8 +210,9 @@ typedef struct sslm_decode_params {
      * static_asserts sizeof/alignof/offsetof identity against the REAL production header
      * directly (conductor's dispute-resolution commission, mirror-copy defect class closure,
      * 2026-08-20). */
+    uint32_t struct_size;  // D-SLM3797 (Phase D review addendum): FIRST new field, caller-set/library-validated
     int32_t mode;
-    int64_t alpha_q15;
+    int32_t alpha_q15;  // T-2199 Phase D review fix C2: int32_t, matches the real header now
     int32_t anti_lm_max_order;
     int32_t top_k;
     int64_t q_ln2;
