@@ -226,6 +226,15 @@ constexpr int32_t kNumHiddenLayers = 28;
 // to 0 and is unconditionally rejected.
 inline sslm_decode_params MakeFullDepthDecodeParams() {
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan; conductor's fold-23 follow-on commission,
+	// item 1): struct_size is sslm_decode_params' own FIRST new field, caller-set, library-
+	// validated -- sslm_decode_stepImpl now rejects SSLM_INVALID_ARGUMENT for any struct_size
+	// other than sizeof(sslm_decode_params), checked before layer_budget/mode/anything else.
+	// This is the SINGLE choke point every direct sslm_decode_step call in this suite goes
+	// through (see this function's own header comment above), so this one line is what makes
+	// D-SLM3797 real for the whole suite -- confirmed by grep: no dim*.cpp file in this
+	// directory constructs sslm_decode_params directly.
+	params.struct_size = sizeof(params);
 	params.layer_budget = kNumHiddenLayers;
 	return params;
 }

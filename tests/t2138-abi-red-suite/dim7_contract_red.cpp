@@ -66,6 +66,11 @@ static void TestDim7_C1a_AbiLayerOwnAllocationsAreTheDisclosedCount(
 	CHECK(sslm_prefill(model, seq_decode, decode_prompt, 1, 8, SSLM_SPAN_PROMPT, ws,
 	                    &decode_consumed) == SSLM_OK);
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan; conductor's fold-23
+	// follow-on commission, item 1): struct_size is the FIRST new field,
+	// caller-set, library-validated -- sslm_decode_stepImpl now rejects
+	// SSLM_INVALID_ARGUMENT for any other value, checked before layer_budget.
+	params.struct_size = sizeof(params);
 	params.layer_budget = 1;
 	int32_t out_token = 0;
 	sslm_seq batch[1] = {seq_decode};

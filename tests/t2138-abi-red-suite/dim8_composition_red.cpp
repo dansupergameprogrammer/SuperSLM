@@ -69,6 +69,11 @@ static void TestDim8_M2_AdapterBoundAfterPrefixAdoptMatchesFreshPrefillThenSwap(
 	CHECK(sslm_seq_adopt_prefix(seq_adopted, prefix) == SSLM_OK);
 	CHECK(sslm_seq_set_adapter(seq_adopted, adapter) == SSLM_OK);
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan; conductor's fold-23
+	// follow-on commission, item 1): struct_size is the FIRST new field,
+	// caller-set, library-validated -- sslm_decode_stepImpl now rejects
+	// SSLM_INVALID_ARGUMENT for any other value, checked before layer_budget.
+	params.struct_size = sizeof(params);
 	params.layer_budget = 1;  // any positive value -- both sides of the comparison below share
 	                          // this identical params, so the comparison stays meaningful.
 	int32_t token_adopted = 0;
@@ -233,6 +238,11 @@ static void TestDim8_P1_LifetimeConcurrencyChurnDoesNotCorruptLongLivedSequence(
 	std::vector<int32_t> decoded_tokens;
 	std::thread decoder([&]() {
 		sslm_decode_params params{};
+		// T-2199 Phase D review addendum (D-SLM3797, Dan; conductor's fold-23
+		// follow-on commission, item 1): struct_size is the FIRST new field,
+		// caller-set, library-validated -- sslm_decode_stepImpl now rejects
+		// SSLM_INVALID_ARGUMENT for any other value, checked before layer_budget.
+		params.struct_size = sizeof(params);
 		params.layer_budget = 1;  // any positive value -- this cell's own subject is concurrency
 		                          // safety, not full-token content.
 		sslm_seq batch[1] = {long_lived};

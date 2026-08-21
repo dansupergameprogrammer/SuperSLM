@@ -148,6 +148,11 @@ static void TestDim10_P3_AdapterDeltaGoldenReproductionThroughAbi() {
 	CHECK(sslm_prefill(model, seq, prompt, 3, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) == SSLM_OK);
 	std::vector<int32_t> abi_tokens(kNewTokens, 0);
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan; conductor's fold-23
+	// follow-on commission, item 1): struct_size is the FIRST new field,
+	// caller-set, library-validated -- sslm_decode_stepImpl now rejects
+	// SSLM_INVALID_ARGUMENT for any other value, checked before layer_budget.
+	params.struct_size = sizeof(params);
 	params.layer_budget = static_cast<int32_t>(view.config.num_hidden_layers);
 	sslm_seq batch[1] = {seq};
 	for (size_t i = 0; i < kNewTokens; ++i) {
@@ -249,6 +254,11 @@ static void TestDim10_P4_SFreezeExampleShapeFullRealWorkflow() {
 	constexpr int32_t kMaxNewTokens = 16;
 	std::vector<int32_t> generated_tokens;
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan; conductor's fold-23
+	// follow-on commission, item 1): struct_size is the FIRST new field,
+	// caller-set, library-validated -- sslm_decode_stepImpl now rejects
+	// SSLM_INVALID_ARGUMENT for any other value, checked before layer_budget.
+	params.struct_size = sizeof(params);
 	params.layer_budget = static_cast<int32_t>(view.config.num_hidden_layers);
 	sslm_seq batch[1] = {seq};
 	for (int32_t i = 0; i < kMaxNewTokens; ++i) {

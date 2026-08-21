@@ -1,8 +1,12 @@
 // T-2199 (Curie) -- Phase D2 red suite: the teardown-during-flight cell (plan Sec9 dim3, sited
 // at Phase D2 by Mendeleev's coverage audit, d3b310714d -- "not testable before D2 lands," the
 // anti-LM is new per-sequence heap state introduced onto an existing multi-sequence batched
-// ABI). RED BY LINK: sslm_decode_step_damped_greedy is declared in sslm_phaseD_stub.h, defined
-// nowhere yet.
+// ABI).
+//
+// MIGRATED 2026-08-20 (T-2199 Phase D review fix S5; conductor's follow-on commission, item 2):
+// calls the real production sslm_decode_step/sslm_decode_params directly instead of the
+// suite-compatibility shim -- see phaseD2_wiring_red.cpp's own header comment for the full
+// migration rationale.
 //
 // Coverage Model cell realized here (plan Sec9 dim3):
 //   Classification: GATE, authorized by D-SLM3719 (race/sharing freedom is engine correctness,
@@ -11,7 +15,7 @@
 //   same call, asserting no cross-sequence corruption, no use-after-free, and a clean status
 //   for the surviving sequence."
 //
-// Construction: a batched sslm_decode_step_damped_greedy(model, {A, B}, n=2, ...) call, driven
+// Construction: a batched sslm_decode_step(model, {A, B}, n=2, ...) call, driven
 // on one background thread, raced against a SECOND background thread that calls
 // sslm_seq_release(B) as soon as it can after the batched call is launched -- repeated across
 // many trials with fresh sequences each time, since the exact interleaving that exercises the
@@ -154,10 +158,11 @@ static void TestD3_TeardownDuringFlight_ConcurrentReleaseDoesNotCorruptSurvivor(
 		CHECK(sslm_prefill(model, seq_a, prompt, 4, 8, SSLM_SPAN_PROMPT, nullptr, &consumed_a) == SSLM_OK);
 		CHECK(sslm_prefill(model, seq_b, prompt, 4, 8, SSLM_SPAN_PROMPT, nullptr, &consumed_b) == SSLM_OK);
 
-		sslm_decode_params_damped_greedy params{};
+		sslm_decode_params params{};
+		params.struct_size = sizeof(params);  // D-SLM3797: caller-set, library-validated
 		params.layer_budget = static_cast<int32_t>(view.config.num_hidden_layers);
-		params.mode = DampedGreedyMode::kDampedGreedy;
-		params.alpha_q15 = int64_t{1} << 14;
+		params.mode = SSLM_DECODE_MODE_DAMPED_GREEDY;
+		params.alpha_q15 = int32_t{1} << 14;
 		params.anti_lm_max_order = 2;
 		params.top_k = 6;
 		params.q_ln2 = shared_q_ln2;
@@ -170,7 +175,7 @@ static void TestD3_TeardownDuringFlight_ConcurrentReleaseDoesNotCorruptSurvivor(
 		std::thread decode_thread([&] {
 			// One batched call, sequences {A, B} -- exactly the "in-flight batched decode step
 			// mutating a DIFFERENT sequence's anti-LM state in the SAME call" construction.
-			sslm_decode_step_damped_greedy(model, batch, 2, &params, nullptr, out_tokens);
+			sslm_decode_step(model, batch, 2, &params, nullptr, out_tokens);
 		});
 		std::thread release_thread([&] {
 			// No synchronization barrier deliberately -- the race window this cell targets is

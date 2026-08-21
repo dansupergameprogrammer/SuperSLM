@@ -148,6 +148,11 @@ static void TestDim1_P1_WarmSequenceShortLongShortMatchesFreshHandle() {
 	      SSLM_OK);
 	int32_t warm_out[1] = {0};
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan; conductor's fold-23
+	// follow-on commission, item 1): struct_size is the FIRST new field,
+	// caller-set, library-validated -- sslm_decode_stepImpl now rejects
+	// SSLM_INVALID_ARGUMENT for any other value, checked before layer_budget.
+	params.struct_size = sizeof(params);
 	// A FULL-TOKEN budget is required here, not any positive value: this cell's own oracle
 	// comparison (below) is against RunGreedyOracle's own per-token output, which only matches a
 	// decode call that completes a whole token, not a partial-layer step.

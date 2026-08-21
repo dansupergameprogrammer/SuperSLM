@@ -163,11 +163,65 @@ static void TestDim2_M6_AdapterMapBaseMismatchRejected() {
 // out-of-range layer_budget (negative) reaching sslm_decode_step is SSLM_INVALID_ARGUMENT. ---
 static void TestDim2_M7_DecodeParamsHostileLayerBudgetRejected(sslm_model model, sslm_seq seq) {
 	sslm_decode_params hostile_params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan; conductor's fold-23
+	// follow-on commission, item 1): struct_size is the FIRST new field,
+	// caller-set, library-validated -- sslm_decode_stepImpl now rejects
+	// SSLM_INVALID_ARGUMENT for any other value, checked before layer_budget.
+	hostile_params.struct_size = sizeof(hostile_params);
 	hostile_params.layer_budget = -1;
 	int32_t out_tokens[1] = {0};
 	sslm_seq batch[1] = {seq};
 	CHECK(sslm_decode_step(model, batch, 1, &hostile_params, /*ws=*/nullptr, out_tokens) ==
 	      SSLM_INVALID_ARGUMENT);
+}
+
+// --- Mechanism cell 9 (D-SLM3797, T-2199 Phase D review addendum; conductor's fold-23
+// follow-on commission, item 1 -- "author the ruling's own pin: wrong struct_size rejects
+// loudly with the invalid-params status, correct size proceeds"). struct_size is
+// sslm_decode_params' own FIRST new field, caller-set, library-validated, checked BEFORE
+// layer_budget/mode/anything else (src/sslm_abi.cpp, sslm_decode_stepImpl's own comment) -- a
+// version-skew caller (an old header, or a hand-rolled struct literal that has not kept up)
+// gets a defined, loud rejection instead of a partial/garbage read of a struct shape the
+// caller and the library disagree about. Both directions asserted, matching M7's own
+// full-contrast style: a wrong struct_size rejects even with an otherwise-valid layer_budget;
+// the correct size proceeds under the SAME otherwise-valid params. ---
+static void TestDim2_M9_DecodeParamsStructSizeMismatchRejected(sslm_model model, sslm_seq seq) {
+	int32_t out_tokens[1] = {0};
+	sslm_seq batch[1] = {seq};
+
+	// Wrong-size half: struct_size checks BEFORE layer_budget, before any per-sequence
+	// readiness check (src/sslm_abi.cpp, sslm_decode_stepImpl's own comment: "struct_size is
+	// validated FIRST, ahead of ... anything else") -- so an unprefilled `seq` (this cell's own
+	// fixture state, matching M7's identical precondition) does not confound this half.
+	sslm_decode_params wrong_size_params{};
+	wrong_size_params.struct_size = sizeof(sslm_decode_params) - 1;  // deliberately wrong
+	wrong_size_params.layer_budget = 1;  // otherwise valid -- isolates struct_size as the cause
+	const sslm_status wrong_status =
+	    sslm_decode_step(model, batch, 1, &wrong_size_params, /*ws=*/nullptr, out_tokens);
+	CHECK_MSG(wrong_status == SSLM_INVALID_ARGUMENT,
+	          "struct_size=sizeof(sslm_decode_params)-1 (an otherwise-valid layer_budget=1) must "
+	          "reject SSLM_INVALID_ARGUMENT -- got status=%d", (int)wrong_status);
+
+	// Correct-size half: MUST actually reach the per-sequence readiness check and succeed, or
+	// this half is not discriminating (an unprefilled seq would ALSO reject
+	// SSLM_INVALID_ARGUMENT -- indistinguishable from the struct_size defect this cell exists
+	// to catch). Prefills `seq` first, matching this suite's own established prompt fixture
+	// (prompt=[0,1,2,3], SSLM_SPAN_PROMPT).
+	const int32_t prompt[4] = {0, 1, 2, 3};
+	int32_t consumed = 0;
+	CHECK(sslm_prefill(model, seq, prompt, 4, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) == SSLM_OK);
+	sslm_decode_params correct_size_params{};
+	correct_size_params.struct_size = sizeof(correct_size_params);
+	correct_size_params.layer_budget = 1;
+	const sslm_status correct_status =
+	    sslm_decode_step(model, batch, 1, &correct_size_params, /*ws=*/nullptr, out_tokens);
+	CHECK_MSG(correct_status != SSLM_INVALID_ARGUMENT,
+	          "struct_size=sizeof(sslm_decode_params) with the SAME otherwise-valid layer_budget, "
+	          "against a PREFILLED sequence, must NOT be rejected for its struct_size -- got "
+	          "status=%d (this is the discriminating half: a build that rejects EVERY call "
+	          "regardless of struct_size would still pass the wrong-size half above, which is "
+	          "why both directions are asserted together, and why this half prefills first)",
+	          (int)correct_status);
 }
 
 // --- Cells 8a-8e (design Sec7.1/Sec10 dim2, five independent sub-cells -- "each driven
@@ -289,6 +343,10 @@ int main(int argc, char** argv) {
 					CHECK(sslm_seq_create(model, &sp.pool, &seq) == SSLM_OK);
 					if (seq) {
 						TestDim2_M7_DecodeParamsHostileLayerBudgetRejected(model, seq);
+						// M7's own rejected call (layer_budget=-1) never touches `seq` --
+						// struct_size/layer_budget both check before any per-sequence access --
+						// so `seq` is still pristine, unprefilled here, M9's own required start.
+						TestDim2_M9_DecodeParamsStructSizeMismatchRejected(model, seq);
 						CHECK(sslm_seq_release(seq) == SSLM_OK);
 					}
 					CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);

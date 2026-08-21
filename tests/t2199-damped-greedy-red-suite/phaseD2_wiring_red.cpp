@@ -1,8 +1,19 @@
 // T-2199 (Curie) -- Phase D2 red suite: wiring DampedGreedyScoreAndArgmax into
-// sslm_decode_stepImpl (plan Sec8 D2, src/sslm_abi.cpp). RED BY LINK: every cell calls
-// superslm_test_phaseD::sslm_decode_step_damped_greedy and/or
-// RunGreedyOrDampedGreedyDecodeLoop/ValidateDampedGreedyParams (sslm_phaseD_stub.h), defined
-// nowhere yet.
+// sslm_decode_stepImpl (plan Sec8 D2, src/sslm_abi.cpp).
+//
+// MIGRATED 2026-08-20 (T-2199 Phase D review fix S5, `Claude/Poirot/7a3b10a-t2199-phaseD-review.md`;
+// conductor's follow-on commission, item 2): every cell now calls the REAL production ABI
+// surface directly -- `sslm_decode_step`/`sslm_decode_params` (`namespace superslm`, the
+// additive-field shape Sec8 D1 actually ruled) -- instead of the suite-compatibility shim
+// (`sslm_decode_step_damped_greedy`/`sslm_decode_params_damped_greedy`) this file used while
+// Phase D was unbuilt. The shim is now KEPT ONLY because this file (plus
+// phaseD2a_cost_ratio_red.cpp/phaseD3_teardown_red.cpp) constructed it directly -- per the
+// review's own S5 finding and the build log's own routing (Sec9): migrating these three files
+// is what makes the shim (and `sslm_decode_params_damped_greedy`) deletable, confirmed at the
+// end of this file's own header comment history and in this suite's own Curie record.
+// `DampedGreedyMode`/`DampedGreedyValidationParams`/`ValidateDampedGreedyParams` are NOT part
+// of the shim -- they are real, permanent production surface (the shared D2/D3/D4 validator)
+// and are unaffected by this migration.
 //
 // Every product cell below needs a REAL base artifact (a full forward pass, not merely a
 // header-level fixture) -- following this repo's own established convention
@@ -183,9 +194,10 @@ static bool LoadRealModel(RealModelFixture* out, std::string* err) {
 // The no-regression cell: greedy paths must not shift by a single bit once the damped-greedy
 // branch is wired in alongside them (plan Sec8 D2: "as the damped-greedy-mode branch alongside
 // today's ApplyMaskAndArgmax/ArgmaxLowestIndexTieBreak branches"). Drives the SAME prompt
-// through the REAL, unmodified sslm_decode_step (today's only entry point) and through
-// sslm_decode_step_damped_greedy in kGreedy mode, asserting token-for-token bit equality over
-// several real decode steps.
+// through TWO separate sslm_decode_step calls -- one with mode left at its zero-init default
+// (SSLM_DECODE_MODE_GREEDY), one with mode explicitly set to SSLM_DECODE_MODE_DAMPED_GREEDY
+// but every damped-greedy-only field left at a hostile-looking default -- asserting
+// token-for-token bit equality over several real decode steps.
 static void TestD2_GreedyMode_BitUnchangedRegression() {
 	if (g_model_path.empty()) {
 		SKIP_MSG("real base artifact not supplied (--model=PATH) -- greedy-unchanged regression not run");
@@ -208,26 +220,39 @@ static void TestD2_GreedyMode_BitUnchangedRegression() {
 
 	constexpr int kSteps = 6;
 	sslm_decode_params old_params{};
+	old_params.struct_size = sizeof(old_params);  // D-SLM3797: caller-set, library-validated
 	old_params.layer_budget = static_cast<int32_t>(fx.num_hidden_layers);
-	sslm_decode_params_damped_greedy new_params{};
+	sslm_decode_params new_params{};
+	new_params.struct_size = sizeof(new_params);  // D-SLM3797
 	new_params.layer_budget = static_cast<int32_t>(fx.num_hidden_layers);
-	new_params.mode = DampedGreedyMode::kGreedy;
-	// alpha/anti_lm_max_order/top_k/q_ln2/q_b/q_c are irrelevant in kGreedy mode (the whole
-	// point of this cell): a correct D2 build must not read the anti-LM path at all when mode
-	// is kGreedy, so these are deliberately left at hostile-looking defaults (0) to make that
-	// claim discriminating -- a build that accidentally still routes through the damped-greedy
-	// arithmetic even in kGreedy mode would diverge from seq_old immediately.
+	new_params.mode = SSLM_DECODE_MODE_GREEDY;
+	// MIGRATION NOTE (S5): before this migration, `old_params` (a struct with no mode field at
+	// all, pre-D1) and `new_params` (mode explicitly SSLM_DECODE_MODE_GREEDY) called two
+	// DIFFERENT functions (sslm_decode_step vs. the shim sslm_decode_step_damped_greedy), so the
+	// comparison was genuinely discriminating: it proved the NEW branch-dispatch code, when
+	// explicitly told to run greedy, matched the OLD, unwired path bit-for-bit. Post-migration
+	// both params structs go through the SAME real sslm_decode_step, so this comparison is now
+	// narrower -- it proves a struct with `mode` left at its zero-init default (a caller written
+	// before the `mode` field existed, recompiled against the new header without updating its
+	// own code) behaves IDENTICALLY to a caller who explicitly sets mode=SSLM_DECODE_MODE_GREEDY.
+	// This is still a real, non-trivial backward-compatibility contract (SSLM_DECODE_MODE_GREEDY
+	// is defined as 0 specifically so a zero-initialized legacy caller does not silently change
+	// behavior -- a future edit that redefines the constant, or that treats zero specially in
+	// some OTHER way, would break this) -- it is simply no longer the wiring-vs-unwired claim the
+	// original two-shim-functions construction made. The DIRECT wiring claim (damped-greedy mode
+	// selected via the params surface reaches the primitive's own exact output) is
+	// TestD2_DampedGreedyMode_ProducesPrimitiveExactOutputThroughDecodeStep's own job, below.
 	sslm_seq old_batch[1] = {seq_old};
 	sslm_seq new_batch[1] = {seq_new};
 	for (int i = 0; i < kSteps; ++i) {
 		int32_t old_tok = 0, new_tok = 0;
 		CHECK(sslm_decode_step(fx.model, old_batch, 1, &old_params, nullptr, &old_tok) == SSLM_OK);
-		CHECK(sslm_decode_step_damped_greedy(fx.model, new_batch, 1, &new_params, nullptr, &new_tok) ==
-		      SSLM_OK);
+		CHECK(sslm_decode_step(fx.model, new_batch, 1, &new_params, nullptr, &new_tok) == SSLM_OK);
 		CHECK_MSG(old_tok == new_tok,
-		          "step %d: sslm_decode_step (unwired) produced %d, "
-		          "sslm_decode_step_damped_greedy(mode=kGreedy) produced %d -- greedy must be "
-		          "bit-unchanged (plan Sec8 D2's own no-regression clause)",
+		          "step %d: sslm_decode_step(mode=default/0) produced %d, "
+		          "sslm_decode_step(mode=SSLM_DECODE_MODE_GREEDY) produced %d -- greedy must be "
+		          "bit-unchanged regardless of whether mode is left at its zero-init default or "
+		          "set explicitly (plan Sec8 D2's own no-regression clause)",
 		          i, old_tok, new_tok);
 	}
 	CHECK(sslm_seq_release(seq_old) == SSLM_OK);
@@ -286,17 +311,18 @@ static void TestD2_DampedGreedyMode_ProducesPrimitiveExactOutputThroughDecodeSte
 	}
 	CHECK_MSG(found_scale, "could not derive the plan's own default (q_ln2=493) scale constants");
 
-	sslm_decode_params_damped_greedy params{};
+	sslm_decode_params params{};
+	params.struct_size = sizeof(params);  // D-SLM3797
 	params.layer_budget = static_cast<int32_t>(fx.num_hidden_layers);
-	params.mode = DampedGreedyMode::kDampedGreedy;
-	params.alpha_q15 = int64_t{1} << 14;  // alpha = 0.5, a real, in-band value
+	params.mode = SSLM_DECODE_MODE_DAMPED_GREEDY;
+	params.alpha_q15 = int32_t{1} << 14;  // alpha = 0.5, a real, in-band value
 	params.anti_lm_max_order = 2;
 	params.top_k = 6;
 	params.q_ln2 = q_ln2; params.q_b = q_b; params.q_c = q_c;
 
 	sslm_seq batch[1] = {seq};
 	int32_t produced = -1;
-	CHECK(sslm_decode_step_damped_greedy(fx.model, batch, 1, &params, nullptr, &produced) == SSLM_OK);
+	CHECK(sslm_decode_step(fx.model, batch, 1, &params, nullptr, &produced) == SSLM_OK);
 	CHECK_MSG(produced >= 0 && produced < fx.vocab_size,
 	          "produced token %d out of [0, %d) -- the wired call must select a real vocabulary "
 	          "index", produced, fx.vocab_size);
@@ -306,11 +332,11 @@ static void TestD2_DampedGreedyMode_ProducesPrimitiveExactOutputThroughDecodeSte
 	// NOTE, filed openly: a full independent-recompute cross-check (re-deriving the SAME logit
 	// row this call scored, all-legal mask, and feeding it directly to
 	// DampedGreedyScoreAndArgmax with an anti-LM state primed IDENTICALLY, then asserting the
-	// two tokens match bit-for-bit) needs a way to CAPTURE the row sslm_decode_step_damped_greedy
-	// computed internally -- this ABI has no out_logit_row parameter on decode_step (unlike
+	// two tokens match bit-for-bit) needs a way to CAPTURE the row sslm_decode_step computed
+	// internally -- this ABI has no out_logit_row parameter on decode_step (unlike
 	// RunGreedyDecodeLoop's own out_logit_rows), so that capture is not constructible against
 	// the CURRENT public surface alone. Routed, not silently dropped: either
-	// sslm_decode_step_damped_greedy's own D2 build exposes the scored row through a diagnostics
+	// sslm_decode_stepImpl's own D2 build exposes the scored row through a diagnostics
 	// out-parameter (mirroring DampedGreedyScoreAndArgmaxDiag's own precedent), or this cell's
 	// own cross-check is authored against RunGreedyOrDampedGreedyDecodeLoop instead (D3's own
 	// out_logit_rows array), once that entry point exists -- either is a real fill this suite
@@ -350,17 +376,18 @@ static void TestD2_ValidationSymmetry_AcrossEntryPoints() {
 	// The identical invalid-parameter set named in Sec9 dim2: negative alpha, k=0, k>vocab_size,
 	// n=0. One sub-case per iteration, checked against BOTH the live D2 entry point and the
 	// shared ValidateDampedGreedyParams function D3/D4 are specified to route through.
-	struct Case { const char* name; int64_t alpha_q15; int32_t n; int32_t k; };
+	struct Case { const char* name; int32_t alpha_q15; int32_t n; int32_t k; };
 	const Case kCases[] = {
 	    {"negative alpha", -1, 2, 6},
-	    {"k=0", int64_t{1} << 14, 2, 0},
-	    {"k>vocab_size", int64_t{1} << 14, 2, fx.vocab_size + 1},
-	    {"n=0", int64_t{1} << 14, 0, 6},
+	    {"k=0", int32_t{1} << 14, 2, 0},
+	    {"k>vocab_size", int32_t{1} << 14, 2, fx.vocab_size + 1},
+	    {"n=0", int32_t{1} << 14, 0, 6},
 	};
 	for (const auto& c : kCases) {
-		sslm_decode_params_damped_greedy params{};
+		sslm_decode_params params{};
+		params.struct_size = sizeof(params);  // D-SLM3797
 		params.layer_budget = static_cast<int32_t>(fx.num_hidden_layers);
-		params.mode = DampedGreedyMode::kDampedGreedy;
+		params.mode = SSLM_DECODE_MODE_DAMPED_GREEDY;
 		params.alpha_q15 = c.alpha_q15;
 		params.anti_lm_max_order = c.n;
 		params.top_k = c.k;
@@ -368,13 +395,13 @@ static void TestD2_ValidationSymmetry_AcrossEntryPoints() {
 		sslm_seq batch[1] = {seq};
 		int32_t out_tok = -777;
 		const sslm_status abi_status =
-		    sslm_decode_step_damped_greedy(fx.model, batch, 1, &params, nullptr, &out_tok);
+		    sslm_decode_step(fx.model, batch, 1, &params, nullptr, &out_tok);
 
 		DampedGreedyValidationParams vp{DampedGreedyMode::kDampedGreedy, c.alpha_q15, c.n, c.k};
 		const bool shared_valid = ValidateDampedGreedyParams(vp, fx.vocab_size);
 
 		CHECK_MSG((abi_status == SSLM_OK) == shared_valid,
-		          "case '%s': live sslm_decode_step_damped_greedy returned %s but the SHARED "
+		          "case '%s': live sslm_decode_step returned %s but the SHARED "
 		          "ValidateDampedGreedyParams says %s -- D2's own domain check must be the SAME "
 		          "function D3/D4 route through, never a re-implemented copy that can drift",
 		          c.name, abi_status == SSLM_OK ? "OK" : "REJECTED",
@@ -414,10 +441,11 @@ static void TestD2_TokenDigest_CoversDampedGreedyTokens() {
 	CHECK(sslm_prefill(fx.model, seq, prompt, 4, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) == SSLM_OK);
 
 	constexpr int kSteps = 5;
-	sslm_decode_params_damped_greedy params{};
+	sslm_decode_params params{};
+	params.struct_size = sizeof(params);  // D-SLM3797
 	params.layer_budget = static_cast<int32_t>(fx.num_hidden_layers);
-	params.mode = DampedGreedyMode::kDampedGreedy;
-	params.alpha_q15 = int64_t{1} << 14;
+	params.mode = SSLM_DECODE_MODE_DAMPED_GREEDY;
+	params.alpha_q15 = int32_t{1} << 14;
 	params.anti_lm_max_order = 2;
 	params.top_k = 6;
 	// FIXED 2026-08-20 (conductor's dispute-resolution commission, dispute 3): was
@@ -433,7 +461,7 @@ static void TestD2_TokenDigest_CoversDampedGreedyTokens() {
 	std::vector<int32_t> produced_tokens;
 	for (int i = 0; i < kSteps; ++i) {
 		int32_t tok = -1;
-		CHECK(sslm_decode_step_damped_greedy(fx.model, batch, 1, &params, nullptr, &tok) == SSLM_OK);
+		CHECK(sslm_decode_step(fx.model, batch, 1, &params, nullptr, &tok) == SSLM_OK);
 		produced_tokens.push_back(tok);
 	}
 	CHECK(sslm_seq_release(seq) == SSLM_OK);

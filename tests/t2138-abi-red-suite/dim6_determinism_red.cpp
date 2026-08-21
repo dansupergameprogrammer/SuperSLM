@@ -53,6 +53,11 @@ static void TestDim6_P1_AbiDecodeMatchesDirectEngineCallBitForBit() {
 	CHECK(consumed == 4);
 	std::vector<int32_t> abi_tokens(kNewTokens, 0);
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan; conductor's fold-23
+	// follow-on commission, item 1): struct_size is the FIRST new field,
+	// caller-set, library-validated -- sslm_decode_stepImpl now rejects
+	// SSLM_INVALID_ARGUMENT for any other value, checked before layer_budget.
+	params.struct_size = sizeof(params);
 	params.layer_budget = static_cast<int32_t>(view.config.num_hidden_layers);  // one full
 	                                                                            // token per call.
 	sslm_seq batch[1] = {seq};
@@ -101,6 +106,11 @@ static void TestDim6_M2_NoHookInstalledCallSitesAreSafe(sslm_model model, sslm_k
 	      SSLM_OK);
 	CHECK(consumed_a == consumed_b);
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan; conductor's fold-23
+	// follow-on commission, item 1): struct_size is the FIRST new field,
+	// caller-set, library-validated -- sslm_decode_stepImpl now rejects
+	// SSLM_INVALID_ARGUMENT for any other value, checked before layer_budget.
+	params.struct_size = sizeof(params);
 	params.layer_budget = 1;  // any positive value in [1, num_hidden_layers] -- both calls share
 	                          // the identical params, so the comparison stays meaningful.
 	int32_t out_a = 0, out_b = 0;

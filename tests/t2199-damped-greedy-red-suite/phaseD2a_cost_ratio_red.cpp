@@ -1,9 +1,13 @@
 // T-2199 (Curie) -- Phase D2a red suite: the re-sited cost-ratio cell (plan Sec8 D2a, Sec9
-// dim6/dim7's own speed-headroom claim, ratio half). RED BY LINK: measures
-// TopKRenormalizeQ15's own per-token cost (already real, Phase C, this repo's own
-// sslm_damped_greedy.h) against this engine's own REAL total per-token forward cost, taken
-// through the wired sslm_decode_step_damped_greedy entry point -- undefined until Phase D2
-// lands, per this cell's own commission text ("it goes green when D2 lands").
+// dim6/dim7's own speed-headroom claim, ratio half). Measures TopKRenormalizeQ15's own
+// per-token cost (already real, Phase C, this repo's own sslm_damped_greedy.h) against this
+// engine's own REAL total per-token forward cost, taken through the wired sslm_decode_step
+// entry point.
+//
+// MIGRATED 2026-08-20 (T-2199 Phase D review fix S5; conductor's follow-on commission, item 2):
+// calls the real production sslm_decode_step/sslm_decode_params directly instead of the
+// suite-compatibility shim (sslm_decode_step_damped_greedy/sslm_decode_params_damped_greedy) --
+// see phaseD2_wiring_red.cpp's own header comment for the full migration rationale.
 //
 // Coverage Model cell realized here (plan Sec9 dim6/dim7, re-sited 2026-08-20):
 //   Classification: GATE, authorized by D-SLM3719 (a cost-order-of-growth/affordability bound
@@ -142,10 +146,11 @@ static void TestD2a_TopKRenormalizeQ15CostRatio_WithinFivePercentOfRealForwardCo
 	// real steps, matching the plan's own "mean, both target checkpoints" framing (single
 	// checkpoint per invocation; a runner sweeps both by re-invoking with each --model=).
 	constexpr int kSteps = 12;
-	sslm_decode_params_damped_greedy params{};
+	sslm_decode_params params{};
+	params.struct_size = sizeof(params);  // D-SLM3797: caller-set, library-validated
 	params.layer_budget = static_cast<int32_t>(view.config.num_hidden_layers);
-	params.mode = DampedGreedyMode::kDampedGreedy;
-	params.alpha_q15 = int64_t{1} << 14;
+	params.mode = SSLM_DECODE_MODE_DAMPED_GREEDY;
+	params.alpha_q15 = int32_t{1} << 14;
 	params.anti_lm_max_order = 2;
 	params.top_k = 6;
 	// FIXED 2026-08-20 (conductor's dispute-resolution commission, dispute 3): derives the real
@@ -157,7 +162,7 @@ static void TestD2a_TopKRenormalizeQ15CostRatio_WithinFivePercentOfRealForwardCo
 	for (int i = 0; i < kSteps; ++i) {
 		int32_t tok = -1;
 		const auto t0 = std::chrono::steady_clock::now();
-		CHECK(sslm_decode_step_damped_greedy(model, batch, 1, &params, nullptr, &tok) == SSLM_OK);
+		CHECK(sslm_decode_step(model, batch, 1, &params, nullptr, &tok) == SSLM_OK);
 		const auto t1 = std::chrono::steady_clock::now();
 		total_forward_ns += std::chrono::duration<double, std::nano>(t1 - t0).count();
 	}

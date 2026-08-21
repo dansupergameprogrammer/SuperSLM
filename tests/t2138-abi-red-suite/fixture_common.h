@@ -93,6 +93,11 @@ struct SinglePool {
 // Returns true iff the sequence is confirmed pending (out_token < 0) after the second call.
 inline bool EnterMidToken(sslm_model model, sslm_seq seq) {
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan; conductor's fold-23
+	// follow-on commission, item 1): struct_size is the FIRST new field,
+	// caller-set, library-validated -- sslm_decode_stepImpl now rejects
+	// SSLM_INVALID_ARGUMENT for any other value, checked before layer_budget.
+	params.struct_size = sizeof(params);
 	params.layer_budget = 1;
 	sslm_seq batch[1] = {seq};
 	int32_t out_token = 0;

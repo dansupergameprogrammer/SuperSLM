@@ -47,6 +47,11 @@ static void TestDim11_M1_ModelUnmapGuardFiresBeforeAnyTeardownStep(const void* a
 	CHECK(sslm_seq_create(model, &sp2.pool, &seq2) == SSLM_OK);
 	int32_t out_token = 0;
 	sslm_decode_params params{};
+	// T-2199 Phase D review addendum (D-SLM3797, Dan; conductor's fold-23
+	// follow-on commission, item 1): struct_size is the FIRST new field,
+	// caller-set, library-validated -- sslm_decode_stepImpl now rejects
+	// SSLM_INVALID_ARGUMENT for any other value, checked before layer_budget.
+	params.struct_size = sizeof(params);
 	params.layer_budget = 1;  // any positive value in [1, num_hidden_layers] is a valid domain
 	                          // point here -- this cell's own subject is "the sequence is still
 	                          // usable," not a full-token comparison.
