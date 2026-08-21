@@ -91,12 +91,18 @@ it's being restored against.
 `include/superslm/sslm_abi.h` is the contract: a from-scratch, engine-
 agnostic C ABI for embedding SuperSLM's CPU inference path directly in
 another process — a game engine's own tooling, for instance — without the
-GPU handle types above. It declares and implements 34 functions across the
+GPU handle types above. It declares and implements 35 functions across the
 same lifecycle shape as the GPU API (workspace and KV-pool sizing and
 creation, model map/unmap, sequence and prefix lifecycle, decode,
 tokenize/detokenize, stats) plus concepts the GPU API does not need:
-caller-owned workspace and KV-pool memory (sized by the library, allocated
-by the caller, no hidden allocation on the hot path), shared-prefix
+caller-owned workspace and KV-pool memory (sized by the library and allocated
+by the caller). A correctly sized workspace removes the ABI layer's transient
+forward buffers; the engine's existing compute kernels retain their documented,
+shape-stable internal scratch allocations. Damped greedy additionally grows its
+per-sequence anti-LM state as tokens and new n-grams appear. The count-table
+component is content-dependent and reported by `AntiLmRetainedBytes`; total
+retained state also includes four bytes per generated-history token. Neither is
+represented as caller workspace. Shared-prefix
 "prefix" handles that let more than one sequence reuse one prefilled prompt
 prefix, and schema binding (below).
 
@@ -136,14 +142,17 @@ silently accepted.
   forced schema content) through the forward pass in one batched call —
   proven bit-identical to processing the same tokens one at a time, at
   every chunk size (see the README's sliceable-inference section).
-- `sslm_decode_step` advances a batch of sequences by one token each.
-  `sslm_decode_params`'s FIRST field is `struct_size` (D-SLM3797) —
-  caller-set to `sizeof(sslm_decode_params)`, library-validated: any other
-  value is a defined `SSLM_INVALID_ARGUMENT` rejection, checked before every
-  other field, so a caller compiled against a mismatched header/library
-  pair gets a loud reject rather than a partial read. `layer_budget` is the
-  caller-chosen layer budget — the mechanism behind sliceable inference.
-  `mode` selects the decode-step's own selection mechanism:
+- `sslm_decode_step` is the v1.1-compatible greedy entry point. It advances a
+  batch by one token and reads only `sslm_decode_params.layer_budget`, the
+  complete four-byte shape released in v1.1. It never probes later fields, so
+  an unchanged old binary remains safe.
+- `sslm_decode_step_v2` is the extended greedy/damped-greedy entry point.
+  Callers set `struct_size = sizeof(sslm_decode_params)`; any other value is a
+  defined `SSLM_INVALID_ARGUMENT` rejection before another extended field is
+  read. The distinct symbol—not an unsafe in-place size probe—is what makes
+  header/library skew explicit. `layer_budget` remains the caller-chosen layer
+  budget, the mechanism behind sliceable inference. `mode` selects the
+  decode-step's own selection mechanism:
   `SSLM_DECODE_MODE_GREEDY` (0, the default under zero-init) or
   `SSLM_DECODE_MODE_DAMPED_GREEDY` (1) — any other value is rejected, never
   silently treated as greedy. Under damped-greedy mode, five more fields
@@ -221,7 +230,7 @@ token id out of range, a context length exceeded, a legal decode-output
 token id with no tokenizer entry for the padded-vocabulary case, or —
 distinct from all of those — a per-step numeric gate declining on an
 otherwise valid model and valid params, `SSLM_NUMERIC_STEP_REFUSED`,
-`sslm_decode_step`'s own damped-greedy mode only); and schema rejections
+`sslm_decode_step_v2`'s own damped-greedy mode only); and schema rejections
 (an unknown schema name; binding a schema to a non-fresh sequence; a
 schema-content span on an unbound sequence; a prefix or restore whose
 schema doesn't match; a fixed span the schema's own DFA cannot reach; a

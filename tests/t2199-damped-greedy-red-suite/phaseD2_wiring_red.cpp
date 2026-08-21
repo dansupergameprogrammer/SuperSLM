@@ -44,10 +44,12 @@
 #include "superslm/decode_digest.h"
 #include "superslm/sha256.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <vector>
+#include <windows.h>
 
 static int GChecks = 0;
 static int GFailures = 0;
@@ -190,6 +192,48 @@ static bool LoadRealModel(RealModelFixture* out, std::string* err) {
 	return true;
 }
 
+static sslm_decode_params MakeDampedParams(const RealModelFixture& fx) {
+	sslm_decode_params params{};
+	params.struct_size = sizeof(params);
+	params.layer_budget = static_cast<int32_t>(fx.num_hidden_layers);
+	params.mode = SSLM_DECODE_MODE_DAMPED_GREEDY;
+	params.alpha_q15 = int32_t{1} << 19;
+	params.anti_lm_max_order = 3;
+	params.top_k = fx.vocab_size < 6 ? fx.vocab_size : 6;
+	CHECK(t2199phaseD::DeriveDefaultScaleConstants(&params.q_ln2, &params.q_b, &params.q_c));
+	return params;
+}
+
+static bool PrefillPrompt(const RealModelFixture& fx, sslm_seq seq) {
+	const int32_t prompt[4] = {0, 1, 2, 3};
+	int32_t consumed = 0;
+	return sslm_prefill(fx.model, seq, prompt, 4, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) ==
+	           SSLM_OK &&
+	       consumed == 4;
+}
+
+static std::vector<int32_t> DecodeDamped(const RealModelFixture& fx, sslm_seq seq,
+	                                      const sslm_decode_params& params, int steps) {
+	std::vector<int32_t> tokens;
+	sslm_seq batch[1] = {seq};
+	for (int i = 0; i < steps; ++i) {
+		int32_t token = -1;
+		CHECK(sslm_decode_step_v2(fx.model, batch, 1, &params, nullptr, &token) == SSLM_OK);
+		tokens.push_back(token);
+	}
+	return tokens;
+}
+
+static std::vector<uint8_t> SaveSequence(sslm_seq seq) {
+	size_t required = 0;
+	CHECK(sslm_seq_save(seq, nullptr, &required) == SSLM_BUFFER_TOO_SMALL);
+	std::vector<uint8_t> blob(required);
+	size_t written = blob.size();
+	CHECK(sslm_seq_save(seq, blob.data(), &written) == SSLM_OK);
+	blob.resize(written);
+	return blob;
+}
+
 // --- TestD2_GreedyMode_BitUnchangedRegression -----------------------------------------------
 // The no-regression cell: greedy paths must not shift by a single bit once the damped-greedy
 // branch is wired in alongside them (plan Sec8 D2: "as the damped-greedy-mode branch alongside
@@ -247,7 +291,7 @@ static void TestD2_GreedyMode_BitUnchangedRegression() {
 	for (int i = 0; i < kSteps; ++i) {
 		int32_t old_tok = 0, new_tok = 0;
 		CHECK(sslm_decode_step(fx.model, old_batch, 1, &old_params, nullptr, &old_tok) == SSLM_OK);
-		CHECK(sslm_decode_step(fx.model, new_batch, 1, &new_params, nullptr, &new_tok) == SSLM_OK);
+		CHECK(sslm_decode_step_v2(fx.model, new_batch, 1, &new_params, nullptr, &new_tok) == SSLM_OK);
 		CHECK_MSG(old_tok == new_tok,
 		          "step %d: sslm_decode_step(mode=default/0) produced %d, "
 		          "sslm_decode_step(mode=SSLM_DECODE_MODE_GREEDY) produced %d -- greedy must be "
@@ -347,7 +391,7 @@ static void TestD2_DampedGreedyMode_ProducesPrimitiveExactOutputThroughDecodeSte
 
 	sslm_seq batch[1] = {seq};
 	int32_t produced = -1;
-	CHECK(sslm_decode_step(fx.model, batch, 1, &params, nullptr, &produced) == SSLM_OK);
+	CHECK(sslm_decode_step_v2(fx.model, batch, 1, &params, nullptr, &produced) == SSLM_OK);
 	CHECK_MSG(produced >= 0 && produced < fx.vocab_size,
 	          "produced token %d out of [0, %d) -- the wired call must select a real vocabulary "
 	          "index", produced, fx.vocab_size);
@@ -428,7 +472,7 @@ static void TestD2_ValidationSymmetry_AcrossEntryPoints() {
 		sslm_seq batch[1] = {seq};
 		int32_t out_tok = -777;
 		const sslm_status abi_status =
-		    sslm_decode_step(fx.model, batch, 1, &params, nullptr, &out_tok);
+		    sslm_decode_step_v2(fx.model, batch, 1, &params, nullptr, &out_tok);
 
 		DampedGreedyValidationParams vp{static_cast<DampedGreedyMode>(c.mode), c.alpha_q15, c.n, c.k};
 		const bool shared_valid = ValidateDampedGreedyParams(vp, fx.vocab_size);
@@ -452,35 +496,9 @@ static void TestD2_ValidationSymmetry_AcrossEntryPoints() {
 		// a deliberate dummy/null placeholder -- safe ONLY when the call is guaranteed to reject
 		// before touching any of them.
 		//
-		// FOUND BY EXECUTION, NOT ASSUMED (the first draft of this comment claimed otherwise
-		// and crashed on it): src/damped_greedy_phaseD_loop.cpp's own control flow validates
-		// (ValidateDampedGreedyParams -> InvalidDecodeParams) ONLY inside
-		// `if (mode == DampedGreedyMode::kDampedGreedy)` -- a mode value that is NEITHER
-		// kGreedy NOR kDampedGreedy (this cell's own "unknown mode" case, mode=2) skips that
-		// branch entirely and falls through into the REAL greedy forward path, which then
-		// dereferences the dummy nullptr embed/head weights -- a real, reproducible crash
-		// (0xC0000005), caught by execution before this cell was filed, not shipped. This IS
-		// itself a genuine finding, separate from and beyond what this cell set out to pin:
-		// D2 (sslm_decode_stepImpl) validates `mode` UNCONDITIONALLY (S2's own fix, "an unknown
-		// mode... now rejects instead of silently degrading to greedy" -- verified in
-		// src/sslm_abi.cpp, the static_cast<DampedGreedyMode>(params->mode) + ValidateDampedGreedyParams
-		// call runs for every call regardless of mode's own value), but D3 only validates when
-		// mode already reads as kDampedGreedy -- an unknown mode at D3 silently falls through
-		// to the GREEDY path instead of being rejected, the exact D2/D3 asymmetry N8's own
-		// commission names, just discovered via a crash instead of a clean assertion. ROUTED,
-		// not fixed here (Curie does not implement) -- flagged prominently in this suite's own
-		// Curie record for Brunel/the conductor. The dummy-probe below is therefore restricted
-		// to the cases that ARE guaranteed to hit D3's own early-validation branch (every case
-		// whose own `mode` is genuinely kDampedGreedy); the "unknown mode" case's own D3 half is
-		// SKIPPED with an honest message rather than constructed unsafely.
-		if (c.mode != SSLM_DECODE_MODE_DAMPED_GREEDY) {
-			SKIP_MSG("case '%s': D3's own RunGreedyOrDampedGreedyDecodeLoop cannot be safely "
-			         "probed with dummy model data for a non-kDampedGreedy mode value -- it "
-			         "falls through to the real greedy forward path instead of validating first "
-			         "(the newly-found D2/D3 asymmetry, routed -- see this suite's own Curie "
-			         "record)",
-			         c.name);
-		} else {
+		// The production loop validates every mode before branching, so the unknown-mode case is
+		// now safe to run with the same dummy model data as the damped-parameter rejections. This
+		// executing cell pins the N8 fix instead of preserving the pre-fix crash as a stale skip.
 		int8_t dummy_hidden_codes[1] = {0};
 		superslm::SequenceLayerState dummy_seq{};
 		dummy_seq.hidden_codes = dummy_hidden_codes;
@@ -509,7 +527,6 @@ static void TestD2_ValidationSymmetry_AcrossEntryPoints() {
 		CHECK_MSG(!d3_valid,
 		          "case '%s' is constructed to be invalid by name -- D3 must not accept it either",
 		          c.name);
-		}
 	}
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
@@ -562,7 +579,7 @@ static void TestD2_TokenDigest_CoversDampedGreedyTokens() {
 	std::vector<int32_t> produced_tokens;
 	for (int i = 0; i < kSteps; ++i) {
 		int32_t tok = -1;
-		CHECK(sslm_decode_step(fx.model, batch, 1, &params, nullptr, &tok) == SSLM_OK);
+		CHECK(sslm_decode_step_v2(fx.model, batch, 1, &params, nullptr, &tok) == SSLM_OK);
 		produced_tokens.push_back(tok);
 	}
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
@@ -596,12 +613,134 @@ static void TestD2_TokenDigest_CoversDampedGreedyTokens() {
 	          "function was originally proven on");
 }
 
+// A v1.1 caller may place its four-byte params object at the very end of readable memory. The
+// legacy symbol must not probe struct_size at offset four; doing so crosses into the guard page
+// and crashes this executable, making the compatibility failure unhideable.
+static void TestD2_LegacyDecodeParams_DoesNotReadPastReleasedFourByteShape() {
+	RealModelFixture fx;
+	std::string err;
+	if (!LoadRealModel(&fx, &err)) {
+		SKIP_MSG("could not load real artifact: %s", err.c_str());
+		return;
+	}
+	sslm_seq seq = nullptr;
+	CHECK(sslm_seq_create(fx.model, &fx.pool, &seq) == SSLM_OK);
+	CHECK(PrefillPrompt(fx, seq));
+
+	SYSTEM_INFO system_info{};
+	GetSystemInfo(&system_info);
+	const size_t page_size = system_info.dwPageSize;
+	uint8_t* pages = static_cast<uint8_t*>(
+	    VirtualAlloc(nullptr, page_size * 2, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+	CHECK(pages != nullptr);
+	if (pages) {
+		DWORD old_protect = 0;
+		CHECK(VirtualProtect(pages + page_size, page_size, PAGE_NOACCESS, &old_protect) != 0);
+		struct LegacyDecodeParams { int32_t layer_budget; };
+		auto* legacy = reinterpret_cast<LegacyDecodeParams*>(pages + page_size - sizeof(int32_t));
+		legacy->layer_budget = static_cast<int32_t>(fx.num_hidden_layers);
+		sslm_seq batch[1] = {seq};
+		int32_t token = -1;
+		CHECK(sslm_decode_step(fx.model, batch, 1,
+		                       reinterpret_cast<const sslm_decode_params*>(legacy), nullptr,
+		                       &token) == SSLM_OK);
+		CHECK(token >= 0 && token < fx.vocab_size);
+		VirtualFree(pages, 0, MEM_RELEASE);
+	}
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
+}
+
+static void TestD2_DampedGreedyLifecycle_ResetAndRestoreAreFreshAndExact() {
+	RealModelFixture fx;
+	std::string err;
+	if (!LoadRealModel(&fx, &err)) {
+		SKIP_MSG("could not load real artifact: %s", err.c_str());
+		return;
+	}
+	const sslm_decode_params params = MakeDampedParams(fx);
+
+	// Reset: a used sequence must become byte- and output-equivalent to a fresh sequence.
+	sslm_seq used = nullptr, fresh = nullptr;
+	CHECK(sslm_seq_create(fx.model, &fx.pool, &used) == SSLM_OK);
+	CHECK(sslm_seq_create(fx.model, &fx.pool, &fresh) == SSLM_OK);
+	CHECK(PrefillPrompt(fx, used));
+	(void)DecodeDamped(fx, used, params, 4);
+	CHECK(sslm_seq_reset(used) == SSLM_OK);
+	CHECK(PrefillPrompt(fx, used));
+	CHECK(PrefillPrompt(fx, fresh));
+	CHECK(SaveSequence(used) == SaveSequence(fresh));
+	CHECK(DecodeDamped(fx, used, params, 4) == DecodeDamped(fx, fresh, params, 4));
+	CHECK(sslm_seq_release(fresh) == SSLM_OK);
+
+	// Persistence: SSB3 carries order/history, restores byte-identically, and continues exactly.
+	const std::vector<uint8_t> live_blob = SaveSequence(used);
+	CHECK(live_blob.size() >= 120);
+	CHECK(std::memcmp(live_blob.data(), "SSB3", 4) == 0);
+	auto ReadLE32Test = [&](size_t off) {
+		return static_cast<uint32_t>(live_blob[off]) |
+		       (static_cast<uint32_t>(live_blob[off + 1]) << 8) |
+		       (static_cast<uint32_t>(live_blob[off + 2]) << 16) |
+		       (static_cast<uint32_t>(live_blob[off + 3]) << 24);
+	};
+	auto ReadLE64Test = [&](size_t off) {
+		uint64_t value = 0;
+		for (int i = 0; i < 8; ++i) value |= static_cast<uint64_t>(live_blob[off + i]) << (8 * i);
+		return value;
+	};
+	CHECK(static_cast<int32_t>(ReadLE32Test(108)) == params.anti_lm_max_order);
+	CHECK(ReadLE64Test(112) == 4);
+	sslm_seq restored = nullptr;
+	CHECK(sslm_seq_restore(fx.model, &fx.pool, live_blob.data(), live_blob.size(), &restored) == SSLM_OK);
+	CHECK(SaveSequence(used) == SaveSequence(restored));
+	CHECK(DecodeDamped(fx, used, params, 4) == DecodeDamped(fx, restored, params, 4));
+	CHECK(sslm_seq_release(restored) == SSLM_OK);
+	CHECK(sslm_seq_release(used) == SSLM_OK);
+}
+
+static void TestD2_DampedGreedyLifecycle_PrefixAdoptionClearsPriorHistory() {
+	RealModelFixture fx;
+	std::string err;
+	if (!LoadRealModel(&fx, &err)) {
+		SKIP_MSG("could not load real artifact: %s", err.c_str());
+		return;
+	}
+	const sslm_decode_params params = MakeDampedParams(fx);
+	sslm_prefix prefix = nullptr;
+	CHECK(sslm_prefix_begin(fx.model, &fx.pool, &prefix) == SSLM_OK);
+	const int32_t prompt[4] = {0, 1, 2, 3};
+	int32_t consumed = 0;
+	CHECK(sslm_prefix_prefill(fx.model, prefix, prompt, 4, 8, SSLM_SPAN_PROMPT, nullptr,
+	                          &consumed) == SSLM_OK);
+	CHECK(consumed == 4);
+	CHECK(sslm_prefix_freeze(prefix) == SSLM_OK);
+
+	sslm_seq reused = nullptr;
+	CHECK(sslm_seq_create(fx.model, &fx.pool, &reused) == SSLM_OK);
+	CHECK(PrefillPrompt(fx, reused));
+	(void)DecodeDamped(fx, reused, params, 4);
+	CHECK(sslm_seq_adopt_prefix(reused, prefix) == SSLM_OK);
+	const std::vector<uint8_t> reused_blob = SaveSequence(reused);
+	const std::vector<int32_t> reused_tokens = DecodeDamped(fx, reused, params, 4);
+	CHECK(sslm_seq_release(reused) == SSLM_OK);
+
+	sslm_seq fresh = nullptr;
+	CHECK(sslm_seq_create(fx.model, &fx.pool, &fresh) == SSLM_OK);
+	CHECK(sslm_seq_adopt_prefix(fresh, prefix) == SSLM_OK);
+	CHECK(reused_blob == SaveSequence(fresh));
+	CHECK(reused_tokens == DecodeDamped(fx, fresh, params, 4));
+	CHECK(sslm_seq_release(fresh) == SSLM_OK);
+	CHECK(sslm_prefix_release(prefix) == SSLM_OK);
+}
+
 int main(int argc, char** argv) {
 	ParseArgs(argc, argv);
 	TestD2_GreedyMode_BitUnchangedRegression();
 	TestD2_DampedGreedyMode_ProducesPrimitiveExactOutputThroughDecodeStep();
 	TestD2_ValidationSymmetry_AcrossEntryPoints();
 	TestD2_TokenDigest_CoversDampedGreedyTokens();
+	TestD2_LegacyDecodeParams_DoesNotReadPastReleasedFourByteShape();
+	TestD2_DampedGreedyLifecycle_ResetAndRestoreAreFreshAndExact();
+	TestD2_DampedGreedyLifecycle_PrefixAdoptionClearsPriorHistory();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

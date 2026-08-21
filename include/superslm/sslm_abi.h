@@ -192,22 +192,18 @@ typedef enum sslm_span_kind {
 #define SSLM_DECODE_MODE_GREEDY 0
 #define SSLM_DECODE_MODE_DAMPED_GREEDY 1
 
-/* T-2199 Phase D review addendum (D-SLM3797, Dan, 2026-08-20): sslm_decode_params' FIRST new
- * field is `struct_size` -- caller-SET, library-VALIDATED. Supersedes the no-size-field reading
- * of the additive-field ruling above for THIS struct specifically (D-SLM3797's own text): this
- * struct is an IN parameter crossing the ABI trust boundary, and a silent partial/garbage read
- * on header/library version skew contradicts this codebase's own boundary discipline (the
- * loader's hostile-input model, applied here to a decode-time struct instead of an artifact).
- * The field is free to add only while 1.2's own shape is unshipped -- sslm_stats_out and every
- * other OUT struct in this ABI keep the pre-existing version-implied convention unchanged; this
- * is a scoped exception for this ONE struct, not a new blanket rule. A caller sets
- * `struct_size = sizeof(sslm_decode_params)`; sslm_decode_stepImpl rejects any other value with
- * SSLM_INVALID_ARGUMENT (checked before layer_budget/mode/anything else -- see that function's
- * own comment, sslm_abi.cpp) -- a wrong size is a defined, loud rejection, never a partial read
- * of a struct shape the library and the caller disagree about. */
+/* ABI evolution rule (T-2199 independent review, 2026-08-21): v1.1 shipped this type with
+ * `layer_budget` as its only field and shipped `sslm_decode_step` taking a pointer to it. The
+ * appended fields below therefore MUST NOT be read by `sslm_decode_step`: an old binary may
+ * legally pass a four-byte allocation, and even reading `struct_size` would already be beyond
+ * that object. `sslm_decode_step` remains the legacy greedy entry point and reads layer_budget
+ * only. New callers use `sslm_decode_step_v2`, set struct_size to sizeof(sslm_decode_params),
+ * and receive loud size/mode validation before any field beyond the legacy prefix is consumed.
+ * A distinct symbol, rather than an attempted in-place size probe, is what makes header/library
+ * skew safe for already-shipped binaries. */
 typedef struct sslm_decode_params {
     int32_t layer_budget;
-    uint32_t struct_size;        /* caller sets sizeof(sslm_decode_params); library validates */
+    uint32_t struct_size;        /* sslm_decode_step_v2: caller sets sizeof(sslm_decode_params) */
     int32_t mode;               /* SSLM_DECODE_MODE_GREEDY (0, default) or _DAMPED_GREEDY (1) */
     /* T-2199 Phase D review fix, C2 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): int32_t per
      * plan Sec2.5's own stated field type -- the prior build shipped this as int64_t, which

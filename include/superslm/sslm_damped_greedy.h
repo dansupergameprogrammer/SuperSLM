@@ -52,6 +52,12 @@ class AntiLmState;
 [[nodiscard]] AntiLmState* AntiLmCreate(int max_order);
 void AntiLmDestroy(AntiLmState* state);
 
+// Generated-token history is the canonical persistence representation: replaying it through
+// AntiLmUpdate reconstructs every count table exactly and avoids serializing unordered-map
+// implementation details. These accessors copy in generation order.
+std::size_t AntiLmHistorySize(const AntiLmState* state);
+int32_t AntiLmHistoryTokenAt(const AntiLmState* state, std::size_t index);
+
 // Appends one token to the sequence's own generated prefix (x<t, never the prompt).
 // Called once per emitted token; mutates every order's count table. Strictly sequential,
 // in generation order.

@@ -177,7 +177,7 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 
-	// --- save (real 'SSB2' blob), restore into a fresh handle, compare via sslm_stats ---
+	// --- save (real 'SSB3' blob), restore into a fresh handle, compare via sslm_stats ---
 	size_t required = 0;
 	sslm_seq_save(seq, nullptr, &required);
 	std::vector<uint8_t> blob(required);
@@ -188,7 +188,7 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 	blob.resize(n);
-	std::printf("saved 'SSB2' blob: %zu bytes (magic '%c%c%c%c')\n", n, blob[0], blob[1], blob[2],
+	std::printf("saved 'SSB3' blob: %zu bytes (magic '%c%c%c%c')\n", n, blob[0], blob[1], blob[2],
 	            blob[3]);
 
 	int failures = 0;
@@ -217,19 +217,20 @@ int main(int argc, char** argv) {
 	// header, no forced_token_count field, magic 'SSB1') must be rejected outright on the magic
 	// check, never parsed as SSB2. ---
 	{
-		// Slice the real SSB2 blob apart and reassemble it as a byte-exact SSB1-shaped blob: the
+		// Slice the real SSB3 blob apart and reassemble it as a byte-exact SSB1-shaped blob: the
 		// first 92 bytes (magic through kv_saturation_count's own first 92 bytes... actually
 		// through offset 92, i.e. magic(4)+hash(32)+kv_precision(4)+schema_name_hash(8)+
 		// dfa_walk_state(4)+adapter_binding_id(8)+context_length(8)+layer_index(4)+
-		// current_token(4)+hidden_scale(16) = 92 bytes) are IDENTICAL in both formats (SSB2 only
+		// current_token(4)+hidden_scale(16) = 92 bytes) are IDENTICAL in both formats (SSB2 first
 		// inserts forced_token_count AFTER kv_saturation_count, at byte 100); kv_saturation_count
 		// itself is bytes [92,100) in both. The SSB1 shape is: those first 100 bytes, magic
-		// overwritten to 'SSB1', immediately followed by SSB2's OWN residual/kv_block_count/
-		// kv_blocks tail (blob[108:]) -- skipping SSB2's own forced_token_count field at [100,108)
+		// overwritten to 'SSB1', immediately followed by SSB3's OWN residual/kv_block_count/
+		// kv_blocks tail (blob[120:]) -- skipping forced_token_count at [100,108) and SSB3's
+		// damped-greedy metadata at [108,120)
 		// entirely, exactly what a real pre-fold writer would have produced for the same live
 		// sequence state.
-		if (blob.size() < 108) {
-			std::fprintf(stderr, "FAIL: SSB2 blob unexpectedly short (%zu bytes)\n", blob.size());
+		if (blob.size() < 120) {
+			std::fprintf(stderr, "FAIL: SSB3 blob unexpectedly short (%zu bytes)\n", blob.size());
 			return 1;
 		}
 		std::vector<uint8_t> ssb1_shaped;
@@ -238,7 +239,7 @@ int main(int argc, char** argv) {
 		ssb1_shaped[1] = 'S';
 		ssb1_shaped[2] = 'B';
 		ssb1_shaped[3] = '1';
-		ssb1_shaped.insert(ssb1_shaped.end(), blob.begin() + 108, blob.end());
+		ssb1_shaped.insert(ssb1_shaped.end(), blob.begin() + 120, blob.end());
 
 		sslm_seq should_be_null = nullptr;
 		st = sslm_seq_restore(model, &pool, ssb1_shaped.data(), ssb1_shaped.size(), &should_be_null);

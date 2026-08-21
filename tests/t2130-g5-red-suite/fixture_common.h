@@ -248,7 +248,8 @@ inline sslm_decode_params MakeFullDepthDecodeParams() {
 // this ticket's own build log did not evidence for the identical reason as the layer_budget
 // gap above (the suite was never previously run far enough against a real fixture to reach a
 // save call). sslm_seq_state_size(model) reports the same worst-case formula's own upper
-// bound (src/sslm_abi.cpp: fixed header + worst-case residual + kv_block_size) -- every
+// bound (src/sslm_abi.cpp: fixed header + worst-case residual + maximum anti-LM history +
+// kv_block_size) -- every
 // dynamically-sized save-blob buffer below uses it instead of a fixed 64KB guess.
 inline std::vector<uint8_t> AllocRealSaveBlobBuffer(sslm_model model) {
 	const size_t n = model ? sslm_seq_state_size(model) : 0;

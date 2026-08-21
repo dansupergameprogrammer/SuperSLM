@@ -94,6 +94,12 @@ AntiLmState* AntiLmCreate(int max_order) {
 
 void AntiLmDestroy(AntiLmState* state) { delete state; }
 
+std::size_t AntiLmHistorySize(const AntiLmState* state) { return state->history_.size(); }
+
+int32_t AntiLmHistoryTokenAt(const AntiLmState* state, std::size_t index) {
+	return state->history_[index];
+}
+
 void AntiLmUpdate(AntiLmState* state, int32_t token) {
 	const std::size_t hist_size = state->history_.size();
 	for (int order = 1; order <= state->max_order(); ++order) {

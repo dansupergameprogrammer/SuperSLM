@@ -179,7 +179,7 @@ static void TestD3_TeardownDuringFlight_ConcurrentReleaseDoesNotCorruptSurvivor(
 		std::thread decode_thread([&] {
 			// One batched call, sequences {A, B} -- exactly the "in-flight batched decode step
 			// mutating a DIFFERENT sequence's anti-LM state in the SAME call" construction.
-			sslm_decode_step(model, batch, 2, &params, nullptr, out_tokens);
+			sslm_decode_step_v2(model, batch, 2, &params, nullptr, out_tokens);
 		});
 		std::thread release_thread([&] {
 			// No synchronization barrier deliberately -- the race window this cell targets is

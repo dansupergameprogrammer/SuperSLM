@@ -162,7 +162,7 @@ static void TestD2a_TopKRenormalizeQ15CostRatio_WithinFivePercentOfRealForwardCo
 	for (int i = 0; i < kSteps; ++i) {
 		int32_t tok = -1;
 		const auto t0 = std::chrono::steady_clock::now();
-		CHECK(sslm_decode_step(model, batch, 1, &params, nullptr, &tok) == SSLM_OK);
+		CHECK(sslm_decode_step_v2(model, batch, 1, &params, nullptr, &tok) == SSLM_OK);
 		const auto t1 = std::chrono::steady_clock::now();
 		total_forward_ns += std::chrono::duration<double, std::nano>(t1 - t0).count();
 	}
@@ -178,12 +178,23 @@ static void TestD2a_TopKRenormalizeQ15CostRatio_WithinFivePercentOfRealForwardCo
 	std::vector<uint8_t> mask((view.config.vocab_size + 7) / 8, 0xFF);
 	FsdTopK(row.data(), mask.data(), view.config.vocab_size, 6, indices.data());
 	constexpr int kRenormIters = 2000;
-	int64_t out_q15[6];
+	int64_t out_q15[6] = {};
+	CHECK(TopKRenormalizeQ15(row.data(), indices.data(), 6, params.q_ln2, params.q_b, params.q_c,
+	                         out_q15));
+	bool every_renorm_succeeded = true;
 	const auto rt0 = std::chrono::steady_clock::now();
 	for (int i = 0; i < kRenormIters; ++i) {
-		TopKRenormalizeQ15(row.data(), indices.data(), 6, 493, 0, 0, out_q15);
+		every_renorm_succeeded &= TopKRenormalizeQ15(
+		    row.data(), indices.data(), 6, params.q_ln2, params.q_b, params.q_c, out_q15);
 	}
 	const auto rt1 = std::chrono::steady_clock::now();
+	CHECK_MSG(every_renorm_succeeded,
+	          "every timed TopKRenormalizeQ15 call must execute the successful kernel path");
+	int64_t observed_probability = 0;
+	for (int i = 0; i < 6; ++i) observed_probability += out_q15[i];
+	CHECK_MSG(observed_probability > 0 && observed_probability <= (int64_t{1} << 15),
+	          "timed renormalization output must be consumed and probability-like, got sum=%lld",
+	          static_cast<long long>(observed_probability));
 	const double mean_renorm_ns =
 	    std::chrono::duration<double, std::nano>(rt1 - rt0).count() / kRenormIters;
 

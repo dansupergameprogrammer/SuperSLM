@@ -16,6 +16,14 @@
  */
 #include "superslm/sslm_abi_functions_g5_comparable.inc"
 
+/* Versioned decode entry point. The legacy sslm_decode_step declaration lives in the
+ * g5-comparable inventory because it is the v1.1 surface mirrored by that suite. This v2 symbol
+ * is deliberately separate: it may validate and consume sslm_decode_params fields beyond the
+ * shipped four-byte layer_budget prefix without reading past an old caller's allocation. */
+sslm_status sslm_decode_step_v2(sslm_model model, sslm_seq* seqs, int32_t n,
+                                const sslm_decode_params* params, sslm_workspace ws,
+                                int32_t* out_tokens);
+
 /* Takes the caller-memory call-shape struct (design Sec7.1) -- not part of the g5-comparable
  * subset (see above).
  *

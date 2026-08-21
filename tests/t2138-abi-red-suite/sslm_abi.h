@@ -319,6 +319,9 @@ sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_t* tokens, 
 sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_t n,
                               const sslm_decode_params* params, sslm_workspace ws,
                               int32_t* out_tokens);
+sslm_status sslm_decode_step_v2(sslm_model model, sslm_seq* seqs, int32_t n,
+                                 const sslm_decode_params* params, sslm_workspace ws,
+                                 int32_t* out_tokens);
 
 /* ============================================================================
  * text I/O (S-FREEZE only, design Sec4; settled build-now by D-SLM3452).

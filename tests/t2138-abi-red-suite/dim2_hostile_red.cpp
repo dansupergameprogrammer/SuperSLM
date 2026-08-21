@@ -197,7 +197,7 @@ static void TestDim2_M9_DecodeParamsStructSizeMismatchRejected(sslm_model model,
 	wrong_size_params.struct_size = sizeof(sslm_decode_params) - 1;  // deliberately wrong
 	wrong_size_params.layer_budget = 1;  // otherwise valid -- isolates struct_size as the cause
 	const sslm_status wrong_status =
-	    sslm_decode_step(model, batch, 1, &wrong_size_params, /*ws=*/nullptr, out_tokens);
+	    sslm_decode_step_v2(model, batch, 1, &wrong_size_params, /*ws=*/nullptr, out_tokens);
 	CHECK_MSG(wrong_status == SSLM_INVALID_ARGUMENT,
 	          "struct_size=sizeof(sslm_decode_params)-1 (an otherwise-valid layer_budget=1) must "
 	          "reject SSLM_INVALID_ARGUMENT -- got status=%d", (int)wrong_status);
@@ -214,7 +214,7 @@ static void TestDim2_M9_DecodeParamsStructSizeMismatchRejected(sslm_model model,
 	correct_size_params.struct_size = sizeof(correct_size_params);
 	correct_size_params.layer_budget = 1;
 	const sslm_status correct_status =
-	    sslm_decode_step(model, batch, 1, &correct_size_params, /*ws=*/nullptr, out_tokens);
+	    sslm_decode_step_v2(model, batch, 1, &correct_size_params, /*ws=*/nullptr, out_tokens);
 	CHECK_MSG(correct_status != SSLM_INVALID_ARGUMENT,
 	          "struct_size=sizeof(sslm_decode_params) with the SAME otherwise-valid layer_budget, "
 	          "against a PREFILLED sequence, must NOT be rejected for its struct_size -- got "

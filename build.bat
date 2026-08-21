@@ -557,14 +557,14 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 set /p T2139_VERB_COUNT=<out\t2139\verb_count.txt
-if "%T2139_VERB_COUNT%"=="34" goto :t2139_verb_count_ok
-echo count_abi_verbs.sh reports %T2139_VERB_COUNT%, expected 34 -- verb count drifted, see design Sec4 / T-2132
+if "%T2139_VERB_COUNT%"=="35" goto :t2139_verb_count_ok
+echo count_abi_verbs.sh reports %T2139_VERB_COUNT%, expected 35 -- verb count drifted, see design Sec4 / T-2132 / T-2199
 popd & exit /b 1
 :t2139_verb_count_ok
-echo count_abi_verbs.sh: 34 verbs, matches T-2139 Sec4's 29 plus T-2132/G5's five new verbs
+echo count_abi_verbs.sh: 35 verbs, matches T-2139 Sec4's 29 plus T-2132/G5's five verbs and T-2199's versioned decode verb
 goto :t2139_verb_count_done
 :t2139_verb_count_skip
-echo bash ^(git-bash^) not found on PATH -- skipping count_abi_verbs.sh ^(non-fatal: this build does not require bash. NOTE, read at source rather than assumed -- no other check in this tree re-derives the 34-verb ABI surface count, so skipping here leaves that specific invariant unchecked on this run, same as every other `where ^<tool^>`-guarded optional step in this script^)
+echo bash ^(git-bash^) not found on PATH -- skipping count_abi_verbs.sh ^(non-fatal: this build does not require bash. NOTE, read at source rather than assumed -- no other check in this tree re-derives the 35-verb ABI surface count, so skipping here leaves that specific invariant unchecked on this run, same as every other `where ^<tool^>`-guarded optional step in this script^)
 :t2139_verb_count_done
 
 rem C2's own Gate B smoke: maps a real artifact, exercises C1's own construction verbs against

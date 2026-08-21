@@ -161,6 +161,9 @@ struct sslm_model_s {
 	sslm_model_engine_cache engine;
 	superslm::SchemaMasksTable schemas;
 	std::vector<sslm_schema_s> schema_handles;
+	// Immutable all-legal mask for unconstrained damped decoding. Built once at map time so a
+	// free-text decode call does not allocate and fill a vocab-sized bitset on every token.
+	std::vector<uint8_t> damped_greedy_free_text_mask;
 };
 
 // C6. A mapped LoRA adapter (design Sec9 C6, S-LoRA-serial's own outstanding ABI debt): wraps
@@ -330,6 +333,18 @@ struct sslm_seq_s {
 	// release concurrent with an in-flight step naming the SAME live sequence), not a general
 	// double-release/use-after-release guard -- that remains caller UB exactly as documented here.
 };
+
+namespace {
+
+void ClearDampedGreedyState(sslm_seq_s* seq) {
+	if (seq->damped_greedy_antilm) {
+		superslm::AntiLmDestroy(seq->damped_greedy_antilm);
+		seq->damped_greedy_antilm = nullptr;
+	}
+	seq->damped_greedy_antilm_order = 0;
+}
+
+}  // namespace
 
 // T-2199 Phase D3 fix, corrected a SECOND time (Sec9 dim3, GATE, D-SLM3719): the first two
 // corrections (moving the batch lock earlier, then earlier still) both STILL crashed under
@@ -883,17 +898,20 @@ extern "C" size_t sslm_seq_state_size(sslm_model model) {
 	// kv_precision(4) + schema_name_hash(8) + dfa_walk_state(4) + adapter_binding_id(8) +
 	// context_length(8) + layer_index(4) + current_token(4, design commit 9e2995f4e7's own
 	// amendment -- see the C5 block's own top comment) + hidden_scale(16, CarriedScale as two
-	// int64) + kv_saturation_count(8) + forced_token_count(8, design Sec7.3, D-SLM3486, 'SSB2' --
-	// see the C5 block's own top comment) + kv_block_count(4) = 112 bytes. THIS CONSTANT IS
-	// INDEPENDENT of the save/restore block's own kSeqBlobFixedHeaderBytes (108, which excludes
+	// int64) + kv_saturation_count(8) + forced_token_count(8) + damped_greedy_order(4) +
+	// damped_greedy_history_count(8) + kv_block_count(4) = 124 bytes. THIS CONSTANT IS
+	// INDEPENDENT of the save/restore block's own kSeqBlobFixedHeaderBytes (120, which excludes
 	// kv_block_count, added separately at each of that block's own call sites) -- both name the
 	// same design Sec7.3 field list and must be kept in step by hand; there is no single shared
 	// constant between this function and sslm_seq_save/sslm_seq_restore (S4/M4 sweep,
 	// Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md and the coordinator's own M4 follow-up brief).
-	constexpr size_t kFixedHeaderBytes = 112;
+	constexpr size_t kFixedHeaderBytes = 124;
 	SaturatingAccumulator acc;
 	acc.value = kFixedHeaderBytes;
 	acc.AddProduct(1, static_cast<size_t>(c.hidden_size));  // residual_bytes, int8 codes
+	// At most one generated-token history entry per context position. This keeps the model-only
+	// sizing verb a true upper bound for every sequence despite SSB3's variable history tail.
+	acc.AddProduct(static_cast<size_t>(c.context_cap), sizeof(int32_t));
 	acc.AddProduct(1, block_size);  // kv_blocks: exactly one block (Sec7.2's ruled unit)
 	return acc.value;
 }
@@ -1134,7 +1152,10 @@ extern "C" sslm_status sslm_model_map(const void* data, size_t size, sslm_model*
 	// fact about the PLAIN shared slot it arms: that one still always trips Load's own
 	// consultation first, by design -- the two pins now exercise the two independent slots.
 	const sslm_status cache_st = CatchAllocationFailure([&]() -> sslm_status {
-		return BuildEngineCache(h) ? SSLM_OK : SSLM_ARTIFACT_REJECTED;
+		if (!BuildEngineCache(h)) return SSLM_ARTIFACT_REJECTED;
+		h->damped_greedy_free_text_mask.assign(
+		    (static_cast<size_t>(h->view.config.vocab_size) + 7) / 8, 0xFF);
+		return SSLM_OK;
 	});
 	if (cache_st != SSLM_OK) {
 		delete h;
@@ -1726,7 +1747,7 @@ extern "C" sslm_status sslm_seq_release(sslm_seq seq) {
 	// state, if it was ever created, is destroyed here -- before ReturnBlock/delete, matching
 	// this function's own established teardown order (release owned resources, then the pool
 	// block, then the handle itself).
-	if (seq->damped_greedy_antilm) superslm::AntiLmDestroy(seq->damped_greedy_antilm);
+	ClearDampedGreedyState(seq);
 	ReturnBlock(seq->pool, seq->block_index, seq->kv_block, seq->block_size);
 	seq->model->live_refs.fetch_sub(1, std::memory_order_acq_rel);
 	delete seq;
@@ -1770,6 +1791,7 @@ extern "C" sslm_status sslm_seq_set_schema(sslm_seq seq, sslm_schema schema) {
 
 extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
 	if (!seq) return SSLM_INVALID_ARGUMENT;
+	std::lock_guard<std::mutex> lifecycle_lock(seq->lifecycle_mutex);
 	if (seq->state.layer_index != 0) return SSLM_SEQ_RESET_MIDTOKEN_REJECTED;
 	// T-2132 M2 fix (same class as DrawBlock's own zero-fill, above): reset re-exposes this
 	// block's not-yet-written region to the NEXT generation exactly the way a fresh draw does --
@@ -1801,6 +1823,9 @@ extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
 	// discipline this dimension already applies to KV-block recycling, applied here).
 	seq->dfa_walk_state = seq->bound_schema ? 0u : kDfaWalkStateUnused;
 	seq->forced_token_count = 0;
+	// Damped-greedy history belongs to the generation being reset, just like K/V and the
+	// pending token above. Keeping it would make reset-and-restart depend on the prior run.
+	ClearDampedGreedyState(seq);
 	return SSLM_OK;
 }
 
@@ -1817,6 +1842,7 @@ extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
 extern "C" sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix) {
 	if (!seq) return SSLM_INVALID_ARGUMENT;
 	if (!prefix) return SSLM_INVALID_ARGUMENT;
+	std::lock_guard<std::mutex> lifecycle_lock(seq->lifecycle_mutex);
 	// M2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): SSLM_PREFIX_FROZEN_REJECTED's design
 	// Sec6 meaning is "sslm_prefix_prefill called on a prefix PAST freeze" -- i.e. the call is
 	// rejected BECAUSE the prefix is frozen. Adoption is the opposite condition (rejected because
@@ -1853,6 +1879,9 @@ extern "C" sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix) {
 	// walk-state (and binding) is left exactly as it already was, per design Sec5.
 
 	std::memcpy(seq->kv_block, prefix->kv_block, seq->block_size);
+	// A frozen prefix contains prompt/forced forward state, never this sequence's prior generated
+	// token history. Adoption replaces the sequence origin, so any warm anti-LM must be discarded.
+	ClearDampedGreedyState(seq);
 	std::copy(prefix->hidden_codes_storage.begin(), prefix->hidden_codes_storage.end(),
 	          seq->hidden_codes_storage.begin());
 	seq->state.hidden_scale = prefix->state.hidden_scale;
@@ -1934,14 +1963,10 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
                                          int32_t* out_tokens) {
 	if (!model || !seqs || !params || !out_tokens) return SSLM_INVALID_ARGUMENT;
 	if (n < 1) return SSLM_INVALID_ARGUMENT;
-	// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is validated FIRST, ahead of
-	// every other field -- a caller whose header/library are skewed relative to this struct's own
-	// 1.2 shape gets a loud, defined SSLM_INVALID_ARGUMENT here rather than a partial read of
-	// fields it never agreed to the layout of (this struct's own top comment, sslm_abi.h, has the
-	// full rationale). No separate "legacy struct_size==0" exemption: D-SLM3797 states the field
-	// is free to add only while 1.2's own shape is unshipped, so every in-tree caller (this
-	// repo's own tools/pins) was updated to set it in the SAME commit as this check, per the
-	// standing rule.
+	// Only sslm_decode_step_v2 accepts caller memory here. Its distinct symbol proves the caller
+	// selected the extended struct contract, so reading and validating struct_size is safe. The
+	// legacy wrapper below reads only the shipped four-byte layer_budget prefix and supplies its
+	// own complete local struct.
 	if (params->struct_size != sizeof(sslm_decode_params)) return SSLM_INVALID_ARGUMENT;
 	if (params->layer_budget < 1 ||
 	    static_cast<uint32_t>(params->layer_budget) > model->view.config.num_hidden_layers) {
@@ -2068,20 +2093,8 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 
 	const superslm::SslmModelConfig& c = model->view.config;
 
-	// T-2199 Phase D closing-round residue, N7 (Claude/Poirot/a12bbdd-t2199-phaseD-closing.md):
-	// the free-text damped-greedy mask depends on nothing but vocab_size, which is constant for
-	// this WHOLE call -- hoisted here (once per call) rather than declared inside the
-	// per-sequence loop below (previously once per LIVE sequence per call, ~19 KB heap
-	// allocation plus memset each time at the real 151,936-wide target vocab). Only built when
-	// this call's own mode is damped-greedy at all (mode is call-wide, not per-sequence, so this
-	// check runs once); the per-sequence loop below still only USES it for a sequence with no
-	// bound schema (superslm::ApplyMaskAndArgmax's own schema-bound branch reads the artifact's
-	// own mask page instead and never touches this buffer).
-	std::vector<uint8_t> free_text_mask;
-	if (params->mode == SSLM_DECODE_MODE_DAMPED_GREEDY) {
-		free_text_mask.assign((static_cast<size_t>(c.vocab_size) + 7) / 8, 0xFF);
-	}
-
+	// The free-text damped-greedy mask is immutable model state, allocated once by model_map.
+	// Schema-bound sequences instead read their artifact mask page below.
 	// S7 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): "never mallocs on the hot path"
 	// (design Sec2/Sec10 dim7) -- when the caller supplies a workspace sized against THIS model
 	// (the ordinary case: sslm_workspace_size(model, &config) then sslm_workspace_create), this
@@ -2242,10 +2255,9 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 				mask_bits = entry->mask_pages +
 				            static_cast<size_t>(seq->dfa_walk_state) * model->schemas.MaskPageBytes();
 			} else {
-				// Sec6: free-text mode's mask is all-ones by construction -- N7 fix: built ONCE,
-				// above this per-sequence loop (this function's own hoisted `free_text_mask`),
-				// not re-declared/re-filled per sequence per call.
-				mask_bits = free_text_mask.data();
+				// Sec6: free-text mode's mask is all-ones by construction and is built once at
+				// model-map time, never allocated or re-filled on the decode path.
+				mask_bits = model->damped_greedy_free_text_mask.data();
 			}
 			// Mask-first: narrow masked positions to INT32_MIN in place, matching
 			// ApplyMaskAndArgmax's own masking half exactly (superslm::ApplyMaskAndArgmax,
@@ -2258,10 +2270,10 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 			// paying a full O(vocab_size) bit-test pass per sequence per token (~151,936 tests at
 			// the real target vocab). Skipped entirely when `seq->bound_schema` is null; run only
 			// when a real, possibly-non-all-ones schema mask page is in play. `mask_bits` itself
-			// (the ~19 KB free-text allocation above) is kept unconditionally -- it is still a
+			// (the model-owned ~19 KB free-text mask) is kept unconditionally -- it is still a
 			// required argument to DampedGreedyScoreAndArgmax below, whichever branch built it.
 			if (seq->bound_schema) {
-				for (int32_t t = 0; t < c.vocab_size; ++t) {
+				for (uint32_t t = 0; t < c.vocab_size; ++t) {
 					if (!((mask_bits[static_cast<size_t>(t) >> 3] >> (t & 7)) & 1u)) {
 						logit_row[t] = INT32_MIN;
 					}
@@ -2367,6 +2379,21 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_t n,
                                          const sslm_decode_params* params, sslm_workspace ws,
                                          int32_t* out_tokens) {
+	// v1.1 ABI compatibility: the released struct was exactly one int32_t. Never inspect a later
+	// field through this pointer; an old binary may legally have allocated only four bytes.
+	if (!params) return SSLM_INVALID_ARGUMENT;
+	sslm_decode_params legacy{};
+	legacy.layer_budget = params->layer_budget;
+	legacy.struct_size = sizeof(legacy);
+	legacy.mode = SSLM_DECODE_MODE_GREEDY;
+	return CatchAllocationFailure([&]() -> sslm_status {
+		return sslm_decode_stepImpl(model, seqs, n, &legacy, ws, out_tokens);
+	});
+}
+
+extern "C" sslm_status sslm_decode_step_v2(sslm_model model, sslm_seq* seqs, int32_t n,
+                                             const sslm_decode_params* params, sslm_workspace ws,
+                                             int32_t* out_tokens) {
 	return CatchAllocationFailure([&]() -> sslm_status {
 		return sslm_decode_stepImpl(model, seqs, n, params, ws, out_tokens);
 	});
@@ -2464,11 +2491,11 @@ extern "C" sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out
 
 namespace {
 
-// D-SLM3486 (design Sec7.3, M4): magic bumped 'SSB1' -> 'SSB2' for forced_token_count joining the
-// blob -- the standing magic-per-version law, not a second in-place amendment. A 'SSB1'-magic blob
-// (or any other non-'SSB2' magic) is rejected outright on the memcmp check in sslm_seq_restore,
-// below, never parsed as SSB2 and never left to default the new field to 0.
-constexpr uint8_t kSeqBlobMagic[4] = {'S', 'S', 'B', '2'};
+// The standing magic-per-version law is preserved: SSB2 introduced forced_token_count; SSB3
+// introduces damped-greedy history. Any older or foreign magic is rejected before parsing.
+// SSB3 adds damped-greedy anti-LM order and generated-token history. Replaying that history is
+// the canonical reconstruction of the count tables; unordered-map layout never enters the blob.
+constexpr uint8_t kSeqBlobMagic[4] = {'S', 'S', 'B', '3'};
 constexpr int32_t kSeqBlobNoCurrentToken = -1;
 
 void WriteLE32(uint8_t* p, uint32_t v) {
@@ -2490,27 +2517,37 @@ uint64_t ReadLE64(const uint8_t* p) {
 	return v;
 }
 
-// Fixed-size prefix, magic through forced_token_count -- design Sec7.3's own field order
-// ('SSB2', D-SLM3486 -- see this block's own top comment; current_token AMENDED IN under 'SSB1',
-// design commit 9e2995f4e7):
+// Fixed-size prefix, magic through damped_greedy_history_count:
 // magic(4) + model_hash(32) + kv_precision(4) + schema_name_hash(8) + dfa_walk_state(4) +
 // adapter_binding_id(8) + context_length(8) + layer_index(4) + current_token(4) +
-// hidden_scale(16) + kv_saturation_count(8) + forced_token_count(8) = 108 bytes, followed by the
-// variable-length residual, kv_block_count(4), then kv_blocks.
-constexpr size_t kSeqBlobFixedHeaderBytes = 108;
+// hidden_scale(16) + kv_saturation_count(8) + forced_token_count(8) + anti_lm_order(4) +
+// anti_lm_history_count(8) = 120 bytes, followed by the variable-length residual, anti-LM
+// history (history_count little-endian int32 tokens), kv_block_count(4), then kv_blocks.
+constexpr size_t kSeqBlobFixedHeaderBytes = 120;
 
 }  // namespace
 
 extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
 	if (!n) return SSLM_INVALID_ARGUMENT;
 	if (!seq) return SSLM_INVALID_ARGUMENT;
+	std::lock_guard<std::mutex> lifecycle_lock(seq->lifecycle_mutex);
 	sslm_model_s* model = seq->model;
 	const superslm::SslmModelConfig& c = model->view.config;
 	// design Sec7.3: "residual_bytes ... zero-length when layer_index == 0" (§7's own "a
 	// sequence resting between whole tokens carries a zero-length residual").
 	const bool mid_token = seq->state.layer_index != 0;
 	const size_t residual_len = mid_token ? static_cast<size_t>(c.hidden_size) : 0;
-	const size_t required = kSeqBlobFixedHeaderBytes + residual_len + 4 + seq->block_size;
+	const size_t anti_lm_history_count =
+	    seq->damped_greedy_antilm ? superslm::AntiLmHistorySize(seq->damped_greedy_antilm) : 0;
+	size_t anti_lm_history_bytes = 0;
+	size_t required = kSeqBlobFixedHeaderBytes;
+	if (!CheckedMulSizeT(anti_lm_history_count, sizeof(int32_t), &anti_lm_history_bytes) ||
+	    !CheckedAddSizeT(required, residual_len, &required) ||
+	    !CheckedAddSizeT(required, anti_lm_history_bytes, &required) ||
+	    !CheckedAddSizeT(required, 4, &required) ||
+	    !CheckedAddSizeT(required, seq->block_size, &required)) {
+		return SSLM_INVALID_ARGUMENT;
+	}
 	if (!buf || *n < required) {
 		// design Sec7.3: "the same two-call sizing convention sslm_seq_state_size already
 		// establishes" -- *n set to the required size on this specific rejection.
@@ -2566,10 +2603,19 @@ extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
 	// is a legal value, matching current_token's own precedent).
 	WriteLE64(p + off, static_cast<uint64_t>(seq->forced_token_count));
 	off += 8;
+	WriteLE32(p + off, static_cast<uint32_t>(seq->damped_greedy_antilm_order));
+	off += 4;
+	WriteLE64(p + off, static_cast<uint64_t>(anti_lm_history_count));
+	off += 8;
 	if (residual_len > 0) {
 		std::memcpy(p + off, seq->hidden_codes_storage.data(), residual_len);
 	}
 	off += residual_len;
+	for (size_t i = 0; i < anti_lm_history_count; ++i) {
+		WriteLE32(p + off, static_cast<uint32_t>(
+		                       superslm::AntiLmHistoryTokenAt(seq->damped_greedy_antilm, i)));
+		off += sizeof(int32_t);
+	}
 	WriteLE32(p + off, 1);  // kv_block_count -- always 1 (Sec7.2's ruled unit)
 	off += 4;
 	std::memcpy(p + off, seq->kv_block, seq->block_size);
@@ -2597,12 +2643,8 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	// model mismatch -- SSLM_INVALID_ARGUMENT states the actual cause (the blob itself is
 	// unusable) rather than sending the caller to re-check which MODEL it bound.
 	//
-	// D-SLM3486 (design Sec7.3, M4, 'SSB2'): this check is ALSO now the 'SSB1'-rejection --
-	// `kSeqBlobMagic` is 'SSB2', so a well-formed 'SSB1' blob (forced_token_count-less, 100-byte
-	// fixed header) fails this memcmp and is rejected right here, on the magic check alone, never
-	// parsed as SSB2 and never left to silently default forced_token_count to 0 while accepting
-	// the rest of an old-format blob. No 'SSB1'-to-'SSB2' upgrade path exists (design Sec7.3's own
-	// grounding: no genuinely-shipped 'SSB1' consumer exists to need one).
+	// SSB3 rejects SSB1/SSB2 outright rather than silently defaulting fields those versions did
+	// not carry. There is no implicit blob upgrade path at this ABI boundary.
 	if (std::memcmp(p, kSeqBlobMagic, 4) != 0) return SSLM_INVALID_ARGUMENT;
 
 	std::array<uint8_t, 32> saved_hash{};
@@ -2670,13 +2712,34 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	// current_token's own precedent (see this function's own magic-check comment, above, for the
 	// 'SSB1'-rejection half of this ruling).
 	const int64_t saved_forced_token_count = static_cast<int64_t>(ReadLE64(p + 100));
+	const int32_t saved_anti_lm_order = static_cast<int32_t>(ReadLE32(p + 108));
+	const uint64_t saved_anti_lm_history_count_u64 = ReadLE64(p + 112);
+	if ((saved_anti_lm_order == 0 && saved_anti_lm_history_count_u64 != 0) ||
+	    saved_anti_lm_order < 0 ||
+	    saved_anti_lm_history_count_u64 > static_cast<uint64_t>(SIZE_MAX)) {
+		return SSLM_INVALID_ARGUMENT;
+	}
+	const size_t saved_anti_lm_history_count =
+	    static_cast<size_t>(saved_anti_lm_history_count_u64);
 
 	const superslm::SslmModelConfig& c = model->view.config;
+	if (saved_anti_lm_history_count > static_cast<size_t>(c.context_cap)) {
+		return SSLM_INVALID_ARGUMENT;
+	}
 	const bool mid_token = layer_index != 0;
 	const size_t residual_len = mid_token ? static_cast<size_t>(c.hidden_size) : 0;
-	if (n < kSeqBlobFixedHeaderBytes + residual_len + 4) return SSLM_INVALID_ARGUMENT;
+	size_t anti_lm_history_bytes = 0;
+	size_t tail_offset = kSeqBlobFixedHeaderBytes;
+	if (!CheckedMulSizeT(saved_anti_lm_history_count, sizeof(int32_t), &anti_lm_history_bytes) ||
+	    !CheckedAddSizeT(tail_offset, residual_len, &tail_offset) ||
+	    !CheckedAddSizeT(tail_offset, anti_lm_history_bytes, &tail_offset) ||
+	    !CheckedAddSizeT(tail_offset, 4, &tail_offset) || n < tail_offset) {
+		return SSLM_INVALID_ARGUMENT;
+	}
 	const uint8_t* residual_ptr = p + kSeqBlobFixedHeaderBytes;
-	const uint32_t kv_block_count = ReadLE32(residual_ptr + residual_len);
+	const uint8_t* anti_lm_history_ptr = residual_ptr + residual_len;
+	const uint8_t* kv_block_count_ptr = anti_lm_history_ptr + anti_lm_history_bytes;
+	const uint32_t kv_block_count = ReadLE32(kv_block_count_ptr);
 	if (kv_block_count != 1) {
 		// design Sec7.2's ruled unit: a saved sequence always carries exactly one block. A
 		// value other than 1 is a structurally malformed (or pre-ruling-format) blob.
@@ -2684,10 +2747,11 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	}
 	const size_t block_size = sslm_kv_block_size(model);
 	if (block_size == 0) return SSLM_ARTIFACT_REJECTED;
-	if (n < kSeqBlobFixedHeaderBytes + residual_len + 4 + block_size) {
+	size_t exact_blob_size = tail_offset;
+	if (!CheckedAddSizeT(exact_blob_size, block_size, &exact_blob_size) || n != exact_blob_size) {
 		return SSLM_INVALID_ARGUMENT;
 	}
-	const uint8_t* kv_blocks_ptr = residual_ptr + residual_len + 4;
+	const uint8_t* kv_blocks_ptr = kv_block_count_ptr + 4;
 
 	sslm_kv_pool_s* pool_ptr = *pool;
 	// C2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): THE actual overflow site -- checked
@@ -2752,6 +2816,25 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	// verbatim, bit-equal (design Sec7 dim9's own round-trip cell).
 	h->bound_schema = resolved_schema;
 	h->dfa_walk_state = saved_dfa_walk_state;
+	if (saved_anti_lm_order > 0) {
+		const sslm_status anti_lm_st = CatchAllocationFailure([&]() -> sslm_status {
+			h->damped_greedy_antilm = superslm::AntiLmCreate(saved_anti_lm_order);
+			if (!h->damped_greedy_antilm) return SSLM_ALLOCATION_FAILED;
+			h->damped_greedy_antilm_order = saved_anti_lm_order;
+			for (size_t i = 0; i < saved_anti_lm_history_count; ++i) {
+				const int32_t token = static_cast<int32_t>(
+				    ReadLE32(anti_lm_history_ptr + i * sizeof(int32_t)));
+				superslm::AntiLmUpdate(h->damped_greedy_antilm, token);
+			}
+			return SSLM_OK;
+		});
+		if (anti_lm_st != SSLM_OK) {
+			ClearDampedGreedyState(h);
+			ReturnBlock(pool_ptr, block_index, h->kv_block, pool_ptr->block_size);
+			delete h;
+			return anti_lm_st;
+		}
+	}
 	// current_token/ready_for_logits reconstruction -- CLOSED (design commit 9e2995f4e7, the
 	// blob-amendment ruling; see this whole C5 block's own top comment for the finding this
 	// resolves). `saved_current_token` (read above, `-1` sentinel = not applicable) is now the
