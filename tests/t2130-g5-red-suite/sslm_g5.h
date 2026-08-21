@@ -255,8 +255,22 @@ typedef enum sslm_span_kind {
 /* --- decode-time configuration, plan Sec12 (schema field REMOVED this design, Sec5: "is
  * superseded by this per-sequence binding" -- what remains is the field the plan's own Sec12
  * comment names alongside it). --- */
+/* T-2199 Phase D1 (plan Sec8 D1 ruling, D-SLM3476A precedent): sslm_decode_params gained 7
+ * additive fields directly on the real ABI header (include/superslm/sslm_abi.h). Widened here,
+ * same shape, as a STRUCTURAL SAFETY FIX (this suite's own fixture_common.h includes this
+ * LOCAL mirror and passes its address to the REAL, external sslm_decode_step, which now reads
+ * fields past the old 4-byte end -- left unwidened, every call in this suite would pass a
+ * pointer to an under-sized stack allocation) -- not a change to any assertion this suite's own
+ * .cpp files make. */
 typedef struct sslm_decode_params {
     int32_t layer_budget;    /* plan Sec12 (S1) */
+    int32_t mode;
+    int64_t alpha_q15;
+    int32_t anti_lm_max_order;
+    int32_t top_k;
+    int64_t q_ln2;
+    int64_t q_b;
+    int64_t q_c;
 } sslm_decode_params;
 
 /* --- sslm_stats_out, plan Sec12 ("ceiling + actual work, forced-token count, cache state").

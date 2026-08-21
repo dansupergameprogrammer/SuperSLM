@@ -102,8 +102,20 @@ typedef enum sslm_span_kind {
 	SSLM_SPAN_SCHEMA_CONTENT = 1
 } sslm_span_kind;
 
+// T-2199 Phase D1 (plan Sec8 D1 ruling): sslm_decode_params gained 7 additive fields directly
+// (mode/alpha_q15/anti_lm_max_order/top_k/q_ln2/q_b/q_c) -- grown here in the SAME commit that
+// lands the field, per the ruling's own explicit consequence (D-SLM3476A's own precedent:
+// "every duplicate header copy grows in the SAME commit"), closing the exact class of defect
+// this gate exists to catch (a suite-side mirror silently diverging from the real header).
 typedef struct sslm_decode_params {
 	int32_t layer_budget;
+	int32_t mode;
+	int64_t alpha_q15;
+	int32_t anti_lm_max_order;
+	int32_t top_k;
+	int64_t q_ln2;
+	int64_t q_b;
+	int64_t q_c;
 } sslm_decode_params;
 
 typedef struct sslm_stats_out {
@@ -190,6 +202,28 @@ static_assert(alignof(t2139_gate_c_suite_side::sslm_decode_params) ==
 static_assert(offsetof(t2139_gate_c_suite_side::sslm_decode_params, layer_budget) ==
                   offsetof(::sslm_decode_params, layer_budget),
               "sslm_decode_params::layer_budget: offsetof diverges");
+// T-2199 Phase D1: the 7 additive fields, same per-field discipline.
+static_assert(offsetof(t2139_gate_c_suite_side::sslm_decode_params, mode) ==
+                  offsetof(::sslm_decode_params, mode),
+              "sslm_decode_params::mode: offsetof diverges");
+static_assert(offsetof(t2139_gate_c_suite_side::sslm_decode_params, alpha_q15) ==
+                  offsetof(::sslm_decode_params, alpha_q15),
+              "sslm_decode_params::alpha_q15: offsetof diverges");
+static_assert(offsetof(t2139_gate_c_suite_side::sslm_decode_params, anti_lm_max_order) ==
+                  offsetof(::sslm_decode_params, anti_lm_max_order),
+              "sslm_decode_params::anti_lm_max_order: offsetof diverges");
+static_assert(offsetof(t2139_gate_c_suite_side::sslm_decode_params, top_k) ==
+                  offsetof(::sslm_decode_params, top_k),
+              "sslm_decode_params::top_k: offsetof diverges");
+static_assert(offsetof(t2139_gate_c_suite_side::sslm_decode_params, q_ln2) ==
+                  offsetof(::sslm_decode_params, q_ln2),
+              "sslm_decode_params::q_ln2: offsetof diverges");
+static_assert(offsetof(t2139_gate_c_suite_side::sslm_decode_params, q_b) ==
+                  offsetof(::sslm_decode_params, q_b),
+              "sslm_decode_params::q_b: offsetof diverges");
+static_assert(offsetof(t2139_gate_c_suite_side::sslm_decode_params, q_c) ==
+                  offsetof(::sslm_decode_params, q_c),
+              "sslm_decode_params::q_c: offsetof diverges");
 
 // --- sslm_stats_out: sizeof/alignof/offsetof per field ---
 static_assert(sizeof(t2139_gate_c_suite_side::sslm_stats_out) == sizeof(::sslm_stats_out),

@@ -33,3 +33,15 @@ SSLM_SCHEMA_NONE  # T-2132 (G5-2), added 2026-08-17. This checker's own inventor
 # sslm_seq_set_schema/sslm_prefix_set_schema caller passes), matching sslm_g5.h's own
 # unconditional #define -- allowlisted here rather than mis-filed against t2133's own Sec8
 # text, which would be citing the wrong design for what it does not, and should not, name.
+SSLM_DECODE_MODE_GREEDY  # T-2199 Phase D1, added 2026-08-20 (Claude/Plans/
+# superslm-1p2-fsd-plan-2026-08-19.md Sec8 Phase D1, Wizard repo -- a different design document
+# this checker's own inventory source, t2133 Sec8, does not and structurally cannot cover, same
+# shape as SSLM_SCHEMA_NONE above). Public, consumer-facing surface: the value a caller sets
+# sslm_decode_params::mode to for the pre-existing greedy-argmax selection (0, and the default
+# under zero-init, so every existing caller is unaffected). Ruled public by T-2199's own Sec8
+# D1 ("an ADDITIVE FIELD... `mode` selects the decode-step's own selection mechanism"; sslm_abi.h
+# carries the constant's own inventory comment directly, but Sec8's own inventory line lives in
+# the OTHER design document, hence this allowlist entry rather than a t2133 mis-file).
+SSLM_DECODE_MODE_DAMPED_GREEDY  # T-2199 Phase D1, added 2026-08-20 -- pairs with
+# SSLM_DECODE_MODE_GREEDY immediately above; same design document, same reasoning, the other of
+# the two legal values `sslm_decode_params::mode` accepts (1).

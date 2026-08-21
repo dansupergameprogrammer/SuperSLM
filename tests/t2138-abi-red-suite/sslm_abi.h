@@ -184,8 +184,27 @@ typedef enum sslm_span_kind {
     SSLM_SPAN_SCHEMA_CONTENT = 1
 } sslm_span_kind;
 
+// T-2199 Phase D1 (plan Sec8 D1 ruling, D-SLM3476A precedent): sslm_decode_params gained 7
+// additive fields directly on the real ABI header (include/superslm/sslm_abi.h). Widened here,
+// in the SAME shape, as a STRUCTURAL SAFETY FIX rather than a test-content edit: this suite's
+// own fixture_common.h includes this LOCAL mirror via a bare `#include "sslm_abi.h"`
+// (deliberately decoupled from the real header, matching this suite's own S-FREEZE-mirror
+// convention) and passes its address to the REAL, external sslm_decode_step -- which now reads
+// fields past this struct's own end. Left at the old 4-byte size, every call in this suite
+// would pass a pointer to an under-sized stack allocation, and the real function's own
+// `params->mode` read becomes an out-of-bounds read of whatever stack memory happens to follow
+// -- a genuine memory-safety hazard this widening closes, not a change to any assertion this
+// suite's own .cpp files make. Field values are irrelevant here (this struct carries no
+// initializer), only the LAYOUT matching the real header's own.
 typedef struct sslm_decode_params {
     int32_t layer_budget;
+    int32_t mode;
+    int64_t alpha_q15;
+    int32_t anti_lm_max_order;
+    int32_t top_k;
+    int64_t q_ln2;
+    int64_t q_b;
+    int64_t q_c;
 } sslm_decode_params;
 
 typedef struct sslm_stats_out {
