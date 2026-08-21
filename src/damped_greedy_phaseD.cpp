@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "superslm/intmath.h"
+#include "superslm/sslm_damped_greedy.h"  // N2 fix: the shared AlphaQ15InDomain validator
 
 // T-2199 Phase D review fix S5: relocated into namespace superslm (see sslm_phaseD.h's own top
 // comment for the full reasoning and the suite-link argument).
@@ -106,11 +107,14 @@ bool ValidateDampedGreedyParams(const DampedGreedyValidationParams& p,
 		return false;
 	}
 	if (p.mode != DampedGreedyMode::kDampedGreedy) return true;  // greedy: nothing further to validate
-	if (p.alpha_q15 < 0) return false;
-	// T-2199 Phase D review fix, C2: the plan's own two-sided sanity ceiling (Sec9 dim2:
-	// "alpha_q15 is rejected outside [0, 2^20)") -- a defense-in-depth bound on top of the
-	// field's own int32_t width (sslm_abi.h's own C2 comment), not a substitute for it.
-	if (p.alpha_q15 >= (int32_t{1} << 20)) return false;
+	// T-2199 Phase D review fix, C2, and closing-round residue N2
+	// (Claude/Poirot/a12bbdd-t2199-phaseD-closing.md): the plan's own two-sided sanity ceiling
+	// (Sec9 dim2: "alpha_q15 is rejected outside [0, 2^20)") -- a defense-in-depth bound on top of
+	// the field's own int32_t width (sslm_abi.h's own C2 comment), not a substitute for it. N2
+	// fix: routed through the SAME shared superslm::AlphaQ15InDomain (sslm_damped_greedy.h) the
+	// two public score-and-argmax entry points now enforce themselves, rather than re-deriving the
+	// identical bound a second time in this translation unit.
+	if (!superslm::AlphaQ15InDomain(p.alpha_q15)) return false;
 	if (p.anti_lm_max_order < 1) return false;
 	if (p.top_k < 1 || p.top_k > vocab_size) return false;
 	return true;

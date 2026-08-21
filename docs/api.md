@@ -136,16 +136,38 @@ silently accepted.
   forced schema content) through the forward pass in one batched call —
   proven bit-identical to processing the same tokens one at a time, at
   every chunk size (see the README's sliceable-inference section).
-- `sslm_decode_step` advances a batch of sequences by one token each, with
-  a caller-chosen layer budget (`sslm_decode_params::layer_budget`) — the
-  mechanism behind sliceable inference. `out_tokens[i]` carries two
-  reserved sentinel values alongside a real token id: `-1` means the call
-  is still mid-token (call again with the same layer budget to continue),
-  and `-2` means that sequence's schema-bound walk has reached a state with
-  no legal continuation at all — a per-sequence outcome, not a call
-  failure; the overall call still returns `SSLM_OK`, and nothing advances
-  for that sequence until the caller does something else with it (rebind a
-  schema, reset, etc.).
+- `sslm_decode_step` advances a batch of sequences by one token each.
+  `sslm_decode_params`'s FIRST field is `struct_size` (D-SLM3797) —
+  caller-set to `sizeof(sslm_decode_params)`, library-validated: any other
+  value is a defined `SSLM_INVALID_ARGUMENT` rejection, checked before every
+  other field, so a caller compiled against a mismatched header/library
+  pair gets a loud reject rather than a partial read. `layer_budget` is the
+  caller-chosen layer budget — the mechanism behind sliceable inference.
+  `mode` selects the decode-step's own selection mechanism:
+  `SSLM_DECODE_MODE_GREEDY` (0, the default under zero-init) or
+  `SSLM_DECODE_MODE_DAMPED_GREEDY` (1) — any other value is rejected, never
+  silently treated as greedy. Under damped-greedy mode, five more fields
+  apply: `alpha_q15` (the Q15-scaled anti-repetition weight, an `int32_t`
+  rejected outside `[0, 2^20)`), `anti_lm_max_order` (the anti-LM's own n,
+  `>= 1`), `top_k` (candidates scored per step, `1 <= top_k <= vocab_size`),
+  and `q_ln2`/`q_b`/`q_c` (runtime i-exp scale constants the caller derives
+  once per model load from the artifact's own scale section and passes per
+  call). All five are ignored under greedy mode. `out_tokens[i]` carries
+  THREE reserved sentinel values alongside a real token id: `-1` means the
+  call is still mid-token and safe to retry (call again with the same layer
+  budget to continue); `-2` means that sequence's schema-bound walk has
+  reached a state with no legal continuation at all — a per-sequence
+  outcome, not a call failure, and safe to retry (nothing about that
+  sequence changes until the caller does something else with it — rebind a
+  schema, reset, etc.); and `-3` means this index named a sequence that is
+  **not currently live** (concurrently released by another thread) — unlike
+  `-1`, this is **not** safe to retry with the same state, since the caller
+  no longer holds a live handle to that sequence at all. All three leave
+  the overall call returning `SSLM_OK`. A numeric refusal on an otherwise
+  valid model and valid params (a per-step gate declining, not an artifact
+  defect) returns `SSLM_NUMERIC_STEP_REFUSED` rather than rejecting the
+  model — safe to retry once the caller adjusts the parameters that
+  triggered it.
 - `sslm_tokenize` / `sslm_detokenize_stream` convert between text and token
   ids; the streaming detokenizer carries a small caller-owned state struct
   across calls so a partial UTF-8 sequence at a call boundary is handled
@@ -186,7 +208,7 @@ reproducible, on the same certified platform, as an unconstrained one.
 
 ### Status causes
 
-`sslm_status` carries one success value (`SSLM_OK`) plus 25 distinct
+`sslm_status` carries one success value (`SSLM_OK`) plus 26 distinct
 rejection causes (an internal sentinel past the last real value is never
 returned or accepted as an argument), in five groups: argument/precondition
 rejections (a bad argument, a buffer too small, a misaligned buffer);
@@ -195,14 +217,16 @@ match its base model, a restore whose content or KV shape doesn't match);
 lifecycle rejections (a model, pool, or adapter with live handles still
 attached to it; an adapter swap or sequence reset mid-token; a frozen
 prefix reused; a KV pool with no room left); numeric/domain rejections (a
-token id out of range, a context length exceeded, or — a case distinct
-from "out of range" — a legal decode-output token id with no tokenizer
-entry, for the padded-vocabulary case); and schema rejections (an unknown
-schema name; binding a schema to a non-fresh sequence; a schema-content
-span on an unbound sequence; a prefix or restore whose schema doesn't
-match; a fixed span the schema's own DFA cannot reach; a schema the
-offline compiler could not prove satisfiable) plus one process-level
-resource-exhaustion cause distinct from a caller-supplied
+token id out of range, a context length exceeded, a legal decode-output
+token id with no tokenizer entry for the padded-vocabulary case, or —
+distinct from all of those — a per-step numeric gate declining on an
+otherwise valid model and valid params, `SSLM_NUMERIC_STEP_REFUSED`,
+`sslm_decode_step`'s own damped-greedy mode only); and schema rejections
+(an unknown schema name; binding a schema to a non-fresh sequence; a
+schema-content span on an unbound sequence; a prefix or restore whose
+schema doesn't match; a fixed span the schema's own DFA cannot reach; a
+schema the offline compiler could not prove satisfiable) plus one
+process-level resource-exhaustion cause distinct from a caller-supplied
 buffer running out.
 
 ## The GPU schema-constrained decoding surface — shipped

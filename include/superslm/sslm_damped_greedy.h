@@ -140,6 +140,29 @@ void FsdTopK(const int32_t* masked_row, const uint8_t* mask_bits, int32_t vocab_
 // p_omega(v)) >> kProbFracBits (both widened to int64 before the multiply, narrowed by the
 // shift before the subtraction), s(v) = q_theta(v) - alpha_eff. For each masked candidate:
 // s(v) = INT64_MIN exactly. Argmax over the k scores, lowest-token-index tie-break.
+// T-2199 Phase D closing-round residue, N2 (Claude/Poirot/a12bbdd-t2199-phaseD-closing.md): the
+// SINGLE shared validator for alpha_q15's own ruled domain, [0, 2^20) (plan Sec9 dim2) --
+// defined here (damped_greedy_topk.cpp) because this is the LOWEST layer both callers share:
+// DampedGreedyScoreAndArgmax/Diag below call it directly, and
+// superslm::ValidateDampedGreedyParams (Phase D, damped_greedy_phaseD.cpp) calls it too rather
+// than re-deriving the same bound a second time. Before this fix, ScoreAndSelect's own
+// static_cast<int32_t> narrowing (O2) was value-preserving only because every CALLER happened
+// to already enforce this domain -- nothing at THIS function's own boundary did, so
+// alpha_q15 >= 2^31 silently inverted the anti-repetition penalty into the largest possible
+// bonus (the most-repeated token wins), reachable from the public ABI even though the ABI's
+// own struct-level field is int32_t (an int64_t argument here accepts any int32_t value
+// sign-extended, including negative int32_t values reread as huge positive ones is NOT the
+// path -- the reachable path is a caller of this int64_t-signature primitive directly, e.g. a
+// future calibration harness bypassing the ABI's own per-call cost, exactly as the review's own
+// prediction names).
+[[nodiscard]] bool AlphaQ15InDomain(int64_t alpha_q15) noexcept;
+
+// Domain, STATED (N2 fix): 1 <= k <= vocab_size AND 0 <= alpha_q15 < 2^20 -- BOTH checked
+// before anything else runs, via KAndVocabInDomain and AlphaQ15InDomain (damped_greedy_topk.cpp,
+// the same false-on-violation convention as the k/vocab_size check already used). This makes the
+// sign-inversion at alpha_q15 >= 2^31 UNREACHABLE from either public wrapper -- the cast in
+// ScoreAndSelect (this function's own callee) never sees a value outside the range its
+// value-preservation argument depends on.
 [[nodiscard]] bool DampedGreedyScoreAndArgmax(const int32_t* masked_row, const uint8_t* mask_bits,
                                                int32_t vocab_size, int32_t k,
                                                const AntiLmState* anti_lm, int64_t alpha_q15,
@@ -170,8 +193,8 @@ struct DampedGreedyDiagnostics {
 	                         // anti-LM values, never fabricated zeros (RULED, fold 21: plan
 	                         // Sec7.5 ruling note; O2 reverted -- Poirot S7/S8, 927bbda casebook)
 };
-// Same domain (1 <= k <= vocab_size) and false-on-violation contract as
-// DampedGreedyScoreAndArgmax above (Poirot C1). On a domain violation *out_diag is left
+// Same domain (1 <= k <= vocab_size AND 0 <= alpha_q15 < 2^20, N2 fix) and false-on-violation
+// contract as DampedGreedyScoreAndArgmax above (Poirot C1). On a domain violation *out_diag is left
 // UNTOUCHED (the return is false before anything is written); on a TopKRenormalizeQ15
 // refusal (return true, *out_refused = true) *out_diag is zero-filled rather than computed.
 // Either way, every field is only MEANINGFUL when the return is true and *out_refused is

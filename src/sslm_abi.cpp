@@ -379,7 +379,13 @@ struct sslm_seq_s {
 // decode call can hold a lightweight "this sequence will outlive my touch of it" token without
 // holding the registry lock for its own decode work) -- a genuine design question, not fixed
 // here, and NOT worked around with an unsound reorder that would reintroduce the exact crash
-// class this whole D3 fix exists to close. Routed.
+// class this whole D3 fix exists to close. Routed -- and RULED, not merely proposed: plan Sec9
+// dim3, T-2199 fold 24 (Claude/Plans/superslm-1p2-fsd-plan-2026-08-19.md), accepts this shape as
+// current-and-correct and declines the refcounted/generation-checked alternative for now (bounded,
+// precisely-priced contention against an unproven redesign on a subsystem already gotten wrong
+// twice) -- see the closing-round review's own N5 finding
+// (Claude/Poirot/a12bbdd-t2199-phaseD-closing.md) for why this comment, not the board or the
+// decision log, was previously the only place this was recorded.
 static std::mutex g_seq_registry_mutex;
 static std::unordered_set<sslm_seq_s*> g_live_seqs;
 
@@ -2062,6 +2068,20 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 
 	const superslm::SslmModelConfig& c = model->view.config;
 
+	// T-2199 Phase D closing-round residue, N7 (Claude/Poirot/a12bbdd-t2199-phaseD-closing.md):
+	// the free-text damped-greedy mask depends on nothing but vocab_size, which is constant for
+	// this WHOLE call -- hoisted here (once per call) rather than declared inside the
+	// per-sequence loop below (previously once per LIVE sequence per call, ~19 KB heap
+	// allocation plus memset each time at the real 151,936-wide target vocab). Only built when
+	// this call's own mode is damped-greedy at all (mode is call-wide, not per-sequence, so this
+	// check runs once); the per-sequence loop below still only USES it for a sequence with no
+	// bound schema (superslm::ApplyMaskAndArgmax's own schema-bound branch reads the artifact's
+	// own mask page instead and never touches this buffer).
+	std::vector<uint8_t> free_text_mask;
+	if (params->mode == SSLM_DECODE_MODE_DAMPED_GREEDY) {
+		free_text_mask.assign((static_cast<size_t>(c.vocab_size) + 7) / 8, 0xFF);
+	}
+
 	// S7 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): "never mallocs on the hot path"
 	// (design Sec2/Sec10 dim7) -- when the caller supplies a workspace sized against THIS model
 	// (the ordinary case: sslm_workspace_size(model, &config) then sslm_workspace_create), this
@@ -2216,18 +2236,15 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 		// byte-for-byte unchanged for mode=SSLM_DECODE_MODE_GREEDY (Poirot-style no-regression
 		// discipline, this ticket's own build log).
 		if (params->mode == SSLM_DECODE_MODE_DAMPED_GREEDY) {
-			const size_t mask_bytes = (static_cast<size_t>(c.vocab_size) + 7) / 8;
-			std::vector<uint8_t> free_text_mask;
 			const uint8_t* mask_bits;
 			if (seq->bound_schema) {
 				const superslm::SchemaEntry* entry = model->schemas.ByIndex(seq->bound_schema->index);
 				mask_bits = entry->mask_pages +
 				            static_cast<size_t>(seq->dfa_walk_state) * model->schemas.MaskPageBytes();
 			} else {
-				// Sec6: free-text mode's mask is all-ones by construction -- built once per call,
-				// per sequence (no persistent buffer needed; this is not the hot O(V) cost this
-				// design's own Sec2.4 measured, it is a memset-shaped O(V/8) fill).
-				free_text_mask.assign(mask_bytes, 0xFF);
+				// Sec6: free-text mode's mask is all-ones by construction -- N7 fix: built ONCE,
+				// above this per-sequence loop (this function's own hoisted `free_text_mask`),
+				// not re-declared/re-filled per sequence per call.
 				mask_bits = free_text_mask.data();
 			}
 			// Mask-first: narrow masked positions to INT32_MIN in place, matching

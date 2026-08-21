@@ -40,6 +40,16 @@ inline bool KAndVocabInDomain(int32_t vocab_size, int32_t k) {
 
 }  // namespace
 
+// T-2199 Phase D closing-round residue, N2 (Claude/Poirot/a12bbdd-t2199-phaseD-closing.md): the
+// single shared validator declared in sslm_damped_greedy.h -- see that declaration's own comment
+// for the full reasoning. Exported (not in the anonymous namespace above, unlike
+// KAndVocabInDomain) specifically so superslm::ValidateDampedGreedyParams (Phase D,
+// damped_greedy_phaseD.cpp, a different translation unit) can call the SAME check rather than
+// re-deriving the same [0, 2^20) bound a second time.
+bool AlphaQ15InDomain(int64_t alpha_q15) noexcept {
+	return alpha_q15 >= 0 && alpha_q15 < (int64_t{1} << 20);
+}
+
 // Phase C1 (Sec7.4).
 //
 // Domain: 1 <= k <= vocab_size. This function has no channel to report a domain violation
@@ -296,6 +306,9 @@ bool DampedGreedyScoreAndArgmax(const int32_t* masked_row, const uint8_t* mask_b
                                  int64_t alpha_q15, int64_t q_ln2, int64_t q_b, int64_t q_c,
                                  int32_t* out_token, bool* out_refused) {
 	if (!KAndVocabInDomain(vocab_size, k)) return false;
+	// N2 fix: checked BEFORE ScoreAndSelect's own cast ever runs -- makes the sign-inversion at
+	// alpha_q15 >= 2^31 unreachable from this public entry point.
+	if (!AlphaQ15InDomain(alpha_q15)) return false;
 
 	ScoredCandidates sc;
 	if (!ScoreAndSelect(masked_row, mask_bits, vocab_size, k, anti_lm, alpha_q15, q_ln2, q_b, q_c,
@@ -316,6 +329,8 @@ bool DampedGreedyScoreAndArgmaxDiag(const int32_t* masked_row, const uint8_t* ma
                                      int64_t full_row_z, int32_t* out_token, bool* out_refused,
                                      DampedGreedyDiagnostics* out_diag) {
 	if (!KAndVocabInDomain(vocab_size, k)) return false;
+	// N2 fix: same shared check as DampedGreedyScoreAndArgmax above.
+	if (!AlphaQ15InDomain(alpha_q15)) return false;
 
 	std::memset(out_diag, 0, sizeof(*out_diag));
 
