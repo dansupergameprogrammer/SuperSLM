@@ -871,25 +871,30 @@ _B3_MAGNITUDE_WARN_RATIO = 10.0
 #
 # The check's own axis is `delta_norm`'s ratio to a fixed reference. Read directly, without
 # excluding any candidate, from `Claude/Vitruvius/t2204-fold-round4-probe/
-# t2204r4_magnitude_domain_output.json` and its `t2210_magnitude_axis_output.json` sibling
-# (Wizard repo; both replay the SAME 18 honest + 8 "corrupt" constructions, both drawing `a_f` and
-# `b_scaled` from one shared `scale` parameter, so `delta_norm` scales QUADRATICALLY in `scale`
-# for the honest set and the "corrupt" set is that same honest baseline with `b_scaled` further
-# multiplied by a constant `k`): the 18 honest candidates' `ratio_to_ref` spans 0.0099x-100.0x
-# (the earlier ~6.2-6.3x figure quoted a truncated 6-of-18 slice, "honest scale=0.05" only,
-# omitting the "scale=0.1" (~25x) and "scale=0.2" (~100x) rows the SAME probe run and file also
-# report); the 8 corruption candidates' `ratio_to_ref` spans 0.1x-100000.0x, with two readings at
-# EXACTLY 10.0x and one at 0.5x. On the high side the honest population's own max (100.0x) sits
-# TEN TIMES ABOVE the lowest corruption reading that side has (10.0x) -- not a gap, an inversion:
-# some "corrupted" candidates read a smaller ratio than some honest ones. On the low side a
-# corruption (0.5x) sits well inside the honest range (which itself reaches down to 0.0099x). No
-# threshold, symmetric or one-sided, separates these two populations on this axis, because the
-# "corruption" construction here (an honest baseline with `B` uniformly rescaled) and ordinary
-# honest scale variation are the same transformation of the same underlying weights -- the metric
-# cannot tell training-time magnitude choice apart from post-hoc rescaling, which is the same
-# conclusion the whole B3 pooled-gate arc reached about raw magnitude generally (this ticket's own
-# commission, above). D-SLM3787's own "25x honest max to 41.6x corruption floor" does not survive
-# this recomputation: the 25x figure silently excluded the census's own ~100x rows, and 41.6x is
+# t2204r4_magnitude_domain_output.json` (Wizard repo; both drawing `a_f` and `b_scaled` from one
+# shared `scale` parameter, so `delta_norm` scales QUADRATICALLY in `scale` for the honest set,
+# and the "corrupt" set is that same honest baseline with `b_scaled` further multiplied by a
+# constant `k`): the 18 honest candidates' `ratio_to_ref` spans 0.0099x-100.0x (the earlier
+# ~6.2-6.3x figure came from "honest scale=0.05" alone -- 3 of the 18 honest rows; the fuller
+# 6-of-18 in-band slice examined at the time also included "scale=0.02", omitting the "scale=0.1"
+# (~25x) and "scale=0.2" (~100x) rows the SAME probe run and file also report); the 8 corruption
+# candidates' `ratio_to_ref` spans 0.1x-100000.0x, with two readings at EXACTLY 10.0x and one at
+# 0.5x. Corroborated row-for-row at the shipped band by the SAME probe's
+# `t2204r4_magnitude_domain_output_band0.1-10.json` sibling (`band` field `[0.1, 10.0]`, identical
+# ratios for every one of the 26 labels). `Claude/Loki/t2210-probe/t2210_magnitude_axis_output.json`
+# replays the SAME 26 labels and confirms the constructions correspond, but its own rows carry no
+# `delta_norm`/`ratio_to_ref` field and cannot corroborate the axis this check gates. On the high
+# side the honest population's own max (100.0x) sits TEN TIMES ABOVE the lowest corruption reading
+# that side has (10.0x) -- not a gap, an inversion: some "corrupted" candidates read a smaller
+# ratio than some honest ones. On the low side a corruption (0.5x) sits well inside the honest
+# range (which itself reaches down to 0.0099x). No threshold, symmetric or one-sided, separates
+# these two populations on this axis, because the "corruption" construction here (an honest
+# baseline with `B` uniformly rescaled) and ordinary honest scale variation are the same
+# transformation of the same underlying weights -- the metric cannot tell training-time magnitude
+# choice apart from post-hoc rescaling, which is the same conclusion the whole B3 pooled-gate arc
+# reached about raw magnitude generally (this ticket's own commission, above). D-SLM3787's own
+# "25x honest max to 41.6x corruption floor" does not survive this recomputation: the 25x figure
+# silently excluded the census's own ~100x rows, and 41.6x is
 # `Claude/Loki/t2207-t2204-restrike-2026-08-20.md`'s composed-STATISTIC margin (D-SLM3750) --
 # a different quantity, never measured on this ratio axis at all, repeating exactly the
 # quantity-confusion `Claude/Poirot/8af620a-t2214-gate-retirement-confirmation.md` finding S2
@@ -897,10 +902,12 @@ _B3_MAGNITUDE_WARN_RATIO = 10.0
 #
 # 10.0x therefore ships as a plain, non-calibrated sanity distance -- present for visibility,
 # never a discriminator, never a REJECT (see below). On the executed census it warns on 12 of the
-# 18 honest candidates (every row at ratio > 10x: "scale=0.1" and "scale=0.2") and stays silent on
-# 3 of the 8 corruptions (the two at exactly 10.0x, inclusive compare, and the one at 0.5x). A
-# caller who wires a real reference adapter should expect the warning to fire on honest
-# conversions and should not read its absence as a health signal.
+# 18 honest candidates -- 6 rows at ratio > 10x ("scale=0.1", ~25x, and "scale=0.2", ~100x) and 6
+# rows at ratio < 0.1x ("scale=0.002", ~0.01x, and "scale=0.005", ~0.06x); the check's own
+# inclusive lower band catches the second six -- and stays silent on 3 of the 8 corruptions (the
+# two at exactly 10.0x, inclusive compare, and the one at 0.5x). A caller who wires a real
+# reference adapter should expect the warning to fire on honest conversions at either extreme of
+# scale and should not read its absence as a health signal.
 
 
 def run_b3_pooled_report(pair_draws, *, reference_delta_norm: Optional[float] = None,

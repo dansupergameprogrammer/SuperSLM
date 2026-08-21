@@ -106,10 +106,12 @@ def test_honest_sweep_up_to_and_beyond_2_5x_reference_magnitude_never_warns(magn
     `b_scaled`). This cell reproduces that exact axis: the candidate is the SAME honest `(w_f,
     a_f)` as the reference, with `b_scaled` scaled by `magnitude_ratio` -- an ordinary honest
     adapter trained (or declared) at a different `lora_alpha`, not a corrupted weight tensor. The
-    replacement check must never repeat T-2210's false-REJECT -- this is the direct must-accept
-    commissioning cell `StandardsDocument.md` §5.4 requires, run across the observed honest range
-    (up to the ~6.2-6.3x ceiling the fold-round-4 probe measured on its own [quadratic] axis,
-    `Claude/Vitruvius/t2204-fold-round4-probe/t2204r4_magnitude_domain_output.json`)."""
+    replacement check must never repeat T-2210's false-REJECT -- this is a mechanism cell, NOT the
+    independent, blind-to-the-builder's-own-controls must-accept commissioning `StandardsDocument.md`
+    §5.4 requires (see the module docstring above): it sweeps only 1.0x-6.0x, entirely inside the
+    shipped [0.1x, 10.0x] band and well short of the full executed census's own honest range
+    (0.0099x-100.0x, `Claude/Vitruvius/t2204-fold-round4-probe/t2204r4_magnitude_domain_output.json`
+    -- see `_B3_MAGNITUDE_WARN_RATIO`'s own derivation comment)."""
     rng = np.random.default_rng(1)
     ref_w_f, ref_a_f, ref_b_scaled = _honest_pair(rng, scale=0.02)
     ref_raw = _collect(ref_w_f, ref_a_f, ref_b_scaled)
@@ -150,9 +152,10 @@ def test_x50_scaled_corruption_trips_the_magnitude_warning():
     """The T-2210 probe census's own `scaled_hot`/uniform B-scale(k) construction at k=50
     (`Claude/Loki/t2210-probe/t2210_magnitude_axis.py`'s own `CORRUPT k=50` cell) -- a
     production-feasible corruption (the real collector, real quantization path, `B` scaled
-    post-hoc exactly as a corrupted adapter file would arrive). This is the must-reject
-    commissioning cell `StandardsDocument.md` §5.4 requires: genuinely large in the decided
-    quantity (delta_norm ratio), and producible by the real conversion path."""
+    post-hoc exactly as a corrupted adapter file would arrive). This is a must-fire mechanism
+    cell, NOT the independent, blind-to-the-builder's-own-controls must-reject commissioning
+    `StandardsDocument.md` §5.4 requires (see the module docstring above): genuinely large in the
+    decided quantity (delta_norm ratio), and producible by the real conversion path."""
     rng = np.random.default_rng(3)
     ref_w_f, ref_a_f, ref_b_scaled = _honest_pair(rng, scale=0.02)
     ref_raw = _collect(ref_w_f, ref_a_f, ref_b_scaled)
@@ -339,4 +342,71 @@ def test_run_b3_pooled_report_has_no_accept_reject_arithmetic():
     assert not hasattr(A, "run_b3_multi_pair_check"), (
         "the retired pooled-gate function name must not exist any more -- "
         "run_b3_pooled_report is its replacement"
+    )
+
+
+# --- Cell 7: pin on `n_pilot_pooled`'s/`n_val_pooled`'s own arithmetic -- fix for the T-2215
+#     confirmation's finding N3 -----------------------------------------------------------------
+# The build log's disposition table named "the existing n_pilot_pooled/n_val_pooled assertions
+# already in the suite" as covering the M4 remedy (the `np.concatenate` -> `sum(...)` rewrite); no
+# such assertion existed anywhere under `tools/` -- `n_pilot_pooled = sum(...) + 1` left every
+# pre-existing cell in this file green. This cell reads the pooled counts back directly against an
+# independent `sum(len(...))` over a multi-pair fixture.
+
+def test_n_pilot_pooled_and_n_val_pooled_equal_the_sum_of_each_pairs_own_length():
+    rng = np.random.default_rng(13)
+    pairs = []
+    for i in range(3):
+        w_f, a_f, b_scaled = _honest_pair(rng, scale=0.02)
+        raw = _collect(w_f, a_f, b_scaled)
+        pairs.append((f"pair{i}", raw))
+
+    result = A.run_b3_pooled_report(pairs)
+    expected_pilot = sum(raw["composed_pilot"].shape[0] for _name, raw in pairs)
+    expected_val = sum(raw["composed_val"].shape[0] for _name, raw in pairs)
+    assert result["n_pilot_pooled"] == expected_pilot
+    assert result["n_val_pooled"] == expected_val
+
+
+# --- Cell 8: pin on the per-pair loop's own `rng` -- fix for the T-2215 confirmation's finding N3
+# -------------------------------------------------------------------------------------------------
+# The build log's disposition table named "the existing suite (all 3 B3 files, 102/102)" as
+# confirming `rng` is seeded at the loop's own point of first use (S3 item 2); no cell anywhere
+# calls `_b3_pair_diagnostic` independently with a freshly-seeded `default_rng(bootstrap_seed)` and
+# compares it to `run_b3_pooled_report`'s own output -- hoisting `rng` back above the pooled block
+# and pre-consuming it left every pre-existing cell in this file green. This cell makes that
+# comparison directly, reconstructing the SAME `own_check` `run_b3_pooled_report` builds internally.
+
+def test_per_pair_margins_match_a_fresh_rng_seeded_at_the_loops_own_bootstrap_seed():
+    rng = np.random.default_rng(14)
+    w_f, a_f, b_scaled = _honest_pair(rng, scale=0.02)
+    raw = _collect(w_f, a_f, b_scaled)
+
+    result = A.run_b3_pooled_report([("p0", raw)])
+
+    own_check_pilot_c = A._b3_stat(raw["composed_pilot"])
+    own_check_pilot_e = A._b3_stat(raw["effect_pilot"])
+    own_check = {
+        "delta_composed_mean": A._B3_SAFETY_INFLATION * (
+            own_check_pilot_c["mean"] + A._B3_Z_95_ONE_SIDED * own_check_pilot_c["se"]),
+        "delta_composed_tail": A._B3_SAFETY_INFLATION * own_check_pilot_c["p95"],
+        "delta_effect_mean": A._B3_SAFETY_INFLATION * (
+            own_check_pilot_e["mean"] + A._B3_Z_95_ONE_SIDED * own_check_pilot_e["se"]),
+        "delta_effect_tail": A._B3_SAFETY_INFLATION * own_check_pilot_e["p95"],
+    }
+    own_val_c = A._b3_stat(raw["composed_val"])
+    own_val_e = A._b3_stat(raw["effect_val"])
+    own_check["accepted"] = (
+        own_val_c["upper_ci"] < own_check["delta_composed_mean"]
+        and own_val_c["p95"] < own_check["delta_composed_tail"]
+        and own_val_e["upper_ci"] < own_check["delta_effect_mean"]
+        and own_val_e["p95"] < own_check["delta_effect_tail"])
+
+    fresh_rng = np.random.default_rng(0xB007)  # run_b3_pooled_report's own default bootstrap_seed
+    expected = A._b3_pair_diagnostic("p0", raw, own_check, n_bootstrap_resamples=2000, rng=fresh_rng)
+
+    assert result["per_pair_diagnostics"][0]["margins_se"] == pytest.approx(expected["margins_se"]), (
+        "run_b3_pooled_report's per-pair diagnostic must equal a fresh call to "
+        "_b3_pair_diagnostic seeded at the loop's own bootstrap_seed -- a change that hoists `rng` "
+        "above the pooled block and pre-consumes it must turn this cell red"
     )

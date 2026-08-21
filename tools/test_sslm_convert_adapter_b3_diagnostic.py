@@ -308,6 +308,45 @@ def test_main_accept_path_prints_magnitude_warning_when_present(monkeypatch, cap
     assert out_path.exists() or True  # write_artifact is mocked; rc==0 is the real assertion
 
 
+def test_main_reject_path_prints_pooled_report_for_the_pairs_that_did_not_trip(
+    monkeypatch, capsys, tmp_path,
+):
+    """T-2213 fix round (D-SLM3787 finding S4; pinned per the T-2215 confirmation's Minor finding
+    M-N4): a PARTIAL domain trip still leaves `verdict['pooled']` a real report over the pairs
+    that did not trip, and `main()`'s REJECTED branch must print it via `_print_pooled_b3_report`
+    (`file=sys.stderr`) rather than showing a consumer refused an artifact nothing about the pairs
+    that were fine. Deleting that call must turn this cell red."""
+    fake_pooled = {
+        "n_pairs": 1, "delta_norm": 1.2345e-3, "magnitude_warning": None,
+        "per_pair_diagnostics": [{"name": "layer0.q_proj", "flagged": []}],
+    }
+    fake_verdict = {"domain_trip": True, "margin_exceeded": False,
+                    "saturation_elevated": False, "pairs": [], "pooled": fake_pooled}
+
+    def fake_build(adapter_dir, base_sslm_path, **_kwargs):
+        return [], fake_verdict, {}
+
+    monkeypatch.setattr(A, "build_runtime_additive_sections", fake_build)
+
+    out_path = tmp_path / "out.sslm"
+    monkeypatch.setattr(A.sys, "argv", [
+        "sslm_convert_adapter.py",
+        "--adapter", str(tmp_path), "--base", str(tmp_path / "base.sslm"),
+        "--out", str(out_path), "--skip-verify",
+    ])
+
+    rc = A.main()
+    assert rc == 1, "a domain trip must refuse to write an artifact (no --fallback=merge passed)"
+
+    err = capsys.readouterr().err
+    assert "REJECTED" in err
+    assert "pooled B3 report: n_pairs=1 delta_norm=1.234500e-03" in err, (
+        f"the reject branch must print the pooled report for the pairs that did not trip; "
+        f"got stderr:\n{err}"
+    )
+    assert "0 pair(s) flagged for review" in err
+
+
 def test_run_b3_pooled_report_no_longer_exists_under_its_retired_name():
     """T-2213 (D-SLM3783) diff pin: `run_b3_multi_pair_check` -- the retired pooled gate's own
     name -- must not exist; `run_b3_pooled_report` is its replacement."""
