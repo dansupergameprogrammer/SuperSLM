@@ -35,15 +35,19 @@ SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
     int64_t q_c) {
 	using superslm::SslmForwardStatus;
 
-	if (kv_precision == superslm::SslmKvPrecision::Int16) {
-		return SslmForwardStatus::KvPrecisionUnsupported;
-	}
-	if (seq.hidden_codes == nullptr) {
-		return SslmForwardStatus::InvalidHiddenCodes;
-	}
-	(void)out_tokens_capacity;
-
-	if (mode == DampedGreedyMode::kDampedGreedy) {
+	// T-2199 closing round, production bug found by the suite owner's strengthened N8 symmetry
+	// cell (Claude/Curie/t2199-phaseD-red-2026-08-20.md's closing-confirmation round): `mode` was
+	// validated only INSIDE `if (mode == kDampedGreedy)`, below -- an unknown mode value (neither
+	// kGreedy nor kDampedGreedy) skipped validation entirely and fell through to the real forward
+	// path, unlike sslm_decode_stepImpl's own D2 entry point (S2's fix), which validates `mode`
+	// UNCONDITIONALLY before anything else runs. Moved here, to the top of this function, before
+	// any branch -- same shared validator, same status, same symmetry S3/N8 already established
+	// for the DAMPED-GREEDY-mode validation failure case, now covering the unknown-mode case too.
+	// `DampedGreedyValidationParams` doubles as "just the mode" when the other fields are
+	// zero-valued and mode is neither real value -- ValidateDampedGreedyParams's own FIRST check
+	// (mode in {kGreedy, kDampedGreedy}) rejects before it ever reads alpha_q15/anti_lm_max_order/
+	// top_k, so passing zeros for those here is safe regardless of what the caller actually set.
+	{
 		const DampedGreedyValidationParams vp{mode, alpha_q15, anti_lm_max_order, top_k};
 		if (!ValidateDampedGreedyParams(vp, vocab_size)) {
 			// T-2199 Phase D review fix S3: InvalidDecodeParams, not TokenIdOutOfRange -- gives
@@ -53,6 +57,14 @@ SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
 			return SslmForwardStatus::InvalidDecodeParams;
 		}
 	}
+
+	if (kv_precision == superslm::SslmKvPrecision::Int16) {
+		return SslmForwardStatus::KvPrecisionUnsupported;
+	}
+	if (seq.hidden_codes == nullptr) {
+		return SslmForwardStatus::InvalidHiddenCodes;
+	}
+	(void)out_tokens_capacity;
 
 	for (size_t i = 0; i < stop_count; ++i) {
 		if (stop_ids[i] < 0 || stop_ids[i] >= vocab_size) return SslmForwardStatus::TokenIdOutOfRange;
