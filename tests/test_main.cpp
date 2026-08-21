@@ -211,9 +211,26 @@ static void TestRejectsHeaderBytesMismatch() {
 // below), which asserts the opposite (Ok, not BadHeader) for flags=1 -- the
 // two tests together pin both directions of the mechanism this rename makes
 // room for.
+//
+// MOVED AGAIN 2026-08-20 (T-2199 fold 23, docs/sslm_format.md's own new bit
+// allocation table): this is the THIRD time this exact canary has collided
+// with a bit a later ticket then claimed for real (bit 0 the first time,
+// T-1894/D-SLM2408; bit 1/0x2 the second time, T-2199's own
+// kDampedGreedyArtifactConstantsFlag, D-SLM3794). Fold 23 closed the class
+// structurally rather than picking a fourth ad-hoc value: bit 31 (0x80000000)
+// is now PERMANENTLY RESERVED FOR TESTING in docs/sslm_format.md's own
+// allocation table -- never allocated to a real capability, chosen at the
+// opposite end of the 32-bit space from where real allocations grow
+// sequentially from bit 0, specifically so this canary can never collide
+// with a future allocation again without exhausting every other bit first.
+// The pin's own semantics (an unknown flags bit rejects with BadHeader) are
+// UNCHANGED -- only the specific bit moved.
 static void TestRejectsUnknownFlagsBit() {
 	auto built = BuildArtifact({MakeConfigSection()});
-	PutU32(built.bytes, 16, 0x2u);  // flags, offset 16 -- outside kKnownArtifactFlagsMask
+	// flags, offset 16 -- 0x80000000 (bit 31), docs/sslm_format.md's own
+	// permanently-reserved-for-testing bit (fold 23 allocation table), never a
+	// real capability's bit and therefore never able to collide with one.
+	PutU32(built.bytes, 16, 0x80000000u);
 	RecomputeIntegrityHash(built.bytes);
 
 	SslmArtifact out;
@@ -20426,20 +20443,31 @@ static void TestOptionGArtifactFlags_KnownBitAcceptedUnknownBitRejected() {
 		          "check does not exist yet, artifact.cpp still rejects every nonzero flags value)",
 		          SslmStatusName(status));
 	}
-	// Unknown bit (0x2, outside kKnownArtifactFlagsMask): must stay rejected
-	// as BadHeader -- "reject-over-degrade preserved" (design Sec31.2.1).
-	// Already true today; retained so a future build that accepts ANY flags
-	// value (not only known ones) is caught here.
+	// Unknown bit: must stay rejected as BadHeader -- "reject-over-degrade
+	// preserved" (design Sec31.2.1). Already true today; retained so a future
+	// build that accepts ANY flags value (not only known ones) is caught here.
+	//
+	// MOVED 2026-08-20 (T-2199 fold 23, docs/sslm_format.md's own new bit
+	// allocation table): this sub-case used 0x2 as its own "unknown bit"
+	// example -- which T-2199's own kDampedGreedyArtifactConstantsFlag (D-SLM3794)
+	// then claimed for real, making this assertion FALSE against the current
+	// build (flags=0x2 now legitimately loads Ok) until this fix. This is the
+	// exact collision class fold 23 closed structurally: bit 31 (0x80000000) is
+	// now PERMANENTLY RESERVED FOR TESTING, never allocated to a real
+	// capability, so this sub-case (and its own sibling three lines below,
+	// which already used 0x80000000 for the combined-bits case) can never
+	// collide with a future allocation again.
 	{
 		auto built = BuildArtifact({MakeConfigSection()});
-		PutU32(built.bytes, 16, 0x2u);
+		PutU32(built.bytes, 16, 0x80000000u);
 		RecomputeIntegrityHash(built.bytes);
 		SslmArtifact out;
 		SslmError err;
 		auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), out, &err);
 		CHECK_MSG(status == SslmStatus::BadHeader,
-		          "flags=0x2 (an UNKNOWN bit, outside kKnownArtifactFlagsMask=0x%x) must stay "
-		          "rejected as BadHeader under the loosened check too -- got %s",
+		          "flags=0x80000000 (the permanently-reserved-for-testing bit, outside "
+		          "kKnownArtifactFlagsMask=0x%x) must stay rejected as BadHeader under the "
+		          "loosened check too -- got %s",
 		          superslm::kKnownArtifactFlagsMask, SslmStatusName(status));
 		CHECK(err.code == SslmStatus::BadHeader);
 	}

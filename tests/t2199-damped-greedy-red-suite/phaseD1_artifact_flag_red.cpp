@@ -24,9 +24,11 @@
 // for "the real flag" only moves the contradiction, since TestD1b's own fixture would then need
 // the SAME new bit to be known, and TestD1c would need it to be unknown, in the identical
 // build). TestD1c is renamed TestD1_UnknownFlagBit_RejectsWithBadHeader_FormatSemantics and now
-// probes a bit that is STILL genuinely unclaimed after D1 (0x4 -- the next bit past both
-// Option-G's 0x1 and damped greedy's own 0x2), pinning the GENERAL mechanism against the
-// CURRENT, post-D1 loader -- an evergreen regression guard, not a time-scoped historical claim.
+// probes bit 31 / 0x80000000 -- docs/sslm_format.md's own PERMANENTLY RESERVED FOR TESTING bit
+// (T-2199 fold 23's allocation table, added after this cell's own original 0x4 probe would
+// have re-created the exact collision class fold 23 exists to close), pinning the GENERAL
+// mechanism against the CURRENT, post-D1 loader -- an evergreen regression guard that can never
+// collide with a future real allocation, not a time-scoped historical claim.
 // The specific historical fact (0x2 rejected pre-D1) is preserved as a dated citation to this
 // suite's own already-executed evidence (Claude/Curie/t2199-phaseD-red-2026-08-20.md's own
 // "Born-green verification, isolated" section: checks=10 failures=0 against commit 2d7d381,
@@ -174,10 +176,22 @@ static void TestD1b_FlaggedArtifactWithValidConstants_LoadsAndExposesThem() {
 // comment for the full ruling). D-SLM3794's real, GENERAL promise is the format's own
 // unknown-flag-bit-rejection mechanism (docs/sslm_format.md's Versioning section: "the loader
 // accepts flags values that set only known bits and rejects (BadHeader) any unknown bit") --
-// this cell pins that mechanism against a bit that is STILL genuinely unclaimed in THIS,
-// post-D1 tree (0x4, the next bit past Option-G's 0x1 and damped greedy's own 0x2, confirmed
-// below), so it stays a live, re-runnable regression guard rather than a claim that becomes
-// definitionally false the moment any future flag (D1's own damped-greedy bit included) lands.
+// this cell pins that mechanism against a bit that can NEVER become claimed, so it stays a
+// live, re-runnable regression guard rather than a claim that becomes definitionally false the
+// moment some future flag lands.
+//
+// MOVED 2026-08-20 (T-2199 fold 23, docs/sslm_format.md's own new bit allocation table): this
+// cell originally probed 0x4 (the next sequentially-unclaimed bit past Option-G's 0x1 and
+// damped greedy's own 0x2) -- exactly the ad-hoc-canary-bit shape that had ALREADY collided
+// twice before this cell was even written (T-1894/D-SLM2408 moved off bit 0 once;
+// tests/test_main.cpp::TestRejectsUnknownFlagsBit then collided with bit 1/0x2, this very
+// ticket's own damped-greedy flag). This cell's own 0x4 probe was the SAME shape of
+// time-bomb -- a real future capability claiming bit 2 would have collided with it a third
+// time. Fold 23 closed the class structurally: bit 31 (0x80000000) is now PERMANENTLY RESERVED
+// FOR TESTING in docs/sslm_format.md's own allocation table, never allocated to a real
+// capability, at the opposite end of the 32-bit space from where real allocations grow
+// sequentially from bit 0 -- this canary (and test_main.cpp's own, moved in the same fold) can
+// never collide with a future allocation again.
 //
 // The ORIGINAL, time-scoped claim this cell used to make -- that 0x2 SPECIFICALLY was unknown
 // and rejected BEFORE Phase D1 landed -- is real, was independently verified by execution, and
@@ -190,15 +204,18 @@ static void TestD1b_FlaggedArtifactWithValidConstants_LoadsAndExposesThem() {
 // the one that makes the assertion false (the builder's own dispute evidence, § this file's
 // header comment).
 static void TestD1_UnknownFlagBit_RejectsWithBadHeader_FormatSemantics() {
-	// kProbeUnknownFlag must stay OUTSIDE kKnownArtifactFlagsMask for this cell to test
-	// "unknown bit" semantics at all -- checked live so a FUTURE flag landing at 0x4 fails this
-	// PRECONDITION loudly (routing to Curie for a bit bump) rather than this cell silently
-	// testing a bit that is no longer unknown.
-	constexpr uint32_t kProbeUnknownFlag = 0x4u;
+	// kProbeUnknownFlag: bit 31 (0x80000000), docs/sslm_format.md's own PERMANENTLY RESERVED
+	// FOR TESTING bit (fold 23 allocation table) -- never allocated to a real capability, so
+	// this precondition can never fail by a future flag landing here (unlike the retired 0x4
+	// probe, which could). Checked live anyway, matching this cell's own established discipline
+	// of never assuming a premise it can cheaply confirm.
+	constexpr uint32_t kProbeUnknownFlag = 0x80000000u;
 	CHECK_MSG((kKnownArtifactFlagsMask & kProbeUnknownFlag) == 0,
-	          "precondition: the probe bit (0x%x) must be OUTSIDE this worktree's current "
-	          "kKnownArtifactFlagsMask (0x%x) -- if this fails, a THIRD flag has landed at this "
-	          "bit and this cell needs a fresh unclaimed probe, not a claim about the loader",
+	          "precondition: the reserved-for-testing probe bit (0x%x) must be OUTSIDE this "
+	          "worktree's current kKnownArtifactFlagsMask (0x%x) -- if this fails, "
+	          "docs/sslm_format.md's own fold-23 allocation table has been violated (bit 31 "
+	          "allocated to a real capability), which is a documentation/code divergence to fix "
+	          "at its own source, not something this cell should route around with a new probe",
 	          kProbeUnknownFlag, kKnownArtifactFlagsMask);
 	// Sanity check on the ruling's own premise: kDampedGreedyArtifactConstantsFlag (D1's real
 	// bit) IS now known -- confirms this tree is genuinely post-D1, i.e. that TestD1c's own
