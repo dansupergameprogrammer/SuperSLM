@@ -145,6 +145,10 @@ static void TestD3_TeardownDuringFlight_ConcurrentReleaseDoesNotCorruptSurvivor(
 	constexpr int kTrials = 200;
 	std::atomic<int> surviving_ok_count{0};
 	std::atomic<int> surviving_bad_status_count{0};
+	// N3 addition: the released slot's own sentinel (out_tokens[1]), previously never inspected.
+	std::atomic<int> b_real_token_count{0};
+	std::atomic<int> b_dead_sentinel_count{0};
+	std::atomic<int> b_unexpected_count{0};
 
 	for (int trial = 0; trial < kTrials; ++trial) {
 		AlignedBuffer pool_buf(2 * sslm_kv_block_size(model) + sslm_kv_pool_overhead_size(model, 2));
@@ -198,6 +202,34 @@ static void TestD3_TeardownDuringFlight_ConcurrentReleaseDoesNotCorruptSurvivor(
 			surviving_bad_status_count.fetch_add(1);
 		}
 
+		// ADDED 2026-08-20 (closing-review commission, N3: "the -3 sentinel... the D3 teardown
+		// cell never inspects out_tokens[1], the released slot the sentinel fills"). S1's own
+		// production remedy (src/sslm_abi.cpp) writes -3, never -1, for a batch index whose
+		// sequence is not currently registered live -- exactly seq_b's own index (1) in every
+		// trial where the release thread's erase-under-registry-lock won the race before the
+		// decode loop reached it. The three possible, all-defined outcomes for out_tokens[1]:
+		// (a) the release lost the race -- a real, in-domain token, same as out_tokens[0]'s own
+		// check; (b) the release won -- exactly -3, the new sentinel; (c) anything else
+		// (including the OLD -1 "pending" sentinel, which S1's own fix retired specifically
+		// because it made a dead sequence indistinguishable from a mid-token one) is the
+		// guard's own removal, undetected until this addition.
+		const bool b_real_token = out_tokens[1] >= 0 && out_tokens[1] < view.config.vocab_size;
+		const bool b_dead_sentinel = out_tokens[1] == -3;
+		if (b_real_token) {
+			b_real_token_count.fetch_add(1);
+		} else if (b_dead_sentinel) {
+			b_dead_sentinel_count.fetch_add(1);
+		} else {
+			b_unexpected_count.fetch_add(1);
+		}
+		CHECK_MSG(b_real_token || b_dead_sentinel,
+		          "trial's own out_tokens[1] (sequence B, concurrently released) = %d -- must be "
+		          "either a real in-domain token (the release lost the race) or exactly -3 (the "
+		          "S1 dead-sequence sentinel, the release won) -- never anything else, and "
+		          "SPECIFICALLY never -1 (the retired 'pending' sentinel S1's own fix exists to "
+		          "stop a dead sequence from being confused with)",
+		          out_tokens[1]);
+
 		CHECK(sslm_seq_release(seq_a) == SSLM_OK);
 		CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
 	}
@@ -212,6 +244,15 @@ static void TestD3_TeardownDuringFlight_ConcurrentReleaseDoesNotCorruptSurvivor(
 	          "while sequence B was concurrently released -- cross-sequence corruption or a "
 	          "use-after-free reading garbage into A's own decode path",
 	          surviving_bad_status_count.load(), kTrials);
+	std::printf("D3 released-slot (out_tokens[1]) sentinel: %d/%d trials real token (release "
+	            "lost the race), %d/%d trials the -3 dead-sequence sentinel (release won), "
+	            "%d/%d trials unexpected (a real defect if nonzero)\n",
+	            b_real_token_count.load(), kTrials, b_dead_sentinel_count.load(), kTrials,
+	            b_unexpected_count.load(), kTrials);
+	CHECK_MSG(b_unexpected_count.load() == 0,
+	          "%d of %d trials produced an out_tokens[1] value that was neither a real token nor "
+	          "the -3 dead-sequence sentinel -- the S1 guard is not firing as documented",
+	          b_unexpected_count.load(), kTrials);
 
 	CHECK(sslm_model_unmap(model) == SSLM_OK);
 }
