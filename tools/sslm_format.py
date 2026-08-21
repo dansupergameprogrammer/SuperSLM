@@ -28,6 +28,8 @@ MAGIC = b"SSLM"
 # (the C++ loader rejects any unknown bit, `artifact.cpp`'s
 # `kKnownArtifactFlagsMask`).
 OPTION_G_FUSED_K_LANDING_FLAG = 0x1
+# T-2199 / D-SLM3794: artifact-carried damped-greedy scale constants (DGC1).
+DAMPED_GREEDY_CONSTANTS_FLAG = 0x2
 
 
 class SectionType:
@@ -53,6 +55,7 @@ class SectionType:
     # this fold's adapter-artifact writer needed to emit them.
     DELTA_FOLD_SCALES = 40
     U_FOLD_SCALES = 41
+    DAMPED_GREEDY_CONSTANTS = 42
 
 
 class Dtype:

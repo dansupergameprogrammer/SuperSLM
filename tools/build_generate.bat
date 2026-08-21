@@ -9,6 +9,8 @@ if not exist out mkdir out
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp ^
+	src\damped_greedy_phaseD.cpp src\damped_greedy_phaseD_loop.cpp ^
 	tools\sslm_generate.cpp /Fo:out\ /Fe:out\sslm_generate.exe
 set ec=%errorlevel%
 popd

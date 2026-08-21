@@ -501,6 +501,12 @@ int main(int argc, char** argv) {
 	std::printf("output_tokens (%zu):", out_tokens_produced);
 	for (size_t i = 0; i < out_tokens_produced; ++i) std::printf(" %d", out_tokens[i]);
 	std::printf("\n");
+	const std::vector<int32_t> output_token_vector(out_tokens.begin(),
+	                                               out_tokens.begin() + out_tokens_produced);
+	const std::string output_text = tokenizer.Decode(output_token_vector);
+	std::printf("output_text_bytes (%zu):\n", output_text.size());
+	if (!output_text.empty()) std::fwrite(output_text.data(), 1, output_text.size(), stdout);
+	std::printf("\noutput_text_end\n");
 	std::printf("stop_reason: %d\n", static_cast<int>(stop_reason));
 
 	if (!dump_logits_path.empty()) {
