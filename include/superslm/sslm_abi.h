@@ -161,8 +161,30 @@ typedef enum sslm_span_kind {
     SSLM_SPAN_SCHEMA_CONTENT = 1
 } sslm_span_kind;
 
+/* T-2199 Phase D1 (plan Sec8 D1, D-SLM3794/D-SLM3794A-precedent RULING: an ADDITIVE FIELD, not a
+ * versioned successor struct -- grounded against this same struct family's own sslm_stats_out/
+ * schema_accepting precedent, D-SLM3476A, T-2132). `mode` selects the decode-step's own
+ * selection mechanism: 0 (SSLM_DECODE_MODE_GREEDY, the default under zero-init, so every
+ * EXISTING caller of sslm_decode_step -- which never sets these new fields -- is bit-unchanged)
+ * or 1 (SSLM_DECODE_MODE_DAMPED_GREEDY). alpha_q15/anti_lm_max_order/top_k/q_ln2/q_b/q_c are
+ * meaningful ONLY under damped-greedy mode (plan Sec7.1's own "Inputs" list; ignored, never
+ * read, in greedy mode) -- q_ln2/q_b/q_c are the runtime i-exp scale constants a real caller
+ * derives once per model load (plan Sec8 B3) and passes per call here rather than this ABI
+ * caching them on the model handle, matching Phase D1's own build scope (Phase B3's own
+ * model-handle-caching mechanism is not required by this phase; a caller may derive and cache
+ * these itself). */
+#define SSLM_DECODE_MODE_GREEDY 0
+#define SSLM_DECODE_MODE_DAMPED_GREEDY 1
+
 typedef struct sslm_decode_params {
     int32_t layer_budget;
+    int32_t mode;               /* SSLM_DECODE_MODE_GREEDY (0, default) or _DAMPED_GREEDY (1) */
+    int64_t alpha_q15;          /* damped-greedy only: Q15-scaled anti-repetition weight, >= 0 */
+    int32_t anti_lm_max_order;  /* damped-greedy only: the anti-LM's own n, >= 1 */
+    int32_t top_k;              /* damped-greedy only: candidates scored per step, 1 <= k <= vocab_size */
+    int64_t q_ln2;              /* damped-greedy only: runtime i-exp scale constant (plan Sec2.3/B3) */
+    int64_t q_b;                /* damped-greedy only: runtime i-exp scale constant */
+    int64_t q_c;                /* damped-greedy only: runtime i-exp scale constant */
 } sslm_decode_params;
 
 typedef struct sslm_stats_out {

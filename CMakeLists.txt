@@ -42,6 +42,8 @@ set(SUPERSLM_CORE_SOURCES
 	src/sslm_abi.cpp
 	src/damped_greedy_antilm.cpp
 	src/damped_greedy_topk.cpp
+	src/damped_greedy_phaseD.cpp
+	src/damped_greedy_phaseD_loop.cpp
 )
 
 add_library(superslm STATIC ${SUPERSLM_CORE_SOURCES})

@@ -46,6 +46,7 @@ bool IsKnownSectionType(uint32_t type) noexcept {
 		case SslmSectionType::CalibrationBand:
 		case SslmSectionType::DeltaFoldScales:
 		case SslmSectionType::UFoldScales:
+		case SslmSectionType::DampedGreedyConstants:
 			return true;
 	}
 	return false;
@@ -81,6 +82,7 @@ SslmDtype ExpectedDtype(uint32_t type) noexcept {
 		case SslmSectionType::UnicodeTables:
 		case SslmSectionType::SchemaMasks:
 		case SslmSectionType::CalibrationBand:
+		case SslmSectionType::DampedGreedyConstants:
 			return SslmDtype::Raw;
 	}
 	return SslmDtype::Raw; // unknown type — callers gate on IsKnownSectionType first
@@ -508,6 +510,11 @@ const SslmSectionView* SslmArtifact::Section(SslmSectionType type) const noexcep
 // supplied default.
 bool SslmArtifact::OptionGFusedKLandingEnabled() const noexcept {
 	return (flags_ & kOptionGFusedKLandingFlag) != 0;
+}
+
+// T-2199 Phase D1: mirrors OptionGFusedKLandingEnabled() exactly, new bit.
+bool SslmArtifact::DampedGreedyConstantsFlagSet() const noexcept {
+	return (flags_ & kDampedGreedyArtifactConstantsFlag) != 0;
 }
 
 } // namespace superslm

@@ -1,6 +1,8 @@
 obj/
 obj_green/
 obj_o2/
+obj_phaseD/
+obj_green_D/
 *.exe
 *.obj
 *.log

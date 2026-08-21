@@ -75,6 +75,13 @@ enum class SslmSectionType : uint32_t {
 	// inside it.
 	DeltaFoldScales = 40,
 	UFoldScales = 41,
+	// T-2199 Phase D1 (plan Sec8 D1, Decision A mechanism, D-SLM3794): the damped-greedy
+	// decoder's own artifact-carried LM-head logit scale, DGC1 -- a fixed 12-byte binary
+	// struct (int64 scale_mantissa_m, int32 scale_exponent_e), Raw dtype like every other
+	// binary-struct/keyed/opaque-byte section. OPTIONAL, gated behind
+	// kDampedGreedyArtifactConstantsFlag (below): absence (flag unset) loads exactly as before
+	// this type existed, matching CalibrationBand's own precedent.
+	DampedGreedyConstants = 42,
 };
 
 enum class SslmDtype : uint32_t {
@@ -137,7 +144,15 @@ const char* SslmStatusName(SslmStatus s) noexcept;
 // (currently just the one flag); an unknown bit stays a BadHeader rejection
 // under the loosened check (design's own "reject-over-degrade preserved").
 inline constexpr uint32_t kOptionGFusedKLandingFlag = 0x1u;
-inline constexpr uint32_t kKnownArtifactFlagsMask = kOptionGFusedKLandingFlag;
+// T-2199 Phase D1 (plan Sec8 D1, D-SLM3794): the damped-greedy decoder's own artifact-carried
+// scale constants flag -- widens kKnownArtifactFlagsMask the same way kOptionGFusedKLandingFlag
+// did, following this header's own established convention for adding a bit (this comment,
+// above). A pre-Phase-D1 loader (kKnownArtifactFlagsMask == kOptionGFusedKLandingFlag only)
+// rejects any artifact setting this bit with BadHeader, per D-SLM3794's own ruling and
+// docs/sslm_format.md's Versioning section.
+inline constexpr uint32_t kDampedGreedyArtifactConstantsFlag = 0x2u;
+inline constexpr uint32_t kKnownArtifactFlagsMask =
+    kOptionGFusedKLandingFlag | kDampedGreedyArtifactConstantsFlag;
 
 inline constexpr uint32_t kNoSection = 0xFFFFFFFFu;
 
@@ -224,6 +239,11 @@ public:
 	// suite's own established declare-and-stub practice (RopeApplySite's own
 	// history, this file's sibling forward_sites.h).
 	bool OptionGFusedKLandingEnabled() const noexcept;
+
+	// T-2199 Phase D1: true iff this artifact's header `flags` field sets
+	// `kDampedGreedyArtifactConstantsFlag` -- mirrors `OptionGFusedKLandingEnabled()` above exactly,
+	// same precedent, new bit.
+	bool DampedGreedyConstantsFlagSet() const noexcept;
 
 private:
 	// S-HARDEN-7: grants src/artifact.cpp's SslmArtifactAccess (defined only

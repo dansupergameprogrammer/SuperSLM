@@ -83,6 +83,8 @@
 #include "superslm/layer_marshal.h"
 #include "superslm/model.h"
 #include "superslm/schema_masks.h"
+#include "superslm/sslm_damped_greedy.h"  // T-2199 Phase A/C: AntiLmState, DampedGreedyScoreAndArgmax
+#include "superslm/sslm_phaseD.h"         // T-2199 Phase D: ValidateDampedGreedyParams
 
 #include "bad_alloc_wrap.h"  // N3 pin (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3):
                               // superslm::internal::MaybeThrowInjectedBadAllocFault(), the same
@@ -295,6 +297,14 @@ struct sslm_seq_s {
 	sslm_schema bound_schema = nullptr;
 	uint32_t dfa_walk_state = kDfaWalkStateUnused;
 	int64_t forced_token_count = 0;
+	// T-2199 Phase D2: this sequence's own damped-greedy anti-LM state (plan Sec7.2, "a
+	// warm-object class, not fresh-per-call") -- created lazily on the first decode_step call
+	// made with mode=SSLM_DECODE_MODE_DAMPED_GREEDY (sslm_decode_stepImpl, below), destroyed in
+	// sslm_seq_release. Recreated (destroy + fresh AntiLmCreate) if a later call names a
+	// DIFFERENT anti_lm_max_order than the instance already live -- a defined, if unusual,
+	// caller behavior (switching n mid-generation), never a silent reuse of a mismatched order.
+	superslm::AntiLmState* damped_greedy_antilm = nullptr;
+	int32_t damped_greedy_antilm_order = 0;
 	// NO `released` flag -- see sslm_prefix_s's own comment on why (S5): double-release and any
 	// other use of an already-released handle is caller UB, not a state this ABI pretend-guards.
 };
@@ -1586,6 +1596,11 @@ extern "C" sslm_status sslm_seq_release(sslm_seq seq) {
 		// wrongly see a live reference from a sequence that no longer exists.
 		seq->adapter_handle->live_refs.fetch_sub(1, std::memory_order_acq_rel);
 	}
+	// T-2199 Phase D3 (plan Sec9 dim3, teardown-during-flight): this sequence's own anti-LM
+	// state, if it was ever created, is destroyed here -- before ReturnBlock/delete, matching
+	// this function's own established teardown order (release owned resources, then the pool
+	// block, then the handle itself).
+	if (seq->damped_greedy_antilm) superslm::AntiLmDestroy(seq->damped_greedy_antilm);
 	ReturnBlock(seq->pool, seq->block_index, seq->kv_block, seq->block_size);
 	seq->model->live_refs.fetch_sub(1, std::memory_order_acq_rel);
 	delete seq;
@@ -1797,6 +1812,19 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 	    static_cast<uint32_t>(params->layer_budget) > model->view.config.num_hidden_layers) {
 		return SSLM_INVALID_ARGUMENT;
 	}
+	// T-2199 Phase D2 (plan Sec9 dim2): the SAME shared validation D3/D4 route through
+	// (superslm_test_phaseD::ValidateDampedGreedyParams) -- checked before any sequence is
+	// touched, matching this function's own "reject leaves state unperturbed" discipline. A
+	// no-op (returns true unconditionally) when mode is greedy.
+	{
+		const superslm_test_phaseD::DampedGreedyValidationParams vp{
+		    static_cast<superslm_test_phaseD::DampedGreedyMode>(params->mode), params->alpha_q15,
+		    params->anti_lm_max_order, params->top_k};
+		if (!superslm_test_phaseD::ValidateDampedGreedyParams(
+		        vp, static_cast<int32_t>(model->view.config.vocab_size))) {
+			return SSLM_INVALID_ARGUMENT;
+		}
+	}
 	if (!model->engine.ok) return SSLM_ARTIFACT_REJECTED;
 	// Every sequence validated BEFORE any is touched -- a malformed entry anywhere in the batch
 	// leaves every sequence's state exactly as it was (this call's own "reject leaves state
@@ -1942,6 +1970,77 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 		                            static_cast<int32_t>(c.vocab_size), wide_logits,
 		                            logit_row);
 		if (fst != superslm::SslmForwardStatus::Ok) return MapForwardStatus(fst);
+
+		// T-2199 Phase D2 (plan Sec8 D2, Sec6 "mask-first"): damped-greedy mode operates on the
+		// SAME masked row the schema branch below produces -- the mask is resolved FIRST (the
+		// schema's own page, or an all-ones free-text page, per Sec6), narrowed into `logit_row`
+		// in place exactly as ApplyMaskAndArgmax's own masking half does, THEN
+		// DampedGreedyScoreAndArgmax scores it. This branch never reaches the plain
+		// ArgmaxLowestIndexTieBreak/ApplyMaskAndArgmax calls below it -- those two remain
+		// byte-for-byte unchanged for mode=SSLM_DECODE_MODE_GREEDY (Poirot-style no-regression
+		// discipline, this ticket's own build log).
+		if (params->mode == SSLM_DECODE_MODE_DAMPED_GREEDY) {
+			const size_t mask_bytes = (static_cast<size_t>(c.vocab_size) + 7) / 8;
+			std::vector<uint8_t> free_text_mask;
+			const uint8_t* mask_bits;
+			if (seq->bound_schema) {
+				const superslm::SchemaEntry* entry = model->schemas.ByIndex(seq->bound_schema->index);
+				mask_bits = entry->mask_pages +
+				            static_cast<size_t>(seq->dfa_walk_state) * model->schemas.MaskPageBytes();
+			} else {
+				// Sec6: free-text mode's mask is all-ones by construction -- built once per call,
+				// per sequence (no persistent buffer needed; this is not the hot O(V) cost this
+				// design's own Sec2.4 measured, it is a memset-shaped O(V/8) fill).
+				free_text_mask.assign(mask_bytes, 0xFF);
+				mask_bits = free_text_mask.data();
+			}
+			// Mask-first: narrow masked positions to INT32_MIN in place, matching
+			// ApplyMaskAndArgmax's own masking half exactly (superslm::ApplyMaskAndArgmax,
+			// forward_sites.cpp) -- damped greedy never sees a row this step has not already
+			// applied.
+			for (int32_t t = 0; t < c.vocab_size; ++t) {
+				if (!((mask_bits[static_cast<size_t>(t) >> 3] >> (t & 7)) & 1u)) {
+					logit_row[t] = INT32_MIN;
+				}
+			}
+			if (!seq->damped_greedy_antilm ||
+			    seq->damped_greedy_antilm_order != params->anti_lm_max_order) {
+				if (seq->damped_greedy_antilm) superslm::AntiLmDestroy(seq->damped_greedy_antilm);
+				seq->damped_greedy_antilm = superslm::AntiLmCreate(params->anti_lm_max_order);
+				seq->damped_greedy_antilm_order = params->anti_lm_max_order;
+				if (!seq->damped_greedy_antilm) return SSLM_ALLOCATION_FAILED;
+			}
+			int32_t produced_dg = -1;
+			bool refused = false;
+			const bool ok = superslm::DampedGreedyScoreAndArgmax(
+			    logit_row, mask_bits, static_cast<int32_t>(c.vocab_size), params->top_k,
+			    seq->damped_greedy_antilm, params->alpha_q15, params->q_ln2, params->q_b,
+			    params->q_c, &produced_dg, &refused);
+			if (!ok) return SSLM_INVALID_ARGUMENT;  // domain rejection (k/vocab_size), plan Sec8 D1
+			if (refused) {
+				// Plan Sec7.5's own adopted refusal policy: abort this sequence's generation for
+				// this call rather than fall back to plain argmax, matching the shipped attention
+				// call site's SoftmaxKernelRefusedAfterGateAccepted precedent.
+				return MapForwardStatus(superslm::SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted);
+			}
+			if (seq->bound_schema) {
+				const superslm::SchemaEntry* entry = model->schemas.ByIndex(seq->bound_schema->index);
+				uint32_t next_state = seq->dfa_walk_state;
+				const bool has_transition = model->schemas.Transition(
+				    *entry, seq->dfa_walk_state, static_cast<uint32_t>(produced_dg), &next_state);
+				if (!has_transition) {
+					out_tokens[i] = -2;
+					continue;
+				}
+				seq->dfa_walk_state = next_state;
+			}
+			// Sec7.7 Feedback: the anti-LM's update runs once per emitted token, after selection.
+			superslm::AntiLmUpdate(seq->damped_greedy_antilm, produced_dg);
+			out_tokens[i] = produced_dg;
+			seq->current_token = produced_dg;
+			seq->state.layer_index = 0;
+			continue;
+		}
 
 		// G5-2 (design Sec4, T-2132): masking applies to int32 logits BEFORE argmax, indexed by
 		// the sequence's own DFA-walk-state (design Sec4's architecture table) -- SSLM_SCHEMA_NONE
