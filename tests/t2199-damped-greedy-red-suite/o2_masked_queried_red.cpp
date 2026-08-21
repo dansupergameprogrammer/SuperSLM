@@ -35,7 +35,7 @@
 // named ("the o2 mock cell now fails 5/10"): the four masked candidates are absent from
 // `g_o2_queried_candidates` (this cell's own new assertion, "must appear," fails for each),
 // and the total-query-count assertion (want 6, the fix-round code produces 2) also fails --
-// 5 of this file's own 10 checks red. Against `b1dffd7` (the O2 revert, current tip): all six
+// 5 of this file's own 11 checks red (measured). Against `b1dffd7` (the O2 revert, current tip): all six
 // candidates appear, every check green. See this campaign's own test-design record for the
 // transcript.
 #include <cstdint>

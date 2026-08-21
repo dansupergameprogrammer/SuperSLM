@@ -73,7 +73,9 @@ void AntiLmPenalize(const AntiLmState* state, const int32_t* candidates, std::si
 // (2026-08-20, Poirot S3: previously read 3.0-5.9x low) and its residual STATED HONESTLY
 // (fold 21, plan Sec9 dim1, S9 of `Claude/Poirot/927bbda-t2199-confirmation.md`): this
 // reading is a LOWER BOUND, not a magnitude pin -- it still reads ~2.9x low at this design's
-// own default max_order=3 against measured process-memory deltas (a stable ratio: 1.50-1.81x
+// own default max_order=3 against measured process private-bytes deltas -- itself a GENEROUS
+// upper-bound denominator per the source measurement, so the true ratio may be lower
+// (a stable ratio: 1.50-1.81x
 // at max_order=1, ~2.9-3.1x at max_order=3, ~2.8-3.1x at max_order=5), because the
 // recalibration reasoned the constants forward from an allocator model rather than fitting
 // them to the measured population. A caller pricing this instrument (plan Sec8) rounds using
@@ -163,7 +165,10 @@ struct DampedGreedyDiagnostics {
 	                         // fixture to the suite owner, not to this code).
 	int64_t alpha_eff_q15;   // (alpha_q15 * p_omega(winning candidate)) >> kProbFracBits
 	int64_t qspread_q15;     // max(q_theta over k) - min(q_theta over k)
-	int64_t pomspread_q15;   // max(p_omega over k) - min(p_omega over k)
+	int64_t pomspread_q15;   // max(p_omega over k) - min(p_omega over k), computed over ALL k
+	                         // gathered picks uniformly -- masked picks included, at their true
+	                         // anti-LM values, never fabricated zeros (RULED, fold 21: plan
+	                         // Sec7.5 ruling note; O2 reverted -- Poirot S7/S8, 927bbda casebook)
 };
 // Same domain (1 <= k <= vocab_size) and false-on-violation contract as
 // DampedGreedyScoreAndArgmax above (Poirot C1). On a domain violation *out_diag is left

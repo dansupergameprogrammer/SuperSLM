@@ -8,8 +8,11 @@
  * byte-identical (which is why the suite always linked correctly), but the CONTRACTS in the
  * comments did not: the prior copy still claimed `FsdTopK` "writes exactly k" (false since the
  * S5 fix, `k > vocab_size` pads with -1), carried no `AntiLmCreate`/`DampedGreedyScoreAndArgmax`
- * domain documentation at all (both fixed under C1/M4), and so on. This file is now a direct,
- * synced copy of the production header's own real contracts -- regenerate again whenever
+ * domain documentation at all (both fixed under C1/M4), and so on. This file is synced from
+ * the production header: declarations are byte-identical (verified by comment-stripped diff,
+ * 04e0d26 closing confirmation); comments may differ in either direction, so regenerate by
+ * declaration-diff, never by wholesale copy that would discard a ruling recorded here or
+ * there -- regenerate again whenever
  * `include/superslm/sslm_damped_greedy.h` changes, per the promotion convention
  * `tests/t2112-gpu-1p0-red-suite/sslm_gpu_1p0.h` and `tests/t2130-g5-red-suite/sslm_g5.h`
  * already established in this repo. Transcription source: plan
@@ -174,7 +177,10 @@ struct DampedGreedyDiagnostics {
 	                         // the real value AntiLmPenalize computed for it, not a fabricated
 	                         // 0 (Poirot M5, closed by the same revert that closed S7).
 	int64_t qspread_q15;     // max(q_theta over k) - min(q_theta over k)
-	int64_t pomspread_q15;   // max(p_omega over k) - min(p_omega over k) -- over ALL k
+	int64_t pomspread_q15;   // max(p_omega over k) - min(p_omega over k), computed over ALL k
+                             // gathered picks uniformly -- masked picks included, at their true
+                             // anti-LM values, never fabricated zeros (RULED, fold 21: plan
+                             // Sec7.5 ruling note; O2 reverted -- Poirot S7/S8, 927bbda casebook) -- over ALL k
 	                         // gathered picks, masked included (fold 21, plan Sec9 dim8's own
 	                         // open question (a), RULED: "over k," matching qspread/Z_k's own
 	                         // scope in the same cell -- never redefined to the unmasked

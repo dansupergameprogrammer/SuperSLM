@@ -814,6 +814,12 @@ static void TestS7_PomspreadOverAllK_MaskedOutlierDiscriminates() {
 		          "extreme (p_omega=%lld, max=%lld, min=%lld) -- construction does not "
 		          "isolate what this cell claims to test",
 		          (long long)ref_pw[2], (long long)ref_max, (long long)ref_min);
+	} else {
+		// Suite convention (04e0d26 closing confirmation, finding 4): a guard that can drain
+		// this cell's three discriminating checks must say so loudly, never go silently
+		// vacuous under a future domain change.
+		SKIP_MSG("S7 cell skipped: DampedGreedyScoreAndArgmaxDiag refused at this fixture's "
+		         "scale constants -- the pomspread discrimination did not run");
 	}
 	AntiLmDestroy(alm);
 }

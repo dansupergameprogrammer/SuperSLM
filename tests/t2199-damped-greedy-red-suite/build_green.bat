@@ -1,4 +1,9 @@
 @echo off
+rem Stale-runlog guard (04e0d26 closing confirmation, finding 3): every runlog is deleted up
+rem front, so a cell whose BUILD fails cannot contribute yesterday's numbers to the aggregate.
+del /q "obj_green\*.runlog" 2>nul
+del /q "obj_o2\*.runlog" 2>nul
+
 rem T-2199: builds every cell in this directory against the REAL Phase A/Phase C
 rem implementation (src/damped_greedy_antilm.cpp, src/damped_greedy_topk.cpp -- and, for the
 rem O2 mock cell alone, a TEST-ONLY substitute for the former, see below) alongside the same

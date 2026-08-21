@@ -1,16 +1,17 @@
 // o2_counting_antilm_mock.cpp -- TEST-ONLY. A replacement AntiLmState implementation, linked
-// INSTEAD OF src/damped_greedy_antilm.cpp, purely for o2_masked_not_queried_red.cpp's own
+// INSTEAD OF src/damped_greedy_antilm.cpp, purely for o2_masked_queried_red.cpp's own
 // cell. Never touches production code: this file lives in the suite directory and is
 // substituted at the LINK step (a different .cpp providing the same extern symbols
 // sslm_damped_greedy.h declares), which src/damped_greedy_topk.cpp's own ScoreAndSelect does
 // not and cannot distinguish from the real implementation -- it only ever calls AntiLmPenalize
 // through the declared interface.
 //
-// Poirot O2 (`Claude/Poirot/7be9508-t2199-phaseAC-review.md`,
-// `Claude/Brunel/t2199-phaseAC-build-2026-08-20.md` Sec12.1): "the shared ScoreAndSelect
-// helper now queries AntiLmPenalize only for the UNMASKED picks among the k gathered
-// candidates (a masked pick's p_omega is never read -- its score always floors to INT64_MIN
-// regardless)." This claim has no observable consequence through the PUBLIC interface alone
+// RULED BEHAVIOR (fold 21, plan Sec7.5 ruling note; O2 REVERTED -- the historical O2 remedy
+// that skipped masked picks was reverted per `Claude/Poirot/927bbda-t2199-confirmation.md`
+// S7/S8): ScoreAndSelect queries AntiLmPenalize for ALL k gathered picks uniformly, masked
+// and unmasked alike; a masked pick's p_omega is computed at its true value, unused by the
+// score (which floors to INT64_MIN at selection). Which candidates a caller queries has no
+// observable consequence through the PUBLIC interface alone
 // (AntiLmPenalize is a const, side-effect-free query per its own documented contract; the
 // production AntiLmState is opaque, exposing no counter) -- the only way to OBSERVE which
 // candidates a real caller queries, without touching src/damped_greedy_antilm.cpp, is to
