@@ -480,12 +480,32 @@ and a v1 loader rejects a v2 artifact — a rejection with a diagnostic, never a
 additions — distinct from `format_version`.** A version bump is for a field-layout
 change, a new required section, or an integrity-hash change; `flags` is for a
 capability that is optional (an old loader keeps working, unmodified, on an artifact
-that does not set the bit) and requires no new section or field. Bit 0
-(`kOptionGFusedKLandingFlag = 0x1`) selects Option-G fused post-RoPE K landing:
-the loader accepts `flags` values that set only
-known bits and rejects (`BadHeader`) any unknown bit, so a future artifact carrying a
-capability an older loader does not recognize is refused rather than silently
-mis-loaded. Every artifact produced before this bit existed has `flags == 0`, which
-every loader — before and after this bit's own introduction — accepts identically;
-introducing a new flag bit changes no existing artifact's bytes, loadability, or
-computed output.
+that does not set the bit) and requires no new section or field. The loader accepts
+`flags` values that set only known bits and rejects (`BadHeader`) any unknown bit, so
+a future artifact carrying a capability an older loader does not recognize is refused
+rather than silently mis-loaded. Every artifact produced before a given bit existed has
+that bit clear, which every loader — before and after the bit's own introduction —
+accepts identically; introducing a new flag bit changes no existing artifact's bytes,
+loadability, or computed output.
+
+**Bit allocation table — ADDED 2026-08-20 (T-2199 fold 23,
+`Claude/Plans/superslm-1p2-fsd-plan-2026-08-19.md` §3 in the SuperSLM-Wizard records repo),
+closing the third instance of the same collision class (T-1894/D-SLM2408 moved a canary off bit 0
+once already; T-2199's own `TestD1c` re-scoped off bit 1 as a stopgap; the shipped
+`tests/test_main.cpp::TestRejectsUnknownFlagsBit` then collided with bit 1 a second time). A claimed
+bit is now a recorded fact here, not something a reader has to reconstruct from `grep`:**
+
+| Bit | Value | Meaning | Format version | Decision/commit |
+|---|---|---|---|---|
+| 0 | `0x1` | `kOptionGFusedKLandingFlag` — Option-G fused post-RoPE K landing | 2 | `D-SLM2355` |
+| 1 | `0x2` | `kDampedGreedyArtifactConstantsFlag` — damped greedy anti-repetition decoding's carried scale constants (`SslmSectionType::DampedGreedyConstants`) | 2 | `D-SLM3794` |
+| 2–30 | `0x4`–`0x40000000` | Unclaimed — available for future allocation, sequentially from bit 2 | — | — |
+| 31 | `0x80000000` | **PERMANENTLY RESERVED FOR TESTING — never allocated to a real capability.** Every "the loader rejects an unknown `flags` bit" fixture (this file's own canary, any red-suite fixture exercising the same claim) uses this bit and only this bit, so the claim under test can never collide with a real allocation growing sequentially from bit 0. Chosen at the opposite end of the 32-bit space from where real allocations grow, specifically so this class of collision cannot recur without exhausting every other bit first. | n/a | ruled at T-2199 fold 23 (plan §3, above) |
+
+**Why a table now, not before.** Two collisions in one project's history (T-1894's bit-0 canary,
+this ticket's bit-1 canary) is `StandardsDocument.md` §4's own "failed by search twice" shape — the
+fix is a structure a future allocation cannot miss, not a third ad-hoc bit picked without checking
+this file. **Allocating a new capability bit:** add a row above, claim the next unclaimed bit in the
+2–30 range (never bit 31), cite the ruling decision/commit, and update any `kKnownArtifactFlagsMask`-
+style constant in the same commit — this table and the code must never diverge on which bits are
+claimed.
