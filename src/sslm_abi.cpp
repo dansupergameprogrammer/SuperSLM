@@ -76,6 +76,7 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "superslm/adapter_marshal.h"
@@ -305,9 +306,51 @@ struct sslm_seq_s {
 	// caller behavior (switching n mid-generation), never a silent reuse of a mismatched order.
 	superslm::AntiLmState* damped_greedy_antilm = nullptr;
 	int32_t damped_greedy_antilm_order = 0;
+	// T-2199 Phase D3 fix (Sec9 dim3, GATE, D-SLM3719 -- conductor's routed finding, real crash
+	// 0xC0000005 reproduced 5/5 against a real-checkpoint fixture): `sslm_seq_release` frees this
+	// WHOLE object (`delete seq`, below) with no coordination against a batched
+	// `sslm_decode_stepImpl` call that may still be mid-flight touching the SAME sequence pointer
+	// (the exact "teardown races an in-flight step over this sequence's own state" construction
+	// `TestD3_TeardownDuringFlight...` commissions). Before Phase D, per-sequence processing
+	// touched only a handful of already-owned fields per call, so this race window existed but was
+	// too narrow to reproduce in practice; damped-greedy mode's own lazy `AntiLmCreate`/`AntiLmDestroy`
+	// (a heap allocation/deallocation inside the per-sequence critical section) widens it enough
+	// to fire close to every trial. `lifecycle_mutex` closes it as an acquire-then-release BARRIER,
+	// not a lock held across the object's own lifetime: `sslm_decode_stepImpl` holds it for the
+	// FULL per-sequence body (every mode, not only damped-greedy -- the hazard is general, the
+	// widened window is what made it observable), and `sslm_seq_release` acquires and immediately
+	// releases it before `delete seq` -- if a decode step is mid-flight on this sequence,
+	// `sslm_seq_release` blocks until that step's own per-sequence section completes, THEN frees
+	// the object; if no step is in flight, the acquire is uncontended and costs one uncontended
+	// lock/unlock pair.
+	mutable std::mutex lifecycle_mutex;
 	// NO `released` flag -- see sslm_prefix_s's own comment on why (S5): double-release and any
 	// other use of an already-released handle is caller UB, not a state this ABI pretend-guards.
+	// `lifecycle_mutex` above is a narrower, additive guarantee against ONE specific race (a
+	// release concurrent with an in-flight step naming the SAME live sequence), not a general
+	// double-release/use-after-release guard -- that remains caller UB exactly as documented here.
 };
+
+// T-2199 Phase D3 fix, corrected a SECOND time (Sec9 dim3, GATE, D-SLM3719): the first two
+// corrections (moving the batch lock earlier, then earlier still) both STILL crashed under
+// repro against a real checkpoint. Root cause, found via an SEH-wrapped/instrumented repro,
+// 2026-08-20: `lifecycle_mutex` embedded IN `sslm_seq_s` cannot, by itself, guard against the
+// object's OWN deletion, because locking it requires the object to still exist. If
+// `sslm_seq_release` runs to completion (including `delete seq`) before `sslm_decode_stepImpl`'s
+// own lock-acquisition loop ever reaches that pointer -- entirely possible, since the release
+// thread does no forward-pass work and can win the race outright -- that loop's own
+// `s->lifecycle_mutex` dereferences already-freed memory. A registry OUTSIDE any individual
+// sequence, alive for the whole process, closes this: every touch of a sequence pointer that
+// could race a concurrent release -- both the decode side's liveness-check-and-lock and the
+// release side's remove-then-barrier-then-delete -- goes through `g_seq_registry_mutex` first,
+// so the two operations that must never interleave are themselves mutually exclusive, and a
+// decode call PROVES a sequence is still live (a lookup, not a dereference) before it ever
+// touches it. `static`, not a class member: process-wide is a deliberately coarser scope than
+// per-model (this file's only registry of live `sslm_seq_s*` handles), acceptable because this
+// section is held only for a lookup plus a small number of already-cheap mutex acquisitions, not
+// for a call's actual forward-pass work.
+static std::mutex g_seq_registry_mutex;
+static std::unordered_set<sslm_seq_s*> g_live_seqs;
 
 namespace {
 
@@ -1585,6 +1628,14 @@ extern "C" sslm_status sslm_seq_create(sslm_model model, sslm_kv_pool* pool, ssl
 	h->state.hidden_codes = h->hidden_codes_storage.data();
 	h->current_token = -1;
 	model->live_refs.fetch_add(1, std::memory_order_acq_rel);
+	// T-2199 Phase D3 fix (Sec9 dim3, GATE, D-SLM3719): registered as live BEFORE the handle is
+	// ever handed to the caller -- no concurrent decode_step call can name this pointer before
+	// `*out = h` below makes it observable to any other thread, so there is no ordering hazard
+	// registering it here (this store happens-before any possible use of the handle).
+	{
+		std::lock_guard<std::mutex> registry_lock(g_seq_registry_mutex);
+		g_live_seqs.insert(h);
+	}
 	*out = h;
 	return SSLM_OK;
 }
@@ -1595,6 +1646,28 @@ extern "C" sslm_status sslm_seq_release(sslm_seq seq) {
 		// A still-bound adapter's own live_refs must drop too, or sslm_adapter_release would
 		// wrongly see a live reference from a sequence that no longer exists.
 		seq->adapter_handle->live_refs.fetch_sub(1, std::memory_order_acq_rel);
+	}
+	// T-2199 Phase D3 fix, corrected a SECOND time (Sec9 dim3, GATE, D-SLM3719): remove this
+	// sequence from the liveness registry FIRST, under `g_seq_registry_mutex` -- the SAME lock
+	// `sslm_decode_stepImpl`'s own liveness-check-and-lock step holds while it decides whether
+	// `seq` is even safe to touch (sslm_seq_s's own comment, above `g_seq_registry_mutex`'s
+	// declaration, has the full reasoning). Mutually exclusive with that check: either this erase
+	// runs first (a not-yet-started or not-yet-arrived decode call will find `seq` absent and
+	// never dereference it at all), or a decode call's own registry-locked section already ran
+	// first (proved `seq` live and locked its `lifecycle_mutex` before this erase could begin) --
+	// there is no third interleaving.
+	{
+		std::lock_guard<std::mutex> registry_lock(g_seq_registry_mutex);
+		g_live_seqs.erase(seq);
+	}
+	// Acquire-then-release `lifecycle_mutex` as a BARRIER before touching anything
+	// `sslm_decode_stepImpl` might still be mid-flight on for this SAME sequence: if a batched
+	// decode step already proved liveness (above) and is currently inside its own per-sequence
+	// critical section, this blocks here until that section completes -- THEN it is safe to
+	// destroy the anti-LM state and free the object; if no step is in flight (or none reached
+	// this sequence before the registry erase above), this is one uncontended lock/unlock pair.
+	{
+		std::lock_guard<std::mutex> lock(seq->lifecycle_mutex);
 	}
 	// T-2199 Phase D3 (plan Sec9 dim3, teardown-during-flight): this sequence's own anti-LM
 	// state, if it was ever created, is destroyed here -- before ReturnBlock/delete, matching
@@ -1826,11 +1899,57 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 		}
 	}
 	if (!model->engine.ok) return SSLM_ARTIFACT_REJECTED;
-	// Every sequence validated BEFORE any is touched -- a malformed entry anywhere in the batch
-	// leaves every sequence's state exactly as it was (this call's own "reject leaves state
-	// unperturbed" contract, matching every other lifecycle guard in this design).
+	// Pointer-only null check FIRST -- no dereference yet, so this is safe to do before any lock
+	// is held (a null entry cannot be racing a concurrent release, there is nothing to free).
 	for (int32_t i = 0; i < n; ++i) {
 		if (!seqs[i]) return SSLM_INVALID_ARGUMENT;
+	}
+
+	// T-2199 Phase D3 fix, corrected a SECOND time (Sec9 dim3, GATE, D-SLM3719): the first two
+	// corrections both still crashed (root-caused via SEH-wrapped/instrumented repro against a
+	// real checkpoint, 2026-08-20): a lock embedded IN `sslm_seq_s` cannot protect against the
+	// object's OWN deletion, because locking it requires the object to still exist -- if a
+	// concurrent `sslm_seq_release` runs to completion (including `delete seq`) before this
+	// function's own lock loop ever reaches that pointer, locking it is a use-after-free. Every
+	// sequence in this batch is therefore first PROVED live via `g_live_seqs` (a lookup, never a
+	// dereference of the sequence itself) under `g_seq_registry_mutex` -- the SAME lock
+	// `sslm_seq_release` acquires to remove a sequence before it may proceed to its own barrier
+	// and `delete` (see that function's and `g_seq_registry_mutex`'s own comments for the full
+	// mutual-exclusion argument). `live[i]` records this batch's own per-INDEX result (not just
+	// the deduped unique-pointer set locked below) so every later loop can skip an entry this
+	// step proved dead WITHOUT ever dereferencing it -- and, per this cell's own construction, a
+	// sequence found dead here does not abort sibling sequences in the same batch: the surviving
+	// sequence's own decode must succeed regardless of what a DIFFERENT sequence's concurrent
+	// release did. Locked in ASCENDING POINTER ORDER (not batch order) so two concurrent batched
+	// calls naming overlapping sequences in different orders cannot deadlock against each other.
+	std::vector<bool> live(static_cast<size_t>(n), false);
+	std::vector<std::unique_lock<std::mutex>> seq_locks;
+	{
+		std::lock_guard<std::mutex> registry_lock(g_seq_registry_mutex);
+		std::vector<sslm_seq_s*> lock_order(seqs, seqs + n);
+		std::sort(lock_order.begin(), lock_order.end());
+		// A duplicate sequence pointer named twice in one batch is not otherwise validated by
+		// this function (pre-existing) -- deduped here specifically so this fix does not turn an
+		// already-unvalidated input shape into a NEW self-deadlock (locking the same
+		// non-recursive mutex twice from one thread).
+		lock_order.erase(std::unique(lock_order.begin(), lock_order.end()), lock_order.end());
+		seq_locks.reserve(lock_order.size());
+		for (sslm_seq_s* s : lock_order) {
+			if (g_live_seqs.count(s)) seq_locks.emplace_back(s->lifecycle_mutex);
+		}
+		for (int32_t i = 0; i < n; ++i) {
+			live[i] = g_live_seqs.count(seqs[i]) != 0;
+		}
+	}
+
+	// Every LIVE sequence validated before any is touched -- a malformed entry anywhere in the
+	// batch leaves every sequence's state exactly as it was (this call's own "reject leaves state
+	// unperturbed" contract, matching every other lifecycle guard in this design). A dead entry
+	// (proved absent above, under the registry lock) is never dereferenced here at all -- it
+	// contributes neither a rejection nor a touch, matching this cell's own "a concurrently
+	// released sequence must never abort a surviving sibling's own call" construction.
+	for (int32_t i = 0; i < n; ++i) {
+		if (!live[i]) continue;
 		if (seqs[i]->state.layer_index == 0 && seqs[i]->current_token < 0 &&
 		    !seqs[i]->ready_for_logits) {
 			// No prompt/prior token to resume from, AND no already-computed final hidden state
@@ -1898,6 +2017,17 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 	}
 
 	for (int32_t i = 0; i < n; ++i) {
+		// Lifecycle-safety note: `seq` is already covered by `seq_locks` above (acquired for
+		// every LIVE sequence in this batch before this loop began), so no per-iteration lock is
+		// taken here -- see that block's own comment for why locking only once this loop
+		// reaches a sequence is insufficient. A dead entry (proved absent under the registry
+		// lock, above) is skipped here BEFORE `seqs[i]` is ever dereferenced -- `seqs[i]` itself
+		// (a pointer VALUE sitting in the caller's own array) is always safe to read; it is
+		// dereferencing the sequence it points to (`seq->...`) that would be a use-after-free.
+		if (!live[i]) {
+			out_tokens[i] = -1;
+			continue;
+		}
 		sslm_seq_s* seq = seqs[i];
 
 		if (seq->ready_for_logits) {
