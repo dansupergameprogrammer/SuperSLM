@@ -807,6 +807,66 @@ if defined T2139_MODEL_TOK (
 	echo t2139_c7_unmapped_pin: built, NOT run ^(set T2139_MODEL_TOK=path\to\a-model+tokenizer.sslm to run^)
 )
 
+rem T-2199 Phase D closing round, item 3, conductor's commission, 2026-08-20 -- see
+rem Claude/Curie/t2199-phaseD-red-2026-08-20.md item 3's own "spec'd back" finding: a minimal
+rem synthetic fixture passes the converter/verifier but is rejected by the runtime engine
+rem construction, BuildEngineCache, for want of the full named-tensor set. This step generates
+rem a COMPLETE, real, runnable synthetic .sslm -- every WGT1/BIA1/WSC1/ROP1/KVC1 tensor
+rem BuildEngineCache requires -- reusing tools/reference_pipeline/pipeline.py's own "Sec11
+rem fixture model," the same small transformer that suite's entire test estate already
+rem exercises the Python reference forward pass against -- so the model-gated Phase D cells,
+rem D2/D2a/D3, and the C1-discriminating pin, t2139_dim9_current_token_pin, run for REAL on a
+rem bare tree, not merely SKIP. Regenerated fresh every run, S-HARDEN-5's hermetic-fixture
+rem discipline, same as tools/sslm_pinned_calibration_fixture.py -- never committed as a binary.
+rem Guarded, non-fatal if python is absent, this file's own established convention for optional
+rem tooling, e.g. the CI checkers below -- absent python, this step is skipped and every
+rem model-gated cell below reverts to its pre-existing SKIP-without-a-checkpoint behavior --
+rem never a regression, only the pre-existing state. Placed HERE (not at file top): check_gpu_
+rem guard_status_parity.py's own O11-gate check anchors on this file's FIRST "cl /nologo"
+rem invocation by TEXT POSITION -- a cl invocation placed before that anchor (this block's own
+rem sslm_verify build, below) would misdirect that unrelated check, so this whole block runs
+rem after the real anchor instead. Absolute paths throughout (%CD%, not a bare "out\..." relative
+rem path): tests\t2199-damped-greedy-red-suite\build_green_phaseD.bat -- the Phase D gate this
+rem fixture provisions, further below -- cd /d's into its own directory before using the model
+rem path it is passed, so a relative path set HERE would resolve wrong THERE.
+if not exist out\t2199 mkdir out\t2199
+where python >nul 2>nul
+if not errorlevel 1 (
+	python tools\_t2199_s8_synthetic_full_model_fixture.py out\t2199_s8_fixture.sslm
+	if errorlevel 1 (
+		echo T-2199 S8 fixture generation FAILED -- model-gated Phase D cells and the C1 pin
+		echo will SKIP below ^(same as if python/numpy were absent^), not silently pass.
+	) else (
+		if not defined T2199_PHASED_MODEL set T2199_PHASED_MODEL=%CD%\out\t2199_s8_fixture.sslm
+		if not defined T2199_DIM9_MODEL set T2199_DIM9_MODEL=%CD%\out\t2199_s8_fixture.sslm
+		echo T-2199 S8 fixture: out\t2199_s8_fixture.sslm generated -- T2199_PHASED_MODEL/
+		echo T2199_DIM9_MODEL provisioned by default, override either to use a real checkpoint.
+		cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+			src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+			src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+			src\sslm_abi.cpp ^
+			src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp src\damped_greedy_phaseD_loop.cpp ^
+			tools\sslm_verify.cpp /Fo:out\t2199\ /Fe:out\sslm_verify.exe
+		if errorlevel 1 (
+			echo sslm_verify build FAILED -- the S8 fixture's own independent-verifier confirmation
+			echo is skipped ^(non-fatal^); the runtime pin below is this round's own primary gate.
+		) else (
+			out\sslm_verify.exe out\t2199_s8_fixture.sslm out\t2199_s8_fixture.sslm.manifest.json
+			if errorlevel 1 (
+				echo sslm_verify REJECTED the S8 fixture -- a real defect in the generated artifact,
+				echo surfaced here rather than silently trusted just because the runtime pin below
+				echo happens to accept it.
+				popd & exit /b 1
+			)
+			echo sslm_verify: S8 fixture confirmed byte-valid.
+		)
+	)
+) else (
+	echo python not found on PATH -- skipping T-2199 S8 synthetic fixture generation; Phase D's
+	echo model-gated cells and the C1 pin SKIP below unless T2199_PHASED_MODEL/T2139_MODEL are
+	echo set to a real checkpoint by hand ^(non-fatal, matching this file's own convention^).
+)
+
 rem Design commit 9e2995f4e7's own same-round pin (Sec10 dim 9): a sequence saved resting
 rem BETWEEN decode steps, restored, live and restored both driven one further step -- produced
 rem tokens must be bit-identical. NOT auto-run here (same precedent as this file's other
@@ -820,8 +880,16 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 if errorlevel 1 (
 	popd & exit /b 1
 )
-if defined T2139_MODEL (
-	out\t2139_dim9_current_token_pin.exe %T2139_MODEL%
+rem T-2199 Phase D closing round, item 3: T2139_MODEL (a real checkpoint) wins if the caller set
+rem it; otherwise falls back to T2199_DIM9_MODEL (the S8 synthetic fixture provisioned above,
+rem this file's own item-3 block) -- this is THE C1-discriminating pin the conductor's own
+rem acceptance criterion names by name ("goes red under the C1 scratch-reversion check"), so a
+rem bare-tree run must not silently SKIP it the way every OTHER T2139_MODEL-gated tool in this
+rem file still does (unchanged, out of this round's own scope).
+set DIM9_MODEL=%T2139_MODEL%
+if not defined DIM9_MODEL set DIM9_MODEL=%T2199_DIM9_MODEL%
+if defined DIM9_MODEL (
+	out\t2139_dim9_current_token_pin.exe %DIM9_MODEL%
 	if errorlevel 1 ( popd & exit /b 1 )
 ) else (
 	echo t2139_dim9_current_token_pin: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)

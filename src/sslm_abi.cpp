@@ -1979,25 +1979,67 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 	// sequence's own decode must succeed regardless of what a DIFFERENT sequence's concurrent
 	// release did. Locked in ASCENDING POINTER ORDER (not batch order) so two concurrent batched
 	// calls naming overlapping sequences in different orders cannot deadlock against each other.
-	std::vector<bool> live(static_cast<size_t>(n), false);
-	std::vector<std::unique_lock<std::mutex>> seq_locks;
+	// T-2199 Phase D review closing round (dim7 finding, Claude/Curie/t2199-phaseD-red-2026-08-20.md
+	// item 1): this registry-locking section originally used three plain std::vectors (`live`,
+	// `lock_order`, `seq_locks`) -- correct, but each one heap-allocates unconditionally, on
+	// EVERY call, regardless of mode (this section runs before the mode branch even exists).
+	// `dim7_contract_red.cpp`'s own zero-allocation contract for `sslm_decode_step`'s
+	// `ready_for_logits` path (design commit `959336ad64`) measured exactly 3 allocations --
+	// these three, one-for-one, root-caused by direct correspondence (not by elimination alone):
+	// each of the three constructions below is the ONLY heap-allocating statement newly running
+	// unconditionally on this path since that contract was last proven zero, and remains the only
+	// source `dim7`'s own instrumentation could be counting three of. Root cause is therefore this
+	// section's own allocation shape, not `struct_size` (a single scalar-field read, allocates
+	// nothing) and not the damped-greedy branch (gated behind `params->mode ==
+	// SSLM_DECODE_MODE_DAMPED_GREEDY`, unreached by a greedy-mode call).
+	//
+	// Fixed by giving each an INLINE, stack-resident capacity for the common case (batches up to
+	// `kInlineSeqCap`, matching this ABI's own `sslm_config::max_batch` framing as "a small,
+	// caller-bounded batch," not an unbounded one) with a heap fallback ONLY for a batch larger
+	// than that -- the zero-allocation contract is honored for real at ordinary batch sizes,
+	// never re-specified to accept a nonzero count.
+	constexpr int32_t kInlineSeqCap = 64;
+	const bool use_inline = n <= kInlineSeqCap;
+	bool live_inline[kInlineSeqCap];
+	std::unique_ptr<bool[]> live_heap;
+	if (!use_inline) live_heap.reset(new bool[static_cast<size_t>(n)]);
+	bool* const live = use_inline ? live_inline : live_heap.get();
+	for (int32_t i = 0; i < n; ++i) live[i] = false;
+
+	sslm_seq_s* lock_order_inline[kInlineSeqCap];
+	std::unique_ptr<sslm_seq_s*[]> lock_order_heap;
+	if (!use_inline) lock_order_heap.reset(new sslm_seq_s*[static_cast<size_t>(n)]);
+	sslm_seq_s** const lock_order = use_inline ? lock_order_inline : lock_order_heap.get();
+	std::copy(seqs, seqs + n, lock_order);
+	std::sort(lock_order, lock_order + n);
+	// A duplicate sequence pointer named twice in one batch is not otherwise validated by this
+	// function (pre-existing) -- deduped here specifically so this fix does not turn an
+	// already-unvalidated input shape into a NEW self-deadlock (locking the same non-recursive
+	// mutex twice from one thread).
+	sslm_seq_s** const lock_order_end = std::unique(lock_order, lock_order + n);
+	const size_t lock_order_count = static_cast<size_t>(lock_order_end - lock_order);
+
+	std::unique_lock<std::mutex> seq_locks_inline[kInlineSeqCap];
+	std::unique_ptr<std::unique_lock<std::mutex>[]> seq_locks_heap;
+	if (!use_inline) {
+		seq_locks_heap.reset(new std::unique_lock<std::mutex>[static_cast<size_t>(n)]);
+	}
+	std::unique_lock<std::mutex>* const seq_locks =
+	    use_inline ? seq_locks_inline : seq_locks_heap.get();
+	size_t seq_locks_count = 0;
 	{
 		std::lock_guard<std::mutex> registry_lock(g_seq_registry_mutex);
-		std::vector<sslm_seq_s*> lock_order(seqs, seqs + n);
-		std::sort(lock_order.begin(), lock_order.end());
-		// A duplicate sequence pointer named twice in one batch is not otherwise validated by
-		// this function (pre-existing) -- deduped here specifically so this fix does not turn an
-		// already-unvalidated input shape into a NEW self-deadlock (locking the same
-		// non-recursive mutex twice from one thread).
-		lock_order.erase(std::unique(lock_order.begin(), lock_order.end()), lock_order.end());
-		seq_locks.reserve(lock_order.size());
-		for (sslm_seq_s* s : lock_order) {
-			if (g_live_seqs.count(s)) seq_locks.emplace_back(s->lifecycle_mutex);
+		for (size_t k = 0; k < lock_order_count; ++k) {
+			sslm_seq_s* s = lock_order[k];
+			if (g_live_seqs.count(s)) {
+				seq_locks[seq_locks_count++] = std::unique_lock<std::mutex>(s->lifecycle_mutex);
+			}
 		}
 		for (int32_t i = 0; i < n; ++i) {
 			live[i] = g_live_seqs.count(seqs[i]) != 0;
 		}
 	}
+	(void)seq_locks_count;  // held for the RAII duration of this call; never re-read by index
 
 	// Every LIVE sequence validated before any is touched -- a malformed entry anywhere in the
 	// batch leaves every sequence's state exactly as it was (this call's own "reject leaves state

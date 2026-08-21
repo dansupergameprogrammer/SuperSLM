@@ -116,28 +116,11 @@ bool ValidateDampedGreedyParams(const DampedGreedyValidationParams& p,
 	return true;
 }
 
-// --- D2: thin wrapper (plan Sec8 D1's own "additive-field build" shape, sslm_phaseD_stub.h) --
-// Copies the extra fields into the (now mode-aware) sslm_decode_params and calls straight
-// through to the ALREADY-PUBLIC sslm_decode_step -- no new internal entry point, matching the
-// ruling's own "additive field, no successor struct" shape exactly. sslm_decode_stepImpl's own
-// mode-aware branch (src/sslm_abi.cpp) is what actually wires DampedGreedyScoreAndArgmax in.
-extern "C" sslm_status sslm_decode_step_damped_greedy(sslm_model model, sslm_seq* seqs, int32_t n,
-                                                        const sslm_decode_params_damped_greedy* params,
-                                                        sslm_workspace ws, int32_t* out_tokens) {
-	if (!params) return SSLM_INVALID_ARGUMENT;
-	sslm_decode_params plain{};
-	// T-2199 Phase D review addendum (D-SLM3797, Dan): struct_size is the FIRST
-	// new field the library now validates -- an unrecognized size is a loud rejection.
-	plain.struct_size = sizeof(plain);
-	plain.layer_budget = params->layer_budget;
-	plain.mode = static_cast<int32_t>(params->mode);
-	plain.alpha_q15 = params->alpha_q15;
-	plain.anti_lm_max_order = params->anti_lm_max_order;
-	plain.top_k = params->top_k;
-	plain.q_ln2 = params->q_ln2;
-	plain.q_b = params->q_b;
-	plain.q_c = params->q_c;
-	return sslm_decode_step(model, seqs, n, &plain, ws, out_tokens);
-}
+// T-2199 Phase D closing round, item 2 (conductor's commission, 2026-08-20): the thin
+// sslm_decode_step_damped_greedy/sslm_decode_params_damped_greedy shim that used to live here
+// is DELETED -- see sslm_phaseD.h's own top comment. The real, additive-field
+// sslm_decode_step/sslm_decode_params (sslm_abi.h) IS the production entry point; callers pass
+// mode=SSLM_DECODE_MODE_DAMPED_GREEDY directly (tools/sslm_generate.cpp's own S4 CLI wiring is
+// the reference caller).
 
 }  // namespace superslm

@@ -14,19 +14,16 @@
 // linking -- an empty `namespace superslm_test_phaseD {}` is kept at the bottom of this file
 // purely so that `using namespace superslm_test_phaseD;` remains valid syntax.
 //
-// `sslm_decode_step_damped_greedy`/`sslm_decode_params_damped_greedy` (below) are KEPT, not
-// deleted, even though S5 also flags them as "precisely the versioned successor struct plus
-// parallel entry point Sec8 D1 ruled against, now shipping alongside the additive-field shape
-// the ruling chose. Only one was ruled." -- correct, and NOT fixed here: `phaseD2_wiring_red.cpp`
-// / `phaseD2a_cost_ratio_red.cpp` / `phaseD3_teardown_red.cpp` (test files, outside this build's
-// writable scope) construct their own primary cells by calling
-// `sslm_decode_step_damped_greedy(...)` directly -- deleting it would be red-by-link across three
-// suite files, not a build-time fix. The wrapper below is now explicitly a thin, suite-
-// compatibility SHIM over the real, additive-field `sslm_decode_step`/`sslm_decode_params`
-// (which IS the production-recommended path -- see `tools/sslm_generate.cpp`'s own S4 CLI wiring,
-// which calls the real ABI directly, never this wrapper). Routed to the suite owner: migrate
-// those three cells onto `sslm_decode_step`/`sslm_decode_params` directly, then this wrapper and
-// `sslm_decode_params_damped_greedy` can be deleted in the same pass.
+// T-2199 Phase D closing round (conductor's commission, 2026-08-20), item 2: the shim named
+// above (`sslm_decode_step_damped_greedy`/`sslm_decode_params_damped_greedy`) is DELETED --
+// Curie's own migration (`curie/t2199-phaseD-red@db4b230`) moved `phaseD2_wiring_red.cpp`/
+// `phaseD2a_cost_ratio_red.cpp`/`phaseD3_teardown_red.cpp` onto the real
+// `sslm_decode_step`/`sslm_decode_params` directly and grep-confirmed zero remaining callers
+// anywhere in `tests/`. Only the real, additive-field ABI (`sslm_decode_step`/
+// `sslm_decode_params`, `sslm_abi.h`) and this file's own permanent production surface
+// (`DampedGreedyMode`, `ValidateDampedGreedyParams`, `DampedGreedyValidationParams`, the
+// artifact-read functions, `RunGreedyOrDampedGreedyDecodeLoop`) ship now -- the "versioned
+// successor struct plus parallel entry point" S5 flagged no longer exists in this tree.
 //
 // Design of record: Claude/Plans/superslm-1p2-fsd-plan-2026-08-19.md Sec8 Phase D, Sec9
 // dimensions 1-3/5/6/7/9/10. Binding rulings: D-SLM3794 (Decision A mechanism -- additive
@@ -93,17 +90,6 @@ struct RawSection {
 
 enum class DampedGreedyMode : int32_t { kGreedy = 0, kDampedGreedy = 1 };
 
-struct sslm_decode_params_damped_greedy {
-	int32_t layer_budget;
-	DampedGreedyMode mode;
-	int32_t alpha_q15;  // C2 fix: int32_t per plan Sec2.5, matches sslm_decode_params (sslm_abi.h)
-	int32_t anti_lm_max_order;
-	int32_t top_k;
-	int64_t q_ln2;
-	int64_t q_b;
-	int64_t q_c;
-};
-
 // --- D2/D3 shared: params validation (plan Sec9 dim2) -----------------------------------------
 struct DampedGreedyValidationParams {
 	DampedGreedyMode mode;
@@ -113,11 +99,6 @@ struct DampedGreedyValidationParams {
 };
 [[nodiscard]] bool ValidateDampedGreedyParams(const DampedGreedyValidationParams& p,
                                                int32_t vocab_size) noexcept;
-
-// --- D2: the batched-ABI entry point (plan Sec8 D2, sslm_decode_stepImpl) --------------------
-extern "C" sslm_status sslm_decode_step_damped_greedy(sslm_model model, sslm_seq* seqs, int32_t n,
-                                                        const sslm_decode_params_damped_greedy* params,
-                                                        sslm_workspace ws, int32_t* out_tokens);
 
 // --- D3: the free-text CLI/RunGreedyDecodeLoop entry point (plan Sec8 D3, forward_sites.cpp) -
 superslm::SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
