@@ -2,24 +2,50 @@
 // Decision A mechanism half, D-SLM3794) and Sec9 dim9's own siting of the pre-flag loader
 // rejection cell here.
 //
-// Two cells are BORN GREEN (pin CURRENT, real, already-shipped loader behavior -- the exact
-// guarantee D-SLM3794 states about a pre-damped-greedy runtime, executed against THIS
-// worktree's own real src/artifact.cpp, no stub involved): TestD1a and TestD1c. Two cells are
-// RED BY LINK (call superslm_test_phaseD::ArtifactHasDampedGreedyConstants/
-// ReadDampedGreedyScaleConstants, declared in sslm_phaseD_stub.h, defined nowhere yet):
-// TestD1b and TestD1d.
+// REVISED 2026-08-20 (conductor's dispute-resolution commission, after brunel/t2199-phaseD@
+// 5ced7a6 landed): TestD1a stays BORN GREEN, unaffected. TestD1b's fixture now writes a REAL
+// DampedGreedyConstants section via the production MakeDampedGreedyConstantsSection (disputed
+// 1 of 5 -- the fixture never wrote real bytes before; fixed, not worked around). TestD1c is
+// RE-SCOPED (disputed 1 of 5, ruling below) -- its literal pre-build assertion is now
+// definitionally false the moment D1 lands (flags=0x2 is KNOWN in this build), which is not a
+// build defect, it is exactly what the cell's own original comment predicted. TestD1d is
+// unchanged (not disputed, already GREEN).
+//
+// RULING on the TestD1b/TestD1c contradiction (conductor's dispute 1). Two readings were
+// possible: (a) treat TestD1c as permanently broken and delete it, losing D-SLM3794's own
+// "pre-damped-greedy runtime REJECTS a flagged artifact" guarantee as a live, re-checkable
+// claim; or (b) re-scope TestD1c to what is STILL true and STILL checkable post-build --
+// (b) is the correct reading: D-SLM3794's real, general promise is the FORMAT's own
+// unknown-flag-bit-rejection mechanism (docs/sslm_format.md's Versioning section), not the
+// specific historical fact that 0x2 itself was once unknown -- that fact is real, was true,
+// and is preserved as dated evidence (below), but a cell asserting it AS A LIVE, RE-RUNNABLE
+// CHECK is structurally impossible once the very build under test is the one that made 0x2
+// known -- no bit choice fixes this (the builder's own evidence: picking a different literal
+// for "the real flag" only moves the contradiction, since TestD1b's own fixture would then need
+// the SAME new bit to be known, and TestD1c would need it to be unknown, in the identical
+// build). TestD1c is renamed TestD1_UnknownFlagBit_RejectsWithBadHeader_FormatSemantics and now
+// probes a bit that is STILL genuinely unclaimed after D1 (0x4 -- the next bit past both
+// Option-G's 0x1 and damped greedy's own 0x2), pinning the GENERAL mechanism against the
+// CURRENT, post-D1 loader -- an evergreen regression guard, not a time-scoped historical claim.
+// The specific historical fact (0x2 rejected pre-D1) is preserved as a dated citation to this
+// suite's own already-executed evidence (Claude/Curie/t2199-phaseD-red-2026-08-20.md's own
+// "Born-green verification, isolated" section: checks=10 failures=0 against commit 2d7d381,
+// before D1 landed) rather than reasserted as a cell that cannot both exist and pass.
 //
 // Coverage Model cells realized here (plan Sec9):
-//   dim9  Persistence round-trip and version evolution -- GATE, D-SLM3719. "An old loader
-//         (pre-damped-greedy-flag) against a new artifact with the flag set rejects with
-//         BadHeader" (sited at Phase D1 by Mendeleev's coverage audit, d3b310714d) --
-//         TestD1c. The flag-gated field itself loading/round-tripping -- TestD1a/TestD1b.
+//   dim9  Persistence round-trip and version evolution -- GATE, D-SLM3719. The flag-gated
+//         field itself loading/round-tripping -- TestD1a/TestD1b. The FORMAT's own general
+//         unknown-bit-rejection mechanism -- TestD1_UnknownFlagBit_RejectsWithBadHeader_
+//         FormatSemantics (re-scoped from the original TestD1c, see ruling above; the
+//         ORIGINAL, time-scoped claim -- specifically that 0x2 was unknown pre-D1 -- is a
+//         dated historical fact, cited above, not a live cell in a post-D1 tree).
 //   dim2  Trust boundaries and hostile inputs -- GATE, D-SLM3719. Malformed/out-of-domain
 //         constants reject, matching this codebase's own reject-over-degrade discipline for
 //         every other artifact-carried field -- TestD1d.
 #include "sslm_fixtures.h"
 #include "sslm_sil1_hostile_fixtures.h"
 #include "sslm_phaseD_stub.h"
+#include "sslm_phaseD_fixture.h"
 
 #include <cstdio>
 
@@ -94,31 +120,33 @@ static void TestD1a_UnflaggedArtifact_ByteLevelRegression() {
 }
 
 // --- TestD1b: a flagged artifact with valid constants loads and exposes them (plan Sec8 D1,
-// Decision A mechanism half). RED BY LINK: ArtifactHasDampedGreedyConstants/
-// ReadDampedGreedyScaleConstants are declared in sslm_phaseD_stub.h, defined nowhere. Once
-// Phase D1 lands (a real damped-greedy-constants section + the widened
-// kKnownArtifactFlagsMask), this cell's own fixture construction -- set the flag, add a
-// section carrying (m, e) -- is what a real converter output looks like; the cell then reads
-// back the SAME (m, e) it wrote, bit-exact.
+// Decision A mechanism half). FIXED 2026-08-20 (conductor's dispute-resolution commission,
+// dispute 1): the original fixture set the flags word and stopped, never writing a real
+// DampedGreedyConstants section -- no implementation could make ArtifactHasDampedGreedyConstants
+// return true against bytes that were never written. Now uses the REAL production
+// MakeDampedGreedyConstantsSection (src/damped_greedy_phaseD.cpp, landed with Phase D1) to
+// append a genuine DGC1 section, and a genuinely in-domain (m, e) pair derived via this
+// suite's own shared DeriveDefaultScaleConstantsSourceME (sslm_phaseD_fixture.h) rather than a
+// hand-picked pair never verified against ReadDampedGreedyScaleConstants's own domain check
+// (ScaleConstantsInDomain, src/damped_greedy_phaseD.cpp) -- a hand-picked pair that happened to
+// fail that check would have made this cell fail for a REASON UNRELATED to what it tests.
 static void TestD1b_FlaggedArtifactWithValidConstants_LoadsAndExposesThem() {
-	// A hand-chosen, real, in-domain (m, e) pair -- reuses this suite's own certified-primitive
-	// derivation (fixture_common.h's DeriveDefaultScaleConstants search target, q_ln2=493) so
-	// the constants this cell round-trips are not an arbitrary pair no real converter would
-	// ever emit, matching this campaign's own "verified at source, not hand-typed" discipline.
-	const DampedGreedyScaleConstants kExpected{/*scale_mantissa_m=*/(int64_t{1} << 30) + (int64_t{7} << 20),
-	                                            /*scale_exponent_e=*/-42};
+	int64_t src_m = 0;
+	int32_t src_e = 0;
+	CHECK_MSG(t2199phaseD::DeriveDefaultScaleConstantsSourceME(&src_m, &src_e),
+	          "could not derive an in-domain (m, e) source pair for q_ln2=493 -- fixture "
+	          "precondition, not the cell under test");
+	const DampedGreedyScaleConstants kExpected{/*scale_mantissa_m=*/src_m, /*scale_exponent_e=*/src_e};
 
-	auto built = MakeMinimalValidArtifactBytes();
-	PutU32(built.bytes, 16, kDampedGreedyConstantsScaleFlag);
-	// The constants section itself: this cell does not prescribe the section's own byte
-	// layout (that is Phase D1's own decision, "an additive field or a versioned successor
-	// struct") -- it only prescribes that SslmArtifact::OpenFromMemory("this buffer") followed
-	// by ReadDampedGreedyScaleConstants("that artifact") round-trips kExpected. A real Phase D1
-	// build appends whatever section/field it defines; this fixture leaves the trailing bytes
-	// untouched for that build to fill in during its own fixture regeneration pass (the same
-	// "regenerate the fixture against the real header" step every other Phase A/C cell in this
-	// suite went through once its own symbols existed -- see Claude/Curie/
-	// t2199-red-suite-2026-08-20.md's fold-21 S10 entry for the precedent).
+	auto raw_section = MakeDampedGreedyConstantsSection(kExpected);
+	FixtureSection dgc_section;
+	dgc_section.type = raw_section.type;
+	dgc_section.dtype = raw_section.dtype;
+	dgc_section.data = raw_section.data;
+	dgc_section.alignment = raw_section.alignment;
+
+	auto built = BuildArtifact({MakeConfigSection(), MakeSigmoidLutSection(), dgc_section});
+	PutU32(built.bytes, 16, kDampedGreedyArtifactConstantsFlag);
 	RecomputeIntegrityHash(built.bytes);
 
 	SslmArtifact out;
@@ -141,55 +169,74 @@ static void TestD1b_FlaggedArtifactWithValidConstants_LoadsAndExposesThem() {
 	          "round-tripped e = %d, want %d", got.scale_exponent_e, kExpected.scale_exponent_e);
 }
 
-// --- TestD1c: the pre-flag loader semantics check -- an old loader (pre-damped-greedy-flag)
-// against a new artifact with the flag set REJECTS with BadHeader (plan Sec9 dim9, D-SLM3794,
-// docs/sslm_format.md's own Versioning section: "the loader accepts flags values that set only
-// known bits and rejects (BadHeader) any unknown bit"). BORN GREEN: THIS worktree's own real,
-// unmodified src/artifact.cpp/include/superslm/artifact.h IS the pre-damped-greedy loader
-// D-SLM3794 describes (kKnownArtifactFlagsMask == kOptionGFusedKLandingFlag == 0x1 only, as of
-// this suite's authoring commit, confirmed by direct read of artifact.h above) -- so this cell
-// exercises the real guarantee live, not a stand-in. A PRESUMPTIVE bit is used
-// (kDampedGreedyConstantsScaleFlag = 0x2, sslm_phaseD_stub.h) precisely because it is
-// unclaimed today; per that header's own note, this specific assertion is expected to need
-// updating in the SAME edit that lands Phase D1 if D1 claims a different bit.
-static void TestD1c_PreDampedGreedyLoader_RejectsPresumptiveFlagBit_BadHeader() {
-	CHECK_MSG((kKnownArtifactFlagsMask & kDampedGreedyConstantsScaleFlag) == 0,
-	          "precondition: kDampedGreedyConstantsScaleFlag (0x%x) must be OUTSIDE this "
-	          "worktree's current kKnownArtifactFlagsMask (0x%x) for this cell to be testing "
-	          "'pre-flag' semantics at all -- if this fails, Phase D1 has already landed and "
-	          "widened the mask, and this cell (not the loader) needs updating",
-	          kDampedGreedyConstantsScaleFlag, kKnownArtifactFlagsMask);
+// --- TestD1_UnknownFlagBit_RejectsWithBadHeader_FormatSemantics: RE-SCOPED from the original
+// TestD1c (conductor's dispute-resolution commission, dispute 1 -- see this file's own header
+// comment for the full ruling). D-SLM3794's real, GENERAL promise is the format's own
+// unknown-flag-bit-rejection mechanism (docs/sslm_format.md's Versioning section: "the loader
+// accepts flags values that set only known bits and rejects (BadHeader) any unknown bit") --
+// this cell pins that mechanism against a bit that is STILL genuinely unclaimed in THIS,
+// post-D1 tree (0x4, the next bit past Option-G's 0x1 and damped greedy's own 0x2, confirmed
+// below), so it stays a live, re-runnable regression guard rather than a claim that becomes
+// definitionally false the moment any future flag (D1's own damped-greedy bit included) lands.
+//
+// The ORIGINAL, time-scoped claim this cell used to make -- that 0x2 SPECIFICALLY was unknown
+// and rejected BEFORE Phase D1 landed -- is real, was independently verified by execution, and
+// is preserved as dated evidence rather than reasserted here: Claude/Curie/
+// t2199-phaseD-red-2026-08-20.md's own "Born-green verification, isolated" section records
+// `checks=10 failures=0 skips=0` for that exact construction (flags=0x2, and flags=(0x1|0x2))
+// against this repo's real loader at commit 2d7d381 (SuperSLM repo), before Phase D1's own
+// commit 5ced7a6 widened kKnownArtifactFlagsMask to include 0x2. That evidence stands on its
+// own; it is not re-asserted as a live cell because the build that would run it is definitionally
+// the one that makes the assertion false (the builder's own dispute evidence, § this file's
+// header comment).
+static void TestD1_UnknownFlagBit_RejectsWithBadHeader_FormatSemantics() {
+	// kProbeUnknownFlag must stay OUTSIDE kKnownArtifactFlagsMask for this cell to test
+	// "unknown bit" semantics at all -- checked live so a FUTURE flag landing at 0x4 fails this
+	// PRECONDITION loudly (routing to Curie for a bit bump) rather than this cell silently
+	// testing a bit that is no longer unknown.
+	constexpr uint32_t kProbeUnknownFlag = 0x4u;
+	CHECK_MSG((kKnownArtifactFlagsMask & kProbeUnknownFlag) == 0,
+	          "precondition: the probe bit (0x%x) must be OUTSIDE this worktree's current "
+	          "kKnownArtifactFlagsMask (0x%x) -- if this fails, a THIRD flag has landed at this "
+	          "bit and this cell needs a fresh unclaimed probe, not a claim about the loader",
+	          kProbeUnknownFlag, kKnownArtifactFlagsMask);
+	// Sanity check on the ruling's own premise: kDampedGreedyArtifactConstantsFlag (D1's real
+	// bit) IS now known -- confirms this tree is genuinely post-D1, i.e. that TestD1c's own
+	// original assertion really would be false here (not merely reasoned to be).
+	CHECK_MSG((kKnownArtifactFlagsMask & kDampedGreedyArtifactConstantsFlag) != 0,
+	          "sanity: kDampedGreedyArtifactConstantsFlag must be KNOWN in this tree -- if this "
+	          "fails, Phase D1 has NOT actually landed and the original TestD1c should be "
+	          "restored instead of this re-scoped cell");
 
 	auto built = MakeMinimalValidArtifactBytes();
-	PutU32(built.bytes, 16, kDampedGreedyConstantsScaleFlag);
+	PutU32(built.bytes, 16, kProbeUnknownFlag);
 	RecomputeIntegrityHash(built.bytes);
 
 	SslmArtifact out;
 	SslmError err;
 	const auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), out, &err);
 	CHECK_MSG(status == SslmStatus::BadHeader,
-	          "a pre-damped-greedy loader against an artifact carrying the (presumptive) "
-	          "damped-greedy flags bit must reject BadHeader -- got %s (D-SLM3794: 'a "
-	          "pre-damped-greedy runtime REJECTS a flagged artifact with BadHeader per "
-	          "docs/sslm_format.md's own versioning semantics')",
-	          SslmStatusName(status));
+	          "an artifact carrying a genuinely unclaimed flags bit must reject BadHeader -- got "
+	          "%s (docs/sslm_format.md's Versioning section: 'rejects (BadHeader) any unknown "
+	          "bit')", SslmStatusName(status));
 	CHECK(err.code == SslmStatus::BadHeader);
 	CHECK(!out.Ok());
 
-	// A flags value combining the KNOWN Option-G bit with the presumptive damped-greedy bit
-	// must also reject -- a known bit does not license an unknown one riding alongside it
-	// (mirrors tests/test_main.cpp's own TestOptionGArtifactFlags_KnownBitAcceptedUnknownBitRejected
-	// third sub-case, same reasoning, applied to this new bit).
+	// A flags value combining BOTH now-known bits (Option-G, damped greedy) with the unknown
+	// probe must also reject -- known bits do not license an unknown one riding alongside them
+	// (mirrors tests/test_main.cpp's own
+	// TestOptionGArtifactFlags_KnownBitAcceptedUnknownBitRejected third sub-case).
 	auto built2 = MakeMinimalValidArtifactBytes();
-	PutU32(built2.bytes, 16, kOptionGFusedKLandingFlag | kDampedGreedyConstantsScaleFlag);
+	PutU32(built2.bytes, 16,
+	       kOptionGFusedKLandingFlag | kDampedGreedyArtifactConstantsFlag | kProbeUnknownFlag);
 	RecomputeIntegrityHash(built2.bytes);
 	SslmArtifact out2;
 	SslmError err2;
 	const auto status2 =
 	    SslmArtifact::OpenFromMemory(built2.bytes.data(), built2.bytes.size(), out2, &err2);
 	CHECK_MSG(status2 == SslmStatus::BadHeader,
-	          "flags=(Option-G known | presumptive damped-greedy) must still reject on THIS "
-	          "loader -- got %s", SslmStatusName(status2));
+	          "flags=(every known bit | one unknown probe bit) must still reject -- got %s",
+	          SslmStatusName(status2));
 }
 
 // --- TestD1d: malformed/out-of-domain constants reject per the loader's hostile-input
@@ -213,7 +260,7 @@ static void TestD1d_MalformedConstants_RejectHostileInput() {
 	const int32_t kHostileE = 0;
 
 	auto built = MakeMinimalValidArtifactBytes();
-	PutU32(built.bytes, 16, kDampedGreedyConstantsScaleFlag);
+	PutU32(built.bytes, 16, kDampedGreedyArtifactConstantsFlag);
 	RecomputeIntegrityHash(built.bytes);
 
 	SslmArtifact out;
@@ -253,7 +300,7 @@ static void TestD1d_MalformedConstants_RejectHostileInput() {
 
 int main() {
 	TestD1a_UnflaggedArtifact_ByteLevelRegression();
-	TestD1c_PreDampedGreedyLoader_RejectsPresumptiveFlagBit_BadHeader();
+	TestD1_UnknownFlagBit_RejectsWithBadHeader_FormatSemantics();
 	TestD1b_FlaggedArtifactWithValidConstants_LoadsAndExposesThem();
 	TestD1d_MalformedConstants_RejectHostileInput();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);

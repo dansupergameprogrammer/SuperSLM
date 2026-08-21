@@ -82,4 +82,32 @@ static_assert(
     "enumerator the other has not taken; reconcile both to design Sec6, the single-authority "
     "complete ordinal registry (T-2133 ruling, design commit 4f4eb23896)");
 
+// --- sslm_decode_params: sizeof/alignof/offsetof, REAL suite header vs REAL library header --
+// ADDED 2026-08-20 (conductor's dispute-resolution commission, mirror-copy defect class
+// closure -- same remedy, same reasoning as tools/t2139_gate_c_real_suite_side_check.cpp's own
+// identical addition for tests/t2130-g5-red-suite/sslm_g5.h; this is t2138-abi-red-suite's own
+// mirror, found stale by the same battery sweep, at the same single-field pre-D1 shape). ---
+static_assert(sizeof(t2141_gate_c_t2138_suite_side::sslm_decode_params) ==
+                  sizeof(::sslm_decode_params),
+              "sslm_decode_params: sizeof diverges (tests/t2138-abi-red-suite/sslm_abi.h vs "
+              "include/superslm/sslm_abi.h)");
+static_assert(alignof(t2141_gate_c_t2138_suite_side::sslm_decode_params) ==
+                  alignof(::sslm_decode_params),
+              "sslm_decode_params: alignof diverges (tests/t2138-abi-red-suite/sslm_abi.h vs "
+              "include/superslm/sslm_abi.h)");
+#define T2141_GATE_C_T2138_PARAMS_OFFSET_CHECK(FIELD)                                            \
+	static_assert(offsetof(t2141_gate_c_t2138_suite_side::sslm_decode_params, FIELD) ==            \
+	                  offsetof(::sslm_decode_params, FIELD),                                        \
+	              "sslm_decode_params::" #FIELD ": offsetof diverges (tests/t2138-abi-red-suite/"   \
+	              "sslm_abi.h vs include/superslm/sslm_abi.h)")
+T2141_GATE_C_T2138_PARAMS_OFFSET_CHECK(layer_budget);
+T2141_GATE_C_T2138_PARAMS_OFFSET_CHECK(mode);
+T2141_GATE_C_T2138_PARAMS_OFFSET_CHECK(alpha_q15);
+T2141_GATE_C_T2138_PARAMS_OFFSET_CHECK(anti_lm_max_order);
+T2141_GATE_C_T2138_PARAMS_OFFSET_CHECK(top_k);
+T2141_GATE_C_T2138_PARAMS_OFFSET_CHECK(q_ln2);
+T2141_GATE_C_T2138_PARAMS_OFFSET_CHECK(q_b);
+T2141_GATE_C_T2138_PARAMS_OFFSET_CHECK(q_c);
+#undef T2141_GATE_C_T2138_PARAMS_OFFSET_CHECK
+
 int main() { return 0; }

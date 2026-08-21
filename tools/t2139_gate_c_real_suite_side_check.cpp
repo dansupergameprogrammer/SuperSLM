@@ -92,4 +92,38 @@ static_assert(
     "Sec6, the single-authority complete ordinal registry (T-2133 ruling, design commit "
     "4f4eb23896)");
 
+// --- sslm_decode_params: sizeof/alignof/offsetof, REAL suite header vs REAL library header --
+// ADDED 2026-08-20 (conductor's dispute-resolution commission, mirror-copy defect class
+// closure). Before this fold, NOTHING checked whether tests/t2130-g5-red-suite/sslm_g5.h's own
+// ACTUAL, committed sslm_decode_params body agreed with the real library struct -- Gate C's
+// sibling file (tools/t2139_gate_c_type_identity_check.cpp) only ever compared its OWN
+// hand-transcription, which can silently drift from the real mirror exactly the way this file's
+// own top comment already documents for the enum registry (P5/P6: "a human forgets to
+// re-transcribe"). The battery sweep that found t2130/sslm_g5.h's sslm_decode_params still at
+// its pre-D1 single-field shape (build log Claude/Brunel/t2199-phaseD-build-2026-08-20.md) is
+// exactly the failure mode a transcription-only check cannot see; this closes it by reading the
+// REAL suite header directly, the same discipline this file already applies to sslm_status. ---
+static_assert(sizeof(t2139_gate_c_real_suite_side::sslm_decode_params) ==
+                  sizeof(::sslm_decode_params),
+              "sslm_decode_params: sizeof diverges (REAL tests/t2130-g5-red-suite/sslm_g5.h vs "
+              "REAL include/superslm/sslm_abi.h)");
+static_assert(alignof(t2139_gate_c_real_suite_side::sslm_decode_params) ==
+                  alignof(::sslm_decode_params),
+              "sslm_decode_params: alignof diverges (REAL tests/t2130-g5-red-suite/sslm_g5.h vs "
+              "REAL include/superslm/sslm_abi.h)");
+#define T2139_GATE_C_REAL_PARAMS_OFFSET_CHECK(FIELD)                                             \
+	static_assert(offsetof(t2139_gate_c_real_suite_side::sslm_decode_params, FIELD) ==            \
+	                  offsetof(::sslm_decode_params, FIELD),                                       \
+	              "sslm_decode_params::" #FIELD ": offsetof diverges (REAL "                       \
+	              "tests/t2130-g5-red-suite/sslm_g5.h vs REAL include/superslm/sslm_abi.h)")
+T2139_GATE_C_REAL_PARAMS_OFFSET_CHECK(layer_budget);
+T2139_GATE_C_REAL_PARAMS_OFFSET_CHECK(mode);
+T2139_GATE_C_REAL_PARAMS_OFFSET_CHECK(alpha_q15);
+T2139_GATE_C_REAL_PARAMS_OFFSET_CHECK(anti_lm_max_order);
+T2139_GATE_C_REAL_PARAMS_OFFSET_CHECK(top_k);
+T2139_GATE_C_REAL_PARAMS_OFFSET_CHECK(q_ln2);
+T2139_GATE_C_REAL_PARAMS_OFFSET_CHECK(q_b);
+T2139_GATE_C_REAL_PARAMS_OFFSET_CHECK(q_c);
+#undef T2139_GATE_C_REAL_PARAMS_OFFSET_CHECK
+
 int main() { return 0; }

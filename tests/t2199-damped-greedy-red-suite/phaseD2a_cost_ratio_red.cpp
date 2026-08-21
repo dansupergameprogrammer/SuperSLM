@@ -18,6 +18,7 @@
 // Needs a real base artifact (--model=PATH) for the total-forward-cost denominator -- SKIPs
 // honestly when not supplied, matching this suite's own established discipline.
 #include "sslm_phaseD_stub.h"
+#include "sslm_phaseD_fixture.h"
 #include "sslm_damped_greedy.h"
 
 #include <chrono>
@@ -147,7 +148,10 @@ static void TestD2a_TopKRenormalizeQ15CostRatio_WithinFivePercentOfRealForwardCo
 	params.alpha_q15 = int64_t{1} << 14;
 	params.anti_lm_max_order = 2;
 	params.top_k = 6;
-	params.q_ln2 = 493;
+	// FIXED 2026-08-20 (conductor's dispute-resolution commission, dispute 3): derives the real
+	// (q_ln2, q_b, q_c) triple instead of leaving q_b/q_c at their zero-init default, which made
+	// every call refuse (SSLM_ARTIFACT_REJECTED) before the timed/concurrent work ever ran.
+	CHECK(t2199phaseD::DeriveDefaultScaleConstants(&params.q_ln2, &params.q_b, &params.q_c));
 	sslm_seq batch[1] = {seq};
 	double total_forward_ns = 0.0;
 	for (int i = 0; i < kSteps; ++i) {
