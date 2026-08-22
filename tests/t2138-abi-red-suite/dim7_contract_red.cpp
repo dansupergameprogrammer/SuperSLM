@@ -43,10 +43,29 @@ using namespace superslm;
 //       a STABLE-COUNT cell: the identical call shape, with DIFFERENT (still valid) token
 //       values, produces the identical allocation count both times. ---
 static int g_new_call_count = 0;
-static void ResetAllocCounter() { g_new_call_count = 0; }
+// C1c additionally needs the SIZE of what was allocated, not only how many times. Cell 1a's
+// contract is a count because the allocations it governs are all small and fixed; the defect
+// C1c exists to catch was a SINGLE vocabulary-sized buffer, which moves a plain count by one and
+// is indistinguishable by plain count from a hash-table node. What separates them is scale, so
+// this file also tallies allocations at or above a caller-set threshold. Every observation comes
+// from the same operator new below, so no cell pays for another's instrumentation, and the
+// threshold is zero (tally inert) unless a cell sets it.
+static std::size_t g_new_byte_total = 0;
+static std::size_t g_new_largest = 0;
+static std::size_t g_large_alloc_threshold = 0;
+static int g_large_alloc_count = 0;
+static void ResetAllocCounter() {
+	g_new_call_count = 0;
+	g_new_byte_total = 0;
+	g_new_largest = 0;
+	g_large_alloc_count = 0;
+}
 
 void* operator new(std::size_t size) {
 	++g_new_call_count;
+	g_new_byte_total += size;
+	if (size > g_new_largest) g_new_largest = size;
+	if (g_large_alloc_threshold != 0 && size >= g_large_alloc_threshold) ++g_large_alloc_count;
 	return std::malloc(size);
 }
 void operator delete(void* p) noexcept { std::free(p); }
@@ -108,6 +127,125 @@ static void TestDim7_C1a_AbiLayerOwnAllocationsAreTheDisclosedCount(
 	          "with_ws=%d without_ws=%d (delta=%d), expected delta=1 -- the disclosed "
 	          "embed_codes-fallback allocation, design commit 959336ad64",
 	          with_ws_count, without_ws_count, without_ws_count - with_ws_count);
+}
+
+// --- Cell 1c (T-2233, closing finding O1 of the 1.2 release-candidate outside review,
+// Claude/Poirot/4c8cd2d-superslm-1p2-release-candidate.md): the DAMPED-GREEDY decode path is
+// held to a per-token allocation contract, through sslm_decode_step_v2.
+//
+// WHY THIS CELL EXISTS. Cell 1a reaches the contract through sslm_decode_step -- the legacy
+// wrapper, which hard-codes mode = SSLM_DECODE_MODE_GREEDY -- so the damped path inherited the
+// contract by construction without inheriting the cell that proves it. That gap is how a
+// per-token, full-vocabulary allocation (a std::vector<int32_t> of vocab_size, 607,744 bytes at
+// the shipped target vocabulary, plus a partial_sort over the whole row, once per emitted token
+// per sequence) reached a release candidate with every cell in this file green. The remedy
+// carries the selector's index and score scratch in the caller's workspace
+// (sslm_decode_stepImpl's damped_indices/wide_logits, src/sslm_abi.cpp), and this cell pins it.
+//
+// WHAT THE ORACLE IS, AND WHY IT IS A SIZE RATHER THAN A COUNT. The first version of this cell
+// asserted that a damped step allocates exactly as many times as a greedy step. It fails on the
+// shipped release at delta=9, and the 9 are legitimate: AntiLmUpdate grows the sequence's own
+// n-gram count tables as new contexts appear -- persistent STATE whose cost saturates as
+// contexts repeat, disclosed in docs/api.md as the one damped-specific memory cost, and not the
+// per-token scratch this contract governs. A count is the wrong instrument for the defect class
+// anyway: the allocation that shipped was ONE call, indistinguishable by count from one hash
+// node, and expensive only because of its SIZE.
+//
+// So the oracle counts VOCABULARY-SCALE allocations -- those at or above one int32 per
+// vocabulary entry -- and requires the damped arm to make exactly as many as the greedy arm.
+// The greedy arm is the reference rather than a constant, and it has to be: the engine itself
+// allocates one vocabulary-sized logit buffer per token on BOTH paths, measured, so "no
+// vocabulary-sized allocation on the damped path" is a bound neither arm can meet and would be
+// a gate that fails on correct code. "No vocabulary-sized allocation the greedy path does not
+// also make" is the claim the contract actually supports, it refuses the exact construction C1
+// found -- a second vocabulary-sized buffer, on the damped path only -- and it is immune to the
+// anti-LM's small-node churn at any count.
+//
+// THE FIRST DAMPED STEP IS DELIBERATELY NOT THE MEASURED ONE. sslm_decode_stepImpl creates the
+// sequence's own AntiLmState on its first damped call. That allocation is once per sequence
+// rather than once per token, so it is paid in the warm-up step and is out of the measurement.
+static void TestDim7_C1c_DampedDecodeStepAllocatesNoVocabularySizedBuffer(
+    sslm_model model, sslm_seq seq_damped, sslm_seq seq_greedy, sslm_workspace ws,
+    int32_t layer_budget, int32_t vocab_size) {
+	// 1 is SSLM_DECODE_MODE_DAMPED_GREEDY and 0 is SSLM_DECODE_MODE_GREEDY
+	// (include/superslm/sslm_abi.h). This suite's own mirror header carries the parameter
+	// struct, whose layout the T-2141 gate static_asserts against production, but not the mode
+	// constants -- so the literals are used here rather than a second un-gated mirror of them.
+	sslm_decode_params damped{};
+	const sslm_status init = sslm_decode_params_init(model, 1, layer_budget, &damped);
+	if (init == SSLM_ARTIFACT_REJECTED) {
+		SKIP_MSG("dim7 C1c: the supplied artifact carries no DGC1 section, so damped greedy "
+		         "cannot be selected on it -- pass a --model built with "
+		         "convert_model.py --enable-damped-greedy to run this cell");
+		return;
+	}
+	CHECK(init == SSLM_OK);
+	if (init != SSLM_OK) return;
+
+	sslm_decode_params greedy{};
+	CHECK(sslm_decode_params_init(model, 0, layer_budget, &greedy) == SSLM_OK);
+
+	// Identical prompts, identical shape, identical workspace on both arms.
+	int32_t prompt[4] = {0, 1, 2, 3};
+	int32_t consumed_damped = 0;
+	int32_t consumed_greedy = 0;
+	CHECK(sslm_prefill(model, seq_damped, prompt, 4, 8, SSLM_SPAN_PROMPT, ws,
+	                    &consumed_damped) == SSLM_OK);
+	CHECK(sslm_prefill(model, seq_greedy, prompt, 4, 8, SSLM_SPAN_PROMPT, ws,
+	                    &consumed_greedy) == SSLM_OK);
+	CHECK(consumed_damped == consumed_greedy);
+
+	sslm_seq damped_batch[1] = {seq_damped};
+	sslm_seq greedy_batch[1] = {seq_greedy};
+	int32_t token = 0;
+
+	// Warm-up: the ready_for_logits step. On the damped arm this is also the call that creates
+	// the AntiLmState. Neither arm is measured here.
+	CHECK(sslm_decode_step_v2(model, damped_batch, 1, &damped, ws, &token) == SSLM_OK);
+	CHECK(sslm_decode_step_v2(model, greedy_batch, 1, &greedy, ws, &token) == SSLM_OK);
+
+	// The measured step: a full token through the layer loop on each arm. One int32 per
+	// vocabulary entry is the scale of the buffer C1 found, and of the engine's own per-token
+	// logit buffer that both arms pay.
+	const std::size_t vocab_scale = static_cast<std::size_t>(vocab_size) * sizeof(int32_t);
+	g_large_alloc_threshold = vocab_scale;
+
+	ResetAllocCounter();
+	CHECK(sslm_decode_step_v2(model, damped_batch, 1, &damped, ws, &token) == SSLM_OK);
+	const std::size_t damped_largest = g_new_largest;
+	const int damped_count = g_new_call_count;
+	const std::size_t damped_bytes = g_new_byte_total;
+	const int damped_large = g_large_alloc_count;
+
+	ResetAllocCounter();
+	CHECK(sslm_decode_step_v2(model, greedy_batch, 1, &greedy, ws, &token) == SSLM_OK);
+	const std::size_t greedy_largest = g_new_largest;
+	const int greedy_count = g_new_call_count;
+	const std::size_t greedy_bytes = g_new_byte_total;
+	const int greedy_large = g_large_alloc_count;
+
+	g_large_alloc_threshold = 0;  // leave the tally inert for every other cell in this file.
+
+	// FEATURE ORACLE: the damped path makes no vocabulary-scale allocation that the greedy path
+	// does not also make. This is the half that can fail on the defect that shipped: the removed
+	// construction was a std::vector<int32_t> of exactly vocab_size, so restoring it -- or
+	// introducing any other per-token buffer that scales with the vocabulary -- puts the damped
+	// arm one vocabulary-scale allocation above the greedy arm, at every vocabulary, including
+	// the small synthetic fixtures this suite runs on.
+	CHECK_MSG(damped_large == greedy_large,
+	          "damped made %d vocabulary-scale allocation(s) (>= %zu bytes) against greedy's %d, "
+	          "at vocab_size=%d -- a per-token buffer that scales with the vocabulary is on the "
+	          "damped decode path and not on the greedy one",
+	          damped_large, vocab_scale, greedy_large, vocab_size);
+
+	// Reported, never gated: the plain call and byte deltas are the anti-LM count tables growing
+	// as new contexts appear, which docs/api.md discloses and which saturates as contexts repeat.
+	// A gate on either would refuse the disclosed cost, so this cell reports them for a reader and
+	// leaves the judgement to the oracle above.
+	std::printf("dim7 C1c: damped calls=%d bytes=%zu largest=%zu vocab-scale=%d | greedy calls=%d "
+	            "bytes=%zu largest=%zu vocab-scale=%d | vocab scale=%zu\n",
+	            damped_count, damped_bytes, damped_largest, damped_large, greedy_count,
+	            greedy_bytes, greedy_largest, greedy_large, vocab_scale);
 }
 
 // --- Cell 1b: the engine's own internal scratch allocation count is a disclosed,
@@ -254,8 +392,9 @@ int main(int argc, char** argv) {
 	if (model) {
 		const int32_t num_hidden_layers = static_cast<int32_t>(view.config.num_hidden_layers);
 		// C1a needs 3 fresh sequences (decode-common-path, with-ws, without-ws), C1b needs 2
-		// (benign, hostile), C2/C3 need 1 each -- 7 total, one shared pool.
-		const uint32_t block_count = 7;
+		// (benign, hostile), C1c needs 2 (damped arm, greedy arm), C2/C3 need 1 each -- 9 total,
+		// one shared pool.
+		const uint32_t block_count = 9;
 		const size_t block_bytes = sslm_kv_block_size(model);
 		const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
 		AlignedBuffer pool_buf(block_count * block_bytes + overhead);
@@ -270,13 +409,15 @@ int main(int argc, char** argv) {
 
 		if (pool && ws) {
 			sslm_seq seq_decode = nullptr, seq_with_ws = nullptr, seq_without_ws = nullptr,
-			         seq_benign = nullptr, seq_hostile = nullptr, seq_c2 = nullptr,
-			         seq_c3 = nullptr;
+			         seq_benign = nullptr, seq_hostile = nullptr, seq_damped = nullptr,
+			         seq_greedy = nullptr, seq_c2 = nullptr, seq_c3 = nullptr;
 			CHECK(sslm_seq_create(model, &pool, &seq_decode) == SSLM_OK);
 			CHECK(sslm_seq_create(model, &pool, &seq_with_ws) == SSLM_OK);
 			CHECK(sslm_seq_create(model, &pool, &seq_without_ws) == SSLM_OK);
 			CHECK(sslm_seq_create(model, &pool, &seq_benign) == SSLM_OK);
 			CHECK(sslm_seq_create(model, &pool, &seq_hostile) == SSLM_OK);
+			CHECK(sslm_seq_create(model, &pool, &seq_damped) == SSLM_OK);
+			CHECK(sslm_seq_create(model, &pool, &seq_greedy) == SSLM_OK);
 			CHECK(sslm_seq_create(model, &pool, &seq_c2) == SSLM_OK);
 			CHECK(sslm_seq_create(model, &pool, &seq_c3) == SSLM_OK);
 
@@ -287,6 +428,11 @@ int main(int argc, char** argv) {
 			if (seq_benign && seq_hostile) {
 				TestDim7_C1b_EngineAllocationCountIsStableAcrossHostileContent(
 				    model, seq_benign, seq_hostile, ws);
+			}
+			if (seq_damped && seq_greedy) {
+				TestDim7_C1c_DampedDecodeStepAllocatesNoVocabularySizedBuffer(
+				    model, seq_damped, seq_greedy, ws, num_hidden_layers,
+				    static_cast<int32_t>(view.config.vocab_size));
 			}
 			if (seq_c2) TestDim7_C2_MidCallBoundaryChunkedPrefillResumesCorrectly(model, seq_c2);
 			if (!seq_c3) {
@@ -310,6 +456,8 @@ int main(int argc, char** argv) {
 			if (seq_without_ws) CHECK(sslm_seq_release(seq_without_ws) == SSLM_OK);
 			if (seq_benign) CHECK(sslm_seq_release(seq_benign) == SSLM_OK);
 			if (seq_hostile) CHECK(sslm_seq_release(seq_hostile) == SSLM_OK);
+			if (seq_damped) CHECK(sslm_seq_release(seq_damped) == SSLM_OK);
+			if (seq_greedy) CHECK(sslm_seq_release(seq_greedy) == SSLM_OK);
 			if (seq_c2) CHECK(sslm_seq_release(seq_c2) == SSLM_OK);
 			if (seq_c3) CHECK(sslm_seq_release(seq_c3) == SSLM_OK);
 		}
