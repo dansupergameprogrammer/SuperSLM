@@ -147,7 +147,13 @@ silently accepted.
   complete four-byte shape released in v1.1. It never probes later fields, so
   an unchanged old binary remains safe.
 - `sslm_decode_step_v2` is the extended greedy/damped-greedy entry point.
-  Callers set `struct_size = sizeof(sslm_decode_params)`; any other value is a
+  Initialize its parameter block with `sslm_decode_params_init(model, mode,
+  layer_budget, &params)`. For greedy this zeroes every damped-only field. For
+  damped greedy it selects the ruled defaults (`alpha_q15=65536`, anti-LM order
+  `2`, `top_k=min(6, vocab_size)`) and derives `q_ln2`/`q_b`/`q_c` from the
+  mapped artifact's DGC1 scale; an artifact without that opt-in section returns
+  `SSLM_ARTIFACT_REJECTED`. Callers that populate the struct manually set
+  `struct_size = sizeof(sslm_decode_params)`; any other value is a
   defined `SSLM_INVALID_ARGUMENT` rejection before another extended field is
   read. The distinct symbol—not an unsafe in-place size probe—is what makes
   header/library skew explicit. `layer_budget` remains the caller-chosen layer
@@ -159,9 +165,8 @@ silently accepted.
   apply: `alpha_q15` (the Q15-scaled anti-repetition weight, an `int32_t`
   rejected outside `[0, 2^20)`), `anti_lm_max_order` (the anti-LM's own n,
   `>= 1`), `top_k` (candidates scored per step, `1 <= top_k <= vocab_size`),
-  and `q_ln2`/`q_b`/`q_c` (runtime i-exp scale constants the caller derives
-  once per model load from the artifact's own scale section and passes per
-  call). All five are ignored under greedy mode. `out_tokens[i]` carries
+  and `q_ln2`/`q_b`/`q_c` (runtime i-exp scale constants initialized from the
+  artifact). All five are ignored under greedy mode. `out_tokens[i]` carries
   THREE reserved sentinel values alongside a real token id: `-1` means the
   call is still mid-token and safe to retry (call again with the same layer
   budget to continue); `-2` means that sequence's schema-bound walk has

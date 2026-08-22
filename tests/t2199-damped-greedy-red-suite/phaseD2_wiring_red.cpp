@@ -42,6 +42,9 @@
 #include "sslm_phaseD_fixture.h"
 #include "sslm_damped_greedy.h"
 #include "superslm/decode_digest.h"
+#include "superslm/forward_sites.h"
+#include "superslm/layer_marshal.h"
+#include "superslm/schema_masks.h"
 #include "superslm/sha256.h"
 
 #include <algorithm>
@@ -90,12 +93,16 @@ using namespace superslm;
 using namespace superslm_test_phaseD;
 
 static std::string g_model_path;
+static std::string g_adapter_path;
 
 static void ParseArgs(int argc, char** argv) {
 	for (int i = 1; i < argc; ++i) {
 		const std::string a = argv[i];
 		const char* kFlag = "--model=";
 		if (a.compare(0, std::strlen(kFlag), kFlag) == 0) g_model_path = a.c_str() + std::strlen(kFlag);
+		const char* kAdapterFlag = "--adapter=";
+		if (a.compare(0, std::strlen(kAdapterFlag), kAdapterFlag) == 0)
+			g_adapter_path = a.c_str() + std::strlen(kAdapterFlag);
 	}
 }
 
@@ -234,6 +241,58 @@ static std::vector<uint8_t> SaveSequence(sslm_seq seq) {
 	return blob;
 }
 
+struct IndependentGreedyOracle {
+	std::vector<superslm_marshal::LayerBacking> backings;
+	std::vector<LayerWeights> layers;
+	std::vector<int32_t> final_norm_gain;
+	const int8_t* embed = nullptr;
+	const int8_t* head = nullptr;
+	CarriedScale embed_scale{};
+	CarriedScale final_norm_scale{};
+};
+
+static bool MarshalIndependentGreedyOracle(const SslmModelView& view,
+	                                         IndependentGreedyOracle* out,
+	                                         std::string* err) {
+	out->backings.resize(view.config.num_hidden_layers);
+	out->layers.resize(view.config.num_hidden_layers);
+	for (uint32_t layer = 0; layer < view.config.num_hidden_layers; ++layer) {
+		if (!superslm_marshal::MarshalLayer(
+		        view, layer, view.config.num_attention_heads, view.config.num_key_value_heads,
+		        out->backings[layer], out->layers[layer], err)) {
+			return false;
+		}
+	}
+	const SslmTensorView* embed = view.weights.Tensor("embed");
+	const SslmTensorView* final_gain = view.weights.Tensor("final_norm.gain");
+	if (!embed || !final_gain) {
+		if (err) *err = "artifact has no embed or final_norm.gain tensor";
+		return false;
+	}
+	out->embed = reinterpret_cast<const int8_t*>(embed->data);
+	out->final_norm_gain = superslm_marshal::WidenGainToInt32(*final_gain);
+	bool ok = true;
+	out->embed_scale =
+	    superslm_marshal::ReadCarriedScale(view.composition_constants, "embed", &ok);
+	out->final_norm_scale =
+	    superslm_marshal::ReadCarriedScale(view.composition_constants, "final_norm", &ok);
+	if (!ok) {
+		if (err) *err = "artifact has no embed/final_norm composition constant";
+		return false;
+	}
+	if (view.config.tie_word_embeddings) {
+		out->head = out->embed;
+	} else {
+		const SslmTensorView* head = view.weights.Tensor("lm_head");
+		if (!head) {
+			if (err) *err = "untied artifact has no lm_head tensor";
+			return false;
+		}
+		out->head = reinterpret_cast<const int8_t*>(head->data);
+	}
+	return true;
+}
+
 // --- TestD2_GreedyMode_BitUnchangedRegression -----------------------------------------------
 // The no-regression cell: greedy paths must not shift by a single bit once the damped-greedy
 // branch is wired in alongside them (plan Sec8 D2: "as the damped-greedy-mode branch alongside
@@ -288,6 +347,7 @@ static void TestD2_GreedyMode_BitUnchangedRegression() {
 	// TestD2_DampedGreedyMode_ProducesPrimitiveExactOutputThroughDecodeStep's own job, below.
 	sslm_seq old_batch[1] = {seq_old};
 	sslm_seq new_batch[1] = {seq_new};
+	std::vector<int32_t> abi_tokens;
 	for (int i = 0; i < kSteps; ++i) {
 		int32_t old_tok = 0, new_tok = 0;
 		CHECK(sslm_decode_step(fx.model, old_batch, 1, &old_params, nullptr, &old_tok) == SSLM_OK);
@@ -298,34 +358,43 @@ static void TestD2_GreedyMode_BitUnchangedRegression() {
 		          "bit-unchanged regardless of whether mode is left at its zero-init default or "
 		          "set explicitly (plan Sec8 D2's own no-regression clause)",
 		          i, old_tok, new_tok);
+		abi_tokens.push_back(old_tok);
 	}
 	CHECK(sslm_seq_release(seq_old) == SSLM_OK);
 	CHECK(sslm_seq_release(seq_new) == SSLM_OK);
 
-	// N6 (closing-review commission: "the S5 migration cost this cell its discriminating
-	// power... compare against something that is not the same code path") -- ATTEMPTED, NOT
-	// SHIPPED. A full independent-oracle comparison (CpuOracleModel marshal +
-	// superslm::RunGreedyDecodeLoop, driven against the SAME real checkpoint fx already has
-	// open) was built and, in isolation (a standalone throwaway probe, same marshal, same
-	// RunGreedyDecodeLoop call, same checkpoint), produced the bit-exact expected token
-	// stream (4, 5, 6, 25010, 10, 4999 -- matching sslm_decode_step's own greedy output for
-	// this exact prompt) with zero issues. Embedded in THIS function, alongside fx's own
-	// already-open sslm_model_map handle and KV pool, the identical marshal+call sequence
-	// reproducibly crashed the process (0xC0000005) at a point AFTER every check in the new
-	// code had already run and passed (isolated with per-statement stdout diagnostics,
-	// removed before filing) -- consistent with heap corruption manifesting at a later,
-	// unrelated allocation/free rather than at its own true source. Re-scoping the oracle's
-	// own objects into a nested block that destructs immediately (before seq_abi's own
-	// creation) did not resolve it. Root cause not found within this round's own budget --
-	// this is a genuine, reproducible defect (in this new test code, in a shared/static
-	// resource two simultaneously-open SslmModelView/sslm_model instances of the SAME file
-	// contend on, or possibly in production marshal/forward-path code under that same
-	// double-open condition) and is ROUTED, not shipped crashing and not silently dropped --
-	// see this suite's own Curie record for the full reproduction and the standalone probe's
-	// own confirmed-correct output. The cell's own EXISTING comparison (zero-init mode vs.
-	// explicit SSLM_DECODE_MODE_GREEDY, both through the real sslm_decode_step, above) is
-	// unaffected and stays in place -- narrower than the pre-S5-migration claim, as already
-	// stated in that comparison's own comment, but real and unbroken.
+	// N6: grade the ABI stream against the direct engine loop, which does not call either ABI
+	// decode entry point or their mode dispatch. This restores the independent reference lost
+	// when the old compatibility shim was retired.
+	SslmModelView oracle_view;
+	CHECK(SslmModel::Load(fx.bytes.data(), fx.bytes.size(), oracle_view, &err) ==
+	      SslmModelStatus::Ok);
+	IndependentGreedyOracle oracle;
+	CHECK(MarshalIndependentGreedyOracle(oracle_view, &oracle, &err));
+	const size_t kv_bytes = static_cast<size_t>(oracle_view.config.num_hidden_layers) *
+	                        oracle_view.config.context_cap * oracle_view.config.num_key_value_heads *
+	                        oracle_view.config.head_dim * 2;
+	std::vector<uint8_t> workspace(kv_bytes);
+	std::vector<int8_t> hidden(oracle_view.config.hidden_size);
+	std::vector<int32_t> oracle_tokens(kSteps);
+	std::vector<int32_t> oracle_logits(static_cast<size_t>(kSteps) * fx.vocab_size);
+	SequenceLayerState state{};
+	state.hidden_codes = hidden.data();
+	size_t produced = 0;
+	SslmDecodeStopReason stop_reason = SslmDecodeStopReason::MaxTokensReached;
+	CHECK(RunGreedyDecodeLoop(
+	          state, oracle.layers.data(), oracle_view.config.num_hidden_layers,
+	          oracle_view.config.hidden_size, oracle_view.config.head_dim,
+	          oracle_view.config.num_key_value_heads, oracle_view.config.intermediate_size,
+	          oracle_view.config.context_cap, oracle_view.rope_tables, prompt, 4, oracle.embed,
+	          oracle.embed_scale, oracle.final_norm_gain.data(), oracle.final_norm_scale,
+	          oracle.head, fx.vocab_size, nullptr, 0, kSteps, workspace.data(), workspace.size(),
+	          oracle_tokens.data(), oracle_logits.data(), oracle_tokens.size(), &produced,
+	          &stop_reason, oracle_view.config.kv_precision,
+	          oracle_view.option_g_fused_k_landing) == SslmForwardStatus::Ok);
+	CHECK(produced == kSteps);
+	CHECK_MSG(abi_tokens == oracle_tokens,
+	          "ABI greedy stream differs from independent RunGreedyDecodeLoop oracle");
 }
 
 // --- TestD2_DampedGreedyMode_ProducesPrimitiveExactOutputThroughDecodeStep ------------------
@@ -732,6 +801,134 @@ static void TestD2_DampedGreedyLifecycle_PrefixAdoptionClearsPriorHistory() {
 	CHECK(sslm_prefix_release(prefix) == SSLM_OK);
 }
 
+static void TestD2_PublicParamsInitializer_UsesRuledDefaultsAndArtifactScale() {
+	if (g_model_path.empty()) {
+		SKIP_MSG("real damped-greedy artifact not supplied (--model=PATH) -- params initializer not run");
+		return;
+	}
+	RealModelFixture fx;
+	std::string err;
+	if (!LoadRealModel(&fx, &err)) {
+		SKIP_MSG("could not load real artifact: %s", err.c_str());
+		return;
+	}
+	sslm_decode_params params{};
+	CHECK(sslm_decode_params_init(
+	          fx.model, SSLM_DECODE_MODE_DAMPED_GREEDY,
+	          static_cast<int32_t>(fx.num_hidden_layers), &params) == SSLM_OK);
+	CHECK(params.struct_size == sizeof(params));
+	CHECK(params.layer_budget == static_cast<int32_t>(fx.num_hidden_layers));
+	CHECK(params.mode == SSLM_DECODE_MODE_DAMPED_GREEDY);
+	CHECK(params.alpha_q15 == SSLM_DAMPED_GREEDY_DEFAULT_ALPHA_Q15);
+	CHECK(params.anti_lm_max_order == SSLM_DAMPED_GREEDY_DEFAULT_ANTI_LM_ORDER);
+	CHECK(params.top_k == SSLM_DAMPED_GREEDY_DEFAULT_TOP_K);
+	CHECK(params.q_ln2 == 493);
+	CHECK(params.q_b == 964);
+	CHECK(params.q_c == 487361);
+
+	CHECK(sslm_decode_params_init(fx.model, SSLM_DECODE_MODE_GREEDY, 1, &params) == SSLM_OK);
+	CHECK(params.mode == SSLM_DECODE_MODE_GREEDY);
+	CHECK(params.alpha_q15 == 0 && params.anti_lm_max_order == 0 && params.top_k == 0);
+	CHECK(params.q_ln2 == 0 && params.q_b == 0 && params.q_c == 0);
+	CHECK(sslm_decode_params_init(fx.model, 2, 1, &params) == SSLM_INVALID_ARGUMENT);
+	CHECK(sslm_decode_params_init(fx.model, SSLM_DECODE_MODE_GREEDY, 0, &params) ==
+	      SSLM_INVALID_ARGUMENT);
+	CHECK(sslm_decode_params_init(fx.model, SSLM_DECODE_MODE_GREEDY,
+	                              static_cast<int32_t>(fx.num_hidden_layers) + 1, &params) ==
+	      SSLM_INVALID_ARGUMENT);
+	CHECK(sslm_decode_params_init(fx.model, SSLM_DECODE_MODE_GREEDY, 1, nullptr) ==
+	      SSLM_INVALID_ARGUMENT);
+}
+
+static void TestD2_DampedGreedy_ComposesWithSchemaMaskFirst() {
+	if (g_model_path.empty()) {
+		SKIP_MSG("schema-bearing damped artifact not supplied -- composition cell not run");
+		return;
+	}
+	RealModelFixture fx;
+	std::string err;
+	if (!LoadRealModel(&fx, &err)) {
+		SKIP_MSG("could not load real artifact: %s", err.c_str());
+		return;
+	}
+	SslmModelView replay_view;
+	CHECK(SslmModel::Load(fx.bytes.data(), fx.bytes.size(), replay_view, &err) ==
+	      SslmModelStatus::Ok);
+	const SslmSectionView* section = replay_view.Section(SslmSectionType::SchemaMasks);
+	if (!section) {
+		SKIP_MSG("artifact carries no SchemaMasks section -- composition cell not run");
+		return;
+	}
+	SchemaMasksTable replay;
+	CHECK(SchemaMasksTable::Parse(section->data, section->byte_size, fx.vocab_size, replay, &err));
+	const SchemaEntry* entry = replay.ByName("g5_minimal_one_field");
+	CHECK(entry != nullptr);
+	sslm_schema schema = nullptr;
+	CHECK(sslm_schema_lookup(fx.model, "g5_minimal_one_field", &schema) == SSLM_OK);
+	sslm_seq seq = nullptr;
+	CHECK(sslm_seq_create(fx.model, &fx.pool, &seq) == SSLM_OK);
+	CHECK(sslm_seq_set_schema(seq, schema) == SSLM_OK);
+	const int32_t prompt = 1;
+	int32_t consumed = 0;
+	CHECK(sslm_prefill(fx.model, seq, &prompt, 1, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) ==
+	      SSLM_OK);
+	CHECK(consumed == 1);
+	sslm_decode_params params{};
+	CHECK(sslm_decode_params_init(fx.model, SSLM_DECODE_MODE_DAMPED_GREEDY,
+	                              static_cast<int32_t>(fx.num_hidden_layers), &params) == SSLM_OK);
+	uint32_t replay_state = 0;
+	bool accepting = false;
+	for (int step = 0; step < 64 && !accepting; ++step) {
+		int32_t produced = -1;
+		CHECK(sslm_decode_step_v2(fx.model, &seq, 1, &params, nullptr, &produced) == SSLM_OK);
+		CHECK(produced >= 0 && produced < fx.vocab_size);
+		if (produced < 0 || produced >= fx.vocab_size || !entry) break;
+		CHECK(replay.MaskBit(*entry, replay_state, static_cast<uint32_t>(produced)));
+		uint32_t next_state = replay_state;
+		CHECK(replay.Transition(*entry, replay_state, static_cast<uint32_t>(produced), &next_state));
+		replay_state = next_state;
+		sslm_stats_out stats{};
+		CHECK(sslm_stats(fx.model, seq, &stats) == SSLM_OK);
+		accepting = stats.schema_accepting == 1;
+	}
+	CHECK(accepting);
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
+}
+
+static void TestD2_DampedGreedy_ComposesWithRuntimeAdapter() {
+	if (g_model_path.empty() || g_adapter_path.empty()) {
+		SKIP_MSG("--model=PATH and --adapter=PATH required -- adapter composition cell not run");
+		return;
+	}
+	RealModelFixture fx;
+	std::string err;
+	if (!LoadRealModel(&fx, &err)) {
+		SKIP_MSG("could not load real artifact: %s", err.c_str());
+		return;
+	}
+	std::vector<uint8_t> adapter_bytes;
+	CHECK(ReadFileBytes(g_adapter_path, &adapter_bytes));
+	sslm_adapter adapter = nullptr;
+	CHECK(sslm_adapter_map(adapter_bytes.data(), adapter_bytes.size(), fx.model, &adapter) == SSLM_OK);
+	sslm_decode_params params{};
+	CHECK(sslm_decode_params_init(fx.model, SSLM_DECODE_MODE_DAMPED_GREEDY,
+	                              static_cast<int32_t>(fx.num_hidden_layers), &params) == SSLM_OK);
+	auto run = [&]() {
+		sslm_seq seq = nullptr;
+		CHECK(sslm_seq_create(fx.model, &fx.pool, &seq) == SSLM_OK);
+		CHECK(sslm_seq_set_adapter(seq, adapter) == SSLM_OK);
+		CHECK(PrefillPrompt(fx, seq));
+		std::vector<int32_t> tokens = DecodeDamped(fx, seq, params, 4);
+		for (int32_t token : tokens) CHECK(token >= 0 && token < fx.vocab_size);
+		CHECK(sslm_seq_release(seq) == SSLM_OK);
+		return tokens;
+	};
+	const std::vector<int32_t> first = run();
+	const std::vector<int32_t> second = run();
+	CHECK(first == second);
+	CHECK(sslm_adapter_release(adapter) == SSLM_OK);
+}
+
 int main(int argc, char** argv) {
 	ParseArgs(argc, argv);
 	TestD2_GreedyMode_BitUnchangedRegression();
@@ -741,6 +938,9 @@ int main(int argc, char** argv) {
 	TestD2_LegacyDecodeParams_DoesNotReadPastReleasedFourByteShape();
 	TestD2_DampedGreedyLifecycle_ResetAndRestoreAreFreshAndExact();
 	TestD2_DampedGreedyLifecycle_PrefixAdoptionClearsPriorHistory();
+	TestD2_PublicParamsInitializer_UsesRuledDefaultsAndArtifactScale();
+	TestD2_DampedGreedy_ComposesWithSchemaMaskFirst();
+	TestD2_DampedGreedy_ComposesWithRuntimeAdapter();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

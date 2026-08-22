@@ -62,6 +62,16 @@ an independently-verified artifact, not just "the writer didn't crash."
 Look for `verified: independent loader accepted the artifact` in the
 output.
 
+To make the same artifact eligible for 1.2's opt-in damped-greedy decoder,
+add `--enable-damped-greedy` during conversion:
+
+```
+python tools/convert_model.py --artifact <artifact dir from step 1> --out <model output path>.sslm --enable-damped-greedy
+```
+
+That switch adds the DGC1 constants and feature bit. Omitting it preserves the
+ordinary greedy-only artifact shape.
+
 You now have two `.sslm` files — the tokenizer artifact from step 2 and the
 model artifact from this step — and both are what the engine needs to
 decode.
@@ -76,6 +86,19 @@ Runs the prompt through the compiled engine and prints the decoded tokens
 and text. `sslm_generate` also accepts `--adapter <adapter>.sslm` to decode
 through a runtime-attached LoRA adapter (see step 5), `--stop a,b,c` for
 stop-token IDs, and `--dump-logits <path>` for raw logit inspection.
+
+For a model converted with `--enable-damped-greedy`, select the ruled defaults
+with one additional flag:
+
+```
+build/sslm_generate <model>.sslm <tokenizer>.sslm "<prompt>" --max-new <N> --decode-mode damped-greedy
+```
+
+The defaults are `alpha=2` (`--alpha-q15 65536`), anti-LM order `2`, and
+`top_k=min(6, vocab_size)`. Advanced callers can override them with
+`--alpha-q15`, `--anti-lm-order`, and `--top-k`; `--alpha-q15` takes a Q15-scaled
+integer, not a decimal alpha value. Greedy remains the default when
+`--decode-mode` is absent.
 
 The same walkthrough works through the [`sslm_*` C ABI](api.md) instead of
 this CLI tool for embedding the engine directly in another process — including

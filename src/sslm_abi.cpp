@@ -164,6 +164,10 @@ struct sslm_model_s {
 	// Immutable all-legal mask for unconstrained damped decoding. Built once at map time so a
 	// free-text decode call does not allocate and fill a vocab-sized bitset on every token.
 	std::vector<uint8_t> damped_greedy_free_text_mask;
+	bool damped_greedy_available = false;
+	int64_t damped_greedy_q_ln2 = 0;
+	int64_t damped_greedy_q_b = 0;
+	int64_t damped_greedy_q_c = 0;
 };
 
 // C6. A mapped LoRA adapter (design Sec9 C6, S-LoRA-serial's own outstanding ABI debt): wraps
@@ -1155,6 +1159,18 @@ extern "C" sslm_status sslm_model_map(const void* data, size_t size, sslm_model*
 		if (!BuildEngineCache(h)) return SSLM_ARTIFACT_REJECTED;
 		h->damped_greedy_free_text_mask.assign(
 		    (static_cast<size_t>(h->view.config.vocab_size) + 7) / 8, 0xFF);
+		if (h->view.DampedGreedyConstantsFlagSet()) {
+			superslm::DampedGreedyScaleConstants scale{};
+			if (!superslm::ReadDampedGreedyScaleConstants(h->view, &scale) ||
+			    superslm::IExpScaleConstants(
+			        scale.scale_mantissa_m, scale.scale_exponent_e, superslm::kIExpLn2Q, 30,
+			        superslm::kIExpBQ, 30, superslm::kIExpCaQ, 30,
+			        &h->damped_greedy_q_ln2, &h->damped_greedy_q_b,
+			        &h->damped_greedy_q_c) != superslm::IExpScaleDomain::kOk) {
+				return SSLM_ARTIFACT_REJECTED;
+			}
+			h->damped_greedy_available = true;
+		}
 		return SSLM_OK;
 	});
 	if (cache_st != SSLM_OK) {
@@ -2397,6 +2413,34 @@ extern "C" sslm_status sslm_decode_step_v2(sslm_model model, sslm_seq* seqs, int
 	return CatchAllocationFailure([&]() -> sslm_status {
 		return sslm_decode_stepImpl(model, seqs, n, params, ws, out_tokens);
 	});
+}
+
+extern "C" sslm_status sslm_decode_params_init(sslm_model model, int32_t mode,
+                                                  int32_t layer_budget,
+                                                  sslm_decode_params* out) {
+	if (!model || !out || layer_budget < 1 ||
+	    layer_budget > static_cast<int32_t>(model->view.config.num_hidden_layers)) {
+		return SSLM_INVALID_ARGUMENT;
+	}
+	if (mode != SSLM_DECODE_MODE_GREEDY && mode != SSLM_DECODE_MODE_DAMPED_GREEDY) {
+		return SSLM_INVALID_ARGUMENT;
+	}
+	sslm_decode_params params{};
+	params.layer_budget = layer_budget;
+	params.struct_size = sizeof(params);
+	params.mode = mode;
+	if (mode == SSLM_DECODE_MODE_DAMPED_GREEDY) {
+		if (!model->damped_greedy_available) return SSLM_ARTIFACT_REJECTED;
+		params.alpha_q15 = SSLM_DAMPED_GREEDY_DEFAULT_ALPHA_Q15;
+		params.anti_lm_max_order = SSLM_DAMPED_GREEDY_DEFAULT_ANTI_LM_ORDER;
+		params.top_k = std::min<int32_t>(SSLM_DAMPED_GREEDY_DEFAULT_TOP_K,
+		                                 model->view.config.vocab_size);
+		params.q_ln2 = model->damped_greedy_q_ln2;
+		params.q_b = model->damped_greedy_q_b;
+		params.q_c = model->damped_greedy_q_c;
+	}
+	*out = params;
+	return SSLM_OK;
 }
 
 namespace {

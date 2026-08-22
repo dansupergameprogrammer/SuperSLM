@@ -72,7 +72,7 @@ void PrintUsage(const char* argv0) {
 	std::fprintf(stderr,
 	             "usage: %s <model.sslm> <tokenizer.sslm> \"<prompt>\" [--max-new N] [--stop "
 	             "a,b,c] [--dump-logits <path>] [--adapter <adapter.sslm>] [--decode-mode "
-	             "greedy|damped-greedy --alpha-q15 N --anti-lm-order N --top-k N]\n",
+	             "greedy|damped-greedy [--alpha-q15 N] [--anti-lm-order N] [--top-k N]]\n",
 	             argv0);
 }
 
@@ -122,8 +122,10 @@ int main(int argc, char** argv) {
 	// no caller). Defaults to greedy (bit-identical to this driver's pre-Phase-D behavior, this
 	// flag block a pure addition, nothing existing re-parses differently).
 	superslm::DampedGreedyMode decode_mode = superslm::DampedGreedyMode::kGreedy;
-	bool have_alpha_q15 = false, have_anti_lm_order = false, have_top_k = false;
-	int32_t alpha_q15 = 0, anti_lm_max_order = 0, top_k = 0;
+	int32_t alpha_q15 = SSLM_DAMPED_GREEDY_DEFAULT_ALPHA_Q15;
+	int32_t anti_lm_max_order = SSLM_DAMPED_GREEDY_DEFAULT_ANTI_LM_ORDER;
+	int32_t top_k = SSLM_DAMPED_GREEDY_DEFAULT_TOP_K;
+	bool have_top_k = false;
 	for (int i = 4; i < argc; ++i) {
 		if (std::strcmp(argv[i], "--dump-logits") == 0 && i + 1 < argc) {
 			dump_logits_path = argv[++i];
@@ -144,7 +146,6 @@ int main(int argc, char** argv) {
 		} else if (std::strcmp(argv[i], "--alpha-q15") == 0 && i + 1 < argc) {
 			try {
 				alpha_q15 = static_cast<int32_t>(std::stol(argv[++i]));
-				have_alpha_q15 = true;
 			} catch (const std::exception&) {
 				std::fprintf(stderr, "invalid --alpha-q15 value: \"%s\"\n", argv[i]);
 				PrintUsage(argv[0]);
@@ -153,7 +154,6 @@ int main(int argc, char** argv) {
 		} else if (std::strcmp(argv[i], "--anti-lm-order") == 0 && i + 1 < argc) {
 			try {
 				anti_lm_max_order = static_cast<int32_t>(std::stol(argv[++i]));
-				have_anti_lm_order = true;
 			} catch (const std::exception&) {
 				std::fprintf(stderr, "invalid --anti-lm-order value: \"%s\"\n", argv[i]);
 				PrintUsage(argv[0]);
@@ -201,15 +201,6 @@ int main(int argc, char** argv) {
 			return 2;
 		}
 	}
-	if (decode_mode == superslm::DampedGreedyMode::kDampedGreedy &&
-	    !(have_alpha_q15 && have_anti_lm_order && have_top_k)) {
-		std::fprintf(stderr, "FAILED at stage=arg_parse: --decode-mode damped-greedy requires "
-		                      "--alpha-q15, --anti-lm-order, and --top-k all supplied (no default "
-		                      "is defined for a decode-mode hyperparameter)\n");
-		PrintUsage(argv[0]);
-		return 2;
-	}
-
 	const auto t_start = std::chrono::steady_clock::now();
 
 	// --- Stage 1: load the tokenizer artifact and encode the prompt. -------
@@ -275,24 +266,18 @@ int main(int argc, char** argv) {
 	// missing the Decision-A scale field under damped greedy mode must be a defined rejection,
 	// not a silent fallback to garbage constants" (plan Sec9 dim2) -- unreachable before this fix
 	// because ArtifactHasDampedGreedyConstants/ReadDampedGreedyScaleConstants had no production
-	// caller anywhere (q_ln2/q_b/q_c are CALLER-supplied ABI parameters by design, sslm_abi.h's
-	// own comment -- the engine itself never reads the artifact for them; this driver is the one
-	// production caller that has both the artifact bytes and the mode selector, so this is where
-	// the rejection belongs). A second, separate SslmArtifact::OpenFromMemory over model_bytes --
-	// matching this file's own tok_artifact precedent above -- rather than threading a container
-	// handle through SslmModel::Load's own view, which does not carry one.
+	// caller anywhere. SslmModelView now exposes the already-validated backing section, so this
+	// driver does not parse and hash the same model bytes a second time merely to reach DGC1.
 	int64_t q_ln2 = 0, q_b = 0, q_c = 0;
 	if (decode_mode == superslm::DampedGreedyMode::kDampedGreedy) {
-		SslmArtifact model_artifact;
-		SslmError model_open_err;
-		if (SslmArtifact::OpenFromMemory(model_bytes.data(), model_bytes.size(), model_artifact,
-		                                  &model_open_err) != SslmStatus::Ok) {
-			std::fprintf(stderr, "FAILED at stage=damped_greedy_constants: could not re-open model "
-			                      "artifact for the DampedGreedyConstants section: status=%s\n",
-			             SslmStatusName(model_open_err.code));
-			return 1;
+		// Match sslm_decode_params_init: the ruled default is six candidates when the model has
+		// at least six tokens, otherwise the whole vocabulary. An explicit out-of-range override
+		// remains an error rather than being silently rewritten.
+		if (!have_top_k) {
+			top_k = std::min<int32_t>(SSLM_DAMPED_GREEDY_DEFAULT_TOP_K,
+			                          static_cast<int32_t>(model_view.config.vocab_size));
 		}
-		if (!superslm::ArtifactHasDampedGreedyConstants(model_artifact)) {
+		if (!model_view.DampedGreedyConstantsFlagSet()) {
 			std::fprintf(stderr, "FAILED at stage=damped_greedy_constants: --decode-mode "
 			                      "damped-greedy requires the artifact's own DampedGreedyConstants "
 			                      "(DGC1) section and its flag bit -- neither is present on this "
@@ -300,7 +285,7 @@ int main(int argc, char** argv) {
 			return 1;
 		}
 		superslm::DampedGreedyScaleConstants scale{};
-		if (!superslm::ReadDampedGreedyScaleConstants(model_artifact, &scale)) {
+		if (!superslm::ReadDampedGreedyScaleConstants(model_view, &scale)) {
 			std::fprintf(stderr, "FAILED at stage=damped_greedy_constants: the artifact's "
 			                      "DampedGreedyConstants section is present but out of domain\n");
 			return 1;

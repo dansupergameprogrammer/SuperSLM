@@ -1,8 +1,7 @@
 // T-2199 (Curie) -- Phase D2a red suite: the re-sited cost-ratio cell (plan Sec8 D2a, Sec9
-// dim6/dim7's own speed-headroom claim, ratio half). Measures TopKRenormalizeQ15's own
-// per-token cost (already real, Phase C, this repo's own sslm_damped_greedy.h) against this
-// engine's own REAL total per-token forward cost, taken through the wired sslm_decode_step
-// entry point.
+// dim6/dim7's own speed-headroom claim, ratio half). Measures both the isolated
+// TopKRenormalizeQ15 kernel and the complete DampedGreedyScoreAndArgmax selector against this
+// engine's own REAL total per-token forward cost, taken through the wired sslm_decode_step.
 //
 // MIGRATED 2026-08-20 (T-2199 Phase D review fix S5; conductor's follow-on commission, item 2):
 // calls the real production sslm_decode_step/sslm_decode_params directly instead of the
@@ -110,7 +109,7 @@ struct AlignedBuffer {
 	void* storage_;
 };
 
-// --- TestD2a_TopKRenormalizeQ15CostRatio_WithinFiveGercentOfRealForwardCost -----------------
+// --- TestD2a_TopKRenormalizeQ15CostRatio_WithinFivePercentOfRealForwardCost ----------------
 static void TestD2a_TopKRenormalizeQ15CostRatio_WithinFivePercentOfRealForwardCost() {
 	if (g_model_path.empty()) {
 		SKIP_MSG("real base artifact not supplied (--model=PATH) -- cost-ratio cell not run "
@@ -198,13 +197,41 @@ static void TestD2a_TopKRenormalizeQ15CostRatio_WithinFivePercentOfRealForwardCo
 	const double mean_renorm_ns =
 	    std::chrono::duration<double, std::nano>(rt1 - rt0).count() / kRenormIters;
 
+	// The old numerator covered only renormalization and could not explain the end-to-end delta:
+	// candidate selection, anti-LM queries, scoring, and tie-breaking were absent. Measure the
+	// entire selector separately. This is reported evidence, not assigned the renormalizer's 5%
+	// gate (that bound was never derived for this larger quantity).
+	AntiLmState* anti_lm = AntiLmCreate(params.anti_lm_max_order);
+	CHECK(anti_lm != nullptr);
+	for (int32_t token : {3, 7, 3, 7, 3, 11}) AntiLmUpdate(anti_lm, token);
+	bool every_selector_succeeded = true;
+	bool refused = false;
+	int32_t selected = -1;
+	const auto st0 = std::chrono::steady_clock::now();
+	for (int i = 0; i < kRenormIters; ++i) {
+		every_selector_succeeded &= DampedGreedyScoreAndArgmax(
+		    row.data(), mask.data(), view.config.vocab_size, params.top_k, anti_lm,
+		    params.alpha_q15, params.q_ln2, params.q_b, params.q_c, &selected, &refused);
+	}
+	const auto st1 = std::chrono::steady_clock::now();
+	CHECK(every_selector_succeeded);
+	CHECK(!refused);
+	CHECK(selected >= 0 && selected < view.config.vocab_size);
+	const double mean_selector_ns =
+	    std::chrono::duration<double, std::nano>(st1 - st0).count() / kRenormIters;
+	AntiLmDestroy(anti_lm);
+
 	CHECK_MSG(mean_forward_ns > 0.0, "measured mean forward cost must be positive (%f ns) -- a "
 	                                  "zero or negative reading means the timer/harness is broken",
 	          mean_forward_ns);
 	const double ratio = mean_forward_ns > 0.0 ? (mean_renorm_ns / mean_forward_ns) : 1e300;
-	std::printf("D2a: mean_forward_ns=%.1f mean_renorm_ns=%.1f ratio=%.4f%% (budget: <=5%%, "
-	            "FLAGGED not independently derived -- plan Sec8 C2a/D2a)\n",
-	            mean_forward_ns, mean_renorm_ns, ratio * 100.0);
+	const double selector_ratio =
+	    mean_forward_ns > 0.0 ? (mean_selector_ns / mean_forward_ns) : 1e300;
+	std::printf("D2a: mean_forward_ns=%.1f mean_renorm_ns=%.1f renorm_ratio=%.4f%% "
+	            "mean_selector_ns=%.1f selector_ratio=%.4f%% (renorm budget: <=5%%, FLAGGED "
+	            "not independently derived; selector ratio is measurement-only)\n",
+	            mean_forward_ns, mean_renorm_ns, ratio * 100.0, mean_selector_ns,
+	            selector_ratio * 100.0);
 	CHECK_MSG(ratio <= 0.05,
 	          "TopKRenormalizeQ15's own per-token cost (%.1f ns) must be <=5%% of this engine's "
 	          "real total per-token forward cost (%.1f ns), got %.4f%% -- budget FLAGGED "

@@ -24,6 +24,12 @@ sslm_status sslm_decode_step_v2(sslm_model model, sslm_seq* seqs, int32_t n,
                                 const sslm_decode_params* params, sslm_workspace ws,
                                 int32_t* out_tokens);
 
+/* Initializes the complete v2 params shape. Greedy needs no artifact extension. Damped greedy
+ * selects the B0-ruled alpha/n/k defaults and derives q_ln2/q_b/q_c from this mapped model's
+ * DGC1 section; a model converted without --enable-damped-greedy is rejected. */
+sslm_status sslm_decode_params_init(sslm_model model, int32_t mode, int32_t layer_budget,
+                                    sslm_decode_params* out);
+
 /* Takes the caller-memory call-shape struct (design Sec7.1) -- not part of the g5-comparable
  * subset (see above).
  *

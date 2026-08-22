@@ -188,7 +188,10 @@ def main():
                                     elem_count=s["elem_count"], alignment=s["alignment"]))
     sections.append(F.Section(type=F.SectionType.SCHEMA_MASKS, data=scm1))
 
-    fp = F.write_artifact(args.out, sections)
+    # Preserve every recognized base feature bit. In particular, a schema-bearing derivative
+    # of a 1.2 DGC-enabled model must remain DGC-enabled; clearing the bit leaves a DGC1 section
+    # that the loader correctly rejects as inconsistent.
+    fp = F.write_artifact(args.out, sections, flags=header["flags"])
     print(f"wrote {args.out}")
     print(f"fingerprint {fp}")
     print(f"sections {len(sections)}, SCM1 bytes {len(scm1)}")

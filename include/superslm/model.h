@@ -642,6 +642,9 @@ struct SslmModelView {
 	// model as a typed member (e.g. Provenance/ADP1, which no `has_*`/typed field above carries) --
 	// returns nullptr if absent, exactly `SslmArtifact::Section`'s own contract.
 	const SslmSectionView* Section(SslmSectionType type) const noexcept { return backing_.Section(type); }
+	bool DampedGreedyConstantsFlagSet() const noexcept {
+		return backing_.DampedGreedyConstantsFlagSet();
+	}
 
 	// `RawIntegrityHash()`: this view's own artifact's integrity hash -- what a second, independent
 	// `SslmArtifact::OpenFromMemory` over the identical bytes would also compute, without paying for

@@ -27,7 +27,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "reference_pipeline")
 
 import convert_model as C  # noqa: E402
 import pipeline as P  # noqa: E402
+import sslm_convert_schema as SC  # noqa: E402
 import sslm_format as F  # noqa: E402
+from t2132_build_g5_fixture import _serialize_scm1  # noqa: E402
 
 
 # The "Sec11 fixture model" shape (tools/reference_pipeline/tests/test_pipeline.py's own
@@ -40,13 +42,13 @@ def build_config():
     # (test_pipeline.py's fixture_config_kwargs): tools/t2139_dim9_current_token_pin.cpp (the
     # C1-discriminating pin this fixture exists to run for real) hardcodes layer_budget=8 to
     # exercise a genuine partial-layer-budget resumption -- num_hidden_layers must be >= that.
-    # Every OTHER dimension is kept at the proven Sec11 values; only the layer count changes,
-    # and MarshalLayer's own per-layer construction is uniform across layers (no new domain
-    # check is exercised by adding more of the identical, already-verified per-layer shape).
+    # The vocabulary and context are also widened for the product cells in the T-2138 ABI
+    # suite: dim7 deliberately uses token 97 and a 20-token prompt. The old 32/16 fixture made
+    # those cells exercise fixture rejection rather than the contract they grade.
     return P.ModelConfig(
         hidden_size=32, num_hidden_layers=8, num_attention_heads=4,
-        num_key_value_heads=2, head_dim=8, intermediate_size=64, vocab_size=32,
-        rope_theta=10000.0, rms_norm_eps=1e-6, tie_word_embeddings=True, context_cap=16,
+        num_key_value_heads=2, head_dim=8, intermediate_size=64, vocab_size=128,
+        rope_theta=10000.0, rms_norm_eps=1e-6, tie_word_embeddings=True, context_cap=64,
     )
 
 
@@ -54,8 +56,22 @@ def build_artifact_bytes():
     """Returns (data, fingerprint) -- a complete, real .sslm model artifact byte string."""
     cfg = build_config()
     model = P.fixture_model(cfg)
-    sections, fold_approximation_error = C.build_sections(model)
-    data, fingerprint = F.build_artifact(sections)
+    # S8 is the hermetic model used by the Phase D damped-greedy gate, so carry the same DGC1
+    # section and feature flag that production conversion emits with --enable-damped-greedy.
+    sections, fold_approximation_error = C.build_sections(model, enable_damped_greedy=True)
+    # One real compiled schema keeps the Phase D gate's mask-first composition live without a
+    # checkpoint dependency. Token 0 spells the complete accepted document; the remaining
+    # vocabulary entries are deliberately unrelated pieces.
+    vocab = ['{"ok":true}'] + [f"<unused-{i}>" for i in range(1, cfg.vocab_size)]
+    schema = {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean"}},
+    }
+    masks = SC.compile_schema_to_mask_pages(schema, vocab)
+    sections.append(F.Section(
+        F.SectionType.SCHEMA_MASKS,
+        _serialize_scm1([("g5_minimal_one_field", masks)], cfg.vocab_size)))
+    data, fingerprint = F.build_artifact(sections, flags=F.DAMPED_GREEDY_CONSTANTS_FLAG)
     return data, fingerprint, fold_approximation_error
 
 

@@ -181,7 +181,7 @@ def read_header(path):
         data = f.read()
     if data[0:4] != MAGIC:
         raise ValueError(f"{path}: not an .sslm file (bad magic)")
-    version, header_bytes, section_count, _flags, _reserved0 = struct.unpack_from("<IIIII", data, 4)
+    version, header_bytes, section_count, flags, _reserved0 = struct.unpack_from("<IIIII", data, 4)
     file_bytes, = struct.unpack_from("<Q", data, 24)
     integrity_hash = bytes(data[INTEGRITY_HASH_OFFSET:INTEGRITY_HASH_OFFSET + INTEGRITY_HASH_BYTES])
     sections = []
@@ -192,7 +192,8 @@ def read_header(path):
         alignment, _reserved = struct.unpack_from("<II", data, row + 32)
         sections.append({"type": s_type, "dtype": s_dtype, "offset": off,
                          "byte_size": byte_size, "elem_count": elem_count, "alignment": alignment})
-    return {"version": version, "file_bytes": file_bytes, "integrity_hash": integrity_hash,
+    return {"version": version, "flags": flags, "file_bytes": file_bytes,
+           "integrity_hash": integrity_hash,
            "sections": sections, "data": data}
 
 

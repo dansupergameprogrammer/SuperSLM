@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(superslm VERSION 1.1.0 LANGUAGES CXX)
+project(superslm VERSION 1.2.0 LANGUAGES CXX)
 
 # C++20: the S-LoRA delta path is specified at -std=c++20 (SuperSLM_Plan.md §19),
 # and the core carries wide-integer (int64) composition arithmetic throughout. One

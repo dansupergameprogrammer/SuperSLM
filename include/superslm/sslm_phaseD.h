@@ -67,6 +67,8 @@ inline constexpr int64_t kRealVocabSizeForDomainCheck = 151936;
 [[nodiscard]] bool ArtifactHasDampedGreedyConstants(const superslm::SslmArtifact& art) noexcept;
 [[nodiscard]] bool ReadDampedGreedyScaleConstants(const superslm::SslmArtifact& art,
                                                    DampedGreedyScaleConstants* out) noexcept;
+[[nodiscard]] bool ReadDampedGreedyScaleConstants(const superslm::SslmModelView& model,
+                                                   DampedGreedyScaleConstants* out) noexcept;
 
 // The converter-side/hostile-fixture writer (plan Sec8 D1's own disposition: "whoever builds
 // D1's section layout writes the byte-writer against it, in the same pass"). Appends a

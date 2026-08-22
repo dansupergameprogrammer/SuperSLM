@@ -102,6 +102,9 @@ Each section's bytes live at `[offset, offset + byte_size)`, aligned as declared
 |    22 | `UnicodeTables`         | `Raw`        | S1   | pinned NFC + `\p{L}`/`\p{N}`/`\s` tables (blob)     |
 |    30 | `SchemaMasks`           | `Raw`        | S5   | compiled DFA mask pages — an `SCM1` keyed-by-name blob (§ "SchemaMasks sub-format"); **optional** |
 |    31 | `CalibrationBand`       | `Raw`        | S3.7 | token-length calibration band — a `KVC1` keyed blob; **optional** |
+|    40 | `DeltaFoldScales`       | `Int32`      | S-LoRA | adapter delta fold triples — a `DFS1` tensor manifest; adapter artifacts only |
+|    41 | `UFoldScales`           | `Int32`      | S-LoRA | adapter intermediate fold triples — a `UFS1` tensor manifest; adapter artifacts only |
+|    42 | `DampedGreedyConstants` | `Raw`        | 1.2 | opt-in decoder scale — a 12-byte `DGC1` payload (§ "Damped-greedy constants"); **optional** |
 
 The tokenizer types (20–22) are emitted and interpreted at S1. `SchemaMasks` (30) is
 **optional at the current container version** — a v2
@@ -463,6 +466,24 @@ saved sequence's bound schema is identified by `Fnv1a64` of its own name (the pr
 resolves this hash against the target artifact's own `SCM1` name set; no match (including no
 `SchemaMasks` section at all) is a defined rejection (`SSLM_RESTORE_SCHEMA_MISMATCH`), checked
 after the existing model/kv-precision validation and before any block is drawn from the pool.
+
+### Damped-greedy constants (`DGC1`, section type 42)
+
+An artifact converted with `convert_model.py --enable-damped-greedy` carries one Raw,
+12-byte `DampedGreedyConstants` section and sets header flag `0x2`. The payload is:
+
+| Offset | Size | Type | Meaning |
+|---:|---:|---|---|
+| 0 | 8 | little-endian `int64` | source scale mantissa `m` |
+| 8 | 4 | little-endian `int32` | source scale exponent `e` |
+
+The 1.2 ruled pair is `(m, e) = (2883584, -36)`, from which the runtime's
+certified integer derivation produces `(q_ln2, q_b, q_c) = (493, 964,
+487361)`. The runtime validates the section's dtype, exact size and element
+count, and the derived softmax-width domain before making damped greedy
+available. The section is optional because greedy remains the artifact and
+runtime default; a caller selecting damped greedy on an artifact without both
+the section and its flag receives a defined rejection.
 
 ## Versioning
 

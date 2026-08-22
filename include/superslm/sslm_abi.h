@@ -191,6 +191,9 @@ typedef enum sslm_span_kind {
  * these itself). */
 #define SSLM_DECODE_MODE_GREEDY 0
 #define SSLM_DECODE_MODE_DAMPED_GREEDY 1
+#define SSLM_DAMPED_GREEDY_DEFAULT_ALPHA_Q15 65536
+#define SSLM_DAMPED_GREEDY_DEFAULT_ANTI_LM_ORDER 2
+#define SSLM_DAMPED_GREEDY_DEFAULT_TOP_K 6
 
 /* ABI evolution rule (T-2199 independent review, 2026-08-21): v1.1 shipped this type with
  * `layer_budget` as its only field and shipped `sslm_decode_step` taking a pointer to it. The

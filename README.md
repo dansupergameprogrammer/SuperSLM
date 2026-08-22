@@ -14,9 +14,9 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.1** — a wider-vector CPU kernel tier and GPU-side
-batched prompt prefill. [CHANGELOG.md](CHANGELOG.md) has what changed;
-[Status](#status) below has what is measured where.
+Current release: **1.1**. The **1.2 release candidate** adds opt-in damped
+greedy decoding while preserving greedy as the default. [CHANGELOG.md](CHANGELOG.md)
+has what changed; [Status](#status) below has what is measured where.
 
 ## Capabilities
 
@@ -28,6 +28,25 @@ below for exactly which ones and what "certified" means there. Determinism is
 checked at the level of individual forward-pass outputs, not just final
 tokens: on a certified GPU, every intermediate layer's key/value state and
 every decoded token match a CPU reference run bit-for-bit.
+
+### Opt-in damped greedy decoding
+
+Damped greedy is a deterministic anti-repetition decoder for calls where plain
+greedy falls into a loop. It scores the model's top candidates against a small
+anti-language-model built from the generated history. It is opt-in at both
+conversion and decode time; existing artifacts and callers continue to use
+greedy unchanged.
+
+The ruled operating point is `alpha=2`, anti-LM order `n=2`, and `top_k=6`.
+Across 192 paired real generations on Qwen2.5 0.5B and 1.5B, the three observed
+0.5B greedy loop locks fell to zero and repeated-trigram rates dropped in all
+four model/length cells. Many outputs read more coherently, but that is an
+observation over this corpus rather than a general quality guarantee. The
+decoder can penalize legitimate repetition too: one list-continuation case
+changed list formatting. Prefer greedy when preserving the model's learned
+format/style continuity matters, or use a compiled schema when validity is the
+actual requirement. The full population, side-by-side text, and timing scope are in
+[the Phase E confirmation](docs/calibration/t2199-phase-e-confirmation.md).
 
 ### Runtime-switchable LoRA adapters
 
@@ -74,7 +93,7 @@ GPUs.
 Both measurements, their exact hardware and span-length cells, and what
 remains open are in
 [docs/platform-support.md](docs/platform-support.md) and
-[the roadmap](#roadmap-beyond-11).
+[the roadmap](#roadmap-beyond-12).
 
 ### Schema-constrained generation
 
@@ -231,10 +250,9 @@ SuperSLM is licensed under Apache License 2.0. The permissive license and
 express patent grant are deliberate: they make adoption safe for consumers,
 and closed forks remain permitted.
 
-## Roadmap beyond 1.1
+## Roadmap beyond 1.2
 
-Work already committed for the release after 1.1, alongside its own full
-design and review loop when scheduled:
+Named follow-on work after the 1.2 candidate:
 
 - **True shared-prefix KV memory.** 1.0 ships a straightforward per-sequence
   KV layout; a block-table indirection layer is the next step, giving a

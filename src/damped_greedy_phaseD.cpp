@@ -95,6 +95,23 @@ bool ReadDampedGreedyScaleConstants(const superslm::SslmArtifact& art,
 	return true;
 }
 
+bool ReadDampedGreedyScaleConstants(const superslm::SslmModelView& model,
+                                     DampedGreedyScaleConstants* out) noexcept {
+	if (!model.DampedGreedyConstantsFlagSet()) return false;
+	const superslm::SslmSectionView* s =
+	    model.Section(superslm::SslmSectionType::DampedGreedyConstants);
+	if (!s || !out || s->dtype != superslm::SslmDtype::Raw || s->byte_size != kSectionBytes ||
+	    s->elem_count != kSectionBytes) {
+		return false;
+	}
+	const int64_t m = GetI64LE(s->data);
+	const int32_t e = GetI32LE(s->data + 8);
+	if (!ScaleConstantsInDomain(m, e)) return false;
+	out->scale_mantissa_m = m;
+	out->scale_exponent_e = e;
+	return true;
+}
+
 // --- D2/D3 shared params validation (plan Sec9 dim2) -------------------------------------------
 // T-2199 Phase D review fix, S2 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): `mode` is now
 // checked against the closed set of defined values -- plan Sec8 D1 states the mode selector

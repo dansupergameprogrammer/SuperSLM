@@ -4,6 +4,37 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+### Damped greedy decoding
+
+- Added deterministic damped-greedy decoding as an explicit opt-in on the CPU
+  generation path. Greedy remains the default and the legacy
+  `sslm_decode_step` ABI remains greedy-only.
+- The ruled defaults are `alpha=2` (`alpha_q15=65536`), anti-LM order `n=2`,
+  and `top_k=6` (clamped only for a model whose vocabulary is smaller).
+  `sslm_decode_params_init` fills those values and derives the fixed-point scale
+  constants from the mapped model artifact; callers do not need to reproduce
+  converter arithmetic.
+- `convert_model.py --enable-damped-greedy` emits the required DGC1 constants
+  section and feature bit. The default conversion path remains unflagged and
+  compatible with pre-1.2 runtimes.
+- End-to-end confirmation covered 192 paired generations across Qwen2.5 0.5B
+  and 1.5B, 100- and 300-token ceilings. The three observed 0.5B greedy loop
+  locks fell to zero; damped greedy substantially reduced repeated trigrams in
+  all four cells. It is a quality tradeoff, not a dominance claim: legitimate
+  repeated structure can also be penalized, and the `list_primed_00` case
+  visibly changed list formatting. See
+  [the confirmation packet](docs/calibration/t2199-phase-e-confirmation.md).
+
+### Public surface and verification
+
+- `sslm_decode_step_v2` selects greedy or damped greedy through the extended
+  parameter struct. Damped state participates in reset, save/restore, prefix
+  adoption, schema masking, adapter attachment, digesting, and concurrent
+  teardown contracts.
+- The production converter, CLI, C ABI initializer, independent greedy oracle,
+  Phase D suite, and the previously link-only T-2138 ABI suite are now wired
+  into release verification.
+
 ### Fixed
 
 - **`sslm_convert_adapter`'s B3 per-pair review diagnostic no longer

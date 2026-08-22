@@ -531,40 +531,26 @@ rem sslm_abi_functions_g5_comparable.inc (sslm_schema_lookup, sslm_schema_count,
 rem sslm_schema_name, sslm_seq_set_schema, sslm_prefix_set_schema -- design Claude/Vitruvius/
 rem t2119-g5-constrained-decoding-design-2026-08-16.md Sec5, Wizard repo) -- a deliberate,
 rem documented extension of the ABI surface this counter is meant to CATCH undocumented drift
-rem against, not itself an instance of that drift. Checked only when bash is on PATH (git-bash
-rem on a typical Windows dev box) -- non-fatal if absent, matching this script's own
-rem python-checker precedent below.
+rem against, not itself an instance of that drift. T-2199 then raised it to 35 for
+rem sslm_decode_step_v2 and the 1.2 candidate raises it to 36 for sslm_decode_params_init.
+rem Count with native PowerShell so the gate does not depend on WSL, Git Bash's installation
+rem layout, or a separately configured Unix-tool PATH on Windows.
 rem T2139_VERB_COUNT is read and compared OUTSIDE any parenthesized if-block on purpose: %VAR%
 rem inside a `( ... )` block expands at PARSE time (before the block's own `set /p` line has
 rem run) without `setlocal enabledelayedexpansion`, which this script does not otherwise need
 rem and this step does not want to turn on globally -- goto/labels sidestep it instead.
-where bash >nul 2>nul
-if errorlevel 1 goto :t2139_verb_count_skip
-bash -c "cat include/superslm/sslm_abi_functions.inc include/superslm/sslm_abi_functions_g5_comparable.inc | grep -oE '\bsslm_[a-z0-9_]+\s*\(' | sed -E 's/\s*\($//' | sort -u | wc -l" > out\t2139\verb_count.txt
-rem T-2152 (outside strike item 7): `where bash` finding bash on PATH is not proof the
-rem command above RAN successfully -- a missing cat/grep/sed/sort/wc inside a minimal
-rem git-bash install, a bad working directory, or any other bash-side failure previously
-rem fell straight through to the count comparison below, which reports whatever landed in
-rem verb_count.txt (often empty, or "0" from a pipe with no input) as if it were a real,
-rem measured verb count that happens to differ from 34 -- "verb count drifted" is the WRONG
-rem diagnosis for "bash itself failed to run its command," and sends whoever reads it
-rem hunting through include/superslm/*.inc for an ABI change that never happened. bash's own
-rem exit status is checked FIRST, immediately after the command that produced it (same
-rem reason the count read below stays outside a parenthesized block -- %ERRORLEVEL%/errorlevel
-rem here reflects the bash invocation, not a later command).
+powershell -NoLogo -NoProfile -NonInteractive -Command "$n = Get-Content 'include/superslm/sslm_abi_functions.inc','include/superslm/sslm_abi_functions_g5_comparable.inc' | Select-String -AllMatches 'sslm_[a-z0-9_]+\s*\(' | ForEach-Object { $_.Matches.Value -replace '\s*\($','' } | Sort-Object -Unique; $n.Count | Set-Content -Encoding ascii 'out/t2139/verb_count.txt'"
 if errorlevel 1 (
-	echo count_abi_verbs.sh: bash was found on PATH but its own command failed ^(exit %errorlevel%^) -- this is a broken git-bash/coreutils install, not a verb-count drift; see out\t2139\verb_count.txt for whatever partial output it produced
+	echo ABI verb inventory command failed ^(exit %errorlevel%^) -- this is not a measured verb-count drift
 	popd & exit /b 1
 )
 set /p T2139_VERB_COUNT=<out\t2139\verb_count.txt
-if "%T2139_VERB_COUNT%"=="35" goto :t2139_verb_count_ok
-echo count_abi_verbs.sh reports %T2139_VERB_COUNT%, expected 35 -- verb count drifted, see design Sec4 / T-2132 / T-2199
+if "%T2139_VERB_COUNT%"=="36" goto :t2139_verb_count_ok
+echo count_abi_verbs.sh reports %T2139_VERB_COUNT%, expected 36 -- verb count drifted, see design Sec4 / T-2132 / T-2199
 popd & exit /b 1
 :t2139_verb_count_ok
-echo count_abi_verbs.sh: 35 verbs, matches T-2139 Sec4's 29 plus T-2132/G5's five verbs and T-2199's versioned decode verb
+echo count_abi_verbs.sh: 36 verbs, matches T-2139 Sec4's 29 plus T-2132/G5's five verbs and T-2199's versioned decode and params-initializer verbs
 goto :t2139_verb_count_done
-:t2139_verb_count_skip
-echo bash ^(git-bash^) not found on PATH -- skipping count_abi_verbs.sh ^(non-fatal: this build does not require bash. NOTE, read at source rather than assumed -- no other check in this tree re-derives the 35-verb ABI surface count, so skipping here leaves that specific invariant unchecked on this run, same as every other `where ^<tool^>`-guarded optional step in this script^)
 :t2139_verb_count_done
 
 rem C2's own Gate B smoke: maps a real artifact, exercises C1's own construction verbs against
@@ -1303,6 +1289,20 @@ call tests\t2199-damped-greedy-red-suite\build_green_phaseD.bat %T2199_PHASED_MO
 set phaseD_ec=%errorlevel%
 popd
 if not %phaseD_ec%==0 (
+	popd & exit /b 1
+)
+
+rem D-SLM3798 suite-wiring closure: the T-2138 ABI suite previously had a correct executable
+rem driver in every cell but root build only compiled unrelated header probes. S8's hermetic
+rem fixture is now sized to the suite's real token/context population (vocab 128, context 64),
+rem so build, link, and execute all eleven cells here. Adapter/tokenizer/foreign-model cells
+rem activate when their optional T2138_* artifact variables are supplied and otherwise report
+rem counted skips; every model-only cell runs on every ordinary build.
+pushd .
+call tests\t2138-abi-red-suite\run_green.bat %T2199_PHASED_MODEL%
+set t2138_ec=%errorlevel%
+popd
+if not %t2138_ec%==0 (
 	popd & exit /b 1
 )
 

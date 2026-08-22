@@ -20,6 +20,7 @@ int8 [-128,127] silently — this module's own defect finding.
 
 import argparse
 import os
+import struct
 
 import numpy as np
 
@@ -29,6 +30,12 @@ import sslm_format as F  # noqa: E402
 import sslm_model_writer as W  # noqa: E402
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# T-2199 B0's ruled operating point uses this artifact-carried DGC1 source scale for the
+# certified i-exp derivation q=(493, 964, 487361).  Keep the source pair in one converter-side
+# location: production conversion and its tests must not transcribe the derived triple.
+DAMPED_GREEDY_SCALE_M = 2883584
+DAMPED_GREEDY_SCALE_E = -36
 
 # The reference forward pass + calibration (T-2123/T-2137: vendored in-tree at
 # tools/reference_pipeline/, no longer an out-of-tree cross-repo import) is a LAZY
@@ -120,7 +127,8 @@ def _fold_max_relative_error(rows, channel_scales):
     return max(errors)
 
 
-def build_sections(model, *, fold_ops_tensor=None, ctx_fold_tensor=None):
+def build_sections(model, *, fold_ops_tensor=None, ctx_fold_tensor=None,
+                   enable_damped_greedy=False):
     """`fold_ops_tensor`/`ctx_fold_tensor` default to this module's own
     spike-backed implementations above; a caller that cannot import the spike
     (every test in this slot, and the pinned CI fixture) injects its own pure
@@ -207,6 +215,15 @@ def build_sections(model, *, fold_ops_tensor=None, ctx_fold_tensor=None):
     # content check (ParseSigmoidLut, src/model.cpp) validates against byte-for-byte.
     sections.append(F.Section(F.SectionType.SIGMOID_LUT, W.write_sil1()))
 
+    # DGC1 is opt-in at artifact-conversion time because its flag is intentionally rejected by
+    # pre-1.2 runtimes.  The default path therefore remains byte-identical to 1.1.  A 1.2
+    # consumer selecting damped greedy gets a self-contained artifact; no post-conversion byte
+    # patcher or private calibration tool is part of the supported workflow.
+    if enable_damped_greedy:
+        sections.append(F.Section(
+            F.SectionType.DAMPED_GREEDY_CONSTANTS,
+            struct.pack("<qi", DAMPED_GREEDY_SCALE_M, DAMPED_GREEDY_SCALE_E)))
+
     return sections, max(fold_errors)
 
 
@@ -232,6 +249,9 @@ def main():
                     help="set the artifact header's Option-G flag bit, selecting the fused "
                          "post-RoPE K-landing order at load time (default: legacy order, "
                          "flags=0)")
+    ap.add_argument("--enable-damped-greedy", action="store_true",
+                    help="add the DGC1 scale section and flag required by the opt-in 1.2 "
+                         "damped-greedy decoder (greedy remains the runtime default)")
     args = ap.parse_args()
 
     artifact_cache, _pipeline = _load_spike()
@@ -247,8 +267,11 @@ def main():
                      unicode_patch=V.PINNED_UNICODE_VERSION[2])
 
     # Phase 2: serialize (explicit little-endian dtypes throughout sslm_model_writer.py).
-    sections, fold_approximation_error = build_sections(model)
+    sections, fold_approximation_error = build_sections(
+        model, enable_damped_greedy=args.enable_damped_greedy)
     flags = F.OPTION_G_FUSED_K_LANDING_FLAG if args.option_g_fused_k_landing else 0
+    if args.enable_damped_greedy:
+        flags |= F.DAMPED_GREEDY_CONSTANTS_FLAG
     fp = F.write_artifact(args.out, sections, flags=flags)
     print(f"wrote {args.out}")
     print(f"fingerprint {fp}")
