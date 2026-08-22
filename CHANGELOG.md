@@ -45,13 +45,35 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   every mean-conjunct margin — the two tail conjuncts already used the raw
   point estimate correctly. A pair's `composed_mean`/`effect_mean` review
   flag now reflects the same statistic the tail conjuncts always used.
-- **`sslm_convert_adapter`'s pooled B3 gate now tells a consumer what its
-  accept/reject reading does and does not mean, everywhere the tool prints
-  it.** The gate can refuse to write an artifact based on sampling noise
-  between two halves of the same population, and it cannot detect a real
-  magnitude error in the adapter — a refusal is grounds to inspect the
-  conversion and re-run it, not confidence that the adapter itself is
-  defective. A repair replacing the gate's own statistic is in progress.
+- **`sslm_convert_adapter`'s pooled B3 accept/reject gate is retired.** It
+  never discriminated a healthy converted adapter from a corrupted one on
+  its own merits — its accept boundary was one frozen reference adapter's
+  own idiosyncratic scale, and no in-band corruption ever elevated the
+  statistic once that scale was accounted for. Converting an adapter can no
+  longer be refused on B3 pooled quality grounds; only a domain trip (an
+  unrepresentable ratio) still refuses to write an artifact. Two things
+  ship in its place: the per-pair review diagnostics above are now this
+  tool's primary B3 signal, and a new wide-tolerance magnitude sanity check
+  compares a candidate's pooled composed LoRA delta norm against an
+  optional reference (`--reference-delta-norm`) — a candidate far outside
+  tolerance prints a named WARNING for review, never a rejection.
+- **The per-pair review diagnostics' own reported margins shifted once, at
+  the retirement above, and are stable after.** The diagnostics reused a
+  random-number stream that two now-deleted pooled-statistic calls used to
+  draw from first; deleting those calls moved every pair's own bootstrap
+  draws to a different point in the same stream, with no change to the
+  diagnostic's own arithmetic. The stream is now seeded independently for
+  this loop alone, so an unrelated future change elsewhere in the pooled
+  report cannot shift these numbers again.
+- **`build_runtime_additive_sections`'s `checkpoint_path` resume path no
+  longer crashes, and no longer silently reports a zero magnitude for a
+  resumed pair.** The magnitude sanity check above added a required
+  per-pair field that a checkpoint file written before this fix lacks;
+  resuming from such a file now recomputes the field from the pair's own
+  current adapter weights instead of crashing (`.tolist()` on a plain
+  `float`) or silently defaulting to zero. `checkpoint_path` is a Python
+  keyword argument, not a CLI flag, so this affects only direct callers of
+  `build_runtime_additive_sections`, not `sslm_convert_adapter.py`'s CLI.
 
 ## [1.1.0] - 2026-08-19
 

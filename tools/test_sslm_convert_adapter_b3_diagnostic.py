@@ -16,22 +16,17 @@
    the real run's own margin figure exactly -- this is a reconstruction of the recorded arithmetic,
    not a new synthetic scenario.
 
-2. The pooled primary gate's own `accepted=True`/`accepted=False` reading is printed by the CLI
-   beside an explicit, ID-free notice, at every site the tool prints the pooled verdict (the
-   `--verbose` build-log line inside `build_runtime_additive_sections`, and both the accept and
-   reject branches of `main()`). T-2202 (D-SLM3730 lineage) rewrote this notice's text: it states
-   plainly that the check can still refuse to write an artifact, that a refusal can come from
-   sampling noise rather than a real defect, that the check cannot detect a genuine magnitude
-   error, and that a repair replacing its statistic is in progress -- and it stops calling the
-   per-pair diagnostics "the actionable signal" (they are uncommissioned as a general oracle --
-   `StandardsDocument.md` §5.4 reserves that word for a must-accept and a must-reject, both
-   producible by the instrument's real data path, authored independent of the instrument's
-   builder; this file's own flag-fire pin below is a hand-built two-point construction that
-   proves the flag-fire path is live above threshold, and proves nothing about what the
-   diagnostic does on a real conversion -- see `Claude/Poirot/4299d84-t2206-b3-round2-
-   confirmation.md` M3, Wizard repo) and stops saying a live reject "carries no information"
-   (the reject branch still refuses to write the artifact, so that claim contradicted the branch
-   it sat beside).
+2. (RETIRED, T-2213/D-SLM3783) The pooled primary gate's own `accepted=True`/`accepted=False`
+   reading no longer exists -- the pooled ACCEPT/REJECT arithmetic itself was retired, not merely
+   reworded. What this remedy's cells below now pin is the CURRENT notice: an explicit, ID-free
+   status statement printed at every site the tool prints the pooled REPORT (the `--verbose`
+   build-log line inside `build_runtime_additive_sections`, and `main()`'s own accept branch --
+   there is no longer a B3-driven reject branch, since nothing B3 computes can refuse to write an
+   artifact any more). It states plainly that the per-pair diagnostics are this tool's primary B3
+   review signal, that a flagged pair is worth a closer look and not a confirmed finding, that an
+   empty per-pair list is not proof of soundness, and what the new magnitude sanity check does and
+   does not do (a coarse, wide-tolerance WARNING, never a REJECT -- commissioned separately in
+   `test_sslm_convert_adapter_b3_magnitude.py`).
 """
 
 import inspect
@@ -188,7 +183,8 @@ def test_a_genuinely_flagging_pair_actually_flags_composed_mean():
     )
 
 
-# --- Remedy 2: the notice printed beside the pooled gate's own verdict ----------------------
+# --- Remedy 2 (RETIRED and rewritten, T-2213/D-SLM3783): the notice printed beside the pooled
+#     report -- there is no longer a pooled VERDICT for it to sit beside. ---------------------
 
 def test_status_notice_names_no_internal_decision_ids():
     notice = A._B3_POOLED_GATE_STATUS_NOTICE
@@ -200,57 +196,57 @@ def test_status_notice_names_no_internal_decision_ids():
     )
 
 
-def test_status_notice_states_what_the_check_can_and_cannot_do():
-    """T-2202 (Poirot S1/S2): the notice states the check can still refuse to write an artifact,
-    that the refusal can come from sampling noise rather than a real defect, that it cannot
-    detect a genuine magnitude error, and that a repair is in progress -- and it must NOT claim a
-    live reject "carries no information" (S2: the reject branch still refuses the artifact, which
-    directly contradicts that phrase) or headline the per-pair diagnostics as "the actionable
-    signal" (S1: they were never commissioned as a general oracle).
-
-    T-2206 (Poirot S1): the per-pair caveat above qualified the false-POSITIVE direction only
-    ("a pair named there is worth a closer look, not a confirmed finding") while the one thing
-    actually measured about this diagnostic (`Claude/Brunel/t2201-b3-gate-investigation-2026-08-
-    20.md` §3 finding 2, Wizard repo) runs the other way: the ×50-hot construction produces
-    0/28 flags. The notice must also state the false-NEGATIVE direction -- an empty per-pair
-    list is not evidence the adapter is sound."""
+def test_status_notice_states_what_each_shipped_signal_does_and_does_not_do():
+    """T-2213 (D-SLM3783): the notice no longer describes a pooled accept/reject statistic (it
+    was retired, not merely reworded -- 'a repair ... is in progress' is now false and must not
+    appear). It states: nothing below blocks artifact emission on adapter quality; the per-pair
+    diagnostics are this tool's primary B3 review signal, worth review, not a verdict, and an
+    empty list is not proof of soundness; and the magnitude sanity check is a coarse WARNING that
+    never refuses an artifact either."""
     notice = A._B3_POOLED_GATE_STATUS_NOTICE.lower()
-    assert "refuse" in notice and "artifact" in notice
-    assert "sampling noise" in notice
-    assert "magnitude error" in notice
-    assert "repair" in notice and "in progress" in notice
+    assert "retired" in notice
     assert "per-pair diagnostic" in notice
-    assert "carries no information" not in notice
-    assert "actionable signal" not in notice
-    assert "empty" in notice and "not evidence" in notice
+    assert "empty" in notice and "not proof" in notice
+    assert "magnitude" in notice and "warning" in notice
+    assert "never" in notice and "refuse" in notice
+    # The retired framing must not survive: no more "repair in progress," no more "accepted=" or
+    # "cannot detect a real magnitude error" (the new check exists precisely to give a coarse
+    # magnitude signal, so that specific old disclaimer is now false).
+    assert "repair" not in notice or "in progress" not in notice
+    assert "accepted=" not in notice
 
 
-def test_status_notice_is_printed_at_every_pooled_gate_output_site():
-    """Static wiring check: the notice constant must be referenced at its own definition plus
-    every site the tool prints a pooled-gate verdict -- the `--verbose` build-log line inside
-    `build_runtime_additive_sections`, and both the accept and reject branches of `main()`. A
-    count of 1 (definition only, never printed) is exactly the pre-remedy defect T-2201 found:
-    the pooled `accepted=True` printed with no caveat anywhere a consumer would see it."""
+def test_status_notice_is_printed_at_every_pooled_report_output_site():
+    """Static wiring check: the notice constant must be referenced at its own definition, once in
+    `run_b3_pooled_report`'s own docstring, and at every site the tool actually PRINTS a pooled
+    report -- the `--verbose` build-log line inside `build_runtime_additive_sections`, and
+    `main()`'s own accept branch. T-2213 removed the reject-branch print site: nothing B3
+    computes can refuse to write an artifact any more, so `main()`'s REJECTED branch no longer
+    has pooled B3 diagnostics to print. A count of 1 (definition only, nothing else referencing
+    it) would be the pre-T-2201 defect this suite still guards against; the expected count is now
+    4 (definition + 1 docstring mention + 2 real print sites)."""
     source = inspect.getsource(A)
     occurrences = source.count("_B3_POOLED_GATE_STATUS_NOTICE")
-    assert occurrences >= 4, (
-        f"expected the status notice's definition plus 3 print sites (verbose pooled-gate "
-        f"line, main() accept branch, main() reject branch); found {occurrences} references"
+    assert occurrences == 4, (
+        f"expected the status notice's definition, its own docstring mention, and 2 print sites "
+        f"(verbose pooled-report line, main() accept branch -- the reject-branch site was "
+        f"removed under T-2213, since nothing B3 computes can refuse an artifact any more); "
+        f"found {occurrences} references"
     )
 
 
-def test_main_accept_path_prints_pooled_status_notice(monkeypatch, capsys, tmp_path):
+def test_main_accept_path_prints_pooled_status_notice_and_delta_norm(monkeypatch, capsys, tmp_path):
     """End-to-end through `main()` (real CLI dispatch, real argument parsing, `--skip-verify` to
-    avoid the C++ verifier dependency) on the ACCEPT branch: the pooled gate's `accepted=True` is
-    printed beside the status notice, not bare."""
+    avoid the C++ verifier dependency) on the ACCEPT branch: the pooled report's `delta_norm` is
+    printed beside the status notice -- never a retired `accepted=` verdict."""
     fake_pooled = {
-        "accepted": True, "n_pairs": 1,
+        "n_pairs": 1, "delta_norm": 1.2345e-3, "magnitude_warning": None,
         "per_pair_diagnostics": [{"name": "layer0.q_proj", "flagged": []}],
     }
     fake_verdict = {"domain_trip": False, "margin_exceeded": False,
                     "saturation_elevated": False, "pairs": [], "pooled": fake_pooled}
 
-    def fake_build(adapter_dir, base_sslm_path):
+    def fake_build(adapter_dir, base_sslm_path, **_kwargs):
         return [], fake_verdict, {}
 
     monkeypatch.setattr(A, "build_runtime_additive_sections", fake_build)
@@ -267,33 +263,68 @@ def test_main_accept_path_prints_pooled_status_notice(monkeypatch, capsys, tmp_p
     assert rc == 0
 
     out = capsys.readouterr().out
-    assert "accepted=True" in out
-    assert "sampling noise" in out
+    assert "accepted=" not in out, "the retired pooled verdict must not reappear in CLI output"
+    assert "delta_norm=1.2345" in out or "delta_norm=1.234500e-03" in out
     assert "per-pair diagnostic" in out.lower()
+    assert "MAGNITUDE WARNING" not in out, "no warning was configured; none must print"
 
 
-def test_main_reject_path_prints_pooled_status_notice(monkeypatch, capsys, tmp_path):
-    """Same, on the REJECT branch (`margin_exceeded=True`, no `--fallback`) -- the branch the
-    original consumer report's own `accepted=True` sat beside without qualification.
-
-    T-2202 (Poirot M3): this cell no longer asserts the ABSENCE of a bare `accepted=False` line.
-    That assertion pinned an incidental fact about this branch's current print statements, not
-    this remedy -- making the reject branch symmetric with the accept branch (printing a bare
-    `pooled B3 gate: accepted=...` line here too) is a defensible future improvement that would
-    turn this cell red for a reason unrelated to what it guards. What the remedy actually
-    requires -- the per-conjunct accepts and the notice both appear -- is asserted below and
-    holds regardless of whether a future round adds the bare line."""
+def test_main_accept_path_prints_magnitude_warning_when_present(monkeypatch, capsys, tmp_path):
+    """T-2213: when `run_b3_pooled_report` returns a `magnitude_warning`, `main()`'s accept
+    branch prints it -- still on the ACCEPT branch (rc=0), because the warning never refuses to
+    write the artifact."""
     fake_pooled = {
-        "accepted": False, "n_pairs": 1,
-        "composed_mean_accepts": False, "composed_tail_accepts": True,
-        "effect_mean_accepts": True, "effect_tail_accepts": True,
-        "per_pair_diagnostics": [{"name": "layer8.v_proj", "flagged": ["composed_mean"]}],
+        "n_pairs": 1, "delta_norm": 5.0,
+        "magnitude_warning": {
+            "candidate_delta_norm": 5.0, "reference_delta_norm": 0.1,
+            "ratio_to_reference": 50.0, "tolerance": [0.1, 10.0],
+            "disposition": "unresolved",
+            "reason": "pooled composed LoRA delta norm is 50x the reference's, outside the "
+                     "[0.1x, 10x] wide-tolerance sanity band",
+        },
+        "per_pair_diagnostics": [{"name": "layer0.q_proj", "flagged": []}],
     }
-    fake_verdict = {"domain_trip": False, "margin_exceeded": True,
+    fake_verdict = {"domain_trip": False, "margin_exceeded": False,
                     "saturation_elevated": False, "pairs": [], "pooled": fake_pooled}
 
-    def fake_build(adapter_dir, base_sslm_path):
-        return None, fake_verdict, {}
+    def fake_build(adapter_dir, base_sslm_path, **_kwargs):
+        return [], fake_verdict, {}
+
+    monkeypatch.setattr(A, "build_runtime_additive_sections", fake_build)
+    monkeypatch.setattr(A.sf, "write_artifact", lambda path, sections: "deadbeefcafe")
+
+    out_path = tmp_path / "out.sslm"
+    monkeypatch.setattr(A.sys, "argv", [
+        "sslm_convert_adapter.py",
+        "--adapter", str(tmp_path), "--base", str(tmp_path / "base.sslm"),
+        "--out", str(out_path), "--skip-verify",
+    ])
+
+    rc = A.main()
+    assert rc == 0, "a magnitude warning must never refuse to write the artifact"
+    out = capsys.readouterr().out
+    assert "MAGNITUDE WARNING" in out
+    assert "50x the reference" in out
+    assert out_path.exists() or True  # write_artifact is mocked; rc==0 is the real assertion
+
+
+def test_main_reject_path_prints_pooled_report_for_the_pairs_that_did_not_trip(
+    monkeypatch, capsys, tmp_path,
+):
+    """T-2213 fix round (D-SLM3787 finding S4; pinned per the T-2215 confirmation's Minor finding
+    M-N4): a PARTIAL domain trip still leaves `verdict['pooled']` a real report over the pairs
+    that did not trip, and `main()`'s REJECTED branch must print it via `_print_pooled_b3_report`
+    (`file=sys.stderr`) rather than showing a consumer refused an artifact nothing about the pairs
+    that were fine. Deleting that call must turn this cell red."""
+    fake_pooled = {
+        "n_pairs": 1, "delta_norm": 1.2345e-3, "magnitude_warning": None,
+        "per_pair_diagnostics": [{"name": "layer0.q_proj", "flagged": []}],
+    }
+    fake_verdict = {"domain_trip": True, "margin_exceeded": False,
+                    "saturation_elevated": False, "pairs": [], "pooled": fake_pooled}
+
+    def fake_build(adapter_dir, base_sslm_path, **_kwargs):
+        return [], fake_verdict, {}
 
     monkeypatch.setattr(A, "build_runtime_additive_sections", fake_build)
 
@@ -305,9 +336,19 @@ def test_main_reject_path_prints_pooled_status_notice(monkeypatch, capsys, tmp_p
     ])
 
     rc = A.main()
-    assert rc == 1
+    assert rc == 1, "a domain trip must refuse to write an artifact (no --fallback=merge passed)"
 
     err = capsys.readouterr().err
-    assert "composed_mean_accepts=False" in err
-    assert "sampling noise" in err
-    assert "per-pair diagnostic" in err.lower()
+    assert "REJECTED" in err
+    assert "pooled B3 report: n_pairs=1 delta_norm=1.234500e-03" in err, (
+        f"the reject branch must print the pooled report for the pairs that did not trip; "
+        f"got stderr:\n{err}"
+    )
+    assert "0 pair(s) flagged for review" in err
+
+
+def test_run_b3_pooled_report_no_longer_exists_under_its_retired_name():
+    """T-2213 (D-SLM3783) diff pin: `run_b3_multi_pair_check` -- the retired pooled gate's own
+    name -- must not exist; `run_b3_pooled_report` is its replacement."""
+    assert not hasattr(A, "run_b3_multi_pair_check")
+    assert hasattr(A, "run_b3_pooled_report")
