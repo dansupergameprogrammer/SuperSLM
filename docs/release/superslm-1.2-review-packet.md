@@ -55,7 +55,7 @@ new lock. Full tables and real text are in
 
 | Cell | Population | Result |
 |---|---|---|
-| Production converter | default, DGC1, Option-G+DGC flag composition; plus adapter converter regression suites | 20 passed |
+| Production converters | default, DGC1, Option-G+DGC flag composition; adapter conversion, diagnostics, magnitude warning, and notice suites | 65 passed |
 | Phase D1 | artifact flag and DGC1 rejection paths | 18 checks, 0 failures |
 | Phase D2 | independent greedy oracle, damped wiring/lifecycle/digest/default initializer, schema-mask-first composition | 196 checks, 0 failures on hermetic S8 |
 | Real schema composition | Qwen2.5 0.5B DGC+SCM1 artifact, independent DFA replay | 221 checks, 0 failures; adapter-only cell skipped |
@@ -93,8 +93,10 @@ open gate, never as a pass.
   sandbox user could not trust that external worktree's ownership; the in-tree 36-verb inventory
   gate ran and passed.
 - T-2138 complete real-artifact run: **PASS** — 567 checks, 0 failures, 0 skips across 11 cells.
-- Runtime-adapter + damped composition: **PASS** — converter pooled gate accepted; Phase D2
-  reported 210 checks, 0 failures; production CLI loaded the adapter in both decode modes.
+- Runtime-adapter + damped composition: **PASS** — real adapter conversion produced the runtime
+  artifact; Phase D2 reported 210 checks, 0 failures; production CLI loaded the adapter in both
+  decode modes. At the merged candidate tip, T-2213's current converter/report population passed
+  62 tests; its retired pooled quality gate is not represented as evidence.
 - Uncontended real 0.5B/1.5B selector ratios: **PASS** — 0.3589%–0.3673% and
   0.1221%–0.1305%, respectively, over three runs per model.
 - `git diff --check`: **PASS**
@@ -105,7 +107,13 @@ Run from the repository root. Angle-bracketed artifact paths are supplied by the
 
 ```bat
 cmd /d /c build.bat
-python -m pytest tools\test_convert_model_damped_greedy.py tools\test_sslm_convert_adapter.py tools\test_sslm_convert_adapter_bf16.py -q
+python -m pytest ^
+  tools\test_convert_model_damped_greedy.py ^
+  tools\test_sslm_convert_adapter.py ^
+  tools\test_sslm_convert_adapter_bf16.py ^
+  tools\test_sslm_convert_adapter_b3_diagnostic.py ^
+  tools\test_sslm_convert_adapter_b3_magnitude.py ^
+  tools\test_sslm_convert_adapter_b3_notice_e2e.py -q
 
 tests\t2199-damped-greedy-red-suite\obj_green_D\phaseD2_wiring_red.exe --model=<dgc-model.sslm> --adapter=<adapter.sslm>
 tests\t2199-damped-greedy-red-suite\obj_green_D\phaseD2a_cost_ratio_red.exe --model=<dgc-model.sslm>

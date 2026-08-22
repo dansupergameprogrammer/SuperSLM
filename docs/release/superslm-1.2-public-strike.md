@@ -33,6 +33,10 @@ current release and that 1.2 remains `Unreleased` pending independent adversaria
 3. Platform support said the review packet carried verification commands, but the packet only
    carried results. The packet now includes the root build, Python regression, Phase D2/D2a,
    real-artifact T-2138, and public CLI command shapes.
+4. After current `main` was integrated, the packet still called the old B3 pooled accept/reject
+   result evidence. T-2213 retired that non-discriminating gate. The packet now names the real
+   artifact conversion separately from the merged-tip 62-test converter/report population and
+   explicitly refuses to treat the retired gate as evidence.
 
 ## Claims deliberately retained
 
