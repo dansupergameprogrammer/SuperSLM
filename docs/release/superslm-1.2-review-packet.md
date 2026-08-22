@@ -1,15 +1,15 @@
-# SuperSLM 1.2 release-candidate review packet
+# SuperSLM 1.2 release review record
 
-This packet defines the candidate, its public claim, the evidence already executed, and the two
-independent gates that remain before release. Greedy remains the default. Damped greedy is an
-explicitly selected quality tradeoff for loop-prone free-text generation.
+This record defines the candidate, its public claim, the executed evidence, the independent
+review, and the release disposition. Greedy remains the default. Damped greedy is an explicitly
+selected quality tradeoff for loop-prone free-text generation.
 
 ## Index
 
 1. [Candidate and decision](#1-candidate-and-decision)
 2. [Public contract](#2-public-contract)
 3. [Executed evidence](#3-executed-evidence)
-4. [Independent gates remaining](#4-independent-gates-remaining)
+4. [Independent-gate disposition](#4-independent-gate-disposition)
 5. [Adversarial review brief](#5-adversarial-review-brief)
 6. [Release procedure](#6-release-procedure)
 
@@ -150,17 +150,19 @@ The CLI's public-default path is:
 build\sslm_generate <dgc-model.sslm> <tokenizer.sslm> "<prompt>" --max-new 32 --decode-mode damped-greedy
 ```
 
-## 4. Independent gates remaining
+## 4. Independent-gate disposition
 
-The Public Strike is complete and recorded in
-[`superslm-1.2-public-strike.md`](superslm-1.2-public-strike.md). Exactly one
-judgment gate remains:
+Both independent gates are complete:
 
-1. Independent adversarial code/evidence review. This must be performed by a reviewer who did not
-   author the candidate changes.
+1. The Public Strike passed after corrections and is recorded in
+   [`superslm-1.2-public-strike.md`](superslm-1.2-public-strike.md).
+2. The independent adversarial review, performed by a reviewer who authored no candidate change,
+   returned **FIX-THEN-SHIP** in `4c8cd2d-superslm-1p2-release-candidate.md`. Commit `9559711`
+   closes every filed finding; all affected cells and the complete release gates were rerun green.
+   The release owner accepted that closure and authorized publication on 2026-08-21.
 
-No tag, release date, or “current release 1.2” statement lands before the remaining gate passes.
-This is why the changelog remains under `Unreleased` and the README calls 1.2 a release candidate.
+Release disposition: **SHIP 1.2.0**. The annotated `v1.2.0` tag identifies the exact published
+commit.
 
 ## 5. Adversarial review brief
 
@@ -183,10 +185,10 @@ surfaces:
 
 ## 6. Release procedure
 
-After both independent gates pass:
+Completed for `v1.2.0`:
 
-1. Resolve every finding in the candidate and rerun the affected cell plus full `build.bat`.
-2. Move the 1.2 changelog material from `Unreleased` to `## [1.2.0] - YYYY-MM-DD`.
-3. Change README's “1.2 release candidate” line to `Current release: **1.2**`.
-4. Commit the reviewed public-strike result and release-doc finalization.
-5. Merge, tag `v1.2.0`, and publish from that exact commit.
+1. Resolved every finding and reran the affected cells plus full `build.bat`.
+2. Moved the 1.2 changelog material to `## [1.2.0] - 2026-08-21`.
+3. Promoted README to `Current release: **1.2**`.
+4. Recorded the Public Strike, independent review, closure, and release-owner authorization.
+5. Published the candidate branch and annotated tag from the same release commit.

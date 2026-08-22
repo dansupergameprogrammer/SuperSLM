@@ -14,8 +14,8 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.1**. The **1.2 release candidate** adds opt-in damped
-greedy decoding while preserving greedy as the default. [CHANGELOG.md](CHANGELOG.md)
+Current release: **1.2**. This release adds opt-in damped greedy decoding while
+preserving greedy as the default. [CHANGELOG.md](CHANGELOG.md)
 has what changed; [Status](#status) below has what is measured where.
 
 ## Capabilities

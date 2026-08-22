@@ -18,8 +18,8 @@ The strike inspected every 1.2 public claim and documented command in:
 
 Claims were checked against the Phase B0 and Phase E records, final Phase D summaries, the
 zero-skip T-2138 real-artifact run, production converter/CLI execution, and the artifact/ABI
-implementation at the candidate tip. The strike also checked that 1.1 remains named as the
-current release and that 1.2 remains `Unreleased` pending independent adversarial review.
+implementation at the candidate tip. At strike time it also checked that 1.1 remained named as
+the current release and that 1.2 remained `Unreleased` pending independent adversarial review.
 
 ## Findings resolved
 
@@ -50,7 +50,9 @@ current release and that 1.2 remains `Unreleased` pending independent adversaria
 - Greedy remains the runtime and conversion default. Damped greedy requires a DGC-enabled
   artifact and explicit mode selection.
 
-## Remaining release gate
+## Release disposition
 
-Independent adversarial code/evidence review is still required. Until it passes, the changelog
-stays under `Unreleased`, README continues to name 1.1 as current, and no `v1.2.0` tag is created.
+The independent adversarial review returned **FIX-THEN-SHIP**. Commit `9559711` closes all filed
+findings, and the affected plus complete release gates reran green. The release owner accepted
+the closure and authorized `v1.2.0` publication on 2026-08-21. The changelog and README were then
+promoted from candidate state on the exact commit carrying the annotated release tag.

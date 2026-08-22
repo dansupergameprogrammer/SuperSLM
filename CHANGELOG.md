@@ -4,6 +4,8 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-21
+
 ### Damped greedy decoding
 
 - Added deterministic damped-greedy decoding as an explicit opt-in on the CPU

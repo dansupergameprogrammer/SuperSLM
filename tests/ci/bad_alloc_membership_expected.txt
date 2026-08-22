@@ -24,15 +24,17 @@
 # note above already names.
 # Line numbers re-derived 2026-08-18 after the T-2152 installed-header banner scrub
 # shortened every header's preamble (same 20-member set, names and files unchanged).
-artifact.h:185:OpenFromMemory
-artifact.h:191:OpenFromFile
-artifact.h:210:FingerprintHex
+# Re-derived 2026-08-21 after the 1.2 artifact declarations moved four existing
+# members (same 20-member set, names and files unchanged).
+artifact.h:200:OpenFromMemory
+artifact.h:206:OpenFromFile
+artifact.h:225:FingerprintHex
 model.h:278:Parse
 model.h:328:Parse
 model.h:384:Parse
 model.h:458:ParseConfig
 model.h:481:ParseSigmoidLut
-model.h:740:Load
+model.h:743:Load
 proof_manifest.h:40:JsonEscape
 proof_manifest.h:89:ComputeTensorEvidence
 proof_manifest.h:105:ComputeWeightScaleEvidence
