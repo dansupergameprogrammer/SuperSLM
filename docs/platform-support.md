@@ -75,16 +75,18 @@ production CPU generation loop, using real Qwen2.5 0.5B-Instruct and
 100- and 300-token ceilings for each model: 192 greedy generations and 192
 damped generations at `alpha=2`, anti-LM order `2`, and `top_k=6`.
 
-| Cell | Greedy locks | Damped locks | Greedy rep-3 | Damped rep-3 | Damped/greedy ms per generated token |
-|---|---:|---:|---:|---:|---:|
-| 0.5B / 100 | 3 | 0 | 0.09063 | 0.00172 | 1.285x |
-| 0.5B / 300 | 3 | 0 | 0.13959 | 0.00368 | 1.225x |
-| 1.5B / 100 | 0 | 0 | 0.01873 | 0.00087 | 1.252x |
-| 1.5B / 300 | 0 | 0 | 0.04139 | 0.00196 | 1.227x |
+| Cell | Greedy locks | Damped locks | Greedy rep-3 | Damped rep-3 |
+|---|---:|---:|---:|---:|
+| 0.5B / 100 | 3 | 0 | 0.09063 | 0.00172 |
+| 0.5B / 300 | 3 | 0 | 0.13959 | 0.00368 |
+| 1.5B / 100 | 0 | 0 | 0.01873 | 0.00087 |
+| 1.5B / 300 | 0 | 0 | 0.04139 | 0.00196 |
 
-The timing ratio is an end-to-end harness observation that includes model
-loading and different generated lengths; it is not attributed solely to the
-selector. The complete selector microbenchmark and full verification command
+The fixed-work, alternating-arm follow-up measured 4.276667 seconds greedy and
+4.277000 seconds damped across six 30-token pairs on 0.5B: the 0.333 ms mean
+difference was below the CLI timer's 1 ms reporting resolution. The original
+separate-run Phase E timings are retained as raw evidence, not as a decoder-cost
+comparison. The complete selector microbenchmark and full verification command
 are recorded in the 1.2 review packet. Output quality is workload-dependent:
 the measured corpus often became more coherent, while a repeated-list prompt
 also demonstrated a real formatting regression. See

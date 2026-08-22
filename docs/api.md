@@ -91,14 +91,14 @@ it's being restored against.
 `include/superslm/sslm_abi.h` is the contract: a from-scratch, engine-
 agnostic C ABI for embedding SuperSLM's CPU inference path directly in
 another process — a game engine's own tooling, for instance — without the
-GPU handle types above. It declares and implements 35 functions across the
+GPU handle types above. It declares and implements 36 functions across the
 same lifecycle shape as the GPU API (workspace and KV-pool sizing and
 creation, model map/unmap, sequence and prefix lifecycle, decode,
 tokenize/detokenize, stats) plus concepts the GPU API does not need:
 caller-owned workspace and KV-pool memory (sized by the library and allocated
 by the caller). A correctly sized workspace removes the ABI layer's transient
-forward buffers; the engine's existing compute kernels retain their documented,
-shape-stable internal scratch allocations. Damped greedy additionally grows its
+forward and damped-selection buffers; the engine's existing compute kernels retain their
+documented, shape-stable internal scratch allocations. Damped greedy additionally grows its
 per-sequence anti-LM state as tokens and new n-grams appear. The count-table
 component is content-dependent and reported by `AntiLmRetainedBytes`; total
 retained state also includes four bytes per generated-history token. Neither is
@@ -115,8 +115,9 @@ silently accepted.
 
 - **Model**: `sslm_model_map` / `sslm_model_unmap`.
 - **Workspace and KV pool sizing**: `sslm_workspace_size`, `sslm_kv_block_size`,
-  `sslm_kv_pool_overhead_size`, `sslm_seq_state_size` compute exact byte
-  counts for caller-allocated buffers; `sslm_workspace_create`/`_destroy`
+  `sslm_kv_pool_overhead_size`, and `sslm_seq_state_size` compute caller-buffer
+  capacities (`sslm_seq_state_size` is an upper bound across live sequence states);
+  `sslm_workspace_create`/`_destroy`
   and `sslm_kv_pool_create`/`_destroy` take those buffers and hand back a
   handle. A workspace is reusable across a sequence of calls but is not
   safe to share between two calls running concurrently; a caller driving
@@ -129,7 +130,12 @@ silently accepted.
   `sslm_seq_adopt_prefix` (attaches a frozen prefix, so its forward pass is
   never repeated per sequence), `sslm_seq_save` / `sslm_seq_restore`
   (serializes a sequence's full state — including its schema binding and
-  DFA walk state, see below — to a caller buffer and back), and
+  DFA walk state, see below — to a caller buffer and back). v1.2 writes `SSB3`
+  blobs carrying damped anti-LM history and continues to restore shipped `SSB2`
+  blobs as an empty anti-LM state. Restore accepts a buffer whose size is at
+  least the encoded blob size, including a buffer sized by
+  `sslm_seq_state_size`, and ignores trailing capacity. It also rejects anti-LM
+  history longer than the blob's own saved context length;
   `sslm_seq_set_adapter` (attaches or detaches a LoRA adapter on a live
   sequence).
 - **Adapter**: `sslm_adapter_map` / `sslm_adapter_release`, rejecting a
@@ -161,7 +167,9 @@ silently accepted.
   decode-step's own selection mechanism:
   `SSLM_DECODE_MODE_GREEDY` (0, the default under zero-init) or
   `SSLM_DECODE_MODE_DAMPED_GREEDY` (1) — any other value is rejected, never
-  silently treated as greedy. Under damped-greedy mode, five more fields
+  silently treated as greedy. Selecting damped mode directly through this entry
+  point also requires a valid DGC1 section; manually supplied scale constants are
+  validated before forward work begins. Under damped-greedy mode, six more fields
   apply: `alpha_q15` (the Q15-scaled anti-repetition weight, an `int32_t`
   rejected outside `[0, 2^20)`), `anti_lm_max_order` (the anti-LM's own n,
   `>= 1`), `top_k` (candidates scored per step, `1 <= top_k <= vocab_size`),

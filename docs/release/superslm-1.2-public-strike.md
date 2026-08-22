@@ -43,9 +43,10 @@ current release and that 1.2 remains `Unreleased` pending independent adversaria
 - “Often/many outputs read more coherently” remains explicitly scoped to the measured corpus and
   is paired with the `list_primed_00` formatting counterexample. It is not a universal quality or
   semantic-fidelity claim.
-- Phase E's 1.225x–1.285x effective milliseconds/token remains labeled end to end. It is not
-  attributed to selector arithmetic; the separate full-selector ranges are reported as
-  0.3589%–0.3673% (0.5B) and 0.1221%–0.1305% (1.5B).
+- The original Phase E separate-run timing ratios remain raw evidence, not a cost claim. The
+  fixed-work alternating-arm follow-up measured 1.000078x over six 30-token pairs; its 0.333 ms
+  mean difference is below the CLI timer's 1 ms reporting resolution. The allocation-free
+  selector measured 0.2453%–0.2461% of a real 0.5B forward step across three runs.
 - Greedy remains the runtime and conversion default. Damped greedy requires a DGC-enabled
   artifact and explicit mode selection.
 

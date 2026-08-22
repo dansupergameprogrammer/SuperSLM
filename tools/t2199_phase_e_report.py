@@ -154,10 +154,12 @@ def main() -> None:
     parser.add_argument("--selector-forward-ns", required=True, type=float)
     parser.add_argument("--selector-renorm-ns", required=True, type=float)
     parser.add_argument("--selector-checks", required=True, type=int)
+    parser.add_argument("--controlled-cost", required=True, type=Path)
     parser.add_argument("--out-md", required=True, type=Path)
     parser.add_argument("--out-json", required=True, type=Path)
     parser.add_argument("--out-jsonl", required=True, type=Path)
     args = parser.parse_args()
+    controlled_cost = json.loads(args.controlled_cost.read_text(encoding="utf-8"))
 
     if [cell.label for cell in args.cell] != list(CELL_ORDER):
         raise RuntimeError(f"cells must be supplied in order {CELL_ORDER}")
@@ -268,8 +270,8 @@ def main() -> None:
         "## Full-generation production result",
         "",
         "| Cell | Greedy locks | Damped locks | Reach (actual / B0) | Greedy rep-3 | Damped rep-3 | "
-        "Paired delta +/- SE | Greedy cap/EOS | Damped cap/EOS | Effective ms/token ratio |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "Paired delta +/- SE | Greedy cap/EOS | Damped cap/EOS |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for label in CELL_ORDER:
         item = summaries[label]
@@ -280,30 +282,22 @@ def main() -> None:
             f"{greedy['rep_3_mean']:.5f} | {damped['rep_3_mean']:.5f} | "
             f"{item['paired_rep3_delta']:+.5f} +/- {item['paired_rep3_delta_se']:.5f} | "
             f"{greedy['cap_count']}/{greedy['eos_count']} | "
-            f"{damped['cap_count']}/{damped['eos_count']} | "
-            f"{item['effective_ms_per_token_ratio_damped_over_greedy']:.3f}x |")
+            f"{damped['cap_count']}/{damped['eos_count']} |")
     lines.extend([
         "",
-        "`cap/EOS` reports generations that reached the token ceiling / emitted a stop token. The "
-        "effective wall-time ratio uses fresh paired greedy captures from the same executable and "
-        "hardware, but includes model loading and different generated lengths, so it is an end-to-end "
-        "observation, not an isolated selector-cost measurement. Phase D2a separately "
-        "measures the wired selector against real forward cost.",
+        "`cap/EOS` reports generations that reached the token ceiling / emitted a stop token.",
         "",
-        "Across the four fresh paired cells, damped/greedy wall time was "
-        f"{min(item['wall_time_ratio_damped_over_greedy'] for item in summaries.values()):.3f}x to "
-        f"{max(item['wall_time_ratio_damped_over_greedy'] for item in summaries.values()):.3f}x per "
-        "48-generation cell and "
-        f"{min(item['effective_ms_per_token_ratio_damped_over_greedy'] for item in summaries.values()):.3f}x "
-        "to "
-        f"{max(item['effective_ms_per_token_ratio_damped_over_greedy'] for item in summaries.values()):.3f}x "
-        "per generated token. This is a measured "
-        "end-to-end harness cost, not attributed solely to selection. The post-capture Phase D2a "
-        f"microbenchmark passed {args.selector_checks} checks with mean forward "
-        f"{args.selector_forward_ns:.1f} ns, selector renormalization {args.selector_renorm_ns:.1f} "
-        f"ns, and a {selector_ratio_percent:.4f}% selector/forward ratio. The two measurements have "
-        "different scopes; Phase E does not claim that the microbenchmark explains the full "
-        "end-to-end delta.",
+        "The original Phase E arms were separate runs with different generation lengths. Their raw "
+        "timings remain in the JSON evidence, but their aggregate ratios are not decoder-cost "
+        "measurements.",
+        "",
+        "The fixed-work follow-up used the same artifact, prompt, executable, and exactly 30 "
+        f"generated tokens, alternating arm order across {controlled_cost['pairs']} pairs. Greedy "
+        f"averaged {controlled_cost['greedy_seconds_mean']:.6f} seconds and damped greedy "
+        f"{controlled_cost['damped_seconds_mean']:.6f} seconds "
+        f"({controlled_cost['ratio_damped_over_greedy']:.6f}x); the difference is below the "
+        f"timer's {controlled_cost['cli_timer_resolution_seconds'] * 1000:.0f} ms reporting "
+        "resolution.",
         "",
         "Production matched the B0 replay reach and locked-row ceiling in all four cells. The two "
         "100-token cells were rerun after the ruling and matched their B0 token streams exactly: "
@@ -364,6 +358,7 @@ def main() -> None:
             "mean_renorm_ns": args.selector_renorm_ns,
             "renorm_over_forward_percent": selector_ratio_percent,
         },
+        "controlled_cost_followup": controlled_cost,
         "fidelity_caveat": ("anti-loop effectiveness is confirmed; semantic and format equivalence "
                              "is explicitly not claimed"),
         "sample_prompt_ids": list(SAMPLE_PROMPTS),

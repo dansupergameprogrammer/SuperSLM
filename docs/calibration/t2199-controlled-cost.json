@@ -1,0 +1,13 @@
+{
+  "artifact": "Qwen2.5-0.5B-Instruct int8 with DGC1",
+  "cell": "same artifact, same prompt, fixed 30-token generation, alternating arm order",
+  "cli_timer_resolution_seconds": 0.001,
+  "damped_seconds": [4.278, 4.275, 4.286, 4.272, 4.286, 4.265],
+  "damped_seconds_mean": 4.277,
+  "greedy_seconds": [4.239, 4.273, 4.286, 4.281, 4.279, 4.302],
+  "greedy_seconds_mean": 4.276666666666666,
+  "pairs": 6,
+  "ratio_damped_over_greedy": 1.000077946998207,
+  "result": "difference below the timer's 1 ms reporting resolution",
+  "selector_ratio_percent_real_05b_runs": [0.2459, 0.2453, 0.2461]
+}

@@ -40,6 +40,7 @@
 //         TestD2_TokenDigest_CoversDampedGreedyTokens.
 #include "sslm_phaseD_stub.h"
 #include "sslm_phaseD_fixture.h"
+#include "sslm_fixtures.h"
 #include "sslm_damped_greedy.h"
 #include "superslm/decode_digest.h"
 #include "superslm/forward_sites.h"
@@ -90,6 +91,7 @@ static int GSkips = 0;
 	} while (0)
 
 using namespace superslm;
+using namespace superslm_test;
 using namespace superslm_test_phaseD;
 
 static std::string g_model_path;
@@ -597,6 +599,17 @@ static void TestD2_ValidationSymmetry_AcrossEntryPoints() {
 		          "case '%s' is constructed to be invalid by name -- D3 must not accept it either",
 		          c.name);
 	}
+	// Scale fields are ABI-only inputs and are validated before forward work, independently of
+	// the shared alpha/n/k/mode validator above. A rejected triple leaves sequence bytes exact.
+	sslm_decode_params bad_scale = MakeDampedParams(fx);
+	bad_scale.q_c = -1;
+	const std::vector<uint8_t> before_bad_scale = SaveSequence(seq);
+	sslm_seq scale_batch[1] = {seq};
+	int32_t scale_token = -777;
+	CHECK(sslm_decode_step_v2(fx.model, scale_batch, 1, &bad_scale, nullptr, &scale_token) ==
+	      SSLM_INVALID_ARGUMENT);
+	CHECK(scale_token == -777);
+	CHECK(SaveSequence(seq) == before_bad_scale);
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
 
@@ -759,10 +772,56 @@ static void TestD2_DampedGreedyLifecycle_ResetAndRestoreAreFreshAndExact() {
 	CHECK(static_cast<int32_t>(ReadLE32Test(108)) == params.anti_lm_max_order);
 	CHECK(ReadLE64Test(112) == 4);
 	sslm_seq restored = nullptr;
-	CHECK(sslm_seq_restore(fx.model, &fx.pool, live_blob.data(), live_blob.size(), &restored) == SSLM_OK);
+	// The documented state-size workflow passes capacity, not the exact encoded size.
+	std::vector<uint8_t> state_capacity(sslm_seq_state_size(fx.model), 0xA5);
+	CHECK(state_capacity.size() >= live_blob.size());
+	std::copy(live_blob.begin(), live_blob.end(), state_capacity.begin());
+	CHECK(sslm_seq_restore(fx.model, &fx.pool, state_capacity.data(), state_capacity.size(),
+	                       &restored) == SSLM_OK);
 	CHECK(SaveSequence(used) == SaveSequence(restored));
 	CHECK(DecodeDamped(fx, used, params, 4) == DecodeDamped(fx, restored, params, 4));
 	CHECK(sslm_seq_release(restored) == SSLM_OK);
+
+	// A blob may never claim more generated anti-LM history than its own saved context.
+	std::vector<uint8_t> hostile_history = live_blob;
+	const uint64_t saved_context = ReadLE64Test(60);
+	const uint64_t hostile_count = saved_context + 1;
+	for (int byte = 0; byte < 8; ++byte) {
+		hostile_history[112 + byte] = static_cast<uint8_t>(hostile_count >> (8 * byte));
+	}
+	sslm_seq rejected = nullptr;
+	CHECK(sslm_seq_restore(fx.model, &fx.pool, hostile_history.data(), hostile_history.size(),
+	                       &rejected) == SSLM_INVALID_ARGUMENT);
+	CHECK(rejected == nullptr);
+
+	// Shipped SSB2 blobs remain readable. SSB2 is the common 108-byte prefix followed directly
+	// by residual/KV data; a pre-damped sequence has no history to discard during conversion.
+	sslm_seq legacy_source = nullptr;
+	CHECK(sslm_seq_create(fx.model, &fx.pool, &legacy_source) == SSLM_OK);
+	CHECK(PrefillPrompt(fx, legacy_source));
+	const std::vector<uint8_t> ssb3_without_history = SaveSequence(legacy_source);
+	std::vector<uint8_t> ssb2 = ssb3_without_history;
+	ssb2[3] = '2';
+	ssb2.erase(ssb2.begin() + 108, ssb2.begin() + 120);
+	CHECK(sslm_seq_release(legacy_source) == SSLM_OK);
+	legacy_source = nullptr;
+	sslm_seq legacy_restored = nullptr;
+	CHECK(sslm_seq_restore(fx.model, &fx.pool, ssb2.data(), ssb2.size(), &legacy_restored) ==
+	      SSLM_OK);
+	CHECK(legacy_restored != nullptr);
+	std::vector<int32_t> legacy_continuation;
+	if (legacy_restored) {
+		CHECK(SaveSequence(legacy_restored) == ssb3_without_history);
+		legacy_continuation = DecodeDamped(fx, legacy_restored, params, 4);
+		CHECK(sslm_seq_release(legacy_restored) == SSLM_OK);
+	}
+	sslm_seq current_format_restored = nullptr;
+	CHECK(sslm_seq_restore(fx.model, &fx.pool, ssb3_without_history.data(),
+	                       ssb3_without_history.size(), &current_format_restored) == SSLM_OK);
+	if (current_format_restored) {
+		CHECK(legacy_continuation == DecodeDamped(fx, current_format_restored, params, 4));
+		CHECK(sslm_seq_release(current_format_restored) == SSLM_OK);
+	}
 	CHECK(sslm_seq_release(used) == SSLM_OK);
 }
 
@@ -929,6 +988,33 @@ static void TestD2_DampedGreedy_ComposesWithRuntimeAdapter() {
 	CHECK(sslm_adapter_release(adapter) == SSLM_OK);
 }
 
+static void TestD2_ManualDampedParamsRejectArtifactWithoutDgcOptIn() {
+	if (g_model_path.empty()) {
+		SKIP_MSG("real damped artifact not supplied -- no-DGC manual-params rejection not run");
+		return;
+	}
+	RealModelFixture fx;
+	std::string err;
+	if (!LoadRealModel(&fx, &err)) {
+		SKIP_MSG("could not load real artifact: %s", err.c_str());
+		return;
+	}
+	std::vector<uint8_t> unflagged = fx.bytes;
+	PutU32(unflagged, 16, GetU32(unflagged, 16) & ~kDampedGreedyArtifactConstantsFlag);
+	RecomputeIntegrityHash(unflagged);
+	sslm_model unflagged_model = nullptr;
+	CHECK(sslm_model_map(unflagged.data(), unflagged.size(), &unflagged_model) == SSLM_OK);
+	if (unflagged_model) {
+		sslm_decode_params params = MakeDampedParams(fx);
+		sslm_seq null_seq = nullptr;
+		int32_t token = -777;
+		CHECK(sslm_decode_step_v2(unflagged_model, &null_seq, 1, &params, nullptr, &token) ==
+		      SSLM_ARTIFACT_REJECTED);
+		CHECK(token == -777);
+		CHECK(sslm_model_unmap(unflagged_model) == SSLM_OK);
+	}
+}
+
 int main(int argc, char** argv) {
 	ParseArgs(argc, argv);
 	TestD2_GreedyMode_BitUnchangedRegression();
@@ -941,6 +1027,7 @@ int main(int argc, char** argv) {
 	TestD2_PublicParamsInitializer_UsesRuledDefaultsAndArtifactScale();
 	TestD2_DampedGreedy_ComposesWithSchemaMaskFirst();
 	TestD2_DampedGreedy_ComposesWithRuntimeAdapter();
+	TestD2_ManualDampedParamsRejectArtifactWithoutDgcOptIn();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

@@ -175,6 +175,14 @@ void FsdTopK(const int32_t* masked_row, const uint8_t* mask_bits, int32_t vocab_
                                                int64_t q_ln2, int64_t q_b, int64_t q_c,
                                                int32_t* out_token, bool* out_refused);
 
+// Allocation-free production form. Both scratch arrays provide at least k elements and may be
+// reused immediately after return. Return/refusal semantics match the public convenience form.
+[[nodiscard]] bool DampedGreedyScoreAndArgmaxWithScratch(
+    const int32_t* masked_row, const uint8_t* mask_bits, int32_t vocab_size, int32_t k,
+    const AntiLmState* anti_lm, int64_t alpha_q15, int64_t q_ln2, int64_t q_b, int64_t q_c,
+    int32_t* indices_scratch, int64_t* q_theta_scratch, int32_t* out_token,
+    bool* out_refused);
+
 // Sec9 dim7's own "keeper-probe cell" (MEASUREMENT, D-SLM3727: never a build gate on any
 // reported value's own reading) and Sec5.6.3's model-governance column, at per-step grain.
 // `full_row_z` is supplied by the caller (computing a full-row total is the O(V) operation

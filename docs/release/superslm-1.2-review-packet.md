@@ -57,12 +57,12 @@ new lock. Full tables and real text are in
 |---|---|---|
 | Production converters | default, DGC1, Option-G+DGC flag composition; adapter conversion, diagnostics, magnitude warning, and notice suites | 65 passed |
 | Phase D1 | artifact flag and DGC1 rejection paths | 18 checks, 0 failures |
-| Phase D2 | independent greedy oracle, damped wiring/lifecycle/digest/default initializer, schema-mask-first composition | 196 checks, 0 failures on hermetic S8 |
-| Real schema composition | Qwen2.5 0.5B DGC+SCM1 artifact, independent DFA replay | 221 checks, 0 failures; adapter-only cell skipped |
+| Phase D2 | independent greedy oracle, damped wiring/lifecycle/digest/default initializer, schema-mask-first composition | 234 checks, 0 failures on hermetic S8 |
+| Real schema composition | Qwen2.5 0.5B DGC+SCM1 artifact, independent DFA replay | 259 checks, 0 failures; adapter-only cell skipped |
 | Phase D2a | full selector plus isolated renormalizer against a real forward | 29 checks, 0 failures |
 | Phase D3 | 200 concurrent teardown trials | 1,805 checks, 0 failures |
 | CLI defaulted damped mode | Qwen2.5 0.5B, parameters omitted | successful 8-token production generation |
-| Real adapter composition | Qwen2.5 1.5B base + 28-layer rank-16 runtime adapter | 210 checks, 0 failures; schema-only cell skipped |
+| Real adapter composition | Qwen2.5 1.5B base + 28-layer rank-16 runtime adapter | 248 checks, 0 failures; schema-only cell skipped |
 | T-2138 real-artifact ABI suite | base, adapter, foreign shape, variant, and tokenizer artifacts supplied | 567 checks, 0 failures, 0 skips across 11 dimensions |
 | Production CLI + adapter | paired greedy/damped 1.5B generation, damped parameters omitted | both modes loaded the adapter and completed the same 12-token response |
 | Root build | all mandatory compile, ABI, Phase A-D, core, and structural gates | PASS; 34,189 core checks, 0 failures |
@@ -75,13 +75,13 @@ paths activate those artifact-specific cells.
 
 ### 3.3 Cost interpretation
 
-The complete selector, including top-k selection, anti-LM queries, renormalization, scoring, and
-tie-breaking, measured 0.9632% of a full token step on the hermetic gate. Three uncontended runs
-per real model measured 0.3589%–0.3673% on Qwen2.5 0.5B and 0.1221%–0.1305% on Qwen2.5 1.5B.
-The isolated renormalizer measured 0.0002%–0.0007%. This microbenchmark does not explain Phase
-E's 1.225x–1.285x effective milliseconds per emitted token: Phase E includes separate
-process/model loading and different generated lengths. The release does not attribute that
-end-to-end delta to selector arithmetic.
+The release-candidate selector uses caller workspace, performs no transient allocation, and
+measured 0.2453%–0.2461% of a real Qwen2.5 0.5B forward step across three runs. A controlled cost follow-up used the same
+DGC1 artifact, prompt, executable, and exactly 30 generated tokens, alternating arm order across
+six pairs: greedy averaged 4.276667 seconds and damped greedy 4.277000 seconds (1.000078x). The
+0.333 ms difference is below the CLI timer's 1 ms reporting resolution. The original Phase E
+separate-run timing ratios are retained only as raw evidence; differing lengths and non-
+interleaved arms make them invalid as decoder-cost measurements.
 
 ### 3.4 Final verification fill-in
 
@@ -94,14 +94,33 @@ open gate, never as a pass.
   gate ran and passed.
 - T-2138 complete real-artifact run: **PASS** — 567 checks, 0 failures, 0 skips across 11 cells.
 - Runtime-adapter + damped composition: **PASS** — real adapter conversion produced the runtime
-  artifact; Phase D2 reported 210 checks, 0 failures; production CLI loaded the adapter in both
+  artifact; Phase D2 reported 248 checks, 0 failures; production CLI loaded the adapter in both
   decode modes. At the merged candidate tip, T-2213's current converter/report population passed
   62 tests; its retired pooled quality gate is not represented as evidence.
-- Uncontended real 0.5B/1.5B selector ratios: **PASS** — 0.3589%–0.3673% and
-  0.1221%–0.1305%, respectively, over three runs per model.
+- Real 0.5B selector ratio after the allocation fix: **PASS** — 0.2453%–0.2461%; fixed-work six-pair
+  end-to-end comparison unresolved at 1 ms timer resolution (1.000078x measured ratio).
 - `git diff --check`: **PASS**
 
-### 3.5 Reproduction commands
+### 3.5 Independent review disposition
+
+The independent review recorded in `4c8cd2d-superslm-1p2-release-candidate.md` returned
+**FIX-THEN-SHIP**. This candidate closes every filed item; the reviewer must verify this closure
+before the remaining gate is marked passed.
+
+| ID | Closure | Regression evidence |
+|---|---|---|
+| C1 | Replaced the vocabulary-sized vector and full-range `partial_sort` with a caller-scratch, `k`-element heap; the ABI workspace now owns the index and Q15 scratch. Anti-LM read paths and top-k renormalization also avoid transient allocation. | Damped ABI call at the 151,936-token target vocabulary records zero hot-path allocations; Phase C equivalence/adversarial cells remain green. |
+| S1 | Removed the confounded Phase E ratios as a cost claim and added an alternating, fixed-work six-pair measurement. | 30 tokens per arm per pair: greedy 4.276667 s, damped 4.277000 s, 1.000078x; difference below the 1 ms timer resolution. |
+| S2 | Save and restore both enforce `anti_lm_history_count <= saved context_length`; the model sizing bound remains sufficient. | Malformed history/context rejection plus state-size-capacity save/restore with live history. |
+| S3 | SSB3 remains the write format; restore explicitly accepts shipped SSB2 and reconstructs its absent anti-LM state as empty. | Hand-converted SSB2 compatibility cell restores and continues. |
+| S4 | Restore again treats `n` as capacity and accepts trailing bytes after the exact encoded blob. | `sslm_seq_state_size`-sized buffer restores a shorter live-state blob. |
+| S5 | The v2 ABI rejects damped mode without DGC1 before forward/state mutation and validates the fixed-point scale triple at the boundary. | Missing-DGC1 and hostile-scale cells pin status and failure atomicity. |
+| M1 | Corrected the public ABI count to 36. | Existing 36-verb inventory gate. |
+| M2 | Both parameter-domain failures now return `InvalidDecodeParams`. | Phase D loop suite. |
+| M3 | Documented the Phase D loop's input, output, and mutation preconditions beside its declaration. | Header/source contract review. |
+| O1 | Added the two missing coverage shapes identified by the reviewer. | C1 and S2 regression cells above. |
+
+### 3.6 Reproduction commands
 
 Run from the repository root. Angle-bracketed artifact paths are supplied by the reviewer:
 

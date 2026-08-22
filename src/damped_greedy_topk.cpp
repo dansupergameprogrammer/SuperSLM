@@ -64,8 +64,7 @@ bool AlphaQ15InDomain(int64_t alpha_q15) noexcept {
 // uninitialized memory for a direct caller).
 void FsdTopK(const int32_t* masked_row, const uint8_t* mask_bits, int32_t vocab_size,
              int32_t k, int32_t* out_indices) {
-	std::vector<int32_t> idx(static_cast<std::size_t>(vocab_size));
-	for (int32_t i = 0; i < vocab_size; ++i) idx[static_cast<std::size_t>(i)] = i;
+	if (k <= 0 || vocab_size <= 0) return;
 	const int32_t kk = std::min(k, vocab_size);
 	const auto compare = [&](int32_t a, int32_t b) {
 		if (masked_row[a] != masked_row[b]) return masked_row[a] > masked_row[b];
@@ -74,12 +73,18 @@ void FsdTopK(const int32_t* masked_row, const uint8_t* mask_bits, int32_t vocab_
 		if (legal_a != legal_b) return legal_a;  // unmasked outranks masked at equal value
 		return a < b;
 	};
-	if (kk < vocab_size) {
-		std::partial_sort(idx.begin(), idx.begin() + kk, idx.end(), compare);
-	} else {
-		std::sort(idx.begin(), idx.end(), compare);
+	for (int32_t i = 0; i < kk; ++i) out_indices[i] = i;
+	// A caller-owned k-element heap keeps its worst retained candidate at the root. This is
+	// O(V log k), O(1) auxiliary storage, and avoids the former full-vocabulary allocation and
+	// partial_sort. The final k-element sort restores the exact published candidate ordering.
+	std::make_heap(out_indices, out_indices + kk, compare);
+	for (int32_t candidate = kk; candidate < vocab_size; ++candidate) {
+		if (!compare(candidate, out_indices[0])) continue;
+		std::pop_heap(out_indices, out_indices + kk, compare);
+		out_indices[kk - 1] = candidate;
+		std::push_heap(out_indices, out_indices + kk, compare);
 	}
-	for (int32_t i = 0; i < kk; ++i) out_indices[i] = idx[static_cast<std::size_t>(i)];
+	std::sort(out_indices, out_indices + kk, compare);
 	for (int32_t i = kk; i < k; ++i) out_indices[i] = -1;  // k > vocab_size: defined, never UB
 }
 
@@ -101,13 +106,41 @@ bool TopKRenormalizeQ15(const int32_t* row, const int32_t* indices, std::size_t 
 		for (std::size_t i = 0; i < k; ++i) out_q15[i] = 0;
 		return false;
 	}
-	std::vector<int64_t> scores(k);
-	for (std::size_t i = 0; i < k; ++i) scores[i] = static_cast<int64_t>(row[indices[i]]);
-	// "Built entirely from the same certified sub-primitives SoftmaxRowQ15 already uses,
-	// restricted to k top-k positions" (plan Sec7.3) -- SoftmaxRowQ15 IS that composition
-	// (ShiftByMax -> IExpConstruct/IExpEvaluate -> Q15 divide); calling it directly at width
-	// k realizes the restriction exactly, with no separate implementation to drift from it.
-	return SoftmaxRowQ15(scores.data(), k, q_ln2, q_b, q_c, out_q15);
+	int64_t row_max = row[indices[0]];
+	for (std::size_t i = 1; i < k; ++i) row_max = std::max(row_max, int64_t{row[indices[i]]});
+	IExpConstruction peak_construction;
+	const IExpDomain peak_domain = IExpConstruct(0, q_ln2, q_b, q_c, &peak_construction);
+	const bool peak_constructed = peak_domain != IExpDomain::kBadQ &&
+	                              peak_domain != IExpDomain::kBadQLn2 &&
+	                              peak_domain != IExpDomain::kBadQB;
+	const int64_t peak = peak_constructed ? IExpEvaluate(peak_construction) : 0;
+	const bool peak_usable = peak >= 1 && peak <= kSoftmaxRowMaxSafeExponent;
+	int64_t total = 0;
+	bool all_well_formed = peak_usable;
+	for (std::size_t i = 0; i < k; ++i) {
+		IExpConstruction construction;
+		const int64_t shifted = static_cast<int64_t>(row[indices[i]]) - row_max;
+		const IExpDomain domain = IExpConstruct(shifted, q_ln2, q_b, q_c, &construction);
+		if (domain == IExpDomain::kBadQ || domain == IExpDomain::kBadQLn2 ||
+		    domain == IExpDomain::kBadQB) {
+			all_well_formed = false;
+			out_q15[i] = 0;
+			continue;
+		}
+		const int64_t value = IExpEvaluate(construction);
+		if (!peak_usable || value < 0 || value > peak) {
+			all_well_formed = false;
+			out_q15[i] = 0;
+			continue;
+		}
+		out_q15[i] = value;
+		total += value;
+	}
+	const int64_t denom = total > 1 ? total : 1;
+	for (std::size_t i = 0; i < k; ++i) {
+		out_q15[i] = (out_q15[i] << kProbFracBits) / denom;
+	}
+	return all_well_formed;
 }
 
 namespace {
@@ -291,6 +324,35 @@ bool ScoreAndSelect(const int32_t* masked_row, const uint8_t* mask_bits, int32_t
 	return true;
 }
 
+bool ScoreAndSelectWithScratch(const int32_t* masked_row, const uint8_t* mask_bits,
+                               int32_t vocab_size, int32_t k, const AntiLmState* anti_lm,
+                               int64_t alpha_q15, int64_t q_ln2, int64_t q_b, int64_t q_c,
+                               int32_t* indices, int64_t* q_theta, int32_t* out_token) {
+	FsdTopK(masked_row, mask_bits, vocab_size, k, indices);
+	if (!TopKRenormalizeQ15(masked_row, indices, static_cast<std::size_t>(k), q_ln2, q_b, q_c,
+	                         q_theta)) {
+		return false;
+	}
+	bool have_best = false;
+	int64_t best_score = 0;
+	int32_t best_token = -1;
+	for (int32_t i = 0; i < k; ++i) {
+		int64_t p_omega = 0;
+		AntiLmPenalize(anti_lm, &indices[i], 1, &p_omega);
+		const int64_t score = MaskBitSet(mask_bits, indices[i])
+		                          ? q_theta[i] - static_cast<int32_t>(
+		                                             (alpha_q15 * p_omega) >> kProbFracBits)
+		                          : INT64_MIN;
+		if (!have_best || score > best_score || (score == best_score && indices[i] < best_token)) {
+			have_best = true;
+			best_score = score;
+			best_token = indices[i];
+		}
+	}
+	*out_token = best_token;
+	return true;
+}
+
 }  // namespace
 
 // Phase C3 (Sec7.5-7.6).
@@ -318,6 +380,22 @@ bool DampedGreedyScoreAndArgmax(const int32_t* masked_row, const uint8_t* mask_b
 	}
 	*out_refused = false;
 	*out_token = sc.best_token;
+	return true;
+}
+
+bool DampedGreedyScoreAndArgmaxWithScratch(
+    const int32_t* masked_row, const uint8_t* mask_bits, int32_t vocab_size, int32_t k,
+    const AntiLmState* anti_lm, int64_t alpha_q15, int64_t q_ln2, int64_t q_b, int64_t q_c,
+    int32_t* indices_scratch, int64_t* q_theta_scratch, int32_t* out_token,
+    bool* out_refused) {
+	if (!KAndVocabInDomain(vocab_size, k) || !AlphaQ15InDomain(alpha_q15)) return false;
+	if (!ScoreAndSelectWithScratch(masked_row, mask_bits, vocab_size, k, anti_lm, alpha_q15,
+	                               q_ln2, q_b, q_c, indices_scratch, q_theta_scratch,
+	                               out_token)) {
+		*out_refused = true;
+		return true;
+	}
+	*out_refused = false;
 	return true;
 }
 

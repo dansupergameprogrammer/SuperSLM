@@ -11,10 +11,19 @@
 //   dim8  Composition                  -- GATE, D-SLM3719  (mask-first ordering, the single
 //                                         legal continuation under a schema)
 #include <algorithm>
+#include <cstdlib>
 
 #include "fixture_common.h"
 
 using namespace t2199fixture;
+
+static int GHotPathAllocations = 0;
+void* operator new(std::size_t size) {
+	++GHotPathAllocations;
+	return std::malloc(size);
+}
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 
 // A small reusable anti-LM: driven with a fixed loop-lock history (LOOP, ALT repeating), the
 // SAME shape Loki's strike-6 probe used, so that p_omega(LOOP) is genuinely nonzero and large
@@ -891,6 +900,38 @@ static void TestM6_RefusalPropagatesThroughPublicEntryPoints() {
 	AntiLmDestroy(alm);
 }
 
+// Release-gate regression for the ABI's damped selector path: real shipped vocabulary width,
+// caller-provided k scratch, and a warm anti-LM. Persistent AntiLmUpdate growth happens before
+// the counter reset; selection itself must perform exactly zero allocations.
+static void TestC1_DampedSelectorScratchPathAllocatesZeroBytesPerToken() {
+	constexpr int32_t V = 151936;
+	constexpr int32_t K = 6;
+	std::vector<int32_t> row(static_cast<std::size_t>(V), -1000000);
+	std::vector<uint8_t> mask((static_cast<std::size_t>(V) + 7) / 8, 0xFF);
+	for (int32_t i = 0; i < K; ++i) row[100 + i] = 1000 - i;
+	AntiLmState* alm = AntiLmCreate(2);
+	AntiLmUpdate(alm, 100);
+	AntiLmUpdate(alm, 101);
+	int64_t q_ln2 = 0, q_b = 0, q_c = 0;
+	CHECK(DeriveDefaultScaleConstants(&q_ln2, &q_b, &q_c));
+	int32_t indices[K]{};
+	int64_t q_theta[K]{};
+	int32_t token = -1;
+	bool refused = false;
+	GHotPathAllocations = 0;
+	const bool ok = DampedGreedyScoreAndArgmaxWithScratch(
+	    row.data(), mask.data(), V, K, alm, 65536, q_ln2, q_b, q_c, indices, q_theta, &token,
+	    &refused);
+	const int allocations = GHotPathAllocations;
+	CHECK(ok);
+	CHECK(!refused);
+	CHECK(token >= 100 && token < 100 + K);
+	CHECK_MSG(allocations == 0,
+	          "allocation-free damped selector made %d allocation(s) at vocab_size=%d, k=%d",
+	          allocations, V, K);
+	AntiLmDestroy(alm);
+}
+
 int main() {
 	TestC1_DomainRejection_BothEntryPoints_VocabAndKOversizedShapes();
 	TestDim7_MaskedNeverSelected_HighAlphaOverwhelmsLegalCandidate();
@@ -903,6 +944,7 @@ int main() {
 	TestS1S6_PTopkQ15_ExactIntegerAndHonestDenominator();
 	TestS7_PomspreadOverAllK_MaskedOutlierDiscriminates();
 	TestM6_RefusalPropagatesThroughPublicEntryPoints();
+	TestC1_DampedSelectorScratchPathAllocatesZeroBytesPerToken();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

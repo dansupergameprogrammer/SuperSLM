@@ -103,6 +103,10 @@ struct DampedGreedyValidationParams {
                                                int32_t vocab_size) noexcept;
 
 // --- D3: the free-text CLI/RunGreedyDecodeLoop entry point (plan Sec8 D3, forward_sites.cpp) -
+// Same caller-owned-buffer contract as RunGreedyDecodeLoop: prompt_len >= 1; workspace points
+// to the RunLayerLoop-required bytes; and out_tokens/out_logit_rows provide
+// out_tokens_capacity >= max_new_tokens elements/rows. Host token ids are validated before use,
+// and successful/rejected output mutation follows RunGreedyDecodeLoop's documented contract.
 superslm::SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
     superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
     uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim, size_t num_key_value_heads,

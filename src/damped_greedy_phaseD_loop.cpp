@@ -121,7 +121,7 @@ SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
 		// same "no dedicated status" domain-rejection convention as the !ok check below rather
 		// than asserting, since a future relaxation of that precondition should fail defined,
 		// not crash.
-		if (!antilm) return SslmForwardStatus::TokenIdOutOfRange;
+		if (!antilm) return SslmForwardStatus::InvalidDecodeParams;
 	}
 	auto DestroyAntilm = [&] {
 		if (antilm) superslm::AntiLmDestroy(antilm);
@@ -167,7 +167,7 @@ SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
 			    q_ln2, q_b, q_c, &produced_dg, &refused);
 			if (!ok) {
 				DestroyAntilm();
-				return SslmForwardStatus::TokenIdOutOfRange;  // domain rejection, no dedicated status
+				return SslmForwardStatus::InvalidDecodeParams;
 			}
 			if (refused) {
 				DestroyAntilm();

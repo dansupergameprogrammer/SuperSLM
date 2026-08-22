@@ -77,6 +77,10 @@ sslm_status sslm_seq_create(sslm_model model, sslm_kv_pool* pool, sslm_seq* out)
 sslm_status sslm_seq_release(sslm_seq seq);
 sslm_status sslm_seq_reset(sslm_seq seq);
 sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix);
+/* Save emits the current SSB3 format. Restore accepts SSB3 and the shipped SSB2 predecessor;
+ * SSB2's absent damped anti-LM state is restored as empty. `n` is buffer capacity and may exceed
+ * the encoded blob size (including the normal sslm_seq_state_size allocation flow). Malformed
+ * lengths, history longer than the blob's saved context, and unrecognized magic reject. */
 sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n);
 sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, const void* buf, size_t n,
                               sslm_seq* out);

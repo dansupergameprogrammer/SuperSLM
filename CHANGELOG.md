@@ -31,6 +31,10 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   parameter struct. Damped state participates in reset, save/restore, prefix
   adoption, schema masking, adapter attachment, digesting, and concurrent
   teardown contracts.
+- Sequence saves now use `SSB3` to carry damped anti-LM history while restore
+  remains backward-compatible with shipped `SSB2` blobs. Restore accepts
+  state-size-capacity buffers with trailing bytes and rejects history longer
+  than the saved context.
 - The production converter, CLI, C ABI initializer, independent greedy oracle,
   Phase D suite, and the previously link-only T-2138 ABI suite are now wired
   into release verification.

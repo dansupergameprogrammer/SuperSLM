@@ -6,16 +6,26 @@ Operating point: `alpha=2`, `n=2`, `k=6`, `alpha_q15=65536`, `q=(493, 964, 48736
 
 ## Full-generation production result
 
-| Cell | Greedy locks | Damped locks | Reach (actual / B0) | Greedy rep-3 | Damped rep-3 | Paired delta +/- SE | Greedy cap/EOS | Damped cap/EOS | Effective ms/token ratio |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 05_100 | 3 | 0 | 41/48 / 41/48 | 0.09063 | 0.00172 | -0.08890 +/- 0.02786 | 26/22 | 22/26 | 1.285x |
-| 05_300 | 3 | 0 | 41/48 / 41/48 | 0.13959 | 0.00368 | -0.13591 +/- 0.03432 | 9/39 | 8/40 | 1.225x |
-| 15_100 | 0 | 0 | 43/48 / 43/48 | 0.01873 | 0.00087 | -0.01786 +/- 0.00906 | 21/27 | 19/29 | 1.252x |
-| 15_300 | 0 | 0 | 43/48 / 43/48 | 0.04139 | 0.00196 | -0.03943 +/- 0.01632 | 11/37 | 10/38 | 1.227x |
+| Cell | Greedy locks | Damped locks | Reach (actual / B0) | Greedy rep-3 | Damped rep-3 | Paired delta +/- SE | Greedy cap/EOS | Damped cap/EOS |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 05_100 | 3 | 0 | 41/48 / 41/48 | 0.09063 | 0.00172 | -0.08890 +/- 0.02786 | 26/22 | 22/26 |
+| 05_300 | 3 | 0 | 41/48 / 41/48 | 0.13959 | 0.00368 | -0.13591 +/- 0.03432 | 9/39 | 8/40 |
+| 15_100 | 0 | 0 | 43/48 / 43/48 | 0.01873 | 0.00087 | -0.01786 +/- 0.00906 | 21/27 | 19/29 |
+| 15_300 | 0 | 0 | 43/48 / 43/48 | 0.04139 | 0.00196 | -0.03943 +/- 0.01632 | 11/37 | 10/38 |
 
-`cap/EOS` reports generations that reached the token ceiling / emitted a stop token. The effective wall-time ratio uses fresh paired greedy captures from the same executable and hardware, but includes model loading and different generated lengths, so it is an end-to-end observation, not an isolated selector-cost measurement. Phase D2a separately measures the wired selector against real forward cost.
+`cap/EOS` reports generations that reached the token ceiling / emitted a stop token.
 
-Across the four fresh paired cells, damped/greedy wall time was 1.112x to 1.233x per 48-generation cell and 1.225x to 1.285x per generated token. This is a measured end-to-end harness cost, not attributed solely to selection. The final Phase D2a microbenchmark passed 29 checks per run. Three uncontended runs per real model put the complete selector at 0.3589%–0.3673% of forward cost on Qwen2.5 0.5B and 0.1221%–0.1305% on Qwen2.5 1.5B; the isolated renormalizer was 0.0002%–0.0007%. The two measurements have different scopes; Phase E does not claim that the microbenchmark explains the full end-to-end delta.
+The original Phase E arms were captured in separate runs and produced different generation
+lengths. Their raw timings remain in the JSON evidence, but the resulting 1.112x–1.233x
+per-cell and 1.225x–1.285x per-token ratios are not valid decoder-cost measurements and are not
+published as such.
+
+The release-candidate follow-up fixes the workload: the same DGC1 artifact, prompt, executable,
+and exactly 30 generated tokens, with arm order alternating across six pairs. Greedy averaged
+4.276667 seconds and damped greedy 4.277000 seconds, a 1.000078x ratio; the 0.333 ms mean
+difference is below the CLI timer's 1 ms reporting resolution. The real 0.5B Phase D2a run put
+the complete allocation-free selector at 0.2453%–0.2461% of one forward step. Evidence:
+[`t2199-controlled-cost.json`](t2199-controlled-cost.json).
 
 Production matched the B0 replay reach and locked-row ceiling in all four cells. The two 100-token cells were rerun after the ruling and matched their B0 token streams exactly: 0 mismatches across 96 generations. Greedy capture independently matched the frozen T-2193 baseline in all 192 model/length/prompt cases.
 

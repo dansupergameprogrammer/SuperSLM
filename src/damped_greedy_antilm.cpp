@@ -19,15 +19,42 @@ namespace superslm {
 
 namespace {
 
-// ---- a small hash for a variable-length token-context key --------------------------
+struct ContextView {
+	const int32_t* data;
+	std::size_t size;
+};
+
+// Transparent hash/equality let hot-path lookups use a non-owning suffix view. A vector is
+// allocated only when a genuinely new context becomes persistent table state.
 struct VecHash {
-	std::size_t operator()(const std::vector<int32_t>& v) const noexcept {
-		std::size_t h = 1469598103934665603ull;  // FNV-1a offset basis
-		for (int32_t t : v) {
-			h ^= static_cast<std::size_t>(static_cast<uint32_t>(t));
-			h *= 1099511628211ull;  // FNV-1a prime
+	using is_transparent = void;
+	std::size_t operator()(ContextView v) const noexcept {
+		std::size_t h = 1469598103934665603ull;
+		for (std::size_t i = 0; i < v.size; ++i) {
+			h ^= static_cast<std::size_t>(static_cast<uint32_t>(v.data[i]));
+			h *= 1099511628211ull;
 		}
 		return h;
+	}
+	std::size_t operator()(const std::vector<int32_t>& v) const noexcept {
+		return (*this)(ContextView{v.data(), v.size()});
+	}
+};
+
+struct VecEq {
+	using is_transparent = void;
+	bool operator()(ContextView a, ContextView b) const noexcept {
+		if (a.size != b.size) return false;
+		return a.size == 0 || std::equal(a.data, a.data + a.size, b.data);
+	}
+	bool operator()(const std::vector<int32_t>& a, const std::vector<int32_t>& b) const noexcept {
+		return (*this)(ContextView{a.data(), a.size()}, ContextView{b.data(), b.size()});
+	}
+	bool operator()(const std::vector<int32_t>& a, ContextView b) const noexcept {
+		return (*this)(ContextView{a.data(), a.size()}, b);
+	}
+	bool operator()(ContextView a, const std::vector<int32_t>& b) const noexcept {
+		return (*this)(a, ContextView{b.data(), b.size()});
 	}
 };
 
@@ -73,7 +100,7 @@ public:
 	// tables_[i-1] holds order i's context -> {candidate counts, total}. Exact-key lookup
 	// only: every read below is a direct `find`, never a traversal of the map's own bucket
 	// order (Sec7.2's own determinism argument).
-	std::vector<std::unordered_map<std::vector<int32_t>, ContextEntry, VecHash>> tables_;
+	std::vector<std::unordered_map<std::vector<int32_t>, ContextEntry, VecHash, VecEq>> tables_;
 	std::vector<int32_t> history_;
 	std::size_t retained_bytes_ = 0;
 
@@ -105,13 +132,16 @@ void AntiLmUpdate(AntiLmState* state, int32_t token) {
 	for (int order = 1; order <= state->max_order(); ++order) {
 		const std::size_t ctx_len = static_cast<std::size_t>(order - 1);
 		if (ctx_len > hist_size) continue;  // not enough history yet to form this order's context
-		std::vector<int32_t> ctx(state->history_.end() - static_cast<long>(ctx_len),
-		                          state->history_.end());
+		const ContextView ctx_view{ctx_len ? state->history_.data() + hist_size - ctx_len : nullptr,
+		                              ctx_len};
 		auto& table = state->tables_[static_cast<size_t>(order - 1)];
-		auto it = table.find(ctx);
+		auto it = table.find(ctx_view);
 		if (it == table.end()) {
-			state->retained_bytes_ += kContextBaseOverhead + ctx.size() * kContextPerTokenOverhead;
-			it = table.emplace(std::move(ctx), AntiLmState::ContextEntry{}).first;
+			std::vector<int32_t> persistent_ctx(
+			    state->history_.end() - static_cast<long>(ctx_len), state->history_.end());
+			state->retained_bytes_ +=
+			    kContextBaseOverhead + persistent_ctx.size() * kContextPerTokenOverhead;
+			it = table.emplace(std::move(persistent_ctx), AntiLmState::ContextEntry{}).first;
 		}
 		auto& entry = it->second;
 		if (entry.counts.find(token) == entry.counts.end()) {
@@ -144,61 +174,57 @@ void AntiLmPenalize(const AntiLmState* state, const int32_t* candidates, std::si
 	const int max_order = state->max_order();
 	const std::size_t hist_size = state->history_.size();
 
-	// One lookup per order (query context is state's own current history, shared by every
-	// candidate this call), never per candidate -- exact-key lookup only.
-	struct ActiveOrder {
-		const AntiLmState::ContextEntry* entry;
-		int order;  // 1-based
-	};
-	std::vector<ActiveOrder> active;
-	active.reserve(static_cast<size_t>(max_order));
+	// First pass finds the active orders and their exact normalization denominator. The
+	// second pass repeats the exact-key lookups and mixes directly into caller storage. This
+	// avoids the former ActiveOrder/raw-weight/normalized-weight heap vectors on every token.
+	int active_count = 0;
+	int64_t raw_sum = 0;
 	for (int order = 1; order <= max_order; ++order) {
 		const std::size_t ctx_len = static_cast<std::size_t>(order - 1);
 		if (ctx_len > hist_size) continue;
-		std::vector<int32_t> ctx(state->history_.end() - static_cast<long>(ctx_len),
-		                          state->history_.end());
+		const ContextView ctx{ctx_len ? state->history_.data() + hist_size - ctx_len : nullptr,
+		                      ctx_len};
 		const auto& table = state->tables_[static_cast<size_t>(order - 1)];
 		auto it = table.find(ctx);
 		if (it == table.end()) continue;  // context never observed -- order excluded, not zeroed
-		active.push_back(ActiveOrder{&it->second, order});
+		++active_count;
+		raw_sum += Q15Pow(kBetaQ15, max_order - order);
 	}
 
-	if (active.empty()) {
+	if (active_count == 0) {
 		for (std::size_t c = 0; c < k; ++c) out_p_omega_q15[c] = 0;
 		return;
 	}
 
-	// Normalized mixing weights over the ACTIVE orders only (Sec7.2's own "normalized before
-	// mixing... a genuine convex combination"), exact-sum-to-2^15 via largest-remainder: floor
-	// every weight but the last active order, then let the last absorb the residual so the
-	// weights sum to exactly kProbFracBits's own 1<<15 regardless of rounding.
-	std::vector<int64_t> raw_w(active.size());
-	int64_t raw_sum = 0;
-	for (std::size_t j = 0; j < active.size(); ++j) {
-		raw_w[j] = Q15Pow(kBetaQ15, max_order - active[j].order);
-		raw_sum += raw_w[j];
-	}
-	std::vector<int64_t> norm_w(active.size());
-	int64_t norm_sum = 0;
-	for (std::size_t j = 0; j + 1 < active.size(); ++j) {
-		norm_w[j] = (raw_w[j] << kProbFracBits) / raw_sum;
-		norm_sum += norm_w[j];
-	}
-	norm_w.back() = (int64_t{1} << kProbFracBits) - norm_sum;
-
-	for (std::size_t c = 0; c < k; ++c) {
-		const int32_t cand = candidates[c];
-		int64_t mixed = 0;
-		for (std::size_t j = 0; j < active.size(); ++j) {
-			const auto& entry = *active[j].entry;
-			const auto found = entry.counts.find(cand);
-			const int64_t count = (found == entry.counts.end()) ? 0 : found->second;
-			const int64_t ratio_q15 = (count << kProbFracBits) / entry.total;  // total >= 1 always
-			mixed += (norm_w[j] * ratio_q15) >> kProbFracBits;
+	for (std::size_t c = 0; c < k; ++c) out_p_omega_q15[c] = 0;
+	int active_index = 0;
+	int64_t normalized_sum = 0;
+	for (int order = 1; order <= max_order; ++order) {
+		const std::size_t ctx_len = static_cast<std::size_t>(order - 1);
+		if (ctx_len > hist_size) continue;
+		const ContextView ctx{ctx_len ? state->history_.data() + hist_size - ctx_len : nullptr,
+		                      ctx_len};
+		const auto& table = state->tables_[static_cast<size_t>(order - 1)];
+		const auto it = table.find(ctx);
+		if (it == table.end()) continue;
+		++active_index;
+		const int64_t normalized_weight =
+		    (active_index == active_count)
+		        ? ((int64_t{1} << kProbFracBits) - normalized_sum)
+		        : ((Q15Pow(kBetaQ15, max_order - order) << kProbFracBits) / raw_sum);
+		normalized_sum += normalized_weight;
+		for (std::size_t c = 0; c < k; ++c) {
+			const auto found = it->second.counts.find(candidates[c]);
+			const int64_t count = (found == it->second.counts.end()) ? 0 : found->second;
+			const int64_t ratio_q15 = (count << kProbFracBits) / it->second.total;
+			out_p_omega_q15[c] += (normalized_weight * ratio_q15) >> kProbFracBits;
 		}
-		if (mixed < 0) mixed = 0;
-		if (mixed > (int64_t{1} << kProbFracBits)) mixed = int64_t{1} << kProbFracBits;
-		out_p_omega_q15[c] = mixed;
+	}
+	for (std::size_t c = 0; c < k; ++c) {
+		if (out_p_omega_q15[c] < 0) out_p_omega_q15[c] = 0;
+		if (out_p_omega_q15[c] > (int64_t{1} << kProbFracBits)) {
+			out_p_omega_q15[c] = int64_t{1} << kProbFracBits;
+		}
 	}
 }
 
