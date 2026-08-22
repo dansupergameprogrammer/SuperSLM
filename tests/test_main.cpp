@@ -142,6 +142,7 @@ static void TestKnownSectionTypes() {
 	CHECK(IsKnownSectionType(static_cast<uint32_t>(SslmSectionType::Config)));
 	CHECK(IsKnownSectionType(static_cast<uint32_t>(SslmSectionType::Weights)));
 	CHECK(IsKnownSectionType(static_cast<uint32_t>(SslmSectionType::GoldenHashes)));
+	CHECK(IsKnownSectionType(static_cast<uint32_t>(SslmSectionType::DampedGreedyConstants)));
 	CHECK(!IsKnownSectionType(13u));   // gap in the enum (12 is now SigmoidLut, v2)
 	CHECK(!IsKnownSectionType(9999u)); // outside the set
 }
@@ -628,6 +629,29 @@ static void TestAcceptsEmptySection() {
 	if (view) {
 		CHECK(view->byte_size == 0);
 		CHECK(view->elem_count == 0);
+	}
+}
+
+static void TestAcceptsDampedGreedyConstantsSection() {
+	const std::vector<uint8_t> constants = {'D', 'G', 'C', '1', 1, 0, 0, 0, 2, 0, 0, 0};
+	auto built = BuildArtifact(
+	    {MakeConfigSection(), MakeSigmoidLutSection(),
+	     MakeSection(SslmSectionType::DampedGreedyConstants, SslmDtype::Raw, constants)});
+	PutU32(built.bytes, 16, kDampedGreedyArtifactConstantsFlag);
+	RecomputeIntegrityHash(built.bytes);
+
+	SslmArtifact out;
+	SslmError err;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), out, &err);
+	CHECK_MSG(status == SslmStatus::Ok, "got %s", SslmStatusName(status));
+	CHECK(out.Ok());
+	CHECK(out.DampedGreedyConstantsFlagSet());
+	const SslmSectionView* view = out.Section(SslmSectionType::DampedGreedyConstants);
+	CHECK(view != nullptr);
+	if (view) {
+		CHECK(view->dtype == SslmDtype::Raw);
+		CHECK(view->byte_size == constants.size());
+		CHECK(std::memcmp(view->data, constants.data(), constants.size()) == 0);
 	}
 }
 
@@ -25966,6 +25990,7 @@ int main(int argc, char** argv) {
 	TestRejectsMissingConfigSection();
 	TestRejectsIntegrityMismatch();
 	TestAcceptsEmptySection();
+	TestAcceptsDampedGreedyConstantsSection();
 	TestAcceptsMaximumAlignment();
 	TestAcceptsSectionsInNonAscendingOffsetOrder();
 	TestAcceptsReservedSectionTypeStructurally();
