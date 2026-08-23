@@ -308,187 +308,28 @@ enum class GpuLayerLoopGuard : int {
 	kCount
 };
 
-// The device-observable residency cache was missing. Content
-// correctness alone (a byte-for-byte match against the cached row) cannot
-// distinguish "read from the resident DEFAULT-heap buffer" from "read from a
-// plain upload-heap buffer holding the identical bytes" -- both would pass a
-// value-comparison pin identically. Set internally by `RunLayerLoopGpu`'s own
-// weight-residency decision, every call: `true` iff that call's own packed
-// row matched `g_resident_weights`' cached content and the DEFAULT-heap
-// upload/copy/transition sequence was skipped entirely (a cache hit); `false`
-// on a cache miss (a fresh upload+copy ran, whether because the content
-// changed or because this is the first call). Read back by the caller AFTER
-// `RunLayerLoopGpu` returns -- this is the pin round's own observable to
-// consume, not built as a test cell here (Brunel does not author tests).
+// True iff the most recent RunLayerLoopGpu call skipped a weight upload because its packed row
+// already matched the resident cache (a cache hit); false on a cache miss. The
+// device-observable residency cache exists because content correctness alone (a byte-for-byte
+// match against the cached row) cannot distinguish "read from the resident DEFAULT-heap buffer"
+// from "read from a plain upload-heap buffer holding the identical bytes" -- both would pass a
+// value-comparison pin identically. Set internally by RunLayerLoopGpu's own weight-residency
+// decision; read back by the caller after RunLayerLoopGpu returns.
 //
-// "every call" above is now true of a REJECTING call too, corrected
-// from a code defect (not a doc defect) this round found and fixed --
-// `RunLayerLoopGpu` used to leave this flag holding the PREVIOUS call's
-// value across any of its eleven rejecting return paths, reproduced by
-// execution reading back a stale, sometimes-wrong `skipped` value after a
-// guard-rejected call. A rejecting call makes no weight-residency decision
-// at all, so it now reads `false` ("no upload was skipped") on every one of
-// those eleven paths -- set at function entry, before the first guard.
+// Every return path that resolves the call BEFORE that decision runs reads false, by
+// construction (the function-entry reset, never overwritten on that path): the nine-guard
+// ladder, the two device-capability rejections, and every return inside the recording window's
+// own catch, twenty-five paths in all. Every path that resolves the call AFTER the decision
+// reads exactly what the decision decided (true on a cache hit, false on a miss), whether the
+// call's own final status is Ok or one of DecodeStickyTag's thirteen rejecting statuses -- the
+// twenty-five before them, alike, thirty-one paths' own destination in total.
 //
-// CORRECTED 2026-08-14: "eleven"
-// above undercounted by one -- the recording-window catch (`superslm_gpu.cpp`,
-// added the same round this paragraph was written) is a TWELFTH
-// rejecting return path, and it was not among the eleven this paragraph's
-// own fix touched: a cache-hit call that throws inside the try left this
-// flag reading the call's own stale `true` even though the catch had just
-// invalidated the cache it describes. Now set `false` at the catch site too,
-// beside the cache invalidation -- every one of the now-TWELVE rejecting
-// paths reads `false`.
-//
-// CORRECTED 2026-08-14 (line citations
-// refreshed twice, across several same-day commits that each shifted the lines
-// they pointed at; CONVERTED, from line-number pointers to SYMBOL/ANCHOR
-// references -- a line number drifts on any unrelated edit that shifts source;
-// a symbol name or a named anchor comment does not drift until the symbol
-// itself is renamed, which `check_symbol_integrity`
-// (`tests/ci/check_gpu_guard_status_parity.py`) already catches. The CLAIM
-// below is unchanged from its own original statement, only HOW it points at
-// `superslm_gpu.cpp` has changed twice, first refreshed, now removed as a
-// class): "twelve" above is
-// also wrong -- the correction above counted the function's rejecting
-// RETURNS (its guard ladder), not its rejecting return PATHS, and never
-// re-derived the number from the function itself. Enumerated fresh, at
-// source, every rejecting `return superslm::SslmForwardStatus::` (or
-// return-via-ternary) `RunLayerLoopGpu` has: eleven in the nine-guard
-// ladder (`InvalidLayerBudget` (`superslm_gpu.cpp`), `InvalidContextCap`
-// (`superslm_gpu.cpp`), `HeadDimGeometryMismatch` (`superslm_gpu.cpp`),
-// `KvHeadGeometryMismatch` (`superslm_gpu.cpp`), `WorkspaceTooSmall`
-// (`superslm_gpu.cpp`), `InvalidHiddenCodes` (`superslm_gpu.cpp`),
-// `SequenceAlreadyComplete` (`superslm_gpu.cpp`), `PositionOverCap`
-// (`superslm_gpu.cpp`), `KvCapacityExhausted` (`superslm_gpu.cpp`) --
-// eleven RETURN STATEMENTS realizing nine distinct guards, two
-// of them, `InvalidContextCap`/`WorkspaceTooSmall`, each with two return
-// sites); two device-capability rejections below the ladder (the
-// `dev.available` (`superslm_gpu.cpp`) check, the sub-Tier-3
-// `MapModelGpuResidencyTierCheck` (`superslm_gpu.cpp`)
-// check, both `KvPrecisionUnsupported`); and the recording-window catch
-// itself (`device_removed_reason` (`superslm_gpu.cpp`), one return statement, a ternary choosing between
-// `GpuDeviceRemoved`/`GpuAllocationFailed`). **Fourteen**, not twelve --
-// CORRECTED AGAIN below: fourteen is also short by one.
-// `g_last_weight_upload_was_skipped`'s own FOUR write sites (corrected from
-// "three" in the same sentence that listed four citations --
-// the static init (`g_last_weight_upload_was_skipped` (`superslm_gpu.cpp`)),
-// the function-entry write anchored
-// `lwuws_write_function_entry` (`superslm_gpu.cpp`), the residency-decision
-// write (`weights_resident` (`superslm_gpu.cpp`)), the catch's own write
-// anchored `lwuws_write_catch` (`superslm_gpu.cpp`)) still cover all fourteen of THIS
-// paragraph's own paths correctly -- the residency-decision write is the only conditional write
-// and it sits below both device-capability rejections, so those two paths read the
-// entry-set `false` unchanged; this correction is to the COUNT, not to the
-// code, which was already right as far as this paragraph's own scope went.
-// The `!dev.available`/Tier-3 half of this claim is derived by inspection
-// of the write sites, not executed -- forcing either condition is outside
-// what this project's own test harness can do on real hardware.
-//
-// CORRECTED 2026-08-14: "fourteen" above
-// is short by one, and -- unlike the three corrections before it -- the
-// property being counted is FALSE, not merely mis-numbered, so this
-// correction does not just renumber it. `RunLayerLoopGpu`'s own TERMINAL
-// statement, `return DecodeStickyTag(sticky_tag);` (`DecodeStickyTag`
-// (`superslm_gpu.cpp`)),
-// is neither a ladder return nor the catch's ternary -- it is a FUNCTION
-// CALL whose result is returned directly, and `DecodeStickyTag` (`superslm_gpu.cpp`)
-// maps the device's own sticky tag to fourteen statuses, THIRTEEN of them
-// rejecting (`ChainInputOutOfDomain`, `RopeTableTensorMissing`, and eleven
-// more -- only tag 0, `Ok`, is non-rejecting). That is a FIFTEENTH rejecting
-// return path, it is not hypothetical, and this suite already drives it:
-// `TestT2053_Item3_LastWeightUploadWasSkipped`'s own call 3 rejects through
-// exactly this path (`ChainInputOutOfDomain`, a real content-mutation
-// fixture, not an injected fault) -- **executed and measured, that call
-// reads `LastWeightUploadWasSkipped() == true`.**
-//
-// This falsifies the property every version of this paragraph has stated
-// previously: "every rejecting path reads `false`." On the sticky-tag
-// path the upload genuinely WAS skipped (the call was a real cache hit;
-// the rejection happens deep inside the per-layer dispatch, after the
-// weight-residency decision already ran and read `true`), so `true` is the
-// HONEST answer and the accessor's own primary contract --
-// `"true iff this call's own upload was skipped"` -- is satisfied on this
-// path. Making this path read `false` would require lying about a skipped
-// upload; that is not available as a fix. What changes is the SENTENCE, to
-// the smaller promise that is actually true, per `StandardsDocument.md`
-// §5.6:
-//
-// CURRENT (2026-08-19, T-2195 round; `tests/ci/check_gpu_guard_status_parity.py`'s own
-// `derive_lwuws_before_decision_count`/`derive_lwuws_after_decision_count` are what this count is
-// checked against, not restated by hand -- this paragraph states the number that check currently
-// derives, and the check is what a future reader trusts if the two ever disagree, per this
-// project's own append-only/single-current-statement discipline; three same-day superseded
-// derivations of this count -- T-2184's move to three functions, T-2189 finding 6's tail
-// containment on `SubmitOneSubChunkToFullDepthForG5Bridge`, and T-2192's own split of that tail
-// catch's single return into three -- are git history, not restated here):
-//
-// `SubmitOneSubChunkToFullDepthForG5Bridge` (`superslm_gpu.cpp`) calls
-// `PrepareGpuLayerLoopChunkOpenState` for its own chunk-open (the SAME ladder/device-capability
-// region the "before" count already reads, not duplicated) and carries four catch clauses of its
-// own: its recording-body pair (`GpuGemmGroupArithmeticError`, `std::runtime_error`), and its tail
-// pair (`std::bad_alloc`, `std::runtime_error`) guarding `Close()`/`ExecuteCommandLists`/`Signal()`/
-// the `GpuLayerLoopInFlight` allocation -- the tail `runtime_error` clause alone contributes three
-// return statements (a fault before the command list reaches Closed retries `Close()` and returns
-// one of two paths; a fault after `ExecuteCommandLists` retries `Signal()` at a freshly minted fence
-// value and falls through to a third), so this one function contributes 1 + 1 + 1 + 3 = 6 "before"
-// returns. `RunLayerLoopGpuSubmit` (`superslm_gpu.cpp`) carries the identical shape as of this
-// round: its own pre-existing recording-body pair (`GpuGemmGroupArithmeticError`,
-// `std::runtime_error`, 2 returns, unchanged) plus a NEW tail pair
-// (`std::bad_alloc`, `std::runtime_error`) added this round (T-2195 remedy S1's class sweep,
-// `Claude/Poirot/1381076-t2195-t2189-closing-confirmation.md` Observation O1) closing the identical
-// gap T-2189 finding 6 closed on the sibling -- its own tail `runtime_error` clause contributing the
-// same three-return shape, for 2 + 1 + 3 = 6 "before" returns. Two functions, six "before" returns
-// each, twelve catch-clause-return total, plus the thirteen ladder/device-capability terms this
-// paragraph's own opening already counts, for TWENTY-FIVE "before" paths in total.
-//
-// **The true contract, stated precisely rather than as a path count:**
-// `LastWeightUploadWasSkipped()` reflects THIS CALL's own weight-residency
-// decision. It reads `false` on every path that returns BEFORE that
-// decision runs (the `weights_resident` write above) -- the nine-guard ladder's own eleven
-// returns, the two device-capability rejections, and the recording-window catch, twenty-five
-// paths in all (the recording window carries EIGHT catch clauses across two functions, both now
-// the identical shape: `RunLayerLoopGpuSubmit`'s own recording-body pair
-// (`GpuGemmGroupArithmeticError`/`std::runtime_error`) plus its own tail pair
-// (`std::bad_alloc`/`std::runtime_error`, T-2195 remedy S1's class sweep), and
-// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own identical recording-body pair plus tail pair
-// (the tail pair, T-2189 finding 6) -- all eight call the shared cache-invalidation helper before
-// every one of their own returns, but each function's own tail `runtime_error` clause RETURNS
-// three times, not once (T-2192's own T1/T2 remedy, mirrored onto `RunLayerLoopGpuSubmit`'s tail
-// this round), for TWELVE returns across the eight clauses, none of which ever reached a residency
-// decision to report.
-// It reads exactly `weights_resident` (`true` on a cache hit, `false` on a
-// miss) on every path that returns AFTER the decision -- **re-derived after
-// this file's own (B5) split of the single function this paragraph originally
-// described into `RunLayerLoopGpuSubmit` (the guard ladder, the residency
-// decision, and everything above) and `RunLayerLoopGpuFinish` (the fence-
-// wait and the readback), then again (T-2184) for `SubmitOneSubChunkToFullDepthForG5Bridge`'s own
-// terminal success return -- the "after" population now has six members
-// instead of one, not because any NEW decision-making was added, but
-// because the single old "keep going toward the terminal decode" fall-
-// through is now six separate real return statements across three
-// functions: `RunLayerLoopGpuSubmit`'s own async-submission-succeeded
-// return (`return ...::Ok;`, handing the caller an in-flight token),
-// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own identical terminal `Ok`
-// return, and `RunLayerLoopGpuFinish`'s own four -- the non-blocking-poll-not-ready
-// return, the caller-misuse null-token rejection, the terminal
-// `return DecodeStickyTag(sticky_tag);` the sticky-tag-decoded path always
-// ended on, and `RunLayerLoopGpuFinish`'s own catch clause (added the same
-// section this paragraph documents, after a real device fault discovered
-// DURING the wait/readback -- not during Submit's own recording -- was
-// found escaping this function as an uncaught exception instead of the
-// defined `GpuDeviceRemoved`/`GpuAllocationFailed` channel design Sec9
-// promises; StandardsDocument.md Sec5.4, reproduced by execution before
-// being fixed). None of these six re-decides or re-writes the flag --
-// each reads whatever the residency decision already decided -- the six,
-// and the twenty-five before them, alike, thirty-one paths' own destination in
-// total across the three functions, whether the decoded
-// status is `Ok` or one of `DecodeStickyTag`'s thirteen rejecting statuses.**
-// A caller that wants "did THIS call's upload run" reads this accessor for
-// exactly that, on every path, correctly; a caller that reads it as "did
-// this call SUCCEED" is reading a different question than the one it
-// answers, on the sticky-tag paths specifically -- named here so a future
-// reader does not have to re-derive it from the code a fourth time.
+// Both counts are derived structurally from source, not restated by hand, by
+// tests/ci/check_gpu_guard_status_parity.py (derive_lwuws_before_decision_count/
+// derive_lwuws_after_decision_count) -- that check is what a future reader trusts if this
+// paragraph and the real code ever disagree, and it is what must be re-run, not this comment
+// hand-edited, whenever RunLayerLoopGpuSubmit/RunLayerLoopGpuFinish/
+// SubmitOneSubChunkToFullDepthForG5Bridge's own return-path shape changes.
 bool LastWeightUploadWasSkipped();
 
 // A per-call timing

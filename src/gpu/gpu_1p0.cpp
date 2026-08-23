@@ -225,6 +225,17 @@ struct SslmGpuModelHandle {
 	// counter gates; none is on record, so none is assumed.
 	std::atomic<int64_t> submitted_sequences{0};
 
+	// T-2243 (M2, design Sec9/plan Sec6.1, D-SLM3965): count of currently-mapped adapters
+	// against this model -- incremented in sslm_gpu_adapter_map, decremented in
+	// sslm_gpu_adapter_unmap. `sslm_gpu_model_unmap` rejects (SSLM_MODEL_HAS_LIVE_ADAPTERS)
+	// while this is nonzero -- an adapter handle retains a raw `model` pointer
+	// (SslmGpuAdapterHandle::model, below) that is never dereferenced today but must not be
+	// left dangling, the same reasoning `live_sequences` already applies to a bound sequence's
+	// own `model` pointer. Plain `int64_t`, not atomic: written only from sslm_gpu_adapter_map/
+	// _unmap, both ordinary single-threaded map/unmap calls -- never the async Submit/Finish
+	// split that motivates `submitted_sequences`' own atomicity above.
+	int64_t live_adapters = 0;
+
 	// T-2113 (B3.5, design Sec5.1's own amendment / Sec5.3a): host-side metadata
 	// sslm_gpu_seq_embed_token needs for its whole lifetime -- NOT new GPU residency (the
 	// design's own explicit "not new residency" clause, Sec5.3a): the embedding matrix
@@ -355,6 +366,16 @@ struct SslmGpuAdapterHandle {
 	// rather than duplicated here since this field mirrors that one's shape exactly.
 	mutable std::atomic<int64_t> submitted_sequences{0};
 
+	// T-2243 (S2, design plan Sec6.1, D-SLM3965): count of sequences currently HOLDING a bind
+	// to this adapter (via sslm_gpu_seq_bind_adapter), whether or not a call is in flight this
+	// instant -- a different lifetime from `submitted_sequences` above, which counts only calls
+	// genuinely in flight. `sslm_gpu_adapter_unmap` rejects (SSLM_ADAPTER_HAS_BOUND_SEQUENCES)
+	// while this is nonzero: an idle-but-bound sequence's NEXT call would read a `bound_adapter`
+	// pointer that has since been freed, the gap this counter closes. `mutable`/`std::atomic`
+	// for the identical reason `submitted_sequences` above is: written through the `const
+	// SslmGpuAdapterHandle*` every bind call receives.
+	mutable std::atomic<int64_t> bound_sequences{0};
+
 	// T-2114 (S2): see SslmGpuModelHandle's own comment on its `destroyed` field, above --
 	// identical disposition here.
 	bool destroyed = false;
@@ -426,6 +447,19 @@ struct SslmGpuSequenceHandle {
 	// `adapter_or_null`), never state a sequence handle otherwise retains, so this is the one
 	// place a submitted call's own adapter binding needs remembering between Submit and Finish.
 	const SslmGpuAdapterHandle* in_flight_adapter = nullptr;
+
+	// T-2243 (S2, design plan Sec6.1): the adapter this sequence is currently bound to, across
+	// calls -- set by `sslm_gpu_seq_bind_adapter`, distinct from `in_flight_adapter` above
+	// (which answers "which adapter did THIS in-flight call use" and is cleared the instant
+	// that call's own window closes). The two G5 bridge choke points
+	// (`DriveGpuSeqToFullDepthForG5Bridge`, `SubmitAdmittedChunkForG5Bridge`) read this field
+	// and pass it into the existing per-call `adapter_or_null` machinery, which populates
+	// `in_flight_adapter` for that call exactly as it does today for a direct caller of
+	// `sslm_decode_step_gpu`. Null on a freshly created or freshly restored handle (a
+	// save/restore blob carries no adapter identity); preserved across `sslm_gpu_seq_reset`
+	// (the same "caller's own standing configuration survives reset" precedent
+	// `bound_schema_index` below already sets).
+	const SslmGpuAdapterHandle* bound_adapter = nullptr;
 
 	// G5-5 (T-2132, Brunel): the GPU-1.0 twin of `sslm_seq_s::bound_schema`/`dfa_walk_state`
 	// (src/sslm_abi.cpp) -- a sibling scalar pair on this wrapper handle, NEVER folded into
@@ -794,6 +828,14 @@ SslmGpuStatus sslm_gpu_model_unmap(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 	if (model->live_sequences > 0) {
 		return SSLM_MODEL_HAS_LIVE_SEQUENCES;
 	}
+	// T-2243 (M2, design plan Sec6.1/Sec10 Phase 2 M2, D-SLM3965): an adapter handle retains a
+	// raw `model` pointer (SslmGpuAdapterHandle::model) that is never dereferenced today but
+	// must not be left dangling -- persistent-liveness, the same reasoning `live_sequences`
+	// above already applies to a bound sequence. Not `SSLM_BUSY`: this condition never drains on
+	// its own, it holds until every mapped adapter is explicitly unmapped.
+	if (model->live_adapters > 0) {
+		return SSLM_MODEL_HAS_LIVE_ADAPTERS;
+	}
 	// T-2114 (M3, Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md): decrement the
 	// handle's OWN stored context (`model->ctx`, set once at map() time) -- now provably equal to
 	// `ctx` by the check above too, kept as `model->ctx` unchanged since every handle already
@@ -950,6 +992,9 @@ SslmGpuStatus sslm_gpu_adapter_map(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 	h->rank = meta.rank;
 
 	ctx->live_handles += 1;
+	// T-2243 (M2, design plan Sec6.1): this model now has one more live mapped adapter --
+	// mirrored by the decrement in sslm_gpu_adapter_unmap, below.
+	model->live_adapters += 1;
 	*out_adapter = h.release();
 	return SSLM_OK;
 }
@@ -999,6 +1044,20 @@ SslmGpuStatus sslm_gpu_adapter_unmap(SslmGpuContext* ctx, SslmGpuAdapterHandle* 
 	if (adapter->submitted_sequences > 0) {
 		return SSLM_BUSY;  // T-2124 (D-SLM3446 P0-3): Busy-precedence, mirroring
 		                    // sslm_gpu_model_unmap's own D-SLM3417 fix above.
+	}
+	// T-2243 (S2, design plan Sec6.1/Sec10 Phase 2 S2(e), D-SLM3965): a sequence that currently
+	// HOLDS a bind to this adapter (`sslm_gpu_seq_bind_adapter`) has a `bound_adapter` pointer
+	// that would be left dangling by this delete, even though no call against it is in flight
+	// this instant -- persistent-liveness, not the transient `submitted_sequences` check above.
+	// Remedy: unbind every sequence still holding this adapter
+	// (`sslm_gpu_seq_bind_adapter(ctx, seq, nullptr)`) and retry.
+	if (adapter->bound_sequences > 0) {
+		return SSLM_ADAPTER_HAS_BOUND_SEQUENCES;
+	}
+	if (adapter->model && adapter->model->live_adapters > 0) {
+		// T-2243 (M2, design plan Sec6.1): the symmetric decrement of adapter_map's own
+		// increment, above.
+		adapter->model->live_adapters -= 1;
 	}
 	if (adapter->ctx->live_handles > 0) {
 		adapter->ctx->live_handles -= 1;
@@ -1194,11 +1253,63 @@ SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
 	if (seq->model && seq->model->live_sequences > 0) {
 		seq->model->live_sequences -= 1;
 	}
+	// T-2243 (S2, design plan Sec6.1): unbind before delete -- without this, every released
+	// sequence that was ever bound leaks one count against its adapter's own `bound_sequences`,
+	// making that adapter permanently un-unmappable even after every sequence that bound it is
+	// gone.
+	if (seq->bound_adapter != nullptr) {
+		seq->bound_adapter->bound_sequences -= 1;
+		seq->bound_adapter = nullptr;
+	}
 	if (seq->ctx->live_handles > 0) {
 		seq->ctx->live_handles -= 1;
 	}
 	seq->destroyed = true;
 	delete seq;
+	return SSLM_OK;
+}
+
+// T-2243 (S2, design plan Sec6.1/Sec10 Phase 2 S2, D-SLM3954/D-SLM3996): see gpu_1p0.h's own
+// header comment on this declaration for the full rule ordering. Rule 2's mid-token predicate
+// deliberately admits BOTH `layer_index == 0` (a fresh/just-finished-token rest) AND
+// `layer_index == model->num_hidden_layers` (a drained, at-rest sequence that has not yet
+// called SslmGpuSeqFinishTokenForG5Bridge -- the shipped public header states this is a valid
+// resting state, gpu_1p0.h's own SslmGpuSeqFinishTokenForG5Bridge precondition comment, and
+// SslmGpuSeqFinishTokenForG5Bridge's own body already tests the SAME two-sided condition,
+// `:2029` above) -- only the OPEN interval `0 < layer_index < num_hidden_layers` is genuinely
+// mid-token.
+SslmGpuStatus sslm_gpu_seq_bind_adapter(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                         const SslmGpuAdapterHandle* adapter_or_null) {
+	if (!ctx || !seq || seq->ctx != ctx) {  // no channel exists for a malformed handle, the same
+	                                          // disposition every other 1.0 entry point uses.
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	SslmGpuModelHandle* model = seq->model;
+	if (model != nullptr && seq->layer_index != 0 && seq->layer_index != model->num_hidden_layers) {
+		return SSLM_BUSY;  // genuinely mid-token -- resolves through the caller's own continued
+		                    // decoding of the token already in progress, not automatically.
+	}
+	if (adapter_or_null != nullptr) {
+		if (adapter_or_null->model != seq->model) {  // bind-time application of the identical
+		                                              // per-call check sslm_decode_step_gpu
+		                                              // already runs.
+			return SSLM_ADAPTER_MODEL_MISMATCH;
+		}
+		if (adapter_or_null->ctx != ctx) {  // a bound adapter mapped against a different context
+		                                      // names a different device.
+			return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+		}
+	}
+	if (seq->bound_adapter == adapter_or_null) {
+		return SSLM_OK;  // idempotent no-op, mirroring sslm_seq_set_adapter's own short-circuit.
+	}
+	if (seq->bound_adapter != nullptr) {
+		seq->bound_adapter->bound_sequences -= 1;
+	}
+	if (adapter_or_null != nullptr) {
+		adapter_or_null->bound_sequences += 1;
+	}
+	seq->bound_adapter = adapter_or_null;
 	return SSLM_OK;
 }
 
@@ -1675,6 +1786,18 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, in
 	const superslm::SslmForwardStatus decoded = superslm_gpu::RunLayerLoopGpuFinish(
 	    seq->in_flight, seq->live_state, seq->host_kv_mirror.data(), block, &ready);
 	if (!ready) {
+		// T-2243 (O2, Mendeleev F-5, plan Sec10 Phase 2 O2): RunLayerLoopGpuFinish's own
+		// `!inflight` guard (its own header comment: "caller error: no live token") ALSO
+		// reports `*out_ready=0` -- indistinguishable, before this fix, from the ordinary
+		// non-blocking-poll-not-ready-yet case immediately below, which silently discarded
+		// `decoded` on every path through here. `decoded != Ok` on this branch is never the
+		// ordinary poll case (an unsignaled fence reports `Ok`, not a rejection), so it is
+		// surfaced through `out_status` instead of the silent SSLM_OK/*out_ready=0 this call
+		// used to return unconditionally.
+		if (decoded != superslm::SslmForwardStatus::Ok) {
+			if (out_status) *out_status = MapDecodedStatusToGpuStatus(decoded);
+			return SSLM_OK;
+		}
 		// Still Submitted -- a non-blocking poll against an unsignaled fence, design
 		// Sec4.2's own "no state change" case. `seq->in_flight` is untouched by Finish
 		// on this path (still owned by this handle, still pollable next call).
@@ -1757,6 +1880,21 @@ SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 	                                                       // T-2124 (D-SLM3446 P1-4):
 	                                                       // `model->ctx != ctx`.
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	// T-2243 (C1, design plan Sec8/Sec10 Phase 2 C1, D-SLM3991): a sibling sequence on this SAME
+	// model with an unfenced, in-flight submission (`model->submitted_sequences > 0`) has
+	// already recorded a command list that reads this model's own resident buffers and has not
+	// yet fenced -- restoring a fresh sequence proceeds to allocate and upload a NEW K/V buffer
+	// against the identical device without waiting for that fence, a real ordering hazard on
+	// the shared device/command-queue state, undetected before this fix. Genuinely transient
+	// (drains the instant the in-flight sequence's own fence signals): `SSLM_BUSY` is the
+	// correct disposition here, the same Busy-precedence shape `sslm_gpu_model_unmap`'s own
+	// `submitted_sequences` check already uses, and is untouched by D-SLM3965 (which concerns
+	// only the new PERSISTENT-liveness guards below, M2's `live_adapters` and S2's
+	// `bound_sequences`). Remedy: drain the in-flight sequence (`sslm_gpu_ready` to Idle) and
+	// retry -- costs the caller nothing.
+	if (model->submitted_sequences > 0) {
+		return SSLM_BUSY;
 	}
 	// Design Sec4.2/Sec21 (T-2114 N1, corrected 2026-08-15, routing
 	// `Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md` Sec6/Sec8): "sslm_gpu_seq_restore
@@ -1963,6 +2101,33 @@ int64_t SslmGpuSeqHandleContextCapForBench(SslmGpuSequenceHandle* seq) {
 	return seq ? seq->context_cap : 0;
 }
 
+// T-2243 (S2/O2, red suite scaffolding, plan Sec10 Phase 2 S2/O2, Sec5.2's own fixture_common.h
+// additions): global-scope, `extern`-linkage per the `:142-151` note above -- declared in the
+// suite's own `fixture_common.h`, defined here beside the other ForBench accessors.
+//
+// `std::atomic<int64_t>` is lock-free and layout-compatible with `int64_t` on every platform
+// this project builds for (MSVC/x64) -- the identical assumption this accessor's own signature
+// (a raw `int64_t*`, matching every other ForBench accessor's shape rather than an atomic-typed
+// one) already makes explicit.
+int64_t* SslmGpuAdapterHandleBoundSequencesForBench(SslmGpuAdapterHandle* adapter) {
+	return adapter ? reinterpret_cast<int64_t*>(&adapter->bound_sequences) : nullptr;
+}
+const SslmGpuAdapterHandle* const* SslmGpuSequenceHandleBoundAdapterForBench(SslmGpuSequenceHandle* seq) {
+	return seq ? &seq->bound_adapter : nullptr;
+}
+// O2 only (Mendeleev F-5, plan Sec10 Phase 2 O2): forces this handle's internal state directly
+// to reconstruct the window `sslm_gpu_ready` cannot otherwise be driven into through the public
+// API alone -- Submitted, with the in-flight token already cleared -- so the PUBLIC
+// `sslm_gpu_ready` call the cell drives afterward exercises `RunLayerLoopGpuFinish(nullptr, ...)`
+// for real, through the real function the O2 fix lands in, rather than bypassing it with a
+// direct call into the internal finish path (which would prove nothing, per F-5's own
+// reasoning).
+void SslmGpuSeqForceSubmittedNoInflightForBench(SslmGpuSequenceHandle* seq) {
+	if (!seq) return;
+	seq->state = superslm_gpu::SslmSequenceGpuState::Submitted;
+	seq->in_flight = nullptr;
+}
+
 // -----------------------------------------------------------------------------------------
 // G5-5 (T-2132, Brunel): gpu_1p0_g5_bridge.h's own body -- see that header for the full
 // contract each function below implements. "No new arithmetic" (design Sec4) is enforced by
@@ -2095,7 +2260,11 @@ bool DriveGpuSeqToFullDepthForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandl
 	SslmGpuModelHandle* model = seq->model;
 	uint32_t guard = 0;
 	while (seq->layer_index < model->num_hidden_layers) {
-		if (sslm_decode_step_gpu(ctx, seq, /*adapter_or_null=*/nullptr, dispatch_budget) != SSLM_OK) {
+		// T-2243 (S2, design plan Sec6.1): reads seq's own currently-bound adapter (null if
+		// none) and threads it into the existing per-call `adapter_or_null` machinery, which is
+		// what populates `in_flight_adapter`/`submitted_sequences` for this call exactly as it
+		// does today for a direct caller of `sslm_decode_step_gpu`.
+		if (sslm_decode_step_gpu(ctx, seq, seq->bound_adapter, dispatch_budget) != SSLM_OK) {
 			return false;
 		}
 		int32_t ready = 0;
@@ -2337,16 +2506,48 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 	// where a throw can leave the window stuck open. This replaces the manual open above and the
 	// manual unconditional close that used to sit after the call, below; the close is no longer a
 	// second statement that can be skipped, it is a property of the guard's lifetime.
+	// T-2243 (S2, design plan Sec6.1): the local GpuAdapterBridge SubmitOneSequenceDecode
+	// already builds for the per-token path -- built here, on this path, from seq's own
+	// currently-bound adapter, since this chunk path bypasses SubmitOneSequenceDecode entirely
+	// and previously had "no adapter bookkeeping to mirror" (this function's own prior comment,
+	// now superseded by this fix). `num_hidden_layers` is taken from `model`, not from
+	// `seq->bound_adapter` -- the adapter handle carries no such field (confirmed at
+	// SubmitOneSequenceDecode's own identical construction, this file, `:1368`).
+	superslm_gpu::GpuAdapterBridge adapter_bridge;
+	const superslm_gpu::GpuAdapterBridge* adapter_bridge_ptr = nullptr;
+	if (seq->bound_adapter != nullptr) {
+		adapter_bridge.lora_ab_resident = seq->bound_adapter->lora_ab_buf.Get();
+		adapter_bridge.fold_resident = seq->bound_adapter->fold_buf.Get();
+		adapter_bridge.rank = seq->bound_adapter->rank;
+		adapter_bridge.slots = &seq->bound_adapter->slots[0][0];
+		adapter_bridge.num_hidden_layers = model->num_hidden_layers;
+		adapter_bridge_ptr = &adapter_bridge;
+	}
 	struct SubmittedWindowScopeGuard {
 		SslmGpuSequenceHandle* seq;
 		SslmGpuModelHandle* model;
 		SubmittedWindowScopeGuard(SslmGpuSequenceHandle* s, SslmGpuModelHandle* m) : seq(s), model(m) {
 			seq->state = superslm_gpu::SslmSequenceGpuState::Submitted;
 			model->submitted_sequences += 1;
+			// T-2243 (S2, design plan Sec6.1): the symmetric extension of this window to the
+			// bound adapter, mirroring SubmitOneSequenceDecode's own
+			// `adapter_or_null->submitted_sequences += 1`/`seq->in_flight_adapter = adapter_or_null`
+			// pair -- so a concurrent `sslm_gpu_adapter_unmap` sees the in-flight bind on this
+			// path too, not only on the per-token path.
+			if (seq->bound_adapter != nullptr) {
+				seq->bound_adapter->submitted_sequences += 1;
+				seq->in_flight_adapter = seq->bound_adapter;
+			}
 		}
 		~SubmittedWindowScopeGuard() {
 			seq->state = superslm_gpu::SslmSequenceGpuState::Idle;
 			if (model->submitted_sequences > 0) model->submitted_sequences -= 1;
+			if (seq->in_flight_adapter != nullptr) {
+				if (seq->in_flight_adapter->submitted_sequences > 0) {
+					seq->in_flight_adapter->submitted_sequences -= 1;
+				}
+				seq->in_flight_adapter = nullptr;
+			}
 		}
 	} submitted_window_guard(seq, model);
 	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
@@ -2393,7 +2594,7 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		        seq->host_kv_mirror.size(), chunk_embedding_bytes, admit_count, seq->kv_buf.Get(),
 		        &seq->kv_needs_resume_barrier, model->weights_buf.Get(), model->rope_cos_buf.Get(),
 		        model->rope_sin_buf.Get(), model->has_rope_tables, model->rope_cos_elem_count,
-		        model->rope_sin_elem_count, /*adapter_bridge=*/nullptr, &inflight);
+		        model->rope_sin_elem_count, adapter_bridge_ptr, &inflight);
 		if (submit_status == superslm::SslmForwardStatus::Ok && inflight) {
 			// `SubmitChunkToFullDepthForG5Bridge` returns the FINAL (sub-)chunk's own inflight token
 			// genuinely unfenced (its own header comment: "the caller's own async contract... only
@@ -2424,10 +2625,11 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 	// `submitted_window_guard`'s destructor closes the window here, unconditionally, on this
 	// normal-return path exactly as it would on an exception unwind -- `sslm_gpu_ready`'s own
 	// "collapse Submitted -> Idle in one call" symmetry, now a property of the guard's lifetime
-	// rather than a second statement a throw could skip. No adapter bookkeeping to mirror: this
-	// path always submits with `adapter_bridge = nullptr` (no LoRA on the chunk path), so
-	// `seq->in_flight_adapter` is never set here and needs no clearing, matching every other
-	// adapter-less caller.
+	// rather than a second statement a throw could skip. T-2243 (S2): the guard's own
+	// constructor/destructor now also owns the bound adapter's `submitted_sequences`/
+	// `seq->in_flight_adapter` bookkeeping (above) when `seq->bound_adapter` is non-null; an
+	// adapter-less sequence takes the identical no-op path this comment used to describe as
+	// unconditional.
 	//
 	// Copy the (possibly partially-advanced, per the sub-chunk split's own synchronous-finish
 	// discipline, D-SLM3596/3649) live_state back into this handle's own canonical fields.

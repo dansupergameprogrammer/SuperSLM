@@ -130,7 +130,22 @@ typedef enum SslmGpuStatus {
      * size-derivation ladder (a malformed blob is rejected for that reason first) and before any
      * device work. Appended LAST, the same precedent SSLM_SEQUENCE_REJECTED already
      * set: no existing enumerator value moves. */
-    SSLM_RESTORE_MODEL_MISMATCH
+    SSLM_RESTORE_MODEL_MISMATCH,
+    /* T-2243 (M2, D-SLM3965): `sslm_gpu_model_unmap` rejects while any adapter is still mapped
+     * against this model (`SslmGpuModelHandle::live_adapters > 0`) -- a persistent-liveness
+     * condition (it holds until every mapped adapter is explicitly unmapped, never draining on
+     * its own), distinct from the transient `SSLM_BUSY` row above, the same distinction
+     * `SSLM_MODEL_HAS_LIVE_SEQUENCES` already draws against `submitted_sequences`. Appended
+     * LAST, the same precedent SSLM_RESTORE_MODEL_MISMATCH already set: no existing enumerator
+     * value moves. */
+    SSLM_MODEL_HAS_LIVE_ADAPTERS,
+    /* T-2243 (S2, D-SLM3965): `sslm_gpu_adapter_unmap` rejects while any sequence still holds a
+     * bind to this adapter (`SslmGpuAdapterHandle::bound_sequences > 0`, set by
+     * `sslm_gpu_seq_bind_adapter`) -- the same persistent-liveness shape as
+     * SSLM_MODEL_HAS_LIVE_ADAPTERS above, for the adapter's own bound-sequence set rather than
+     * the model's own mapped-adapter set. Remedy: unbind every sequence still holding this
+     * adapter (`sslm_gpu_seq_bind_adapter(ctx, seq, nullptr)`) and retry. Appended LAST. */
+    SSLM_ADAPTER_HAS_BOUND_SEQUENCES
 } SslmGpuStatus;
 
 /* --- Sec4.1.1: context create/destroy. DEFINED as of B1 (src/gpu/gpu_1p0.cpp). --- */
@@ -167,6 +182,27 @@ SslmGpuStatus sslm_gpu_adapter_unmap(SslmGpuContext* ctx, SslmGpuAdapterHandle* 
 SslmGpuStatus sslm_gpu_seq_create(SslmGpuContext* ctx, SslmGpuModelHandle* model,
                                    int64_t context_cap, SslmGpuSequenceHandle** out_seq);
 SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq);
+
+/* --- T-2243 (S2, D-SLM3954/D-SLM3996, plan Sec6.1): bind a LoRA adapter to a sequence handle,
+ * across calls -- distinct from the existing per-call `adapter_or_null` argument every decode
+ * call already takes. `adapter_or_null == nullptr` unbinds, mirroring `sslm_seq_set_adapter`'s
+ * own CPU-side convention. Checked in order:
+ *  1. `!ctx || !seq || seq->ctx != ctx` -> SSLM_SEQUENCE_KV_BUFFER_MISMATCH (malformed handle).
+ *  2. `0 < seq's own layer_index < model's own num_hidden_layers` (genuinely mid-token; a
+ *     drained rest at 0 OR at num_hidden_layers both admit) -> SSLM_BUSY. Resolves through the
+ *     caller's own continued decoding of the token already in progress -- not automatically.
+ *  3. `adapter_or_null != nullptr`: a model-mismatched adapter -> SSLM_ADAPTER_MODEL_MISMATCH;
+ *     a foreign-context adapter -> SSLM_SEQUENCE_KV_BUFFER_MISMATCH.
+ *  4. Already bound to `adapter_or_null` -> SSLM_OK, no counter change (idempotent).
+ *  5. Otherwise rebinds: decrements the previously-bound adapter's own `bound_sequences` (if
+ *     any), increments `adapter_or_null`'s (if non-null), and returns SSLM_OK.
+ * Unbound automatically on `sslm_gpu_seq_release`. Untouched by `sslm_gpu_seq_reset` (the same
+ * "caller's own standing configuration survives reset" precedent `bound_schema_index` already
+ * sets) and does NOT round-trip through `sslm_gpu_seq_save`/`sslm_gpu_seq_restore` -- a restored
+ * handle's own binding is always null; a caller that wants one re-binds explicitly after
+ * restore. --- */
+SslmGpuStatus sslm_gpu_seq_bind_adapter(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                         const SslmGpuAdapterHandle* adapter_or_null);
 
 /* --- Sec5.3a: the production token-feed entry point. Host-only -- no dispatch, no
  * state transition to Submitted. DEFINED as of B3.5 (src/gpu/gpu_1p0.cpp), added at the

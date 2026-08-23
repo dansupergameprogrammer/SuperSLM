@@ -1377,29 +1377,14 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// construction: a return here issues no upload, no dispatch, no
 	// readback, so nothing GPU-side is ever touched.
 	//
-	// STRUCTURAL closure (M1's own remedy, not a fourth hand-count) -- OF THE
-	// LADDER'S OWN INTERNAL CONSISTENCY, not of drift against CPU (corrected
-	// 2026-08-14, T-2055, Claude/Poirot/db73b22-gpu-serial-port-final-
-	// confirmation-review.md, P1; D-SLM3183, superseding D-SLM3182's own
-	// claim): every guard below is tagged with its own `GpuLayerLoopGuard`
-	// enum value (`GpuLayerLoopGuard` (`gpu_port.h`), generated from
-	// `gpu_layer_loop_guards.def`)
-	// in a trailing comment, and the `static_assert` immediately after this
-	// ladder ties the number of guards a maintainer believes were written
-	// here to `GpuLayerLoopGuard::kCount` -- the SAME compile-time constant
-	// the pin round's own table-walk cell (Curie's work) asserts against.
-	// That ties a literal to a constant; NEITHER is compared against
-	// `forward_sites.cpp` itself, so this does not, on its own, close the
-	// three-hand-counts-produced-three-different-numbers class the paragraph
-	// used to claim it closed -- proven false by execution: a tenth guard
-	// added here AND to CPU's own ladder, with no matching `.def` row, left
-	// this `static_assert`, the table-walk cell, and the full suite all
-	// green. `tests/ci/check_gpu_guard_status_parity.py` (T-2055) is what
-	// reads `forward_sites.cpp` and closes that class -- this ladder's own
-	// tagging and `static_assert` remain useful (a guard added here with no
-	// `.def` row, or vice versa, still fails to compile or fails that CI
-	// check), just not sufficient alone against a drift that touches CPU's
-	// own source.
+	// STRUCTURAL closure (M1's own remedy): every guard below is tagged with its own
+	// `GpuLayerLoopGuard` enum value (`GpuLayerLoopGuard` (`gpu_port.h`), generated from
+	// `gpu_layer_loop_guards.def`) in a trailing comment, and the `static_assert` immediately
+	// after this ladder ties the guard count here to `GpuLayerLoopGuard::kCount`. This checks
+	// the ladder's own internal consistency; it does not, on its own, prove parity against
+	// CPU's own guard set in `forward_sites.cpp` -- that comparison is
+	// `tests/ci/check_gpu_guard_status_parity.py`'s job, which derives CPU's own guard-status
+	// set from source and compares it against this file's generated set directly.
 	if (layer_budget == 0) return superslm::SslmForwardStatus::InvalidLayerBudget;  // LayerBudgetZero
 	if (context_cap < 1) return superslm::SslmForwardStatus::InvalidContextCap;  // ContextCapNonPositive
 	// HeadDimGeometryMismatch / KvHeadGeometryMismatch (the CFG1 geometry join in

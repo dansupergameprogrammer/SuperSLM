@@ -40,13 +40,31 @@ never through the return value itself.
 - **Adapter**: `sslm_gpu_adapter_map` maps a LoRA adapter artifact against
   an already-mapped model, rejecting a base-model mismatch; `sslm_gpu_
   adapter_unmap` releases it, with the same in-flight-work refusal as model
-  unmap.
+  unmap, plus a refusal (`SSLM_ADAPTER_HAS_BOUND_SEQUENCES`) while any
+  sequence still holds a bind to it (`sslm_gpu_seq_bind_adapter`, below).
+- **Model**: `sslm_gpu_model_unmap` also refuses
+  (`SSLM_MODEL_HAS_LIVE_ADAPTERS`) while any adapter is still mapped
+  against it, independent of whether any sequence is live.
 - **Sequence**: `sslm_gpu_seq_create` / `sslm_gpu_seq_release`;
   `sslm_gpu_seq_embed_token` feeds a starting token; `sslm_gpu_seq_reset`
   clears a sequence back to empty; `sslm_gpu_seq_save` / `sslm_gpu_seq_
   restore` serialize a sequence's full state to a caller buffer and back,
   rejecting a restore against a model that isn't the one the state was
   saved from.
+- **Adapter binding**: `sslm_gpu_seq_bind_adapter` binds (or, passed a
+  null adapter, unbinds) a LoRA adapter to a sequence handle *across*
+  calls — distinct from the per-call `adapter_or_null` argument every
+  decode call already takes. A bound adapter is read automatically by
+  `SslmGpuSeqDecodeStepForG5Bridge` and by the prefill entry points below;
+  it does not change what a direct `sslm_decode_step_gpu`/`sslm_decode_
+  step_batch_gpu` caller must still pass explicitly. Rejects a
+  model-mismatched adapter, a foreign-context adapter, or a call made
+  mid-token (`Busy` — a drained rest, at either token boundary, always
+  admits); unbinds automatically on `sslm_gpu_seq_release`; survives
+  `sslm_gpu_seq_reset`; does not round-trip through save/restore — a
+  restored sequence's binding is always null and is re-bound explicitly if
+  wanted. `sslm_gpu_adapter_unmap` refuses (`SSLM_ADAPTER_HAS_BOUND_
+  SEQUENCES`) while any sequence still holds a bind to that adapter.
 
 ### Decoding
 
@@ -66,24 +84,32 @@ never through the return value itself.
 
 Calls against **different** sequence handles are safe to make from
 different threads concurrently. Any call that submits GPU work — either
-decode call, or `sslm_gpu_ready` with `block` set — must be externally
-serialized by the caller relative to every other GPU-submitting call on
-the same context; the API does not build an internal queue lock. Two
-threads driving the *same* sequence handle concurrently is not a supported
-use.
+decode call, `sslm_gpu_ready` with `block` set, or `sslm_gpu_seq_restore`
+(which uploads the restored sequence's K/V state to a fresh device
+buffer, and refuses `Busy` while any sibling sequence on the same model
+has unfenced in-flight work) — must be externally serialized by the
+caller relative to every other GPU-submitting call on the same context;
+the API does not build an internal queue lock. Two threads driving the
+*same* sequence handle concurrently is not a supported use.
 
 ### Status causes
 
 `SslmGpuStatus` distinguishes: a dispatch budget too small to make
 progress; the device busy with in-flight work on the handle you're
-releasing; a context or model with handles still live; an adapter that
-doesn't match the model it's mapped against, by content hash or by
-identity; a sequence's saved KV state that doesn't match the buffer shape
-it's being restored into; a lost/reset device; a batch call that ran out
-of its shared budget; an out-of-range token id; a single sequence's decode
-step rejected on structural grounds unrelated to device health (so a
-healthy device serving other sequences in the same batch is distinguishable
-from a real device loss); and a restore whose blob doesn't match the model
+releasing, or with a sibling sequence's unfenced in-flight work when
+you're restoring against the same model; a context or model with handles
+still live; a model with an adapter still mapped against it
+(`SSLM_MODEL_HAS_LIVE_ADAPTERS`) or an adapter with a sequence still
+bound to it (`SSLM_ADAPTER_HAS_BOUND_SEQUENCES`) — both persistent
+conditions that hold until the caller explicitly unmaps/unbinds, unlike
+the transient in-flight-work `Busy`; an adapter that doesn't match the
+model it's mapped against, by content hash or by identity; a sequence's
+saved KV state that doesn't match the buffer shape it's being restored
+into; a lost/reset device; a batch call that ran out of its shared
+budget; an out-of-range token id; a single sequence's decode step
+rejected on structural grounds unrelated to device health (so a healthy
+device serving other sequences in the same batch is distinguishable from
+a real device loss); and a restore whose blob doesn't match the model
 it's being restored against.
 
 ## The CPU consumer API (`sslm_*`) — shipped
