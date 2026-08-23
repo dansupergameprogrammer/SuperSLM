@@ -533,6 +533,10 @@ rem t2119-g5-constrained-decoding-design-2026-08-16.md Sec5, Wizard repo) -- a d
 rem documented extension of the ABI surface this counter is meant to CATCH undocumented drift
 rem against, not itself an instance of that drift. T-2199 then raised it to 35 for
 rem sslm_decode_step_v2 and the 1.2 candidate raises it to 36 for sslm_decode_params_init.
+rem T-2246 raises it to 40: sslm_speculate_params_init, sslm_speculate_step_v3, and the
+rem committed-token retention read-back pair sslm_seq_committed_token_count /
+rem sslm_seq_committed_tokens_peek (plan Claude/Plans/SuperSLM_SpecDecoding_SubPlan_
+rem 2026-08-22.md SS3.6) -- same deliberate, documented extension class.
 rem Count with native PowerShell so the gate does not depend on WSL, Git Bash's installation
 rem layout, or a separately configured Unix-tool PATH on Windows.
 rem T2139_VERB_COUNT is read and compared OUTSIDE any parenthesized if-block on purpose: %VAR%
@@ -545,11 +549,11 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 set /p T2139_VERB_COUNT=<out\t2139\verb_count.txt
-if "%T2139_VERB_COUNT%"=="36" goto :t2139_verb_count_ok
-echo count_abi_verbs.sh reports %T2139_VERB_COUNT%, expected 36 -- verb count drifted, see design Sec4 / T-2132 / T-2199
+if "%T2139_VERB_COUNT%"=="40" goto :t2139_verb_count_ok
+echo count_abi_verbs.sh reports %T2139_VERB_COUNT%, expected 40 -- verb count drifted, see design Sec4 / T-2132 / T-2199 / T-2246
 popd & exit /b 1
 :t2139_verb_count_ok
-echo count_abi_verbs.sh: 36 verbs, matches T-2139 Sec4's 29 plus T-2132/G5's five verbs and T-2199's versioned decode and params-initializer verbs
+echo count_abi_verbs.sh: 40 verbs, matches T-2139 Sec4's 29 plus T-2132/G5's five verbs, T-2199's versioned decode and params-initializer verbs, and T-2246's speculate pair and retention read-back pair
 goto :t2139_verb_count_done
 :t2139_verb_count_done
 
