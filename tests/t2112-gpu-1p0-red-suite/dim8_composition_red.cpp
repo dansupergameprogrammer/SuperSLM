@@ -317,7 +317,8 @@ static void TestS2_F_CompositionBitEqualityBothChokePoints(SslmGpuContext* ctx,
 // D-SLM4058): each counter gates its own object -- M2 live_adapters stops the model, S2 own
 // bound_sequences stops the adapter, and neither masks the other absence. Two-block
 // construction resolving the live-sequence confound the single-block sketch had.
-static void TestS2_K_EachCounterGatesItsOwnObject(SslmGpuContext* ctx, const SslmModelView* model_view) {
+static void TestS2_K_EachCounterGatesItsOwnObject(SslmGpuContext* ctx, const SslmModelView* model_view,
+                                                   const SslmModelView* adapter_view) {
 	// Block 1 (attribution, zero live sequences): map M; map A2; NO sequences -> unmap must
 	// attribute to live_adapters alone.
 	{
@@ -326,7 +327,7 @@ static void TestS2_K_EachCounterGatesItsOwnObject(SslmGpuContext* ctx, const Ssl
 		SslmGpuModelHandle* m1 = nullptr;
 		CHECK(sslm_gpu_model_map(ctx1, model_view, GpuResidencyConfig{}, &m1) == SSLM_OK);
 		SslmGpuAdapterHandle* a2 = nullptr;
-		CHECK(sslm_gpu_adapter_map(ctx1, m1, model_view, &a2) == SSLM_OK);
+		CHECK(sslm_gpu_adapter_map(ctx1, m1, adapter_view, &a2) == SSLM_OK);
 		CHECK_MSG(sslm_gpu_model_unmap(ctx1, m1) == SSLM_MODEL_HAS_LIVE_ADAPTERS,
 		          "S2-K block1: with zero live sequences, the rejection must attribute to "
 		          "live_adapters specifically");
@@ -344,8 +345,8 @@ static void TestS2_K_EachCounterGatesItsOwnObject(SslmGpuContext* ctx, const Ssl
 		CHECK(sslm_gpu_model_map(ctx2, model_view, GpuResidencyConfig{}, &m2) == SSLM_OK);
 		SslmGpuAdapterHandle* a1 = nullptr;
 		SslmGpuAdapterHandle* a2b = nullptr;
-		CHECK(sslm_gpu_adapter_map(ctx2, m2, model_view, &a1) == SSLM_OK);
-		CHECK(sslm_gpu_adapter_map(ctx2, m2, model_view, &a2b) == SSLM_OK);
+		CHECK(sslm_gpu_adapter_map(ctx2, m2, adapter_view, &a1) == SSLM_OK);
+		CHECK(sslm_gpu_adapter_map(ctx2, m2, adapter_view, &a2b) == SSLM_OK);
 		SslmGpuSequenceHandle* seq = nullptr;
 		CHECK(sslm_gpu_seq_create(ctx2, m2, 64, &seq) == SSLM_OK);
 		CHECK(sslm_gpu_seq_bind_adapter(ctx2, seq, a1) == SSLM_OK);
@@ -486,7 +487,11 @@ int main(int argc, char** argv) {
 	} else {
 		SKIP_MSG("S2-F needs --adapter=PATH -- not run");
 	}
-	TestS2_K_EachCounterGatesItsOwnObject(ctx, &view);
+	if (have_adapter) {
+		TestS2_K_EachCounterGatesItsOwnObject(ctx, &view, &adapter_view);
+	} else {
+		SKIP_MSG("S2-K needs --adapter=PATH -- not run");
+	}
 
 	if (adapter) sslm_gpu_adapter_unmap(ctx, adapter);
 	CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
