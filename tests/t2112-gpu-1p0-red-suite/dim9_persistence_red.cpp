@@ -308,6 +308,69 @@ static void TestDim9_S4_RestoreDeviceThrowReturnsStatusNotUnwind(SslmGpuContext*
 	CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
 }
 
+// T-2243 (C1, plan Sec8/Sec10 Phase 2 C1, D-SLM3991): restore vs a genuinely in-flight sibling
+// on the SAME model. GPU-C1-C1 (Curie's red-suite design, Sec6.16) -- the end-to-end
+// reproduction plan Sec8 requires, against a real 1.5B artifact, not reachability-at-source. A
+// blob saved from one sequence (seq_c) is restored while a SECOND, unrelated sequence on the
+// SAME model (seq_a) holds an unfenced, in-flight submission -- before this fix, that restore
+// returned SSLM_OK and proceeded to allocate/upload a new K/V buffer against the same device
+// without waiting for seq_a's own fence, a real ordering hazard. Single-threaded, deliberately
+// outside dimension 3's concurrency claim (plan Sec11 dim3).
+static void TestC1_RestoreVsGenuinelyInFlightSibling(SslmGpuContext* ctx, SslmGpuModelHandle* model,
+                                                      int64_t context_cap,
+                                                      uint32_t num_hidden_layers) {
+	const char* label = "C1";
+	constexpr int32_t kTokenId = 5;
+
+	// seq_c: one complete token, then saved -- the blob a fresh restore will consume.
+	SslmGpuSequenceHandle* seq_c = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, context_cap, &seq_c) == SSLM_OK);
+	CHECK_MSG(RunFullTokenStep(ctx, seq_c, nullptr, num_hidden_layers, kTokenId),
+	          "%s: seq_c fixture full-token step", label);
+	size_t required_size = 0;
+	{
+		uint8_t probe = 0;
+		CHECK(sslm_gpu_seq_save(ctx, seq_c, &probe, &required_size) != SSLM_OK);
+		CHECK_MSG(required_size > 0, "%s: seq_c save probe did not report a required size", label);
+	}
+	std::vector<uint8_t> blob(required_size);
+	size_t blob_size = blob.size();
+	CHECK_MSG(sslm_gpu_seq_save(ctx, seq_c, blob.data(), &blob_size) == SSLM_OK, "%s: seq_c save",
+	          label);
+	CHECK(blob_size > 0 && blob_size <= blob.size());
+	CHECK(sslm_gpu_seq_release(ctx, seq_c) == SSLM_OK);
+
+	// seq_a: submit one decode step and deliberately do NOT drain it -- Submitted, unfenced.
+	SslmGpuSequenceHandle* seq_a = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, context_cap, &seq_a) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq_a, kTokenId) == SSLM_OK);
+	CHECK_MSG(sslm_decode_step_gpu(ctx, seq_a, nullptr, FullTokenBudget(num_hidden_layers)) == SSLM_OK,
+	          "%s: seq_a submit (deliberately not drained)", label);
+
+	// The reproduction/assertion: restore a fresh seq_b for the SAME model WITHOUT draining
+	// seq_a. Committed/green form asserts SSLM_BUSY -- at f409bda (pre-fix) this returned
+	// SSLM_OK, the defect this item closes (plan Sec8's own red-form observation, recorded in
+	// the build log rather than re-staged here since the fix is already committed on this
+	// branch).
+	SslmGpuSequenceHandle* seq_b = nullptr;
+	const SslmGpuStatus restore_status =
+	    sslm_gpu_seq_restore(ctx, model, blob.data(), blob_size, &seq_b);
+	CHECK_MSG(restore_status == SSLM_BUSY,
+	          "%s: sslm_gpu_seq_restore against a model with an unfenced in-flight sibling must "
+	          "return SSLM_BUSY -- observed status %d", label, static_cast<int>(restore_status));
+	CHECK_MSG(seq_b == nullptr, "%s: a rejected restore must not hand back a live handle", label);
+
+	// Remedy arm: drain seq_a, then retry -- the transient guard's escape, costing nothing.
+	CHECK_MSG(Drain(ctx, seq_a) == SSLM_OK, "%s: drain seq_a", label);
+	SslmGpuSequenceHandle* seq_b2 = nullptr;
+	CHECK_MSG(sslm_gpu_seq_restore(ctx, model, blob.data(), blob_size, &seq_b2) == SSLM_OK,
+	          "%s: retry restore after draining the sibling", label);
+	CHECK(seq_b2 != nullptr);
+
+	CHECK(sslm_gpu_seq_release(ctx, seq_a) == SSLM_OK);
+	if (seq_b2) CHECK(sslm_gpu_seq_release(ctx, seq_b2) == SSLM_OK);
+}
+
 // T-2114 (M2): see dim1_lifetime_red.cpp's own header comment -- the local re-declaration
 // this file used to complete here is retired; sslm_gpu_1p0.h now defines both types complete.
 
@@ -326,6 +389,7 @@ int main(int argc, char** argv) {
 	volatile void* addr_1 = (void*)&TestDim9_P1_RealArtifactSaveRestoreThen64FurtherSteps; (void)addr_1;
 	volatile void* addr_2 = (void*)&TestDim9_N1_SmallCappedRestoreDerivesBlobOwnCap; (void)addr_2;
 	volatile void* addr_3 = (void*)&TestDim9_S4_RestoreDeviceThrowReturnsStatusNotUnwind; (void)addr_3;
+	volatile void* addr_4 = (void*)&TestC1_RestoreVsGenuinelyInFlightSibling; (void)addr_4;
 
 	SslmGpuContext* ctx = nullptr;
 	CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
@@ -352,6 +416,7 @@ int main(int argc, char** argv) {
 		TestDim9_N1_SmallCappedRestoreDerivesBlobOwnCap(ctx, model, nullptr, kN1ContextCap,
 		                                                 model_context_cap, num_hidden_layers);
 		TestDim9_S4_RestoreDeviceThrowReturnsStatusNotUnwind(ctx, model, kSmallContextCap);
+		TestC1_RestoreVsGenuinelyInFlightSibling(ctx, model, kSmallContextCap, num_hidden_layers);
 		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
 	} else {
 		SKIP_MSG("dim9 needs --model1p5b=PATH -- not run");

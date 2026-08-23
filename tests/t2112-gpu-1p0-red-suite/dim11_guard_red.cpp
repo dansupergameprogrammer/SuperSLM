@@ -1,7 +1,17 @@
 // T-2112 (Curie) -- Dim 11 (Guard vitality), design Sec11 dim11. 3 cells. RED BY LINK.
+//
+// T-2243 (fold, Curie's red suite design Sec6.17/Sec6.18, D-SLM4058): two more cells added here
+// -- GPU-M2-C1 (model-unmap blocked by a mapped adapter, alongside this file's existing
+// live-sequences guard cells) and GPU-O2-C1 (sslm_gpu_ready propagating the discarded null-token
+// status, Mendeleev F-5).
 #include "fixture_common.h"
 
 using namespace superslm;
+
+// T-2243 (O2, Mendeleev F-5, plan Sec10 Phase 2 O2, red suite Sec6.18): declared in gpu_1p0.cpp,
+// the test-side forcing accessor -- global scope, matching the linkage note above.
+extern void SslmGpuSeqForceSubmittedNoInflightForBench(SslmGpuSequenceHandle*);
+extern int64_t* SslmGpuAdapterHandleBoundSequencesForBench(SslmGpuAdapterHandle*);
 
 // --- Mechanism cell 1: every guard named in Sec9's table, plus the carried-forward nine-guard
 // ladder, checked ABLE TO FIRE in the shipping build configuration, non-vacuous over its own
@@ -58,14 +68,84 @@ static void TestDim11_P1_OrdinaryMisuseReachesGuardAtProductionScale(SslmGpuCont
 	CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
 }
 
-// T-2114 (M2): see dim1_lifetime_red.cpp's own header comment -- the local re-declaration
-// this file used to complete here is retired; sslm_gpu_1p0.h now defines both types complete.
+// T-2243 (O2, Mendeleev F-5, plan Sec10 Phase 2 O2, red suite Sec6.18): GPU-O2-C1 -- sslm_gpu_
+// ready propagates RunLayerLoopGpuFinish's own null-in-flight rejection instead of discarding it
+// as a silent SSLM_OK/*out_ready=0. Single-threaded, deliberately outside dimension 3's
+// concurrency claim (F-5's own pinned construction: a literal call into the internal finish path
+// would bypass the function this fix lands in and prove nothing).
+static void TestO2_ReadyPropagatesNullTokenStatus(SslmGpuContext* ctx, SslmGpuModelHandle* model) {
+	SslmGpuSequenceHandle* seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
+	// Force the internal state directly to reconstruct the unreachable-in-practice window: state
+	// Submitted, with the in-flight token already cleared -- then call the PUBLIC sslm_gpu_ready.
+	SslmGpuSeqForceSubmittedNoInflightForBench(seq);
+	int32_t ready = 0;
+	SslmGpuStatus out_status = SSLM_OK;
+	const SslmGpuStatus ret = sslm_gpu_ready(ctx, seq, /*block=*/1, &ready, &out_status);
+	CHECK_MSG(!(ret == SSLM_OK && out_status == SSLM_OK),
+	          "O2: sslm_gpu_ready must not silently discard RunLayerLoopGpuFinish's own "
+	          "null-in-flight rejection as SSLM_OK/*out_status=OK -- got ret=%d out_status=%d",
+	          (int)ret, (int)out_status);
+	// Precision arm: RunLayerLoopGpuFinish's own `!inflight` guard returns
+	// SslmForwardStatus::GpuAllocationFailed (V18), and gpu_1p0.cpp's own internal
+	// MapDecodedStatusToGpuStatus maps BOTH of its two device-derived members
+	// (GpuDeviceRemoved/GpuAllocationFailed) to SSLM_DEVICE_LOST, unconditionally (never
+	// SSLM_SEQUENCE_REJECTED, which is reserved for every OTHER, non-device-derived member) --
+	// asserted directly against that documented mapping rather than calling the mapper itself
+	// (internal linkage, anonymous-namespace, not callable from this TU).
+	const SslmGpuStatus mapped = SSLM_DEVICE_LOST;
+	CHECK_MSG(ret == mapped || out_status == mapped,
+	          "O2: the surfaced status must equal the mapped null-token member on whichever "
+	          "channel is non-OK -- got ret=%d out_status=%d, expected the mapped member %d",
+	          (int)ret, (int)out_status, (int)mapped);
+	// Cleanup note: the forced state leaves `seq` permanently Submitted-with-no-inflight (a
+	// state no legitimate caller can produce or escape) -- this is the deliberate, documented
+	// unreachable-in-practice window this cell exists to exercise (F-5), not a defect to release
+	// cleanly around. `ctx`/`model` are this cell's own dedicated handles (see main(), below);
+	// left unreleased for this process's own short lifetime rather than forcing a second,
+	// undocumented "unstick" accessor into the production surface for a cleanup path no real
+	// caller needs either.
+}
+
+// T-2243 (M2, plan Sec6/Sec10 Phase 2 M2, D-SLM3965, red suite Sec6.17): GPU-M2-C1 --
+// sslm_gpu_model_unmap rejects SSLM_MODEL_HAS_LIVE_ADAPTERS while any adapter is still mapped
+// against the model, attributed with ZERO live sequences so this file's own existing
+// ModelHasLiveSequences guard (V7) cannot be the firer.
+static void TestM2_ModelUnmapBlockedByMappedAdapter(SslmGpuContext* ctx, SslmGpuModelHandle* model,
+                                                     const SslmModelView* adapter_view) {
+	SslmGpuAdapterHandle* adapter = nullptr;
+	CHECK(sslm_gpu_adapter_map(ctx, model, adapter_view, &adapter) == SSLM_OK);
+	if (!adapter) return;
+
+	// Companion behavioral assertion, sequenced FIRST (Sec6.17: "compiles TODAY, fails red
+	// immediately" -- discriminates the defect before the enumerator's own red-by-link state).
+	const SslmGpuStatus unmap_status = sslm_gpu_model_unmap(ctx, model);
+	CHECK_MSG(unmap_status != SSLM_OK,
+	          "M2: sslm_gpu_model_unmap must not succeed while an adapter is still mapped "
+	          "against it -- got SSLM_OK, leaving adapter->model dangling-but-never-dereferenced");
+	CHECK_MSG(unmap_status == SSLM_MODEL_HAS_LIVE_ADAPTERS,
+	          "M2: with zero live sequences, the rejection must attribute to live_adapters "
+	          "specifically (SSLM_MODEL_HAS_LIVE_ADAPTERS), not SSLM_MODEL_HAS_LIVE_SEQUENCES or "
+	          "any other status -- got %d", (int)unmap_status);
+
+	// Model still alive: a subsequent adapter_map against it still succeeds.
+	SslmGpuAdapterHandle* adapter2 = nullptr;
+	CHECK_MSG(sslm_gpu_adapter_map(ctx, model, adapter_view, &adapter2) == SSLM_OK,
+	          "M2: the model must still be alive after a rejected unmap");
+
+	// Cleanup: unmap both adapters, then the model, in guard-satisfying order.
+	if (adapter2) CHECK(sslm_gpu_adapter_unmap(ctx, adapter2) == SSLM_OK);
+	CHECK(sslm_gpu_adapter_unmap(ctx, adapter) == SSLM_OK);
+	CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
+}
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
 	volatile void* addr_0 = (void*)&TestDim11_M1_EveryGuardAbleToFireShippingConfig; (void)addr_0;
 	volatile void* addr_1 = (void*)&TestDim11_M2_ContextDestroyGuardFiresInReleaseConfig; (void)addr_1;
 	volatile void* addr_2 = (void*)&TestDim11_P1_OrdinaryMisuseReachesGuardAtProductionScale; (void)addr_2;
+	volatile void* addr_3 = (void*)&TestO2_ReadyPropagatesNullTokenStatus; (void)addr_3;
+	volatile void* addr_4 = (void*)&TestM2_ModelUnmapBlockedByMappedAdapter; (void)addr_4;
 
 	std::vector<uint8_t> bytes;
 	SslmModelView view{};
@@ -124,6 +204,39 @@ int main(int argc, char** argv) {
 		// the guarded call P1 itself already exercised.
 		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
 		CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
+	}
+
+	// O2 (dedicated ctx/model -- see TestO2's own cleanup note: this block's handles are
+	// deliberately left unreleased).
+	{
+		SslmGpuContext* ctx = nullptr;
+		CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
+		SslmGpuModelHandle* model = nullptr;
+		CHECK(sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model) == SSLM_OK);
+		TestO2_ReadyPropagatesNullTokenStatus(ctx, model);
+	}
+
+	// M2 (real adapter required -- SKIPs its product half when none is supplied, matching this
+	// suite's own established convention, fixture_common.h:10-16).
+	{
+		if (g_adapter_path.empty()) {
+			SKIP_MSG("M2 needs --adapter=PATH -- product cell not run");
+		} else {
+			std::vector<uint8_t> adapter_bytes;
+			SslmModelView adapter_view{};
+			std::string adapter_err;
+			if (!LoadRealModel(g_adapter_path, &adapter_view, &adapter_bytes, &adapter_err)) {
+				SKIP_MSG("M2: could not load --adapter=%s (%s)", g_adapter_path.c_str(),
+				         adapter_err.c_str());
+			} else {
+				SslmGpuContext* ctx = nullptr;
+				CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
+				SslmGpuModelHandle* model = nullptr;
+				CHECK(sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model) == SSLM_OK);
+				TestM2_ModelUnmapBlockedByMappedAdapter(ctx, model, &adapter_view);
+				CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
+			}
+		}
 	}
 
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);

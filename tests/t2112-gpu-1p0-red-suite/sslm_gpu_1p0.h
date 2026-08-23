@@ -102,12 +102,23 @@ typedef enum SslmGpuStatus {
                                            * SSLM_DEVICE_LOST -- see gpu_1p0.h's
                                            * own header comment on this enumerator
                                            * for the full account.               */
-    SSLM_RESTORE_MODEL_MISMATCH          /* design Sec9/Sec22, ADDED at the 2026-08-15
+    SSLM_RESTORE_MODEL_MISMATCH,         /* design Sec9/Sec22, ADDED at the 2026-08-15
                                            * mini-fold (P2, D-SLM3415): sslm_gpu_seq_restore's
                                            * v3 blob model_content_hash does not match the
                                            * target model handle's own RawIntegrityHash() --
                                            * see gpu_1p0.h's own header comment for the full
                                            * account. Appended LAST, same S1 precedent. */
+    SSLM_MODEL_HAS_LIVE_ADAPTERS,        /* T-2243 (M2, D-SLM3965), ADDED this fold: rejects
+                                           * sslm_gpu_model_unmap while any adapter is still
+                                           * mapped against the model -- persistent liveness,
+                                           * not SSLM_BUSY. See gpu_1p0.h's own header comment
+                                           * for the full account. Appended LAST. */
+    SSLM_ADAPTER_HAS_BOUND_SEQUENCES      /* T-2243 (S2, D-SLM3965), ADDED this fold: rejects
+                                           * sslm_gpu_adapter_unmap while any sequence still
+                                           * holds a bind to the adapter (sslm_gpu_seq_bind_
+                                           * adapter) -- persistent liveness, not SSLM_BUSY.
+                                           * See gpu_1p0.h's own header comment for the full
+                                           * account. Appended LAST. */
 } SslmGpuStatus;
 
 /* --- Sec4.1.1: context create/destroy --- */
@@ -129,6 +140,12 @@ SslmGpuStatus sslm_gpu_adapter_unmap(SslmGpuContext* ctx, SslmGpuAdapterHandle* 
 SslmGpuStatus sslm_gpu_seq_create(SslmGpuContext* ctx, SslmGpuModelHandle* model,
                                    int64_t context_cap, SslmGpuSequenceHandle** out_seq);
 SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq);
+
+/* --- T-2243 (S2, D-SLM3954/D-SLM3996, plan Sec6.1): bind a LoRA adapter to a sequence handle,
+ * across calls. `adapter_or_null == nullptr` unbinds. See gpu_1p0.h's own header comment on
+ * this declaration for the full rule ordering. --- */
+SslmGpuStatus sslm_gpu_seq_bind_adapter(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                         const SslmGpuAdapterHandle* adapter_or_null);
 
 /* --- Sec5.3a: the production token-feed entry point, ADDED at the 2026-08-15 mini-fold
  * (Sec18), routing D-SLM3367. Host-only -- no dispatch, no state transition to Submitted.
