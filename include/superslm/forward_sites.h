@@ -897,17 +897,18 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 // `SequenceLayerState::kv_saturation_count` is. There is no partial/resumable layer_budget in
 // this path -- every layer runs to completion for every token, or the call returns non-Ok.
 SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
-                                            size_t chunk_tokens, const LayerWeights* layers,
-                                            uint32_t num_hidden_layers, size_t hidden_size,
-                                            size_t head_dim, size_t num_key_value_heads,
-                                            size_t intermediate_size, int64_t context_cap,
-                                            int64_t context_length_start,
-                                            const SslmTensorManifest& rope_tables,
-                                            uint8_t* workspace, size_t workspace_size,
-                                            bool option_g_fused_k_landing,
-                                            uint64_t* kv_saturation_count,
-                                            std::string_view site_prefix = {},
-                                            SslmTraceHookState* trace_hook_state = nullptr);
+                                             size_t chunk_tokens, const LayerWeights* layers,
+                                             uint32_t num_hidden_layers, size_t hidden_size,
+                                             size_t head_dim, size_t num_key_value_heads,
+                                             size_t intermediate_size, int64_t context_cap,
+                                             int64_t context_length_start,
+                                             const SslmTensorManifest& rope_tables,
+                                             uint8_t* workspace, size_t workspace_size,
+                                             bool option_g_fused_k_landing,
+                                             uint64_t* kv_saturation_count,
+                                             std::string_view site_prefix = {},
+                                             SslmTraceHookState* trace_hook_state = nullptr,
+                                             uint64_t* per_token_saturation = nullptr);
 
 // (design Sec31.2's own "int64-input, __int128-intermediate sibling of
 // the RoPE pair primitive, Q2.30 tables unchanged" -- Sec12 "Wide-RoPE

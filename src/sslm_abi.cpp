@@ -305,6 +305,19 @@ struct sslm_seq_s {
 	sslm_schema bound_schema = nullptr;
 	uint32_t dfa_walk_state = kDfaWalkStateUnused;
 	int64_t forced_token_count = 0;
+	// T-2246 speculative decoding (plan Claude/Plans/SuperSLM_SpecDecoding_SubPlan_
+	// 2026-08-22.md SS3.0): this sequence's own retained stream of committed token ids --
+	// every id admitted by prefill plus every id emitted by a completed decode step, in
+	// emission order. The drafter's lookup window (SS3.1) and nothing else derives lengths
+	// from it: verify entry and rollback derive theirs from state.context_length (the
+	// positioning invariant), so a stale or short window degrades drafting availability
+	// only. Bounded by context_cap + 1 -- occupancy counts landed KV rows while every
+	// emission appends its id immediately, so the just-emitted token stays unlanded-pending
+	// until the next call embeds it, making post-emission retention occupancy + 1 exactly.
+	// NOT serialized: save/restore leaves it empty and the drafter re-accumulates from new
+	// commitments (plan SS4 persistence ruling); sslm_seq_reset and sslm_seq_adopt_prefix
+	// clear it. Read back through sslm_seq_committed_token_count/sslm_seq_committed_tokens_peek.
+	std::vector<int32_t> committed_tokens;
 	// T-2199 Phase D2: this sequence's own damped-greedy anti-LM state (plan Sec7.2, "a
 	// warm-object class, not fresh-per-call") -- created lazily on the first decode_step call
 	// made with mode=SSLM_DECODE_MODE_DAMPED_GREEDY (sslm_decode_stepImpl, below), destroyed in
@@ -1720,6 +1733,12 @@ extern "C" sslm_status sslm_seq_create(sslm_model model, sslm_kv_pool* pool, ssl
 	// P1 -- see sslm_prefix_begin's own identical fix.
 	const sslm_status assign_st = CatchAllocationFailure([&]() -> sslm_status {
 		h->hidden_codes_storage.assign(model->view.config.hidden_size, 0);
+		// T-2246 (plan SS3.0): reserve the whole bounded window up front -- retention is
+		// capped at context_cap + 1, so no later append ever reallocates, which keeps the
+		// decode-step emission append allocation-free on the ready_for_logits path
+		// (t2138 dim7's own zero-allocation contract for that path).
+		h->committed_tokens.reserve(
+		    static_cast<size_t>(model->view.config.context_cap) + 1u);
 		return SSLM_OK;
 	});
 	if (assign_st != SSLM_OK) {
@@ -1851,6 +1870,9 @@ extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
 	// discipline this dimension already applies to KV-block recycling, applied here).
 	seq->dfa_walk_state = seq->bound_schema ? 0u : kDfaWalkStateUnused;
 	seq->forced_token_count = 0;
+	// T-2246 retention lifecycle (plan SS3.0 reset row): the retained window belongs to the
+	// generation being reset, exactly like the K/V store and the pending token above.
+	seq->committed_tokens.clear();
 	// Damped-greedy history belongs to the generation being reset, just like K/V and the
 	// pending token above. Keeping it would make reset-and-restart depend on the prior run.
 	ClearDampedGreedyState(seq);
@@ -1910,6 +1932,10 @@ extern "C" sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix) {
 	// A frozen prefix contains prompt/forced forward state, never this sequence's prior generated
 	// token history. Adoption replaces the sequence origin, so any warm anti-LM must be discarded.
 	ClearDampedGreedyState(seq);
+	// T-2246 retention lifecycle (plan SS3.0 adopt row): retention clears and restarts EMPTY
+	// over the copied prefix occupancy -- the lag arm the post-adopt positioning cell convicts
+	// any occupancy-deriving window on.
+	seq->committed_tokens.clear();
 	std::copy(prefix->hidden_codes_storage.begin(), prefix->hidden_codes_storage.end(),
 	          seq->hidden_codes_storage.begin());
 	seq->state.hidden_scale = prefix->state.hidden_scale;
@@ -1970,6 +1996,19 @@ extern "C" sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_
 		// own full-layer_budget convention) -- its final hidden state is ready for logits with
 		// no further RunLayerLoop work (see sslm_seq_s::ready_for_logits's own comment).
 		seq->ready_for_logits = true;
+	}
+	// T-2246 retention lifecycle (plan SS3.0 prefill row): append exactly the ids this call
+	// admitted -- including a partially-admitted call's prefix (those tokens are committed to
+	// the KV store either way). Allocation failure here leaves the window short of the landed
+	// rows: the positioning invariant keeps output identity independent of the window, so the
+	// lag degrades drafting availability only.
+	if (*consumed > 0) {
+		const sslm_status append_st = CatchAllocationFailure([&]() -> sslm_status {
+			seq->committed_tokens.insert(seq->committed_tokens.end(), tokens,
+			                             tokens + static_cast<size_t>(*consumed));
+			return SSLM_OK;
+		});
+		if (append_st != SSLM_OK) return append_st;
 	}
 	return st;
 }
@@ -2381,6 +2420,10 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 			superslm::AntiLmUpdate(seq->damped_greedy_antilm, produced_dg);
 			out_tokens[i] = produced_dg;
 			seq->current_token = produced_dg;
+			// T-2246 retention lifecycle (plan SS3.0 "Decode step (any mode)" row): every
+			// completed emission appends its id immediately -- the just-emitted token stays
+			// unlanded-pending until the next call embeds it.
+			seq->committed_tokens.push_back(produced_dg);
 			seq->state.layer_index = 0;
 			continue;
 		}
@@ -2426,6 +2469,9 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 		}
 		out_tokens[i] = produced;
 		seq->current_token = produced;
+		// T-2246 retention lifecycle (plan SS3.0 "Decode step (any mode)" row): see the
+		// damped-mode append above -- greedy mode appends on the same rule.
+		seq->committed_tokens.push_back(produced);
 		// forward_sites.h: "a sequence resting between whole tokens carries a marker at layer
 		// 0" -- reset to the resting convention now that this token is complete.
 		seq->state.layer_index = 0;
@@ -2893,6 +2939,10 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	// P1 -- see sslm_prefix_begin's own identical fix.
 	const sslm_status assign_st = CatchAllocationFailure([&]() -> sslm_status {
 		h->hidden_codes_storage.assign(c.hidden_size, 0);
+		// T-2246 (plan SS3.0): same up-front reservation as sslm_seq_create -- retention is
+		// NOT serialized (plan SS4), so a restored handle starts empty, still bounded by
+		// context_cap + 1, and its later appends never reallocate.
+		h->committed_tokens.reserve(static_cast<size_t>(c.context_cap) + 1u);
 		return SSLM_OK;
 	});
 	if (assign_st != SSLM_OK) {

@@ -2096,17 +2096,18 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 // rejection while processing token j at layer L leaves every token fully committed through
 // layer L-1, and token j (only) left at whatever partial state its own failing step reached.
 SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
-                                            size_t chunk_tokens, const LayerWeights* layers,
-                                            uint32_t num_hidden_layers, size_t hidden_size,
-                                            size_t head_dim, size_t num_key_value_heads,
-                                            size_t intermediate_size, int64_t context_cap,
-                                            int64_t context_length_start,
-                                            const SslmTensorManifest& rope_tables,
-                                            uint8_t* workspace, size_t workspace_size,
-                                            bool option_g_fused_k_landing,
-                                            uint64_t* kv_saturation_count,
-                                            std::string_view site_prefix,
-                                            SslmTraceHookState* trace_hook_state) {
+                                             size_t chunk_tokens, const LayerWeights* layers,
+                                             uint32_t num_hidden_layers, size_t hidden_size,
+                                             size_t head_dim, size_t num_key_value_heads,
+                                             size_t intermediate_size, int64_t context_cap,
+                                             int64_t context_length_start,
+                                             const SslmTensorManifest& rope_tables,
+                                             uint8_t* workspace, size_t workspace_size,
+                                             bool option_g_fused_k_landing,
+                                             uint64_t* kv_saturation_count,
+                                             std::string_view site_prefix,
+                                             SslmTraceHookState* trace_hook_state,
+                                             uint64_t* per_token_saturation) {
 	// The same domain guards RunLayerLoopImpl's own top-of-function block performs (§9.3),
 	// restated here because this path has no single `SequenceLayerState` to validate against --
 	// `chunk_tokens` tokens share one `context_cap`/geometry, not `chunk_tokens` independent
@@ -2211,12 +2212,18 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 
 			// LandTokenKVRow is the SAME function RunLayerLoopImpl calls -- identical WSC1
 			// fold, LoRA delta-add, bias, and per-head landing (design §15.2's shared-code
-			// argument).
+			// argument). T-2246: when the caller supplies a per-token saturation array, each
+			// token's landing events accumulate into its own slot instead of the shared
+			// counter, so a caller that keeps only a prefix of the chunk can attribute the
+			// kept positions' landings exactly (the verify primitive's truncated-commit
+			// contract); every slot defaults to zero for tokens whose landing never ran.
+			uint64_t* const saturation_slot =
+			    per_token_saturation != nullptr ? per_token_saturation + t : kv_saturation_count;
 			st = LandTokenKVRow(kacc_all.data() + t * kv_hidden_size, vacc_all.data() + t * kv_hidden_size,
 			                    normed.data() + t * hidden_size, normed_scale[t], lw, hidden_size,
 			                    kv_hidden_size, num_key_value_heads, head_dim, l, position,
 			                    context_cap, rope_tables, workspace, option_g_fused_k_landing,
-			                    kv_saturation_count);
+			                    saturation_slot);
 			if (st != SslmForwardStatus::Ok) return st;
 
 			std::vector<int8_t> q_rot(hidden_size), k_rot(hidden_size);
