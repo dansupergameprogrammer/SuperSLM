@@ -75,6 +75,18 @@ def build_artifact_bytes():
     return data, fingerprint, fold_approximation_error
 
 
+def build_plain_artifact_bytes():
+    """T-2234 (SuperSLM 1.2.1): the SAME fixture model with NO damped-greedy opt-in -- the
+    default conversion path (no DGC1 section, no feature bit), i.e. exactly the artifact
+    shape a pre-1.2 caller holds. The workspace-layout cells in
+    tests/t2138-abi-red-suite/dim7_contract_red.cpp need this twin so both variants differ
+    in nothing but `damped_greedy_available`."""
+    cfg = build_config()
+    model = P.fixture_model(cfg)
+    sections, _ = C.build_sections(model)  # default: no DGC1 section, no feature bit
+    return F.build_artifact(sections)
+
+
 if __name__ == "__main__":
     out_path = sys.argv[1] if len(sys.argv) > 1 else "t2199_s8_fixture.sslm"
     data, fingerprint, fold_err = build_artifact_bytes()
@@ -82,3 +94,10 @@ if __name__ == "__main__":
         f.write(data)
     print(f"wrote {out_path}: {len(data)} bytes, fingerprint={fingerprint}, "
           f"fold_approximation_error={fold_err}")
+    if len(sys.argv) > 2:
+        plain_out_path = sys.argv[2]
+        plain_data, plain_fingerprint = build_plain_artifact_bytes()
+        with open(plain_out_path, "wb") as f:
+            f.write(plain_data)
+        print(f"wrote {plain_out_path}: {len(plain_data)} bytes, "
+              f"fingerprint={plain_fingerprint} (no DGC1 section/flag)")

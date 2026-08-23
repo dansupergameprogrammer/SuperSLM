@@ -281,6 +281,18 @@ enum class SslmForwardStatus {
 	                                          // maps this one member to SSLM_INVALID_ARGUMENT,
 	                                          // giving the two entry points the same outcome for
 	                                          // the same bad input.
+	OutputCapacityExceeded,                   // T-2237/F3 (SuperSLM 1.2.1, plan Sec10 Phase 1
+	                                          // F3): RunGreedyOrDampedGreedyDecodeLoop found
+	                                          // out_tokens_capacity too small for the token /
+	                                          // logit-row count it is about to produce --
+	                                          // a caller-argument problem, not an artifact or
+	                                          // device defect (no existing sibling names this
+	                                          // condition: WorkspaceTooSmall guards the
+	                                          // unrelated internal scratch workspace argument,
+	                                          // never the caller's output buffers). Mapped to
+	                                          // SSLM_INVALID_ARGUMENT by MapForwardStatus
+	                                          // (sslm_abi.cpp), mirroring InvalidDecodeParams'
+	                                          // own precedent exactly.
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,

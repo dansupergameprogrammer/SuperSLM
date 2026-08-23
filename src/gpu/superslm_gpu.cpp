@@ -1755,7 +1755,10 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// nothing beyond the 4-byte floor `MakeBuffer` already needs to be a legal resource).
 	const uint64_t work_adapter_u_off = work_rope_stage_off + static_cast<uint64_t>(NQH) * static_cast<uint64_t>(HD) * 4u;
 	const uint32_t adapter_rank = adapter_bridge ? adapter_bridge->rank : 0;
-	const uint64_t work_total = work_adapter_u_off + std::max<uint64_t>(4u, adapter_rank);
+	// T-2240/O3 (plan Sec10 Phase 2 O3): the region's byte size reads the ONE shared
+	// definition (gpu_port.h, beside kDispatchesPerLayer) rather than an inline expression
+	// here -- one source, no drift, and host-test-visible at that single definition.
+	const uint64_t work_total = work_adapter_u_off + AdapterURegionBytes(static_cast<uint64_t>(adapter_rank));
 
 	// T-2049 (N6): index 24 (formerly `work_attn_scores_off`) is retired --
 	// left unwritten (reads back 0, never consulted by any shader) rather

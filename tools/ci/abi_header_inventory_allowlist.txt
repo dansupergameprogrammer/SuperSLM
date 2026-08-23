@@ -45,3 +45,20 @@ SSLM_DECODE_MODE_GREEDY  # T-2199 Phase D1, added 2026-08-20 (Claude/Plans/
 SSLM_DECODE_MODE_DAMPED_GREEDY  # T-2199 Phase D1, added 2026-08-20 -- pairs with
 # SSLM_DECODE_MODE_GREEDY immediately above; same design document, same reasoning, the other of
 # the two legal values `sslm_decode_params::mode` accepts (1).
+SSLM_DAMPED_GREEDY_DEFAULT_ALPHA_Q15  # T-2199/FSD release candidate, added 2026-08-21 (commit
+# e1e7e37, "prepare SuperSLM 1.2 damped greedy release candidate") -- the value
+# sslm_decode_params_init writes into sslm_decode_params::alpha_q15, exported so a caller can
+# read the shipped default instead of transcribing it. Ruled by the FSD design
+# (Claude/Plans/superslm-1p2-fsd-plan-2026-08-19.md, Wizard repo) -- a different design document
+# this checker's own inventory source, t2133 Sec8, does not and structurally cannot cover; same
+# shape as SSLM_DECODE_MODE_GREEDY above. FLAGGED PRE-EXISTING at the v1.2.0 tag by T-2243's
+# 1.2.1 build gate (the checker fails on f409bda itself when the records repo is reachable):
+# these three entries are the disclosed-exception disposition, entered 2026-08-23; a dedicated
+# inventory ruling in the FSD design's own Sec8 remains owed and removes them when it lands
+# (the SSLM_ABI_ALIGNMENT_BYTES precedent).
+SSLM_DAMPED_GREEDY_DEFAULT_ANTI_LM_ORDER  # pairs with SSLM_DAMPED_GREEDY_DEFAULT_ALPHA_Q15
+# immediately above; same commit, same design document, same flagged-pre-existing disposition --
+# the sslm_decode_params_init default for anti_lm_max_order.
+SSLM_DAMPED_GREEDY_DEFAULT_TOP_K  # pairs with the two entries above; same commit, same design
+# document, same flagged-pre-existing disposition -- the sslm_decode_params_init default for
+# top_k.

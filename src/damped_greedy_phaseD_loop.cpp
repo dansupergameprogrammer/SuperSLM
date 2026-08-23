@@ -64,8 +64,12 @@ SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
 	if (seq.hidden_codes == nullptr) {
 		return SslmForwardStatus::InvalidHiddenCodes;
 	}
-	(void)out_tokens_capacity;
-
+	// T-2237/F3 (SuperSLM 1.2.1, plan Sec10 Phase 1 F3): out_tokens_capacity is the caller's
+	// own stated bound on both output buffers -- it used to be ignored outright (this cast),
+	// and the copy-out below wrote every produced token and full logit row past it, a silent
+	// out-of-bounds write returning Ok. The generation loop now rejects with
+	// OutputCapacityExceeded BEFORE any output byte is written when the next produced token
+	// would not fit, so a rejected call leaves the caller's buffers untouched.
 	for (size_t i = 0; i < stop_count; ++i) {
 		if (stop_ids[i] < 0 || stop_ids[i] >= vocab_size) return SslmForwardStatus::TokenIdOutOfRange;
 	}
@@ -177,6 +181,17 @@ SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
 			token = produced_dg;
 		} else {
 			token = superslm::ArgmaxLowestIndexTieBreak(logit_row.data(), vocab_size_z);
+		}
+
+		// T-2237/F3: the capacity check sits HERE -- immediately before the produced token is
+		// appended and the full logit row copied out below it -- so it rejects the exact
+		// moment a write would exceed the stated bound, before either output buffer is
+		// touched. An exact-fit capacity (== the count actually produced, e.g. when a stop
+		// token fires early or max_new_tokens is reached) still succeeds: this is `>=`,
+		// never `>`.
+		if (produced_tokens.size() >= out_tokens_capacity) {
+			DestroyAntilm();
+			return SslmForwardStatus::OutputCapacityExceeded;
 		}
 
 		produced_tokens.push_back(token);

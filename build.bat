@@ -818,13 +818,16 @@ rem path it is passed, so a relative path set HERE would resolve wrong THERE.
 if not exist out\t2199 mkdir out\t2199
 where python >nul 2>nul
 if not errorlevel 1 (
-	python tools\_t2199_s8_synthetic_full_model_fixture.py out\t2199_s8_fixture.sslm
+	python tools\_t2199_s8_synthetic_full_model_fixture.py out\t2199_s8_fixture.sslm out\t2243_s8_plain.sslm
 	if errorlevel 1 (
 		echo T-2199 S8 fixture generation FAILED -- model-gated Phase D cells and the C1 pin
 		echo will SKIP below ^(same as if python/numpy were absent^), not silently pass.
 	) else (
 		if not defined T2199_PHASED_MODEL set T2199_PHASED_MODEL=%CD%\out\t2199_s8_fixture.sslm
 		if not defined T2199_DIM9_MODEL set T2199_DIM9_MODEL=%CD%\out\t2199_s8_fixture.sslm
+		rem T-2234 (SuperSLM 1.2.1): the same fixture with NO damped-greedy opt-in -- the
+		rem pre-1.2 artifact shape the workspace-layout golden cells (dim7 C4/C5) read.
+		if not defined T2138_MODEL_PLAIN set T2138_MODEL_PLAIN=%CD%\out\t2243_s8_plain.sslm
 		echo T-2199 S8 fixture: out\t2199_s8_fixture.sslm generated -- T2199_PHASED_MODEL/
 		echo T2199_DIM9_MODEL provisioned by default, override either to use a real checkpoint.
 		cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^

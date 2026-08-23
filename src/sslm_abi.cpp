@@ -94,6 +94,12 @@
                               // test can force a genuine bad_alloc through this file's own new
                               // catch-and-return path without needing an actual OOM condition.
 
+// T-2237/F3 (SuperSLM 1.2.1): forward declaration for the external-linkage definition below
+// (after this file's own anonymous namespaces close). Formerly internal-linkage inside the
+// anonymous namespace; the move is a linkage change only -- the red-suite capacity cell calls
+// it directly, and every in-file call site is unchanged.
+sslm_status MapForwardStatus(superslm::SslmForwardStatus st);
+
 // G5 (design Sec5/Sec13.4, T-2132): the DFA-walk-state "no schema bound" sentinel -- moved up
 // here (out of the save/restore-local anonymous namespace it originated in, below) so it is
 // visible to every G5 verb, not only save/restore. `kMaxSchemaStates` (schema_masks.h) is fixed
@@ -819,11 +825,24 @@ WorkspaceLayout ComputeWorkspaceLayout(const sslm_model_s* model, const sslm_con
 
 		if (!RoundUpToAlignment(cursor, SSLM_ABI_ALIGNMENT_BYTES, &aligned)) of = true;
 		L.damped_indices_offset = aligned;
-		if (!CheckedMulSizeT(static_cast<size_t>(c.vocab_size), sizeof(int32_t),
-		                      &L.damped_indices_bytes)) {
-			of = true;
+		// T-2234 (SuperSLM 1.2.1): the region is now CONDITIONAL on damped_greedy_available.
+		// 1.2.0 reserved it for EVERY mapped model unconditionally, growing every caller's
+		// workspace (undisclosed -- retroactively disclosed in CHANGELOG.md); for a
+		// greedy-only (non-DGC1) artifact the region is unreachable -- the damped decode arm
+		// rejects `!model->damped_greedy_available` before it could ever be carved -- so a
+		// caller workspace sized by the pre-1.2 formula validates again at 1.2.1. DGC1-bearing
+		// artifacts keep the region unchanged. With model == nullptr this block is skipped
+		// entirely (header/status/staged sizing only), as before.
+		if (model->damped_greedy_available) {
+			if (!CheckedMulSizeT(static_cast<size_t>(c.vocab_size), sizeof(int32_t),
+			                      &L.damped_indices_bytes)) {
+				of = true;
+			}
+			if (!CheckedAddSizeT(L.damped_indices_offset, L.damped_indices_bytes, &cursor))
+				of = true;
+		} else {
+			L.damped_indices_bytes = 0;  // offset stays aligned-but-unclaimed
 		}
-		if (!CheckedAddSizeT(L.damped_indices_offset, L.damped_indices_bytes, &cursor)) of = true;
 
 		if (!RoundUpToAlignment(cursor, SSLM_ABI_ALIGNMENT_BYTES, &aligned)) of = true;
 		L.rms_wide_offset = aligned;  // int64_t* -- the other region N2 measured misaligned.
@@ -1349,25 +1368,10 @@ void ReturnBlock(sslm_kv_pool_s* pool, uint32_t block_index, uint8_t* kv_block, 
 // invented a new status this design never named -- flagged as a modeling choice, not a design
 // citation, since Sec6's own text does not name this mapping. Never observed on any real
 // artifact this build tested against (see this ticket's own build log).
-sslm_status MapForwardStatus(superslm::SslmForwardStatus st) {
-	// T-2199 Phase D review fix S6 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): ONE
-	// special-cased member, not a rewrite of the blanket collapse above (that collapse's own
-	// reasoning -- no dedicated status exists for most of these causes -- still holds for every
-	// other member). SoftmaxKernelRefusedAfterGateAccepted is the one cause among them that is
-	// NOT an artifact defect: it fires on a valid model and valid params, when a per-step
-	// numeric gate (TopKRenormalizeQ15) declines -- SSLM_ARTIFACT_REJECTED's own documented
-	// remedy ("discard the model") is wrong advice for a retry-safe, per-step condition. Mapped
-	// to the new SSLM_NUMERIC_STEP_REFUSED (sslm_abi.h) instead.
-	if (st == superslm::SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted) {
-		return SSLM_NUMERIC_STEP_REFUSED;
-	}
-	// T-2199 Phase D review fix S3: symmetric with sslm_decode_stepImpl's own direct
-	// SSLM_INVALID_ARGUMENT return for the identical invalid-parameter set (above, this file).
-	if (st == superslm::SslmForwardStatus::InvalidDecodeParams) {
-		return SSLM_INVALID_ARGUMENT;
-	}
-	return st == superslm::SslmForwardStatus::Ok ? SSLM_OK : SSLM_ARTIFACT_REJECTED;
-}
+// T-2237/F3 (SuperSLM 1.2.1): MapForwardStatus itself moved OUT of this anonymous
+// namespace -- a linkage change only, body unchanged plus the new OutputCapacityExceeded
+// arm -- and now lives just after this namespace's close, where its definition is
+// reachable by the red-suite cell that asserts the mapping (dim5_failure_red.cpp).
 
 // C6: resolves the LayerWeights[] array a real RunLayerLoop call should use -- the model's own
 // cached BASE array directly when no adapter is bound (the common, zero-copy case; Sec8.3's
@@ -1580,6 +1584,38 @@ sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState
 }
 
 }  // namespace
+
+// T-2237/F3 (SuperSLM 1.2.1): moved OUT of the anonymous namespace above -- a linkage
+// change only, the body is unchanged -- so the red-suite cell that asserts this mapping's
+// new OutputCapacityExceeded arm can call it directly (the tests/t2112-gpu-1p0-red-suite/
+// fixture_common.h:142-151 global-scope-extern bench-accessor convention; precedent for
+// promoting an internal helper to a named, auditable door: checked_chain_funnel.cpp's own
+// CombineCarriedScale, T-1655/D-SLM620).
+sslm_status MapForwardStatus(superslm::SslmForwardStatus st) {
+	// T-2199 Phase D review fix S6 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): ONE
+	// special-cased member, not a rewrite of the blanket collapse above (that collapse's own
+	// reasoning -- no dedicated status exists for most of these causes -- still holds for every
+	// other member). SoftmaxKernelRefusedAfterGateAccepted is the one cause among them that is
+	// NOT an artifact defect: it fires on a valid model and valid params, when a per-step
+	// numeric gate (TopKRenormalizeQ15) declines -- SSLM_ARTIFACT_REJECTED's own documented
+	// remedy ("discard the model") is wrong advice for a retry-safe, per-step condition. Mapped
+	// to the new SSLM_NUMERIC_STEP_REFUSED (sslm_abi.h) instead.
+	if (st == superslm::SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted) {
+		return SSLM_NUMERIC_STEP_REFUSED;
+	}
+	// T-2199 Phase D review fix S3: symmetric with sslm_decode_stepImpl's own direct
+	// SSLM_INVALID_ARGUMENT return for the identical invalid-parameter set (above, this file).
+	if (st == superslm::SslmForwardStatus::InvalidDecodeParams) {
+		return SSLM_INVALID_ARGUMENT;
+	}
+	// T-2237/F3 (plan Sec7 F3 row, D-SLM3977's second landing): a caller-argument problem,
+	// not an artifact defect -- the blanket collapse below would send a host that under-sized
+	// its output buffers to discard a perfectly good model.
+	if (st == superslm::SslmForwardStatus::OutputCapacityExceeded) {
+		return SSLM_INVALID_ARGUMENT;
+	}
+	return st == superslm::SslmForwardStatus::Ok ? SSLM_OK : SSLM_ARTIFACT_REJECTED;
+}
 
 extern "C" sslm_status sslm_prefix_begin(sslm_model model, sslm_kv_pool* pool, sslm_prefix* out) {
 	if (!out) return SSLM_INVALID_ARGUMENT;

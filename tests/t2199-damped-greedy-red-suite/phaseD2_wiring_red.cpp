@@ -1015,6 +1015,76 @@ static void TestD2_ManualDampedParamsRejectArtifactWithoutDgcOptIn() {
 	}
 }
 
+// --- T-2238/F4 (SuperSLM 1.2.1, D-SLM3953): anti_lm_max_order gains the ceiling 82 in
+// ValidateDampedGreedyParams -- REJECTED past it, never clamped, mapped to
+// SSLM_INVALID_ARGUMENT at the ABI. Two-sided boundary cells in the shared validator's own
+// suite home. mode = kDampedGreedy is REQUIRED on both: greedy short-circuits before the
+// order checks (damped_greedy_phaseD.cpp), so a greedy-mode cell would pass vacuously at
+// any order. ---
+static void TestF4_MaxOrderCeiling_TwoSidedValidatorBoundary() {
+	// No artifact needed: the validator reads only its params and vocab_size.
+	const DampedGreedyValidationParams in_domain{DampedGreedyMode::kDampedGreedy,
+	                                             int32_t{1} << 14, /*anti_lm_max_order=*/82,
+	                                             /*top_k=*/6};
+	CHECK_MSG(ValidateDampedGreedyParams(in_domain, /*vocab_size=*/128),
+	          "F4: anti_lm_max_order=82 must be ACCEPTED at the validator (the last order "
+	          "carrying nonzero weight under the shipped recurrence, D-SLM3912/D-SLM3953)");
+	const DampedGreedyValidationParams out_of_domain{DampedGreedyMode::kDampedGreedy,
+	                                                 int32_t{1} << 14,
+	                                                 /*anti_lm_max_order=*/83, /*top_k=*/6};
+	CHECK_MSG(!ValidateDampedGreedyParams(out_of_domain, /*vocab_size=*/128),
+	          "F4: anti_lm_max_order=83 must be REJECTED at the validator -- one past the "
+	          "ruled ceiling of 82");
+}
+
+static void TestF4_MaxOrderCeiling_AbiFormRejectsInvalidArgument() {
+	if (g_model_path.empty()) {
+		SKIP_MSG("real damped artifact not supplied (--model=PATH) -- ABI-form ceiling cell "
+		         "not run");
+		return;
+	}
+	RealModelFixture fx;
+	std::string err;
+	if (!LoadRealModel(&fx, &err)) {
+		SKIP_MSG("could not load real artifact: %s", err.c_str());
+		return;
+	}
+
+	auto run_with_order = [&](int32_t order) -> sslm_status {
+		sslm_seq seq = nullptr;
+		CHECK(sslm_seq_create(fx.model, &fx.pool, &seq) == SSLM_OK);
+		CHECK(PrefillPrompt(fx, seq));
+		// Hand-filled params: sslm_decode_params_init fills the ruled operating point
+		// n=2, so hand-filling is the only route to reach the boundary value through
+		// the public struct.
+		sslm_decode_params params{};
+		params.struct_size = sizeof(params);  // D-SLM3797
+		params.layer_budget = static_cast<int32_t>(fx.num_hidden_layers);
+		params.mode = SSLM_DECODE_MODE_DAMPED_GREEDY;
+		params.alpha_q15 = int32_t{1} << 14;
+		params.anti_lm_max_order = order;
+		params.top_k = fx.vocab_size < 6 ? fx.vocab_size : 6;
+		CHECK(t2199phaseD::DeriveDefaultScaleConstants(&params.q_ln2, &params.q_b,
+		                                               &params.q_c));
+		sslm_seq batch[1] = {seq};
+		int32_t token = -777;
+		const sslm_status st =
+		    sslm_decode_step_v2(fx.model, batch, 1, &params, nullptr, &token);
+		CHECK(sslm_seq_release(seq) == SSLM_OK);
+		return st;
+	};
+
+	const sslm_status at_ceiling = run_with_order(82);
+	CHECK_MSG(at_ceiling == SSLM_OK,
+	          "F4: a hand-filled anti_lm_max_order=82 decode call must be accepted (got %d)",
+	          static_cast<int>(at_ceiling));
+	const sslm_status past_ceiling = run_with_order(83);
+	CHECK_MSG(past_ceiling == SSLM_INVALID_ARGUMENT,
+	          "F4: a hand-filled anti_lm_max_order=83 decode call must reject "
+	          "SSLM_INVALID_ARGUMENT (got %d) -- rejected outright, never clamped",
+	          static_cast<int>(past_ceiling));
+}
+
 int main(int argc, char** argv) {
 	ParseArgs(argc, argv);
 	TestD2_GreedyMode_BitUnchangedRegression();
@@ -1028,6 +1098,8 @@ int main(int argc, char** argv) {
 	TestD2_DampedGreedy_ComposesWithSchemaMaskFirst();
 	TestD2_DampedGreedy_ComposesWithRuntimeAdapter();
 	TestD2_ManualDampedParamsRejectArtifactWithoutDgcOptIn();
+	TestF4_MaxOrderCeiling_TwoSidedValidatorBoundary();
+	TestF4_MaxOrderCeiling_AbiFormRejectsInvalidArgument();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

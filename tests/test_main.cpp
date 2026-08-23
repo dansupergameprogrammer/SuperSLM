@@ -1655,6 +1655,78 @@ static void TestTok1RejectsSpecialOffsetOutOfRange() {
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: bad special offset");
 }
 
+// --- T-2235 / F1 (SuperSLM 1.2.1): special-token content lengths must be
+//     non-increasing -- docs/sslm_format.md "special_blob ... special-token
+//     contents, longest-content-first (greedy match order)". encode()'s
+//     special_at walks `specials` in stored order and returns the FIRST match,
+//     so a blob whose stored lengths ascend makes a shorter special shadow a
+//     longer one at any position where both match: a silent, deterministic
+//     greedy-match divergence from the documented contract. ParseTok checked
+//     only non-decreasing offsets and in-blob bounds; these two cells drive
+//     SslmModel::Load (the real trust boundary) over twin TOK1 blobs whose
+//     special BLOB BYTES are identical ("abcdef") and whose offset tables
+//     alone differ. The control stores [4, 2] (longest-first, valid); the
+//     hostile twin patches one offset to store [2, 4] (ascending), keeping
+//     every offset non-decreasing and within special_blob_len so ONLY the
+//     length-monotonicity check can reject it. ---
+
+// A valid TOK1 whose specials are stored longest-content-first: contents
+// "abcd" (id 3) then "ef" (id 4), offsets [0, 4, 6]. Ids name the vocabulary
+// slots carrying the same bytes (the converter's own id_to_bytes convention).
+static BuiltTok1 MakeTok1WithTwoSpecialsLongestFirst() {
+	std::array<uint32_t, 256> byte_to_id{};
+	byte_to_id[static_cast<unsigned char>('c')] = 0;
+	byte_to_id[static_cast<unsigned char>('a')] = 1;
+	byte_to_id[static_cast<unsigned char>('t')] = 2;
+	std::vector<TokVocabEntry> vocab = {{"c"}, {"a"}, {"t"}, {"abcd"}, {"ef"}};
+	std::vector<TokMerge> merges = {{0, 1, 3}};
+	std::vector<TokSpecial> specials = {{"abcd", 3}, {"ef", 4}};
+	return BuildTok1(byte_to_id, vocab, merges, specials);
+}
+
+static void TestLoadAcceptsSpecialTokensStoredLongestContentFirst() {
+	using namespace superslm_test;
+	auto tok1 = MakeTok1WithTwoSpecialsLongestFirst();  // lengths [4, 2] -- compliant
+	CHECK(tok1.layout.vocab_count == 5);
+	auto uni1 = MakeMinimalValidUni1();
+	auto built = BuildTokenizerArtifactForLoad(tok1.bytes, uni1.bytes, /*vocab_size=*/5);
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok,
+	          "specials stored longest-content-first ([4, 2]) must load through SslmModel::Load: "
+	          "got %s (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+	CHECK(view.has_tokenizer);
+	CHECK(view.tokenizer.Ok());
+}
+
+static void TestLoadRejectsSpecialTokenContentLengthsAscending() {
+	using namespace superslm_test;
+	auto tok1 = MakeTok1WithTwoSpecialsLongestFirst();  // offsets [0, 4, 6]
+	// Patch ONLY the middle offset 4 -> 2: effective content lengths become
+	// [2, 4] (ascending) over the same blob bytes "abcdef". Offsets stay
+	// non-decreasing and within special_blob_len, so the pre-existing range
+	// and monotonicity checks both pass and only the new
+	// longest-content-first check can reject this artifact.
+	PutU32(tok1.bytes, tok1.layout.special_offsets_off + 1 * 4, 2);
+
+	auto uni1 = MakeMinimalValidUni1();
+	auto built = BuildTokenizerArtifactForLoad(tok1.bytes, uni1.bytes, /*vocab_size=*/5);
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::TokenizerRejected,
+	          "ascending special-content lengths ([2, 4], same blob bytes) through "
+	          "SslmModel::Load: got %s, want TokenizerRejected (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK_MSG(!err.empty(), "a TokenizerRejected load must carry a diagnostic string");
+	CHECK(!view.has_tokenizer);
+}
+
 // --- S-HARDEN-2 (F6): TOK1's declared version and reserved fields (offset 4 and
 //     offset 20 respectively, docs/sslm_format.md "Tokenizer blob — TOK1") were
 //     never read by any code path before this slot — a guard-vitality gap (§17
@@ -26047,6 +26119,8 @@ int main(int argc, char** argv) {
 	TestTok1RejectsTruncatedSpecialBlob();
 	TestTok1RejectsSpecialOffsetNonMonotonic();
 	TestTok1RejectsSpecialOffsetOutOfRange();
+	TestLoadAcceptsSpecialTokensStoredLongestContentFirst();
+	TestLoadRejectsSpecialTokenContentLengthsAscending();
 
 	// --- S-HARDEN-2 (F6/F18, red-first): TOK1's version/reserved fields and its
 	//     vocabulary-bound rejection (byte_to_id, merge operands/results, special

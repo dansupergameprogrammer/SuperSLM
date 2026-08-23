@@ -13,9 +13,27 @@
 //   SSLM_RESTORE_MODEL_MISMATCH, SSLM_RESTORE_KV_MISMATCH -- dim9 M2/M3.
 // 11 cells here: SSLM_OK's own negative-space is implicit in every other file's non-hostile
 // calls, not a dedicated cell. RED BY LINK.
+// T-2237/F3 brings the production phase-D surface into this TU. sslm_phaseD.h itself
+// includes superslm/sslm_abi.h; THIS suite tests against the promoted MIRROR of that header
+// (fixture_common.h below, gate-reconciled against production), so BOTH sections of the real
+// header -- its main type section and its independently-guarded functions section -- are
+// suppressed here to keep exactly one definition of every ABI type in this TU.
+#define SUPERSLM_INCLUDE_SSLM_ABI_H
+#define SUPERSLM_ABI_FUNCTIONS_INCLUDED_
+#include "superslm/sslm_phaseD.h"
+
 #include "fixture_common.h"
 
+#include <cstring>
+
 using namespace superslm;
+
+// T-2237/F3 bench access (the tests/t2112-gpu-1p0-red-suite/fixture_common.h:142-151
+// global-scope-extern convention): MapForwardStatus moved out of src/sslm_abi.cpp's
+// anonymous namespace, definition unchanged -- a linkage change only, so this cell can
+// assert the ABI mapping arm directly (the C ABI carries no undersized-output-capacity
+// call shape of its own: sslm_decode_step emits one token per sequence per call).
+sslm_status MapForwardStatus(superslm::SslmForwardStatus st);
 
 // --- Cell 1 (SSLM_INVALID_ARGUMENT -- design Sec6's own kept broad catch-all, "a null
 // required pointer, a negative count"): a null `out` pointer and a negative `count` are both
@@ -278,6 +296,175 @@ static void TestDim5_C11_ContextCapExceededRejected(sslm_model model, sslm_seq s
 	CHECK(sslm_seq_release(restored) == SSLM_OK);
 }
 
+// --- Cell 12 (T-2237/F3(a), plan Sec10 Phase 1 F3; red suite PH1-F3-C1): an undersized
+// out_tokens_capacity used to be ignored outright (`(void)out_tokens_capacity`,
+// damped_greedy_phaseD_loop.cpp) while the loop wrote every produced token and full logit
+// row past the caller's stated capacity -- silent OOB writes, returns Ok. The fix rejects
+// with the NEW SslmForwardStatus::OutputCapacityExceeded before any output byte is
+// touched. Canary words bracket the writable window INSIDE each allocation (the same
+// memory-safety evidence ASan gives, without turning the pre-fix run into a heap crash):
+// a write past capacity lands in the canary, not in allocator metadata.
+//
+// Fixture rig: the hermetic artifact via --model (the suite's real engine call shape,
+// LoadCpuOracleModel), prompt of 3 tokens, max_new_tokens = 4, capacity = 3.
+static void TestDim5_C12_UndersizedOutputCapacityRejected(const SslmModelView& view) {
+	CpuOracleModel m;
+	std::string oerr;
+	if (!LoadCpuOracleModel(view, &m, &oerr)) {
+		SKIP_MSG("dim5 C12: could not build CPU oracle rig: %s", oerr.c_str());
+		return;
+	}
+	const size_t kv_bytes = static_cast<size_t>(m.num_hidden_layers) *
+	                        static_cast<size_t>(m.context_cap) * m.num_kv_heads * m.head_dim * 2;
+	std::vector<uint8_t> workspace(kv_bytes);
+	std::vector<int8_t> hidden_codes(m.hidden_size);
+	SequenceLayerState seq{};
+	seq.hidden_codes = hidden_codes.data();
+
+	const int32_t prompt[3] = {0, 1, 2};
+	const size_t max_new_tokens = 4;
+	const size_t capacity = 3;  // one short of what the loop will produce
+
+	constexpr size_t kCanaryWords = 4;
+	constexpr int32_t kCanaryValue = static_cast<int32_t>(0x5A5A5A5A);
+	// Layout per buffer: [leading canary][writable window: capacity][spill zone][far zone].
+	// The window is what the caller CONTRACT allows the loop to write. The spill zone is
+	// sized for the UNFIXED loop's worst-case writes (max_new_tokens rows/tokens) so this
+	// process survives to report -- the same evidence ASan gives, without turning the red
+	// run into a heap crash. Pre-fix the spill zone reads disturbed; post-fix everything
+	// outside the window keeps its canary value.
+	const size_t token_spill_end = kCanaryWords + max_new_tokens;
+	std::vector<int32_t> token_storage(token_spill_end + 64, kCanaryValue);
+	const size_t row_window_words = capacity * static_cast<size_t>(m.vocab_size);
+	const size_t row_spill_end =
+	    kCanaryWords + max_new_tokens * static_cast<size_t>(m.vocab_size);
+	std::vector<int32_t> row_storage(row_spill_end + 256, kCanaryValue);
+	int32_t* out_tokens = token_storage.data() + kCanaryWords;
+	int32_t* out_rows = row_storage.data() + kCanaryWords;
+
+	size_t produced = 999;
+	SslmDecodeStopReason stop_reason{};
+	const SslmForwardStatus st = RunGreedyOrDampedGreedyDecodeLoop(
+	    seq, m.layers.data(), m.num_hidden_layers, m.hidden_size, m.head_dim, m.num_kv_heads,
+	    m.intermediate_size, m.context_cap, *m.rope_tables, prompt, 3, m.embed_weights,
+	    m.embed_site_constant, m.final_norm_gain.data(), m.final_norm_site_constant,
+	    m.head_weights, m.vocab_size, /*stop_ids=*/nullptr, /*stop_count=*/0, max_new_tokens,
+	    workspace.data(), workspace.size(), out_tokens, out_rows, capacity, &produced,
+	    &stop_reason, m.kv_precision, m.option_g_fused_k_landing,
+	    /*mode=*/DampedGreedyMode::kGreedy, /*alpha_q15=*/int32_t{1} << 14,
+	    /*anti_lm_max_order=*/2, /*top_k=*/6, /*q_ln2=*/493, /*q_b=*/0, /*q_c=*/0);
+
+	// Companion behavioral half (compiles and fails against the unfixed loop): the
+	// undersized call must not report Ok.
+	CHECK_MSG(st != SslmForwardStatus::Ok,
+	          "dim5 C12: undersized out_tokens_capacity (%zu, produced would be %zu) returned "
+	          "the forward status %d -- the loop wrote past the caller's capacity and returned "
+	          "Ok",
+	          capacity, max_new_tokens, static_cast<int>(st));
+	// The named rejection (red-by-link until the enumerator lands).
+	CHECK_MSG(st == SslmForwardStatus::OutputCapacityExceeded,
+	          "dim5 C12: undersized capacity must reject OutputCapacityExceeded, got status %d",
+	          static_cast<int>(st));
+	// The ABI mapping arm (D-SLM3977's second landing): a caller-argument problem maps to
+	// SSLM_INVALID_ARGUMENT, mirroring InvalidDecodeParams' own precedent.
+	CHECK_MSG(MapForwardStatus(SslmForwardStatus::OutputCapacityExceeded) ==
+	                  SSLM_INVALID_ARGUMENT,
+	          "dim5 C12: MapForwardStatus(OutputCapacityExceeded) must map to "
+	          "SSLM_INVALID_ARGUMENT");
+	// SslmForwardStatusName owes the new member a REAL arm: the switch has no default and
+	// silently degrades to "?" under /W4-without-/WX when the arm is missing.
+	CHECK_MSG(std::strcmp(SslmForwardStatusName(SslmForwardStatus::OutputCapacityExceeded),
+	                      "?") != 0,
+	          "dim5 C12: SslmForwardStatusName(OutputCapacityExceeded) returned \"?\" -- the "
+	          "name switch is missing its arm");
+
+	bool canaries_intact = true;
+	for (size_t i = 0; i < kCanaryWords; ++i) {
+		if (token_storage[i] != kCanaryValue || token_storage[token_spill_end + i] != kCanaryValue)
+			canaries_intact = false;
+		if (row_storage[i] != kCanaryValue || row_storage[row_spill_end + i] != kCanaryValue)
+			canaries_intact = false;
+	}
+	// The spill zone is OUTSIDE the window the caller contracted for: any non-canary word
+	// there proves the loop wrote past its stated capacity.
+	for (size_t i = kCanaryWords + capacity; i < token_spill_end; ++i) {
+		if (token_storage[i] != kCanaryValue) canaries_intact = false;
+	}
+	for (size_t i = kCanaryWords + row_window_words; i < row_spill_end; ++i) {
+		if (row_storage[i] != kCanaryValue) canaries_intact = false;
+	}
+	CHECK_MSG(canaries_intact,
+	          "dim5 C12: memory outside the stated capacity window was overwritten -- the loop "
+	          "wrote past out_tokens_capacity before rejecting");
+}
+
+// --- Cell 13 (T-2237/F3(b), plan Sec10 Phase 1 F3; red suite PH1-F3-C2): the boundary
+// PARTNER for C12 -- capacity EXACTLY equal to the count actually produced succeeds.
+// Catches `<` written where `<=` was intended, which C12 alone cannot see.
+// REGRESSION-PIN-class partner: green-vacuous until C12's check exists, never counted as
+// red coverage.
+static void TestDim5_C13_ExactFitOutputCapacityAccepted(const SslmModelView& view) {
+	CpuOracleModel m;
+	std::string oerr;
+	if (!LoadCpuOracleModel(view, &m, &oerr)) {
+		SKIP_MSG("dim5 C13: could not build CPU oracle rig: %s", oerr.c_str());
+		return;
+	}
+	const size_t kv_bytes = static_cast<size_t>(m.num_hidden_layers) *
+	                        static_cast<size_t>(m.context_cap) * m.num_kv_heads * m.head_dim * 2;
+	std::vector<uint8_t> workspace(kv_bytes);
+	std::vector<int8_t> hidden_codes(m.hidden_size);
+	SequenceLayerState seq{};
+	seq.hidden_codes = hidden_codes.data();
+
+	const int32_t prompt[3] = {0, 1, 2};
+	const size_t max_new_tokens = 4;
+	const size_t capacity = 4;  // EXACTLY the produced count (no stop ids -> MaxTokensReached)
+
+	constexpr size_t kCanaryWords = 4;
+	constexpr int32_t kCanaryValue = static_cast<int32_t>(0x5A5A5A5A);
+	std::vector<int32_t> token_storage(kCanaryWords + capacity + kCanaryWords, kCanaryValue);
+	std::vector<int32_t> row_storage(kCanaryWords + capacity * m.vocab_size + kCanaryWords,
+	                                 kCanaryValue);
+	int32_t* out_tokens = token_storage.data() + kCanaryWords;
+	int32_t* out_rows = row_storage.data() + kCanaryWords;
+
+	size_t produced = 0;
+	SslmDecodeStopReason stop_reason{};
+	const SslmForwardStatus st = RunGreedyOrDampedGreedyDecodeLoop(
+	    seq, m.layers.data(), m.num_hidden_layers, m.hidden_size, m.head_dim, m.num_kv_heads,
+	    m.intermediate_size, m.context_cap, *m.rope_tables, prompt, 3, m.embed_weights,
+	    m.embed_site_constant, m.final_norm_gain.data(), m.final_norm_site_constant,
+	    m.head_weights, m.vocab_size, /*stop_ids=*/nullptr, /*stop_count=*/0, max_new_tokens,
+	    workspace.data(), workspace.size(), out_tokens, out_rows, capacity, &produced,
+	    &stop_reason, m.kv_precision, m.option_g_fused_k_landing,
+	    /*mode=*/DampedGreedyMode::kGreedy, /*alpha_q15=*/int32_t{1} << 14,
+	    /*anti_lm_max_order=*/2, /*top_k=*/6, /*q_ln2=*/493, /*q_b=*/0, /*q_c=*/0);
+
+	CHECK_MSG(st == SslmForwardStatus::Ok,
+	          "dim5 C13: capacity exactly equal to the produced count (%zu) must succeed, got "
+	          "status %d -- an off-by-one (< written for <=) in the capacity check",
+	          capacity, static_cast<int>(st));
+	if (st == SslmForwardStatus::Ok) {
+		CHECK(produced == max_new_tokens);
+		CHECK(stop_reason == SslmDecodeStopReason::MaxTokensReached);
+		for (size_t i = 0; i < produced; ++i) {
+			CHECK(out_tokens[i] >= 0 && out_tokens[i] < m.vocab_size);
+		}
+		bool canaries_intact = true;
+		for (size_t i = 0; i < kCanaryWords; ++i) {
+			if (token_storage[i] != kCanaryValue ||
+			    token_storage[kCanaryWords + capacity + i] != kCanaryValue)
+				canaries_intact = false;
+			if (row_storage[i] != kCanaryValue ||
+			    row_storage[kCanaryWords + capacity * static_cast<size_t>(m.vocab_size) + i] !=
+			        kCanaryValue)
+				canaries_intact = false;
+		}
+		CHECK(canaries_intact);
+	}
+}
+
 // REAL INVOCATION DRIVER (house pattern) -- supersedes the address-only convention. The
 // builder's own ad-hoc driver crashed (STATUS_HEAP_CORRUPTION, root cause unisolated) and was
 // reverted to link-only (Claude/Brunel/t2139-abi-build-2026-08-16.md S6). Authored fresh here:
@@ -404,6 +591,11 @@ int main(int argc, char** argv) {
 		}
 		TestDim5_C8_KvPoolExhaustedSequenceResumable(model);
 		TestDim5_C9_KvPoolExhaustedPrefixResumable(model);
+
+		// T-2237/F3: the phase-D free-text loop's own output-capacity contract. Self-contained
+		// rigs built from the already-mapped model view (own workspace, own sequence state).
+		TestDim5_C12_UndersizedOutputCapacityRejected(view);
+		TestDim5_C13_ExactFitOutputCapacityAccepted(view);
 
 		CHECK(sslm_model_unmap(model) == SSLM_OK);
 	}

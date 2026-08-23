@@ -369,6 +369,175 @@ static void TestDim7_C3_LifecycleGuardRejectionCostIsDataIndependent(sslm_model 
 	CHECK(stats_before.decode_step_ceiling == stats_after.decode_step_ceiling);
 }
 
+// --- Cells 4 and 5 (T-2234, SuperSLM 1.2.1; red suite PH1-T2234-C1/C2): the workspace's
+// damped_indices region becomes CONDITIONAL on damped_greedy_available. 1.2.0 grew EVERY
+// caller's workspace unconditionally (the region is reserved for any mapped model,
+// src/sslm_abi.cpp ComputeWorkspaceLayout); the fix reserves it only when the artifact
+// carries the DGC1 opt-in, restoring the pre-1.2 formula for greedy-only callers -- so an
+// old-formula buffer sized by 1.1.0's own arithmetic validates again at 1.2.1.
+//
+// GOLDEN_1_1_0_TOTAL -- captured ONCE by executing tag v1.1.0's own shipped
+// sslm_workspace_size over the identical geometry (provenance: 2026-08-23, detached
+// worktree at v1.1.0 = commit 49d1333, capture tool linked v1.1.0's real
+// src/sslm_abi.cpp; artifact: out/t2243_s8_plain.sslm, the S8 fixture's no-DGC1 twin;
+// frozen geometry literals: num_hidden_layers=8 hidden_size=32 vocab_size=128
+// context_cap=64; sslm_config: max_batch=16 max_chunk_budget=256 max_layer_budget=8).
+// Executed output: "GOLDEN v1.1.0: ... total_bytes=11264". The reference is the prior
+// release's OWN arithmetic, independent of 1.2.1's.
+//
+// Both cells require the hermetic fixture pair at exactly this geometry (--model= the S8
+// DGC1 artifact, --modelplain= its no-DGC1 twin): the golden value is meaningful ONLY over
+// the frozen geometry it was captured at (a different artifact SKIPs rather than asserting
+// against a mismatched domain). The v1.1.0 -> 1.2.0 layout diff is EXACTLY one added region
+// (damped_indices_offset/bytes between logit_row and rms_wide; verified by diffing the two
+// tags' ComputeWorkspaceLayout), so over a frozen geometry `total == GOLDEN` is equivalent
+// to `damped_indices_bytes == 0` with its offset unclaimed.
+
+static const size_t GOLDEN_1_1_0_TOTAL = 11264;
+
+// Frozen geometry + config both cells' golden comparisons are valid over.
+struct FrozenGeometry {
+	uint32_t num_hidden_layers;
+	uint32_t hidden_size;
+	uint32_t vocab_size;
+	int32_t context_cap;
+};
+static constexpr FrozenGeometry kGoldenGeometry{8, 32, 128, 64};
+
+static bool GeometryMatchesGolden(const superslm::SslmModelView& view) {
+	return view.config.num_hidden_layers == kGoldenGeometry.num_hidden_layers &&
+	       view.config.hidden_size == kGoldenGeometry.hidden_size &&
+	       view.config.vocab_size == kGoldenGeometry.vocab_size &&
+	       static_cast<int32_t>(view.config.context_cap) == kGoldenGeometry.context_cap;
+}
+
+// Cell 4 (PH1-T2234-C1): with damped_greedy_available == false the workspace reserves NO
+// damped_indices region and the total equals the pre-1.2.0 formula -- AND an sslm_decode
+// call with a caller workspace buffer sized to that golden total succeeds end to end (the
+// old buffer is ACCEPTED, not merely identically computed).
+static void TestDim7_C4_NonDgc1WorkspaceMatchesV110Golden(sslm_model model_plain,
+                                                           const superslm::SslmModelView& view) {
+	if (!GeometryMatchesGolden(view)) {
+		SKIP_MSG("dim7 C4: --modelplain geometry (%u/%u/%u/%d) does not match the frozen "
+		         "geometry the golden was captured over (8/32/128/64) -- cell not run",
+		         static_cast<unsigned>(view.config.num_hidden_layers),
+		         static_cast<unsigned>(view.config.hidden_size),
+		         static_cast<unsigned>(view.config.vocab_size),
+		         static_cast<int>(view.config.context_cap));
+		return;
+	}
+	const int32_t num_hidden_layers = static_cast<int32_t>(view.config.num_hidden_layers);
+	const sslm_config cfg = ValidWorkspaceConfig(num_hidden_layers);
+	const size_t ws_size = sslm_workspace_size(model_plain, &cfg);
+	CHECK_MSG(ws_size == GOLDEN_1_1_0_TOTAL,
+	          "dim7 C4: a non-DGC1 artifact's workspace must size to the pre-1.2 formula "
+	          "(golden %zu captured from v1.1.0's own ComputeWorkspaceLayout); got %zu -- "
+	          "%zu bytes of unconditional damped_indices growth",
+	          GOLDEN_1_1_0_TOTAL, ws_size, ws_size - GOLDEN_1_1_0_TOTAL);
+
+	// End-to-end validation arm: the old-formula buffer is ACCEPTED and drives a real
+	// prefill + decode step.
+	const uint32_t block_count = 1;
+	const size_t block_bytes = sslm_kv_block_size(model_plain);
+	const size_t overhead = sslm_kv_pool_overhead_size(model_plain, block_count);
+	AlignedBuffer pool_buf(block_count * block_bytes + overhead);
+	sslm_kv_pool pool = nullptr;
+	CHECK(sslm_kv_pool_create(model_plain, pool_buf.data(), pool_buf.size(), block_count,
+	                          &pool) == SSLM_OK);
+	AlignedBuffer ws_buf(GOLDEN_1_1_0_TOTAL);
+	sslm_workspace ws = nullptr;
+	CHECK_MSG(sslm_workspace_create(model_plain, &cfg, ws_buf.data(), ws_buf.size(), &ws) ==
+	                  SSLM_OK,
+	          "dim7 C4: a caller workspace sized to the v1.1.0 golden total (%zu bytes) must "
+	          "be ACCEPTED for a non-DGC1 artifact at 1.2.1 (got status %d)",
+	          GOLDEN_1_1_0_TOTAL, ws != nullptr ? 0 : -1);
+	if (!ws) return;
+	sslm_seq seq = nullptr;
+	CHECK(sslm_seq_create(model_plain, &pool, &seq) == SSLM_OK);
+	if (seq && pool) {
+		int32_t prompt[4] = {0, 1, 2, 3};
+		int32_t consumed = 0;
+		CHECK(sslm_prefill(model_plain, seq, prompt, 4, 8, SSLM_SPAN_PROMPT, ws,
+		                    &consumed) == SSLM_OK);
+		sslm_decode_params params{};
+		params.struct_size = sizeof(params);
+		params.layer_budget = num_hidden_layers;
+		sslm_seq batch[1] = {seq};
+		int32_t token = 0;
+		CHECK(sslm_decode_step(model_plain, batch, 1, &params, ws, &token) == SSLM_OK);
+		CHECK(sslm_seq_release(seq) == SSLM_OK);
+	}
+	if (ws) CHECK(sslm_workspace_destroy(ws) == SSLM_OK);
+	if (pool) CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
+}
+
+// Cell 5 (PH1-T2234-C2): a DGC1-bearing artifact STILL reserves the damped_indices region
+// once the gating lands -- REGRESSION-PIN, green-at-authoring (it passes today BY the very
+// behavior cell 4 removes elsewhere), never counted as red coverage. Its obligation is
+// existence BEFORE the fix, so the fix cannot silently drop the region.
+static void TestDim7_C5_Dgc1ArtifactKeepsDampedRegion(sslm_model model_dgc1,
+                                                       const superslm::SslmModelView& view) {
+	if (!GeometryMatchesGolden(view)) {
+		SKIP_MSG("dim7 C5: --model geometry does not match the frozen geometry the golden was "
+		         "captured over (8/32/128/64) -- cell not run");
+		return;
+	}
+	const int32_t vocab_size = static_cast<int32_t>(view.config.vocab_size);
+	const int32_t num_hidden_layers = static_cast<int32_t>(view.config.num_hidden_layers);
+	const sslm_config cfg = ValidWorkspaceConfig(num_hidden_layers);
+	const size_t ws_size = sslm_workspace_size(model_dgc1, &cfg);
+
+	// The region's byte count at THIS fixture's vocabulary: vocab_size * sizeof(int32_t),
+	// aligned per the layout's alignment rule. The delta against the v1.1.0 golden is
+	// observable publicly through the total alone (the v1.1.0 -> 1.2.0 layout diff is
+	// exactly that one region).
+	CHECK(ws_size >= GOLDEN_1_1_0_TOTAL);
+	const size_t delta = ws_size - GOLDEN_1_1_0_TOTAL;
+	CHECK_MSG(delta >= static_cast<size_t>(vocab_size) * sizeof(int32_t),
+	          "dim7 C5: the DGC1 artifact's workspace must still reserve damped_indices "
+	          "(delta %zu vs golden %zu < vocab %d * 4) -- the gating dropped the region",
+	          delta, GOLDEN_1_1_0_TOTAL, vocab_size);
+
+	// Decode with the FULL layout succeeds: the reserved region is real and usable on the
+	// damped path (prefill + one damped-greedy decode step through the caller's workspace).
+	const uint32_t block_count = 1;
+	const size_t block_bytes = sslm_kv_block_size(model_dgc1);
+	const size_t overhead = sslm_kv_pool_overhead_size(model_dgc1, block_count);
+	AlignedBuffer pool_buf(block_count * block_bytes + overhead);
+	sslm_kv_pool pool = nullptr;
+	CHECK(sslm_kv_pool_create(model_dgc1, pool_buf.data(), pool_buf.size(), block_count,
+	                          &pool) == SSLM_OK);
+	AlignedBuffer ws_buf(ws_size);
+	sslm_workspace ws = nullptr;
+	CHECK(sslm_workspace_create(model_dgc1, &cfg, ws_buf.data(), ws_buf.size(), &ws) ==
+	      SSLM_OK);
+	if (ws && pool) {
+		sslm_seq seq = nullptr;
+		CHECK(sslm_seq_create(model_dgc1, &pool, &seq) == SSLM_OK);
+		if (seq) {
+			int32_t prompt[4] = {0, 1, 2, 3};
+			int32_t consumed = 0;
+			CHECK(sslm_prefill(model_dgc1, seq, prompt, 4, 8, SSLM_SPAN_PROMPT, ws,
+			                    &consumed) == SSLM_OK);
+			sslm_decode_params params{};
+			const sslm_status init =
+			    sslm_decode_params_init(model_dgc1, /*mode=*/1, num_hidden_layers, &params);
+			if (init == SSLM_ARTIFACT_REJECTED) {
+				SKIP_MSG("dim7 C5: --model carries no DGC1 section -- damped arm not run");
+			} else {
+				CHECK(init == SSLM_OK);
+				sslm_seq batch[1] = {seq};
+				int32_t token = 0;
+				CHECK(sslm_decode_step_v2(model_dgc1, batch, 1, &params, ws, &token) ==
+				      SSLM_OK);
+			}
+			CHECK(sslm_seq_release(seq) == SSLM_OK);
+		}
+	}
+	if (ws) CHECK(sslm_workspace_destroy(ws) == SSLM_OK);
+	if (pool) CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
+}
+
 // REAL INVOCATION DRIVER (house pattern) -- supersedes the address-only convention. Each cell
 // gets its OWN fresh sequence (a pool sized for three) so C2's own "prefill from scratch" and
 // C3's own mid-token setup never observe another cell's leftover state.
@@ -451,6 +620,32 @@ int main(int argc, char** argv) {
 					CHECK(sslm_adapter_release(adapter) == SSLM_OK);
 				}
 			}
+			// T-2234: the workspace-layout contract across the damped_greedy_available
+			// gating. Both cells build their own pools/workspaces; C5 runs against THIS
+			// file's --model (the DGC1-bearing hermetic artifact), C4 against --modelplain.
+			if (!g_model_plain_path.empty()) {
+				superslm::SslmModelView plain_view;
+				std::vector<uint8_t> plain_bytes;
+				std::string plain_err;
+				if (LoadRealModelView(g_model_plain_path, &plain_view, &plain_bytes,
+				                      &plain_err)) {
+					sslm_model model_plain = nullptr;
+					CHECK(sslm_model_map(plain_bytes.data(), plain_bytes.size(),
+					                     &model_plain) == SSLM_OK);
+					if (model_plain) {
+						TestDim7_C4_NonDgc1WorkspaceMatchesV110Golden(model_plain,
+						                                              plain_view);
+						CHECK(sslm_model_unmap(model_plain) == SSLM_OK);
+					}
+				} else {
+					SKIP_MSG("dim7 C4: could not load --modelplain artifact: %s",
+					         plain_err.c_str());
+				}
+			} else {
+				SKIP_MSG("--modelplain=PATH not supplied -- dim7 C4 not run");
+			}
+			TestDim7_C5_Dgc1ArtifactKeepsDampedRegion(model, view);
+
 			if (seq_decode) CHECK(sslm_seq_release(seq_decode) == SSLM_OK);
 			if (seq_with_ws) CHECK(sslm_seq_release(seq_with_ws) == SSLM_OK);
 			if (seq_without_ws) CHECK(sslm_seq_release(seq_without_ws) == SSLM_OK);

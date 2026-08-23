@@ -484,6 +484,19 @@ bool ParseTok(const uint8_t* d, size_t sz, TokenizerView::Impl& im, std::string*
 	uint32_t sblob = Rd32(d + pos); pos += 4;
 	if (!need(pos, sblob)) return fail("Tokenizer: truncated special blob");
 	const uint8_t* sb = d + pos;
+	// T-2235/F1 (SuperSLM 1.2.1): the special table's WRITER invariant -- docs/sslm_format.md
+	// "special_blob ... special-token contents, longest-content-first (greedy match order)".
+	// encode()'s special_at walks `specials` in stored order and returns the FIRST match, so
+	// contents stored shortest-first let a shorter token shadow a longer one at any position
+	// where both match: silent, deterministic greedy-match divergence from the documented
+	// contract. Same shape as the vocab-offset monotonicity sibling above: content LENGTHS
+	// must be non-increasing. A pair that also violates the per-pair non-decreasing-offset
+	// check inside the emplace loop below wraps unsigned here and is rejected there -- every
+	// hostile table is caught by one of the two passes.
+	for (uint32_t i = 0; i + 1 < special; ++i) {
+		if (soff[i + 1] - soff[i] < soff[i + 2] - soff[i + 1])
+			return fail("Tokenizer: special tokens not stored longest-content-first");
+	}
 	im.specials.reserve(special);
 	for (uint32_t i = 0; i < special; ++i) {
 		if (soff[i] > soff[i + 1] || soff[i + 1] > sblob) return fail("Tokenizer: bad special offset");

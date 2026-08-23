@@ -777,6 +777,21 @@ enum class SslmGpuStatus { Ok, DispatchBudgetTooSmall, Busy };
 // later sequence in the same call), silently.
 constexpr uint32_t kDispatchesPerLayer = 24;  // the real per-layer dispatch count
 
+// T-2240/O3 (SuperSLM 1.2.1, plan Sec10 Phase 2 O3): the ADAPTER_U region's own byte size,
+// extracted from the work_total site (superslm_gpu.cpp, `work_adapter_u_off + ...`) into
+// this namespace-scope pure helper -- the same one-source discipline
+// kDispatchesPerLayer above establishes, so the sizing expression and its test read one
+// definition. The region keeps its 4-byte floor (a D3D12 buffer needs to be a legal
+// resource even at rank 0 / no bound adapter) and is ROUNDED UP TO A MULTIPLE OF 4 for
+// every rank: a raw non-multiple-of-4 size (rank 5, 6, 7, ...) made the total an exact
+// multiple of 4 only by luck of the offsets before it; the rounding closes the theoretical
+// over-read at the CAS's tail (the CAS was already well-formed in practice -- this is a
+// structural guarantee, not a runtime behavior change).
+constexpr uint64_t AdapterURegionBytes(uint64_t adapter_rank) {
+	const uint64_t floored = adapter_rank < uint64_t{4} ? uint64_t{4} : adapter_rank;
+	return (floored + uint64_t{3}) & ~uint64_t{3};
+}
+
 SslmGpuStatus PlanDispatchBudgetGpu(uint32_t dispatch_budget, uint32_t num_hidden_layers,
                                      uint32_t current_layer_position,
                                      uint32_t* out_layers_to_issue);

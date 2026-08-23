@@ -17,6 +17,9 @@ if defined T2138_ADAPTER set ARGS=!ARGS! --adapter=!T2138_ADAPTER!
 if defined T2138_FOREIGN_MODEL set ARGS=!ARGS! --foreignmodel=!T2138_FOREIGN_MODEL!
 if defined T2138_MODEL_VARIANT set ARGS=!ARGS! --modelvariant=!T2138_MODEL_VARIANT!
 if defined T2138_MODEL_TOK set ARGS=!ARGS! --modeltok=!T2138_MODEL_TOK!
+rem T-2234 (SuperSLM 1.2.1): the hermetic fixture's no-DGC1 twin (S8 generator's second
+rem output) -- drives the workspace-layout golden cells. Absent => those cells SKIP.
+if defined T2138_MODEL_PLAIN set ARGS=!ARGS! --modelplain=!T2138_MODEL_PLAIN!
 
 set OVERALL_OK=1
 for %%f in (dim1_lifetime_red dim2_hostile_red dim3_concurrency_red dim4_shape_red dim5_failure_red dim6_determinism_red dim7_contract_red dim8_composition_red dim9_persistence_red dim10_functional_red dim11_guard_red) do (

@@ -133,6 +133,16 @@ bool ValidateDampedGreedyParams(const DampedGreedyValidationParams& p,
 	// identical bound a second time in this translation unit.
 	if (!superslm::AlphaQ15InDomain(p.alpha_q15)) return false;
 	if (p.anti_lm_max_order < 1) return false;
+	// T-2238/F4 (SuperSLM 1.2.1, D-SLM3953): the ceiling is DERIVED BY EXECUTION, not invented
+	// (D-SLM3912): under the shipped recurrence (`Q15Pow(kBetaQ15 = 29491)`, starting at 1<<15,
+	// `result = (result * 29491) >> 15`), exponent 82 is the last carrying nonzero weight --
+	// Q15Pow(29491, 82) truncates to exactly zero -- so with max_order M >= 83 order 1 carries
+	// exponent M-1 >= 82 and its contribution is identically zero: the parameter stops denoting
+	// what it names while AntiLmCreate still pays up to M unordered_map constructions. Rejected
+	// outright, never clamped -- the ABI's own existing discipline for an out-of-domain field
+	// (`top_k > vocab_size` rejects). A contract narrowing on a shipped public ABI: a value
+	// 1.2.0 accepts becomes SSLM_INVALID_ARGUMENT here; disclosed in CHANGELOG.md under Changed.
+	if (p.anti_lm_max_order > 82) return false;
 	if (p.top_k < 1 || p.top_k > vocab_size) return false;
 	return true;
 }

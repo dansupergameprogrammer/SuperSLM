@@ -64,6 +64,12 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 		case SslmForwardStatus::GpuDeviceRemoved: return "GpuDeviceRemoved";
 		case SslmForwardStatus::GpuGemmGroupArithmeticInvalid: return "GpuGemmGroupArithmeticInvalid";
 		case SslmForwardStatus::InvalidDecodeParams: return "InvalidDecodeParams";
+		case SslmForwardStatus::OutputCapacityExceeded:
+			// T-2237/F3 (SuperSLM 1.2.1): D-SLM3977's first landing -- a new enumerator owes
+			// an arm HERE as well as its MapForwardStatus arm. This switch has no default
+			// and silently degrades to "?" below when an arm is missing (/W4 without /WX),
+			// degrading every diagnostic that names the status.
+			return "OutputCapacityExceeded";
 	}
 	return "?";
 }
