@@ -23,7 +23,7 @@ rem D-SLM3388 signature). Copy the engine build's shaders next to the suite bina
 if exist ..\..\out\shaders xcopy /Y /I /Q ..\..\out\shaders obj\shaders >nul
 
 set OVERALL_LINK_OK=1
-for %%f in (dim1_lifetime_red.cpp dim2_hostile_red.cpp dim3_concurrency_red.cpp dim4_shape_red.cpp dim5_failure_red.cpp dim6_determinism_red.cpp dim8_composition_red.cpp dim9_persistence_red.cpp dim10_functional_red.cpp dim11_guard_red.cpp) do (
+for %%f in (dim1_lifetime_red.cpp dim2_hostile_red.cpp dim3_concurrency_red.cpp dim4_shape_red.cpp dim5_failure_red.cpp dim6_determinism_red.cpp dim8_composition_red.cpp dim9_persistence_red.cpp dim10_functional_red.cpp dim11_guard_red.cpp s2_bind_red.cpp cell_rebind_serial.cpp) do (
     echo ===== %%f =====
     rem T-2114 (S4): the two allocation-fault-injection macros build.bat's own test-binary line
     rem already defines (superslm_tests.exe) -- needed here so dim9's own SeqRestore injection

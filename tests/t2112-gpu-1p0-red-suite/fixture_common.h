@@ -81,6 +81,13 @@ static std::string g_adapter_path;   // real adapter artifact (e.g. shopkeeper-v
 // cell). Optional like every other real-artifact flag: absent means that one product cell SKIPs.
 static std::string g_model_1p5b_variant_path;
 
+// T-2243 (S2, plan Sec6.1/Sec10 Phase 2 S2, red suite Sec5.2, D-SLM4058): a SECOND, real,
+// distinct adapter artifact -- S2 cells (c) rebind, (f) composition, (n) serial specialist
+// switching all need two genuinely different adapters against one model. Absent means those
+// cells' two-adapter product half SKIPs, matching every other real-artifact flag's own
+// convention.
+static std::string g_adapter2_path;
+
 // Reuses tools/t2100_gpu_throughput.cpp's own load path verbatim (T-2100, this repo).
 inline bool LoadRealModel(const std::string& path, superslm::SslmModelView* out_view,
                            std::vector<uint8_t>* out_bytes, std::string* out_err) {
@@ -123,6 +130,7 @@ inline void ParseFixtureArgs(int argc, char** argv) {
 		else if (const char* v = take("--model0p5b=")) g_model_0p5b_path = v;
 		else if (const char* v = take("--adapter=")) g_adapter_path = v;
 		else if (const char* v = take("--model1p5bvariant=")) g_model_1p5b_variant_path = v;
+		else if (const char* v = take("--adapter2=")) g_adapter2_path = v;
 	}
 }
 
@@ -148,6 +156,12 @@ extern superslm::CarriedScale* SslmGpuSeqHandleHiddenScaleForBench(SslmGpuSequen
 extern uint32_t* SslmGpuSeqHandleLayerIndexForBench(SslmGpuSequenceHandle*);
 extern uint64_t* SslmGpuSeqHandleKvSaturationForBench(SslmGpuSequenceHandle*);
 extern int64_t* SslmGpuSeqHandleContextLengthForBench(SslmGpuSequenceHandle*);
+
+// T-2243 (S2/O2, plan Sec10 Phase 2 S2/O2, red suite Sec5.2): new bench accessors this
+// fold's cells need, declared centrally here per this suite's own established convention.
+extern int64_t* SslmGpuAdapterHandleBoundSequencesForBench(SslmGpuAdapterHandle*);
+extern const SslmGpuAdapterHandle* const* SslmGpuSequenceHandleBoundAdapterForBench(SslmGpuSequenceHandle*);
+extern void SslmGpuSeqForceSubmittedNoInflightForBench(SslmGpuSequenceHandle*);  // O2 only
 extern size_t SslmGpuSeqHandleHiddenSizeForBench(SslmGpuSequenceHandle*);
 
 // The comparable surface a sequence handle exposes -- the SequenceLayerState-complete set C1's

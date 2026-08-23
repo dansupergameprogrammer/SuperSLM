@@ -230,6 +230,143 @@ static void TestDim8_5_HandleChurnConcurrentWithLiveDecode(SslmGpuContext* ctx,
 	CHECK(sslm_gpu_seq_release(ctx, long_lived) == SSLM_OK);
 }
 
+// T-2243 (S2 cell (f), plan Sec6.1/Sec10 Phase 2 S2(f), red suite Sec6.6, D-SLM4058):
+// composition bit-equality at BOTH G5 choke points -- a bound adapter reaches the chunk path's
+// own locally-built GpuAdapterBridge correctly, AND the per-token bridge's whole one-call
+// composition matches hand-assembly with the adapter passed explicitly.
+static void TestS2_F_CompositionBitEqualityBothChokePoints(SslmGpuContext* ctx,
+                                                             SslmGpuModelHandle* model,
+                                                             const SslmGpuAdapterHandle* A,
+                                                             uint32_t num_hidden_layers) {
+	// f-chunk: primary bind(A) then chunk-prefill; reference hand-runs the same prompt with A
+	// passed explicitly via RunFullTokenStep.
+	{
+		const int32_t prompt[] = {5, 6, 7};
+		SslmGpuSequenceHandle* primary = nullptr;
+		CHECK(sslm_gpu_seq_create(ctx, model, 64, &primary) == SSLM_OK);
+		CHECK(sslm_gpu_seq_bind_adapter(ctx, primary, A) == SSLM_OK);
+		CHECK(SslmGpuSeqPrefillPromptForG5Bridge(ctx, primary, prompt, 3, kDispatchesPerLayer) == SSLM_OK);
+
+		SslmGpuSequenceHandle* reference = nullptr;
+		CHECK(sslm_gpu_seq_create(ctx, model, 64, &reference) == SSLM_OK);
+		for (int32_t tok : prompt) {
+			CHECK(RunFullTokenStep(ctx, reference, A, num_hidden_layers, tok));
+		}
+
+		SeqSnapshot snap_p{}, snap_r{};
+		CHECK(CaptureSnapshot(primary, &snap_p));
+		CHECK(CaptureSnapshot(reference, &snap_r));
+		CHECK_MSG(SnapshotsBitEqual(snap_p, snap_r),
+		          "S2-F chunk: the bound-adapter chunk path must be bit-equal to the direct-call "
+		          "adapter path over identical prompt history");
+
+		int32_t tok_p = -1, tok_r = -1;
+		CHECK(SslmGpuSeqDecodeStepForG5Bridge(ctx, primary, /*unused, shortcut consumed=*/0,
+		                                       FullTokenBudget(num_hidden_layers), &tok_p) == SSLM_OK);
+		CHECK(SslmGpuSeqFinishTokenForG5Bridge(ctx, reference, &tok_r) == SSLM_OK);
+		CHECK_MSG(tok_p == tok_r, "S2-F chunk: produced tokens must match -- tok_p=%d tok_r=%d",
+		          tok_p, tok_r);
+
+		CHECK(sslm_gpu_seq_bind_adapter(ctx, primary, nullptr) == SSLM_OK);
+		CHECK(sslm_gpu_seq_release(ctx, primary) == SSLM_OK);
+		CHECK(sslm_gpu_seq_release(ctx, reference) == SSLM_OK);
+	}
+
+	// f-decode: primary bind(A), two bridge calls; clone hand-composed (embed + decode_step_gpu
+	// loop with A explicit + finish) per token -- NOT compared against a direct call that
+	// reduces to the identical function (the vacuous-oracle class this design's own rung-3
+	// repair closes).
+	{
+		constexpr int32_t t1 = 5, t2 = 9;
+		SslmGpuSequenceHandle* primary = nullptr;
+		CHECK(sslm_gpu_seq_create(ctx, model, 64, &primary) == SSLM_OK);
+		CHECK(sslm_gpu_seq_bind_adapter(ctx, primary, A) == SSLM_OK);
+		SslmGpuSequenceHandle* clone = nullptr;
+		CHECK(sslm_gpu_seq_create(ctx, model, 64, &clone) == SSLM_OK);
+
+		int32_t tok_p[2] = {-1, -1};
+		int32_t tok_c[2] = {-1, -1};
+		const int32_t toks[2] = {t1, t2};
+		for (int i = 0; i < 2; ++i) {
+			CHECK(SslmGpuSeqDecodeStepForG5Bridge(ctx, primary, toks[i],
+			                                       FullTokenBudget(num_hidden_layers), &tok_p[i]) == SSLM_OK);
+			CHECK(sslm_gpu_seq_embed_token(ctx, clone, toks[i]) == SSLM_OK);
+			uint32_t guard = 0;
+			while (*SslmGpuSeqHandleLayerIndexForBench(clone) < num_hidden_layers) {
+				CHECK(sslm_decode_step_gpu(ctx, clone, A, kDispatchesPerLayer) == SSLM_OK);
+				CHECK(Drain(ctx, clone) == SSLM_OK);
+				if (++guard > 200) break;
+			}
+			CHECK(SslmGpuSeqFinishTokenForG5Bridge(ctx, clone, &tok_c[i]) == SSLM_OK);
+		}
+		CHECK_MSG(tok_p[0] == tok_c[0] && tok_p[1] == tok_c[1],
+		          "S2-F decode: both bridge-composed tokens must match the hand-composed "
+		          "reference -- tok_p={%d,%d} tok_c={%d,%d}", tok_p[0], tok_p[1], tok_c[0], tok_c[1]);
+		SeqSnapshot snap_p{}, snap_c{};
+		CHECK(CaptureSnapshot(primary, &snap_p));
+		CHECK(CaptureSnapshot(clone, &snap_c));
+		CHECK_MSG(SnapshotsBitEqual(snap_p, snap_c), "S2-F decode: post-finish snapshots bit-equal");
+
+		CHECK(sslm_gpu_seq_bind_adapter(ctx, primary, nullptr) == SSLM_OK);
+		CHECK(sslm_gpu_seq_release(ctx, primary) == SSLM_OK);
+		CHECK(sslm_gpu_seq_release(ctx, clone) == SSLM_OK);
+	}
+}
+
+// T-2243 (S2 cell (k), plan Sec6.1/Sec10 Phase 2 S2(k), Mendeleev gap-0, red suite Sec6.11,
+// D-SLM4058): each counter gates its own object -- M2 live_adapters stops the model, S2 own
+// bound_sequences stops the adapter, and neither masks the other absence. Two-block
+// construction resolving the live-sequence confound the single-block sketch had.
+static void TestS2_K_EachCounterGatesItsOwnObject(SslmGpuContext* ctx, const SslmModelView* model_view) {
+	// Block 1 (attribution, zero live sequences): map M; map A2; NO sequences -> unmap must
+	// attribute to live_adapters alone.
+	{
+		SslmGpuContext* ctx1 = nullptr;
+		CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx1) == SSLM_OK);
+		SslmGpuModelHandle* m1 = nullptr;
+		CHECK(sslm_gpu_model_map(ctx1, model_view, GpuResidencyConfig{}, &m1) == SSLM_OK);
+		SslmGpuAdapterHandle* a2 = nullptr;
+		CHECK(sslm_gpu_adapter_map(ctx1, m1, model_view, &a2) == SSLM_OK);
+		CHECK_MSG(sslm_gpu_model_unmap(ctx1, m1) == SSLM_MODEL_HAS_LIVE_ADAPTERS,
+		          "S2-K block1: with zero live sequences, the rejection must attribute to "
+		          "live_adapters specifically");
+		CHECK(sslm_gpu_adapter_unmap(ctx1, a2) == SSLM_OK);
+		CHECK(sslm_gpu_model_unmap(ctx1, m1) == SSLM_OK);
+		CHECK(sslm_gpu_context_destroy(ctx1) == SSLM_OK);
+	}
+	// Block 2 (composition, the realistic caller state): map M; map A1, A2; create seq(M);
+	// bind(A1) -> model_unmap rejected by a persistent-liveness member; adapter_unmap(A1) still
+	// separately rejects SSLM_ADAPTER_HAS_BOUND_SEQUENCES in the SAME fixture.
+	{
+		SslmGpuContext* ctx2 = nullptr;
+		CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx2) == SSLM_OK);
+		SslmGpuModelHandle* m2 = nullptr;
+		CHECK(sslm_gpu_model_map(ctx2, model_view, GpuResidencyConfig{}, &m2) == SSLM_OK);
+		SslmGpuAdapterHandle* a1 = nullptr;
+		SslmGpuAdapterHandle* a2b = nullptr;
+		CHECK(sslm_gpu_adapter_map(ctx2, m2, model_view, &a1) == SSLM_OK);
+		CHECK(sslm_gpu_adapter_map(ctx2, m2, model_view, &a2b) == SSLM_OK);
+		SslmGpuSequenceHandle* seq = nullptr;
+		CHECK(sslm_gpu_seq_create(ctx2, m2, 64, &seq) == SSLM_OK);
+		CHECK(sslm_gpu_seq_bind_adapter(ctx2, seq, a1) == SSLM_OK);
+
+		const SslmGpuStatus unmap_st = sslm_gpu_model_unmap(ctx2, m2);
+		CHECK_MSG(unmap_st != SSLM_OK && unmap_st != SSLM_BUSY && unmap_st != SSLM_DEVICE_LOST,
+		          "S2-K block2: model_unmap must be rejected by a persistent-liveness member -- "
+		          "got %d", (int)unmap_st);
+		CHECK_MSG(sslm_gpu_adapter_unmap(ctx2, a1) == SSLM_ADAPTER_HAS_BOUND_SEQUENCES,
+		          "S2-K block2: adapter_unmap(a1) must independently reject "
+		          "SSLM_ADAPTER_HAS_BOUND_SEQUENCES -- neither counter substitutes for the other");
+
+		CHECK(sslm_gpu_seq_bind_adapter(ctx2, seq, nullptr) == SSLM_OK);
+		CHECK(sslm_gpu_seq_release(ctx2, seq) == SSLM_OK);
+		CHECK(sslm_gpu_adapter_unmap(ctx2, a1) == SSLM_OK);
+		CHECK(sslm_gpu_adapter_unmap(ctx2, a2b) == SSLM_OK);
+		CHECK(sslm_gpu_model_unmap(ctx2, m2) == SSLM_OK);
+		CHECK(sslm_gpu_context_destroy(ctx2) == SSLM_OK);
+	}
+}
+
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
 	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
@@ -341,6 +478,15 @@ int main(int argc, char** argv) {
 
 	// Cell 5: handle churn concurrent with live decode.
 	TestDim8_5_HandleChurnConcurrentWithLiveDecode(ctx, model, have_oracle ? &oracle : nullptr);
+
+	// S2 cells (f), (k) -- (f) needs a real adapter; (k) also needs its own dedicated
+	// ctx/model pairs (built from model_view inside the cell itself).
+	if (adapter) {
+		TestS2_F_CompositionBitEqualityBothChokePoints(ctx, model, adapter, num_hidden_layers_top);
+	} else {
+		SKIP_MSG("S2-F needs --adapter=PATH -- not run");
+	}
+	TestS2_K_EachCounterGatesItsOwnObject(ctx, &view);
 
 	if (adapter) sslm_gpu_adapter_unmap(ctx, adapter);
 	CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);

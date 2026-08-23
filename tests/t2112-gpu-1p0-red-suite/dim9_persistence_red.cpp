@@ -371,6 +371,53 @@ static void TestC1_RestoreVsGenuinelyInFlightSibling(SslmGpuContext* ctx, SslmGp
 	if (seq_b2) CHECK(sslm_gpu_seq_release(ctx, seq_b2) == SSLM_OK);
 }
 
+// T-2243 (S2 cell (j), plan Sec6.1/Sec10 Phase 2 S2(j), red suite Sec6.10, D-SLM4058):
+// persistence -- bound_adapter does NOT round-trip through save/restore, and the post-restore
+// re-bind Sec6.1's own Persistence paragraph instructs the caller to make admits.
+static void TestS2_J_PersistenceNoRoundTripPostRestoreRebindAdmits(SslmGpuContext* ctx,
+                                                                    SslmGpuModelHandle* model,
+                                                                    const SslmGpuAdapterHandle* A,
+                                                                    int64_t context_cap) {
+	const char* label = "S2-J";
+	SslmGpuSequenceHandle* seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, context_cap, &seq) == SSLM_OK);
+	CHECK(sslm_gpu_seq_bind_adapter(ctx, seq, A) == SSLM_OK);
+	const int32_t prompt[] = {5, 6};
+	CHECK_MSG(SslmGpuSeqPrefillPromptForG5Bridge(ctx, seq, prompt, 2, kDispatchesPerLayer) == SSLM_OK,
+	          "%s: completed prefill (saved state rests at full depth)", label);
+
+	size_t required_size = 0;
+	{
+		uint8_t probe = 0;
+		CHECK(sslm_gpu_seq_save(ctx, seq, &probe, &required_size) != SSLM_OK);
+		CHECK(required_size > 0);
+	}
+	std::vector<uint8_t> blob(required_size);
+	size_t blob_size = blob.size();
+	CHECK_MSG(sslm_gpu_seq_save(ctx, seq, blob.data(), &blob_size) == SSLM_OK, "%s: save", label);
+
+	SslmGpuSequenceHandle* seq_r = nullptr;
+	CHECK_MSG(sslm_gpu_seq_restore(ctx, model, blob.data(), blob_size, &seq_r) == SSLM_OK,
+	          "%s: restore", label);
+	CHECK(seq_r != nullptr);
+
+	CHECK_MSG(*SslmGpuSequenceHandleBoundAdapterForBench(seq_r) == nullptr,
+	          "%s: a restored handle's own bound_adapter must default null -- no round-trip", label);
+	CHECK_MSG(sslm_gpu_seq_bind_adapter(ctx, seq_r, A) == SSLM_OK,
+	          "%s: the re-bind Sec6.1's own Persistence paragraph instructs the caller to make "
+	          "after restore must return SSLM_OK -- the fractured predicate rejected this exact "
+	          "call from this exact state", label);
+	CHECK_MSG(sslm_gpu_adapter_unmap(ctx, const_cast<SslmGpuAdapterHandle*>(A)) ==
+	          SSLM_ADAPTER_HAS_BOUND_SEQUENCES,
+	          "%s: the restored bind must be real, not cosmetic -- unmap must reject", label);
+
+	CHECK(sslm_gpu_seq_bind_adapter(ctx, seq, nullptr) == SSLM_OK);
+	CHECK(sslm_gpu_seq_bind_adapter(ctx, seq_r, nullptr) == SSLM_OK);
+	CHECK(sslm_gpu_adapter_unmap(ctx, const_cast<SslmGpuAdapterHandle*>(A)) == SSLM_OK);
+	CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
+	CHECK(sslm_gpu_seq_release(ctx, seq_r) == SSLM_OK);
+}
+
 // T-2114 (M2): see dim1_lifetime_red.cpp's own header comment -- the local re-declaration
 // this file used to complete here is retired; sslm_gpu_1p0.h now defines both types complete.
 
@@ -390,6 +437,7 @@ int main(int argc, char** argv) {
 	volatile void* addr_2 = (void*)&TestDim9_N1_SmallCappedRestoreDerivesBlobOwnCap; (void)addr_2;
 	volatile void* addr_3 = (void*)&TestDim9_S4_RestoreDeviceThrowReturnsStatusNotUnwind; (void)addr_3;
 	volatile void* addr_4 = (void*)&TestC1_RestoreVsGenuinelyInFlightSibling; (void)addr_4;
+	volatile void* addr_5 = (void*)&TestS2_J_PersistenceNoRoundTripPostRestoreRebindAdmits; (void)addr_5;
 
 	SslmGpuContext* ctx = nullptr;
 	CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
@@ -417,6 +465,26 @@ int main(int argc, char** argv) {
 		                                                 model_context_cap, num_hidden_layers);
 		TestDim9_S4_RestoreDeviceThrowReturnsStatusNotUnwind(ctx, model, kSmallContextCap);
 		TestC1_RestoreVsGenuinelyInFlightSibling(ctx, model, kSmallContextCap, num_hidden_layers);
+
+		if (!g_adapter_path.empty()) {
+			std::vector<uint8_t> abytes;
+			SslmModelView aview{};
+			std::string aerr;
+			if (LoadRealModel(g_adapter_path, &aview, &abytes, &aerr)) {
+				SslmGpuAdapterHandle* adapter = nullptr;
+				CHECK(sslm_gpu_adapter_map(ctx, model, &aview, &adapter) == SSLM_OK);
+				if (adapter) {
+					TestS2_J_PersistenceNoRoundTripPostRestoreRebindAdmits(ctx, model, adapter,
+					                                                       kSmallContextCap);
+					// TestS2_J's own final step already unmapped `adapter` -- no second unmap here.
+				}
+			} else {
+				SKIP_MSG("S2-J: could not load --adapter=%s (%s)", g_adapter_path.c_str(), aerr.c_str());
+			}
+		} else {
+			SKIP_MSG("S2-J needs --adapter=PATH -- not run");
+		}
+
 		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
 	} else {
 		SKIP_MSG("dim9 needs --model1p5b=PATH -- not run");

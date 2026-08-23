@@ -8,10 +8,8 @@
 
 using namespace superslm;
 
-// T-2243 (O2, Mendeleev F-5, plan Sec10 Phase 2 O2, red suite Sec6.18): declared in gpu_1p0.cpp,
-// the test-side forcing accessor -- global scope, matching the linkage note above.
-extern void SslmGpuSeqForceSubmittedNoInflightForBench(SslmGpuSequenceHandle*);
-extern int64_t* SslmGpuAdapterHandleBoundSequencesForBench(SslmGpuAdapterHandle*);
+// T-2243 (O2/M2, plan Sec10 Phase 2 O2/M2, red suite Sec6.17/Sec6.18): the two bench accessors
+// these cells need are now declared centrally in fixture_common.h (Sec5.2's own convention).
 
 // --- Mechanism cell 1: every guard named in Sec9's table, plus the carried-forward nine-guard
 // ladder, checked ABLE TO FIRE in the shipping build configuration, non-vacuous over its own
