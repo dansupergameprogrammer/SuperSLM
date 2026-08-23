@@ -3,7 +3,9 @@
 // input surface; every documented rejection fires per its diagnostic and entry-path
 // symmetrically. The stream-identity half of ST-1's symmetry leg lives jointly in dim10 P2.
 //
-// RED STATUS: link-red on sslm_speculate_step_v3 / sslm_speculate_params_init until S-E.
+// EXECUTION STATUS (fold round 1, 2026-08-22): S-E has LANDED -- sslm_speculate_step_v3 /
+// sslm_speculate_params_init exist in production under the recorded names; every cell
+// executes against the real mechanism.
 #include "fixture_common.h"
 
 using namespace superslm;
@@ -46,6 +48,7 @@ void TestJ1_MalformedStructSizeRejected(sslm_model model, sslm_workspace ws,
 	CHECK(sslm_speculate_step_v3(model, seq, &params, ws, tok.data(), 16, rows.data(),
 	                             static_cast<int32_t>(rows.size()), &produced,
 	                             &stop) == SSLM_OK);
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
 
 // J2 -- Draft-length domain rejections when caller-set: K <= 0 rejects; K exceeding the
@@ -104,6 +107,8 @@ void TestJ2_KDomainRejected(sslm_model model, sslm_workspace ws,
 		post.bytes.resize(post.size);
 		CHECK(BlobSaturationCount(post.bytes) == BlobSaturationCount(pre.bytes));  // no landings
 	}
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
+	CHECK(sslm_seq_release(near) == SSLM_OK);
 }
 
 // J3 -- Invalid handles and null outs reject per ABI conventions (the null-required-pointer /
@@ -136,6 +141,7 @@ void TestJ3_NullHandleAndNullOutRejected(sslm_model model, sslm_workspace ws,
 	                             nullptr, &stop) == SSLM_INVALID_ARGUMENT);
 	CHECK(sslm_speculate_step_v3(model, seq, &params, ws, tok.data(), 8, rows.data(), 8,
 	                             &produced, nullptr) == SSLM_INVALID_ARGUMENT);
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
 	(void)oracle;
 }
 

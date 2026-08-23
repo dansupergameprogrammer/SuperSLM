@@ -2,14 +2,18 @@
 // (plan r6 SS3.2 batch walk, SS3.5 guards, SS5 S-A boundary cells; audits Delta-G1/Delta-G2).
 // This file also carries ALL FOUR commissioning-time residuals as pinned cells:
 //   R2-W1 -> V1/V2/V3's feed-accounting assertions (occupancy and kv_saturation_count stated
-//            in FEED terms: E emissions from pending-token entry cost E feeds and end at
-//            context_length C + E with the final emission resting unfed-pending --
-//            forward_sites.cpp:2595-2630 loop shape; logits-ready/adopt entry costs E-1).
+//            in FEED terms: from a logits-ready/adopt entry -- post-prefill, post-adopt --
+//            E emissions cost E-1 feeds and end at context_length C + E - 1, with the final
+//            emission resting unfed-pending; from a pending-token entry they cost E feeds and
+//            end at C + E -- forward_sites.cpp:2595-2630 loop shape;
+//            src/sslm_abi.cpp SpeculateWalkAndCommit kept_feeds).
 //   R2-W2 + r-G2 -> V3 (the zero-budget entry arm; one cell satisfying both seats' occupants,
 //            filed independently by plan review and coverage audit).
 //   r-G1  -> V2's post-step state leg (cell (b)'s missing fifth property).
 //
-// RED STATUS: link-red on sslm_speculate_step_v3 / sslm_seq_committed_token_count until S-E.
+// EXECUTION STATUS (fold round 1, 2026-08-22): S-E has LANDED -- sslm_speculate_step_v3 /
+// sslm_seq_committed_token_count exist in production under the recorded names; every cell
+// executes against the real mechanism.
 #include "fixture_common.h"
 
 using namespace superslm;
@@ -94,9 +98,12 @@ void TestV1_CapStraddlingBatchTruncationAndFeedAccounting(sslm_model model, sslm
 	                                  static_cast<size_t>(sslm_kv_block_size(model)),
 	                                  oracle.context_cap, &why),
 	          "truncated-commit contract: post-step state equals capped greedy (%s)", why.c_str());
-	// R2-W1 pin, numeric form: pending-entry Emissions E=r => E feeds => ctx = start + r,
-	// final emission resting unfed-pending as current_token.
-	CHECK(BlobContextLength(spec_blob.bytes) == ctx_start + static_cast<int64_t>(kR));
+	// R2-W1 pin, numeric form (F-B reconciled): logits-ready entry, E = r emissions =>
+	// E-1 feeds => ctx = start + r - 1, the final emission resting unfed-pending as
+	// current_token. This is the SAME geometry the twin-equality leg above pins: both sides
+	// land E-1 rows for E emissions from a prefill.
+	CHECK(BlobContextLength(spec_blob.bytes) ==
+	      ctx_start + static_cast<int64_t>(kR) - 1);
 	if (produced > 0) {
 		CHECK(BlobReadLE32(spec_blob.bytes.data() + BlobLayout::kCurrentToken) ==
 		      static_cast<uint32_t>(tok[produced - 1]));
@@ -104,6 +111,10 @@ void TestV1_CapStraddlingBatchTruncationAndFeedAccounting(sslm_model model, sslm
 	int64_t retained = -1;
 	CHECK(sslm_seq_committed_token_count(spec, &retained) == SSLM_OK);
 	CHECK(retained == ctx_start + static_cast<int64_t>(kR));  // retention holds exactly emitted
+	CHECK(sslm_seq_release(spec) == SSLM_OK);
+	CHECK(sslm_seq_release(twin) == SSLM_OK);
+	spec = nullptr;
+	twin = nullptr;
 }
 
 // V1b -- Reason precedence corner: the r-th token ITSELF is a stop id -> StopTokenMatched,
@@ -133,6 +144,7 @@ void TestV1b_StopPrecedesCapAtTheBoundaryCorner(sslm_model model, sslm_workspace
 	CHECK_MSG(produced == 2 && stop == SSLM_SPECULATE_STOP_TOKEN_MATCHED,
 	          "a matched stop AT the budget edge reports StopTokenMatched (stop precedes cap)");
 	CHECK(produced >= 1 && tok[static_cast<size_t>(produced) - 1] == stop_id);
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
 
 // V2 -- Stop-inside-batch (boundary cell (b)) WITH its post-step state leg (residual r-G1):
@@ -141,9 +153,12 @@ void TestV1b_StopPrecedesCapAtTheBoundaryCorner(sslm_model model, sslm_workspace
 // post-step state equals stopped greedy: occupancy through the last EMITTED token, retention
 // exactly the p+1 emitted ids including the stop id, saturation counting emitted landings
 // only, carried walk-state resting unfed-pending (greedy's between-steps value). Fixture
-// route per plan: seed committed history via prefill CONTAINING the stop id (prefill performs
-// no stop filtering -- decode-only filter, forward_sites.cpp:2531-2532), so the suffix
-// continuation proposes it into the batch.
+// route per plan: seed committed history via prefill CONTAINING the stop id (prefill
+// performs no stop filtering -- the stop set is a decode-loop-only input, absent from the
+// prefill path entirely: sslm_abi.cpp:1984-2001's sslm_prefill/PrefillWholeTokens signature
+// carries no stop set; forward_sites.cpp:2586-2591 runs prompt tokens through the identical
+// whole-token walk with no stop test, versus :2615-2628's per-emission test in generation),
+// so the suffix continuation proposes it into the batch.
 void TestV2_StopInsideBatchCutWithPostStateLeg(sslm_model model, sslm_workspace ws,
                                                const CpuOracleModel& oracle,
                                                const FullKFx& fx) {
@@ -205,10 +220,19 @@ void TestV2_StopInsideBatchCutWithPostStateLeg(sslm_model model, sslm_workspace 
 	          "r-G1 post-step state leg: stop-arm disposal leaves state equal to stopped "
 	          "greedy (%s)",
 	          why.c_str());
-	// Retention holds EXACTLY the p+1 emitted ids including the stop id.
+	// Retention holds EXACTLY the p+1 emitted ids including the stop id, counted from the
+	// spec side's own pre-drive retention (the seeded prompt's admissions): F-C reconciled --
+	// the twin's context_length is the WRONG anchor (it rests one row short of its own
+	// emissions under the implemented feed accounting), so comparing against it is
+	// unsatisfiable by exactly the pending token.
 	int64_t retained = -1;
 	CHECK(sslm_seq_committed_token_count(spec, &retained) == SSLM_OK);
-	CHECK(retained == BlobContextLength(tb.bytes));
+	CHECK(retained ==
+	      static_cast<int64_t>(seeded.size()) + static_cast<int64_t>(produced));
+	CHECK(sslm_seq_release(spec) == SSLM_OK);
+	CHECK(sslm_seq_release(twin) == SSLM_OK);
+	spec = nullptr;
+	twin = nullptr;
 }
 
 // V3 -- Zero-budget entry arm (residuals R2-W2 + r-G2): speculate entered with exhausted
@@ -252,6 +276,7 @@ void TestV3_ZeroBudgetEntryArm(sslm_model model, sslm_workspace ws, const CpuOra
 	                                  static_cast<size_t>(sslm_kv_block_size(model)),
 	                                  oracle.context_cap, &why),
 	          "no landings, no counters moved, no retention append (%s)", why.c_str());
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
 
 }  // namespace

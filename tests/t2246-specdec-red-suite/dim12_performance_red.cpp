@@ -6,14 +6,18 @@
 // NOT-COMMISSIONED) rather than passing silently. M2 proves that cell can fail: the same
 // procedure over a never-matching drafter must NOT satisfy the ratio assertion while still
 // satisfying every equivalence cell. M3 is the budget-free report scaffold for S-F cells 1-2
-// (outside the catalog boundary per the audit's own note; prints, asserts nothing).
+// (outside the catalog boundary per the audit's own note; prints, asserts nothing): it
+// reports the per-call ACCEPTANCE HISTOGRAM over a corpus-driven speculate drive -- emissions
+// per call bucketed 1..K+1 -- plus the mean. No threshold, no verdict; commissioning-time
+// readings only.
 //
 // Corpus integrity: SHA-256 pinned at commissioning time from this tree
 // (tools/reference_pipeline/data/shopkeeper_corpus_v1.jsonl,
 //  640a5770da9e093446e2aece8b3b7e2869476963e54039af1e897ec750e4d9ae).
 //
-// RED STATUS: link-red on sslm_speculate_step_v3 / sslm_speculate_params_init (measurement
-// needs the mechanism); the not-commissioned refusal is structural and independent.
+// EXECUTION STATUS (fold round 1, 2026-08-22): S-E has LANDED -- sslm_speculate_step_v3 /
+// sslm_speculate_params_init exist in production under the recorded names; every cell
+// executes against the real mechanism. The not-commissioned refusal stays structural.
 #include "fixture_common.h"
 
 using namespace superslm;
@@ -70,6 +74,8 @@ bool MeasureCostRatio(sslm_model model, sslm_workspace ws, const CpuOracleModel&
 	if (sslm_seq_create(model, &sp.pool, &spec) != SSLM_OK ||
 	    sslm_seq_create(model, &sp.pool, &base) != SSLM_OK) {
 		CHECK(false);
+		if (spec) sslm_seq_release(spec);
+		if (base) sslm_seq_release(base);
 		return false;
 	}
 	int32_t consumed = 0;
@@ -78,12 +84,16 @@ bool MeasureCostRatio(sslm_model model, sslm_workspace ws, const CpuOracleModel&
 	    sslm_prefill(model, base, prompt.data(), static_cast<int32_t>(prompt.size()), 64,
 	                 SSLM_SPAN_PROMPT, nullptr, &consumed) != SSLM_OK) {
 		CHECK(false);
+		sslm_seq_release(spec);
+		sslm_seq_release(base);
 		return false;
 	}
 
 	sslm_speculate_params params{};
 	if (!MakeSpecParams(model, 6, static_cast<int32_t>(emissions_to_time), {}, &params)) {
 		CHECK(false);
+		sslm_seq_release(spec);
+		sslm_seq_release(base);
 		return false;
 	}
 	sslm_decode_params dp{};
@@ -97,23 +107,33 @@ bool MeasureCostRatio(sslm_model model, sslm_workspace ws, const CpuOracleModel&
 	                              static_cast<size_t>(oracle.vocab_size), 0);
 	int32_t produced = 0, stop = -1;
 	size_t spec_emitted = 0;
+	bool drive_ok = true;
 	while (spec_emitted < emissions_to_time) {
 		params.max_new_tokens = static_cast<int32_t>(emissions_to_time - spec_emitted);
 		if (sslm_speculate_step_v3(model, spec, &params, ws, tok.data(),
 		                           static_cast<int32_t>(tok.size()), rows.data(),
 		                           static_cast<int32_t>(rows.size()), &produced,
 		                           &stop) != SSLM_OK) {
-			return false;
+			drive_ok = false;
+			break;
 		}
 		spec_emitted += static_cast<size_t>(produced);
 		if (stop == SSLM_SPECULATE_STOP_TOKEN_MATCHED || produced == 0) break;
 	}
 	const auto t1 = Clock::now();
-	for (size_t i = 0; i < emissions_to_time; ++i) {
-		int32_t t = -1;
-		if (sslm_decode_step_v2(model, &base, 1, &dp, ws, &t) != SSLM_OK) return false;
+	if (drive_ok) {
+		for (size_t i = 0; i < emissions_to_time; ++i) {
+			int32_t t = -1;
+			if (sslm_decode_step_v2(model, &base, 1, &dp, ws, &t) != SSLM_OK) {
+				drive_ok = false;
+				break;
+			}
+		}
 	}
 	const auto t2 = Clock::now();
+	sslm_seq_release(spec);
+	sslm_seq_release(base);
+	if (!drive_ok) return false;
 
 	const auto ns = [](std::chrono::steady_clock::duration d) {
 		return static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count());
@@ -166,6 +186,64 @@ void TestM2_BrokenDrafterNegativeControl(sslm_model model, sslm_workspace ws,
 	CHECK_MSG(broken_ratio >= g_max_cost_ratio,
 	          "the control MUST fail the achievement predicate -- a never-matching drafter "
 	          "cannot be cheaper per emitted token");
+}
+
+// M3 -- Acceptance-histogram report scaffold (S-F cells 1-2, outside the catalog boundary;
+// RS-G3): drives speculate over the corpus prompt and PRINTS the per-call emissions
+// histogram -- bucket b counts calls that emitted exactly b tokens (b in [1, K+1]) -- plus
+// the emission-weighted mean. Report-only: no threshold, no CHECK on the distribution.
+void TestM3_AcceptanceHistogramReport(sslm_model model, sslm_workspace ws,
+                                      const CpuOracleModel& oracle,
+                                      const std::vector<int32_t>& corpus_prompt) {
+	constexpr int32_t kK = 6;
+	SinglePool sp;
+	ASSERT_TRUE(MakeSinglePool(model, &sp));
+	sslm_seq seq = nullptr;
+	ASSERT_TRUE(sslm_seq_create(model, &sp.pool, &seq) == SSLM_OK);
+	int32_t consumed = 0;
+	ASSERT_TRUE(sslm_prefill(model, seq, corpus_prompt.data(),
+	                         static_cast<int32_t>(corpus_prompt.size()), 64,
+	                         SSLM_SPAN_PROMPT, nullptr, &consumed) == SSLM_OK);
+
+	sslm_speculate_params params{};
+	ASSERT_TRUE(MakeSpecParams(model, kK, 16, {}, &params));
+	std::vector<int32_t> hist(static_cast<size_t>(kK) + 2, 0);  // index = emissions per call
+	size_t calls = 0, total_emitted = 0;
+	std::string err;
+	while (total_emitted < 32 && calls < 64) {
+		params.max_new_tokens =
+		    static_cast<int32_t>(std::min<size_t>(kK + 1, 32 - total_emitted));
+		std::vector<int32_t> tok(static_cast<size_t>(params.max_new_tokens), 0);
+		std::vector<int32_t> rows(static_cast<size_t>(params.max_new_tokens) *
+		                              static_cast<size_t>(oracle.vocab_size), 0);
+		int32_t produced = -1, stop = -1;
+		if (sslm_speculate_step_v3(model, seq, &params, ws, tok.data(),
+		                           static_cast<int32_t>(tok.size()), rows.data(),
+		                           static_cast<int32_t>(rows.size()), &produced,
+		                           &stop) != SSLM_OK) {
+			break;
+		}
+		if (produced <= 0) break;
+		++calls;
+		total_emitted += static_cast<size_t>(produced);
+		++hist[static_cast<size_t>(produced)];
+		if (stop == SSLM_SPECULATE_STOP_TOKEN_MATCHED) break;
+	}
+	if (calls > 0) {
+		std::printf("REPORT m3: acceptance histogram over %zu speculate calls (%zu "
+		            "emissions):\n",
+		            calls, total_emitted);
+		for (int32_t b = 1; b <= kK + 1; ++b) {
+			if (hist[static_cast<size_t>(b)] == 0) continue;
+			std::printf("REPORT m3:   %d emitted: %zu call(s)\n", b,
+			            static_cast<size_t>(hist[static_cast<size_t>(b)]));
+		}
+		std::printf("REPORT m3:   mean emissions/call = %.4f\n",
+		            static_cast<double>(total_emitted) / static_cast<double>(calls));
+	} else {
+		SKIP_MSG("M3 produced no speculate calls to report");
+	}
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
 
 }  // namespace
@@ -232,9 +310,10 @@ int main(int argc, char** argv) {
 			if (corpus_prompt.size() >= 8) {
 				TestM1_AchievementCostRatioBelowCommissionedThreshold(model, ws, oracle,
 				                                                      corpus_prompt);
+				TestM3_AcceptanceHistogramReport(model, ws, oracle, corpus_prompt);
 			} else {
-				SKIP_MSG("M1 needs a tokenizer-bound artifact (--modeltok=PATH) to drive the "
-				         "pinned corpus");
+				SKIP_MSG("M1/M3 need a tokenizer-bound artifact (--modeltok=PATH) to drive "
+				         "the pinned corpus");
 			}
 			TestM2_BrokenDrafterNegativeControl(model, ws, oracle);
 			CHECK(sslm_workspace_destroy(ws) == SSLM_OK);

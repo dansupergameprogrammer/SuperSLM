@@ -9,7 +9,9 @@
 // token); an implementation carrying the superseded cap-only bound fails T7 at exactly that
 // checkpoint (+1 excess, probe-executed shape from Claude/Loki/t2246-specdec-strike-2026-08-22.md).
 //
-// RED STATUS: link-red on the read-back pair and sslm_speculate_step_v3 until S-E/S-B.
+// EXECUTION STATUS (fold round 1, 2026-08-22): S-B..S-E have LANDED -- the read-back pair and
+// sslm_speculate_step_v3 exist in production under the recorded names; every cell executes
+// against the real mechanism.
 #include "fixture_common.h"
 
 using namespace superslm;
@@ -65,6 +67,7 @@ void TestT1_PrefillAndSpeculateAppendsExactLengths(sslm_model model, sslm_worksp
 	peeked.resize(static_cast<size_t>(io));
 	CHECK(peeked == expect);
 	CheckBoundAt(seq, oracle.context_cap, "post-speculate");
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
 
 // T2 -- Reset clears retention together with KV occupancy (no reset lag arm exists:
@@ -85,6 +88,7 @@ void TestT2_ResetClearsRetention(sslm_model model, sslm_workspace ws,
 	CHECK(sslm_seq_reset(seq) == SSLM_OK);
 	CHECK(sslm_seq_committed_token_count(seq, &n) == SSLM_OK);
 	CHECK_MSG(n == 0, "reset clears retention (SS3.0 table row 4)");
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
 	(void)ws;
 	(void)oracle;
 }
@@ -116,6 +120,7 @@ void TestT3_AdoptClearsRestartsEmpty(sslm_model model, const CpuOracleModel& ora
 	CHECK(BlobContextLength(blob.bytes) ==
 	      static_cast<int64_t>(prefix_ids.size()));  // occupancy copied with the prefix
 	CHECK(sslm_prefix_release(prefix) == SSLM_OK);
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
 	(void)oracle;
 }
 
@@ -150,60 +155,93 @@ void TestT4_RestoreStartsEmpty(sslm_model model, const CpuOracleModel& oracle,
 	ASSERT_TRUE(sslm_seq_save(restored, rblob.bytes.data(), &rblob.size) == SSLM_OK);
 	rblob.bytes.resize(rblob.size);
 	CHECK(BlobContextLength(rblob.bytes) == BlobContextLength(blob.bytes));  // occupancy resumes
+	CHECK(sslm_seq_release(src) == SSLM_OK);
+	CHECK(sslm_seq_release(restored) == SSLM_OK);
 	(void)oracle;
 }
 
-// T7 -- Cache-filling terminal checkpoint at toy scale (fold-3's own cell): drive the
-// retention state machine directly to occupancy context_cap -- pure bookkeeping, no model
-// weights beyond seeding one real tiny sequence for a valid blob -- and assert the EXACT
-// terminal length context_cap + 1. An implementation bounded by cap alone fails right here.
+// T7 -- Cache-filling terminal checkpoint (fold-3's own cell, fold-round-1 reconciled against
+// SS3.0's lifecycle table): retention appends happen on PREFILL ADMISSIONS and on EMISSIONS
+// only, and restore/adopt start retention EMPTY -- so the terminal shape occupancy ==
+// context_cap with retention == context_cap + 1 is realizable exactly one way: prefill
+// cap-1 admissions, then two v2 emissions. The first rides the prefill's logits-ready state
+// for free; the second lands its predecessor's row at position cap-1 and commits the
+// (cap+1)-th retained id as the always-present unlanded pending token. An implementation
+// bounded by cap alone fails right here (+1 excess). The old restore-staged staging was
+// self-contradictory: a restored window starts EMPTY, so one emission from it can never read
+// cap + 1. Speculate is likewise unusable as the driver here: from occupancy cap-1 a
+// pending-token entry needs k+1 rows and a logits-ready entry emits only its free token --
+// neither reaches the terminal shape.
 void TestT7_TerminalCheckpointCapPlusOne(sslm_model model, sslm_workspace ws,
                                          const CpuOracleModel& oracle,
                                          const std::vector<int32_t>& prompt) {
 	const int64_t cap = oracle.context_cap;
+	// Drivable bound (dated 2026-08-22): the honest construction prefills cap-1 admissions,
+	// so an artifact whose cap exceeds this bound SKIPs rather than hangs the suite.
+	constexpr int64_t kDrivableCap = 512;
 	if (cap < 8) {
 		SKIP_MSG("context_cap too small to stage the terminal checkpoint");
 		return;
 	}
+	if (cap > kDrivableCap) {
+		SKIP_MSG("context_cap %lld exceeds the drivable bound %lld -- the terminal-checkpoint "
+		         "construction needs cap-1 real admissions",
+		         static_cast<long long>(cap), static_cast<long long>(kDrivableCap));
+		return;
+	}
 	SinglePool sp;
 	ASSERT_TRUE(MakeSinglePool(model, &sp));
-	sslm_seq seed = nullptr;
-	ASSERT_TRUE(sslm_seq_create(model, &sp.pool, &seed) == SSLM_OK);
+	sslm_seq seq = nullptr;
+	ASSERT_TRUE(sslm_seq_create(model, &sp.pool, &seq) == SSLM_OK);
+
+	std::vector<int32_t> window;
+	window.reserve(static_cast<size_t>(cap - 1));
+	for (int64_t i = 0; i < cap - 1; ++i) {
+		window.push_back(static_cast<int32_t>(
+		    prompt[static_cast<size_t>(i) % prompt.size()] %
+		    static_cast<int32_t>(oracle.vocab_size)));
+	}
 	int32_t consumed = 0;
-	ASSERT_TRUE(sslm_prefill(model, seed, prompt.data(), static_cast<int32_t>(prompt.size()),
+	ASSERT_TRUE(sslm_prefill(model, seq, window.data(), static_cast<int32_t>(window.size()),
 	                         64, SSLM_SPAN_PROMPT, nullptr, &consumed) == SSLM_OK);
-	SeqBlobBuffer seed_blob(model);
-	size_t sz = seed_blob.size;
-	ASSERT_TRUE(sslm_seq_save(seed, seed_blob.bytes.data(), &sz) == SSLM_OK);
-	seed_blob.bytes.resize(sz);
-	CHECK(sslm_seq_release(seed) == SSLM_OK);
-
-	// Terminal-step entry state: occupancy cap-1 with the pending token unlanded (the shape
-	// the shipped guard admits and plan SS3.0 derives the +1 from).
-	sslm_seq near_end = nullptr;
-	ASSERT_TRUE(RestoreWithTamperedContextLength(model, &sp.pool, seed_blob.bytes, cap - 1,
-	                                             &near_end));
+	ASSERT_TRUE(consumed == static_cast<int32_t>(cap - 1));
 	int64_t n = -1;
-	CHECK(sslm_seq_committed_token_count(near_end, &n) == SSLM_OK);
-	CHECK_MSG(n == 0, "restored window starts empty");
+	CHECK(sslm_seq_committed_token_count(seq, &n) == SSLM_OK);
+	CHECK_MSG(n == cap - 1, "prefill appended exactly its cap-1 admissions");
+	CheckBoundAt(seq, cap, "post-prefill near-cap");
 
-	// One final speculated emission: enters at cap-1, lands the final row, commits its
-	// emission -- retention MUST read cap + 1 exactly.
-	sslm_speculate_params params{};
-	ASSERT_TRUE(MakeSpecParams(model, 1, 1, {}, &params));
-	std::vector<int32_t> tok(2, 0), rows(2 * static_cast<size_t>(oracle.vocab_size), 0);
-	int32_t produced = 0, stop = -1;
-	const sslm_status st =
-	    sslm_speculate_step_v3(model, near_end, &params, ws, tok.data(), 2, rows.data(),
-	                           static_cast<int32_t>(rows.size()), &produced, &stop);
-	CHECK(st == SSLM_OK);
-	CHECK(produced == 1);
-	CHECK(sslm_seq_committed_token_count(near_end, &n) == SSLM_OK);
+	sslm_decode_params dp{};
+	dp.struct_size = sizeof(dp);
+	dp.layer_budget = static_cast<int32_t>(oracle.num_hidden_layers);
+	int32_t t0 = -1;
+	CHECK(sslm_decode_step_v2(model, &seq, 1, &dp, ws, &t0) == SSLM_OK);
+	ASSERT_TRUE(t0 >= 0);
+	CHECK(sslm_seq_committed_token_count(seq, &n) == SSLM_OK);
+	CHECK_MSG(n == cap, "the free logits-ready emission appends without landing a row");
+
+	int32_t t1 = -1;
+	CHECK(sslm_decode_step_v2(model, &seq, 1, &dp, ws, &t1) == SSLM_OK);
+	ASSERT_TRUE(t1 >= 0);
+	CHECK(sslm_seq_committed_token_count(seq, &n) == SSLM_OK);
 	CHECK_MSG(n == cap + 1,
-	          "terminal checkpoint: retention reads %lld exactly, not the superseded cap-only "
-	          "bound",
+	          "terminal checkpoint: retention reads %lld exactly (occupancy at cap plus the "
+	          "unlanded pending token), not the superseded cap-only bound",
 	          static_cast<long long>(cap) + 1);
-	CheckBoundAt(near_end, cap, "terminal");
+	CheckBoundAt(seq, cap, "terminal");
+
+	SeqBlobBuffer term_blob(model);
+	term_blob.size = term_blob.bytes.size();
+	ASSERT_TRUE(sslm_seq_save(seq, term_blob.bytes.data(), &term_blob.size) == SSLM_OK);
+	term_blob.bytes.resize(term_blob.size);
+	CHECK(BlobContextLength(term_blob.bytes) == cap);  // occupancy is genuinely AT the cap
+
+	// The terminal state is stable: with zero rows free, another v2 emission must reject --
+	// pinning that the count above was earned at real full occupancy, not by skipped guards.
+	int32_t t2 = -1;
+	const sslm_status st = sslm_decode_step_v2(model, &seq, 1, &dp, ws, &t2);
+	CHECK_MSG(st == SSLM_CONTEXT_CAP_EXCEEDED,
+	          "a further emission past full occupancy rejects SSLM_CONTEXT_CAP_EXCEEDED");
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
 
 }  // namespace

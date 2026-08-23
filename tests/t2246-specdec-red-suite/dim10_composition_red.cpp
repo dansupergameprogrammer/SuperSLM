@@ -6,7 +6,9 @@
 // v2 run of the same prompt; retention is asserted DIRECTLY at each event (output oracles
 // cannot see retention staleness). P2 is ST-1's stream-identity symmetry leg.
 //
-// RED STATUS: link-red on sslm_speculate_step_v3 / sslm_seq_committed_token_count until S-E.
+// EXECUTION STATUS (fold round 1, 2026-08-22): S-E has LANDED -- sslm_speculate_step_v3 /
+// sslm_seq_committed_token_count exist in production under the recorded names; every cell
+// executes against the real mechanism.
 #include "fixture_common.h"
 
 using namespace superslm;
@@ -44,6 +46,12 @@ void TestP1_InterleaveV2V3BothOrdersAcrossAcceptAndReject(
 	ASSERT_TRUE(sslm_prefill(model, st.spec_seq, prompt.data(),
 	                         static_cast<int32_t>(prompt.size()), 64, SSLM_SPAN_PROMPT,
 	                         nullptr, &consumed) == SSLM_OK);
+	// The bystander must be a REAL driven sequence: shipped v2 rejects a fresh (never-
+	// prefilled) batch member -- it has no prior token to embed and no logits-ready state.
+	const std::vector<int32_t> bystander_prompt = NoRepeatPrompt(oracle.vocab_size, 12);
+	ASSERT_TRUE(sslm_prefill(model, st.bystander, bystander_prompt.data(),
+	                         static_cast<int32_t>(bystander_prompt.size()), 64,
+	                         SSLM_SPAN_PROMPT, nullptr, &consumed) == SSLM_OK);
 	CHECK(sslm_seq_committed_token_count(st.spec_seq, &st.committed) == SSLM_OK);
 	const int64_t committed_start = st.committed;
 
@@ -56,6 +64,12 @@ void TestP1_InterleaveV2V3BothOrdersAcrossAcceptAndReject(
 	SpecDrive got;
 	size_t emitted = 0;
 	int order_flip = 0;  // alternates which verb LEADS each pair of calls: both orders covered
+	// Logit rows exist ONLY for speculate emissions (v2 emits tokens without rows -- CM-G4
+	// declared out_logit_rows on the _v3 boundary alone), so the digest covers the LONGEST
+	// CONTIGUOUS prefix of the drive whose every emission came from speculate. The first
+	// v2 emission breaks contiguity and freezes the covered-prefix length.
+	bool v2_seen = false;
+	int64_t row_covered_prefix = 0;
 	while (emitted < want.produced) {
 		const bool speculate_first = (order_flip % 2 == 0);
 		++order_flip;
@@ -78,6 +92,7 @@ void TestP1_InterleaveV2V3BothOrdersAcrossAcceptAndReject(
 			    got.logit_rows.end(), rows.begin(),
 			    rows.begin() + static_cast<ptrdiff_t>(static_cast<size_t>(produced) *
 			                                          oracle.vocab_size));
+			if (!v2_seen) row_covered_prefix += produced;
 			emitted = got.tokens.size();
 			int64_t n = -1;
 			CHECK(sslm_seq_committed_token_count(st.spec_seq, &n) == SSLM_OK);
@@ -93,6 +108,7 @@ void TestP1_InterleaveV2V3BothOrdersAcrossAcceptAndReject(
 				CHECK(s == SSLM_OK);
 				if (s != SSLM_OK || outs[0] < 0) return false;
 				got.tokens.push_back(outs[0]);
+				v2_seen = true;  // this emission carries no logit row: prefix freezes here
 				emitted = got.tokens.size();
 				int64_t n = -1;
 				CHECK(sslm_seq_committed_token_count(st.spec_seq, &n) == SSLM_OK);
@@ -113,13 +129,19 @@ void TestP1_InterleaveV2V3BothOrdersAcrossAcceptAndReject(
 	CHECK(got.tokens ==
 	      std::vector<int32_t>(want.tokens.begin(),
 	                           want.tokens.begin() + static_cast<ptrdiff_t>(got.tokens.size())));
-	uint8_t gt[32], gr[32], wt[32], wr[32];
+	uint8_t gt[32], wt[32], wr[32];
 	superslm::ComputeTokenDigest(got.tokens.data(), got.tokens.size(), gt);
-	superslm::ComputeFinalLogitDigest(got.logit_rows.data(), got.tokens.size(),
-	                                  static_cast<size_t>(oracle.vocab_size), gr);
 	DigestRunPrefix(want, got.tokens.size(), static_cast<size_t>(oracle.vocab_size), wt, wr);
 	CHECK(DigestEqual(gt, wt));
-	CHECK(DigestEqual(gr, wr));
+	if (row_covered_prefix > 0) {
+		uint8_t cov_rows[32], ref_tok[32], ref_rows[32];
+		superslm::ComputeFinalLogitDigest(got.logit_rows.data(),
+		                                  static_cast<size_t>(row_covered_prefix),
+		                                  static_cast<size_t>(oracle.vocab_size), cov_rows);
+		DigestRunPrefix(want, static_cast<size_t>(row_covered_prefix),
+		                static_cast<size_t>(oracle.vocab_size), ref_tok, ref_rows);
+		CHECK(DigestEqual(cov_rows, ref_rows));  // speculate-covered rows stay integer-exact
+	}
 
 	// Rejection leg: hostile params mid-mixed-drive reject and leave BOTH batch members live.
 	sslm_speculate_params bad{};
@@ -132,6 +154,10 @@ void TestP1_InterleaveV2V3BothOrdersAcrossAcceptAndReject(
 	int32_t outs[2] = {0, 0};
 	sslm_seq batch[2] = {st.spec_seq, st.bystander};
 	CHECK(sslm_decode_step_v2(model, batch, 2, &dp, ws, outs) == SSLM_OK);
+	CHECK(sslm_seq_release(st.spec_seq) == SSLM_OK);
+	CHECK(sslm_seq_release(st.bystander) == SSLM_OK);
+	st.spec_seq = nullptr;
+	st.bystander = nullptr;
 }
 
 }  // namespace

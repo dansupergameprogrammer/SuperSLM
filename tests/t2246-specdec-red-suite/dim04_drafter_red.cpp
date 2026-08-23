@@ -7,8 +7,9 @@
 // dimension requires. Every expected proposal below is hand-decoded from the rule against a
 // constructed history -- never by recoding the drafter inside the test.
 //
-// RED STATUS: link-red on superslm::SpecdecDraftPropose (expected seam, planner routing
-// CM-G2) until S-D lands.
+// EXECUTION STATUS (fold round 1, 2026-08-22): S-D has LANDED -- superslm::SpecdecDraftPropose
+// exists in production under the recorded name, so this file no longer links red; every cell
+// executes against the real drafter.
 #include "fixture_common.h"
 
 using namespace superslm;
@@ -82,6 +83,7 @@ void TestD4_PureFunctionNoHiddenState(sslm_model model, sslm_workspace ws,
 
 	superslm::SpecdecDraftPropose(history, 3, &after);
 	CHECK_MSG(after == before, "unrelated decode traffic must not perturb proposals");
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
 
 // D5 -- No match proposes nothing: a history repeating no token yields the empty draft --

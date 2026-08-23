@@ -3,8 +3,9 @@
 // primitive's failure containment. The empty-draft fallback cell doubles as the equivalence
 // witness for the broken-drafter negative control (dim12 M2 drives the same fixture).
 //
-// RED STATUS: link-red on sslm_speculate_step_v3 / superslm_test::g_inject_specdec_fault
-// (expected seam, planner routing CM-G3) until S-B/S-E.
+// EXECUTION STATUS (fold round 1, 2026-08-22): S-B/S-E have LANDED -- sslm_speculate_step_v3
+// and superslm_test::g_inject_specdec_fault exist in production under the recorded names;
+// every cell executes against the real mechanism.
 #include "fixture_common.h"
 
 using namespace superslm;
@@ -48,6 +49,7 @@ void TestF1_EmptyDraftFallsBackToSingleToken(sslm_model model, sslm_workspace ws
 	                                  static_cast<size_t>(oracle.vocab_size), gr);
 	CHECK(DigestEqual(gt, wt));
 	CHECK(DigestEqual(gr, wr));
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
 
 // F2 -- A rejected speculate call leaves the sequence resumable: after hostile-params
@@ -82,6 +84,7 @@ void TestF2_RejectedCallLeavesSequenceResumable(sslm_model model, sslm_workspace
 	ASSERT_TRUE(DriveSpeculate(model, seq, good, ws, oracle.vocab_size, want.produced, &got,
 	                           &err));
 	CHECK(got.tokens == want.tokens);
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
 
 // F3 -- Injected mid-verify non-Ok is contained per the staging rule: post-call sequence
@@ -146,6 +149,7 @@ void TestF3_InjectedMidVerifyNonOkContained(sslm_model model, sslm_workspace ws,
 	ASSERT_TRUE(DriveSpeculate(model, seq, retry, ws, oracle.vocab_size, want.produced, &got,
 	                           &err));
 	CHECK(got.tokens == want.tokens);
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
 
 // F4 -- Within-window exhaustion is the UP-FRONT whole-chunk capacity guard: occupancy near
@@ -191,6 +195,7 @@ void TestF4_WithinWindowCapacityGuardBeforeAnyLanding(sslm_model model, sslm_wor
 		CHECK(BlobSaturationCount(post.bytes) == BlobSaturationCount(pre.bytes));
 		CHECK(BlobContextLength(post.bytes) == BlobContextLength(pre.bytes));
 	}
+	CHECK(sslm_seq_release(near) == SSLM_OK);
 }
 
 }  // namespace

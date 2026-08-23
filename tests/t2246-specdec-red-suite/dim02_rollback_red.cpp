@@ -5,7 +5,9 @@
 // residual, and anti-LM regions byte-exact; live KV rows below context_length byte-exact;
 // raw bytes beyond excluded (path-dependent by design, sslm_abi.cpp:1864-1869).
 //
-// RED STATUS: link-red on sslm_speculate_step_v3 / sslm_seq_committed_token_count until S-E.
+// EXECUTION STATUS (fold round 1, 2026-08-22): S-B..S-E have LANDED -- sslm_speculate_step_v3
+// and sslm_seq_committed_token_count exist in production under the recorded names, so this
+// file no longer links red; every cell executes against the real mechanism.
 #include "fixture_common.h"
 
 using namespace superslm;
@@ -38,6 +40,26 @@ void SaveInto(sslm_seq seq, SeqBlobBuffer* blob) {
 	blob->bytes.resize(blob->size);
 }
 
+// RS-G1 direct retention read-back: count and CONTENT, not just outputs. Asserts the
+// sequence's retained window reads pre + emitted ids -- the prompt followed by exactly this
+// drive's emissions in order.
+void CheckRetentionReadBack(sslm_seq seq, int64_t pre, const std::vector<int32_t>& prompt,
+                            const std::vector<int32_t>& emitted) {
+	int64_t n = -1;
+	CHECK(sslm_seq_committed_token_count(seq, &n) == SSLM_OK);
+	CHECK_MSG(n == pre + static_cast<int64_t>(emitted.size()),
+	          "post-drive retention must read prompt + emitted prefix");
+	std::vector<int32_t> expect(prompt.begin(), prompt.end());
+	expect.insert(expect.end(), emitted.begin(), emitted.end());
+	if (n != pre + static_cast<int64_t>(emitted.size())) return;
+	std::vector<int32_t> peeked(expect.size() + 1, 0);
+	int64_t io = static_cast<int64_t>(peeked.size());
+	CHECK(sslm_seq_committed_tokens_peek(seq, 0, peeked.data(), &io) == SSLM_OK);
+	peeked.resize(static_cast<size_t>(io));
+	CHECK_MSG(peeked == expect, "retained content must be the prompt followed by the "
+	                            "drive's emitted ids in order");
+}
+
 // B1 -- Mismatch rollback exactness: a natural divergence leaves post-step sequence state
 // IDENTICAL to the never-speculated twin at the same emitted prefix -- full struct including
 // kv_saturation_count (verify lands K/V for rejected drafts where greedy never does; the
@@ -48,6 +70,14 @@ void TestB1_PostRejectionFullStructEquality(sslm_model model, sslm_workspace ws,
                                             const std::vector<int32_t>& prompt) {
 	TwinFixture fx;
 	ASSERT_TRUE(MakeTwin(model, prompt, &fx));
+
+	// RS-G1: record both twins' retention BEFORE driving (prefill pins it at the prompt
+	// length) so the post-drive read-back asserts count AND content, not just outputs.
+	int64_t spec_pre = -1, twin_pre = -1;
+	CHECK(sslm_seq_committed_token_count(fx.spec_seq, &spec_pre) == SSLM_OK);
+	CHECK(spec_pre == static_cast<int64_t>(prompt.size()));
+	CHECK(sslm_seq_committed_token_count(fx.greedy_seq, &twin_pre) == SSLM_OK);
+	CHECK(twin_pre == static_cast<int64_t>(prompt.size()));
 
 	GreedyRun want;
 	std::string err;
@@ -80,6 +110,12 @@ void TestB1_PostRejectionFullStructEquality(sslm_model model, sslm_workspace ws,
 		CHECK_MSG(equal, "post-rejection state must equal never-speculated state (%s)",
 		          why.c_str());
 	}
+	CheckRetentionReadBack(fx.spec_seq, spec_pre, prompt, got.tokens);
+	CheckRetentionReadBack(fx.greedy_seq, twin_pre, prompt, want.tokens);
+	CHECK(sslm_seq_release(fx.spec_seq) == SSLM_OK);
+	CHECK(sslm_seq_release(fx.greedy_seq) == SSLM_OK);
+	fx.spec_seq = nullptr;
+	fx.greedy_seq = nullptr;
 }
 
 // B2/B3 -- Save-blob byte equality vs pure greedy (audit N-4, scoped): after a full-K
@@ -125,6 +161,10 @@ void TestB2_PostAcceptanceBlobEquality(sslm_model model, sslm_workspace ws,
 	                            oracle.context_cap, &why);
 	CHECK_MSG(equal, "post-full-K save-blob must equal pure greedy's at the same prefix (%s)",
 	          why.c_str());
+	CHECK(sslm_seq_release(fx.spec_seq) == SSLM_OK);
+	CHECK(sslm_seq_release(fx.greedy_seq) == SSLM_OK);
+	fx.spec_seq = nullptr;
+	fx.greedy_seq = nullptr;
 }
 
 }  // namespace

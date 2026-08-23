@@ -4,10 +4,9 @@
 // equal the shipped greedy loop's on identical drives -- the feature oracle for plan SS1's
 // identity claim ("identical emitted-token stream and identical digests versus pure greedy").
 //
-// RED STATUS: every cell below calls sslm_speculate_step_v3 / sslm_speculate_params_init --
-// declared in sslm_specdec_red_contract.h, undefined at pin f409bda -- so each file links RED
-// BY LINK until S-E lands. The greedy-reference and margin-search legs use only shipped
-// symbols and run for real once linked.
+// EXECUTION STATUS (fold round 1, 2026-08-22): S-B..S-E have LANDED -- sslm_speculate_step_v3 /
+// sslm_speculate_params_init exist in production under the recorded names, so this file no
+// longer links red; every cell executes against the real mechanism.
 #include "fixture_common.h"
 
 using namespace superslm;
@@ -54,6 +53,7 @@ void TestE1_FlagshipGreedyEquivalenceWithDigests(sslm_model model, sslm_workspac
 	CHECK_MSG(DigestEqual(got_rows, want_rows),
 	          "logit-row digest must pair every emitted token with its own target-argmax row "
 	          "(plan SS1 digest mapping)");
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
 
 // E2 -- Minimal-margin runner-up class (M-1): acceptance must flip exactly at integer
@@ -144,6 +144,7 @@ void TestE2_AcceptanceFlipsExactlyAtEquality(sslm_model model, sslm_workspace ws
 	                                  static_cast<size_t>(oracle.vocab_size), gr);
 	CHECK(DigestEqual(gt, wt));
 	CHECK(DigestEqual(gr, wr));
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
 
 // E3 -- Full-K bonus branch (G-1): history containing an exact K-token repetition so the
@@ -203,8 +204,14 @@ void TestE3_FullKBonusBranchAndK1Sibling(sslm_model model, sslm_workspace ws,
 	size_t sz_after = blob_after.size;
 	ASSERT_TRUE(sslm_seq_save(seq, blob_after.bytes.data(), &sz_after) == SSLM_OK);
 	blob_after.bytes.resize(sz_after);
+	// Occupancy advances produced - 1 over the drive: each speculate call commits
+	// kept_feeds = m-1 from a logits-ready entry and m from a pending-token entry
+	// (src/sslm_abi.cpp SpeculateWalkAndCommit), so exactly one emission -- the FIRST call's
+	// free logits-ready emission -- rests unfed-pending at drive end. Retention appends all
+	// m walked emissions per call, so its delta is the full produced count; the two deltas
+	// therefore differ by exactly the one pending token.
 	CHECK(BlobContextLength(blob_after.bytes) - BlobContextLength(blob_before.bytes) ==
-	      static_cast<int64_t>(want.produced));  // occupancy advances K+1 (plan SS3.2)
+	      static_cast<int64_t>(want.produced) - 1);
 	int64_t committed_after = -1;
 	CHECK(sslm_seq_committed_token_count(seq, &committed_after) == SSLM_OK);
 	CHECK(committed_after - committed_before == static_cast<int64_t>(want.produced));
@@ -223,6 +230,8 @@ void TestE3_FullKBonusBranchAndK1Sibling(sslm_model model, sslm_workspace ws,
 	ASSERT_TRUE(DriveSpeculate(model, seq1, params1, ws, oracle.vocab_size, want.produced,
 	                           &got1, &err));
 	CHECK(got1.tokens == want.tokens);
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
+	CHECK(sslm_seq_release(seq1) == SSLM_OK);
 }
 
 // E4 -- Ceiling boundary: identity across a longer drive whose occupancy stays under the
@@ -261,6 +270,7 @@ void TestE4_CeilingBoundaryEquivalenceAndGuard(sslm_model model, sslm_workspace 
 	                                  static_cast<size_t>(oracle.vocab_size), gr);
 	CHECK(DigestEqual(gt, wt));
 	CHECK(DigestEqual(gr, wr));
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
 
 	// Ceiling guard arm: occupancy parked at cap-4 via the tampered-restore route (real
 	// sequence saved first so every other blob field stays valid), then a K=8 speculate whose
