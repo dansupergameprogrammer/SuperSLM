@@ -4,6 +4,73 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-08-23
+
+Eleven correctness items closed against 1.2.0, red-first (`Claude/Plans/SuperSLM_1p2p1_Plan.md`
+plan of record; test design `Claude/Curie/t2243-1p2p1-red-suite-2026-08-22.md`). Four items priced
+in the same review (S1, M1, S3, a perf-footprint item T-2236) are deferred to a later release —
+see that plan's own deferral table; they carry no line here.
+
+### Fixed
+
+- **`sslm_gpu_seq_restore` now rejects `SSLM_BUSY` while any sequence on the target model holds
+  an unfenced, in-flight decode submission**, closing an ordering hazard between that in-flight
+  work and the restore's own device round-trip (a fresh K/V buffer allocated and uploaded against
+  the same device without waiting for the sibling's fence). Genuinely transient: drains the
+  instant the in-flight sequence's own fence signals.
+- **`sslm_gpu_model_unmap` now rejects while any adapter is still mapped against the model**
+  (`SSLM_MODEL_HAS_LIVE_ADAPTERS` — see Changed, below). An adapter handle's retained model
+  pointer is never dereferenced today but was left dangling by an unmap that ignored it.
+- **The tokenizer's special-token table is now validated for longest-content-first ordering.** A
+  hand-built artifact with non-monotonic special-token content lengths is rejected at load
+  (`TokenizerRejected`) instead of accepted silently — restores parity with the writer-invariant
+  checks the parser already runs for vocab-offset monotonicity and unicode-range sortedness.
+- **The damped-greedy forward loop now enforces `out_tokens_capacity` before every token/logit-row
+  write**, rejecting an undersized caller buffer (`SSLM_INVALID_ARGUMENT`) instead of writing past
+  it — closes a memory-safety hole reproducible under ASan.
+- **A non-DGC1 (greedy-only) artifact's workspace no longer grows unconditionally.** The
+  `damped_indices` scratch region is now reserved only when the mapped model actually carries the
+  damped-greedy feature — restores the pre-1.2.0 workspace-sizing formula for every caller that
+  never opted into damped-greedy decoding. See also the retroactive disclosure, below: 1.2.0
+  itself grew every caller's workspace unconditionally, undisclosed at the time.
+- `sslm_gpu_ready` no longer silently discards a null-in-flight-token status
+  (`RunLayerLoopGpuFinish`'s own caller-error rejection) as `SSLM_OK`/`*out_ready=0` — the real
+  status now surfaces through `*out_status`. Affects only a state no legitimate public caller can
+  reach through the documented API alone.
+
+### Added
+
+- **`sslm_gpu_seq_bind_adapter(ctx, seq, adapter_or_null)`** binds (or, passed a null adapter,
+  unbinds) a LoRA adapter to a GPU sequence handle *across* calls — distinct from the existing
+  per-call `adapter_or_null` argument every decode call already takes. A bound adapter is read
+  automatically by the recommended one-call bridge (`SslmGpuSeqDecodeStepForG5Bridge`) and by the
+  chunk-prefill entry points; it does not change what a direct `sslm_decode_step_gpu`/
+  `sslm_decode_step_batch_gpu` caller must still pass explicitly. This is the mechanism serial
+  specialist-switching needs: decode under one adapter, rebind to a different one, decode again,
+  on the same live sequence, without an unwanted extra token or losing K/V state. Rejects a
+  model-mismatched or foreign-context adapter, and rejects mid-token (`SSLM_BUSY` — a drained rest,
+  at either token boundary, always admits). Unbinds automatically on `sslm_gpu_seq_release`;
+  survives `sslm_gpu_seq_reset`; does not round-trip through save/restore.
+
+### Changed
+
+- **New `SslmGpuStatus` members, appended last, no existing value moved:**
+  `SSLM_MODEL_HAS_LIVE_ADAPTERS` (`sslm_gpu_model_unmap`, above) and
+  `SSLM_ADAPTER_HAS_BOUND_SEQUENCES` (`sslm_gpu_adapter_unmap` now rejects while any sequence
+  still holds a bind to that adapter, via the new bind verb above). Both are persistent-liveness
+  conditions — they hold until the caller explicitly unmaps/unbinds, never draining on their own —
+  distinct from the existing transient `SSLM_BUSY`.
+- **`anti_lm_max_order` now has a ceiling of 82** (`ValidateDampedGreedyParams`); `83` and above
+  are rejected `SSLM_INVALID_ARGUMENT`. Derived from the shipped fixed-point recurrence
+  (`kBetaQ15`) as the last order whose contribution does not underflow to zero.
+- **Retroactive disclosure (1.2.0):** the workspace-region growth this release now makes
+  conditional on `damped_greedy_available` was, in 1.2.0, unconditional for every caller and was
+  not disclosed as a narrowing at the time. 1.2.1 restores the pre-1.2 sizing for non-DGC1
+  artifacts; see Fixed, above.
+- `docs/api.md` updated: `sslm_gpu_seq_restore` added to the calls needing external
+  serialization (it now performs real device work under a Busy-precedence guard, above); the new
+  bind verb and both new statuses documented.
+
 ## [1.2.0] - 2026-08-21
 
 ### Damped greedy decoding
