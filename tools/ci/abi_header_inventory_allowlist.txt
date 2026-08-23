@@ -45,3 +45,12 @@ SSLM_DECODE_MODE_GREEDY  # T-2199 Phase D1, added 2026-08-20 (Claude/Plans/
 SSLM_DECODE_MODE_DAMPED_GREEDY  # T-2199 Phase D1, added 2026-08-20 -- pairs with
 # SSLM_DECODE_MODE_GREEDY immediately above; same design document, same reasoning, the other of
 # the two legal values `sslm_decode_params::mode` accepts (1).
+
+SSLM_SPECULATE_STOP_MAX_TOKENS  # T-2246 speculative decoding, added 2026-08-22 -- one of the two
+# stop-reason values sslm_speculate_step_v3 reports through out_stop_reason, mirroring the
+# internal superslm::SslmDecodeStopReason enumerators (forward_sites.h); the t2133 design doc
+# predates this surface, so the inventory line lives in Claude/Plans/
+# SuperSLM_SpecDecoding_SubPlan_2026-08-22.md SS3.6 rather than any Sec8.
+SSLM_SPECULATE_STOP_TOKEN_MATCHED  # T-2246 speculative decoding, added 2026-08-22 -- pairs
+# with SSLM_SPECULATE_STOP_MAX_TOKENS immediately above; the other of the two values
+# out_stop_reason accepts.

@@ -288,7 +288,7 @@ int main(int argc, char** argv) {
 		cfg.max_chunk_budget = 256;
 		cfg.max_layer_budget = static_cast<int32_t>(oracle.num_hidden_layers);
 		const size_t ws_size = sslm_workspace_size(model, &cfg);
-		std::vector<uint8_t> ws_store(ws_size ? ws_size : 1);
+		AlignedBuffer ws_store(ws_size ? ws_size : 1);
 		sslm_workspace ws = nullptr;
 		if (sslm_workspace_create(model, &cfg, ws_store.data(), ws_store.size(), &ws) !=
 		    SSLM_OK) {

@@ -50,3 +50,55 @@ sslm_status sslm_workspace_create(sslm_model model, const sslm_config* config,
  * g5-comparable subset (see above). */
 sslm_status sslm_detokenize_stream(sslm_model model, sslm_detok_state* state, const int32_t* tokens,
                                     int32_t n, char* utf8, int32_t* out_n);
+
+/* ---------------------------------------------------------------------------
+ * T-2246 speculative decoding (plan SS3.6), appended per this file's own stated
+ * evolution rule (appends are how this ABI grows).
+ *
+ * sslm_speculate_params_init fills a KNOWN-VALID params shape: max_draft_tokens
+ * defaulted to 4, budget defaulted generous, no stop set -- the
+ * sslm_decode_params_init precedent.
+ *
+ * sslm_speculate_step_v3 proposes up to params->max_draft_tokens drafts from the
+ * sequence's retained committed tokens, verifies them integer-exactly against the
+ * target argmax in ONE chunk-batched pass, emits accepted drafts plus the
+ * bonus/divergence target applying the shipped per-token stop/cap tests in order
+ * (append, stop test, cap test per position), commits on Ok, and restores the
+ * snapshotted three-term sequence state on any rejection. Single sequence by
+ * signature. Free-text greedy scope only: a schema-bound sequence rejects with
+ * SSLM_INVALID_ARGUMENT.
+ *
+ * out_tokens receives up to out_tokens_capacity ids; out_logit_rows receives the
+ * emitted tokens' target-argmax logit rows, row-major -- row i is the full int32
+ * logit row composed immediately before the i-th emitted token was selected (the
+ * caller-owned-rows convention RunGreedyDecodeLoop establishes). Capacity is
+ * checked up front against the call's worst reachable emission count,
+ * min(K+1, remaining budget); an undersized buffer rejects SSLM_BUFFER_TOO_SMALL
+ * before any landing. On a truncated call, out slots beyond *out_tokens_produced
+ * have unspecified content; nothing beyond the worst reachable count is ever
+ * written. Digesting stays outside the ABI: the verb emits raw arrays only, so
+ * ComputeTokenDigest/ComputeFinalLogitDigest remain pure functions of those
+ * arrays. On any rejection the sequence's header fields, residual, and anti-LM
+ * state are byte-identical to pre-call over the canonicalized save-blob
+ * comparison (plan SS3.3); raw KV bytes beyond context_length are stale-but-
+ * unread by design and excluded there, exactly as for every other path.
+ *
+ * sslm_seq_committed_token_count returns the sequence's retained committed-token
+ * id count (plan SS3.0 lifecycle checkpoints' quantity of record).
+ * sslm_seq_committed_tokens_peek copies up to *io_count retained ids starting at
+ * start_index into out_ids and sets *io_count to the number written. Read-back
+ * is observation only -- retention stays unserialized (plan SS4). A
+ * [start_index, start_index + *io_count) range crossing past the retained count
+ * rejects SSLM_INVALID_ARGUMENT; an undersized (or null) out_ids buffer rejects
+ * SSLM_BUFFER_TOO_SMALL with *io_count set to the required count, the shipped
+ * two-call sizing convention.
+ * --------------------------------------------------------------------------- */
+sslm_status sslm_speculate_params_init(sslm_model model, sslm_speculate_params* out);
+sslm_status sslm_speculate_step_v3(sslm_model model, sslm_seq seq,
+                                    const sslm_speculate_params* params, sslm_workspace ws,
+                                    int32_t* out_tokens, int32_t out_tokens_capacity,
+                                    int32_t* out_logit_rows, int32_t out_rows_capacity,
+                                    int32_t* out_tokens_produced, int32_t* out_stop_reason);
+sslm_status sslm_seq_committed_token_count(sslm_seq seq, int64_t* out_count);
+sslm_status sslm_seq_committed_tokens_peek(sslm_seq seq, int64_t start_index,
+                                            int32_t* out_ids, int64_t* io_count);

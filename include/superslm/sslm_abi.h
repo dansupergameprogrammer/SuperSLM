@@ -249,6 +249,31 @@ typedef struct sslm_stats_out {
  * implementation. */
 #define SSLM_ABI_ALIGNMENT_BYTES 64u
 
+/* ---------------------------------------------------------------------------
+ * T-2246 speculative decoding (plan Claude/Plans/SuperSLM_SpecDecoding_SubPlan_
+ * 2026-08-22.md SS3.6, CM-G4): versioned-additive `_v3` surface, appended per
+ * this header's own additive-only evolution rule. Values mirror the internal
+ * superslm::SslmDecodeStopReason's two shipped enumerators
+ * (include/superslm/forward_sites.h: MaxTokensReached = 0, StopTokenMatched = 1)
+ * so one mapping serves both sides.
+ * --------------------------------------------------------------------------- */
+#define SSLM_SPECULATE_STOP_MAX_TOKENS 0
+#define SSLM_SPECULATE_STOP_TOKEN_MATCHED 1
+
+/* Versioned-additive params struct on the sslm_decode_params pattern: `struct_size` is the
+ * FIRST field, caller-set to sizeof(sslm_speculate_params) and validated before anything else
+ * consumes the struct. Zero-init is NOT a valid params state: a zero struct_size is exactly
+ * the malformed-input rejection the trust matrix fires on. */
+typedef struct sslm_speculate_params {
+    uint32_t struct_size;        /* caller sets sizeof(sslm_speculate_params) */
+    int32_t max_draft_tokens;    /* K >= 1: max drafts proposed per call */
+    int32_t max_new_tokens;      /* remaining emission budget r for this call's walk;
+                                  * r == 0 is the exhausted-budget entry arm: emits nothing,
+                                  * reports SSLM_SPECULATE_STOP_MAX_TOKENS, no forward pass */
+    const int32_t* stop_ids;     /* per-emitted-token stop set; may be null when stop_count == 0 */
+    int32_t stop_count;
+} sslm_speculate_params;
+
 #ifdef __cplusplus
 }
 #endif

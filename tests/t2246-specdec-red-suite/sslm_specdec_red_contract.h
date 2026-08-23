@@ -35,106 +35,67 @@
 // these names or renames HERE, in this file, in the same commit that lands the production
 // symbol -- never silently. A rename without this header moving breaks the whole suite's link
 // loudly, which is the point of recording the expectation.
+//
+// RECONCILED 2026-08-22 (S-B..S-E build): every expected symbol below now exists in
+// production under these exact names -- sslm_speculate_params / sslm_speculate_step_v3 /
+// sslm_speculate_params_init / SSLM_SPECULATE_STOP_* in include/superslm/sslm_abi.h and the
+// sole declaration source include/superslm/sslm_abi_functions.inc; superslm::
+// SpecdecDraftPropose in include/superslm/specdec_drafter.h; superslm_test::g_inject_
+// specdec_fault in tests/support/specdec_injection.h (the bad_alloc_injection.h home, which
+// is where a production-consulted test seam lives per that precedent). This header therefore
+// INCLUDES those surfaces instead of restating them -- one declaration each, never two --
+// and keeps its recording comments below.
 
 #include <stdint.h>
 
+#include "superslm/sslm_abi.h"
+
 #ifdef __cplusplus
-extern "C" {
+#include "superslm/specdec_drafter.h"
+#include "../support/specdec_injection.h"
 #endif
 
-/* Stop reasons reported through sslm_speculate_step_v3's out_stop_reason, mirroring
- * superslm::SslmDecodeStopReason's two shipped values (include/superslm/forward_sites.h:1070-1073,
- * MaxTokensReached = 0, StopTokenMatched = 1). Declared here because the C ABI has no shipped
- * stop-reason type yet; values pinned to the internal enum's so one mapping serves both sides. */
-#define SSLM_SPECULATE_STOP_MAX_TOKENS 0
-#define SSLM_SPECULATE_STOP_TOKEN_MATCHED 1
-
-/* Versioned-additive params struct on the sslm_decode_params pattern (sslm_abi.h:207-224):
- * `struct_size` is the FIRST field, caller-set to sizeof(sslm_speculate_params), validated
- * before anything else (the trust-boundary matrix's malformed-struct_size rejection, plan SS6
- * Trust boundaries row). Zero-init is NOT a valid params state here (unlike sslm_detok_state):
- * a zero struct_size is exactly the malformed-input rejection the matrix fires on. */
-typedef struct sslm_speculate_params {
-    uint32_t struct_size;        /* caller sets sizeof(sslm_speculate_params) */
-    int32_t max_draft_tokens;    /* K >= 1: max drafts proposed per call (plan SS3.1) */
-    int32_t max_new_tokens;      /* remaining emission budget r for this call's walk (SS3.2);
-                                  * r == 0 is the exhausted-budget entry arm: emits nothing,
-                                  * reports SSLM_SPECULATE_STOP_MAX_TOKENS, no forward pass */
-    const int32_t* stop_ids;     /* per-emitted-token stop set, composed per SS3.2's ordered
-                                  * walk; may be null when stop_count == 0 */
-    int32_t stop_count;
-} sslm_speculate_params;
-
-/* Fills a KNOWN-VALID params shape (max_draft_tokens defaulted, budget defaulted generous,
- * no stop set) -- the sslm_decode_params_init precedent (sslm_abi_functions.inc:30-31). */
-sslm_status sslm_speculate_params_init(sslm_model model, sslm_speculate_params* out);
-
-/* The `_v3` speculate step: proposes up to params->max_draft_tokens drafts from the sequence's
- * retained committed tokens (SS3.0/SS3.1), verifies them integer-exactly against the target
- * argmax in ONE chunk-batched pass (SS3.2), emits accepted drafts plus the bonus/divergence
- * target applying the shipped per-token stop/cap tests in order, commits per SS3.4, and rolls
- * back per SS3.3 on mismatch. Single sequence by signature (plan SS4 ruling).
+/* The expected C surface below (stop-reason macros, sslm_speculate_params,
+ * sslm_speculate_params_init, sslm_speculate_step_v3, and the retention read-back pair) is
+ * now SUPPLIED BY include/superslm/sslm_abi.h, included above -- see the reconciliation note
+ * in this file's header comment. The recording comments in the replaced blocks are preserved
+ * here so the expectation record survives alongside the production declarations:
  *
- * out_tokens receives up to out_tokens_capacity ids; out_logit_rows receives the emitted
- * tokens' target-argmax logit rows, row-major, up to out_rows_capacity elements -- the
- * caller-owned-rows convention the shipped loop itself establishes
- * (include/superslm/forward_sites.h:1102-1109); WITHOUT some emitted-row observation surface,
- * plan SS1's pinned logit-row digest (D-SLM3795 mapping: ComputeFinalLogitDigest covers those
- * rows) is unassertable by any caller. The plan never states this surface explicitly -- routed
- * to the planner as casebook finding CM-G4; this signature records the suite's expectation.
- * *out_tokens_produced counts emissions; *out_stop_reason receives one SSLM_SPECULATE_STOP_*
- * value. On any rejection the call leaves the sequence byte-identical to its pre-call state
- * over the canonicalized save-blob comparison (SS3.3 canonicalization) -- the containment
- * property dim07_failure_red.cpp asserts. */
-sslm_status sslm_speculate_step_v3(sslm_model model, sslm_seq seq,
-                                   const sslm_speculate_params* params, sslm_workspace ws,
-                                   int32_t* out_tokens, int32_t out_tokens_capacity,
-                                   int32_t* out_logit_rows, int32_t out_rows_capacity,
-                                   int32_t* out_tokens_produced, int32_t* out_stop_reason);
-
-/* Committed-token retention read-back (expected surface -- see header comment, CM-G1).
- * count: current retained id count (the quantity every SS3.0 lifecycle checkpoint asserts).
- * peek: copies up to *io_count retained ids starting at start_index into out_ids, setting
- * *io_count to the number written; reading past the retained count rejects. */
-sslm_status sslm_seq_committed_token_count(sslm_seq seq, int64_t* out_count);
-sslm_status sslm_seq_committed_tokens_peek(sslm_seq seq, int64_t start_index,
-                                           int32_t* out_ids, int64_t* io_count);
+ *   - SSLM_SPECULATE_STOP_MAX_TOKENS = 0 / SSLM_SPECULATE_STOP_TOKEN_MATCHED = 1, mirroring
+ *     superslm::SslmDecodeStopReason's two shipped values; the C ABI had no shipped
+ *     stop-reason type, so the values are pinned to the internal enum's.
+ *   - sslm_speculate_params: struct_size FIRST, caller-set to sizeof(...), validated before
+ *     anything else; zero-init is NOT a valid params state -- a zero struct_size is exactly
+ *     the malformed-input rejection the trust matrix fires on. Fields: max_draft_tokens
+ *     (K >= 1), max_new_tokens (remaining budget r; r == 0 is the exhausted-budget entry
+ *     arm), stop_ids/stop_count.
+ *   - sslm_speculate_step_v3: proposes up to K drafts from retained committed tokens,
+ *     verifies integer-exactly against target argmax in ONE chunk-batched pass, emits
+ *     accepted drafts plus bonus/divergence under the shipped append-before-stop-test /
+ *     stop-then-cap ordering, commits on Ok, restores on rejection. Single sequence by
+ *     signature. out_tokens/out_logit_rows are caller-owned (the shipped loop's convention);
+ *     row i receives the full int32 logit row composed immediately before the i-th emitted
+ *     token was selected, so logit-digest equality versus pure greedy is checkable
+ *     byte-for-byte. On any rejection the sequence is byte-identical to pre-call over the
+ *     canonicalized save-blob comparison. */
 
 #ifdef __cplusplus
-}
-#endif
 
-#ifdef __cplusplus
-#include <vector>
-
-namespace superslm {
-
-/* Expected S-D drafter unit seam (CM-G2): the pure function of committed_tokens plan SS3.1
- * defines -- proposes up to k_max ids by longest-suffix match over committed_tokens, earliest
- * occurrence winning equal-length ties (C16-style lowest-index discipline), extending the
- * matched suffix greedily by its continuation in history. Returns the number of proposals
- * written to *out_drafts (0 when nothing matches -- the empty-draft fallback arm's input
- * condition, SS6 Failure paths row). A fixture whose history repeats no token therefore drives
- * the never-matching-drafter negative control WITHOUT any injection seam. */
-size_t SpecdecDraftPropose(const std::vector<int32_t>& committed_tokens, int32_t k_max,
-                           std::vector<int32_t>* out_drafts);
-
-}  // namespace superslm
-
-namespace superslm_test {
-
-/* Expected mid-verify non-Ok injection seam (CM-G3), bad_alloc_injection.h's shape: the test
- * arms the kind before the call under test; the verify primitive consults (and disarms) it at
- * the staged midpoint of its chunk walk. kNone is the unarmed default. */
-enum class SpecDecFaultKind {
-    kNone = 0,
-    kNonOkMidVerify,  /* a genuine non-Ok raised between per-position stages, after at least
-                       * one KV landing -- the granularity forward_sites.cpp:2085-2097 names */
-};
-
-inline thread_local SpecDecFaultKind g_inject_specdec_fault = SpecDecFaultKind::kNone;
-
-}  // namespace superslm_test
+/* The expected S-D drafter unit seam (CM-G2) is now SUPPLIED BY
+ * include/superslm/specdec_drafter.h, included above: superslm::SpecdecDraftPropose, the
+ * pure function of committed_tokens -- proposes up to k_max ids by longest-suffix match,
+ * earliest occurrence winning equal-length ties, extending the matched suffix greedily by
+ * its continuation in history; returns the proposal count, 0 when nothing matches (the
+ * empty-draft fallback arm's input condition). A fixture whose history repeats no token
+ * therefore drives the never-matching-drafter negative control WITHOUT any injection seam.
+ *
+ * The expected mid-verify non-Ok injection seam (CM-G3) is now SUPPLIED BY
+ * tests/support/specdec_injection.h, included above:
+ * superslm_test::SpecDecFaultKind (kNone default) plus the single-shot
+ * thread_local g_inject_specdec_fault, consulted (and disarmed) by the verify primitive's
+ * staged midpoint after at least one KV landing -- one INDEPENDENT slot per region, never a
+ * reuse of g_inject_throw (the post-load pin's lesson, D-SLM3466); production consults it
+ * only under SUPERSLM_ENABLE_T2246_SPECDEC_FAULT_INJECTION. */
 #endif  // __cplusplus
 
 /* EXPECTED-MISSING SYMBOL SET (machine-checked by build_link_red.bat): every unresolved

@@ -84,6 +84,7 @@
 #include "superslm/layer_marshal.h"
 #include "superslm/model.h"
 #include "superslm/schema_masks.h"
+#include "superslm/specdec_drafter.h"  // T-2246: superslm::SpecdecDraftPropose (plan SS3.1/CM-G2)
 #include "superslm/sslm_damped_greedy.h"  // T-2199 Phase A/C: AntiLmState, DampedGreedyScoreAndArgmax
 #include "superslm/sslm_phaseD.h"         // T-2199 Phase D: ValidateDampedGreedyParams
 
@@ -93,6 +94,13 @@
                               // uses -- consulted once, at sslm_model_map's own Load call, so a
                               // test can force a genuine bad_alloc through this file's own new
                               // catch-and-return path without needing an actual OOM condition.
+
+// T-2246 mid-verify fault-injection seam (plan SS3.6 CM-G3): the verify primitive's
+// consultation point below is compiled only under this gate -- the existing injection-gating
+// convention. In non-test builds the seam is never consulted and the walk is unchanged.
+#if defined(SUPERSLM_ENABLE_T2246_SPECDEC_FAULT_INJECTION)
+#include "../tests/support/specdec_injection.h"
+#endif
 
 // G5 (design Sec5/Sec13.4, T-2132): the DFA-walk-state "no schema bound" sentinel -- moved up
 // here (out of the save/restore-local anonymous namespace it originated in, below) so it is
@@ -2527,6 +2535,426 @@ extern "C" sslm_status sslm_decode_params_init(sslm_model model, int32_t mode,
 		params.q_c = model->damped_greedy_q_c;
 	}
 	*out = params;
+	return SSLM_OK;
+}
+
+// -----------------------------------------------------------------------------------------
+// T-2246 -- the speculative-decoding verify primitive (plan SS3.2/SS3.3/SS3.6).
+//
+// Entry shapes (the positioning invariant, plan SS3.0: lengths derive from the sequence's
+// own context_length occupancy, never from retention count):
+//   - logits-ready entry (post-prefill / post-adopt / post-restore: ready_for_logits true,
+//     the pending token's residual already carried and its KV already landed): the FIRST
+//     comparison row composes directly from the carried residual at zero feed cost -- the
+//     same fold sslm_decode_step's ready_for_logits path performs -- and the chunk runs the
+//     drafted positions only.
+//   - pending-token entry (resting between decode calls: current_token unlanded): the
+//     chunk runs the pending token's row first, then the drafted positions.
+//
+// Emission accounting follows the shipped greedy geometry exactly: an emission's producing
+// row is the landing whose logits selected it, so committing m emissions advances
+// context_length through the last KEPT landing (m feeds from a pending-token entry, m-1
+// from a logits-ready entry), retention appends all m ids, and kv_saturation_count gains
+// exactly the kept positions' landing events via the chunk-batched pass's per-token
+// saturation array -- never the disposed tail's landings. Disposed-tail landings sit beyond
+// restored context_length, which nothing reads past (plan SS3.3's logical rollback ground);
+// the canonicalized save-blob comparison excludes them by design.
+// -----------------------------------------------------------------------------------------
+
+namespace {
+
+bool SpeculateStopSetContains(const int32_t* stop_ids, int32_t stop_count, int32_t token) {
+	for (int32_t i = 0; i < stop_count; ++i) {
+		if (stop_ids[i] == token) return true;
+	}
+	return false;
+}
+
+struct SpeculateScratch {
+	int8_t* embed_stage = nullptr;    // chunk_rows x hidden_size staged embeddings/residuals
+	superslm::CarriedScale* chunk_scales = nullptr;
+	uint64_t* per_token_sat = nullptr;
+	int8_t* final_codes = nullptr;
+	int64_t* wide_logits = nullptr;
+	int64_t* rms_wide = nullptr;
+	int32_t* out_tokens = nullptr;
+	int32_t* out_logit_rows = nullptr;
+	int32_t* out_tokens_produced = nullptr;
+	int32_t* out_stop_reason = nullptr;
+	std::vector<int8_t> embed_stage_storage;
+	std::vector<superslm::CarriedScale> chunk_scales_storage;
+	std::vector<uint64_t> per_token_sat_storage;
+	std::vector<int8_t> final_codes_storage;
+	std::vector<int64_t> wide_logits_storage;
+	std::vector<int64_t> rms_wide_storage;
+};
+
+// The acceptance walk, ordered would-be-emission walk, and atomic commit -- everything
+// after the chunked forward pass returned Ok.
+sslm_status SpeculateWalkAndCommit(sslm_model model, sslm_seq seq,
+                                    const sslm_speculate_params* params, bool ready,
+                                    int64_t ctx0, uint64_t sat0,
+                                    const std::vector<int32_t>& drafts, int64_t ndrafts,
+                                    const SpeculateScratch& scratch, int64_t r) {
+	const superslm::SslmModelConfig& c = model->view.config;
+	int32_t* const out_tokens = scratch.out_tokens;
+	int32_t* const out_logit_rows = scratch.out_logit_rows;
+
+	// Per-row final-norm + logits compositions, written straight into the caller's
+	// out_logit_rows: row i IS emission i's target-argmax comparison row, so the emitting
+	// walk needs no second copy step. Slots beyond the finally reported produced count may
+	// hold composed-but-unemitted content on a truncated call; nothing beyond the worst
+	// reachable count validated up front is ever written.
+	auto compose_row = [&](const int8_t* codes, superslm::CarriedScale scale,
+	                        int64_t slot) -> sslm_status {
+		superslm::CarriedScale final_scale{};
+		superslm::SslmForwardStatus fst =
+		    superslm::RmsNormSite(codes, model->engine.final_norm_gain.data(), c.hidden_size,
+		                           scale, model->engine.final_norm_site_constant,
+		                           scratch.final_codes, &final_scale, "final_norm",
+		                           /*token_index=*/0, /*trace_hook_state=*/nullptr,
+		                           scratch.rms_wide);
+		if (fst != superslm::SslmForwardStatus::Ok) return MapForwardStatus(fst);
+		fst = superslm::LogitsSite(scratch.final_codes, c.hidden_size,
+		                            model->engine.head_weights,
+		                            static_cast<int32_t>(c.vocab_size), scratch.wide_logits,
+		                            out_logit_rows + slot * static_cast<int64_t>(c.vocab_size));
+		if (fst != superslm::SslmForwardStatus::Ok) return MapForwardStatus(fst);
+		return SSLM_OK;
+	};
+
+	{
+		const bool have_chunk = (ready ? ndrafts : (ndrafts + 1)) > 0;
+		const int8_t* row0_codes = ready ? seq->state.hidden_codes : scratch.embed_stage;
+		const superslm::CarriedScale row0_scale =
+		    ready ? seq->state.hidden_scale
+		          : (have_chunk ? scratch.chunk_scales[0] : superslm::CarriedScale{});
+		const sslm_status cst = compose_row(row0_codes, row0_scale, 0);
+		if (cst != SSLM_OK) return cst;
+	}
+
+	// Integer-exact acceptance walk: accept draft j iff it EQUALS the target argmax of its
+	// comparison row (ArgmaxLowestIndexTieBreak; no tolerances). Longest matching prefix.
+	// The walk also stops at the last slot the remaining budget could ever emit
+	// (jstar + 1 < r): emissions past an exhausted budget are disposed either way, so their
+	// comparison rows are never composed -- which keeps every write inside the caller-owned
+	// capacity validated against min(K+1, r) above.
+	int32_t arg = superslm::ArgmaxLowestIndexTieBreak(out_logit_rows,
+	                                                  static_cast<size_t>(c.vocab_size));
+	int64_t jstar = 0;
+	while (jstar < ndrafts && (jstar + 1) < r && arg == drafts[static_cast<size_t>(jstar)]) {
+		const int64_t src = ready ? jstar : (jstar + 1);
+		const sslm_status cst = compose_row(
+		    scratch.embed_stage + src * static_cast<int64_t>(c.hidden_size),
+		    scratch.chunk_scales[static_cast<size_t>(src)], jstar + 1);
+		if (cst != SSLM_OK) return cst;
+		arg = superslm::ArgmaxLowestIndexTieBreak(
+		    out_logit_rows + (jstar + 1) * static_cast<int64_t>(c.vocab_size),
+		    static_cast<size_t>(c.vocab_size));
+		++jstar;
+	}
+
+	// Ordered would-be-emission walk (plan SS3.2): accepted drafts, then the divergence
+	// target or full-K bonus -- append, stop test, then budget test, per position, exactly
+	// the shipped loop's ordering, so greedy-boundary behavior reproduces by construction.
+	int64_t m = 0;
+	int32_t stop_reason = SSLM_SPECULATE_STOP_MAX_TOKENS;
+	for (int64_t i = 0; i <= jstar; ++i) {
+		const int32_t emitted = (i < jstar) ? drafts[static_cast<size_t>(i)] : arg;
+		out_tokens[m++] = emitted;
+		if (SpeculateStopSetContains(params->stop_ids, params->stop_count, emitted)) {
+			stop_reason = SSLM_SPECULATE_STOP_TOKEN_MATCHED;
+			break;
+		}
+		if (m == r) {
+			stop_reason = SSLM_SPECULATE_STOP_MAX_TOKENS;
+			break;
+		}
+	}
+
+	// Commit (plan SS3.4): sequence terms advance only here, on the walked prefix. Kept
+	// feeds = m from a pending-token entry, m-1 from a logits-ready entry (whose first
+	// comparison row cost none). The carried residual rests at greedy's between-steps
+	// value: the final residual of the landing whose logits produced the LAST emitted
+	// token -- from a logits-ready single-emission call, the previously carried residual
+	// itself, unchanged.
+	const int64_t kept_feeds = ready ? (m - 1) : m;
+	uint64_t kept_sat = 0;
+	for (int64_t t = 0; t < kept_feeds; ++t) kept_sat += scratch.per_token_sat[static_cast<size_t>(t)];
+
+	seq->state.context_length = ctx0 + kept_feeds;
+	seq->state.kv_saturation_count = sat0 + kept_sat;
+	seq->committed_tokens.insert(seq->committed_tokens.end(), drafts.begin(),
+	                             drafts.begin() + static_cast<ptrdiff_t>(m - 1));
+	seq->committed_tokens.push_back(out_tokens[m - 1]);
+	seq->current_token = out_tokens[m - 1];
+	seq->state.layer_index = 0;
+	seq->ready_for_logits = false;
+	if (kept_feeds > 0) {
+		// Source physical row of global row (ready ? m-1 : m-1): from a pending-token
+		// entry, emission m-1's producing row is chunk row m-1; from a logits-ready entry,
+		// global row m-1 is chunk row m-2.
+		const int64_t src_row = ready ? (m - 2) : (m - 1);
+		std::memcpy(seq->state.hidden_codes,
+		            scratch.embed_stage + src_row * static_cast<int64_t>(c.hidden_size),
+		            static_cast<size_t>(c.hidden_size));
+		seq->state.hidden_scale = scratch.chunk_scales[static_cast<size_t>(src_row)];
+	}
+
+	*scratch.out_tokens_produced = static_cast<int32_t>(m);
+	*scratch.out_stop_reason = stop_reason;
+	return SSLM_OK;
+}
+
+sslm_status SpeculateStepImpl(sslm_model model, sslm_seq seq,
+                               const sslm_speculate_params* params, sslm_workspace ws,
+                               int32_t* out_tokens, int32_t out_tokens_capacity,
+                               int32_t* out_logit_rows, int32_t out_rows_capacity,
+                               int32_t* out_tokens_produced, int32_t* out_stop_reason) {
+	if (!model || !seq || !params) return SSLM_INVALID_ARGUMENT;
+	if (!out_tokens || !out_logit_rows || !out_tokens_produced || !out_stop_reason) {
+		return SSLM_INVALID_ARGUMENT;
+	}
+	if (params->struct_size != sizeof(sslm_speculate_params)) return SSLM_INVALID_ARGUMENT;
+	const superslm::SslmModelConfig& c = model->view.config;
+
+	// Documented diagnostics, checked before anything else consumes the struct or touches
+	// the sequence (entry-path symmetric with the trust-boundary matrix).
+	const int64_t k = params->max_draft_tokens;
+	const int64_t r = params->max_new_tokens;
+	if (k < 1) return SSLM_INVALID_ARGUMENT;
+	if (r < 0) return SSLM_INVALID_ARGUMENT;
+	if (params->stop_count < 0) return SSLM_INVALID_ARGUMENT;
+	if (params->stop_count > 0 && !params->stop_ids) return SSLM_INVALID_ARGUMENT;
+	for (int32_t i = 0; i < params->stop_count; ++i) {
+		if (params->stop_ids[i] < 0 ||
+		    static_cast<int64_t>(params->stop_ids[i]) >= static_cast<int64_t>(c.vocab_size)) {
+			return SSLM_INVALID_ARGUMENT;
+		}
+	}
+	if (!model->engine.ok) return SSLM_ARTIFACT_REJECTED;
+
+	std::lock_guard<std::mutex> lifecycle_lock(seq->lifecycle_mutex);
+
+	// Free-text greedy scope only (plan SS4); a mid-token sequence has no token boundary to
+	// speculate from; and neither entry shape has anything to produce from without prior
+	// state -- the same rule sslm_decode_stepImpl applies to a batch member.
+	if (seq->state.layer_index != 0) return SSLM_INVALID_ARGUMENT;
+	if (seq->bound_schema != nullptr) return SSLM_INVALID_ARGUMENT;
+	if (seq->state.context_length < 0) return SSLM_INVALID_ARGUMENT;
+	if (seq->state.context_length == 0 && seq->current_token < 0 && !seq->ready_for_logits) {
+		return SSLM_INVALID_ARGUMENT;
+	}
+
+	const bool ready = seq->ready_for_logits;
+	const int64_t ctx0 = seq->state.context_length;
+
+	// Exhausted-budget entry arm: emits nothing, reports MaxTokensReached, no forward pass,
+	// no counter moves (plan SS3.2's zero-budget arm).
+	if (r == 0) {
+		*out_tokens_produced = 0;
+		*out_stop_reason = SSLM_SPECULATE_STOP_MAX_TOKENS;
+		return SSLM_OK;
+	}
+
+	// Up-front whole-chunk capacity guard (plan SS3.5 guard 1): the drafted block -- the
+	// pending token's row plus K drafts from a pending-token entry, K drafts alone from a
+	// logits-ready entry -- never crosses the cache cap, rejected BEFORE any landing. This
+	// same bound caps the commit claim (a logits-ready entry's worst advance is K feeds),
+	// so no second guard is needed.
+	const int64_t rows_needed = ready ? k : (k + 1);
+	if (ctx0 + rows_needed > static_cast<int64_t>(c.context_cap)) {
+		return SSLM_CONTEXT_CAP_EXCEEDED;
+	}
+
+	// Caller-owned outputs are sized against the call's worst reachable emission count
+	// (min(K+1, remaining budget)), checked up front like every other guard.
+	const int64_t worst_emissions = std::min(k + 1, r);
+	if (static_cast<int64_t>(out_tokens_capacity) < worst_emissions ||
+	    static_cast<int64_t>(out_rows_capacity) <
+	        worst_emissions * static_cast<int64_t>(c.vocab_size)) {
+		return SSLM_BUFFER_TOO_SMALL;
+	}
+
+	// Draft from the retained window. A stale or empty window (post-restore / post-adopt)
+	// legitimately proposes nothing -- the single-token step falls out of the same walk.
+	std::vector<int32_t> drafts;
+	const int64_t ndrafts = static_cast<int64_t>(
+	    superslm::SpecdecDraftPropose(seq->committed_tokens, params->max_draft_tokens, &drafts));
+
+	// Snapshot terms (plan SS3.3): context_length above, kv_saturation_count here, retention
+	// commit point implicit in the vector itself. Nothing commits until the walk completes,
+	// so a mid-call non-Ok leaves every sequence-visible byte untouched.
+	const uint64_t sat0 = seq->state.kv_saturation_count;
+
+	SpeculateScratch scratch;
+	scratch.out_tokens = out_tokens;
+	scratch.out_logit_rows = out_logit_rows;
+	scratch.out_tokens_produced = out_tokens_produced;
+	scratch.out_stop_reason = out_stop_reason;
+
+	// Scratch: carved from the caller-supplied workspace when one sized for this model is
+	// supplied (the house convention), heap fallback otherwise. The chunk-batched pass's
+	// internal per-layer scratch is its own, matching both shipped callers.
+	const WorkspaceLayout layout =
+	    ws ? ComputeWorkspaceLayout(model, ws->config) : WorkspaceLayout{};
+	const bool ws_usable = ws && !layout.overflowed && ws->buf_size >= layout.total_bytes;
+	uint8_t* const ws_base = ws_usable ? static_cast<uint8_t*>(ws->buf) : nullptr;
+
+	const int64_t chunk_rows = ready ? ndrafts : (ndrafts + 1);
+	if (chunk_rows > 0) {
+		const bool embed_ws_fits =
+		    ws_usable && static_cast<size_t>(chunk_rows) * static_cast<size_t>(c.hidden_size) <=
+		                     layout.embed_codes_bytes;
+		if (embed_ws_fits) {
+			scratch.embed_stage =
+			    reinterpret_cast<int8_t*>(ws_base + layout.embed_codes_offset);
+		} else {
+			scratch.embed_stage_storage.assign(
+			    static_cast<size_t>(chunk_rows) * static_cast<size_t>(c.hidden_size), 0);
+			scratch.embed_stage = scratch.embed_stage_storage.data();
+		}
+	}
+	if (ws_usable) {
+		scratch.final_codes = reinterpret_cast<int8_t*>(ws_base + layout.final_codes_offset);
+		scratch.wide_logits = reinterpret_cast<int64_t*>(ws_base + layout.wide_logits_offset);
+		scratch.rms_wide = reinterpret_cast<int64_t*>(ws_base + layout.rms_wide_offset);
+	} else {
+		scratch.final_codes_storage.assign(static_cast<size_t>(c.hidden_size), 0);
+		scratch.wide_logits_storage.assign(static_cast<size_t>(c.vocab_size), 0);
+		scratch.rms_wide_storage.assign(static_cast<size_t>(c.hidden_size), 0);
+		scratch.final_codes = scratch.final_codes_storage.data();
+		scratch.wide_logits = scratch.wide_logits_storage.data();
+		scratch.rms_wide = scratch.rms_wide_storage.data();
+	}
+	scratch.chunk_scales_storage.assign(
+	    static_cast<size_t>(chunk_rows > 0 ? chunk_rows : 1), superslm::CarriedScale{});
+	scratch.chunk_scales = scratch.chunk_scales_storage.data();
+	scratch.per_token_sat_storage.assign(
+	    static_cast<size_t>(chunk_rows > 0 ? chunk_rows : 1), 0);
+	scratch.per_token_sat = scratch.per_token_sat_storage.data();
+
+	if (chunk_rows > 0) {
+		// Stage embeddings: the pending token's row first from a pending-token entry, then
+		// the drafts in proposal order.
+		int64_t stage = 0;
+		if (!ready) {
+			superslm::CarriedScale embed_scale{};
+			const superslm::SslmForwardStatus est = superslm::EmbedEntry(
+			    seq->current_token, static_cast<int32_t>(c.vocab_size),
+			    model->engine.embed_weights, c.hidden_size, model->engine.embed_site_constant,
+			    scratch.embed_stage, &embed_scale);
+			if (est != superslm::SslmForwardStatus::Ok) return MapForwardStatus(est);
+			scratch.chunk_scales[0] = embed_scale;
+			stage = 1;
+		}
+		for (int64_t d = 0; d < ndrafts; ++d, ++stage) {
+			superslm::CarriedScale embed_scale{};
+			const superslm::SslmForwardStatus est = superslm::EmbedEntry(
+			    drafts[static_cast<size_t>(d)], static_cast<int32_t>(c.vocab_size),
+			    model->engine.embed_weights, c.hidden_size, model->engine.embed_site_constant,
+			    scratch.embed_stage + stage * static_cast<int64_t>(c.hidden_size),
+			    &embed_scale);
+			if (est != superslm::SslmForwardStatus::Ok) return MapForwardStatus(est);
+			scratch.chunk_scales[static_cast<size_t>(stage)] = embed_scale;
+		}
+
+		std::vector<superslm::LayerWeights> layers_scratch;
+		const superslm::LayerWeights* layers =
+		    ResolveLayers(model, seq->adapter_handle, &layers_scratch);
+		const superslm::SslmForwardStatus st = superslm::RunLayerLoopChunkBatched(
+		    scratch.embed_stage, scratch.chunk_scales, static_cast<size_t>(chunk_rows), layers,
+		    c.num_hidden_layers, c.hidden_size, c.head_dim, c.num_key_value_heads,
+		    c.intermediate_size, c.context_cap, ctx0, model->view.rope_tables, seq->kv_block,
+		    seq->block_size, /*option_g_fused_k_landing=*/false,
+		    /*kv_saturation_count=*/nullptr, /*site_prefix=*/{}, /*trace_hook_state=*/nullptr,
+		    scratch.per_token_sat);
+		if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
+	}
+
+#if defined(SUPERSLM_ENABLE_T2246_SPECDEC_FAULT_INJECTION)
+	// CM-G3 consultation point: after at least one KV landing (any reached landing count
+	// satisfies the granularity the chunk-batched commit loop names), before any staged
+	// composition is consumed. Single-shot: the consult disarms. Surfaced as
+	// SSLM_ALLOCATION_FAILED -- the containment cell proves the failed call left every
+	// sequence-state byte untouched over the canonicalized comparison.
+	if (superslm_test::ConsultSpecDecFault()) {
+		return SSLM_ALLOCATION_FAILED;
+	}
+#endif
+
+	return SpeculateWalkAndCommit(model, seq, params, ready, ctx0, sat0, drafts, ndrafts,
+	                              scratch, r);
+}
+
+}  // namespace
+
+extern "C" sslm_status sslm_speculate_params_init(sslm_model model,
+                                                   sslm_speculate_params* out) {
+	if (!model || !out) return SSLM_INVALID_ARGUMENT;
+	sslm_speculate_params p{};
+	p.struct_size = sizeof(p);
+	p.max_draft_tokens = 4;          // defaulted draft depth
+	p.max_new_tokens = INT32_MAX;    // generous default budget; callers size their own buffers
+	p.stop_ids = nullptr;
+	p.stop_count = 0;
+	*out = p;
+	return SSLM_OK;
+}
+
+extern "C" sslm_status sslm_speculate_step_v3(sslm_model model, sslm_seq seq,
+                                               const sslm_speculate_params* params,
+                                               sslm_workspace ws, int32_t* out_tokens,
+                                               int32_t out_tokens_capacity,
+                                               int32_t* out_logit_rows,
+                                               int32_t out_rows_capacity,
+                                               int32_t* out_tokens_produced,
+                                               int32_t* out_stop_reason) {
+	return CatchAllocationFailure([&]() -> sslm_status {
+		return SpeculateStepImpl(model, seq, params, ws, out_tokens, out_tokens_capacity,
+		                         out_logit_rows, out_rows_capacity, out_tokens_produced,
+		                         out_stop_reason);
+	});
+}
+
+// -----------------------------------------------------------------------------------------
+// T-2246 -- committed-token retention read-back pair (plan SS3.0 lifecycle checkpoints'
+// quantity of record, SS3.6 CM-G1). Observation only: retention stays unserialized (SS4).
+// -----------------------------------------------------------------------------------------
+
+extern "C" sslm_status sslm_seq_committed_token_count(sslm_seq seq, int64_t* out_count) {
+	if (!seq || !out_count) return SSLM_INVALID_ARGUMENT;
+	std::lock_guard<std::mutex> lifecycle_lock(seq->lifecycle_mutex);
+	*out_count = static_cast<int64_t>(seq->committed_tokens.size());
+	return SSLM_OK;
+}
+
+extern "C" sslm_status sslm_seq_committed_tokens_peek(sslm_seq seq, int64_t start_index,
+                                                       int32_t* out_ids, int64_t* io_count) {
+	if (!seq || !io_count) return SSLM_INVALID_ARGUMENT;
+	std::lock_guard<std::mutex> lifecycle_lock(seq->lifecycle_mutex);
+	const int64_t count = static_cast<int64_t>(seq->committed_tokens.size());
+	// *io_count is capacity on entry and the number written on exit (the read-back pair's
+	// contract, exercised exactly that way by the retention lifecycle cells' over-sized
+	// buffers). A start index outside the retained window is hostile input; a negative
+	// capacity likewise. The copy itself clamps to what the window holds -- a caller asking
+	// past the end simply gets fewer ids back.
+	if (start_index < 0 || start_index > count || *io_count < 0) {
+		return SSLM_INVALID_ARGUMENT;
+	}
+	if (*io_count == 0) {
+		return SSLM_OK;
+	}
+	if (!out_ids) {
+		// Null buffer with positive demand: the sizing round-trip names the required count.
+		*io_count = count - start_index;
+		return SSLM_BUFFER_TOO_SMALL;
+	}
+	const int64_t writable =
+	    std::min(*io_count, count - start_index);
+	std::memcpy(out_ids, seq->committed_tokens.data() + start_index,
+	            static_cast<size_t>(writable) * sizeof(int32_t));
+	*io_count = writable;
 	return SSLM_OK;
 }
 
