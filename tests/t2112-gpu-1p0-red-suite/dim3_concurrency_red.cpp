@@ -114,9 +114,15 @@ static void TestDim3_M2_SameSequenceConcurrentAccessResidualObserved(SslmGpuCont
 	// outcome the casebook's own re-run reproduced (Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-
 	// build-review.md Sec14.2) -- so this cell's own CHECK below is what runs when the process
 	// survives; a hard fault is itself the observed signal when it does not.
-	CHECK_MSG(r1 == SSLM_BUSY || r2 == SSLM_BUSY || r1 != r2,
-	          "same-sequence concurrent access produced Ok/Ok with no observable state-machine "
-	          "collision -- residual not measured (r1=%d r2=%d)", (int)r1, (int)r2);
+	// D-SLM4120 finding 1 (confirmation pass): on this toolchain the unsynchronized race
+	// collides on the process-global command allocator/list and both submits return
+	// SSLM_DEVICE_LOST -- observably rejected, which is the signal this cell exists to
+	// measure; only silent Ok/Ok is forbidden. Accepted as the measured realization beside
+	// Busy-or-divergent.
+	CHECK_MSG(r1 == SSLM_BUSY || r2 == SSLM_BUSY || r1 != r2 ||
+	          (r1 != SSLM_OK && r2 != SSLM_OK),
+	          "same-sequence concurrent access produced Ok/Ok with no observable collision "
+	          "signal -- residual unmeasured (r1=%d r2=%d)", (int)r1, (int)r2);
 	CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
 }
 
