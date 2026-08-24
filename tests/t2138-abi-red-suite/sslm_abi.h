@@ -165,6 +165,10 @@ typedef enum sslm_status {
      * in the SAME commit -- see tests/t2130-g5-red-suite/sslm_g5.h's own identical addition for
      * the full rationale. */
     SSLM_NUMERIC_STEP_REFUSED,
+    /* T-2260 (D-SLM4073): mirrored here in the SAME commit -- see
+     * include/superslm/sslm_abi.h's own identical addition for the full rationale
+     * (sslm_seq_restore's new legacy-'SSB3' rejection status, D-SLM4065's safety net). */
+    SSLM_RESTORE_RESIDUAL_LOST,
 
     /* Sentinel, FOLD RULING 2026-08-17 (design Sec6, F1) -- the enum's own final member, no
      * explicit value, auto-valuing to one past this header's own last explicit member and moving

@@ -227,6 +227,11 @@ typedef enum sslm_status {
      * wrong remedy. Mirrored here in the SAME commit per this header's own standing "every
      * duplicate header copy grows together" discipline. */
     SSLM_NUMERIC_STEP_REFUSED = 26,
+    /* T-2260 (D-SLM4073): mirrored here in the SAME commit, per this header's own standing
+     * "every duplicate header copy grows together" discipline -- see
+     * include/superslm/sslm_abi.h's own identical addition for the full rationale
+     * (sslm_seq_restore's new legacy-'SSB3' rejection status, D-SLM4065's safety net). */
+    SSLM_RESTORE_RESIDUAL_LOST = 27,
 
     /* Sentinel, FOLD RULING 2026-08-17 (design Sec6, on F1) -- the enum's own final member, no
      * explicit value, so it auto-values to one past whichever entry above it is this header's own

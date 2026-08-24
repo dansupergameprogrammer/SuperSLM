@@ -88,6 +88,10 @@ typedef enum sslm_status {
 	// in the SAME commit -- see tests/t2130-g5-red-suite/sslm_g5.h's own identical addition for
 	// the full rationale.
 	SSLM_NUMERIC_STEP_REFUSED = 26,
+	// T-2260 (D-SLM4073): mirrored here in the SAME commit -- see
+	// tests/t2130-g5-red-suite/sslm_g5.h's own identical addition for the full rationale
+	// (sslm_seq_restore's new legacy-'SSB3' rejection status, D-SLM4065's safety net).
+	SSLM_RESTORE_RESIDUAL_LOST = 27,
 	// SSLM_STATUS_NEXT_FREE -- CONFIRMED (M1, Claude/Poirot/3bcbe43-t2139-fourth-confirmation-
 	// review.md), not re-derived: the real tests/t2130-g5-red-suite/sslm_g5.h now carries this
 	// same sentinel, landed by curie/t2130-g5-red-suite@beb2355 (this line's own prior comment

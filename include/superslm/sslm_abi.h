@@ -149,7 +149,16 @@ typedef struct sslm_detok_state {
      * retry-safe, per-step numeric condition. Appended at the END of this list (never inserted
      * into the "numeric/domain rejections" block above, ordinals 15-17) so no already-shipped
      * ordinal renumbers -- this ABI's own additive-only discipline for a public C surface. */ \
-    X(SSLM_NUMERIC_STEP_REFUSED) /* 26 */
+    X(SSLM_NUMERIC_STEP_REFUSED) /* 26 */ \
+    /* T-2260 (D-SLM4073, Sec6 safety net): sslm_seq_restore rejects a legacy 'SSB3' blob
+     * whose fresh-post-prefill/adopt residual was never written by the pre-fix save path
+     * (D-SLM4065) -- detected from fields the reader already parses (layer_index == 0 &&
+     * context_length > 0 && saved_current_token == the blob's own "no pending embed"
+     * sentinel), loud instead of silently restoring ready_for_logits=true over a zeroed
+     * residual. Never returned for the current 'SSB4' format, which serializes the
+     * residual unconditionally and cannot lose it. Appended at the END of this list,
+     * same additive-only discipline as SSLM_NUMERIC_STEP_REFUSED above. */ \
+    X(SSLM_RESTORE_RESIDUAL_LOST) /* 27 */
 
 typedef enum sslm_status {
 #define SSLM_STATUS_ENUM_VALUE_(name) name,

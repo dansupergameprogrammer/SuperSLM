@@ -925,8 +925,10 @@ extern "C" size_t sslm_seq_state_size(sslm_model model) {
 	const size_t block_size = sslm_kv_block_size(model);
 	if (block_size == 0) return 0;
 	// Design Sec7.3's field list: fixed-size header fields, the residual (hidden_size *
-	// activation_bytes, worst case -- a mid-token residual, layer_index != 0), then the whole
-	// KV store a single sequence carries -- CORRECTED to the ruled block unit (Sec4 above): a
+	// activation_bytes -- T-2260/D-SLM4073, Option A: now ALWAYS present when hidden_size > 0,
+	// no longer only the mid-token worst case, since this is the upper-bound sizing verb for
+	// the CURRENT 'SSB4' format sslm_seq_save now writes), then the whole KV store a single
+	// sequence carries -- CORRECTED to the ruled block unit (Sec4 above): a
 	// sequence draws exactly ONE block (its own whole-sequence KV footprint), so
 	// kv_block_count is always 1 for a real saved sequence, not a ceil(context_cap/page) count
 	// under the now-retired PagedAttention reading. Fixed fields: magic(4) + model_hash(32) +
@@ -934,13 +936,15 @@ extern "C" size_t sslm_seq_state_size(sslm_model model) {
 	// context_length(8) + layer_index(4) + current_token(4, design commit 9e2995f4e7's own
 	// amendment -- see the C5 block's own top comment) + hidden_scale(16, CarriedScale as two
 	// int64) + kv_saturation_count(8) + forced_token_count(8) + damped_greedy_order(4) +
-	// damped_greedy_history_count(8) + kv_block_count(4) = 124 bytes. THIS CONSTANT IS
-	// INDEPENDENT of the save/restore block's own kSeqBlobFixedHeaderBytes (120, which excludes
-	// kv_block_count, added separately at each of that block's own call sites) -- both name the
-	// same design Sec7.3 field list and must be kept in step by hand; there is no single shared
-	// constant between this function and sslm_seq_save/sslm_seq_restore (S4/M4 sweep,
-	// Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md and the coordinator's own M4 follow-up brief).
-	constexpr size_t kFixedHeaderBytes = 124;
+	// damped_greedy_history_count(8) + ready_for_logits(4, T-2260/D-SLM4073's own new 'SSB4'
+	// field) + kv_block_count(4) = 128 bytes. THIS CONSTANT IS
+	// INDEPENDENT of the save/restore block's own kSeqBlobV4FixedHeaderBytes (124, which
+	// excludes kv_block_count, added separately at each of that block's own call sites) -- both
+	// name the same design Sec7.3 field list and must be kept in step by hand; there is no
+	// single shared constant between this function and sslm_seq_save/sslm_seq_restore (S4/M4
+	// sweep, Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md and the coordinator's own M4 follow-up
+	// brief).
+	constexpr size_t kFixedHeaderBytes = 128;
 	SaturatingAccumulator acc;
 	acc.value = kFixedHeaderBytes;
 	acc.AddProduct(1, static_cast<size_t>(c.hidden_size));  // residual_bytes, int8 codes
@@ -2619,7 +2623,16 @@ namespace {
 // SSB2 blobs and initializes their absent anti-LM state to empty; SSB1 and foreign formats reject.
 // Replaying SSB3 history is the canonical reconstruction of the count tables; unordered-map
 // layout never enters the blob.
-constexpr uint8_t kSeqBlobMagic[4] = {'S', 'S', 'B', '3'};
+// T-2260 (D-SLM4073, Option A + Sec6 safety net): 'SSB4' is now the CURRENT save format --
+// see this file's own standing per-field-layout-change law, above (`kSeqBlobMagicV2`'s own
+// header comment) -- residual serialization is broadened from mid-token-only to unconditional
+// (whenever hidden_size > 0), and a new explicit `ready_for_logits` field is appended to the
+// fixed header so restore reads it directly instead of inferring it from
+// layer_index/context_length, which is what let a restored post-prefill sequence carry
+// ready_for_logits=true over an all-zero residual (D-SLM4065). 'SSB3'/'SSB2' remain accepted,
+// read-only, legacy formats -- never written by this build again.
+constexpr uint8_t kSeqBlobMagicV4[4] = {'S', 'S', 'B', '4'};
+constexpr uint8_t kSeqBlobMagicV3[4] = {'S', 'S', 'B', '3'};
 constexpr uint8_t kSeqBlobMagicV2[4] = {'S', 'S', 'B', '2'};
 constexpr int32_t kSeqBlobNoCurrentToken = -1;
 
@@ -2642,14 +2655,21 @@ uint64_t ReadLE64(const uint8_t* p) {
 	return v;
 }
 
-// Fixed-size prefix, magic through damped_greedy_history_count:
-// magic(4) + model_hash(32) + kv_precision(4) + schema_name_hash(8) + dfa_walk_state(4) +
-// adapter_binding_id(8) + context_length(8) + layer_index(4) + current_token(4) +
-// hidden_scale(16) + kv_saturation_count(8) + forced_token_count(8) + anti_lm_order(4) +
-// anti_lm_history_count(8) = 120 bytes, followed by the variable-length residual, anti-LM
-// history (history_count little-endian int32 tokens), kv_block_count(4), then kv_blocks.
-constexpr size_t kSeqBlobFixedHeaderBytes = 120;
+// Fixed-size prefix, magic through damped_greedy_history_count -- the SSB3/SSB2 shape,
+// unchanged, still the legacy-format layout: magic(4) + model_hash(32) + kv_precision(4) +
+// schema_name_hash(8) + dfa_walk_state(4) + adapter_binding_id(8) + context_length(8) +
+// layer_index(4) + current_token(4) + hidden_scale(16) + kv_saturation_count(8) +
+// forced_token_count(8) + anti_lm_order(4) + anti_lm_history_count(8) = 120 bytes ('SSB3'; 'SSB2'
+// omits the trailing anti_lm_order/anti_lm_history_count pair, 108 bytes), followed by the
+// variable-length residual, anti-LM history (history_count little-endian int32 tokens),
+// kv_block_count(4), then kv_blocks.
+constexpr size_t kSeqBlobV3FixedHeaderBytes = 120;
 constexpr size_t kSeqBlobV2FixedHeaderBytes = 108;
+// T-2260 (Option A): 'SSB4' appends ONE new field, `ready_for_logits` (LE32, 0/1), immediately
+// after `anti_lm_history_count` -- every field at or before offset 120 keeps the IDENTICAL byte
+// position 'SSB3' already uses, so only this one new offset is added, nothing already-shipped
+// moves.
+constexpr size_t kSeqBlobV4FixedHeaderBytes = 124;
 
 }  // namespace
 
@@ -2659,10 +2679,13 @@ extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
 	std::lock_guard<std::mutex> lifecycle_lock(seq->lifecycle_mutex);
 	sslm_model_s* model = seq->model;
 	const superslm::SslmModelConfig& c = model->view.config;
-	// design Sec7.3: "residual_bytes ... zero-length when layer_index == 0" (§7's own "a
-	// sequence resting between whole tokens carries a zero-length residual").
-	const bool mid_token = seq->state.layer_index != 0;
-	const size_t residual_len = mid_token ? static_cast<size_t>(c.hidden_size) : 0;
+	// T-2260 (D-SLM4073, Option A): the residual is now serialized UNCONDITIONALLY whenever
+	// hidden_size > 0 -- mirroring the shipped GPU-blob precedent (T-2114/C1,
+	// src/gpu/superslm_gpu.cpp SaveGpuSequenceState, gated only on hidden_codes_size > 0, never
+	// on layer_index). The prior `mid_token`-gated predicate is what let a post-prefill/adopt
+	// sequence (layer_index == 0, ready_for_logits == true, a REAL load-bearing residual) save
+	// zero residual bytes -- D-SLM4065's defect. `mid_token` itself is no longer read here.
+	const size_t residual_len = c.hidden_size > 0 ? static_cast<size_t>(c.hidden_size) : 0;
 	const size_t anti_lm_history_count =
 	    seq->damped_greedy_antilm ? superslm::AntiLmHistorySize(seq->damped_greedy_antilm) : 0;
 	if (seq->state.context_length < 0 ||
@@ -2670,7 +2693,7 @@ extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
 		return SSLM_INVALID_ARGUMENT;
 	}
 	size_t anti_lm_history_bytes = 0;
-	size_t required = kSeqBlobFixedHeaderBytes;
+	size_t required = kSeqBlobV4FixedHeaderBytes;
 	if (!CheckedMulSizeT(anti_lm_history_count, sizeof(int32_t), &anti_lm_history_bytes) ||
 	    !CheckedAddSizeT(required, residual_len, &required) ||
 	    !CheckedAddSizeT(required, anti_lm_history_bytes, &required) ||
@@ -2687,7 +2710,7 @@ extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
 
 	uint8_t* p = static_cast<uint8_t*>(buf);
 	size_t off = 0;
-	std::memcpy(p + off, kSeqBlobMagic, 4);
+	std::memcpy(p + off, kSeqBlobMagicV4, 4);
 	off += 4;
 	const std::array<uint8_t, 32> hash = model->view.RawIntegrityHash();
 	std::memcpy(p + off, hash.data(), 32);
@@ -2737,6 +2760,12 @@ extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
 	off += 4;
 	WriteLE64(p + off, static_cast<uint64_t>(anti_lm_history_count));
 	off += 8;
+	// T-2260 (D-SLM4073, Option A): new field, 'SSB4' only -- restore reads this directly
+	// instead of inferring ready_for_logits from layer_index/context_length, which is what
+	// D-SLM4065's defect exploited (that inference agreed with the state even when the residual
+	// backing it had been silently dropped).
+	WriteLE32(p + off, seq->ready_for_logits ? 1u : 0u);
+	off += 4;
 	if (residual_len > 0) {
 		std::memcpy(p + off, seq->hidden_codes_storage.data(), residual_len);
 	}
@@ -2772,11 +2801,16 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	// model mismatch -- SSLM_INVALID_ARGUMENT states the actual cause (the blob itself is
 	// unusable) rather than sending the caller to re-check which MODEL it bound.
 	//
-	const bool is_ssb3 = std::memcmp(p, kSeqBlobMagic, 4) == 0;
+	// T-2260 (D-SLM4073, Option A): 'SSB4' is the current format; 'SSB3'/'SSB2' remain
+	// accepted, read-only, legacy formats -- the standing per-field-layout-change law's own
+	// "reject SSB1 outright, never default the field" precedent, extended to a third magic.
+	const bool is_ssb4 = std::memcmp(p, kSeqBlobMagicV4, 4) == 0;
+	const bool is_ssb3 = std::memcmp(p, kSeqBlobMagicV3, 4) == 0;
 	const bool is_ssb2 = std::memcmp(p, kSeqBlobMagicV2, 4) == 0;
-	if (!is_ssb3 && !is_ssb2) return SSLM_INVALID_ARGUMENT;
+	if (!is_ssb4 && !is_ssb3 && !is_ssb2) return SSLM_INVALID_ARGUMENT;
 	const size_t fixed_header_bytes =
-	    is_ssb3 ? kSeqBlobFixedHeaderBytes : kSeqBlobV2FixedHeaderBytes;
+	    is_ssb4 ? kSeqBlobV4FixedHeaderBytes
+	            : (is_ssb3 ? kSeqBlobV3FixedHeaderBytes : kSeqBlobV2FixedHeaderBytes);
 	if (n < fixed_header_bytes + 4) return SSLM_INVALID_ARGUMENT;
 
 	std::array<uint8_t, 32> saved_hash{};
@@ -2844,9 +2878,18 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	// current_token's own precedent (see this function's own magic-check comment, above, for the
 	// 'SSB1'-rejection half of this ruling).
 	const int64_t saved_forced_token_count = static_cast<int64_t>(ReadLE64(p + 100));
+	// anti-LM fields sit at the same offset (108/112) in BOTH 'SSB4' and 'SSB3' -- the new
+	// ready_for_logits field is appended at 120, AFTER this pair, so nothing here moves.
+	const bool has_anti_lm_fields = is_ssb4 || is_ssb3;
 	const int32_t saved_anti_lm_order =
-	    is_ssb3 ? static_cast<int32_t>(ReadLE32(p + 108)) : 0;
-	const uint64_t saved_anti_lm_history_count_u64 = is_ssb3 ? ReadLE64(p + 112) : 0;
+	    has_anti_lm_fields ? static_cast<int32_t>(ReadLE32(p + 108)) : 0;
+	const uint64_t saved_anti_lm_history_count_u64 = has_anti_lm_fields ? ReadLE64(p + 112) : 0;
+	// T-2260 (D-SLM4073, Option A): the new explicit field, 'SSB4' only -- read directly here so
+	// the reconstruction below (per this function's own C5 block) uses it instead of inferring
+	// ready_for_logits from layer_index/context_length, which is what let D-SLM4065's defect
+	// through: that inference agreed with the resting state even when the residual backing it
+	// had been silently dropped by the pre-fix save predicate.
+	const bool saved_ready_for_logits_v4 = is_ssb4 && (ReadLE32(p + 120) != 0);
 	if ((saved_anti_lm_order == 0 && saved_anti_lm_history_count_u64 != 0) ||
 	    saved_anti_lm_order < 0 ||
 	    saved_anti_lm_history_count_u64 > static_cast<uint64_t>(SIZE_MAX)) {
@@ -2862,8 +2905,26 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	    saved_anti_lm_history_count > static_cast<size_t>(c.context_cap)) {
 		return SSLM_INVALID_ARGUMENT;
 	}
+	// T-2260 (D-SLM4073, Sec6 safety net): a legacy 'SSB3' blob in the one unrecoverable state
+	// (fresh-post-prefill/adopt, ready_for_logits was true at save time, but the pre-fix save
+	// predicate wrote ZERO residual bytes for it, D-SLM4065) is detected here, from fields
+	// already read above, and rejected LOUDLY instead of silently restoring
+	// ready_for_logits=true over an all-zero residual. The lost residual cannot be recovered --
+	// it was never written -- this converts an existing silent-wrong-output consumer into a
+	// diagnosable failure. Scoped to 'SSB3' only, per the ruled shape (D-SLM4073): 'SSB4' never
+	// produces this state (the residual is always present now); 'SSB2' shares the same
+	// underlying defect but is out of this fix's ruled scope.
+	if (is_ssb3 && layer_index == 0 && context_length > 0 &&
+	    saved_current_token == kSeqBlobNoCurrentToken) {
+		return SSLM_RESTORE_RESIDUAL_LOST;
+	}
+	// T-2260 (D-SLM4073, Option A): 'SSB4' serializes the residual UNCONDITIONALLY whenever
+	// hidden_size > 0 (mirroring the shipped GPU-blob precedent, T-2114/C1) -- the legacy
+	// 'SSB3'/'SSB2' mid-token-only predicate is preserved for those two magics exactly as
+	// before (the case above is the only 'SSB3' state this fold changes the disposition of).
 	const bool mid_token = layer_index != 0;
-	const size_t residual_len = mid_token ? static_cast<size_t>(c.hidden_size) : 0;
+	const size_t residual_len = is_ssb4 ? (c.hidden_size > 0 ? static_cast<size_t>(c.hidden_size) : 0)
+	                                     : (mid_token ? static_cast<size_t>(c.hidden_size) : 0);
 	size_t anti_lm_history_bytes = 0;
 	size_t tail_offset = fixed_header_bytes;
 	if (!CheckedMulSizeT(saved_anti_lm_history_count, sizeof(int32_t), &anti_lm_history_bytes) ||
@@ -2990,7 +3051,16 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	//     fold (mid-token resumes via layer_index alone; a fresh/empty sequence has nothing to
 	//     decode from until prefilled, exactly as sslm_decode_step's own validation already
 	//     requires).
-	if (saved_current_token >= 0) {
+	// T-2260 (D-SLM4073, Option A): 'SSB4' carries ready_for_logits as its own explicit field
+	// (read above, saved_ready_for_logits_v4) -- no inference. current_token still governs the
+	// pending-embed id exactly as before (unrelated to this fold: current_token and
+	// ready_for_logits are never both meaningful at once, by construction, has_pending_embed at
+	// save time). Legacy 'SSB3'/'SSB2' keep the pre-existing inference; the one 'SSB3' state
+	// that inference got wrong is already rejected above (SSLM_RESTORE_RESIDUAL_LOST).
+	if (is_ssb4) {
+		h->current_token = (saved_current_token >= 0) ? saved_current_token : -1;
+		h->ready_for_logits = saved_ready_for_logits_v4;
+	} else if (saved_current_token >= 0) {
 		h->current_token = saved_current_token;
 		h->ready_for_logits = false;
 	} else {
