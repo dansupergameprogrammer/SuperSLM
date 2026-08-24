@@ -23,6 +23,15 @@ rem D-SLM3388 signature). Copy the engine build's shaders next to the suite bina
 if exist ..\..\out\shaders xcopy /Y /I /Q ..\..\out\shaders obj\shaders >nul
 
 set OVERALL_LINK_OK=1
+rem T-2243 review finding 5 (D-SLM4113): ANY_LINK_FAILURE tracks a genuine RED BY LINK cell
+rem (LNK2019/LNK1120 -- the undeclared-1.0-API-implementation case this script was ORIGINALLY
+rem written for, T-2113 era) separately from OVERALL_LINK_OK (a compile error or unexpected
+rem error class). Before this fix the exit code never distinguished the two: it was always 1
+rem once linking succeeded (every cell LINKED CLEAN, the shipped-since-T-2113 state) or 2 on a
+rem real compile error -- contradicting this file own header comment ("this script own exit
+rem code inverts to 0 ONLY once linking succeeds") and silently defeating run_green.bat own
+rem "call build_link_red.bat; if errorlevel 1 exit /b 1" gate, which always tripped.
+set ANY_LINK_FAILURE=0
 for %%f in (dim1_lifetime_red.cpp dim2_hostile_red.cpp dim3_concurrency_red.cpp dim4_shape_red.cpp dim5_failure_red.cpp dim6_determinism_red.cpp dim8_composition_red.cpp dim9_persistence_red.cpp dim10_functional_red.cpp dim11_guard_red.cpp s2_bind_red.cpp cell_rebind_serial.cpp) do (
     echo ===== %%f =====
     rem T-2114 (S4): the two allocation-fault-injection macros build.bat's own test-binary line
@@ -48,6 +57,7 @@ for %%f in (dim1_lifetime_red.cpp dim2_hostile_red.cpp dim3_concurrency_red.cpp 
         if not errorlevel 1 (
             echo    RED BY LINK -- unresolved external^(s^) on the undeclared 1.0 API implementation:
             findstr /C:"LNK2019" "obj\%%~nf.log"
+            set ANY_LINK_FAILURE=1
         ) else (
             findstr /C:"error" "obj\%%~nf.log" >nul
             if not errorlevel 1 (
@@ -61,10 +71,15 @@ for %%f in (dim1_lifetime_red.cpp dim2_hostile_red.cpp dim3_concurrency_red.cpp 
     )
 )
 echo.
-if "%OVERALL_LINK_OK%"=="1" (
-    echo SUITE STATUS: RED BY LINK, as expected pre-build ^(or GREEN where an implementation exists^).
-    exit /b 1
-) else (
+if "%OVERALL_LINK_OK%"=="0" (
     echo SUITE STATUS: an unexpected error class was found -- see logs above.
     exit /b 2
+) else if "%ANY_LINK_FAILURE%"=="1" (
+    echo SUITE STATUS: RED BY LINK -- one or more cells did not link against the real, shipped
+    echo 1.0 API. Expected pre-build ^(T-2113^); a real defect on any build where the API is
+    echo shipped -- see the per-cell LNK2019 lines above.
+    exit /b 1
+) else (
+    echo SUITE STATUS: LINKED CLEAN -- every cell links against the real, shipped 1.0 API.
+    exit /b 0
 )

@@ -319,6 +319,56 @@ void TestS2_O_ResetPreservesBinding(SslmGpuContext* ctx, SslmGpuModelHandle* mod
 	CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
 }
 
+// --- S2-P (T-2243 review finding 1, D-SLM4113): bind rejects while the sequence is genuinely
+// Submitted, between `sslm_decode_step_gpu`'s own async submission and the drain that collapses
+// it back to Idle -- the exact window cell (b) (S2-B, above) does not cover: S2-B drains before
+// measuring, so it only ever exercises the DRAINED mid-token rest (`0 < layer_index <
+// num_hidden_layers` with `state == Idle`). Before this fix, `sslm_gpu_seq_bind_adapter` carried
+// no `is_submitted` guard at all -- `seq->layer_index` stays at its PRE-SUBMIT value throughout a
+// Submitted window (only `sslm_gpu_ready`/the chunk guard's close ever advance it), so for a
+// freshly embedded token (layer_index == 0 going in) the old mid-token guard (rule 2) read 0 and
+// silently ADMITTED the bind mid-flight -- reachable through public calls alone, no
+// ForBench state-forcing needed: `sslm_decode_step_gpu` returns immediately after submission
+// (design's own async contract), leaving `state == Submitted` until the caller drains it. ---
+void TestS2_P_BindRejectsDuringSubmittedWindow(SslmGpuContext* ctx, SslmGpuModelHandle* model,
+                                                const SslmGpuAdapterHandle* A,
+                                                const SslmGpuAdapterHandle* B,
+                                                uint32_t num_hidden_layers) {
+	SslmGpuSequenceHandle* seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);
+	CHECK(sslm_gpu_seq_bind_adapter(ctx, seq, A) == SSLM_OK);  // bind BEFORE submission -- legal
+
+	// Submit the FULL token (every layer's worth of dispatches in one call) -- state becomes
+	// Submitted, seq->layer_index stays at its pre-submit value (0) until this call is drained.
+	// A full-token budget (not a single layer's) is deliberate: it puts the DRAINED rest, below,
+	// at layer_index == num_hidden_layers -- a legitimate "drained rest" rule 2 admits (S2-L's
+	// own case) -- rather than at a genuinely mid-token layer_index rule 2 correctly still
+	// rejects (S2-B's own case), which would make the post-drain re-bind assertion below wrong
+	// for a reason unrelated to this fix.
+	CHECK(sslm_decode_step_gpu(ctx, seq, A, FullTokenBudget(num_hidden_layers)) == SSLM_OK);
+
+	// The window under test: a second bind (to a different adapter, or to the same one --
+	// either must reject) attempted while genuinely Submitted, never drained.
+	const SslmGpuAdapterHandle* rebind_target = B ? B : A;
+	CHECK_MSG(sslm_gpu_seq_bind_adapter(ctx, seq, rebind_target) == SSLM_BUSY,
+	          "S2-P: bind must reject SSLM_BUSY while the sequence is Submitted -- admitting it "
+	          "here would split one token's layer walk across two adapters silently");
+	// The binding itself must be UNCHANGED by the rejected call.
+	CHECK(*SslmGpuSequenceHandleBoundAdapterForBench(seq) == A);
+
+	// Drain, then confirm the sequence is still usable and the ordinary drained-rest bind rules
+	// (S2-L's own case, unaffected by this fix) resume governing it.
+	CHECK(Drain(ctx, seq) == SSLM_OK);
+	CHECK_MSG(*SslmGpuSeqHandleLayerIndexForBench(seq) == num_hidden_layers,
+	          "S2-P: setup precondition -- draining a full-token submission must land at a "
+	          "drained rest (layer_index == num_hidden_layers)");
+	CHECK(sslm_gpu_seq_bind_adapter(ctx, seq, rebind_target) == SSLM_OK);
+
+	CHECK(sslm_gpu_seq_bind_adapter(ctx, seq, nullptr) == SSLM_OK);
+	CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -402,6 +452,8 @@ int main(int argc, char** argv) {
 		TestS2_M_AdmissionAfterChunkPrefillChokePoint(ctx, model, A, num_hidden_layers);
 		std::printf("cell S2-O\n");
 		TestS2_O_ResetPreservesBinding(ctx, model, &aview);
+		std::printf("cell S2-P\n");
+		TestS2_P_BindRejectsDuringSubmittedWindow(ctx, model, A, B, num_hidden_layers);
 		std::printf("all S2 cells returned\n");
 	}
 

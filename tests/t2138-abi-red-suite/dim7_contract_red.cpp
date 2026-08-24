@@ -376,6 +376,18 @@ static void TestDim7_C3_LifecycleGuardRejectionCostIsDataIndependent(sslm_model 
 // carries the DGC1 opt-in, restoring the pre-1.2 formula for greedy-only callers -- so an
 // old-formula buffer sized by 1.1.0's own arithmetic validates again at 1.2.1.
 //
+// T-2243 review finding 7 (D-SLM4113) pin note: C4's own `ws_size == GOLDEN_1_1_0_TOTAL`
+// assertion below IS the externally-observable proof that `layout.damped_indices_bytes == 0`
+// for a non-DGC1 model (this comment block's own "equivalent to damped_indices_bytes == 0"
+// note, above) -- the exact condition finding 7's carve-site guard
+// (`layout.damped_indices_bytes > 0`, sslm_abi.cpp's ws_usable block) now branches on. No
+// separate pin was added for the guarded pointer itself: `WorkspaceLayout`/`sslm_model_s` are
+// both private to sslm_abi.cpp (no header declares either), and the only public entry point
+// that reaches the carve site (sslm_workspace_create's own decode path) already rejects a
+// non-DGC1 model with SSLM_ARTIFACT_REJECTED before the carve runs -- there is no way to
+// observe the guarded pointer from outside that TU without adding new test-only exported
+// surface for a defensive fix on an already-proven-unreachable path.
+//
 // GOLDEN_1_1_0_TOTAL -- captured ONCE by executing tag v1.1.0's own shipped
 // sslm_workspace_size over the identical geometry (provenance: 2026-08-23, detached
 // worktree at v1.1.0 = commit 49d1333, capture tool linked v1.1.0's real

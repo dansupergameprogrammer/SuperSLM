@@ -312,6 +312,63 @@ static void TestDim2_M8e_ConfigReservedNonzeroRejected(sslm_model model,
 	AssertConfigHostileContrast(model, baseline, hostile, "reserved(=1)");
 }
 
+// --- T-2243 review finding 3 (D-SLM4113): sslm_seq_restore's own untrusted blob field,
+// saved_anti_lm_order (offset 108), gains the SAME ceiling ValidateDampedGreedyParams enforces
+// on the caller-supplied-params path (82 -- the last order carrying nonzero weight under the
+// shipped fixed-point recurrence). Before this fix it was bounded only by `> 0`; 83 is one past
+// the ceiling and must reject SSLM_INVALID_ARGUMENT rather than reach AntiLmCreate at all. A real
+// 'SSB4' blob (produced by this build's own sslm_seq_save) is mutated at exactly that one field --
+// dim2's own established "otherwise-valid baseline, single hostile field" shape (M8a-M8e above),
+// applied to a restore blob instead of an sslm_config. ---
+static void TestDim2_M10_RestoreHostileAntiLmMaxOrderRejected(sslm_model model, sslm_kv_pool* pool) {
+	int32_t prompt[2] = {0, 1};
+	int32_t consumed = 0;
+	sslm_seq seq = nullptr;
+	if (pool) CHECK(sslm_seq_create(model, pool, &seq) == SSLM_OK);
+	CHECK_MSG(seq != nullptr, "M10: sequence create");
+	if (!seq) return;
+	CHECK(sslm_prefill(model, seq, prompt, 2, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) == SSLM_OK);
+
+	SeqBlobBuffer blob(model);
+	CHECK_MSG(sslm_seq_save(seq, blob.bytes.data(), &blob.size) == SSLM_OK,
+	          "M10: save a real 'SSB4' blob to mutate");
+	CHECK_MSG(blob.size >= 124, "M10: real blob at least covers the SSB4 fixed header");
+
+	// Baseline half: the real, unmutated blob restores clean (the otherwise-valid contrast this
+	// dim's own M8 cells establish -- proves the rejection below fires on the mutation, not on
+	// some other property of this fixture's own blob shape).
+	{
+		std::vector<uint8_t> baseline = blob.bytes;
+		baseline.resize(blob.size);
+		sslm_seq restored = nullptr;
+		CHECK_MSG(sslm_seq_restore(model, pool, baseline.data(), baseline.size(), &restored) ==
+		              SSLM_OK,
+		          "M10: baseline half -- the real, unmutated blob must restore");
+		if (restored) CHECK(sslm_seq_release(restored) == SSLM_OK);
+	}
+
+	// Hostile half: saved_anti_lm_order (offset 108, LE int32_t) mutated to 83 -- one past the
+	// ruled ceiling of 82, an ordinary value an attacker-controlled blob can set without
+	// violating any OTHER field's own domain check (saved_anti_lm_history_count at 112 stays 0,
+	// satisfying the `order == 0 && count != 0` / `count > SIZE_MAX` checks trivially on the
+	// order side).
+	std::vector<uint8_t> hostile = blob.bytes;
+	hostile.resize(blob.size);
+	const int32_t hostile_order = 83;
+	for (int byte = 0; byte < 4; ++byte) {
+		hostile[108 + byte] = static_cast<uint8_t>(static_cast<uint32_t>(hostile_order) >> (8 * byte));
+	}
+	sslm_seq rejected = nullptr;
+	const sslm_status st = sslm_seq_restore(model, pool, hostile.data(), hostile.size(), &rejected);
+	CHECK_MSG(st == SSLM_INVALID_ARGUMENT,
+	          "M10: saved_anti_lm_order=83 (one past the ceiling of 82) must reject "
+	          "SSLM_INVALID_ARGUMENT before AntiLmCreate ever runs -- got status %d",
+	          static_cast<int>(st));
+	CHECK_MSG(rejected == nullptr, "M10: a rejected restore must not hand back a live handle");
+
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
+}
+
 // REAL INVOCATION DRIVER (house pattern) -- supersedes the address-only convention.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
@@ -352,6 +409,17 @@ int main(int argc, char** argv) {
 					CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
 				} else {
 					SKIP_MSG("dim2 M7 needs a real pool/sequence -- not run");
+				}
+				// T-2243 review finding 3 (D-SLM4113): M10 needs its own dedicated pool -- its
+				// baseline half restores a live handle alongside the still-live save-arm sequence.
+				{
+					SinglePool sp10;
+					if (MakePool(model, 2, &sp10)) {
+						TestDim2_M10_RestoreHostileAntiLmMaxOrderRejected(model, &sp10.pool);
+						CHECK(sslm_kv_pool_destroy(sp10.pool) == SSLM_OK);
+					} else {
+						SKIP_MSG("dim2 M10 needs a real pool -- not run");
+					}
 				}
 				CHECK(sslm_model_unmap(model) == SSLM_OK);
 			}

@@ -84,14 +84,16 @@ static void TestO2_ReadyPropagatesNullTokenStatus(SslmGpuContext* ctx, SslmGpuMo
 	          "O2: sslm_gpu_ready must not silently discard RunLayerLoopGpuFinish's own "
 	          "null-in-flight rejection as SSLM_OK/*out_status=OK -- got ret=%d out_status=%d",
 	          (int)ret, (int)out_status);
-	// Precision arm: RunLayerLoopGpuFinish's own `!inflight` guard returns
-	// SslmForwardStatus::GpuAllocationFailed (V18), and gpu_1p0.cpp's own internal
-	// MapDecodedStatusToGpuStatus maps BOTH of its two device-derived members
-	// (GpuDeviceRemoved/GpuAllocationFailed) to SSLM_DEVICE_LOST, unconditionally (never
-	// SSLM_SEQUENCE_REJECTED, which is reserved for every OTHER, non-device-derived member) --
-	// asserted directly against that documented mapping rather than calling the mapper itself
-	// (internal linkage, anonymous-namespace, not callable from this TU).
-	const SslmGpuStatus mapped = SSLM_DEVICE_LOST;
+	// Precision arm, corrected by T-2243 review finding 10 (D-SLM4113): before this fix,
+	// RunLayerLoopGpuFinish's own `!inflight` guard returned SslmForwardStatus::GpuAllocationFailed
+	// (V18) and gpu_1p0.cpp's own internal MapDecodedStatusToGpuStatus mapped it to
+	// SSLM_DEVICE_LOST alongside genuine device-derived faults -- naming the wrong cause for a
+	// caller-error state (no real device/allocation failure occurred). sslm_gpu_ready now checks
+	// `seq->in_flight == nullptr` directly, before Finish is ever called, and surfaces
+	// SSLM_SEQUENCE_REJECTED -- the same caller-error-shaped status every other non-device-derived
+	// per-sequence rejection uses (MapDecodedStatusToGpuStatus's own documented default arm),
+	// never reaching Finish's `!inflight` guard through this call at all.
+	const SslmGpuStatus mapped = SSLM_SEQUENCE_REJECTED;
 	CHECK_MSG(ret == mapped || out_status == mapped,
 	          "O2: the surfaced status must equal the mapped null-token member on whichever "
 	          "channel is non-OK -- got ret=%d out_status=%d, expected the mapped member %d",

@@ -465,6 +465,141 @@ static void TestDim5_C13_ExactFitOutputCapacityAccepted(const SslmModelView& vie
 	}
 }
 
+// --- Cell 14 (T-2243 review finding 6, D-SLM4113; mirror of C12): `RunGreedyDecodeLoop`, the
+// plain-greedy sibling of the loop C12/C13 exercise, carried the identical `(void)
+// out_tokens_capacity` and unbounded copy-out until this fix. Same canary-bracketed rig as C12,
+// called against `RunGreedyDecodeLoop` instead of `RunGreedyOrDampedGreedyDecodeLoop` (no damped-
+// mode arguments -- this loop never took them).
+static void TestDim5_C14_RunGreedyDecodeLoopUndersizedOutputCapacityRejected(
+    const SslmModelView& view) {
+	CpuOracleModel m;
+	std::string oerr;
+	if (!LoadCpuOracleModel(view, &m, &oerr)) {
+		SKIP_MSG("dim5 C14: could not build CPU oracle rig: %s", oerr.c_str());
+		return;
+	}
+	const size_t kv_bytes = static_cast<size_t>(m.num_hidden_layers) *
+	                        static_cast<size_t>(m.context_cap) * m.num_kv_heads * m.head_dim * 2;
+	std::vector<uint8_t> workspace(kv_bytes);
+	std::vector<int8_t> hidden_codes(m.hidden_size);
+	SequenceLayerState seq{};
+	seq.hidden_codes = hidden_codes.data();
+
+	const int32_t prompt[3] = {0, 1, 2};
+	const size_t max_new_tokens = 4;
+	const size_t capacity = 3;  // one short of what the loop will produce
+
+	constexpr size_t kCanaryWords = 4;
+	constexpr int32_t kCanaryValue = static_cast<int32_t>(0x5A5A5A5A);
+	const size_t token_spill_end = kCanaryWords + max_new_tokens;
+	std::vector<int32_t> token_storage(token_spill_end + 64, kCanaryValue);
+	const size_t row_window_words = capacity * static_cast<size_t>(m.vocab_size);
+	const size_t row_spill_end = kCanaryWords + max_new_tokens * static_cast<size_t>(m.vocab_size);
+	std::vector<int32_t> row_storage(row_spill_end + 256, kCanaryValue);
+	int32_t* out_tokens = token_storage.data() + kCanaryWords;
+	int32_t* out_rows = row_storage.data() + kCanaryWords;
+
+	size_t produced = 999;
+	SslmDecodeStopReason stop_reason{};
+	const SslmForwardStatus st = RunGreedyDecodeLoop(
+	    seq, m.layers.data(), m.num_hidden_layers, m.hidden_size, m.head_dim, m.num_kv_heads,
+	    m.intermediate_size, m.context_cap, *m.rope_tables, prompt, 3, m.embed_weights,
+	    m.embed_site_constant, m.final_norm_gain.data(), m.final_norm_site_constant,
+	    m.head_weights, m.vocab_size, /*stop_ids=*/nullptr, /*stop_count=*/0, max_new_tokens,
+	    workspace.data(), workspace.size(), out_tokens, out_rows, capacity, &produced,
+	    &stop_reason, m.kv_precision, m.option_g_fused_k_landing);
+
+	CHECK_MSG(st != SslmForwardStatus::Ok,
+	          "dim5 C14: undersized out_tokens_capacity (%zu, produced would be %zu) returned "
+	          "the forward status %d -- the loop wrote past the caller's capacity and returned "
+	          "Ok",
+	          capacity, max_new_tokens, static_cast<int>(st));
+	CHECK_MSG(st == SslmForwardStatus::OutputCapacityExceeded,
+	          "dim5 C14: undersized capacity must reject OutputCapacityExceeded, got status %d",
+	          static_cast<int>(st));
+
+	bool canaries_intact = true;
+	for (size_t i = 0; i < kCanaryWords; ++i) {
+		if (token_storage[i] != kCanaryValue || token_storage[token_spill_end + i] != kCanaryValue)
+			canaries_intact = false;
+		if (row_storage[i] != kCanaryValue || row_storage[row_spill_end + i] != kCanaryValue)
+			canaries_intact = false;
+	}
+	for (size_t i = kCanaryWords + capacity; i < token_spill_end; ++i) {
+		if (token_storage[i] != kCanaryValue) canaries_intact = false;
+	}
+	for (size_t i = kCanaryWords + row_window_words; i < row_spill_end; ++i) {
+		if (row_storage[i] != kCanaryValue) canaries_intact = false;
+	}
+	CHECK_MSG(canaries_intact,
+	          "dim5 C14: memory outside the stated capacity window was overwritten -- the loop "
+	          "wrote past out_tokens_capacity before rejecting");
+}
+
+// --- Cell 15 (T-2243 review finding 6, D-SLM4113; mirror of C13): the boundary PARTNER for
+// C14 -- capacity EXACTLY equal to the count actually produced succeeds against
+// `RunGreedyDecodeLoop`. Catches `<` written where `<=` was intended.
+static void TestDim5_C15_RunGreedyDecodeLoopExactFitOutputCapacityAccepted(
+    const SslmModelView& view) {
+	CpuOracleModel m;
+	std::string oerr;
+	if (!LoadCpuOracleModel(view, &m, &oerr)) {
+		SKIP_MSG("dim5 C15: could not build CPU oracle rig: %s", oerr.c_str());
+		return;
+	}
+	const size_t kv_bytes = static_cast<size_t>(m.num_hidden_layers) *
+	                        static_cast<size_t>(m.context_cap) * m.num_kv_heads * m.head_dim * 2;
+	std::vector<uint8_t> workspace(kv_bytes);
+	std::vector<int8_t> hidden_codes(m.hidden_size);
+	SequenceLayerState seq{};
+	seq.hidden_codes = hidden_codes.data();
+
+	const int32_t prompt[3] = {0, 1, 2};
+	const size_t max_new_tokens = 4;
+	const size_t capacity = 4;  // EXACTLY the produced count (no stop ids -> MaxTokensReached)
+
+	constexpr size_t kCanaryWords = 4;
+	constexpr int32_t kCanaryValue = static_cast<int32_t>(0x5A5A5A5A);
+	std::vector<int32_t> token_storage(kCanaryWords + capacity + kCanaryWords, kCanaryValue);
+	std::vector<int32_t> row_storage(kCanaryWords + capacity * m.vocab_size + kCanaryWords,
+	                                 kCanaryValue);
+	int32_t* out_tokens = token_storage.data() + kCanaryWords;
+	int32_t* out_rows = row_storage.data() + kCanaryWords;
+
+	size_t produced = 0;
+	SslmDecodeStopReason stop_reason{};
+	const SslmForwardStatus st = RunGreedyDecodeLoop(
+	    seq, m.layers.data(), m.num_hidden_layers, m.hidden_size, m.head_dim, m.num_kv_heads,
+	    m.intermediate_size, m.context_cap, *m.rope_tables, prompt, 3, m.embed_weights,
+	    m.embed_site_constant, m.final_norm_gain.data(), m.final_norm_site_constant,
+	    m.head_weights, m.vocab_size, /*stop_ids=*/nullptr, /*stop_count=*/0, max_new_tokens,
+	    workspace.data(), workspace.size(), out_tokens, out_rows, capacity, &produced,
+	    &stop_reason, m.kv_precision, m.option_g_fused_k_landing);
+
+	CHECK_MSG(st == SslmForwardStatus::Ok,
+	          "dim5 C15: capacity exactly equal to the produced count (%zu) must succeed, got "
+	          "status %d -- an off-by-one (< written for <=) in the capacity check",
+	          capacity, static_cast<int>(st));
+	if (st == SslmForwardStatus::Ok) {
+		CHECK(produced == max_new_tokens);
+		CHECK(stop_reason == SslmDecodeStopReason::MaxTokensReached);
+		for (size_t i = 0; i < produced; ++i) {
+			CHECK(out_tokens[i] >= 0 && out_tokens[i] < m.vocab_size);
+		}
+		bool canaries_intact = true;
+		for (size_t i = 0; i < kCanaryWords; ++i) {
+			if (token_storage[i] != kCanaryValue ||
+			    token_storage[kCanaryWords + capacity + i] != kCanaryValue)
+				canaries_intact = false;
+			if (row_storage[i] != kCanaryValue ||
+			    row_storage[kCanaryWords + capacity * static_cast<size_t>(m.vocab_size) + i] !=
+			        kCanaryValue)
+				canaries_intact = false;
+		}
+		CHECK(canaries_intact);
+	}
+}
+
 // REAL INVOCATION DRIVER (house pattern) -- supersedes the address-only convention. The
 // builder's own ad-hoc driver crashed (STATUS_HEAP_CORRUPTION, root cause unisolated) and was
 // reverted to link-only (Claude/Brunel/t2139-abi-build-2026-08-16.md S6). Authored fresh here:
@@ -596,6 +731,8 @@ int main(int argc, char** argv) {
 		// rigs built from the already-mapped model view (own workspace, own sequence state).
 		TestDim5_C12_UndersizedOutputCapacityRejected(view);
 		TestDim5_C13_ExactFitOutputCapacityAccepted(view);
+		TestDim5_C14_RunGreedyDecodeLoopUndersizedOutputCapacityRejected(view);
+		TestDim5_C15_RunGreedyDecodeLoopExactFitOutputCapacityAccepted(view);
 
 		CHECK(sslm_model_unmap(model) == SSLM_OK);
 	}

@@ -242,6 +242,73 @@ static void TestT2260_R2_LegacySsb3AffectedStateRejectedLoudly(sslm_model model,
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
 
+// --- R4 (T-2243 review finding 4, D-SLM4114): the SAME affected state R2 proves for 'SSB3' is
+// rejected loudly for legacy 'SSB2' too -- the safety net's scope extension this fold rules.
+// Constructed the same way R2's 'SSB3' blob is (from a real 'SSB4' blob's own shared-layout
+// header bytes), except 'SSB2' has NO anti_lm_order/anti_lm_history_count/ready_for_logits
+// fields at all (its own 108-byte fixed header, vs 'SSB3'/'SSB4''s 116/120): the legacy blob is
+// magic 'SSB2' + the shared 104-byte header prefix [4, 108) + (no residual bytes -- the pre-fix
+// predicate wrote zero for this exact state under 'SSB2' too, the identical defect R2 proves for
+// 'SSB3') + the real kv_block_count/kv_blocks tail, copied verbatim. ---
+static void TestT2243F4_R4_LegacySsb2AffectedStateRejectedLoudly(sslm_model model,
+                                                                  sslm_kv_pool* pool) {
+	int32_t prompt[2] = {0, 1};
+	int32_t consumed = 0;
+	sslm_seq seq = nullptr;
+	if (pool) CHECK(sslm_seq_create(model, pool, &seq) == SSLM_OK);
+	CHECK_MSG(seq != nullptr, "T2243F4-R4: sequence create");
+	if (!seq) return;
+	CHECK(sslm_prefill(model, seq, prompt, 2, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) == SSLM_OK);
+
+	SeqBlobBuffer real_blob(model);
+	CHECK_MSG(sslm_seq_save(seq, real_blob.bytes.data(), &real_blob.size) == SSLM_OK,
+	          "T2243F4-R4: save the real 'SSB4' blob to transform");
+	CHECK_MSG(real_blob.size >= 124, "T2243F4-R4: real blob at least covers the SSB4 fixed header");
+
+	const uint8_t* real = real_blob.bytes.data();
+	// Same setup precondition R2 checks: rest at ready-for-logits (layer_index == 0, current_token
+	// == the "no pending embed" sentinel) -- the offsets are shared between 'SSB2'/'SSB3'/'SSB4'.
+	const uint32_t layer_index = T2260ReadLE32(real + 68);
+	const int32_t current_token = static_cast<int32_t>(T2260ReadLE32(real + 72));
+	CHECK_MSG(layer_index == 0 && current_token == -1,
+	          "T2243F4-R4: setup precondition -- must rest at ready-for-logits (layer_index=%u "
+	          "current_token=%d)",
+	          layer_index, current_token);
+
+	const uint64_t anti_lm_history_count = T2260ReadLE64(real + 112);
+	CHECK_MSG(anti_lm_history_count == 0,
+	          "T2243F4-R4: this fixture uses no damped-greedy state -- the 'SSB2' construction "
+	          "below assumes zero anti-LM history to drop");
+	const size_t block_size = sslm_kv_block_size(model);
+	// real_blob layout: [124 fixed header][residual (zero bytes here, the defect)][4
+	// kv_block_count][kv_blocks]. No anti-LM history bytes to skip (checked above), so the tail
+	// starts 4 + block_size before the end, same derivation R3's SSB2 construction uses.
+	CHECK_MSG(real_blob.size >= 124 + 4 + block_size,
+	          "T2243F4-R4: real blob large enough to locate its own tail sections");
+	const size_t tail_offset = real_blob.size - 4 - block_size;
+	CHECK_MSG(tail_offset >= 108, "T2243F4-R4: derived tail region is non-negative");
+
+	std::vector<uint8_t> legacy;
+	legacy.push_back('S');
+	legacy.push_back('S');
+	legacy.push_back('B');
+	legacy.push_back('2');
+	// 'SSB2' shared 104-byte header prefix [4, 108) -- identical layout to 'SSB3'/'SSB4' for
+	// every field 'SSB2' also carries. NO anti_lm/ready_for_logits fields, NO residual bytes.
+	legacy.insert(legacy.end(), real + 4, real + 108);
+	legacy.insert(legacy.end(), real + tail_offset, real + real_blob.size);
+
+	sslm_seq restored = nullptr;
+	const sslm_status st = sslm_seq_restore(model, pool, legacy.data(), legacy.size(), &restored);
+	CHECK_MSG(st == SSLM_RESTORE_RESIDUAL_LOST,
+	          "T2243F4-R4: a legacy 'SSB2' blob in the affected state must reject "
+	          "SSLM_RESTORE_RESIDUAL_LOST, not silently restore ready_for_logits=true over a "
+	          "zeroed residual -- got status %d", static_cast<int>(st));
+	CHECK_MSG(restored == nullptr, "T2243F4-R4: a rejected restore must not hand back a live handle");
+
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
+}
+
 // --- R3 (round-trip regression): 'SSB4' save/restore still works at a mid-token state and at a
 // genuinely fresh/empty state; a real legacy 'SSB2'-shaped blob (hand-constructed the same way
 // R2's 'SSB3' construction is, from a real 'SSB4' blob's own shared-layout header bytes) is
@@ -411,6 +478,15 @@ int main(int argc, char** argv) {
 			SinglePool sp;
 			if (MakeSinglePool(model, &sp)) {
 				TestT2260_R3_Ssb4RoundTripPlusLegacySsb2StillAccepted(model, &sp.pool);
+				CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
+			}
+		}
+		// T-2243 review finding 4 (D-SLM4114): R4, the 'SSB2' analogue of R2 -- its own dedicated
+		// pool, same shape as R2's (the restore attempt is rejected so nothing extra is drawn).
+		{
+			SinglePool sp;
+			if (MakeSinglePool(model, &sp)) {
+				TestT2243F4_R4_LegacySsb2AffectedStateRejectedLoudly(model, &sp.pool);
 				CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
 			}
 		}

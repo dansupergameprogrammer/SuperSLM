@@ -371,6 +371,69 @@ static void TestC1_RestoreVsGenuinelyInFlightSibling(SslmGpuContext* ctx, SslmGp
 	if (seq_b2) CHECK(sslm_gpu_seq_release(ctx, seq_b2) == SSLM_OK);
 }
 
+// T-2243 review finding 2 (D-SLM4113): restore vs a genuinely in-flight sibling on a DIFFERENT
+// model mapped in the SAME context -- the exact case C1 (above) missed. Before this fix,
+// `sslm_gpu_seq_restore`'s guard read `model->submitted_sequences`, scoped to the target model
+// only; the resource it actually protects is `harness::GetDevice()`'s process-global, single
+// command allocator/list (superslm_gpu.cpp `:3620-3628`), shared by every model and every context
+// in the process. A second model mapped against the SAME view (mirroring s2_bind_red.cpp's own
+// second-model construction) reproduces the identical device-level hazard C1 proves for a
+// same-model sibling.
+static void TestT2243F2_C1Cross_RestoreVsInFlightSiblingOnDifferentModel(
+    SslmGpuContext* ctx, SslmGpuModelHandle* model_a, SslmGpuModelHandle* model_b,
+    int64_t context_cap, uint32_t num_hidden_layers) {
+	const char* label = "T2243F2-C1Cross";
+	constexpr int32_t kTokenId = 5;
+
+	// seq_c: one complete token on model_a, then saved -- the blob a fresh restore will consume.
+	SslmGpuSequenceHandle* seq_c = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model_a, context_cap, &seq_c) == SSLM_OK);
+	CHECK_MSG(RunFullTokenStep(ctx, seq_c, nullptr, num_hidden_layers, kTokenId),
+	          "%s: seq_c fixture full-token step", label);
+	size_t required_size = 0;
+	{
+		uint8_t probe = 0;
+		CHECK(sslm_gpu_seq_save(ctx, seq_c, &probe, &required_size) != SSLM_OK);
+		CHECK_MSG(required_size > 0, "%s: seq_c save probe did not report a required size", label);
+	}
+	std::vector<uint8_t> blob(required_size);
+	size_t blob_size = blob.size();
+	CHECK_MSG(sslm_gpu_seq_save(ctx, seq_c, blob.data(), &blob_size) == SSLM_OK, "%s: seq_c save",
+	          label);
+	CHECK(blob_size > 0 && blob_size <= blob.size());
+	CHECK(sslm_gpu_seq_release(ctx, seq_c) == SSLM_OK);
+
+	// seq_x: submit one decode step on model_b -- a DIFFERENT model, same context -- and
+	// deliberately do NOT drain it. Submitted, unfenced, on the shared process-global device.
+	SslmGpuSequenceHandle* seq_x = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model_b, context_cap, &seq_x) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq_x, kTokenId) == SSLM_OK);
+	CHECK_MSG(sslm_decode_step_gpu(ctx, seq_x, nullptr, FullTokenBudget(num_hidden_layers)) == SSLM_OK,
+	          "%s: seq_x submit on model_b (deliberately not drained)", label);
+
+	// The reproduction/assertion: restore against model_a WITHOUT draining seq_x on model_b. A
+	// model-scoped guard (the pre-finding-2 shape) would read model_a->submitted_sequences == 0
+	// and wrongly admit; the process-global guard must still reject.
+	SslmGpuSequenceHandle* seq_b = nullptr;
+	const SslmGpuStatus restore_status =
+	    sslm_gpu_seq_restore(ctx, model_a, blob.data(), blob_size, &seq_b);
+	CHECK_MSG(restore_status == SSLM_BUSY,
+	          "%s: sslm_gpu_seq_restore against model_a with an unfenced in-flight sibling on "
+	          "model_b (same context, same shared device) must return SSLM_BUSY -- observed "
+	          "status %d", label, static_cast<int>(restore_status));
+	CHECK_MSG(seq_b == nullptr, "%s: a rejected restore must not hand back a live handle", label);
+
+	// Remedy arm: drain seq_x, then retry -- the transient guard's escape, costing nothing.
+	CHECK_MSG(Drain(ctx, seq_x) == SSLM_OK, "%s: drain seq_x", label);
+	SslmGpuSequenceHandle* seq_b2 = nullptr;
+	CHECK_MSG(sslm_gpu_seq_restore(ctx, model_a, blob.data(), blob_size, &seq_b2) == SSLM_OK,
+	          "%s: retry restore after draining the cross-model sibling", label);
+	CHECK(seq_b2 != nullptr);
+
+	CHECK(sslm_gpu_seq_release(ctx, seq_x) == SSLM_OK);
+	if (seq_b2) CHECK(sslm_gpu_seq_release(ctx, seq_b2) == SSLM_OK);
+}
+
 // T-2243 (S2 cell (j), plan Sec6.1/Sec10 Phase 2 S2(j), red suite Sec6.10, D-SLM4058):
 // persistence -- bound_adapter does NOT round-trip through save/restore, and the post-restore
 // re-bind Sec6.1's own Persistence paragraph instructs the caller to make admits.
@@ -465,6 +528,18 @@ int main(int argc, char** argv) {
 		                                                 model_context_cap, num_hidden_layers);
 		TestDim9_S4_RestoreDeviceThrowReturnsStatusNotUnwind(ctx, model, kSmallContextCap);
 		TestC1_RestoreVsGenuinelyInFlightSibling(ctx, model, kSmallContextCap, num_hidden_layers);
+
+		// T-2243 review finding 2 (D-SLM4113): a second model handle, mapped against the SAME
+		// view (mirroring s2_bind_red.cpp's own second-model construction) -- a distinct handle,
+		// same real weights, needed only so a submission on it is a genuinely different model
+		// from model_a's own perspective.
+		SslmGpuModelHandle* model_cross = nullptr;
+		CHECK(sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model_cross) == SSLM_OK);
+		if (model_cross) {
+			TestT2243F2_C1Cross_RestoreVsInFlightSiblingOnDifferentModel(
+			    ctx, model, model_cross, kSmallContextCap, num_hidden_layers);
+			CHECK(sslm_gpu_model_unmap(ctx, model_cross) == SSLM_OK);
+		}
 
 		if (!g_adapter_path.empty()) {
 			std::vector<uint8_t> abytes;
