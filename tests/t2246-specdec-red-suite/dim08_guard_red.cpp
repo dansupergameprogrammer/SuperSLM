@@ -96,7 +96,7 @@ void TestV1_CapStraddlingBatchTruncationAndFeedAccounting(sslm_model model, sslm
 	std::string why;
 	CHECK_MSG(CanonicalizedBlobsEqual(twin_blob.bytes, spec_blob.bytes, oracle.hidden_size,
 	                                  static_cast<size_t>(sslm_kv_block_size(model)),
-	                                  oracle.context_cap, &why),
+	                                  oracle.context_cap, oracle.num_hidden_layers, oracle.num_kv_heads, oracle.head_dim, &why),
 	          "truncated-commit contract: post-step state equals capped greedy (%s)", why.c_str());
 	// R2-W1 pin, numeric form (F-B reconciled): logits-ready entry, E = r emissions =>
 	// E-1 feeds => ctx = start + r - 1, the final emission resting unfed-pending as
@@ -150,26 +150,76 @@ void TestV1b_StopPrecedesCapAtTheBoundaryCorner(sslm_model model, sslm_workspace
 // V2 -- Stop-inside-batch (boundary cell (b)) WITH its post-step state leg (residual r-G1):
 // stop id placed inside a would-be-accepted batch terminates at p INCLUSIVE, drafts beyond p
 // discarded, both digests cover through p only, StopTokenMatched identical to greedy, AND
-// post-step state equals stopped greedy: occupancy through the last EMITTED token, retention
-// exactly the p+1 emitted ids including the stop id, saturation counting emitted landings
-// only, carried walk-state resting unfed-pending (greedy's between-steps value). Fixture
-// route per plan: seed committed history via prefill CONTAINING the stop id (prefill
-// performs no stop filtering -- the stop set is a decode-loop-only input, absent from the
-// prefill path entirely: sslm_abi.cpp:1984-2001's sslm_prefill/PrefillWholeTokens signature
-// carries no stop set; forward_sites.cpp:2586-2591 runs prompt tokens through the identical
-// whole-token walk with no stop test, versus :2615-2628's per-emission test in generation),
-// so the suffix continuation proposes it into the batch.
+// post-step state equals stopped greedy over min-ctx live rows (fold round 2 scoping), with
+// the designed feed delta pinned explicitly on both arms. Fixture route (fold round 2): a
+// CONSTRUCTION SEARCH over the corpus stream for a seeded prompt whose drafter actually
+// proposes -- the first version seeded prompt+t0 and assumed a proposal, but history without
+// a repetition proposes nothing, every call emits exactly one bonus token, and the batch
+// scenario is unreachable by construction (D-SLM4093 Class B). Candidates whose single _v3
+// call does not produce exactly p+1 emissions with StopTokenMatched are rejected in the
+// search; when no candidate qualifies the cell SKIPs honestly rather than asserting nothing.
 void TestV2_StopInsideBatchCutWithPostStateLeg(sslm_model model, sslm_workspace ws,
                                                const CpuOracleModel& oracle,
-                                               const FullKFx& fx) {
+                                               const FullKFx& fx,
+                                               const std::vector<int32_t>& stream) {
 	ASSERT_TRUE(fx.want.produced >= 3);
 	constexpr size_t kP = 1;  // stop lands at batch position 1 (inside a 4-proposal batch)
-	const int32_t stop_id = fx.want.tokens[kP];
+	std::string err;
+	GreedyRun want2;
+	std::vector<int32_t> seeded;
+	bool found = false;
+	const size_t kMinPrompt = 10, kMaxPrompt = 28;
+	if (stream.size() > kMaxPrompt + 4) {
+		for (size_t end = kMaxPrompt; end + 2 < stream.size() && !found; end += 3) {
+			for (size_t len = kMinPrompt; len <= kMaxPrompt && !found; len += 6) {
+				const size_t s = end - len;
+				std::vector<int32_t> cand(stream.begin() + static_cast<ptrdiff_t>(s),
+				                          stream.begin() + static_cast<ptrdiff_t>(end));
+				err.clear();
+				if (!RunGreedyReference(oracle, cand.data(),
+				                        static_cast<int32_t>(cand.size()), {}, 3, &want2,
+				                        &err) ||
+				    want2.produced < 3) {
+					continue;
+				}
+				seeded = cand;
+				seeded.push_back(want2.tokens[0]);
+				SinglePool probe_pool;
+				if (!MakeSinglePool(model, &probe_pool)) continue;
+				sslm_seq probe = nullptr;
+				if (sslm_seq_create(model, &probe_pool.pool, &probe) != SSLM_OK) continue;
+				int32_t consumed = 0;
+				if (sslm_prefill(model, probe, seeded.data(),
+				                 static_cast<int32_t>(seeded.size()), 64, SSLM_SPAN_PROMPT,
+				                 nullptr, &consumed) != SSLM_OK) {
+					CHECK(sslm_seq_release(probe) == SSLM_OK);
+					continue;
+				}
+				sslm_speculate_params pp{};
+				if (!MakeSpecParams(model, 4, 8, {want2.tokens[1]}, &pp)) {
+					CHECK(sslm_seq_release(probe) == SSLM_OK);
+					continue;
+				}
+				std::vector<int32_t> ptok(16, 0),
+				    prows(16 * static_cast<size_t>(oracle.vocab_size), 0);
+				int32_t pproduced = -1, pstop = -1;
+				const sslm_status pst = sslm_speculate_step_v3(
+				    model, probe, &pp, ws, ptok.data(), 16, prows.data(),
+				    static_cast<int32_t>(prows.size()), &pproduced, &pstop);
+				CHECK(sslm_seq_release(probe) == SSLM_OK);
+				found = pst == SSLM_OK && pproduced == static_cast<int32_t>(kP) + 1 &&
+				        pstop == SSLM_SPECULATE_STOP_TOKEN_MATCHED;
+			}
+		}
+	}
+	if (!found) {
+		SKIP_MSG("no seeded candidate produced a stop-inside-batch on this artifact/corpus "
+		         "-- the batch-cut scenario needs a drafter that actually proposes");
+		return;
+	}
+
+	const int32_t stop_id = want2.tokens[kP];
 	const std::vector<int32_t> stop_ids{stop_id};
-	// Seeded prompt: original window plus the first would-be emission, ending just before the
-	// stop id -- the drafter's continuation then proposes the stop id INTO the batch.
-	std::vector<int32_t> seeded(fx.prompt.begin(), fx.prompt.end());
-	seeded.push_back(fx.want.tokens[0]);
 
 	SinglePool sp;
 	ASSERT_TRUE(MakePool(model, 2, &sp));
@@ -193,13 +243,13 @@ void TestV2_StopInsideBatchCutWithPostStateLeg(sslm_model model, sslm_workspace 
 	          "termination lands exactly at the stop position p inclusive");
 	CHECK(stop == SSLM_SPECULATE_STOP_TOKEN_MATCHED);
 	CHECK(tok[kP] == stop_id);
-	for (size_t i = 0; i <= kP; ++i) CHECK(tok[i] == fx.want.tokens[i]);  // drafts beyond cut
+	for (size_t i = 0; i <= kP; ++i) CHECK(tok[i] == want2.tokens[i]);  // drafts beyond cut
 
 	uint8_t gt[32], gr[32], wt[32], wr[32];
 	superslm::ComputeTokenDigest(tok.data(), static_cast<size_t>(produced), gt);
 	superslm::ComputeFinalLogitDigest(rows.data(), static_cast<size_t>(produced),
 	                                  static_cast<size_t>(oracle.vocab_size), gr);
-	DigestRunPrefix(fx.want, kP + 1, static_cast<size_t>(oracle.vocab_size), wt, wr);
+	DigestRunPrefix(want2, kP + 1, static_cast<size_t>(oracle.vocab_size), wt, wr);
 	CHECK(DigestEqual(gt, wt));
 	CHECK(DigestEqual(gr, wr));  // coverage through p only
 
@@ -213,10 +263,17 @@ void TestV2_StopInsideBatchCutWithPostStateLeg(sslm_model model, sslm_workspace 
 	tb.bytes.resize(tb.size);
 	ASSERT_TRUE(sslm_seq_save(spec, sb.bytes.data(), &sb.size) == SSLM_OK);
 	sb.bytes.resize(sb.size);
+	// Designed feed geometry pinned on BOTH arms (R2-W1): from the seeded logits-ready
+	// prefill, the twin's E=kP+1 v2 emissions cost E feeds; the walk's commit costs E-1.
+	CHECK(BlobContextLength(tb.bytes) ==
+	      static_cast<int64_t>(seeded.size()) + static_cast<int64_t>(kP) + 1);
+	CHECK(BlobContextLength(sb.bytes) ==
+	      static_cast<int64_t>(seeded.size()) + static_cast<int64_t>(kP));
 	std::string why;
 	CHECK_MSG(CanonicalizedBlobsEqual(tb.bytes, sb.bytes, oracle.hidden_size,
 	                                  static_cast<size_t>(sslm_kv_block_size(model)),
-	                                  oracle.context_cap, &why),
+	                                  oracle.context_cap, oracle.num_hidden_layers,
+	                                  oracle.num_kv_heads, oracle.head_dim, &why),
 	          "r-G1 post-step state leg: stop-arm disposal leaves state equal to stopped "
 	          "greedy (%s)",
 	          why.c_str());
@@ -234,7 +291,6 @@ void TestV2_StopInsideBatchCutWithPostStateLeg(sslm_model model, sslm_workspace 
 	spec = nullptr;
 	twin = nullptr;
 }
-
 // V3 -- Zero-budget entry arm (residuals R2-W2 + r-G2): speculate entered with exhausted
 // budget and a non-empty would-be draft emits nothing, reports MaxTokensReached, changes no
 // counter, and passes no landings -- canonicalized post-state equal to pre-state.
@@ -274,7 +330,7 @@ void TestV3_ZeroBudgetEntryArm(sslm_model model, sslm_workspace ws, const CpuOra
 	std::string why;
 	CHECK_MSG(CanonicalizedBlobsEqual(pre.bytes, post.bytes, oracle.hidden_size,
 	                                  static_cast<size_t>(sslm_kv_block_size(model)),
-	                                  oracle.context_cap, &why),
+	                                  oracle.context_cap, oracle.num_hidden_layers, oracle.num_kv_heads, oracle.head_dim, &why),
 	          "no landings, no counters moved, no retention append (%s)", why.c_str());
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
@@ -321,6 +377,7 @@ int main(int argc, char** argv) {
 		}
 		FullKFx fx;
 		bool have_fx = false;
+		std::vector<int32_t> corpus_stream_v2;
 		if (!g_corpus_path.empty() && !g_model_tok_path.empty()) {
 			sslm_model tok_model = nullptr;
 			std::vector<uint8_t> tok_bytes;
@@ -329,7 +386,7 @@ int main(int argc, char** argv) {
 			}
 			if (tok_model) {
 				std::vector<std::string> utterances;
-				std::vector<int32_t> stream;
+				std::vector<int32_t>& stream = corpus_stream_v2;
 				if (LoadCorpusUtterances(g_corpus_path, 24, &utterances)) {
 					for (const auto& u : utterances) {
 						std::vector<int32_t> ids;
@@ -350,7 +407,7 @@ int main(int argc, char** argv) {
 			if (have_fx) {
 				TestV1_CapStraddlingBatchTruncationAndFeedAccounting(model, ws, oracle, fx);
 				TestV1b_StopPrecedesCapAtTheBoundaryCorner(model, ws, oracle, fx);
-				TestV2_StopInsideBatchCutWithPostStateLeg(model, ws, oracle, fx);
+				TestV2_StopInsideBatchCutWithPostStateLeg(model, ws, oracle, fx, corpus_stream_v2);
 			} else {
 				SKIP_MSG("V1/V1b/V2 require the full-K accepting-window fixture");
 			}
@@ -364,3 +421,8 @@ int main(int argc, char** argv) {
 	PrintSummaryAndExit(&ec);
 	return ec;
 }
+
+
+
+
+

@@ -248,7 +248,16 @@ void TestM3_AcceptanceHistogramReport(sslm_model model, sslm_workspace ws,
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) {	// Fold round 2 commissioning input (D-SLM4094): the two gate values arrive as argv so
+	// the recorded decision precedes any reading the assertion acts on. Unset keeps the
+	// loud NOT-COMMISSIONED refusal.
+	for (int ci = 1; ci < argc; ++ci) {
+		const std::string ca = argv[ci];
+		if (ca.rfind("--commission-max-cost-ratio=", 0) == 0)
+			g_max_cost_ratio = std::atof(ca.substr(ca.find("=") + 1).c_str());
+		else if (ca.rfind("--commission-min-effect-size=", 0) == 0)
+			g_min_effect_size = std::atof(ca.substr(ca.find("=") + 1).c_str());
+	}
 	ParseFixtureArgs(argc, argv);
 	if (g_model_path.empty()) {
 		SKIP_MSG("--model=PATH not supplied -- dim12 M1-M2 not run");
@@ -326,3 +335,5 @@ int main(int argc, char** argv) {
 	PrintSummaryAndExit(&ec);
 	return ec;
 }
+
+

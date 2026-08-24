@@ -134,7 +134,7 @@ void TestF3_InjectedMidVerifyNonOkContained(sslm_model model, sslm_workspace ws,
 	std::string why;
 	CHECK_MSG(CanonicalizedBlobsEqual(pre.bytes, post.bytes, oracle.hidden_size,
 	                                  static_cast<size_t>(sslm_kv_block_size(model)),
-	                                  oracle.context_cap, &why),
+	                                  oracle.context_cap, oracle.num_hidden_layers, oracle.num_kv_heads, oracle.head_dim, &why),
 	          "a failed verify call must leave every sequence-state byte untouched (%s)",
 	          why.c_str());
 
@@ -281,3 +281,4 @@ int main(int argc, char** argv) {
 	PrintSummaryAndExit(&ec);
 	return ec;
 }
+

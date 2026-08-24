@@ -106,7 +106,7 @@ void TestB1_PostRejectionFullStructEquality(sslm_model model, sslm_workspace ws,
 		                                           oracle.hidden_size,
 		                                           static_cast<size_t>(
 		                                               sslm_kv_block_size(model)),
-		                                           oracle.context_cap, &why);
+		                                           oracle.context_cap, oracle.num_hidden_layers, oracle.num_kv_heads, oracle.head_dim, &why);
 		CHECK_MSG(equal, "post-rejection state must equal never-speculated state (%s)",
 		          why.c_str());
 	}
@@ -158,7 +158,7 @@ void TestB2_PostAcceptanceBlobEquality(sslm_model model, sslm_workspace ws,
 	const bool equal =
 	    CanonicalizedBlobsEqual(want_blob.bytes, got_blob.bytes, oracle.hidden_size,
 	                            static_cast<size_t>(sslm_kv_block_size(model)),
-	                            oracle.context_cap, &why);
+	                            oracle.context_cap, oracle.num_hidden_layers, oracle.num_kv_heads, oracle.head_dim, &why);
 	CHECK_MSG(equal, "post-full-K save-blob must equal pure greedy's at the same prefix (%s)",
 	          why.c_str());
 	CHECK(sslm_seq_release(fx.spec_seq) == SSLM_OK);
@@ -249,3 +249,4 @@ int main(int argc, char** argv) {
 	PrintSummaryAndExit(&ec);
 	return ec;
 }
+

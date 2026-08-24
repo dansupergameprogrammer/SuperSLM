@@ -460,9 +460,21 @@ inline size_t BlobKvRegionStart(const std::vector<uint8_t>& b, size_t hidden_siz
 // live KV rows below context_length compare byte-exact inside the block image. Live-byte span
 // assumes cache positions occupy ascending addresses within each layer segment -- the order
 // landings are written (row index = position); both layer-major and flat layouts satisfy it.
+// Fold round 2 (D-SLM4093/D-SLM4094): the live-row span is computed over the store's REAL
+// layout -- (layer, head)-major, position-minor, K half then V half per layer
+// (src/forward/forward_sites.cpp KvHalfOffset/KvRowOffsetWithinHalf) -- not the flat
+// position-major image the first version assumed. The old span (per_position x ctx bytes,
+// per_position = block/cap) was an arbitrary prefix of layer 0's K half on every real
+// artifact, sweeping freshly landed draft rows into a comparison SS3.3 never scoped, which
+// is what convicted B1/V1/F3/V2-state on real artifacts (probe: out/t2246/probe_b1_diff).
+// Context lengths are reported, not enforced here: the designed feed geometry (R2-W1) makes
+// a speculate arm rest at start+E-1 where the v2 twin rests at start+E, so cells pin their
+// own expected ctx delta and this helper compares live rows over min(ctx_a, ctx_b).
 inline bool CanonicalizedBlobsEqual(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b,
                                     size_t hidden_size, size_t block_size, int64_t context_cap,
-                                    std::string* why_not) {
+                                    size_t num_hidden_layers, size_t num_kv_heads,
+                                    size_t head_dim, std::string* why_not) {
+	(void)block_size;
 	if (a.size() != b.size()) {
 		if (why_not) *why_not = "blob sizes differ";
 		return false;
@@ -474,20 +486,31 @@ inline bool CanonicalizedBlobsEqual(const std::vector<uint8_t>& a, const std::ve
 	}
 	const int64_t ctx_a = BlobContextLength(a);
 	const int64_t ctx_b = BlobContextLength(b);
-	if (ctx_a != ctx_b) {
-		if (why_not) *why_not = "context_length differs";
-		return false;
+	const int64_t ctx_min = ctx_a < ctx_b ? ctx_a : ctx_b;
+	const size_t half_bytes = static_cast<size_t>(context_cap) * num_kv_heads * head_dim;
+	const size_t layer_stride = half_bytes * 2u;
+	for (size_t l = 0; l < num_hidden_layers; ++l) {
+		for (size_t half = 0; half < 2; ++half) {
+			for (size_t h = 0; h < num_kv_heads; ++h) {
+				const size_t base = kv_start + l * layer_stride + half * half_bytes +
+				                    h * static_cast<size_t>(context_cap) * head_dim;
+				const size_t run = static_cast<size_t>(ctx_min) * head_dim;
+				if (base + run > a.size() || base + run > b.size()) {
+					if (why_not) *why_not = "blob shorter than the live-row span";
+					return false;
+				}
+				if (std::memcmp(a.data() + base, b.data() + base, run) != 0) {
+					if (why_not) *why_not = "live KV rows below min(context_length) differ";
+					return false;
+				}
+			}
+		}
 	}
-	const size_t per_position = block_size / static_cast<size_t>(context_cap);
-	size_t live_bytes = per_position * static_cast<size_t>(ctx_a);
-	if (live_bytes > block_size) live_bytes = block_size;  // paranoia; ctx <= cap by validation
-	if (std::memcmp(a.data() + kv_start, b.data() + kv_start, live_bytes) != 0) {
-		if (why_not) *why_not = "live KV rows below context_length differ";
-		return false;
+	if (ctx_a != ctx_b && why_not != nullptr) {
+		*why_not = "equal over live rows; context_lengths differ by design (R2-W1 geometry)";
 	}
 	return true;
 }
-
 // Cheap near-cap occupancy without real compute (dim5 C11's grounded tamper route): save a
 // small real sequence, patch ONLY its context_length field to `new_ctx`, restore into a fresh
 // handle. Restore reads both counters from the blob verbatim (sslm_abi.cpp:2909-2910).
@@ -623,3 +646,4 @@ inline bool FindFullKAcceptancePrompt(const CpuOracleModel& m, const std::vector
 }
 
 #endif  // SSLM_T2246_FIXTURE_COMMON_H
+
