@@ -233,6 +233,29 @@ static std::vector<int32_t> DecodeDamped(const RealModelFixture& fx, sslm_seq se
 	return tokens;
 }
 
+// T-2260 (D-SLM4073): leaves a REAL sequence genuinely mid-token (layer_index != 0, a real
+// residual carried on BOTH the current 'SSB4' predicate and the legacy 'SSB3'/'SSB2'
+// mid_token-gated predicate) -- same house precedent as tests/t2138-abi-red-suite/
+// fixture_common.h::EnterMidToken (tools/t2139_c6_smoke.cpp's own comment: "the FIRST
+// decode_step call after a completed prefill is always the free ready_for_logits step -- no
+// RunLayerLoop work, so a real token completes in one call regardless of layer_budget. A
+// SECOND, bounded call is what genuinely starts a new token and leaves it mid-token."). Used
+// here (rather than the ready-for-logits state PrefillPrompt alone leaves) so this file's own
+// legacy-'SSB2'-compat cell exercises a state neither the pre-fix nor the fixed predicate ever
+// disagreed on -- D-SLM4065's defect state is 'SSB3'-only in this fold's ruled scope (D-SLM4073
+// Sec6), not a 'SSB2' round-trip-identity guarantee this cell never claimed.
+static bool EnterMidToken(sslm_model model, sslm_seq seq) {
+	sslm_decode_params params{};
+	params.struct_size = sizeof(params);
+	params.layer_budget = 1;
+	sslm_seq batch[1] = {seq};
+	int32_t out_token = 0;
+	if (sslm_decode_step(model, batch, 1, &params, nullptr, &out_token) != SSLM_OK) return false;
+	out_token = 0;
+	if (sslm_decode_step(model, batch, 1, &params, nullptr, &out_token) != SSLM_OK) return false;
+	return out_token < 0;
+}
+
 static std::vector<uint8_t> SaveSequence(sslm_seq seq) {
 	size_t required = 0;
 	CHECK(sslm_seq_save(seq, nullptr, &required) == SSLM_BUFFER_TOO_SMALL);
@@ -754,10 +777,11 @@ static void TestD2_DampedGreedyLifecycle_ResetAndRestoreAreFreshAndExact() {
 	CHECK(DecodeDamped(fx, used, params, 4) == DecodeDamped(fx, fresh, params, 4));
 	CHECK(sslm_seq_release(fresh) == SSLM_OK);
 
-	// Persistence: SSB3 carries order/history, restores byte-identically, and continues exactly.
+	// Persistence: SSB4 (T-2260/D-SLM4073 -- the current save format) carries order/history,
+	// restores byte-identically, and continues exactly.
 	const std::vector<uint8_t> live_blob = SaveSequence(used);
-	CHECK(live_blob.size() >= 120);
-	CHECK(std::memcmp(live_blob.data(), "SSB3", 4) == 0);
+	CHECK(live_blob.size() >= 124);
+	CHECK(std::memcmp(live_blob.data(), "SSB4", 4) == 0);
 	auto ReadLE32Test = [&](size_t off) {
 		return static_cast<uint32_t>(live_blob[off]) |
 		       (static_cast<uint32_t>(live_blob[off + 1]) << 8) |
@@ -796,13 +820,57 @@ static void TestD2_DampedGreedyLifecycle_ResetAndRestoreAreFreshAndExact() {
 
 	// Shipped SSB2 blobs remain readable. SSB2 is the common 108-byte prefix followed directly
 	// by residual/KV data; a pre-damped sequence has no history to discard during conversion.
+	// T-2260/D-SLM4073: the live save format is now 'SSB4' (108-byte SSB2-shared prefix +
+	// anti_lm_order/anti_lm_history_count[108,120) + the new ready_for_logits[120,124) field) --
+	// SSB2 lacks all three, so the erase range widens from [108,120) to [108,124).
 	sslm_seq legacy_source = nullptr;
 	CHECK(sslm_seq_create(fx.model, &fx.pool, &legacy_source) == SSLM_OK);
 	CHECK(PrefillPrompt(fx, legacy_source));
-	const std::vector<uint8_t> ssb3_without_history = SaveSequence(legacy_source);
-	std::vector<uint8_t> ssb2 = ssb3_without_history;
-	ssb2[3] = '2';
-	ssb2.erase(ssb2.begin() + 108, ssb2.begin() + 120);
+	// T-2260/D-SLM4073: brought to a genuinely MID-TOKEN state (not left resting at
+	// ready-for-logits) -- see EnterMidToken's own comment, above, for why: at ready-for-logits
+	// the current 'SSB4' format now carries a REAL residual (this fold's own fix) while legacy
+	// 'SSB2' would still drop it (its restore predicate stays mid_token-gated, unchanged by this
+	// fold, matching the pre-fix 'SSB3' writer this cell used to mirror) -- a divergence in the
+	// affected state that D-SLM4073 scopes the safety net to 'SSB3' only, never claiming 'SSB2'
+	// round-trip identity there. Mid-token is a state where both the current and legacy
+	// predicates agree (residual present either way), which is what "shipped SSB2 blobs remain
+	// readable" is actually claiming.
+	CHECK(EnterMidToken(fx.model, legacy_source));
+	const std::vector<uint8_t> ssb4_without_history = SaveSequence(legacy_source);
+	CHECK(ssb4_without_history.size() >= 124);
+	CHECK(std::memcmp(ssb4_without_history.data(), "SSB4", 4) == 0);
+	auto ReadLE64Ssb4 = [&](size_t off) {
+		uint64_t value = 0;
+		for (int i = 0; i < 8; ++i) {
+			value |= static_cast<uint64_t>(ssb4_without_history[off + i]) << (8 * i);
+		}
+		return value;
+	};
+	CHECK(ReadLE64Ssb4(112) == 0);  // setup precondition: no anti-LM history to account for
+	const size_t legacy_block_size = sslm_kv_block_size(fx.model);
+	CHECK_MSG(ssb4_without_history.size() >= 124 + 4 + legacy_block_size,
+	          "T2260: real blob large enough to locate its own residual/tail sections");
+	const size_t legacy_residual_len =
+	    ssb4_without_history.size() - 124 - 4 - legacy_block_size;
+	const size_t legacy_residual_offset = 124;
+	const size_t legacy_tail_offset = legacy_residual_offset + legacy_residual_len;
+	std::vector<uint8_t> ssb2;
+	ssb2.push_back('S');
+	ssb2.push_back('S');
+	ssb2.push_back('B');
+	ssb2.push_back('2');
+	ssb2.insert(ssb2.end(), ssb4_without_history.begin() + 4, ssb4_without_history.begin() + 108);
+	// Skip [108,124) only (anti_lm_order/anti_lm_history_count/ready_for_logits -- 'SSB2' has
+	// none of these). The residual [124, legacy_tail_offset) is INCLUDED verbatim -- unlike the
+	// ready-for-logits state this cell used before EnterMidToken (above), a genuinely mid-token
+	// sequence's residual is written by BOTH the current 'SSB4' predicate (unconditional) and the
+	// legacy 'SSB2' predicate (mid_token-gated) -- they agree here, so nothing to drop. Append
+	// the residual, then the real anti-LM-history-free tail (kv_block_count + kv_blocks)
+	// verbatim.
+	ssb2.insert(ssb2.end(), ssb4_without_history.begin() + legacy_residual_offset,
+	            ssb4_without_history.begin() + legacy_tail_offset);
+	ssb2.insert(ssb2.end(), ssb4_without_history.begin() + legacy_tail_offset,
+	            ssb4_without_history.end());
 	CHECK(sslm_seq_release(legacy_source) == SSLM_OK);
 	legacy_source = nullptr;
 	sslm_seq legacy_restored = nullptr;
@@ -811,13 +879,13 @@ static void TestD2_DampedGreedyLifecycle_ResetAndRestoreAreFreshAndExact() {
 	CHECK(legacy_restored != nullptr);
 	std::vector<int32_t> legacy_continuation;
 	if (legacy_restored) {
-		CHECK(SaveSequence(legacy_restored) == ssb3_without_history);
+		CHECK(SaveSequence(legacy_restored) == ssb4_without_history);
 		legacy_continuation = DecodeDamped(fx, legacy_restored, params, 4);
 		CHECK(sslm_seq_release(legacy_restored) == SSLM_OK);
 	}
 	sslm_seq current_format_restored = nullptr;
-	CHECK(sslm_seq_restore(fx.model, &fx.pool, ssb3_without_history.data(),
-	                       ssb3_without_history.size(), &current_format_restored) == SSLM_OK);
+	CHECK(sslm_seq_restore(fx.model, &fx.pool, ssb4_without_history.data(),
+	                       ssb4_without_history.size(), &current_format_restored) == SSLM_OK);
 	if (current_format_restored) {
 		CHECK(legacy_continuation == DecodeDamped(fx, current_format_restored, params, 4));
 		CHECK(sslm_seq_release(current_format_restored) == SSLM_OK);

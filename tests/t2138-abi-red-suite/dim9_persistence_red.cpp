@@ -95,6 +95,253 @@ static void TestDim9_C3_CorruptedMagicOnRealV1BlobRejectedBeforeFieldParsing(ssl
 	CHECK(restored == nullptr);
 }
 
+// T-2260 (D-SLM4073, Option A + Sec6 safety net; plan Claude/Vitruvius/
+// t2260-ssb3-residual-options-2026-08-23.md) -- three cells, this fold.
+namespace {
+inline uint32_t T2260ReadLE32(const uint8_t* p) {
+	return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+	       (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+}
+inline uint64_t T2260ReadLE64(const uint8_t* p) {
+	uint64_t v = 0;
+	for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(p[i]) << (8 * i);
+	return v;
+}
+}  // namespace
+
+// --- R1 (D-SLM4065's own defect, reproduced end to end): save a sequence resting at
+// ready-for-logits (post-prefill, layer_index == 0) -- the state whose residual the pre-fix
+// save path silently dropped -- restore it, and decode one step. Asserts the restored decode's
+// own token matches a LIVE reference continuation from an identically-prefilled sequence, never
+// saved/restored -- the same identity D-SLM4065's own repro checked by hand (token 0 emitted vs
+// 97 wanted, pre-fix). ---
+static void TestT2260_R1_ReadyForLogitsSaveRestoreMatchesLiveContinuation(sslm_model model,
+                                                                          sslm_kv_pool* pool) {
+	int32_t prompt[3] = {0, 1, 2};
+	int32_t consumed = 0;
+
+	// The live reference: prefill, then decode one step directly -- no save/restore at all.
+	SinglePool ref_sp;
+	sslm_seq ref_seq = nullptr;
+	CHECK(MakeSinglePool(model, &ref_sp));
+	if (ref_sp.pool) CHECK(sslm_seq_create(model, &ref_sp.pool, &ref_seq) == SSLM_OK);
+	CHECK_MSG(ref_seq != nullptr, "T2260-R1: reference sequence create");
+	if (!ref_seq) return;
+	CHECK(sslm_prefill(model, ref_seq, prompt, 3, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) ==
+	      SSLM_OK);
+	sslm_decode_params ref_params{};
+	ref_params.struct_size = sizeof(ref_params);
+	ref_params.layer_budget = 1;
+	sslm_seq ref_batch[1] = {ref_seq};
+	int32_t ref_token = -1;
+	CHECK_MSG(sslm_decode_step(model, ref_batch, 1, &ref_params, nullptr, &ref_token) == SSLM_OK,
+	          "T2260-R1: live reference decode step");
+
+	// The save/restore arm: an identically-prefilled sequence, saved AT the ready-for-logits
+	// resting point (before any decode_step call), restored into a fresh handle, then decoded.
+	sslm_seq seq = nullptr;
+	if (pool) CHECK(sslm_seq_create(model, pool, &seq) == SSLM_OK);
+	CHECK_MSG(seq != nullptr, "T2260-R1: save-arm sequence create");
+	if (!seq) {
+		CHECK(sslm_seq_release(ref_seq) == SSLM_OK);
+		return;
+	}
+	CHECK(sslm_prefill(model, seq, prompt, 3, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) == SSLM_OK);
+
+	SeqBlobBuffer blob(model);
+	CHECK_MSG(sslm_seq_save(seq, blob.bytes.data(), &blob.size) == SSLM_OK,
+	          "T2260-R1: save at ready-for-logits");
+	sslm_seq restored = nullptr;
+	CHECK_MSG(sslm_seq_restore(model, pool, blob.bytes.data(), blob.size, &restored) == SSLM_OK,
+	          "T2260-R1: restore");
+	CHECK_MSG(restored != nullptr, "T2260-R1: restore produced a live handle");
+	if (restored) {
+		sslm_decode_params params{};
+		params.struct_size = sizeof(params);
+		params.layer_budget = 1;
+		sslm_seq batch[1] = {restored};
+		int32_t restored_token = -1;
+		CHECK_MSG(sslm_decode_step(model, batch, 1, &params, nullptr, &restored_token) == SSLM_OK,
+		          "T2260-R1: restored decode step");
+		CHECK_MSG(restored_token == ref_token,
+		          "T2260-R1: restored decode must match the live reference -- ref=%d restored=%d "
+		          "(D-SLM4065's own defect: a restored post-prefill sequence used to carry "
+		          "ready_for_logits=true over an all-zero residual, producing whatever token the "
+		          "head weights map zero to)",
+		          ref_token, restored_token);
+		CHECK(sslm_seq_release(restored) == SSLM_OK);
+	}
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
+	CHECK(sslm_seq_release(ref_seq) == SSLM_OK);
+}
+
+// --- R2 (plan Sec6 safety net): a legacy-'SSB3'-shaped blob in the one unrecoverable state
+// (fresh-post-prefill/adopt, current_token == the "no pending embed" sentinel) must be rejected
+// loudly (SSLM_RESTORE_RESIDUAL_LOST) rather than silently restored. Constructed by hand from a
+// REAL 'SSB4' blob (produced by this build's own sslm_seq_save): the fixed-header bytes at
+// offset [4, 120) are BYTE-IDENTICAL between 'SSB4' and 'SSB3' by this fold's own design (only
+// the magic and the trailing ready_for_logits field differ) -- so the legacy blob is magic
+// 'SSB3' + those 116 bytes verbatim + (no ready_for_logits field, no residual bytes -- the
+// pre-fix save path wrote zero residual bytes for exactly this state, which is the defect) +
+// the real anti-LM history / kv_block_count / kv_blocks tail, copied verbatim from the real
+// blob. ---
+static void TestT2260_R2_LegacySsb3AffectedStateRejectedLoudly(sslm_model model,
+                                                                sslm_kv_pool* pool) {
+	int32_t prompt[2] = {0, 1};
+	int32_t consumed = 0;
+	sslm_seq seq = nullptr;
+	if (pool) CHECK(sslm_seq_create(model, pool, &seq) == SSLM_OK);
+	CHECK_MSG(seq != nullptr, "T2260-R2: sequence create");
+	if (!seq) return;
+	CHECK(sslm_prefill(model, seq, prompt, 2, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) == SSLM_OK);
+
+	SeqBlobBuffer real_blob(model);
+	CHECK_MSG(sslm_seq_save(seq, real_blob.bytes.data(), &real_blob.size) == SSLM_OK,
+	          "T2260-R2: save the real 'SSB4' blob to transform");
+	CHECK_MSG(real_blob.size >= 124, "T2260-R2: real blob at least covers the SSB4 fixed header");
+
+	const uint8_t* real = real_blob.bytes.data();
+	// Confirm this fixture actually reached the state R2 needs -- current_token's own sentinel
+	// (-1) at its shared offset (72, identical in SSB3/SSB4), and layer_index == 0 (offset 68).
+	const uint32_t layer_index = T2260ReadLE32(real + 68);
+	const int32_t current_token = static_cast<int32_t>(T2260ReadLE32(real + 72));
+	CHECK_MSG(layer_index == 0 && current_token == -1,
+	          "T2260-R2: setup precondition -- must rest at ready-for-logits (layer_index=%u "
+	          "current_token=%d)",
+	          layer_index, current_token);
+
+	const uint64_t anti_lm_history_count = T2260ReadLE64(real + 112);
+	const size_t anti_lm_history_bytes = static_cast<size_t>(anti_lm_history_count) * 4;
+	const size_t block_size = sslm_kv_block_size(model);
+	// real_blob layout: [124 fixed header][residual][anti_lm history][4 kv_block_count][kv_blocks]
+	CHECK_MSG(real_blob.size >= 124 + anti_lm_history_bytes + 4 + block_size,
+	          "T2260-R2: real blob large enough to locate its own tail sections");
+	const size_t tail_offset = real_blob.size - anti_lm_history_bytes - 4 - block_size;
+	CHECK_MSG(tail_offset >= 124, "T2260-R2: derived residual region is non-negative");
+
+	std::vector<uint8_t> legacy;
+	legacy.push_back('S');
+	legacy.push_back('S');
+	legacy.push_back('B');
+	legacy.push_back('3');
+	// Fixed-header bytes [4, 120) -- byte-identical layout between 'SSB3' and 'SSB4'.
+	legacy.insert(legacy.end(), real + 4, real + 120);
+	// NO ready_for_logits field (that is the 'SSB4'-only addition), NO residual bytes (the
+	// pre-fix 'SSB3' save path wrote zero for this exact state -- the defect this cell proves is
+	// now caught). Anti-LM history + kv_block_count + kv_blocks, copied verbatim.
+	legacy.insert(legacy.end(), real + tail_offset, real + real_blob.size);
+
+	sslm_seq restored = nullptr;
+	const sslm_status st = sslm_seq_restore(model, pool, legacy.data(), legacy.size(), &restored);
+	CHECK_MSG(st == SSLM_RESTORE_RESIDUAL_LOST,
+	          "T2260-R2: a legacy 'SSB3' blob in the affected state must reject "
+	          "SSLM_RESTORE_RESIDUAL_LOST, not silently restore ready_for_logits=true over a "
+	          "zeroed residual -- got status %d", static_cast<int>(st));
+	CHECK_MSG(restored == nullptr, "T2260-R2: a rejected restore must not hand back a live handle");
+
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
+}
+
+// --- R3 (round-trip regression): 'SSB4' save/restore still works at a mid-token state and at a
+// genuinely fresh/empty state; a real legacy 'SSB2'-shaped blob (hand-constructed the same way
+// R2's 'SSB3' construction is, from a real 'SSB4' blob's own shared-layout header bytes) is
+// still accepted -- the shipped SSB2-compatibility promise, unaffected by this fold. ---
+static void TestT2260_R3_Ssb4RoundTripPlusLegacySsb2StillAccepted(sslm_model model,
+                                                                   sslm_kv_pool* pool) {
+	// Fresh/empty sequence, never prefilled -- layer_index == 0, context_length == 0.
+	{
+		sslm_seq seq = nullptr;
+		if (pool) CHECK(sslm_seq_create(model, pool, &seq) == SSLM_OK);
+		if (seq) {
+			SeqBlobBuffer blob(model);
+			CHECK_MSG(sslm_seq_save(seq, blob.bytes.data(), &blob.size) == SSLM_OK,
+			          "T2260-R3: save a fresh/empty sequence");
+			// Release the original before restoring -- this sub-case's own pool holds only ONE
+			// block (main()'s own MakeSinglePool wiring for R3), so the original and the
+			// restored handle cannot both be live at once.
+			CHECK(sslm_seq_release(seq) == SSLM_OK);
+			sslm_seq restored = nullptr;
+			const sslm_status restore_st =
+			    sslm_seq_restore(model, pool, blob.bytes.data(), blob.size, &restored);
+			CHECK_MSG(restore_st == SSLM_OK,
+			          "T2260-R3: restore a fresh/empty sequence -- got status %d",
+			          static_cast<int>(restore_st));
+			if (restored) CHECK(sslm_seq_release(restored) == SSLM_OK);
+		}
+	}
+	// Mid-token: the existing C1 cell's own shape, re-run to confirm 'SSB4' still round-trips it.
+	{
+		SinglePool sp;
+		sslm_seq seq = nullptr;
+		if (MakePool(model, 2, &sp)) CHECK(sslm_seq_create(model, &sp.pool, &seq) == SSLM_OK);
+		if (seq) {
+			int32_t prompt[3] = {0, 1, 2};
+			int32_t consumed = 0;
+			CHECK(sslm_prefill(model, seq, prompt, 3, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) ==
+			      SSLM_OK);
+			CHECK(EnterMidToken(model, seq));
+			SeqBlobBuffer blob(model);
+			CHECK_MSG(sslm_seq_save(seq, blob.bytes.data(), &blob.size) == SSLM_OK,
+			          "T2260-R3: save mid-token");
+			sslm_seq restored = nullptr;
+			CHECK_MSG(sslm_seq_restore(model, &sp.pool, blob.bytes.data(), blob.size, &restored) ==
+			              SSLM_OK,
+			          "T2260-R3: restore mid-token");
+			if (restored) CHECK(sslm_seq_release(restored) == SSLM_OK);
+			CHECK(sslm_seq_release(seq) == SSLM_OK);
+		}
+		if (sp.pool) CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
+	}
+	// Legacy 'SSB2': hand-constructed from a real 'SSB4' mid-token blob -- 'SSB2' omits the
+	// trailing anti_lm_order/anti_lm_history_count pair entirely (its own 108-byte fixed header,
+	// vs 'SSB3'/'SSB4''s 120), so the legacy blob is magic 'SSB2' + the first 104 bytes of the
+	// real header (offset [4, 108), identical layout to 'SSB3'/'SSB4' for every field SSB2 also
+	// carries) + the residual (present, mid-token) + kv_block_count + kv_blocks -- no anti-LM
+	// history, matching SSB2's own documented absence of that state.
+	{
+		SinglePool sp;
+		sslm_seq seq = nullptr;
+		if (MakePool(model, 2, &sp)) CHECK(sslm_seq_create(model, &sp.pool, &seq) == SSLM_OK);
+		if (seq) {
+			int32_t prompt[3] = {0, 1, 2};
+			int32_t consumed = 0;
+			CHECK(sslm_prefill(model, seq, prompt, 3, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) ==
+			      SSLM_OK);
+			CHECK(EnterMidToken(model, seq));
+			SeqBlobBuffer real_blob(model);
+			CHECK_MSG(sslm_seq_save(seq, real_blob.bytes.data(), &real_blob.size) == SSLM_OK,
+			          "T2260-R3: save the real 'SSB4' mid-token blob to transform into 'SSB2'");
+			const uint8_t* real = real_blob.bytes.data();
+			const uint64_t anti_lm_history_count = T2260ReadLE64(real + 112);
+			CHECK_MSG(anti_lm_history_count == 0,
+			          "T2260-R3: this fixture uses no damped-greedy state -- the 'SSB2' "
+			          "construction below assumes zero anti-LM history to drop");
+			const size_t block_size = sslm_kv_block_size(model);
+			const size_t tail_offset = real_blob.size - 4 - block_size;  // kv_block_count + kv_blocks
+			const size_t residual_offset = 124;  // fixed header(120) + ready_for_logits(4)
+			CHECK_MSG(tail_offset >= residual_offset, "T2260-R3: derived residual region sane");
+
+			std::vector<uint8_t> legacy;
+			legacy.push_back('S');
+			legacy.push_back('S');
+			legacy.push_back('B');
+			legacy.push_back('2');
+			legacy.insert(legacy.end(), real + 4, real + 108);  // shared 104-byte header prefix
+			legacy.insert(legacy.end(), real + residual_offset, real + tail_offset);  // residual
+			legacy.insert(legacy.end(), real + tail_offset, real + real_blob.size);  // kv tail
+
+			sslm_seq restored = nullptr;
+			CHECK_MSG(sslm_seq_restore(model, &sp.pool, legacy.data(), legacy.size(), &restored) ==
+			              SSLM_OK,
+			          "T2260-R3: a real legacy 'SSB2'-shaped blob must still restore -- the "
+			          "shipped SSB2-compatibility promise, unaffected by this fold");
+			if (restored) CHECK(sslm_seq_release(restored) == SSLM_OK);
+			CHECK(sslm_seq_release(seq) == SSLM_OK);
+		}
+		if (sp.pool) CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
+	}
+}
+
 // REAL INVOCATION DRIVER (house pattern) -- supersedes the address-only convention. C1/C3 each
 // get their OWN fresh sequence and pool (C1's own restored handle and C3's own attempted-but-
 // rejected restore both need a real, bound pool per the buffer-mapping ruling); C2 needs only a
@@ -141,6 +388,31 @@ int main(int argc, char** argv) {
 				CHECK(sslm_seq_release(seq) == SSLM_OK);
 			}
 			if (sp.pool) CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
+		}
+		// T-2260 (D-SLM4073): R1/R2 each need their own dedicated pool (R1 needs two concurrent
+		// blocks -- the save-arm sequence and its restored handle -- alongside R1's own separate
+		// live-reference pool; R2 needs one, its own restore attempt is rejected so nothing extra
+		// is ever drawn from it).
+		{
+			SinglePool sp;
+			if (MakePool(model, 2, &sp)) {
+				TestT2260_R1_ReadyForLogitsSaveRestoreMatchesLiveContinuation(model, &sp.pool);
+				CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
+			}
+		}
+		{
+			SinglePool sp;
+			if (MakeSinglePool(model, &sp)) {
+				TestT2260_R2_LegacySsb3AffectedStateRejectedLoudly(model, &sp.pool);
+				CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
+			}
+		}
+		{
+			SinglePool sp;
+			if (MakeSinglePool(model, &sp)) {
+				TestT2260_R3_Ssb4RoundTripPlusLegacySsb2StillAccepted(model, &sp.pool);
+				CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
+			}
 		}
 		CHECK(sslm_model_unmap(model) == SSLM_OK);
 	}
