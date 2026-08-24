@@ -1439,8 +1439,8 @@ def test_wiring_vitality_check_lwuws_path_count_disable_stops_catching_a_corrupt
     with tempfile.TemporaryDirectory() as tmp:
         with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
             real_text = f.read()
-        corrupted = real_text.replace("catch, twenty-five\n", "catch, seventeen\n", 1)
-        assert corrupted != real_text, "sanity: the exact wrapped phrase must exist in the real file"
+        corrupted = real_text.replace("catch, twenty-five paths", "catch, seventeen paths", 1)
+        assert corrupted != real_text, "sanity: the exact phrase must exist in the real file"
         gph_path = os.path.join(tmp, "corrupted_before_word_gpu_port.h")
         with open(gph_path, "w", encoding="utf-8") as f:
             f.write(corrupted)
