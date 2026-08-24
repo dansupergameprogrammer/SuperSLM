@@ -380,29 +380,29 @@ int main(int argc, char** argv) {
 	const uint32_t num_hidden_layers = mview.config.num_hidden_layers;
 
 	if (ctx && model && A) {
-		std::printf("DEBUG: entering S2-A\n");
+		std::printf("cell S2-A\n");
 		TestS2_A_BindTimeArgumentGuards(ctx, &mview, &aview, model, A);
-		std::printf("DEBUG: entering S2-B\n");
+		std::printf("cell S2-B\n");
 		TestS2_B_MidTokenRejection(ctx, model, A, num_hidden_layers);
-		std::printf("DEBUG: entering S2-C\n");
+		std::printf("cell S2-C\n");
 		TestS2_C_RebindMovesCounter(ctx, model, A, B);
-		std::printf("DEBUG: entering S2-D\n");
+		std::printf("cell S2-D\n");
 		TestS2_D_ReleaseDecrements(ctx, model, A);
-		std::printf("DEBUG: entering S2-E\n");
+		std::printf("cell S2-E\n");
 		TestS2_E_UnmapBlockedWhileBound(ctx, model, A, &aview);
-		std::printf("DEBUG: entering S2-G\n");
+		std::printf("cell S2-G\n");
 		TestS2_G_UnblockAfterUnbind(ctx, model, &aview);
-		std::printf("DEBUG: entering S2-H\n");
+		std::printf("cell S2-H\n");
 		TestS2_H_MalformedHandleBoilerplate(ctx, model, A);
-		std::printf("DEBUG: entering S2-I\n");
+		std::printf("cell S2-I\n");
 		TestS2_I_IdempotentDoubleBind(ctx, model, &aview);
-		std::printf("DEBUG: entering S2-L\n");
+		std::printf("cell S2-L\n");
 		TestS2_L_AdmissionAfterGranularFullDepthDrainedRest(ctx, model, A, num_hidden_layers);
-		std::printf("DEBUG: entering S2-M\n");
+		std::printf("cell S2-M\n");
 		TestS2_M_AdmissionAfterChunkPrefillChokePoint(ctx, model, A, num_hidden_layers);
-		std::printf("DEBUG: entering S2-O\n");
+		std::printf("cell S2-O\n");
 		TestS2_O_ResetPreservesBinding(ctx, model, &aview);
-		std::printf("DEBUG: all S2 cells returned\n");
+		std::printf("all S2 cells returned\n");
 	}
 
 	if (B) CHECK(sslm_gpu_adapter_unmap(ctx, B) == SSLM_OK);
