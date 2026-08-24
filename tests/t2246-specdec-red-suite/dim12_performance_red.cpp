@@ -169,6 +169,35 @@ void TestM1_AchievementCostRatioBelowCommissionedThreshold(sslm_model model, ssl
 	          ratio, g_max_cost_ratio, g_min_effect_size);
 }
 
+// M1b -- S-F(1)'s acceptance>=1 arm: the SAME commissioned measurement over a
+// repetition-stream fixture (the full-K accepting-window prompt, where the drafter provably
+// proposes and the target reproduces the continuation). This is the workload shape n-gram
+// speculation exists for; the novel-chat drive M1 measures is its control.
+void TestM1b_RepetitionStreamCostRatioBelowCommissionedThreshold(
+    sslm_model model, sslm_workspace ws, const CpuOracleModel& oracle,
+    const std::vector<int32_t>& corpus_stream) {
+	CHECK_MSG(ThresholdsCommissioned(),
+	          "NOT-COMMISSIONED: record max-cost-ratio and min-effect-size before first "
+	          "reading (plan SS5 S-F(2a)); refusing to assert against nothing");
+	if (!ThresholdsCommissioned()) return;
+	std::string err;
+	std::vector<int32_t> prompt;
+	if (!FindFullKAcceptancePrompt(oracle, corpus_stream, /*kK=*/4, /*max_len=*/160, &prompt,
+	                               &err)) {
+		SKIP_MSG("repetition fixture not found on this artifact/corpus: %s", err.c_str());
+		return;
+	}
+	CostSample sample;
+	ASSERT_TRUE(MeasureCostRatio(model, ws, oracle, prompt,
+	                             /*emissions_to_time=*/32, &sample));
+	const double ratio = sample.spec_per_emitted_ns / sample.baseline_per_emitted_ns;
+	std::printf("REPORT m1b: ratio=%.6f (threshold=%.6f, min_effect=%.6f, prompt=%zu)\n",
+	            ratio, g_max_cost_ratio, g_min_effect_size, prompt.size());
+	CHECK_MSG(ratio <= g_max_cost_ratio - g_min_effect_size,
+	          "achievement claim (repetition stream): per-emitted-token ratio %.6f must sit "
+	          "below threshold %.6f by at least the minimum effect size %.6f",
+	          ratio, g_max_cost_ratio, g_min_effect_size);
+}
 // M2 -- Broken-drafter negative control: the same measurement procedure over a
 // never-matching history must FAIL M1's predicate (ratio >= threshold -- verification
 // overhead makes it slower, never faster), while every equivalence cell still holds on this
@@ -325,6 +354,29 @@ int main(int argc, char** argv) {	// Fold round 2 commissioning input (D-SLM4094
 				         "the pinned corpus");
 			}
 			TestM2_BrokenDrafterNegativeControl(model, ws, oracle);
+		if (!g_corpus_path.empty() && !g_model_tok_path.empty()) {
+			std::vector<int32_t> rep_stream;
+			sslm_model tok_model2 = nullptr;
+			std::vector<uint8_t> tok_bytes2;
+			if (ReadFileBytes(g_model_tok_path, &tok_bytes2)) {
+				CHECK(sslm_model_map(tok_bytes2.data(), tok_bytes2.size(), &tok_model2) ==
+				      SSLM_OK);
+			}
+			if (tok_model2) {
+				std::vector<std::string> ut2;
+				if (LoadCorpusUtterances(g_corpus_path, 24, &ut2)) {
+					for (const auto& u : ut2) {
+						std::vector<int32_t> ids;
+						if (TokenizeUtf8(tok_model2, u, &ids) && ids.size() >= 8)
+							rep_stream.insert(rep_stream.end(), ids.begin(), ids.end());
+					}
+				}
+				CHECK(sslm_model_unmap(tok_model2) == SSLM_OK);
+			}
+			if (!rep_stream.empty())
+				TestM1b_RepetitionStreamCostRatioBelowCommissionedThreshold(
+				    model, ws, oracle, rep_stream);
+		}
 			CHECK(sslm_workspace_destroy(ws) == SSLM_OK);
 		} else {
 			SKIP_MSG("workspace create failed -- dim12 needs a workspace");
@@ -335,5 +387,6 @@ int main(int argc, char** argv) {	// Fold round 2 commissioning input (D-SLM4094
 	PrintSummaryAndExit(&ec);
 	return ec;
 }
+
 
 
