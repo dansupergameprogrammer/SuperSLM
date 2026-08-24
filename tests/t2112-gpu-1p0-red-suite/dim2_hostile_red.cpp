@@ -447,7 +447,10 @@ int main(int argc, char** argv) {
 		// device is reclaimed on process exit regardless) rather than a correctness check.
 		CHECK(sslm_gpu_seq_release(ctx, seq_bound_to_a) == SSLM_OK);
 		CHECK(sslm_gpu_model_unmap(ctx, model_a) == SSLM_OK);
-		CHECK(sslm_gpu_model_unmap(ctx, model_b) == SSLM_OK);
+		// adapter_for_b is still mapped against model_b (the cell body's documented leak
+		// above), so M2's live-adapters guard rejects the unmap -- asserted as that guard's
+		// own positive product case rather than as cleanup expecting the pre-guard SSLM_OK.
+		CHECK(sslm_gpu_model_unmap(ctx, model_b) == SSLM_MODEL_HAS_LIVE_ADAPTERS);
 		sslm_gpu_context_destroy(ctx);
 	}
 
