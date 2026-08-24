@@ -37,6 +37,16 @@ see that plan's own deferral table; they carry no line here.
   (`RunLayerLoopGpuFinish`'s own caller-error rejection) as `SSLM_OK`/`*out_ready=0` — the real
   status now surfaces through `*out_status`. Affects only a state no legitimate public caller can
   reach through the documented API alone.
+- **`sslm_seq_save` now serializes the carried residual for a sequence resting at ready-for-logits
+  (post-`sslm_prefill`/`sslm_seq_adopt_prefix`, `layer_index == 0`), closing a shipped 1.2.0
+  defect.** The prior predicate keyed residual presence off `layer_index != 0` alone, so a
+  ready-for-logits sequence — which carries a real, load-bearing residual — saved zero residual
+  bytes; `sslm_seq_restore` then reconstructed `ready_for_logits = true` over that all-zero
+  residual, and the next `sslm_decode_step` produced whatever token the model's head weights map
+  zero to, independent of any speculative-decoding mechanism (proven by execution: token 0 emitted
+  vs. 97 wanted). Fixed by writing the residual unconditionally whenever `hidden_size > 0` —
+  mirroring the GPU blob format's own identical fix (T-2114/C1). See Changed, below, for the new
+  blob format this required.
 
 ### Added
 
@@ -70,6 +80,21 @@ see that plan's own deferral table; they carry no line here.
 - `docs/api.md` updated: `sslm_gpu_seq_restore` added to the calls needing external
   serialization (it now performs real device work under a Busy-precedence guard, above); the new
   bind verb and both new statuses documented.
+- **The CPU sequence save/restore format bumps to a new magic, `SSB4`.** It supersedes `SSB3`
+  (shipped 1.2.0) with two changes: the residual is now serialized unconditionally whenever
+  `hidden_size > 0` (see Fixed, above), and a new explicit `ready_for_logits` field is appended to
+  the fixed header, so restore reads that state directly instead of inferring it from
+  `layer_index`/`context_length` alone. `sslm_seq_save` writes only `SSB4`; `sslm_seq_restore`
+  continues to accept shipped `SSB3` and `SSB2` blobs read-only, unchanged in this respect from
+  1.2.0's own `SSB3`/`SSB2` compatibility promise. `sslm_seq_state_size`'s upper bound grows by 4
+  bytes (the new field) to 128.
+- **New `sslm_status` member `SSLM_RESTORE_RESIDUAL_LOST`, appended last, no existing value
+  moved.** `sslm_seq_restore` now returns it for a legacy `SSB3` blob in the one state the 1.2.0
+  defect above could produce (`layer_index == 0 && context_length > 0` with no pending-embed
+  token saved) — the lost residual cannot be recovered, since it was never written, but the caller
+  now gets a loud, diagnosable failure instead of a silently wrong restore. Scoped to `SSB3` only;
+  `SSB2` shares the same underlying defect for this state and is unaffected by this release, and
+  the current `SSB4` format never produces this state at all.
 
 ## [1.2.0] - 2026-08-21
 
