@@ -2216,7 +2216,17 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 		final_codes = reinterpret_cast<int8_t*>(ws_base + layout.final_codes_offset);
 		wide_logits = reinterpret_cast<int64_t*>(ws_base + layout.wide_logits_offset);
 		logit_row = reinterpret_cast<int32_t*>(ws_base + layout.logit_row_offset);
-		damped_indices = reinterpret_cast<int32_t*>(ws_base + layout.damped_indices_offset);
+		// T-2243 review finding 7 (D-SLM4113): for a non-DGC1 model, ComputeWorkspaceLayout
+		// leaves the cursor unadvanced across this region (damped_indices_bytes == 0), so
+		// damped_indices_offset == rms_wide_offset -- forming this pointer unconditionally would
+		// give two live pointers to the same bytes. Carved only when the region is actually
+		// reserved; nullptr otherwise, the same fallback-nullptr shape rms_wide's own comment
+		// above already establishes as a legal value here. Unreachable today (the damped decode
+		// arm rejects a non-DGC1 model with SSLM_ARTIFACT_REJECTED before this pointer is ever
+		// used), so this closes fragility, not a live bug.
+		damped_indices = layout.damped_indices_bytes > 0
+		                     ? reinterpret_cast<int32_t*>(ws_base + layout.damped_indices_offset)
+		                     : nullptr;
 		rms_wide = reinterpret_cast<int64_t*>(ws_base + layout.rms_wide_offset);
 		// N2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3): a real, compiled-in check
 		// at the exact point of use, not merely trusted from ComputeWorkspaceLayout's own rounding
@@ -2890,8 +2900,17 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	// through: that inference agreed with the resting state even when the residual backing it
 	// had been silently dropped by the pre-fix save predicate.
 	const bool saved_ready_for_logits_v4 = is_ssb4 && (ReadLE32(p + 120) != 0);
+	// T-2243 review finding 3 (D-SLM4113): the SAME ceiling ValidateDampedGreedyParams enforces
+	// on the caller-supplied-params path (damped_greedy_phaseD.cpp, "the ceiling is DERIVED BY
+	// EXECUTION" -- order 82 is the last one carrying nonzero weight under the shipped
+	// recurrence) applies here too. Without it, this field is bounded only by `> 0` from a
+	// 4-byte, attacker-controlled blob offset, and AntiLmCreate below constructs up to
+	// `saved_anti_lm_order` std::unordered_maps -- at INT32_MAX that is the 137.4 GB the F4
+	// ruling session measured, from a restore path that is a declared trust boundary. Rejected
+	// outright, never clamped, matching this same file's existing discipline for an
+	// out-of-domain field and the ceiling's own "rejected, never clamped" ruling.
 	if ((saved_anti_lm_order == 0 && saved_anti_lm_history_count_u64 != 0) ||
-	    saved_anti_lm_order < 0 ||
+	    saved_anti_lm_order < 0 || saved_anti_lm_order > 82 ||
 	    saved_anti_lm_history_count_u64 > static_cast<uint64_t>(SIZE_MAX)) {
 		return SSLM_INVALID_ARGUMENT;
 	}
@@ -2905,23 +2924,28 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	    saved_anti_lm_history_count > static_cast<size_t>(c.context_cap)) {
 		return SSLM_INVALID_ARGUMENT;
 	}
-	// T-2260 (D-SLM4073, Sec6 safety net): a legacy 'SSB3' blob in the one unrecoverable state
+	// T-2260 (D-SLM4073, Sec6 safety net), extended to 'SSB2' by T-2243 review finding 4
+	// (D-SLM4114): a legacy 'SSB3'/'SSB2' blob in the one unrecoverable state
 	// (fresh-post-prefill/adopt, ready_for_logits was true at save time, but the pre-fix save
 	// predicate wrote ZERO residual bytes for it, D-SLM4065) is detected here, from fields
 	// already read above, and rejected LOUDLY instead of silently restoring
 	// ready_for_logits=true over an all-zero residual. The lost residual cannot be recovered --
 	// it was never written -- this converts an existing silent-wrong-output consumer into a
-	// diagnosable failure. Scoped to 'SSB3' only, per the ruled shape (D-SLM4073): 'SSB4' never
-	// produces this state (the residual is always present now); 'SSB2' shares the same
-	// underlying defect but is out of this fix's ruled scope.
-	if (is_ssb3 && layer_index == 0 && context_length > 0 &&
+	// diagnosable failure. 'SSB2' carries the identical defect at the identical field offsets
+	// (context_length at 60, layer_index at 68, current_token at 72 sit at the same offsets in
+	// both magics) and is an equally shipped, equally accepted legacy magic -- D-SLM4114 rules
+	// the extension strictly conservative: it converts an existing silent-garbage restore into a
+	// loud error, changes no format, and D-SLM4073 never priced 'SSB2' either way. 'SSB4' never
+	// produces this state at all (the residual is always present now).
+	if ((is_ssb3 || is_ssb2) && layer_index == 0 && context_length > 0 &&
 	    saved_current_token == kSeqBlobNoCurrentToken) {
 		return SSLM_RESTORE_RESIDUAL_LOST;
 	}
 	// T-2260 (D-SLM4073, Option A): 'SSB4' serializes the residual UNCONDITIONALLY whenever
 	// hidden_size > 0 (mirroring the shipped GPU-blob precedent, T-2114/C1) -- the legacy
 	// 'SSB3'/'SSB2' mid-token-only predicate is preserved for those two magics exactly as
-	// before (the case above is the only 'SSB3' state this fold changes the disposition of).
+	// before (the case above is the only 'SSB3'/'SSB2' state this fold changes the disposition
+	// of).
 	const bool mid_token = layer_index != 0;
 	const size_t residual_len = is_ssb4 ? (c.hidden_size > 0 ? static_cast<size_t>(c.hidden_size) : 0)
 	                                     : (mid_token ? static_cast<size_t>(c.hidden_size) : 0);

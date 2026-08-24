@@ -55,7 +55,8 @@ SSLM_DAMPED_GREEDY_DEFAULT_ALPHA_Q15  # T-2199/FSD release candidate, added 2026
 # 1.2.1 build gate (the checker fails on f409bda itself when the records repo is reachable):
 # these three entries are the disclosed-exception disposition, entered 2026-08-23; a dedicated
 # inventory ruling in the FSD design's own Sec8 remains owed and removes them when it lands
-# (the SSLM_ABI_ALIGNMENT_BYTES precedent).
+# (the SSLM_ABI_ALIGNMENT_BYTES precedent). Tracked as T-2264, minted 2026-08-23 (T-2243 review
+# finding 9, D-SLM4113) -- the owed follow-up carried no ticket id or date before this.
 SSLM_DAMPED_GREEDY_DEFAULT_ANTI_LM_ORDER  # pairs with SSLM_DAMPED_GREEDY_DEFAULT_ALPHA_Q15
 # immediately above; same commit, same design document, same flagged-pre-existing disposition --
 # the sslm_decode_params_init default for anti_lm_max_order.

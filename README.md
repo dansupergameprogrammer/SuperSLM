@@ -14,7 +14,7 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.2.1**. This patch closes eleven GPU/CPU correctness
+Current release: **1.2.1**. This patch closes twelve GPU/CPU correctness
 defects found reviewing 1.2.0 — including a save/restore ordering hazard, two
 new liveness guards on the LoRA adapter lifecycle, and a new verb
 (`sslm_gpu_seq_bind_adapter`) for binding an adapter to a GPU sequence across

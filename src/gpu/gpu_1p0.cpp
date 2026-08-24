@@ -105,6 +105,21 @@
 //     this context's OWN `device` (making the requirement genuinely per-context rather than
 //     process-wide) is out of B8's own scope -- named here, dated, the same class of routed item
 //     `g_resident_rope`'s own retirement note already established (Sec6.3 of the build log).
+
+// T-2243 review finding 2 (D-SLM4113): a process-global in-flight submission count, scoped to
+// what the guarded resource actually is. The comment block above already establishes that the
+// decode dispatch path does not route through any per-context `device` -- it calls the pre-1.0
+// substrate's process-WIDE `harness::GetDevice()` singleton, with ONE command allocator and ONE
+// command list shared by every context and every model in the process. `sslm_gpu_seq_restore`'s
+// own guard against that singleton's `dev.alloc->Reset()`/`dev.list->Reset(...)` therefore cannot
+// be scoped to a single model's `submitted_sequences` (a sibling in flight on a DIFFERENT model,
+// or on a different context, reaches the identical Reset() against an executing allocator) -- it
+// has to be scoped to the resource, which is process-global. Incremented/decremented at exactly
+// the four sites that already maintain the per-model/per-adapter counts this mirrors:
+// SubmitOneSequenceDecode's submit, sslm_gpu_ready's drain, and SubmittedWindowScopeGuard's
+// construct/destruct pair (the G5 bridge's own submit/drain).
+static std::atomic<int64_t> g_process_wide_submitted_sequences{0};
+
 struct SslmGpuContext {
 	superslm_gpu::harness::Device device;
 
@@ -1284,6 +1299,18 @@ SslmGpuStatus sslm_gpu_seq_bind_adapter(SslmGpuContext* ctx, SslmGpuSequenceHand
 	                                          // disposition every other 1.0 entry point uses.
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
+	// T-2243 review finding 1 (D-SLM4113): this is a host-mutating sequence call and carries
+	// the same `is_submitted` precondition every sibling (release/embed_token/decode_step/
+	// save/reset) already enforces -- reusing CallProceedsOrBusy_SeqReset, the same predicate
+	// sslm_gpu_seq_embed_token reuses for its own distinct call. Without this, seq->layer_index
+	// (only advanced by sslm_gpu_ready and the chunk guard's close) still reads its pre-submit
+	// value throughout a Submitted window, so the mid-token guard below cannot see it: a bind
+	// admitted between sslm_decode_step_gpu and sslm_gpu_ready splits one token's layer walk
+	// across two adapters, silently.
+	const bool is_submitted = seq->state == superslm_gpu::SslmSequenceGpuState::Submitted;
+	if (!superslm_gpu::CallProceedsOrBusy_SeqReset(is_submitted)) {
+		return SSLM_BUSY;
+	}
 	SslmGpuModelHandle* model = seq->model;
 	if (model != nullptr && seq->layer_index != 0 && seq->layer_index != model->num_hidden_layers) {
 		return SSLM_BUSY;  // genuinely mid-token -- resolves through the caller's own continued
@@ -1499,6 +1526,9 @@ SslmGpuStatus SubmitOneSequenceDecode(SslmGpuContext* ctx, SslmGpuSequenceHandle
 	// T-2113 (design Sec4.2/Sec9, D-SLM3417): model's own Busy-precedence count -- see
 	// SslmGpuModelHandle::submitted_sequences' own field comment, above.
 	model->submitted_sequences += 1;
+	// T-2243 review finding 2 (D-SLM4113): the process-global twin of the per-model count just
+	// above -- see g_process_wide_submitted_sequences' own comment.
+	g_process_wide_submitted_sequences += 1;
 	// T-2124 (D-SLM3446 P0-3): the adapter-handle analogue of the line above -- see
 	// SslmGpuAdapterHandle::submitted_sequences' own field comment. `seq->in_flight_adapter`
 	// remembers which adapter (if any) this in-flight submission bound, so sslm_gpu_ready knows
@@ -1782,15 +1812,28 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, in
 		return SSLM_OK;
 	}
 
+	// T-2243 review finding 10, Observation (D-SLM4113): `seq->in_flight == nullptr` while
+	// `seq->state == Submitted` is an internal-invariant violation reachable only by a caller
+	// bypassing this handle's own lifecycle (RunLayerLoopGpuFinish's `!inflight` guard exists
+	// for exactly this, its own comment: "caller error: no live token") -- never a genuine
+	// device/allocation fault. Checked here, before Finish is ever called, so this call's own
+	// `decoded` value stays exactly what a real device-derived fault would produce (GpuDeviceRemoved/
+	// GpuAllocationFailed only ever arrive from inside Finish's try/catch, past this point) and
+	// O2's status surfaces the caller-error cause directly instead of being folded into
+	// GpuAllocationFailed and mapped to SSLM_DEVICE_LOST by MapDecodedStatusToGpuStatus below.
+	if (!seq->in_flight) {
+		if (out_status) *out_status = SSLM_SEQUENCE_REJECTED;
+		return SSLM_OK;
+	}
+
 	int32_t ready = 0;
 	const superslm::SslmForwardStatus decoded = superslm_gpu::RunLayerLoopGpuFinish(
 	    seq->in_flight, seq->live_state, seq->host_kv_mirror.data(), block, &ready);
 	if (!ready) {
 		// T-2243 (O2, Mendeleev F-5, plan Sec10 Phase 2 O2): RunLayerLoopGpuFinish's own
-		// `!inflight` guard (its own header comment: "caller error: no live token") ALSO
-		// reports `*out_ready=0` -- indistinguishable, before this fix, from the ordinary
-		// non-blocking-poll-not-ready-yet case immediately below, which silently discarded
-		// `decoded` on every path through here. `decoded != Ok` on this branch is never the
+		// `!inflight` guard is now unreachable from here (checked above) -- this branch only
+		// ever sees the genuine device-derived faults Finish's try/catch can produce, plus the
+		// ordinary poll case immediately below. `decoded != Ok` on this branch is never the
 		// ordinary poll case (an unsignaled fence reports `Ok`, not a rejection), so it is
 		// surfaced through `out_status` instead of the silent SSLM_OK/*out_ready=0 this call
 		// used to return unconditionally.
@@ -1813,6 +1856,11 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, in
 	// symmetric twin of SubmitOneSequenceDecode's own increment, above.
 	if (seq->model && seq->model->submitted_sequences > 0) {
 		seq->model->submitted_sequences -= 1;
+	}
+	// T-2243 review finding 2 (D-SLM4113): the process-global twin of the per-model decrement
+	// just above -- see g_process_wide_submitted_sequences' own comment.
+	if (g_process_wide_submitted_sequences > 0) {
+		g_process_wide_submitted_sequences -= 1;
 	}
 	// T-2124 (D-SLM3446 P0-3): the adapter-handle analogue -- the symmetric twin of
 	// SubmitOneSequenceDecode's own `adapter_or_null->submitted_sequences += 1` above. The fence
@@ -1881,19 +1929,23 @@ SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 	                                                       // `model->ctx != ctx`.
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
-	// T-2243 (C1, design plan Sec8/Sec10 Phase 2 C1, D-SLM3991): a sibling sequence on this SAME
-	// model with an unfenced, in-flight submission (`model->submitted_sequences > 0`) has
-	// already recorded a command list that reads this model's own resident buffers and has not
-	// yet fenced -- restoring a fresh sequence proceeds to allocate and upload a NEW K/V buffer
-	// against the identical device without waiting for that fence, a real ordering hazard on
-	// the shared device/command-queue state, undetected before this fix. Genuinely transient
-	// (drains the instant the in-flight sequence's own fence signals): `SSLM_BUSY` is the
-	// correct disposition here, the same Busy-precedence shape `sslm_gpu_model_unmap`'s own
-	// `submitted_sequences` check already uses, and is untouched by D-SLM3965 (which concerns
-	// only the new PERSISTENT-liveness guards below, M2's `live_adapters` and S2's
-	// `bound_sequences`). Remedy: drain the in-flight sequence (`sslm_gpu_ready` to Idle) and
-	// retry -- costs the caller nothing.
-	if (model->submitted_sequences > 0) {
+	// T-2243 (C1, design plan Sec8/Sec10 Phase 2 C1, D-SLM3991), scope corrected by review
+	// finding 2 (D-SLM4113): a sibling sequence with an unfenced, in-flight submission has
+	// already recorded a command list against `harness::GetDevice()`'s process-global, single
+	// command allocator/list and has not yet fenced -- restoring a fresh sequence proceeds to
+	// allocate and upload a NEW K/V buffer against the identical device without waiting for
+	// that fence, a real ordering hazard on the shared device/command-queue state. The hazard is
+	// process-global, not per-model: `model->submitted_sequences > 0` alone missed a sibling in
+	// flight on a DIFFERENT model or a different context, which reaches the identical
+	// `dev.alloc->Reset()`/`dev.list->Reset(...)` (superslm_gpu.cpp `:3620-3628`) just the same.
+	// `g_process_wide_submitted_sequences` is the scoped-correctly count -- see its own comment.
+	// Genuinely transient (drains the instant the in-flight sequence's own fence signals):
+	// `SSLM_BUSY` is the correct disposition here, the same Busy-precedence shape
+	// `sslm_gpu_model_unmap`'s own `submitted_sequences` check already uses, and is untouched by
+	// D-SLM3965 (which concerns only the new PERSISTENT-liveness guards below, M2's
+	// `live_adapters` and S2's `bound_sequences`). Remedy: drain the in-flight sequence
+	// (`sslm_gpu_ready` to Idle) and retry -- costs the caller nothing.
+	if (g_process_wide_submitted_sequences > 0) {
 		return SSLM_BUSY;
 	}
 	// Design Sec4.2/Sec21 (T-2114 N1, corrected 2026-08-15, routing
@@ -2529,6 +2581,9 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		SubmittedWindowScopeGuard(SslmGpuSequenceHandle* s, SslmGpuModelHandle* m) : seq(s), model(m) {
 			seq->state = superslm_gpu::SslmSequenceGpuState::Submitted;
 			model->submitted_sequences += 1;
+			// T-2243 review finding 2 (D-SLM4113): the process-global twin of the per-model
+			// increment just above -- see g_process_wide_submitted_sequences' own comment.
+			g_process_wide_submitted_sequences += 1;
 			// T-2243 (S2, design plan Sec6.1): the symmetric extension of this window to the
 			// bound adapter, mirroring SubmitOneSequenceDecode's own
 			// `adapter_or_null->submitted_sequences += 1`/`seq->in_flight_adapter = adapter_or_null`
@@ -2542,6 +2597,9 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		~SubmittedWindowScopeGuard() {
 			seq->state = superslm_gpu::SslmSequenceGpuState::Idle;
 			if (model->submitted_sequences > 0) model->submitted_sequences -= 1;
+			// T-2243 review finding 2 (D-SLM4113): the process-global twin of the per-model
+			// decrement just above -- see g_process_wide_submitted_sequences' own comment.
+			if (g_process_wide_submitted_sequences > 0) g_process_wide_submitted_sequences -= 1;
 			if (seq->in_flight_adapter != nullptr) {
 				if (seq->in_flight_adapter->submitted_sequences > 0) {
 					seq->in_flight_adapter->submitted_sequences -= 1;

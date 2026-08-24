@@ -2518,12 +2518,14 @@ SslmForwardStatus RunGreedyDecodeLoop(
 		return SslmForwardStatus::InvalidHiddenCodes;
 	}
 
-	// Caller-ensures `out_tokens_capacity >= max_new_tokens` (header comment,
-	// forward_sites.h) -- a workspace-sizing question this call does not
-	// scope, matching this file's existing caller-ensures convention for
-	// buffer sizes throughout (not runtime-checked, like GemmInt8AccumulateRow's
-	// own `out_acc` sizing).
-	(void)out_tokens_capacity;
+	// T-2243 review finding 6 (D-SLM4113): out_tokens_capacity used to be caller-ensures only
+	// (the `(void)` this comment replaces), the same class of bound `RunGreedyOrDampedGreedyDecodeLoop`
+	// was fixed to enforce as F3 (T-2237, plan Sec10 Phase 1 F3) -- this sibling, declared in the
+	// same installed public header (forward_sites.h) and reachable the identical way, still wrote
+	// every produced token and full logit row past the caller's stated bound, a silent
+	// out-of-bounds write returning Ok. The check sits at the same place F3's does: immediately
+	// before the produced token is appended, so a rejection leaves the caller's output buffers
+	// untouched (the commit loop below only runs after Ok).
 
 	// §9.1: every stop id validated against [0, vocab_size) BEFORE the loop
 	// starts -- checked here, ahead of every prompt token, so neither array
@@ -2606,6 +2608,14 @@ SslmForwardStatus RunGreedyDecodeLoop(
 		if (st != SslmForwardStatus::Ok) return st;
 
 		const int32_t token = ArgmaxLowestIndexTieBreak(logit_row.data(), vocab_size_z);
+
+		// T-2243 review finding 6 (D-SLM4113), mirroring F3's own placement: rejects the exact
+		// moment a write would exceed the caller's stated bound, before either output buffer is
+		// touched. An exact-fit capacity (== the count actually produced) still succeeds -- this
+		// is `>=`, never `>`.
+		if (produced_tokens.size() >= out_tokens_capacity) {
+			return SslmForwardStatus::OutputCapacityExceeded;
+		}
 
 		// §9.1: the produced token is appended BEFORE the stop-id test, so a
 		// matched stop token is present in the output and in both digests.

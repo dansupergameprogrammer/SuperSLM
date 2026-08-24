@@ -1121,9 +1121,12 @@ enum class SslmDecodeStopReason {
 // attempt).
 //
 // `out_tokens`/`out_logit_rows` have `out_tokens_capacity` (rows, for the
-// latter) elements -- caller-ensures `out_tokens_capacity >= max_new_tokens`
-// (a workspace-sizing question this call does not scope, matching this
-// file's existing caller-ensures convention for buffer sizes throughout).
+// latter) elements. T-2243 review finding 6 (D-SLM4113): enforced, not
+// caller-ensures -- mirrors the sibling `RunGreedyOrDampedGreedyDecodeLoop`'s
+// own F3 fix (T-2237). The generation loop rejects with
+// `OutputCapacityExceeded` before either output buffer is touched the moment
+// the next produced token would not fit; `out_tokens_capacity >= max_new_tokens`
+// no longer needs to hold for correctness, only for every token to be kept.
 // This function performs no per-layer WGT1/KVC1-by-name resolution of its
 // own (LayerWeights' own header comment); `embed_weights`/`head_weights` are
 // the same kind of raw, caller-resolved pointer EmbedEntry/LogitsSite above

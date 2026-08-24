@@ -86,9 +86,16 @@ class TokenizerTables:
         # merge rank lookup for the reference encoder
         self._rank = {(a, b): i for i, (a, b, _) in enumerate(self.merge_triples)}
         self._merged = {(a, b): m for a, b, m in self.merge_triples}
-        # special tokens, longest-content first so overlapping specials match greedily
+        # special tokens, longest-content first so overlapping specials match greedily.
+        # T-2243 review finding 11 (D-SLM4113): sorted by ENCODED BYTE length, not Python
+        # character count -- the reader (src/tokenizer.cpp) validates the stored order against
+        # byte length, so a non-ASCII special (where character count and UTF-8 byte length
+        # diverge) used to be written in an order the reader could reject as "not stored
+        # longest-content-first" even though every special was in fact written longest-first by
+        # the writer's own intended invariant. Latent on every artifact shipped so far (every
+        # special observed in the field is ASCII, where the two measures agree).
         self.specials = sorted(((x["content"], x["id"]) for x in self.added),
-                               key=lambda kv: len(kv[0]), reverse=True)
+                               key=lambda kv: len(kv[0].encode("utf-8")), reverse=True)
         self.special_ids = {c: i for c, i in self.specials}
         # id -> raw bytes (for decode): the byte-level chars mapped back to bytes
         max_id = max(max(self.vocab.values()), max((x["id"] for x in self.added), default=0))

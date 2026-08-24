@@ -6,7 +6,7 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [1.2.1] - 2026-08-23
 
-Eleven correctness items closed against 1.2.0, red-first (`Claude/Plans/SuperSLM_1p2p1_Plan.md`
+Twelve correctness items closed against 1.2.0, red-first (`Claude/Plans/SuperSLM_1p2p1_Plan.md`
 plan of record; test design `Claude/Curie/t2243-1p2p1-red-suite-2026-08-22.md`). Four items priced
 in the same review (S1, M1, S3, a perf-footprint item T-2236) are deferred to a later release —
 see that plan's own deferral table; they carry no line here.
@@ -28,6 +28,10 @@ see that plan's own deferral table; they carry no line here.
 - **The damped-greedy forward loop now enforces `out_tokens_capacity` before every token/logit-row
   write**, rejecting an undersized caller buffer (`SSLM_INVALID_ARGUMENT`) instead of writing past
   it — closes a memory-safety hole reproducible under ASan.
+- **`RunGreedyDecodeLoop` (the plain-greedy sibling of the loop above) now enforces the same
+  `out_tokens_capacity` bound**, closing the identical undersized-buffer hole on its own call
+  path. No live overflow existed in any first-party caller, all of which already size the buffer
+  to `max_new_tokens`; closed as the root class rather than as an active defect.
 - **A non-DGC1 (greedy-only) artifact's workspace no longer grows unconditionally.** The
   `damped_indices` scratch region is now reserved only when the mapped model actually carries the
   damped-greedy feature — restores the pre-1.2.0 workspace-sizing formula for every caller that
@@ -70,9 +74,12 @@ see that plan's own deferral table; they carry no line here.
   still holds a bind to that adapter, via the new bind verb above). Both are persistent-liveness
   conditions — they hold until the caller explicitly unmaps/unbinds, never draining on their own —
   distinct from the existing transient `SSLM_BUSY`.
-- **`anti_lm_max_order` now has a ceiling of 82** (`ValidateDampedGreedyParams`); `83` and above
-  are rejected `SSLM_INVALID_ARGUMENT`. Derived from the shipped fixed-point recurrence
-  (`kBetaQ15`) as the last order whose contribution does not underflow to zero.
+- **`anti_lm_max_order` now has a ceiling of 82**, enforced on both the caller-supplied-params
+  path (`ValidateDampedGreedyParams`) and `sslm_seq_restore`'s blob path; `83` and above are
+  rejected `SSLM_INVALID_ARGUMENT` on either. Derived from the shipped fixed-point recurrence
+  (`kBetaQ15`) as the last order whose contribution does not underflow to zero — a blob-format
+  constraint as much as a caller-params one, since `sslm_seq_restore` reconstructs the identical
+  object from an untrusted 4-byte field.
 - **Retroactive disclosure (1.2.0):** the workspace-region growth this release now makes
   conditional on `damped_greedy_available` was, in 1.2.0, unconditional for every caller and was
   not disclosed as a narrowing at the time. 1.2.1 restores the pre-1.2 sizing for non-DGC1
@@ -89,12 +96,12 @@ see that plan's own deferral table; they carry no line here.
   1.2.0's own `SSB3`/`SSB2` compatibility promise. `sslm_seq_state_size`'s upper bound grows by 4
   bytes (the new field) to 128.
 - **New `sslm_status` member `SSLM_RESTORE_RESIDUAL_LOST`, appended last, no existing value
-  moved.** `sslm_seq_restore` now returns it for a legacy `SSB3` blob in the one state the 1.2.0
-  defect above could produce (`layer_index == 0 && context_length > 0` with no pending-embed
-  token saved) — the lost residual cannot be recovered, since it was never written, but the caller
-  now gets a loud, diagnosable failure instead of a silently wrong restore. Scoped to `SSB3` only;
-  `SSB2` shares the same underlying defect for this state and is unaffected by this release, and
-  the current `SSB4` format never produces this state at all.
+  moved.** `sslm_seq_restore` now returns it for a legacy `SSB3` **or `SSB2`** blob in the one
+  state the 1.2.0 defect above could produce (`layer_index == 0 && context_length > 0` with no
+  pending-embed token saved) — the lost residual cannot be recovered, since it was never written,
+  but the caller now gets a loud, diagnosable failure instead of a silently wrong restore. `SSB2`
+  carries the identical defect at the identical field offsets and is extended in this release
+  (D-SLM4114); the current `SSB4` format never produces this state at all.
 
 ## [1.2.0] - 2026-08-21
 

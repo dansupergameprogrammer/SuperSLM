@@ -86,18 +86,21 @@ Calls against **different** sequence handles are safe to make from
 different threads concurrently. Any call that submits GPU work — either
 decode call, `sslm_gpu_ready` with `block` set, or `sslm_gpu_seq_restore`
 (which uploads the restored sequence's K/V state to a fresh device
-buffer, and refuses `Busy` while any sibling sequence on the same model
-has unfenced in-flight work) — must be externally serialized by the
-caller relative to every other GPU-submitting call on the same context;
-the API does not build an internal queue lock. Two threads driving the
-*same* sequence handle concurrently is not a supported use.
+buffer, and refuses `Busy` while *any* sequence anywhere in the process
+— any model, any context — has unfenced in-flight work, because the
+decode dispatch path shares one process-global command allocator/list
+regardless of which model or context submitted it) — must be externally
+serialized by the caller relative to every other GPU-submitting call on
+the same context; the API does not build an internal queue lock. Two
+threads driving the *same* sequence handle concurrently is not a
+supported use.
 
 ### Status causes
 
 `SslmGpuStatus` distinguishes: a dispatch budget too small to make
 progress; the device busy with in-flight work on the handle you're
-releasing, or with a sibling sequence's unfenced in-flight work when
-you're restoring against the same model; a context or model with handles
+releasing, or with any unfenced in-flight work elsewhere in the process
+when you're restoring; a context or model with handles
 still live; a model with an adapter still mapped against it
 (`SSLM_MODEL_HAS_LIVE_ADAPTERS`) or an adapter with a sequence still
 bound to it (`SSLM_ADAPTER_HAS_BOUND_SEQUENCES`) — both persistent
