@@ -75,22 +75,46 @@ void AntiLmPenalize(const AntiLmState* state, const int32_t* candidates, std::si
                      int64_t* out_p_omega_q15);
 
 // Bytes currently retained across every order's count table -- grows with the number of
-// distinct n-grams observed, never with the number of AntiLmUpdate calls. Recalibrated once
-// (2026-08-20, Poirot S3: previously read 3.0-5.9x low) and its residual STATED HONESTLY
-// (fold 21, plan Sec9 dim1, S9 of `Claude/Poirot/927bbda-t2199-confirmation.md`): this
-// reading is a LOWER BOUND, not a magnitude pin -- it still reads ~2.9x low at this design's
-// own default max_order=3 against measured process private-bytes deltas -- itself a GENEROUS
-// upper-bound denominator per the source measurement, so the true ratio may be lower
-// (a stable ratio: 1.50-1.81x
-// at max_order=1, ~2.9-3.1x at max_order=3, ~2.8-3.1x at max_order=5), because the
-// recalibration reasoned the constants forward from an allocator model rather than fitting
-// them to the measured population. A caller pricing this instrument (plan Sec8) rounds using
-// the ~2.9x figure, not the raw reading, until the constants are fit rather than reasoned
-// toward (owed, not this build's own scope). Deliberately EXCLUDES the per-sequence
-// generated-token history (grows by one token per AntiLmUpdate call regardless of repeats,
-// unlike the table this reports on) -- a caller pricing the anti-LM's TOTAL footprint adds
-// `generation_length_so_far * sizeof(int32_t)` directly; see the implementation's own comment
-// for why folding it into this figure would break this suite's own memory-growth cell.
+// distinct n-grams observed, never with the number of AntiLmUpdate calls. This reading is a
+// LOWER BOUND, not a magnitude pin: it counts one fixed accounting unit per newly-discovered
+// distinct context and per newly-discovered distinct candidate token (kContextBaseOverhead,
+// kContextPerTokenOverhead, kCandidateOverhead, implementation), not the containers' own
+// real, per-element byte cost.
+//
+// The 2026-08-20 calibration this comment previously carried ("~2.9x low" at max_order=3,
+// a stable per-order table) was fit to a std::unordered_map-shaped model and RETRACTED,
+// measured-false, once the count/context tables became the open-addressing
+// GrowableIntMap/GrowableContextMap (T-2296, this header's own tables_/counts types) --
+// T-2299 measured the true understatement at 9.05x (max_order=3) and 15.50x (max_order=5)
+// against that container, before its own empty-slot eager-allocation defect was fixed
+// (D-SLM4759/D-SLM4760).
+//
+// MEASURED (T-2302, 2026-08-26, Claude/Brunel/t2302-footprint-probe/, T-2299's own method --
+// global operator new accounting, base vs. new, over the real
+// AntiLmCreate/AntiLmUpdate/AntiLmPenalize surface), AFTER GrowableIntMap's lazy-allocation
+// fix (D-SLM4763, this file's own tables_/counts implementation): the understatement is NOT
+// a stable per-order ratio. It is workload-dependent -- a wider vocabulary spreads the same
+// live-bucket cost over more distinct candidate tokens (shrinking the ratio); a longer
+// generation at a fixed vocabulary saturates each context's own inner table further (growing
+// it). Measured ranges, by max_order, sampled over vocab in {4096, 8192, 16384} and
+// generation length in {20000, 50000} tokens (six cells, not exhaustive of the workload
+// space):
+//   max_order=1: 1.31x-2.61x low
+//   max_order=3: 3.85x-4.98x low
+//   max_order=5: 4.54x-5.60x low
+// A caller pricing this instrument does NOT round using a single fixed multiplier -- these
+// ranges were sampled at three vocab sizes and two generation lengths, and a workload outside
+// that sample can shift the true ratio further in either direction. The only claim this
+// reading supports unconditionally is its own name: a LOWER BOUND. A caller needing a number
+// closer to its own true footprint re-runs Claude/Brunel/t2302-footprint-probe/'s method at
+// its own actual vocab size and expected generation length, rather than applying an
+// interpolated multiplier measured on a different workload.
+//
+// Deliberately EXCLUDES the per-sequence generated-token history (grows by one token per
+// AntiLmUpdate call regardless of repeats, unlike the table this reports on) -- a caller
+// pricing the anti-LM's TOTAL footprint adds `generation_length_so_far * sizeof(int32_t)`
+// directly; see the implementation's own comment for why folding it into this figure would
+// break this suite's own memory-growth cell.
 std::size_t AntiLmRetainedBytes(const AntiLmState* state);
 
 // =====================================================================================

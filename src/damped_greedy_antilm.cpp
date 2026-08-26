@@ -28,25 +28,25 @@ using superslm::detail::ContextView;
 // either; nothing in this file constructs a VecHash or VecEq once tables_'s type changes
 // below.
 
-// Poirot S3, recalibrated 2026-08-20 against measured process-memory deltas (the review's
-// own table: reported figures read 2.97-5.92x low against `PrivateUsage` at max_order in
-// {1,3,5}, most stably ~5.8x at this design's own default max_order=3). The prior constants
-// (32 / 4 / 28 bytes) modeled only the raw key/value payload plus a small guess at node
-// overhead; these model MSVC's own `unordered_map` shape more closely -- each element is a
-// SEPARATE heap allocation (a doubly-linked-list node: ~16 bytes prev/next + ~8 bytes cached
-// hash, plus typical CRT small-allocation bookkeeping ~16 bytes, plus an amortized bucket-
-// array share at load factor ~1, ~8 bytes/element -- summing to ~48 bytes of overhead per
-// element beyond its own key+value payload), and a context key additionally owns a SECOND,
-// separately-allocated heap buffer (the `std::vector<int32_t>` context tuple's own backing
-// array), taxed at the same ~16 bytes of per-allocation bookkeeping. This remains a MODEL,
-// not a byte-exact accounting (real allocator layout is platform- and load-factor-
-// dependent) -- it is now calibrated toward a measured population rather than hand-picked,
-// per `StandardsDocument.md` Sec5.4.
-constexpr std::size_t kNodeOverhead = 48;         // linked-list node + hash cache + CRT
-                                                   // per-allocation bookkeeping + amortized
-                                                   // bucket-array share, per element
-constexpr std::size_t kSeparateAllocOverhead = 16;  // a second heap allocation's own CRT
-                                                     // bookkeeping (the context vector's
+// Poirot S3 (2026-08-20) fit these constants to model MSVC's own `std::unordered_map`
+// shape: a doubly-linked-list node, a cached hash, CRT small-allocation bookkeeping, and an
+// amortized bucket-array share at load factor ~1. T-2296 (2026-08-26) replaced tables_/counts
+// with the open-addressing GrowableContextMap/GrowableIntMap (src/detail/context_hash.h,
+// src/detail/int_hash.h) -- not one clause of that model describes the container these
+// constants now sit beside: an open-addressing slot is inline in one contiguous vector at
+// load factor <= 0.5, with no linked-list node, no cached hash, and no per-element
+// allocation (T-2299, S2). The constants below are UNCHANGED from Poirot's 2026-08-20 values
+// -- they remain a stale, unretired model of a container this file no longer has, kept as a
+// documented LOWER BOUND rather than refit, because refitting them to the real container
+// shape is a separate, not-yet-authorized change to what AntiLmRetainedBytes returns (see the
+// header's own comment for the honest, measured-workload-dependent understatement this
+// produces post-T-2296, T-2302).
+constexpr std::size_t kNodeOverhead = 48;         // stale: linked-list node + hash cache +
+                                                   // CRT bookkeeping + bucket-array share,
+                                                   // per element -- not this file's own
+                                                   // container shape (see comment above)
+constexpr std::size_t kSeparateAllocOverhead = 16;  // stale: a second heap allocation's own
+                                                     // CRT bookkeeping (the context vector's
                                                      // backing buffer)
 constexpr std::size_t kContextBaseOverhead = kNodeOverhead + kSeparateAllocOverhead;  // 64
 constexpr std::size_t kContextPerTokenOverhead = sizeof(int32_t);
@@ -207,13 +207,13 @@ void AntiLmPenalize(const AntiLmState* state, const int32_t* candidates, std::si
 // against this state (this interface has no accessor for it, matching the suite's own
 // declared two-operation surface -- update/penalize -- which this build does not extend).
 //
-// The table-portion residual itself is STATED HONESTLY, not merely "recalibrated" (fold 21,
-// plan Sec9 dim1, S9 of `Claude/Poirot/927bbda-t2199-confirmation.md`): this reading is a
-// LOWER BOUND, still ~2.9x low at this design's own default max_order=3 against measured
-// process-memory deltas -- the recalibration above reasoned the constants forward from an
-// allocator model rather than fitting them to the measured population, which is why the gap
-// narrowed (from ~5.8x) rather than closed. See the production header's own copy of this note
-// for the full per-order ratio table.
+// The table-portion residual itself is STATED HONESTLY, not merely "recalibrated": this
+// reading is a LOWER BOUND, and the gap between it and the real footprint is
+// workload-dependent, not a stable per-order ratio -- MEASURED (T-2302, 2026-08-26, following
+// T-2299's own method) at 1.31x-2.61x low (max_order=1), 3.85x-4.98x low (max_order=3), and
+// 4.54x-5.60x low (max_order=5), across the vocab sizes and generation lengths T-2302 sampled.
+// See the production header's own copy of this note for the full range table and the caller
+// guidance it carries.
 std::size_t AntiLmRetainedBytes(const AntiLmState* state) { return state->retained_bytes_; }
 
 }  // namespace superslm
