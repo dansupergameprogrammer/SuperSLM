@@ -10,7 +10,11 @@ rem 0 = every CHECK in that cell passed; nonzero = at least one CHECK failed (in
 rem "whole cell-group unattemptable" sentinel failure dim6/dim7 add when their __has_include
 rem gate is closed).
 rem
-rem These cells are header-only against src/detail/{int_hash,context_hash}.h -- no engine .cpp
+rem These cells exercise src/detail/{int_hash,context_hash}.h. They are NOT header-only:
+rem BucketCountFor calls the engine out-of-line superslm::Clz64, exactly as the design
+rem specifies, so intmath.cpp must be on the compile line or both cells fail to LINK and the
+rem suite reports a false RED. (T-2297, 2026-08-26: the original list omitted it; the conductor
+rem reproduced 18/18 passing once linked, and fixed the list here.)
 rem source list is linked (contrast tests/t2138-abi-red-suite's own full CPU-core source list):
 rem FixedIntMap/FixedIntSet/GrowableIntSet/GrowableIntMap/GrowableContextMap are templates
 rem defined entirely in those two headers (design Sec3.1/Sec3.5/Sec3.6), so once they exist,
@@ -45,7 +49,7 @@ for %%f in (dim4_shape_red.cpp dim6_determinism_red.cpp dim7_contract_red.cpp di
     set EXTRAFLAGS=
     if "%%f"=="dim7_contract_red.cpp" set EXTRAFLAGS=/DNDEBUG
     cl /nologo /std:c++20 /O2 /W4 /EHsc !EXTRAFLAGS! /I%ENG%\src /I%ENG%\include -I. ^
-        "%%f" /Fo:"obj\\" /Fe:"obj\%%~nf.exe" ^
+        "%%f" "%ENG%\src\intmath.cpp" /Fo:"obj\\" /Fe:"obj\%%~nf.exe" ^
         /link > "obj\%%~nf.log" 2>&1
     findstr /C:"error C" "obj\%%~nf.log" >nul
     if not errorlevel 1 (
