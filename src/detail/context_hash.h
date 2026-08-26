@@ -92,7 +92,15 @@ private:
     }
     void Grow() {
         std::vector<Slot> old = std::move(slots_);
-        uint64_t new_mask = BucketCountFor((live_ + 1) * 2) - 1;
+        // Corrected fold round 26 (D-SLM4767/D-SLM4768), identical defect and identical
+        // fix as GrowableIntMap::Grow() (Sec3.6, full derivation and termination proof
+        // there): BucketCountFor already bakes in the <=50% headroom (Sec3.1); the
+        // pre-fold-26 line here read BucketCountFor((live_+1)*2), doubling an already-
+        // doubled argument (a quadrupling, uncommented at this call site through fold
+        // round 26). live_ is read before the reset two lines down -- still the
+        // pre-Grow() live count -- and this type never erases, so there is no tombstone
+        // term to account for, unlike Sec3.5's GrowableIntSet::Grow().
+        uint64_t new_mask = BucketCountFor(live_ + 1) - 1;
         slots_.assign(new_mask + 1, Slot{});
         mask_ = new_mask;
         live_ = 0;

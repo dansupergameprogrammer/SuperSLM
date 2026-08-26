@@ -379,9 +379,17 @@ private:
 
     void Grow() {
         std::vector<Slot> old = std::move(slots_);
-        uint64_t new_mask = BucketCountFor((live_ + 1) * 2) - 1;  // integer doubling via
-                                                                    // BucketCountFor's own
-                                                                    // bit-shift sizing
+        // Corrected fold round 26 (D-SLM4767/D-SLM4768): BucketCountFor already returns
+        // capacity >= 2*n (Sec3.1) -- the pre-fold-26 line read BucketCountFor((live_+1)*2),
+        // doubling an argument BucketCountFor doubles again internally (a quadrupling, not
+        // the "integer doubling" this line's own pre-fold-26 comment claimed). live_ here is
+        // read before the reset three lines down, so it is still the occupied-only count
+        // (tombstones_ is not added -- Grow()'s own reinsertion loop below drops tombstones,
+        // so the post-Grow() population is exactly the occupied count, not occupied-plus-
+        // tombstones). Full derivation, worked example, and termination proof at Sec3.6's
+        // identical correction to GrowableIntMap::Grow(), below -- same argument, no
+        // tombstone term there since that type never erases.
+        uint64_t new_mask = BucketCountFor(live_ + 1) - 1;
         slots_.assign(new_mask + 1, Slot{});
         mask_ = new_mask;
         live_ = 0; tombstones_ = 0;
@@ -455,13 +463,17 @@ public:
         if (slots_.empty()) {
             // First insert this table has ever received (fold round 25, S1): allocate
             // NOW, sized from the hint recorded at construction -- not from Grow()'s
-            // own (live_+1)*2 doubling formula below, which ignores the hint entirely
-            // and would always produce a 4-slot table regardless of what the caller
-            // asked for. This is the only call to BucketCountFor over pending_hint_'s
-            // own value; every allocation after this one goes through Grow(), exactly
-            // as before this fold -- only the TIMING of the first allocation changed,
-            // not its size (BucketCountFor(8) = 16, identical to the pre-fold-25
-            // constructor's own eager result) or the growth curve after it.
+            // own BucketCountFor(live_+1) formula below (fold round 26 correction,
+            // D-SLM4767/D-SLM4768 -- pre-fold-26 this line's own formula doubled an
+            // already-doubled argument), which ignores the hint entirely and, at
+            // live_ == 0, sizes for a population of 1 (BucketCountFor(1) = 2 slots)
+            // regardless of what the caller's hint asked for. This is the only call to
+            // BucketCountFor over pending_hint_'s own value; every allocation after this
+            // one goes through Grow(), exactly as before this fold -- only the TIMING of
+            // the first allocation changed, not its size (BucketCountFor(8) = 16, identical
+            // to the pre-fold-25 constructor's own eager result) or the growth curve after
+            // it (fold round 26 corrected that curve's own multiplier -- see Grow(), below
+            // -- this branch itself is unaffected, since it never calls Grow()).
             mask_ = BucketCountFor(pending_hint_) - 1;
             slots_.assign(mask_ + 1, Slot{});
         } else if ((live_ + 1) * 2 > slots_.size()) {
@@ -506,16 +518,18 @@ private:
     void Grow() {
         // Precondition (fold round 25, S1): slots_ is never empty on entry. operator[]
         // above routes the slots_.empty() case to the allocate-from-hint branch and
-        // never falls through to this function in that state, so Grow()'s own doubling
-        // formula ((live_+1)*2) is never asked to size the table's FIRST allocation --
-        // it only ever re-sizes an already-populated one, exactly its pre-fold-25 role.
+        // never falls through to this function in that state, so Grow()'s own sizing
+        // formula (BucketCountFor(live_+1), fold round 26 correction below) is never
+        // asked to size the table's FIRST allocation -- it only ever re-sizes an
+        // already-populated one, exactly its pre-fold-25 role.
         assert(!slots_.empty());
         std::vector<Slot> old = std::move(slots_);
-        uint64_t new_mask = BucketCountFor((live_ + 1) * 2) - 1;  // integer doubling,
-        slots_.assign(new_mask + 1, Slot{});                       // BucketCountFor's
-        mask_ = new_mask;                                          // own bit-shift
-        live_ = 0;                                                 // sizing
+        uint64_t new_mask = BucketCountFor(live_ + 1) - 1;  // corrected fold round 26
+        slots_.assign(new_mask + 1, Slot{});                 // (D-SLM4767/D-SLM4768):
+        mask_ = new_mask;                                    // BucketCountFor already
+        live_ = 0;                                           // bakes in the headroom --
         for (auto& s : old) if (s.occupied) (*this)[s.key] = std::move(s.value);
+        // see the derivation immediately below this code block.
     }
     uint64_t pending_hint_;    // fold round 25, S1: the hint, held until the first
                                // Insert allocates from it; unused thereafter (Grow()'s
