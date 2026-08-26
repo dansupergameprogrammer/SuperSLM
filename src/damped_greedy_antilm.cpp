@@ -14,49 +14,19 @@
 #include <vector>
 
 #include "superslm/intmath.h"
+#include "detail/context_hash.h"
 
 namespace superslm {
 
 namespace {
 
-struct ContextView {
-	const int32_t* data;
-	std::size_t size;
-};
-
-// Transparent hash/equality let hot-path lookups use a non-owning suffix view. A vector is
-// allocated only when a genuinely new context becomes persistent table state.
-struct VecHash {
-	using is_transparent = void;
-	std::size_t operator()(ContextView v) const noexcept {
-		std::size_t h = 1469598103934665603ull;
-		for (std::size_t i = 0; i < v.size; ++i) {
-			h ^= static_cast<std::size_t>(static_cast<uint32_t>(v.data[i]));
-			h *= 1099511628211ull;
-		}
-		return h;
-	}
-	std::size_t operator()(const std::vector<int32_t>& v) const noexcept {
-		return (*this)(ContextView{v.data(), v.size()});
-	}
-};
-
-struct VecEq {
-	using is_transparent = void;
-	bool operator()(ContextView a, ContextView b) const noexcept {
-		if (a.size != b.size) return false;
-		return a.size == 0 || std::equal(a.data, a.data + a.size, b.data);
-	}
-	bool operator()(const std::vector<int32_t>& a, const std::vector<int32_t>& b) const noexcept {
-		return (*this)(ContextView{a.data(), a.size()}, ContextView{b.data(), b.size()});
-	}
-	bool operator()(const std::vector<int32_t>& a, ContextView b) const noexcept {
-		return (*this)(ContextView{a.data(), a.size()}, b);
-	}
-	bool operator()(ContextView a, const std::vector<int32_t>& b) const noexcept {
-		return (*this)(a, ContextView{b.data(), b.size()});
-	}
-};
+// ContextView RETIRED -- aliased to the design's own type (src/detail/context_hash.h),
+// so every existing local-variable construction below (`ctx_view`, `ctx`) needs no edit.
+using superslm::detail::ContextView;
+// VecHash/VecEq RETIRED -- deleted outright. GrowableContextMap (src/detail/context_hash.h)
+// computes HashContext/Eq internally and takes no policy-class template argument for
+// either; nothing in this file constructs a VecHash or VecEq once tables_'s type changes
+// below.
 
 // Poirot S3, recalibrated 2026-08-20 against measured process-memory deltas (the review's
 // own table: reported figures read 2.97-5.92x low against `PrivateUsage` at max_order in
@@ -93,14 +63,14 @@ public:
 	int max_order() const { return max_order_; }
 
 	struct ContextEntry {
-		std::unordered_map<int32_t, int64_t> counts;
+		superslm::detail::GrowableIntMap<int32_t, int64_t, superslm::detail::MixKeyS32> counts;
 		int64_t total = 0;
 	};
 
 	// tables_[i-1] holds order i's context -> {candidate counts, total}. Exact-key lookup
 	// only: every read below is a direct `find`, never a traversal of the map's own bucket
 	// order (Sec7.2's own determinism argument).
-	std::vector<std::unordered_map<std::vector<int32_t>, ContextEntry, VecHash, VecEq>> tables_;
+	std::vector<superslm::detail::GrowableContextMap<ContextEntry>> tables_;
 	std::vector<int32_t> history_;
 	std::size_t retained_bytes_ = 0;
 
@@ -135,18 +105,12 @@ void AntiLmUpdate(AntiLmState* state, int32_t token) {
 		const ContextView ctx_view{ctx_len ? state->history_.data() + hist_size - ctx_len : nullptr,
 		                              ctx_len};
 		auto& table = state->tables_[static_cast<size_t>(order - 1)];
-		auto it = table.find(ctx_view);
-		if (it == table.end()) {
-			std::vector<int32_t> persistent_ctx(
-			    state->history_.end() - static_cast<long>(ctx_len), state->history_.end());
-			state->retained_bytes_ +=
-			    kContextBaseOverhead + persistent_ctx.size() * kContextPerTokenOverhead;
-			it = table.emplace(std::move(persistent_ctx), AntiLmState::ContextEntry{}).first;
+		AntiLmState::ContextEntry* existing = table.Find(ctx_view);
+		if (!existing) {
+			state->retained_bytes_ += kContextBaseOverhead + ctx_view.size * kContextPerTokenOverhead;
 		}
-		auto& entry = it->second;
-		if (entry.counts.find(token) == entry.counts.end()) {
-			state->retained_bytes_ += kCandidateOverhead;
-		}
+		AntiLmState::ContextEntry& entry = existing ? *existing : table.FindOrEmplace(ctx_view);
+		if (!entry.counts.Find(token)) { state->retained_bytes_ += kCandidateOverhead; }
 		entry.counts[token] += 1;
 		entry.total += 1;
 	}
@@ -185,8 +149,8 @@ void AntiLmPenalize(const AntiLmState* state, const int32_t* candidates, std::si
 		const ContextView ctx{ctx_len ? state->history_.data() + hist_size - ctx_len : nullptr,
 		                      ctx_len};
 		const auto& table = state->tables_[static_cast<size_t>(order - 1)];
-		auto it = table.find(ctx);
-		if (it == table.end()) continue;  // context never observed -- order excluded, not zeroed
+		const AntiLmState::ContextEntry* entry = table.Find(ctx);
+		if (!entry) continue;  // context never observed -- order excluded, not zeroed
 		++active_count;
 		raw_sum += Q15Pow(kBetaQ15, max_order - order);
 	}
@@ -205,8 +169,8 @@ void AntiLmPenalize(const AntiLmState* state, const int32_t* candidates, std::si
 		const ContextView ctx{ctx_len ? state->history_.data() + hist_size - ctx_len : nullptr,
 		                      ctx_len};
 		const auto& table = state->tables_[static_cast<size_t>(order - 1)];
-		const auto it = table.find(ctx);
-		if (it == table.end()) continue;
+		const AntiLmState::ContextEntry* entry = table.Find(ctx);
+		if (!entry) continue;
 		++active_index;
 		const int64_t normalized_weight =
 		    (active_index == active_count)
@@ -214,9 +178,9 @@ void AntiLmPenalize(const AntiLmState* state, const int32_t* candidates, std::si
 		        : ((Q15Pow(kBetaQ15, max_order - order) << kProbFracBits) / raw_sum);
 		normalized_sum += normalized_weight;
 		for (std::size_t c = 0; c < k; ++c) {
-			const auto found = it->second.counts.find(candidates[c]);
-			const int64_t count = (found == it->second.counts.end()) ? 0 : found->second;
-			const int64_t ratio_q15 = (count << kProbFracBits) / it->second.total;
+			const int64_t* found = entry->counts.Find(candidates[c]);
+			const int64_t count = found ? *found : 0;
+			const int64_t ratio_q15 = (count << kProbFracBits) / entry->total;
 			out_p_omega_q15[c] += (normalized_weight * ratio_q15) >> kProbFracBits;
 		}
 	}
