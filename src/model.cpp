@@ -23,6 +23,8 @@
 #include <string>
 #include <unordered_set>
 
+#include "detail/int_hash.h"
+
 namespace superslm {
 
 namespace {
@@ -271,8 +273,8 @@ SslmModelStatus SslmAmplifyingFoldScaleViewAccess<Kind>::ParseImpl(const SslmSec
 	entries.reserve(tensor_count);
 	std::vector<std::pair<uint64_t, uint64_t>> ranges;
 	ranges.reserve(tensor_count);
-	std::unordered_set<std::string_view> seen_names;
-	seen_names.reserve(tensor_count);
+	superslm::detail::FixedIntSet<std::string_view, superslm::detail::HashSV>
+	    seen_names(tensor_count);
 
 	for (uint32_t i = 0; i < tensor_count; ++i) {
 		const uint8_t* d = base + kManifestHeaderBytes + uint64_t(i) * kTensorDescBytes;
@@ -290,7 +292,7 @@ SslmModelStatus SslmAmplifyingFoldScaleViewAccess<Kind>::ParseImpl(const SslmSec
 		if (uint64_t(name_off) + name_len > name_blob_len)
 			return Reject(SslmModelStatus::BadTensorName, err, "entry name range outside the name blob");
 		std::string_view name(reinterpret_cast<const char*>(base + name_blob_off + name_off), name_len);
-		if (!seen_names.insert(name).second)
+		if (!seen_names.InsertUnique(name))
 			return Reject(SslmModelStatus::DuplicateTensorName, err, "duplicate entry name");
 
 		if (rank == 0 || rank > kMaxTensorRank)
@@ -530,8 +532,8 @@ SslmModelStatus SslmTensorManifestAccess::ParseImpl(const SslmSectionView& secti
 	std::vector<std::pair<uint64_t, uint64_t>> ranges;
 	ranges.reserve(tensor_count);
 	// Names seen so far, for O(1) duplicate detection (S2a-1: was an O(n^2) scan).
-	std::unordered_set<std::string_view> seen_names;
-	seen_names.reserve(tensor_count);
+	superslm::detail::FixedIntSet<std::string_view, superslm::detail::HashSV>
+	    seen_names(tensor_count);
 
 	for (uint32_t i = 0; i < tensor_count; ++i) {
 		const uint8_t* d = base + kManifestHeaderBytes + uint64_t(i) * kTensorDescBytes;
@@ -550,7 +552,7 @@ SslmModelStatus SslmTensorManifestAccess::ParseImpl(const SslmSectionView& secti
 		if (uint64_t(name_off) + name_len > name_blob_len)
 			return Reject(SslmModelStatus::BadTensorName, err, "tensor name range outside the name blob");
 		std::string_view name(reinterpret_cast<const char*>(base + name_blob_off + name_off), name_len);
-		if (!seen_names.insert(name).second)
+		if (!seen_names.InsertUnique(name))
 			return Reject(SslmModelStatus::DuplicateTensorName, err, "duplicate tensor name");
 
 		// Rank.
@@ -681,8 +683,8 @@ SslmModelStatus SslmKeyedConstantsAccess::ParseImpl(const SslmSectionView& secti
 	// --- Entries (all descriptor/value/name bytes are now known in-bounds) ---
 	std::vector<SslmConstantEntry> entries;
 	entries.reserve(entry_count);
-	std::unordered_set<std::string_view> seen_names;
-	seen_names.reserve(entry_count);
+	superslm::detail::FixedIntSet<std::string_view, superslm::detail::HashSV>
+	    seen_names(entry_count);
 
 	for (uint32_t i = 0; i < entry_count; ++i) {
 		const uint8_t* d = base + kConstantHeaderBytes + uint64_t(i) * kConstantDescBytes;
@@ -694,7 +696,7 @@ SslmModelStatus SslmKeyedConstantsAccess::ParseImpl(const SslmSectionView& secti
 		if (uint64_t(name_off) + name_len > name_blob_len)
 			return Reject(SslmModelStatus::BadEntryName, err, "entry name range outside the name blob");
 		std::string_view name(reinterpret_cast<const char*>(base + name_blob_off + name_off), name_len);
-		if (!seen_names.insert(name).second)
+		if (!seen_names.InsertUnique(name))
 			return Reject(SslmModelStatus::DuplicateEntryName, err, "duplicate entry name");
 
 		SslmConstantEntry e;
