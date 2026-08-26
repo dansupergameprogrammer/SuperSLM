@@ -420,16 +420,53 @@ public:
     // `explicit` here changes no ABI and no behavior -- it only widens which
     // initialization forms the compiler accepts for a type nothing outside this file
     // constructs.
+    //
+    // LAZY (fold round 25, T-2300/D-SLM4763, S1). Every prior constructor allocated
+    // `slots_` unconditionally in its own member-initializer list -- the same shape
+    // GrowableIntSet's own constructor still uses (unaffected; GrowableIntSet is not
+    // touched by this fix). Because ContextEntry (damped_greedy_antilm.cpp) holds a
+    // GrowableIntMap BY VALUE, and GrowableContextMap<ContextEntry>'s own Slot holds
+    // its Value BY VALUE, every slot of the outer GrowableContextMap<ContextEntry> --
+    // occupied AND empty, at least half of every table by the outer type's own <= 50%
+    // load invariant -- default-constructed a live ContextEntry, which
+    // default-constructed a live, 16-slot-allocated GrowableIntMap: every EMPTY slot of
+    // the outer table paid a real heap allocation nothing had ever looked up. The
+    // remedy makes ONLY this type lazy -- the outer GrowableContextMap is not touched
+    // (a separate, larger change to its own construction, not taken here), and
+    // ContextEntry's own `counts` member is not indirected (a pointer/unique_ptr member
+    // would also remove the per-empty-slot cost, but changes ContextEntry's layout and
+    // every aggregate-init call site above; not adopted unless this narrower fix proves
+    // insufficient). `pending_hint_` records the hint and nothing allocates until the
+    // first Insert -- via operator[] below, the only mutator this type has.
     GrowableIntMap(uint64_t initial_capacity_hint = 8)
-        : mask_(BucketCountFor(initial_capacity_hint ? initial_capacity_hint : 1) - 1),
-          slots_(mask_ + 1) {}
+        : pending_hint_(initial_capacity_hint ? initial_capacity_hint : 1) {}
+    // mask_ = 0, live_ = 0, slots_ = {} (default member-initializers below) is the state
+    // a default-constructed table is in until its first Insert -- a state this type
+    // never had before this fold, since every prior constructor allocated
+    // unconditionally. Get-or-default access has no natural point to defer TO other
+    // than the first insert itself, so the deferred state is recognized structurally
+    // (`slots_.empty()`) rather than by a second boolean flag.
 
     // Returns a reference to k's stored value, default-constructing Value{} and
     // inserting if k is not yet present -- exactly std::unordered_map::operator[]'s
     // own semantics, which is what entry.counts[token] += 1 (damped_greedy_antilm.cpp)
     // needs.
     Value& operator[](Key k) {
-        if ((live_ + 1) * 2 > slots_.size()) Grow();
+        if (slots_.empty()) {
+            // First insert this table has ever received (fold round 25, S1): allocate
+            // NOW, sized from the hint recorded at construction -- not from Grow()'s
+            // own (live_+1)*2 doubling formula below, which ignores the hint entirely
+            // and would always produce a 4-slot table regardless of what the caller
+            // asked for. This is the only call to BucketCountFor over pending_hint_'s
+            // own value; every allocation after this one goes through Grow(), exactly
+            // as before this fold -- only the TIMING of the first allocation changed,
+            // not its size (BucketCountFor(8) = 16, identical to the pre-fold-25
+            // constructor's own eager result) or the growth curve after it.
+            mask_ = BucketCountFor(pending_hint_) - 1;
+            slots_.assign(mask_ + 1, Slot{});
+        } else if ((live_ + 1) * 2 > slots_.size()) {
+            Grow();
+        }
         uint64_t i = Hash(k) & mask_;
         for (uint64_t steps = 0; steps <= mask_; ++steps) {
             if (!slots_[i].occupied) {
@@ -440,11 +477,21 @@ public:
             if (slots_[i].key == k) return slots_[i].value;
             i = (i + 1) & mask_;
         }
-        std::abort();  // unreachable: Grow() below always keeps an empty slot on the probe path
+        std::abort();  // unreachable: the allocate-on-first-insert branch and Grow()
+                        // above always leave at least one empty slot on the probe path
     }
 
     // Non-mutating lookup -- mirrors entry.counts.find(token) != entry.counts.end().
+    // A table that has never received an Insert (slots_.empty(), fold round 25, S1) is
+    // a miss BY CONSTRUCTION and returns immediately, before touching mask_/slots_ at
+    // all. This is the one place the lazy state is a genuinely new condition this
+    // method did not have to handle before this fold: falling through to the probe
+    // loop at mask_ == 0 with slots_ of size 0 would index slots_[Hash(k) & 0] into a
+    // zero-length vector -- undefined behavior, not the correct "not present" answer --
+    // rather than the miss this method has always correctly returned for every OTHER
+    // unrepresented key.
     const Value* Find(Key k) const {
+        if (slots_.empty()) return nullptr;
         uint64_t i = Hash(k) & mask_;
         for (uint64_t steps = 0; steps <= mask_; ++steps) {
             if (!slots_[i].occupied) return nullptr;
@@ -457,6 +504,12 @@ public:
 private:
     struct Slot { Key key{}; Value value{}; bool occupied = false; };
     void Grow() {
+        // Precondition (fold round 25, S1): slots_ is never empty on entry. operator[]
+        // above routes the slots_.empty() case to the allocate-from-hint branch and
+        // never falls through to this function in that state, so Grow()'s own doubling
+        // formula ((live_+1)*2) is never asked to size the table's FIRST allocation --
+        // it only ever re-sizes an already-populated one, exactly its pre-fold-25 role.
+        assert(!slots_.empty());
         std::vector<Slot> old = std::move(slots_);
         uint64_t new_mask = BucketCountFor((live_ + 1) * 2) - 1;  // integer doubling,
         slots_.assign(new_mask + 1, Slot{});                       // BucketCountFor's
@@ -464,9 +517,17 @@ private:
         live_ = 0;                                                 // sizing
         for (auto& s : old) if (s.occupied) (*this)[s.key] = std::move(s.value);
     }
-    uint64_t mask_;
+    uint64_t pending_hint_;    // fold round 25, S1: the hint, held until the first
+                               // Insert allocates from it; unused thereafter (Grow()'s
+                               // own doubling formula does not consult it, unchanged
+                               // from every prior fold -- only the FIRST allocation
+                               // ever honored the hint, before and after this fold)
+    uint64_t mask_ = 0;        // fold round 25: was always constructor-set before this
+                               // fold; 0 is now a real, reachable pre-first-insert state
     uint64_t live_ = 0;
-    std::vector<Slot> slots_;
+    std::vector<Slot> slots_;  // fold round 25: was always constructor-allocated before
+                               // this fold; empty is now a real, reachable pre-first-
+                               // insert state, checked explicitly by every method above
 };
 
 }  // namespace superslm::detail
