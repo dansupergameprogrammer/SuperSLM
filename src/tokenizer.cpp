@@ -8,6 +8,8 @@
 #include <utility>
 #include <vector>
 
+#include "detail/int_hash.h"
+
 namespace superslm {
 namespace {
 
@@ -159,22 +161,22 @@ struct TokenizerView::Impl {
 	const uint8_t* vocab_blob = nullptr;
 	uint32_t vocab_count = 0;
 	// (a<<32|b) -> (rank, merged_id)
-	std::unordered_map<uint64_t, std::pair<int32_t, int32_t>> merges;
+	superslm::detail::FixedIntMap<uint64_t, std::pair<int32_t, int32_t>, superslm::detail::MixKey64> merges;
 	std::vector<std::pair<std::string, int32_t>> specials; // longest-content-first
 
 	// Unicode (copied from the UnicodeTables section; ~55 KB).
 	std::vector<Range> letter, number, space;
-	std::unordered_map<uint32_t, uint8_t> ccc_map;
-	std::unordered_map<uint32_t, std::vector<uint32_t>> decomp;
-	std::unordered_map<uint64_t, uint32_t> compose;
+	superslm::detail::FixedIntMap<uint32_t, uint8_t, superslm::detail::MixKey32> ccc_map;
+	superslm::detail::FixedIntMap<uint32_t, std::vector<uint32_t>, superslm::detail::MixKey32> decomp;
+	superslm::detail::FixedIntMap<uint64_t, uint32_t, superslm::detail::MixKey64> compose;
 	bool ok = false;
 
 	bool is_letter(uint32_t cp) const { return InRanges(cp, letter); }
 	bool is_number(uint32_t cp) const { return InRanges(cp, number); }
 	bool is_space(uint32_t cp) const { return InRanges(cp, space); }
 	uint8_t ccc(uint32_t cp) const {
-		auto it = ccc_map.find(cp);
-		return it == ccc_map.end() ? 0 : it->second;
+		const uint8_t* p = ccc_map.Find(cp);
+		return p ? *p : 0;
 	}
 
 	// --- NFC (decompose -> canonical order -> compose), mirroring unicode_tables.py ---
@@ -187,9 +189,9 @@ struct TokenizerView::Impl {
 				uint32_t t = s % TCOUNT;
 				if (t) out.push_back(TBASE + t);
 			} else {
-				auto it = decomp.find(cp);
-				if (it == decomp.end()) out.push_back(cp);
-				else out.insert(out.end(), it->second.begin(), it->second.end());
+				const std::vector<uint32_t>* p = decomp.Find(cp);
+				if (!p) out.push_back(cp);
+				else out.insert(out.end(), p->begin(), p->end());
 			}
 		}
 	}
@@ -232,8 +234,8 @@ struct TokenizerView::Impl {
 					comp = s + (cp - TBASE);
 					have = true;
 				} else {
-					auto it = compose.find((uint64_t(s) << 32) | cp);
-					if (it != compose.end()) { comp = it->second; have = true; }
+					const uint32_t* p = compose.Find((uint64_t(s) << 32) | cp);
+					if (p) { comp = *p; have = true; }
 				}
 				if (have) {
 					result[last_starter] = comp;
@@ -325,15 +327,17 @@ struct TokenizerView::Impl {
 			int32_t best_rank = -1;
 			size_t best_pos = 0;
 			for (size_t p = 0; p + 1 < ids.size(); ++p) {
-				auto it = merges.find((uint64_t(uint32_t(ids[p])) << 32) | uint32_t(ids[p + 1]));
-				if (it != merges.end() && (best_rank < 0 || it->second.first < best_rank)) {
-					best_rank = it->second.first;
+				const std::pair<int32_t,int32_t>* m =
+				    merges.Find((uint64_t(uint32_t(ids[p])) << 32) | uint32_t(ids[p + 1]));
+				if (m && (best_rank < 0 || m->first < best_rank)) {
+					best_rank = m->first;
 					best_pos = p;
 				}
 			}
 			if (best_rank < 0) break;
-			auto it = merges.find((uint64_t(uint32_t(ids[best_pos])) << 32) | uint32_t(ids[best_pos + 1]));
-			ids[best_pos] = it->second.second;
+			const std::pair<int32_t,int32_t>* m2 =
+			    merges.Find((uint64_t(uint32_t(ids[best_pos])) << 32) | uint32_t(ids[best_pos + 1]));
+			ids[best_pos] = m2->second;
 			ids.erase(ids.begin() + best_pos + 1);
 		}
 		out.insert(out.end(), ids.begin(), ids.end());
@@ -455,7 +459,7 @@ bool ParseTok(const uint8_t* d, size_t sz, TokenizerView::Impl& im, std::string*
 		}
 	}
 	if (!need(pos, size_t(merge) * 12)) return fail("Tokenizer: truncated merges");
-	im.merges.reserve(merge);
+	im.merges.Init(merge);
 	for (uint32_t r = 0; r < merge; ++r) {
 		uint32_t a = Rd32(d + pos), b = Rd32(d + pos + 4), m = Rd32(d + pos + 8);
 		// S-HARDEN-2 (F18): a merge's operands and result all become ids Encode()
@@ -463,7 +467,7 @@ bool ParseTok(const uint8_t* d, size_t sz, TokenizerView::Impl& im, std::string*
 		// the vocabulary the same way byte_to_id's entries must.
 		if (a >= vocab || b >= vocab || m >= vocab)
 			return fail("Tokenizer: merge operand or result >= vocab_count");
-		im.merges.emplace((uint64_t(a) << 32) | b, std::make_pair(int32_t(r), int32_t(m)));
+		im.merges.Insert((uint64_t(a) << 32) | b, std::make_pair(int32_t(r), int32_t(m)));
 		pos += 12;
 	}
 	if (!need(pos, uint64_t(special) * 4)) return fail("Tokenizer: truncated special ids");
@@ -564,12 +568,14 @@ bool ParseUni(const uint8_t* d, size_t sz, TokenizerView::Impl& im, std::string*
 	if (pos + 4 > sz) return fail("UnicodeTables: truncated ccc count");
 	uint32_t ccc_n = Rd32(d + pos); pos += 4;
 	if (pos + size_t(ccc_n) * 8 > sz) return fail("UnicodeTables: truncated ccc");
+	im.ccc_map.Init(ccc_n);
 	for (uint32_t i = 0; i < ccc_n; ++i) {
-		im.ccc_map[Rd32(d + pos)] = uint8_t(Rd32(d + pos + 4)); pos += 8;
+		im.ccc_map.InsertOrAssign(Rd32(d + pos), uint8_t(Rd32(d + pos + 4))); pos += 8;
 	}
 	if (pos + 4 > sz) return fail("UnicodeTables: truncated decomp count");
 	uint32_t dn = Rd32(d + pos); pos += 4;
 	if (pos + size_t(dn) * 4 > sz) return fail("UnicodeTables: truncated decomp cps");
+	im.decomp.Init(dn);
 	std::vector<uint32_t> dcps(dn);
 	for (uint32_t i = 0; i < dn; ++i) { dcps[i] = Rd32(d + pos); pos += 4; }
 	if (uint64_t(pos) + (uint64_t(dn) + 1) * 4 > uint64_t(sz)) return fail("UnicodeTables: truncated decomp offsets");
@@ -583,15 +589,16 @@ bool ParseUni(const uint8_t* d, size_t sz, TokenizerView::Impl& im, std::string*
 		if (doff[i] > doff[i + 1] || doff[i + 1] > seq_len) return fail("UnicodeTables: bad decomp offset");
 		std::vector<uint32_t> s;
 		for (uint32_t k = doff[i]; k < doff[i + 1]; ++k) s.push_back(Rd32(seq + size_t(k) * 4));
-		im.decomp.emplace(dcps[i], std::move(s));
+		im.decomp.Insert(dcps[i], std::move(s));
 	}
 	pos += size_t(seq_len) * 4;
 	if (pos + 4 > sz) return fail("UnicodeTables: truncated compose count");
 	uint32_t cn = Rd32(d + pos); pos += 4;
 	if (pos + size_t(cn) * 12 > sz) return fail("UnicodeTables: truncated compose");
+	im.compose.Init(cn);
 	for (uint32_t i = 0; i < cn; ++i) {
 		uint32_t a = Rd32(d + pos), b = Rd32(d + pos + 4), c = Rd32(d + pos + 8);
-		im.compose[(uint64_t(a) << 32) | b] = c;
+		im.compose.InsertOrAssign((uint64_t(a) << 32) | b, c);
 		pos += 12;
 	}
 	return true;
