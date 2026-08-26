@@ -1,25 +1,31 @@
 @echo off
 rem T-2296 (Curie): builds every cell file in this directory and RUNS it, reporting the exit
-rem code as the red/green signal -- unlike tests/t2138-abi-red-suite's own build_link_red.bat
-rem (which distinguishes COMPILE/LINK failure classes because that suite's cells reference a
-rem declared-but-unimplemented C ABI), every cell here compiles clean today: the not-yet-built
-rem src/detail/int_hash.h is gated behind __has_include("detail/int_hash.h") in each cell file,
-rem so a missing header routes that cell's own post-remedy checks to an explicit, counted SKIP +
-rem FAIL rather than a build error. The red/green signal is therefore each .exe's own exit code:
-rem 0 = every CHECK in that cell passed; nonzero = at least one CHECK failed (including the
-rem "whole cell-group unattemptable" sentinel failure dim6/dim7 add when their __has_include
-rem gate is closed).
+rem code as the primary red/green signal: the not-yet-built src/detail/int_hash.h is gated
+rem behind __has_include("detail/int_hash.h") in each cell file, so a missing header routes
+rem that cell's own post-remedy checks to an explicit, counted SKIP + FAIL rather than a build
+rem error. 0 = every CHECK in that cell passed; nonzero = at least one CHECK failed (including
+rem the "whole cell-group unattemptable" sentinel failure dim6/dim7 add when their
+rem __has_include gate is closed).
 rem
-rem These cells exercise src/detail/{int_hash,context_hash}.h. They are NOT header-only:
-rem BucketCountFor calls the engine out-of-line superslm::Clz64, exactly as the design
-rem specifies, so intmath.cpp must be on the compile line or both cells fail to LINK and the
-rem suite reports a false RED. (T-2297, 2026-08-26: the original list omitted it; the conductor
-rem reproduced 18/18 passing once linked, and fixed the list here.)
-rem source list is linked (contrast tests/t2138-abi-red-suite's own full CPU-core source list):
-rem FixedIntMap/FixedIntSet/GrowableIntSet/GrowableIntMap/GrowableContextMap are templates
-rem defined entirely in those two headers (design Sec3.1/Sec3.5/Sec3.6), so once they exist,
-rem #include "detail/int_hash.h" with -I<repo>/src is everything a cell needs to compile and
-rem link against them.
+rem LINK FAILURE is its own class, distinct from both a compile error and a red CHECK (T-2301,
+rem 2026-08-26, mirroring this directory's own build_liveness_red.bat findstr /C:"LNK" branch):
+rem dim7_contract_red.cpp calls BucketCountFor, which calls the engine's out-of-line
+rem superslm::Clz64 (see below) -- an omitted or reverted compile line produces
+rem LNK2019/LNK1120, no .exe is produced, and the loop body's own attempt to run a nonexistent
+rem .exe (errorlevel 9009) would otherwise print as an indistinguishable red CHECK failure --
+rem the exact detection gap T-2297 fixed the symptom of but left open (S4,
+rem Claude/Poirot/t2299-fp-free-open-review-2026-08-26.md). The LINK FAILURE branch below
+rem catches this before the run-and-check-exit-code step is ever reached.
+rem
+rem These cells exercise src/detail/{int_hash,context_hash}.h. FixedIntMap/FixedIntSet/
+rem GrowableIntSet/GrowableIntMap/GrowableContextMap are templates defined entirely in those
+rem two headers (design Sec3.1/Sec3.5/Sec3.6) -- but BucketCountFor calls the engine's
+rem out-of-line superslm::Clz64, so the #include alone is NOT sufficient: intmath.cpp must
+rem also be on the compile line, or both cells fail to LINK and the suite reports a false RED.
+rem (T-2297, 2026-08-26: the original source list omitted it; the conductor reproduced 18/18
+rem passing once linked, and added it below.) Kept deliberately minimal rather than matching
+rem tests/t2138-abi-red-suite's own full CPU-core source list: the two headers plus the one
+rem .cpp their templates call out to is everything these cells need.
 rem
 rem dim7_contract_red.cpp is compiled WITH /DNDEBUG (this file's own header comment: the
 rem probe-exhaustion std::abort() is documented release-safe/NDEBUG-independent, and building
@@ -57,20 +63,27 @@ for %%f in (dim4_shape_red.cpp dim6_determinism_red.cpp dim7_contract_red.cpp di
         type "obj\%%~nf.log"
         set ANY_COMPILE_ERROR=1
     ) else (
-        "%HEREDIR%obj\%%~nf.exe"
-        set CELLEXIT=!ERRORLEVEL!
-        if not "!CELLEXIT!"=="0" (
-            echo    RED ^(exit !CELLEXIT!^) -- see the FAIL/SKIP lines printed above.
-            set ANY_RED=1
+        findstr /C:"LNK" "obj\%%~nf.log" >nul
+        if not errorlevel 1 (
+            echo    LINK FAILURE:
+            type "obj\%%~nf.log"
+            set ANY_COMPILE_ERROR=1
         ) else (
-            echo    GREEN.
+            "%HEREDIR%obj\%%~nf.exe"
+            set CELLEXIT=!ERRORLEVEL!
+            if not "!CELLEXIT!"=="0" (
+                echo    RED ^(exit !CELLEXIT!^) -- see the FAIL/SKIP lines printed above.
+                set ANY_RED=1
+            ) else (
+                echo    GREEN.
+            )
         )
     )
 )
 
 echo.
 if "%ANY_COMPILE_ERROR%"=="1" (
-    echo SUITE STATUS: COMPILE ERROR -- see logs above.
+    echo SUITE STATUS: COMPILE/LINK ERROR -- see logs above.
     exit /b 2
 ) else if "%ANY_RED%"=="1" (
     echo SUITE STATUS: RED -- one or more cells reported a CHECK failure ^(expected pre-build:
