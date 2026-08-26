@@ -77,6 +77,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
+#include "detail/int_hash.h"
 #include <vector>
 
 #include "superslm/adapter_marshal.h"
@@ -412,7 +413,7 @@ void ClearDampedGreedyState(sslm_seq_s* seq) {
 // (Claude/Poirot/a12bbdd-t2199-phaseD-closing.md) for why this comment, not the board or the
 // decision log, was previously the only place this was recorded.
 static std::mutex g_seq_registry_mutex;
-static std::unordered_set<sslm_seq_s*> g_live_seqs;
+static superslm::detail::GrowableIntSet<sslm_seq_s*, superslm::detail::HashSeq> g_live_seqs;
 
 namespace {
 
@@ -1776,7 +1777,7 @@ extern "C" sslm_status sslm_seq_create(sslm_model model, sslm_kv_pool* pool, ssl
 	// registering it here (this store happens-before any possible use of the handle).
 	{
 		std::lock_guard<std::mutex> registry_lock(g_seq_registry_mutex);
-		g_live_seqs.insert(h);
+		g_live_seqs.InsertOrReclaim(h);
 	}
 	*out = h;
 	return SSLM_OK;
@@ -1800,7 +1801,7 @@ extern "C" sslm_status sslm_seq_release(sslm_seq seq) {
 	// there is no third interleaving.
 	{
 		std::lock_guard<std::mutex> registry_lock(g_seq_registry_mutex);
-		g_live_seqs.erase(seq);
+		g_live_seqs.Erase(seq);
 	}
 	// Acquire-then-release `lifecycle_mutex` as a BARRIER before touching anything
 	// `sslm_decode_stepImpl` might still be mid-flight on for this SAME sequence: if a batched
@@ -2150,12 +2151,12 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 		std::lock_guard<std::mutex> registry_lock(g_seq_registry_mutex);
 		for (size_t k = 0; k < lock_order_count; ++k) {
 			sslm_seq_s* s = lock_order[k];
-			if (g_live_seqs.count(s)) {
+			if (g_live_seqs.Contains(s)) {
 				seq_locks[seq_locks_count++] = std::unique_lock<std::mutex>(s->lifecycle_mutex);
 			}
 		}
 		for (int32_t i = 0; i < n; ++i) {
-			live[i] = g_live_seqs.count(seqs[i]) != 0;
+			live[i] = g_live_seqs.Contains(seqs[i]);
 		}
 	}
 	(void)seq_locks_count;  // held for the RAII duration of this call; never re-read by index
@@ -3105,7 +3106,7 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	// thread (no ordering hazard, identical reasoning to `sslm_seq_create`'s own comment).
 	{
 		std::lock_guard<std::mutex> registry_lock(g_seq_registry_mutex);
-		g_live_seqs.insert(h);
+		g_live_seqs.InsertOrReclaim(h);
 	}
 	*out = h;
 	return SSLM_OK;
