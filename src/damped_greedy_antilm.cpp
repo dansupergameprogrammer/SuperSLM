@@ -63,7 +63,11 @@ public:
 	int max_order() const { return max_order_; }
 
 	struct ContextEntry {
-		superslm::detail::GrowableIntMap<int32_t, int64_t, superslm::detail::MixKeyS32> counts;
+		// {1} added fold round 26 (D-SLM4769): a default member initializer sizing THIS
+		// declaration's own first allocation from T-2303's measured population, without
+		// touching GrowableIntMap's own class-level default (= 8, unchanged) -- see the
+		// construction-site sizing decision, design Sec3.6.
+		superslm::detail::GrowableIntMap<int32_t, int64_t, superslm::detail::MixKeyS32> counts{1};
 		int64_t total = 0;
 	};
 
