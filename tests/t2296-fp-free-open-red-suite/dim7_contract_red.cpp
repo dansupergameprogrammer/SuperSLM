@@ -27,25 +27,33 @@
 // own (StandardsDocument.md Sec6.4). All six constructions the prose DOES describe are built and
 // asserted below.
 //
-// CELL B -- must-reject, capacity/population desync, mutation-proof. The design names "each of
-// the five replacement types." Built here for the TWO fixed-capacity types (FixedIntMap,
-// FixedIntSet) only: Init() with a small capacity_hint fixes the slot count forever, so
-// inserting more DISTINCT keys than that capacity allows is reachable through the PUBLIC API
-// alone (Init(1) sizes to 2 slots via BucketCountFor; a 3rd distinct key exhausts the bounded
-// probe). The three GROWABLE types (GrowableIntSet, GrowableIntMap, GrowableContextMap) check
-// their own load factor and call Grow() BEFORE every insert (Sec3.5/Sec3.6's own printed
-// `if ((live_[+tombstones_]+1)*2 > slots_.size()) Grow();"), which keeps the table at <=50%
-// occupied after every public-API insert -- there is no sequence of InsertOrReclaim/operator[]/
-// FindOrEmplace calls that leaves the table 100% full, so the bounded-probe-exhaustion state
-// these three types' own Contains/Erase/Find/operator[] guard against is NOT reachable through
-// the public surface the design specifies. This is a SPECIFICATION GAP, not a cell this suite
-// declines to build: the design names all five types for Cell B but states no construction
-// (public-API sequence, test-only hook, or otherwise) that reaches the state for the three
-// growable types, and reaching into their private slots_/live_/tombstones_/mask_ fields from a
-// test file would require adding a friend/backdoor to the production header -- writing
-// implementation, which this seat does not do (Curie.md, "Does not implement"). Routed back to
-// the design (Claude/Vitruvius) rather than papered over with a reflective/UB construction that
-// would look like coverage without being a genuine test of the public contract.
+// CELL B -- must-reject, capacity/population desync, mutation-proof. Built here for the TWO
+// fixed-capacity types (FixedIntMap, FixedIntSet) only: Init() with a small capacity_hint fixes
+// the slot count forever, so inserting more DISTINCT keys than that capacity allows is reachable
+// through the PUBLIC API alone (Init(1) sizes to 2 slots via BucketCountFor; a 3rd distinct key
+// exhausts the bounded probe). The three GROWABLE types (GrowableIntSet, GrowableIntMap,
+// GrowableContextMap) check their own load factor and call Grow() BEFORE every insert
+// (Sec3.5/Sec3.6's own printed `if ((live_[+tombstones_]+1)*2 > slots_.size()) Grow();"), which
+// keeps the table at <= 50 percent occupied after every public-API insert -- there is no
+// sequence of InsertOrReclaim/operator[]/FindOrEmplace calls that leaves the table 100% full, so
+// the bounded-probe-exhaustion state these three types' own Contains/Erase/Find/operator[] guard
+// against is NOT reachable through the public surface.
+//
+// CLOSED, not open. This was originally filed here as an open specification gap routed back to
+// Claude/Vitruvius. The design's fold round 24
+// (Claude/Vitruvius/t2265-superslm-fp-free-open-design-2026-08-24.md) accepted the finding and
+// narrowed Cell B's own population to the two fixed-capacity types by design -- the three
+// growable types are DEFENDED BY CONSTRUCTION (their own preemptive Grow(), not an untested
+// guard) and are correctly not-applicable to this cell, not a hole in it. The T-2298 coverage
+// audit (Claude/Mendeleev/t2296-fp-free-open-red-suite-coverage-audit-2026-08-26.md Sec5)
+// independently confirmed this at source, against the production src/detail/int_hash.h: every
+// public insertion verb on all three growable types opens with the identical <= 50 percent
+// pre-check, foreclosing the state Cell B constructs for the two fixed types. Reaching into the
+// growable types' private slots_/live_/tombstones_/mask_ fields from a test file to force the
+// state anyway would require adding a friend/backdoor to the production header -- writing
+// implementation, which this seat does not do (Curie.md, "Does not implement") -- and would not
+// be a genuine test of the public contract in any case, since the state is unreachable through
+// it.
 //
 // MUTATION-PROOF STANDARD (Sec7 dim 7's own text, StandardsDocument.md's "pin the documented
 // claim"): "the cell is only load-bearing if a version of the code with the std::abort() calls
@@ -74,10 +82,35 @@
 // SINGLE build/toolchain/optimization-level combination, since UB's own defining property is
 // that a different compiler, flag set, or allocator could observe the crash, the corruption, or
 // neither. Filed here as the honest finding rather than a stronger claim this session's own
-// evidence does not support. The full, build-time re-run against the real src/detail/int_hash.h
-// (once it exists) remains owed and is the load-bearing evidence for the shipped suite -- this
-// paragraph records that the test's own construction was checked for soundness before being
-// handed to Brunel, not that the production header has been proven to satisfy it.
+// evidence does not support. This paragraph records what was checked for soundness before being
+// handed to Brunel -- the test's own construction, against the design's own printed text, not
+// yet against production src/. The build-time re-run against the real src/detail/int_hash.h this
+// paragraph once named as owed is no longer owed; see the "T-2301 REPAIR" paragraph immediately
+// below for what it found and what this file's own CHECKs do about it.
+//
+// T-2301 REPAIR (this session): the build-time re-run against the PRODUCTION
+// src/detail/int_hash.h has since happened, independently, twice -- the T-2298 coverage audit
+// (D-SLM4757) and the T-2299 code review
+// (Claude/Poirot/t2299-fp-free-open-review-2026-08-26.md Sec4) -- and each reproduces the SAME
+// conclusion this self-check reached, by the OPPOSITE empirical route. On the real shipping
+// build (MSVC 19.33.31631, x64, /O2 /DNDEBUG), removing the ready_ guard entirely does NOT let
+// the four pre-Init calls return cleanly the way this session's own self-check observed on
+// whatever build it ran -- instead the raw out-of-bounds/null-pointer access reliably CRASHES on
+// this toolchain too, at exit code 0xC0000005 (STATUS_ACCESS_VIOLATION). The guard-present path
+// also crashes, but at a DIFFERENT exit code, 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN, MSVC's
+// fail-fast exit from std::abort()). RunChildModeRaw (fixture_common.h) already returns this raw
+// DWORD; only the classified kCrashed bucket (fixture_common.h's own `code >= 0xC0000000u`
+// collapse) was discarding the distinction. Both directions independently confirm the same
+// underlying limit UB's own definition predicts: whichever way the unguarded access resolves on
+// a given toolchain, a check that only classifies to kCrashed cannot tell "the guard fired"
+// apart from "the access happened to fault the same way" -- it is the CODE, not the CLASS, that
+// discriminates, and only on the toolchain it was measured on. The four pre-Init CHECKs below
+// therefore call ExpectAbortByGuard (asserting the guard's own exit code, 0xC0000409) rather
+// than ExpectAbort (the collapsed kCrashed) -- a positive, build-scoped claim about the guard's
+// own fail-fast, not a claim that a different compiler, allocator, or optimization level would
+// reproduce these same two codes. No portable, toolchain-independent observable for this
+// specific claim was found in this repair; stated plainly rather than pinning these codes as if
+// they generalized.
 //
 // EXECUTION MODEL, RELEASE-SAFE proof specifically: every cell below runs its child in a build
 // compiled WITH /DNDEBUG (see build_link_red.bat) so the debug-only `assert(size_ < slots_.size())`
@@ -211,6 +244,23 @@ void ExpectAbort(const char* label, const std::string& mode) {
 	          "%s: expected the guard to abort the process, got %s", label, ChildResultName(r));
 }
 
+// Distinguishes the ready_ guard's own fail-fast exit (0xC0000409, MSVC's abort()-triggered
+// STATUS_STACK_BUFFER_OVERRUN) from the exit code observed when the guard is absent and the raw
+// out-of-bounds/null-pointer access faults instead (0xC0000005, STATUS_ACCESS_VIOLATION) on this
+// exact build -- see this file's header comment, "T-2301 REPAIR". kCrashed alone (ExpectAbort)
+// cannot make this distinction: both codes classify to kCrashed. This is a claim about THIS
+// toolchain/build configuration specifically, not a portable guarantee across toolchains -- see
+// the header comment for the caveat this asserts around.
+constexpr DWORD kReadyGuardAbortCode = 0xC0000409u;
+
+void ExpectAbortByGuard(const char* label, const std::string& mode) {
+	DWORD code = 0;
+	ChildResult r = RunChildModeRaw(mode, &code);
+	CHECK_MSG(r == ChildResult::kCrashed && code == kReadyGuardAbortCode,
+	          "%s: expected the ready_ guard's own fail-fast exit (0x%08lX), got %s (exit 0x%08lX)",
+	          label, kReadyGuardAbortCode, ChildResultName(r), code);
+}
+
 // Asserts `mode` returns normally -- the must-accept control half of each pair above.
 void ExpectCleanExit(const char* label, const std::string& mode) {
 	ChildResult r = RunChildMode(mode);
@@ -232,10 +282,10 @@ int main(int argc, char** argv) {
 
 #if T2296_HAVE_INT_HASH_H
 	std::printf("--- Cell A: pre-Init/double-Init misuse (six constructions) ---\n");
-	ExpectAbort("FixedIntMap::Insert before Init()", "fim_insert_preinit");
-	ExpectAbort("FixedIntMap::Find before Init()", "fim_find_preinit");
-	ExpectAbort("FixedIntMap::InsertOrAssign before Init()", "fim_insertorassign_preinit");
-	ExpectAbort("FixedIntSet::InsertUnique before Init()", "fis_insertunique_preinit");
+	ExpectAbortByGuard("FixedIntMap::Insert before Init()", "fim_insert_preinit");
+	ExpectAbortByGuard("FixedIntMap::Find before Init()", "fim_find_preinit");
+	ExpectAbortByGuard("FixedIntMap::InsertOrAssign before Init()", "fim_insertorassign_preinit");
+	ExpectAbortByGuard("FixedIntSet::InsertUnique before Init()", "fis_insertunique_preinit");
 	ExpectAbort("FixedIntMap::Init() called twice", "fim_double_init");
 	ExpectAbort("FixedIntSet::Init() called twice", "fis_double_init");
 	ExpectCleanExit("FixedIntMap correct Init-then-use order", "fim_correct_order");
@@ -243,7 +293,7 @@ int main(int argc, char** argv) {
 
 	std::printf(
 	    "--- Cell B: capacity/population desync (fixed-capacity types; growable types: "
-	    "specification gap, see this file's header) ---\n");
+	    "not applicable, defended by construction -- see this file's header) ---\n");
 	ExpectAbort("FixedIntMap capacity_hint=1, 3 distinct Insert()s", "fim_capacity_desync");
 	ExpectAbort("FixedIntSet capacity_hint=1, 3 distinct InsertUnique()s", "fis_capacity_desync");
 	ExpectCleanExit("FixedIntMap population within its own capacity_hint",
@@ -252,20 +302,13 @@ int main(int argc, char** argv) {
 	                 "fis_capacity_within_bounds");
 
 	SKIP_MSG(
-	    "Cell B for GrowableIntSet/GrowableIntMap/GrowableContextMap: SPECIFICATION GAP, not "
-	    "executed -- see this file's header comment. The design names all five replacement "
-	    "types for Cell B but the three growable types' own preemptive Grow()-before-insert "
-	    "discipline (Sec3.5/Sec3.6) makes the probe-exhaustion state unreachable through the "
-	    "public API alone; routed back to Claude/Vitruvius rather than built with a private-"
-	    "state backdoor this seat does not own adding.");
-
-	SKIP_MSG(
-	    "Mutation-proof demonstration against the PRODUCTION src/detail/int_hash.h is OWED AT "
-	    "BUILD TIME, once it exists -- see this file's header comment. A throwaway self-check "
-	    "against the design's own printed text was already performed this authoring session "
-	    "(this file's header comment records the result, including a disclosed UB-related limit "
-	    "on the pre-Init half of Cell A) but that check never touched src/ and is not a "
-	    "substitute for the build-time re-run against what Brunel actually ships.");
+	    "Cell B for GrowableIntSet/GrowableIntMap/GrowableContextMap: NOT APPLICABLE, by design "
+	    "-- see this file's header comment. Design fold round 24 narrowed Cell B's own population "
+	    "to the two fixed-capacity types; the three growable types are defended by construction "
+	    "(their own preemptive Grow()-before-insert keeps them <= 50 percent occupied after "
+	    "every public-API insert, foreclosing the state this cell constructs) and are correctly "
+	    "not exercised here -- confirmed at source by the T-2298 coverage audit against the "
+	    "production header.");
 #else
 	SKIP_MSG(
 	    "dimension 7 fifth cell-group NOT YET BUILDABLE -- src/detail/int_hash.h does not exist "
