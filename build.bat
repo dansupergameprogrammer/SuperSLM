@@ -1309,6 +1309,98 @@ if not %t2138_ec%==0 (
 	popd & exit /b 1
 )
 
+rem T-2314 (gate-reachability sweep, Claude/Brunel/t2314-gate-reachability-2026-08-27.md): three
+rem suites -- this one, T-2178, and T-2296 below -- had zero references anywhere in this file,
+rem CMakeLists.txt, or .github/workflows/tests.yml, found by an independent hand sweep and
+rem reproduced by tools/ci/check_tests_have_build_recipe.py (wired further down). Wired here the
+rem same shape as the T-2112/T-2199/T-2138 suites above: tests\t2018-slora-serial\ has three
+rem independent build scripts, none of which run their own output (they only compile) -- so each
+rem is called and the resulting .exe is run directly too, matching this file's own
+rem out\superslm_tests.exe precedent below. All three exes need no external artifact; verified
+rem this round fully green (75/0, 37/0, 21/0).
+pushd .
+call tests\t2018-slora-serial\build.bat
+set t2018_offline_ec=%errorlevel%
+popd
+if not %t2018_offline_ec%==0 (
+	popd & exit /b 1
+)
+tests\t2018-slora-serial\t2018_offline_red.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+pushd .
+call tests\t2018-slora-serial\build_b0b.bat
+set t2018_b0b_ec=%errorlevel%
+popd
+if not %t2018_b0b_ec%==0 (
+	popd & exit /b 1
+)
+tests\t2018-slora-serial\t2029_b0b_red.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+pushd .
+call tests\t2018-slora-serial\build_b2.bat
+set t2018_b2_ec=%errorlevel%
+popd
+if not %t2018_b2_ec%==0 (
+	popd & exit /b 1
+)
+tests\t2018-slora-serial\t2029_b2_red.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
+rem T-2314: tests\t2178-gpu-batched-prefill-red-suite\ wired calling its own single entry point,
+rem build_red_suite.bat, exactly as that script's own header and tail document its exit-code
+rem contract: exit 2 is "an unexpected error class was found" (a real regression -- a COMPILE
+rem ERROR or an UNEXPECTED ERROR CLASS); exit 1 covers BOTH "RED BY LINK" (a probe/bound symbol
+rem not yet wired) and "LINKED CLEAN" (a cell that needs none) -- both named explicitly in that
+rem script's own tail as acceptable, non-failing states, UNLIKE tests\t2296-fp-free-open-red-
+rem suite\ below, where exit 1 IS a real, gating failure. Verified this round:
+rem kT2169TdrSafeMaxChunkTokens (src\gpu\superslm_gpu.cpp, defined since T-2180) is no longer the
+rem unresolved symbol the suite's own header comments describe -- all five cells now link clean,
+rem and running each resulting .exe directly (obj\<cell>.exe, no arguments) shows 4 checks/0
+rem failures/5 skips, every skip for want of --model1p5b=PATH / --g5fixture=PATH, matching this
+rem suite's own documented shape (D-SLM3432: no GPU CI runner -- "run directly"). Its own
+rem build_red_suite.bat never runs the cells itself (only compiles/links them), so this gate
+rem proves the suite still compiles and links against the current engine; it does NOT re-verify
+rem cell runtime pass/fail, which needs a real model artifact and a GPU this environment does not
+rem assume -- the per-cell .exe runs above were a one-time manual verification this round, not
+rem part of this gate, matching every other wired suite's one-call convention.
+pushd .
+call tests\t2178-gpu-batched-prefill-red-suite\build_red_suite.bat
+set t2178_ec=%errorlevel%
+popd
+if %t2178_ec%==2 (
+	popd & exit /b 1
+)
+
+rem T-2314: tests\t2296-fp-free-open-red-suite\ -- this arc's own pin, six cells each
+rem mutation-proved to discriminate, reverting any one of which left every automated gate green
+rem until now. Wired here the same shape as the T-2138/T-2199 suites above: both of its own
+rem scripts run and check every cell's real pass/fail via their own exit code (0=GREEN, 1=RED,
+rem 2=COMPILE/LINK ERROR -- unlike tests\t2178-gpu-batched-prefill-red-suite\ above, 1 here IS a
+rem real, gating failure). Verified this round: both scripts GREEN (build_link_red.bat's own
+rem dim7_capacity_red.cpp cell alone reports 162 checks/0 failures; build_liveness_red.bat's two
+rem cells report 2/0 and 1/0 checks, the rest SKIP for want of a full-model artifact this
+rem environment does not assume).
+pushd .
+call tests\t2296-fp-free-open-red-suite\build_link_red.bat
+set t2296_link_ec=%errorlevel%
+popd
+if not %t2296_link_ec%==0 (
+	popd & exit /b 1
+)
+pushd .
+call tests\t2296-fp-free-open-red-suite\build_liveness_red.bat
+set t2296_liveness_ec=%errorlevel%
+popd
+if not %t2296_liveness_ec%==0 (
+	popd & exit /b 1
+)
+
 rem NON-ZERO-EXIT PATHS (O2, Claude/Poirot/aea6116-t2139-seventh-confirmation-review.md; RoPE
 rem baseline retired T-2153, Claude/Curie/t2153-rope-fix-2026-08-17.md): this build's own
 rem non-zero-exit paths, named so "build.bat exits 1" is never read as "no code defect" without
@@ -1366,6 +1458,20 @@ if not errorlevel 1 (
 		echo check_tools_have_build_recipe.py FAILED -- see output above
 		set ec=1
 	)
+	rem T-2314 (gate-reachability sweep, Claude/Brunel/t2314-gate-reachability-2026-08-27.md): the
+	rem symmetric class-closer to check_tools_have_build_recipe.py immediately above, for test
+	rem SUITE DIRECTORIES rather than tools/*.cpp files -- tests/t2296-fp-free-open-red-suite/, this
+	rem arc's entire pin, had zero references anywhere in this file, CMakeLists.txt, or
+	rem .github/workflows/tests.yml until the T-2314 wiring above; two siblings
+	rem (tests/t2018-slora-serial/, tests/t2178-gpu-batched-prefill-red-suite/) were found orphaned
+	rem the same way by the same hand sweep. Validated pre-wiring (Claude/Brunel/t2314-gate-
+	rem reachability-raw/check_pre_wiring.txt) to reproduce exactly that three-suite population
+	rem before any of the three were wired above.
+	python tools\ci\check_tests_have_build_recipe.py
+	if errorlevel 1 (
+		echo check_tests_have_build_recipe.py FAILED -- see output above
+		set ec=1
+	)
 	rem T-2139 sixth confirmation review item 5 (Claude/Poirot/5fbd04d-t2139-sixth-confirmation-
 	rem review.md, ruled in Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md Sec8's
 	rem "structural half" paragraph): M3's class-closer -- extracts every #define/#ifndef/
@@ -1388,7 +1494,7 @@ if not errorlevel 1 (
 		set ec=1
 	)
 ) else (
-	echo python not found on PATH -- skipping tests\ci\check_gpu_guard_status_parity.py, check_gemm_site_thread_width_parity.py, tools\ci\check_tools_have_build_recipe.py, and tools\ci\check_abi_header_inventory.py ^(non-fatal^)
+	echo python not found on PATH -- skipping tests\ci\check_gpu_guard_status_parity.py, check_gemm_site_thread_width_parity.py, tools\ci\check_tools_have_build_recipe.py, tools\ci\check_tests_have_build_recipe.py, and tools\ci\check_abi_header_inventory.py ^(non-fatal^)
 )
 
 popd
