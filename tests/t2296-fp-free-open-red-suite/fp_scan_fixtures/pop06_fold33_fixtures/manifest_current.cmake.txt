@@ -1,0 +1,6 @@
+# Fixture manifest — stands in for the real CMakeLists.txt's own
+# SUPERSLM_CORE_SOURCES AFTER tu_b.cpp was added to the real source set.
+set(SUPERSLM_CORE_SOURCES
+    src/tu_a.cpp
+    src/tu_b.cpp
+)

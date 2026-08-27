@@ -1,11 +1,15 @@
-"""T-2326 (Curie) -- red suite for design Sec4.1's deciding instrument: an
-instruction-level, byte-accounting, default-deny scan over compiled machine
-code, which does not exist yet anywhere in this tree.
+"""T-2333/T-2326 (Curie) -- red suite for design Sec4.1's deciding instrument:
+an instruction-level, byte-accounting, default-deny scan over compiled
+machine code, which does not exist yet anywhere in this tree.
 
 SOURCE ARTIFACT. `Claude/Vitruvius/t2265-superslm-fp-free-open-design-2026-08-24.md`
-Sec4.1 (the mechanism) and Sec7 dimension 11 (the fourteen commissioning
-populations this suite realizes). This campaign's own test-design record is
-`Claude/Curie/t2326-fp-scan-instrument-red-suite-<date>.md` (records worktree).
+Sec4.1 (the mechanism and its now-RATIFIED production interface) and Sec7
+dimension 11 (the fourteen commissioning populations this suite realizes), as
+the design stands through fold round 33. This campaign's own test-design
+records: `Claude/Curie/t2326-fp-scan-instrument-red-suite-2026-08-27.md`
+(original 23-cell suite, contract proposed) and
+`Claude/Curie/t2333-fp-scan-instrument-red-suite-ratified-2026-08-27.md`
+(this ticket's own repointing to the ratified contract).
 
 WHY EVERY TEST HERE FAILS TODAY, AND WILL CONTINUE TO FAIL UNTIL BRUNEL BUILDS
 THE INSTRUMENT. Sec4.1 specifies a Python CI tool -- a byte-level decoder
@@ -15,81 +19,141 @@ jmp target allowlist), and a REFUSE control action on any unaccounted byte --
 wired into this repo's own tests/ci/check_<name>.py + test_check_<name>.py
 convention (tests/ci/check_no_forward_leaf_calls.py and its own test file are
 the precedent this suite matches). None of that production module exists.
-This file assumes it will be built at `tests/ci/check_fp_free_scan.py` (added
+This file assumes it will be built at tests/ci/check_fp_free_scan.py (added
 to sys.path below relative to this file, since this suite itself lives under
 tests/t2296-fp-free-open-red-suite/ per this ticket's own writable-scope
-constraint, not tests/ci/ -- a filed disposition, not a placement Curie
-resolved on her own authority; see the case file). Every population test
-below:
+constraint, not tests/ci/). Every population test below:
 
-  1. Builds its own fixture FRESH (never a committed binary -- this design's
-     own git-archive-only sourcing discipline, Sec4.1 throughout), using
+  1. Builds its own fixture FRESH (never a committed binary), using
      fp_scan_common.py's own toolchain wrappers. A toolchain genuinely absent
-     from this environment SKIPs that one cell (an environment gap, not a
-     mechanism defect, mirroring tests/ci/test_check_no_forward_leaf_calls.py's
-     own `requires_clang` convention) -- every toolchain this suite calls on
-     was confirmed present and working in this session (see the case file's
-     own toolchain-availability table).
-  2. Independently verifies, via a raw capstone decode -- NOT the (absent)
-     instrument's own logic, see fp_scan_common.py's own docstring -- that the
-     fixture genuinely carries the byte-level property its own population
-     claims (a real FP-arithmetic mnemonic present; a real undecodable byte
-     range; a real symbol reachable by no call/jmp edge; etc.). This half is
-     real, executed, and independent of whether the instrument exists.
+     from this environment SKIPs that one cell -- none did this session;
+     every toolchain fired (see the case file's own toolchain table).
+  2. Independently verifies, via a raw capstone decode or a narrow disasm-text
+     parse -- NOT the (absent) instrument's own logic -- that the fixture
+     genuinely carries the byte-level property its own population claims.
+     This half is real, executed, and independent of whether the instrument
+     exists.
   3. THEN calls the (absent) production module and asserts its documented
-     verdict, from WITHIN the same fixture's own scope (the compiled object
-     is never deleted before this call runs). This is the genuinely red half,
-     today, for exactly one reason: `import check_fp_free_scan` fails. Once
-     Brunel builds that module matching the ASSUMED CONTRACT below, this half
-     starts exercising the real grading path with NO EDIT to this file
-     required -- the same "every gated CHECK flips from failure to load-
-     bearing the moment the header exists" property T-2296's own dim6/dim7
-     cells already hold, applied to a Python instrument instead of a C++
-     header.
+     verdict, from WITHIN the same fixture's own scope. This is the genuinely
+     red half, today, for exactly one reason: importing check_fp_free_scan
+     fails.
 
-ASSUMED CONTRACT for tests/ci/check_fp_free_scan.py (Curie's own derivation
-from the converged shape across this design's own fold-round probes --
-Claude/Vitruvius/t2265-fold11-probe/fold11_remedy_check.py's own report_leg/
-ci_gate, Claude/Loki/t2276-probe/strike.py's own verbatim copy of the same --
-NOT an authoritative interface Curie is authorized to decide; routed to
-Brunel as a proposal in this campaign's case file, and this file's own
-assertions are the falsifiable form of that proposal):
+THE RATIFIED CONTRACT for tests/ci/check_fp_free_scan.py (design
+Sec4.1, fold rounds 31/32/33; D-SLM4826/D-SLM4827/D-SLM4830/D-SLM4834 --
+superseding T-2326's own proposed contract, D-SLM4825, which this file no
+longer asserts as current):
 
-    check_fp_free_scan.scan_object(path: str, isa: str, object_format: str) -> ScanResult
+    scan_object(path: str, isa: str) -> ScanResult
 
-        isa in {"x86-64", "aarch64"}; object_format in {"coff", "elf"}.
+        isa in {"x86-64", "aarch64"} -- a build-time input the CI leg
+        declares, never inferred from the object.
 
     ScanResult:
-        .refuse: bool                     -- clause (0)'s own REFUSE, True iff
-                                              any code section's UNCLASSIFIED > 0
+        .object_format: str          -- "coff" | "elf", READ from the
+                                         object's own header -- NEVER a
+                                         caller-supplied parameter (the one
+                                         correction fold round 31 made to
+                                         T-2326's own proposal: T-2326 carried
+                                         object_format as a peer parameter to
+                                         isa; every executed probe this design
+                                         has run reads it from the object's
+                                         own header instead, and a caller-
+                                         supplied label could drift from what
+                                         the file actually is).
+        .refuse: bool                -- clause (0)'s own REFUSE.
         .unclassified_bytes: int
-        .verdicts: dict[str, str]         -- symbol name -> "ACCEPT" | "REJECT";
-                                              EMPTY when .refuse is True (no
-                                              verdict emitted on a refused object,
-                                              design Sec4.1's second law)
+        .verdicts: dict[str, str]    -- symbol -> "ACCEPT" | "REJECT"; EMPTY
+                                         when .refuse (guarantee (i)).
+
+    ci_gate(result: ScanResult, expected_symbols: Sequence[str]) -> bool
+
+        expected_symbols is derived from the OBJECT'S OWN symbol table, never
+        from result.verdicts. Enforces: (i) result.refuse implies
+        result.verdicts == {}; (ii) the caller's own process exits nonzero
+        whenever this returns False for any leg; (iii) any name in
+        expected_symbols absent from result.verdicts, when NOT refused, fails
+        independently -- the absent-report leg.
+
+    enumerate_scan_targets() -> list[tuple[str, str]]
+
+        (translation_unit_name, compiled_object_path) pairs, derived from
+        SUPERSLM_CORE_SOURCES at scan time -- the production membership's own
+        node-set derivation.
+
+    diagnostic_walk(roots: Sequence[str], call_graph: Mapping[str, set[str]]) -> set[str]
+
+        Breadth/depth-first transitive closure from roots over call_graph's
+        own edges. Population five's own discharge: compile the chain, build
+        the real call graph, assert the deepest member is reachable.
+
+    derive_core_sources(manifest_path: str = "CMakeLists.txt") -> list[str]
+
+        Parses SUPERSLM_CORE_SOURCES out of the named manifest -- the shared
+        TU-list primitive enumerate_scan_targets, build_call_graph, and
+        flagged_symbols all call internally. Specified fold round 32
+        (D-SLM4830) as population six's own occupant; CORRECTED fold round 33
+        (D-SLM4834): this function alone does NOT discharge population six --
+        it parses a manifest into a TU-name list and never compiles,
+        disassembles, or detects anything, so it cannot carry population
+        six's own end-to-end claim (a genuine derivation REPORTS a flagged
+        instruction in a newly-added TU; a stale enumeration SILENTLY MISSES
+        it). It remains a real, sound sub-component of population five's own
+        discharge and of enumerate_scan_targets.
+
+    build_call_graph(manifest_path: str, disasm_dir: str) -> Mapping[str, set[str]]
+    flagged_symbols(manifest_path: str, disasm_dir: str) -> Mapping[str, list[str]]
+    diagnostic_fp_report(manifest_path: str, disasm_dir: str,
+                          roots: Sequence[str]) -> Mapping[str, list[str]]
+
+        Population six's real occupant, specified fold round 33 (D-SLM4834).
+        Both build_call_graph and flagged_symbols derive their own TU
+        enumeration from derive_core_sources(manifest_path) internally --
+        never a caller-supplied source list -- and read each derived TU's own
+        real disassembly text from disasm_dir. diagnostic_fp_report combines
+        them: every symbol reachable from roots via
+        diagnostic_walk(roots, build_call_graph(...)) that also has a
+        non-empty entry in flagged_symbols(...). A call instruction names its
+        target by symbol whether or not the target's own TU was ever read, so
+        build_call_graph alone (population five's own surface) cannot
+        distinguish a genuine derivation from a stale one -- only the
+        combined report can, because a symbol's own content is scanned ONLY
+        if its defining TU was actually read.
+
+THIS FILE DOES NOT CITE, IMPORT, OR RELY ON Claude/Vitruvius/
+t2265-fold32-probe/class_closure_check.py OR DESIGN Sec2.9's OWN VERDICTS.
+Sec2.9's claim-shadow test is QUARANTINED (D-SLM4833) -- its own validation
+population and its shadow-parameter field are each proven insufficient by a
+named, executed finding, and the design's own text states its verdicts are
+"recorded, never cited as evidence for any gate decision" until independently
+commissioned (tracked at T-2337, which does not gate this design). Population
+six's own correction is established here the same way the design's own text
+establishes it: by an independent, directly executed probe
+(Claude/Vitruvius/t2265-fold33-probe/population6_end_to_end_probe.py), never
+by running Sec2.9's own check against a corrected row.
 
 POPULATION-TO-TEST CROSS-REFERENCE (full disposition in each test's own
-docstring and in the case file):
+docstring and in the T-2333 case file):
 
-  1  reintroduced reserve() on the ORIGINAL two sites (TE-32 Part B/C)     -- test_population_01_03
-  2  MXCSR-invisible FP op classes (TE-32 Part D2/D/E/E2)                  -- test_population_02
-  3  reintroduced reserve()-shaped growth, sslm_abi.cpp (fold round 3)     -- test_population_01_03
-  4  reintroduced unordered_map growth, damped_greedy_antilm.cpp (fold 5)  -- test_population_04
-  5  synthetic multi-hop transitive-closure proof (fold round 6)          -- test_population_05
-  6  translation-unit-set desync detection (fold round 6)                 -- test_population_06
-  7  T-2271's eight-object classifier construction (fold round 7)         -- test_population_07
-  8  real v1.2.1 whole-corpus sweep (fold rounds 7/8)                     -- test_population_08
-  9  T-2272's funclet, membership rule (fold round 8)                    -- test_population_09
-  10 T-2273's AArch64 differential control (fold round 9, infeasible      -- test_population_10
-     commissioning per fold round 10, superseded by population 11)
-  11 four (ISA,format,toolchain) legs (fold round 10)                     -- test_population_11
-  12 T-2275's clause-(0) REFUSE construction, extended 3 legs (fold 11/12)-- test_population_12
-  13 T-2276's decodable-pool construction (fold round 13)                 -- test_population_13
-  14 T-2277's per-symbol-granularity census, 11 cells (fold round 14)     -- test_population_14
+  1  TE-32's original two sites (Part B/C), reproduced verbatim (T-2333)      -- test_population_01_te32_reserve
+  2  TE-32's four always-invisible ops + BodyUnderTest, verbatim (T-2333)     -- test_population_02_te32_mxcsr_invisible
+  3  reintroduced reserve()-shaped growth, sslm_abi.cpp (fold round 3)        -- test_population_03_seqreg_growth_mutant
+  4  reintroduced unordered_map growth, damped_greedy_antilm.cpp (fold 5)     -- test_population_04_antilm_restore_growth_mutant
+  5  synthetic multi-hop transitive-closure proof, graded via diagnostic_walk -- test_population_05_transitive_chain_diagnostic
+  6  TU-set-desync, graded via build_call_graph/flagged_symbols/report (T-2333)-- test_population_06_tu_set_desync_end_to_end
+  7  T-2271's eight-object classifier construction (fold round 7)            -- test_population_07_fpblind_classifier
+  8  real v1.2.1 whole-corpus sweep (fold rounds 7/8)                        -- test_population_08_real_corpus_whole_sweep
+  9  T-2272's funclet, membership rule (fold round 8)                       -- test_population_09_funclet_membership
+  10 T-2273's AArch64 differential control (fold round 9, historical)        -- test_population_10_arm_differential_historical
+  11 four (ISA,format,toolchain) legs + ci_gate (fold round 10)              -- test_population_11_toolchain_format_independence
+  12 T-2275's clause-(0) REFUSE construction + ci_gate (fold rounds 11/12)   -- test_population_12_clause0_refuse_undecodable_pool
+  13 T-2276's decodable-pool construction + ci_gate (fold round 13)          -- test_population_13_coverage_relation_decodable_swallow
+  14 T-2277's per-symbol-granularity census, 11 cells (fold round 14)        -- test_population_14_per_symbol_granularity_census
+  -- ci_gate's own absent-report leg (item 2, T-2333's own brief)            -- test_ci_gate_absent_report_leg
 """
 from __future__ import annotations
 
 import os
+import re
 import struct
 import sys
 
@@ -107,8 +171,7 @@ import pop14_make_objects as mk  # noqa: E402  -- pure-Python object synthesis, 
 
 # The production module's own expected home (tests/ci/, this repo's established
 # check_<name>.py / test_check_<name>.py convention) -- NOT this file's own
-# directory, per this ticket's writable-scope constraint (field 2: this
-# session may write tests/t2296-fp-free-open-red-suite/ only).
+# directory, per this ticket's writable-scope constraint.
 _TESTS_ROOT = os.path.dirname(_HERE)
 _CI_DIR = os.path.join(_TESTS_ROOT, "ci")
 sys.path.insert(0, _CI_DIR)
@@ -167,14 +230,8 @@ def _decode_arm64(code: bytes, base=0x0):
 
 def _decode_sections(sections, isa):
     """Decodes each section chunk INDEPENDENTLY and pools the resulting
-    instructions -- never concatenates chunks before decoding. Confirmed by
-    direct execution, this session: capstone's own disasm() generator stops
-    permanently at the first byte range it cannot decode, so a concatenated
-    multi-section blob silently never reaches any section after the first
-    non-code one (an unwind-thunk `.text$x` section, in the case that
-    surfaced this) -- see fp_scan_common.py's own coff_code_sections
-    docstring for the full account. Decoding section-by-section is immune to
-    this: one section's own decode failure never affects another's."""
+    instructions -- never concatenates chunks before decoding (see
+    fp_scan_common.py's own coff_code_sections docstring for why)."""
     decode_one = _decode_arm64 if isa == "aarch64" else _decode_x86
     insns = []
     for chunk in sections:
@@ -183,35 +240,82 @@ def _decode_sections(sections, isa):
 
 
 # ===========================================================================
-# Populations one and three -- reintroduced reserve()/insert()-shaped
-# std::unordered_map/set growth (fold round 3, D-SLM4308; the design's own
-# must-reject shape for TE-32's original two sites, population one, is
-# mechanically identical -- see this file's own header and the fixture's own
-# provenance comment for why one fixture discharges both).
+# Disassembly-TEXT parsing helpers, populations five and six ONLY.
+#
+# NOT the ratified build_call_graph/flagged_symbols surfaces (design Sec4.1,
+# D-SLM4834) -- these exist solely to VERIFY, independent of and before the
+# absent instrument, that a fixture's own REAL dumpbin disassembly text (or,
+# for population six, the adopted fold-33-probe fixture text) genuinely
+# carries the call edge / flagged mnemonic its own population claims. The
+# regex shapes mirror Claude/Vitruvius/t2265-fold33-probe/
+# population6_end_to_end_probe.py's own _SYM_RE/_INS_RE/FP_RE (cited, not
+# imported -- that file's own fixtures are plain text, not a real corpus, and
+# importing it would blur "verifying a fixture" into "being the instrument,"
+# the same line fp_scan_common.py's own module docstring draws).
 # ===========================================================================
 
-def test_population_01_03_reserve_growth_mutant():
-    """Falsifying construction: an std::unordered_set grown by plain insert()/
-    erase() (mirrors sslm_abi.cpp's own pre-replacement `g_live_seqs`, T-2268's
-    own "seqreg" leg) and a second grown by explicit reserve() (the original
-    two sites' own shape). Both must REJECT: the bucket-array resize either
-    path drives lowers to genuine SSE2 floating-point arithmetic (the
-    max_load_factor()-driven divide/ceil inside the STL's own rehash sizing).
+_DISASM_SYM_RE = re.compile(r'^(\S.*):$')
+_DISASM_INS_RE = re.compile(
+    r'^\s+[0-9A-F]{16}:\s+(?:[0-9A-F]{2}\s)+\s*([a-zA-Z][a-zA-Z0-9]*)(?:\s+(.*))?$')
 
-    Disposition, population one: TE-32's own historical artifact
-    (Claude/Loki/te32-probe/) is outside this session's granted read-only
-    scope. NOT reproduced byte-for-byte. The claim this test DOES discharge:
-    a byte-level scan cannot distinguish "this container lives in
-    tokenizer.cpp" from "this container lives in sslm_abi.cpp" -- both compile
-    to the identical rehash-sizing machinery, and the SAME classifier property
-    (checks (A)/(B) rejecting the divide/ceil instructions) is what both
-    populations require. The residual left open -- confirming TE-32's own
-    exact historical bytes specifically -- is filed in the case file, not
-    silently treated as fully commissioned by this substitute.
+
+def _iter_disasm_text(text):
+    """Yields (symbol_name, mnemonic, operand_text) for every instruction
+    line in real dumpbin /disasm output (or the adopted fold-33-probe text
+    fixtures, which are hand-authored in the identical shape)."""
+    cur = None
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip("\r\n")
+        m = _DISASM_SYM_RE.match(line)
+        if m:
+            cur = m.group(1).split(" (")[0]
+            continue
+        m = _DISASM_INS_RE.match(line)
+        if not m or cur is None:
+            continue
+        yield cur, m.group(1), (m.group(2) or "")
+
+
+def _verify_call_edge(disasm_text, caller, callee):
+    """Confirms a real `call <callee>` instruction exists inside caller's own
+    disassembly text -- a narrow, single-purpose check, not a general
+    call-graph builder."""
+    for cur, mn, ops in _iter_disasm_text(disasm_text):
+        if cur == caller and mn.lower() == "call" and callee in ops:
+            return True
+    return False
+
+
+def _verify_fp_mnemonic(disasm_text, symbol, fp_re):
+    for cur, mn, _ops in _iter_disasm_text(disasm_text):
+        if cur == symbol and fp_re.match(mn):
+            return mn
+    return None
+
+
+# ===========================================================================
+# Populations one and two -- TE-32's own historical constructions, now
+# reproduced verbatim: Claude/Loki/te32-probe/ was outside T-2326's own
+# granted read-only scope and is granted for T-2333 (coordinator's own brief,
+# item 5).
+# ===========================================================================
+
+def test_population_01_te32_reserve():
+    """Falsifying construction: TE-32's own DoReserve, kind 0
+    (std::unordered_map<std::string, uint32_t>, mirroring tokenizer.cpp's own
+    four std::unordered_map sites) and kind 1 (std::unordered_set<
+    std::string_view>, mirroring model.cpp's own three std::unordered_set<
+    std::string_view> sites) -- the ORIGINAL two site families, reproduced
+    verbatim from Claude/Loki/te32-probe/te32_fp_observability_cell.cpp's own
+    DoReserve function. TE-32's own runtime harness (Part B/C) proved 69 of 69
+    reserve()-driven legs trap under cleared exception masks
+    (Claude/Loki/te32-probe/output-te32.txt); this population's own claim is
+    the byte-level half of that corroboration -- the identical rehash-sizing
+    machinery must REJECT under checks (A)/(B) when scanned.
     """
-    src = os.path.join(_FIXTURES, "pop01_pop03_reserve_growth_mutant.cpp")
+    src = os.path.join(_FIXTURES, "pop01_te32_reserve.cpp")
     with fc.TempDir() as tmp:
-        obj = os.path.join(tmp, "pop0103.obj")
+        obj = os.path.join(tmp, "pop01.obj")
         try:
             fc.compile_cl(src, obj)
         except fc.ToolUnavailable as e:
@@ -221,45 +325,43 @@ def test_population_01_03_reserve_growth_mutant():
         insns = _decode_sections(sections, "x86-64")
         fp_insns = [(i.mnemonic, i.op_str) for i in insns if _is_x86_fp_arith(i.mnemonic)]
         assert fp_insns, (
-            "fixture verification FAILED (not the instrument's fault): the compiled "
-            "reserve()/insert()-growth mutant decoded to {} instructions and NONE is "
-            "FP-arithmetic-shaped -- this fixture does not carry the property this "
-            "population needs and must be repaired before it can commission anything"
-        ).format(len(insns))
+            "fixture verification FAILED (not the instrument's fault): TE-32's own "
+            "reproduced DoReserve bodies decoded to {} instructions and NONE is "
+            "FP-arithmetic-shaped".format(len(insns))
+        )
 
         if not _SCAN_AVAILABLE:
             _fail_absent(
-                "one and three",
-                "Fixture verified above: the compiled object genuinely contains FP-"
-                "arithmetic instructions ({} found, e.g. {}) that a default-deny "
-                "register-file check must REJECT.".format(len(fp_insns), fp_insns[:3]),
+                "one",
+                "Fixture verified above: TE-32's own reproduced construction genuinely "
+                "contains FP-arithmetic instructions ({} found, e.g. {}) that a "
+                "default-deny register-file check must REJECT.".format(len(fp_insns), fp_insns[:3]),
             )
-        result = scan.scan_object(obj, isa="x86-64", object_format="coff")
+        result = scan.scan_object(obj, isa="x86-64")
+        assert result.object_format == "coff", (
+            "a real MSVC cl.exe object must read back as coff, not {}".format(result.object_format)
+        )
         assert not result.refuse, "byte-accounting law should not REFUSE a fully-decodable object"
         assert any(v == "REJECT" for v in result.verdicts.values()), (
-            "the reserve()/insert()-growth mutant must REJECT under checks (A)/(B); "
+            "TE-32's own reserve()-driven bodies must REJECT under checks (A)/(B); "
             "verdicts were: {}".format(result.verdicts)
         )
 
 
-# ===========================================================================
-# Population two -- MXCSR-invisible FP operation classes.
-# ===========================================================================
-
-def test_population_02_mxcsr_invisible_ops():
-    """Falsifying construction: an SSE2 comparison (comisd/ucomisd) and a min
-    (minsd), neither of which raises an IEEE-754 exception for a normal,
-    non-NaN operand pair -- invisible to a trap-observing liveness control
-    (design Sec4.2/Sec4.3's own masks-cleared/sticky-flag cells) but which
-    must still REJECT under check (A): any instruction naming an xmm/ymm/zmm/
-    st register is rejected unless on the closed VEC_MOVE_ALLOW list, and
-    neither comisd/ucomisd nor minsd is on it.
-
-    Disposition: TE-32's own historical artifact (Claude/Loki/te32-probe/) is
-    outside this session's granted read-only scope; this is a fresh
-    construction satisfying the documented property, not a reproduction.
+def test_population_02_te32_mxcsr_invisible():
+    """Falsifying construction: TE-32's own four "always-invisible-to-MXCSR"
+    operation classes (i64->f64 conversion, ordered compare, abs/negate, min
+    -- the only four of TE-32's own twelve operation classes whose executed
+    Part D census reports INVISIBLE on BOTH the exact and inexact operand set,
+    Claude/Loki/te32-probe/output-te32.txt lines 170/177-179) plus
+    BodyUnderTest() from Part E/E2, reproduced verbatim from
+    Claude/Loki/te32-probe/te32_fp_observability_cell.cpp. A trap-observing
+    liveness control (design Sec4.2/Sec4.3) sees nothing on any of these four
+    bodies at any operand set; the byte-level scan must still REJECT under
+    check (A) -- a vector/FP register touched by an instruction not on
+    VEC_MOVE_ALLOW.
     """
-    src = os.path.join(_FIXTURES, "pop02_mxcsr_invisible_ops.cpp")
+    src = os.path.join(_FIXTURES, "pop02_te32_mxcsr_invisible.cpp")
     with fc.TempDir() as tmp:
         obj = os.path.join(tmp, "pop02.obj")
         try:
@@ -274,29 +376,70 @@ def test_population_02_mxcsr_invisible_ops():
         ]
         assert vec_reg_insns, (
             "fixture verification FAILED: no xmm-register instruction decoded from "
-            "the compiled comparison/min body -- this fixture does not exercise the "
-            "register-file coordinate this population needs"
-        )
-        mnems = {m.lower() for m, _ in vec_reg_insns}
-        assert mnems & {"comisd", "ucomisd", "minsd", "maxsd"}, (
-            "expected at least one of comisd/ucomisd/minsd/maxsd; decoded xmm "
-            "instructions were: {}".format(vec_reg_insns)
+            "TE-32's own reproduced always-invisible bodies"
         )
 
         if not _SCAN_AVAILABLE:
             _fail_absent(
                 "two",
-                "Fixture verified above: the compiled object contains {} (an SSE2 "
-                "comparison/min instruction that raises no exception for a normal "
-                "operand pair, confirmed at compile time by mnemonic; the design's "
-                "own liveness controls, Sec4.2/Sec4.3, would see nothing if this were "
-                "the ONLY guard).".format(sorted(mnems & {"comisd", "ucomisd", "minsd", "maxsd"})),
+                "Fixture verified above: TE-32's own four always-invisible-to-MXCSR "
+                "bodies (confirmed by that probe's own execution, not re-derived here) "
+                "compile to real xmm-register instructions ({} found, e.g. {}) that a "
+                "trap-observing liveness control cannot see at any operand set, but "
+                "checks (A)/(B) must still REJECT.".format(len(vec_reg_insns), vec_reg_insns[:3]),
             )
-        result = scan.scan_object(obj, isa="x86-64", object_format="coff")
+        result = scan.scan_object(obj, isa="x86-64")
+        assert result.object_format == "coff"
         assert not result.refuse
         assert any(v == "REJECT" for v in result.verdicts.values()), (
-            "an MXCSR-invisible SSE2 comparison/min must still REJECT under check (A) "
-            "(register-file classification); verdicts were: {}".format(result.verdicts)
+            "TE-32's own always-invisible-to-MXCSR bodies must still REJECT under "
+            "check (A) (register-file classification); verdicts were: "
+            "{}".format(result.verdicts)
+        )
+
+
+# ===========================================================================
+# Population three -- reintroduced std::unordered_set growth on
+# sslm_abi.cpp's own g_live_seqs shape (fold round 3).
+# ===========================================================================
+
+def test_population_03_seqreg_growth_mutant():
+    """Falsifying construction: an std::unordered_set grown by plain insert()/
+    erase() (mirrors sslm_abi.cpp's own pre-replacement g_live_seqs, T-2268's
+    own "seqreg" leg, Claude/Loki/t2268-probe/t2268_insert_growth_fp.cpp).
+    Must REJECT: the bucket-array resize drives the identical rehash-sizing
+    machinery population one/two's own TE-32 bodies do.
+    """
+    src = os.path.join(_FIXTURES, "pop03_seqreg_growth_mutant.cpp")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "pop03.obj")
+        try:
+            fc.compile_cl(src, obj)
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        sections = fc.code_sections(obj, ".text")
+        assert sum(len(s) for s in sections) > 0, "compiled .text section(s) are empty"
+        insns = _decode_sections(sections, "x86-64")
+        fp_insns = [(i.mnemonic, i.op_str) for i in insns if _is_x86_fp_arith(i.mnemonic)]
+        assert fp_insns, (
+            "fixture verification FAILED (not the instrument's fault): the compiled "
+            "insert()/erase()-growth mutant decoded to {} instructions and NONE is "
+            "FP-arithmetic-shaped".format(len(insns))
+        )
+
+        if not _SCAN_AVAILABLE:
+            _fail_absent(
+                "three",
+                "Fixture verified above: the compiled object genuinely contains FP-"
+                "arithmetic instructions ({} found, e.g. {}) that a default-deny "
+                "register-file check must REJECT.".format(len(fp_insns), fp_insns[:3]),
+            )
+        result = scan.scan_object(obj, isa="x86-64")
+        assert result.object_format == "coff"
+        assert not result.refuse
+        assert any(v == "REJECT" for v in result.verdicts.values()), (
+            "the insert()/erase()-growth mutant must REJECT under checks (A)/(B); "
+            "verdicts were: {}".format(result.verdicts)
         )
 
 
@@ -310,13 +453,9 @@ def test_population_04_antilm_restore_growth_mutant():
     """Falsifying construction: a standalone reproduction of
     damped_greedy_antilm.cpp's PRE-T-2296 tables_/counts shape (plain
     std::unordered_map, replaced today by GrowableContextMap/GrowableIntMap --
-    confirmed by reading the real, current source this session, cited in the
-    fixture's own header), populated through a restore-shaped replay: many
-    distinct contexts, each accumulating many distinct candidate tokens in one
-    call, mirroring sslm_seq_restore's own replay pattern into AntiLmUpdate.
-    Must REJECT: the same rehash-sizing machinery as populations one/three,
-    reached via a different call shape (restore-time bulk population, not
-    open/load-time or steady insert/erase).
+    confirmed by reading the real, current source, that file's own line-33
+    comment), populated through a restore-shaped replay mirroring
+    sslm_seq_restore's own call pattern into AntiLmUpdate. Must REJECT.
     """
     src = os.path.join(_FIXTURES, "pop04_antilm_growth_mutant.cpp")
     with fc.TempDir() as tmp:
@@ -339,142 +478,220 @@ def test_population_04_antilm_restore_growth_mutant():
                 "Fixture verified above: {} FP-arithmetic instructions found (e.g. "
                 "{}) in the restore-shaped growth mutant.".format(len(fp_insns), fp_insns[:3]),
             )
-        result = scan.scan_object(obj, isa="x86-64", object_format="coff")
+        result = scan.scan_object(obj, isa="x86-64")
+        assert result.object_format == "coff"
         assert not result.refuse
         assert any(v == "REJECT" for v in result.verdicts.values())
 
 
 # ===========================================================================
 # Population five -- synthetic multi-hop transitive-closure proof (fold round
-# 6). DEMOTED TO DIAGNOSTIC at fold round 8: does not gate the production
-# ACCEPT/REJECT verdict (membership is the closed symbol table, not the
-# walk), still required for Sec7 dimensions 1-3's own "when does this site
-# run" reasoning. This test's own gating assertion is scoped accordingly.
+# 6), graded via the ratified diagnostic_walk surface (fold round 31,
+# D-SLM4827).
 # ===========================================================================
 
 def test_population_05_transitive_chain_diagnostic():
     """Falsifying construction: Root -> HopA -> HopB -> FlaggedLeaf, three
-    hops, no shorter path from Root to FlaggedLeaf exists in the translation
-    unit (Root calls ONLY HopA; HopA calls ONLY HopB). A diagnostic built on a
-    genuine transitive walk (BFS/DFS) attributes FlaggedLeaf's own divsd to
-    Root's reachable set; one built on a bounded-depth approximation (a
-    one-hop-plus-one-hop check) does not.
+    hops, no shorter path from Root to FlaggedLeaf exists (Root calls ONLY
+    HopA; HopA calls ONLY HopB). Built with MSVC cl.exe and read via real
+    dumpbin /disasm text (T-2333: switched from clang to MSVC+dumpbin so this
+    population's own real disassembly is read the same way population six's
+    own ratified surfaces read theirs).
 
-    EXECUTED, independent of the instrument: the call chain is confirmed real
-    by decoding HopA/HopB/Root and finding at least 3 `call` instructions
-    survive to the object file (-O0 -fno-inline disables the optimizer's own
-    inlining, so the chain is not collapsed away) -- the "no shorter path"
-    property is a fact about the compiled bytes, not merely the source text.
-
-    DISPOSITION: this population no longer gates the production ACCEPT/
-    REJECT verdict (design Sec7 dim 11's own fold-round-12 text: membership
-    is the closed symbol table since fold round 8, not the walk). It remains
-    "genuinely valuable" for Sec7 dimensions 1-3's own diagnostic attribution
-    reasoning. No diagnostic-walk API is part of this suite's own assumed
-    contract (see this file's own header) -- there is nothing narrower than
-    "the instrument is absent" to assert once it exists, until that API is
-    itself specified. Filed as an open contract gap in the case file, not
-    silently assumed covered by the ACCEPT/REJECT contract above.
+    VERIFIED, independent of the instrument: this test parses the REAL
+    dumpbin text (not the ratified build_call_graph -- a narrow, single-edge
+    check, _verify_call_edge, defined at this file's own top) and confirms
+    all three call edges are genuinely present, and that FlaggedLeaf's own
+    body carries a real divsd. GRADED via scan.diagnostic_walk(roots,
+    call_graph) -- design Sec4.1's own ratified diagnostic surface
+    (D-SLM4827) -- with call_graph built from the SAME real disassembly text
+    by this file's own narrow, verification-only parser (never the
+    instrument's own build_call_graph, which population six's own cell
+    exercises instead).
     """
     src = os.path.join(_FIXTURES, "pop05_transitive_chain.cpp")
     with fc.TempDir() as tmp:
-        obj = os.path.join(tmp, "pop05.o")
+        obj = os.path.join(tmp, "pop05.obj")
         try:
-            fc.compile_clangxx(src, obj, "x86_64-pc-linux-gnu", extra_args=["-O0", "-fno-inline"])
+            fc.compile_cl(src, obj)
+            disasm_text = fc.dumpbin_disasm(obj)
         except fc.ToolUnavailable as e:
             pytest.skip(str(e))
-        sections = fc.code_sections(obj, ".text")
-        insns = _decode_sections(sections, "x86-64")
-        call_targets = [i.op_str for i in insns if i.mnemonic == "call"]
-        fp_insns = [(i.mnemonic, i.op_str) for i in insns if _is_x86_fp_arith(i.mnemonic)]
-        assert len(call_targets) >= 3, (
-            "expected at least 3 call instructions (Root->HopA, HopA->HopB, "
-            "HopB->FlaggedLeaf); found {}: {}".format(len(call_targets), call_targets)
-        )
-        assert fp_insns, "FlaggedLeaf's own divsd did not survive to the object file"
 
-        _fail_absent(
-            "five (diagnostic -- does not gate ACCEPT/REJECT since fold round 8; "
-            "gates the walk's own attribution correctness only, and this suite's "
-            "own assumed contract has no diagnostic-walk API yet -- an open "
-            "contract gap, filed in the case file)",
-            "Fixture verified above: a genuine 3-hop call chain with no shorter "
-            "path, and FlaggedLeaf's own divsd present in the object ({} FP "
-            "instructions, {} call sites).".format(len(fp_insns), len(call_targets)),
+        assert _verify_call_edge(disasm_text, "Root", "HopA"), (
+            "Root must call HopA -- not found in real dumpbin text"
         )
+        assert _verify_call_edge(disasm_text, "HopA", "HopB"), (
+            "HopA must call HopB -- not found in real dumpbin text"
+        )
+        assert _verify_call_edge(disasm_text, "HopB", "FlaggedLeaf"), (
+            "HopB must call FlaggedLeaf -- not found in real dumpbin text"
+        )
+        assert not _verify_call_edge(disasm_text, "Root", "FlaggedLeaf"), (
+            "Root must NOT call FlaggedLeaf directly -- the whole point of the "
+            "3-hop construction is that no shorter path exists"
+        )
+        fp_re = re.compile(r'^(divsd|addsd|mulsd|subsd)$')
+        assert _verify_fp_mnemonic(disasm_text, "FlaggedLeaf", fp_re), (
+            "FlaggedLeaf's own body must carry a genuine FP-arithmetic instruction"
+        )
+
+        # Build a real call_graph from the same disassembly text, using this
+        # file's own narrow parser (verification-only -- see this module's
+        # own header) -- independent of, and prior to, the absent
+        # diagnostic_walk grading below.
+        real_call_graph: dict[str, set[str]] = {}
+        for cur, mn, ops in _iter_disasm_text(disasm_text):
+            if mn.lower() == "call":
+                target = ops.strip().split()[0] if ops.strip() else ""
+                if target:
+                    real_call_graph.setdefault(cur, set()).add(target)
+        assert real_call_graph.get("Root") == {"HopA"}
+        assert real_call_graph.get("HopA") == {"HopB"}
+        assert real_call_graph.get("HopB") == {"FlaggedLeaf"}
+
+        if not _SCAN_AVAILABLE:
+            _fail_absent(
+                "five",
+                "Fixture verified above: a genuine 3-hop call chain with no shorter "
+                "path (Root->HopA->HopB->FlaggedLeaf, confirmed in real dumpbin text), "
+                "FlaggedLeaf's own divsd present, and a real call_graph built from "
+                "that same text ({}).".format(real_call_graph),
+            )
+        reachable = scan.diagnostic_walk(["Root"], real_call_graph)
+        assert "FlaggedLeaf" in reachable, (
+            "diagnostic_walk must reach FlaggedLeaf, 3 hops from Root, over the real "
+            "call graph; reachable set was {}".format(reachable)
+        )
+        assert "HopA" in reachable and "HopB" in reachable
 
 
 # ===========================================================================
-# Population six -- translation-unit-set desync detection (fold round 6).
-# Also a diagnostic population per the same fold-round-12 disposition as
-# population five (the walk's TU enumeration is diagnostic-only since fold
-# round 8); the SAME open-contract-gap note applies.
+# Population six -- translation-unit-set desync detection (fold round 6),
+# respecified fold round 33 (D-SLM4834): graded via build_call_graph +
+# flagged_symbols + diagnostic_fp_report, NOT derive_core_sources alone
+# (fold round 32's own too-narrow fix, corrected) and NOT diagnostic_walk
+# alone (fold round 31's own too-narrow fix, corrected).
 # ===========================================================================
 
-def test_population_06_tu_set_desync():
-    """Falsifying construction: two translation units, pop06_tu_a.cpp (Root)
-    and pop06_tu_b_added.cpp (CalleeInOtherTU, called from Root, one hop, a
-    genuine divsd). pop06_mini_source_list.txt names BOTH as "the build's own
-    compiled source set" (mirroring CMakeLists.txt's SUPERSLM_CORE_SOURCES
-    shape); pop06_mini_scan_list_stale.txt names only tu_a.cpp -- a
-    hand-maintained list that agreed on the day it was written and was never
-    updated. A scan whose TU enumeration is DERIVED from the source-set file
-    reports the flagged instruction; one that reads the stale list never
-    opens tu_b_added's own object and reports clean.
+def test_population_06_tu_set_desync_end_to_end():
+    """Falsifying construction, ADOPTED VERBATIM from
+    Claude/Vitruvius/t2265-fold33-probe/fixtures/ (the design's own executed
+    precedent for this exact population, per T-2333's own brief item 4):
+    two manifest fixtures (manifest_stale.cmake.txt lists only tu_a;
+    manifest_current.cmake.txt lists tu_a and tu_b) sharing one disassembly
+    fixture directory that already contains BOTH tu_a.disasm.txt and
+    tu_b.disasm.txt -- modelling the real situation this population's own
+    claim describes: the added translation unit has genuinely been compiled
+    and disassembled; the only question is whether the corpus-building step's
+    own TU enumeration picked it up. tu_a defines root_fn, which calls
+    callee_in_b (a real, named call target, present in tu_a's own
+    disassembly regardless of whether tu_b is ever read -- exactly as a real
+    relocation would be); tu_b defines callee_in_b, which contains a genuine
+    addsd instruction.
 
-    EXECUTED, independent of the instrument: both TUs compile; the desync
-    itself (source-set lists 2 files, scan-list lists 1) is confirmed by
-    reading both list files directly -- no instrument needed to see that they
-    disagree, only to see what a scan reading each ONE would do about it.
+    This is population six's own REAL, end-to-end claim (design Sec4.1,
+    fold round 33): a genuine derivation REPORTS callee_in_b's flagged
+    content under the current manifest; a stale enumeration SILENTLY MISSES
+    it under the stale manifest -- NOT a TU-name-list diff (fold round 32's
+    own too-narrow fix, corrected) and NOT a bare reachable-name-set diff
+    (fold round 33's own first, failed attempt at this exact probe, kept at
+    Claude/Vitruvius/t2265-fold33-probe/out-population6-probe-v1-FAILED.txt
+    per StandardsDocument.md Sec7's own repair standard). callee_in_b is
+    reachable-by-NAME under BOTH manifests (a call instruction names its
+    target whether or not the target's own TU was ever read) -- this test
+    confirms that explicitly, so the discrimination the grading step performs
+    is real, not accidental.
     """
-    src_a = os.path.join(_FIXTURES, "pop06_tu_a.cpp")
-    src_b = os.path.join(_FIXTURES, "pop06_tu_b_added.cpp")
-    source_list_path = os.path.join(_FIXTURES, "pop06_mini_source_list.txt")
-    stale_list_path = os.path.join(_FIXTURES, "pop06_mini_scan_list_stale.txt")
+    fx_dir = os.path.join(_FIXTURES, "pop06_fold33_fixtures")
+    manifest_stale = os.path.join(fx_dir, "manifest_stale.cmake.txt")
+    manifest_current = os.path.join(fx_dir, "manifest_current.cmake.txt")
+    disasm_dir = os.path.join(fx_dir, "disasm")
 
-    with open(source_list_path) as f:
-        source_list = [line.strip() for line in f if line.strip()]
-    with open(stale_list_path) as f:
-        stale_list = [line.strip() for line in f if line.strip()]
+    with open(os.path.join(disasm_dir, "tu_a.disasm.txt")) as f:
+        tu_a_text = f.read()
+    with open(os.path.join(disasm_dir, "tu_b.disasm.txt")) as f:
+        tu_b_text = f.read()
 
-    assert "pop06_tu_b_added.cpp" in source_list, "the mini build's own source set must name it"
-    assert "pop06_tu_b_added.cpp" not in stale_list, (
-        "the whole point of this population: the stale list must NOT mirror it"
+    assert _verify_call_edge(tu_a_text, "root_fn", "callee_in_b"), (
+        "root_fn must call callee_in_b in the adopted fixture's own real text"
     )
-    assert set(stale_list) < set(source_list), (
-        "the stale list must be a strict subset of the real source set, or this "
-        "is not a desync at all"
+    fp_re = re.compile(r'^(addsd|subsd|mulsd|divsd)$')
+    assert _verify_fp_mnemonic(tu_b_text, "callee_in_b", fp_re), (
+        "callee_in_b must carry a genuine FP-arithmetic mnemonic in the adopted "
+        "fixture's own real text"
     )
 
-    with fc.TempDir() as tmp:
-        obj_a = os.path.join(tmp, "tu_a.o")
-        obj_b = os.path.join(tmp, "tu_b.o")
-        try:
-            fc.compile_clangxx(src_a, obj_a, "x86_64-pc-linux-gnu", extra_args=["-O0"])
-            fc.compile_clangxx(src_b, obj_b, "x86_64-pc-linux-gnu", extra_args=["-O0"])
-        except fc.ToolUnavailable as e:
-            pytest.skip(str(e))
-        sections_b = fc.code_sections(obj_b, ".text")
-        insns_b = _decode_sections(sections_b, "x86-64")
-        fp_insns = [(i.mnemonic, i.op_str) for i in insns_b if _is_x86_fp_arith(i.mnemonic)]
-        assert fp_insns, "CalleeInOtherTU's own divsd did not survive to its object file"
+    # Manifest content itself: confirm the desync is real before grading it.
+    # Parses only the set(SUPERSLM_CORE_SOURCES ...) block's own entries, not
+    # the raw file text -- both fixtures' own header COMMENTS mention "tu_b"
+    # in prose regardless of which manifest actually lists it (confirmed by
+    # direct execution this session: a raw substring check against the whole
+    # file falsely finds "tu_b" in the stale manifest's own explanatory
+    # comment, "stands in for a snapshot ... taken BEFORE tu_b.cpp was
+    # added"), so the check must read the declaration block the way
+    # derive_core_sources itself would, not the file's prose.
+    _set_var_re = re.compile(r"set\(\s*SUPERSLM_CORE_SOURCES(.*?)\)", re.DOTALL)
 
+    def _manifest_entries(path):
+        with open(path) as f:
+            text = f.read()
+        m = _set_var_re.search(text)
+        assert m, "{}: no set(SUPERSLM_CORE_SOURCES ...) block found".format(path)
+        return [line.strip() for line in m.group(1).splitlines()
+                if line.strip() and not line.strip().startswith("#")]
+
+    stale_entries = _manifest_entries(manifest_stale)
+    current_entries = _manifest_entries(manifest_current)
+    assert not any("tu_b" in e for e in stale_entries), (
+        "the stale manifest's own SUPERSLM_CORE_SOURCES block must NOT list tu_b; "
+        "got {}".format(stale_entries)
+    )
+    assert any("tu_b" in e for e in current_entries), (
+        "the current manifest's own SUPERSLM_CORE_SOURCES block must list tu_b; "
+        "got {}".format(current_entries)
+    )
+    assert any("tu_a" in e for e in stale_entries)
+    assert any("tu_a" in e for e in current_entries)
+
+    if not _SCAN_AVAILABLE:
         _fail_absent(
-            "six (diagnostic -- same open-contract-gap disposition as population "
-            "five; TU-enumeration derivation is not part of this suite's own "
-            "assumed ScanResult contract)",
-            "Fixture verified above: the mini build's own source-set/scan-list "
-            "desync is real (source set names 2 files, the stale scan list names "
-            "1), and the omitted file's own object genuinely carries {} FP "
-            "instructions.".format(len(fp_insns)),
+            "six",
+            "Fixture verified above: the adopted fold-33-probe fixture is genuine -- "
+            "root_fn really calls callee_in_b (confirmed in tu_a's own real "
+            "disassembly text), callee_in_b really carries FP-arithmetic content "
+            "(confirmed in tu_b's own real disassembly text), and the two manifests "
+            "genuinely differ exactly where the desync predicts.",
         )
+    # Reachable-by-name in BOTH runs -- the property that makes population
+    # six's own claim non-trivial (build_call_graph alone cannot discharge it).
+    graph_stale = scan.build_call_graph(manifest_stale, disasm_dir)
+    graph_current = scan.build_call_graph(manifest_current, disasm_dir)
+    reach_stale = scan.diagnostic_walk(["root_fn"], graph_stale)
+    reach_current = scan.diagnostic_walk(["root_fn"], graph_current)
+    assert "callee_in_b" in reach_stale, (
+        "callee_in_b must be reachable BY NAME even under the stale manifest -- a "
+        "call edge names its target regardless of whether the target's own TU was "
+        "read; reach_stale={}".format(reach_stale)
+    )
+    assert "callee_in_b" in reach_current
+
+    # The actual discrimination: the COMBINED report (reachable AND flagged).
+    report_stale = scan.diagnostic_fp_report(manifest_stale, disasm_dir, ["root_fn"])
+    report_current = scan.diagnostic_fp_report(manifest_current, disasm_dir, ["root_fn"])
+    assert "callee_in_b" not in report_stale, (
+        "the STALE manifest must SILENTLY MISS callee_in_b's own flagged content -- "
+        "its own TU was never in the derived enumeration; report_stale={}".format(report_stale)
+    )
+    assert "callee_in_b" in report_current, (
+        "the CURRENT manifest must REPORT callee_in_b's own flagged content; "
+        "report_current={}".format(report_current)
+    )
 
 
 # ===========================================================================
 # Population seven -- T-2271's own eight-object classifier construction (fold
-# round 7, D-SLM4350): four bodies, each performing a genuine floating-point
-# operation invisible to the pre-fold-7 36-mnemonic detector, at two ISA
-# tiers (SSE baseline, AVX2).
+# round 7, D-SLM4350).
 # ===========================================================================
 
 _POP07_TIERS = [("sse_baseline", []), ("avx2", ["-mavx2"])]
@@ -483,15 +700,11 @@ _POP07_TIERS = [("sse_baseline", []), ("avx2", ["-mavx2"])]
 @pytest.mark.parametrize("tier,extra_flags", _POP07_TIERS)
 def test_population_07_fpblind_classifier(tier, extra_flags):
     """Falsifying construction: BodyFloor/BodyFma/BodyRound/BodyHadd, adapted
-    from T-2271's own construction (see pop07_fpblind.cpp's own header for the
-    STL-portability adaptation). All four must REJECT at BOTH ISA tiers this
-    fold's own commissioning names -- SSE baseline (this parametrization) and
-    AVX2 (-mavx2) -- eight (function, tier) cells total, matching D-SLM4350's
-    own "8 of 8 REJECT" figure in shape.
+    from T-2271's own construction. All four must REJECT at both ISA tiers.
     """
     src = os.path.join(_FIXTURES, "pop07_fpblind.cpp")
     with fc.TempDir() as tmp:
-        obj = os.path.join(tmp, f"pop07_{tier}.obj")
+        obj = os.path.join(tmp, "pop07_{}.obj".format(tier))
         try:
             fc.compile_clangxx(src, obj, "x86_64-pc-windows-msvc",
                                extra_args=["-msse4.1", *extra_flags])
@@ -512,7 +725,8 @@ def test_population_07_fpblind_classifier(tier, extra_flags):
                 "Fixture verified above: {} FP-arithmetic instructions present at "
                 "this ISA tier.".format(len(fp_insns)),
             )
-        result = scan.scan_object(obj, isa="x86-64", object_format="coff")
+        result = scan.scan_object(obj, isa="x86-64")
+        assert result.object_format == "coff"
         assert not result.refuse
         for fn in ("BodyFloor", "BodyFma", "BodyRound", "BodyHadd"):
             assert result.verdicts.get(fn) == "REJECT", (
@@ -529,21 +743,12 @@ def test_population_07_fpblind_classifier(tier, extra_flags):
 def test_population_08_real_corpus_whole_sweep():
     """This population is a claim about the REAL, currently-committed engine
     source (SUPERSLM_CORE_SOURCES, CMakeLists.txt) -- not a constructed
-    fixture. Verified today, independent of the absent instrument: the real
-    source list resolves to a non-vacuous, 17-file population, exactly the
-    count design Sec4.1's own text states ("all 17 SUPERSLM_CORE_SOURCES
-    translation units"), and every named file exists on disk.
-
-    NOT graded this session even once the instrument exists in principle:
-    compiling and scanning the real 17-TU corpus and reproducing the design's
-    own "219 of 235 R4-closure ACCEPT / whole-corpus 4933 ACCEPT, 190 REJECT,
-    zero unexplained" claim (Sec4.1, D-SLM4370) is a build-scale operation
-    (the full CMake build, not a single translation unit) that belongs to the
-    instrument's own commissioning run in CI, not a single pytest cell in
-    this suite -- filed as its own residual in the case file, not silently
-    assumed covered by populations one through seven's own per-fixture shape.
+    fixture. Verified today: the real source list resolves to a non-vacuous
+    17-file population, and every named file exists on disk. Not gradable by
+    this single pytest cell even once the instrument exists -- a full-corpus
+    build-and-scan is CI-scale, not a unit cell.
     """
-    engine_root = os.path.dirname(_TESTS_ROOT)  # tests/.. == the engine repo root
+    engine_root = os.path.dirname(_TESTS_ROOT)
     cmake_path = os.path.join(engine_root, "CMakeLists.txt")
     assert os.path.exists(cmake_path), "expected CMakeLists.txt at the engine repo root"
     with open(cmake_path) as f:
@@ -564,9 +769,9 @@ def test_population_08_real_corpus_whole_sweep():
         "built at tests/ci/check_fp_free_scan.py -- population eight cannot be "
         "graded through it, and would not be graded by this single pytest cell "
         "even once it exists (a full-corpus build-and-scan is a CI-scale "
-        "operation, not a unit cell -- see this test's own docstring). Verified "
-        "above: SUPERSLM_CORE_SOURCES resolves to the documented 17 real files, "
-        "all present on disk ({}).".format(sources)
+        "operation, not a unit cell). Verified above: SUPERSLM_CORE_SOURCES "
+        "resolves to the documented 17 real files, all present on disk "
+        "({}).".format(sources)
     )
 
 
@@ -579,22 +784,7 @@ def test_population_09_funclet_membership():
     """Falsifying construction: RegressionParent (no FP instruction of its
     own) wraps a try/catch; the catch FUNCLET performs genuine IEEE-754
     double arithmetic and is entered by the runtime unwinder through
-    `.xdata`, named by no `call` and no `jmp` instruction anywhere in the
-    image. A membership rule decided by a call/jmp edge walk never reaches
-    it (absent, not rejected); the closed-symbol-table rule (every code-
-    carrying symbol in the object) scans it because it exists.
-
-    EXECUTED, both directions, independent of the absent instrument: the
-    compiled object's own COFF symbol table is read directly (no capstone
-    needed for this check) and confirmed to contain a SECOND function symbol
-    beyond RegressionParent (the funclet, name-mangled `?catch$...`), AND the
-    whole object's own decoded instruction stream is scanned for any `call`/
-    `jmp` whose target is a direct address -- none resolves to the funclet
-    (an unlinked .obj's own inter-function control transfer goes through
-    relocations, not immediate addresses, matching the population's own
-    defining property: reachable by NO call/jmp INSTRUCTION; the funclet's
-    real reachability is via `.xdata`, a metadata table this test does not
-    parse).
+    `.xdata`, named by no call and no jmp instruction anywhere in the image.
     """
     src = os.path.join(_FIXTURES, "pop09_funclet_fp.cpp")
     with fc.TempDir() as tmp:
@@ -614,14 +804,8 @@ def test_population_09_funclet_membership():
         def sym_name(i):
             # COFF long-name form: first 4 bytes zero, next 4 bytes is an
             # offset INTO the string table INCLUDING its own leading 4-byte
-            # size prefix -- `strtab` already starts at that size prefix
-            # (strtab_off == symptr + nsym*18, the string table's own start),
-            # so `off` indexes directly into it with no adjustment. Fixed
-            # this session: an earlier `off - 4` version silently returned
-            # every long name shifted 4 bytes into its own predecessor's
-            # tail, producing garbage fragments ('X@Z', 'urn', ...) instead
-            # of real mangled names -- caught only because the funclet
-            # symbol this test looks for never appeared among them.
+            # size prefix -- strtab already starts at that size prefix, so
+            # off indexes directly into it with no adjustment.
             raw = data[symptr + i * 18: symptr + i * 18 + 8]
             if raw[:4] == b"\x00\x00\x00\x00":
                 off, = struct.unpack_from("<I", raw, 4)
@@ -657,7 +841,8 @@ def test_population_09_funclet_membership():
                 "({}), and the object carries real FP arithmetic ({} "
                 "instructions).".format(catch_funclets, len(fp_insns)),
             )
-        result = scan.scan_object(obj, isa="x86-64", object_format="coff")
+        result = scan.scan_object(obj, isa="x86-64")
+        assert result.object_format == "coff"
         assert not result.refuse
         assert result.verdicts.get("RegressionParent") == "ACCEPT", (
             "RegressionParent itself carries no FP instruction and must ACCEPT"
@@ -672,26 +857,14 @@ def test_population_09_funclet_membership():
 
 # ===========================================================================
 # Population ten -- T-2273's AArch64 differential control (fold round 9).
-# Commissioning found INFEASIBLE at fold round 10 (its own dumpbin-rendered
-# must-accept/must-reject pair cannot be produced by the real macos-arm64
-# CI leg's own toolchain) and SUPERSEDED by population eleven (the same ISA
-# leg via clang/ELF instead). Executed here anyway, at low marginal cost
-# (this session's own toolchain confirms the real MSVC AArch64 cross-compiler
-# is present) -- historical/diagnostic value only; this population's own
-# GATING status is disposed to population eleven.
+# Historical/diagnostic: commissioning infeasible per fold round 10, disposed
+# to population eleven.
 # ===========================================================================
 
 def test_population_10_arm_differential_historical():
-    """Falsifying + must-accept construction, one object: BuildMerges (the
-    real site-1 shape, reserve()+emplace()), DedupNames (model.cpp's own
-    site 5-7 shape, an unordered_set, no FP), BodyDivide, BodyConvertCompare
-    -- compiled for AArch64 via MSVC's own cross-compiler (cl.exe via
-    vcvarsamd64_arm64.bat), matching Claude/Loki/t2273-probe/build-arm.bat's
-    own toolchain exactly (not clang, per that probe's own build script).
-
-    Both directions in one object: BuildMerges/BodyDivide/BodyConvertCompare
-    must REJECT (genuine fdiv/fmadd/fsub/scvtf); DedupNames must ACCEPT (an
-    unordered_set with no floating-point operation).
+    """Falsifying + must-accept construction, one object: BuildMerges,
+    DedupNames, BodyDivide, BodyConvertCompare -- compiled for AArch64 via
+    MSVC's own cross-compiler. Both directions in one object.
     """
     src = os.path.join(_FIXTURES, "pop10_arm_site.cpp")
     with fc.TempDir() as tmp:
@@ -715,7 +888,11 @@ def test_population_10_arm_differential_historical():
                 "Fixture verified above: {} genuine AArch64 FP instructions "
                 "decoded (e.g. {}).".format(len(fp_insns), fp_insns[:3]),
             )
-        result = scan.scan_object(obj, isa="aarch64", object_format="coff")
+        result = scan.scan_object(obj, isa="aarch64")
+        assert result.object_format == "coff", (
+            "MSVC's own AArch64 cross-compiler still emits COFF, not {}".format(
+                result.object_format)
+        )
         assert not result.refuse
         for fn in ("BuildMerges", "BodyDivide", "BodyConvertCompare"):
             assert result.verdicts.get(fn) == "REJECT", (
@@ -728,7 +905,8 @@ def test_population_10_arm_differential_historical():
 
 # ===========================================================================
 # Population eleven -- the byte-accounting law's own toolchain-and-format
-# independence, four (ISA, object-format, toolchain) legs (fold round 10).
+# independence, four (ISA, object-format, toolchain) legs (fold round 10) --
+# now also exercises ci_gate's own True (healthy-job) path.
 # ===========================================================================
 
 _POP11_LEGS = [
@@ -742,10 +920,9 @@ _POP11_LEGS = [
 @pytest.mark.parametrize("leg_name,fname,isa,fmt,toolchain", _POP11_LEGS)
 def test_population_11_toolchain_format_independence(leg_name, fname, isa, fmt, toolchain):
     """Falsifying + must-accept construction on ONE of the design's own four
-    named production legs: HashSite (an ordinary integer add/mov, no FP) must
-    ACCEPT; BodyDivide (a genuine divsd/fdiv) must REJECT -- on this exact
-    (ISA, object-format, toolchain) combination, non-degenerately (a
-    real, nonzero byte count decoded, not a 0-0=0 vacuous pass).
+    named production legs: HashSite must ACCEPT; BodyDivide must REJECT --
+    non-degenerately. Also exercises ci_gate's own True (job-passes) path:
+    both expected symbols present, no REFUSE.
     """
     src = os.path.join(_FIXTURES, fname)
     with fc.TempDir() as tmp:
@@ -780,19 +957,28 @@ def test_population_11_toolchain_format_independence(leg_name, fname, isa, fmt, 
                 "Fixture verified above: {} bytes decoded non-degenerately, "
                 "BodyDivide's own FP instruction present ({}).".format(total_bytes, fp_insns),
             )
-        result = scan.scan_object(obj, isa=isa, object_format=fmt)
+        result = scan.scan_object(obj, isa=isa)
+        assert result.object_format == fmt, (
+            "leg {}: expected object_format {}, read back {}".format(
+                leg_name, fmt, result.object_format)
+        )
         assert not result.refuse, "leg {}: byte-accounting law should not REFUSE".format(leg_name)
         assert result.verdicts.get("HashSite") == "ACCEPT", (
             "leg {}: HashSite carries no FP instruction and must ACCEPT".format(leg_name))
         assert result.verdicts.get("BodyDivide") == "REJECT", (
             "leg {}: BodyDivide carries a genuine FP instruction and must "
             "REJECT".format(leg_name))
+        assert scan.ci_gate(result, expected_symbols=["HashSite", "BodyDivide"]) is True, (
+            "leg {}: ci_gate must return True -- both expected symbols are present "
+            "and the accounting law did not REFUSE".format(leg_name)
+        )
 
 
 # ===========================================================================
 # Population twelve -- T-2275's clause-(0) REFUSE construction (fold round
 # 11), extended to the three x86-64 production legs at fold round 12
-# (D-SLM4442).
+# (D-SLM4442) -- now also exercises ci_gate's own False (job-fails-on-REFUSE)
+# path.
 # ===========================================================================
 
 _POP12_LEGS = [
@@ -807,20 +993,8 @@ _POP12_LEGS = [
 @pytest.mark.parametrize("leg_name,fname,isa,fmt", _POP12_LEGS)
 def test_population_12_clause0_refuse_undecodable_pool(leg_name, fname, isa, fmt):
     """Falsifying construction: an ordinary integer function, an inline
-    literal pool UNDECODABLE as machine code in this ISA/mode (fold-9's own
-    disclosed FNV-1a-constant shape for AArch64; eight long-mode-invalid
-    opcodes for x86-64, confirmed genuinely undecodable against capstone
-    before assembly per each fixture's own header), then a floating-point
-    body -- covered by no symbol, no recognised padding pattern, and no
-    data-typed symbol. Clause (0) must REFUSE: zero ACCEPT/REJECT verdicts
-    emitted for ANY symbol in the object, non-zero unclassified bytes, CI
-    job fails.
-
-    EXECUTED, independent of the instrument: capstone itself is used to
-    confirm the pool bytes really are undecodable at this ISA/mode BEFORE any
-    grading is attempted -- the same pre-flight check T-2265's own fold-12
-    remedy performed (fold12_remedy_check.py's own pre-flight, cited in
-    pop12_pool_elf_x64.s's header).
+    literal pool UNDECODABLE as machine code in this ISA/mode, then a
+    floating-point body. Clause (0) must REFUSE; ci_gate must return False.
     """
     src = os.path.join(_FIXTURES, fname)
     with fc.TempDir() as tmp:
@@ -845,10 +1019,8 @@ def test_population_12_clause0_refuse_undecodable_pool(leg_name, fname, isa, fmt
         decoded_bytes = sum(sum(i.size for i in md.disasm(s, 0x0)) for s in sections)
         assert decoded_bytes < total_bytes, (
             "leg {}: expected the decoder to STOP before the end of the section "
-            "(the pool must be undecodable) -- decoded {} of {} bytes cleanly, "
-            "meaning either the whole object decodes (this fixture does not "
-            "carry the property) or a resync/skip strategy would be needed to "
-            "see the failure at all".format(leg_name, decoded_bytes, total_bytes)
+            "(the pool must be undecodable) -- decoded {} of {} bytes "
+            "cleanly".format(leg_name, decoded_bytes, total_bytes)
         )
 
         if not _SCAN_AVAILABLE:
@@ -859,21 +1031,24 @@ def test_population_12_clause0_refuse_undecodable_pool(leg_name, fname, isa, fmt
                 "is exactly the unaccounted range clause (0) must REFUSE "
                 "on.".format(decoded_bytes, total_bytes),
             )
-        result = scan.scan_object(obj, isa=isa, object_format=fmt)
+        result = scan.scan_object(obj, isa=isa)
+        assert result.object_format == fmt
         assert result.refuse, "leg {}: clause (0) must REFUSE on an undecodable range".format(leg_name)
         assert result.unclassified_bytes > 0
         assert not result.verdicts, (
             "leg {}: REFUSE must emit ZERO ACCEPT/REJECT verdicts for any symbol; "
             "got {}".format(leg_name, result.verdicts)
         )
+        assert scan.ci_gate(result, expected_symbols=["BodyDivide"]) is False, (
+            "leg {}: ci_gate must return False on a REFUSE leg -- the job must "
+            "fail".format(leg_name)
+        )
 
 
 # ===========================================================================
 # Population thirteen -- T-2276's decodable-pool construction (fold round
-# 13): the pool's bytes DO decode (a movabs whose immediate swallows the
-# next function's own body), so clause (0)'s REFUSE must come from the
-# COVERAGE relation (is this byte attributed to the symbol whose body it
-# is?), not merely a decodability relation.
+# 13) -- also exercises ci_gate's own False path on the coverage-relation
+# REFUSE shape.
 # ===========================================================================
 
 _POP13_LEGS = [
@@ -886,14 +1061,10 @@ _POP13_LEGS = [
 @pytest.mark.parametrize("leg_name,fname,fmt", _POP13_LEGS)
 def test_population_13_coverage_relation_decodable_swallow(leg_name, fname, fmt):
     """Falsifying construction: HashSite, an 8-byte pool covered by no
-    symbol whose trailing bytes `48 B8` begin a 10-byte `movabs` that
-    DECODES CLEANLY and swallows BodyDivide's own 5-byte body whole,
-    then BodyDivide (a genuine divsd). Ground truth: the raw bytes `f2 0f
-    5e c1` (divsd xmm0, xmm1) are present in the compiled object (confirmed
-    directly, no decoder needed) -- REFUSE must still fire, because the
-    pool bytes are attributed to no symbol's own extent even though they
-    decode; a law that only tests decodability (not attribution) would PASS
-    this object with BodyDivide silently unscanned.
+    symbol whose trailing bytes decode cleanly as a movabs that swallows
+    BodyDivide's own body whole, then BodyDivide (a genuine divsd). REFUSE
+    must fire on the COVERAGE relation, not merely decodability; ci_gate must
+    return False.
     """
     src = os.path.join(_FIXTURES, fname)
     with fc.TempDir() as tmp:
@@ -911,43 +1082,37 @@ def test_population_13_coverage_relation_decodable_swallow(leg_name, fname, fmt)
             raw = f.read()
         divsd_bytes = bytes([0xF2, 0x0F, 0x5E, 0xC1])
         assert divsd_bytes in raw, (
-            "leg {}: expected the raw bytes of `divsd xmm0, xmm1` in the compiled "
+            "leg {}: expected the raw bytes of divsd xmm0, xmm1 in the compiled "
             "object; ground truth check failed".format(leg_name)
         )
 
         if not _SCAN_AVAILABLE:
             _fail_absent(
                 "thirteen, leg {}".format(leg_name),
-                "Fixture verified above: the raw bytes of `divsd xmm0, xmm1` are "
+                "Fixture verified above: the raw bytes of divsd xmm0, xmm1 are "
                 "present in the compiled object (ground truth, independent of any "
-                "decoder) -- BodyDivide's own FP instruction genuinely exists, and "
-                "a law that only checks decodability (not per-symbol coverage) "
-                "would silently pass this object with a REJECT-worthy instruction "
-                "unseen.",
+                "decoder).",
             )
-        result = scan.scan_object(obj, isa="x86-64", object_format=fmt)
+        result = scan.scan_object(obj, isa="x86-64")
+        assert result.object_format == fmt
         assert result.refuse, (
-            "leg {}: the pool bytes are covered by no symbol's own extent (they "
-            "decode, but are not attributed to anyone) -- clause (0) must REFUSE "
-            "on the coverage relation, not merely the decodability "
-            "relation".format(leg_name)
+            "leg {}: the pool bytes are covered by no symbol's own extent -- "
+            "clause (0) must REFUSE on the coverage relation".format(leg_name)
         )
         assert not result.verdicts
+        assert scan.ci_gate(result, expected_symbols=["BodyDivide"]) is False, (
+            "leg {}: ci_gate must return False on a REFUSE leg".format(leg_name)
+        )
 
 
 # ===========================================================================
 # Population fourteen -- T-2277's per-symbol-granularity census, 11 cells
-# (fold round 14). Pure Python object synthesis (pop14_make_objects.py,
-# adapted from Claude/Loki/t2277-probe/make_objects.py) -- no compiler
-# needed at all, so every cell runs regardless of toolchain availability.
+# (fold round 14). Pure Python object synthesis -- no compiler needed.
 # ===========================================================================
 
 def _build_pop14_cells(out_dir):
     """Builds the 11 hand-crafted ELF64/COFF objects T-2277's own census
-    derives from the fold-13 module's own branch conditions. Returns a list
-    of (cell_id, note, obj_path, isa, fmt, owner_symbol) -- `owner_symbol` is
-    the symbol whose body the FP instruction genuinely is, per the
-    construction's own design (see pop14_make_objects.py's own header)."""
+    derives from the fold-13 module's own branch conditions."""
     FUNC, OBJECT = mk.STT_FUNC, mk.STT_OBJECT
     cells = []
 
@@ -1007,20 +1172,7 @@ def _build_pop14_cells(out_dir):
 def test_population_14_per_symbol_granularity_census():
     """Eleven hand-synthesized objects (no compiler -- pure Python ELF64/COFF
     byte synthesis, pop14_make_objects.py) mechanically enumerated from
-    design Sec4.1's own branch conditions: an alias symbol sharing a start
-    address, a symbol with no declared size, a symbol at a section's own end,
-    a declared size clamped by the next symbol, an ELF STT_OBJECT / COFF
-    non-function symbol covering the FP bytes inside an executable section, a
-    decodable extent tail, and an inter-extent padding gap. Every cell's own
-    ground truth (the raw x86-64/AArch64 divsd/fdiv bytes are present in the
-    object) is confirmed directly, independent of any decoder.
-
-    Once the instrument exists: a scan that emits ANY verdict for BodyDivide
-    computed over bytes that are not BodyDivide's own -- or that omits
-    BodyDivide's own FP instruction from every emitted verdict while the law
-    PASSes -- fails this cell (T-2277's own two named failure shapes,
-    "vacuous/misattributed" and "FP invisible"), for whichever of the 11
-    cells exercises it.
+    design Sec4.1's own branch conditions.
     """
     with fc.TempDir() as tmp:
         cells = _build_pop14_cells(tmp)
@@ -1043,8 +1195,11 @@ def test_population_14_per_symbol_granularity_census():
             )
         misattributed_or_vacuous = []
         fp_invisible = []
+        bad_format = []
         for cell_id, note, path, isa, fmt, owner in cells:
-            result = scan.scan_object(path, isa=isa, object_format=fmt)
+            result = scan.scan_object(path, isa=isa)
+            if result.object_format != fmt:
+                bad_format.append((cell_id, result.object_format, fmt))
             if not result.refuse:
                 owner_verdict = result.verdicts.get(owner)
                 if owner_verdict is None:
@@ -1055,8 +1210,64 @@ def test_population_14_per_symbol_granularity_census():
                 )
                 if not emitted_as_owner_reject:
                     fp_invisible.append((cell_id, note))
+        assert not bad_format, "cells whose object_format was misread: {}".format(bad_format)
         assert not misattributed_or_vacuous, (
             "cells with a vacuous/misattributed verdict: {}".format(misattributed_or_vacuous))
         assert not fp_invisible, (
             "cells where the FP instruction is invisible to every emitted verdict: "
             "{}".format(fp_invisible))
+
+
+# ===========================================================================
+# ci_gate's own absent-report leg (T-2333's own brief, item 2): a leg that is
+# NOT refused, but names an expected symbol that never appears in
+# result.verdicts. This is guarantee (iii) -- fails independently of (i)/(ii).
+# ===========================================================================
+
+def test_ci_gate_absent_report_leg():
+    """Uses population eleven's own healthy, non-refused ELF/x86-64 fixture
+    (HashSite/BodyDivide, both real, both present in verdicts once graded) but
+    asks ci_gate for a THIRD symbol that does not exist anywhere in the
+    object. Per the ratified contract's own guarantee (iii): "any name in
+    expected_symbols absent from result.verdicts, when NOT refused, fails
+    independently of (i) and (ii)" -- ci_gate must return False even though
+    the accounting law does not REFUSE and every symbol that DOES exist is
+    correctly graded.
+    """
+    src = os.path.join(_FIXTURES, "pop11_elf_x64.s")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "absent_report.o")
+        try:
+            fc.compile_clang_asm(src, obj, "x86_64-pc-linux-gnu")
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        sections = fc.code_sections(obj, ".text")
+        assert sum(len(s) for s in sections) > 0
+        with open(os.path.join(_HERE, "fp_scan_fixtures", "pop11_elf_x64.s")) as f:
+            src_text = f.read()
+        assert "NonexistentSymbol" not in src_text, (
+            "the absent-report leg's own control depends on this name genuinely "
+            "not existing in the fixture's own source"
+        )
+
+        if not _SCAN_AVAILABLE:
+            _fail_absent(
+                "ci_gate's own absent-report leg",
+                "Fixture verified above: the object compiles and is non-degenerate; "
+                "\"NonexistentSymbol\" is confirmed absent from the fixture's own "
+                "source, so asking ci_gate for it exercises guarantee (iii) "
+                "genuinely, not by accident.",
+            )
+        result = scan.scan_object(obj, isa="x86-64")
+        assert not result.refuse, "this leg must not REFUSE -- guarantee (iii) is tested apart from (i)"
+        assert "NonexistentSymbol" not in result.verdicts
+        assert scan.ci_gate(
+            result, expected_symbols=["HashSite", "BodyDivide", "NonexistentSymbol"]
+        ) is False, (
+            "ci_gate must return False: NonexistentSymbol is in expected_symbols but "
+            "absent from result.verdicts, and the leg is not refused -- guarantee "
+            "(iii), the absent-report leg, independent of (i) and (ii)"
+        )
+        # Guarantee (ii)'s own converse, confirmed on the same object: naming
+        # only the symbols that ARE present still passes.
+        assert scan.ci_gate(result, expected_symbols=["HashSite", "BodyDivide"]) is True

@@ -1405,27 +1405,37 @@ if not %t2296_liveness_ec%==0 (
 	popd & exit /b 1
 )
 
-rem T-2326 (Curie): tests\t2296-fp-free-open-red-suite\test_check_fp_free_scan.py -- the red suite
-rem for design Sec4.1's own deciding instrument (Sec7 dimension 11's fourteen commissioning
-rem populations: Claude/Vitruvius/t2265-superslm-fp-free-open-design-2026-08-24.md). The instrument
-rem itself is a Python CI tool that does not exist yet anywhere in this tree
+rem T-2326/T-2333 (Curie): tests\t2296-fp-free-open-red-suite\test_check_fp_free_scan.py -- the red
+rem suite for design Sec4.1's own deciding instrument (Sec7 dimension 11's fourteen commissioning
+rem populations, plus ci_gate's own enforcement contract: Claude/Vitruvius/
+rem t2265-superslm-fp-free-open-design-2026-08-24.md, as ratified through fold round 33). The
+rem instrument itself is a Python CI tool that does not exist yet anywhere in this tree
 rem (tests\ci\check_fp_free_scan.py) -- a separate, substantial deliverable T-2296's own dim11_
 rem guard_red.cpp named as a specification-scale follow-on rather than authoring it as a C++ TU
 rem (Python test code for a Python instrument, not C++ test code against an existing/soon-to-exist
 rem C++ API). Every cell in this suite independently verifies its own fixture first -- a fresh
-rem compile or byte-level synthesis, plus a raw capstone decode that is NOT the absent instrument's
-rem own logic (fp_scan_common.py's own docstring) -- before asserting the instrument's documented
-rem verdict, so every cell fails today for exactly one reason (the check_fp_free_scan import
-rem failing), never a broken fixture: 23 cells across the fourteen populations, 0 unexpected
-rem exceptions, 0 fixture-verification failures, verified this ticket's own session (23 of 23 red
-rem for the stated reason, real toolchains -- MSVC cl.exe/ml64.exe, clang/clang++, capstone -- every
-rem one confirmed present and working, 0 skips). THIS IS WHY build.bat NOW EXITS NONZERO ON A CLEAN
-rem CHECKOUT, identically in shape to how dim6_determinism_red.cpp/dim7_contract_red.cpp gated this
-rem same build red before src\detail\int_hash.h existed (T-2296) -- see this file's own "NON-ZERO-
-rem EXIT PATHS" note below, extended with this path (4). Guarded on pytest being importable by
-rem whatever `python` resolves to on PATH: an environment with python but no pytest SKIPs this step
-rem loudly, non-fatal, rather than failing the build on a missing dev-only dependency -- distinct
-rem from the instrument itself being absent, which IS fatal, per this suite's own red-first charter.
+rem compile or byte-level synthesis, plus a raw capstone decode or disasm-text parse that is NOT the
+rem absent instrument's own logic (fp_scan_common.py's own docstring) -- before asserting the
+rem instrument's documented verdict, so every cell fails today for exactly one reason (the
+rem check_fp_free_scan import failing), never a broken fixture: 25 cells across the fourteen
+rem populations plus ci_gate's own absent-report leg, 0 unexpected exceptions, 0 fixture-verification
+rem failures, verified this ticket's own session (25 of 25 red for the stated reason, real
+rem toolchains -- MSVC cl.exe/ml64.exe/dumpbin, MSVC's own AArch64 cross-compiler, clang/clang++,
+rem capstone -- every one confirmed present and working, 0 skips). T-2333 repoints this suite at the
+rem RATIFIED production contract (scan_object(path, isa) -> ScanResult{object_format, refuse,
+rem unclassified_bytes, verdicts}; ci_gate; enumerate_scan_targets; diagnostic_walk;
+rem derive_core_sources; build_call_graph/flagged_symbols/diagnostic_fp_report) after T-2326's own
+rem proposed contract (D-SLM4825) went through the planner and both review rungs and moved
+rem (D-SLM4826/D-SLM4827/D-SLM4830/D-SLM4834) -- populations one and two are now real reproductions
+rem of TE-32's own construction (that scope was denied to T-2326, granted to T-2333), and population
+rem six is graded end-to-end against build_call_graph/flagged_symbols/diagnostic_fp_report, not a
+rem TU-name-list diff. THIS IS WHY build.bat NOW EXITS NONZERO ON A CLEAN CHECKOUT, identically in
+rem shape to how dim6_determinism_red.cpp/dim7_contract_red.cpp gated this same build red before
+rem src\detail\int_hash.h existed (T-2296) -- see this file's own "NON-ZERO-EXIT PATHS" note below,
+rem extended with this path (4). Guarded on pytest being importable by whatever `python` resolves to
+rem on PATH: an environment with python but no pytest SKIPs this step loudly, non-fatal, rather than
+rem failing the build on a missing dev-only dependency -- distinct from the instrument itself being
+rem absent, which IS fatal, per this suite's own red-first charter.
 pushd .
 set t2326_scan_ec=0
 where python >nul 2>nul
@@ -1464,11 +1474,12 @@ rem      (an apparatus defect, not a code defect -- now a SKIP, exit 0, never th
 rem   3. tools\ci\gate_c_third_tu_can_fail_probe.py, above -- before T-2142's S3 fix, ANY dirty
 rem      working tree aborted this path regardless of what was dirty or why (an apparatus defect,
 rem      not a code defect); now compares before/after and only fires on a real regression.
-rem   4. tests\t2296-fp-free-open-red-suite\test_check_fp_free_scan.py, immediately above (T-2326)
-rem      -- EXPECTED nonzero on a clean checkout, not a regression: design Sec4.1's own deciding
-rem      instrument (tests\ci\check_fp_free_scan.py) does not exist yet, so every one of this
-rem      suite's 23 cells fails for that one stated reason. Stops being this path's own nonzero
-rem      exit only once that module is built to the contract this suite's own docstring names.
+rem   4. tests\t2296-fp-free-open-red-suite\test_check_fp_free_scan.py, immediately above
+rem      (T-2326/T-2333) -- EXPECTED nonzero on a clean checkout, not a regression: design Sec4.1's
+rem      own deciding instrument (tests\ci\check_fp_free_scan.py) does not exist yet, so every one of
+rem      this suite's 25 cells fails for that one stated reason. Stops being this path's own nonzero
+rem      exit only once that module is built to the RATIFIED contract this suite's own docstring
+rem      names (design Sec4.1, fold round 33).
 out\superslm_tests.exe
 set ec=%errorlevel%
 if not %b1_ec%==0 set ec=%b1_ec%

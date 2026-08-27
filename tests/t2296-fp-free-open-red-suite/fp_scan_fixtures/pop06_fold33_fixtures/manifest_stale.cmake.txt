@@ -1,0 +1,7 @@
+# Fixture manifest — stands in for a snapshot of CMakeLists.txt taken BEFORE
+# tu_b.cpp was added to the real source set. Mirrors the real
+# SUPERSLM_CORE_SOURCES declaration shape (CMakeLists.txt:30-47), reduced to
+# the two members this probe needs.
+set(SUPERSLM_CORE_SOURCES
+    src/tu_a.cpp
+)

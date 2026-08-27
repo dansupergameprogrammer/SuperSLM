@@ -1,2 +1,0 @@
-pop06_tu_a.cpp
-pop06_tu_b_added.cpp

@@ -1,0 +1,5 @@
+callee_in_b:
+  0000000000000000: F2 0F 10 05 00 00 00 00 movsd       xmm0, qword ptr [rip]
+  0000000000000008: F2 0F 58 C1          addsd       xmm0, xmm1
+  000000000000000C: F2 0F 11 05 00 00 00 00 movsd       qword ptr [rip], xmm0
+  0000000000000014: C3                   ret

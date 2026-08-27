@@ -209,6 +209,31 @@ def compile_cl_arm64(src_path, out_obj, extra_args=()):
     return out_obj
 
 
+def dumpbin_disasm(obj_path):
+    """Runs dumpbin /disasm against a compiled COFF object via VsDevCmd and
+    returns the captured stdout text -- real, executed disassembly text in
+    the identical shape design fold round 33's own probe parses
+    (Claude/Vitruvius/t2265-fold33-probe/population6_end_to_end_probe.py's
+    own _SYM_RE/_INS_RE: a bare `SymbolName:` header line, then indented
+    `<16-hex-digit address>: <hex bytes>  <mnemonic> <operands>` lines).
+    T-2333 (Curie): added so population five's own real 3-hop call chain can
+    be read by the same text-shaped corpus this design's own ratified
+    build_call_graph/diagnostic_walk surfaces consume, matching population
+    six's own toolchain exactly. Raises ToolUnavailable if no VS install is
+    found."""
+    vsdevcmd = find_vsdevcmd()
+    if vsdevcmd is None:
+        raise ToolUnavailable("no VsDevCmd.bat found at either well-known VS2022 install location")
+    obj_dir = os.path.dirname(os.path.abspath(obj_path))
+    obj_name = os.path.basename(obj_path)
+    args = ["dumpbin", "/nologo", "/disasm", obj_name]
+    r = _run_via_env_script(vsdevcmd, "-arch=x64 -no_logo", args, cwd=obj_dir)
+    if r.returncode != 0:
+        msg = "dumpbin /disasm failed ({}): {} {}".format(r.returncode, r.stdout, r.stderr)
+        raise RuntimeError(msg)
+    return r.stdout
+
+
 def assemble_ml64(src_path, out_obj):
     """Assemble a MASM .asm file with ml64.exe (/c, object-only), via
     VsDevCmd.bat. Raises ToolUnavailable if no VS install is found."""
