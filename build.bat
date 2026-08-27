@@ -1383,9 +1383,13 @@ rem until now. Wired here the same shape as the T-2138/T-2199 suites above: both
 rem scripts run and check every cell's real pass/fail via their own exit code (0=GREEN, 1=RED,
 rem 2=COMPILE/LINK ERROR -- unlike tests\t2178-gpu-batched-prefill-red-suite\ above, 1 here IS a
 rem real, gating failure). Verified this round: both scripts GREEN (build_link_red.bat's own
-rem dim7_capacity_red.cpp cell alone reports 162 checks/0 failures; build_liveness_red.bat's two
-rem cells report 2/0 and 1/0 checks, the rest SKIP for want of a full-model artifact this
-rem environment does not assume).
+rem dim7_capacity_red.cpp cell alone reported 162 checks/0 failures at wiring time, T-2314;
+rem Cells I and J landed two commits later in this same range and brought that cell's own count
+rem to 9,532 checks/0 failures, T-2321/T-2322; Cell F's own round-budget derivation (T-2324, per
+rem Claude/Poirot/t-2323-fold28-confirmation-review-2026-08-27.md S1) raised it again to 12,484
+rem checks/0 failures -- corrected here rather than left at either stale figure.
+rem build_liveness_red.bat's two cells report 2/0 and 1/0 checks, the rest SKIP for want of a
+rem full-model artifact this environment does not assume).
 pushd .
 call tests\t2296-fp-free-open-red-suite\build_link_red.bat
 set t2296_link_ec=%errorlevel%
