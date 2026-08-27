@@ -36,9 +36,22 @@ inline uint64_t HashContext(ContextView v) {
 template <typename Value>
 class GrowableContextMap {
 public:
+    // LAZY (fold round 27, T-2306 Sec8.1, adopted). Every prior fold's constructor
+    // allocated slots_ unconditionally -- T-2306 measured 93.1%-97.2% of AntiLmCreate's
+    // own whole construction-time footprint (zero tokens, no order ever queried) is
+    // this table's own eager, unconditional per-order allocation, fired once per order
+    // regardless of whether that order is ever used. This is the identical
+    // population-independent lever GrowableIntMap's own fold round 25 fix already
+    // applies one level in: deferring the allocation changes only its TIMING for any
+    // table eventually touched, and eliminates it entirely for a table constructed and
+    // never queried before the run ends. pending_hint_ records the hint and nothing
+    // allocates until the first FindOrEmplace.
     explicit GrowableContextMap(uint64_t initial_capacity_hint = 8)
-        : mask_(BucketCountFor(initial_capacity_hint ? initial_capacity_hint : 1) - 1),
-          slots_(mask_ + 1) {}
+        : pending_hint_(initial_capacity_hint ? initial_capacity_hint : 1) {}
+    // mask_ = 0, live_ = 0, slots_ = {} (default member-initializers below) is the
+    // identical deferred-population shape GrowableIntMap's own fold-round-25
+    // constructor established, restated here for this type's own mask_/slots_ pair;
+    // this type has no tombstone member to defer alongside them.
 
     // Non-allocating lookup by view -- mirrors table.find(ctx_view) exactly, called
     // on every order for every token in both AntiLmUpdate and AntiLmPenalize. Non-const
@@ -61,7 +74,16 @@ public:
     // mirrors "a vector is allocated only when a genuinely new context becomes
     // persistent table state" (damped_greedy_antilm.cpp's own comment).
     Value& FindOrEmplace(ContextView v) {
-        if ((live_ + 1) * 2 > slots_.size()) Grow();
+        if (slots_.empty()) {
+            // First insert this table has ever received (fold round 27, mirrors
+            // GrowableIntMap::operator[]): allocate NOW, sized from the hint recorded
+            // at construction, never from Grow()'s own BucketCountFor(live_+1) formula
+            // below, which ignores the hint entirely.
+            mask_ = BucketCountFor(pending_hint_) - 1;
+            slots_.assign(mask_ + 1, Slot{});
+        } else if ((live_ + 1) * 2 > slots_.size()) {
+            Grow();
+        }
         uint64_t i = HashContext(v) & mask_;
         for (uint64_t steps = 0; steps <= mask_; ++steps) {
             if (!slots_[i].occupied) {
@@ -72,13 +94,18 @@ public:
             if (Eq(slots_[i].key, v)) return slots_[i].value;
             i = (i + 1) & mask_;
         }
-        std::abort();  // unreachable: Grow() below always keeps an empty slot on the probe path
+        std::abort();  // unreachable: the allocate-on-first-insert branch and Grow() above
+                        // always leave at least one empty slot on the probe path
     }
 
 private:
     struct Slot { std::vector<int32_t> key; Value value{}; bool occupied = false; };
     // Shared by both Find overloads above -- exactly one lookup body.
     const Value* FindConst(ContextView v) const {
+        if (slots_.empty()) return nullptr;  // fold round 27: never-touched table, a miss BY
+                                              // CONSTRUCTION -- mirrors GrowableIntMap::Find;
+                                              // falling through would index slots_[i] into a
+                                              // zero-length vector, undefined behavior
         uint64_t i = HashContext(v) & mask_;
         for (uint64_t steps = 0; steps <= mask_; ++steps) {
             if (!slots_[i].occupied) return nullptr;
@@ -91,6 +118,12 @@ private:
         return k.size() == v.size && (v.size == 0 || std::equal(k.begin(), k.end(), v.data));
     }
     void Grow() {
+        // Precondition (fold round 27, mirrors GrowableIntMap::Grow()'s own): slots_ is
+        // never empty on entry. FindOrEmplace above routes the slots_.empty() case to
+        // the allocate-from-hint branch and never falls through to this function in
+        // that state, so this formula is never asked to size the table's FIRST
+        // allocation.
+        assert(!slots_.empty());
         std::vector<Slot> old = std::move(slots_);
         // Corrected fold round 26 (D-SLM4767/D-SLM4768), identical defect and identical
         // fix as GrowableIntMap::Grow() (Sec3.6, full derivation and termination proof
@@ -107,9 +140,15 @@ private:
         for (auto& s : old) if (s.occupied)
             FindOrEmplace(ContextView{s.key.data(), s.key.size()}) = std::move(s.value);
     }
-    uint64_t mask_;
+    uint64_t pending_hint_;    // fold round 27: the hint, held until the first
+                               // FindOrEmplace allocates from it; unused thereafter
+    uint64_t mask_ = 0;        // fold round 27: was always constructor-set before this
+                               // fold; 0 is now a real, reachable pre-first-insert state
     uint64_t live_ = 0;
-    std::vector<Slot> slots_;
+    std::vector<Slot> slots_;  // fold round 27: was always constructor-allocated before
+                               // this fold; empty is now a real, reachable pre-first-
+                               // insert state, checked explicitly by FindConst/
+                               // FindOrEmplace/Grow() above
 };
 
 }  // namespace superslm::detail
