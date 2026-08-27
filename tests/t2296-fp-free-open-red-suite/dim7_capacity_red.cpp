@@ -37,6 +37,17 @@
 //             directly out of the header rather than a frozen copy -- see this cell's own
 //             function definition below.
 //
+// T-2321 UPDATE (2026-08-27, Claude/Curie/t2321-cells-i-and-j-2026-08-27.md): Cell I authored,
+// realizing design Sec7 dim 7's own seventh cell (fold round 28) -- see this cell's own
+// function definition below for its full method and mutation-proof. Cell J follows in the next
+// commit of this same round.
+//   Cell I -- GrowableIntSet's own allocation count under steady erase-churn (fold 28,
+//             D-SLM4796, NOT YET BUILT at this suite's current authoring commit -- Grow()
+//             still carries fold round 27's formula) -- RED against the unmodified header,
+//             for the design's own named reason (fold 27's formula does not fall with L);
+//             flips GREEN under a temporary, reverted build of fold round 28's own target
+//             formula.
+//
 // WHY CELLS F/G/H WERE ALLOWED TO BE RED AT T-2310's OWN HANDOFF (historical; fold 27 is landed
 // now): fold round 27 was design-only as of this suite's authoring
 // (`Claude/Vitruvius/t2265-fold27-superslm-fp-free-open-2026-08-26.md` Sec9, Verdict/status:
@@ -111,6 +122,7 @@ namespace t2310_alloc {
 
 std::atomic<long long> g_live_bytes{0};
 std::atomic<long long> g_window_bytes{0};
+std::atomic<long long> g_window_events{0};
 std::atomic<bool> g_armed{false};
 
 // A 16-byte header in front of every allocation stores the requested size, so `operator
@@ -127,16 +139,21 @@ inline void RecordAlloc(std::size_t sz) {
 	// window's reading depend on an earlier window's own cleanup, which is not what "bytes
 	// allocated during this interval" means.
 	g_window_bytes.fetch_add(static_cast<long long>(sz), std::memory_order_relaxed);
+	// g_window_events counts ALLOCATION EVENTS (calls to this function), not bytes -- added
+	// for Cell I (below), which reads GrowableIntSet's own Grow() CALL COUNT rather than a
+	// capacity. Reset alongside g_window_bytes, same lifetime.
+	g_window_events.fetch_add(1, std::memory_order_relaxed);
 }
 inline void RecordFree(std::size_t sz) {
 	if (!g_armed.load(std::memory_order_relaxed)) return;
 	g_live_bytes.fetch_sub(static_cast<long long>(sz), std::memory_order_relaxed);
 }
 
-inline void Arm() { g_live_bytes = 0; g_window_bytes = 0; g_armed = true; }
+inline void Arm() { g_live_bytes = 0; g_window_bytes = 0; g_window_events = 0; g_armed = true; }
 inline void Disarm() { g_armed = false; }
-inline void ResetWindow() { g_window_bytes = 0; }
+inline void ResetWindow() { g_window_bytes = 0; g_window_events = 0; }
 inline long long ReadWindow() { return g_window_bytes.load(); }
+inline long long ReadWindowEvents() { return g_window_events.load(); }
 inline long long LiveBytes() { return g_live_bytes.load(); }
 
 }  // namespace t2310_alloc
@@ -696,6 +713,80 @@ void CellH_Order1Hint() {
 }
 
 // ==================================================================================
+// CELL I -- GrowableIntSet's own allocation count under steady erase-churn (Sec3.5 above,
+// fold round 28, D-SLM4796, closing T-2313 S1's cost half). Design Sec7 dim 7 Cell I:
+// construct a table, insert keys until live_ reaches a fixed population L, then run 1,000
+// rounds of one Erase (a key currently held) plus one InsertOrReclaim (a fresh key), counting
+// every Grow() call from construction onward -- the counted window includes the initial
+// fill's own Grow() calls, stated explicitly (T-2316 Note, fold round 29, D-SLM4807: only
+// this reading gives K, below, anything to "cover," and both readings execute to the
+// identical PASS/FAIL verdict, so this is a clarity fix, not a discrimination change). Assert
+// the total count is <= ceil(1000 / (L + 1)) + K, K = 8, at L in {7, 31, 127, 511}.
+//
+// FALSIFYING MUTATION: reverting the sizing line to BucketCountFor(live_+1) alone (fold round
+// 27's own formula, no 2x headroom) must flip this assertion at every tested L -- this IS the
+// formula shipped at this suite's own build commit (Grow() carries fold round 27's formula,
+// not fold round 28's target; design Sec2, T-2319's own audit Sec2), so this cell is RED
+// against the unmodified header without any mutation, and flips GREEN under a temporary,
+// reverted build of fold round 28's own BucketCountFor(2*(live_+1)) formula -- both executed,
+// see this cell's own test-design record for the transcript.
+//
+// EVENT COUNTING, NOT BYTES. GrowableIntSet's own Grow() is the only place this type ever
+// allocates once its constructor has returned (int_hash.h) -- every allocation EVENT this
+// file's instrumented allocator records after construction is exactly one Grow() call, no
+// division or sizeof(Slot) calibration needed (unlike Cells D/E/H/J, which read an EXACT
+// capacity and therefore need byte-to-slot-count division). The table is constructed UNARMED
+// so its own single construction-time allocation is never counted: Grow() is a private
+// method reached only from InsertOrReclaim's own growth pre-check, never from the
+// constructor, so the constructor's own allocation is not a "Grow() call" under this cell's
+// own definition -- arming the window only after construction returns is what keeps it out.
+// ==================================================================================
+
+uint64_t CellI_GrowCallCount(uint64_t L) {
+	using GIS = GrowableIntSet<uint64_t, MixKey64>;
+	GIS s(8);  // unarmed -- see this cell's own header comment
+
+	t2310_alloc::Arm();  // one continuous window: the initial fill AND all 1,000 churn rounds
+
+	std::vector<uint64_t> live_keys;
+	live_keys.reserve(L);
+	for (uint64_t k = 0; k < L; ++k) {
+		CHECK(s.InsertOrReclaim(k));
+		live_keys.push_back(k);
+	}
+
+	uint64_t next_fresh_key = L;
+	for (int round = 0; round < 1000; ++round) {
+		uint64_t idx = static_cast<uint64_t>(round) % L;
+		CHECK(s.Erase(live_keys[idx]));       // a key currently held
+		uint64_t fresh_key = next_fresh_key++;
+		CHECK(s.InsertOrReclaim(fresh_key));  // a fresh key, never used before
+		live_keys[idx] = fresh_key;
+	}
+
+	long long events = t2310_alloc::ReadWindowEvents();
+	t2310_alloc::Disarm();
+	return static_cast<uint64_t>(events);
+}
+
+void CellI_GrowableIntSetChurnAllocationCount() {
+	constexpr uint64_t kL[4] = {7, 31, 127, 511};
+	constexpr uint64_t kRounds = 1000;
+	constexpr uint64_t kK = 8;
+	for (uint64_t L : kL) {
+		uint64_t grow_calls = CellI_GrowCallCount(L);
+		uint64_t bound = (kRounds + L) / (L + 1) + kK;  // ceil(1000/(L+1)) + K
+		CHECK_MSG(grow_calls <= bound,
+		          "GrowableIntSet Grow() call count under steady erase-churn (L=%llu, 1000 "
+		          "rounds, counted from construction onward, including the initial fill's own "
+		          "Grow() calls): got %llu, want <= %llu (ceil(1000/(L+1)) + %llu) -- the "
+		          "corrected 2*(live_+1) formula's own amortized-cost bound",
+		          (unsigned long long)L, (unsigned long long)grow_calls,
+		          (unsigned long long)bound, (unsigned long long)kK);
+	}
+}
+
+// ==================================================================================
 // CELL CALIB -- the calibration-currency check (fold 27, D-SLM4778, S2). Design Sec7 dim 7,
 // sixth cell: at build/test time, re-derive the true understatement multiplier using T-2299's
 // own method (global operator new accounting, base vs. shipped construction) at max_order in
@@ -872,6 +963,10 @@ int main() {
 	std::printf("--- Cell H: order 1's own construction-site hint of 1 (fold 27, not yet "
 	            "built) ---\n");
 	CellH_Order1Hint();
+
+	std::printf("--- Cell I: GrowableIntSet's own allocation count under steady erase-churn "
+	            "(fold 28, not yet built) ---\n");
+	CellI_GrowableIntSetChurnAllocationCount();
 
 	std::printf("--- Cell Calib: AntiLmRetainedBytes calibration currency ---\n");
 	CellCalib_AntiLmRetainedBytesCurrency();
