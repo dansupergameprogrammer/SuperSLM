@@ -57,8 +57,18 @@ constexpr std::size_t kCandidateOverhead =
 
 class AntiLmState {
 public:
-	explicit AntiLmState(int max_order)
-	    : tables_(static_cast<size_t>(max_order)), max_order_(max_order) {}
+	// tables_'s own construction moved out of the member-initializer list, fold round 27
+	// (T-2306 Sec8.3/D-SLM4780): order 1's population is provably always exactly 1 (the one
+	// empty-history root every generated token queries unconditionally), so order 1's table
+	// is constructed with hint 1 (BucketCountFor(1)=2 slots) instead of the class default
+	// (BucketCountFor(8)=16); every other order keeps the class default, unexamined and
+	// unchanged. std::vector's own count constructor cannot give one element a different
+	// hint than the rest, so this can no longer be a member-initializer-list term.
+	explicit AntiLmState(int max_order) : max_order_(max_order) {
+		tables_.reserve(static_cast<size_t>(max_order));
+		tables_.emplace_back(1);  // order 1: population is provably always exactly 1 (above)
+		for (int i = 1; i < max_order; ++i) tables_.emplace_back();  // orders 2+: class default (8)
+	}
 
 	int max_order() const { return max_order_; }
 
@@ -213,11 +223,15 @@ void AntiLmPenalize(const AntiLmState* state, const int32_t* candidates, std::si
 //
 // The table-portion residual itself is STATED HONESTLY, not merely "recalibrated": this
 // reading is a LOWER BOUND, and the gap between it and the real footprint is
-// workload-dependent, not a stable per-order ratio -- MEASURED (T-2302, 2026-08-26, following
-// T-2299's own method) at 1.31x-2.61x low (max_order=1), 3.85x-4.98x low (max_order=3), and
-// 4.54x-5.60x low (max_order=5), across the vocab sizes and generation lengths T-2302 sampled.
-// See the production header's own copy of this note for the full range table and the caller
-// guidance it carries.
+// workload-dependent, not a stable per-order ratio -- MEASURED (T-2311, 2026-08-27,
+// Claude/Brunel/t2302-footprint-probe/footprint_probe.cpp UNCHANGED, re-run against the
+// fold-round-27 built tree, following T-2299's own method) at 1.25x-2.61x low (max_order=1),
+// 1.87x-2.11x low (max_order=3), and 1.98x-2.35x low (max_order=5), across the vocab sizes and
+// generation lengths the probe sampled. These figures supersede the pre-fold-27 ones this
+// comment previously carried (1.31x-2.61x/3.85x-4.98x/4.54x-5.60x, measured before fold round
+// 26's own Grow()/ContextEntry::counts corrections landed and stale a second time by fold
+// round 27 -- D-SLM4778). See the production header's own copy of this note for the full
+// range table and the caller guidance it carries.
 std::size_t AntiLmRetainedBytes(const AntiLmState* state) { return state->retained_bytes_; }
 
 }  // namespace superslm

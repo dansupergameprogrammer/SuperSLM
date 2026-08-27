@@ -89,20 +89,26 @@ void AntiLmPenalize(const AntiLmState* state, const int32_t* candidates, std::si
 // against that container, before its own empty-slot eager-allocation defect was fixed
 // (D-SLM4759/D-SLM4760).
 //
-// MEASURED (T-2302, 2026-08-26, Claude/Brunel/t2302-footprint-probe/, T-2299's own method --
-// global operator new accounting, base vs. new, over the real
-// AntiLmCreate/AntiLmUpdate/AntiLmPenalize surface), AFTER GrowableIntMap's lazy-allocation
-// fix (D-SLM4763, this file's own tables_/counts implementation): the understatement is NOT
-// a stable per-order ratio. It is workload-dependent -- a wider vocabulary spreads the same
-// live-bucket cost over more distinct candidate tokens (shrinking the ratio); a longer
+// MEASURED (T-2311, 2026-08-27, Claude/Brunel/t2302-footprint-probe/footprint_probe.cpp
+// UNCHANGED, re-run against the fold-round-27 built tree -- GrowableIntSet's never-shrink
+// Grow() repair, GrowableContextMap's lazy construction, and order 1's own construction-site
+// hint, all three landed -- T-2299's own method: global operator new accounting, base vs.
+// new, over the real AntiLmCreate/AntiLmUpdate/AntiLmPenalize surface): the understatement is
+// NOT a stable per-order ratio. It is workload-dependent -- a wider vocabulary spreads the
+// same live-bucket cost over more distinct candidate tokens (shrinking the ratio); a longer
 // generation at a fixed vocabulary saturates each context's own inner table further (growing
 // it). Measured ranges, by max_order, sampled over vocab in {4096, 8192, 16384} and
 // generation length in {20000, 50000} tokens (six cells, not exhaustive of the workload
-// space):
-//   max_order=1: 1.31x-2.61x low
-//   max_order=3: 3.85x-4.98x low
-//   max_order=5: 4.54x-5.60x low
-// A caller pricing this instrument does NOT round using a single fixed multiplier -- these
+// space; per-cell figures in Claude/Brunel/t2311-fold27-build-2026-08-27.md):
+//   max_order=1: 1.25x-2.61x low
+//   max_order=3: 1.87x-2.11x low
+//   max_order=5: 1.98x-2.35x low
+// These ranges supersede the pre-fold-27 figures this comment previously carried
+// ("1.31x-2.61x"/"3.85x-4.98x"/"4.54x-5.60x", measured before fold round 26's own Grow()/
+// ContextEntry::counts corrections landed and stale a second time by the time fold round 27
+// closed -- Claude/Poirot/t2307-fold26-and-instrument-chain-review-2026-08-26.md S2,
+// Claude/Vitruvius/t2265-fold27-superslm-fp-free-open-2026-08-26.md Sec2, D-SLM4778). A
+// caller pricing this instrument does NOT round using a single fixed multiplier -- these
 // ranges were sampled at three vocab sizes and two generation lengths, and a workload outside
 // that sample can shift the true ratio further in either direction. The only claim this
 // reading supports unconditionally is its own name: a LOWER BOUND. A caller needing a number
