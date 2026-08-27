@@ -9,35 +9,47 @@
 // cell-group (Cells D-H, fold round 27) and sixth cell (calibration currency, fold round 27).
 // Test-design record: Claude/Curie/t2310-fold27-growable-capacity-red-suite-2026-08-26.md.
 //
-// WHAT EACH CELL PROVES, AND WHICH FOLD IT PINS:
+// T-2312 UPDATE (2026-08-27, Claude/Curie/t2312-fold27-suite-repair-round-2026-08-27.md): fold
+// round 27 landed for real (Claude/Brunel/t2311-fold27-build-2026-08-27.md, permanent -- `src/`
+// and `include/` are read-only DELIVERABLES to this seat, not a state this suite reverts). Cells
+// D/F/G/H are GREEN, unrevised. Cell E and Cell Calib both lost discrimination against the real
+// landed build (T-2311 Sec10/Sec11, D-SLM4785/D-SLM4786) and were revised this round -- both
+// GREEN again, at their own function definitions below, which carry the current, authoritative
+// description of each cell's own method. The status table immediately below is T-2310's own
+// authoring-time snapshot (fold 27 unbuilt) and is retained for the historical WHY; it does not
+// describe current behavior for Cell E or Cell Calib.
+//
+// WHAT EACH CELL PROVED AT THIS SUITE'S OWN AUTHORING (T-2310, fold 27 not yet built):
 //   Cell D -- GrowableIntMap's and GrowableContextMap's corrected `Grow()` formula (fold 26,
-//             BUILT at this suite's authoring commit, 6041003) -- currently GREEN.
+//             BUILT at this suite's authoring commit, 6041003) -- GREEN then, GREEN now.
 //   Cell E -- `ContextEntry::counts{1}`'s own construction-site hint (fold 26, BUILT) --
-//             currently GREEN.
-//   Cell F -- GrowableIntSet's never-shrink compaction (fold 27, NOT YET BUILT) -- currently
-//             RED, exit-unimplemented (the production `Grow()` still reads
-//             `BucketCountFor(live_+1)` alone, no `max()` against current capacity).
-//   Cell G -- GrowableContextMap's lazy construction (fold 27, NOT YET BUILT) -- currently
-//             RED (the constructor still allocates eagerly).
-//   Cell H -- order 1's own construction-site hint of 1 (fold 27, NOT YET BUILT) -- currently
-//             RED (every order still gets the class default hint of 8).
+//             GREEN then; lost discrimination once fold 27 landed for real, REVISED this
+//             round (T-2312) -- see this cell's own function definition below.
+//   Cell F -- GrowableIntSet's never-shrink compaction (fold 27, NOT YET BUILT at authoring)
+//             -- RED then; fold 27 landed for real, GREEN now, unrevised.
+//   Cell G -- GrowableContextMap's lazy construction (fold 27, NOT YET BUILT at authoring) --
+//             RED then; fold 27 landed for real, GREEN now, unrevised.
+//   Cell H -- order 1's own construction-site hint of 1 (fold 27, NOT YET BUILT at authoring)
+//             -- RED then; fold 27 landed for real, GREEN now, unrevised.
 //   Calibration-currency -- re-derives `AntiLmRetainedBytes`'s true understatement multiplier
 //             at build/test time and asserts the published header range is a superset of it --
-//             currently RED (the header still publishes the pre-fold-26 ranges, disjoint from
-//             the true post-fold-26 figures at max_order=3/5; see this file's own CellCalib
-//             comment).
+//             RED then (header stale); REVISED this round (T-2312) to read the published range
+//             directly out of the header rather than a frozen copy -- see this cell's own
+//             function definition below.
 //
-// WHY EACH FOLD-27 CELL IS ALLOWED TO BE RED AT HANDOFF: fold round 27 is design-only as of
-// this suite's authoring (`Claude/Vitruvius/t2265-fold27-superslm-fp-free-open-2026-08-26.md`
-// Sec9, Verdict/status: "PROPOSED... neither T-2306's two adopted levers nor S1's repair is
-// built"). This suite's own exit condition (T-2310's brief) is every cell reported RED-or-GREEN
-// against 6041003 WITH its reason, and every falsifying mutation executed -- not every cell
-// green. Cells F/G/H/Calib's own mutation-proof (below, and reported in the test-design record)
-// TEMPORARILY built fold 27's own printed fix in the engine tree, confirmed each cell flips
-// GREEN, then reverted the engine tree to the unbuilt state -- proving discrimination in BOTH
-// directions without leaving fold 27 built, which is not this seat's authority (Curie.md, "Does
-// not implement"; this ticket's own brief, Sec2 -- src/ and include/ are read-only to Curie as a
-// DELIVERABLE; a temporary, reverted mutation to prove discrimination is the sanctioned method).
+// WHY CELLS F/G/H WERE ALLOWED TO BE RED AT T-2310's OWN HANDOFF (historical; fold 27 is landed
+// now): fold round 27 was design-only as of this suite's authoring
+// (`Claude/Vitruvius/t2265-fold27-superslm-fp-free-open-2026-08-26.md` Sec9, Verdict/status:
+// "PROPOSED... neither T-2306's two adopted levers nor S1's repair is built"). T-2310's own exit
+// condition was every cell reported RED-or-GREEN against 6041003 WITH its reason, and every
+// falsifying mutation executed -- not every cell green. Cells F/G/H/Calib's own mutation-proof
+// (T-2310, reported in that ticket's own test-design record) TEMPORARILY built fold 27's own
+// printed fix in the engine tree, confirmed each cell flipped GREEN, then reverted the engine
+// tree to the unbuilt state -- proving discrimination in BOTH directions without leaving fold 27
+// built, which was not this seat's authority at that time (Curie.md, "Does not implement"; that
+// ticket's own brief, Sec2 -- src/ and include/ are read-only to Curie as a DELIVERABLE; a
+// temporary, reverted mutation to prove discrimination is the sanctioned method, used again this
+// round for Cell Calib's own falsifying leg -- see that cell's own comment below).
 //
 // THE CAPACITY-OBSERVATION PROBLEM AND HOW THIS FILE SOLVES IT. None of GrowableIntSet,
 // GrowableIntMap, or GrowableContextMap exposes a public capacity/slot-count accessor (by
@@ -90,7 +102,9 @@
 
 #include <atomic>
 #include <cstdint>
+#include <fstream>
 #include <new>
+#include <string>
 
 // --- instrumented global allocator -------------------------------------------------------------
 namespace t2310_alloc {
@@ -314,16 +328,31 @@ long long HistoryPushBackBytes(int n_pushes) {
 // Sec7 dim 7 Cell E: construct a fresh ContextEntry (through the real public surface -- see
 // this file's header comment on why -- AntiLmCreate/AntiLmUpdate) and insert one candidate
 // token; assert the resulting `counts` capacity is exactly 2, not the class default's 16.
-// FALSIFYING MUTATION (executed and reverted this session): reverting `counts{1}` to
-// `counts{}` must flip this assertion (capacity 16 on the first insert).
+// FALSIFYING MUTATION (executed and reverted this session, and again this round -- T-2312):
+// reverting `counts{1}` to `counts{}` must flip this assertion (capacity 16 on the first
+// insert).
 //
-// ISOLATION: `AntiLmCreate` is called UNARMED, so whatever the outer GrowableContextMap<...>
-// table's own construction-time allocation is (eager, pre-fold-27, current) happens before
-// this cell starts measuring -- the armed window that follows therefore contains ONLY the
-// `counts{1}` sub-table's own first-insert allocation (order 1's context has ctx_len=0, so no
-// key-vector cost either). This isolation is valid specifically because fold 26 (which this
-// cell pins) does not touch construction timing -- that is fold 27's Cell G, tested
-// separately below.
+// ISOLATION, T-2312-REVISED (D-SLM4785): the original method called `AntiLmCreate` UNARMED,
+// relying on order 1's own outer GrowableContextMap<ContextEntry> table allocating EAGERLY at
+// construction (true pre-fold-27) so that allocation happened before the armed window opened.
+// Fold round 27 (D-SLM4779) made that table's own slot-array allocation LAZY -- first touch,
+// not construction -- so it no longer happens inside the unarmed `AntiLmCreate` call at all; it
+// now happens on the very same `AntiLmUpdate` call this cell measures, landing inside the same
+// window as `counts{1}`'s own first-insert allocation and making the two terms inseparable by
+// the old method (T-2311, Claude/Brunel/t2311-fold27-build-2026-08-27.md Sec10, executed both
+// directions: both the correct build and a `counts{1}`->`counts{}` mutation FAILED at the same
+// assertion with different, equally uninterpretable numbers -- zero discrimination). The fix
+// keeps the window exactly where it was (opened after the unarmed `AntiLmCreate` call, around
+// `AntiLmUpdate` alone -- `AntiLmCreate`'s own state-object and tables_-backing-array
+// allocations are unconditional on every fold and correctly excluded either way) and instead
+// SUBTRACTS order 1's own outer-table first-touch cost as an explicit, independently-calibrated
+// term (BucketCountFor(1) slots of an independently-calibrated sizeof(Slot)), the same
+// isolation Cell H already performs for order 1's own outer-table claim below. This isolation
+// is fold-27-SPECIFIC: it assumes the outer table's slot array allocates lazily, inside this
+// same `AntiLmUpdate` call, and subtracts that term out of the window it measures. That
+// assumption is correct for this ticket's own permanently-built state (`src/`/`include/` are
+// READ-ONLY deliverables to this seat; fold 27 is landed, not reverted, going forward) and is
+// exactly what the mutation-proof below verifies by execution.
 // ==================================================================================
 
 void CellE_ContextEntryCountsHint() {
@@ -342,10 +371,35 @@ void CellE_ContextEntryCountsHint() {
 	          "GrowableIntMap<int32_t,int64_t,...> calibration window (%lld bytes) not a clean "
 	          "multiple of capacity %llu", w_cal, (unsigned long long)cap16);
 	long long sizeof_inner = w_cal / static_cast<long long>(cap16);
+
+	// Calibrate sizeof(GrowableContextMap<ContextEntry>::Slot) -- order 1's own OUTER table's
+	// own Slot, using the field-for-field ContextEntryMirror this file's header comment
+	// establishes for Cell H (reused here, not redeclared: the Slot size depends on the value
+	// type T, unlike GrowableContextMap<T>'s own fixed-size object -- calibrating against a
+	// smaller T, e.g. uint64_t, would measure the wrong Slot size).
+	t2310_alloc::ResetWindow();
+	{
+		GrowableContextMap<ContextEntryMirror> outer_cal(8);
+		int32_t k = 0;
+		outer_cal.FindOrEmplace(ContextView{&k, 1});
+	}
+	long long w_outer_cal = t2310_alloc::ReadWindow();
+	uint64_t cap16_outer = BucketCountFor(8);
+	long long slot_bytes_outer_cal = w_outer_cal - 4;  // subtract the ctx_len=1 key-vector copy
+	CHECK_MSG(slot_bytes_outer_cal > 0 &&
+	              slot_bytes_outer_cal % static_cast<long long>(cap16_outer) == 0,
+	          "GrowableContextMap<ContextEntryMirror> calibration window (%lld bytes, -4 "
+	          "key-vector) not a clean multiple of capacity %llu", w_outer_cal,
+	          (unsigned long long)cap16_outer);
+	long long sizeof_outer = slot_bytes_outer_cal / static_cast<long long>(cap16_outer);
+
 	long long history_bytes = HistoryPushBackBytes(1);
 	t2310_alloc::Disarm();
 
-	// Real AntiLmState, single order. AntiLmCreate runs UNARMED (see header comment above).
+	// Real AntiLmState, single order. AntiLmCreate runs UNARMED -- its own state-object and
+	// tables_-backing-array allocations happen unconditionally inside AntiLmCreate on every
+	// fold (see this cell's own header comment); only order 1's own outer-table SLOT ARRAY
+	// (accounted for above) moved into this AntiLmUpdate call under fold round 27's laziness.
 	superslm::AntiLmState* state = superslm::AntiLmCreate(1);
 	t2310_alloc::Arm();
 	t2310_alloc::ResetWindow();
@@ -355,13 +409,17 @@ void CellE_ContextEntryCountsHint() {
 	superslm::AntiLmDestroy(state);
 
 	// Subtract history_'s own unconditional push_back cost (see HistoryPushBackBytes's own
-	// header comment above) -- unrelated to counts's own capacity, but landing in the same
-	// window since AntiLmUpdate does both in one call.
-	long long w = w_full - history_bytes;
+	// header comment above) and order 1's own outer-table first-touch allocation
+	// (BucketCountFor(1) slots of sizeof_outer each) -- both unrelated to counts's own
+	// capacity, but landing in the same window since AntiLmUpdate does all three in one call
+	// under fold round 27's lazy construction (this cell's own header comment).
+	long long order1_outer_bytes = static_cast<long long>(BucketCountFor(1)) * sizeof_outer;
+	long long w = w_full - history_bytes - order1_outer_bytes;
 	CHECK_MSG(w % sizeof_inner == 0,
-	          "order 1's first-touch window (%lld bytes, -%lld history_ growth) not a clean "
-	          "multiple of sizeof(counts's own Slot) (%lld) -- an unexpected allocation occurred",
-	          w, history_bytes, sizeof_inner);
+	          "order 1's first-touch window (%lld bytes, -%lld history_ growth, -%lld order-1 "
+	          "outer-table first-touch) not a clean multiple of sizeof(counts's own Slot) "
+	          "(%lld) -- an unexpected allocation occurred",
+	          w, history_bytes, order1_outer_bytes, sizeof_inner);
 	uint64_t counts_capacity = static_cast<uint64_t>(w / sizeof_inner);
 	CHECK_MSG(counts_capacity == 2,
 	          "ContextEntry::counts's own capacity on its first insert: got %llu, want 2 "
@@ -642,11 +700,38 @@ void CellH_Order1Hint() {
 // sixth cell: at build/test time, re-derive the true understatement multiplier using T-2299's
 // own method (global operator new accounting, base vs. shipped construction) at max_order in
 // {1, 3, 5}, and assert the published header range at each order is a superset of the freshly
-// computed value. FALSIFYING MUTATION: this cell must fail against the header ranges the
-// design's own Sec3.6 text names as currently shipped and stale
-// (max_order=3: 3.85x-4.98x, true 1.877x-2.105x, disjoint) -- confirmed below: it does, against
-// commit 6041003 as authored, without needing any temporary mutation to prove it (the
-// discrepancy is already live in the shipped header).
+// computed value.
+//
+// T-2312-REVISED (D-SLM4786): the original method compared against `kPublishedRanges`, a
+// frozen C++ constant CITING the header's own text at this suite's authoring commit --
+// deliberately hard-coded because "a C++ comment is not machine-readable." That is the wrong
+// pin: it goes red the moment the header is edited for any reason (this exact suite's own
+// fold-27 build round hit this -- the header was corrected to the TRUE ranges and the cell
+// stayed red, comparing the correct new figures against the stale frozen copy), and if the
+// header and the copy are ever edited TOGETHER by hand, the two can drift in lockstep with
+// nothing to catch it -- the exact failure a currency check exists to prevent
+// (Claude/Brunel/t2311-fold27-build-2026-08-27.md Sec11).
+//
+// The header IS machine-readable, at the one thing this cell actually needs: its own
+// published-range lines have a fixed, disclosed text shape --
+// "// max_order=<N>: <lo>x-<hi>x low" (three lines, AntiLmRetainedBytes's own comment,
+// include/superslm/sslm_damped_greedy.h) -- and ParsePublishedRange below reads them directly
+// out of the header file at test run time via `sscanf` on that exact shape, never a looser
+// scan. This makes the header the single source: the only way to turn this cell green is to
+// make the header state a range that actually contains the freshly measured figure. A header
+// edit that changes a number is picked up automatically (no second file to remember to touch);
+// a header edit that breaks the line's own text shape fails this cell loudly, at
+// ParsePublishedRange's own CHECK_MSG below, rather than silently reading zero ranges and
+// passing vacuously.
+//
+// FALSIFYING MUTATION: this cell must fail when the header names a range disjoint from the
+// true figure -- executed and reverted this round (T-2312) the same way Cells F/G/H's own
+// mutation-proofs touch production text (a temporary, reverted edit, comment-only here: the
+// header's own published-range lines were rewritten to the pre-fold-27 stale figures --
+// "1.31x-2.61x"/"3.85x-4.98x"/"4.54x-5.60x", the exact figures the ORIGINAL frozen-copy
+// mechanism cited -- rebuilt, confirmed all three orders FAIL against the now-stale text, then
+// reverted to the real, correct figures and confirmed green again; see this cell's own
+// test-design record for the executed transcript).
 //
 // WORKLOAD: reuses T-2299's/T-2302's own primary three cells verbatim
 // (Claude/Brunel/t2302-footprint-probe/footprint_probe.cpp -- max_order=1, 20k tok, vocab
@@ -658,21 +743,52 @@ void CellH_Order1Hint() {
 // "measured range (live bytes / AntiLmRetainedBytes reading)").
 // ==================================================================================
 
-struct PublishedRange { double lo, hi; };
-
-// Cited verbatim from include/superslm/sslm_damped_greedy.h's own AntiLmRetainedBytes comment
-// (mirrored in src/damped_greedy_antilm.cpp) as shipped at this suite's authoring commit,
-// 6041003. HARD-CODED, deliberately: a C++ comment is not machine-readable, and this cell's
-// whole purpose is to catch when these constants drift from what the header actually
-// publishes -- the header and this constant must be updated together.
-constexpr PublishedRange kPublishedRanges[3] = {
-    {1.31, 2.61},  // max_order=1
-    {3.85, 4.98},  // max_order=3
-    {4.54, 5.60},  // max_order=5
-};
 constexpr int kOrders[3] = {1, 3, 5};
 constexpr int32_t kVocab[3] = {4096, 4096, 8192};
 constexpr long long kTokenCounts[3] = {20000, 20000, 50000};
+
+// Opens the header this cell reads its published ranges from. Two candidate relative paths,
+// covering both known invocation shapes: build_link_red.bat (this suite's own build script)
+// sets this exe's own working directory to this suite's own directory
+// (tests/t2296-fp-free-open-red-suite) before running it (the first candidate resolves from
+// there); a caller running the exe directly from the engine worktree root is covered by the
+// second.
+bool OpenPublishedRangesHeader(std::ifstream& f) {
+	const char* candidates[] = {
+	    "../../include/superslm/sslm_damped_greedy.h",
+	    "include/superslm/sslm_damped_greedy.h",
+	};
+	for (const char* c : candidates) {
+		f.open(c);
+		if (f.good()) return true;
+		f.clear();
+	}
+	return false;
+}
+
+// Reads `order`'s own published understatement range directly out of the header's text --
+// see this cell's own header comment above for the exact line shape and why this is the
+// single source of truth. Returns false if the header cannot be opened or no line for `order`
+// matches the expected shape (a real finding, not a soft miss -- CHECK_MSG'd by the caller).
+bool ParsePublishedRange(int order, double* lo, double* hi) {
+	std::ifstream f;
+	if (!OpenPublishedRangesHeader(f)) return false;
+	char prefix[32];
+	std::snprintf(prefix, sizeof(prefix), "max_order=%d:", order);
+	std::string line;
+	while (std::getline(f, line)) {
+		std::size_t pos = line.find(prefix);
+		if (pos == std::string::npos) continue;
+		double parsed_lo = 0.0, parsed_hi = 0.0;
+		if (std::sscanf(line.c_str() + pos, "max_order=%*d: %lfx-%lfx", &parsed_lo,
+		                 &parsed_hi) == 2) {
+			*lo = parsed_lo;
+			*hi = parsed_hi;
+			return true;
+		}
+	}
+	return false;
+}
 
 uint64_t NextRand(uint64_t& state) {
 	uint64_t x = state;
@@ -711,13 +827,22 @@ void CellCalib_AntiLmRetainedBytesCurrency() {
 		                        "tokens -- cannot compute an understatement ratio",
 		          kOrders[i], kTokenCounts[i]);
 		double understatement = static_cast<double>(live_bytes) / static_cast<double>(reported);
-		CHECK_MSG(understatement >= kPublishedRanges[i].lo &&
-		              understatement <= kPublishedRanges[i].hi,
+
+		double lo = 0.0, hi = 0.0;
+		bool parsed = ParsePublishedRange(kOrders[i], &lo, &hi);
+		CHECK_MSG(parsed,
+		          "max_order=%d: could not find or parse a 'max_order=%d: <lo>x-<hi>x low' "
+		          "published-range line in include/superslm/sslm_damped_greedy.h -- the "
+		          "header's own AntiLmRetainedBytes comment shape changed; update this cell's "
+		          "own parse pattern to match",
+		          kOrders[i], kOrders[i]);
+		if (!parsed) continue;  // nothing to compare the measured figure against
+
+		CHECK_MSG(understatement >= lo && understatement <= hi,
 		          "max_order=%d: computed understatement %.4fx (live_bytes=%lld, reported=%zu) "
 		          "falls outside the published header range [%.2fx, %.2fx] -- the header's own "
 		          "calibration is stale for this cell",
-		          kOrders[i], understatement, live_bytes, reported, kPublishedRanges[i].lo,
-		          kPublishedRanges[i].hi);
+		          kOrders[i], understatement, live_bytes, reported, lo, hi);
 	}
 }
 
