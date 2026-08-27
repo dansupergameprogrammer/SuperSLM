@@ -1437,9 +1437,24 @@ rem on PATH: an environment with python but no pytest SKIPs this step loudly, no
 rem failing the build on a missing dev-only dependency -- distinct from the instrument itself being
 rem absent, which IS fatal, per this suite's own red-first charter.
 rem
-rem T-2338 (Brunel): tests\ci\check_fp_free_scan.py BUILT to the ratified contract above. 23 of the
-rem suite's 25 cells are graded through it and green; two are DESELECTED from this gating run, each
-rem for a stated reason recorded here and in Claude/Brunel/t2338-fp-scan-instrument-build-*.md (the
+rem T-2342 (Curie): design fold round 34 (Dan's ruling: every leg proven before v1.3.0) closed five
+rem specification gaps (a)-(e) against Sec4.1 -- ci_gate_corpus (a REJECT anywhere fails the job,
+rem D-SLM4856), scan_object's own corpus_symbols index (D-SLM4857), the external-edge default-deny
+rem policy ruled explicit (D-SLM4858), enumerate_scan_targets's duplicate-stem refusal (D-SLM4859),
+rem and the BFloat16 exclusion on both ISAs (D-SLM4860) -- plus Poirot's own Critical C1 (movsd
+rem missing from the movement allowlist) and Popper's own clang/ELF/x86-64 finding (the padding
+rem detector recognises only repeated 0x90/0xCC, not clang/GCC's multi-byte NOP forms). 16 new cells
+rem (12 genuinely red today; 4 confirmatory controls, stated as such rather than forced red) realize
+rem all of this, none of it built yet -- see this file's own "NON-ZERO-EXIT PATHS" note below for the
+rem exact list, and Claude/Curie/t2342-fp-scan-instrument-red-suite-fold34-2026-08-27.md for the full
+rem disposition. Suite total: 41 cells (25 T-2326/T-2333 + 16 T-2342), 39 executed by the gating run
+rem below (2 pre-existing deselects, unrelated to T-2342).
+rem
+rem T-2338 (Brunel): tests\ci\check_fp_free_scan.py BUILT to the ratified contract above -- this
+rem paragraph describes the suite's own state AT THAT BUILD (25 cells, before T-2342 added 16 more).
+rem 23 of the suite's 25 cells were graded through it and green at that time; two were DESELECTED
+rem from the gating run, each for a stated reason recorded here and in
+rem Claude/Brunel/t2338-fp-scan-instrument-build-*.md (the
 rem build record) -- neither is "moved" (the test file is untouched):
 rem   - test_population_08_real_corpus_whole_sweep: its OWN docstring states it is "Not gradable by
 rem     this single pytest cell even once the instrument exists -- a full-corpus build-and-scan is
@@ -1514,12 +1529,20 @@ rem   3. tools\ci\gate_c_third_tu_can_fail_probe.py, above -- before T-2142's S3
 rem      working tree aborted this path regardless of what was dirty or why (an apparatus defect,
 rem      not a code defect); now compares before/after and only fires on a real regression.
 rem   4. tests\t2296-fp-free-open-red-suite\test_check_fp_free_scan.py, immediately above
-rem      (T-2326/T-2333/T-2338) -- the instrument (tests\ci\check_fp_free_scan.py) is now BUILT to
-rem      the ratified contract; the gating run above deselects only the two cells named in the
-rem      comment above it (population eight, never gradable by a pytest cell by its own docstring;
-rem      population ten, a found tension against the ratified design text's own disclosed fold-9
-rem      finding for the identical construction) -- ANY nonzero exit from the 23 cells actually run
-rem      is a real regression in the instrument, not an absence.
+rem      (T-2326/T-2333/T-2338/T-2342) -- EXPECTED nonzero again as of T-2342, not a regression:
+rem      Dan's ruling that every leg is proven before v1.3.0 tags landed design fold round 34
+rem      (Claude/Vitruvius/t2265-superslm-fp-free-open-design-2026-08-24.md Sec4.1 gaps (a)-(e),
+rem      Sec5.5's three-way ship-gate disjunction) and Poirot's/Popper's own findings against the
+rem      T-2338 build (Critical C1: movsd; the clang/ELF/x86-64 padding gap) -- T-2342 authored 16
+rem      new red cells (12 genuinely red today, 4 confirmatory/control) pinning that newly specified
+rem      and newly diagnosed behaviour, none of it built yet. The gating run above still deselects
+rem      only the same two cells named in the comment above it (population eight, never gradable by
+rem      a pytest cell by its own docstring; population ten, the pre-existing found tension against
+rem      the ratified design text's own disclosed fold-9 finding, unrelated to T-2342's own seven
+rem      items) -- of the 39 cells this run actually executes, 12 are EXPECTED red for T-2342's own
+rem      stated reasons (ci_gate_corpus, corpus_symbols, BF16 both ISAs, enumerate_scan_targets's
+rem      duplicate-stem refusal, the clang/ELF/x86-64 leg, movsd) until Brunel's next build round
+rem      implements fold round 34's specification; any OTHER nonzero exit is a real regression.
 out\superslm_tests.exe
 set ec=%errorlevel%
 if not %b1_ec%==0 set ec=%b1_ec%

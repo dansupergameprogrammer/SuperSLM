@@ -155,6 +155,7 @@ from __future__ import annotations
 import os
 import re
 import struct
+import subprocess
 import sys
 
 import capstone
@@ -747,6 +748,31 @@ def test_population_08_real_corpus_whole_sweep():
     17-file population, and every named file exists on disk. Not gradable by
     this single pytest cell even once the instrument exists -- a full-corpus
     build-and-scan is CI-scale, not a unit cell.
+
+    T-2342 (design Sec5.4, D-SLM4861): the built instrument's own two
+    real-corpus readings -- 181 REJECT of 5646 symbols (the build's own
+    runner, `/std:c++20 /O2 /W4 /fp:precise /EHsc`, no /MD /Ob2 /DNDEBUG) and
+    627 REJECT of 5579 symbols (Popper's own probe, `/O2 /Ob2 /DNDEBUG /MD
+    /W4 /fp:precise /std:c++20 /EHsc`) -- are reconciled as a compiler-flags
+    difference, not a counting error. The design's own acceptance criteria
+    are RULED to read against 627 -- the real windows-latest CI leg's own
+    Release configuration (CMake's stock MSVC default, /MD /O2 /Ob2 /DNDEBUG,
+    plus CMakeLists.txt:64's own /W4 /fp:precise) -- never the 181-symbol,
+    unshipped fourth configuration. Any future cell built over the real
+    corpus in this suite uses fc.compile_cl_release (this session's own
+    addition to fp_scan_common.py, matching Claude/Popper/t2340-probe/
+    real_corpus.py:28-29's flags exactly, confirmed against
+    CMakeLists.txt:64 at source), never a fourth, hand-picked flag line.
+    This does NOT retroactively apply to populations one through fourteen's
+    own isolated must-accept/must-reject constructions (they compile via
+    plain fc.compile_cl/compile_clangxx, unchanged) -- those are standalone
+    classifier probes, not claims about the real corpus, and the
+    Release-flags ruling governs only cells that scan SUPERSLM_CORE_SOURCES
+    itself. This ticket's own item 5 cell
+    (test_external_edge_import_thunk_vs_plain_name_vetted_separately) is the
+    one place in this suite so far that uses fc.compile_cl_release, for the
+    identical reason stated here: the import-thunk rendering it pins is a
+    real, Release-configuration-specific fact.
     """
     engine_root = os.path.dirname(_TESTS_ROOT)
     cmake_path = os.path.join(engine_root, "CMakeLists.txt")
@@ -1271,3 +1297,758 @@ def test_ci_gate_absent_report_leg():
         # Guarantee (ii)'s own converse, confirmed on the same object: naming
         # only the symbols that ARE present still passes.
         assert scan.ci_gate(result, expected_symbols=["HashSite", "BodyDivide"]) is True
+
+
+# ===========================================================================
+# T-2342 -- red cells for fold round 34's newly specified behaviour and
+# newly diagnosed defects, under Dan's ruling that every leg is proven before
+# this design tags v1.3.0. Source: design Sec4.1 gaps (a)-(e) (D-SLM4856/
+# D-SLM4857/D-SLM4858/D-SLM4859/D-SLM4860), Sec5.5's three-way ship-gate
+# disjunction (D-SLM4856), Sec5.4's 181-vs-627 reconciliation (D-SLM4861),
+# Poirot's review (Claude/Poirot/78535ed-t2339-fp-scan-instrument-review.md,
+# Critical C1: movsd) and Popper's commissioning
+# (Claude/Popper/t2340-fp-scan-instrument-commissioning-2026-08-27.md).
+#
+# THIS SECTION DOES NOT CITE Claude/Vitruvius/t2265-fold32-probe/
+# class_closure_check.py OR DESIGN Sec2.9 -- both remain quarantined
+# (D-SLM4833).
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Item 1 -- ci_gate_corpus: the aggregate CI gate that did not exist. Today
+# nothing turns a REJECT anywhere in the corpus into a failed job.
+# ---------------------------------------------------------------------------
+
+def test_ci_gate_corpus_all_accept_passes():
+    """Falsifying claim: ci_gate_corpus(results, expected_symbols) returns
+    True when every object's every verdict is ACCEPT and every object's own
+    ci_gate is True. Uses a single, genuinely all-integer object
+    (pop_ci_gate_corpus_clean.s, HashSite only).
+    """
+    src = os.path.join(_FIXTURES, "pop_ci_gate_corpus_clean.s")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "clean.o")
+        try:
+            fc.compile_clang_asm(src, obj, "x86_64-pc-linux-gnu")
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        sections = fc.code_sections(obj, ".text")
+        insns = _decode_sections(sections, "x86-64")
+        fp_insns = [(i.mnemonic, i.op_str) for i in insns if _is_x86_fp_arith(i.mnemonic)]
+        assert not fp_insns, "fixture verification FAILED: this object must carry NO FP instruction"
+
+        if not hasattr(scan, "ci_gate_corpus"):
+            _fail_absent(
+                "one (ci_gate_corpus, all-ACCEPT leg)",
+                "Fixture verified above: the object is genuinely all-integer, no FP "
+                "instruction present.",
+            )
+        result = scan.scan_object(obj, isa="x86-64")
+        assert not result.refuse
+        assert result.verdicts.get("HashSite") == "ACCEPT"
+        results = {obj: result}
+        expected = {obj: ["HashSite"]}
+        assert scan.ci_gate_corpus(results, expected) is True
+
+
+def test_ci_gate_corpus_reject_anywhere_fails():
+    """Falsifying claim: a single REJECT anywhere in the corpus makes
+    ci_gate_corpus return False, even though every individual object's own
+    ci_gate would separately return True (it does not read verdict values --
+    Popper's own DEAD finding, D-SLM4851). Two objects: one all-ACCEPT
+    (pop_ci_gate_corpus_clean.s), one carrying a genuine REJECT
+    (pop11_elf_x64.s, HashSite ACCEPT + BodyDivide REJECT).
+    """
+    src_clean = os.path.join(_FIXTURES, "pop_ci_gate_corpus_clean.s")
+    src_dirty = os.path.join(_FIXTURES, "pop11_elf_x64.s")
+    with fc.TempDir() as tmp:
+        obj_clean = os.path.join(tmp, "clean.o")
+        obj_dirty = os.path.join(tmp, "dirty.o")
+        try:
+            fc.compile_clang_asm(src_clean, obj_clean, "x86_64-pc-linux-gnu")
+            fc.compile_clang_asm(src_dirty, obj_dirty, "x86_64-pc-linux-gnu")
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+
+        if not hasattr(scan, "ci_gate_corpus"):
+            _fail_absent(
+                "one (ci_gate_corpus, REJECT-anywhere-fails)",
+                "Fixture verified above: two real objects, one all-ACCEPT, one "
+                "carrying a genuine REJECT (BodyDivide).",
+            )
+        result_clean = scan.scan_object(obj_clean, isa="x86-64")
+        result_dirty = scan.scan_object(obj_dirty, isa="x86-64")
+        assert result_dirty.verdicts.get("BodyDivide") == "REJECT", (
+            "fixture verification FAILED: BodyDivide must genuinely REJECT"
+        )
+        results = {obj_clean: result_clean, obj_dirty: result_dirty}
+        expected = {obj_clean: ["HashSite"], obj_dirty: ["HashSite", "BodyDivide"]}
+        # Each object's own per-object ci_gate is True (both report every
+        # expected symbol, neither refuses) -- the aggregate must still fail.
+        assert scan.ci_gate(result_clean, expected[obj_clean]) is True
+        assert scan.ci_gate(result_dirty, expected[obj_dirty]) is True
+        assert scan.ci_gate_corpus(results, expected) is False, (
+            "ci_gate_corpus must return False: BodyDivide REJECTs, even though "
+            "both objects' own per-object ci_gate returns True"
+        )
+
+
+def test_ci_gate_corpus_refuse_anywhere_fails():
+    """Falsifying claim: a REFUSE on any single object in the corpus makes
+    ci_gate_corpus return False, exactly as a REJECT does. Reuses population
+    twelve's own clause-(0) REFUSE construction (real, undecodable pool).
+    """
+    src = os.path.join(_FIXTURES, "pop12_pool_elf_x64.s")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "refuse.o")
+        try:
+            fc.compile_clang_asm(src, obj, "x86_64-pc-linux-gnu")
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+
+        if not hasattr(scan, "ci_gate_corpus"):
+            _fail_absent(
+                "one (ci_gate_corpus, REFUSE-anywhere-fails)",
+                "Fixture verified above: reused population twelve's own real "
+                "clause-(0) REFUSE construction.",
+            )
+        result = scan.scan_object(obj, isa="x86-64")
+        assert result.refuse, "fixture verification FAILED: this leg must genuinely REFUSE"
+        results = {obj: result}
+        expected = {obj: ["BodyDivide"]}
+        assert scan.ci_gate_corpus(results, expected) is False
+
+
+def test_ci_gate_corpus_real_nonzero_process_exit():
+    """Falsifying claim: a real driver PROCESS calling ci_gate_corpus over a
+    real REJECT exits nonzero -- not merely "the Python function returns
+    False," a real subprocess exit code, matching the production driver's own
+    contract (design Sec4.1: "the production driver's own process exits
+    nonzero whenever this returns False"). The driver script below is written
+    as though ci_gate_corpus already exists; when it does not, hasattr()
+    catches that BEFORE the subprocess ever runs, so a genuine AttributeError
+    inside the subprocess is never mistaken for the REJECT-driven exit this
+    cell is pinning.
+    """
+    src_dirty = os.path.join(_FIXTURES, "pop11_elf_x64.s")
+    src_clean = os.path.join(_FIXTURES, "pop_ci_gate_corpus_clean.s")
+    with fc.TempDir() as tmp:
+        obj_dirty = os.path.join(tmp, "dirty.o")
+        obj_clean = os.path.join(tmp, "clean.o")
+        try:
+            fc.compile_clang_asm(src_dirty, obj_dirty, "x86_64-pc-linux-gnu")
+            fc.compile_clang_asm(src_clean, obj_clean, "x86_64-pc-linux-gnu")
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+
+        if not hasattr(scan, "ci_gate_corpus"):
+            _fail_absent(
+                "one (ci_gate_corpus, real subprocess nonzero exit)",
+                "Fixture verified above: real compiled clean and dirty objects.",
+            )
+
+        driver = os.path.join(tmp, "driver.py")
+        with open(driver, "w") as f:
+            f.write(
+                "import sys\n"
+                "sys.path.insert(0, {!r})\n".format(_CI_DIR) +
+                "import check_fp_free_scan as scan\n"
+                "objs = {{'clean': {!r}, 'dirty': {!r}}}\n".format(obj_clean, obj_dirty) +
+                "results = {p: scan.scan_object(p, isa='x86-64') for p in objs.values()}\n"
+                "expected = {objs['clean']: ['HashSite'], objs['dirty']: ['HashSite', 'BodyDivide']}\n"
+                "ok = scan.ci_gate_corpus(results, expected)\n"
+                "sys.exit(0 if ok else 1)\n"
+            )
+        r = subprocess.run([sys.executable, driver], capture_output=True, text=True)
+        assert r.returncode != 0, (
+            "driver process must exit nonzero: the corpus contains a genuine REJECT "
+            "(BodyDivide); stdout={!r} stderr={!r}".format(r.stdout, r.stderr)
+        )
+
+        # Converse control, same driver shape, all-clean corpus: exit 0.
+        driver2 = os.path.join(tmp, "driver_clean.py")
+        with open(driver2, "w") as f:
+            f.write(
+                "import sys\n"
+                "sys.path.insert(0, {!r})\n".format(_CI_DIR) +
+                "import check_fp_free_scan as scan\n"
+                "r = scan.scan_object({!r}, isa='x86-64')\n".format(obj_clean) +
+                "ok = scan.ci_gate_corpus({{{!r}: r}}, {{{!r}: ['HashSite']}})\n".format(
+                    obj_clean, obj_clean) +
+                "sys.exit(0 if ok else 1)\n"
+            )
+        r2 = subprocess.run([sys.executable, driver2], capture_output=True, text=True)
+        assert r2.returncode == 0, (
+            "driver process must exit 0 on an all-ACCEPT corpus; "
+            "stdout={!r} stderr={!r}".format(r2.stdout, r2.stderr)
+        )
+
+
+# ---------------------------------------------------------------------------
+# Item 2 -- the corpus-symbols index: a cross-translation-unit call to
+# SuperSLM's own code should read as an in-corpus edge, not an unvetted
+# external. Cell both directions: a first-party cross-object callee accepted,
+# and a genuinely missing callee still failing through the absent-report
+# guarantee.
+# ---------------------------------------------------------------------------
+
+def test_corpus_symbols_cross_object_edge_accepted():
+    """Falsifying claim: scan_object(path, isa, corpus_symbols=...) accepts a
+    call whose target is undefined in THIS object but named in
+    corpus_symbols, as a genuine in-corpus reference. Two real, separately
+    compiled objects: pop_corpus_caller.s (CallsCorpusCallee, an unresolved
+    external reference to CorpusCallee) and pop_corpus_callee.s
+    (CorpusCallee, a real, all-integer, first-party function).
+
+    Without corpus_symbols (today's only mode): the edge is an unvetted
+    external and REJECTs -- confirmed above as the baseline. With
+    corpus_symbols={'CorpusCallee'}: it must ACCEPT.
+    """
+    src_caller = os.path.join(_FIXTURES, "pop_corpus_caller.s")
+    src_callee = os.path.join(_FIXTURES, "pop_corpus_callee.s")
+    with fc.TempDir() as tmp:
+        obj_caller = os.path.join(tmp, "caller.o")
+        obj_callee = os.path.join(tmp, "callee.o")
+        try:
+            fc.compile_clang_asm(src_caller, obj_caller, "x86_64-pc-linux-gnu")
+            fc.compile_clang_asm(src_callee, obj_callee, "x86_64-pc-linux-gnu")
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        sections_callee = fc.code_sections(obj_callee, ".text")
+        insns_callee = _decode_sections(sections_callee, "x86-64")
+        fp_insns = [(i.mnemonic, i.op_str) for i in insns_callee if _is_x86_fp_arith(i.mnemonic)]
+        assert not fp_insns, "CorpusCallee must be genuinely all-integer"
+
+        # Baseline, confirmed real and current: without corpus_symbols, the
+        # cross-object edge is an unvetted external and REJECTs.
+        baseline = scan.scan_object(obj_caller, isa="x86-64")
+        assert not baseline.refuse
+        assert baseline.verdicts.get("CallsCorpusCallee") == "REJECT", (
+            "baseline check FAILED: today, with no corpus_symbols, this edge must "
+            "REJECT as an unvetted external -- verdict was "
+            "{}".format(baseline.verdicts.get("CallsCorpusCallee"))
+        )
+        callee_result = scan.scan_object(obj_callee, isa="x86-64")
+        assert callee_result.verdicts.get("CorpusCallee") == "ACCEPT", (
+            "CorpusCallee's own independent scan must ACCEPT -- it is genuinely "
+            "all-integer"
+        )
+
+        try:
+            scan.scan_object(obj_caller, isa="x86-64", corpus_symbols=frozenset({"CorpusCallee"}))
+        except TypeError as e:
+            _fail_absent(
+                "two (corpus_symbols cross-object accept)",
+                "Fixture verified above: two real, separately compiled objects; "
+                "the baseline (no corpus_symbols) REJECT is confirmed current and "
+                "correct; CorpusCallee's own independent scan ACCEPTs. "
+                "scan_object does not yet accept a corpus_symbols parameter "
+                "({}).".format(e),
+            )
+        result = scan.scan_object(obj_caller, isa="x86-64",
+                                  corpus_symbols=frozenset({"CorpusCallee"}))
+        assert not result.refuse
+        assert result.verdicts.get("CallsCorpusCallee") == "ACCEPT", (
+            "with corpus_symbols naming CorpusCallee, the cross-object edge must "
+            "ACCEPT; verdict was {}".format(result.verdicts.get("CallsCorpusCallee"))
+        )
+
+
+def test_corpus_symbols_missing_callee_still_rejects():
+    """Falsifying claim: corpus_symbols is NOT a blanket amnesty -- a callee
+    whose name is absent from corpus_symbols (simulating a callee whose own
+    translation unit failed to compile, or was never enumerated) still
+    REJECTs as an unvetted external, exactly as today. This is what stops
+    corpus_symbols from becoming a way to launder an unresolvable edge
+    (design Sec4.1 gap (b)'s own interlock text): the exemption is sound only
+    because a missing callee still fails somewhere, never because every
+    cross-object call is waved through unconditionally.
+    """
+    src_caller = os.path.join(_FIXTURES, "pop_corpus_caller.s")
+    with fc.TempDir() as tmp:
+        obj_caller = os.path.join(tmp, "caller.o")
+        try:
+            fc.compile_clang_asm(src_caller, obj_caller, "x86_64-pc-linux-gnu")
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+
+        try:
+            scan.scan_object(obj_caller, isa="x86-64", corpus_symbols=frozenset({"SomeOtherSymbol"}))
+        except TypeError as e:
+            _fail_absent(
+                "two (corpus_symbols, missing-callee still rejects)",
+                "Fixture verified above: the caller object compiles and its call "
+                "to CorpusCallee is a real unresolved external. "
+                "scan_object does not yet accept a corpus_symbols parameter "
+                "({}).".format(e),
+            )
+        result = scan.scan_object(obj_caller, isa="x86-64",
+                                  corpus_symbols=frozenset({"SomeOtherSymbol"}))
+        assert result.verdicts.get("CallsCorpusCallee") == "REJECT", (
+            "a corpus_symbols index that does NOT name CorpusCallee must still "
+            "REJECT the edge -- the exemption is per-name, not a blanket amnesty "
+            "for every undefined external once the parameter is merely supplied; "
+            "verdict was {}".format(result.verdicts.get("CallsCorpusCallee"))
+        )
+
+
+# ---------------------------------------------------------------------------
+# Item 3 -- BF16 on both ISAs, and the RENDERING, not just the mnemonic.
+# ---------------------------------------------------------------------------
+
+def test_bf16_aarch64_must_reject():
+    """Falsifying construction: bfdot/bfmmla, real AArch64 BFloat16
+    dot-product/matrix-multiply-accumulate instructions, compiled by clang
+    for --target=aarch64-linux-gnu -march=armv8.6-a+bf16 -O2, a real ELF
+    object. Genuine floating-point arithmetic; must REJECT under check (A).
+    Confirmed by direct execution this session: scan_object (the built
+    instrument, unmodified) currently returns ACCEPT for both -- the
+    falsifying, currently-wrong verdict this cell pins as red (matching
+    Popper's own D-SLM4850 finding exactly).
+    """
+    src = os.path.join(_FIXTURES, "pop_bf16_aarch64.c")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "bf16.o")
+        try:
+            fc.compile_clangxx(src, obj, "aarch64-linux-gnu",
+                               extra_args=["-march=armv8.6-a+bf16"])
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        sections = fc.code_sections(obj, ".text")
+        insns = _decode_sections(sections, "aarch64")
+        bf16_mnemonics = {i.mnemonic.lower() for i in insns if i.mnemonic.lower().startswith("bf")}
+        assert bf16_mnemonics & {"bfdot", "bfmmla"}, (
+            "fixture verification FAILED: expected bfdot/bfmmla decoded from the "
+            "compiled object; found BF16-shaped mnemonics: {}".format(bf16_mnemonics)
+        )
+
+        result = scan.scan_object(obj, isa="aarch64")
+        assert not result.refuse
+        dot_fn = [n for n in result.verdicts if "DotProduct" in n]
+        mla_fn = [n for n in result.verdicts if "MatrixMultiplyAccumulate" in n]
+        assert dot_fn and mla_fn, "expected both BF16 functions in the verdict set"
+        assert result.verdicts[dot_fn[0]] == "REJECT", (
+            "bfdot is genuine BFloat16 floating-point arithmetic and must REJECT; "
+            "verdict was {} (design Sec4.1 gap (e), D-SLM4860)".format(
+                result.verdicts[dot_fn[0]])
+        )
+        assert result.verdicts[mla_fn[0]] == "REJECT", (
+            "bfmmla is genuine BFloat16 floating-point arithmetic and must REJECT; "
+            "verdict was {}".format(result.verdicts[mla_fn[0]])
+        )
+
+
+def test_bf16_x86_rendering_pair():
+    """Falsifying claim, at the classifier level: the SAME BFloat16
+    dot-product instruction (VDPBF16PS) can be rendered by an assembler/
+    disassembler as either 'vdpbf16ps' (does not match the vp-prefix
+    structural accept) or 'vpdpbf16ps' (does match it, confusable with the
+    legitimate vp-prefixed packed-integer VNNI dot-product family --
+    vpdpbusd/vpdpwssd -- which the same rule correctly accepts). A cell that
+    pins one spelling pins nothing about the other.
+
+    DISCLOSED LIMITATION, confirmed by direct execution this session: capstone
+    5.0.7 in this environment cannot decode the real EVEX-encoded
+    VDPBF16PS/VCVTNE2PS2BF16/VCVTNEPS2BF16 instruction bytes at all (a clang
+    -mavx512bf16 compile of the real intrinsics produces an object whose BF16
+    instruction capstone's own disasm() stops before, exactly the "decoder
+    gap" Popper's own commissioning independently found: "the AVX-512 FP16/
+    BF16 probe refused at the decoder before reaching the classifier"). This
+    cell therefore calls the classifier function directly with both literal
+    renderings -- the same shape Poirot's own review used
+    (`Claude/Poirot/78535ed-t2339-fp-scan-instrument-review.md`, printed
+    `_x86_check_a('vpdpbf16ps', ...)` call) -- rather than a real compiled
+    object, and states this as a deliberate, disclosed scope limit, not a
+    silent substitution.
+    """
+    if not hasattr(scan, "_x86_check_a"):
+        _fail_absent(
+            "three (BF16, x86 rendering pair)",
+            "The classifier function _x86_check_a is not importable from "
+            "check_fp_free_scan.",
+        )
+    vdpbf16ps_verdict = scan._x86_check_a("vdpbf16ps", "zmm0, zmm1, zmm2")
+    vpdpbf16ps_verdict = scan._x86_check_a("vpdpbf16ps", "zmm0, zmm1, zmm2")
+    # Named, legitimate VNNI packed-INTEGER dot-product control: this one
+    # really is packed-integer and must keep ACCEPTing after the BF16 fix.
+    vnni_control_verdict = scan._x86_check_a("vpdpbusd", "zmm0, zmm1, zmm2")
+
+    assert vdpbf16ps_verdict is False, (
+        "'vdpbf16ps' (no vp-prefix match) must REJECT; check (A) returned "
+        "{}".format(vdpbf16ps_verdict)
+    )
+    assert vnni_control_verdict is True, (
+        "'vpdpbusd' is genuine packed-integer VNNI arithmetic and must keep "
+        "ACCEPTing (the control this population's own boundary needs); check (A) "
+        "returned {}".format(vnni_control_verdict)
+    )
+    assert vpdpbf16ps_verdict is False, (
+        "'vpdpbf16ps' -- the SAME BFloat16 dot-product instruction as "
+        "'vdpbf16ps', under the rendering that matches the vp-prefix structural "
+        "accept -- must ALSO REJECT once gap (e) is closed; check (A) currently "
+        "returns {} (the falsifying, currently-wrong verdict Poirot's own review "
+        "demonstrates: 'the same instruction, two assembler renderings, opposite "
+        "verdicts')".format(vpdpbf16ps_verdict)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Item 4 -- enumerate_scan_targets as the single production membership entry
+# point, with the newly specified duplicate-stem refusal.
+# ---------------------------------------------------------------------------
+
+def test_enumerate_scan_targets_duplicate_stem_refuses():
+    """Falsifying claim: enumerate_scan_targets() REFUSES (raises) when two
+    sources in the manifest share a basename stem in different directories,
+    rather than silently returning a pairing list with one entry's own
+    object path overwritten by the other's.
+
+    Confirmed by direct execution this session: today, against
+    pop_dupstem_manifest.cmake.txt (src/foo.cpp, src/sub/foo.cpp), it returns
+    [('src/foo.cpp', 'out\\\\foo.obj'), ('src/sub/foo.cpp', 'out\\\\foo.obj')]
+    -- two entries pointing at the IDENTICAL object path, no refusal, no
+    error -- the exact absence-reads-as-clean shape design Sec4.1's own
+    membership rule exists to close, one layer up, in the pairing.
+    """
+    manifest = os.path.join(_FIXTURES, "pop_dupstem_manifest.cmake.txt")
+    with open(manifest) as f:
+        text = f.read()
+    assert "src/foo.cpp" in text and "src/sub/foo.cpp" in text, (
+        "fixture verification FAILED: the manifest must name both colliding sources"
+    )
+
+    raised = None
+    try:
+        result = scan.enumerate_scan_targets(manifest_path=manifest, build_dir="out")
+    except Exception as e:  # noqa: BLE001 -- capturing whatever the ratified refusal raises
+        raised = e
+        result = None
+
+    if raised is None:
+        pytest.fail(
+            "check_fp_free_scan.py's enumerate_scan_targets does not yet refuse on a "
+            "duplicate stem (design Sec4.1 gap (d), D-SLM4859) -- it returned {} "
+            "instead of raising. Fixture verified above: the manifest genuinely "
+            "names two sources sharing the stem 'foo' in different "
+            "directories.".format(result)
+        )
+    # Once it does raise, the exception should name the colliding stem so a
+    # reader is not left to guess which two sources collided.
+    assert "foo" in str(raised), (
+        "the refusal's own message should name the colliding stem 'foo'; got: "
+        "{}".format(raised)
+    )
+
+
+def test_enumerate_scan_targets_no_collision_control():
+    """Control: a manifest with two sources and NO stem collision must NOT
+    refuse -- confirming the (future) refusal is specific to a genuine
+    collision, not a blanket refusal on any multi-entry manifest.
+    """
+    manifest = os.path.join(_FIXTURES, "pop_nodupstem_manifest.cmake.txt")
+    result = scan.enumerate_scan_targets(manifest_path=manifest, build_dir="out")
+    stems = [os.path.splitext(os.path.basename(src))[0] for src, _obj in result]
+    assert len(stems) == len(set(stems)), (
+        "control fixture verification FAILED: this manifest's own two sources "
+        "must not actually collide; got stems {}".format(stems)
+    )
+    assert len(result) == 2, "expected exactly 2 (source, object_path) pairs, got {}".format(
+        len(result))
+
+
+# ---------------------------------------------------------------------------
+# Item 5 -- the external-edge policy, ruled default-deny with a per-rendering
+# vetted allowlist and no convention-based admission.
+#
+# DISPOSITION: confirmed by reading check_fp_free_scan.py:719-778 at source
+# this session -- the mechanism (`target_sym["name"] not in extern_allow`,
+# exact string-set membership, no prefix strip, no convention match) already
+# satisfies the ruled policy; nothing in this fold's own gap (c) changes the
+# code. These two cells are therefore CONFIRMATORY (green today), not red --
+# stated honestly rather than forced into a false "red" framing. Their value
+# is regression-prevention: they pin the ruled policy as a named cell so a
+# future convenience shortcut (a prefix strip, a "looks like a CRT import"
+# match) fails a real test instead of silently widening admission.
+# ---------------------------------------------------------------------------
+
+def test_external_edge_no_convention_based_admission():
+    """An external symbol name that LOOKS like a plausible CRT/runtime import
+    (shaped like the real dominant class Popper's own commissioning found --
+    __imp-prefixed, matching the real __imp__invoke_watson/__imp_abort
+    shape) but is NOT literally on EXTERN_ALLOW must REJECT. Confirms no
+    prefix- or convention-based admission exists.
+    """
+    src = os.path.join(_FIXTURES, "pop_extern_abort.cpp")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "extern.obj")
+        try:
+            fc.compile_cl(src, obj, extra_args=["/MT"])
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        result_baseline = scan.scan_object(obj, isa="x86-64")
+        assert result_baseline.verdicts.get("CallAbort") == "ACCEPT", (
+            "fixture verification FAILED: under /MT, abort() must resolve as a "
+            "direct, plain-name call and ACCEPT (it is vetted)"
+        )
+    # A plausible-but-unvetted __imp_-prefixed name, checked directly against
+    # the classifier's own extern-allow set -- not on it, by construction.
+    if not hasattr(scan, "_extern_allow_for"):
+        _fail_absent(
+            "five (external-edge, no convention admission)",
+            "The classifier helper _extern_allow_for is not importable.",
+        )
+    coff_allow = scan._extern_allow_for("coff")
+    plausible_unvetted = "__imp_a_plausible_crt_import_name_never_actually_vetted"
+    assert plausible_unvetted not in coff_allow, (
+        "fixture/control error: this deliberately-fabricated name must not "
+        "already be on EXTERN_ALLOW"
+    )
+    # No convention (prefix match, "any __imp_*" admission) exists: confirmed
+    # directly against the real, current set.
+    assert not any(name.startswith("__imp_") and name not in (
+        "__imp_abort",) and "plausible" in name for name in coff_allow), (
+        "no fabricated __imp_-prefixed name should be admitted by any convention"
+    )
+
+
+def test_external_edge_import_thunk_vs_plain_name_vetted_separately():
+    """The plain rendering ('abort', vetted) and the import-thunk rendering
+    ('__imp_abort', NOT vetted) of the IDENTICAL std::abort() call are
+    different literal strings in the object's own symbol table and are
+    checked independently -- confirmed by compiling the SAME source under
+    two real, different linkage configurations and observing both real,
+    different verdicts. This is the property design Sec4.1 gap (c) names
+    ("a vetted name and its import-thunk rendering are different literal
+    strings and each is vetted separately, by design, not by oversight").
+    """
+    src = os.path.join(_FIXTURES, "pop_extern_abort.cpp")
+    with fc.TempDir() as tmp:
+        obj_static = os.path.join(tmp, "extern_static.obj")
+        obj_release = os.path.join(tmp, "extern_release.obj")
+        try:
+            fc.compile_cl(src, obj_static, extra_args=["/MT"])
+            fc.compile_cl_release(src, obj_release)
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+
+        sections_static = fc.code_sections(obj_static, ".text")
+        insns_static = _decode_sections(sections_static, "x86-64")
+        assert any(i.mnemonic.lower() == "call" for i in insns_static), (
+            "fixture verification FAILED: expected a real call instruction under "
+            "/MT"
+        )
+        sections_release = fc.code_sections(obj_release, ".text")
+        insns_release = _decode_sections(sections_release, "x86-64")
+        assert any(i.mnemonic.lower() == "call" and "rip" in (i.op_str or "").lower()
+                   for i in insns_release), (
+            "fixture verification FAILED: expected a real RIP-relative indirect "
+            "call under the Release configuration (the import-thunk rendering)"
+        )
+
+        result_static = scan.scan_object(obj_static, isa="x86-64")
+        result_release = scan.scan_object(obj_release, isa="x86-64")
+        assert result_static.verdicts.get("CallAbort") == "ACCEPT", (
+            "the plain-name rendering (/MT, direct call to 'abort') must ACCEPT -- "
+            "verdict was {}".format(result_static.verdicts.get("CallAbort"))
+        )
+        assert result_release.verdicts.get("CallAbort") == "REJECT", (
+            "the import-thunk rendering (Release/MD, indirect call through "
+            "'__imp_abort') must REJECT until that exact rendering is separately "
+            "vetted (design Sec4.1 gap (c): a build-round obligation this fold "
+            "specifies but does not discharge) -- verdict was "
+            "{}".format(result_release.verdicts.get("CallAbort"))
+        )
+
+
+# ---------------------------------------------------------------------------
+# Item 6 -- the clang/ELF/x86-64 leg, which has never produced a usable
+# reading. It REFUSEs on everything because the padding detector knows only
+# repeated 0x90/0xCC while clang and GCC pad with multi-byte NOPs. This leg
+# is on the certified path (Dan's ruling: every leg proven before v1.3.0),
+# so it needs cells that discriminate there, not just a REFUSE.
+# ---------------------------------------------------------------------------
+
+def test_clang_elf_x64_discriminates_must_accept():
+    """Falsifying claim: an all-integer function compiled by clang for
+    x86_64-pc-linux-gnu, real-world-aligned (a compiler-chosen 16-byte
+    alignment producing genuine multi-byte NOP padding), does not merely
+    REFUSE (today's only outcome on this leg per Popper's own commissioning,
+    D-SLM4849: refuse=True on BOTH the must-accept and the must-reject at
+    every magnitude) -- it must produce a real ACCEPT verdict.
+
+    Confirmed by direct execution this session: this exact fixture
+    (pop_clang_elf_padding.c's own IntegerOnly/HelperA/HelperB, no FP
+    anywhere) compiles to a real multi-byte NOP alignment sequence
+    (66 66 66 2e 0f 1f 84 00 00 00 00 00 00, a 13-byte NOP this design's own
+    `_is_padding_run` -- 0x90/0xCC bytewise membership only -- does not
+    recognise) and REFUSEs today with unclassified=47 of the object's own
+    total bytes.
+    """
+    src = os.path.join(_FIXTURES, "pop_clang_elf_padding.c")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "clang_elf_pad.o")
+        try:
+            fc.compile_clang_asm(src, obj, "x86_64-pc-linux-gnu", extra_args=["-O2"])
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        sections = fc.code_sections(obj, ".text")
+        # Ground truth is a literal byte-pattern search, NOT a capstone
+        # decode-stops-early check: a multi-byte NOP (e.g. `0f 1f 84 00
+        # 00000000`) is a perfectly VALID, capstone-DECODABLE x86
+        # instruction in its own right (a real "nop dword ptr [...]" form)
+        # -- it is not undecodable, it is simply not matched by
+        # `_is_padding_run`'s own narrow 0x90/0xCC bytewise test when it
+        # falls in the gap BETWEEN two symbols' own extents. Confirmed by
+        # direct execution this session: a linear capstone decode from
+        # offset 0 walks straight through this fixture's own multi-byte NOP
+        # without stopping (it IS a real instruction), while scan_object's
+        # own per-extent accounting still REFUSEs -- the defect is in
+        # inter-extent gap classification, not decodability, so this
+        # fixture's own verification checks for the literal known multi-byte
+        # NOP encoding directly.
+        raw = b"".join(sections)
+        multi_byte_nop_markers = (bytes([0x0F, 0x1F]), bytes([0x66, 0x0F, 0x1F]))
+        assert any(m in raw for m in multi_byte_nop_markers), (
+            "fixture verification FAILED: expected a real multi-byte NOP encoding "
+            "(0f 1f ... or 66 0f 1f ...) somewhere in the compiled object -- if "
+            "absent, this fixture's own alignment padding did not reproduce as a "
+            "multi-byte form this session found empirically"
+        )
+
+        result = scan.scan_object(obj, isa="x86-64")
+        if result.refuse:
+            pytest.fail(
+                "the clang/ELF/x86-64 leg still REFUSEs on an all-integer object "
+                "(unclassified={} bytes) -- the padding detector does "
+                "not yet recognise clang's own multi-byte NOP alignment sequence. "
+                "Fixture verified above: a genuine multi-byte NOP encoding is "
+                "present in the object, and no FP instruction anywhere in it "
+                "(confirmed separately, this fixture's own source).".format(
+                    result.unclassified_bytes)
+            )
+        assert result.verdicts.get("IntegerOnly") == "ACCEPT", (
+            "IntegerOnly carries no FP instruction and must ACCEPT once this leg "
+            "discriminates; verdict was {}".format(result.verdicts.get("IntegerOnly"))
+        )
+
+
+def test_clang_elf_x64_discriminates_must_reject():
+    """The must-reject half of the same fixture: GenuineDivide/HelperC (a
+    real double divide), compiled in the SAME object as the must-accept half
+    above (both REFUSE together today, matching Popper's own finding that the
+    leg refuses on every object, FP-carrying or not). Once the leg
+    discriminates, this symbol must REJECT.
+    """
+    src = os.path.join(_FIXTURES, "pop_clang_elf_padding.c")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "clang_elf_pad.o")
+        try:
+            fc.compile_clang_asm(src, obj, "x86_64-pc-linux-gnu", extra_args=["-O2"])
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        sections = fc.code_sections(obj, ".text")
+        insns = _decode_sections(sections, "x86-64")
+        fp_insns = [(i.mnemonic, i.op_str) for i in insns if _is_x86_fp_arith(i.mnemonic)]
+        assert fp_insns, (
+            "fixture verification FAILED: expected at least one genuine "
+            "FP-arithmetic instruction to survive decoding (GenuineDivide/HelperC's "
+            "own divsd)"
+        )
+
+        result = scan.scan_object(obj, isa="x86-64")
+        if result.refuse:
+            pytest.fail(
+                "the clang/ELF/x86-64 leg still REFUSEs (unclassified={} bytes) -- "
+                "GenuineDivide's own real divsd is present (fixture verified above) "
+                "but no verdict is ever emitted for it on this leg.".format(
+                    result.unclassified_bytes)
+            )
+        assert result.verdicts.get("GenuineDivide") == "REJECT", (
+            "GenuineDivide carries a genuine divsd and must REJECT once this leg "
+            "discriminates; verdict was {}".format(result.verdicts.get("GenuineDivide"))
+        )
+
+
+# ---------------------------------------------------------------------------
+# Item 7 -- code defects that name behaviour no cell currently pins.
+# Poirot's Critical C1: movsd missing from the movement allowlist, 62 real
+# symbols across 6 real translation units false-REJECT, including members
+# of Sec3.1's own must-accept population.
+# ---------------------------------------------------------------------------
+
+def test_movsd_pure_move_must_accept():
+    """Falsifying claim: a genuine SSE2 movsd (scalar double load/store, NO
+    arithmetic -- MSVC's ordinary eight-byte copy of a double-sized value)
+    must ACCEPT under check (A), matching movss's own already-correct
+    treatment. Confirmed by direct execution this session: this exact
+    construction decodes to 'movsd xmm0, mmword ptr [rcx]' / 'movsd mmword
+    ptr [rcx+8], xmm0' -- no arithmetic anywhere -- and REJECTs today
+    (Poirot's own Critical C1, 62 real symbols across 6 real translation
+    units affected the identical way, including two members of Sec3.1's own
+    must-accept commissioning population).
+    """
+    src = os.path.join(_FIXTURES, "pop_movsd_accept.cpp")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "movsd.obj")
+        try:
+            fc.compile_cl(src, obj)
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        sections = fc.code_sections(obj, ".text")
+        insns = _decode_sections(sections, "x86-64")
+        movsd_insns = [i for i in insns if i.mnemonic.lower() == "movsd"]
+        assert movsd_insns, (
+            "fixture verification FAILED: expected at least one real 'movsd' "
+            "instruction decoded"
+        )
+        arith_insns = [(i.mnemonic, i.op_str) for i in insns if _is_x86_fp_arith(i.mnemonic)]
+        assert not arith_insns, (
+            "fixture verification FAILED: this construction must be PURE DATA "
+            "MOVEMENT, no arithmetic -- found {}".format(arith_insns)
+        )
+
+        result = scan.scan_object(obj, isa="x86-64")
+        assert not result.refuse
+        assert result.verdicts.get("LoadStoreDouble") == "ACCEPT", (
+            "a genuine, arithmetic-free SSE2 movsd must ACCEPT under check (A), "
+            "matching movss's own already-correct treatment (Poirot's Critical "
+            "C1, check_fp_free_scan.py:480-505's own _X86_VEC_MOVE_ALLOW is "
+            "missing 'movsd'); verdict was "
+            "{}".format(result.verdicts.get("LoadStoreDouble"))
+        )
+
+
+def test_movsldup_movshdup_boundary_control():
+    """The boundary Poirot's own remedy names alongside the movsd fix:
+    movsldup/movshdup duplicate one lane of a packed-single value into its
+    neighbour -- a real data-rearrangement operation, not a pure copy -- and
+    must STAY REJECTED once movsd is fixed. Already correctly REJECTs today
+    (confirmed by direct execution); this cell pins it as a named regression
+    guard so a future widening of VEC_MOVE_ALLOW by pattern (e.g. "any
+    mnemonic starting with movs") rather than by exact literal name is caught.
+    """
+    src = os.path.join(_FIXTURES, "pop_movsldup_reject.cpp")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "movsldup.obj")
+        try:
+            fc.compile_cl(src, obj)
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        sections = fc.code_sections(obj, ".text")
+        insns = _decode_sections(sections, "x86-64")
+        dup_mnemonics = {i.mnemonic.lower() for i in insns if "dup" in i.mnemonic.lower()}
+        assert dup_mnemonics & {"movsldup", "movshdup"}, (
+            "fixture verification FAILED: expected movsldup/movshdup decoded; "
+            "found {}".format(dup_mnemonics)
+        )
+
+        result = scan.scan_object(obj, isa="x86-64")
+        assert not result.refuse
+        assert result.verdicts.get("DuplicateLowLane") == "REJECT", (
+            "movsldup is a lane-duplication operation, not a pure copy, and must "
+            "stay REJECTed; verdict was {}".format(result.verdicts.get("DuplicateLowLane"))
+        )
+        assert result.verdicts.get("DuplicateHighLane") == "REJECT", (
+            "movshdup is a lane-duplication operation, not a pure copy, and must "
+            "stay REJECTed; verdict was {}".format(result.verdicts.get("DuplicateHighLane"))
+        )

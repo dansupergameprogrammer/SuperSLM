@@ -1,0 +1,7 @@
+# T-2342 (Curie) -- control fixture: two sources, no stem collision. Confirms
+# enumerate_scan_targets's own refusal is specific to a genuine collision, not
+# a blanket refusal on any two-entry manifest.
+set(SUPERSLM_CORE_SOURCES
+    src/foo.cpp
+    src/bar.cpp
+)

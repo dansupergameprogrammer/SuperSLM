@@ -1,0 +1,11 @@
+# T-2342 (Curie) -- fixture manifest for enumerate_scan_targets's own
+# duplicate-stem refusal (design Sec4.1 gap (d), D-SLM4859). Two sources with
+# the SAME basename stem ("foo") in different directories -- today's real 17
+# SUPERSLM_CORE_SOURCES have no such collision (this is latent, not live, per
+# the design's own text), so this fixture is what makes the class testable at
+# all: a future source added under a different directory that happens to
+# share a stem with an existing one must be caught the moment it is added.
+set(SUPERSLM_CORE_SOURCES
+    src/foo.cpp
+    src/sub/foo.cpp
+)

@@ -234,6 +234,36 @@ def dumpbin_disasm(obj_path):
     return r.stdout
 
 
+def compile_cl_release(src_path, out_obj, extra_args=()):
+    """Compile a C++ source with MSVC cl.exe under the REAL CMake Release
+    configuration the shipping windows-latest CI leg actually builds with
+    (T-2342): CMake's own stock MSVC Release default (/MD /O2 /Ob2 /DNDEBUG)
+    plus the superslm target's own explicit /W4 /fp:precise
+    (CMakeLists.txt:64) -- confirmed at source this session, matching
+    Claude/Popper/t2340-probe/real_corpus.py:28-29's own flag string exactly
+    (design Sec5.4, D-SLM4861: the design's own acceptance criteria are ruled
+    to read against THIS configuration's own corpus, not a fourth,
+    hand-picked flag line). Raises ToolUnavailable if no VS install is
+    found."""
+    vsdevcmd = find_vsdevcmd()
+    if vsdevcmd is None:
+        raise ToolUnavailable("no VsDevCmd.bat found at either well-known VS2022 install location")
+    src_dir = os.path.dirname(os.path.abspath(src_path))
+    src_name = os.path.basename(src_path)
+    out_name = os.path.basename(out_obj)
+    args = ["cl", "/nologo", "/c", "/O2", "/Ob2", "/DNDEBUG", "/MD", "/W4",
+            "/fp:precise", "/std:c++20", "/EHsc",
+            *extra_args, src_name, f"/Fo:{out_name}"]
+    r = _run_via_env_script(vsdevcmd, "-arch=x64 -no_logo", args, cwd=src_dir)
+    produced = os.path.join(src_dir, out_name)
+    if r.returncode != 0 or not os.path.exists(produced):
+        msg = "cl.exe (Release) compile failed ({}): {} {}".format(r.returncode, r.stdout, r.stderr)
+        raise RuntimeError(msg)
+    if os.path.abspath(produced) != os.path.abspath(out_obj):
+        shutil.move(produced, out_obj)
+    return out_obj
+
+
 def assemble_ml64(src_path, out_obj):
     """Assemble a MASM .asm file with ml64.exe (/c, object-only), via
     VsDevCmd.bat. Raises ToolUnavailable if no VS install is found."""
