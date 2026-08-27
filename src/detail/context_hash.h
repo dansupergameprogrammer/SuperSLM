@@ -13,6 +13,7 @@
 #include "int_hash.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
