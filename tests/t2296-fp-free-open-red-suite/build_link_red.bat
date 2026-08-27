@@ -33,6 +33,14 @@ rem NDEBUG is what actually exercises that specific guard rather than the earlie
 rem assert()). Every other cell is built without /DNDEBUG (the ordinary debug/assert-enabled
 rem config the rest of this repo's suites use). Loop shape (for %%f in (...), no call/goto
 rem subroutine) matches tests/t2138-abi-red-suite/build_link_red.bat's own working convention.
+rem
+rem dim7_capacity_red.cpp (T-2310) additionally needs damped_greedy_antilm.cpp on its own
+rem compile line: Cells E/H/Calib drive AntiLmState through the real public surface
+rem (AntiLmCreate/AntiLmUpdate/AntiLmPenalize/AntiLmRetainedBytes), which is defined there, not
+rem in a header -- omitting it produces the identical LNK2019/LNK1120 false-red T-2297 found
+rem for intmath.cpp above. Scoped to this one file via EXTRASOURCES (mirroring EXTRAFLAGS's own
+rem per-file pattern) rather than added to every cell's source list, since no other cell in
+rem this directory calls into AntiLmState.
 setlocal enabledelayedexpansion
 set HEREDIR=%~dp0
 rem Normalized via %%~fi (FOR's own path canonicalization), not %HEREDIR%..\.. verbatim -- see
@@ -50,12 +58,14 @@ if not exist obj mkdir obj
 set ANY_COMPILE_ERROR=0
 set ANY_RED=0
 
-for %%f in (dim4_shape_red.cpp dim6_determinism_red.cpp dim7_contract_red.cpp dim11_guard_red.cpp) do (
+for %%f in (dim4_shape_red.cpp dim6_determinism_red.cpp dim7_contract_red.cpp dim11_guard_red.cpp dim7_capacity_red.cpp) do (
     echo ===== %%f =====
     set EXTRAFLAGS=
     if "%%f"=="dim7_contract_red.cpp" set EXTRAFLAGS=/DNDEBUG
+    set EXTRASOURCES=
+    if "%%f"=="dim7_capacity_red.cpp" set EXTRASOURCES="%ENG%\src\damped_greedy_antilm.cpp"
     cl /nologo /std:c++20 /O2 /W4 /EHsc !EXTRAFLAGS! /I%ENG%\src /I%ENG%\include -I. ^
-        "%%f" "%ENG%\src\intmath.cpp" /Fo:"obj\\" /Fe:"obj\%%~nf.exe" ^
+        "%%f" "%ENG%\src\intmath.cpp" !EXTRASOURCES! /Fo:"obj\\" /Fe:"obj\%%~nf.exe" ^
         /link > "obj\%%~nf.log" 2>&1
     findstr /C:"error C" "obj\%%~nf.log" >nul
     if not errorlevel 1 (
