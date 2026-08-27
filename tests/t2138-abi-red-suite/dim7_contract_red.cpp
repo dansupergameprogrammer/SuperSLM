@@ -161,9 +161,34 @@ static void TestDim7_C1a_AbiLayerOwnAllocationsAreTheDisclosedCount(
 // found -- a second vocabulary-sized buffer, on the damped path only -- and it is immune to the
 // anti-LM's small-node churn at any count.
 //
-// THE FIRST DAMPED STEP IS DELIBERATELY NOT THE MEASURED ONE. sslm_decode_stepImpl creates the
-// sequence's own AntiLmState on its first damped call. That allocation is once per sequence
-// rather than once per token, so it is paid in the warm-up step and is out of the measurement.
+// THE WARM-UP PRECONDITION IS `anti_lm_max_order` STEPS, NOT A FIXED ONE (T-2312-REVISED,
+// D-SLM4787). sslm_decode_stepImpl creates the sequence's own AntiLmState on its first damped
+// call, and that state's own per-order outer tables (src/detail/context_hash.h,
+// GrowableContextMap) allocate LAZILY (fold round 27, D-SLM4779) -- not at construction, but on
+// each order's own first reachable AntiLmUpdate call. Order k's context has length k-1
+// (src/damped_greedy_antilm.cpp, AntiLmUpdate/AntiLmPenalize: `ctx_len = order - 1`), and a
+// context of length k-1 first becomes reachable once the sequence's own history holds k-1
+// tokens -- which happens immediately before the k-th AntiLmUpdate call, since history_ grows
+// by exactly one token per decode_step_v2 call in damped mode (one AntiLmUpdate per call,
+// src/sslm_abi.cpp). So order k's own outer table allocates for the first time on the k-th
+// warm-up call, and the highest order, `anti_lm_max_order`, needs `anti_lm_max_order` warm-up
+// calls -- not one -- before every order's own one-time allocation is safely behind the
+// measured window. A fixed one-step warm-up only ever covered the case anti_lm_max_order<=1;
+// at the shipped default (anti_lm_max_order=2, SSLM_DAMPED_GREEDY_DEFAULT_ANTI_LM_ORDER), order
+// 2's own outer-table allocation (BucketCountFor(8)=16 slots, the class default hint, 1,408
+// bytes at this ABI's own Slot size) landed inside the SECOND decode_step_v2 call -- the one
+// this cell was measuring -- and was large enough to cross this cell's own vocabulary-scale
+// threshold at the small synthetic fixtures this suite runs on, producing a false vocabulary-
+// scale-allocation finding against otherwise-correct code
+// (Claude/Brunel/t2311-fold27-build-2026-08-27.md Sec12). The fix below reads
+// `anti_lm_max_order` back from the params this cell itself initialized (never hardcoded) and
+// warms up that many calls on both arms before opening the measured window, so this
+// precondition tracks whatever `SSLM_DAMPED_GREEDY_DEFAULT_ANTI_LM_ORDER` (or an explicit
+// override) actually is, rather than a number frozen at this cell's own authoring. No shipped
+// header (include/superslm/sslm_abi.h, include/superslm/sslm_damped_greedy.h) discloses this
+// per-order first-touch-allocation timing as a public contract (checked, T-2312) -- this is a
+// test-instrumentation precondition, not a documented API guarantee, so no production header
+// needed updating alongside this repair.
 static void TestDim7_C1c_DampedDecodeStepAllocatesNoVocabularySizedBuffer(
     sslm_model model, sslm_seq seq_damped, sslm_seq seq_greedy, sslm_workspace ws,
     int32_t layer_budget, int32_t vocab_size) {
@@ -199,10 +224,17 @@ static void TestDim7_C1c_DampedDecodeStepAllocatesNoVocabularySizedBuffer(
 	sslm_seq greedy_batch[1] = {seq_greedy};
 	int32_t token = 0;
 
-	// Warm-up: the ready_for_logits step. On the damped arm this is also the call that creates
-	// the AntiLmState. Neither arm is measured here.
-	CHECK(sslm_decode_step_v2(model, damped_batch, 1, &damped, ws, &token) == SSLM_OK);
-	CHECK(sslm_decode_step_v2(model, greedy_batch, 1, &greedy, ws, &token) == SSLM_OK);
+	// Warm-up: `anti_lm_max_order` ready_for_logits steps (see this function's own header
+	// comment for why the count is the order, not a fixed one). On the damped arm the FIRST of
+	// these is also the call that creates the AntiLmState; by the LAST of these, every order's
+	// own outer table has taken its own one-time first-touch allocation. Neither arm is
+	// measured across any of these calls. `damped.anti_lm_max_order` is read back from the
+	// params this function itself initialized above (sslm_decode_params_init), never
+	// hardcoded, so this loop tracks whatever order is actually configured.
+	for (int32_t i = 0; i < damped.anti_lm_max_order; ++i) {
+		CHECK(sslm_decode_step_v2(model, damped_batch, 1, &damped, ws, &token) == SSLM_OK);
+		CHECK(sslm_decode_step_v2(model, greedy_batch, 1, &greedy, ws, &token) == SSLM_OK);
+	}
 
 	// The measured step: a full token through the layer loop on each arm. One int32 per
 	// vocabulary entry is the scale of the buffer C1 found, and of the engine's own per-token
