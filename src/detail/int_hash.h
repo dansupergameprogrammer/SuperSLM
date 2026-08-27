@@ -379,17 +379,34 @@ private:
 
     void Grow() {
         std::vector<Slot> old = std::move(slots_);
-        // Corrected fold round 26 (D-SLM4767/D-SLM4768): BucketCountFor already returns
-        // capacity >= 2*n (Sec3.1) -- the pre-fold-26 line read BucketCountFor((live_+1)*2),
-        // doubling an argument BucketCountFor doubles again internally (a quadrupling, not
-        // the "integer doubling" this line's own pre-fold-26 comment claimed). live_ here is
-        // read before the reset three lines down, so it is still the occupied-only count
-        // (tombstones_ is not added -- Grow()'s own reinsertion loop below drops tombstones,
-        // so the post-Grow() population is exactly the occupied count, not occupied-plus-
-        // tombstones). Full derivation, worked example, and termination proof at Sec3.6's
-        // identical correction to GrowableIntMap::Grow(), below -- same argument, no
-        // tombstone term there since that type never erases.
-        uint64_t new_mask = BucketCountFor(live_ + 1) - 1;
+        // Corrected fold round 26 (D-SLM4767/D-SLM4768), SUPERSEDED at this line fold round 27
+        // (D-SLM4777): fold round 26 sized the new table from BucketCountFor(live_+1) alone,
+        // citing Sec3.6's GrowableIntMap::Grow() correction as the identical argument. It is
+        // not identical here: this type's own trigger is (live_+tombstones_+1)*2 > slots_.size()
+        // (InsertOrReclaim, above), so a table can be triggered while live_ alone is far below
+        // BucketCountFor's own headroom -- a capacity-16 table holding live_=1, tombstones_=7
+        // trips the trigger (18 > 16) and BucketCountFor(live_+1) = BucketCountFor(2) = 4,
+        // FOUR TIMES SMALLER than the table it replaces. Every key remains findable (the shrink
+        // is not a correctness defect), but a table that shrinks on a tombstone-only trigger
+        // loses the capacity it already paid for and must re-earn it on the very next
+        // tombstone-driven trigger -- executed and measured (Sec3.5 prose): amortized O(1)
+        // rehashing becomes amortized O(live_).
+        //
+        // The fix never shrinks: the new capacity is the LARGER of what live_+1 needs and what
+        // the table already has. A live_-driven trigger (the ordinary growth case) still grows
+        // exactly as before -- BucketCountFor(live_+1) already exceeds the current capacity
+        // whenever growth is genuinely needed, so max() is a no-op there. A tombstone-driven
+        // trigger instead COMPACTS: capacity is unchanged, tombstones_ resets to 0 (this
+        // reinsertion loop below already drops tombstones, unchanged by this fold), and live_
+        // is read before that reset, so it is still the occupied-only count. Never shrinks by
+        // construction; cannot immediately re-fire (whenever the max() picks current_capacity,
+        // BucketCountFor(live_+1) <= current_capacity implies 2*(live_+1) <= current_capacity,
+        // exactly the post-compaction trigger's own negation); operations-before-next-trigger
+        // is bounded by the table's own current capacity, not by live_ alone.
+        uint64_t grown_for_live = BucketCountFor(live_ + 1);
+        uint64_t current_capacity = mask_ + 1;
+        uint64_t new_capacity = grown_for_live > current_capacity ? grown_for_live : current_capacity;
+        uint64_t new_mask = new_capacity - 1;
         slots_.assign(new_mask + 1, Slot{});
         mask_ = new_mask;
         live_ = 0; tombstones_ = 0;
