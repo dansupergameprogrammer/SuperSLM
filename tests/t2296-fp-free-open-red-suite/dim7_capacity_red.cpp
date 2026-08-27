@@ -37,16 +37,21 @@
 //             directly out of the header rather than a frozen copy -- see this cell's own
 //             function definition below.
 //
-// T-2321 UPDATE (2026-08-27, Claude/Curie/t2321-cells-i-and-j-2026-08-27.md): Cell I authored,
-// realizing design Sec7 dim 7's own seventh cell (fold round 28) -- see this cell's own
-// function definition below for its full method and mutation-proof. Cell J follows in the next
-// commit of this same round.
+// T-2321 UPDATE (2026-08-27, Claude/Curie/t2321-cells-i-and-j-2026-08-27.md): Cells I and J
+// authored, realizing design Sec7 dim 7's own seventh and eighth cells (fold rounds 28/30) --
+// see each cell's own function definition below for its full method and mutation-proof.
 //   Cell I -- GrowableIntSet's own allocation count under steady erase-churn (fold 28,
 //             D-SLM4796, NOT YET BUILT at this suite's current authoring commit -- Grow()
 //             still carries fold round 27's formula) -- RED against the unmodified header,
 //             for the design's own named reason (fold 27's formula does not fall with L);
 //             flips GREEN under a temporary, reverted build of fold round 28's own target
 //             formula.
+//   Cell J -- GrowableIntSet's own capacity at its own first four Grow() trigger populations
+//             (redesigned fold round 30, D-SLM4808, NOT YET BUILT) -- RED against the
+//             unmodified header for the identical reason; flips GREEN under the same
+//             temporary, reverted build; the design's own four named falsifying mutations
+//             (1x/4x/8x/16x) reproduced, each failing the cell as a whole per its own
+//             predicted pattern.
 //
 // WHY CELLS F/G/H WERE ALLOWED TO BE RED AT T-2310's OWN HANDOFF (historical; fold 27 is landed
 // now): fold round 27 was design-only as of this suite's authoring
@@ -787,6 +792,134 @@ void CellI_GrowableIntSetChurnAllocationCount() {
 }
 
 // ==================================================================================
+// CELL J -- GrowableIntSet's own capacity, read exact at its own first four Grow() trigger
+// populations (redesigned fold round 30, D-SLM4808, superseding the ceiling form fold round
+// 29 specified, D-SLM4806, refuted by a pre-authorship audit --
+// Claude/Mendeleev/t2319-cellj-preauthorship-audit-2026-08-27.md, verdict GAPS NAMED: the
+// ceiling form does not discriminate at any of 2000 populations checked). Design Sec7 dim 7
+// Cell J: drive GrowableIntSet to its own first four Grow() trigger populations by monotonic
+// InsertOrReclaim alone (no Erase -- a fresh instance per population, matching Cell D's own
+// convention), and assert exact capacity equality, capacity == BucketCountFor(2*N), at
+// N in {9, 33, 129, 513} (BucketCountFor(2*(live_+1)) target: capacities 64, 256, 1024, 4096).
+//
+// FALSIFYING MUTATIONS, all four, executed in both directions (see this cell's own
+// test-design record for the transcript): the currently-shipped fold-27 formula (live_+1, no
+// 2x headroom) fails all four populations -- RED against the unmodified header, no mutation
+// needed; a 4x-over-target formula (BucketCountFor(4*(live_+1))) fails three of four (N=129
+// individually passes -- 1024 == BucketCountFor(4*(129))'s own value at that one population --
+// but the assertion is a conjunction over all four named populations, so the cell as a whole
+// still fails); an 8x construction (BucketCountFor(8*(live_+1)), T-2316's own construction)
+// fails two of four (N=33 and N=513 individually pass); a 16x construction
+// (BucketCountFor(16*(live_+1))) fails all four. Every mutation was built as a temporary,
+// reverted edit to src/detail/int_hash.h (a single parameterized multiplier, see this cell's
+// own test-design record for the executed transcript) -- not this seat's authority to leave
+// built (Curie.md, "Does not implement"; this ticket's own brief Sec2 -- src/ and include/
+// are READ-ONLY DELIVERABLES).
+//
+// THE RESOLUTION FLOOR THIS CELL DOES NOT CLOSE, AND IS NOT ASKED TO (D-SLM4809). A
+// sizing-formula regression that multiplies the target headroom by exactly 3 (as against the
+// 2x that is correct, or the 4x/8x/16x this cell catches, above) is provably unobservable to
+// this or any capacity-snapshot cell, at any population -- proven by induction over
+// BucketCountFor's own power-of-two rounding and confirmed by execution across 600
+// populations with zero divergence (the pre-authorship audit, Sec6). Not this cell's claim to
+// make and not mapped as one; recorded here, not investigated further, per that audit's own
+// disposition.
+//
+// CAPACITY READ -- BYTE-FOR-BYTE AGAINST AN INDEPENDENT REFERENCE, NOT A DIVISION.
+// Cell D's own division technique (window bytes / calibrated sizeof(Slot) = capacity) was
+// tried first here and found NOT SOUND at the byte counts this cell's own larger populations
+// reach -- a genuine finding, not assumed, discovered by execution:
+// std::vector<T>::assign()/reserve() in this build (MSVC 19.33, /std:c++20) manually
+// over-aligns any allocation whose requested byte size crosses an internal large-allocation
+// threshold (empirically ~4096 bytes here), adding a FIXED, undocumented extra byte count to
+// the raw request passed to `operator new` -- confirmed by an isolated `std::vector<T>`
+// probe outside GrowableIntSet entirely, using a plain 16-byte POD with no relation to this
+// type: `.assign(256, {})` requests 4135 bytes, not 4096; `.assign(512, {})` requests 8231,
+// not 8192 -- the identical +39-byte residual both times, present even on a FRESH vector's
+// FIRST allocation (not an artifact of reuse or growth history). This defeats a plain
+// `bytes / sizeof(Slot)` division at N=129 and N=513 (both cross the threshold) while N=9 and
+// N=33 (which do not) divide cleanly -- exactly the asymmetry an execution-first check
+// catches and a by-construction assumption would not (StandardsDocument.md Sec5.4).
+//
+// The fix sidesteps needing to know that overhead's own formula: whatever it is, it is a
+// property of the REQUESTED BYTE SIZE and the TARGET TYPE's size/alignment, not of
+// GrowableIntSet specifically -- so it applies IDENTICALLY to an independently-built
+// `std::vector<SlotProxy>` of the SAME element size (16 bytes, calibrated below) allocated to
+// the SAME element count. Comparing GrowableIntSet's own measured byte footprint against that
+// reference's measured byte footprint, byte-for-byte, is exact regardless of what the
+// underlying allocator does at any threshold -- it never needs to be inverted or divided.
+// SlotProxy is a field-for-field mirror of the private Slot ({Key key{}; State state{};},
+// Key=uint64_t, State an enum class with a uint8_t underlying type -- same layout as a plain
+// uint8_t member), the same mirroring convention Cell H's own ContextEntryMirror already
+// uses for a different private type.
+// ==================================================================================
+
+void CellJ_GrowableIntSetTriggerCapacity() {
+	using GIS = GrowableIntSet<uint64_t, MixKey64>;
+	struct SlotProxy {
+		uint64_t key = 0;
+		uint8_t state = 0;
+	};
+
+	// Sanity-calibrate SlotProxy's own size against GrowableIntSet's real Slot, at a capacity
+	// (16) small enough that no large-allocation overhead is in play, so a plain division is
+	// trustworthy for this one check only.
+	t2310_alloc::Arm();
+	GIS cal(8);
+	long long w_cal = t2310_alloc::LiveBytes();
+	t2310_alloc::Disarm();
+	uint64_t cap16 = BucketCountFor(8);
+	CHECK_MSG(w_cal > 0 && w_cal % static_cast<long long>(cap16) == 0,
+	          "GrowableIntSet calibration window (%lld bytes) not a clean multiple of capacity "
+	          "%llu -- calibration assumption violated",
+	          w_cal, (unsigned long long)cap16);
+	long long sizeof_slot = w_cal / static_cast<long long>(cap16);
+	CHECK_MSG(sizeof_slot == static_cast<long long>(sizeof(SlotProxy)),
+	          "SlotProxy (%zu bytes) does not match GrowableIntSet's own calibrated Slot size "
+	          "(%lld bytes) -- the mirror struct's own layout no longer matches the private "
+	          "Slot it stands in for",
+	          sizeof(SlotProxy), sizeof_slot);
+
+	struct TriggerPoint {
+		uint64_t n;
+		uint64_t expected_capacity;
+	};
+	const TriggerPoint points[4] = {
+	    {9, BucketCountFor(2 * 9)},
+	    {33, BucketCountFor(2 * 33)},
+	    {129, BucketCountFor(2 * 129)},
+	    {513, BucketCountFor(2 * 513)},
+	};
+
+	for (const TriggerPoint& p : points) {
+		// Measure GrowableIntSet's own real footprint after reaching population p.n.
+		t2310_alloc::Arm();
+		GIS s(8);  // fresh instance per population, matching Cell D's own convention
+		for (uint64_t k = 0; k < p.n; ++k) CHECK(s.InsertOrReclaim(k));
+		long long real_bytes = t2310_alloc::LiveBytes();
+		t2310_alloc::Disarm();
+
+		// Measure what an independent std::vector<SlotProxy> of exactly the EXPECTED
+		// element count allocates, under the identical allocator override and the
+		// identical STL -- whatever large-allocation overhead applies, applies the same
+		// way to both, since both are 16-byte, 8-byte-aligned element arrays.
+		t2310_alloc::Arm();
+		std::vector<SlotProxy> ref;
+		ref.assign(p.expected_capacity, SlotProxy{});
+		long long expected_bytes = t2310_alloc::LiveBytes();
+		t2310_alloc::Disarm();
+
+		CHECK_MSG(real_bytes == expected_bytes,
+		          "GrowableIntSet capacity at its own first-Grow()-trigger population N=%llu: "
+		          "real footprint %lld bytes, want %lld bytes (an independent "
+		          "std::vector<SlotProxy> sized to BucketCountFor(2N)=%llu elements) -- "
+		          "capacity != BucketCountFor(2N)",
+		          (unsigned long long)p.n, real_bytes, expected_bytes,
+		          (unsigned long long)p.expected_capacity);
+	}
+}
+
+// ==================================================================================
 // CELL CALIB -- the calibration-currency check (fold 27, D-SLM4778, S2). Design Sec7 dim 7,
 // sixth cell: at build/test time, re-derive the true understatement multiplier using T-2299's
 // own method (global operator new accounting, base vs. shipped construction) at max_order in
@@ -967,6 +1100,10 @@ int main() {
 	std::printf("--- Cell I: GrowableIntSet's own allocation count under steady erase-churn "
 	            "(fold 28, not yet built) ---\n");
 	CellI_GrowableIntSetChurnAllocationCount();
+
+	std::printf("--- Cell J: GrowableIntSet's own capacity at its first four Grow() trigger "
+	            "populations (fold 28, not yet built) ---\n");
+	CellJ_GrowableIntSetTriggerCapacity();
 
 	std::printf("--- Cell Calib: AntiLmRetainedBytes calibration currency ---\n");
 	CellCalib_AntiLmRetainedBytesCurrency();
