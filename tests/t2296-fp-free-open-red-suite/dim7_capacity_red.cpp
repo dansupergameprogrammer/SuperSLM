@@ -39,7 +39,10 @@
 //
 // T-2321 UPDATE (2026-08-27, Claude/Curie/t2321-cells-i-and-j-2026-08-27.md): Cells I and J
 // authored, realizing design Sec7 dim 7's own seventh and eighth cells (fold rounds 28/30) --
-// see each cell's own function definition below for its full method and mutation-proof.
+// see each cell's own function definition below for its full method and mutation-proof. This
+// block is T-2321's own authoring-time snapshot (fold 28 not yet built) and is retained for
+// the historical WHY; it does not describe current behavior -- see the T-2324 UPDATE
+// immediately below.
 //   Cell I -- GrowableIntSet's own allocation count under steady erase-churn (fold 28,
 //             D-SLM4796, NOT YET BUILT at this suite's current authoring commit -- Grow()
 //             still carries fold round 27's formula) -- RED against the unmodified header,
@@ -52,6 +55,20 @@
 //             temporary, reverted build; the design's own four named falsifying mutations
 //             (1x/4x/8x/16x) reproduced, each failing the cell as a whole per its own
 //             predicted pattern.
+//
+// T-2322 UPDATE (2026-08-27, Claude/Brunel/t2322-...): fold round 28's own target formula
+// (BucketCountFor(2*(live_+1))) landed for real in Grow() at 91474c3, permanent -- `src/` and
+// `include/` are read-only DELIVERABLES to this seat, not a state this suite reverts. Cells I
+// and J are GREEN, unrevised, at their own function definitions below, which carry the
+// current, authoritative RED/GREEN state rather than the "NOT YET BUILT" snapshot the T-2321
+// block above describes at its own authoring commit.
+//
+// T-2324 UPDATE (2026-08-27, Claude/Curie/t2324-cellf-reachability-fix-2026-08-27.md): a code
+// review (Claude/Poirot/t-2323-fold28-confirmation-review-2026-08-27.md) found fold round 28's
+// own headroom doubling had silently consumed most of Cell F's own trigger margin (fixed below,
+// at Cell F's own function definition) and that Cell I's own allocation-event identity was off
+// by one (fixed below, at Cell I's own function definition). Neither Cell I nor Cell J's own
+// assertions changed; both remain GREEN as the T-2322 UPDATE above states.
 //
 // WHY CELLS F/G/H WERE ALLOWED TO BE RED AT T-2310's OWN HANDOFF (historical; fold 27 is landed
 // now): fold round 27 was design-only as of this suite's authoring
@@ -450,7 +467,7 @@ void CellE_ContextEntryCountsHint() {
 }
 
 // ==================================================================================
-// CELL F -- GrowableIntSet's never-shrink compaction (fold 27, Sec3.5, NOT YET BUILT).
+// CELL F -- GrowableIntSet's never-shrink compaction (fold 27, Sec3.5, BUILT).
 // Design Sec7 dim 7 Cell F: grow a table to a measured capacity C (any population sufficient
 // to trigger at least one live_-driven growth), then erase down to a small live count and
 // insert-and-erase enough distinct further keys to trip a tombstone-driven trigger; assert the
@@ -460,10 +477,28 @@ void CellE_ContextEntryCountsHint() {
 // own Sec3.5 text (capacity 16, live_=1, tombstones_=7, shrinking to capacity 4) is the
 // concrete instance this mutation reproduces.
 //
+// T-2324 UPDATE (2026-08-27, Claude/Curie/t2324-cellf-reachability-fix-2026-08-27.md): a code
+// review (Claude/Poirot/t-2323-fold28-confirmation-review-2026-08-27.md, S1) found step 3's own
+// round budget below was a hardcoded 40, chosen against fold round 27's own capacity (32
+// slots, first fire at round 9). Fold round 28 doubled this type's own headroom (Grow()'s
+// sizing line, int_hash.h), which doubled the tombstone-driven trigger's own threshold, which
+// moved the firing round to 27 of 40 -- thirteen rounds of margin where this comment (until
+// this fold) still claimed thirty-one, against a capacity (32) two folds stale. One further
+// doubling would have taken the firing round past the 40-round budget and left this cell
+// GREEN while no longer exercising the property it exists to pin (D-SLM4777, the never-shrink
+// property), silently, because assertion and reachability are different questions and the
+// prior round's records checked only the first. Fixed below by deriving the round budget from
+// THIS RUN'S OWN measured capacity rather than a constant correct against one fold's capacity
+// -- see the round-budget comment in step 3 for the derivation and the executed margin at
+// every headroom multiplier this fix was mutation-proved against.
+//
 // This cell needs no calibrated sizeof(Slot): GrowableIntSet<uint64_t, MixKey64>'s Key is POD
 // (no per-key heap cost), so `t2310_alloc::LiveBytes()` is directly proportional to the
 // table's own current capacity at every point in the sequence, and a `>=` comparison in bytes
-// is exactly a `>=` comparison in capacity -- no division needed.
+// is exactly a `>=` comparison in capacity -- no division needed. The round budget below is
+// therefore derived from the measured BYTE figure directly, never divided down to a slot
+// count -- see the round-budget comment in step 3 for why a division was tried first and found
+// unsound by execution.
 // ==================================================================================
 
 void CellF_GrowableIntSetNeverShrink() {
@@ -473,8 +508,9 @@ void CellF_GrowableIntSetNeverShrink() {
 	GIS s(8);
 	// Step 1: grow via a live_-driven trigger to a measured capacity C. Insert 9 distinct
 	// keys (hint 8 -> capacity 16; the 9th insertion's own pre-check, live_=8: (8+1)*2=18>16,
-	// trips Grow(), sizing to BucketCountFor(9)=32 -- matches Cell D's own arithmetic exactly,
-	// no tombstone term since tombstones_=0 throughout this step).
+	// trips Grow(), sizing to whatever this build's own headroom formula produces -- this cell
+	// does not assume which formula is in force, it measures the result (BucketCountFor(2*9)=64
+	// under fold round 28's own shipped formula).
 	for (uint64_t k = 0; k < 9; ++k) s.InsertOrReclaim(k);
 	long long capacity_c_bytes = t2310_alloc::LiveBytes();
 	CHECK_MSG(capacity_c_bytes > 0, "GrowableIntSet step 1: expected a nonzero live footprint "
@@ -487,28 +523,45 @@ void CellF_GrowableIntSetNeverShrink() {
 	          "GrowableIntSet step 2 (erase only): live footprint changed from %lld to %lld -- "
 	          "erase alone must never reallocate", capacity_c_bytes, t2310_alloc::LiveBytes());
 
-	// Step 3: insert-and-erase 40 further distinct keys (never previously used), one round at
-	// a time -- each round's own erase deterministically creates a tombstone at the slot it
+	// Step 3: insert-and-erase enough further distinct keys (never previously used), one round
+	// at a time -- each round's own erase deterministically creates a tombstone at the slot it
 	// just occupied (Erase always tombstones on a hit, regardless of whether that round's own
 	// insert reclaimed an existing tombstone or used a fresh empty slot), so tombstones_ is
 	// monotonically non-decreasing across rounds and cannot get stuck below the trigger
-	// threshold indefinitely -- 40 rounds against a threshold that trips at tombstones_ >= 15
-	// (from (live_+tombstones_+1)*2 > 32 with live_=1) is a wide, empirically-confirmed
-	// margin (see this file's own test-design record for the executed trace). The invariant
-	// under test -- capacity never drops below C -- is checked after EVERY round, not only at
-	// the end, so this cell does not depend on knowing exactly which round trips the trigger.
+	// threshold indefinitely. The invariant under test -- capacity never drops below C -- is
+	// checked after EVERY round, not only at the end, so this cell does not depend on knowing
+	// exactly which round trips the trigger.
 	//
-	// "The trigger fired at least once" is checked via NEW allocation bytes (t2310_alloc's own
-	// window, reset each round), never via a live-byte CHANGE: the corrected (fixed) formula's
-	// own `max()` can leave the resulting capacity IDENTICAL to C (`max(BucketCountFor(2), 32)
-	// == 32`), so a genuine Grow() -- a real reallocation, old array freed and a new one of the
-	// same size allocated -- produces zero NET live-byte change even though it definitely ran.
-	// A live-byte-change check would therefore wrongly conclude the trigger never fired on a
-	// CORRECT build (caught empirically during this suite's own authoring, mutation-proofing
-	// this exact cell: the fold-27 fix applied, `capacity_ever_changed` read false against a
-	// build that was visibly, correctly holding the invariant).
+	// ROUND BUDGET, DERIVED FROM THIS RUN'S OWN MEASURED CAPACITY, NOT A CONSTANT (T-2324; see
+	// this file's header comment for why a constant chosen against one fold's capacity silently
+	// stops discriminating the next time this type's own headroom formula changes). The
+	// trigger's own threshold is `(live_+tombstones_+1)*2 > C`; with live_=1 after step 2 that
+	// is `tombstones_ > C/2 - 2`, i.e. a minimum of `C/2 - 1` tombstones starting from the 8
+	// step 2 already leaves behind -- so a budget of roughly C rounds gives that derivation
+	// comfortable multiplicative headroom without pinning it to today's own multiplier.
+	//
+	// Dividing capacity_c_bytes by a calibrated sizeof(Slot) to recover an exact slot count was
+	// tried first (matching Cell D's own technique) and found UNSOUND BY EXECUTION at a
+	// temporary x8 mutation: MSVC's own large-allocation path adds an undocumented byte
+	// overhead, not a multiple of sizeof(Slot), once a request crosses roughly 4096 bytes --
+	// the identical defect Cell J's own header comment already diagnoses for its capacity READ,
+	// surfacing here in a capacity DERIVATION instead, and defeating a `bytes % sizeof(Slot) ==
+	// 0` calibration check the same way. Using capacity_c_bytes DIRECTLY as the round budget
+	// sidesteps the division entirely: it stays exactly proportional to the real slot count
+	// (this cell's own Key is POD, see this cell's own header comment above), just scaled up by
+	// sizeof(Slot) -- a wider margin, not a narrower one, and it costs nothing at any
+	// multiplier this design's own headroom policy is likely to reach. Mutation-proved by
+	// execution (Claude/Curie/t2324-cellf-reachability-fix-2026-08-27.md records the full
+	// table) at C=32 bytes=512 (fold-27 reversion, fires round 10), C=64 bytes=1024 (this
+	// suite's own shipped build, fires round 28), C=128 bytes=2048 (a temporary x4 mutation,
+	// fires round 74), and C=256 bytes=4135 -- the large-allocation overhead itself, harmless
+	// here since it only enlarges the budget -- (x8, fires round 163): the margin widens, not
+	// narrows, as this run's own multiplier grows, confirmed further through x128 in the same
+	// record.
+	uint64_t round_budget = static_cast<uint64_t>(capacity_c_bytes);
 	bool trigger_fired = false;
-	for (uint64_t k = 100; k < 140; ++k) {
+	for (uint64_t round = 0; round < round_budget; ++round) {
+		uint64_t k = 100 + round;
 		t2310_alloc::ResetWindow();
 		CHECK(s.InsertOrReclaim(k));
 		CHECK(s.Erase(k));
@@ -520,10 +573,14 @@ void CellF_GrowableIntSetNeverShrink() {
 		          capacity_c_bytes, now, (unsigned long long)k);
 	}
 	CHECK_MSG(trigger_fired,
-	          "GrowableIntSet step 3: no round allocated anything -- the tombstone-driven "
-	          "trigger never fired across 40 rounds, so this cell did not exercise the "
-	          "property it exists to pin; widen the round count or re-check the trigger "
-	          "arithmetic");
+	          "GrowableIntSet step 3: no round allocated anything across a %llu-round budget "
+	          "derived from this run's own measured capacity (%lld live bytes after step 1) -- "
+	          "the tombstone-driven trigger never fired, so this cell did not exercise the "
+	          "property it exists to pin; if this type's own headroom formula changed to need "
+	          "substantially more rounds than its own measured byte footprint to trip, that is "
+	          "the change to look at (widen the derivation's own safety margin), not this "
+	          "cell's round count",
+	          (unsigned long long)round_budget, capacity_c_bytes);
 
 	t2310_alloc::Disarm();
 }
@@ -728,13 +785,12 @@ void CellH_Order1Hint() {
 // identical PASS/FAIL verdict, so this is a clarity fix, not a discrimination change). Assert
 // the total count is <= ceil(1000 / (L + 1)) + K, K = 8, at L in {7, 31, 127, 511}.
 //
-// FALSIFYING MUTATION: reverting the sizing line to BucketCountFor(live_+1) alone (fold round
-// 27's own formula, no 2x headroom) must flip this assertion at every tested L -- this IS the
-// formula shipped at this suite's own build commit (Grow() carries fold round 27's formula,
-// not fold round 28's target; design Sec2, T-2319's own audit Sec2), so this cell is RED
-// against the unmodified header without any mutation, and flips GREEN under a temporary,
-// reverted build of fold round 28's own BucketCountFor(2*(live_+1)) formula -- both executed,
-// see this cell's own test-design record for the transcript.
+// FALSIFYING MUTATION, executed and reverted (T-2321; re-executed T-2324): Grow() ships fold
+// round 28's own target formula (BucketCountFor(2*(live_+1))) as of 91474c3, so this cell is
+// GREEN against the unmodified header today. Reverting the sizing line to BucketCountFor
+// (live_+1) alone (fold round 27's own formula, no 2x headroom) flips this assertion RED at
+// every tested L -- both directions executed, see this cell's own test-design record for the
+// transcript.
 //
 // EVENT COUNTING, NOT BYTES. GrowableIntSet's own Grow() is the only place this type ever
 // allocates once its constructor has returned (int_hash.h) -- every allocation EVENT this
@@ -745,16 +801,32 @@ void CellH_Order1Hint() {
 // method reached only from InsertOrReclaim's own growth pre-check, never from the
 // constructor, so the constructor's own allocation is not a "Grow() call" under this cell's
 // own definition -- arming the window only after construction returns is what keeps it out.
+//
+// T-2324 (M3, Claude/Poirot/t-2323-fold28-confirmation-review-2026-08-27.md): the identity
+// above was false by exactly one event at this cell's own prior authoring -- the fixture's own
+// `live_keys.reserve(L)` allocated once and was landing INSIDE the armed window, ahead of the
+// initial fill. `K = 8` absorbed the extra event silently (it changes no verdict), but the
+// design's own text for `K` names only the initial fill's `O(log L)` growth sequence, not a
+// second, undocumented term. Fixed by moving `live_keys.reserve(L)` above `t2310_alloc::Arm()`
+// in this cell's own function body, below -- the reserve's own allocation now lands outside
+// the window entirely, and every allocation event the window records is, as stated, exactly
+// one `Grow()` call.
 // ==================================================================================
 
 uint64_t CellI_GrowCallCount(uint64_t L) {
 	using GIS = GrowableIntSet<uint64_t, MixKey64>;
 	GIS s(8);  // unarmed -- see this cell's own header comment
 
-	t2310_alloc::Arm();  // one continuous window: the initial fill AND all 1,000 churn rounds
-
+	// T-2324 (M3): live_keys.reserve(L) allocates once and must land BEFORE the window is
+	// armed, or that one std::vector allocation event counts as a "Grow() call" under this
+	// cell's own definition (it is not one) -- Arm() moved below the reserve for exactly that
+	// reason; see this file's header comment above Cell I's own function for the identity this
+	// keeps true.
 	std::vector<uint64_t> live_keys;
 	live_keys.reserve(L);
+
+	t2310_alloc::Arm();  // one continuous window: the initial fill AND all 1,000 churn rounds
+
 	for (uint64_t k = 0; k < L; ++k) {
 		CHECK(s.InsertOrReclaim(k));
 		live_keys.push_back(k);
@@ -803,9 +875,11 @@ void CellI_GrowableIntSetChurnAllocationCount() {
 // N in {9, 33, 129, 513} (BucketCountFor(2*(live_+1)) target: capacities 64, 256, 1024, 4096).
 //
 // FALSIFYING MUTATIONS, all four, executed in both directions (see this cell's own
-// test-design record for the transcript): the currently-shipped fold-27 formula (live_+1, no
-// 2x headroom) fails all four populations -- RED against the unmodified header, no mutation
-// needed; a 4x-over-target formula (BucketCountFor(4*(live_+1))) fails three of four (N=129
+// test-design record for the transcript): Grow() ships fold round 28's own target formula
+// (BucketCountFor(2*(live_+1))) as of 91474c3, so this cell is GREEN against the unmodified
+// header today. Reverting to fold round 27's own formula (live_+1, no 2x headroom) fails all
+// four populations -- RED, no further mutation needed to reach it; a 4x-over-target formula
+// (BucketCountFor(4*(live_+1))) fails three of four (N=129
 // individually passes -- 1024 == BucketCountFor(4*(129))'s own value at that one population --
 // but the assertion is a conjunction over all four named populations, so the cell as a whole
 // still fails); an 8x construction (BucketCountFor(8*(live_+1)), T-2316's own construction)
@@ -1098,11 +1172,11 @@ int main() {
 	CellH_Order1Hint();
 
 	std::printf("--- Cell I: GrowableIntSet's own allocation count under steady erase-churn "
-	            "(fold 28, not yet built) ---\n");
+	            "(fold 28, built) ---\n");
 	CellI_GrowableIntSetChurnAllocationCount();
 
 	std::printf("--- Cell J: GrowableIntSet's own capacity at its first four Grow() trigger "
-	            "populations (fold 28, not yet built) ---\n");
+	            "populations (fold 28, built) ---\n");
 	CellJ_GrowableIntSetTriggerCapacity();
 
 	std::printf("--- Cell Calib: AntiLmRetainedBytes calibration currency ---\n");
