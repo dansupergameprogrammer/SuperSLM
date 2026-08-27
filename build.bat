@@ -1405,6 +1405,48 @@ if not %t2296_liveness_ec%==0 (
 	popd & exit /b 1
 )
 
+rem T-2326 (Curie): tests\t2296-fp-free-open-red-suite\test_check_fp_free_scan.py -- the red suite
+rem for design Sec4.1's own deciding instrument (Sec7 dimension 11's fourteen commissioning
+rem populations: Claude/Vitruvius/t2265-superslm-fp-free-open-design-2026-08-24.md). The instrument
+rem itself is a Python CI tool that does not exist yet anywhere in this tree
+rem (tests\ci\check_fp_free_scan.py) -- a separate, substantial deliverable T-2296's own dim11_
+rem guard_red.cpp named as a specification-scale follow-on rather than authoring it as a C++ TU
+rem (Python test code for a Python instrument, not C++ test code against an existing/soon-to-exist
+rem C++ API). Every cell in this suite independently verifies its own fixture first -- a fresh
+rem compile or byte-level synthesis, plus a raw capstone decode that is NOT the absent instrument's
+rem own logic (fp_scan_common.py's own docstring) -- before asserting the instrument's documented
+rem verdict, so every cell fails today for exactly one reason (the check_fp_free_scan import
+rem failing), never a broken fixture: 23 cells across the fourteen populations, 0 unexpected
+rem exceptions, 0 fixture-verification failures, verified this ticket's own session (23 of 23 red
+rem for the stated reason, real toolchains -- MSVC cl.exe/ml64.exe, clang/clang++, capstone -- every
+rem one confirmed present and working, 0 skips). THIS IS WHY build.bat NOW EXITS NONZERO ON A CLEAN
+rem CHECKOUT, identically in shape to how dim6_determinism_red.cpp/dim7_contract_red.cpp gated this
+rem same build red before src\detail\int_hash.h existed (T-2296) -- see this file's own "NON-ZERO-
+rem EXIT PATHS" note below, extended with this path (4). Guarded on pytest being importable by
+rem whatever `python` resolves to on PATH: an environment with python but no pytest SKIPs this step
+rem loudly, non-fatal, rather than failing the build on a missing dev-only dependency -- distinct
+rem from the instrument itself being absent, which IS fatal, per this suite's own red-first charter.
+pushd .
+set t2326_scan_ec=0
+where python >nul 2>nul
+if not errorlevel 1 (
+	python -c "import pytest" >nul 2>nul
+	if not errorlevel 1 (
+		python -m pytest tests\t2296-fp-free-open-red-suite\test_check_fp_free_scan.py -q
+		if errorlevel 1 (
+			set t2326_scan_ec=1
+		)
+	) else (
+		echo pytest not installed for this Python -- skipping test_check_fp_free_scan.py ^(non-fatal^)
+	)
+) else (
+	echo python not found on PATH -- skipping test_check_fp_free_scan.py ^(non-fatal^)
+)
+popd
+if not %t2326_scan_ec%==0 (
+	popd & exit /b 1
+)
+
 rem NON-ZERO-EXIT PATHS (O2, Claude/Poirot/aea6116-t2139-seventh-confirmation-review.md; RoPE
 rem baseline retired T-2153, Claude/Curie/t2153-rope-fix-2026-08-17.md): this build's own
 rem non-zero-exit paths, named so "build.bat exits 1" is never read as "no code defect" without
@@ -1422,6 +1464,11 @@ rem      (an apparatus defect, not a code defect -- now a SKIP, exit 0, never th
 rem   3. tools\ci\gate_c_third_tu_can_fail_probe.py, above -- before T-2142's S3 fix, ANY dirty
 rem      working tree aborted this path regardless of what was dirty or why (an apparatus defect,
 rem      not a code defect); now compares before/after and only fires on a real regression.
+rem   4. tests\t2296-fp-free-open-red-suite\test_check_fp_free_scan.py, immediately above (T-2326)
+rem      -- EXPECTED nonzero on a clean checkout, not a regression: design Sec4.1's own deciding
+rem      instrument (tests\ci\check_fp_free_scan.py) does not exist yet, so every one of this
+rem      suite's 23 cells fails for that one stated reason. Stops being this path's own nonzero
+rem      exit only once that module is built to the contract this suite's own docstring names.
 out\superslm_tests.exe
 set ec=%errorlevel%
 if not %b1_ec%==0 set ec=%b1_ec%
