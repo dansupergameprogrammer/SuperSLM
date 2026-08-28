@@ -1477,6 +1477,22 @@ rem     without relocation/unwind metadata, so this reader -- built to that text
 rem     whole object exactly as the design's own probe did. This is a found tension between the red
 rem     suite's own assertion and the ratified design text's own disclosed, executed finding for the
 rem     identical construction, filed as an open finding rather than resolved by editing either side.
+rem T-2343 (Brunel): fold round 34's own five specification gaps (a)-(e), Poirot's Critical C1
+rem (movsd), Popper's clang/ELF/x86-64 finding, and the routed review findings (S1/S2/S4/S5/S6/
+rem M1-M6/O3-O6) are ALL BUILT into tests\ci\check_fp_free_scan.py this round. Re-executed this
+rem session: 39 passed, 2 deselected (the identical two named below, unrelated to fold round 34) --
+rem every one of T-2342's own 12 newly-red cells now passes for a genuine grading reason, and no
+rem cell was edited to reach that state. Population ten remains an open, disclosed tension (below);
+rem population eight remains ungradable by any pytest cell by its own docstring, unchanged.
+rem S5 (Poirot): a `--deselect` in a batch-file string is silent the moment it stops matching (an
+rem unmatched nodeid deselects nothing, with no error -- this file's own prior session confirmed
+rem that directly). Poirot's own recommended structural fix (`xfail(strict=True)` inside the test
+rem file) needs an edit to test_check_fp_free_scan.py, which is Curie's own writable domain, not
+rem this build round's -- routed back rather than done here. What this round adds, inside this
+rem build's own writable scope: a `--collect-only` count check, immediately below, that FAILS THE
+rem BUILD the moment the number of deselected cells is not exactly 2 -- so a third cell silently
+rem ceasing to match (or a fourth deselect quietly added) is a loud build failure, not a permanently
+rem invisible batch-file string.
 pushd .
 set t2326_scan_ec=0
 where python >nul 2>nul
@@ -1489,6 +1505,26 @@ if not errorlevel 1 (
 		rem here silently matches nothing (no error, no deselect -- confirmed by direct execution this
 		rem ticket's own session: --collect-only reported "25 tests collected" with backslash nodeids
 		rem and "23/25 tests collected (2 deselected)" with the identical nodeids forward-slashed).
+		rem T-2343 (Brunel), S5's own structural fix within this build's writable scope: `set
+		rem t2326_scan_ec=1` is set DIRECTLY inside the guard-failure branch below, never read back
+		rem within this same parenthesized block -- %VAR% expands ONCE when the whole block is first
+		rem parsed, before any line in it runs, so a variable both set and read inside one block reads
+		rem as empty/stale (confirmed by direct execution this session: the same-block read form
+		rem produced a bare "( was unexpected at this time." parse failure; this file's own
+		rem pre-existing t2326_scan_ec pattern already avoids it by never reading the variable back
+		rem until after the enclosing block closes, which this guard now follows too).
+		python -m pytest tests\t2296-fp-free-open-red-suite\test_check_fp_free_scan.py -q --collect-only ^
+			--deselect tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py::test_population_08_real_corpus_whole_sweep ^
+			--deselect tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py::test_population_10_arm_differential_historical > "%TEMP%\t2343_collect.txt" 2>&1
+		findstr /C:"(2 deselected)" "%TEMP%\t2343_collect.txt" >nul
+		if errorlevel 1 (
+			echo T-2343 S5 GUARD FAILED: the red suite's own --collect-only no longer reports exactly
+			echo 2 deselected cells -- a deselect nodeid stopped matching, or a new one was added
+			echo silently. Read %TEMP%\t2343_collect.txt and reconcile the deselect list before proceeding.
+			type "%TEMP%\t2343_collect.txt"
+			set t2326_scan_ec=1
+		)
+		del "%TEMP%\t2343_collect.txt" >nul 2>nul
 		python -m pytest tests\t2296-fp-free-open-red-suite\test_check_fp_free_scan.py -q ^
 			--deselect tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py::test_population_08_real_corpus_whole_sweep ^
 			--deselect tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py::test_population_10_arm_differential_historical
@@ -1498,8 +1534,11 @@ if not errorlevel 1 (
 		rem Population eight's own real occupant -- a whole-corpus build-and-scan of the real 17-file
 		rem SUPERSLM_CORE_SOURCES, reported (never gating: a REFUSE/REJECT on the real corpus is the
 		rem design's own disclosed, unclosed residual, not a build regression -- see the script's own
-		rem module docstring).
+		rem module docstring). M4 (Poirot): non-gating means reported, not unobserved -- the runner's
+		rem own exit code is captured and surfaced; it stays non-fatal to this build (a genuine
+		rem infrastructure failure inside the runner is loud in its own printed output either way).
 		python tests\ci\run_fp_free_scan_real_corpus.py
+		echo run_fp_free_scan_real_corpus.py exited %errorlevel% ^(non-gating; see the script's own module docstring^)
 	) else (
 		echo pytest not installed for this Python -- skipping test_check_fp_free_scan.py ^(non-fatal^)
 	)
@@ -1529,20 +1568,20 @@ rem   3. tools\ci\gate_c_third_tu_can_fail_probe.py, above -- before T-2142's S3
 rem      working tree aborted this path regardless of what was dirty or why (an apparatus defect,
 rem      not a code defect); now compares before/after and only fires on a real regression.
 rem   4. tests\t2296-fp-free-open-red-suite\test_check_fp_free_scan.py, immediately above
-rem      (T-2326/T-2333/T-2338/T-2342) -- EXPECTED nonzero again as of T-2342, not a regression:
-rem      Dan's ruling that every leg is proven before v1.3.0 tags landed design fold round 34
-rem      (Claude/Vitruvius/t2265-superslm-fp-free-open-design-2026-08-24.md Sec4.1 gaps (a)-(e),
-rem      Sec5.5's three-way ship-gate disjunction) and Poirot's/Popper's own findings against the
-rem      T-2338 build (Critical C1: movsd; the clang/ELF/x86-64 padding gap) -- T-2342 authored 16
-rem      new red cells (12 genuinely red today, 4 confirmatory/control) pinning that newly specified
-rem      and newly diagnosed behaviour, none of it built yet. The gating run above still deselects
-rem      only the same two cells named in the comment above it (population eight, never gradable by
-rem      a pytest cell by its own docstring; population ten, the pre-existing found tension against
-rem      the ratified design text's own disclosed fold-9 finding, unrelated to T-2342's own seven
-rem      items) -- of the 39 cells this run actually executes, 12 are EXPECTED red for T-2342's own
-rem      stated reasons (ci_gate_corpus, corpus_symbols, BF16 both ISAs, enumerate_scan_targets's
-rem      duplicate-stem refusal, the clang/ELF/x86-64 leg, movsd) until Brunel's next build round
-rem      implements fold round 34's specification; any OTHER nonzero exit is a real regression.
+rem      (T-2326/T-2333/T-2338/T-2342/T-2343) -- T-2343 (Brunel) BUILT fold round 34's own five
+rem      specification gaps, Poirot's Critical C1 (movsd), Popper's clang/ELF/x86-64 finding, and
+rem      the routed review findings. Re-executed this round: 39 passed, 2 deselected -- all 12 of
+rem      T-2342's own newly-red cells now pass for a genuine grading reason, and the 4 confirmatory
+rem      cells are unregressed. The gating run above still deselects exactly the same two cells named
+rem      in the comment above it (population eight, never gradable by a pytest cell by its own
+rem      docstring; population ten, the found tension against the ratified design text's own
+rem      disclosed fold-9 finding, still open -- see Claude/Brunel/
+rem      t2343-fp-scan-instrument-fix-round-2026-08-27.md for the full accounting) -- a `--collect-
+rem      only` count guard immediately above this pytest invocation fails the build the moment that
+rem      count is not exactly 2, per S5's own structural fix (a full `xfail(strict=True))` still
+rem      needs an edit to this test file, out of this build round's own writable scope, and is routed
+rem      back to whoever next touches it). ANY nonzero exit from the 39 cells this run actually
+rem      executes is a real regression.
 out\superslm_tests.exe
 set ec=%errorlevel%
 if not %b1_ec%==0 set ec=%b1_ec%

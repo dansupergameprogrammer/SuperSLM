@@ -362,7 +362,43 @@ def _decode_one(md, data: bytes, offset: int):
 _X86_PAD_BYTES = (0x90, 0xCC)
 
 
-def _is_padding_run(data: bytes, start: int, end: int, isa: str) -> bool:
+def _is_multi_byte_nop_run(md, data: bytes, start: int, end: int) -> bool:
+    """T-2343 (Brunel), diagnosing D-SLM4849 (Popper's undiagnosed
+    clang/ELF/x86-64 REFUSE-on-everything finding). clang and GCC pad
+    function alignment with multi-byte NOP encodings (Intel's own documented
+    1-9-byte NOP table, `0F 1F ...` forms, optionally preceded by one or
+    more `0x66`/`0x2E` legacy-prefix bytes for longer runs) -- bytes that are
+    neither bare `0x90` nor `0xCC`, so `_is_padding_run`'s own bytewise test
+    (unchanged, still the first and cheaper test) never matched them and the
+    whole object REFUSEd on every real clang/ELF object, FP-carrying or not.
+
+    Decodability is deliberately excluded from `_is_padding_run` itself
+    (design Sec4.1's own fold-13 law: a byte range's accounting must not
+    depend on whether an arbitrary decode of it happens to succeed, which is
+    exactly the movabs-swallow escape that law closes). This function does
+    NOT reopen that escape: it runs only over an INTER-EXTENT GAP no code or
+    data extent has claimed (never a symbol's own declared/inferred range,
+    where a false decode could misattribute bytes to a verdict), and it
+    requires every decoded instruction in the gap to be a genuine NOP
+    (capstone's own mnemonic for every documented multi-byte NOP encoding is
+    literally "nop", the same string a bare 0x90 decodes to) with ZERO
+    residue -- a materially narrower target than "decodes as something,"
+    which is what made the movabs-swallow shape exploitable in the first
+    place. Requires the WHOLE gap to decode as nothing but NOPs; any
+    non-NOP instruction or decode failure anywhere in the span means this is
+    not a recognised pattern, and the gap remains unaccounted."""
+    offset = start
+    while offset < end:
+        insn = _decode_one(md, data, offset)
+        if insn is None or insn.mnemonic.lower() != "nop":
+            return False
+        if offset + insn.size > end:
+            return False  # would spill past the gap's own end
+        offset += insn.size
+    return offset == end
+
+
+def _is_padding_run(data: bytes, start: int, end: int, isa: str, md=None) -> bool:
     if end <= start:
         return True
     span = data[start:end]
@@ -371,7 +407,11 @@ def _is_padding_run(data: bytes, start: int, end: int, isa: str) -> bool:
             return False
         nop_word = bytes([0x1F, 0x20, 0x03, 0xD5])
         return all(span[i:i + 4] == nop_word for i in range(0, len(span), 4))
-    return all(b in _X86_PAD_BYTES for b in span)
+    if all(b in _X86_PAD_BYTES for b in span):
+        return True
+    if md is not None:
+        return _is_multi_byte_nop_run(md, data, start, end)
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +440,18 @@ def _compute_extents(section: _CodeSection) -> list:
     extents = []
     for start in sorted(by_start):
         group = by_start[start]
+        # T-2343 (Brunel), Poirot's M6: design Sec4.1's fold-14 rule requires
+        # one extent per alias group, computed once, but does not name which
+        # reduction to take when declared sizes within a group disagree
+        # (they never do on any real toolchain observed so far). `max` is
+        # chosen deliberately: an ALIAS's own declared sizes are independent
+        # facts the compiler asserted about the SAME bytes, and the extent
+        # is clamped to `next_witness`/`sec_size` immediately below
+        # regardless of which reduction is used, so neither choice can grow
+        # past a real neighbouring boundary -- `min` would silently shrink
+        # the extent below what one alias's own declared size states without
+        # a boundary forcing it to, which is the direction more likely to
+        # produce a spurious spill on a real, correctly-sized alias.
         declared = max((s.size for s in group), default=0)
         later = [w for w in witness_starts if w > start]
         next_witness = later[0] if later else sec_size
@@ -451,14 +503,25 @@ def _account_section(section: _CodeSection, isa: str, md):
     for b in boundaries:
         if b[0] == "gap":
             _, g_start, g_end = b
-            if g_end > g_start and not _is_padding_run(section.data, g_start, g_end, isa):
+            if g_end > g_start and not _is_padding_run(section.data, g_start, g_end, isa, md=md):
                 ok = False
                 unclassified += (g_end - g_start)
             continue
         _, e_start, e_end, ext = b
         if e_end <= e_start:
             ok = False
-            unclassified += 0  # empty extent: unverifiable, no residue bytes to count
+            # T-2343 (Brunel), Poirot's O5: an empty extent has no byte range
+            # of its own to attribute a residue to, but reporting
+            # unclassified_bytes == 0 on a REFUSE reads identically to "this
+            # object had nothing wrong at the byte level," which is false --
+            # the whole section's own attribution is what became
+            # unverifiable (fold-14's own rule: "a symbol table shown to
+            # place one code symbol inconsistently is not trusted to have
+            # bounded its neighbours correctly either"). Charge the section's
+            # own total size, so a caller reading unclassified_bytes alone
+            # sees a nonzero figure whenever any code symbol in it failed
+            # this test, whichever shape the failure took.
+            unclassified += sec_size
             continue
         success, insns, stopped_at = _chain_decode(md, section.data, e_start, e_end)
         if not success:
@@ -478,6 +541,21 @@ def _account_section(section: _CodeSection, isa: str, md):
 _X86_VEC_REG_RE = re.compile(r"\b(?:xmm|ymm|zmm|mm|tmm)\d+\b|\bk[0-7]\b|\bst\(?[0-7]?\)?\b")
 
 _X86_VEC_MOVE_ALLOW = {
+    # T-2343 (Brunel), Poirot's Critical C1 (78535ed-t2339 review): `movsd`
+    # (scalar-double load/store, MSVC's ordinary 8-byte copy of a
+    # pair<int,int>/double-sized value) was absent while its AVX form
+    # `vmovsd` and its SSE sibling `movss` were both present -- 62 real
+    # symbols across 6 real translation units, including two members of
+    # Sec3.1's own must-accept commissioning population
+    # (`FixedIntMap::_Emplace_back`/`_Uninitialized_fill_n`), REJECTed on
+    # nothing but a data move. Design Sec4.1 names the category directly:
+    # "movss/movaps/movdqa/movd/movq and their AVX v-prefixed equivalents" --
+    # `movsd` is `movss`'s own scalar-double sibling, not a distinct case.
+    # `movsldup`/`movshdup` (lane-DUPLICATION, not a pure copy) are
+    # deliberately NOT added here -- they remain rejected as genuine
+    # rearrangement, pinned as a named boundary control
+    # (test_movsldup_movshdup_boundary_control).
+    "movsd",
     "movss", "movaps", "movapd", "movups", "movupd", "movdqa", "movdqu",
     "movd", "movq", "movhlps", "movlhps", "movhps", "movlps", "movhpd", "movlpd",
     "vmovss", "vmovsd", "vmovaps", "vmovapd", "vmovups", "vmovupd",
@@ -504,7 +582,24 @@ _X86_VEC_MOVE_ALLOW = {
     "vmovmskps", "vmovmskpd", "vpmovmskb",
 }
 
-_X86_P_PREFIX_EXCLUDE = {"pi2fd", "pi2fw"}  # 3DNow int->float: genuinely arithmetic
+# 3DNow int->float (genuinely arithmetic) plus the AVX-512 BF16 dot-product/
+# convert family (T-2343, Brunel; design Sec4.1 fold round 34 gap (e),
+# D-SLM4860) -- BOTH real renderings of the same instruction are excluded,
+# not one spelling: `vdpbf16ps` is the design's own printed name, and
+# `vpdpbf16ps` is the SAME instruction under the rendering that also matches
+# the vp-prefix structural accept (conductor-measured: the two spellings
+# classified oppositely before this fix). `vcvtne2ps2bf16`/`vcvtneps2bf16`
+# (format conversion, not dot-product) are the same family's other two
+# members. None is emitted by any toolchain in the matrix without explicit
+# AVX-512-BF16 intrinsics; none is vetted onto VEC_MOVE_ALLOW, since no
+# legitimate use of BFloat16 arithmetic exists anywhere in
+# SUPERSLM_CORE_SOURCES. `vpdpbusd`/`vpdpwssd` (VNNI, genuine packed-integer
+# dot-product) are deliberately NOT excluded -- they stay accepted under the
+# structural rule, per the named control in test_bf16_x86_rendering_pair.
+_X86_P_PREFIX_EXCLUDE = {
+    "pi2fd", "pi2fw",
+    "vdpbf16ps", "vpdpbf16ps", "vcvtne2ps2bf16", "vcvtneps2bf16",
+}
 
 
 def _x86_touches_vector_register(op_str: str) -> bool:
@@ -518,13 +613,22 @@ def _x86_check_a(mnemonic: str, op_str: str) -> bool:
     if m in _X86_VEC_MOVE_ALLOW:
         return True
     if (m.startswith("p") or m.startswith("vp")) and m not in _X86_P_PREFIX_EXCLUDE:
-        # 3DNow pf* family and named int->float conversions excluded above;
-        # every other p/vp-prefixed mnemonic is packed-integer by construction.
+        # 3DNow pf* family, named int->float conversions, and the BF16
+        # dot-product/convert family excluded above; every other p/vp-prefixed
+        # mnemonic is packed-integer by construction.
         if not m.startswith("pf"):
             return True
-    if m in ("xorps", "xorpd"):
-        ops = [o.strip() for o in (op_str or "").split(",")]
-        if len(ops) == 2 and ops[0] == ops[1]:
+    if m in ("xorps", "xorpd", "vxorps", "vxorpd"):
+        # Self-zeroing idiom (T-2343, Brunel, Poirot's S1): the VEX forms
+        # were missing, and the two-operand test structurally could not
+        # match a three-operand VEX encoding even if they had been added.
+        # Generalized: EVERY operand identical (2 for the legacy SSE form,
+        # 3 for VEX xorps/pxor dst,src,src) is a constant-zero
+        # materialization regardless of encoding width; any operand list
+        # that is not uniformly the same register remains a genuine bitwise
+        # operation and REJECTs.
+        ops = [o.strip() for o in (op_str or "").split(",") if o.strip()]
+        if len(ops) >= 2 and len(set(ops)) == 1:
             return True  # self-zeroing idiom
         return False
     return False
@@ -536,6 +640,19 @@ def _x86_check_a(mnemonic: str, op_str: str) -> bool:
 
 _AARCH64_VEC_REG_RE = re.compile(r"\b[bhsdq]\d+\b|\bv\d+(?:\.\w+)?\b")
 _AARCH64_NAMED_CONVERSIONS = {"scvtf", "ucvtf", "fcvtzs", "fcvtzu", "fjcvtzs"}
+# BFloat16 dot-product/multiply-accumulate/convert family (T-2343, Brunel;
+# design Sec4.1 fold round 34 gap (e), D-SLM4860; Popper's D-SLM4850,
+# commissioned dead through the real production route -- three real
+# arm_neon.h intrinsic bodies, clang --target=aarch64-linux-gnu
+# -march=armv8.6-a+bf16, ACCEPTed). None carries the leading `f` the
+# structural rule keys on (it carries `bf`, indistinguishable from a
+# `b`-prefixed integer mnemonic like `bic` by that test alone) and none is
+# one of the three named domain-crossing conversions, so the rule as
+# printed accepted it structurally; every one is genuine BFloat16
+# floating-point arithmetic and none is vetted onto VEC_MOVE_ALLOW, since no
+# legitimate use of BFloat16 arithmetic exists anywhere in
+# SUPERSLM_CORE_SOURCES.
+_AARCH64_BF16_EXCLUDE = {"bfdot", "bfmmla", "bfmlalb", "bfmlalt", "bfcvt", "bfcvtn", "bfcvtn2"}
 _AARCH64_VEC_MOVE_ALLOW = {
     "fmov", "mov", "movi",
     "ldr", "str", "ldur", "stur", "ldp", "stp",
@@ -549,18 +666,59 @@ def _aarch64_touches_vector_register(op_str: str) -> bool:
 
 
 def _aarch64_check_a(mnemonic: str, op_str: str) -> bool:
+    """True == ACCEPT under check (A). T-2343 (Brunel), Popper's D-SLM4850:
+    the prior form of this function ended `return m in _AARCH64_VEC_MOVE_ALLOW
+    or True`, which is the constant True -- default-ALLOW, the inverse of the
+    default-deny property this whole design rests on. A real BFloat16 ELF
+    object (bfdot/bfmmla) ACCEPTed through the production route. Rewritten to
+    actually consult the membership test, with the BF16 family excluded by
+    name from the non-f-prefix structural accept, mirroring x86's own
+    pi2fd/pi2fw/BF16 exclusions."""
     m = mnemonic.lower()
     if m in _AARCH64_NAMED_CONVERSIONS:
         return False
     if m.startswith("f"):
         return m in _AARCH64_VEC_MOVE_ALLOW
-    return m in _AARCH64_VEC_MOVE_ALLOW or True  # non-f-prefixed NEON integer op: structural accept
+    if m in _AARCH64_BF16_EXCLUDE:
+        return False
+    # T-2343 (Brunel), Poirot's M1: this is a STRUCTURAL accept, not a
+    # membership test -- a mnemonic reaching this line touches a
+    # vector/FP register family, is not `f`-prefixed, is not one of the
+    # three named conversions, and is not the BF16 family, which makes it
+    # NEON packed-integer arithmetic/logic/compare/shift/permute BY THE
+    # ISA'S OWN NAMING CONVENTION (design Sec4.1's own AArch64 text: "a
+    # mnemonic touching one of these register families with no f prefix and
+    # not one of the three named conversions is NEON packed-integer... and
+    # is accepted structurally, with no mnemonic added to any list"). The
+    # prior form of this line, `m in _AARCH64_VEC_MOVE_ALLOW or True`, was
+    # the constant True wearing a membership test that was never consulted
+    # on this branch -- write the structural accept as what it is.
+    return True
 
 
 # ---------------------------------------------------------------------------
 # Check (B): GPR/control-flow mnemonic allowlist, pinned per ISA.
 # ---------------------------------------------------------------------------
 
+# T-2343 (Brunel), Poirot's S6: this set (plus _X86_JCC below) is 185
+# entries against design Sec4.1's own stated "pinned, 159-entry" production
+# GPR_ALLOW -- the design prints that count with only a partial
+# enumeration, which Poirot's own review states plainly: "an implementer
+# cannot reproduce it exactly from the text... the finding is the absent
+# reconciliation, not any particular entry." Audited this session rather
+# than silently re-affirmed: no entry here is a floating-point mnemonic, and
+# the two names that collide with SSE mnemonics by spelling (`movsd`,
+# `cmpsd` -- both real x86 string-operation names AND real SSE2 scalar-
+# double mnemonics) are safe by construction regardless of this set's own
+# membership, because `scan_object`'s own dispatch routes an instruction to
+# check (A), never check (B), whenever it touches a vector register at all
+# (`touches_vec`, above) -- these two names reach check (B) only on their
+# genuine string-operation reading. This module's own actual count is 185,
+# stated here as the citable fact the design's own text does not yet state;
+# reconciling the design's own printed 159 against this module's 185 (a
+# line-by-line diff with a vetting note per addition) is spec-side work
+# this build does not perform -- filed as a residual, not silently closed
+# by this comment.
 _X86_GPR_ALLOW = {
     "mov", "movzx", "movsx", "movsxd", "movabs", "lea",
     "add", "adc", "sub", "sbb", "inc", "dec", "neg", "not",
@@ -720,12 +878,22 @@ def _check_c_for_symbol(md, section: _CodeSection, ext_start: int, ext_end: int,
                         insns, isa: str, object_format: str,
                         reloc_by_offset: Mapping[int, int],
                         sym_by_raw: Mapping[int, dict],
-                        local_starts: set) -> bool:
+                        local_starts: set,
+                        corpus_symbols: frozenset | None = None) -> bool:
     """True == every call/tail-jmp edge in this extent's own instructions
-    passes check (C). `local_starts` is the set of byte offsets (within this
-    same object, across every code section) where a real symbol begins --
-    used to recognise an intra-object direct edge that carries no relocation
-    because the assembler could resolve it directly (same-section target)."""
+    passes check (C). `local_starts` is the set of byte offsets, WITHIN THIS
+    SECTION ONLY (T-2343, Brunel, Poirot's O3 -- a pooled cross-section set
+    compared against a section-relative operand address was a latent
+    correctness bug, 0 live impact measured because MSVC relocates every
+    real cross-function edge, but wrong regardless), where a real symbol
+    begins -- used to recognise an intra-object direct edge that carries no
+    relocation because the assembler could resolve it directly (same-section
+    target). `corpus_symbols`, when supplied (design Sec4.1 fold round 34
+    gap (b), D-SLM4857), is the full set of function-typed symbol names
+    defined anywhere in the closed corpus; a relocated edge to a name
+    undefined in THIS object but present in `corpus_symbols` is accepted as
+    a genuine first-party in-corpus reference rather than forced through
+    EXTERN_ALLOW."""
     extern_allow = _extern_allow_for(object_format)
     is_call_or_jmp = _is_x86_call_or_jmp if isa == "x86-64" else _is_aarch64_call_or_jmp
 
@@ -752,6 +920,18 @@ def _check_c_for_symbol(md, section: _CodeSection, ext_start: int, ext_end: int,
                 break
 
         if reloc_off is not None:
+            # T-2343 (Brunel), Poirot's S2: a relocation's presence says the
+            # TARGET SYMBOL is known; it says nothing about whether THIS
+            # instruction's own addressing mode is direct or indirect. A
+            # relocated memory operand (e.g. `jmp QWORD PTR [gp]`, `gp` a
+            # function pointer in .data) still names an in-object symbol via
+            # relocation, and was silently accepted with no vetting at all
+            # before this fix. Sec4.1(C) is explicit that an indirect call/
+            # jmp -- register or memory operand -- "cannot be statically
+            # vetted by this method and is rejected," independent of whether
+            # a relocation happens to resolve what it points at.
+            if not _operand_is_direct_immediate(insn, isa):
+                return False
             raw_idx = reloc_by_offset[reloc_off]
             target_sym = sym_by_raw.get(raw_idx)
             if target_sym is None:
@@ -759,7 +939,9 @@ def _check_c_for_symbol(md, section: _CodeSection, ext_start: int, ext_end: int,
             is_external = (object_format == "coff" and target_sym.get("sec_num", -1) == 0) or \
                            (object_format == "elf" and target_sym.get("shndx", -1) == 0)
             if not is_external:
-                continue  # in-corpus target: no separate vetting needed
+                continue  # in-corpus target (this object): no separate vetting needed
+            if corpus_symbols is not None and target_sym["name"] in corpus_symbols:
+                continue  # in-corpus target (a sibling TU): the design's own membership rule already covers it
             if target_sym["name"] not in extern_allow:
                 return False
             continue
@@ -783,17 +965,40 @@ def _check_c_for_symbol(md, section: _CodeSection, ext_start: int, ext_end: int,
 # ---------------------------------------------------------------------------
 
 
-def scan_object(path: str, isa: str) -> ScanResult:
-    with open(path, "rb") as f:
-        data = f.read()
-    object_format = _read_object_format(data)
+def scan_object(path: str, isa: str,
+                corpus_symbols: frozenset | None = None) -> ScanResult:
+    """`corpus_symbols` (design Sec4.1 fold round 34 gap (b), D-SLM4857): the
+    full set of function-typed symbol NAMES defined anywhere in the closed
+    corpus (every object `enumerate_scan_targets()` names). When supplied, a
+    check-(C) edge whose target is undefined in THIS object but whose name
+    IS a member of `corpus_symbols` is accepted as a genuine first-party
+    in-corpus reference rather than forced through `EXTERN_ALLOW` -- the
+    target is itself a member of the scanned corpus and receives its own
+    independent verdict wherever its own translation unit is scanned, so
+    accepting the edge here does not excuse the target from its own bytes
+    being checked. `None` (the default) preserves prior behavior exactly,
+    for a call outside the full-corpus driver (an isolated must-accept/
+    must-reject construction has no corpus to index)."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        object_format = _read_object_format(data)
+        md = _decoder(isa)
+    except (ValueError, capstone.CsError):
+        # T-2343 (Brunel), Poirot's M2: design Sec4.1's own contract states
+        # "a leg whose declared isa has no decoder mode REFUSES via clause
+        # (0) rather than guessing at the bytes" -- an unrecognised object
+        # format or ISA is exactly that shape, and previously raised instead
+        # of returning a ScanResult, so it never reached ci_gate at all (an
+        # uncaught exception inside a caller's own try/loop silently skips
+        # the leg rather than failing the job).
+        return ScanResult(object_format="unknown", refuse=True,
+                          unclassified_bytes=0, verdicts={})
 
     if object_format == "elf":
         code_sections, sym_by_raw, relocs_by_section = _parse_elf(data)
     else:
         code_sections, sym_by_raw, relocs_by_section = _parse_coff(data)
-
-    md = _decoder(isa)
 
     refuse = False
     unclassified_total = 0
@@ -812,13 +1017,20 @@ def scan_object(path: str, isa: str) -> ScanResult:
         return ScanResult(object_format=object_format, refuse=True,
                           unclassified_bytes=unclassified_total, verdicts={})
 
-    # local_starts: every real symbol start offset, across every code section
-    # of this object -- used by check (C) to recognise an intra-object direct
-    # edge the assembler resolved without a relocation.
-    local_starts = set()
+    # local_starts_by_section: every real symbol start offset, keyed by ITS
+    # OWN section (T-2343, Brunel, Poirot's O3) -- used by check (C) to
+    # recognise an intra-object direct edge the assembler resolved without a
+    # relocation. A single pooled set across every section was compared
+    # against `insn.operands[0].imm`, which `_chain_decode` produces as an
+    # offset relative to the CURRENT section only (each section is decoded
+    # independently, never concatenated) -- an offset from one section could
+    # coincidentally match a symbol start in a different section, a latent
+    # cross-section confusion (0 live impact measured: MSVC relocates every
+    # real cross-function edge, so this path was never exercised on the real
+    # corpus) that a per-section keying closes structurally.
+    local_starts_by_section: dict = {}
     for section, _per_symbol_insns, extents in per_symbol_insns_by_section:
-        for ext in extents:
-            local_starts.add(ext.start)
+        local_starts_by_section[section.index] = {ext.start for ext in extents}
 
     touches_vec = _x86_touches_vector_register if isa == "x86-64" else _aarch64_touches_vector_register
     check_a = _x86_check_a if isa == "x86-64" else _aarch64_check_a
@@ -827,6 +1039,7 @@ def scan_object(path: str, isa: str) -> ScanResult:
     verdicts: dict = {}
     for section, per_symbol_insns, extents in per_symbol_insns_by_section:
         reloc_by_offset = {r.offset: r.sym_raw_index for r in relocs_by_section.get(section.index, [])}
+        local_starts = local_starts_by_section[section.index]
         for ext in extents:
             insns = per_symbol_insns.get(ext.names[0] if ext.names else None, [])
             ab_accept = True
@@ -845,6 +1058,7 @@ def scan_object(path: str, isa: str) -> ScanResult:
                 c_accept = _check_c_for_symbol(
                     md, section, ext.start, ext.end, insns, isa, object_format,
                     reloc_by_offset, sym_by_raw, local_starts,
+                    corpus_symbols=corpus_symbols,
                 )
             verdict = "ACCEPT" if (ab_accept and c_accept) else "REJECT"
             for name in ext.names:
@@ -871,6 +1085,33 @@ def ci_gate(result: ScanResult, expected_symbols: Sequence[str]) -> bool:
     return True
 
 
+def ci_gate_corpus(results: Mapping[str, ScanResult],
+                   expected_symbols: Mapping[str, Sequence[str]]) -> bool:
+    """The production CI gate (design Sec4.1 fold round 34 gap (a),
+    D-SLM4856; Sec5.5's own three-way ship-gate disjunction): an aggregate
+    over the WHOLE corpus. Returns True iff, for every object path in
+    `expected_symbols`: `ci_gate(results[path], expected_symbols[path])` is
+    True, AND every value in `results[path].verdicts` is "ACCEPT". A single
+    REJECT anywhere, on any object, makes the whole call return False --
+    additive to `ci_gate`'s own three guarantees, never a replacement:
+    `ci_gate` still decides whether a leg is well-formed (refuses cleanly,
+    or reports every expected symbol); this function's own fourth condition
+    decides whether what every leg reported is ACCEPTABLE.
+
+    Before this function existed, nothing in this design or in the tree
+    converted a REJECT verdict into a failed job (Popper's D-SLM4851,
+    commissioned DEAD: `ci_gate` returned True on a must-reject construction
+    at every magnitude tested, because neither it nor anything upstream of
+    it ever read a verdict's VALUE)."""
+    for path, expected in expected_symbols.items():
+        result = results.get(path)
+        if result is None or not ci_gate(result, expected):
+            return False
+        if any(v != "ACCEPT" for v in result.verdicts.values()):
+            return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # enumerate_scan_targets / derive_core_sources -- production membership,
 # derived from SUPERSLM_CORE_SOURCES, never a second hand-maintained list.
@@ -893,16 +1134,47 @@ def derive_core_sources(manifest_path: str = None) -> list:
             if line.strip() and not line.strip().startswith("#")]
 
 
+class DuplicateStemError(ValueError):
+    """Raised by enumerate_scan_targets() when two sources in the manifest
+    share a basename stem in different directories (design Sec4.1 fold
+    round 34 gap (d), D-SLM4859)."""
+
+
 def enumerate_scan_targets(manifest_path: str = None, build_dir: str = None) -> list:
     """Returns (translation_unit_name, compiled_object_path) pairs, derived
     from SUPERSLM_CORE_SOURCES at scan time. `build_dir` names where each
     TU's own compiled object is expected (a caller-supplied convention; this
-    function derives WHICH objects are expected, not how they were built)."""
+    function derives WHICH objects are expected, not how they were built).
+
+    RULED the single production membership entry point (design Sec4.1 fold
+    round 34 gap (d), D-SLM4859, closing Poirot's S3): every driver that
+    builds or scans SUPERSLM_CORE_SOURCES calls this function rather than
+    re-deriving the (translation-unit, object-path) pairing inline -- a
+    second, hand-written copy is exactly where `run_fp_free_scan_real_
+    corpus.py`'s own pairing drifted from this one (Poirot's S3, this
+    fold's own delta manifest item 2).
+
+    REFUSES (raises DuplicateStemError) the moment two sources anywhere in
+    the manifest share a stem: the stem-based pairing would otherwise
+    silently overwrite one translation unit's own expected object path with
+    another's, with no error and no visible sign that one TU's own object is
+    never actually scanned -- the identical absence-reads-as-clean shape
+    Sec4.1's own membership rule exists to close, one layer up, in the
+    pairing rather than the symbol table."""
     sources = derive_core_sources(manifest_path)
     out_dir = build_dir or os.path.join(_REPO_ROOT, "out", "fp_scan")
+    seen_stems: dict = {}
     targets = []
     for src in sources:
         stem = os.path.splitext(os.path.basename(src))[0]
+        if stem in seen_stems:
+            raise DuplicateStemError(
+                "enumerate_scan_targets: two sources share the stem {!r} -- {!r} and "
+                "{!r} -- which would silently collapse onto the identical object path "
+                "and leave one translation unit never scanned".format(
+                    stem, seen_stems[stem], src)
+            )
+        seen_stems[stem] = src
         obj_path = os.path.join(out_dir, stem + ".obj")
         targets.append((src, obj_path))
     return targets
@@ -961,7 +1233,43 @@ def _looks_like_symbol_target(target: str) -> bool:
     return True
 
 
-def build_call_graph(manifest_path: str = None, disasm_dir: str = "obj") -> Mapping[str, set]:
+class MissingDisassemblyError(FileNotFoundError):
+    """Raised by build_call_graph/flagged_symbols (T-2343, Brunel, Poirot's
+    S4) when a translation unit derive_core_sources() names has no
+    corresponding disassembly file in disasm_dir."""
+
+
+# T-2343 (Brunel), Poirot's S4: the manifest default (derive_core_sources's
+# own _DEFAULT_MANIFEST) is an ABSOLUTE path computed from this module's own
+# location; the disasm_dir default was the bare relative string "obj",
+# resolved against whatever the process's current working directory
+# happened to be -- the two defaults did not agree about what "default"
+# means. This one is absolute for the identical reason.
+_DEFAULT_DISASM_DIR = os.path.join(_REPO_ROOT, "obj")
+
+
+def _require_disasm_path(disasm_dir: str, tu: str) -> str:
+    p = _tu_disasm_path(disasm_dir, tu)
+    if not os.path.exists(p):
+        # T-2343 (Brunel), Poirot's S4: a missing disassembly file and a
+        # genuinely clean (empty) report were the same value, {} -- design
+        # Sec4.1's own first law ("a stage that cannot classify its input
+        # emits a rejection rather than a silence") applies here exactly as
+        # it does to the byte-accounting instrument: this surface decides
+        # nothing about ACCEPT/REJECT/REFUSE, but its own commissioning
+        # population (population six) grades precisely the distinction
+        # between "reported" and "silently missed," and a production
+        # function that can return "silently missed" for the WHOLE corpus
+        # (an absent disasm_dir) cannot be trusted to make that distinction.
+        raise MissingDisassemblyError(
+            "no disassembly found for translation unit {!r} at {!r} -- "
+            "build_call_graph/flagged_symbols refuse rather than silently "
+            "reporting an empty (indistinguishable from clean) result".format(tu, p)
+        )
+    return p
+
+
+def build_call_graph(manifest_path: str = None, disasm_dir: str = None) -> Mapping[str, set]:
     """Edges from both `call` AND unconditional tail-`jmp` instructions --
     routed to Brunel by the test author (D-SLM4839) as a finding to examine
     rather than inherit: the reference `build_call_graph` in
@@ -973,12 +1281,15 @@ def build_call_graph(manifest_path: str = None, disasm_dir: str = "obj") -> Mapp
     jumps (always intra-function) and any jmp whose own operand is a bare
     address or a compiler-generated local label rather than a named symbol --
     the only shapes an ordinary intra-function branch's own operand takes in
-    this text format."""
+    this text format.
+
+    Raises MissingDisassemblyError (T-2343, Poirot's S4) if any derived
+    translation unit has no corresponding disassembly file -- an absent
+    corpus and a clean corpus are not the same value."""
+    disasm_dir = disasm_dir if disasm_dir is not None else _DEFAULT_DISASM_DIR
     graph: dict = {}
     for tu in derive_core_sources(manifest_path):
-        p = _tu_disasm_path(disasm_dir, tu)
-        if not os.path.exists(p):
-            continue
+        p = _require_disasm_path(disasm_dir, tu)
         with open(p) as f:
             text = f.read()
         for cur, mn, ops in _iter_disasm_text(text):
@@ -994,12 +1305,14 @@ def build_call_graph(manifest_path: str = None, disasm_dir: str = "obj") -> Mapp
     return graph
 
 
-def flagged_symbols(manifest_path: str = None, disasm_dir: str = "obj") -> Mapping[str, list]:
+def flagged_symbols(manifest_path: str = None, disasm_dir: str = None) -> Mapping[str, list]:
+    """Raises MissingDisassemblyError (T-2343, Poirot's S4) under the
+    identical condition build_call_graph does -- see that function's own
+    docstring."""
+    disasm_dir = disasm_dir if disasm_dir is not None else _DEFAULT_DISASM_DIR
     flagged: dict = {}
     for tu in derive_core_sources(manifest_path):
-        p = _tu_disasm_path(disasm_dir, tu)
-        if not os.path.exists(p):
-            continue
+        p = _require_disasm_path(disasm_dir, tu)
         with open(p) as f:
             text = f.read()
         for cur, mn, _ops in _iter_disasm_text(text):
