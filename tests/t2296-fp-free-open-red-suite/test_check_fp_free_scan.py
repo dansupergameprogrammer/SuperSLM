@@ -272,13 +272,14 @@ def _run_gate(build_dir, target="superslm", isa="x86-64"):
         sys.argv = saved_argv
 
 
-# The real, already-built 17-object corpus (engine a1df129, CMake target
-# superslm, MSBuild/Release layout) -- read-only, per this ticket's own
-# environment contract ("do not rebuild into it"). Cells below that need a
-# real-build leg skip cleanly when this directory is not present, rather than
-# trying to trigger a fresh CMake configure/build themselves.
-_REAL_BUILD_ROOT = "D:/SuperSLM/.worktrees/optb-build"
-_REAL_BUILD_OBJ_DIR = _REAL_BUILD_ROOT + "/superslm.dir/Release"
+# T-2368 (Curie), D-SLM5008: the real 17-object corpus (CMake target
+# superslm, MSBuild/Release layout) is no longer read from a hand-configured,
+# unversioned directory named by a literal path here. Every cell below that
+# needs a real-build leg takes the `real_build_dir` fixture (conftest.py,
+# this directory) instead -- a corpus cell derives its corpus from a build it
+# causes, never from a path it is told. That fixture builds fresh, once per
+# test session, and skips every dependent cell with a stated reason when no
+# usable corpus can be produced in this environment.
 
 
 def _fail_absent(population_no, note=""):
@@ -3281,22 +3282,29 @@ def test_check_a_bitwise_family_widening_must_accept():
         )
 
 
-def test_check_a_bitwise_family_real_corpus_leg():
+def test_check_a_bitwise_family_real_corpus_leg(real_build_dir):
     """The design's own real-corpus leg (D-SLM4982): `orps xmm2, xmm0` in
     `ReadDampedGreedyScaleConstants`'s two overloads
     (src/damped_greedy_phaseD.cpp) -- MSVC's own instruction selection for
     packing two integer fields into an XMM-resident struct write, with no
     floating-point type anywhere in either function. Scanned directly from
-    the real, already-built object (D:/SuperSLM/.worktrees/optb-build,
-    engine a1df129, read-only) -- this suite's own standing law that at
-    least one cell runs the real build, applied to this cell's own claim
-    rather than only to a synthesized fixture.
+    a real object built fresh by this session's own `real_build_dir`
+    fixture (conftest.py, T-2368, D-SLM5008 -- never a hand-configured,
+    unversioned directory) -- this suite's own standing law that at least
+    one cell runs the real build, applied to this cell's own claim rather
+    than only to a synthesized fixture.
     """
-    obj_path = os.path.join(_REAL_BUILD_OBJ_DIR, "damped_greedy_phaseD.obj")
-    if not os.path.exists(obj_path):
-        pytest.skip("real build object not present in this environment: {}".format(obj_path))
     if not _SCAN_AVAILABLE:
         _fail_absent("(D-SLM4987 real-corpus leg)", "")
+    if not _GATE_AVAILABLE:
+        _fail_absent("(D-SLM4987 real-corpus leg, object lookup)", "")
+    objects = scan_build_output.find_target_objects(real_build_dir, "superslm")
+    matches = [o for o in objects if os.path.basename(o) == "damped_greedy_phaseD.obj"]
+    if not matches:
+        pytest.skip(
+            "damped_greedy_phaseD.obj not found among the real build's own "
+            "{} objects under {}".format(len(objects), real_build_dir))
+    obj_path = matches[0]
 
     sections = fc.code_sections(obj_path, ".text")
     insns = _decode_sections(sections, "x86-64")
@@ -3309,20 +3317,28 @@ def test_check_a_bitwise_family_real_corpus_leg():
 
     result = scan.scan_object(obj_path, isa="x86-64")
     assert not result.refuse
-    overloads = [name for name in result.verdicts if "ReadDampedGreedyScaleConstants" in name]
+    # T-2368: reads ab_verdicts (checks (A)/(B) alone), not the combined
+    # verdicts field -- this claim is about check (A)'s own bitwise-family
+    # classification (D-SLM4987), and the shipped ship gate itself decides
+    # on ab_verdicts alone (D-SLM5004/D-SLM5007); the combined field also
+    # carries check (C)'s own unrelated, non-gating cross-object call-target
+    # vetting, which this single-object scan (no corpus_symbols) cannot
+    # resolve and which is not what this cell claims about.
+    overloads = [name for name in result.ab_verdicts if "ReadDampedGreedyScaleConstants" in name]
     assert len(overloads) == 2, (
         "fixture verification FAILED: expected exactly two "
         "ReadDampedGreedyScaleConstants overloads in the real object; found "
         "{}".format(overloads)
     )
-    still_rejecting = [name for name in overloads if result.verdicts.get(name) != "ACCEPT"]
+    still_rejecting = [name for name in overloads if result.ab_verdicts.get(name) != "ACCEPT"]
     assert still_rejecting == [], (
         "design Sec4.1 (fold round 39, D-SLM4987, D-SLM4982's own measured "
         "real-corpus leg): ReadDampedGreedyScaleConstants's own orps "
         "instructions perform no floating-point arithmetic and must ACCEPT "
-        "-- still rejecting today: {} (verdicts: {})".format(
+        "under checks (A)/(B) -- still rejecting today: {} (ab_verdicts: "
+        "{})".format(
             still_rejecting,
-            {name: result.verdicts.get(name) for name in overloads})
+            {name: result.ab_verdicts.get(name) for name in overloads})
     )
 
 
@@ -3347,23 +3363,30 @@ def test_check_a_bitwise_family_real_corpus_leg():
 # computes 1523/539/428/111, using a "named" set that includes
 # `_X86_GPR_ALLOW` -- a list check (B), not check (A), consults, and which
 # check (A) never reads on ANY branch, vector-operand or not. Reproduced
-# independently, twice, this session, using ONLY the allow-list check (A)
-# itself actually consults for a vector-touching instruction
-# (`_X86_VEC_MOVE_ALLOW`; the self-zeroing xorps/vxorps family contributes
-# zero additional members under a differing-operand probe, since it never
-# matches a differing-operand construction): 1523 vocabulary, 539 accepted
-# by check (A) on a vector operand, of which 438 pass ONLY the structural
-# rule and 101 are named by `_X86_VEC_MOVE_ALLOW` explicitly. Neither
-# D-SLM4999's 481/58 nor T-2364's 428/111 reproduces against the classifier
-# actually consulted; 438/101 (which the cell below asserts and re-derives
-# at run time, never a bare literal with no accompanying computation) is
-# pinned here as the reproduced figure, and this discrepancy is filed in
-# this ticket's own casebook per `StandardsDocument.md` Sec5.4 (a ruling
-# contradicted by measurement is reopened, not defended) rather than
-# silently pinning either prior, unreproduced number. The qualitative
-# finding -- a majority of check (A)'s vector-operand accepts rely on the
-# deny-list-guarded structural rule alone, not an allow-list -- reproduces
-# identically under all three accountings, and is what the assertion below
+# independently, twice, this session (T-2366), using ONLY the allow-list
+# check (A) itself actually consults for a vector-touching instruction
+# (`_X86_VEC_MOVE_ALLOW`; the self-zeroing xorps/vxorps family contributed
+# zero additional members under a differing-operand probe at that time,
+# since it never matched a differing-operand construction): 1523
+# vocabulary, 539 accepted by check (A) on a vector operand, of which 438
+# passed ONLY the structural rule and 101 were named by
+# `_X86_VEC_MOVE_ALLOW` explicitly. Neither D-SLM4999's 481/58 nor T-2364's
+# 428/111 reproduced against the classifier actually consulted; 438/101 was
+# pinned as the reproduced figure, and the discrepancy was filed per
+# `StandardsDocument.md` Sec5.4 (a ruling contradicted by measurement is
+# reopened, not defended) rather than silently pinning either prior,
+# unreproduced number.
+#
+# T-2368 (Curie), D-SLM5009a: T-2367's build round widened check (A)'s
+# bitwise-family boundary per D-SLM4987 -- `orps`/`orpd`/`andps`/`andpd`/
+# `andnps`/`andnpd`/`xorps`/`xorpd` and their eight VEX forms, all sixteen
+# now ACCEPT unconditionally. Re-derived fresh this session (not copied from
+# any prior entry): the sixteen are ADDITIONAL structural-only accepts --
+# none is named by `_X86_VEC_MOVE_ALLOW` -- so `accept_a` moves 539 -> 555
+# and `structural_only` moves 438 -> 454; `named_accept` (101) is
+# unaffected. The qualitative finding -- a majority of check (A)'s
+# vector-operand accepts rely on the deny-list-guarded structural rule
+# alone, not an allow-list -- is unchanged and is what the cell below
 # checks: a design that claims "never a deny-list ... fail-closed on any
 # mnemonic neither check names" is false while this count is nonzero.
 # ===========================================================================
@@ -3390,12 +3413,18 @@ def _census_check_a_p_vp_structural_reliance():
 
 
 def test_check_a_p_vp_structural_accept_census_and_violation():
-    """Reproduces D-SLM4999's own measurement (with the corrected
-    accounting stated in this section's own header comment above) and pins
-    the RED assertion: the design's own guarantee (Sec5.4/Sec5.5, fold round
-    39) states checks (A)/(B) are an allow-list, fail-closed on any
-    mnemonic neither check names. `structural_only` must be empty for that
-    claim to hold; today it is not.
+    """Reproduces D-SLM4999's own measurement, rebaselined per D-SLM5009a
+    against T-2367's build (this section's own header comment states the
+    539+16=555 / 438+16=454 derivation): 1523 vocabulary, 555 accepted by
+    check (A) on a vector operand, of which 454 pass ONLY the structural
+    rule (named by no allow-list at all) and 101 are named by
+    `_X86_VEC_MOVE_ALLOW` explicitly. These four counts are current facts
+    about the shipped classifier, independent of whether the design's own
+    fail-closed guarantee holds -- that guarantee's own violation
+    (`structural_only` is non-empty) is pinned separately, below, as
+    `test_check_a_p_vp_structural_only_nonempty_violates_fail_closed_claim`
+    (D-SLM5009b: xfail, since closing it is an open question waiting on
+    Dan, not this ticket's to answer or build).
     """
     if not _SCAN_AVAILABLE:
         _fail_absent("(D-SLM4999 p/vp vitality pin, census)", "")
@@ -3405,14 +3434,48 @@ def test_check_a_p_vp_structural_accept_census_and_violation():
         "reproduced 1523 -- this suite's own capstone version may have "
         "changed; got {}".format(len(vocabulary))
     )
-    assert len(accept_a) == 539, (
+    assert len(accept_a) == 555, (
         "check (A)'s own ACCEPT count on a vector operand changed from the "
-        "reproduced 539; got {}".format(len(accept_a))
+        "reproduced 555 (539 pre-D-SLM4987 + 16 bitwise-family/VEX "
+        "mnemonics D-SLM4987 widened); got {}".format(len(accept_a))
     )
     assert len(named_accept) == 101, (
         "check (A)'s own explicitly-allow-listed ACCEPT count changed from "
-        "the reproduced 101; got {}".format(len(named_accept))
+        "the reproduced 101 -- D-SLM4987's sixteen-mnemonic widening is a "
+        "structural-rule accept, not an allow-list addition, so this count "
+        "should be unaffected by it; got {}".format(len(named_accept))
     )
+    assert len(structural_only) == 454, (
+        "check (A)'s own structural-only (no-allow-list) ACCEPT count "
+        "changed from the reproduced 454 (438 pre-D-SLM4987 + 16 "
+        "bitwise-family/VEX mnemonics D-SLM4987 widened, all sixteen "
+        "landing in the structural-only population since none is named by "
+        "_X86_VEC_MOVE_ALLOW); got {}".format(len(structural_only))
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="D-SLM5009b: whether check (A) should be made fail-CLOSED over "
+    "the p/vp class (enumerating its 555 accepted mnemonics explicitly) is "
+    "OPEN, waiting on Dan, and separable from this arc -- 'the hole is "
+    "real and has leaked twice (3DNow, BF16); closing it is bounded but "
+    "not small, and nothing in 1.3.0's scope requires it.' This cell "
+    "expresses that open question directly (structural_only is non-empty, "
+    "so the design's own fail-closed claim does not hold) and is not this "
+    "ticket's to build; xfail(strict=True) so the day Dan's ruling closes "
+    "the hole, this flips to a loud XPASS demanding removal rather than "
+    "silently continuing to pass for the wrong reason.",
+)
+def test_check_a_p_vp_structural_only_nonempty_violates_fail_closed_claim():
+    """The design's own guarantee (Sec5.4/Sec5.5, fold round 39) states
+    checks (A)/(B) are an allow-list, fail-closed on any mnemonic neither
+    check names. `structural_only` must be empty for that claim to hold;
+    today (D-SLM5009a: 454 of 555 vector-operand accepts) it is not.
+    """
+    if not _SCAN_AVAILABLE:
+        _fail_absent("(D-SLM4999 p/vp vitality pin, fail-closed violation)", "")
+    _, accept_a, structural_only, _ = _census_check_a_p_vp_structural_reliance()
     assert structural_only == [], (
         "design Sec5.4/Sec5.5's own guarantee states checks (A)/(B) are an "
         "allow-list, fail-closed on an unvetted mnemonic (D-SLM4986) -- but "
@@ -3428,52 +3491,71 @@ def test_check_a_p_vp_structural_accept_census_and_violation():
     )
 
 
-def test_check_a_p_vp_rule_fails_open_on_a_future_fp_mnemonic():
-    """Mutation/vitality proof for D-SLM4999's own finding: the p/vp
-    structural rule's premise has already been falsified twice (3DNow
-    pi2f*, BF16), each patched into `_X86_P_PREFIX_EXCLUDE` reactively
-    after it leaked. A fabricated mnemonic name, shaped exactly like a
-    plausible future ISA extension's genuine floating-point instruction
-    (vp-prefixed, arithmetic-shaped under this suite's own independent
-    `_is_x86_fp_arith` classifier -- the same classifier populations seven
-    and nine use to verify their own fixtures carry real FP arithmetic),
-    confirmed absent from both capstone's current vocabulary and the deny
-    list, must REJECT under check (A) if the rule were closed rather than
-    open. It does not: the structural rule accepts any p/vp name it has not
-    been individually told to deny -- this is the exact failure mode
-    D-SLM4999 names ("a cell must turn red if the decoder's vocabulary ever
-    gains a p/vp-prefixed floating-point mnemonic that is not excluded"),
-    demonstrated directly against the classifier function itself since
-    capstone's own vocabulary is closed today but the function it feeds is
-    not.
+_P_VP_STRUCTURAL_ONLY_PIN_PATH = os.path.join(
+    _FIXTURES, "p_vp_structural_only_pinned.txt")
+
+
+def _load_pinned_p_vp_structural_only():
+    with open(_P_VP_STRUCTURAL_ONLY_PIN_PATH) as f:
+        return sorted(
+            line.strip() for line in f
+            if line.strip() and not line.strip().startswith("#")
+        )
+
+
+def test_check_a_p_vp_structural_only_set_is_pinned_against_vocabulary_growth():
+    """T-2368 (Curie), D-SLM5001 item (5)/D-SLM5009b -- the vitality cell
+    D-SLM5001 item (5) actually specified, replacing
+    test_check_a_p_vp_rule_fails_open_on_a_future_fp_mnemonic (retired: it
+    asserted a FABRICATED mnemonic, 'vpfoobaraddps', must REJECT under
+    check (A) -- demanding a production change no decision authorizes,
+    since check (A)'s p/vp branch is a structural, deny-list-guarded rule
+    by design, not a positive allow-list (D-SLM4986/D-SLM4999), so that
+    assertion was permanently red asserting an unruled requirement).
+
+    THIS cell instead watches the REAL decoder: `_census_check_a_p_vp_
+    structural_reliance()`'s own `structural_only` set (454 members, this
+    file's own rebaselined census above) is pinned, member for member,
+    against fp_scan_fixtures/p_vp_structural_only_pinned.txt.
+
+    Deliberately NOT an attempt to classify which members are "genuinely
+    floating point": D-SLM5009b files that classification as open, waiting
+    on Dan, bounded but not small, and not this ticket's to build --  and
+    this suite's own narrow, test-local `_is_x86_fp_arith` (confirmed this
+    session to misclassify the real packed-integer mnemonics `pmaxsd`/
+    `pminsd`/`vpcmpd`/`vpmaxsd`/`vpminsd` as floating-point-shaped, because
+    their `sd`/`d` suffix is an integer element-size code that coincides
+    textually with the FP scalar-double suffix) is not a safe instrument to
+    run over the whole real vocabulary -- doing so produces false "FP"
+    positives on ordinary packed-integer instructions, which would make
+    this cell red for the wrong reason.
+
+    A membership pin needs no such classifier: ANY change to this set -- a
+    capstone upgrade adding OR removing a member -- is exactly the
+    observable signal D-SLM4999's residual concern needs, whether or not
+    the new member turns out to be genuinely floating point, and is a
+    strictly SAFER (superset) trigger than one that fires only on a
+    confirmed-FP addition. On failure, a human determines whether each
+    added member is genuine floating-point arithmetic (D-SLM4999's hole
+    leaking a third time -- raise it, do not silently regenerate the pin)
+    or genuine packed-integer (regenerate the pin deliberately, as a
+    reviewed change, never automatically); a removed member means capstone
+    renamed or retired a mnemonic.
     """
-    fabricated = "vpfoobaraddps"
-    from capstone import x86_const
-    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
-    known = {md.insn_name(getattr(x86_const, attr))
-             for attr in dir(x86_const) if attr.startswith("X86_INS_")}
-    assert fabricated not in known, (
-        "fixture verification FAILED: the fabricated name must not already "
-        "be a real capstone mnemonic"
-    )
     if not _SCAN_AVAILABLE:
-        _fail_absent("(D-SLM4999 p/vp vitality pin, mutation proof)", "")
-    assert fabricated not in scan._X86_P_PREFIX_EXCLUDE, (
-        "fixture verification FAILED: the fabricated name must not already "
-        "be on the deny list"
-    )
-    assert _is_x86_fp_arith(fabricated), (
-        "fixture verification FAILED: the fabricated name must be shaped "
-        "like genuine floating-point arithmetic under this suite's own "
-        "independent classifier (starts with neither mov/nop/ret/endbr64, "
-        "contains an arithmetic infix, ends in ps/pd/ss/sd or contains cvt)"
-    )
-    assert not scan._x86_check_a(fabricated, "xmm0, xmm1, xmm2"), (
-        "D-SLM4999: the p/vp structural rule must REJECT a genuinely "
-        "FP-arithmetic-shaped mnemonic it has never been told to exclude; "
-        "instead it ACCEPTs by default -- the rule fails OPEN, not closed, "
-        "on the vocabulary's own future growth, exactly as the 3DNow "
-        "pi2f* and BF16 escapes already demonstrated in production"
+        _fail_absent("(D-SLM4999 p/vp vitality pin, membership)", "")
+    _, _, structural_only, _ = _census_check_a_p_vp_structural_reliance()
+    pinned = _load_pinned_p_vp_structural_only()
+    added = sorted(set(structural_only) - set(pinned))
+    removed = sorted(set(pinned) - set(structural_only))
+    assert added == [] and removed == [], (
+        "check (A)'s p/vp structural-only accept set changed since "
+        "fp_scan_fixtures/p_vp_structural_only_pinned.txt was pinned ({} "
+        "members) -- added: {}; removed: {}. Determine whether each added "
+        "member is genuine floating-point arithmetic (D-SLM4999's hole "
+        "leaking again -- raise it, do not silently regenerate) or genuine "
+        "packed-integer (regenerate the pin deliberately) before updating "
+        "the fixture.".format(len(pinned), added, removed)
     )
 
 
@@ -3531,41 +3613,51 @@ _DSLM4359_SEVEN = [
 ]
 
 
-def test_dslm4359_seven_switch_jump_table_symbols_must_not_block_gate():
+def test_dslm4359_seven_switch_jump_table_symbols_must_not_block_gate(real_build_dir):
     """None of D-SLM4359's own seven switch-jump-table symbols may block
-    the ship gate once its restructure lands -- five via check (C) (no
-    longer a gating surface, design Sec4.1 D-SLM4985) and two via REFUSE
-    (`artifact.obj`'s own two unclassified bytes, disposed at design Sec4.1
-    as D-SLM4359's already-ruled restructure, D-SLM4988). Executed against
-    the real, already-built 17-object corpus
-    (D:/SuperSLM/.worktrees/optb-build, engine a1df129, read-only) --  not a
-    synthesized fixture, per this suite's own standing law that at least one
-    cell runs the real build.
+    the ship gate, which decides on `ab_verdicts` (checks (A)/(B) alone)
+    and REFUSE, never on the combined `verdicts` field check (C) still
+    populates as a non-gating diagnostic (D-SLM5004/D-SLM5007, matching
+    `scan_build_output.py`'s own gating read of `ab_verdicts`) -- five via
+    check (C) alone (no longer a gating surface, design Sec4.1 D-SLM4985)
+    and two via REFUSE (`artifact.obj`'s own two unclassified bytes,
+    disposed at design Sec4.1 as D-SLM4359's already-ruled restructure,
+    D-SLM4988). Executed against a real 17-object corpus built fresh by
+    this session's own `real_build_dir` fixture (conftest.py, T-2368,
+    D-SLM5008 -- never a hand-configured, unversioned directory) -- not a
+    synthesized fixture, per this suite's own standing law that at least
+    one cell runs the real build.
     """
     if not _SCAN_AVAILABLE:
         _fail_absent("(D-SLM4359 seven-symbol sweep)", "")
-    if not os.path.isdir(_REAL_BUILD_OBJ_DIR):
-        pytest.skip("real build directory not present in this environment: {}".format(
-            _REAL_BUILD_OBJ_DIR))
+    if not _GATE_AVAILABLE:
+        _fail_absent("(D-SLM4359 seven-symbol sweep, object lookup)", "")
+
+    objects = scan_build_output.find_target_objects(real_build_dir, "superslm")
+    objects_by_name: dict = {}
+    for o in objects:
+        objects_by_name.setdefault(os.path.basename(o), o)
 
     blocking = []
     for obj_name, substr in _DSLM4359_SEVEN:
-        obj_path = os.path.join(_REAL_BUILD_OBJ_DIR, obj_name)
-        if not os.path.exists(obj_path):
-            pytest.skip("real build object not present: {}".format(obj_path))
+        obj_path = objects_by_name.get(obj_name)
+        if obj_path is None:
+            pytest.skip(
+                "real build object not present: {} (real build under {} "
+                "has {} objects)".format(obj_name, real_build_dir, len(objects)))
         result = scan.scan_object(obj_path, isa="x86-64")
         if result.refuse:
             blocking.append("{} ({}, object REFUSEs)".format(substr, obj_name))
             continue
-        matches = [name for name in result.verdicts if substr in name]
+        matches = [name for name in result.ab_verdicts if substr in name]
         assert matches, (
             "fixture verification FAILED: expected a symbol containing "
             "{!r} in {}; found none among {} symbols".format(
-                substr, obj_name, len(result.verdicts))
+                substr, obj_name, len(result.ab_verdicts))
         )
-        verdict = result.verdicts[matches[0]]
+        verdict = result.ab_verdicts[matches[0]]
         if verdict != "ACCEPT":
-            blocking.append("{} ({}, verdict={})".format(substr, obj_name, verdict))
+            blocking.append("{} ({}, ab_verdict={})".format(substr, obj_name, verdict))
 
     assert blocking == [], (
         "D-SLM4359's restructure is owed for all seven switch-jump-table "
@@ -3610,18 +3702,16 @@ def test_scan_build_output_zero_objects_exits_2_not_a_pass():
         )
 
 
-def test_scan_build_output_real_build_finds_exactly_seventeen_objects():
+def test_scan_build_output_real_build_finds_exactly_seventeen_objects(real_build_dir):
     """Must-accept leg: the real superslm CMake target's own build output
-    resolves to exactly 17 objects, no configuration supplied. Reuses the
-    already-built, read-only corpus at D:/SuperSLM/.worktrees/optb-build
-    (engine a1df129) rather than triggering a fresh build.
+    resolves to exactly 17 objects, no configuration supplied. Uses a real
+    corpus built fresh by this session's own `real_build_dir` fixture
+    (conftest.py, T-2368, D-SLM5008 -- never a hand-configured, unversioned
+    directory).
     """
     if not _GATE_AVAILABLE:
         _fail_absent("(thirty-sixth population, must-accept)", "")
-    if not os.path.isdir(_REAL_BUILD_ROOT):
-        pytest.skip("real build directory not present in this environment: {}".format(
-            _REAL_BUILD_ROOT))
-    objects = scan_build_output.find_target_objects(_REAL_BUILD_ROOT, "superslm")
+    objects = scan_build_output.find_target_objects(real_build_dir, "superslm")
     assert len(objects) == 17, (
         "design Sec4.1's own text states the real build emits exactly 17 "
         "objects for the superslm target; found {}: {}".format(

@@ -1725,6 +1725,42 @@ rem      (D:/SuperSLM/.worktrees/t2367-bld): 0 REJECT, 0 REFUSE under checks (A)
 rem      objects, down from 264 REJECT / 1 REFUSE pre-remedy. A nonzero exit here should be read
 rem      against this comment's own 4-failure list before being treated as an unrelated new
 rem      regression.
+rem      T-2368 (Curie), D-SLM5008/D-SLM5009: this round's own four red cells are CLOSED, none by
+rem      editing production code. D-SLM5008 (corpus-path class): `test_check_fp_free_scan.py` no
+rem      longer binds `_REAL_BUILD_ROOT`/`_REAL_BUILD_OBJ_DIR` to the hand-configured
+rem      D:/SuperSLM/.worktrees/optb-build path at all -- every corpus-dependent cell now takes a
+rem      new `real_build_dir` session fixture (test_t2296-fp-free-open-red-suite/conftest.py) that
+rem      configures and builds `superslm` fresh, once per pytest session, into
+rem      out/t2368_fp_scan_corpus_build, and SKIPS (never fails) every dependent cell with a stated
+rem      reason when no usable corpus can be produced (toolchain absent, or the configure/build
+rem      itself fails) -- proven both ways this session (corpus built fresh: 0 skipped; corpus
+rem      forced unavailable via the fixture's own SUPERSLM_FP_SCAN_BUILD_DIR override: the 3
+rem      corpus-dependent cells skip, the other 74 collected cells are unaffected). Fixing this also
+rem      closed `test_check_a_bitwise_family_real_corpus_leg` and
+rem      `test_dslm4359_seven_switch_jump_table_symbols_must_not_block_gate`, which now read
+rem      `ab_verdicts` (checks (A)/(B) alone, matching `scan_build_output.py`'s own gating decision,
+rem      D-SLM5004) instead of the combined `verdicts` field check (C) still populates as a
+rem      non-gating diagnostic. D-SLM5009a (stale pin): `test_check_a_p_vp_structural_accept_
+rem      census_and_violation` is rebaselined to the reproduced 1523/555/101/454 (539+16/438+16,
+rem      D-SLM4987's sixteen-mnemonic widening landing entirely in the structural-only population);
+rem      its own former fourth assertion (`structural_only == []`, permanently unsatisfiable by the
+rem      partition's own arithmetic once accept_a/named_accept are pinned separately) is split into
+rem      its own `xfail(strict=True)` cell,
+rem      `test_check_a_p_vp_structural_only_nonempty_violates_fail_closed_claim`, reason D-SLM5009b.
+rem      D-SLM5009b (unruled requirement): `test_check_a_p_vp_rule_fails_open_on_a_future_fp_mnemonic`
+rem      (asserted a FABRICATED mnemonic must REJECT, demanding a production change no decision
+rem      authorizes) is RETIRED and replaced by the vitality cell D-SLM5001 item (5) actually
+rem      specified,
+rem      `test_check_a_p_vp_structural_only_set_is_pinned_against_vocabulary_growth`: a membership
+rem      pin (fp_scan_fixtures/p_vp_structural_only_pinned.txt, 454 mnemonics) against the REAL
+rem      decoder's own structural-only accept set, deliberately not attempting an FP-vs-packed-
+rem      integer classifier (this suite's own `_is_x86_fp_arith` was confirmed this session to
+rem      misclassify real packed-integer mnemonics `pmaxsd`/`pminsd`/`vpcmpd`/`vpmaxsd`/`vpminsd` as
+rem      floating-point-shaped) -- whether check (A) should be made fail-closed over the whole p/vp
+rem      class stays OPEN, waiting on Dan (D-SLM5009), and is not this ticket's to answer or build.
+rem      Re-executed this session: 77 collected, 74 passed, 3 xfailed, 0 failed (corpus available);
+rem      77 collected, 71 passed, 3 skipped, 3 xfailed, 0 failed (corpus forced unavailable). ANY
+rem      nonzero exit from this pytest invocation is now a real regression against this baseline.
 out\superslm_tests.exe
 set ec=%errorlevel%
 if not %b1_ec%==0 set ec=%b1_ec%
