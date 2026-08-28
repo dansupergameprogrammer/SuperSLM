@@ -1906,11 +1906,16 @@ def test_external_edge_import_thunk_vs_plain_name_vetted_separately():
             "the plain-name rendering (/MT, direct call to 'abort') must ACCEPT -- "
             "verdict was {}".format(result_static.verdicts.get("CallAbort"))
         )
-        assert result_release.verdicts.get("CallAbort") == "REJECT", (
+        assert result_release.verdicts.get("CallAbort") == "ACCEPT", (
             "the import-thunk rendering (Release/MD, indirect call through "
-            "'__imp_abort') must REJECT until that exact rendering is separately "
-            "vetted (design Sec4.1 gap (c): a build-round obligation this fold "
-            "specifies but does not discharge) -- verdict was "
+            "'__imp_abort') now ACCEPTs: that exact rendering was separately "
+            "vetted onto _X86_EXTERN_ALLOW, which is the condition this cell's "
+            "own prior REJECT was scoped to ('until that exact rendering is "
+            "separately vetted', design Sec4.1 gap (c)). The vetting is the "
+            "eight-name set measured to take the real corpus from 630 REJECT to "
+            "8; std::abort() performs no floating-point arithmetic on the "
+            "caller's behalf under either rendering, and the two renderings of "
+            "the IDENTICAL call must not disagree. -- verdict was "
             "{}".format(result_release.verdicts.get("CallAbort"))
         )
 

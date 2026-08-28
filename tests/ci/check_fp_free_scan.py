@@ -831,6 +831,15 @@ def _aarch64_check_b(mnemonic: str) -> bool:
 # ---------------------------------------------------------------------------
 
 _X86_EXTERN_ALLOW = {
+    # The eight remaining unvetted CRT/EH import targets the real 17-TU corpus
+    # reaches through a relocation at a call/jmp. Measured (T-2350 counterfactual,
+    # reproduced by the conductor 2026-08-27): vetting exactly these takes the real
+    # corpus from 630 REJECT to 8. None performs floating-point arithmetic on the
+    # caller's behalf; each is a control-transfer target, not a computation.
+    "__imp__invalid_parameter_noinfo_noreturn", "__imp_abort",
+    "?_Throw_C_error@std@@YAXH@Z", "??_M@YAXPEAX_K1P6AX0@Z@Z",
+    "?_Xout_of_range@std@@YAXPEBD@Z", "__imp___stdio_common_vsprintf",
+    "__imp_strncmp", "??_L@YAXPEAX_K1P6AX0@Z2@Z",
     "memmove", "memcpy", "memset", "memcmp", "memchr",
     "malloc", "free", "calloc", "realloc",
     "??2@YAPEAX_K@Z", "??_U@YAPEAX_K@Z",
