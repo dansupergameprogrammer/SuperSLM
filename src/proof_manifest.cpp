@@ -72,14 +72,17 @@ int64_t RdI64(const uint8_t* p) noexcept {
 }  // namespace
 
 const char* ConfigGeometryStatusName(ConfigGeometryStatus s) noexcept {
-	switch (s) {
-		case ConfigGeometryStatus::Ok: return "Ok";
-		case ConfigGeometryStatus::ZeroAttentionHeads: return "ZeroAttentionHeads";
-		case ConfigGeometryStatus::ZeroKeyValueHeads: return "ZeroKeyValueHeads";
-		case ConfigGeometryStatus::KvHeadsExceedsHeads: return "KvHeadsExceedsHeads";
-		case ConfigGeometryStatus::HeadsNotDivisibleByKv: return "HeadsNotDivisibleByKv";
-		case ConfigGeometryStatus::HiddenSizeGeometryMismatch: return "HiddenSizeGeometryMismatch";
-	}
+	// T-2367 (Brunel), D-SLM4359: restructured from a switch to direct
+	// conditional branches -- one of the seven switch-jump-table symbols
+	// D-SLM4359 rules restructured (D-SLM4988's own measured "seven", this
+	// ticket's own build). Behaviourally identical: same six named statuses
+	// map to their own string, every other value falls through to "?".
+	if (s == ConfigGeometryStatus::Ok) return "Ok";
+	if (s == ConfigGeometryStatus::ZeroAttentionHeads) return "ZeroAttentionHeads";
+	if (s == ConfigGeometryStatus::ZeroKeyValueHeads) return "ZeroKeyValueHeads";
+	if (s == ConfigGeometryStatus::KvHeadsExceedsHeads) return "KvHeadsExceedsHeads";
+	if (s == ConfigGeometryStatus::HeadsNotDivisibleByKv) return "HeadsNotDivisibleByKv";
+	if (s == ConfigGeometryStatus::HiddenSizeGeometryMismatch) return "HiddenSizeGeometryMismatch";
 	return "?";
 }
 
@@ -237,25 +240,32 @@ std::string HashSectionHex(const SslmSectionView& section) {
 namespace {
 
 const char* SectionTypeName(SslmSectionType t) {
-	switch (t) {
-		case SslmSectionType::Config: return "Config";
-		case SslmSectionType::Provenance: return "Provenance";
-		case SslmSectionType::Weights: return "Weights";
-		case SslmSectionType::Biases: return "Biases";
-		case SslmSectionType::RopeTables: return "RopeTables";
-		case SslmSectionType::Scales: return "Scales";
-		case SslmSectionType::WeightScales: return "WeightScales";
-		case SslmSectionType::CompositionConstants: return "CompositionConstants";
-		case SslmSectionType::KvLandingScales: return "KvLandingScales";
-		case SslmSectionType::KvLandingReciprocals: return "KvLandingReciprocals";
-		case SslmSectionType::Calibration: return "Calibration";
-		case SslmSectionType::GoldenHashes: return "GoldenHashes";
-		case SslmSectionType::SigmoidLut: return "SigmoidLut";
-		case SslmSectionType::Tokenizer: return "Tokenizer";
-		case SslmSectionType::ChatTemplate: return "ChatTemplate";
-		case SslmSectionType::UnicodeTables: return "UnicodeTables";
-		case SslmSectionType::SchemaMasks: return "SchemaMasks";
-	}
+	// T-2367 (Brunel), D-SLM4359: restructured from a switch to direct
+	// conditional branches. This function is called from exactly one site
+	// (BuildProofManifestJsonImpl's own section loop, below) and MSVC
+	// inlines it there at /O2 -- its own switch's jump-table dispatch was
+	// compiled directly into BuildProofManifestJsonImpl's own extent, which
+	// is why THAT symbol (never this one) carried the indirect jmp check
+	// (C) rejected (D-SLM4982, confirmed by disassembly this ticket's own
+	// session). Behaviourally identical: same seventeen named types map to
+	// their own string, every other value falls through to "Unknown".
+	if (t == SslmSectionType::Config) return "Config";
+	if (t == SslmSectionType::Provenance) return "Provenance";
+	if (t == SslmSectionType::Weights) return "Weights";
+	if (t == SslmSectionType::Biases) return "Biases";
+	if (t == SslmSectionType::RopeTables) return "RopeTables";
+	if (t == SslmSectionType::Scales) return "Scales";
+	if (t == SslmSectionType::WeightScales) return "WeightScales";
+	if (t == SslmSectionType::CompositionConstants) return "CompositionConstants";
+	if (t == SslmSectionType::KvLandingScales) return "KvLandingScales";
+	if (t == SslmSectionType::KvLandingReciprocals) return "KvLandingReciprocals";
+	if (t == SslmSectionType::Calibration) return "Calibration";
+	if (t == SslmSectionType::GoldenHashes) return "GoldenHashes";
+	if (t == SslmSectionType::SigmoidLut) return "SigmoidLut";
+	if (t == SslmSectionType::Tokenizer) return "Tokenizer";
+	if (t == SslmSectionType::ChatTemplate) return "ChatTemplate";
+	if (t == SslmSectionType::UnicodeTables) return "UnicodeTables";
+	if (t == SslmSectionType::SchemaMasks) return "SchemaMasks";
 	return "Unknown";
 }
 

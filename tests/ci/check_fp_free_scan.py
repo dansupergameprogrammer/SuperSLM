@@ -96,6 +96,20 @@ class ScanResult:
     refuse: bool
     unclassified_bytes: int
     verdicts: dict = field(default_factory=dict)
+    # T-2367 (Brunel), design Sec4.1/Sec5.5 fold round 39 (D-SLM4985/D-SLM4996):
+    # the ship gate decides on checks (A)/(B) alone; check (C) keeps running and
+    # keeps reporting through `verdicts` above (the combined ab_accept-and-
+    # c_accept verdict, unchanged, still the full diagnostic), but nothing
+    # gating may read it. `verdicts` alone cannot express that distinction --
+    # every caller of `scan_object` before this field existed read one ANDed
+    # string with no way to tell which check produced a REJECT (T-2364 Finding
+    # C6-C9, T-2365 Finding 3, both independently). `ab_verdicts` is the
+    # checks-(A)/(B)-only verdict, per symbol, computed identically to
+    # `verdicts` except that a check-(C) failure never turns an ACCEPT into a
+    # REJECT here. The production gate (`scan_build_output.py`) reads THIS
+    # field to decide pass/fail; `verdicts` remains the non-gating diagnostic
+    # surface check (C)'s own attribution is read from.
+    ab_verdicts: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -623,6 +637,25 @@ _X86_P_PREFIX_EXCLUDE = {
     "vdpbf16ps", "vpdpbf16ps", "vcvtne2ps2bf16", "vcvtneps2bf16",
 }
 
+# T-2367 (Brunel), design Sec4.1 fold round 39 (D-SLM4987). AND, OR, ANDN, and
+# XOR are Boolean functions of their operand bits under every x86 encoding --
+# packed-integer (`p`-prefix, already accepted unconditionally above) or
+# packed-single/-double (`ps`/`pd`-suffix) -- with no rounding, no exception,
+# and no vendor- or microarchitecture-dependent behavior possible for a pure
+# bitwise operation. The design's own pre-fold-39 text already named the
+# distinct-operand case "a genuine bitwise operation" while still rejecting
+# it (self-zeroing-only carve-out, retired below): the correct classification
+# paired with the wrong verdict. All eight base mnemonics and their VEX forms
+# perform no floating-point arithmetic and are accepted unconditionally, on
+# any operand list -- joining pand/por/pandn/pxor on the same footing. The
+# genuinely arithmetic float instructions (addps/mulps/divps/sqrtps/cvt*/
+# comis*/fma* and their pd/VEX forms) are distinct mnemonics, unaffected by
+# this rule and still rejected by this function's own default.
+_X86_BITWISE_FP_FAMILY = {
+    "orps", "orpd", "andps", "andpd", "andnps", "andnpd", "xorps", "xorpd",
+    "vorps", "vorpd", "vandps", "vandpd", "vandnps", "vandnpd", "vxorps", "vxorpd",
+}
+
 
 def _x86_touches_vector_register(op_str: str) -> bool:
     return bool(_X86_VEC_REG_RE.search(op_str or ""))
@@ -640,19 +673,16 @@ def _x86_check_a(mnemonic: str, op_str: str) -> bool:
         # mnemonic is packed-integer by construction.
         if not m.startswith("pf"):
             return True
-    if m in ("xorps", "xorpd", "vxorps", "vxorpd"):
-        # Self-zeroing idiom (T-2343, Brunel, Poirot's S1): the VEX forms
-        # were missing, and the two-operand test structurally could not
-        # match a three-operand VEX encoding even if they had been added.
-        # Generalized: EVERY operand identical (2 for the legacy SSE form,
-        # 3 for VEX xorps/pxor dst,src,src) is a constant-zero
-        # materialization regardless of encoding width; any operand list
-        # that is not uniformly the same register remains a genuine bitwise
-        # operation and REJECTs.
-        ops = [o.strip() for o in (op_str or "").split(",") if o.strip()]
-        if len(ops) >= 2 and len(set(ops)) == 1:
-            return True  # self-zeroing idiom
-        return False
+    if m in _X86_BITWISE_FP_FAMILY:
+        # T-2367 (Brunel), D-SLM4987: accepted unconditionally, on any
+        # operand list. Supersedes the pre-fold-39 self-zeroing-only
+        # carve-out for xorps/xorpd/vxorps/vxorpd (every operand identical),
+        # which is retired as an intermediate, historically-cautious
+        # approximation of the rule stated here -- not left standing
+        # alongside it. Population sixteen's own must-reject construction
+        # for a differing-operand vxorps is reconciled to must-accept by the
+        # same fold (D-SLM5002).
+        return True
     return False
 
 
@@ -1102,6 +1132,7 @@ def scan_object(path: str, isa: str,
     check_b = _x86_check_b if isa == "x86-64" else _aarch64_check_b
 
     verdicts: dict = {}
+    ab_verdicts: dict = {}
     for section, per_symbol_insns, extents in per_symbol_insns_by_section:
         reloc_by_offset = {r.offset: r.sym_raw_index for r in relocs_by_section.get(section.index, [])}
         local_starts = local_starts_by_section[section.index]
@@ -1126,11 +1157,14 @@ def scan_object(path: str, isa: str,
                     corpus_symbols=corpus_symbols,
                 )
             verdict = "ACCEPT" if (ab_accept and c_accept) else "REJECT"
+            ab_verdict = "ACCEPT" if ab_accept else "REJECT"
             for name in ext.names:
                 verdicts[name] = verdict
+                ab_verdicts[name] = ab_verdict
 
     return ScanResult(object_format=object_format, refuse=False,
-                      unclassified_bytes=0, verdicts=verdicts)
+                      unclassified_bytes=0, verdicts=verdicts,
+                      ab_verdicts=ab_verdicts)
 
 
 # ---------------------------------------------------------------------------

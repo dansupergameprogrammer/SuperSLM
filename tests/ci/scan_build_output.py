@@ -15,6 +15,19 @@ FAILS CLOSED. Finding zero objects is an error, not a pass -- "nothing to scan"
 is what a mis-pointed build directory looks like, and it must never read as
 clean.
 
+THE GATE READS CHECKS (A)/(B) ALONE (T-2367, design Sec4.1/Sec5.5 fold round
+39, D-SLM4985/D-SLM4996). `check_fp_free_scan.scan_object` runs checks (A),
+(B), AND (C) and reports two per-symbol surfaces: `ab_verdicts` (checks
+(A)/(B) only) and `verdicts` (the combined ab_accept-and-c_accept verdict,
+unchanged). This driver's own pass/fail decision is a function of
+`ab_verdicts` and `refuse` alone -- a call/tail-jmp edge check (C) cannot vet
+(an external target absent from the vetted list, or a first-party indirect
+tail jump) is reported below as a non-gating diagnostic, never as a build
+failure. A genuine check-(A)/(B) violation (real floating-point arithmetic,
+or an unvetted vector-register mnemonic) still fails the job exactly as
+before -- check (C)'s retirement narrows what can fail the gate, it does not
+widen what can pass it.
+
 WHAT IT DOES NOT ANSWER. Scanning is per-object and per-ISA. This module reports
 what `check_fp_free_scan.scan_object` returns for each object, on the ISA named
 on the command line; it does not itself decide whether the scanner is correct.
@@ -26,9 +39,10 @@ Usage:
     python tests/ci/scan_build_output.py --build-dir <cmake-build-dir>
                                          [--target superslm] [--isa x86-64]
 
-Exit codes: 0 every object scanned clean; 1 a REJECT or a REFUSE; 2 nothing to
-scan, or the object directory was not found (an infrastructure failure, kept
-distinct from a scan finding).
+Exit codes: 0 every object's checks (A)/(B) accept, on every symbol, and no
+object REFUSEs; 1 a checks-(A)/(B) REJECT or a REFUSE; 2 nothing to scan, or
+the object directory was not found (an infrastructure failure, kept distinct
+from a scan finding).
 """
 
 import argparse
@@ -93,9 +107,10 @@ def main() -> int:
         *(driver._read_function_symbol_names(o) for o in objects)
     )
 
-    n_reject = 0
-    n_refuse = 0
-    n_accept = 0
+    n_reject = 0          # gating: checks (A)/(B) alone
+    n_refuse = 0          # gating: byte-accounting REFUSE
+    n_accept = 0          # gating: checks (A)/(B) ACCEPT
+    n_check_c_only = 0    # non-gating diagnostic: check (C) alone
     print()
     for obj in objects:
         result = scan.scan_object(obj, isa=args.isa, corpus_symbols=corpus_symbols)
@@ -105,26 +120,48 @@ def main() -> int:
             print("  REFUSE   {}  (unclassified_bytes={}, format={})".format(
                 rel, result.unclassified_bytes, result.object_format))
             continue
-        rejects = sorted(s for s, v in result.verdicts.items() if v == "REJECT")
-        n_accept += sum(1 for v in result.verdicts.values() if v == "ACCEPT")
-        n_reject += len(rejects)
-        if rejects:
+
+        # Gating decision: checks (A)/(B) alone (design Sec4.1/Sec5.5 fold
+        # round 39, D-SLM4985/D-SLM4996). Check (C) keeps running and keeps
+        # reporting through `result.verdicts` (the combined verdict,
+        # unaffected) -- read below only for the non-gating diagnostic line,
+        # never for the pass/fail decision.
+        ab_rejects = sorted(s for s, v in result.ab_verdicts.items() if v == "REJECT")
+        check_c_only = sorted(
+            s for s, v in result.verdicts.items()
+            if v == "REJECT" and result.ab_verdicts.get(s) == "ACCEPT"
+        )
+        n_accept += sum(1 for v in result.ab_verdicts.values() if v == "ACCEPT")
+        n_reject += len(ab_rejects)
+        n_check_c_only += len(check_c_only)
+
+        if ab_rejects:
             print("  REJECT   {}  ({} symbol(s), format={})".format(
-                rel, len(rejects), result.object_format))
-            for s in rejects:
+                rel, len(ab_rejects), result.object_format))
+            for s in ab_rejects:
                 print("             {}".format(s))
         else:
             print("  clean    {}  ({} symbol(s), format={})".format(
-                rel, len(result.verdicts), result.object_format))
+                rel, len(result.ab_verdicts), result.object_format))
+        if check_c_only:
+            print("             (non-gating diagnostic: {} symbol(s) reject under "
+                  "check (C) alone -- an unvetted external call target or an "
+                  "unresolved indirect edge; checks (A)/(B) accept them, and "
+                  "check (C) does not gate)".format(len(check_c_only)))
+            for s in check_c_only:
+                print("               [check-C-only] {}".format(s))
 
     print()
-    print("Totals: {} object(s); {} symbol(s) ACCEPT, {} REJECT, {} object(s) REFUSE".format(
-        len(objects), n_accept, n_reject, n_refuse))
+    print("Totals: {} object(s); {} symbol(s) ACCEPT, {} REJECT, {} object(s) REFUSE "
+          "(checks (A)/(B), gating); {} symbol(s) reject under check (C) alone "
+          "(non-gating diagnostic)".format(
+              len(objects), n_accept, n_reject, n_refuse, n_check_c_only))
 
     if n_reject or n_refuse:
         print("FAIL: the scan did not come back clean.")
         return 1
-    print("PASS: no floating-point arithmetic found in any object of this target.")
+    print("PASS: no floating-point arithmetic found in any object of this target "
+          "(checks (A)/(B); check (C) is a non-gating diagnostic).")
     return 0
 
 

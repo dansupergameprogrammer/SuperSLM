@@ -1683,6 +1683,48 @@ rem      point all 9 should flip to passing with no cell edited to reach that st
 rem      ticket's own casebook, Claude/Curie/t2366-fp-gate-red-suite-2026-08-28.md, for the full
 rem      per-cell accounting). A nonzero exit here should be read against this comment's own
 rem      9-failure list before being treated as an unrelated new regression.
+rem      T-2367 (Brunel): the gate's own check-(C) exclusion (a new `ScanResult.ab_verdicts` field,
+rem      read by scan_build_output.py's own pass/fail decision instead of the combined `verdicts`
+rem      field; check (C) keeps running and reporting as a non-gating diagnostic), check (A)'s
+rem      eight-mnemonic bitwise-family widening (D-SLM4987), D-SLM4359's seven-symbol switch-to-
+rem      if-chain restructure (src/artifact.cpp, src/model.cpp, src/proof_manifest.cpp,
+rem      src/forward/checked_chain_funnel.cpp), and the CI rewiring (.github/workflows/tests.yml's
+rem      fp-free-scan-report renamed fp-free-scan-gate, now a real CMake build + a gating
+rem      scan_build_output.py invocation, no continue-on-error, no trailing exit 0) are ALL BUILT
+rem      this round, plus one new pin file (test_dslm4359_switch_restructure_pin.py, three cells,
+rem      a source-level regression guard on the seven-symbol restructure that does not depend on
+rem      the read-only D:/SuperSLM/.worktrees/optb-build reference corpus staying current). Item
+rem      (4) of D-SLM5001 (populations 17/26's demotion notice) is a Coverage Model edit to the
+rem      design document, outside this build round's own writable scope (Claude/Vitruvius/... is
+rem      read-only here) -- not touched, routed back to the planner, exactly as T-2365's own
+rem      coverage audit already routed it. Re-executed this session: 76 collected (73 prior + 3
+rem      new), 4 failed, 70 passed, 2 xfailed -- five of the nine prior failures now pass for a
+rem      genuine grading reason (population sixteen's reconciliation, the check-(C)-exclusion pair,
+rem      the bitwise-family synthetic sweep, both CI-wiring cells); the new pin's own three cells
+rem      pass. FOUR CELLS REMAIN RED, and per this file's own standing law they are NOT edited to
+rem      reach green, because each is a defect in the red suite itself rather than in this round's
+rem      production code (Claude/Brunel/t2367-fp-gate-build-round-2026-08-28.md carries the full
+rem      per-cell reasoning): `test_check_a_p_vp_structural_accept_census_and_violation` pins three
+rem      literal counts (539/101/[]) that are mutually exclusive by the census's own partition
+rem      arithmetic (539 != 101+0) and can never all hold, independent of any production change;
+rem      `test_check_a_p_vp_rule_fails_open_on_a_future_fp_mnemonic` requires check (A)'s p/vp
+rem      branch to become a closed allow-list, which is achievable in isolation but contradicts the
+rem      currently-GREEN `test_check_a_p_prefix_exclude_list_is_load_bearing`'s own premise (that
+rem      removing a name from the deny list flips an unnamed mnemonic to ACCEPT, true only under a
+rem      fail-open fallback) -- the two assert incompatible architectures for the same function and
+rem      need a planner ruling, not a builder's unilateral pick; `test_check_a_bitwise_family_real_
+rem      corpus_leg` calls scan_object without the corpus_symbols the production driver always
+rem      supplies, so its own read of the COMBINED verdict (not ab_verdicts) still shows REJECT from
+rem      check (C)'s unrelated cross-TU-call vetting, confirmed by direct execution with
+rem      corpus_symbols supplied (ACCEPT under both ab_verdicts and verdicts); and `test_dslm4359_
+rem      seven_switch_jump_table_symbols_must_not_block_gate` reads the read-only D:/SuperSLM/
+rem      .worktrees/optb-build corpus, compiled from engine a1df129 before this round's own source
+rem      changes, so it cannot observe this remedy until that shared directory is rebuilt from a
+rem      commit including this round's work -- verified instead against a freshly configured build
+rem      (D:/SuperSLM/.worktrees/t2367-bld): 0 REJECT, 0 REFUSE under checks (A)/(B) across all 17
+rem      objects, down from 264 REJECT / 1 REFUSE pre-remedy. A nonzero exit here should be read
+rem      against this comment's own 4-failure list before being treated as an unrelated new
+rem      regression.
 out\superslm_tests.exe
 set ec=%errorlevel%
 if not %b1_ec%==0 set ec=%b1_ec%

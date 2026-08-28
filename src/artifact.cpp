@@ -25,67 +25,64 @@ uint32_t DtypeSize(uint32_t dtype) noexcept {
 }
 
 bool IsKnownSectionType(uint32_t type) noexcept {
-	switch (static_cast<SslmSectionType>(type)) {
-		case SslmSectionType::Config:
-		case SslmSectionType::Provenance:
-		case SslmSectionType::Weights:
-		case SslmSectionType::Biases:
-		case SslmSectionType::RopeTables:
-		case SslmSectionType::Scales:
-		case SslmSectionType::WeightScales:
-		case SslmSectionType::CompositionConstants:
-		case SslmSectionType::KvLandingScales:
-		case SslmSectionType::KvLandingReciprocals:
-		case SslmSectionType::Calibration:
-		case SslmSectionType::GoldenHashes:
-		case SslmSectionType::SigmoidLut:
-		case SslmSectionType::Tokenizer:
-		case SslmSectionType::ChatTemplate:
-		case SslmSectionType::UnicodeTables:
-		case SslmSectionType::SchemaMasks:
-		case SslmSectionType::CalibrationBand:
-		case SslmSectionType::DeltaFoldScales:
-		case SslmSectionType::UFoldScales:
-		case SslmSectionType::DampedGreedyConstants:
-			return true;
-	}
+	// T-2367 (Brunel), D-SLM4359/D-SLM4988: restructured from a switch to direct
+	// conditional branches. A dense-case switch's own compiler-emitted jump-table
+	// dispatch embeds a computed-jmp/table directly inside this symbol's own
+	// compiled extent, which the FP-free scan's byte-accounting law cannot fully
+	// account for (design Sec4.1) -- this was one of the two symbols that REFUSEd
+	// the real build (`artifact.obj`, D-SLM4982/D-SLM4988). An equality-comparison
+	// chain has no equivalent codegen risk and is behaviourally identical: same
+	// twenty-one known types return true, everything else returns false.
+	const auto t = static_cast<SslmSectionType>(type);
+	if (t == SslmSectionType::Config) return true;
+	if (t == SslmSectionType::Provenance) return true;
+	if (t == SslmSectionType::Weights) return true;
+	if (t == SslmSectionType::Biases) return true;
+	if (t == SslmSectionType::RopeTables) return true;
+	if (t == SslmSectionType::Scales) return true;
+	if (t == SslmSectionType::WeightScales) return true;
+	if (t == SslmSectionType::CompositionConstants) return true;
+	if (t == SslmSectionType::KvLandingScales) return true;
+	if (t == SslmSectionType::KvLandingReciprocals) return true;
+	if (t == SslmSectionType::Calibration) return true;
+	if (t == SslmSectionType::GoldenHashes) return true;
+	if (t == SslmSectionType::SigmoidLut) return true;
+	if (t == SslmSectionType::Tokenizer) return true;
+	if (t == SslmSectionType::ChatTemplate) return true;
+	if (t == SslmSectionType::UnicodeTables) return true;
+	if (t == SslmSectionType::SchemaMasks) return true;
+	if (t == SslmSectionType::CalibrationBand) return true;
+	if (t == SslmSectionType::DeltaFoldScales) return true;
+	if (t == SslmSectionType::UFoldScales) return true;
+	if (t == SslmSectionType::DampedGreedyConstants) return true;
 	return false;
 }
 
 SslmDtype ExpectedDtype(uint32_t type) noexcept {
-	switch (static_cast<SslmSectionType>(type)) {
-		case SslmSectionType::Weights: return SslmDtype::Int8;
-		// Biases carries the C28 dynamic-bias codes (int64 — they reach ~10^14 at q_b=30).
-		case SslmSectionType::Biases: return SslmDtype::Int64;
-		// WeightScales is a WSC1 tensor manifest of int32 (identity,mult,shift) fold ops.
-		case SslmSectionType::WeightScales: return SslmDtype::Int32;
-		// SigmoidLut is a SIL1 fixed table of int32 Q15 nodes (int16 unsafe: sigmoid(16)*2^15
-		// = 32768 exceeds INT16_MAX; SuperSLM_S2.4_SiLU_LUT_Design §8).
-		case SslmSectionType::SigmoidLut: return SslmDtype::Int32;
-		case SslmSectionType::RopeTables: return SslmDtype::Int64;
-		// T-2021/T-2029 B0b (design Sec9): DeltaFoldScales/UFoldScales are DFS1/UFS1 manifests of
-		// int32 (identity,mult,exponent) triples -- same element dtype as WSC1, distinct section
-		// type and distinct on-disk magic (never WSC1's own).
-		case SslmSectionType::DeltaFoldScales: return SslmDtype::Int32;
-		case SslmSectionType::UFoldScales: return SslmDtype::Int32;
-		// All binary-struct / keyed / opaque-byte sections are Raw (CFG1, KVC1, JSON).
-		case SslmSectionType::Config:
-		case SslmSectionType::Provenance:
-		case SslmSectionType::Scales:
-		case SslmSectionType::CompositionConstants:
-		case SslmSectionType::KvLandingScales:
-		case SslmSectionType::KvLandingReciprocals:
-		case SslmSectionType::Calibration:
-		case SslmSectionType::GoldenHashes:
-		case SslmSectionType::Tokenizer:
-		case SslmSectionType::ChatTemplate:
-		case SslmSectionType::UnicodeTables:
-		case SslmSectionType::SchemaMasks:
-		case SslmSectionType::CalibrationBand:
-		case SslmSectionType::DampedGreedyConstants:
-			return SslmDtype::Raw;
-	}
-	return SslmDtype::Raw; // unknown type — callers gate on IsKnownSectionType first
+	// T-2367 (Brunel), D-SLM4359/D-SLM4988: restructured from a switch to direct
+	// conditional branches -- the other of the two symbols that REFUSEd the real
+	// build (`artifact.obj`, D-SLM4982/D-SLM4988); see IsKnownSectionType's own
+	// comment above for the full rationale. Behaviourally identical: the same
+	// six section types return their own named dtype, every other type
+	// (including every unknown type) returns Raw.
+	const auto t = static_cast<SslmSectionType>(type);
+	if (t == SslmSectionType::Weights) return SslmDtype::Int8;
+	// Biases carries the C28 dynamic-bias codes (int64 — they reach ~10^14 at q_b=30).
+	if (t == SslmSectionType::Biases) return SslmDtype::Int64;
+	// WeightScales is a WSC1 tensor manifest of int32 (identity,mult,shift) fold ops.
+	if (t == SslmSectionType::WeightScales) return SslmDtype::Int32;
+	// SigmoidLut is a SIL1 fixed table of int32 Q15 nodes (int16 unsafe: sigmoid(16)*2^15
+	// = 32768 exceeds INT16_MAX; SuperSLM_S2.4_SiLU_LUT_Design §8).
+	if (t == SslmSectionType::SigmoidLut) return SslmDtype::Int32;
+	if (t == SslmSectionType::RopeTables) return SslmDtype::Int64;
+	// T-2021/T-2029 B0b (design Sec9): DeltaFoldScales/UFoldScales are DFS1/UFS1 manifests of
+	// int32 (identity,mult,exponent) triples -- same element dtype as WSC1, distinct section
+	// type and distinct on-disk magic (never WSC1's own).
+	if (t == SslmSectionType::DeltaFoldScales) return SslmDtype::Int32;
+	if (t == SslmSectionType::UFoldScales) return SslmDtype::Int32;
+	// All binary-struct / keyed / opaque-byte sections are Raw (CFG1, KVC1, JSON),
+	// and so is every unknown type -- callers gate on IsKnownSectionType first.
+	return SslmDtype::Raw;
 }
 
 const char* SslmStatusName(SslmStatus s) noexcept {

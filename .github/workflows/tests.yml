@@ -29,36 +29,30 @@ jobs:
           Write-Output $out
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
-  # T-2348 (Brunel), D-SLM4876 (Popper's t2345 recommissioning, unchanged from fold round 34's own
-  # residual): nothing under .github/ ran design Sec4.1's own FP-instruction-absence scan at all --
-  # "a scan this design specifies and nothing in the pipeline runs is not a gate, whatever its own
-  # verdicts say." This job wires tests/ci/run_fp_free_scan_real_corpus.py (the real 17-TU
-  # build-and-scan) into an actual CI job step for the first time. NON-GATING, deliberately: every
-  # check_fp_free_scan.py verdict stays QUARANTINED per StandardsDocument.md Sec5.4 -- recorded,
-  # never boarded as a job pass/fail -- until fold round 35's own new corrections (D-SLM4886/4887/
-  # 4888) are independently re-commissioned and code-reviewed (design Sec10, "Next owner, fold round
-  # 35"), so this job's own exit code is forced to 0 regardless of what the scan reports; the
-  # script's own real exit code (T-2348, 8a28460-t2344's own S3: 0 if ci_gate_corpus else 1) is
-  # printed in this step's own log for a human reader, not read by this workflow. Untested from this
-  # build round's own environment (`cmake.exe` and a GitHub-hosted `windows-latest` runner are both
-  # unavailable here): whether this runner image's own VsDevCmd.bat lives at one of
-  # run_fp_free_scan_real_corpus.py's two hardcoded candidate paths is 8a28460-t2344's own O6, an
-  # accepted, unrouted residual this ticket does not touch -- if it does not, this step still runs,
-  # prints "no VsDevCmd.bat found ... skipping (non-fatal)", and exits 0, which is itself visible in
-  # this job's own log rather than the prior silence.
-  fp-free-scan-report:
+  # T-2367 (Brunel), design Sec4.1/Sec5.5 fold round 39 (D-SLM4981/D-SLM4985/D-SLM4996), replacing
+  # the non-gating fp-free-scan-report job this comment used to sit on: the membership-derivation
+  # interface (`derive_core_sources`/`enumerate_scan_targets`/`ci_gate_corpus`) and the standalone
+  # `run_fp_free_scan_real_corpus.py` driver are retired as the gate's own mechanism -- the production
+  # driver is `tests/ci/scan_build_output.py`, which globs the object files a real build of the
+  # `superslm` CMake target actually emits (no derivation, no completeness proof to fracture) and
+  # gates on checks (A) and (B) alone; check (C) keeps running and keeps reporting as a non-gating
+  # diagnostic (D-SLM4985). T-2364's own strike and T-2365's own coverage audit both found the prior
+  # form of this job non-gating twice over: `run_fp_free_scan_real_corpus.py` was never the production
+  # driver design Sec4.1 names, and even the production driver's own combined verdict read check (C),
+  # which the shipped gate must not (D-SLM4996). This step's own exit code is read by this job -- no
+  # `continue-on-error`, no trailing `exit 0` -- so a checks-(A)/(B) REJECT or a byte-accounting REFUSE
+  # fails the workflow exactly as the windows-x64 job's own test-binary exit code already does.
+  fp-free-scan-gate:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: '3.13'
-      - run: pip install capstone pytest
-      - shell: pwsh
-        run: |
-          python tests/ci/run_fp_free_scan_real_corpus.py
-          Write-Output "check_fp_free_scan.py verdicts are QUARANTINED (StandardsDocument.md Sec5.4) -- reported above, not gating this job."
-          exit 0
+      - run: pip install capstone
+      - run: cmake -B build
+      - run: cmake --build build --target superslm --config Release
+      - run: python tests/ci/scan_build_output.py --build-dir build --target superslm --isa x86-64
 
   linux-x64:
     runs-on: ubuntu-latest

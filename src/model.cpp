@@ -67,69 +67,74 @@ constexpr uint32_t kDescReserved = 44;
 } // namespace
 
 const char* SslmModelStatusName(SslmModelStatus s) noexcept {
-	switch (s) {
-		case SslmModelStatus::Ok: return "Ok";
-		case SslmModelStatus::SectionTooShort: return "SectionTooShort";
-		case SslmModelStatus::BadManifestMagic: return "BadManifestMagic";
-		case SslmModelStatus::UnsupportedManifestVersion: return "UnsupportedManifestVersion";
-		case SslmModelStatus::TooManyTensors: return "TooManyTensors";
-		case SslmModelStatus::ManifestOutOfBounds: return "ManifestOutOfBounds";
-		case SslmModelStatus::BadTensorName: return "BadTensorName";
-		case SslmModelStatus::EmptyTensorName: return "EmptyTensorName";
-		case SslmModelStatus::DuplicateTensorName: return "DuplicateTensorName";
-		case SslmModelStatus::BadTensorRank: return "BadTensorRank";
-		case SslmModelStatus::BadTensorShape: return "BadTensorShape";
-		case SslmModelStatus::ShapeCountMismatch: return "ShapeCountMismatch";
-		case SslmModelStatus::TensorMisaligned: return "TensorMisaligned";
-		case SslmModelStatus::TensorOutOfBounds: return "TensorOutOfBounds";
-		case SslmModelStatus::TensorOverlap: return "TensorOverlap";
-		case SslmModelStatus::BadDescriptorReserved: return "BadDescriptorReserved";
-		case SslmModelStatus::BadConstantsMagic: return "BadConstantsMagic";
-		case SslmModelStatus::UnsupportedConstantsVersion: return "UnsupportedConstantsVersion";
-		case SslmModelStatus::TooManyConstantEntries: return "TooManyConstantEntries";
-		case SslmModelStatus::BadValueWords: return "BadValueWords";
-		case SslmModelStatus::ConstantsOutOfBounds: return "ConstantsOutOfBounds";
-		case SslmModelStatus::BadEntryName: return "BadEntryName";
-		case SslmModelStatus::EmptyEntryName: return "EmptyEntryName";
-		case SslmModelStatus::DuplicateEntryName: return "DuplicateEntryName";
-		case SslmModelStatus::BadConstantsReserved: return "BadConstantsReserved";
-		case SslmModelStatus::BadConfigSize: return "BadConfigSize";
-		case SslmModelStatus::BadConfigMagic: return "BadConfigMagic";
-		case SslmModelStatus::UnsupportedConfigVersion: return "UnsupportedConfigVersion";
-		case SslmModelStatus::BadConfigDim: return "BadConfigDim";
-		case SslmModelStatus::BadKvPrecision: return "BadKvPrecision";
-		case SslmModelStatus::BadConfigBool: return "BadConfigBool";
-		case SslmModelStatus::BadConfigReserved: return "BadConfigReserved";
-		case SslmModelStatus::BadSigmoidLutSize: return "BadSigmoidLutSize";
-		case SslmModelStatus::BadSigmoidLutMagic: return "BadSigmoidLutMagic";
-		case SslmModelStatus::UnsupportedSigmoidLutVersion: return "UnsupportedSigmoidLutVersion";
-		case SslmModelStatus::BadSigmoidLutCount: return "BadSigmoidLutCount";
-		case SslmModelStatus::BadSigmoidLutReserved: return "BadSigmoidLutReserved";
-		case SslmModelStatus::BadSigmoidLutContent: return "BadSigmoidLutContent";
-		case SslmModelStatus::ArtifactRejected: return "ArtifactRejected";
-		case SslmModelStatus::CompositionScaleOutOfDomain: return "CompositionScaleOutOfDomain";
-		case SslmModelStatus::WeightScaleShiftOutOfDomain: return "WeightScaleShiftOutOfDomain";
-		case SslmModelStatus::WeightScaleIdentityNotBool: return "WeightScaleIdentityNotBool";
-		case SslmModelStatus::WeightScaleTripleCountInvalid: return "WeightScaleTripleCountInvalid";
-		case SslmModelStatus::RopeTableEntryOutOfDomain: return "RopeTableEntryOutOfDomain";
-		case SslmModelStatus::KvLandingScaleOutOfDomain: return "KvLandingScaleOutOfDomain";
-		case SslmModelStatus::KvLandingReciprocalOutOfDomain: return "KvLandingReciprocalOutOfDomain";
-		case SslmModelStatus::TokenizerRejected: return "TokenizerRejected";
-		case SslmModelStatus::TokenizerVocabSizeMismatch: return "TokenizerVocabSizeMismatch";
-		case SslmModelStatus::BadConfigHeadDimParity: return "BadConfigHeadDimParity";
-		case SslmModelStatus::ConfigGeometryKvHeadsExceedsHeads: return "ConfigGeometryKvHeadsExceedsHeads";
-		case SslmModelStatus::ConfigGeometryHeadsNotDivisibleByKv: return "ConfigGeometryHeadsNotDivisibleByKv";
-		case SslmModelStatus::ConfigGeometryHiddenSizeMismatch: return "ConfigGeometryHiddenSizeMismatch";
-		case SslmModelStatus::RopeTablesShapeMismatchConfig: return "RopeTablesShapeMismatchConfig";
-		case SslmModelStatus::CalibrationBandOutOfDomain: return "CalibrationBandOutOfDomain";
-		case SslmModelStatus::AmplifyingFoldSectionTypeMismatch: return "AmplifyingFoldSectionTypeMismatch";
-		case SslmModelStatus::AmplifyingFoldTripleCountInvalid: return "AmplifyingFoldTripleCountInvalid";
-		case SslmModelStatus::AmplifyingFoldIdentityNotBool: return "AmplifyingFoldIdentityNotBool";
-		case SslmModelStatus::AmplifyingFoldExponentOutOfDomain: return "AmplifyingFoldExponentOutOfDomain";
-		case SslmModelStatus::AmplifyingFoldDimensionMismatch: return "AmplifyingFoldDimensionMismatch";
-		case SslmModelStatus::AmplifyingFoldProjectionInvalid: return "AmplifyingFoldProjectionInvalid";
-		case SslmModelStatus::AmplifyingFoldBaseHashMismatch: return "AmplifyingFoldBaseHashMismatch";
-	}
+	// T-2367 (Brunel), D-SLM4359: restructured from a switch to direct
+	// conditional branches -- a compiler-emitted jump table for a switch this
+	// dense embeds a computed-jmp/table inside this symbol's own compiled
+	// extent (design Sec4.1's byte-accounting law), and the indirect jmp
+	// itself is an unvetted edge check (C) rejects (D-SLM4982). Behaviourally
+	// identical: same sixty-one named statuses map to their own string, every
+	// other value falls through to "Unknown".
+	if (s == SslmModelStatus::Ok) return "Ok";
+	if (s == SslmModelStatus::SectionTooShort) return "SectionTooShort";
+	if (s == SslmModelStatus::BadManifestMagic) return "BadManifestMagic";
+	if (s == SslmModelStatus::UnsupportedManifestVersion) return "UnsupportedManifestVersion";
+	if (s == SslmModelStatus::TooManyTensors) return "TooManyTensors";
+	if (s == SslmModelStatus::ManifestOutOfBounds) return "ManifestOutOfBounds";
+	if (s == SslmModelStatus::BadTensorName) return "BadTensorName";
+	if (s == SslmModelStatus::EmptyTensorName) return "EmptyTensorName";
+	if (s == SslmModelStatus::DuplicateTensorName) return "DuplicateTensorName";
+	if (s == SslmModelStatus::BadTensorRank) return "BadTensorRank";
+	if (s == SslmModelStatus::BadTensorShape) return "BadTensorShape";
+	if (s == SslmModelStatus::ShapeCountMismatch) return "ShapeCountMismatch";
+	if (s == SslmModelStatus::TensorMisaligned) return "TensorMisaligned";
+	if (s == SslmModelStatus::TensorOutOfBounds) return "TensorOutOfBounds";
+	if (s == SslmModelStatus::TensorOverlap) return "TensorOverlap";
+	if (s == SslmModelStatus::BadDescriptorReserved) return "BadDescriptorReserved";
+	if (s == SslmModelStatus::BadConstantsMagic) return "BadConstantsMagic";
+	if (s == SslmModelStatus::UnsupportedConstantsVersion) return "UnsupportedConstantsVersion";
+	if (s == SslmModelStatus::TooManyConstantEntries) return "TooManyConstantEntries";
+	if (s == SslmModelStatus::BadValueWords) return "BadValueWords";
+	if (s == SslmModelStatus::ConstantsOutOfBounds) return "ConstantsOutOfBounds";
+	if (s == SslmModelStatus::BadEntryName) return "BadEntryName";
+	if (s == SslmModelStatus::EmptyEntryName) return "EmptyEntryName";
+	if (s == SslmModelStatus::DuplicateEntryName) return "DuplicateEntryName";
+	if (s == SslmModelStatus::BadConstantsReserved) return "BadConstantsReserved";
+	if (s == SslmModelStatus::BadConfigSize) return "BadConfigSize";
+	if (s == SslmModelStatus::BadConfigMagic) return "BadConfigMagic";
+	if (s == SslmModelStatus::UnsupportedConfigVersion) return "UnsupportedConfigVersion";
+	if (s == SslmModelStatus::BadConfigDim) return "BadConfigDim";
+	if (s == SslmModelStatus::BadKvPrecision) return "BadKvPrecision";
+	if (s == SslmModelStatus::BadConfigBool) return "BadConfigBool";
+	if (s == SslmModelStatus::BadConfigReserved) return "BadConfigReserved";
+	if (s == SslmModelStatus::BadSigmoidLutSize) return "BadSigmoidLutSize";
+	if (s == SslmModelStatus::BadSigmoidLutMagic) return "BadSigmoidLutMagic";
+	if (s == SslmModelStatus::UnsupportedSigmoidLutVersion) return "UnsupportedSigmoidLutVersion";
+	if (s == SslmModelStatus::BadSigmoidLutCount) return "BadSigmoidLutCount";
+	if (s == SslmModelStatus::BadSigmoidLutReserved) return "BadSigmoidLutReserved";
+	if (s == SslmModelStatus::BadSigmoidLutContent) return "BadSigmoidLutContent";
+	if (s == SslmModelStatus::ArtifactRejected) return "ArtifactRejected";
+	if (s == SslmModelStatus::CompositionScaleOutOfDomain) return "CompositionScaleOutOfDomain";
+	if (s == SslmModelStatus::WeightScaleShiftOutOfDomain) return "WeightScaleShiftOutOfDomain";
+	if (s == SslmModelStatus::WeightScaleIdentityNotBool) return "WeightScaleIdentityNotBool";
+	if (s == SslmModelStatus::WeightScaleTripleCountInvalid) return "WeightScaleTripleCountInvalid";
+	if (s == SslmModelStatus::RopeTableEntryOutOfDomain) return "RopeTableEntryOutOfDomain";
+	if (s == SslmModelStatus::KvLandingScaleOutOfDomain) return "KvLandingScaleOutOfDomain";
+	if (s == SslmModelStatus::KvLandingReciprocalOutOfDomain) return "KvLandingReciprocalOutOfDomain";
+	if (s == SslmModelStatus::TokenizerRejected) return "TokenizerRejected";
+	if (s == SslmModelStatus::TokenizerVocabSizeMismatch) return "TokenizerVocabSizeMismatch";
+	if (s == SslmModelStatus::BadConfigHeadDimParity) return "BadConfigHeadDimParity";
+	if (s == SslmModelStatus::ConfigGeometryKvHeadsExceedsHeads) return "ConfigGeometryKvHeadsExceedsHeads";
+	if (s == SslmModelStatus::ConfigGeometryHeadsNotDivisibleByKv) return "ConfigGeometryHeadsNotDivisibleByKv";
+	if (s == SslmModelStatus::ConfigGeometryHiddenSizeMismatch) return "ConfigGeometryHiddenSizeMismatch";
+	if (s == SslmModelStatus::RopeTablesShapeMismatchConfig) return "RopeTablesShapeMismatchConfig";
+	if (s == SslmModelStatus::CalibrationBandOutOfDomain) return "CalibrationBandOutOfDomain";
+	if (s == SslmModelStatus::AmplifyingFoldSectionTypeMismatch) return "AmplifyingFoldSectionTypeMismatch";
+	if (s == SslmModelStatus::AmplifyingFoldTripleCountInvalid) return "AmplifyingFoldTripleCountInvalid";
+	if (s == SslmModelStatus::AmplifyingFoldIdentityNotBool) return "AmplifyingFoldIdentityNotBool";
+	if (s == SslmModelStatus::AmplifyingFoldExponentOutOfDomain) return "AmplifyingFoldExponentOutOfDomain";
+	if (s == SslmModelStatus::AmplifyingFoldDimensionMismatch) return "AmplifyingFoldDimensionMismatch";
+	if (s == SslmModelStatus::AmplifyingFoldProjectionInvalid) return "AmplifyingFoldProjectionInvalid";
+	if (s == SslmModelStatus::AmplifyingFoldBaseHashMismatch) return "AmplifyingFoldBaseHashMismatch";
 	return "Unknown";
 }
 
@@ -1260,31 +1265,46 @@ SslmModelStatus ValidateTokenizerVocabSizeJoin(const SslmModelView& view, std::s
 // here rather than given a defensive mapping, per the fold's own note that
 // either choice satisfies the plan's zero-boundary requirement.
 SslmModelStatus ValidateConfigGeometryJoin(const SslmModelConfig& config, std::string* err) {
+	// T-2367 (Brunel), D-SLM4359: restructured from a switch to direct
+	// conditional branches. This function is called from exactly one site
+	// (ValidateSectionValues, below) and MSVC inlines it there at /O2 -- its
+	// own switch's jump-table dispatch was compiled directly into
+	// ValidateSectionValues's own extent, which is why THAT symbol (never
+	// this one, which optimizes away as a distinct linked symbol) carried
+	// the indirect jmp check (C) rejected (confirmed by disassembly this
+	// ticket's own session: ValidateSectionValues's compiled body contains
+	// `cmp eax, 5 / ja ... / jmp rcx` immediately after the inlined
+	// CheckConfigGeometry call). Behaviourally identical to the switch it
+	// replaces, including the ZeroAttentionHeads/ZeroKeyValueHeads
+	// fallthrough and the unrecognized-status fallback.
 	const ConfigGeometryResult result = CheckConfigGeometry(
 	    config.hidden_size, config.num_attention_heads, config.num_key_value_heads, config.head_dim);
-	switch (result.status) {
-		case ConfigGeometryStatus::Ok:
-			if (err) err->clear();
-			return SslmModelStatus::Ok;
-		case ConfigGeometryStatus::KvHeadsExceedsHeads:
-			if (err) *err = result.diagnostic;
-			return SslmModelStatus::ConfigGeometryKvHeadsExceedsHeads;
-		case ConfigGeometryStatus::HeadsNotDivisibleByKv:
-			if (err) *err = result.diagnostic;
-			return SslmModelStatus::ConfigGeometryHeadsNotDivisibleByKv;
-		case ConfigGeometryStatus::HiddenSizeGeometryMismatch:
-			if (err) *err = result.diagnostic;
-			return SslmModelStatus::ConfigGeometryHiddenSizeMismatch;
-		case ConfigGeometryStatus::ZeroAttentionHeads:
-		case ConfigGeometryStatus::ZeroKeyValueHeads:
-			// Unreachable through SslmModel::Load: ParseConfigImpl's BadConfigDim
-			// already rejects a zero num_attention_heads/num_key_value_heads
-			// before ValidateSectionValues runs. A direct, off-Load caller of
-			// CheckConfigGeometry can still reach these arms; mapped to the same
-			// diagnostic-carrying rejection as every other non-Ok status rather
-			// than left to fall through.
-			if (err) *err = result.diagnostic;
-			return SslmModelStatus::ConfigGeometryHiddenSizeMismatch;
+	if (result.status == ConfigGeometryStatus::Ok) {
+		if (err) err->clear();
+		return SslmModelStatus::Ok;
+	}
+	if (result.status == ConfigGeometryStatus::KvHeadsExceedsHeads) {
+		if (err) *err = result.diagnostic;
+		return SslmModelStatus::ConfigGeometryKvHeadsExceedsHeads;
+	}
+	if (result.status == ConfigGeometryStatus::HeadsNotDivisibleByKv) {
+		if (err) *err = result.diagnostic;
+		return SslmModelStatus::ConfigGeometryHeadsNotDivisibleByKv;
+	}
+	if (result.status == ConfigGeometryStatus::HiddenSizeGeometryMismatch) {
+		if (err) *err = result.diagnostic;
+		return SslmModelStatus::ConfigGeometryHiddenSizeMismatch;
+	}
+	// Unreachable through SslmModel::Load: ParseConfigImpl's BadConfigDim
+	// already rejects a zero num_attention_heads/num_key_value_heads before
+	// ValidateSectionValues runs. A direct, off-Load caller of
+	// CheckConfigGeometry can still reach these two statuses; mapped to the
+	// same diagnostic-carrying rejection as every other non-Ok status rather
+	// than left to fall through.
+	if (result.status == ConfigGeometryStatus::ZeroAttentionHeads ||
+	    result.status == ConfigGeometryStatus::ZeroKeyValueHeads) {
+		if (err) *err = result.diagnostic;
+		return SslmModelStatus::ConfigGeometryHiddenSizeMismatch;
 	}
 	if (err) *err = "ValidateConfigGeometryJoin: unrecognized ConfigGeometryStatus";
 	return SslmModelStatus::ConfigGeometryHiddenSizeMismatch;

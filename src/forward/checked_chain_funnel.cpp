@@ -27,50 +27,58 @@
 namespace superslm {
 
 const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
-	switch (s) {
-		case SslmForwardStatus::Ok: return "Ok";
-		case SslmForwardStatus::ChainInputOutOfDomain: return "ChainInputOutOfDomain";
-		case SslmForwardStatus::LogitNarrowingOverflow: return "LogitNarrowingOverflow";
-		case SslmForwardStatus::IExpConstantsOutOfDomain: return "IExpConstantsOutOfDomain";
-		case SslmForwardStatus::CarriedScaleMantissaOutOfDomain: return "CarriedScaleMantissaOutOfDomain";
-		case SslmForwardStatus::SiluCompositionScaleOutOfDomain: return "SiluCompositionScaleOutOfDomain";
-		case SslmForwardStatus::RoundingDivideByPotExponentOutOfDomain:
-			return "RoundingDivideByPotExponentOutOfDomain";
-		case SslmForwardStatus::SoftmaxRowWidthOutOfDomain: return "SoftmaxRowWidthOutOfDomain";
-		case SslmForwardStatus::TokenIdOutOfRange: return "TokenIdOutOfRange";
-		case SslmForwardStatus::PositionOverCap: return "PositionOverCap";
-		case SslmForwardStatus::WorkspaceTooSmall: return "WorkspaceTooSmall";
-		case SslmForwardStatus::KvCapacityExhausted: return "KvCapacityExhausted";
-		case SslmForwardStatus::KvPrecisionUnsupported: return "KvPrecisionUnsupported";
-		case SslmForwardStatus::InvalidLayerBudget: return "InvalidLayerBudget";
-		case SslmForwardStatus::RopeTableTensorMissing: return "RopeTableTensorMissing";
-		case SslmForwardStatus::RopeTableExtentExceeded: return "RopeTableExtentExceeded";
-		case SslmForwardStatus::InvalidContextCap: return "InvalidContextCap";
-		case SslmForwardStatus::HeadDimGeometryMismatch: return "HeadDimGeometryMismatch";
-		case SslmForwardStatus::KvHeadGeometryMismatch: return "KvHeadGeometryMismatch";
-		case SslmForwardStatus::SequenceAlreadyComplete: return "SequenceAlreadyComplete";
-		case SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted:
-			return "SoftmaxKernelRefusedAfterGateAccepted";
-		case SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain:
-			return "ResidualReconciliationMagnitudeOutOfDomain";
-		case SslmForwardStatus::InvalidHiddenCodes: return "InvalidHiddenCodes";
-		case SslmForwardStatus::IExpScaleDerivationOutOfDomain: return "IExpScaleDerivationOutOfDomain";
-		case SslmForwardStatus::BiasReconcileProductOutOfDomain: return "BiasReconcileProductOutOfDomain";
-		case SslmForwardStatus::OptionGWideRopeMagnitudeOutOfDomain:
-			return "OptionGWideRopeMagnitudeOutOfDomain";
-		case SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain:
-			return "OptionGFusedLandingExponentOutOfDomain";
-		case SslmForwardStatus::GpuAllocationFailed: return "GpuAllocationFailed";
-		case SslmForwardStatus::GpuDeviceRemoved: return "GpuDeviceRemoved";
-		case SslmForwardStatus::GpuGemmGroupArithmeticInvalid: return "GpuGemmGroupArithmeticInvalid";
-		case SslmForwardStatus::InvalidDecodeParams: return "InvalidDecodeParams";
-		case SslmForwardStatus::OutputCapacityExceeded:
-			// T-2237/F3 (SuperSLM 1.2.1): D-SLM3977's first landing -- a new enumerator owes
-			// an arm HERE as well as its MapForwardStatus arm. This switch has no default
-			// and silently degrades to "?" below when an arm is missing (/W4 without /WX),
-			// degrading every diagnostic that names the status.
-			return "OutputCapacityExceeded";
-	}
+	// T-2367 (Brunel), D-SLM4359: restructured from a switch to direct
+	// conditional branches -- a compiler-emitted jump table for a switch this
+	// dense embeds a computed-jmp/table inside this symbol's own compiled
+	// extent (design Sec4.1's byte-accounting law), and the indirect jmp
+	// itself is an unvetted edge check (C) rejects (D-SLM4982). Behaviourally
+	// identical: same thirty-one named statuses map to their own string,
+	// every other value -- there is no enumerator this function does not
+	// name -- falls through to "?", preserving the switch's own no-default,
+	// /W4-without-/WX missing-arm behavior (see the comment this replaces,
+	// on OutputCapacityExceeded below, for why a future enumerator still
+	// owes an arm here).
+	if (s == SslmForwardStatus::Ok) return "Ok";
+	if (s == SslmForwardStatus::ChainInputOutOfDomain) return "ChainInputOutOfDomain";
+	if (s == SslmForwardStatus::LogitNarrowingOverflow) return "LogitNarrowingOverflow";
+	if (s == SslmForwardStatus::IExpConstantsOutOfDomain) return "IExpConstantsOutOfDomain";
+	if (s == SslmForwardStatus::CarriedScaleMantissaOutOfDomain) return "CarriedScaleMantissaOutOfDomain";
+	if (s == SslmForwardStatus::SiluCompositionScaleOutOfDomain) return "SiluCompositionScaleOutOfDomain";
+	if (s == SslmForwardStatus::RoundingDivideByPotExponentOutOfDomain)
+		return "RoundingDivideByPotExponentOutOfDomain";
+	if (s == SslmForwardStatus::SoftmaxRowWidthOutOfDomain) return "SoftmaxRowWidthOutOfDomain";
+	if (s == SslmForwardStatus::TokenIdOutOfRange) return "TokenIdOutOfRange";
+	if (s == SslmForwardStatus::PositionOverCap) return "PositionOverCap";
+	if (s == SslmForwardStatus::WorkspaceTooSmall) return "WorkspaceTooSmall";
+	if (s == SslmForwardStatus::KvCapacityExhausted) return "KvCapacityExhausted";
+	if (s == SslmForwardStatus::KvPrecisionUnsupported) return "KvPrecisionUnsupported";
+	if (s == SslmForwardStatus::InvalidLayerBudget) return "InvalidLayerBudget";
+	if (s == SslmForwardStatus::RopeTableTensorMissing) return "RopeTableTensorMissing";
+	if (s == SslmForwardStatus::RopeTableExtentExceeded) return "RopeTableExtentExceeded";
+	if (s == SslmForwardStatus::InvalidContextCap) return "InvalidContextCap";
+	if (s == SslmForwardStatus::HeadDimGeometryMismatch) return "HeadDimGeometryMismatch";
+	if (s == SslmForwardStatus::KvHeadGeometryMismatch) return "KvHeadGeometryMismatch";
+	if (s == SslmForwardStatus::SequenceAlreadyComplete) return "SequenceAlreadyComplete";
+	if (s == SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted)
+		return "SoftmaxKernelRefusedAfterGateAccepted";
+	if (s == SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain)
+		return "ResidualReconciliationMagnitudeOutOfDomain";
+	if (s == SslmForwardStatus::InvalidHiddenCodes) return "InvalidHiddenCodes";
+	if (s == SslmForwardStatus::IExpScaleDerivationOutOfDomain) return "IExpScaleDerivationOutOfDomain";
+	if (s == SslmForwardStatus::BiasReconcileProductOutOfDomain) return "BiasReconcileProductOutOfDomain";
+	if (s == SslmForwardStatus::OptionGWideRopeMagnitudeOutOfDomain)
+		return "OptionGWideRopeMagnitudeOutOfDomain";
+	if (s == SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain)
+		return "OptionGFusedLandingExponentOutOfDomain";
+	if (s == SslmForwardStatus::GpuAllocationFailed) return "GpuAllocationFailed";
+	if (s == SslmForwardStatus::GpuDeviceRemoved) return "GpuDeviceRemoved";
+	if (s == SslmForwardStatus::GpuGemmGroupArithmeticInvalid) return "GpuGemmGroupArithmeticInvalid";
+	if (s == SslmForwardStatus::InvalidDecodeParams) return "InvalidDecodeParams";
+	// T-2237/F3 (SuperSLM 1.2.1): D-SLM3977's first landing -- a new enumerator owes
+	// an arm HERE as well as its MapForwardStatus arm; this function silently
+	// degrades to "?" below when an arm is missing, degrading every diagnostic
+	// that names the status.
+	if (s == SslmForwardStatus::OutputCapacityExceeded) return "OutputCapacityExceeded";
 	return "?";
 }
 
