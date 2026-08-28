@@ -28,6 +28,7 @@ import os
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 
 CLANG_CANDIDATES = (
@@ -234,6 +235,31 @@ def dumpbin_disasm(obj_path):
     return r.stdout
 
 
+def _production_flags():
+    """Derives the real windows-latest CI leg's own MSVC Release flags by
+    REUSING tests/ci/run_fp_free_scan_real_corpus.py's own
+    `_production_compile_flags()` -- CMake's stock MSVC Release default
+    (/MD /O2 /Ob2 /DNDEBUG) plus whatever `superslm`'s own CMakeLists.txt
+    currently declares in its `target_compile_options` -- rather than a
+    second, hand-restated copy of the identical fact in this file.
+
+    T-2347 (Curie), Poirot's M4: `compile_cl_release` used to hardcode
+    `/O2 /Ob2 /DNDEBUG /MD /W4 /fp:precise` directly, duplicating exactly
+    what the runner already derives at source -- "two copies of one fact,
+    one derived and one restated, in the round whose S3 remedy was that a
+    second hand-written copy is where drift starts." Importing the
+    runner's own function means a future edit to CMakeLists.txt:64's own
+    `/W4 /fp:precise` line is picked up here automatically, identically to
+    how the runner itself already picks it up -- one derivation, two
+    callers, never two derivations."""
+    _here = os.path.dirname(os.path.abspath(__file__))
+    _ci_dir = os.path.abspath(os.path.join(_here, "..", "ci"))
+    if _ci_dir not in sys.path:
+        sys.path.insert(0, _ci_dir)
+    import run_fp_free_scan_real_corpus as _runner  # noqa: E402  -- see docstring above
+    return _runner._production_compile_flags()
+
+
 def compile_cl_release(src_path, out_obj, extra_args=()):
     """Compile a C++ source with MSVC cl.exe under the REAL CMake Release
     configuration the shipping windows-latest CI leg actually builds with
@@ -243,16 +269,19 @@ def compile_cl_release(src_path, out_obj, extra_args=()):
     Claude/Popper/t2340-probe/real_corpus.py:28-29's own flag string exactly
     (design Sec5.4, D-SLM4861: the design's own acceptance criteria are ruled
     to read against THIS configuration's own corpus, not a fourth,
-    hand-picked flag line). Raises ToolUnavailable if no VS install is
-    found."""
+    hand-picked flag line). T-2347: the derivable half of this flag string
+    (/MD /O2 /Ob2 /DNDEBUG /W4 /fp:precise) is no longer hand-restated here --
+    see `_production_flags()`, above (Poirot's M4). /std:c++20 /EHsc remain a
+    stated constant, matching the runner's own identical, disclosed residual
+    (Poirot's M3, out of this ticket's own routing). Raises ToolUnavailable
+    if no VS install is found."""
     vsdevcmd = find_vsdevcmd()
     if vsdevcmd is None:
         raise ToolUnavailable("no VsDevCmd.bat found at either well-known VS2022 install location")
     src_dir = os.path.dirname(os.path.abspath(src_path))
     src_name = os.path.basename(src_path)
     out_name = os.path.basename(out_obj)
-    args = ["cl", "/nologo", "/c", "/O2", "/Ob2", "/DNDEBUG", "/MD", "/W4",
-            "/fp:precise", "/std:c++20", "/EHsc",
+    args = ["cl", "/nologo", "/c", *_production_flags(), "/std:c++20", "/EHsc",
             *extra_args, src_name, f"/Fo:{out_name}"]
     r = _run_via_env_script(vsdevcmd, "-arch=x64 -no_logo", args, cwd=src_dir)
     produced = os.path.join(src_dir, out_name)

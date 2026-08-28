@@ -1,0 +1,5 @@
+# T-2347 (Curie) -- population eighteen's must-accept half: the named
+# translation unit's own disassembly IS present in disasm_dir.
+set(SUPERSLM_CORE_SOURCES
+    src/tu18.cpp
+)

@@ -1,0 +1,10 @@
+# T-2347 (Curie) -- D-SLM4887: an EARLIER, unrelated mention of the variable
+# name, shaped so the naive regex (text-based, no CMake comment awareness)
+# matches THIS occurrence first -- an old prose note inside a comment,
+# happening to spell "set(SUPERSLM_CORE_SOURCES)" verbatim -- and captures
+# its own empty span, never reaching the real block two lines below.
+# an old note: set(SUPERSLM_CORE_SOURCES) was the pre-refactor variable name
+set(SUPERSLM_CORE_SOURCES
+    src/real1.cpp
+    src/real2.cpp
+)

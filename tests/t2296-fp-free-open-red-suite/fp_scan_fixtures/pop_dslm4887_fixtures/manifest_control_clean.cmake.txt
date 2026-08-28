@@ -1,0 +1,6 @@
+# T-2347 (Curie) -- D-SLM4887's control: an ordinary, unambiguous manifest.
+# Must NOT raise; must return exactly the two declared sources.
+set(SUPERSLM_CORE_SOURCES
+    src/real1.cpp
+    src/real2.cpp
+)

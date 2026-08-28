@@ -1,0 +1,12 @@
+# T-2347 (Curie) -- design Sec4.1 fold round 35, D-SLM4887: the list(APPEND)
+# idiom -- SUPERSLM_CORE_SOURCES declared empty by set(), then populated by a
+# SEPARATE list(APPEND ...) call, an ordinary, unremarkable CMake idiom.
+# derive_core_sources's own regex (set\(SUPERSLM_CORE_SOURCES(.*?)\)) matches
+# only the FIRST call and captures its own (empty) parenthesised span,
+# silently returning zero sources despite two real translation units being
+# genuinely declared two lines below.
+set(SUPERSLM_CORE_SOURCES)
+list(APPEND SUPERSLM_CORE_SOURCES
+    src/real1.cpp
+    src/real2.cpp
+)

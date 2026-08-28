@@ -1,0 +1,10 @@
+# T-2347 (Curie) -- D-SLM4887: a stray ) inside a comment WITHIN the real
+# set(...) block's own span terminates the non-greedy capture early --
+# derive_core_sources silently returns a TRUNCATED list (src/real1.cpp only),
+# never raising, even though src/real2.cpp is genuinely declared one line
+# below the comment.
+set(SUPERSLM_CORE_SOURCES
+    src/real1.cpp
+    # this comment has a stray ) inside it
+    src/real2.cpp
+)

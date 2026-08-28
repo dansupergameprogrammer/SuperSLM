@@ -149,6 +149,28 @@ docstring and in the T-2333 case file):
   13 T-2276's decodable-pool construction + ci_gate (fold round 13)          -- test_population_13_coverage_relation_decodable_swallow
   14 T-2277's per-symbol-granularity census, 11 cells (fold round 14)        -- test_population_14_per_symbol_granularity_census
   -- ci_gate's own absent-report leg (item 2, T-2333's own brief)            -- test_ci_gate_absent_report_leg
+  16 self-zeroing vxorps/vxorpd boundary (T-2347, fold round 35, D-SLM4889)  -- test_population_16_vxorps_*
+  17 check (C) relocation-resolve-then-classify carve-out (T-2347, D-SLM4886)-- test_population_17_carveout_*
+  18 diagnostic surface fail-closed on missing disassembly (T-2347, D-SLM4889)-- test_population_18_diagnostic_*
+  19 ScanResult(refuse=True) on unrecognised ISA/format (T-2347, D-SLM4889)  -- test_population_19_refuse_on_*, test_population_19_recognized_pair_control_unaffected
+  20 per-section local_starts keying (T-2347, D-SLM4889, Poirot's O3)        -- test_population_20_local_starts_*
+  21 the empty-extent byte charge's own arithmetic (T-2347, D-SLM4889, M2)   -- test_population_21_*_empty_extent*
+
+T-2347 (fold round 35) ALSO adds, outside the sixteen-through-twenty-first
+population numbering (each pinning a named, routed finding rather than a
+Coverage Model population): derive_core_sources's completeness self-check
+(D-SLM4887, four cells, test_derive_core_sources_*), ci_gate_corpus's
+vacuous-True closure (D-SLM4888, two cells, test_ci_gate_corpus_vacuous_*/
+test_ci_gate_corpus_end_to_end_*), and the three findings Poirot's
+8a28460-t2344 casebook routes to the test author rather than the build round:
+M4 (fp_scan_common.compile_cl_release's own hardcoded flag duplication --
+FIXED in place this ticket, since fp_scan_common.py is this suite's own test
+helper, not production code -- see _production_flags()), O4 (populations
+eight and ten migrated to xfail(strict=True), Poirot's own recommended
+structural fix for build.bat's own fragile --deselect guard, S5), and O5
+(run_fp_free_scan_real_corpus._msvc_target_flags's silent truncation on an
+embedded ), documented as a disclosed residual --
+test_msvc_target_flags_silently_truncates_on_embedded_paren).
 """
 from __future__ import annotations
 
@@ -741,6 +763,23 @@ def test_population_07_fpblind_classifier(tier, extra_flags):
 # Population eight -- the real v1.2.1 whole-corpus sweep (fold rounds 7/8).
 # ===========================================================================
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="T-2347 (Curie), Poirot's O4/S5: this population calls pytest.fail() "
+    "unconditionally, by its own docstring's own design -- 'not gradable by "
+    "this single pytest cell even once the instrument exists.' xfail(strict=True) "
+    "moves this suite's own known-red state INTO the test file (Poirot's own "
+    "recommended structural fix, previously only enforceable by build.bat's own "
+    "fragile --deselect + --collect-only-count guard, S5). strict=True means an "
+    "accidental future PASS (this population can never legitimately pass, by "
+    "construction) would itself become a loud failure, not a silent XPASS. "
+    "build.bat's own --deselect flags for this test still apply today and make "
+    "this marker currently inert under that exact invocation -- removing the "
+    "now-redundant deselect (so this test is collected and actually hits the "
+    "marker) is a build-round follow-up, routed back, not done here (this "
+    "ticket's own writable scope is the test file, not build.bat's own gating "
+    "command line).",
+)
 def test_population_08_real_corpus_whole_sweep():
     """This population is a claim about the REAL, currently-committed engine
     source (SUPERSLM_CORE_SOURCES, CMakeLists.txt) -- not a constructed
@@ -887,6 +926,22 @@ def test_population_09_funclet_membership():
 # to population eleven.
 # ===========================================================================
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="T-2347 (Curie), Poirot's O4/S5: this population is an open, "
+    "disclosed tension against the ratified design text's own fold-9 finding "
+    "(see this test's own docstring, below) -- a real, currently-failing "
+    "assertion, not an absent-instrument placeholder. xfail(strict=True) states "
+    "that openly in the test file itself (Poirot's own recommended structural "
+    "fix, S5) rather than only in build.bat's own fragile --deselect string. "
+    "strict=True means the day this tension is actually resolved (the ratified "
+    "design text corrected, or this reader's own COMDAT-filler padding "
+    "recognition widened), this marker flips to a loud XPASS failure demanding "
+    "removal, rather than silently continuing to pass for the wrong reason. "
+    "build.bat's own --deselect flags for this test still apply today (see the "
+    "population-eight marker above); the same build-round follow-up note "
+    "applies here.",
+)
 def test_population_10_arm_differential_historical():
     """Falsifying + must-accept construction, one object: BuildMerges,
     DedupNames, BodyDivide, BodyConvertCompare -- compiled for AArch64 via
@@ -2051,4 +2106,847 @@ def test_movsldup_movshdup_boundary_control():
         assert result.verdicts.get("DuplicateHighLane") == "REJECT", (
             "movshdup is a lane-duplication operation, not a pure copy, and must "
             "stay REJECTed; verdict was {}".format(result.verdicts.get("DuplicateHighLane"))
+        )
+
+
+# ===========================================================================
+# T-2347 (Curie) -- fold round 35 (Claude/Vitruvius/
+# t2265-fold35-delta-manifest.md): design Sec4.1's two new refusal contracts
+# (D-SLM4887, D-SLM4888), Sec7 dimension 11's six new populations
+# (sixteenth-twenty-first, D-SLM4889), and the three findings routed to the
+# test author by Claude/Poirot/8a28460-t2344-fp-scan-fix-round-confirmation.md
+# (M4, O4, O5). Every cell below independently verifies its own fixture --
+# by direct execution against the built instrument, this session, before this
+# file existed in its current form -- before asserting the ratified verdict.
+# Neither this section nor any fixture it uses cites
+# Claude/Vitruvius/t2265-fold32-probe/class_closure_check.py or design Sec2.9.
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# D-SLM4887 -- derive_core_sources's completeness self-check: raise
+# CoreSourcesDerivationError rather than silently returning an empty (or
+# truncated) list whenever the manifest names SUPERSLM_CORE_SOURCES at all.
+# Three real CMake idioms the re-commissioning constructed
+# (Claude/Popper/t2345-fp-scan-recommissioning-2026-08-27.md Sec5.7), each
+# independently reproduced this session before this test was written:
+#   - list(APPEND): NO exception, returns [] (zero of two real sources).
+#   - a stray ) inside a comment WITHIN the real set(...) block's own span:
+#     NO exception, returns ['src/real1.cpp'] -- truncated, not zero, never
+#     reaching src/real2.cpp one line below the comment.
+#   - an earlier, unrelated mention of the variable name (itself shaped like
+#     a set(SUPERSLM_CORE_SOURCES...) call, inside a comment) that the naive
+#     text regex matches FIRST: NO exception, returns [] (its own empty span).
+# A fourth, ordinary manifest is the control: must NOT raise, must return
+# exactly the two declared sources.
+# ---------------------------------------------------------------------------
+
+_DSLM4887_FIXTURES = os.path.join(_FIXTURES, "pop_dslm4887_fixtures")
+
+
+def _assert_raises_core_sources_derivation_error(manifest_path, note=""):
+    """Shared assertion for all three D-SLM4887 reproductions: the ratified
+    correction names the raised type as `CoreSourcesDerivationError`
+    (mirroring `enumerate_scan_targets()`'s own `DuplicateStemError`
+    convention), but that name does not exist in the module at all today, so
+    a bare `pytest.raises(scan.CoreSourcesDerivationError)` would fail with
+    an opaque AttributeError rather than a clear message -- matching this
+    suite's own established convention (see
+    test_enumerate_scan_targets_duplicate_stem_refuses) of catching whatever
+    the current code actually does and stating plainly what is missing.
+    """
+    raised = None
+    result = None
+    try:
+        result = scan.derive_core_sources(manifest_path)
+    except Exception as e:  # noqa: BLE001 -- capturing whatever today's code actually does
+        raised = e
+    if raised is None:
+        pytest.fail(
+            "derive_core_sources does not yet raise CoreSourcesDerivationError "
+            "(design Sec4.1 fold round 35, D-SLM4887) -- it returned {} instead "
+            "of raising. {}".format(result, note)
+        )
+    assert type(raised).__name__ == "CoreSourcesDerivationError" or isinstance(
+        raised, getattr(scan, "CoreSourcesDerivationError", ())
+    ), (
+        "derive_core_sources raised {}, not the ratified "
+        "CoreSourcesDerivationError -- {}: {}".format(type(raised).__name__, note, raised)
+    )
+
+
+def test_derive_core_sources_raises_on_list_append_idiom():
+    """set(SUPERSLM_CORE_SOURCES) immediately followed by a separate
+    list(APPEND SUPERSLM_CORE_SOURCES ...) call -- an ordinary, unremarkable
+    CMake idiom. derive_core_sources's own regex matches only the first
+    call's own (empty) parenthesised span. Confirmed by direct execution this
+    session, before this assertion was written: NO exception, result=[] --
+    two real translation units silently vanish with no error.
+    """
+    manifest = os.path.join(_DSLM4887_FIXTURES, "manifest_list_append.cmake.txt")
+    with open(manifest) as f:
+        text = f.read()
+    assert "list(APPEND SUPERSLM_CORE_SOURCES" in text, (
+        "fixture verification FAILED: expected the list(APPEND) idiom in the "
+        "fixture's own text"
+    )
+    assert "src/real1.cpp" in text and "src/real2.cpp" in text, (
+        "fixture verification FAILED: expected two real source paths declared "
+        "somewhere in the fixture (via list(APPEND), not the initial set())"
+    )
+
+    _assert_raises_core_sources_derivation_error(
+        manifest,
+        "Fixture verified above: the list(APPEND) idiom genuinely declares two "
+        "real sources that derive_core_sources currently fails to capture.",
+    )
+
+
+def test_derive_core_sources_raises_on_comment_embedded_paren():
+    """A stray `)` inside a comment WITHIN the real set(...) block's own span
+    terminates the non-greedy capture early. Confirmed by direct execution
+    this session: NO exception, result=['src/real1.cpp'] -- a TRUNCATED list,
+    never zero, which is why this is a distinct raise condition from the
+    list(APPEND) case above: the ratified correction's own second clause
+    ("cannot positively confirm it reached the balanced closing parenthesis
+    ... a nested ) inside a comment or string literal within the captured
+    span") is what this construction exercises, not the "captures zero
+    source paths" clause.
+    """
+    manifest = os.path.join(_DSLM4887_FIXTURES, "manifest_comment_paren.cmake.txt")
+    with open(manifest) as f:
+        text = f.read()
+    assert "src/real1.cpp" in text and "src/real2.cpp" in text, (
+        "fixture verification FAILED: expected two real source paths declared "
+        "in the fixture's own set(...) block"
+    )
+    assert re.search(r"#.*\)", text), (
+        "fixture verification FAILED: expected a comment line containing a "
+        "stray ) inside the set(...) block's own span"
+    )
+
+    _assert_raises_core_sources_derivation_error(
+        manifest,
+        "Fixture verified above: a stray ) inside a comment truncates the "
+        "capture, silently dropping src/real2.cpp.",
+    )
+
+
+def test_derive_core_sources_raises_on_earlier_unrelated_mention():
+    """An earlier, unrelated mention of the variable's own name -- an old
+    prose note inside a comment, itself shaped like a real
+    set(SUPERSLM_CORE_SOURCES...) call -- that the naive, CMake-comment-blind
+    text regex matches FIRST. Confirmed by direct execution this session: NO
+    exception, result=[] -- the comment's own immediately-following `)` closes
+    the capture before the real block, two lines below, is ever reached.
+    """
+    manifest = os.path.join(_DSLM4887_FIXTURES, "manifest_earlier_mention.cmake.txt")
+    with open(manifest) as f:
+        text = f.read()
+    lines = text.splitlines()
+    comment_line_no = next(
+        i for i, line in enumerate(lines) if "old note" in line)
+    real_block_line_no = next(
+        i for i, line in enumerate(lines)
+        if line.strip().startswith("set(SUPERSLM_CORE_SOURCES") and "old note" not in line)
+    assert comment_line_no < real_block_line_no, (
+        "fixture verification FAILED: expected the unrelated mention to precede "
+        "the real set(...) block"
+    )
+    assert "set(SUPERSLM_CORE_SOURCES)" in lines[comment_line_no], (
+        "fixture verification FAILED: expected the comment's own prose to spell "
+        "out a matching set(SUPERSLM_CORE_SOURCES) shape verbatim"
+    )
+
+    _assert_raises_core_sources_derivation_error(
+        manifest,
+        "Fixture verified above: an earlier, unrelated comment shaped like a "
+        "real set(...) call is matched first, capturing its own empty span.",
+    )
+
+
+def test_derive_core_sources_control_ordinary_manifest_unaffected():
+    """Control: an ordinary, unambiguous manifest with no comment, no
+    list(APPEND), no earlier mention. Must NOT raise; must return exactly the
+    two declared sources -- the completeness self-check must not become a
+    false-REFUSE on the overwhelming majority of ordinary manifests,
+    including the real CMakeLists.txt this suite's own population eight reads
+    (17 sources, no comment inside the block's own span, confirmed at source).
+    """
+    manifest = os.path.join(_DSLM4887_FIXTURES, "manifest_control_clean.cmake.txt")
+    result = scan.derive_core_sources(manifest)
+    assert result == ["src/real1.cpp", "src/real2.cpp"], (
+        "an ordinary, unambiguous manifest must parse cleanly with no raise; "
+        "got {}".format(result)
+    )
+    # The real, currently-committed CMakeLists.txt must also be unaffected --
+    # population eight's own 17-source claim depends on this.
+    engine_root = os.path.dirname(_TESTS_ROOT)
+    real_cmake = os.path.join(engine_root, "CMakeLists.txt")
+    real_result = scan.derive_core_sources(real_cmake)
+    assert len(real_result) == 17, (
+        "the completeness self-check must not regress the real, currently-"
+        "committed CMakeLists.txt -- got {} sources: {}".format(
+            len(real_result), real_result)
+    )
+
+
+# ---------------------------------------------------------------------------
+# D-SLM4888 -- ci_gate_corpus must return False, never True, on an empty or
+# incomplete expected_symbols map. Reproduced by direct execution this
+# session, matching the coordinator's own reproduction exactly:
+# ci_gate_corpus({}, {}) -> True, today.
+# ---------------------------------------------------------------------------
+
+
+def test_ci_gate_corpus_vacuous_true_on_bare_empty_maps():
+    """The coordinator's own reproduction, verbatim: ci_gate_corpus({}, {})
+    returns True today, because "for every object path in expected_symbols"
+    is vacuously true of an empty map -- no per-object loop body ever runs,
+    so nothing can fail. A REJECT anywhere is supposed to fail the whole
+    corpus; an EMPTY corpus description trivially satisfies that same
+    contract's own literal wording, which is exactly why it must not be
+    trusted at face value.
+    """
+    assert scan.ci_gate_corpus({}, {}) is False, (
+        "ci_gate_corpus({{}}, {{}}) must return False -- an empty "
+        "expected_symbols map describes no corpus at all, and must not be "
+        "read as a corpus with nothing wrong in it"
+    )
+
+
+def test_ci_gate_corpus_end_to_end_zero_sources_manifest_would_pass():
+    """End-to-end, through the shipped functions in the shipped order (the
+    ticket's own explicit ask: "cell both, including the shipped driver
+    end-to-end"): a manifest using the list(APPEND) idiom -- the identical
+    fixture test_derive_core_sources_raises_on_list_append_idiom already
+    verified genuinely declares two real translation units that
+    derive_core_sources currently fails to capture -- flows through
+    enumerate_scan_targets (which calls derive_core_sources internally) to
+    ZERO targets, exactly reproducing the re-commissioning's own finding:
+    "0 translation units ... would PASS a real CI job, exit 0," out of a
+    real manifest edited to this exact idiom. This is the SAME defect as
+    test_derive_core_sources_raises_on_list_append_idiom pins (D-SLM4887)
+    composed with THIS test's own ci_gate_corpus assertion (D-SLM4888) --
+    both must be fixed for this end-to-end path to stop silently passing.
+
+    Today, BEFORE D-SLM4887's own fix lands, enumerate_scan_targets itself
+    already raises CoreSourcesDerivationError once population one's own fix
+    is in place (it calls derive_core_sources internally) -- so this cell
+    catches that expected exception first (confirming the two fixes compose
+    correctly end-to-end) and, absent it, falls through to the direct
+    ci_gate_corpus({}, {}) reproduction the driver's own empty-targets branch
+    would reach.
+    """
+    manifest = os.path.join(_DSLM4887_FIXTURES, "manifest_list_append.cmake.txt")
+    try:
+        targets = scan.enumerate_scan_targets(manifest_path=manifest,
+                                              build_dir=_FIXTURES)
+    except scan.CoreSourcesDerivationError:
+        # D-SLM4887's own fix has landed: the zero-sources manifest now
+        # raises before ci_gate_corpus is ever reached, which is the
+        # STRONGER of the two closures the ticket names ("both... including
+        # the shipped driver end-to-end") -- nothing further to assert.
+        return
+
+    assert targets == [], (
+        "fixture verification FAILED: expected enumerate_scan_targets to "
+        "silently derive ZERO targets from the list(APPEND) manifest today "
+        "(the exact pre-fix defect); got {}".format(targets)
+    )
+    # Mirrors run_fp_free_scan_real_corpus.main()'s own shape exactly: an
+    # empty `targets` list means the per-object loop never runs, so `results`
+    # and `expected_symbols` are both built (trivially) empty.
+    results = {}
+    expected_symbols = {}
+    assert scan.ci_gate_corpus(results, expected_symbols) is False, (
+        "ci_gate_corpus must return False for a zero-target corpus derived "
+        "from a manifest that genuinely declares real sources -- returning "
+        "True here is exactly '0 translation units ... would PASS a real CI "
+        "job, exit 0' (Claude/Popper/t2345-fp-scan-recommissioning-2026-08-27.md "
+        "Sec5.7)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Population sixteen -- the self-zeroing vxorps/vxorpd boundary (design Sec7
+# dim 11, D-SLM4889; the remedy for the prior review's own S1 landed at
+# 8a28460, but Poirot's own S2 grep-confirmed zero occurrences of
+# "vxorps"/"xorps" anywhere in this suite -- one of the four remedies proven
+# UNDETECTABLE by execution: reverting it alone, and all four together, left
+# the gating suite at 39 passed). Both directions confirmed by direct
+# execution this session, real VEX-encoded instructions, real capstone decode.
+# ---------------------------------------------------------------------------
+
+
+def test_population_16_vxorps_self_zeroing_must_accept():
+    """Must-accept: `vxorps xmm0, xmm0, xmm0` -- every operand the identical
+    register, the constant-zero-materialization idiom. Already correctly
+    ACCEPTs today (this cell pins it as a named regression guard, closing the
+    coverage hole Poirot's S2 measured, not a currently-broken behavior)."""
+    src = os.path.join(_FIXTURES, "pop16_vxorps.s")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "pop16.o")
+        try:
+            fc.compile_clang_asm(src, obj, "x86_64-pc-linux-gnu", extra_args=["-mavx"])
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        sections = fc.code_sections(obj, ".text")
+        insns = _decode_sections(sections, "x86-64")
+        vxorps_insns = [(i.mnemonic, i.op_str) for i in insns if i.mnemonic.lower() == "vxorps"]
+        assert len(vxorps_insns) == 2, (
+            "fixture verification FAILED: expected exactly two real vxorps "
+            "instructions decoded; found {}".format(vxorps_insns)
+        )
+
+        result = scan.scan_object(obj, isa="x86-64")
+        assert not result.refuse
+        assert result.verdicts.get("SelfZeroAccept") == "ACCEPT", (
+            "vxorps xmm0, xmm0, xmm0 (every operand identical) is the "
+            "self-zeroing idiom and must ACCEPT; verdict was "
+            "{}".format(result.verdicts.get("SelfZeroAccept"))
+        )
+
+
+def test_population_16_vxorps_differing_operands_must_reject():
+    """Must-reject: `vxorps xmm0, xmm1, xmm0` -- one operand differs, a
+    genuine bitwise XOR between two distinct register values (a sign-flip/
+    negation shape), not a zero-forming idiom. Already correctly REJECTs
+    today (companion control to the accept cell above, same fixture, same
+    object -- proving the boundary discriminates, not merely that vxorps as
+    a bare mnemonic is universally allowed)."""
+    src = os.path.join(_FIXTURES, "pop16_vxorps.s")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "pop16b.o")
+        try:
+            fc.compile_clang_asm(src, obj, "x86_64-pc-linux-gnu", extra_args=["-mavx"])
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        sections = fc.code_sections(obj, ".text")
+        insns = _decode_sections(sections, "x86-64")
+        differing = [i for i in insns
+                     if i.mnemonic.lower() == "vxorps" and len(set(
+                         o.strip() for o in (i.op_str or "").split(",") if o.strip())) > 1]
+        assert differing, (
+            "fixture verification FAILED: expected a real vxorps instruction "
+            "with at least one differing operand"
+        )
+
+        result = scan.scan_object(obj, isa="x86-64")
+        assert not result.refuse
+        assert result.verdicts.get("GenuineXorReject") == "REJECT", (
+            "vxorps xmm0, xmm1, xmm0 (operands differ) is genuine bitwise "
+            "arithmetic, not the self-zeroing idiom, and must REJECT; verdict "
+            "was {}".format(result.verdicts.get("GenuineXorReject"))
+        )
+
+
+# ---------------------------------------------------------------------------
+# Population seventeen -- check (C)'s relocation-resolve-then-classify
+# carve-out (design Sec4.1/Sec7 dim 11, D-SLM4886/D-SLM4889). THE ITEM THE
+# COORDINATOR NAMED AS THE ONE THAT MOVES THE PRODUCT CLAIM. Must-accept: a
+# relocated INDIRECT (memory-operand) call whose relocation resolves to a
+# symbol that IS itself the callable entity (here, via corpus_symbols -- a
+# sibling translation unit's own real function, not requiring any edit to the
+# production EXTERN_ALLOW list, which is a build-round vetting obligation,
+# not this ticket's own). Confirmed by direct execution this session: REJECTs
+# TODAY, before the fold-35 fix -- `_check_c_for_symbol` currently returns
+# False on `not _operand_is_direct_immediate(insn, isa)` BEFORE ever reading
+# reloc_by_offset's own target, exactly Poirot's Critical C1. Must-reject:
+# the ORIGINAL S2 construction (Helper/Caller, `jmp QWORD PTR [gp]`, gp a
+# real in-object DATA symbol whose contents -- not its address -- determine
+# the runtime target) -- confirmed REJECTing both before and after the fix,
+# the carve-out's own boundary, not a regression it introduces.
+# ---------------------------------------------------------------------------
+
+
+def test_population_17_carveout_import_thunk_shape_must_accept():
+    """Must-accept, the carve-out's own central claim: IndirectCallSibling
+    performs `call qword ptr [rip]`, a genuine indirect (memory-operand) x86
+    instruction, whose ELF relocation resolves to SiblingCallee -- a real
+    function DEFINED in a separate compiled object (pop17_carveout_callee.s),
+    undefined in THIS object's own symbol table, present in `corpus_symbols`.
+    This mirrors MSVC's own `__imp_<name>` import-thunk shape structurally
+    (an indirect call through a relocated pointer to the actual callable
+    entity) without requiring any edit to the production EXTERN_ALLOW list --
+    corpus_symbols is this suite's own, test-authored index, exactly as
+    design Sec4.1 gap (b) specifies. Confirmed by direct execution this
+    session, BEFORE this assertion was written: currently REJECTs (the
+    addressing-mode check fires and returns False before the relocation's
+    own target is ever read) -- Poirot's Critical C1, reproduced here on a
+    fixture this ticket authored rather than only cited from the casebook.
+    """
+    caller_src = os.path.join(_FIXTURES, "pop17_carveout_caller.s")
+    callee_src = os.path.join(_FIXTURES, "pop17_carveout_callee.s")
+    with fc.TempDir() as tmp:
+        caller_obj = os.path.join(tmp, "caller.o")
+        callee_obj = os.path.join(tmp, "callee.o")
+        try:
+            fc.compile_clang_asm(caller_src, caller_obj, "x86_64-pc-linux-gnu")
+            fc.compile_clang_asm(callee_src, callee_obj, "x86_64-pc-linux-gnu")
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+
+        sections = fc.code_sections(caller_obj, ".text")
+        insns = _decode_sections(sections, "x86-64")
+        call_insns = [i for i in insns if i.mnemonic.lower() == "call"]
+        assert call_insns, "fixture verification FAILED: expected a real call instruction"
+        assert "[rip" in (call_insns[0].op_str or "") or call_insns[0].op_str.strip().startswith("qword"), (
+            "fixture verification FAILED: expected a genuine memory-operand "
+            "(indirect) call; got operand string {!r}".format(call_insns[0].op_str)
+        )
+        with open(caller_obj, "rb") as f:
+            data = f.read()
+        _sections, _sym_by_raw, relocs = scan._parse_elf(data)
+        all_relocs = [r for rs in relocs.values() for r in rs]
+        assert all_relocs, (
+            "fixture verification FAILED: expected a real relocation on the "
+            "caller's own indirect call instruction"
+        )
+
+        callee_result = scan.scan_object(callee_obj, isa="x86-64")
+        assert callee_result.verdicts.get("SiblingCallee") == "ACCEPT", (
+            "SiblingCallee itself must independently ACCEPT on its own bytes -- "
+            "granting the caller's edge must never excuse the callee from its "
+            "own check"
+        )
+
+        corpus_symbols = frozenset({"SiblingCallee"})
+        result = scan.scan_object(caller_obj, isa="x86-64", corpus_symbols=corpus_symbols)
+        assert not result.refuse
+        assert result.verdicts.get("IndirectCallSibling") == "ACCEPT", (
+            "design Sec4.1 fold round 35 (D-SLM4886): resolve-then-classify -- "
+            "an indirect call/jmp whose relocation resolves to a symbol that IS "
+            "the callable entity (here, a corpus_symbols member) must ACCEPT "
+            "regardless of the addressing-mode encoding; verdict was {} "
+            "(Poirot's Critical C1: today's check rejects on addressing mode "
+            "BEFORE ever reading the relocation's own target)".format(
+                result.verdicts.get("IndirectCallSibling"))
+        )
+
+
+def test_population_17_carveout_function_pointer_must_reject():
+    """Must-reject, the carve-out's own boundary: the ORIGINAL S2
+    construction, Helper/Caller -- `jmp QWORD PTR [gp]`, `gp` a real,
+    in-object DATA symbol whose runtime CONTENTS (not its own address)
+    determine which function actually executes. This edge's relocation
+    resolves to `gp` itself -- the data HOLDER, never the callable entity --
+    which is exactly the shape the carve-out's own ratified text says stays
+    unvettable. Confirmed by direct execution this session: REJECTs today,
+    and must stay REJECTed after the fold-35 fix lands -- this is the fix's
+    own boundary, not a regression it introduces.
+    """
+    src = os.path.join(_FIXTURES, "pop17_carveout_reject.asm")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "reject.obj")
+        try:
+            fc.assemble_ml64(src, obj)
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        sections = fc.code_sections(obj, ".text")
+        insns = _decode_sections(sections, "x86-64")
+        jmp_insns = [i for i in insns if i.mnemonic.lower() == "jmp"]
+        assert jmp_insns, "fixture verification FAILED: expected a real jmp instruction"
+        assert "qword ptr" in (jmp_insns[0].op_str or "").lower(), (
+            "fixture verification FAILED: expected a genuine memory-operand "
+            "(indirect) jmp; got {!r}".format(jmp_insns[0].op_str)
+        )
+
+        result = scan.scan_object(obj, isa="x86-64")
+        assert not result.refuse
+        assert result.verdicts.get("Helper") == "ACCEPT", (
+            "Helper itself carries no FP instruction and must ACCEPT"
+        )
+        assert result.verdicts.get("Caller") == "REJECT", (
+            "jmp QWORD PTR [gp] (gp a data holder, not the callable entity) "
+            "must REJECT -- the carve-out's own boundary; verdict was "
+            "{}".format(result.verdicts.get("Caller"))
+        )
+
+
+# ---------------------------------------------------------------------------
+# Population eighteen -- the diagnostic surface's fail-closed behavior on a
+# missing disassembly (design Sec7 dim 11, D-SLM4889; the remedy for the
+# prior review's own S4 landed at 8a28460 -- MissingDisassemblyError already
+# exists at source -- but carries zero cells; one of the four remedies
+# proven UNDETECTABLE by execution). Both directions confirmed by direct
+# execution this session.
+# ---------------------------------------------------------------------------
+
+_POP18_FIXTURES = os.path.join(_FIXTURES, "pop18_fixtures")
+
+
+def test_population_18_diagnostic_missing_disassembly_must_reject():
+    """Must-reject: a manifest naming translation unit tu18_missing.cpp,
+    whose disassembly does NOT exist anywhere under disasm_dir --
+    build_call_graph and flagged_symbols must both raise
+    MissingDisassemblyError rather than silently reporting that translation
+    unit clean (indistinguishable, pre-fix, from a genuinely FP-free one).
+    Confirmed by direct execution this session: both already raise correctly
+    (Brunel's S4 remedy, 8a28460) -- this cell closes the coverage hole, not
+    a currently-broken behavior.
+    """
+    manifest = os.path.join(_POP18_FIXTURES, "manifest_missing.cmake.txt")
+    disasm_dir = os.path.join(_POP18_FIXTURES, "disasm")
+    missing_path = os.path.join(disasm_dir, "tu18_missing.disasm.txt")
+    assert not os.path.exists(missing_path), (
+        "fixture verification FAILED: tu18_missing.disasm.txt must NOT exist"
+    )
+
+    with pytest.raises(scan.MissingDisassemblyError):
+        scan.build_call_graph(manifest, disasm_dir)
+    with pytest.raises(scan.MissingDisassemblyError):
+        scan.flagged_symbols(manifest, disasm_dir)
+
+
+def test_population_18_diagnostic_present_disassembly_must_accept():
+    """Must-accept, the control: the identical machinery against a manifest
+    whose named translation unit's disassembly IS present -- confirmed by
+    direct execution this session: root18's own real `addsd` instruction
+    (verified present in the fixture's own disasm text below) is correctly
+    reported by flagged_symbols, and build_call_graph runs with no
+    exception, on both functions.
+    """
+    manifest = os.path.join(_POP18_FIXTURES, "manifest_present.cmake.txt")
+    disasm_dir = os.path.join(_POP18_FIXTURES, "disasm")
+    disasm_path = os.path.join(disasm_dir, "tu18.disasm.txt")
+    with open(disasm_path) as f:
+        disasm_text = f.read()
+    assert _verify_fp_mnemonic(disasm_text, "root18", re.compile(r"^addsd$")), (
+        "fixture verification FAILED: expected root18 to carry a real addsd "
+        "instruction in its own disassembly text"
+    )
+
+    graph = scan.build_call_graph(manifest, disasm_dir)
+    flagged = scan.flagged_symbols(manifest, disasm_dir)
+    assert isinstance(graph, dict)
+    assert flagged.get("root18") == ["addsd"], (
+        "flagged_symbols must report root18's own real addsd instruction when "
+        "its disassembly is present; got {}".format(flagged.get("root18"))
+    )
+
+
+# ---------------------------------------------------------------------------
+# Population nineteen -- ScanResult(refuse=True) on an unrecognised ISA or
+# object format (design Sec7 dim 11, D-SLM4889; the prior review's own M2
+# remedy landed at 8a28460 -- but carries zero cells; one of the four
+# remedies proven UNDETECTABLE by execution). Confirmed by direct execution
+# this session, all three legs.
+# ---------------------------------------------------------------------------
+
+
+def test_population_19_refuse_on_unrecognized_isa():
+    """Must-reject (REFUSE sense): a real, valid COFF object scanned with an
+    ISA string this reader's own decoder table does not recognise --
+    scan_object must return ScanResult(refuse=True, verdicts={}), never let
+    the ValueError _decoder raises propagate uncaught (which would silently
+    skip the leg in a caller's own try/loop rather than failing the job).
+    Confirmed by direct execution this session: already correct today.
+    """
+    src = os.path.join(_FIXTURES, "pop09_funclet_fp.cpp")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "pop19.obj")
+        try:
+            fc.compile_cl(src, obj)
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        result = scan.scan_object(obj, isa="bogus-isa-9000")
+        assert result.refuse is True, (
+            "an unrecognised ISA string must REFUSE (refuse=True), not raise "
+            "an uncaught exception nor silently ACCEPT/REJECT; got {}".format(result)
+        )
+        assert result.verdicts == {}, (
+            "guarantee (i): refuse implies an empty verdict map; got "
+            "{}".format(result.verdicts)
+        )
+
+
+def test_population_19_refuse_on_unrecognized_object_format():
+    """Must-reject (REFUSE sense): a file that is neither valid ELF nor a
+    known COFF machine type, scanned with a perfectly ordinary, recognised
+    ISA -- scan_object must REFUSE via the identical clause-(0) path,
+    reporting object_format="unknown" (Mach-O and any future format this
+    reader has never implemented is the named residual this exercises).
+    Confirmed by direct execution this session: already correct today.
+    """
+    with fc.TempDir() as tmp:
+        garbage = os.path.join(tmp, "not_an_object.bin")
+        with open(garbage, "wb") as f:
+            f.write(b"NOTANOBJECTFILEATALLxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+        result = scan.scan_object(garbage, isa="x86-64")
+        assert result.refuse is True, (
+            "a file that is neither ELF nor a recognised COFF machine type "
+            "must REFUSE; got {}".format(result)
+        )
+        assert result.object_format == "unknown"
+        assert result.verdicts == {}
+
+
+def test_population_19_recognized_pair_control_unaffected():
+    """Must-accept, the control: an ordinary, recognised (isa, format) pair
+    must be completely unaffected by the refuse-on-unrecognised path --
+    reusing population nine's own real fixture, confirming a normal ACCEPT/
+    REJECT verdict set is produced, object_format read correctly, no
+    spurious REFUSE.
+    """
+    src = os.path.join(_FIXTURES, "pop09_funclet_fp.cpp")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "pop19_control.obj")
+        try:
+            fc.compile_cl(src, obj)
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        result = scan.scan_object(obj, isa="x86-64")
+        assert result.object_format == "coff"
+        assert not result.refuse
+        assert result.verdicts, "expected a non-empty verdict map on a recognised pair"
+
+
+# ---------------------------------------------------------------------------
+# Population twenty -- per-section local_starts keying (design Sec7 dim 11,
+# D-SLM4889; Poirot's own O3 finding, already fixed at 8a28460 via
+# local_starts_by_section keyed on section.index). A pooled, cross-section
+# local_starts set is a LATENT correctness bug the real corpus never
+# exercises (MSVC relocates every real cross-function edge) -- this
+# population constructs the exact discriminating shape at the level the
+# defect lives: the arguments _check_c_for_symbol itself receives, real
+# capstone-decoded instructions, real per-section extent semantics. A
+# genuine assembler can never emit a no-relocation cross-section coincidence
+# (cross-section displacements always need a relocation, since sections get
+# independent final addresses at link time) -- this is why the discriminating
+# half is necessarily white-box, matching Poirot's own likely methodology.
+# ---------------------------------------------------------------------------
+
+
+def test_population_20_local_starts_cross_section_confusion_rejected():
+    """Discriminating construction: a real, capstone-decoded `jmp 0x20`
+    instruction (E9 rel32, decoded target offset 32) placed in a section
+    whose OWN real symbol starts are {0, 16} -- 32 belongs to nothing in
+    THIS section. Per-section-correct local_starts ({0, 16}) must REJECT
+    this edge (no relocation, no matching local target); a pooled,
+    cross-section local_starts set ({0, 16, 32}, simulating a DIFFERENT
+    section's own symbol leaking in, the pre-8a28460 shape) would incorrectly
+    ACCEPT it. Confirmed by direct execution this session, both directions,
+    against the actual `_check_c_for_symbol` function scan_object itself
+    calls (not a reimplementation of it).
+    """
+    md = scan._decoder("x86-64")
+    target = 32
+    addr = 0
+    rel32 = target - (addr + 5)
+    code = bytes([0xE9]) + rel32.to_bytes(4, "little", signed=True)
+    insns = list(md.disasm(code, addr))
+    assert len(insns) == 1, "fixture verification FAILED: expected exactly one decoded jmp"
+    insn = insns[0]
+    assert insn.mnemonic.lower() == "jmp" and insn.operands[0].imm == target, (
+        "fixture verification FAILED: expected a real jmp decoding to target "
+        "offset {}; got {} {}".format(target, insn.mnemonic, insn.op_str)
+    )
+
+    class _FakeSection:
+        index = 0
+
+    sec = _FakeSection()
+    ext_start, ext_end = 0, 5
+
+    local_starts_correct = {0, 16}  # THIS section's own real symbol starts only
+    result_correct = scan._check_c_for_symbol(
+        md, sec, ext_start, ext_end, [insn], "x86-64", "elf",
+        reloc_by_offset={}, sym_by_raw={}, local_starts=local_starts_correct)
+    assert result_correct is False, (
+        "per-section-correct local_starts must REJECT an edge whose target "
+        "offset (32) matches nothing in THIS section's own symbol starts "
+        "({0, 16}) -- got ACCEPT, which would be a false accept"
+    )
+
+    local_starts_pooled_buggy = {0, 16, 32}  # simulates a DIFFERENT section's symbol leaking in
+    result_buggy = scan._check_c_for_symbol(
+        md, sec, ext_start, ext_end, [insn], "x86-64", "elf",
+        reloc_by_offset={}, sym_by_raw={}, local_starts=local_starts_pooled_buggy)
+    assert result_buggy is True, (
+        "fixture verification FAILED: expected the POOLED (cross-section, "
+        "pre-8a28460-shaped) local_starts set to demonstrate the false-accept "
+        "this population's own fix closes -- if this is False too, the "
+        "discriminating shape itself is broken, not merely already-fixed"
+    )
+
+
+def test_population_20_single_section_corpus_unregressed_control():
+    """Must-accept: the existing single-section corpus, unregressed --
+    reusing population eleven's own real MSVC/COFF/x86-64 fixture end-to-end
+    through the real scan_object pipeline (which internally builds
+    local_starts_by_section keyed per real section.index), confirming the
+    per-section keying fix changed nothing about the ordinary, single-code-
+    section case every other population in this suite already exercises.
+    """
+    src = os.path.join(_FIXTURES, "pop11_msvc_x64.asm")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "pop20_control.obj")
+        try:
+            fc.assemble_ml64(src, obj)
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        result = scan.scan_object(obj, isa="x86-64")
+        assert not result.refuse
+        assert result.verdicts.get("HashSite") == "ACCEPT"
+        assert result.verdicts.get("BodyDivide") == "REJECT"
+
+
+# ---------------------------------------------------------------------------
+# Population twenty-one -- the empty-extent byte charge's own arithmetic
+# (design Sec7 dim 11, D-SLM4889; Poirot's own M2 finding: the O5 remedy
+# charges sec_size ONCE PER EMPTY EXTENT, not once per section -- three empty
+# extents on a 64-byte section produces unclassified_bytes=192, exceeding
+# the section's own real size). White-box, at the level the defect lives
+# (_account_section's own per-extent accumulation loop) -- a real compiler
+# does not emit multiple function symbols placed at or beyond a section's
+# own declared end, so this is necessarily a synthetic construction of the
+# module's own internal _CodeSection/_Sym types, matching population
+# twenty's own disclosed methodology.
+# ---------------------------------------------------------------------------
+
+
+def test_population_21_single_empty_extent_charges_true_span():
+    """Must-accept, the control: exactly ONE empty extent (a function symbol
+    placed at the section's own declared end, offset 64 on a 64-byte
+    section) must charge unclassified_bytes == sec_size exactly ONCE.
+    Confirmed by direct execution this session: already correct today (the
+    multiplicative bug requires MORE than one empty extent in the same
+    section to manifest at all).
+    """
+    md = scan._decoder("x86-64")
+    sec = scan._CodeSection(
+        index=0, name=".text", data=b"\x90" * 64,
+        symbols=[scan._Sym(name="FuncA", value=64, size=0,
+                            is_function=True, is_witness=True, raw_index=1)],
+    )
+    ok, unclassified, _per_symbol = scan._account_section(sec, "x86-64", md)
+    assert ok is False, "a single empty extent must REFUSE the whole section"
+    assert unclassified == 64, (
+        "a section with exactly one empty extent must charge its own true "
+        "byte span (64) exactly once; got {}".format(unclassified)
+    )
+
+
+def test_population_21_multiple_empty_extents_charge_once_not_per_extent():
+    """Discriminating construction: THREE function symbols (FuncA@64,
+    FuncB@70, FuncC@80), each individually placed at or beyond the same
+    64-byte section's own declared end -- each independently computes an
+    empty (or negative-span) extent. Confirmed by direct execution this
+    session, BEFORE this assertion was written: today charges
+    unclassified_bytes=192 (3 x 64) -- exceeding the section's own real size,
+    Poirot's own M2 measurement exactly. The corrected accounting must charge
+    the section's own unclassified span ONCE, however many empty extents it
+    decomposes into: unclassified_bytes == sec_size (64), not a multiple of
+    it.
+    """
+    md = scan._decoder("x86-64")
+    sec = scan._CodeSection(
+        index=0, name=".text", data=b"\x90" * 64,
+        symbols=[
+            scan._Sym(name="FuncA", value=64, size=0,
+                      is_function=True, is_witness=True, raw_index=1),
+            scan._Sym(name="FuncB", value=70, size=0,
+                      is_function=True, is_witness=True, raw_index=2),
+            scan._Sym(name="FuncC", value=80, size=0,
+                      is_function=True, is_witness=True, raw_index=3),
+        ],
+    )
+    ok, unclassified, _per_symbol = scan._account_section(sec, "x86-64", md)
+    assert ok is False, "three empty extents must REFUSE the whole section"
+    assert unclassified == 64, (
+        "unclassified_bytes must charge the section's own true size (64) "
+        "ONCE, regardless of how many empty extents it decomposes into -- "
+        "Poirot's own M2: today this reads {} (an object of 64 real bytes "
+        "cannot have more than 64 unclassified bytes in it)".format(unclassified)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Poirot's O5 (Claude/Poirot/8a28460-t2344-fp-scan-fix-round-confirmation.md,
+# routed to the test author alongside M4/O4, above): run_fp_free_scan_real_
+# corpus.py's own _msvc_target_flags captures `([^)]*)` after PRIVATE, which
+# terminates at the FIRST literal `)` inside the captured span -- silent on a
+# partial match, loud only on zero matches. Confirmed by direct execution
+# this session: a target_compile_options(... PRIVATE ...) line whose own
+# flag list contains a literal `)` (a macro-with-arguments define, or a CMake
+# generator expression that itself embeds one) truncates the returned flag
+# list silently, with everything after the embedded `)` -- including further,
+# real flags -- silently dropped. This is a documentation/regression pin of a
+# disclosed, Observation-level defect, not an assertion of a not-yet-ratified
+# fix contract (no D-SLM number specifies what the corrected behavior must
+# be); the finding is filed as an open residual for whoever next specifies
+# the correction, per this campaign's own disclosure discipline.
+# ---------------------------------------------------------------------------
+
+
+def test_msvc_target_flags_silently_truncates_on_embedded_paren():
+    """Documents Poirot's O5 exactly: a target_compile_options(superslm
+    PRIVATE ...) line whose flags contain a literal embedded `)` (here, a
+    macro-with-arguments define, `/DSOME_MACRO(x)=1`) causes
+    _msvc_target_flags to silently return a TRUNCATED, partially-corrupted
+    flag list -- both the offending flag itself (missing its own closing
+    paren and everything after it) and every flag genuinely declared after
+    it (here, /EHsc) are silently lost, with no exception raised. Verified
+    against the control (no embedded paren) first, so the discrimination is
+    real: the same function, same regex, only the fixture's own flag content
+    differs.
+    """
+    _here = os.path.dirname(os.path.abspath(__file__))
+    ci_dir = os.path.abspath(os.path.join(_here, "..", "ci"))
+    if ci_dir not in sys.path:
+        sys.path.insert(0, ci_dir)
+    import run_fp_free_scan_real_corpus as runner
+
+    control_text = (
+        "if(MSVC)\n"
+        "    target_compile_options(superslm PRIVATE /W4 /fp:precise /EHsc)\n"
+        "else()\n"
+        "    target_compile_options(superslm PRIVATE -Wall)\n"
+        "endif()\n"
+    )
+    truncating_text = (
+        "if(MSVC)\n"
+        "    target_compile_options(superslm PRIVATE /W4 /DSOME_MACRO(x)=1 /EHsc)\n"
+        "else()\n"
+        "    target_compile_options(superslm PRIVATE -Wall)\n"
+        "endif()\n"
+    )
+
+    with fc.TempDir() as tmp:
+        control_path = os.path.join(tmp, "control.cmake.txt")
+        truncating_path = os.path.join(tmp, "truncating.cmake.txt")
+        with open(control_path, "w") as f:
+            f.write(control_text)
+        with open(truncating_path, "w") as f:
+            f.write(truncating_text)
+
+        orig_cmakelists = runner._CMAKELISTS
+        try:
+            runner._CMAKELISTS = control_path
+            control_flags = runner._msvc_target_flags("superslm")
+        finally:
+            runner._CMAKELISTS = orig_cmakelists
+        assert control_flags == ["/W4", "/fp:precise", "/EHsc"], (
+            "control fixture must parse cleanly and completely; got "
+            "{}".format(control_flags)
+        )
+
+        try:
+            runner._CMAKELISTS = truncating_path
+            truncated_flags = runner._msvc_target_flags("superslm")
+        finally:
+            runner._CMAKELISTS = orig_cmakelists
+
+        assert "/EHsc" not in truncated_flags, (
+            "documents Poirot's O5: /EHsc, genuinely declared after the "
+            "embedded ), is silently dropped -- if this now fails, the "
+            "truncation defect has been fixed and this pin should be "
+            "updated/retired rather than left asserting a since-corrected "
+            "defect; got {}".format(truncated_flags)
+        )
+        assert not any(f == "/DSOME_MACRO(x)=1" for f in truncated_flags), (
+            "documents Poirot's O5: the offending flag itself is also "
+            "corrupted (missing its own closing paren and suffix), not just "
+            "the flags after it; got {}".format(truncated_flags)
         )

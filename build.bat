@@ -1493,6 +1493,35 @@ rem build's own writable scope: a `--collect-only` count check, immediately belo
 rem BUILD the moment the number of deselected cells is not exactly 2 -- so a third cell silently
 rem ceasing to match (or a fourth deselect quietly added) is a loud build failure, not a permanently
 rem invisible batch-file string.
+rem T-2347 (Curie): fold round 35 (Claude/Vitruvius/t2265-fold35-delta-manifest.md) -- design
+rem Sec4.1's two new refusal contracts (derive_core_sources raises CoreSourcesDerivationError,
+rem D-SLM4887; ci_gate_corpus closes its own vacuous-True side, D-SLM4888), Sec7 dim 11's six new
+rem populations (sixteenth-twenty-first, D-SLM4889: self-zeroing vxorps/vxorpd; check (C)'s
+rem relocation-resolve-then-classify carve-out, D-SLM4886; the diagnostic surface's fail-closed
+rem behavior; refuse=True on an unrecognised ISA/format; per-section local_starts keying; the
+rem empty-extent byte charge), and the three findings Poirot's 8a28460-t2344 casebook routes to the
+rem test author (M4: fp_scan_common.compile_cl_release's own hardcoded flag duplication -- FIXED IN
+rem PLACE this ticket, since it is this suite's own test-helper file; O4: populations eight and ten
+rem migrated to xfail(strict=True), S5's own structural fix, now actually landed; O5:
+rem run_fp_free_scan_real_corpus._msvc_target_flags's silent truncation on an embedded ), documented
+rem as a disclosed residual, not fixed -- no ratified correction exists for it yet). 20 new cells:
+rem 7 newly RED for the newly-specified behaviour (check (C)'s carve-out must-accept; all three
+rem derive_core_sources raise reproductions; both ci_gate_corpus vacuous-True cells; the empty-extent
+rem multi-charge cell) and 13 confirmatory/green (the prior fix round's own remedies for
+rem vxorps/xorps, the diagnostic surface's MissingDisassemblyError, refuse=True on an unrecognised
+rem ISA/format, and the per-section local_starts keying were all already correct but carried ZERO
+rem cells anywhere in this suite -- Poirot's own S2: reverting all four together left the gating
+rem suite at 39 passed, unchanged). Re-executed this session: 61 collected, 7 failed (the newly-red
+rem cells above), 52 passed, 2 xfailed (populations eight/ten, now marked in the test file itself
+rem rather than only in this batch file's own --deselect strings) -- reproduced twice, stable.
+rem NOTE: this file's own --deselect flags below still name populations eight and ten by nodeid;
+rem they remain collected as normal and simply hit their own new xfail(strict=True) markers when run
+rem WITHOUT --deselect (confirmed this session: `2 xfailed` with no --deselect, `2 deselected` with
+rem it, both stable). Removing the now-redundant --deselect flags and the --collect-only count guard
+rem above (since xfail(strict=True) now provides the identical drift protection structurally, inside
+rem the test file, per S5's own original intent) is a build-round follow-up, routed back, not done
+rem by this ticket (test-file edits are Curie's own writable scope; this batch file's own gating
+rem command line is not).
 pushd .
 set t2326_scan_ec=0
 where python >nul 2>nul
@@ -1582,6 +1611,21 @@ rem      count is not exactly 2, per S5's own structural fix (a full `xfail(stri
 rem      needs an edit to this test file, out of this build round's own writable scope, and is routed
 rem      back to whoever next touches it). ANY nonzero exit from the 39 cells this run actually
 rem      executes is a real regression.
+rem      T-2347 (Curie): fold round 35's own two new refusal contracts and six new Coverage Model
+rem      populations (sixteenth-twenty-first) are AUTHORED, not built, this round -- 7 newly RED for
+rem      the newly-specified behaviour (D-SLM4886/4887/4888), 13 confirmatory/green (D-SLM4889's
+rem      remedies, already correct, previously uncovered). THIS CHANGES WHAT "a real regression"
+rem      MEANS UNTIL THE NEXT BUILD ROUND: the gating pytest invocation above deselects ONLY
+rem      populations eight and ten by name, so it NOW COLLECTS AND RUNS all 20 of this ticket's own
+rem      new cells alongside the pre-existing 39 -- 59 executed, EXPECTED 7 failed / 52 passed, which
+rem      WILL set t2326_scan_ec=1 and fail this build, deliberately, exactly as T-2333's and T-2342's
+rem      own new red cells each did in their own rounds until the following build round closed them.
+rem      This is this ticket's own intended EXIT state (red for the newly specified behaviour and
+rem      nothing else), not a regression to chase -- the next build round closes it by building the
+rem      carve-out (D-SLM4886), the two refusal contracts (D-SLM4887/D-SLM4888), and the empty-extent
+rem      once-per-section charge, at which point all 7 should flip to passing with no cell edited to
+rem      reach that state. A nonzero exit here should be read against this comment's own 7-failure
+rem      list, above, before being treated as an unrelated new regression.
 out\superslm_tests.exe
 set ec=%errorlevel%
 if not %b1_ec%==0 set ec=%b1_ec%

@@ -1,0 +1,7 @@
+# T-2347 (Curie) -- population eighteen's must-reject half: the manifest
+# names a translation unit (tu18_missing.cpp) whose disassembly does NOT
+# exist anywhere under disasm_dir -- build_call_graph/flagged_symbols must
+# raise MissingDisassemblyError rather than silently reporting it clean.
+set(SUPERSLM_CORE_SOURCES
+    src/tu18_missing.cpp
+)
