@@ -1526,6 +1526,21 @@ rem the gating run directly, the same way any other genuine regression does). Th
 rem now COLLECTS AND RUNS all 61 of this suite's own cells (39 pre-existing + 20 fold round 35, T-
 rem 2347) -- expected 59 passed, 2 xfailed, 0 failed, reproduced this session (see this file's own
 rem NON-ZERO-EXIT PATHS note, item 4, below, for the up-to-date accounting).
+rem T-2366 (Curie), D-SLM5001 -- the invocation below now targets the whole SUITE DIRECTORY, not
+rem only test_check_fp_free_scan.py: a new sibling file, test_ci_gate_wiring.py (D-SLM5001 item 6,
+rem CI reachability -- this ticket's own writable scope names "tests/t2296-fp-free-open-red-suite/
+rem and any new test file it needs," never tools/ci/, which is where this repo's own analogous
+rem check_tests_have_build_recipe.py precedent otherwise lives), would sit uncollected under the
+rem prior single-file invocation. This is fold round 39's own red suite (design Sec4.1/Sec5.4/
+rem Sec5.5/Sec7 dim 11 as amended by fold round 39, routed by T-2364's strike and T-2365's coverage
+rem audit, D-SLM5001): 9 newly RED for the newly-specified behaviour the fold wrote as accomplished
+rem but never built (the gate reading check (C) at all; check (A)'s eight-mnemonic bitwise-family
+rem widening, including population sixteen's own reconciled collision; the p/vp-prefix rule's
+rem vitality census; D-SLM4359's seven switch-jump-table symbols; the CI wiring, two cells), 4 newly
+rem green (already-correct regression guards carrying zero cells until this ticket: the gate's own
+rem must-reject control, the p/vp deny-list's own mutation proof, and scan_build_output.py's
+rem fail-closed membership discipline, both legs). See this file's own NON-ZERO-EXIT PATHS note,
+rem item 4, below, for the up-to-date accounting.
 pushd .
 set t2326_scan_ec=0
 rem T-2348 (Brunel): initialized here, OUTSIDE every nested if-block below, so the sentinel is
@@ -1538,7 +1553,7 @@ where python >nul 2>nul
 if not errorlevel 1 (
 	python -c "import pytest" >nul 2>nul
 	if not errorlevel 1 (
-		python -m pytest tests\t2296-fp-free-open-red-suite\test_check_fp_free_scan.py -q
+		python -m pytest tests\t2296-fp-free-open-red-suite -q
 		if errorlevel 1 (
 			set t2326_scan_ec=1
 		)
@@ -1642,6 +1657,32 @@ rem      2 xfailed, 0 failed -- every one of fold round 35's own 7 newly-red cel
 rem      genuine grading reason, no cell was edited to reach that state, and the 52 previously-green
 rem      cells (T-2326 through T-2343) are unregressed. ANY nonzero exit from this pytest invocation
 rem      is now a real regression against this 61-collected/59-passed/2-xfailed/0-failed baseline.
+rem      T-2366 (Curie), D-SLM5001: the invocation above now runs the whole suite directory
+rem      (test_check_fp_free_scan.py plus a new sibling file, test_ci_gate_wiring.py -- D-SLM5001
+rem      item 6, CI reachability). This ticket authors tests only, builds nothing, and adds 12 new
+rem      cells realizing the six gaps T-2364's strike and T-2365's coverage audit both found in fold
+rem      round 39's own text: (1) the gate's verdict must not read check (C) -- one RED cell
+rem      (test_gate_must_not_fail_on_a_check_c_only_reject) plus its own GREEN must-reject control;
+rem      (2) check (A)'s eight-mnemonic bitwise-family widening, D-SLM4987 -- two RED cells (the
+rem      sixteen-mnemonic sweep and its real-corpus leg), plus population sixteen's own committed
+rem      cell reconciled in place rather than left asserting the reversed verdict (now RED -- it was
+rem      GREEN before this ticket, since D-SLM4987 requires the opposite verdict from what that cell
+rem      asserted pre-fold-39); (3) the p/vp-prefix rule's vitality pin, D-SLM4999 -- two RED cells
+rem      (the census-and-violation cell, the future-mnemonic mutation proof), plus one GREEN
+rem      mutation proof that the deny list is load-bearing for KNOWN escapes; (4) D-SLM4359's seven
+rem      switch-jump-table symbols -- one RED real-corpus sweep (7 of 7 still block the gate); (5)
+rem      scan_build_output.py's fail-closed membership discipline, design Sec7 dim 11's thirty-sixth
+rem      population -- two GREEN cells, already correct; (6) CI reachability -- two RED cells in the
+rem      new sibling file (scan_build_output.py is referenced nowhere under .github/workflows/). Net
+rem      this round: 73 collected (61 prior + 12 new), 62 passed, 2 xfailed, 9 failed. THIS CHANGES
+rem      WHAT "a real regression" MEANS UNTIL THE NEXT BUILD ROUND, exactly as fold round 35's own
+rem      red cells did above: the gating pytest invocation now executes 9 cells expected to fail,
+rem      deliberately, until the next build round builds the gate's own check-(C) exclusion, check
+rem      (A)'s widening, D-SLM4359's full seven-symbol restructure, and the CI rewiring -- at which
+rem      point all 9 should flip to passing with no cell edited to reach that state (per this
+rem      ticket's own casebook, Claude/Curie/t2366-fp-gate-red-suite-2026-08-28.md, for the full
+rem      per-cell accounting). A nonzero exit here should be read against this comment's own
+rem      9-failure list before being treated as an unrelated new regression.
 out\superslm_tests.exe
 set ec=%errorlevel%
 if not %b1_ec%==0 set ec=%b1_ec%
