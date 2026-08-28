@@ -14,14 +14,17 @@ belong in the ordinary gating run. The REAL population-reproduction evidence
 -- that this module actually reproduces the ten historical instances found
 by hand across `Claude/Poirot/8a28460-...` and `Claude/Poirot/3cd1a2b-...`,
 by executing the real repository's real history -- is not repeated here as a
-fast unit cell: each of those replays a full `tests/t2296-fp-free-open-red-
-suite` run (order 30s) against real historical commits, so folding all ten
-into this file would turn an ordinary `pytest` invocation into a 10+ minute
-one. That evidence is `Claude/Brunel/t2352-detectability-check-build-
-2026-08-27.md`'s own reproduction table, executed and named per instance,
-and `tests/ci/test_check_round_detectability_historical.py` carries a
-runnable (not gating) subset of it for a later session to re-run without
-re-deriving the commit list from the build log.
+unit cell, deliberately: each of those replays a full `tests/t2296-fp-free-
+open-red-suite` run (order 30s) against a real historical commit, so folding
+all ten into this file would add ~5 minutes to every `tests/ci -q` run this
+project already has, for a fixed historical fact that does not change
+between runs. Registering a slow/opt-in marker for that (this project's own
+`upstream` marker in the root `pytest.ini` is the precedent) is a shared-
+config change outside this ticket's writable scope. The evidence itself is
+real, executed, and named per instance in `Claude/Brunel/t2352-
+detectability-check-build-2026-08-27.md` Sec4 -- every one of the ten,
+plus this sweep's own independently-found population, with the exact
+command and output for each.
 
 WHAT THIS COVERS: hunk splitting on a file with 1 vs N changes; reverse-apply
 succeeding on an isolated hunk and failing (then combining) on an

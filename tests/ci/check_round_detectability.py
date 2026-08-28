@@ -86,6 +86,19 @@ demonstrated (T-2352 brief):
     "the suite's outcome changed" but may be detecting a syntax dependency
     rather than a behavioural one -- reported with its own error text so a
     reader does not mistake a coincidental crash for a targeted assertion.
+  - MEASURED, not hypothetical: a git hunk that BUNDLES a genuinely-covered
+    remedy with a genuinely-uncovered one reads DETECTED as a whole, hiding
+    the uncovered half -- this is not a theoretical edge case, it is what
+    this module's own hunk-level sweep produced on 5 of the 10 historical
+    T-2352 instances (`Claude/Brunel/t2352-detectability-check-build-
+    2026-08-27.md` Sec4), each requiring a hand-isolated, source-level
+    mutation (keeping the bundled remedy's surrounding refactor intact) to
+    reveal the uncovered sub-change underneath a DETECTED hunk. A caller
+    who trusts a raw DETECTED verdict on a large, multi-remedy hunk without
+    that finer check is trusting the coupling, not the coverage. Splitting
+    each remedy into its own commit-time hunk (already good practice) is
+    the structural fix; this module does not do that decomposition for a
+    caller today.
 
 USAGE.
     python tests/ci/check_round_detectability.py \\
