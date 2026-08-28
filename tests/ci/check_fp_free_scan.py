@@ -487,6 +487,7 @@ def _account_section(section: _CodeSection, isa: str, md):
     sec_size = len(section.data)
     ok = True
     unclassified = 0
+    empty_extent_charged = False
     per_symbol_insns: dict = {}
 
     cursor = 0
@@ -521,7 +522,17 @@ def _account_section(section: _CodeSection, isa: str, md):
             # own total size, so a caller reading unclassified_bytes alone
             # sees a nonzero figure whenever any code symbol in it failed
             # this test, whichever shape the failure took.
-            unclassified += sec_size
+            #
+            # T-2348 (Brunel), Poirot's M2 (8a28460-t2344 confirmation): the
+            # O5 remedy above charged sec_size ONCE PER EMPTY EXTENT -- three
+            # empty extents on one 64-byte section read unclassified_bytes
+            # 192, three times the section's own real size. The section's
+            # own attribution became unverifiable once; charge its size once,
+            # however many empty extents that single failure decomposes
+            # into.
+            if not empty_extent_charged:
+                unclassified += sec_size
+                empty_extent_charged = True
             continue
         success, insns, stopped_at = _chain_decode(md, section.data, e_start, e_end)
         if not success:
@@ -584,18 +595,29 @@ _X86_VEC_MOVE_ALLOW = {
 
 # 3DNow int->float (genuinely arithmetic) plus the AVX-512 BF16 dot-product/
 # convert family (T-2343, Brunel; design Sec4.1 fold round 34 gap (e),
-# D-SLM4860) -- BOTH real renderings of the same instruction are excluded,
-# not one spelling: `vdpbf16ps` is the design's own printed name, and
-# `vpdpbf16ps` is the SAME instruction under the rendering that also matches
-# the vp-prefix structural accept (conductor-measured: the two spellings
-# classified oppositely before this fix). `vcvtne2ps2bf16`/`vcvtneps2bf16`
-# (format conversion, not dot-product) are the same family's other two
-# members. None is emitted by any toolchain in the matrix without explicit
-# AVX-512-BF16 intrinsics; none is vetted onto VEC_MOVE_ALLOW, since no
-# legitimate use of BFloat16 arithmetic exists anywhere in
-# SUPERSLM_CORE_SOURCES. `vpdpbusd`/`vpdpwssd` (VNNI, genuine packed-integer
-# dot-product) are deliberately NOT excluded -- they stay accepted under the
-# structural rule, per the named control in test_bf16_x86_rendering_pair.
+# D-SLM4860) -- `vdpbf16ps` is the design's own printed name; `vpdpbf16ps` is
+# the SAME instruction under the rendering that also matches the vp-prefix
+# structural accept (conductor-measured: the two spellings classified
+# oppositely before this fix), and it is the ONLY one of the four entries
+# below that reaches the p/vp branch at all under the shipped decoder's own
+# mnemonic vocabulary -- `vdpbf16ps`, `vcvtne2ps2bf16`, and `vcvtneps2bf16`
+# start with neither `p` nor `vp`, so they already fall off the movement
+# allowlist and REJECT via this function's own default at the bottom,
+# whether or not they are named here (8a28460-t2344's own O2: removing any
+# of the three from this set changes `_x86_check_a`'s answer for none of
+# them, executed). All four are still named explicitly rather than pruned
+# to the one load-bearing entry: this is a closed, individually-vetted
+# family (`vcvtne2ps2bf16`/`vcvtneps2bf16` are format conversion, not
+# dot-product, the family's other two members), and keeping every member
+# listed documents the whole vetting decision in one place against a future
+# capstone mnemonic-naming change, rather than only the entry today's
+# decoder happens to need. None is emitted by any toolchain in the matrix
+# without explicit AVX-512-BF16 intrinsics; none is vetted onto
+# VEC_MOVE_ALLOW, since no legitimate use of BFloat16 arithmetic exists
+# anywhere in SUPERSLM_CORE_SOURCES. `vpdpbusd`/`vpdpwssd` (VNNI, genuine
+# packed-integer dot-product) are deliberately NOT excluded -- they stay
+# accepted under the structural rule, per the named control in
+# test_bf16_x86_rendering_pair.
 _X86_P_PREFIX_EXCLUDE = {
     "pi2fd", "pi2fw",
     "vdpbf16ps", "vpdpbf16ps", "vcvtne2ps2bf16", "vcvtneps2bf16",
@@ -920,29 +942,49 @@ def _check_c_for_symbol(md, section: _CodeSection, ext_start: int, ext_end: int,
                 break
 
         if reloc_off is not None:
-            # T-2343 (Brunel), Poirot's S2: a relocation's presence says the
-            # TARGET SYMBOL is known; it says nothing about whether THIS
-            # instruction's own addressing mode is direct or indirect. A
-            # relocated memory operand (e.g. `jmp QWORD PTR [gp]`, `gp` a
-            # function pointer in .data) still names an in-object symbol via
-            # relocation, and was silently accepted with no vetting at all
-            # before this fix. Sec4.1(C) is explicit that an indirect call/
-            # jmp -- register or memory operand -- "cannot be statically
-            # vetted by this method and is rejected," independent of whether
-            # a relocation happens to resolve what it points at.
-            if not _operand_is_direct_immediate(insn, isa):
-                return False
+            # T-2348 (Brunel), design Sec4.1 fold round 35 (D-SLM4886),
+            # closing Poirot's Critical C1: resolve the relocation, THEN
+            # classify -- a relocation's presence says the TARGET SYMBOL is
+            # known; the fold-34 remedy (T-2343, Poirot's S2) applied the
+            # addressing-mode test before ever reading that target, which
+            # rejected every relocated memory-operand edge uniformly,
+            # including MSVC's own `call qword ptr [__imp_<name>]`
+            # dllimport rendering -- whose relocation names the exact
+            # callee, a static fact, not a runtime-determined value. The
+            # addressing-mode test is reserved for the one case it is
+            # actually about: an in-object relocation target that is NOT
+            # itself a callable entity (a data symbol whose runtime
+            # CONTENTS, not its address, determine which function actually
+            # runs -- the original S2 construction, `jmp QWORD PTR [gp]`,
+            # `gp` a QWORD in .data).
             raw_idx = reloc_by_offset[reloc_off]
             target_sym = sym_by_raw.get(raw_idx)
             if target_sym is None:
                 return False
             is_external = (object_format == "coff" and target_sym.get("sec_num", -1) == 0) or \
                            (object_format == "elf" and target_sym.get("shndx", -1) == 0)
-            if not is_external:
-                continue  # in-corpus target (this object): no separate vetting needed
-            if corpus_symbols is not None and target_sym["name"] in corpus_symbols:
-                continue  # in-corpus target (a sibling TU): the design's own membership rule already covers it
-            if target_sym["name"] not in extern_allow:
+            if is_external:
+                # Vetted by the symbol that relocation names, exactly as
+                # every other external/in-corpus edge -- regardless of this
+                # instruction's own addressing-mode encoding, since the
+                # relocation already resolved WHICH callee this is.
+                if corpus_symbols is not None and target_sym["name"] in corpus_symbols:
+                    continue  # in-corpus target (a sibling TU): the design's own membership rule already covers it
+                if target_sym["name"] not in extern_allow:
+                    return False
+                continue
+            # In-object target. If it is itself a function symbol -- the
+            # callable entity -- it receives its own independent verdict
+            # wherever its own extent is scanned in this same object, so
+            # accepting the edge here does not excuse it; the addressing-
+            # mode encoding is irrelevant to that case. Only when the
+            # relocation names something that is NOT itself callable (a
+            # data symbol holding a pointer) does the addressing-mode test
+            # apply, and only then does a non-immediate encoding REJECT as
+            # genuinely unvettable.
+            if target_sym.get("is_function"):
+                continue
+            if not _operand_is_direct_immediate(insn, isa):
                 return False
             continue
 
@@ -983,16 +1025,30 @@ def scan_object(path: str, isa: str,
         with open(path, "rb") as f:
             data = f.read()
         object_format = _read_object_format(data)
+    except ValueError:
+        # T-2343 (Brunel), 78535ed-t2339's own M2: design Sec4.1's own
+        # contract states "a leg whose declared isa has no decoder mode
+        # REFUSES via clause (0) rather than guessing at the bytes" -- an
+        # unrecognised object format is exactly that shape, and previously
+        # raised instead of returning a ScanResult, so it never reached
+        # ci_gate at all (an uncaught exception inside a caller's own
+        # try/loop silently skips the leg rather than failing the job). The
+        # header itself could not be read here, so "unknown" is the real
+        # fact about the format, not a fallback value.
+        return ScanResult(object_format="unknown", refuse=True,
+                          unclassified_bytes=0, verdicts={})
+
+    try:
         md = _decoder(isa)
     except (ValueError, capstone.CsError):
-        # T-2343 (Brunel), Poirot's M2: design Sec4.1's own contract states
-        # "a leg whose declared isa has no decoder mode REFUSES via clause
-        # (0) rather than guessing at the bytes" -- an unrecognised object
-        # format or ISA is exactly that shape, and previously raised instead
-        # of returning a ScanResult, so it never reached ci_gate at all (an
-        # uncaught exception inside a caller's own try/loop silently skips
-        # the leg rather than failing the job).
-        return ScanResult(object_format="unknown", refuse=True,
+        # T-2348 (Brunel), 8a28460-t2344's own M5: the fold-34 remedy above
+        # covered `_read_object_format` and `_decoder` with one shared
+        # `except`, so an unsupported ISA on an otherwise perfectly readable
+        # object also reported object_format="unknown" -- a second false
+        # fact riding along with the true REFUSE. The header already parsed
+        # cleanly by this point; carry the real, confirmed format into the
+        # refusal instead of overwriting it.
+        return ScanResult(object_format=object_format, refuse=True,
                           unclassified_bytes=0, verdicts={})
 
     if object_format == "elf":
@@ -1086,7 +1142,9 @@ def ci_gate(result: ScanResult, expected_symbols: Sequence[str]) -> bool:
 
 
 def ci_gate_corpus(results: Mapping[str, ScanResult],
-                   expected_symbols: Mapping[str, Sequence[str]]) -> bool:
+                   expected_symbols: Mapping[str, Sequence[str]],
+                   manifest_path: str = None,
+                   build_dir: str = None) -> bool:
     """The production CI gate (design Sec4.1 fold round 34 gap (a),
     D-SLM4856; Sec5.5's own three-way ship-gate disjunction): an aggregate
     over the WHOLE corpus. Returns True iff, for every object path in
@@ -1102,7 +1160,41 @@ def ci_gate_corpus(results: Mapping[str, ScanResult],
     converted a REJECT verdict into a failed job (Popper's D-SLM4851,
     commissioned DEAD: `ci_gate` returned True on a must-reject construction
     at every magnitude tested, because neither it nor anything upstream of
-    it ever read a verdict's VALUE)."""
+    it ever read a verdict's VALUE).
+
+    Corrected at fold round 35 (D-SLM4888, closing Popper's own t2345
+    Sec5.7 KILL): the contract above is vacuously satisfiable. "For every
+    object path in `expected_symbols`" is true of every object in an empty
+    map, so `ci_gate_corpus({}, {})` returned True, as did a map that
+    listed every object except the one carrying a REJECT (reachable
+    end-to-end from the shipped driver through an ordinary edit to a real
+    CMakeLists.txt -- `derive_core_sources`'s own zero-source failure mode,
+    corrected above, used to produce exactly this map). `expected_symbols`
+    is not entitled to be read as authoritative on its own: it must be
+    non-empty, and it must name EXACTLY the same object paths `results`
+    does -- a caller can no longer avoid a REJECT by supplying a map
+    smaller than the corpus it actually scanned, nor pass two empty maps
+    and read the vacuous True as a clean corpus.
+
+    When `manifest_path` and/or `build_dir` is supplied (the production
+    driver's own real corpus run always supplies its own `build_dir`),
+    this additionally re-derives the corpus's OWN current membership via
+    `enumerate_scan_targets()` against that same manifest/build_dir and
+    requires `expected_symbols.keys()` to be exactly that independently
+    re-derived set too -- closing the gap that comparing `results` against
+    `expected_symbols` alone cannot: both could agree by omission if an
+    object silently never made it into either map. `None` (the default)
+    skips this second, stronger check for an isolated must-accept/
+    must-reject construction with no real manifest or build directory to
+    re-derive against, mirroring `scan_object`'s own `corpus_symbols=None`
+    convention for the identical reason."""
+    if not expected_symbols or set(expected_symbols.keys()) != set(results.keys()):
+        return False
+    if manifest_path is not None or build_dir is not None:
+        derived_paths = {obj for _src, obj in
+                         enumerate_scan_targets(manifest_path=manifest_path, build_dir=build_dir)}
+        if not derived_paths or set(expected_symbols.keys()) != derived_paths:
+            return False
     for path, expected in expected_symbols.items():
         result = results.get(path)
         if result is None or not ci_gate(result, expected):
@@ -1123,15 +1215,68 @@ _DEFAULT_MANIFEST = os.path.join(_REPO_ROOT, "CMakeLists.txt")
 _CORE_SOURCES_RE = re.compile(r"set\(\s*SUPERSLM_CORE_SOURCES(.*?)\)", re.DOTALL)
 
 
+class CoreSourcesDerivationError(ValueError):
+    """Raised by derive_core_sources() when the manifest names
+    SUPERSLM_CORE_SOURCES but the parse cannot positively confirm a
+    complete, correct capture (design Sec4.1 fold round 35, D-SLM4887) --
+    mirroring enumerate_scan_targets()'s own DuplicateStemError
+    convention."""
+
+
 def derive_core_sources(manifest_path: str = None) -> list:
+    """Corrected at fold round 35 (D-SLM4887, closing a gap the
+    re-commissioning found by execution): must not return an empty (or
+    truncated) list as though it were a true reading of the manifest.
+    Executed against three ordinary, unmodified CMake idioms -- `set(X)`
+    immediately followed by `list(APPEND X ...)`; a `set(...)` block
+    containing a comment holding a stray `)`; an earlier, unrelated mention
+    of the variable's own name inside a comment -- the pre-fix regex
+    returned zero (or a silently truncated) source list, with no error,
+    from a manifest that in fact declares real sources. Zero is not a
+    silent, valid reading of a manifest that names the variable at all: a
+    parser that cannot tell "the variable is genuinely absent" from "the
+    variable is present and my own regex could not capture it" is required
+    to raise CoreSourcesDerivationError rather than guess."""
     path = manifest_path or _DEFAULT_MANIFEST
     with open(path) as f:
         text = f.read()
     m = _CORE_SOURCES_RE.search(text)
     if not m:
         raise ValueError("no set(SUPERSLM_CORE_SOURCES ...) block found in {!r}".format(path))
-    return [line.strip() for line in m.group(1).splitlines()
-            if line.strip() and not line.strip().startswith("#")]
+
+    # The non-greedy capture above terminates at the FIRST ")" it finds
+    # after the variable name -- which may be a ")" embedded in a comment
+    # inside the block's own span, never the variable's own real closing
+    # parenthesis. Check the LAST line of the whole match (the line the
+    # regex's own terminating ")" actually landed on): if a "#" precedes
+    # that ")" on the same line, the parse cannot positively confirm which
+    # ")" it reached and is required to say so rather than guess.
+    match_lines = m.group(0).splitlines()
+    last_match_line = match_lines[-1] if match_lines else ""
+    hash_pos = last_match_line.find("#")
+    close_paren_pos = last_match_line.rfind(")")
+    if hash_pos != -1 and close_paren_pos != -1 and hash_pos < close_paren_pos:
+        raise CoreSourcesDerivationError(
+            "derive_core_sources: cannot positively confirm the parse reached "
+            "SUPERSLM_CORE_SOURCES's own balanced closing parenthesis in {!r} "
+            "-- a '#' precedes the matched ')' on the same line, which may be "
+            "a comment containing a stray ')' rather than the variable's own "
+            "terminator".format(path)
+        )
+
+    sources = [line.strip() for line in m.group(1).splitlines()
+              if line.strip() and not line.strip().startswith("#")]
+    if not sources:
+        raise CoreSourcesDerivationError(
+            "derive_core_sources: {!r} names SUPERSLM_CORE_SOURCES but the "
+            "parse captured zero source paths -- no real SuperSLM manifest "
+            "has ever declared the variable with genuinely zero sources, and "
+            "a parser that cannot tell 'genuinely empty' from 'my own regex "
+            "failed to capture' (an earlier unrelated mention matched first, "
+            "or a separate list(APPEND ...) call populates the variable "
+            "instead) is required to raise rather than guess".format(path)
+        )
+    return sources
 
 
 class DuplicateStemError(ValueError):
@@ -1140,11 +1285,19 @@ class DuplicateStemError(ValueError):
     round 34 gap (d), D-SLM4859)."""
 
 
-def enumerate_scan_targets(manifest_path: str = None, build_dir: str = None) -> list:
+def enumerate_scan_targets(manifest_path: str = None, build_dir: str = None,
+                          obj_ext: str = ".obj") -> list:
     """Returns (translation_unit_name, compiled_object_path) pairs, derived
     from SUPERSLM_CORE_SOURCES at scan time. `build_dir` names where each
     TU's own compiled object is expected (a caller-supplied convention; this
     function derives WHICH objects are expected, not how they were built).
+    `obj_ext` (T-2348, Brunel, 8a28460-t2344's own O3) names the compiled
+    object's own file extension -- `.obj` by default, matching every caller
+    in this tree today (the MSVC/COFF leg), but this function is the RULED
+    single production membership entry point for every leg in the 29-job
+    matrix, including the clang/GCC legs that emit `.o`; a caller on such a
+    leg passes `obj_ext=".o"` rather than this function hardcoding the one
+    extension it happened to be built against.
 
     RULED the single production membership entry point (design Sec4.1 fold
     round 34 gap (d), D-SLM4859, closing Poirot's S3): every driver that
@@ -1175,7 +1328,7 @@ def enumerate_scan_targets(manifest_path: str = None, build_dir: str = None) -> 
                     stem, seen_stems[stem], src)
             )
         seen_stems[stem] = src
-        obj_path = os.path.join(out_dir, stem + ".obj")
+        obj_path = os.path.join(out_dir, stem + obj_ext)
         targets.append((src, obj_path))
     return targets
 

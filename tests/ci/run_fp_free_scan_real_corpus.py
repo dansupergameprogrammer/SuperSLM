@@ -48,6 +48,34 @@ commissioning found in this script's own T-2338 form:
     aggregate is computed via `ci_gate_corpus`, not by hand-summing
     ACCEPT/REJECT counts.
 
+T-2348 (Brunel) closes 8a28460-t2344's own M3, routed back rather than
+folded into the paragraph above (that paragraph describes the prior round's
+own remedy; this one is this round's own correction to it, per this
+project's accretive-note convention): `_production_compile_flags`'s own
+docstring claimed the real CI leg's invocation is "derived rather than
+restated" while four flags were still hand-written in `_compile_all`
+(`/nologo /c /std:c++20 /EHsc /Iinclude`) and CMake's own unconditional
+Windows-platform defines (`/DWIN32 /D_WINDOWS`) were omitted entirely. Of
+those four, `/std:c++20` genuinely IS derivable -- `CMAKE_CXX_STANDARD 20`
+is set at `CMakeLists.txt:7`, the same file `_msvc_target_flags` already
+parses -- so `_cxx_standard_flag` now reads it at run time rather than
+hand-restating the literal `20`. `/DWIN32`/`/D_WINDOWS` are CMake's own
+documented, unconditional defines for any target under this generator on
+Windows (a fact about the generator, not this repository's own text,
+identically to the Release default below) and are now included as a second
+stated constant. `/nologo`, `/c`, `/EHsc`, and `/Iinclude` remain
+hand-written in `_compile_all`: none is a CMake-derivable project setting
+-- `/nologo`/`/c` are this script's own compiler-driver invocation
+mechanics (silence the banner, compile-only), `/Iinclude` mirrors this
+target's own `target_include_directories(superslm PUBLIC include)`
+(D-SLM4861's own established scope did not extend to include-path
+derivation, and nothing in the corpus's own FP-instruction content depends
+on which header search path resolved a `#include`), and `/EHsc` is not set
+anywhere in `CMakeLists.txt` for this target under any generator -- it is
+this script's own engineering choice to enable C++ exception handling for
+a standalone `cl.exe` invocation outside CMake's own target machinery, not
+a restatement of a project-declared flag that could drift.
+
 Per `StandardsDocument.md` Sec5.4's commissioning rule, `check_fp_free_scan.py`'s
 own verdicts are QUARANTINED until independently commissioned -- this
 script's REJECT/ACCEPT/`ci_gate_corpus` readings are reported as what the
@@ -58,13 +86,18 @@ is a separate, CI-configuration task this script does not perform (design
 Sec4.1's own text: "a scan this design specifies and nothing in the
 pipeline runs is not a gate").
 
-Process exit code: 0 on a normal run, REGARDLESS of what the scan finds --
-a REFUSE or a REJECT on the real corpus is not itself a defect in this
-script (design Sec4.1's own text: the whole-corpus claim stays "[U]" for
-disclosed, named reasons, not a script bug); 1 only if the real toolchain
-itself failed (a compile error, a missing VsDevCmd.bat) or this script
-raised an exception it did not itself account for -- a genuine
-infrastructure failure, distinct from "the scan found something," per
+Process exit code (T-2348, Brunel, corrected per 8a28460-t2344's own S3):
+`0 if ci_gate_corpus(...) else 1` whenever the corpus was actually compiled
+and scanned -- reflecting design Sec4.1's own ratified contract, "the
+production driver's own process exits nonzero whenever [ci_gate_corpus]
+returns False, exactly as ci_gate's own guarantee (ii) states for the
+per-object case." `0` when the toolchain is genuinely absent (nothing was
+scanned, so there is no gate reading to report) -- the whole-corpus claim
+stays "[U]" for that disclosed, named reason, not a script bug; this
+script's own caller (`build.bat`) invokes it non-gating regardless of this
+exit code (StandardsDocument.md Sec5.4: `check_fp_free_scan.py`'s verdicts
+stay QUARANTINED until independently commissioned, so nothing outside this
+script's own reported output currently acts on this exit code) -- per
 Poirot's M4 (report the exit code, don't swallow it; don't let non-gating
 mean unobserved).
 """
@@ -96,6 +129,36 @@ _VSDEVCMD_CANDIDATES = (
 # anywhere in CMakeLists.txt to change it.
 _CMAKE_MSVC_RELEASE_DEFAULT = ("/MD", "/O2", "/Ob2", "/DNDEBUG")
 
+# T-2348 (Brunel), 8a28460-t2344's own M3: CMake's own documented,
+# unconditional defines for any target built under this generator on
+# Windows -- a fact about the generator, not this repository's own text,
+# identically to the Release default above (neither is something
+# `_msvc_target_flags` can parse out of CMakeLists.txt, since neither is
+# CMakeLists.txt's own declaration).
+_CMAKE_MSVC_PLATFORM_DEFINES = ("/DWIN32", "/D_WINDOWS")
+
+_CXX_STANDARD_RE = re.compile(r"set\(\s*CMAKE_CXX_STANDARD\s+(\d+)\s*\)")
+
+
+def _cxx_standard_flag() -> str:
+    """T-2348 (Brunel), 8a28460-t2344's own M3: `/std:c++20` was hand-
+    restated in `_compile_all`'s own cl.exe invocation while
+    `CMakeLists.txt:7` already declares `CMAKE_CXX_STANDARD 20` -- the
+    identical fact, genuinely derivable from the same file
+    `_msvc_target_flags` already parses, rather than a second hand-written
+    copy a future language-standard bump could silently leave stale here."""
+    with open(_CMAKELISTS) as f:
+        text = f.read()
+    m = _CXX_STANDARD_RE.search(text)
+    if not m:
+        raise RuntimeError(
+            "could not find set(CMAKE_CXX_STANDARD <N>) in {} -- the "
+            "/std:c++<N> derivation this fold specifies has nothing to "
+            "parse; refusing to fall back to a hand-maintained standard "
+            "version".format(_CMAKELISTS)
+        )
+    return "/std:c++{}".format(m.group(1))
+
 
 def _msvc_target_flags(target_name: str = "superslm") -> list:
     """Parses the named target's own `target_compile_options(<target>
@@ -126,10 +189,19 @@ def _msvc_target_flags(target_name: str = "superslm") -> list:
 
 
 def _production_compile_flags() -> list:
-    """The real `windows-latest` CI leg's own compile invocation, derived
-    rather than restated: CMake's own MSVC Release default, plus whatever
-    `superslm`'s own CMakeLists.txt currently declares."""
-    return list(_CMAKE_MSVC_RELEASE_DEFAULT) + _msvc_target_flags("superslm")
+    """The real `windows-latest` CI leg's own compile invocation. Derived:
+    the C++ language standard (`CMakeLists.txt`'s own `CMAKE_CXX_STANDARD`)
+    and whatever `superslm`'s own `target_compile_options` currently
+    declares. Stated CMake-generator constants, not project text
+    (identically documented, neither drifts independently of this
+    repository): the MSVC Release default and the unconditional Windows
+    platform defines. NOT included here (T-2348, 8a28460-t2344's own M3):
+    `/nologo`/`/c`/`/Iinclude`/`/EHsc` -- compiler-driver invocation
+    mechanics and an include path this script supplies on its own,
+    hand-written in `_compile_all`, never a restatement of a
+    project-declared flag that could drift out from under it."""
+    return ([_cxx_standard_flag()] + list(_CMAKE_MSVC_RELEASE_DEFAULT) +
+            list(_CMAKE_MSVC_PLATFORM_DEFINES) + _msvc_target_flags("superslm"))
 
 
 def _find_vsdevcmd():
@@ -149,8 +221,9 @@ def _compile_all(targets, out_dir):
         return False
     os.makedirs(out_dir, exist_ok=True)
     flags = _production_compile_flags()
-    print("Compile flags (derived from CMakeLists.txt + CMake's own MSVC Release "
-          "default): {}".format(" ".join(flags)))
+    print("Compile flags (derived from CMakeLists.txt's own CMAKE_CXX_STANDARD "
+          "and target_compile_options, plus CMake's own MSVC Release default and "
+          "platform defines): {}".format(" ".join(flags)))
     fd, bat_path = tempfile.mkstemp(suffix=".bat", prefix="t2343_realcorpus_")
     os.close(fd)
     try:
@@ -160,7 +233,7 @@ def _compile_all(targets, out_dir):
             f.write('cd /d "{}"\r\n'.format(_REPO_ROOT))
             for src, obj in targets:
                 f.write(
-                    'cl /nologo /c {} /std:c++20 /EHsc /Iinclude "{}" /Fo:"{}"\r\n'
+                    'cl /nologo /c {} /EHsc /Iinclude "{}" /Fo:"{}"\r\n'
                     .format(" ".join(flags), src, obj)
                 )
                 f.write("if errorlevel 1 exit /b 1\r\n")
@@ -199,13 +272,23 @@ def _read_function_symbol_names(obj_path: str) -> set:
 
 
 def main() -> int:
+    out_dir = os.path.join(_REPO_ROOT, "out", "fp_scan_real_corpus")
     try:
-        targets = scan.enumerate_scan_targets(build_dir=os.path.join(_REPO_ROOT, "out", "fp_scan_real_corpus"))
+        targets = scan.enumerate_scan_targets(build_dir=out_dir)
     except scan.DuplicateStemError as e:
         print("enumerate_scan_targets refused: {}".format(e))
         return 1
+    except scan.CoreSourcesDerivationError as e:
+        # T-2348 (Brunel), D-SLM4887: enumerate_scan_targets calls
+        # derive_core_sources internally, which now raises rather than
+        # silently deriving zero sources -- surfaced here exactly as
+        # DuplicateStemError already is, rather than left to propagate as
+        # an unhandled exception (a genuine infrastructure failure this
+        # script's own module docstring already distinguishes from "the
+        # scan found something").
+        print("enumerate_scan_targets refused (derive_core_sources): {}".format(e))
+        return 1
     print("SUPERSLM_CORE_SOURCES: {} translation units (via enumerate_scan_targets)".format(len(targets)))
-    out_dir = os.path.join(_REPO_ROOT, "out", "fp_scan_real_corpus")
     ok = _compile_all(targets, out_dir)
     if not ok:
         return 0  # toolchain absent, or a real compile failure already printed above (non-fatal, per this script's own docstring)
@@ -249,7 +332,12 @@ def main() -> int:
             print("  scanned {}  ACCEPT={} REJECT={} format={}".format(
                 src, n_accept, n_reject, result.object_format))
 
-    gate_result = scan.ci_gate_corpus(results, expected_symbols)
+    # T-2348 (Brunel), D-SLM4888: build_dir passed explicitly so
+    # ci_gate_corpus's own independent re-derivation (via
+    # enumerate_scan_targets) checks against the SAME object-path set this
+    # driver actually built and scanned, rather than the function's own
+    # bare default (out/fp_scan, which this driver never writes to).
+    gate_result = scan.ci_gate_corpus(results, expected_symbols, build_dir=out_dir)
 
     print()
     print("Aggregate: {} of {} translation units REFUSE; {} ACCEPT / {} REJECT across the "
@@ -263,11 +351,13 @@ def main() -> int:
     print(
         "QUARANTINED per StandardsDocument.md Sec5.4: these counts and this gate reading are "
         "what the instrument returns on this run, not yet an independently commissioned "
-        "verdict about the corpus's own FP-freedom. This script's own process exit code stays "
-        "0 regardless (see this module's own docstring) -- wiring a REJECT into a real failed "
-        "CI job is a separate, CI-configuration task this script does not perform."
+        "verdict about the corpus's own FP-freedom -- not to be read as an answer about "
+        "the corpus's actual FP-freedom until the re-commissioning that follows this round "
+        "returns. This script's own process exit code now reflects this gate reading "
+        "(T-2348, 8a28460-t2344's own S3) -- build.bat's own invocation of this script "
+        "stays non-gating regardless (see this module's own docstring)."
     )
-    return 0
+    return 0 if gate_result else 1
 
 
 if __name__ == "__main__":

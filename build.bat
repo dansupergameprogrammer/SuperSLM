@@ -1514,49 +1514,31 @@ rem cells anywhere in this suite -- Poirot's own S2: reverting all four together
 rem suite at 39 passed, unchanged). Re-executed this session: 61 collected, 7 failed (the newly-red
 rem cells above), 52 passed, 2 xfailed (populations eight/ten, now marked in the test file itself
 rem rather than only in this batch file's own --deselect strings) -- reproduced twice, stable.
-rem NOTE: this file's own --deselect flags below still name populations eight and ten by nodeid;
-rem they remain collected as normal and simply hit their own new xfail(strict=True) markers when run
-rem WITHOUT --deselect (confirmed this session: `2 xfailed` with no --deselect, `2 deselected` with
-rem it, both stable). Removing the now-redundant --deselect flags and the --collect-only count guard
-rem above (since xfail(strict=True) now provides the identical drift protection structurally, inside
-rem the test file, per S5's own original intent) is a build-round follow-up, routed back, not done
-rem by this ticket (test-file edits are Curie's own writable scope; this batch file's own gating
-rem command line is not).
+rem NOTE, corrected T-2348 (Brunel), O4's own build-round half (8a28460-t2344-fp-scan-fix-round-
+rem confirmation.md): fold round 35's own text above described the --deselect flags and the
+rem --collect-only count guard as still present, routed back for removal once xfail(strict=True)
+rem was actually landed. It IS landed (T-2347, populations eight/ten, test_check_fp_free_scan.py
+rem :766,929) -- both flags and the guard are REMOVED below this round: xfail(strict=True) now
+rem provides the identical drift protection structurally, inside the test file itself (a deselect
+rem nodeid that stops matching, or a swapped/added deselect, was only ever detectable via the
+rem --collect-only count this guard computed; a cell that stops being an expected failure now fails
+rem the gating run directly, the same way any other genuine regression does). The gating run below
+rem now COLLECTS AND RUNS all 61 of this suite's own cells (39 pre-existing + 20 fold round 35, T-
+rem 2347) -- expected 59 passed, 2 xfailed, 0 failed, reproduced this session (see this file's own
+rem NON-ZERO-EXIT PATHS note, item 4, below, for the up-to-date accounting).
 pushd .
 set t2326_scan_ec=0
+rem T-2348 (Brunel): initialized here, OUTSIDE every nested if-block below, so the sentinel is
+rem correctly in place however far this block gets (python absent, pytest absent, or a real run) --
+rem a sentinel set only INSIDE the innermost block would read as empty/undefined from outside it on
+rem every path that never reaches that block, which the later "was it actually run" check below
+rem would misread as a captured (empty) exit code rather than "never ran at all."
+set t2343_runner_ec=not-run
 where python >nul 2>nul
 if not errorlevel 1 (
 	python -c "import pytest" >nul 2>nul
 	if not errorlevel 1 (
-		rem --deselect's own nodeid argument must use FORWARD slashes even on this backslash-path
-		rem shell: pytest matches a deselect nodeid against its own internally-normalized ('/') node
-		rem IDs by exact string, never by filesystem-equivalence, and a backslash-separated nodeid
-		rem here silently matches nothing (no error, no deselect -- confirmed by direct execution this
-		rem ticket's own session: --collect-only reported "25 tests collected" with backslash nodeids
-		rem and "23/25 tests collected (2 deselected)" with the identical nodeids forward-slashed).
-		rem T-2343 (Brunel), S5's own structural fix within this build's writable scope: `set
-		rem t2326_scan_ec=1` is set DIRECTLY inside the guard-failure branch below, never read back
-		rem within this same parenthesized block -- %VAR% expands ONCE when the whole block is first
-		rem parsed, before any line in it runs, so a variable both set and read inside one block reads
-		rem as empty/stale (confirmed by direct execution this session: the same-block read form
-		rem produced a bare "( was unexpected at this time." parse failure; this file's own
-		rem pre-existing t2326_scan_ec pattern already avoids it by never reading the variable back
-		rem until after the enclosing block closes, which this guard now follows too).
-		python -m pytest tests\t2296-fp-free-open-red-suite\test_check_fp_free_scan.py -q --collect-only ^
-			--deselect tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py::test_population_08_real_corpus_whole_sweep ^
-			--deselect tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py::test_population_10_arm_differential_historical > "%TEMP%\t2343_collect.txt" 2>&1
-		findstr /C:"(2 deselected)" "%TEMP%\t2343_collect.txt" >nul
-		if errorlevel 1 (
-			echo T-2343 S5 GUARD FAILED: the red suite's own --collect-only no longer reports exactly
-			echo 2 deselected cells -- a deselect nodeid stopped matching, or a new one was added
-			echo silently. Read %TEMP%\t2343_collect.txt and reconcile the deselect list before proceeding.
-			type "%TEMP%\t2343_collect.txt"
-			set t2326_scan_ec=1
-		)
-		del "%TEMP%\t2343_collect.txt" >nul 2>nul
-		python -m pytest tests\t2296-fp-free-open-red-suite\test_check_fp_free_scan.py -q ^
-			--deselect tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py::test_population_08_real_corpus_whole_sweep ^
-			--deselect tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py::test_population_10_arm_differential_historical
+		python -m pytest tests\t2296-fp-free-open-red-suite\test_check_fp_free_scan.py -q
 		if errorlevel 1 (
 			set t2326_scan_ec=1
 		)
@@ -1566,8 +1548,23 @@ if not errorlevel 1 (
 		rem module docstring). M4 (Poirot): non-gating means reported, not unobserved -- the runner's
 		rem own exit code is captured and surfaced; it stays non-fatal to this build (a genuine
 		rem infrastructure failure inside the runner is loud in its own printed output either way).
+		rem T-2348 (Brunel), 8a28460-t2344's own S1: the fold-34 remedy echoed %errorlevel% INSIDE
+		rem this same parenthesized block, which expands every %VAR% reference in the block ONCE when
+		rem the block is first PARSED, before any line in it runs -- so the echo always reported the
+		rem ERRORLEVEL left by the preceding `where`/`if` test, never the runner's own real exit code
+		rem (confirmed by direct execution this session: "runner exited 0" printed here while the
+		rem process genuinely exited 3, in the identical two-level nesting this file uses). This file
+		rem does not use `setlocal enabledelayedexpansion` (see this file's own note near line 540)
+		rem and this fix does not introduce it for the whole script's own single setlocal scope --
+		rem `call set VAR=%%errorlevel%%` is the standard escape: CALL re-parses its own argument line
+		rem as a fresh command, so the doubled %% (a literal % after THIS block's one parse pass)
+		rem becomes %errorlevel% again in that second pass and is expanded THEN, against the real,
+		rem current value the python command just left, not the value frozen at this block's own
+		rem parse time. The value is captured into a variable and echoed only AFTER the block closes
+		rem (below), the same read-after-close discipline t2326_scan_ec already uses. The sentinel
+		rem itself is initialized once, above, outside every nested block (see that comment).
 		python tests\ci\run_fp_free_scan_real_corpus.py
-		echo run_fp_free_scan_real_corpus.py exited %errorlevel% ^(non-gating; see the script's own module docstring^)
+		call set t2343_runner_ec=%%errorlevel%%
 	) else (
 		echo pytest not installed for this Python -- skipping test_check_fp_free_scan.py ^(non-fatal^)
 	)
@@ -1575,6 +1572,9 @@ if not errorlevel 1 (
 	echo python not found on PATH -- skipping test_check_fp_free_scan.py ^(non-fatal^)
 )
 popd
+if not "%t2343_runner_ec%"=="not-run" (
+	echo run_fp_free_scan_real_corpus.py exited %t2343_runner_ec% ^(non-gating; see the script's own module docstring^)
+)
 if not %t2326_scan_ec%==0 (
 	popd & exit /b 1
 )
@@ -1626,6 +1626,22 @@ rem      carve-out (D-SLM4886), the two refusal contracts (D-SLM4887/D-SLM4888),
 rem      once-per-section charge, at which point all 7 should flip to passing with no cell edited to
 rem      reach that state. A nonzero exit here should be read against this comment's own 7-failure
 rem      list, above, before being treated as an unrelated new regression.
+rem      T-2348 (Brunel): the carve-out (D-SLM4886), both refusal contracts (D-SLM4887/D-SLM4888),
+rem      and the empty-extent once-per-section charge (Poirot's M2, 8a28460-t2344 confirmation) are
+rem      ALL BUILT this round, plus 8a28460-t2344's own S1 (build.bat's own %errorlevel% parse-time-
+rem      expansion bug, above), S3 (the runner's main() now returns 0 if ci_gate_corpus else 1), M3
+rem      (the runner's own /std:c++<N> now derived, CMake's own platform defines added), M5
+rem      (scan_object no longer reports object_format="unknown" when only the ISA lacked a decoder),
+rem      O2 (a documentation-accuracy correction), and O3 (enumerate_scan_targets's own object
+rem      extension is now a parameter, `.obj` by default). The gating pytest invocation above no
+rem      longer deselects anything: O4's own build-round half (the now-redundant --deselect flags
+rem      and the --collect-only count guard, both routed back by fold round 35's own delta manifest)
+rem      is REMOVED -- xfail(strict=True) inside the test file itself (T-2347) now provides the
+rem      identical drift protection structurally. Re-executed this session: 61 collected, 59 passed,
+rem      2 xfailed, 0 failed -- every one of fold round 35's own 7 newly-red cells now passes for a
+rem      genuine grading reason, no cell was edited to reach that state, and the 52 previously-green
+rem      cells (T-2326 through T-2343) are unregressed. ANY nonzero exit from this pytest invocation
+rem      is now a real regression against this 61-collected/59-passed/2-xfailed/0-failed baseline.
 out\superslm_tests.exe
 set ec=%errorlevel%
 if not %b1_ec%==0 set ec=%b1_ec%
