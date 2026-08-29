@@ -95,8 +95,53 @@ _VSDEVCMD_CANDIDATES = (
     r"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat",
 )
 
+# T-2371 (Brunel), D-SLM5018 O2: the two hardcoded candidates above are a
+# fail-skip on any machine whose VS 2022 lives at a third location (a
+# GitHub-hosted `windows-latest` runner's own VS 2022 Enterprise install is
+# a documented example: `C:\Program Files\Microsoft Visual Studio\2022\
+# Enterprise\...`, matching neither candidate). `vswhere.exe` ships at this
+# fixed path with every VS 2022 installer regardless of which edition or
+# install location was chosen (Microsoft's own documented contract for the
+# tool), so it is queried first and the two hardcoded paths remain the
+# fallback for a machine where `vswhere.exe` itself is absent (a bare
+# BuildTools-only install predating the Installer's own vswhere bundling).
+_VSWHERE_PATH = (
+    r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+)
+
+
+def _vswhere_vsdevcmd_candidates():
+    """Every `VsDevCmd.bat` belonging to a VS 2022 instance `vswhere.exe`
+    reports, BuildTools-named instances first -- preserving this fixture's
+    own documented preference (BuildTools first, not shared with
+    `run_fp_free_scan_real_corpus.py`'s own Community-first order) across
+    however many instances are actually installed, rather than only the
+    two this file's own author had on hand. Returns an empty list, never
+    raises, if `vswhere.exe` is absent or reports nothing usable -- this is
+    a widened SEARCH, not a required dependency."""
+    if not os.path.exists(_VSWHERE_PATH):
+        return []
+    try:
+        result = subprocess.run(
+            [_VSWHERE_PATH, "-products", "*", "-property", "installationPath",
+             "-nologo"],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0:
+        return []
+    install_paths = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    candidates = [
+        os.path.join(p, "Common7", "Tools", "VsDevCmd.bat") for p in install_paths
+    ]
+    candidates.sort(key=lambda c: 0 if "BuildTools" in c else 1)
+    return candidates
+
 
 def _find_vsdevcmd():
+    for c in _vswhere_vsdevcmd_candidates():
+        if os.path.exists(c):
+            return c
     for c in _VSDEVCMD_CANDIDATES:
         if os.path.exists(c):
             return c

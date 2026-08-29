@@ -247,8 +247,23 @@ const char* SectionTypeName(SslmSectionType t) {
 	// compiled directly into BuildProofManifestJsonImpl's own extent, which
 	// is why THAT symbol (never this one) carried the indirect jmp check
 	// (C) rejected (D-SLM4982, confirmed by disassembly this ticket's own
-	// session). Behaviourally identical: same seventeen named types map to
-	// their own string, every other value falls through to "Unknown".
+	// session).
+	//
+	// T-2371 (Brunel), D-SLM5017/D-SLM5021: at the time this switch was
+	// authored, SslmSectionType had exactly the seventeen enumerators named
+	// below and this was genuinely exhaustive (no default, every
+	// enumerator a case label). Four enumerators were added to the header
+	// afterward (CalibrationBand, DeltaFoldScales, UFoldScales,
+	// DampedGreedyConstants) without a matching arm here, which the
+	// original switch's own `-Wswitch` guard should have caught and did
+	// not catch before this restructuring ever touched the function --
+	// this was already a real gap, not one the restructure introduced, and
+	// it meant a proof manifest naming one of those four legitimate
+	// section types printed "Unknown" for it. Closed here by naming all
+	// twenty-one: same seventeen types return the string they always did,
+	// the four that used to fall through now return their own name, and
+	// only a value outside the enum entirely still falls through to
+	// "Unknown".
 	if (t == SslmSectionType::Config) return "Config";
 	if (t == SslmSectionType::Provenance) return "Provenance";
 	if (t == SslmSectionType::Weights) return "Weights";
@@ -266,6 +281,10 @@ const char* SectionTypeName(SslmSectionType t) {
 	if (t == SslmSectionType::ChatTemplate) return "ChatTemplate";
 	if (t == SslmSectionType::UnicodeTables) return "UnicodeTables";
 	if (t == SslmSectionType::SchemaMasks) return "SchemaMasks";
+	if (t == SslmSectionType::CalibrationBand) return "CalibrationBand";
+	if (t == SslmSectionType::DeltaFoldScales) return "DeltaFoldScales";
+	if (t == SslmSectionType::UFoldScales) return "UFoldScales";
+	if (t == SslmSectionType::DampedGreedyConstants) return "DampedGreedyConstants";
 	return "Unknown";
 }
 

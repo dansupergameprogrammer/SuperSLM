@@ -1590,6 +1590,35 @@ popd
 if not "%t2343_runner_ec%"=="not-run" (
 	echo run_fp_free_scan_real_corpus.py exited %t2343_runner_ec% ^(non-gating; see the script's own module docstring^)
 )
+rem T-2371 (Brunel), D-SLM5018 O1: the pytest run above, when it reaches
+rem test_check_fp_free_scan.py's `real_build_dir`-dependent cells, causes
+rem conftest.py's own session fixture to configure and build a real
+rem `superslm` CMake target at out\t2368_fp_scan_corpus_build (D-SLM5008) --
+rem the IDENTICAL object layout the ship gate's own production driver,
+rem scan_build_output.py, reads. Before this round, that driver was never
+rem invoked here at all: build.bat could pass locally while the real ship
+rem gate -- checks (A)/(B) alone, the driver CI actually runs -- would have
+rem failed, an asymmetry the code review filed as O1. If the fixture
+rem produced that build directory, this build now ALSO gates on the same
+rem driver CI runs against it; if the fixture skipped (no VS 2022 install
+rem found, D-SLM5018 O2) or was never reached, this step is silently
+rem skipped rather than treated as a failure, matching the fixture's own
+rem stated disposition ("no cell in this suite tests whether superslm
+rem builds").
+set t2371_gate_ec=0
+if exist "out\t2368_fp_scan_corpus_build" (
+	where python >nul 2>nul
+	if not errorlevel 1 (
+		python tests\ci\scan_build_output.py --build-dir out\t2368_fp_scan_corpus_build --target superslm --isa x86-64
+		if errorlevel 1 (
+			set t2371_gate_ec=1
+		)
+	)
+)
+if not %t2371_gate_ec%==0 (
+	echo scan_build_output.py FAILED against the real corpus this build's own red suite produced -- this IS the ship gate CI runs.
+	popd & exit /b 1
+)
 if not %t2326_scan_ec%==0 (
 	popd & exit /b 1
 )

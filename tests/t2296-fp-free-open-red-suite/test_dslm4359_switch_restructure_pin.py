@@ -24,6 +24,38 @@ change is structurally the one nobody pins, this is a NEW cell for a remedy
 this round actually landed (the seven-symbol switch-to-if-chain
 restructure), not a re-statement of the existing, environment-dependent
 seven-symbol sweep above.
+
+T-2371 (Brunel), D-SLM5017/D-SLM5021/D-SLM5018 S1. The original form of
+`test_seven_switch_jump_table_symbols_preserve_every_named_branch` asserted
+each function's branch count against a hardcoded literal (21, 7, 32, 61, 6,
+17) parsed only from the function's own body -- so a header gaining an
+enumerator with no matching arm left the literal (and the body's own count)
+unchanged, and the pin stayed green through exactly the regression it
+existed to catch. Five of the six restructured functions below were
+genuinely exhaustive switches before the restructure (verified at source
+against each enum's own header: `SslmForwardStatus` 32/32,
+`SslmModelStatus` 61/61, `ConfigGeometryStatus` 6/6, `SslmSectionType`
+21/21 for `IsKnownSectionType`) -- the state in which a compiler's own
+`-Wswitch` warns on a newly added enumerator. The sixth, `SectionTypeName`,
+was exhaustive only over the seventeen-enumerator `SslmSectionType` that
+existed when it was authored; four enumerators (`CalibrationBand`,
+`DeltaFoldScales`, `UFoldScales`, `DampedGreedyConstants`) were added to
+the header afterward with no matching arm here, a real, pre-existing gap
+this round closes in `src/proof_manifest.cpp` itself (D-SLM5018 S1) rather
+than leaving unexhaustive. `ExpectedDtype`'s restructure similarly replaced
+fourteen explicit case labels (all mapped to `Raw`) with an implicit
+fallthrough default; this round restores all twenty-one as explicit
+comparisons in `src/artifact.cpp` (same output for every input) so its own
+text states the same completeness the switch it replaced did. All six are
+therefore now genuinely exhaustive over their own enum, and this file
+derives each one's EXPECTED set of named enumerators from the enum's own
+header instead of a literal, asserting SET equality (not just a count, so
+a duplicated comparison cannot silently stand in for a missing one) --
+restoring exactly the property `-Wswitch` provided, checkable on every
+platform including the ones that never had `-Wswitch` (MSVC's own `C4062`
+is off at `/W4`), and proven both ways below: green against the real,
+unmutated headers, and provably red against a header carrying one
+unhandled enumerator, by construction.
 """
 from __future__ import annotations
 
@@ -33,22 +65,31 @@ import re
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ENGINE_ROOT = os.path.dirname(os.path.dirname(_HERE))
 _SRC = os.path.join(_ENGINE_ROOT, "src")
+_INCLUDE = os.path.join(_ENGINE_ROOT, "include", "superslm")
 
-# (source-relative path, function name, expected named branches, fallback string
-# or None for a function that returns a bool/enum default rather than "?"/"Unknown")
+# (source-relative path, function name, header-relative path or None for a
+# control-flow restructure with no name-table of its own, enum name or None)
 _RESTRUCTURED = [
-    ("artifact.cpp", "IsKnownSectionType", 21, None),
-    ("artifact.cpp", "ExpectedDtype", 7, None),
-    (os.path.join("forward", "checked_chain_funnel.cpp"), "SslmForwardStatusName", 32, '"?"'),
-    ("model.cpp", "SslmModelStatusName", 61, '"Unknown"'),
+    ("artifact.cpp", "IsKnownSectionType", "artifact.h", "SslmSectionType"),
+    ("artifact.cpp", "ExpectedDtype", "artifact.h", "SslmSectionType"),
+    (os.path.join("forward", "checked_chain_funnel.cpp"), "SslmForwardStatusName",
+     "checked_chain_funnel.h", "SslmForwardStatus"),
+    ("model.cpp", "SslmModelStatusName", "model.h", "SslmModelStatus"),
     ("model.cpp", "ValidateConfigGeometryJoin", None, None),
-    ("proof_manifest.cpp", "ConfigGeometryStatusName", 6, '"?"'),
-    ("proof_manifest.cpp", "SectionTypeName", 17, '"Unknown"'),
+    ("proof_manifest.cpp", "ConfigGeometryStatusName", "proof_manifest.h", "ConfigGeometryStatus"),
+    ("proof_manifest.cpp", "SectionTypeName", "artifact.h", "SslmSectionType"),
 ]
+
+_SYNTHETIC_ENUMERATOR = "T2371SyntheticMutationEnumerator"
 
 
 def _read(rel_path: str) -> str:
     with open(os.path.join(_SRC, rel_path), encoding="utf-8") as f:
+        return f.read()
+
+
+def _read_header(rel_path: str) -> str:
+    with open(os.path.join(_INCLUDE, rel_path), encoding="utf-8") as f:
         return f.read()
 
 
@@ -75,6 +116,52 @@ def _function_body(text: str, name: str) -> str:
     raise AssertionError("unbalanced braces scanning {!r}'s own body".format(name))
 
 
+def _enum_body_text(header_text: str, enum_name: str) -> str:
+    """Returns the brace-balanced body text (braces included) of
+    `enum class enum_name { ... };` inside header_text."""
+    m = re.search(r"enum class\s+" + re.escape(enum_name) + r"\b[^{]*\{", header_text)
+    assert m, "could not locate `enum class {}` in the given header text".format(enum_name)
+    start = m.end() - 1  # index of the opening '{'
+    depth = 0
+    i = start
+    while i < len(header_text):
+        if header_text[i] == "{":
+            depth += 1
+        elif header_text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return header_text[start:i + 1]
+        i += 1
+    raise AssertionError("unbalanced braces scanning enum {!r}'s own body".format(enum_name))
+
+
+def _enumerator_names(enum_body: str) -> list:
+    """Every enumerator identifier declared inside a `{ ... }` enum body
+    (braces included), comments stripped, one name per line -- the
+    convention every enum this file reads is written in (confirmed at
+    source for all four headers below)."""
+    inner = enum_body[1:-1]
+    inner = re.sub(r"//.*", "", inner)
+    inner = re.sub(r"/\*.*?\*/", "", inner, flags=re.DOTALL)
+    names = re.findall(r"^\s*([A-Za-z_]\w*)\s*(?:=\s*[^,]+)?,?\s*$", inner, re.MULTILINE)
+    return [n for n in names if n]
+
+
+def _header_enumerator_set(header_rel: str, enum_name: str) -> set:
+    return set(_enumerator_names(_enum_body_text(_read_header(header_rel), enum_name)))
+
+
+def _function_named_enumerator_set(rel_path: str, name: str) -> set:
+    """Every bare enumerator name this function's own body compares against
+    with `==` (`EnumType::Name` reduced to `Name`) -- the set this
+    function's own text demonstrates it considers, independent of how many
+    times any one of them is compared."""
+    text = _read(rel_path)
+    body = _function_body(text, name)
+    qualified = re.findall(r"==\s*(\w+::\w+)", body)
+    return {q.split("::", 1)[1] for q in qualified}
+
+
 def test_seven_switch_jump_table_symbols_contain_no_switch_statement():
     """Must-accept, source-level: none of D-SLM4359's own seven symbols'
     function bodies contain a `switch` statement any more -- the class of
@@ -87,7 +174,7 @@ def test_seven_switch_jump_table_symbols_contain_no_switch_statement():
     future edit or by a merge that reverts this round's own change.
     """
     offenders = []
-    for rel_path, name, _branches, _fallback in _RESTRUCTURED:
+    for rel_path, name, _header_rel, _enum_name in _RESTRUCTURED:
         text = _read(rel_path)
         body = _function_body(text, name)
         if re.search(r"\bswitch\s*\(", body):
@@ -103,28 +190,94 @@ def test_seven_switch_jump_table_symbols_contain_no_switch_statement():
 
 def test_seven_switch_jump_table_symbols_preserve_every_named_branch():
     """Must-accept: the if-chain each restructured function was rewritten to
-    still names every one of the enumerators/statuses the switch it replaces
-    named, in the same count -- a restructure that silently dropped a branch
-    would be a behavior change this ticket's own contract forbids ("must not
-    change any observable behaviour"). Counted by the number of `==`
-    equality comparisons against a qualified enumerator name in each
-    function's own body, which is exactly one per branch for every function
-    in this list except `ValidateConfigGeometryJoin` (a control-flow
-    restructure rather than a name table, checked by its own narrower cell
-    below instead).
+    still names exactly the set of enumerators the switch it replaces named
+    -- a restructure that silently dropped or duplicated a branch would be a
+    behavior change this ticket's own contract forbids ("must not change
+    any observable behaviour"). The EXPECTED set is derived from each
+    enum's own header (D-SLM5021), never a literal: `IsKnownSectionType`,
+    `ExpectedDtype`, and `SectionTypeName` are checked against
+    `SslmSectionType`'s own full enumerator set (`artifact.h`);
+    `SslmForwardStatusName` against `SslmForwardStatus`
+    (`checked_chain_funnel.h`); `SslmModelStatusName` against
+    `SslmModelStatus` (`model.h`); `ConfigGeometryStatusName` against
+    `ConfigGeometryStatus` (`proof_manifest.h`). `ValidateConfigGeometryJoin`
+    is a control-flow restructure rather than a name table and is checked by
+    its own narrower cell below instead. A header gaining an enumerator with
+    no matching arm here changes the header side of this comparison and not
+    the body side, which is exactly what makes this comparison catch it --
+    proven by construction in
+    `test_enumerator_pin_is_mutation_provable` below.
     """
-    for rel_path, name, expected_branches, _fallback in _RESTRUCTURED:
-        if expected_branches is None:
+    for rel_path, name, header_rel, enum_name in _RESTRUCTURED:
+        if header_rel is None:
             continue
-        text = _read(rel_path)
-        body = _function_body(text, name)
-        comparisons = re.findall(r"==\s*\w+::\w+", body)
-        assert len(comparisons) == expected_branches, (
-            "{}::{} -- expected {} named-enumerator comparisons (one per "
-            "branch the original switch named), found {}: the restructure "
-            "may have dropped or duplicated a branch".format(
-                rel_path, name, expected_branches, len(comparisons))
+        function_set = _function_named_enumerator_set(rel_path, name)
+        header_set = _header_enumerator_set(header_rel, enum_name)
+        missing = header_set - function_set
+        extra = function_set - header_set
+        assert not missing and not extra, (
+            "{}::{} -- named enumerator set does not match {}'s own "
+            "definition of {} enumerators: missing {}, unexpected {} -- "
+            "the restructure may have dropped a branch, or {} gained an "
+            "enumerator with no matching arm here".format(
+                rel_path, name, header_rel, enum_name,
+                sorted(missing), sorted(extra), enum_name)
         )
+
+
+def test_enumerator_pin_is_mutation_provable():
+    """Must-reject, by construction (D-SLM5021: "mutation-prove it: add an
+    enumerator without an arm and show the cell goes red"). For each of the
+    four enums the cell above reads, this test builds a MUTATED COPY of the
+    real header text -- in memory only, nothing on disk is written or the
+    real source tree touched -- carrying one synthetic enumerator with no
+    matching arm anywhere, and confirms the exact comparison the cell above
+    performs would report that enumerator as missing for every function
+    indexed over that enum. This is the demonstration that the cell above
+    is a live regression guard rather than a comparison that happens to
+    hold today: it proves the pin goes red on the shape S1 warns about,
+    not merely that it is currently green.
+    """
+    mutated_sets_by_enum = {}
+    checked_at_least_one = False
+    for rel_path, name, header_rel, enum_name in _RESTRUCTURED:
+        if header_rel is None:
+            continue
+        key = (header_rel, enum_name)
+        if key not in mutated_sets_by_enum:
+            real_header_text = _read_header(header_rel)
+            real_enum_body = _enum_body_text(real_header_text, enum_name)
+            real_set = set(_enumerator_names(real_enum_body))
+            mutated_enum_body = (
+                real_enum_body[:-1].rstrip().rstrip(",")
+                + ",\n\t" + _SYNTHETIC_ENUMERATOR + ",\n}"
+            )
+            mutated_header_text = real_header_text.replace(
+                real_enum_body, mutated_enum_body, 1)
+            mutated_set = set(_enumerator_names(
+                _enum_body_text(mutated_header_text, enum_name)))
+            assert mutated_set - real_set == {_SYNTHETIC_ENUMERATOR}, (
+                "mutation fixture FAILED to add exactly one synthetic "
+                "enumerator to {}'s own body -- cannot prove the pin "
+                "catches this shape until the fixture itself is trusted"
+                .format(enum_name)
+            )
+            mutated_sets_by_enum[key] = mutated_set
+
+        mutated_set = mutated_sets_by_enum[key]
+        function_set = _function_named_enumerator_set(rel_path, name)
+        missing_against_mutated = mutated_set - function_set
+        assert _SYNTHETIC_ENUMERATOR in missing_against_mutated, (
+            "{}::{}'s own comparison against a {} carrying one unhandled "
+            "enumerator did NOT flag it as missing -- the pin above would "
+            "not catch this exact regression".format(
+                rel_path, name, enum_name)
+        )
+        checked_at_least_one = True
+    assert checked_at_least_one, (
+        "internal inconsistency: no entry in _RESTRUCTURED carries a "
+        "header/enum pair -- this mutation proof never ran"
+    )
 
 
 def test_validate_config_geometry_join_preserves_every_status_mapping():

@@ -32,12 +32,23 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 	// dense embeds a computed-jmp/table inside this symbol's own compiled
 	// extent (design Sec4.1's byte-accounting law), and the indirect jmp
 	// itself is an unvetted edge check (C) rejects (D-SLM4982). Behaviourally
-	// identical: same thirty-one named statuses map to their own string,
+	// identical: same thirty-two named statuses map to their own string,
 	// every other value -- there is no enumerator this function does not
-	// name -- falls through to "?", preserving the switch's own no-default,
-	// /W4-without-/WX missing-arm behavior (see the comment this replaces,
-	// on OutputCapacityExceeded below, for why a future enumerator still
-	// owes an arm here).
+	// name -- falls through to "?".
+	//
+	// T-2371 (Brunel), D-SLM5017/D-SLM5021: the switch this replaced was
+	// exhaustive (no default, one case per enumerator), which meant clang
+	// and GCC's `-Wswitch` (both build `superslm` with `-Wall -Wextra`)
+	// warned the moment a new enumerator went unhandled -- MSVC's
+	// equivalent `C4062` is off at `/W4` and never carried this guard, so
+	// the loss below is real only on the non-MSVC legs. An if-chain has no
+	// notion of exhaustiveness either compiler checks: this restructuring
+	// removed that diagnostic on every leg that had it, and nothing in
+	// source replaces it. A future enumerator still owes an arm here (see
+	// the comment on OutputCapacityExceeded below for the cost of missing
+	// one), and nothing will warn if it does not get one --
+	// `test_dslm4359_switch_restructure_pin.py`'s header-derived pin is
+	// what now catches that omission, not the compiler.
 	if (s == SslmForwardStatus::Ok) return "Ok";
 	if (s == SslmForwardStatus::ChainInputOutOfDomain) return "ChainInputOutOfDomain";
 	if (s == SslmForwardStatus::LogitNarrowingOverflow) return "LogitNarrowingOverflow";

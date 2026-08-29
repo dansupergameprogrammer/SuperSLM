@@ -250,25 +250,12 @@ def _compile_all(targets, out_dir):
     return True
 
 
-def _read_function_symbol_names(obj_path: str) -> set:
-    """The corpus_symbols index's own per-object contribution (design
-    Sec4.1 fold round 34 gap (b)): every function-typed symbol name defined
-    in this one compiled object, read directly from its own symbol table --
-    no decode, no accounting, no per-instruction check, the same data
-    `_check_c_for_symbol`'s own relocation resolution already reads."""
-    with open(obj_path, "rb") as f:
-        data = f.read()
-    object_format = scan._read_object_format(data)
-    if object_format == "elf":
-        code_sections, _sym_by_raw, _relocs = scan._parse_elf(data)
-    else:
-        code_sections, _sym_by_raw, _relocs = scan._parse_coff(data)
-    names = set()
-    for section in code_sections:
-        for sym in section.symbols:
-            if sym.is_function:
-                names.add(sym.name)
-    return names
+# T-2371 (Brunel), D-SLM5018 M2: `_read_function_symbol_names` moved to
+# `check_fp_free_scan.py` (this module's own `scan`), which is where the
+# ship gate's current driver (`scan_build_output.py`) now imports it from
+# -- this retired driver is no longer the sole definition, and calls the
+# same function `scan_build_output.py` calls rather than a second copy.
+_read_function_symbol_names = scan._read_function_symbol_names
 
 
 def main() -> int:

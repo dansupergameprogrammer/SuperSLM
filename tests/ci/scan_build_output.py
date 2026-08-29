@@ -23,10 +23,17 @@ unchanged). This driver's own pass/fail decision is a function of
 `ab_verdicts` and `refuse` alone -- a call/tail-jmp edge check (C) cannot vet
 (an external target absent from the vetted list, or a first-party indirect
 tail jump) is reported below as a non-gating diagnostic, never as a build
-failure. A genuine check-(A)/(B) violation (real floating-point arithmetic,
-or an unvetted vector-register mnemonic) still fails the job exactly as
-before -- check (C)'s retirement narrows what can fail the gate, it does not
-widen what can pass it.
+failure. A genuine check-(A)/(B) violation still fails the job exactly as
+before EXCEPT on one open, named axis: an unvetted vector-register mnemonic
+fails unless it is `p`/`vp`-prefixed, in which case check (A) is
+structural-only and currently fail-OPEN on that whole class (measured:
+capstone 5.0.7's own vocabulary gives 555 accepted `p`/`vp` mnemonics, of
+which 454 are named by no allow-list at all) -- whether to close that class
+is OPEN, waiting on Dan (D-SLM5009), and is pinned in the suite as
+`xfail(strict=True)` rather than asserted here as settled. Check (C)'s
+retirement narrows what can fail checks (A)/(B) alone (a call/tail-jmp edge
+check (C) alone used to reject is now a non-gating diagnostic); it does not
+widen what checks (A)/(B) themselves accept.
 
 WHAT IT DOES NOT ANSWER. Scanning is per-object and per-ISA. This module reports
 what `check_fp_free_scan.scan_object` returns for each object, on the ISA named
@@ -99,12 +106,14 @@ def main() -> int:
         len(objects), args.target, args.isa))
 
     # Built once, from every object's own symbol table, so each scan sees the
-    # whole in-corpus index rather than a growing prefix of it. The reader is
-    # imported from the existing driver rather than restated here -- one
-    # derivation, two callers.
-    import run_fp_free_scan_real_corpus as driver  # noqa: E402
+    # whole in-corpus index rather than a growing prefix of it.
+    # `_read_function_symbol_names` lives in `check_fp_free_scan` itself
+    # (T-2371, D-SLM5018 M2): this driver's only production dependency is
+    # the scanner module already imported above as `scan`, not the retired
+    # `run_fp_free_scan_real_corpus.py` driver, which is not load-bearing
+    # for the ship gate and must not become a hard import of it.
     corpus_symbols = frozenset().union(
-        *(driver._read_function_symbol_names(o) for o in objects)
+        *(scan._read_function_symbol_names(o) for o in objects)
     )
 
     n_reject = 0          # gating: checks (A)/(B) alone

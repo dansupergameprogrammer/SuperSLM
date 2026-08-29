@@ -2521,12 +2521,12 @@ def test_population_16_vxorps_differing_operands_now_accepts_per_fold39():
     must-accept instead, since the design's current text supports only (a)
     (no narrower "genuine bitwise XOR" carve-out survives fold round 39's
     own unconditional, any-operand-list ruling for this eight-mnemonic
-    family). Confirmed by direct execution this session: the shipped
-    classifier still REJECTs this construction today (the pre-fold-39 rule
-    is not yet built), so this assertion is genuinely red, for the
-    documented reason that check (A)'s D-SLM4987 widening has not landed --
-    never from a broken fixture (the same real, VEX-encoded instruction and
-    the same independent capstone verification the retracted cell used).
+    family). T-2367 landed check (A)'s D-SLM4987 widening; confirmed by
+    direct execution this session, the shipped classifier now ACCEPTs this
+    construction and the assertion below passes, for the same reason it
+    was genuinely red before that widening landed -- never from a broken
+    fixture (the same real, VEX-encoded instruction and the same
+    independent capstone verification the retracted cell used).
     """
     src = os.path.join(_FIXTURES, "pop16_vxorps.s")
     with fc.TempDir() as tmp:
@@ -3238,11 +3238,12 @@ def test_check_a_bitwise_family_widening_must_accept():
     text states is accepted unconditionally, joining pand/por/pandn/pxor's
     existing treatment. Sixteen real, assembled instructions
     (pop_dslm4987_bitwise_family.s), independently decoded by capstone
-    before the production module is ever consulted. Today, ALL sixteen
-    REJECT: the six OR/AND/ANDN mnemonics are named nowhere in
-    `_x86_check_a` and fall through to its own default REJECT; the two XOR
-    mnemonics are named only for the self-zeroing (all-operands-identical)
-    idiom, which none of these constructions is.
+    before the production module is ever consulted. At the time this cell
+    was authored, all sixteen REJECTed: the six OR/AND/ANDN mnemonics were
+    named nowhere in `_x86_check_a` and fell through to its own default
+    REJECT; the two XOR mnemonics were named only for the self-zeroing
+    (all-operands-identical) idiom, which none of these constructions is.
+    T-2367 landed D-SLM4987's widening; all sixteen now ACCEPT.
     """
     src = os.path.join(_FIXTURES, "pop_dslm4987_bitwise_family.s")
     with fc.TempDir() as tmp:
@@ -3598,8 +3599,11 @@ def test_check_a_p_prefix_exclude_list_is_load_bearing():
 # (?ExpectedDtype/?IsKnownSectionType), on the premise that the other five
 # -- which reject via check (C) alone -- no longer block the gate once check
 # (C) stops gating. T-2364's strike (blast radius item 2) found that premise
-# void: the shipped driver's own verdict still reads check (C), so all five
-# still REJECT through it today, unconditionally.
+# void against the driver as it stood then: the shipped driver's own
+# verdict still read check (C), so all five still REJECTed through it,
+# unconditionally. T-2367 (fold round 39) built the premise's own
+# precondition -- the driver now decides on `ab_verdicts` (checks (A)/(B)
+# alone) -- and all seven now ACCEPT.
 # ===========================================================================
 
 _DSLM4359_SEVEN = [

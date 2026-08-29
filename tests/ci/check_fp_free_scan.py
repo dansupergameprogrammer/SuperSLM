@@ -349,6 +349,38 @@ def _parse_coff(data: bytes):
     return code_sections, sym_by_raw, relocs_by_section
 
 
+def _read_function_symbol_names(obj_path: str) -> set:
+    """The corpus_symbols index's own per-object contribution (design
+    Sec4.1 fold round 34 gap (b)): every function-typed symbol name defined
+    in this one compiled object, read directly from its own symbol table --
+    no decode, no accounting, no per-instruction check, the same data
+    `_check_c_for_symbol`'s own relocation resolution already reads.
+
+    T-2371 (Brunel), D-SLM5018 M2: moved here from
+    `run_fp_free_scan_real_corpus.py` (T-2338/T-2343), which retired as the
+    ship gate's own mechanism at fold round 39 (D-SLM4981). This module's
+    scanning entry points (`scan_object`, `ci_gate`, `ci_gate_corpus`) are
+    the ship gate's own production surface; `scan_build_output.py` -- the
+    gate's current driver -- called this function through the retired
+    module, making a file the design calls "no longer load-bearing" a hard
+    import dependency of the gate. It is defined here instead, so the
+    retired driver can be deleted without breaking the gate, and the
+    retired driver now calls this copy rather than defining its own."""
+    with open(obj_path, "rb") as f:
+        data = f.read()
+    object_format = _read_object_format(data)
+    if object_format == "elf":
+        code_sections, _sym_by_raw, _relocs = _parse_elf(data)
+    else:
+        code_sections, _sym_by_raw, _relocs = _parse_coff(data)
+    names = set()
+    for section in code_sections:
+        for sym in section.symbols:
+            if sym.is_function:
+                names.add(sym.name)
+    return names
+
+
 # ---------------------------------------------------------------------------
 # ISA decoders.
 # ---------------------------------------------------------------------------

@@ -63,8 +63,28 @@ SslmDtype ExpectedDtype(uint32_t type) noexcept {
 	// conditional branches -- the other of the two symbols that REFUSEd the real
 	// build (`artifact.obj`, D-SLM4982/D-SLM4988); see IsKnownSectionType's own
 	// comment above for the full rationale. Behaviourally identical: the same
-	// six section types return their own named dtype, every other type
+	// seven section types return their own named dtype, every other type
 	// (including every unknown type) returns Raw.
+	//
+	// T-2371 (Brunel), D-SLM5017/D-SLM5021: the original switch named all
+	// twenty-one SslmSectionType enumerators as case labels (the fourteen
+	// Raw-mapped ones grouped under a shared `return`), with no default --
+	// which is what made it exhaustive and gave it a live -Wswitch guard.
+	// The first restructuring pass (T-2367) kept that grouping's OUTPUT
+	// correct but dropped fourteen of the twenty-one enumerators from the
+	// text entirely, relying on an implicit "everything else is Raw"
+	// fallthrough -- textually indistinguishable from having never
+	// considered those fourteen types at all. This pass restores every
+	// enumerator as an explicit comparison (same twenty-one total, same
+	// output for every input) so a header gaining a twenty-second
+	// enumerator with no arm here is a fact this function's own body no
+	// longer states by omission -- it is a set this function's own body no
+	// longer contains, checkable by
+	// test_dslm4359_switch_restructure_pin.py's header-derived pin. This
+	// does not restore the compiler's own `-Wswitch` diagnostic (an
+	// if-chain has no notion of exhaustiveness `-Wall`/`-Wextra` checks);
+	// see that finding's own disposition for why a test-side pin is the
+	// remedy rather than reintroducing a switch.
 	const auto t = static_cast<SslmSectionType>(type);
 	if (t == SslmSectionType::Weights) return SslmDtype::Int8;
 	// Biases carries the C28 dynamic-bias codes (int64 — they reach ~10^14 at q_b=30).
@@ -80,8 +100,24 @@ SslmDtype ExpectedDtype(uint32_t type) noexcept {
 	// type and distinct on-disk magic (never WSC1's own).
 	if (t == SslmSectionType::DeltaFoldScales) return SslmDtype::Int32;
 	if (t == SslmSectionType::UFoldScales) return SslmDtype::Int32;
-	// All binary-struct / keyed / opaque-byte sections are Raw (CFG1, KVC1, JSON),
-	// and so is every unknown type -- callers gate on IsKnownSectionType first.
+	// All binary-struct / keyed / opaque-byte sections are Raw (CFG1, KVC1, JSON).
+	if (t == SslmSectionType::Config) return SslmDtype::Raw;
+	if (t == SslmSectionType::Provenance) return SslmDtype::Raw;
+	if (t == SslmSectionType::Scales) return SslmDtype::Raw;
+	if (t == SslmSectionType::CompositionConstants) return SslmDtype::Raw;
+	if (t == SslmSectionType::KvLandingScales) return SslmDtype::Raw;
+	if (t == SslmSectionType::KvLandingReciprocals) return SslmDtype::Raw;
+	if (t == SslmSectionType::Calibration) return SslmDtype::Raw;
+	if (t == SslmSectionType::GoldenHashes) return SslmDtype::Raw;
+	if (t == SslmSectionType::Tokenizer) return SslmDtype::Raw;
+	if (t == SslmSectionType::ChatTemplate) return SslmDtype::Raw;
+	if (t == SslmSectionType::UnicodeTables) return SslmDtype::Raw;
+	if (t == SslmSectionType::SchemaMasks) return SslmDtype::Raw;
+	if (t == SslmSectionType::CalibrationBand) return SslmDtype::Raw;
+	if (t == SslmSectionType::DampedGreedyConstants) return SslmDtype::Raw;
+	// Every value outside the twenty-one enumerators above (including any
+	// value not yet assigned to an enumerator) -- callers gate on
+	// IsKnownSectionType first.
 	return SslmDtype::Raw;
 }
 
