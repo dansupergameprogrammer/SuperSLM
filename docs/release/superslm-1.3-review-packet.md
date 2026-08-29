@@ -17,7 +17,10 @@ disassembly rather than by inspection.
 ## 1. Candidate and decision
 
 - Candidate branch: `brunel/t2348-fp-scan-build`
-- Review range: `main...brunel/t2348-fp-scan-build`
+- Release range: `v1.2.1..HEAD` — the prior tag to the candidate tip. Stated this way on
+  purpose: a range expressed against `main` cannot see commits that arrived on the `main`
+  side, and two did.
+- Range the in-house code review read: `3dc7b8b..61bdcdd`
 - Version prepared in-tree: `1.3.0` (`CMakeLists.txt`, `README.md`, `CHANGELOG.md`)
 - Scope ruling: 1.3.0 carries **one** consumer-driven ask and nothing else. Four sibling asks were
   approved at the same time and are deliberately excluded; they remain open 1.x work.
