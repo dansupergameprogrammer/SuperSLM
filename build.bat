@@ -1541,6 +1541,29 @@ rem green (already-correct regression guards carrying zero cells until this tick
 rem must-reject control, the p/vp deny-list's own mutation proof, and scan_build_output.py's
 rem fail-closed membership discipline, both legs). See this file's own NON-ZERO-EXIT PATHS note,
 rem item 4, below, for the up-to-date accounting.
+rem T-2380 (Curie), design Sec4.1/Sec5.4/Sec5.5/Sec7 dim 11 as amended by fold round 42 -- the red
+rem suite for the archive-based ship gate's own reader, classifier, and composition stages (T-2378's
+rem strike found 16 of 18 archive-member positions invisible to fold round 41's own acceptance
+rem form). Two new sibling files, both collected by the same directory-level invocation below:
+rem test_archive_gate.py (thirty-seventh through forty-sixth populations: magic/header validation,
+rem member classification, zero-object refusal, the even-byte padding rule, the notrack/shrd-shld/
+rem vextract-vinsert classifier corrections, Mach-O REFUSE-not-crash, and scan_object's corrected
+rem signature) and test_archive_composition.py (the forty-seventh population, corrected to resolving
+rem power zero over membership, and the forty-eighth -- membership swept at resolving power dn = 1
+rem across all eighteen real archive-member positions, adopting T-2378's own fp_at_k.lib/SKIPPER_k
+rem construction). None of the archive-reading or archive-composition surface these two files test
+rem is built yet at this ticket's own pinned commit (b2b7aef): check_fp_free_scan.py has no
+rem iterate_archive_members/enumerate_archive_objects, and scan_build_output.py's find_target_
+rem objects still globs a directory, never an archive. Every cell asserting that not-yet-built
+rem behaviour is marked xfail(strict=True) in the test file itself, so this round's own 51 new
+rem cells (16 passed -- fixture-verification pins and controls already true today; 1 skipped -- a
+rem documented model gap, capstone 5.0.7 never renders a "data16" mnemonic prefix, see the test
+rem file's own docstring; 34 xfailed -- genuinely red-unimplemented) do not fail the gating run
+rem below. Re-executed this session: 143 collected (92 prior + 51 new), 105 passed, 1 skipped, 37
+rem xfailed, 0 failed -- reproduced twice, stable. The object-directory gate two paragraphs below
+rem stays green and untouched (D-SLM5047's own mutation proof is unrevisited): 17 objects, 1950
+rem ACCEPT, 0 REJECT, 0 REFUSE, exit 0, confirmed this session against the identical real corpus
+rem this suite's own real_build_dir fixture builds.
 pushd .
 set t2326_scan_ec=0
 rem T-2348 (Brunel): initialized here, OUTSIDE every nested if-block below, so the sentinel is
