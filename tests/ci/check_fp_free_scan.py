@@ -349,6 +349,30 @@ def _parse_coff(data: bytes):
     return code_sections, sym_by_raw, relocs_by_section
 
 
+def _function_symbol_names_from_bytes(data: bytes) -> set:
+    """The byte-based core of `_read_function_symbol_names`, below --
+    factored out (T-2381, Brunel, design Sec4.1's archive member-iterator
+    contract) so the archive-based corpus driver
+    (`scan_build_output.py`'s own per-archive-member path) can build the
+    identical `corpus_symbols` index from an in-memory member payload,
+    without a temporary file, the same "by byte range, with no extraction
+    to a temporary file" discipline the design states for `scan_object`'s
+    own `data` parameter. `_read_function_symbol_names` is unchanged in
+    signature and behavior; it now delegates here rather than duplicating
+    the parse."""
+    object_format = _read_object_format(data)
+    if object_format == "elf":
+        code_sections, _sym_by_raw, _relocs = _parse_elf(data)
+    else:
+        code_sections, _sym_by_raw, _relocs = _parse_coff(data)
+    names = set()
+    for section in code_sections:
+        for sym in section.symbols:
+            if sym.is_function:
+                names.add(sym.name)
+    return names
+
+
 def _read_function_symbol_names(obj_path: str) -> set:
     """The corpus_symbols index's own per-object contribution (design
     Sec4.1 fold round 34 gap (b)): every function-typed symbol name defined
@@ -368,17 +392,182 @@ def _read_function_symbol_names(obj_path: str) -> set:
     retired driver now calls this copy rather than defining its own."""
     with open(obj_path, "rb") as f:
         data = f.read()
-    object_format = _read_object_format(data)
-    if object_format == "elf":
-        code_sections, _sym_by_raw, _relocs = _parse_elf(data)
-    else:
-        code_sections, _sym_by_raw, _relocs = _parse_coff(data)
-    names = set()
-    for section in code_sections:
-        for sym in section.symbols:
-            if sym.is_function:
-                names.add(sym.name)
-    return names
+    return _function_symbol_names_from_bytes(data)
+
+
+# ---------------------------------------------------------------------------
+# Archive member iterator (T-2381, Brunel, design Sec4.1, D-SLM5035, as
+# amended by fold rounds 41/42 -- the even-byte padding correction,
+# D-SLM5054, and the toolchain-specific member-count correction, D-SLM5055).
+# The corpus becomes the archive the build actually ships (superslm.lib /
+# libsuperslm.a), read member-by-member here, replacing the object-directory
+# glob as the gate's own membership mechanism (`scan_build_output.py`,
+# below).
+# ---------------------------------------------------------------------------
+
+_ARCHIVE_MAGIC = b"!<arch>\n"
+_ARCHIVE_HEADER_SIZE = 60
+_ARCHIVE_END_MARKER = b"\x60\x0a"
+
+
+class MalformedArchiveError(Exception):
+    """Design Sec4.1, D-SLM5035: reserved for HEADER-LEVEL corruption inside
+    an archive whose own magic and file structure otherwise parse -- a
+    member's end marker, size field, or name field failing its own
+    well-formedness check. A distinct failure from the archive's own magic
+    being absent or the file being too short to be an archive at all (a
+    plain `ValueError`, below): "the container's own structure could not be
+    trusted" and "no container was found" are the same KIND of failure to
+    the gate (both an infrastructure failure, exit 2, never a REFUSE), but
+    they are not the same class of Python exception, per the design's own
+    text naming this class specifically for header-level corruption."""
+
+
+class ArchiveHasNoObjectsError(Exception):
+    """Design Sec4.1, D-SLM5035: raised by `enumerate_archive_objects` when
+    a well-formed archive (magic present, every header well-formed) carries
+    no OBJECT-kind member at all -- an archive containing only its own
+    index/longnames members, or nothing after the magic. This is a distinct
+    failure from `MalformedArchiveError`: the container is not corrupt, it
+    simply has nothing to scan, "identical treatment to today's
+    zero-objects-found disposition, never a pass on an archive that opens
+    cleanly but ships nothing to scan.\""""
+
+
+@dataclass
+class ArchiveMember:
+    """One member of an `!<arch>` archive, as `iterate_archive_members`
+    yields it. `name` is the member's own resolved name (the index name for
+    SYMTAB, the literal "//" for LONGNAMES, or the object's own filename --
+    resolved through the longnames table for a GNU-style "/<offset>"
+    reference -- for OBJECT). `payload` is this member's own bytes (exactly
+    `size` bytes; the even-byte pad byte, when present, is neither part of
+    nor counted in this range)."""
+    name: str
+    kind: str          # "SYMTAB" | "LONGNAMES" | "OBJECT"
+    offset: int        # byte offset of this member's own 60-byte header
+    payload: bytes
+
+
+def iterate_archive_members(path: str):
+    """Design Sec4.1, D-SLM5035, as amended by D-SLM5054 (even-byte member
+    padding). Opens `path` and reads its first 8 bytes: they MUST equal the
+    literal magic `b"!<arch>\\n"`, the common `ar` container both GNU/Unix
+    `ar` and Microsoft's `lib.exe` share. A file shorter than 8 bytes, a
+    mismatched magic, or a file that cannot be opened at all raises
+    `ValueError` -- an INFRASTRUCTURE FAILURE (exit 2, never a pass),
+    identical in kind to today's "build directory not found," but the
+    design's own text names no specific exception class for a magic
+    mismatch (unlike `MalformedArchiveError`, reserved for header-level
+    corruption below), so any caller here catches `Exception` broadly for
+    this branch.
+
+    After the magic, members are read sequentially, each preceded by a
+    fixed 60-byte header: name[16], mtime[12], uid[6], gid[6], mode[8],
+    size[10], end[2]. Three checks, each individually load-bearing: `end`
+    MUST equal the literal two bytes 0x60 0x0A; `size` MUST parse as a
+    base-10 ASCII integer (space-padded, no other character permitted); the
+    member's declared size MUST NOT exceed the bytes actually remaining in
+    the file. Any header failing any one of these three RAISES
+    `MalformedArchiveError` naming the byte offset of the failing header.
+
+    Each member's own 16-byte `name` field resolves to exactly one of three
+    kinds, with no fourth branch: SYMTAB ("/" or "/SYM64/"), LONGNAMES
+    ("//"), or OBJECT (a literal ".obj"/".o" in the name field directly, or
+    a GNU-style "/<offset>" reference into the already-read longnames
+    member). A member matching none of the three RAISES
+    `MalformedArchiveError` -- there is no "assume object" default.
+
+    D-SLM5054: `ar`'s own even-byte member padding. When a member's own
+    `size` is odd, exactly one pad byte follows the payload before the next
+    60-byte header begins -- this reader advances past it when computing
+    the next header's offset; the pad byte is never yielded as part of any
+    `ArchiveMember`'s payload and is not itself subject to the three
+    header-level checks above.
+    """
+    try:
+        with open(path, "rb") as f:
+            blob = f.read()
+    except OSError as exc:
+        raise ValueError(
+            "cannot open {!r} as an archive: {}".format(path, exc)) from exc
+    if len(blob) < 8 or blob[:8] != _ARCHIVE_MAGIC:
+        raise ValueError(
+            "{!r} is not a recognized archive: magic {!r} absent or file "
+            "shorter than 8 bytes".format(path, _ARCHIVE_MAGIC))
+
+    off = 8
+    n = len(blob)
+    longnames = None
+    while off < n:
+        if off + _ARCHIVE_HEADER_SIZE > n:
+            raise MalformedArchiveError(
+                "header truncated at byte offset {}".format(off))
+        hdr = blob[off:off + _ARCHIVE_HEADER_SIZE]
+        name_field = hdr[0:16]
+        end = hdr[58:60]
+        if end != _ARCHIVE_END_MARKER:
+            raise MalformedArchiveError(
+                "header at byte offset {}: end marker {!r} != {!r}".format(
+                    off, end, _ARCHIVE_END_MARKER))
+        size_field = hdr[48:58]
+        stripped = size_field.rstrip(b" ")
+        if not stripped or not all(0x30 <= c <= 0x39 for c in stripped):
+            raise MalformedArchiveError(
+                "header at byte offset {}: size field {!r} is not base-10 "
+                "ASCII".format(off, size_field))
+        size = int(stripped)
+        payload_start = off + _ARCHIVE_HEADER_SIZE
+        if payload_start + size > n:
+            raise MalformedArchiveError(
+                "header at byte offset {}: declared size {} overruns the "
+                "file (only {} byte(s) remain)".format(
+                    off, size, n - payload_start))
+        payload = blob[payload_start:payload_start + size]
+
+        nm = name_field.rstrip(b" ")
+        if nm in (b"/", b"/SYM64/"):
+            kind, resolved = "SYMTAB", nm.decode("ascii")
+        elif nm == b"//":
+            kind, resolved = "LONGNAMES", "//"
+            longnames = payload
+        elif b".obj" in name_field or b".o" in name_field:
+            kind = "OBJECT"
+            resolved = nm.rstrip(b"/").decode("utf-8", errors="replace")
+        elif nm.startswith(b"/") and nm[1:].rstrip(b"/").isdigit():
+            longname_offset = int(nm[1:].rstrip(b"/"))
+            if longnames is None or longname_offset >= len(longnames):
+                raise MalformedArchiveError(
+                    "header at byte offset {}: /<offset> name references a "
+                    "longnames table that is absent or too short".format(off))
+            terminator = longnames.find(b"\x00", longname_offset)
+            end_idx = terminator if terminator != -1 else len(longnames)
+            kind = "OBJECT"
+            resolved = longnames[longname_offset:end_idx].split(b"/")[0].decode(
+                "utf-8", errors="replace")
+        else:
+            raise MalformedArchiveError(
+                "header at byte offset {}: member name {!r} matches none of "
+                "the three kinds (symbol table, longnames, object)".format(
+                    off, name_field))
+
+        yield ArchiveMember(name=resolved, kind=kind, offset=off, payload=payload)
+        off = payload_start + size + (size % 2)
+
+
+def enumerate_archive_objects(archive_path: str) -> list:
+    """Design Sec4.1, D-SLM5035: every OBJECT-kind member
+    `iterate_archive_members` yields, in archive order, each carrying the
+    byte range of its own payload within the archive file. Zero object
+    members -- an archive containing only index/longnames members, or
+    nothing at all -- raises `ArchiveHasNoObjectsError`, an infrastructure
+    failure (exit 2), never a pass."""
+    objects = [m for m in iterate_archive_members(archive_path) if m.kind == "OBJECT"]
+    if not objects:
+        raise ArchiveHasNoObjectsError(
+            "archive {!r} contains no OBJECT-kind members -- nothing to "
+            "scan is an infrastructure failure, never a pass".format(archive_path))
+    return objects
 
 
 # ---------------------------------------------------------------------------
@@ -637,6 +826,25 @@ _X86_VEC_MOVE_ALLOW = {
     "psrldq", "pslldq",
     "movmskps", "movmskpd", "pmovmskb",
     "vmovmskps", "vmovmskpd", "vpmovmskb",
+    # T-2381 (Brunel), design Sec4.1 fold round 40 (D-SLM5032/D-SLM5037), the
+    # ELF/GCC leg's own third measured false reject: vextracti128/
+    # vextracti64x4 (matmul.o, real GCC-built corpus) are pure lane-movement
+    # -- a 128/256/512-bit lane select by immediate, no rounding, no
+    # exception, no dependence on the operands' numeric value. The design's
+    # own ruling widens this to the whole family, both suffixes ('i'/'f'
+    # naming which register-file typing convention the toolchain's
+    # instruction selector favored, never whether arithmetic occurred -- the
+    # identical boundary D-SLM4987 already drew for orps/andps/xorps), every
+    # AVX-512 width (128/32x4/64x2/64x4), and the vinsert-mnemonic
+    # counterparts (the inverse lane-insert operation, the same movement
+    # class). The genuinely arithmetic float family (addps/mulps/divps/
+    # sqrtps/cvt*/comis*/fma* and their forms) is a distinct set of
+    # mnemonics, unaffected by this addition and still rejected by this
+    # function's own default.
+    "vextracti128", "vextracti32x4", "vextracti64x2", "vextracti64x4",
+    "vextractf128", "vextractf32x4", "vextractf64x2", "vextractf64x4",
+    "vinserti128", "vinserti32x4", "vinserti64x2", "vinserti64x4",
+    "vinsertf128", "vinsertf32x4", "vinsertf64x2", "vinsertf64x4",
 }
 
 # 3DNow int->float (genuinely arithmetic) plus the AVX-512 BF16 dot-product/
@@ -810,6 +1018,13 @@ _X86_GPR_ALLOW = {
     "and", "or", "xor", "shl", "shr", "sal", "sar", "rol", "ror", "rcl", "rcr",
     "bt", "bts", "btr", "btc", "bsf", "bsr", "popcnt", "lzcnt", "tzcnt",
     "andn", "bzhi", "pdep", "pext", "shrx", "shlx", "sarx",
+    # T-2381 (Brunel), design Sec4.1 fold round 40 (D-SLM5032/D-SLM5037), the
+    # ELF/GCC leg's own second measured false reject: shrd/shld
+    # (intmath.o/forward_sites.o, real GCC-built corpus) are ordinary
+    # integer double-precision shifts across a register pair -- "double"
+    # names the operand width, not a float type -- the identical semantic
+    # class as shl/shr/sar/rol/ror, already on this allow-list.
+    "shrd", "shld",
     "cmp", "test",
     "jmp",
     "call", "ret", "retn", "retf",
@@ -843,7 +1058,17 @@ _X86_GPR_ALLOW |= _X86_JCC
 
 def _x86_strip_prefix(mnemonic: str) -> str:
     m = mnemonic.lower()
-    for pfx in ("rep ", "repe ", "repz ", "repne ", "repnz ", "lock "):
+    # T-2381 (Brunel), design Sec4.1 fold round 40 (D-SLM5032/D-SLM5037), the
+    # ELF/GCC leg's own first measured false reject: "notrack " is GCC's own
+    # CET indirect-branch-tracking prefix (-fcf-protection's default on
+    # Ubuntu), ahead of an ordinary indirect jmp/call already on
+    # _X86_GPR_ALLOW -- stripped here on the same footing as the other six
+    # named prefixes below, never a general "strip everything before the
+    # first space" rule (design Sec7 dim 11's forty-first population, D-
+    # SLM5058/D-SLM5070: that looser shape is the specification's own
+    # excluded control, which must still REJECT a fabricated two-token
+    # mnemonic this narrow, literal-tuple strip does not touch).
+    for pfx in ("rep ", "repe ", "repz ", "repne ", "repnz ", "lock ", "notrack "):
         if m.startswith(pfx):
             return m[len(pfx):]
     return m
@@ -1079,7 +1304,8 @@ def _check_c_for_symbol(md, section: _CodeSection, ext_start: int, ext_end: int,
 
 
 def scan_object(path: str, isa: str,
-                corpus_symbols: frozenset | None = None) -> ScanResult:
+                corpus_symbols: frozenset | None = None,
+                data: bytes | None = None) -> ScanResult:
     """`corpus_symbols` (design Sec4.1 fold round 34 gap (b), D-SLM4857): the
     full set of function-typed symbol NAMES defined anywhere in the closed
     corpus (every object `enumerate_scan_targets()` names). When supplied, a
@@ -1091,11 +1317,25 @@ def scan_object(path: str, isa: str,
     accepting the edge here does not excuse the target from its own bytes
     being checked. `None` (the default) preserves prior behavior exactly,
     for a call outside the full-corpus driver (an isolated must-accept/
-    must-reject construction has no corpus to index)."""
+    must-reject construction has no corpus to index).
+
+    `data` (T-2381, Brunel, design Sec4.1's archive member-iterator contract,
+    D-SLM5056/D-SLM5071): when not None, parsing reads `data` directly -- the
+    identical `_read_object_format`/`_parse_coff`/`_parse_elf` code path a
+    file-based call already exercises -- and `path` is used only for error
+    messages and the returned `ScanResult`'s own identification, never
+    opened or read. When `data` is None (unchanged from every pre-fold-41
+    caller), `path` is opened and read as before. This is additive over the
+    fold-34 signature: `corpus_symbols` keeps its fold-34 position (third),
+    unaffected by `data`'s own addition after it -- a caller binding a third
+    positional argument keeps its pre-fold-41 behavior (D-SLM5071 exists
+    precisely because a naive "additive" patch deleted this parameter)."""
     try:
-        with open(path, "rb") as f:
-            data = f.read()
-        object_format = _read_object_format(data)
+        raw = data
+        if raw is None:
+            with open(path, "rb") as f:
+                raw = f.read()
+        object_format = _read_object_format(raw)
     except ValueError:
         # T-2343 (Brunel), 78535ed-t2339's own M2: design Sec4.1's own
         # contract states "a leg whose declared isa has no decoder mode
@@ -1123,9 +1363,9 @@ def scan_object(path: str, isa: str,
                           unclassified_bytes=0, verdicts={})
 
     if object_format == "elf":
-        code_sections, sym_by_raw, relocs_by_section = _parse_elf(data)
+        code_sections, sym_by_raw, relocs_by_section = _parse_elf(raw)
     else:
-        code_sections, sym_by_raw, relocs_by_section = _parse_coff(data)
+        code_sections, sym_by_raw, relocs_by_section = _parse_coff(raw)
 
     refuse = False
     unclassified_total = 0

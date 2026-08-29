@@ -33,10 +33,16 @@ jobs:
   # the non-gating fp-free-scan-report job this comment used to sit on: the membership-derivation
   # interface (`derive_core_sources`/`enumerate_scan_targets`/`ci_gate_corpus`) and the standalone
   # `run_fp_free_scan_real_corpus.py` driver are retired as the gate's own mechanism -- the production
-  # driver is `tests/ci/scan_build_output.py`, which globs the object files a real build of the
-  # `superslm` CMake target actually emits (no derivation, no completeness proof to fracture) and
-  # gates on checks (A) and (B) alone; check (C) keeps running and keeps reporting as a non-gating
-  # diagnostic (D-SLM4985). T-2364's own strike and T-2365's own coverage audit both found the prior
+  # driver is `tests/ci/scan_build_output.py`, which gates on checks (A) and (B) alone; check (C)
+  # keeps running and keeps reporting as a non-gating diagnostic (D-SLM4985). T-2381 (Brunel), design
+  # Sec4.1/Sec5.4/Sec5.5 fold round 40 (D-SLM5034-D-SLM5039): the driver's own corpus is now the
+  # `superslm` static archive itself (`build/Release/superslm.lib`, produced by the `cmake --build`
+  # step immediately above this one), read member-by-member -- no directory glob, no derivation, and
+  # no second corpus for a future build-layout change to desync, because reading the archive's own
+  # member table is reading what the shipped artifact contains. This job's own invocation is
+  # unchanged (`--build-dir build --target superslm --isa x86-64`): `find_target_archive` resolves
+  # `build/Release/superslm.lib` from that same `--build-dir` argument. T-2364's own strike and
+  # T-2365's own coverage audit both found the prior
   # form of this job non-gating twice over: `run_fp_free_scan_real_corpus.py` was never the production
   # driver design Sec4.1 names, and even the production driver's own combined verdict read check (C),
   # which the shipped gate must not (D-SLM4996). This step's own exit code is read by this job -- no

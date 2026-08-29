@@ -10,23 +10,17 @@ populations (forty-seventh, corrected, and forty-eighth) -- this split
 mirrors the design's own four-stage partition (Sec4.1's fourth law):
 membership/reading/classification live here, composition lives there.
 
-NONE OF THE ARCHIVE-READING SURFACE THIS FILE TESTS IS BUILT YET. At
-`b2b7aef` (this ticket's own pinned engine commit), `check_fp_free_scan.py`
-has no `iterate_archive_members`, no `enumerate_archive_objects`, and
-`scan_object`'s own signature carries `corpus_symbols` but not `data`
-(confirmed by direct execution this session:
-`inspect.signature(scan.scan_object)` ==
-`(path: str, isa: str, corpus_symbols: frozenset | None = None) -> ScanResult`).
-Every cell below that asserts a NEW claim is therefore genuinely
-red-unimplemented today and is marked `xfail(strict=True)` so this file's
-own collection does not fail `build.bat`'s gating pytest invocation before
-Brunel builds the surface it specifies -- `strict=True` means the day that
-surface exists and a cell starts passing, THIS test flips to a reported
-failure (XPASS) instead of silently going green unnoticed, which is the
-signal to remove its xfail marker. A cell that already passes today
-(a control, an already-fixed scan_object behavior, or a pure specification-
-level pin that does not call any not-yet-built production surface) carries
-no xfail marker and is a real, currently-enforced regression guard.
+BUILT (T-2381, Brunel, 2026-08-28): `check_fp_free_scan.py` now has
+`iterate_archive_members`, `enumerate_archive_objects`,
+`MalformedArchiveError`, and `ArchiveHasNoObjectsError`, and `scan_object`'s
+own signature carries both `corpus_symbols` and `data`
+(`(path: str, isa: str, corpus_symbols: frozenset | None = None, data:
+bytes | None = None) -> ScanResult`). Every `xfail(strict=True)` cell this
+file originally carried has been removed by Brunel's build round, per this
+suite's own stated gate ("the day a cell starts passing unexpectedly,
+strict=True turns it into a reported failure, which is the signal to remove
+that cell's own marker") -- every cell below is now a real, currently-
+enforced regression guard, none an absent-instrument placeholder.
 
 RESOLVING POWER is stated in each population's own docstring, per design
 Sec4.1's resolving-power clause (D-SLM5066): the smallest unit-count change
@@ -256,7 +250,6 @@ def test_dslm5071_current_scan_object_signature_keeps_corpus_symbols():
 # member is affected, only whether the container itself is trustworthy.
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason="enumerate_archive_objects not yet built (design Sec4.1, D-SLM5035)")
 def test_pop37_must_accept_real_archive_enumerates_seventeen_objects(real_coff_archive):
     """Must-accept: the real, unmodified archive -- enumerate_archive_objects
     yields exactly 17 OBJECT members, magic and all 20 headers well-formed."""
@@ -264,7 +257,6 @@ def test_pop37_must_accept_real_archive_enumerates_seventeen_objects(real_coff_a
     assert len(objs) == 17, "expected 17 real object members, got {}".format(len(objs))
 
 
-@pytest.mark.xfail(strict=True, reason="iterate_archive_members not yet built (design Sec4.1, D-SLM5035)")
 def test_pop37_must_reject_bad_magic(malformed_archives):
     """Must-reject: the real archive with its first 8 bytes overwritten to
     any other value -- an infrastructure failure. The design's own text
@@ -278,7 +270,6 @@ def test_pop37_must_reject_bad_magic(malformed_archives):
         list(scan.iterate_archive_members(malformed_archives["bad_magic"]))
 
 
-@pytest.mark.xfail(strict=True, reason="iterate_archive_members not yet built (design Sec4.1, D-SLM5035)")
 def test_pop37_must_reject_truncated(malformed_archives):
     """Must-reject: a copy of the real archive truncated mid-header --
     RAISES MalformedArchiveError (design Sec4.1's own pinned exception name
@@ -287,7 +278,6 @@ def test_pop37_must_reject_truncated(malformed_archives):
         list(scan.iterate_archive_members(malformed_archives["truncated"]))
 
 
-@pytest.mark.xfail(strict=True, reason="iterate_archive_members not yet built (design Sec4.1, D-SLM5035)")
 def test_pop37_must_reject_size_overrun(malformed_archives):
     """Must-reject: one header's `size` field replaced by a value exceeding
     the file's own remaining length -- RAISES MalformedArchiveError."""
@@ -295,7 +285,6 @@ def test_pop37_must_reject_size_overrun(malformed_archives):
         list(scan.iterate_archive_members(malformed_archives["size_overrun"]))
 
 
-@pytest.mark.xfail(strict=True, reason="iterate_archive_members not yet built (design Sec4.1, D-SLM5035)")
 def test_pop37_must_reject_size_nondigit(malformed_archives):
     """Must-reject: one header's `size` field replaced by non-digit bytes --
     RAISES MalformedArchiveError."""
@@ -319,13 +308,43 @@ def test_pop37_malformed_fixtures_are_real_byte_patches_not_fabrications(malform
     assert 0 < os.path.getsize(malformed_archives["truncated"]) < real_size
 
 
+@pytest.mark.parametrize("label", ["bad_magic", "truncated", "size_overrun", "size_nondigit", "bad_name"])
+def test_pop37_38_malformed_archive_exits_2_at_composition_level(label, malformed_archives, tmp_path):
+    """T-2381 (Brunel) -- a new pin for a production change this build
+    round landed with no existing cell: `scan_build_output.py`'s own
+    `_scan_archive_corpus` catches `MalformedArchiveError`/`ValueError`
+    from `enumerate_archive_objects` and converts it to exit 2 (an
+    infrastructure failure, design Sec4.1's own disposition for header-
+    level corruption and for an unrecognized container alike). Every
+    thirty-seventh/thirty-eighth population cell above tests this at the
+    READER level (`iterate_archive_members`/`enumerate_archive_objects`
+    raising directly); none exercises the CLI/exit-code path the design's
+    own text actually states the observable as ("Must-reject
+    (infrastructure failure, exit 2, not a REFUSE)"). This cell places each
+    of the five malformed-archive fixtures at `<build_dir>/Release/
+    superslm.lib` and runs the real production CLI against it, confirming
+    the composition-level except clause this round wrote actually fires
+    for every one of the five header-level/magic-level corruption shapes,
+    never a REFUSE (exit 1) and never an uncaught traceback."""
+    build_dir = _place_as_release_archive(malformed_archives[label], tmp_path, "malformed_%s" % label)
+    rc, out, err = _run_scan_build_output(build_dir)
+    assert rc == 2, (
+        "malformed archive {!r}: expected exit 2 (infrastructure failure); "
+        "got {} stdout={!r} stderr={!r}".format(label, rc, out, err)
+    )
+    assert "Traceback (most recent call last)" not in err, (
+        "malformed archive {!r}: the job crashed with an uncaught exception "
+        "rather than reporting a clean infrastructure failure:\n{}".format(
+            label, err)
+    )
+
+
 # ===========================================================================
 # Population 38 -- member classification's three-way exhaustiveness.
 # Resolving power: one member (a single member whose name is corrupted to
 # match none of the three kinds is must-reject).
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason="enumerate_archive_objects not yet built (design Sec4.1, D-SLM5035)")
 def test_pop38_must_accept_no_fourth_branch(real_coff_archive):
     """Must-accept: the real archive's own two symbol-table members, its
     longnames member, and its seventeen object members, each classified to
@@ -336,7 +355,6 @@ def test_pop38_must_accept_no_fourth_branch(real_coff_archive):
     assert len(objs) == 17
 
 
-@pytest.mark.xfail(strict=True, reason="iterate_archive_members not yet built (design Sec4.1, D-SLM5035)")
 def test_pop38_must_reject_bad_member_name(malformed_archives):
     """Must-reject: a copy of the real archive with one object member's
     16-byte name field overwritten to a value that is neither a known index
@@ -353,13 +371,11 @@ def test_pop38_must_reject_bad_member_name(malformed_archives):
 # omits exactly one of the seventeen.
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason="enumerate_archive_objects not yet built (design Sec4.1, D-SLM5035)")
 def test_pop39_must_accept_seventeen_objects_found(real_coff_archive):
     """Must-accept: the real archive, seventeen object members found."""
     assert len(scan.enumerate_archive_objects(real_coff_archive)) == 17
 
 
-@pytest.mark.xfail(strict=True, reason="enumerate_archive_objects not yet built (design Sec4.1, D-SLM5035)")
 def test_pop39_must_reject_zero_object_archive_at_reader_level(malformed_archives):
     """Must-reject, reader level: a real, well-formed archive containing
     only its own symbol-table and longnames members -- enumerate_archive_
@@ -417,7 +433,6 @@ def test_pop39_must_reject_zero_object_archive_at_composition_level(malformed_ar
 # construction either strips correctly or does not).
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason="_x86_strip_prefix does not yet strip 'notrack ' (design Sec4.1, D-SLM5037/D-SLM5058)")
 def test_pop41_must_accept_notrack_jmp_real_compiled():
     """Must-accept: `notrack jmp rax` (and `notrack call`) -- the underlying
     jmp/call is on _X86_GPR_ALLOW; stripping the CET prefix must ACCEPT.
@@ -584,7 +599,6 @@ def test_pop41_fold42_data16_jmp_model_gap_documented():
 # mnemonic.
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason="shrd/shld not yet in _X86_GPR_ALLOW (design Sec4.1, D-SLM5037)")
 def test_pop42_must_accept_shrd_shld_real_compiled():
     """Must-accept: `shrd eax, ebx, cl` / `shld eax, ebx, cl` -- real integer
     double-precision shifts. Real compiled ELF object, real capstone decode
@@ -612,7 +626,6 @@ def test_pop42_control_arithmetic_family_unaffected():
 # Resolving power: one mnemonic.
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason="vextract/vinsert family not yet in _X86_VEC_MOVE_ALLOW (design Sec4.1, D-SLM5037)")
 def test_pop43_must_accept_vextract_measured_on_real_corpus():
     """Must-accept, the subset measured on the real GCC-built corpus
     (D-SLM5032): vextracti128, vextracti64x4."""
@@ -625,7 +638,6 @@ def test_pop43_must_accept_vextract_measured_on_real_corpus():
         assert result.ab_verdicts.get("VextractMeasuredAccept") == "ACCEPT", result.ab_verdicts
 
 
-@pytest.mark.xfail(strict=True, reason="vextract/vinsert family not yet in _X86_VEC_MOVE_ALLOW (design Sec4.1, D-SLM5037)")
 def test_pop43_must_accept_vextract_vinsert_wider_family_specified():
     """Must-accept, the wider family specified but not yet measured on a
     real corpus (design's own ruling, D-SLM5037): both suffixes' f/i forms,
@@ -648,6 +660,53 @@ def test_pop43_control_arithmetic_family_unaffected():
         fc.compile_clang_asm(os.path.join(_FIXTURES, "pop_arith_family_control.s"), obj, "x86_64-pc-linux-gnu")
         result = scan.scan_object(obj, isa="x86-64")
         assert result.ab_verdicts.get("ArithFamilyControlReject") == "REJECT", result.ab_verdicts
+
+
+def test_dslm5032_real_elf_gcc_archive_all_four_corrections_end_to_end(real_elf_archive, tmp_path):
+    """T-2381 (Brunel) -- a new pin for a production change this build
+    round landed with no existing product-level cell: the four ELF/GCC
+    classifier corrections (notrack strip, shrd/shld, and the
+    vextract/vinsert family, design Sec4.1/Sec7 dim 11's forty-first
+    through forty-third populations) landing TOGETHER, against the real
+    GCC-built archive (D-SLM5032's own conductor measurement), through the
+    archive-based composition path built this round -- not a synthetic
+    per-mnemonic fixture, and not the unit-level cells above, which each
+    exercise one correction in isolation via a hand-written clang-compiled
+    fixture.
+
+    D-SLM5032 measured 17 objects, 505 ACCEPT, 18 gating REJECT (checks
+    (A)/(B)), 0 REFUSE against this exact real archive BEFORE any of the
+    four corrections existed. Executed this session with all four landed:
+    505 + 18 = 523 ACCEPT, 0 REJECT, 0 REFUSE, exit 0 -- every one of the
+    eighteen measured false rejects now accepts, none of them floating-
+    point, reproducing design Sec4.1's own closing claim
+    ("closing 18 measured false rejects, none floating-point") end to end
+    for the first time through the archive-based driver rather than
+    through the conductor's own direct `check_fp_free_scan.scan_object`
+    probe D-SLM5032 itself used.
+
+    Does NOT discharge design Sec7 dim 11's forty-sixth population (the
+    ELF/GCC leg's own CMake-integration half) -- that population requires
+    a real `cmake -B build`/`cmake --build` configure on this archive's own
+    source, which this cell does not perform (this ticket's own writable
+    scope does not include standing up ELF CI wiring, and the forty-sixth
+    population is explicitly routed, not built, by this ticket's own
+    casebook). This cell instead pins the four corrections' own COMBINED
+    effect against the real, already-built GCC archive named in this
+    ticket's own environment note, through the driver this round built.
+    """
+    build_dir = _place_as_release_archive(real_elf_archive, tmp_path, "elf_leg")
+    rc, out, err = _run_scan_build_output(build_dir)
+    assert rc == 0, (
+        "expected exit 0 on the real GCC-built ELF archive with all four "
+        "classifier corrections landed; got {} stdout={!r} "
+        "stderr={!r}".format(rc, out, err)
+    )
+    assert "Totals: 17 object(s); 523 symbol(s) ACCEPT, 0 REJECT, 0 object(s) REFUSE" in out, (
+        "expected 17 objects / 523 ACCEPT / 0 REJECT / 0 REFUSE (505 "
+        "pre-correction ACCEPT + 18 now-accepted false rejects, D-SLM5032); "
+        "got:\n{}".format(out)
+    )
 
 
 # ===========================================================================
@@ -677,7 +736,6 @@ def test_pop44_scan_object_already_refuses_not_crashes_on_macho():
         assert result.object_format == "unknown"
 
 
-@pytest.mark.xfail(strict=True, reason="archive-based composition does not exist yet; scan_build_output.py still globs a directory (design Sec4.1, D-SLM5035/D-SLM5036)")
 def test_pop44_macho_archive_member_refuses_nonzero_exit_no_crash(malformed_archives, tmp_path):
     """Must-reject (REFUSE sense): a real archive with one member's payload
     overwritten to carry Mach-O magic -- the job must exit nonzero, with no

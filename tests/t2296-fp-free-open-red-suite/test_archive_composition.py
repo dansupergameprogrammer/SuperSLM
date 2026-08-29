@@ -202,7 +202,6 @@ def test_pop47_must_accept_real_archive_has_no_reject_under_the_built_gate(real_
     )
 
 
-@pytest.mark.xfail(strict=True, reason="scan_build_output.py does not read archives yet (design Sec4.1, D-SLM5035/D-SLM5036)")
 def test_pop47_must_accept_real_archive_composition(real_coff_archive, tmp_path):
     """Must-accept: the real, unmodified archive placed at
     <build_dir>/Release/superslm.lib -- the job must exit 0."""
@@ -211,7 +210,6 @@ def test_pop47_must_accept_real_archive_composition(real_coff_archive, tmp_path)
     assert rc == 0, "expected exit 0 on the real clean archive; got {} stdout={!r} stderr={!r}".format(rc, out, err)
 
 
-@pytest.mark.xfail(strict=True, reason="scan_build_output.py does not read archives yet (design Sec4.1, D-SLM5035/D-SLM5036)")
 def test_pop47_must_reject_poisoned_archive_composition(poisoned_archive, tmp_path):
     """Must-reject: poisoned.lib (the real archive plus the carrier) placed
     identically -- the job must exit nonzero. This is the exact
@@ -245,7 +243,6 @@ def test_pop47_must_reject_poisoned_archive_composition(poisoned_archive, tmp_pa
 # ===========================================================================
 
 @pytest.mark.parametrize("k", list(range(1, 19)))
-@pytest.mark.xfail(strict=True, reason="scan_build_output.py does not read archives yet (design Sec4.1, D-SLM5035/D-SLM5036)")
 def test_pop48_membership_resolves_carrier_at_every_position(k, fp_at_k_archives, tmp_path):
     """Must-reject, position k of 18: fp_at_k.lib must make the job exit
     nonzero, whichever position k places the carrier at. A driver that

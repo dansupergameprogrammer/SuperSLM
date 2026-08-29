@@ -3415,14 +3415,23 @@ def _census_check_a_p_vp_structural_reliance():
 
 def test_check_a_p_vp_structural_accept_census_and_violation():
     """Reproduces D-SLM4999's own measurement, rebaselined per D-SLM5009a
-    against T-2367's build (this section's own header comment states the
-    539+16=555 / 438+16=454 derivation): 1523 vocabulary, 555 accepted by
-    check (A) on a vector operand, of which 454 pass ONLY the structural
-    rule (named by no allow-list at all) and 101 are named by
-    `_X86_VEC_MOVE_ALLOW` explicitly. These four counts are current facts
-    about the shipped classifier, independent of whether the design's own
-    fail-closed guarantee holds -- that guarantee's own violation
-    (`structural_only` is non-empty) is pinned separately, below, as
+    against T-2367's build (539+16=555 / 438+16=454 derivation), and
+    rebaselined again (T-2381, Brunel, design Sec4.1 fold round 40,
+    D-SLM5037): 1523 vocabulary (unchanged -- no capstone-version shift),
+    571 accepted by check (A) on a vector operand (555 + 16, the
+    vextract/vinsert lane-movement family design Sec7 dim 11's forty-third
+    population commissions), of which 454 pass ONLY the structural rule
+    (unchanged -- every one of the sixteen new mnemonics is explicitly
+    named, landing in named_accept, never structural_only) and 117 are
+    named by `_X86_VEC_MOVE_ALLOW` explicitly (101 + 16). This is a stale-
+    pin update following the identical shape D-SLM5009a already corrected
+    once in this same cell: a legitimate, specified widening of
+    `_X86_VEC_MOVE_ALLOW` shifts this census's own literal counts, and the
+    counts are recomputed and reasserted here, not the assertion loosened.
+    These four counts are current facts about the shipped classifier,
+    independent of whether the design's own fail-closed guarantee holds --
+    that guarantee's own violation (`structural_only` is non-empty) is
+    pinned separately, below, as
     `test_check_a_p_vp_structural_only_nonempty_violates_fail_closed_claim`
     (D-SLM5009b: xfail, since closing it is an open question waiting on
     Dan, not this ticket's to answer or build).
@@ -3435,23 +3444,24 @@ def test_check_a_p_vp_structural_accept_census_and_violation():
         "reproduced 1523 -- this suite's own capstone version may have "
         "changed; got {}".format(len(vocabulary))
     )
-    assert len(accept_a) == 555, (
+    assert len(accept_a) == 571, (
         "check (A)'s own ACCEPT count on a vector operand changed from the "
-        "reproduced 555 (539 pre-D-SLM4987 + 16 bitwise-family/VEX "
-        "mnemonics D-SLM4987 widened); got {}".format(len(accept_a))
+        "reproduced 571 (555 pre-D-SLM5037 + 16 vextract/vinsert "
+        "lane-movement mnemonics D-SLM5037 widened); got {}".format(len(accept_a))
     )
-    assert len(named_accept) == 101, (
+    assert len(named_accept) == 117, (
         "check (A)'s own explicitly-allow-listed ACCEPT count changed from "
-        "the reproduced 101 -- D-SLM4987's sixteen-mnemonic widening is a "
-        "structural-rule accept, not an allow-list addition, so this count "
-        "should be unaffected by it; got {}".format(len(named_accept))
+        "the reproduced 117 (101 pre-D-SLM5037 + 16 -- D-SLM5037's own "
+        "sixteen-mnemonic widening is an EXPLICIT _X86_VEC_MOVE_ALLOW "
+        "addition, unlike D-SLM4987's structural-rule accept, so this count "
+        "moves with it); got {}".format(len(named_accept))
     )
     assert len(structural_only) == 454, (
         "check (A)'s own structural-only (no-allow-list) ACCEPT count "
-        "changed from the reproduced 454 (438 pre-D-SLM4987 + 16 "
-        "bitwise-family/VEX mnemonics D-SLM4987 widened, all sixteen "
-        "landing in the structural-only population since none is named by "
-        "_X86_VEC_MOVE_ALLOW); got {}".format(len(structural_only))
+        "changed from the reproduced 454 -- D-SLM5037's sixteen-mnemonic "
+        "widening is an explicit allow-list addition (named_accept, above), "
+        "not a structural-rule accept, so this count should be unaffected "
+        "by it; got {}".format(len(structural_only))
     )
 
 

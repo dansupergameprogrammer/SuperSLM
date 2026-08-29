@@ -1564,6 +1564,34 @@ rem xfailed, 0 failed -- reproduced twice, stable. The object-directory gate two
 rem stays green and untouched (D-SLM5047's own mutation proof is unrevisited): 17 objects, 1950
 rem ACCEPT, 0 REJECT, 0 REFUSE, exit 0, confirmed this session against the identical real corpus
 rem this suite's own real_build_dir fixture builds.
+rem T-2381 (Brunel), design Sec4.1/Sec5.4/Sec5.5/Sec7 dim 11 as amended by fold round 42 -- the
+rem archive reader (iterate_archive_members/enumerate_archive_objects/MalformedArchiveError/
+rem ArchiveHasNoObjectsError), scan_object's corrected signature (corpus_symbols AND data, both),
+rem the four ELF/GCC classifier corrections (notrack strip, shrd/shld, the full sixteen-mnemonic
+rem vextract/vinsert lane-movement family), and scan_build_output.py's own corpus retargeting from
+rem the object-directory glob to the archive (find_target_archive, checked BEFORE the directory;
+rem the directory path is kept, used only when no archive exists at any candidate location, solely
+rem because six pre-existing cells in this suite's own test_check_fp_free_scan.py build a bare
+rem <target>.dir layout with no archive at all -- every real CI leg always produces an archive, so
+rem that path is inert on every real leg) ARE ALL BUILT this round. 34 of the 37 xfail(strict=True)
+rem cells the two new files above carried now pass for the built reason and their markers are
+rem removed -- no cell's own assertion was edited; two new pins close production changes this round
+rem landed with no existing cell (the four ELF/GCC corrections' combined effect against the real
+rem GCC-built archive, 523 ACCEPT/0 REJECT/0 REFUSE up from 505/18/0 pre-correction; the malformed-
+rem archive-exits-2 composition path, five parametrized cases). One stale literal-count regression
+rem guard in test_check_fp_free_scan.py (test_check_a_p_vp_structural_accept_census_and_violation)
+rem is rebaselined 555/101/454 -> 571/117/454, the exact +16 shift the vextract/vinsert widening
+rem produces -- the identical shape that file's own D-SLM5009a comment already documents once, not
+rem a weakened assertion. Re-executed this session: 149 collected (143 prior + 6 new), 145 passed,
+rem 1 skipped, 3 xfailed, 0 failed -- the 3 remaining xfailed and the 1 skipped are pre-existing,
+rem unrelated to this round (D-SLM5009b's own open question, two long-standing population 8/10
+rem tensions, the data16-jmp model gap). tests\ci unaffected at 377 passed. The object-directory
+rem gate's own real-corpus reading (D-SLM5047, two paragraphs above) is reproduced exactly by the
+rem archive path now built: 17 objects, 1950 ACCEPT, 0 REJECT, 0 REFUSE, exit 0, against the
+rem identical real corpus, now read via out\t2368_fp_scan_corpus_build\Release\superslm.lib rather
+rem than the retired directory glob. Full engine regression (fresh CMake Release build,
+rem BuildTools-pinned toolset): 34213 checks, 0 failures, unchanged. See
+rem Claude/Brunel/t2381-archive-gate-build-2026-08-28.md for the full accounting.
 pushd .
 set t2326_scan_ec=0
 rem T-2348 (Brunel): initialized here, OUTSIDE every nested if-block below, so the sentinel is
