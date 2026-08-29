@@ -255,9 +255,9 @@ SuperSLM is licensed under Apache License 2.0. The permissive license and
 express patent grant are deliberate: they make adoption safe for consumers,
 and closed forks remain permitted.
 
-## Roadmap beyond 1.2
+## Roadmap beyond 1.3
 
-Named follow-on work after the 1.2 candidate:
+Named follow-on work after 1.3:
 
 - **True shared-prefix KV memory.** 1.0 ships a straightforward per-sequence
   KV layout; a block-table indirection layer is the next step, giving a
