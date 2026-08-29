@@ -26,7 +26,7 @@ unmodified from the adversary's own already-executed constructions:
 
   - the floating-point carrier: `fp_scan_fixtures/fp_carrier.cpp`, adopted
     from `Claude/Loki/t2376-probe/fp_carrier.cpp` (T-2376) -- the function
-    body (four lines of real C++, the construction that matters) is
+    body (three lines of real C++, the construction that matters) is
     byte-identical; a 15-line adoption header naming the source and this
     ticket's own copy-in convention differs (T-2382 M2, verified this
     session by diffing both files);
@@ -42,7 +42,7 @@ Per this ticket's own contract ("adopt that construction rather than
 authoring your own ... copy what you need into the suite's own fixture
 space; do not write into the probe directory"), nothing here reads from or
 writes to `Claude/Loki/t2378-probe/` or `Claude/Loki/t2376-probe/` at test
-time -- the one file worth copying (`fp_carrier.cpp`, four lines of real
+time -- the one file worth copying (`fp_carrier.cpp`, three lines of real
 C++) is copied into this suite's own fixture directory, and every archive
 byte this module produces is built fresh, in a temp directory, from a real
 `lib.exe` invocation against a real build's own real objects.
