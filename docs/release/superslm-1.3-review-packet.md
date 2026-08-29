@@ -100,9 +100,12 @@ This configuration had never been exercised before this release round, and it is
 | `pytest tests/ci` | 377 passed, exit 0 | `af4e841` | build round |
 | `build.bat` end to end | exit 0; 34,207 checks, 0 failures | `af4e841` | build round |
 
-The engine regression is cited at `af4e841` rather than at the branch tip because the only files
-that changed between `af4e841` and `61bdcdd` are three Python test files — verified by
-`git diff --name-only`, zero C++, header, CMake, or batch files — so no compiled surface moved.
+The engine regression is cited at `af4e841` rather than at the candidate tip because nothing the
+regression covers has moved since. Verified by `git diff --name-only af4e841..<tip>`: the files
+that changed are prose (`CHANGELOG.md`, `README.md`, this document), Python test and tool files,
+and one comment-only change to `tests/t1691_primitive_probe.cpp` — a standalone certifier-style
+probe that is not part of the CMake-built test binary. No CMake file, no header, no library
+source, and no batch build script changed.
 
 ### 3.3 The gate's own behaviour was proven unchanged by the release round
 
