@@ -839,7 +839,7 @@ jobs:
       - run: pip install pytest
       - name: Present-tense-defect-comment check's own red suite and historical-population validation
         run: python -m pytest tests/ci/test_check_present_tense_defect_comments.py -v
-      - name: Fail the build if a test-suite comment cites a severity finding with no resolution marker
+      - name: Fail the build if a test-suite comment cites an unresolved severity finding or a stale not-yet-built claim
         run: python tests/ci/check_present_tense_defect_comments.py
 
   # T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-review.md,
