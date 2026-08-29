@@ -242,7 +242,7 @@ _TESTS_ROOT = os.path.dirname(_HERE)
 _CI_DIR = os.path.join(_TESTS_ROOT, "ci")
 sys.path.insert(0, _CI_DIR)
 try:
-    import check_fp_free_scan as scan  # noqa: E402  -- NOT YET BUILT, design Sec4.1
+    import check_fp_free_scan as scan  # noqa: E402  -- built; retained as an import guard so this suite degrades gracefully if it is ever unavailable (T-2387)
     _SCAN_AVAILABLE = True
 except ImportError:
     scan = None

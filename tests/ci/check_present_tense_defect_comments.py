@@ -225,8 +225,46 @@ the real historical population at commit `7a77a07^{tree}`'s own two files,
 the fix (nine sites, D-SLM5018-shaped), and both are clean after it --
 `test_check_present_tense_unbuilt_class.py` (`tests/t2296-fp-free-open-red-
 suite/`, this round's own test pin, since this module's own test file is
-outside this ticket's writable scope) replays both states through this
-scanner via `git show`, never a hand-transcribed stand-in.
+outside this ticket's writable scope) replays both states, now from
+fixture files vendored in the pin's own directory rather than `git show`
+(see "POPULATION RECOVERY IS VENDORED, NOT LIVE `git show`" below).
+
+WHITESPACE-TOLERANT MATCHING (T-2387, Poirot
+8788b01-t2386-archive-gate-confirmation.md N2). Every alternative above
+that spans more than one word originally spelled its internal spaces as a
+literal `" "`, and this suite's own docstrings are hard-wrapped near
+column 72 -- so a trigger phrase that happens to straddle a line break was
+invisible to the pattern. Measured against the real historical population
+at `7a77a07^{tree}`: the literal-space pattern matched 12 of the real
+occurrences in `test_archive_composition.py`/`test_archive_gate.py`; two
+more -- `does not read` / `archives` and `coincidentally` / `the correct
+exit code`, each pair split across a line break -- were missed for no
+reason other than the line wrap, reaching 14 once each internal literal
+space is replaced with `\\s+` (already the case for the future-tense
+alternative's own `[^.]{0,N}` gaps, which admit newlines). Neither miss
+changed this check's own verdict on either
+historical file (both still flagged, on a different phrase), but the
+pattern's OWN rule-coverage cells fed it single-line synthetic strings and
+so could not see the gap -- exactly the commissioning failure
+`StandardsDocument.md` Sec5.4 names: a maker-authored control the real
+input can, and did, fail to reproduce. `_UNBUILT_CLAIM_PATTERN` below is
+now whitespace-tolerant throughout, and the pin adds one wrapped-fixture
+cell per multi-word alternative alongside the existing single-line ones.
+
+POPULATION RECOVERY IS VENDORED, NOT LIVE `git show` (T-2387, Poirot
+8788b01-t2386-archive-gate-confirmation.md N1). The pin's two
+historical-population cells used to recover `7a77a07`'s pre-fix text with
+a live `git show <sha>` subprocess call, skipping (not failing) when that
+command could not resolve the commit. Measured: a real
+`git clone --depth 1` of this repository -- the checkout every job in
+`.github/workflows/tests.yml` performs, none of them setting
+`fetch-depth` -- resolves that `git show` with exit 128, so both cells
+skipped and the pin reported green in the exact environment that gates it.
+The pin now reads the pre-fix text of both files from two fixture files
+vendored in its own directory
+(`present_tense_unbuilt_class_historical_fixtures/`), recovered once by
+this fix and committed alongside it; recovery no longer depends on git
+history being present at all, in CI or anywhere else.
 
 INPUT COVERAGE, DELIBERATELY NARROWER THAN THE SEVERITY-LABEL CHECK ABOVE.
 `_UNBUILT_CLAIM_GLOBS` scans only `tests/t2296-fp-free-open-red-suite/`,
@@ -250,24 +288,64 @@ severity-label check above requires the citation and its resolution marker
 in the SAME comment/docstring block, because a citation and an unrelated
 "closed" elsewhere in the file must not silently satisfy each other
 (T-1545's own paragraph-granularity fix exists for exactly this reason).
-This check's own marker -- an actual `@pytest.mark.xfail`/`pytest.mark.
-xfail(` decorator anywhere in the file -- is checked at FILE granularity on
-purpose: the defect this check pins is not "a citation and its marker
-disagree within one block," it is "this file's prose describes a whole
-surface as unbuilt-and-xfailed, and the file's own marker count is zero" --
-a fact about the file as a whole, which is exactly what T-2382 found (zero
+This check's own marker is checked at FILE granularity on purpose: the
+defect this check pins is not "a citation and its marker disagree within
+one block," it is "this file's prose describes a whole surface as
+unbuilt-and-xfailed, and the file's own marker count is zero" -- a fact
+about the file as a whole, which is exactly what T-2382 found (zero
 `xfail(strict=True)` markers survive in either file, confirmed by direct
-count, while the prose describing them does). A file that still carries
-live `xfail` markers elsewhere (this suite's own
-`test_check_fp_free_scan.py`, three markers, D-SLM5009's own genuinely open
-questions) is correctly NOT flagged even though it also contains
-trigger-shaped prose (`NOT YET BUILT` on an old defensive import guard,
-predating the archive round by many folds) -- that file has not had its
-markers stripped out from under its prose, which is the one state this
-check exists to catch.
+count, while the prose describing them does).
+
+WHAT COUNTS AS THE MARKER (T-2387, Poirot
+8788b01-t2386-archive-gate-confirmation.md N3/N4). File-granularity means
+ONE thing has to be true of the file, not that ANY `@pytest.mark.xfail`
+anywhere clears ANY trigger phrase anywhere -- the original form did the
+latter, and it was wrong twice over. First (N3): `test_check_fp_free_scan.
+py` carried a stale `# ... -- NOT YET BUILT` import-guard comment (line
+245, predating the archive round) that was cleared by three markers whose
+own `reason=` text is D-SLM5009's and T-2347's genuinely open questions --
+having nothing to do with whether that import is built. The file "has not
+had its markers stripped out from under its prose" was true of the file's
+own markers and false of that comment: a marker with no relationship to a
+claim should not launder it. Second (N4): a live marker was found by a bare
+`_XFAIL_MARKER_PATTERN.search(text)` over the WHOLE raw file text, which
+cannot tell a real `@pytest.mark.xfail(...)` decorator from a Python string
+literal that merely spells the same characters -- this module's own pin
+file (`test_check_present_tense_unbuilt_class.py`) carries every trigger
+phrase verbatim as fixture DATA and was saved from flagging only because
+one of its fixture strings happens to also spell `@pytest.mark.xfail(`
+literally; a checker that cannot be caught by its own rule for an
+accidental reason is the shape of the defect it hunts.
+
+Both are closed the same way: `_xfail_decorator_source_texts` finds every
+REAL decorator via `ast.parse` (a string that merely spells decorator
+syntax is not a decorator node and is never returned), and
+`find_stale_unbuilt_claim` requires that at least one such decorator's own
+source text -- the whole `@pytest.mark.xfail(...)` call, `reason=` included
+-- ITSELF matches `_UNBUILT_CLAIM_PATTERN` before treating the file as
+covered. A marker about an unrelated open question no longer launders a
+claim it says nothing about, and a fixture string that only spells marker
+syntax is never mistaken for one. File granularity is preserved -- this is
+still "does the file, as a whole, carry a marker for this claim," not a
+per-block or per-function scope -- but the marker itself is real and
+on-topic rather than merely present.
+
+THE PIN'S OWN FILE IS EXCLUDED BY NAME, NOT BY ACCIDENT (T-2387, N4). Even
+with the tightened marker rule above, this module's own pin has no real
+`@pytest.mark.xfail` decorators of its own (it decorates nothing; it
+constructs fixture text), so its fixture strings would flag under the
+tightened rule exactly as they would have flagged the moment its one
+accidental marker-spelling string was refactored away. `_UNBUILT_CLAIM_
+GLOBS`'s own matches are filtered against `_UNBUILT_CLAIM_EXCLUDE_
+BASENAMES` in `main()` before scanning -- the same "known false positive,
+scoped out by name and pinned by a test proving the exclusion is load-
+bearing" shape the pin's own `_KNOWN_FALSE_POSITIVE_FILES` uses for the two
+`tests/ci/` files named above -- so the exclusion no longer depends on what
+any fixture string happens to spell.
 """
 from __future__ import annotations
 
+import ast
 import glob
 import io
 import os
@@ -306,24 +384,30 @@ _DEFAULT_TEST_GLOBS = (
 # from the real historical population rather than authored in the
 # abstract -- see the module docstring's own "A SECOND, INDEPENDENT DEFECT
 # CLASS" section for the provenance of each alternative and the validation
-# against commit 7a77a07's own two files.
+# against commit 7a77a07's own two files. T-2387 (Poirot
+# 8788b01-t2386-archive-gate-confirmation.md N2): every internal literal
+# space is `\s+`, not `" "` -- this suite's own prose is hard-wrapped near
+# column 72, and a phrase that happens to straddle a line break is real
+# text on the historical population, not a hypothetical (see the module
+# docstring's own "WHITESPACE-TOLERANT MATCHING" section).
 _UNBUILT_CLAIM_PATTERN = re.compile(
-    r"\bnot yet built\b"
-    r"|NONE OF THIS IS BUILT"
-    r"|\bstill globs\b"
-    r"|genuinely red-unimplemented"
+    r"\bnot\s+yet\s+built\b"
+    r"|NONE\s+OF\s+THIS\s+IS\s+BUILT"
+    r"|\bstill\s+globs\b"
+    r"|genuinely\s+red-unimplemented"
     r"|\bunbuilt\b"
-    r"|does not read archives"
-    r"|coincidentally (?:the correct exit code|exits \d+)"
+    r"|does\s+not\s+read\s+archives"
+    r"|coincidentally\s+(?:the\s+correct\s+exit\s+code|exits\s+\d+)"
     r"|\bwill\b[^.]{0,100}\bonce\b[^.]{0,60}\b(?:lands?|ships?|builds?)\b",
     re.IGNORECASE,
 )
 
 # A live, real xfail marker -- either decorator spelling this codebase uses
-# (`@pytest.mark.xfail(...)` or the bare attribute reference). Checked at
-# FILE granularity, not block granularity -- see the module docstring's own
-# "THE MARKER, AND WHY FILE-GRANULARITY" section for why the two checks in
-# this module use different granularities on purpose.
+# (`@pytest.mark.xfail(...)` or the bare attribute reference). Matched
+# against one AST decorator's own source text at a time
+# (`_xfail_decorator_source_texts`), never against raw whole-file text --
+# see the module docstring's own "WHAT COUNTS AS THE MARKER" section for
+# why (T-2387, N3/N4).
 _XFAIL_MARKER_PATTERN = re.compile(r"pytest\.mark\.xfail\b")
 
 # T-2385: scoped to the one suite this defect class has recurred in twice
@@ -333,6 +417,17 @@ _XFAIL_MARKER_PATTERN = re.compile(r"pytest\.mark\.xfail\b")
 _UNBUILT_CLAIM_GLOBS = (
     "tests/t2296-fp-free-open-red-suite/**/*.py",
 )
+
+# T-2387 (Poirot 8788b01-t2386-archive-gate-confirmation.md N4): this
+# module's own pin file lives inside `_UNBUILT_CLAIM_GLOBS`'s own scan
+# surface and carries every `_UNBUILT_CLAIM_PATTERN` alternative verbatim
+# as fixture DATA -- see the module docstring's own "THE PIN'S OWN FILE IS
+# EXCLUDED BY NAME" section. Matched by basename, not full path, since
+# there is exactly one file to exclude and no risk of collision within the
+# scanned suite.
+_UNBUILT_CLAIM_EXCLUDE_BASENAMES = frozenset({
+    "test_check_present_tense_unbuilt_class.py",
+})
 
 
 
@@ -751,19 +846,56 @@ def scan_files(file_paths: list[str], repo_root: str = _REPO_ROOT) -> list[str]:
     return failures
 
 
+def _xfail_decorator_source_texts(text: str) -> list[str]:
+    """Every real `@pytest.mark.xfail(...)`-shaped decorator's own full
+    source text, one entry per decorator, found anywhere in `text` via
+    Python's own `ast` parser -- never a regex re-derivation of decorator
+    syntax. A decorator is included only when it is an actual AST decorator
+    node attached to a function, async function, or class; a string literal
+    that merely SPELLS `@pytest.mark.xfail(` (this suite's own fixture data
+    for the rule-coverage cells above) is not a decorator node and is never
+    included (T-2387, Poirot 8788b01-t2386-archive-gate-confirmation.md N4
+    -- see the module docstring's own "WHAT COUNTS AS THE MARKER" section).
+    Returns an empty list, rather than raising, when `text` cannot be
+    parsed as Python: `find_stale_unbuilt_claim` treats that the
+    conservative direction -- no marker can be verified, so none is
+    credited, and a real trigger phrase in unparseable text still flags
+    rather than being silently cleared."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return []
+    sources: list[str] = []
+    for node in ast.walk(tree):
+        for dec in getattr(node, "decorator_list", None) or []:
+            func = dec.func if isinstance(dec, ast.Call) else dec
+            func_src = ast.get_source_segment(text, func) or ""
+            if _XFAIL_MARKER_PATTERN.search(func_src):
+                sources.append(ast.get_source_segment(text, dec) or func_src)
+    return sources
+
+
 def find_stale_unbuilt_claim(text: str) -> str | None:
     """T-2385: the second, independent defect class this module checks for
     (see the module docstring's own "A SECOND, INDEPENDENT DEFECT CLASS"
     section) -- `text` (a whole file's own content) asserts, in one of the
     phrasings `_UNBUILT_CLAIM_PATTERN` names, that some surface is unbuilt,
-    while carrying no live `@pytest.mark.xfail` marker anywhere in it.
-    Returns the matched phrase, or None if the file is clean by this rule.
-    File-granularity by design -- see the module docstring's own "THE
-    MARKER, AND WHY FILE-GRANULARITY" section."""
+    while carrying no live `@pytest.mark.xfail` marker whose OWN source
+    text is itself about the same claim. Returns the matched phrase, or
+    None if the file is clean by this rule. File-granularity by design --
+    see the module docstring's own "THE MARKER, AND WHY FILE-GRANULARITY"
+    and "WHAT COUNTS AS THE MARKER" sections (T-2387, N3/N4): this file
+    either does or does not carry a covering marker, and that fact is
+    checked once for the file, but "covering" now means the marker's own
+    `reason=` text matches `_UNBUILT_CLAIM_PATTERN` too -- not merely that
+    some unrelated marker exists anywhere in the file."""
     match = _UNBUILT_CLAIM_PATTERN.search(text)
     if match is None:
         return None
-    if _XFAIL_MARKER_PATTERN.search(text):
+    covering = any(
+        _UNBUILT_CLAIM_PATTERN.search(src) for src in _xfail_decorator_source_texts(text)
+    )
+    if covering:
         return None
     return match.group(0)
 
@@ -793,7 +925,7 @@ def scan_unbuilt_claims(file_paths: list[str], repo_root: str = _REPO_ROOT) -> l
         if phrase is not None:
             failures.append(
                 f"{rel}: contains a not-yet-built-shaped claim ({phrase!r}) with no "
-                f"live @pytest.mark.xfail marker anywhere in the file"
+                f"live @pytest.mark.xfail marker in the file whose own reason covers it"
             )
     return failures
 
@@ -802,7 +934,10 @@ def main(globs: tuple[str, ...] = _DEFAULT_TEST_GLOBS, repo_root: str = _REPO_RO
     files = _glob_files(globs, repo_root)
     failures = scan_files(files, repo_root)
 
-    unbuilt_files = _glob_files(_UNBUILT_CLAIM_GLOBS, repo_root)
+    unbuilt_files = [
+        p for p in _glob_files(_UNBUILT_CLAIM_GLOBS, repo_root)
+        if os.path.basename(p) not in _UNBUILT_CLAIM_EXCLUDE_BASENAMES
+    ]
     unbuilt_failures = scan_unbuilt_claims(unbuilt_files, repo_root)
 
     if failures or unbuilt_failures:
