@@ -22,10 +22,13 @@ own `fp-free-scan-gate` job runs against this exact checkout:
 
 producing the MSBuild/Visual-Studio-generator object layout
 (`<dir>/superslm.dir/<config>/*.obj`) `tests/ci/scan_build_output.py`'s own
-`find_target_objects` already knows how to walk -- the same production
-entry point the real ship gate uses, so a cell built on this fixture is
-grading the scanner against a real build laid out exactly as the gate reads
-it, not a second, hand-derived layout.
+`find_target_objects` already knows how to walk, and the same build's own
+`<dir>/Release/superslm.lib` -- the real ship gate's own production entry
+point since T-2381/T-2385 reads the archive, never the directory (design
+Sec4.1, D-SLM5100/D-SLM5101) -- so a cell built on this fixture is grading
+the scanner against a real build laid out exactly as the gate reads it,
+whichever of the two surfaces a given cell needs, not a second,
+hand-derived layout.
 
 RESOLUTION ORDER:
 

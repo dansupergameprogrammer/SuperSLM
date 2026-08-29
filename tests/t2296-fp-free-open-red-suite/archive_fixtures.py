@@ -24,8 +24,12 @@ CONSTRUCTION, adopted rather than re-derived. The forty-seventh and
 forty-eighth dimension-11 populations (D-SLM5053, D-SLM5068) are adopted
 unmodified from the adversary's own already-executed constructions:
 
-  - the floating-point carrier: `fp_scan_fixtures/fp_carrier.cpp`, copied
-    verbatim from `Claude/Loki/t2376-probe/fp_carrier.cpp` (T-2376);
+  - the floating-point carrier: `fp_scan_fixtures/fp_carrier.cpp`, adopted
+    from `Claude/Loki/t2376-probe/fp_carrier.cpp` (T-2376) -- the function
+    body (four lines of real C++, the construction that matters) is
+    byte-identical; a 15-line adoption header naming the source and this
+    ticket's own copy-in convention differs (T-2382 M2, verified this
+    session by diffing both files);
   - the per-position archive family (`fp_at_k.lib`, k in 1..17) and the
     single-append archive (`poisoned.lib`, k=18): the same construction
     method `Claude/Loki/t2378-probe/gen_fixture_cmds.py` uses (extract every
@@ -231,9 +235,9 @@ def run_lib_exe(args, cwd):
 
 
 def compile_fp_carrier(out_obj):
-    """Compiles fp_scan_fixtures/fp_carrier.cpp (adopted verbatim from
-    T-2376's own probe, see this module's docstring) with MSVC cl.exe.
-    Raises ToolUnavailable if no VS install is found."""
+    """Compiles fp_scan_fixtures/fp_carrier.cpp (adopted from T-2376's own
+    probe, function body byte-identical, see this module's docstring) with
+    MSVC cl.exe. Raises ToolUnavailable if no VS install is found."""
     return fc.compile_cl(FP_CARRIER_CPP, out_obj)
 
 

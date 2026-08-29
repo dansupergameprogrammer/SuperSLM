@@ -191,6 +191,80 @@ Two SINGLE-line literals still merge, and so do two quoted-`//` lines: both
 sit wholly outside every span, both are deliberate (the bare C string-literal
 continuation rule and `_PY_QUOTED_CPP_COMMENT_PATTERN` respectively), and
 splitting them would fire false positives across the fixture generators.
+
+A SECOND, INDEPENDENT DEFECT CLASS: A "NOT YET BUILT" CLAIM SURVIVING ITS OWN
+BUILD ROUND (T-2385, fold round 43, closing T-2382 finding S3). A test-suite
+docstring or comment can assert, in present tense, that a surface is unbuilt
+and its cells `xfail`-marked ("NONE OF THIS IS BUILT YET", "scan_build_
+output.py does not read archives at all yet", "the still-unbuilt half") while
+the build round that lands the surface removes every `xfail` marker the
+prose was describing and leaves the prose itself untouched. This is NOT the
+class `SEVERITY_LABEL_PATTERN`/`RESOLUTION_MARKER_PATTERN` above catch: that
+pair requires a specific citation shape ("Critical N"/"Significant N"/etc.)
+this prose never uses, so a docstring saying "not yet built" is invisible to
+it by construction -- confirmed twice on the same red suite
+(`tests/t2296-fp-free-open-red-suite/`), one round apart: D-SLM5018 S1/S3
+filed it first, and it recurred at scale (nine sites across two files) in
+the very build round that closed it (T-2382 finding S3).
+
+RULE COVERAGE, MEASURED. `_UNBUILT_CLAIM_PATTERN` (below) is a set of the
+exact phrasings this codebase has used for "not built yet," recovered from
+the real T-2382 finding rather than authored in the abstract: a bare
+`not yet built` (the `pytest.fail` guards this suite's own cells raised
+before the production module existed), `NONE OF THIS IS BUILT`, `still
+globs` (naming the pre-archive directory-glob path by name), `genuinely
+red-unimplemented`, a bare `unbuilt` (catching `still-unbuilt`,
+`(unbuilt -- xfail)`, and `unbuilt archive-composition`), `does not read
+archives`, `coincidentally the correct exit code`/`coincidentally exits N`
+(the "right answer for the wrong reason" shape), and a future-tense
+`will ... once ... lands/ships/builds` construction (T-2382's own finding
+that a docstring describing a landed interface in future tense is the same
+defect wearing different grammar). Validated (T-2385, this session) against
+the real historical population at commit `7a77a07^{tree}`'s own two files,
+`test_archive_composition.py` and `test_archive_gate.py`: both flag before
+the fix (nine sites, D-SLM5018-shaped), and both are clean after it --
+`test_check_present_tense_unbuilt_class.py` (`tests/t2296-fp-free-open-red-
+suite/`, this round's own test pin, since this module's own test file is
+outside this ticket's writable scope) replays both states through this
+scanner via `git show`, never a hand-transcribed stand-in.
+
+INPUT COVERAGE, DELIBERATELY NARROWER THAN THE SEVERITY-LABEL CHECK ABOVE.
+`_UNBUILT_CLAIM_GLOBS` scans only `tests/t2296-fp-free-open-red-suite/`,
+not the whole `tests/` tree `_DEFAULT_TEST_GLOBS` covers. Measured (T-2385):
+the identical trigger phrases scanned against the whole `tests/` tree hit
+two unrelated, correctly-worded files
+(`tests/ci/check_checked_chain_funnel_position_cap_not_a_stub.py` and its
+own test file) that quote a PAST "still-unbuilt"-shaped defect as the
+worked example inside a check built to detect that exact class on a
+DIFFERENT function -- accurate historical narration, not a live claim about
+current build status, and outside this ticket's own writable scope to
+correct even if it were the same defect. Widening this check's own input
+coverage to the whole tree the day a real instance is found outside this
+suite is the same discipline `_DEFAULT_TEST_GLOBS` above was widened under
+(T-1485 through T-1564); until then, scoping to the two files this defect
+has recurred in twice keeps the check honest about what it has actually
+been validated against.
+
+THE MARKER, AND WHY FILE-GRANULARITY RATHER THAN BLOCK-GRANULARITY. The
+severity-label check above requires the citation and its resolution marker
+in the SAME comment/docstring block, because a citation and an unrelated
+"closed" elsewhere in the file must not silently satisfy each other
+(T-1545's own paragraph-granularity fix exists for exactly this reason).
+This check's own marker -- an actual `@pytest.mark.xfail`/`pytest.mark.
+xfail(` decorator anywhere in the file -- is checked at FILE granularity on
+purpose: the defect this check pins is not "a citation and its marker
+disagree within one block," it is "this file's prose describes a whole
+surface as unbuilt-and-xfailed, and the file's own marker count is zero" --
+a fact about the file as a whole, which is exactly what T-2382 found (zero
+`xfail(strict=True)` markers survive in either file, confirmed by direct
+count, while the prose describing them does). A file that still carries
+live `xfail` markers elsewhere (this suite's own
+`test_check_fp_free_scan.py`, three markers, D-SLM5009's own genuinely open
+questions) is correctly NOT flagged even though it also contains
+trigger-shaped prose (`NOT YET BUILT` on an old defensive import guard,
+predating the archive round by many folds) -- that file has not had its
+markers stripped out from under its prose, which is the one state this
+check exists to catch.
 """
 from __future__ import annotations
 
@@ -224,6 +298,40 @@ _DEFAULT_TEST_GLOBS = (
     "tests/**/*.cpp",
     "tests/**/*.h",
     "tests/**/*.py",
+)
+
+
+# T-2385 (fold round 43, closing T-2382 finding S3): the exact phrasings
+# this codebase has used to claim a surface is "not built yet," recovered
+# from the real historical population rather than authored in the
+# abstract -- see the module docstring's own "A SECOND, INDEPENDENT DEFECT
+# CLASS" section for the provenance of each alternative and the validation
+# against commit 7a77a07's own two files.
+_UNBUILT_CLAIM_PATTERN = re.compile(
+    r"\bnot yet built\b"
+    r"|NONE OF THIS IS BUILT"
+    r"|\bstill globs\b"
+    r"|genuinely red-unimplemented"
+    r"|\bunbuilt\b"
+    r"|does not read archives"
+    r"|coincidentally (?:the correct exit code|exits \d+)"
+    r"|\bwill\b[^.]{0,100}\bonce\b[^.]{0,60}\b(?:lands?|ships?|builds?)\b",
+    re.IGNORECASE,
+)
+
+# A live, real xfail marker -- either decorator spelling this codebase uses
+# (`@pytest.mark.xfail(...)` or the bare attribute reference). Checked at
+# FILE granularity, not block granularity -- see the module docstring's own
+# "THE MARKER, AND WHY FILE-GRANULARITY" section for why the two checks in
+# this module use different granularities on purpose.
+_XFAIL_MARKER_PATTERN = re.compile(r"pytest\.mark\.xfail\b")
+
+# T-2385: scoped to the one suite this defect class has recurred in twice
+# (D-SLM5018, then T-2382 finding S3) -- see the module docstring's own
+# "INPUT COVERAGE, DELIBERATELY NARROWER" section for the measured reason
+# this is not yet `tests/**/*.py`.
+_UNBUILT_CLAIM_GLOBS = (
+    "tests/t2296-fp-free-open-red-suite/**/*.py",
 )
 
 
@@ -643,17 +751,71 @@ def scan_files(file_paths: list[str], repo_root: str = _REPO_ROOT) -> list[str]:
     return failures
 
 
+def find_stale_unbuilt_claim(text: str) -> str | None:
+    """T-2385: the second, independent defect class this module checks for
+    (see the module docstring's own "A SECOND, INDEPENDENT DEFECT CLASS"
+    section) -- `text` (a whole file's own content) asserts, in one of the
+    phrasings `_UNBUILT_CLAIM_PATTERN` names, that some surface is unbuilt,
+    while carrying no live `@pytest.mark.xfail` marker anywhere in it.
+    Returns the matched phrase, or None if the file is clean by this rule.
+    File-granularity by design -- see the module docstring's own "THE
+    MARKER, AND WHY FILE-GRANULARITY" section."""
+    match = _UNBUILT_CLAIM_PATTERN.search(text)
+    if match is None:
+        return None
+    if _XFAIL_MARKER_PATTERN.search(text):
+        return None
+    return match.group(0)
+
+
+def find_stale_unbuilt_claims(path: str) -> str | None:
+    """File-backed form of `find_stale_unbuilt_claim`: reads `path` and
+    applies the same rule."""
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    return find_stale_unbuilt_claim(text)
+
+
+def scan_unbuilt_claims(file_paths: list[str], repo_root: str = _REPO_ROOT) -> list[str]:
+    """Scans every file in `file_paths` for the stale-unbuilt-claim defect
+    class (T-2385). Returns one formatted failure string per flagged file,
+    empty if clean. A missing file is reported the same way `scan_files`
+    reports one, for the same reason (a file this check cannot read is a
+    file it cannot vouch for)."""
+    failures: list[str] = []
+    for p in file_paths:
+        abs_p = p if os.path.isabs(p) else os.path.join(repo_root, p)
+        rel = os.path.relpath(abs_p, repo_root)
+        if not os.path.isfile(abs_p):
+            failures.append(f"{rel}: file not found at {abs_p}")
+            continue
+        phrase = find_stale_unbuilt_claims(abs_p)
+        if phrase is not None:
+            failures.append(
+                f"{rel}: contains a not-yet-built-shaped claim ({phrase!r}) with no "
+                f"live @pytest.mark.xfail marker anywhere in the file"
+            )
+    return failures
+
+
 def main(globs: tuple[str, ...] = _DEFAULT_TEST_GLOBS, repo_root: str = _REPO_ROOT) -> int:
     files = _glob_files(globs, repo_root)
     failures = scan_files(files, repo_root)
-    if failures:
+
+    unbuilt_files = _glob_files(_UNBUILT_CLAIM_GLOBS, repo_root)
+    unbuilt_failures = scan_unbuilt_claims(unbuilt_files, repo_root)
+
+    if failures or unbuilt_failures:
         print("check_present_tense_defect_comments.py: FAILED", file=sys.stderr)
         for f in failures:
+            print(f"  - {f}", file=sys.stderr)
+        for f in unbuilt_failures:
             print(f"  - {f}", file=sys.stderr)
         return 1
     print(
         f"check_present_tense_defect_comments.py: OK -- {len(files)} test file(s) scanned, "
-        f"every severity-label citation carries a resolution marker"
+        f"every severity-label citation carries a resolution marker; "
+        f"{len(unbuilt_files)} file(s) scanned for stale not-yet-built claims, none found"
     )
     return 0
 

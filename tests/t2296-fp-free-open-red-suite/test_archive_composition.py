@@ -43,18 +43,16 @@ names. Every cell below therefore invokes `tests/ci/scan_build_output.py`
 as a subprocess against a fixture directory shaped that way: the same
 production CLI `build.bat` and `.github/workflows/tests.yml` both already
 invoke, unmodified. This is the composition stage's own graded observable
-(the job's exit code), tested through the interface the design specifies
-will keep reading it once the archive path lands (`find_target_objects`'s
-own directory glob is what changes; the CLI surface does not).
+(the job's exit code).
 
-NONE OF THIS IS BUILT YET. `scan_build_output.py`'s own `find_target_
-objects` still globs `<build_dir>/<target>.dir/**` for `.obj`/`.o` files --
-confirmed by direct execution this session, it finds nothing under any of
-this file's own fixture directories (each contains only `Release/
-superslm.lib`, no `<target>.dir`), so it exits 2 ("no object files found")
-on every fixture below, poisoned or clean alike. Every cell that
-distinguishes the two is therefore genuinely red-unimplemented and marked
-`xfail(strict=True)`.
+BUILT (T-2381, Brunel, 2026-08-28). `scan_build_output.py`'s own `main()`
+reads the archive at `<build_dir>/Release/superslm.lib` -- the exact layout
+every fixture below produces -- via `find_target_archive`/
+`enumerate_archive_objects`, and classifies every OBJECT-kind member it
+yields; `find_target_objects`'s own directory glob never runs against these
+fixtures, because an archive is present at the first candidate location
+`find_target_archive` checks. Every cell below carries no `xfail` marker and
+exercises the built interface directly.
 """
 from __future__ import annotations
 
@@ -188,16 +186,17 @@ def test_poisoned_archive_fixture_matches_forty_seventh_population(poisoned_arch
 
 def test_pop47_must_accept_real_archive_has_no_reject_under_the_built_gate(real_coff_archive, real_build_dir):
     """Fixture verification of the must-accept side, independent of the
-    unbuilt archive-composition CLI path: the real archive's own build
-    directory scans clean under the ALREADY-BUILT (D-SLM5047), currently
-    green object-directory gate -- 0 REJECT, 0 REFUSE, exit 0. Confirms the
+    composition-level assertions below: the real build directory scans
+    clean under the built ship gate -- which reads the archive at
+    `Release/superslm.lib` (T-2381/T-2385, D-SLM5100/D-SLM5101), not the
+    object directory -- 0 REJECT, 0 REFUSE, exit 0. Confirms the
     must-accept genuinely has no floating-point arithmetic before any
     archive-composition-level assertion is made against it, by reusing the
     already-commissioned gate rather than re-deriving a second reading."""
     rc, out, err = _run_scan_build_output(real_build_dir)
     assert rc == 0, (
-        "the real build's own object-directory gate (still the production "
-        "path today) must exit 0 on this session's own real corpus; got {} "
+        "the real build's own archive-based gate (the production path "
+        "today) must exit 0 on this session's own real corpus; got {} "
         "stdout={!r} stderr={!r}".format(rc, out, err)
     )
 

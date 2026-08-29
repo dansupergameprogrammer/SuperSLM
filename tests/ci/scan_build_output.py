@@ -50,24 +50,31 @@ is OPEN, waiting on Dan (D-SLM5009), and is pinned in the suite as
 retirement narrows what can fail checks (A)/(B) alone (a call/tail-jmp edge
 check (C) alone used to reject is now a non-gating diagnostic).
 
-THE OBJECT-DIRECTORY PATH IS RETAINED, NOT AS A FALLBACK OVER THE SAME BUILD
-(T-2381, Brunel). Design Sec4.1 rules out reading BOTH the archive and the
-directory for one build's own corpus -- that is the two-sources-of-truth
-shape the archive retargeting exists to close, and this driver never does
-it: whenever an archive exists at any of `find_target_archive`'s own
-candidate locations, it is read and the directory is never consulted for
-that run. `find_target_objects`/`_scan_object_directory_corpus` are kept,
-used only when NO archive is found at any candidate location, because
-several pre-archive unit constructions in
-`tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py` (read-only
-to this ticket) build a bare `<target>.dir` object layout with no archive at
-all and invoke this driver's own `main()` directly against it -- deleting
-the directory path would fail those currently-green, already-committed
-cells for a reason unrelated to what this round built. Every real CI leg
-(`.github/workflows/tests.yml`'s `fp-free-scan-gate` job, `build.bat`'s own
-gating invocation) always produces an archive, so this fallback is inert on
-every real leg; it exists solely for the pre-archive synthetic fixtures
-named above.
+THE ARCHIVE IS THE ONLY CORPUS -- NO FALLBACK (T-2385, Brunel, fold round 43,
+D-SLM5100/D-SLM5101, correcting T-2381's own retained fallback found by
+T-2382 finding S1/S4: the stated six-cell justification for keeping it
+measured one cell at source, not six). `main()` searches
+`find_target_archive`'s own four candidate locations, in order; if none
+exists, this is an infrastructure failure -- the search is printed and the
+job exits 2 -- and the object-directory scan is NEVER called. This design
+has retired every other dual-corpus mechanism outright rather than keeping
+the retired one as a named fallback (fold rounds 8, 10, 39, 40), and the
+same reasoning applies here: a fallback means the two corpora can still
+disagree on some future build layout neither author anticipated, which is
+exactly the two-sources-of-truth shape the archive retargeting exists to
+close. `find_target_objects`/`_scan_object_directory_corpus` remain in the
+tree, unretired and non-load-bearing, matching this design's own scrub
+convention for every mechanism it retires
+(`run_fp_free_scan_real_corpus.py`, fold rounds 39/40): three read-only
+cells in `tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py`
+still call `find_target_objects` directly against a build that already has
+an archive, and `_scan_object_directory_corpus` is kept callable for the
+same reason `find_target_objects` is, though nothing in this module calls
+it anymore. Design Sec7 dimension 11's restored fortieth population
+(D-SLM5099/D-SLM5103) grades exactly this contract: a build directory with
+no archive at any candidate location must exit 2 regardless of whether its
+own `<target>.dir` is clean or floating-point-carrying, because the
+corrected driver never opens the directory to find out which.
 
 WHAT IT DOES NOT ANSWER. Scanning is per-member and per-ISA. This module
 reports what `check_fp_free_scan.scan_object` returns for each object member,
@@ -87,9 +94,9 @@ Usage:
 
 Exit codes: 0 every object's checks (A)/(B) accept, on every symbol, and no
 object REFUSEs; 1 a checks-(A)/(B) REJECT or a REFUSE; 2 nothing to scan, the
-build directory was not found, or the archive/object-directory corpus itself
-could not be read (an infrastructure failure, kept distinct from a scan
-finding).
+build directory was not found, no archive was found at any candidate
+location, or the archive itself could not be read (an infrastructure
+failure, kept distinct from a scan finding).
 """
 
 import argparse
@@ -144,12 +151,14 @@ def find_target_objects(build_dir: str, target: str) -> list:
     Nothing is parsed and nothing is derived; the directory name is the build
     system's own record of which objects belong to the target.
 
-    T-2381 (Brunel): retained as the object-directory corpus's own reader,
-    used by `_scan_object_directory_corpus` only when `find_target_archive`
-    finds no archive at all -- see this module's own docstring ("THE
-    OBJECT-DIRECTORY PATH IS RETAINED..."). Also called directly by several
-    read-only cells in `tests/t2296-fp-free-open-red-suite/
-    test_check_fp_free_scan.py` that predate the archive-based corpus.
+    T-2385 (Brunel, fold round 43, D-SLM5100/D-SLM5101): kept in the tree as
+    a non-load-bearing utility -- `main()` never calls it, and
+    `_scan_object_directory_corpus` (below) is itself unreachable from
+    `main()` -- see this module's own docstring ("THE ARCHIVE IS THE ONLY
+    CORPUS -- NO FALLBACK"). Called directly by three read-only cells in
+    `tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py` that
+    predate the archive-based corpus and run against a build that already
+    has an archive, independent of this module's own dispatch.
     """
     wanted = target + ".dir"
     found = []
@@ -288,10 +297,14 @@ def _scan_archive_corpus(archive_path: str, args) -> int:
 
 
 def _scan_object_directory_corpus(args) -> int:
-    """The pre-archive object-directory corpus path (T-2367/T-2371),
-    retained per this module's own docstring ("THE OBJECT-DIRECTORY PATH IS
-    RETAINED...") -- used only when `find_target_archive` finds no archive
-    at any candidate location."""
+    """The pre-archive object-directory corpus path (T-2367/T-2371).
+    Non-load-bearing since T-2385 (fold round 43, D-SLM5100/D-SLM5101):
+    `main()` no longer calls this function under any condition -- the
+    archive-discovery contract has no fallback, per this module's own
+    docstring ("THE ARCHIVE IS THE ONLY CORPUS -- NO FALLBACK"). Kept in
+    the tree as a callable utility, matching this design's own scrub
+    convention for a retired mechanism (`run_fp_free_scan_real_corpus.py`,
+    fold rounds 39/40)."""
     objects = find_target_objects(args.build_dir, args.target)
     if not objects:
         print("ERROR: no object files found for target {!r} under {}".format(
@@ -334,15 +347,24 @@ def main() -> int:
         print("ERROR: build directory not found: {}".format(args.build_dir))
         return 2
 
-    # T-2381 (Brunel), design Sec4.1/Sec5.4 (D-SLM5034/D-SLM5038): the
-    # archive is the corpus whenever one exists at any candidate location --
-    # never consulted alongside the object directory for the same build, per
-    # this module's own docstring. The directory path below runs only when
-    # no archive is found at all.
+    # T-2385 (Brunel, fold round 43, D-SLM5100/D-SLM5101): the archive is
+    # the only corpus. `find_target_archive` searches its own four
+    # candidate locations, in order; if none exists, this is an
+    # infrastructure failure -- the search is printed and the job exits 2 --
+    # and the object-directory scan is never called. Design Sec7 dimension
+    # 11's restored fortieth population (D-SLM5103) grades exactly this: the
+    # build directory's own content, clean or floating-point-carrying, has
+    # zero effect on a missing-archive disposition.
     archive_path = find_target_archive(args.build_dir, args.target)
-    if archive_path is not None:
-        return _scan_archive_corpus(archive_path, args)
-    return _scan_object_directory_corpus(args)
+    if archive_path is None:
+        print("ERROR: no archive found for target {!r} under {} -- "
+              "searched:".format(args.target, args.build_dir))
+        for template in _ARCHIVE_CANDIDATES_TEMPLATE:
+            print("       {}".format(
+                os.path.join(args.build_dir, template.format(target=args.target))))
+        print("       Nothing to scan is an infrastructure failure, never a pass.")
+        return 2
+    return _scan_archive_corpus(archive_path, args)
 
 
 if __name__ == "__main__":

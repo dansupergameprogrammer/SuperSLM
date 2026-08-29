@@ -1592,6 +1592,50 @@ rem identical real corpus, now read via out\t2368_fp_scan_corpus_build\Release\s
 rem than the retired directory glob. Full engine regression (fresh CMake Release build,
 rem BuildTools-pinned toolset): 34213 checks, 0 failures, unchanged. See
 rem Claude/Brunel/t2381-archive-gate-build-2026-08-28.md for the full accounting.
+rem T-2385 (Brunel), design Sec4.1 fold round 43 (D-SLM5099-D-SLM5103), closing T-2382's own
+rem FIX-THEN-SHIP review of T-2381's build (S1/S2/S3/S4, M1/M2). S1/S4: the retained
+rem object-directory fallback in scan_build_output.py's main() is REMOVED, not kept and graded --
+rem main() now searches find_target_archive's own four candidate locations and, finding none,
+rem prints the search and exits 2; the object-directory scan is never called. The stated
+rem six-cell justification for keeping the fallback measured one cell at source (T-2382 S4);
+rem that one cell (test_gate_must_not_fail_on_a_check_c_only_reject) and its must-reject sibling
+rem (test_gate_still_fails_on_a_genuine_check_ab_violation) now build a real lib.exe archive for
+rem their own scratch build via archive_fixtures.run_lib_exe, so neither reads a corpus the
+rem corrected driver would refuse to open. S2: design Sec7 dim 11's fortieth population, retired
+rem at fold round 41 on a premise the built driver falsifies (main() DOES open a directory, the
+rem two reader functions alone do not), is restored at the design (D-SLM5099) and built here as
+rem two live cells in test_archive_gate.py -- a clean object directory and an FP-carrying one,
+rem both with no archive present, both required to exit 2, because the directory's own content
+rem must have zero effect on a missing-archive disposition. S3: the nine present-tense
+rem "not yet built" claims T-2382 found recurring on this same suite (D-SLM5018's own class,
+rem structurally invisible to check_present_tense_defect_comments.py's severity-label-only
+rem pattern) are corrected to current truth in test_archive_composition.py and
+rem test_archive_gate.py, and the class is closed structurally: check_present_tense_defect_
+rem comments.py gains a second, independent check (find_stale_unbuilt_claim/find_stale_
+rem unbuilt_claims/scan_unbuilt_claims) that fails when a file in tests/t2296-fp-free-open-red-
+rem suite/ carries a not-yet-built-shaped phrase with no live @pytest.mark.xfail marker anywhere
+rem in it -- validated (before any fix was applied) against the real historical population at
+rem this ticket's own starting commit 7a77a07: both files flag; both are clean after the fix.
+rem Its own test pin, test_check_present_tense_unbuilt_class.py, lives in tests/t2296-fp-free-
+rem open-red-suite/ rather than beside the module, since this ticket's writable scope names the
+rem check module alone, not its existing test file. M1/M2: conftest.py's docstring corrected --
+rem the archive, not the object directory, is the real ship gate's own production entry point
+rem since T-2381/T-2385; archive_fixtures.py's docstring corrected -- fp_carrier.cpp's function
+rem body is byte-identical to the adversary's probe, a 15-line adoption header differs (verified
+rem by diff this session). Five counts re-run this session, all from D:\SuperSLM\.worktrees\
+rem t2348-build: `pytest tests/t2296-fp-free-open-red-suite -q` 180 collected (149 baseline + 2
+rem pop40 cells + 29 in the new present-tense pin), 176 passed, 1 skipped, 3 xfailed, 0 failed --
+rem every one of the 149 baseline cells still passes; `pytest tests/ci -q` 377 passed, unchanged;
+rem the real COFF archive (D:/SuperSLM/.worktrees/t2367-bld/Release/superslm.lib) 17 objects, 1950
+rem ACCEPT, 0 REJECT, 0 REFUSE, exit 0, unchanged; the real ELF archive
+rem (D:/SuperSLM/.worktrees/elf-leg/libsuperslm.a) 17 objects, 523 ACCEPT, 0 REJECT, 0 REFUSE,
+rem exit 0, unchanged; full engine regression (fresh CMake Release build, BuildTools-pinned
+rem toolset) 34213 checks, 0 failures, unchanged -- no C++ production source is touched this
+rem round. Fail-closed behavior confirmed by direct execution: a synthetic build directory
+rem carrying real, uncompiled-but-present objects under <target>.dir and no archive at any
+rem candidate location now exits 2 with the search printed, where the pre-fix driver would have
+rem scanned the directory and exited 0 or 1 depending on its contents. See
+rem Claude/Brunel/t2385-archive-gate-fix-round-2026-08-28.md for the full accounting.
 pushd .
 set t2326_scan_ec=0
 rem T-2348 (Brunel): initialized here, OUTSIDE every nested if-block below, so the sentinel is

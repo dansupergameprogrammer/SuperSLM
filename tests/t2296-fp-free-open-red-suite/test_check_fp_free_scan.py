@@ -227,6 +227,10 @@ _FIXTURES = os.path.join(_HERE, "fp_scan_fixtures")
 
 sys.path.insert(0, _HERE)
 import fp_scan_common as fc  # noqa: E402
+import archive_fixtures as af  # noqa: E402  -- T-2385: run_lib_exe builds a real
+# archive for the two _run_gate cells below, whose scratch build must carry one
+# now that scan_build_output.py's main() no longer falls back to the object
+# directory (design Sec4.1 fold round 43, D-SLM5100/D-SLM5101).
 
 sys.path.insert(0, _FIXTURES)
 import pop14_make_objects as mk  # noqa: E402  -- pure-Python object synthesis, no compiler needed
@@ -3099,6 +3103,14 @@ def test_gate_must_not_fail_on_a_check_c_only_reject():
     PASS the ship gate. Confirmed by direct execution this session, before
     this assertion was written: the shipped driver reports REJECT and exits
     1 on this exact construction.
+
+    T-2385 (Brunel, fold round 43, D-SLM5100/D-SLM5101): the scratch build
+    below also carries a real `Release/superslm.lib` archive, built by
+    `lib.exe` from the same object -- `scan_build_output.py`'s own main()
+    no longer falls back to the object directory when no archive is found,
+    so a `_run_gate` cell whose scratch build carries no archive would now
+    exit 2 (infrastructure failure) before check (C) is ever reached,
+    which is not what this cell tests.
     """
     src = os.path.join(_FIXTURES, "pop17_carveout_reject.asm")
     with fc.TempDir() as tmp:
@@ -3109,6 +3121,14 @@ def test_gate_must_not_fail_on_a_check_c_only_reject():
         try:
             fc.assemble_ml64(src, obj)
         except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+
+        release_dir = os.path.join(build_dir, "Release")
+        os.makedirs(release_dir, exist_ok=True)
+        archive_path = os.path.join(release_dir, "superslm.lib")
+        try:
+            af.run_lib_exe(["/OUT:" + archive_path, "reject.obj"], cwd=target_dir)
+        except af.ToolUnavailable as e:
             pytest.skip(str(e))
 
         # Independent verification of the fixture's own truth, before the
@@ -3171,6 +3191,15 @@ def test_gate_still_fails_on_a_genuine_check_ab_violation():
     still fail. Already correct today (checks (A)/(B) already REJECT this
     symbol on their own, independent of check (C)), and must remain correct
     once check (C) stops gating.
+
+    T-2385 (Brunel, fold round 43, D-SLM5100/D-SLM5101): the scratch build
+    below also carries a real `Release/superslm.lib` archive holding BOTH
+    objects, built by `lib.exe` -- the same reason
+    test_gate_must_not_fail_on_a_check_c_only_reject needs one. Without an
+    archive, `main()` would exit 2 (no archive found) before either object
+    is ever scanned, which would leave this control's own `ec != 0`
+    assertion trivially satisfied for the wrong reason and no longer
+    discriminating check (C) from checks (A)/(B) at all.
     """
     reject_src = os.path.join(_FIXTURES, "pop17_carveout_reject.asm")
     arith_src = os.path.join(_FIXTURES, "pop07_fpblind.cpp")
@@ -3185,6 +3214,15 @@ def test_gate_still_fails_on_a_genuine_check_ab_violation():
             fc.compile_clangxx(arith_src, arith_obj, "x86_64-pc-windows-msvc",
                                extra_args=["-msse4.1"])
         except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+
+        release_dir = os.path.join(build_dir, "Release")
+        os.makedirs(release_dir, exist_ok=True)
+        archive_path = os.path.join(release_dir, "superslm.lib")
+        try:
+            af.run_lib_exe(["/OUT:" + archive_path, "reject.obj", "arith.obj"],
+                            cwd=target_dir)
+        except af.ToolUnavailable as e:
             pytest.skip(str(e))
 
         if not _SCAN_AVAILABLE:

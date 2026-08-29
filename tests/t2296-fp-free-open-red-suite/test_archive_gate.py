@@ -50,6 +50,9 @@ import archive_fixtures as af  # noqa: E402
 
 sys.path.insert(0, _CI_DIR)
 import check_fp_free_scan as scan  # noqa: E402
+import scan_build_output  # noqa: E402  -- T-2385: find_target_objects builds the
+# restored fortieth population's own no-archive fixtures (design Sec7 dim 11,
+# D-SLM5103), which need a real <target>.dir layout to place against no archive.
 
 _ELF_LIB_ENV = "SUPERSLM_FP_SCAN_ELF_LIB"
 _ELF_LIB_DEFAULT = r"D:/SuperSLM/.worktrees/elf-leg/libsuperslm.a"
@@ -102,13 +105,27 @@ def malformed_archives(real_coff_archive, tmp_path_factory):
     return af.build_malformed_fixtures(real_coff_archive, str(out_dir))
 
 
+@pytest.fixture(scope="session")
+def fp_carrier_obj(tmp_path_factory):
+    """The forty-seventh/forty-eighth populations' own genuinely
+    floating-point-carrying object (archive_fixtures.compile_fp_carrier),
+    adopted unmodified here for the restored fortieth population's own
+    FP-carrying-directory control (D-SLM5103)."""
+    out_dir = tmp_path_factory.mktemp("t2385_pop40_carrier")
+    obj = str(out_dir / "fp_carrier.obj")
+    try:
+        af.compile_fp_carrier(obj)
+    except af.ToolUnavailable as e:
+        pytest.skip(str(e))
+    return obj
+
+
 def _place_as_release_archive(archive_path, tmp_path, subdir="fixture_build"):
     """Lays out a directory shaped `<dir>/Release/superslm.lib`, matching the
     real windows-latest CI leg's own VS-generator output layout (design
     Sec4.1's own platform-legs paragraph) -- the shape scan_build_output.py's
-    own future archive-based `main()` is specified to read (unchanged CLI,
-    only which artifact is read changes). Returns the directory to pass as
-    `--build-dir`."""
+    own archive-based `main()` reads (T-2381, Brunel). Returns the directory
+    to pass as `--build-dir`."""
     build_dir = tmp_path / subdir
     release_dir = build_dir / "Release"
     release_dir.mkdir(parents=True, exist_ok=True)
@@ -264,8 +281,6 @@ def test_pop37_must_reject_bad_magic(malformed_archives):
     (unlike MalformedArchiveError, reserved for header-level corruption) --
     this cell asserts only that SOME exception is raised, never a silent
     empty read."""
-    if not hasattr(scan, "iterate_archive_members"):
-        pytest.fail("iterate_archive_members not yet built (design Sec4.1, D-SLM5035)")
     with pytest.raises(Exception):
         list(scan.iterate_archive_members(malformed_archives["bad_magic"]))
 
@@ -388,8 +403,6 @@ def test_pop39_must_reject_zero_object_archive_at_reader_level(malformed_archive
     test_pop39_must_reject_zero_object_archive_at_composition_level below
     must convert into an exit-2 infrastructure failure. This cell pins the
     stronger of the two acceptable shapes: raises."""
-    if not hasattr(scan, "enumerate_archive_objects"):
-        pytest.fail("enumerate_archive_objects not yet built (design Sec4.1, D-SLM5035)")
     with pytest.raises(Exception):
         objs = scan.enumerate_archive_objects(malformed_archives["zero_objects"])
         assert objs, "zero_objects.lib produced an empty list with no exception -- see composition-level cell"
@@ -399,16 +412,15 @@ def test_pop39_must_reject_zero_object_archive_at_composition_level(malformed_ar
     """Must-reject, composition level (design's own graded observable --
     "exit 2, identical treatment to today's zero-objects-found disposition"):
     a zero-object archive placed where the ship gate's own archive-based
-    driver will read it must make the job exit 2, never 0. Genuinely red
-    today for a different, honest reason than the reader-level cells above:
-    scan_build_output.py does not read archives at all yet (find_target_
-    objects globs a directory that does not exist in this fixture layout),
-    so it ALREADY exits 2 today ("no object files found") -- coincidentally
-    the correct exit code, for the wrong reason (no archive support, not a
-    correctly-diagnosed empty archive). Not marked xfail: exit 2 is the
-    correct assertion both before and after the archive path is built, so
-    this cell stays green throughout and is the one cell in this file that
-    is not expected to flip when the surface is built.
+    driver reads it must make the job exit 2, never 0. Built (T-2381,
+    Brunel): `scan_build_output.py`'s own `_scan_archive_corpus` calls
+    `enumerate_archive_objects`, catches `ArchiveHasNoObjectsError`, and
+    exits 2 for exactly that reason -- the correctly-diagnosed empty
+    archive, not the pre-archive object-directory path's own unrelated "no
+    object files found." Not marked xfail: exit 2 was already the correct
+    assertion before the archive path was built (the object-directory path
+    reached the same exit code for an unrelated reason) and remains correct
+    now that the archive path is what produces it.
     """
     build_dir = _place_as_release_archive(malformed_archives["zero_objects"], tmp_path)
     rc, out, err = _run_scan_build_output(build_dir)
@@ -416,15 +428,77 @@ def test_pop39_must_reject_zero_object_archive_at_composition_level(malformed_ar
 
 
 # ===========================================================================
-# Population 40 -- SUPERSEDED (D-SLM5057, fold round 41): closed by
-# construction, not by a population. No archive-based driver opens any
-# directory (iterate_archive_members/enumerate_archive_objects take only an
-# archive path), so no execution of them can vary with a build directory's
-# own contents -- there is no discriminating construction to author. No
-# cell in this file grades population 40; see this ticket's own casebook
-# (Claude/Curie/t2380-archive-gate-red-suite-2026-08-28.md) for the
-# explicit accounting.
+# Population 40, restored (D-SLM5099/D-SLM5103, fold round 43; supersedes
+# the fold-41 "closed by construction" disposition, D-SLM5057). Fold round
+# 41 retired this population on the ground that no archive-based driver
+# opens any directory -- true of iterate_archive_members/
+# enumerate_archive_objects, which take only an archive path, and never
+# true of scan_build_output.py's own main(), which (before T-2385) fell
+# back to the object-directory scan whenever find_target_archive found no
+# archive at any of its four candidate locations (T-2382 finding 2). T-2385
+# removes that fallback: main() now searches the four candidate locations
+# and exits 2, with the search printed, when none exists -- the
+# object-directory scan is never called. This population grades exactly
+# that: the directory's own content -- clean or floating-point-carrying --
+# has zero effect on a missing-archive disposition, because the corrected
+# driver never reads the directory to find out what is in it. Two cells,
+# not one, because a single must-reject cell would leave open whether an
+# incidental exit 2 came from never reading the directory or from reading
+# it and getting lucky on that content alone.
 # ===========================================================================
+
+def test_pop40_no_archive_clean_directory_exits_2(tmp_path, real_build_dir):
+    """Must-reject-shaped control 1 -- clean directory (D-SLM5103). A build
+    directory with no archive at any of find_target_archive's four
+    candidate locations, whose <target>.dir holds the real build's own
+    seventeen clean objects, must exit 2. A driver retaining the removed
+    fallback would scan the directory, find 0 REJECT / 0 REFUSE, and exit
+    0 -- a false PASS over a corpus that is not the shipped artifact."""
+    objects = scan_build_output.find_target_objects(real_build_dir, "superslm")
+    if not objects:
+        pytest.skip("real_build_dir produced no objects to build this fixture from")
+    build_dir = tmp_path / "pop40_clean"
+    target_dir = build_dir / "superslm.dir" / "Release"
+    target_dir.mkdir(parents=True)
+    for obj in objects:
+        with open(obj, "rb") as src, open(target_dir / os.path.basename(obj), "wb") as dst:
+            dst.write(src.read())
+    rc, out, err = _run_scan_build_output(str(build_dir))
+    assert rc == 2, (
+        "no archive present, clean object directory: expected exit 2 "
+        "(infrastructure failure -- the directory's own content must have "
+        "no bearing on a missing-archive disposition); got {} stdout={!r} "
+        "stderr={!r}".format(rc, out, err)
+    )
+
+
+def test_pop40_no_archive_fp_carrying_directory_exits_2(tmp_path, real_build_dir, fp_carrier_obj):
+    """Must-reject-shaped control 2 -- FP-carrying directory (D-SLM5103).
+    The same construction as above, plus one genuinely floating-point-
+    carrying object (the forty-seventh/forty-eighth populations' own
+    fp_carrier, adopted unmodified) -- must also exit 2, not 1. A driver
+    retaining the removed fallback would scan the directory, find one
+    REJECT, and exit 1 -- the right-shaped failure for the wrong reason,
+    over a corpus that is not the shipped artifact."""
+    objects = scan_build_output.find_target_objects(real_build_dir, "superslm")
+    if not objects:
+        pytest.skip("real_build_dir produced no objects to build this fixture from")
+    build_dir = tmp_path / "pop40_fp"
+    target_dir = build_dir / "superslm.dir" / "Release"
+    target_dir.mkdir(parents=True)
+    for obj in objects:
+        with open(obj, "rb") as src, open(target_dir / os.path.basename(obj), "wb") as dst:
+            dst.write(src.read())
+    with open(fp_carrier_obj, "rb") as src, open(target_dir / "fp_carrier.obj", "wb") as dst:
+        dst.write(src.read())
+    rc, out, err = _run_scan_build_output(str(build_dir))
+    assert rc == 2, (
+        "no archive present, FP-carrying object directory: expected exit 2 "
+        "(infrastructure failure), not 1 -- a REJECT reachable only by "
+        "reading the directory must never surface once the corrected "
+        "driver never reads it); got {} stdout={!r} stderr={!r}".format(
+            rc, out, err)
+    )
 
 
 # ===========================================================================
@@ -713,7 +787,7 @@ def test_dslm5032_real_elf_gcc_archive_all_four_corrections_end_to_end(real_elf_
 # Population 44 -- Mach-O's REFUSE-not-crash contract. Two cells: the
 # scan_object-level behavior (already correct today, T-2343/78535ed-t2339's
 # own M2 remedy -- NOT xfail, a real regression guard) and the archive/
-# composition-level behavior (unbuilt -- xfail).
+# composition-level behavior (built, T-2381 -- NOT xfail either).
 # ===========================================================================
 
 def test_pop44_scan_object_already_refuses_not_crashes_on_macho():
@@ -725,7 +799,7 @@ def test_pop44_scan_object_already_refuses_not_crashes_on_macho():
     the per-call half of the forty-fourth population's own contract; the
     per-ARCHIVE-MEMBER half (a REFUSE inside iterate_archive_members'
     per-member loop, with the failing member named in the job's own output)
-    is the still-unbuilt half, covered by the composition-level cell below.
+    is built (T-2381) and covered by the composition-level cell below.
     Not xfail."""
     with fc.TempDir() as tmp:
         p = os.path.join(tmp, "macho.obj")
@@ -740,23 +814,18 @@ def test_pop44_macho_archive_member_refuses_nonzero_exit_no_crash(malformed_arch
     """Must-reject (REFUSE sense): a real archive with one member's payload
     overwritten to carry Mach-O magic -- the job must exit nonzero, with no
     uncaught Python traceback (a genuine crash), once the archive-based
-    driver dispatches per-member scans. Today the CLI does not read
-    archives at all (find_target_objects globs a directory absent from this
-    fixture layout) and exits 2 for that unrelated reason -- asserted here
-    against the eventual per-member REFUSE contract (nonzero exit, no
-    traceback in stderr), which the current directory-glob path cannot
-    satisfy by construction."""
+    driver dispatches per-member scans. Built (T-2381): the archive-based
+    driver reads this fixture's own `Release/superslm.lib`, REFUSEs the
+    Mach-O-magic'd member, and the job exits 1."""
     build_dir = _place_as_release_archive(malformed_archives["macho_member"], tmp_path)
     rc, out, err = _run_scan_build_output(build_dir)
     # rc == 1 specifically (not merely nonzero): design Sec4.1 reserves exit
     # 2 for infrastructure failures (missing archive, zero objects,
     # malformed container) and a nonzero content-decision exit (REJECT/
-    # REFUSE) for everything the classifier or composition stage decides.
-    # Today's driver still globs a directory absent from this fixture
-    # layout and coincidentally exits 2 ("no object files found") for an
-    # unrelated reason -- asserting rc == 1 here (rather than the weaker
-    # rc != 0) keeps this cell genuinely red for its own stated reason
-    # instead of accidentally passing on that coincidence.
+    # REFUSE) for everything the classifier or composition stage decides --
+    # asserting rc == 1 here (rather than the weaker rc != 0) confirms this
+    # is a REFUSE reaching the job's exit code, not an infrastructure
+    # failure reaching it by coincidence.
     assert rc == 1, (
         "expected exit 1 (a REFUSE reaching the job's own exit code, "
         "design Sec4.1's REFUSE-verdict contract); got {} stdout={!r} "
