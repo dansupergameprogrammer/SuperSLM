@@ -4,6 +4,54 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-29
+
+Ask 4 of D-SLM4738's five consumer-driven asks (`Claude/Decisions/DecisionLog.md` D-SLM4984): the
+FP-free load path SuperEmbedder's first buildable encoder unit needs. Design of record:
+`Claude/Vitruvius/t2265-superslm-fp-free-open-design-2026-08-24.md`. Asks 2, 3, and 5 are not
+part of this release and remain open 1.x work (D-SLM4984).
+
+### Added
+
+- **A new, CI-checked guarantee: the `superslm` CMake target's compiled object output — every
+  member of the static archive it links into (`superslm.lib` on MSVC, `libsuperslm.a` wherever
+  `ar` produces one) — contains no floating-point arithmetic instruction.** "Floating-point
+  arithmetic instruction" means an instruction whose semantics compute a numeric result under
+  IEEE-754 rules (addition, subtraction, multiplication, division, square root, fused
+  multiply-add, rounding conversion, or a numeric comparison that reads operand bits as a float).
+  Decided by disassembling every archive member: checks (A) and (B) allow-list every known-safe
+  move, bitwise-logical, and integer mnemonic and reject everything else that touches the
+  vector/FP register file. **The guarantee covers only arithmetic present in SuperSLM's own
+  compiled objects — it asserts nothing about arithmetic an external callee (the CRT, the STL, a
+  consumer-installed callback) might itself perform.** (D-SLM4989)
+- **A new CI job, `fp-free-scan-gate`** (`.github/workflows/tests.yml`): configures and builds the
+  `superslm` target, scans the resulting archive with `tests/ci/scan_build_output.py`, and fails
+  the workflow on any rejected symbol or an archive member that cannot be read or recognized.
+  Runs the arc's own red suite (`tests/t2296-fp-free-open-red-suite`) in the same job, against the
+  same build.
+
+### Changed
+
+- **Internal hash containers.** `std::unordered_map`/`std::unordered_set`, used for the anti-LM's
+  per-context n-gram tables (`src/damped_greedy_antilm.cpp`), the live-sequence registry
+  (`src/sslm_abi.cpp`), duplicate tensor/constant-name detection (`src/model.cpp`), and the
+  tokenizer's BPE-merge and Unicode-normalization tables (`src/tokenizer.cpp`), are replaced by
+  this release's own open-addressing containers (`src/detail/int_hash.h`,
+  `src/detail/context_hash.h`) — removes the standard library's own bucket-count floating-point
+  division from the compiled corpus, which is what the guarantee above depends on not being
+  present. Internal implementation detail; no public signature changes.
+- **Seven compiled symbols restructured from a `switch` to a chain of direct conditional
+  branches**, removing a compiler-emitted jump table from each symbol's own compiled extent:
+  `SslmModelStatusName`, `ValidateSectionValues` (via its inlined `ValidateConfigGeometryJoin`),
+  `SslmForwardStatusName`, `BuildProofManifestJsonImpl`, `ConfigGeometryStatusName`,
+  `IsKnownSectionType`, and `ExpectedDtype`. Behaviourally identical in every case — the same
+  inputs map to the same outputs.
+- `AntiLmRetainedBytes`'s documentation (`include/superslm/sslm_damped_greedy.h`) is corrected:
+  the prior footprint calibration was fit to `std::unordered_map`'s own bucket shape and is
+  retracted as measured-false against this release's own containers, replaced with measured
+  lower-bound ranges by `max_order`, sampled across vocabulary size and generation length.
+  Comment-only — no declaration changed; this release carries no ABI change.
+
 ## [1.2.1] - 2026-08-24
 
 Twelve correctness items closed against 1.2.0, red-first (`Claude/Plans/SuperSLM_1p2p1_Plan.md`

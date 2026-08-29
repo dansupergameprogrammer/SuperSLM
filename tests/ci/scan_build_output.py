@@ -62,15 +62,20 @@ the retired one as a named fallback (fold rounds 8, 10, 39, 40), and the
 same reasoning applies here: a fallback means the two corpora can still
 disagree on some future build layout neither author anticipated, which is
 exactly the two-sources-of-truth shape the archive retargeting exists to
-close. `find_target_objects`/`_scan_object_directory_corpus` remain in the
-tree, unretired and non-load-bearing, matching this design's own scrub
-convention for every mechanism it retires
-(`run_fp_free_scan_real_corpus.py`, fold rounds 39/40): three read-only
-cells in `tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py`
-still call `find_target_objects` directly against a build that already has
-an archive, and `_scan_object_directory_corpus` is kept callable for the
-same reason `find_target_objects` is, though nothing in this module calls
-it anymore. Design Sec7 dimension 11's restored fortieth population
+close. `find_target_objects` remains in the tree, unretired and
+non-load-bearing, matching this design's own scrub convention for every
+mechanism it retires (`run_fp_free_scan_real_corpus.py`, fold rounds
+39/40): three read-only cells in
+`tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py` still call
+it directly against a build that already has an archive. The driver
+function that used to wrap it for `main()`'s own use,
+`_scan_object_directory_corpus`, is REMOVED (T-2388): unlike
+`find_target_objects`, it had acquired zero callers and zero test coverage
+anywhere in the tree once `main()` stopped calling it (fold round 43), so
+the retention precedent above -- a retired mechanism stays because
+something still exercises it -- did not cover it; keeping it would have
+been dead code with nothing to catch it going stale against `scan_object`'s
+own signature. Design Sec7 dimension 11's restored fortieth population
 (D-SLM5099/D-SLM5103) grades exactly this contract: a build directory with
 no archive at any candidate location must exit 2 regardless of whether its
 own `<target>.dir` is clean or floating-point-carrying, because the
@@ -127,16 +132,25 @@ _ARCHIVE_CANDIDATES_TEMPLATE = (
 )
 
 
+def _archive_candidate_paths(build_dir: str, target: str) -> list:
+    """Every location `_ARCHIVE_CANDIDATES_TEMPLATE` names for `target`'s
+    archive under `build_dir`, in search order -- the single source both
+    `find_target_archive` (which searches them) and `main`'s missing-archive
+    error path (which prints them) read from, so the list `main` prints can
+    never diverge from the list it actually searched (T-2388, O1)."""
+    return [os.path.join(build_dir, template.format(target=target))
+            for template in _ARCHIVE_CANDIDATES_TEMPLATE]
+
+
 def find_target_archive(build_dir: str, target: str):
     """The static-library archive CMake's own build produced for `target`,
-    at the first of `_ARCHIVE_CANDIDATES_TEMPLATE`'s own locations (relative
-    to `build_dir`) that exists. Returns the path, or None if none of the
-    candidates exists -- callers read None as "no archive at this build
-    directory," never as an error on its own (a caller may fall back to the
-    object-directory path, below, or may itself treat a missing archive as
-    an infrastructure failure)."""
-    for template in _ARCHIVE_CANDIDATES_TEMPLATE:
-        candidate = os.path.join(build_dir, template.format(target=target))
+    at the first of `_archive_candidate_paths`'s own locations that exists.
+    Returns the path, or None if none of the candidates exists -- `main`
+    reads None as an infrastructure failure and exits 2, printing every
+    location searched; there is no object-directory fallback (module
+    docstring, "THE ARCHIVE IS THE ONLY CORPUS -- NO FALLBACK",
+    D-SLM5100/D-SLM5101)."""
+    for candidate in _archive_candidate_paths(build_dir, target):
         if os.path.isfile(candidate):
             return candidate
     return None
@@ -152,13 +166,15 @@ def find_target_objects(build_dir: str, target: str) -> list:
     system's own record of which objects belong to the target.
 
     T-2385 (Brunel, fold round 43, D-SLM5100/D-SLM5101): kept in the tree as
-    a non-load-bearing utility -- `main()` never calls it, and
-    `_scan_object_directory_corpus` (below) is itself unreachable from
-    `main()` -- see this module's own docstring ("THE ARCHIVE IS THE ONLY
-    CORPUS -- NO FALLBACK"). Called directly by three read-only cells in
+    a non-load-bearing utility -- `main()` never calls it -- see this
+    module's own docstring ("THE ARCHIVE IS THE ONLY CORPUS -- NO
+    FALLBACK"). Called directly by three read-only cells in
     `tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py` that
     predate the archive-based corpus and run against a build that already
-    has an archive, independent of this module's own dispatch.
+    has an archive, independent of this module's own dispatch. The driver
+    function that used to wrap it for `main()`'s own use,
+    `_scan_object_directory_corpus`, is removed (T-2388) -- once `main()`
+    stopped calling it, it had no caller anywhere, unlike this function.
     """
     wanted = target + ".dir"
     found = []
@@ -174,9 +190,10 @@ def find_target_objects(build_dir: str, target: str) -> list:
 
 def _report_and_tally(label: str, result, counters: dict) -> None:
     """Prints one object member's own scan result and updates the shared
-    running totals -- the identical accounting and print shape both the
-    archive-based and object-directory corpus paths use (T-2381, Brunel),
-    factored out so the report format is defined once rather than twice."""
+    running totals -- factored out of `_scan_archive_corpus` (T-2381,
+    Brunel) so the report format is defined once. `_scan_object_directory_
+    corpus`, the only other caller this was ever factored out for, is
+    removed (T-2388, O2); this function is single-caller today."""
     if result.refuse:
         counters["refuse"] += 1
         print("  REFUSE   {}  (unclassified_bytes={}, format={})".format(
@@ -215,8 +232,9 @@ def _report_and_tally(label: str, result, counters: dict) -> None:
 
 
 def _finish(counters: dict, n_units: int) -> int:
-    """Prints the closing totals line and returns the job's own exit code --
-    shared by both corpus paths (T-2381, Brunel)."""
+    """Prints the closing totals line and returns the job's own exit code
+    (T-2381, Brunel). Single-caller today -- see `_report_and_tally`'s own
+    docstring (T-2388, O2)."""
     print()
     print("Totals: {} object(s); {} symbol(s) ACCEPT, {} REJECT, {} object(s) REFUSE "
           "(checks (A)/(B), gating); {} symbol(s) reject under check (C) alone "
@@ -296,46 +314,6 @@ def _scan_archive_corpus(archive_path: str, args) -> int:
     return _finish(counters, len(members))
 
 
-def _scan_object_directory_corpus(args) -> int:
-    """The pre-archive object-directory corpus path (T-2367/T-2371).
-    Non-load-bearing since T-2385 (fold round 43, D-SLM5100/D-SLM5101):
-    `main()` no longer calls this function under any condition -- the
-    archive-discovery contract has no fallback, per this module's own
-    docstring ("THE ARCHIVE IS THE ONLY CORPUS -- NO FALLBACK"). Kept in
-    the tree as a callable utility, matching this design's own scrub
-    convention for a retired mechanism (`run_fp_free_scan_real_corpus.py`,
-    fold rounds 39/40)."""
-    objects = find_target_objects(args.build_dir, args.target)
-    if not objects:
-        print("ERROR: no object files found for target {!r} under {}".format(
-            args.target, args.build_dir))
-        print("       Nothing to scan is an infrastructure failure, never a pass.")
-        return 2
-
-    print("Scanning {} object(s) emitted by the build for target {!r} (isa={})".format(
-        len(objects), args.target, args.isa))
-
-    # Built once, from every object's own symbol table, so each scan sees the
-    # whole in-corpus index rather than a growing prefix of it.
-    # `_read_function_symbol_names` lives in `check_fp_free_scan` itself
-    # (T-2371, D-SLM5018 M2): this driver's only production dependency is
-    # the scanner module already imported above as `scan`, not the retired
-    # `run_fp_free_scan_real_corpus.py` driver, which is not load-bearing
-    # for the ship gate and must not become a hard import of it.
-    corpus_symbols = frozenset().union(
-        *(scan._read_function_symbol_names(o) for o in objects)
-    )
-
-    counters = {"accept": 0, "reject": 0, "refuse": 0, "check_c_only": 0}
-    print()
-    for obj in objects:
-        result = scan.scan_object(obj, isa=args.isa, corpus_symbols=corpus_symbols)
-        rel = os.path.relpath(obj, args.build_dir)
-        _report_and_tally(rel, result, counters)
-
-    return _finish(counters, len(objects))
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--build-dir", required=True)
@@ -359,9 +337,12 @@ def main() -> int:
     if archive_path is None:
         print("ERROR: no archive found for target {!r} under {} -- "
               "searched:".format(args.target, args.build_dir))
-        for template in _ARCHIVE_CANDIDATES_TEMPLATE:
-            print("       {}".format(
-                os.path.join(args.build_dir, template.format(target=args.target))))
+        # T-2388, O1: the printed list is `find_target_archive`'s own search
+        # list, read from the same `_archive_candidate_paths` helper rather
+        # than rebuilt from `_ARCHIVE_CANDIDATES_TEMPLATE` here -- the two
+        # can no longer diverge by construction.
+        for candidate in _archive_candidate_paths(args.build_dir, args.target):
+            print("       {}".format(candidate))
         print("       Nothing to scan is an infrastructure failure, never a pass.")
         return 2
     return _scan_archive_corpus(archive_path, args)

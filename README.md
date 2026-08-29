@@ -14,12 +14,14 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.2.1**. This patch closes twelve GPU/CPU correctness
-defects found reviewing 1.2.0 — including a save/restore ordering hazard, two
-new liveness guards on the LoRA adapter lifecycle, and a new verb
-(`sslm_gpu_seq_bind_adapter`) for binding an adapter to a GPU sequence across
-calls, the mechanism serial specialist-switching needs. [CHANGELOG.md](CHANGELOG.md)
-has what changed; [Status](#status) below has what is measured where.
+Current release: **1.3.0**. This release adds a new, CI-checked guarantee: the
+compiled `superslm` static archive's own object code contains no
+floating-point arithmetic instruction, decided by disassembling every archive
+member the build produces (`tests/ci/scan_build_output.py`, the
+`fp-free-scan-gate` CI job) — a claim about SuperSLM's own compiled objects,
+not about arithmetic an external callee might itself perform.
+[CHANGELOG.md](CHANGELOG.md) has what changed; [Status](#status) below has
+what is measured where.
 
 ## Capabilities
 
