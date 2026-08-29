@@ -65,9 +65,10 @@ exactly the two-sources-of-truth shape the archive retargeting exists to
 close. `find_target_objects` remains in the tree, unretired and
 non-load-bearing, matching this design's own scrub convention for every
 mechanism it retires (`run_fp_free_scan_real_corpus.py`, fold rounds
-39/40): three read-only cells in
-`tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py` still call
-it directly against a build that already has an archive. The driver
+39/40): five read-only cells (three in
+`tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py`, two in
+`tests/t2296-fp-free-open-red-suite/test_archive_gate.py`) still call it
+directly against a build that already has an archive. The driver
 function that used to wrap it for `main()`'s own use,
 `_scan_object_directory_corpus`, is REMOVED (T-2388): unlike
 `find_target_objects`, it had acquired zero callers and zero test coverage
@@ -168,11 +169,12 @@ def find_target_objects(build_dir: str, target: str) -> list:
     T-2385 (Brunel, fold round 43, D-SLM5100/D-SLM5101): kept in the tree as
     a non-load-bearing utility -- `main()` never calls it -- see this
     module's own docstring ("THE ARCHIVE IS THE ONLY CORPUS -- NO
-    FALLBACK"). Called directly by three read-only cells in
-    `tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py` that
-    predate the archive-based corpus and run against a build that already
-    has an archive, independent of this module's own dispatch. The driver
-    function that used to wrap it for `main()`'s own use,
+    FALLBACK"). Called directly by five read-only cells that predate the
+    archive-based corpus and run against a build that already has an
+    archive, independent of this module's own dispatch: three in
+    `tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py` and two
+    more in `tests/t2296-fp-free-open-red-suite/test_archive_gate.py`. The
+    driver function that used to wrap it for `main()`'s own use,
     `_scan_object_directory_corpus`, is removed (T-2388) -- once `main()`
     stopped calling it, it had no caller anywhere, unlike this function.
     """

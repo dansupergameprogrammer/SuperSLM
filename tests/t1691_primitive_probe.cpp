@@ -12,7 +12,11 @@
 // through a CLI so a Python test can drive them as a subprocess and compare
 // stdout against its own independent computation, the same "drive a built
 // binary as a subprocess and parse its stdout" convention T-1689's own
-// red-first proof already established (tools/sslm_layer_trace.cpp).
+// red-first proof already established (tools/sslm_layer_trace.cpp). The
+// Python driver that did this, tools/test_t1691_shadow_layer_recompute.py,
+// is deleted from this branch (T-2389 item 4, D-SLM5125); this probe and
+// its build script remain, exercising real engine functions, with no
+// current caller.
 //
 // This file is the SAME shape as tests/cert_intmath.cpp -- a standalone
 // certifier-style probe, not part of the CMake-built superslm_tests binary

@@ -6,10 +6,9 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [1.3.0] - 2026-08-29
 
-Ask 4 of D-SLM4738's five consumer-driven asks (`Claude/Decisions/DecisionLog.md` D-SLM4984): the
-FP-free load path SuperEmbedder's first buildable encoder unit needs. Design of record:
-`Claude/Vitruvius/t2265-superslm-fp-free-open-design-2026-08-24.md`. Asks 2, 3, and 5 are not
-part of this release and remain open 1.x work (D-SLM4984).
+This release ships one of five requested consumer-driven changes: the FP-free load path
+SuperEmbedder's first buildable encoder unit needs. The other four remain open follow-up work
+for later 1.x releases.
 
 ### Added
 
@@ -19,11 +18,14 @@ part of this release and remain open 1.x work (D-SLM4984).
   arithmetic instruction" means an instruction whose semantics compute a numeric result under
   IEEE-754 rules (addition, subtraction, multiplication, division, square root, fused
   multiply-add, rounding conversion, or a numeric comparison that reads operand bits as a float).
-  Decided by disassembling every archive member: checks (A) and (B) allow-list every known-safe
-  move, bitwise-logical, and integer mnemonic and reject everything else that touches the
-  vector/FP register file. **The guarantee covers only arithmetic present in SuperSLM's own
+  Decided by disassembling every archive member: checks (A) and (B) accept known-safe move and
+  bitwise-logical mnemonics from an explicit list, accept packed-integer mnemonics by a
+  naming-convention rule (not an enumerated list) checked against a small exclusion set, and
+  reject everything else that touches the vector/FP register file. The naming-convention branch
+  is not yet proven closed against every possible future mnemonic in that class — a known, open
+  gap, not yet scheduled. **The guarantee covers only arithmetic present in SuperSLM's own
   compiled objects — it asserts nothing about arithmetic an external callee (the CRT, the STL, a
-  consumer-installed callback) might itself perform.** (D-SLM4989)
+  consumer-installed callback) might itself perform.**
 - **A new CI job, `fp-free-scan-gate`** (`.github/workflows/tests.yml`): configures and builds the
   `superslm` target, scans the resulting archive with `tests/ci/scan_build_output.py`, and fails
   the workflow on any rejected symbol or an archive member that cannot be read or recognized.
@@ -51,6 +53,10 @@ part of this release and remain open 1.x work (D-SLM4984).
   retracted as measured-false against this release's own containers, replaced with measured
   lower-bound ranges by `max_order`, sampled across vocabulary size and generation length.
   Comment-only — no declaration changed; this release carries no ABI change.
+- **`tools/convert_tokenizer.py`'s emitted CONFIG model label is now derived from the checkpoint
+  directory path** instead of being hardcoded to `qwen2.5-1.5b-instruct` — every converted
+  checkpoint previously carried that label regardless of which model it actually was. Seven new
+  tests cover the derivation (commit `87e0639`).
 
 ## [1.2.1] - 2026-08-24
 

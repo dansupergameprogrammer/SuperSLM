@@ -52,12 +52,15 @@ started this work is inlined by the compiler directly into SuperSLM's own object
 called out of line, so it is arithmetic present in the scanned corpus. The call-edge classifier
 was catching a different and weaker concern.
 
-**How it is decided.** Every archive member is disassembled. Checks (A) and (B) allow-list known
-safe move, bitwise-logical, and integer mnemonics and reject everything else that touches the
-vector or floating-point register file. The shape is deliberately allow-list rather than
-deny-list: an unknown mnemonic — a new ISA extension, a codegen change — is rejected rather than
-passed, so the gate fails closed. A member whose bytes cannot be fully accounted for is a REFUSE,
-which blocks the gate exactly as a REJECT does, with no partial credit.
+**How it is decided.** Every archive member is disassembled. Checks (A) and (B) accept known-safe
+move and bitwise-logical mnemonics from an explicit list, accept packed-integer mnemonics by a
+naming-convention rule (not an enumerated list) checked against a small exclusion set, and reject
+everything else that touches the vector or floating-point register file. The naming-convention
+branch is not yet proven closed against every possible future mnemonic in that class — the
+production file's own docstring (`tests/ci/scan_build_output.py`) states this narrower property
+directly, and it is an open, undecided question (not part of this release's scope) whether that
+branch should be tightened to an enumerated list. A member whose bytes cannot be fully accounted
+for is a REFUSE, which blocks the gate exactly as a REJECT does, with no partial credit.
 
 **ABI.** No ABI change. One public header is modified and the change is comment-only: the
 `AntiLmRetainedBytes` footprint calibration is retracted as measured-false against the new
@@ -155,11 +158,12 @@ run by the maintainer against this file. Neither is shown the other's findings.
 
 The claims worth attacking, in the order a defect in them would cost most:
 
-1. **The guarantee in §2 is either wider than the mechanism establishes, or the mechanism does not
-   establish it.** The allow-list is asserted to be fail-closed on an unknown mnemonic. Is it? A
-   prior strike on an earlier version of this gate found that for a large fraction of the
-   mnemonics one check accepted, a deny-list was in fact deciding — the opposite of the claimed
-   shape.
+1. **§2 already discloses that the packed-integer branch accepts by naming convention rather than
+   an enumerated list. Is that gap actually bounded to the class named** — packed-integer
+   mnemonics only — **or does it reach further than described?** A prior strike on an earlier
+   version of this gate found that for a large fraction of the mnemonics one check accepted, the
+   naming-convention rule was in fact deciding, on a class wider than any prior description
+   admitted.
 2. **The corpus is the archive the build produced.** If a compiled unit that ships can be absent
    from that archive, the guarantee has a hole that no amount of scanning inside it will find.
 3. **REFUSE is claimed to block exactly as REJECT does.** Verify that in the driver rather than in
