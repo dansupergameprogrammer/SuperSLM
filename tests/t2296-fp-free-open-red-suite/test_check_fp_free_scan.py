@@ -3321,17 +3321,49 @@ def test_check_a_bitwise_family_widening_must_accept():
         )
 
 
+# N/A -- T-2389 item 1 (Poirot 8788b01 -> D-SLM5128/D-SLM5129): the
+# real-corpus leg's own fixture precondition harvested one literal
+# mnemonic ("orps") that MSVC happened to select for the struct-pack site
+# in the build `build.bat` produces. `cmake -B build_ci_preflight` --
+# CI's own `fp-free-scan-gate` job configuration -- selects `xorps` for
+# the identical semantic pack instead (confirmed by direct disassembly
+# this session: 3 xorps, 0 orps, 611 total instructions). `xorps` is not
+# an incidental substitute; it is itself named, on equal footing with
+# `orps`, by the sixteen-member family D-SLM4987 widened (the same set
+# `_DSLM4987_EIGHT_FAMILY`'s legacy half enumerates above). The
+# precondition below is re-aimed at that named family rather than at one
+# member of it, so it stops being configuration-dependent on which member
+# the compiler picks and starts asserting the boundary the cell actually
+# claims: check (A) must ACCEPT a bitwise-family instruction on the
+# floating-point register file at this site, whichever family member is
+# present. A skip-when-absent repair was refused for this cell
+# (D-SLM5111's class, closed one round prior in this suite) -- the
+# precondition below still asserts, it does not skip.
+_BITWISE_FAMILY_MNEMONICS = {
+    "orps", "orpd", "andps", "andpd", "andnps", "andnpd", "xorps", "xorpd",
+    "vorps", "vorpd", "vandps", "vandpd", "vandnps", "vandnpd", "vxorps", "vxorpd",
+}
+
+
 def test_check_a_bitwise_family_real_corpus_leg(real_build_dir):
-    """The design's own real-corpus leg (D-SLM4982): `orps xmm2, xmm0` in
-    `ReadDampedGreedyScaleConstants`'s two overloads
-    (src/damped_greedy_phaseD.cpp) -- MSVC's own instruction selection for
-    packing two integer fields into an XMM-resident struct write, with no
-    floating-point type anywhere in either function. Scanned directly from
-    a real object built fresh by this session's own `real_build_dir`
-    fixture (conftest.py, T-2368, D-SLM5008 -- never a hand-configured,
-    unversioned directory) -- this suite's own standing law that at least
-    one cell runs the real build, applied to this cell's own claim rather
-    than only to a synthesized fixture.
+    """The design's own real-corpus leg (D-SLM4982): a D-SLM4987
+    bitwise-family instruction in `ReadDampedGreedyScaleConstants`'s two
+    overloads (src/damped_greedy_phaseD.cpp) -- MSVC's own instruction
+    selection for packing two integer fields into an XMM-resident struct
+    write, with no floating-point type anywhere in either function.
+    Scanned directly from a real object built fresh by this session's own
+    `real_build_dir` fixture (conftest.py, T-2368, D-SLM5008 -- never a
+    hand-configured, unversioned directory) -- this suite's own standing
+    law that at least one cell runs the real build, applied to this
+    cell's own claim rather than only to a synthesized fixture.
+
+    Which family member MSVC selects for this struct-pack site is a
+    codegen detail, not the claim: `build.bat`'s own build selects
+    `orps`, CI's `cmake -B build_ci_preflight` selects `xorps` (both
+    confirmed by direct disassembly this session) -- the precondition
+    below accepts any of the sixteen family members D-SLM4987 names,
+    since the boundary under test is that ALL of them must ACCEPT on this
+    non-floating-point site, not that one specific mnemonic must appear.
     """
     if not _SCAN_AVAILABLE:
         _fail_absent("(D-SLM4987 real-corpus leg)", "")
@@ -3347,11 +3379,14 @@ def test_check_a_bitwise_family_real_corpus_leg(real_build_dir):
 
     sections = fc.code_sections(obj_path, ".text")
     insns = _decode_sections(sections, "x86-64")
-    orps_insns = [i for i in insns if i.mnemonic.lower() == "orps"]
-    assert orps_insns, (
+    family_insns = [i for i in insns if i.mnemonic.lower() in _BITWISE_FAMILY_MNEMONICS]
+    assert family_insns, (
         "fixture verification FAILED: expected the real object to still "
-        "carry at least one orps instruction (D-SLM4982's own measured "
-        "leg); found none among {} instructions".format(len(insns))
+        "carry at least one D-SLM4987 bitwise-family instruction (orps/"
+        "orpd/andps/andpd/andnps/andnpd/xorps/xorpd or a VEX form) at "
+        "this struct-pack site; found none among {} instructions -- "
+        "mnemonics present: {}".format(
+            len(insns), sorted({i.mnemonic.lower() for i in insns}))
     )
 
     result = scan.scan_object(obj_path, isa="x86-64")
