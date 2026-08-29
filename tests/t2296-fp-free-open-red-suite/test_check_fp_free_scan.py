@@ -3766,11 +3766,40 @@ def test_dslm4359_seven_switch_jump_table_symbols_must_not_block_gate(real_build
 
 
 def test_scan_build_output_zero_objects_exits_2_not_a_pass():
-    """Must-reject leg: an empty or nonexistent <target>.dir must never
-    report a pass -- "nothing to scan is an infrastructure failure, never a
-    pass" (scan_build_output.py's own module docstring). Already correct
-    today; pinned here as a named regression guard, not a currently-broken
-    behavior.
+    """Must-reject leg: a build directory with no archive at any candidate
+    location must never report a pass -- "nothing to scan is an
+    infrastructure failure, never a pass" (scan_build_output.py's own
+    module docstring).
+
+    Re-aimed (T-2389 item 2, Poirot 8788b01 N6): the second leg used to
+    assert that an existing but empty `<target>.dir` exits 2 "(zero
+    objects found)". `main()` no longer enumerates `<target>.dir` at all
+    -- the archive is the only corpus (D-SLM5100/D-SLM5101) -- so it
+    reaches `find_target_archive`, finds no candidate, and exits 2 via
+    the identical missing-archive path a NONEXISTENT build directory
+    takes. An empty `<target>.dir` therefore graded nothing about object
+    count; it duplicated the first leg under a different label.
+
+    Re-aimed at what the driver actually discriminates: a `<target>.dir`
+    carrying a REAL compiled object, still with no archive at any
+    candidate path. This is the design's own "THE ARCHIVE IS THE ONLY
+    CORPUS -- NO FALLBACK" claim, not yet pinned anywhere else in this
+    suite -- `main()`'s own comment cites it (design Sec7 dim 11's
+    restored fortieth population, D-SLM5103) but no cell exercises a
+    populated object directory against a missing archive. Able to fail
+    for its own reason -- proven by mutation this round (T-2389 casebook,
+    `Claude/Curie/t2389-1p3-test-surface-repairs-2026-08-29.md`):
+    monkeypatching `find_target_archive` so it fabricates a hit (any real,
+    well-formed archive elsewhere on disk) for this exact populated,
+    archive-less build directory turns the exit code from 2 to 0 (PASS),
+    and the assertion below catches it. (A literal object-directory
+    fallback that mis-encodes the raw `.obj` itself as an archive is
+    instead caught one step later, by the malformed-archive check --
+    still exit 2, but for a different reason; the fabricated-hit mutation
+    isolates the property this leg actually pins: exit code 2 depends on
+    the archive genuinely being absent from every candidate location, not
+    on anything `find_target_archive` returns or on what is in
+    `<target>.dir`.)
     """
     if not _GATE_AVAILABLE:
         _fail_absent("(thirty-sixth population, must-reject)", "")
@@ -3781,11 +3810,26 @@ def test_scan_build_output_zero_objects_exits_2_not_a_pass():
             "failure), never a pass"
         )
 
-        empty_build = os.path.join(tmp, "empty-build")
-        os.makedirs(os.path.join(empty_build, "superslm.dir"))
-        assert _run_gate(empty_build) == 2, (
-            "an existing but empty <target>.dir (zero objects found) must "
-            "exit 2, never a pass"
+        populated_build = os.path.join(tmp, "populated-build")
+        target_dir = os.path.join(populated_build, "superslm.dir", "Release")
+        os.makedirs(target_dir)
+        src = os.path.join(_FIXTURES, "pop17_carveout_reject.asm")
+        obj = os.path.join(target_dir, "reject.obj")
+        try:
+            fc.assemble_ml64(src, obj)
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        assert os.path.isfile(obj), (
+            "fixture verification FAILED: expected a real compiled object "
+            "at {}".format(obj)
+        )
+
+        assert _run_gate(populated_build) == 2, (
+            "design Sec4.1 (fold round 43, D-SLM5100/D-SLM5101): the "
+            "archive is the only corpus, with no object-directory "
+            "fallback -- a <target>.dir carrying a real compiled object "
+            "but no archive at any candidate location must still exit 2, "
+            "never scan the object directory directly"
         )
 
 
