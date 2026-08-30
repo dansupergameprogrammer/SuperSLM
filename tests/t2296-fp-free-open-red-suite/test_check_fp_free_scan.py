@@ -141,7 +141,9 @@ docstring and in the T-2333 case file):
   5  synthetic multi-hop transitive-closure proof, graded via diagnostic_walk -- test_population_05_transitive_chain_diagnostic
   6  TU-set-desync, graded via build_call_graph/flagged_symbols/report (T-2333)-- test_population_06_tu_set_desync_end_to_end
   7  T-2271's eight-object classifier construction (fold round 7)            -- test_population_07_fpblind_classifier
-  8  real v1.2.1 whole-corpus sweep (fold rounds 7/8)                        -- test_population_08_real_corpus_whole_sweep
+  8  real v1.2.1 whole-corpus sweep (fold rounds 7/8); registered OPEN, T-2404
+     R5 -- discharged operationally by the CI gate, not gradable by a unit
+     cell; this cell verifies its own source-manifest premise only          -- test_population_08_source_manifest_resolves_seventeen_real_files
   9  T-2272's funclet, membership rule (fold round 8)                       -- test_population_09_funclet_membership
   10 T-2273's AArch64 differential control (fold round 9, historical) --
      split T-2403 R6 into a hard cell and a disclosed xfail(strict=True)
@@ -294,11 +296,23 @@ def _fail_absent(population_no, note=""):
     """The gating assertion every population ends in today. `note` states what
     THIS test already proved about its own fixture, independent of the
     instrument, so a reader of a failure log sees both halves: what is known
-    (the fixture is real and correct) and what is missing (the instrument)."""
+    (the fixture is real and correct) and what is missing (the instrument).
+
+    R9 (T-2404, D-SLM5209/D-SLM5211): the message below formerly claimed the
+    deciding instrument did not exist -- false since it was built, many
+    folds before this repair (confirmed at source: the file exists and this
+    suite imports it at module scope). The narrower, true claim this
+    helper's callers actually need is stated instead: the instrument
+    exists; the specific surface named by `population_no` and `note` is
+    what this cell cannot grade through it (a still-missing production
+    symbol, an allow-list awaiting its own build round, or similar) -- the
+    same operational-discharge reasoning population eight's own repair
+    (R5) already applies."""
     pytest.fail(
-        "check_fp_free_scan.py (design Sec4.1's deciding instrument) is not yet "
-        "built at tests/ci/check_fp_free_scan.py -- population {} cannot be "
-        "graded through it. {}".format(population_no, note)
+        "check_fp_free_scan.py (design Sec4.1's deciding instrument) exists at "
+        "tests/ci/check_fp_free_scan.py, but population {} cannot be graded "
+        "through it -- the surface this cell needs is absent from the shipped "
+        "module. {}".format(population_no, note)
     )
 
 
@@ -847,30 +861,29 @@ def test_population_07_fpblind_classifier(tier, extra_flags):
 # Population eight -- the real v1.2.1 whole-corpus sweep (fold rounds 7/8).
 # ===========================================================================
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="T-2347 (Curie), Poirot's O4/S5: this population calls pytest.fail() "
-    "unconditionally, by its own docstring's own design -- 'not gradable by "
-    "this single pytest cell even once the instrument exists.' xfail(strict=True) "
-    "moves this suite's own known-red state INTO the test file (Poirot's own "
-    "recommended structural fix, previously only enforceable by build.bat's own "
-    "fragile --deselect + --collect-only-count guard, S5). strict=True means an "
-    "accidental future PASS (this population can never legitimately pass, by "
-    "construction) would itself become a loud failure, not a silent XPASS. "
-    "build.bat's own --deselect flags for this test still apply today and make "
-    "this marker currently inert under that exact invocation -- removing the "
-    "now-redundant deselect (so this test is collected and actually hits the "
-    "marker) is a build-round follow-up, routed back, not done here (this "
-    "ticket's own writable scope is the test file, not build.bat's own gating "
-    "command line).",
-)
-def test_population_08_real_corpus_whole_sweep():
+# R5 (T-2404): this cell formerly ended in an unconditional pytest.fail()
+# stating the deciding instrument did not exist -- false since it was
+# built, many folds before this repair (confirmed at source this round:
+# the file exists and is imported by this suite). The
+# xfail(strict=True) marker that pinned that unconditional failure is
+# removed with it. This population's own real claim -- a full-corpus
+# build-and-scan of SUPERSLM_CORE_SOURCES -- is discharged operationally
+# by the CI gate running scan_build_output.py against the real corpus, not
+# by any unit cell in this file; no unit cell can grade a CI-scale
+# operation. Population eight is registered OPEN with that blocker stated
+# plainly, rather than recorded as covered by a cell that could not pass.
+# The cell is renamed to what it actually checks: the source manifest this
+# population's own claim depends on.
+def test_population_08_source_manifest_resolves_seventeen_real_files():
     """This population is a claim about the REAL, currently-committed engine
     source (SUPERSLM_CORE_SOURCES, CMakeLists.txt) -- not a constructed
-    fixture. Verified today: the real source list resolves to a non-vacuous
-    17-file population, and every named file exists on disk. Not gradable by
-    this single pytest cell even once the instrument exists -- a full-corpus
-    build-and-scan is CI-scale, not a unit cell.
+    fixture. Verified here: the real source list resolves to a non-vacuous
+    17-file population, and every named file exists on disk. This is the
+    whole of what this cell checks -- population eight's own claim (a
+    full-corpus build-and-scan) is CI-scale, not gradable by any unit cell,
+    and is registered OPEN rather than COVERED (design Sec7 dim 11): the
+    blocker is discharged operationally by the CI gate running
+    scan_build_output.py against the real corpus, outside this suite.
 
     T-2342 (design Sec5.4, D-SLM4861): the built instrument's own two
     real-corpus readings -- 181 REJECT of 5646 symbols (the build's own
@@ -912,16 +925,6 @@ def test_population_08_real_corpus_whole_sweep():
     )
     missing = [s for s in sources if not os.path.exists(os.path.join(engine_root, s))]
     assert not missing, "SUPERSLM_CORE_SOURCES names files that do not exist: {}".format(missing)
-
-    pytest.fail(
-        "check_fp_free_scan.py (design Sec4.1's deciding instrument) is not yet "
-        "built at tests/ci/check_fp_free_scan.py -- population eight cannot be "
-        "graded through it, and would not be graded by this single pytest cell "
-        "even once it exists (a full-corpus build-and-scan is a CI-scale "
-        "operation, not a unit cell). Verified above: SUPERSLM_CORE_SOURCES "
-        "resolves to the documented 17 real files, all present on disk "
-        "({}).".format(sources)
-    )
 
 
 # ===========================================================================

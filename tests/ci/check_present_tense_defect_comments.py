@@ -875,6 +875,36 @@ def _xfail_decorator_source_texts(text: str) -> list[str]:
     return sources
 
 
+def _rendered_string_constant_match(text: str):
+    """R9 (T-2404, D-SLM5209/D-SLM5211/D-SLM5215): the raw-text-only search
+    above cannot see a claim split across two adjacent Python string
+    literals -- e.g. `"...is not yet "` immediately followed by
+    `"built..."`, where the raw file carries a closing quote, a newline,
+    indentation, and an opening quote between "yet" and "built" (not
+    whitespace, so `_UNBUILT_CLAIM_PATTERN`'s own `\\s+` does not bridge
+    it), while Python's parser concatenates the two literals into one
+    string at parse time and the RENDERED value matches the pattern
+    cleanly. Parses `text` (`ast.parse`, the same machinery
+    `_xfail_decorator_source_texts` already uses in this module) and runs
+    `_UNBUILT_CLAIM_PATTERN` against the rendered `.value` of every
+    `ast.Constant` string node, returning the first match object found or
+    None. Returns None, rather than raising, when `text` cannot be parsed
+    as Python -- the same conservative direction
+    `_xfail_decorator_source_texts` takes; the raw-text surface above still
+    sees a real trigger phrase in unparseable text even when this one
+    cannot."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            found = _UNBUILT_CLAIM_PATTERN.search(node.value)
+            if found:
+                return found
+    return None
+
+
 def find_stale_unbuilt_claim(text: str) -> str | None:
     """T-2385: the second, independent defect class this module checks for
     (see the module docstring's own "A SECOND, INDEPENDENT DEFECT CLASS"
@@ -888,8 +918,17 @@ def find_stale_unbuilt_claim(text: str) -> str | None:
     either does or does not carry a covering marker, and that fact is
     checked once for the file, but "covering" now means the marker's own
     `reason=` text matches `_UNBUILT_CLAIM_PATTERN` too -- not merely that
-    some unrelated marker exists anywhere in the file."""
+    some unrelated marker exists anywhere in the file.
+
+    R9 (T-2404): two scan surfaces are unioned -- the raw text search
+    above, and a second pass (`_rendered_string_constant_match`) over
+    every string constant's RENDERED value, which catches a claim split
+    across adjacent literals that the raw-text surface cannot see. A file
+    is flagged if either surface matches; neither surface's own scope
+    (file-granularity, the covering-marker rule) changes."""
     match = _UNBUILT_CLAIM_PATTERN.search(text)
+    if match is None:
+        match = _rendered_string_constant_match(text)
     if match is None:
         return None
     covering = any(
