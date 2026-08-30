@@ -1882,6 +1882,12 @@ rem      integer classifier (this suite's own `_is_x86_fp_arith` was confirmed t
 rem      misclassify real packed-integer mnemonics `pmaxsd`/`pminsd`/`vpcmpd`/`vpmaxsd`/`vpminsd` as
 rem      floating-point-shaped) -- whether check (A) should be made fail-closed over the whole p/vp
 rem      class stays OPEN, waiting on Dan (D-SLM5009), and is not this ticket's to answer or build.
+rem      CLOSED 2026-08-29 (D-SLM5155/D-SLM5156, T-2404 R3): the p/vp class's fail-closed question
+rem      the paragraph above leaves OPEN is resolved. check_fp_free_scan.py's own
+rem      _X86_P_VP_STRUCTURAL_ALLOW replaces the deny-list-guarded structural rule with a frozen
+rem      allow-list; check (A) REJECTs an unrecognized p/vp mnemonic instead of accepting it by the
+rem      old rule's own silence. The paragraph above is left standing as a record of the round it
+rem      describes, not as a claim about the class's current state.
 rem      Re-executed this session: 77 collected, 74 passed, 3 xfailed, 0 failed (corpus available);
 rem      77 collected, 71 passed, 3 skipped, 3 xfailed, 0 failed (corpus forced unavailable). ANY
 rem      nonzero exit from this pytest invocation is now a real regression against this baseline.
