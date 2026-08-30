@@ -12,25 +12,27 @@ for later 1.x releases.
 
 ### Added
 
-- **A new, CI-checked guarantee: the `superslm` CMake target's compiled object output — every
-  member of the static archive it links into (`superslm.lib` on MSVC, `libsuperslm.a` wherever
-  `ar` produces one) — contains no floating-point arithmetic instruction.** "Floating-point
-  arithmetic instruction" means an instruction whose semantics compute a numeric result under
-  IEEE-754 rules (addition, subtraction, multiplication, division, square root, fused
-  multiply-add, rounding conversion, or a numeric comparison that reads operand bits as a float).
-  Decided by disassembling every archive member: checks (A) and (B) accept known-safe move and
-  bitwise-logical mnemonics from an explicit list, accept packed-integer mnemonics by a
-  naming-convention rule (not an enumerated list) checked against a small exclusion set, and
-  reject everything else that touches the vector/FP register file. The naming-convention branch
-  is not yet proven closed against every possible future mnemonic in that class — a known, open
-  gap, not yet scheduled. **The guarantee covers only arithmetic present in SuperSLM's own
+- **A new, CI-checked guarantee: checks (A) and (B) decide, by disassembly, that the `superslm`
+  CMake target's compiled object output contains no floating-point arithmetic instruction, over
+  the archive each enforced platform's own build produces — enforced on Windows/COFF, and on
+  Linux/ELF; not enforced on macOS, where no Mach-O reader exists and macOS is ruled out of
+  1.3.0's own scope.** "Floating-point arithmetic instruction" means an instruction whose
+  semantics compute a numeric result under IEEE-754 rules (addition, subtraction, multiplication,
+  division, square root, fused multiply-add, rounding conversion, or a numeric comparison that
+  reads operand bits as a float). Decided by disassembling every archive member: checks (A) and
+  (B) accept known-safe move and bitwise-logical mnemonics from an explicit, checked-in list, and
+  packed-integer mnemonics from a second explicit, checked-in allow-list — each entry individually
+  vetted against ISA-reference IEEE-754 semantics — and reject everything else that touches the
+  vector/FP register file, including any future packed-integer-shaped mnemonic that has not been
+  vetted onto that list. **The guarantee covers only arithmetic present in SuperSLM's own
   compiled objects — it asserts nothing about arithmetic an external callee (the CRT, the STL, a
   consumer-installed callback) might itself perform.**
 - **A new CI job, `fp-free-scan-gate`** (`.github/workflows/tests.yml`): configures and builds the
   `superslm` target, scans the resulting archive with `tests/ci/scan_build_output.py`, and fails
   the workflow on any rejected symbol or an archive member that cannot be read or recognized.
   Runs the arc's own red suite (`tests/t2296-fp-free-open-red-suite`) in the same job, against the
-  same build.
+  same build. The `linux-x64` job also scans its own build's archive with the same driver, gating
+  on Linux/ELF.
 
 ### Changed
 
