@@ -2123,6 +2123,21 @@ def _derive_composition_constants(cfg: ModelConfig, weight_scales, scales: Stati
             gain_scale = gain_of(f"{prefix}.{norm}.gain") / (1 << NORM_FRAC_BITS)
             constants[f"{prefix}.{norm}"] = canonical_scale(Fraction(gain_scale) / 127)
 
+        # T-2425 (Ask 5 Track B, design §6 Track B step 1 / §4): q_norm/k_norm's own site
+        # constant, by the IDENTICAL generic formula every other RMSNorm gain above already
+        # uses -- no new arithmetic, this design's own §2.2 finding that QK-norm is "the exact
+        # shape attn_norm's own call already takes" applies here too. Gated on presence in
+        # `weight_scales` (never unconditional like attn_norm/mlp_norm above): a checkpoint with
+        # no q_norm/k_norm tensors -- every existing Qwen2.5 incumbent -- has no
+        # "{prefix}.q_norm.gain" entry in weight_scales at all (Track C step 7's own conditional
+        # _weight_shapes enumeration), and `gain_of` would KeyError on it unconditionally.
+        for norm in ("q_norm", "k_norm"):
+            gain_key = f"{prefix}.{norm}.gain"
+            if gain_key not in weight_scales:
+                continue
+            gain_scale = gain_of(gain_key) / (1 << NORM_FRAC_BITS)
+            constants[f"{prefix}.{norm}"] = canonical_scale(Fraction(gain_scale) / 127)
+
         for proj in ("q_proj", "o_proj", "gate_proj", "up_proj", "down_proj"):
             _, s_ref = _reference_fold(weight_scales[f"{prefix}.{proj}"])
             constants[f"{prefix}.{proj}"] = canonical_scale(Fraction(s_ref) / 127)

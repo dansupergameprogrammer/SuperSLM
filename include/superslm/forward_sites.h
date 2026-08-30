@@ -657,6 +657,17 @@ struct LayerWeights {
 	CarriedScale q_site_constant;
 	CarriedScale o_site_constant;
 
+	// T-2425 (Ask 5 Track B, design §4/§6 Track B step 1): per-head QK-norm gain + site
+	// constant. nullptr means this layer's artifact carries no q_norm.gain/k_norm.gain WGT1
+	// tensor -- the identical optional-tensor convention `adapter`/`q_bias` below already use.
+	// ONE shared [head_dim] gain vector, reused across every head (Qwen3RMSNorm(head_dim) is
+	// one module instance applied per head, design §3) -- never [hidden_size] or [q_width],
+	// unlike attn_norm_gain/mlp_norm_gain above.
+	const int32_t* q_norm_gain = nullptr;  // head_dim, or nullptr
+	const int32_t* k_norm_gain = nullptr;  // head_dim, or nullptr
+	CarriedScale q_norm_site_constant;
+	CarriedScale k_norm_site_constant;
+
 	// C28's dynamic-arm bias, one array per q/k/v projection this layer's
 	// ProjectAndFunnel/K-V-landing calls consume (§6.2 step 2).
 	// nullptr means this projection carries no BIA1 entry at this layer -- the
@@ -745,6 +756,34 @@ struct LayerWeights {
 	CarriedScale down_site_constant;
 	CarriedScale mlp_residual_site_constant;
 };
+
+// T-2425 (Ask 5 Track B, design §2.2/§3/§4/§6 Track B): the per-head QK-norm CPU call site,
+// shared by RunLayerLoopImpl (single-token path) and RunLayerLoopChunkBatched (chunk-batched
+// path) since both duplicate the identical per-layer attention composition (GS-02/GS-03's own
+// census entries). Runs strictly between the K/V landing block and the RoPE loop's first
+// RopeApplySite call, on the plain K-landing path only (design §3, D-SLM5243): the combination
+// of q_norm/k_norm tensor presence with `option_g_fused_k_landing == true` is a defined
+// convert/load-time rejection (§6 Track B step 5), not a second call-site branch here -- a
+// caller reaching this function with that combination true is a design violation this function
+// does not itself re-check (§6 Track B step 5's own rejection is what makes that unreachable).
+//
+// `q_codes_row` is `hidden_size`-wide, this token's own already-computed q_proj output;
+// normalized IN PLACE, per query head (`num_heads` calls, each width `head_dim`), gated on
+// `lw.q_norm_gain != nullptr` -- RmsNormSite's own `incoming_scale` parameter is accepted but
+// never folded into its arithmetic (forward_sites.cpp: "never folded in" -- normalization
+// annihilates any input scale), so an empty `CarriedScale{}` is passed for both Q and K here
+// with no effect on the computed output. K is normalized in place at its just-landed row
+// (`MutableKeyRow`), ONCE PER KV HEAD (`num_key_value_heads` calls, not `num_heads` -- applying
+// RmsNormSite twice to an already-normalized row is not idempotent and would be wrong), gated on
+// `lw.k_norm_gain != nullptr`. `position` is this token's own `context_length`/chunk offset, the
+// same value the caller's own K/V landing call just used. No new arithmetic primitive: both
+// calls are the identical RmsNormSite composition `attn_norm`'s own call already uses, at a
+// narrower width and a higher call count (design §2.2's own text).
+SslmForwardStatus ApplyQkNormSite(int8_t* q_codes_row, uint8_t* workspace, uint32_t layer,
+                                   int64_t context_cap, size_t num_heads,
+                                   size_t num_key_value_heads, size_t head_dim, int64_t position,
+                                   const LayerWeights& lw, std::string_view site_prefix,
+                                   size_t token_index, SslmTraceHookState* trace_hook_state);
 
 // S3a's layer loop (§9.3, §11 S3.5): advances `seq` through up to
 // `layer_budget` layers of its CURRENT token, composing, per layer and in

@@ -1417,6 +1417,50 @@ SslmForwardStatus LandTokenKVRow(int64_t* kacc, int64_t* vacc, const int8_t* nor
 	return SslmForwardStatus::Ok;
 }
 
+// T-2425 (Ask 5 Track B, design §2.2/§3/§4/§6 Track B): the per-head QK-norm CPU call site --
+// see forward_sites.h's own declaration comment for the full contract. Both `q_norm_gain` and
+// `k_norm_gain` being null is the every-existing-incumbent case (no such artifact carries these
+// tensors) and this function returns Ok having done nothing, byte-for-byte matching this ask's
+// own additive/non-regressive contract (§6 Track A/B: "byte-identical output for every existing
+// artifact"). §4's asymmetric-presence rejection (exactly one of the two present) is enforced at
+// marshal time (layer_marshal.h's own MarshalLayer, §6 Track B step 4) -- a call reaching this
+// function has already been proven symmetric by construction, so this function does not
+// re-check it.
+SslmForwardStatus ApplyQkNormSite(int8_t* q_codes_row, uint8_t* workspace, uint32_t layer,
+                                   int64_t context_cap, size_t num_heads,
+                                   size_t num_key_value_heads, size_t head_dim, int64_t position,
+                                   const LayerWeights& lw, std::string_view site_prefix,
+                                   size_t token_index, SslmTraceHookState* trace_hook_state) {
+	if (lw.q_norm_gain != nullptr) {
+		for (size_t h = 0; h < num_heads; ++h) {
+			CarriedScale discard{};
+			int8_t* const q_row = q_codes_row + h * head_dim;
+			const SslmForwardStatus st =
+			    RmsNormSite(q_row, lw.q_norm_gain, head_dim, CarriedScale{},
+			                lw.q_norm_site_constant, q_row, &discard,
+			                LayerSite(site_prefix, layer, "q_norm"), token_index,
+			                trace_hook_state);
+			if (st != SslmForwardStatus::Ok) return st;
+		}
+	}
+	if (lw.k_norm_gain != nullptr) {
+		// ONE call per KV head, never per query head (design §2.2's own "not query head" text):
+		// applying RmsNormSite twice to an already-normalized row is not idempotent.
+		for (size_t kv_head = 0; kv_head < num_key_value_heads; ++kv_head) {
+			int8_t* const k_row = MutableKeyRow(workspace, layer, context_cap, num_key_value_heads,
+			                                    head_dim, kv_head, position);
+			CarriedScale discard{};
+			const SslmForwardStatus st =
+			    RmsNormSite(k_row, lw.k_norm_gain, head_dim, CarriedScale{},
+			                lw.k_norm_site_constant, k_row, &discard,
+			                LayerSite(site_prefix, layer, "k_norm"), token_index,
+			                trace_hook_state);
+			if (st != SslmForwardStatus::Ok) return st;
+		}
+	}
+	return SslmForwardStatus::Ok;
+}
+
 // T-1894 (design Sec31.2): the real body both public RunLayerLoop overloads
 // share (defined below, after this function closes). `option_g_fused_k_landing`
 // is this function's own new parameter -- the ONE addition; every other line
@@ -1732,6 +1776,18 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			    kv_hidden_size, num_key_value_heads, head_dim, l, position, context_cap,
 			    rope_tables, workspace, option_g_fused_k_landing, &seq.kv_saturation_count);
 			if (land_status != SslmForwardStatus::Ok) return land_status;
+		}
+
+		// T-2425 (Ask 5 Track B, design §2.2/§3): the per-head QK-norm call site -- strictly
+		// after Q's own projection and the K/V landing block above, strictly before the RoPE
+		// loop's first RopeApplySite call below, on the plain K-landing path only (design §3,
+		// D-SLM5243's own convert/load-time rejection of the option-G combination -- not
+		// re-checked here, see ApplyQkNormSite's own header comment).
+		if (!option_g_fused_k_landing) {
+			st = ApplyQkNormSite(q_codes.data(), workspace, l, context_cap, num_heads,
+			                     num_key_value_heads, head_dim, position, lw, site_prefix,
+			                     token_index, trace_hook_state);
+			if (st != SslmForwardStatus::Ok) return st;
 		}
 
 		// RoPE on q and on the just-landed k, per head (§6.2 step 3). k is
@@ -2218,6 +2274,16 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 			                    context_cap, rope_tables, workspace, option_g_fused_k_landing,
 			                    kv_saturation_count);
 			if (st != SslmForwardStatus::Ok) return st;
+
+			// T-2425 (Ask 5 Track B, design §2.2/§3): the chunk-batched sibling of
+			// RunLayerLoopImpl's own QK-norm call site above -- identical contract, one call
+			// per token in this chunk's own position order, strictly before the RoPE loop below.
+			if (!option_g_fused_k_landing) {
+				st = ApplyQkNormSite(q_codes.data() + t * hidden_size, workspace, l, context_cap,
+				                     num_heads, num_key_value_heads, head_dim, position, lw,
+				                     site_prefix, t, trace_hook_state);
+				if (st != SslmForwardStatus::Ok) return st;
+			}
 
 			std::vector<int8_t> q_rot(hidden_size), k_rot(hidden_size);
 			for (size_t h = 0; h < num_heads; ++h) {

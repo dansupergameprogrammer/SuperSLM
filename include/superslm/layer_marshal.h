@@ -83,6 +83,9 @@ inline superslm::CarriedScale ReadCarriedScale(const superslm::SslmKeyedConstant
 // instance per layer, kept alive for the whole decode call.
 struct LayerBacking {
 	std::vector<int32_t> attn_norm_gain, mlp_norm_gain;
+	// T-2425 (Ask 5 Track B, design §4/§6 Track B step 1): optional, empty unless this layer's
+	// artifact carries the corresponding WGT1 tensor.
+	std::vector<int32_t> q_norm_gain, k_norm_gain;
 	std::vector<int64_t> kv_r_t_k, kv_e_t_k, kv_r_t_v, kv_e_t_v;
 	std::vector<int64_t> iexp_m, iexp_e;
 	std::vector<int32_t> ctx_identity, ctx_mult, ctx_shift;
@@ -172,6 +175,25 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 	backing.mlp_norm_gain = WidenGainToInt32(*mlp_gain);
 	out.attn_norm_gain = backing.attn_norm_gain.data();
 	out.mlp_norm_gain = backing.mlp_norm_gain.data();
+
+	// T-2425 (Ask 5 Track B, design §4 "gated on tensor presence, not a config field"):
+	// q_norm.gain/k_norm.gain are OPTIONAL WGT1 tensors -- absent for every existing incumbent
+	// (LayerWeights::q_norm_gain/k_norm_gain default nullptr), present for a Qwen3-family
+	// artifact. Asymmetric presence (exactly one of the two) is a defined rejection, not two
+	// independent null checks (design §4's own closing paragraph, D-SLM5239/D-SLM5246) --
+	// checked here, the point both lookups have resolved for this layer, mirroring this
+	// function's own existing required-tensor rejection shape immediately above.
+	const superslm::SslmTensorView *q_norm_w = Wgt("q_norm.gain"), *k_norm_w = Wgt("k_norm.gain");
+	if ((q_norm_w != nullptr) != (k_norm_w != nullptr)) {
+		*err = prefix + ": asymmetric q_norm/k_norm presence";
+		return false;
+	}
+	if (q_norm_w != nullptr) {
+		backing.q_norm_gain = WidenGainToInt32(*q_norm_w);
+		backing.k_norm_gain = WidenGainToInt32(*k_norm_w);
+		out.q_norm_gain = backing.q_norm_gain.data();
+		out.k_norm_gain = backing.k_norm_gain.data();
+	}
 
 	// --- WSC1 per-output-channel fold: one (identity, mult, shift)
 	// array per output channel, per projection. Channel counts match exactly
@@ -312,6 +334,23 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 	out.attn_residual_site_constant =
 	    ReadCarriedScale(view.composition_constants, prefix + ".attn_residual", &ok);
 	out.mlp_norm_site_constant = ReadCarriedScale(view.composition_constants, prefix + ".mlp_norm", &ok);
+	// T-2425 (Ask 5 Track B): q_norm/k_norm's own site constant, required only when this
+	// layer's artifact actually carries the gain tensor -- `ok` is intentionally NOT threaded
+	// through this pair's own lookup when the tensor is absent (a model with no q_norm/k_norm
+	// tensors must not be rejected for lacking a composition-constants entry it has no use
+	// for). When present, missing the constant IS a required-entry failure, exactly like every
+	// other site above.
+	if (q_norm_w != nullptr) {
+		bool qk_ok = true;
+		out.q_norm_site_constant =
+		    ReadCarriedScale(view.composition_constants, prefix + ".q_norm", &qk_ok);
+		out.k_norm_site_constant =
+		    ReadCarriedScale(view.composition_constants, prefix + ".k_norm", &qk_ok);
+		if (!qk_ok) {
+			*err = prefix + ": q_norm/k_norm tensor present but missing composition_constants site entry";
+			return false;
+		}
+	}
 	out.gate_site_constant = ReadCarriedScale(view.composition_constants, prefix + ".gate_proj", &ok);
 	out.up_site_constant = ReadCarriedScale(view.composition_constants, prefix + ".up_proj", &ok);
 	out.mlp_act_site_constant = ReadCarriedScale(view.composition_constants, prefix + ".mlp_act", &ok);

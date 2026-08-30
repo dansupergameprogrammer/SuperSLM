@@ -2584,6 +2584,51 @@ extern "C" sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out
 	return SSLM_OK;
 }
 
+// T-2425 (Ask 5 Track D, design §5 "the hidden-state ABI verb's contract"): a new terminal on
+// the SAME shared decode-completion tail sslm_decode_stepImpl's own final_norm/logits/argmax
+// block already runs (above, ~line 2331's "finish it: final_norm, logits, argmax" comment) --
+// consumed instead of continuing to logits+argmax, not a new forward-pass computation. This
+// verb adds no RunLayerLoop machinery of its own: on entry, `seq->ready_for_logits == true`
+// means `seq->state.hidden_codes` already holds the fully-computed final hidden state (the same
+// fact sslm_decode_stepImpl's own comment at that branch states), and this function's only job
+// is the identical RmsNormSite("final_norm") call that block performs, copied out to the
+// caller instead of fed into LogitsSite. Locking follows sslm_stats's own precedent immediately
+// above: a single-sequence, read-only query, no registry/lifecycle lock taken.
+extern "C" sslm_status sslm_seq_get_hidden_state(sslm_model model, sslm_seq seq, int8_t* out_codes,
+                                                  sslm_carried_scale* out_scale) {
+	if (!model || !seq || !out_codes || !out_scale) return SSLM_INVALID_ARGUMENT;
+	if (!model->engine.ok) return SSLM_ARTIFACT_REJECTED;
+	// design §5's own precondition: "the named sequence has completed prefill through every
+	// prompt token ... the same 'ready for a completion action' point sslm_decode_step's own
+	// tail already checks". `ready_for_logits` IS that point (sslm_prefill/sslm_seq_adopt_prefix
+	// set it exactly there; sslm_decode_stepImpl's own ready_for_logits branch, above, reads the
+	// identical field for the identical reason). A sequence mid-generation (layer_index <
+	// num_hidden_layers, ready_for_logits false) has no complete hidden state to return.
+	if (!seq->ready_for_logits) return SSLM_SEQUENCE_NOT_READY;
+
+	const superslm::SslmModelConfig& c = model->view.config;
+	superslm::CarriedScale final_scale{};
+	std::vector<int8_t> final_codes(c.hidden_size);
+	// The identical RmsNormSite("final_norm") composition sslm_decode_stepImpl's own tail calls
+	// (this file, the "finish it" block) -- same gain, same site constant, same input
+	// (seq->state.hidden_codes/hidden_scale). No external_wide_scratch here: this verb has no
+	// caller-supplied workspace parameter (design §5's contract names none), so RmsNormSite
+	// falls back to its own internal allocation, matching every OTHER caller of this site that
+	// does not carve from a workspace.
+	const superslm::SslmForwardStatus fst = superslm::RmsNormSite(
+	    seq->state.hidden_codes, model->engine.final_norm_gain.data(), c.hidden_size,
+	    seq->state.hidden_scale, model->engine.final_norm_site_constant, final_codes.data(),
+	    &final_scale, "final_norm", /*token_index=*/0, /*trace_hook_state=*/nullptr);
+	if (fst != superslm::SslmForwardStatus::Ok) return MapForwardStatus(fst);
+
+	// Postcondition (design §5): "the sequence's own state is unmodified by the call" -- no
+	// field of `seq` is written anywhere above or below this line. Copy-out only.
+	std::memcpy(out_codes, final_codes.data(), static_cast<size_t>(c.hidden_size));
+	out_scale->m = final_scale.m;
+	out_scale->e = final_scale.e;
+	return SSLM_OK;
+}
+
 // -----------------------------------------------------------------------------------------
 // C5 -- save/restore (design Sec7.3): the blob format at that section's own field order.
 // Writers emit only the current magic. Readers recognize the shipped predecessor when its

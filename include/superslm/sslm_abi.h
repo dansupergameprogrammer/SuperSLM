@@ -158,7 +158,17 @@ typedef struct sslm_detok_state {
      * residual. Never returned for the current 'SSB4' format, which serializes the
      * residual unconditionally and cannot lose it. Appended at the END of this list,
      * same additive-only discipline as SSLM_NUMERIC_STEP_REFUSED above. */ \
-    X(SSLM_RESTORE_RESIDUAL_LOST) /* 27 */
+    X(SSLM_RESTORE_RESIDUAL_LOST) /* 27 */ \
+    /* T-2425 (Ask 5 Track D, design §5's own precondition: "the named sequence has completed
+     * prefill through every prompt token ... calling it before that point is a defined
+     * rejection ... not UB"). sslm_seq_get_hidden_state's own precondition-violation status --
+     * the sequence's hidden_codes do not (yet) hold a fully-computed final hidden state
+     * (seq->ready_for_logits == false; no sslm_prefill/sslm_seq_adopt_prefix has completed on
+     * it, or a sslm_decode_step call has already consumed the ready state and moved the
+     * sequence on). Appended at the END of this list, same additive-only discipline as
+     * SSLM_NUMERIC_STEP_REFUSED/SSLM_RESTORE_RESIDUAL_LOST above -- no already-shipped ordinal
+     * renumbers. */ \
+    X(SSLM_SEQUENCE_NOT_READY) /* 28 */
 
 typedef enum sslm_status {
 #define SSLM_STATUS_ENUM_VALUE_(name) name,
@@ -247,6 +257,18 @@ typedef struct sslm_stats_out {
      * (the same one already applied to forced_token_count). */
     int32_t schema_accepting;
 } sslm_stats_out;
+
+/* T-2425 (Ask 5 Track D, design §5 "the hidden-state ABI verb's contract"): the mantissa/
+ * exponent pair every scaled quantity crossing this ABI boundary already carries internally
+ * (superslm::CarriedScale, checked_chain_funnel.h) -- this is that same representation, given a
+ * plain-C mirror so it can cross the extern "C" boundary. The host dequantizes with
+ * `float_value[i] = code[i] * 2^e * m` (design §5's own stated formula, the identical one every
+ * existing CarriedScale consumer already applies) -- this ABI performs no float arithmetic
+ * itself, design §5's own architectural-posture grounding. */
+typedef struct sslm_carried_scale {
+    int64_t m;
+    int64_t e;
+} sslm_carried_scale;
 
 /* The alignment sslm_workspace_create and
  * sslm_kv_pool_create both require of their caller-supplied `buf`, on pain of

@@ -50,3 +50,24 @@ sslm_status sslm_workspace_create(sslm_model model, const sslm_config* config,
  * g5-comparable subset (see above). */
 sslm_status sslm_detokenize_stream(sslm_model model, sslm_detok_state* state, const int32_t* tokens,
                                     int32_t n, char* utf8, int32_t* out_n);
+
+/* T-2425 (Ask 5 Track D, design §5 "the hidden-state ABI verb's contract") -- new function, per
+ * this ABI's own append-only evolution contract (D-SLM3526). Takes the new sslm_carried_scale
+ * struct (see above) -- not part of the g5-comparable subset, matching sslm_decode_step_v2's own
+ * disposition immediately above (a symbol g5's own suite has no counterpart type for).
+ *
+ * Returns, on SSLM_OK, the raw quantized final_norm codes (out_codes, caller-owned buffer of at
+ * least model->hidden_size int8 elements -- the model's own config.hidden_size, queryable via no
+ * new accessor since every existing caller of this ABI already resolves it from
+ * sslm_workspace_size's own model handle) and their CarriedScale (out_scale) for `seq`, at its
+ * CURRENT position -- design §5's contract: no dequantization, no last-token selection beyond
+ * what the caller's own prior sslm_prefill sequencing already determined, no L2-normalization,
+ * no Matryoshka truncation. `seq` must have completed prefill through every prompt token (the
+ * same ready-for-a-completion-action point sslm_decode_step's own tail already checks) via the
+ * existing, unmodified prefill/decode-step call sequence -- calling this before that point
+ * returns SSLM_SEQUENCE_NOT_READY, a defined rejection, not UB, and touches neither out_codes nor
+ * out_scale. Non-mutating on success: `seq`'s own state is unchanged by this call (reading the
+ * hidden state is not a mutating operation, design §5's own postcondition), unlike
+ * sslm_decode_step's ready_for_logits path, which this verb does not consume. */
+sslm_status sslm_seq_get_hidden_state(sslm_model model, sslm_seq seq, int8_t* out_codes,
+                                       sslm_carried_scale* out_scale);
