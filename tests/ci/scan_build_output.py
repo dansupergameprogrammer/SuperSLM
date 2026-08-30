@@ -39,14 +39,19 @@ unchanged). This driver's own pass/fail decision is a function of
 `ab_verdicts` and `refuse` alone -- a call/tail-jmp edge check (C) cannot vet
 (an external target absent from the vetted list, or a first-party indirect
 tail jump) is reported below as a non-gating diagnostic, never as a build
-failure. A genuine check-(A)/(B) violation still fails the job exactly as
-before EXCEPT on one open, named axis: an unvetted vector-register mnemonic
-fails unless it is `p`/`vp`-prefixed, in which case check (A) is
-structural-only and currently fail-OPEN on that whole class (measured:
-capstone 5.0.7's own vocabulary gives 555 accepted `p`/`vp` mnemonics, of
-which 454 are named by no allow-list at all) -- whether to close that class
-is OPEN, waiting on Dan (D-SLM5009), and is pinned in the suite as
-`xfail(strict=True)` rather than asserted here as settled. Check (C)'s
+failure. A genuine check-(A)/(B) violation still fails the job exactly as before,
+with no open axis remaining: check (A)'s `p`/`vp` branch consults an
+explicit, checked-in allow-list (`check_fp_free_scan.
+_X86_P_VP_STRUCTURAL_ALLOW`), and an unvetted vector-register mnemonic
+fails whether or not it is `p`/`vp`-prefixed -- D-SLM5155/D-SLM5156 (Dan,
+2026-08-29) closed the previously-open question this paragraph used to
+describe, when an unvetted `p`/`vp` mnemonic reached no named rule at all
+and check (A) accepted it anyway. The allow-list is a frozen snapshot of
+the vocabulary's own `p`/`vp`
+naming-convention membership less a six-entry, individually vetted deny
+list, not a fresh per-mnemonic re-derivation (D-SLM5229); an unrecognized
+future `p`/`vp` mnemonic REJECTs by default, which is what makes the
+freeze fail closed rather than the individual membership. Check (C)'s
 retirement narrows what can fail checks (A)/(B) alone (a call/tail-jmp edge
 check (C) alone used to reject is now a non-gating diagnostic).
 
@@ -122,9 +127,12 @@ _OBJ_EXTS = (".obj", ".o")
 # is read: `cmake -B build` on that runner defaults to the Visual Studio
 # generator, producing `build/Release/<target>.lib`, the first candidate.
 # The remaining candidates are defensive, covering a single-config Windows
-# generator and a GNU-`ar`-toolchain layout (`lib<target>.a`) for whichever
-# leg next wires the ELF/GCC archive path CI-side (design Sec7 dim 11's
-# forty-sixth population, routed, not built by this round).
+# generator and a GNU-`ar`-toolchain layout (`lib<target>.a`). R2 (T-2404)
+# wired the `linux-x64` job's own `fp-free-scan-gate` invocation to read
+# this candidate -- it is now that leg's live lookup path, not a
+# placeholder for a future one -- though the design's own fiftieth
+# population (must-accept/must-reject commissioning this driver against a
+# real GNU-`ar` archive) is not yet built (D-SLM5230, deferred to 1.3.1).
 _ARCHIVE_CANDIDATES_TEMPLATE = (
     os.path.join("Release", "{target}.lib"),
     "{target}.lib",
