@@ -1112,10 +1112,7 @@ def test_population_10a_arm_differential_fixture_and_format():
     "the day that gap closes and byte-accounting stops REFUSING this "
     "object, this marker flips to a loud XPASS failure demanding removal "
     "and the four verdict assertions begin discriminating for the first "
-    "time, rather than silently continuing to pass for the wrong reason. "
-    "build.bat's own --deselect flags for this test still apply today (see "
-    "the population-eight marker above); the same build-round follow-up "
-    "note applies here.",
+    "time, rather than silently continuing to pass for the wrong reason.",
 )
 def test_population_10b_arm_differential_verdicts_disclosed_tension():
     """Population ten's xfail(strict=True) cell (T-2403, R6): the five
@@ -3566,6 +3563,19 @@ def test_check_a_bitwise_family_real_corpus_leg(real_build_dir):
 # alone, not an allow-list -- is unchanged and is what the cell below
 # checks: a design that claims "never a deny-list ... fail-closed on any
 # mnemonic neither check names" is false while this count is nonzero.
+#
+# CLOSURE NOTE (T-2404/T-2407): every paragraph above describes the
+# classifier as it stood through T-2368's own D-SLM5009a rebaseline --
+# deny-list-guarded, and open on whether to make it fail-closed
+# (D-SLM5009). D-SLM5155/D-SLM5156 (Dan, 2026-08-29) closed that question:
+# `_X86_P_VP_STRUCTURAL_ALLOW` (R3, T-2404) replaces the deny-list-guarded
+# structural rule with a frozen allow-list, and check (A)'s p/vp branch is
+# fail-closed as of that commit, not fail-open. The counts this block
+# reasoned toward (1523/571/117/454) are current facts about the shipped
+# classifier -- see `test_check_a_p_vp_structural_accept_census_and_
+# violation`'s own docstring below for why D-SLM5156's closure leaves them
+# unchanged -- but the OPEN-question framing in the paragraphs above is
+# superseded and must not be read as describing today's classifier.
 # ===========================================================================
 
 
@@ -3707,17 +3717,35 @@ def test_check_a_p_vp_structural_only_set_is_pinned_against_vocabulary_growth():
     positives on ordinary packed-integer instructions, which would make
     this cell red for the wrong reason.
 
-    A membership pin needs no such classifier: ANY change to this set -- a
-    capstone upgrade adding OR removing a member -- is exactly the
-    observable signal D-SLM4999's residual concern needs, whether or not
-    the new member turns out to be genuinely floating point, and is a
-    strictly SAFER (superset) trigger than one that fires only on a
-    confirmed-FP addition. On failure, a human determines whether each
-    added member is genuine floating-point arithmetic (D-SLM4999's hole
-    leaking a third time -- raise it, do not silently regenerate the pin)
-    or genuine packed-integer (regenerate the pin deliberately, as a
-    reviewed change, never automatically); a removed member means capstone
-    renamed or retired a mnemonic.
+    A membership pin needs no such classifier: a REMOVED member -- capstone
+    renaming or retiring a mnemonic already admitted onto the frozen
+    allow-list -- is exactly the observable signal D-SLM4999's residual
+    concern needs from THIS cell, and needs no confirmed-FP classification
+    to trigger.
+
+    S6 (T-2407, review e9879e2-t2404-1p3-shipping-repair-set-review.md):
+    D-SLM5156's own freeze (R3, T-2404) forecloses this cell's other half.
+    `_x86_check_a`'s p/vp branch now consults `_X86_P_VP_STRUCTURAL_ALLOW`
+    alone, so a brand-new p/vp mnemonic capstone starts recognizing is, by
+    construction, absent from that frozen list -- it REJECTs and never
+    enters `accept_a`, so it never enters `structural_only` either. This
+    cell alone can no longer see a member ADDED to the set the way it once
+    did (when the pre-freeze rule accepted anything not on a 6-entry deny
+    list, a genuinely new mnemonic joined `structural_only` automatically).
+    The added-member half of "any change to this set" is restored by the
+    sibling cell below,
+    `test_check_a_p_vp_naming_convention_vocabulary_is_pinned_against_growth`,
+    which watches the raw p/vp naming-convention vocabulary instead of
+    this post-decision accept set, so a new mnemonic changes what THAT
+    cell sees the moment capstone starts emitting it, REJECT or not.
+
+    On failure here, a removed member means capstone renamed or retired a
+    mnemonic already admitted onto the frozen allow-list -- raise it; the
+    fixture is not silently regenerated. (The `added` branch below is kept
+    rather than deleted: it still fires, safely, if `_X86_VEC_MOVE_ALLOW`
+    ever shrinks and reclassifies an existing accept into
+    `structural_only` -- it is only a brand-new capstone mnemonic that
+    this cell can no longer see arrive.)
     """
     if not _SCAN_AVAILABLE:
         _fail_absent("(D-SLM4999 p/vp vitality pin, membership)", "")
@@ -3733,6 +3761,92 @@ def test_check_a_p_vp_structural_only_set_is_pinned_against_vocabulary_growth():
         "leaking again -- raise it, do not silently regenerate) or genuine "
         "packed-integer (regenerate the pin deliberately) before updating "
         "the fixture.".format(len(pinned), added, removed)
+    )
+
+
+def _p_vp_naming_convention_membership():
+    """S6 (T-2407): the raw p/vp-prefixed, non-`pf`-prefixed capstone
+    vocabulary, independent of `_x86_check_a`'s own D-SLM5156 frozen-
+    allow-list decision -- reproduced fresh every call, like
+    `_census_check_a_p_vp_structural_reliance` above. Starts with `p` or
+    `vp`, does not start with `pf`, and is not one of
+    `_X86_VEC_MOVE_ALLOW`'s own named entries -- the identical predicate
+    the pre-D-SLM5156 structural rule used, kept alive here purely as a
+    census surface now that `_x86_check_a` no longer computes it. See
+    `test_check_a_p_vp_naming_convention_vocabulary_is_pinned_against_
+    growth`'s own docstring for why this population, not `structural_only`,
+    is what detects an ADDED p/vp mnemonic post-freeze."""
+    from capstone import x86_const
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+    vocabulary = sorted({
+        md.insn_name(getattr(x86_const, attr))
+        for attr in dir(x86_const) if attr.startswith("X86_INS_")
+        if md.insn_name(getattr(x86_const, attr))
+    })
+    named = set(scan._X86_VEC_MOVE_ALLOW)
+    return sorted(
+        m for m in vocabulary
+        if (m.startswith("p") or m.startswith("vp"))
+        and not m.startswith("pf")
+        and m not in named
+    )
+
+
+_P_VP_NAMING_CONVENTION_PIN_PATH = os.path.join(
+    _FIXTURES, "p_vp_naming_convention_pinned.txt")
+
+
+def _load_pinned_p_vp_naming_convention():
+    with open(_P_VP_NAMING_CONVENTION_PIN_PATH) as f:
+        return sorted(
+            line.strip() for line in f
+            if line.strip() and not line.strip().startswith("#")
+        )
+
+
+def test_check_a_p_vp_naming_convention_vocabulary_is_pinned_against_growth():
+    """S6 (T-2407, review e9879e2-t2404-1p3-shipping-repair-set-review.md):
+    restores the added-member half of "any change to this set" the
+    sibling cell above,
+    `test_check_a_p_vp_structural_only_set_is_pinned_against_vocabulary_
+    growth`, can no longer detect once D-SLM5156's freeze (R3, T-2404) is
+    in place -- see that cell's own docstring for why. A brand-new
+    p/vp-shaped mnemonic REJECTs under `_x86_check_a` (absent from
+    `_X86_P_VP_STRUCTURAL_ALLOW`) and so never reaches `structural_only`,
+    but it DOES change `_p_vp_naming_convention_membership`'s raw,
+    decision-independent population the moment capstone starts emitting
+    it -- which is exactly the human-vetting trigger the frozen
+    allow-list's own design depends on: the freeze is safe (an
+    unrecognized mnemonic REJECTs by default) but not self-maintaining,
+    and nothing else notices a new member exists to vet.
+
+    440 members: the 438-member frozen allow-list plus `pi2fd`/`pi2fw`,
+    the two `_X86_P_PREFIX_EXCLUDE` deny-list entries capstone's own
+    vocabulary still recognizes (the deny list's other four entries either
+    are not p/vp-prefixed by this exact rule -- `vcvtne2ps2bf16`,
+    `vcvtneps2bf16` -- or are absent from capstone 5.0.7's own vocabulary
+    entirely -- `vdpbf16ps`, `vpdpbf16ps` -- reproduced and executed
+    against the real capstone install, not asserted).
+    """
+    if not _SCAN_AVAILABLE:
+        _fail_absent("(D-SLM4999 p/vp vitality pin, naming-convention membership)", "")
+    naming = _p_vp_naming_convention_membership()
+    pinned = _load_pinned_p_vp_naming_convention()
+    added = sorted(set(naming) - set(pinned))
+    removed = sorted(set(pinned) - set(naming))
+    assert added == [] and removed == [], (
+        "check (A)'s p/vp naming-convention vocabulary (independent of "
+        "the frozen allow-list) changed since fp_scan_fixtures/"
+        "p_vp_naming_convention_pinned.txt was pinned ({} members) -- "
+        "added: {}; removed: {}. An added member is a new p/vp-shaped "
+        "mnemonic capstone now recognizes that _X86_P_VP_STRUCTURAL_ALLOW "
+        "has never seen -- vet it against ISA-reference IEEE-754 "
+        "semantics and, if it performs no floating-point operation, add "
+        "it to the allow-list deliberately (never automatically) before "
+        "updating this pin; if it does perform floating-point arithmetic, "
+        "it already REJECTs under the freeze and no production change is "
+        "needed either way. A removed member means capstone renamed or "
+        "retired a mnemonic.".format(len(pinned), added, removed)
     )
 
 
@@ -4074,22 +4188,36 @@ _KNOWN_P_VP_FP_LEAKS = frozenset({"pi2fd", "pi2fw", "vpdpbf16ps"})
 
 def test_check_a_p_vp_structural_allow_agrees_with_independent_fp_oracle():
     """Population fifty-one's corrected must-accept (D-SLM5156): every
-    mnemonic on the real, built _X86_P_VP_STRUCTURAL_ALLOW is cross-checked
-    against the independent oracle above -- none of the three known real FP
-    leaks may appear on the allow-list.
+    mnemonic the independent oracle above names is run through the real,
+    unmodified `_x86_check_a` -- production code, not a set intersection
+    over the raw allow-list -- and none may be ACCEPTed via the
+    `p_vp_structural_allow` branch.
+
+    M5 (T-2407, review e9879e2-t2404-1p3-shipping-repair-set-review.md):
+    the ORIGINAL form of both cells in this population computed
+    `set(scan._X86_P_VP_STRUCTURAL_ALLOW) & _KNOWN_P_VP_FP_LEAKS` directly
+    -- a membership check against the list under test, never calling
+    `_x86_check_a` at all, so `mock.patch.object` in the must-reject cell
+    below had no bearing on what either assertion actually exercised. Both
+    cells now call `_x86_check_a` per mnemonic, the real function
+    `check_fp_free_scan.scan_object` calls in production, so the oracle
+    grades what the shipped classifier actually decides.
     """
     if not hasattr(scan, "_X86_P_VP_STRUCTURAL_ALLOW"):
         _fail_absent(
             "fifty-one (must-accept: allow-list vs. independent FP oracle)",
             "_X86_P_VP_STRUCTURAL_ALLOW is not yet defined on check_fp_free_scan.",
         )
-    allow_list = set(scan._X86_P_VP_STRUCTURAL_ALLOW)
-    leaked = allow_list & _KNOWN_P_VP_FP_LEAKS
-    assert leaked == set(), (
-        "the allow-list wrongly admits {} known real IEEE-754-arithmetic "
-        "mnemonic(s) the independent oracle identifies as genuine floating-"
-        "point: {} -- the allow-list and the oracle disagree".format(
-            len(leaked), sorted(leaked))
+    vec_ops = "xmm1, xmm2"
+    leaked = sorted(
+        m for m in _KNOWN_P_VP_FP_LEAKS
+        if scan._x86_check_a(m, vec_ops) == "p_vp_structural_allow"
+    )
+    assert leaked == [], (
+        "_x86_check_a wrongly ACCEPTs {} known real IEEE-754-arithmetic "
+        "mnemonic(s) via the p_vp_structural_allow branch, per the "
+        "independent oracle: {} -- the shipped classifier and the oracle "
+        "disagree".format(len(leaked), leaked)
     )
 
 
@@ -4102,6 +4230,14 @@ def test_check_a_p_vp_mis_vetted_allow_list_caught_by_independent_oracle():
     Proves the corrected check discriminates a mis-vetted list from a
     genuinely fail-closed one, rather than only checking the list against
     itself (a membership tautology that cannot fail on any input).
+
+    M5 (T-2407): the must-reject now runs `_x86_check_a("pi2fd", ...)`
+    against the module under `mock.patch.object`, not a set intersection
+    over the patched attribute directly -- `_x86_check_a` resolves
+    `_X86_P_VP_STRUCTURAL_ALLOW` as a module global at call time, so the
+    patch is genuinely exercised through the production function's own
+    control flow, and the assertion would fail if `_x86_check_a`'s p/vp
+    branch were ever rewired to consult a different list.
     """
     if not hasattr(scan, "_X86_P_VP_STRUCTURAL_ALLOW"):
         _fail_absent(
@@ -4112,13 +4248,17 @@ def test_check_a_p_vp_mis_vetted_allow_list_caught_by_independent_oracle():
         "fixture verification FAILED: 'pi2fd' must not already be on the "
         "real, correctly-vetted allow-list"
     )
+    vec_ops = "xmm1, xmm2"
     mis_vetted = set(scan._X86_P_VP_STRUCTURAL_ALLOW) | {"pi2fd"}
     with mock.patch.object(scan, "_X86_P_VP_STRUCTURAL_ALLOW", mis_vetted):
-        leaked = set(scan._X86_P_VP_STRUCTURAL_ALLOW) & _KNOWN_P_VP_FP_LEAKS
-        assert leaked == {"pi2fd"}, (
+        leaked = sorted(
+            m for m in _KNOWN_P_VP_FP_LEAKS
+            if scan._x86_check_a(m, vec_ops) == "p_vp_structural_allow"
+        )
+        assert leaked == ["pi2fd"], (
             "D-SLM5164's own construction: re-admitting 'pi2fd' to the "
-            "allow-list must be caught by the independent oracle cross-"
-            "check -- got {}".format(sorted(leaked))
+            "allow-list must make _x86_check_a('pi2fd', ...) ACCEPT via "
+            "the p_vp_structural_allow branch -- got {}".format(leaked)
         )
 
 
@@ -4147,7 +4287,17 @@ def _census_check_a_reason_attribution():
     value is a reason STRING (attributed) or merely truthy-non-string
     (unattributed). Never a cached or hardcoded population, so a capstone
     upgrade is read fresh every call -- the same discipline
-    _census_check_a_p_vp_structural_reliance already follows."""
+    _census_check_a_p_vp_structural_reliance already follows.
+
+    M3 (T-2407, review e9879e2-t2404-1p3-shipping-repair-set-review.md):
+    the third return value is named `unattributed`, not `structural_only`
+    -- `_census_check_a_p_vp_structural_reliance`'s own `structural_only`
+    names a completely different quantity (accepted, and not on
+    `_X86_VEC_MOVE_ALLOW`, regardless of whether the acceptance carries a
+    reason string); this census's own quantity is accepted with NO
+    reason string at all. Same identifier, two unrelated meanings, one
+    file was the finding; this function's own return value is renamed to
+    stop it."""
     from capstone import x86_const
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
     vocabulary = sorted({
@@ -4157,35 +4307,35 @@ def _census_check_a_reason_attribution():
     })
     vec_ops = "xmm1, xmm2"
     accept_a = []
-    structural_only = []
+    unattributed = []
     for m in vocabulary:
         r = scan._x86_check_a(m, vec_ops)
         if not r:
             continue
         accept_a.append(m)
         if not isinstance(r, str):
-            structural_only.append(m)
-    return vocabulary, accept_a, structural_only
+            unattributed.append(m)
+    return vocabulary, accept_a, unattributed
 
 
 def test_check_a_reason_attribution_census_every_accept_has_a_reason():
     """Population fifty-two's must-accept (D-SLM5157): once _x86_check_a
-    adopts the Optional[str] contract (R4), structural_only (redefined:
-    every acceptance with no reported reason) must be [] -- every member of
+    adopts the Optional[str] contract (R4), `unattributed` (every
+    acceptance with no reported reason) must be [] -- every member of
     accept_a is attributed to exactly one of the three named reasons
     (_X86_VEC_MOVE_ALLOW, _X86_BITWISE_FP_FAMILY, _X86_P_VP_STRUCTURAL_ALLOW).
 
     TODAY _x86_check_a still returns bool: every accepted mnemonic's own
-    'reason' is the literal True, not a string, so structural_only ==
+    'reason' is the literal True, not a string, so unattributed ==
     accept_a in full (nonempty) -- this cell fails for exactly that reason
     until R4's contract change lands.
     """
-    _vocabulary, accept_a, structural_only = _census_check_a_reason_attribution()
-    assert structural_only == [], (
+    _vocabulary, accept_a, unattributed = _census_check_a_reason_attribution()
+    assert unattributed == [], (
         "{} of {} check(A) acceptances report no distinguishable reason "
         "(not a string) -- _x86_check_a has not yet adopted the "
         "Optional[str] contract (R4); first 10: {}".format(
-            len(structural_only), len(accept_a), structural_only[:10])
+            len(unattributed), len(accept_a), unattributed[:10])
     )
 
 
@@ -4230,12 +4380,12 @@ def test_check_a_reason_attribution_census_catches_a_silently_unattributed_accep
         return r
 
     with mock.patch.object(scan, "_x86_check_a", _mutant):
-        _vocabulary, _accept_a, structural_only_mutant = _census_check_a_reason_attribution()
-    assert len(structural_only_mutant) == len(bitwise_family), (
+        _vocabulary, _accept_a, unattributed_mutant = _census_check_a_reason_attribution()
+    assert len(unattributed_mutant) == len(bitwise_family), (
         "mutating the bitwise_fp_family branch's own reason tag (ACCEPT "
         "unchanged, reason stripped to a bare truthy sentinel) was "
-        "expected to make structural_only nonempty ({} members, the "
+        "expected to make unattributed nonempty ({} members, the "
         "family's own size) -- got {}: the census does not actually "
         "discriminate a silently-unattributed accept from an attributed "
-        "one".format(len(bitwise_family), len(structural_only_mutant))
+        "one".format(len(bitwise_family), len(unattributed_mutant))
     )
