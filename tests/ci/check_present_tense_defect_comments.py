@@ -863,7 +863,13 @@ def _xfail_decorator_source_texts(text: str) -> list[str]:
     rather than being silently cleared."""
     try:
         tree = ast.parse(text)
-    except SyntaxError:
+    except (SyntaxError, ValueError, RecursionError):
+        # M4 (T-2407, review e9879e2-t2404-1p3-shipping-repair-set-review.md):
+        # ast.parse raises SyntaxError on malformed syntax, ValueError on
+        # source containing a null byte, and RecursionError on
+        # pathologically deep nesting -- all three are "cannot be parsed
+        # as Python" per this function's own docstring, not SyntaxError
+        # alone.
         return []
     sources: list[str] = []
     for node in ast.walk(tree):
@@ -895,7 +901,13 @@ def _rendered_string_constant_match(text: str):
     cannot."""
     try:
         tree = ast.parse(text)
-    except SyntaxError:
+    except (SyntaxError, ValueError, RecursionError):
+        # M4 (T-2407, review e9879e2-t2404-1p3-shipping-repair-set-review.md):
+        # ast.parse raises SyntaxError on malformed syntax, ValueError on
+        # source containing a null byte, and RecursionError on
+        # pathologically deep nesting -- all three are "cannot be parsed
+        # as Python" per this function's own docstring, not SyntaxError
+        # alone.
         return None
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -903,6 +915,53 @@ def _rendered_string_constant_match(text: str):
             if found:
                 return found
     return None
+
+
+def _xfail_decorator_rendered_texts(text: str) -> list[str]:
+    """S3 (T-2407, review e9879e2-t2404-1p3-shipping-repair-set-review.md):
+    the same real-decorator scan `_xfail_decorator_source_texts` performs,
+    but returns each real `@pytest.mark.xfail(...)` decorator's own string
+    constants RENDERED by Python's parser -- adjacent-literal concatenation
+    already applied -- rather than the raw, un-rendered source text that
+    function returns. A `reason=` argument whose text is split across two
+    adjacent string literals (this suite's own hard-wrap convention;
+    `test_check_fp_free_scan.py`'s one live marker wraps its `reason=` this
+    way across 17 adjacent-literal joins) renders as one joined string in
+    `ast.Constant.value` even though the raw source carries a closing
+    quote, a newline, indentation, and an opening quote between the two
+    halves -- the identical rendering gap `_rendered_string_constant_match`
+    exists to close for the file-wide raw-text surface (R9, T-2404).
+    `find_stale_unbuilt_claim`'s `covering` check consulted only the raw
+    surface, which could not see a claim disclosed in a wrapped `reason=`
+    even on a file where `_rendered_string_constant_match` had just found
+    that identical claim via its own rendered value one line above --
+    detection and coverage read different surfaces for the same claim, so
+    a properly-disclosed, live `xfail(strict=True)` was reported as an
+    UNcovered stale claim solely because of how its string was wrapped.
+    Returns an empty list, rather than raising, when `text` cannot be
+    parsed as Python -- the same conservative direction every sibling
+    function in this module takes."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError, RecursionError):
+        # M4 (T-2407, review e9879e2-t2404-1p3-shipping-repair-set-review.md):
+        # ast.parse raises SyntaxError on malformed syntax, ValueError on
+        # source containing a null byte, and RecursionError on
+        # pathologically deep nesting -- all three are "cannot be parsed
+        # as Python" per this function's own docstring, not SyntaxError
+        # alone.
+        return []
+    rendered: list[str] = []
+    for node in ast.walk(tree):
+        for dec in getattr(node, "decorator_list", None) or []:
+            func = dec.func if isinstance(dec, ast.Call) else dec
+            func_src = ast.get_source_segment(text, func) or ""
+            if not _XFAIL_MARKER_PATTERN.search(func_src):
+                continue
+            for sub in ast.walk(dec):
+                if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                    rendered.append(sub.value)
+    return rendered
 
 
 def find_stale_unbuilt_claim(text: str) -> str | None:
@@ -920,12 +979,21 @@ def find_stale_unbuilt_claim(text: str) -> str | None:
     `reason=` text matches `_UNBUILT_CLAIM_PATTERN` too -- not merely that
     some unrelated marker exists anywhere in the file.
 
-    R9 (T-2404): two scan surfaces are unioned -- the raw text search
+    R9 (T-2404): two DETECTION surfaces are unioned -- the raw text search
     above, and a second pass (`_rendered_string_constant_match`) over
     every string constant's RENDERED value, which catches a claim split
-    across adjacent literals that the raw-text surface cannot see. A file
-    is flagged if either surface matches; neither surface's own scope
-    (file-granularity, the covering-marker rule) changes."""
+    across adjacent literals that the raw-text surface cannot see.
+
+    S3 (T-2407): the COVERING check is unioned the same way. A marker
+    covers a claim when either its raw source (`_xfail_decorator_source_
+    texts`) or the rendered value of any of its own string constants
+    (`_xfail_decorator_rendered_texts`) matches `_UNBUILT_CLAIM_PATTERN` --
+    otherwise a claim only the rendered-value detection pass can see could
+    be "covered" only by a marker whose raw source the rendered-value pass
+    was never given the chance to see, which is backwards: the marker's
+    OWN reason can be split across adjacent literals exactly like the
+    claim it discloses. Neither surface's own scope (file-granularity, the
+    covering-marker rule) changes."""
     match = _UNBUILT_CLAIM_PATTERN.search(text)
     if match is None:
         match = _rendered_string_constant_match(text)
@@ -933,6 +1001,8 @@ def find_stale_unbuilt_claim(text: str) -> str | None:
         return None
     covering = any(
         _UNBUILT_CLAIM_PATTERN.search(src) for src in _xfail_decorator_source_texts(text)
+    ) or any(
+        _UNBUILT_CLAIM_PATTERN.search(val) for val in _xfail_decorator_rendered_texts(text)
     )
     if covering:
         return None
