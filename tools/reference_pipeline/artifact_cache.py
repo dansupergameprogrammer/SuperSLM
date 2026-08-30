@@ -406,8 +406,12 @@ def _reopen_checkpoint_float_source(checkpoint_path, config):
     from reference_pipeline import pipeline
 
     checkpoint = Path(checkpoint_path)
-    names = pipeline._upstream_names(config)
+    # T-2423 SPIKE (Track C step 1, reopen shape, design §2.7 CC-01): the map's namespace
+    # prefix is now detected from the checkpoint's own tensor keys, so `present` must be
+    # derived before `_upstream_names` is called -- mirroring `load_model`'s own fix.
     tensors = pipeline._open_checkpoint_tensors(checkpoint)
+    present = set(tensors.keys())
+    names = pipeline._upstream_names(config, present)
     return pipeline._CheckpointFloatSource(tensors, names, config)
 
 

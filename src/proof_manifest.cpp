@@ -119,21 +119,15 @@ ConfigGeometryResult CheckConfigGeometry(uint32_t hidden_size, uint32_t num_atte
 		return r;
 	}
 
-	// hidden_size == heads * head_dim, computed in uint64_t so the multiply
-	// cannot itself overflow the way the fields it is comparing might if done
-	// in-width; both operands come from a Config that already passed
-	// ParseConfig's own bounds when this runs against a Load-accepted view (it
-	// is also directly callable on raw hostile fields, per this header's test
-	// contract, in which case the wide multiply is the only thing standing
-	// between a huge head_dim and silent 32-bit wraparound).
-	const uint64_t expected = static_cast<uint64_t>(num_attention_heads) * static_cast<uint64_t>(head_dim);
-	if (expected != static_cast<uint64_t>(hidden_size)) {
-		r.status = ConfigGeometryStatus::HiddenSizeGeometryMismatch;
-		r.diagnostic = "hidden_size (" + std::to_string(hidden_size) + ") != num_attention_heads * head_dim (" +
-		               std::to_string(num_attention_heads) + " * " + std::to_string(head_dim) + " = " +
-		               std::to_string(expected) + ")";
-		return r;
-	}
+	// T-2423 SPIKE (Track A step 1, design §6 Track A step 1, D-SLM5273): the R1 identity
+	// hidden_size == num_attention_heads * head_dim is no longer enforced here -- removed,
+	// not loosened. q_width (num_attention_heads * head_dim) is threaded independently of
+	// hidden_size once the forward path decouples Q/O's own width (§2.1). hidden_size and
+	// head_dim are retained as parameters (unused past this point) so this function's
+	// signature is unchanged, per the design's own §2.1 framing of this as a widening of
+	// the existing check, not a new one.
+	(void)hidden_size;
+	(void)head_dim;
 
 	r.status = ConfigGeometryStatus::Ok;
 	return r;
