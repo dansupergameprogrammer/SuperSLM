@@ -1,14 +1,27 @@
 """T-2371 (Brunel), D-SLM5018 S2/M2 -- pins for two of Poirot's build-round
 findings against `tests/ci/scan_build_output.py` and its symbol-table reader.
 
-S2: the module's own docstring asserted as settled the checks-(A)/(B)
-fail-open property `Claude/Decisions/DecisionLog.md` D-SLM5009 files as
-OPEN, waiting on Dan, and contained a self-contradictory sentence
-(`StandardsDocument.md` §7). The remedy is a wording correction; this file
-pins the corrected text's own load-bearing properties (states the true
-narrower claim, cites D-SLM5009, and drops the self-contradiction) rather
-than re-asserting the false claim never returns, which no test can prove
-about future prose.
+S2 (original, T-2371): the module's own docstring asserted as settled the
+checks-(A)/(B) fail-open property `Claude/Decisions/DecisionLog.md`
+D-SLM5009 files as OPEN, waiting on Dan, and contained a self-contradictory
+sentence (`StandardsDocument.md` §7). The remedy was a wording correction
+stating the fail-open claim narrowly and citing D-SLM5009; this file
+pinned that corrected text's own load-bearing properties.
+
+S2 CORRECTION (T-2407, review e9879e2-t2404-1p3-shipping-repair-set-review.
+md): D-SLM5009's fail-open question closed 2026-08-29 (D-SLM5155/D-SLM5156,
+T-2404 R3/R7), and `scan_build_output.py`'s own docstring was corrected to
+state check (A)'s p/vp branch is now fail-CLOSED via the explicit,
+frozen `_X86_P_VP_STRUCTURAL_ALLOW` allow-list. The review found this
+file's own pin below still required the OLD, now-false "fail-OPEN"
+wording to be present -- a green test pinning a false claim in the
+production driver's own docstring in place, invisible on every re-run
+because passing is exactly what a guard defending a stale claim looks
+like. `StandardsDocument.md` §7's *a fix is new writing* applies to the
+guard as much as to the docstring it guards: the assertions below are
+inverted to pin the current, narrower true claim (fail-closed, citing the
+closing decision) rather than deleted, so the docstring cannot silently
+regress back to the fail-open claim without this file catching it.
 
 M2: `scan_build_output.py` imported `run_fp_free_scan_real_corpus` -- a
 module the design calls "retired... no longer load-bearing" -- for
@@ -38,23 +51,27 @@ def _read_scan_build_output_source():
 
 
 def test_scan_build_output_docstring_states_the_narrower_true_claim():
-    """S2: the module docstring must state check (A)'s open, named fail-open
-    axis on `p`/`vp`-prefixed mnemonics -- citing D-SLM5009 as the open
-    question it is -- rather than asserting fail-closed behaviour that a
-    fabricated `p`/`vp` mnemonic (`vpneverheardof`) is measured to defeat.
+    """S2 (T-2407 correction): the module docstring must state check (A)'s
+    `p`/`vp` branch is fail-CLOSED via the frozen `_X86_P_VP_STRUCTURAL_
+    ALLOW` allow-list and cite the decision that closed it (D-SLM5155 or
+    D-SLM5156) -- not the fail-open claim D-SLM5009 left open, which
+    T-2406's review measured false against the current tree (D-SLM5155/
+    D-SLM5156 closed it 2026-08-29, three commits before this docstring's
+    own correction in the same range).
     """
     text = _read_scan_build_output_source()
-    assert "D-SLM5009" in text, (
-        "scan_build_output.py's own module docstring no longer cites "
-        "D-SLM5009 -- the open, unresolved question about check (A)'s "
-        "p/vp fail-open behaviour must be named where a reader of this "
-        "driver's own claims would look for it"
+    assert "D-SLM5155" in text or "D-SLM5156" in text, (
+        "scan_build_output.py's own module docstring no longer cites the "
+        "decision (D-SLM5155/D-SLM5156) that closed check (A)'s p/vp "
+        "fail-open question -- the closure must be named where a reader "
+        "of this driver's own claims would look for it"
     )
-    assert "fail-OPEN" in text or "fail-open" in text, (
-        "scan_build_output.py's own module docstring no longer states "
-        "that check (A) is fail-open on the p/vp structural-only class -- "
-        "the property the strike and this ticket's own review measured "
-        "false against the previous, settled-sounding wording"
+    assert "fail-OPEN" not in text and "fail-open" not in text, (
+        "scan_build_output.py's own module docstring states check (A) is "
+        "fail-open on the p/vp structural-only class -- false since "
+        "D-SLM5155/D-SLM5156 closed it; T-2406 finding S2 found this "
+        "exact false claim standing in the docstring with this cell "
+        "pinning it in place"
     )
 
 
