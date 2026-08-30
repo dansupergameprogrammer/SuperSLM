@@ -871,7 +871,9 @@ _X86_VEC_MOVE_ALLOW = {
 # VEC_MOVE_ALLOW, since no legitimate use of BFloat16 arithmetic exists
 # anywhere in SUPERSLM_CORE_SOURCES. `vpdpbusd`/`vpdpwssd` (VNNI, genuine
 # packed-integer dot-product) are deliberately NOT excluded -- they stay
-# accepted under the structural rule, per the named control in
+# accepted, now via membership on `_X86_P_VP_STRUCTURAL_ALLOW` below
+# (D-SLM5156; the deny-list-guarded structural rule this comment
+# originally described is retired), per the named control in
 # test_bf16_x86_rendering_pair.
 _X86_P_PREFIX_EXCLUDE = {
     "pi2fd", "pi2fw",
@@ -882,24 +884,30 @@ _X86_P_PREFIX_EXCLUDE = {
 # list above left open is ruled closed. This is the fail-closed replacement
 # design Sec4.1 specifies: an explicit, checked-in allow-list, built by
 # enumerating capstone's real x86-64 p/vp-prefixed vocabulary (the same
-# 1523-mnemonic census this module's own test suite pins) and individually
-# vetting each entry against ISA-reference IEEE-754 semantics (admitted iff
-# the mnemonic's documented semantics perform no rounding, no exception, and
-# produce no float-typed numeric result). Built the same way GPR_ALLOW's own
-# fold-8 freeze was (D-SLM4374): a closed set computed once against a named,
-# re-executable reference vocabulary, requiring an explicit, reviewed diff
-# for any future addition -- an unknown future p/vp mnemonic REJECTs by
-# default instead of being admitted by the old rule's own silence.
+# 1523-mnemonic census this module's own test suite pins) and excluding the
+# six mnemonics `_X86_P_PREFIX_EXCLUDE` names above.
+#
+# D-SLM5229 (Dan, 2026-08-29, correcting a T-2406 review finding, S1): the
+# construction below is classify-and-DENY, not classify-and-vet -- every
+# member is admitted because it is the naming-convention set less the
+# six-entry deny list, NOT because it was separately, individually checked
+# against ISA-reference IEEE-754 semantics. The published claim that each
+# entry was so vetted was false; only the six deny-list entries received
+# that individual check. What makes this fail closed is the FREEZE, not a
+# vetting the construction never performed: the set is computed once
+# against a named, re-executable reference vocabulary, requiring an
+# explicit, reviewed diff for any future addition -- built the same way
+# GPR_ALLOW's own fold-8 freeze was (D-SLM4374) -- so an unknown future
+# p/vp mnemonic REJECTs by default instead of being admitted by the old
+# rule's own silence.
 #
 # This is the real vocabulary's p/vp-prefixed, non-`pf`-prefixed membership
 # (excluding `_X86_VEC_MOVE_ALLOW`'s own named entries, which ACCEPT via
 # that list and never reach this one) with the six documented FP leaks
-# `_X86_P_PREFIX_EXCLUDE` names above removed -- every member here was
-# already individually vetted as the deny list's own complement; none is a
-# genuine IEEE-754 operation. `_X86_P_PREFIX_EXCLUDE`'s six entries are
-# retained above as documentation of what was individually considered and
-# excluded; they are no longer load-bearing as a gate -- this allow-list is
-# now the sole authority for the p/vp branch below.
+# `_X86_P_PREFIX_EXCLUDE` names above removed. `_X86_P_PREFIX_EXCLUDE`'s
+# six entries are retained above as documentation of what was individually
+# considered and excluded; they are no longer load-bearing as a gate --
+# this allow-list is now the sole authority for the p/vp branch below.
 _X86_P_VP_STRUCTURAL_ALLOW = frozenset({
     "pabsb", "pabsd", "pabsw", "packssdw", "packsswb", "packusdw", "packuswb", "paddb",
     "paddd", "paddq", "paddsb", "paddsw", "paddusb", "paddusw", "paddw", "pause",
