@@ -81,10 +81,18 @@ def real_elf_archive():
     `D:/SuperSLM/.worktrees/elf-leg/libsuperslm.a` as an existing, real,
     GCC-built archive (D-SLM5032's own conductor measurement). Overridable
     via SUPERSLM_FP_SCAN_ELF_LIB for a machine where that exact worktree
-    path does not exist; skips, never fails, when neither is present -- this
-    suite has no CI leg that builds an ELF archive itself (design Sec4.1's
-    own forty-sixth population: the CMake+build-system integration half of
-    the ELF/GCC leg is owed, not built)."""
+    path does not exist; skips, never fails, when neither is present.
+
+    R2 (T-2404) wired the `linux-x64` CI job to build `superslm` and scan
+    its own real, GNU-`ar`-produced `libsuperslm.a` directly via
+    `scan_build_output.py`'s CLI entry point -- a CI leg that builds and
+    scans a real ELF archive now exists. What that job does NOT do is run
+    THIS pytest suite's own must-accept/must-reject population against
+    that archive: the design's own fiftieth population (Sec5.4, closing
+    paragraph) -- a must-accept on the wired job's real archive and a
+    must-reject on a poisoned one -- remains outstanding, so this fixture
+    still has no CI leg supplying it a real ELF archive to run against
+    (D-SLM5230, deferred to 1.3.1)."""
     p = os.environ.get(_ELF_LIB_ENV, _ELF_LIB_DEFAULT)
     if not os.path.isfile(p):
         pytest.skip(
