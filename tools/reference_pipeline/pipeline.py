@@ -1029,6 +1029,11 @@ def _weight_shapes(cfg: ModelConfig):
             (f"layer{layer}.k_proj", (kv_width, cfg.hidden_size)),
             (f"layer{layer}.v_proj", (kv_width, cfg.hidden_size)),
             (f"layer{layer}.o_proj", (cfg.hidden_size, q_width)),
+            # T-2423 SPIKE (Track C step 7, design §6 Track C step 7): QK-norm gain vectors,
+            # one shared gain per head (`Qwen3RMSNorm(self.head_dim)` is one module instance
+            # applied per head), so the declared shape is `(head_dim,)`, not `(q_width,)`.
+            (f"layer{layer}.q_norm.gain", (cfg.head_dim,)),
+            (f"layer{layer}.k_norm.gain", (cfg.head_dim,)),
             (f"layer{layer}.mlp_norm.gain", (cfg.hidden_size,)),
             (f"layer{layer}.gate_proj", (cfg.intermediate_size, cfg.hidden_size)),
             (f"layer{layer}.up_proj", (cfg.intermediate_size, cfg.hidden_size)),
@@ -1166,34 +1171,69 @@ class _SafeTensors:
         return values.reshape(tuple(spec["shape"]))
 
 
-def _upstream_names(cfg: ModelConfig):
-    """The total map from a Qwen2.5 checkpoint's tensor names to this pipeline's.
+def _upstream_names(cfg: ModelConfig, present: set):
+    """The total map from a checkpoint's tensor names to this pipeline's.
 
     **Total is the point.** §11's N3 discipline — "an unrecognized ... constant in the config
     is a hard rejection, never a silent drop" — governs the weight map for the same reason it
     governs the config: a quietly-dropped projection is a model that loads, runs, generates
     fluent text, and is not Qwen. So this map is compared against the checkpoint's key set in
     both directions, and either difference is a rejection.
+
+    T-2423 SPIKE (Track C step 1, design §2.6/§6): the namespace prefix is detected from
+    `present` — the checkpoint's own observed tensor key set — rather than hardcoded, because
+    a bare-base-model checkpoint (no `model.` root) is a real candidate this map must also
+    accept. `present` carrying neither anchor, or both, is an explicit rejection, never a
+    guessed default.
     """
+    has_wrapper = "model.embed_tokens.weight" in present
+    has_bare = "embed_tokens.weight" in present
+    if has_wrapper and has_bare:
+        raise UnsupportedOpSet(
+            "checkpoint tensor keys carry both 'model.embed_tokens.weight' and "
+            "'embed_tokens.weight' -- the namespace convention is ambiguous and this map "
+            "does not guess which one the rest of the checkpoint follows"
+        )
+    if has_wrapper:
+        prefix = "model."
+    elif has_bare:
+        prefix = ""
+    else:
+        raise UnsupportedOpSet(
+            "checkpoint tensor keys carry neither the 'model.'-prefixed wrapper convention's "
+            "anchor ('model.embed_tokens.weight') nor the bare base-model convention's "
+            "('embed_tokens.weight') -- this checkpoint matches no convention this map knows"
+        )
+
     names = {
-        "model.embed_tokens.weight": "embed",
-        "model.norm.weight": "final_norm.gain",
+        f"{prefix}embed_tokens.weight": "embed",
+        f"{prefix}norm.weight": "final_norm.gain",
     }
     for layer in range(cfg.num_hidden_layers):
-        prefix = f"layer{layer}"
-        names[f"model.layers.{layer}.input_layernorm.weight"] = f"{prefix}.attn_norm.gain"
-        names[f"model.layers.{layer}.post_attention_layernorm.weight"] = f"{prefix}.mlp_norm.gain"
+        ours_prefix = f"layer{layer}"
+        names[f"{prefix}layers.{layer}.input_layernorm.weight"] = f"{ours_prefix}.attn_norm.gain"
+        names[f"{prefix}layers.{layer}.post_attention_layernorm.weight"] = f"{ours_prefix}.mlp_norm.gain"
         for upstream, ours in (("self_attn.q_proj", "q_proj"), ("self_attn.k_proj", "k_proj"),
                                ("self_attn.v_proj", "v_proj"), ("self_attn.o_proj", "o_proj"),
                                ("mlp.gate_proj", "gate_proj"), ("mlp.up_proj", "up_proj"),
                                ("mlp.down_proj", "down_proj")):
-            names[f"model.layers.{layer}.{upstream}.weight"] = f"{prefix}.{ours}"
-        # Qwen2.5 biases q/k/v and nothing else. Read from the checkpoint, not assumed:
-        # an unmapped bias is a rejection, and a mapped-but-absent one is also a rejection.
+            names[f"{prefix}layers.{layer}.{upstream}.weight"] = f"{ours_prefix}.{ours}"
+        # Bias entries are conditional on the checkpoint actually carrying them (T-2423
+        # SPIKE, Track C step 2, design §2.6 CKN-02) -- Qwen3-Embedding-0.6B carries none
+        # (attention_bias: false).
         for upstream, ours in (("self_attn.q_proj", "q_proj"), ("self_attn.k_proj", "k_proj"),
                                ("self_attn.v_proj", "v_proj")):
-            names[f"model.layers.{layer}.{upstream}.bias"] = f"{prefix}.{ours}.bias"
-    if not cfg.tie_word_embeddings:
+            bias_key = f"{prefix}layers.{layer}.{upstream}.bias"
+            if bias_key in present:
+                names[bias_key] = f"{ours_prefix}.{ours}.bias"
+        # QK-norm entries (T-2423 SPIKE, Track C step 5, design §6 Track C step 5).
+        for upstream, ours in (("self_attn.q_norm", "q_norm"), ("self_attn.k_norm", "k_norm")):
+            names[f"{prefix}layers.{layer}.{upstream}.weight"] = f"{ours_prefix}.{ours}.gain"
+    # lm_head.weight is un-prefixed regardless of the backbone's own detected convention --
+    # HuggingFace's AutoModelForCausalLM places it outside the `model.` submodule either way
+    # (T-2423 SPIKE, Track C step 3, design §2.8/D-SLM5285) -- and gated on the checkpoint
+    # actually carrying it, not on `tie_word_embeddings` alone (CKN-04, D-SLM5257).
+    if not cfg.tie_word_embeddings and "lm_head.weight" in present:
         names["lm_head.weight"] = "lm_head"
     return names
 
@@ -1278,6 +1318,11 @@ def _permuted_if_rope(name, values, cfg: ModelConfig):
         return _permute_head_rows(values, cfg, cfg.num_attention_heads)
     if leaf in ("k_proj", "k_proj.bias"):
         return _permute_head_rows(values, cfg, cfg.num_key_value_heads)
+    # T-2423 SPIKE (Track C step 6, design §3/§6 Track C step 6, D-SLM5284): the leaf this
+    # function computes for the engine-side name `layer{L}.q_norm.gain` is `q_norm.gain`, not
+    # bare `q_norm` -- the match set must include the `.gain` suffix or it can never fire.
+    if leaf in ("q_norm.gain", "k_norm.gain"):
+        return _permute_head_rows(values, cfg, heads=1)
     return values
 
 
@@ -1551,11 +1596,13 @@ def load_model(checkpoint, extra_tensors=None, require_tensors=(),
         raise UnsupportedOpSet(
             f"§6.4's rotation is pairwise; head_dim must be even, got {cfg.head_dim}")
 
-    names = _upstream_names(cfg)
     tensors = _open_checkpoint_tensors(checkpoint)
 
     present = set(tensors.keys())
     present.update(extra_tensors or {})
+    # T-2423 SPIKE (Track C step 1, design §2.6/§6): `present` must be derived before the map
+    # is built, since the map's own namespace prefix is now detected from it.
+    names = _upstream_names(cfg, present)
     demanded = set(names) | set(require_tensors)
 
     unmapped = sorted(present - set(names))

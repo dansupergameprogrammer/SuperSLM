@@ -181,8 +181,13 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 	const uint64_t hidden_size = view.config.hidden_size;
 	const uint64_t intermediate_size = view.config.intermediate_size;
 	const uint64_t kv_hidden_size = static_cast<uint64_t>(num_key_value_heads) * view.config.head_dim;
+	// T-2423 SPIKE (Track A step 4, design §2.1 item 4/§6 Track A step 4, GS-08): q_proj's
+	// true output width is q_width = num_attention_heads * head_dim, not hidden_size, once
+	// CheckConfigGeometry's R1 identity no longer holds. o_proj's own channel count stays
+	// hidden_size (GS-09, confirmed correct, D-SLM5249) -- only this one call changes.
+	const uint64_t q_width = static_cast<uint64_t>(num_heads) * view.config.head_dim;
 
-	if (!MarshalProjectionFold(Wsc("q_proj"), hidden_size, prefix + ".q_proj", backing.q_fold_identity,
+	if (!MarshalProjectionFold(Wsc("q_proj"), q_width, prefix + ".q_proj", backing.q_fold_identity,
 	                            backing.q_fold_mult, backing.q_fold_shift, err) ||
 	    !MarshalProjectionFold(Wsc("k_proj"), kv_hidden_size, prefix + ".k_proj",
 	                            backing.k_fold_identity, backing.k_fold_mult, backing.k_fold_shift,

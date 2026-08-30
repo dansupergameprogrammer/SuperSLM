@@ -128,10 +128,12 @@ def check_config_geometry(cfg):
         _reject("KvHeadsExceedsHeads", f"num_key_value_heads ({kv_heads}) > num_attention_heads ({heads})")
     if heads % kv_heads != 0:
         _reject("HeadsNotDivisibleByKv", f"num_attention_heads ({heads}) % num_key_value_heads ({kv_heads}) != 0")
-    expected = heads * head_dim
-    if expected != hidden_size:
-        _reject("HiddenSizeGeometryMismatch",
-                f"hidden_size ({hidden_size}) != num_attention_heads * head_dim ({heads} * {head_dim} = {expected})")
+    # T-2423 SPIKE (Track A step 6, design §2.5 GS-06/§6 Track A step 6): the R1 identity
+    # `hidden_size == num_attention_heads * head_dim` is no longer enforced -- q_width
+    # (`num_attention_heads * head_dim`) is threaded independently of hidden_size once the
+    # forward path decouples Q/O's own width. Removed rather than loosened, mirroring
+    # CheckConfigGeometry's own C++ widening (src/proof_manifest.cpp).
+    del hidden_size, head_dim
 
 
 def check_unicode_version_coherence(major, minor, patch, running_version=None):
@@ -197,7 +199,11 @@ def check_required_groups(model):
     actual Weights tensor -- an orphaned fold entry is a converter bug, not a
     model fact.
     """
-    for name in ("weights", "dynamic_biases", "weight_scales", "composition_constants",
+    # T-2423 SPIKE (Track C step 4, design §2.6 CKN-03/§6 Track C step 4): dynamic_biases
+    # is dropped from the always-required tuple -- it is built by a total, filter-free
+    # comprehension over float_biases, so its emptiness is now a fact about the checkpoint
+    # (no bias tensors, e.g. attention_bias: false) rather than a possible calibration bug.
+    for name in ("weights", "weight_scales", "composition_constants",
                  "kv_landing_scales", "kv_landing_reciprocals"):
         group = getattr(model, name)
         if not group:
