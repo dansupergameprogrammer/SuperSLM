@@ -81,7 +81,7 @@ import re
 import struct
 import sys
 from dataclasses import dataclass, field
-from typing import Mapping, Sequence
+from typing import Mapping, Optional, Sequence
 
 import capstone
 
@@ -982,18 +982,28 @@ def _x86_touches_vector_register(op_str: str) -> bool:
     return bool(_X86_VEC_REG_RE.search(op_str or ""))
 
 
-def _x86_check_a(mnemonic: str, op_str: str) -> bool:
-    """True == ACCEPT under check (A). Only called for instructions that
-    touch a vector/FP/mask/tile register at all."""
+def _x86_check_a(mnemonic: str, op_str: str) -> Optional[str]:
+    """Non-None (a reason string) == ACCEPT under check (A); the returned
+    string names the admitting branch. None == REJECT. Only called for
+    instructions that touch a vector/FP/mask/tile register at all.
+
+    D-SLM5157 (R4, T-2404): the contract was `bool`; every acceptance
+    reported the literal True regardless of which rule admitted it, so a
+    census over check (A)'s own acceptances could not distinguish an
+    accept attributed to a named allow-list from one that reached no
+    named rule at all. Every admitting branch below now returns its own
+    name; callers that only need ACCEPT/REJECT keep working unchanged
+    (`not check_a(...)` is True for both `None` and the pre-existing
+    `False`, and every non-empty reason string is truthy)."""
     m = mnemonic.lower()
     if m in _X86_VEC_MOVE_ALLOW:
-        return True
+        return "vec_move_allow"
     if m in _X86_P_VP_STRUCTURAL_ALLOW:
         # D-SLM5156: fail-closed allow-list membership, not the deny-list-
         # guarded "starts with p/vp and isn't excluded" rule it replaces --
         # an mnemonic absent from this list REJECTs by default, whether or
         # not it happens to start with p/vp.
-        return True
+        return "p_vp_structural_allow"
     if m in _X86_BITWISE_FP_FAMILY:
         # T-2367 (Brunel), D-SLM4987: accepted unconditionally, on any
         # operand list. Supersedes the pre-fold-39 self-zeroing-only
@@ -1003,8 +1013,8 @@ def _x86_check_a(mnemonic: str, op_str: str) -> bool:
         # alongside it. Population sixteen's own must-reject construction
         # for a differing-operand vxorps is reconciled to must-accept by the
         # same fold (D-SLM5002).
-        return True
-    return False
+        return "bitwise_fp_family"
+    return None
 
 
 # ---------------------------------------------------------------------------
