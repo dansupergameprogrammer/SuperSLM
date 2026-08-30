@@ -273,6 +273,7 @@ def _parse_elf(data: bytes):
 # ---------------------------------------------------------------------------
 
 _IMAGE_SCN_CNT_CODE = 0x20
+_IMAGE_SCN_MEM_EXECUTE = 0x20000000
 _IMAGE_SYM_CLASS_EXTERNAL = 2
 
 
@@ -331,7 +332,7 @@ def _parse_coff(data: bytes):
 
     code_sections = []
     for i, s in enumerate(sections_raw):
-        if not (s["characteristics"] & _IMAGE_SCN_CNT_CODE):
+        if not (s["characteristics"] & (_IMAGE_SCN_CNT_CODE | _IMAGE_SCN_MEM_EXECUTE)):
             continue
         sec_data = data[s["ptr"]:s["ptr"] + s["size"]]
         syms = []
