@@ -143,10 +143,7 @@ docstring and in the T-2333 case file):
   7  T-2271's eight-object classifier construction (fold round 7)            -- test_population_07_fpblind_classifier
   8  real v1.2.1 whole-corpus sweep (fold rounds 7/8)                        -- test_population_08_real_corpus_whole_sweep
   9  T-2272's funclet, membership rule (fold round 8)                       -- test_population_09_funclet_membership
-  10 T-2273's AArch64 differential control (fold round 9, historical) --
-     split T-2403 R6 into a hard cell and a disclosed xfail(strict=True)
-     tension (`Claude/Vitruvius/t2265-fold46-delta-manifest.md` Sec2)      -- test_population_10a_arm_differential_fixture_and_format,
-                                                                              test_population_10b_arm_differential_verdicts_disclosed_tension
+  10 T-2273's AArch64 differential control (fold round 9, historical)        -- test_population_10_arm_differential_historical
   11 four (ISA,format,toolchain) legs + ci_gate (fold round 10)              -- test_population_11_toolchain_format_independence
   12 T-2275's clause-(0) REFUSE construction + ci_gate (fold rounds 11/12)   -- test_population_12_clause0_refuse_undecodable_pool
   13 T-2276's decodable-pool construction + ci_gate (fold round 13)          -- test_population_13_coverage_relation_decodable_swallow
@@ -237,7 +234,6 @@ import archive_fixtures as af  # noqa: E402  -- T-2385: run_lib_exe builds a rea
 
 sys.path.insert(0, _FIXTURES)
 import pop14_make_objects as mk  # noqa: E402  -- pure-Python object synthesis, no compiler needed
-import pop49_evil_object as pop49_fx  # noqa: E402  -- T-2403 (Curie), R1's own hand-emitted COFF pair
 
 # The production module's own expected home (tests/ci/, this repo's established
 # check_<name>.py / test_check_<name>.py convention) -- NOT this file's own
@@ -1008,81 +1004,48 @@ def test_population_09_funclet_membership():
 # Population ten -- T-2273's AArch64 differential control (fold round 9).
 # Historical/diagnostic: commissioning infeasible per fold round 10, disposed
 # to population eleven.
-#
-# T-2403 (Curie), R6 -- split corrected from executed evidence
-# (`Claude/Vitruvius/t2265-fold46-delta-manifest.md` Sec2; D-SLM5207,
-# D-SLM5211, D-SLM5213), superseding fold round 45's own split (D-SLM5187)
-# before it ever landed. Fold round 45 assumed five of this cell's six
-# post-scan assertions currently pass; re-executed against the real compiled
-# AArch64 object this round (`Claude/Vitruvius/t2265-fold46-probes/
-# r6_full_cell_probe.py`, and independently against the strike's own
-# `pop10_assertion_census.py`, identical result): `scan_object` returns
-# `refuse=True, unclassified_bytes=60, verdicts={}` -- FIVE of six fail
-# today, not one, and it is one root cause, not five: `scan_object`'s own
-# `if refuse:` branch (tests/ci/check_fp_free_scan.py:1383-1385) returns
-# `verdicts={}` unconditionally the instant byte-accounting REFUSEs (60
-# bytes it cannot attribute to any recognised symbol or padding run), before
-# any per-symbol classification runs -- so the four verdict assertions
-# cannot discriminate anything while REFUSE holds; they fail in lockstep
-# with `not result.refuse`, for the one reason this cell's own marker names
-# below (the COMDAT-filler padding-recognition gap this reader has not yet
-# closed). Two assertions hold today, confirmed by this same execution: the
-# pre-scan fixture verification (A0, genuine AArch64 FP instructions decode)
-# and `result.object_format == 'coff'` (A1) -- both independent of the
-# COMDAT-filler tension, since A0 is about the compiler's own output before
-# `scan_object` ever runs and A1 is the container-format read, which
-# succeeds before byte-accounting begins.
-#
-# The cell therefore splits in two: a hard cell (no marker) carrying exactly
-# A0/A1, and an xfail(strict=True) cell carrying the five that fail
-# together (A2, the four verdict checks). Nothing green today goes red under
-# this split; the change is that a regression in A0/A1 is now caught, where
-# before it was absorbed by the same marker as the disclosed tension.
-# Population ten's own registry disposition is left unresolved rather than
-# guessed at here (COVERED needs a passing must-reject side, and none exists
-# while the classifier is never reached) -- filed as owed work for whichever
-# fold builds the dimension-11 registry (out of this release's scope,
-# D-SLM5200/D-SLM5201).
 # ===========================================================================
 
-def _build_pop10_object(tmp):
-    """Compiles pop10_arm_site.cpp for AArch64 fresh (never a committed
-    binary) and independently verifies -- via a raw capstone decode, NOT
-    scan_object's own logic -- that it genuinely carries FP-arithmetic-
-    shaped instructions. Shared by both of population ten's own split
-    cells so each builds and verifies its own fixture from scratch, per
-    this suite's own established convention."""
-    src = os.path.join(_FIXTURES, "pop10_arm_site.cpp")
-    obj = os.path.join(tmp, "pop10.obj")
-    fc.compile_cl_arm64(src, obj)
-    sections = fc.code_sections(obj, ".text")
-    insns = _decode_sections(sections, "aarch64")
-    fp_insns = [(i.mnemonic, i.op_str) for i in insns if _is_arm64_fp_arith(i.mnemonic)]
-    return obj, insns, fp_insns
-
-
-def test_population_10a_arm_differential_fixture_and_format():
-    """Population ten's hard cell (T-2403, R6): the two of six post-scan
-    assertions that hold today -- A0 (fixture verification: the compiled
-    object decodes to genuine AArch64 FP-arithmetic-shaped instructions)
-    and A1 (result.object_format == 'coff', MSVC's own AArch64
-    cross-compiler still emits COFF). No marker: both are independent of
-    the COMDAT-filler byte-accounting tension population ten-b discloses
-    below, so a regression in either must fail the gate outright rather
-    than being absorbed by that cell's own xfail(strict=True).
+@pytest.mark.xfail(
+    strict=True,
+    reason="T-2347 (Curie), Poirot's O4/S5: this population is an open, "
+    "disclosed tension against the ratified design text's own fold-9 finding "
+    "(see this test's own docstring, below) -- a real, currently-failing "
+    "assertion, not an absent-instrument placeholder. xfail(strict=True) states "
+    "that openly in the test file itself (Poirot's own recommended structural "
+    "fix, S5) rather than only in build.bat's own fragile --deselect string. "
+    "strict=True means the day this tension is actually resolved (the ratified "
+    "design text corrected, or this reader's own COMDAT-filler padding "
+    "recognition widened), this marker flips to a loud XPASS failure demanding "
+    "removal, rather than silently continuing to pass for the wrong reason. "
+    "build.bat's own --deselect flags for this test still apply today (see the "
+    "population-eight marker above); the same build-round follow-up note "
+    "applies here.",
+)
+def test_population_10_arm_differential_historical():
+    """Falsifying + must-accept construction, one object: BuildMerges,
+    DedupNames, BodyDivide, BodyConvertCompare -- compiled for AArch64 via
+    MSVC's own cross-compiler. Both directions in one object.
     """
+    src = os.path.join(_FIXTURES, "pop10_arm_site.cpp")
     with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "pop10.obj")
         try:
-            obj, insns, fp_insns = _build_pop10_object(tmp)
+            fc.compile_cl_arm64(src, obj)
         except fc.ToolUnavailable as e:
             pytest.skip(str(e))
+        sections = fc.code_sections(obj, ".text")
+        insns = _decode_sections(sections, "aarch64")
+        fp_insns = [(i.mnemonic, i.op_str) for i in insns if _is_arm64_fp_arith(i.mnemonic)]
         assert fp_insns, (
             "fixture verification FAILED: the AArch64 object decoded to {} "
             "instructions and NONE is FP-arithmetic-shaped".format(len(insns))
         )
+
         if not _SCAN_AVAILABLE:
             _fail_absent(
-                "ten-a (hard cell: fixture verification + object_format)",
+                "ten (historical/diagnostic -- commissioning disposed to "
+                "population eleven per fold round 10's own infeasibility finding)",
                 "Fixture verified above: {} genuine AArch64 FP instructions "
                 "decoded (e.g. {}).".format(len(fp_insns), fp_insns[:3]),
             )
@@ -1091,54 +1054,7 @@ def test_population_10a_arm_differential_fixture_and_format():
             "MSVC's own AArch64 cross-compiler still emits COFF, not {}".format(
                 result.object_format)
         )
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="T-2403 (Curie), R6 (Claude/Vitruvius/t2265-fold46-delta-"
-    "manifest.md Sec2; D-SLM5207/D-SLM5211/D-SLM5213), superseding T-2347's "
-    "own reason text: byte-accounting REFUSEs on unclassified_bytes bytes "
-    "of unattributed content in this object's own AArch64 section "
-    "(tests/ci/check_fp_free_scan.py:1383-1385 returns verdicts={} "
-    "unconditionally the instant REFUSE fires), which forces ALL FOUR "
-    "verdict assertions below to fail in lockstep with 'not result.refuse' "
-    "-- not four independent verdict-specific failures, one cause surfacing "
-    "through five assertions. The cause is this reader's own COMDAT-filler "
-    "padding-recognition gap: the unattributed bytes are compiler-emitted "
-    "padding this reader does not yet recognise as such. strict=True means "
-    "the day that gap closes and byte-accounting stops REFUSING this "
-    "object, this marker flips to a loud XPASS failure demanding removal "
-    "and the four verdict assertions begin discriminating for the first "
-    "time, rather than silently continuing to pass for the wrong reason. "
-    "build.bat's own --deselect flags for this test still apply today (see "
-    "the population-eight marker above); the same build-round follow-up "
-    "note applies here.",
-)
-def test_population_10b_arm_differential_verdicts_disclosed_tension():
-    """Population ten's xfail(strict=True) cell (T-2403, R6): the five
-    post-scan assertions that fail together today, all downstream of one
-    byte-accounting REFUSE -- not result.refuse (A2), and the four verdict
-    checks (A3-A6: BuildMerges/BodyDivide/BodyConvertCompare must REJECT,
-    DedupNames must ACCEPT) once the classifier is actually reached.
-    """
-    with fc.TempDir() as tmp:
-        try:
-            obj, _insns, fp_insns = _build_pop10_object(tmp)
-        except fc.ToolUnavailable as e:
-            pytest.skip(str(e))
-        if not _SCAN_AVAILABLE:
-            _fail_absent(
-                "ten-b (xfail cell: refuse + four verdict checks, disclosed "
-                "COMDAT-filler tension)",
-                "Fixture verified above: {} genuine AArch64 FP instructions "
-                "decoded (e.g. {}).".format(len(fp_insns), fp_insns[:3]),
-            )
-        result = scan.scan_object(obj, isa="aarch64")
-        assert not result.refuse, (
-            "byte-accounting REFUSEd this object (unclassified_bytes={}); "
-            "the four verdict checks below cannot discriminate anything "
-            "while this holds".format(result.unclassified_bytes)
-        )
+        assert not result.refuse
         for fn in ("BuildMerges", "BodyDivide", "BodyConvertCompare"):
             assert result.verdicts.get(fn) == "REJECT", (
                 "{} must REJECT; verdict was {}".format(fn, result.verdicts.get(fn)))
@@ -1879,22 +1795,6 @@ def test_bf16_x86_rendering_pair():
     `_x86_check_a('vpdpbf16ps', ...)` call) -- rather than a real compiled
     object, and states this as a deliberate, disclosed scope limit, not a
     silent substitution.
-
-    T-2403 (Curie), R4's own companion pin (`Claude/Vitruvius/
-    t2265-fold46-delta-manifest.md` Sec2/Sec5; D-SLM5166): once
-    _x86_check_a's contract changes from bool to Optional[str] (R4,
-    population fifty-two above), 'vpdpbusd' ACCEPTs by returning the string
-    'p_vp_structural_allow' rather than the literal True, and the two BF16
-    rejects become None rather than the literal False -- the three
-    assertions below would break under an `is True`/`is False` identity
-    check the moment R4 lands, landing this cell's own regression exactly
-    where the project's standing rule says a production remedy's test pin
-    belongs: routed in the SAME round as the change it pins, not
-    discovered after. Written in truthiness form (bool(...) is True/False)
-    now, ahead of R4, so this cell reads identically under both the
-    current bool contract and the future Optional[str] one -- confirmed by
-    this fold's own execution (fold46 manifest Sec5, R4 row: 'Repaired
-    (bool(...) form): 1811=PASS 1815=PASS 1820=PASS').
     """
     if not hasattr(scan, "_x86_check_a"):
         _fail_absent(
@@ -1908,16 +1808,16 @@ def test_bf16_x86_rendering_pair():
     # really is packed-integer and must keep ACCEPTing after the BF16 fix.
     vnni_control_verdict = scan._x86_check_a("vpdpbusd", "zmm0, zmm1, zmm2")
 
-    assert bool(vdpbf16ps_verdict) is False, (
+    assert vdpbf16ps_verdict is False, (
         "'vdpbf16ps' (no vp-prefix match) must REJECT; check (A) returned "
         "{}".format(vdpbf16ps_verdict)
     )
-    assert bool(vnni_control_verdict) is True, (
+    assert vnni_control_verdict is True, (
         "'vpdpbusd' is genuine packed-integer VNNI arithmetic and must keep "
         "ACCEPTing (the control this population's own boundary needs); check (A) "
         "returned {}".format(vnni_control_verdict)
     )
-    assert bool(vpdpbf16ps_verdict) is False, (
+    assert vpdpbf16ps_verdict is False, (
         "'vpdpbf16ps' -- the SAME BFloat16 dot-product instruction as "
         "'vdpbf16ps', under the rendering that matches the vp-prefix structural "
         "accept -- must ALSO REJECT once gap (e) is closed; check (A) currently "
@@ -3947,311 +3847,4 @@ def test_scan_build_output_real_build_finds_exactly_seventeen_objects(real_build
         "design Sec4.1's own text states the real build emits exactly 17 "
         "objects for the superslm target; found {}: {}".format(
             len(objects), objects)
-    )
-
-
-# ===========================================================================
-# T-2403 (Curie), R1 -- population forty-nine, the COFF section-selection
-# bypass (`Claude/Vitruvius/t2265-fold46-delta-manifest.md` Sec2's own R1
-# entry; design Sec7 dimension 11's forty-ninth population, D-SLM5153;
-# corrected must-reject observables, D-SLM5163/D-SLM5169). See
-# fp_scan_fixtures/pop49_evil_object.py's own module docstring for the full
-# mechanism. `_parse_coff`'s own selection criterion
-# (tests/ci/check_fp_free_scan.py:334) keys on IMAGE_SCN_CNT_CODE alone; a
-# section flagged MEM_EXECUTE without CNT_CODE never enters code_sections,
-# so an object built entirely inside such a section is invisible to the
-# scan today -- LIVE on the shipping tree (D-SLM5169), release-blocking.
-#
-# Two different mechanisms, two must-reject cells, per the design's own
-# correction (D-SLM5163): the zero-symbol object has no function symbol to
-# derive an extent from, so it can never reach per-symbol classification --
-# its real post-fix observable is refuse=True (byte-accounting cannot
-# attribute the divsd bytes to anything). The symbol-carrying variant's one
-# function symbol witnesses an extent covering the whole section, so
-# byte-accounting succeeds and check (A) classifies the decoded divsd --
-# its real post-fix observable is verdicts['EvilExecSectionFn'] == 'REJECT'.
-# ===========================================================================
-
-def test_population_49a_evil_object_zero_symbol_refuses_once_fixed():
-    """Population forty-nine's first must-reject cell (T-2403, R1): the
-    conductor's own zero-symbol `evil.obj` construction (`Claude/Bach/
-    probes/t2391-exec-section-bypass.py`, reproduced byte for byte by
-    fp_scan_fixtures/pop49_evil_object.py's own build_zero_symbol), a
-    hand-emitted x86-64 COFF object with one MEM_EXECUTE-without-CNT_CODE
-    section containing a real `divsd xmm0, xmm0`. Real observable once R1
-    widens section selection: refuse=True (byte-accounting cannot attribute
-    the divsd bytes to any symbol -- there is none -- or recognise them as
-    padding). TODAY the bypass is live: the section is skipped entirely,
-    code_sections is empty, and the object exits clean (refuse=False, no
-    verdict) -- confirmed by this cell's own fixture verification below,
-    independent of scan_object's own logic.
-    """
-    import capstone as _capstone
-    with fc.TempDir() as tmp:
-        obj_path, raw = pop49_fx.build_zero_symbol(tmp)
-        md = _capstone.Cs(_capstone.CS_ARCH_X86, _capstone.CS_MODE_64)
-        insns = list(md.disasm(pop49_fx.CODE, 0))
-        assert [(i.mnemonic, i.op_str) for i in insns] == [("divsd", "xmm0, xmm0")], (
-            "fixture verification FAILED: expected exactly one decoded "
-            "'divsd xmm0, xmm0'; independent capstone decode found "
-            "{}".format([(i.mnemonic, i.op_str) for i in insns])
-        )
-        if not _SCAN_AVAILABLE:
-            _fail_absent(
-                "forty-nine-a (zero-symbol evil.obj, must-reject: refuse=True)",
-                "Fixture verified above: a real divsd decoded from the "
-                "hand-emitted section.",
-            )
-        result = scan.scan_object(obj_path, isa="x86-64", data=raw)
-        assert result.refuse is True, (
-            "the zero-symbol object's own MEM_EXECUTE-without-CNT_CODE "
-            "section carries a real divsd with no symbol to attribute it "
-            "to -- byte-accounting must REFUSE once the section is not "
-            "skipped outright; got refuse={} verdicts={} (the live bypass: "
-            "the section never enters code_sections, so the object exits "
-            "clean)".format(result.refuse, result.verdicts)
-        )
-
-
-def test_population_49b_evil_object_symbol_carrying_rejects_once_fixed():
-    """Population forty-nine's second must-reject cell (T-2403, R1): the
-    design's own "symbol-carrying variant (one COFF function symbol added,
-    otherwise identical)" -- fp_scan_fixtures/pop49_evil_object.py's own
-    build_symbol_carrying, byte-identical to the zero-symbol construction
-    plus one function-typed COFF symbol (EvilExecSectionFn) witnessing an
-    extent over the whole section. Real observable once R1 widens section
-    selection: byte-accounting succeeds (the symbol's own extent covers the
-    divsd cleanly) and check (A) classifies it -- divsd is not on
-    _X86_VEC_MOVE_ALLOW, not p/vp-prefixed, not in _X86_BITWISE_FP_FAMILY,
-    so it default-deny REJECTs: verdicts['EvilExecSectionFn'] == 'REJECT'.
-    TODAY the bypass is live for this construction too -- confirmed by this
-    cell's own fixture verification below.
-    """
-    import capstone as _capstone
-    with fc.TempDir() as tmp:
-        obj_path, raw = pop49_fx.build_symbol_carrying(tmp)
-        md = _capstone.Cs(_capstone.CS_ARCH_X86, _capstone.CS_MODE_64)
-        insns = list(md.disasm(pop49_fx.CODE, 0))
-        assert [(i.mnemonic, i.op_str) for i in insns] == [("divsd", "xmm0, xmm0")], (
-            "fixture verification FAILED: expected exactly one decoded "
-            "'divsd xmm0, xmm0'; independent capstone decode found "
-            "{}".format([(i.mnemonic, i.op_str) for i in insns])
-        )
-        if not _SCAN_AVAILABLE:
-            _fail_absent(
-                "forty-nine-b (symbol-carrying evil object, must-reject: "
-                "verdict REJECT)",
-                "Fixture verified above: a real divsd decoded from the "
-                "hand-emitted section, witnessed by one real COFF function "
-                "symbol.",
-            )
-        result = scan.scan_object(obj_path, isa="x86-64", data=raw)
-        assert result.verdicts.get(pop49_fx.SYMBOL_NAME) == "REJECT", (
-            "the symbol-carrying object's own {} witnesses a real divsd -- "
-            "check (A) must REJECT it (not on any accept list) once the "
-            "section is not skipped outright; got refuse={} "
-            "verdicts={}".format(
-                pop49_fx.SYMBOL_NAME, result.refuse, result.verdicts)
-        )
-
-
-# ===========================================================================
-# T-2403 (Curie), R3 -- population fifty-one's corrected must-accept/
-# must-reject pair (`Claude/Vitruvius/t2265-fold46-delta-manifest.md` Sec2's
-# R3 entry via Sec5's execution ledger; design Sec7 dimension 11's
-# fifty-first population, D-SLM5156; the tautology finding, D-SLM5164).
-#
-# D-SLM5164 executed fold round 44's own original population and found
-# neither cell can fail on a deliberately mis-vetted allow-list that
-# re-admits a known real IEEE-754-arithmetic mnemonic ('pi2fd'): the
-# original must-accept ("every admitted mnemonic is admitted") is a
-# membership lookup against the list under test -- it can only check the
-# list against itself, and passes regardless of what the list contains. The
-# corrected pair below cross-checks the allow-list against an
-# INDEPENDENTLY-derived oracle (StandardsDocument.md Sec5.4: a reference
-# that shares no parameter with the list it grades).
-#
-# `_X86_P_VP_STRUCTURAL_ALLOW` is R3's own production build item and does
-# not exist yet -- both cells below are guarded and fail explicitly for
-# that reason until it is built.
-# ===========================================================================
-
-# Adopted UNMODIFIED from `Claude/Vitruvius/t2265-fold46-probes/
-# r3_premise_probe.py`'s own `_KNOWN_FP_LEAKS` -- p/vp-prefixed x86
-# mnemonics that are genuine IEEE-754 floating-point arithmetic per the
-# Intel SDM (pi2fd/pi2fw: 3DNow packed-int-to-float conversion, rounds;
-# vpdpbf16ps: AVX-512 BF16 dot-product-accumulate, the SAME instruction as
-# vdpbf16ps under the rendering that matches the vp-prefix structural
-# accept -- test_bf16_x86_rendering_pair's own subject). A literal constant
-# in THIS file, not read from any list check_fp_free_scan.py defines, so it
-# shares no parameter with the allow-list it cross-checks.
-_KNOWN_P_VP_FP_LEAKS = frozenset({"pi2fd", "pi2fw", "vpdpbf16ps"})
-
-
-def test_check_a_p_vp_structural_allow_agrees_with_independent_fp_oracle():
-    """Population fifty-one's corrected must-accept (D-SLM5156): every
-    mnemonic on the real, built _X86_P_VP_STRUCTURAL_ALLOW is cross-checked
-    against the independent oracle above -- none of the three known real FP
-    leaks may appear on the allow-list.
-    """
-    if not hasattr(scan, "_X86_P_VP_STRUCTURAL_ALLOW"):
-        _fail_absent(
-            "fifty-one (must-accept: allow-list vs. independent FP oracle)",
-            "_X86_P_VP_STRUCTURAL_ALLOW is not yet defined on check_fp_free_scan.",
-        )
-    allow_list = set(scan._X86_P_VP_STRUCTURAL_ALLOW)
-    leaked = allow_list & _KNOWN_P_VP_FP_LEAKS
-    assert leaked == set(), (
-        "the allow-list wrongly admits {} known real IEEE-754-arithmetic "
-        "mnemonic(s) the independent oracle identifies as genuine floating-"
-        "point: {} -- the allow-list and the oracle disagree".format(
-            len(leaked), sorted(leaked))
-    )
-
-
-def test_check_a_p_vp_mis_vetted_allow_list_caught_by_independent_oracle():
-    """Population fifty-one's corrected must-reject (D-SLM5156, D-SLM5164's
-    own reproduction): a copy of the real allow-list with 'pi2fd' (a
-    documented member of the independent oracle above) wrongly re-admitted
-    must be caught -- the exact construction D-SLM5164 executed and found
-    the ORIGINAL population's must-accept/must-reject pair both silent on.
-    Proves the corrected check discriminates a mis-vetted list from a
-    genuinely fail-closed one, rather than only checking the list against
-    itself (a membership tautology that cannot fail on any input).
-    """
-    if not hasattr(scan, "_X86_P_VP_STRUCTURAL_ALLOW"):
-        _fail_absent(
-            "fifty-one (must-reject: mis-vetted list caught by oracle)",
-            "_X86_P_VP_STRUCTURAL_ALLOW is not yet defined on check_fp_free_scan.",
-        )
-    assert "pi2fd" not in scan._X86_P_VP_STRUCTURAL_ALLOW, (
-        "fixture verification FAILED: 'pi2fd' must not already be on the "
-        "real, correctly-vetted allow-list"
-    )
-    mis_vetted = set(scan._X86_P_VP_STRUCTURAL_ALLOW) | {"pi2fd"}
-    with mock.patch.object(scan, "_X86_P_VP_STRUCTURAL_ALLOW", mis_vetted):
-        leaked = set(scan._X86_P_VP_STRUCTURAL_ALLOW) & _KNOWN_P_VP_FP_LEAKS
-        assert leaked == {"pi2fd"}, (
-            "D-SLM5164's own construction: re-admitting 'pi2fd' to the "
-            "allow-list must be caught by the independent oracle cross-"
-            "check -- got {}".format(sorted(leaked))
-        )
-
-
-# ===========================================================================
-# T-2403 (Curie), R4 -- population fifty-two, the reason-reporting census
-# correction (`Claude/Vitruvius/t2265-fold46-delta-manifest.md` Sec2's own
-# R4 entry via Sec5's execution ledger; design Sec7 dimension 11's
-# fifty-second population, D-SLM5157). `_x86_check_a`'s contract changes
-# from bool to Optional[str] (the admitting branch's own name, or None on
-# REJECT); structural_only is redefined as every acceptance with no
-# reported reason (not isinstance(reason, str) -- D-SLM5165 proved the
-# literal 'reason is None' reading dead: accept_a is already filtered to
-# acceptances, so nothing inside it can satisfy that predicate and the
-# census reports zero on the mutant it exists to catch).
-#
-# Both cells below need R4's contract change to exist: the must-accept
-# fails naturally today (every accept returns bool True, not a reason
-# string, so structural_only == accept_a, nonempty); the must-reject is a
-# mutation on the contract itself and is guarded explicitly until R4 lands.
-# ===========================================================================
-
-def _census_check_a_reason_attribution():
-    """Population fifty-two's own census: walks the real x86-64 capstone
-    vocabulary and calls the real, unmodified _x86_check_a for each
-    mnemonic on a vector operand, recording whether the call's own return
-    value is a reason STRING (attributed) or merely truthy-non-string
-    (unattributed). Never a cached or hardcoded population, so a capstone
-    upgrade is read fresh every call -- the same discipline
-    _census_check_a_p_vp_structural_reliance already follows."""
-    from capstone import x86_const
-    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
-    vocabulary = sorted({
-        md.insn_name(getattr(x86_const, attr))
-        for attr in dir(x86_const) if attr.startswith("X86_INS_")
-        if md.insn_name(getattr(x86_const, attr))
-    })
-    vec_ops = "xmm1, xmm2"
-    accept_a = []
-    structural_only = []
-    for m in vocabulary:
-        r = scan._x86_check_a(m, vec_ops)
-        if not r:
-            continue
-        accept_a.append(m)
-        if not isinstance(r, str):
-            structural_only.append(m)
-    return vocabulary, accept_a, structural_only
-
-
-def test_check_a_reason_attribution_census_every_accept_has_a_reason():
-    """Population fifty-two's must-accept (D-SLM5157): once _x86_check_a
-    adopts the Optional[str] contract (R4), structural_only (redefined:
-    every acceptance with no reported reason) must be [] -- every member of
-    accept_a is attributed to exactly one of the three named reasons
-    (_X86_VEC_MOVE_ALLOW, _X86_BITWISE_FP_FAMILY, _X86_P_VP_STRUCTURAL_ALLOW).
-
-    TODAY _x86_check_a still returns bool: every accepted mnemonic's own
-    'reason' is the literal True, not a string, so structural_only ==
-    accept_a in full (nonempty) -- this cell fails for exactly that reason
-    until R4's contract change lands.
-    """
-    _vocabulary, accept_a, structural_only = _census_check_a_reason_attribution()
-    assert structural_only == [], (
-        "{} of {} check(A) acceptances report no distinguishable reason "
-        "(not a string) -- _x86_check_a has not yet adopted the "
-        "Optional[str] contract (R4); first 10: {}".format(
-            len(structural_only), len(accept_a), structural_only[:10])
-    )
-
-
-def test_check_a_reason_attribution_census_catches_a_silently_unattributed_accept():
-    """Population fifty-two's must-reject (D-SLM5157, mutation-tested, not
-    a real defect): once R4's Optional[str] contract lands, wrapping
-    _x86_check_a so the bitwise_fp_family branch's own reason tag is
-    stripped (returning a bare truthy sentinel instead of the reason
-    string) WHILE its own ACCEPT behaviour is unchanged must make
-    structural_only nonempty (16, the family's own size) -- proving the
-    census actually discriminates a silently-unattributed accept from an
-    attributed one, rather than reporting [] regardless of whether
-    reason-reporting is wired correctly.
-
-    Cannot be constructed against today's bool-returning _x86_check_a --
-    there is no reason string for the wrapper to strip. Guarded explicitly
-    until R4 lands; the mutation logic below runs unmodified once it does
-    (it wraps the function's own OUTPUT, never its internal branches).
-    """
-    if not hasattr(scan, "_X86_BITWISE_FP_FAMILY"):
-        _fail_absent("fifty-two (must-reject: bitwise-family mutation)", "")
-    sample = next(iter(scan._X86_BITWISE_FP_FAMILY))
-    sample_reason = scan._x86_check_a(sample, "xmm1, xmm2")
-    if not isinstance(sample_reason, str):
-        pytest.fail(
-            "check_fp_free_scan.py's _x86_check_a still returns bool (R4's "
-            "Optional[str] contract, design Sec7 dim 11's fifty-second "
-            "population, has not landed) -- population fifty-two's "
-            "must-reject (a mutation on the bitwise_fp_family branch's own "
-            "reason tag) cannot be constructed until _x86_check_a returns a "
-            "reason string. Confirmed at source: _x86_check_a({!r}, "
-            "'xmm1, xmm2') returned {!r}, not a string.".format(sample, sample_reason)
-        )
-
-    real_check_a = scan._x86_check_a
-    bitwise_family = scan._X86_BITWISE_FP_FAMILY
-
-    def _mutant(mnemonic, op_str):
-        r = real_check_a(mnemonic, op_str)
-        if mnemonic.lower() in bitwise_family and isinstance(r, str):
-            return True  # reason tag stripped; ACCEPT behaviour unchanged
-        return r
-
-    with mock.patch.object(scan, "_x86_check_a", _mutant):
-        _vocabulary, _accept_a, structural_only_mutant = _census_check_a_reason_attribution()
-    assert len(structural_only_mutant) == len(bitwise_family), (
-        "mutating the bitwise_fp_family branch's own reason tag (ACCEPT "
-        "unchanged, reason stripped to a bare truthy sentinel) was "
-        "expected to make structural_only nonempty ({} members, the "
-        "family's own size) -- got {}: the census does not actually "
-        "discriminate a silently-unattributed accept from an attributed "
-        "one".format(len(bitwise_family), len(structural_only_mutant))
     )

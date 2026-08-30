@@ -80,6 +80,7 @@ depth.
 """
 from __future__ import annotations
 
+import ast
 import os
 import sys
 import tempfile
@@ -412,6 +413,93 @@ def test_unbuilt_claim_globs_scan_surface_excludes_this_pin_file():
     assert this_basename in scanned_basenames, "this pin file is expected to be inside the glob's raw scan surface"
     assert this_basename in cptdc._UNBUILT_CLAIM_EXCLUDE_BASENAMES, (
         "this pin file's basename is expected to be in _UNBUILT_CLAIM_EXCLUDE_BASENAMES"
+    )
+
+
+# ===========================================================================
+# T-2403 (Curie), R9 -- the RENDERED-value-only population this check's
+# raw-text-only scan cannot see (`Claude/Vitruvius/t2265-fold46-delta-
+# manifest.md` Sec4; D-SLM5209/D-SLM5211/D-SLM5215). test_check_fp_free_
+# scan.py's own prose wraps its "is not yet built" claim across two adjacent
+# Python string literals (a quote/newline/indent/quote gap between "yet" and
+# "built" that `\s+` does not bridge); the RENDERED string Python produces by
+# concatenating the literals at parse time matches _UNBUILT_CLAIM_PATTERN
+# cleanly. `find_stale_unbuilt_claim` today searches only raw source text and
+# cannot see this shape.
+#
+# This population was independently derived three times before any repair
+# (the adversary, the planner, and the conductor's own AST walk) and is
+# pinned here a fourth time, permanently, against a VENDORED snapshot of
+# test_check_fp_free_scan.py (commit b2325597a906 -- the same discipline
+# "POPULATION RECOVERY IS VENDORED" above already applies: a pin against the
+# live, mutable file would stop discriminating the day R9's own text fix
+# lands and the rendered claims stop existing to be found). Per
+# `StandardsDocument.md` Sec4, the repaired checker's new scan surface must
+# reproduce this exact population -- 2 rendered-value matches, 0 at
+# raw-source level, at the file's own lines 295 and 913 -- BEFORE either
+# claim is fixed; fixing first would destroy the only population the
+# repaired checker could be shown to catch.
+# ===========================================================================
+
+_R9_POPULATION_FIXTURE = "test_check_fp_free_scan_pre_r9.txt"
+_R9_EXPECTED_LINES = (295, 913)
+
+
+def test_r9_population_ast_walk_independently_finds_two_rendered_matches_zero_raw():
+    """Independent verification, NOT the (absent) checker surface's own
+    logic: walks the vendored file's own AST directly (this test's own
+    code, not `find_stale_unbuilt_claim`) and checks each string-constant
+    node's RENDERED value against `_UNBUILT_CLAIM_PATTERN` (the checker's
+    shared vocabulary, not its detection mechanism) versus that same node's
+    own raw source segment. Confirms the exact population this fold's own
+    manifest derived: two rendered-only matches, at lines 295 and 913, and
+    a whole-file raw-text search finds neither."""
+    text = _read_vendored_fixture(_R9_POPULATION_FIXTURE)
+    tree = ast.parse(text)
+    rendered_hits = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if cptdc._UNBUILT_CLAIM_PATTERN.search(node.value):
+                segment = ast.get_source_segment(text, node) or ""
+                raw_visible = bool(cptdc._UNBUILT_CLAIM_PATTERN.search(segment))
+                rendered_hits.append((node.lineno, raw_visible))
+    lines_found = sorted(lineno for lineno, _raw_visible in rendered_hits)
+    assert lines_found == list(_R9_EXPECTED_LINES), (
+        "expected exactly the rendered-value matches at lines {}, found at "
+        "{}".format(list(_R9_EXPECTED_LINES), lines_found)
+    )
+    assert all(not raw_visible for _lineno, raw_visible in rendered_hits), (
+        "expected every rendered-value match to be INVISIBLE at raw-source "
+        "level (the whole point of this population); got {}".format(rendered_hits)
+    )
+    assert cptdc._UNBUILT_CLAIM_PATTERN.search(text) is None, (
+        "a whole-file raw-text search was expected to find nothing on this "
+        "vendored population -- if it now matches, the population has "
+        "changed and this fixture needs re-vendoring, not this assertion "
+        "loosened"
+    )
+
+
+def test_r9_checker_flags_the_pinned_population_once_the_rendered_value_surface_exists():
+    """THE genuinely red half, today: `find_stale_unbuilt_claim`'s current
+    raw-text-only scan returns None on this vendored population (confirmed
+    by the independent AST walk above to carry two real rendered-value
+    claims) -- a false "clean." Per R9's own repair (`Claude/Vitruvius/
+    t2265-fold46-delta-manifest.md` Sec4, item 2), the checker gains a
+    second scan surface: `_UNBUILT_CLAIM_PATTERN` also runs against the
+    RENDERED value of every `ast.Constant` string node, unioned with the
+    existing raw-text result. Against a VENDORED, frozen population (not
+    the live file, which R5/R9's own text fixes will make legitimately
+    clean), this assertion stays the permanent regression guard the ticket
+    asks for: it fails today because the surface does not exist, passes
+    once it is added, and fails again if that surface is ever removed."""
+    text = _read_vendored_fixture(_R9_POPULATION_FIXTURE)
+    result = cptdc.find_stale_unbuilt_claim(text)
+    assert result is not None, (
+        "expected the repaired checker's rendered-value scan surface to "
+        "flag this vendored population (two claims split across adjacent "
+        "string literals, invisible to a raw-text-only search); got None -- "
+        "the checker's rendered-value scan surface is absent or was removed"
     )
 
 
