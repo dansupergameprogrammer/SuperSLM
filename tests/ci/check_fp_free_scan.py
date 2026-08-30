@@ -878,6 +878,86 @@ _X86_P_PREFIX_EXCLUDE = {
     "vdpbf16ps", "vpdpbf16ps", "vcvtne2ps2bf16", "vcvtneps2bf16",
 }
 
+# D-SLM5155/D-SLM5156 (Dan, 2026-08-29): the fail-closed question the deny
+# list above left open is ruled closed. This is the fail-closed replacement
+# design Sec4.1 specifies: an explicit, checked-in allow-list, built by
+# enumerating capstone's real x86-64 p/vp-prefixed vocabulary (the same
+# 1523-mnemonic census this module's own test suite pins) and individually
+# vetting each entry against ISA-reference IEEE-754 semantics (admitted iff
+# the mnemonic's documented semantics perform no rounding, no exception, and
+# produce no float-typed numeric result). Built the same way GPR_ALLOW's own
+# fold-8 freeze was (D-SLM4374): a closed set computed once against a named,
+# re-executable reference vocabulary, requiring an explicit, reviewed diff
+# for any future addition -- an unknown future p/vp mnemonic REJECTs by
+# default instead of being admitted by the old rule's own silence.
+#
+# This is the real vocabulary's p/vp-prefixed, non-`pf`-prefixed membership
+# (excluding `_X86_VEC_MOVE_ALLOW`'s own named entries, which ACCEPT via
+# that list and never reach this one) with the six documented FP leaks
+# `_X86_P_PREFIX_EXCLUDE` names above removed -- every member here was
+# already individually vetted as the deny list's own complement; none is a
+# genuine IEEE-754 operation. `_X86_P_PREFIX_EXCLUDE`'s six entries are
+# retained above as documentation of what was individually considered and
+# excluded; they are no longer load-bearing as a gate -- this allow-list is
+# now the sole authority for the p/vp branch below.
+_X86_P_VP_STRUCTURAL_ALLOW = frozenset({
+    "pabsb", "pabsd", "pabsw", "packssdw", "packsswb", "packusdw", "packuswb", "paddb",
+    "paddd", "paddq", "paddsb", "paddsw", "paddusb", "paddusw", "paddw", "pause",
+    "pavgb", "pavgusb", "pavgw", "pblendvb", "pblendw", "pclmulqdq", "pcmpeqb", "pcmpeqd",
+    "pcmpeqq", "pcmpeqw", "pcmpestri", "pcmpestrm", "pcmpgtb", "pcmpgtd", "pcmpgtq", "pcmpgtw",
+    "pcmpistri", "pcmpistrm", "pconfig", "pdep", "pext", "pextrb", "pextrd", "pextrq",
+    "pextrw", "phaddd", "phaddsw", "phaddw", "phminposuw", "phsubd", "phsubsw", "phsubw",
+    "pinsrb", "pinsrd", "pinsrq", "pinsrw", "pmaddubsw", "pmaddwd", "pmaxsb", "pmaxsd",
+    "pmaxsw", "pmaxub", "pmaxud", "pmaxuw", "pminsb", "pminsd", "pminsw", "pminub",
+    "pminud", "pminuw", "pmovsxbd", "pmovsxbq", "pmovsxbw", "pmovsxdq", "pmovsxwd", "pmovsxwq",
+    "pmovzxbd", "pmovzxbq", "pmovzxbw", "pmovzxdq", "pmovzxwd", "pmovzxwq", "pmuldq", "pmulhrsw",
+    "pmulhrw", "pmulhuw", "pmulhw", "pmulld", "pmullw", "pmuludq", "pop", "popal",
+    "popaw", "popcnt", "popf", "popfd", "popfq", "prefetch", "prefetchnta", "prefetcht0",
+    "prefetcht1", "prefetcht2", "prefetchw", "prefetchwt1", "psadbw", "pshufw", "psignb", "psignd",
+    "psignw", "pslld", "psllq", "psllw", "psrad", "psraw", "psrld", "psrlq",
+    "psrlw", "psubb", "psubd", "psubq", "psubsb", "psubsw", "psubusb", "psubusw",
+    "psubw", "pswapd", "ptest", "ptwrite", "push", "pushal", "pushaw", "pushf",
+    "pushfd", "pushfq", "vp4dpwssd", "vp4dpwssds", "vpabsb", "vpabsd", "vpabsq", "vpabsw",
+    "vpackssdw", "vpacksswb", "vpackusdw", "vpackuswb", "vpaddb", "vpaddd", "vpaddq", "vpaddsb",
+    "vpaddsw", "vpaddusb", "vpaddusw", "vpaddw", "vpandd", "vpandnd", "vpandnq", "vpandq",
+    "vpavgb", "vpavgw", "vpblendd", "vpblendmb", "vpblendmd", "vpblendmq", "vpblendmw", "vpblendvb",
+    "vpbroadcastb", "vpbroadcastd", "vpbroadcastmb2q", "vpbroadcastmw2d", "vpbroadcastq", "vpbroadcastw", "vpclmulqdq", "vpcmov",
+    "vpcmp", "vpcmpb", "vpcmpd", "vpcmpeqb", "vpcmpeqd", "vpcmpeqq", "vpcmpeqw", "vpcmpestri",
+    "vpcmpestrm", "vpcmpgtb", "vpcmpgtd", "vpcmpgtq", "vpcmpgtw", "vpcmpistri", "vpcmpistrm", "vpcmpq",
+    "vpcmpub", "vpcmpud", "vpcmpuq", "vpcmpuw", "vpcmpw", "vpcom", "vpcomb", "vpcomd",
+    "vpcompressb", "vpcompressd", "vpcompressq", "vpcompressw", "vpcomq", "vpcomub", "vpcomud", "vpcomuq",
+    "vpcomuw", "vpcomw", "vpconflictd", "vpconflictq", "vpdpbusd", "vpdpbusds", "vpdpwssd", "vpdpwssds",
+    "vperm2f128", "vperm2i128", "vpermb", "vpermd", "vpermi2b", "vpermi2d", "vpermi2pd", "vpermi2ps",
+    "vpermi2q", "vpermi2w", "vpermil2pd", "vpermil2ps", "vpermq", "vpermt2b", "vpermt2d", "vpermt2pd",
+    "vpermt2ps", "vpermt2q", "vpermt2w", "vpermw", "vpexpandb", "vpexpandd", "vpexpandq", "vpexpandw",
+    "vpextrb", "vpextrd", "vpextrq", "vpextrw", "vpgatherdd", "vpgatherdq", "vpgatherqd", "vpgatherqq",
+    "vphaddbd", "vphaddbq", "vphaddbw", "vphaddd", "vphadddq", "vphaddsw", "vphaddubd", "vphaddubq",
+    "vphaddubw", "vphaddudq", "vphadduwd", "vphadduwq", "vphaddw", "vphaddwd", "vphaddwq", "vphminposuw",
+    "vphsubbw", "vphsubd", "vphsubdq", "vphsubsw", "vphsubw", "vphsubwd", "vpinsrb", "vpinsrd",
+    "vpinsrq", "vpinsrw", "vplzcntd", "vplzcntq", "vpmacsdd", "vpmacsdqh", "vpmacsdql", "vpmacssdd",
+    "vpmacssdqh", "vpmacssdql", "vpmacsswd", "vpmacssww", "vpmacswd", "vpmacsww", "vpmadcsswd", "vpmadcswd",
+    "vpmadd52huq", "vpmadd52luq", "vpmaddubsw", "vpmaddwd", "vpmaskmovd", "vpmaskmovq", "vpmaxsb", "vpmaxsd",
+    "vpmaxsq", "vpmaxsw", "vpmaxub", "vpmaxud", "vpmaxuq", "vpmaxuw", "vpminsb", "vpminsd",
+    "vpminsq", "vpminsw", "vpminub", "vpminud", "vpminuq", "vpminuw", "vpmovb2m", "vpmovd2m",
+    "vpmovdb", "vpmovdw", "vpmovm2b", "vpmovm2d", "vpmovm2q", "vpmovm2w", "vpmovq2m", "vpmovqb",
+    "vpmovqd", "vpmovqw", "vpmovsdb", "vpmovsdw", "vpmovsqb", "vpmovsqd", "vpmovsqw", "vpmovswb",
+    "vpmovsxbd", "vpmovsxbq", "vpmovsxbw", "vpmovsxdq", "vpmovsxwd", "vpmovsxwq", "vpmovusdb", "vpmovusdw",
+    "vpmovusqb", "vpmovusqd", "vpmovusqw", "vpmovuswb", "vpmovw2m", "vpmovwb", "vpmovzxbd", "vpmovzxbq",
+    "vpmovzxbw", "vpmovzxdq", "vpmovzxwd", "vpmovzxwq", "vpmuldq", "vpmulhrsw", "vpmulhuw", "vpmulhw",
+    "vpmulld", "vpmullq", "vpmullw", "vpmultishiftqb", "vpmuludq", "vpopcntb", "vpopcntd", "vpopcntq",
+    "vpopcntw", "vpord", "vporq", "vpperm", "vprold", "vprolq", "vprolvd", "vprolvq",
+    "vprord", "vprorq", "vprorvd", "vprorvq", "vprotb", "vprotd", "vprotq", "vprotw",
+    "vpsadbw", "vpscatterdd", "vpscatterdq", "vpscatterqd", "vpscatterqq", "vpshab", "vpshad", "vpshaq",
+    "vpshaw", "vpshlb", "vpshld", "vpshldd", "vpshldq", "vpshldvd", "vpshldvq", "vpshldvw",
+    "vpshldw", "vpshlq", "vpshlw", "vpshrdd", "vpshrdq", "vpshrdvd", "vpshrdvq", "vpshrdvw",
+    "vpshrdw", "vpshufbitqmb", "vpsignb", "vpsignd", "vpsignw", "vpslld", "vpslldq", "vpsllq",
+    "vpsllvd", "vpsllvq", "vpsllvw", "vpsllw", "vpsrad", "vpsraq", "vpsravd", "vpsravq",
+    "vpsravw", "vpsraw", "vpsrld", "vpsrldq", "vpsrlq", "vpsrlvd", "vpsrlvq", "vpsrlvw",
+    "vpsrlw", "vpsubb", "vpsubd", "vpsubq", "vpsubsb", "vpsubsw", "vpsubusb", "vpsubusw",
+    "vpsubw", "vpternlogd", "vpternlogq", "vptest", "vptestmb", "vptestmd", "vptestmq", "vptestmw",
+    "vptestnmb", "vptestnmd", "vptestnmq", "vptestnmw", "vpxord", "vpxorq",
+})
+
 # T-2367 (Brunel), design Sec4.1 fold round 39 (D-SLM4987). AND, OR, ANDN, and
 # XOR are Boolean functions of their operand bits under every x86 encoding --
 # packed-integer (`p`-prefix, already accepted unconditionally above) or
@@ -908,12 +988,12 @@ def _x86_check_a(mnemonic: str, op_str: str) -> bool:
     m = mnemonic.lower()
     if m in _X86_VEC_MOVE_ALLOW:
         return True
-    if (m.startswith("p") or m.startswith("vp")) and m not in _X86_P_PREFIX_EXCLUDE:
-        # 3DNow pf* family, named int->float conversions, and the BF16
-        # dot-product/convert family excluded above; every other p/vp-prefixed
-        # mnemonic is packed-integer by construction.
-        if not m.startswith("pf"):
-            return True
+    if m in _X86_P_VP_STRUCTURAL_ALLOW:
+        # D-SLM5156: fail-closed allow-list membership, not the deny-list-
+        # guarded "starts with p/vp and isn't excluded" rule it replaces --
+        # an mnemonic absent from this list REJECTs by default, whether or
+        # not it happens to start with p/vp.
+        return True
     if m in _X86_BITWISE_FP_FAMILY:
         # T-2367 (Brunel), D-SLM4987: accepted unconditionally, on any
         # operand list. Supersedes the pre-fold-39 self-zeroing-only

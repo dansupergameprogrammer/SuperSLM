@@ -3601,13 +3601,19 @@ def test_check_a_p_vp_structural_accept_census_and_violation():
     once in this same cell: a legitimate, specified widening of
     `_X86_VEC_MOVE_ALLOW` shifts this census's own literal counts, and the
     counts are recomputed and reasserted here, not the assertion loosened.
-    These four counts are current facts about the shipped classifier,
-    independent of whether the design's own fail-closed guarantee holds --
-    that guarantee's own violation (`structural_only` is non-empty) is
-    pinned separately, below, as
-    `test_check_a_p_vp_structural_only_nonempty_violates_fail_closed_claim`
-    (D-SLM5009b: xfail, since closing it is an open question waiting on
-    Dan, not this ticket's to answer or build).
+    These four counts are current facts about the shipped classifier and are
+    unaffected by D-SLM5156's own closure: `_X86_P_VP_STRUCTURAL_ALLOW`
+    (R3, T-2404) is built to admit exactly the 438 mnemonics that passed
+    the pre-closure structural rule, so `accept_a`/`named_accept`/
+    `structural_only` (against `_X86_VEC_MOVE_ALLOW`, this census's own
+    definition of "named") hold the same counts under the fail-closed
+    allow-list as they did under the deny-list-guarded rule it replaced.
+    D-SLM5009b's own open question (whether check (A) should be made
+    fail-closed over the p/vp class) is closed (D-SLM5155/D-SLM5156); the
+    cell that pinned it as open,
+    test_check_a_p_vp_structural_only_nonempty_violates_fail_closed_claim,
+    is retired (R7, same commit as R3) rather than left describing a
+    decision that has since been made.
     """
     if not _SCAN_AVAILABLE:
         _fail_absent("(D-SLM4999 p/vp vitality pin, census)", "")
@@ -3638,41 +3644,25 @@ def test_check_a_p_vp_structural_accept_census_and_violation():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="D-SLM5009b: whether check (A) should be made fail-CLOSED over "
-    "the p/vp class (enumerating its 555 accepted mnemonics explicitly) is "
-    "OPEN, waiting on Dan, and separable from this arc -- 'the hole is "
-    "real and has leaked twice (3DNow, BF16); closing it is bounded but "
-    "not small, and nothing in 1.3.0's scope requires it.' This cell "
-    "expresses that open question directly (structural_only is non-empty, "
-    "so the design's own fail-closed claim does not hold) and is not this "
-    "ticket's to build; xfail(strict=True) so the day Dan's ruling closes "
-    "the hole, this flips to a loud XPASS demanding removal rather than "
-    "silently continuing to pass for the wrong reason.",
-)
-def test_check_a_p_vp_structural_only_nonempty_violates_fail_closed_claim():
-    """The design's own guarantee (Sec5.4/Sec5.5, fold round 39) states
-    checks (A)/(B) are an allow-list, fail-closed on any mnemonic neither
-    check names. `structural_only` must be empty for that claim to hold;
-    today (D-SLM5009a: 454 of 555 vector-operand accepts) it is not.
-    """
-    if not _SCAN_AVAILABLE:
-        _fail_absent("(D-SLM4999 p/vp vitality pin, fail-closed violation)", "")
-    _, accept_a, structural_only, _ = _census_check_a_p_vp_structural_reliance()
-    assert structural_only == [], (
-        "design Sec5.4/Sec5.5's own guarantee states checks (A)/(B) are an "
-        "allow-list, fail-closed on an unvetted mnemonic (D-SLM4986) -- but "
-        "{} of the {} mnemonics check (A) accepts on a vector operand are "
-        "named by NO allow-list at all (D-SLM4999): they pass only because "
-        "they start with p/vp and are not on the 6-entry deny list "
-        "_X86_P_PREFIX_EXCLUDE. This is a deny-list, not an allow-list, and "
-        "the structural population must be empty for the design's own "
-        "'fail-closed on any mnemonic neither check names' claim to hold. "
-        "First 10 of {}: {}".format(
-            len(structural_only), len(accept_a), len(structural_only),
-            structural_only[:10])
-    )
+# R7 (T-2404): the cell that formerly stood here,
+# test_check_a_p_vp_structural_only_nonempty_violates_fail_closed_claim,
+# pinned design Sec5.4/Sec5.5's fail-closed guarantee as an open question
+# under xfail(strict=True), reason "OPEN, waiting on Dan." Dan ruled it
+# closed 2026-08-29 (D-SLM5155) and D-SLM5156 specified the closure
+# (`_X86_P_VP_STRUCTURAL_ALLOW`, built above `_x86_check_a`). The cell is
+# retired by R3's own must-accept/must-reject pair
+# (test_check_a_p_vp_structural_allow_agrees_with_independent_fp_oracle,
+# test_check_a_p_vp_mis_vetted_allow_list_caught_by_independent_oracle,
+# below) rather than left standing with a reason describing a decision
+# that has since been made -- retirement landed in the same commit as R3,
+# per the manifest's own instruction (t2265-fold45-delta-manifest.md,
+# R7). Note for a future reader: this cell's own `structural_only`
+# computation (named only against `_X86_VEC_MOVE_ALLOW`) would not have
+# detected the closure even if left in place -- the fail-closed guarantee
+# is now satisfied via a second, separately-named list
+# (`_X86_P_VP_STRUCTURAL_ALLOW`), which this cell's narrower definition of
+# "named" never consulted. That staleness, not only the reason text, is
+# why the cell is retired rather than merely reworded.
 
 
 _P_VP_STRUCTURAL_ONLY_PIN_PATH = os.path.join(
@@ -3743,35 +3733,26 @@ def test_check_a_p_vp_structural_only_set_is_pinned_against_vocabulary_growth():
     )
 
 
-def test_check_a_p_prefix_exclude_list_is_load_bearing():
-    """Mutation proof that `_X86_P_PREFIX_EXCLUDE` is genuinely load-bearing
-    for the two historical escapes named in its own source comment (3DNow
-    pi2fd, the BF16 vpdpbf16ps rendering): each currently REJECTs (on the
-    deny list today), and removing it from the list flips the verdict to
-    ACCEPT -- proving the exclusion is doing real work, not a dead entry
-    that happens to sit alongside a rule that would reject the mnemonic
-    anyway. Currently passing in both directions: this is a regression
-    guard on the deny list's own vitality for KNOWN cases, complementing
-    the cell above, which shows the mechanism's blind spot for an UNKNOWN
-    case.
-    """
-    if not _SCAN_AVAILABLE:
-        _fail_absent("(D-SLM4999 deny-list mutation proof)", "")
-    for mnemonic, op_str in (("pi2fd", "mm0, mm1"), ("vpdpbf16ps", "xmm0, xmm1, xmm2")):
-        assert mnemonic in scan._X86_P_PREFIX_EXCLUDE, (
-            "fixture verification FAILED: {} must be on the deny list "
-            "today".format(mnemonic)
-        )
-        assert not scan._x86_check_a(mnemonic, op_str), (
-            "{} must REJECT today (on the deny list); check (A) accepted it".format(mnemonic)
-        )
-        patched = scan._X86_P_PREFIX_EXCLUDE - {mnemonic}
-        with mock.patch.object(scan, "_X86_P_PREFIX_EXCLUDE", patched):
-            assert scan._x86_check_a(mnemonic, op_str), (
-                "removing {} from the deny list must flip the verdict to "
-                "ACCEPT -- otherwise the exclusion is not load-bearing "
-                "and the mutation proof fails to discriminate".format(mnemonic)
-            )
+# T-2404 (Brunel), a self-found consequence of building R3: the cell that
+# formerly stood here, test_check_a_p_prefix_exclude_list_is_load_bearing,
+# proved `_X86_P_PREFIX_EXCLUDE` (the deny list) was load-bearing by
+# showing that removing an entry from it flipped the verdict to ACCEPT.
+# D-SLM5156 rules that this deny list is "no longer load-bearing as a
+# gate" once `_X86_P_VP_STRUCTURAL_ALLOW` (R3, above `_x86_check_a`) is
+# built -- `_x86_check_a`'s p/vp branch now consults the allow-list alone,
+# so removing an entry from `_X86_P_PREFIX_EXCLUDE` no longer changes any
+# verdict: `pi2fd`/`vpdpbf16ps` REJECT because they are absent from the
+# allow-list, not because they are present on the deny list, and stay
+# absent (and therefore still REJECT) whether or not the deny list still
+# names them. This cell's own premise -- that the deny list gates the
+# verdict -- is exactly what D-SLM5156 supersedes; it is retired in the
+# same commit as R3, alongside R7's own predecessor cell, rather than left
+# asserting a mechanism the production change deliberately replaced. This
+# retirement was not named by the fold-46 manifest, the red suite's own
+# casebook, or any repair item -- it surfaced only once R3 was built and
+# this cell was re-run red for a mechanism-superseded reason. Flagged in
+# the build log for review alongside R3 rather than silently folded into
+# it.
 
 
 # ===========================================================================
