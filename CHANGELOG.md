@@ -12,7 +12,7 @@ for later 1.x releases.
 
 ### Added
 
-- **A new, CI-checked guarantee: checks (A) and (B) decide, by disassembly, that the `superslm`
+- **A new guarantee: checks (A) and (B) decide, by disassembly, that the `superslm`
   CMake target's compiled object output contains no floating-point arithmetic instruction, over
   the archive the platform's own build produces — enforced on Windows/COFF for this release. The
   Linux/ELF leg is wired into CI (see the job below), not yet enforced: no run of it has completed
@@ -31,12 +31,13 @@ for later 1.x releases.
   that is not on that frozen list. **The guarantee covers only arithmetic present in SuperSLM's
   own compiled objects — it asserts nothing about arithmetic an external callee (the CRT, the
   STL, a consumer-installed callback) might itself perform.**
-- **A new CI job, `fp-free-scan-gate`** (`.github/workflows/tests.yml`): configures and builds the
-  `superslm` target, scans the resulting archive with `tests/ci/scan_build_output.py`, and fails
+- **A new CI job, `fp-free-scan-gate`**: configures and builds the
+  `superslm` target, scans the resulting archive with `scan_build_output.py`, and fails
   the workflow on any rejected symbol or an archive member that cannot be read or recognized.
-  Runs the arc's own red suite (`tests/t2296-fp-free-open-red-suite`) in the same job, against the
-  same build. The `linux-x64` job also scans its own build's archive with the same driver, gating
-  on Linux/ELF.
+  Defined in `.github/workflows/tests.yml`. Runs the arc's own red suite
+  (`tests/t2296-fp-free-open-red-suite`) in the same job, against the
+  same build. The `linux-x64` job also scans its own build's archive with the same driver; that
+  leg is not enforced for this release.
 
 ### Changed
 

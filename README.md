@@ -14,12 +14,14 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.3.0**. This release adds a new, CI-checked guarantee: the
+Current release: **1.3.0**. This release adds a new guarantee: the
 compiled `superslm` static archive's own object code contains no
 floating-point arithmetic instruction, decided by disassembling every archive
-member the build produces (`tests/ci/scan_build_output.py`, the
-`fp-free-scan-gate` CI job) — a claim about SuperSLM's own compiled objects,
-not about arithmetic an external callee might itself perform.
+member the build produces — a claim about SuperSLM's own compiled objects,
+not about arithmetic an external callee might itself perform. The scanner is
+`scan_build_output.py`, driven by the `fp-free-scan-gate` job;
+[docs/platform-support.md](docs/platform-support.md) records where the
+guarantee is enforced and where each leg has run.
 [CHANGELOG.md](CHANGELOG.md) has what changed; [Status](#status) below has
 what is measured where.
 
