@@ -145,14 +145,32 @@ _PART2_EXCLUDED_FILES = {
     # already-audited, not a defect this census exists to (re-)find.
     os.path.join("tools", "reference_pipeline", "pipeline.py"),
 }
-# (relative path, 1-based line number) pairs excluded individually, each with its own reason
-# in the comment beside it -- never a whole-file exclusion for a single documented residual.
-_PART2_EXCLUDED_LINES = {
+# (relative path, distinctive non-comment source-text fragment) pairs excluded individually,
+# each with its own reason in the comment beside it -- never a whole-file exclusion for a
+# single documented residual.
+#
+# T-2467 (Claude/Poirot/665f430-t2462-ask5-tracka-confirmation.md, Significant 1, D-SLM5557):
+# this set used to be keyed by (relative path, 1-based line number) -- a decorative identifier
+# with no window/scope semantics of its own, the same shape the bad-alloc membership oracle's
+# line column had (T-2458, D-SLM5537). Executed both directions on the line-keyed form: a
+# single comment line inserted above `proof_manifest.h:54` turned the census red on an
+# untouched, already-excused enumerator declaration (false negative -- the excluded line's own
+# text just moved down one line and the stale line number no longer covered it); a NEW,
+# unregistered q_proj-width-from-hidden_size site written AT `adapter_marshal.h:188` was
+# silently absorbed, exit 0, with the unaudited site sitting in the tree (false positive -- the
+# stale line number covered whatever code happened to be there, not the excused code itself).
+# Re-keyed on the excused code's own text so the exclusion follows its subject instead of a
+# coordinate that can drift away from it -- each fragment below is verified unique among this
+# file's own non-comment lines (`_part2_excluded_text_hit`'s whole match surface), so widening
+# match is bounded to "another literal copy of this exact excused statement," not "whatever
+# lands on this line number next."
+_PART2_EXCLUDED_TEXT = {
     # design Sec2.1 closing paragraph: "One item explicitly NOT touched, flagged rather than
     # silently left alone" -- AdapterOutChannelsFor's own identical hidden_size-for-q_proj/
     # o_proj convention, out of scope for Ask 5 (no adapter conversion requested for a
     # non-square base model). A residual for whichever design next asks for one.
-    (os.path.join("include", "superslm", "adapter_marshal.h"), 188),
+    (os.path.join("include", "superslm", "adapter_marshal.h"),
+     'if (proj == "q_proj" || proj == "o_proj" || proj == "down_proj") return hidden_size;'),
     # T-2432's own named residual, not fixed by this build: CheckConfigGeometry's own
     # ConfigGeometryStatus::HiddenSizeGeometryMismatch enumerator (and its C-ABI mirror,
     # SslmModelStatus::ConfigGeometryHiddenSizeMismatch) is now UNREACHABLE dead code -- Track
@@ -163,9 +181,16 @@ _PART2_EXCLUDED_LINES = {
     # StandardsDocument.md Sec5.6's "every deferral is surfaced loudly" -- not fixed here
     # because removing or renaming an ABI-additive enumerator is a design-level call, not a
     # build-time one.
-    (os.path.join("include", "superslm", "model.h"), 210),
-    (os.path.join("include", "superslm", "proof_manifest.h"), 54),
+    (os.path.join("include", "superslm", "model.h"), "ConfigGeometryHiddenSizeMismatch,"),
+    (os.path.join("include", "superslm", "proof_manifest.h"), "HiddenSizeGeometryMismatch,"),
 }
+
+
+def _part2_excluded_text_hit(rel_path: str, line: str) -> bool:
+    """True when `line` (from `rel_path`) carries one of `_PART2_EXCLUDED_TEXT`'s own excused
+    fragments -- a substring match on the fragment's exact text, not the line's position, so an
+    unrelated line above it shifting the excused code down the file changes nothing here."""
+    return any(rel_path == f and text in line for f, text in _PART2_EXCLUDED_TEXT)
 
 
 def _iter_source_files(repo_root: str, *, production_only: bool = False):
@@ -285,7 +310,7 @@ def run_census(repo_root: str) -> list[str]:
             # build log for the same disclosure the production-only file scope above carries.
             if stripped.startswith(comment_prefixes):
                 continue
-            if (rel_path, i) in _PART2_EXCLUDED_LINES:
+            if _part2_excluded_text_hit(rel_path, line):
                 continue
             hit = None
             if _R1_DIVISION_RE.search(line) or _r1_multiply_hit(line):
