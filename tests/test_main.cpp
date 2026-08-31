@@ -7458,16 +7458,30 @@ static void TestConfigGeometryRejectsHeadsNotDivisibleByKv() {
 
 // T-2445 (Claude/Poirot/ddbc57a-t2443-ask5-tracka-confirmation.md, Significant 4,
 // D-SLM5473): T-2441's Minor 7 (D-SLM5440) added the `head_dim == 0`/`hidden_size == 0`
-// guards immediately above -- R1's removal left both unguarded on the two direct-call
-// surfaces (this function, and tools/sslm_convert_validate.py's Python mirror) that bypass
-// SslmModel::Load's own upstream zero guard. The fix landed with a disposable probe
-// (built, run, and deleted) as its only verification -- no committed cell named either
-// status. Executed and confirmed before this pin existed: deleting both guards left
-// `python -m pytest tools/` at the identical `1901 passed, 0 failed` the fix round's own
-// build log cites as its regression evidence, i.e. nothing here discriminated. These two
-// cells are that discriminating coverage, matching this test suite's own established
-// zero-boundary convention (TestConfigGeometryRejectsZeroAttentionHeads, above) rather than
-// the disposable probe's now-deleted shape.
+// guards to CheckConfigGeometry (src/proof_manifest.cpp) -- R1's removal left both
+// unguarded on the pure function. The fix landed with a disposable probe (built, run, and
+// deleted) as its only verification -- no committed cell named either status. Executed and
+// confirmed before this pin existed: deleting both guards left `python -m pytest tools/` at
+// the identical `1901 passed, 0 failed` the fix round's own build log cites as its
+// regression evidence, i.e. nothing here discriminated. These two cells are that
+// discriminating coverage, matching this test suite's own established zero-boundary
+// convention (TestConfigGeometryRejectsZeroAttentionHeads, above) rather than the
+// disposable probe's now-deleted shape.
+// CORRECTED (T-2458, Claude/Poirot/5c82f92-t2453-ask5-tracka-confirmation.md, Minor 1):
+// this comment used to say the guards sit "immediately above" and that "the two
+// direct-call surfaces (this function, and tools/sslm_convert_validate.py's Python
+// mirror)" bypass SslmModel::Load's own upstream zero guard. Both clauses were
+// transcribed out of src/proof_manifest.cpp's own comment on CheckConfigGeometry, where
+// the guards genuinely sit immediately above the paragraph. Neither holds here: nothing
+// sits immediately above this comment in this file except
+// TestConfigGeometryRejectsHeadsNotDivisibleByKv and the retired
+// TestConfigGeometryRejectsHiddenSizeMismatch comment above it, and "this function"
+// calling CheckConfigGeometry directly is simply what a unit test does -- not a second
+// production surface that bypasses Load. T-2450 (F3, D-SLM5503-D-SLM5505) retired the
+// "two direct-call surfaces" framing to one everywhere it made a reachability claim about
+// production code; tools/sslm_convert_validate.py's Python mirror is the one surface that
+// genuinely bypasses an equivalent gate and reaches ZeroHeadDim/ZeroHiddenSize for real --
+// see include/superslm/proof_manifest.h's own corrected comment for the full disposition.
 static void TestConfigGeometryRejectsZeroHeadDim() {
 	const auto r = CheckConfigGeometry(/*hidden_size=*/4096, /*heads=*/32, /*kv_heads=*/8, /*head_dim=*/0);
 	CHECK_MSG(r.status == ConfigGeometryStatus::ZeroHeadDim,
