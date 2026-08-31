@@ -859,25 +859,6 @@ jobs:
   # Mirrors forward-leaf-check's own two-step shape (self-test, then the gate
   # script) exactly; no compiler dependency (unlike forward-leaf-check's
   # clang++ AST walk), so no pinned-toolchain env var is needed here.
-  # T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Significant 3, D-SLM5437): the
-  # geometry site census (design Claude/Vitruvius/t2408-superslm-ask5-qwen3-arch-design-
-  # 2026-08-29.md Sec2.5) is specified as "run as a test-suite cell, not a human step" --
-  # T-2432's own build committed the registry and the script but wired them into nothing:
-  # not build.bat, not CMakeLists.txt, not this workflow. A tree-wide search for
-  # `geometry_site_census` before this job existed returned only the script's own self-
-  # references. Mirrors gpu-guard-status-parity-check's own shape immediately below (a
-  # standalone Python check, no compiler or build dependency) since the census reads
-  # source text only.
-  geometry-site-census:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
-        with:
-          python-version: '3.13'
-      - name: Fail the build if any geometry site is missing its marker, unmarked in production source, or has a fixed site's own required token missing from its marker's scope
-        run: python tools/geometry_site_census.py
-
   gpu-guard-status-parity-check:
     runs-on: ubuntu-latest
     steps:
@@ -890,6 +871,29 @@ jobs:
         run: python -m pytest tests/ci/test_check_gpu_guard_status_parity.py -v
       - name: Fail the build if CPU's guard range, the GPU ladder, and gpu_layer_loop_guards.def disagree
         run: python tests/ci/check_gpu_guard_status_parity.py
+
+  # T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Significant 3, D-SLM5437; placement
+  # corrected T-2445, Claude/Poirot/ddbc57a-t2443-ask5-tracka-confirmation.md, Minor 2,
+  # D-SLM5436 superseded -- this job used to sit between the T-2055 comment above and the job
+  # it documents, gpu-guard-status-parity-check, so that comment's own closing sentence,
+  # "Mirrors forward-leaf-check's own two-step shape... exactly," read as describing THIS job
+  # instead): the geometry site census (design Claude/Vitruvius/t2408-superslm-ask5-qwen3-
+  # arch-design-2026-08-29.md Sec2.5) is specified as "run as a test-suite cell, not a human
+  # step" -- T-2432's own build committed the registry and the script but wired them into
+  # nothing: not build.bat, not CMakeLists.txt, not this workflow. A tree-wide search for
+  # `geometry_site_census` before this job existed returned only the script's own self-
+  # references. Mirrors gpu-guard-status-parity-check's own shape immediately above (a
+  # standalone Python check, no compiler or build dependency) since the census reads
+  # source text only.
+  geometry-site-census:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      - name: Fail the build if any geometry site is missing its marker, unmarked in production source, or has a fixed site's own required token missing from its marker's scope
+        run: python tools/geometry_site_census.py
 
   # S-HARDEN-3 (F13): the converter's validate/serialize/verify transaction and
   # its proof manifest. Builds `sslm_verify` (the §13 item 7 independent C++
