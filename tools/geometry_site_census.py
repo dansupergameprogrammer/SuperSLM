@@ -18,16 +18,32 @@ question into a checkable one, in three parts:
      *.py), and every raw hit not covered by a marker within the same line window fails
      the census.
   3. Per-site regression check (T-2441, Poirot 327ee29-t2438-ask5-tracka-review.md,
-     Significant 2, D-SLM5436). Parts 1 and 2 both read whether a marker EXISTS; neither
-     reads what the code AT a marked location actually says, so a "fixed" site whose own
-     fix is reverted in place, marker left untouched, satisfies both. For every `fixed`
-     site that carries a `required_tokens` list (the registry's own field, one substring
-     set per site), at least one of those tokens must appear in the scope from that site's
-     own marker to the next marker in the same file (or end of file) -- a revert that
-     restores the pre-fix code removes the token the landed fix itself introduced, so this
-     part fails where parts 1 and 2 do not. Demonstrated by construction: GS-14's fix
-     reverted to `plan.out_channels = hidden_size;`, marker untouched, passes parts 1 and 2
-     and fails here.
+     Significant 2, D-SLM5436; scope bounding corrected T-2445, Poirot
+     ddbc57a-t2443-ask5-tracka-confirmation.md, Significant 2, D-SLM5436 superseded).
+     Parts 1 and 2 both read whether a marker EXISTS; neither reads what the code AT a
+     marked location actually says, so a "fixed" site whose own fix is reverted in place,
+     marker left untouched, satisfies both. For every `fixed` site that carries a
+     `required_tokens` list (the registry's own field, one substring set per site), at
+     least one of those tokens must appear in that OCCURRENCE's own bounded scope -- the
+     registry's own `required_token_scope_ends` map, keyed by exact marker location, one
+     entry per occurrence (see the registry's own header comment for how each value is
+     derived). A revert that restores the pre-fix code removes the token the landed fix
+     itself introduced, so this part fails where parts 1 and 2 do not. Demonstrated by
+     construction: GS-14's fix reverted to `plan.out_channels = hidden_size;`, marker
+     untouched, passes parts 1 and 2 and fails here.
+
+     T-2445 correction: scope used to run from a marker to the NEXT marker anywhere in the
+     same file, which (a) swept unrelated code between two distant, unrelated sites'
+     markers into the search -- a required token appearing there by coincidence masked a
+     revert of the actual site -- and (b) for a multi-line site, let an untouched sibling
+     line elsewhere in that same wide scope mask a revert of the one line a specific
+     mutation touched. Executed and found doing exactly that: three independent single-line
+     reverts (GS-12's o_proj in-width, GS-10's packed q_weight byte extent, GS-18's
+     LayerScratch q_codes width) all passed under the old rule. The registry's own
+     per-occurrence `required_token_scope_ends` closes both: each value is the minimal line
+     (scanning forward from the marker on the correct tree) at which the site's own
+     required token is actually found, so the bounded scope is exactly as wide as that
+     occurrence's own governed code.
 
 Scope (T-2432): this census covers families R1 and QOW, the two families Track A owns.
 Family KLP (the Option-G fused-K-landing assumption, GS-05) is Track B's own scope
@@ -293,17 +309,19 @@ def run_census(repo_root: str) -> list[str]:
     # (registry's own field, one substring set per site, derived once from that site's own
     # diff against v1.3.0): for each marker OCCURRENCE (a site can have more than one, per
     # Part 1's own "several registered sites legitimately touch more than one call site"), the
-    # scope is [marker_line, next_marker_line_in_the_SAME_FILE) -- or end of file if this is
-    # the last marker in it -- and at least one of the site's own required tokens must appear
-    # somewhere in that scope. A revert that keeps the marker but restores the pre-fix code
-    # removes the token that scope would have contained (every landed fix introduces its own
-    # named quantity -- effective_q_width, g_q_width, QWIDTH, or similar -- exactly because
-    # that is what distinguishes the fix from what it replaced), so the site fails here instead
-    # of passing silently. `confirmed-correct` sites carry no `required_tokens` (their own
-    # governing quantity is correctly UNCHANGED by this ask, so a presence check would be
-    # backwards for them) and are not checked by this part.
+    # scope is [marker_line, required_token_scope_ends[file:marker_line]] -- the registry's own
+    # per-occurrence bound (T-2445; see the registry's own header comment and this module's
+    # docstring for why "next marker in the file" was replaced) -- and at least one of the
+    # site's own required tokens must appear somewhere in that scope. A revert that keeps the
+    # marker but restores the pre-fix code removes the token that scope would have contained
+    # (every landed fix introduces its own named quantity -- effective_q_width, g_q_width,
+    # QWIDTH, or similar -- exactly because that is what distinguishes the fix from what it
+    # replaced), so the site fails here instead of passing silently. `confirmed-correct` sites
+    # carry no `required_tokens` (their own governing quantity is correctly UNCHANGED by this
+    # ask, so a presence check would be backwards for them) and are not checked by this part.
     for rel_path, occurrences in markers_by_file.items():
         lines = file_lines_cache[rel_path]
+        rel_path_fwd = rel_path.replace(os.sep, "/")
         ext = os.path.splitext(rel_path)[1]
         # T-2441: deliberately NOT Part 2's own `("//", "*", "/*")` tuple -- this codebase's
         # own pervasive `/*name=*/value` inline-argument-annotation idiom (e.g.
@@ -326,10 +344,24 @@ def run_census(repo_root: str) -> list[str]:
             required = site.get("required_tokens")
             if not required:
                 continue
-            scope_end = sorted_occ[idx + 1][0] - 1 if idx + 1 < len(sorted_occ) else len(lines)
+            scope_ends = site.get("required_token_scope_ends", {})
+            occ_key = f"{rel_path_fwd}:{marker_line}"
+            if occ_key not in scope_ends:
+                failures.append(
+                    f"MISSING required_token_scope_ends ENTRY: {gs_id} has required_tokens but "
+                    f"no registry scope-end for occurrence {occ_key!r} -- add one (the minimal "
+                    f"line, scanning forward from the marker on the correct tree, at which the "
+                    f"site's own required token is found), or null if this occurrence has no "
+                    f"independently-revertible code of its own to check")
+                continue
+            scope_end = scope_ends[occ_key]
+            if scope_end is None:
+                # Explicit exemption (registry header comment documents when this is correct):
+                # this occurrence has no code of its own whose regression Part 3 could detect.
+                continue
             # 0-indexed slice: lines[marker_line - 1 : scope_end] covers 1-based lines
-            # [marker_line, scope_end], i.e. the marker's own line through the line
-            # immediately before the next marker (or the file's own last line).
+            # [marker_line, scope_end], i.e. the marker's own line through the registry's own
+            # recorded end line for this specific occurrence.
             #
             # Comment-only lines are excluded from the search -- executed and found load-
             # bearing, not a narrowing carried over by assumption from Part 2: every fix's own
@@ -346,11 +378,31 @@ def run_census(repo_root: str) -> list[str]:
                 ln for ln in lines[marker_line - 1:scope_end] if not ln.strip().startswith(comment_prefixes)
             ]
             scope_text = "".join(scope_lines)
-            if not any(tok in scope_text for tok in required):
+            # T-2445 (Significant 2 remedy, GS-18): most sites use OR semantics -- different
+            # occurrences of the SAME site spell its own quantity differently (GS-10's own two
+            # occurrences use "effective_q_width" and "QW" respectively), so any ONE listed
+            # token satisfies. A site whose ONE occurrence governs several independent
+            # sub-assignments that all share the same generic token text (GS-18's q_codes/
+            # q_rot/ctx_codes, each `codes_block(effective_q_width)`) needs the opposite:
+            # reverting just one sub-assignment leaves the bare token "effective_q_width"
+            # present via the others (or via this function's own shared derivation line), so a
+            # presence-of-any check never fires. `require_all_tokens` (registry field, default
+            # false) switches that site to AND semantics over exact, per-assignment fragments
+            # (`required_tokens` then holds one fragment per sub-assignment, not alternates).
+            require_all = site.get("require_all_tokens", False)
+            if require_all:
+                missing_toks = [tok for tok in required if tok not in scope_text]
+                ok = not missing_toks
+            else:
+                missing_toks = required
+                ok = any(tok in scope_text for tok in required)
+            if not ok:
+                verb = "missing" if require_all else "none of"
+                shown = missing_toks if require_all else required
                 failures.append(
-                    f"REGRESSED SITE: {gs_id} at {rel_path}:{marker_line} -- none of "
-                    f"{required!r} found before the next marker (or end of file); the fix "
-                    f"may have been reverted with its marker left in place")
+                    f"REGRESSED SITE: {gs_id} at {rel_path}:{marker_line} -- {verb} "
+                    f"{shown!r} found within its own bounded scope; the fix may have been "
+                    f"reverted with its marker left in place")
 
     return failures
 
