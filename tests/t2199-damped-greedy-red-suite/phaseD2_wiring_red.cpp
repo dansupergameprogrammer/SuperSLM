@@ -416,7 +416,8 @@ static void TestD2_GreedyMode_BitUnchangedRegression() {
 	          oracle.head, fx.vocab_size, nullptr, 0, kSteps, workspace.data(), workspace.size(),
 	          oracle_tokens.data(), oracle_logits.data(), oracle_tokens.size(), &produced,
 	          &stop_reason, oracle_view.config.kv_precision,
-	          oracle_view.option_g_fused_k_landing) == SslmForwardStatus::Ok);
+	          oracle_view.option_g_fused_k_landing,
+	          oracle_view.config.num_attention_heads) == SslmForwardStatus::Ok);
 	CHECK(produced == kSteps);
 	CHECK_MSG(abi_tokens == oracle_tokens,
 	          "ABI greedy stream differs from independent RunGreedyDecodeLoop oracle");
@@ -609,7 +610,7 @@ static void TestD2_ValidationSymmetry_AcrossEntryPoints() {
 		    /*out_tokens=*/nullptr, /*out_logit_rows=*/nullptr, 0, &d3_tokens_produced,
 		    &d3_stop_reason, superslm::SslmKvPrecision{}, /*option_g_fused_k_landing=*/false,
 		    static_cast<DampedGreedyMode>(c.mode), c.alpha_q15, c.n, c.k, /*q_ln2=*/493,
-		    /*q_b=*/0, /*q_c=*/0);
+		    /*q_b=*/0, /*q_c=*/0, /*num_attention_heads=*/1);
 		const bool d3_valid = (d3_status == superslm::SslmForwardStatus::Ok);
 		CHECK_MSG(d3_valid == shared_valid,
 		          "case '%s': D3's own RunGreedyOrDampedGreedyDecodeLoop returned %s (status=%d) "

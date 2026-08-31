@@ -2549,7 +2549,7 @@ SslmForwardStatus RunGreedyDecodeLoop(
     size_t workspace_size, int32_t* out_tokens, int32_t* out_logit_rows,
     size_t out_tokens_capacity, size_t* out_tokens_produced,
     SslmDecodeStopReason* out_stop_reason, SslmKvPrecision kv_precision,
-    bool option_g_fused_k_landing) {
+    bool option_g_fused_k_landing, size_t num_attention_heads) {
 	// S3.7 (§14.4): checked FIRST, before `seq`, `workspace`, or any output
 	// parameter is touched, and before any token is embedded -- an artifact
 	// carrying `kv_precision = Int16` loads today (CFG1's own domain check
@@ -2625,11 +2625,18 @@ SslmForwardStatus RunGreedyDecodeLoop(
 		// `tools/sslm_generate.cpp`) -- not the twelve-argument call that used
 		// to resolve to the 15-parameter overload's own default-`kLegacy`
 		// behavior regardless of what the loaded artifact's header asked for.
+		// SSLM-GEOMETRY-SITE: GS-26
+		// T-2441 (Critical 1, D-SLM5431): q_width threaded from this function's own REQUIRED
+		// `num_attention_heads` parameter -- no longer the sentinel default that silently
+		// derived an undercounted head total from hidden_size for a non-square artifact.
 		return RunLayerLoop(seq, layers, num_hidden_layers, /*layer_budget=*/num_hidden_layers,
 		                     hidden_size, head_dim, num_key_value_heads, intermediate_size,
 		                     context_cap, rope_tables, workspace, workspace_size,
 		                     option_g_fused_k_landing ? OptionGKLandingMode::kFused
-		                                              : OptionGKLandingMode::kLegacy);
+		                                              : OptionGKLandingMode::kLegacy,
+		                     /*site_prefix=*/{}, /*token_index=*/0,
+		                     /*trace_hook_state=*/nullptr,
+		                     /*q_width=*/num_attention_heads * head_dim);
 	};
 
 	// Prefill: every prompt token except the last (the last is folded into

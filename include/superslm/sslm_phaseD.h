@@ -107,6 +107,14 @@ struct DampedGreedyValidationParams {
 // to the RunLayerLoop-required bytes; and out_tokens/out_logit_rows provide
 // out_tokens_capacity >= max_new_tokens elements/rows. Host token ids are validated before use,
 // and successful/rejected output mutation follows RunGreedyDecodeLoop's documented contract.
+// SSLM-GEOMETRY-SITE: GS-27
+// T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Critical 1, D-SLM5431): this sibling
+// entry point had the identical gap RunGreedyDecodeLoop's own GS-26 fix closes -- no
+// `num_attention_heads` in its signature, so its own internal `RunLayerLoop` call (this
+// file's own damped_greedy_phaseD_loop.cpp) had no way to supply `q_width` and fell through to
+// the sentinel default. `num_attention_heads` is a REQUIRED trailing parameter, no default,
+// for the identical reason GS-26's own comment states. Every existing caller (4 call sites)
+// was updated in the same change.
 superslm::SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
     superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
     uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
@@ -119,7 +127,7 @@ superslm::SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
     size_t* out_tokens_produced, superslm::SslmDecodeStopReason* out_stop_reason,
     superslm::SslmKvPrecision kv_precision, bool option_g_fused_k_landing, DampedGreedyMode mode,
     int32_t alpha_q15, int32_t anti_lm_max_order, int32_t top_k, int64_t q_ln2, int64_t q_b,
-    int64_t q_c);
+    int64_t q_c, size_t num_attention_heads);
 
 }  // namespace superslm
 

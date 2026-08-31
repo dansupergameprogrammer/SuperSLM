@@ -191,7 +191,7 @@ bool GenerateOne(const LoadedModel& m, const TokenizerView& tok, const std::stri
 	    m.final_norm_site_constant, m.head_weights, static_cast<int32_t>(out.vocab_size), kStopIds, 2,
 	    max_new_tokens, workspace.data(), workspace.size(), out.out_tokens.data(), out.out_logit_rows.data(),
 	    out.out_tokens.size(), &out.tokens_produced, &stop_reason, m.view.config.kv_precision,
-	    m.view.option_g_fused_k_landing);
+	    m.view.option_g_fused_k_landing, m.view.config.num_attention_heads);
 	const auto t1 = std::chrono::steady_clock::now();
 	out.decode_seconds = std::chrono::duration<double>(t1 - t0).count();
 	if (out.status != SslmForwardStatus::Ok) {

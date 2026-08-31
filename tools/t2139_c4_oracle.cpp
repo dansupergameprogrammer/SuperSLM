@@ -235,7 +235,8 @@ int main(int argc, char** argv) {
 			    oracle.final_norm_site_constant, oracle.head_weights, oracle.vocab_size, nullptr,
 			    0, max_new_tokens, oracle_workspace.data(), oracle_workspace.size(),
 			    oracle_tokens2.data(), oracle_logit_rows.data(), oracle_tokens2.size(), &produced2,
-			    &stop2, oracle.kv_precision, oracle.option_g_fused_k_landing);
+			    &stop2, oracle.kv_precision, oracle.option_g_fused_k_landing,
+			    oracle.num_attention_heads);
 			if (st2 != superslm::SslmForwardStatus::Ok) {
 				std::fprintf(stderr, "FAIL: second oracle run returned status %d\n",
 				             static_cast<int>(st2));

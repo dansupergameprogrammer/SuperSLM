@@ -465,7 +465,7 @@ int main(int argc, char** argv) {
 		    workspace.data(), workspace.size(), out_tokens.data(), out_logit_rows.data(),
 		    out_tokens.size(), &out_tokens_produced, &stop_reason, model_view.config.kv_precision,
 		    model_view.option_g_fused_k_landing, decode_mode, alpha_q15, anti_lm_max_order, top_k,
-		    q_ln2, q_b, q_c);
+		    q_ln2, q_b, q_c, model_view.config.num_attention_heads);
 	} else {
 		decode_status = RunGreedyDecodeLoop(
 		    seq, layers.data(), num_hidden_layers, hidden_size, model_view.config.head_dim, num_kv_heads,
@@ -474,7 +474,8 @@ int main(int argc, char** argv) {
 		    final_norm_site_constant, head_weights, static_cast<int32_t>(model_view.config.vocab_size),
 		    stop_ids.empty() ? nullptr : stop_ids.data(), stop_ids.size(), max_new_tokens, workspace.data(), workspace.size(),
 		    out_tokens.data(), out_logit_rows.data(), out_tokens.size(), &out_tokens_produced, &stop_reason,
-		    model_view.config.kv_precision, model_view.option_g_fused_k_landing);
+		    model_view.config.kv_precision, model_view.option_g_fused_k_landing,
+		    model_view.config.num_attention_heads);
 	}
 
 	if (decode_status != SslmForwardStatus::Ok) {

@@ -290,6 +290,11 @@ struct CpuOracleModel {
 	const int8_t* head_weights = nullptr;
 	uint32_t num_hidden_layers = 0;
 	size_t hidden_size = 0, head_dim = 0, num_kv_heads = 0, intermediate_size = 0;
+	// T-2441 (Critical 1, D-SLM5431): RunGreedyDecodeLoop's own num_attention_heads is now a
+	// REQUIRED parameter (forward_sites.h GS-26) -- this oracle threads it through, sourced
+	// from the same view.config LoadCpuOracleModel already reads every other geometry field
+	// from, below.
+	size_t num_attention_heads = 0;
 	int64_t context_cap = 0;
 	int32_t vocab_size = 0;
 	const superslm::SslmTensorManifest* rope_tables = nullptr;
@@ -308,6 +313,7 @@ inline bool LoadCpuOracleModel(const superslm::SslmModelView& view, CpuOracleMod
 	out->hidden_size = view.config.hidden_size;
 	out->head_dim = view.config.head_dim;
 	out->num_kv_heads = view.config.num_key_value_heads;
+	out->num_attention_heads = view.config.num_attention_heads;
 	out->intermediate_size = view.config.intermediate_size;
 	out->context_cap = static_cast<int64_t>(view.config.context_cap);
 	out->vocab_size = view.config.vocab_size;
@@ -376,7 +382,7 @@ inline superslm::SslmForwardStatus RunGreedyOracle(
 	    m.final_norm_site_constant, m.head_weights, m.vocab_size, /*stop_ids=*/nullptr,
 	    /*stop_count=*/0, max_new_tokens, workspace.data(), workspace.size(), out_tokens->data(),
 	    out_logit_rows.data(), out_tokens->size(), out_tokens_produced, out_stop_reason,
-	    m.kv_precision, m.option_g_fused_k_landing);
+	    m.kv_precision, m.option_g_fused_k_landing, m.num_attention_heads);
 }
 
 #endif  // SSLM_T2138_FIXTURE_COMMON_H

@@ -1200,6 +1200,20 @@ enum class SslmDecodeStopReason {
 // own `RunLayerLoop` call inside this function's definition (link 5,
 // `forward_sites.cpp`), which selects the 16-parameter overload's
 // `OptionGKLandingMode` explicitly.
+// SSLM-GEOMETRY-SITE: GS-26
+// T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Critical 1, D-SLM5431): this entry
+// point's own signature carried `hidden_size`/`head_dim` but never `num_attention_heads`, so
+// it had no way to supply T-2432's own `q_width` (`num_attention_heads * head_dim`) to the
+// forward path it drives -- every caller silently fell through to `RunLayerLoop`'s own
+// sentinel default (`q_width = 0`, "derive as hidden_size"), which is the pre-widening
+// identity and is WRONG the moment a loaded artifact's real geometry is non-square (the
+// R1 identity this whole ask exists to remove). `num_attention_heads` is a REQUIRED trailing
+// parameter, no default -- matching this function's own established precedent one parameter
+// to its left (`option_g_fused_k_landing`'s own header comment, above: "a default here is
+// silently-wrong-by-default rather than silently-inert... removing the default turns the next
+// omitted caller into a compile error instead of a second silent-agreement instrument"). Every
+// existing caller (11 call sites across tests/tools) was updated in the same change; a future
+// caller that omits this parameter fails to compile, not silently returns a wrong answer.
 SslmForwardStatus RunGreedyDecodeLoop(
     SequenceLayerState& seq, const LayerWeights* layers, uint32_t num_hidden_layers,
     size_t hidden_size, size_t head_dim, size_t num_key_value_heads, size_t intermediate_size,
@@ -1212,7 +1226,7 @@ SslmForwardStatus RunGreedyDecodeLoop(
     uint8_t* workspace, size_t workspace_size,
     int32_t* out_tokens, int32_t* out_logit_rows, size_t out_tokens_capacity,
     size_t* out_tokens_produced, SslmDecodeStopReason* out_stop_reason,
-    SslmKvPrecision kv_precision, bool option_g_fused_k_landing);
+    SslmKvPrecision kv_precision, bool option_g_fused_k_landing, size_t num_attention_heads);
 
 }  // namespace superslm
 

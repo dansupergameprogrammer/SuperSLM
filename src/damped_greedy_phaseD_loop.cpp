@@ -32,7 +32,7 @@ SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
     size_t* out_tokens_produced, superslm::SslmDecodeStopReason* out_stop_reason,
     superslm::SslmKvPrecision kv_precision, bool option_g_fused_k_landing, DampedGreedyMode mode,
     int32_t alpha_q15, int32_t anti_lm_max_order, int32_t top_k, int64_t q_ln2, int64_t q_b,
-    int64_t q_c) {
+    int64_t q_c, size_t num_attention_heads) {
 	using superslm::SslmForwardStatus;
 
 	// T-2199 closing round, production bug found by the suite owner's strengthened N8 symmetry
@@ -94,12 +94,17 @@ SslmForwardStatus RunGreedyOrDampedGreedyDecodeLoop(
 		for (size_t i = 0; i < hidden_size; ++i) seq.hidden_codes[i] = embed_codes[i];
 		seq.hidden_scale = embed_scale;
 		seq.layer_index = 0;
+		// SSLM-GEOMETRY-SITE: GS-27
+		// T-2441 (Critical 1, D-SLM5431): q_width threaded from this function's own REQUIRED
+		// `num_attention_heads` parameter -- see forward_sites.cpp's own identical GS-26 fix.
 		return superslm::RunLayerLoop(
 		    seq, layers, num_hidden_layers, /*layer_budget=*/num_hidden_layers, hidden_size,
 		    head_dim, num_key_value_heads, intermediate_size, context_cap, rope_tables, workspace,
 		    workspace_size,
 		    option_g_fused_k_landing ? superslm::OptionGKLandingMode::kFused
-		                              : superslm::OptionGKLandingMode::kLegacy);
+		                              : superslm::OptionGKLandingMode::kLegacy,
+		    /*site_prefix=*/{}, /*token_index=*/0, /*trace_hook_state=*/nullptr,
+		    /*q_width=*/num_attention_heads * head_dim);
 	};
 
 	for (size_t i = 0; i + 1 < prompt_len; ++i) {

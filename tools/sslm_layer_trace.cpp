@@ -261,7 +261,8 @@ int main(int argc, char** argv) {
 	    static_cast<int32_t>(model_view.config.vocab_size), /*stop_ids=*/nullptr, /*stop_count=*/0,
 	    /*max_new_tokens=*/1, prod_workspace.data(), prod_workspace.size(), prod_out_token.data(),
 	    prod_out_logit_row.data(), prod_out_token.size(), &prod_tokens_produced, &prod_stop_reason,
-	    model_view.config.kv_precision, option_g_fused_k_landing);
+	    model_view.config.kv_precision, option_g_fused_k_landing,
+	    model_view.config.num_attention_heads);
 	if (prod_status != SslmForwardStatus::Ok) {
 		std::fprintf(stderr, "FAILED at stage=production_decode: status=%s\n",
 		             SslmForwardStatusName(prod_status));

@@ -352,7 +352,8 @@ static void TestDim5_C12_UndersizedOutputCapacityRejected(const SslmModelView& v
 	    workspace.data(), workspace.size(), out_tokens, out_rows, capacity, &produced,
 	    &stop_reason, m.kv_precision, m.option_g_fused_k_landing,
 	    /*mode=*/DampedGreedyMode::kGreedy, /*alpha_q15=*/int32_t{1} << 14,
-	    /*anti_lm_max_order=*/2, /*top_k=*/6, /*q_ln2=*/493, /*q_b=*/0, /*q_c=*/0);
+	    /*anti_lm_max_order=*/2, /*top_k=*/6, /*q_ln2=*/493, /*q_b=*/0, /*q_c=*/0,
+	    m.num_attention_heads);
 
 	// Companion behavioral half (compiles and fails against the unfixed loop): the
 	// undersized call must not report Ok.
@@ -439,7 +440,8 @@ static void TestDim5_C13_ExactFitOutputCapacityAccepted(const SslmModelView& vie
 	    workspace.data(), workspace.size(), out_tokens, out_rows, capacity, &produced,
 	    &stop_reason, m.kv_precision, m.option_g_fused_k_landing,
 	    /*mode=*/DampedGreedyMode::kGreedy, /*alpha_q15=*/int32_t{1} << 14,
-	    /*anti_lm_max_order=*/2, /*top_k=*/6, /*q_ln2=*/493, /*q_b=*/0, /*q_c=*/0);
+	    /*anti_lm_max_order=*/2, /*top_k=*/6, /*q_ln2=*/493, /*q_b=*/0, /*q_c=*/0,
+	    m.num_attention_heads);
 
 	CHECK_MSG(st == SslmForwardStatus::Ok,
 	          "dim5 C13: capacity exactly equal to the produced count (%zu) must succeed, got "
@@ -507,7 +509,7 @@ static void TestDim5_C14_RunGreedyDecodeLoopUndersizedOutputCapacityRejected(
 	    m.embed_site_constant, m.final_norm_gain.data(), m.final_norm_site_constant,
 	    m.head_weights, m.vocab_size, /*stop_ids=*/nullptr, /*stop_count=*/0, max_new_tokens,
 	    workspace.data(), workspace.size(), out_tokens, out_rows, capacity, &produced,
-	    &stop_reason, m.kv_precision, m.option_g_fused_k_landing);
+	    &stop_reason, m.kv_precision, m.option_g_fused_k_landing, m.num_attention_heads);
 
 	CHECK_MSG(st != SslmForwardStatus::Ok,
 	          "dim5 C14: undersized out_tokens_capacity (%zu, produced would be %zu) returned "
@@ -574,7 +576,7 @@ static void TestDim5_C15_RunGreedyDecodeLoopExactFitOutputCapacityAccepted(
 	    m.embed_site_constant, m.final_norm_gain.data(), m.final_norm_site_constant,
 	    m.head_weights, m.vocab_size, /*stop_ids=*/nullptr, /*stop_count=*/0, max_new_tokens,
 	    workspace.data(), workspace.size(), out_tokens, out_rows, capacity, &produced,
-	    &stop_reason, m.kv_precision, m.option_g_fused_k_landing);
+	    &stop_reason, m.kv_precision, m.option_g_fused_k_landing, m.num_attention_heads);
 
 	CHECK_MSG(st == SslmForwardStatus::Ok,
 	          "dim5 C15: capacity exactly equal to the produced count (%zu) must succeed, got "

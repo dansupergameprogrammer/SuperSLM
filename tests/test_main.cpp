@@ -7593,28 +7593,35 @@ static void TestBuildProofManifestJsonReportsGeometryOkOnCoherentArtifact() {
 
 static void TestBuildProofManifestJsonReportsGeometryMismatchOnIncoherentArtifact() {
 	using namespace superslm_test;
-	// A deliberately incoherent shape, unrelated to this slot: 24 heads * 128
-	// head_dim = 3072 != hidden_size 4096. Built explicitly rather than via
-	// Cfg1Spec{}'s own defaults -- since SslmModel::Load's config-geometry join
-	// landed (S3.3 §13.1 cell 4, D-SLM420-D-SLM423), Cfg1Spec{}'s defaults are
-	// themselves R1-coherent (32*128 == 4096, the sibling coherent-case test's
-	// own explicit values above), so this cell can no longer borrow the shared
-	// default's incoherence and states its own.
+	// T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Critical 2, D-SLM5432): this cell
+	// used to pin R1 (hidden_size == num_attention_heads * head_dim), removed by T-2432 Track A
+	// step 1 (src/proof_manifest.cpp, GS-01) -- the 24-heads/128-head_dim/4096-hidden_size shape
+	// this cell used to build is no longer geometry-incoherent at all (CheckConfigGeometry no
+	// longer checks the relation), so the manifest it produces now correctly reports
+	// config_geometry.ok == true, and asserting the opposite pinned exactly the behavior this
+	// ticket's own ask removed. Narrowed to a shape CheckConfigGeometry still rejects on a
+	// DIFFERENT axis -- num_key_value_heads (8, the shared default) exceeding num_attention_heads
+	// (4) is R3 (KvHeadsExceedsHeads), untouched by the R1 removal. A zero-valued dimension was
+	// tried first and rejected: ParseConfig's own BadConfigDim guard (src/model.cpp,
+	// "a required dimension field is 0") rejects any zero BEFORE BuildProofManifestJson's own
+	// config_geometry re-parse ever calls CheckConfigGeometry, so a zero-heads construction
+	// produces "config_geometry": null, not "ok": false -- executed and confirmed by this
+	// ticket's own probe (tools/t2441_c2_probe.cpp) before landing this non-zero construction.
+	// This cell's own stated purpose (proving BuildProofManifestJson's "config_geometry" field
+	// reflects CheckConfigGeometry's own independent verdict rather than a hardcoded "ok") still
+	// holds under the widened contract.
 	Cfg1Spec incoherent;
-	incoherent.num_attention_heads = 24;
-	incoherent.head_dim = 128;  // hidden_size stays the default 4096: 24*128=3072 != 4096
+	incoherent.num_attention_heads = 4;
+	incoherent.num_key_value_heads = 8;  // 8 > 4 -> KvHeadsExceedsHeads, still rejected post-T-2432
 	auto built = BuildArtifact(
 	    {MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(incoherent)), MakeSigmoidLutSection()});
 
-	// This artifact is deliberately R1-incoherent, so SslmModel::Load itself now
-	// rejects it too (ConfigGeometryHiddenSizeMismatch) -- that is the correct,
-	// intended outcome of cell 4's own obligation, not a regression, and is
-	// exercised by cell 4's own red suite above. This cell's purpose is
-	// different: proving BuildProofManifestJson's "config_geometry" field
-	// reflects CheckConfigGeometry's own independent verdict rather than a
-	// hardcoded "ok" -- which needs only that the artifact is otherwise
-	// structurally valid (OpenFromMemory succeeds), not that SslmModel::Load
-	// accepts it.
+	// This artifact is deliberately geometry-incoherent (kv_heads > attention_heads), so
+	// SslmModel::Load itself now rejects it too -- that is the correct, intended outcome, not a
+	// regression. This cell's purpose is different: proving BuildProofManifestJson's
+	// "config_geometry" field reflects CheckConfigGeometry's own independent verdict rather than
+	// a hardcoded "ok" -- which needs only that the artifact is otherwise structurally valid
+	// (OpenFromMemory succeeds), not that SslmModel::Load accepts it.
 	SslmArtifact artifact;
 	SslmError aerr;
 	const SslmStatus open_status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), artifact, &aerr);
@@ -7626,10 +7633,10 @@ static void TestBuildProofManifestJsonReportsGeometryMismatchOnIncoherentArtifac
 
 	const std::string manifest = BuildProofManifestJson(artifact);
 	CHECK_MSG(manifest.find("\"ok\": false") != std::string::npos,
-	          "proof manifest for an incoherent shape (24*128=3072 != hidden_size 4096) must report "
-	          "config_geometry.ok == false; manifest:\n%s",
+	          "proof manifest for an incoherent shape (num_key_value_heads=8 > "
+	          "num_attention_heads=4) must report config_geometry.ok == false; manifest:\n%s",
 	          manifest.c_str());
-	CHECK(manifest.find("HiddenSizeGeometryMismatch") != std::string::npos);
+	CHECK(manifest.find("KvHeadsExceedsHeads") != std::string::npos);
 }
 
 // ---------------------------------------------------------------------------
@@ -12146,29 +12153,18 @@ static void TestCell4LoadAcceptsFullyConformantConfigGeometryAndRopeShapeJoin() 
 	          SslmForwardStatusName(fwd));
 }
 
-// R1: hidden_size (4097) != num_attention_heads * head_dim (32 * 128 = 4096),
-// one past the exact product, with R2/R3/R4 all held.
-static void TestCell4LoadRejectsHiddenSizeMismatchAgainstHeadsTimesHeadDim() {
-	using namespace superslm_test;
-	Cfg1Spec spec = MakeCell4CoherentCfg1Spec();
-	spec.hidden_size = spec.num_attention_heads * spec.head_dim + 1;  // 4097
-	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
-	FixtureSection rope_tables = MakeRop1SectionMultiRow(kRopeSiteRoundTripContextCap, kRopeSiteRoundTripPairs,
-	                                                      kRopeSiteRoundTripCosFlat, kRopeSiteRoundTripSinFlat);
-	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
-
-	SslmModelView view;
-	std::string err;
-	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
-	CHECK_MSG(status == SslmModelStatus::ConfigGeometryHiddenSizeMismatch,
-	          "§13.1 cell 4, R1: hidden_size=4097 != num_attention_heads(32)*head_dim(128)=4096, R2/R3/R4 all "
-	          "held: got %s, want ConfigGeometryHiddenSizeMismatch (%s)",
-	          SslmModelStatusName(status), err.c_str());
-	CHECK_MSG(err.find("4097") != std::string::npos && err.find("4096") != std::string::npos,
-	          "diagnostic does not name both the declared hidden_size (4097) and the expected product (4096): "
-	          "\"%s\"",
-	          err.c_str());
-}
+// TestCell4LoadRejectsHiddenSizeMismatchAgainstHeadsTimesHeadDim retired (T-2441, Poirot
+// 327ee29-t2438-ask5-tracka-review.md, Critical 2, D-SLM5432): this cell pinned the SAME R1
+// identity (hidden_size == num_attention_heads * head_dim) TestConfigGeometryRejectsHiddenSize
+// Mismatch's own retirement comment (above, T-2432 Track A step 1) already retires -- this one
+// through SslmModel::Load's own end-to-end join rather than CheckConfigGeometry directly, which
+// is why it sat outside the design's own enumerated `:7416-:7472` range and was not touched by
+// that step. hidden_size=4097 with heads=32/head_dim=128 (one past the exact product) is no
+// longer geometry-incoherent at all once R1 is removed, and now loads Ok -- asserting
+// ConfigGeometryHiddenSizeMismatch pinned exactly the rejection this ticket's own ask removes.
+// The sibling cells in this same §13.1 cell-4 family covering R2 (heads not divisible by kv),
+// R3 (kv exceeds heads), and R4 (ROP1 conformance) are unaffected -- none re-derive or enforce
+// the R1 relation -- and remain below, untouched.
 
 // R2: num_attention_heads (32) % num_key_value_heads (7) != 0, with kv_heads
 // still <= heads (R3 held) and hidden_size still == heads*head_dim (R1 held)
@@ -18873,7 +18869,8 @@ struct DecodeLoopCallFixture {
 		    model.final_norm_site_constant, model.head_weights, DecodeLoopFixture::kVocabSize,
 		    stop_ids.data(), stop_ids.size(), max_new_tokens, workspace, sizeof(workspace),
 		    out_tokens.data(), out_logit_rows.data(), out_tokens.size(), &tokens_produced,
-		    &stop_reason, superslm::SslmKvPrecision::Int8, /*option_g_fused_k_landing=*/false);
+		    &stop_reason, superslm::SslmKvPrecision::Int8, /*option_g_fused_k_landing=*/false,
+		    /*num_attention_heads=*/2);
 	}
 
 	void CheckEverythingUntouched(const char* what) const {
@@ -18917,7 +18914,8 @@ static void TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse() {
 	    f.model.final_norm_site_constant, f.model.head_weights, DecodeLoopFixture::kVocabSize,
 	    stop_ids.data(), stop_ids.size(), /*max_new_tokens=*/1, tiny_workspace, sizeof(tiny_workspace),
 	    f.out_tokens.data(), f.out_logit_rows.data(), f.out_tokens.size(), &f.tokens_produced,
-	    &f.stop_reason, SslmKvPrecision::Int16, /*option_g_fused_k_landing=*/false);
+	    &f.stop_reason, SslmKvPrecision::Int16, /*option_g_fused_k_landing=*/false,
+	    /*num_attention_heads=*/2);
 	CHECK_MSG(result == SslmForwardStatus::KvPrecisionUnsupported,
 	          "RunGreedyDecodeLoop(kv_precision=Int16, workspace=1 byte) status == %s, want "
 	          "KvPrecisionUnsupported (checked before the workspace is sized -- a 1-byte workspace "
@@ -21272,7 +21270,8 @@ static void TestOptionGSelectionDispatch_EndToEndProductionPath() {
 		    /*vocab_size=*/OptionGComposedPathFixture::kVocabSize, /*stop_ids=*/nullptr,
 		    /*stop_count=*/0, /*max_new_tokens=*/1, workspace, kWorkspaceSize, out_tokens,
 		    out_logit_rows, /*out_tokens_capacity=*/1, &tokens_produced, &stop_reason,
-		    SslmKvPrecision::Int8, fixture.view.option_g_fused_k_landing);
+		    SslmKvPrecision::Int8, fixture.view.option_g_fused_k_landing,
+		    /*num_attention_heads=*/1);
 	};
 
 	uint8_t ws_legacy[kWorkspaceSize];
@@ -26692,7 +26691,8 @@ int main(int argc, char** argv) {
 	// declared and stubbed at commit 6bb6b92; every hostile cell below is red
 	// against the real symbols' unconditional-Ok stub bodies.
 	TestCell4LoadAcceptsFullyConformantConfigGeometryAndRopeShapeJoin();
-	TestCell4LoadRejectsHiddenSizeMismatchAgainstHeadsTimesHeadDim();
+	// TestCell4LoadRejectsHiddenSizeMismatchAgainstHeadsTimesHeadDim retired -- see its own
+	// retirement comment above.
 	TestCell4LoadRejectsHeadsNotDivisibleByKvHeads();
 	TestCell4LoadRejectsKvHeadsExceedsHeads();
 	TestCell4LoadRejectsRopeCosShapeMismatchWithSinCorrect();
