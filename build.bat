@@ -56,6 +56,32 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Significant 5, D-SLM5439): the T-2432
+rem Track A acceptance harness (tools/t2432_geometry_harness.cpp) had no committed build
+rem recipe -- the one load-bearing result of the whole Ask 5 Track A arc was not reproducible
+rem from HEAD, the identical S-3 lesson tools/t2039_c5_harness.cpp's own header (and its own
+rem recipe immediately above) already records. Built here, alongside it, from the identical
+rem source list -- NOT auto-run (it needs a real .sslm artifact on disk this build does not
+rem assume exists, matching tools/t2039_c5_harness.cpp's own precedent). Usage after a
+rem successful build: first compile the 33 GPU shaders into a `shaders\` directory beside the
+rem harness executable exactly as this file's own dxc loop above does (ShaderPath resolves
+rem .cso relative to the EXECUTABLE's directory, never the working directory -- skipping this
+rem step produces a false GpuAllocationFailed, this ticket's own build log Sec7 names the exact
+rem failure mode); then out\t2432_geometry_harness.exe ^<model.sslm^> [token_id]. A non-square
+rem fixture is generated with tools\_t2432_nonsquare_fixture.py <checkpoint_dir> {nonsquare|
+rem square}, then tools\calibrate_checkpoint.py --checkpoint <checkpoint_dir> --out <calibrated_
+rem dir>, then tools\convert_model.py --artifact <calibrated_dir> --out <model.sslm> --skip-verify.
+if not exist out\geoharness mkdir out\geoharness
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp ^
+	tools\t2432_geometry_harness.cpp /Fo:out\geoharness\ /Fe:out\t2432_geometry_harness.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 rem T-2169 (Brunel, Rung 2b, Claude/Brunel/t2180-t2169-gpu-batched-prefill-build-2026-08-18.md):
 rem the chunk-submission primitive's own self-check harness (tools/t2169_rung2b_selfcheck.cpp) --
 rem design Sec8's exit condition (b)/(b2), the chunk_tokens=1 mechanism cell and the 4-token

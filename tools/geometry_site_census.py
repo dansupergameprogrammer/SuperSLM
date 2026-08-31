@@ -4,10 +4,14 @@ fold round 1) each found more instances of. Converts "was every site found" from
 question into a checkable one, in three parts:
 
   1. Registry <-> marker symmetry. Every registry entry with status "fixed" or
-     "confirmed-correct" has exactly one `SSLM-GEOMETRY-SITE: GS-NN` marker in the tree;
-     every marker in the tree has a matching registry entry. A site moved, deleted, or
-     renamed without updating the registry fails here; a marker copy-pasted with the wrong
-     id fails here.
+     "confirmed-correct" has exactly its own `expected_marker_count` occurrences of
+     `SSLM-GEOMETRY-SITE: GS-NN` in the tree (T-2441, Poirot 327ee29-t2438-ask5-tracka-
+     review.md, Significant 4, D-SLM5438: the registry's own per-site count, not a blanket
+     "at least one" -- several sites legitimately touch more than one code location, so
+     the count itself varies by site); every marker in the tree has a matching registry
+     entry. A site moved, deleted, or renamed without updating the registry fails here; a
+     marker copy-pasted with the wrong id, or landed on the wrong declaration among a
+     site's own several, fails here.
   2. Pattern <-> marker coverage -- the check that catches a site nobody has registered
      yet. An independent, deliberately broad regex family per assumption family, run
      across every source class the four grounding passes ranged over (*.cpp, *.h, *.hlsl,
@@ -36,9 +40,10 @@ expected to extend this same registry/script when it lands GS-05, not to duplica
 mechanism.
 
 Usage: python geometry_site_census.py [--repo-root PATH]
-Exit 0 on a clean census (every fixed/confirmed-correct site has exactly one marker, no
-unmarked pattern hit exists for R1/QOW, and no fixed site's own required token is missing
-from its marker's scope); exit 1 and a printed report otherwise.
+Exit 0 on a clean census (every fixed/confirmed-correct site has exactly its own registered
+`expected_marker_count` of markers, no unmarked pattern hit exists for R1/QOW, and no fixed
+site's own required token is missing from its marker's scope); exit 1 and a printed report
+otherwise.
 """
 from __future__ import annotations
 
@@ -197,15 +202,26 @@ def run_census(repo_root: str) -> list[str]:
 
     for gs_id in marker_required_ids:
         locs = found_markers.get(gs_id, [])
-        # T-2432's own reading: "exactly one marker" (design Sec2.5) holds per DISTINCT code
-        # location a site touches -- several registered sites (GS-09..GS-12, GS-19 among them)
-        # legitimately touch more than one call site (e.g. GS-12's own registry "function"
-        # field names BOTH RunLayerLoopImpl and RunLayerLoopChunkBatched), so more than one
-        # marker for one id is expected, not a defect, as long as at least one exists.
-        if len(locs) == 0:
-            failures.append(f"MISSING MARKER: {gs_id} ({registry_by_id[gs_id]['function']}) has "
-                             f"status={registry_by_id[gs_id]['status']!r} but no "
-                             f"'SSLM-GEOMETRY-SITE: {gs_id}' marker exists in the tree")
+        # T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Significant 4, D-SLM5438): the
+        # design's own text (Sec2.5) states "exactly one marker" as this check's contract, but
+        # the code here used to accept ANY count >= 1 -- a docstring describing a check the
+        # code did not perform, and the gap this section closes. Several registered sites
+        # (GS-09..GS-12, GS-19, GS-26, GS-27 among them) legitimately touch more than one code
+        # location, so "exactly one" is not the right invariant EITHER -- the fix is the
+        # registry's own `expected_marker_count` field (one count per site, derived by reading
+        # that site's own diff/current tree, not a blanket relaxation to "at least one"): a
+        # site now reports both too few AND too many markers, closing what M5 in the same
+        # review names as the first thing the old, weaker form let through (a marker sitting on
+        # the wrong declaration is a count mismatch, not silently absorbed as "at least one").
+        expected = registry_by_id[gs_id].get("expected_marker_count")
+        if expected is None:
+            failures.append(f"MISSING expected_marker_count: {gs_id} has status="
+                             f"{registry_by_id[gs_id]['status']!r} (requires a marker) but the "
+                             f"registry names no expected_marker_count for it")
+        elif len(locs) != expected:
+            failures.append(f"MARKER COUNT MISMATCH: {gs_id} ({registry_by_id[gs_id]['function']}) "
+                             f"has {len(locs)} marker(s) at {locs}, want exactly {expected} per the "
+                             f"registry's own expected_marker_count")
     for gs_id, locs in found_markers.items():
         if gs_id not in registry_by_id:
             failures.append(f"ORPHAN MARKER: {gs_id} at {locs} has no registry entry")
