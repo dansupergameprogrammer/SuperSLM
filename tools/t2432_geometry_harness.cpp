@@ -75,17 +75,26 @@ struct QProjRowCapture {
 	std::vector<int8_t> codes;
 };
 
+// CORRECTED 2026-08-31 (T-2445, Claude/Poirot/ddbc57a-t2443-ask5-tracka-confirmation.md,
+// Significant 1): this hook used to keep only its FIRST fire (`if (!cap->captured)`), which
+// holds layer 0's row, while the GPU side below reads `q_codes` from `LayerScratch` AFTER the
+// whole dispatch chain -- `RunLayerLoopGpuSubmit`'s own per-layer loop overwrites that region
+// every layer, so it holds the LAST layer's row. At `num_hidden_layers == 1` the two coincide;
+// above it they do not, and the check read `Q_CODES CHECK: FAILED` on an unmodified tree the
+// moment a real (multi-layer) artifact was run. Fixed by keeping the LAST fire instead of the
+// first -- both sides now agree on which layer they compare, independent of layer count, and
+// the harness's own two calls below already run every layer (`layer_budget=num_hidden_layers`)
+// on both paths, so no other change is needed to exercise this.
 void QProjRowHook(const SslmChainTraceRecord* chain, const SslmKvLandingTraceRecord* kv, void* user) {
 	(void)kv;
 	if (chain == nullptr) return;
 	QProjRowCapture* cap = static_cast<QProjRowCapture*>(user);
-	// LayerSite's own convention: "layer{L}.q_proj.requant" -- match the SUFFIX so this
-	// fires once, at layer 0, token 0 (the only layer/token this harness runs).
+	// LayerSite's own convention: "layer{L}.q_proj.requant" -- match the SUFFIX. Fires once per
+	// layer; the LAST fire (the highest layer index run) is what is kept, matching the GPU
+	// side's own LayerScratch readback below.
 	if (chain->site.size() >= 14 && chain->site.substr(chain->site.size() - 14) == "q_proj.requant") {
-		if (!cap->captured) {
-			cap->captured = true;
-			cap->codes.assign(chain->codes.begin(), chain->codes.end());
-		}
+		cap->captured = true;
+		cap->codes.assign(chain->codes.begin(), chain->codes.end());
 	}
 }
 }  // namespace
@@ -199,7 +208,7 @@ int main(int argc, char** argv) {
 		geometry_row_ok = false;
 	} else {
 		std::printf("GEOMETRY CHECK: PASS -- q_proj.requant output row width=%zu == q_width (CPU, "
-		            "layer 0, token 0)\n",
+		            "last layer run, token 0)\n",
 		            cap.codes.size());
 	}
 
@@ -258,7 +267,7 @@ int main(int argc, char** argv) {
 				q_codes_match = false;
 			} else {
 				std::printf("Q_CODES CHECK: PASS -- CPU/GPU q_codes bit-identical across all %zu "
-				            "q_width channels (direct LayerScratch readback, layer 0, token 0)\n",
+				            "q_width channels (direct LayerScratch readback, last layer run, token 0)\n",
 				            cap.codes.size());
 			}
 		}
