@@ -70,7 +70,15 @@ rem step produces a false GpuAllocationFailed, this ticket's own build log Sec7 
 rem failure mode); then out\t2432_geometry_harness.exe ^<model.sslm^> [token_id]. A non-square
 rem fixture is generated with tools\_t2432_nonsquare_fixture.py <checkpoint_dir> {nonsquare|
 rem square}, then tools\calibrate_checkpoint.py --checkpoint <checkpoint_dir> --out <calibrated_
-rem dir>, then tools\convert_model.py --artifact <calibrated_dir> --out <model.sslm> --skip-verify.
+rem dir>, then tools\convert_model.py --artifact <calibrated_dir> --out <model.sslm>. T-2445
+rem (Claude/Poirot/ddbc57a-t2443-ask5-tracka-confirmation.md, Minor 6, D-SLM5436 superseded):
+rem this comment used to end the sequence with --skip-verify, a weaker form of design Sec6
+rem Track A's own acceptance criterion that the fixture load "through the standard
+rem convert_model.py pipeline" -- --skip-verify prints its own warning that the artifact's
+rem must-load-Ok contract is unproven for that conversion. Executed with sslm_verify built
+rem (cmake --build build --config Release --target sslm_verify) and the flag dropped: the
+rem non-square fixture converts cleanly, independent loader accepted the artifact, proof
+rem manifest written. The flag is not needed; dropped from the documented sequence.
 if not exist out\geoharness mkdir out\geoharness
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
