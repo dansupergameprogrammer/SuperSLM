@@ -1306,6 +1306,20 @@ SslmModelStatus ValidateConfigGeometryJoin(const SslmModelConfig& config, std::s
 		if (err) *err = result.diagnostic;
 		return SslmModelStatus::ConfigGeometryHiddenSizeMismatch;
 	}
+	// T-2441 (Minor 7, D-SLM5440; fix D-SLM5452): the identical unreachability note above applies to these
+	// two new zero-boundary statuses -- ParseConfigImpl's BadConfigDim rejects any zero
+	// dimension, head_dim/hidden_size included, before ValidateSectionValues runs, so this
+	// arm is reached only by a direct, off-Load caller (BuildProofManifestJson,
+	// tools/sslm_convert_validate.py's own Python mirror). Mapped to the SAME
+	// SslmModelStatus as every other geometry rejection on this join -- no new C-ABI status
+	// value, since ConfigGeometryHiddenSizeMismatch already carries a diagnostic string, not
+	// a fixed message, and the two Zero* statuses immediately above already established this
+	// many-to-one mapping as the precedent.
+	if (result.status == ConfigGeometryStatus::ZeroHeadDim ||
+	    result.status == ConfigGeometryStatus::ZeroHiddenSize) {
+		if (err) *err = result.diagnostic;
+		return SslmModelStatus::ConfigGeometryHiddenSizeMismatch;
+	}
 	if (err) *err = "ValidateConfigGeometryJoin: unrecognized ConfigGeometryStatus";
 	return SslmModelStatus::ConfigGeometryHiddenSizeMismatch;
 }

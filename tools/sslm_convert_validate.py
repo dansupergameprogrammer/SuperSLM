@@ -107,12 +107,16 @@ def _check_shape(name, values, code_prefix):
 
 
 def check_config_geometry(cfg):
-    """SuperSLM_Plan.md S17.3 cell 4: hidden_size == heads * head_dim,
-    heads % kv_heads == 0, kv_heads <= heads. The zero-boundary cases are
-    checked FIRST and independently -- the coverage audit's own specification
-    (2026-07-21 S3.3): `heads % kv_heads` below would raise ZeroDivisionError
-    if reached with kv_heads == 0, so both zero cases must be rejected with a
-    named diagnostic before the modulus is ever evaluated, mirroring
+    """SuperSLM_Plan.md S17.3 cell 4, as amended by T-2432 Track A step 6 (GS-06,
+    D-SLM5244) and T-2441 Minor 1 (D-SLM5446)/Minor 7 (D-SLM5440, fix D-SLM5452): heads % kv_heads == 0, kv_heads <= heads,
+    head_dim != 0, hidden_size != 0. The relation between hidden_size and the
+    heads/head_dim product that this docstring used to state as a still-enforced
+    contract is REMOVED, not loosened, once q_width decouples Q/O's own width from
+    hidden_size -- see this function's own GS-06 comment below for the removal itself.
+    The zero-boundary cases are checked FIRST and independently -- the coverage audit's
+    own specification (2026-07-21 S3.3): `heads % kv_heads` below would raise
+    ZeroDivisionError if reached with kv_heads == 0, so both zero cases must be rejected
+    with a named diagnostic before the modulus is ever evaluated, mirroring
     superslm::CheckConfigGeometry (include/superslm/proof_manifest.h) exactly.
     """
     heads = int(cfg.num_attention_heads)
@@ -124,6 +128,16 @@ def check_config_geometry(cfg):
         _reject("ZeroAttentionHeads", "num_attention_heads == 0")
     if kv_heads == 0:
         _reject("ZeroKeyValueHeads", "num_key_value_heads == 0")
+    # T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Minor 7, D-SLM5440; fix D-SLM5452): R1's removal
+    # (below) left these two zero cases unguarded on this direct-call surface -- executed and
+    # confirmed before this fix: head_dim/hidden_size appeared nowhere in this module outside
+    # the deleted check, so a zero-dimension checkpoint converted cleanly and was caught only
+    # later, at C++ load. Mirrors superslm::CheckConfigGeometry's own identical fix
+    # (src/proof_manifest.cpp), same zero-boundary-first ordering.
+    if head_dim == 0:
+        _reject("ZeroHeadDim", "head_dim == 0")
+    if hidden_size == 0:
+        _reject("ZeroHiddenSize", "hidden_size == 0")
     if kv_heads > heads:
         _reject("KvHeadsExceedsHeads", f"num_key_value_heads ({kv_heads}) > num_attention_heads ({heads})")
     if heads % kv_heads != 0:
@@ -135,6 +149,10 @@ def check_config_geometry(cfg):
     # forward path decouples Q/O's own width. Removed rather than loosened, mirroring
     # CheckConfigGeometry's own C++ widening (src/proof_manifest.cpp). Confirmed correct by
     # execution against the real Qwen3-Embedding-0.6B candidate, T-2423's spike (D-SLM5290).
+    # T-2441 (Minor 7, D-SLM5440; fix D-SLM5452): both names are read by the ZeroHeadDim/ZeroHiddenSize
+    # checks above this point in the function, but neither is read again after it -- `del`
+    # here means "not needed past this point," not "unused," now that the zero-boundary gap
+    # is closed.
     del hidden_size, head_dim
 
 

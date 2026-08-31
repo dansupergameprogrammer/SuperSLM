@@ -642,7 +642,16 @@ struct LayerWeights {
 	// q_bias/k_bias/v_bias (below): caller-resolved, no runtime length field --
 	// the caller's own out_channels/kv_hidden_size argument (already threaded
 	// through ProjectAndFunnel and the K/V landing loop) is what bounds every read.
-	// SSLM-GEOMETRY-SITE: GS-12
+	// SSLM-GEOMETRY-SITE: GS-08
+	// T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Minor 5, D-SLM5450): relabeled from
+	// GS-12 to GS-08 -- this struct field declaration is the CPU-side capacity contract for the
+	// q_fold_identity/mult/shift pointers include/superslm/layer_marshal.h's own MarshalLayer
+	// (GS-08) populates, not the q_codes/q_rot/k_rot/ctx_* forward-pass buffers GS-12's own
+	// registry entry actually names (src/forward/forward_sites.cpp). The census's own per-site
+	// symmetry check (Part 1) could not have caught the original mislabeling before this
+	// ticket's own S4 fix made it check an exact count per id rather than "at least one" --
+	// under "at least one," a marker on the wrong id was invisible as long as SOME marker for
+	// each id existed somewhere.
 	// T-2432 (Track A step 3): q_fold_identity/mult/shift are per-q_proj-OUTPUT-channel --
 	// q_width-sized once R1 no longer holds (previously hidden_size, when the two coincided
 	// for every existing incumbent). o_fold_identity/mult/shift stay hidden_size-sized (GS-09,
@@ -657,6 +666,13 @@ struct LayerWeights {
 	const int32_t* v_fold_identity;  // num_key_value_heads * head_dim
 	const int32_t* v_fold_mult;      // num_key_value_heads * head_dim
 	const int32_t* v_fold_shift;     // num_key_value_heads * head_dim
+	// SSLM-GEOMETRY-SITE: GS-09 -- confirmed-correct-and-marked (T-2441, found while fixing
+	// Minor 5, D-SLM5450): o_proj's own per-output-channel fold arrays are genuinely
+	// hidden_size-sized, unaffected by this ask (GS-09, D-SLM5249) -- this exact struct field
+	// declaration passed the census's own coverage check only by coincidental proximity to the
+	// GS-12 marker mislabeled onto q_fold_identity/mult/shift immediately above (M5's own
+	// finding); relabeling that marker to its correct id (GS-08) moved it far enough away to
+	// expose that this site was never independently marked at all.
 	const int32_t* o_fold_identity;  // hidden_size
 	const int32_t* o_fold_mult;      // hidden_size
 	const int32_t* o_fold_shift;     // hidden_size
@@ -668,9 +684,12 @@ struct LayerWeights {
 	// nullptr means this projection carries no BIA1 entry at this layer -- the
 	// composition is unchanged from today's unbiased path, matching the reference's
 	// own `model.dynamic_biases.get(site)` returning None. Non-null arrays hold
-	// hidden_size (q_bias) or num_key_value_heads * head_dim (k_bias/v_bias)
-	// elements, in the SAME projection-output-channel order GemmInt8AccumulateRow
-	// already produces for that projection.
+	// q_width (q_bias, T-2441 Minor 2 fix, D-SLM5447: this prose block said
+	// "hidden_size" until this ticket, contradicting the trailing comment on the
+	// declaration below it, which already said "q_width" since T-2432) or
+	// num_key_value_heads * head_dim (k_bias/v_bias) elements, in the SAME
+	// projection-output-channel order GemmInt8AccumulateRow already produces for
+	// that projection.
 	const int64_t* q_bias = nullptr;  // q_width, or nullptr
 	const int64_t* k_bias = nullptr;  // num_key_value_heads * head_dim, or nullptr
 	const int64_t* v_bias = nullptr;  // num_key_value_heads * head_dim, or nullptr

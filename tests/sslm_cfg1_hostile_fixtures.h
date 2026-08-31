@@ -91,10 +91,15 @@ inline double GetF64LE(const std::vector<uint8_t>& b, size_t off) {
 //
 // num_attention_heads, head_dim, and context_cap additionally satisfy every
 // relation SslmModel::Load's config-geometry/ROP1 join checks (S3.3 §13.1
-// cell 4, D-SLM420-D-SLM423): hidden_size == num_attention_heads * head_dim
-// (4096 == 32*128, R1), num_attention_heads % num_key_value_heads == 0
-// (32 % 8 == 0, R2), num_key_value_heads <= num_attention_heads (8 <= 32,
-// R3). context_cap is kept at its smallest legal value (BadConfigDim rejects
+// cell 4, D-SLM420-D-SLM423) still enforce: num_attention_heads %
+// num_key_value_heads == 0 (32 % 8 == 0, R2), num_key_value_heads <=
+// num_attention_heads (8 <= 32, R3). T-2441 Minor 6 fix (D-SLM5451):
+// hidden_size == num_attention_heads * head_dim (4096 == 32*128) still holds
+// numerically for these defaults, but R1 -- the identity that once made this
+// a Load-enforced relation -- was REMOVED by T-2432 Track A step 1
+// (src/proof_manifest.cpp, GS-01); it is no longer a join check this fixture
+// needs to satisfy, only a coincidence of its own chosen numbers. context_cap
+// is kept at its smallest legal value (BadConfigDim rejects
 // 0) so a ROP1 section built alongside the default Config — whose "cos"/
 // "sin" tensors must each carry exactly context_cap * (head_dim/2) elements
 // (R4) — stays small (2 * 64 = 128 elements) rather than requiring a

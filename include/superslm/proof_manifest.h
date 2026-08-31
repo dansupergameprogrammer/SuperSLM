@@ -51,7 +51,21 @@ enum class ConfigGeometryStatus {
 	ZeroKeyValueHeads,       // num_key_value_heads == 0 -- checked before any modulus
 	KvHeadsExceedsHeads,     // num_key_value_heads > num_attention_heads
 	HeadsNotDivisibleByKv,   // num_attention_heads % num_key_value_heads != 0
-	HiddenSizeGeometryMismatch, // hidden_size != num_attention_heads * head_dim
+	HiddenSizeGeometryMismatch, // hidden_size != num_attention_heads * head_dim -- R1, REMOVED
+	                            // (T-2432 Track A step 1, GS-01): no live producer returns this
+	                            // from CheckConfigGeometry itself any longer (D-SLM5418); kept,
+	                            // additive-only (D-SLM3526), as ValidateConfigGeometryJoin's own
+	                            // SslmModelStatus target for the two zero-boundary statuses below
+	                            // and its own unrecognized-status fallback (src/model.cpp).
+	// T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Minor 7, D-SLM5440; fix recorded as D-SLM5452): R1's removal
+	// left these two zero cases unguarded -- executed and confirmed, CheckConfigGeometry(0, ...)
+	// and CheckConfigGeometry(..., head_dim=0) both returned Ok. Unreachable through
+	// SslmModel::Load (ParseConfigImpl's own BadConfigDim guard rejects any zero dimension
+	// first), matching ZeroAttentionHeads/ZeroKeyValueHeads's own identical unreachability
+	// note above -- these two follow that exact precedent for the two direct-call surfaces
+	// (BuildProofManifestJson, tools/sslm_convert_validate.py) that bypass Load.
+	ZeroHeadDim,             // head_dim == 0 -- checked on the two direct-call surfaces only
+	ZeroHiddenSize,          // hidden_size == 0 -- checked on the two direct-call surfaces only
 };
 
 const char* ConfigGeometryStatusName(ConfigGeometryStatus s) noexcept;

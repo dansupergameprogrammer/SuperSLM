@@ -83,6 +83,8 @@ const char* ConfigGeometryStatusName(ConfigGeometryStatus s) noexcept {
 	if (s == ConfigGeometryStatus::KvHeadsExceedsHeads) return "KvHeadsExceedsHeads";
 	if (s == ConfigGeometryStatus::HeadsNotDivisibleByKv) return "HeadsNotDivisibleByKv";
 	if (s == ConfigGeometryStatus::HiddenSizeGeometryMismatch) return "HiddenSizeGeometryMismatch";
+	if (s == ConfigGeometryStatus::ZeroHeadDim) return "ZeroHeadDim";
+	if (s == ConfigGeometryStatus::ZeroHiddenSize) return "ZeroHiddenSize";
 	return "?";
 }
 
@@ -103,6 +105,23 @@ ConfigGeometryResult CheckConfigGeometry(uint32_t hidden_size, uint32_t num_atte
 	if (num_key_value_heads == 0) {
 		r.status = ConfigGeometryStatus::ZeroKeyValueHeads;
 		r.diagnostic = "num_key_value_heads == 0";
+		return r;
+	}
+	// T-2441 (Minor 7, D-SLM5440; fix D-SLM5452): head_dim/hidden_size zero-boundary, closed at the SAME
+	// point in the ordering as the two zero checks immediately above -- R1's removal (below)
+	// left these two direct-call-surface-only cases (BuildProofManifestJson,
+	// tools/sslm_convert_validate.py; unreachable through SslmModel::Load, whose own
+	// ParseConfigImpl rejects any zero dimension first) silently returning Ok. Executed and
+	// confirmed before this fix: CheckConfigGeometry(hidden_size=0, ...) and
+	// CheckConfigGeometry(..., head_dim=0) both returned Ok.
+	if (head_dim == 0) {
+		r.status = ConfigGeometryStatus::ZeroHeadDim;
+		r.diagnostic = "head_dim == 0";
+		return r;
+	}
+	if (hidden_size == 0) {
+		r.status = ConfigGeometryStatus::ZeroHiddenSize;
+		r.diagnostic = "hidden_size == 0";
 		return r;
 	}
 

@@ -1254,9 +1254,15 @@ void RecordOneTokenFullDepthDispatchBody(
 		// was previously past this array's own end (27 values = indices 0-26); it does NOT
 		// collide with kv_proj_site.hlsl's own two-slot usage (indices 11-26, both slots'
 		// adapter fields) precisely because it is the first index past that range. Every other
-		// tail shader (o/gate/up/down_proj_site.hlsl) declares its own trailing padding for
-		// index 27 exactly as it already does for the unused prefix positions, and never reads
-		// it -- see q_proj_site.hlsl's own cbuffer for the one shader that does.
+		// tail shader (o/gate/up/down_proj_site.hlsl) declares 12 cbuffer fields, ending at
+		// index 26 (T-2441 Minor 3 fix, D-SLM5448: this comment previously claimed each one
+		// declares its own trailing padding for index 27, matching how they pad the unused
+		// PREFIX positions -- checked and found false; they simply do not declare a 13th
+		// field). This is harmless: D3D12 does not require a PSO to consume every root
+		// parameter its shared root signature declares, so an undeclared 28th value at index 27
+		// is not read by them, the same "subset usage" already established for the adapter
+		// t8/t9 SRVs -- see q_proj_site.hlsl's own cbuffer for the one shader that does declare
+		// and read index 27.
 		uint32_t consts[28] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
 		                        NQH,        width_u32, I,  N,  /*lanes=*/1u};
 		size_t base = 11;

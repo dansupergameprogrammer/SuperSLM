@@ -95,8 +95,15 @@ _SKIP_DIR_NAMES = {".git", "out", "build", "__pycache__", "node_modules"}
 
 # T-2432's own narrowing, stated rather than silently applied: the pattern-coverage half
 # (part 2) sweeps PRODUCTION source only -- src/, include/, and the shipped conversion
-# pipeline's own four Python modules -- not the whole tree the design's own fold-round-1
-# text describes ("*.cpp, *.h, *.hlsl, *.py, and the test-fixture tree"). A blunt
+# pipeline's own three Python modules (T-2441 Minor 4 fix, D-SLM5449: this comment said
+# "four" against a three-entry _PART2_ALLOWED_FILES below it, and the build log that shipped
+# alongside it repeated "four" -- checked rather than assumed a typo, per the review's own
+# framing that the count decides which files get swept: tools/convert_tokenizer.py, the one
+# other Python conversion-adjacent tool in this tree, is never called by convert_model.py and
+# converts a DIFFERENT artifact, the tokenizer, which carries no hidden_size/q_width geometry
+# at all -- it is not a fourth member of this pipeline, and no other candidate was found, so
+# the count itself was the error, not the file list) -- not the whole tree the design's own
+# fold-round-1 text describes ("*.cpp, *.h, *.hlsl, *.py, and the test-fixture tree"). A blunt
 # same-line-token-co-occurrence regex, run over test assertions, docstrings, and the
 # ALREADY-audited (design Sec2.3, "needed no change for geometry") reference_pipeline.py's
 # own correct q_width arithmetic, produced dozens of false positives this session's own
