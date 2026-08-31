@@ -44,6 +44,16 @@ cbuffer RootConstants : register(b0)
     // T-2113 (B10 lever 1b): the fused stage-1 reduction's own group-cooperative lane count,
     // host-computed from this slot's real rank (superslm_gpu.cpp's stage1_lanes_for_rank).
     uint g_adapter_stage1_lanes;
+    // T-2432 (Track A step 9): positions 19-26 -- this shader has only ONE adapter slot (q's
+    // own, above), so the second slot's own 8 positions a two-slot tail dispatch (e.g.
+    // kv_proj_site.hlsl) would occupy are unused padding here, matching this file's own
+    // g_unused6..g_unused10 convention above.
+    uint g_unused19; uint g_unused20; uint g_unused21; uint g_unused22;
+    uint g_unused23; uint g_unused24; uint g_unused25; uint g_unused26;
+    // T-2432 (Track A step 9, design §2.5 GS-16/§6 Track A step 9, D-SLM5248): q_proj's real
+    // output width (num_attention_heads * head_dim) -- this shader's own bias-reconcile and
+    // requant loops both cover this many channels, not g_hidden_size.
+    uint g_q_width;
 };
 
 ByteAddressBuffer   LayerWeights  : register(t0);
@@ -88,11 +98,16 @@ void main(uint3 gtid : SV_GroupThreadID)
     uint off_bias_present = layer_base + Layout.Load<uint>(7 * 4);
     uint off_bias = layer_base + Layout.Load<uint>(8 * 4);
 
+    // SSLM-GEOMETRY-SITE: GS-16
+    // T-2432 (Track A step 9): q_proj's own bias-reconcile/requant striding loops cover
+    // g_q_width channels, not g_hidden_size -- q_proj's real output width.
+    int q_width = (int)g_q_width;
+
     int64_t bias_present = LayerWeights.Load<int64_t>(off_bias_present);
     if (bias_present != 0)
     {
         int64_t bias_tag;
-        if (!ApplyBiasReconcileRowGpuP(t, WorkScratch, 0u, hidden_size, LayerWeights, off_bias,
+        if (!ApplyBiasReconcileRowGpuP(t, WorkScratch, 0u, q_width, LayerWeights, off_bias,
                                         normed_scale_m, normed_scale_e, bias_tag))
         {
             if (t == 0) SeqState.Store<int64_t>(sticky_off, bias_tag);
@@ -116,7 +131,7 @@ void main(uint3 gtid : SV_GroupThreadID)
     uint q_codes_off = ScratchLayout.Load<uint>(2 * 4);
     uint q_scale_off = ScratchLayout.Load<uint>(3 * 4);
     int64_t status_tag;
-    RequantChainCheckedFullGpuP(t, WorkScratch, 0u, hidden_size, incoming_m, incoming_e, /*n_incoming=*/1,
+    RequantChainCheckedFullGpuP(t, WorkScratch, 0u, q_width, incoming_m, incoming_e, /*n_incoming=*/1,
                                  site_m, site_e, LayerScratch, q_codes_off, q_scale_off, status_tag);
     if (status_tag != kTagOk)
     {

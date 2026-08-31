@@ -20,6 +20,18 @@ cbuffer RootConstants : register(b0)
     uint g_num_attention_heads;
     uint g_width;
     uint g_intermediate_size;
+    // T-2432 (Track A step 9, new site found by this build -- not named in the design's own
+    // §2.5 census, SSLM-GEOMETRY-SITE: GS-19): this dispatch has no `g_num_hidden_layers`/
+    // `g_gemm_lanes` fields (it is not a GEMM-split site), so g_q_width lands at position 9,
+    // not 11 -- matching this shader's own 9-field cbuffer, one field earlier than
+    // q_proj_gemm_site.hlsl/o_proj_gemm_site.hlsl's own 12th-of-12 position. The host's shared
+    // `bind_and_dispatch` lambda writes Q_WIDTH at consts[11] for EVERY plain dispatch
+    // regardless of a given shader's own field count (D3D12 does not require a PSO to consume
+    // every root parameter its shared root signature declares) -- but this shader's own 9-field
+    // struct would read consts[9] as g_q_width if declared naively at the end, which is
+    // g_intermediate_size's own slot, not Q_WIDTH's. Two padding fields close that gap.
+    uint g_unused9; uint g_unused10;
+    uint g_q_width;
 };
 
 ByteAddressBuffer   LayerWeights   : register(t0);
@@ -54,7 +66,11 @@ void main(uint3 gtid : SV_GroupThreadID)
     uint ctx_codes_off = ScratchLayout.Load<uint>(5 * 4);
     uint ctx_scale_off = ScratchLayout.Load<uint>(6 * 4);
     int64_t status_tag;
-    RequantChainCheckedFullGpuP(t, WorkScratch, 0u, hidden_size, incoming_m, incoming_e, 0, site_m, site_e,
+    // SSLM-GEOMETRY-SITE: GS-19
+    // T-2432 (Track A step 9): the ctx_wide row's own width is q_width (Q's real output
+    // width), not hidden_size -- the CPU-side analog of this exact fix, forward_sites.cpp GS-12.
+    int q_width = (int)g_q_width;
+    RequantChainCheckedFullGpuP(t, WorkScratch, 0u, q_width, incoming_m, incoming_e, 0, site_m, site_e,
                                  LayerScratch, ctx_codes_off, ctx_scale_off, status_tag);
     if (status_tag != kTagOk)
     {

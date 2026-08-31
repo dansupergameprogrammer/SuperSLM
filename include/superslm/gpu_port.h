@@ -222,7 +222,11 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
     ID3D12Resource* external_rope_cos_resident = nullptr,
     ID3D12Resource* external_rope_sin_resident = nullptr, bool external_rope_has = false,
     uint64_t external_rope_cos_elems = 0, uint64_t external_rope_sin_elems = 0,
-    const GpuAdapterBridge* adapter_bridge = nullptr);
+    const GpuAdapterBridge* adapter_bridge = nullptr,
+    // T-2432 (Track A step 2/3): `q_width`, identical convention as `RunLayerLoop`'s own
+    // (forward_sites.h) -- default `0` means "not supplied, derive as hidden_size," so
+    // `RunLayerLoopGpu`'s own ~40 existing callers (all square fixtures) are unaffected.
+    size_t q_width = 0);
 
 // FINISH: `block == 0` and the fence has not yet signaled: `*out_ready = 0`, returns
 // `superslm::SslmForwardStatus::Ok` (design Sec4.2: "the call itself succeeded; nothing
@@ -250,6 +254,9 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 // embedding arithmetic and no admission decision of its own. Async, matching
 // `RunLayerLoopGpuSubmit`'s own contract: `*out_inflight` is null on an immediate rejection
 // (nothing to close), otherwise owns a token the caller drains via `RunLayerLoopGpuFinish`.
+// T-2432 (Track A step 2/3): `q_width`, identical convention as `RunLayerLoopGpuSubmit`'s own
+// new parameter (immediately above) -- default `0` means "not supplied, derive as
+// hidden_size," so every pre-T-2432 caller of this function is unaffected.
 superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
     superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
     uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
@@ -259,7 +266,8 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
     bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
     ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
     bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
-    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight);
+    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight,
+    size_t q_width = 0);
 
 // T-2169 (Rung 2, design Sec5, D-SLM3596/D-SLM3641): the measured, driver-stability-bounded
 // maximum sub-chunk size, in tokens -- see its own definition (src/gpu/superslm_gpu.cpp) for the
@@ -405,9 +413,15 @@ struct GpuGemmSiteGroupPlan {
 // channels packed into one grid (`kv_proj_gemm_site.hlsl`'s own header comment), so its own
 // out_channels is 2*kv_hidden_size, passed in already doubled by the caller (the ONLY site
 // that reads this parameter; every other site ignores it).
+// T-2432 (Track A step 9, design §2.5 GS-14/§6 Track A step 9, D-SLM5248): `q_width`, read
+// ONLY by the `QProj` case (`plan.out_channels`) -- every other site ignores it, on the
+// identical "the only site that reads this parameter" footing `kv_out_channels` already
+// documents above. Default `UINT32_MAX` means "not supplied, derive as hidden_size" (the
+// pre-widening identity, matching every other new q_width-shaped parameter this ask adds).
 GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t hidden_size,
                                                   uint32_t kv_out_channels,
-                                                  uint32_t intermediate_size);
+                                                  uint32_t intermediate_size,
+                                                  uint32_t q_width = UINT32_MAX);
 
 // One GPU-measured millisecond figure per dispatch the most recent
 // `RunLayerLoopGpu` call issued, in dispatch order (empty if the call was rejected before
@@ -655,9 +669,17 @@ struct GpuLayerLayout {
 	uint32_t stride = 0;
 };
 
+// T-2432 (Track A step 5/7, design §2.1 items 4/5, §6 Track A steps 5/7, GS-07/GS-10/GS-11):
+// `q_width` (num_attention_heads * head_dim) is Q's own real output width / O's own real
+// input width, independent of `hidden_size` once R1 no longer holds -- appended LAST, with a
+// default of `UINT32_MAX` meaning "not supplied, derive as `hidden_size`" (the pre-widening
+// identity), so this function's two pre-T-2432 callers (both updated in the same change to
+// pass the real value) and any future caller that genuinely wants the square-geometry
+// behavior are both served by the identical convention `RunLayerLoop`'s own `q_width`
+// parameter uses (forward_sites.h).
 GpuLayerLayout ComputeLayerLayout(uint32_t hidden_size, uint32_t kv_hidden_size,
                                    uint32_t num_kv_heads, uint32_t num_attention_heads,
-                                   uint32_t intermediate_size);
+                                   uint32_t intermediate_size, uint32_t q_width = UINT32_MAX);
 
 // Packs `N` LayerWeights entries into one contiguous byte buffer at `layout`'s own
 // stride/offsets -- the exact byte-for-byte transformation RunLayerLoopGpu's own
@@ -665,9 +687,14 @@ GpuLayerLayout ComputeLayerLayout(uint32_t hidden_size, uint32_t kv_hidden_size,
 // it has exactly one implementation. `H`=hidden_size, `KV`=num_kv_heads*head_dim,
 // `NH`=num_kv_heads, `NQH`=num_attention_heads, `I`=intermediate_size -- the same five
 // dimension values `ComputeLayerLayout` above must be called with to produce `layout`.
+// T-2432 (Track A step 5): `q_width`, identical convention as `ComputeLayerLayout`'s own new
+// parameter above -- `q_weight`'s and `o_weight`'s real byte extents (GS-10/GS-11) need it
+// independently of `layout` (which already encodes it into `layout.off[]`), because this
+// function's own copy loops read `q_width` directly to bound their `for` loops.
 std::vector<uint8_t> PackLayerWeightsBytes(const superslm::LayerWeights* layers, uint32_t N,
                                             const GpuLayerLayout& layout, uint32_t H, uint32_t KV,
-                                            uint32_t NH, uint32_t NQH, uint32_t I);
+                                            uint32_t NH, uint32_t NQH, uint32_t I,
+                                            uint32_t q_width = UINT32_MAX);
 
 // --- Sec5.9: the asynchronous sequence lifecycle, Idle ->
 // Submitted -> Completed -> Idle. Each `CallProceedsOrBusy_*` function is the POLICY

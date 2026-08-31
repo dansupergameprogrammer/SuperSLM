@@ -128,10 +128,14 @@ def check_config_geometry(cfg):
         _reject("KvHeadsExceedsHeads", f"num_key_value_heads ({kv_heads}) > num_attention_heads ({heads})")
     if heads % kv_heads != 0:
         _reject("HeadsNotDivisibleByKv", f"num_attention_heads ({heads}) % num_key_value_heads ({kv_heads}) != 0")
-    expected = heads * head_dim
-    if expected != hidden_size:
-        _reject("HiddenSizeGeometryMismatch",
-                f"hidden_size ({hidden_size}) != num_attention_heads * head_dim ({heads} * {head_dim} = {expected})")
+    # SSLM-GEOMETRY-SITE: GS-06
+    # T-2432 (Track A step 6, design §2.5 GS-06/§6 Track A step 6, D-SLM5244): the R1 identity
+    # `hidden_size == num_attention_heads * head_dim` is no longer enforced -- q_width
+    # (`num_attention_heads * head_dim`) is threaded independently of hidden_size once the
+    # forward path decouples Q/O's own width. Removed rather than loosened, mirroring
+    # CheckConfigGeometry's own C++ widening (src/proof_manifest.cpp). Confirmed correct by
+    # execution against the real Qwen3-Embedding-0.6B candidate, T-2423's spike (D-SLM5290).
+    del hidden_size, head_dim
 
 
 def check_unicode_version_coherence(major, minor, patch, running_version=None):

@@ -155,11 +155,12 @@ def test_rejects_heads_not_divisible_by_kv():
     assert exc.value.code == "HeadsNotDivisibleByKv", exc.value.code
 
 
-def test_rejects_hidden_size_geometry_mismatch():
-    model = _valid_model(hidden_size=9)  # heads(2) * head_dim(4) = 8 != 9
-    with pytest.raises(V.ConverterValidationError) as exc:
-        _validate(model)
-    assert exc.value.code == "HiddenSizeGeometryMismatch", exc.value.code
+# test_rejects_hidden_size_geometry_mismatch retired (T-2432, Track A step 6, design §6 Track
+# A step 6, D-SLM5244): check_config_geometry's R1 identity (hidden_size == num_attention_heads
+# * head_dim) is removed, not loosened, once Track A's forward-path Q/O width decoupling lands
+# -- this test pinned exactly the rejection behavior that removal retires. The zero-boundary
+# cell above (test_rejects_zero_attention_heads) already covers the one case the widened
+# function still rejects on this axis.
 
 
 def test_accepts_mha_shape_kv_heads_equals_heads():

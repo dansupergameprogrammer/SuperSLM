@@ -52,7 +52,11 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
     bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
     ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
     bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
-    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight);
+    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight,
+    // T-2432 (Track A step 2/3): q_width, matching the real definition's own new trailing
+    // parameter (superslm_gpu.cpp) -- this harness's own square fixture needs no explicit
+    // value.
+    size_t q_width = 0);
 #if defined(SUPERSLM_T2169_VALIDATE_UNSPLIT_CRASH_REPRO)
 // D-SLM3649's own owed evidence (Dan's review): the UNSPLIT, pre-fix primitive -- identical
 // signature, renamed in production (src/gpu/superslm_gpu.cpp) when the split-wrapper landed.

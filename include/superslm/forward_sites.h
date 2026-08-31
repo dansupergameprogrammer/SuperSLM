@@ -642,9 +642,15 @@ struct LayerWeights {
 	// q_bias/k_bias/v_bias (below): caller-resolved, no runtime length field --
 	// the caller's own out_channels/kv_hidden_size argument (already threaded
 	// through ProjectAndFunnel and the K/V landing loop) is what bounds every read.
-	const int32_t* q_fold_identity;  // hidden_size
-	const int32_t* q_fold_mult;      // hidden_size
-	const int32_t* q_fold_shift;     // hidden_size
+	// SSLM-GEOMETRY-SITE: GS-12
+	// T-2432 (Track A step 3): q_fold_identity/mult/shift are per-q_proj-OUTPUT-channel --
+	// q_width-sized once R1 no longer holds (previously hidden_size, when the two coincided
+	// for every existing incumbent). o_fold_identity/mult/shift stay hidden_size-sized (GS-09,
+	// confirmed correct, D-SLM5249): o_proj's own output width is genuinely hidden_size,
+	// unaffected by this ask.
+	const int32_t* q_fold_identity;  // q_width
+	const int32_t* q_fold_mult;      // q_width
+	const int32_t* q_fold_shift;     // q_width
 	const int32_t* k_fold_identity;  // num_key_value_heads * head_dim
 	const int32_t* k_fold_mult;      // num_key_value_heads * head_dim
 	const int32_t* k_fold_shift;     // num_key_value_heads * head_dim
@@ -665,7 +671,7 @@ struct LayerWeights {
 	// hidden_size (q_bias) or num_key_value_heads * head_dim (k_bias/v_bias)
 	// elements, in the SAME projection-output-channel order GemmInt8AccumulateRow
 	// already produces for that projection.
-	const int64_t* q_bias = nullptr;  // hidden_size, or nullptr
+	const int64_t* q_bias = nullptr;  // q_width, or nullptr
 	const int64_t* k_bias = nullptr;  // num_key_value_heads * head_dim, or nullptr
 	const int64_t* v_bias = nullptr;  // num_key_value_heads * head_dim, or nullptr
 	// §8.1: per-(head, projection) K/V landing reciprocal/exponent, from
@@ -822,6 +828,14 @@ struct LayerWeights {
 // `layer_index` is rejected here rather than reaching the landing write
 // (Poirot 0d64462 review, Critical 1). S3a builds no eviction or truncation
 // remedy for a full cache; that stays S4's.
+// T-2432 (Track A step 2, design §6 Track A step 2/§2.1): `q_width` is Q's own real output
+// width / O's own real input width (`num_attention_heads * head_dim`), independent of
+// `hidden_size` once R1 no longer holds (§6 Track A step 1). Appended LAST, after every
+// existing trailing-default parameter, so every one of this function's existing callers
+// (~200 call sites across tests/tools) is unaffected -- the default `0` means "not supplied,
+// derive as `hidden_size`" (the pre-widening identity), which is bit-identical to this
+// function's pre-T-2432 behavior for every existing (square) incumbent, per the design's own
+// additive/backward-compatible framing (§2.1 closing paragraph).
 SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
                                  uint32_t num_hidden_layers, uint32_t layer_budget,
                                  size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
@@ -829,7 +843,8 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
                                  const SslmTensorManifest& rope_tables, uint8_t* workspace,
                                  size_t workspace_size, std::string_view site_prefix = {},
                                  size_t token_index = 0,
-                                 SslmTraceHookState* trace_hook_state = nullptr);
+                                 SslmTraceHookState* trace_hook_state = nullptr,
+                                 size_t q_width = 0);
 
 // (design Sec31.2.1, round 4): the fused K-landing
 // selector's own type. `const char* -> bool` is a standard boolean
@@ -875,6 +890,9 @@ enum class OptionGKLandingMode : uint8_t { kLegacy = 0, kFused = 1 };
 // TYPE changed from `bool` to `OptionGKLandingMode` in an earlier build
 // round -- see that enum's own
 // comment, above.
+// T-2432 (Track A step 2): `q_width`, appended LAST for the identical reason the sibling
+// overload's own comment states -- see that comment, immediately above this enum's
+// declaration/header block, for the full contract. Default `0` means "derive as hidden_size."
 SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
                                  uint32_t num_hidden_layers, uint32_t layer_budget,
                                  size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
@@ -882,7 +900,8 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
                                  const SslmTensorManifest& rope_tables, uint8_t* workspace,
                                  size_t workspace_size, OptionGKLandingMode option_g_k_landing_mode,
                                  std::string_view site_prefix = {}, size_t token_index = 0,
-                                 SslmTraceHookState* trace_hook_state = nullptr);
+                                 SslmTraceHookState* trace_hook_state = nullptr,
+                                 size_t q_width = 0);
 
 // (design §15.1/§15.2/§15.3): the chunk-batched
 // prefill entry point -- runs `chunk_tokens` already-embedded tokens through every layer,
@@ -896,6 +915,10 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 // `kv_saturation_count` is the same per-sequence running counter
 // `SequenceLayerState::kv_saturation_count` is. There is no partial/resumable layer_budget in
 // this path -- every layer runs to completion for every token, or the call returns non-Ok.
+// T-2432 (Track A step 2): `q_width`, appended LAST -- see the single-token `RunLayerLoop`
+// overload's own header comment for the full contract (identical convention, identical
+// default). This is the path `sslm_prefill` actually calls (T-2425's own finding, §6 of that
+// spike's log) -- the real, non-square candidate's own silent-undercount defect lives here.
 SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
                                             size_t chunk_tokens, const LayerWeights* layers,
                                             uint32_t num_hidden_layers, size_t hidden_size,
@@ -907,7 +930,8 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
                                             bool option_g_fused_k_landing,
                                             uint64_t* kv_saturation_count,
                                             std::string_view site_prefix = {},
-                                            SslmTraceHookState* trace_hook_state = nullptr);
+                                            SslmTraceHookState* trace_hook_state = nullptr,
+                                            size_t q_width = 0);
 
 // (design Sec31.2's own "int64-input, __int128-intermediate sibling of
 // the RoPE pair primitive, Q2.30 tables unchanged" -- Sec12 "Wide-RoPE

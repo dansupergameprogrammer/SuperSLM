@@ -603,8 +603,17 @@ uint32_t SeqCtxLenOff(uint32_t hidden_size) { return SeqSatHiOff(hidden_size) + 
 uint32_t SeqStickyOff(uint32_t hidden_size) { return SeqCtxLenOff(hidden_size) + 8u; }
 uint32_t SeqTotalSize(uint32_t hidden_size) { return SeqStickyOff(hidden_size) + 8u; }
 
+// SSLM-GEOMETRY-SITE: GS-18
+// T-2432 (Track A step 9, new site found by this build -- not named in the design's own §2.5
+// census): q_codes/q_rot/ctx_codes are the GPU-side LayerScratch counterparts of the CPU's own
+// identically-widened buffers (forward_sites.cpp GS-12) -- must be q_width-sized, not
+// hidden_size-sized, or q_proj_site.hlsl's own requant write (now q_width elements, GS-16)
+// overflows into the next field (q_scale). `q_width == UINT32_MAX` (every pre-T-2432 caller)
+// falls back to hidden_size, the pre-widening identity.
 GpuScratchLayout ComputeScratchLayout(uint32_t hidden_size, uint32_t intermediate_size,
-                                       uint32_t num_attention_heads, uint32_t context_cap) {
+                                       uint32_t num_attention_heads, uint32_t context_cap,
+                                       uint32_t q_width = UINT32_MAX) {
+	const uint32_t effective_q_width = (q_width != UINT32_MAX) ? q_width : hidden_size;
 	GpuScratchLayout L;
 	uint32_t cur = 0;
 	auto codes_block = [&](uint32_t width) {
@@ -618,9 +627,9 @@ GpuScratchLayout ComputeScratchLayout(uint32_t hidden_size, uint32_t intermediat
 		return o;
 	};
 	L.normed = codes_block(hidden_size); L.normed_scale = scale_block();
-	L.q_codes = codes_block(hidden_size); L.q_scale = scale_block();
-	L.q_rot = codes_block(hidden_size);
-	L.ctx_codes = codes_block(hidden_size); L.ctx_scale = scale_block();
+	L.q_codes = codes_block(effective_q_width); L.q_scale = scale_block();
+	L.q_rot = codes_block(effective_q_width);
+	L.ctx_codes = codes_block(effective_q_width); L.ctx_scale = scale_block();
 	L.o_codes = codes_block(hidden_size); L.o_scale = scale_block();
 	L.attn_stream = codes_block(hidden_size); L.attn_stream_scale = scale_block();
 	L.gate_codes = codes_block(intermediate_size); L.gate_scale = scale_block();
@@ -691,18 +700,28 @@ Microsoft::WRL::ComPtr<ID3D12Resource> MakeInitializedUav(
 // include/superslm/gpu_port.h. Body byte-for-byte unchanged from its original definition.
 GpuLayerLayout ComputeLayerLayout(uint32_t hidden_size, uint32_t kv_hidden_size,
                                    uint32_t num_kv_heads, uint32_t num_attention_heads,
-                                   uint32_t intermediate_size) {
+                                   uint32_t intermediate_size, uint32_t q_width) {
+	// SSLM-GEOMETRY-SITE: GS-07
+	// T-2432 (Track A step 7, design §2.5 GS-07/§6 Track A step 7, D-SLM5245): q_fold_identity/
+	// q_fold_mult/q_fold_shift/q_bias are per-q_proj-OUTPUT-channel arrays -- sized q_width, not
+	// hidden_size, once R1 no longer holds. `q_width == UINT32_MAX` (every pre-T-2432 caller)
+	// falls back to hidden_size, the pre-widening identity.
+	const uint32_t effective_q_width = (q_width != UINT32_MAX) ? q_width : hidden_size;
 	GpuLayerLayout L;
 	uint32_t cur = 0;
 	L.off[0] = cur; cur += Align8U32(hidden_size * 4);              // attn_norm_gain
 	L.off[1] = cur; cur += 16;                                      // attn_norm_site_constant
-	L.off[2] = cur; cur += Align8U32(hidden_size * hidden_size);    // q_weight (int8)
-	L.off[3] = cur; cur += Align8U32(hidden_size * 4);              // q_fold_identity
-	L.off[4] = cur; cur += Align8U32(hidden_size * 4);              // q_fold_mult
-	L.off[5] = cur; cur += Align8U32(hidden_size * 4);              // q_fold_shift
+	// SSLM-GEOMETRY-SITE: GS-10
+	// T-2432 (Track A step 5, design §2.1 item 5/§6 Track A step 5, GS-10): q_proj.weight's
+	// real shape is [q_width, hidden_size] -- byte extent q_width * hidden_size, not
+	// hidden_size * hidden_size.
+	L.off[2] = cur; cur += Align8U32(effective_q_width * hidden_size);  // q_weight (int8)
+	L.off[3] = cur; cur += Align8U32(effective_q_width * 4);        // q_fold_identity
+	L.off[4] = cur; cur += Align8U32(effective_q_width * 4);        // q_fold_mult
+	L.off[5] = cur; cur += Align8U32(effective_q_width * 4);        // q_fold_shift
 	L.off[6] = cur; cur += 16;                                      // q_site_constant
 	L.off[7] = cur; cur += 8;                                       // q_bias_present
-	L.off[8] = cur; cur += Align8U32(hidden_size * 8);              // q_bias
+	L.off[8] = cur; cur += Align8U32(effective_q_width * 8);        // q_bias
 	L.off[9] = cur; cur += Align8U32(kv_hidden_size * hidden_size); // k_weight (int8)
 	L.off[10] = cur; cur += Align8U32(kv_hidden_size * hidden_size);// v_weight (int8)
 	L.off[11] = cur; cur += Align8U32(kv_hidden_size * 4);          // k_fold_identity
@@ -719,7 +738,16 @@ GpuLayerLayout ComputeLayerLayout(uint32_t hidden_size, uint32_t kv_hidden_size,
 	L.off[22] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_e_t_k
 	L.off[23] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_r_t_v
 	L.off[24] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_e_t_v
-	L.off[25] = cur; cur += Align8U32(hidden_size * hidden_size);   // o_weight (int8)
+	// SSLM-GEOMETRY-SITE: GS-11
+	// T-2432 (Track A step 5, GS-11): o_proj.weight's real shape is [hidden_size, q_width] --
+	// byte extent hidden_size * q_width, not hidden_size * hidden_size. Unlike GS-07's own
+	// per-output-channel fold count (o_fold_identity/mult/shift below, GS-09, confirmed
+	// correct as hidden_size-sized and NOT touched by this step), the weight MATRIX itself
+	// genuinely decouples on its input axis.
+	L.off[25] = cur; cur += Align8U32(hidden_size * effective_q_width);  // o_weight (int8)
+	// SSLM-GEOMETRY-SITE: GS-09 -- confirmed-correct-and-marked (D-SLM5249): o_proj's own
+	// per-output-channel fold count is genuinely hidden_size-invariant (o_proj's OUTPUT width
+	// stays hidden_size, unchanged by this ask) -- NOT a defect, and NOT touched by Track A.
 	L.off[26] = cur; cur += Align8U32(hidden_size * 4);             // o_fold_identity
 	L.off[27] = cur; cur += Align8U32(hidden_size * 4);             // o_fold_mult
 	L.off[28] = cur; cur += Align8U32(hidden_size * 4);             // o_fold_shift
@@ -763,7 +791,10 @@ GpuLayerLayout ComputeLayerLayout(uint32_t hidden_size, uint32_t kv_hidden_size,
 // sslm_gpu_model_map (design Sec10 B2).
 std::vector<uint8_t> PackLayerWeightsBytes(const superslm::LayerWeights* layers, uint32_t N,
                                             const GpuLayerLayout& layout, uint32_t H, uint32_t KV,
-                                            uint32_t NH, uint32_t NQH, uint32_t I) {
+                                            uint32_t NH, uint32_t NQH, uint32_t I, uint32_t q_width) {
+	// T-2432 (Track A step 5, GS-10/GS-11): identical fallback convention as
+	// ComputeLayerLayout's own new parameter -- see that function's header comment.
+	const uint32_t QW = (q_width != UINT32_MAX) ? q_width : H;
 	std::vector<uint8_t> lw_bytes;
 	lw_bytes.assign(static_cast<size_t>(layout.stride) * N, 0);
 	for (uint32_t l = 0; l < N; ++l) {
@@ -772,8 +803,9 @@ std::vector<uint8_t> PackLayerWeightsBytes(const superslm::LayerWeights* layers,
 		for (uint32_t i = 0; i < H; ++i) PutI32At(lw_bytes, base + layout.off[0] + i * 4, lw.attn_norm_gain[i]);
 		PutI64At(lw_bytes, base + layout.off[1] + 0, lw.attn_norm_site_constant.m);
 		PutI64At(lw_bytes, base + layout.off[1] + 8, lw.attn_norm_site_constant.e);
-		for (uint32_t i = 0; i < H * H; ++i) lw_bytes[base + layout.off[2] + i] = static_cast<uint8_t>(lw.q_weight[i]);
-		for (uint32_t i = 0; i < H; ++i) {
+		// SSLM-GEOMETRY-SITE: GS-10
+		for (uint32_t i = 0; i < QW * H; ++i) lw_bytes[base + layout.off[2] + i] = static_cast<uint8_t>(lw.q_weight[i]);
+		for (uint32_t i = 0; i < QW; ++i) {
 			PutI32At(lw_bytes, base + layout.off[3] + i * 4, lw.q_fold_identity[i]);
 			PutI32At(lw_bytes, base + layout.off[4] + i * 4, lw.q_fold_mult[i]);
 			PutI32At(lw_bytes, base + layout.off[5] + i * 4, lw.q_fold_shift[i]);
@@ -782,7 +814,7 @@ std::vector<uint8_t> PackLayerWeightsBytes(const superslm::LayerWeights* layers,
 		PutI64At(lw_bytes, base + layout.off[6] + 8, lw.q_site_constant.e);
 		PutI64At(lw_bytes, base + layout.off[7], lw.q_bias != nullptr ? 1 : 0);
 		if (lw.q_bias != nullptr) {
-			for (uint32_t i = 0; i < H; ++i) PutI64At(lw_bytes, base + layout.off[8] + i * 8, lw.q_bias[i]);
+			for (uint32_t i = 0; i < QW; ++i) PutI64At(lw_bytes, base + layout.off[8] + i * 8, lw.q_bias[i]);
 		}
 		for (uint32_t i = 0; i < KV * H; ++i) {
 			lw_bytes[base + layout.off[9] + i] = static_cast<uint8_t>(lw.k_weight[i]);
@@ -811,7 +843,10 @@ std::vector<uint8_t> PackLayerWeightsBytes(const superslm::LayerWeights* layers,
 			PutI64At(lw_bytes, base + layout.off[24] + i * 8, lw.kv_landing_e_t_v[i]);
 		}
 		// T-2035: sites 5-16's own read-resource list.
-		for (uint32_t i = 0; i < H * H; ++i) lw_bytes[base + layout.off[25] + i] = static_cast<uint8_t>(lw.o_weight[i]);
+		// SSLM-GEOMETRY-SITE: GS-11
+		for (uint32_t i = 0; i < H * QW; ++i) lw_bytes[base + layout.off[25] + i] = static_cast<uint8_t>(lw.o_weight[i]);
+		// SSLM-GEOMETRY-SITE: GS-09 -- confirmed-correct-and-marked (D-SLM5249): o's own
+		// per-output-channel fold arrays stay hidden_size-sized, NOT touched by this step.
 		for (uint32_t i = 0; i < H; ++i) {
 			PutI32At(lw_bytes, base + layout.off[26] + i * 4, lw.o_fold_identity[i]);
 			PutI32At(lw_bytes, base + layout.off[27] + i * 4, lw.o_fold_mult[i]);
@@ -1144,6 +1179,11 @@ void RecordOneTokenFullDepthDispatchBody(
     uint32_t position_u32, uint32_t width_u32, const GpuScratchLayout& scratch_layout,
     uint64_t work_wide_a_off, uint64_t work_wide_b_off, uint64_t work_adapter_u_off,
     const GpuAdapterBridge* adapter_bridge, uint32_t& dispatch_query_index) {
+	// T-2432 (Track A step 9): q_width = num_attention_heads * head_dim -- NQH is already
+	// correct by the time this function runs (Track A step 8 fixes its own derivation, at this
+	// function's own caller). Declared before the dispatch lambdas below so their `[&]` capture
+	// sees it.
+	const uint32_t Q_WIDTH = NQH * HD;
 	auto& attn_norm_pipe = harness::GetOrBuildComposedPipeline("attn_norm_site");
 	auto& q_proj_pipe = harness::GetOrBuildComposedPipeline("q_proj_site");
 	auto& kv_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("kv_proj_gemm_site");
@@ -1185,9 +1225,15 @@ void RecordOneTokenFullDepthDispatchBody(
 			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
 		}
 		++dispatch_query_index;
-		uint32_t consts[11] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
-		                        NQH,        width_u32, I,  N,  lanes};
-		dev.list->SetComputeRoot32BitConstants(0, 11, consts, 0);
+		// T-2432 (Track A step 9, GS-15/GS-17): Q_WIDTH appended as a 12th root constant --
+		// q_proj_gemm_site.hlsl and o_proj_gemm_site.hlsl each declare a 12th cbuffer field
+		// (g_q_width) to read it; every other shader driven through this lambda declares only
+		// 11 fields and never reads the 12th (D3D12 does not require a PSO to consume every
+		// root parameter its shared root signature declares -- the same "subset usage" already
+		// established for t8/t9 SRVs, this file's own MakeRootSigComposed comment).
+		uint32_t consts[12] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
+		                        NQH,        width_u32, I,  N,  lanes,          Q_WIDTH};
+		dev.list->SetComputeRoot32BitConstants(0, 12, consts, 0);
 		dev.list->SetPipelineState(pso);
 		dev.list->Dispatch(num_groups, 1, 1);
 		dev.list->ResourceBarrier(1, &global_uav_barrier);
@@ -1198,7 +1244,15 @@ void RecordOneTokenFullDepthDispatchBody(
 			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
 		}
 		++dispatch_query_index;
-		uint32_t consts[27] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
+		// T-2432 (Track A step 9, GS-16): grown from 27 to 28 values -- index 27 (the NEW 28th
+		// value) carries Q_WIDTH for q_proj_site.hlsl's own bias/requant striding loop. Index 27
+		// was previously past this array's own end (27 values = indices 0-26); it does NOT
+		// collide with kv_proj_site.hlsl's own two-slot usage (indices 11-26, both slots'
+		// adapter fields) precisely because it is the first index past that range. Every other
+		// tail shader (o/gate/up/down_proj_site.hlsl) declares its own trailing padding for
+		// index 27 exactly as it already does for the unused prefix positions, and never reads
+		// it -- see q_proj_site.hlsl's own cbuffer for the one shader that does.
+		uint32_t consts[28] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
 		                        NQH,        width_u32, I,  N,  /*lanes=*/1u};
 		size_t base = 11;
 		for (const TailAdapterSlot& s : slots) {
@@ -1223,14 +1277,16 @@ void RecordOneTokenFullDepthDispatchBody(
 			consts[base + 7] = Stage1LanesForRank(rank);
 			base += 8;
 		}
-		dev.list->SetComputeRoot32BitConstants(0, 27, consts, 0);
+		consts[27] = Q_WIDTH;
+		dev.list->SetComputeRoot32BitConstants(0, 28, consts, 0);
 		dev.list->SetPipelineState(pso);
 		dev.list->Dispatch(1, 1, 1);
 		dev.list->ResourceBarrier(1, &global_uav_barrier);
 	};
 
 	const uint32_t KV2 = 2u * NH * HD;
-	const GpuGemmSiteGroupPlan q_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::QProj, H, KV2, I);
+	const GpuGemmSiteGroupPlan q_proj_plan =
+	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::QProj, H, KV2, I, Q_WIDTH);
 	const GpuGemmSiteGroupPlan o_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::OProj, H, KV2, I);
 	const GpuGemmSiteGroupPlan kv_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::KvProj, H, KV2, I);
 	const GpuGemmSiteGroupPlan gate_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::GateProj, H, KV2, I);
@@ -1337,7 +1393,8 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
     ID3D12Resource* external_weights_resident, ID3D12Resource* external_rope_cos_resident,
     ID3D12Resource* external_rope_sin_resident, bool external_rope_has,
     uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
-    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopChunkOpenState* out_state) {
+    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopChunkOpenState* out_state,
+    size_t q_width) {
 	// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
 	// review.md, P2): set BEFORE every one of this function's eleven
 	// rejecting return paths (the nine guards below, `!dev.available`, and
@@ -1393,8 +1450,13 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// never assumed sound because some other caller (the loader's own
 	// ValidateConfigGeometryJoin) already checked an artifact-sourced
 	// instance of the same triple.
-	const size_t guard_num_heads = head_dim == 0 ? 0 : hidden_size / head_dim;
-	if (guard_num_heads == 0 || guard_num_heads * head_dim != hidden_size) {
+	// SSLM-GEOMETRY-SITE: GS-04
+	// T-2432 (Track A step 2, design §2.5 GS-04/§6 Track A step 2): identical `q_width`-vs-
+	// `hidden_size` fallback convention as RunLayerLoopImpl's own GS-02 site (forward_sites.cpp)
+	// -- see that site's comment for the full contract.
+	const size_t effective_q_width_guard = (q_width != 0) ? q_width : hidden_size;
+	const size_t guard_num_heads = head_dim == 0 ? 0 : effective_q_width_guard / head_dim;
+	if (guard_num_heads == 0 || guard_num_heads * head_dim != effective_q_width_guard) {
 		return superslm::SslmForwardStatus::HeadDimGeometryMismatch;  // HeadDimGeometryMismatch
 	}
 	if (num_key_value_heads == 0 || num_key_value_heads > guard_num_heads ||
@@ -1468,15 +1530,17 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	const uint32_t NH = static_cast<uint32_t>(num_key_value_heads);
 	const uint32_t KV = NH * HD;
 	const uint32_t N = num_hidden_layers;
-	// This design's build target carries no GQA-group config field distinct
-	// from what hidden_size/head_dim/num_key_value_heads already fix -- every
-	// fixture in this suite is MHA-degenerate (num_attention_heads ==
-	// num_key_value_heads == 1), and hidden_size == num_attention_heads *
-	// head_dim (the CFG1 geometry join, model.h) gives num_attention_heads
-	// directly: hidden_size / head_dim.
-	const uint32_t NQH = (HD > 0) ? (H / HD) : 0;
+	// SSLM-GEOMETRY-SITE: GS-13
+	// T-2432 (Track A step 8, design §2.5 GS-13/§6 Track A step 8, D-SLM5248): this is the SAME
+	// broken derivation the guard three dozen lines above it now threads correctly (GS-04) for
+	// the REJECTION check -- missed here, for the SIZING use, because grounding stopped reading
+	// at the guard. The true num_attention_heads is `effective_q_width_guard / HD` (both already
+	// computed above, by GS-04's own fix) -- re-derived from `hidden_size / head_dim` only when
+	// the guard already accepted that identity (q_width == 0, every pre-T-2432 caller).
+	const uint32_t NQH = (HD > 0) ? (static_cast<uint32_t>(effective_q_width_guard) / HD) : 0;
+	const uint32_t QWIDTH = NQH * HD;
 	const uint32_t I = static_cast<uint32_t>(intermediate_size);
-	const GpuLayerLayout layout = ComputeLayerLayout(H, KV, NH, NQH, I);
+	const GpuLayerLayout layout = ComputeLayerLayout(H, KV, NH, NQH, I, QWIDTH);
 
 	// T-2045 (S3, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md): §5.3's
 	// own decision is "weight buffers upload once... and stay resident for the
@@ -1550,7 +1614,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// !lw_fast_hit miss, and never at all on the external-weights path (B5).
 	std::vector<uint8_t> lw_bytes;
 	if (!lw_fast_hit && !external_weights) {
-		lw_bytes = PackLayerWeightsBytes(layers, N, layout, H, KV, NH, NQH, I);
+		lw_bytes = PackLayerWeightsBytes(layers, N, layout, H, KV, NH, NQH, I, QWIDTH);
 	}  // T-2100: end of the !lw_fast_hit pack guard
 
 	// T-2045 (S3): true iff this call's freshly-packed row is byte-identical
@@ -1646,7 +1710,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// persistent cross-dispatch scores/probs region the de-fused attention
 	// sites need.
 	const GpuScratchLayout scratch_layout =
-	    ComputeScratchLayout(H, I, NQH, static_cast<uint32_t>(context_cap));
+	    ComputeScratchLayout(H, I, NQH, static_cast<uint32_t>(context_cap), QWIDTH);
 	// T-2101: LayerScratch (below, `scratch_uav`) needs no host-supplied initial content -- every
 	// byte any site shader reads from it (the codes blocks, the persistent `scores` region) was
 	// written earlier in the SAME call, by the SAME 17-dispatch-per-layer sequence (T-2045's own C3
@@ -1727,7 +1791,17 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// `t` (`rope_guard_site.hlsl`'s own updated `my_stage` computation) means
 	// every head's own staged row is independent of which thread processes
 	// it, at any head count -- the class of defect is removed, not capped.
-	const uint32_t max_width = std::max(H, I);
+	// SSLM-GEOMETRY-SITE: GS-20
+	// T-2432 (Track A step 9, new site found by this build -- not named in the design's own
+	// §2.5 census): WORK_WIDE_A/WORK_WIDE_B are the shared "wide" int64 GEMM-accumulator
+	// scratch every projection's GemmCoalescedGpu call streams through (site_common.hlsli),
+	// including q_proj's own out_channels-wide accumulator (q_proj_gemm_site.hlsl) -- must
+	// cover QWIDTH, not merely H and I, or a non-square candidate whose q_width exceeds both
+	// hidden_size and intermediate_size overflows this region. For every existing incumbent
+	// (q_width == hidden_size) and this candidate (Qwen3-Embedding-0.6B's own intermediate_size
+	// already exceeds its q_width), this max is unaffected -- named for the next non-square
+	// candidate where it would not be.
+	const uint32_t max_width = std::max({H, I, QWIDTH});
 	const uint64_t work_wide_a_off = 0;
 	const uint64_t work_wide_b_off = static_cast<uint64_t>(max_width) * 8u;
 	const uint64_t work_rope_stage_off = work_wide_b_off + static_cast<uint64_t>(max_width) * 8u;
@@ -2167,7 +2241,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
     GpuLayerLoopInFlight** out_inflight, ID3D12Resource* external_weights_resident,
     ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
     bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
-    const GpuAdapterBridge* adapter_bridge) {
+    const GpuAdapterBridge* adapter_bridge, size_t q_width) {
 	if (out_inflight) *out_inflight = nullptr;
 	// T-2169 (Rung 2b-prep, D-SLM3632/D-SLM3633): the guard ladder, the weight/rope/K-V
 	// pack-and-residency decision, and the once-per-call root-signature/binding setup now live in
@@ -2203,7 +2277,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	    intermediate_size, context_cap, rope_tables, workspace, workspace_size, external_kv_resident,
 	    io_external_kv_needs_resume_barrier, external_weights_resident, external_rope_cos_resident,
 	    external_rope_sin_resident, external_rope_has, external_rope_cos_elems,
-	    external_rope_sin_elems, adapter_bridge, &state);
+	    external_rope_sin_elems, adapter_bridge, &state, q_width);
 	if (prep_status != superslm::SslmForwardStatus::Ok) {
 		return prep_status;  // a guard rejected before any recording began -- nothing to close
 	}
@@ -2575,7 +2649,7 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
     bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
     ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
     bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
-    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight) {
+    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight, size_t q_width) {
 	if (out_inflight) *out_inflight = nullptr;
 	// T-2184 remedy S3 (Brunel fix round 1, D-SLM3662): this primitive's own catch clauses call
 	// the same file-scope `InvalidateResidencyCachesOnThrow()` `RunLayerLoopGpuSubmit`'s catch
@@ -2623,7 +2697,7 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 	    num_key_value_heads, intermediate_size, context_cap, rope_tables, workspace, workspace_size,
 	    external_kv_resident, io_external_kv_needs_resume_barrier, external_weights_resident,
 	    external_rope_cos_resident, external_rope_sin_resident, external_rope_has,
-	    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &state);
+	    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &state, q_width);
 	if (prep_status != superslm::SslmForwardStatus::Ok) {
 		return prep_status;  // a guard rejected before any recording began -- nothing to close
 	}
@@ -3030,7 +3104,7 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
     bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
     ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
     bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
-    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight) {
+    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight, size_t q_width) {
 	if (out_inflight) *out_inflight = nullptr;
 	if (chunk_len == 0) {
 		// Nothing to submit -- no guard ladder has run, so this is not itself a rejection; the
@@ -3052,7 +3126,7 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 		    chunk_embedding_bytes + static_cast<size_t>(submitted) * embed_block_bytes, this_sub_chunk,
 		    external_kv_resident, io_external_kv_needs_resume_barrier, external_weights_resident,
 		    external_rope_cos_resident, external_rope_sin_resident, external_rope_has,
-		    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &inflight);
+		    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &inflight, q_width);
 		if (submit_status != superslm::SslmForwardStatus::Ok) {
 			return submit_status;
 		}
@@ -3318,11 +3392,17 @@ uint32_t ComputeGpuGemmGroupCount(uint32_t out_channels, uint32_t threads_per_gr
 // one grid, `kv_proj_gemm_site.hlsl`'s own header comment) and ignored by every other site.
 GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t hidden_size,
                                                   uint32_t kv_out_channels,
-                                                  uint32_t intermediate_size) {
+                                                  uint32_t intermediate_size, uint32_t q_width) {
 	GpuGemmSiteGroupPlan plan;
 	switch (site) {
 		case GpuGemmSplitSite::QProj:
-			plan.out_channels = hidden_size;
+			// SSLM-GEOMETRY-SITE: GS-14
+			// T-2432 (Track A step 9, D-SLM5248): q_proj's real output width is q_width, not
+			// hidden_size, once R1 no longer holds -- this is the function that sets the actual
+			// number of GPU thread groups dispatched for q_proj's GEMM; unfixed, the GPU
+			// dispatches ceil(hidden_size/threads-per-channel) groups for a GEMM that needs
+			// ceil(q_width/threads-per-channel), silently never computing the upper channels.
+			plan.out_channels = (q_width != UINT32_MAX) ? q_width : hidden_size;
 			plan.threads_per_group = 256u;
 			plan.lanes = 32u;
 			break;

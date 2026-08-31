@@ -71,6 +71,9 @@ void main(uint3 dtid : SV_DispatchThreadID)
     // One work item per (head, head_dim element): num_attention_heads * head_dim of them,
     // each an independent width-long reduction over its own V column. The host dispatches
     // ceil(num_attention_heads * head_dim / 256) groups.
+    // SSLM-GEOMETRY-SITE: GS-25 -- confirmed-correct-and-marked (T-2432): this IS q_width's own
+    // correct computation (num_attention_heads * head_dim), already independent of hidden_size
+    // -- not a stand-in for it. Registered by T-2432's own part-2 pattern sweep.
     uint items = g_num_attention_heads * (uint)head_dim;
     if (t >= items) return;
     {

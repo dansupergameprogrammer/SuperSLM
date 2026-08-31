@@ -48,6 +48,9 @@ void main(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
     uint off_mult = layer_base + Layout.Load<uint>(39 * 4);
     uint off_shift = layer_base + Layout.Load<uint>(40 * 4);
 
+    // SSLM-GEOMETRY-SITE: GS-23 -- confirmed-correct-and-marked (T-2432): gate_proj's own
+    // input width is genuinely hidden_size (the normed residual stream); its output width
+    // (out_channels) is intermediate_size, neither touched by Q/O's own width decoupling.
     GemmCoalescedGpu(gtid.x, gid.x, LayerScratch, normed_off, LayerWeights, off_weight, LayerWeights, off_id,
                       LayerWeights, off_mult, LayerWeights, off_shift, hidden_size, out_channels,
                       WorkScratch, 0u, g_gemm_lanes);

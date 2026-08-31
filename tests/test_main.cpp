@@ -7449,14 +7449,12 @@ static void TestConfigGeometryRejectsHeadsNotDivisibleByKv() {
 	          ConfigGeometryStatusName(r.status));
 }
 
-static void TestConfigGeometryRejectsHiddenSizeMismatch() {
-	// heads=32, head_dim=128 -> 4096, but hidden_size declares 4097: the GQA
-	// relations both hold, isolating the hidden_size x heads*head_dim relation.
-	const auto r = CheckConfigGeometry(/*hidden_size=*/4097, /*heads=*/32, /*kv_heads=*/8, /*head_dim=*/128);
-	CHECK_MSG(r.status == ConfigGeometryStatus::HiddenSizeGeometryMismatch,
-	          "hidden_size (4097) != num_attention_heads * head_dim (32*128=4096): got %s",
-	          ConfigGeometryStatusName(r.status));
-}
+// TestConfigGeometryRejectsHiddenSizeMismatch retired (T-2432, Track A step 1, design §6
+// Track A step 1, D-SLM5273): CheckConfigGeometry's R1 identity (hidden_size ==
+// num_attention_heads * head_dim) is removed, not loosened, once Track A's forward-path Q/O
+// width decoupling lands -- this cell pinned exactly the rejection behavior that removal
+// retires. TestConfigGeometryRejectsZeroAttentionHeads (above) already covers the one case
+// on this axis the widened function still rejects.
 
 static void TestConfigGeometryAcceptsGqaShape() {
 	const auto r = CheckConfigGeometry(/*hidden_size=*/4096, /*heads=*/32, /*kv_heads=*/8, /*head_dim=*/128);
@@ -26536,7 +26534,7 @@ int main(int argc, char** argv) {
 	TestConfigGeometryRejectsZeroKeyValueHeadsBeforeModulusFaults();
 	TestConfigGeometryRejectsKvHeadsExceedsHeads();
 	TestConfigGeometryRejectsHeadsNotDivisibleByKv();
-	TestConfigGeometryRejectsHiddenSizeMismatch();
+	// TestConfigGeometryRejectsHiddenSizeMismatch retired -- see its own retirement comment above.
 	TestConfigGeometryAcceptsGqaShape();
 	TestConfigGeometryAcceptsMhaShape();
 	TestComputeTensorEvidenceReportsExtremaAndSaturationBoundary();

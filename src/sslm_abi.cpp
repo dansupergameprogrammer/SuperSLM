@@ -1541,12 +1541,17 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
 			hidden_scales[static_cast<size_t>(i)] = embed_scale;
 		}
 
+		// T-2432 (Track A step 2/3): q_width threaded explicitly -- this is the real production
+		// path `sslm_prefill` drives (T-2425's own finding: RunLayerLoopChunkBatched is the ONLY
+		// path sslm_prefill reaches), so a non-square candidate's real num_attention_heads must
+		// reach this call, not fall back to the `q_width == hidden_size` default.
 		const superslm::SslmForwardStatus st = superslm::RunLayerLoopChunkBatched(
 		    embed_codes, hidden_scales.data(), static_cast<size_t>(admit_count), layers,
 		    c.num_hidden_layers, c.hidden_size, c.head_dim, c.num_key_value_heads,
 		    c.intermediate_size, c.context_cap, state.context_length, model->view.rope_tables,
 		    kv_block, block_size, /*option_g_fused_k_landing=*/false, &state.kv_saturation_count,
-		    /*site_prefix=*/{}, nullptr);
+		    /*site_prefix=*/{}, nullptr,
+		    /*q_width=*/static_cast<size_t>(c.num_attention_heads) * c.head_dim);
 		if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
 
 		// forward_sites.h: "a sequence resting between whole tokens carries a marker at layer
@@ -2304,11 +2309,14 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 			std::vector<superslm::LayerWeights> layers_scratch;
 			const superslm::LayerWeights* layers =
 			    ResolveLayers(model, seq->adapter_handle, &layers_scratch);
+			// T-2432 (Track A step 2/3): q_width threaded explicitly, matching
+			// RunLayerLoopChunkBatched's own call site above.
 			const superslm::SslmForwardStatus st = superslm::RunLayerLoop(
 			    seq->state, layers, c.num_hidden_layers,
 			    static_cast<uint32_t>(params->layer_budget), c.hidden_size, c.head_dim,
 			    c.num_key_value_heads, c.intermediate_size, c.context_cap, model->view.rope_tables,
-			    seq->kv_block, seq->block_size, /*site_prefix=*/{}, /*token_index=*/0, nullptr);
+			    seq->kv_block, seq->block_size, /*site_prefix=*/{}, /*token_index=*/0, nullptr,
+			    /*q_width=*/static_cast<size_t>(c.num_attention_heads) * c.head_dim);
 			if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
 
 			if (seq->state.layer_index < c.num_hidden_layers) {

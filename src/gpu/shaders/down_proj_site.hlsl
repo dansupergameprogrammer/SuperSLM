@@ -58,6 +58,8 @@ void main(uint3 gtid : SV_GroupThreadID)
 {
     uint t = gtid.x;
     int hidden_size = (int)g_hidden_size;
+    // SSLM-GEOMETRY-SITE: GS-22 -- confirmed-correct-and-marked (T-2432): down_proj's own
+    // output width is genuinely hidden_size, unaffected by Q/O's own width decoupling.
     int out_channels = hidden_size;
     uint sticky_off = SeqStickyOffGpu(hidden_size);
     int64_t sticky = SeqState.Load<int64_t>(sticky_off);

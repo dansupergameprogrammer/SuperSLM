@@ -476,7 +476,12 @@ struct Device {
 	ComPtr<ID3D12RootSignature> MakeRootSigComposed() {
 		D3D12_ROOT_PARAMETER ps[1 + kComposedResourceBindingCount]{};
 		ps[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-		ps[0].Constants.Num32BitValues = 27;  // 10th: num_hidden_layers (commit_site.hlsl only);
+		// T-2432 (Track A step 9): grown 27 -> 28. The 28th value (index 27) carries Q_WIDTH
+		// (num_attention_heads * head_dim) for q_proj_gemm_site.hlsl/o_proj_gemm_site.hlsl
+		// (plain `bind_and_dispatch`, at index 11 of ITS OWN 12-value block) and
+		// q_proj_site.hlsl (tail `bind_and_dispatch_tail`, at index 27) -- see
+		// superslm_gpu.cpp's own bind_and_dispatch/bind_and_dispatch_tail lambdas.
+		ps[0].Constants.Num32BitValues = 28;  // 10th: num_hidden_layers (commit_site.hlsl only);
 		                                      // 11th: T-2113 (B4) GEMM lanes (the six
 		                                      // <site>_gemm_site.hlsl dispatches only);
 		                                      // 12th-19th/20th-27th: T-2113 (B10 lever 1b) two

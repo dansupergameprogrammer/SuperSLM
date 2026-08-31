@@ -1433,7 +1433,8 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
                                  const SslmTensorManifest& rope_tables, uint8_t* workspace,
                                  size_t workspace_size, bool option_g_fused_k_landing,
                                  std::string_view site_prefix,
-                                 size_t token_index, SslmTraceHookState* trace_hook_state) {
+                                 size_t token_index, SslmTraceHookState* trace_hook_state,
+                                 size_t q_width) {
 	// §9.3's first decided contract, checked BEFORE anything is read or
 	// written: a budget of 0 consumes a call, advances nothing, and would
 	// return "pending" -- a host-visible livelock. `seq` is left bit-identical,
@@ -1463,8 +1464,16 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 	// `WorkspaceTooSmall` used to be returned here, which sends a host that
 	// enlarges its buffer into an infinite retry against a size no buffer
 	// satisfies, because the guard below it is never reached.
-	const size_t num_heads = head_dim == 0 ? 0 : hidden_size / head_dim;
-	if (num_heads == 0 || num_heads * head_dim != hidden_size) {
+	// SSLM-GEOMETRY-SITE: GS-02
+	// T-2432 (Track A step 2, design §2.5/§6 Track A step 2): `q_width` is Q's own real
+	// output width (`num_attention_heads * head_dim`), independent of `hidden_size` once
+	// R1 no longer holds. `q_width == 0` means the caller did not supply one (every
+	// existing caller, pre-T-2432) -- falls back to `hidden_size`, the pre-widening
+	// identity, so this guard's behavior for every existing (square) incumbent is
+	// unchanged bit-for-bit.
+	const size_t effective_q_width = (q_width != 0) ? q_width : hidden_size;
+	const size_t num_heads = head_dim == 0 ? 0 : effective_q_width / head_dim;
+	if (num_heads == 0 || num_heads * head_dim != effective_q_width) {
 		return SslmForwardStatus::HeadDimGeometryMismatch;
 	}
 	// T-1654 (S3.8a): `num_key_value_heads` gets the identical treatment as
@@ -1669,8 +1678,19 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 	const int64_t position = seq.context_length;
 	const size_t width = static_cast<size_t>(seq.context_length) + 1;
 
-	std::vector<int8_t> normed(hidden_size), q_codes(hidden_size), o_codes(hidden_size);
-	std::vector<int8_t> q_rot(hidden_size), k_rot(hidden_size), ctx_codes(hidden_size);
+	// SSLM-GEOMETRY-SITE: GS-12
+	// T-2432 (Track A step 3, design §2.1 item 5/§6 Track A step 3): q_codes/q_rot/ctx_codes
+	// are Q's own output-width buffers -- sized `effective_q_width`, not `hidden_size`.
+	// k_rot is written at `h * head_dim` for `h` up to `num_heads` (this loop's own query-head
+	// index, not the KV-head index LandTokenKVRow uses to size its own K store) -- the same
+	// query-head-count bound q_rot uses, so it needs the identical widening or an
+	// out-of-bounds write follows the moment `num_heads` exceeds `hidden_size / head_dim`
+	// (a mechanical consequence of widening `num_heads`, not a separate design decision --
+	// the design's own §6 Track A step 3 text names q_codes/q_rot/ctx_wide/ctx_codes and does
+	// not separately name k_rot because k_rot did not yet exist as a distinct local at the
+	// text's own citation range; its indexing is identical to q_rot's).
+	std::vector<int8_t> normed(hidden_size), q_codes(effective_q_width), o_codes(hidden_size);
+	std::vector<int8_t> q_rot(effective_q_width), k_rot(effective_q_width), ctx_codes(effective_q_width);
 	std::vector<int8_t> gate_codes(intermediate_size), up_codes(intermediate_size);
 	std::vector<int8_t> act_codes(intermediate_size), down_codes(hidden_size);
 	std::vector<int8_t> stream_next(hidden_size);
@@ -1696,7 +1716,10 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		                 LayerSite(site_prefix, l, "attn_norm"), token_index, trace_hook_state);
 		if (st != SslmForwardStatus::Ok) return st;
 
-		st = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, hidden_size, hidden_size,
+		// SSLM-GEOMETRY-SITE: GS-12
+		// T-2432 (Track A step 3): q_proj's INPUT width stays hidden_size (the normed
+		// residual stream is unchanged by this ask); its OUTPUT width is effective_q_width.
+		st = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, hidden_size, effective_q_width,
 		                      lw.q_fold_identity, lw.q_fold_mult, lw.q_fold_shift, lw.q_site_constant,
 		                      lw.q_bias, q_codes.data(), &q_scale,
 		                      LayerSite(site_prefix, l, "q_proj.requant"),
@@ -1801,7 +1824,10 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			std::vector<int64_t> khead_q_ln2(num_key_value_heads), khead_q_b(num_key_value_heads),
 			    khead_q_c(num_key_value_heads);
 			std::vector<bool> khead_derived(num_key_value_heads, false);
-			std::vector<int64_t> ctx_wide(hidden_size);
+			// SSLM-GEOMETRY-SITE: GS-12
+			// T-2432 (Track A step 3): ctx_wide is the pre-fold attention-context accumulator,
+			// one head_dim-wide slice per query head -- sized effective_q_width, not hidden_size.
+			std::vector<int64_t> ctx_wide(effective_q_width);
 			for (size_t h = 0; h < num_heads; ++h) {
 				std::vector<int64_t> scores(width), probs(width), ctx_acc(head_dim);
 				// T-1654 (S3.8a): `h / group`, the reference's own grouping
@@ -1897,14 +1923,20 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			}
 			// §6.2 step 6: the context funnel takes an EMPTY incoming span --
 			// the per-head static scale was already consumed at the landing.
+			// T-2432 (Track A step 3): the funnel's own channel count is effective_q_width
+			// (ctx_wide/ctx_codes are Q-head-count-wide, not hidden_size-wide).
 			const ChainResult ctx_result = RequantChainChecked(
-			    ctx_wide.data(), hidden_size, std::span<const CarriedScale>{},
+			    ctx_wide.data(), effective_q_width, std::span<const CarriedScale>{},
 			    lw.ctx_fold_site_constant, ctx_codes.data(), &ctx_scale,
 			    LayerSite(site_prefix, l, "attn_ctx"), token_index, trace_hook_state);
 			if (ctx_result.status != SslmForwardStatus::Ok) return ctx_result.status;
 		}
 
-		st = ProjectAndFunnel(ctx_codes.data(), ctx_scale, lw.o_weight, hidden_size, hidden_size,
+		// SSLM-GEOMETRY-SITE: GS-12
+		// T-2432 (Track A step 3): o_proj's INPUT width is effective_q_width (the just-folded
+		// attention context); its OUTPUT width stays hidden_size -- attention always returns to
+		// the model's residual-stream width, unchanged by this ask (GS-09, D-SLM5249).
+		st = ProjectAndFunnel(ctx_codes.data(), ctx_scale, lw.o_weight, effective_q_width, hidden_size,
 		                      lw.o_fold_identity, lw.o_fold_mult, lw.o_fold_shift, lw.o_site_constant,
 		                      /*bias=*/nullptr, o_codes.data(), &o_scale,
 		                      LayerSite(site_prefix, l, "o_proj.requant"),
@@ -2025,11 +2057,12 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
                                  size_t intermediate_size, int64_t context_cap,
                                  const SslmTensorManifest& rope_tables, uint8_t* workspace,
                                  size_t workspace_size, std::string_view site_prefix,
-                                 size_t token_index, SslmTraceHookState* trace_hook_state) {
+                                 size_t token_index, SslmTraceHookState* trace_hook_state,
+                                 size_t q_width) {
 	return RunLayerLoopImpl(seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim,
 	                        num_key_value_heads, intermediate_size, context_cap, rope_tables,
 	                        workspace, workspace_size, /*option_g_fused_k_landing=*/false,
-	                        site_prefix, token_index, trace_hook_state);
+	                        site_prefix, token_index, trace_hook_state, q_width);
 }
 
 // T-1894 (design Sec31.2, T-1899's own contract extension, forward_sites.h):
@@ -2050,12 +2083,12 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
                                  const SslmTensorManifest& rope_tables, uint8_t* workspace,
                                  size_t workspace_size, OptionGKLandingMode option_g_k_landing_mode,
                                  std::string_view site_prefix, size_t token_index,
-                                 SslmTraceHookState* trace_hook_state) {
+                                 SslmTraceHookState* trace_hook_state, size_t q_width) {
 	const bool fused = (option_g_k_landing_mode == OptionGKLandingMode::kFused);
 	return RunLayerLoopImpl(seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim,
 	                        num_key_value_heads, intermediate_size, context_cap, rope_tables,
 	                        workspace, workspace_size, fused, site_prefix,
-	                        token_index, trace_hook_state);
+	                        token_index, trace_hook_state, q_width);
 }
 
 // T-2147 (design §15.1/§15.2/§15.3, D-SLM3479/D-SLM3481/D-SLM3482/D-SLM3483): the chunk-batched
@@ -2106,15 +2139,20 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
                                             bool option_g_fused_k_landing,
                                             uint64_t* kv_saturation_count,
                                             std::string_view site_prefix,
-                                            SslmTraceHookState* trace_hook_state) {
+                                            SslmTraceHookState* trace_hook_state,
+                                            size_t q_width) {
 	// The same domain guards RunLayerLoopImpl's own top-of-function block performs (§9.3),
 	// restated here because this path has no single `SequenceLayerState` to validate against --
 	// `chunk_tokens` tokens share one `context_cap`/geometry, not `chunk_tokens` independent
 	// calls each re-deriving the identical answer.
 	if (chunk_tokens == 0) return SslmForwardStatus::InvalidLayerBudget;
 	if (context_cap < 1) return SslmForwardStatus::InvalidContextCap;
-	const size_t num_heads = head_dim == 0 ? 0 : hidden_size / head_dim;
-	if (num_heads == 0 || num_heads * head_dim != hidden_size) {
+	// SSLM-GEOMETRY-SITE: GS-03
+	// T-2432 (Track A step 2): identical `q_width`-vs-`hidden_size` fallback convention as
+	// RunLayerLoopImpl's own GS-02 site -- see that site's comment for the full contract.
+	const size_t effective_q_width = (q_width != 0) ? q_width : hidden_size;
+	const size_t num_heads = head_dim == 0 ? 0 : effective_q_width / head_dim;
+	if (num_heads == 0 || num_heads * head_dim != effective_q_width) {
 		return SslmForwardStatus::HeadDimGeometryMismatch;
 	}
 	if (num_key_value_heads == 0 || num_key_value_heads > num_heads ||
@@ -2151,9 +2189,12 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 
 	std::vector<int8_t> normed(chunk_tokens * hidden_size);
 	std::vector<CarriedScale> normed_scale(chunk_tokens);
-	std::vector<int8_t> q_codes(chunk_tokens * hidden_size);
+	// SSLM-GEOMETRY-SITE: GS-12
+	// T-2432 (Track A step 3): q_codes/ctx_codes are Q's own output-width buffers -- sized
+	// effective_q_width, not hidden_size. See RunLayerLoopImpl's own identical comment.
+	std::vector<int8_t> q_codes(chunk_tokens * effective_q_width);
 	std::vector<CarriedScale> q_scale(chunk_tokens);
-	std::vector<int8_t> ctx_codes(chunk_tokens * hidden_size);
+	std::vector<int8_t> ctx_codes(chunk_tokens * effective_q_width);
 	std::vector<CarriedScale> ctx_scale(chunk_tokens);
 	std::vector<int8_t> o_codes(chunk_tokens * hidden_size);
 	std::vector<CarriedScale> o_scale(chunk_tokens);
@@ -2185,8 +2226,11 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 			if (st != SslmForwardStatus::Ok) return st;
 		}
 
+		// SSLM-GEOMETRY-SITE: GS-12
+		// T-2432 (Track A step 3): q_proj's INPUT width stays hidden_size; OUTPUT width is
+		// effective_q_width.
 		st = ProjectAndFunnelBatched(normed.data(), normed_scale.data(), chunk_tokens, lw.q_weight,
-		                             hidden_size, hidden_size, lw.q_fold_identity, lw.q_fold_mult,
+		                             hidden_size, effective_q_width, lw.q_fold_identity, lw.q_fold_mult,
 		                             lw.q_fold_shift, lw.q_site_constant, lw.q_bias, q_codes.data(),
 		                             q_scale.data(), LayerSite(site_prefix, l, "q_proj.requant"),
 		                             trace_hook_state,
@@ -2219,9 +2263,13 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 			                    kv_saturation_count);
 			if (st != SslmForwardStatus::Ok) return st;
 
-			std::vector<int8_t> q_rot(hidden_size), k_rot(hidden_size);
+			// SSLM-GEOMETRY-SITE: GS-12
+			// T-2432 (Track A step 3): q_rot/k_rot are per-query-head-indexed (h up to
+			// num_heads), sized effective_q_width -- see RunLayerLoopImpl's own identical
+			// comment on why k_rot needs the same widening q_rot does.
+			std::vector<int8_t> q_rot(effective_q_width), k_rot(effective_q_width);
 			for (size_t h = 0; h < num_heads; ++h) {
-				st = RopeApplySite(q_codes.data() + t * hidden_size + h * head_dim, head_dim,
+				st = RopeApplySite(q_codes.data() + t * effective_q_width + h * head_dim, head_dim,
 				                   position, context_cap, rope_tables, q_rot.data() + h * head_dim);
 				if (st != SslmForwardStatus::Ok) return st;
 				if (option_g_fused_k_landing) continue;
@@ -2248,7 +2296,10 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 				std::vector<int64_t> khead_q_ln2(num_key_value_heads), khead_q_b(num_key_value_heads),
 				    khead_q_c(num_key_value_heads);
 				std::vector<bool> khead_derived(num_key_value_heads, false);
-				std::vector<int64_t> ctx_wide(hidden_size);
+				// SSLM-GEOMETRY-SITE: GS-12
+				// T-2432 (Track A step 3): ctx_wide is the pre-fold attention-context accumulator,
+				// one head_dim-wide slice per query head -- sized effective_q_width, not hidden_size.
+				std::vector<int64_t> ctx_wide(effective_q_width);
 				for (size_t h = 0; h < num_heads; ++h) {
 					std::vector<int64_t> scores(width), probs(width), ctx_acc(head_dim);
 					const size_t kv_head = h / group;
@@ -2305,16 +2356,19 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 					}
 				}
 				const ChainResult ctx_result = RequantChainChecked(
-				    ctx_wide.data(), hidden_size, std::span<const CarriedScale>{},
-				    lw.ctx_fold_site_constant, ctx_codes.data() + t * hidden_size, &ctx_scale[t],
+				    ctx_wide.data(), effective_q_width, std::span<const CarriedScale>{},
+				    lw.ctx_fold_site_constant, ctx_codes.data() + t * effective_q_width, &ctx_scale[t],
 				    LayerSite(site_prefix, l, "attn_ctx"), t, trace_hook_state);
 				if (ctx_result.status != SslmForwardStatus::Ok) return ctx_result.status;
 			}
 		}
 
 		// --- o_proj: batched GEMM across every token's ctx_codes -----------------------------
+		// SSLM-GEOMETRY-SITE: GS-12
+		// T-2432 (Track A step 3): o_proj's INPUT width is effective_q_width; OUTPUT stays
+		// hidden_size (GS-09, D-SLM5249).
 		st = ProjectAndFunnelBatched(ctx_codes.data(), ctx_scale.data(), chunk_tokens, lw.o_weight,
-		                             hidden_size, hidden_size, lw.o_fold_identity, lw.o_fold_mult,
+		                             effective_q_width, hidden_size, lw.o_fold_identity, lw.o_fold_mult,
 		                             lw.o_fold_shift, lw.o_site_constant, /*bias=*/nullptr,
 		                             o_codes.data(), o_scale.data(),
 		                             LayerSite(site_prefix, l, "o_proj.requant"), trace_hook_state,

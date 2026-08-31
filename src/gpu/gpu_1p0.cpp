@@ -617,6 +617,10 @@ SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
 	const uint32_t KV = num_kv_heads * HD;
 	const uint32_t I = static_cast<uint32_t>(base->config.intermediate_size);
 	const uint32_t NQH = num_heads;
+	// T-2432 (Track A step 5/7): q_width = num_attention_heads * head_dim, threaded into the
+	// layout/pack calls below so this handle's own resident weight buffer is sized and packed
+	// at Q's own real (possibly non-square) width.
+	const uint32_t QWIDTH = NQH * HD;
 
 	// Marshal every layer's LayerWeights (superslm_marshal::MarshalLayer, the identical
 	// call tools/t2100_gpu_throughput.cpp's own T-2100 harness makes before calling
@@ -636,9 +640,9 @@ SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
 	}
 
 	const superslm_gpu::GpuLayerLayout layout =
-	    superslm_gpu::ComputeLayerLayout(H, KV, num_kv_heads, NQH, I);
+	    superslm_gpu::ComputeLayerLayout(H, KV, num_kv_heads, NQH, I, QWIDTH);
 	const std::vector<uint8_t> lw_bytes = superslm_gpu::PackLayerWeightsBytes(
-	    layers.data(), num_hidden_layers, layout, H, KV, num_kv_heads, NQH, I);
+	    layers.data(), num_hidden_layers, layout, H, KV, num_kv_heads, NQH, I, QWIDTH);
 
 	// T-2105's own RoPE cos/sin residency construction (Claude/Laplace/
 	// t2105-gpu-speed-ceiling-2026-08-14.md Sec2 change 1), re-derived here per design Sec1's
@@ -1508,13 +1512,16 @@ SslmGpuStatus SubmitOneSequenceDecode(SslmGpuContext* ctx, SslmGpuSequenceHandle
 	}
 
 	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+	// T-2432 (Track A step 2/3): q_width threaded explicitly, matching
+	// SubmitChunkToFullDepthForG5Bridge's own call site above.
 	const superslm::SslmForwardStatus submit_status = superslm_gpu::RunLayerLoopGpuSubmit(
 	    seq->live_state, /*layers=*/nullptr, model->num_hidden_layers, layers_to_issue,
 	    model->hidden_size, model->head_dim, model->num_key_value_heads, model->intermediate_size,
 	    seq->context_cap, kEmptyManifest, seq->host_kv_mirror.data(), seq->host_kv_mirror.size(),
 	    seq->kv_buf.Get(), &seq->kv_needs_resume_barrier, &inflight, model->weights_buf.Get(),
 	    model->rope_cos_buf.Get(), model->rope_sin_buf.Get(), model->has_rope_tables,
-	    model->rope_cos_elem_count, model->rope_sin_elem_count, adapter_bridge_ptr);
+	    model->rope_cos_elem_count, model->rope_sin_elem_count, adapter_bridge_ptr,
+	    /*q_width=*/static_cast<size_t>(model->num_attention_heads) * model->head_dim);
 
 	if (!inflight) {
 		// Rejected before submission (a guard, or an exception) -- seq/host state untouched,
@@ -2644,6 +2651,9 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 	// short of `admit_count` is guaranteed to resolve to `SSLM_DEVICE_LOST` through that EXISTING
 	// logic, with no new status-mapping code duplicated at either call site.
 	try {
+		// T-2432 (Track A step 2/3): q_width threaded explicitly -- this is the real GPU-side
+		// prefill submission path, the direct analog of sslm_abi.cpp's own
+		// RunLayerLoopChunkBatched call site.
 		const superslm::SslmForwardStatus submit_status =
 		    superslm_gpu::SubmitChunkToFullDepthForG5Bridge(
 		        seq->live_state, /*layers=*/nullptr, model->num_hidden_layers, model->hidden_size,
@@ -2652,7 +2662,8 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		        seq->host_kv_mirror.size(), chunk_embedding_bytes, admit_count, seq->kv_buf.Get(),
 		        &seq->kv_needs_resume_barrier, model->weights_buf.Get(), model->rope_cos_buf.Get(),
 		        model->rope_sin_buf.Get(), model->has_rope_tables, model->rope_cos_elem_count,
-		        model->rope_sin_elem_count, adapter_bridge_ptr, &inflight);
+		        model->rope_sin_elem_count, adapter_bridge_ptr, &inflight,
+		        /*q_width=*/static_cast<size_t>(model->num_attention_heads) * model->head_dim);
 		if (submit_status == superslm::SslmForwardStatus::Ok && inflight) {
 			// `SubmitChunkToFullDepthForG5Bridge` returns the FINAL (sub-)chunk's own inflight token
 			// genuinely unfenced (its own header comment: "the caller's own async contract... only

@@ -19,6 +19,10 @@ cbuffer RootConstants : register(b0)
     // this dispatch's own lane split -- the host computes the group count from the SAME
     // value, so the two cannot drift.
     uint g_num_hidden_layers; uint g_gemm_lanes;
+    // T-2432 (Track A step 9, design §2.5 GS-15/§6 Track A step 9, D-SLM5248): q_proj's real
+    // output width (num_attention_heads * head_dim) -- this GEMM's own out_channels bound,
+    // independent of g_hidden_size once R1 no longer holds.
+    uint g_q_width;
 };
 
 ByteAddressBuffer   LayerWeights  : register(t0);
@@ -34,7 +38,9 @@ RWByteAddressBuffer WorkScratch   : register(u3);
 void main(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 {
     int hidden_size = (int)g_hidden_size;
-    int out_channels = hidden_size;
+    // SSLM-GEOMETRY-SITE: GS-15
+    // T-2432 (Track A step 9): out_channels is q_proj's real output width, not hidden_size.
+    int out_channels = (int)g_q_width;
     uint sticky_off = SeqStickyOffGpu(hidden_size);
     int64_t sticky = SeqState.Load<int64_t>(sticky_off);
     if (sticky != kTagOk) return;

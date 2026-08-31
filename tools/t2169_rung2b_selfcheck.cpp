@@ -64,7 +64,11 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
     bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
     ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
     bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
-    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight);
+    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight,
+    // T-2432 (Track A step 2/3): q_width, matching the real definition's own new trailing
+    // parameter (superslm_gpu.cpp) -- this harness's own square Qwen2.5-1.5B fixture needs no
+    // explicit value, so this forward declaration's default keeps its own call site unchanged.
+    size_t q_width = 0);
 }  // namespace superslm_gpu
 
 namespace {

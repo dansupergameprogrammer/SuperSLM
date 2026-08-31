@@ -15,6 +15,10 @@ cbuffer RootConstants : register(b0)
     // this dispatch's own lane split -- the host computes the group count from the SAME
     // value, so the two cannot drift.
     uint g_num_hidden_layers; uint g_gemm_lanes;
+    // T-2432 (Track A step 9, design §2.5 GS-17/§6 Track A step 9, D-SLM5248): o_proj's real
+    // INPUT width (num_attention_heads * head_dim) -- this GEMM's own in_channels bound.
+    // o_proj's out_channels stays hidden_size (GS-09, confirmed correct, D-SLM5249).
+    uint g_q_width;
 };
 
 ByteAddressBuffer   LayerWeights   : register(t0);
@@ -48,7 +52,11 @@ void main(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
     uint off_mult = layer_base + Layout.Load<uint>(27 * 4);
     uint off_shift = layer_base + Layout.Load<uint>(28 * 4);
 
+    // SSLM-GEOMETRY-SITE: GS-17
+    // T-2432 (Track A step 9): the GEMM's own IN-width is o_proj's real input width
+    // (q_width), not hidden_size; out_channels (hidden_size) is already correct and NOT
+    // touched.
     GemmCoalescedGpu(gtid.x, gid.x, LayerScratch, ctx_codes_off, LayerWeights, off_weight, LayerWeights,
-                      off_id, LayerWeights, off_mult, LayerWeights, off_shift, hidden_size,
+                      off_id, LayerWeights, off_mult, LayerWeights, off_shift, (int)g_q_width,
                       out_channels, WorkScratch, 0u, g_gemm_lanes);
 }

@@ -1,0 +1,30 @@
+{
+  "_comment": "T-2432 (design Sec2.5): one entry per geometry site the four grounding/temper/audit/fold passes found. `family` is R1 (re-derives hidden_size==num_attention_heads*head_dim), QOW (uses hidden_size as a stand-in for q_proj's/o_proj's true width), or KLP (assumes one K-landing path). `status` is fixed, confirmed-correct, rejected (a defined convert/load-time rejection, not a code fix), or not-yet-built (a Track this build did not own). GS-01..GS-04, GS-06..GS-19 are Track A's own scope (T-2432); GS-05 is Track B's (D-SLM5243), out of this ticket's scope and not yet built.",
+  "sites": [
+    {"id": "GS-01", "family": "R1", "file": "src/proof_manifest.cpp", "function": "CheckConfigGeometry", "status": "fixed"},
+    {"id": "GS-02", "family": "R1", "file": "src/forward/forward_sites.cpp", "function": "RunLayerLoopImpl", "status": "fixed"},
+    {"id": "GS-03", "family": "R1", "file": "src/forward/forward_sites.cpp", "function": "RunLayerLoopChunkBatched", "status": "fixed"},
+    {"id": "GS-04", "family": "R1", "file": "src/gpu/superslm_gpu.cpp", "function": "PrepareGpuLayerLoopChunkOpenState", "status": "fixed"},
+    {"id": "GS-05", "family": "KLP", "file": "src/forward/forward_sites.cpp", "function": "RopeApplyPairWide (Option-G fused K-landing)", "status": "not-yet-built", "note": "Track B's own scope (D-SLM5243); a defined convert/load-time rejection, not built by T-2432."},
+    {"id": "GS-06", "family": "R1", "file": "tools/sslm_convert_validate.py", "function": "check_config_geometry", "status": "fixed"},
+    {"id": "GS-07", "family": "QOW", "file": "src/gpu/superslm_gpu.cpp", "function": "ComputeLayerLayout", "status": "fixed"},
+    {"id": "GS-08", "family": "QOW", "file": "include/superslm/layer_marshal.h", "function": "MarshalLayer (q_proj)", "status": "fixed"},
+    {"id": "GS-09", "family": "QOW", "file": "include/superslm/layer_marshal.h", "function": "MarshalLayer (o_proj)", "status": "confirmed-correct"},
+    {"id": "GS-10", "family": "QOW", "file": "src/gpu/superslm_gpu.cpp", "function": "ComputeLayerLayout / PackLayerWeightsBytes (q_weight)", "status": "fixed"},
+    {"id": "GS-11", "family": "QOW", "file": "src/gpu/superslm_gpu.cpp", "function": "ComputeLayerLayout / PackLayerWeightsBytes (o_weight)", "status": "fixed"},
+    {"id": "GS-12", "family": "QOW", "file": "src/forward/forward_sites.cpp", "function": "RunLayerLoopImpl / RunLayerLoopChunkBatched (q_codes/q_rot/k_rot/ctx_wide/ctx_codes)", "status": "fixed"},
+    {"id": "GS-13", "family": "R1", "file": "src/gpu/superslm_gpu.cpp", "function": "PrepareGpuLayerLoopChunkOpenState (NQH re-derivation)", "status": "fixed"},
+    {"id": "GS-14", "family": "QOW", "file": "src/gpu/superslm_gpu.cpp", "function": "ComputeGpuGemmSiteGroupPlan (QProj)", "status": "fixed"},
+    {"id": "GS-15", "family": "QOW", "file": "src/gpu/shaders/q_proj_gemm_site.hlsl", "function": "main (out_channels)", "status": "fixed"},
+    {"id": "GS-16", "family": "QOW", "file": "src/gpu/shaders/q_proj_site.hlsl", "function": "main (bias/requant striding)", "status": "fixed"},
+    {"id": "GS-17", "family": "QOW", "file": "src/gpu/shaders/o_proj_gemm_site.hlsl", "function": "main (GEMM in-width)", "status": "fixed"},
+    {"id": "GS-18", "family": "QOW", "file": "src/gpu/superslm_gpu.cpp", "function": "ComputeScratchLayout (q_codes/q_rot/ctx_codes)", "status": "fixed", "note": "New site found by T-2432's own build -- not named in the design's fold-round-1 census. The GPU-side LayerScratch counterpart of GS-12."},
+    {"id": "GS-19", "family": "QOW", "file": "src/gpu/shaders/ctx_fold_site.hlsl", "function": "main (RequantChainCheckedFullGpuP width)", "status": "fixed", "note": "New site found by T-2432's own build -- not named in the design's fold-round-1 census. The GPU-side counterpart of GS-12's ctx_wide funnel call."},
+    {"id": "GS-20", "family": "QOW", "file": "src/gpu/superslm_gpu.cpp", "function": "PrepareGpuLayerLoopChunkOpenState (WORK_WIDE_A/B max_width)", "status": "fixed", "note": "New site found by T-2432's own build -- not named in the design's fold-round-1 census. The shared GEMM-accumulator scratch every GemmCoalescedGpu call streams through, including q_proj's own out_channels-wide accumulator."},
+    {"id": "GS-21", "family": "QOW", "file": "src/gpu/shaders/down_proj_gemm_site.hlsl", "function": "main (out_channels)", "status": "confirmed-correct", "note": "down_proj's own output width is genuinely hidden_size; not touched by Q/O width decoupling. Registered by T-2432's own part-2 pattern sweep, not the design's fold-round-1 text."},
+    {"id": "GS-22", "family": "QOW", "file": "src/gpu/shaders/down_proj_site.hlsl", "function": "main (out_channels)", "status": "confirmed-correct", "note": "Same as GS-21 (requant-only sibling shader)."},
+    {"id": "GS-23", "family": "QOW", "file": "src/gpu/shaders/gate_proj_gemm_site.hlsl", "function": "main (GemmCoalescedGpu in/out width)", "status": "confirmed-correct", "note": "gate_proj's own in-width (hidden_size) and out-width (intermediate_size) are both genuinely unrelated to Q/O width decoupling. Registered by T-2432's own part-2 pattern sweep."},
+    {"id": "GS-24", "family": "QOW", "file": "src/gpu/shaders/up_proj_gemm_site.hlsl", "function": "main (GemmCoalescedGpu in/out width)", "status": "confirmed-correct", "note": "Same as GS-23 (up_proj's own sibling GEMM)."},
+    {"id": "GS-25", "family": "R1", "file": "src/gpu/shaders/context_accumulate_site.hlsl", "function": "main (items)", "status": "confirmed-correct", "note": "This IS q_width's own correct computation (num_attention_heads * head_dim), not a stand-in for it. Registered by T-2432's own part-2 pattern sweep."}
+  ]
+}
