@@ -255,15 +255,25 @@ def _dedup_sort(hits: list[dict]) -> list[dict]:
     declaration) -- and each instantiation's `type` field carries the
     substituted `Kind`, so a key that includes `type` stops deduplicating for
     exactly a template member and grows by one entry per additional `Kind`
-    enumerator with no soundness reason to. `(header, line, name)` is what
-    both the pinned oracle and every consumer of this module's output already
-    treat as the population's own identity (`test_membership_check_
-    population.py`'s `_keyset` strips to exactly this triple); dropping
-    `type` from the dedup key makes the LIST length this function returns
-    match that identity, so `python tests/ci/derive_bad_alloc_membership.py`
-    -- the regeneration command the oracle file's own header names -- prints
-    the population's true size instead of counting every template
-    instantiation."""
+    enumerator with no soundness reason to. `(header, line, name)` is this
+    function's own dedup key -- it is what makes each of model.h's three
+    distinct `Parse` overloads survive dedup as three separate members rather
+    than collapsing to one, which is exactly the property the oracle's own
+    `(header, name)` MULTISET (see `format_oracle_lines`, below) depends on to
+    detect a fourth same-named member joining, the way T-2125's real one did;
+    dropping `type` from the dedup key (not `line`) makes the LIST length this
+    function returns match the population's true size instead of counting
+    every template instantiation.
+
+    CORRECTED (T-2458, Claude/Poirot/5c82f92-t2453-ask5-tracka-confirmation.md,
+    Observation 2 / Critical 1's structural remedy, D-SLM5528): `(header, line,
+    name)` is no longer what the ORACLE FILE or its consumers treat as the
+    population's identity, though it stays this function's own dedup key (see
+    directly above): `tests/ci/bad_alloc_membership_expected.txt` and
+    `test_membership_check_population.py` project this function's output down
+    to `(header, name)`, counted with multiplicity, because the line component
+    of that triple re-derived seven times across this population's history and
+    never once caught a membership change the name alone did not."""
     seen = set()
     uniq = []
     for x in hits:
@@ -388,6 +398,28 @@ def format_population(members: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def format_oracle_lines(members: list[dict]) -> str:
+    """T-2458 (Claude/Poirot/5c82f92-t2453-ask5-tracka-confirmation.md, Critical 1 +
+    Observation 2, D-SLM5528's structural recommendation): the oracle file
+    (`tests/ci/bad_alloc_membership_expected.txt`) is keyed on `header:name` alone --
+    line dropped, per member -- because the line column has re-derived stale seven
+    times (T-2125's real 19->20 growth aside) across this population's history and
+    never once discriminated a membership change the name alone did not already
+    catch. Duplicates (a header carrying more than one member of the same name --
+    e.g. `model.h`'s three `Parse` overloads) are repeated once per member, not
+    collapsed: the oracle's own identity is a MULTISET over (header, name), not a
+    SET, specifically because a SET would have silently absorbed T-2125's own
+    twentieth member (`model.h:Parse`, a fourth same-named entry) as "already
+    present." One line per member, sorted by (header, name), ties broken by
+    original declaration order -- copy this function's own output verbatim into
+    the oracle file below its header comment."""
+    ordered = sorted(members, key=lambda m: (m["header"], m["name"], m["line"] or 0))
+    return "\n".join("%s:%s" % (m["header"], m["name"]) for m in ordered)
+
+
 if __name__ == "__main__":
     pop = derive_population_per_header()
-    print(format_population(pop))
+    if "--oracle" in sys.argv[1:]:
+        print(format_oracle_lines(pop))
+    else:
+        print(format_population(pop))

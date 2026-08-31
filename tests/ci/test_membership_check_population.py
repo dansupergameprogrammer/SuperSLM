@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from collections import Counter
 
 import pytest
 
@@ -48,21 +49,37 @@ requires_clang = pytest.mark.skipif(
 )
 
 
-def _load_pinned_oracle() -> set[tuple[str, int, str]]:
+def _load_pinned_oracle() -> Counter[tuple[str, str]]:
+    """T-2458 (Claude/Poirot/5c82f92-t2453-ask5-tracka-confirmation.md,
+    Critical 1 + Observation 2, D-SLM5528): the oracle file is keyed on
+    `header:name`, one line per member, WITHOUT a line column -- the line
+    component re-derived stale eight times across this population's history
+    (see the oracle file's own header) and never once caught a membership
+    change the name alone did not. Returned as a Counter, not a set: the
+    oracle's identity is a MULTISET over (header, name), because a plain set
+    would silently absorb a same-named member joining a header that already
+    has one (T-2125's real `model.h:Parse` fourth-member growth, verified
+    against git history to be exactly this shape -- see the oracle file's own
+    header)."""
     path = os.path.join(dbam._THIS_DIR, "bad_alloc_membership_expected.txt")
-    entries: set[tuple[str, int, str]] = set()
+    entries: Counter[tuple[str, str]] = Counter()
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            header, line_no, name = line.split(":", 2)
-            entries.add((header, int(line_no), name))
+            header, name = line.split(":", 1)
+            entries[(header, name)] += 1
     return entries
 
 
-def _keyset(pop: list[dict]) -> set[tuple[str, int, str]]:
-    return {(m["header"], m["line"], m["name"]) for m in pop}
+def _multiset(pop: list[dict]) -> Counter[tuple[str, str]]:
+    """Projects a derived population down to the (header, name) MULTISET the
+    oracle is keyed on (see `_load_pinned_oracle`) -- line dropped, counted
+    with multiplicity so a same-named member joining or leaving a header is
+    still caught even where that header already carries members of that
+    name."""
+    return Counter((m["header"], m["name"]) for m in pop)
 
 
 @requires_clang
@@ -86,10 +103,11 @@ def test_pinned_oracle_has_twenty_sites():
     tracks the mechanically-derived population, which is the number this
     gate and the oracle file must agree on."""
     oracle = _load_pinned_oracle()
-    assert len(oracle) == 20, (
+    total = sum(oracle.values())
+    assert total == 20, (
         f"the pinned oracle should carry the twenty sites the corrected rule "
         f"derives as of T-2125 (SslmAmplifyingFoldScaleView<Kind>::Parse joining "
-        f"proof_manifest.h's own JsonEscape-era nineteen); has {len(oracle)} -- "
+        f"proof_manifest.h's own JsonEscape-era nineteen); has {total} -- "
         f"regenerate tests/ci/bad_alloc_membership_expected.txt only after "
         f"confirming the design's own table changed, never silently"
     )
@@ -100,9 +118,16 @@ def test_per_header_scan_matches_pinned_oracle():
     """The regression pin: if a header changes in a way that moves the
     membership population, this fails loudly and the oracle file must be
     regenerated deliberately (never silently) -- the same discipline
-    check_provenance.py applies to the vendored reference's hash."""
+    check_provenance.py applies to the vendored reference's hash.
+
+    T-2458 (D-SLM5528): compares MULTISETS over (header, name), not sets --
+    line dropped from both sides. Counter subtraction already gives only the
+    positive-count differences, so `missing`/`extra` below report exactly the
+    members (and, for a duplicate name, the excess/deficit COUNT) that moved,
+    the same diagnostic shape the prior (header, line, name) set comparison
+    gave, minus the line noise that never once discriminated a real change."""
     oracle = _load_pinned_oracle()
-    derived = _keyset(dbam.derive_population_per_header())
+    derived = _multiset(dbam.derive_population_per_header())
     missing = oracle - derived
     extra = derived - oracle
     assert not missing and not extra, (
@@ -116,23 +141,34 @@ def test_per_header_scan_matches_pinned_oracle():
 @requires_clang
 def test_derived_population_list_length_matches_the_oracle():
     """T-2125 fix round (Poirot 242dc12-t2125-ci-drift-review.md, Significant
-    4): `test_per_header_scan_matches_pinned_oracle` above compares KEYSETS --
-    (header, line, name) triples -- so it stayed green even while
-    `_dedup_sort`'s old key silently stopped deduplicating a class template's
-    own member: `derive_population_per_header()` returned 22 entries for this
-    20-site population (one row per `ClassTemplateSpecializationDecl` Clang
-    emits for `SslmAmplifyingFoldScaleView<Kind>::Parse`'s two real
-    instantiations plus the primary template's own declaration), and nothing
-    here compared the LIST's own length against the oracle it is regenerated
-    from. `python tests/ci/derive_bad_alloc_membership.py` is the command the
-    oracle file's own header names as its regeneration command; this pins
-    that the number that command prints is the population's true size, not
-    the instantiation count of whichever member happens to be a template."""
+    4): at the time, `test_per_header_scan_matches_pinned_oracle` above
+    compared KEYSETS -- (header, line, name) triples -- so it stayed green
+    even while `_dedup_sort`'s old key silently stopped deduplicating a class
+    template's own member: `derive_population_per_header()` returned 22
+    entries for this 20-site population (one row per
+    `ClassTemplateSpecializationDecl` Clang emits for
+    `SslmAmplifyingFoldScaleView<Kind>::Parse`'s two real instantiations plus
+    the primary template's own declaration), and nothing here compared the
+    LIST's own length against the oracle it is regenerated from. (T-2458,
+    D-SLM5528: `test_per_header_scan_matches_pinned_oracle` now compares a
+    (header, name) MULTISET rather than a (header, line, name) SET, which
+    would itself have caught this specific historical bug -- three identical
+    `(header, name)` duplicates raise the count, where three identical
+    `(header, line, name)` triples collapse to one set element and do not.
+    This test still guards the layer beneath that projection: a correctness
+    property of `_dedup_sort`'s own key, independent of which final form the
+    oracle comparison takes.) `python tests/ci/derive_bad_alloc_membership.py
+    --oracle` is the command
+    the oracle file's own header names as its regeneration command; this pins
+    that the number that command's LIST has is the population's true size,
+    not the instantiation count of whichever member happens to be a
+    template."""
     oracle = _load_pinned_oracle()
+    total = sum(oracle.values())
     derived = dbam.derive_population_per_header()
-    assert len(derived) == len(oracle), (
+    assert len(derived) == total, (
         f"derive_population_per_header() returned {len(derived)} entries for "
-        f"a {len(oracle)}-site pinned oracle -- the list is no longer the same "
+        f"a {total}-member pinned oracle -- the list is no longer the same "
         f"size as its own deduplicated keyset, which means _dedup_sort's key "
         f"is admitting more than one row per (header, line, name)"
     )
@@ -146,9 +182,9 @@ def test_scan_strategy_independence_all_three_derive_identical_population():
     12 -- three different answers to "run the predicate over the nine
     headers"). The corrected rule's defining claim is that this no longer
     happens; this test is that claim, executed, not asserted."""
-    per_header = _keyset(dbam.derive_population_per_header())
-    single_tu = _keyset(dbam.derive_population_single_tu())
-    odr_tu = _keyset(dbam.derive_population_single_tu(force_odr_use_artifact_moves=True))
+    per_header = _multiset(dbam.derive_population_per_header())
+    single_tu = _multiset(dbam.derive_population_single_tu())
+    odr_tu = _multiset(dbam.derive_population_single_tu(force_odr_use_artifact_moves=True))
 
     assert per_header == single_tu, (
         f"per-header vs single-all-headers-TU diverge: "
@@ -227,14 +263,14 @@ def test_vitality_injected_twenty_first_function_is_flagged(tmp_path):
     # Every other site must be unaffected -- the injected function adds
     # exactly one member, it does not perturb the other twenty.
     oracle = _load_pinned_oracle()
-    derived_without_probe = {
-        (m["header"], m["line"], m["name"]) for m in population_with_injection if m["name"] != "Probe"
-    }
+    derived_without_probe = Counter(
+        (m["header"], m["name"]) for m in population_with_injection if m["name"] != "Probe"
+    )
     assert derived_without_probe == oracle
 
     # Restore and confirm the population returns to exactly the pinned twenty.
     artifact_h.write_text(original, encoding="utf-8")
-    population_restored = _keyset(dbam.derive_population_from_headers_dir(str(tmp_path)))
+    population_restored = _multiset(dbam.derive_population_from_headers_dir(str(tmp_path)))
     assert population_restored == oracle
 
 

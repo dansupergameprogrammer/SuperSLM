@@ -1,54 +1,71 @@
 # Pinned oracle: the "throws only std::bad_alloc" contract membership
 # population, independently derived by tests/ci/derive_bad_alloc_membership.py
-# (S-HARDEN-7, design Sec3.1, T-411). One site per line: header:line:name
-# Regenerate with: python tests/ci/derive_bad_alloc_membership.py
+# (S-HARDEN-7, design Sec3.1, T-411). One member per line: header:name.
+# Regenerate with: python tests/ci/derive_bad_alloc_membership.py --oracle
+# (SUPERSLM_CLANGXX="C:\Program Files\LLVM\bin\clang++.exe" if not on PATH),
+# and paste its output verbatim below this comment block.
 #
-# 20 sites (T-2125, up from 19): artifact.h gained a CalibrationBand
-# section-type enumerator and model.h gained SslmCalibrationBandVerdict/
-# ClassifyCalibrationBand/SslmDecodeStepStatus, all noexcept or non-function
-# declarations, so none joins this population -- only line numbers moved,
-# regenerated against the real headers on disk rather than hand-adjusted.
-# T-2125 (D-SLM3446): SslmAmplifyingFoldScaleView<Kind>::Parse (model.h) --
+# T-2458 (Claude/Poirot/5c82f92-t2453-ask5-tracka-confirmation.md, Critical 1
+# + Observation 2, D-SLM5528): the line column is DROPPED as of this change.
+# Independently derived from `git log --follow` on this file rather than
+# taken from the notes below (which undercount and, for T-2125, miscount):
+# eleven total commits touch this file end to end, `5043678` (creation, 18
+# members) through this one. Of the ten after creation, TWO are genuine
+# membership growth -- `8ce6aa7` added `proof_manifest.h:JsonEscape`
+# (eighteen to nineteen) and `242dc12` (T-2125) added a FOURTH
+# `model.h:Parse` (the population's only same-name duplicate, nineteen to
+# twenty) -- and the other EIGHT are pure line shifts with the member set
+# byte-for-byte unchanged: `480d610`/`d7d9442` (the initial S-HARDEN-7/8
+# build-out, before either growth), `b8ecff5` (S3.7, between the two
+# growths), `70abbed` (T-2152), `2809d73` (the 2026-08-18 banner scrub),
+# `0ef481d` (the 2026-08-21 release, matching the prior note below's
+# "artifact declarations moved four members"), `e3bc0cf` (T-2445), and this
+# commit (T-2458, regenerating after T-2450's `5c82f92` comment insert). Not
+# one of those eight pure-line-shift regenerations ever caught a membership
+# change the name alone did not.
+#
+# This oracle's identity is now the (header, name) MULTISET, not a set: a
+# plain set would have silently absorbed T-2125's own fourth `Parse` as
+# "already present" (three `model.h:Parse` entries already existed), which is
+# why `Parse` appears three times below rather than once -- duplicates are
+# repeated per member, never collapsed. Confirmed against the
+# independently-derived history above: every one of the eight pure-line-shift
+# commits is a byte-for-byte no-op under this format (re-verified by
+# re-deriving each commit's own `header:line:name` triples and projecting
+# both sides down to `(header, name)` counts); both real-growth commits still
+# change it, including under a MULTISET rather than a SET comparison -- the
+# distinction the T-2125 case exists to make. See
+# `test_membership_check_population.py`'s `_load_pinned_oracle`/`_multiset`
+# and `derive_bad_alloc_membership.py`'s `format_oracle_lines` for the
+# comparison this file is read against.
+#
+# Prior history (line-column era, preserved for provenance): 20 sites as of
+# T-2125 (D-SLM3446) -- SslmAmplifyingFoldScaleView<Kind>::Parse (model.h),
 # the T-2021/T-2029 B0b runtime-additive-LoRA adapter view's own parse entry
-# point -- is a genuinely new, 20th member (found unwrapped by this suite's
-# own regression pin; closed by a rename-and-wrap fix in the same change,
-# src/model.h/model.cpp). Clang attributes all instantiations of a template
-# member to its one declaration site, so this member's line (387) appears
-# once here regardless of how many Kind values instantiate it.
-#
-# T-2152 (outside strike item 3c): still 20 sites, same 20 names -- only line
-# numbers moved (artifact.h/model.h -2 lines each, proof_manifest.h -12
-# lines), regenerated against the real headers on disk (`python tests/ci/
-# derive_bad_alloc_membership.py`, SUPERSLM_CLANGXX="C:\Program Files\LLVM\
-# bin\clang++.exe") rather than hand-adjusted, same discipline the T-2125
-# note above already names.
-# Line numbers re-derived 2026-08-18 after the T-2152 installed-header banner scrub
-# shortened every header's preamble (same 20-member set, names and files unchanged).
-# Re-derived 2026-08-21 after the 1.2 artifact declarations moved four existing
-# members (same 20-member set, names and files unchanged).
-# Re-derived 2026-08-31 (T-2445, Claude/Poirot/ddbc57a-t2443-ask5-tracka-confirmation.md,
-# Critical 1): T-2441 Minor 7 added a 14-line enum comment plus two enumerators to
-# proof_manifest.h ahead of the four members below, shifting each by +14 (same 20-member
-# set, names and files unchanged) -- regenerated against the real headers on disk
-# (SUPERSLM_CLANGXX="C:\Program Files\LLVM\bin\clang++.exe", clang 18.1.8, the CI pin)
-# rather than hand-adjusted, same discipline every prior re-derivation above used.
-artifact.h:200:OpenFromMemory
-artifact.h:206:OpenFromFile
-artifact.h:225:FingerprintHex
-model.h:278:Parse
-model.h:328:Parse
-model.h:384:Parse
-model.h:458:ParseConfig
-model.h:481:ParseSigmoidLut
-model.h:743:Load
-proof_manifest.h:40:JsonEscape
-proof_manifest.h:103:ComputeTensorEvidence
-proof_manifest.h:119:ComputeWeightScaleEvidence
-proof_manifest.h:126:HashSectionHex
-proof_manifest.h:149:BuildProofManifestJson
-sha256.h:20:Update
-sha256.h:41:Sha256Hash
-sha256.h:45:ToHex
-tokenizer.h:36:Open
-tokenizer.h:46:Encode
-tokenizer.h:51:Decode
+# point, found unwrapped by this suite's own regression pin and closed by a
+# rename-and-wrap fix in the same change (src/model.h/model.cpp). T-2152,
+# 2026-08-18, 2026-08-21, and T-2445 (Claude/Poirot/ddbc57a-t2443-ask5-tracka-
+# confirmation.md, Critical 1) each re-derived line numbers only, same
+# 20-member set, names and files unchanged, per that era's own regeneration
+# discipline (SUPERSLM_CLANGXX="C:\Program Files\LLVM\bin\clang++.exe", clang
+# 18.1.8, the CI pin) -- superseded by this format, not restated per-member.
+artifact.h:FingerprintHex
+artifact.h:OpenFromFile
+artifact.h:OpenFromMemory
+model.h:Load
+model.h:Parse
+model.h:Parse
+model.h:Parse
+model.h:ParseConfig
+model.h:ParseSigmoidLut
+proof_manifest.h:BuildProofManifestJson
+proof_manifest.h:ComputeTensorEvidence
+proof_manifest.h:ComputeWeightScaleEvidence
+proof_manifest.h:HashSectionHex
+proof_manifest.h:JsonEscape
+sha256.h:Sha256Hash
+sha256.h:ToHex
+sha256.h:Update
+tokenizer.h:Decode
+tokenizer.h:Encode
+tokenizer.h:Open
