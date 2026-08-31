@@ -1307,10 +1307,19 @@ SslmModelStatus ValidateConfigGeometryJoin(const SslmModelConfig& config, std::s
 		return SslmModelStatus::ConfigGeometryHiddenSizeMismatch;
 	}
 	// T-2441 (Minor 7, D-SLM5440; fix D-SLM5452): the identical unreachability note above applies to these
-	// two new zero-boundary statuses -- ParseConfigImpl's BadConfigDim rejects any zero
-	// dimension, head_dim/hidden_size included, before ValidateSectionValues runs, so this
-	// arm is reached only by a direct, off-Load caller (BuildProofManifestJson,
-	// tools/sslm_convert_validate.py's own Python mirror). Mapped to the SAME
+	// two new zero-boundary statuses through THIS join -- ParseConfigImpl's BadConfigDim rejects
+	// any zero dimension, head_dim/hidden_size included, before ValidateSectionValues runs, so
+	// this arm is reached only by a direct, off-Load caller of CheckConfigGeometry itself (a unit
+	// test, or a future caller built to skip ParseConfig on purpose).
+	// CORRECTED (T-2450, T-2446 commissioning Structural finding F3, D-SLM5503-D-SLM5505): this
+	// comment previously named BuildProofManifestJson, alongside tools/sslm_convert_validate.py's
+	// Python mirror, as such an off-Load caller. That is false for BuildProofManifestJson: read and
+	// verified by execution, BuildProofManifestJsonImpl (src/proof_manifest.cpp) re-parses its
+	// config via the SAME ParseConfig/BadConfigDim gate as this join, so it can never present
+	// CheckConfigGeometry a zero dimension either -- a zero-dimension artifact makes it emit
+	// `"config_geometry": null`, not a Zero* status. Only the Python mirror genuinely bypasses an
+	// equivalent gate and reaches ZeroHeadDim/ZeroHiddenSize for real (full disposition in
+	// include/superslm/proof_manifest.h's own corrected comment). Mapped to the SAME
 	// SslmModelStatus as every other geometry rejection on this join -- no new C-ABI status
 	// value, since ConfigGeometryHiddenSizeMismatch already carries a diagnostic string, not
 	// a fixed message, and the two Zero* statuses immediately above already established this

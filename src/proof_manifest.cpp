@@ -109,11 +109,19 @@ ConfigGeometryResult CheckConfigGeometry(uint32_t hidden_size, uint32_t num_atte
 	}
 	// T-2441 (Minor 7, D-SLM5440; fix D-SLM5452): head_dim/hidden_size zero-boundary, closed at the SAME
 	// point in the ordering as the two zero checks immediately above -- R1's removal (below)
-	// left these two direct-call-surface-only cases (BuildProofManifestJson,
-	// tools/sslm_convert_validate.py; unreachable through SslmModel::Load, whose own
-	// ParseConfigImpl rejects any zero dimension first) silently returning Ok. Executed and
+	// left this pure function silently returning Ok on a zero head_dim/hidden_size. Executed and
 	// confirmed before this fix: CheckConfigGeometry(hidden_size=0, ...) and
 	// CheckConfigGeometry(..., head_dim=0) both returned Ok.
+	// CORRECTED (T-2450, T-2446 commissioning Structural finding F3, D-SLM5503-D-SLM5505): this
+	// comment used to call these "direct-call-surface-only cases (BuildProofManifestJson,
+	// tools/sslm_convert_validate.py)... unreachable through SslmModel::Load", implying
+	// BuildProofManifestJson reaches them by a different route. It does not: BuildProofManifestJsonImpl
+	// re-parses its config via this same file's ParseConfig/ParseConfigImpl, whose BadConfigDim check
+	// rejects any zero dimension before this function ever runs, exactly like SslmModel::Load does.
+	// The two branches below are unreachable dead code from every real C++ caller of this function
+	// (ValidateConfigGeometryJoin/SslmModel::Load, BuildProofManifestJsonImpl, sslm_verify.cpp) and
+	// are kept as defense-in-depth (additive-only, D-SLM3526) -- only tools/sslm_convert_validate.py's
+	// Python mirror genuinely bypasses an equivalent gate and can reach the matching statuses.
 	if (head_dim == 0) {
 		r.status = ConfigGeometryStatus::ZeroHeadDim;
 		r.diagnostic = "head_dim == 0";

@@ -58,14 +58,27 @@ enum class ConfigGeometryStatus {
 	                            // SslmModelStatus target for the two zero-boundary statuses below
 	                            // and its own unrecognized-status fallback (src/model.cpp).
 	// T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Minor 7, D-SLM5440; fix recorded as D-SLM5452): R1's removal
-	// left these two zero cases unguarded -- executed and confirmed, CheckConfigGeometry(0, ...)
-	// and CheckConfigGeometry(..., head_dim=0) both returned Ok. Unreachable through
-	// SslmModel::Load (ParseConfigImpl's own BadConfigDim guard rejects any zero dimension
-	// first), matching ZeroAttentionHeads/ZeroKeyValueHeads's own identical unreachability
-	// note above -- these two follow that exact precedent for the two direct-call surfaces
-	// (BuildProofManifestJson, tools/sslm_convert_validate.py) that bypass Load.
-	ZeroHeadDim,             // head_dim == 0 -- checked on the two direct-call surfaces only
-	ZeroHiddenSize,          // hidden_size == 0 -- checked on the two direct-call surfaces only
+	// left these two zero cases unguarded on the pure function -- executed and confirmed at the
+	// time, CheckConfigGeometry(0, ...) and CheckConfigGeometry(..., head_dim=0) both returned Ok.
+	// CORRECTED (T-2450, Mendeleev's T-2446 independent commissioning, Structural finding F3,
+	// D-SLM5503-D-SLM5505): the note this fix originally left here -- naming BuildProofManifestJson
+	// alongside tools/sslm_convert_validate.py as "the two direct-call surfaces... that bypass
+	// Load" -- is false for BuildProofManifestJson on the C++ side. Read and verified by execution:
+	// BuildProofManifestJsonImpl (src/proof_manifest.cpp) re-parses its config via the SAME
+	// ParseConfig/ParseConfigImpl whose BadConfigDim check rejects any zero dimension first; a
+	// zero-dimension artifact makes it emit `"config_geometry": null`, never a Zero* status.
+	// tools/sslm_verify.cpp's own independent cross-check re-parses through the identical gate, and
+	// ValidateConfigGeometryJoin (src/model.cpp, the third and only other real caller, reached only
+	// from SslmModel::Load) is gated the same way upstream. All three of this enum's real C++
+	// callers are therefore gated ahead of CheckConfigGeometry, and these two branches are
+	// UNREACHABLE dead code from any live C++ caller. They are kept, additive-only (D-SLM3526), as
+	// defense-in-depth on the pure function -- correct in isolation, but no test exercises them
+	// through a production C++ path, and none can until a caller is built that genuinely skips
+	// ParseConfig. tools/sslm_convert_validate.py's `check_config_geometry` is the one surface that
+	// genuinely bypasses an equivalent gate and does reach these two for real, on the Python side.
+	ZeroHeadDim,             // head_dim == 0 -- reachable only via the Python mirror above; the C++
+	                         // branch is unreachable dead code, kept as defense-in-depth
+	ZeroHiddenSize,          // hidden_size == 0 -- same disposition as ZeroHeadDim immediately above
 };
 
 const char* ConfigGeometryStatusName(ConfigGeometryStatus s) noexcept;
