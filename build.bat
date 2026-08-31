@@ -1921,6 +1921,18 @@ if not errorlevel 1 (
 		echo check_gemm_site_thread_width_parity.py FAILED -- see output above
 		set ec=1
 	)
+	rem T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Significant 3, D-SLM5437): the
+	rem geometry site census (design Claude/Vitruvius/t2408-superslm-ask5-qwen3-arch-design-
+	rem 2026-08-29.md Sec2.5) is specified as "run as a test-suite cell, not a human step" --
+	rem T-2432's own build committed the registry and the script but wired them into nothing
+	rem local: not this file, not CMakeLists.txt, not .github/workflows/tests.yml (also wired,
+	rem separately, in the same fix round). A tree-wide search for `geometry_site_census`
+	rem before this line found only the script's own self-references.
+	python tools\geometry_site_census.py
+	if errorlevel 1 (
+		echo geometry_site_census.py FAILED -- see output above
+		set ec=1
+	)
 	rem T-2139 (Finding 3 class-closer, Claude/Poirot/3bcbe43-t2139-fourth-confirmation-review.md
 	rem S3): every tools/*.cpp must have a build recipe SOMEWHERE in HEAD (build.bat,
 	rem CMakeLists.txt, tests/*/build_link_red.bat, or tools/build_*.bat) or be an explicitly

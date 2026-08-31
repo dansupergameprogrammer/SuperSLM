@@ -368,6 +368,18 @@ option(SUPERSLM_REQUIRE_CI_CHECK_TOOLS
 	OFF)
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+	# T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Significant 3, D-SLM5437): the
+	# geometry site census (design Claude/Vitruvius/t2408-superslm-ask5-qwen3-arch-design-
+	# 2026-08-29.md Sec2.5) is specified as "run as a test-suite cell, not a human step" --
+	# T-2432's own build committed the registry and the script but wired them into no build
+	# step at all. Registered here unconditionally (not gated behind
+	# SUPERSLM_REQUIRE_CI_CHECK_TOOLS, which is scoped to the two AVX-isolation entries
+	# immediately below by that option's own docstring) -- a bare `cmake -B build` with
+	# Python3 present now also gets this ctest entry for free, matching the design's own
+	# "test-suite cell" framing rather than a job-specific opt-in.
+	add_test(NAME geometry_site_census
+		COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/geometry_site_census.py
+			--repo-root ${CMAKE_SOURCE_DIR})
 	add_test(NAME check_matmul_avx_isolation
 		COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ci/check_matmul_avx_isolation.py
 			--cmakelists ${CMAKE_SOURCE_DIR}/CMakeLists.txt
