@@ -1,22 +1,53 @@
 // T-2432 Track A acceptance harness. Disposable, matching tools/t2039_c5_harness.cpp's own
 // precedent ("Not part of the build.bat/CMake build graph -- compiled and run directly for
-// this session's own verification"). Adapted from t2039_c5_harness.cpp: loads a real .sslm
-// artifact, marshals it, embeds one token, and runs it through every layer on BOTH the CPU
-// oracle (production RunLayerLoop) and the GPU port (RunLayerLoopGpu) from an IDENTICAL
-// initial SequenceLayerState and workspace -- q_width threaded explicitly through both calls
-// (design's own new parameter, forward_sites.h/gpu_port.h).
+// this session's own verification"). Loads a real .sslm artifact, marshals it, embeds one
+// token, and runs it through every layer on BOTH the CPU oracle (production RunLayerLoop) and
+// the GPU port (RunLayerLoopGpuSubmit/Finish) from an IDENTICAL initial SequenceLayerState and
+// workspace -- q_width threaded explicitly through both calls (design's own new parameter,
+// forward_sites.h/gpu_port.h).
 //
-// Two checks beyond t2039_c5_harness.cpp's own template:
-//   1. A trace hook installed on the CPU run's own model view captures the "q_proj.requant"
-//      chain-trace record for token_index 0, layer 0, and asserts its own `codes` span has
-//      length == q_width (not hidden_size) -- a direct, executed proof that Q's own output
-//      row is genuinely widened on the CPU path (Track A steps 2/3, GS-02/GS-12).
-//   2. The existing CPU-vs-GPU bit-identity comparison (hidden_codes, K/V cache, derived
-//      logits) is unchanged from t2039_c5_harness.cpp's own template, but now runs at
-//      non-square geometry -- so it is the GPU-side proof: a truncated-to-hidden_size GPU
-//      q_proj/o_proj computation (GS-14 through GS-17, unfixed) would read stale/garbage
-//      WorkScratch bytes for o_proj's missing input channels and diverge from the CPU's
-//      complete computation, which this comparison would catch as a hidden_codes mismatch.
+// T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Significant 1, D-SLM5434/D-SLM5435):
+// this harness originally ran ONE token at position 0 and compared only the END-TO-END output
+// (final hidden_codes, K/V cache) -- attention's softmax over a width-1 row is probability 1
+// regardless of scores, so the context vector is exactly V independent of Q, making the
+// comparison structurally incapable of detecting any defect in q_proj's own computed values
+// (GS-14 through GS-17). Demonstrated by construction: with GS-14's own fix reverted
+// (`plan.out_channels = hidden_size;` in place of the `q_width`-aware line), the harness
+// reported PASS, byte-identical to the fixed build.
+//
+// TWO remedies were tried, in order, and this file's own history is left in place rather than
+// silently deleted (StandardsDocument.md Sec6.6/Sec7): the record of what did not work is
+// itself worth keeping.
+//
+//   1. A first attempt ran TWO tokens (later two DISTINCT ids, once same-id was found to
+//      leave V identical at both positions -- RoPE rotates Q/K but never V, so a repeated id
+//      makes the weighted-average context insensitive to Q for the identical reason the
+//      width-1 case is). Executed: even with two distinct tokens and a genuinely non-degenerate
+//      softmax, the GS-14 mutant STILL PASSED against a non-GQA (MHA) non-square fixture --
+//      because the mutation leaves the missing channels' Q at exactly ZERO (uncomputed
+//      GPU-resident memory, D3D12 zero-initialized), and a zero Q dot-products to a CONSTANT
+//      zero score against every key regardless of position, so attention degenerates to a
+//      UNIFORM average over however many tokens exist -- "make the softmax non-degenerate" does
+//      not by itself make an all-zero-Q defect detectable, because the defect's OWN failure mode
+//      is a second kind of degeneracy end-to-end propagation cannot see through. (Separately,
+//      the same construction on a GQA fixture (num_key_value_heads < num_attention_heads) DID
+//      diverge, by a small amount -- inconclusive whether that reflects a real, independent GQA-
+//      specific residual or fixture-specific quantization luck; not run down further, named here
+//      as an open question for whoever next touches GQA + non-square + multi-token GPU decoding,
+//      not fixed or claimed by this ticket.)
+//   2. What actually closes it, landed here: a DIRECT readback of the GPU's own intermediate
+//      q_codes LayerScratch region (RunLayerLoopGpuSubmit/Finish's new optional `out_q_codes`
+//      parameter, T-2441), compared byte-for-byte against the CPU's own q_codes (captured via
+//      the trace hook below) -- exactly the design's own first-stated preference (§6 Track A:
+//      "a GPU parity check specifically asserts every one of q_proj's q_width output channels
+//      is populated and correct"). This does not depend on attention, o_proj, or the MLP at
+//      all, so it cannot be defeated by a defect whose downstream effect happens to cancel out.
+//
+// Checks:
+//   1. CPU q_proj.requant trace hook (VALUES, not just width) vs GPU's direct q_codes readback
+//      -- byte-for-byte, the primary defect-detecting check (closes GS-14 through GS-17).
+//   2. The pre-existing end-to-end CPU-vs-GPU bit-identity comparison (hidden_codes, K/V cache)
+//      at width-1 -- unaffected by the above, kept as a broader regression check.
 //
 // Usage: t2432_geometry_harness <model.sslm> [token_id]
 #include <cstdio>
@@ -41,7 +72,7 @@ using superslm_marshal::WidenGainToInt32;
 namespace {
 struct QProjRowCapture {
 	bool captured = false;
-	size_t width = 0;
+	std::vector<int8_t> codes;
 };
 
 void QProjRowHook(const SslmChainTraceRecord* chain, const SslmKvLandingTraceRecord* kv, void* user) {
@@ -53,7 +84,7 @@ void QProjRowHook(const SslmChainTraceRecord* chain, const SslmKvLandingTraceRec
 	if (chain->site.size() >= 14 && chain->site.substr(chain->site.size() - 14) == "q_proj.requant") {
 		if (!cap->captured) {
 			cap->captured = true;
-			cap->width = chain->codes.size();
+			cap->codes.assign(chain->codes.begin(), chain->codes.end());
 		}
 	}
 }
@@ -139,7 +170,7 @@ int main(int argc, char** argv) {
 	                        num_kv_heads * head_dim * 2;
 
 	// --- CPU oracle: production RunLayerLoop, layer_budget = all layers, q_width explicit,
-	//     a trace hook installed to capture q_proj.requant's own output row length. ---
+	//     a trace hook installed to capture q_proj.requant's own output row VALUES. ---
 	std::vector<int8_t> cpu_codes(hidden_size);
 	std::memcpy(cpu_codes.data(), embed_codes.data(), hidden_size);
 	SequenceLayerState cpu_seq;
@@ -162,17 +193,19 @@ int main(int argc, char** argv) {
 	if (!cap.captured) {
 		std::printf("GEOMETRY CHECK: FAILED -- q_proj.requant trace hook never fired\n");
 		geometry_row_ok = false;
-	} else if (cap.width != q_width) {
+	} else if (cap.codes.size() != q_width) {
 		std::printf("GEOMETRY CHECK: FAILED -- q_proj.requant output row width=%zu, want q_width=%zu\n",
-		            cap.width, q_width);
+		            cap.codes.size(), q_width);
 		geometry_row_ok = false;
 	} else {
 		std::printf("GEOMETRY CHECK: PASS -- q_proj.requant output row width=%zu == q_width (CPU, "
 		            "layer 0, token 0)\n",
-		            cap.width);
+		            cap.codes.size());
 	}
 
-	// --- GPU port: RunLayerLoopGpu, IDENTICAL inputs, q_width explicit. ---
+	// --- GPU port: RunLayerLoopGpuSubmit/Finish, IDENTICAL inputs, q_width explicit, PLUS a
+	//     direct readback of the GPU's own q_codes LayerScratch region (T-2441's new optional
+	//     out_q_codes/out_q_codes_capacity parameters). ---
 	std::vector<int8_t> gpu_codes(hidden_size);
 	std::memcpy(gpu_codes.data(), embed_codes.data(), hidden_size);
 	SequenceLayerState gpu_seq;
@@ -180,10 +213,7 @@ int main(int argc, char** argv) {
 	gpu_seq.hidden_scale = embed_scale;
 	gpu_seq.layer_index = 0;
 	std::vector<uint8_t> gpu_ws(kv_bytes, 0);
-	// T-2432: RunLayerLoopGpu's own signature is deliberately UNCHANGED (gpu_port.h's own
-	// "~40 existing callers" contract) -- q_width reaches the real GPU forward path only
-	// through RunLayerLoopGpuSubmit/Finish, the two-call form RunLayerLoopGpu itself is a
-	// thin wrapper over (superslm_gpu.cpp).
+	std::vector<uint8_t> gpu_q_codes(q_width, 0xEE);  // poison value: FAILED-to-fire is visible
 	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
 	const SslmForwardStatus gpu_submit_status = superslm_gpu::RunLayerLoopGpuSubmit(
 	    gpu_seq, layers.data(), num_hidden_layers, /*layer_budget=*/num_hidden_layers, hidden_size,
@@ -192,14 +222,50 @@ int main(int argc, char** argv) {
 	    &inflight, /*external_weights_resident=*/nullptr, /*external_rope_cos_resident=*/nullptr,
 	    /*external_rope_sin_resident=*/nullptr, /*external_rope_has=*/false,
 	    /*external_rope_cos_elems=*/0, /*external_rope_sin_elems=*/0, /*adapter_bridge=*/nullptr,
-	    q_width);
+	    q_width, gpu_q_codes.data(), gpu_q_codes.size());
 	SslmForwardStatus gpu_status = gpu_submit_status;
 	if (inflight) {
 		int32_t ready = 0;
-		gpu_status = superslm_gpu::RunLayerLoopGpuFinish(inflight, gpu_seq, gpu_ws.data(), /*block=*/1, &ready);
+		gpu_status = superslm_gpu::RunLayerLoopGpuFinish(inflight, gpu_seq, gpu_ws.data(), /*block=*/1,
+		                                                  &ready, gpu_q_codes.data());
 	}
 	std::printf("GPU port:   status=%s layer_index=%u\n", SslmForwardStatusName(gpu_status),
 	            gpu_seq.layer_index);
+
+	// --- Primary check (T-2441, Significant 1): CPU's own q_codes (captured by the trace hook)
+	//     vs GPU's own q_codes (read back directly from LayerScratch), byte-for-byte. This is
+	//     the design's own preferred assertion -- direct, not inferred from end-to-end
+	//     propagation -- and it is what actually closes GS-14 through GS-17. ---
+	bool q_codes_match = true;
+	if (cpu_status == SslmForwardStatus::Ok && gpu_status == SslmForwardStatus::Ok) {
+		if (cap.codes.size() != gpu_q_codes.size()) {
+			std::printf("Q_CODES CHECK: FAILED -- CPU row width=%zu != GPU readback width=%zu\n",
+			            cap.codes.size(), gpu_q_codes.size());
+			q_codes_match = false;
+		} else {
+			int first_mismatch = -1;
+			for (size_t i = 0; i < cap.codes.size(); ++i) {
+				if (cap.codes[i] != static_cast<int8_t>(gpu_q_codes[i])) {
+					first_mismatch = static_cast<int>(i);
+					break;
+				}
+			}
+			if (first_mismatch >= 0) {
+				std::printf("Q_CODES CHECK: FAILED -- q_codes[%d]: CPU=%d GPU=%d (first mismatch of "
+				            "%zu elements)\n",
+				            first_mismatch, cap.codes[first_mismatch],
+				            static_cast<int8_t>(gpu_q_codes[first_mismatch]), cap.codes.size());
+				q_codes_match = false;
+			} else {
+				std::printf("Q_CODES CHECK: PASS -- CPU/GPU q_codes bit-identical across all %zu "
+				            "q_width channels (direct LayerScratch readback, layer 0, token 0)\n",
+				            cap.codes.size());
+			}
+		}
+	} else {
+		std::printf("Q_CODES CHECK: SKIPPED -- CPU or GPU status was not Ok\n");
+		q_codes_match = false;
+	}
 
 	bool all_match = true;
 	if (cpu_status != gpu_status) {
@@ -246,9 +312,10 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	if (all_match && geometry_row_ok) {
-		std::printf("RESULT: PASS -- CPU q_proj row genuinely q_width-wide, and CPU/GPU bit-identical "
-		            "across hidden_codes[%zu], hidden_scale, and every K/V row (%u layers).\n",
+	if (all_match && geometry_row_ok && q_codes_match) {
+		std::printf("RESULT: PASS -- CPU q_proj row genuinely q_width-wide, GPU's own direct q_codes "
+		            "readback bit-identical to it, and CPU/GPU bit-identical end-to-end across "
+		            "hidden_codes[%zu], hidden_scale, and every K/V row (%u layers).\n",
 		            hidden_size, num_hidden_layers);
 		return 0;
 	}

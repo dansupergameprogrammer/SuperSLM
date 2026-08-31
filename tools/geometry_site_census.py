@@ -1,7 +1,7 @@
 """geometry_site_census.py -- T-2432 (design Sec2.5): the structural closure for the
 class of geometry-assumption defects four independent passes (grounding, temper, audit,
 fold round 1) each found more instances of. Converts "was every site found" from a reading
-question into a checkable one, in two parts:
+question into a checkable one, in three parts:
 
   1. Registry <-> marker symmetry. Every registry entry with status "fixed" or
      "confirmed-correct" has exactly one `SSLM-GEOMETRY-SITE: GS-NN` marker in the tree;
@@ -13,19 +13,32 @@ question into a checkable one, in two parts:
      across every source class the four grounding passes ranged over (*.cpp, *.h, *.hlsl,
      *.py), and every raw hit not covered by a marker within the same line window fails
      the census.
+  3. Per-site regression check (T-2441, Poirot 327ee29-t2438-ask5-tracka-review.md,
+     Significant 2, D-SLM5436). Parts 1 and 2 both read whether a marker EXISTS; neither
+     reads what the code AT a marked location actually says, so a "fixed" site whose own
+     fix is reverted in place, marker left untouched, satisfies both. For every `fixed`
+     site that carries a `required_tokens` list (the registry's own field, one substring
+     set per site), at least one of those tokens must appear in the scope from that site's
+     own marker to the next marker in the same file (or end of file) -- a revert that
+     restores the pre-fix code removes the token the landed fix itself introduced, so this
+     part fails where parts 1 and 2 do not. Demonstrated by construction: GS-14's fix
+     reverted to `plan.out_channels = hidden_size;`, marker untouched, passes parts 1 and 2
+     and fails here.
 
 Scope (T-2432): this census covers families R1 and QOW, the two families Track A owns.
 Family KLP (the Option-G fused-K-landing assumption, GS-05) is Track B's own scope
 (D-SLM5243) and is not built by this ticket -- GS-05 is registered with status
-"not-yet-built" and is exempt from BOTH parts of this census until Track B's own build
-lands it; running the KLP pattern sweep here would either find nothing (the code does not
-exist yet) or, if Track B's own code already exists unmarked elsewhere, incorrectly
-attribute Track B's own obligation to this census. Track B's own build is expected to
-extend this same registry/script when it lands GS-05, not to duplicate the mechanism.
+"not-yet-built" and is exempt from all three parts of this census until Track B's own
+build lands it; running the KLP pattern sweep here would either find nothing (the code
+does not exist yet) or, if Track B's own code already exists unmarked elsewhere,
+incorrectly attribute Track B's own obligation to this census. Track B's own build is
+expected to extend this same registry/script when it lands GS-05, not to duplicate the
+mechanism.
 
 Usage: python geometry_site_census.py [--repo-root PATH]
-Exit 0 on a clean census (every fixed/confirmed-correct site has exactly one marker, and
-no unmarked pattern hit exists for R1/QOW); exit 1 and a printed report otherwise.
+Exit 0 on a clean census (every fixed/confirmed-correct site has exactly one marker, no
+unmarked pattern hit exists for R1/QOW, and no fixed site's own required token is missing
+from its marker's scope); exit 1 and a printed report otherwise.
 """
 from __future__ import annotations
 
@@ -158,17 +171,29 @@ def run_census(repo_root: str) -> list[str]:
 
     # --- Part 1: registry <-> marker symmetry. ---
     found_markers: dict[str, list[tuple[str, int]]] = {}
+    # T-2441 (S2 fix, D-SLM5436): markers grouped BY FILE, sorted by line, plus the file's own
+    # lines cached -- Part 3 (below) needs "every marker in this file, in order" to bound each
+    # occurrence's own scope, and re-reads would otherwise repeat this same file walk a third
+    # time (Part 2 already repeats it once, production-source-only).
+    markers_by_file: dict[str, list[tuple[int, str]]] = {}
+    file_lines_cache: dict[str, list[str]] = {}
     for path in _iter_source_files(repo_root):
         try:
             with open(path, "r", encoding="utf-8", errors="strict") as f:
                 lines = f.readlines()
         except (UnicodeDecodeError, OSError):
             continue
+        rel_path = os.path.relpath(path, repo_root)
+        file_markers: list[tuple[int, str]] = []
         for i, line in enumerate(lines, start=1):
             m = _MARKER_RE.search(line)
             if m:
                 gs_id = m.group(1)
-                found_markers.setdefault(gs_id, []).append((os.path.relpath(path, repo_root), i))
+                found_markers.setdefault(gs_id, []).append((rel_path, i))
+                file_markers.append((i, gs_id))
+        if file_markers:
+            markers_by_file[rel_path] = file_markers
+            file_lines_cache[rel_path] = lines
 
     for gs_id in marker_required_ids:
         locs = found_markers.get(gs_id, [])
@@ -231,6 +256,78 @@ def run_census(repo_root: str) -> list[str]:
             if hit and not _covered(i):
                 failures.append(f"UNMARKED {hit} PATTERN HIT: {os.path.relpath(path, repo_root)}:{i}: "
                                  f"{line.strip()}")
+
+    # --- Part 3: per-site regression check (T-2441, S2 fix, D-SLM5436). ---
+    # Part 1 proves a marker exists somewhere in the tree; Part 2 proves no UNMARKED pattern
+    # hit exists. Neither reads what the code AT a marked location actually says -- a "fixed"
+    # site whose own fix is reverted in place, with its marker left untouched, satisfies both:
+    # the marker is still there (Part 1), and the reverted line is within its own marker's
+    # exemption window (Part 2). Demonstrated by construction (Poirot 327ee29-t2438-ask5-
+    # tracka-review.md Significant 2): GS-14's fix reverted to `plan.out_channels =
+    # hidden_size;`, marker untouched, both parts PASS.
+    #
+    # This part closes that gap for every `fixed` site that carries a `required_tokens` list
+    # (registry's own field, one substring set per site, derived once from that site's own
+    # diff against v1.3.0): for each marker OCCURRENCE (a site can have more than one, per
+    # Part 1's own "several registered sites legitimately touch more than one call site"), the
+    # scope is [marker_line, next_marker_line_in_the_SAME_FILE) -- or end of file if this is
+    # the last marker in it -- and at least one of the site's own required tokens must appear
+    # somewhere in that scope. A revert that keeps the marker but restores the pre-fix code
+    # removes the token that scope would have contained (every landed fix introduces its own
+    # named quantity -- effective_q_width, g_q_width, QWIDTH, or similar -- exactly because
+    # that is what distinguishes the fix from what it replaced), so the site fails here instead
+    # of passing silently. `confirmed-correct` sites carry no `required_tokens` (their own
+    # governing quantity is correctly UNCHANGED by this ask, so a presence check would be
+    # backwards for them) and are not checked by this part.
+    for rel_path, occurrences in markers_by_file.items():
+        lines = file_lines_cache[rel_path]
+        ext = os.path.splitext(rel_path)[1]
+        # T-2441: deliberately NOT Part 2's own `("//", "*", "/*")` tuple -- this codebase's
+        # own pervasive `/*name=*/value` inline-argument-annotation idiom (e.g.
+        # `/*layer_budget=*/num_hidden_layers`, seen throughout forward_sites.cpp/
+        # superslm_gpu.cpp) opens a block comment that CLOSES on the same line, followed by
+        # real code; a bare `/*` prefix check treats that whole line as comment-only and
+        # excludes it, which for Part 2 only means "one fewer place a hit could fire"
+        # (safe-direction over-exclusion) but for Part 3 turns a line carrying the required
+        # token into an invisible one -- executed and found doing exactly that: GS-26's own
+        # `/*q_width=*/num_attention_heads * head_dim);` line was excluded and produced a
+        # false REGRESSED SITE on an unmodified, correct tree. `*` alone is kept (still
+        # correctly excludes a `/* ... */` block's own continuation lines, this codebase's
+        # multi-line-comment convention elsewhere).
+        comment_prefixes = ("#",) if ext == ".py" else ("//", "*")
+        sorted_occ = sorted(occurrences, key=lambda p: p[0])
+        for idx, (marker_line, gs_id) in enumerate(sorted_occ):
+            site = registry_by_id.get(gs_id)
+            if site is None or site["status"] != "fixed":
+                continue
+            required = site.get("required_tokens")
+            if not required:
+                continue
+            scope_end = sorted_occ[idx + 1][0] - 1 if idx + 1 < len(sorted_occ) else len(lines)
+            # 0-indexed slice: lines[marker_line - 1 : scope_end] covers 1-based lines
+            # [marker_line, scope_end], i.e. the marker's own line through the line
+            # immediately before the next marker (or the file's own last line).
+            #
+            # Comment-only lines are excluded from the search -- executed and found load-
+            # bearing, not a narrowing carried over by assumption from Part 2: every fix's own
+            # explanatory comment (placed immediately below its marker, by this same ticket's
+            # own authoring convention) names the exact quantity the fix introduces in prose
+            # ("q_proj's real output width is q_width, not hidden_size"), so a mutant that
+            # reverts the CODE line while leaving the marker AND its comment block untouched --
+            # precisely the construction Significant 2's own must-reject uses -- would read the
+            # token out of the comment and report a false PASS if comments were included. A
+            # first version of this part searched the whole scope, comments included, and was
+            # shown by this exact construction to miss GS-14's own reverted mutant before this
+            # exclusion was added.
+            scope_lines = [
+                ln for ln in lines[marker_line - 1:scope_end] if not ln.strip().startswith(comment_prefixes)
+            ]
+            scope_text = "".join(scope_lines)
+            if not any(tok in scope_text for tok in required):
+                failures.append(
+                    f"REGRESSED SITE: {gs_id} at {rel_path}:{marker_line} -- none of "
+                    f"{required!r} found before the next marker (or end of file); the fix "
+                    f"may have been reverted with its marker left in place")
 
     return failures
 

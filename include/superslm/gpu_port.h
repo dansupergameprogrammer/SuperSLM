@@ -226,7 +226,18 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
     // T-2432 (Track A step 2/3): `q_width`, identical convention as `RunLayerLoop`'s own
     // (forward_sites.h) -- default `0` means "not supplied, derive as hidden_size," so
     // `RunLayerLoopGpu`'s own ~40 existing callers (all square fixtures) are unaffected.
-    size_t q_width = 0);
+    size_t q_width = 0,
+    // T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Significant 1, D-SLM5434/D-SLM5435):
+    // an optional direct readback of the GPU's own intermediate q_codes LayerScratch region --
+    // the design's own first-preference remedy (§6 Track A), closing the acceptance evidence
+    // gap without relying on end-to-end propagation through attention/o_proj/the MLP, which an
+    // executed probe found unreliable (a wrong-but-uniform attention weighting can survive
+    // int8 requantization undetected). `out_q_codes` non-null with `out_q_codes_capacity >=
+    // q_width` (or `>= hidden_size` when `q_width == 0`) records the copy at Submit time;
+    // `RunLayerLoopGpuFinish`'s own matching parameter performs the actual host-visible copy
+    // after the fence wait. Both default to "no readback" so every existing caller (~40 sites)
+    // is unaffected.
+    uint8_t* out_q_codes = nullptr, size_t out_q_codes_capacity = 0);
 
 // FINISH: `block == 0` and the fence has not yet signaled: `*out_ready = 0`, returns
 // `superslm::SslmForwardStatus::Ok` (design Sec4.2: "the call itself succeeded; nothing
@@ -238,10 +249,15 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 // sets `*out_ready = 1`, deletes `inflight` (consumed, exactly once), and returns the
 // DECODED per-call result -- the channel design Sec4.2 names `sslm_gpu_ready`'s own
 // `out_status`.
+// T-2441: `out_q_codes` mirrors `RunLayerLoopGpuSubmit`'s own new parameter -- if Submit
+// recorded a q_codes readback copy (non-null `out_q_codes` there), Finish copies the actual
+// bytes into THIS call's own `out_q_codes` buffer after the fence wait, up to the capacity
+// Submit was given. Null (the default) skips the copy -- every existing caller unaffected.
 superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight,
                                                     superslm::SequenceLayerState& seq,
                                                     uint8_t* workspace, int32_t block,
-                                                    int32_t* out_ready);
+                                                    int32_t* out_ready,
+                                                    uint8_t* out_q_codes = nullptr);
 
 // T-2169 (Rung 2b/3/4, design Sec5/Sec5.1/Sec8, D-SLM3595/D-SLM3611/D-SLM3612/D-SLM3631/D-SLM3634/
 // D-SLM3641): the chunk-submission entry point -- declared here (not exported via the public C

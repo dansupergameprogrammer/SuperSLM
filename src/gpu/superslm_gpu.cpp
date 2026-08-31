@@ -1093,6 +1093,11 @@ struct GpuLayerLoopInFlight {
 	uint32_t hidden_size_h = 0;
 	uint32_t head_dim_hd = 0;
 	std::chrono::steady_clock::time_point t_record_end{};
+	// T-2441 (Significant 1, D-SLM5434/D-SLM5435): the optional direct q_codes readback --
+	// null/0 when RunLayerLoopGpuSubmit's own `out_q_codes` was null (the common case, every
+	// pre-existing caller).
+	Microsoft::WRL::ComPtr<ID3D12Resource> q_codes_readback;
+	size_t q_codes_readback_bytes = 0;
 
 	// T-2113 (B5): EVERY per-call GPU resource the recorded command list either reads
 	// throughout the dispatch chain or copies FROM, that is not independently kept
@@ -2241,7 +2246,8 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
     GpuLayerLoopInFlight** out_inflight, ID3D12Resource* external_weights_resident,
     ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
     bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
-    const GpuAdapterBridge* adapter_bridge, size_t q_width) {
+    const GpuAdapterBridge* adapter_bridge, size_t q_width, uint8_t* out_q_codes,
+    size_t out_q_codes_capacity) {
 	if (out_inflight) *out_inflight = nullptr;
 	// T-2169 (Rung 2b-prep, D-SLM3632/D-SLM3633): the guard ladder, the weight/rope/K-V
 	// pack-and-residency decision, and the once-per-call root-signature/binding setup now live in
@@ -2255,6 +2261,11 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	harness::Device& dev = harness::GetDevice();
 	Microsoft::WRL::ComPtr<ID3D12Resource> seq_readback;
 	Microsoft::WRL::ComPtr<ID3D12Resource> kv_readback;
+	// T-2441: mirrors seq_readback/kv_readback's own lifetime -- declared here so it survives
+	// past this function's own stack frame the same way (RunLayerLoopGpuFinish reads it after
+	// the fence wait, via `inflight`).
+	Microsoft::WRL::ComPtr<ID3D12Resource> q_codes_readback;
+	size_t q_codes_readback_bytes = 0;
 	std::vector<size_t> kv_row_offsets;
 	uint32_t dispatch_count_this_call = 0;
 	GpuLayerLoopChunkOpenState state;
@@ -2299,6 +2310,10 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	const uint32_t N = state.N;
 	Microsoft::WRL::ComPtr<ID3D12Resource>& seq_uav = state.seq_uav;
 	Microsoft::WRL::ComPtr<ID3D12Resource>& kv_uav = state.kv_uav;
+	// T-2441: scratch_uav is LayerScratch (holds q_codes among other per-token regions) --
+	// already kept alive for the dispatch chain's own duration (GpuLayerLoopChunkOpenState's
+	// own field); this reference is new, used only by the optional q_codes readback below.
+	Microsoft::WRL::ComPtr<ID3D12Resource>& scratch_uav = state.scratch_uav;
 
 	const uint32_t position_u32 = static_cast<uint32_t>(seq.context_length);  // constant across the whole call (Sec9.3)
 	const uint32_t context_cap_u32 = static_cast<uint32_t>(context_cap);
@@ -2372,7 +2387,33 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	const size_t kv_readback_bytes = kv_row_offsets.size() * static_cast<size_t>(HD);
 	kv_readback = dev.MakeBuffer(kv_readback_bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
 	                                   D3D12_RESOURCE_STATE_COPY_DEST);
-	D3D12_RESOURCE_BARRIER pre_copy[2]{};
+	// T-2441 (Significant 1, D-SLM5434/D-SLM5435): optional q_codes readback -- allocated and
+	// barrier-transitioned alongside seq_readback/kv_readback above, using the IDENTICAL
+	// pattern, so it shares their fence-wait/lifetime guarantees exactly (GpuLayerLoopInFlight's
+	// own comment on why every per-call resource must survive to the fence). `state.scratch_layout
+	// .q_codes` is the SAME byte offset q_proj_site.hlsl itself writes to and this call's own
+	// dispatch chain just finished writing -- reading it back is safe once scratch_uav is
+	// transitioned to COPY_SOURCE below, before anything downstream of q_proj (RoPE, attention,
+	// ctx_fold, o_proj, the MLP) could otherwise overwrite it -- and nothing does: every
+	// ComputeScratchLayout field gets its own non-overlapping byte range, so q_codes is never
+	// aliased by a later stage.
+	//
+	// `out_q_codes_capacity` is a count of ELEMENTS (matching the CPU side's own
+	// std::vector<int8_t> q_codes), but ComputeScratchLayout's own `codes_block` reserves
+	// `width * 4` bytes per field -- RequantChainCheckedFullGpuP's own write-out
+	// (site_common.hlsli, "out_buf.Store<int>(out_codes_base + i*4u, (int)code)") stores each
+	// code as a full 4-byte int32, not a packed int8 -- so the RAW copy is 4 bytes per element;
+	// RunLayerLoopGpuFinish's own matching code extracts each element's low int32 and narrows
+	// it to int8_t when it writes the caller's `out_q_codes` buffer.
+	const bool want_q_codes = (out_q_codes != nullptr && out_q_codes_capacity > 0);
+	const size_t q_codes_native_width = (q_width != 0) ? q_width : H;
+	const size_t q_codes_elems = want_q_codes ? std::min(out_q_codes_capacity, q_codes_native_width) : 0;
+	q_codes_readback_bytes = q_codes_elems * 4u;
+	if (want_q_codes) {
+		q_codes_readback = dev.MakeBuffer(q_codes_readback_bytes, D3D12_HEAP_TYPE_READBACK,
+		                                   D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
+	}
+	D3D12_RESOURCE_BARRIER pre_copy[3]{};
 	pre_copy[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 	pre_copy[0].Transition.pResource = seq_uav.Get();
 	pre_copy[0].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
@@ -2380,7 +2421,13 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	pre_copy[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 	pre_copy[1] = pre_copy[0];
 	pre_copy[1].Transition.pResource = kv_uav.Get();
-	dev.list->ResourceBarrier(2, pre_copy);
+	uint32_t pre_copy_count = 2;
+	if (want_q_codes) {
+		pre_copy[2] = pre_copy[0];
+		pre_copy[2].Transition.pResource = scratch_uav.Get();
+		pre_copy_count = 3;
+	}
+	dev.list->ResourceBarrier(pre_copy_count, pre_copy);
 	// T-2113 (B3): kv_uav (whichever buffer it names) is now COPY_SOURCE, same as the
 	// pre-existing g_resident_kv path already left it for kv_fast_hit's own resume
 	// barrier to find on the NEXT call -- latch that fact into the caller-owned flag on
@@ -2392,6 +2439,11 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	for (size_t r = 0; r < kv_row_offsets.size(); ++r) {
 		dev.list->CopyBufferRegion(kv_readback.Get(), r * static_cast<UINT64>(HD), kv_uav.Get(),
 		                            kv_row_offsets[r], HD);
+	}
+	if (want_q_codes) {
+		dev.list->CopyBufferRegion(q_codes_readback.Get(), 0, scratch_uav.Get(),
+		                            state.scratch_layout.q_codes,
+		                            static_cast<UINT64>(q_codes_readback_bytes));
 	}
 	} catch (const GpuGemmGroupArithmeticError& e) {
 		// T-2101 (S4, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
@@ -2530,6 +2582,8 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		inflight->seq_bytes_size = SeqTotalSize(state.H);
 		inflight->hidden_size_h = state.H;
 		inflight->head_dim_hd = state.HD;
+		inflight->q_codes_readback = q_codes_readback;
+		inflight->q_codes_readback_bytes = q_codes_readback_bytes;
 		inflight->t_record_end = t_record_end;
 		// T-2113 (B5): extend every per-call GPU resource's lifetime to the fence, per
 		// GpuLayerLoopInFlight's own struct comment -- these ComPtr copies are what close
@@ -3184,7 +3238,7 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight,
                                                     superslm::SequenceLayerState& seq,
                                                     uint8_t* workspace, int32_t block,
-                                                    int32_t* out_ready) {
+                                                    int32_t* out_ready, uint8_t* out_q_codes) {
 	if (out_ready) *out_ready = 0;
 	if (!inflight || !inflight->dev) {
 		return superslm::SslmForwardStatus::GpuAllocationFailed;  // caller error: no live token
@@ -3275,6 +3329,26 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 		}
 		D3D12_RANGE none{0, 0};
 		owned->kv_readback->Unmap(0, &none);
+	}
+	// T-2441 (Significant 1, D-SLM5434/D-SLM5435): the optional q_codes readback --
+	// `owned->q_codes_readback` is null whenever RunLayerLoopGpuSubmit's own `out_q_codes` was
+	// null (every pre-existing caller), so this whole block is a no-op for them. Each element
+	// is 4 raw bytes in LayerScratch (RequantChainCheckedFullGpuP's own `Store<int>`, not a
+	// packed int8) -- narrowed to int8_t here, one per element, matching the CPU side's own
+	// int8_t q_codes representation the caller compares against.
+	if (owned->q_codes_readback && out_q_codes != nullptr) {
+		void* p = nullptr;
+		D3D12_RANGE range{0, owned->q_codes_readback_bytes};
+		SSLM_GPU_HR(owned->q_codes_readback->Map(0, &range, &p));
+		const uint8_t* raw = static_cast<const uint8_t*>(p);
+		const size_t elems = owned->q_codes_readback_bytes / 4u;
+		for (size_t i = 0; i < elems; ++i) {
+			int32_t v = 0;
+			std::memcpy(&v, raw + i * 4u, 4u);
+			out_q_codes[i] = static_cast<uint8_t>(static_cast<int8_t>(v));
+		}
+		D3D12_RANGE none{0, 0};
+		owned->q_codes_readback->Unmap(0, &none);
 	}
 	g_last_call_timing.readback_ms =
 	    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_readback_start)
