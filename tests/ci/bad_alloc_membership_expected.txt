@@ -26,6 +26,12 @@
 # shortened every header's preamble (same 20-member set, names and files unchanged).
 # Re-derived 2026-08-21 after the 1.2 artifact declarations moved four existing
 # members (same 20-member set, names and files unchanged).
+# Re-derived 2026-08-31 (T-2445, Claude/Poirot/ddbc57a-t2443-ask5-tracka-confirmation.md,
+# Critical 1): T-2441 Minor 7 added a 14-line enum comment plus two enumerators to
+# proof_manifest.h ahead of the four members below, shifting each by +14 (same 20-member
+# set, names and files unchanged) -- regenerated against the real headers on disk
+# (SUPERSLM_CLANGXX="C:\Program Files\LLVM\bin\clang++.exe", clang 18.1.8, the CI pin)
+# rather than hand-adjusted, same discipline every prior re-derivation above used.
 artifact.h:200:OpenFromMemory
 artifact.h:206:OpenFromFile
 artifact.h:225:FingerprintHex
@@ -36,10 +42,10 @@ model.h:458:ParseConfig
 model.h:481:ParseSigmoidLut
 model.h:743:Load
 proof_manifest.h:40:JsonEscape
-proof_manifest.h:89:ComputeTensorEvidence
-proof_manifest.h:105:ComputeWeightScaleEvidence
-proof_manifest.h:112:HashSectionHex
-proof_manifest.h:135:BuildProofManifestJson
+proof_manifest.h:103:ComputeTensorEvidence
+proof_manifest.h:119:ComputeWeightScaleEvidence
+proof_manifest.h:126:HashSectionHex
+proof_manifest.h:149:BuildProofManifestJson
 sha256.h:20:Update
 sha256.h:41:Sha256Hash
 sha256.h:45:ToHex
