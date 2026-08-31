@@ -313,7 +313,9 @@ int main(int argc, char** argv) {
 		                   /*layer_budget=*/num_hidden_layers, hidden_size, model_view.config.head_dim,
 		                   num_kv_heads, model_view.config.intermediate_size, context_cap,
 		                   model_view.rope_tables, trace_workspace.data(), trace_workspace.size(),
-		                   option_g_mode);
+		                   option_g_mode, /*site_prefix=*/{}, /*token_index=*/0,
+		                   /*trace_hook_state=*/nullptr,
+		                   /*q_width=*/model_view.config.num_attention_heads * model_view.config.head_dim);
 		if (st != SslmForwardStatus::Ok) {
 			std::fprintf(stderr, "FAILED at stage=trace_prefill_layers: position=%zu status=%s\n", i,
 			             SslmForwardStatusName(st));
@@ -340,7 +342,9 @@ int main(int argc, char** argv) {
 		    RunLayerLoop(trace_seq, layers.data(), num_hidden_layers, /*layer_budget=*/1, hidden_size,
 		                 model_view.config.head_dim, num_kv_heads, model_view.config.intermediate_size,
 		                 context_cap, model_view.rope_tables, trace_workspace.data(),
-		                 trace_workspace.size(), option_g_mode);
+		                 trace_workspace.size(), option_g_mode, /*site_prefix=*/{}, /*token_index=*/0,
+		                 /*trace_hook_state=*/nullptr,
+		                 /*q_width=*/model_view.config.num_attention_heads * model_view.config.head_dim);
 		if (st != SslmForwardStatus::Ok) {
 			std::fprintf(stderr, "FAILED at stage=trace_layer_step: layer=%u status=%s\n", step,
 			             SslmForwardStatusName(st));
@@ -400,7 +404,9 @@ int main(int argc, char** argv) {
 		    oracle_prefill_seq, layers.data(), num_hidden_layers,
 		    /*layer_budget=*/num_hidden_layers, hidden_size, model_view.config.head_dim, num_kv_heads,
 		    model_view.config.intermediate_size, context_cap, model_view.rope_tables,
-		    oracle_workspace.data(), oracle_workspace.size(), option_g_mode);
+		    oracle_workspace.data(), oracle_workspace.size(), option_g_mode, /*site_prefix=*/{},
+		    /*token_index=*/0, /*trace_hook_state=*/nullptr,
+		    /*q_width=*/model_view.config.num_attention_heads * model_view.config.head_dim);
 		if (lst != SslmForwardStatus::Ok) {
 			std::fprintf(stderr, "FAILED at stage=oracle_prefill_layers: position=%zu status=%s\n", i,
 			             SslmForwardStatusName(lst));
@@ -458,7 +464,9 @@ int main(int argc, char** argv) {
 		const SslmForwardStatus st = RunLayerLoop(
 		    oracle_row_seq, layers.data(), num_hidden_layers, /*layer_budget=*/i, hidden_size,
 		    model_view.config.head_dim, num_kv_heads, model_view.config.intermediate_size, context_cap,
-		    model_view.rope_tables, oracle_workspace.data(), oracle_workspace.size(), option_g_mode);
+		    model_view.rope_tables, oracle_workspace.data(), oracle_workspace.size(), option_g_mode,
+		    /*site_prefix=*/{}, /*token_index=*/0, /*trace_hook_state=*/nullptr,
+		    /*q_width=*/model_view.config.num_attention_heads * model_view.config.head_dim);
 		if (st != SslmForwardStatus::Ok) {
 			std::fprintf(stderr, "FAILED at stage=oracle_row_layers: row=%u status=%s\n", i,
 			             SslmForwardStatusName(st));
