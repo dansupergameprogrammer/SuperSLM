@@ -7456,6 +7456,37 @@ static void TestConfigGeometryRejectsHeadsNotDivisibleByKv() {
 // retires. TestConfigGeometryRejectsZeroAttentionHeads (above) already covers the one case
 // on this axis the widened function still rejects.
 
+// T-2445 (Claude/Poirot/ddbc57a-t2443-ask5-tracka-confirmation.md, Significant 4,
+// D-SLM5473): T-2441's Minor 7 (D-SLM5440) added the `head_dim == 0`/`hidden_size == 0`
+// guards immediately above -- R1's removal left both unguarded on the two direct-call
+// surfaces (this function, and tools/sslm_convert_validate.py's Python mirror) that bypass
+// SslmModel::Load's own upstream zero guard. The fix landed with a disposable probe
+// (built, run, and deleted) as its only verification -- no committed cell named either
+// status. Executed and confirmed before this pin existed: deleting both guards left
+// `python -m pytest tools/` at the identical `1901 passed, 0 failed` the fix round's own
+// build log cites as its regression evidence, i.e. nothing here discriminated. These two
+// cells are that discriminating coverage, matching this test suite's own established
+// zero-boundary convention (TestConfigGeometryRejectsZeroAttentionHeads, above) rather than
+// the disposable probe's now-deleted shape.
+static void TestConfigGeometryRejectsZeroHeadDim() {
+	const auto r = CheckConfigGeometry(/*hidden_size=*/4096, /*heads=*/32, /*kv_heads=*/8, /*head_dim=*/0);
+	CHECK_MSG(r.status == ConfigGeometryStatus::ZeroHeadDim,
+	          "head_dim == 0 must be a DEFINED rejection (ZeroHeadDim), checked before the "
+	          "KvHeadsExceedsHeads/HeadsNotDivisibleByKv relations below it: got %s",
+	          ConfigGeometryStatusName(r.status));
+	CHECK_MSG(r.diagnostic == "head_dim == 0", "diagnostic text must name the exact guard that fired: got \"%s\"",
+	          r.diagnostic.c_str());
+}
+
+static void TestConfigGeometryRejectsZeroHiddenSize() {
+	const auto r = CheckConfigGeometry(/*hidden_size=*/0, /*heads=*/32, /*kv_heads=*/8, /*head_dim=*/128);
+	CHECK_MSG(r.status == ConfigGeometryStatus::ZeroHiddenSize,
+	          "hidden_size == 0 must be a DEFINED rejection (ZeroHiddenSize): got %s",
+	          ConfigGeometryStatusName(r.status));
+	CHECK_MSG(r.diagnostic == "hidden_size == 0",
+	          "diagnostic text must name the exact guard that fired: got \"%s\"", r.diagnostic.c_str());
+}
+
 static void TestConfigGeometryAcceptsGqaShape() {
 	const auto r = CheckConfigGeometry(/*hidden_size=*/4096, /*heads=*/32, /*kv_heads=*/8, /*head_dim=*/128);
 	CHECK_MSG(r.status == ConfigGeometryStatus::Ok,
@@ -26534,6 +26565,8 @@ int main(int argc, char** argv) {
 	TestConfigGeometryRejectsKvHeadsExceedsHeads();
 	TestConfigGeometryRejectsHeadsNotDivisibleByKv();
 	// TestConfigGeometryRejectsHiddenSizeMismatch retired -- see its own retirement comment above.
+	TestConfigGeometryRejectsZeroHeadDim();
+	TestConfigGeometryRejectsZeroHiddenSize();
 	TestConfigGeometryAcceptsGqaShape();
 	TestConfigGeometryAcceptsMhaShape();
 	TestComputeTensorEvidenceReportsExtremaAndSaturationBoundary();

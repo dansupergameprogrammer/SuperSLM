@@ -33,9 +33,13 @@ enumerator with no matching arm left the literal (and the body's own count)
 unchanged, and the pin stayed green through exactly the regression it
 existed to catch. Five of the six restructured functions below were
 genuinely exhaustive switches before the restructure (verified at source
-against each enum's own header: `SslmForwardStatus` 32/32,
-`SslmModelStatus` 61/61, `ConfigGeometryStatus` 6/6, `SslmSectionType`
-21/21 for `IsKnownSectionType`) -- the state in which a compiler's own
+against each enum's own header, AS OF THIS RESTRUCTURE: `SslmForwardStatus`
+32/32, `SslmModelStatus` 61/61, `ConfigGeometryStatus` 6/6, `SslmSectionType`
+21/21 for `IsKnownSectionType` -- T-2441 Minor 7 later added ZeroHeadDim/
+ZeroHiddenSize, making `ConfigGeometryStatus` 8/8 as of T-2445; the general
+exhaustiveness check below re-derives the current count from the header on
+every run rather than trusting this paragraph's own snapshot) -- the state
+in which a compiler's own
 `-Wswitch` warns on a newly added enumerator. The sixth, `SectionTypeName`,
 was exhaustive only over the seventeen-enumerator `SslmSectionType` that
 existed when it was authored; four enumerators (`CalibrationBand`,
@@ -282,19 +286,35 @@ def test_enumerator_pin_is_mutation_provable():
 
 def test_validate_config_geometry_join_preserves_every_status_mapping():
     """Must-accept: `ValidateConfigGeometryJoin`'s own restructured if-chain
-    still maps all four distinct outcomes (Ok, KvHeadsExceedsHeads,
-    HeadsNotDivisibleByKv, HiddenSizeGeometryMismatch) plus the
-    ZeroAttentionHeads/ZeroKeyValueHeads fallthrough and the unrecognized-
-    status fallback -- six ConfigGeometryStatus values and one default,
-    exactly as the switch it replaces did.
+    still names every `ConfigGeometryStatus` value the header currently
+    declares, plus the unrecognized-status fallback.
+
+    T-2445 (Claude/Poirot/ddbc57a-t2443-ask5-tracka-confirmation.md, Minor 4
+    /Significant 4, D-SLM5436/D-SLM5473 superseded): this cell used to
+    assert a HARDCODED six-name tuple -- the exact literal-count shape this
+    same file's own header comment (above, S1) describes the OTHER six
+    functions as having outgrown, and the shape `test_enumerator_pin_is_
+    mutation_provable` above exists to catch, except THIS function is
+    excluded from that general mechanism (`_RESTRUCTURED`'s own `(None,
+    None)` entry for it, since it deliberately maps several statuses to
+    fewer C-ABI outcomes rather than one arm per enumerator). Executed: the
+    header gained `ZeroHeadDim`/`ZeroHiddenSize` (T-2441 Minor 7) and this
+    cell's own hardcoded tuple was never extended -- Significant 4 measured
+    that deleting the join's own new mapping arm left this cell (and the
+    whole `t2296` suite) green, 199 passed. Corrected to derive the expected
+    set mechanically from the header, via the same `_header_enumerator_set`
+    helper the general check above already uses, so a future enumerator
+    addition with no matching arm here fails this cell without anyone
+    remembering to extend a literal.
     """
     text = _read("model.cpp")
     body = _function_body(text, "ValidateConfigGeometryJoin")
-    for status in ("Ok", "KvHeadsExceedsHeads", "HeadsNotDivisibleByKv",
-                   "HiddenSizeGeometryMismatch", "ZeroAttentionHeads", "ZeroKeyValueHeads"):
+    expected = _header_enumerator_set("proof_manifest.h", "ConfigGeometryStatus")
+    for status in sorted(expected):
         assert "ConfigGeometryStatus::{}".format(status) in body, (
             "ValidateConfigGeometryJoin no longer names ConfigGeometryStatus::{} "
-            "-- the restructure may have dropped a branch".format(status)
+            "-- the restructure may have dropped a branch, or ConfigGeometryStatus "
+            "gained an enumerator with no matching arm here".format(status)
         )
     assert "unrecognized ConfigGeometryStatus" in body, (
         "ValidateConfigGeometryJoin no longer carries its own "

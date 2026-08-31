@@ -163,6 +163,28 @@ def test_rejects_heads_not_divisible_by_kv():
 # function still rejects on this axis.
 
 
+# T-2445 (Claude/Poirot/ddbc57a-t2443-ask5-tracka-confirmation.md, Significant 4, D-SLM5473):
+# T-2441's Minor 7 (D-SLM5440) added the head_dim == 0 / hidden_size == 0 guards this module's
+# own R1 removal left open on this direct-call surface. Verified by direct execution at the
+# time (not by a committed cell) -- executed and confirmed here, both guards removed left
+# `python -m pytest tools/` at the identical 1901 passed, 0 failed the fix round's own build
+# log cites as regression evidence, i.e. nothing discriminated. These two cells are that
+# discriminating coverage, matching this file's own established zero-boundary convention.
+
+def test_rejects_zero_head_dim():
+    model = _valid_model(head_dim=0)
+    with pytest.raises(V.ConverterValidationError) as exc:
+        _validate(model)
+    assert exc.value.code == "ZeroHeadDim", exc.value.code
+
+
+def test_rejects_zero_hidden_size():
+    model = _valid_model(hidden_size=0)
+    with pytest.raises(V.ConverterValidationError) as exc:
+        _validate(model)
+    assert exc.value.code == "ZeroHiddenSize", exc.value.code
+
+
 def test_accepts_mha_shape_kv_heads_equals_heads():
     model = _valid_model(num_attention_heads=2, num_key_value_heads=2, head_dim=4, hidden_size=8)
     model.scales = _Scales({"layer0.v_head0.scale": 0.5, "layer0.v_head1.scale": 0.5})
