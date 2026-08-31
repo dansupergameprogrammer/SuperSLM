@@ -447,10 +447,20 @@ def test_verify_and_merge_raises_on_geometry_mismatch_even_with_zero_exit_code(t
     # exists to prevent (a manifest field nobody's control flow depends on).
     artifact = tmp_path / "model.sslm"
     artifact.write_bytes(b"x")
+    # T-2445 (Claude/Poirot/ddbc57a-t2443-ask5-tracka-confirmation.md, Minor 5, D-SLM5436
+    # superseded): this fixture used to pair status="HiddenSizeGeometryMismatch" with
+    # diagnostic="4097 != 4096" -- the exact shape Critical 2 (T-2432 Track A step 1, design
+    # §6 Track A step 1) retired: CheckConfigGeometry can no longer produce that diagnostic on
+    # the geometry axis at all, since the R1 identity it names is removed, not loosened. The
+    # cell's own subject (the merge layer does not trust a zero exit code) is unaffected by
+    # which currently-producible status/diagnostic pair exercises it -- corrected to
+    # KvHeadsExceedsHeads with the real diagnostic format CheckConfigGeometry still emits for
+    # it (src/proof_manifest.cpp), a relation R1's removal left untouched.
     mismatched = {
         "schema": "sslm_proof_manifest_v1",
         "artifact_hash": "abc123",
-        "config_geometry": {"ok": False, "status": "HiddenSizeGeometryMismatch", "diagnostic": "4097 != 4096"},
+        "config_geometry": {"ok": False, "status": "KvHeadsExceedsHeads",
+                             "diagnostic": "num_key_value_heads (16) > num_attention_heads (8)"},
         "sections": [],
     }
     cmd = _write_fake_verifier(tmp_path, mismatched, returncode=0)
@@ -458,7 +468,7 @@ def test_verify_and_merge_raises_on_geometry_mismatch_even_with_zero_exit_code(t
     with pytest.raises(M.VerifierFailure) as exc:
         M.verify_and_merge(str(tmp_path), str(artifact), str(tmp_path), verifier_cmd=cmd,
                            manifest_out_path=str(tmp_path / "out.json"))
-    assert "HiddenSizeGeometryMismatch" in str(exc.value)
+    assert "KvHeadsExceedsHeads" in str(exc.value)
 
 
 def test_verify_and_merge_raises_on_nonzero_exit_with_otherwise_ok_manifest(tmp_path):
