@@ -274,6 +274,124 @@ def test_vitality_injected_twenty_first_function_is_flagged(tmp_path):
     assert population_restored == oracle
 
 
+@requires_clang
+def test_vitality_injected_same_named_duplicate_is_flagged_by_multiset_not_by_set(tmp_path):
+    """Guard-vitality cell for the MULTISET identity itself (T-2467,
+    Claude/Poirot/665f430-t2462-ask5-tracka-confirmation.md, Significant 2,
+    D-SLM5558/D-SLM5559): `test_vitality_injected_twenty_first_function_is_flagged`
+    above injects a uniquely-named `Probe`, which a plain (header, name) SET
+    catches identically -- it proves *a member joining* is flagged, not that a
+    MULTISET specifically was needed to flag it. This cell injects a SECOND
+    member sharing an EXISTING member's own name (`artifact.h::OpenFromFile`,
+    already in the pinned oracle once), the exact shape T-2125's real
+    `model.h::Parse` growth took (two Parse overloads already present, a third
+    joining) and the shape the round's own build log (Claude/Brunel/
+    t2458-t2453-review-fixes-2026-08-31.md Sec6) and this review's own
+    independent commissioning (Sec6 of the casebook above) both used to settle
+    the multiset-vs-set design question by execution. A plain SET is
+    unchanged by a same-named member joining a header that already has one --
+    it would have silently absorbed this injection exactly as the prior rule's
+    review-proposed literal-set wording would have silently absorbed T-2125's
+    real fourth `model.h::Parse` -- so this cell asserts BOTH that the
+    MULTISET comparison rejects the injection with the right excess count AND
+    that a plain SET projection of the same two populations does not."""
+    import shutil
+
+    scratch_include = tmp_path / "include"
+    shutil.copytree(dbam._INCLUDE_DIR, scratch_include)
+
+    artifact_h = scratch_include / "superslm" / "artifact.h"
+    original = artifact_h.read_text(encoding="utf-8")
+
+    # A second, distinctly-signatured static overload also named `OpenFromFile`,
+    # taking a `const char*` parameter named `path` (satisfies condition 4(a) the
+    # same way the real member does), not noexcept, not deleted -- admitted by
+    # the same four-condition rule as the real member it duplicates.
+    injected = original.replace(
+        "static SslmStatus OpenFromFile(const char* path, SslmArtifact& out, SslmError* err);",
+        "static SslmStatus OpenFromFile(const char* path, SslmArtifact& out, SslmError* err);\n\n"
+        "\t// Throwaway vitality probe (T-2467): a second, real overload sharing an\n"
+        "\t// EXISTING member's own name -- proves the MULTISET identity specifically,\n"
+        "\t// not merely that a joining member is flagged at all.\n"
+        "\tstatic SslmStatus OpenFromFile(const char* path, uint32_t flags,\n"
+        "\t                               SslmArtifact& out, SslmError* err);",
+        1,
+    )
+    assert injected != original, "the injection anchor text was not found in artifact.h"
+    artifact_h.write_text(injected, encoding="utf-8")
+
+    oracle = _load_pinned_oracle()
+    derived = _multiset(dbam.derive_population_from_headers_dir(str(tmp_path)))
+
+    # MUST-REJECT: the multiset comparison flags the duplicate with the right
+    # excess count -- exactly one extra ("artifact.h", "OpenFromFile"), nothing else.
+    extra = derived - oracle
+    missing = oracle - derived
+    assert extra == Counter({("artifact.h", "OpenFromFile"): 1}), (
+        f"expected exactly one excess (\"artifact.h\", \"OpenFromFile\") under the "
+        f"multiset comparison; got extra={extra}, missing={missing}"
+    )
+    assert not missing
+
+    # The property under test: a plain (header, name) SET does NOT separate this
+    # injected population from the oracle -- the injection adds no NEW key, only
+    # a second occurrence of one already present, which is exactly the shape a
+    # set-based comparison cannot see.
+    assert set(derived) == set(oracle), (
+        "a plain (header, name) SET should NOT discriminate a same-named "
+        "duplicate joining -- if this fails, the fixture no longer isolates the "
+        "multiset-vs-set question this cell exists to answer"
+    )
+
+    # Restore and confirm the population returns to exactly the pinned twenty.
+    artifact_h.write_text(original, encoding="utf-8")
+    population_restored = _multiset(dbam.derive_population_from_headers_dir(str(tmp_path)))
+    assert population_restored == oracle
+
+
+@requires_clang
+def test_oracle_regeneration_command_matches_the_committed_oracle_file():
+    """Gives `derive_bad_alloc_membership.py --oracle` a caller (T-2467,
+    Claude/Poirot/665f430-t2462-ask5-tracka-confirmation.md, Significant 2):
+    before this cell, the committed oracle's own header names this as its
+    regeneration command ("Regenerate with: python tests/ci/
+    derive_bad_alloc_membership.py --oracle ... paste its output verbatim
+    below this comment block"), but nothing asserted the committed body IS
+    that command's current output -- a tree-wide sweep found no caller of
+    `format_oracle_lines`/`--oracle` in any suite. This cell runs the real
+    subprocess CLI path (not `format_oracle_lines` called in-process, which
+    would leave `--argv` parsing itself unpinned) against the real headers on
+    disk and diffs its stdout, byte-for-byte, against the oracle file's own
+    non-comment body."""
+    repo_root = dbam._REPO_ROOT
+    tool_path = os.path.join(dbam._THIS_DIR, "derive_bad_alloc_membership.py")
+    env = dict(os.environ)
+    result = subprocess.run(
+        [sys.executable, tool_path, "--oracle"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, (
+        f"derive_bad_alloc_membership.py --oracle must exit 0; got "
+        f"{result.returncode}, stderr:\n{result.stderr}"
+    )
+    regenerated = result.stdout.strip("\n")
+
+    oracle_path = os.path.join(dbam._THIS_DIR, "bad_alloc_membership_expected.txt")
+    with open(oracle_path, "r", encoding="utf-8") as f:
+        committed_body = "\n".join(
+            line.rstrip("\n") for line in f if line.strip() and not line.lstrip().startswith("#")
+        )
+    assert regenerated == committed_body, (
+        "`python tests/ci/derive_bad_alloc_membership.py --oracle`'s own stdout no "
+        "longer matches tests/ci/bad_alloc_membership_expected.txt's committed "
+        "non-comment body -- regenerate the file and paste the output verbatim "
+        "below its header comment, per the oracle file's own instructions"
+    )
+
+
 # ---------------------------------------------------------------------------
 # The production gate (design Sec3.1: "tools/ci/check_bad_alloc_contract.py")
 # is built, and design Sec3.3's rename-and-wrap has landed for every one of
