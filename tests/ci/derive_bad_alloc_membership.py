@@ -435,10 +435,10 @@ def git_log_follow_commit_count(rel_path: str, repo_root: str = _REPO_ROOT) -> i
     was never pushed, so it never actually ran on a runner). This function was made to run ONLY
     when a human invokes this module directly with `--commit-count`, on their own full-history
     checkout, at REGENERATION time -- never from a CI-collected test. The result is meant to be
-    pasted into `tests/ci/bad_alloc_membership_expected.txt`'s own header, both into the prose sentence that
-    states it in words and into the `COMMIT_COUNT_PIN:` line beneath it, together, by hand -- see
-    that file's own header comment for the pinned-value check this replaces the live git call
-    with.
+    pasted into `tests/ci/bad_alloc_membership_expected.txt`'s own header, both into the prose
+    sentence that states it in words and into the `COMMIT_COUNT_PIN:` line beneath it, together,
+    by hand -- see that file's own header comment for the pinned-value check this replaces the
+    live git call with.
 
     T-2499 (Claude/Poirot/bc2ae29-t2498-census-fixes-confirmation.md Significant 1, D-SLM5775):
     that restriction is narrowed, not repealed. `test_membership_check_population.py`'s
@@ -462,7 +462,11 @@ if __name__ == "__main__":
     if "--commit-count" in sys.argv[1:]:
         # Regeneration-time only (see git_log_follow_commit_count's own docstring) -- prints the
         # fresh git log --follow count for the pinned oracle file itself, run on the caller's own
-        # full-history checkout, never invoked by a pytest cell.
+        # full-history checkout at regeneration time. The CLI branch itself is exercised by
+        # test_commit_count_cli_matches_the_in_process_derivation (T-2499 item 6, via subprocess,
+        # unconditionally in CI), and the function it wraps is called in-process by
+        # test_oracle_header_commit_count_matches_git_log_follow_on_a_full_history_checkout (item
+        # 1) -- narrowed from "never invoked by a pytest cell," not repealed as untested.
         print(git_log_follow_commit_count(
             os.path.relpath(os.path.join(_THIS_DIR, "bad_alloc_membership_expected.txt"), _REPO_ROOT)
         ))

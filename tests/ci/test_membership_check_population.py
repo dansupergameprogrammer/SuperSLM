@@ -511,8 +511,10 @@ def test_oracle_header_commit_count_matches_git_log_follow_on_a_full_history_che
     in `.github/workflows/` sets `fetch-depth`, so this cell is not expected to run in CI; it runs
     on every developer's own full-history checkout, which is exactly where `pytest tests/ci/` was
     run before each of the four drift instances landed -- the environment the replaced cell was
-    actually useful in, per T-2497's own build log (Claude/Brunel/t2497-t2496-review-fixes-
-    2026-08-31.md Sec1: 'red on every developer machine ... broken in CI')."""
+    actually useful in: "The replaced cell was red in CI and green nowhere it mattered; it was,
+    however, red on every developer machine, which is where `pytest tests/ci/` is run before a
+    push — the T-2497 build itself ran it there." (Claude/Poirot/bc2ae29-t2498-census-fixes-
+    confirmation.md Sec4)."""
     is_shallow = subprocess.run(
         ["git", "rev-parse", "--is-shallow-repository"],
         cwd=dbam._REPO_ROOT, capture_output=True, text=True, check=True,
@@ -550,7 +552,6 @@ def test_oracle_header_commit_count_matches_git_log_follow_on_a_full_history_che
         f"full-history checkout and paste the result into both the prose word and "
         f"COMMIT_COUNT_PIN together"
     )
-
 
 
 def test_commit_count_cli_matches_the_in_process_derivation():
