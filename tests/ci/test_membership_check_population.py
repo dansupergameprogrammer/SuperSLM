@@ -58,9 +58,11 @@ def _load_pinned_oracle() -> Counter[tuple[str, str]]:
     change the name alone did not. Returned as a Counter, not a set: the
     oracle's identity is a MULTISET over (header, name), because a plain set
     would silently absorb a same-named member joining a header that already
-    has one (T-2125's real `model.h:Parse` fourth-member growth, verified
-    against git history to be exactly this shape -- see the oracle file's own
-    header)."""
+    has one (T-2125's real `model.h:Parse` growth -- two Parse entries
+    already existed and a third joined, taking that key two to three under
+    the multiset, T-2467/D-SLM5560 correcting this docstring's own prior
+    "fourth" miscount -- verified against git history to be exactly this
+    shape -- see the oracle file's own header)."""
     path = os.path.join(dbam._THIS_DIR, "bad_alloc_membership_expected.txt")
     entries: Counter[tuple[str, str]] = Counter()
     with open(path, "r", encoding="utf-8") as f:
@@ -292,7 +294,7 @@ def test_vitality_injected_same_named_duplicate_is_flagged_by_multiset_not_by_se
     unchanged by a same-named member joining a header that already has one --
     it would have silently absorbed this injection exactly as the prior rule's
     review-proposed literal-set wording would have silently absorbed T-2125's
-    real fourth `model.h::Parse` -- so this cell asserts BOTH that the
+    real third `model.h::Parse` -- so this cell asserts BOTH that the
     MULTISET comparison rejects the injection with the right excess count AND
     that a plain SET projection of the same two populations does not."""
     import shutil
