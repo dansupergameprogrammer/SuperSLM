@@ -908,6 +908,12 @@ SslmGpuStatus sslm_gpu_adapter_map(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 	base_geom.hidden_size = model->hidden_size;
 	base_geom.intermediate_size = model->intermediate_size;
 	base_geom.kv_hidden_size = static_cast<uint64_t>(model->num_key_value_heads) * model->head_dim;
+	// SSLM-GEOMETRY-SITE: GS-33
+	// T-2509 (GS-28/GS-29): q_width, the same num_attention_heads * head_dim construction this
+	// file already threads elsewhere (e.g. the /*q_width=*/ call arguments below) -- q_proj's own
+	// out_channels and o_proj's own in_channels. This IS q_width's own correct computation, not a
+	// stand-in for hidden_size.
+	base_geom.q_width = static_cast<uint64_t>(model->num_attention_heads) * model->head_dim;
 	base_geom.base_artifact_hash = model->content_hash;
 
 	// T-2113 (B6, D-SLM3368): PopulateAdapterFromView is the extracted body of
@@ -968,12 +974,17 @@ SslmGpuStatus sslm_gpu_adapter_map(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 			slot.present = true;
 			slot.rank = la.rank;
 			slot.out_channels = static_cast<uint32_t>(proj.delta_fold_entry->row_count);
+			// SSLM-GEOMETRY-SITE: GS-28
 			// a_weight is [rank, in_channels]: in_channels isn't independently recorded on
 			// LayerAdapterProjection -- reconstructed here by calling the ONE function that owns
 			// the projection-kind-to-in_channels rule (AdapterInChannelsFor,
-			// include/superslm/adapter_marshal.h), not a second copy of its own logic.
+			// include/superslm/adapter_marshal.h), not a second copy of its own logic. T-2509:
+			// base_geom.q_width above threaded through so o_proj's own in_channels (and thus
+			// a_bytes, the byte extent read out of proj.a_weight below) is q_width, not
+			// hidden_size.
 			const uint64_t in_channels = superslm_adapter::AdapterInChannelsFor(
-			    kProjNamesByIndex[p], model->hidden_size, model->intermediate_size);
+			    kProjNamesByIndex[p], model->hidden_size, model->intermediate_size,
+			    base_geom.q_width);
 			slot.a_bytes = static_cast<uint64_t>(la.rank) * in_channels;
 			slot.b_bytes = static_cast<uint64_t>(slot.out_channels) * la.rank;
 

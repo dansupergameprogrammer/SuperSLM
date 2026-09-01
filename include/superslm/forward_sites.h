@@ -543,12 +543,25 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
 // not discharge and does not block on.
 //
 // All weight matrices are row-major [out_channels, in_channels] (WGT1's own
-// layout, matmul.h). `hidden_size == num_attention_heads * head_dim`.
-// `k_weight`/`v_weight` are `[num_key_value_heads * head_dim, hidden_size]`,
-// distinct from `q_weight`/`o_weight`/`gate_weight`/`up_weight`/`down_weight`
-// (each `[hidden_size, hidden_size]` or `[intermediate_size, hidden_size]`/
-// `[hidden_size, intermediate_size]` as already documented below) -- GQA
-// group dispatch, including this shape, is owned by §11 S3.8a.
+// layout, matmul.h). T-2509 (Claude/Linnaeus/t2508-geometry-interchangeability-
+// fact-sheet-2026-09-01.md §3.3): this block used to assert `hidden_size ==
+// num_attention_heads * head_dim` as present-tense fact and state `q_weight`/
+// `o_weight` were each `[hidden_size, hidden_size]` -- both wrong once T-2432
+// Track A decoupled the two quantities (GS-01: the identity is no longer a
+// Load-enforced relation, only a coincidence some artifacts' own numbers
+// happen to satisfy). The struct's own field declarations below (q_fold_*
+// etc.) were already corrected by Track A; this was the one remaining
+// freestanding prose block describing the whole struct's weight-matrix
+// shapes that was not. `q_weight` is `[q_width, hidden_size]` (q_proj's real
+// output width, q_width = num_attention_heads * head_dim, GS-10); `o_weight`
+// is `[hidden_size, q_width]` (o_proj's real input width is q_width, its
+// output stays hidden_size, GS-11) -- DISTINCT from each other whenever
+// q_width != hidden_size. `k_weight`/`v_weight` are
+// `[num_key_value_heads * head_dim, hidden_size]`, unaffected by Q/O
+// decoupling; `gate_weight`/`up_weight`/`down_weight` are
+// `[intermediate_size, hidden_size]`/`[hidden_size, intermediate_size]` as
+// already documented below, likewise unaffected -- GQA group dispatch,
+// including the k/v shape, is owned by §11 S3.8a.
 //
 // C28's bias reconciliation (§6.2 step 2's third component, "then C28's bias
 // reconciliation where the site has a BIA1 entry", F-S3-4) is likewise a

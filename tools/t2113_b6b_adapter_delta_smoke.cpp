@@ -223,6 +223,7 @@ int main(int argc, char** argv) {
 	base_geom.hidden_size = hidden_size;
 	base_geom.intermediate_size = intermediate_size;
 	base_geom.kv_hidden_size = static_cast<uint64_t>(num_kv_heads) * head_dim;
+	base_geom.q_width = static_cast<uint64_t>(num_heads) * head_dim;  // T-2509
 	base_geom.base_artifact_hash = view.RawIntegrityHash();
 	superslm_adapter::AdapterHandle cpu_adapter;
 	const superslm_adapter::AdapterLoadStatus adapter_load_st =

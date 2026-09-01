@@ -363,6 +363,7 @@ int main(int argc, char** argv) {
 		geo.hidden_size = hidden_size;
 		geo.intermediate_size = model_view.config.intermediate_size;
 		geo.kv_hidden_size = static_cast<uint64_t>(num_kv_heads) * model_view.config.head_dim;
+		geo.q_width = static_cast<uint64_t>(num_heads) * model_view.config.head_dim;  // T-2509
 		geo.base_artifact_hash = model_view.RawIntegrityHash();
 
 		const auto t_adapter_start = std::chrono::steady_clock::now();

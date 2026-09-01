@@ -180,12 +180,28 @@ inline bool ParseLayerProjName(std::string_view name, uint32_t& layer, std::stri
 
 // This projection's own out_channels, the SAME per-projection channel-count convention
 // sslm_marshal.h's MarshalProjectionFold already applies to the base model's own WSC1 fold
-// (hidden_size for q/o/down_proj, num_key_value_heads*head_dim for k/v_proj, intermediate_size
-// for gate/up_proj) -- design Sec9 item (a)'s own "the caller reads the expectation from the base
-// artifact's own geometry."
+// (hidden_size for o/down_proj, num_key_value_heads*head_dim for k/v_proj, intermediate_size
+// for gate/up_proj, q_width for q_proj) -- design Sec9 item (a)'s own "the caller reads the
+// expectation from the base artifact's own geometry."
+//
+// T-2509 (Claude/Linnaeus/t2508-geometry-interchangeability-fact-sheet-2026-09-01.md §3.2):
+// `q_width` is a REQUIRED parameter, not derived here -- the base model's own forward path
+// already computes it once (num_attention_heads * head_dim, GS-04/GS-13) and this marshal site
+// reads that value rather than recomputing it, matching every other GS-NN site's own convention.
+// A caller with no real q_width to thread (none exists today; kept for the identical
+// "not-yet-widened caller" fallback GS-04's own guard uses) passes hidden_size, which is exactly
+// this parameter's own pre-T-2509 value everywhere it coincided with q_width.
 inline uint64_t AdapterOutChannelsFor(const std::string& proj, uint64_t hidden_size,
-                                       uint64_t intermediate_size, uint64_t kv_hidden_size) {
-	if (proj == "q_proj" || proj == "o_proj" || proj == "down_proj") return hidden_size;
+                                       uint64_t intermediate_size, uint64_t kv_hidden_size,
+                                       uint64_t q_width) {
+	// SSLM-GEOMETRY-SITE: GS-29
+	// q_proj's real out_channels is q_width (num_attention_heads * head_dim), independently of
+	// hidden_size -- the base model's own forward path already made this same correction
+	// (GS-08's own q_fold_identity/mult/shift, GS-12's own ProjectAndFunnel call at
+	// forward_sites.cpp:1722, "q_proj: in=hidden_size, out=q_width"). Split from o_proj/down_proj
+	// below, whose real out_channels genuinely IS hidden_size (GS-09/GS-12), unaffected by this.
+	if (proj == "q_proj") return q_width;
+	if (proj == "o_proj" || proj == "down_proj") return hidden_size;
 	if (proj == "k_proj" || proj == "v_proj") return kv_hidden_size;
 	if (proj == "gate_proj" || proj == "up_proj") return intermediate_size;
 	return 0;  // unreachable once ValidateAmplifyingFoldProjection has already accepted `proj`
@@ -193,18 +209,30 @@ inline uint64_t AdapterOutChannelsFor(const std::string& proj, uint64_t hidden_s
 
 // This projection's own IN-channels -- the sibling
 // `AdapterOutChannelsFor` above never had. Read from the SAME call sites `AddAmplifyingLoraDelta`
-// itself is invoked from (src/forward/forward_sites.cpp): `hidden_size` feeds q/o/gate/up/k/v_proj's
-// own delta-add (the q/o/gate/up calls each pass `hidden_size` as `in_channels`; the k/v calls pass
-// `normed.data(), hidden_size`), `intermediate_size` feeds down_proj's own (the down_proj call passes
+// itself is invoked from (src/forward/forward_sites.cpp): `hidden_size` feeds q/gate/up/k/v_proj's
+// own delta-add (the q/gate/up calls each pass `hidden_size` as `in_channels`; the k/v calls pass
+// `normed.data(), hidden_size`), `q_width` feeds o_proj's own (the o_proj call passes
+// `ctx_codes.data(), effective_q_width` -- forward_sites.cpp:1939, "o_proj: in=q_width,
+// out=hidden_size"), `intermediate_size` feeds down_proj's own (the down_proj call passes
 // `act_codes.data(), intermediate_size`). This is what `lora_A`'s own declared shape must match --
 // `GemmInt8AccumulateRow(in_codes, adapter->a_weight, in_channels, rank, ...)` reads
 // `in_channels * rank` bytes from `a_weight` with a length that comes from THIS function's own
 // return value and `LayerAdapter::rank`, never from the tensor actually indexed.
+//
+// T-2509 (fact sheet §3.1): `q_width`, the identical required parameter
+// `AdapterOutChannelsFor` above now takes, for the identical reason.
 inline uint64_t AdapterInChannelsFor(const std::string& proj, uint64_t hidden_size,
-                                      uint64_t intermediate_size) {
+                                      uint64_t intermediate_size, uint64_t q_width) {
 	if (proj == "down_proj") return intermediate_size;
-	if (proj == "q_proj" || proj == "o_proj" || proj == "gate_proj" || proj == "up_proj" ||
-	    proj == "k_proj" || proj == "v_proj") {
+	// SSLM-GEOMETRY-SITE: GS-28
+	// o_proj's real in-channels is q_width (num_attention_heads * head_dim), independently of
+	// hidden_size -- confirmed at the base model's own forward path (GS-12's own ProjectAndFunnel
+	// call at forward_sites.cpp:1939, "o_proj: in=q_width, out=hidden_size"). Split from
+	// q_proj/gate_proj/up_proj/k_proj/v_proj below, whose real in-channels genuinely IS
+	// hidden_size (each reads the normed hidden state, unaffected by Q/O width decoupling).
+	if (proj == "o_proj") return q_width;
+	if (proj == "q_proj" || proj == "gate_proj" || proj == "up_proj" || proj == "k_proj" ||
+	    proj == "v_proj") {
 		return hidden_size;
 	}
 	return 0;  // unreachable once ValidateAmplifyingFoldProjection has already accepted `proj`
@@ -246,6 +274,11 @@ struct BaseModelGeometry {
 	uint64_t hidden_size = 0;
 	uint64_t intermediate_size = 0;
 	uint64_t kv_hidden_size = 0;  // num_key_value_heads * head_dim
+	// T-2509: q_proj's real out-channels and o_proj's real in-channels
+	// (AdapterOutChannelsFor/AdapterInChannelsFor, above) -- every construction site below sets
+	// this the SAME way `kv_hidden_size` above is set, from the base model's own
+	// num_attention_heads * head_dim, matching the base forward path's own q_width (GS-04/GS-13).
+	uint64_t q_width = 0;
 	std::array<uint8_t, superslm::kIntegrityHashBytes> base_artifact_hash{};
 };
 
@@ -365,8 +398,11 @@ inline AdapterLoadStatus PopulateAdapterFromView(const superslm::SslmModelView& 
 			return AdapterLoadStatus::ProjectionInvalid;
 		}
 
-		const uint64_t expected_out =
-		    AdapterOutChannelsFor(proj, base.hidden_size, base.intermediate_size, base.kv_hidden_size);
+		// SSLM-GEOMETRY-SITE: GS-29
+		// T-2509: threads base.q_width through -- q_proj's own DeltaFoldScales row-count check
+		// (below) now compares against the real out_channels, not hidden_size.
+		const uint64_t expected_out = AdapterOutChannelsFor(
+		    proj, base.hidden_size, base.intermediate_size, base.kv_hidden_size, base.q_width);
 		std::string dim_err;
 		if (superslm::ValidateAmplifyingFoldDimension(dentry, expected_out, &dim_err) !=
 		    superslm::SslmModelStatus::Ok) {
@@ -408,8 +444,11 @@ inline AdapterLoadStatus PopulateAdapterFromView(const superslm::SslmModelView& 
 		// checked by name (rejected magic, version, reserved, projection, entry name, layer index,
 		// DFS1/UFS1 dimension) -- these two were taken on trust and become raw pointers the engine
 		// dereferences at a length neither tensor's own declared shape had ever been read against.
+		// SSLM-GEOMETRY-SITE: GS-28
+		// T-2509: threads base.q_width through -- o_proj's own lora_A shape check (below) now
+		// compares against the real in_channels, not hidden_size.
 		const uint64_t in_channels =
-		    AdapterInChannelsFor(proj, base.hidden_size, base.intermediate_size);
+		    AdapterInChannelsFor(proj, base.hidden_size, base.intermediate_size, base.q_width);
 		if (a_t->rank != 2 || a_t->shape[0] != meta.rank || a_t->shape[1] != in_channels) {
 			if (err) {
 				*err = "\"" + std::string(dentry.name) + ".lora_A\" shape mismatch: expected rank=2 "

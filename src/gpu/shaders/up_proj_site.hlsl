@@ -49,6 +49,15 @@ ByteAddressBuffer Fold   : register(t9);
 void main(uint3 gtid : SV_GroupThreadID)
 {
     uint t = gtid.x;
+    // SSLM-GEOMETRY-SITE: GS-31
+    // T-2509 (widening byproduct, geometry_site_census.py's own multi-line window sweep):
+    // `hidden_size` here and `out_channels` two lines below are TWO INDEPENDENT, both-correct
+    // local variables that happen to share this shader's own generic prelude, not one standing
+    // in for the other -- `hidden_size` feeds only SeqStickyOffGpu's per-sequence tag-offset
+    // lookup (unrelated to any projection's width), and `out_channels` correctly equals
+    // g_intermediate_size, up_proj's own real, unaffected output width (matching
+    // up_proj_gemm_site.hlsl's own confirmed-correct GS-24). Registered, not fixed: no code here
+    // assumes hidden_size == num_attention_heads * head_dim.
     int hidden_size = (int)g_hidden_size;
     int out_channels = (int)g_intermediate_size;
     uint sticky_off = SeqStickyOffGpu(hidden_size);

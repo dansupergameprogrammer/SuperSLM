@@ -473,6 +473,7 @@ int main(int argc, char** argv) {
 		geo.hidden_size = base_model.hidden_size;
 		geo.intermediate_size = base_model.view.config.intermediate_size;
 		geo.kv_hidden_size = static_cast<uint64_t>(base_model.num_kv_heads) * base_model.view.config.head_dim;
+		geo.q_width = static_cast<uint64_t>(base_model.num_heads) * base_model.view.config.head_dim;  // T-2509
 		geo.base_artifact_hash = base_model.view.RawIntegrityHash();
 
 		AdapterHandle h;

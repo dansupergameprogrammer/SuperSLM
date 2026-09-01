@@ -110,6 +110,7 @@ static void TestDim10_P3_AdapterDeltaGoldenReproductionThroughAbi() {
 	geo.hidden_size = oracle.hidden_size;
 	geo.intermediate_size = oracle.intermediate_size;
 	geo.kv_hidden_size = static_cast<uint64_t>(oracle.num_kv_heads) * oracle.head_dim;
+	geo.q_width = static_cast<uint64_t>(oracle.num_attention_heads) * oracle.head_dim;  // T-2509
 	geo.base_artifact_hash = view.RawIntegrityHash();
 	superslm_adapter::AdapterHandle adapter_handle;
 	std::string adapter_err;

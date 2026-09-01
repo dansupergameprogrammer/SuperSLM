@@ -18,15 +18,36 @@ question into a checkable one, in three parts:
      *.py), and every raw hit not covered by a marker within the same line window fails
      the census.
 
-     KNOWN LIMITATION (T-2468 F2, Claude/Mendeleev/t2468-census-recommissioning-2026-08-31.md
-     Sec4a case 4, dated 2026-08-31, pre-existing -- not introduced or touched by T-2475's own
-     exclusion-matching fix): `_r1_multiply_hit`/`_qow_hit` co-occurrence-match one PHYSICAL
-     LINE at a time (`readlines()`, per-line). A genuinely new R1/QOW site whose co-occurring
-     tokens land on different physical lines -- plausible under ordinary formatting of a long
-     conditional or a wrapped return -- evades Part 2 entirely, regardless of markers or
-     exclusions. A `PASS` from this census does not cover that shape; it covers only defects
-     whose co-occurring tokens share one physical line. Restated at `main()`'s own PASS line so
-     a reader of a passing run sees it without opening this file.
+     WIDENED T-2509 (Claude/Linnaeus/t2508-geometry-interchangeability-fact-sheet-2026-09-01.md
+     §3.1, dated 2026-09-01): the limitation named below as a prediction is demonstrated --
+     `AdapterInChannelsFor`'s o_proj branch (include/superslm/adapter_marshal.h) has its
+     condition (`proj == "o_proj"`) and its `return hidden_size;` on different physical lines,
+     inside this census's own swept prefix (`include/`), and the single-physical-line form of
+     Part 2 below did not catch it. Part 2 now ALSO runs a sliding multi-line window
+     (`_WINDOW_SIZE` physical lines, joining every non-comment line in the window before testing
+     the SAME `_r1_multiply_hit`/`_qow_hit` functions against the joined text) alongside the
+     original single-physical-line test, so a co-occurrence split across up to `_WINDOW_SIZE`
+     physical lines is now caught. This was validated BEFORE either §3.1 or §3.2 was fixed
+     (StandardsDocument.md §4's own rule against validating a new check on a population its own
+     fix would destroy): with the widening landed and adapter_marshal.h still UNFIXED, the
+     census reported exactly one new "UNMARKED QOW PATTERN HIT (window)" finding --
+     `AdapterInChannelsFor`'s o_proj branch, reproducing §3.1 -- and continued to correctly
+     EXCLUDE `AdapterOutChannelsFor`'s already-known, already-excused q_proj residual (§3.2,
+     same-line, already reachable by the pre-widening single-line check, unaffected by this
+     addition), with `matched_exclusions` unchanged for it. See this ticket's own build log
+     (Claude/Brunel/) for the pre-fix, widening-only run's full output. Overlapping window starts
+     that both land on the SAME underlying defect are merged into one reported finding (below) so
+     one real site is not reported once per line it spans.
+
+     PRE-EXISTING LIMITATION (T-2468 F2, Claude/Mendeleev/t2468-census-recommissioning-
+     2026-08-31.md Sec4a case 4, dated 2026-08-31): `_r1_multiply_hit`/`_qow_hit` themselves still
+     co-occurrence-match on TEXT, never on tokens -- widening the window closes the "different
+     physical line" gap, not the family's own reach (D-SLM5811's own ruling, "a census is an
+     inventory control, not a completeness oracle," applies here exactly as it applies to the
+     registry itself): a co-occurrence spelled out via a renamed local, an intermediate quantity
+     computed several lines further upstream than `_WINDOW_SIZE` allows, or a derivation in a data
+     file this scan's token list does not anticipate, still evades Part 2 entirely. A `PASS` from
+     this census does not cover those shapes.
 
      DEAD EXCLUSION check (T-2475, Claude/Poirot/6597903-t2472-ask5-tracka-confirmation.md
      Observation, D-SLM5617): every `_PART2_EXCLUDED_TEXT` entry must match at least one
@@ -141,14 +162,33 @@ def _r1_multiply_hit(line: str) -> bool:
 # Family QOW: hidden_size used as a stand-in for q_proj's/o_proj's true width, without
 # checking anything -- a same-line co-occurrence of `hidden_size`/`g_hidden_size` and one
 # of the projection/weight/fold/channel-count tokens the design's own §2.5 names.
-_QOW_TOKENS = ("q_proj", "o_proj", "q_weight", "o_weight", "q_fold", "o_fold", "QProj",
-               "OProj", "out_channels")
+_QOW_TOKENS = ("q_proj", "o_proj", "q_weight", "o_weight", "q_fold", "o_fold", "QProj", "OProj")
+
+# T-2509: `out_channels` is checked separately from the plain-substring `_QOW_TOKENS` above, with
+# a word boundary on its LEFT side -- `kv_out_channels` (include/superslm/gpu_port.h's own
+# `ComputeGpuGemmSiteGroupPlan` parameter, k/v's real, unaffected output width doubled) contains
+# `out_channels` as a bare substring, which a plain `in` check matches for free. Executed and
+# found doing exactly that: widening Part 2 to a multi-line window (below) put a `hidden_size`
+# parameter and this `kv_out_channels` parameter of the SAME declaration inside one window for the
+# first time (they were never on one physical line together before), firing a QOW hit on a
+# declaration that has nothing to do with q_proj/o_proj at all. Every genuine `out_channels` use
+# already in this tree (grepped tree-wide) is a bare identifier, never itself prefixed by another
+# word character, so this tightening changes nothing for a real hit.
+_OUT_CHANNELS_RE = re.compile(r"(?<![A-Za-z0-9_])out_channels")
+
+# T-2509: the widened Part 2 window, in physical lines (module docstring's own "WIDENED T-2509"
+# note). `AdapterInChannelsFor`'s o_proj branch -- the demonstrated population this constant is
+# sized against -- has its condition and its `return hidden_size;` 2 physical lines apart; 4 is
+# generous relative to that (room for a continued condition line plus the return, without being
+# so wide it starts joining unrelated statements from neighboring functions). Widening this
+# further is cheap if a future demonstrated site needs more.
+_WINDOW_SIZE = 4
 
 
 def _qow_hit(line: str) -> bool:
     if "hidden_size" not in line and "g_hidden_size" not in line:
         return False
-    return any(tok in line for tok in _QOW_TOKENS)
+    return any(tok in line for tok in _QOW_TOKENS) or bool(_OUT_CHANNELS_RE.search(line))
 
 
 _SOURCE_GLOBS = (".cpp", ".h", ".hlsl", ".py")
@@ -225,41 +265,37 @@ _PART2_EXCLUDED_FILES = {
 # statement it names and nothing else sharing its line. `_part2_excise_excluded_text` (below)
 # removes each matched fragment's own text from the line before the pattern regexes ever see
 # it, rather than skipping the whole line -- new content before, after, or instead of the
-# fragment is left in the remainder and scanned exactly like ordinary code. The `model.h` and
-# `proof_manifest.h` fragments below now carry their own full stripped line (the enumerator
-# declaration plus the trailing comment that is the actual reason Part 2's regexes fire on that
-# line at all) rather than a shorter uniqueness-only prefix -- excising a partial prefix would
-# have left that trailing comment's own hidden_size/head_dim/num_attention_heads/`*` text in the
-# remainder, re-triggering Part 2 on the untouched tree. `adapter_marshal.h`'s fragment already
-# spans its whole line and is unchanged.
+# fragment is left in the remainder and scanned exactly like ordinary code. Every fragment below
+# carries its own full stripped line (the enumerator declaration plus the trailing comment that
+# is the actual reason Part 2's regexes fire on that line at all) rather than a shorter
+# uniqueness-only prefix -- excising a partial prefix would have left that trailing comment's own
+# hidden_size/head_dim/num_attention_heads/`*` text in the remainder, re-triggering Part 2 on the
+# untouched tree.
+#
+# T-2509: this set used to carry two more entries (`include/superslm/adapter_marshal.h`'s
+# AdapterOutChannelsFor q_proj residual and `include/superslm/model.h`'s
+# ConfigGeometryHiddenSizeMismatch comment) -- both fixed/corrected this round and removed rather
+# than left as DEAD EXCLUSION findings; see the module docstring's own "WIDENED T-2509" note and
+# this ticket's own build log for what changed at each.
 _PART2_EXCLUDED_TEXT = {
-    # design Sec2.1 closing paragraph: "One item explicitly NOT touched, flagged rather than
-    # silently left alone" -- AdapterOutChannelsFor's own identical hidden_size-for-q_proj/
-    # o_proj convention, out of scope for Ask 5 (no adapter conversion requested for a
-    # non-square base model). A residual for whichever design next asks for one.
-    (os.path.join("include", "superslm", "adapter_marshal.h"),
-     'if (proj == "q_proj" || proj == "o_proj" || proj == "down_proj") return hidden_size;'),
-    # T-2432's own named residual, not fixed by this build: CheckConfigGeometry's own
-    # ConfigGeometryStatus::HiddenSizeGeometryMismatch enumerator (and its C-ABI mirror,
-    # SslmModelStatus::ConfigGeometryHiddenSizeMismatch) is now UNREACHABLE dead code -- Track
-    # A step 1 removed the return path that ever produced it, but the enumerator itself is
-    # additive-only (D-SLM3526) and this build does not remove enum values, only what
-    # populates them. The comment beside each declaration still describes the value's
-    # original, now-stale meaning. Flagged for the planner rather than silently left, per
-    # StandardsDocument.md Sec5.6's "every deferral is surfaced loudly" -- not fixed here
-    # because removing or renaming an ABI-additive enumerator is a design-level call, not a
-    # build-time one.
-    #
-    # T-2475: fragment widened from the enumerator's own text alone ("ConfigGeometryHiddenSize
-    # Mismatch,") to the full stripped line, including the trailing "// R1: ..." comment that is
-    # itself what trips _r1_multiply_hit -- the enumerator text alone matches no R1/QOW pattern.
-    (os.path.join("include", "superslm", "model.h"),
-     "ConfigGeometryHiddenSizeMismatch,    // R1: hidden_size != num_attention_heads * head_dim"),
     # T-2475: same widening as model.h above, and for the same reason -- the trailing comment,
     # not the enumerator name, is what the R1 regex actually matches.
     (os.path.join("include", "superslm", "proof_manifest.h"),
      "HiddenSizeGeometryMismatch, // hidden_size != num_attention_heads * head_dim -- R1, REMOVED"),
 }
+# T-2509 (StandardsDocument.md §6.6, records lifecycle -- a stale exclusion is deleted, not left
+# in the tree once its excused statement no longer exists): this set used to carry two more
+# entries.
+#   - `include/superslm/adapter_marshal.h`'s AdapterOutChannelsFor q_proj residual (fact sheet
+#     §3.2) is FIXED this round (GS-29) -- the exact excused line
+#     (`if (proj == "q_proj" || proj == "o_proj" || proj == "down_proj") return hidden_size;`)
+#     no longer exists (q_proj is now its own branch, registered and marked instead of excused).
+#   - `include/superslm/model.h`'s ConfigGeometryHiddenSizeMismatch enumerator comment (fact
+#     sheet §3.4) was corrected this round to match `proof_manifest.h`'s own already-correct
+#     "REMOVED... UNREACHABLE... additive-only" form -- `head_dim` moved onto a comment-only
+#     continuation line the correction added, so the enumerator's own CODE line no longer
+#     contains the `hidden_size .. head_dim .. *` co-occurrence this exclusion existed to
+#     excuse; removed rather than left to report DEAD EXCLUSION.
 
 
 def _part2_excise_excluded_text(rel_path: str, line: str, matched=None) -> str:
@@ -410,8 +446,15 @@ def run_census(repo_root: str) -> list[str]:
         def _covered(line_no: int, window: int = 25) -> bool:
             return any(abs(line_no - ml) <= window for ml in marker_lines)
 
+        # First pass: classify every line as comment-only or not, and -- for every non-comment
+        # line -- compute its excised scan text exactly ONCE (T-2475's own excision, unchanged),
+        # so both the single-physical-line check below and the T-2509 windowed check that
+        # follows it read the SAME excised text without excising (and re-tallying
+        # `matched_exclusions` for) any line twice.
+        n = len(lines)
+        is_comment_only = [False] * (n + 1)  # 1-indexed; index 0 unused
+        scan_lines = [""] * (n + 1)
         for i, line in enumerate(lines, start=1):
-            stripped = line.strip()
             # T-2432's own narrowing: a pure-comment/prose line is exempt from Part 2 -- the
             # census's job is to catch CODE that misuses hidden_size, not prose that names the
             # relation while explaining a fix (every marked site's own explanatory comment
@@ -420,22 +463,96 @@ def run_census(repo_root: str) -> list[str]:
             # code, since code and its explaining comment are never the ONLY two lines in a
             # diff -- but this narrowing is stated, not silently applied: see this ticket's own
             # build log for the same disclosure the production-only file scope above carries.
-            if stripped.startswith(comment_prefixes):
+            if line.strip().startswith(comment_prefixes):
+                is_comment_only[i] = True
                 continue
             # T-2475: excise the excused fragment's own text (if any) rather than skipping the
             # whole line -- see `_part2_excise_excluded_text`'s own docstring and the header
-            # comment above `_PART2_EXCLUDED_TEXT` for why. `scan_line` is what the pattern
-            # regexes see; failure messages below still quote the real, un-excised `line` so a
-            # human reading a finding sees the actual source text.
-            scan_line = _part2_excise_excluded_text(rel_path, line, matched_exclusions)
+            # comment above `_PART2_EXCLUDED_TEXT` for why. `scan_lines[i]` is what the pattern
+            # regexes see; failure messages below still quote the real, un-excised source line so
+            # a human reading a finding sees the actual source text.
+            scan_lines[i] = _part2_excise_excluded_text(rel_path, line, matched_exclusions)
+
+        # --- Single-physical-line check (unchanged mechanics, now reading the precomputed
+        #     scan_lines rather than excising inline). ---
+        single_line_hit: list[str | None] = [None] * (n + 1)
+        for i in range(1, n + 1):
+            if is_comment_only[i]:
+                continue
+            scan_line = scan_lines[i]
             hit = None
             if _R1_DIVISION_RE.search(scan_line) or _r1_multiply_hit(scan_line):
                 hit = "R1"
             elif _qow_hit(scan_line):
                 hit = "QOW"
+            single_line_hit[i] = hit
             if hit and not _covered(i):
                 failures.append(f"UNMARKED {hit} PATTERN HIT: {os.path.relpath(path, repo_root)}:{i}: "
-                                 f"{line.strip()}")
+                                 f"{lines[i - 1].strip()}")
+
+        # --- T-2509: sliding multi-line window (module docstring's own "WIDENED T-2509" note).
+        #     Catches a co-occurrence whose two halves sit on DIFFERENT physical lines, up to
+        #     `_WINDOW_SIZE` lines apart -- exactly the shape the single-line check above cannot
+        #     see (demonstrated: adapter_marshal.h's AdapterInChannelsFor, condition on one line,
+        #     `return hidden_size;` two lines below). Only tests a window whose OWN start line did
+        #     not already produce a single-line hit above, so this section adds strictly NEW
+        #     findings -- never a second report of a hit the single-line check already caught.
+        #     Comment-only lines within a window are skipped when joining (matching the
+        #     single-line check's own comment exemption), not counted toward window width.
+        #
+        #     QOW ONLY, deliberately -- R1's own multiply detection (`_r1_multiply_hit`) fires on
+        #     a bare `"*" in line`, loosened (module comment above `_R1_DIVISION_RE`) because the
+        #     founding site wraps both operands in `static_cast<uint64_t>(...)`. That looseness
+        #     was safe on ONE physical line (an unrelated pointer type/deref sharing a line with a
+        #     `head_dim`/heads mention is rare); windowed across `_WINDOW_SIZE` lines it stops
+        #     being safe -- executed and found firing on `src/proof_manifest.cpp`'s own
+        #     `CheckConfigGeometry(cfg.hidden_size, cfg.num_attention_heads, ...)` CALL (a
+        #     legitimate caller of the canonical, already-decoupled check, analogous to
+        #     `ValidateConfigGeometryJoin`) purely because an UNRELATED `*config_section` pointer
+        #     dereference two lines above shares the window, and on both `rope_commit_site.hlsl`
+        #     and `rope_guard_site.hlsl`'s own unrelated `num_attention_heads / num_kv_heads`
+        #     GQA-group-count division for the identical reason. Widening R1's own detection
+        #     safely needs a tighter "*" test (binding it to the actual heads/head_dim tokens, not
+        #     any asterisk in the window) that is a separate, more careful change this ticket does
+        #     not make -- stated as an owed narrowing, matching this file's own established
+        #     convention of disclosing a scope boundary rather than silently applying it (see
+        #     `_PART2_ALLOWED_PREFIXES`'s own comment). The demonstrated population this widening
+        #     is validated against (§3.1/§3.2 of this ticket's own fact sheet) is QOW-family only,
+        #     so narrowing the window to QOW does not cost the widening its one proven job. ---
+        raw_window_hits: list[tuple[int, int, str]] = []  # (start_line, end_line, hit_type)
+        for i in range(1, n + 1):
+            if is_comment_only[i] or single_line_hit[i]:
+                continue
+            parts = []
+            end = i
+            for j in range(i, min(i + _WINDOW_SIZE, n + 1)):
+                if is_comment_only[j]:
+                    continue
+                parts.append(scan_lines[j])
+                end = j
+            if len(parts) < 2:
+                continue  # nothing to co-occur across -- a lone line is the single-line check's job
+            window_text = " ".join(parts)
+            if _qow_hit(window_text):
+                raw_window_hits.append((i, end, "QOW"))
+
+        # Merge overlapping/adjacent same-type window hits into ONE reported finding per
+        # underlying defect -- a real multi-line site is caught by every window start whose span
+        # reaches it, and reporting each start separately would report one defect many times.
+        raw_window_hits.sort(key=lambda t: (t[2], t[0]))
+        idx = 0
+        while idx < len(raw_window_hits):
+            group_start, group_end, group_hit = raw_window_hits[idx]
+            idx += 1
+            while idx < len(raw_window_hits) and raw_window_hits[idx][2] == group_hit and \
+                    raw_window_hits[idx][0] <= group_end + 1:
+                group_end = max(group_end, raw_window_hits[idx][1])
+                idx += 1
+            if not _covered(group_start):
+                snippet = " / ".join(ln.strip() for ln in lines[group_start - 1:group_end] if ln.strip())
+                failures.append(
+                    f"UNMARKED {group_hit} PATTERN HIT (window): {os.path.relpath(path, repo_root)}:"
+                    f"{group_start}-{group_end}: {snippet}")
 
     for f, text in _PART2_EXCLUDED_TEXT:
         count = matched_exclusions.get((f, text), 0)
@@ -700,9 +817,13 @@ def main() -> int:
     print(f"geometry_site_census: PASS -- {marked} site(s) fixed-and-marked or "
           f"confirmed-correct-and-marked, 0 unmarked R1/QOW pattern hits "
           f"({len(registry) - marked} site(s) exempt, Track B's own not-yet-built scope)")
-    print("  KNOWN LIMITATION (T-2468 F2, dated 2026-08-31, pre-existing): Part 2 matches R1/QOW "
-          "co-occurrence one physical line at a time -- a genuinely new site whose co-occurring "
-          "tokens land on different physical lines is not covered by this PASS.")
+    print(f"  T-2509: Part 2's co-occurrence check now also runs a {_WINDOW_SIZE}-physical-line "
+          "sliding window (module docstring's own \"WIDENED T-2509\" note), closing the T-2468 F2 "
+          "limitation this line used to restate. What remains true (D-SLM5811): this is still a "
+          "TEXT match, never a token/dataflow one -- a co-occurrence spelled out via a renamed "
+          "local, a quantity computed further upstream than the window reaches, or a derivation "
+          "in a data file this scan's token list does not anticipate is still not covered by this "
+          "PASS.")
     return 0
 
 

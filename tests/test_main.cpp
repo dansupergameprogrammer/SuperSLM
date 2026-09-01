@@ -22449,6 +22449,7 @@ static void TestAdapterLoaderAcceptsWellFormedSyntheticAdapterAndPopulatesEveryD
 	geo.hidden_size = 2;
 	geo.intermediate_size = 2;
 	geo.kv_hidden_size = 2;  // num_key_value_heads(1) * head_dim(2)
+	geo.q_width = 2;  // num_attention_heads(1) * head_dim(2) -- T-2509
 	geo.base_artifact_hash = base_hash;
 
 	AdapterHandle handle;
@@ -22511,6 +22512,7 @@ static void TestAdapterLoaderRejectionCells() {
 	geo.hidden_size = 2;
 	geo.intermediate_size = 2;
 	geo.kv_hidden_size = 2;
+	geo.q_width = 2;  // num_attention_heads(1) * head_dim(2) -- T-2509
 	geo.base_artifact_hash = base_hash;
 
 	auto write_and_load = [&](const std::vector<uint8_t>& bytes, AdapterHandle& handle, std::string& err) {
@@ -22840,6 +22842,190 @@ static void TestAdapterLoaderRejectionCells() {
 	}
 }
 
+// --- T-2509 (Claude/Linnaeus/t2508-geometry-interchangeability-fact-sheet-2026-09-01.md §3.1/
+// §3.2): a NON-SQUARE base geometry (hidden_size != num_attention_heads * head_dim) -- the shape
+// every OTHER cell in this file avoids, since every existing fixture's own heads*head_dim happens
+// to equal hidden_size. The pinned real candidate this ticket derives from has hidden_size=1024
+// against heads*head_dim=2048; these two cells use the smallest fixture geometry that keeps the
+// same inequality (hidden_size=2, num_attention_heads=2, head_dim=2 -- q_width=4 != hidden_size=2).
+// Before this ticket's fix, AdapterOutChannelsFor's q_proj branch and AdapterInChannelsFor's
+// o_proj branch both returned hidden_size where each's real width is q_width -- a correctly-
+// shaped q_proj/o_proj adapter artifact for this geometry was wrongly REJECTED. Tree-wide grep
+// confirmed zero existing test references to either function under any geometry before this pin
+// (fact sheet §3.1's own method note) -- these are the first. -----------------------------------
+
+// q_proj's real out_channels is q_width (4), not hidden_size (2) -- AdapterOutChannelsFor's own
+// q_proj branch (fact sheet §3.2, the design's own already-flagged deferral).
+static void TestAdapterLoaderNonSquareGeometryQProjOutChannelsIsQWidth() {
+	using namespace t2102_adapter_loader_fixtures;
+	using namespace superslm_test;
+	using superslm::SslmDtype;
+	using superslm::SslmSectionType;
+
+	superslm::SslmArtifact base = BuildMinimalBaseArtifact(
+	    /*hidden_size=*/2, /*num_hidden_layers=*/1, /*num_attention_heads=*/2,
+	    /*num_key_value_heads=*/1, /*head_dim=*/2, /*intermediate_size=*/2);
+	const auto base_hash = base.RawIntegrityHash();
+
+	Cfg1Spec spec{};
+	spec.hidden_size = 2;
+	spec.num_hidden_layers = 1;
+	spec.num_attention_heads = 2;
+	spec.num_key_value_heads = 1;
+	spec.head_dim = 2;
+	spec.intermediate_size = 2;
+	spec.context_cap = 1;
+	spec.kv_precision = 0;
+	spec.kv_block_size = 1;
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+
+	std::vector<uint8_t> adp1 = BuildAdp1(/*rank=*/1, /*target_modules_mask=*/0x1 /*q_proj*/, base_hash,
+	                                       /*lora_alpha=*/8.0, /*use_rslora=*/false,
+	                                       "t2509-qproj-nonsquare");
+	FixtureSection prov = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, adp1);
+
+	// DeltaFoldScales row_count=4 -- q_proj's own REAL out_channels (q_width), matching what a
+	// real converter writes for this candidate's own geometry.
+	BuiltManifest dfs1 = BuildFoldManifestOneEntry(superslm::kDeltaFoldScalesMagic, "layer0.q_proj",
+	                                                /*row_count=*/4,
+	                                                {{1, 0, 0}, {1, 0, 0}, {1, 0, 0}, {1, 0, 0}});
+	FixtureSection dfs1_section =
+	    MakeSection(SslmSectionType::DeltaFoldScales, SslmDtype::Int32, dfs1.bytes);
+	BuiltManifest ufs1 =
+	    BuildFoldManifestOneEntry(superslm::kUFoldScalesMagic, "layer0.q_proj", /*row_count=*/1, {{1, 0, 0}});
+	FixtureSection ufs1_section = MakeSection(SslmSectionType::UFoldScales, SslmDtype::Int32, ufs1.bytes);
+
+	// lora_A: [rank=1, in_channels=hidden_size=2] -- q_proj's IN is genuinely hidden_size,
+	// unaffected by Q/O decoupling (fact sheet §3.1's own confirmation, forward_sites.cpp:1722).
+	// lora_B: [out_channels=4, rank=1] -- q_proj's REAL out_channels, q_width, not hidden_size=2.
+	BuiltManifest wgt1 = BuildAdapterWeightsManifest("layer0.q_proj", /*rank=*/1, /*in=*/2, /*out=*/4,
+	                                                  /*a=*/{1, 2}, /*b=*/{10, 20, 30, 40});
+	FixtureSection wgt1_section = MakeSection(SslmSectionType::Weights, SslmDtype::Int8, wgt1.bytes);
+
+	auto built = BuildArtifact(
+	    {config, MakeSigmoidLutSection(), prov, wgt1_section, dfs1_section, ufs1_section});
+
+	const std::string path = "t2509_qproj_nonsquare_fixture.sslm.tmp";
+	{
+		std::ofstream f(path, std::ios::binary | std::ios::trunc);
+		f.write(reinterpret_cast<const char*>(built.bytes.data()),
+		        static_cast<std::streamsize>(built.bytes.size()));
+	}
+
+	BaseModelGeometry geo;
+	geo.num_hidden_layers = 1;
+	geo.hidden_size = 2;
+	geo.intermediate_size = 2;
+	geo.kv_hidden_size = 2;  // num_key_value_heads(1) * head_dim(2)
+	geo.q_width = 4;         // num_attention_heads(2) * head_dim(2) -- T-2509, genuinely != hidden_size
+	geo.base_artifact_hash = base_hash;
+
+	AdapterHandle handle;
+	std::string err;
+	const auto status = LoadAdapterArtifact(path, geo, handle, &err);
+	std::remove(path.c_str());
+	CHECK_MSG(status == AdapterLoadStatus::Ok,
+	          "a correctly-shaped q_proj adapter at a NON-SQUARE base geometry (hidden_size=2, "
+	          "q_width=4) -- DeltaFoldScales row_count=4 and lora_B shape=[4,1], both q_width, not "
+	          "hidden_size -- must be ACCEPTED: AdapterOutChannelsFor's q_proj branch must return "
+	          "q_width, not hidden_size: got %s (%s)",
+	          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
+	if (status != AdapterLoadStatus::Ok) return;
+	CHECK_MSG(handle.layer_adapters[0].q.a_weight != nullptr && handle.layer_adapters[0].q.b_weight != nullptr,
+	          "layer0.q_proj must be wired (a_weight/b_weight non-null)");
+	CHECK_MSG(handle.layer_adapters[0].q.b_weight[0] == 10 && handle.layer_adapters[0].q.b_weight[1] == 20 &&
+	              handle.layer_adapters[0].q.b_weight[2] == 30 && handle.layer_adapters[0].q.b_weight[3] == 40,
+	          "layer0.q_proj's b_weight (out_channels=q_width=4) must be the exact bytes this "
+	          "fixture wrote ([10,20,30,40]), got [%d,%d,%d,%d]",
+	          handle.layer_adapters[0].q.b_weight[0], handle.layer_adapters[0].q.b_weight[1],
+	          handle.layer_adapters[0].q.b_weight[2], handle.layer_adapters[0].q.b_weight[3]);
+}
+
+// o_proj's real in_channels is q_width (4), not hidden_size (2) -- AdapterInChannelsFor's own
+// o_proj branch (fact sheet §3.1, newly found by this ticket's own widened census).
+static void TestAdapterLoaderNonSquareGeometryOProjInChannelsIsQWidth() {
+	using namespace t2102_adapter_loader_fixtures;
+	using namespace superslm_test;
+	using superslm::SslmDtype;
+	using superslm::SslmSectionType;
+
+	superslm::SslmArtifact base = BuildMinimalBaseArtifact(
+	    /*hidden_size=*/2, /*num_hidden_layers=*/1, /*num_attention_heads=*/2,
+	    /*num_key_value_heads=*/1, /*head_dim=*/2, /*intermediate_size=*/2);
+	const auto base_hash = base.RawIntegrityHash();
+
+	Cfg1Spec spec{};
+	spec.hidden_size = 2;
+	spec.num_hidden_layers = 1;
+	spec.num_attention_heads = 2;
+	spec.num_key_value_heads = 1;
+	spec.head_dim = 2;
+	spec.intermediate_size = 2;
+	spec.context_cap = 1;
+	spec.kv_precision = 0;
+	spec.kv_block_size = 1;
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+
+	std::vector<uint8_t> adp1 = BuildAdp1(/*rank=*/1, /*target_modules_mask=*/0x2 /*o_proj*/, base_hash,
+	                                       /*lora_alpha=*/8.0, /*use_rslora=*/false,
+	                                       "t2509-oproj-nonsquare");
+	FixtureSection prov = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, adp1);
+
+	// DeltaFoldScales row_count=2 -- o_proj's own REAL out_channels stays hidden_size (unaffected
+	// by Q/O decoupling, GS-09/GS-12), correct either side of this ticket's own fix.
+	BuiltManifest dfs1 = BuildFoldManifestOneEntry(superslm::kDeltaFoldScalesMagic, "layer0.o_proj",
+	                                                /*row_count=*/2, {{1, 0, 0}, {1, 0, 0}});
+	FixtureSection dfs1_section =
+	    MakeSection(SslmSectionType::DeltaFoldScales, SslmDtype::Int32, dfs1.bytes);
+	BuiltManifest ufs1 =
+	    BuildFoldManifestOneEntry(superslm::kUFoldScalesMagic, "layer0.o_proj", /*row_count=*/1, {{1, 0, 0}});
+	FixtureSection ufs1_section = MakeSection(SslmSectionType::UFoldScales, SslmDtype::Int32, ufs1.bytes);
+
+	// lora_A: [rank=1, in_channels=4] -- o_proj's REAL in_channels, q_width, not hidden_size=2.
+	// lora_B: [out_channels=2, rank=1] -- o_proj's real out_channels, hidden_size (unaffected).
+	BuiltManifest wgt1 = BuildAdapterWeightsManifest("layer0.o_proj", /*rank=*/1, /*in=*/4, /*out=*/2,
+	                                                  /*a=*/{1, 2, 3, 4}, /*b=*/{50, 60});
+	FixtureSection wgt1_section = MakeSection(SslmSectionType::Weights, SslmDtype::Int8, wgt1.bytes);
+
+	auto built = BuildArtifact(
+	    {config, MakeSigmoidLutSection(), prov, wgt1_section, dfs1_section, ufs1_section});
+
+	const std::string path = "t2509_oproj_nonsquare_fixture.sslm.tmp";
+	{
+		std::ofstream f(path, std::ios::binary | std::ios::trunc);
+		f.write(reinterpret_cast<const char*>(built.bytes.data()),
+		        static_cast<std::streamsize>(built.bytes.size()));
+	}
+
+	BaseModelGeometry geo;
+	geo.num_hidden_layers = 1;
+	geo.hidden_size = 2;
+	geo.intermediate_size = 2;
+	geo.kv_hidden_size = 2;  // num_key_value_heads(1) * head_dim(2)
+	geo.q_width = 4;         // num_attention_heads(2) * head_dim(2) -- T-2509, genuinely != hidden_size
+	geo.base_artifact_hash = base_hash;
+
+	AdapterHandle handle;
+	std::string err;
+	const auto status = LoadAdapterArtifact(path, geo, handle, &err);
+	std::remove(path.c_str());
+	CHECK_MSG(status == AdapterLoadStatus::Ok,
+	          "a correctly-shaped o_proj adapter at a NON-SQUARE base geometry (hidden_size=2, "
+	          "q_width=4) -- lora_A shape=[1,4], q_width, not hidden_size -- must be ACCEPTED: "
+	          "AdapterInChannelsFor's o_proj branch must return q_width, not hidden_size: got %s "
+	          "(%s)",
+	          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
+	if (status != AdapterLoadStatus::Ok) return;
+	CHECK_MSG(handle.layer_adapters[0].o.a_weight != nullptr && handle.layer_adapters[0].o.b_weight != nullptr,
+	          "layer0.o_proj must be wired (a_weight/b_weight non-null)");
+	CHECK_MSG(handle.layer_adapters[0].o.a_weight[0] == 1 && handle.layer_adapters[0].o.a_weight[1] == 2 &&
+	              handle.layer_adapters[0].o.a_weight[2] == 3 && handle.layer_adapters[0].o.a_weight[3] == 4,
+	          "layer0.o_proj's a_weight (in_channels=q_width=4) must be the exact bytes this "
+	          "fixture wrote ([1,2,3,4]), got [%d,%d,%d,%d]",
+	          handle.layer_adapters[0].o.a_weight[0], handle.layer_adapters[0].o.a_weight[1],
+	          handle.layer_adapters[0].o.a_weight[2], handle.layer_adapters[0].o.a_weight[3]);
+}
+
 // --- End-to-end: a LOADER-populated adapter drives RunLayerLoop to the BIT-IDENTICAL result of
 // the SAME construction t2029_b1_fixtures' own B1c cell already proves correct (hand-wired), and
 // both diverge from the base-only (null-adapter) run -- proving the loader's marshaled pointers
@@ -22907,6 +23093,7 @@ static void TestAdapterLoaderPopulatedHandleDrivesRunLayerLoopBitIdenticalToHand
 	geo.hidden_size = 2;
 	geo.intermediate_size = 2;
 	geo.kv_hidden_size = 2;
+	geo.q_width = 2;  // num_attention_heads(1) * head_dim(2) -- T-2509
 	geo.base_artifact_hash = base_hash;
 
 	AdapterHandle handle_a, handle_b;
@@ -23091,6 +23278,8 @@ static void TestSslmGenerateAdapterFlagSequenceEndToEndChangesOutputFromBaseOnly
 	geo.intermediate_size = base_view.config.intermediate_size;
 	geo.kv_hidden_size =
 	    static_cast<uint64_t>(base_view.config.num_key_value_heads) * base_view.config.head_dim;
+	geo.q_width =
+	    static_cast<uint64_t>(base_view.config.num_attention_heads) * base_view.config.head_dim;  // T-2509
 	geo.base_artifact_hash = base_hash;
 
 	AdapterHandle handle;
@@ -26943,6 +27132,12 @@ int main(int argc, char** argv) {
 	// T-2102 (RESUME-2026-08-14-gpu-throughput.md §4, D-SLM3304): the adapter loader red suite.
 	TestAdapterLoaderAcceptsWellFormedSyntheticAdapterAndPopulatesEveryDeclaredEntry();
 	TestAdapterLoaderRejectionCells();
+
+	// T-2509 (Claude/Linnaeus/t2508-geometry-interchangeability-fact-sheet-2026-09-01.md §3.1/
+	// §3.2): a non-square base geometry -- see this file's own T-2509 section above.
+	TestAdapterLoaderNonSquareGeometryQProjOutChannelsIsQWidth();
+	TestAdapterLoaderNonSquareGeometryOProjInChannelsIsQWidth();
+
 	TestAdapterLoaderPopulatedHandleDrivesRunLayerLoopBitIdenticalToHandWiredFixture();
 	TestSslmGenerateAdapterFlagSequenceEndToEndChangesOutputFromBaseOnly();
 

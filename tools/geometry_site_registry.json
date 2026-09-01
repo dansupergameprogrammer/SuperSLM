@@ -514,6 +514,96 @@
           }
         ]
       }
+    },
+    {
+      "id": "GS-28",
+      "family": "QOW",
+      "file": "include/superslm/adapter_marshal.h",
+      "function": "AdapterInChannelsFor (o_proj); also marks its own two real call sites, PopulateAdapterFromView (this file) and sslm_gpu_adapter_map (src/gpu/gpu_1p0.cpp)",
+      "status": "fixed",
+      "required_tokens": [
+        "q_width"
+      ],
+      "note": "T-2509 (Claude/Linnaeus/t2508-geometry-interchangeability-fact-sheet-2026-09-01.md §3.1): the census's own single-physical-line Part 2 could not see this site (the o_proj condition and its `return hidden_size;` sit on different physical lines) -- found by T-2509's own widened, multi-line-window Part 2, demonstrated BEFORE this fix landed (this ticket's own build log). o_proj's real in-channels is q_width (num_attention_heads * head_dim), not hidden_size; AdapterInChannelsFor now takes q_width as a required parameter and returns it for o_proj, split from q_proj/gate_proj/up_proj/k_proj/v_proj (unaffected, still hidden_size).",
+      "expected_marker_count": 3,
+      "required_token_scopes": {
+        "include/superslm/adapter_marshal.h": [
+          {
+            "anchor": "o_proj's real in-channels is q_width",
+            "offset": 6
+          },
+          {
+            "anchor": "threads base.q_width through -- o_proj's own lora_A shape check",
+            "offset": 4
+          }
+        ],
+        "src/gpu/gpu_1p0.cpp": [
+          {
+            "anchor": null,
+            "offset": 10
+          }
+        ]
+      }
+    },
+    {
+      "id": "GS-29",
+      "family": "QOW",
+      "file": "include/superslm/adapter_marshal.h",
+      "function": "AdapterOutChannelsFor (q_proj); also marks its own real call site, PopulateAdapterFromView (this file)",
+      "status": "fixed",
+      "required_tokens": [
+        "q_width"
+      ],
+      "note": "T-2509 (fact sheet §3.2): the design's own already-flagged, not-yet-fixed residual (Ask 5, no adapter conversion requested for a non-square base model at the time) -- same-line, already reachable by the census's pre-widening Part 2, and excused there by name (_PART2_EXCLUDED_TEXT) until this fix landed; that exclusion entry is removed in the same round this site is registered (StandardsDocument.md §6.6, a dead exclusion is not left in the tree once its excused statement no longer exists). q_proj's real out-channels is q_width (num_attention_heads * head_dim), not hidden_size; AdapterOutChannelsFor now takes q_width as a required parameter and returns it for q_proj, split from o_proj/down_proj (unaffected, still hidden_size).",
+      "expected_marker_count": 2,
+      "required_token_scopes": {
+        "include/superslm/adapter_marshal.h": [
+          {
+            "anchor": "q_proj's real out_channels is q_width",
+            "offset": 6
+          },
+          {
+            "anchor": "threads base.q_width through -- q_proj's own DeltaFoldScales row-count check",
+            "offset": 4
+          }
+        ]
+      }
+    },
+    {
+      "id": "GS-30",
+      "family": "QOW",
+      "file": "src/gpu/shaders/gate_proj_site.hlsl",
+      "function": "main (hidden_size local + out_channels local)",
+      "status": "confirmed-correct",
+      "note": "T-2509 widening byproduct: surfaced by the multi-line-window sweep as a co-occurrence of `hidden_size` and `out_channels` within a few physical lines, but the two are independent, both-correct local variables sharing this shader's own generic prelude -- `hidden_size` feeds only SeqStickyOffGpu's per-sequence tag-offset lookup, `out_channels` correctly equals g_intermediate_size (gate_proj's own real, unaffected output width, matching GS-23's confirmed-correct gate_proj_gemm_site.hlsl). Not a defect; registered so the widened census's own coverage has a place to land instead of flagging it.",
+      "expected_marker_count": 1
+    },
+    {
+      "id": "GS-31",
+      "family": "QOW",
+      "file": "src/gpu/shaders/up_proj_site.hlsl",
+      "function": "main (hidden_size local + out_channels local)",
+      "status": "confirmed-correct",
+      "note": "T-2509 widening byproduct: identical shape and reasoning to GS-30, this shader's own up_proj sibling (out_channels correctly equals g_intermediate_size, up_proj's own real, unaffected output width, matching GS-24's confirmed-correct up_proj_gemm_site.hlsl).",
+      "expected_marker_count": 1
+    },
+    {
+      "id": "GS-32",
+      "family": "R1",
+      "file": "src/sslm_abi.cpp",
+      "function": "sslm_adapter_map (base_geom.q_width)",
+      "status": "confirmed-correct",
+      "note": "T-2509: this IS q_width's own correct computation (num_attention_heads * head_dim), not a stand-in for hidden_size -- the new construction site feeding GS-28/GS-29's own required BaseModelGeometry::q_width field, matching GS-25's own precedent (context_accumulate_site.hlsl).",
+      "expected_marker_count": 1
+    },
+    {
+      "id": "GS-33",
+      "family": "R1",
+      "file": "src/gpu/gpu_1p0.cpp",
+      "function": "sslm_gpu_adapter_map (base_geom.q_width)",
+      "status": "confirmed-correct",
+      "note": "T-2509: identical construction and reasoning to GS-32, this GPU-side sibling entry point.",
+      "expected_marker_count": 1
     }
   ]
 }

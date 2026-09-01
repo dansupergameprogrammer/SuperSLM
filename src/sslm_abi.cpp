@@ -3166,6 +3166,10 @@ extern "C" sslm_status sslm_adapter_map(const void* data, size_t size, sslm_mode
 	base_geom.hidden_size = bc.hidden_size;
 	base_geom.intermediate_size = bc.intermediate_size;
 	base_geom.kv_hidden_size = static_cast<uint64_t>(bc.num_key_value_heads) * bc.head_dim;
+	// SSLM-GEOMETRY-SITE: GS-32
+	// T-2509: this IS q_width's own correct computation (num_attention_heads * head_dim), not a
+	// stand-in for hidden_size -- feeds GS-28/GS-29's own required base.q_width field.
+	base_geom.q_width = static_cast<uint64_t>(bc.num_attention_heads) * bc.head_dim;
 	base_geom.base_artifact_hash = base->view.RawIntegrityHash();
 
 	auto* h = new (std::nothrow) sslm_adapter_s();
