@@ -168,8 +168,36 @@ confirmation of T-2491's diff --
     whole file green. `_mutated_targets_and_registry_are_byte_identical_after_the_module_runs`,
     below, is a module-scoped, autouse fixture that snapshots the seven `_mutated` targets plus
     the registry before this module's own suite runs and asserts them byte-identical after --
-    closing both halves of the dirty-checkout class at once, and every future cell that touches
-    the real tree, not just the two named above.
+    closing both halves of the dirty-checkout class at once, for those eight named paths.
+
+T-2499 fold-in (Claude/Bach/briefs/t2499.md; Claude/Poirot/bc2ae29-t2498-census-fixes-
+confirmation.md Significant 1/2, D-SLM5775/D-SLM5776): fix round on T-2498's confirmation of
+T-2497's diff --
+
+  - `test_oracle_header_commit_count_pin_matches_the_prose_word`'s own remedy (T-2497) removed
+    the only detection of the class it replaced: the oracle header's `COMMIT_COUNT_PIN` and prose
+    word can drift together from the file's own true history with that cell green throughout,
+    executed (a comment-only commit to the oracle, neither number updated: a full-history `git
+    log --follow` gives 16 where both the prose word and the pin still read 15). Restored by
+    `test_oracle_header_commit_count_matches_git_log_follow_on_a_full_history_checkout` in
+    `test_membership_check_population.py`, guarded on `git rev-parse --is-shallow-repository` the
+    same way `tools/ci/check_abi_header_inventory.py` degrades when its own population source is
+    unavailable -- skips explicitly on a shallow checkout (never expected to run in CI), runs and
+    catches the drift on every developer's own full-history checkout.
+  - The T-2497 fold-in bullet immediately above overclaimed the byte-identity fixture's own
+    scope: "every future cell that touches the real tree" is false as implemented -- executed, a
+    cell writing `include/superslm/forward_sites.h` without restoring gives `41 passed`, fixture
+    silent, file left modified, because that path was never in
+    `_MUTATED_TARGETS_AND_REGISTRY_PATHS`. The claim is narrowed to what the fixture actually
+    guarantees (its own docstring, below, and the comment above the tuple) -- exactly the eight
+    paths the tuple names, no more. The tuple's own `src/` entries, formerly duplicated as
+    separate `os.path.join(...)` literals 430-odd lines below the tuple, are replaced with
+    references to `_PROOF_MANIFEST_CPP`/`_SUPERSLM_GPU_CPP`, moved up and defined once, so the two
+    spellings cannot desync.
+  - `derive_bad_alloc_membership.py`'s `git_log_follow_commit_count` and its `--commit-count` CLI
+    branch (T-2497) had no cell; `test_membership_check_population.py`'s `--oracle` mode is
+    deliberately pinned through the real subprocess CLI path rather than called in-process, with
+    the reason written down, and this round follows that same precedent for `--commit-count`.
 """
 from __future__ import annotations
 
@@ -190,10 +218,39 @@ _MODEL_H = os.path.join("include", "superslm", "model.h")
 _PROOF_H = os.path.join("include", "superslm", "proof_manifest.h")
 _MATMUL_H = os.path.join("include", "superslm", "matmul.h")
 _FORWARD_SITES_CPP_T2481 = os.path.join("src", "forward", "forward_sites.cpp")
+# T-2499 (Claude/Poirot/bc2ae29-t2498-census-fixes-confirmation.md Significant 2, D-SLM5776):
+# moved up from this file's own T-2475 fold-in section (formerly defined at what were then lines
+# 674-675, well below `_MUTATED_TARGETS_AND_REGISTRY_PATHS`, below) so that tuple can reference
+# these two constants directly instead of duplicating their spelling as separate `os.path.join(...)`
+# literals -- a duplicate spelling that could (and did) go unnoticed if the constant below it in
+# the file ever changed. One definition, referenced from both places.
+_PROOF_MANIFEST_CPP = os.path.join("src", "proof_manifest.cpp")
+_SUPERSLM_GPU_CPP = os.path.join("src", "gpu", "superslm_gpu.cpp")
 
 _ADAPTER_FRAGMENT = 'if (proj == "q_proj" || proj == "o_proj" || proj == "down_proj") return hidden_size;'
 _MODEL_FRAGMENT = "ConfigGeometryHiddenSizeMismatch,    // R1: hidden_size != num_attention_heads * head_dim"
 _PROOF_FRAGMENT = "HiddenSizeGeometryMismatch, // hidden_size != num_attention_heads * head_dim -- R1, REMOVED"
+
+
+def _write_newline_for(raw_bytes: bytes) -> str:
+    """T-2491 (Poirot dcefab3-t2486-census-content-keying-confirmation.md Significant 2,
+    D-SLM5718), extracted as its own pure function by T-2499 (Claude/Poirot/bc2ae29-t2498-census-
+    fixes-confirmation.md item 3 sweep, D-SLM5778): picks the `open(..., newline=...)` argument
+    that reproduces a file's own newline convention on write-back, from that file's own raw bytes
+    rather than from its extension or the platform default. `.h`/`.cpp`/`.hlsl` files are
+    `attr/text` (tool-native, `w/crlf` on this checkout) and the platform-default write already
+    reproduced that -- the defect this closes is an `attr/text eol=lf` file (e.g. the JSON
+    registry): the platform-default write translates every `\\n` to `\\r\\n` regardless of the
+    file's own pinned convention, so a byte-for-byte restore of an eol=lf file silently comes back
+    CRLF.
+
+    Pulled out of `_mutated`, below, so this branch can be pinned directly on synthetic bytes
+    (`test_write_newline_for_picks_the_convention_from_raw_bytes`) rather than only through a real
+    repo file -- every one of `_mutated`'s own real-tree targets is pure CRLF today, so the branch
+    this function chooses on an eol=lf input has never been exercised by any cell that mutates the
+    real tree (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Sec7: reverting this
+    function's own logic to a blanket `newline=""` leaves the whole file green)."""
+    return "\r\n" if b"\r\n" in raw_bytes else ""
 
 
 @contextlib.contextmanager
@@ -201,21 +258,11 @@ def _mutated(rel_path: str, transform):
     """Mutates a real production file, at `rel_path` under the repo root, for the duration of
     the `with` block via `transform(original_text) -> new_text`, then restores the original
     content byte-for-byte. See this module's own docstring for why the real tree is mutated
-    in place rather than exercised against a synthetic `tmp` repo root.
-
-    T-2491 (Poirot dcefab3-t2486-census-content-keying-confirmation.md Significant 2, D-SLM5718):
-    the write-back explicitly picks the target file's own newline convention rather than trusting
-    the platform default. `.h`/`.cpp`/`.hlsl` files are `attr/text` (tool-native, `w/crlf` on this
-    checkout) and the platform-default write already reproduced that -- the defect this closes is
-    an `attr/text eol=lf` file (e.g. the JSON registry): the platform-default write translates
-    every `\\n` to `\\r\\n` regardless of the file's own pinned convention, so a byte-for-byte
-    restore of an eol=lf file silently comes back CRLF. Detected from the file's own raw bytes
-    (not assumed from its extension), so a future `eol=lf` file this helper is pointed at inherits
-    the correct behavior automatically rather than a second instance of this same defect."""
+    in place rather than exercised against a synthetic `tmp` repo root. See `_write_newline_for`,
+    above, for how the write-back newline convention is chosen."""
     full = os.path.join(_REPO_ROOT, rel_path)
     with open(full, "rb") as f:
-        _uses_crlf = b"\r\n" in f.read()
-    _write_newline = "\r\n" if _uses_crlf else ""
+        _write_newline = _write_newline_for(f.read())
     with open(full, "r", encoding="utf-8") as f:
         original = f.read()
     try:
@@ -227,25 +274,46 @@ def _mutated(rel_path: str, transform):
             f.write(original)
 
 
+def test_write_newline_for_picks_the_convention_from_raw_bytes():
+    """T-2499 (item 3 sweep, D-SLM5778): pins `_write_newline_for`'s own branch directly on
+    synthetic bytes rather than only through a real repo file -- every one of `_mutated`'s real
+    targets is pure CRLF today, so this branch has never been exercised via the real tree, and
+    reverting it to a blanket `newline=""` is undetectable by any other cell in this module
+    (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Sec7)."""
+    assert _write_newline_for(b"a line\r\nanother line\r\n") == "\r\n"
+    assert _write_newline_for(b"a line\nanother line\n") == ""
+    assert _write_newline_for(b"") == ""
+
+
 # T-2497 (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Significant 2, D-SLM5758):
-# every real path `_mutated` is pointed at in this module, plus the registry -- the two files
-# T-2491's own S2 remedy touches (`_mutated` itself, and the registry write in
-# `test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_registry_record_at_all`)
-# and the five more `_mutated` also restores. Executed by the reviewer: reverting `newline=""`
-# on the registry cell's own writes still leaves that cell `1 passed` while the registry's own
-# sha256 changes underneath it; reverting `_mutated`'s convention-detection hardening leaves
-# this whole file green (every file it touches is pure CRLF today, so the hardening and the
-# platform default agree on every input this suite has -- Claude/Poirot/ba29de4-t2496-census-
-# fixes-confirmation.md Sec7). The dirty-checkout class this fixture closes can return with the
-# suite green.
+# every real path this module's own cells touch as of this writing -- the seven `_mutated`
+# targets (see every `_mutated(...)` call site in this file) plus the registry, written directly
+# (not via `_mutated`) by `test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_
+# registry_record_at_all`. Eight entries, exhaustive against today's population, EXACTLY (T-2499,
+# Claude/Poirot/bc2ae29-t2498-census-fixes-confirmation.md Significant 2, D-SLM5776: this
+# fixture's own docstring previously claimed it closes "every future cell that touches the real
+# tree" -- false as implemented, executed against a cell writing `include/superslm/forward_
+# sites.h` without restoring: `41 passed`, fixture silent, file left modified, because that path
+# is not on this list). It does NOT close every future cell that touches the real tree: a cell
+# added later that mutates a real-tree path outside this tuple is NOT caught here -- extend
+# `_MUTATED_TARGETS_AND_REGISTRY_PATHS` in the same change that adds such a cell. The two
+# `src/` entries are the same `_PROOF_MANIFEST_CPP`/`_SUPERSLM_GPU_CPP` constants this file's own
+# T-2475-fold-in cells use, defined once above (not duplicated here), so the two spellings cannot
+# desync. Executed by the T-2498 reviewer: reverting `newline=""` on the registry cell's own
+# writes still leaves that cell `1 passed` while the registry's own bytes change underneath it;
+# reverting `_mutated`'s convention-detection hardening leaves this whole file green (every file
+# it touches is pure CRLF today, so the hardening and the platform default agree on every input
+# this suite has -- Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Sec7). The
+# dirty-checkout class this fixture closes, for these eight paths, can return with the suite
+# green if it lands on an unlisted ninth.
 _MUTATED_TARGETS_AND_REGISTRY_PATHS = (
     _ADAPTER_H,
     _MATMUL_H,
     _MODEL_H,
     _PROOF_H,
     _FORWARD_SITES_CPP_T2481,
-    os.path.join("src", "proof_manifest.cpp"),
-    os.path.join("src", "gpu", "superslm_gpu.cpp"),
+    _PROOF_MANIFEST_CPP,
+    _SUPERSLM_GPU_CPP,
     os.path.join("tools", "geometry_site_registry.json"),
 )
 
@@ -257,9 +325,15 @@ def _mutated_targets_and_registry_are_byte_identical_after_the_module_runs():
     raw bytes of every path in `_MUTATED_TARGETS_AND_REGISTRY_PATHS` BEFORE the first cell in
     this module runs, and asserts them byte-identical AFTER the last one has, whatever mix of
     `_mutated()` blocks and direct registry writes ran in between. Closes T-2496's Significant 2
-    (D-SLM5758) at the root rather than per-cell: a fix that touches one of these paths and
-    leaves it modified fails HERE regardless of what that fix's own cell asserts, so the next
-    dirty-checkout regression cannot ship with this suite green the way this round's own did."""
+    (D-SLM5758) at the root rather than per-cell: a fix that touches one of the EIGHT paths named
+    in `_MUTATED_TARGETS_AND_REGISTRY_PATHS` and leaves it modified fails HERE regardless of what
+    that fix's own cell asserts.
+
+    Its guarantee is exactly that list, not the whole real tree (T-2499, Claude/Poirot/bc2ae29-
+    t2498-census-fixes-confirmation.md Significant 2, D-SLM5776): a future cell that mutates a
+    real-tree path outside `_MUTATED_TARGETS_AND_REGISTRY_PATHS` and fails to restore it is NOT
+    caught here -- extend that tuple in the same change that adds such a cell, the same discipline
+    every prior real-tree cell in this module already follows via `_mutated`."""
     paths = [os.path.join(_REPO_ROOT, rel) for rel in _MUTATED_TARGETS_AND_REGISTRY_PATHS]
     before = {}
     for p in paths:
@@ -670,9 +744,6 @@ def test_main_end_to_end_via_subprocess_is_green_today():
 # same-line population cells, below -- see the S2 red-check comment block further down this
 # file for the exact, executed cell list and count.
 # =====================================================================================
-
-_PROOF_MANIFEST_CPP = os.path.join("src", "proof_manifest.cpp")
-_SUPERSLM_GPU_CPP = os.path.join("src", "gpu", "superslm_gpu.cpp")
 
 _GS14_FIXED_LINE = "\t\t\tplan.out_channels = (q_width != UINT32_MAX) ? q_width : hidden_size;\n"
 _GS14_REVERTED_LINE = "\t\t\tplan.out_channels = hidden_size;\n"
