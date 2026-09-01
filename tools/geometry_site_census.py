@@ -17,20 +17,40 @@ question into a checkable one, in three parts:
      across every source class the four grounding passes ranged over (*.cpp, *.h, *.hlsl,
      *.py), and every raw hit not covered by a marker within the same line window fails
      the census.
+
+     KNOWN LIMITATION (T-2468 F2, Claude/Mendeleev/t2468-census-recommissioning-2026-08-31.md
+     Sec4a case 4, dated 2026-08-31, pre-existing -- not introduced or touched by T-2475's own
+     exclusion-matching fix): `_r1_multiply_hit`/`_qow_hit` co-occurrence-match one PHYSICAL
+     LINE at a time (`readlines()`, per-line). A genuinely new R1/QOW site whose co-occurring
+     tokens land on different physical lines -- plausible under ordinary formatting of a long
+     conditional or a wrapped return -- evades Part 2 entirely, regardless of markers or
+     exclusions. A `PASS` from this census does not cover that shape; it covers only defects
+     whose co-occurring tokens share one physical line. Restated at `main()`'s own PASS line so
+     a reader of a passing run sees it without opening this file.
+
+     DEAD EXCLUSION check (T-2475, Claude/Poirot/6597903-t2472-ask5-tracka-confirmation.md
+     Observation, D-SLM5617): every `_PART2_EXCLUDED_TEXT` entry must match at least one
+     non-comment line in its own registered file somewhere during the walk. An entry that
+     matches nothing -- its excused statement deleted, moved, or reworded -- previously
+     produced no diagnostic at all, indistinguishable from a healthy tree; it now fails the
+     census by name (`DEAD EXCLUSION: ...`) so a stale, silently-inert exclusion is surfaced
+     rather than left to describe a residual that no longer exists.
   3. Per-site regression check (T-2441, Poirot 327ee29-t2438-ask5-tracka-review.md,
      Significant 2, D-SLM5436; scope bounding corrected T-2445, Poirot
-     ddbc57a-t2443-ask5-tracka-confirmation.md, Significant 2, D-SLM5436 superseded).
+     ddbc57a-t2443-ask5-tracka-confirmation.md, Significant 2, D-SLM5436 superseded; keying
+     corrected again T-2475, see below).
      Parts 1 and 2 both read whether a marker EXISTS; neither reads what the code AT a
      marked location actually says, so a "fixed" site whose own fix is reverted in place,
      marker left untouched, satisfies both. For every `fixed` site that carries a
      `required_tokens` list (the registry's own field, one substring set per site), at
      least one of those tokens must appear in that OCCURRENCE's own bounded scope -- the
-     registry's own `required_token_scope_ends` map, keyed by exact marker location, one
-     entry per occurrence (see the registry's own header comment for how each value is
-     derived). A revert that restores the pre-fix code removes the token the landed fix
-     itself introduced, so this part fails where parts 1 and 2 do not. Demonstrated by
-     construction: GS-14's fix reverted to `plan.out_channels = hidden_size;`, marker
-     untouched, passes parts 1 and 2 and fails here.
+     registry's own `required_token_scope_end_offsets` map, keyed by occurrence ORDINAL and
+     storing an OFFSET from the marker, one entry per occurrence (see the registry's own
+     header comment for how each value is derived). A revert that restores the pre-fix code
+     removes the token the landed fix itself introduced, so this part fails where parts 1
+     and 2 do not. Demonstrated by construction: GS-14's fix reverted to
+     `plan.out_channels = hidden_size;`, marker untouched, passes parts 1 and 2 and fails
+     here.
 
      T-2445 correction: scope used to run from a marker to the NEXT marker anywhere in the
      same file, which (a) swept unrelated code between two distant, unrelated sites'
@@ -40,10 +60,27 @@ question into a checkable one, in three parts:
      mutation touched. Executed and found doing exactly that: three independent single-line
      reverts (GS-12's o_proj in-width, GS-10's packed q_weight byte extent, GS-18's
      LayerScratch q_codes width) all passed under the old rule. The registry's own
-     per-occurrence `required_token_scope_ends` closes both: each value is the minimal line
-     (scanning forward from the marker on the correct tree) at which the site's own
-     required token is actually found, so the bounded scope is exactly as wide as that
-     occurrence's own governed code.
+     per-occurrence scope-end field closed both, at the time, by keying each occurrence to
+     its marker's absolute line and storing the absolute end line: the bounded scope was
+     exactly as wide as that occurrence's own governed code.
+
+     T-2475 correction (Claude/Poirot/6597903-t2472-ask5-tracka-confirmation.md, Significant
+     1): that absolute keying carried its own drift. The LOOKUP half (`marker_line`) is
+     recomputed from a fresh scan every run, which a prior round read as making the whole
+     structure self-correcting; the STORED half (the registry's own key and its end line)
+     is a literal frozen at authoring time and is not recomputed by anything. An edit
+     anywhere ELSE in the same file -- one comment line inserted far above every marker, not
+     touching any site's own code -- shifts every marker below it without shifting the
+     registry to match, and the census reports a false `MISSING ... ENTRY` on untouched,
+     correctly-fixed code. GS-01's own registry note already records this exact shape being
+     hit and hand-repaired once (T-2450's 8-line insert); the review reproduced it as the
+     general case on demand. The registry now keys each occurrence by ORDINAL (this site's
+     Nth marker found in this file, which an edit elsewhere cannot reorder) and stores an
+     OFFSET from the marker to its own scope end (a local distance, invariant outside that
+     occurrence's own span) rather than an absolute line -- removing the term that drifted
+     rather than adding a rule to remember it. An edit INSIDE one occurrence's own governed
+     span (between its marker and its own required token) can still desync the offset; this
+     is unchanged from the prior scheme and is not the class either scheme targets.
 
 Scope (T-2432): this census covers families R1 and QOW, the two families Track A owns.
 Family KLP (the Option-G fused-K-landing assumption, GS-05) is Track B's own scope
@@ -160,10 +197,31 @@ _PART2_EXCLUDED_FILES = {
 # silently absorbed, exit 0, with the unaudited site sitting in the tree (false positive -- the
 # stale line number covered whatever code happened to be there, not the excused code itself).
 # Re-keyed on the excused code's own text so the exclusion follows its subject instead of a
-# coordinate that can drift away from it -- each fragment below is verified unique among this
-# file's own non-comment lines (`_part2_excluded_text_hit`'s whole match surface), so widening
-# match is bounded to "another literal copy of this exact excused statement," not "whatever
-# lands on this line number next."
+# coordinate that can drift away from it.
+#
+# T-2468 (Claude/Mendeleev/t2468-census-recommissioning-2026-08-31.md, F1, D-SLM5603): re-keying
+# on text closed the position defeat and opened a content-shaped one -- the re-key's own match,
+# `text in line`, excused the WHOLE physical line the instant the fragment appeared anywhere in
+# it, so a genuinely new, unregistered geometry-defect statement appended onto the SAME line as
+# an already-excused fragment was silently absorbed too, exit 0, unaudited site in the tree --
+# demonstrated on 2 of these 3 exclusions, mechanism identical for the third. The header comment
+# this replaces claimed widening was "bounded to another literal copy of this exact excused
+# statement, not whatever lands on this line number next"; that held for a DIFFERENT line
+# reusing the fragment (still true today, each fragment below verified unique among its file's
+# own non-comment lines) and did not hold for the excused line's OWN remainder, which is exactly
+# what T-2468 found and this correction states.
+#
+# T-2475: the property this set is now built to is that an exclusion excuses exactly the
+# statement it names and nothing else sharing its line. `_part2_excise_excluded_text` (below)
+# removes each matched fragment's own text from the line before the pattern regexes ever see
+# it, rather than skipping the whole line -- new content before, after, or instead of the
+# fragment is left in the remainder and scanned exactly like ordinary code. The `model.h` and
+# `proof_manifest.h` fragments below now carry their own full stripped line (the enumerator
+# declaration plus the trailing comment that is the actual reason Part 2's regexes fire on that
+# line at all) rather than a shorter uniqueness-only prefix -- excising a partial prefix would
+# have left that trailing comment's own hidden_size/head_dim/num_attention_heads/`*` text in the
+# remainder, re-triggering Part 2 on the untouched tree. `adapter_marshal.h`'s fragment already
+# spans its whole line and is unchanged.
 _PART2_EXCLUDED_TEXT = {
     # design Sec2.1 closing paragraph: "One item explicitly NOT touched, flagged rather than
     # silently left alone" -- AdapterOutChannelsFor's own identical hidden_size-for-q_proj/
@@ -181,16 +239,42 @@ _PART2_EXCLUDED_TEXT = {
     # StandardsDocument.md Sec5.6's "every deferral is surfaced loudly" -- not fixed here
     # because removing or renaming an ABI-additive enumerator is a design-level call, not a
     # build-time one.
-    (os.path.join("include", "superslm", "model.h"), "ConfigGeometryHiddenSizeMismatch,"),
-    (os.path.join("include", "superslm", "proof_manifest.h"), "HiddenSizeGeometryMismatch,"),
+    #
+    # T-2475: fragment widened from the enumerator's own text alone ("ConfigGeometryHiddenSize
+    # Mismatch,") to the full stripped line, including the trailing "// R1: ..." comment that is
+    # itself what trips _r1_multiply_hit -- the enumerator text alone matches no R1/QOW pattern.
+    (os.path.join("include", "superslm", "model.h"),
+     "ConfigGeometryHiddenSizeMismatch,    // R1: hidden_size != num_attention_heads * head_dim"),
+    # T-2475: same widening as model.h above, and for the same reason -- the trailing comment,
+    # not the enumerator name, is what the R1 regex actually matches.
+    (os.path.join("include", "superslm", "proof_manifest.h"),
+     "HiddenSizeGeometryMismatch, // hidden_size != num_attention_heads * head_dim -- R1, REMOVED"),
 }
 
 
-def _part2_excluded_text_hit(rel_path: str, line: str) -> bool:
-    """True when `line` (from `rel_path`) carries one of `_PART2_EXCLUDED_TEXT`'s own excused
-    fragments -- a substring match on the fragment's exact text, not the line's position, so an
-    unrelated line above it shifting the excused code down the file changes nothing here."""
-    return any(rel_path == f and text in line for f, text in _PART2_EXCLUDED_TEXT)
+def _part2_excise_excluded_text(rel_path: str, line: str, matched=None) -> str:
+    """Returns `line` with every `_PART2_EXCLUDED_TEXT` fragment registered for `rel_path`
+    removed from it -- each fragment's own exact text, at most once per fragment (each is
+    verified unique per file today; see the header comment above this set). T-2475: this
+    replaces the prior `_part2_excluded_text_hit`, which matched a fragment's presence and then
+    skipped the ENTIRE line -- excusing whatever else shared it. This function excuses only the
+    fragment's own text, wherever it sits on the line; the caller scans whatever remains exactly
+    like ordinary code, so new content sharing the excused line -- appended after the fragment,
+    prepended before it, or on a second, unrelated statement -- is not swept in for free. A line
+    an exclusion does not touch is returned unchanged.
+
+    `matched`, if given a set, gains every `(rel_path, text)` pair actually found and excised on
+    this line -- the caller's own tally of which `_PART2_EXCLUDED_TEXT` entries are still live.
+    An entry never added to `matched` across the whole tree walk is DEAD: its excused statement
+    was deleted, moved, or reworded, so this fragment now matches nothing (T-2475 fold-in, Poirot
+    6597903-t2472-ask5-tracka-confirmation.md Observation, D-SLM5617 -- run_census's own caller
+    reports a dead entry as a finding rather than leaving it silently inert)."""
+    for f, text in _PART2_EXCLUDED_TEXT:
+        if rel_path == f and text in line:
+            line = line.replace(text, "", 1)
+            if matched is not None:
+                matched.add((f, text))
+    return line
 
 
 def _iter_source_files(repo_root: str, *, production_only: bool = False):
@@ -279,6 +363,11 @@ def run_census(repo_root: str) -> list[str]:
 
     # --- Part 2: pattern <-> marker coverage (families R1, QOW only, production source
     #     only -- see module docstring and _PART2_ALLOWED_PREFIXES's own comment). ---
+    # T-2475 fold-in (Poirot 6597903-t2472-ask5-tracka-confirmation.md Observation, D-SLM5617):
+    # tracks which `_PART2_EXCLUDED_TEXT` entries actually matched something during this walk, so
+    # a dead entry (its excused statement deleted, moved, or reworded elsewhere) is reported
+    # rather than left silently inert -- see the check right after this loop.
+    matched_exclusions: set[tuple[str, str]] = set()
     for path in _iter_source_files(repo_root, production_only=True):
         if os.path.basename(path) in ("geometry_site_census.py", "geometry_site_registry.json"):
             continue
@@ -310,16 +399,28 @@ def run_census(repo_root: str) -> list[str]:
             # build log for the same disclosure the production-only file scope above carries.
             if stripped.startswith(comment_prefixes):
                 continue
-            if _part2_excluded_text_hit(rel_path, line):
-                continue
+            # T-2475: excise the excused fragment's own text (if any) rather than skipping the
+            # whole line -- see `_part2_excise_excluded_text`'s own docstring and the header
+            # comment above `_PART2_EXCLUDED_TEXT` for why. `scan_line` is what the pattern
+            # regexes see; failure messages below still quote the real, un-excised `line` so a
+            # human reading a finding sees the actual source text.
+            scan_line = _part2_excise_excluded_text(rel_path, line, matched_exclusions)
             hit = None
-            if _R1_DIVISION_RE.search(line) or _r1_multiply_hit(line):
+            if _R1_DIVISION_RE.search(scan_line) or _r1_multiply_hit(scan_line):
                 hit = "R1"
-            elif _qow_hit(line):
+            elif _qow_hit(scan_line):
                 hit = "QOW"
             if hit and not _covered(i):
                 failures.append(f"UNMARKED {hit} PATTERN HIT: {os.path.relpath(path, repo_root)}:{i}: "
                                  f"{line.strip()}")
+
+    for f, text in _PART2_EXCLUDED_TEXT:
+        if (f, text) not in matched_exclusions:
+            failures.append(
+                f"DEAD EXCLUSION: _PART2_EXCLUDED_TEXT entry for {f!r} ({text!r}) matched no "
+                f"non-comment line in that file during this walk -- the excused statement may "
+                f"have been deleted, moved, or reworded; remove this entry or update its text to "
+                f"match the current tree")
 
     # --- Part 3: per-site regression check (T-2441, S2 fix, D-SLM5436). ---
     # Part 1 proves a marker exists somewhere in the tree; Part 2 proves no UNMARKED pattern
@@ -334,16 +435,31 @@ def run_census(repo_root: str) -> list[str]:
     # (registry's own field, one substring set per site, derived once from that site's own
     # diff against v1.3.0): for each marker OCCURRENCE (a site can have more than one, per
     # Part 1's own "several registered sites legitimately touch more than one call site"), the
-    # scope is [marker_line, required_token_scope_ends[file:marker_line]] -- the registry's own
-    # per-occurrence bound (T-2445; see the registry's own header comment and this module's
-    # docstring for why "next marker in the file" was replaced) -- and at least one of the
-    # site's own required tokens must appear somewhere in that scope. A revert that keeps the
-    # marker but restores the pre-fix code removes the token that scope would have contained
+    # scope is [marker_line, marker_line + required_token_scope_end_offsets[file:ordinal]] --
+    # the registry's own per-occurrence bound, keyed by occurrence ORDINAL and stored as an
+    # OFFSET from the marker rather than an absolute end line (T-2475, Claude/Poirot/6597903-
+    # t2472-ask5-tracka-confirmation.md Significant 1; supersedes the T-2445 absolute-line
+    # scheme -- see the registry's own header comment for the full account) -- and at least one
+    # of the site's own required tokens must appear somewhere in that scope. A revert that keeps
+    # the marker but restores the pre-fix code removes the token that scope would have contained
     # (every landed fix introduces its own named quantity -- effective_q_width, g_q_width,
     # QWIDTH, or similar -- exactly because that is what distinguishes the fix from what it
     # replaced), so the site fails here instead of passing silently. `confirmed-correct` sites
     # carry no `required_tokens` (their own governing quantity is correctly UNCHANGED by this
     # ask, so a presence check would be backwards for them) and are not checked by this part.
+    #
+    # T-2475 (Significant 1): the absolute-line scheme's own lookup key recomputed `marker_line`
+    # fresh every run, which the T-2467 round read as making the whole structure self-detecting
+    # --- true of the LOOKUP key, false of the registry's STORED key and stored end line, both
+    # frozen absolute line numbers. An edit anywhere ELSE in the same file (the confirmation
+    # review's own construction: one comment line at the very top, nowhere near any marker)
+    # shifted every marker below it without shifting the registry to match, producing a false
+    # `MISSING ... ENTRY` on untouched, correctly-fixed code -- the exact shape GS-01's own note
+    # (registry, below) already records being hit and hand-repaired once, before this fix
+    # existed. Keying by ORDINAL (this site's Nth marker in this file, stable under any edit
+    # that does not reorder its own markers relative to each other) and by OFFSET (the local
+    # marker-to-scope-end distance, invariant outside that local span) removes the term that
+    # drifted rather than adding a rule to remember it.
     for rel_path, occurrences in markers_by_file.items():
         lines = file_lines_cache[rel_path]
         rel_path_fwd = rel_path.replace(os.sep, "/")
@@ -362,6 +478,12 @@ def run_census(repo_root: str) -> list[str]:
         # multi-line-comment convention elsewhere).
         comment_prefixes = ("#",) if ext == ".py" else ("//", "*")
         sorted_occ = sorted(occurrences, key=lambda p: p[0])
+        # T-2475: this site's Nth marker found in THIS file, in ascending line order -- the
+        # ordinal half of the occurrence key, tracked per gs_id so a file carrying markers for
+        # several different sites (the common case) numbers each site's own occurrences
+        # independently. Depends only on the RELATIVE order markers are found in, which an edit
+        # anywhere in the file cannot change without literally reordering the markers themselves.
+        ordinal_by_gs_id: dict[str, int] = {}
         for idx, (marker_line, gs_id) in enumerate(sorted_occ):
             site = registry_by_id.get(gs_id)
             if site is None or site["status"] != "fixed":
@@ -369,21 +491,25 @@ def run_census(repo_root: str) -> list[str]:
             required = site.get("required_tokens")
             if not required:
                 continue
-            scope_ends = site.get("required_token_scope_ends", {})
-            occ_key = f"{rel_path_fwd}:{marker_line}"
-            if occ_key not in scope_ends:
+            ordinal = ordinal_by_gs_id.get(gs_id, 0)
+            ordinal_by_gs_id[gs_id] = ordinal + 1
+            scope_end_offsets = site.get("required_token_scope_end_offsets", {})
+            occ_key = f"{rel_path_fwd}:{ordinal}"
+            if occ_key not in scope_end_offsets:
                 failures.append(
-                    f"MISSING required_token_scope_ends ENTRY: {gs_id} has required_tokens but "
-                    f"no registry scope-end for occurrence {occ_key!r} -- add one (the minimal "
-                    f"line, scanning forward from the marker on the correct tree, at which the "
-                    f"site's own required token is found), or null if this occurrence has no "
-                    f"independently-revertible code of its own to check")
+                    f"MISSING required_token_scope_end_offsets ENTRY: {gs_id} has required_tokens "
+                    f"but no registry scope-end-offset for occurrence {occ_key!r} (this file's "
+                    f"{ordinal + 1}-th marker for {gs_id}, currently at line {marker_line}) -- add "
+                    f"one (the OFFSET, in lines, scanning forward from the marker on the correct "
+                    f"tree, at which the site's own required token is found), or null if this "
+                    f"occurrence has no independently-revertible code of its own to check")
                 continue
-            scope_end = scope_ends[occ_key]
-            if scope_end is None:
+            offset = scope_end_offsets[occ_key]
+            if offset is None:
                 # Explicit exemption (registry header comment documents when this is correct):
                 # this occurrence has no code of its own whose regression Part 3 could detect.
                 continue
+            scope_end = marker_line + offset
             # 0-indexed slice: lines[marker_line - 1 : scope_end] covers 1-based lines
             # [marker_line, scope_end], i.e. the marker's own line through the registry's own
             # recorded end line for this specific occurrence.
@@ -447,6 +573,9 @@ def main() -> int:
     print(f"geometry_site_census: PASS -- {marked} site(s) fixed-and-marked or "
           f"confirmed-correct-and-marked, 0 unmarked R1/QOW pattern hits "
           f"({len(registry) - marked} site(s) exempt, Track B's own not-yet-built scope)")
+    print("  KNOWN LIMITATION (T-2468 F2, dated 2026-08-31, pre-existing): Part 2 matches R1/QOW "
+          "co-occurrence one physical line at a time -- a genuinely new site whose co-occurring "
+          "tokens land on different physical lines is not covered by this PASS.")
     return 0
 
 
