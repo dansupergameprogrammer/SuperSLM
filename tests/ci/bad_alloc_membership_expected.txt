@@ -9,8 +9,8 @@
 # + Observation 2, D-SLM5528): the line column is DROPPED as of this change.
 # Independently derived from `git log --follow` on this file rather than
 # taken from the notes below (which undercount and, for T-2125, miscount):
-# fifteen total commits touch this file end to end, `5043678` (creation, 18
-# members) through this one. Of the fourteen after creation, TWO are genuine
+# sixteen total commits touch this file end to end, `5043678` (creation, 18
+# members) through this one. Of the fifteen after creation, TWO are genuine
 # membership growth -- `8ce6aa7` added `proof_manifest.h:JsonEscape`
 # (eighteen to nineteen) and `242dc12` (T-2125) added a THIRD
 # `model.h:Parse` (the population's only same-name-duplicate growth -- two
@@ -24,7 +24,7 @@
 # `e3bc0cf` (T-2445), and `566bf98`'s own regeneration (T-2458, regenerating
 # after T-2450's comment insert). Not one of those eight pure-line-shift
 # regenerations ever caught a membership change the name alone did not. The
-# remaining FOUR commits after those ten are comment-only corrections to
+# remaining FIVE commits after those ten are comment-only corrections to
 # THIS paragraph, touching neither the member set nor the line-count-
 # derivation method: `6597903` (T-2467, correcting a THIRD-vs-FOURTH
 # `model.h:Parse` miscount this paragraph itself carried), `dcefab3` (T-2481,
@@ -40,10 +40,18 @@
 # --oneline -1 5c82f92` shows is T-2450's own comment-insert commit -- `git
 # log 5c82f92 -1 --name-only -- tests/ci/bad_alloc_membership_expected.txt`
 # confirms it never touches this file; the regeneration commit is `566bf98`,
-# corrected above), and this commit (T-2497, Claude/Poirot/ba29de4-t2496-
-# census-fixes-confirmation.md Critical 1, D-SLM5755: the count below is no
-# longer checked against a live `git log --follow` in CI at all -- see the
-# pinned-count paragraph immediately below).
+# corrected above), `4758b0b` (T-2497, Claude/Poirot/ba29de4-t2496-census-
+# fixes-confirmation.md Critical 1, D-SLM5755: the count below is no longer
+# checked against a live `git log --follow` in CI at all -- see the
+# pinned-count paragraph immediately below), and this commit (T-2499,
+# Claude/Poirot/bc2ae29-t2498-census-fixes-confirmation.md Minor 1,
+# D-SLM5779: corrects "the cell failed on every Actions run", below, from
+# accomplished history to the conditional that was actually established --
+# the branch carrying that cell was never pushed, `git branch -a --contains
+# c507cc9` returns local branches only, so it never ran on a GitHub Actions
+# runner at all; also restores the drift detection T-2497's own remedy
+# removed, via a full-history-guarded live cell alongside the pin below --
+# see `test_membership_check_population.py`'s own two commit-count cells).
 #
 # This paragraph's own deictic anchor ("N total commits ... through this
 # one") re-derives its stated count as of WHICHEVER commit most recently
@@ -56,7 +64,10 @@
 # time -- a property of the CLONE, not of this file: `actions/checkout@v5`
 # defaults to a depth-1 clone and no job in `.github/workflows/` sets
 # `fetch-depth`, so on a GitHub Actions runner `git log --follow` sees one
-# commit, not fifteen, and the cell failed on every Actions run
+# commit, not fifteen, and the cell fails on every Actions checkout,
+# reproduced on a local depth-1 clone -- the branch carrying that cell was
+# never pushed, so it never actually ran on a GitHub Actions runner (T-2499,
+# Claude/Poirot/bc2ae29-t2498-census-fixes-confirmation.md Minor 1, D-SLM5779)
 # (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Critical 1,
 # D-SLM5755). T-2497 removes the git dependency from CI entirely, following
 # the pattern this same directory already adopted for the identical class
@@ -75,7 +86,7 @@
 # real regeneration, and it spends a git call only when a human chooses to
 # make one.
 #
-# COMMIT_COUNT_PIN: 15
+# COMMIT_COUNT_PIN: 16
 #
 # T-2467 (Claude/Poirot/665f430-t2462-ask5-tracka-confirmation.md, Minor 1,
 # D-SLM5560): this paragraph used to state `242dc12` added a FOURTH

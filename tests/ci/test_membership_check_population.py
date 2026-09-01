@@ -431,9 +431,12 @@ def test_oracle_header_commit_count_pin_matches_the_prose_word():
     against a FRESH `git log --follow` count taken at test-run time. That is a property of the
     CLONE, not of this file: `actions/checkout@v5` defaults to a depth-1 clone and no job in
     `.github/workflows/` sets `fetch-depth`, so `git log --follow` on a GitHub Actions runner
-    counted one commit regardless of the true history and the cell failed on every Actions run --
-    the first cell in `tests/ci/` to take repository history as an input, in the one job that
-    collects this whole directory.
+    counted one commit regardless of the true history and the cell fails on every Actions
+    checkout, reproduced on a local depth-1 clone -- the first cell in `tests/ci/` to take
+    repository history as an input, in the one job that collects this whole directory. (T-2499,
+    Claude/Poirot/bc2ae29-t2498-census-fixes-confirmation.md Minor 1, D-SLM5779: the branch
+    carrying that cell was never pushed, so it never actually ran on a GitHub Actions runner --
+    "fails on every Actions checkout" is what was established; "ran and failed" was not.)
 
     This cell takes no git-history input at all: it asserts the prose word above against a
     companion literal, `COMMIT_COUNT_PIN: N`, that is also committed in the same file's header.
@@ -545,6 +548,54 @@ def test_oracle_header_commit_count_matches_git_log_follow_on_a_full_history_che
         f"the header with `python tests/ci/derive_bad_alloc_membership.py --commit-count` on a "
         f"full-history checkout and paste the result into both the prose word and "
         f"COMMIT_COUNT_PIN together"
+    )
+
+
+
+def test_commit_count_cli_matches_the_in_process_derivation():
+    """T-2499 (Claude/Poirot/bc2ae29-t2498-census-fixes-confirmation.md Minor 3, D-SLM5777):
+    `git_log_follow_commit_count` and the `--commit-count` CLI branch it backs
+    (`derive_bad_alloc_membership.py`'s `if __name__ == "__main__":` block) were exercised by
+    nothing -- the sibling `--oracle` mode is deliberately pinned through the real subprocess CLI
+    path immediately above (`test_oracle_regeneration_command_matches_the_committed_oracle_file`),
+    with the reason written down there ("not `format_oracle_lines` called in-process, which would
+    leave `--argv` parsing itself unpinned"); the same argument applies here and this round
+    follows the same precedent.
+
+    Unlike this file's two full-history-only commit-count cells above, this cell needs no shallow
+    guard: both sides -- the CLI subprocess and the in-process call -- run `git log --follow`
+    against the SAME checkout, so on a shallow clone both return the same (wrong) small count and
+    still agree; what this cell pins is that the CLI's own `--argv` parsing reaches the same
+    function the in-process call does, not that either reads true full history. It is expected to
+    run, and pass, in CI."""
+    repo_root = dbam._REPO_ROOT
+    tool_path = os.path.join(dbam._THIS_DIR, "derive_bad_alloc_membership.py")
+    result = subprocess.run(
+        [sys.executable, tool_path, "--commit-count"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"derive_bad_alloc_membership.py --commit-count must exit 0; got "
+        f"{result.returncode}, stderr:\n{result.stderr}"
+    )
+    cli_value_line = result.stdout.strip()
+    assert cli_value_line.isdigit(), (
+        f"--commit-count's stdout should be a single integer; got {cli_value_line!r}"
+    )
+    cli_value = int(cli_value_line)
+
+    oracle_rel_path = os.path.relpath(
+        os.path.join(dbam._THIS_DIR, "bad_alloc_membership_expected.txt"), repo_root
+    )
+    in_process_value = dbam.git_log_follow_commit_count(oracle_rel_path, repo_root)
+
+    assert cli_value == in_process_value, (
+        f"`derive_bad_alloc_membership.py --commit-count` printed {cli_value}, but calling "
+        f"git_log_follow_commit_count(...) in-process against the same checkout returns "
+        f"{in_process_value} -- the CLI's own argv parsing has drifted from the function it is "
+        f"supposed to invoke"
     )
 
 

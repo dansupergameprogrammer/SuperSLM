@@ -430,7 +430,10 @@ def git_log_follow_commit_count(rel_path: str, repo_root: str = _REPO_ROOT) -> i
     collected by CI's own `pytest tests/ci/ -v` step. `git log --follow` is a property of the
     CLONE, not of this file: `actions/checkout@v5` defaults to a depth-1 clone and no job in
     `.github/workflows/` sets `fetch-depth`, so that cell read one commit instead of fourteen and
-    failed on every Actions run. This function was made to run ONLY when a human invokes this
+    fails on every Actions checkout, reproduced on a local depth-1 clone (T-2499, Claude/Poirot/
+    bc2ae29-t2498-census-fixes-confirmation.md Minor 1, D-SLM5779: the branch carrying that cell
+    was never pushed, so it never actually ran on a runner). This function was made to run ONLY
+    when a human invokes this
     module directly with `--commit-count`, on their own full-history checkout, at REGENERATION
     time -- never from a CI-collected test. The result is meant to be pasted into
     `tests/ci/bad_alloc_membership_expected.txt`'s own header, both into the prose sentence that
