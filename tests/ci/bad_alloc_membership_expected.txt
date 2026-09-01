@@ -64,10 +64,11 @@
 # time -- a property of the CLONE, not of this file: `actions/checkout@v5`
 # defaults to a depth-1 clone and no job in `.github/workflows/` sets
 # `fetch-depth`, so on a GitHub Actions runner `git log --follow` sees one
-# commit, not fifteen, and the cell fails on every Actions checkout,
-# reproduced on a local depth-1 clone -- the branch carrying that cell was
-# never pushed, so it never actually ran on a GitHub Actions runner (T-2499,
-# Claude/Poirot/bc2ae29-t2498-census-fixes-confirmation.md Minor 1, D-SLM5779)
+# commit, not the full-history count stated above, and the cell fails on every
+# Actions checkout, reproduced on a local depth-1 clone -- the branch carrying
+# that cell was never pushed, so it never actually ran on a GitHub Actions
+# runner (T-2499, Claude/Poirot/bc2ae29-t2498-census-fixes-confirmation.md
+# Minor 1, D-SLM5779)
 # (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Critical 1,
 # D-SLM5755). T-2497 removes the git dependency from CI entirely, following
 # the pattern this same directory already adopted for the identical class
