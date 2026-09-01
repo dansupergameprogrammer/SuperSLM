@@ -394,6 +394,7 @@ def test_oracle_regeneration_command_matches_the_committed_oracle_file():
         "below its header comment, per the oracle file's own instructions"
     )
 
+
 # ---------------------------------------------------------------------------
 # The production gate (design Sec3.1: "tools/ci/check_bad_alloc_contract.py")
 # is built, and design Sec3.3's rename-and-wrap has landed for every one of
