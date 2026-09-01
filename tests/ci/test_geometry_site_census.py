@@ -255,8 +255,11 @@ def _write_newline_for(raw_bytes: bytes) -> str:
     (`test_write_newline_for_picks_the_convention_from_raw_bytes`) rather than only through a real
     repo file -- every one of `_mutated`'s own real-tree targets is pure CRLF today, so the branch
     this function chooses on an eol=lf input has never been exercised by any cell that mutates the
-    real tree (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Sec7: reverting this
-    function's own logic to a blanket `newline=""` leaves the whole file green)."""
+    real tree. What `Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md` Sec7 (D-SLM5758)
+    measured, on this Windows/CRLF checkout, is BOTH of `_mutated`'s writes reverted to the
+    platform default -- `open(full, "w", encoding="utf-8")`, no `newline=` argument, not a blanket
+    `newline=""` -- leaving the whole file green and the regression undetected (Claude/Poirot/
+    ed0c67d-t2502-census-fixes-confirmation.md Significant 2, D-SLM5785)."""
     return "\r\n" if b"\r\n" in raw_bytes else ""
 
 
@@ -284,9 +287,13 @@ def _mutated(rel_path: str, transform):
 def test_write_newline_for_picks_the_convention_from_raw_bytes():
     """T-2499 (item 3 sweep, D-SLM5778): pins `_write_newline_for`'s own branch directly on
     synthetic bytes rather than only through a real repo file -- every one of `_mutated`'s real
-    targets is pure CRLF today, so this branch has never been exercised via the real tree, and
-    reverting it to a blanket `newline=""` is undetectable by any other cell in this module
-    (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Sec7)."""
+    targets is pure CRLF today, so this branch has never been exercised via the real tree.
+    Reverting this function's own logic to always return `""` is caught here directly. On the
+    gating job's LF checkout, where every `_mutated` target already writes LF, both the
+    platform-default and the blanket-`newline=""` call-site reversions become no-ops with
+    nothing to detect -- this cell, run on synthetic bytes rather than a real file, is the only
+    thing in the module that still catches the function's own logic being reverted there
+    (Claude/Poirot/ed0c67d-t2502-census-fixes-confirmation.md Significant 2, D-SLM5785)."""
     assert _write_newline_for(b"a line\r\nanother line\r\n") == "\r\n"
     assert _write_newline_for(b"a line\nanother line\n") == ""
     assert _write_newline_for(b"") == ""
