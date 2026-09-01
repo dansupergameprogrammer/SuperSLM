@@ -424,9 +424,40 @@ def format_oracle_lines(members: list[dict]) -> str:
     return "\n".join("%s:%s" % (m["header"], m["name"]) for m in ordered)
 
 
+def git_log_follow_commit_count(rel_path: str, repo_root: str = _REPO_ROOT) -> int:
+    """T-2497 (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Critical 1, D-SLM5755):
+    moved here from `test_membership_check_population.py`, where it was called by a pytest cell
+    collected by CI's own `pytest tests/ci/ -v` step. `git log --follow` is a property of the
+    CLONE, not of this file: `actions/checkout@v5` defaults to a depth-1 clone and no job in
+    `.github/workflows/` sets `fetch-depth`, so that cell read one commit instead of fourteen and
+    failed on every Actions run. This function now runs ONLY when a human invokes this module
+    directly with `--commit-count`, on their own full-history checkout, at REGENERATION time --
+    never from a CI-collected test. The result is meant to be pasted into
+    `tests/ci/bad_alloc_membership_expected.txt`'s own header, both into the prose sentence that
+    states it in words and into the `COMMIT_COUNT_PIN:` line beneath it, together, by hand -- see
+    that file's own header comment for the pinned-value check this replaces the live git call
+    with."""
+    result = subprocess.run(
+        ["git", "log", "--follow", "--oneline", "--", rel_path],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return len([ln for ln in result.stdout.splitlines() if ln.strip()])
+
+
 if __name__ == "__main__":
-    pop = derive_population_per_header()
-    if "--oracle" in sys.argv[1:]:
-        print(format_oracle_lines(pop))
+    if "--commit-count" in sys.argv[1:]:
+        # Regeneration-time only (see git_log_follow_commit_count's own docstring) -- prints the
+        # fresh git log --follow count for the pinned oracle file itself, run on the caller's own
+        # full-history checkout, never invoked by a pytest cell.
+        print(git_log_follow_commit_count(
+            os.path.relpath(os.path.join(_THIS_DIR, "bad_alloc_membership_expected.txt"), _REPO_ROOT)
+        ))
     else:
-        print(format_population(pop))
+        pop = derive_population_per_header()
+        if "--oracle" in sys.argv[1:]:
+            print(format_oracle_lines(pop))
+        else:
+            print(format_population(pop))

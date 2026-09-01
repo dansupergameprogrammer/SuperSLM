@@ -98,13 +98,26 @@ confirmation of T-2481's diff --
     The cells also have zero discrimination, executed both with the QOW family forced false and
     with the injected identifier replaced by an inert statement: the assertion still holds either
     way, because what actually fires is the trailing prose comment's own R1 co-occurrence once
-    the exclusion's exact-text match goes dead, not recognition of the injected statement. The
-    same-line-append class T-2468 found is VACUOUS for these two files -- there is no producible
-    same-line geometry defect an enum body can host -- and is real only on `adapter_marshal.h`,
-    whose excused line sits inside a function body; the two `..._append_adapter_marshal`/
-    `test_prepended_content_on_an_excused_line_is_also_caught` cells below are that whole
-    population. The two non-compiling cells are deleted rather than replaced with a third
-    attempt -- there is no compiling construction left to pin for `model.h`/`proof_manifest.h`.
+    the exclusion's exact-text match goes dead, not recognition of the injected statement. Deleted
+    rather than replaced with a third attempt at the SAME shape.
+
+    T-2491's own replacement text (D-SLM5732, D-SLM5740) went further than the compile finding
+    supports: "there is no producible same-line geometry defect an enum body can host." Refuted
+    by construction (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Significant 1,
+    D-SLM5756/D-SLM5757): an enum body admits enumerators, not statements, but a same-line
+    ENUMERATOR prepend is both legal C++ and enough. Because the excused fragment is the whole
+    stripped line, a prepend leaves it intact -- the exclusion still fires and the injected text
+    is scanned as ordinary remainder. Executed at the CI's pinned compiler, clang 18.1.8,
+    `-fsyntax-only -std=c++20`: `q_proj_out_channels_hidden_size, ` prepended to `model.h`'s
+    fragment and `o_proj_out_channels_hidden_size, ` prepended to `proof_manifest.h`'s both
+    compile clean and fire `UNMARKED QOW PATTERN HIT`, discriminating both ways (silent with the
+    QOW family disabled, silent with an inert enumerator in place of the defect). T-2497 adds one
+    cell per header (`test_defeats_the_prior_mechanism_same_line_enumerator_prepend_model_h`/
+    `_proof_manifest_h`, below) pinning exactly this. The corrected, narrower fact: a same-line
+    *statement* is not producible inside an `enum class` body; a same-line *enumerator* is, and
+    the census catches it. `adapter_marshal.h`'s excused line sits inside a function body, where
+    both statement forms (`..._append_adapter_marshal`/
+    `test_prepended_content_on_an_excused_line_is_also_caught`, below) are real.
   - `test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_registry_record_at_all`
     restored `tools/geometry_site_registry.json` via `open(path, "w", encoding="utf-8")`, which
     translates `\\n` to `\\r\\n` on this platform; the file is `attr/text eol=lf`, so a clean
@@ -119,8 +132,10 @@ confirmation of T-2481's diff --
     below, reproducing the reviewer's own construction.
   - GS-12's own nine occurrences are anchored on their own explanatory COMMENT text (this file's
     own Part 3 header comment explains why: a bare code prefix collided with unrelated, unmarked
-    code once a reorder moved it), so the match key includes comment prose for 8 of GS-12's 9
-    occurrences -- a developer who rewords one of those comments, no code touched, reddens the
+    code once a reorder moved it), so the match key includes comment prose for all nine of GS-12's
+    occurrences, through eight registered records (two occurrences, `occ2`/`occ7`, share one
+    record -- see the registry's own header comment) -- a developer who rewords one of those
+    comments, no code touched, reddens the
     census with `MISSING SCOPE ANCHOR` (Claude/Poirot/dcefab3-t2486-census-content-keying-
     confirmation.md Sec7 O2, D-SLM5726, executed: "the normed" to "the normalised" in one GS-12
     comment). This was disclosed nowhere a reader of the tool would find it; disclosed now in
@@ -131,6 +146,29 @@ confirmation of T-2481's diff --
     file) each carried a stale claim untouched by T-2481's diff -- corrected in place rather than
     superseded a third time; see each site's own comment for what was wrong and how it was
     checked.
+
+T-2497 fold-in (Claude/Bach/briefs/t2497.md; Claude/Poirot/ba29de4-t2496-census-fixes-
+confirmation.md Significant 1/2, D-SLM5756/D-SLM5757/D-SLM5758): fix round on T-2496's
+confirmation of T-2491's diff --
+
+  - T-2491's own replacement fact for the two deleted pins -- "there is no producible same-line
+    geometry defect an enum body can host" -- overclaimed. Refuted by construction: an enum body
+    admits enumerators, not statements, but a same-line ENUMERATOR prepend is legal C++, compiles
+    clean at the CI's pinned compiler, and fires the census from the excused fragment's own
+    remainder. Two cells restore what the deletion left uncovered
+    (`test_defeats_the_prior_mechanism_same_line_enumerator_prepend_model_h`/
+    `_proof_manifest_h`, below); the corrected, narrower fact -- a same-line statement is not
+    producible inside an enum class body, a same-line enumerator is, and is caught -- replaces
+    the overclaim at every site it reached (this docstring, the S2 red-check comment block, both
+    T-2481/T-2491 build logs, and D-SLM5732/D-SLM5740).
+  - Neither production change T-2491 made is detectable by any cell in this file: reverting
+    `newline=""` on `test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_
+    registry_record_at_all`'s own registry write still passes while the registry's own bytes
+    change underneath it, and reverting `_mutated`'s convention-detection hardening leaves this
+    whole file green. `test_mutated_targets_and_registry_are_byte_identical_after_the_module_
+    runs`, below, is a session-scoped fixture that snapshots the seven `_mutated` targets plus
+    the registry before this module runs and asserts them byte-identical after -- closing both
+    halves of the dirty-checkout class at once, and every future cell that touches the real tree.
 """
 from __future__ import annotations
 
@@ -326,12 +364,15 @@ def test_appending_after_model_h_s_trailing_comment_fires_on_apparatus_unsound_g
     # `HiddenSizeGeometryMismatch` are enumerators inside an `enum class` body, which admits
     # enumerators, not statements, so an insert between the enumerator and its own trailing
     # comment is exactly as uncompilable as an append after it. There is no producible same-line
-    # geometry defect for `model.h`/`proof_manifest.h`: the same-line-append class T-2468 found is
-    # VACUOUS for these two files and real only on `adapter_marshal.h` (whose excused line sits
-    # inside a function body, not an enum) -- `test_defeats_the_prior_mechanism_same_line_append_
-    # adapter_marshal` and `test_prepended_content_on_an_excused_line_is_also_caught`, above, are
-    # that class's whole population. No cell below claims otherwise; a claim that "the class is
-    # closed for model.h/proof_manifest.h" is false on its face -- there is no such class.
+    # STATEMENT for `model.h`/`proof_manifest.h`: the same-line-append class T-2468 found is
+    # vacuous, for statements, on these two files and real only on `adapter_marshal.h` (whose
+    # excused line sits inside a function body, not an enum) -- `test_defeats_the_prior_mechanism_
+    # same_line_append_adapter_marshal` and `test_prepended_content_on_an_excused_line_is_also_
+    # caught`, above, are that class's whole population. A same-line ENUMERATOR, by contrast, IS
+    # producible and caught -- see `test_defeats_the_prior_mechanism_same_line_enumerator_prepend_
+    # model_h`/`_proof_manifest_h`, below (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md
+    # Significant 1, D-SLM5756/D-SLM5757). T-2491's own broader claim, "there is no producible
+    # same-line geometry defect an enum body can host," is false and corrected here.
     def _t(text):
         return text.replace(
             "\t" + _MODEL_FRAGMENT,
@@ -363,21 +404,74 @@ def test_appending_after_proof_manifest_h_s_trailing_comment_fires_on_apparatus_
                for f in failures)
 
 
-# --- No same-line construction is producible for model.h/proof_manifest.h (T-2491, Poirot
-# dcefab3-t2486-census-content-keying-confirmation.md Sec4, D-SLM5716/D-SLM5717, D-SLM5732): both
-# excused lines are enumerators inside an `enum class` body (`SslmModelStatus`, `Config
-# GeometryStatus`), which admits enumerators, not statements. T-2481's two cells here inserted a
-# statement between the enumerator and its own trailing comment, believing that construction was
-# real, compiled code the production path could emit; executed with the CI's own pinned compiler
-# (clang 18.1.8, `-fsyntax-only -std=c++20`), both headers fail with `error: missing ',' between
-# enumerators`. The cells also had zero discrimination, executed both with the QOW family forced
-# false and with the injected identifier replaced by an inert statement: the assertion held either
-# way, because what actually fired was the trailing prose comment's own R1 co-occurrence once the
-# exclusion's exact-text match went dead -- not recognition of the injected statement. Deleted
-# rather than replaced with a third attempt: there is no compiling same-line construction left to
-# pin for these two files. `test_defeats_the_prior_mechanism_same_line_append_adapter_marshal` and
-# `test_prepended_content_on_an_excused_line_is_also_caught`, above, are this class's whole
-# population -- `adapter_marshal.h`'s excused line sits inside a function body, not an enum. ---
+# --- No same-line STATEMENT is producible for model.h/proof_manifest.h (T-2491, Poirot dcefab3-
+# t2486-census-content-keying-confirmation.md Sec4, D-SLM5716/D-SLM5717, D-SLM5732): both excused
+# lines are enumerators inside an `enum class` body (`SslmModelStatus`, `ConfigGeometryStatus`),
+# which admits enumerators, not statements. T-2481's two cells here inserted a statement between
+# the enumerator and its own trailing comment, believing that construction was real, compiled code
+# the production path could emit; executed with the CI's own pinned compiler (clang 18.1.8,
+# `-fsyntax-only -std=c++20`), both headers fail with `error: missing ',' between enumerators`.
+# The cells also had zero discrimination, executed both with the QOW family forced false and with
+# the injected identifier replaced by an inert statement: the assertion held either way, because
+# what actually fired was the trailing prose comment's own R1 co-occurrence once the exclusion's
+# exact-text match went dead -- not recognition of the injected statement. Deleted rather than
+# replaced with a third attempt at the SAME (statement) shape.
+# `test_defeats_the_prior_mechanism_same_line_append_adapter_marshal` and
+# `test_prepended_content_on_an_excused_line_is_also_caught`, above, are the statement class's
+# whole population -- `adapter_marshal.h`'s excused line sits inside a function body, not an enum.
+#
+# T-2491's own replacement text overclaimed: "there is no producible same-line geometry defect an
+# enum body can host" is false -- refuted by construction (Claude/Poirot/ba29de4-t2496-census-
+# fixes-confirmation.md Significant 1, D-SLM5756/D-SLM5757). An enum body admits enumerators, not
+# statements, but a same-line ENUMERATOR prepend is legal C++ and enough: the excused fragment is
+# the whole stripped line, so a prepend leaves it intact -- the exclusion still fires and the
+# injected text is scanned as ordinary remainder. Executed at the CI's pinned compiler, clang
+# 18.1.8, `-fsyntax-only -std=c++20`: `q_proj_out_channels_hidden_size, ` prepended to `model.h`'s
+# fragment and `o_proj_out_channels_hidden_size, ` prepended to `proof_manifest.h`'s both compile
+# clean and fire `UNMARKED QOW PATTERN HIT`; both discriminate (silent with the QOW family
+# disabled, silent with an inert enumerator instead of the defect). The two cells below pin
+# exactly this -- the corrected fact is: a same-line statement is not producible inside an enum
+# body; a same-line enumerator is, and the census catches it. ---
+
+def test_defeats_the_prior_mechanism_same_line_enumerator_prepend_model_h():
+    def _t(text):
+        return text.replace(
+            "\t" + _MODEL_FRAGMENT,
+            "\tq_proj_out_channels_hidden_size, " + _MODEL_FRAGMENT,
+            1,
+        )
+    with _mutated(_MODEL_H, _t):
+        failures = census.run_census(_REPO_ROOT)
+    assert failures, (
+        "a new enumerator prepended before model.h's own excused enumerator must FAIL -- this is "
+        "the producible same-line construction the class admits inside an enum class body"
+    )
+    assert any("UNMARKED QOW PATTERN HIT" in f and "model.h" in f and "out_channels" in f
+               for f in failures), (
+        "the new enumerator's own out_channels/hidden_size co-occurrence is what fires here, in "
+        "the excused fragment's own remainder -- see this file's own comment block above"
+    )
+    assert not any("DEAD EXCLUSION" in f for f in failures), (
+        "a prepend, unlike an insert-between-the-comment, leaves the excused fragment's own exact "
+        "text intact -- the exclusion must still be found alive"
+    )
+
+
+def test_defeats_the_prior_mechanism_same_line_enumerator_prepend_proof_manifest_h():
+    def _t(text):
+        return text.replace(
+            "\t" + _PROOF_FRAGMENT,
+            "\to_proj_out_channels_hidden_size, " + _PROOF_FRAGMENT,
+            1,
+        )
+    with _mutated(_PROOF_H, _t):
+        failures = census.run_census(_REPO_ROOT)
+    assert failures, (
+        "a new enumerator prepended before proof_manifest.h's own excused enumerator must FAIL"
+    )
+    assert any("UNMARKED QOW PATTERN HIT" in f and "proof_manifest.h" in f and "out_channels" in f
+               for f in failures)
+    assert not any("DEAD EXCLUSION" in f for f in failures)
 
 
 # --- This ticket's own added construction: new content BEFORE the fragment, not just after --
@@ -563,18 +657,22 @@ def test_part3_unrelated_edit_elsewhere_in_the_file_does_not_false_fail():
 # --- S2 red-check: reverting `_part2_excise_excluded_text` to skip-whole-line-on-match (the
 # TEXT-keyed exclusion mechanism the reviewer's own mutation-proof reverted to -- `Claude/Brunel/
 # t2475-census-exclusion-class-2026-08-31.md` Sec10 records what was actually run; NOT a return
-# to (path, line) keying) reddens exactly SIX cells (T-2480 F2, Poirot f363c2a-t2479-census-
+# to (path, line) keying) reddens exactly EIGHT cells (T-2480 F2, Poirot f363c2a-t2479-census-
 # class-confirmation.md Sec8 M2, D-SLM5654; re-verified against this file's own current, grown
-# population by Poirot dcefab3-t2486-census-content-keying-confirmation.md Sec8 M2, D-SLM5721):
-# the four same-line population cells --
+# population by Poirot dcefab3-t2486-census-content-keying-confirmation.md Sec8 M2, D-SLM5721;
+# T-2497 adds the two enumerator-prepend cells to the population, re-executed against the same
+# reversion -- 8 failed, 32 passed, up from the prior 6 failed/34 passed): the SIX same-line
+# population cells --
 # test_defeats_the_prior_mechanism_same_line_append_adapter_marshal,
 # test_appending_after_model_h_s_trailing_comment_fires_on_apparatus_unsound_grounds,
 # test_appending_after_proof_manifest_h_s_trailing_comment_fires_on_apparatus_unsound_grounds,
-# test_prepended_content_on_an_excused_line_is_also_caught -- plus the two mechanism-level unit
-# cells test_excise_leaves_appended_new_content_in_the_remainder and
+# test_prepended_content_on_an_excused_line_is_also_caught,
+# test_defeats_the_prior_mechanism_same_line_enumerator_prepend_model_h,
+# test_defeats_the_prior_mechanism_same_line_enumerator_prepend_proof_manifest_h -- plus the two
+# mechanism-level unit cells test_excise_leaves_appended_new_content_in_the_remainder and
 # test_excise_leaves_prepended_new_content_in_the_remainder (this file's own docstring separately
 # names these). The two cells T-2491 deletes (formerly the `..._insert_before_comment_*` pair,
-# above) were never among these six -- executed and confirmed: neither depended on the excision
+# above) were never among these eight -- executed and confirmed: neither depended on the excision
 # mechanism at all, so reverting it left both unaffected regardless of whether they existed.
 
 

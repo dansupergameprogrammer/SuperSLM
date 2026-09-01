@@ -425,52 +425,58 @@ _NUMBER_WORDS = {
 }
 
 
-def _git_log_follow_commit_count(rel_path: str) -> int:
-    """Number of commits `git log --follow` reports for `rel_path` under the repo root, counted
-    fresh at call time -- not cached, so a commit landed since this process started is picked up
-    the moment it is asked for."""
-    result = subprocess.run(
-        ["git", "log", "--follow", "--oneline", "--", rel_path],
-        cwd=dbam._REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return len([ln for ln in result.stdout.splitlines() if ln.strip()])
+def test_oracle_header_commit_count_pin_matches_the_prose_word():
+    """T-2497 (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Critical 1, D-SLM5755):
+    replaces `test_oracle_header_commit_count_matches_git_log_follow`, which asserted the oracle
+    header's own prose word ("N total commits touch this file end to end ... through this one")
+    against a FRESH `git log --follow` count taken at test-run time. That is a property of the
+    CLONE, not of this file: `actions/checkout@v5` defaults to a depth-1 clone and no job in
+    `.github/workflows/` sets `fetch-depth`, so `git log --follow` on a GitHub Actions runner
+    counted one commit regardless of the true history and the cell failed on every Actions run --
+    the first cell in `tests/ci/` to take repository history as an input, in the one job that
+    collects this whole directory.
 
-
-def test_oracle_header_commit_count_matches_git_log_follow():
-    """T-2491 (Poirot dcefab3-t2486-census-content-keying-confirmation.md Sec8 M3, D-SLM5722):
-    the oracle file's own header states, in prose, how many commits `git log --follow` counts
-    against it ("N total commits touch this file end to end ... through this one") -- a
-    hand-maintained claim that has drifted three times ("eleven"/"ten" corrected to "thirteen"/
-    "twelve" by T-2481, itself carrying a misattributed commit hash corrected by T-2491), each
-    time because the sentence is re-anchored to whichever commit most recently touched the
-    paragraph rather than derived. Per StandardsDocument.md Sec5.6's preference for removing a
-    term from a formula over adding a rule to remember it, the count is pinned here against a
-    fresh `git log --follow`, run at test time rather than trusted from the prose: this does not
-    stop the prose from drifting, but it stops a drifted prose count from shipping unnoticed --
-    the next edit that gets it wrong fails this cell instead of waiting for a reviewer to read
-    both numbers and notice they disagree."""
+    This cell takes no git-history input at all: it asserts the prose word above against a
+    companion literal, `COMMIT_COUNT_PIN: N`, that is also committed in the same file's header.
+    Per StandardsDocument.md Sec5.6's preference for removing a term from a formula over adding a
+    rule to remember it, the count is no longer independently re-derived from live history on
+    every CI run; deriving it from `git log --follow` now happens only when a human runs
+    `python tests/ci/derive_bad_alloc_membership.py --commit-count` on their own full-history
+    checkout, at regeneration time, and pastes the result into both the prose word and the pin
+    together -- the same shape `tests/ci/check_present_tense_defect_comments.py` (T-2387) already
+    uses for the identical class: a live git call in a CI-collected cell silently degraded on a
+    depth-1 checkout, closed there by vendoring the value instead of re-deriving it live. This
+    cell's own job is narrower than the one it replaces -- it catches a human mistranscribing the
+    word relative to the pin, not history drifting past both of them unnoticed -- which is the
+    whole of what a depth-1 checkout can verify."""
     oracle_path = os.path.join(dbam._THIS_DIR, "bad_alloc_membership_expected.txt")
     with open(oracle_path, "r", encoding="utf-8") as f:
         header = f.read()
-    m = re.search(r"\b(\w+) total commits touch this file end to end", header)
-    assert m, (
+    word_match = re.search(r"\b(\w+) total commits touch this file end to end", header)
+    assert word_match, (
         "the oracle header's own commit-count sentence has moved or been reworded -- update "
         "this pin's own regex to match its new wording"
     )
-    word = m.group(1).lower()
+    word = word_match.group(1).lower()
     assert word in _NUMBER_WORDS, (
         f"the oracle header states the commit count as {word!r}, which this pin's own "
         f"_NUMBER_WORDS does not cover -- extend it"
     )
     stated = _NUMBER_WORDS[word]
-    actual = _git_log_follow_commit_count("tests/ci/bad_alloc_membership_expected.txt")
-    assert stated == actual, (
+
+    pin_match = re.search(r"^# COMMIT_COUNT_PIN:\s*(\d+)", header, re.MULTILINE)
+    assert pin_match, (
+        "the oracle header's own COMMIT_COUNT_PIN line is missing or has moved -- regenerate it "
+        "with `python tests/ci/derive_bad_alloc_membership.py --commit-count` on a full-history "
+        "checkout and restore the line"
+    )
+    pinned = int(pin_match.group(1))
+
+    assert stated == pinned, (
         f"the oracle header states {word!r} ({stated}) total commits touching this file, but "
-        f"`git log --follow` counts {actual} as of this test run -- regenerate the header's own "
-        f"commit-count paragraph (and its per-commit enumeration) to match before committing"
+        f"COMMIT_COUNT_PIN: {pinned} disagrees -- regenerate both together with "
+        f"`python tests/ci/derive_bad_alloc_membership.py --commit-count` on a full-history "
+        f"checkout before committing"
     )
 
 
