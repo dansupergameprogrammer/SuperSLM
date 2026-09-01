@@ -165,10 +165,11 @@ confirmation of T-2491's diff --
     `newline=""` on `test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_
     registry_record_at_all`'s own registry write still passes while the registry's own bytes
     change underneath it, and reverting `_mutated`'s convention-detection hardening leaves this
-    whole file green. `test_mutated_targets_and_registry_are_byte_identical_after_the_module_
-    runs`, below, is a session-scoped fixture that snapshots the seven `_mutated` targets plus
-    the registry before this module runs and asserts them byte-identical after -- closing both
-    halves of the dirty-checkout class at once, and every future cell that touches the real tree.
+    whole file green. `_mutated_targets_and_registry_are_byte_identical_after_the_module_runs`,
+    below, is a module-scoped, autouse fixture that snapshots the seven `_mutated` targets plus
+    the registry before this module's own suite runs and asserts them byte-identical after --
+    closing both halves of the dirty-checkout class at once, and every future cell that touches
+    the real tree, not just the two named above.
 """
 from __future__ import annotations
 
@@ -176,6 +177,8 @@ import contextlib
 import os
 import subprocess
 import sys
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools"))
 import geometry_site_census as census  # noqa: E402
@@ -222,6 +225,57 @@ def _mutated(rel_path: str, transform):
     finally:
         with open(full, "w", encoding="utf-8", newline=_write_newline) as f:
             f.write(original)
+
+
+# T-2497 (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Significant 2, D-SLM5758):
+# every real path `_mutated` is pointed at in this module, plus the registry -- the two files
+# T-2491's own S2 remedy touches (`_mutated` itself, and the registry write in
+# `test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_registry_record_at_all`)
+# and the five more `_mutated` also restores. Executed by the reviewer: reverting `newline=""`
+# on the registry cell's own writes still leaves that cell `1 passed` while the registry's own
+# sha256 changes underneath it; reverting `_mutated`'s convention-detection hardening leaves
+# this whole file green (every file it touches is pure CRLF today, so the hardening and the
+# platform default agree on every input this suite has -- Claude/Poirot/ba29de4-t2496-census-
+# fixes-confirmation.md Sec7). The dirty-checkout class this fixture closes can return with the
+# suite green.
+_MUTATED_TARGETS_AND_REGISTRY_PATHS = (
+    _ADAPTER_H,
+    _MATMUL_H,
+    _MODEL_H,
+    _PROOF_H,
+    _FORWARD_SITES_CPP_T2481,
+    os.path.join("src", "proof_manifest.cpp"),
+    os.path.join("src", "gpu", "superslm_gpu.cpp"),
+    os.path.join("tools", "geometry_site_registry.json"),
+)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _mutated_targets_and_registry_are_byte_identical_after_the_module_runs():
+    """Session-scoped in spirit, module-scoped in fact (this module's own `census` import is
+    already bound to this repo's `tools/`, per this file's own docstring above) -- snapshots the
+    raw bytes of every path in `_MUTATED_TARGETS_AND_REGISTRY_PATHS` BEFORE the first cell in
+    this module runs, and asserts them byte-identical AFTER the last one has, whatever mix of
+    `_mutated()` blocks and direct registry writes ran in between. Closes T-2496's Significant 2
+    (D-SLM5758) at the root rather than per-cell: a fix that touches one of these paths and
+    leaves it modified fails HERE regardless of what that fix's own cell asserts, so the next
+    dirty-checkout regression cannot ship with this suite green the way this round's own did."""
+    paths = [os.path.join(_REPO_ROOT, rel) for rel in _MUTATED_TARGETS_AND_REGISTRY_PATHS]
+    before = {}
+    for p in paths:
+        with open(p, "rb") as f:
+            before[p] = f.read()
+    yield
+    changed = []
+    for p in paths:
+        with open(p, "rb") as f:
+            after = f.read()
+        if after != before[p]:
+            changed.append(os.path.relpath(p, _REPO_ROOT))
+    assert not changed, (
+        "this module's own suite left the checkout modified -- byte mismatch after the run on: "
+        + ", ".join(changed)
+    )
 
 
 # --- Mechanism cells: _part2_excise_excluded_text in isolation. ---
@@ -1064,6 +1118,10 @@ def test_part3_ambiguous_scope_anchor_fires_when_two_records_own_anchors_collide
         "window, with disagreeing offsets, must be reported by name rather than guessed at"
     )
     assert not any("REGRESSED SITE" in f and "GS-10" in f for f in failures), (
-        "an ambiguous match must not fall through to a required-token check against either "
-        "record's own (possibly wrong) window"
+        "an ambiguous match must not fall through and silently pass -- this second assertion is "
+        "itself inert (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Sec8 M2, "
+        "D-SLM5760: with the guard disabled the census reports nothing at exit 0, never a false "
+        "REGRESSED SITE); the first assertion above carries the whole pin, and what the guard "
+        "actually prevents is that silent absorption, not a required-token check against either "
+        "record's own window"
     )

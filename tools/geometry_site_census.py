@@ -525,12 +525,16 @@ def run_census(repo_root: str) -> list[str]:
     # ambiguous-exclusion checks hold.
     #
     # Cost, disclosed rather than left implicit (Claude/Poirot/dcefab3-t2486-census-content-
-    # keying-confirmation.md Sec7 O2, D-SLM5726): GS-12's own nine occurrences are anchored on
-    # their own explanatory COMMENT text, not a code prefix (see the registry's own header
+    # keying-confirmation.md Sec7 O2, D-SLM5726; count corrected by Claude/Poirot/ba29de4-t2496-
+    # census-fixes-confirmation.md Sec8 M1, D-SLM5759): GS-12's own nine occurrences are anchored
+    # on their own explanatory COMMENT text, not a code prefix (see the registry's own header
     # comment for why -- a code-prefix anchor collided with unrelated, unmarked code once a
-    # reorder moved it). That puts comment prose into the match key for 8 of GS-12's 9
-    # occurrences, so a developer who rewords one of those comments -- no code touched -- reddens
-    # this census with MISSING SCOPE ANCHOR, the exact diagnostic a genuine revert produces.
+    # reorder moved it). That puts comment prose into the match key for ALL NINE of GS-12's
+    # occurrences, through eight registered records (two occurrences, `occ2`/`occ7`, share one
+    # record -- their local comment text is identical by construction, see the registry's own
+    # header comment), so a developer who rewords one of those comments -- no code touched --
+    # reddens this census with MISSING SCOPE ANCHOR, the exact diagnostic a genuine revert
+    # produces.
     # Executed: changing "the normed" to "the normalised" in one GS-12 comment, no code touched,
     # fails the census; an unrelated comment respace elsewhere in the same file does not. This is
     # the safe direction (a real revert can never look like a passing comment edit), but the
