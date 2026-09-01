@@ -56,6 +56,28 @@ against the built mechanism):
         pre-existing, not this ticket's own diff (Part 2's per-line hit detection is unchanged),
         reproduced here so the PASS this case still returns is a proven, not assumed, fact, and
         cross-checked against the KNOWN LIMITATION text `main()` now prints.
+
+T-2481 fold-in (Claude/Bach/briefs/t2481.md; Claude/Mendeleev/t2480-census-recommissioning-
+2026-08-31.md F1, D-SLM5647/D-SLM5659; Claude/Poirot/f363c2a-t2479-census-class-confirmation.md
+Significant 1/2, D-SLM5651/D-SLM5652): four sources bundled into one round --
+
+  - Part 3's occurrence-ordinal keying is defeated by REORDERING two existing occurrences of a
+    same-file, multi-occurrence site -- nothing added or removed, marker count unchanged, Part 1
+    blind to it -- which desyncs the ordinal-to-offset lookup and silently absorbs a genuine
+    revert while citing an untouched line (`test_part3_reorder_*`, below). Replaced with
+    CONTENT-ADDRESSED occurrence identification (`required_token_scopes`, registry) -- see
+    `tools/geometry_site_census.py`'s own Part 3 header comment and the registry's own header
+    comment for the full account.
+  - Part 2's exclusion mechanism excuses EVERY literal copy of an excused fragment in its own
+    file, not only the one statement it names -- a genuinely new, unregistered site written as a
+    literal copy of an excused statement is excised for free (`test_part2_ambiguous_exclusion_*`,
+    below). Closed by counting non-comment-line matches instead of recording mere presence.
+  - Two of the four cells pinning T-2475's own headline remedy exercised text a compiler never
+    sees (append AFTER a fragment's own trailing `//` comment); replaced with cells over the
+    producible shape (insert BEFORE the trailing comment) and the two prior cells renamed to
+    state precisely what they do prove (a dead exclusion, not a caught defect statement).
+  - The S2 red-check comment block's own cell count ("exactly four") is corrected to what a
+    full, unfiltered run of this file actually reddens under the same reversion.
 """
 from __future__ import annotations
 
@@ -73,6 +95,7 @@ _ADAPTER_H = os.path.join("include", "superslm", "adapter_marshal.h")
 _MODEL_H = os.path.join("include", "superslm", "model.h")
 _PROOF_H = os.path.join("include", "superslm", "proof_manifest.h")
 _MATMUL_H = os.path.join("include", "superslm", "matmul.h")
+_FORWARD_SITES_CPP_T2481 = os.path.join("src", "forward", "forward_sites.cpp")
 
 _ADAPTER_FRAGMENT = 'if (proj == "q_proj" || proj == "o_proj" || proj == "down_proj") return hidden_size;'
 _MODEL_FRAGMENT = "ConfigGeometryHiddenSizeMismatch,    // R1: hidden_size != num_attention_heads * head_dim"
@@ -216,7 +239,23 @@ def test_defeats_the_prior_mechanism_same_line_append_adapter_marshal():
     assert any("adapter_marshal.h" in f and "k_proj" in f for f in failures)
 
 
-def test_defeats_the_prior_mechanism_same_line_append_model_h():
+def test_appending_after_model_h_s_trailing_comment_fires_on_apparatus_unsound_grounds():
+    # T-2479 Significant 2 (Poirot f363c2a-t2479-census-class-confirmation.md Sec5, D-SLM5652):
+    # this construction's own injected text lands AFTER the fragment's trailing `//` comment, so
+    # from a real compiler's own point of view the ENTIRE remainder of the physical line --
+    # including the appended `uint64_t o_proj_out_channels = hidden_size;` -- is commented-out
+    # prose, never compiled, and cannot be a geometry site. Census.py does not know that: once
+    # the fragment (enumerator PLUS its own trailing `// R1: ...` comment) is excised as one
+    # exact-text match, only the appended text remains in the scanned line, and that text
+    # independently looks QOW-shaped (`hidden_size` plus the `out_channels` substring inside its
+    # own identifier) regardless of ever having sat inside a comment. Executed: this construction
+    # DOES fire, on `UNMARKED QOW PATTERN HIT`, not merely a `DEAD EXCLUSION` -- but the
+    # right-verdict-for-the-wrong-reason gap D-SLM5652 names still holds: nothing here proves the
+    # census recognizes commented-out text as inert, only that this SPECIFIC probe's own
+    # appended identifier happens to independently trip a pattern. The producible, semantically
+    # real defeat for these two files -- new code BEFORE the trailing comment, genuinely
+    # compiled -- is `test_defeats_the_prior_mechanism_same_line_insert_before_comment_model_h`,
+    # below, and that is the cell a claim of "the class is closed for model.h" should cite.
     def _t(text):
         return text.replace(
             "\t" + _MODEL_FRAGMENT,
@@ -225,11 +264,16 @@ def test_defeats_the_prior_mechanism_same_line_append_model_h():
         )
     with _mutated(_MODEL_H, _t):
         failures = census.run_census(_REPO_ROOT)
-    assert failures, "new content appended after model.h's own excused line must now FAIL"
-    assert any("model.h" in f for f in failures)
+    assert failures, "appending after model.h's own trailing comment must still redden the census"
+    assert any("UNMARKED QOW PATTERN HIT" in f and "model.h" in f and "out_channels" in f
+               for f in failures), (
+        "the appended identifier's own out_channels substring, not a recognition of commented-"
+        "out prose, is what fires here -- see this cell's own docstring"
+    )
 
 
-def test_defeats_the_prior_mechanism_same_line_append_proof_manifest_h():
+def test_appending_after_proof_manifest_h_s_trailing_comment_fires_on_apparatus_unsound_grounds():
+    # Same shape and same caveat as the model.h cell above (T-2479 Significant 2, D-SLM5652).
     def _t(text):
         return text.replace(
             "\t" + _PROOF_FRAGMENT,
@@ -238,8 +282,45 @@ def test_defeats_the_prior_mechanism_same_line_append_proof_manifest_h():
         )
     with _mutated(_PROOF_H, _t):
         failures = census.run_census(_REPO_ROOT)
-    assert failures, "new content appended after proof_manifest.h's own excused line must now FAIL"
-    assert any("proof_manifest.h" in f for f in failures)
+    assert failures, "appending after proof_manifest.h's own trailing comment must still redden the census"
+    assert any("UNMARKED QOW PATTERN HIT" in f and "proof_manifest.h" in f and "out_channels" in f
+               for f in failures)
+
+
+# --- THE producible same-line shape for model.h/proof_manifest.h (T-2481, T-2479 Significant 2,
+# D-SLM5652): new code inserted BETWEEN the enumerator and its own trailing `//` comment is real,
+# compiled code -- the shape production can actually emit on these two files, unlike appending
+# after the comment above. The mechanism is sound (executed at f363c2a); these two cells are the
+# pin the prior pair only appeared to be. ---
+
+def test_defeats_the_prior_mechanism_same_line_insert_before_comment_model_h():
+    def _t(text):
+        return text.replace(
+            _MODEL_FRAGMENT,
+            'ConfigGeometryHiddenSizeMismatch, uint64_t o_proj_out_channels = hidden_size;   '
+            '// R1: hidden_size != num_attention_heads * head_dim',
+            1,
+        )
+    with _mutated(_MODEL_H, _t):
+        failures = census.run_census(_REPO_ROOT)
+    assert failures, "real code inserted before model.h's own trailing comment must FAIL"
+    assert any("UNMARKED R1 PATTERN HIT" in f and "model.h" in f and "o_proj_out_channels" in f
+               for f in failures), "the new statement itself must be cited, not just a dead exclusion"
+
+
+def test_defeats_the_prior_mechanism_same_line_insert_before_comment_proof_manifest_h():
+    def _t(text):
+        return text.replace(
+            _PROOF_FRAGMENT,
+            'HiddenSizeGeometryMismatch, uint64_t o_proj_out_channels = hidden_size;   '
+            '// hidden_size != num_attention_heads * head_dim -- R1, REMOVED',
+            1,
+        )
+    with _mutated(_PROOF_H, _t):
+        failures = census.run_census(_REPO_ROOT)
+    assert failures, "real code inserted before proof_manifest.h's own trailing comment must FAIL"
+    assert any("UNMARKED R1 PATTERN HIT" in f and "proof_manifest.h" in f and "o_proj_out_channels" in f
+               for f in failures), "the new statement itself must be cited, not just a dead exclusion"
 
 
 # --- This ticket's own added construction: new content BEFORE the fragment, not just after --
@@ -422,16 +503,27 @@ def test_part3_unrelated_edit_elsewhere_in_the_file_does_not_false_fail():
     )
 
 
-# --- S2 red-check: this suite's own same-line-append population (test_defeats_the_prior_
-# mechanism_* and test_prepended_content_on_an_excused_line_is_also_caught, above) IS the
-# cell the reviewer's Significant 2 asked for. Confirmed by construction (recorded in
-# Claude/Brunel/t2475-census-exclusion-class-2026-08-31.md, not reproduced as a monkeypatch
-# test here to avoid duplicating run_census's own source under a second name): with
-# `_part2_excise_excluded_text` textually reverted to the reviewer's own defective
-# `(rel_path, line_number)` skip-whole-line form, exactly those four cells fail and every
-# other cell in this file (including the must-accept/must-reject/safe-direction population)
-# stays green -- proving the pin is neither vacuous nor over-broad, then the fix was
-# restored and this file re-run clean (22/22) before landing.
+# --- S2 red-check: this suite's own same-line-append/insert population (the
+# test_defeats_the_prior_mechanism_* and test_prepended_content_on_an_excused_line_is_also_
+# caught cells above) IS the cell the reviewer's Significant 2 asked for. T-2481 correction
+# (Poirot f363c2a-t2479-census-class-confirmation.md Sec8 M2, D-SLM5654): this block previously
+# both claimed the mutation-proof "is reproduced here as `test_red_check_*` below" (no such cell
+# exists in this file) and, fifty lines later, stated the opposite -- a self-contradiction inside
+# one file. It also named the mutant "the exact defective `(path, line)` form" /
+# "`(rel_path, line_number)` skip-whole-line form", where `Claude/Brunel/t2475-census-exclusion-
+# class-2026-08-31.md` Sec10 records what was actually run: a TEXT-keyed revert to
+# skip-whole-line-on-match, not a return to line-number keying (both are in fact caught -- the
+# coverage was never in question, only the label). And it reported "exactly those four cells
+# fail ... (22/22)" from a `pytest -k`-filtered run of 5 of this file's own cells (`4 failed, 1
+# passed, 17 deselected`), not the file's real population. Executed against the FULL, unfiltered
+# file at `f363c2a` (26 cells then; this file's own cell count has since grown): reverting
+# `_part2_excise_excluded_text` to skip-whole-line-on-match fails SIX cells, not four -- the four
+# same-line population cells plus `test_excise_leaves_appended_new_content_in_the_remainder` and
+# `test_excise_leaves_prepended_new_content_in_the_remainder` (mechanism-level unit cells this
+# file's own docstring separately names, independently reproduced by
+# Claude/Mendeleev/t2480-census-recommissioning-2026-08-31.md Sec3.3 axis (a) and Poirot
+# f363c2a-t2479-census-class-confirmation.md Sec8 M2 -- the suite's real discriminating power for
+# this axis exceeds what this block previously stated; the count was wrong, not the coverage).
 
 
 # --- Observation carried into this round (Poirot 6597903-t2472-ask5-tracka-confirmation.md
@@ -457,3 +549,322 @@ def test_dead_exclusion_check_does_not_false_fire_on_the_untouched_tree():
     # restated here so a DEAD EXCLUSION regression is locatable by name if it ever recurs.
     failures = census.run_census(_REPO_ROOT)
     assert not any("DEAD EXCLUSION" in f for f in failures)
+
+
+# =====================================================================================
+# T-2481 fold-in, item 2 (Poirot f363c2a-t2479-census-class-confirmation.md Significant 1,
+# D-SLM5651/D-SLM5670): `_part2_excise_excluded_text` matches an excused fragment by exact-text
+# PRESENCE, so a genuinely new, unregistered site written as a LITERAL COPY of an excused
+# fragment, anywhere else in that same file, is excised for free -- exit 0, unaudited site in
+# the tree. Closed by counting non-comment-line matches instead of recording mere presence and
+# failing above one. This is the same class as item 1 below one level apart (a key that names
+# LESS than the thing it stands for -- here, "this text exists somewhere in the file" instead of
+# "this text is THE one statement it was written to excuse").
+# =====================================================================================
+
+def test_part2_ambiguous_exclusion_fires_on_a_literal_duplicate_copy():
+    def _t(text):
+        assert text.count(_ADAPTER_FRAGMENT) == 1
+        injected = (
+            "\ninline uint64_t T2481DuplicateProbe(const std::string& proj, uint64_t hidden_size) {\n"
+            "\t" + _ADAPTER_FRAGMENT + "\n"
+            "\treturn 0;\n"
+            "}\n"
+        )
+        assert "}  // namespace superslm" in text
+        return text.replace("}  // namespace superslm", injected + "}  // namespace superslm", 1)
+    with _mutated(_ADAPTER_H, _t):
+        failures = census.run_census(_REPO_ROOT)
+    assert failures, "a literal duplicate copy of an excused fragment must FAIL, not be excised for free"
+    assert any("AMBIGUOUS EXCLUSION" in f and "adapter_marshal.h" in f and "2 non-comment lines" in f
+               for f in failures)
+
+
+def test_part2_ambiguous_exclusion_does_not_false_fire_on_a_near_copy():
+    # A near-copy (the excused fragment's own text disturbed, not reproduced literally) is NOT
+    # a duplicate -- it is a genuinely different statement, and must be caught the ordinary way
+    # (UNMARKED ... PATTERN HIT), not misreported as an ambiguous exclusion.
+    def _t(text):
+        near_copy = _ADAPTER_FRAGMENT.replace("proj ==", "proj  ==", 1)
+        assert near_copy != _ADAPTER_FRAGMENT
+        injected = (
+            "\ninline uint64_t T2481NearCopyProbe(const std::string& proj, uint64_t hidden_size) {\n"
+            "\t" + near_copy + "\n"
+            "\treturn 0;\n"
+            "}\n"
+        )
+        return text.replace("}  // namespace superslm", injected + "}  // namespace superslm", 1)
+    with _mutated(_ADAPTER_H, _t):
+        failures = census.run_census(_REPO_ROOT)
+    assert failures, "a near-copy (not a literal duplicate) must still FAIL as an unmarked site"
+    assert any("UNMARKED QOW PATTERN HIT" in f and "adapter_marshal.h" in f for f in failures)
+    assert not any("AMBIGUOUS EXCLUSION" in f for f in failures)
+
+
+def test_part2_ambiguous_exclusion_does_not_false_fire_on_the_untouched_tree():
+    failures = census.run_census(_REPO_ROOT)
+    assert not any("AMBIGUOUS EXCLUSION" in f for f in failures)
+
+
+# =====================================================================================
+# T-2481 fold-in, item 1 (Claude/Mendeleev/t2480-census-recommissioning-2026-08-31.md F1,
+# D-SLM5647; D-SLM5659): Part 3's occurrence-ORDINAL keying is defeated by REORDERING two of a
+# multi-occurrence site's own existing occurrences within their shared file -- nothing added or
+# removed, marker count unchanged, Part 1 blind to it -- which desyncs the ordinal-to-offset
+# lookup and silently absorbs a genuine revert while citing an untouched line. Demonstrated on
+# GS-10 (D-SLM5647); T-2481 found the SAME exposure, independently, on GS-11 (same two-occurrence
+# shape, omitted from the prior commissioning's own exposure list) before building the remedy.
+# `required_token_scopes` (registry) replaces ordinal with CONTENT-ADDRESSED anchors -- these
+# cells prove the reorder-plus-revert construction that produced byte-identical output under the
+# old scheme now correctly discriminates: PASS on the healthy reorder, FAIL citing the RELOCATED
+# occurrence's own line on the reverted one.
+# =====================================================================================
+
+def _marker_line(indent: str, gs_id: str) -> str:
+    """Builds a real marker's own literal line at RUNTIME rather than embedding it as a
+    contiguous string constant in this module -- this test file is itself swept by Part 1's
+    tree-wide marker scan (`_iter_source_files` with no `production_only` filter includes
+    tests/**/*.py), so a literal "SSLM-GEOMETRY-SITE: GS-NN" substring written directly into
+    this file's own source would be picked up as a genuine (orphan/duplicate) marker occurrence
+    of THIS file, not just of the mutated production file a fixture targets."""
+    return indent + "// SSLM-GEOMETRY" + "-SITE: " + gs_id + "\n"
+
+
+def _swap_and_optionally_revert(text, chunk_a, chunk_b, revert_from=None, revert_to=None):
+    """Swaps `chunk_a` and `chunk_b` bodily (each occupies the other's former physical position),
+    optionally reverting one occurrence of a literal substring (`revert_from` -> `revert_to`,
+    the FIRST one found) in the RESULT -- i.e. after the swap, wherever that text now physically
+    sits. Mirrors Claude/Mendeleev/t2480-probes/t2480_q2_part3_edit_survivability.py's own
+    reorder-plus-revert construction. `revert_from` need not be unique in the swapped text: two
+    occurrences whose own local code is genuinely identical (GS-12's occ2/occ7) legitimately
+    share the same revertible text, and reverting either one is an equally valid probe of that
+    pair's own harmless-collision property."""
+    assert text.count(chunk_a) == 1, "chunk_a not found uniquely -- update this fixture"
+    assert text.count(chunk_b) == 1, "chunk_b not found uniquely -- update this fixture"
+    swapped = text.replace(chunk_a, "\0T2481CHUNKB\0").replace(chunk_b, chunk_a)
+    swapped = swapped.replace("\0T2481CHUNKB\0", chunk_b)
+    if revert_from is None:
+        return swapped
+    assert swapped.count(revert_from) >= 1, "revert_from not found at all after the swap"
+    return swapped.replace(revert_from, revert_to, 1)
+
+
+_GS10_CHUNK_A = (
+    _marker_line("\t", "GS-10") +
+    "\t// T-2432 (Track A step 5, design §2.1 item 5/§6 Track A step 5, GS-10): "
+    "q_proj.weight's\n"
+    "\t// real shape is [q_width, hidden_size] -- byte extent q_width * hidden_size, not\n"
+    "\t// hidden_size * hidden_size.\n"
+    "\tL.off[2] = cur; cur += Align8U32(effective_q_width * hidden_size);  // q_weight (int8)\n"
+)
+_GS10_CHUNK_B = (
+    _marker_line("\t\t", "GS-10") +
+    "\t\tfor (uint32_t i = 0; i < QW * H; ++i) lw_bytes[base + layout.off[2] + i] = "
+    "static_cast<uint8_t>(lw.q_weight[i]);\n"
+)
+
+
+def test_part3_reorder_gs10_healthy_swap_stays_clean():
+    # The bare reorder, with neither occurrence's own fix touched -- content-addressing must not
+    # false-fire just because the two occurrences trade physical positions.
+    with _mutated(_SUPERSLM_GPU_CPP, lambda t: _swap_and_optionally_revert(t, _GS10_CHUNK_A, _GS10_CHUNK_B)):
+        failures = census.run_census(_REPO_ROOT)
+    assert failures == [], "reordering two healthy occurrences must not, by itself, redden the census"
+
+
+def test_part3_reorder_gs10_plus_revert_is_caught_at_the_relocated_line():
+    # Claude/Mendeleev/t2480-census-recommissioning-2026-08-31.md's own founding construction
+    # (D-SLM5647): under the pre-T2481 ordinal keying this produced BYTE-IDENTICAL output to the
+    # healthy-swap cell above, citing the UNTOUCHED occurrence's own line while the RELOCATED
+    # occurrence's own genuine revert went silently absorbed.
+    def _t(text):
+        return _swap_and_optionally_revert(
+            text, _GS10_CHUNK_A, _GS10_CHUNK_B,
+            revert_from="for (uint32_t i = 0; i < QW * H; ++i)",
+            revert_to="for (uint32_t i = 0; i < H * H; ++i)",
+        )
+    with _mutated(_SUPERSLM_GPU_CPP, _t):
+        failures = census.run_census(_REPO_ROOT)
+    assert failures, "a genuine revert of the relocated occurrence must FAIL, not be silently absorbed"
+    assert any("REGRESSED SITE" in f and "GS-10" in f and ":714" in f for f in failures), (
+        "the finding must cite the RELOCATED occurrence's own (now-first) line, not the "
+        "untouched occurrence -- a wrong-line citation is exactly what the prior ordinal "
+        "keying produced"
+    )
+
+
+_GS11_CHUNK_A = (
+    _marker_line("\t", "GS-11") +
+    "\t// T-2432 (Track A step 5, GS-11): o_proj.weight's real shape is [hidden_size, q_width] --\n"
+    "\t// byte extent hidden_size * q_width, not hidden_size * hidden_size. Unlike GS-07's own\n"
+    "\t// per-output-channel fold count (o_fold_identity/mult/shift below, GS-09, confirmed\n"
+    "\t// correct as hidden_size-sized and NOT touched by this step), the weight MATRIX itself\n"
+    "\t// genuinely decouples on its input axis.\n"
+    "\tL.off[25] = cur; cur += Align8U32(hidden_size * effective_q_width);  // o_weight (int8)\n"
+)
+_GS11_CHUNK_B = (
+    _marker_line("\t\t", "GS-11") +
+    "\t\tfor (uint32_t i = 0; i < H * QW; ++i) lw_bytes[base + layout.off[25] + i] = "
+    "static_cast<uint8_t>(lw.o_weight[i]);\n"
+)
+
+
+def test_part3_reorder_gs11_healthy_swap_stays_clean():
+    # GS-11 shares GS-10's own two-occurrence, one-file shape (offsets 6 and 1) and is
+    # independently exposed to the same ordinal-desync defect (T-2481, D-SLM5659) -- the prior
+    # commissioning's own exposure list ("GS-10, GS-12, GS-19") omitted it. Verified by
+    # execution: this exact swap produced a false REGRESSED SITE on healthy, unreverted code
+    # under the pre-T2481 ordinal keying (a safe-direction false alarm, not a silent pass, for
+    # this specific construction -- contingent on what unrelated text fell inside the misapplied
+    # window, per Claude/Mendeleev/t2480-census-recommissioning-2026-08-31.md F3).
+    with _mutated(_SUPERSLM_GPU_CPP, lambda t: _swap_and_optionally_revert(t, _GS11_CHUNK_A, _GS11_CHUNK_B)):
+        failures = census.run_census(_REPO_ROOT)
+    assert failures == [], "reordering two healthy GS-11 occurrences must not redden the census"
+
+
+def test_part3_reorder_gs11_plus_revert_is_caught_at_the_relocated_line():
+    def _t(text):
+        return _swap_and_optionally_revert(
+            text, _GS11_CHUNK_A, _GS11_CHUNK_B,
+            revert_from="for (uint32_t i = 0; i < H * QW; ++i)",
+            revert_to="for (uint32_t i = 0; i < H * H; ++i)",
+        )
+    with _mutated(_SUPERSLM_GPU_CPP, _t):
+        failures = census.run_census(_REPO_ROOT)
+    assert failures, "a genuine revert of the relocated GS-11 occurrence must FAIL"
+    assert any("REGRESSED SITE" in f and "GS-11" in f and ":741" in f for f in failures)
+
+
+_GS12_OCC0 = (
+    _marker_line("\t", "GS-12") +
+    "\t// T-2432 (Track A step 3, design §2.1 item 5/§6 Track A step 3): "
+    "q_codes/q_rot/ctx_codes\n"
+    "\t// are Q's own output-width buffers -- sized `effective_q_width`, not `hidden_size`.\n"
+    "\t// k_rot is written at `h * head_dim` for `h` up to `num_heads` (this loop's own "
+    "query-head\n"
+    "\t// index, not the KV-head index LandTokenKVRow uses to size its own K store) -- the same\n"
+    "\t// query-head-count bound q_rot uses, so it needs the identical widening or an\n"
+    "\t// out-of-bounds write follows the moment `num_heads` exceeds `hidden_size / head_dim`\n"
+    "\t// (a mechanical consequence of widening `num_heads`, not a separate design decision --\n"
+    "\t// the design's own §6 Track A step 3 text names q_codes/q_rot/ctx_wide/ctx_codes "
+    "and does\n"
+    "\t// not separately name k_rot because k_rot did not yet exist as a distinct local at the\n"
+    "\t// text's own citation range; its indexing is identical to q_rot's).\n"
+    "\tstd::vector<int8_t> normed(hidden_size), q_codes(effective_q_width), o_codes(hidden_size);\n"
+)
+_GS12_OCC1 = (
+    _marker_line("\t\t", "GS-12") +
+    "\t\t// T-2432 (Track A step 3): q_proj's INPUT width stays hidden_size (the normed\n"
+    "\t\t// residual stream is unchanged by this ask); its OUTPUT width is effective_q_width.\n"
+    "\t\tst = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, hidden_size, "
+    "effective_q_width,\n"
+)
+
+
+def test_part3_reorder_gs12_two_differently_offset_occurrences_plus_revert_is_caught():
+    # GS-12 has nine occurrences in one file with a mix of offsets (11, 3, 3, 4, 3, 4, 4, 3, 4)
+    # -- occ0 (offset 11) and occ1 (offset 3) genuinely differ, unlike the occ2/occ7 pair below.
+    def _t(text):
+        return _swap_and_optionally_revert(
+            text, _GS12_OCC0, _GS12_OCC1,
+            revert_from=("st = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, "
+                          "hidden_size, effective_q_width,"),
+            revert_to=("st = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, "
+                        "hidden_size, hidden_size,"),
+        )
+    with _mutated(_FORWARD_SITES_CPP_T2481, _t):
+        failures = census.run_census(_REPO_ROOT)
+    assert failures, "a genuine revert of the relocated GS-12 occurrence must FAIL"
+    assert any("REGRESSED SITE" in f and "GS-12" in f and ":1681" in f for f in failures)
+
+
+_GS12_OCC2 = (
+    _marker_line("\t\t\t", "GS-12") +
+    "\t\t\t// T-2432 (Track A step 3): ctx_wide is the pre-fold attention-context accumulator,\n"
+    "\t\t\t// one head_dim-wide slice per query head -- sized effective_q_width, not "
+    "hidden_size.\n"
+    "\t\t\tstd::vector<int64_t> ctx_wide(effective_q_width);\n"
+)
+_GS12_OCC7 = (
+    _marker_line("\t\t\t\t", "GS-12") +
+    "\t\t\t\t// T-2432 (Track A step 3): ctx_wide is the pre-fold attention-context accumulator,\n"
+    "\t\t\t\t// one head_dim-wide slice per query head -- sized effective_q_width, not "
+    "hidden_size.\n"
+    "\t\t\t\tstd::vector<int64_t> ctx_wide(effective_q_width);\n"
+)
+
+
+def test_part3_reorder_gs12_identical_shared_anchor_pair_is_harmless():
+    # occ2 and occ7 share literally identical local comment text (a copy-pasted explanation for
+    # equivalent code in two sibling functions) and the SAME offset (3) -- the registry
+    # registers one shared anchor record for both. Reordering these two specifically must stay
+    # harmless in both directions: healthy swap clean, and a revert of EITHER relocated
+    # occurrence still correctly caught (misassigning between two occurrences whose own
+    # registered offset agrees changes nothing about what gets checked).
+    with _mutated(_FORWARD_SITES_CPP_T2481, lambda t: _swap_and_optionally_revert(t, _GS12_OCC2, _GS12_OCC7)):
+        failures = census.run_census(_REPO_ROOT)
+    assert failures == [], "reordering the two identical-anchor GS-12 occurrences must not redden the census"
+
+    def _t(text):
+        return _swap_and_optionally_revert(
+            text, _GS12_OCC2, _GS12_OCC7,
+            revert_from="std::vector<int64_t> ctx_wide(effective_q_width);",
+            revert_to="std::vector<int64_t> ctx_wide(hidden_size);",
+        )
+    with _mutated(_FORWARD_SITES_CPP_T2481, _t):
+        failures = census.run_census(_REPO_ROOT)
+    assert failures, "a revert of either identical-anchor occurrence must still be caught"
+    assert any("REGRESSED SITE" in f and "GS-12" in f for f in failures)
+
+
+def test_part3_insert_unregistered_occurrence_between_two_existing_is_caught_without_corrupting_others():
+    # Claude/Mendeleev/t2480-census-recommissioning-2026-08-31.md Sec3.2's own "add an
+    # occurrence between two existing ones" construction, F3: under the pre-T2481 ordinal
+    # keying this cascaded an ordinal shift through every downstream occurrence, contingently
+    # producing a mix of false REGRESSED SITEs on untouched code. Content-addressing has no
+    # ordinal to cascade: only the new, genuinely unregistered marker is flagged, and every
+    # pre-existing occurrence -- unaffected by an edit elsewhere in the file -- stays clean.
+    def _t(text):
+        anchor_line = ("\tstd::vector<int8_t> normed(hidden_size), q_codes(effective_q_width), "
+                        "o_codes(hidden_size);\n")
+        assert text.count(anchor_line) == 1
+        injected = (_marker_line("\t", "GS-12") +
+                    "\tstd::vector<int8_t> ctx_extra(effective_q_width);\n")
+        return text.replace(anchor_line, anchor_line + injected, 1)
+    with _mutated(_FORWARD_SITES_CPP_T2481, _t):
+        failures = census.run_census(_REPO_ROOT)
+    assert any("MARKER COUNT MISMATCH" in f and "GS-12" in f for f in failures)
+    assert any("MISSING SCOPE ANCHOR" in f and "GS-12" in f for f in failures), (
+        "the new, unregistered occurrence must be named by its own marker line"
+    )
+    assert not any("REGRESSED SITE" in f for f in failures), (
+        "no PRE-EXISTING occurrence may be falsely flagged just because an unrelated new "
+        "marker was inserted elsewhere in the file"
+    )
+
+
+def test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_registry_record_at_all():
+    # A `fixed` site with `required_tokens` but NO `required_token_scopes` entry for a file it
+    # has a marker in -- the registry-side twin of `MISSING SCOPE ANCHOR` (a marker with no
+    # matching record at all, rather than one that fails to match any of its site's records).
+    def _t(registry_json):
+        import json
+        data = json.loads(registry_json)
+        for site in data["sites"]:
+            if site["id"] == "GS-01":
+                del site["required_token_scopes"]
+                break
+        else:
+            raise AssertionError("GS-01 not found in registry")
+        return json.dumps(data, indent=2)
+    registry_path = os.path.join(_REPO_ROOT, "tools", "geometry_site_registry.json")
+    with open(registry_path, "r", encoding="utf-8") as f:
+        original = f.read()
+    try:
+        with open(registry_path, "w", encoding="utf-8") as f:
+            f.write(_t(original))
+        failures = census.run_census(_REPO_ROOT)
+    finally:
+        with open(registry_path, "w", encoding="utf-8") as f:
+            f.write(original)
+    assert any("MISSING required_token_scopes ENTRY" in f and "GS-01" in f for f in failures)
