@@ -109,8 +109,11 @@ confirmation of T-2481's diff --
     restored `tools/geometry_site_registry.json` via `open(path, "w", encoding="utf-8")`, which
     translates `\\n` to `\\r\\n` on this platform; the file is `attr/text eol=lf`, so a clean
     checkout came back `w/crlf` and ` M` after one run. Fixed with `newline=""` on both the write
-    and the restore, and the same argument added to `_mutated` below for the next `eol=lf` file
-    it is pointed at.
+    and the restore. `_mutated`, below, is hardened the same round -- not with a blanket
+    `newline=""` (every `.h`/`.cpp`/`.hlsl` file it mutates is `attr/text`, checked out CRLF, and
+    an unconditional `newline=""` would restore those as LF instead, the same defect in the other
+    direction), but by detecting each target file's own newline convention from its raw bytes
+    before writing, so the next `eol=lf` file it is pointed at inherits the correct behavior.
   - `AMBIGUOUS SCOPE ANCHOR` (Part 3's third fail-closed diagnostic) had no cell -- pinned by
     `test_part3_ambiguous_scope_anchor_fires_when_two_records_own_anchors_collide_in_one_window`,
     below, reproducing the reviewer's own construction.
