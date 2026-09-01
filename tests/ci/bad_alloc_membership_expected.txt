@@ -9,8 +9,8 @@
 # + Observation 2, D-SLM5528): the line column is DROPPED as of this change.
 # Independently derived from `git log --follow` on this file rather than
 # taken from the notes below (which undercount and, for T-2125, miscount):
-# thirteen total commits touch this file end to end, `5043678` (creation, 18
-# members) through this one. Of the twelve after creation, TWO are genuine
+# fourteen total commits touch this file end to end, `5043678` (creation, 18
+# members) through this one. Of the thirteen after creation, TWO are genuine
 # membership growth -- `8ce6aa7` added `proof_manifest.h:JsonEscape`
 # (eighteen to nineteen) and `242dc12` (T-2125) added a THIRD
 # `model.h:Parse` (the population's only same-name-duplicate growth -- two
@@ -21,23 +21,39 @@
 # initial S-HARDEN-7/8 build-out, before either growth), `b8ecff5` (S3.7,
 # between the two growths), `70abbed` (T-2152), `2809d73` (the 2026-08-18
 # banner scrub), `0ef481d` (the 2026-08-21 release, a pure line shift),
-# `e3bc0cf` (T-2445), and `5c82f92`'s own regeneration (T-2458, regenerating
+# `e3bc0cf` (T-2445), and `566bf98`'s own regeneration (T-2458, regenerating
 # after T-2450's comment insert). Not one of those eight pure-line-shift
 # regenerations ever caught a membership change the name alone did not. The
-# remaining TWO commits after those ten are comment-only corrections to THIS
-# paragraph, touching neither the member set nor the line-count-derivation
-# method: `6597903` (T-2467, correcting a THIRD-vs-FOURTH `model.h:Parse`
-# miscount this paragraph itself carried) and this commit (T-2481, Claude/
-# Poirot/6597903-t2472-ask5-tracka-confirmation.md Sec8 M1, D-SLM5611:
+# remaining THREE commits after those ten are comment-only corrections to
+# THIS paragraph, touching neither the member set nor the line-count-
+# derivation method: `6597903` (T-2467, correcting a THIRD-vs-FOURTH
+# `model.h:Parse` miscount this paragraph itself carried), `dcefab3` (T-2481,
+# Claude/Poirot/6597903-t2472-ask5-tracka-confirmation.md Sec8 M1, D-SLM5611:
 # correcting THIS sentence's own commit-count miscount -- it stated "eleven
-# total / ten after creation" from the count as of `5c82f92`'s own
+# total / ten after creation" from the count as of `566bf98`'s own
 # regeneration and was never updated by the two comment-only corrections
 # landed after it, so the commit that fixed the prior miscount immediately
-# became a new instance of the same class it was fixing. A commit-count
-# stated as a present-tense fact in a paragraph that later commits edit will
-# recur; this correction states the count as of itself rather than pretend a
-# static number can stay current -- read `git log --follow` on this file for
-# the count as of any LATER commit).
+# became a new instance of the same class it was fixing), and this commit
+# (T-2491, Claude/Poirot/dcefab3-t2486-census-content-keying-confirmation.md
+# Sec8 M3/M4, D-SLM5722/D-SLM5723: `dcefab3`'s own correction still
+# misattributed the eighth pure-line-shift regeneration to `5c82f92`, which
+# `git log --oneline -1 5c82f92` shows is T-2450's own comment-insert commit
+# -- `git log 5c82f92 -1 --name-only -- tests/ci/bad_alloc_membership_
+# expected.txt` confirms it never touches this file; the regeneration commit
+# is `566bf98`, corrected above).
+#
+# This paragraph's own deictic anchor ("N total commits ... through this
+# one") re-derives its stated count as of WHICHEVER commit most recently
+# edited it, so the very next comment-only edit falsifies that number the
+# moment it lands, exactly as it did to the "eleven"/"ten" this paragraph
+# once carried -- three rounds correcting this same class running. Per
+# StandardsDocument.md Sec5.6's preference for removing a term from a
+# formula over adding a rule to remember it, the count no longer lives only
+# in this prose: `tests/ci/test_membership_check_population.py`'s
+# `test_oracle_header_commit_count_matches_git_log_follow` asserts the
+# number stated a few lines up against a fresh `git log --follow` count
+# taken at test-run time, so the next edit that gets the count wrong fails a
+# test instead of waiting for a reviewer to notice by hand.
 #
 # T-2467 (Claude/Poirot/665f430-t2462-ask5-tracka-confirmation.md, Minor 1,
 # D-SLM5560): this paragraph used to state `242dc12` added a FOURTH

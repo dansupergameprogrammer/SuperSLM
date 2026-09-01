@@ -22,6 +22,7 @@ such clang++ is available -- an environment gap is not a population defect.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -414,6 +415,63 @@ def test_oracle_regeneration_command_matches_the_committed_oracle_file():
 # one `header:line:name` row per currently-unwrapped member of the derived
 # population and exits 1 if any exist, 0 if none do.
 # ---------------------------------------------------------------------------
+
+
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+    "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19, "twenty": 20,
+}
+
+
+def _git_log_follow_commit_count(rel_path: str) -> int:
+    """Number of commits `git log --follow` reports for `rel_path` under the repo root, counted
+    fresh at call time -- not cached, so a commit landed since this process started is picked up
+    the moment it is asked for."""
+    result = subprocess.run(
+        ["git", "log", "--follow", "--oneline", "--", rel_path],
+        cwd=dbam._REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return len([ln for ln in result.stdout.splitlines() if ln.strip()])
+
+
+def test_oracle_header_commit_count_matches_git_log_follow():
+    """T-2491 (Poirot dcefab3-t2486-census-content-keying-confirmation.md Sec8 M3, D-SLM5722):
+    the oracle file's own header states, in prose, how many commits `git log --follow` counts
+    against it ("N total commits touch this file end to end ... through this one") -- a
+    hand-maintained claim that has drifted three times ("eleven"/"ten" corrected to "thirteen"/
+    "twelve" by T-2481, itself carrying a misattributed commit hash corrected by T-2491), each
+    time because the sentence is re-anchored to whichever commit most recently touched the
+    paragraph rather than derived. Per StandardsDocument.md Sec5.6's preference for removing a
+    term from a formula over adding a rule to remember it, the count is pinned here against a
+    fresh `git log --follow`, run at test time rather than trusted from the prose: this does not
+    stop the prose from drifting, but it stops a drifted prose count from shipping unnoticed --
+    the next edit that gets it wrong fails this cell instead of waiting for a reviewer to read
+    both numbers and notice they disagree."""
+    oracle_path = os.path.join(dbam._THIS_DIR, "bad_alloc_membership_expected.txt")
+    with open(oracle_path, "r", encoding="utf-8") as f:
+        header = f.read()
+    m = re.search(r"\b(\w+) total commits touch this file end to end", header)
+    assert m, (
+        "the oracle header's own commit-count sentence has moved or been reworded -- update "
+        "this pin's own regex to match its new wording"
+    )
+    word = m.group(1).lower()
+    assert word in _NUMBER_WORDS, (
+        f"the oracle header states the commit count as {word!r}, which this pin's own "
+        f"_NUMBER_WORDS does not cover -- extend it"
+    )
+    stated = _NUMBER_WORDS[word]
+    actual = _git_log_follow_commit_count("tests/ci/bad_alloc_membership_expected.txt")
+    assert stated == actual, (
+        f"the oracle header states {word!r} ({stated}) total commits touching this file, but "
+        f"`git log --follow` counts {actual} as of this test run -- regenerate the header's own "
+        f"commit-count paragraph (and its per-commit enumeration) to match before committing"
+    )
 
 
 def test_production_membership_check_tool_exists():
