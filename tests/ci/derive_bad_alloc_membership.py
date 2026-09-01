@@ -433,10 +433,9 @@ def git_log_follow_commit_count(rel_path: str, repo_root: str = _REPO_ROOT) -> i
     fails on every Actions checkout, reproduced on a local depth-1 clone (T-2499, Claude/Poirot/
     bc2ae29-t2498-census-fixes-confirmation.md Minor 1, D-SLM5779: the branch carrying that cell
     was never pushed, so it never actually ran on a runner). This function was made to run ONLY
-    when a human invokes this
-    module directly with `--commit-count`, on their own full-history checkout, at REGENERATION
-    time -- never from a CI-collected test. The result is meant to be pasted into
-    `tests/ci/bad_alloc_membership_expected.txt`'s own header, both into the prose sentence that
+    when a human invokes this module directly with `--commit-count`, on their own full-history
+    checkout, at REGENERATION time -- never from a CI-collected test. The result is meant to be
+    pasted into `tests/ci/bad_alloc_membership_expected.txt`'s own header, both into the prose sentence that
     states it in words and into the `COMMIT_COUNT_PIN:` line beneath it, together, by hand -- see
     that file's own header comment for the pinned-value check this replaces the live git call
     with.

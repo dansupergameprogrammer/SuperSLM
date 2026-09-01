@@ -198,6 +198,13 @@ T-2497's diff --
     branch (T-2497) had no cell; `test_membership_check_population.py`'s `--oracle` mode is
     deliberately pinned through the real subprocess CLI path rather than called in-process, with
     the reason written down, and this round follows that same precedent for `--commit-count`.
+  - The item-3 sweep (Claude/Bach/briefs/t2499.md; every production change landed by T-2491,
+    T-2497, and this round, checked against a detecting cell) found `_mutated`'s own newline-
+    convention branch (T-2491) genuinely undetectable by anything in this suite -- every real
+    `_mutated` target is pure CRLF today, so the branch has never been exercised on an `eol=lf`
+    input. Cheap to close: extracted into its own pure function, `_write_newline_for`, pinned
+    directly on synthetic bytes by `test_write_newline_for_picks_the_convention_from_raw_bytes`,
+    below, with no real file and no new `eol=lf` fixture added to the repo.
 """
 from __future__ import annotations
 
