@@ -9,8 +9,8 @@
 # + Observation 2, D-SLM5528): the line column is DROPPED as of this change.
 # Independently derived from `git log --follow` on this file rather than
 # taken from the notes below (which undercount and, for T-2125, miscount):
-# seventeen total commits touch this file end to end, `5043678` (creation, 18
-# members) through this one. Of the sixteen after creation, TWO are genuine
+# nineteen total commits touch this file end to end, `5043678` (creation, 18
+# members) through this one. Of the eighteen after creation, TWO are genuine
 # membership growth -- `8ce6aa7` added `proof_manifest.h:JsonEscape` (eighteen
 # to nineteen) and `242dc12` (T-2125) added a THIRD `model.h:Parse` (the
 # population's only same-name-duplicate growth -- two Parse entries already
@@ -23,9 +23,9 @@
 # 2026-08-21 release, a pure line shift), `e3bc0cf` (T-2445), and `566bf98`'s
 # own regeneration (T-2458, regenerating after T-2450's comment insert). Not
 # one of those eight pure-line-shift regenerations ever caught a membership
-# change the name alone did not. The remaining SIX commits after those ten are
-# comment-only corrections to THIS paragraph, touching neither the member set
-# nor the line-count-derivation method: `6597903` (T-2467, correcting a
+# change the name alone did not. The remaining EIGHT commits after those ten
+# are comment-only corrections to THIS paragraph, touching neither the member
+# set nor the line-count-derivation method: `6597903` (T-2467, correcting a
 # THIRD-vs-FOURTH `model.h:Parse` miscount this paragraph itself carried),
 # `dcefab3` (T-2481, Claude/Poirot/6597903-t2472-ask5-tracka-confirmation.md
 # Sec8 M1, D-SLM5611: correcting THIS sentence's own commit-count miscount --
@@ -51,14 +51,20 @@
 # c507cc9` returns local branches only, so it never ran on a GitHub Actions
 # runner at all; also restores the drift detection T-2497's own remedy
 # removed, via a full-history-guarded live cell alongside the pin below -- see
-# `test_membership_check_population.py`'s own two commit-count cells), and
-# this commit (T-2503,
+# `test_membership_check_population.py`'s own two commit-count cells),
+# `a024b01` (T-2503 item 1,
 # Claude/Poirot/ed0c67d-t2502-census-fixes-confirmation.md Significant 1,
-# D-SLM5784: `65fd041` bumped this paragraph's own count to sixteen and, in
-# the same edit, left the drift-blindness sentence below stating a stale "not
-# fifteen" that nothing reads -- this commit drops that restatement rather
-# than adding a fourth copy of the number; see the pinned-count paragraph
-# immediately below).
+# D-SLM5784: drops the drift-blindness sentence's own stale "not fifteen"
+# restatement below rather than adding a fourth copy of the number -- a
+# comment-only edit, so it is itself this paragraph's 17th touch), `2885347`
+# (T-2503, regenerating this paragraph to seventeen to account for `a024b01`
+# -- the same class one turn tighter: that regeneration commit is ITSELF a
+# comment-only touch, so "seventeen" was stale the moment it landed, at
+# eighteen touches, not seventeen), and this commit (T-2503, correcting
+# `2885347`'s own off-by-one by accounting for its own edit before committing
+# rather than after: the count a regeneration commit writes is the count AS OF
+# that commit landing, prior count plus one, not the count queried before it
+# lands).
 #
 # This paragraph's own deictic anchor ("N total commits ... through this
 # one") re-derives its stated count as of WHICHEVER commit most recently
@@ -94,7 +100,7 @@
 # real regeneration, and it spends a git call only when a human chooses to
 # make one.
 #
-# COMMIT_COUNT_PIN: 17
+# COMMIT_COUNT_PIN: 19
 #
 # T-2467 (Claude/Poirot/665f430-t2462-ask5-tracka-confirmation.md, Minor 1,
 # D-SLM5560): this paragraph used to state `242dc12` added a FOURTH
