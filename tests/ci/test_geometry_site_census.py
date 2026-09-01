@@ -27,9 +27,14 @@ against the built mechanism):
     lines, no file I/O -- proves the excision itself, independent of the real tree.
   - Real-tree population cells, against the REAL checkout via `_mutated` (mutate one real
     production file for the duration of one test, restore its exact original bytes after --
-    `run_census`'s own registry path is fixed relative to the script and is not parameterized
-    by `repo_root`, so a synthetic tmp tree cannot carry the 26-site registry this census
-    checks Part 1/Part 3 against; mirrors T-2468's own mutate/run/revert discipline):
+    this module imports `census` ONCE, at collection time, so `census._REGISTRY_PATH` is bound
+    to this repo's own `tools/` directory for every call in this file; calling
+    `census.run_census(tmp_root)` against a synthetic tmp tree would still load THIS repo's real
+    registry, mismatched against the tmp tree's own paths, not a copy of it -- a fresh subprocess
+    invoking a copy of `tools/` alongside a copy of `src/`/`include/` genuinely does carry its own
+    registry (Claude/Poirot/dcefab3-t2486-census-content-keying-confirmation.md's own lab does
+    exactly this), which this suite does not use because every cell here calls the already-
+    imported module in-process; mirrors T-2468's own mutate/run/revert discipline):
       * `test_real_tree_baseline_is_clean_today` -- cell zero, unmutated.
       * `test_must_accept_*` (T-2468 Sec1, D-SLM5601) -- comment inserted above each of the
         three excluded lines; must stay PASS (position-independence, unaffected by this fix).
@@ -73,11 +78,56 @@ Significant 1/2, D-SLM5651/D-SLM5652): four sources bundled into one round --
     literal copy of an excused statement is excised for free (`test_part2_ambiguous_exclusion_*`,
     below). Closed by counting non-comment-line matches instead of recording mere presence.
   - Two of the four cells pinning T-2475's own headline remedy exercised text a compiler never
-    sees (append AFTER a fragment's own trailing `//` comment); replaced with cells over the
-    producible shape (insert BEFORE the trailing comment) and the two prior cells renamed to
-    state precisely what they do prove (a dead exclusion, not a caught defect statement).
+    sees (append AFTER a fragment's own trailing `//` comment); the two prior cells renamed to
+    state precisely what they do prove (a dead exclusion, not a caught defect statement). T-2481
+    also added two cells over what it believed was the producible shape for these two files
+    (insert BEFORE the trailing comment) -- corrected below, T-2491: it is not producible.
   - The S2 red-check comment block's own cell count ("exactly four") is corrected to what a
     full, unfiltered run of this file actually reddens under the same reversion.
+
+T-2491 fold-in (Claude/Bach/briefs/t2491.md; Claude/Poirot/dcefab3-t2486-census-content-keying-
+confirmation.md Significant 1/2, D-SLM5716/D-SLM5717/D-SLM5718; D-SLM5732): fix round on T-2486's
+confirmation of T-2481's diff --
+
+  - T-2481's own `test_defeats_the_prior_mechanism_same_line_insert_before_comment_model_h`/
+    `_proof_manifest_h` were believed to pin the producible same-line shape for `model.h` and
+    `proof_manifest.h`. Both excused lines are enumerators inside an `enum class` body
+    (`SslmModelStatus`, `ConfigGeometryStatus`); an enum body admits enumerators, not statements,
+    so the construction does not compile -- executed with the CI's own pinned compiler, clang
+    18.1.8, `-fsyntax-only -std=c++20`: `error: missing ',' between enumerators` on both headers.
+    The cells also have zero discrimination, executed both with the QOW family forced false and
+    with the injected identifier replaced by an inert statement: the assertion still holds either
+    way, because what actually fires is the trailing prose comment's own R1 co-occurrence once
+    the exclusion's exact-text match goes dead, not recognition of the injected statement. The
+    same-line-append class T-2468 found is VACUOUS for these two files -- there is no producible
+    same-line geometry defect an enum body can host -- and is real only on `adapter_marshal.h`,
+    whose excused line sits inside a function body; the two `..._append_adapter_marshal`/
+    `test_prepended_content_on_an_excused_line_is_also_caught` cells below are that whole
+    population. The two non-compiling cells are deleted rather than replaced with a third
+    attempt -- there is no compiling construction left to pin for `model.h`/`proof_manifest.h`.
+  - `test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_registry_record_at_all`
+    restored `tools/geometry_site_registry.json` via `open(path, "w", encoding="utf-8")`, which
+    translates `\\n` to `\\r\\n` on this platform; the file is `attr/text eol=lf`, so a clean
+    checkout came back `w/crlf` and ` M` after one run. Fixed with `newline=""` on both the write
+    and the restore, and the same argument added to `_mutated` below for the next `eol=lf` file
+    it is pointed at.
+  - `AMBIGUOUS SCOPE ANCHOR` (Part 3's third fail-closed diagnostic) had no cell -- pinned by
+    `test_part3_ambiguous_scope_anchor_fires_when_two_records_own_anchors_collide_in_one_window`,
+    below, reproducing the reviewer's own construction.
+  - GS-12's own nine occurrences are anchored on their own explanatory COMMENT text (this file's
+    own Part 3 header comment explains why: a bare code prefix collided with unrelated, unmarked
+    code once a reorder moved it), so the match key includes comment prose for 8 of GS-12's 9
+    occurrences -- a developer who rewords one of those comments, no code touched, reddens the
+    census with `MISSING SCOPE ANCHOR` (Claude/Poirot/dcefab3-t2486-census-content-keying-
+    confirmation.md Sec7 O2, D-SLM5726, executed: "the normed" to "the normalised" in one GS-12
+    comment). This was disclosed nowhere a reader of the tool would find it; disclosed now in
+    `tools/geometry_site_census.py`'s own Part 3 header comment and the registry's own header
+    comment, both of which also say the correct response to that red: re-derive the occurrence's
+    own anchor from the new comment text, not treat the finding as a caught regression.
+  - This module's own docstring (below) and the S2 red-check comment block (further down this
+    file) each carried a stale claim untouched by T-2481's diff -- corrected in place rather than
+    superseded a third time; see each site's own comment for what was wrong and how it was
+    checked.
 """
 from __future__ import annotations
 
@@ -107,16 +157,29 @@ def _mutated(rel_path: str, transform):
     """Mutates a real production file, at `rel_path` under the repo root, for the duration of
     the `with` block via `transform(original_text) -> new_text`, then restores the original
     content byte-for-byte. See this module's own docstring for why the real tree is mutated
-    in place rather than exercised against a synthetic `tmp` repo root."""
+    in place rather than exercised against a synthetic `tmp` repo root.
+
+    T-2491 (Poirot dcefab3-t2486-census-content-keying-confirmation.md Significant 2, D-SLM5718):
+    the write-back explicitly picks the target file's own newline convention rather than trusting
+    the platform default. `.h`/`.cpp`/`.hlsl` files are `attr/text` (tool-native, `w/crlf` on this
+    checkout) and the platform-default write already reproduced that -- the defect this closes is
+    an `attr/text eol=lf` file (e.g. the JSON registry): the platform-default write translates
+    every `\\n` to `\\r\\n` regardless of the file's own pinned convention, so a byte-for-byte
+    restore of an eol=lf file silently comes back CRLF. Detected from the file's own raw bytes
+    (not assumed from its extension), so a future `eol=lf` file this helper is pointed at inherits
+    the correct behavior automatically rather than a second instance of this same defect."""
     full = os.path.join(_REPO_ROOT, rel_path)
+    with open(full, "rb") as f:
+        _uses_crlf = b"\r\n" in f.read()
+    _write_newline = "\r\n" if _uses_crlf else ""
     with open(full, "r", encoding="utf-8") as f:
         original = f.read()
     try:
-        with open(full, "w", encoding="utf-8") as f:
+        with open(full, "w", encoding="utf-8", newline=_write_newline) as f:
             f.write(transform(original))
         yield
     finally:
-        with open(full, "w", encoding="utf-8") as f:
+        with open(full, "w", encoding="utf-8", newline=_write_newline) as f:
             f.write(original)
 
 
@@ -252,10 +315,20 @@ def test_appending_after_model_h_s_trailing_comment_fires_on_apparatus_unsound_g
     # DOES fire, on `UNMARKED QOW PATTERN HIT`, not merely a `DEAD EXCLUSION` -- but the
     # right-verdict-for-the-wrong-reason gap D-SLM5652 names still holds: nothing here proves the
     # census recognizes commented-out text as inert, only that this SPECIFIC probe's own
-    # appended identifier happens to independently trip a pattern. The producible, semantically
-    # real defeat for these two files -- new code BEFORE the trailing comment, genuinely
-    # compiled -- is `test_defeats_the_prior_mechanism_same_line_insert_before_comment_model_h`,
-    # below, and that is the cell a claim of "the class is closed for model.h" should cite.
+    # appended identifier happens to independently trip a pattern. T-2481 believed inserting new
+    # code BEFORE the trailing comment (rather than after it) was the producible, genuinely
+    # compiled defeat for these two files, and pinned it as a third cell; T-2491 (Poirot dcefab3-
+    # t2486-census-content-keying-confirmation.md Sec4, D-SLM5716/D-SLM5717, D-SLM5732) found
+    # that construction does not compile either -- `ConfigGeometryHiddenSizeMismatch` and
+    # `HiddenSizeGeometryMismatch` are enumerators inside an `enum class` body, which admits
+    # enumerators, not statements, so an insert between the enumerator and its own trailing
+    # comment is exactly as uncompilable as an append after it. There is no producible same-line
+    # geometry defect for `model.h`/`proof_manifest.h`: the same-line-append class T-2468 found is
+    # VACUOUS for these two files and real only on `adapter_marshal.h` (whose excused line sits
+    # inside a function body, not an enum) -- `test_defeats_the_prior_mechanism_same_line_append_
+    # adapter_marshal` and `test_prepended_content_on_an_excused_line_is_also_caught`, above, are
+    # that class's whole population. No cell below claims otherwise; a claim that "the class is
+    # closed for model.h/proof_manifest.h" is false on its face -- there is no such class.
     def _t(text):
         return text.replace(
             "\t" + _MODEL_FRAGMENT,
@@ -287,40 +360,21 @@ def test_appending_after_proof_manifest_h_s_trailing_comment_fires_on_apparatus_
                for f in failures)
 
 
-# --- THE producible same-line shape for model.h/proof_manifest.h (T-2481, T-2479 Significant 2,
-# D-SLM5652): new code inserted BETWEEN the enumerator and its own trailing `//` comment is real,
-# compiled code -- the shape production can actually emit on these two files, unlike appending
-# after the comment above. The mechanism is sound (executed at f363c2a); these two cells are the
-# pin the prior pair only appeared to be. ---
-
-def test_defeats_the_prior_mechanism_same_line_insert_before_comment_model_h():
-    def _t(text):
-        return text.replace(
-            _MODEL_FRAGMENT,
-            'ConfigGeometryHiddenSizeMismatch, uint64_t o_proj_out_channels = hidden_size;   '
-            '// R1: hidden_size != num_attention_heads * head_dim',
-            1,
-        )
-    with _mutated(_MODEL_H, _t):
-        failures = census.run_census(_REPO_ROOT)
-    assert failures, "real code inserted before model.h's own trailing comment must FAIL"
-    assert any("UNMARKED R1 PATTERN HIT" in f and "model.h" in f and "o_proj_out_channels" in f
-               for f in failures), "the new statement itself must be cited, not just a dead exclusion"
-
-
-def test_defeats_the_prior_mechanism_same_line_insert_before_comment_proof_manifest_h():
-    def _t(text):
-        return text.replace(
-            _PROOF_FRAGMENT,
-            'HiddenSizeGeometryMismatch, uint64_t o_proj_out_channels = hidden_size;   '
-            '// hidden_size != num_attention_heads * head_dim -- R1, REMOVED',
-            1,
-        )
-    with _mutated(_PROOF_H, _t):
-        failures = census.run_census(_REPO_ROOT)
-    assert failures, "real code inserted before proof_manifest.h's own trailing comment must FAIL"
-    assert any("UNMARKED R1 PATTERN HIT" in f and "proof_manifest.h" in f and "o_proj_out_channels" in f
-               for f in failures), "the new statement itself must be cited, not just a dead exclusion"
+# --- No same-line construction is producible for model.h/proof_manifest.h (T-2491, Poirot
+# dcefab3-t2486-census-content-keying-confirmation.md Sec4, D-SLM5716/D-SLM5717, D-SLM5732): both
+# excused lines are enumerators inside an `enum class` body (`SslmModelStatus`, `Config
+# GeometryStatus`), which admits enumerators, not statements. T-2481's two cells here inserted a
+# statement between the enumerator and its own trailing comment, believing that construction was
+# real, compiled code the production path could emit; executed with the CI's own pinned compiler
+# (clang 18.1.8, `-fsyntax-only -std=c++20`), both headers fail with `error: missing ',' between
+# enumerators`. The cells also had zero discrimination, executed both with the QOW family forced
+# false and with the injected identifier replaced by an inert statement: the assertion held either
+# way, because what actually fired was the trailing prose comment's own R1 co-occurrence once the
+# exclusion's exact-text match went dead -- not recognition of the injected statement. Deleted
+# rather than replaced with a third attempt: there is no compiling same-line construction left to
+# pin for these two files. `test_defeats_the_prior_mechanism_same_line_append_adapter_marshal` and
+# `test_prepended_content_on_an_excused_line_is_also_caught`, above, are this class's whole
+# population -- `adapter_marshal.h`'s excused line sits inside a function body, not an enum. ---
 
 
 # --- This ticket's own added construction: new content BEFORE the fragment, not just after --
@@ -460,10 +514,10 @@ def test_main_end_to_end_via_subprocess_is_green_today():
 # header comment for the full account.
 #
 # S2: this file's own suite IS the pin Significant 2 asked for -- the census had no cell at
-# all before it, and the reviewer's own mutation-proof (reverting the text-keyed remedy to
-# the exact defective `(path, line)` form leaves every gate green) is reproduced here as
-# `test_red_check_*` below, which independently confirms the population above catches the
-# exact regression the reviewer used to prove the gap existed.
+# all before it, and the reviewer's own mutation-proof (reverting the text-keyed exclusion
+# remedy to skip-whole-line-on-match leaves every gate green) is reproduced by this file's own
+# same-line population cells, below -- see the S2 red-check comment block further down this
+# file for the exact, executed cell list and count.
 # =====================================================================================
 
 _PROOF_MANIFEST_CPP = os.path.join("src", "proof_manifest.cpp")
@@ -503,27 +557,22 @@ def test_part3_unrelated_edit_elsewhere_in_the_file_does_not_false_fail():
     )
 
 
-# --- S2 red-check: this suite's own same-line-append/insert population (the
-# test_defeats_the_prior_mechanism_* and test_prepended_content_on_an_excused_line_is_also_
-# caught cells above) IS the cell the reviewer's Significant 2 asked for. T-2481 correction
-# (Poirot f363c2a-t2479-census-class-confirmation.md Sec8 M2, D-SLM5654): this block previously
-# both claimed the mutation-proof "is reproduced here as `test_red_check_*` below" (no such cell
-# exists in this file) and, fifty lines later, stated the opposite -- a self-contradiction inside
-# one file. It also named the mutant "the exact defective `(path, line)` form" /
-# "`(rel_path, line_number)` skip-whole-line form", where `Claude/Brunel/t2475-census-exclusion-
-# class-2026-08-31.md` Sec10 records what was actually run: a TEXT-keyed revert to
-# skip-whole-line-on-match, not a return to line-number keying (both are in fact caught -- the
-# coverage was never in question, only the label). And it reported "exactly those four cells
-# fail ... (22/22)" from a `pytest -k`-filtered run of 5 of this file's own cells (`4 failed, 1
-# passed, 17 deselected`), not the file's real population. Executed against the FULL, unfiltered
-# file at `f363c2a` (26 cells then; this file's own cell count has since grown): reverting
-# `_part2_excise_excluded_text` to skip-whole-line-on-match fails SIX cells, not four -- the four
-# same-line population cells plus `test_excise_leaves_appended_new_content_in_the_remainder` and
-# `test_excise_leaves_prepended_new_content_in_the_remainder` (mechanism-level unit cells this
-# file's own docstring separately names, independently reproduced by
-# Claude/Mendeleev/t2480-census-recommissioning-2026-08-31.md Sec3.3 axis (a) and Poirot
-# f363c2a-t2479-census-class-confirmation.md Sec8 M2 -- the suite's real discriminating power for
-# this axis exceeds what this block previously stated; the count was wrong, not the coverage).
+# --- S2 red-check: reverting `_part2_excise_excluded_text` to skip-whole-line-on-match (the
+# TEXT-keyed exclusion mechanism the reviewer's own mutation-proof reverted to -- `Claude/Brunel/
+# t2475-census-exclusion-class-2026-08-31.md` Sec10 records what was actually run; NOT a return
+# to (path, line) keying) reddens exactly SIX cells (T-2480 F2, Poirot f363c2a-t2479-census-
+# class-confirmation.md Sec8 M2, D-SLM5654; re-verified against this file's own current, grown
+# population by Poirot dcefab3-t2486-census-content-keying-confirmation.md Sec8 M2, D-SLM5721):
+# the four same-line population cells --
+# test_defeats_the_prior_mechanism_same_line_append_adapter_marshal,
+# test_appending_after_model_h_s_trailing_comment_fires_on_apparatus_unsound_grounds,
+# test_appending_after_proof_manifest_h_s_trailing_comment_fires_on_apparatus_unsound_grounds,
+# test_prepended_content_on_an_excused_line_is_also_caught -- plus the two mechanism-level unit
+# cells test_excise_leaves_appended_new_content_in_the_remainder and
+# test_excise_leaves_prepended_new_content_in_the_remainder (this file's own docstring separately
+# names these). The two cells T-2491 deletes (formerly the `..._insert_before_comment_*` pair,
+# above) were never among these six -- executed and confirmed: neither depended on the excision
+# mechanism at all, so reverting it left both unaffected regardless of whether they existed.
 
 
 # --- Observation carried into this round (Poirot 6597903-t2472-ask5-tracka-confirmation.md
@@ -847,6 +896,13 @@ def test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_registr
     # A `fixed` site with `required_tokens` but NO `required_token_scopes` entry for a file it
     # has a marker in -- the registry-side twin of `MISSING SCOPE ANCHOR` (a marker with no
     # matching record at all, rather than one that fails to match any of its site's records).
+    #
+    # T-2491 (Poirot dcefab3-t2486-census-content-keying-confirmation.md Significant 2,
+    # D-SLM5718): both writes use `newline=""` -- `tools/geometry_site_registry.json` is
+    # `attr/text eol=lf`, and the default text-mode write translates every `\n` to `\r\n` on this
+    # platform, which left the checkout ` M` after this cell ran even though it restores the
+    # original *content* byte-for-byte. `newline=""` writes the string's own bytes with no
+    # translation, so a clean checkout stays clean before and after.
     def _t(registry_json):
         import json
         data = json.loads(registry_json)
@@ -861,10 +917,52 @@ def test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_registr
     with open(registry_path, "r", encoding="utf-8") as f:
         original = f.read()
     try:
-        with open(registry_path, "w", encoding="utf-8") as f:
+        with open(registry_path, "w", encoding="utf-8", newline="") as f:
             f.write(_t(original))
         failures = census.run_census(_REPO_ROOT)
     finally:
-        with open(registry_path, "w", encoding="utf-8") as f:
+        with open(registry_path, "w", encoding="utf-8", newline="") as f:
             f.write(original)
     assert any("MISSING required_token_scopes ENTRY" in f and "GS-01" in f for f in failures)
+
+
+# =====================================================================================
+# T-2491 fold-in (Claude/Poirot/dcefab3-t2486-census-content-keying-confirmation.md O1,
+# D-SLM5725): `AMBIGUOUS SCOPE ANCHOR` is the third of Part 3's three fail-closed diagnostics and
+# the only one this file never exercised. It is a live guard, not a dead one -- the reviewer
+# fired it by placing a second record's own anchor text inside a first record's own claimed
+# window, with no reorder needed. Reproduced here on GS-10: occurrence 0's own registered record
+# (`anchor="L.off[2] = cur; cur += Align8U32(", offset=4`) claims a 5-line window starting at its
+# marker (its own 5-line chunk, marker through its own governed code); occurrence 1's own
+# registered anchor (`"lw_bytes[base + layout.off[2] + i] = static_cast<uint8_t>(lw.q_weight[i]);
+# "`) is appended onto occurrence 0's OWN marker line -- inside occurrence 0's own window and
+# without adding or removing a line, so occurrence 0's own real anchor stays exactly where it
+# was. Both records now match occurrence 0's marker, and they disagree on offset (4 vs 1).
+# =====================================================================================
+
+def test_part3_ambiguous_scope_anchor_fires_when_two_records_own_anchors_collide_in_one_window():
+    def _t(text):
+        assert _GS10_CHUNK_A in text, "GS-10 occurrence 0's own chunk has moved -- update this fixture"
+        marker = _marker_line("\t", "GS-10")
+        assert marker in _GS10_CHUNK_A
+        collided_marker = marker.rstrip("\n") + (
+            "  // collision probe: lw_bytes[base + layout.off[2] + i] = "
+            "static_cast<uint8_t>(lw.q_weight[i]);\n"
+        )
+        collided = _GS10_CHUNK_A.replace(marker, collided_marker, 1)
+        assert collided != _GS10_CHUNK_A
+        assert collided.count("\n") == _GS10_CHUNK_A.count("\n"), (
+            "must not change the chunk's own line count -- occurrence 0's real anchor line "
+            "would shift out of its own registered window"
+        )
+        return text.replace(_GS10_CHUNK_A, collided, 1)
+    with _mutated(_SUPERSLM_GPU_CPP, _t):
+        failures = census.run_census(_REPO_ROOT)
+    assert any("AMBIGUOUS SCOPE ANCHOR" in f and "GS-10" in f for f in failures), (
+        "two registered records whose own anchors both match within one physical marker's own "
+        "window, with disagreeing offsets, must be reported by name rather than guessed at"
+    )
+    assert not any("REGRESSED SITE" in f and "GS-10" in f for f in failures), (
+        "an ambiguous match must not fall through to a required-token check against either "
+        "record's own (possibly wrong) window"
+    )

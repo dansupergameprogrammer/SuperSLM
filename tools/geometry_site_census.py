@@ -523,6 +523,22 @@ def run_census(repo_root: str) -> list[str]:
     # reported by name rather than silently guessed at (`MISSING SCOPE ANCHOR` /
     # `AMBIGUOUS SCOPE ANCHOR`, below) -- the same fail-closed posture Part 2's own dead/
     # ambiguous-exclusion checks hold.
+    #
+    # Cost, disclosed rather than left implicit (Claude/Poirot/dcefab3-t2486-census-content-
+    # keying-confirmation.md Sec7 O2, D-SLM5726): GS-12's own nine occurrences are anchored on
+    # their own explanatory COMMENT text, not a code prefix (see the registry's own header
+    # comment for why -- a code-prefix anchor collided with unrelated, unmarked code once a
+    # reorder moved it). That puts comment prose into the match key for 8 of GS-12's 9
+    # occurrences, so a developer who rewords one of those comments -- no code touched -- reddens
+    # this census with MISSING SCOPE ANCHOR, the exact diagnostic a genuine revert produces.
+    # Executed: changing "the normed" to "the normalised" in one GS-12 comment, no code touched,
+    # fails the census; an unrelated comment respace elsewhere in the same file does not. This is
+    # the safe direction (a real revert can never look like a passing comment edit), but the
+    # failure it produces is a false positive, not a caught defect. The correct response to a
+    # MISSING SCOPE ANCHOR after an anchor-owning comment was reworded is to re-derive that
+    # occurrence's own registry anchor from the new comment text (see the registry's own header
+    # comment for how each record is derived) -- not to treat the finding as a regression and
+    # revert the comment edit.
     for rel_path, occurrences in markers_by_file.items():
         lines = file_lines_cache[rel_path]
         rel_path_fwd = rel_path.replace(os.sep, "/")
