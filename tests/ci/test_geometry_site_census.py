@@ -205,6 +205,99 @@ T-2497's diff --
     input. Cheap to close: extracted into its own pure function, `_write_newline_for`, pinned
     directly on synthetic bytes by `test_write_newline_for_picks_the_convention_from_raw_bytes`,
     below, with no real file and no new `eol=lf` fixture added to the repo.
+
+T-2518 fold-in (Claude/Bach/briefs/t2518-census-ci-regression-fix.md; Claude/Poirot/a3a20bc-
+t2509-adapter-geometry-review.md Critical 1, D-SLM5857): fix round on T-2509's own diff, which
+rewrote `tools/geometry_site_census.py` (the T-2509 widening -- see the module docstring's own
+"WIDENED T-2509" note) and fixed BOTH of adapter_marshal.h's own geometry defects (GS-28, GS-29)
+without running this file, reddening 13 of its then-41 cells --
+
+  - `_ADAPTER_FRAGMENT`/`_MODEL_FRAGMENT` (module-level constants, above) named text that no
+    longer exists: T-2509 fixed adapter_marshal.h's own q_proj/o_proj residual (the exact excused
+    line these constants pinned is deleted, replaced by real per-projection branches, registered
+    and marked instead of excused) and restructured model.h's ConfigGeometryHiddenSizeMismatch
+    comment so `head_dim` no longer shares a physical line with `hidden_size` there either --
+    `_PART2_EXCLUDED_TEXT` (census.py) no longer carries an entry for either file. Every cell
+    built on `_ADAPTER_FRAGMENT`/`_MODEL_FRAGMENT` either raised constructing its own fixture (an
+    internal `assert ... == 1` uniqueness check against text no longer present) or silently
+    no-opped (mutated nothing, asserted against an unmutated tree) -- ten cells across the
+    excise-mechanism, must-accept, same-line-append, enumerator-prepend, prepended-content,
+    safe-direction, dead-exclusion, and ambiguous-exclusion populations. Each population's own
+    adapter_marshal.h and/or model.h member is DELETED (ten cells; see each section's own header
+    comment, at the site of its own deletion, for the specific account) rather than retargeted at
+    a synthetic (path, text) pair invented for the sole purpose of keeping the cell count
+    unchanged -- this module's own standard (above, "population derived and verified at source
+    before the mechanism was built") is that a construction is grounded in the real tree, not
+    fabricated to exercise a mechanism in the abstract, and neither file has a real, compilable
+    subject left for any of these shapes. Four of the ten (the must-accept/dead-exclusion/
+    ambiguous-exclusion/safe-direction populations' own rename-and-reformat pair) are RETARGETED
+    onto `proof_manifest.h` instead of deleted outright -- that file's own exclusion is untouched
+    by T-2509 and still live, so the underlying property (position-independence, a dead/ambiguous
+    exclusion is reported by name, rename/reformat re-triggers the census) still has a real
+    subject and is still proven, just against the one file where it remains true. One cell
+    (`test_two_line_split_is_the_documented_f2_limitation_still_open`) is SPLIT in two rather than
+    deleted or retargeted: T-2509's own window widening is QOW-only, deliberately (census.py's
+    own comment above the window loop), so half of what this cell's own construction proved --
+    the QOW-shaped two-line split -- now FAILS the census where it used to PASS, while the other
+    half (an R1-shaped two-line split, a new construction this round adds) is still NOT caught,
+    exactly as documented. Net: ten deletions, one two-way split, thirty-two cells passing (was
+    forty-one; twenty-nine pre-existing plus the new R1 cell).
+  - Poirot's own Significant 1 (`include/superslm/model.h`'s ConfigGeometryHiddenSizeMismatch
+    comment falsely claims "UNREACHABLE, no live producer returns this" when four `src/model.cpp`
+    returns are live) is fixed in place: the two clauses T-2509 dropped while copying
+    `proof_manifest.h`'s own already-correct form are restored, verified by execution to leave
+    the census unaffected (head_dim/the multiply still sit on the comment-only continuation line,
+    exactly as before this fix).
+  - Poirot's own Significant 2 (the fix's own two new construction sites, GS-32/GS-33, are
+    registered `confirmed-correct` -- carrying no `required_tokens` -- so Part 3 never checks
+    them, and reverting either to the pre-fix `q_width = hidden_size` defect leaves the census
+    PASSing) is fixed per Poirot's own routed, execution-verified remedy: both flipped to
+    `status: "fixed"` with `required_tokens: ["num_attention_heads"]` and a null-anchor,
+    offset-6 `required_token_scopes` record for their own file. Verified by construction: reverting
+    either site's own `q_width` computation to `bc.hidden_size`/`model->hidden_size` now fails the
+    census with `REGRESSED SITE`, restored clean.
+  - Poirot's own Significant 3 (the window's own doc comment claims a comment-only line is "not
+    counted toward window width" -- false; it is skipped from the JOINED text but still consumes
+    one of the window's own `_WINDOW_SIZE` physical-line slots, so `_WINDOW_SIZE` or more
+    intervening comment lines between a real co-occurrence's two halves are not reached) is
+    corrected in place (census.py's own comment above the window loop) -- a documentation fix,
+    the second of Poirot's own two offered remedies, folded into the same PASS-line KNOWN
+    LIMITATION disclosure S4 below already needed.
+  - Poirot's own Significant 4 (the PASS line claims the T-2468 F2 limitation is closed whole; it
+    is closed only for QOW, and the R1 half is exactly as open as before) is corrected: the PASS
+    line (census.py's own `main()`) now states what closed (QOW, across physical lines) and what
+    did not (R1, still single-physical-line only; and Significant 3's own comment-width bound),
+    on the PASS line itself, not only in the docstring -- matching the two-way split above.
+  - Poirot's own Minor 1 (the window check tests only whether its own START line already produced
+    a single-line hit, so a single-line hit at `i+1` is re-reported a second time by a window
+    starting at `i`) is fixed: the window loop (census.py) now skips any window whose own SPAN
+    contains a single-line hit anywhere in it, verified by construction (a minimal probe: one
+    QOW-shaped statement now produces exactly one finding, not two).
+  - Poirot's own Minor 2 (the `_OUT_CHANNELS_RE` comment claims every genuine `out_channels` use
+    tree-wide is a bare identifier -- false; 31 occurrences across six distinct prefixed
+    identifiers exist tree-wide) is corrected: the comment (census.py) now states the narrower,
+    verified-true claim the tightening actually rests on (no CODE line in Part 2's own swept
+    scope pairs `hidden_size` with a prefixed `*_out_channels`), independently re-verified by grep
+    and by a direct sweep of the swept scope.
+  - Poirot's own Minor 3 (`tools/t2113_b6b_adapter_delta_smoke.cpp`'s own `StepCpu` loads an
+    adapter at `q_width` but calls `RunLayerLoop` without threading `q_width` through, taking the
+    `= 0` default that resolves to `effective_q_width = hidden_size` -- an under-read on a
+    non-square artifact) is fixed: `StepCpu` now takes and threads `q_width` (both call sites pass
+    `base_geom.q_width`, the same construction the loader already uses), verified to compile
+    clean at the CI's own pinned compiler (clang 18.1.8, `-fsyntax-only -std=c++20`).
+  - Poirot's own Observation 1 (a merged window group's coverage is checked only at its own start
+    line, so a group longer than `_covered`'s own +-25-line marker window with a covered start but
+    an uncovered end would be suppressed -- no live instance today, all 20 real groups measured
+    span <=12 lines and are covered at both ends) is closed on sight, per this file's own
+    established convention of closing a cheap gap rather than filing a note for one: the check
+    (census.py) now reads `_covered(group_start) or _covered(group_end)`.
+  - D-SLM5859 (the census sweeps `.worktrees`, so its result depends on which checkout it is
+    invoked from -- `D:/SuperSLM` itself holds roughly sixty nested full-source checkouts under
+    its own `.worktrees` directory) is fixed rather than deferred: `.worktrees` is added to
+    `_SKIP_DIR_NAMES` (census.py), the same mechanism that already excludes `.git`/`out`/`build`.
+    Verified by construction: invoking the fixed census with `--repo-root D:/SuperSLM` sweeps 446
+    files (none under `.worktrees`) in 0.15s, where the unfixed script measured 212.17s and a
+    result that depended on caller cwd.
 """
 from __future__ import annotations
 
@@ -367,26 +460,29 @@ def _mutated_targets_and_registry_are_byte_identical_after_the_module_runs():
 
 
 # --- Mechanism cells: _part2_excise_excluded_text in isolation. ---
-
-def test_excise_removes_the_adapter_marshal_fragment_entirely():
-    line = _ADAPTER_FRAGMENT + "\n"
-    out = census._part2_excise_excluded_text(_ADAPTER_H, line)
-    assert out.strip() == ""
-
-
-def test_excise_leaves_appended_new_content_in_the_remainder():
-    line = (_ADAPTER_FRAGMENT + ' if (proj == "k_proj") { uint64_t out_channels = hidden_size;'
-            " return out_channels; }\n")
-    out = census._part2_excise_excluded_text(_ADAPTER_H, line)
-    assert "k_proj" in out
-    assert "q_proj" not in out, "the excused fragment's own q_proj text must be gone from the remainder"
-
-
-def test_excise_leaves_prepended_new_content_in_the_remainder():
-    line = 'uint64_t sneaky_new_site = hidden_size; /* q_proj_alias */ ' + _ADAPTER_FRAGMENT + "\n"
-    out = census._part2_excise_excluded_text(_ADAPTER_H, line)
-    assert "sneaky_new_site" in out
-
+#
+# T-2518 (Claude/Poirot/a3a20bc-t2509-adapter-geometry-review.md Critical 1): this section, and
+# the population below it, used to carry cells keyed on `_ADAPTER_H`/`_ADAPTER_FRAGMENT` and
+# `_MODEL_H`/`_MODEL_FRAGMENT` -- `test_excise_removes_the_adapter_marshal_fragment_entirely`,
+# `test_excise_leaves_appended_new_content_in_the_remainder`,
+# `test_excise_leaves_prepended_new_content_in_the_remainder`, and
+# `test_excise_removes_the_full_widened_model_h_fragment_including_its_own_comment`. T-2509 fixed
+# BOTH residuals these cells' own subjects named (adapter_marshal.h's AdapterOutChannelsFor q_proj
+# branch, GS-29; and restructured model.h's ConfigGeometryHiddenSizeMismatch comment so head_dim
+# no longer shares a physical line with hidden_size there) -- `_PART2_EXCLUDED_TEXT` no longer
+# carries an entry for either file (module docstring's own "WIDENED T-2509" note; census.py's own
+# header comment above `_PART2_EXCLUDED_TEXT`), so `_ADAPTER_FRAGMENT`/`_MODEL_FRAGMENT` no longer
+# match anything in the real tree and every cell built on them either silently no-ops (mutates
+# nothing, asserts against an unmutated tree) or raises constructing its own fixture. Deleted
+# rather than retargeted at a synthetic (path, text) pair invented for the sole purpose of keeping
+# these cells green -- this file's own standard (module docstring, "population derived and
+# verified at source before the mechanism was built") is that a construction is grounded in the
+# real tree, not fabricated to exercise a mechanism in the abstract. `_part2_excise_excluded_text`'s
+# generic contract -- removes a registered fragment's own text, leaves everything else -- is still
+# proven, against the ONE exclusion still live (`proof_manifest.h`), by the cell immediately below
+# and by the end-to-end population further down this file (`test_appending_after_proof_manifest_
+# h_s_trailing_comment_fires_on_apparatus_unsound_grounds`,
+# `test_defeats_the_prior_mechanism_same_line_enumerator_prepend_proof_manifest_h`).
 
 def test_excise_does_not_touch_a_line_in_an_unregistered_file():
     line = _ADAPTER_FRAGMENT + "\n"
@@ -395,16 +491,12 @@ def test_excise_does_not_touch_a_line_in_an_unregistered_file():
 
 
 def test_excise_does_not_touch_an_unrelated_line_in_a_registered_file():
+    # T-2518: retargeted from _ADAPTER_H to _PROOF_H -- adapter_marshal.h is no longer a
+    # registered exclusion (this section's own header comment, above), so this cell's own premise
+    # ("a registered file") now needs the one file that actually is registered.
     line = "uint64_t unrelated_thing = 1;\n"
-    out = census._part2_excise_excluded_text(_ADAPTER_H, line)
+    out = census._part2_excise_excluded_text(_PROOF_H, line)
     assert out == line
-
-
-def test_excise_removes_the_full_widened_model_h_fragment_including_its_own_comment():
-    line = "\t" + _MODEL_FRAGMENT + "\n"
-    out = census._part2_excise_excluded_text(_MODEL_H, line)
-    assert "head_dim" not in out
-    assert "hidden_size" not in out
 
 
 def test_excise_removes_the_full_widened_proof_manifest_h_fragment_including_its_own_comment():
@@ -421,21 +513,15 @@ def test_real_tree_baseline_is_clean_today():
 
 
 # --- Must-accept (T-2468 Sec1, D-SLM5601): comment inserted above each excluded line --
-# position-independence, the property text-keying was built for, unaffected by this fix. ---
-
-def test_must_accept_comment_above_adapter_marshal_exclusion():
-    def _t(text):
-        return text.replace(_ADAPTER_FRAGMENT, "// a harmless comment, no defect\n\t" + _ADAPTER_FRAGMENT, 1)
-    with _mutated(_ADAPTER_H, _t):
-        assert census.run_census(_REPO_ROOT) == []
-
-
-def test_must_accept_comment_above_model_h_exclusion():
-    def _t(text):
-        return text.replace("\t" + _MODEL_FRAGMENT, "\t// a harmless comment, no defect\n\t" + _MODEL_FRAGMENT, 1)
-    with _mutated(_MODEL_H, _t):
-        assert census.run_census(_REPO_ROOT) == []
-
+# position-independence, the property text-keying was built for, unaffected by this fix.
+#
+# T-2518 (Poirot Critical 1): this population used to have three members, one per excluded file.
+# The adapter_marshal.h and model.h members are deleted, not retargeted -- both files' own
+# exclusions are gone (T-2509 fixed the residuals they named; see the mechanism-cells section's
+# own header comment, above, for the full account), so `_ADAPTER_FRAGMENT`/`_MODEL_FRAGMENT` no
+# longer match either file and both cells silently no-op (mutate nothing, assert against an
+# unmutated tree) rather than exercising position-independence at all. Only proof_manifest.h's
+# exclusion is still live; that member is unaffected and remains the population's sole survivor. ---
 
 def test_must_accept_comment_above_proof_manifest_h_exclusion():
     def _t(text):
@@ -468,24 +554,17 @@ def test_must_reject_new_unmarked_site_in_zero_marker_header():
 
 
 # --- THE finding this ticket closes (T-2468 Sec3, D-SLM5603): a genuinely new statement
-# appended onto the SAME physical line as an already-excused fragment. Reproduced on all
-# three exclusions -- the mechanism is one function applied identically to each. ---
+# appended onto the SAME physical line as an already-excused fragment.
+#
+# T-2518 (Poirot Critical 1): this population used to be reproduced on all three exclusions.
+# `test_defeats_the_prior_mechanism_same_line_append_adapter_marshal` (adapter_marshal.h) and the
+# model.h half of the pair below are deleted, not retargeted -- both files' own exclusions are
+# gone (T-2509 fixed the residuals they named; see the mechanism-cells section's own header
+# comment, near the top of this file, for the full account), so `_ADAPTER_FRAGMENT`/
+# `_MODEL_FRAGMENT` no longer match either file. Only proof_manifest.h's exclusion is still live;
+# that member of the population is unaffected and remains below. ---
 
-def test_defeats_the_prior_mechanism_same_line_append_adapter_marshal():
-    def _t(text):
-        return text.replace(
-            _ADAPTER_FRAGMENT,
-            _ADAPTER_FRAGMENT + ' if (proj == "k_proj") { uint64_t out_channels = hidden_size;'
-                                 " return out_channels; }",
-            1,
-        )
-    with _mutated(_ADAPTER_H, _t):
-        failures = census.run_census(_REPO_ROOT)
-    assert failures, "a new QOW statement appended to the same line as the excused fragment must now FAIL"
-    assert any("adapter_marshal.h" in f and "k_proj" in f for f in failures)
-
-
-def test_appending_after_model_h_s_trailing_comment_fires_on_apparatus_unsound_grounds():
+def test_appending_after_proof_manifest_h_s_trailing_comment_fires_on_apparatus_unsound_grounds():
     # T-2479 Significant 2 (Poirot f363c2a-t2479-census-class-confirmation.md Sec5, D-SLM5652):
     # this construction's own injected text lands AFTER the fragment's trailing `//` comment, so
     # from a real compiler's own point of view the ENTIRE remainder of the physical line --
@@ -498,41 +577,15 @@ def test_appending_after_model_h_s_trailing_comment_fires_on_apparatus_unsound_g
     # DOES fire, on `UNMARKED QOW PATTERN HIT`, not merely a `DEAD EXCLUSION` -- but the
     # right-verdict-for-the-wrong-reason gap D-SLM5652 names still holds: nothing here proves the
     # census recognizes commented-out text as inert, only that this SPECIFIC probe's own
-    # appended identifier happens to independently trip a pattern. T-2481 believed inserting new
-    # code BEFORE the trailing comment (rather than after it) was the producible, genuinely
-    # compiled defeat for these two files, and pinned it as a third cell; T-2491 (Poirot dcefab3-
-    # t2486-census-content-keying-confirmation.md Sec4, D-SLM5716/D-SLM5717, D-SLM5732) found
-    # that construction does not compile either -- `ConfigGeometryHiddenSizeMismatch` and
-    # `HiddenSizeGeometryMismatch` are enumerators inside an `enum class` body, which admits
-    # enumerators, not statements, so an insert between the enumerator and its own trailing
-    # comment is exactly as uncompilable as an append after it. There is no producible same-line
-    # STATEMENT for `model.h`/`proof_manifest.h`: the same-line-append class T-2468 found is
-    # vacuous, for statements, on these two files and real only on `adapter_marshal.h` (whose
-    # excused line sits inside a function body, not an enum) -- `test_defeats_the_prior_mechanism_
-    # same_line_append_adapter_marshal` and `test_prepended_content_on_an_excused_line_is_also_
-    # caught`, above, are that class's whole population. A same-line ENUMERATOR, by contrast, IS
-    # producible and caught -- see `test_defeats_the_prior_mechanism_same_line_enumerator_prepend_
-    # model_h`/`_proof_manifest_h`, below (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md
-    # Significant 1, D-SLM5756/D-SLM5757). T-2491's own broader claim, "there is no producible
-    # same-line geometry defect an enum body can host," is false and corrected here.
-    def _t(text):
-        return text.replace(
-            "\t" + _MODEL_FRAGMENT,
-            "\t" + _MODEL_FRAGMENT + "  uint64_t o_proj_out_channels = hidden_size; // T-2475 probe",
-            1,
-        )
-    with _mutated(_MODEL_H, _t):
-        failures = census.run_census(_REPO_ROOT)
-    assert failures, "appending after model.h's own trailing comment must still redden the census"
-    assert any("UNMARKED QOW PATTERN HIT" in f and "model.h" in f and "out_channels" in f
-               for f in failures), (
-        "the appended identifier's own out_channels substring, not a recognition of commented-"
-        "out prose, is what fires here -- see this cell's own docstring"
-    )
-
-
-def test_appending_after_proof_manifest_h_s_trailing_comment_fires_on_apparatus_unsound_grounds():
-    # Same shape and same caveat as the model.h cell above (T-2479 Significant 2, D-SLM5652).
+    # appended identifier happens to independently trip a pattern. `ConfigGeometryHiddenSizeMismatch`
+    # and `HiddenSizeGeometryMismatch` are enumerators inside an `enum class` body, which admits
+    # enumerators, not statements, so there is no producible same-line STATEMENT for
+    # model.h/proof_manifest.h (T-2491, Poirot dcefab3-t2486-census-content-keying-confirmation.md
+    # Sec4, D-SLM5716/D-SLM5717, D-SLM5732, executed with the CI's own pinned compiler, clang
+    # 18.1.8, `-fsyntax-only -std=c++20`: `error: missing ',' between enumerators`). A same-line
+    # ENUMERATOR, by contrast, IS producible and caught -- see
+    # `test_defeats_the_prior_mechanism_same_line_enumerator_prepend_proof_manifest_h`, below
+    # (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Significant 1, D-SLM5756/D-SLM5757).
     def _t(text):
         return text.replace(
             "\t" + _PROOF_FRAGMENT,
@@ -558,9 +611,6 @@ def test_appending_after_proof_manifest_h_s_trailing_comment_fires_on_apparatus_
 # what actually fired was the trailing prose comment's own R1 co-occurrence once the exclusion's
 # exact-text match went dead -- not recognition of the injected statement. Deleted rather than
 # replaced with a third attempt at the SAME (statement) shape.
-# `test_defeats_the_prior_mechanism_same_line_append_adapter_marshal` and
-# `test_prepended_content_on_an_excused_line_is_also_caught`, above, are the statement class's
-# whole population -- `adapter_marshal.h`'s excused line sits inside a function body, not an enum.
 #
 # T-2491's own replacement text overclaimed: "there is no producible same-line geometry defect an
 # enum body can host" is false -- refuted by construction (Claude/Poirot/ba29de4-t2496-census-
@@ -570,34 +620,25 @@ def test_appending_after_proof_manifest_h_s_trailing_comment_fires_on_apparatus_
 # injected text is scanned as ordinary remainder. Executed at the CI's pinned compiler, clang
 # 18.1.8, `-fsyntax-only -std=c++20`: `q_proj_out_channels_hidden_size, ` prepended to `model.h`'s
 # fragment and `o_proj_out_channels_hidden_size, ` prepended to `proof_manifest.h`'s both compile
-# clean and fire `UNMARKED QOW PATTERN HIT`; both discriminate (silent with the QOW family
-# disabled, silent with an inert enumerator instead of the defect). The two cells below pin
-# exactly this -- the corrected fact is: a same-line statement is not producible inside an enum
-# body; a same-line enumerator is, and the census catches it. ---
-
-def test_defeats_the_prior_mechanism_same_line_enumerator_prepend_model_h():
-    def _t(text):
-        return text.replace(
-            "\t" + _MODEL_FRAGMENT,
-            "\tq_proj_out_channels_hidden_size, " + _MODEL_FRAGMENT,
-            1,
-        )
-    with _mutated(_MODEL_H, _t):
-        failures = census.run_census(_REPO_ROOT)
-    assert failures, (
-        "a new enumerator prepended before model.h's own excused enumerator must FAIL -- this is "
-        "the producible same-line construction the class admits inside an enum class body"
-    )
-    assert any("UNMARKED QOW PATTERN HIT" in f and "model.h" in f and "out_channels" in f
-               for f in failures), (
-        "the new enumerator's own out_channels/hidden_size co-occurrence is what fires here, in "
-        "the excused fragment's own remainder -- see this file's own comment block above"
-    )
-    assert not any("DEAD EXCLUSION" in f for f in failures), (
-        "a prepend, unlike an insert-between-the-comment, leaves the excused fragment's own exact "
-        "text intact -- the exclusion must still be found alive"
-    )
-
+# clean and fire `UNMARKED QOW PATTERN HIT`; both discriminated (silent with the QOW family
+# disabled, silent with an inert enumerator instead of the defect) -- the corrected fact is: a
+# same-line statement is not producible inside an enum body; a same-line enumerator is, and the
+# census catches it.
+#
+# T-2518 (Poirot Critical 1): this population, and the same-line-append/prepend population above
+# it, used to have BOTH an adapter_marshal.h member (`test_defeats_the_prior_mechanism_same_
+# line_append_adapter_marshal`, `test_prepended_content_on_an_excused_line_is_also_caught` -- the
+# same-line STATEMENT class's whole population, since adapter_marshal.h's excused line sat inside
+# a function body, not an enum) and a model.h member (`test_defeats_the_prior_mechanism_same_
+# line_enumerator_prepend_model_h`). T-2509 fixed the residual adapter_marshal.h's own exclusion
+# named (GS-29) and restructured model.h's comment so its exclusion is no longer needed either
+# (see the mechanism-cells section's own header comment, near the top of this file, for the full
+# account) -- neither file carries a live exclusion any more, so there is no longer a real,
+# compilable subject for either shape on either file. Both members deleted rather than retargeted
+# at a synthetic exclusion invented for the sole purpose of keeping the cell count unchanged; the
+# statement-class property (same-line append/prepend defeats a function-body exclusion) has no
+# live subject left anywhere in this tree. The enumerator-prepend property is still fully proven,
+# against the one exclusion still live, by the surviving proof_manifest.h cell below. ---
 
 def test_defeats_the_prior_mechanism_same_line_enumerator_prepend_proof_manifest_h():
     def _t(text):
@@ -616,38 +657,29 @@ def test_defeats_the_prior_mechanism_same_line_enumerator_prepend_proof_manifest
     assert not any("DEAD EXCLUSION" in f for f in failures)
 
 
-# --- This ticket's own added construction: new content BEFORE the fragment, not just after --
-# proves the excise-and-scan property is symmetric, not an "append-only" patch. ---
-
-def test_prepended_content_on_an_excused_line_is_also_caught():
-    def _t(text):
-        return text.replace(
-            _ADAPTER_FRAGMENT,
-            'if (proj == "k_proj") { uint64_t out_channels = hidden_size; return out_channels; } '
-            + _ADAPTER_FRAGMENT,
-            1,
-        )
-    with _mutated(_ADAPTER_H, _t):
-        failures = census.run_census(_REPO_ROOT)
-    assert failures, "a new QOW statement prepended before the excused fragment must FAIL, same as appended"
-    assert any("adapter_marshal.h" in f and "k_proj" in f for f in failures)
-
-
 # --- Safe-direction Note (T-2468 Sec4a cases 1-2, D-SLM5604): rename/reformat of the excused
-# line itself must still re-trigger the census. This fix must not make exclusions stickier. ---
+# line itself must still re-trigger the census. This fix must not make exclusions stickier.
+#
+# T-2518 (Poirot Critical 1): both cells below used to target model.h (rename) and adapter_
+# marshal.h (reformat) -- one representative file per case, rather than all three, to avoid a full
+# 3x3 duplication. Neither file carries a live exclusion any more (see the mechanism-cells
+# section's own header comment, near the top of this file), so both are retargeted onto
+# proof_manifest.h, the one file whose exclusion is still live and whose fragment sits on a single
+# physical line the way the original model.h fragment did (unlike the corrected, multi-line
+# model.h comment this round leaves behind). ---
 
 def test_safe_direction_rename_of_the_excused_enumerator_reddens():
     def _t(text):
-        return text.replace("ConfigGeometryHiddenSizeMismatch,", "ConfigGeometryHiddenSizeMismatchRenamed,", 1)
-    with _mutated(_MODEL_H, _t):
+        return text.replace("HiddenSizeGeometryMismatch,", "HiddenSizeGeometryMismatchRenamed,", 1)
+    with _mutated(_PROOF_H, _t):
         failures = census.run_census(_REPO_ROOT)
     assert failures, "renaming the excused enumerator must re-trigger the census (safe direction)"
 
 
 def test_safe_direction_reformat_of_the_excused_line_reddens():
     def _t(text):
-        return text.replace(_ADAPTER_FRAGMENT, _ADAPTER_FRAGMENT.replace(" || ", "  ||  "), 1)
-    with _mutated(_ADAPTER_H, _t):
+        return text.replace(_PROOF_FRAGMENT, _PROOF_FRAGMENT.replace(" != ", "  !=  "), 1)
+    with _mutated(_PROOF_H, _t):
         failures = census.run_census(_REPO_ROOT)
     assert failures, "whitespace-only reformat of the excused line must re-trigger the census (safe direction)"
 
@@ -684,16 +716,22 @@ def test_wrap_comment_split_is_now_reported_as_a_dead_exclusion_not_a_silent_pas
     assert not any("UNMARKED" in f for f in failures)
 
 
-# --- F2, pre-existing, not this ticket's own diff (T-2468 Sec4a case 4): a genuinely new QOW
-# site whose co-occurring tokens land on different physical lines evades Part 2 entirely.
-# Reproduced so the PASS it returns is proven, and cross-checked against the KNOWN LIMITATION
-# text main() now prints, so the two cannot drift apart silently. ---
+# --- F2 (T-2468 Sec4a case 4): a genuinely new site whose co-occurring tokens land on different
+# physical lines. T-2509 widened Part 2 with a sliding multi-line window (module docstring's own
+# "WIDENED T-2509" note), but QOW-ONLY, deliberately -- R1's own bare `"*" in line` test is not
+# safely windowable (census.py's own comment above the window loop). So F2 is now HALF closed:
+# the QOW two-line split below IS caught; the R1 two-line split is not, and is still the
+# documented KNOWN LIMITATION main() prints (T-2518 correction, Poirot Significant 4 -- this
+# split reproduces both halves so the PASS/FAIL for each is proven, not assumed, and cross-checked
+# against the KNOWN LIMITATION text main() now prints, so the two cannot drift apart silently). ---
 
-def test_two_line_split_is_the_documented_f2_limitation_still_open():
+def test_two_line_split_qow_case_is_now_caught_by_the_window():
     # Neither physical line carries BOTH a QOW token and hidden_size on its own -- the
     # condition line names q_proj/o_proj without hidden_size, and the return line names
     # hidden_size without any QOW token, exactly the shape an ordinary wrapped conditional
-    # produces (T-2468 Sec4a case 4's own construction, reproduced here).
+    # produces (T-2468 Sec4a case 4's own construction, reproduced here). T-2509's own widened
+    # window closes this half of F2 -- unlike at T-2468/T-2475/T-2481/T-2491/T-2497/T-2499, this
+    # construction now FAILS the census (T-2518 correction, Poirot Significant 4).
     injected = (
         "\ninline uint64_t T2475TwoLineProbe(const std::string& proj, uint64_t hidden_size) {\n"
         '\tif (proj == "q_proj" || proj == "o_proj")\n'
@@ -707,11 +745,39 @@ def test_two_line_split_is_the_documented_f2_limitation_still_open():
 
     with _mutated(_MATMUL_H, _t):
         failures = census.run_census(_REPO_ROOT)
+    assert failures, (
+        "a new QOW site split across two physical lines, within _WINDOW_SIZE, must now be caught "
+        "by the T-2509 window -- if this reverts to passing, the window has regressed"
+    )
+    assert any("UNMARKED QOW PATTERN HIT (window)" in f and "matmul.h" in f for f in failures)
+
+
+def test_two_line_split_r1_case_is_still_the_documented_f2_limitation():
+    # R1's own co-occurrence (head_dim, a heads-token, and "*") split across two physical lines --
+    # the heads-token on the condition line, `head_dim` and the multiply on the next -- so neither
+    # line alone satisfies `_r1_multiply_hit`, and the window (QOW-only, deliberately -- see this
+    # section's own header comment) never tests R1 at all, windowed or not. This is the half of F2
+    # T-2509 does NOT close; a change to this assertion means R1 was widened into the window and
+    # the KNOWN LIMITATION text below (and the module docstring) must be updated in the same
+    # change.
+    injected = (
+        "\ninline uint64_t T2518TwoLineR1Probe(uint64_t num_attention_heads, uint64_t head_dim) {\n"
+        "\tuint64_t reconstructed_hidden_size = num_attention_heads;\n"
+        "\treconstructed_hidden_size *= head_dim;\n"
+        "\treturn reconstructed_hidden_size;\n"
+        "}\n"
+    )
+
+    def _t(text):
+        return text.replace("}  // namespace superslm", injected + "}  // namespace superslm", 1)
+
+    with _mutated(_MATMUL_H, _t):
+        failures = census.run_census(_REPO_ROOT)
     assert failures == [], (
-        "a new QOW site split across two physical lines is NOT caught today -- this is F2, "
-        "pre-existing and named as a known limitation rather than closed by this ticket; a "
-        "change to this assertion means F2 was closed and the KNOWN LIMITATION text below "
-        "(and the module docstring) must be updated in the same change"
+        "a new R1 site split across two physical lines is NOT caught today -- this is F2's own "
+        "R1 half, deliberately left open (the window is QOW-only) rather than closed by this "
+        "ticket; a change to this assertion means R1 was widened into the window and the KNOWN "
+        "LIMITATION text below (and the module docstring) must be updated in the same change"
     )
 
 
@@ -796,22 +862,26 @@ def test_part3_unrelated_edit_elsewhere_in_the_file_does_not_false_fail():
 # --- S2 red-check: reverting `_part2_excise_excluded_text` to skip-whole-line-on-match (the
 # TEXT-keyed exclusion mechanism the reviewer's own mutation-proof reverted to -- `Claude/Brunel/
 # t2475-census-exclusion-class-2026-08-31.md` Sec10 records what was actually run; NOT a return
-# to (path, line) keying) reddens exactly EIGHT cells (T-2480 F2, Poirot f363c2a-t2479-census-
+# to (path, line) keying) reddened EIGHT cells at T-2497 (T-2480 F2, Poirot f363c2a-t2479-census-
 # class-confirmation.md Sec8 M2, D-SLM5654; re-verified against this file's own current, grown
 # population by Poirot dcefab3-t2486-census-content-keying-confirmation.md Sec8 M2, D-SLM5721;
 # T-2497 adds the two enumerator-prepend cells to the population, re-executed against the same
-# reversion -- 8 failed, 32 passed, up from the prior 6 failed/34 passed): the SIX same-line
-# population cells --
-# test_defeats_the_prior_mechanism_same_line_append_adapter_marshal,
-# test_appending_after_model_h_s_trailing_comment_fires_on_apparatus_unsound_grounds,
-# test_appending_after_proof_manifest_h_s_trailing_comment_fires_on_apparatus_unsound_grounds,
-# test_prepended_content_on_an_excused_line_is_also_caught,
-# test_defeats_the_prior_mechanism_same_line_enumerator_prepend_model_h,
-# test_defeats_the_prior_mechanism_same_line_enumerator_prepend_proof_manifest_h -- plus the two
-# mechanism-level unit cells test_excise_leaves_appended_new_content_in_the_remainder and
-# test_excise_leaves_prepended_new_content_in_the_remainder (this file's own docstring separately
-# names these). The two cells T-2491 deletes (formerly the `..._insert_before_comment_*` pair,
-# above) were never among these eight -- executed and confirmed: neither depended on the excision
+# reversion -- 8 failed, 32 passed, up from the prior 6 failed/34 passed).
+#
+# T-2518 re-execution (Poirot Critical 1's own fold-in, this docstring's own T-2518 fold-in
+# bullet above): reddens exactly TWO cells now -- 2 failed, 30 passed. Six of the prior eight are
+# gone from the population: `test_defeats_the_prior_mechanism_same_line_append_adapter_marshal`,
+# `test_appending_after_model_h_s_trailing_comment_fires_on_apparatus_unsound_grounds`,
+# `test_prepended_content_on_an_excused_line_is_also_caught`,
+# `test_defeats_the_prior_mechanism_same_line_enumerator_prepend_model_h`,
+# `test_excise_leaves_appended_new_content_in_the_remainder`, and
+# `test_excise_leaves_prepended_new_content_in_the_remainder` are all deleted (this file's own
+# T-2518 fold-in bullet, above, names why). The two that remain --
+# `test_appending_after_proof_manifest_h_s_trailing_comment_fires_on_apparatus_unsound_grounds`
+# and `test_defeats_the_prior_mechanism_same_line_enumerator_prepend_proof_manifest_h` -- are the
+# whole surviving population, both still keyed on `proof_manifest.h`'s own exclusion, untouched by
+# T-2509. The two cells T-2491 deletes (formerly the `..._insert_before_comment_*` pair) were
+# never among these -- executed and confirmed at the time: neither depended on the excision
 # mechanism at all, so reverting it left both unaffected regardless of whether they existed.
 
 
@@ -824,13 +894,17 @@ def test_part3_unrelated_edit_elsewhere_in_the_file_does_not_false_fail():
 # the walk, and an entry that matched nothing anywhere is reported by name. ---
 
 def test_dead_exclusion_is_reported_when_its_subject_is_deleted():
+    # T-2518 (Poirot Critical 1): retargeted from _ADAPTER_H to _PROOF_H -- adapter_marshal.h no
+    # longer carries a live exclusion (T-2509 fixed the residual it named; see the mechanism-cells
+    # section's own header comment, near the top of this file), so proof_manifest.h is the only
+    # file left where "delete the excused statement outright" is a real, non-vacuous mutation.
     def _t(text):
-        assert (_ADAPTER_FRAGMENT + "\n") in text
-        return text.replace(_ADAPTER_FRAGMENT + "\n", "", 1)
-    with _mutated(_ADAPTER_H, _t):
+        assert (_PROOF_FRAGMENT + "\n") in text
+        return text.replace(_PROOF_FRAGMENT + "\n", "", 1)
+    with _mutated(_PROOF_H, _t):
         failures = census.run_census(_REPO_ROOT)
     assert failures, "deleting an excused statement outright must be reported, not silent"
-    assert any("DEAD EXCLUSION" in f and "adapter_marshal.h" in f for f in failures)
+    assert any("DEAD EXCLUSION" in f and "proof_manifest.h" in f for f in failures)
 
 
 def test_dead_exclusion_check_does_not_false_fire_on_the_untouched_tree():
@@ -852,20 +926,27 @@ def test_dead_exclusion_check_does_not_false_fire_on_the_untouched_tree():
 # =====================================================================================
 
 def test_part2_ambiguous_exclusion_fires_on_a_literal_duplicate_copy():
+    # T-2518 (Poirot Critical 1): retargeted from _ADAPTER_H to _PROOF_H -- adapter_marshal.h no
+    # longer carries a live exclusion to duplicate (see the mechanism-cells section's own header
+    # comment, near the top of this file), so proof_manifest.h is the only file left where a
+    # literal duplicate copy of an excused fragment is a real, non-vacuous mutation.
     def _t(text):
-        assert text.count(_ADAPTER_FRAGMENT) == 1
+        assert text.count(_PROOF_FRAGMENT) == 1
+        # A new, unrelated `enum class` with an enumerator carrying the SAME literal text as the
+        # excused fragment -- legal, compiling C++ (a scoped enum's own enumerators are scoped to
+        # it, so the name collides with nothing), and a literal duplicate copy of the fragment on
+        # a new non-comment line, exactly the shape T-2481's own construction intends.
         injected = (
-            "\ninline uint64_t T2481DuplicateProbe(const std::string& proj, uint64_t hidden_size) {\n"
-            "\t" + _ADAPTER_FRAGMENT + "\n"
-            "\treturn 0;\n"
-            "}\n"
+            "\nenum class T2518DuplicateProofEnum : uint8_t {\n"
+            "\t" + _PROOF_FRAGMENT + "\n"
+            "};\n"
         )
         assert "}  // namespace superslm" in text
         return text.replace("}  // namespace superslm", injected + "}  // namespace superslm", 1)
-    with _mutated(_ADAPTER_H, _t):
+    with _mutated(_PROOF_H, _t):
         failures = census.run_census(_REPO_ROOT)
     assert failures, "a literal duplicate copy of an excused fragment must FAIL, not be excised for free"
-    assert any("AMBIGUOUS EXCLUSION" in f and "adapter_marshal.h" in f and "2 non-comment lines" in f
+    assert any("AMBIGUOUS EXCLUSION" in f and "proof_manifest.h" in f and "2 non-comment lines" in f
                for f in failures)
 
 
