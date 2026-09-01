@@ -90,17 +90,28 @@ static bool LoadModel(const std::string& path, SslmModelView* out_view,
 // One CPU decode step -- identical convention to t2113_b5_async_smoke.cpp's StepCpu.
 // `layers` already carries LayerWeights::adapter set (or null on every entry) via
 // ApplyAdapterToLayers, called once by main() before either the adapted or base-only sweep.
+//
+// T-2518 (Claude/Poirot/a3a20bc-t2509-adapter-geometry-review.md Minor 3): `q_width`, threaded
+// through to `RunLayerLoop`'s own trailing parameter -- this tool's own `base_geom.q_width`
+// (main(), above) already loads the adapter at `q_width`, but this decode step used to omit
+// `RunLayerLoop`'s `q_width` argument entirely, taking the `= 0` default that `forward_sites.cpp`
+// resolves to `effective_q_width = hidden_size`: a loader/consumer mismatch, invisible on a square
+// artifact (where `q_width == hidden_size`) but numerically wrong (an under-read, not unsafe) on
+// the non-square fixture `tools/_t2432_nonsquare_fixture.py` builds. Every production entry point
+// (`sslm_abi.cpp`, `gpu_1p0.cpp`, `damped_greedy_phaseD_loop.cpp`) already threads `q_width`
+// through; this bench tool was the one remaining caller left on the sentinel default.
 static SslmForwardStatus StepCpu(SequenceLayerState& seq, int8_t* codes, const int8_t* embed_codes,
                                   const CarriedScale& embed_scale, const LayerWeights* layers,
                                   uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim,
                                   size_t num_kv_heads, size_t intermediate_size, int64_t context_cap,
                                   const superslm::SslmTensorManifest& rope_tables, uint8_t* ws,
-                                  size_t ws_size) {
+                                  size_t ws_size, size_t q_width) {
 	std::memcpy(codes, embed_codes, hidden_size);
 	seq.hidden_scale = embed_scale;
 	seq.layer_index = 0;
 	return RunLayerLoop(seq, layers, num_hidden_layers, num_hidden_layers, hidden_size, head_dim,
-	                     num_kv_heads, intermediate_size, context_cap, rope_tables, ws, ws_size);
+	                     num_kv_heads, intermediate_size, context_cap, rope_tables, ws, ws_size,
+	                     /*site_prefix=*/{}, /*token_index=*/0, /*trace_hook_state=*/nullptr, q_width);
 }
 
 // One GPU decode step through the real async pair, `adapter_or_null` bound per call
@@ -296,7 +307,8 @@ int main(int argc, char** argv) {
 			const SslmForwardStatus cpu_st =
 			    StepCpu(cpu_seq, cpu_codes.data(), embed_codes.data(), embed_scale, layers.data(),
 			            num_hidden_layers, hidden_size, head_dim, num_kv_heads, intermediate_size,
-			            context_cap, view.rope_tables, cpu_ws.data(), cpu_ws.size());
+			            context_cap, view.rope_tables, cpu_ws.data(), cpu_ws.size(),
+			            base_geom.q_width);  // T-2518 (Poirot Minor 3): thread q_width through
 
 			SequenceLayerState gpu_view{};
 			std::vector<int8_t> gpu_codes(hidden_size, 0);
@@ -337,7 +349,8 @@ int main(int argc, char** argv) {
 			const SslmForwardStatus cpu_st =
 			    StepCpu(cpu_seq, cpu_codes.data(), embed_codes.data(), embed_scale, layers.data(),
 			            num_hidden_layers, hidden_size, head_dim, num_kv_heads, intermediate_size,
-			            context_cap, view.rope_tables, cpu_ws.data(), cpu_ws.size());
+			            context_cap, view.rope_tables, cpu_ws.data(), cpu_ws.size(),
+			            base_geom.q_width);  // T-2518 (Poirot Minor 3): thread q_width through
 
 			SequenceLayerState gpu_view{};
 			std::vector<int8_t> gpu_codes(hidden_size, 0);

@@ -592,18 +592,40 @@
       "family": "R1",
       "file": "src/sslm_abi.cpp",
       "function": "sslm_adapter_map (base_geom.q_width)",
-      "status": "confirmed-correct",
+      "status": "fixed",
       "note": "T-2509: this IS q_width's own correct computation (num_attention_heads * head_dim), not a stand-in for hidden_size -- the new construction site feeding GS-28/GS-29's own required BaseModelGeometry::q_width field, matching GS-25's own precedent (context_accumulate_site.hlsl).",
-      "expected_marker_count": 1
+      "expected_marker_count": 1,
+      "required_tokens": [
+        "num_attention_heads"
+      ],
+      "required_token_scopes": {
+        "src/sslm_abi.cpp": [
+          {
+            "anchor": null,
+            "offset": 6
+          }
+        ]
+      }
     },
     {
       "id": "GS-33",
       "family": "R1",
       "file": "src/gpu/gpu_1p0.cpp",
       "function": "sslm_gpu_adapter_map (base_geom.q_width)",
-      "status": "confirmed-correct",
+      "status": "fixed",
       "note": "T-2509: identical construction and reasoning to GS-32, this GPU-side sibling entry point.",
-      "expected_marker_count": 1
+      "expected_marker_count": 1,
+      "required_tokens": [
+        "num_attention_heads"
+      ],
+      "required_token_scopes": {
+        "src/gpu/gpu_1p0.cpp": [
+          {
+            "anchor": null,
+            "offset": 6
+          }
+        ]
+      }
     }
   ]
 }

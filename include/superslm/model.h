@@ -208,16 +208,18 @@ enum class SslmModelStatus {
 	ConfigGeometryKvHeadsExceedsHeads,   // R3: num_key_value_heads > num_attention_heads
 	ConfigGeometryHeadsNotDivisibleByKv, // R2: num_attention_heads % num_key_value_heads != 0
 	ConfigGeometryHiddenSizeMismatch,    // R1 (REMOVED, T-2432 Track A step 1, GS-01): hidden_size
-	                                      // != num_attention_heads * head_dim -- UNREACHABLE, no
-	                                      // live producer returns this: CheckConfigGeometry
-	                                      // (proof_manifest.cpp) no longer produces the join's
-	                                      // own ConfigGeometryStatus::HiddenSizeGeometryMismatch
-	                                      // this value mirrors (proof_manifest.h), and
-	                                      // ValidateConfigGeometryJoin's own mapping branch for it
-	                                      // is dead code (model.cpp). Kept, additive-only
-	                                      // (D-SLM3526). Confirmed T-2509
+	                                      // != num_attention_heads * head_dim -- no live producer
+	                                      // returns this FROM CheckConfigGeometry ITSELF any
+	                                      // longer (D-SLM5418); kept, additive-only (D-SLM3526), AS
+	                                      // ValidateConfigGeometryJoin's own SslmModelStatus target
+	                                      // for the two Zero* statuses below and its own
+	                                      // unrecognized-status fallback (src/model.cpp). T-2509
 	                                      // (Claude/Linnaeus/t2508-geometry-interchangeability-
-	                                      // fact-sheet-2026-09-01.md §3.4).
+	                                      // fact-sheet-2026-09-01.md §3.4); corrected T-2518
+	                                      // (Claude/Poirot/a3a20bc-t2509-adapter-geometry-
+	                                      // review.md Significant 1) after T-2509 dropped this
+	                                      // comment's own qualifying clause and surviving-role
+	                                      // sentence while copying proof_manifest.h's form.
 	RopeTablesShapeMismatchConfig,       // R4: a present ROP1 "cos"/"sin" tensor's elem_count !=
 	                                      // context_cap * (head_dim / 2), checked independently
 	                                      // per tensor -- the ROP1<->CFG1 join itself

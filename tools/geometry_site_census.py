@@ -171,9 +171,16 @@ _QOW_TOKENS = ("q_proj", "o_proj", "q_weight", "o_weight", "q_fold", "o_fold", "
 # found doing exactly that: widening Part 2 to a multi-line window (below) put a `hidden_size`
 # parameter and this `kv_out_channels` parameter of the SAME declaration inside one window for the
 # first time (they were never on one physical line together before), firing a QOW hit on a
-# declaration that has nothing to do with q_proj/o_proj at all. Every genuine `out_channels` use
-# already in this tree (grepped tree-wide) is a bare identifier, never itself prefixed by another
-# word character, so this tightening changes nothing for a real hit.
+# declaration that has nothing to do with q_proj/o_proj at all. T-2518 correction (Poirot
+# Minor 2): the claim used to be that every genuine `out_channels` use tree-wide is a bare
+# identifier -- false as stated. Grepped tree-wide: prefixed identifiers carrying `out_channels`
+# as a bare substring DO exist -- `kv_out_channels` (19), `o_proj_out_channels` (5),
+# `want_out_channels` (3), `q_proj_out_channels` (2), `tq_proj_out_channels` (1),
+# `to_proj_out_channels` (1); 31 occurrences across six distinct prefixed identifiers. The
+# narrowing itself is still safe -- verified separately, and the claim it actually rests on: no
+# CODE line in Part 2's own swept scope (`_PART2_ALLOWED_PREFIXES`/`_PART2_ALLOWED_FILES`, below)
+# pairs `hidden_size` with one of those prefixed identifiers, so this tightening changes nothing
+# for a real hit there, even though prefixed identifiers exist elsewhere in the wider tree.
 _OUT_CHANNELS_RE = re.compile(r"(?<![A-Za-z0-9_])out_channels")
 
 # T-2509: the widened Part 2 window, in physical lines (module docstring's own "WIDENED T-2509"
@@ -194,7 +201,18 @@ def _qow_hit(line: str) -> bool:
 _SOURCE_GLOBS = (".cpp", ".h", ".hlsl", ".py")
 # Directories this census does not sweep -- generated/vendored/build output, never
 # hand-authored geometry logic.
-_SKIP_DIR_NAMES = {".git", "out", "build", "__pycache__", "node_modules"}
+#
+# T-2518 (Claude/Poirot/a3a20bc-t2509-adapter-geometry-review.md Critical 1 fold-in, D-SLM5859):
+# `.worktrees` is NOT excluded here, so a census invoked with `--repo-root` (or a default derived
+# from `__file__`) pointed at a checkout that itself contains a `.worktrees` directory -- as
+# `D:\SuperSLM` itself does, holding roughly sixty nested full-source checkouts -- sweeps every one
+# of those checkouts too, multiplying every marker count and every pattern hit by however many
+# nested worktrees exist. Measured: 41 passed in 6.08s invoked from a nested worktree itself (this
+# directory is not swept a second time from inside itself), 11 failed / 30 passed in 212.17s
+# invoked from `D:\SuperSLM` directly. A census whose verdict depends on the caller's own working
+# directory is not an inventory control -- it is excluded the same way `.git`/`out`/`build` already
+# are, below.
+_SKIP_DIR_NAMES = {".git", "out", "build", "__pycache__", "node_modules", ".worktrees"}
 
 # T-2432's own narrowing, stated rather than silently applied: the pattern-coverage half
 # (part 2) sweeps PRODUCTION source only -- src/, include/, and the shipped conversion
@@ -494,11 +512,39 @@ def run_census(repo_root: str) -> list[str]:
         #     Catches a co-occurrence whose two halves sit on DIFFERENT physical lines, up to
         #     `_WINDOW_SIZE` lines apart -- exactly the shape the single-line check above cannot
         #     see (demonstrated: adapter_marshal.h's AdapterInChannelsFor, condition on one line,
-        #     `return hidden_size;` two lines below). Only tests a window whose OWN start line did
-        #     not already produce a single-line hit above, so this section adds strictly NEW
-        #     findings -- never a second report of a hit the single-line check already caught.
-        #     Comment-only lines within a window are skipped when joining (matching the
-        #     single-line check's own comment exemption), not counted toward window width.
+        #     `return hidden_size;` two lines below). Skips any window whose OWN SPAN contains a
+        #     single-line hit ANYWHERE in it, not only at its own start line (T-2518 M1 fix,
+        #     Claude/Poirot/a3a20bc-t2509-adapter-geometry-review.md Minor 1: checking only the
+        #     window's start line let a single-line hit at i+1 be re-reported a second time by the
+        #     window starting at i -- one real defect, two findings, inflating the count on a
+        #     failing run. Executed: a minimal probe file with `uint64_t q_proj_bytes =
+        #     hidden_size * rank;` produced both `UNMARKED QOW PATTERN HIT` (the single-line check,
+        #     at that line) and `UNMARKED QOW PATTERN HIT (window)` (a window starting one line
+        #     above it) for the identical statement -- closed by requiring the whole window span,
+        #     not just its first line, be free of a single-line hit before the window is tested at
+        #     all), so this section adds strictly NEW findings -- never a second report of a hit
+        #     the single-line check already caught.
+        #
+        #     Comment-only lines within a window are skipped when JOINING the text the pattern
+        #     regexes see (matching the single-line check's own comment exemption) -- but they
+        #     STILL consume one of the window's own `_WINDOW_SIZE` physical-line slots (T-2518 S3
+        #     fix, Poirot Significant 3: this comment used to claim such lines are "not counted
+        #     toward window width", which is false -- the join loop below is `for j in range(i,
+        #     min(i + _WINDOW_SIZE, n + 1))`, and a comment-only line is skipped from `parts` but
+        #     still advances `j`, so `_WINDOW_SIZE` or more PHYSICAL lines of intervening comment
+        #     between a co-occurrence's two halves is not reached, joined, or scanned at all.
+        #     Executed, varying the number of comment lines between a QOW co-occurrence's own two
+        #     halves at `_WINDOW_SIZE = 4`: 0/1/2 intervening comment lines -- caught; 3/4/5/6 --
+        #     MISSED. Not academic in this codebase: its own `SSLM-GEOMETRY-SITE` comment-block
+        #     convention routinely places five-to-nine lines of explanatory comment between two
+        #     statements -- this very diff's own fix inserts a seven-line block between the
+        #     `down_proj` and `o_proj` branches it splits -- and measured over the swept scope
+        #     (`src/`, `include/`, 112 files): 1,401 of 17,616 adjacent code-line pairs (8.0%) sit
+        #     `_WINDOW_SIZE` or more physical lines apart, a gap this window cannot join. Stated as
+        #     an owed narrowing (widen `_WINDOW_SIZE`, or make the window skip comment lines with a
+        #     bounded NON-comment count instead of a bounded physical-line count) rather than made
+        #     here, matching this file's own established convention of disclosing a scope boundary
+        #     instead of silently applying or silently misdescribing it.
         #
         #     QOW ONLY, deliberately -- R1's own multiply detection (`_r1_multiply_hit`) fires on
         #     a bare `"*" in line`, loosened (module comment above `_R1_DIVISION_RE`) because the
@@ -521,15 +567,20 @@ def run_census(repo_root: str) -> list[str]:
         #     so narrowing the window to QOW does not cost the widening its one proven job. ---
         raw_window_hits: list[tuple[int, int, str]] = []  # (start_line, end_line, hit_type)
         for i in range(1, n + 1):
-            if is_comment_only[i] or single_line_hit[i]:
+            if is_comment_only[i]:
                 continue
             parts = []
             end = i
+            window_has_single_hit = bool(single_line_hit[i])
             for j in range(i, min(i + _WINDOW_SIZE, n + 1)):
                 if is_comment_only[j]:
                     continue
+                if single_line_hit[j]:
+                    window_has_single_hit = True
                 parts.append(scan_lines[j])
                 end = j
+            if window_has_single_hit:
+                continue  # T-2518 M1: a single-line hit ANYWHERE in this span is already reported
             if len(parts) < 2:
                 continue  # nothing to co-occur across -- a lone line is the single-line check's job
             window_text = " ".join(parts)
@@ -548,7 +599,14 @@ def run_census(repo_root: str) -> list[str]:
                     raw_window_hits[idx][0] <= group_end + 1:
                 group_end = max(group_end, raw_window_hits[idx][1])
                 idx += 1
-            if not _covered(group_start):
+            # T-2518 (Poirot Observation 1): checking only `group_start` would suppress a genuine
+            # finding for a merged group longer than `_covered`'s own +-25-line marker window whose
+            # start happens to sit near a marker but whose end does not -- `_covered` is a window
+            # around a SPECIFIC line, not a property of the whole group. Checking both ends is a
+            # one-line, no-live-instance-today closure (all 20 real groups measured span <=12 lines
+            # and are covered at both ends) rather than a note, per this file's own convention of
+            # closing a cheap gap on sight instead of filing it.
+            if not (_covered(group_start) or _covered(group_end)):
                 snippet = " / ".join(ln.strip() for ln in lines[group_start - 1:group_end] if ln.strip())
                 failures.append(
                     f"UNMARKED {group_hit} PATTERN HIT (window): {os.path.relpath(path, repo_root)}:"
@@ -818,12 +876,17 @@ def main() -> int:
           f"confirmed-correct-and-marked, 0 unmarked R1/QOW pattern hits "
           f"({len(registry) - marked} site(s) exempt, Track B's own not-yet-built scope)")
     print(f"  T-2509: Part 2's co-occurrence check now also runs a {_WINDOW_SIZE}-physical-line "
-          "sliding window (module docstring's own \"WIDENED T-2509\" note), closing the T-2468 F2 "
-          "limitation this line used to restate. What remains true (D-SLM5811): this is still a "
-          "TEXT match, never a token/dataflow one -- a co-occurrence spelled out via a renamed "
-          "local, a quantity computed further upstream than the window reaches, or a derivation "
-          "in a data file this scan's token list does not anticipate is still not covered by this "
-          "PASS.")
+          "sliding window (module docstring's own \"WIDENED T-2509\" note), closing the QOW half "
+          "of the T-2468 F2 limitation this line used to claim was closed whole (T-2518 correction, "
+          "Poirot Significant 4). KNOWN LIMITATION: the R1 half of F2 is still exactly as open as "
+          "it was -- the window is QOW-only, deliberately (R1's own bare \"*\" test is not safely "
+          "windowable; see this script's own Part 2 comment above the window loop). And what "
+          "remains true regardless of family (D-SLM5811): this is still a TEXT match, never a "
+          "token/dataflow one -- a co-occurrence spelled out via a renamed local, a quantity "
+          "computed further upstream than the window reaches, _WINDOW_SIZE or more physical lines "
+          "of comment separating a real co-occurrence's two halves (T-2518, Poirot Significant 3), "
+          "or a derivation in a data file this scan's token list does not anticipate, is still not "
+          "covered by this PASS.")
     return 0
 
 
