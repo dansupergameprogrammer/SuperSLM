@@ -430,13 +430,22 @@ def git_log_follow_commit_count(rel_path: str, repo_root: str = _REPO_ROOT) -> i
     collected by CI's own `pytest tests/ci/ -v` step. `git log --follow` is a property of the
     CLONE, not of this file: `actions/checkout@v5` defaults to a depth-1 clone and no job in
     `.github/workflows/` sets `fetch-depth`, so that cell read one commit instead of fourteen and
-    failed on every Actions run. This function now runs ONLY when a human invokes this module
-    directly with `--commit-count`, on their own full-history checkout, at REGENERATION time --
-    never from a CI-collected test. The result is meant to be pasted into
+    failed on every Actions run. This function was made to run ONLY when a human invokes this
+    module directly with `--commit-count`, on their own full-history checkout, at REGENERATION
+    time -- never from a CI-collected test. The result is meant to be pasted into
     `tests/ci/bad_alloc_membership_expected.txt`'s own header, both into the prose sentence that
     states it in words and into the `COMMIT_COUNT_PIN:` line beneath it, together, by hand -- see
     that file's own header comment for the pinned-value check this replaces the live git call
-    with."""
+    with.
+
+    T-2499 (Claude/Poirot/bc2ae29-t2498-census-fixes-confirmation.md Significant 1, D-SLM5775):
+    that restriction is narrowed, not repealed. `test_membership_check_population.py`'s
+    `test_oracle_header_commit_count_matches_git_log_follow_on_a_full_history_checkout` DOES call
+    this function from a CI-collected cell -- but only after `git rev-parse
+    --is-shallow-repository` confirms the checkout has full history, which no `actions/checkout`
+    default clone does, so the call still never actually executes on a runner; it `pytest.skip`s
+    there instead, and only runs (restoring the drift-class detection this function's own move
+    once removed) on a developer's own full-history checkout."""
     result = subprocess.run(
         ["git", "log", "--follow", "--oneline", "--", rel_path],
         cwd=repo_root,

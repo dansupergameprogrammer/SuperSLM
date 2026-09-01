@@ -394,7 +394,6 @@ def test_oracle_regeneration_command_matches_the_committed_oracle_file():
         "below its header comment, per the oracle file's own instructions"
     )
 
-
 # ---------------------------------------------------------------------------
 # The production gate (design Sec3.1: "tools/ci/check_bad_alloc_contract.py")
 # is built, and design Sec3.3's rename-and-wrap has landed for every one of
@@ -448,7 +447,13 @@ def test_oracle_header_commit_count_pin_matches_the_prose_word():
     depth-1 checkout, closed there by vendoring the value instead of re-deriving it live. This
     cell's own job is narrower than the one it replaces -- it catches a human mistranscribing the
     word relative to the pin, not history drifting past both of them unnoticed -- which is the
-    whole of what a depth-1 checkout can verify."""
+    whole of what a depth-1 checkout can verify.
+
+    T-2499 (Claude/Poirot/bc2ae29-t2498-census-fixes-confirmation.md Significant 1, D-SLM5775):
+    this narrowing was real -- the class the replaced cell caught (the pin drifting from the
+    file's own true history; four recorded instances: T-2467, T-2481, T-2491, T-2497) went from
+    "caught on every developer checkout, broken in CI" to "caught nowhere." Restored, on the
+    checkouts where it can run, by the companion cell immediately below."""
     oracle_path = os.path.join(dbam._THIS_DIR, "bad_alloc_membership_expected.txt")
     with open(oracle_path, "r", encoding="utf-8") as f:
         header = f.read()
@@ -477,6 +482,69 @@ def test_oracle_header_commit_count_pin_matches_the_prose_word():
         f"COMMIT_COUNT_PIN: {pinned} disagrees -- regenerate both together with "
         f"`python tests/ci/derive_bad_alloc_membership.py --commit-count` on a full-history "
         f"checkout before committing"
+    )
+
+
+def test_oracle_header_commit_count_matches_git_log_follow_on_a_full_history_checkout():
+    """T-2499 (Claude/Poirot/bc2ae29-t2498-census-fixes-confirmation.md Significant 1, D-SLM5775):
+    restores the detection `test_oracle_header_commit_count_pin_matches_the_prose_word` cannot
+    provide by construction -- that cell only catches a human mistranscribing the prose word
+    against `COMMIT_COUNT_PIN`; it cannot catch the PIN ITSELF drifting from the file's own true
+    history, which is the class that has recurred four times (T-2467, T-2481, T-2491, T-2497),
+    each caught only by a reviewer reading the paragraph. Executed on that exact shape (one
+    comment-only commit to this file, neither number updated): a fresh `git log --follow` gives
+    16 where the prose word and the pin both still read 15 -- this cell fails, the replaced cell
+    (T-2497) would have failed too, and `test_oracle_header_commit_count_pin_matches_the_prose_
+    word` passes throughout, because both its own numbers agree with each other while both are
+    stale together.
+
+    Guarded the same way `tools/ci/check_abi_header_inventory.py` degrades when its own
+    population source is unavailable: `git rev-parse --is-shallow-repository` decides, and a
+    shallow checkout SKIPS explicitly (printed by the `-v` the gating job already runs), rather
+    than reporting a false pass (a shallow clone's own `git log --follow` returns 1 unconditionally,
+    which would make this cell either always-red on every CI run or -- if compared to itself --
+    vacuously green) or a false fail. `actions/checkout@v5` defaults to a depth-1 clone and no job
+    in `.github/workflows/` sets `fetch-depth`, so this cell is not expected to run in CI; it runs
+    on every developer's own full-history checkout, which is exactly where `pytest tests/ci/` was
+    run before each of the four drift instances landed -- the environment the replaced cell was
+    actually useful in, per T-2497's own build log (Claude/Brunel/t2497-t2496-review-fixes-
+    2026-08-31.md Sec1: 'red on every developer machine ... broken in CI')."""
+    is_shallow = subprocess.run(
+        ["git", "rev-parse", "--is-shallow-repository"],
+        cwd=dbam._REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    if is_shallow == "true":
+        pytest.skip(
+            "shallow checkout (git rev-parse --is-shallow-repository == true) -- this cell needs "
+            "full history to run `git log --follow`; not expected in CI (actions/checkout@v5 "
+            "defaults to depth-1 and no job sets fetch-depth). Run `pytest tests/ci/` on a "
+            "full-history checkout to exercise it."
+        )
+
+    oracle_path = os.path.join(dbam._THIS_DIR, "bad_alloc_membership_expected.txt")
+    with open(oracle_path, "r", encoding="utf-8") as f:
+        header = f.read()
+    word_match = re.search(r"\b(\w+) total commits touch this file end to end", header)
+    assert word_match, (
+        "the oracle header's own commit-count sentence has moved or been reworded -- update "
+        "this pin's own regex to match its new wording"
+    )
+    word = word_match.group(1).lower()
+    assert word in _NUMBER_WORDS, (
+        f"the oracle header states the commit count as {word!r}, which this pin's own "
+        f"_NUMBER_WORDS does not cover -- extend it"
+    )
+    stated = _NUMBER_WORDS[word]
+
+    actual = dbam.git_log_follow_commit_count(
+        os.path.relpath(oracle_path, dbam._REPO_ROOT)
+    )
+    assert stated == actual, (
+        f"the oracle header states {word!r} ({stated}) total commits touching this file, but a "
+        f"fresh `git log --follow` on this full-history checkout counts {actual} -- regenerate "
+        f"the header with `python tests/ci/derive_bad_alloc_membership.py --commit-count` on a "
+        f"full-history checkout and paste the result into both the prose word and "
+        f"COMMIT_COUNT_PIN together"
     )
 
 
