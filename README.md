@@ -14,7 +14,14 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.3.0**. This release adds a new guarantee: the
+Current release: **1.3.1**, a patch on 1.3.0. It fixes the six CI jobs behind
+1.3.0's own guarantees at source (the reciprocal seed's signed-overflow made
+well-defined with no emitted bit moved, the FP-free scan's frozen allow-list,
+the VsDevCmd discovery, the coverage floors, the converter's path-separator
+handling) and the engine's non-square-geometry handling (adapter-marshal
+geometry sites, Track A's own geometry generalization) -- see
+[CHANGELOG.md](CHANGELOG.md) for the complete list and what each entry does
+and does not claim. 1.3.0's own guarantee is unchanged by this patch: the
 compiled `superslm` static archive's own object code contains no
 floating-point arithmetic instruction, decided by disassembling every archive
 member the build produces — a claim about SuperSLM's own compiled objects,
