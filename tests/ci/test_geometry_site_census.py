@@ -1645,11 +1645,26 @@ def test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_registr
     # (`_mutated_targets_and_registry_are_byte_identical_after_the_module_runs`) never saw a
     # mismatch -- confirming D-SLM5785 is still live at this tip exactly as the review found.
     # Routed through `_mutated` here instead of hand-rolling the write: every real-tree write in
-    # this module now goes through the one function that decides the convention, so reverting it
-    # corrupts every write alike and the byte-identity fixture fires regardless of which cell
-    # happens to run last. Re-executed after this change: reverting `_mutated`'s own
-    # `newline=_write_newline` argument now fails the module (byte mismatch reported on
-    # `tools\geometry_site_registry.json`) rather than passing silently.
+    # this module now goes through the one function that decides the convention, so the
+    # instrument-level flaw (a second writer disagreeing with the first) is closed everywhere.
+    #
+    # T-2535 correction (Poirot 2945361-t2534-superslm-ci-green-confirmation2.md S-1): the
+    # sentence this paragraph used to close on -- "reverting it corrupts every write alike and
+    # the byte-identity fixture fires regardless of which cell happens to run last" -- and the
+    # one after it -- "reverting `_mutated`'s own `newline=_write_newline` argument now fails
+    # the module (byte mismatch reported on `tools\geometry_site_registry.json`) rather than
+    # passing silently" -- are both false as unqualified statements, on the SAME cell C-1n's own
+    # closure was already qualified against and the docstring above (`_write_newline_for`) now
+    # states correctly: on a CRLF checkout (this platform) the revert fails the module with a
+    # byte mismatch on the registry, exactly as both sentences here claim; on a fresh LF checkout
+    # (`git clone` into WSL/Ubuntu, what every `ubuntu-latest` job that runs this module actually
+    # checks out) the IDENTICAL revert leaves `40 passed, 1 failed` with NO byte mismatch and the
+    # registry untouched -- the registry is already LF there, Linux's own platform-default write
+    # is also LF, so the call-site regression is a no-op on that cell and nothing about it
+    # corrupts anything, let alone every write alike. The one failure on LF is
+    # `test_mutated_call_site_preserves_a_forced_crlf_file_regardless_of_checkout_platform`'s own
+    # synthetic-bytes cell (below `_write_newline_for`), not this module's real-tree state --
+    # confirmed by direct execution, both ways, on byte-preserved trees.
     def _t(registry_json):
         import json
         data = json.loads(registry_json)
