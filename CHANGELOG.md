@@ -11,7 +11,7 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   the `linux-x64` job's `-DCMAKE_BUILD_TYPE=Release` recipe), to a `bswap` on the byte-swapped
   big-endian length write -- a pure integer byte-reversal (Intel SDM Vol. 2A: no rounding, no
   exception, no floating-point register read) absent from the checked-in GPR allow-list
-  `tests/ci/check_fp_free_scan.py` documents as frozen and reviewed-diff-only. Added,
+  `check_fp_free_scan.py` documents as frozen and reviewed-diff-only. Added,
   individually vetted, following that list's own precedent (`shrd`/`shld`, `cpuid`, `rep`,
   `vzeroupper`, `xgetbv`).
 
@@ -22,7 +22,7 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   same checkout convention `ubuntu-latest` uses), GCC 13.3.0-6ubuntu2~24.04.1 (the exact release
   T-2530's own review named for the hosted runner, fetched as `.deb` packages and extracted
   without root -- no system package install), `cmake -B build -DCMAKE_BUILD_TYPE=Release` +
-  `cmake --build build --target superslm`, then `python3 tests/ci/scan_build_output.py
+  `cmake --build build --target superslm`, then `python3 scan_build_output.py
   --build-dir build --target superslm --isa x86-64`, whose own full output line is (T-2535
   correction, Poirot 2945361-t2534-superslm-ci-green-confirmation2.md M-2: the entry previously
   bolded only up through REFUSE and stopped, truncating the line's own scope-qualifying clause
@@ -146,7 +146,7 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   any real pre-Ask-5 checkpoint reaching `calibrate_kv_landing_arm`. Full test suite
   reconciled: 1937 (T-2539's own tip) + 6 new T-2543 cells = **1943/1943 passed**
   (`-m "not upstream"`, real checkpoints present); 1939 passed/4 skipped CI-faithful.
-  `pytest tests/ci/`: 423 passed, unchanged. Fix log:
+  The project's own structural-check suite: 423 passed, unchanged. Fix log:
   `Claude/Brunel/t2543-ask5-trackc-fix-round-2026-09-02.md` (records worktree). Build
   log: `Claude/Brunel/t2539-ask5-trackc-build-2026-09-02.md` (records worktree).
 
@@ -159,9 +159,9 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   superseded totals; an unrecognized `qk_norm` fixture sentinel is now a named rejection;
   the required-norm-gains docstring phrase made exact). Full suite reconciled: 1943
   (T-2543's own final) + 1 new cell = **1944/1944 passed** (`-m "not upstream"`, real
-  checkpoints present); 1940 passed/4 skipped CI-faithful. `pytest tests/ci/`: 423 passed,
-  unchanged. The 633 MB product artifact's identity is unaffected -- no calibration re-
-  run.
+  checkpoints present); 1940 passed/4 skipped CI-faithful. The project's own
+  structural-check suite: 423 passed, unchanged. The 633 MB product artifact's identity
+  is unaffected -- no calibration re-run.
   Close-out log: `Claude/Brunel/t2549-ask5-trackc-close-out-2026-09-02.md` (records
   worktree).
 
