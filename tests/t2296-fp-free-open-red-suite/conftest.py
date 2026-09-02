@@ -112,10 +112,27 @@ _VSWHERE_PATH = (
     r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
 )
 
+# T-2533 (Poirot 4187739-t2532-superslm-ci-green-confirmation.md S-3n): `-version` constrains
+# `vswhere`'s own report to VS 2022 (major version 17) instances only. Without it this function's
+# own docstring claimed a VS-2022-only scope the query never enforced -- `vswhere -products *`
+# with no `-version` reports EVERY registered VS 2017+ instance, so a machine carrying an older VS
+# release alongside 2022 could have that older instance's own VsDevCmd.bat returned first,
+# silently building this fixture's own corpus with the wrong toolset. This is the identical defect
+# T-2531 (Poirot 5e128ee-t2530-superslm-ci-green-review.md S-3) fixed in this suite's sibling
+# module, `fp_scan_common.py`'s own `_vswhere_vsdevcmd_candidates()` -- unswept to this file at the
+# time, per Poirot 4187739's own S-3n finding. `[17.0,18.0)` is vswhere's own documented range
+# syntax (`vswhere -help`; https://aka.ms/vswhere/versions) for "major version 17, any
+# minor/patch" -- VS 2022's own product-version family; confirmed by direct execution on this
+# machine's two real installs (BuildTools, Community), both returned, both correctly
+# version-gated.
+_VSWHERE_VERSION_RANGE = "[17.0,18.0)"
+
 
 def _vswhere_vsdevcmd_candidates():
     """Every `VsDevCmd.bat` belonging to a VS 2022 instance `vswhere.exe`
-    reports, BuildTools-named instances first -- preserving this fixture's
+    reports (version-constrained to `_VSWHERE_VERSION_RANGE`, so an older or
+    newer VS release installed alongside 2022 is never returned here),
+    BuildTools-named instances first -- preserving this fixture's
     own documented preference (BuildTools first, not shared with
     `run_fp_free_scan_real_corpus.py`'s own Community-first order) across
     however many instances are actually installed, rather than only the
@@ -126,8 +143,8 @@ def _vswhere_vsdevcmd_candidates():
         return []
     try:
         result = subprocess.run(
-            [_VSWHERE_PATH, "-products", "*", "-property", "installationPath",
-             "-nologo"],
+            [_VSWHERE_PATH, "-products", "*", "-version", _VSWHERE_VERSION_RANGE,
+             "-property", "installationPath", "-nologo"],
             capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return []
