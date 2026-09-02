@@ -1270,6 +1270,18 @@ _X86_EXTERN_ALLOW = {
     "_Init_thread_header", "_Init_thread_footer", "_Init_thread_epoch",
     "__stdio_common_vsprintf",
     "_invalid_parameter_noinfo_noreturn",
+    # T-2533 (Poirot 4187739-t2532-superslm-ci-green-confirmation.md S-1n): this machine's
+    # BuildTools MSVC edition (17.14.36408.4) links tests/t2296-fp-free-open-red-suite/
+    # fp_scan_fixtures/pop09_funclet_fp.cpp's own RegressionParent to _invoke_watson --
+    # confirmed by direct execution: the relocation is a real external call target (COFF
+    # section number 0, undefined here), absent from this list, causing check (C) alone to
+    # REJECT RegressionParent under that edition where Community (17.4.33213.308) does not
+    # reach this symbol at all. _invoke_watson is the MSVC CRT's Watson-crash-reporting invoke
+    # helper, reached from the same _invalid_parameter/assertion-failure diagnostic chain
+    # __imp__invalid_parameter_noinfo_noreturn and _wassert already vet above -- a
+    # control-transfer target on a validation-failure path, not a computation, and it performs
+    # no floating-point arithmetic on the caller's behalf.
+    "_invoke_watson",
 }
 
 _ELF_EXTERN_ALLOW = {

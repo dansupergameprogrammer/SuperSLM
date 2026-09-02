@@ -932,6 +932,23 @@ def test_population_08_source_manifest_resolves_seventeen_real_files():
 # MEMBERSHIP rule specifically (fold round 8).
 # ===========================================================================
 
+def _detected_msvc_edition():
+    """T-2533 (S-1n): names which MSVC edition this machine's compile helpers actually resolved
+    to, from fc.find_vsdevcmd()'s own returned path -- 'Community', 'BuildTools', 'Enterprise', or
+    the raw path if none of those substrings match (never guessed, never silently assumed).
+    Population nine's own fixture premise is a property of the edition that compiled it, not of
+    the fixture source (S-1n: this machine's two editions disagree about whether RegressionParent
+    carries FP), so a cell that grades this population records which edition produced its own
+    verdict."""
+    path = fc.find_vsdevcmd()
+    if path is None:
+        return "none found"
+    for name in ("Enterprise", "BuildTools", "Community"):
+        if name in path:
+            return name
+    return path
+
+
 def test_population_09_funclet_membership():
     """Falsifying construction: RegressionParent (no FP instruction of its
     own) wraps a try/catch; the catch FUNCLET performs genuine IEEE-754
@@ -996,8 +1013,55 @@ def test_population_09_funclet_membership():
         result = scan.scan_object(obj, isa="x86-64")
         assert result.object_format == "coff"
         assert not result.refuse
+
+        # T-2533 (Poirot 4187739-t2532-superslm-ci-green-confirmation.md S-1n): this cell used to
+        # assert RegressionParent's own ACCEPT verdict on the strength of the docstring's claim
+        # ("no FP instruction of its own") alone, with no independent check -- the same gap
+        # `assert fp_insns` above already closes for the funclet's own REJECT half. The first
+        # T-2533 remedy here hypothesized (per the reviewer's own characterization) that a toolset
+        # "folds FP into the parent"; that hypothesis was tested by direct execution and refuted --
+        # under BuildTools (17.14.36408.4), RegressionParent's own decoded instructions carry NO FP
+        # arithmetic (checked via `scan._account_section` + `_is_x86_fp_arith`, the same machinery
+        # `scan_object` itself uses), identically to Community (17.4.33213.308). Root-caused instead
+        # by direct inspection of RegressionParent's own relocations: its compiled bytes call the
+        # external symbol `_invoke_watson` -- present only under BuildTools' own STL, absent from
+        # `_X86_EXTERN_ALLOW` (tests/ci/check_fp_free_scan.py) -- so check (C) alone REJECTed it
+        # under that edition while check (A)/(B) ACCEPTed under both. `_invoke_watson` is now vetted
+        # and added to that allow-list (the MSVC CRT's Watson-crash-reporting invoke helper, reached
+        # from the same `_invalid_parameter`/assertion-failure diagnostic chain
+        # `__imp__invalid_parameter_noinfo_noreturn`/`_wassert` already vet -- a control-transfer
+        # target on a validation-failure path, not a computation, performing no FP arithmetic on
+        # the caller's behalf).
+        #
+        # This cell now checks BOTH the population's real intent and full check-(C) coverage,
+        # recording which MSVC edition compiled the object either way, per the brief's own standard
+        # (a population states the toolset its own verdict was taken under, rather than sorting one
+        # edition first and reporting whatever that edition says): `ab_verdicts` (checks (A)/(B)
+        # only) is what population nine actually tests -- membership/AB semantics -- and is asserted
+        # directly; if some FUTURE edition ever disagrees at this level that is a genuine,
+        # uncommissioned-edition fixture-premise gap, and the cell skips, naming the edition, rather
+        # than reporting a false instrument defect. The full `verdicts` (which includes check (C))
+        # is then also asserted as a real, loud failure -- not a skip -- since the concrete gap
+        # above is now closed and any future divergence here is a genuine unvetted external-target
+        # gap worth fixing at `_X86_EXTERN_ALLOW`, exactly the shape of defect this population
+        # exists to catch.
+        edition = _detected_msvc_edition()
+        ab_verdict = result.ab_verdicts.get("RegressionParent")
+        if ab_verdict != "ACCEPT":
+            pytest.skip(
+                "population nine's own fixture premise (RegressionParent carries no FP "
+                "instruction of its own, checks (A)/(B)) does not hold under this machine's "
+                "MSVC edition ({}): ab_verdicts['RegressionParent'] == {!r}. This population is "
+                "not commissioned for this edition -- not an instrument defect. S-1n, "
+                "Claude/Poirot/4187739-t2532-superslm-ci-green-confirmation.md.".format(
+                    edition, ab_verdict)
+            )
         assert result.verdicts.get("RegressionParent") == "ACCEPT", (
-            "RegressionParent itself carries no FP instruction and must ACCEPT"
+            "RegressionParent's own check-(A)/(B) verdict is ACCEPT (verified above, edition {}), "
+            "so a REJECT here is a check-(C) external-call-target gap for this edition's own STL "
+            "-- vet the real target and add it to _X86_EXTERN_ALLOW "
+            "(tests/ci/check_fp_free_scan.py), the same fix _invoke_watson (S-1n) already "
+            "received, rather than skipping".format(edition)
         )
         funclet_verdicts = [result.verdicts.get(n) for n in catch_funclets]
         assert any(v == "REJECT" for v in funclet_verdicts), (
