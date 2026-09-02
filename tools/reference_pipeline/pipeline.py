@@ -1217,8 +1217,12 @@ def _upstream_names(cfg: ModelConfig, present: set):
     **§11's N3 discipline governs this map** -- "an unrecognized ... constant in the config
     is a hard rejection, never a silent drop" -- for the same reason it governs the config: a
     quietly-dropped projection is a model that loads, runs, generates fluent text, and is
-    not Qwen. Every REQUIRED entry (the embedding, the final norm, every per-layer
-    projection and its two norm gains) is compared against the checkpoint's key set in both
+    not Qwen. Every REQUIRED entry -- the embedding, the final norm, every per-layer
+    projection, and each layer's own `attn_norm`/`mlp_norm` gains (T-2549 N-5: named
+    explicitly here, not as "its two norm gains" -- QK-norm's own two gains are a
+    DIFFERENT, OPTIONAL pair, stated two paragraphs below; the prior phrasing was
+    ambiguous between the two in a docstring rewritten precisely because its predecessor
+    made a false totality claim) -- is compared against the checkpoint's key set in both
     directions by the caller (`load_model`'s own `unmapped`/`missing` checks) and either
     difference is a rejection.
 
