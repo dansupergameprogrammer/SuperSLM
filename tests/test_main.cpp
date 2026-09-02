@@ -18905,6 +18905,22 @@ struct DecodeLoopCallFixture {
 		// exercises neither S3.7 nor Option-G, so both are passed at their old
 		// default values explicitly (Int8, legacy) rather than relying on a
 		// default that no longer exists.
+		// T-2529: `num_attention_heads` corrected from 2 to 1. `TwoLayerFixture`'s own
+		// constructor (its header comment, T-1374/Significant 4) builds exactly ONE
+		// attention head's worth of per-head geometry: `hidden_size=2, head_dim=2` (so
+		// hidden_size/head_dim == 1), and `ctx_fold_identity_arr`/`ctx_fold_mult_arr`/
+		// `ctx_fold_shift_arr` are each declared `[1]`. Passing 2 here drove
+		// `RunLayerLoopImpl`'s own per-query-head loop (forward_sites.cpp, the `ctx_wide`
+		// composition) to a second iteration, h=1, reading `lw.ctx_fold_shift[1]` -- one
+		// element past this fixture's own 1-element array. On this session's build that
+		// out-of-bounds read returned 16384, reaching `ApplyWeightScaleFold` ->
+		// `RoundingDivideByPOTImpl` as the shift exponent and tripping UBSan's shift-too-
+		// large trap (intmath.cpp:247) -- reproduced directly, `linux-x64-asan`'s own
+		// failure, confirmed by this session's own UBSan build on this machine. Every
+		// OTHER call site in this tree that builds a 1-head fixture and calls
+		// `RunGreedyDecodeLoop`/`RunLayerLoop` (e.g. `TestOptionGSelectionDispatch_
+		// EndToEndProductionPath`, below) already passes `num_attention_heads=1`; this
+		// call site is the one place that diverged.
 		return superslm::RunGreedyDecodeLoop(
 		    seq, model.layers_fixture.layers, /*num_hidden_layers=*/2, DecodeLoopFixture::kHiddenSize,
 		    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
@@ -18915,7 +18931,7 @@ struct DecodeLoopCallFixture {
 		    stop_ids.data(), stop_ids.size(), max_new_tokens, workspace, sizeof(workspace),
 		    out_tokens.data(), out_logit_rows.data(), out_tokens.size(), &tokens_produced,
 		    &stop_reason, superslm::SslmKvPrecision::Int8, /*option_g_fused_k_landing=*/false,
-		    /*num_attention_heads=*/2);
+		    /*num_attention_heads=*/1);
 	}
 
 	void CheckEverythingUntouched(const char* what) const {
@@ -18960,7 +18976,13 @@ static void TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse() {
 	    stop_ids.data(), stop_ids.size(), /*max_new_tokens=*/1, tiny_workspace, sizeof(tiny_workspace),
 	    f.out_tokens.data(), f.out_logit_rows.data(), f.out_tokens.size(), &f.tokens_produced,
 	    &f.stop_reason, SslmKvPrecision::Int16, /*option_g_fused_k_landing=*/false,
-	    /*num_attention_heads=*/2);
+	    // T-2529: 2 -> 1, matching `DecodeLoopCallFixture::Run`'s own fix above and this
+	    // fixture's true 1-head geometry -- this specific call is expected to reject at
+	    // KvPrecisionUnsupported before the layer loop ever reads a per-head array, so the
+	    // stale value of 2 never crashed here, but it is corrected for the same reason: a
+	    // future reordering of this rejection ahead of the layer loop must not silently
+	    // reintroduce the out-of-bounds read the sibling call site had.
+	    /*num_attention_heads=*/1);
 	CHECK_MSG(result == SslmForwardStatus::KvPrecisionUnsupported,
 	          "RunGreedyDecodeLoop(kv_precision=Int16, workspace=1 byte) status == %s, want "
 	          "KvPrecisionUnsupported (checked before the workspace is sized -- a 1-byte workspace "

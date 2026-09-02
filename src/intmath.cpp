@@ -308,9 +308,40 @@ int64_t DynamicScaleReciprocal(int64_t dn) {
 	constexpr int64_t kC32 = (2 * (int64_t{48} << 31) + 17) / 34;    // round_half_up(48·2^31/17)
 	constexpr int64_t kC32_2 = (2 * (int64_t{32} << 31) + 17) / 34;  // round_half_up(32·2^31/17)
 
-	// Seed y0 ≈ 1/d, d = Dn/2^31, from the minimax line 48/17 − (32/17)·d in Q31. The
-	// product kC32_2·Dn is < 2^63, so the seed itself needs no 128-bit intermediate.
-	int64_t y = kC32 - ((kC32_2 * dn) >> 31);
+	// Seed y0 ≈ 1/d, d = Dn/2^31, from the minimax line 48/17 − (32/17)·d in Q31. For a
+	// CANONICAL Dn in [2^30, 2^31) the product kC32_2·Dn is < 2^63 and a plain int64
+	// multiply is exact -- but `CarriedScaleReciprocal` (checked_chain_funnel.h) is an
+	// explicitly unguarded door onto this function ("not required to be canonical...
+	// guarded only by whatever the caller does with it downstream"), so a non-canonical
+	// Dn is a real, doc-permitted input, not merely a defensive possibility. T-2529
+	// (linux-x64-asan, `TestT2019_B1_DynamicScaleReciprocal_DomainSweep_GpuMatchesCpu`'s
+	// own Dn=2^62 fixture, sweeping exactly the non-canonical region that door's
+	// contract states reachable): a plain signed `int64_t` multiply here is signed-
+	// integer-overflow UB at that magnitude (UBSan traps it, intmath.cpp:313).
+	//
+	// NOT widened to the 128-bit `SMul`/`SShrToI64` pair the Newton loop below uses for
+	// its own "wide multiply, shift" shape: that computes the mathematically exact
+	// `(kC32_2 * dn) >> 31` (keeping bits [31,158] of the true 190-bit-worst-case
+	// product before truncating to 64 bits), which is a DIFFERENT value from what a
+	// 64-bit multiply followed by a 64-bit shift computes once the product exceeds 64
+	// bits -- verified this session: widening this line the same way as the Newton loop
+	// changed this function's own output at Dn=2^62 and broke `windows-x64`'s
+	// DynamicScaleReciprocalGpu bit-identity check (the GPU shader's own seed step does
+	// the narrow 64-bit multiply, so matching it means reproducing ITS truncation, not
+	// replacing it with the exact wide one). The fix instead keeps the exact SAME
+	// truncate-then-shift computation the narrow multiply already performed on this
+	// platform, made well-defined: computed in `uint64_t` (unsigned overflow is modular
+	// arithmetic, not UB, and two's-complement wraparound is bit-for-bit identical to
+	// what the signed multiply silently produced here in every already-shipped build of
+	// this function), reinterpreted back to `int64_t` (well-defined value-preserving
+	// conversion, C++20 [conv.integral]), then right-shifted as a signed 64-bit value
+	// (arithmetic/sign-propagating, standardized behaviour since C++20
+	// [expr.shift] -- this project targets C++20 unconditionally, CMakeLists.txt). Bit-
+	// identical to the ORIGINAL narrow-multiply result on every input, canonical or not,
+	// with the UB removed rather than the arithmetic changed.
+	int64_t y = kC32 - (static_cast<int64_t>(static_cast<uint64_t>(kC32_2) *
+	                                          static_cast<uint64_t>(dn)) >>
+	                     31);
 
 	// Newton: y ← y·(2 − d·y) = (y·(2^32 − ((Dn·y) >> 31))) >> 31.
 	for (int i = 0; i < DYNAMIC_RECIPROCAL_NEWTON_ITERATIONS; ++i) {
