@@ -935,18 +935,46 @@ def test_population_08_source_manifest_resolves_seventeen_real_files():
 def _detected_msvc_edition():
     """T-2533 (S-1n): names which MSVC edition this machine's compile helpers actually resolved
     to, from fc.find_vsdevcmd()'s own returned path -- 'Community', 'BuildTools', 'Enterprise', or
-    the raw path if none of those substrings match (never guessed, never silently assumed).
-    Population nine's own fixture premise is a property of the edition that compiled it, not of
-    the fixture source (S-1n: this machine's two editions disagree about whether RegressionParent
-    carries FP), so a cell that grades this population records which edition produced its own
-    verdict."""
+    the raw path if none of those match (never guessed, never silently assumed). Population nine's
+    own fixture premise is a property of the edition that compiled it, not of the fixture source
+    (S-1n: this machine's two editions disagree about whether RegressionParent carries FP), so a
+    cell that grades this population records which edition produced its own verdict.
+
+    T-2535 correction (Poirot 2945361-t2534-superslm-ci-green-confirmation2.md M-5): this function
+    used a raw `name in path` substring test -- the exact construction O-1 removed from both real
+    sort keys in this same round (fp_scan_common.py, conftest.py) for exactly this fragility (a
+    directory literally named e.g. `CommunityUser` would misname the edition). Reintroduced here,
+    three definitions above the module that now carries `_path_has_segment`. Fixed to use it: the
+    value is diagnostic-only (skip/failure message text, never a verdict), so the prior fragility
+    never changed a verdict -- only ever risked misnaming an edition in a message -- but there is
+    no reason for this function to be the one place in the suite still doing it the old way."""
     path = fc.find_vsdevcmd()
     if path is None:
         return "none found"
     for name in ("Enterprise", "BuildTools", "Community"):
-        if name in path:
+        if fc._path_has_segment(path, name):
             return name
     return path
+
+
+def test_detected_msvc_edition_does_not_misfire_on_a_directory_literally_named_communityuser():
+    """T-2535 (Poirot 2945361-t2534-superslm-ci-green-confirmation2.md M-5): pins the fix
+    directly -- a path whose LONGER component merely contains an edition word
+    ("CommunityUser", with no genuine "Community"/"BuildTools"/"Enterprise" segment anywhere
+    in the path) must NOT be misnamed by the raw substring test `_detected_msvc_edition` used
+    before this round. Under the old `if name in path` test this adversarial path misnamed as
+    "Community" (verified directly before this fix landed); under the `_path_has_segment` fix
+    it falls through to the documented fallback (the raw path, since no edition word matches a
+    whole segment) instead of guessing wrong.
+    """
+    adversarial = os.path.join(
+        "C:", "Users", "CommunityUser", "SomeUnknownVSInstall", "Common7", "Tools",
+        "VsDevCmd.bat")
+    with mock.patch.object(fc, "find_vsdevcmd", return_value=adversarial):
+        assert _detected_msvc_edition() == adversarial, (
+            "an adversarial path containing an edition word only as a substring of a longer "
+            "component must fall through to the raw path, not misname the edition"
+        )
 
 
 def _regression_parent_own_fp_instructions(data):
