@@ -19,3 +19,26 @@ same way. `python -m pytest tests/manual/ -v` runs everything here.
 
 Each test skips (does not fail) when a required binary or artifact is absent,
 so a checkout on a machine without the model still collects cleanly.
+
+## The QK-norm real-candidate acceptance gate (T-2564, S4, ruled D-SLM6199)
+
+`tests/t2551_qk_norm_harness.cpp` is not a `pytest` test — it is a standalone C++ harness,
+compiled by hand (`build.bat`'s own `t2432_geometry_harness` recipe, source list swapped for this
+file; see that recipe for the exact `cl` invocation and the shader-staging step it depends on) and
+run against a real, multi-gigabyte QK-norm-bearing artifact under `D:\hf_cache\` — the same reason
+this directory's own tests cannot run in hosted CI. It is the width>1, 28-layer, N=100-repeated-GPU-
+dispatch acceptance for any checkpoint carrying `q_norm`/`k_norm` tensors (Ask 5 Track B), and it is
+the ONLY construction in this repository that exercises `ApplyQkNormSite` at real production scale;
+the small synthetic cells in `superslm_tests.exe` (`TestT2564_S4_ApplyQkNormSitePerHeadQScaleNotCollapsed`,
+`TestT2564_S4_ApplyQkNormSiteKLandsOnNewPostNormScaleNotJustNorm`, `tests/test_main.cpp`) catch a
+regression of the per-head Q carry or the K re-landing on every local `ctest` and in hosted CI, but
+neither they nor anything else here proves the real 633 MB candidate still passes at production
+scale and width.
+
+**Run this by hand, on Windows, with the RTX GPU this repo builds against: after any change to
+`ApplyQkNormSite`, `qk_norm_site.hlsl`, `q_proj_site.hlsl`, `softmax_site.hlsl`, or
+`LayerWeights`'s q_norm/k_norm fields; at every pin bump of the calibrated Qwen3-Embedding-0.6B
+candidate; and before every release tag that ships Qwen3-architecture (QK-norm) support.** Usage:
+`out\t2551_qk_norm_harness.exe <model.sslm> [token_id]`; a `RESULT: PASS` line with `CELL 1` and
+`CELL 4` both `PASS` and `DETERMINISM CROWN: PASS` is the acceptance. Never a per-push hosted CI
+leg (D-SLM6161) — hosted runners have neither the artifact nor the GPU this gate needs.

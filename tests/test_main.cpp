@@ -16929,6 +16929,211 @@ static void TestKvRowAccessorHeadStrideIncludesContextCapFactor() {
 	          static_cast<long long>(off_v));
 }
 
+// (T-2564, S4 -- Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md; ruled D-SLM6199):
+// the delta's own Sec7 Cells 2/3/10 mutate `pipeline.forward_dynamic` and
+// `pipeline._derive_composition_constants` and grade against `composition_ref.py` -- they pin
+// the REFERENCE implementations, never the real, committed C++ engine. Two mutants of that
+// engine (Q's per-head carry collapsed onto the last head; the second K `LandingRescale` loop
+// deleted from `ApplyQkNormSite`) passed `superslm_tests.exe` at 34228/0, because no cell here
+// called `ApplyQkNormSite` at all. The two cells below call it directly -- no artifact load, no
+// `RunLayerLoop` drive, matching `TestKvStoreEarlyWriteSurvivesLateReadAcrossEightFurtherPositions`
+// immediately above's own "raw workspace buffer, no `SslmModel::Load` dependency" precedent,
+// since `ApplyQkNormSite` itself needs neither. Both are part of `superslm_tests`, already a
+// registered CTest target (`add_test(NAME superslm_tests ...)`, `CMakeLists.txt`) and already run
+// in hosted CI -- satisfying D-SLM6199's "runs in the local ctest and in hosted CI at negligible
+// cost" with no new build target. Verified RED on both mutants, hand-applied and reverted this
+// session (build log records the exact edit and the resulting failure for each).
+static void TestT2564_S4_ApplyQkNormSitePerHeadQScaleNotCollapsed() {
+	using superslm::ApplyQkNormSite;
+	using superslm::CarriedScale;
+	using superslm::LayerWeights;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+
+	// Two query heads, deliberately shaped so their own post-norm dynamic scales differ:
+	// head 0 is a small, near-uniform pair; head 1 is large and lopsided. Same construction
+	// family (RmsNormSite-driven, Q14 norm_gain, canonical site_constant) every other fixture
+	// in this file already uses for its own RmsNormSite-backed cells -- carried through two
+	// heads instead of one. Distinctness is CONFIRMED BELOW BY EXECUTION, not assumed
+	// (StandardsDocument.md Sec5.4): this cell's own claim is the differential (head 0 != head
+	// 1), never a specific predicted value.
+	constexpr size_t kNumHeads = 2, kHeadDim = 2;
+	int8_t q_codes[kNumHeads * kHeadDim] = {
+	    10, 10,   // head 0
+	    100, 5,   // head 1
+	};
+	int32_t q_norm_gain[kHeadDim] = {16384, 16384};
+	const CarriedScale canonical{INT64_C(1073741824), INT64_C(-30)};
+
+	LayerWeights lw{};
+	lw.q_norm_gain = q_norm_gain;
+	lw.q_norm_site_constant = canonical;
+	// k_norm left absent (nullptr, the default): this cell targets Q's own per-head carry
+	// only, matching the mutant it exists to catch.
+
+	CarriedScale q_scales[kNumHeads] = {canonical, canonical};  // broadcast pre-fill, the real caller's own convention
+	const auto status = ApplyQkNormSite(q_codes, q_scales, /*workspace=*/nullptr, /*layer=*/0,
+	                                     /*context_cap=*/1, /*position=*/0, kNumHeads,
+	                                     /*num_key_value_heads=*/0, kHeadDim, lw, "t2564_s4_q",
+	                                     /*token_index=*/0, /*trace_hook_state=*/nullptr);
+	CHECK_MSG(status == SslmForwardStatus::Ok, "ApplyQkNormSite(Q-only, T-2564 S4) status == %s, want Ok",
+	          SslmForwardStatusName(status));
+	if (status != SslmForwardStatus::Ok) return;
+
+	CHECK_MSG(!(q_scales[0].m == q_scales[1].m && q_scales[0].e == q_scales[1].e),
+	          "head 0's own carried scale (m=%lld,e=%lld) != head 1's (m=%lld,e=%lld) -- RED "
+	          "under the pre-delta collapse mutant (`for (h) q_scales[h] = "
+	          "q_scales[num_heads-1]`), which makes every head equal head %zu's own value by "
+	          "construction",
+	          static_cast<long long>(q_scales[0].m), static_cast<long long>(q_scales[0].e),
+	          static_cast<long long>(q_scales[1].m), static_cast<long long>(q_scales[1].e),
+	          kNumHeads - 1);
+}
+
+// (T-2564, S4, companion to the cell immediately above): the K side of the same gap --
+// `ApplyQkNormSite`'s own SECOND `LandingRescale` call (delta Sec4, D-SLM6117), which relands
+// K's post-norm codes from `RmsNormSite`'s own output scale onto the new, static
+// `k_norm_landing_r_t`/`e_t` constants. Deleting that second call (C2's own mutant) leaves the
+// K row at exactly `RmsNormSite`'s own first-pass value instead. The independent reference
+// below calls `RmsNormSite` directly -- the SAME primitive `ApplyQkNormSite`'s own first pass
+// calls, with the identical gain and site_constant -- to reproduce that first-pass-only value,
+// then asserts the real call's own final row differs from it. The landing target is chosen a
+// full 2^5 away from the norm's own requant target, so a genuinely-relanded row is not a
+// rounding coincidence away from the norm-only reference.
+static void TestT2564_S4_ApplyQkNormSiteKLandsOnNewPostNormScaleNotJustNorm() {
+	using superslm::ApplyQkNormSite;
+	using superslm::CarriedScale;
+	using superslm::DynamicScaleReciprocal;
+	using superslm::LayerWeights;
+	using superslm::MutableKeyRow;
+	using superslm::RmsNormSite;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+
+	constexpr size_t kHeadDim = 2, kNumKvHeads = 1;
+	constexpr int64_t kContextCap = 1;
+	constexpr uint32_t kLayer = 0;
+
+	int32_t k_norm_gain[kHeadDim] = {16384, 16384};
+	const CarriedScale canonical{INT64_C(1073741824), INT64_C(-30)};       // k_norm's own requant target
+	const CarriedScale landing_target{INT64_C(1073741824), INT64_C(-25)};  // the NEW landing scale, 2^5 away
+	const int64_t landing_r_t = DynamicScaleReciprocal(landing_target.m);
+	int64_t k_norm_landing_r_t[kNumKvHeads] = {landing_r_t};
+	int64_t k_norm_landing_e_t[kNumKvHeads] = {landing_target.e};
+
+	LayerWeights lw{};
+	lw.k_norm_gain = k_norm_gain;
+	lw.k_norm_site_constant = canonical;
+	lw.k_norm_landing_r_t = k_norm_landing_r_t;
+	lw.k_norm_landing_e_t = k_norm_landing_e_t;
+
+	uint8_t workspace[1 * kContextCap * kNumKvHeads * kHeadDim * 2] = {};
+	int8_t* const k_row = MutableKeyRow(workspace, kLayer, kContextCap, kNumKvHeads, kHeadDim,
+	                                     /*kv_head=*/0, /*position=*/0);
+	const int8_t kRawK[kHeadDim] = {60, -40};
+	std::memcpy(k_row, kRawK, kHeadDim);
+
+	CarriedScale q_scales_unused[1] = {canonical};
+	int8_t q_codes_unused[1] = {0};
+	const auto status = ApplyQkNormSite(q_codes_unused, q_scales_unused, workspace, kLayer,
+	                                     kContextCap, /*position=*/0, /*num_heads=*/0, kNumKvHeads,
+	                                     kHeadDim, lw, "t2564_s4_k", /*token_index=*/0,
+	                                     /*trace_hook_state=*/nullptr);
+	CHECK_MSG(status == SslmForwardStatus::Ok, "ApplyQkNormSite(K-only, T-2564 S4) status == %s, want Ok",
+	          SslmForwardStatusName(status));
+	if (status != SslmForwardStatus::Ok) return;
+
+	int8_t relanded[kHeadDim];
+	std::memcpy(relanded, k_row, kHeadDim);
+
+	int8_t norm_only[kHeadDim];
+	std::memcpy(norm_only, kRawK, kHeadDim);
+	CarriedScale norm_only_scale{};
+	const auto norm_status = RmsNormSite(norm_only, k_norm_gain, kHeadDim, CarriedScale{}, canonical,
+	                                      norm_only, &norm_only_scale);
+	CHECK_MSG(norm_status == SslmForwardStatus::Ok,
+	          "independent RmsNormSite(K-norm-only reference, T-2564 S4) status == %s, want Ok",
+	          SslmForwardStatusName(norm_status));
+	if (norm_status != SslmForwardStatus::Ok) return;
+
+	CHECK_MSG(memcmp(relanded, norm_only, kHeadDim) != 0,
+	          "ApplyQkNormSite's own K row after the second landing (%d,%d) != the norm-only "
+	          "reference (%d,%d) -- RED if the second LandingRescale loop is deleted from "
+	          "ApplyQkNormSite (C2's own mutant), which would leave the row at exactly the "
+	          "norm-only value",
+	          relanded[0], relanded[1], norm_only[0], norm_only[1]);
+}
+
+// (T-2564, S3 -- Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md): the second K
+// landing's own clamp signal reached no counter before this fix (the CPU call passed
+// neither `LandingRescale` out-parameter; the GPU shader computed `would_clamp` and threw
+// it away) -- so `SslmDecodeStepStatus::saturation_count` silently under-reported whenever
+// this specific landing clamped. Landing target chosen (2^10 finer than the norm's own
+// requant target) to force both elements of a nonzero row to clamp, matching this file's
+// own `CriticalOneFixture`/`TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter`
+// precedent for the ORIGINAL K/V landing -- this is that same proof for the NEW second
+// landing, which that cell cannot reach (its own fixture carries no q_norm/k_norm gain).
+static void TestT2564_S3_ApplyQkNormSiteSecondKLandingCountsSaturation() {
+	using superslm::ApplyQkNormSite;
+	using superslm::CarriedScale;
+	using superslm::DynamicScaleReciprocal;
+	using superslm::LayerWeights;
+	using superslm::MutableKeyRow;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+
+	constexpr size_t kHeadDim = 2, kNumKvHeads = 1;
+	constexpr int64_t kContextCap = 1;
+	constexpr uint32_t kLayer = 0;
+
+	int32_t k_norm_gain[kHeadDim] = {16384, 16384};
+	const CarriedScale canonical{INT64_C(1073741824), INT64_C(-30)};
+	// A landing target 2^10 FINER than the norm's own requant target: any nonzero
+	// post-norm code lands at roughly 1024x its own norm-only magnitude, forcing a clamp
+	// to [-127,127] on both elements below (verified by execution, not assumed --
+	// StandardsDocument.md Sec5.4).
+	const CarriedScale landing_target{INT64_C(1073741824), INT64_C(-20)};
+	const int64_t landing_r_t = DynamicScaleReciprocal(landing_target.m);
+	int64_t k_norm_landing_r_t[kNumKvHeads] = {landing_r_t};
+	int64_t k_norm_landing_e_t[kNumKvHeads] = {landing_target.e};
+
+	LayerWeights lw{};
+	lw.k_norm_gain = k_norm_gain;
+	lw.k_norm_site_constant = canonical;
+	lw.k_norm_landing_r_t = k_norm_landing_r_t;
+	lw.k_norm_landing_e_t = k_norm_landing_e_t;
+
+	uint8_t workspace[1 * kContextCap * kNumKvHeads * kHeadDim * 2] = {};
+	int8_t* const k_row = MutableKeyRow(workspace, kLayer, kContextCap, kNumKvHeads, kHeadDim,
+	                                     /*kv_head=*/0, /*position=*/0);
+	const int8_t kRawK[kHeadDim] = {60, -40};
+	std::memcpy(k_row, kRawK, kHeadDim);
+
+	CarriedScale q_scales_unused[1] = {canonical};
+	int8_t q_codes_unused[1] = {0};
+	uint64_t saturation_count = 0;
+	const auto status = ApplyQkNormSite(q_codes_unused, q_scales_unused, workspace, kLayer,
+	                                     kContextCap, /*position=*/0, /*num_heads=*/0, kNumKvHeads,
+	                                     kHeadDim, lw, "t2564_s3_k", /*token_index=*/0,
+	                                     /*trace_hook_state=*/nullptr, &saturation_count);
+	CHECK_MSG(status == SslmForwardStatus::Ok, "ApplyQkNormSite(K-only, T-2564 S3) status == %s, want Ok",
+	          SslmForwardStatusName(status));
+	if (status != SslmForwardStatus::Ok) return;
+
+	const bool clamped = k_row[0] == INT8_C(127) || k_row[0] == INT8_C(-127) ||
+	                      k_row[1] == INT8_C(127) || k_row[1] == INT8_C(-127);
+	CHECK_MSG(clamped,
+	          "this cell's own construction landed (%d,%d) with neither element at the "
+	          "clamp bound -- the fixture no longer forces a clamp and this cell's own "
+	          "saturation claim below is not exercising what it claims to",
+	          k_row[0], k_row[1]);
+	CHECK_MSG(saturation_count > 0,
+	          "saturation_count after a deliberately-clamping second K landing == %llu, "
+	          "want > 0 -- RED if the count is dropped (the pre-fix CPU call passed no "
+	          "out-parameter at all, so this was always 0 regardless of what clamped)",
+	          static_cast<unsigned long long>(saturation_count));
+}
+
 // T-1691 (design Sec7 red-first proof part 8; D-SLM725, S11 dimension 1
 // corrected from NOT APPLICABLE): the K/V store's own lifetime cell -- an
 // early write via MutableKeyRow/MutableValueRow survives at least eight
@@ -27108,6 +27313,9 @@ int main(int argc, char** argv) {
 	// 2026-07-31.md §3, Cells 1-9).
 	TestRunLayerLoopQAndKWeightsAreLoadBearingOnceWidthReachesTwo();
 	TestKvRowAccessorHeadStrideIncludesContextCapFactor();
+	TestT2564_S4_ApplyQkNormSitePerHeadQScaleNotCollapsed();
+	TestT2564_S4_ApplyQkNormSiteKLandsOnNewPostNormScaleNotJustNorm();
+	TestT2564_S3_ApplyQkNormSiteSecondKLandingCountsSaturation();
 	TestKvStoreEarlyWriteSurvivesLateReadAcrossEightFurtherPositions();
 	TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast();
 	TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition();

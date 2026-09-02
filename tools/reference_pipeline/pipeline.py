@@ -2139,10 +2139,22 @@ def _derive_scales(cfg: ModelConfig, maxima, weight_scales, float_biases):
         # delta -- still read by `_derive_composition_constants`'s own separate
         # k_proj.requant site and by a non-QK-norm layer's own `softmax_khead`).
         k_normed_scale = None
+        softmax_k_scale = k_scale
         if k_norm_present:
             add_rescale(f"{prefix}.k_norm.requant", 1.0 / (1 << NORM_FRAC_BITS))
             k_norm_gain_scale = gain_of(f"{prefix}.k_norm.gain") / (1 << NORM_FRAC_BITS)
             k_normed_scale = _output_scale(maxima, f"{prefix}.k_normed", k_norm_gain_scale)
+            # (T-2564, C1 -- Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md): by the
+            # identical argument the Q branch above already makes, this file's own K codes
+            # after `k_norm.requant` are landed at `gain_of(k_norm.gain)` exactly, not at
+            # the pre-norm `k_scale` -- so `softmax.input`'s own product below must read
+            # the POST-norm value once k_norm fires, symmetric with q_scale's own
+            # reassignment three lines above. `k_scale` itself stays untouched (K's own
+            # RAW, pre-norm landing target -- still read by `_derive_composition_
+            # constants`'s own separate k_proj.requant site, by a non-QK-norm layer's own
+            # `softmax_khead`, and by this same block's own `softmax.input` product when
+            # k_norm is absent, below).
+            softmax_k_scale = gain_of(f"{prefix}.k_norm.gain")
 
         # C27's A-3-pinned per-head KV landing surface: static per-head scales as
         # nonlinear entries, constants of the artifact (D-SLM5's discipline on the
@@ -2155,7 +2167,8 @@ def _derive_scales(cfg: ModelConfig, maxima, weight_scales, float_biases):
             if k_norm_present:
                 nonlinear.append((f"{prefix}.k_normed_head{head}.scale", k_normed_scale))
 
-        nonlinear.append((f"{prefix}.softmax.input", q_scale * k_scale / math.sqrt(cfg.head_dim)))
+        nonlinear.append(
+            (f"{prefix}.softmax.input", q_scale * softmax_k_scale / math.sqrt(cfg.head_dim)))
 
         context_in = v_scale / (1 << PROB_FRAC_BITS)
         context_scale = _output_scale(maxima, f"{prefix}.attn_ctx", context_in)
@@ -2331,8 +2344,16 @@ def _derive_composition_constants(cfg: ModelConfig, weight_scales, scales: Stati
         # separate weight-reference to divide out.
         k_norm_present = f"{prefix}.k_norm.gain" in weight_scales
         if k_norm_present:
-            k_norm_gain_scale = gain_of(f"{prefix}.k_norm.gain") / (1 << NORM_FRAC_BITS)
-            k_normed_scale = _output_scale(maxima, f"{prefix}.k_normed", k_norm_gain_scale)
+            # (T-2564, M9 -- Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md): read
+            # `_derive_scales`'s own already-computed `k_normed_scale` (the `StaticScales`
+            # entry it stores per KV head, one shared value per layer) rather than
+            # re-deriving it a second time from `maxima` here -- the exact duplication this
+            # whole ask's own governing finding named ("an oracle with two forwards is a
+            # defect"), one level down: one FORMULA in two places rather than two
+            # independent forwards, but the same fix (one computation, read twice) applies.
+            # Any KV head's own entry carries the identical value (§4's own "one scale per
+            # K/V TENSOR" discipline), so head 0 is read unconditionally.
+            k_normed_scale = scales.scale(f"{prefix}.k_normed_head0.scale")
             m_t_kn, e_t_kn = canonical_scale(Fraction(k_normed_scale))
             r_t_kn = intmath.dynamic_scale_reciprocal(m_t_kn)
 

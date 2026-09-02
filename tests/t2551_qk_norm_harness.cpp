@@ -597,14 +597,15 @@ int main(int argc, char** argv) {
 		    kRepeatedDispatches, divergences, kRepeatedDispatches,
 		    divergences == 0 ? "PASS (must-accept)" : "FAIL");
 		// Must-reject twin (D-SLM6150): a disposable mutant reverting Q's per-head write back
-		// to the single, shared q_scale_off slot was NOT built this round -- constructing it
-		// requires a second qk_norm_site.hlsl compiled under a distinct pipeline name, which
-		// RunLayerLoopGpuSubmit's own dispatch table has no injection point for without a
-		// production-code change this round does not make. Filed per the delta's own
-		// sanctioned disposition (§7 Cell 4): "not demonstrated to fire on this GPU/driver" --
-		// the per-head-addressing fix removes the shared write by construction (confirmed by
-		// source reading, qk_norm_site.hlsl), unbacked here by an executed regression-catching
-		// proof. GPU/driver identity for this reading: see the build record.
+		// to the single, shared q_scale_off slot WAS built and executed, in a follow-up round
+		// this same session (T-2560 §3 Cell 4, T-2564): a scratch copy of the whole worktree
+		// with qk_norm_site.hlsl reverted there, RunLayerLoopGpuSubmit's own dispatch table
+		// having no injection point for a second variant under this binary without a further
+		// production-code change. 186 divergences across the same 100 repeated dispatches --
+		// the per-head-addressing fix's own closure of the race is backed by an executed
+		// regression-catching proof, not accepted by construction alone. Not committed (the
+		// mutant lived only in the scratch copy). GPU/driver identity for this reading: see
+		// the build record.
 		if (divergences != 0) qk_norm_ran = false;
 	}
 

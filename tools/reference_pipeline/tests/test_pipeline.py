@@ -1304,18 +1304,19 @@ def test_integer_pipeline_tracks_the_float_reference_per_layer():
     missing residual) and too wide to certify quantization damage — which is the spike's
     measurement, not this cell's.
 
-    **CORRECTED 2026-09-02 (T-2553):** widened 0.25 -> 0.6, re-measured against the
-    current tree. QK-norm's own K-side treatment matches the real engine's own accepted
-    approximation (`_derive_scales`'s own header comment on why `k_scale` is NOT
-    reassigned post-norm, unlike `q_scale`): K's own codes are renormalized, but no
-    downstream site tracks a post-norm K scale, so `softmax.input`'s own static half
-    stays calibrated against the pre-norm K distribution — a real, bounded, and expected
-    source of int8-vs-float divergence beyond pure requantization, on top of what this
-    cell already measured before QK-norm existed, and it compounds across this fixture's
-    two layers (measured: layer 0 at 0.129, comfortably under the OLD 0.25 bound; layer 1
-    at 0.554, over it). This remains far below the magnitude a genuinely structural bug
-    (a transposed head, a dropped residual) produces, which this cell's own docstring
-    already states is its actual job — a wider bound here does not weaken that job.
+    **CORRECTED 2026-09-02 (T-2553), then RESTORED 2026-09-02 (T-2564, C1):** T-2553
+    widened this bound 0.25 -> 0.6 because `softmax.input`'s own static half paired a
+    post-norm Q scale with a pre-norm K scale on every QK-norm-bearing layer (layer 1 at
+    0.554, over the OLD 0.25 bound) — not ordinary quantization noise but the same
+    composition failure C2 named for the engine, in the one arm C2's own fix did not
+    reach (`Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md` C1). `_derive_scales`
+    now reads the post-norm `k_norm.gain` scale for `softmax.input`'s K half, symmetric
+    with `q_scale`'s own reassignment three lines above it. Re-measured against the
+    corrected tree: layer 0 unchanged at 0.129, layer 1 drops to 0.125 — both back under
+    the original 0.25 bound, which is restored below. What 0.25 now bounds is ordinary
+    int8-vs-float64 rounding noise across the fixture's quantized sites, the same class
+    this cell's own docstring above states is its actual job — a transposed head or a
+    dropped residual still produces a far larger divergence than either reading.
     """
     module = require(MODULE)
     forward_layers, forward_layers_float, fixture_model = api(
@@ -1328,7 +1329,7 @@ def test_integer_pipeline_tracks_the_float_reference_per_layer():
         b = np.asarray(float_out, dtype=np.float64)
         assert a.shape == b.shape, f"layer {index} shape"
         denominator = max(float(np.abs(b).max()), 1.0)
-        assert float(np.abs(a - b).max()) / denominator <= 0.6, f"layer {index} diverged"
+        assert float(np.abs(a - b).max()) / denominator <= 0.25, f"layer {index} diverged"
 
 
 # ==============================================================================

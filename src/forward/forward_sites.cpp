@@ -1428,7 +1428,8 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
                                    uint32_t layer, int64_t context_cap, int64_t position,
                                    size_t num_heads, size_t num_key_value_heads, size_t head_dim,
                                    const LayerWeights& lw, std::string_view site_prefix,
-                                   size_t token_index, SslmTraceHookState* trace_hook_state) {
+                                   size_t token_index, SslmTraceHookState* trace_hook_state,
+                                   uint64_t* out_saturation_count) {
 	if (lw.q_norm_gain != nullptr) {
 		for (size_t h = 0; h < num_heads; ++h) {
 			int8_t* const q_head_row = q_codes + h * head_dim;
@@ -1461,7 +1462,8 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
 			for (size_t d = 0; d < head_dim; ++d) {
 				k_row[d] = static_cast<int8_t>(ClampRopeCode(
 				    LandingRescale(k_row[d], k_norm_scale.m, lw.k_norm_landing_r_t[kv_head],
-				                   k_norm_scale.e, lw.k_norm_landing_e_t[kv_head])));
+				                   k_norm_scale.e, lw.k_norm_landing_e_t[kv_head],
+				                   out_saturation_count)));
 			}
 		}
 	}
@@ -1823,7 +1825,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		if (!option_g_fused_k_landing) {
 			st = ApplyQkNormSite(q_codes.data(), q_scales.data(), workspace, l, context_cap, position,
 			                     num_heads, num_key_value_heads, head_dim, lw, site_prefix,
-			                     token_index, trace_hook_state);
+			                     token_index, trace_hook_state, &seq.kv_saturation_count);
 			if (st != SslmForwardStatus::Ok) return st;
 		}
 
@@ -2334,7 +2336,7 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 				st = ApplyQkNormSite(q_codes.data() + t * effective_q_width, q_scales_h.data(),
 				                     workspace, l, context_cap, position, num_heads,
 				                     num_key_value_heads, head_dim, lw, site_prefix, t,
-				                     trace_hook_state);
+				                     trace_hook_state, kv_saturation_count);
 				if (st != SslmForwardStatus::Ok) return st;
 			}
 

@@ -724,7 +724,16 @@ struct LayerWeights {
 	// post-norm data, distinct from `kv_landing_r_t_k`/`kv_landing_e_t_k` below (K's raw,
 	// pre-norm landing). `num_key_value_heads` elements each; meaningless when `k_norm_gain`
 	// above is nullptr -- the identical "meaningless when absent" convention as
-	// `q_norm_site_constant`/`k_norm_site_constant`, immediately above.
+	// `q_norm_site_constant`/`k_norm_site_constant`, immediately above. **The obligation runs
+	// the other direction too (T-2564, M8 --
+	// `Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md`): REQUIRED non-null whenever
+	// `k_norm_gain` above is non-null.** `ApplyQkNormSite` (`forward_sites.cpp`) dereferences
+	// both, per KV head, unconditionally once the outer `k_norm_gain != nullptr` gate is taken,
+	// with no null check of its own on these two pointers specifically -- `MarshalLayer` is the
+	// only in-tree producer and sets all three together (asymmetric presence rejected before
+	// either is read, `layer_marshal.h`), but this is a public exported header, and a caller
+	// that constructs a `LayerWeights` outside `MarshalLayer` with `k_norm_gain` set and either
+	// of these left null reaches an unguarded null-pointer dereference.
 	const int64_t* k_norm_landing_r_t = nullptr;  // num_key_value_heads, or nullptr
 	const int64_t* k_norm_landing_e_t = nullptr;  // num_key_value_heads, or nullptr
 	// §8.1: per-(head, projection) K/V landing reciprocal/exponent, from
@@ -1104,11 +1113,20 @@ int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
 // `q_norm`/`k_norm` presence with `option_g_fused_k_landing = true` is a defined convert/
 // load-time rejection (`MarshalLayer`, §4/§6 Track B step 5) -- this function does not itself
 // re-check the flag, matching the K RoPE write-back loop's own identical caller-side gate.
+//
+// `out_saturation_count` (T-2564, S2 -- `Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md`
+// S3): the second K landing's own `LandingRescale` call threads this through exactly like
+// `LandTokenKVRow`'s three calls do, so a clamp at the post-norm landing counts toward the
+// SAME host-facing `SslmDecodeStepStatus::saturation_count` the pre-norm landing already
+// feeds -- one counter, every landing site. Defaults to `nullptr`, matching
+// `LandingRescale`'s own convention; every pre-existing caller that does not pass it compiles
+// unchanged.
 SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8_t* workspace,
                                    uint32_t layer, int64_t context_cap, int64_t position,
                                    size_t num_heads, size_t num_key_value_heads, size_t head_dim,
                                    const LayerWeights& lw, std::string_view site_prefix,
-                                   size_t token_index, SslmTraceHookState* trace_hook_state);
+                                   size_t token_index, SslmTraceHookState* trace_hook_state,
+                                   uint64_t* out_saturation_count = nullptr);
 
 // --- S3.6: the head and the greedy decode loop (SuperSLM_S3a_WalkingSkeleton_
 // Plan.md §11 S3.6; §9.1; master plan §6.4; C16). This is

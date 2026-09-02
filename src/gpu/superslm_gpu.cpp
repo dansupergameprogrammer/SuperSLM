@@ -953,10 +953,17 @@ std::vector<uint8_t> PackLayerWeightsBytes(const superslm::LayerWeights* layers,
 				PutI64At(lw_bytes, base + layout.off[61] + 8, lw.k_norm_site_constant.e);
 				// (carried-scale delta §4/§7 Cell 8, D-SLM6117/D-SLM6146): K's second, post-norm
 				// landing scale -- present iff k_norm_gain is (asymmetric presence is already a
-				// rejected marshal state, layer_marshal.h).
+				// rejected marshal state, layer_marshal.h). Guarded per-element with the same
+				// ternary fallback `iexp_softmax_khead_m`/`_e` already use above (T-2564, M8):
+				// this branch's own `k_norm_gain != nullptr` gate already makes these two
+				// non-null on every path this function itself constructs, but a caller
+				// constructing `LayerWeights` by hand -- the public contract this header
+				// exports -- gets a safe no-op rather than a null dereference if it doesn't.
 				for (uint32_t i = 0; i < NH; ++i) {
-					PutI64At(lw_bytes, base + layout.off[62] + i * 8, lw.k_norm_landing_r_t[i]);
-					PutI64At(lw_bytes, base + layout.off[63] + i * 8, lw.k_norm_landing_e_t[i]);
+					PutI64At(lw_bytes, base + layout.off[62] + i * 8,
+					         lw.k_norm_landing_r_t != nullptr ? lw.k_norm_landing_r_t[i] : 0);
+					PutI64At(lw_bytes, base + layout.off[63] + i * 8,
+					         lw.k_norm_landing_e_t != nullptr ? lw.k_norm_landing_e_t[i] : 0);
 				}
 			}
 		}

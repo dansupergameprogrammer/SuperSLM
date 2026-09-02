@@ -76,6 +76,12 @@ RWByteAddressBuffer WorkScratch   : register(u3);
 
 static const int kNormFracBitsGpu = 16;
 
+// (T-2564, S3 -- Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md): the second K
+// landing's own clamp count, per group -- mirrors kv_proj_site.hlsl's own gTotalClamps,
+// declared separately here because each .hlsl file compiles to its own shader and does
+// not share groupshared storage with another file's declaration of the same name.
+groupshared uint gQkNormClamps;
+
 [numthreads(256, 1, 1)]
 void main(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 {
@@ -199,6 +205,20 @@ void main(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
         // relands it, and stores it packed into KvCache, in place.
         uint k_stage_off = qk_norm_k_stage_base + head * (uint)head_dim * 4u;
         uint k_scale_off = qk_norm_k_scale_base + head * 16u;
+        // (T-2564, S2 -- Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md): the scale
+        // word at k_scale_off is written by thread 0 alone, inside
+        // RequantChainCheckedFullGpuP (site_common.hlsli's own store under `if (t == 0)`),
+        // and every thread of this group reads it back below. Without a barrier between
+        // that store and this load, a thread reaching this point before thread 0 reaches
+        // its own store reads a stale/uninitialized word -- probe-commissioned: masked on
+        // this GPU/driver (0/100), reproduced 100/100 with a must-reject control. The same
+        // primitive appears 46 lines above this call for the identical reason.
+        // AllMemoryBarrierWithGroupSync (not DeviceMemoryBarrierWithGroupSync alone): this
+        // barrier also has to make gQkNormClamps's own zero-init below (S3) visible to
+        // every thread before any InterlockedAdd against it, which is a groupshared-memory
+        // ordering guarantee DeviceMemoryBarrierWithGroupSync does not make.
+        if (t == 0) gQkNormClamps = 0;
+        AllMemoryBarrierWithGroupSync();
         int64_t normed_m = WorkScratch.Load<int64_t>(k_scale_off + 0);
         int64_t normed_e = WorkScratch.Load<int64_t>(k_scale_off + 8);
         uint off_k_norm_r_t = layer_base + Layout.Load<uint>(63 * 4);
@@ -209,8 +229,33 @@ void main(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
             int64_t code = (int64_t)WorkScratch.Load<int>(k_stage_off + (uint)i * 4u);
             bool would_clamp, mag_exceeded;
             int64_t raw = LandingRescaleGpu(code, normed_m, r_t, normed_e, e_t, would_clamp, mag_exceeded);
+            // (T-2564, S3 -- Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md): the
+            // second K landing's own clamp signal, computed and discarded before this fix
+            // -- now counted the way kv_proj_site.hlsl counts its own K/V landing clamps,
+            // four lines away.
+            if (would_clamp) InterlockedAdd(gQkNormClamps, 1u);
             int64_t landed = ClampRopeCodeGpu(raw);
             StoreSignedByteGpu(KvCache, k_row_off + (uint)i, (int)landed);
+        }
+        // This dispatch issues one thread group PER KV head (unlike kv_proj_site.hlsl's
+        // single group), so multiple groups can reach this flush concurrently -- a plain
+        // Load-then-Store here would be the identical cross-group lost-update race
+        // StoreSignedByteGpu's own header comment already documents and closes for the
+        // K/V cache byte writes. InterlockedAdd on the RWByteAddressBuffer itself (the
+        // established primitive, site_common.hlsli's own StoreSignedByteGpu) keeps the
+        // lo-word accumulation atomic across groups; the hi-word carry is detected from
+        // this group's own InterlockedAdd's returned pre-image, which is correct
+        // regardless of what any other concurrent group's own add does to the same word.
+        GroupMemoryBarrierWithGroupSync();
+        if (t == 0 && gQkNormClamps != 0) {
+            uint sat_lo_off = SeqSatLoOffGpu(hidden_size);
+            uint sat_hi_off = SeqSatHiOffGpu(hidden_size);
+            uint old_lo;
+            SeqState.InterlockedAdd(sat_lo_off, gQkNormClamps, old_lo);
+            if (old_lo + gQkNormClamps < old_lo) {
+                uint old_hi;
+                SeqState.InterlockedAdd(sat_hi_off, 1u, old_hi);
+            }
         }
     }
 }
