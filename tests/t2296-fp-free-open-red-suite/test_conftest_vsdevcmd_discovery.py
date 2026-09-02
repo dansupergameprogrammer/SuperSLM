@@ -168,3 +168,36 @@ def test_vswhere_version_range_is_passed_to_the_real_query():
     assert call_args[version_idx + 1] == _fixture_module._VSWHERE_VERSION_RANGE, (
         "the real vswhere invocation must pass this module's own _VSWHERE_VERSION_RANGE "
         "immediately after -version -- got {}".format(call_args))
+
+
+def test_buildtools_sort_key_is_adopted_at_the_real_call_site_not_only_in_the_helper():
+    """T-2535 (Poirot 2945361-t2534-superslm-ci-green-confirmation2.md M-1): mirrors
+    `test_fp_scan_common_vsdevcmd_discovery.py`'s own cell of the same shape -- the O-1 pin here
+    (`test_path_has_segment_rejects_a_substring_that_is_not_a_whole_path_component`, above) calls
+    `_path_has_segment` directly and never exercises the real call site that adopted it
+    (`_vswhere_vsdevcmd_candidates`'s own sort key, line 170) -- reverting that ONE line back to
+    the raw substring test `0 if "BuildTools" in c else 1` left every existing cell in this file
+    green. `vswhere` reports an adversarial path whose LONGER component contains "BuildTools" as a
+    mere substring (`BuildToolsBackup`) FIRST, and the real BuildTools install SECOND; under the
+    raw substring test both tie at sort key 0 and the adversarial one stays first (stable sort);
+    under the adopted `_path_has_segment` fix, only the real install matches the whole-segment
+    test and must sort first regardless of report order.
+    """
+    adversarial = r"C:\BuildToolsBackup\Microsoft Visual Studio\2022\Enterprise"
+    real_buildtools = r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools"
+    fake_stdout = "{}\n{}\n".format(adversarial, real_buildtools)  # adversarial reported FIRST
+    fake_result = subprocess.CompletedProcess(
+        args=["vswhere.exe"], returncode=0, stdout=fake_stdout, stderr="")
+
+    def _fake_exists(path):
+        return path == _fixture_module._VSWHERE_PATH
+
+    with mock.patch.object(_fixture_module.os.path, "exists", side_effect=_fake_exists), \
+         mock.patch.object(_fixture_module.subprocess, "run", return_value=fake_result):
+        candidates = _fixture_module._vswhere_vsdevcmd_candidates()
+
+    assert candidates[0] == os.path.join(real_buildtools, "Common7", "Tools", "VsDevCmd.bat"), (
+        "the REAL call site (_vswhere_vsdevcmd_candidates's own sort key) must resolve the real "
+        "BuildTools install first, not an adversarial path that merely contains the word as a "
+        "substring of a longer component; got {}".format(candidates)
+    )

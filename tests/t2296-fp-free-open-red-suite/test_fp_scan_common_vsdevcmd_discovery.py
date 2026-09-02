@@ -155,3 +155,38 @@ def test_path_has_segment_rejects_a_substring_that_is_not_a_whole_path_component
     assert _fixture_module._path_has_segment(
         r"C:\Program Files\Microsoft Visual Studio\2022\COMMUNITY", "Community"
     ), "the match must stay case-insensitive"
+
+
+def test_community_sort_key_is_adopted_at_the_real_call_site_not_only_in_the_helper():
+    """T-2535 (Poirot 2945361-t2534-superslm-ci-green-confirmation2.md M-1): the O-1 pin
+    (`test_path_has_segment_rejects_a_substring_that_is_not_a_whole_path_component`, above) calls
+    `_path_has_segment` directly and never exercises the real call site that adopted it
+    (`_vswhere_vsdevcmd_candidates`'s own sort key, line 117) -- reverting that ONE line back to
+    the raw substring test `0 if "Community" in p else 1` left every existing cell in this file
+    green, because none of them constructs a path where the raw substring test and
+    `_path_has_segment` disagree. This cell does: `vswhere` reports an adversarial path whose
+    LONGER component contains "Community" as a mere substring (`CommunityUser`, a stand-in for a
+    Windows account or relocated directory carrying that word) FIRST, and the real Community
+    install SECOND -- under the raw substring test both tie at sort key 0 and Python's stable sort
+    keeps the adversarial one first (the wrong install resolved silently); under the adopted
+    `_path_has_segment` fix, only the real install matches the whole-segment test, and it must
+    sort first regardless of report order.
+    """
+    adversarial = r"C:\Users\CommunityUser\Microsoft Visual Studio\2022\Enterprise"
+    real_community = r"C:\Program Files\Microsoft Visual Studio\2022\Community"
+    fake_stdout = "{}\n{}\n".format(adversarial, real_community)  # adversarial reported FIRST
+    fake_result = subprocess.CompletedProcess(
+        args=["vswhere.exe"], returncode=0, stdout=fake_stdout, stderr="")
+
+    def _fake_exists(path):
+        return path == _fixture_module._VSWHERE_PATH
+
+    with mock.patch.object(_fixture_module.os.path, "exists", side_effect=_fake_exists), \
+         mock.patch.object(_fixture_module.subprocess, "run", return_value=fake_result):
+        candidates = _fixture_module._vswhere_vsdevcmd_candidates()
+
+    assert candidates[0] == os.path.join(real_community, "Common7", "Tools", "VsDevCmd.bat"), (
+        "the REAL call site (_vswhere_vsdevcmd_candidates's own sort key) must resolve the real "
+        "Community install first, not an adversarial path that merely contains the word as a "
+        "substring of a longer component; got {}".format(candidates)
+    )
