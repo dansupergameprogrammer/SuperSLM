@@ -91,6 +91,63 @@ def _parse_merge_element(m, index):
     )
 
 
+def _require_type(value, expected_type, context):
+    """The one validating accessor every field this module reads off the
+    `post_processor` subtree goes through (T-2546 Finding B, Poirot, closing the
+    class rather than the two newest instances -- an unhashable `SpecialToken.id`
+    raising a raw `TypeError`, and `ids: [null]` silently returning `None`, the
+    vacuous value -- after three consecutive rounds each closed the constructions
+    they were handed and left the same escape one level deeper). `expected_type`
+    is always a single Python type, never a tuple of alternatives: the schema
+    below states exactly one type per field. `bool` is excluded from `int` --
+    JSON's boolean and integer both deserialize through Python's `bool`/`int`,
+    with `bool` a subclass of `int`, so an unqualified `isinstance(x, int)` would
+    silently accept `True`/`False` as a token id. Raises `UnsupportedTokenizerShape`
+    by name -- never a raw `AttributeError`/`KeyError`/`TypeError` -- naming the
+    context, the expected type, and the actual value."""
+    if expected_type is int and isinstance(value, bool):
+        raise UnsupportedTokenizerShape(f"{context}: expected int, got bool: {value!r}")
+    if not isinstance(value, expected_type):
+        raise UnsupportedTokenizerShape(
+            f"{context}: expected {expected_type.__name__}, got {type(value).__name__}: {value!r}"
+        )
+    return value
+
+
+def _require_key(mapping, key, expected_type, context):
+    """Reads `mapping[key]`, routed entirely through `_require_type` on both the
+    mapping itself and the resolved value -- no caller of this function ever
+    indexes a dict directly. A missing key is its own named rejection rather than
+    a silent `{}`/`None` default standing in for "absent" (the field is one the
+    code reads, so its absence is exactly as reportable as its wrong type)."""
+    _require_type(mapping, dict, context)
+    if key not in mapping:
+        raise UnsupportedTokenizerShape(f"{context}: missing key {key!r}")
+    return _require_type(mapping[key], expected_type, f"{context}.{key}")
+
+
+def _require_list_of(value, length, elem_type, context):
+    """A list of exactly `length` elements, each of exactly `elem_type` -- the
+    cardinality half of the schema, paired with `_require_type`'s typing half."""
+    _require_type(value, list, context)
+    if len(value) != length:
+        raise UnsupportedTokenizerShape(
+            f"{context}: expected a list of length {length}, got length {len(value)}: {value!r}"
+        )
+    return [_require_type(elem, elem_type, f"{context}[{i}]") for i, elem in enumerate(value)]
+
+
+# The one place either narrowing (T-2542 Finding 2, D-SLM6052) rejects a Sequence
+# post-processor's shape outright, which blocks the whole checkpoint's conversion
+# rather than only its trailing-id extraction (T-2546 Finding E, Poirot): `_classify_
+# post_processor` has exactly one caller, `TokenizerTables.__init__`, above every
+# emit path, so this text is repeated in each of the two rejections it can reach.
+_SEQUENCE_SHAPE_NOTE = (
+    ' -- rejecting this checkpoint\'s "post_processor" blocks the whole checkpoint '
+    "from converting, not only its trailing-id extraction (T-2546 Finding E, D-SLM6052)"
+)
+
+
 def _classify_post_processor(pp):
     """Reads the top-level `post_processor` key (`TOK-06`, root cause of D-SLM5574;
     t2408 §2.9, §6 Track E step 2) and exposes whether the tokenizer's own
@@ -104,31 +161,42 @@ def _classify_post_processor(pp):
     incumbent observed in this project) carries no trailing-append fact -- returns
     `None`. A `Sequence` whose own `processors` is EXACTLY two members, in order --
     a bare `"ByteLevel"` processor, then a `TemplateProcessing` whose own `single`
-    template is exactly `[{"Sequence": ...}, {"SpecialToken": ...}]` (the candidate's
-    own shape) -- resolves the appended token's numeric id from that
-    `TemplateProcessing`'s own `special_tokens` map and returns it. Any other shape
-    -- a bare, non-`"ByteLevel"` top-level type; a `Sequence` whose own `processors`
-    is not exactly `[ByteLevel, TemplateProcessing]` in that order (T-2542 Finding 2,
-    D-SLM6052: a third member, a different order, or a member other than
-    `TemplateProcessing` in the second position is a silent guess that would report
-    `trailing_special_id` as the whole append when a sibling processor also inserts
-    tokens -- the same vacuousness class D-SLM5619 found and D-SLM5631 repaired one
-    level up, ruled by the conductor as narrowing past the frozen design's own N3
-    discipline rather than a design change); a `single` template of a different
-    length; the `Sequence`/`SpecialToken` entries in the wrong order; or an id the
-    `special_tokens` map does not resolve to exactly one entry -- is an explicit
-    rejection, never a silent guess (narrowed fold round 13, D-SLM5631, closing
-    D-SLM5619's found vacuousness). Every sub-object this function reads is
-    type-checked before being indexed into (T-2542 Finding 5, Poirot): `pp` itself,
-    a `Sequence` member, the `SpecialToken` entry, and the `special_tokens` map and
-    its own resolved entry each raise `UnsupportedTokenizerShape` by name rather
-    than a raw `AttributeError`/`KeyError` when malformed."""
+    template is exactly `[{"Sequence": ...}, {"SpecialToken": {"id": <str>}}]` and
+    whose own `special_tokens[<that str>].ids` is exactly `[<int>]` (the candidate's
+    own shape) -- resolves that one int and returns it.
+
+    THE SCHEMA (T-2546 Finding B, Poirot): every field read off this subtree has a
+    declared Python type and, where it is a list, a declared length, and every read
+    goes through `_require_type` / `_require_key` / `_require_list_of` above --
+    there is no direct dict index or attribute access anywhere below this line, so
+    there is no level left below the schema for a malformation to sit at. `pp`
+    itself: `dict`. `pp["type"]`: not schema-checked beyond equality, since it is
+    the discriminator the two branches above already switch on. `processors`:
+    `list[dict]`, length 2. Each processor's own `"type"`: `str`, compared for
+    equality (`"ByteLevel"`, `"TemplateProcessing"`). `single`: `list[dict]`, length
+    2. The `SpecialToken` entry: `dict` with a `"id"` key of type `str` -- string,
+    not the raw JSON value, because that string becomes a `special_tokens` mapping
+    key next, and an unhashable key (a list or dict, the T-2546 Finding B `TypeError`)
+    can never be a valid mapping key in the first place. `special_tokens`: `dict`.
+    Its resolved entry: `dict` with an `"ids"` key of type `list[int]`, length 1 --
+    `int`, not merely "not `None`", because a `null` in that position (the T-2546
+    Finding B silent alias) is `NoneType`, which fails `_require_type(..., int, ...)`
+    exactly like any other wrong type, rather than passing an `is not None` check
+    and returning the vacuous value.
+
+    Any shape the schema above does not admit is an explicit `UnsupportedTokenizerShape`
+    rejection, never a silent guess (N3 discipline). This includes: a bare,
+    non-`"ByteLevel"` top-level type; a `Sequence` whose own `processors` is not
+    exactly `[ByteLevel, TemplateProcessing]` in that order (T-2542 Finding 2,
+    D-SLM6052 -- the same vacuousness class D-SLM5619 found and D-SLM5631 repaired
+    one level up, ruled by the conductor as narrowing past the frozen design's own
+    N3 discipline rather than a design change); a `single` template of a different
+    length or shape; the `Sequence`/`SpecialToken` entries in the wrong order; a
+    `SpecialToken.id` that is not a string; a `special_tokens` map, or its resolved
+    entry, that is not a mapping; or an `ids` that is not exactly one integer."""
     if pp is None:
         return None
-    if not isinstance(pp, dict):
-        raise UnsupportedTokenizerShape(
-            f"post_processor: is a {type(pp).__name__}, not a mapping (or None): {pp!r}"
-        )
+    _require_type(pp, dict, "post_processor")
     pp_type = pp.get("type")
     if pp_type == "ByteLevel":
         return None
@@ -137,50 +205,48 @@ def _classify_post_processor(pp):
             f"post_processor: unrecognized top-level type {pp_type!r} "
             f'(expected None, "ByteLevel", or "Sequence")'
         )
-    processors = pp.get("processors", [])
-    processor_types = [p.get("type") if isinstance(p, dict) else type(p).__name__ for p in processors] \
-        if isinstance(processors, list) else type(processors).__name__
-    if not (isinstance(processors, list) and len(processors) == 2
-            and processor_types[0] == "ByteLevel" and processor_types[1] == "TemplateProcessing"):
+    processors = _require_key(pp, "processors", list, "post_processor")
+    if len(processors) != 2:
+        types = [p.get("type") if isinstance(p, dict) else type(p).__name__ for p in processors]
         raise UnsupportedTokenizerShape(
-            f"post_processor: Sequence.processors is {processor_types!r} "
+            f"post_processor: Sequence.processors is {types!r} "
             f'(expected exactly two members, in order: ["ByteLevel", "TemplateProcessing"])'
+            + _SEQUENCE_SHAPE_NOTE
+        )
+    bytelevel_type = _require_key(processors[0], "type", str, "post_processor.processors[0]")
+    if bytelevel_type != "ByteLevel":
+        raise UnsupportedTokenizerShape(
+            f'post_processor.processors[0].type: expected "ByteLevel", got {bytelevel_type!r}'
+            + _SEQUENCE_SHAPE_NOTE
         )
     template_proc = processors[1]
-    single = template_proc.get("single")
-    if not (isinstance(single, list) and len(single) == 2):
-        got = len(single) if isinstance(single, list) else type(single).__name__
+    template_type = _require_key(template_proc, "type", str, "post_processor.processors[1]")
+    if template_type != "TemplateProcessing":
         raise UnsupportedTokenizerShape(
-            f"post_processor: TemplateProcessing.single has {got} entries "
-            f"(expected exactly 2: Sequence, SpecialToken)"
+            f'post_processor.processors[1].type: expected "TemplateProcessing", got {template_type!r}'
+            + _SEQUENCE_SHAPE_NOTE
         )
+    single = _require_key(template_proc, "single", list, "post_processor.processors[1]")
+    single = _require_list_of(single, 2, dict, "post_processor.processors[1].single")
     seq_entry, special_entry = single
-    if (not isinstance(seq_entry, dict) or not isinstance(special_entry, dict)
-            or "Sequence" not in seq_entry or "SpecialToken" not in special_entry):
+    if "Sequence" not in seq_entry:
         raise UnsupportedTokenizerShape(
-            f"post_processor: TemplateProcessing.single entries are not in the "
-            f"expected order (Sequence, SpecialToken): {single!r}"
+            f"post_processor.processors[1].single[0]: missing key 'Sequence' "
+            f"(entries not in the expected order, Sequence then SpecialToken): {single!r}"
         )
-    special_token_obj = special_entry["SpecialToken"]
-    if not isinstance(special_token_obj, dict) or "id" not in special_token_obj:
+    special_token_obj = _require_key(special_entry, "SpecialToken", dict,
+                                      "post_processor.processors[1].single[1]")
+    special_content_id = _require_key(special_token_obj, "id", str,
+                                       "post_processor.processors[1].single[1].SpecialToken")
+    special_tokens_map = _require_key(template_proc, "special_tokens", dict, "post_processor.processors[1]")
+    if special_content_id not in special_tokens_map:
         raise UnsupportedTokenizerShape(
-            f"post_processor: TemplateProcessing.single's SpecialToken entry is "
-            f"malformed, no \"id\" key: {special_token_obj!r}"
+            f"post_processor.processors[1].special_tokens: missing key {special_content_id!r}"
         )
-    special_content_id = special_token_obj["id"]
-    special_tokens_map = template_proc.get("special_tokens", {})
-    if not isinstance(special_tokens_map, dict):
-        raise UnsupportedTokenizerShape(
-            f"post_processor: TemplateProcessing.special_tokens is a "
-            f"{type(special_tokens_map).__name__}, not a mapping: {special_tokens_map!r}"
-        )
-    entry = special_tokens_map.get(special_content_id)
-    ids = entry.get("ids") if isinstance(entry, dict) else None
-    if not (isinstance(ids, list) and len(ids) == 1):
-        raise UnsupportedTokenizerShape(
-            f"post_processor: special_tokens[{special_content_id!r}] does not resolve "
-            f"to exactly one id (got {ids!r})"
-        )
+    entry_ctx = f"post_processor.processors[1].special_tokens[{special_content_id!r}]"
+    entry = _require_type(special_tokens_map[special_content_id], dict, entry_ctx)
+    ids = _require_key(entry, "ids", list, entry_ctx)
+    ids = _require_list_of(ids, 1, int, f"{entry_ctx}.ids")
     return ids[0]
 
 

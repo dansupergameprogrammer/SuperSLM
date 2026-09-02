@@ -294,7 +294,7 @@ def test_classify_post_processor_rejects_the_two_recognized_members_out_of_order
     recognized types."""
     pp = _candidate_shaped_post_processor()
     pp["processors"] = list(reversed(pp["processors"]))
-    with pytest.raises(CT.UnsupportedTokenizerShape, match="Sequence.processors is"):
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="post_processor.processors"):
         CT._classify_post_processor(pp)
 
 
@@ -312,7 +312,7 @@ def test_classify_post_processor_rejects_a_single_bytelevel_only_sequence():
 def test_classify_post_processor_rejects_a_single_template_of_the_wrong_length():
     pp = _candidate_shaped_post_processor()
     pp["processors"][1]["single"].append({"SpecialToken": {"id": "<|endoftext|>", "type_id": 0}})
-    with pytest.raises(CT.UnsupportedTokenizerShape, match="has 3 entries"):
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="length 2, got length 3"):
         CT._classify_post_processor(pp)
 
 
@@ -326,14 +326,14 @@ def test_classify_post_processor_rejects_sequence_and_specialtoken_in_the_wrong_
 def test_classify_post_processor_rejects_an_id_the_special_tokens_map_does_not_resolve():
     pp = _candidate_shaped_post_processor()
     pp["processors"][1]["special_tokens"]["<|endoftext|>"]["ids"] = [151643, 151644]
-    with pytest.raises(CT.UnsupportedTokenizerShape, match="does not resolve to exactly one id"):
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="length 1, got length 2"):
         CT._classify_post_processor(pp)
 
 
 def test_classify_post_processor_rejects_an_unresolvable_special_token_reference():
     pp = _candidate_shaped_post_processor()
     del pp["processors"][1]["special_tokens"]["<|endoftext|>"]
-    with pytest.raises(CT.UnsupportedTokenizerShape, match="does not resolve to exactly one id"):
+    with pytest.raises(CT.UnsupportedTokenizerShape, match=r"missing key '<\|endoftext\|>'"):
         CT._classify_post_processor(pp)
 
 
@@ -348,14 +348,14 @@ def test_classify_post_processor_rejects_an_unresolvable_special_token_reference
 def test_classify_post_processor_rejects_a_bare_string_top_level_value_by_name():
     """`post_processor` itself is a string, not a mapping -- `pp.get("type")` would
     have raised `AttributeError: 'str' object has no attribute 'get'`."""
-    with pytest.raises(CT.UnsupportedTokenizerShape, match="not a mapping"):
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="expected dict, got str"):
         CT._classify_post_processor("ByteLevel")
 
 
 def test_classify_post_processor_rejects_a_bare_list_top_level_value_by_name():
     """`post_processor` itself is a list -- the same `AttributeError` class as
     above, one level up from where the reviewer's own example fired it."""
-    with pytest.raises(CT.UnsupportedTokenizerShape, match="not a mapping"):
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="expected dict, got list"):
         CT._classify_post_processor([])
 
 
@@ -365,11 +365,11 @@ def test_classify_post_processor_rejects_a_non_dict_sequence_member_by_name():
     same `AttributeError` one level into the Sequence's own `processors`."""
     pp = _candidate_shaped_post_processor()
     pp["processors"][0] = "ByteLevel"
-    with pytest.raises(CT.UnsupportedTokenizerShape, match="Sequence.processors is"):
+    with pytest.raises(CT.UnsupportedTokenizerShape, match=r"post_processor.processors\[0\]"):
         CT._classify_post_processor(pp)
     pp2 = _candidate_shaped_post_processor()
     pp2["processors"][0] = []
-    with pytest.raises(CT.UnsupportedTokenizerShape, match="Sequence.processors is"):
+    with pytest.raises(CT.UnsupportedTokenizerShape, match=r"post_processor.processors\[0\]"):
         CT._classify_post_processor(pp2)
 
 
@@ -378,7 +378,7 @@ def test_classify_post_processor_rejects_a_specialtoken_entry_missing_id_by_name
     ["id"]` would have raised `KeyError: 'id'`."""
     pp = _candidate_shaped_post_processor()
     del pp["processors"][1]["single"][1]["SpecialToken"]["id"]
-    with pytest.raises(CT.UnsupportedTokenizerShape, match="SpecialToken.*malformed"):
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="missing key 'id'"):
         CT._classify_post_processor(pp)
 
 
@@ -388,7 +388,7 @@ def test_classify_post_processor_rejects_a_non_dict_special_tokens_map_by_name()
     `AttributeError: 'list' object has no attribute 'get'`."""
     pp = _candidate_shaped_post_processor()
     pp["processors"][1]["special_tokens"] = []
-    with pytest.raises(CT.UnsupportedTokenizerShape, match="not a mapping"):
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="expected dict, got list"):
         CT._classify_post_processor(pp)
 
 
@@ -398,7 +398,66 @@ def test_classify_post_processor_rejects_a_non_dict_special_tokens_entry_by_name
     deeper than the case above."""
     pp = _candidate_shaped_post_processor()
     pp["processors"][1]["special_tokens"]["<|endoftext|>"] = []
-    with pytest.raises(CT.UnsupportedTokenizerShape, match="does not resolve to exactly one id"):
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="expected dict, got list"):
+        CT._classify_post_processor(pp)
+
+
+# ==============================================================================
+# T-2546 Finding B (Poirot): the malformation escape survived one level deeper
+# than Finding 5 reached, under a docstring that claimed absolutely it did not.
+# These four are the reviewer's own reproduction, verbatim -- an unhashable
+# SpecialToken.id (RAW TypeError) and an ids element that is not an integer
+# (silently RETURNED the wrong value, including None, the vacuous value).
+# ==============================================================================
+
+
+def test_classify_post_processor_rejects_an_unhashable_list_special_token_id_by_name():
+    """`SpecialToken.id` is a LIST -- previously a RAW `TypeError: unhashable
+    type: 'list'` when that value was used as a `special_tokens` mapping key."""
+    pp = _candidate_shaped_post_processor()
+    pp["processors"][1]["single"][1]["SpecialToken"]["id"] = ["<|endoftext|>"]
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="expected str, got list"):
+        CT._classify_post_processor(pp)
+
+
+def test_classify_post_processor_rejects_an_unhashable_dict_special_token_id_by_name():
+    """`SpecialToken.id` is a DICT -- the same RAW `TypeError` class as above."""
+    pp = _candidate_shaped_post_processor()
+    pp["processors"][1]["single"][1]["SpecialToken"]["id"] = {"content": "<|endoftext|>"}
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="expected str, got dict"):
+        CT._classify_post_processor(pp)
+
+
+def test_classify_post_processor_rejects_a_string_id_in_the_ids_list_by_name():
+    """`special_tokens[...].ids = ["151643"]` -- a STRING where the schema
+    requires an int -- previously silently RETURNED the string '151643'."""
+    pp = _candidate_shaped_post_processor()
+    pp["processors"][1]["special_tokens"]["<|endoftext|>"]["ids"] = ["151643"]
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="expected int, got str"):
+        CT._classify_post_processor(pp)
+
+
+def test_classify_post_processor_rejects_a_null_id_in_the_ids_list_by_name():
+    """`special_tokens[...].ids = [null]` -- the more consequential of the
+    reviewer's two new escapes: `None` is EXACTLY the value that means "this
+    checkpoint appends nothing", so this previously converted successfully and
+    silently declared the vacuous fact for a checkpoint that in fact declares an
+    append. Root cause of the scratch-checkpoint reproduction in the fix log
+    (fingerprint `ff00fe4d255e8c06238235bd...`, a checkpoint indistinguishable
+    from an incumbent after this exact one-field edit)."""
+    pp = _candidate_shaped_post_processor()
+    pp["processors"][1]["special_tokens"]["<|endoftext|>"]["ids"] = [None]
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="expected int, got NoneType"):
+        CT._classify_post_processor(pp)
+
+
+def test_classify_post_processor_rejects_a_bool_id_in_the_ids_list_by_name():
+    """`ids = [True]` -- Python's `bool` is a subclass of `int`, so an
+    unqualified `isinstance(x, int)` would silently accept it as a token id;
+    the schema's own bool exclusion (`_require_type`) rejects it by name."""
+    pp = _candidate_shaped_post_processor()
+    pp["processors"][1]["special_tokens"]["<|endoftext|>"]["ids"] = [True]
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="expected int, got bool"):
         CT._classify_post_processor(pp)
 
 
