@@ -1124,6 +1124,30 @@ _X86_GPR_ALLOW = {
     # names the operand width, not a float type -- the identical semantic
     # class as shl/shr/sar/rol/ror, already on this allow-list.
     "shrd", "shld",
+    # T-2529 (Brunel), design Sec4.1's own vetting law (fold round 8, D-SLM4374:
+    # "a mnemonic newly observed in a future corpus and not on this list is
+    # rejected as unknown until an explicit, reviewed addition lands it"): the
+    # `linux-x64` job's own measured false reject -- `sha256.cpp.o`,
+    # `superslm::Sha256::Final`, real GCC 15.2.0 `-O3 -DNDEBUG` corpus (this
+    # session, WSL/Ubuntu, matching the CI job's own `-DCMAKE_BUILD_TYPE=Release`
+    # recipe exactly), `bswap r14` at offset 0x8d9. Every other instruction the
+    # same symbol's own auto-vectorized big-endian length encoding compiles to
+    # (movdqa/pshufd/punpcklwd/psrld/pand/packuswb/psrlw and their siblings) was
+    # already on `_X86_VEC_MOVE_ALLOW`/`_X86_P_VP_STRUCTURAL_ALLOW` and ACCEPTs
+    # under check (A); `bswap` alone reached check (B) (it touches no vector
+    # register) and was simply absent from this list. Intel SDM Vol. 2A,
+    # `BSWAP -- Byte Swap`: reverses the byte order of a 32- or 64-bit
+    # general-purpose register: a pure bit-permutation, no rounding, no
+    # exception, no EFLAGS write, no operand ever read as a floating-point
+    # value -- the identical semantic class as `rol`/`ror` and the `bt*`/`bs*`
+    # family already on this list, only narrower (a fixed full-width rotate by
+    # 8/16/24/32/40/48/56, expressed as one opcode rather than a rotate-count
+    # operand). GCC's own idiom for it here is exactly what motivates the
+    # opcode's existence: `Sha256::Final`'s own big-endian length loop
+    # (`for (i=0;i<8;++i) lenbe[i] = uint8_t(bits >> (56-i*8));`), the
+    # textbook byte-swap shape every mainstream compiler recognizes and folds
+    # to one `bswap` on a little-endian target.
+    "bswap",
     "cmp", "test",
     "jmp",
     "call", "ret", "retn", "retf",

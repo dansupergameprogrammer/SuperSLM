@@ -4,6 +4,22 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Linux/ELF FP-free scan leg (`_X86_GPR_ALLOW`) now accepts `bswap`.** 1.3.0's own
+  CHANGELOG entry (below) deferred the Linux/ELF enforcement of the "no floating-point
+  arithmetic instruction" guarantee to 1.3.1, pending a green run of the `linux-x64` job's
+  own scan step. That run has now completed: `superslm::Sha256::Final`
+  (`src/sha256.cpp`) compiles, under real GCC 15.2.0 `-O3 -DNDEBUG` (this fix's own
+  verification; matches the `linux-x64` job's `-DCMAKE_BUILD_TYPE=Release` recipe), to a
+  `bswap` on the byte-swapped big-endian length write -- a pure integer byte-reversal
+  (Intel SDM Vol. 2A: no rounding, no exception, no floating-point register read) absent
+  from the checked-in GPR allow-list `tests/ci/check_fp_free_scan.py` documents as frozen
+  and reviewed-diff-only. Added, individually vetted, following that list's own precedent
+  (`shrd`/`shld`, `cpuid`, `rep`, `vzeroupper`, `xgetbv`). The `linux-x64` job's own scan
+  step now passes against a real GCC-built archive (447 symbols ACCEPT, 0 REJECT): the
+  guarantee 1.3.0 deferred is delivered.
+
 ## [1.3.0] - 2026-08-29
 
 This release ships one of five requested consumer-driven changes: the FP-free load path
