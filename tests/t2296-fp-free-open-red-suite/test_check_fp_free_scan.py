@@ -967,9 +967,21 @@ def test_detected_msvc_edition_does_not_misfire_on_a_directory_literally_named_c
     it falls through to the documented fallback (the raw path, since no edition word matches a
     whole segment) instead of guessing wrong.
     """
+    # T-2537 correction (Poirot 67bfcbf-t2536-superslm-ci-green-confirmation3.md O-3): the first
+    # path segment below used to be the bare string "C:" -- os.path.join("C:", "Users", ...)
+    # yields the DRIVE-RELATIVE path "C:Users\CommunityUser\..." (os.path.isabs -> False, not
+    # the shape this docstring calls "a path whose LONGER component merely contains an edition
+    # word"), because "C:" alone carries no separator. The assertion was unaffected either way
+    # (_path_has_segment splits on separators regardless of absolute/relative), but a vswhere
+    # result is always an absolute path, and this construction was not. "C:\\" (with the
+    # separator) makes it genuinely absolute.
     adversarial = os.path.join(
-        "C:", "Users", "CommunityUser", "SomeUnknownVSInstall", "Common7", "Tools",
+        "C:\\", "Users", "CommunityUser", "SomeUnknownVSInstall", "Common7", "Tools",
         "VsDevCmd.bat")
+    assert os.path.isabs(adversarial), (
+        "this construction must be absolute, matching the shape a real vswhere result takes -- "
+        "got {!r}".format(adversarial)
+    )
     with mock.patch.object(fc, "find_vsdevcmd", return_value=adversarial):
         assert _detected_msvc_edition() == adversarial, (
             "an adversarial path containing an edition word only as a substring of a longer "
