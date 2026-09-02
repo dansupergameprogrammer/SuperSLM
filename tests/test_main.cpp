@@ -24272,13 +24272,14 @@ namespace t2019_b7 {
 using superslm::SslmForwardStatus;
 using superslm_gpu::SslmGpuStatus;
 
-// T-2113 (B4, design Sec3/Sec6.1): re-derived from 17 (16 sites + 1 commit) to 24, the real
-// per-layer dispatch count this design's own geometry ships -- see `superslm_gpu.cpp`'s own
+// T-2113 (B4, design Sec3/Sec6.1): re-derived from 17 (16 sites + 1 commit) to 24, then to 25
+// (design §6 Track B step 3, T-2551 -- the new qk_norm_site.hlsl dispatch), the real per-layer
+// dispatch count this design's own geometry ships -- see `superslm_gpu.cpp`'s own
 // `PlanDispatchBudgetGpu` header comment for the site list.
-constexpr uint32_t kDispatchesPerLayer = 24;
+constexpr uint32_t kDispatchesPerLayer = 25;
 
 // Sec5.8's own formula, computed locally: complete_layers = floor(dispatch_budget /
-// 24), capped at (num_hidden_layers - current_layer_position); status is
+// 25), capped at (num_hidden_layers - current_layer_position); status is
 // DispatchBudgetTooSmall iff the floor division yields zero layers AND the cap
 // itself is not already zero (a sequence already at the last layer with budget for
 // one more isn't "too small," it has nothing left to do -- Ok with 0 layers is a
@@ -24299,9 +24300,10 @@ static void TestT2019_B7_DispatchBudget_EveryRemainderAndBoundary() {
 	using namespace t2019_b7;
 	constexpr uint32_t N = 28;  // 1.5B-Instruct tier's own layer count (Sec14 Fold F1)
 
-	// {0, ..., 23} individually -- uniform DispatchBudgetTooSmall, zero layers,
-	// not merely the endpoints (Sec5.8's own explicit obligation).
-	for (uint32_t budget = 0; budget <= 23; ++budget) {
+	// {0, ..., 24} individually (T-2551: re-derived from {0,...,23} -- kDispatchesPerLayer
+	// moved 24 -> 25) -- uniform DispatchBudgetTooSmall, zero layers, not merely the
+	// endpoints (Sec5.8's own explicit obligation).
+	for (uint32_t budget = 0; budget <= 24; ++budget) {
 		uint32_t cpu_layers = 0;
 		const auto cpu_status = ExpectedDispatchBudgetPlan(budget, N, 0, &cpu_layers);
 		CHECK_MSG(cpu_status == SslmGpuStatus::DispatchBudgetTooSmall && cpu_layers == 0,
@@ -24318,25 +24320,26 @@ static void TestT2019_B7_DispatchBudget_EveryRemainderAndBoundary() {
 		          cpu_layers);
 	}
 
-	// 24: exactly one layer.
+	// 25: exactly one layer (T-2551: re-derived from 24).
 	{
 		uint32_t cpu_layers = 0;
-		ExpectedDispatchBudgetPlan(24, N, 0, &cpu_layers);
-		CHECK_MSG(cpu_layers == 1, "dispatch_budget=24: reference formula gives exactly 1 layer");
+		ExpectedDispatchBudgetPlan(25, N, 0, &cpu_layers);
+		CHECK_MSG(cpu_layers == 1, "dispatch_budget=25: reference formula gives exactly 1 layer");
 		uint32_t gpu_layers = 999;
-		const auto gpu_status = superslm_gpu::PlanDispatchBudgetGpu(24, N, 0, &gpu_layers);  // LINK-RED
+		const auto gpu_status = superslm_gpu::PlanDispatchBudgetGpu(25, N, 0, &gpu_layers);  // LINK-RED
 		CHECK_MSG(gpu_status == SslmGpuStatus::Ok && gpu_layers == 1,
-		          "dispatch_budget=24: GPU plan gives Ok/1 layer, got layers=%u", gpu_layers);
+		          "dispatch_budget=25: GPU plan gives Ok/1 layer, got layers=%u", gpu_layers);
 	}
 
-	// Non-dividing remainder 24k+r (0<r<24) at a small k and a k near N.
+	// Non-dividing remainder 25k+r (0<r<25) at a small k and a k near N (T-2551: re-derived
+	// from 24k+r, 0<r<24).
 	for (uint32_t k : {2u, N - 2u}) {
-		for (uint32_t r : {1u, 8u, 23u}) {
-			const uint32_t budget = 24 * k + r;
+		for (uint32_t r : {1u, 8u, 24u}) {
+			const uint32_t budget = 25 * k + r;
 			uint32_t cpu_layers = 0;
 			ExpectedDispatchBudgetPlan(budget, N, 0, &cpu_layers);
 			CHECK_MSG(cpu_layers == k,
-			          "dispatch_budget=%u (24*%u+%u): reference formula gives exactly %u layers "
+			          "dispatch_budget=%u (25*%u+%u): reference formula gives exactly %u layers "
 			          "(remainder %u unused)",
 			          budget, k, r, k, r);
 			uint32_t gpu_layers = 999;
@@ -25335,11 +25338,13 @@ static void TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject() {
 	// dispatches this call issued -- q/o/kv/gate/up/down_proj each split into a GEMM dispatch plus
 	// their own requant dispatch, and RoPE split into stage+commit (re-derived from the 22
 	// sites/layer T-2101 shipped: kv_proj no longer stays fused-and-single-dispatch, and RoPE's
-	// commit phase is its own dispatch). One GPU-measured figure per dispatch, every one
+	// commit phase is its own dispatch). Re-derived again to 8 layers * 25 sites/layer = 200
+	// (design §6 Track B step 3, T-2551): the new qk_norm_site.hlsl dispatch, inserted between
+	// kv_proj_site and rope_guard_site. One GPU-measured figure per dispatch, every one
 	// non-negative, summing to (approximately) gpu_busy_ms above.
 	const auto per_dispatch_ok = superslm_gpu::LastCallPerDispatchTimingsMs();
-	CHECK_MSG(per_dispatch_ok.size() == 8 * 24,
-	          "T2101/T2113 per-dispatch timing (success call): %zu entries, want 8*24=192",
+	CHECK_MSG(per_dispatch_ok.size() == 8 * 25,
+	          "T2101/T2113 per-dispatch timing (success call): %zu entries, want 8*25=200",
 	          per_dispatch_ok.size());
 	double per_dispatch_sum = 0.0;
 	bool all_non_negative = true;
@@ -25381,7 +25386,7 @@ static void TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject() {
 	CHECK_MSG(per_dispatch_rejected.empty(),
 	          "T2101 per-dispatch timing (guard-rejected call): %zu entries, want 0 -- a call "
 	          "rejected before recording starts must report no per-dispatch timings, not the "
-	          "PREVIOUS successful call's own stale 192",
+	          "PREVIOUS successful call's own stale 200",
 	          per_dispatch_rejected.size());
 }
 

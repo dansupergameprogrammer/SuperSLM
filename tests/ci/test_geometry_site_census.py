@@ -1558,7 +1558,12 @@ def test_part3_reorder_gs12_two_differently_offset_occurrences_plus_revert_is_ca
     with _mutated(_FORWARD_SITES_CPP_T2481, _t):
         failures = census.run_census(_REPO_ROOT)
     assert failures, "a genuine revert of the relocated GS-12 occurrence must FAIL"
-    assert any("REGRESSED SITE" in f and "GS-12" in f and ":1681" in f for f in failures)
+    # T-2551 (design §6 Track B steps 1/2): ApplyQkNormSite landed between LandTokenKVRow and
+    # RunLayerLoopImpl, shifting this occurrence from :1681 to :1721 in the mutated (OCC0/OCC1
+    # swapped) copy this test builds -- re-derived by running the census against the real,
+    # current file (through the same mutation this test applies), not by applying a line-count
+    # offset to the unmutated file's own line number.
+    assert any("REGRESSED SITE" in f and "GS-12" in f and ":1721" in f for f in failures)
 
 
 _GS12_OCC2 = (
