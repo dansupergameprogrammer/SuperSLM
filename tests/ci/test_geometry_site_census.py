@@ -559,50 +559,32 @@ def test_mutated_call_site_preserves_a_forced_lf_file_regardless_of_checkout_pla
 
 
 
-# T-2497 (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Significant 2, D-SLM5758):
-# every real path this module's own cells touch as of this writing -- the seven `_mutated`
-# targets (see every `_mutated(...)` call site in this file) plus the registry, written directly
-# (not via `_mutated`) by `test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_
-# registry_record_at_all`. Eight entries, exhaustive against today's population, EXACTLY (T-2499,
-# Claude/Poirot/bc2ae29-t2498-census-fixes-confirmation.md Significant 2, D-SLM5776: this
-# fixture's own docstring previously claimed it closes "every future cell that touches the real
-# tree" -- false as implemented, executed against a cell writing `include/superslm/forward_
-# sites.h` without restoring: `41 passed`, fixture silent, file left modified, because that path
-# is not on this list). It does NOT close every future cell that touches the real tree: a cell
-# added later that mutates a real-tree path outside this tuple is NOT caught here -- extend
-# `_MUTATED_TARGETS_AND_REGISTRY_PATHS` in the same change that adds such a cell. The two
-# `src/` entries are the same `_PROOF_MANIFEST_CPP`/`_SUPERSLM_GPU_CPP` constants this file's own
-# T-2475-fold-in cells use, defined once above (not duplicated here), so the two spellings cannot
-# desync. Executed by the T-2498 reviewer: reverting `newline=""` on the registry cell's own
-# writes still leaves that cell `1 passed` while the registry's own bytes change underneath it;
-# reverting `_mutated`'s convention-detection hardening leaves this whole file green (every file
-# it touches is pure CRLF today, so the hardening and the platform default agree on every input
-# this suite has -- Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Sec7). The
-# dirty-checkout class this fixture closes, for the paths `_MUTATED_TARGETS_AND_REGISTRY_PATHS`
-# names, can return with the suite green if it lands on an unlisted path outside that tuple.
+# T-2497 (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Significant 2, D-SLM5758)
+# established this tuple: every real path this module's own cells touch, closing per-cell
+# dirty-checkout drift at the root (the module-scoped byte-identity fixture below) rather than
+# trusting each cell to restore what it mutates. The two `src/` entries are the same
+# `_PROOF_MANIFEST_CPP`/`_SUPERSLM_GPU_CPP` constants this file's own T-2475-fold-in cells use,
+# defined once above (not duplicated here), so the two spellings cannot desync.
 #
-# T-2524 correction (Poirot e4bcaeb-t2518-census-fix-confirmation.md Minor 4, D-SLM5883): "seven
-# `_mutated` targets ... EXACTLY" was already false when written -- `_MODEL_H` is in this tuple
-# and mutated by nothing (`_MODEL_FRAGMENT`, its own fixture, is dead and removed above; see the
-# mechanism-cells section's own header comment), so only SIX of the eight entries were ever real
-# `_mutated` targets. `_MODEL_H`'s own presence is a harmless superset guard (a byte-identity
-# check over an untouched path costs nothing), not an eighth `_mutated` target, so "EXACTLY" was
-# also false. Two entries are added this round, `_SSLM_ABI_CPP`/`_GPU_1P0_CPP` (GS-32/GS-33's own
-# new construction sites, Significant 3, D-SLM5882).
+# CURRENT STATE (T-2535, Poirot 2945361-t2534-superslm-ci-green-confirmation2.md M-4): ten
+# entries. Every one except `_MODEL_H` is a real `_mutated` target, reached EXCLUSIVELY through
+# that one function -- there is no direct-write path anywhere in this module. `_MODEL_H` alone
+# is a harmless superset guard: mutated by nothing (`_MODEL_FRAGMENT`, its own would-be writer,
+# is dead and removed; see the mechanism-cells section's own header comment), a byte-identity
+# check over an untouched path costs nothing to keep. It does NOT close every future cell that
+# touches the real tree: a cell added later that mutates a real-tree path outside this tuple is
+# NOT caught here -- extend `_MUTATED_TARGETS_AND_REGISTRY_PATHS` in the same change that adds
+# such a cell.
 #
-# T-2526 correction (Poirot 96abd9e-t2524-census-confirmation2.md Minor 1, D-SLM5899): the T-2524
-# text above was already false when written -- `test_part2_window_group_covered_start_uncovered_
-# end_is_still_reported` and its sibling (this file's own S1 cells, mechanism-cells section, above)
-# each open `_mutated(registry_rel, ...)`, so the registry is now written THROUGH `_mutated` too,
-# not only directly. Every entry in this tuple except `_MODEL_H` is now a real `_mutated` target;
-# `_MODEL_H` alone remains the harmless superset guard -- ten entries total, unchanged.
-#
-# T-2533 correction (Poirot 4187739-t2532-superslm-ci-green-confirmation.md M-2n): "not only
-# directly" above is itself now stale -- T-2531's own C-1 fix routed
-# `test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_registry_record_at_all`
-# (the LAST remaining direct-write path this paragraph and the T-2497 paragraph above both name)
-# through `_mutated` too. As of that fix, every entry in this tuple except `_MODEL_H` is
-# accessed EXCLUSIVELY through `_mutated` -- there is no longer any direct-write path at all.
+# This statement has been wrong three times before as this module's own construction changed
+# under it without the comment being updated in the same change -- T-2524 (Minor 4, D-SLM5883:
+# an already-stale entry count), T-2526 (Minor 1, D-SLM5899: an already-stale direct/`_mutated`
+# split), T-2533 (its own M-2n: the same split, stale again). Each time it was restated in place
+# rather than left standing -- and restating it is exactly the failure mode M-4 named: a reader
+# who stops at an early generation reads a false statement, and reproducing the whole chain
+# every round guarantees a further stale generation on the next touch. `git log -p` on this
+# hunk carries that chain for anyone tracing what changed and why; it is not reproduced here
+# again.
 _MUTATED_TARGETS_AND_REGISTRY_PATHS = (
     _ADAPTER_H,
     _MATMUL_H,
@@ -623,12 +605,9 @@ def _mutated_targets_and_registry_are_byte_identical_after_the_module_runs():
     already bound to this repo's `tools/`, per this file's own docstring above) -- snapshots the
     raw bytes of every path in `_MUTATED_TARGETS_AND_REGISTRY_PATHS` BEFORE the first cell in
     this module runs, and asserts them byte-identical AFTER the last one has, whatever mix of
-    `_mutated()` blocks ran in between (T-2533 correction, Poirot 4187739-t2532-superslm-ci-
-    green-confirmation.md M-2n: "and direct registry writes" is stale here too -- T-2531's own
-    C-1 fix routed the last direct-write cell through `_mutated`, so every entry in
-    `_MUTATED_TARGETS_AND_REGISTRY_PATHS` except `_MODEL_H` is now reached exclusively through
-    `_mutated`; see the tuple's own comment, above, for the full correction chain). Closes
-    T-2496's Significant 2
+    `_mutated()` blocks ran in between -- every entry except `_MODEL_H` is reached exclusively
+    through `_mutated`, there is no direct-write path in this module (see the tuple's own
+    "CURRENT STATE" comment, above, T-2535 M-4). Closes T-2496's Significant 2
     (D-SLM5758) at the root rather than per-cell: a fix that touches one of the paths named
     in `_MUTATED_TARGETS_AND_REGISTRY_PATHS` and leaves it modified fails HERE regardless of what
     that fix's own cell asserts.
