@@ -145,7 +145,12 @@ def test_path_has_segment_rejects_a_substring_that_is_not_a_whole_path_component
 
 def test_vswhere_version_range_is_passed_to_the_real_query():
     """T-2535 (Poirot 2945361-t2534-superslm-ci-green-confirmation2.md S-2): this file's own
-    `-version` constraint (`_VSWHERE_VERSION_RANGE`, T-2535 S-3n) had no cell -- deleting the
+    `-version` constraint (`_VSWHERE_VERSION_RANGE`, added by T-2533 S-3n -- commit `d1ee166`,
+    `git log -S'"-version", _VSWHERE_VERSION_RANGE' -- tests/t2296-fp-free-open-red-suite/
+    conftest.py`, confirmed by execution; T-2537 correction, Poirot 67bfcbf-t2536-superslm-
+    ci-green-confirmation3.md M-3: this docstring said "T-2535 S-3n", misattributing the
+    production change this cell pins to the round that added the PIN, not the round that
+    added the argument) had no cell -- deleting the
     argument from `conftest.py`'s real query left this whole file at `6 passed` and the full red
     suite at `161 passed, 48 skipped, 1 xfailed`, undiscriminated, while the identical deletion in
     the sibling module `fp_scan_common.py` already failed
