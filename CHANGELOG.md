@@ -6,19 +6,36 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ### Fixed
 
-- **The Linux/ELF FP-free scan leg (`_X86_GPR_ALLOW`) now accepts `bswap`.** 1.3.0's own
-  CHANGELOG entry (below) deferred the Linux/ELF enforcement of the "no floating-point
-  arithmetic instruction" guarantee to 1.3.1, pending a green run of the `linux-x64` job's
-  own scan step. That run has now completed: `superslm::Sha256::Final`
-  (`src/sha256.cpp`) compiles, under real GCC 15.2.0 `-O3 -DNDEBUG` (this fix's own
-  verification; matches the `linux-x64` job's `-DCMAKE_BUILD_TYPE=Release` recipe), to a
-  `bswap` on the byte-swapped big-endian length write -- a pure integer byte-reversal
-  (Intel SDM Vol. 2A: no rounding, no exception, no floating-point register read) absent
-  from the checked-in GPR allow-list `tests/ci/check_fp_free_scan.py` documents as frozen
-  and reviewed-diff-only. Added, individually vetted, following that list's own precedent
-  (`shrd`/`shld`, `cpuid`, `rep`, `vzeroupper`, `xgetbv`). The `linux-x64` job's own scan
-  step now passes against a real GCC-built archive (447 symbols ACCEPT, 0 REJECT): the
-  guarantee 1.3.0 deferred is delivered.
+- **The Linux/ELF FP-free scan leg (`_X86_GPR_ALLOW`) now accepts `bswap`; the `linux-x64` job's
+  own scan step passes.** `superslm::Sha256::Final` (`src/sha256.cpp`) compiles, under the
+  runner's own GCC 13.x (`-O3 -DNDEBUG`, matching the `linux-x64` job's
+  `-DCMAKE_BUILD_TYPE=Release` recipe), to a `bswap` on the byte-swapped big-endian length write
+  -- a pure integer byte-reversal (Intel SDM Vol. 2A: no rounding, no exception, no
+  floating-point register read) absent from the checked-in GPR allow-list
+  `tests/ci/check_fp_free_scan.py` documents as frozen and reviewed-diff-only. Added,
+  individually vetted, following that list's own precedent (`shrd`/`shld`, `cpuid`, `rep`,
+  `vzeroupper`, `xgetbv`). Confirmed on the runner's own compiler family (GCC 13.4.0, built
+  without root): 8 real symbols, 1 REJECT (this same symbol, this same mnemonic) without the
+  addition, 0 REJECT with it -- the identical symbol CI names.
+
+  **This closes only the first of 1.3.0's own two deferral conditions for the Linux/ELF leg (no
+  run had completed) -- the second is still outstanding, and the guarantee stays deferred.**
+  1.3.0 also deferred on the design's own fiftieth population (`t2265-superslm-fp-free-open-
+  design-2026-08-24.md` Sec5.4 closing paragraph) never having been built: a must-accept run
+  against this wired job's own real archive, and a must-reject run against an archive that
+  genuinely carries floating-point arithmetic. Neither has run.
+  `tests/t2296-fp-free-open-red-suite/test_archive_gate.py`'s own `real_elf_archive` fixture
+  states this plainly, at this same tip: the population "remains outstanding" (D-SLM5230,
+  deferred to 1.3.1). An instrument whose must-reject has never fired has not been shown able to
+  fail -- so the Linux/ELF no-floating-point guarantee is **enforced and green, not yet
+  delivered**; 1.3.1 is where it is delivered, once that population runs.
+
+- **`tools/convert_tokenizer.py`'s `derive_model_name` now parses a checkpoint path's own
+  separators directly, regardless of the OS running the converter.** A Windows-style checkpoint
+  path (backslash-separated, this project's own HF hub cache convention) previously returned the
+  whole path as the emitted CONFIG section's model label when the converter ran on a POSIX host
+  -- `pathlib.Path` splits only on the running OS's own separator convention. User-visible: the
+  label every converted `.sslm` artifact's CONFIG section carries.
 
 ## [1.3.0] - 2026-08-29
 
