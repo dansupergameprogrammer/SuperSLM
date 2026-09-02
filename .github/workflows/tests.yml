@@ -59,6 +59,18 @@ jobs:
   # override) so the suite's real_build_dir fixture reuses this job's build
   # rather than paying for a second configure+build of the identical
   # target.
+  #
+  # T-2535 (Poirot 2945361-t2534-superslm-ci-green-confirmation2.md O-3): a local reproduction
+  # of this job's own scan step, against a checked-in Release build, covers a materially
+  # SMALLER corpus than this job's own real runs -- measured directly, 2097 symbols across 17
+  # objects locally vs. run 33545319929's own 6273 symbols across the same 17 objects. The
+  # corpus is largely STL and template instantiation, so a cross-toolset/cross-build difference
+  # of this size is expected, not a defect; it is the measured scale of the gap this job's own
+  # `windows-latest` runner closes and a local machine cannot -- this runner carries a single VS
+  # 2022 Enterprise instance neither `fp_scan_common.py`'s Community-first nor `conftest.py`'s
+  # BuildTools-first sort key matches (S-1n, S-3), so the edition that compiles this job's own
+  # real corpus, on this job's own real runner, has never been reproduced on a development
+  # machine that lacks Enterprise.
   fp-free-scan-gate:
     runs-on: windows-latest
     steps:
