@@ -79,6 +79,38 @@ jobs:
         with:
           python-version: '3.13'
       - run: pip install capstone pytest
+      # T-2555: run 33648618208's own fp-free-scan-gate job errored 22 red-suite cells with
+      # "no VsDevCmd.bat found at either well-known VS2022 install location" -- the T-2531/T-2533
+      # discovery (vswhere with a [17.0,18.0) filter, Community-first / BuildTools-first sort)
+      # never finds this runner's own instance, because windows-latest carries VS 2022 Enterprise
+      # only and neither sort key's substring test matches "Enterprise". Fixed structurally rather
+      # than by adding a third hardcoded candidate (a fourth would recur the next time the hosted
+      # image changes edition or install root): this step resolves VsDevCmd.bat itself, using the
+      # SAME vswhere.exe every hosted Windows image ships, with NO edition preference -- the first
+      # VS 2022 instance vswhere reports, whichever edition it is -- and exports the resolved path
+      # so discovery in the suite itself is never a guess on any runner.
+      - name: Resolve VsDevCmd.bat via the runner's own vswhere
+        shell: pwsh
+        run: |
+          $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+          Write-Host "vswhere path: $vswhere"
+          if (-not (Test-Path $vswhere)) {
+            Write-Host "::error::vswhere.exe not found at $vswhere -- this runner's own image no longer ships it at the documented path"
+            exit 1
+          }
+          $installPath = & $vswhere -products * -version "[17.0,18.0)" -property installationPath -nologo | Select-Object -First 1
+          if (-not $installPath) {
+            Write-Host "::error::vswhere reported no VS 2022 (version [17.0,18.0)) instance on this runner"
+            exit 1
+          }
+          Write-Host "vswhere resolved installationPath: $installPath"
+          $vsdevcmd = Join-Path $installPath "Common7\Tools\VsDevCmd.bat"
+          if (-not (Test-Path $vsdevcmd)) {
+            Write-Host "::error::VsDevCmd.bat not found at $vsdevcmd (derived from vswhere's own installationPath)"
+            exit 1
+          }
+          Write-Host "Resolved VsDevCmd.bat: $vsdevcmd"
+          echo "SUPERSLM_VSDEVCMD=$vsdevcmd" >> $env:GITHUB_ENV
       - run: cmake -B build
       - run: cmake --build build --target superslm --config Release
       - run: python tests/ci/scan_build_output.py --build-dir build --target superslm --isa x86-64
