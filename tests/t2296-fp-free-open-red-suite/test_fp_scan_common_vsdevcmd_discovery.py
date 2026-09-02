@@ -1,0 +1,138 @@
+"""T-2533 (Poirot 4187739-t2532-superslm-ci-green-confirmation.md O-3) -- pin for
+`fp_scan_common.py`'s own widened VS 2022 `VsDevCmd.bat` discovery.
+
+WHY THIS FILE EXISTS. `fp_scan_common.py`'s own `_vswhere_vsdevcmd_candidates()`/
+`find_vsdevcmd()` -- the function `compile_cl`/`compile_ml64` actually call, per this suite's own
+S-1n incident (a machine's installed MSVC edition deciding a population's ACCEPT/REJECT verdict)
+-- had no dedicated pin of its own: its sibling in this same directory, `conftest.py`'s
+`_vswhere_vsdevcmd_candidates()`/`_find_vsdevcmd()`, already carries five cells in
+`test_conftest_vsdevcmd_discovery.py`, but this module's own, separately-maintained copy (T-2529's
+own comment beside `_VSWHERE_PATH` names the mirror explicitly) did not. This file closes that gap
+by mirroring those same five cells against this module's own functions, adjusted for the two
+places this module's own discovery genuinely differs from `conftest.py`'s: it sorts
+Community-first (not BuildTools-first -- `_vswhere_vsdevcmd_candidates`'s own docstring states
+the reason), and its fallback tuple is the public `VSDEVCMD_CANDIDATES` (not `_VSDEVCMD_CANDIDATES`).
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from unittest import mock
+
+import pytest
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+import fp_scan_common as _fixture_module  # noqa: E402
+
+
+def test_vswhere_absent_returns_no_candidates():
+    """Must-accept: a machine with no `vswhere.exe` at the documented Installer path gets an
+    empty candidate list from the widened search, never an exception -- the widened search
+    degrades to the original hardcoded candidates, it does not replace them with a hard failure.
+    """
+    with mock.patch.object(_fixture_module.os.path, "exists", return_value=False):
+        assert _fixture_module._vswhere_vsdevcmd_candidates() == []
+
+
+def test_vswhere_reports_a_third_location_and_community_sorts_first():
+    """Must-accept, this module's own version of the shape `conftest.py`'s O2 cell names:
+    `vswhere.exe` reporting an installation path neither hardcoded candidate names (a stand-in
+    for VS 2022 Enterprise on a hosted CI runner) is surfaced as a real candidate, and when a
+    Community instance is also reported, it sorts first -- preserving THIS module's own documented
+    Community-first preference (unlike `conftest.py`'s BuildTools-first order for its own,
+    separate corpus-build use) regardless of how many instances vswhere finds or in what order it
+    reports them.
+    """
+    enterprise = r"C:\Program Files\Microsoft Visual Studio\2022\Enterprise"
+    community = r"C:\Program Files\Microsoft Visual Studio\2022\Community"
+    fake_stdout = "{}\n{}\n".format(enterprise, community)  # Enterprise reported FIRST
+    fake_result = subprocess.CompletedProcess(
+        args=["vswhere.exe"], returncode=0, stdout=fake_stdout, stderr="")
+
+    def _fake_exists(path):
+        return path == _fixture_module._VSWHERE_PATH
+
+    with mock.patch.object(_fixture_module.os.path, "exists", side_effect=_fake_exists), \
+         mock.patch.object(_fixture_module.subprocess, "run", return_value=fake_result) as run:
+        candidates = _fixture_module._vswhere_vsdevcmd_candidates()
+
+    assert run.called, "vswhere.exe was found to exist but subprocess.run was never invoked"
+    assert candidates == [
+        os.path.join(community, "Common7", "Tools", "VsDevCmd.bat"),
+        os.path.join(enterprise, "Common7", "Tools", "VsDevCmd.bat"),
+    ], (
+        "expected the Community-derived VsDevCmd.bat first regardless of "
+        "vswhere's own report order; got {}".format(candidates)
+    )
+
+
+def test_vswhere_nonzero_exit_returns_no_candidates():
+    """Must-accept: a `vswhere.exe` that exists but exits non-zero (a corrupted install, or a
+    future incompatible CLI) is treated the same as absent -- an empty list, never a crash that
+    would take down every cell in this suite that calls `compile_cl`/`compile_ml64`.
+    """
+    fake_result = subprocess.CompletedProcess(
+        args=["vswhere.exe"], returncode=1, stdout="", stderr="boom")
+    with mock.patch.object(_fixture_module.os.path, "exists", return_value=True), \
+         mock.patch.object(_fixture_module.subprocess, "run", return_value=fake_result):
+        assert _fixture_module._vswhere_vsdevcmd_candidates() == []
+
+
+def test_find_vsdevcmd_prefers_a_vswhere_candidate_over_the_hardcoded_fallback():
+    """Must-accept: when the widened search reports a real, existing `VsDevCmd.bat` that is NOT
+    one of the hardcoded `VSDEVCMD_CANDIDATES`, `find_vsdevcmd()` returns it rather than falling
+    through to (or past) the hardcoded pair -- proving the widened search is actually consulted
+    first, not merely present in the module unused.
+    """
+    third_location = os.path.join(
+        "C:\\", "fake-vs-2022-instance", "Common7", "Tools", "VsDevCmd.bat")
+    with mock.patch.object(
+        _fixture_module, "_vswhere_vsdevcmd_candidates", return_value=[third_location]
+    ), mock.patch.object(
+        _fixture_module.os.path, "exists",
+        side_effect=lambda p: p == third_location
+    ):
+        assert _fixture_module.find_vsdevcmd() == third_location
+
+
+def test_find_vsdevcmd_falls_back_to_hardcoded_candidates_when_vswhere_finds_nothing_real():
+    """Must-accept: when the widened search returns paths that do not exist on disk (or returns
+    nothing at all), `find_vsdevcmd()` still falls through to the original hardcoded
+    `VSDEVCMD_CANDIDATES` -- the widened search is additive, it does not narrow what this module
+    can find relative to before its own T-2529 remedy landed.
+    """
+    hardcoded_first = _fixture_module.VSDEVCMD_CANDIDATES[0]
+    with mock.patch.object(
+        _fixture_module, "_vswhere_vsdevcmd_candidates", return_value=[]
+    ), mock.patch.object(
+        _fixture_module.os.path, "exists",
+        side_effect=lambda p: p == hardcoded_first
+    ):
+        assert _fixture_module.find_vsdevcmd() == hardcoded_first
+
+
+def test_vswhere_version_range_is_passed_to_the_real_query():
+    """T-2533 (O-3, and matching S-1n's own root cause): this module's own `-version`
+    constraint (`_VSWHERE_VERSION_RANGE`, T-2531 S-3) is exercised here directly, on a mocked
+    `subprocess.run`, rather than only being trusted by inspection -- the query passed to
+    `vswhere.exe` must actually carry `-version` and this module's own range, not merely define
+    the constant and never use it.
+    """
+    fake_result = subprocess.CompletedProcess(
+        args=["vswhere.exe"], returncode=0, stdout="", stderr="")
+    with mock.patch.object(_fixture_module.os.path, "exists", return_value=True), \
+         mock.patch.object(_fixture_module.subprocess, "run", return_value=fake_result) as run:
+        _fixture_module._vswhere_vsdevcmd_candidates()
+
+    assert run.called, "vswhere.exe was found to exist but subprocess.run was never invoked"
+    call_args = run.call_args[0][0]
+    assert "-version" in call_args, (
+        "the real vswhere invocation must pass -version -- got {}".format(call_args))
+    version_idx = call_args.index("-version")
+    assert call_args[version_idx + 1] == _fixture_module._VSWHERE_VERSION_RANGE, (
+        "the real vswhere invocation must pass this module's own _VSWHERE_VERSION_RANGE "
+        "immediately after -version -- got {}".format(call_args))
