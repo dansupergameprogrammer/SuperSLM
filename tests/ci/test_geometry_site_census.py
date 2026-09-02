@@ -390,7 +390,8 @@ def _write_newline_for(raw_bytes: bytes) -> str:
     measured, on this Windows/CRLF checkout, is BOTH of `_mutated`'s writes reverted to the
     platform default -- `open(full, "w", encoding="utf-8")`, no `newline=` argument, not a blanket
     `newline=""` -- leaving the whole file green and the regression undetected (Claude/Poirot/
-    ed0c67d-t2502-census-fixes-confirmation.md Significant 2, D-SLM5785)."""
+    ed0c67d-t2502-census-fixes-confirmation.md Significant 2, D-SLM5785) -- closed by T-2499's
+    extraction of this function, above."""
     return "\r\n" if b"\r\n" in raw_bytes else ""
 
 
