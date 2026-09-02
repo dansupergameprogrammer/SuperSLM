@@ -61,7 +61,7 @@ VSDEVCMD_CANDIDATES = (
 _VSWHERE_PATH = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
 
 
-# T-2531 (Poirot 5e128ee-t2530-superslm-ci-review.md S-3): `-version` constrains `vswhere`'s own
+# T-2531 (Poirot 5e128ee-t2530-superslm-ci-green-review.md S-3): `-version` constrains `vswhere`'s own
 # report to VS 2022 (major version 17) instances only. Without it this module's own docstring
 # claimed a VS-2022-only scope the query never enforced -- `vswhere -products *` with no
 # `-version` reports EVERY registered VS 2017+ instance, so a machine carrying an older VS
