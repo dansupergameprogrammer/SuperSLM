@@ -1277,6 +1277,17 @@ def test_regression_parent_own_fp_instructions_is_empty_on_the_real_fixture():
     direct execution (RegressionParent carries no FP arithmetic of its own under either MSVC
     edition present on this machine), and this cell re-derives it independently each run rather
     than assuming the prior finding still holds.
+
+    T-2537 (Poirot 67bfcbf-t2536-superslm-ci-green-confirmation3.md O-2): this cell pays its own
+    full `cl` compile of `pop09_funclet_fp.cpp`, and so does
+    `test_symbol_own_instructions_detects_real_fp_when_present` below, and so does
+    `test_population_09_funclet_membership` above -- three independent compiles of the identical
+    fixture, when the object bytes `test_population_09_funclet_membership` already has could in
+    principle be shared via a module-scoped fixture. Measured cost as of this round: the whole red
+    suite is ~60s wall for ~168 passed on this machine -- not a defect, and not restructured here
+    (a fixture-sharing refactor changes three call sites' own control flow for a cost this small,
+    which is exactly the kind of widening a close-out round avoids). Worth revisiting if a FOURTH
+    cell is ever added on the same pattern.
     """
     src = os.path.join(_FIXTURES, "pop09_funclet_fp.cpp")
     with fc.TempDir() as tmp:
