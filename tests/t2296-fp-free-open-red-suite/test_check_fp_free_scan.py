@@ -1168,7 +1168,22 @@ def test_invoke_watson_is_in_the_extern_allow_list():
     machine) -- it closes the narrower, always-reachable gap: a future edit deleting or renaming
     this entry is caught here on every machine, everywhere, not only the one machine happening to
     carry BuildTools first.
+
+    T-2537 correction (Poirot 67bfcbf-t2536-superslm-ci-green-confirmation3.md M-1): this
+    cell used to dereference `scan._X86_EXTERN_ALLOW` directly, bypassing the module-wide
+    absent-instrument degradation every other cell in this file goes through
+    (`if not _SCAN_AVAILABLE: _fail_absent(...)`, T-2387's own established pattern) --
+    executed: with `tests/ci/check_fp_free_scan.py` hidden, this cell raised
+    `AttributeError: 'NoneType' object has no attribute '_X86_EXTERN_ALLOW'` instead of
+    degrading through `_fail_absent` like `test_population_09_funclet_membership` does in the
+    same run. Routed through the same guard now.
     """
+    if not _SCAN_AVAILABLE:
+        _fail_absent(
+            "nine",
+            "_invoke_watson's own membership pin cannot be graded: check_fp_free_scan.py is "
+            "absent from this environment.",
+        )
     assert "_invoke_watson" in scan._X86_EXTERN_ALLOW, (
         "_invoke_watson (S-1n, closing the fp-free-scan-gate BuildTools gap on "
         "RegressionParent) is missing from _X86_EXTERN_ALLOW"
