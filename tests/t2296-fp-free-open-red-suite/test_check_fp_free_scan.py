@@ -4473,12 +4473,21 @@ def test_x86_gpr_allow_population_is_pinned_by_count_not_by_comment():
     `_X86_GPR_ALLOW`'s current size -- a future addition or removal changes the
     expected count here, in the same diff, rather than leaving a stale number in
     `check_fp_free_scan.py`'s own header comment for the next reviewer to catch by
-    hand-counting the set. 188 = 154 ordinary integer/control-flow/memory mnemonics
-    plus five entries the T-2343 fold-8 sweep individually vetted (cpuid, int, rep,
-    vzeroupper, xgetbv) plus shrd/shld (T-2381) plus bswap (T-2531, this review's own
-    C-1 -- see check_fp_free_scan.py's own comment beside the entry) -- 162 base
-    entries -- plus `_X86_JCC`'s own 26-member condition-code family, merged into
-    `_X86_GPR_ALLOW` at module load (`_X86_GPR_ALLOW |= _X86_JCC`): 162 + 26 = 188."""
+    hand-counting the set.
+
+    T-2533 correction (Poirot 4187739-t2532-superslm-ci-green-confirmation.md S-2n):
+    the decomposition this docstring stated -- "154 ordinary ... plus five ... plus
+    shrd/shld ... plus bswap -- 162 base entries -- plus _X86_JCC's own 26-member
+    condition-code family ... 162 + 26 = 188" -- was never checked by execution and
+    both counts inside it were wrong: `len(scan._X86_JCC)` is 38, not 26, and the
+    non-JCC remainder is 150, not 162 (188 - 38 = 150, confirmed directly:
+    `scan._X86_GPR_ALLOW - scan._X86_JCC` has 150 members). Of those 150, 8 are the
+    individually-vetted, non-"ordinary" entries this docstring's history names --
+    cpuid, int, rep, vzeroupper, xgetbv (T-2343 fold-8), shrd/shld (T-2381), bswap
+    (T-2531 C-1) -- confirmed a subset of the 150 by direct execution, leaving 142
+    ordinary integer/control-flow/memory mnemonics: 142 + 8 = 150 non-JCC entries,
+    plus `_X86_JCC`'s own 38-member condition-code family, merged into
+    `_X86_GPR_ALLOW` at module load (`_X86_GPR_ALLOW |= _X86_JCC`): 150 + 38 = 188."""
     assert len(scan._X86_GPR_ALLOW) == 188, (
         "_X86_GPR_ALLOW's own size changed (now {}) without this pin being updated -- "
         "update the expected count here AND check_fp_free_scan.py's own header comment "
