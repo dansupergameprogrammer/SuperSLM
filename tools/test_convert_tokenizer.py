@@ -163,3 +163,117 @@ def test_parse_merge_element_rejects_an_unrecognized_shape_by_name():
 def test_parse_merge_element_rejects_a_three_element_list():
     with pytest.raises(CT.UnsupportedTokenizerShape):
         CT._parse_merge_element(["a", "b", "c"], 0)
+
+
+# ==============================================================================
+# _classify_post_processor -- the post_processor read (T-2541, closes TOK-06 /
+# root cause of D-SLM5574, t2408 §6 Track E step 2). Pure function of the JSON
+# value, no checkpoint files needed.
+# ==============================================================================
+
+
+def _candidate_shaped_post_processor(appended_id=151643):
+    """The pinned Qwen3-Embedding-0.6B candidate's own `post_processor` shape,
+    confirmed against the real checkpoint's own tokenizer.json this fold: a
+    `Sequence` wrapping a bare `ByteLevel` and a `TemplateProcessing` whose own
+    `single` template appends one `SpecialToken` after the input `Sequence`."""
+    return {
+        "type": "Sequence",
+        "processors": [
+            {"type": "ByteLevel", "add_prefix_space": False, "trim_offsets": False, "use_regex": False},
+            {
+                "type": "TemplateProcessing",
+                "single": [
+                    {"Sequence": {"id": "A", "type_id": 0}},
+                    {"SpecialToken": {"id": "<|endoftext|>", "type_id": 0}},
+                ],
+                "pair": [
+                    {"Sequence": {"id": "A", "type_id": 0}},
+                    {"Sequence": {"id": "B", "type_id": 0}},
+                    {"SpecialToken": {"id": "<|endoftext|>", "type_id": 0}},
+                ],
+                "special_tokens": {
+                    "<|endoftext|>": {"id": "<|endoftext|>", "ids": [appended_id], "tokens": ["<|endoftext|>"]},
+                },
+            },
+        ],
+    }
+
+
+def test_classify_post_processor_none_carries_no_trailing_append():
+    assert CT._classify_post_processor(None) is None
+
+
+def test_classify_post_processor_bare_bytelevel_carries_no_trailing_append():
+    """Every incumbent's own bare `ByteLevel` post_processor."""
+    assert CT._classify_post_processor({"type": "ByteLevel", "add_prefix_space": False}) is None
+
+
+def test_classify_post_processor_resolves_the_candidates_own_trailing_special_id():
+    assert CT._classify_post_processor(_candidate_shaped_post_processor()) == 151643
+
+
+def test_classify_post_processor_rejects_a_bare_non_bytelevel_top_level_type():
+    """The exact shape D-SLM5619 found this branch silently absorbing into the
+    no-append case through fold round 12: a bare, non-Sequence-wrapped
+    `TemplateProcessing` (bge-small-en-v1.5's own real `post_processor`, confirmed
+    against the real file this fold, reproduced here as a literal fixture since the
+    checkpoint's own `model.type` is WordPiece and would never reach this
+    classifier through the real `__init__` path)."""
+    bare_template_processing = {
+        "type": "TemplateProcessing",
+        "single": [
+            {"SpecialToken": {"id": "[CLS]", "type_id": 0}},
+            {"Sequence": {"id": "A", "type_id": 0}},
+            {"SpecialToken": {"id": "[SEP]", "type_id": 0}},
+        ],
+        "pair": [],
+        "special_tokens": {
+            "[CLS]": {"id": "[CLS]", "ids": [101], "tokens": ["[CLS]"]},
+            "[SEP]": {"id": "[SEP]", "ids": [102], "tokens": ["[SEP]"]},
+        },
+    }
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="unrecognized top-level type"):
+        CT._classify_post_processor(bare_template_processing)
+
+
+def test_classify_post_processor_rejects_a_sequence_with_no_templateprocessing():
+    pp = _candidate_shaped_post_processor()
+    pp["processors"] = [pp["processors"][0]]  # ByteLevel only, no TemplateProcessing
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="0 TemplateProcessing"):
+        CT._classify_post_processor(pp)
+
+
+def test_classify_post_processor_rejects_a_sequence_with_two_templateprocessing_entries():
+    pp = _candidate_shaped_post_processor()
+    pp["processors"].append(pp["processors"][1])
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="2 TemplateProcessing"):
+        CT._classify_post_processor(pp)
+
+
+def test_classify_post_processor_rejects_a_single_template_of_the_wrong_length():
+    pp = _candidate_shaped_post_processor()
+    pp["processors"][1]["single"].append({"SpecialToken": {"id": "<|endoftext|>", "type_id": 0}})
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="has 3 entries"):
+        CT._classify_post_processor(pp)
+
+
+def test_classify_post_processor_rejects_sequence_and_specialtoken_in_the_wrong_order():
+    pp = _candidate_shaped_post_processor()
+    pp["processors"][1]["single"] = list(reversed(pp["processors"][1]["single"]))
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="not in the.*expected order"):
+        CT._classify_post_processor(pp)
+
+
+def test_classify_post_processor_rejects_an_id_the_special_tokens_map_does_not_resolve():
+    pp = _candidate_shaped_post_processor()
+    pp["processors"][1]["special_tokens"]["<|endoftext|>"]["ids"] = [151643, 151644]
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="does not resolve to exactly one id"):
+        CT._classify_post_processor(pp)
+
+
+def test_classify_post_processor_rejects_an_unresolvable_special_token_reference():
+    pp = _candidate_shaped_post_processor()
+    del pp["processors"][1]["special_tokens"]["<|endoftext|>"]
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="does not resolve to exactly one id"):
+        CT._classify_post_processor(pp)

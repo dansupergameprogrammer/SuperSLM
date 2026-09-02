@@ -81,6 +81,67 @@ def _parse_merge_element(m, index):
     )
 
 
+def _classify_post_processor(pp):
+    """Reads the top-level `post_processor` key (`TOK-06`, root cause of D-SLM5574;
+    t2408 §2.9, §6 Track E step 2) and exposes whether the tokenizer's own
+    post-processing template appends a trailing special-token id -- the fact
+    composed-acceptance item 3's own harness appends before comparing against
+    `sslm_prefill` (t2408 §6 Composed acceptance item 3). This reads and exposes the
+    fact only: it changes neither `ref_encode`'s own output nor the emitted `TOK1`
+    artifact's own format (`serialize_tokenizer` below does not carry this field).
+
+    `None`, or a bare processor whose own `type` is exactly `"ByteLevel"` (every
+    incumbent observed in this project) carries no trailing-append fact -- returns
+    `None`. A `Sequence` containing exactly one `TemplateProcessing` whose own
+    `single` template is exactly `[{"Sequence": ...}, {"SpecialToken": ...}]` (the
+    candidate's own shape) resolves the appended token's numeric id from that
+    `TemplateProcessing`'s own `special_tokens` map and returns it. Any other shape
+    -- a bare, non-`"ByteLevel"` top-level type; a `Sequence` with other than exactly
+    one `TemplateProcessing`; a `single` template of a different length; the
+    `Sequence`/`SpecialToken` entries in the wrong order; or an id the
+    `special_tokens` map does not resolve to exactly one entry -- is an explicit
+    rejection, never a silent guess (narrowed fold round 13, D-SLM5631, closing
+    D-SLM5619's found vacuousness)."""
+    if pp is None:
+        return None
+    pp_type = pp.get("type")
+    if pp_type == "ByteLevel":
+        return None
+    if pp_type != "Sequence":
+        raise UnsupportedTokenizerShape(
+            f"post_processor: unrecognized top-level type {pp_type!r} "
+            f'(expected None, "ByteLevel", or "Sequence")'
+        )
+    template_procs = [p for p in pp.get("processors", []) if p.get("type") == "TemplateProcessing"]
+    if len(template_procs) != 1:
+        raise UnsupportedTokenizerShape(
+            f"post_processor: Sequence contains {len(template_procs)} TemplateProcessing "
+            f"entries (expected exactly 1)"
+        )
+    single = template_procs[0].get("single")
+    if not (isinstance(single, list) and len(single) == 2):
+        got = len(single) if isinstance(single, list) else type(single).__name__
+        raise UnsupportedTokenizerShape(
+            f"post_processor: TemplateProcessing.single has {got} entries "
+            f"(expected exactly 2: Sequence, SpecialToken)"
+        )
+    seq_entry, special_entry = single
+    if "Sequence" not in seq_entry or "SpecialToken" not in special_entry:
+        raise UnsupportedTokenizerShape(
+            f"post_processor: TemplateProcessing.single entries are not in the "
+            f"expected order (Sequence, SpecialToken): {single!r}"
+        )
+    special_content_id = special_entry["SpecialToken"]["id"]
+    entry = template_procs[0].get("special_tokens", {}).get(special_content_id)
+    ids = entry.get("ids") if entry else None
+    if not (isinstance(ids, list) and len(ids) == 1):
+        raise UnsupportedTokenizerShape(
+            f"post_processor: special_tokens[{special_content_id!r}] does not resolve "
+            f"to exactly one id (got {ids!r})"
+        )
+    return ids[0]
+
+
 def derive_model_name(ckpt_dir):
     """Best-effort model label for the CONFIG blob, from the checkpoint path alone --
     it is the only identifying signal available. `tokenizer_class`/`model_type` in
@@ -132,6 +193,7 @@ class TokenizerTables:
         self.id_to_tok = {v: k for k, v in self.vocab.items()}
         self.merges = [_parse_merge_element(m, i)          # [ [a,b], ... ] rank order
                        for i, m in enumerate(model["merges"])]
+        self.trailing_special_id = _classify_post_processor(tj.get("post_processor"))
         self.added = tj.get("added_tokens", [])
         self.chat_template = cfg.get("chat_template")
         # All NFC + \p{L}/\p{N}/\s classification runs through the table-driven Unicode
