@@ -72,7 +72,14 @@ jobs:
   # real corpus, on this job's own real runner, has never been reproduced on a development
   # machine that lacks Enterprise.
   fp-free-scan-gate:
-    runs-on: windows-latest
+    runs-on: windows-2022
+    # T-2556 (2026-09-02): pinned to the windows-2022 image, not windows-latest. The hosted
+    # windows-latest image no longer carries a Visual Studio 2022 instance (vswhere reported no
+    # [17.0,18.0) instance on run 33652034366), and this job's red suite is commissioned against
+    # the VS 2022 toolset -- the suite's own conftest records that a different MSVC toolset
+    # emits different instructions, so running the populations under a newer toolset is a
+    # different measurement cell, not the same gate on a newer machine. Re-commissioning the
+    # suite on the next toolset is its own round; until then this job runs where it was proven.
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
