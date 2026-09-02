@@ -270,17 +270,25 @@ def test_oversized_bias_magnitudes_reject_at_the_coarse_scale_edge():
     regime sat lower; the builder's counter-evidence reproduced at this seat's bench and
     REFINED: the pinned fixture's ladder is
 
-        ±2^50  → COMPUTES clean (logit[0][0] = −2393 — inside the chain domain; re-executed
-                  2026-07-27 after SuperSLM_S3a_WalkingSkeleton_Plan.md SS11 S3.0/F-S3-1
-                  reconciled composition_ref.py's mlp_act to C10's LUT sigmoid, superseding
-                  the −2389 witness computed under the excluded i-exp-sigmoid construction),
-        ±2^52  → ValueError, C30's COARSE bound (q_ln2 < 1 — i-exp's existing rejection),
-        ±2^55  → ValueError, C29's CHAIN-DOMAIN edge (D' = 3309102943 > 2^31 at
-                  normalize_scale — rejection arrives via the chain domain, not C30).
+        ±2^50  → COMPUTES clean (logit[0][0] = −2350 — inside the chain domain; re-executed
+                  2026-09-02, T-2553, after `_kv_calibration_capture`/`_vec_forward`/
+                  `_scalar_forward`/`forward_dynamic` all gained the QK-norm call site
+                  `_float_layer` already had -- superseding the −2393 witness this
+                  docstring cited before that fold),
+        ±2^55  → ValueError, C29's CHAIN-DOMAIN edge (D' > 2^31 at normalize_scale).
 
-    Both rejection mechanisms are pinned, pre-existing rejections (C30's coarse end;
-    C29 restating C21's precondition at every feeding site), so the implementation must
-    raise the same class the oracle does at each rung."""
+    **CORRECTED 2026-09-02 (T-2553):** the ±2^52 rung retired, re-executed rather than
+    defended (`StandardsDocument.md` §5.4/§5.6 -- a ruling contradicted by a measurement
+    is re-opened). QK-norm's own scale changes (`_derive_scales`'s own q_scale
+    reassignment, `pipeline.py`) shift where C30's coarse bound (`q_ln2 < 1`) sits
+    relative to this construction's own oversized-bias magnitude sweep: probed by
+    execution across every magnitude 48-59 on both the oracle and `forward_dynamic`, the
+    coarse bound never fires at all on this fixture post-fix -- the ladder now has two
+    rungs, not three, and both the oracle and the production implementation agree at
+    every probed magnitude. Both rejection mechanisms this test names are still real,
+    pinned, pre-existing rejections in `intmath.py`; this fixture's own oversized-bias
+    construction no longer happens to land in the coarse bound's own domain before the
+    chain-domain edge catches it first."""
     import dataclasses
 
     forward_dynamic, fixture_model_biased = api(
@@ -303,18 +311,19 @@ def test_oversized_bias_magnitudes_reject_at_the_coarse_scale_edge():
     # matches the oracle bit-for-bit there (conformance holds right up to the edge).
     model_50 = oversized(50)
     oracle_50 = forward_dynamic_logits_oracle(model_50, tokens)
-    assert oracle_50[0][0] == -2393  # the executed pinned-fixture witness (re-executed 2026-07-27, C10)
+    # T-2553: re-executed 2026-09-02 after _kv_calibration_capture gained the same
+    # QK-norm call site _float_layer already had (the fixture's own q_norm/k_norm
+    # tensors, unconditionally declared by _weight_shapes since T-2539, now feed a
+    # real forward on both of this module's independent layer walks) -- the witness
+    # moves from -2393 (T-2551-era, one-sided) to -2350; the pinned-fixture-witness
+    # discipline stays the same, only the number changes.
+    assert oracle_50[0][0] == -2350  # the executed pinned-fixture witness (re-executed 2026-09-02, T-2553)
     forward_50 = forward_dynamic(model_50, tokens)
     for f_row, o_row in zip(forward_50, oracle_50):
         assert [int(v) for v in f_row] == [int(v) for v in o_row]
 
-    # Rung 1 — ±2^52: C30's coarse bound fires first (q_ln2 < 1), oracle AND forward.
-    with pytest.raises(ValueError):
-        forward_dynamic_logits_oracle(oversized(52), tokens)
-    with pytest.raises(ValueError):
-        forward_dynamic(oversized(52), tokens)
-
-    # Rung 2 — ±2^55: C29's chain-domain edge (D' > 2^31 at normalize_scale).
+    # ±2^55 — C29's chain-domain edge (D' > 2^31 at normalize_scale). The ±2^52 coarse-
+    # bound rung is retired (this test's own docstring states why, T-2553).
     with pytest.raises(ValueError):
         forward_dynamic_logits_oracle(oversized(55), tokens)
     with pytest.raises(ValueError):

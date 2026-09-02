@@ -625,12 +625,56 @@ def forward_dynamic_logits_oracle(model, tokens) -> list:
             out.append(land_kv(folded, in_scale[t][0], in_scale[t][1], targets))
         return out
 
+    def qk_norm_site_per_head(rows, name, num_heads):
+        """(design §3/§6 Track B steps 1/2, T-2553): QK-norm's own per-head site --
+        the SAME C23 scale-killing composition `norm_site` (above) uses, applied per
+        head_dim-wide head slice rather than the full hidden_size row (one shared
+        gain vector reused across every head, matching Qwen3RMSNorm(self.head_dim)).
+        Strictly between projection (`project_dynamic`/`project_kv`, above) and RoPE
+        (`_rope_rotate`, below). Returns `(out_rows, out_scale)` -- `out_scale` is the
+        LAST head's own carried scale, matching `_apply_qk_norm`'s own documented
+        convergence: every head's own funnel targets the identical gain-derived site
+        constant (`norm_const`, above -- the SAME `/127`-folded formula
+        `_derive_composition_constants` uses for the real production artifact), so
+        every head's own write converges on the identical value.
+        """
+        gain = [int(v) for v in w[name + ".gain"]]
+        c_norm = norm_const(name + ".gain")
+        out_rows = [list(row) for row in rows]
+        out_scale = [None] * steps
+        for h in range(num_heads):
+            head_rows = [row[h * hd:(h + 1) * hd] for row in rows]
+            normed_rows = _rmsnorm_rows(head_rows, hd)
+            for t in range(steps):
+                codes, dfac = _chain([normed_rows[t][i] * gain[i] for i in range(hd)])
+                out_rows[t][h * hd:(h + 1) * hd] = codes
+                out_scale[t] = carried_scale_product_oracle([c_norm, dfac])
+        return out_rows, out_scale
+
     for layer in range(cfg.num_hidden_layers):
         prefix = f"layer{layer}"
 
         normed, normed_scale = norm_site(hidden_codes, f"{prefix}.attn_norm")
         q_codes, q_scale = project_dynamic(prefix, "q_proj", normed, normed_scale)
+        if f"{prefix}.q_norm.gain" in w:
+            # (T-2553): q_scale is OVERWRITTEN by the norm's own carried scale --
+            # matches `_derive_scales`'s own identical choice (pipeline.py) and the
+            # real C++ engine's own ApplyQkNormSite ("writing the new carried scale
+            # back into *q_scale"), since Q's own carried scale genuinely propagates
+            # downstream (the softmax.input composition, below).
+            q_codes, q_scale = qk_norm_site_per_head(q_codes, f"{prefix}.q_norm", n_heads)
         k_codes = project_kv(prefix, "k_proj", "k", normed, normed_scale)
+        if f"{prefix}.k_norm.gain" in w:
+            # (T-2553): K's own norm output scale is DISCARDED (`_discarded_k_norm_
+            # scale`, below) -- K has no analog of Q's own downstream carried-scale
+            # read (ApplyQkNormSite's own header comment, forward_sites.h): K's own
+            # landing (`project_kv`/`land_kv`, above) already produced the final,
+            # per-head-scale-target codes this function's own `kv_targets` computed
+            # OFFLINE from the pre-norm K distribution (matching the real engine's own
+            # accepted approximation -- `_derive_scales`'s own header comment, T-2553,
+            # states the identical reasoning for `pipeline.py`'s own k_scale).
+            k_codes, _discarded_k_norm_scale = qk_norm_site_per_head(
+                k_codes, f"{prefix}.k_norm", n_kv)
         v_codes = project_kv(prefix, "v_proj", "v", normed, normed_scale)
 
         def split(rows, head):

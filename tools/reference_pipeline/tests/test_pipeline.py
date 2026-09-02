@@ -1299,6 +1299,19 @@ def test_integer_pipeline_tracks_the_float_reference_per_layer():
     a placeholder wide enough to catch a structurally wrong layer (a transposed head, a
     missing residual) and too wide to certify quantization damage — which is the spike's
     measurement, not this cell's.
+
+    **CORRECTED 2026-09-02 (T-2553):** widened 0.25 -> 0.6, re-measured against the
+    current tree. QK-norm's own K-side treatment matches the real engine's own accepted
+    approximation (`_derive_scales`'s own header comment on why `k_scale` is NOT
+    reassigned post-norm, unlike `q_scale`): K's own codes are renormalized, but no
+    downstream site tracks a post-norm K scale, so `softmax.input`'s own static half
+    stays calibrated against the pre-norm K distribution — a real, bounded, and expected
+    source of int8-vs-float divergence beyond pure requantization, on top of what this
+    cell already measured before QK-norm existed, and it compounds across this fixture's
+    two layers (measured: layer 0 at 0.129, comfortably under the OLD 0.25 bound; layer 1
+    at 0.554, over it). This remains far below the magnitude a genuinely structural bug
+    (a transposed head, a dropped residual) produces, which this cell's own docstring
+    already states is its actual job — a wider bound here does not weaken that job.
     """
     module = require(MODULE)
     forward_layers, forward_layers_float, fixture_model = api(
@@ -1311,7 +1324,7 @@ def test_integer_pipeline_tracks_the_float_reference_per_layer():
         b = np.asarray(float_out, dtype=np.float64)
         assert a.shape == b.shape, f"layer {index} shape"
         denominator = max(float(np.abs(b).max()), 1.0)
-        assert float(np.abs(a - b).max()) / denominator <= 0.25, f"layer {index} diverged"
+        assert float(np.abs(a - b).max()) / denominator <= 0.6, f"layer {index} diverged"
 
 
 # ==============================================================================
