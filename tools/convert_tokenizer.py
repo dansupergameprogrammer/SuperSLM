@@ -603,12 +603,20 @@ def verify(ckpt_dir, corpus_path, limit=None):
 
 def _post_processor_mismatches(tables, hf, lines, max_report=8):
     """The additive check itself (T-2541, closes D-SLM5575, the dead parity gate;
-    t2408 §6 Track E step 3): for a checkpoint whose own `trailing_special_id` is
-    not `None`, `ref_encode(text) + [trailing_special_id]` must equal
-    `hf.encode(text, add_special_tokens=True)` for every corpus record. Factored out
-    of `verify_post_processor` below so a test can drive it against a `tables`
-    object it has deliberately corrupted (the must-reject construction), without
-    needing a second checkpoint that genuinely mis-extracts the append.
+    t2408 §6 Track E step 3): `ref_encode(text) + [trailing_special_id]` must equal
+    `hf.encode(text, add_special_tokens=True)` for every corpus record, run
+    unconditionally rather than gated on `trailing_special_id is not None` (T-2542
+    Finding 1: an early return keyed on that condition made this comparison
+    unreachable for its own must-reject class -- deleted from the caller,
+    `verify_post_processor` below, not from this function, which never carried the
+    early return). For a checkpoint whose `trailing_special_id` is `None`, nothing
+    is appended and the assertion becomes `ref_encode(text) ==
+    hf.encode(text, add_special_tokens=True)` -- this is the branch that makes a
+    dropped extraction (`trailing_special_id` wrongly `None` for a checkpoint that
+    should carry an id) fail here rather than pass vacuously; it is not a no-op.
+    Factored out of `verify_post_processor` below so a test can drive it against a
+    `tables` object it has deliberately corrupted (the must-reject construction),
+    without needing a second checkpoint that genuinely mis-extracts the append.
 
     Sited beside `verify` above, additive rather than a change to it: `verify`'s own
     comparison (`ref_encode` vs. `hf.encode(text, add_special_tokens=False)`) is a
