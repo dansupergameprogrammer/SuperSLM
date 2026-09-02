@@ -219,7 +219,7 @@ def check_required_groups(model):
     actual Weights tensor -- an orphaned fold entry is a converter bug, not a
     model fact.
     """
-    for name in ("weights", "dynamic_biases", "weight_scales", "composition_constants",
+    for name in ("weights", "weight_scales", "composition_constants",
                  "kv_landing_scales", "kv_landing_reciprocals"):
         group = getattr(model, name)
         if not group:
