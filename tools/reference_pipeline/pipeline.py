@@ -1025,6 +1025,8 @@ def _weight_shapes(cfg: ModelConfig):
     for layer in range(cfg.num_hidden_layers):
         shapes.extend([
             (f"layer{layer}.attn_norm.gain", (cfg.hidden_size,)),
+            (f"layer{layer}.q_norm.gain", (cfg.head_dim,)),
+            (f"layer{layer}.k_norm.gain", (cfg.head_dim,)),
             (f"layer{layer}.q_proj", (q_width, cfg.hidden_size)),
             (f"layer{layer}.k_proj", (kv_width, cfg.hidden_size)),
             (f"layer{layer}.v_proj", (kv_width, cfg.hidden_size)),
@@ -1166,34 +1168,81 @@ class _SafeTensors:
         return values.reshape(tuple(spec["shape"]))
 
 
-def _upstream_names(cfg: ModelConfig):
-    """The total map from a Qwen2.5 checkpoint's tensor names to this pipeline's.
+def _upstream_names(cfg: ModelConfig, present: set):
+    """The total, checkpoint-driven map from a checkpoint's tensor names to this pipeline's.
 
     **Total is the point.** §11's N3 discipline — "an unrecognized ... constant in the config
     is a hard rejection, never a silent drop" — governs the weight map for the same reason it
     governs the config: a quietly-dropped projection is a model that loads, runs, generates
     fluent text, and is not Qwen. So this map is compared against the checkpoint's key set in
     both directions, and either difference is a rejection.
+
+    `present` is the checkpoint's own observed tensor-name set (computed by the caller from
+    the real, on-disk checkpoint before this function is called — never guessed). Two known
+    namespace conventions exist: a `model.`-prefixed transformer backbone (every incumbent
+    through Qwen2.5) and a bare, un-prefixed backbone (this ask's own candidate). The
+    namespace is detected once, from a single anchor tensor unique to each convention
+    (`model.embed_tokens.weight` / `embed_tokens.weight`). A checkpoint carrying neither
+    anchor, or both, is a hard rejection (`UnsupportedOpSet`, matching every other named
+    rejection this map already raises) — never a silent default to either convention.
+
+    The three q/k/v projection biases per layer and the two QK-norm gains per layer are each
+    included only when the checkpoint's own key set carries that exact tensor, independently
+    per entry: Qwen2.5 biases q/k/v unconditionally and carries no QK-norm tensors; this
+    ask's own candidate is the reverse. Gating both the same way as bias is what lets a
+    checkpoint carrying neither survive this map's own totality check unmodified — the
+    backward-compatibility acceptance cell this gate exists to keep passing.
     """
+    has_prefixed = "model.embed_tokens.weight" in present
+    has_bare = "embed_tokens.weight" in present
+    if has_prefixed and has_bare:
+        raise UnsupportedOpSet(
+            "checkpoint tensor names carry both 'model.embed_tokens.weight' and "
+            "'embed_tokens.weight' -- the namespace convention is ambiguous and this map "
+            "does not guess which the rest of the checkpoint follows"
+        )
+    if has_prefixed:
+        ns = "model."
+    elif has_bare:
+        ns = ""
+    else:
+        raise UnsupportedOpSet(
+            "checkpoint tensor names carry neither 'model.embed_tokens.weight' nor "
+            "'embed_tokens.weight' -- this checkpoint matches neither namespace "
+            "convention this map recognizes"
+        )
+
     names = {
-        "model.embed_tokens.weight": "embed",
-        "model.norm.weight": "final_norm.gain",
+        f"{ns}embed_tokens.weight": "embed",
+        f"{ns}norm.weight": "final_norm.gain",
     }
     for layer in range(cfg.num_hidden_layers):
-        prefix = f"layer{layer}"
-        names[f"model.layers.{layer}.input_layernorm.weight"] = f"{prefix}.attn_norm.gain"
-        names[f"model.layers.{layer}.post_attention_layernorm.weight"] = f"{prefix}.mlp_norm.gain"
+        ours_prefix = f"layer{layer}"
+        names[f"{ns}layers.{layer}.input_layernorm.weight"] = f"{ours_prefix}.attn_norm.gain"
+        names[f"{ns}layers.{layer}.post_attention_layernorm.weight"] = f"{ours_prefix}.mlp_norm.gain"
         for upstream, ours in (("self_attn.q_proj", "q_proj"), ("self_attn.k_proj", "k_proj"),
                                ("self_attn.v_proj", "v_proj"), ("self_attn.o_proj", "o_proj"),
                                ("mlp.gate_proj", "gate_proj"), ("mlp.up_proj", "up_proj"),
                                ("mlp.down_proj", "down_proj")):
-            names[f"model.layers.{layer}.{upstream}.weight"] = f"{prefix}.{ours}"
-        # Qwen2.5 biases q/k/v and nothing else. Read from the checkpoint, not assumed:
-        # an unmapped bias is a rejection, and a mapped-but-absent one is also a rejection.
+            names[f"{ns}layers.{layer}.{upstream}.weight"] = f"{ours_prefix}.{ours}"
+        # Qwen2.5 biases q/k/v and nothing else; this ask's own candidate biases none.
+        # Read from the checkpoint, not assumed -- gated per projection, independently, on
+        # that exact tensor's own presence in `present`.
         for upstream, ours in (("self_attn.q_proj", "q_proj"), ("self_attn.k_proj", "k_proj"),
                                ("self_attn.v_proj", "v_proj")):
-            names[f"model.layers.{layer}.{upstream}.bias"] = f"{prefix}.{ours}.bias"
-    if not cfg.tie_word_embeddings:
+            key = f"{ns}layers.{layer}.{upstream}.bias"
+            if key in present:
+                names[key] = f"{ours_prefix}.{ours}.bias"
+        # QK-norm: present on this ask's own candidate, absent on every pre-ask-5
+        # incumbent -- gated identically to bias, for the identical reason.
+        for norm in ("q_norm", "k_norm"):
+            key = f"{ns}layers.{layer}.self_attn.{norm}.weight"
+            if key in present:
+                names[key] = f"{ours_prefix}.{norm}.gain"
+    if not cfg.tie_word_embeddings and "lm_head.weight" in present:
+        # lm_head sits outside the `model.` submodule under BOTH conventions -- HF's
+        # AutoModelForCausalLM places it there regardless of the backbone's own namespace --
+        # so its key is never namespaced to `ns`; only the transformer backbone varies.
         names["lm_head.weight"] = "lm_head"
     return names
 
@@ -1278,6 +1327,8 @@ def _permuted_if_rope(name, values, cfg: ModelConfig):
         return _permute_head_rows(values, cfg, cfg.num_attention_heads)
     if leaf in ("k_proj", "k_proj.bias"):
         return _permute_head_rows(values, cfg, cfg.num_key_value_heads)
+    if leaf in ("q_norm.gain", "k_norm.gain"):
+        return _permute_head_rows(values, cfg, heads=1)
     return values
 
 
@@ -1551,11 +1602,11 @@ def load_model(checkpoint, extra_tensors=None, require_tensors=(),
         raise UnsupportedOpSet(
             f"§6.4's rotation is pairwise; head_dim must be even, got {cfg.head_dim}")
 
-    names = _upstream_names(cfg)
     tensors = _open_checkpoint_tensors(checkpoint)
-
     present = set(tensors.keys())
     present.update(extra_tensors or {})
+
+    names = _upstream_names(cfg, present)
     demanded = set(names) | set(require_tensors)
 
     unmapped = sorted(present - set(names))
@@ -2075,6 +2126,18 @@ def _derive_composition_constants(cfg: ModelConfig, weight_scales, scales: Stati
         for norm in ("attn_norm", "mlp_norm"):
             gain_scale = gain_of(f"{prefix}.{norm}.gain") / (1 << NORM_FRAC_BITS)
             constants[f"{prefix}.{norm}"] = canonical_scale(Fraction(gain_scale) / 127)
+
+        # New in fold round 9 (T-2455): QK-norm's own offline composition constant, the
+        # identical formula the attn_norm/mlp_norm loop above already uses. Gated on
+        # presence in `weight_scales` -- a checkpoint carrying neither tensor (every
+        # pre-ask-5 incumbent) would `KeyError` on an unconditional lookup, and this
+        # step's own presence gate is exactly what `_upstream_names`'s checkpoint-driven
+        # QK-norm gating (above) makes possible.
+        for norm in ("q_norm", "k_norm"):
+            gain_key = f"{prefix}.{norm}.gain"
+            if gain_key in weight_scales:
+                gain_scale = gain_of(gain_key) / (1 << NORM_FRAC_BITS)
+                constants[f"{prefix}.{norm}"] = canonical_scale(Fraction(gain_scale) / 127)
 
         for proj in ("q_proj", "o_proj", "gate_proj", "up_proj", "down_proj"):
             _, s_ref = _reference_fold(weight_scales[f"{prefix}.{proj}"])
