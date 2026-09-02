@@ -63,6 +63,28 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   -- `pathlib.Path` splits only on the running OS's own separator convention. User-visible: the
   label every converted `.sslm` artifact's CONFIG section carries.
 
+- **`tools/convert_tokenizer.py` no longer crashes on the Qwen3-Embedding-0.6B candidate's
+  `tokenizer.json`.** `TokenizerTables.__init__` raised `AttributeError: 'list' object has no
+  attribute 'split'` on this checkpoint's own `model.merges` schema (a 2-element list per entry,
+  where every prior checkpoint this converter has emitted for carried a space-separated string).
+  `_parse_merge_element` now branches on the element's own schema, using a 2-element list/tuple
+  directly and rejecting any other shape by name; every prior checkpoint's own string schema is
+  parsed unchanged. **Additive: `TokenizerTables` now also reads the top-level `post_processor`
+  key and exposes `trailing_special_id`** -- `None` for every checkpoint whose post-processor is
+  absent or a bare `ByteLevel` (every checkpoint this converter previously supported), and the
+  candidate's own appended token id (`151643`) for a `Sequence`-wrapped single-append
+  `TemplateProcessing`; every other shape is an explicit rejection. This reads and exposes the
+  fact only -- the emitted `.sslm` `TOK1` artifact's own format and every prior checkpoint's
+  emitted bytes are unchanged (confirmed byte-identical against the unmodified converter). A
+  second, additive parity check (`--verify-post-processor`) confirms
+  `ref_encode(text) + [trailing_special_id] == hf.encode(text, add_special_tokens=True)` for a
+  checkpoint whose post-processor appends a token; it is vacuously satisfied, and does not run
+  `transformers`, for every checkpoint that does not. **This new check's own readings are
+  quarantined pending an independent must-accept/must-reject commissioning** (not attempted this
+  round) -- it is not yet a load-bearing pass/fail gate. User-visible: the pinned candidate's
+  `tokenizer.json` now converts to a `.sslm` tokenizer artifact; every other checkpoint's
+  converted output is unchanged.
+
 ## [1.3.0] - 2026-08-29
 
 This release ships one of five requested consumer-driven changes: the FP-free load path
