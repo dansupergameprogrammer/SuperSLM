@@ -482,23 +482,26 @@ def read_peft_lora_pair(adapter_dir: Path, layer: int, proj_short: str, meta: Ad
     return a_f, b_f * meta.scaling
 
 
-def read_base_projection_weight(tensors, layer: int, proj_short: str, ns: str = "model.") -> np.ndarray:
+def read_base_projection_weight(tensors, layer: int, proj_short: str, ns: str) -> np.ndarray:
     """One projection's `[out, in]` float64 weight, read directly from the base checkpoint's own
     open tensor source -- UNPERMUTED (PEFT trains against the checkpoint's own raw orientation;
     RoPE's pair-permutation is applied only inside `pipeline.load_model`'s own processing loop,
     never at this raw-tensor level -- matching `t2029_b3_execute.py`'s own `load_base_weight()`,
     which reads the identical raw key).
 
-    **T-2543 C-1 sibling fix.** `ns` is the checkpoint's own detected namespace
-    (`pipeline.detect_namespace`'s return value) -- defaults to `"model."` only to keep
-    this function's own signature source-compatible for a caller that has not been
-    updated; every real call site in this tree (`build_runtime_additive_sections`) passes
-    it explicitly. Before this fix the key was hardcoded `"model."`, which raises
-    `KeyError` loudly on a bare-convention checkpoint (Poirot
-    2a46a85-t2540-ask5-trackc-review.md C-1's own sibling-site note) rather than merging
-    zero deltas silently -- the reviewer's own reason this site is Significant, not
-    Critical, on its own; fixed in the same sweep so the next round does not repeat this
-    finding one function over.
+    **T-2543 C-1 sibling fix, T-2549 N-1 correction.** `ns` is the checkpoint's own
+    detected namespace (`pipeline.detect_namespace`'s return value) -- REQUIRED, no
+    default. T-2543's own first draft defaulted this to `"model."` "to keep this
+    function's own signature source-compatible" -- the identical shape the frozen
+    design's own step 1 already refused for the sibling call: "never given a silent
+    default (... a fallback would let a critical-path caller keep passing Python's own
+    signature check while resolving the wrong namespace)." The one real caller
+    (`build_runtime_additive_sections`) already computes and passes a real `ns` on every
+    path, and its own base checkpoint fixture happens to be `model.`-prefixed, so the
+    default made a reverted threading call byte-identical to the fix on every existing
+    test -- confirmed by execution (Poirot e0fdd60-t2544-ask5-trackc-confirmation.md N-1):
+    deleting the threading changed nothing anywhere in the suite. Required, a reverted
+    call site is a `TypeError` instead of a silent wrong-checkpoint read.
     """
     full_path = _PROJECTION_FULL_PATH[proj_short]
     return tensors.tensor(f"{ns}layers.{layer}.{full_path}.weight")
