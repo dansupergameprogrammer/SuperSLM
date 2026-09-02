@@ -384,14 +384,35 @@ def _write_newline_for(raw_bytes: bytes) -> str:
 
     Pulled out of `_mutated`, below, so this branch can be pinned directly on synthetic bytes
     (`test_write_newline_for_picks_the_convention_from_raw_bytes`) rather than only through a real
-    repo file -- every one of `_mutated`'s own real-tree targets is pure CRLF today, so the branch
-    this function chooses on an eol=lf input has never been exercised by any cell that mutates the
-    real tree. What `Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md` Sec7 (D-SLM5758)
-    measured, on this Windows/CRLF checkout, is BOTH of `_mutated`'s writes reverted to the
-    platform default -- `open(full, "w", encoding="utf-8")`, no `newline=` argument, not a blanket
-    `newline=""` -- leaving the whole file green and the regression undetected (Claude/Poirot/
-    ed0c67d-t2502-census-fixes-confirmation.md Significant 2, D-SLM5785) -- closed by T-2499's
-    extraction of this function, above."""
+    repo file. T-2526 (Poirot 96abd9e-t2524-census-confirmation2.md Minor 1, D-SLM5899) widened
+    `tools/geometry_site_registry.json` -- `attr/text eol=lf`, genuinely LF on disk (confirmed by
+    direct execution, T-2531) -- from a directly-written path into a real `_mutated` target too,
+    so this function's own eol=lf branch IS now exercised through the real tree by two cells
+    (`test_part2_window_group_covered_start_uncovered_end_is_still_reported` and its sibling,
+    below).
+
+    What `Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md` Sec7 (D-SLM5758) measured, on
+    this Windows/CRLF checkout, is BOTH of `_mutated`'s writes reverted to the platform default --
+    `open(full, "w", encoding="utf-8")`, no `newline=` argument, not a blanket `newline=""` --
+    leaving the whole file green and the regression undetected (Claude/Poirot/
+    ed0c67d-t2502-census-fixes-confirmation.md Significant 2, D-SLM5785). T-2499's extraction of
+    this function did NOT close that finding, whatever the module's own prose once claimed
+    (Claude/Poirot/5e128ee-t2530-superslm-ci-green-review.md C-1, D-SLM5936): a second, separate
+    writer --
+    `test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_registry_record_at_all`
+    (below) hand-rolled its own hardcoded `newline=""` against this same registry path instead of
+    calling this function, and that cell's own still-correct write, running after the two
+    window-group cells corrupt the registry through a REVERTED `_mutated`, silently restored the
+    checkout to its correct bytes as a side effect of its own teardown -- so the module-scoped
+    `_mutated_targets_and_registry_are_byte_identical_after_the_module_runs` fixture never saw a
+    mismatch, and the regression stayed undetectable end to end (reproduced by direct execution,
+    T-2531: reverting `_mutated`'s `newline=_write_newline` argument with that cell unchanged left
+    the FULL module at 39 passed, 0 failed). Closed by T-2531 (Poirot 5e128ee review C-1,
+    D-SLM5785): that cell now calls `_mutated` too, so every real-tree write in this module
+    decides its newline convention through this ONE function -- reverting it now corrupts every
+    write alike, and the byte-identity fixture fires regardless of which cell happens to run
+    last (re-executed: the identical revert now fails the module with a byte mismatch reported on
+    `tools\\geometry_site_registry.json`, rather than passing silently)."""
     return "\r\n" if b"\r\n" in raw_bytes else ""
 
 
@@ -1489,12 +1510,27 @@ def test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_registr
     # has a marker in -- the registry-side twin of `MISSING SCOPE ANCHOR` (a marker with no
     # matching record at all, rather than one that fails to match any of its site's records).
     #
-    # T-2491 (Poirot dcefab3-t2486-census-content-keying-confirmation.md Significant 2,
-    # D-SLM5718): both writes use `newline=""` -- `tools/geometry_site_registry.json` is
-    # `attr/text eol=lf`, and the default text-mode write translates every `\n` to `\r\n` on this
-    # platform, which left the checkout ` M` after this cell ran even though it restores the
-    # original *content* byte-for-byte. `newline=""` writes the string's own bytes with no
-    # translation, so a clean checkout stays clean before and after.
+    # T-2531 (Poirot 5e128ee-t2530-superslm-ci-green-review.md C-1, D-SLM5785/D-SLM5936): this
+    # cell used to read/write tools/geometry_site_registry.json directly, hand-rolling its own
+    # hardcoded `newline=""` rather than calling `_write_newline_for` (above) -- a second,
+    # independent decision of the identical newline convention that function exists to be the
+    # ONE place deciding. Two writers agreeing is indistinguishable from one, until one of them
+    # reverts and the other does not: executed at this tip, reverting `_mutated`'s own
+    # `newline=_write_newline` argument (D-SLM5785's exact regression -- the platform-default
+    # write, not a blanket `newline=""`) while THIS cell still hand-rolled its own correct write
+    # left the FULL module at 39 passed, 0 failed -- this cell's own unrelated, still-correct
+    # write, running after the two window-group cells that corrupt the registry through
+    # `_mutated` (test_part2_window_group_covered_start_uncovered_end_is_still_reported and its
+    # sibling, above), silently restored the correct bytes as a side effect of its own teardown,
+    # and the module-scoped byte-identity fixture
+    # (`_mutated_targets_and_registry_are_byte_identical_after_the_module_runs`) never saw a
+    # mismatch -- confirming D-SLM5785 is still live at this tip exactly as the review found.
+    # Routed through `_mutated` here instead of hand-rolling the write: every real-tree write in
+    # this module now goes through the one function that decides the convention, so reverting it
+    # corrupts every write alike and the byte-identity fixture fires regardless of which cell
+    # happens to run last. Re-executed after this change: reverting `_mutated`'s own
+    # `newline=_write_newline` argument now fails the module (byte mismatch reported on
+    # `tools\geometry_site_registry.json`) rather than passing silently.
     def _t(registry_json):
         import json
         data = json.loads(registry_json)
@@ -1505,16 +1541,9 @@ def test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_registr
         else:
             raise AssertionError("GS-01 not found in registry")
         return json.dumps(data, indent=2)
-    registry_path = os.path.join(_REPO_ROOT, "tools", "geometry_site_registry.json")
-    with open(registry_path, "r", encoding="utf-8") as f:
-        original = f.read()
-    try:
-        with open(registry_path, "w", encoding="utf-8", newline="") as f:
-            f.write(_t(original))
+    registry_rel = os.path.join("tools", "geometry_site_registry.json")
+    with _mutated(registry_rel, _t):
         failures = census.run_census(_REPO_ROOT)
-    finally:
-        with open(registry_path, "w", encoding="utf-8", newline="") as f:
-            f.write(original)
     assert any("MISSING required_token_scopes ENTRY" in f and "GS-01" in f for f in failures)
 
 
