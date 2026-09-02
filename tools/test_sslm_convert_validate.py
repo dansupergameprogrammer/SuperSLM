@@ -243,7 +243,35 @@ def test_rejects_fold_identity_not_bool():
 
 def test_rejects_empty_required_group():
     model = _valid_model()
+    model.weight_scales = {}
+    model.composition_constants = {}
+    with pytest.raises(V.ConverterValidationError) as exc:
+        _validate(model)
+    assert exc.value.code == "EmptyRequiredGroup", exc.value.code
+
+
+def test_ask5_trackc_ckn03_accepts_a_bias_free_model():
+    """CKN-03 (`Claude/Vitruvius/t2408-superslm-ask5-qwen3-arch-design-2026-08-29.md`
+    §6 Track C, "Acceptance for Track C alone"): `dynamic_biases` is dropped from the
+    always-required tuple, because its emptiness is a fact about a bias-free checkpoint
+    (this ask's own candidate carries no q/k/v biases) rather than a symptom of a
+    calibration bug -- `dynamic_biases` is built by a total, filter-free comprehension
+    over `float_biases`, so nothing downstream can silently drop an entry a checkpoint
+    actually carries. A model with every OTHER required group populated but
+    `dynamic_biases` empty must pass."""
+    model = _valid_model()
     model.dynamic_biases = {}
+    _validate(model)   # must not raise
+
+
+def test_ask5_trackc_ckn03_still_rejects_a_genuinely_missing_required_group():
+    """The discriminating twin of the cell above: `dynamic_biases` empty AND `weights`
+    (a distinct, still-required group) ALSO empty is still rejected -- proving CKN-03's
+    removal is scoped to `dynamic_biases` alone and does not weaken the check for any
+    other required group."""
+    model = _valid_model()
+    model.dynamic_biases = {}
+    model.weights = {}
     with pytest.raises(V.ConverterValidationError) as exc:
         _validate(model)
     assert exc.value.code == "EmptyRequiredGroup", exc.value.code
