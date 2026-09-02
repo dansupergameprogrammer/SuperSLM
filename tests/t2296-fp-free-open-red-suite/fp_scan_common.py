@@ -61,25 +61,44 @@ VSDEVCMD_CANDIDATES = (
 _VSWHERE_PATH = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
 
 
+# T-2531 (Poirot 5e128ee-t2530-superslm-ci-review.md S-3): `-version` constrains `vswhere`'s own
+# report to VS 2022 (major version 17) instances only. Without it this module's own docstring
+# claimed a VS-2022-only scope the query never enforced -- `vswhere -products *` with no
+# `-version` reports EVERY registered VS 2017+ instance, so a machine carrying an older VS
+# release alongside 2022 could have that older instance's own VsDevCmd.bat returned first,
+# silently building the fixtures with the wrong toolset. `[17.0,18.0)` is vswhere's own
+# documented range syntax (`vswhere -help`; https://aka.ms/vswhere/versions) for "major version
+# 17, any minor/patch" -- VS 2022's own product-version family; confirmed by direct execution on
+# this machine's two real installs (BuildTools, Community), both returned, both correctly
+# version-gated.
+_VSWHERE_VERSION_RANGE = "[17.0,18.0)"
+
+
 def _vswhere_vsdevcmd_candidates():
-    """Every `VsDevCmd.bat` belonging to a VS 2022 instance `vswhere.exe` reports, in the order
-    `vswhere` itself returns them (this module's own documented preference is Community first
-    among the hardcoded fallbacks, unlike `conftest.py`'s BuildTools-first order -- vswhere's own
-    ordering is left as reported rather than re-sorted to match either fixed preference, since
-    neither preference is meaningful once more than the two hardcoded installs are in play).
-    Returns an empty list, never raises, if `vswhere.exe` is absent or reports nothing usable --
-    this is a widened SEARCH, not a required dependency."""
+    """Every `VsDevCmd.bat` belonging to a VS 2022 instance `vswhere.exe` reports (version-
+    constrained to `_VSWHERE_VERSION_RANGE`, so an older or newer VS release installed alongside
+    2022 is never returned here), sorted Community-first -- this module's own stated preference,
+    matching `VSDEVCMD_CANDIDATES`'s own hardcoded fallback order above and unlike `conftest.py`'s
+    BuildTools-first order for its own, separate fixture-build use. Explicitly sorted rather than
+    left in whatever order `vswhere` itself reports (T-2531, S-3): on a machine carrying more than
+    one VS 2022 instance, `vswhere`'s own report order is not documented as stable, and a module
+    that says it prefers one instance should return that instance first regardless of what order
+    the tool happens to enumerate installs in. Returns an empty list, never raises, if
+    `vswhere.exe` is absent or reports nothing usable -- this is a widened SEARCH, not a required
+    dependency."""
     if not os.path.exists(_VSWHERE_PATH):
         return []
     try:
         result = subprocess.run(
-            [_VSWHERE_PATH, "-products", "*", "-property", "installationPath", "-nologo"],
+            [_VSWHERE_PATH, "-products", "*", "-version", _VSWHERE_VERSION_RANGE,
+             "-property", "installationPath", "-nologo"],
             capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return []
     if result.returncode != 0:
         return []
     install_paths = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    install_paths.sort(key=lambda p: 0 if "Community" in p else 1)
     return [os.path.join(p, "Common7", "Tools", "VsDevCmd.bat") for p in install_paths]
 # The Hostx64/ARM64 cross-compiler's own env script -- distinct from
 # VsDevCmd.bat -arch=x64, needed for population ten's own AArch64 leg (matching
