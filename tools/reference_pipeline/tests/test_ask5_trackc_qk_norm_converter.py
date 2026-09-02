@@ -355,7 +355,13 @@ def test_qk_norms_composition_constant_is_gain_derived_matching_the_attn_norm_fo
     """`_derive_composition_constants`'s new `q_norm`/`k_norm` loop applies the identical
     formula the existing `attn_norm`/`mlp_norm` loop uses: `gain_scale = gain_of(...) /
     (1 << NORM_FRAC_BITS)`, `canonical_scale(Fraction(gain_scale) / 127)`. Independently
-    recomputed by hand from the fixture's own calibrated `weight_scales`, matching
+    recomputed by hand FROM THE FIXTURE'S OWN RAW FLOAT VALUES (T-2549 N-6 correction:
+    the prior form of this cell read `gain_of` back from `model.weight_scales` -- the
+    artifact's OWN emitted scale, not an independent oracle, per the frozen acceptance
+    text's own D-SLM5550 grounding, which specifies hand-computation from the fixture's
+    own float values. Grading the formula against a value the artifact itself produced
+    cannot catch a defect in the PEAK-SCALE quantization step that `gain_of` also passes
+    through -- Poirot e0fdd60-t2544-ask5-trackc-confirmation.md N-6), matching
     byte-for-byte -- mutation-decisive against a reverted or wrong-formula
     implementation, the same discipline
     `test_dynamic_forward_composition.py::test_a_norm_sites_carried_scale_is_gain_derived_not_forwarded`
@@ -367,12 +373,34 @@ def test_qk_norms_composition_constant_is_gain_derived_matching_the_attn_norm_fo
                   tie_word_embeddings=True, qk_norm=True)
     model = pipeline.load_model(ckpt)
     norm_frac_bits = pipeline.NORM_FRAC_BITS
+    head_dim = model.config.head_dim
+    assert head_dim == 4, "the raw gain values below are pinned to the fixture's own head_dim=4"
+
+    # The fixture's own raw gain values (matching the S-2 fix's own
+    # build_parameterized_fixture_checkpoint construction exactly), built float32-first so
+    # this hand computation carries no extra float64-literal rounding against the real
+    # on-disk bytes (the same reasoning the WGT1 hand-recomputation cell above states).
+    raw_gains = {
+        "q_norm": np.array([0.1 * (i + 1) for i in range(head_dim)],
+                           dtype=np.float32).astype(np.float64),
+        "k_norm": np.array([0.1 * (head_dim - i) for i in range(head_dim)],
+                           dtype=np.float32).astype(np.float64),
+    }
     for leaf in ("q_norm", "k_norm"):
         gain_key = f"layer0.{leaf}.gain"
-        gain_of = model.weight_scales[gain_key][0]
-        expected = pipeline.canonical_scale(Fraction(gain_of / (1 << norm_frac_bits)) / 127)
+        # Peak-scale quantization's own scale, independently derived from the raw float
+        # values -- peak is permutation-invariant, so this matches _quantize_tensor's own
+        # output regardless of _permuted_if_rope's own reordering.
+        peak = float(np.abs(raw_gains[leaf]).max())
+        hand_gain_of = peak / 127.0
+        expected = pipeline.canonical_scale(
+            Fraction(hand_gain_of / (1 << norm_frac_bits)) / 127)
         actual = model.composition_constants[f"layer0.{leaf}"]
         assert actual == expected, f"layer0.{leaf}: {actual} != hand-computed {expected}"
+        # Cross-check: the artifact's own emitted weight_scales agrees with the
+        # independently hand-derived peak-scale -- confirms _quantize_tensor's own
+        # formula too, not merely that this test's two computations agree with each other.
+        assert abs(model.weight_scales[gain_key][0] - hand_gain_of) < 1e-15
 
 
 def test_qk_norms_composition_constant_gate_is_absent_on_a_pre_ask5_checkpoint(tmp_path):
