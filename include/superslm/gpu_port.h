@@ -628,25 +628,26 @@ const int8_t* ValueRowGpu(const uint8_t* workspace, uint32_t layer, int64_t cont
 // layer quanta. This is the ARITHMETIC/policy half of `sslm_decode_step_gpu`'s own
 // contract -- how many layers a call at a given budget will record, and what status
 // it returns -- and is testable without a device (no dispatch is actually issued to
-// answer this question, only planned). `complete_layers = min(dispatch_budget / 24,
-// num_hidden_layers - current_layer_position)`, floor division, 24 = the real per-layer
-// dispatch count this design's own geometry ships (Sec3/Sec6.1 -- re-derived
-// from the 17 = 16 sites + 1 commit figure this constant carried before B4 ported the
-// dispatch chain onto its own production geometry). Returns
-// SslmGpuStatus::DispatchBudgetTooSmall, `*out_layers_to_issue = 0`, for any
-// `dispatch_budget` in [0, 23] -- floor division by 24 is uniformly zero there. Never
-// records a partial layer. ---
+// answer this question, only planned). `complete_layers = min(dispatch_budget / 25,
+// num_hidden_layers - current_layer_position)`, floor division, 25 = the real per-layer
+// dispatch count this design's own geometry ships (design §6 Track B step 3, T-2551: re-
+// derived from 24 to 25 -- the new qk_norm_site.hlsl dispatch, inserted between kv_proj_site
+// and rope_guard_site in RecordOneTokenFullDepthDispatchBody -- itself re-derived from 17 =
+// 16 sites + 1 commit before B4 ported the dispatch chain onto its own production geometry,
+// then from that to 24 at B4). Returns SslmGpuStatus::DispatchBudgetTooSmall,
+// `*out_layers_to_issue = 0`, for any `dispatch_budget` in [0, 24] -- floor division by 25 is
+// uniformly zero there. Never records a partial layer. ---
 enum class SslmGpuStatus { Ok, DispatchBudgetTooSmall, Busy };
 
 // The ONE source for
 // the real per-layer dispatch count -- `PlanDispatchBudgetGpu`'s own body (superslm_gpu.cpp)
 // and `sslm_decode_step_batch_gpu`'s own budget-spend line (gpu_1p0.cpp,
 // `remaining_budget -= layers_to_issue * kDispatchesPerLayer`) both read this constant rather
-// than each carrying its own `24u` literal. Before this fix the two agreed only because no one
+// than each carrying its own `25u` literal. Before this fix the two agreed only because no one
 // had changed either copy since B4; a future change to one and not the other would have made
 // the batch call's own unsigned subtraction wrap (an effectively unlimited budget for every
 // later sequence in the same call), silently.
-constexpr uint32_t kDispatchesPerLayer = 24;  // the real per-layer dispatch count
+constexpr uint32_t kDispatchesPerLayer = 25;  // the real per-layer dispatch count (T-2551: 24 -> 25)
 
 // T-2240/O3 (SuperSLM 1.2.1, plan Sec10 Phase 2 O3): the ADAPTER_U region's own byte size,
 // extracted from the work_total site (superslm_gpu.cpp, `work_adapter_u_off + ...`) into
@@ -680,8 +681,17 @@ SslmGpuStatus PlanDispatchBudgetGpu(uint32_t dispatch_budget, uint32_t num_hidde
 // `Layout.Load<uint>(N*4)` index
 // order exactly (superslm_gpu.cpp's own original header comment on this struct, carried here
 // unchanged).
+// (design §4/§6 Track B step 1/3, T-2551): `off[56..61]` are six NEW per-layer field offsets --
+// q_norm_present, q_norm_gain, q_norm_site_constant, k_norm_present, k_norm_gain,
+// k_norm_site_constant -- appended AFTER every pre-existing field (`ComputeLayerLayout`'s own
+// `cur` accumulation places them last, so `off[0..55]` keep byte-identical values to before this
+// ask). Serialized into the `Layout` GPU buffer at buffer POSITIONS 57-62, one past the stride
+// slot at position 56 -- never at off[]'s own array indices 56-61, which would collide with
+// stride's existing serialization position. Every pre-existing shader reads only positions 0-56
+// and is therefore unaffected; only `qk_norm_site.hlsl` reads 57-62 (superslm_gpu.cpp's own
+// `layout_bytes` construction, PackLayerWeightsBytes below).
 struct GpuLayerLayout {
-	uint32_t off[56]{};
+	uint32_t off[62]{};
 	uint32_t stride = 0;
 };
 
