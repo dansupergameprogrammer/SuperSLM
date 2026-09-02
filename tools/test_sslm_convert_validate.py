@@ -242,9 +242,13 @@ def test_rejects_fold_identity_not_bool():
 # --- required key sets --------------------------------------------------
 
 def test_rejects_empty_required_group():
+    """T-2543 M-5: empties exactly ONE required group (`weight_scales`) so this cell
+    identifies which check fired -- the prior form emptied `weight_scales` AND
+    `composition_constants` together, which cannot distinguish the check catching the
+    first from the check catching the second (Poirot
+    2a46a85-t2540-ask5-trackc-review.md M-5)."""
     model = _valid_model()
     model.weight_scales = {}
-    model.composition_constants = {}
     with pytest.raises(V.ConverterValidationError) as exc:
         _validate(model)
     assert exc.value.code == "EmptyRequiredGroup", exc.value.code
