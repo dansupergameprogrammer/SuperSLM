@@ -18852,11 +18852,22 @@ namespace {
 // comment to keep it in sync with the fixture's own geometry, and nothing failed if it
 // drifted: the out-of-bounds read the mismatch produces is intra-object (invisible to
 // ASan's default configuration) and was caught only because a garbage value happened to
-// trip UBSan's shift check. Namespace scope (not a member of `TwoLayerFixture` itself,
-// which is used interchangeably across this file's many other fixtures at other head
-// counts) so both `DecodeLoopCallFixture::Run` and
-// `TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse` (free function, below,
-// outside this namespace) read the identical derivation.
+// trip UBSan's shift check.
+//
+// T-2533 correction (Poirot 4187739-t2532-superslm-ci-green-confirmation.md O-2): the prior
+// justification here for namespace scope over a `TwoLayerFixture` member -- "which is used
+// interchangeably across this file's many other fixtures at other head counts" -- does not
+// hold: `TwoLayerFixture` is one head everywhere (T-1374/Significant 4, its own header
+// comment; confirmed again this round, T-2533 M-1n), and a public `static constexpr` member
+// of the struct would be exactly as visible to a free function outside the namespace as a
+// namespace-scope constant is (`TwoLayerFixture::kTwoLayerFixtureNumAttentionHeads`, same as
+// any other qualified name). The real reason is narrower: this ONE constant is the single
+// source both `DecodeLoopCallFixture::Run` (a method) and
+// `TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse` (an unrelated free
+// function, below) read, and defining it once beside the struct rather than as a member
+// keeps it out of `TwoLayerFixture`'s own public surface (which every other call site in
+// this file that constructs the fixture also sees) for a value only these two call sites
+// use.
 static constexpr size_t kTwoLayerFixtureNumAttentionHeads =
     std::extent<decltype(TwoLayerFixture::ctx_fold_shift_arr)>::value;
 // T-2533 (Poirot 4187739-t2532-superslm-ci-green-confirmation.md M-1n): the derivation above
