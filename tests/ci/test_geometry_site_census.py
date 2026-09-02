@@ -439,7 +439,18 @@ def _mutated(rel_path: str, transform):
     the `with` block via `transform(original_text) -> new_text`, then restores the original
     content byte-for-byte. See this module's own docstring for why the real tree is mutated
     in place rather than exercised against a synthetic `tmp` repo root. See `_write_newline_for`,
-    above, for how the write-back newline convention is chosen."""
+    above, for how the write-back newline convention is chosen.
+
+    T-2535 (Poirot 2945361-t2534-superslm-ci-green-confirmation2.md O-1): `rel_path` is also
+    called with an ABSOLUTE path by both forced-bytes `_mutated`-call-site cells (below
+    `_write_newline_for`) -- relied on, not stated, until this note. `os.path.join(_REPO_ROOT,
+    rel_path)` discards `_REPO_ROOT` entirely when `rel_path` is already absolute (`os.path`'s
+    own documented behaviour, identical on POSIX and Windows: the last absolute component wins),
+    so passing a scratch file's own absolute path here operates on that file directly rather
+    than joining it under the repo root, with no code change needed -- this is what lets those
+    two cells build a synthetic scratch file OUTSIDE the checked-out tree and still route it
+    through this exact function.
+    """
     full = os.path.join(_REPO_ROOT, rel_path)
     with open(full, "rb") as f:
         _write_newline = _write_newline_for(f.read())
