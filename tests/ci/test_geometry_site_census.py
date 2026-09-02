@@ -336,6 +336,7 @@ import contextlib
 import os
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -407,12 +408,28 @@ def _write_newline_for(raw_bytes: bytes) -> str:
     `_mutated_targets_and_registry_are_byte_identical_after_the_module_runs` fixture never saw a
     mismatch, and the regression stayed undetectable end to end (reproduced by direct execution,
     T-2531: reverting `_mutated`'s `newline=_write_newline` argument with that cell unchanged left
-    the FULL module at 39 passed, 0 failed). Closed by T-2531 (Poirot 5e128ee review C-1,
-    D-SLM5785): that cell now calls `_mutated` too, so every real-tree write in this module
-    decides its newline convention through this ONE function -- reverting it now corrupts every
-    write alike, and the byte-identity fixture fires regardless of which cell happens to run
-    last (re-executed: the identical revert now fails the module with a byte mismatch reported on
-    `tools\\geometry_site_registry.json`, rather than passing silently)."""
+    the FULL module at 39 passed, 0 failed). T-2531 routed that cell through `_mutated` too, so
+    every real-tree write in this module decides its newline convention through this ONE
+    function.
+
+    T-2533 correction (Poirot 4187739-t2532-superslm-ci-green-confirmation.md C-1n): the closure
+    claim T-2531 wrote here -- "the byte-identity fixture fires regardless of which cell happens
+    to run last" -- is FALSE as an unqualified statement, and D-SLM5944 recorded the same false
+    breadth. Executed both ways, on byte-preserved trees: on a CRLF checkout the identical revert
+    still fails the module (`39 passed, 1 error`, byte mismatch on
+    `tools/geometry_site_registry.json`); on a genuine LF checkout -- built by cloning this repo
+    fresh into WSL/Ubuntu, matching every `ubuntu-latest` CI job that runs this module -- the
+    IDENTICAL revert leaves `39 passed, 0 failed`: `tools/geometry_site_registry.json` is already
+    LF there, Linux's own platform default is also LF, and a platform-default write to it is a
+    no-op, so the real tree has nothing left to discriminate. The call-site regression D-SLM5785/
+    D-SLM5758 name is real and stays undetectable by any REAL-TREE cell in this module on the
+    platform every CI job that runs it actually uses.
+
+    Closed for that platform by `test_mutated_call_site_preserves_a_forced_crlf_file_regardless_
+    of_checkout_platform` (below): a synthetic scratch file carrying FORCED CRLF bytes, outside
+    `_MUTATED_TARGETS_AND_REGISTRY_PATHS` and independent of the real tree's own OS-dependent
+    state, round-tripped through `_mutated`'s own call site -- discriminating the regression on
+    every platform, including the LF one where nothing else in this module can."""
     return "\r\n" if b"\r\n" in raw_bytes else ""
 
 
@@ -439,17 +456,107 @@ def _mutated(rel_path: str, transform):
 
 def test_write_newline_for_picks_the_convention_from_raw_bytes():
     """T-2499 (item 3 sweep, D-SLM5778): pins `_write_newline_for`'s own branch directly on
-    synthetic bytes rather than only through a real repo file -- every one of `_mutated`'s real
-    targets is pure CRLF today, so this branch has never been exercised via the real tree.
-    Reverting this function's own logic to always return `""` is caught here directly. On the
-    gating job's LF checkout, where every `_mutated` target already writes LF, both the
-    platform-default and the blanket-`newline=""` call-site reversions become no-ops with
-    nothing to detect -- this cell, run on synthetic bytes rather than a real file, is the only
-    thing in the module that still catches the function's own logic being reverted there
-    (Claude/Poirot/ed0c67d-t2502-census-fixes-confirmation.md Significant 2, D-SLM5785)."""
+    synthetic bytes rather than only through a real repo file.
+
+    T-2533 (Poirot 4187739-t2532-superslm-ci-green-confirmation.md M-2n) correction: this
+    docstring used to claim "every one of `_mutated`'s real targets is pure CRLF today" --
+    stale since T-2526 (`tools/geometry_site_registry.json` has been a real, LF-carrying
+    `_mutated` target since that round) and doubly so since T-2531's own C-1 fix (below,
+    `test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_registry_record_at_
+    all` now calls `_mutated` too) -- the exact self-contradiction M-2n names, a false claim
+    sitting 45 lines from the true one this same diff introduced. What remains true, and is
+    this cell's own reason to exist: reverting this FUNCTION's own logic (its `return`
+    statement) is caught here directly, on synthetic bytes, regardless of platform or of any
+    real file's own checked-out line-ending convention. What this cell does NOT catch --
+    proven by direct execution, T-2533 (see `test_mutated_call_site_preserves_a_forced_crlf_
+    file_regardless_of_checkout_platform`, below) -- is a revert of the CALL SITE's own
+    `newline=_write_newline` argument (`_mutated`, immediately above): on a real LF checkout
+    (every `ubuntu-latest` CI job that runs this module), `tools/geometry_site_registry.json`
+    is ALREADY LF, and Linux's own platform default is ALSO LF, so a platform-default write to
+    it is a no-op -- there is nothing for the real tree's own state to discriminate. That gap
+    is what the two forced-bytes `_mutated`-call-site cells below close, on any platform.
+    """
     assert _write_newline_for(b"a line\r\nanother line\r\n") == "\r\n"
     assert _write_newline_for(b"a line\nanother line\n") == ""
     assert _write_newline_for(b"") == ""
+
+def test_mutated_call_site_preserves_a_forced_crlf_file_regardless_of_checkout_platform():
+    """T-2533 (Poirot 4187739-t2532-superslm-ci-green-confirmation.md C-1n): D-SLM5785's own
+    regression -- `_mutated`'s own `newline=_write_newline` argument reverted to the platform
+    default -- is undetectable by every OTHER cell in this module on a real LF checkout (every
+    `ubuntu-latest` CI job that runs it): `tools/geometry_site_registry.json`, the one real
+    `_mutated` target whose own convention (`eol=lf`) differs from the platform default on
+    Windows, is ALREADY LF on a Linux checkout, where the platform default is ALSO LF -- a
+    platform-default write to it is a no-op there, so the real tree's own checked-out state has
+    nothing left to discriminate (confirmed by direct execution, T-2533: on a fresh `git clone`
+    into WSL/Ubuntu -- matching `ubuntu-latest`'s own checkout convention -- the identical
+    revert this cell reproduces leaves the WHOLE module at `39 passed, 0 failed`).
+
+    This cell does not depend on the checked-out tree's own OS-dependent line-ending state at
+    all: it constructs a scratch file (never a tracked path -- outside
+    `_MUTATED_TARGETS_AND_REGISTRY_PATHS`, so the module-scoped byte-identity fixture does not
+    also need to know about it) with FORCED CRLF bytes, a convention that diverges from the
+    platform default on every OS this suite runs on except Windows itself, and proves
+    `_mutated`'s own call-site argument round-trips it byte-for-byte through a real mutate+
+    restore cycle -- discriminating the D-SLM5785/D-SLM5758 regression on Linux, where every
+    other real-tree cell in this module cannot, because it does not depend on the real tree
+    agreeing with the platform default to begin with.
+    """
+    fd, path = tempfile.mkstemp(suffix=".json", prefix="t2533_crlf_scratch_")
+    os.close(fd)
+    original = b'{\r\n  "a": 1\r\n}\r\n'
+    try:
+        with open(path, "wb") as f:
+            f.write(original)
+        with _mutated(path, lambda text: text.replace('"a": 1', '"a": 2')):
+            with open(path, "rb") as f:
+                mutated_bytes = f.read()
+            assert mutated_bytes == b'{\r\n  "a": 2\r\n}\r\n', (
+                "the mutation itself must preserve CRLF while changing content -- got %r" % mutated_bytes
+            )
+        with open(path, "rb") as f:
+            restored = f.read()
+        assert restored == original, (
+            "_mutated must restore a forced-CRLF scratch file byte-for-byte, on every platform -- "
+            "got %r, want %r (this is D-SLM5785/D-SLM5758's own regression, reproduced without "
+            "depending on the checked-out tree's own OS-dependent line endings)" % (restored, original)
+        )
+    finally:
+        os.remove(path)
+
+
+def test_mutated_call_site_preserves_a_forced_lf_file_regardless_of_checkout_platform():
+    """T-2533 (Poirot 4187739-t2532-superslm-ci-green-confirmation.md C-1n), sibling of the
+    CRLF cell above: the same construction with FORCED LF bytes, proving `_mutated`'s own
+    call site also round-trips the LF branch correctly on every platform. This direction
+    already discriminates a blanket-`newline=""` call-site reversion on Windows (LF diverges
+    from that platform's own CRLF default there); included for symmetry with the CRLF cell
+    above and so this module tests both `_write_newline_for` branches at the call site, not
+    only in `_write_newline_for` itself (`test_write_newline_for_picks_the_convention_from_
+    raw_bytes`, above).
+    """
+    fd, path = tempfile.mkstemp(suffix=".json", prefix="t2533_lf_scratch_")
+    os.close(fd)
+    original = b'{\n  "a": 1\n}\n'
+    try:
+        with open(path, "wb") as f:
+            f.write(original)
+        with _mutated(path, lambda text: text.replace('"a": 1', '"a": 2')):
+            with open(path, "rb") as f:
+                mutated_bytes = f.read()
+            assert mutated_bytes == b'{\n  "a": 2\n}\n', (
+                "the mutation itself must preserve LF while changing content -- got %r" % mutated_bytes
+            )
+        with open(path, "rb") as f:
+            restored = f.read()
+        assert restored == original, (
+            "_mutated must restore a forced-LF scratch file byte-for-byte, on every platform -- "
+            "got %r, want %r" % (restored, original)
+        )
+    finally:
+        os.remove(path)
+
+
 
 
 # T-2497 (Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Significant 2, D-SLM5758):
@@ -489,6 +596,13 @@ def test_write_newline_for_picks_the_convention_from_raw_bytes():
 # each open `_mutated(registry_rel, ...)`, so the registry is now written THROUGH `_mutated` too,
 # not only directly. Every entry in this tuple except `_MODEL_H` is now a real `_mutated` target;
 # `_MODEL_H` alone remains the harmless superset guard -- ten entries total, unchanged.
+#
+# T-2533 correction (Poirot 4187739-t2532-superslm-ci-green-confirmation.md M-2n): "not only
+# directly" above is itself now stale -- T-2531's own C-1 fix routed
+# `test_part3_missing_scopes_entry_is_reported_when_a_fixed_site_has_no_registry_record_at_all`
+# (the LAST remaining direct-write path this paragraph and the T-2497 paragraph above both name)
+# through `_mutated` too. As of that fix, every entry in this tuple except `_MODEL_H` is
+# accessed EXCLUSIVELY through `_mutated` -- there is no longer any direct-write path at all.
 _MUTATED_TARGETS_AND_REGISTRY_PATHS = (
     _ADAPTER_H,
     _MATMUL_H,
