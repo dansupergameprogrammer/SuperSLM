@@ -218,6 +218,31 @@ def check_required_groups(model):
     fold pipeline requires structurally: every WeightScales key must name an
     actual Weights tensor -- an orphaned fold entry is a converter bug, not a
     model fact.
+
+    `dynamic_biases` is deliberately NOT in the always-required tuple below
+    (CKN-03, T-2539). **T-2543 correction to the grounding.** The frozen
+    design's own text (`t2408` Sec6 Track C step 4) argues `dynamic_biases`'s
+    emptiness is "verified total by the same L5/L6 totality check that
+    already runs upstream in `load_model`" -- read as a claim that the
+    totality check VERIFIES bias completeness, that argument is circular
+    under `_upstream_names`'s own per-projection gating: a gated bias entry
+    is removed from BOTH sides of the totality comparison (the map's own
+    demanded set and the checkpoint's present set) before that check ever
+    runs, so the check has no way to observe a truncated bias population as
+    anomalous -- it was never capable of catching that shape, symmetric
+    bias sets or not. **The real, non-circular reason `dynamic_biases` needs
+    no group-emptiness check:** its population is a deterministic function of
+    `float_biases`'s own population, computed by a single, TOTAL, filter-free
+    dict comprehension (`pipeline.py`'s `dynamic_biases = {name: ... for
+    name, values in float_biases.items()}`) -- empty input produces empty
+    output and non-empty input produces non-empty output, by construction,
+    regardless of what any totality check does or does not verify elsewhere.
+    A checkpoint biasing some layers or projections and not others (legitimate
+    per CKN-02's own per-projection-independent gating, matching the runtime's
+    own independent per-projection nullptr support) was never caught by this
+    group-emptiness check even before CKN-03, and is not caught by any other
+    check in this pipeline today -- that is an accepted architectural
+    generality, not a hole CKN-03 opened.
     """
     for name in ("weights", "weight_scales", "composition_constants",
                  "kv_landing_scales", "kv_landing_reciprocals"):
