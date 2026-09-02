@@ -1006,13 +1006,30 @@ def _regression_parent_own_fp_instructions(data):
     ]
 
 
-def _classify_ab_reject(regression_parent_fp):
-    """T-2535 (S-4): an A/B REJECT on RegressionParent has exactly two possible causes, and this
-    is the boundary between them -- given the symbol's own decoded FP instructions (or lack of
-    them, from `_regression_parent_own_fp_instructions`), returns which one applies. A non-empty
-    list means the fixture's own premise genuinely does not hold under this compile (a real,
-    uncommissioned-edition condition); an empty list means checks (A)/(B) rejected a symbol that
-    carries no FP -- an instrument false positive, not a fixture-premise gap."""
+def _classify_ab_reject(ab_verdict, regression_parent_fp):
+    """T-2535 (S-4), widened T-2537 (S-2): a non-ACCEPT `ab_verdict` on RegressionParent has
+    THREE possible causes, and this is the boundary between them.
+
+    T-2537 correction (Poirot 67bfcbf-t2536-superslm-ci-green-confirmation3.md S-2): this
+    function used to take only `regression_parent_fp` and assume the symbol was PRESENT in
+    `ab_verdicts` with some non-ACCEPT value -- but `result.ab_verdicts.get("RegressionParent")`
+    also returns `None` when the symbol is absent from the scan result ENTIRELY (never scanned by
+    check (A)/(B)/(C) at all), and `None != "ACCEPT"` took the same branch as a real REJECT.
+    `_regression_parent_own_fp_instructions` then returned `[]` for the unrelated reason the
+    symbol is missing, and the old two-way classifier called that `instrument_false_positive` --
+    accusing checks (A)/(B) of rejecting a symbol they never scanned. Executed: with a name absent
+    from `ab_verdicts`, `.get(...)` is `None`, and the old classifier's only two arms both read as
+    a real REJECT.
+
+    Now takes `ab_verdict` itself, checked first: `None` classifies as `instrument_degraded` (the
+    symbol never reached the scan result -- an instrument-degradation state, not a verdict of any
+    kind, and never accused of rejecting anything it never saw). Otherwise, given the symbol's own
+    decoded FP instructions (or lack of them): a non-empty list means the fixture's own premise
+    genuinely does not hold under this compile (a real, uncommissioned-edition condition,
+    `genuine_premise_violation`); an empty list means checks (A)/(B) rejected a symbol that
+    carries no FP -- `instrument_false_positive`, not a fixture-premise gap."""
+    if ab_verdict is None:
+        return "instrument_degraded"
     return "genuine_premise_violation" if regression_parent_fp else "instrument_false_positive"
 
 
@@ -1125,11 +1142,45 @@ def test_population_09_funclet_membership():
         # `_is_x86_fp_arith`); it was not put in this cell. Decoded here, before deciding: a false
         # positive fails loudly instead of skipping past it silently, and a genuine premise
         # violation still skips, naming the edition, exactly as before.
+        # T-2537 (Poirot 67bfcbf-t2536-superslm-ci-green-confirmation3.md S-1, S-2): this block
+        # used to call `pytest.skip()` on a genuine premise violation immediately, before the
+        # `funclet_verdicts` assertion below ever ran -- but that assertion is population nine's
+        # own falsifying construction, and it is INDEPENDENT of RegressionParent's own verdict:
+        # executed, `__catch$RegressionParent$0` REJECTs regardless of what RegressionParent's own
+        # A/B verdict is, so a genuine premise violation on the parent does not stop the funclet
+        # half from still discriminating. And `ab_verdict != "ACCEPT"` took the same branch whether
+        # RegressionParent held a real REJECT verdict or was simply ABSENT from `ab_verdicts`
+        # entirely (`.get(...)` returns `None` either way) -- the absent case is a third,
+        # instrument-degradation state this block could not tell from a REJECT, and reported it as
+        # though checks (A)/(B) had rejected a symbol they never scanned at all.
+        #
+        # Restructured: classify first, without exiting early. A genuine premise violation or an
+        # absent-symbol state records why this cell cannot vouch for RegressionParent's own verdict
+        # (`skip_reason`) but does NOT return -- the funclet assertion below still runs regardless,
+        # and `pytest.skip` (if `skip_reason` is set) fires only AFTER it, so a funclet failure
+        # under a degraded parent state is reported as a real failure, not masked by the skip. An
+        # instrument false positive (the worst class of defect this scanner can have) still fails
+        # loudly and immediately -- there is nothing further to discriminate once checks (A)/(B)
+        # have wrongly rejected a symbol proven FP-free.
         edition = _detected_msvc_edition()
         ab_verdict = result.ab_verdicts.get("RegressionParent")
-        if ab_verdict != "ACCEPT":
+        skip_reason = None
+        if ab_verdict is None:
+            skip_reason = (
+                "population nine's own fixture symbol 'RegressionParent' is ABSENT from this "
+                "scan result's own ab_verdicts entirely (an instrument-degradation state, not a "
+                "check verdict of any kind) under this machine's MSVC edition ({}): {} named "
+                "symbols were scanned and none is 'RegressionParent', so checks (A)/(B)/(C) never "
+                "ran on it and nothing here accuses any check of rejecting anything it never saw. "
+                "Re-fixture population nine for this edition/toolset before trusting its own "
+                "verdict here. S-2, "
+                "Claude/Poirot/67bfcbf-t2536-superslm-ci-green-confirmation3.md.".format(
+                    edition, len(result.ab_verdicts))
+            )
+        elif ab_verdict != "ACCEPT":
             regression_parent_fp = _regression_parent_own_fp_instructions(data)
-            assert _classify_ab_reject(regression_parent_fp) == "genuine_premise_violation", (
+            cause = _classify_ab_reject(ab_verdict, regression_parent_fp)
+            assert cause != "instrument_false_positive", (
                 "INSTRUMENT FALSE POSITIVE, not a fixture-premise gap: RegressionParent's own "
                 "decoded instructions carry NO FP arithmetic under this machine's MSVC edition "
                 "({}), yet ab_verdicts['RegressionParent'] == {!r} -- checks (A)/(B) rejected an "
@@ -1140,7 +1191,7 @@ def test_population_09_funclet_membership():
                 "Claude/Poirot/2945361-t2534-superslm-ci-green-confirmation2.md.".format(
                     edition, ab_verdict)
             )
-            pytest.skip(
+            skip_reason = (
                 "population nine's own fixture premise (RegressionParent carries no FP "
                 "instruction of its own) does not hold under this machine's MSVC edition ({}): "
                 "ab_verdicts['RegressionParent'] == {!r}, and its own decoded instructions DO "
@@ -1149,19 +1200,24 @@ def test_population_09_funclet_membership():
                 "S-1n/S-4, Claude/Poirot/2945361-t2534-superslm-ci-green-confirmation2.md.".format(
                     edition, ab_verdict, regression_parent_fp)
             )
-        assert result.verdicts.get("RegressionParent") == "ACCEPT", (
-            "RegressionParent's own check-(A)/(B) verdict is ACCEPT (verified above, edition {}), "
-            "so a REJECT here is a check-(C) external-call-target gap for this edition's own STL "
-            "-- vet the real target and add it to _X86_EXTERN_ALLOW "
-            "(tests/ci/check_fp_free_scan.py), the same fix _invoke_watson (S-1n) already "
-            "received, rather than skipping".format(edition)
-        )
+        else:
+            assert result.verdicts.get("RegressionParent") == "ACCEPT", (
+                "RegressionParent's own check-(A)/(B) verdict is ACCEPT (verified above, edition "
+                "{}), so a REJECT here is a check-(C) external-call-target gap for this edition's "
+                "own STL -- vet the real target and add it to _X86_EXTERN_ALLOW "
+                "(tests/ci/check_fp_free_scan.py), the same fix _invoke_watson (S-1n) already "
+                "received, rather than skipping".format(edition)
+            )
+
         funclet_verdicts = [result.verdicts.get(n) for n in catch_funclets]
         assert any(v == "REJECT" for v in funclet_verdicts), (
             "the catch funclet must REJECT -- membership must include it even "
             "though no call/jmp instruction names it; verdicts: {}".format(
                 dict(zip(catch_funclets, funclet_verdicts)))
         )
+
+        if skip_reason is not None:
+            pytest.skip(skip_reason)
 
 
 def test_invoke_watson_is_in_the_extern_allow_list():
@@ -1288,21 +1344,37 @@ def test_symbol_own_instructions_detects_real_fp_when_present():
         )
 
 
-def test_classify_ab_reject_distinguishes_the_two_causes():
-    """T-2535 (S-4): commissions the decision boundary itself, not merely the decode -- an empty
-    FP-instruction list must classify as an instrument false positive (checks (A)/(B) rejected a
-    symbol that carries no FP: the worst class of defect this scanner can have), and a non-empty
-    one must classify as a genuine premise violation (the fixture's own compile really does carry
-    FP under this edition). Both branches of `_regression_parent_own_fp_instructions`'s possible
-    output are exercised directly, independent of any real compile or any installed MSVC edition.
+def test_classify_ab_reject_distinguishes_the_three_causes():
+    """T-2535 (S-4), widened T-2537 (S-2): commissions the decision boundary itself, not merely
+    the decode. A non-ACCEPT `ab_verdict` has THREE possible causes now, not two: `None` (the
+    symbol absent from the scan result entirely -- an instrument-degradation state, not a check
+    verdict of any kind) must classify as `instrument_degraded`, checked BEFORE the FP-instruction
+    list is even consulted (the old two-argument function had no way to reach this state at all,
+    and reported it as `instrument_false_positive` -- S-2's own finding, executed: `None !=
+    "ACCEPT"` is `True`, and the old classifier's only two arms both read that as a real REJECT).
+    A real, non-`None` verdict with an empty FP-instruction list must still classify as an
+    instrument false positive (checks (A)/(B) rejected a symbol that carries no FP: the worst
+    class of defect this scanner can have); a non-empty one must classify as a genuine premise
+    violation (the fixture's own compile really does carry FP under this edition). All three
+    branches are exercised directly, independent of any real compile or any installed MSVC
+    edition.
     """
-    assert _classify_ab_reject([]) == "instrument_false_positive", (
-        "no decoded FP instructions must classify as an instrument false positive, not a "
-        "fixture-premise gap"
+    assert _classify_ab_reject(None, []) == "instrument_degraded", (
+        "an absent symbol (ab_verdict is None) must classify as instrument_degraded, checked "
+        "before the FP-instruction list, regardless of what that list contains -- never as an "
+        "instrument false positive or a premise violation"
     )
-    assert _classify_ab_reject([("addsd", "xmm0, xmm1")]) == "genuine_premise_violation", (
-        "a real decoded FP instruction must classify as a genuine premise violation, not an "
-        "instrument false positive"
+    assert _classify_ab_reject(None, [("addsd", "xmm0, xmm1")]) == "instrument_degraded", (
+        "ab_verdict is None must classify as instrument_degraded even when a caller passes a "
+        "non-empty FP-instruction list -- the None check comes first, unconditionally"
+    )
+    assert _classify_ab_reject("REJECT", []) == "instrument_false_positive", (
+        "a real REJECT verdict with no decoded FP instructions must classify as an instrument "
+        "false positive, not a fixture-premise gap"
+    )
+    assert _classify_ab_reject("REJECT", [("addsd", "xmm0, xmm1")]) == "genuine_premise_violation", (
+        "a real REJECT verdict with a real decoded FP instruction must classify as a genuine "
+        "premise violation, not an instrument false positive"
     )
 
 
