@@ -623,7 +623,12 @@ def _mutated_targets_and_registry_are_byte_identical_after_the_module_runs():
     already bound to this repo's `tools/`, per this file's own docstring above) -- snapshots the
     raw bytes of every path in `_MUTATED_TARGETS_AND_REGISTRY_PATHS` BEFORE the first cell in
     this module runs, and asserts them byte-identical AFTER the last one has, whatever mix of
-    `_mutated()` blocks and direct registry writes ran in between. Closes T-2496's Significant 2
+    `_mutated()` blocks ran in between (T-2533 correction, Poirot 4187739-t2532-superslm-ci-
+    green-confirmation.md M-2n: "and direct registry writes" is stale here too -- T-2531's own
+    C-1 fix routed the last direct-write cell through `_mutated`, so every entry in
+    `_MUTATED_TARGETS_AND_REGISTRY_PATHS` except `_MODEL_H` is now reached exclusively through
+    `_mutated`; see the tuple's own comment, above, for the full correction chain). Closes
+    T-2496's Significant 2
     (D-SLM5758) at the root rather than per-cell: a fix that touches one of the paths named
     in `_MUTATED_TARGETS_AND_REGISTRY_PATHS` and leaves it modified fails HERE regardless of what
     that fix's own cell asserts.
