@@ -19,6 +19,7 @@ tables so the runtime never calls a platform regex or Unicode library (D-SLM13).
 import argparse
 import hashlib
 import json
+import re
 import struct
 import sys
 from pathlib import Path
@@ -68,13 +69,28 @@ def derive_model_name(ckpt_dir):
     directories whose own leaf name is already descriptive (e.g. a merged-LoRA output).
     Detect the first shape by its `models--` cache-key convention; fall back to the
     checkpoint directory's own leaf name for everything else.
+
+    T-2529 (converter-validate, linux-x64 job): a checkpoint path is not always authored
+    on the OS that later runs this converter -- a Windows-produced HF hub cache copied
+    onto a Linux build box, or a path recorded verbatim in a manifest and read back on a
+    different machine, both carry Windows-style backslash separators regardless of where
+    the string is finally parsed. `pathlib.Path` splits on the HOST's own separator
+    convention (`PurePosixPath` never treats `\\` as a separator), so a backslash path
+    handed to this function on Linux was read as one opaque leaf component and returned
+    whole rather than reaching either branch above -- reproduced by direct execution
+    (`tools/test_convert_tokenizer.py`'s own fixtures, all Windows-style paths, run under
+    Linux). Parses the string directly on both separators instead of delegating to
+    `pathlib`, so the same path string derives the same model name regardless of which OS
+    is running this function.
     """
-    p = Path(ckpt_dir).resolve()
-    grandparent = p.parent.parent.name if p.parent.name == "snapshots" else None
+    parts = [seg for seg in re.split(r"[\\/]+", str(ckpt_dir)) if seg not in ("", ".")]
+    leaf = parts[-1] if parts else str(ckpt_dir)
+    parent = parts[-2] if len(parts) >= 2 else None
+    grandparent = parts[-3] if parent == "snapshots" and len(parts) >= 3 else None
     if grandparent and grandparent.startswith("models--") and grandparent.count("--") >= 2:
         repo = grandparent.split("--", 2)[2]
         return repo.lower()
-    return p.name.lower()
+    return leaf.lower()
 
 
 # --- The tokenizer tables extracted from an HF checkpoint -----------------------
