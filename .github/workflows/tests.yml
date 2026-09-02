@@ -635,18 +635,22 @@ jobs:
       # useful evidence even in the steady state) and writes only a build artifact,
       # never the committed file.
       #
-      # Integration sequence: push (or PR) -> this leg runs, unconditionally
-      # records its own measurement to the build artifact below, and -- because
-      # tools/ci/branch_coverage_floors.json has no src/matmul.cpp key at HEAD --
-      # the check step FAILS the leg with the named message -> a human downloads
-      # the measured-branch-coverage-floors artifact and commits src/matmul.cpp's
-      # measured value into tools/ci/branch_coverage_floors.json, next to that
-      # file's own "_measured_cell" comment (already present, naming the cell:
-      # GitHub-hosted Linux runner, clang-18, llvm-cov/llvm-profdata 18, the full
-      # suite, all five binaries unioned) -> the next push finds the key present
-      # and the leg goes green, unless a genuine regression occurred between the
-      # two runs (in which case it correctly stays red, exactly as it would have
-      # if the number had been correct from the start).
+      # Integration sequence: push (or PR) -> this leg runs, unconditionally records its
+      # own measurement to the build artifact below, and -- if any file this build measures
+      # has no entry in tools/ci/branch_coverage_floors.json, or measures below the floor an
+      # entry there already states -- the check step FAILS the leg with the named message ->
+      # a human downloads the measured-branch-coverage-floors artifact and commits that
+      # file's measured value into tools/ci/branch_coverage_floors.json, next to that file's
+      # own "_measured_cell" comment (already present, naming the cell: GitHub-hosted Linux
+      # runner, clang-18, llvm-cov/llvm-profdata 18, the full suite, all five binaries
+      # unioned) -> the next push finds the key present and the leg goes green, unless a
+      # genuine regression occurred between the two runs (in which case it correctly stays
+      # red, exactly as it would have if the number had been correct from the start).
+      # T-2531 (Poirot 5e128ee-t2530-superslm-ci-green-review.md M-3): this paragraph used to
+      # name src/matmul.cpp specifically as a file with no committed entry at HEAD, as a
+      # worked example -- stale since e8b809f gave it one; the paragraph above is now generic
+      # to any file the mechanism applies to, rather than restating a specific file's own
+      # state, which drifts as floors are added.
       - name: Record branch-coverage floors from this leg's own run
         run: |
           python3 tools/ci/check_branch_coverage_floors.py \
