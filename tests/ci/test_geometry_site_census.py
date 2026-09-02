@@ -229,19 +229,36 @@ without running this file, reddening 13 of its then-41 cells --
     unchanged -- this module's own standard (above, "population derived and verified at source
     before the mechanism was built") is that a construction is grounded in the real tree, not
     fabricated to exercise a mechanism in the abstract, and neither file has a real, compilable
-    subject left for any of these shapes. Four of the ten (the must-accept/dead-exclusion/
-    ambiguous-exclusion/safe-direction populations' own rename-and-reformat pair) are RETARGETED
-    onto `proof_manifest.h` instead of deleted outright -- that file's own exclusion is untouched
-    by T-2509 and still live, so the underlying property (position-independence, a dead/ambiguous
-    exclusion is reported by name, rename/reformat re-triggers the census) still has a real
-    subject and is still proven, just against the one file where it remains true. One cell
-    (`test_two_line_split_is_the_documented_f2_limitation_still_open`) is SPLIT in two rather than
-    deleted or retargeted: T-2509's own window widening is QOW-only, deliberately (census.py's
-    own comment above the window loop), so half of what this cell's own construction proved --
-    the QOW-shaped two-line split -- now FAILS the census where it used to PASS, while the other
-    half (an R1-shaped two-line split, a new construction this round adds) is still NOT caught,
-    exactly as documented. Net: ten deletions, one two-way split, thirty-two cells passing (was
-    forty-one; twenty-nine pre-existing plus the new R1 cell).
+    subject left for any of these shapes. All ten are genuinely absent from the tip file -- none
+    is retargeted. Five SURVIVING cells, never among the ten, are separately retargeted onto
+    `proof_manifest.h` (that file's own exclusion is untouched by T-2509 and still live, so the
+    underlying property each proves -- one member of the excise-mechanism population
+    (`test_excise_does_not_touch_an_unrelated_line_in_a_registered_file`), both members of the
+    safe-direction population (`test_safe_direction_rename_of_the_excused_enumerator_reddens`,
+    `test_safe_direction_reformat_of_the_excused_line_reddens`), one member of the dead-exclusion
+    population (`test_dead_exclusion_is_reported_when_its_subject_is_deleted`), and one member of
+    the ambiguous-exclusion population (`test_part2_ambiguous_exclusion_fires_on_a_literal_
+    duplicate_copy`) -- still has a real subject and is still proven, just against the one file
+    where it remains true). One cell (`test_two_line_split_is_the_documented_f2_limitation_still_
+    open`) is SPLIT in two rather than deleted or retargeted: T-2509's own window widening is
+    QOW-only, deliberately (census.py's own comment above the window loop), so half of what this
+    cell's own construction proved -- the QOW-shaped two-line split -- now FAILS the census where
+    it used to PASS, while the other half (an R1-shaped two-line split, a new construction this
+    round adds) is still NOT caught, exactly as documented. Net (name-diffed against the tip file:
+    11 removed, 2 added, 30 kept): ten deletions, one two-way split, thirty-two cells passing (was
+    forty-one; thirty kept plus the split's own two halves).
+
+    T-2524 correction (Poirot e4bcaeb-t2518-census-fix-confirmation.md Minor 1, D-SLM5883): the
+    paragraph above originally said "29 pre-existing plus the new R1 cell" (= 30, not 32) and
+    named "four of the ten ... RETARGETED onto proof_manifest.h" as must-accept/dead-exclusion/
+    ambiguous-exclusion/safe-direction -- both wrong, checked at source: no deleted cell is
+    retargeted, the five retargets above are all SURVIVING cells, must-accept's own two
+    non-`proof_manifest.h` members are among the ten DELETED (not retargeted) with its
+    `proof_manifest.h` member simply untouched, and the excise-mechanism population (omitted from
+    the original four) has one retarget of its own. Two of the ten -- `test_excise_leaves_
+    appended_new_content_in_the_remainder` and `test_excise_leaves_prepended_new_content_in_the_
+    remainder` -- are additionally RESTORED (not merely corrected in the account): see the
+    mechanism-cells section's own header comment, above, for why they were deleted in error.
   - Poirot's own Significant 1 (`include/superslm/model.h`'s ConfigGeometryHiddenSizeMismatch
     comment falsely claims "UNREACHABLE, no live producer returns this" when four `src/model.cpp`
     returns are live) is fixed in place: the two clauses T-2509 dropped while copying
@@ -274,11 +291,15 @@ without running this file, reddening 13 of its then-41 cells --
     contains a single-line hit anywhere in it, verified by construction (a minimal probe: one
     QOW-shaped statement now produces exactly one finding, not two).
   - Poirot's own Minor 2 (the `_OUT_CHANNELS_RE` comment claims every genuine `out_channels` use
-    tree-wide is a bare identifier -- false; 31 occurrences across six distinct prefixed
-    identifiers exist tree-wide) is corrected: the comment (census.py) now states the narrower,
-    verified-true claim the tightening actually rests on (no CODE line in Part 2's own swept
-    scope pairs `hidden_size` with a prefixed `*_out_channels`), independently re-verified by grep
-    and by a direct sweep of the swept scope.
+    tree-wide is a bare identifier -- false; prefixed identifiers exist tree-wide) is corrected:
+    the comment (census.py, above `_OUT_CHANNELS_RE`) now states the narrower, verified-true claim
+    the tightening actually rests on (no CODE line in Part 2's own swept scope pairs `hidden_size`
+    with a prefixed `*_out_channels`), independently re-verified by grep and by a direct sweep of
+    the swept scope. The exact per-identifier count is not restated here -- see census.py's own
+    comment for the current figure and its disclosed classifier; T-2524 (Poirot e4bcaeb-t2518-
+    census-fix-confirmation.md Minor 2, D-SLM5883) found this bullet's own prior restatement of
+    that count already stale at the commit that carried it, which is the drift this indirection
+    is meant to stop recurring.
   - Poirot's own Minor 3 (`tools/t2113_b6b_adapter_delta_smoke.cpp`'s own `StepCpu` loads an
     adapter at `q_width` but calls `RunLayerLoop` without threading `q_width` through, taking the
     `= 0` default that resolves to `effective_q_width = hidden_size` -- an under-read on a
@@ -291,6 +312,14 @@ without running this file, reddening 13 of its then-41 cells --
     span <=12 lines and are covered at both ends) is closed on sight, per this file's own
     established convention of closing a cheap gap rather than filing a note for one: the check
     (census.py) now reads `_covered(group_start) or _covered(group_end)`.
+
+    T-2524 correction (Poirot e4bcaeb-t2518-census-fix-confirmation.md Significant 1, D-SLM5880):
+    the expression above is INVERTED -- it emits only when NEITHER end is covered, which is a
+    strict narrowing of the old single-end check, not the superset this bullet's own stated intent
+    describes. Executed on the real tree: four measured gaps where `or` suppresses a genuine
+    finding the pre-T-2518 code used to report, and the (covered start, uncovered end) case this
+    Observation names is still missed. Corrected to `_covered(group_start) and _covered(group_end)`
+    (census.py) -- emit unless BOTH ends are covered, the superset the bullet above always intended.
   - D-SLM5859 (the census sweeps `.worktrees`, so its result depends on which checkout it is
     invoked from -- `D:/SuperSLM` itself holds roughly sixty nested full-source checkouts under
     its own `.worktrees` directory) is fixed rather than deferred: `.worktrees` is added to
@@ -326,10 +355,17 @@ _FORWARD_SITES_CPP_T2481 = os.path.join("src", "forward", "forward_sites.cpp")
 # the file ever changed. One definition, referenced from both places.
 _PROOF_MANIFEST_CPP = os.path.join("src", "proof_manifest.cpp")
 _SUPERSLM_GPU_CPP = os.path.join("src", "gpu", "superslm_gpu.cpp")
+# T-2524 (Poirot e4bcaeb-t2518-census-fix-confirmation.md Significant 3, D-SLM5882): GS-32's and
+# GS-33's own new construction sites, neither previously a `_mutated` target.
+_SSLM_ABI_CPP = os.path.join("src", "sslm_abi.cpp")
+_GPU_1P0_CPP = os.path.join("src", "gpu", "gpu_1p0.cpp")
 
 _ADAPTER_FRAGMENT = 'if (proj == "q_proj" || proj == "o_proj" || proj == "down_proj") return hidden_size;'
-_MODEL_FRAGMENT = "ConfigGeometryHiddenSizeMismatch,    // R1: hidden_size != num_attention_heads * head_dim"
 _PROOF_FRAGMENT = "HiddenSizeGeometryMismatch, // hidden_size != num_attention_heads * head_dim -- R1, REMOVED"
+# T-2524 (Poirot e4bcaeb-t2518-census-fix-confirmation.md Minor 4, D-SLM5883): `_MODEL_FRAGMENT`
+# (formerly defined here) was referenced only by its own definition and by prose comments after
+# T-2518 deleted every cell built on it -- dead in HEAD (StandardsDocument.md §6.6). Removed; the
+# historical fold-in bullets above still name it in prose, which needs no live constant to be true.
 
 
 def _write_newline_for(raw_bytes: bytes) -> str:
@@ -413,6 +449,16 @@ def test_write_newline_for_picks_the_convention_from_raw_bytes():
 # this suite has -- Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Sec7). The
 # dirty-checkout class this fixture closes, for these eight paths, can return with the suite
 # green if it lands on an unlisted ninth.
+#
+# T-2524 correction (Poirot e4bcaeb-t2518-census-fix-confirmation.md Minor 4, D-SLM5883): "seven
+# `_mutated` targets ... EXACTLY" was already false when written -- `_MODEL_H` is in this tuple
+# and mutated by nothing (`_MODEL_FRAGMENT`, its own fixture, is dead and removed above; see the
+# mechanism-cells section's own header comment), so only SIX of the eight entries were ever real
+# `_mutated` targets. `_MODEL_H`'s own presence is a harmless superset guard (a byte-identity
+# check over an untouched path costs nothing), not an eighth `_mutated` target, so "EXACTLY" was
+# also false. Two entries are added this round, `_SSLM_ABI_CPP`/`_GPU_1P0_CPP` (GS-32/GS-33's own
+# new construction sites, Significant 3, D-SLM5882): EIGHT real `_mutated` targets now, plus
+# `_MODEL_H`'s superset guard and the registry, ten entries total.
 _MUTATED_TARGETS_AND_REGISTRY_PATHS = (
     _ADAPTER_H,
     _MATMUL_H,
@@ -421,6 +467,8 @@ _MUTATED_TARGETS_AND_REGISTRY_PATHS = (
     _FORWARD_SITES_CPP_T2481,
     _PROOF_MANIFEST_CPP,
     _SUPERSLM_GPU_CPP,
+    _SSLM_ABI_CPP,
+    _GPU_1P0_CPP,
     os.path.join("tools", "geometry_site_registry.json"),
 )
 
@@ -472,17 +520,32 @@ def _mutated_targets_and_registry_are_byte_identical_after_the_module_runs():
 # no longer shares a physical line with hidden_size there) -- `_PART2_EXCLUDED_TEXT` no longer
 # carries an entry for either file (module docstring's own "WIDENED T-2509" note; census.py's own
 # header comment above `_PART2_EXCLUDED_TEXT`), so `_ADAPTER_FRAGMENT`/`_MODEL_FRAGMENT` no longer
-# match anything in the real tree and every cell built on them either silently no-ops (mutates
-# nothing, asserts against an unmutated tree) or raises constructing its own fixture. Deleted
-# rather than retargeted at a synthetic (path, text) pair invented for the sole purpose of keeping
-# these cells green -- this file's own standard (module docstring, "population derived and
-# verified at source before the mechanism was built") is that a construction is grounded in the
-# real tree, not fabricated to exercise a mechanism in the abstract. `_part2_excise_excluded_text`'s
-# generic contract -- removes a registered fragment's own text, leaves everything else -- is still
-# proven, against the ONE exclusion still live (`proof_manifest.h`), by the cell immediately below
-# and by the end-to-end population further down this file (`test_appending_after_proof_manifest_
-# h_s_trailing_comment_fires_on_apparatus_unsound_grounds`,
-# `test_defeats_the_prior_mechanism_same_line_enumerator_prepend_proof_manifest_h`).
+# match anything in the real tree. T-2518 deleted all four rather than retargeting any of them.
+#
+# T-2524 correction (Poirot e4bcaeb-t2518-census-fix-confirmation.md Significant 2, D-SLM5881):
+# that reasoning does not hold for two of the four. `test_excise_removes_the_adapter_marshal_
+# fragment_entirely` and `test_excise_removes_the_full_widened_model_h_fragment_including_its_
+# own_comment` call `_part2_excise_excluded_text` against each file's OWN fragment constant -- once
+# neither fragment exists in the tree, both silently no-op (mutate nothing, assert against an
+# unmutated tree) and are correctly deleted; `test_excise_removes_the_adapter_marshal_fragment_
+# entirely` additionally adds nothing even retargeted (a whole-line skip also removes the fragment
+# outright, so it does not discriminate from the surviving `..._proof_manifest_h_fragment_
+# including_its_own_comment` cell below). But `test_excise_leaves_appended_new_content_in_the_
+# remainder` and `test_excise_leaves_prepended_new_content_in_the_remainder` call
+# `_part2_excise_excluded_text(path, line)` on a SYNTHETIC STRING LITERAL -- they never touch the
+# tree and never needed a compilable subject, only a REGISTERED path, which `proof_manifest.h`
+# still is. Restored below, retargeted onto `_PROOF_H`/`_PROOF_FRAGMENT` -- executed: pass on the
+# clean tree, and BOTH fail under `_part2_excise_excluded_text` reverted to skip-whole-line-on-
+# match, the mutation this file's own S2 red-check comment block (further down this file) exists
+# to measure. These two are the excise mechanism's only UNIT-LEVEL pins for "new content sharing
+# an excused line is left in the remainder" -- the surviving end-to-end population further down
+# this file (`test_appending_after_proof_manifest_h_s_trailing_comment_fires_on_apparatus_unsound_
+# grounds`, `test_defeats_the_prior_mechanism_same_line_enumerator_prepend_proof_manifest_h`) both
+# depend on `proof_manifest.h` still carrying a live exclusion, one edit away from having no
+# subject left at all -- these two take their input as an argument instead, and do not.
+#
+# `_part2_excise_excluded_text`'s generic contract -- removes a registered fragment's own text,
+# leaves everything else -- is proven by all four surviving cells in this section together.
 
 def test_excise_does_not_touch_a_line_in_an_unregistered_file():
     line = _ADAPTER_FRAGMENT + "\n"
@@ -504,6 +567,29 @@ def test_excise_removes_the_full_widened_proof_manifest_h_fragment_including_its
     out = census._part2_excise_excluded_text(_PROOF_H, line)
     assert "head_dim" not in out
     assert "hidden_size" not in out
+
+
+def test_excise_leaves_appended_new_content_in_the_remainder():
+    # T-2524 (Poirot e4bcaeb-t2518-census-fix-confirmation.md Significant 2, D-SLM5881):
+    # restored, retargeted from _ADAPTER_H/_ADAPTER_FRAGMENT to _PROOF_H/_PROOF_FRAGMENT -- this
+    # cell never mutates the tree; it calls `_part2_excise_excluded_text` directly on a synthetic
+    # string and needs only a REGISTERED path, which `proof_manifest.h` still is (unlike
+    # adapter_marshal.h, whose own exclusion T-2509 fixed away). See this section's own header
+    # comment for why T-2518 deleted this cell in error.
+    line = "\t" + _PROOF_FRAGMENT + ' if (proj == "k_proj") { uint64_t out_channels = hidden_size; return out_channels; }\n'
+    out = census._part2_excise_excluded_text(_PROOF_H, line)
+    assert "k_proj" in out
+    assert "num_attention_heads" not in out, (
+        "the excused fragment's own text must be gone from the remainder"
+    )
+
+
+def test_excise_leaves_prepended_new_content_in_the_remainder():
+    # T-2524: restored, retargeted from _ADAPTER_H/_ADAPTER_FRAGMENT to _PROOF_H/_PROOF_FRAGMENT --
+    # see the cell above and this section's own header comment.
+    line = 'uint64_t sneaky_new_site = hidden_size; /* alias */ \t' + _PROOF_FRAGMENT + "\n"
+    out = census._part2_excise_excluded_text(_PROOF_H, line)
+    assert "sneaky_new_site" in out
 
 
 # --- Cell zero: the real, unmutated tree is clean today. ---
@@ -781,6 +867,101 @@ def test_two_line_split_r1_case_is_still_the_documented_f2_limitation():
     )
 
 
+# =====================================================================================
+# T-2524 (Poirot e4bcaeb-t2518-census-fix-confirmation.md Significant 1, D-SLM5880): a merged
+# window group's own coverage check was `_covered(group_start) or _covered(group_end)` -- this
+# EMITS ONLY when NEITHER end is covered, a strict narrowing of the pre-T-2518 single-end check,
+# not the superset the comment above it always described. Fixed to `and` -- emit unless BOTH
+# ends are covered. Nothing in the suite asserted that a finding IS reported for a genuinely
+# unmarked group with one end near an unrelated marker, in either direction; these two cells
+# close that gap directly, each planting its own disposable marker (`_marker_line`, registered
+# against a `confirmed-correct` registry entry with no `required_tokens`, so Part 3 never checks
+# it) at a swept distance from a genuinely unmarked two-line QOW split -- reproducing Poirot's own
+# executed construction. A 4-line comment-only buffer on every side keeps the real surrounding
+# tree's own markers and window scans from reaching in or being reached.
+# =====================================================================================
+
+def _covered_start_uncovered_end_probe_lines() -> list[str]:
+    # Marker ABOVE the group, 25 lines from the group's own START (covered) and therefore 26
+    # from its END (uncovered) -- this is the case Poirot's own Observation 1 named: a covered
+    # start suppressing a genuine finding for an uncovered end. `or` left this open; `and`
+    # closes it (not(True and False) == True -> emit).
+    return (
+        ["\t// T-2524 buffer\n"] * 4
+        + [_marker_line("\t", "GS-9001")]
+        + ["\t// T-2524 filler\n"] * 24
+        + ['\tif (proj == "q_proj") {\n', "\t\treturn hidden_size;\n"]
+        + ["\t// T-2524 buffer\n"] * 4
+    )
+
+
+def _uncovered_start_covered_end_probe_lines() -> list[str]:
+    # Marker BELOW the group, 25 lines from the group's own END (covered) and therefore 26 from
+    # its START (uncovered) -- the case the pre-T-2518 single-end check already caught (checking
+    # `group_start` alone), and the case T-2518's own `or` silently stopped reporting. Guards
+    # against a re-regression to `or` as surely as the cell above guards the Observation's own
+    # named case.
+    return (
+        ["\t// T-2524 buffer\n"] * 4
+        + ['\tif (proj == "q_proj") {\n', "\t\treturn hidden_size;\n"]
+        + ["\t// T-2524 filler\n"] * 24
+        + [_marker_line("\t", "GS-9002")]
+        + ["\t// T-2524 buffer\n"] * 4
+    )
+
+
+def _with_probe_registry_entry(gs_id: str):
+    def _t(registry_json):
+        import json
+        data = json.loads(registry_json)
+        assert not any(s["id"] == gs_id for s in data["sites"]), (
+            f"{gs_id} is no longer free -- pick a different probe id"
+        )
+        data["sites"].append({
+            "id": gs_id,
+            "family": "QOW",
+            "file": "include/superslm/matmul.h",
+            "function": "T-2524 disposable probe (window group coverage, not a real geometry site)",
+            "status": "confirmed-correct",
+            "expected_marker_count": 1,
+        })
+        return json.dumps(data, indent=2)
+    return _t
+
+
+def test_part2_window_group_covered_start_uncovered_end_is_still_reported():
+    injected = "".join(_covered_start_uncovered_end_probe_lines())
+
+    def _t(text):
+        assert "}  // namespace superslm" in text
+        return text.replace("}  // namespace superslm", injected + "}  // namespace superslm", 1)
+
+    registry_rel = os.path.join("tools", "geometry_site_registry.json")
+    with _mutated(_MATMUL_H, _t), _mutated(registry_rel, _with_probe_registry_entry("GS-9001")):
+        failures = census.run_census(_REPO_ROOT)
+    assert any("UNMARKED QOW PATTERN HIT (window)" in f and "matmul.h" in f for f in failures), (
+        "a genuinely unmarked two-line QOW split with a COVERED start and an UNCOVERED end must "
+        "still be reported -- if this reverts to passing, S1's own `and` fix has regressed to `or`"
+    )
+
+
+def test_part2_window_group_uncovered_start_covered_end_is_still_reported():
+    injected = "".join(_uncovered_start_covered_end_probe_lines())
+
+    def _t(text):
+        assert "}  // namespace superslm" in text
+        return text.replace("}  // namespace superslm", injected + "}  // namespace superslm", 1)
+
+    registry_rel = os.path.join("tools", "geometry_site_registry.json")
+    with _mutated(_MATMUL_H, _t), _mutated(registry_rel, _with_probe_registry_entry("GS-9002")):
+        failures = census.run_census(_REPO_ROOT)
+    assert any("UNMARKED QOW PATTERN HIT (window)" in f and "matmul.h" in f for f in failures), (
+        "a genuinely unmarked two-line QOW split with an UNCOVERED start and a COVERED end must "
+        "still be reported -- this is the shape the pre-T-2518 single-end check already caught, "
+        "and T-2518's own `or` silently stopped reporting"
+    )
+
+
 def test_known_limitation_for_f2_is_printed_on_a_passing_run():
     proc = subprocess.run(
         [sys.executable, os.path.join(_REPO_ROOT, "tools", "geometry_site_census.py")],
@@ -859,6 +1040,61 @@ def test_part3_unrelated_edit_elsewhere_in_the_file_does_not_false_fail():
     )
 
 
+# =====================================================================================
+# T-2524 (Poirot e4bcaeb-t2518-census-fix-confirmation.md Significant 3, D-SLM5882): T-2518's own
+# two new production changes -- GS-32/GS-33 flipped to `status: "fixed"` with `required_tokens`,
+# and `.worktrees` added to `_SKIP_DIR_NAMES` -- were guarded by nothing. Reverting either left the
+# census PASSing and the suite green, the same shape as T-2514's own Significant 2 one level out.
+# Three cells close it: two drive the GS-32/GS-33 revert mutation the way `test_part3_gs14_
+# revert_with_marker_untouched_is_still_caught` (above) already does for GS-14, and one plants a
+# `.worktrees` subtree under a scratch root rather than depending on how many worktrees this
+# checkout happens to carry.
+# =====================================================================================
+
+_GS32_FIXED_LINE = "\tbase_geom.q_width = static_cast<uint64_t>(bc.num_attention_heads) * bc.head_dim;\n"
+_GS32_REVERTED_LINE = "\tbase_geom.q_width = bc.hidden_size;\n"
+
+
+def test_part3_gs32_revert_to_hidden_size_is_caught():
+    def _t(text):
+        assert _GS32_FIXED_LINE in text, "GS-32's own fixed line has moved -- update this fixture"
+        return text.replace(_GS32_FIXED_LINE, _GS32_REVERTED_LINE, 1)
+    with _mutated(_SSLM_ABI_CPP, _t):
+        failures = census.run_census(_REPO_ROOT)
+    assert failures, "GS-32's fix reverted to bc.hidden_size with its marker left in place must still fail Part 3"
+    assert any("GS-32" in f and "REGRESSED SITE" in f for f in failures)
+
+
+_GS33_FIXED_LINE = "\tbase_geom.q_width = static_cast<uint64_t>(model->num_attention_heads) * model->head_dim;\n"
+_GS33_REVERTED_LINE = "\tbase_geom.q_width = model->hidden_size;\n"
+
+
+def test_part3_gs33_revert_to_hidden_size_is_caught():
+    def _t(text):
+        assert _GS33_FIXED_LINE in text, "GS-33's own fixed line has moved -- update this fixture"
+        return text.replace(_GS33_FIXED_LINE, _GS33_REVERTED_LINE, 1)
+    with _mutated(_GPU_1P0_CPP, _t):
+        failures = census.run_census(_REPO_ROOT)
+    assert failures, "GS-33's fix reverted to model->hidden_size with its marker left in place must still fail Part 3"
+    assert any("GS-33" in f and "REGRESSED SITE" in f for f in failures)
+
+
+def test_worktrees_subtree_under_a_scratch_repo_root_is_not_swept(tmp_path):
+    # Planted rather than asserted against the real tree -- a scratch root's own count is stable
+    # regardless of how many worktrees this checkout happens to carry (D-SLM5859 measured roughly
+    # sixty under `D:/SuperSLM` itself; that number is not this cell's own subject).
+    assert ".worktrees" in census._SKIP_DIR_NAMES
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "kept.h").write_text("// kept\n", encoding="utf-8")
+    nested = tmp_path / ".worktrees" / "some-branch" / "src"
+    nested.mkdir(parents=True)
+    (nested / "excluded.h").write_text("// must not be swept\n", encoding="utf-8")
+    found = list(census._iter_source_files(str(tmp_path)))
+    names = {os.path.basename(p) for p in found}
+    assert "kept.h" in names
+    assert "excluded.h" not in names, ".worktrees must be excluded from the sweep"
+
+
 # --- S2 red-check: reverting `_part2_excise_excluded_text` to skip-whole-line-on-match (the
 # TEXT-keyed exclusion mechanism the reviewer's own mutation-proof reverted to -- `Claude/Brunel/
 # t2475-census-exclusion-class-2026-08-31.md` Sec10 records what was actually run; NOT a return
@@ -869,20 +1105,31 @@ def test_part3_unrelated_edit_elsewhere_in_the_file_does_not_false_fail():
 # reversion -- 8 failed, 32 passed, up from the prior 6 failed/34 passed).
 #
 # T-2518 re-execution (Poirot Critical 1's own fold-in, this docstring's own T-2518 fold-in
-# bullet above): reddens exactly TWO cells now -- 2 failed, 30 passed. Six of the prior eight are
-# gone from the population: `test_defeats_the_prior_mechanism_same_line_append_adapter_marshal`,
-# `test_appending_after_model_h_s_trailing_comment_fires_on_apparatus_unsound_grounds`,
-# `test_prepended_content_on_an_excused_line_is_also_caught`,
-# `test_defeats_the_prior_mechanism_same_line_enumerator_prepend_model_h`,
-# `test_excise_leaves_appended_new_content_in_the_remainder`, and
-# `test_excise_leaves_prepended_new_content_in_the_remainder` are all deleted (this file's own
-# T-2518 fold-in bullet, above, names why). The two that remain --
+# bullet above): reddened exactly TWO cells -- 2 failed, 30 passed. Four of the prior eight are
+# gone from the population, correctly: `test_defeats_the_prior_mechanism_same_line_append_
+# adapter_marshal`, `test_appending_after_model_h_s_trailing_comment_fires_on_apparatus_unsound_
+# grounds`, `test_prepended_content_on_an_excused_line_is_also_caught`, and `test_defeats_the_
+# prior_mechanism_same_line_enumerator_prepend_model_h` are all deleted (this file's own T-2518
+# fold-in bullet, above, names why; all four are keyed on `_ADAPTER_H`/`_ADAPTER_FRAGMENT` or
+# `_MODEL_H`/`_MODEL_FRAGMENT`, both fixed away). The two that remained --
 # `test_appending_after_proof_manifest_h_s_trailing_comment_fires_on_apparatus_unsound_grounds`
-# and `test_defeats_the_prior_mechanism_same_line_enumerator_prepend_proof_manifest_h` -- are the
-# whole surviving population, both still keyed on `proof_manifest.h`'s own exclusion, untouched by
-# T-2509. The two cells T-2491 deletes (formerly the `..._insert_before_comment_*` pair) were
-# never among these -- executed and confirmed at the time: neither depended on the excision
-# mechanism at all, so reverting it left both unaffected regardless of whether they existed.
+# and `test_defeats_the_prior_mechanism_same_line_enumerator_prepend_proof_manifest_h` -- were
+# both still keyed on `proof_manifest.h`'s own exclusion, untouched by T-2509.
+#
+# T-2524 correction (Poirot e4bcaeb-t2518-census-fix-confirmation.md Significant 2, D-SLM5881):
+# `test_excise_leaves_appended_new_content_in_the_remainder` and `test_excise_leaves_prepended_
+# new_content_in_the_remainder` were deleted alongside the four above on the SAME stated reason --
+# incorrectly: both call `_part2_excise_excluded_text(path, line)` on a synthetic string literal,
+# never touch the tree, and need only a REGISTERED path, which `proof_manifest.h` still is.
+# Restored, retargeted onto `_PROOF_H`/`_PROOF_FRAGMENT` (mechanism-cells section, above).
+# Re-executed against the same reversion: **FOUR cells now redden, not two** -- 4 failed, 32
+# passed. The two that remained after T-2518 are the whole surviving END-TO-END population; these
+# two restored cells are the excise mechanism's only UNIT-LEVEL pins -- they take their subject as
+# an argument rather than reading it off the tree, so they do not depend on `proof_manifest.h`
+# still carrying a live exclusion the way the other two do. The two cells T-2491 deletes (formerly
+# the `..._insert_before_comment_*` pair) were never among either population -- executed and
+# confirmed at the time: neither depended on the excision mechanism at all, so reverting it left
+# both unaffected regardless of whether they existed.
 
 
 # --- Observation carried into this round (Poirot 6597903-t2472-ask5-tracka-confirmation.md

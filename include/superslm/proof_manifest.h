@@ -55,7 +55,13 @@ enum class ConfigGeometryStatus {
 	                            // (T-2432 Track A step 1, GS-01): no live producer returns this
 	                            // from CheckConfigGeometry itself any longer (D-SLM5418); kept,
 	                            // additive-only (D-SLM3526), as ValidateConfigGeometryJoin's own
-	                            // SslmModelStatus target for the two zero-boundary statuses below
+	                            // SslmModelStatus target for ZeroAttentionHeads, ZeroKeyValueHeads,
+	                            // ZeroHeadDim, and ZeroHiddenSize (T-2524, Poirot e4bcaeb-t2518-
+	                            // census-fix-confirmation.md Minor 3, D-SLM5883: four
+	                            // ConfigGeometryStatus values map to this one target via
+	                            // src/model.cpp:1307/:1330, not "the two ... below" -- two of the
+	                            // four, ZeroAttentionHeads/ZeroKeyValueHeads, are ABOVE this
+	                            // enumerator in this very enum)
 	                            // and its own unrecognized-status fallback (src/model.cpp).
 	// T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Minor 7, D-SLM5440; fix recorded as D-SLM5452): R1's removal
 	// left these two zero cases unguarded on the pure function -- executed and confirmed at the

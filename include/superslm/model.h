@@ -212,7 +212,14 @@ enum class SslmModelStatus {
 	                                      // returns this FROM CheckConfigGeometry ITSELF any
 	                                      // longer (D-SLM5418); kept, additive-only (D-SLM3526), AS
 	                                      // ValidateConfigGeometryJoin's own SslmModelStatus target
-	                                      // for the two Zero* statuses below and its own
+	                                      // for ConfigGeometryStatus's ZeroAttentionHeads,
+	                                      // ZeroKeyValueHeads, ZeroHeadDim, and ZeroHiddenSize (four
+	                                      // values, include/superslm/proof_manifest.h's own enum --
+	                                      // this enum, SslmModelStatus, carries no Zero* enumerator
+	                                      // of its own; T-2524, Poirot e4bcaeb-t2518-census-fix-
+	                                      // confirmation.md Minor 3, D-SLM5883, corrects "the two
+	                                      // Zero* statuses below", which named neither the right
+	                                      // count nor the right file) and its own
 	                                      // unrecognized-status fallback (src/model.cpp). T-2509
 	                                      // (Claude/Linnaeus/t2508-geometry-interchangeability-
 	                                      // fact-sheet-2026-09-01.md §3.4); corrected T-2518

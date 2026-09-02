@@ -173,13 +173,21 @@ _QOW_TOKENS = ("q_proj", "o_proj", "q_weight", "o_weight", "q_fold", "o_fold", "
 # first time (they were never on one physical line together before), firing a QOW hit on a
 # declaration that has nothing to do with q_proj/o_proj at all. T-2518 correction (Poirot
 # Minor 2): the claim used to be that every genuine `out_channels` use tree-wide is a bare
-# identifier -- false as stated. Grepped tree-wide: prefixed identifiers carrying `out_channels`
-# as a bare substring DO exist -- `kv_out_channels` (19), `o_proj_out_channels` (5),
-# `want_out_channels` (3), `q_proj_out_channels` (2), `tq_proj_out_channels` (1),
-# `to_proj_out_channels` (1); 31 occurrences across six distinct prefixed identifiers. The
-# narrowing itself is still safe -- verified separately, and the claim it actually rests on: no
-# CODE line in Part 2's own swept scope (`_PART2_ALLOWED_PREFIXES`/`_PART2_ALLOWED_FILES`, below)
-# pairs `hidden_size` with one of those prefixed identifiers, so this tightening changes nothing
+# identifier -- false as stated. Prefixed identifiers carrying `out_channels` as a bare substring
+# DO exist -- `kv_out_channels` (20), `o_proj_out_channels` (3), `want_out_channels` (4),
+# `q_proj_out_channels` (1), `tq_proj_out_channels` (1), `to_proj_out_channels` (1); 30
+# occurrences across six distinct prefixed identifiers, tree-wide, over every file this census's
+# own `_iter_source_files` sweeps (no `production_only` filter), for a maximal identifier token
+# matching `\b\w+_out_channels\b` -- disclosed here, per T-2524 (Poirot e4bcaeb-t2518-census-fix-
+# confirmation.md Minor 2, D-SLM5883), so the count is reproducible rather than restated.
+# T-2518's own count (19/5/3/2/1/1 = 31) was measured at `a3a20bc`, the tree before the commit
+# that carried it, and had already drifted by the time it landed (StandardsDocument.md §5.4:
+# check a count against the tree at the commit that carries the correction). This measurement is
+# re-executed at the tip of every fix round that touches this file; verify against the tree
+# before restating it again. The narrowing itself is still safe -- verified separately, and the
+# claim it actually rests on: no CODE line in Part 2's own swept scope (`_PART2_ALLOWED_PREFIXES`/
+# `_PART2_ALLOWED_FILES`, below) pairs `hidden_size` with one of those prefixed identifiers, so
+# this tightening changes nothing
 # for a real hit there, even though prefixed identifiers exist elsewhere in the wider tree.
 _OUT_CHANNELS_RE = re.compile(r"(?<![A-Za-z0-9_])out_channels")
 
@@ -606,7 +614,18 @@ def run_census(repo_root: str) -> list[str]:
             # one-line, no-live-instance-today closure (all 20 real groups measured span <=12 lines
             # and are covered at both ends) rather than a note, per this file's own convention of
             # closing a cheap gap on sight instead of filing it.
-            if not (_covered(group_start) or _covered(group_end)):
+            #
+            # T-2524 (Poirot e4bcaeb-t2518-census-fix-confirmation.md Significant 1, D-SLM5880):
+            # T-2518 implemented this as `or`, which emits only when NEITHER end is covered -- the
+            # exact opposite of a superset of the old single-end check. Truth table over (start
+            # covered, end covered): `or` SUPPRESSES the (uncovered start, covered end) case the
+            # old code used to report, and still MISSES (covered start, uncovered end), the case
+            # this comment names. Executed on the real tree (a swept marker distance in
+            # `include/superslm/matmul.h`, restored byte-identical): four measured gaps where `or`
+            # loses a real finding the old code reported, zero gained. `and` -- emit unless BOTH
+            # ends are covered -- is the superset this comment always intended: it reports every
+            # case the old single-end check did, plus the (covered start, uncovered end) case.
+            if not (_covered(group_start) and _covered(group_end)):
                 snippet = " / ".join(ln.strip() for ln in lines[group_start - 1:group_end] if ln.strip())
                 failures.append(
                     f"UNMARKED {group_hit} PATTERN HIT (window): {os.path.relpath(path, repo_root)}:"
