@@ -122,13 +122,23 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   reconciled: 1937 (T-2539's own tip) + 6 new T-2543 cells = **1943/1943 passed**
   (`-m "not upstream"`, real checkpoints present); 1939 passed/4 skipped CI-faithful.
   `pytest tests/ci/`: 423 passed, unchanged. Fix log:
-  `Claude/Brunel/t2543-ask5-trackc-fix-round-2026-09-02.md` (records worktree).
+  `Claude/Brunel/t2543-ask5-trackc-fix-round-2026-09-02.md` (records worktree). Build
+  log: `Claude/Brunel/t2539-ask5-trackc-build-2026-09-02.md` (records worktree).
 
-  Full converter validation suite unregressed: 1937/1937 passed
-  (`pytest tools/ tests/reference/ -m "not upstream"`, this tree's own real checkpoints
-  present); 1922 passed/4 skipped in the CI-faithful environment (no cached upstream
-  checkpoints). `pytest tests/ci/`: 423 passed. Build log:
-  `Claude/Brunel/t2539-ask5-trackc-build-2026-09-02.md` (records worktree).
+  **T-2549 close-out (confirmation review FIX-THEN-SHIP,
+  `Claude/Poirot/e0fdd60-t2544-ask5-trackc-confirmation.md`).**
+  Closes the confirmation review's one remaining Significant (the C-1 sibling's `ns`
+  parameter is now required, not defaulted -- a reverted call site is a `TypeError` on
+  every real caller, confirmed by direct execution) and four Minors (a genuine, non-
+  duplicated safetensors writer; this entry's own trailing paragraph no longer ends on
+  superseded totals; an unrecognized `qk_norm` fixture sentinel is now a named rejection;
+  the required-norm-gains docstring phrase made exact). Full suite reconciled: 1943
+  (T-2543's own final) + 1 new cell = **1944/1944 passed** (`-m "not upstream"`, real
+  checkpoints present); 1940 passed/4 skipped CI-faithful. `pytest tests/ci/`: 423 passed,
+  unchanged. The 633 MB product artifact's identity is unaffected -- no calibration re-
+  run.
+  Close-out log: `Claude/Brunel/t2549-ask5-trackc-close-out-2026-09-02.md` (records
+  worktree).
 
 ## [1.3.0] - 2026-08-29
 
