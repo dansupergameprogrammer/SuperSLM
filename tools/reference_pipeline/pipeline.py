@@ -2832,6 +2832,27 @@ def _float_layer(cfg, tensors, hidden, maxima, prefix):
     _observe(maxima, f"{prefix}.k", k)
     _observe(maxima, f"{prefix}.v", v)
 
+    # (design §3/§6 Track B step 6, D-SLM5675/D-SLM5676/D-SLM5677): QK-norm, strictly between
+    # this head's projection output and RoPE (below) -- matching modeling_qwen3.py:175-179's own
+    # order exactly (q_norm(q_proj(...)) then apply_rotary_pos_emb). `tensors[f"{prefix}.q_norm.
+    # gain"]`/`.k_norm.gain` (`_layer_tensors`, above) is the checkpoint's own UN-PERMUTED,
+    # UNQUANTIZED float weight -- `.gain` is the lookup key `_upstream_names` maps the
+    # checkpoint's raw `...self_attn.q_norm.weight` tensor to (T-2543 C-1), not a reference to
+    # the engine-side int8 WGT1 tensor of the identical name, which Track C step 6 permutes and
+    # this oracle never reads: this function runs in the checkpoint's native (unpermuted)
+    # coordinate space, so no permutation applies here. `_float_rmsnorm`'s own mean-of-squares
+    # reduces over the last axis, which is head_dim once q/k are reshaped to (steps, heads,
+    # head_dim) above -- exactly the per-head RMSNorm Qwen3RMSNorm(self.head_dim) applies, one
+    # module instance per head. Gated on tensor presence in the checkpoint's own loaded state
+    # dict, matching every other optional-mechanism gate in this design; absent for every
+    # non-QK-norm checkpoint.
+    q_norm_w = tensors.get(f"{prefix}.q_norm.gain")
+    k_norm_w = tensors.get(f"{prefix}.k_norm.gain")
+    if q_norm_w is not None:
+        q = _float_rmsnorm(q, cfg.rms_norm_eps) * q_norm_w
+    if k_norm_w is not None:
+        k = _float_rmsnorm(k, cfg.rms_norm_eps) * k_norm_w
+
     q = _float_rope(q, cfg.rope_theta)
     k = _float_rope(k, cfg.rope_theta)
     _observe(maxima, f"{prefix}.q", q)
@@ -2880,6 +2901,28 @@ def _layer_tensors(float_weight, prefix):
         bias = _float_bias(float_weight, name)
         if bias is not None:
             tensors[f"{name}.bias"] = bias
+    # (design §6 Track B step 6): q_norm/k_norm -- OPTIONAL, present only for a QK-norm-bearing
+    # checkpoint. `.gain` (not `.weight`) is the correct lookup key: `_upstream_names` (above,
+    # T-2543 C-1) maps the checkpoint's own `{ns}layers.{L}.self_attn.q_norm.weight` tensor to
+    # the ENGINE-side name `layer{L}.q_norm.gain` -- the same `.gain`-suffixed convention
+    # `attn_norm.gain`/`mlp_norm.gain` already use two lines above, and `float_weight` (this
+    # function's own parameter, `_CheckpointFloatSource.__call__`) looks up by that mapped
+    # name, not the checkpoint's own raw key. Fetching `f"{prefix}.q_norm.weight"` here raises
+    # KeyError unconditionally (confirmed by execution against a real QK-norm-bearing fixture:
+    # every layer's own q_norm/k_norm silently absent from `tensors`, `_float_layer`'s own new
+    # call site never firing) -- `.gain` is the fix, not a second, independent presence gate.
+    # Absence of the mapped name is a fact about the checkpoint (every non-QK-norm checkpoint
+    # has neither), matching `_float_bias`'s own try/except KeyError convention above, never a
+    # config toggle. This still returns the checkpoint's OWN raw float weight, unpermuted and
+    # unquantized -- `_CheckpointFloatSource` reads the original safetensors tensor at the
+    # mapped name; the ENGINE's own int8 WGT1 tensor of the identical name (Track C step 6,
+    # permuted before quantization) is a completely different object this function never reads.
+    for leaf in ("q_norm.gain", "k_norm.gain"):
+        name = f"{prefix}.{leaf}"
+        try:
+            tensors[name] = float_weight(name)
+        except KeyError:
+            pass
     return tensors
 
 
