@@ -57,6 +57,30 @@ BYTE_ENCODER = bytes_to_unicode()
 BYTE_DECODER = {c: b for b, c in BYTE_ENCODER.items()}
 
 
+class UnsupportedTokenizerShape(ValueError):
+    """Raised, with a named diagnostic, when `tokenizer.json` carries a `model.merges`
+    element or a `post_processor` shape this converter does not recognize -- never a
+    silent guess (N3 discipline:
+    `Claude/Vitruvius/t2408-superslm-ask5-qwen3-arch-design-2026-08-29.md` §6 Track C
+    step 1, applied to Track E in §6 Track E steps 1-2)."""
+
+
+def _parse_merge_element(m, index):
+    """Each element of `model["merges"]` is either the incumbent schema -- a single
+    space-separated string, e.g. "a b" -- or the schema this checkpoint's own
+    `tokenizers` library version emits: a 2-element [a, b] list (no join/split
+    needed). Closes `TOK-04` / D-SLM5573 (t2408 §2.9, §6 Track E step 1): any other
+    element shape is an explicit rejection, never a silent guess."""
+    if isinstance(m, str):
+        return m.split(" ")
+    if isinstance(m, (list, tuple)) and len(m) == 2:
+        return [m[0], m[1]]
+    raise UnsupportedTokenizerShape(
+        f"model.merges[{index}]: unrecognized merge element {m!r} "
+        f"(expected a space-separated string or a 2-element list/tuple)"
+    )
+
+
 def derive_model_name(ckpt_dir):
     """Best-effort model label for the CONFIG blob, from the checkpoint path alone --
     it is the only identifying signal available. `tokenizer_class`/`model_type` in
@@ -106,7 +130,8 @@ class TokenizerTables:
 
         self.vocab = model["vocab"]                       # byte-level-string -> id
         self.id_to_tok = {v: k for k, v in self.vocab.items()}
-        self.merges = [m.split(" ") for m in model["merges"]]  # [ [a,b], ... ] rank order
+        self.merges = [_parse_merge_element(m, i)          # [ [a,b], ... ] rank order
+                       for i, m in enumerate(model["merges"])]
         self.added = tj.get("added_tokens", [])
         self.chat_template = cfg.get("chat_template")
         # All NFC + \p{L}/\p{N}/\s classification runs through the table-driven Unicode

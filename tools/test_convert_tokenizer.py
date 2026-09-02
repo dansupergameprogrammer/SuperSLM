@@ -17,6 +17,8 @@ reintroduces a hardcoded literal -- in either function -- is caught.
 import json
 import struct
 
+import pytest
+
 import convert_tokenizer as CT
 import sslm_format as F
 
@@ -127,3 +129,37 @@ def test_emit_artifact_config_section_changes_when_the_checkpoint_changes():
     ckpt_a = r"D:\hf_cache\hub\models--Qwen--Qwen2.5-1.5B-Instruct\snapshots\989aa7980e4cf806f80c7fef2b1adb7bc71aa306"
     ckpt_b = r"D:\hf_cache\hub\models--Qwen--Qwen2.5-3B-Instruct\snapshots\deadbeefcafe1234567890abcdef1234567890ab"
     assert _bare_tokenizer_tables(ckpt_a).model_name != _bare_tokenizer_tables(ckpt_b).model_name
+
+
+# ==============================================================================
+# _parse_merge_element -- the model.merges schema branch (T-2541, closes TOK-04 /
+# D-SLM5573, t2408 §6 Track E step 1). Pure function, no checkpoint files needed.
+# ==============================================================================
+
+
+def test_parse_merge_element_splits_the_incumbent_space_separated_string_schema():
+    """Every Qwen2.5-family checkpoint's own `model.merges` element -- unchanged
+    behavior from before this fix."""
+    assert CT._parse_merge_element("\u0120 \u0120", 0) == ["\u0120", "\u0120"]
+
+
+def test_parse_merge_element_uses_a_two_element_list_directly():
+    """The pinned Qwen3-Embedding-0.6B candidate's own `model.merges` element schema
+    -- a 2-element list, no join/split needed."""
+    assert CT._parse_merge_element(["\u0120", "\u0120"], 0) == ["\u0120", "\u0120"]
+
+
+def test_parse_merge_element_uses_a_two_element_tuple_directly():
+    assert CT._parse_merge_element(("\u0120", "\u0120"), 0) == ["\u0120", "\u0120"]
+
+
+def test_parse_merge_element_rejects_an_unrecognized_shape_by_name():
+    """A merge element that is neither a string nor a 2-element list/tuple is an
+    explicit, named rejection -- never a silent guess (N3 discipline)."""
+    with pytest.raises(CT.UnsupportedTokenizerShape, match=r"model\.merges\[3\]"):
+        CT._parse_merge_element({"a": "b"}, 3)
+
+
+def test_parse_merge_element_rejects_a_three_element_list():
+    with pytest.raises(CT.UnsupportedTokenizerShape):
+        CT._parse_merge_element(["a", "b", "c"], 0)
