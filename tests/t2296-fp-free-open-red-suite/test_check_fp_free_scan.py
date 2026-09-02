@@ -4389,3 +4389,39 @@ def test_check_a_reason_attribution_census_catches_a_silently_unattributed_accep
         "discriminate a silently-unattributed accept from an attributed "
         "one".format(len(bitwise_family), len(unattributed_mutant))
     )
+
+
+# ---------------------------------------------------------------------------
+# T-2531 (Poirot 5e128ee-t2530-superslm-ci-green-review.md M-2): _X86_GPR_ALLOW's own
+# header comment restated its count as a hand-typed literal ("this set ... is 185
+# entries", "this module's own actual count is 185") twice over, and both were already
+# stale by two before T-2529 added bswap (187 -> 188): a number copied into a comment
+# drifts the moment the set it describes changes and nothing re-checks it. Pinned here
+# instead, so a future addition or removal is caught by the suite rather than left for a
+# future review to notice by counting a set literal by hand.
+# ---------------------------------------------------------------------------
+
+
+def test_x86_gpr_allow_population_is_pinned_by_count_not_by_comment():
+    """M-2's own durable form: a comment restating a collection's size is a second
+    fact that can silently disagree with the first (the collection itself) the moment
+    either changes without the other. This cell is the single source of truth for
+    `_X86_GPR_ALLOW`'s current size -- a future addition or removal changes the
+    expected count here, in the same diff, rather than leaving a stale number in
+    `check_fp_free_scan.py`'s own header comment for the next reviewer to catch by
+    hand-counting the set. 188 = 154 ordinary integer/control-flow/memory mnemonics
+    plus five entries the T-2343 fold-8 sweep individually vetted (cpuid, int, rep,
+    vzeroupper, xgetbv) plus shrd/shld (T-2381) plus bswap (T-2531, this review's own
+    C-1 -- see check_fp_free_scan.py's own comment beside the entry) -- 162 base
+    entries -- plus `_X86_JCC`'s own 26-member condition-code family, merged into
+    `_X86_GPR_ALLOW` at module load (`_X86_GPR_ALLOW |= _X86_JCC`): 162 + 26 = 188."""
+    assert len(scan._X86_GPR_ALLOW) == 188, (
+        "_X86_GPR_ALLOW's own size changed (now {}) without this pin being updated -- "
+        "update the expected count here AND check_fp_free_scan.py's own header comment "
+        "in the same change (M-2: the comment must never again restate a count this "
+        "cell does not also check)".format(len(scan._X86_GPR_ALLOW))
+    )
+    assert "bswap" in scan._X86_GPR_ALLOW, (
+        "bswap (T-2531 C-1's own addition, closing the linux-x64 job's real GCC reject "
+        "on Sha256::Final) is missing from _X86_GPR_ALLOW"
+    )

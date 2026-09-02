@@ -1091,25 +1091,27 @@ def _aarch64_check_a(mnemonic: str, op_str: str) -> bool:
 # Check (B): GPR/control-flow mnemonic allowlist, pinned per ISA.
 # ---------------------------------------------------------------------------
 
-# T-2343 (Brunel), Poirot's S6: this set (plus _X86_JCC below) is 185
-# entries against design Sec4.1's own stated "pinned, 159-entry" production
-# GPR_ALLOW -- the design prints that count with only a partial
-# enumeration, which Poirot's own review states plainly: "an implementer
-# cannot reproduce it exactly from the text... the finding is the absent
-# reconciliation, not any particular entry." Audited this session rather
-# than silently re-affirmed: no entry here is a floating-point mnemonic, and
-# the two names that collide with SSE mnemonics by spelling (`movsd`,
-# `cmpsd` -- both real x86 string-operation names AND real SSE2 scalar-
-# double mnemonics) are safe by construction regardless of this set's own
-# membership, because `scan_object`'s own dispatch routes an instruction to
-# check (A), never check (B), whenever it touches a vector register at all
-# (`touches_vec`, above) -- these two names reach check (B) only on their
-# genuine string-operation reading. This module's own actual count is 185,
-# stated here as the citable fact the design's own text does not yet state;
-# reconciling the design's own printed 159 against this module's 185 (a
-# line-by-line diff with a vetting note per addition) is spec-side work
-# this build does not perform -- filed as a residual, not silently closed
-# by this comment.
+# T-2343 (Brunel), Poirot's S6: this set (plus _X86_JCC below) was audited against design
+# Sec4.1's own stated "pinned, 159-entry" production GPR_ALLOW -- the design prints that
+# count with only a partial enumeration, which Poirot's own review states plainly: "an
+# implementer cannot reproduce it exactly from the text... the finding is the absent
+# reconciliation, not any particular entry." Audited this session rather than silently
+# re-affirmed: no entry here is a floating-point mnemonic, and the two names that collide
+# with SSE mnemonics by spelling (`movsd`, `cmpsd` -- both real x86 string-operation names
+# AND real SSE2 scalar-double mnemonics) are safe by construction regardless of this set's
+# own membership, because `scan_object`'s own dispatch routes an instruction to check (A),
+# never check (B), whenever it touches a vector register at all (`touches_vec`, above) --
+# these two names reach check (B) only on their genuine string-operation reading.
+#
+# T-2531 (Poirot 5e128ee-t2530-superslm-ci-green-review.md M-2): this comment used to
+# restate the set's own size as a hand-typed literal ("this module's own actual count is
+# 185") -- stale by two before this round's own bswap addition, and a third instance of
+# drift the moment anyone touched this set again. The count is now pinned where it can be
+# CHECKED rather than merely stated: `tests/t2296-fp-free-open-red-suite/
+# test_check_fp_free_scan.py::test_x86_gpr_allow_population_is_pinned_by_count_not_by_
+# comment`. Reconciling the design's own printed 159 against this module's real count (a
+# line-by-line diff with a vetting note per addition) is spec-side work this build does not
+# perform -- filed as a residual, not silently closed by this comment.
 _X86_GPR_ALLOW = {
     "mov", "movzx", "movsx", "movsxd", "movabs", "lea",
     "add", "adc", "sub", "sbb", "inc", "dec", "neg", "not",
