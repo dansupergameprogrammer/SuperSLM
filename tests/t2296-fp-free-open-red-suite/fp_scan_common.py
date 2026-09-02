@@ -82,6 +82,16 @@ _VSWHERE_VERSION_RANGE = "[17.0,18.0)"
 # case-insensitive path COMPONENT instead -- matching `vswhere`'s own `installationPath`
 # convention, where the edition name is always the final path segment
 # (`...\Microsoft Visual Studio\2022\Community`), never a substring of an unrelated one.
+#
+# T-2535 (Poirot 2945361-t2534-superslm-ci-green-confirmation2.md O-2): _path_has_segment is
+# defined again, verbatim, in conftest.py -- the same directory, the same round it was added
+# here, mirroring this function's own edition-preference use for that module's BuildTools-first
+# sort. Deliberate, not an oversight: conftest.py does not import this module (matching this
+# whole file's own established pattern -- _VSWHERE_PATH, _VSWHERE_VERSION_RANGE, and
+# _vswhere_vsdevcmd_candidates above are each separately maintained too, per this file's own
+# docstring). This is the exact shape S-3n found drifting (one module's fix landing without its
+# sibling's matching one) -- a future change to this function belongs in BOTH files, in the
+# same commit, until they are unified into a real shared module.
 def _path_has_segment(path, segment):
     """True iff `segment` (case-insensitive) is one whole component of `path`, split on either
     path separator -- not merely a substring anywhere in `path`."""
