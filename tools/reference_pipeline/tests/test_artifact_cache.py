@@ -260,7 +260,10 @@ def _build_synthetic_checkpoint(tmp_path, pipeline, cfg, *, embed_values=None):
     needs to be present on disk for this fixture's cells."""
     checkpoint_dir = tmp_path / "checkpoint"
     checkpoint_dir.mkdir()
-    names = pipeline._upstream_names(cfg)          # upstream -> ours
+    # Bootstrap shape: the checkpoint does not exist on disk yet, so `present` states the
+    # intent directly -- the single literal anchor the legacy, `model.`-prefixed
+    # convention this fixture builds needs.
+    names = pipeline._upstream_names(cfg, present={"model.embed_tokens.weight"})   # upstream -> ours
     embed_upstream = next(u for u, o in names.items() if o == "embed")
     if embed_values is None:
         embed_values = np.arange(cfg.vocab_size * cfg.hidden_size, dtype=np.float32).reshape(
@@ -276,8 +279,11 @@ def _model_pointed_at_checkpoint(pipeline, cfg, checkpoint_dir):
     import dataclasses
 
     model = pipeline.fixture_model(cfg)
-    names = pipeline._upstream_names(cfg)
+    # Reopen shape: the synthetic checkpoint already exists on disk (built by the caller
+    # via `_build_synthetic_checkpoint`), so `present` is derived from its own real
+    # tensors rather than stated as a literal.
     tensors = pipeline._open_checkpoint_tensors(checkpoint_dir)
+    names = pipeline._upstream_names(cfg, present=set(tensors.keys()))
     float_source = pipeline._CheckpointFloatSource(tensors, names, cfg)
     return dataclasses.replace(model, float_source=float_source)
 

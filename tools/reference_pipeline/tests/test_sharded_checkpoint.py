@@ -105,7 +105,16 @@ def _write_tiny_config_json(tmp_path, cfg):
 def _upstream_tensor_shapes(pipeline, cfg):
     """`{upstream_name: shape}` for every tensor `_upstream_names(cfg)` demands, including
     the q/k/v biases (1-D, output width) `_weight_shapes` does not carry."""
-    names = pipeline._upstream_names(cfg)
+    # Bootstrap shape: this helper builds the map to learn what to WRITE, before any
+    # checkpoint exists -- the legacy `model.`-prefixed, biased convention every existing
+    # incumbent fixture in this file carries. Every per-layer bias key is stated directly,
+    # since this map's own bias entries are gated on presence and this helper's whole
+    # purpose is a full legacy checkpoint that DOES carry them.
+    present = {"model.embed_tokens.weight"}
+    for layer in range(cfg.num_hidden_layers):
+        for proj in ("q_proj", "k_proj", "v_proj"):
+            present.add(f"model.layers.{layer}.self_attn.{proj}.bias")
+    names = pipeline._upstream_names(cfg, present=present)
     own_shapes = dict(pipeline._weight_shapes(cfg))
     q_width = cfg.num_attention_heads * cfg.head_dim
     kv_width = cfg.num_key_value_heads * cfg.head_dim
@@ -454,9 +463,10 @@ class TestDimension2Mode0:
         pipeline = require(MODULE)
 
         cfg = pipeline.load_config(checkpoint / "config.json")
-        names = pipeline._upstream_names(cfg)
         index = json.loads((checkpoint / "model.safetensors.index.json").read_text())
         weight_map = index["weight_map"]
+        # Reopen shape: the real checkpoint's own weight_map IS the observed present set.
+        names = pipeline._upstream_names(cfg, present=set(weight_map))
 
         assert set(weight_map) == set(names), (
             "the real checkpoint's weight_map is not an exact bijection with "
@@ -633,9 +643,10 @@ def test_real_3b_checkpoint_routing_is_array_equal_to_a_direct_shard_read():
     pipeline = require(MODULE)
 
     cfg = pipeline.load_config(checkpoint / "config.json")
-    names = pipeline._upstream_names(cfg)
     index = json.loads((checkpoint / "model.safetensors.index.json").read_text())
     weight_map = index["weight_map"]
+    # Reopen shape: the real checkpoint's own weight_map IS the observed present set.
+    names = pipeline._upstream_names(cfg, present=set(weight_map))
     sample = sorted(names)[::max(1, len(names) // 20)]           # ~20 names, deterministic
 
     open_checkpoint_tensors = api(MODULE, "_open_checkpoint_tensors")
@@ -682,9 +693,10 @@ def test_all_434_real_3b_tensors_route_to_an_array_equal_direct_shard_read():
     pipeline = require(MODULE)
 
     cfg = pipeline.load_config(checkpoint / "config.json")
-    names = pipeline._upstream_names(cfg)
     index = json.loads((checkpoint / "model.safetensors.index.json").read_text())
     weight_map = index["weight_map"]
+    # Reopen shape: the real checkpoint's own weight_map IS the observed present set.
+    names = pipeline._upstream_names(cfg, present=set(weight_map))
     assert set(weight_map) == set(names), (
         "the real checkpoint's weight_map is not an exact bijection with "
         "_upstream_names(cfg); this cell's own premise (434 names) no longer holds"
@@ -773,8 +785,14 @@ def test_load_model_rejects_an_unmapped_tensor_on_a_sharded_checkpoint(tmp_path)
     _write_tiny_config_json(tmp_path, _tiny_cfg(require(MODULE)))
     write_index_json(tmp_path / "model.safetensors.index.json", {})   # sharded, vacuously valid
 
+    # The namespace anchor is declared present so prefix detection resolves to the
+    # legacy, `model.`-prefixed convention this fixture's config implies -- leaving
+    # `mystery_proj` as the sole, genuinely unmapped tensor this cell tests for.
     with pytest.raises(unsupported, match="mystery_proj"):
-        load_model(tmp_path, extra_tensors={"model.layers.0.self_attn.mystery_proj.weight": None})
+        load_model(tmp_path, extra_tensors={
+            "model.embed_tokens.weight": None,
+            "model.layers.0.self_attn.mystery_proj.weight": None,
+        })
 
 
 def test_load_model_rejects_a_missing_tensor_on_a_sharded_checkpoint(tmp_path):
@@ -790,7 +808,10 @@ def test_load_model_rejects_a_missing_tensor_on_a_sharded_checkpoint(tmp_path):
     cfg = _tiny_cfg(pipeline)
     _write_tiny_config_json(tmp_path, cfg)
     write_index_json(tmp_path / "model.safetensors.index.json", {})   # sharded, vacuously valid
-    names = pipeline._upstream_names(cfg)
+    # Bootstrap shape: no checkpoint exists on disk yet (the index above is vacuously
+    # empty), so `present` states the legacy `model.`-prefixed convention's anchor
+    # directly, matching `require_tensors` below.
+    names = pipeline._upstream_names(cfg, present={"model.embed_tokens.weight"})
 
     with pytest.raises(KeyError, match="phantom_proj"):
         load_model(
@@ -858,9 +879,10 @@ def _model_pointed_at_a_sharded_checkpoint(pipeline, cfg, checkpoint_dir):
     import dataclasses
 
     model = pipeline.fixture_model(cfg)
-    names = pipeline._upstream_names(cfg)
+    # Reopen shape: `checkpoint_dir` is already built by the caller.
     open_checkpoint_tensors = api(MODULE, "_open_checkpoint_tensors")
     tensors = open_checkpoint_tensors(checkpoint_dir)
+    names = pipeline._upstream_names(cfg, present=set(tensors.keys()))
     float_source = pipeline._CheckpointFloatSource(tensors, names, cfg)
     return dataclasses.replace(model, float_source=float_source)
 
@@ -880,7 +902,9 @@ def test_reopening_a_saved_artifacts_sharded_checkpoint_is_array_equal_to_the_or
     checkpoint_dir.mkdir()
     embed_shape = (cfg.vocab_size, cfg.hidden_size)
     embed_values = np.arange(np.prod(embed_shape), dtype=np.float32).reshape(embed_shape)
-    names = pipeline._upstream_names(cfg)
+    # Bootstrap shape: the checkpoint does not exist on disk yet, so `present` states
+    # the legacy `model.`-prefixed convention's anchor directly.
+    names = pipeline._upstream_names(cfg, present={"model.embed_tokens.weight"})
     embed_upstream = next(u for u, o in names.items() if o == "embed")
     self_consistent_sharded_checkpoint(checkpoint_dir, {
         "shard_a.safetensors": {embed_upstream: embed_values},
@@ -906,7 +930,9 @@ def test_a_partially_missing_sharded_checkpoint_degrades_to_the_stub_on_reload(t
     cfg = _tiny_cfg(pipeline)
     checkpoint_dir = tmp_path / "checkpoint"
     checkpoint_dir.mkdir()
-    names = pipeline._upstream_names(cfg)
+    # Bootstrap shape: the checkpoint does not exist on disk yet, so `present` states
+    # the legacy `model.`-prefixed convention's anchor directly.
+    names = pipeline._upstream_names(cfg, present={"model.embed_tokens.weight"})
     embed_upstream = next(u for u, o in names.items() if o == "embed")
     embed_values = np.zeros((cfg.vocab_size, cfg.hidden_size), dtype=np.float32)
     self_consistent_sharded_checkpoint(checkpoint_dir, {
@@ -936,7 +962,9 @@ def test_the_stub_message_names_the_real_cause_for_a_genuine_absence(tmp_path):
     cfg = _tiny_cfg(pipeline)
     checkpoint_dir = tmp_path / "checkpoint"
     checkpoint_dir.mkdir()
-    names = pipeline._upstream_names(cfg)
+    # Bootstrap shape: the checkpoint does not exist on disk yet, so `present` states
+    # the legacy `model.`-prefixed convention's anchor directly.
+    names = pipeline._upstream_names(cfg, present={"model.embed_tokens.weight"})
     embed_upstream = next(u for u, o in names.items() if o == "embed")
     self_consistent_sharded_checkpoint(checkpoint_dir, {
         "shard_a.safetensors": {embed_upstream: np.zeros((cfg.vocab_size, cfg.hidden_size),
@@ -1035,7 +1063,10 @@ def test_the_real_3b_checkpoint_converts_to_a_working_quantized_model():
     model = load_model(checkpoint)
 
     assert model.config.num_hidden_layers == 36
-    names = pipeline._upstream_names(model.config)
+    # Reopen shape: the real checkpoint already exists on disk (just loaded above).
+    open_checkpoint_tensors = api(MODULE, "_open_checkpoint_tensors")
+    present = set(open_checkpoint_tensors(checkpoint).keys())
+    names = pipeline._upstream_names(model.config, present=present)
     own_shapes = dict(pipeline._weight_shapes(model.config))
     for upstream, ours in names.items():
         if ours.endswith(".bias"):
