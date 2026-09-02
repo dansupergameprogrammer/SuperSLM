@@ -23,16 +23,26 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   T-2530's own review named for the hosted runner, fetched as `.deb` packages and extracted
   without root -- no system package install), `cmake -B build -DCMAKE_BUILD_TYPE=Release` +
   `cmake --build build --target superslm`, then `python3 tests/ci/scan_build_output.py
-  --build-dir build --target superslm --isa x86-64`: **17 object(s); 505 symbol(s) ACCEPT, 0
-  REJECT, 0 object(s) REFUSE** -- an archive-level result under the runner's own exact compiler,
-  not the 8-symbol single-object spot check this entry previously cited (that check remains
-  correct as far as it goes: `Sha256::Final` alone, 1 REJECT without `bswap`, 0 with it). The
-  505-symbol corpus is consistent with T-2530's own prediction that GCC 13.x's corpus differs
-  from GCC 15.2.0's by 58 symbols: the prior archive-level GCC-15.2.0 scan (`5e128ee`, unchanged
-  by this diff -- it touches no file under `src/`) found 447 ACCEPT, 0 REJECT; 447 + 58 = 505,
-  digit for digit. The job's second step, `./build/superslm_tests`, was also run against this
-  same GCC-13.3.0 build: `superslm tests: 24310 checks, 0 failures`. Both steps of the job's own
-  recipe pass on the reproduced cell; the job itself remains unrun.
+  --build-dir build --target superslm --isa x86-64`, whose own full output line is (T-2535
+  correction, Poirot 2945361-t2534-superslm-ci-green-confirmation2.md M-2: the entry previously
+  bolded only up through REFUSE and stopped, truncating the line's own scope-qualifying clause
+  -- check (C) is non-gating by design so the gate verdict is unaffected either way, but a
+  published "0 REJECT" without the clause that bounds it claims a larger cell than was
+  measured): **`Totals: 17 object(s); 505 symbol(s) ACCEPT, 0 REJECT, 0 object(s) REFUSE
+  (checks (A)/(B), gating); 344 symbol(s) reject under check (C) alone (non-gating
+  diagnostic)`** -- an archive-level result under the runner's own exact compiler, not the
+  8-symbol single-object spot check this entry previously cited (that check remains correct as
+  far as it goes: `Sha256::Final` alone, 1 REJECT without `bswap`, 0 with it). The 505-symbol,
+  344-check-(C)-reject corpus matches CI run 33545319929's own `linux-x64` step exactly (`504
+  symbol(s) ACCEPT, 1 REJECT ... 344 symbol(s) reject under check (C) alone` -- the 504/1 split
+  there is that run's own report against a since-fixed tip, T-2529's own `bswap` addition
+  turning the 1 REJECT to 0 here without moving the check-(C) count, and the two runs' matching
+  344 is the genuine corroboration): 447 (`5e128ee`'s own GCC-15.2.0 archive scan, unchanged by
+  this diff -- it touches no file under `src/`) + 58 (T-2530's own review, the GCC-13-vs-15.2.0
+  corpus-size difference) = 505, matching this run and the CI run's own `504 + 1` identically.
+  The job's second step, `./build/superslm_tests`, was also run against this same GCC-13.3.0
+  build: `superslm tests: 24310 checks, 0 failures`. Both steps of the job's own recipe pass on
+  the reproduced cell; the job itself remains unrun.
 
   **This closes only the first of 1.3.0's own two deferral conditions for the Linux/ELF leg (no
   run had completed) -- the second is still outstanding, and the guarantee stays deferred.**
