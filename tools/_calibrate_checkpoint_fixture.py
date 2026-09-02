@@ -155,3 +155,129 @@ def build_fixture_checkpoint(checkpoint_dir: Path, *, seed: int = 0) -> Path:
     _write_safetensors(checkpoint_dir, seed=seed)
     _write_tokenizer(checkpoint_dir)
     return checkpoint_dir
+
+
+def _write_safetensors_shard(checkpoint_dir: Path, tensors: dict) -> None:
+    """Delegates to `tools/reference_pipeline/tests/conftest.py`'s own
+    `write_safetensors_shard` -- the generic, convention-agnostic on-disk tensor writer
+    already used elsewhere in the tree for ad hoc checkpoints -- rather than a fourth
+    reimplementation of the same minimal safetensors-file shape. `tests/` carries no
+    `__init__.py` (pytest's own rootless collection makes it importable as a bare module
+    for test files only); this mirrors `conftest.py`'s own `sys.path` insertion so a
+    plain script import works identically outside pytest.
+    """
+    import sys
+
+    tests_dir = Path(__file__).resolve().parent / "reference_pipeline" / "tests"
+    if str(tests_dir) not in sys.path:
+        sys.path.insert(0, str(tests_dir))
+    from conftest import write_safetensors_shard
+
+    write_safetensors_shard(checkpoint_dir / "model.safetensors", tensors)
+
+
+def _parameterized_tensors(*, prefix, biased, lm_head_present, qk_norm, seed):
+    """`{tensor_name: array}` for one parameterized fixture -- every one of Track C's own
+    checkpoint fixtures is one call to this function under a different `prefix`.
+
+    `prefix="both"`/`prefix=None` emit only the anchor tensor(s) their own rejection cell
+    needs: `_upstream_names`'s namespace-detection rejects before any other tensor is
+    ever read, so the rest of a legitimate checkpoint's payload is not needed to exercise
+    either rejection.
+    """
+    rng = np.random.default_rng(seed)
+    q_width = NUM_ATTENTION_HEADS * HEAD_DIM
+    kv_width = NUM_KEY_VALUE_HEADS * HEAD_DIM
+
+    def small(*shape):
+        return rng.normal(scale=0.02, size=shape).astype(np.float32)
+
+    if prefix == "both":
+        return {
+            "model.embed_tokens.weight": small(VOCAB_SIZE, HIDDEN_SIZE),
+            "embed_tokens.weight": small(VOCAB_SIZE, HIDDEN_SIZE),
+        }
+    if prefix is None:
+        # A root matching NEITHER known anchor.
+        return {"backbone.embed_tokens.weight": small(VOCAB_SIZE, HIDDEN_SIZE)}
+
+    ns = prefix   # "" (bare) or "model." (legacy)
+    tensors = {
+        f"{ns}embed_tokens.weight": small(VOCAB_SIZE, HIDDEN_SIZE),
+        f"{ns}norm.weight": np.ones(HIDDEN_SIZE, dtype=np.float32),
+    }
+    for layer in range(NUM_HIDDEN_LAYERS):
+        p = f"{ns}layers.{layer}"
+        tensors[f"{p}.input_layernorm.weight"] = np.ones(HIDDEN_SIZE, dtype=np.float32)
+        tensors[f"{p}.post_attention_layernorm.weight"] = np.ones(HIDDEN_SIZE, dtype=np.float32)
+        tensors[f"{p}.self_attn.q_proj.weight"] = small(q_width, HIDDEN_SIZE)
+        tensors[f"{p}.self_attn.k_proj.weight"] = small(kv_width, HIDDEN_SIZE)
+        tensors[f"{p}.self_attn.v_proj.weight"] = small(kv_width, HIDDEN_SIZE)
+        tensors[f"{p}.self_attn.o_proj.weight"] = small(HIDDEN_SIZE, q_width)
+        if biased:
+            tensors[f"{p}.self_attn.q_proj.bias"] = small(q_width)
+            tensors[f"{p}.self_attn.k_proj.bias"] = small(kv_width)
+            tensors[f"{p}.self_attn.v_proj.bias"] = small(kv_width)
+        if qk_norm:
+            tensors[f"{p}.self_attn.q_norm.weight"] = np.ones(HEAD_DIM, dtype=np.float32)
+            tensors[f"{p}.self_attn.k_norm.weight"] = np.ones(HEAD_DIM, dtype=np.float32)
+        tensors[f"{p}.mlp.gate_proj.weight"] = small(INTERMEDIATE_SIZE, HIDDEN_SIZE)
+        tensors[f"{p}.mlp.up_proj.weight"] = small(INTERMEDIATE_SIZE, HIDDEN_SIZE)
+        tensors[f"{p}.mlp.down_proj.weight"] = small(HIDDEN_SIZE, INTERMEDIATE_SIZE)
+    if lm_head_present:
+        # lm_head sits outside the `model.` submodule under BOTH conventions -- never
+        # namespaced to `ns`, matching pipeline._upstream_names's own CKN-04 fix.
+        tensors["lm_head.weight"] = small(VOCAB_SIZE, HIDDEN_SIZE)
+    return tensors
+
+
+def build_parameterized_fixture_checkpoint(
+    checkpoint_dir: Path, *, prefix, biased: bool, tie_word_embeddings: bool,
+    lm_head_present: bool = None, qk_norm: bool = True, seed: int = 0,
+) -> Path:
+    """A real, on-disk checkpoint directory whose namespace convention, bias presence,
+    tied-embeddings state, lm_head presence, and QK-norm presence are each stated by the
+    caller -- the one construction every one of Track C's own checkpoint fixtures is built
+    from (design §6 Track C step 8), never a separate hand-built mechanism per cell.
+
+    `prefix`: `"model."` (the legacy, `model.`-prefixed convention every existing
+    incumbent carries), `""` (this ask's own bare-backbone convention), `None` (a
+    sentinel -- emits a root matching NEITHER known anchor, for the "matches neither
+    convention" rejection cell), or `"both"` (a sentinel -- emits BOTH anchor tensors,
+    for the "matches both conventions" rejection cell).
+
+    `lm_head_present` defaults to mirroring `tie_word_embeddings` (the shape every
+    existing incumbent carries: tied embeddings never carry a separate `lm_head.weight`,
+    untied ones always do) and is set independently only to exercise CKN-04's own
+    presence gate directly, both directions.
+
+    `qk_norm` defaults to True -- this ask's own candidate, and the whole reason this
+    track exists, carries these tensors. The backward-compatibility fixture states it
+    False explicitly: "matching every existing incumbent exactly" means a checkpoint
+    that does NOT carry this ask's own new tensors.
+    """
+    checkpoint_dir = Path(checkpoint_dir)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    if lm_head_present is None:
+        lm_head_present = not tie_word_embeddings
+    config = {
+        "hidden_size": HIDDEN_SIZE,
+        "num_hidden_layers": NUM_HIDDEN_LAYERS,
+        "num_attention_heads": NUM_ATTENTION_HEADS,
+        "num_key_value_heads": NUM_KEY_VALUE_HEADS,
+        "head_dim": HEAD_DIM,
+        "intermediate_size": INTERMEDIATE_SIZE,
+        "vocab_size": VOCAB_SIZE,
+        "rope_theta": 10000.0,
+        "rms_norm_eps": 1e-6,
+        "tie_word_embeddings": tie_word_embeddings,
+        "max_position_embeddings": MAX_POSITION_EMBEDDINGS,
+        "model_type": "qwen2",
+    }
+    (checkpoint_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    tensors = _parameterized_tensors(
+        prefix=prefix, biased=biased, lm_head_present=lm_head_present,
+        qk_norm=qk_norm, seed=seed)
+    _write_safetensors_shard(checkpoint_dir, tensors)
+    _write_tokenizer(checkpoint_dir)
+    return checkpoint_dir
