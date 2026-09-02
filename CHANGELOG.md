@@ -6,17 +6,33 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ### Fixed
 
-- **The Linux/ELF FP-free scan leg (`_X86_GPR_ALLOW`) now accepts `bswap`; the `linux-x64` job's
-  own scan step passes.** `superslm::Sha256::Final` (`src/sha256.cpp`) compiles, under the
-  runner's own GCC 13.x (`-O3 -DNDEBUG`, matching the `linux-x64` job's
-  `-DCMAKE_BUILD_TYPE=Release` recipe), to a `bswap` on the byte-swapped big-endian length write
-  -- a pure integer byte-reversal (Intel SDM Vol. 2A: no rounding, no exception, no
-  floating-point register read) absent from the checked-in GPR allow-list
+- **The Linux/ELF FP-free scan leg (`_X86_GPR_ALLOW`) now accepts `bswap`.** `superslm::Sha256::
+  Final` (`src/sha256.cpp`) compiles, under the runner's own GCC 13.x (`-O3 -DNDEBUG`, matching
+  the `linux-x64` job's `-DCMAKE_BUILD_TYPE=Release` recipe), to a `bswap` on the byte-swapped
+  big-endian length write -- a pure integer byte-reversal (Intel SDM Vol. 2A: no rounding, no
+  exception, no floating-point register read) absent from the checked-in GPR allow-list
   `tests/ci/check_fp_free_scan.py` documents as frozen and reviewed-diff-only. Added,
   individually vetted, following that list's own precedent (`shrd`/`shld`, `cpuid`, `rep`,
-  `vzeroupper`, `xgetbv`). Confirmed on the runner's own compiler family (GCC 13.4.0, built
-  without root): 8 real symbols, 1 REJECT (this same symbol, this same mnemonic) without the
-  addition, 0 REJECT with it -- the identical symbol CI names.
+  `vzeroupper`, `xgetbv`).
+
+  **The `linux-x64` job's own scan step has NOT actually run** -- this branch has never been
+  pushed, and no GitHub Actions run of that job exists at this tip. What stands instead (T-2533,
+  closing M-4n/M-5n) is the job's own two-step recipe reproduced end to end, off this exact tip,
+  under the real runner's own compiler: a fresh `git clone` of this branch into WSL/Ubuntu (the
+  same checkout convention `ubuntu-latest` uses), GCC 13.3.0-6ubuntu2~24.04.1 (the exact release
+  T-2530's own review named for the hosted runner, fetched as `.deb` packages and extracted
+  without root -- no system package install), `cmake -B build -DCMAKE_BUILD_TYPE=Release` +
+  `cmake --build build --target superslm`, then `python3 tests/ci/scan_build_output.py
+  --build-dir build --target superslm --isa x86-64`: **17 object(s); 505 symbol(s) ACCEPT, 0
+  REJECT, 0 object(s) REFUSE** -- an archive-level result under the runner's own exact compiler,
+  not the 8-symbol single-object spot check this entry previously cited (that check remains
+  correct as far as it goes: `Sha256::Final` alone, 1 REJECT without `bswap`, 0 with it). The
+  505-symbol corpus is consistent with T-2530's own prediction that GCC 13.x's corpus differs
+  from GCC 15.2.0's by 58 symbols: the prior archive-level GCC-15.2.0 scan (`5e128ee`, unchanged
+  by this diff -- it touches no file under `src/`) found 447 ACCEPT, 0 REJECT; 447 + 58 = 505,
+  digit for digit. The job's second step, `./build/superslm_tests`, was also run against this
+  same GCC-13.3.0 build: `superslm tests: 24310 checks, 0 failures`. Both steps of the job's own
+  recipe pass on the reproduced cell; the job itself remains unrun.
 
   **This closes only the first of 1.3.0's own two deferral conditions for the Linux/ELF leg (no
   run had completed) -- the second is still outstanding, and the guarantee stays deferred.**
@@ -27,8 +43,8 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   `tests/t2296-fp-free-open-red-suite/test_archive_gate.py`'s own `real_elf_archive` fixture
   states this plainly, at this same tip: the population "remains outstanding" (D-SLM5230,
   deferred to 1.3.1). An instrument whose must-reject has never fired has not been shown able to
-  fail -- so the Linux/ELF no-floating-point guarantee is **enforced and green, not yet
-  delivered**; 1.3.1 is where it is delivered, once that population runs.
+  fail -- so the Linux/ELF no-floating-point guarantee is **enforced on the reproduced cell above
+  and not yet delivered**; 1.3.1 is where it is delivered, once that population runs.
 
 - **`tools/convert_tokenizer.py`'s `derive_model_name` now parses a checkpoint path's own
   separators directly, regardless of the OS running the converter.** A Windows-style checkpoint
