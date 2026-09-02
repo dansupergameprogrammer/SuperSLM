@@ -277,3 +277,64 @@ def test_classify_post_processor_rejects_an_unresolvable_special_token_reference
     del pp["processors"][1]["special_tokens"]["<|endoftext|>"]
     with pytest.raises(CT.UnsupportedTokenizerShape, match="does not resolve to exactly one id"):
         CT._classify_post_processor(pp)
+
+
+# ==============================================================================
+# _post_processor_mismatches -- the additive parity check's own counting logic
+# (T-2541, closes D-SLM5575, t2408 §6 Track E step 3). Pure function of a
+# `tables`/`hf`-shaped pair of objects, no checkpoint files needed -- the
+# real-checkpoint acceptance run lives in test_convert_tokenizer_post_processor_
+# parity.py, skipped when the pinned candidate is not present locally.
+# ==============================================================================
+
+
+class _FakeTables:
+    """Stands in for a `TokenizerTables` instance: exposes only the two attributes
+    `_post_processor_mismatches` reads, so this file's tests don't need a real
+    checkpoint to drive the check's own pass/mismatch counting."""
+
+    def __init__(self, trailing_special_id, ids_by_text):
+        self.trailing_special_id = trailing_special_id
+        self._ids_by_text = ids_by_text
+
+    def ref_encode(self, text):
+        return list(self._ids_by_text[text])
+
+
+class _FakeHF:
+    def __init__(self, ids_by_text_with_trailing):
+        self._ids = ids_by_text_with_trailing
+
+    def encode(self, text, add_special_tokens):
+        assert add_special_tokens is True
+        return list(self._ids[text])
+
+
+def test_post_processor_mismatches_counts_zero_when_ref_plus_trailing_matches_hf():
+    tables = _FakeTables(trailing_special_id=999, ids_by_text={"a": [1, 2], "b": [3]})
+    hf = _FakeHF({"a": [1, 2, 999], "b": [3, 999]})
+    assert CT._post_processor_mismatches(tables, hf, ["a", "b"]) == 0
+
+
+def test_post_processor_mismatches_counts_every_line_wrong_by_a_bad_trailing_id():
+    """The must-reject shape by construction: a trailing_special_id one off from
+    what HF's own encode path actually appends makes every line a mismatch."""
+    tables = _FakeTables(trailing_special_id=998, ids_by_text={"a": [1, 2], "b": [3]})
+    hf = _FakeHF({"a": [1, 2, 999], "b": [3, 999]})
+    assert CT._post_processor_mismatches(tables, hf, ["a", "b"]) == 2
+
+
+def test_post_processor_mismatches_counts_only_the_lines_that_actually_differ():
+    tables = _FakeTables(trailing_special_id=999, ids_by_text={"a": [1, 2], "b": [3]})
+    hf = _FakeHF({"a": [1, 2, 999], "b": [3, 1000]})  # only "b" is wrong
+    assert CT._post_processor_mismatches(tables, hf, ["a", "b"]) == 1
+
+
+def test_verify_post_processor_is_vacuous_and_appends_nothing_when_trailing_id_is_none(monkeypatch):
+    """`verify_post_processor` never reaches `_post_processor_mismatches` -- and
+    never calls into `transformers` at all -- when trailing_special_id is None
+    (every incumbent): it returns 0 directly, matching t2408 §6 Track E step 3's
+    "the check is vacuously satisfied" text."""
+    stub = _FakeTables(trailing_special_id=None, ids_by_text={})
+    monkeypatch.setattr(CT, "TokenizerTables", lambda ckpt_dir: stub)
+    assert CT.verify_post_processor("unused-ckpt-dir", "unused-corpus-path") == 0

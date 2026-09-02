@@ -493,10 +493,74 @@ def verify(ckpt_dir, corpus_path, limit=None):
     return mism
 
 
+def _post_processor_mismatches(tables, hf, lines, max_report=8):
+    """The additive check itself (T-2541, closes D-SLM5575, the dead parity gate;
+    t2408 §6 Track E step 3): for a checkpoint whose own `trailing_special_id` is
+    not `None`, `ref_encode(text) + [trailing_special_id]` must equal
+    `hf.encode(text, add_special_tokens=True)` for every corpus record. Factored out
+    of `verify_post_processor` below so a test can drive it against a `tables`
+    object it has deliberately corrupted (the must-reject construction), without
+    needing a second checkpoint that genuinely mis-extracts the append.
+
+    Sited beside `verify` above, additive rather than a change to it: `verify`'s own
+    comparison (`ref_encode` vs. `hf.encode(text, add_special_tokens=False)`) is a
+    legitimate, already-correct, and untouched test of the BPE algorithm alone --
+    flipping its `add_special_tokens` flag was considered and rejected, since
+    `ref_encode` implements no post-processor append by contract (step 2 above) and
+    the candidate's own gate would become permanently unsatisfiable rather than
+    transiently red (t2408 §6 Track E step 3's own executed reasoning)."""
+    mism = []
+    for ln, text in enumerate(lines):
+        got = tables.ref_encode(text)
+        if tables.trailing_special_id is not None:
+            got = got + [tables.trailing_special_id]
+        want = hf.encode(text, add_special_tokens=True)
+        if got != want:
+            mism.append(ln)
+            if len(mism) <= max_report:
+                print(f"MISMATCH line {ln}: {text!r}\n  ref+trailing: {got}\n  hf          : {want}")
+    return len(mism)
+
+
+def verify_post_processor(ckpt_dir, corpus_path, limit=None):
+    """CLI-facing entry point for the additive post-processor-parity check (above).
+    For every incumbent (`trailing_special_id is None`), this check is vacuously
+    satisfied -- `ref_encode(text)` already equals
+    `hf.encode(text, add_special_tokens=True)` for a checkpoint whose own
+    post-processor appends nothing, since `add_special_tokens=True` and `=False`
+    then produce byte-identical HF output (t2408 §6 Track E step 3, "the flag is
+    inert for every incumbent"), so nothing this check adds beyond `verify`'s own
+    gate fires for that population.
+
+    THIS CHECK IS ITSELF A DECIDING INSTRUMENT AND IS NOT COMMISSIONED BY THIS
+    BUILD -- its readings are quarantined pending an independent seat's must-accept
+    and must-reject construction, per t2408 §6 Track E's own note and §9. Do not
+    read a passing run here as proof the check discriminates a real defective
+    extraction from a real correct one; it is stated as an owed obligation, not
+    attempted this fold."""
+    from transformers import AutoTokenizer
+    tables = TokenizerTables(ckpt_dir)
+    if tables.trailing_special_id is None:
+        print("post-processor-parity: vacuous (trailing_special_id is None)")
+        return 0
+    hf = AutoTokenizer.from_pretrained(ckpt_dir)
+    lines = read_corpus_records(corpus_path)
+    if limit:
+        lines = lines[:limit]
+    mism = _post_processor_mismatches(tables, hf, lines)
+    print(f"\npost-processor-parity: {len(lines)} lines, {mism} mismatches, "
+          f"trailing_special_id={tables.trailing_special_id}")
+    return mism
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True, help="HF checkpoint dir with tokenizer.json")
     ap.add_argument("--verify", help="corpus file to check ref_encode vs HF")
+    ap.add_argument("--verify-post-processor",
+                    help="corpus file to check ref_encode+trailing_special_id vs "
+                         "HF add_special_tokens=True (additive; quarantined, see "
+                         "verify_post_processor's own docstring)")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--emit", help="output .sslm path (tokenizer + unicode + chat sections)")
     ap.add_argument("--golden", nargs=2, metavar=("CORPUS", "OUT_JSON"),
@@ -505,6 +569,8 @@ if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
     if args.verify:
         sys.exit(1 if verify(args.ckpt, args.verify, args.limit) else 0)
+    if args.verify_post_processor:
+        sys.exit(1 if verify_post_processor(args.ckpt, args.verify_post_processor, args.limit) else 0)
     if args.emit or args.golden:
         tables = TokenizerTables(args.ckpt)
         if args.emit:
