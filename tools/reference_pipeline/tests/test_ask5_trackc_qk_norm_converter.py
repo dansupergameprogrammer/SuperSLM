@@ -448,3 +448,18 @@ def test_upstream_names_now_requires_the_present_argument():
     )
     with pytest.raises(TypeError):
         pipeline._upstream_names(cfg)
+
+
+def test_build_parameterized_fixture_checkpoint_rejects_an_unrecognized_qk_norm_value(tmp_path):
+    """T-2549 N-4 (Poirot e0fdd60-t2544-ask5-trackc-confirmation.md): before this fix, any
+    value for `qk_norm` other than `True`/`False`/`"q_only"`/`"k_only"` fell through the
+    `if qk_norm:` / `!= "k_only"` / `!= "q_only"` gates and silently built the SYMMETRIC
+    pair -- exactly the shape that would make an asymmetric-presence rejection cell pass
+    vacuously on a mistyped sentinel, and the silent-default shape this tree's own N3
+    discipline forbids for production code. `build_parameterized_fixture_checkpoint` now
+    raises `ValueError` for any other value."""
+    fixture_mod = _fixture_builder()
+    with pytest.raises(ValueError, match="qk_norm"):
+        fixture_mod.build_parameterized_fixture_checkpoint(
+            tmp_path / "bad_qk_norm", prefix="model.", biased=False,
+            tie_word_embeddings=True, qk_norm="both_please")

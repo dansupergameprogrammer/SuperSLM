@@ -229,10 +229,22 @@ def _parameterized_tensors(*, prefix, biased, lm_head_present, qk_norm, seed):
             tensors[f"{p}.self_attn.q_proj.bias"] = small(q_width)
             tensors[f"{p}.self_attn.k_proj.bias"] = small(kv_width)
             tensors[f"{p}.self_attn.v_proj.bias"] = small(kv_width)
+        if qk_norm not in (True, False, "q_only", "k_only"):
+            # T-2549 N-4: an unrecognized qk_norm value used to fall through the `if
+            # qk_norm:`/`!= "k_only"`/`!= "q_only"` gates below and silently build the
+            # SYMMETRIC pair -- the exact silent-default shape this tree's own N3
+            # discipline (an unrecognized constant is a hard rejection, never a silent
+            # drop, cited two paragraphs below for the production code this fixture
+            # exercises) forbids, and specifically the shape that would make an
+            # asymmetric-presence rejection cell pass vacuously if a caller mistyped the
+            # sentinel (Poirot e0fdd60-t2544-ask5-trackc-confirmation.md N-4).
+            raise ValueError(
+                f"qk_norm={qk_norm!r} is not one of True, False, 'q_only', 'k_only'"
+            )
         if qk_norm:
-            # T-2543 C-1: `qk_norm` also accepts the string sentinels "q_only"/"k_only"
-            # (truthy, so this outer gate still fires) -- builds ONE of the pair only, for
-            # the asymmetric-presence rejection cell (design Sec4). Both sentinels still
+            # `qk_norm` also accepts the string sentinels "q_only"/"k_only" (truthy, so
+            # this outer gate still fires) -- builds ONE of the pair only, for the
+            # asymmetric-presence rejection cell (design Sec4). Both sentinels still
             # write the SAME non-uniform values as the symmetric case, below.
             # T-2543 S-2: a uniform (all-ones) gain is invariant under ANY permutation of
             # its own elements, so it cannot discriminate _permuted_if_rope's own
