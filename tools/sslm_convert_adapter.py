@@ -1561,7 +1561,7 @@ def build_merged_checkpoint(adapter_dir, out_dir, *, verbose: bool = True) -> Pa
     checkpoint_dir = _resolve_base_checkpoint_dir(adapter_dir)
     cfg = pipeline.load_config(checkpoint_dir / "config.json")
     tensors = pipeline._open_checkpoint_tensors(checkpoint_dir)
-    names = pipeline._upstream_names(cfg)  # upstream -> ours
+    names = pipeline._upstream_names(cfg, present=set(tensors.keys()))  # upstream -> ours
 
     adapted_upstream = {}
     for layer in range(cfg.num_hidden_layers):
