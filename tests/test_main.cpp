@@ -18845,6 +18845,21 @@ namespace {
 
 // Common call shape for the cells below: a single-token prompt, generous
 // buffers, poisoned outputs so an untouched-on-rejection claim is checkable.
+// T-2531 (Poirot 5e128ee-t2530-superslm-ci-green-review.md M-1): `TwoLayerFixture`'s own
+// per-head arrays (`ctx_fold_identity_arr`/`ctx_fold_mult_arr`/`ctx_fold_shift_arr`, each
+// declared `[1]`) are the ONLY thing that makes `num_attention_heads=1` correct for a call
+// through this fixture -- a bare literal at each call site (T-2529's own fix) relied on a
+// comment to keep it in sync with the fixture's own geometry, and nothing failed if it
+// drifted: the out-of-bounds read the mismatch produces is intra-object (invisible to
+// ASan's default configuration) and was caught only because a garbage value happened to
+// trip UBSan's shift check. Namespace scope (not a member of `TwoLayerFixture` itself,
+// which is used interchangeably across this file's many other fixtures at other head
+// counts) so both `DecodeLoopCallFixture::Run` and
+// `TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse` (free function, below,
+// outside this namespace) read the identical derivation.
+static constexpr size_t kTwoLayerFixtureNumAttentionHeads =
+    std::extent<decltype(TwoLayerFixture::ctx_fold_shift_arr)>::value;
+
 struct DecodeLoopCallFixture {
 	DecodeLoopFixture model;
 	superslm::SequenceLayerState seq{};
@@ -18905,6 +18920,10 @@ struct DecodeLoopCallFixture {
 		// exercises neither S3.7 nor Option-G, so both are passed at their old
 		// default values explicitly (Int8, legacy) rather than relying on a
 		// default that no longer exists.
+		// T-2531 (Poirot 5e128ee-t2530-superslm-ci-green-review.md M-1): `num_attention_heads`
+		// below is `kTwoLayerFixtureNumAttentionHeads` (defined above, namespace scope, just
+		// before this class), derived from the fixture's own per-head array extent rather than a
+		// bare literal -- see that constant's own comment for why.
 		// T-2529: `num_attention_heads` corrected from 2 to 1. `TwoLayerFixture`'s own
 		// constructor (its header comment, T-1374/Significant 4) builds exactly ONE
 		// attention head's worth of per-head geometry: `hidden_size=2, head_dim=2` (so
@@ -18931,7 +18950,7 @@ struct DecodeLoopCallFixture {
 		    stop_ids.data(), stop_ids.size(), max_new_tokens, workspace, sizeof(workspace),
 		    out_tokens.data(), out_logit_rows.data(), out_tokens.size(), &tokens_produced,
 		    &stop_reason, superslm::SslmKvPrecision::Int8, /*option_g_fused_k_landing=*/false,
-		    /*num_attention_heads=*/1);
+		    /*num_attention_heads=*/kTwoLayerFixtureNumAttentionHeads);
 	}
 
 	void CheckEverythingUntouched(const char* what) const {
@@ -18976,13 +18995,16 @@ static void TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse() {
 	    stop_ids.data(), stop_ids.size(), /*max_new_tokens=*/1, tiny_workspace, sizeof(tiny_workspace),
 	    f.out_tokens.data(), f.out_logit_rows.data(), f.out_tokens.size(), &f.tokens_produced,
 	    &f.stop_reason, SslmKvPrecision::Int16, /*option_g_fused_k_landing=*/false,
-	    // T-2529: 2 -> 1, matching `DecodeLoopCallFixture::Run`'s own fix above and this
-	    // fixture's true 1-head geometry -- this specific call is expected to reject at
-	    // KvPrecisionUnsupported before the layer loop ever reads a per-head array, so the
-	    // stale value of 2 never crashed here, but it is corrected for the same reason: a
-	    // future reordering of this rejection ahead of the layer loop must not silently
-	    // reintroduce the out-of-bounds read the sibling call site had.
-	    /*num_attention_heads=*/1);
+	    // T-2531 (Poirot 5e128ee-t2530-superslm-ci-green-review.md M-1): matching
+	    // `DecodeLoopCallFixture::Run`'s own fix above, this argument is derived from the
+	    // fixture's own per-head array extent (`kTwoLayerFixtureNumAttentionHeads`, defined
+	    // there) rather than a second, hand-maintained literal. This specific call is expected
+	    // to reject at KvPrecisionUnsupported before the layer loop ever reads a per-head
+	    // array, so the stale literal `2` this call site used to carry never crashed here --
+	    // but deriving it removes the possibility of a future reordering of this rejection
+	    // silently reintroducing the sibling call site's own out-of-bounds read, without
+	    // relying on a comment to say so.
+	    /*num_attention_heads=*/kTwoLayerFixtureNumAttentionHeads);
 	CHECK_MSG(result == SslmForwardStatus::KvPrecisionUnsupported,
 	          "RunGreedyDecodeLoop(kv_precision=Int16, workspace=1 byte) status == %s, want "
 	          "KvPrecisionUnsupported (checked before the workspace is sized -- a 1-byte workspace "
