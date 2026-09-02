@@ -72,8 +72,10 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   parsed unchanged. **Additive: `TokenizerTables` now also reads the top-level `post_processor`
   key and exposes `trailing_special_id`** -- `None` for every checkpoint whose post-processor is
   absent or a bare `ByteLevel` (every checkpoint this converter previously supported), and the
-  candidate's own appended token id (`151643`) for a `Sequence`-wrapped single-append
-  `TemplateProcessing`; every other shape is an explicit rejection. This reads and exposes the
+  candidate's own appended token id (`151643`) for a `Sequence` whose own `processors` are EXACTLY
+  `[ByteLevel, TemplateProcessing]` in that order, the candidate's own shape; every other shape --
+  including a `Sequence` carrying a third, sibling processor that also inserts tokens -- is an
+  explicit rejection. This reads and exposes the
   fact only -- the emitted `.sslm` `TOK1` artifact's own format and every prior checkpoint's
   emitted bytes are unchanged (confirmed byte-identical against the unmodified converter). A
   second, additive parity check (`--verify-post-processor`) confirms

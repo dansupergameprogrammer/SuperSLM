@@ -240,14 +240,50 @@ def test_classify_post_processor_rejects_a_bare_non_bytelevel_top_level_type():
 def test_classify_post_processor_rejects_a_sequence_with_no_templateprocessing():
     pp = _candidate_shaped_post_processor()
     pp["processors"] = [pp["processors"][0]]  # ByteLevel only, no TemplateProcessing
-    with pytest.raises(CT.UnsupportedTokenizerShape, match="0 TemplateProcessing"):
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="Sequence.processors is"):
         CT._classify_post_processor(pp)
 
 
 def test_classify_post_processor_rejects_a_sequence_with_two_templateprocessing_entries():
     pp = _candidate_shaped_post_processor()
     pp["processors"].append(pp["processors"][1])
-    with pytest.raises(CT.UnsupportedTokenizerShape, match="2 TemplateProcessing"):
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="Sequence.processors is"):
+        CT._classify_post_processor(pp)
+
+
+def test_classify_post_processor_rejects_a_third_sequence_member_even_when_the_first_two_are_correct():
+    """T-2542 Finding 2 (Poirot), ruled by the conductor (D-SLM6052): a `Sequence`
+    is recognized only as EXACTLY the candidate's own two-member shape. Before this
+    fix, the code filtered `processors` for `TemplateProcessing` and never asked
+    what the other members were -- a `Sequence` of
+    `[ByteLevel, TemplateProcessing, BertProcessing]` silently returned 151643,
+    reporting `trailing_special_id` as the whole append when a sibling processor
+    (here, `BertProcessing`) also inserts tokens. The reviewer's own constructed
+    reproduction, verbatim."""
+    pp = _candidate_shaped_post_processor()
+    pp["processors"].append({"type": "BertProcessing", "sep": ["[SEP]", 102], "cls": ["[CLS]", 101]})
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="Sequence.processors is"):
+        CT._classify_post_processor(pp)
+
+
+def test_classify_post_processor_rejects_the_two_recognized_members_out_of_order():
+    """"In that order" per the ruling: TemplateProcessing before ByteLevel is not
+    the candidate's own shape, even though both members are individually
+    recognized types."""
+    pp = _candidate_shaped_post_processor()
+    pp["processors"] = list(reversed(pp["processors"]))
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="Sequence.processors is"):
+        CT._classify_post_processor(pp)
+
+
+def test_classify_post_processor_rejects_a_single_bytelevel_only_sequence():
+    """A `Sequence` wrapping only `ByteLevel` (one member, no append at all) is not
+    the candidate's own two-member shape and is rejected, not silently treated as
+    `trailing_special_id = None` -- the design's own vacuity is reserved for a
+    BARE `ByteLevel` post_processor (the `pp_type == "ByteLevel"` branch above),
+    never a `Sequence`-wrapped one."""
+    pp = {"type": "Sequence", "processors": [{"type": "ByteLevel", "add_prefix_space": False}]}
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="Sequence.processors is"):
         CT._classify_post_processor(pp)
 
 

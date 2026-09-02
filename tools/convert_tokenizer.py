@@ -92,13 +92,20 @@ def _classify_post_processor(pp):
 
     `None`, or a bare processor whose own `type` is exactly `"ByteLevel"` (every
     incumbent observed in this project) carries no trailing-append fact -- returns
-    `None`. A `Sequence` containing exactly one `TemplateProcessing` whose own
-    `single` template is exactly `[{"Sequence": ...}, {"SpecialToken": ...}]` (the
-    candidate's own shape) resolves the appended token's numeric id from that
+    `None`. A `Sequence` whose own `processors` is EXACTLY two members, in order --
+    a bare `"ByteLevel"` processor, then a `TemplateProcessing` whose own `single`
+    template is exactly `[{"Sequence": ...}, {"SpecialToken": ...}]` (the candidate's
+    own shape) -- resolves the appended token's numeric id from that
     `TemplateProcessing`'s own `special_tokens` map and returns it. Any other shape
-    -- a bare, non-`"ByteLevel"` top-level type; a `Sequence` with other than exactly
-    one `TemplateProcessing`; a `single` template of a different length; the
-    `Sequence`/`SpecialToken` entries in the wrong order; or an id the
+    -- a bare, non-`"ByteLevel"` top-level type; a `Sequence` whose own `processors`
+    is not exactly `[ByteLevel, TemplateProcessing]` in that order (T-2542 Finding 2,
+    D-SLM6052: a third member, a different order, or a member other than
+    `TemplateProcessing` in the second position is a silent guess that would report
+    `trailing_special_id` as the whole append when a sibling processor also inserts
+    tokens -- the same vacuousness class D-SLM5619 found and D-SLM5631 repaired one
+    level up, ruled by the conductor as narrowing past the frozen design's own N3
+    discipline rather than a design change); a `single` template of a different
+    length; the `Sequence`/`SpecialToken` entries in the wrong order; or an id the
     `special_tokens` map does not resolve to exactly one entry -- is an explicit
     rejection, never a silent guess (narrowed fold round 13, D-SLM5631, closing
     D-SLM5619's found vacuousness)."""
@@ -112,13 +119,17 @@ def _classify_post_processor(pp):
             f"post_processor: unrecognized top-level type {pp_type!r} "
             f'(expected None, "ByteLevel", or "Sequence")'
         )
-    template_procs = [p for p in pp.get("processors", []) if p.get("type") == "TemplateProcessing"]
-    if len(template_procs) != 1:
+    processors = pp.get("processors", [])
+    processor_types = [p.get("type") if isinstance(p, dict) else type(p).__name__ for p in processors] \
+        if isinstance(processors, list) else type(processors).__name__
+    if not (isinstance(processors, list) and len(processors) == 2
+            and processor_types[0] == "ByteLevel" and processor_types[1] == "TemplateProcessing"):
         raise UnsupportedTokenizerShape(
-            f"post_processor: Sequence contains {len(template_procs)} TemplateProcessing "
-            f"entries (expected exactly 1)"
+            f"post_processor: Sequence.processors is {processor_types!r} "
+            f'(expected exactly two members, in order: ["ByteLevel", "TemplateProcessing"])'
         )
-    single = template_procs[0].get("single")
+    template_proc = processors[1]
+    single = template_proc.get("single")
     if not (isinstance(single, list) and len(single) == 2):
         got = len(single) if isinstance(single, list) else type(single).__name__
         raise UnsupportedTokenizerShape(
@@ -132,7 +143,7 @@ def _classify_post_processor(pp):
             f"expected order (Sequence, SpecialToken): {single!r}"
         )
     special_content_id = special_entry["SpecialToken"]["id"]
-    entry = template_procs[0].get("special_tokens", {}).get(special_content_id)
+    entry = template_proc.get("special_tokens", {}).get(special_content_id)
     ids = entry.get("ids") if entry else None
     if not (isinstance(ids, list) and len(ids) == 1):
         raise UnsupportedTokenizerShape(
