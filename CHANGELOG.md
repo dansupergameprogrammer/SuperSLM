@@ -4,64 +4,13 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+Ask 5's Qwen3-architecture support (`SuperSLM_Plan.md` §22.5) lands here in two pieces,
+both additive and tools-only, both present in this tree already -- but the architecture pin
+itself is claimed only once Track B (the forward call site) lands, as **1.4.0**. A consumer
+building against this tag today gets the converter-side support with no forward-path change;
+it does not yet get a runnable Qwen3-Embedding candidate.
+
 ### Fixed
-
-- **The Linux/ELF FP-free scan leg (`_X86_GPR_ALLOW`) now accepts `bswap`.** `superslm::Sha256::
-  Final` (`src/sha256.cpp`) compiles, under the runner's own GCC 13.x (`-O3 -DNDEBUG`, matching
-  the `linux-x64` job's `-DCMAKE_BUILD_TYPE=Release` recipe), to a `bswap` on the byte-swapped
-  big-endian length write -- a pure integer byte-reversal (Intel SDM Vol. 2A: no rounding, no
-  exception, no floating-point register read) absent from the checked-in GPR allow-list
-  `check_fp_free_scan.py` documents as frozen and reviewed-diff-only. Added,
-  individually vetted, following that list's own precedent (`shrd`/`shld`, `cpuid`, `rep`,
-  `vzeroupper`, `xgetbv`).
-
-  **The `linux-x64` job's own scan step has NOT actually run** -- this branch has never been
-  pushed, and no GitHub Actions run of that job exists at this tip. What stands instead (T-2533,
-  closing M-4n/M-5n) is the job's own two-step recipe reproduced end to end, off this exact tip,
-  under the real runner's own compiler: a fresh `git clone` of this branch into WSL/Ubuntu (the
-  same checkout convention `ubuntu-latest` uses), GCC 13.3.0-6ubuntu2~24.04.1 (the exact release
-  T-2530's own review named for the hosted runner, fetched as `.deb` packages and extracted
-  without root -- no system package install), `cmake -B build -DCMAKE_BUILD_TYPE=Release` +
-  `cmake --build build --target superslm`, then `python3 scan_build_output.py
-  --build-dir build --target superslm --isa x86-64`, whose own full output line is (T-2535
-  correction, Poirot 2945361-t2534-superslm-ci-green-confirmation2.md M-2: the entry previously
-  bolded only up through REFUSE and stopped, truncating the line's own scope-qualifying clause
-  -- check (C) is non-gating by design so the gate verdict is unaffected either way, but a
-  published "0 REJECT" without the clause that bounds it claims a larger cell than was
-  measured): **`Totals: 17 object(s); 505 symbol(s) ACCEPT, 0 REJECT, 0 object(s) REFUSE
-  (checks (A)/(B), gating); 344 symbol(s) reject under check (C) alone (non-gating
-  diagnostic)`** -- an archive-level result under the runner's own exact compiler, not the
-  8-symbol single-object spot check this entry previously cited (that check remains correct as
-  far as it goes: `Sha256::Final` alone, 1 REJECT without `bswap`, 0 with it). The 505-symbol,
-  344-check-(C)-reject corpus matches CI run 33545319929's own `linux-x64` step exactly (`504
-  symbol(s) ACCEPT, 1 REJECT ... 344 symbol(s) reject under check (C) alone` -- the 504/1 split
-  there is that run's own report against a since-fixed tip, T-2529's own `bswap` addition
-  turning the 1 REJECT to 0 here without moving the check-(C) count, and the two runs' matching
-  344 is the genuine corroboration): 447 (`5e128ee`'s own GCC-15.2.0 archive scan, unchanged by
-  this diff -- it touches no file under `src/`) + 58 (T-2530's own review, the GCC-13-vs-15.2.0
-  corpus-size difference) = 505, matching this run and the CI run's own `504 + 1` identically.
-  The job's second step, `./build/superslm_tests`, was also run against this same GCC-13.3.0
-  build: `superslm tests: 24310 checks, 0 failures`. Both steps of the job's own recipe pass on
-  the reproduced cell; the job itself remains unrun.
-
-  **This closes only the first of 1.3.0's own two deferral conditions for the Linux/ELF leg (no
-  run had completed) -- the second is still outstanding, and the guarantee stays deferred.**
-  1.3.0 also deferred on the design's own fiftieth population (`t2265-superslm-fp-free-open-
-  design-2026-08-24.md` Sec5.4 closing paragraph) never having been built: a must-accept run
-  against this wired job's own real archive, and a must-reject run against an archive that
-  genuinely carries floating-point arithmetic. Neither has run.
-  `tests/t2296-fp-free-open-red-suite/test_archive_gate.py`'s own `real_elf_archive` fixture
-  states this plainly, at this same tip: the population "remains outstanding" (D-SLM5230,
-  deferred to 1.3.1). An instrument whose must-reject has never fired has not been shown able to
-  fail -- so the Linux/ELF no-floating-point guarantee is **enforced on the reproduced cell above
-  and not yet delivered**; 1.3.1 is where it is delivered, once that population runs.
-
-- **`tools/convert_tokenizer.py`'s `derive_model_name` now parses a checkpoint path's own
-  separators directly, regardless of the OS running the converter.** A Windows-style checkpoint
-  path (backslash-separated, this project's own HF hub cache convention) previously returned the
-  whole path as the emitted CONFIG section's model label when the converter ran on a POSIX host
-  -- `pathlib.Path` splits only on the running OS's own separator convention. User-visible: the
-  label every converted `.sslm` artifact's CONFIG section carries.
 
 - **`tools/convert_tokenizer.py` no longer crashes on the Qwen3-Embedding-0.6B candidate's
   `tokenizer.json`.** `TokenizerTables.__init__` raised `AttributeError: 'list' object has no
@@ -164,6 +113,171 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   is unaffected -- no calibration re-run.
   Close-out log: `Claude/Brunel/t2549-ask5-trackc-close-out-2026-09-02.md` (records
   worktree).
+
+## [1.3.1] - 2026-09-02
+
+A patch: the six CI jobs behind 1.3.0's own guarantees, fixed at source, plus the engine's
+own handling of non-square attention geometry (`q_width` distinct from `hidden_size`),
+already on `main`.
+
+### Fixed
+
+- **The Linux/ELF FP-free scan leg (`_X86_GPR_ALLOW`) now accepts `bswap`.** `superslm::Sha256::
+  Final` (`src/sha256.cpp`) compiles, under the runner's own GCC 13.x (`-O3 -DNDEBUG`, matching
+  the `linux-x64` job's `-DCMAKE_BUILD_TYPE=Release` recipe), to a `bswap` on the byte-swapped
+  big-endian length write -- a pure integer byte-reversal (Intel SDM Vol. 2A: no rounding, no
+  exception, no floating-point register read) absent from the checked-in GPR allow-list
+  `check_fp_free_scan.py` documents as frozen and reviewed-diff-only. Added,
+  individually vetted, following that list's own precedent (`shrd`/`shld`, `cpuid`, `rep`,
+  `vzeroupper`, `xgetbv`).
+
+  **The `linux-x64` job's own scan step has NOT actually run** -- this branch has never been
+  pushed, and no GitHub Actions run of that job exists at this tip. What stands instead (T-2533,
+  closing M-4n/M-5n) is the job's own two-step recipe reproduced end to end, off this exact tip,
+  under the real runner's own compiler: a fresh `git clone` of this branch into WSL/Ubuntu (the
+  same checkout convention `ubuntu-latest` uses), GCC 13.3.0-6ubuntu2~24.04.1 (the exact release
+  T-2530's own review named for the hosted runner, fetched as `.deb` packages and extracted
+  without root -- no system package install), `cmake -B build -DCMAKE_BUILD_TYPE=Release` +
+  `cmake --build build --target superslm`, then `python3 scan_build_output.py
+  --build-dir build --target superslm --isa x86-64`, whose own full output line is (T-2535
+  correction, Poirot 2945361-t2534-superslm-ci-green-confirmation2.md M-2: the entry previously
+  bolded only up through REFUSE and stopped, truncating the line's own scope-qualifying clause
+  -- check (C) is non-gating by design so the gate verdict is unaffected either way, but a
+  published "0 REJECT" without the clause that bounds it claims a larger cell than was
+  measured): **`Totals: 17 object(s); 505 symbol(s) ACCEPT, 0 REJECT, 0 object(s) REFUSE
+  (checks (A)/(B), gating); 344 symbol(s) reject under check (C) alone (non-gating
+  diagnostic)`** -- an archive-level result under the runner's own exact compiler, not the
+  8-symbol single-object spot check this entry previously cited (that check remains correct as
+  far as it goes: `Sha256::Final` alone, 1 REJECT without `bswap`, 0 with it). The 505-symbol,
+  344-check-(C)-reject corpus matches CI run 33545319929's own `linux-x64` step exactly (`504
+  symbol(s) ACCEPT, 1 REJECT ... 344 symbol(s) reject under check (C) alone` -- the 504/1 split
+  there is that run's own report against a since-fixed tip, T-2529's own `bswap` addition
+  turning the 1 REJECT to 0 here without moving the check-(C) count, and the two runs' matching
+  344 is the genuine corroboration): 447 (`5e128ee`'s own GCC-15.2.0 archive scan, unchanged by
+  this diff -- it touches no file under `src/`) + 58 (T-2530's own review, the GCC-13-vs-15.2.0
+  corpus-size difference) = 505, matching this run and the CI run's own `504 + 1` identically.
+  The job's second step, `./build/superslm_tests`, was also run against this same GCC-13.3.0
+  build: `superslm tests: 24310 checks, 0 failures`. Both steps of the job's own recipe pass on
+  the reproduced cell; the job itself remains unrun.
+
+  **This closes only the first of 1.3.0's own two deferral conditions for the Linux/ELF leg (no
+  run had completed) -- the second is still outstanding, and the guarantee stays deferred.**
+  1.3.0 also deferred on the design's own fiftieth population (`t2265-superslm-fp-free-open-
+  design-2026-08-24.md` Sec5.4 closing paragraph) never having been built: a must-accept run
+  against this wired job's own real archive, and a must-reject run against an archive that
+  genuinely carries floating-point arithmetic. Neither has run.
+  `tests/t2296-fp-free-open-red-suite/test_archive_gate.py`'s own `real_elf_archive` fixture
+  states this plainly, at this same tip: the population "remains outstanding" (D-SLM5230).
+  An instrument whose must-reject has never fired has not been shown able to fail -- so the
+  Linux/ELF no-floating-point guarantee is **enforced in CI (this patch closes the leg's own
+  run) and not yet delivered**; see this entry's own Notes, below, for the corrected timeline --
+  1.3.0 promised delivery "for 1.3.1", and this release is 1.3.1, but the population is still
+  unbuilt, so delivery is deferred again rather than claimed here.
+
+- **`tools/convert_tokenizer.py`'s `derive_model_name` now parses a checkpoint path's own
+  separators directly, regardless of the OS running the converter.** A Windows-style checkpoint
+  path (backslash-separated, this project's own HF hub cache convention) previously returned the
+  whole path as the emitted CONFIG section's model label when the converter ran on a POSIX host
+  -- `pathlib.Path` splits only on the running OS's own separator convention. User-visible: the
+  label every converted `.sslm` artifact's CONFIG section carries.
+
+- **`DynamicScaleReciprocal`'s seed computation (`src/intmath.cpp`) no longer has signed-integer-
+  overflow undefined behaviour at non-canonical magnitudes.** `CarriedScaleReciprocal`
+  (`checked_chain_funnel.h`) is an explicitly unguarded door onto this function -- a non-canonical
+  `Dn` (outside `[2^30, 2^31)`) is a real, doc-permitted input, not merely a defensive
+  possibility -- and the seed's own `int64_t` multiply overflowed at `Dn=2^62`
+  (`TestT2019_B1_DynamicScaleReciprocal_DomainSweep_GpuMatchesCpu`'s own fixture, caught by
+  `linux-x64-asan`'s UBSan build, `intmath.cpp:313`). Computed in `uint64_t` instead (unsigned
+  overflow is modular arithmetic, not UB, and two's-complement wraparound reproduces the identical
+  bit pattern the signed multiply already produced on this platform in every shipped build of
+  this function), reinterpreted back to `int64_t`, then right-shifted as signed -- bit-identical
+  to the original narrow-multiply result on every input, canonical or not. No emitted bit moves;
+  the UB is removed, not the arithmetic.
+
+- **`tests/ci/test_geometry_site_census.py`'s own D-SLM5785 call-site regression is genuinely
+  closed on both checkout conventions.** A prior round's fix for this regression (a real,
+  once-live bug: `_mutated`'s own newline-convention argument silently reverted to the platform
+  default, corrupting an `eol=lf` file on write) was itself claimed closed without the cell it
+  actually held in -- on a CRLF checkout (this project's own Windows development convention) the
+  claim was true; on a fresh LF checkout (what every `ubuntu-latest` job that runs this module
+  actually checks out) the identical regression stayed undetectable, because the one real-tree
+  file the fixture's own state depended on is LF-native on Linux, and a platform-default write to
+  an already-LF file is a no-op. Two synthetic, platform-independent cells now discriminate the
+  regression on whichever checkout convention is running: one forces CRLF bytes into a scratch
+  file outside the checked-out tree, the other forces LF, so the module no longer depends on the
+  real tree's own accidental line-ending state to catch a revert. Both cells verified by direct
+  execution on byte-preserved trees, both conventions.
+
+- **`fp-free-scan-gate`'s red suite no longer guesses which MSVC edition a Windows runner
+  carries.** The suite's own `VsDevCmd.bat` discovery (`fp_scan_common.py`, `conftest.py`) sorted
+  a `vswhere`-reported list by a hand-picked edition preference (Community-first,
+  BuildTools-first); `windows-latest`'s own hosted image carries VS 2022 Enterprise only, which
+  neither preference ever matched, erroring 22 red-suite cells with `ToolUnavailable`. The job now
+  resolves `VsDevCmd.bat` itself, in its own workflow step, using the runner's own `vswhere.exe`
+  with no edition preference -- the first VS 2022 instance reported, whichever edition -- and
+  exports it as `SUPERSLM_VSDEVCMD`; discovery in both modules honours that variable before
+  falling back to the prior vswhere-then-hardcoded search, which stays in place for a local
+  developer machine or any environment the variable is not set in. The job's own runner image is
+  also now pinned to `windows-2022` -- the image the red suite's own fixtures are commissioned
+  against -- rather than the floating `windows-latest` alias, which can point at an image with no
+  VS 2022 instance at all.
+
+- **`tools/ci/branch_coverage_floors.json`'s pinned floors re-measured against the sanctioned
+  cell.** `src/model.cpp` and `src/proof_manifest.cpp` gained real branches from feature work done
+  since their floors were last set (new `SslmSectionType` enum members and their `SectionTypeName`
+  mapping; new geometry-gate validation branches) and are re-pinned to the hosted `branch-coverage`
+  job's own measured values (`67.31343283582089`, `53.84615384615385`) -- genuine coverage debt
+  from unrelated feature work, not a regression, and not backfilled here. `src/matmul.cpp`'s own
+  floor is deliberately left unmoved at the CI leg's own last reported value
+  (`74.39024390243902`): this file's own comment states its rule plainly -- only a number measured
+  on the sanctioned cell (the hosted `branch-coverage` job itself) is a floor for this file, and an
+  off-cell reading, however many are taken, never becomes one.
+
+- **The engine no longer requires a square attention geometry (`hidden_size == num_attention_heads
+  * head_dim`).** `CheckConfigGeometry`'s own R1 identity check is removed, not loosened;
+  `MarshalLayer`'s q-projection channel count becomes `q_width`, a quantity independently derived
+  from `num_attention_heads * head_dim` rather than assumed equal to `hidden_size`, and threaded as
+  a new trailing parameter through `RunLayerLoop` (both overloads) and
+  `RunLayerLoopChunkBatched` -- additive for every existing (square) caller, which defaults it to
+  `0` (derive as `hidden_size`, the prior behaviour, bit-identical). `q_codes`/`q_rot`/`k_rot`/
+  `ctx_wide`/`ctx_codes` buffers and the Q/O projection call widths are widened to `q_width`;
+  `num_heads` is now re-derived from `q_width`, not `hidden_size`. Production callers
+  (`sslm_abi.cpp`, `gpu_1p0.cpp`) thread the real `q_width` from
+  `config.num_attention_heads * head_dim`. `sslm_convert_validate.py`'s own
+  `check_config_geometry` widened identically, so a non-square checkpoint that was previously a
+  named load-time rejection now converts.
+- **The LoRA adapter-marshal path's own geometry now agrees with the base-model decoupling
+  above.** Two defects the base-model geometry work did not reach: `AdapterOutChannelsFor`
+  returned `hidden_size` for q_proj's real out-channel count (`q_width`), and
+  `AdapterInChannelsFor` returned `hidden_size` for o_proj's real in-channel count (`q_width`) --
+  against a non-square base geometry, both incorrectly rejected or under-read a correctly-shaped
+  adapter artifact. Both now read the real, independently-derived `q_width`.
+
+**Notes.** Two things this patch does **not** claim, stated here rather than left implied. It is
+**not the Qwen3-arch pin** (`SuperSLM_Plan.md` §22.5): Ask 5's Tracks C and E are on `main` and
+ship in this tag's own code because they are additive and tools-only (see `[Unreleased]` above),
+but the architecture pin itself is claimed only once Track B (the forward call site) lands, as
+1.4.0 -- a consumer reading 1.3.1 must not conclude it can run the candidate. The **Linux/ELF
+FP-free guarantee stays deferred**: the leg is enforced and green in CI as of this patch, but the
+design's own must-reject population for that leg (the fiftieth population, `t2265-superslm-fp-
+free-open-design-2026-08-24.md` Sec5.4) is still unbuilt, so 1.3.0's own promise of the guarantee
+"for 1.3.1" is carried forward honestly -- to whichever release actually builds that
+population -- rather than claimed here.
+
+**Verification.** The hosted matrix is green on `main`@`9c46750`: run
+[33652587914](https://github.com/dansupergameprogrammer/SuperSLM/actions/runs/33652587914),
+**31 jobs, every conclusion success** -- `linux-x64`, `fp-free-scan-gate`, `windows-x64`,
+`macos-arm64-digest`, `forward-leaf-check`, `linux-x64-clang-digest`,
+`matmul-avx-isolation-guard`, `macos-arm64`, `linux-x64-tsan`, `linux-x64-clang-sse2-forced`,
+`workflow-lint`, `linux-x64-clang-avx2-forced`, `windows-msvc-digest`,
+`linux-x64-clang-scalar-forced-digest`, `gpu-guard-status-parity-check`, `converter-validate`,
+`geometry-site-census`, `present-tense-defect-comment-check`,
+`linux-x64-clang-avx2-forced-digest`, `ci-claims-check`, `linux-x64-gcc-digest`,
+`windows-clangcl-digest`, `bad-alloc-membership-check`, `linux-x64-clang-avx512-forced-digest`,
+`generators`, `linux-x64-asan`, `linux-x64-debug`, `linux-x64-clang-sse2-forced-digest`,
+`linux-x64-clang-avx512-forced`, `branch-coverage`, `axis-digest-compare`. The first green matrix
+run since before the 1.3.0 tag; `ecadbb6` and `3c741d5` (T-2555, T-2556) were red on two
+runner-cell jobs the matrix's own image never let a local machine reproduce.
 
 ## [1.3.0] - 2026-08-29
 
