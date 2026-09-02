@@ -118,9 +118,17 @@ def _classify_post_processor(pp):
     length; the `Sequence`/`SpecialToken` entries in the wrong order; or an id the
     `special_tokens` map does not resolve to exactly one entry -- is an explicit
     rejection, never a silent guess (narrowed fold round 13, D-SLM5631, closing
-    D-SLM5619's found vacuousness)."""
+    D-SLM5619's found vacuousness). Every sub-object this function reads is
+    type-checked before being indexed into (T-2542 Finding 5, Poirot): `pp` itself,
+    a `Sequence` member, the `SpecialToken` entry, and the `special_tokens` map and
+    its own resolved entry each raise `UnsupportedTokenizerShape` by name rather
+    than a raw `AttributeError`/`KeyError` when malformed."""
     if pp is None:
         return None
+    if not isinstance(pp, dict):
+        raise UnsupportedTokenizerShape(
+            f"post_processor: is a {type(pp).__name__}, not a mapping (or None): {pp!r}"
+        )
     pp_type = pp.get("type")
     if pp_type == "ByteLevel":
         return None
@@ -147,14 +155,27 @@ def _classify_post_processor(pp):
             f"(expected exactly 2: Sequence, SpecialToken)"
         )
     seq_entry, special_entry = single
-    if "Sequence" not in seq_entry or "SpecialToken" not in special_entry:
+    if (not isinstance(seq_entry, dict) or not isinstance(special_entry, dict)
+            or "Sequence" not in seq_entry or "SpecialToken" not in special_entry):
         raise UnsupportedTokenizerShape(
             f"post_processor: TemplateProcessing.single entries are not in the "
             f"expected order (Sequence, SpecialToken): {single!r}"
         )
-    special_content_id = special_entry["SpecialToken"]["id"]
-    entry = template_proc.get("special_tokens", {}).get(special_content_id)
-    ids = entry.get("ids") if entry else None
+    special_token_obj = special_entry["SpecialToken"]
+    if not isinstance(special_token_obj, dict) or "id" not in special_token_obj:
+        raise UnsupportedTokenizerShape(
+            f"post_processor: TemplateProcessing.single's SpecialToken entry is "
+            f"malformed, no \"id\" key: {special_token_obj!r}"
+        )
+    special_content_id = special_token_obj["id"]
+    special_tokens_map = template_proc.get("special_tokens", {})
+    if not isinstance(special_tokens_map, dict):
+        raise UnsupportedTokenizerShape(
+            f"post_processor: TemplateProcessing.special_tokens is a "
+            f"{type(special_tokens_map).__name__}, not a mapping: {special_tokens_map!r}"
+        )
+    entry = special_tokens_map.get(special_content_id)
+    ids = entry.get("ids") if isinstance(entry, dict) else None
     if not (isinstance(ids, list) and len(ids) == 1):
         raise UnsupportedTokenizerShape(
             f"post_processor: special_tokens[{special_content_id!r}] does not resolve "

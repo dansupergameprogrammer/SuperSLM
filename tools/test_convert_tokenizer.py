@@ -338,6 +338,71 @@ def test_classify_post_processor_rejects_an_unresolvable_special_token_reference
 
 
 # ==============================================================================
+# T-2542 Finding 5 (Poirot): malformed sub-objects escaped the named-rejection
+# contract as raw AttributeError / KeyError before this fix. Each cell below is
+# the reviewer's own reproduction, verbatim, now asserting UnsupportedTokenizerShape
+# instead of the raw exception.
+# ==============================================================================
+
+
+def test_classify_post_processor_rejects_a_bare_string_top_level_value_by_name():
+    """`post_processor` itself is a string, not a mapping -- `pp.get("type")` would
+    have raised `AttributeError: 'str' object has no attribute 'get'`."""
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="not a mapping"):
+        CT._classify_post_processor("ByteLevel")
+
+
+def test_classify_post_processor_rejects_a_bare_list_top_level_value_by_name():
+    """`post_processor` itself is a list -- the same `AttributeError` class as
+    above, one level up from where the reviewer's own example fired it."""
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="not a mapping"):
+        CT._classify_post_processor([])
+
+
+def test_classify_post_processor_rejects_a_non_dict_sequence_member_by_name():
+    """A `Sequence` member that is a bare string ("ByteLevel", not
+    `{"type": "ByteLevel"}`) or a list -- `p.get("type")` would have raised the
+    same `AttributeError` one level into the Sequence's own `processors`."""
+    pp = _candidate_shaped_post_processor()
+    pp["processors"][0] = "ByteLevel"
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="Sequence.processors is"):
+        CT._classify_post_processor(pp)
+    pp2 = _candidate_shaped_post_processor()
+    pp2["processors"][0] = []
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="Sequence.processors is"):
+        CT._classify_post_processor(pp2)
+
+
+def test_classify_post_processor_rejects_a_specialtoken_entry_missing_id_by_name():
+    """A `SpecialToken` entry with no `"id"` key -- `special_entry["SpecialToken"]
+    ["id"]` would have raised `KeyError: 'id'`."""
+    pp = _candidate_shaped_post_processor()
+    del pp["processors"][1]["single"][1]["SpecialToken"]["id"]
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="SpecialToken.*malformed"):
+        CT._classify_post_processor(pp)
+
+
+def test_classify_post_processor_rejects_a_non_dict_special_tokens_map_by_name():
+    """`TemplateProcessing.special_tokens` is a list, not a mapping --
+    `.get(special_content_id)` on it would have raised
+    `AttributeError: 'list' object has no attribute 'get'`."""
+    pp = _candidate_shaped_post_processor()
+    pp["processors"][1]["special_tokens"] = []
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="not a mapping"):
+        CT._classify_post_processor(pp)
+
+
+def test_classify_post_processor_rejects_a_non_dict_special_tokens_entry_by_name():
+    """A `special_tokens` map entry that resolves to a list rather than a mapping
+    -- `entry.get("ids")` would have raised the same `AttributeError` one level
+    deeper than the case above."""
+    pp = _candidate_shaped_post_processor()
+    pp["processors"][1]["special_tokens"]["<|endoftext|>"] = []
+    with pytest.raises(CT.UnsupportedTokenizerShape, match="does not resolve to exactly one id"):
+        CT._classify_post_processor(pp)
+
+
+# ==============================================================================
 # _post_processor_mismatches -- the additive parity check's own counting logic
 # (T-2541, closes D-SLM5575, t2408 §6 Track E step 3). Pure function of a
 # `tables`/`hf`-shaped pair of objects, no checkpoint files needed -- the
