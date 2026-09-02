@@ -104,8 +104,12 @@ def test_must_reject_the_designs_own_dropped_extraction_through_the_entry_point(
     above) discriminated correctly all along. This is the standing regression pin
     for that gap: it drives the public entry point, not the helper."""
     monkeypatch.setattr(CT, "_classify_post_processor", lambda pp: None)
+    lines = CT.read_corpus_records(_CORPUS)
     mism = CT.verify_post_processor(_CANDIDATE, _CORPUS)
-    assert mism == 44, "the drop mutant must make the entry point itself return non-zero"
+    # T-2546 Finding D (Observation, Poirot): derived from the corpus's own length,
+    # like this test's sibling above, rather than the literal 44 -- a corpus change
+    # no longer fails this cell for a reason unrelated to the mutant.
+    assert mism == len(lines), "the drop mutant must make the entry point itself return non-zero"
 
 
 def test_verify_and_verify_post_processor_both_run_when_both_are_passed():
@@ -122,3 +126,56 @@ def test_verify_and_verify_post_processor_both_run_when_both_are_passed():
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "0 mismatches, Unicode" in proc.stdout, "the --verify output line is missing"
     assert "post-processor-parity:" in proc.stdout, "the --verify-post-processor output line is missing"
+
+def _write_neutered_classifier_copy(dst_dir):
+    """T-2546 Finding A (Poirot): builds a scratch copy of the real
+    convert_tokenizer.py with exactly one line changed -- `_classify_post_processor`
+    returns a wrong-but-real int (999999999, never None) for every input, so the
+    additive check genuinely fails on the real candidate while the BPE-only gate
+    (unaffected by post_processor at all) still passes. The composition/dispatch
+    code under `if __name__ == "__main__":` is untouched -- this exercises the
+    REAL, shipped combined-exit logic against a real failure, not a hypothetical
+    one. Mirrors the reviewer's own executed construction (the casebook's "checkpoint
+    or classifier that makes the second check fail")."""
+    src = os.path.join(_TOOLS_DIR, "convert_tokenizer.py")
+    with open(src, encoding="utf-8") as f:
+        source = f.read()
+    marker = "def _classify_post_processor(pp):"
+    i = source.index(marker)
+    assert i >= 0, "convert_tokenizer.py's own _classify_post_processor def not found verbatim"
+    insertion = "\n    return 999999999  # T-2546 Finding A: neutered, real int, never None\n"
+    neutered = source[: i + len(marker)] + insertion + source[i + len(marker):]
+    dst = os.path.join(dst_dir, "convert_tokenizer.py")
+    with open(dst, "w", encoding="utf-8") as f:
+        f.write(neutered)
+    return dst
+
+
+def test_combined_exit_is_nonzero_when_only_verify_post_processor_fails(tmp_path):
+    """T-2546 Finding A (Minor, Poirot): the combined exit code Finding 6's own
+    remedy introduced had no standing cell. An executed mutant that ALSO discards
+    verify_post_processor's own return value (reproducing the original Finding 6
+    bug on top of this neutered classifier) exits 0 while printing 44 mismatches --
+    reproduced live, quoted in the build log, not carried as a standing cell since
+    it tests a hypothetical regressed state rather than real shipped code.
+
+    This cell is the standing regression pin: the REAL, unmutated combined-exit
+    dispatch (`if ran_verify: sys.exit(1 if verify_failed else 0)`), run as a real
+    subprocess against a classifier genuinely neutered to fail, on the real
+    pinned candidate. --verify (the BPE-only gate, which reads nothing from
+    post_processor) still passes; --verify-post-processor genuinely fails; the
+    combined exit code must be non-zero."""
+    neutered_copy = _write_neutered_classifier_copy(str(tmp_path))
+    env = dict(os.environ)
+    env["PYTHONPATH"] = _TOOLS_DIR + os.pathsep + env.get("PYTHONPATH", "")
+    proc = subprocess.run(
+        [sys.executable, neutered_copy, "--ckpt", _CANDIDATE,
+         "--verify", _CORPUS, "--verify-post-processor", _CORPUS],
+        capture_output=True, text=True, env=env,
+    )
+    assert proc.returncode == 1, (
+        f"combined exit must be non-zero when only the second check fails "
+        f"(got {proc.returncode}); stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
+    assert "0 mismatches, Unicode" in proc.stdout, "the --verify pass line is missing"
+    assert "44 mismatches" in proc.stdout, "the --verify-post-processor failure line is missing"
