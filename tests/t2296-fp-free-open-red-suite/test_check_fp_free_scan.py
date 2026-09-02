@@ -1322,11 +1322,19 @@ def test_symbol_own_instructions_detects_real_fp_when_present():
     (the catch funclet COFF emits as a child symbol of `RegressionParent`, named identically to the
     catch-funclet symbols `test_population_09_funclet_membership` already discovers via
     `"catch$" in name`) carries genuine IEEE-754 double arithmetic by the fixture's own construction.
-    Pinned to the reviewer's own executed numbers, re-derived independently here rather than quoted:
-    `RegressionParent` decodes 75 instructions total, 0 of them FP (the accept-direction pin, above,
-    restated as a raw count); `__catch$RegressionParent$0` decodes 20 instructions total, 5 of them
-    FP (`cvtsi2sd` x2, `addsd` x2, `mulsd` x1) -- a decode that silently found nothing would fail
-    BOTH of the non-zero assertions below, not just report an empty accept-direction result.
+
+    Self-correction, same round: a first draft pinned RegressionParent's own decoded instruction
+    count to an exact literal (75, this machine's Community reading). Verified by execution before
+    landing this version: under BuildTools (the sort key toggled, then restored), RegressionParent
+    decodes 137 instructions, not 75 -- the SAME edition-dependence S-1n's own population is built
+    around, discovered here because this test paid its own fresh compile rather than trusting the
+    prior number. `__catch$RegressionParent$0`'s own counts (20 total, 5 FP) were checked under
+    BOTH editions and are stable, so those stay pinned exactly; RegressionParent's own total count
+    is asserted only structurally (non-zero, real instructions decoded), with its FP count -- the
+    fact S-1n's population actually depends on -- still pinned to exactly zero under whichever
+    edition this run resolves. A decode that silently found nothing would still fail every
+    assertion below: zero total instructions for RegressionParent, and zero total/zero FP for the
+    catch funclet, regardless of edition.
     """
     src = os.path.join(_FIXTURES, "pop09_funclet_fp.cpp")
     with fc.TempDir() as tmp:
@@ -1339,31 +1347,35 @@ def test_symbol_own_instructions_detects_real_fp_when_present():
             data = f.read()
         if not _SCAN_AVAILABLE:
             _fail_absent("nine", "compiled the same fixture as the population's own cell above")
+        edition = _detected_msvc_edition()
 
         regression_parent_all = _symbol_own_instructions(data, "RegressionParent")
-        assert len(regression_parent_all) == 75, (
-            "RegressionParent's own decoded instruction count changed on this machine ({}, "
-            "expected 75) -- the fixture or the toolchain drifted; re-derive the expected count "
-            "before trusting either pin".format(len(regression_parent_all))
+        assert len(regression_parent_all) > 0, (
+            "RegressionParent's own decode returned NO instructions at all under this machine's "
+            "MSVC edition ({}) -- a silently-empty decode, exactly the defect this cell exists to "
+            "catch".format(edition)
         )
         regression_parent_fp = [x for x in regression_parent_all if _is_x86_fp_arith(x[0])]
         assert regression_parent_fp == [], (
-            "RegressionParent's own 75 decoded instructions now include FP arithmetic ({}) -- "
-            "S-1n's own ground truth no longer holds".format(regression_parent_fp)
+            "RegressionParent's own {} decoded instructions (edition {}) now include FP "
+            "arithmetic ({}) -- S-1n's own ground truth no longer holds under this "
+            "edition".format(len(regression_parent_all), edition, regression_parent_fp)
         )
 
         catch_all = _symbol_own_instructions(data, "__catch$RegressionParent$0")
         assert len(catch_all) == 20, (
             "__catch$RegressionParent$0's own decoded instruction count changed on this machine "
-            "({}, expected 20) -- the fixture or the toolchain drifted".format(len(catch_all))
+            "(edition {}, got {}, expected 20 -- checked stable under both Community and "
+            "BuildTools before this pin landed) -- the fixture or the toolchain "
+            "drifted".format(edition, len(catch_all))
         )
         catch_fp = [x for x in catch_all if _is_x86_fp_arith(x[0])]
         assert len(catch_fp) == 5, (
             "_symbol_own_instructions found {} FP instructions in __catch$RegressionParent$0's "
-            "own 20 decoded instructions, expected 5 ({}) -- the must-reject construction no "
-            "longer discriminates: a decode that silently found nothing would report 0 here, not "
-            "5, and the fixture is known (by the population's own cell, above) to carry genuine "
-            "FP arithmetic".format(len(catch_fp), catch_fp)
+            "own 20 decoded instructions (edition {}), expected 5 ({}) -- the must-reject "
+            "construction no longer discriminates: a decode that silently found nothing would "
+            "report 0 here, not 5, and the fixture is known (by the population's own cell, above) "
+            "to carry genuine FP arithmetic".format(len(catch_fp), edition, catch_fp)
         )
 
 
