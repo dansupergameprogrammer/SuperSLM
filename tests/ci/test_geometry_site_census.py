@@ -166,9 +166,11 @@ confirmation of T-2491's diff --
     registry_record_at_all`'s own registry write still passes while the registry's own bytes
     change underneath it, and reverting `_mutated`'s convention-detection hardening leaves this
     whole file green. `_mutated_targets_and_registry_are_byte_identical_after_the_module_runs`,
-    below, is a module-scoped, autouse fixture that snapshots the seven `_mutated` targets plus
+    below, is a module-scoped, autouse fixture that snapshots the `_mutated` targets plus
     the registry before this module's own suite runs and asserts them byte-identical after --
-    closing both halves of the dirty-checkout class at once, for those eight named paths.
+    closing both halves of the dirty-checkout class at once, for the paths
+    `_MUTATED_TARGETS_AND_REGISTRY_PATHS` names (T-2526: no count restated here -- see that
+    tuple's own comment for why).
 
 T-2499 fold-in (Claude/Bach/briefs/t2499.md; Claude/Poirot/bc2ae29-t2498-census-fixes-
 confirmation.md Significant 1/2, D-SLM5775/D-SLM5776): fix round on T-2498's confirmation of
@@ -189,11 +191,11 @@ T-2497's diff --
     cell writing `include/superslm/forward_sites.h` without restoring gives `41 passed`, fixture
     silent, file left modified, because that path was never in
     `_MUTATED_TARGETS_AND_REGISTRY_PATHS`. The claim is narrowed to what the fixture actually
-    guarantees (its own docstring, below, and the comment above the tuple) -- exactly the eight
-    paths the tuple names, no more. The tuple's own `src/` entries, formerly duplicated as
-    separate `os.path.join(...)` literals 430-odd lines below the tuple, are replaced with
-    references to `_PROOF_MANIFEST_CPP`/`_SUPERSLM_GPU_CPP`, moved up and defined once, so the two
-    spellings cannot desync.
+    guarantees (its own docstring, below, and the comment above the tuple) -- exactly the paths
+    `_MUTATED_TARGETS_AND_REGISTRY_PATHS` names, no more. The tuple's own `src/` entries, formerly
+    duplicated as separate `os.path.join(...)` literals 430-odd lines below the tuple, are replaced
+    with references to `_PROOF_MANIFEST_CPP`/`_SUPERSLM_GPU_CPP`, moved up and defined once, so the
+    two spellings cannot desync.
   - `derive_bad_alloc_membership.py`'s `git_log_follow_commit_count` and its `--commit-count` CLI
     branch (T-2497) had no cell; `test_membership_check_population.py`'s `--oracle` mode is
     deliberately pinned through the real subprocess CLI path rather than called in-process, with
@@ -447,8 +449,8 @@ def test_write_newline_for_picks_the_convention_from_raw_bytes():
 # reverting `_mutated`'s convention-detection hardening leaves this whole file green (every file
 # it touches is pure CRLF today, so the hardening and the platform default agree on every input
 # this suite has -- Claude/Poirot/ba29de4-t2496-census-fixes-confirmation.md Sec7). The
-# dirty-checkout class this fixture closes, for these eight paths, can return with the suite
-# green if it lands on an unlisted ninth.
+# dirty-checkout class this fixture closes, for the paths `_MUTATED_TARGETS_AND_REGISTRY_PATHS`
+# names, can return with the suite green if it lands on an unlisted path outside that tuple.
 #
 # T-2524 correction (Poirot e4bcaeb-t2518-census-fix-confirmation.md Minor 4, D-SLM5883): "seven
 # `_mutated` targets ... EXACTLY" was already false when written -- `_MODEL_H` is in this tuple
@@ -457,8 +459,14 @@ def test_write_newline_for_picks_the_convention_from_raw_bytes():
 # `_mutated` targets. `_MODEL_H`'s own presence is a harmless superset guard (a byte-identity
 # check over an untouched path costs nothing), not an eighth `_mutated` target, so "EXACTLY" was
 # also false. Two entries are added this round, `_SSLM_ABI_CPP`/`_GPU_1P0_CPP` (GS-32/GS-33's own
-# new construction sites, Significant 3, D-SLM5882): EIGHT real `_mutated` targets now, plus
-# `_MODEL_H`'s superset guard and the registry, ten entries total.
+# new construction sites, Significant 3, D-SLM5882).
+#
+# T-2526 correction (Poirot 96abd9e-t2524-census-confirmation2.md Minor 1, D-SLM5899): the T-2524
+# text above was already false when written -- `test_part2_window_group_covered_start_uncovered_
+# end_is_still_reported` and its sibling (this file's own S1 cells, mechanism-cells section, above)
+# each open `_mutated(registry_rel, ...)`, so the registry is now written THROUGH `_mutated` too,
+# not only directly. Every entry in this tuple except `_MODEL_H` is now a real `_mutated` target;
+# `_MODEL_H` alone remains the harmless superset guard -- ten entries total, unchanged.
 _MUTATED_TARGETS_AND_REGISTRY_PATHS = (
     _ADAPTER_H,
     _MATMUL_H,
@@ -480,7 +488,7 @@ def _mutated_targets_and_registry_are_byte_identical_after_the_module_runs():
     raw bytes of every path in `_MUTATED_TARGETS_AND_REGISTRY_PATHS` BEFORE the first cell in
     this module runs, and asserts them byte-identical AFTER the last one has, whatever mix of
     `_mutated()` blocks and direct registry writes ran in between. Closes T-2496's Significant 2
-    (D-SLM5758) at the root rather than per-cell: a fix that touches one of the EIGHT paths named
+    (D-SLM5758) at the root rather than per-cell: a fix that touches one of the paths named
     in `_MUTATED_TARGETS_AND_REGISTRY_PATHS` and leaves it modified fails HERE regardless of what
     that fix's own cell asserts.
 
@@ -881,30 +889,37 @@ def test_two_line_split_r1_case_is_still_the_documented_f2_limitation():
 # tree's own markers and window scans from reaching in or being reached.
 # =====================================================================================
 
+# T-2526 (Poirot 96abd9e-t2524-census-confirmation2.md Observation 3): the filler count below is
+# sized against `_covered`'s own +-line window rather than a hard-coded copy of it --
+# `census._COVERED_WINDOW`, imported from `tools/geometry_site_census.py`, so a future widening of
+# that window cannot silently desync these two probes from the boundary they exist to sit on.
+_COVERED_WINDOW_FILLER_LINES = census._COVERED_WINDOW - 1
+
+
 def _covered_start_uncovered_end_probe_lines() -> list[str]:
-    # Marker ABOVE the group, 25 lines from the group's own START (covered) and therefore 26
-    # from its END (uncovered) -- this is the case Poirot's own Observation 1 named: a covered
-    # start suppressing a genuine finding for an uncovered end. `or` left this open; `and`
-    # closes it (not(True and False) == True -> emit).
+    # Marker ABOVE the group, `census._COVERED_WINDOW` lines from the group's own START (covered)
+    # and therefore one more than that from its END (uncovered) -- this is the case Poirot's own
+    # Observation 1 named: a covered start suppressing a genuine finding for an uncovered end.
+    # `or` left this open; `and` closes it (not(True and False) == True -> emit).
     return (
         ["\t// T-2524 buffer\n"] * 4
         + [_marker_line("\t", "GS-9001")]
-        + ["\t// T-2524 filler\n"] * 24
+        + ["\t// T-2524 filler\n"] * _COVERED_WINDOW_FILLER_LINES
         + ['\tif (proj == "q_proj") {\n', "\t\treturn hidden_size;\n"]
         + ["\t// T-2524 buffer\n"] * 4
     )
 
 
 def _uncovered_start_covered_end_probe_lines() -> list[str]:
-    # Marker BELOW the group, 25 lines from the group's own END (covered) and therefore 26 from
-    # its START (uncovered) -- the case the pre-T-2518 single-end check already caught (checking
-    # `group_start` alone), and the case T-2518's own `or` silently stopped reporting. Guards
-    # against a re-regression to `or` as surely as the cell above guards the Observation's own
-    # named case.
+    # Marker BELOW the group, `census._COVERED_WINDOW` lines from the group's own END (covered) and
+    # therefore one more than that from its START (uncovered) -- the case the pre-T-2518
+    # single-end check already caught (checking `group_start` alone), and the case T-2518's own
+    # `or` silently stopped reporting. Guards against a re-regression to `or` as surely as the cell
+    # above guards the Observation's own named case.
     return (
         ["\t// T-2524 buffer\n"] * 4
         + ['\tif (proj == "q_proj") {\n', "\t\treturn hidden_size;\n"]
-        + ["\t// T-2524 filler\n"] * 24
+        + ["\t// T-2524 filler\n"] * _COVERED_WINDOW_FILLER_LINES
         + [_marker_line("\t", "GS-9002")]
         + ["\t// T-2524 buffer\n"] * 4
     )
@@ -1122,10 +1137,18 @@ def test_worktrees_subtree_under_a_scratch_repo_root_is_not_swept(tmp_path):
 # incorrectly: both call `_part2_excise_excluded_text(path, line)` on a synthetic string literal,
 # never touch the tree, and need only a REGISTERED path, which `proof_manifest.h` still is.
 # Restored, retargeted onto `_PROOF_H`/`_PROOF_FRAGMENT` (mechanism-cells section, above).
-# Re-executed against the same reversion: **FOUR cells now redden, not two** -- 4 failed, 32
-# passed. The two that remained after T-2518 are the whole surviving END-TO-END population; these
-# two restored cells are the excise mechanism's only UNIT-LEVEL pins -- they take their subject as
-# an argument rather than reading it off the tree, so they do not depend on `proof_manifest.h`
+# Re-executed against the same reversion: the two cells restored just above and the two end-to-end
+# survivors the T-2518 bullet above names
+# (`test_appending_after_proof_manifest_h_s_trailing_comment_fires_on_apparatus_unsound_grounds`,
+# `test_defeats_the_prior_mechanism_same_line_enumerator_prepend_proof_manifest_h`) are the FOUR
+# cells that now redden -- named here rather than counted against the suite's own total, which
+# changes every time this file gains a cell (T-2526, Poirot 96abd9e-t2524-census-confirmation2.md
+# Minor 2, D-SLM5899: the "4 failed, 32 passed" this correction stated was already stale when
+# written -- two more cells landed in this same round before the commit that carries it, giving
+# 4 failed, 35 passed at the tip). The two that remained after T-2518 are the whole surviving
+# END-TO-END population; these two restored cells are the excise mechanism's only UNIT-LEVEL pins
+# -- they take their subject as an argument rather than reading it off the tree, so they do not
+# depend on `proof_manifest.h`
 # still carrying a live exclusion the way the other two do. The two cells T-2491 deletes (formerly
 # the `..._insert_before_comment_*` pair) were never among either population -- executed and
 # confirmed at the time: neither depended on the excision mechanism at all, so reverting it left

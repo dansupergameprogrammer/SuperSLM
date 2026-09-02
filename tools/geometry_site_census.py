@@ -174,21 +174,21 @@ _QOW_TOKENS = ("q_proj", "o_proj", "q_weight", "o_weight", "q_fold", "o_fold", "
 # declaration that has nothing to do with q_proj/o_proj at all. T-2518 correction (Poirot
 # Minor 2): the claim used to be that every genuine `out_channels` use tree-wide is a bare
 # identifier -- false as stated. Prefixed identifiers carrying `out_channels` as a bare substring
-# DO exist -- `kv_out_channels` (20), `o_proj_out_channels` (3), `want_out_channels` (4),
-# `q_proj_out_channels` (1), `tq_proj_out_channels` (1), `to_proj_out_channels` (1); 30
-# occurrences across six distinct prefixed identifiers, tree-wide, over every file this census's
-# own `_iter_source_files` sweeps (no `production_only` filter), for a maximal identifier token
-# matching `\b\w+_out_channels\b` -- disclosed here, per T-2524 (Poirot e4bcaeb-t2518-census-fix-
-# confirmation.md Minor 2, D-SLM5883), so the count is reproducible rather than restated.
-# T-2518's own count (19/5/3/2/1/1 = 31) was measured at `a3a20bc`, the tree before the commit
-# that carried it, and had already drifted by the time it landed (StandardsDocument.md §5.4:
-# check a count against the tree at the commit that carries the correction). This measurement is
-# re-executed at the tip of every fix round that touches this file; verify against the tree
-# before restating it again. The narrowing itself is still safe -- verified separately, and the
-# claim it actually rests on: no CODE line in Part 2's own swept scope (`_PART2_ALLOWED_PREFIXES`/
-# `_PART2_ALLOWED_FILES`, below) pairs `hidden_size` with one of those prefixed identifiers, so
-# this tightening changes nothing
-# for a real hit there, even though prefixed identifiers exist elsewhere in the wider tree.
+# DO exist -- `kv_out_channels`, `o_proj_out_channels`, `want_out_channels`, `q_proj_out_channels`,
+# `tq_proj_out_channels`, `to_proj_out_channels` among them, tree-wide, over every file this
+# census's own `_iter_source_files` sweeps (no `production_only` filter). T-2524 (Poirot e4bcaeb-
+# t2518-census-fix-confirmation.md Minor 2, D-SLM5883) disclosed an exact count here so it would be
+# reproducible rather than restated; T-2526 (Poirot 96abd9e-t2524-census-confirmation2.md Minor 3,
+# D-SLM5900) found that count's own classifier (`\b\w+_out_channels\b`, both boundaries) STRICTER
+# than `_OUT_CHANNELS_RE` itself (below), which tests only the LEFT boundary and so also excludes
+# `q_proj_out_channels_hidden_size`/`o_proj_out_channels_hidden_size` -- two identifiers no
+# restatement here had ever named. Two restatements of this population's exact count have now
+# landed wrong (T-2518's, then T-2524's own); the count is dropped rather than corrected a third
+# time. Run the sweep against `_OUT_CHANNELS_RE`'s own convention for the current figure; nothing
+# below depends on this comment stating one. What DOES have to hold, and is verified separately: no
+# CODE line in Part 2's own swept scope (`_PART2_ALLOWED_PREFIXES`/`_PART2_ALLOWED_FILES`, below)
+# pairs `hidden_size` with one of these prefixed identifiers, so this tightening changes nothing for
+# a real hit there, even though prefixed identifiers exist elsewhere in the wider tree.
 _OUT_CHANNELS_RE = re.compile(r"(?<![A-Za-z0-9_])out_channels")
 
 # T-2509: the widened Part 2 window, in physical lines (module docstring's own "WIDENED T-2509"
@@ -198,6 +198,11 @@ _OUT_CHANNELS_RE = re.compile(r"(?<![A-Za-z0-9_])out_channels")
 # so wide it starts joining unrelated statements from neighboring functions). Widening this
 # further is cheap if a future demonstrated site needs more.
 _WINDOW_SIZE = 4
+
+# T-2526 (Poirot 96abd9e-t2524-census-confirmation2.md Observation 3): `_covered`'s own +-line
+# marker window (below), hoisted to module level so a cell can size a probe against it instead of
+# hard-coding a copy of the number that silently desyncs if this window is ever widened.
+_COVERED_WINDOW = 25
 
 
 def _qow_hit(line: str) -> bool:
@@ -469,7 +474,7 @@ def run_census(repo_root: str) -> list[str]:
         ext = os.path.splitext(path)[1]
         comment_prefixes = ("#",) if ext == ".py" else ("//", "*", "/*")
 
-        def _covered(line_no: int, window: int = 25) -> bool:
+        def _covered(line_no: int, window: int = _COVERED_WINDOW) -> bool:
             return any(abs(line_no - ml) <= window for ml in marker_lines)
 
         # First pass: classify every line as comment-only or not, and -- for every non-comment
@@ -588,7 +593,13 @@ def run_census(repo_root: str) -> list[str]:
                 parts.append(scan_lines[j])
                 end = j
             if window_has_single_hit:
-                continue  # T-2518 M1: a single-line hit ANYWHERE in this span is already reported
+                # T-2518 M1: a single-line hit ANYWHERE in this span is already reported. T-2526
+                # (Poirot e4bcaeb-t2518-census-fix-confirmation.md Observation 1, carried into
+                # 96abd9e-t2524-census-confirmation2.md Observation 1): a genuine cross-line split
+                # that straddles this same single-line hit is not ALSO reported here -- it
+                # serializes to the next run, once the single-line hit is fixed away. Not a silent
+                # miss: this run is red either way, on the single-line hit alone.
+                continue
             if len(parts) < 2:
                 continue  # nothing to co-occur across -- a lone line is the single-line check's job
             window_text = " ".join(parts)
