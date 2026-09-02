@@ -158,22 +158,39 @@ def build_fixture_checkpoint(checkpoint_dir: Path, *, seed: int = 0) -> Path:
 
 
 def _write_safetensors_shard(checkpoint_dir: Path, tensors: dict) -> None:
-    """Delegates to `tools/reference_pipeline/tests/conftest.py`'s own
-    `write_safetensors_shard` -- the generic, convention-agnostic on-disk tensor writer
-    already used elsewhere in the tree for ad hoc checkpoints -- rather than a fourth
-    reimplementation of the same minimal safetensors-file shape. `tests/` carries no
-    `__init__.py` (pytest's own rootless collection makes it importable as a bare module
-    for test files only); this mirrors `conftest.py`'s own `sys.path` insertion so a
-    plain script import works identically outside pytest.
+    """One safetensors file at `checkpoint_dir / "model.safetensors"`, from
+    `{tensor_name: array}` -- the identical minimal on-disk shape `_write_safetensors`
+    (thirty lines above, this same file) already writes, generalized to an arbitrary
+    tensor dict instead of one hardcoded fixture's own fixed set.
+
+    **T-2543 M-4 correction.** The first version of this function imported
+    `tools/reference_pipeline/tests/conftest.py`'s own `write_safetensors_shard` across
+    the `tools/`/`tests/` boundary via a `sys.path` insertion -- the sibling fixture file
+    in this same directory records the tree's own convention against exactly that shape
+    (`_t2194_bf16_lora_fixture.py`: reuse `_calibrate_checkpoint_fixture.py`'s own
+    `_write_safetensors` "rather than a cross-suite import"), and a local writer with the
+    identical logic already existed thirty lines above the one that reached across
+    (Poirot 2a46a85-t2540-ask5-trackc-review.md M-4). This is that local writer,
+    generalized rather than imported.
     """
-    import sys
+    header = {}
+    payload = bytearray()
+    offset = 0
+    for name, arr in tensors.items():
+        arr = np.ascontiguousarray(arr, dtype=np.float32)
+        data = arr.tobytes()
+        header[name] = {"dtype": "F32", "shape": list(arr.shape),
+                        "data_offsets": [offset, offset + len(data)]}
+        payload += data
+        offset += len(data)
+    header["__metadata__"] = {}
+    header_bytes = json.dumps(header).encode("utf-8")
 
-    tests_dir = Path(__file__).resolve().parent / "reference_pipeline" / "tests"
-    if str(tests_dir) not in sys.path:
-        sys.path.insert(0, str(tests_dir))
-    from conftest import write_safetensors_shard
-
-    write_safetensors_shard(checkpoint_dir / "model.safetensors", tensors)
+    path = checkpoint_dir / "model.safetensors"
+    with open(path, "wb") as handle:
+        handle.write(len(header_bytes).to_bytes(8, "little"))
+        handle.write(header_bytes)
+        handle.write(bytes(payload))
 
 
 def _parameterized_tensors(*, prefix, biased, lm_head_present, qk_norm, seed):
@@ -219,8 +236,24 @@ def _parameterized_tensors(*, prefix, biased, lm_head_present, qk_norm, seed):
             tensors[f"{p}.self_attn.k_proj.bias"] = small(kv_width)
             tensors[f"{p}.self_attn.v_proj.bias"] = small(kv_width)
         if qk_norm:
-            tensors[f"{p}.self_attn.q_norm.weight"] = np.ones(HEAD_DIM, dtype=np.float32)
-            tensors[f"{p}.self_attn.k_norm.weight"] = np.ones(HEAD_DIM, dtype=np.float32)
+            # T-2543 C-1: `qk_norm` also accepts the string sentinels "q_only"/"k_only"
+            # (truthy, so this outer gate still fires) -- builds ONE of the pair only, for
+            # the asymmetric-presence rejection cell (design Sec4). Both sentinels still
+            # write the SAME non-uniform values as the symmetric case, below.
+            # T-2543 S-2: a uniform (all-ones) gain is invariant under ANY permutation of
+            # its own elements, so it cannot discriminate _permuted_if_rope's own
+            # q_norm.gain/k_norm.gain branch -- deleting that branch left the whole suite
+            # green (Poirot 2a46a85-t2540-ask5-trackc-review.md S-2). Two distinct,
+            # strictly non-uniform vectors close that gap: reordering EITHER one under the
+            # RoPE-pair permutation (order = [0, 2, 1, ...] for HEAD_DIM=4) changes which
+            # int8 code lands at which position, so a reverted permutation now changes the
+            # emitted WGT1 bytes.
+            if qk_norm != "k_only":
+                tensors[f"{p}.self_attn.q_norm.weight"] = np.array(
+                    [0.1 * (i + 1) for i in range(HEAD_DIM)], dtype=np.float32)
+            if qk_norm != "q_only":
+                tensors[f"{p}.self_attn.k_norm.weight"] = np.array(
+                    [0.1 * (HEAD_DIM - i) for i in range(HEAD_DIM)], dtype=np.float32)
         tensors[f"{p}.mlp.gate_proj.weight"] = small(INTERMEDIATE_SIZE, HIDDEN_SIZE)
         tensors[f"{p}.mlp.up_proj.weight"] = small(INTERMEDIATE_SIZE, HIDDEN_SIZE)
         tensors[f"{p}.mlp.down_proj.weight"] = small(HIDDEN_SIZE, INTERMEDIATE_SIZE)
@@ -254,7 +287,9 @@ def build_parameterized_fixture_checkpoint(
     `qk_norm` defaults to True -- this ask's own candidate, and the whole reason this
     track exists, carries these tensors. The backward-compatibility fixture states it
     False explicitly: "matching every existing incumbent exactly" means a checkpoint
-    that does NOT carry this ask's own new tensors.
+    that does NOT carry this ask's own new tensors. `qk_norm` also accepts the string
+    sentinels "q_only"/"k_only" (T-2543 C-1) -- builds ONE of the pair, for the
+    asymmetric-presence rejection cell design Sec4 requires.
     """
     checkpoint_dir = Path(checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
