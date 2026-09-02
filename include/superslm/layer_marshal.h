@@ -96,6 +96,10 @@ struct LayerBacking {
 	std::vector<int32_t> gate_fold_identity, gate_fold_mult, gate_fold_shift;
 	std::vector<int32_t> up_fold_identity, up_fold_mult, up_fold_shift;
 	std::vector<int32_t> down_fold_identity, down_fold_mult, down_fold_shift;
+	// (design §4/§6 Track B step 1): QK-norm's per-head gain, head_dim-sized, present only when
+	// this layer's artifact carries the matching q_norm.gain/k_norm.gain tensor -- left empty
+	// (LayerWeights::q_norm_gain/k_norm_gain stay nullptr) otherwise.
+	std::vector<int32_t> q_norm_gain, k_norm_gain;
 };
 
 // Marshals one projection's per-output-channel WSC1 fold tensor into three
@@ -172,6 +176,37 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 	backing.mlp_norm_gain = WidenGainToInt32(*mlp_gain);
 	out.attn_norm_gain = backing.attn_norm_gain.data();
 	out.mlp_norm_gain = backing.mlp_norm_gain.data();
+
+	// --- q_norm/k_norm (WGT1, int8, OPTIONAL) -- design §4/§6 Track B steps 1/4/5 -------------
+	const superslm::SslmTensorView *q_norm_w = Wgt("q_norm.gain"), *k_norm_w = Wgt("k_norm.gain");
+	// §4's own closing paragraph / §6 Track B step 4: asymmetric presence (one tensor present,
+	// the other absent, on the same layer) is a defined rejection, not two independent null
+	// checks -- mirrors this function's own existing required-tensor rejection shape.
+	if ((q_norm_w != nullptr) != (k_norm_w != nullptr)) {
+		*err = prefix + ": asymmetric q_norm/k_norm presence";
+		return false;
+	}
+	// §3/§6 Track B step 5 (D-SLM5243): q_norm/k_norm presence combined with
+	// option_g_fused_k_landing is a defined convert/load-time rejection. Built here, at the
+	// loader (MarshalLayer), rather than in the converter: view.option_g_fused_k_landing is
+	// already a field this function receives on every call, so the check costs a comparison and
+	// a diagnostic string with no new parameter, no new converter-side validation pass, and no
+	// second place the same rule could drift from -- the smaller of the two remedies the design
+	// names as equally sound (§3's own text).
+	if (q_norm_w != nullptr && view.option_g_fused_k_landing) {
+		*err = prefix + ": q_norm/k_norm tensor presence combined with option_g_fused_k_landing "
+		                 "is unsupported";
+		return false;
+	}
+	if (q_norm_w != nullptr) {
+		backing.q_norm_gain = WidenGainToInt32(*q_norm_w);
+		backing.k_norm_gain = WidenGainToInt32(*k_norm_w);
+		out.q_norm_gain = backing.q_norm_gain.data();
+		out.k_norm_gain = backing.k_norm_gain.data();
+	} else {
+		out.q_norm_gain = nullptr;
+		out.k_norm_gain = nullptr;
+	}
 
 	// --- WSC1 per-output-channel fold: one (identity, mult, shift)
 	// array per output channel, per projection. Channel counts match exactly
@@ -322,6 +357,23 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 	    ReadCarriedScale(view.composition_constants, prefix + ".mlp_residual", &ok);
 	if (!ok) {
 		*err = prefix + ": missing a required composition_constants site entry";
+		return false;
+	}
+
+	// (design §6 Track B step 1's own corrected text): once weight_scales carries a q_norm/
+	// k_norm gain entry for this layer, the matching composition_constants site entry is
+	// REQUIRED -- gated on q_norm_w != nullptr so a model with no q_norm/k_norm tensors at all
+	// is never rejected for lacking an entry it has no use for (§6 Track B's own third rejection
+	// cell, D-SLM5552).
+	bool qk_ok = true;
+	if (q_norm_w != nullptr) {
+		out.q_norm_site_constant =
+		    ReadCarriedScale(view.composition_constants, prefix + ".q_norm", &qk_ok);
+		out.k_norm_site_constant =
+		    ReadCarriedScale(view.composition_constants, prefix + ".k_norm", &qk_ok);
+	}
+	if (!qk_ok) {
+		*err = prefix + ": q_norm/k_norm tensor present but missing composition_constants site entry";
 		return false;
 	}
 
