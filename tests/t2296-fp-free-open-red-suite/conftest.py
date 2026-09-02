@@ -128,6 +128,18 @@ _VSWHERE_PATH = (
 _VSWHERE_VERSION_RANGE = "[17.0,18.0)"
 
 
+# T-2533 (Poirot 4187739-t2532-superslm-ci-green-confirmation.md O-1): mirrors
+# fp_scan_common.py's own `_path_has_segment` helper (added the same round, for the identical
+# substring-match fragility on that module's Community preference) -- a raw `"BuildTools" in c`
+# test matches a directory containing that word ANYWHERE in the path, not only the real edition
+# segment `vswhere` reports.
+def _path_has_segment(path, segment):
+    """True iff `segment` (case-insensitive) is one whole component of `path`, split on either
+    path separator -- not merely a substring anywhere in `path`."""
+    normalized = path.replace("\\", "/")
+    return segment.lower() in (part.lower() for part in normalized.split("/") if part)
+
+
 def _vswhere_vsdevcmd_candidates():
     """Every `VsDevCmd.bat` belonging to a VS 2022 instance `vswhere.exe`
     reports (version-constrained to `_VSWHERE_VERSION_RANGE`, so an older or
@@ -136,9 +148,10 @@ def _vswhere_vsdevcmd_candidates():
     own documented preference (BuildTools first, not shared with
     `run_fp_free_scan_real_corpus.py`'s own Community-first order) across
     however many instances are actually installed, rather than only the
-    two this file's own author had on hand. Returns an empty list, never
-    raises, if `vswhere.exe` is absent or reports nothing usable -- this is
-    a widened SEARCH, not a required dependency."""
+    two this file's own author had on hand. The "BuildTools" preference is matched as a whole
+    path COMPONENT (`_path_has_segment`, T-2533 O-1), not a raw substring of the whole candidate
+    path. Returns an empty list, never raises, if `vswhere.exe` is absent or reports nothing
+    usable -- this is a widened SEARCH, not a required dependency."""
     if not os.path.exists(_VSWHERE_PATH):
         return []
     try:
@@ -154,7 +167,7 @@ def _vswhere_vsdevcmd_candidates():
     candidates = [
         os.path.join(p, "Common7", "Tools", "VsDevCmd.bat") for p in install_paths
     ]
-    candidates.sort(key=lambda c: 0 if "BuildTools" in c else 1)
+    candidates.sort(key=lambda c: 0 if _path_has_segment(c, "BuildTools") else 1)
     return candidates
 
 

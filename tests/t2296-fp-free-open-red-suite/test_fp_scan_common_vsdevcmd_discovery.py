@@ -136,3 +136,22 @@ def test_vswhere_version_range_is_passed_to_the_real_query():
     assert call_args[version_idx + 1] == _fixture_module._VSWHERE_VERSION_RANGE, (
         "the real vswhere invocation must pass this module's own _VSWHERE_VERSION_RANGE "
         "immediately after -version -- got {}".format(call_args))
+
+
+def test_path_has_segment_rejects_a_substring_that_is_not_a_whole_path_component():
+    """T-2533 (O-1): `_path_has_segment` (the fix for the substring-match fragility O-1 named
+    in this module's own edition-sort key) must reject a path where the word appears only as
+    part of a LONGER component -- e.g. a Windows account or a relocated directory literally
+    named `CommunityUser` or `BuildToolsBackup` -- which the raw `"Community" in p` /
+    `"BuildTools" in c` tests this module and `conftest.py` used before this round would both
+    have matched.
+    """
+    assert not _fixture_module._path_has_segment(
+        r"C:\Users\CommunityUser\Microsoft Visual Studio\2022\Enterprise", "Community"
+    ), "a substring inside a longer path component must not match"
+    assert _fixture_module._path_has_segment(
+        r"C:\Program Files\Microsoft Visual Studio\2022\Community", "Community"
+    ), "the real edition segment must still match"
+    assert _fixture_module._path_has_segment(
+        r"C:\Program Files\Microsoft Visual Studio\2022\COMMUNITY", "Community"
+    ), "the match must stay case-insensitive"

@@ -74,6 +74,21 @@ _VSWHERE_PATH = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhe
 _VSWHERE_VERSION_RANGE = "[17.0,18.0)"
 
 
+# T-2533 (Poirot 4187739-t2532-superslm-ci-green-confirmation.md O-1): the edition preference
+# below used to be `0 if "Community" in p else 1` -- a raw substring test over the whole
+# installation path, which a directory containing that word ANYWHERE (e.g. a Windows account
+# named `Community`, or a drive relocated under `D:\CommunityBuilds\...`) would also match,
+# sorting first for the wrong reason. `_path_has_segment` checks the word as a whole,
+# case-insensitive path COMPONENT instead -- matching `vswhere`'s own `installationPath`
+# convention, where the edition name is always the final path segment
+# (`...\Microsoft Visual Studio\2022\Community`), never a substring of an unrelated one.
+def _path_has_segment(path, segment):
+    """True iff `segment` (case-insensitive) is one whole component of `path`, split on either
+    path separator -- not merely a substring anywhere in `path`."""
+    normalized = path.replace("\\", "/")
+    return segment.lower() in (part.lower() for part in normalized.split("/") if part)
+
+
 def _vswhere_vsdevcmd_candidates():
     """Every `VsDevCmd.bat` belonging to a VS 2022 instance `vswhere.exe` reports (version-
     constrained to `_VSWHERE_VERSION_RANGE`, so an older or newer VS release installed alongside
@@ -83,9 +98,10 @@ def _vswhere_vsdevcmd_candidates():
     left in whatever order `vswhere` itself reports (T-2531, S-3): on a machine carrying more than
     one VS 2022 instance, `vswhere`'s own report order is not documented as stable, and a module
     that says it prefers one instance should return that instance first regardless of what order
-    the tool happens to enumerate installs in. Returns an empty list, never raises, if
-    `vswhere.exe` is absent or reports nothing usable -- this is a widened SEARCH, not a required
-    dependency."""
+    the tool happens to enumerate installs in. The "Community" preference is matched as a whole
+    path COMPONENT (`_path_has_segment`, T-2533 O-1), not a raw substring of the whole
+    `installationPath`. Returns an empty list, never raises, if `vswhere.exe` is absent or reports
+    nothing usable -- this is a widened SEARCH, not a required dependency."""
     if not os.path.exists(_VSWHERE_PATH):
         return []
     try:
@@ -98,7 +114,7 @@ def _vswhere_vsdevcmd_candidates():
     if result.returncode != 0:
         return []
     install_paths = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    install_paths.sort(key=lambda p: 0 if "Community" in p else 1)
+    install_paths.sort(key=lambda p: 0 if _path_has_segment(p, "Community") else 1)
     return [os.path.join(p, "Common7", "Tools", "VsDevCmd.bat") for p in install_paths]
 # The Hostx64/ARM64 cross-compiler's own env script -- distinct from
 # VsDevCmd.bat -arch=x64, needed for population ten's own AArch64 leg (matching

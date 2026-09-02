@@ -119,3 +119,25 @@ def test_find_vsdevcmd_falls_back_to_hardcoded_candidates_when_vswhere_finds_not
         side_effect=lambda p: p == hardcoded_first
     ):
         assert _fixture_module._find_vsdevcmd() == hardcoded_first
+
+
+def test_path_has_segment_rejects_a_substring_that_is_not_a_whole_path_component():
+    """T-2533 (Poirot 4187739-t2532-superslm-ci-green-confirmation.md O-1): `_path_has_segment`
+    (this file's own fix for the substring-match fragility O-1 named in the BuildTools-first sort
+    key) must reject a path where the word appears only as part of a LONGER component -- e.g. a
+    directory literally named `BuildToolsBackup` -- which the raw `"BuildTools" in c` test this
+    file used before this round would have matched.
+    """
+    assert not _fixture_module._path_has_segment(
+        r"C:\BuildToolsBackup\Microsoft Visual Studio\2022\Enterprise", "BuildTools"
+    ), "a substring inside a longer path component must not match"
+    real_path = os.path.join(
+        r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools",
+        "Common7", "Tools", "VsDevCmd.bat")
+    assert _fixture_module._path_has_segment(real_path, "BuildTools"), (
+        "the real edition segment must still match")
+    upper_path = os.path.join(
+        r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BUILDTOOLS",
+        "Common7", "Tools", "VsDevCmd.bat")
+    assert _fixture_module._path_has_segment(upper_path, "BuildTools"), (
+        "the match must stay case-insensitive")
