@@ -18859,6 +18859,27 @@ namespace {
 // outside this namespace) read the identical derivation.
 static constexpr size_t kTwoLayerFixtureNumAttentionHeads =
     std::extent<decltype(TwoLayerFixture::ctx_fold_shift_arr)>::value;
+// T-2533 (Poirot 4187739-t2532-superslm-ci-green-confirmation.md M-1n): the derivation above
+// widens automatically only with `ctx_fold_shift_arr`'s own extent. `forward_sites.h:731-733`
+// documents all THREE per-head arrays this fixture backs -- `ctx_fold_identity`/`ctx_fold_mult`/
+// `ctx_fold_shift` -- as `num_heads`-sized, and `TwoLayerFixture`'s constructor keeps them at the
+// same size by construction (its own header comment, T-1374/Significant 4) but nothing enforced
+// that invariant here: a future edit widening `ctx_fold_identity_arr`/`ctx_fold_mult_arr` alone,
+// leaving `ctx_fold_shift_arr` at its old extent (or any other single-array drift among the
+// three), would silently pass this constant's stale value to every call site below without
+// tripping a build error -- exactly the class of drift T-2531's own M-1 fix set out to remove,
+// and the comments beside both call sites below (`removes the possibility of...`) overstated what
+// deriving from one array alone actually closes. This assertion makes the constructor's own
+// same-size invariant a compile-time fact instead of an unchecked assumption.
+static_assert(
+    std::extent<decltype(TwoLayerFixture::ctx_fold_identity_arr)>::value ==
+            std::extent<decltype(TwoLayerFixture::ctx_fold_shift_arr)>::value &&
+        std::extent<decltype(TwoLayerFixture::ctx_fold_mult_arr)>::value ==
+            std::extent<decltype(TwoLayerFixture::ctx_fold_shift_arr)>::value,
+    "TwoLayerFixture::ctx_fold_identity_arr/ctx_fold_mult_arr/ctx_fold_shift_arr must share the "
+    "same extent -- forward_sites.h:731-733 documents all three as num_heads-sized, and "
+    "kTwoLayerFixtureNumAttentionHeads derives from ctx_fold_shift_arr alone; a single-array "
+    "widening here would silently desync it from the other two (T-2533 M-1n)");
 
 struct DecodeLoopCallFixture {
 	DecodeLoopFixture model;
@@ -19003,7 +19024,12 @@ static void TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse() {
 	    // array, so the stale literal `2` this call site used to carry never crashed here --
 	    // but deriving it removes the possibility of a future reordering of this rejection
 	    // silently reintroducing the sibling call site's own out-of-bounds read, without
-	    // relying on a comment to say so.
+	    // relying on a comment to say so. T-2533 (M-1n): that claim itself relied on a comment
+	    // until this round -- `kTwoLayerFixtureNumAttentionHeads` derives from
+	    // `ctx_fold_shift_arr`'s own extent alone, and nothing enforced that the other two
+	    // per-head arrays (`ctx_fold_identity_arr`/`ctx_fold_mult_arr`) stayed the same size.
+	    // The `static_assert` beside that constant's own definition now makes the three arrays'
+	    // shared extent a compile-time fact, so this comment's claim is no longer just asserted.
 	    /*num_attention_heads=*/kTwoLayerFixtureNumAttentionHeads);
 	CHECK_MSG(result == SslmForwardStatus::KvPrecisionUnsupported,
 	          "RunGreedyDecodeLoop(kv_precision=Int16, workspace=1 byte) status == %s, want "
