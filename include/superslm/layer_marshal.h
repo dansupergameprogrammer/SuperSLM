@@ -100,6 +100,9 @@ struct LayerBacking {
 	// this layer's artifact carries the matching q_norm.gain/k_norm.gain tensor -- left empty
 	// (LayerWeights::q_norm_gain/k_norm_gain stay nullptr) otherwise.
 	std::vector<int32_t> q_norm_gain, k_norm_gain;
+	// (carried-scale delta §4/§7 Cell 8, D-SLM6117/D-SLM6146): K's post-norm landing constants --
+	// num_key_value_heads-sized, present only when this layer's artifact carries k_norm.gain.
+	std::vector<int64_t> k_norm_landing_r_t, k_norm_landing_e_t;
 };
 
 // Marshals one projection's per-output-channel WSC1 fold tensor into three
@@ -172,6 +175,22 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 	out.gate_weight = reinterpret_cast<const int8_t*>(gate_w->data);
 	out.up_weight = reinterpret_cast<const int8_t*>(up_w->data);
 	out.down_weight = reinterpret_cast<const int8_t*>(down_w->data);
+	// (carried-scale delta §7 Cell 9, D-SLM6141/D-SLM6147): length validation on every gain
+	// tensor the forward reads unconditionally at exactly `hidden_size` elements --
+	// WidenGainToInt32 sizes its own loop from the tensor's stated length, not the caller's
+	// expectation, so an unchecked short tensor is read in-bounds and silently truncated rather
+	// than rejected. Closes S7 for attn_norm/mlp_norm; q_norm/k_norm's own head_dim-sized check
+	// is below, gated on their own presence branch.
+	if (attn_gain->elem_count != view.config.hidden_size) {
+		*err = prefix + ": attn_norm.gain has " + std::to_string(attn_gain->elem_count) +
+		       " elements, expected " + std::to_string(view.config.hidden_size);
+		return false;
+	}
+	if (mlp_gain->elem_count != view.config.hidden_size) {
+		*err = prefix + ": mlp_norm.gain has " + std::to_string(mlp_gain->elem_count) +
+		       " elements, expected " + std::to_string(view.config.hidden_size);
+		return false;
+	}
 	backing.attn_norm_gain = WidenGainToInt32(*attn_gain);
 	backing.mlp_norm_gain = WidenGainToInt32(*mlp_gain);
 	out.attn_norm_gain = backing.attn_norm_gain.data();
@@ -199,6 +218,20 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 		return false;
 	}
 	if (q_norm_w != nullptr) {
+		// (§7 Cell 9, D-SLM6141/D-SLM6147): the identical length check as attn_norm/mlp_norm
+		// above, against head_dim -- the width q_norm_gain/k_norm_gain are declared at
+		// (forward_sites.h), and the width both ApplyQkNormSite and qk_norm_site.hlsl read
+		// unconditionally.
+		if (q_norm_w->elem_count != view.config.head_dim) {
+			*err = prefix + ": q_norm.gain has " + std::to_string(q_norm_w->elem_count) +
+			       " elements, expected " + std::to_string(view.config.head_dim);
+			return false;
+		}
+		if (k_norm_w->elem_count != view.config.head_dim) {
+			*err = prefix + ": k_norm.gain has " + std::to_string(k_norm_w->elem_count) +
+			       " elements, expected " + std::to_string(view.config.head_dim);
+			return false;
+		}
 		backing.q_norm_gain = WidenGainToInt32(*q_norm_w);
 		backing.k_norm_gain = WidenGainToInt32(*k_norm_w);
 		out.q_norm_gain = backing.q_norm_gain.data();
@@ -303,6 +336,10 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 	backing.kv_e_t_k.resize(num_key_value_heads);
 	backing.kv_r_t_v.resize(num_key_value_heads);
 	backing.kv_e_t_v.resize(num_key_value_heads);
+	if (q_norm_w != nullptr) {
+		backing.k_norm_landing_r_t.resize(num_key_value_heads);
+		backing.k_norm_landing_e_t.resize(num_key_value_heads);
+	}
 	for (uint32_t h = 0; h < num_key_value_heads; ++h) {
 		const std::string kname = prefix + ".k_head" + std::to_string(h);
 		const std::string vname = prefix + ".v_head" + std::to_string(h);
@@ -316,11 +353,34 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 		backing.kv_r_t_k[h] = superslm::SslmKeyedConstants::Value(*ke, 2);
 		backing.kv_e_t_v[h] = superslm::SslmKeyedConstants::Value(*ve, 1);
 		backing.kv_r_t_v[h] = superslm::SslmKeyedConstants::Value(*ve, 2);
+		// (§4 D-SLM6117, §7 Cell 8, D-SLM6146): the fourth per-KV-head landing constant --
+		// present only when this layer carries q_norm/k_norm (asymmetric presence is already
+		// rejected above, so q_norm_w != nullptr implies k_norm_w != nullptr too). K's post-norm
+		// codes requantize onto this scale a second time, through the SAME
+		// kv_landing_reciprocals manifest family the raw K/V landing constants above already
+		// occupy -- read the identical way, under a new key.
+		if (q_norm_w != nullptr) {
+			const std::string k_normed_name = prefix + ".k_normed_head" + std::to_string(h);
+			const superslm::SslmConstantEntry* kne = view.kv_landing_reciprocals.Entry(k_normed_name);
+			if (!kne || kne->value_words < 3) {
+				*err = prefix + ": missing kv_landing_reciprocals entry \"" + k_normed_name + "\"";
+				return false;
+			}
+			backing.k_norm_landing_e_t[h] = superslm::SslmKeyedConstants::Value(*kne, 1);
+			backing.k_norm_landing_r_t[h] = superslm::SslmKeyedConstants::Value(*kne, 2);
+		}
 	}
 	out.kv_landing_r_t_k = backing.kv_r_t_k.data();
 	out.kv_landing_e_t_k = backing.kv_e_t_k.data();
 	out.kv_landing_r_t_v = backing.kv_r_t_v.data();
 	out.kv_landing_e_t_v = backing.kv_e_t_v.data();
+	if (q_norm_w != nullptr) {
+		out.k_norm_landing_r_t = backing.k_norm_landing_r_t.data();
+		out.k_norm_landing_e_t = backing.k_norm_landing_e_t.data();
+	} else {
+		out.k_norm_landing_r_t = nullptr;
+		out.k_norm_landing_e_t = nullptr;
+	}
 
 	// --- per-query i-exp composition inputs (KVC1 composition_constants)
 	// -------------------------------------------------------------------------

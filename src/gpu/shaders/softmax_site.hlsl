@@ -71,9 +71,10 @@ void main(uint3 gtid : SV_GroupThreadID)
     uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
     uint group = (g_num_kv_heads > 0u) ? (g_num_attention_heads / g_num_kv_heads) : 1u;
 
+    // (carried-scale delta §3/§5, D-SLM6116/D-SLM6118): q_scale_off is now a
+    // num_attention_heads-wide table, one 16-byte slot per query head -- read per head below
+    // (`q_scale_off + h*16u`), never once, flat, for the whole layer.
     uint q_scale_off = ScratchLayout.Load<uint>(3 * 4);
-    int64_t q_scale_m = LayerScratch.Load<int64_t>(q_scale_off + 0);
-    int64_t q_scale_e = LayerScratch.Load<int64_t>(q_scale_off + 8);
 
     uint off_khead_m = layer_base + Layout.Load<uint>(54 * 4);
     uint off_khead_e = layer_base + Layout.Load<uint>(55 * 4);
@@ -115,6 +116,12 @@ void main(uint3 gtid : SV_GroupThreadID)
         int64_t d_q_ln2 = 0, d_q_b = 0, d_q_c = 0;
         if (in_range)
         {
+            // (carried-scale delta §3, D-SLM6116): THIS query head's own carried scale --
+            // ApplyQkNormSite's GPU sibling wrote a genuinely distinct value per head into
+            // q_scale_off + h*16u (qk_norm_site.hlsl); a layer without q_norm reads the
+            // broadcast value q_proj_site.hlsl wrote into every slot.
+            int64_t q_scale_m = LayerScratch.Load<int64_t>(q_scale_off + h * 16u + 0);
+            int64_t q_scale_e = LayerScratch.Load<int64_t>(q_scale_off + h * 16u + 8);
             int64_t sm_m = LayerWeights.Load<int64_t>(off_khead_m + kv_head * 8u);
             int64_t sm_e = LayerWeights.Load<int64_t>(off_khead_e + kv_head * 8u);
             bool q_in = q_scale_m >= -2147483648LL && q_scale_m <= 2147483647LL;

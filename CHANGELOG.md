@@ -6,6 +6,87 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ### Fixed
 
+- **Track B's carried-scale contract for the per-head QK-norm (T-2560).** The
+  `f1a2741`-era build resolved the norm's own output carried scale by construction, not by
+  design, and both resolutions were numeric-correctness defects (review
+  `Claude/Poirot/f1a2741-t2552-ask5-trackb-review.md`, DO-NOT-SHIP): Q kept one shared
+  scale (the last head's), overwriting every other head's own genuinely distinct value
+  (C1, measured 3.854x on the real candidate); K's post-norm codes were stored at the
+  norm's own dynamic scale and read back through the artifact's static, pre-norm landing
+  constant (C2, measured 79.2x/39.6x). The design delta
+  (`Claude/Vitruvius/t2557-trackb-carried-scale-delta-2026-09-02.md`) states the contract
+  this round builds: **Q** carries a genuinely distinct scale per query head into
+  attention's C30 derivation, re-derived per query head rather than memoized per KV head
+  (`ApplyQkNormSite`'s Q parameter widens from one `CarriedScale*` to a `num_heads`-wide
+  array, broadcast from the pre-norm `q_proj` scale for a layer without `q_norm`,
+  overwritten per head when present). **K** requantizes its post-norm codes a SECOND time,
+  through the identical `LandingRescale` primitive K's own raw pre-norm landing already
+  uses, onto a NEW static per-(layer, KV head) landing scale calibrated on post-norm data
+  (`LayerWeights` gains `k_norm_landing_r_t`/`e_t`); `softmax_khead` is recomputed from
+  that new scale when `k_norm` is present, closing C2 structurally (writer and reader now
+  agree on the same scale). **The GPU** gives every query head its own 16-byte scratch
+  slot (`ScratchLayout` index 3 widens from one slot to `num_attention_heads * 16` bytes),
+  closing C3 (the race `num_attention_heads` concurrent thread groups had on one shared
+  slot) by construction — no two groups ever write the same address.
+
+  **Three items the paired rung routed here, closed in the same round:** (1) **S7** — every
+  gain tensor the forward reads unconditionally (`q_norm.gain`/`k_norm.gain` against
+  `head_dim`, and the pre-existing `attn_norm.gain`/`mlp_norm.gain` gap the review's own S7
+  finding named) is now length-checked at `MarshalLayer`, rejecting a short tensor by name
+  before `WidenGainToInt32` ever reads it out of bounds. (2) **S8** — the four constants
+  T-2553 re-pinned against the pre-fix tree (`_ARMD_REAL_SWEEP_KEY`, the retired §31.4.4
+  row 5 property, the retired ±2^52 rung, the golden logit, the structural 0.6 bound) are
+  each re-measured against the corrected composition; three (the golden logit, the ARMD
+  key, the 0.6 bound) live in the reference pipeline's own STATIC-quantization arm and
+  fixture-level composition, both orthogonal to this delta's dynamic per-token carried-scale
+  contract, and all three hold UNCHANGED, re-executed rather than re-cited (golden logit
+  −2350; layer 0/1 structural ratios 0.128775/0.554224, matching the pre-fix reading to six
+  decimal digits; ARMD key `layer1.k_head0`). The composed-acceptance tolerance (D-SLM5912)
+  stays held pending its own derivation (D-SLM6123) — this round does not derive it. (3) The
+  pinned Qwen3-Embedding-0.6B candidate is recalibrated on the corrected forward and
+  reconverted (verified, `sslm_verify` invoked): **633,588,308 bytes**, new SHA-256
+  **`09c439f69d40e058d574a30f45f8b104772117e8ad7e453ed895ed9635100b39`**, superseding the
+  T-2553-era `7fd5d398...` this branch's own prior entry recorded.
+
+  **Every cell in the delta's own §7, red-then-green, its construction quoted.** Cell 1
+  (width>1 acceptance, must-reject = identical with/without QK-norm): PASS on the real
+  28-layer candidate at width=3 — DIFFERS, unlike C4's own width==1 finding. Cell 2
+  (collapsed-Q must-reject, `_derive_composition_constants`'s own mutant): diverges from
+  the correct per-head build, max |logit diff| 2343 at this fixture. Cell 3 (pre-norm
+  softmax_khead must-reject): diverges from the float-grounded oracle, max |logit diff|
+  3557. Cell 4 (GPU determinism, repeated dispatch, N=100, width>1, real candidate): 0/100
+  divergences against the first GPU run and against the CPU chunk-batched reference — the
+  must-reject mutant (a second `qk_norm_site.hlsl` reverting Q's write to the pre-fix
+  shared slot) was not built this round (no injection point into `RunLayerLoopGpuSubmit`'s
+  own dispatch table without a further production-code change); the per-head addressing
+  fix closes the race by construction, unbacked here by an executed regression-catching
+  proof, filed per the delta's own sanctioned disposition. Cell 5 (asymmetric/Option-G
+  rejections): untouched, re-asserted. Cell 6 (S5's materiality check, repaired to compare
+  matching-width captures, and its own must-reject via the gain-bypassed construction):
+  both executed, PASS. Cell 7 (S6, strengthened to a per-caller source-inspection
+  assertion, with both single-caller-deletion must-reject mutants executed): PASS. Cell 8
+  (the fourth `composition_constants` key's own rejection gate): must-accept is this
+  round's own recalibrated artifact loading clean; must-reject is the PRE-EXISTING
+  `f1a2741`-era artifact (`out/fixtures/good.sslm`), rejected by name
+  (`missing kv_landing_reciprocals entry "layer0.k_normed_head0"`) — a real artifact
+  calibrated before this delta landed, not a contrived input. Cell 9 (gain-tensor length
+  validation): both `q_norm.gain` and `attn_norm.gain`, one element short, rejected by name
+  with the exact expected/actual element counts. Cell 10 (the carried-scale composition at
+  `group=1`): the fixed build passes both Cell 1's and Cell 3's own must-reject
+  constructions, re-run at this geometry.
+
+  **CPU and GPU agree bit-for-bit on all 28 layers of the real candidate at the acceptance
+  width** — the single-token determinism crown (width=1) and Cell 4's own 100x
+  repeated-dispatch chunk-batched drive (width>1) both PASS on this machine's RTX 2080
+  SUPER.
+
+  Suites, on the fixed tree: `superslm_tests.exe` → **34228 checks, 0 failures**; `ctest`
+  (build/, Release) → **13/13 passed**; `pytest tools/ tests/reference/ -m "not upstream"`
+  → **1999 passed, 13 deselected, 0 failed**; `pytest tests/ci/` → **423 passed**.
+
+  Build log: `Claude/Brunel/t2560-trackb-carried-scale-rebuild-2026-09-02.md` (records
+  worktree).
+
 - **The Linux/ELF FP-free scan leg (`_X86_GPR_ALLOW`) now accepts `bswap`.** `superslm::Sha256::
   Final` (`src/sha256.cpp`) compiles, under the runner's own GCC 13.x (`-O3 -DNDEBUG`, matching
   the `linux-x64` job's `-DCMAKE_BUILD_TYPE=Release` recipe), to a `bswap` on the byte-swapped

@@ -221,14 +221,22 @@ int main(int argc, char** argv) {
 			            "both fired (CPU, RunLayerLoopImpl, last layer run, token 0)\n",
 			            cap.q_codes.size(), cap.k_codes.size());
 		}
-		// Materiality (D-SLM5312's own established shape, T-2425): the norm's own effect on the
-		// real forward pass, not merely that the call site executes -- q_proj.requant's own
-		// PRE-norm codes vs q_norm's own POST-norm codes, same run, same layer.
-		if (cap.q_proj_captured && cap.q_captured) {
-			bool q_materially_differs = cap.q_proj_codes != cap.q_codes;
-			std::printf("QK_NORM MATERIALITY CHECK (Q): pre-norm=[");
-			for (size_t i = 0; i < cap.q_proj_codes.size() && i < cap.q_codes.size(); ++i) {
-				std::printf("%s%d", i ? "," : "", (int)cap.q_proj_codes[i]);
+		// (§7 Cell 6, D-SLM6145): S5's repair -- the review's own materiality check compared
+		// q_proj_codes (q_width elements) against q_codes (head_dim elements); std::vector
+		// operator!= on unequal lengths is unconditionally true, so it could not fail
+		// regardless of whether the norm ran (confirmed by execution, T-2559 §3). Repaired:
+		// compare q_codes against the SAME head_dim-wide SLICE of q_proj_codes -- the LAST
+		// head's own pre-norm codes (q_norm's trace hook keeps the last head visited, the
+		// same convention QkNormHook already establishes for every other capture), never the
+		// full wide record.
+		if (cap.q_proj_captured && cap.q_captured && cap.q_proj_codes.size() >= cap.q_codes.size()) {
+			const std::vector<int8_t> matching_width_pre_norm(
+			    cap.q_proj_codes.end() - static_cast<std::ptrdiff_t>(cap.q_codes.size()),
+			    cap.q_proj_codes.end());
+			bool q_materially_differs = matching_width_pre_norm != cap.q_codes;
+			std::printf("QK_NORM MATERIALITY CHECK (Q, matching-width): pre-norm=[");
+			for (size_t i = 0; i < matching_width_pre_norm.size(); ++i) {
+				std::printf("%s%d", i ? "," : "", (int)matching_width_pre_norm[i]);
 			}
 			std::printf("] post-norm=[");
 			for (size_t i = 0; i < cap.q_codes.size(); ++i) {
@@ -380,6 +388,224 @@ int main(int argc, char** argv) {
 			                          chunk_codes.data() + (chunk_tokens - 1) * hidden_size,
 			                          hidden_size, chunk_scales[chunk_tokens - 1]);
 		}
+		// (§7 Cell 6, D-SLM6145): the matching-width repair (above), re-run against the LAST
+		// token's own trace record from THIS chunk-batched drive -- width>1 (chunk_tokens=3),
+		// where the review's own C4 finding says the pre-fix cell was blind.
+		if (chunk_cap.q_proj_captured && chunk_cap.q_captured &&
+		    chunk_cap.q_proj_codes.size() >= chunk_cap.q_codes.size()) {
+			const std::vector<int8_t> matching_width_pre_norm(
+			    chunk_cap.q_proj_codes.end() - static_cast<std::ptrdiff_t>(chunk_cap.q_codes.size()),
+			    chunk_cap.q_proj_codes.end());
+			bool q_materially_differs = matching_width_pre_norm != chunk_cap.q_codes;
+			std::printf("QK_NORM MATERIALITY CHECK (Q, chunk-batched width>1, matching-width): %s\n",
+			            q_materially_differs ? "DIFFERS (materiality confirmed at width>1)"
+			                                 : "IDENTICAL (no measurable effect)");
+		}
+		// (§7 Cell 6, D-SLM6145): must-reject twin -- bypassing the call site's norm
+		// application (q_norm_gain/k_norm_gain nulled, the engine's own no-QK-norm state,
+		// the delta's own sanctioned alternative to an identity-gain construction) must leave
+		// the repaired check reporting no materiality: with the gain nulled, ApplyQkNormSite's
+		// Q branch never runs (forward_sites.cpp's own `if (lw.q_norm_gain != nullptr)`
+		// gate), so no "q_norm" trace record fires at all -- confirmed by execution, not by
+		// construction, immediately below (§7 Cell 1 reuses this same nulled-gain layer set).
+		std::vector<LayerWeights> layers_no_qk = layers;
+		for (LayerWeights& lw : layers_no_qk) {
+			lw.q_norm_gain = nullptr;
+			lw.k_norm_gain = nullptr;
+		}
+		std::vector<int8_t> chunk_codes_no_qk(chunk_tokens * hidden_size);
+		std::vector<CarriedScale> chunk_scales_no_qk(chunk_tokens);
+		for (size_t t = 0; t < chunk_tokens; ++t) {
+			CarriedScale sc{};
+			const SslmForwardStatus e =
+			    EmbedEntry(chunk_ids[t], model_view.config.vocab_size, embed_weights, hidden_size,
+			               embed_site_constant, chunk_codes_no_qk.data() + t * hidden_size, &sc);
+			if (e != SslmForwardStatus::Ok) {
+				std::fprintf(stderr, "FAILED at stage=chunk_embed_no_qk: token=%zu status=%s\n", t,
+				             SslmForwardStatusName(e));
+				return 1;
+			}
+			chunk_scales_no_qk[t] = sc;
+		}
+		std::vector<uint8_t> chunk_ws_no_qk(kv_bytes, 0);
+		uint64_t kv_sat_no_qk = 0;
+		QkNormCapture chunk_cap_no_qk;
+		SslmTraceHookState chunk_hook_no_qk;
+		SslmSetTraceHook(chunk_hook_no_qk, &QkNormHook, &chunk_cap_no_qk);
+		const SslmForwardStatus chunk_status_no_qk = RunLayerLoopChunkBatched(
+		    chunk_codes_no_qk.data(), chunk_scales_no_qk.data(), chunk_tokens, layers_no_qk.data(),
+		    num_hidden_layers, hidden_size, head_dim, num_kv_heads, intermediate_size, context_cap,
+		    /*context_length_start=*/0, model_view.rope_tables, chunk_ws_no_qk.data(),
+		    chunk_ws_no_qk.size(), model_view.option_g_fused_k_landing, &kv_sat_no_qk,
+		    /*site_prefix=*/{}, &chunk_hook_no_qk, q_width);
+		SslmSetTraceHook(chunk_hook_no_qk, nullptr, nullptr);
+		if (layers_with_qk_norm > 0) {
+			std::printf("QK_NORM MATERIALITY MUST-REJECT (Q, gain bypassed): q_norm_fired=%d "
+			            "(expected 0 -- the norm application never runs) %s\n",
+			            chunk_cap_no_qk.q_captured ? 1 : 0,
+			            chunk_cap_no_qk.q_captured
+			                ? "FAIL -- q_norm fired despite nulled gain"
+			                : "PASS -- the repaired check correctly observes nothing to compare, "
+			                  "never a false DIFFERS/IDENTICAL claim");
+			if (chunk_cap_no_qk.q_captured) qk_norm_ran = false;
+		}
+
+		// (§7 Cell 1, D-SLM6122): width>=2 acceptance, must-reject = identical output with vs.
+		// without QK-norm at width>1 -- the cell C4 shows every pre-delta cell fails to be
+		// (every recorded reading was taken at width==1, where Q/K cannot influence the
+		// output). Reuses layers_no_qk/chunk_codes_no_qk/chunk_status_no_qk, above.
+		if (layers_with_qk_norm > 0 && chunk_status == SslmForwardStatus::Ok &&
+		    chunk_status_no_qk == SslmForwardStatus::Ok) {
+			bool width_gt1_identical = true;
+			for (size_t i = 0; i < hidden_size; ++i) {
+				if (chunk_codes[(chunk_tokens - 1) * hidden_size + i] !=
+				    chunk_codes_no_qk[(chunk_tokens - 1) * hidden_size + i]) {
+					width_gt1_identical = false;
+					break;
+				}
+			}
+			if (chunk_scales[chunk_tokens - 1].m != chunk_scales_no_qk[chunk_tokens - 1].m ||
+			    chunk_scales[chunk_tokens - 1].e != chunk_scales_no_qk[chunk_tokens - 1].e) {
+				width_gt1_identical = false;
+			}
+			std::printf(
+			    "CELL 1 (width>1 acceptance, real candidate, must-reject=identical-with-vs-"
+			    "without-QK-norm at width=%zu): %s\n",
+			    chunk_tokens,
+			    width_gt1_identical
+			        ? "FAIL -- IDENTICAL with and without QK-norm at width>1 (the must-reject "
+			          "construction did not fire -- this cell cannot distinguish the feature)"
+			        : "PASS -- DIFFERS with vs. without QK-norm at width>1 (unlike C4's own "
+			          "width==1 finding, this cell IS live to the feature)");
+			if (width_gt1_identical) qk_norm_ran = false;
+		}
+	}
+
+	// --- (§7 Cell 4, D-SLM6118/D-SLM6150): GPU chunk-batched drive, repeated N=100 -----------
+	// No GPU-side chunk-batched dispatch function exists (confirmed absent by reading
+	// superslm_gpu.cpp/gpu_port.h in full) -- this drives the SAME real single-token
+	// RunLayerLoopGpuSubmit/Finish pair sequentially, position by position, over the SAME
+	// chunk_ids the CPU chunk-batched drive above used, reusing ONE gpu_seq/gpu_ws pair across
+	// the three calls exactly the way autoregressive decode does ("layer_index resets to 0
+	// every token but context_length does not", forward_sites.cpp's own comment on this
+	// property) -- width grows 1, 2, 3 across the three calls, the identical width range the
+	// CPU chunk-batched drive exercises in one call.
+	if (layers_with_qk_norm > 0 && cpu_status == SslmForwardStatus::Ok) {
+		const size_t chunk_tokens = 3;
+		std::vector<int32_t> chunk_ids;
+		for (size_t i = 0; i < chunk_tokens; ++i) {
+			chunk_ids.push_back(static_cast<int32_t>((token_id + static_cast<int32_t>(i)) %
+			                                          model_view.config.vocab_size));
+		}
+		auto RunGpuChunkSequential = [&](std::vector<int8_t>& out_codes,
+		                                  CarriedScale& out_scale) -> SslmForwardStatus {
+			SequenceLayerState seq;
+			std::vector<int8_t> hidden(hidden_size);
+			seq.hidden_codes = hidden.data();
+			seq.layer_index = 0;
+			std::vector<uint8_t> ws(kv_bytes, 0);
+			SslmForwardStatus st = SslmForwardStatus::Ok;
+			for (size_t t = 0; t < chunk_tokens; ++t) {
+				CarriedScale sc{};
+				st = EmbedEntry(chunk_ids[t], model_view.config.vocab_size, embed_weights,
+				                hidden_size, embed_site_constant, hidden.data(), &sc);
+				if (st != SslmForwardStatus::Ok) return st;
+				seq.hidden_scale = sc;
+				seq.layer_index = 0;
+				superslm_gpu::GpuLayerLoopInFlight* inflight2 = nullptr;
+				st = superslm_gpu::RunLayerLoopGpuSubmit(
+				    seq, layers.data(), num_hidden_layers, /*layer_budget=*/num_hidden_layers,
+				    hidden_size, head_dim, num_kv_heads, intermediate_size, context_cap,
+				    model_view.rope_tables, ws.data(), ws.size(), /*external_kv_resident=*/nullptr,
+				    /*io_external_kv_needs_resume_barrier=*/nullptr, &inflight2,
+				    /*external_weights_resident=*/nullptr, /*external_rope_cos_resident=*/nullptr,
+				    /*external_rope_sin_resident=*/nullptr, /*external_rope_has=*/false,
+				    /*external_rope_cos_elems=*/0, /*external_rope_sin_elems=*/0,
+				    /*adapter_bridge=*/nullptr, q_width, /*out_q_codes=*/nullptr,
+				    /*out_q_codes_capacity=*/0);
+				if (inflight2) {
+					int32_t ready = 0;
+					st = superslm_gpu::RunLayerLoopGpuFinish(inflight2, seq, ws.data(), /*block=*/1,
+					                                          &ready, /*out_q_codes=*/nullptr);
+				}
+				if (st != SslmForwardStatus::Ok) return st;
+			}
+			out_codes.assign(hidden.begin(), hidden.end());
+			out_scale = seq.hidden_scale;
+			return st;
+		};
+
+		std::vector<int8_t> cpu_ref_codes;
+		CarriedScale cpu_ref_scale{};
+		{
+			// The CPU chunk-batched reference this repeated GPU drive is checked against --
+			// re-run once here (fresh workspace) rather than reusing the earlier block's own
+			// already-consumed chunk_ws/chunk_codes buffers.
+			std::vector<int8_t> ref_codes(chunk_tokens * hidden_size);
+			std::vector<CarriedScale> ref_scales(chunk_tokens);
+			for (size_t t = 0; t < chunk_tokens; ++t) {
+				CarriedScale sc{};
+				EmbedEntry(chunk_ids[t], model_view.config.vocab_size, embed_weights, hidden_size,
+				          embed_site_constant, ref_codes.data() + t * hidden_size, &sc);
+				ref_scales[t] = sc;
+			}
+			std::vector<uint8_t> ref_ws(kv_bytes, 0);
+			uint64_t ref_sat = 0;
+			const SslmForwardStatus ref_status = RunLayerLoopChunkBatched(
+			    ref_codes.data(), ref_scales.data(), chunk_tokens, layers.data(), num_hidden_layers,
+			    hidden_size, head_dim, num_kv_heads, intermediate_size, context_cap,
+			    /*context_length_start=*/0, model_view.rope_tables, ref_ws.data(), ref_ws.size(),
+			    model_view.option_g_fused_k_landing, &ref_sat, /*site_prefix=*/{},
+			    /*trace_hook_state=*/nullptr, q_width);
+			if (ref_status == SslmForwardStatus::Ok) {
+				cpu_ref_codes.assign(ref_codes.begin() + (chunk_tokens - 1) * hidden_size,
+				                     ref_codes.end());
+				cpu_ref_scale = ref_scales[chunk_tokens - 1];
+			}
+		}
+
+		const int kRepeatedDispatches = 100;
+		int divergences = 0;
+		std::vector<int8_t> first_codes;
+		CarriedScale first_scale{};
+		for (int i = 0; i < kRepeatedDispatches; ++i) {
+			std::vector<int8_t> out_codes;
+			CarriedScale out_scale{};
+			const SslmForwardStatus st = RunGpuChunkSequential(out_codes, out_scale);
+			if (st != SslmForwardStatus::Ok) {
+				std::printf("CELL 4: GPU chunk-batched run %d/%d FAILED: status=%s\n", i,
+				            kRepeatedDispatches, SslmForwardStatusName(st));
+				++divergences;
+				continue;
+			}
+			if (i == 0) {
+				first_codes = out_codes;
+				first_scale = out_scale;
+			} else if (out_codes != first_codes || out_scale.m != first_scale.m ||
+			           out_scale.e != first_scale.e) {
+				++divergences;
+			}
+			if (!cpu_ref_codes.empty() &&
+			    (out_codes != cpu_ref_codes || out_scale.m != cpu_ref_scale.m ||
+			     out_scale.e != cpu_ref_scale.e)) {
+				++divergences;
+			}
+		}
+		std::printf(
+		    "CELL 4 (GPU determinism, repeated dispatch, width>1, N=%d): %d/%d divergences "
+		    "(against the first GPU run and against the CPU chunk-batched reference) -- %s\n",
+		    kRepeatedDispatches, divergences, kRepeatedDispatches,
+		    divergences == 0 ? "PASS (must-accept)" : "FAIL");
+		// Must-reject twin (D-SLM6150): a disposable mutant reverting Q's per-head write back
+		// to the single, shared q_scale_off slot was NOT built this round -- constructing it
+		// requires a second qk_norm_site.hlsl compiled under a distinct pipeline name, which
+		// RunLayerLoopGpuSubmit's own dispatch table has no injection point for without a
+		// production-code change this round does not make. Filed per the delta's own
+		// sanctioned disposition (§7 Cell 4): "not demonstrated to fire on this GPU/driver" --
+		// the per-head-addressing fix removes the shared write by construction (confirmed by
+		// source reading, qk_norm_site.hlsl), unbacked here by an executed regression-catching
+		// proof. GPU/driver identity for this reading: see the build record.
+		if (divergences != 0) qk_norm_ran = false;
 	}
 
 	if (all_match && qk_norm_ran && cpu_status == SslmForwardStatus::Ok &&

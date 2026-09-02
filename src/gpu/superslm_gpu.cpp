@@ -626,8 +626,17 @@ GpuScratchLayout ComputeScratchLayout(uint32_t hidden_size, uint32_t intermediat
 		cur += 16;
 		return o;
 	};
+	// (carried-scale delta §5, D-SLM6118): q_scale widens from one 16-byte slot to
+	// `num_attention_heads * 16` -- one disjoint slot per query head, which is what removes the
+	// C3 race (every Q thread group in qk_norm_site.hlsl's one Dispatch call writes its own
+	// head's slot, never a shared address).
+	auto scale_block_n = [&](uint32_t count) {
+		uint32_t o = cur;
+		cur += count * 16u;
+		return o;
+	};
 	L.normed = codes_block(hidden_size); L.normed_scale = scale_block();
-	L.q_codes = codes_block(effective_q_width); L.q_scale = scale_block();
+	L.q_codes = codes_block(effective_q_width); L.q_scale = scale_block_n(num_attention_heads);
 	L.q_rot = codes_block(effective_q_width);
 	L.ctx_codes = codes_block(effective_q_width); L.ctx_scale = scale_block();
 	L.o_codes = codes_block(hidden_size); L.o_scale = scale_block();
@@ -793,6 +802,12 @@ GpuLayerLayout ComputeLayerLayout(uint32_t hidden_size, uint32_t kv_hidden_size,
 	L.off[59] = cur; cur += 8;                                      // k_norm_present (int64 flag)
 	L.off[60] = cur; cur += Align8U32(head_dim * 4);                // k_norm_gain
 	L.off[61] = cur; cur += 16;                                     // k_norm_site_constant
+	// (carried-scale delta §4/§7 Cell 8, D-SLM6117/D-SLM6146): k_norm_landing_r_t/e_t -- K's
+	// second, post-norm landing scale, num_kv_heads-sized, appended after the six q_norm/k_norm
+	// fields for the identical reason those were appended after off[0..55] (gpu_port.h's own
+	// header comment on GpuLayerLayout).
+	L.off[62] = cur; cur += Align8U32(num_kv_heads * 8);            // k_norm_landing_r_t
+	L.off[63] = cur; cur += Align8U32(num_kv_heads * 8);            // k_norm_landing_e_t
 	L.stride = cur;
 	return L;
 }
@@ -936,6 +951,13 @@ std::vector<uint8_t> PackLayerWeightsBytes(const superslm::LayerWeights* layers,
 				}
 				PutI64At(lw_bytes, base + layout.off[61] + 0, lw.k_norm_site_constant.m);
 				PutI64At(lw_bytes, base + layout.off[61] + 8, lw.k_norm_site_constant.e);
+				// (carried-scale delta §4/§7 Cell 8, D-SLM6117/D-SLM6146): K's second, post-norm
+				// landing scale -- present iff k_norm_gain is (asymmetric presence is already a
+				// rejected marshal state, layer_marshal.h).
+				for (uint32_t i = 0; i < NH; ++i) {
+					PutI64At(lw_bytes, base + layout.off[62] + i * 8, lw.k_norm_landing_r_t[i]);
+					PutI64At(lw_bytes, base + layout.off[63] + i * 8, lw.k_norm_landing_e_t[i]);
+				}
 			}
 		}
 	}
@@ -1719,12 +1741,17 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// 0-55 (off[0..55]) and 56 (stride) are byte-identical to before this ask; positions 57-62
 	// are the six NEW q_norm/k_norm field offsets (off[56..61], gpu_port.h's own header comment
 	// on GpuLayerLayout states why they land AFTER the stride slot rather than before it).
-	std::vector<uint8_t> layout_bytes(63 * 4, 0);
+	// (carried-scale delta §4/§7 Cell 8): grown from 63 to 65 uint32 values -- positions 0-62
+	// are byte-identical to before this ask; positions 63-64 are the two NEW
+	// k_norm_landing_r_t/e_t field offsets (off[62..63]).
+	std::vector<uint8_t> layout_bytes(65 * 4, 0);
 	for (int i = 0; i < 56; ++i) PutI32At(layout_bytes, static_cast<size_t>(i) * 4, static_cast<int32_t>(layout.off[i]));
 	PutI32At(layout_bytes, 56 * 4, static_cast<int32_t>(layout.stride));
 	for (int i = 0; i < 6; ++i) {
 		PutI32At(layout_bytes, static_cast<size_t>(57 + i) * 4, static_cast<int32_t>(layout.off[56 + i]));
 	}
+	PutI32At(layout_bytes, 63 * 4, static_cast<int32_t>(layout.off[62]));
+	PutI32At(layout_bytes, 64 * 4, static_cast<int32_t>(layout.off[63]));
 
 	// --- RopeGuardInfo: resolved HOST-SIDE, once, from the SAME
 	// SslmTensorManifest::Tensor("cos")/Tensor("sin") lookup RopeApplySite

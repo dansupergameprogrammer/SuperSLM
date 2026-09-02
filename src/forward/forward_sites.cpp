@@ -1424,7 +1424,7 @@ SslmForwardStatus LandTokenKVRow(int64_t* kacc, int64_t* vacc, const int8_t* nor
 // sits inside above: that block gives internal linkage, which would make this definition a
 // second, distinct symbol from the one forward_sites.h declares, leaving the declared external
 // symbol undefined at link time.
-SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scale, uint8_t* workspace,
+SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8_t* workspace,
                                    uint32_t layer, int64_t context_cap, int64_t position,
                                    size_t num_heads, size_t num_key_value_heads, size_t head_dim,
                                    const LayerWeights& lw, std::string_view site_prefix,
@@ -1432,9 +1432,12 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scale, uint8_
 	if (lw.q_norm_gain != nullptr) {
 		for (size_t h = 0; h < num_heads; ++h) {
 			int8_t* const q_head_row = q_codes + h * head_dim;
+			// (delta §3, D-SLM6116): this head's own scale writes into its OWN slot -- never a
+			// shared local -- so a caller reading q_scales[h] downstream (attention's C30
+			// derivation) sees this head's genuine post-norm scale, not the last head visited.
 			const SslmForwardStatus st =
 			    RmsNormSite(q_head_row, lw.q_norm_gain, head_dim, CarriedScale{},
-			                lw.q_norm_site_constant, q_head_row, q_scale,
+			                lw.q_norm_site_constant, q_head_row, &q_scales[h],
 			                LayerSite(site_prefix, layer, "q_norm"), token_index, trace_hook_state);
 			if (st != SslmForwardStatus::Ok) return st;
 		}
@@ -1443,15 +1446,23 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scale, uint8_
 		for (size_t kv_head = 0; kv_head < num_key_value_heads; ++kv_head) {
 			int8_t* const k_row = MutableKeyRow(workspace, layer, context_cap, num_key_value_heads,
 			                                    head_dim, kv_head, position);
-			// K has no analog of Q's own q_scale local (this function's own header comment,
-			// forward_sites.h) -- the funnel's output scale is required by RmsNormSite's own
-			// signature but has no caller-visible destination for K.
-			CarriedScale discarded_k_scale{};
+			CarriedScale k_norm_scale{};
 			const SslmForwardStatus st =
 			    RmsNormSite(k_row, lw.k_norm_gain, head_dim, CarriedScale{}, lw.k_norm_site_constant,
-			                k_row, &discarded_k_scale, LayerSite(site_prefix, layer, "k_norm"),
+			                k_row, &k_norm_scale, LayerSite(site_prefix, layer, "k_norm"),
 			                token_index, trace_hook_state);
 			if (st != SslmForwardStatus::Ok) return st;
+			// (delta §4, D-SLM6117): requantize the post-norm codes a SECOND time, onto the new
+			// static per-(layer, KV head) landing scale -- the identical LandingRescale primitive
+			// K's own raw pre-norm landing already uses (LandTokenKVRow, above), called again here
+			// with the norm's own just-produced (m, e) as the incoming scale and
+			// k_norm_landing_r_t/e_t as the target. k_row already holds the post-norm int8 codes
+			// (RmsNormSite's own in-place write, immediately above); this rescales them in place.
+			for (size_t d = 0; d < head_dim; ++d) {
+				k_row[d] = static_cast<int8_t>(ClampRopeCode(
+				    LandingRescale(k_row[d], k_norm_scale.m, lw.k_norm_landing_r_t[kv_head],
+				                   k_norm_scale.e, lw.k_norm_landing_e_t[kv_head])));
+			}
 		}
 	}
 	return SslmForwardStatus::Ok;
@@ -1803,8 +1814,14 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		// defined convert/load-time rejection (MarshalLayer, §6 Track B step 5), never reachable
 		// here for a marshaled artifact -- matching the K RoPE write-back loop's own identical
 		// gate, immediately below.
+		// (delta §3/§5): q_scale is q_proj's own whole-row funnel scale, legitimately ONE shared
+		// value for a layer carrying no q_norm tensor (§3's own closing paragraph) -- broadcast
+		// into a num_heads-wide array before the call so ApplyQkNormSite's Q branch has a slot
+		// per head to overwrite, and a layer without q_norm still presents a uniformly valid
+		// per-head table to the attention block below.
+		std::vector<CarriedScale> q_scales(num_heads, q_scale);
 		if (!option_g_fused_k_landing) {
-			st = ApplyQkNormSite(q_codes.data(), &q_scale, workspace, l, context_cap, position,
+			st = ApplyQkNormSite(q_codes.data(), q_scales.data(), workspace, l, context_cap, position,
 			                     num_heads, num_key_value_heads, head_dim, lw, site_prefix,
 			                     token_index, trace_hook_state);
 			if (st != SslmForwardStatus::Ok) return st;
@@ -1865,18 +1882,12 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		// Attention proper (§6.2 step 5). No named site for this composition
 		// exists anywhere in this tree; this is where it is first composed.
 		{
-			// T-1655/D-SLM620, §4.5: C30's per-query i-exp derivation, once per
-			// distinct kv_head (never once per layer, and never once per query
-			// head) -- q_scale (the q_proj carried scale, in scope from this
-			// layer's own ProjectAndFunnel call above) is per-token and shared
-			// across every head; only softmax_khead[kv_head] varies by KV head.
-			// Query heads sharing one kv_head are visited in non-decreasing
-			// order (`h / group` for `h = 0..num_heads-1`), so deriving on first
-			// sight of each kv_head costs at most num_key_value_heads
-			// derivations per token per layer, never num_heads.
-			std::vector<int64_t> khead_q_ln2(num_key_value_heads), khead_q_b(num_key_value_heads),
-			    khead_q_c(num_key_value_heads);
-			std::vector<bool> khead_derived(num_key_value_heads, false);
+			// T-1655/D-SLM620, §4.5, re-derived per delta §3 (D-SLM6116): C30's per-query i-exp
+			// derivation, once per QUERY HEAD -- never memoized per KV head. Before this delta,
+			// q_scale was one value shared across every head, so memoizing by kv_head cost at
+			// most num_key_value_heads derivations; carrying a genuinely distinct scale per query
+			// head (q_scales[h]) means two query heads sharing one kv_head can now derive
+			// different (q_ln2, q_b, q_c) triples, so the derivation runs once per query head.
 			// SSLM-GEOMETRY-SITE: GS-12
 			// T-2432 (Track A step 3): ctx_wide is the pre-fold attention-context accumulator,
 			// one head_dim-wide slice per query head -- sized effective_q_width, not hidden_size.
@@ -1888,7 +1899,8 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 				// `num_heads` (`ctx_wide`/`ctx_fold_identity` are query-head-sized).
 				const size_t kv_head = h / group;
 
-				if (!khead_derived[kv_head]) {
+				int64_t derived_q_ln2 = 0, derived_q_b = 0, derived_q_c = 0;
+				{
 					// §4.5 step 2a: both operands' mantissas checked against
 					// CombineCarriedScale's own precondition before the combine
 					// runs (ac34677 S5's convention, applied at this new call
@@ -1896,20 +1908,20 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 					const int64_t sm_khead_m = lw.iexp_softmax_khead_m[kv_head];
 					const int64_t sm_khead_e = lw.iexp_softmax_khead_e[kv_head];
 					const bool q_scale_in_domain =
-					    q_scale.m >= static_cast<int64_t>(kInt32Min) &&
-					    q_scale.m <= static_cast<int64_t>(kInt32Max);
+					    q_scales[h].m >= static_cast<int64_t>(kInt32Min) &&
+					    q_scales[h].m <= static_cast<int64_t>(kInt32Max);
 					const bool khead_in_domain =
 					    sm_khead_m >= static_cast<int64_t>(kInt32Min) &&
 					    sm_khead_m <= static_cast<int64_t>(kInt32Max);
 					if (!q_scale_in_domain || !khead_in_domain) {
 						return SslmForwardStatus::CarriedScaleMantissaOutOfDomain;
 					}
-					// §4.5 step 2b: carried_scale_product([q_scale, softmax_khead]),
+					// §4.5 step 2b: carried_scale_product([q_scales[h], softmax_khead]),
 					// through the funnel's own exposed combine door -- then the
 					// post-combine check RequantChainChecked's own fold already
 					// applies, at this new call site.
 					const CarriedScale sm =
-					    CombineCarriedScale(q_scale, CarriedScale{sm_khead_m, sm_khead_e});
+					    CombineCarriedScale(q_scales[h], CarriedScale{sm_khead_m, sm_khead_e});
 					if (sm.m < static_cast<int64_t>(kInt32Min) ||
 					    sm.m > static_cast<int64_t>(kInt32Max)) {
 						return SslmForwardStatus::CarriedScaleMantissaOutOfDomain;
@@ -1917,27 +1929,20 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 					// §4.5 step 2c: C30's derivation itself. Any outcome other
 					// than kOk means no triple exists to hand to SoftmaxRowQ15
 					// at all -- caught here, before SoftmaxRowQ15 (or the width
-					// gate below) is ever called for this kv_head.
-					int64_t derived_q_ln2 = 0, derived_q_b = 0, derived_q_c = 0;
+					// gate below) is ever called for this query head.
 					const IExpScaleDomain scale_domain = IExpScaleConstants(
 					    sm.m, sm.e, kIExpLn2Q, 30, kIExpBQ, 30, kIExpCaQ, 30, &derived_q_ln2,
 					    &derived_q_b, &derived_q_c);
 					if (scale_domain != IExpScaleDomain::kOk) {
 						return SslmForwardStatus::IExpScaleDerivationOutOfDomain;
 					}
-					khead_q_ln2[kv_head] = derived_q_ln2;
-					khead_q_b[kv_head] = derived_q_b;
-					khead_q_c[kv_head] = derived_q_c;
-					khead_derived[kv_head] = true;
 				}
-
-				// §4.5 step 3: CheckSoftmaxRowWidthDomain moves from once-per-
-				// layer to once-per-distinct-kv_head, still hoisted above the
-				// per-head kernel call for that kv_head -- the same gate-
-				// before-kernel ordering the prior once-per-layer call already
-				// established (Minor B, Poirot e4b398c review), now scoped to
-				// the per-kv_head triple this design derives.
-				st = CheckSoftmaxRowWidthDomain(khead_q_b[kv_head], khead_q_c[kv_head], width);
+				// §4.5 step 3: CheckSoftmaxRowWidthDomain, hoisted above the
+				// per-head kernel call for THIS query head's own derived triple --
+				// the same gate-before-kernel ordering the prior once-per-layer call
+				// already established (Minor B, Poirot e4b398c review), now scoped
+				// per query head, matching the derivation above.
+				st = CheckSoftmaxRowWidthDomain(derived_q_b, derived_q_c, width);
 				if (st != SslmForwardStatus::Ok) return st;
 
 				// S3.7: the score row reads `width` contiguous rows of this
@@ -1951,8 +1956,8 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 				    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
 				GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_rows_base, head_dim, width,
 				                      scores.data());
-				if (!SoftmaxRowQ15(scores.data(), width, khead_q_ln2[kv_head], khead_q_b[kv_head],
-				                   khead_q_c[kv_head], probs.data())) {
+				if (!SoftmaxRowQ15(scores.data(), width, derived_q_ln2, derived_q_b,
+				                   derived_q_c, probs.data())) {
 					// Minor A (Poirot e4b398c review): the kernel refused after
 					// its own gate already accepted -- a distinct outcome from
 					// the gate's own rejection, now named rather than reported
@@ -2320,10 +2325,16 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 			// sibling of RunLayerLoopImpl's own identical call, strictly after this token's K/V
 			// landing above and strictly before the RoPE loop's first RopeApplySite call, below.
 			// Same !option_g_fused_k_landing gate (§3, D-SLM5243).
+			// (delta §3/§5): the batched sibling of RunLayerLoopImpl's own identical broadcast --
+			// q_scale[t] is q_proj's whole-row funnel scale for this token, legitimately ONE
+			// shared value for a layer carrying no q_norm tensor; broadcast into a num_heads-wide
+			// per-token array before the call so ApplyQkNormSite's Q branch has a slot per head.
+			std::vector<CarriedScale> q_scales_h(num_heads, q_scale[t]);
 			if (!option_g_fused_k_landing) {
-				st = ApplyQkNormSite(q_codes.data() + t * effective_q_width, &q_scale[t], workspace,
-				                     l, context_cap, position, num_heads, num_key_value_heads,
-				                     head_dim, lw, site_prefix, t, trace_hook_state);
+				st = ApplyQkNormSite(q_codes.data() + t * effective_q_width, q_scales_h.data(),
+				                     workspace, l, context_cap, position, num_heads,
+				                     num_key_value_heads, head_dim, lw, site_prefix, t,
+				                     trace_hook_state);
 				if (st != SslmForwardStatus::Ok) return st;
 			}
 
@@ -2357,9 +2368,8 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 			// Attention proper (§6.2 step 5) -- the identical composition RunLayerLoopImpl's
 			// own attention block performs, per token, in the same position order.
 			{
-				std::vector<int64_t> khead_q_ln2(num_key_value_heads), khead_q_b(num_key_value_heads),
-				    khead_q_c(num_key_value_heads);
-				std::vector<bool> khead_derived(num_key_value_heads, false);
+				// (delta §3, D-SLM6116): re-derived per query head, never memoized per KV head --
+				// see RunLayerLoopImpl's own identical comment on this same restructuring.
 				// SSLM-GEOMETRY-SITE: GS-12
 				// T-2432 (Track A step 3): ctx_wide is the pre-fold attention-context accumulator,
 				// one head_dim-wide slice per query head -- sized effective_q_width, not hidden_size.
@@ -2368,12 +2378,13 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 					std::vector<int64_t> scores(width), probs(width), ctx_acc(head_dim);
 					const size_t kv_head = h / group;
 
-					if (!khead_derived[kv_head]) {
+					int64_t derived_q_ln2 = 0, derived_q_b = 0, derived_q_c = 0;
+					{
 						const int64_t sm_khead_m = lw.iexp_softmax_khead_m[kv_head];
 						const int64_t sm_khead_e = lw.iexp_softmax_khead_e[kv_head];
 						const bool q_scale_in_domain =
-						    q_scale[t].m >= static_cast<int64_t>(kInt32Min) &&
-						    q_scale[t].m <= static_cast<int64_t>(kInt32Max);
+						    q_scales_h[h].m >= static_cast<int64_t>(kInt32Min) &&
+						    q_scales_h[h].m <= static_cast<int64_t>(kInt32Max);
 						const bool khead_in_domain =
 						    sm_khead_m >= static_cast<int64_t>(kInt32Min) &&
 						    sm_khead_m <= static_cast<int64_t>(kInt32Max);
@@ -2381,33 +2392,28 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 							return SslmForwardStatus::CarriedScaleMantissaOutOfDomain;
 						}
 						const CarriedScale sm =
-						    CombineCarriedScale(q_scale[t], CarriedScale{sm_khead_m, sm_khead_e});
+						    CombineCarriedScale(q_scales_h[h], CarriedScale{sm_khead_m, sm_khead_e});
 						if (sm.m < static_cast<int64_t>(kInt32Min) ||
 						    sm.m > static_cast<int64_t>(kInt32Max)) {
 							return SslmForwardStatus::CarriedScaleMantissaOutOfDomain;
 						}
-						int64_t derived_q_ln2 = 0, derived_q_b = 0, derived_q_c = 0;
 						const IExpScaleDomain scale_domain = IExpScaleConstants(
 						    sm.m, sm.e, kIExpLn2Q, 30, kIExpBQ, 30, kIExpCaQ, 30, &derived_q_ln2,
 						    &derived_q_b, &derived_q_c);
 						if (scale_domain != IExpScaleDomain::kOk) {
 							return SslmForwardStatus::IExpScaleDerivationOutOfDomain;
 						}
-						khead_q_ln2[kv_head] = derived_q_ln2;
-						khead_q_b[kv_head] = derived_q_b;
-						khead_q_c[kv_head] = derived_q_c;
-						khead_derived[kv_head] = true;
 					}
 
-					st = CheckSoftmaxRowWidthDomain(khead_q_b[kv_head], khead_q_c[kv_head], width);
+					st = CheckSoftmaxRowWidthDomain(derived_q_b, derived_q_c, width);
 					if (st != SslmForwardStatus::Ok) return st;
 
 					const int8_t* const k_rows_base =
 					    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
 					GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_rows_base, head_dim, width,
 					                      scores.data());
-					if (!SoftmaxRowQ15(scores.data(), width, khead_q_ln2[kv_head], khead_q_b[kv_head],
-					                   khead_q_c[kv_head], probs.data())) {
+					if (!SoftmaxRowQ15(scores.data(), width, derived_q_ln2, derived_q_b,
+					                   derived_q_c, probs.data())) {
 						return SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted;
 					}
 					const int8_t* const v_rows_base =

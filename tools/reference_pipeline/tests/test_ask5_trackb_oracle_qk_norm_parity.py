@@ -18,9 +18,14 @@ the same discipline `test_ask5_trackc_qk_norm_converter.py` and T-2551's own bui
 establish for this class of claim (`StandardsDocument.md` §5.4).
 """
 
+import importlib.util
+import inspect
+import sys
+
 import numpy as np
 import pytest
 
+import conftest
 from conftest import api, require
 
 MODULE = "reference_pipeline.pipeline"
@@ -51,13 +56,310 @@ def _without_qk_norm(floats, cfg):
 
 
 def test_apply_qk_norm_is_the_one_shared_implementation():
-    """_float_layer and _kv_calibration_capture call the IDENTICAL function object, not two
-    separately-authored copies that happen to compute the same formula today and can
-    silently drift apart tomorrow -- the defect class this whole ticket exists to close,
-    made mechanically checkable."""
+    """(carried-scale delta §7 Cell 7, D-SLM6145): _float_layer and _kv_calibration_capture
+    call the IDENTICAL function object, not two separately-authored copies that happen to
+    compute the same formula today and can silently drift apart tomorrow -- the defect class
+    this whole ticket exists to close, made mechanically checkable.
+
+    Strengthened from a bare `hasattr` check (which sees only whether the function EXISTS,
+    not whether either caller actually invokes it -- confirmed blind by execution: deleting
+    both `_float_layer`'s and `_kv_calibration_capture`'s own calls to `_apply_qk_norm` left
+    the bare `hasattr` form green, T-2559 §3) to a per-caller source-inspection assertion:
+    each caller's own source text must contain a real call to `_apply_qk_norm(`, so a mutant
+    deleting either call site ALONE -- not only both together -- turns this cell red.
+    """
     pipeline = require(MODULE)
     assert hasattr(pipeline, "_apply_qk_norm"), (
         "no shared _apply_qk_norm function -- T-2553's own governing fix is absent"
+    )
+    apply_qk_norm = pipeline._apply_qk_norm
+    for caller_name in ("_float_layer", "_kv_calibration_capture"):
+        caller = getattr(pipeline, caller_name)
+        source = inspect.getsource(caller)
+        assert "_apply_qk_norm(" in source, (
+            f"{caller_name}'s own source does not call _apply_qk_norm(...) -- the shared "
+            f"implementation exists but this caller does not invoke it, exactly the "
+            f"single-caller-deleted mutant a bare hasattr check cannot see"
+        )
+        # The call is to the SAME function object every other caller shares -- not a
+        # same-named local shadowing it (module globals resolve at call time, so this reads
+        # the identical object `pipeline._apply_qk_norm` above already confirmed exists).
+        assert caller.__globals__.get("_apply_qk_norm") is apply_qk_norm, (
+            f"{caller_name}'s own module globals resolve '_apply_qk_norm' to a different "
+            f"function object than pipeline._apply_qk_norm -- not the one shared implementation"
+        )
+
+
+def _load_mutant_pipeline_module(transform, tmp_path):
+    """(carried-scale delta §7 Cell 7): loads a MUTATED copy of pipeline.py's own real source
+    text, transformed by `transform`, as an isolated module -- never touching the real,
+    imported `pipeline` module other tests in this file share. Used to prove the strengthened
+    per-caller assertion (above) actually turns red on a single-call-site-deleted mutant,
+    the exact case a bare `hasattr` check cannot see (T-2559 §3)."""
+    real_path = conftest.TOOLS_DIR / "reference_pipeline" / "pipeline.py"
+    real_source = real_path.read_text(encoding="utf-8")
+    mutated_source = transform(real_source)
+    assert mutated_source != real_source, "sanity: the transform must actually change the source"
+    mutant_path = tmp_path / "pipeline_mutant.py"
+    mutant_path.write_text(mutated_source, encoding="utf-8")
+    module_name = f"_t2560_pipeline_mutant_{id(mutant_path)}"
+    spec = importlib.util.spec_from_file_location(module_name, mutant_path)
+    module = importlib.util.module_from_spec(spec)
+    # dataclasses' own field-type resolution (ModelConfig/QuantizedModel/StaticScales, all
+    # defined in pipeline.py) looks the defining class's module up via sys.modules[cls.
+    # __module__] -- registered here, matching the standard importlib pattern, and popped in
+    # the finally block so this mutant never lingers in sys.modules past this one load.
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(module_name, None)
+    # CALIBRATION_CORPUS_PATH is derived from the module's OWN __file__ at load time
+    # (pipeline.py:220-221) -- the mutant lives under tmp_path, not the real
+    # tools/reference_pipeline/ directory, so this is repointed at the real corpus the real,
+    # imported pipeline module already resolved correctly.
+    real_pipeline = require(MODULE)
+    module.CALIBRATION_CORPUS_PATH = real_pipeline.CALIBRATION_CORPUS_PATH
+    return module
+
+
+def _assert_apply_qk_norm_called(module, caller_name):
+    """The strengthened check's own logic (mirrors the real assertion above), run against
+    an arbitrary module -- real or mutant -- so both share exactly one implementation of
+    what "caught" means."""
+    caller = getattr(module, caller_name)
+    source = inspect.getsource(caller)
+    assert "_apply_qk_norm(" in source, (
+        f"{caller_name}'s own source does not call _apply_qk_norm(...)"
+    )
+
+
+def test_strengthened_assertion_rejects_float_layer_call_site_deleted_alone(tmp_path):
+    """Must-reject twin 1/2 (D-SLM6145): deleting ONLY `_float_layer`'s own call to
+    `_apply_qk_norm` (leaving `_kv_calibration_capture`'s own call intact) must turn the
+    strengthened per-caller check red -- the single-caller case the pre-delta bare `hasattr`
+    form, and T-2559's own both-deleted probe, never distinguished from a healthy tree."""
+    def _t(text):
+        pipeline = require(MODULE)
+        source_of_caller = inspect.getsource(pipeline._float_layer)
+        call_line = "    q, k = _apply_qk_norm(q, k, tensors, prefix, cfg)\n"
+        assert call_line in source_of_caller, "sanity: _float_layer's own call line must match verbatim"
+        assert text.count(source_of_caller) == 1, (
+            "sanity: _float_layer's own source must appear verbatim, once, in the file"
+        )
+        mutated_caller_source = source_of_caller.replace(
+            call_line, "    q = q  # T-2560 mutant: _float_layer's own _apply_qk_norm call deleted\n", 1)
+        return text.replace(source_of_caller, mutated_caller_source, 1)
+    mutant = _load_mutant_pipeline_module(_t, tmp_path)
+    _assert_apply_qk_norm_called(mutant, "_kv_calibration_capture")  # the untouched sibling still passes
+    with pytest.raises(AssertionError):
+        _assert_apply_qk_norm_called(mutant, "_float_layer")
+
+
+def test_strengthened_assertion_rejects_kv_calibration_capture_call_site_deleted_alone(tmp_path):
+    """Must-reject twin 2/2 (D-SLM6145): the symmetric single-caller deletion, on
+    `_kv_calibration_capture` instead."""
+    def _t(text):
+        pipeline = require(MODULE)
+        source_of_caller = inspect.getsource(pipeline._kv_calibration_capture)
+        assert "q, k = _apply_qk_norm(q, k, tensors, prefix, cfg)" in source_of_caller
+        mutated_caller_source = source_of_caller.replace(
+            "q, k = _apply_qk_norm(q, k, tensors, prefix, cfg)",
+            "q = q  # T-2560 mutant: _kv_calibration_capture's own _apply_qk_norm call deleted",
+            1,
+        )
+        assert text.count(source_of_caller) == 1, (
+            "sanity: _kv_calibration_capture's own source must appear verbatim, once, in the file"
+        )
+        return text.replace(source_of_caller, mutated_caller_source, 1)
+    mutant = _load_mutant_pipeline_module(_t, tmp_path)
+    _assert_apply_qk_norm_called(mutant, "_float_layer")  # the untouched sibling still passes
+    with pytest.raises(AssertionError):
+        _assert_apply_qk_norm_called(mutant, "_kv_calibration_capture")
+
+
+def _fixture_config_group1(pipeline):
+    """(carried-scale delta §7 Cell 10, D-SLM6149): num_attention_heads == num_key_value_heads
+    -- group=1, the general `kv_head = h / group` formula's own boundary case (the pinned
+    real candidate's own 2:1 ratio never exercises the trivial `kv_head = h` mapping this
+    produces). Otherwise identical to `_fixture_config`, above."""
+    return pipeline.ModelConfig(
+        hidden_size=32, num_hidden_layers=2, num_attention_heads=4,
+        num_key_value_heads=4, head_dim=8, intermediate_size=64, vocab_size=32,
+        rope_theta=10000.0, rms_norm_eps=1e-6, tie_word_embeddings=True, context_cap=16,
+    )
+
+
+def test_group1_geometry_must_accept_the_fixed_build():
+    """Cell 10 must-accept (D-SLM6149): the fixed build's forward_dynamic matches
+    composition_ref.py's independent oracle bit-for-bit at group=1 -- the same proof
+    test_dynamic_forward_logits.py already runs at this fixture's own group=2."""
+    pipeline = require(MODULE)
+    import composition_ref
+    cfg = _fixture_config_group1(pipeline)
+    model = pipeline.fixture_model(cfg)
+    tokens = [0, 1, 3, 5]
+    logits = np.asarray(pipeline.forward_dynamic(model, tokens))
+    expected = composition_ref.forward_dynamic_logits_oracle(model, tokens)
+    assert logits.tolist() == [[int(v) for v in row] for row in expected], (
+        "forward_dynamic and the independent oracle diverge at group=1 -- the carried-scale "
+        "contract does not hold at this geometry"
+    )
+
+
+def test_group1_geometry_must_reject_the_collapsed_q_scale_mutant(tmp_path):
+    """Cell 10 must-reject 1/2 (D-SLM6149): the same collapsed-Q construction C1's own
+    pre-fix behavior produced (every head reads the LAST head's own carried scale, §7 Cell
+    2's own must-reject), re-run at group=1. A build with this defect must diverge from the
+    correct oracle at this geometry too, not only at the real candidate's own 2:1 ratio."""
+    pipeline = require(MODULE)
+    import composition_ref
+    cfg = _fixture_config_group1(pipeline)
+    model = pipeline.fixture_model(cfg)
+    tokens = [0, 1, 3, 5]
+    expected = composition_ref.forward_dynamic_logits_oracle(model, tokens)
+
+    def _t(text):
+        source = inspect.getsource(pipeline.forward_dynamic)
+        assign_line = "                    q_scale_by_head[h][t] = scale\n"
+        assert assign_line in source, "sanity: the per-head assignment must match verbatim"
+        assert text.count(source) == 1
+        mutated = source.replace(
+            assign_line,
+            "                    q_scale_by_head[h][t] = scale\n"
+            "                    for _mh in range(cfg.num_attention_heads):\n"
+            "                        q_scale_by_head[_mh][t] = scale  "
+            "# T-2560 mutant: collapse onto the last head visited\n",
+            1,
+        )
+        return text.replace(source, mutated, 1)
+    mutant = _load_mutant_pipeline_module(_t, tmp_path)
+    mutant_model = mutant.fixture_model(cfg)
+    mutant_logits = np.asarray(mutant.forward_dynamic(mutant_model, tokens))
+    assert mutant_logits.tolist() != [[int(v) for v in row] for row in expected], (
+        "the collapsed-Q mutant produced the SAME output as the correct oracle at group=1 -- "
+        "this geometry cannot discriminate the defect Cell 2 exists to catch"
+    )
+
+
+def test_group1_geometry_must_reject_the_prenorm_k_scale_mutant(tmp_path):
+    """Cell 10 must-reject 2/2 (D-SLM6149): the same pre-norm-K-scale construction Cell 3's
+    own pre-fix behavior produced (softmax_khead never switches off the raw, pre-norm
+    k_scale once K is relanded onto the new post-norm scale), re-run at group=1."""
+    pipeline = require(MODULE)
+    import composition_ref
+    cfg = _fixture_config_group1(pipeline)
+    model = pipeline.fixture_model(cfg)
+    tokens = [0, 1, 3, 5]
+    expected = composition_ref.forward_dynamic_logits_oracle(model, tokens)
+
+    def _t(text):
+        source = inspect.getsource(pipeline._derive_composition_constants)
+        needle = "Fraction(k_normed_scale if k_norm_present else k_scale) /"
+        assert needle in source, "sanity: the softmax_khead switch must match verbatim"
+        assert text.count(source) == 1
+        mutated = source.replace(
+            needle,
+            "Fraction(k_scale) /  # T-2560 mutant: never switches off the raw pre-norm scale",
+            1,
+        )
+        return text.replace(source, mutated, 1)
+    mutant = _load_mutant_pipeline_module(_t, tmp_path)
+    mutant_model = mutant.fixture_model(cfg)
+    mutant_logits = np.asarray(mutant.forward_dynamic(mutant_model, tokens))
+    assert mutant_logits.tolist() != [[int(v) for v in row] for row in expected], (
+        "the pre-norm-K-scale mutant produced the SAME output as the correct oracle at "
+        "group=1 -- this geometry cannot discriminate the defect Cell 3 exists to catch"
+    )
+
+
+def test_cell2_collapsed_q_scale_reproduces_only_the_last_heads_value(tmp_path):
+    """Cell 2 (D-SLM6116, the review's own C1): a build that collapses every query head's
+    own post-norm scale onto the LAST head's value (§3's own pre-fix behavior) must diverge
+    from the correct per-head build -- the cell fails on any head but the last. Run at this
+    file's own standard group=2 fixture; Cell 10 (above) re-runs the identical mutant at
+    group=1.
+
+    Measured, not merely asserted: the max-abs logit divergence is printed and quoted.
+    """
+    pipeline = require(MODULE)
+    import composition_ref
+    cfg = _fixture_config(pipeline)
+    model = pipeline.fixture_model(cfg)
+    tokens = [0, 1, 3, 5]
+    expected = composition_ref.forward_dynamic_logits_oracle(model, tokens)
+
+    def _t(text):
+        source = inspect.getsource(pipeline.forward_dynamic)
+        assign_line = "                    q_scale_by_head[h][t] = scale\n"
+        assert assign_line in source, "sanity: the per-head assignment must match verbatim"
+        assert text.count(source) == 1
+        mutated = source.replace(
+            assign_line,
+            "                    q_scale_by_head[h][t] = scale\n"
+            "                    for _mh in range(cfg.num_attention_heads):\n"
+            "                        q_scale_by_head[_mh][t] = scale  "
+            "# T-2560 mutant: collapse onto the last head visited\n",
+            1,
+        )
+        return text.replace(source, mutated, 1)
+    mutant = _load_mutant_pipeline_module(_t, tmp_path)
+    mutant_model = mutant.fixture_model(cfg)
+    mutant_logits = np.asarray(mutant.forward_dynamic(mutant_model, tokens))
+    expected_arr = np.asarray([[int(v) for v in row] for row in expected])
+    assert mutant_logits.shape == expected_arr.shape
+    max_abs_diff = int(np.abs(mutant_logits.astype(np.int64) - expected_arr.astype(np.int64)).max())
+    print(f"Cell 2 mutant (Q scale collapsed onto last head): "
+          f"max |logit diff| against the correct per-head build = {max_abs_diff}")
+    assert max_abs_diff > 0, (
+        "the collapsed-Q mutant produced logits IDENTICAL to the correct per-head build -- "
+        "this fixture cannot discriminate the C1/Cell-2 defect"
+    )
+
+
+def test_cell3_k_scale_reads_the_old_prenorm_softmax_khead_and_diverges(tmp_path):
+    """Cell 3 (D-SLM6117, the delta's own quoted mismatch class): reading K's post-norm,
+    relanded codes through the OLD, pre-norm softmax_khead constant -- the fixed engine
+    relands K onto the new k_normed scale (§4) but this mutant never switches
+    softmax_khead off the raw pre-norm k_scale -- must diverge from the correct oracle. Run
+    at this file's own standard group=2 fixture (_fixture_config), the same geometry Cells
+    1/2 use; Cell 10 (above) re-runs the identical construction at group=1.
+
+    Measured, not merely asserted: the max-abs logit divergence this mutant produces is
+    printed and quoted in the build record, matching the review's own "measured, not
+    summarized" discipline (`StandardsDocument.md` §5.4) -- the exact magnitude is a
+    property of this fixture's own calibration, not pinned to the review's 79.2x/39.6x
+    reading on the real candidate.
+    """
+    pipeline = require(MODULE)
+    import composition_ref
+    cfg = _fixture_config(pipeline)
+    model = pipeline.fixture_model(cfg)
+    tokens = [0, 1, 3, 5]
+    expected = composition_ref.forward_dynamic_logits_oracle(model, tokens)
+
+    def _t(text):
+        source = inspect.getsource(pipeline._derive_composition_constants)
+        needle = "Fraction(k_normed_scale if k_norm_present else k_scale) /"
+        assert needle in source, "sanity: the softmax_khead switch must match verbatim"
+        assert text.count(source) == 1
+        mutated = source.replace(
+            needle,
+            "Fraction(k_scale) /  # T-2560 mutant: never switches off the raw pre-norm scale",
+            1,
+        )
+        return text.replace(source, mutated, 1)
+    mutant = _load_mutant_pipeline_module(_t, tmp_path)
+    mutant_model = mutant.fixture_model(cfg)
+    mutant_logits = np.asarray(mutant.forward_dynamic(mutant_model, tokens))
+    expected_arr = np.asarray([[int(v) for v in row] for row in expected])
+    assert mutant_logits.shape == expected_arr.shape
+    max_abs_diff = int(np.abs(mutant_logits.astype(np.int64) - expected_arr.astype(np.int64)).max())
+    print(f"Cell 3 mutant (pre-norm softmax_khead, post-norm-relanded K): "
+          f"max |logit diff| against the float-grounded oracle = {max_abs_diff}")
+    assert max_abs_diff > 0, (
+        "the pre-norm-softmax_khead mutant produced logits IDENTICAL to the correct oracle -- "
+        "this fixture cannot discriminate the C2/Cell-3 defect"
     )
 
 
@@ -116,7 +418,7 @@ def test_vec_forward_layer_outputs_differ_with_and_without_qk_norm():
     scales_with, residual_scales_with, biases_with = pipeline._derive_scales(
         cfg, maxima_with, weight_scales, {})
     composition_with, kv_scales_with, kv_recip_with = pipeline._derive_composition_constants(
-        cfg, weight_scales, scales_with)
+        cfg, weight_scales, scales_with, maxima_with)
     model_with = pipeline.QuantizedModel(
         config=cfg, scales=scales_with, weights=weights, weight_scales=weight_scales,
         residual_scales=residual_scales_with, rope_tables=pipeline._build_rope_tables(cfg),
@@ -141,7 +443,8 @@ def test_vec_forward_layer_outputs_differ_with_and_without_qk_norm():
     scales_without, residual_scales_without, biases_without = pipeline._derive_scales(
         cfg, maxima_without, weight_scales_without, {})
     composition_without, kv_scales_without, kv_recip_without = (
-        pipeline._derive_composition_constants(cfg, weight_scales_without, scales_without))
+        pipeline._derive_composition_constants(
+            cfg, weight_scales_without, scales_without, maxima_without))
     model_without = pipeline.QuantizedModel(
         config=cfg, scales=scales_without, weights=weights_without,
         weight_scales=weight_scales_without, residual_scales=residual_scales_without,

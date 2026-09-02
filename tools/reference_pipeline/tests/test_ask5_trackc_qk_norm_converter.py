@@ -447,14 +447,16 @@ def test_qk_norms_composition_constant_gate_would_keyerror_if_unconditional(tmp_
     assert "layer0.q_norm.gain" not in model.weight_scales   # the must-accept cell's own premise
 
     # Confirm the REAL function, unmutated, against the REAL weight_scales: no exception
-    # (this is the must-accept cell's own claim, re-confirmed here as the control).
-    pipeline._derive_composition_constants(model.config, model.weight_scales, model.scales)
+    # (this is the must-accept cell's own claim, re-confirmed here as the control). `maxima={}`
+    # -- this fixture carries no q_norm/k_norm tensor, so the carried-scale delta's own
+    # k_norm-present branch (D-SLM6117) never reaches a maxima lookup on this path.
+    pipeline._derive_composition_constants(model.config, model.weight_scales, model.scales, {})
 
     # Now the simulated mutant: the SAME real function, the SAME real weight_scales
     # content, wrapped so the presence gate always reports "present."
     mutant_weight_scales = _AlwaysContains(model.weight_scales)
     with pytest.raises(KeyError):
-        pipeline._derive_composition_constants(model.config, mutant_weight_scales, model.scales)
+        pipeline._derive_composition_constants(model.config, mutant_weight_scales, model.scales, {})
 
 
 # ==============================================================================

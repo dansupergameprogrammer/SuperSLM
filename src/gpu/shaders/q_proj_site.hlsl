@@ -28,10 +28,14 @@ cbuffer RootConstants : register(b0)
     uint g_context_cap;
     uint g_position;
     // T-2113 (B10 lever 1): positions 6-10 of the 25-value composed root-constants block --
-    // g_num_attention_heads/g_width/g_intermediate_size/g_num_hidden_layers/g_lanes -- this
-    // shader does not read them, declared only as padding so the adapter fields below land at
-    // their real positions (11-17), matching every other tail shader's own prefix discipline.
-    uint g_unused6; uint g_unused7; uint g_unused8; uint g_unused9; uint g_unused10;
+    // g_num_attention_heads/g_width/g_intermediate_size/g_num_hidden_layers/g_lanes.
+    // (carried-scale delta §5, D-SLM6118): position 6 (g_num_attention_heads) is now READ -- the
+    // host already places NQH there for every bind_and_dispatch_tail call (superslm_gpu.cpp's
+    // own `consts` array); this shader previously left it as padding because it had no per-head
+    // use for it before this ask. Positions 7-10 remain unread padding, so the adapter fields
+    // below still land at their real positions (11-17).
+    uint g_num_attention_heads;
+    uint g_unused7; uint g_unused8; uint g_unused9; uint g_unused10;
     // T-2113 (B10 lever 1): this projection's own adapter-delta coverage, fused into this
     // dispatch (site_common.hlsli's ApplyFusedAdapterDeltaGpu) -- rank == 0 when uncovered.
     uint g_adapter_rank;
@@ -137,5 +141,22 @@ void main(uint3 gtid : SV_GroupThreadID)
     {
         if (t == 0) SeqState.Store<int64_t>(sticky_off, status_tag);
         return;
+    }
+
+    // (carried-scale delta §3/§5, D-SLM6116/D-SLM6118): q_scale_off is slot 0 of a
+    // num_attention_heads-wide table (ComputeScratchLayout's own widened index-3 allocation) --
+    // this is the ONE shared value a layer without q_norm needs, so broadcast it into every
+    // other head's own slot. qk_norm_site.hlsl overwrites the slots it actually normalizes when
+    // q_norm IS present; a layer with no q_norm tensor leaves this broadcast as the final value
+    // every head reads, matching q_proj's own pre-norm scale being genuinely shared in that case.
+    if (t == 0)
+    {
+        int64_t bm = LayerScratch.Load<int64_t>(q_scale_off + 0);
+        int64_t be = LayerScratch.Load<int64_t>(q_scale_off + 8);
+        for (uint h = 1; h < g_num_attention_heads; ++h)
+        {
+            LayerScratch.Store<int64_t>(q_scale_off + h * 16u + 0, bm);
+            LayerScratch.Store<int64_t>(q_scale_off + h * 16u + 8, be);
+        }
     }
 }

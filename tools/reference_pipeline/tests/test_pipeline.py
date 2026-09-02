@@ -695,7 +695,11 @@ def test_static_scales_are_offline_constants_of_the_model():
     assert sorted(first.rescale) == sorted(model.scales.rescale)
 
     # Nonlinear: everything except the named dynamic-arm complement, exactly.
-    kv_head = re.compile(r"^layer\d+\.[kv]_head\d+\.scale$")
+    # (carried-scale delta §4, D-SLM6117/D-SLM6119): k_normed_head{h}.scale joins this
+    # complement -- the identical dynamic-arm-only A-3 pinned surface as k_head/v_head
+    # (composition_ref.py's own independent oracle reads it; the static forward does not),
+    # populated only when a layer carries k_norm (this fixture does, unconditionally, T-2539).
+    kv_head = re.compile(r"^layer\d+\.(?:[kv]_head\d+|k_normed_head\d+)\.scale$")
     artifact = dict(model.scales.nonlinear)
     dynamic_only = {name for name in artifact if kv_head.match(name)}
     assert dynamic_only, (

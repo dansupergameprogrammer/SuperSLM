@@ -719,6 +719,14 @@ struct LayerWeights {
 	// only when the gain tensor is present (§6 Track B step 1's own corrected text).
 	CarriedScale q_norm_site_constant;
 	CarriedScale k_norm_site_constant;
+	// (carried-scale delta §4, D-SLM6117): K's post-norm codes requantize a SECOND time, back
+	// onto this static, per-(layer, KV head) landing scale -- a NEW scale, calibrated on
+	// post-norm data, distinct from `kv_landing_r_t_k`/`kv_landing_e_t_k` below (K's raw,
+	// pre-norm landing). `num_key_value_heads` elements each; meaningless when `k_norm_gain`
+	// above is nullptr -- the identical "meaningless when absent" convention as
+	// `q_norm_site_constant`/`k_norm_site_constant`, immediately above.
+	const int64_t* k_norm_landing_r_t = nullptr;  // num_key_value_heads, or nullptr
+	const int64_t* k_norm_landing_e_t = nullptr;  // num_key_value_heads, or nullptr
 	// §8.1: per-(head, projection) K/V landing reciprocal/exponent, from
 	// KvLandingReciprocals'/KvLandingScales' own per-head rows -- K and V are
 	// separate arrays because §8.1 states the reciprocal/exponent as
@@ -1054,32 +1062,49 @@ int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
 // q_proj/k_proj's GEMM output, already in the engine's permuted (interleaved) order, so no
 // permutation crosses this call.
 //
+// (carried-scale delta, `Claude/Vitruvius/t2557-trackb-carried-scale-delta-2026-09-02.md` §3/§4,
+// D-SLM6116/D-SLM6117 -- this contract supersedes the "identical value on every head"/"K has no
+// analog" text this comment carried before that delta): a per-head RMSNorm produces a genuinely
+// distinct output scale per head (`RmsNormSite` hands the row to `RequantChainChecked`, whose
+// `*out_scale` is derived from `MaxAbsReduceWide` of THAT call's own row, `checked_chain_funnel.cpp`)
+// -- collapsing that per-head scale onto one shared value, or discarding it, is a numeric-
+// correctness defect (measured 3.854x on Q, 79.2x/39.6x on K, the review this delta answers,
+// `Claude/Poirot/f1a2741-t2552-ask5-trackb-review.md` C1/C2).
+//
 // Q: for each query head `h` in `[0, num_heads)`, when `lw.q_norm_gain != nullptr`,
 // `RmsNormSite` against `q_codes + h*head_dim` at width `head_dim`, in place, writing the new
-// carried scale back into `*q_scale` on every iteration -- `q_scale` is per-token (shared across
-// every head, the same local the attention half's C30 derivation reads once this call returns),
-// and every head's own funnel call targets the identical artifact-derived site constant
-// (`q_norm_site_constant`, one entry per LAYER, not per head), so overwriting `*q_scale`
-// identically on every head is exactly the composition, not an approximation of one.
+// carried scale into `q_scales[h]` -- `q_scales` is a `num_heads`-wide, caller-owned array, ONE
+// scale per query head, never a single shared local. The caller broadcasts the pre-norm
+// `q_proj` scale into every slot BEFORE this call (the legitimate single shared value for a
+// layer carrying no `q_norm` tensor, §3's own closing paragraph); this function overwrites only
+// the slots it actually normalizes. The attention half's C30 derivation (below,
+// `RunLayerLoopImpl`/`RunLayerLoopChunkBatched`) reads `q_scales[h]` per query head, re-derived
+// every head rather than memoized per KV head, because two query heads sharing one KV head can
+// now carry different Q scales.
 //
 // K: for each KV head `kv_head` in `[0, num_key_value_heads)`, ONCE (never once per query head
 // -- applying `RmsNormSite` twice to an already-normalized row is not idempotent), when
 // `lw.k_norm_gain != nullptr`, `RmsNormSite` against the just-landed K row (`MutableKeyRow`), in
-// place. K's own output scale is discarded: the K/V store carries codes at a fixed, per-head
-// static landing scale (§8.1's `LandingRescale`, already applied by `LandTokenKVRow` before this
-// call runs) that no downstream call reads as a per-token `CarriedScale` -- the attention score
-// GEMM against the K store takes no scale parameter at all, and K has no analog of Q's own
-// `q_scale` local for a caller to update.
+// place, into a local `CarriedScale`. K's post-norm codes are then requantized a SECOND time,
+// through `LandingRescale` (the identical primitive `LandTokenKVRow`'s own raw K landing already
+// uses, §8.1) -- onto `lw.k_norm_landing_r_t[kv_head]`/`lw.k_norm_landing_e_t[kv_head]`, a NEW,
+// static, per-(layer, KV head) landing scale calibrated on POST-norm data, distinct from
+// `lw.kv_landing_r_t_k`/`e_t_k` (K's raw, pre-norm landing scale). This second landing is what
+// makes the K/V store's static-scale contract (§8.1: the store carries codes at a fixed,
+// per-head static landing scale) true of the post-norm row too -- the attention score GEMM still
+// takes no scale parameter, and `softmax_khead` (the artifact's own `iexp_softmax_khead_{m,e}`
+// constant, below) is derived from this SAME new landing scale when `k_norm` is present (design
+// delta §4, `_derive_composition_constants`), so writer and reader agree.
 //
-// Both calls pass `CarriedScale{}` for `incoming_scale` -- `RmsNormSite`'s own contract (above):
-// RMS normalization's arithmetic annihilates any input scale, so this is a correctness no-op,
-// never a choice this function makes.
+// Both `RmsNormSite` calls pass `CarriedScale{}` for `incoming_scale` -- its own contract
+// (above): RMS normalization's arithmetic annihilates any input scale, so this is a correctness
+// no-op, never a choice this function makes.
 //
 // Gated by the caller on `!option_g_fused_k_landing` (§3, D-SLM5243): the combination of
 // `q_norm`/`k_norm` presence with `option_g_fused_k_landing = true` is a defined convert/
 // load-time rejection (`MarshalLayer`, §4/§6 Track B step 5) -- this function does not itself
 // re-check the flag, matching the K RoPE write-back loop's own identical caller-side gate.
-SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scale, uint8_t* workspace,
+SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8_t* workspace,
                                    uint32_t layer, int64_t context_cap, int64_t position,
                                    size_t num_heads, size_t num_key_value_heads, size_t head_dim,
                                    const LayerWeights& lw, std::string_view site_prefix,

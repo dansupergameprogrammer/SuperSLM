@@ -24,26 +24,35 @@
 // existing Qwen2.5 artifact's forward OUTPUT byte-for-byte (§4's own promise; dispatch count is
 // not part of that promise).
 //
-// Q's own carried scale IS written back to LayerScratch's q_scale slot (ScratchLayout index 3),
-// overwriting the pre-norm q_proj scale -- softmax_site.hlsl's own C30 derivation reads that slot
-// downstream. This is sound because q_norm_site_constant is one artifact value per LAYER, not
-// per head, so every one of this dispatch's Q groups funnels to the identical fixed point and
-// converges on the identical q_scale value regardless of which group's own write lands last
-// (matching ApplyQkNormSite's own header comment, forward_sites.h: "every head's own funnel call
-// targets the identical artifact-derived site constant... overwriting q_scale identically on
-// every head is exactly the composition, not an approximation of one").
+// (carried-scale delta, `Claude/Vitruvius/t2557-trackb-carried-scale-delta-2026-09-02.md` §3/§4/
+// §5, D-SLM6116/D-SLM6117/D-SLM6118 -- this contract supersedes the "converges on the identical
+// q_scale value" / "K's own carried scale is discarded" text this comment carried before that
+// delta): a per-head RMSNorm produces a genuinely distinct output scale per head, and this
+// dispatch's own per-group addressing is what makes carrying it, per head, race-free.
 //
-// K's own carried scale is discarded after the funnel -- no downstream GPU site reads a per-token
-// K scale (attention_score_site.hlsl's own K read is a plain packed-int8 dot product with no
-// carried-scale operand), matching ApplyQkNormSite's own "K has no analog of Q's own q_scale."
+// Q's own carried scale is written back to LayerScratch's q_scale table (ScratchLayout index 3,
+// now `num_attention_heads * 16` bytes -- one 16-byte slot per query head) at THIS group's own
+// disjoint slot, `q_scale_off + head*16u` -- never the single shared slot the pre-delta contract
+// used. softmax_site.hlsl's own C30 derivation reads `q_scale_off + h*16u` per query head. Every
+// Q group in this one Dispatch call writes only its own head's slot, which is what removes the
+// C3 race identified against the pre-delta single-slot contract: no two groups ever write the
+// same address, by construction of the addressing, not by the values converging.
+//
+// K's own carried scale is READ BACK, not discarded: after the funnel, K's post-norm codes are
+// requantized a second time (LandingRescaleGpu, below) onto a new static per-(layer, KV head)
+// landing scale (`k_norm_landing_r_t`/`e_t`, Layout positions 63-64) -- the identical primitive
+// kv_proj_site.hlsl already uses for K's own raw pre-norm landing. This is what makes the K/V
+// store's post-norm codes readable at a fixed static scale (attention_score_site.hlsl's own K
+// read is still a plain packed-int8 dot product with no carried-scale operand; the scale is
+// consumed at landing time, not at read time, matching every other K/V row).
 //
 // K's own destination (KvCache) is PACKED int8 (StoreSignedByteGpu), unlike LayerScratch's
 // int32-per-code convention RequantChainCheckedFullGpuP natively writes via Store<int> -- K's own
 // funnel call below targets a disjoint WorkScratch int32 staging slice (QK_NORM_K_STAGE,
 // ScratchLayout index 28), never aliasing its own QK_NORM_WIDE input slice (index 27), then every
-// owning thread re-reads its own staged int32 code and re-stores it packed, mirroring
-// rope_guard_site.hlsl/rope_commit_site.hlsl's own stage-then-commit precedent for the identical
-// packed-KvCache constraint.
+// owning thread re-reads its own staged int32 code, relands it onto the new static scale, and
+// stores it packed, mirroring rope_guard_site.hlsl/rope_commit_site.hlsl's own stage-then-commit
+// precedent for the identical packed-KvCache constraint.
 #include "site_common.hlsli"
 
 cbuffer RootConstants : register(b0)
@@ -153,18 +162,22 @@ void main(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 
     int64_t status_tag;
     if (is_q) {
-        // Q's own destination (LayerScratch) matches RequantChainCheckedFullGpuP's native
-        // int32-per-code write exactly -- written in place, at the SAME q_row_off this group
-        // already fully consumed above (every thread's own read of q_row_off happened before
-        // this call; the funnel's own internal read is from wide_base, a disjoint region).
+        // (carried-scale delta §5, D-SLM6118): this head's own DISJOINT slot -- q_scale_off is
+        // now num_attention_heads*16 bytes wide (ComputeScratchLayout, superslm_gpu.cpp), one
+        // slot per query head, so this write can never race another Q group's write. Q's own
+        // destination (LayerScratch) matches RequantChainCheckedFullGpuP's native int32-per-code
+        // write exactly -- written in place, at the SAME q_row_off this group already fully
+        // consumed above.
+        uint q_scale_slot_off = q_scale_off + head * 16u;
         RequantChainCheckedFullGpuP(t, WorkScratch, wide_base, head_dim, incoming_m, incoming_e,
                                      /*n_incoming=*/0, site_m, site_e, LayerScratch, q_row_off,
-                                     q_scale_off, status_tag);
+                                     q_scale_slot_off, status_tag);
     } else {
         // K's own destination (KvCache) is packed int8 -- stage the funnel's native
         // int32-per-code output into this KV head's own disjoint QK_NORM_K_STAGE slice (never
         // wide_base itself, which the funnel's own internal steps still read from concurrently
-        // within this same call), and its own disjoint QK_NORM_K_SCALE discard slot.
+        // within this same call), and its own disjoint QK_NORM_K_SCALE slot -- no longer a
+        // discard target (carried-scale delta §4): read back below for the second landing.
         uint k_stage_off = qk_norm_k_stage_base + head * (uint)head_dim * 4u;
         uint k_scale_off = qk_norm_k_scale_base + head * 16u;
         RequantChainCheckedFullGpuP(t, WorkScratch, wide_base, head_dim, incoming_m, incoming_e,
@@ -178,12 +191,26 @@ void main(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
     }
 
     if (!is_q) {
-        // Repack: every owning thread re-reads its own staged int32 code and re-stores it
-        // packed into KvCache, in place -- rope_commit_site.hlsl's own identical repack shape.
+        // (carried-scale delta §4, D-SLM6117, §7 Cell 3): requantize the staged post-norm codes
+        // a SECOND time, onto the new static per-(layer, KV head) landing scale -- the funnel's
+        // own just-produced (m, e), read back from its own disjoint scale slot, and
+        // LandingRescaleGpu, the identical primitive kv_proj_site.hlsl already uses for K's own
+        // raw pre-norm landing (:199). Every owning thread re-reads its own staged int32 code,
+        // relands it, and stores it packed into KvCache, in place.
         uint k_stage_off = qk_norm_k_stage_base + head * (uint)head_dim * 4u;
+        uint k_scale_off = qk_norm_k_scale_base + head * 16u;
+        int64_t normed_m = WorkScratch.Load<int64_t>(k_scale_off + 0);
+        int64_t normed_e = WorkScratch.Load<int64_t>(k_scale_off + 8);
+        uint off_k_norm_r_t = layer_base + Layout.Load<uint>(63 * 4);
+        uint off_k_norm_e_t = layer_base + Layout.Load<uint>(64 * 4);
+        int64_t r_t = LayerWeights.Load<int64_t>(off_k_norm_r_t + (uint)head * 8u);
+        int64_t e_t = LayerWeights.Load<int64_t>(off_k_norm_e_t + (uint)head * 8u);
         for (int i = (int)t; i < head_dim; i += 256) {
-            int code = WorkScratch.Load<int>(k_stage_off + (uint)i * 4u);
-            StoreSignedByteGpu(KvCache, k_row_off + (uint)i, code);
+            int64_t code = (int64_t)WorkScratch.Load<int>(k_stage_off + (uint)i * 4u);
+            bool would_clamp, mag_exceeded;
+            int64_t raw = LandingRescaleGpu(code, normed_m, r_t, normed_e, e_t, would_clamp, mag_exceeded);
+            int64_t landed = ClampRopeCodeGpu(raw);
+            StoreSignedByteGpu(KvCache, k_row_off + (uint)i, (int)landed);
         }
     }
 }
