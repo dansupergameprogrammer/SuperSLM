@@ -63,6 +63,39 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   -- `pathlib.Path` splits only on the running OS's own separator convention. User-visible: the
   label every converted `.sslm` artifact's CONFIG section carries.
 
+### Added
+
+- **The converter learns the checkpoint's own namespace convention and its QK-norm
+  tensors (Ask 5 Track C, T-2539).** `_upstream_names` now detects, from a single anchor
+  tensor, whether a checkpoint's transformer backbone is `model.`-prefixed (every
+  incumbent through Qwen2.5) or bare (this ask's own candidate) -- a checkpoint matching
+  neither convention, or both, is a named rejection, never a guess. Q/k/v projection
+  biases and the two new QK-norm gain tensors per layer are each included only when the
+  checkpoint's own key set carries that exact tensor. `sslm_convert_validate.
+  check_required_groups` no longer demands `dynamic_biases` be non-empty -- a bias-free
+  checkpoint is a legitimate architecture fact, not a calibration-bug symptom, since that
+  group is built by a total, filter-free comprehension. `_derive_composition_constants`
+  gains a `q_norm`/`k_norm` offline composition-constant loop, gated on presence,
+  applying the identical formula the existing `attn_norm`/`mlp_norm` loop uses. No
+  forward-path code, GPU shader, tokenizer converter, or ABI change -- the converter half
+  of Qwen3-architecture support only (`SuperSLM_Plan.md` §22.5 Track C).
+
+  **Product claim, executed against the real, pinned candidate** (Qwen3-Embedding-0.6B,
+  revision `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3`): rejected before this round with
+  310 of 310 checkpoint tensors unmapped and 338 of 338 map entries missing. After:
+  `calibrate_checkpoint.py` then `convert_model.py` (with the engine's own compiled
+  `sslm_verify` invoked, not skipped) ran end to end -- `verified: independent loader
+  accepted the artifact`, 9 sections (Config, Weights, Biases, RopeTables, WeightScales,
+  CompositionConstants, KvLandingScales, KvLandingReciprocals, SigmoidLut),
+  `config_geometry.ok: true`. The emitted `.sslm` is **633,576,276 bytes**, SHA-256
+  **`5cf871fbfc2153e6296913c0ef602dfeafac005548adbb4d3a8b34db14ec2aae`**, and its own
+  proof manifest's `weight_scales_evidence` carries all 56 `q_norm`/`k_norm` gain entries
+  (28 layers x 2). Full converter validation suite unregressed: 1937/1937 passed
+  (`pytest tools/ tests/reference/ -m "not upstream"`, this tree's own real checkpoints
+  present); 1922 passed/4 skipped in the CI-faithful environment (no cached upstream
+  checkpoints). `pytest tests/ci/`: 423 passed. Build log:
+  `Claude/Brunel/t2539-ask5-trackc-build-2026-09-02.md` (records worktree).
+
 ## [1.3.0] - 2026-08-29
 
 This release ships one of five requested consumer-driven changes: the FP-free load path
