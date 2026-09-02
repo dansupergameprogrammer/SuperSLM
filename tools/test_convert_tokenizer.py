@@ -165,6 +165,28 @@ def test_parse_merge_element_rejects_a_three_element_list():
         CT._parse_merge_element(["a", "b", "c"], 0)
 
 
+def test_parse_merge_element_rejects_a_string_with_three_parts_by_name():
+    """T-2542 Finding 4 (Poirot): the string branch validated nothing before this
+    fix -- "a b c" silently returned ['a', 'b', 'c'], three elements, which
+    __init__'s own `for a, b in self.merges` then failed to unpack several frames
+    downstream as an opaque ValueError instead of this function's own named
+    rejection. Every real incumbent's own merges element already splits into
+    exactly 2 parts (unaffected by this fix); only a genuinely malformed string
+    is now caught here."""
+    with pytest.raises(CT.UnsupportedTokenizerShape, match=r"model\.merges\[0\].*got 3"):
+        CT._parse_merge_element("a b c", 0)
+
+
+def test_parse_merge_element_rejects_a_string_with_one_part_by_name():
+    with pytest.raises(CT.UnsupportedTokenizerShape, match=r"got 1"):
+        CT._parse_merge_element("ab", 0)
+
+
+def test_parse_merge_element_rejects_an_empty_string_by_name():
+    with pytest.raises(CT.UnsupportedTokenizerShape, match=r"got 1"):
+        CT._parse_merge_element("", 0)
+
+
 # ==============================================================================
 # _classify_post_processor -- the post_processor read (T-2541, closes TOK-06 /
 # root cause of D-SLM5574, t2408 §6 Track E step 2). Pure function of the JSON

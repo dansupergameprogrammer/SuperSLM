@@ -70,9 +70,19 @@ def _parse_merge_element(m, index):
     space-separated string, e.g. "a b" -- or the schema this checkpoint's own
     `tokenizers` library version emits: a 2-element [a, b] list (no join/split
     needed). Closes `TOK-04` / D-SLM5573 (t2408 §2.9, §6 Track E step 1): any other
-    element shape is an explicit rejection, never a silent guess."""
+    element shape is an explicit rejection, named, never a silent guess -- including
+    a string that does not split into exactly two parts (T-2542 Finding 4, Poirot:
+    a malformed string element previously escaped this function's own rejection
+    contract, surfacing several frames downstream as an opaque `ValueError` from
+    `__init__`'s own tuple-unpack instead)."""
     if isinstance(m, str):
-        return m.split(" ")
+        parts = m.split(" ")
+        if len(parts) != 2:
+            raise UnsupportedTokenizerShape(
+                f"model.merges[{index}]: unrecognized merge element {m!r} "
+                f"(a space-separated string must split into exactly 2 parts, got {len(parts)})"
+            )
+        return parts
     if isinstance(m, (list, tuple)) and len(m) == 2:
         return [m[0], m[1]]
     raise UnsupportedTokenizerShape(
