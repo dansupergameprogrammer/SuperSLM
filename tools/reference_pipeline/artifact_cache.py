@@ -406,8 +406,9 @@ def _reopen_checkpoint_float_source(checkpoint_path, config):
     from reference_pipeline import pipeline
 
     checkpoint = Path(checkpoint_path)
-    names = pipeline._upstream_names(config)
     tensors = pipeline._open_checkpoint_tensors(checkpoint)
+    present = set(tensors.keys())
+    names = pipeline._upstream_names(config, present)
     return pipeline._CheckpointFloatSource(tensors, names, config)
 
 

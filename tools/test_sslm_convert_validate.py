@@ -242,8 +242,40 @@ def test_rejects_fold_identity_not_bool():
 # --- required key sets --------------------------------------------------
 
 def test_rejects_empty_required_group():
+    """T-2543 M-5: empties exactly ONE required group (`weight_scales`) so this cell
+    identifies which check fired -- the prior form emptied `weight_scales` AND
+    `composition_constants` together, which cannot distinguish the check catching the
+    first from the check catching the second (Poirot
+    2a46a85-t2540-ask5-trackc-review.md M-5)."""
+    model = _valid_model()
+    model.weight_scales = {}
+    with pytest.raises(V.ConverterValidationError) as exc:
+        _validate(model)
+    assert exc.value.code == "EmptyRequiredGroup", exc.value.code
+
+
+def test_ask5_trackc_ckn03_accepts_a_bias_free_model():
+    """CKN-03 (`Claude/Vitruvius/t2408-superslm-ask5-qwen3-arch-design-2026-08-29.md`
+    §6 Track C, "Acceptance for Track C alone"): `dynamic_biases` is dropped from the
+    always-required tuple, because its emptiness is a fact about a bias-free checkpoint
+    (this ask's own candidate carries no q/k/v biases) rather than a symptom of a
+    calibration bug -- `dynamic_biases` is built by a total, filter-free comprehension
+    over `float_biases`, so nothing downstream can silently drop an entry a checkpoint
+    actually carries. A model with every OTHER required group populated but
+    `dynamic_biases` empty must pass."""
     model = _valid_model()
     model.dynamic_biases = {}
+    _validate(model)   # must not raise
+
+
+def test_ask5_trackc_ckn03_still_rejects_a_genuinely_missing_required_group():
+    """The discriminating twin of the cell above: `dynamic_biases` empty AND `weights`
+    (a distinct, still-required group) ALSO empty is still rejected -- proving CKN-03's
+    removal is scoped to `dynamic_biases` alone and does not weaken the check for any
+    other required group."""
+    model = _valid_model()
+    model.dynamic_biases = {}
+    model.weights = {}
     with pytest.raises(V.ConverterValidationError) as exc:
         _validate(model)
     assert exc.value.code == "EmptyRequiredGroup", exc.value.code

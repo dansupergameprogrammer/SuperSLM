@@ -88,6 +88,83 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   `tokenizer.json` now converts to a `.sslm` tokenizer artifact; every other checkpoint's
   converted output is unchanged.
 
+### Added
+
+- **The converter learns the checkpoint's own namespace convention and its QK-norm
+  tensors (Ask 5 Track C, T-2539).** `_upstream_names` now detects, from a single anchor
+  tensor, whether a checkpoint's transformer backbone is `model.`-prefixed (every
+  incumbent through Qwen2.5) or bare (this ask's own candidate) -- a checkpoint matching
+  neither convention, or both, is a named rejection, never a guess. Q/k/v projection
+  biases and the two new QK-norm gain tensors per layer are each included only when the
+  checkpoint's own key set carries that exact tensor. `sslm_convert_validate.
+  check_required_groups` no longer demands `dynamic_biases` be non-empty -- a bias-free
+  checkpoint is a legitimate architecture fact, not a calibration-bug symptom, since that
+  group is built by a total, filter-free comprehension. `_derive_composition_constants`
+  gains a `q_norm`/`k_norm` offline composition-constant loop, gated on presence,
+  applying the identical formula the existing `attn_norm`/`mlp_norm` loop uses. No
+  forward-path code, GPU shader, tokenizer converter, or ABI change -- the converter half
+  of Qwen3-architecture support only (`SuperSLM_Plan.md` §22.5 Track C).
+
+  **Product claim, executed against the real, pinned candidate** (Qwen3-Embedding-0.6B,
+  revision `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3`) -- **a LOAD-TIME claim only; see
+  the staleness note below before treating this artifact as an input to anything.**
+  Rejected before this round with 310 of 310 checkpoint tensors unmapped and 338 of 338
+  map entries missing. After: `calibrate_checkpoint.py` then `convert_model.py` (with the
+  engine's own compiled `sslm_verify` invoked, not skipped) ran end to end --
+  `verified: independent loader accepted the artifact`, 9 sections (Config, Weights,
+  Biases, RopeTables, WeightScales, CompositionConstants, KvLandingScales,
+  KvLandingReciprocals, SigmoidLut), `config_geometry.ok: true`. The emitted `.sslm` is
+  **633,576,276 bytes**, SHA-256
+  **`5cf871fbfc2153e6296913c0ef602dfeafac005548adbb4d3a8b34db14ec2aae`**, and its own
+  proof manifest's `weight_scales_evidence` carries all 56 `q_norm`/`k_norm` gain entries
+  (28 layers x 2).
+
+  **Calibration staleness (T-2543 S-4).** This artifact's numerical content is stale by
+  construction and NOT to be reused as an input once Ask 5 Track B step 6 lands: the
+  calibration forward (`_float_layer`) applies no QK-norm today, so every scale in this
+  artifact was derived from a Qwen2.5-shaped forward trajectory over an architecturally
+  Qwen3 checkpoint. `t2408`'s own Track B step 6 already rules this: landing the real
+  QK-norm forward call site "re-prices production calibration and invalidates every
+  cached calibrated artifact for this candidate," and this candidate's own calibrated
+  artifacts "go stale and must be discarded, not reused," once that step lands. The
+  SHA-256 above remains the correct identity of what this round produced; it names an
+  artifact proven to convert and load, not one proven numerically correct.
+
+  **T-2543 fix round (code review FIX-THEN-SHIP,
+  `Claude/Poirot/2a46a85-t2540-ask5-trackc-review.md`).** The namespace-detection fix
+  above now protects `sslm_convert_adapter.py`'s LoRA merge path too: before this fix, a
+  bare-convention checkpoint reaching the merge loop matched zero adapter keys against a
+  still-hardcoded `model.`-prefixed adapter key set, merging nothing, printing success,
+  and writing a checkpoint byte-equal to the base -- a silent wrong model, where the
+  pre-Track-C engine raised loudly on the identical input. Both the merge site and its
+  sibling (`read_base_projection_weight`) now detect the checkpoint's own namespace via a
+  new, shared `detect_namespace` helper. Asymmetric `q_norm`/`k_norm` presence (one
+  tensor present, the other absent, on the same layer) is now a named converter-side
+  rejection, matching design §4's "defined rejection, not two independent null checks."
+  `_weight_scales_from_float_source` now reads a float source's own real population
+  rather than `_weight_shapes`'s unconditional full set, closing a latent `KeyError` on
+  any real pre-Ask-5 checkpoint reaching `calibrate_kv_landing_arm`. Full test suite
+  reconciled: 1937 (T-2539's own tip) + 6 new T-2543 cells = **1943/1943 passed**
+  (`-m "not upstream"`, real checkpoints present); 1939 passed/4 skipped CI-faithful.
+  `pytest tests/ci/`: 423 passed, unchanged. Fix log:
+  `Claude/Brunel/t2543-ask5-trackc-fix-round-2026-09-02.md` (records worktree). Build
+  log: `Claude/Brunel/t2539-ask5-trackc-build-2026-09-02.md` (records worktree).
+
+  **T-2549 close-out (confirmation review FIX-THEN-SHIP,
+  `Claude/Poirot/e0fdd60-t2544-ask5-trackc-confirmation.md`).**
+  Closes the confirmation review's one remaining Significant (the C-1 sibling's `ns`
+  parameter is now required, not defaulted -- a reverted call site is a `TypeError` on
+  every real caller, confirmed by direct execution) and four Minors (a genuine, non-
+  duplicated safetensors writer; this entry's own trailing paragraph no longer ends on
+  superseded totals; an unrecognized `qk_norm` fixture sentinel is now a named rejection;
+  the required-norm-gains docstring phrase made exact). Full suite reconciled: 1943
+  (T-2543's own final) + 1 new cell = **1944/1944 passed** (`-m "not upstream"`, real
+  checkpoints present); 1940 passed/4 skipped CI-faithful. `pytest tests/ci/`: 423 passed,
+  unchanged. The 633 MB product artifact's identity is unaffected -- no calibration re-
+  run.
+  Close-out log: `Claude/Brunel/t2549-ask5-trackc-close-out-2026-09-02.md` (records
+  worktree).
+
 ## [1.3.0] - 2026-08-29
 
 This release ships one of five requested consumer-driven changes: the FP-free load path

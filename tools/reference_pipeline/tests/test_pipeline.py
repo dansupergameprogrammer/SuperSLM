@@ -1615,8 +1615,14 @@ def test_load_model_rejects_an_unmapped_tensor(tmp_path):
     load_model, unsupported = api(MODULE, "load_model", "UnsupportedOpSet")
     write_config(tmp_path)
     _write_synthetic_safetensors(tmp_path / "model.safetensors", {})
+    # The namespace anchor is declared present so prefix detection resolves to the
+    # legacy, `model.`-prefixed convention this fixture's config implies -- leaving
+    # `mystery_proj` as the sole, genuinely unmapped tensor this cell tests for.
     with pytest.raises(unsupported, match="mystery_proj"):
-        load_model(tmp_path, extra_tensors={"model.layers.0.self_attn.mystery_proj.weight": None})
+        load_model(tmp_path, extra_tensors={
+            "model.embed_tokens.weight": None,
+            "model.layers.0.self_attn.mystery_proj.weight": None,
+        })
 
 
 @pytest.mark.upstream

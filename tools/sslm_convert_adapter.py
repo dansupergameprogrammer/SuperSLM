@@ -482,14 +482,29 @@ def read_peft_lora_pair(adapter_dir: Path, layer: int, proj_short: str, meta: Ad
     return a_f, b_f * meta.scaling
 
 
-def read_base_projection_weight(tensors, layer: int, proj_short: str) -> np.ndarray:
+def read_base_projection_weight(tensors, layer: int, proj_short: str, ns: str) -> np.ndarray:
     """One projection's `[out, in]` float64 weight, read directly from the base checkpoint's own
     open tensor source -- UNPERMUTED (PEFT trains against the checkpoint's own raw orientation;
     RoPE's pair-permutation is applied only inside `pipeline.load_model`'s own processing loop,
     never at this raw-tensor level -- matching `t2029_b3_execute.py`'s own `load_base_weight()`,
-    which reads the identical raw key)."""
+    which reads the identical raw key).
+
+    **T-2543 C-1 sibling fix, T-2549 N-1 correction.** `ns` is the checkpoint's own
+    detected namespace (`pipeline.detect_namespace`'s return value) -- REQUIRED, no
+    default. T-2543's own first draft defaulted this to `"model."` "to keep this
+    function's own signature source-compatible" -- the identical shape the frozen
+    design's own step 1 already refused for the sibling call: "never given a silent
+    default (... a fallback would let a critical-path caller keep passing Python's own
+    signature check while resolving the wrong namespace)." The one real caller
+    (`build_runtime_additive_sections`) already computes and passes a real `ns` on every
+    path, and its own base checkpoint fixture happens to be `model.`-prefixed, so the
+    default made a reverted threading call byte-identical to the fix on every existing
+    test -- confirmed by execution (Poirot e0fdd60-t2544-ask5-trackc-confirmation.md N-1):
+    deleting the threading changed nothing anywhere in the suite. Required, a reverted
+    call site is a `TypeError` instead of a silent wrong-checkpoint read.
+    """
     full_path = _PROJECTION_FULL_PATH[proj_short]
-    return tensors.tensor(f"model.layers.{layer}.{full_path}.weight")
+    return tensors.tensor(f"{ns}layers.{layer}.{full_path}.weight")
 
 
 _ADP1_MAGIC = b"ADP1"
@@ -1376,6 +1391,10 @@ def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
     pipeline = _load_spike()
     cfg = pipeline.load_config(checkpoint_dir / "config.json")
     tensors = pipeline._open_checkpoint_tensors(checkpoint_dir)
+    # T-2543 C-1 sibling fix: detect the base checkpoint's own namespace once, threaded
+    # into every read_base_projection_weight call below -- see that function's own
+    # docstring and sslm_convert_adapter.build_merged_checkpoint's identical fix.
+    base_ns = pipeline.detect_namespace(set(tensors.keys()))
 
     base_cfg1 = sf.read_section_bytes(str(base_sslm_path), sf.SectionType.CONFIG)
     if base_cfg1 is None:
@@ -1417,7 +1436,7 @@ def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
             if proj not in meta.target_modules:
                 continue
             name = f"layer{layer}.{proj}"
-            w_f = read_base_projection_weight(tensors, layer, proj)
+            w_f = read_base_projection_weight(tensors, layer, proj, base_ns)
             a_f, b_scaled = read_peft_lora_pair(adapter_dir, layer, proj, meta)
             d_out, d_in = w_f.shape
             r = a_f.shape[0]
@@ -1561,13 +1580,23 @@ def build_merged_checkpoint(adapter_dir, out_dir, *, verbose: bool = True) -> Pa
     checkpoint_dir = _resolve_base_checkpoint_dir(adapter_dir)
     cfg = pipeline.load_config(checkpoint_dir / "config.json")
     tensors = pipeline._open_checkpoint_tensors(checkpoint_dir)
-    names = pipeline._upstream_names(cfg)  # upstream -> ours
+    present = set(tensors.keys())
+    names = pipeline._upstream_names(cfg, present=present)  # upstream -> ours
+    # T-2543 C-1: the adapter's own key set must be built under the SAME namespace the
+    # base checkpoint actually carries, not a hardcoded "model." literal. Before this fix,
+    # threading `present` into `_upstream_names` (above) let a bare-convention checkpoint
+    # reach this function at all, and the merge loop below then compared un-prefixed
+    # checkpoint keys against still-"model."-prefixed adapter keys: zero matches, 0 of N
+    # tensors merged, a checkpoint byte-equal to the base written as a "merged" artifact,
+    # exit 0 -- where `fdd4739` raised `KeyError` on the identical input (Poirot
+    # 2a46a85-t2540-ask5-trackc-review.md C-1).
+    ns = pipeline.detect_namespace(present)
 
     adapted_upstream = {}
     for layer in range(cfg.num_hidden_layers):
         for proj in PEFT_ADAPTABLE_PROJECTIONS:
             if proj in meta.target_modules:
-                adapted_upstream[f"model.layers.{layer}.{_PROJECTION_FULL_PATH[proj]}.weight"] = (layer, proj)
+                adapted_upstream[f"{ns}layers.{layer}.{_PROJECTION_FULL_PATH[proj]}.weight"] = (layer, proj)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     merged_tensors = {}

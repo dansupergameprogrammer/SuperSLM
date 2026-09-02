@@ -202,7 +202,10 @@ def test_resuming_a_pre_t2213_checkpoint_recomputes_delta_norm_sq_instead_of_rea
     # real A/B rather than reusing `verdict_fresh`'s own already-pooled figures.
     old_ckpt = tmp_path / "old_format_checkpoint.jsonl"
     a_f, b_scaled = A.read_peft_lora_pair(adapter_dir, 0, "q_proj", A.load_adapter_meta(adapter_dir))
-    w_f = A.read_base_projection_weight(A._load_spike()._open_checkpoint_tensors(checkpoint_dir), 0, "q_proj")
+    # T-2543 C-1 census: this fixture is legacy (model.-prefixed) convention, stated
+    # explicitly rather than relying on read_base_projection_weight's own default.
+    w_f = A.read_base_projection_weight(
+        A._load_spike()._open_checkpoint_tensors(checkpoint_dir), 0, "q_proj", "model.")
     pipeline = A._load_spike()
     Wc, w_scales = pipeline.quantize_weight_per_channel(w_f, output_axis=0)
     w = np.asarray(w_scales, dtype=np.float64)
