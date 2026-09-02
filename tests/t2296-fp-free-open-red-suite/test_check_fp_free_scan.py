@@ -977,21 +977,32 @@ def test_detected_msvc_edition_does_not_misfire_on_a_directory_literally_named_c
         )
 
 
-def _regression_parent_own_fp_instructions(data):
-    """T-2535 (S-4): decodes RegressionParent's own instructions DIRECTLY from raw COFF object
-    bytes, independent of `scan_object`'s own ACCEPT/REJECT verdict -- the same machinery S-1n's
-    own root-causing used (`scan._parse_coff` + `scan._account_section` + `_is_x86_fp_arith`).
-    Returns the (mnemonic, op_str) pairs found; an empty list means the symbol's own compiled
-    bytes carry no FP arithmetic under this object's toolchain, regardless of what any gating
-    check concluded about it."""
+def _symbol_own_instructions(data, symbol_name):
+    """T-2537 (S-3), generalized from T-2535's own `_regression_parent_own_fp_instructions`
+    (which called this same pipeline hardcoded to one name): decodes `symbol_name`'s own
+    instructions DIRECTLY from raw COFF object bytes, independent of `scan_object`'s own
+    ACCEPT/REJECT verdict -- the same machinery S-1n's own root-causing used (`scan._parse_coff`
+    + `scan._account_section`). Returns the FULL (mnemonic, op_str) list decoded for that symbol,
+    unfiltered -- callers filter for FP arithmetic themselves (`_regression_parent_own_fp_
+    instructions`, below) or assert on the raw count directly (this function's own must-reject
+    pin, `test_symbol_own_instructions_detects_real_fp_when_present`)."""
     code_sections, _sym_by_raw, _relocs = scan._parse_coff(data)
     md = scan._decoder("x86-64")
-    regression_parent_insns = []
+    insns = []
     for section in code_sections:
         _ok, _unclassified, per_symbol_insns = scan._account_section(section, "x86-64", md)
-        regression_parent_insns.extend(per_symbol_insns.get("RegressionParent", []))
+        insns.extend(per_symbol_insns.get(symbol_name, []))
+    return [(i.mnemonic, i.op_str) for i in insns]
+
+
+def _regression_parent_own_fp_instructions(data):
+    """T-2535 (S-4): RegressionParent's own FP-filtered instructions, independent of
+    `scan_object`'s own ACCEPT/REJECT verdict. An empty list means the symbol's own compiled
+    bytes carry no FP arithmetic under this object's toolchain, regardless of what any gating
+    check concluded about it."""
     return [
-        (i.mnemonic, i.op_str) for i in regression_parent_insns if _is_x86_fp_arith(i.mnemonic)
+        (mnemonic, op_str) for mnemonic, op_str in _symbol_own_instructions(data, "RegressionParent")
+        if _is_x86_fp_arith(mnemonic)
     ]
 
 
@@ -1216,6 +1227,64 @@ def test_regression_parent_own_fp_instructions_is_empty_on_the_real_fixture():
             "({}) -- S-1n's own ground truth no longer holds; the skip branch's classification "
             "would now (correctly) call this a genuine premise violation, not a false positive, "
             "but the assumption this cell exists to check has changed".format(regression_parent_fp)
+        )
+
+
+def test_symbol_own_instructions_detects_real_fp_when_present():
+    """T-2537 (Poirot 67bfcbf-t2536-superslm-ci-green-confirmation3.md S-3): the must-reject
+    `_regression_parent_own_fp_instructions`'s own pin (above) never had -- its only cell asserted
+    `== []`, which a decode that silently finds NOTHING at all also returns, so nothing in the
+    suite distinguished "decoded correctly, no FP present" from "decoded nothing". A silently-empty
+    decode would invert S-4's own classification: every genuine premise violation would report as
+    a gating false positive instead. This cell proves `_symbol_own_instructions` (the generalized
+    decode T-2537 factored `_regression_parent_own_fp_instructions` through) genuinely decodes real
+    instructions and genuinely finds FP arithmetic when it is really there, using the SAME compiled
+    object and the SAME pipeline population nine's own cell already builds: `__catch$RegressionParent$0`
+    (the catch funclet COFF emits as a child symbol of `RegressionParent`, named identically to the
+    catch-funclet symbols `test_population_09_funclet_membership` already discovers via
+    `"catch$" in name`) carries genuine IEEE-754 double arithmetic by the fixture's own construction.
+    Pinned to the reviewer's own executed numbers, re-derived independently here rather than quoted:
+    `RegressionParent` decodes 75 instructions total, 0 of them FP (the accept-direction pin, above,
+    restated as a raw count); `__catch$RegressionParent$0` decodes 20 instructions total, 5 of them
+    FP (`cvtsi2sd` x2, `addsd` x2, `mulsd` x1) -- a decode that silently found nothing would fail
+    BOTH of the non-zero assertions below, not just report an empty accept-direction result.
+    """
+    src = os.path.join(_FIXTURES, "pop09_funclet_fp.cpp")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "pop09_s3_must_reject.obj")
+        try:
+            fc.compile_cl(src, obj)
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        with open(obj, "rb") as f:
+            data = f.read()
+        if not _SCAN_AVAILABLE:
+            _fail_absent("nine", "compiled the same fixture as the population's own cell above")
+
+        regression_parent_all = _symbol_own_instructions(data, "RegressionParent")
+        assert len(regression_parent_all) == 75, (
+            "RegressionParent's own decoded instruction count changed on this machine ({}, "
+            "expected 75) -- the fixture or the toolchain drifted; re-derive the expected count "
+            "before trusting either pin".format(len(regression_parent_all))
+        )
+        regression_parent_fp = [x for x in regression_parent_all if _is_x86_fp_arith(x[0])]
+        assert regression_parent_fp == [], (
+            "RegressionParent's own 75 decoded instructions now include FP arithmetic ({}) -- "
+            "S-1n's own ground truth no longer holds".format(regression_parent_fp)
+        )
+
+        catch_all = _symbol_own_instructions(data, "__catch$RegressionParent$0")
+        assert len(catch_all) == 20, (
+            "__catch$RegressionParent$0's own decoded instruction count changed on this machine "
+            "({}, expected 20) -- the fixture or the toolchain drifted".format(len(catch_all))
+        )
+        catch_fp = [x for x in catch_all if _is_x86_fp_arith(x[0])]
+        assert len(catch_fp) == 5, (
+            "_symbol_own_instructions found {} FP instructions in __catch$RegressionParent$0's "
+            "own 20 decoded instructions, expected 5 ({}) -- the must-reject construction no "
+            "longer discriminates: a decode that silently found nothing would report 0 here, not "
+            "5, and the fixture is known (by the population's own cell, above) to carry genuine "
+            "FP arithmetic".format(len(catch_fp), catch_fp)
         )
 
 
