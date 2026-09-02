@@ -1054,6 +1054,11 @@ def _dict_float_source(floats: dict):
     """A `float_weight` over already-resident tensors, for a model small enough to hold."""
     def float_weight(name: str):
         return floats[name]
+    # T-2543 S-1: matches _CheckpointFloatSource.names() -- a fixture built from
+    # _pinned_weights(cfg) always carries every name _weight_shapes(cfg) declares, so this
+    # is a true, exact set and filtering against it is a no-op for every existing fixture
+    # caller.
+    float_weight.names = lambda: set(floats)
     return float_weight
 
 
@@ -1168,30 +1173,24 @@ class _SafeTensors:
         return values.reshape(tuple(spec["shape"]))
 
 
-def _upstream_names(cfg: ModelConfig, present: set):
-    """The total, checkpoint-driven map from a checkpoint's tensor names to this pipeline's.
+def detect_namespace(present: set) -> str:
+    """The checkpoint's own namespace convention -- `"model."` (the legacy, `model.`-
+    prefixed transformer backbone every incumbent through Qwen2.5 carries) or `""` (the
+    bare, un-prefixed backbone this ask's own candidate carries) -- detected once, from a
+    single anchor tensor unique to each convention (`model.embed_tokens.weight` /
+    `embed_tokens.weight`). A checkpoint carrying neither anchor, or both, is a hard
+    rejection (`UnsupportedOpSet`, matching every other named rejection this map already
+    raises) — never a silent default to either convention.
 
-    **Total is the point.** §11's N3 discipline — "an unrecognized ... constant in the config
-    is a hard rejection, never a silent drop" — governs the weight map for the same reason it
-    governs the config: a quietly-dropped projection is a model that loads, runs, generates
-    fluent text, and is not Qwen. So this map is compared against the checkpoint's key set in
-    both directions, and either difference is a rejection.
-
-    `present` is the checkpoint's own observed tensor-name set (computed by the caller from
-    the real, on-disk checkpoint before this function is called — never guessed). Two known
-    namespace conventions exist: a `model.`-prefixed transformer backbone (every incumbent
-    through Qwen2.5) and a bare, un-prefixed backbone (this ask's own candidate). The
-    namespace is detected once, from a single anchor tensor unique to each convention
-    (`model.embed_tokens.weight` / `embed_tokens.weight`). A checkpoint carrying neither
-    anchor, or both, is a hard rejection (`UnsupportedOpSet`, matching every other named
-    rejection this map already raises) — never a silent default to either convention.
-
-    The three q/k/v projection biases per layer and the two QK-norm gains per layer are each
-    included only when the checkpoint's own key set carries that exact tensor, independently
-    per entry: Qwen2.5 biases q/k/v unconditionally and carries no QK-norm tensors; this
-    ask's own candidate is the reverse. Gating both the same way as bias is what lets a
-    checkpoint carrying neither survive this map's own totality check unmodified — the
-    backward-compatibility acceptance cell this gate exists to keep passing.
+    **T-2543 C-1.** Extracted from `_upstream_names` so every reader of a checkpoint's raw
+    tensors by their own upstream key detects the SAME namespace the same way, in exactly
+    one place: `_upstream_names` itself, and `tools/sslm_convert_adapter.py`'s
+    `build_merged_checkpoint`/`build_runtime_additive_sections`, both of which build an
+    adapter-side key set that must agree with whichever namespace the base checkpoint
+    actually carries. Before this extraction, `_upstream_names` was the only caller and the
+    adapter module built its own key set with a hardcoded `"model."` literal -- correct only
+    for the legacy convention, and silently wrong (zero tensors match, not an exception) for
+    the bare one.
     """
     has_prefixed = "model.embed_tokens.weight" in present
     has_bare = "embed_tokens.weight" in present
@@ -1202,15 +1201,56 @@ def _upstream_names(cfg: ModelConfig, present: set):
             "does not guess which the rest of the checkpoint follows"
         )
     if has_prefixed:
-        ns = "model."
-    elif has_bare:
-        ns = ""
-    else:
-        raise UnsupportedOpSet(
-            "checkpoint tensor names carry neither 'model.embed_tokens.weight' nor "
-            "'embed_tokens.weight' -- this checkpoint matches neither namespace "
-            "convention this map recognizes"
-        )
+        return "model."
+    if has_bare:
+        return ""
+    raise UnsupportedOpSet(
+        "checkpoint tensor names carry neither 'model.embed_tokens.weight' nor "
+        "'embed_tokens.weight' -- this checkpoint matches neither namespace "
+        "convention this map recognizes"
+    )
+
+
+def _upstream_names(cfg: ModelConfig, present: set):
+    """The checkpoint-driven map from a checkpoint's tensor names to this pipeline's.
+
+    **§11's N3 discipline governs this map** -- "an unrecognized ... constant in the config
+    is a hard rejection, never a silent drop" -- for the same reason it governs the config: a
+    quietly-dropped projection is a model that loads, runs, generates fluent text, and is
+    not Qwen. Every REQUIRED entry (the embedding, the final norm, every per-layer
+    projection and its two norm gains) is compared against the checkpoint's key set in both
+    directions by the caller (`load_model`'s own `unmapped`/`missing` checks) and either
+    difference is a rejection.
+
+    **T-2543 S-1/S-3 correction: "total" no longer means every entry this map CAN produce is
+    always produced.** Three groups of entries are OPTIONAL, checkpoint-driven, and gated
+    independently on that exact tensor's own presence in `present`, never assumed: the three
+    q/k/v projection biases per layer (Qwen2.5 biases q/k/v unconditionally; this ask's own
+    candidate biases none), the two QK-norm gains per layer (the reverse), and `lm_head`
+    (present only when `tie_word_embeddings` is false AND the checkpoint carries it). Gating
+    these is what lets a checkpoint carrying none of them (the legacy convention) and a
+    checkpoint carrying all of them (this ask's own candidate) both survive this map's own
+    totality check unmodified -- the backward-compatibility acceptance cell this gate exists
+    to keep passing. What stays total: every gated entry that IS added is added consistently
+    with the checkpoint's own real key set, so a caller iterating this map's keys against
+    `present` still finds the two sets equal -- totality now applies to "what the map claims
+    given what the checkpoint carries," not to "every group is always non-empty."
+
+    `present` is the checkpoint's own observed tensor-name set, computed by the caller from
+    the real, on-disk checkpoint before this function is called -- never guessed.
+
+    **T-2543 C-1, asymmetric QK-norm presence.** A checkpoint carrying `q_norm.weight` for a
+    layer without `k_norm.weight`, or vice versa, is REJECTED by name here rather than
+    silently mapping the one present and skipping the other -- design §4
+    (`t2408-superslm-ask5-qwen3-arch-design-2026-08-29.md#4-gating`) states this combination
+    is "a defined rejection, not two independent null checks." The design's own primary
+    enforcement point is the C++ layer marshal (`layer_marshal.h`'s `MarshalLayer`, Track B,
+    unbuilt and out of this track's own scope), which rejects at LOAD time; this converter-
+    side check is the identical invariant enforced earlier, at CONVERT time, for free at the
+    point this map is already reading the checkpoint's own key set -- rejecting a defect
+    earlier never contradicts a design that also rejects it later.
+    """
+    ns = detect_namespace(present)
 
     names = {
         f"{ns}embed_tokens.weight": "embed",
@@ -1234,11 +1274,25 @@ def _upstream_names(cfg: ModelConfig, present: set):
             if key in present:
                 names[key] = f"{ours_prefix}.{ours}.bias"
         # QK-norm: present on this ask's own candidate, absent on every pre-ask-5
-        # incumbent -- gated identically to bias, for the identical reason.
-        for norm in ("q_norm", "k_norm"):
-            key = f"{ns}layers.{layer}.self_attn.{norm}.weight"
-            if key in present:
-                names[key] = f"{ours_prefix}.{norm}.gain"
+        # incumbent -- gated identically to bias, for the identical reason. Symmetric
+        # presence is required (T-2543 C-1): design Sec4 makes one-present-one-absent a
+        # defined rejection, not two independent null checks.
+        q_norm_key = f"{ns}layers.{layer}.self_attn.q_norm.weight"
+        k_norm_key = f"{ns}layers.{layer}.self_attn.k_norm.weight"
+        q_norm_present = q_norm_key in present
+        k_norm_present = k_norm_key in present
+        if q_norm_present != k_norm_present:
+            present_name = "q_norm" if q_norm_present else "k_norm"
+            absent_name = "k_norm" if q_norm_present else "q_norm"
+            raise UnsupportedOpSet(
+                f"layer {layer}: {present_name} tensor present, {absent_name} tensor "
+                f"absent -- design Sec4 (t2408-superslm-ask5-qwen3-arch-design-2026-08-29"
+                f".md#4-gating) makes asymmetric QK-norm presence a defined rejection, not "
+                f"two independent null checks"
+            )
+        if q_norm_present:
+            names[q_norm_key] = f"{ours_prefix}.q_norm.gain"
+            names[k_norm_key] = f"{ours_prefix}.k_norm.gain"
     if not cfg.tie_word_embeddings and "lm_head.weight" in present:
         # lm_head sits outside the `model.` submodule under BOTH conventions -- HF's
         # AutoModelForCausalLM places it there regardless of the backbone's own namespace --
@@ -1319,6 +1373,15 @@ class _CheckpointFloatSource:
         if upstream is None:
             raise KeyError(name)
         return _permuted_if_rope(name, self._tensors.tensor(upstream), self._cfg)
+
+    def names(self):
+        """The set of `ours`-side names this source can actually serve -- the checkpoint's
+        own real, gated population (T-2543 S-1). `_weight_scales_from_float_source` reads
+        this, when present, to iterate only the names this particular model instance
+        carries, rather than `_weight_shapes(cfg)`'s own unconditional full set -- the
+        gate `_upstream_names` already applied to build `_ours_to_upstream`, read back
+        rather than re-derived."""
+        return set(self._ours_to_upstream)
 
 
 def _permuted_if_rope(name, values, cfg: ModelConfig):
@@ -1583,12 +1646,31 @@ def load_model(checkpoint, extra_tensors=None, require_tensors=(),
     from the spike: a run over it would emit arithmetic noise in exactly the right format to be
     quoted as T-066's answer.
 
-    Every rejection here is §11's reject-over-degrade. An unmapped tensor, a missing tensor, or
-    a shape that contradicts `config.json` fails the load; none of them is a silent skip.
+    Every rejection here is §11's reject-over-degrade for a REQUIRED tensor: an unmapped
+    tensor, a missing REQUIRED tensor, or a shape that contradicts `config.json` fails the
+    load, never a silent skip.
 
-    `extra_tensors` and `require_tensors` exist for the rejection cells: they add names to the
-    observed and to the demanded key sets respectively, so both directions of the map's
-    totality can be driven without a corrupt checkpoint on disk.
+    **T-2543 S-3 correction.** Three tensor groups are OPTIONAL and gated on the checkpoint's
+    own presence, not on this reject-over-degrade rule: q/k/v biases, QK-norm
+    (`_upstream_names`'s own docstring states both, and asymmetric QK-norm presence is
+    still a hard rejection -- only symmetric presence/absence degrades), and `lm_head` when
+    `tie_word_embeddings` is false. The third is a genuine, checked-in degradation this
+    round leaves as the frozen design's own accept-side cell states it (`t2408` §6 Track C,
+    fold round 3, CKN-04's second acceptance cell): an untied checkpoint with no
+    `lm_head.weight` loads successfully here and fails later, at the first consumer that
+    reads the head (`forward_float_reference`/`lm_head_weight`, both `KeyError('lm_head')`)
+    -- no real checkpoint is known to take this shape (HuggingFace's own
+    `AutoModelForCausalLM` always materializes a separate `lm_head` when embeddings are
+    untied), so this is an accepted, named residual on a hypothetical input, not a silent
+    trap on a real one.
+
+    `extra_tensors` and `require_tensors` exist for the rejection cells: they add names to
+    the observed and to the demanded key sets respectively, so both directions of the map's
+    totality can be driven without a corrupt checkpoint on disk. Since CKN-01 (T-2539),
+    `extra_tensors` ALSO participates in `present` before `_upstream_names` builds the map
+    -- it can supply the namespace anchor a synthetic fixture needs, or add tensors that get
+    gated INTO the map (a synthetic bias or QK-norm entry), not only tensors that end up
+    unmapped.
 
     `tokenize_prompt` defaults to the checkpoint's own chat template and tokenizer — the
     encoder the run decodes through. It is a parameter and not a choice: whichever encoder
@@ -2237,9 +2319,27 @@ def _weight_scales_from_float_source(cfg: ModelConfig, float_weight):
     own contract (T-1933 §0) takes `float_weight` alone, and Arm A/B's own legacy
     calibration below reuses the existing `_derive_scales`/`_derive_composition_constants`
     machinery, both of which require a `weight_scales` dict.
+
+    **T-2543 S-1.** `_weight_shapes(cfg)` declares every name a config of this shape CAN
+    carry (q_norm/k_norm unconditionally, since T-2539; lm_head when untied) -- it says
+    nothing about which of them THIS `float_weight` actually has, because a real,
+    pre-ask-5 checkpoint's own `_CheckpointFloatSource` is gated on the checkpoint's real
+    tensor presence (`_upstream_names`'s own per-entry gate) and does not carry
+    `q_norm`/`k_norm` at all. Asking it for a name it does not have is not a defect to
+    paper over with a shape change; the model genuinely does not carry that weight, and
+    the correct read is "this scale does not exist for this model," not "quantize
+    whatever KeyError comes back." So this loop reads the source's own `names()` when it
+    offers one (every `float_weight` in this module now does; `getattr` degrades to the
+    old unconditional-iteration behavior for a caller's own ad hoc callable that offers no
+    introspection, never silently narrowing a contract nothing asked to narrow) and skips
+    a shape this particular source does not carry, rather than KeyError-ing on it.
     """
+    available = getattr(float_weight, "names", None)
+    available = available() if available is not None else None
     weight_scales = {}
     for name, _shape in _weight_shapes(cfg):
+        if available is not None and name not in available:
+            continue
         weight_scales[name] = _quantize_tensor(name, float_weight(name), cfg)[1]
     return weight_scales
 
