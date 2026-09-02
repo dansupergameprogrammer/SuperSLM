@@ -579,7 +579,17 @@ def test_mutated_call_site_preserves_a_forced_lf_file_regardless_of_checkout_pla
 #
 # CURRENT STATE (T-2535, Poirot 2945361-t2534-superslm-ci-green-confirmation2.md M-4): ten
 # entries. Every one except `_MODEL_H` is a real `_mutated` target, reached EXCLUSIVELY through
-# that one function -- there is no direct-write path anywhere in this module. `_MODEL_H` alone
+# that one function -- there is no direct-write path to any entry of THIS TUPLE anywhere in
+# this module. (T-2537 correction, Poirot 67bfcbf-t2536-superslm-ci-green-confirmation3.md
+# M-2: the unqualified form of that sentence -- "there is no direct-write path anywhere in
+# this module", with no "to any entry of this tuple" -- was false the moment it was written:
+# the two forced-bytes cells this same round's own C-1n fix added
+# (`test_mutated_call_site_preserves_a_forced_crlf_file_regardless_of_checkout_platform` and
+# its LF sibling, below `_write_newline_for`) write their own `tempfile.mkstemp()` scratch
+# paths directly with `open(path, "wb")` -- by design, since those paths are deliberately
+# OUTSIDE this tuple and O-1's own note on `_mutated` documents exactly why. The true
+# statement is scoped to this tuple's own entries, never to every write statement in the
+# module.) `_MODEL_H` alone
 # is a harmless superset guard: mutated by nothing (`_MODEL_FRAGMENT`, its own would-be writer,
 # is dead and removed; see the mechanism-cells section's own header comment), a byte-identity
 # check over an untouched path costs nothing to keep. It does NOT close every future cell that
@@ -617,8 +627,10 @@ def _mutated_targets_and_registry_are_byte_identical_after_the_module_runs():
     raw bytes of every path in `_MUTATED_TARGETS_AND_REGISTRY_PATHS` BEFORE the first cell in
     this module runs, and asserts them byte-identical AFTER the last one has, whatever mix of
     `_mutated()` blocks ran in between -- every entry except `_MODEL_H` is reached exclusively
-    through `_mutated`, there is no direct-write path in this module (see the tuple's own
-    "CURRENT STATE" comment, above, T-2535 M-4). Closes T-2496's Significant 2
+    through `_mutated`, there is no direct-write path to any entry of THIS TUPLE anywhere in
+    this module (T-2537 correction, M-2: not "no direct-write path in this module" --
+    scratch files outside this tuple ARE written directly, by design; see the tuple's own
+    "CURRENT STATE" comment, above). Closes T-2496's Significant 2
     (D-SLM5758) at the root rather than per-cell: a fix that touches one of the paths named
     in `_MUTATED_TARGETS_AND_REGISTRY_PATHS` and leaves it modified fails HERE regardless of what
     that fix's own cell asserts.
