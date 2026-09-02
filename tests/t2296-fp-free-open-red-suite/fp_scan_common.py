@@ -43,6 +43,44 @@ VSDEVCMD_CANDIDATES = (
     r"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat",
     r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat",
 )
+
+# T-2529: the two hardcoded candidates above are a fail-skip on any machine whose VS 2022 lives
+# at a third location -- the hosted GitHub Actions `windows-latest` runner's own VS 2022
+# Enterprise install (`C:\Program Files\Microsoft Visual Studio\2022\Enterprise\...`) is exactly
+# such a machine, confirmed by the CI run this fixes (run 33545319929, `fp-free-scan-gate`): 22
+# `ToolUnavailable` errors, one per cell that calls `compile_cl`/`compile_ml64`, each reporting
+# "no VsDevCmd.bat found at either well-known VS2022 install location". `vswhere.exe` ships at
+# this fixed path with every VS 2022 installer regardless of edition or install location
+# (Microsoft's own documented contract for the tool), so it is queried first; the two hardcoded
+# paths above remain the fallback for a machine where `vswhere.exe` itself is absent (a bare
+# BuildTools-only install predating the Installer's own vswhere bundling). Mirrors
+# `conftest.py`'s own `_vswhere_vsdevcmd_candidates`/`_find_vsdevcmd` in this same directory,
+# which already carries this discovery for the corpus-build fixture; this module's own
+# `find_vsdevcmd()` is the one `compile_cl`/`compile_ml64` actually call, and had not been
+# widened when that one was.
+_VSWHERE_PATH = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+
+
+def _vswhere_vsdevcmd_candidates():
+    """Every `VsDevCmd.bat` belonging to a VS 2022 instance `vswhere.exe` reports, in the order
+    `vswhere` itself returns them (this module's own documented preference is Community first
+    among the hardcoded fallbacks, unlike `conftest.py`'s BuildTools-first order -- vswhere's own
+    ordering is left as reported rather than re-sorted to match either fixed preference, since
+    neither preference is meaningful once more than the two hardcoded installs are in play).
+    Returns an empty list, never raises, if `vswhere.exe` is absent or reports nothing usable --
+    this is a widened SEARCH, not a required dependency."""
+    if not os.path.exists(_VSWHERE_PATH):
+        return []
+    try:
+        result = subprocess.run(
+            [_VSWHERE_PATH, "-products", "*", "-property", "installationPath", "-nologo"],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0:
+        return []
+    install_paths = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return [os.path.join(p, "Common7", "Tools", "VsDevCmd.bat") for p in install_paths]
 # The Hostx64/ARM64 cross-compiler's own env script -- distinct from
 # VsDevCmd.bat -arch=x64, needed for population ten's own AArch64 leg (matching
 # Claude/Loki/t2273-probe/build-arm.bat's own toolchain choice exactly: real
@@ -74,6 +112,9 @@ def find_clang():
 
 
 def find_vsdevcmd():
+    for c in _vswhere_vsdevcmd_candidates():
+        if os.path.exists(c):
+            return c
     for c in VSDEVCMD_CANDIDATES:
         if os.path.exists(c):
             return c
