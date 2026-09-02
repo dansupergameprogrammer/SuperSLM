@@ -706,6 +706,19 @@ struct LayerWeights {
 	const int64_t* q_bias = nullptr;  // q_width, or nullptr
 	const int64_t* k_bias = nullptr;  // num_key_value_heads * head_dim, or nullptr
 	const int64_t* v_bias = nullptr;  // num_key_value_heads * head_dim, or nullptr
+
+	// (design §4/§6 Track B step 1): QK-norm's per-head RMSNorm gain, nullptr when this layer's
+	// artifact carries no q_norm/k_norm tensor -- the identical adapter/q_bias optional-tensor
+	// convention (above). `head_dim` elements each (ONE shared gain vector reused across every
+	// head, matching `Qwen3RMSNorm(self.head_dim)` being one module instance applied per head,
+	// Linnaeus §2.2) -- never q_width/kv_hidden_size-sized. Asymmetric presence (one non-null,
+	// the other null) is a defined `MarshalLayer` rejection (§4); never reachable past marshal.
+	const int32_t* q_norm_gain = nullptr;  // head_dim, or nullptr
+	const int32_t* k_norm_gain = nullptr;  // head_dim, or nullptr
+	// Meaningless when the matching gain pointer above is null -- required by `MarshalLayer`
+	// only when the gain tensor is present (§6 Track B step 1's own corrected text).
+	CarriedScale q_norm_site_constant;
+	CarriedScale k_norm_site_constant;
 	// §8.1: per-(head, projection) K/V landing reciprocal/exponent, from
 	// KvLandingReciprocals'/KvLandingScales' own per-head rows -- K and V are
 	// separate arrays because §8.1 states the reciprocal/exponent as
@@ -1031,6 +1044,46 @@ int8_t* MutableKeyRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
 int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
                          size_t num_kv_heads, size_t head_dim, size_t kv_head,
                          int64_t position) noexcept;
+
+// (design §2.2/§3/§4/§6 Track B steps 1/2): the per-head QK-norm forward call site, shared by
+// both `RunLayerLoopImpl` (the single-token path) and `RunLayerLoopChunkBatched` (the
+// chunk-batched path) -- one function, called once per (layer, token), so the composition is
+// never duplicated between the two forward paths. Called strictly after this layer's K/V
+// landing (`LandTokenKVRow`) and strictly before the RoPE loop's first `RopeApplySite` call,
+// matching §3's own ordering resolution: the engine's runtime call site sits downstream of
+// q_proj/k_proj's GEMM output, already in the engine's permuted (interleaved) order, so no
+// permutation crosses this call.
+//
+// Q: for each query head `h` in `[0, num_heads)`, when `lw.q_norm_gain != nullptr`,
+// `RmsNormSite` against `q_codes + h*head_dim` at width `head_dim`, in place, writing the new
+// carried scale back into `*q_scale` on every iteration -- `q_scale` is per-token (shared across
+// every head, the same local the attention half's C30 derivation reads once this call returns),
+// and every head's own funnel call targets the identical artifact-derived site constant
+// (`q_norm_site_constant`, one entry per LAYER, not per head), so overwriting `*q_scale`
+// identically on every head is exactly the composition, not an approximation of one.
+//
+// K: for each KV head `kv_head` in `[0, num_key_value_heads)`, ONCE (never once per query head
+// -- applying `RmsNormSite` twice to an already-normalized row is not idempotent), when
+// `lw.k_norm_gain != nullptr`, `RmsNormSite` against the just-landed K row (`MutableKeyRow`), in
+// place. K's own output scale is discarded: the K/V store carries codes at a fixed, per-head
+// static landing scale (§8.1's `LandingRescale`, already applied by `LandTokenKVRow` before this
+// call runs) that no downstream call reads as a per-token `CarriedScale` -- the attention score
+// GEMM against the K store takes no scale parameter at all, and K has no analog of Q's own
+// `q_scale` local for a caller to update.
+//
+// Both calls pass `CarriedScale{}` for `incoming_scale` -- `RmsNormSite`'s own contract (above):
+// RMS normalization's arithmetic annihilates any input scale, so this is a correctness no-op,
+// never a choice this function makes.
+//
+// Gated by the caller on `!option_g_fused_k_landing` (§3, D-SLM5243): the combination of
+// `q_norm`/`k_norm` presence with `option_g_fused_k_landing = true` is a defined convert/
+// load-time rejection (`MarshalLayer`, §4/§6 Track B step 5) -- this function does not itself
+// re-check the flag, matching the K RoPE write-back loop's own identical caller-side gate.
+SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scale, uint8_t* workspace,
+                                   uint32_t layer, int64_t context_cap, int64_t position,
+                                   size_t num_heads, size_t num_key_value_heads, size_t head_dim,
+                                   const LayerWeights& lw, std::string_view site_prefix,
+                                   size_t token_index, SslmTraceHookState* trace_hook_state);
 
 // --- S3.6: the head and the greedy decode loop (SuperSLM_S3a_WalkingSkeleton_
 // Plan.md §11 S3.6; §9.1; master plan §6.4; C16). This is
