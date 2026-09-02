@@ -141,3 +141,30 @@ def test_path_has_segment_rejects_a_substring_that_is_not_a_whole_path_component
         "Common7", "Tools", "VsDevCmd.bat")
     assert _fixture_module._path_has_segment(upper_path, "BuildTools"), (
         "the match must stay case-insensitive")
+
+
+def test_vswhere_version_range_is_passed_to_the_real_query():
+    """T-2535 (Poirot 2945361-t2534-superslm-ci-green-confirmation2.md S-2): this file's own
+    `-version` constraint (`_VSWHERE_VERSION_RANGE`, T-2535 S-3n) had no cell -- deleting the
+    argument from `conftest.py`'s real query left this whole file at `6 passed` and the full red
+    suite at `161 passed, 48 skipped, 1 xfailed`, undiscriminated, while the identical deletion in
+    the sibling module `fp_scan_common.py` already failed
+    `test_vswhere_version_range_is_passed_to_the_real_query` there -- the mirroring that added that
+    cell ran one way. Exercised here directly, on a mocked `subprocess.run`, rather than only
+    trusted by inspection -- the query passed to `vswhere.exe` must actually carry `-version` and
+    this module's own range, not merely define the constant and never use it.
+    """
+    fake_result = subprocess.CompletedProcess(
+        args=["vswhere.exe"], returncode=0, stdout="", stderr="")
+    with mock.patch.object(_fixture_module.os.path, "exists", return_value=True), \
+         mock.patch.object(_fixture_module.subprocess, "run", return_value=fake_result) as run:
+        _fixture_module._vswhere_vsdevcmd_candidates()
+
+    assert run.called, "vswhere.exe was found to exist but subprocess.run was never invoked"
+    call_args = run.call_args[0][0]
+    assert "-version" in call_args, (
+        "the real vswhere invocation must pass -version -- got {}".format(call_args))
+    version_idx = call_args.index("-version")
+    assert call_args[version_idx + 1] == _fixture_module._VSWHERE_VERSION_RANGE, (
+        "the real vswhere invocation must pass this module's own _VSWHERE_VERSION_RANGE "
+        "immediately after -version -- got {}".format(call_args))
