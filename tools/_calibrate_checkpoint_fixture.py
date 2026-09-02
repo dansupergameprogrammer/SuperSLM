@@ -96,6 +96,12 @@ def _write_config(checkpoint_dir: Path) -> None:
 
 
 def _write_safetensors(checkpoint_dir: Path, *, seed: int = 0) -> None:
+    """The legacy fixture's own fixed tensor set, written via `_write_safetensors_shard`
+    (T-2549 N-2 correction: T-2543 introduced that function as a verbatim, un-called copy
+    of this one's own serializer, against its own docstring's "generalized rather than
+    imported" claim -- Poirot e0fdd60-t2544-ask5-trackc-confirmation.md N-2. This function
+    now builds the dict and delegates the actual serialization, which is the reuse that
+    was claimed)."""
     rng = np.random.default_rng(seed)
     q_width = NUM_ATTENTION_HEADS * HEAD_DIM
     kv_width = NUM_KEY_VALUE_HEADS * HEAD_DIM
@@ -122,24 +128,7 @@ def _write_safetensors(checkpoint_dir: Path, *, seed: int = 0) -> None:
         tensors[f"{p}.mlp.up_proj.weight"] = small(INTERMEDIATE_SIZE, HIDDEN_SIZE)
         tensors[f"{p}.mlp.down_proj.weight"] = small(HIDDEN_SIZE, INTERMEDIATE_SIZE)
 
-    header = {}
-    payload = bytearray()
-    offset = 0
-    for name, arr in tensors.items():
-        arr = np.ascontiguousarray(arr, dtype=np.float32)
-        data = arr.tobytes()
-        header[name] = {"dtype": "F32", "shape": list(arr.shape),
-                        "data_offsets": [offset, offset + len(data)]}
-        payload += data
-        offset += len(data)
-    header["__metadata__"] = {}
-    header_bytes = json.dumps(header).encode("utf-8")
-
-    path = checkpoint_dir / "model.safetensors"
-    with open(path, "wb") as handle:
-        handle.write(len(header_bytes).to_bytes(8, "little"))
-        handle.write(header_bytes)
-        handle.write(bytes(payload))
+    _write_safetensors_shard(checkpoint_dir, tensors)
 
 
 def build_fixture_checkpoint(checkpoint_dir: Path, *, seed: int = 0) -> Path:
@@ -159,19 +148,24 @@ def build_fixture_checkpoint(checkpoint_dir: Path, *, seed: int = 0) -> Path:
 
 def _write_safetensors_shard(checkpoint_dir: Path, tensors: dict) -> None:
     """One safetensors file at `checkpoint_dir / "model.safetensors"`, from
-    `{tensor_name: array}` -- the identical minimal on-disk shape `_write_safetensors`
-    (thirty lines above, this same file) already writes, generalized to an arbitrary
-    tensor dict instead of one hardcoded fixture's own fixed set.
+    `{tensor_name: array}` -- the minimal on-disk safetensors shape (8-byte little-endian
+    header length, JSON header, raw bytes back to back), generic over an arbitrary tensor
+    dict rather than one hardcoded fixture's own fixed set. `_write_safetensors` (above)
+    builds its own fixed dict and calls this function to serialize it.
 
-    **T-2543 M-4 correction.** The first version of this function imported
-    `tools/reference_pipeline/tests/conftest.py`'s own `write_safetensors_shard` across
-    the `tools/`/`tests/` boundary via a `sys.path` insertion -- the sibling fixture file
-    in this same directory records the tree's own convention against exactly that shape
-    (`_t2194_bf16_lora_fixture.py`: reuse `_calibrate_checkpoint_fixture.py`'s own
-    `_write_safetensors` "rather than a cross-suite import"), and a local writer with the
-    identical logic already existed thirty lines above the one that reached across
-    (Poirot 2a46a85-t2540-ask5-trackc-review.md M-4). This is that local writer,
-    generalized rather than imported.
+    **T-2543 M-4 correction, T-2549 N-2 correction.** The first version of this function
+    imported `tools/reference_pipeline/tests/conftest.py`'s own `write_safetensors_shard`
+    across the `tools/`/`tests/` boundary via a `sys.path` insertion -- the sibling
+    fixture file in this same directory records the tree's own convention against exactly
+    that shape (`_t2194_bf16_lora_fixture.py`: reuse `_calibrate_checkpoint_fixture.py`'s
+    own `_write_safetensors` "rather than a cross-suite import"), fixed (M-4) by copying
+    that local writer's own serializer body here instead. The copy left `_write_safetensors`
+    with its own, second, un-called copy of the identical eighteen lines -- a duplicate
+    the M-4 fix's own docstring described as "generalized rather than imported" without
+    actually being called by anything (Poirot
+    e0fdd60-t2544-ask5-trackc-confirmation.md N-2). `_write_safetensors` now calls this
+    function instead of carrying its own copy, which is the reuse both docstrings always
+    claimed.
     """
     header = {}
     payload = bytearray()
