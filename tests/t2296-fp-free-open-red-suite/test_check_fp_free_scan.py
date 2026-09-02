@@ -1071,6 +1071,28 @@ def test_population_09_funclet_membership():
         )
 
 
+def test_invoke_watson_is_in_the_extern_allow_list():
+    """T-2535 (Poirot 2945361-t2534-superslm-ci-green-confirmation2.md S-3): the S-1n remedy
+    (adding "_invoke_watson" to `_X86_EXTERN_ALLOW`, tests/ci/check_fp_free_scan.py) is only
+    discriminated by `test_population_09_funclet_membership` under BuildTools -- RegressionParent's
+    own compiled bytes call `_invoke_watson` only under that edition's STL, so under Community
+    (which `fp_scan_common.py:117` sorts first, and which `find_vsdevcmd()` resolves on this
+    machine) deleting the allow-list entry leaves that cell `1 passed`, undiscriminated. This cell
+    is a membership pin, not a behavioural one: it checks the allow-list itself, a pure Python
+    set, so it fires identically regardless of which MSVC edition (if any) is installed or
+    selected -- Community and BuildTools alike, and even with neither present. It does not replace
+    `test_population_09_funclet_membership`'s own behavioural check (whether the compiled object's
+    check-(C) verdict actually reflects the allow-list, only reachable under BuildTools on this
+    machine) -- it closes the narrower, always-reachable gap: a future edit deleting or renaming
+    this entry is caught here on every machine, everywhere, not only the one machine happening to
+    carry BuildTools first.
+    """
+    assert "_invoke_watson" in scan._X86_EXTERN_ALLOW, (
+        "_invoke_watson (S-1n, closing the fp-free-scan-gate BuildTools gap on "
+        "RegressionParent) is missing from _X86_EXTERN_ALLOW"
+    )
+
+
 # ===========================================================================
 # Population ten -- T-2273's AArch64 differential control (fold round 9).
 # Historical/diagnostic: commissioning infeasible per fold round 10, disposed
