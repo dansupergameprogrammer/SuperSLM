@@ -16,12 +16,15 @@ check and do NOT satisfy that independent commissioning.
 """
 
 import os
+import subprocess
 import sys
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
 import convert_tokenizer as CT  # noqa: E402
+
+_TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 _HF_HOME = os.environ.get("HF_HOME", r"D:\hf_cache")
 _CANDIDATE = os.path.join(
@@ -103,3 +106,19 @@ def test_must_reject_the_designs_own_dropped_extraction_through_the_entry_point(
     monkeypatch.setattr(CT, "_classify_post_processor", lambda pp: None)
     mism = CT.verify_post_processor(_CANDIDATE, _CORPUS)
     assert mism == 44, "the drop mutant must make the entry point itself return non-zero"
+
+
+def test_verify_and_verify_post_processor_both_run_when_both_are_passed():
+    """T-2542 Finding 6 (Poirot, Observation): --verify used to short-circuit
+    --verify-post-processor via sys.exit before the second flag was even checked,
+    so passing both silently ran only the first -- unlike --emit/--golden, which
+    already compose in the same block. Real CLI subprocess, both flags together,
+    against the real candidate: both checks' own output lines must appear."""
+    proc = subprocess.run(
+        [sys.executable, "convert_tokenizer.py", "--ckpt", _CANDIDATE,
+         "--verify", _CORPUS, "--verify-post-processor", _CORPUS],
+        cwd=_TOOLS_DIR, capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "0 mismatches, Unicode" in proc.stdout, "the --verify output line is missing"
+    assert "post-processor-parity:" in proc.stdout, "the --verify-post-processor output line is missing"

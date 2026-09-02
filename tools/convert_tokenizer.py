@@ -617,10 +617,21 @@ if __name__ == "__main__":
                     help="emit the golden reference pack for a corpus")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
+    # T-2542 Finding 6 (Poirot): --verify used to short-circuit --verify-post-processor
+    # via sys.exit before the second flag was even checked, so passing both silently
+    # ran only the first -- unlike --emit/--golden, which already compose in one block
+    # below. Both verify flags now run, independently, when both are given; the exit
+    # code is non-zero if either one found a mismatch.
+    ran_verify = False
+    verify_failed = False
     if args.verify:
-        sys.exit(1 if verify(args.ckpt, args.verify, args.limit) else 0)
+        ran_verify = True
+        verify_failed = bool(verify(args.ckpt, args.verify, args.limit)) or verify_failed
     if args.verify_post_processor:
-        sys.exit(1 if verify_post_processor(args.ckpt, args.verify_post_processor, args.limit) else 0)
+        ran_verify = True
+        verify_failed = bool(verify_post_processor(args.ckpt, args.verify_post_processor, args.limit)) or verify_failed
+    if ran_verify:
+        sys.exit(1 if verify_failed else 0)
     if args.emit or args.golden:
         tables = TokenizerTables(args.ckpt)
         if args.emit:
