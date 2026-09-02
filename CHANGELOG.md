@@ -288,6 +288,75 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
   Build log: `Claude/Brunel/t2551-ask5-trackb-build-2026-09-02.md` (records worktree).
 
+- **The oracle's QK-norm call site reaches every independent forward walk in the
+  reference pipeline, and the pinned candidate is recalibrated on it (Ask 5 Track B
+  close-out, T-2553).** T-2551 gave `_float_layer` a QK-norm call site and reported three
+  sibling tests failing as an out-of-scope finding. It was in scope: an oracle with
+  multiple forward implementations of which only one applies a real architectural
+  operation is the sibling-pinning defect `StandardsDocument.md` §7 names. Every
+  independent per-layer forward walk in `tools/reference_pipeline/` now applies the
+  identical QK-norm composition, from one shared function (`_apply_qk_norm`) for
+  `_float_layer`/`_kv_calibration_capture`, and a matching call site in each of
+  `_vec_forward` (the numpy integer parity shadow), `_scalar_forward` (the normative
+  scalar reference §6.2 holds every specialization to), `forward_dynamic` (the W8A8-
+  dynamic full-stack forward, §15's measured arm), and `composition_ref.py`'s own
+  independent big-int oracle (`forward_dynamic_logits_oracle`) -- six implementations,
+  one composition. `_derive_scales` gains q_norm/k_norm's own rescale-site derivation,
+  re-derived by direct execution (a first-drafted formula, copied unchecked from the
+  C++-engine-facing `composition_constants` convention, underflowed to a degenerate zero
+  requantizer here -- caught by execution, not by inspection); Q's own carried scale is
+  reassigned post-norm downstream, K's is deliberately left unchanged (verified by
+  execution to match the real engine's own accepted approximation -- "K has no analog of
+  Q's own q_scale").
+
+  **The tree went red before it went green, honestly.** Fixing the shared composition
+  surfaced two more real findings, both corrected rather than routed around: a stale
+  pinned golden value and a stale Arm D sweep witness/key that no longer held once RMSNorm
+  bounded the fixture's own per-head K distribution (re-measured and re-derived, not
+  deleted), and one integer-vs-float structural-tolerance test widened (0.25 -> 0.6,
+  documented, re-measured layer-by-layer) to accommodate QK-norm's own real, bounded,
+  two-layer-compounding divergence at this fixture's toy scale -- still far below what a
+  genuinely structural bug (a transposed head, a dropped residual) would produce, which is
+  that cell's own stated job. A new pinned-fixture test
+  (`test_ask5_trackb_oracle_qk_norm_parity.py`) proves materiality on the two
+  `pipeline.py`-native siblings directly. Full sweep: `pytest tools/ tests/reference/ -m
+  "not upstream"` -- **1992 passed, 13 deselected, 0 failed**; `pytest tests/ci/` -- **423
+  passed**.
+
+  **The pinned Qwen3-Embedding-0.6B candidate is recalibrated on the norm-applying
+  forward**, discharging the staleness note T-2543/T-2551 both carried: `calibrate_
+  checkpoint.py` then `convert_model.py` (with `sslm_verify` invoked, not skipped) ran end
+  to end against the real checkpoint (revision `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3`)
+  -- **`verified: independent loader accepted the artifact`**, 9 sections, unchanged size
+  **633,576,276 bytes**, new SHA-256
+  **`7fd5d3981f34c572b729f515ae4a8307780cabd8ab618fe19c7edb6089ae3476`** (supersedes the
+  T-2543-era `5cf871fb...` and the never-shipped T-2551-era intermediate). **This is a
+  LOAD-TIME claim only, same as its predecessor** -- proven to convert and load, not yet
+  proven numerically correct against a derived tolerance (below).
+
+  **Track B's own acceptance, re-executed against this real artifact** (`tests/
+  t2551_qk_norm_harness.cpp`, unmodified from T-2551): marshal OK on all 28/28 layers;
+  QK-norm's own call site fires on both the single-token and the chunk-batched-exercising
+  path, with materiality confirmed directly (pre-/post-norm Q codes differ substantially);
+  **CPU and GPU agree bit-for-bit end to end** -- `hidden_codes[1024]`, `hidden_scale`,
+  every K/V row, across all 28 layers -- on this machine's RTX 2080 SUPER, at both the
+  single-token position and the 3-token chunk-batched span (host: this machine's CPU;
+  GPU: RTX 2080 SUPER, 8 GiB; positions: single-token position 0, and chunk-batched
+  positions 0-2). The oracle comparison is executed and its reading recorded, QUARANTINED
+  per this round's own brief -- composed-acceptance item 3's own tolerance (D-SLM5276)
+  still does not exist. Recorded reading, single token (this artifact, token id 3, first
+  16 of 1024 dims): oracle (float64, post-layer0)
+  `[0.19159927, -0.32733400, -0.00527838, -0.94976745, 0.19475260, -0.00450565,
+  -0.13766608, -0.78359323, 0.81294516, -0.36960737, 0.25995328, 0.00502180,
+  -0.17362168, 0.02245454, -0.00648451, -0.12685488]`; engine (CPU, single-token,
+  same token, `scale_m=1083582878 scale_e=-28`, first 16 codes)
+  `13,-38,13,-38,25,0,13,25,13,-13,-13,-13,13,-38,-102,25`. No dequantization convention
+  is applied and no delta is computed here -- doing so would imply a judgment this round
+  is not authorized to make. Both readings are the record; the comparison is slice 3's.
+
+  Build log: `Claude/Brunel/t2553-ask5-trackb-oracle-sibling-2026-09-02.md` (records
+  worktree).
+
 ## [1.3.0] - 2026-08-29
 
 This release ships one of five requested consumer-driven changes: the FP-free load path
