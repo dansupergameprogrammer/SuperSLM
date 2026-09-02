@@ -146,14 +146,15 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   (`_kv_calibration_capture`, `_layer_q_scale`, `_armd_arme_candidate_sweep`) are untouched
   by both this round's diff and T-2560's — "unchanged by inspection," confirmed by
   re-running `test_arm_d_saturation_is_reported_and_does_not_gate_selection`, still green.
-  **M9** — `k_normed_scale` was derived twice from the same inputs, by `_derive_scales` and
-  by `_derive_composition_constants` independently; the latter now reads the former's own
-  `StaticScales` entry (`scales.scale(f"{prefix}.k_normed_head0.scale")`) instead of
-  re-deriving it. **M8** — `k_norm_landing_r_t`/`e_t` were dereferenced with no null guard
+  **M8** — `k_norm_landing_r_t`/`e_t` were dereferenced with no null guard
   of their own (gated only by the outer `k_norm_gain != nullptr`, unlike the sibling
   `iexp_softmax_khead_m`/`_e` three lines above in the same GPU packing loop); the header
   comment now states the obligation in both directions, and the GPU marshal site now uses
-  the identical per-element ternary guard its sibling already does. The CHANGELOG
+  the identical per-element ternary guard its sibling already does. **M9** — `k_normed_scale`
+  was derived twice from the same inputs, by `_derive_scales` and by
+  `_derive_composition_constants` independently; the latter now reads the former's own
+  `StaticScales` entry (`scales.scale(f"{prefix}.k_normed_head0.scale")`) instead of
+  re-deriving it. The CHANGELOG
   misattributions above (Cell 2's mutant, Cell 4's must-reject status, Cell 10's own
   re-run list, the chunk-batched-drive phrasing) are corrected in place, above.
 
