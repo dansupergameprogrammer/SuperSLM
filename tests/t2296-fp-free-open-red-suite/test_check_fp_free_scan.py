@@ -949,6 +949,34 @@ def _detected_msvc_edition():
     return path
 
 
+def _regression_parent_own_fp_instructions(data):
+    """T-2535 (S-4): decodes RegressionParent's own instructions DIRECTLY from raw COFF object
+    bytes, independent of `scan_object`'s own ACCEPT/REJECT verdict -- the same machinery S-1n's
+    own root-causing used (`scan._parse_coff` + `scan._account_section` + `_is_x86_fp_arith`).
+    Returns the (mnemonic, op_str) pairs found; an empty list means the symbol's own compiled
+    bytes carry no FP arithmetic under this object's toolchain, regardless of what any gating
+    check concluded about it."""
+    code_sections, _sym_by_raw, _relocs = scan._parse_coff(data)
+    md = scan._decoder("x86-64")
+    regression_parent_insns = []
+    for section in code_sections:
+        _ok, _unclassified, per_symbol_insns = scan._account_section(section, "x86-64", md)
+        regression_parent_insns.extend(per_symbol_insns.get("RegressionParent", []))
+    return [
+        (i.mnemonic, i.op_str) for i in regression_parent_insns if _is_x86_fp_arith(i.mnemonic)
+    ]
+
+
+def _classify_ab_reject(regression_parent_fp):
+    """T-2535 (S-4): an A/B REJECT on RegressionParent has exactly two possible causes, and this
+    is the boundary between them -- given the symbol's own decoded FP instructions (or lack of
+    them, from `_regression_parent_own_fp_instructions`), returns which one applies. A non-empty
+    list means the fixture's own premise genuinely does not hold under this compile (a real,
+    uncommissioned-edition condition); an empty list means checks (A)/(B) rejected a symbol that
+    carries no FP -- an instrument false positive, not a fixture-premise gap."""
+    return "genuine_premise_violation" if regression_parent_fp else "instrument_false_positive"
+
+
 def test_population_09_funclet_membership():
     """Falsifying construction: RegressionParent (no FP instruction of its
     own) wraps a try/catch; the catch FUNCLET performs genuine IEEE-754
@@ -1045,16 +1073,42 @@ def test_population_09_funclet_membership():
         # above is now closed and any future divergence here is a genuine unvetted external-target
         # gap worth fixing at `_X86_EXTERN_ALLOW`, exactly the shape of defect this population
         # exists to catch.
+        # T-2535 (Poirot 2945361-t2534-superslm-ci-green-confirmation2.md S-4): the skip below
+        # used to branch on `ab_verdict != "ACCEPT"` alone and report the fixture-premise
+        # explanation unconditionally -- but an A/B REJECT has two possible causes this branch
+        # could not tell apart: RegressionParent's own compiled bytes genuinely carry FP under
+        # this edition (a real, uncommissioned-edition premise violation, fine to skip), or checks
+        # (A)/(B) -- the GATING checks -- wrongly REJECT an FP-free symbol (an instrument false
+        # positive, the most serious defect this scanner can have, and the opposite of what the
+        # skip message claimed). The machinery to tell them apart -- decoding RegressionParent's
+        # own instructions and checking for real FP arithmetic -- is the exact machinery S-1n's own
+        # root-causing already used (`scan._parse_coff` + `scan._account_section` +
+        # `_is_x86_fp_arith`); it was not put in this cell. Decoded here, before deciding: a false
+        # positive fails loudly instead of skipping past it silently, and a genuine premise
+        # violation still skips, naming the edition, exactly as before.
         edition = _detected_msvc_edition()
         ab_verdict = result.ab_verdicts.get("RegressionParent")
         if ab_verdict != "ACCEPT":
+            regression_parent_fp = _regression_parent_own_fp_instructions(data)
+            assert _classify_ab_reject(regression_parent_fp) == "genuine_premise_violation", (
+                "INSTRUMENT FALSE POSITIVE, not a fixture-premise gap: RegressionParent's own "
+                "decoded instructions carry NO FP arithmetic under this machine's MSVC edition "
+                "({}), yet ab_verdicts['RegressionParent'] == {!r} -- checks (A)/(B) rejected an "
+                "FP-free symbol. This is the worst class of defect check_fp_free_scan.py can have "
+                "(a false REJECT on gating checks); it is not the fixture-premise skip this "
+                "population's history assumed. Decode the symbol's own instructions directly to "
+                "find which check (A) register-file or (B) mnemonic misclassified it. S-4, "
+                "Claude/Poirot/2945361-t2534-superslm-ci-green-confirmation2.md.".format(
+                    edition, ab_verdict)
+            )
             pytest.skip(
                 "population nine's own fixture premise (RegressionParent carries no FP "
-                "instruction of its own, checks (A)/(B)) does not hold under this machine's "
-                "MSVC edition ({}): ab_verdicts['RegressionParent'] == {!r}. This population is "
-                "not commissioned for this edition -- not an instrument defect. S-1n, "
-                "Claude/Poirot/4187739-t2532-superslm-ci-green-confirmation.md.".format(
-                    edition, ab_verdict)
+                "instruction of its own) does not hold under this machine's MSVC edition ({}): "
+                "ab_verdicts['RegressionParent'] == {!r}, and its own decoded instructions DO "
+                "carry real FP arithmetic ({}) -- verified by decode, not assumed. This "
+                "population is not commissioned for this edition -- not an instrument defect. "
+                "S-1n/S-4, Claude/Poirot/2945361-t2534-superslm-ci-green-confirmation2.md.".format(
+                    edition, ab_verdict, regression_parent_fp)
             )
         assert result.verdicts.get("RegressionParent") == "ACCEPT", (
             "RegressionParent's own check-(A)/(B) verdict is ACCEPT (verified above, edition {}), "
@@ -1090,6 +1144,53 @@ def test_invoke_watson_is_in_the_extern_allow_list():
     assert "_invoke_watson" in scan._X86_EXTERN_ALLOW, (
         "_invoke_watson (S-1n, closing the fp-free-scan-gate BuildTools gap on "
         "RegressionParent) is missing from _X86_EXTERN_ALLOW"
+    )
+
+
+
+def test_regression_parent_own_fp_instructions_is_empty_on_the_real_fixture():
+    """T-2535 (S-4): commissions `_regression_parent_own_fp_instructions` directly against the
+    real compiled fixture, rather than leaving it trusted-by-construction -- this is the harder
+    direction to fake: an empty list is the ground truth S-1n's own root-causing established by
+    direct execution (RegressionParent carries no FP arithmetic of its own under either MSVC
+    edition present on this machine), and this cell re-derives it independently each run rather
+    than assuming the prior finding still holds.
+    """
+    src = os.path.join(_FIXTURES, "pop09_funclet_fp.cpp")
+    with fc.TempDir() as tmp:
+        obj = os.path.join(tmp, "pop09_s4.obj")
+        try:
+            fc.compile_cl(src, obj)
+        except fc.ToolUnavailable as e:
+            pytest.skip(str(e))
+        with open(obj, "rb") as f:
+            data = f.read()
+        if not _SCAN_AVAILABLE:
+            _fail_absent("nine", "compiled the same fixture as the population's own cell above")
+        regression_parent_fp = _regression_parent_own_fp_instructions(data)
+        assert regression_parent_fp == [], (
+            "RegressionParent's own decoded instructions carry FP arithmetic on this machine "
+            "({}) -- S-1n's own ground truth no longer holds; the skip branch's classification "
+            "would now (correctly) call this a genuine premise violation, not a false positive, "
+            "but the assumption this cell exists to check has changed".format(regression_parent_fp)
+        )
+
+
+def test_classify_ab_reject_distinguishes_the_two_causes():
+    """T-2535 (S-4): commissions the decision boundary itself, not merely the decode -- an empty
+    FP-instruction list must classify as an instrument false positive (checks (A)/(B) rejected a
+    symbol that carries no FP: the worst class of defect this scanner can have), and a non-empty
+    one must classify as a genuine premise violation (the fixture's own compile really does carry
+    FP under this edition). Both branches of `_regression_parent_own_fp_instructions`'s possible
+    output are exercised directly, independent of any real compile or any installed MSVC edition.
+    """
+    assert _classify_ab_reject([]) == "instrument_false_positive", (
+        "no decoded FP instructions must classify as an instrument false positive, not a "
+        "fixture-premise gap"
+    )
+    assert _classify_ab_reject([("addsd", "xmm0, xmm1")]) == "genuine_premise_violation", (
+        "a real decoded FP instruction must classify as a genuine premise violation, not an "
+        "instrument false positive"
     )
 
 
