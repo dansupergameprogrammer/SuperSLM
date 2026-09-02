@@ -156,13 +156,41 @@ def find_clang():
     return _first_working(CLANG_C_CANDIDATES)
 
 
+# T-2555: run 33648618208's own fp-free-scan-gate job errored 22 red-suite cells with "no
+# VsDevCmd.bat found at either well-known VS2022 install location" -- windows-latest carries VS
+# 2022 Enterprise only, and neither this module's own Community-first sort key nor conftest.py's
+# BuildTools-first one matches it. The job's own workflow now resolves VsDevCmd.bat itself (a
+# step immediately before this suite runs, .github/workflows/tests.yml) using the runner's own
+# vswhere.exe with NO edition preference, and exports it as SUPERSLM_VSDEVCMD -- honoured here
+# FIRST, before any discovery, so this module never has to guess which edition a given runner
+# carries. Falls back to discovery (vswhere, then the hardcoded candidates) only when the
+# variable is unset or does not resolve to a real file, printing what it tried either way, so a
+# CI log states which path was taken rather than leaving it to be inferred from which cells ran.
+_VSDEVCMD_ENV_VAR = "SUPERSLM_VSDEVCMD"
+
+
 def find_vsdevcmd():
+    env_value = os.environ.get(_VSDEVCMD_ENV_VAR)
+    if env_value:
+        if os.path.exists(env_value):
+            print("find_vsdevcmd: using {}={!r} (exists)".format(_VSDEVCMD_ENV_VAR, env_value))
+            return env_value
+        print(
+            "find_vsdevcmd: {}={!r} is set but does not exist on disk -- falling back to "
+            "discovery".format(_VSDEVCMD_ENV_VAR, env_value)
+        )
+    else:
+        print("find_vsdevcmd: {} is unset -- falling back to discovery".format(_VSDEVCMD_ENV_VAR))
     for c in _vswhere_vsdevcmd_candidates():
         if os.path.exists(c):
+            print("find_vsdevcmd: discovery (vswhere) resolved {!r}".format(c))
             return c
     for c in VSDEVCMD_CANDIDATES:
         if os.path.exists(c):
+            print("find_vsdevcmd: discovery (hardcoded fallback) resolved {!r}".format(c))
             return c
+    print("find_vsdevcmd: no VsDevCmd.bat found by the environment variable, vswhere, or the "
+          "hardcoded fallback")
     return None
 
 

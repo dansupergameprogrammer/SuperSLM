@@ -171,13 +171,39 @@ def _vswhere_vsdevcmd_candidates():
     return candidates
 
 
+# T-2555: mirrors fp_scan_common.py's own fix for the identical gap (run 33648618208's
+# fp-free-scan-gate job errored 22 red-suite cells with "no VsDevCmd.bat found at either
+# well-known VS2022 install location" -- windows-latest carries VS 2022 Enterprise only, and
+# neither this module's own BuildTools-first sort key nor fp_scan_common.py's Community-first
+# one matches it). The job's own workflow now resolves VsDevCmd.bat itself using the runner's
+# own vswhere.exe with NO edition preference and exports it as SUPERSLM_VSDEVCMD -- honoured
+# here FIRST, before any discovery. Falls back to discovery only when the variable is unset or
+# does not resolve to a real file, printing what it tried either way.
+_VSDEVCMD_ENV_VAR = "SUPERSLM_VSDEVCMD"
+
+
 def _find_vsdevcmd():
+    env_value = os.environ.get(_VSDEVCMD_ENV_VAR)
+    if env_value:
+        if os.path.exists(env_value):
+            print("_find_vsdevcmd: using {}={!r} (exists)".format(_VSDEVCMD_ENV_VAR, env_value))
+            return env_value
+        print(
+            "_find_vsdevcmd: {}={!r} is set but does not exist on disk -- falling back to "
+            "discovery".format(_VSDEVCMD_ENV_VAR, env_value)
+        )
+    else:
+        print("_find_vsdevcmd: {} is unset -- falling back to discovery".format(_VSDEVCMD_ENV_VAR))
     for c in _vswhere_vsdevcmd_candidates():
         if os.path.exists(c):
+            print("_find_vsdevcmd: discovery (vswhere) resolved {!r}".format(c))
             return c
     for c in _VSDEVCMD_CANDIDATES:
         if os.path.exists(c):
+            print("_find_vsdevcmd: discovery (hardcoded fallback) resolved {!r}".format(c))
             return c
+    print("_find_vsdevcmd: no VsDevCmd.bat found by the environment variable, vswhere, or the "
+          "hardcoded fallback")
     return None
 
 

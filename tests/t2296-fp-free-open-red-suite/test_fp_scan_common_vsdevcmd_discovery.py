@@ -190,3 +190,63 @@ def test_community_sort_key_is_adopted_at_the_real_call_site_not_only_in_the_hel
         "Community install first, not an adversarial path that merely contains the word as a "
         "substring of a longer component; got {}".format(candidates)
     )
+
+
+def test_find_vsdevcmd_honours_the_env_var_when_set_and_it_exists():
+    """T-2555: run 33648618208's own fp-free-scan-gate job errored 22 red-suite cells with "no
+    VsDevCmd.bat found" -- windows-latest carries VS 2022 Enterprise only, and neither this
+    module's own Community-first sort nor conftest.py's BuildTools-first one matches it. The
+    job's own workflow now resolves VsDevCmd.bat itself and exports it as SUPERSLM_VSDEVCMD;
+    `find_vsdevcmd` must honour it BEFORE any discovery. Mocks the environment and `os.path.exists`
+    directly -- `_vswhere_vsdevcmd_candidates`/`subprocess.run` are never touched when the
+    variable resolves, which this cell also proves via a patch that would raise if called.
+    """
+    fake_path = r"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat"
+    with mock.patch.dict(os.environ, {_fixture_module._VSDEVCMD_ENV_VAR: fake_path}), \
+         mock.patch.object(_fixture_module.os.path, "exists", return_value=True), \
+         mock.patch.object(
+             _fixture_module, "_vswhere_vsdevcmd_candidates",
+             side_effect=AssertionError("discovery must not run when the env var resolves")):
+        assert _fixture_module.find_vsdevcmd() == fake_path, (
+            "find_vsdevcmd must return the env var's own path directly when it exists, without "
+            "falling back to discovery"
+        )
+
+
+def test_find_vsdevcmd_falls_back_to_discovery_when_env_var_is_unset():
+    """T-2555: the env var is a hosted-CI-only mechanism (this job's own new workflow step) --
+    a local run, or any environment that never set SUPERSLM_VSDEVCMD, must still fall back to
+    discovery exactly as before this round.
+    """
+    with mock.patch.dict(os.environ, {}, clear=False):
+        os.environ.pop(_fixture_module._VSDEVCMD_ENV_VAR, None)
+        with mock.patch.object(
+            _fixture_module, "_vswhere_vsdevcmd_candidates", return_value=[]
+        ), mock.patch.object(
+            _fixture_module.os.path, "exists",
+            side_effect=lambda p: p == _fixture_module.VSDEVCMD_CANDIDATES[0]
+        ):
+            assert _fixture_module.find_vsdevcmd() == _fixture_module.VSDEVCMD_CANDIDATES[0], (
+                "find_vsdevcmd must fall back to discovery (here, the hardcoded fallback) when "
+                "the env var is unset"
+            )
+
+
+def test_find_vsdevcmd_falls_back_to_discovery_when_env_var_path_does_not_exist():
+    """T-2555: a SET but stale/wrong env var (e.g. a future workflow edit that exports a typo'd
+    path) must not be trusted blindly -- find_vsdevcmd checks the path actually exists before
+    returning it, falling back to discovery exactly as an unset variable would, rather than
+    handing a caller a VsDevCmd.bat path that does not resolve to a real file.
+    """
+    fake_path = r"C:\nonexistent\VsDevCmd.bat"
+    with mock.patch.dict(os.environ, {_fixture_module._VSDEVCMD_ENV_VAR: fake_path}), \
+         mock.patch.object(
+             _fixture_module, "_vswhere_vsdevcmd_candidates", return_value=[]
+         ), mock.patch.object(
+             _fixture_module.os.path, "exists",
+             side_effect=lambda p: p != fake_path and p == _fixture_module.VSDEVCMD_CANDIDATES[0]
+         ):
+        assert _fixture_module.find_vsdevcmd() == _fixture_module.VSDEVCMD_CANDIDATES[0], (
+            "find_vsdevcmd must fall back to discovery when the env var's own path does not "
+            "exist on disk, not return the nonexistent path or raise"
+        )
