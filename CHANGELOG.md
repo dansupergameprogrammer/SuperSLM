@@ -77,9 +77,10 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   fact only -- the emitted `.sslm` `TOK1` artifact's own format and every prior checkpoint's
   emitted bytes are unchanged (confirmed byte-identical against the unmodified converter). A
   second, additive parity check (`--verify-post-processor`) confirms
-  `ref_encode(text) + [trailing_special_id] == hf.encode(text, add_special_tokens=True)` for a
-  checkpoint whose post-processor appends a token; it is vacuously satisfied, and does not run
-  `transformers`, for every checkpoint that does not. **This new check's own readings are
+  `ref_encode(text) + [trailing_special_id] == hf.encode(text, add_special_tokens=True)` for
+  every checkpoint, run unconditionally rather than skipped for one whose post-processor appends
+  nothing -- vacuity for that population is a property of the comparison's own result (it already
+  reads 0 mismatches), not of the check declining to run. **This new check's own readings are
   quarantined pending an independent must-accept/must-reject commissioning** (not attempted this
   round) -- it is not yet a load-bearing pass/fail gate. User-visible: the pinned candidate's
   `tokenizer.json` now converts to a `.sslm` tokenizer artifact; every other checkpoint's

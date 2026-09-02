@@ -524,13 +524,24 @@ def _post_processor_mismatches(tables, hf, lines, max_report=8):
 
 def verify_post_processor(ckpt_dir, corpus_path, limit=None):
     """CLI-facing entry point for the additive post-processor-parity check (above).
-    For every incumbent (`trailing_special_id is None`), this check is vacuously
-    satisfied -- `ref_encode(text)` already equals
+    The comparison runs unconditionally, for every checkpoint -- there is no early
+    return keyed on `trailing_special_id`. For an incumbent, this makes vacuity a
+    property of the comparison's own RESULT rather than of the function declining
+    to run it: `ref_encode(text)` already equals
     `hf.encode(text, add_special_tokens=True)` for a checkpoint whose own
     post-processor appends nothing, since `add_special_tokens=True` and `=False`
     then produce byte-identical HF output (t2408 §6 Track E step 3, "the flag is
-    inert for every incumbent"), so nothing this check adds beyond `verify`'s own
-    gate fires for that population.
+    inert for every incumbent") -- so an incumbent still reads 0 mismatches, read
+    by evaluation, not by skip.
+
+    T-2542 Finding 1 (Poirot): an early return keyed on `trailing_special_id is
+    None` conflated "this checkpoint appends nothing" with "we failed to see the
+    append this checkpoint declares" -- the two facts differ on exactly the input
+    this check exists to catch, a checkpoint whose extraction was dropped. That
+    early return is gone; a dropped extraction (`_classify_post_processor` always
+    returning `None`) now reaches this function's own comparison and returns
+    non-zero on a checkpoint that genuinely appends, matching the design's own
+    named must-reject (`t2408` §6 Track E, "Acceptance for Track E alone").
 
     THIS CHECK IS ITSELF A DECIDING INSTRUMENT AND IS NOT COMMISSIONED BY THIS
     BUILD -- its readings are quarantined pending an independent seat's must-accept
@@ -540,9 +551,6 @@ def verify_post_processor(ckpt_dir, corpus_path, limit=None):
     attempted this fold."""
     from transformers import AutoTokenizer
     tables = TokenizerTables(ckpt_dir)
-    if tables.trailing_special_id is None:
-        print("post-processor-parity: vacuous (trailing_special_id is None)")
-        return 0
     hf = AutoTokenizer.from_pretrained(ckpt_dir)
     lines = read_corpus_records(corpus_path)
     if limit:

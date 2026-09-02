@@ -330,11 +330,59 @@ def test_post_processor_mismatches_counts_only_the_lines_that_actually_differ():
     assert CT._post_processor_mismatches(tables, hf, ["a", "b"]) == 1
 
 
-def test_verify_post_processor_is_vacuous_and_appends_nothing_when_trailing_id_is_none(monkeypatch):
-    """`verify_post_processor` never reaches `_post_processor_mismatches` -- and
-    never calls into `transformers` at all -- when trailing_special_id is None
-    (every incumbent): it returns 0 directly, matching t2408 §6 Track E step 3's
-    "the check is vacuously satisfied" text."""
-    stub = _FakeTables(trailing_special_id=None, ids_by_text={})
+def test_verify_post_processor_evaluates_unconditionally_when_trailing_id_is_none(monkeypatch):
+    """T-2542 Finding 1 (Poirot): the early return keyed on `trailing_special_id is
+    None` is gone -- `verify_post_processor` now calls `_post_processor_mismatches`
+    (and therefore `transformers.AutoTokenizer.from_pretrained`) for every
+    checkpoint, incumbent included. Vacuity for an incumbent is now a property of
+    the comparison's own RESULT (it reads 0 mismatches because nothing is appended
+    on either side), not of the function declining to run it -- proven here by a
+    fake `hf` that records every call it receives: the comparison actually ran."""
+    stub = _FakeTables(trailing_special_id=None, ids_by_text={"a": [1, 2], "b": [3]})
     monkeypatch.setattr(CT, "TokenizerTables", lambda ckpt_dir: stub)
+    monkeypatch.setattr(CT, "read_corpus_records", lambda corpus_path: ["a", "b"])
+
+    calls = []
+
+    class _RecordingHF:
+        def encode(self, text, add_special_tokens):
+            calls.append((text, add_special_tokens))
+            return list(stub._ids_by_text[text])  # nothing appended -> matches ref_encode
+
+    class _FakeAutoTokenizer:
+        @staticmethod
+        def from_pretrained(ckpt_dir):
+            return _RecordingHF()
+
+    import sys as _sys
+    import types as _types
+    fake_transformers = _types.SimpleNamespace(AutoTokenizer=_FakeAutoTokenizer)
+    monkeypatch.setitem(_sys.modules, "transformers", fake_transformers)
+
     assert CT.verify_post_processor("unused-ckpt-dir", "unused-corpus-path") == 0
+    assert calls == [("a", True), ("b", True)], "the comparison must actually run, not be skipped"
+
+
+def test_verify_post_processor_imports_transformers_even_on_the_vacuous_path(monkeypatch):
+    """T-2542 Finding 3 (Poirot): the CHANGELOG and this file previously claimed the
+    vacuous path (trailing_special_id is None) "does not run transformers" -- false,
+    since the import was always the function's first statement, above the early
+    return. Finding 1's fix deletes the early return entirely, so this is no longer
+    even a latent claim: with `transformers` unimportable, the vacuous path now
+    raises ImportError rather than returning quietly, proving the import is not
+    merely present but load-bearing on every path."""
+    stub = _FakeTables(trailing_special_id=None, ids_by_text={"a": [1, 2]})
+    monkeypatch.setattr(CT, "TokenizerTables", lambda ckpt_dir: stub)
+    monkeypatch.setattr(CT, "read_corpus_records", lambda corpus_path: ["a"])
+
+    import builtins as _builtins
+    real_import = _builtins.__import__
+
+    def _no_transformers(name, *args, **kwargs):
+        if name == "transformers":
+            raise ImportError("No module named 'transformers' (simulated absent)")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(_builtins, "__import__", _no_transformers)
+    with pytest.raises(ImportError, match="transformers"):
+        CT.verify_post_processor("unused-ckpt-dir", "unused-corpus-path")

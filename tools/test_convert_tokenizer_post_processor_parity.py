@@ -84,3 +84,22 @@ def test_must_reject_a_trailing_special_id_deliberately_wrong_by_one():
     tables.trailing_special_id = tables.trailing_special_id + 1
     mism = CT._post_processor_mismatches(tables, hf, lines)
     assert mism == len(lines)
+
+
+def test_must_reject_the_designs_own_dropped_extraction_through_the_entry_point(monkeypatch):
+    """The exact must-reject `t2408` §6 Track E names in "Acceptance for Track E
+    alone" -- a mutant that DROPS step 2's own extraction, `_classify_post_processor`
+    returning `None` for every input -- driven through `verify_post_processor`, the
+    check's only CLI-facing entry point, against the real pinned candidate.
+
+    T-2542 Finding 1 (Poirot): before this fix, this exact mutant reached
+    `verify_post_processor`'s own early return (`trailing_special_id is None` reads
+    as "nothing to append" instead of "the append was not seen") and returned 0 --
+    the entry point could not fail on the class the design built this check for,
+    even though the internal helper (`_post_processor_mismatches`, exercised
+    directly by `test_must_reject_a_trailing_special_id_deliberately_wrong_by_one`
+    above) discriminated correctly all along. This is the standing regression pin
+    for that gap: it drives the public entry point, not the helper."""
+    monkeypatch.setattr(CT, "_classify_post_processor", lambda pp: None)
+    mism = CT.verify_post_processor(_CANDIDATE, _CORPUS)
+    assert mism == 44, "the drop mutant must make the entry point itself return non-zero"
