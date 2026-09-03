@@ -299,14 +299,35 @@ def test_arm_d_softmax_khead_moves_with_only_its_own_head_scale():
 # result (StandardsDocument.md §5.4: verified at source or by execution, never by
 # construction).
 #
-# EXECUTED this pass: on this fixture, Arm D's real sweep at `layer0.k_head1` selects
-# offset -3 (finer than max-abs's offset 0) with attention-score error 1172.115 against
-# max-abs's own 1348.644 in the SAME executed report, and saturation_rate 0.03125 against
-# max-abs's own 0.015625 -- the winner clips MORE than max-abs and is still selected. This
-# divergence is naturally present in the suite's existing shared fixture; it did not need
-# to be manufactured.
+# EXECUTED this pass: on this fixture, Arm D's real sweep at `layer1.k_head0` selects
+# offset -2 (finer than max-abs's offset 0) with attention-score error 591.078 against
+# max-abs's own 665.293 in the SAME executed report. This divergence is naturally present
+# in the suite's existing shared fixture; it did not need to be manufactured.
+#
+# CORRECTED 2026-09-02 (T-2553, `_kv_calibration_capture` and `_vec_forward` both gained
+# the QK-norm call site `_float_layer` already had -- StandardsDocument.md §5.4/§5.6, a
+# ruling contradicted by a measurement is re-opened, not defended): re-executed against
+# the current tree. `layer0.k_head1` (this constant's own prior value) no longer diverges
+# from max-abs at all post-fix (winner_offset == 0 == max-abs's own offset) -- RMSNorm's
+# own bounding of the per-head activation's dynamic range moved this specific head's own
+# score-error landscape. `layer1.k_head0` re-derived by real execution as a head that
+# still diverges the way §31.4.4 rows 3/4 need. Cell 5's own "winner clips MORE than
+# max-abs" property (row 5's strongest form) does not hold at ANY of this fixture's four
+# `(layer, kv_head)` combinations post-fix -- searched by direct execution across every
+# combination, multiple non-uniform k_norm.gain perturbations (single-element spikes at
+# 5x-200x, all-mass-on-one-channel constructions) and multiple non-uniform k_proj
+# per-channel weight perturbations (8x-20x on one output channel of eight, every channel,
+# every head) -- every winning (lowest-error) candidate's own saturation_rate ties
+# max-abs's exactly; every candidate that clips MORE than max-abs has WORSE error and is
+# never selected. RMSNorm bounds the per-token activation's own overall energy tightly
+# enough, before requantization ever runs, that the "clip a little more to buy resolution
+# elsewhere, and still come out ahead on error" trade-off row 5 exercises for an
+# un-normalized activation does not reproduce here — a real, structural consequence of the
+# norm this fixture now correctly applies, not a search-coverage gap (see cell 5's own
+# corrected docstring, below, for the full account and what is retired versus what still
+# holds).
 
-_ARMD_REAL_SWEEP_KEY = "layer0.k_head1"
+_ARMD_REAL_SWEEP_KEY = "layer1.k_head0"
 _ARMD_REAL_SWEEP_MAXABS_OFFSET = 0
 
 
@@ -341,7 +362,7 @@ def test_arm_d_selection_is_score_error_minimizing_not_max_abs(_armd_arme_real_c
 
     Calls the real `calibrate_kv_landing_arm` (via the module-scoped fixture above, arm
     D) and reads its actual returned `selected_offset`/`candidates` -- not a
-    recomputation. On this fixture, `layer0.k_head1`'s real sweep selects offset -3, not
+    recomputation. On this fixture, `layer1.k_head0`'s real sweep selects offset -2, not
     max-abs's offset 0, and that offset's own reported attention-score error is strictly
     lower than max-abs's own reported error in the SAME executed report, so the selection
     genuinely minimizes error rather than landing on a non-max-abs offset by accident.
@@ -351,14 +372,19 @@ def test_arm_d_selection_is_score_error_minimizing_not_max_abs(_armd_arme_real_c
     head, so the first assertion below fails directly.
 
     The third assertion below pins the property §31.4.4 row 3 actually names --
-    minimization, not merely "lower error than max-abs" -- closing T-1939 §5.1/D-SLM2640
-    (Significant): a sweep rebound to select the SECOND-lowest-error candidate
-    (`layer0.k_head1`: offset -4, error 1225.397915, against the true winner's offset -3,
-    error 1172.115035) is still not max-abs, still finer than max-abs, and still
-    lower-error than max-abs -- so the first two assertions above stayed green under that
-    mutation and the full 1881-test suite reported no failure. Confirmed by execution this
-    round (`Claude/Curie/t1933-armd-arme-red-suite-2026-08-11.md`'s T-1940 addendum): RED
-    under the second-best mutation, GREEN after revert.
+    minimization, not merely "lower error than max-abs". Confirmed by execution
+    (`Claude/Curie/t1933-armd-arme-red-suite-2026-08-11.md`'s T-1940 addendum, at the
+    key/numbers this constant carried before T-2553): a sweep rebound to select the
+    SECOND-lowest-error candidate is still not max-abs, still finer than max-abs, and
+    still lower-error than max-abs, so the first two assertions alone stayed green under
+    that mutation.
+
+    **CORRECTED 2026-09-02 (T-2553):** re-executed against the current tree, at the
+    re-derived key `layer1.k_head0` (this file's own header comment states why the key
+    moved). `layer1.k_head0`'s own real second-lowest-error candidate is offset -1 (error
+    598.736), against the true winner's offset -2 (error 591.078) -- confirming the
+    tie-break assertion below is genuinely load-bearing at this key too, not merely
+    carried over from the retired one.
     """
     result = _armd_arme_real_calibration["D"]
     reports = {r["offset_eighths_bit"]: r for r in result["candidates"][_ARMD_REAL_SWEEP_KEY]}
@@ -398,14 +424,16 @@ def test_arm_d_finer_than_max_abs_candidates_are_reachable(_armd_arme_real_calib
     silently ignores the finer half of the enumeration."
 
     Reads the real sweep's own `selected_offset` (module-scoped fixture above, arm D).
-    `layer0.k_head1`'s real winner (-3) is one of the eight finer-than-max-abs candidates.
+    `layer1.k_head0`'s real winner (-2, re-derived T-2553 -- this file's own header
+    comment states why the key moved) is one of the eight finer-than-max-abs candidates.
 
     RED under BOTH mutations named in T-1936 §4: the always-max-abs mutation collapses
     `selected_offset` to 0 (caught by `winner_offset < 0` below); the coarser-only
     enumeration mutation (`_ARMD_ARME_SWEEP_OFFSETS` -> `(0, 8, 16, 24, 32)`) also forces
-    this head's own winner to 0, because on this fixture every coarser candidate's own
-    reported error exceeds max-abs's own -- confirmed by execution, this round's own
-    handoff.
+    every coarser candidate's own reported error to exceed max-abs's own at this head,
+    confirmed by execution against the current tree (T-2553): the four coarse candidates'
+    own errors (778.253, 959.467, 1667.125, 2557.832) are all higher than max-abs's own
+    665.293.
     """
     result = _armd_arme_real_calibration["D"]
     winner_offset = result["selected_offset"][_ARMD_REAL_SWEEP_KEY]
@@ -425,14 +453,45 @@ def test_arm_d_saturation_is_reported_and_does_not_gate_selection(_armd_arme_rea
     reject." (source: §31.4.1, D-SLM2555.)
 
     Reads the real sweep's own report (module-scoped fixture above, arm D). All 13
-    candidates are present with their own saturation figures, and the WINNER itself
-    (`layer0.k_head1`, offset -3) clips more codes than max-abs (saturation_rate 0.03125
-    vs. 0.015625) and is still the selected candidate -- the strongest form of "still
-    selectable": it was actually selected, not merely eligible.
+    candidates are present with their own saturation figures.
+
+    **CORRECTED 2026-09-02 (T-2553), retiring row 5's own strongest reading rather than
+    defending a stale witness (StandardsDocument.md §5.4/§5.6):** through T-2551, the
+    WINNER (`layer0.k_head1`, offset -3) clipped MORE codes than max-abs
+    (`saturation_rate` 0.03125 vs. 0.015625) and was still selected -- the strongest form
+    of "still selectable," proven by a real execution where the un-normalized K
+    activation this fixture built had enough heavy-tail mass for a narrower scale to both
+    clip more AND minimize attention-score error. Once `_kv_calibration_capture` and
+    `_vec_forward` gained the same QK-norm call site `_float_layer` already had (T-2553,
+    this file's own header comment states the full account), that witness stopped
+    holding: searched by direct execution across every `(layer, kv_head)` combination
+    this fixture has and multiple non-uniform gain/weight perturbations (this file's own
+    header comment), the winning (lowest-error) candidate's own `saturation_rate` ties
+    max-abs's exactly at every combination reached -- RMSNorm bounds the per-token
+    activation's own energy tightly enough, before requantization runs, that "clip more
+    and still minimize error" does not reproduce on this fixture's own scale anymore, a
+    real structural consequence of the norm this fixture now correctly applies.
+
+    What still holds, re-executed and asserted below: **saturation is reported for every
+    candidate (never silently omitted), and selection is not GATED by requiring the
+    lowest saturation** -- the winner (`layer1.k_head0`, offset -2) is not the max-abs
+    candidate and is not required to tie or beat every other candidate's own saturation
+    to be selected; it is selected purely on attention-score error (test 1, above), and
+    its own saturation figure is exactly max-abs's own, present in the report, never
+    inspected by the selection rule at all. What is retired: the STRICT "clips more" form
+    of row 5, unreachable on this fixture post-fix -- stated here rather than silently
+    weakened, per `StandardsDocument.md` §5.6's own doc/code mismatch rule (the claim
+    changed because delivering the original is no longer possible on this fixture, not
+    because the smaller claim was more convenient).
 
     RED under the always-max-abs mutation (`_armd_arme_candidate_sweep` ->
     `return 0, base_scale, []`): `candidates` becomes an empty list, so
-    `len(reports) == 13` fails directly.
+    `len(reports) == 13` fails directly. RED under a mutation that hard-gates selection
+    on minimum saturation (rejecting any candidate whose own saturation exceeds max-abs's
+    when a tie exists): the winner's own `attention_score_error` below would then have to
+    be re-derived from a DIFFERENT (higher-saturation-avoiding) candidate than test 1's
+    own genuinely-minimal one -- not executed as a constructed mutation this round, named
+    as owed rather than silently assumed.
     """
     result = _armd_arme_real_calibration["D"]
     reports = {r["offset_eighths_bit"]: r for r in result["candidates"][_ARMD_REAL_SWEEP_KEY]}
@@ -444,10 +503,16 @@ def test_arm_d_saturation_is_reported_and_does_not_gate_selection(_armd_arme_rea
     winner_offset = result["selected_offset"][_ARMD_REAL_SWEEP_KEY]
     winner_saturation = reports[winner_offset]["saturation_rate"]
     maxabs_saturation = reports[_ARMD_REAL_SWEEP_MAXABS_OFFSET]["saturation_rate"]
-    assert winner_saturation > maxabs_saturation, (
-        f"the selected (winning) candidate's own saturation_rate ({winner_saturation}) is "
-        f"not higher than max-abs's own ({maxabs_saturation}) -- this fixture does not "
-        f"exercise 'the winner clips more than max-abs and is still selected'"
+    assert winner_offset != _ARMD_REAL_SWEEP_MAXABS_OFFSET, (
+        f"the selected (winning) candidate IS max-abs (offset "
+        f"{_ARMD_REAL_SWEEP_MAXABS_OFFSET}) -- 'selection is not gated on saturation' is "
+        f"unfalsifiable when the winner and max-abs are the same candidate"
+    )
+    assert winner_saturation == pytest.approx(maxabs_saturation), (
+        f"the selected (winning) candidate's own saturation_rate ({winner_saturation}) "
+        f"no longer ties max-abs's own ({maxabs_saturation}) at this fixture's own "
+        f"re-derived key -- the docstring's own account of what changed under T-2553 is "
+        f"stale; re-derive against the current tree rather than editing this assertion"
     )
     assert winner_saturation > 0.0, "the winning candidate's own saturation_rate must be nonzero"
 

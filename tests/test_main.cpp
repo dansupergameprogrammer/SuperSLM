@@ -16929,6 +16929,404 @@ static void TestKvRowAccessorHeadStrideIncludesContextCapFactor() {
 	          static_cast<long long>(off_v));
 }
 
+// (T-2564, S4 -- Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md; ruled D-SLM6199):
+// the delta's own Sec7 Cells 2/3/10 mutate `pipeline.forward_dynamic` and
+// `pipeline._derive_composition_constants` and grade against `composition_ref.py` -- they pin
+// the REFERENCE implementations, never the real, committed C++ engine. Two mutants of that
+// engine (Q's per-head carry collapsed onto the last head; the second K `LandingRescale` loop
+// deleted from `ApplyQkNormSite`) passed `superslm_tests.exe` at 34228/0, because no cell here
+// called `ApplyQkNormSite` at all. The two cells below call it directly -- no artifact load, no
+// `RunLayerLoop` drive, matching `TestKvStoreEarlyWriteSurvivesLateReadAcrossEightFurtherPositions`
+// immediately above's own "raw workspace buffer, no `SslmModel::Load` dependency" precedent,
+// since `ApplyQkNormSite` itself needs neither. Both are part of `superslm_tests`, already a
+// registered CTest target (`add_test(NAME superslm_tests ...)`, `CMakeLists.txt`) and already run
+// in hosted CI -- satisfying D-SLM6199's "runs in the local ctest and in hosted CI at negligible
+// cost" with no new build target. Verified RED on both mutants, hand-applied and reverted this
+// session (build log records the exact edit and the resulting failure for each).
+static void TestT2564_S4_ApplyQkNormSitePerHeadQScaleNotCollapsed() {
+	using superslm::ApplyQkNormSite;
+	using superslm::CarriedScale;
+	using superslm::LayerWeights;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+
+	// Two query heads, deliberately shaped so their own post-norm dynamic scales differ:
+	// head 0 is a small, near-uniform pair; head 1 is large and lopsided. Same construction
+	// family (RmsNormSite-driven, Q14 norm_gain, canonical site_constant) every other fixture
+	// in this file already uses for its own RmsNormSite-backed cells -- carried through two
+	// heads instead of one. Distinctness is CONFIRMED BELOW BY EXECUTION, not assumed
+	// (StandardsDocument.md Sec5.4): this cell's own claim is the differential (head 0 != head
+	// 1), never a specific predicted value.
+	constexpr size_t kNumHeads = 2, kHeadDim = 2;
+	int8_t q_codes[kNumHeads * kHeadDim] = {
+	    10, 10,   // head 0
+	    100, 5,   // head 1
+	};
+	int32_t q_norm_gain[kHeadDim] = {16384, 16384};
+	const CarriedScale canonical{INT64_C(1073741824), INT64_C(-30)};
+
+	LayerWeights lw{};
+	lw.q_norm_gain = q_norm_gain;
+	lw.q_norm_site_constant = canonical;
+	// k_norm left absent (nullptr, the default): this cell targets Q's own per-head carry
+	// only, matching the mutant it exists to catch.
+
+	CarriedScale q_scales[kNumHeads] = {canonical, canonical};  // broadcast pre-fill, the real caller's own convention
+	const auto status = ApplyQkNormSite(q_codes, q_scales, /*workspace=*/nullptr, /*layer=*/0,
+	                                     /*context_cap=*/1, /*position=*/0, kNumHeads,
+	                                     /*num_key_value_heads=*/0, kHeadDim, lw, "t2564_s4_q",
+	                                     /*token_index=*/0, /*trace_hook_state=*/nullptr);
+	CHECK_MSG(status == SslmForwardStatus::Ok, "ApplyQkNormSite(Q-only, T-2564 S4) status == %s, want Ok",
+	          SslmForwardStatusName(status));
+	if (status != SslmForwardStatus::Ok) return;
+
+	CHECK_MSG(!(q_scales[0].m == q_scales[1].m && q_scales[0].e == q_scales[1].e),
+	          "head 0's own carried scale (m=%lld,e=%lld) != head 1's (m=%lld,e=%lld) -- RED "
+	          "under the pre-delta collapse mutant (`for (h) q_scales[h] = "
+	          "q_scales[num_heads-1]`), which makes every head equal head %zu's own value by "
+	          "construction",
+	          static_cast<long long>(q_scales[0].m), static_cast<long long>(q_scales[0].e),
+	          static_cast<long long>(q_scales[1].m), static_cast<long long>(q_scales[1].e),
+	          kNumHeads - 1);
+}
+
+// (T-2564, S4, companion to the cell immediately above): the K side of the same gap --
+// `ApplyQkNormSite`'s own SECOND `LandingRescale` call (delta Sec4, D-SLM6117), which relands
+// K's post-norm codes from `RmsNormSite`'s own output scale onto the new, static
+// `k_norm_landing_r_t`/`e_t` constants. Deleting that second call (C2's own mutant) leaves the
+// K row at exactly `RmsNormSite`'s own first-pass value instead. The independent reference
+// below calls `RmsNormSite` directly -- the SAME primitive `ApplyQkNormSite`'s own first pass
+// calls, with the identical gain and site_constant -- to reproduce that first-pass-only value,
+// then asserts the real call's own final row differs from it. The landing target is chosen a
+// full 2^5 away from the norm's own requant target, so a genuinely-relanded row is not a
+// rounding coincidence away from the norm-only reference.
+static void TestT2564_S4_ApplyQkNormSiteKLandsOnNewPostNormScaleNotJustNorm() {
+	using superslm::ApplyQkNormSite;
+	using superslm::CarriedScale;
+	using superslm::DynamicScaleReciprocal;
+	using superslm::LayerWeights;
+	using superslm::MutableKeyRow;
+	using superslm::RmsNormSite;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+
+	constexpr size_t kHeadDim = 2, kNumKvHeads = 1;
+	constexpr int64_t kContextCap = 1;
+	constexpr uint32_t kLayer = 0;
+
+	int32_t k_norm_gain[kHeadDim] = {16384, 16384};
+	const CarriedScale canonical{INT64_C(1073741824), INT64_C(-30)};       // k_norm's own requant target
+	const CarriedScale landing_target{INT64_C(1073741824), INT64_C(-25)};  // the NEW landing scale, 2^5 away
+	const int64_t landing_r_t = DynamicScaleReciprocal(landing_target.m);
+	int64_t k_norm_landing_r_t[kNumKvHeads] = {landing_r_t};
+	int64_t k_norm_landing_e_t[kNumKvHeads] = {landing_target.e};
+
+	LayerWeights lw{};
+	lw.k_norm_gain = k_norm_gain;
+	lw.k_norm_site_constant = canonical;
+	lw.k_norm_landing_r_t = k_norm_landing_r_t;
+	lw.k_norm_landing_e_t = k_norm_landing_e_t;
+
+	uint8_t workspace[1 * kContextCap * kNumKvHeads * kHeadDim * 2] = {};
+	int8_t* const k_row = MutableKeyRow(workspace, kLayer, kContextCap, kNumKvHeads, kHeadDim,
+	                                     /*kv_head=*/0, /*position=*/0);
+	const int8_t kRawK[kHeadDim] = {60, -40};
+	std::memcpy(k_row, kRawK, kHeadDim);
+
+	CarriedScale q_scales_unused[1] = {canonical};
+	int8_t q_codes_unused[1] = {0};
+	const auto status = ApplyQkNormSite(q_codes_unused, q_scales_unused, workspace, kLayer,
+	                                     kContextCap, /*position=*/0, /*num_heads=*/0, kNumKvHeads,
+	                                     kHeadDim, lw, "t2564_s4_k", /*token_index=*/0,
+	                                     /*trace_hook_state=*/nullptr);
+	CHECK_MSG(status == SslmForwardStatus::Ok, "ApplyQkNormSite(K-only, T-2564 S4) status == %s, want Ok",
+	          SslmForwardStatusName(status));
+	if (status != SslmForwardStatus::Ok) return;
+
+	int8_t relanded[kHeadDim];
+	std::memcpy(relanded, k_row, kHeadDim);
+
+	int8_t norm_only[kHeadDim];
+	std::memcpy(norm_only, kRawK, kHeadDim);
+	CarriedScale norm_only_scale{};
+	const auto norm_status = RmsNormSite(norm_only, k_norm_gain, kHeadDim, CarriedScale{}, canonical,
+	                                      norm_only, &norm_only_scale);
+	CHECK_MSG(norm_status == SslmForwardStatus::Ok,
+	          "independent RmsNormSite(K-norm-only reference, T-2564 S4) status == %s, want Ok",
+	          SslmForwardStatusName(norm_status));
+	if (norm_status != SslmForwardStatus::Ok) return;
+
+	CHECK_MSG(memcmp(relanded, norm_only, kHeadDim) != 0,
+	          "ApplyQkNormSite's own K row after the second landing (%d,%d) != the norm-only "
+	          "reference (%d,%d) -- RED if the second LandingRescale loop is deleted from "
+	          "ApplyQkNormSite (C2's own mutant), which would leave the row at exactly the "
+	          "norm-only value",
+	          relanded[0], relanded[1], norm_only[0], norm_only[1]);
+}
+
+// (T-2564, S3 -- Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md): the second K
+// landing's own clamp signal reached no counter before this fix (the CPU call passed
+// neither `LandingRescale` out-parameter; the GPU shader computed `would_clamp` and threw
+// it away) -- so `SslmDecodeStepStatus::saturation_count` silently under-reported whenever
+// this specific landing clamped. Landing target chosen (2^10 finer than the norm's own
+// requant target) to force both elements of a nonzero row to clamp, matching this file's
+// own `CriticalOneFixture`/`TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter`
+// precedent for the ORIGINAL K/V landing -- this is that same proof for the NEW second
+// landing, which that cell cannot reach (its own fixture carries no q_norm/k_norm gain).
+static void TestT2564_S3_ApplyQkNormSiteSecondKLandingCountsSaturation() {
+	using superslm::ApplyQkNormSite;
+	using superslm::CarriedScale;
+	using superslm::DynamicScaleReciprocal;
+	using superslm::LayerWeights;
+	using superslm::MutableKeyRow;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+
+	constexpr size_t kHeadDim = 2, kNumKvHeads = 1;
+	constexpr int64_t kContextCap = 1;
+	constexpr uint32_t kLayer = 0;
+
+	int32_t k_norm_gain[kHeadDim] = {16384, 16384};
+	const CarriedScale canonical{INT64_C(1073741824), INT64_C(-30)};
+	// A landing target 2^10 FINER than the norm's own requant target: any nonzero
+	// post-norm code lands at roughly 1024x its own norm-only magnitude, forcing a clamp
+	// to [-127,127] on both elements below (verified by execution, not assumed --
+	// StandardsDocument.md Sec5.4).
+	const CarriedScale landing_target{INT64_C(1073741824), INT64_C(-20)};
+	const int64_t landing_r_t = DynamicScaleReciprocal(landing_target.m);
+	int64_t k_norm_landing_r_t[kNumKvHeads] = {landing_r_t};
+	int64_t k_norm_landing_e_t[kNumKvHeads] = {landing_target.e};
+
+	LayerWeights lw{};
+	lw.k_norm_gain = k_norm_gain;
+	lw.k_norm_site_constant = canonical;
+	lw.k_norm_landing_r_t = k_norm_landing_r_t;
+	lw.k_norm_landing_e_t = k_norm_landing_e_t;
+
+	uint8_t workspace[1 * kContextCap * kNumKvHeads * kHeadDim * 2] = {};
+	int8_t* const k_row = MutableKeyRow(workspace, kLayer, kContextCap, kNumKvHeads, kHeadDim,
+	                                     /*kv_head=*/0, /*position=*/0);
+	const int8_t kRawK[kHeadDim] = {60, -40};
+	std::memcpy(k_row, kRawK, kHeadDim);
+
+	CarriedScale q_scales_unused[1] = {canonical};
+	int8_t q_codes_unused[1] = {0};
+	uint64_t saturation_count = 0;
+	const auto status = ApplyQkNormSite(q_codes_unused, q_scales_unused, workspace, kLayer,
+	                                     kContextCap, /*position=*/0, /*num_heads=*/0, kNumKvHeads,
+	                                     kHeadDim, lw, "t2564_s3_k", /*token_index=*/0,
+	                                     /*trace_hook_state=*/nullptr, &saturation_count);
+	CHECK_MSG(status == SslmForwardStatus::Ok, "ApplyQkNormSite(K-only, T-2564 S3) status == %s, want Ok",
+	          SslmForwardStatusName(status));
+	if (status != SslmForwardStatus::Ok) return;
+
+	const bool clamped = k_row[0] == INT8_C(127) || k_row[0] == INT8_C(-127) ||
+	                      k_row[1] == INT8_C(127) || k_row[1] == INT8_C(-127);
+	CHECK_MSG(clamped,
+	          "this cell's own construction landed (%d,%d) with neither element at the "
+	          "clamp bound -- the fixture no longer forces a clamp and this cell's own "
+	          "saturation claim below is not exercising what it claims to",
+	          k_row[0], k_row[1]);
+	CHECK_MSG(saturation_count > 0,
+	          "saturation_count after a deliberately-clamping second K landing == %llu, "
+	          "want > 0 -- RED if the count is dropped (the pre-fix CPU call passed no "
+	          "out-parameter at all, so this was always 0 regardless of what clamped)",
+	          static_cast<unsigned long long>(saturation_count));
+}
+
+// (T-2566, S1 -- Claude/Poirot/a5834b3-t2565-trackb-confirmation.md): T-2564's own S3 cell,
+// immediately above, calls `ApplyQkNormSite` DIRECTLY with its own local counter -- it pins the
+// SITE's arithmetic (the second K landing itself counts a clamp), never the WIRING (that
+// `RunLayerLoopImpl` and `RunLayerLoopChunkBatched` actually HAND `ApplyQkNormSite` a live
+// counter). Reverting only the two call sites that thread `&seq.kv_saturation_count` /
+// `kv_saturation_count` (`forward_sites.cpp:1828, 2339`) back to the implicit `nullptr` default
+// restores exactly the host-facing under-reporting S3 named, and the cell above stays green
+// regardless, because it never drives either caller. `CriticalOneFixture`'s own
+// `TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter` (above, `:16302`) drives
+// `RunLayerLoop` for real but carries no `q_norm`/`k_norm` gain (its own comment states this),
+// so it cannot reach the new landing either. This fixture goes through the REAL layer loop, on
+// BOTH paths, so the wiring itself -- not just the site -- is what is pinned.
+struct QkNormWiringFixture {
+	superslm::SslmModelView view;
+	superslm::LayerWeights layer{};
+	int64_t kv_landing_r_t_arr[1];
+	int64_t kv_landing_e_t_arr[1] = {0};
+	int32_t ctx_fold_identity_arr[1] = {1};
+	int32_t ctx_fold_mult_arr[1] = {0};
+	int32_t ctx_fold_shift_arr[1] = {0};
+	int32_t norm_gain[2] = {16384, 16384};
+	int8_t identity2x2[4] = {1, 0, 0, 1};
+	int64_t iexp_softmax_khead_m_arr[1] = {INT64_C(1073741824)};
+	int64_t iexp_softmax_khead_e_arr[1] = {-86};
+	// K-norm fields (delta Sec3/Sec4, D-SLM6117): q_norm is left unset (nullptr), matching
+	// TestT2564_S3's own K-only precedent -- Q's branch never touches
+	// `out_saturation_count` (ApplyQkNormSite, forward_sites.cpp), so it is orthogonal to
+	// this cell's own claim.
+	int32_t k_norm_gain[2] = {16384, 16384};
+	int64_t k_norm_landing_r_t_arr[1];
+	int64_t k_norm_landing_e_t_arr[1] = {INT64_C(-20)};
+
+	// Same construction family as `CriticalOneFixture` above (identity weights throughout --
+	// the ORIGINAL K/V landing stays non-saturating, matching that fixture's own
+	// `saturating=false` arm, so any saturation this cell observes is unambiguously the
+	// SECOND, QK-norm landing's own), plus the K-norm gain/site-constant/landing-target this
+	// cell adds.
+	QkNormWiringFixture() {
+		using namespace superslm_test;
+		using superslm::CarriedScale;
+
+		QkNormWiringFixture& f = *this;
+		Cfg1Spec spec{};
+		spec.hidden_size = 2;
+		spec.num_hidden_layers = 1;
+		spec.num_attention_heads = 1;
+		spec.num_key_value_heads = 1;
+		spec.head_dim = 2;
+		spec.intermediate_size = 2;
+		spec.context_cap = 1;
+		spec.kv_precision = 0;
+		spec.kv_block_size = 1;
+		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+		const int64_t cos_flat[1] = {INT64_C(1073741824)};
+		const int64_t sin_flat[1] = {0};
+		FixtureSection rope =
+		    MakeRop1SectionMultiRow(/*context_cap=*/1, /*pairs=*/1, cos_flat, sin_flat);
+		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope});
+		std::string err;
+		const auto status =
+		    superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), f.view, &err);
+		CHECK_MSG(status == superslm::SslmModelStatus::Ok,
+		          "QkNormWiringFixture's own minimal artifact failed to load: got %s (%s)",
+		          superslm::SslmModelStatusName(status), err.c_str());
+
+		const CarriedScale canonical{INT64_C(1073741824), INT64_C(-30)};
+		const int64_t r_t = superslm::DynamicScaleReciprocal(canonical.m);
+		f.kv_landing_r_t_arr[0] = r_t;
+		// A landing target 2^10 FINER than the K-norm's own requant target -- the identical
+		// choice TestT2564_S3 makes above, for the identical reason (forces a clamp on any
+		// nonzero post-norm code; verified by execution below, not assumed --
+		// StandardsDocument.md Sec5.4).
+		const CarriedScale landing_target{INT64_C(1073741824), INT64_C(-20)};
+		f.k_norm_landing_r_t_arr[0] = superslm::DynamicScaleReciprocal(landing_target.m);
+
+		superslm::LayerWeights& lw = f.layer;
+		lw.attn_norm_gain = f.norm_gain;
+		lw.attn_norm_site_constant = canonical;
+		lw.q_weight = f.identity2x2;
+		lw.k_weight = f.identity2x2;
+		lw.v_weight = f.identity2x2;
+		lw.o_weight = f.identity2x2;
+		lw.q_fold_identity = kIdentityFoldArr; lw.q_fold_mult = kZeroFoldArr; lw.q_fold_shift = kZeroFoldArr;
+		lw.k_fold_identity = kIdentityFoldArr; lw.k_fold_mult = kZeroFoldArr; lw.k_fold_shift = kZeroFoldArr;
+		lw.v_fold_identity = kIdentityFoldArr; lw.v_fold_mult = kZeroFoldArr; lw.v_fold_shift = kZeroFoldArr;
+		lw.o_fold_identity = kIdentityFoldArr; lw.o_fold_mult = kZeroFoldArr; lw.o_fold_shift = kZeroFoldArr;
+		lw.gate_fold_identity = kIdentityFoldArr; lw.gate_fold_mult = kZeroFoldArr; lw.gate_fold_shift = kZeroFoldArr;
+		lw.up_fold_identity = kIdentityFoldArr; lw.up_fold_mult = kZeroFoldArr; lw.up_fold_shift = kZeroFoldArr;
+		lw.down_fold_identity = kIdentityFoldArr; lw.down_fold_mult = kZeroFoldArr; lw.down_fold_shift = kZeroFoldArr;
+		lw.q_site_constant = canonical;
+		lw.o_site_constant = canonical;
+		lw.kv_landing_r_t_k = f.kv_landing_r_t_arr;
+		lw.kv_landing_e_t_k = f.kv_landing_e_t_arr;
+		lw.kv_landing_r_t_v = f.kv_landing_r_t_arr;
+		lw.kv_landing_e_t_v = f.kv_landing_e_t_arr;
+		lw.ctx_fold_identity = f.ctx_fold_identity_arr;
+		lw.ctx_fold_mult = f.ctx_fold_mult_arr;
+		lw.ctx_fold_shift = f.ctx_fold_shift_arr;
+		lw.ctx_fold_site_constant = canonical;
+		lw.attn_residual_site_constant = canonical;
+		lw.iexp_softmax_khead_m = f.iexp_softmax_khead_m_arr;
+		lw.iexp_softmax_khead_e = f.iexp_softmax_khead_e_arr;
+		lw.mlp_norm_gain = f.norm_gain;
+		lw.mlp_norm_site_constant = canonical;
+		lw.gate_weight = f.identity2x2;
+		lw.up_weight = f.identity2x2;
+		lw.down_weight = f.identity2x2;
+		lw.gate_site_constant = canonical;
+		lw.up_site_constant = canonical;
+		lw.mlp_act_site_constant = CarriedScale{INT64_C(1073741824), INT64_C(-96)};
+		lw.down_site_constant = canonical;
+		lw.mlp_residual_site_constant = canonical;
+		lw.k_norm_gain = f.k_norm_gain;
+		lw.k_norm_site_constant = canonical;
+		lw.k_norm_landing_r_t = f.k_norm_landing_r_t_arr;
+		lw.k_norm_landing_e_t = f.k_norm_landing_e_t_arr;
+	}
+
+	// Same reason as `CriticalOneFixture`'s own deletions above -- `layer`'s pointer fields
+	// are wired to THIS object's own sibling arrays.
+	QkNormWiringFixture(const QkNormWiringFixture&) = delete;
+	QkNormWiringFixture& operator=(const QkNormWiringFixture&) = delete;
+	QkNormWiringFixture(QkNormWiringFixture&&) = delete;
+	QkNormWiringFixture& operator=(QkNormWiringFixture&&) = delete;
+};
+
+static void TestT2566_S1_RunLayerLoopWiresSaturationCounterThroughBothPaths() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+
+	// --- Path 1: RunLayerLoop (the single-token path; calls RunLayerLoopImpl, which threads
+	// `&seq.kv_saturation_count` into ApplyQkNormSite at forward_sites.cpp:1828). ---
+	{
+		QkNormWiringFixture fixture;
+		int8_t hidden_codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		constexpr size_t kWorkspaceSize = 1 * 1 * 1 * 2 * 2;
+		uint8_t workspace[kWorkspaceSize] = {};
+		const auto result = superslm::RunLayerLoop(
+		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+		    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+		    /*context_cap=*/1, fixture.view.rope_tables, workspace, sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::Ok,
+		          "RunLayerLoop(T-2566 S1, path=RunLayerLoop) status == %s, want Ok",
+		          SslmForwardStatusName(result));
+		if (result == SslmForwardStatus::Ok) {
+			CHECK_MSG(seq.kv_saturation_count > 0,
+			          "seq.kv_saturation_count after RunLayerLoop, K-norm fixture forcing a "
+			          "second-landing clamp, == %llu, want > 0 -- RED if RunLayerLoopImpl's own "
+			          "ApplyQkNormSite call (forward_sites.cpp:1828) is reverted to pass no "
+			          "counter (the pre-S3-fix form), which restores the exact host-facing "
+			          "under-reporting S3 named",
+			          static_cast<unsigned long long>(seq.kv_saturation_count));
+		}
+	}
+
+	// --- Path 2: RunLayerLoopChunkBatched (the prefill path; threads `kv_saturation_count`
+	// into ApplyQkNormSite at forward_sites.cpp:2339). One-token chunk, otherwise identical
+	// construction to Path 1 above, so the two paths are compared on the same fixture. ---
+	{
+		QkNormWiringFixture fixture;
+		int8_t hidden_codes_chunk[2] = {5, -5};
+		CarriedScale hidden_scales[1] = {CarriedScale{INT64_C(1073741824), 0}};
+		constexpr size_t kWorkspaceSize = 1 * 1 * 1 * 2 * 2;
+		uint8_t workspace[kWorkspaceSize] = {};
+		uint64_t saturation_count = 0;
+		const auto result = superslm::RunLayerLoopChunkBatched(
+		    hidden_codes_chunk, hidden_scales, /*chunk_tokens=*/1, &fixture.layer,
+		    /*num_hidden_layers=*/1, /*hidden_size=*/2, /*head_dim=*/2,
+		    /*num_key_value_heads=*/1, /*intermediate_size=*/2, /*context_cap=*/1,
+		    /*context_length_start=*/0, fixture.view.rope_tables, workspace, sizeof(workspace),
+		    /*option_g_fused_k_landing=*/false, &saturation_count);
+		CHECK_MSG(result == SslmForwardStatus::Ok,
+		          "RunLayerLoopChunkBatched(T-2566 S1, path=RunLayerLoopChunkBatched) status == "
+		          "%s, want Ok",
+		          SslmForwardStatusName(result));
+		if (result == SslmForwardStatus::Ok) {
+			CHECK_MSG(saturation_count > 0,
+			          "saturation_count after RunLayerLoopChunkBatched, the SAME K-norm fixture, "
+			          "== %llu, want > 0 -- RED if RunLayerLoopChunkBatched's own ApplyQkNormSite "
+			          "call (forward_sites.cpp:2339) is reverted to pass no counter (the "
+			          "pre-S3-fix form), which restores the exact host-facing under-reporting S3 "
+			          "named",
+			          static_cast<unsigned long long>(saturation_count));
+		}
+	}
+}
+
 // T-1691 (design Sec7 red-first proof part 8; D-SLM725, S11 dimension 1
 // corrected from NOT APPLICABLE): the K/V store's own lifetime cell -- an
 // early write via MutableKeyRow/MutableValueRow survives at least eight
@@ -24272,13 +24670,14 @@ namespace t2019_b7 {
 using superslm::SslmForwardStatus;
 using superslm_gpu::SslmGpuStatus;
 
-// T-2113 (B4, design Sec3/Sec6.1): re-derived from 17 (16 sites + 1 commit) to 24, the real
-// per-layer dispatch count this design's own geometry ships -- see `superslm_gpu.cpp`'s own
+// T-2113 (B4, design Sec3/Sec6.1): re-derived from 17 (16 sites + 1 commit) to 24, then to 25
+// (design §6 Track B step 3, T-2551 -- the new qk_norm_site.hlsl dispatch), the real per-layer
+// dispatch count this design's own geometry ships -- see `superslm_gpu.cpp`'s own
 // `PlanDispatchBudgetGpu` header comment for the site list.
-constexpr uint32_t kDispatchesPerLayer = 24;
+constexpr uint32_t kDispatchesPerLayer = 25;
 
 // Sec5.8's own formula, computed locally: complete_layers = floor(dispatch_budget /
-// 24), capped at (num_hidden_layers - current_layer_position); status is
+// 25), capped at (num_hidden_layers - current_layer_position); status is
 // DispatchBudgetTooSmall iff the floor division yields zero layers AND the cap
 // itself is not already zero (a sequence already at the last layer with budget for
 // one more isn't "too small," it has nothing left to do -- Ok with 0 layers is a
@@ -24299,9 +24698,10 @@ static void TestT2019_B7_DispatchBudget_EveryRemainderAndBoundary() {
 	using namespace t2019_b7;
 	constexpr uint32_t N = 28;  // 1.5B-Instruct tier's own layer count (Sec14 Fold F1)
 
-	// {0, ..., 23} individually -- uniform DispatchBudgetTooSmall, zero layers,
-	// not merely the endpoints (Sec5.8's own explicit obligation).
-	for (uint32_t budget = 0; budget <= 23; ++budget) {
+	// {0, ..., 24} individually (T-2551: re-derived from {0,...,23} -- kDispatchesPerLayer
+	// moved 24 -> 25) -- uniform DispatchBudgetTooSmall, zero layers, not merely the
+	// endpoints (Sec5.8's own explicit obligation).
+	for (uint32_t budget = 0; budget <= 24; ++budget) {
 		uint32_t cpu_layers = 0;
 		const auto cpu_status = ExpectedDispatchBudgetPlan(budget, N, 0, &cpu_layers);
 		CHECK_MSG(cpu_status == SslmGpuStatus::DispatchBudgetTooSmall && cpu_layers == 0,
@@ -24318,25 +24718,26 @@ static void TestT2019_B7_DispatchBudget_EveryRemainderAndBoundary() {
 		          cpu_layers);
 	}
 
-	// 24: exactly one layer.
+	// 25: exactly one layer (T-2551: re-derived from 24).
 	{
 		uint32_t cpu_layers = 0;
-		ExpectedDispatchBudgetPlan(24, N, 0, &cpu_layers);
-		CHECK_MSG(cpu_layers == 1, "dispatch_budget=24: reference formula gives exactly 1 layer");
+		ExpectedDispatchBudgetPlan(25, N, 0, &cpu_layers);
+		CHECK_MSG(cpu_layers == 1, "dispatch_budget=25: reference formula gives exactly 1 layer");
 		uint32_t gpu_layers = 999;
-		const auto gpu_status = superslm_gpu::PlanDispatchBudgetGpu(24, N, 0, &gpu_layers);  // LINK-RED
+		const auto gpu_status = superslm_gpu::PlanDispatchBudgetGpu(25, N, 0, &gpu_layers);  // LINK-RED
 		CHECK_MSG(gpu_status == SslmGpuStatus::Ok && gpu_layers == 1,
-		          "dispatch_budget=24: GPU plan gives Ok/1 layer, got layers=%u", gpu_layers);
+		          "dispatch_budget=25: GPU plan gives Ok/1 layer, got layers=%u", gpu_layers);
 	}
 
-	// Non-dividing remainder 24k+r (0<r<24) at a small k and a k near N.
+	// Non-dividing remainder 25k+r (0<r<25) at a small k and a k near N (T-2551: re-derived
+	// from 24k+r, 0<r<24).
 	for (uint32_t k : {2u, N - 2u}) {
-		for (uint32_t r : {1u, 8u, 23u}) {
-			const uint32_t budget = 24 * k + r;
+		for (uint32_t r : {1u, 8u, 24u}) {
+			const uint32_t budget = 25 * k + r;
 			uint32_t cpu_layers = 0;
 			ExpectedDispatchBudgetPlan(budget, N, 0, &cpu_layers);
 			CHECK_MSG(cpu_layers == k,
-			          "dispatch_budget=%u (24*%u+%u): reference formula gives exactly %u layers "
+			          "dispatch_budget=%u (25*%u+%u): reference formula gives exactly %u layers "
 			          "(remainder %u unused)",
 			          budget, k, r, k, r);
 			uint32_t gpu_layers = 999;
@@ -25335,11 +25736,13 @@ static void TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject() {
 	// dispatches this call issued -- q/o/kv/gate/up/down_proj each split into a GEMM dispatch plus
 	// their own requant dispatch, and RoPE split into stage+commit (re-derived from the 22
 	// sites/layer T-2101 shipped: kv_proj no longer stays fused-and-single-dispatch, and RoPE's
-	// commit phase is its own dispatch). One GPU-measured figure per dispatch, every one
+	// commit phase is its own dispatch). Re-derived again to 8 layers * 25 sites/layer = 200
+	// (design §6 Track B step 3, T-2551): the new qk_norm_site.hlsl dispatch, inserted between
+	// kv_proj_site and rope_guard_site. One GPU-measured figure per dispatch, every one
 	// non-negative, summing to (approximately) gpu_busy_ms above.
 	const auto per_dispatch_ok = superslm_gpu::LastCallPerDispatchTimingsMs();
-	CHECK_MSG(per_dispatch_ok.size() == 8 * 24,
-	          "T2101/T2113 per-dispatch timing (success call): %zu entries, want 8*24=192",
+	CHECK_MSG(per_dispatch_ok.size() == 8 * 25,
+	          "T2101/T2113 per-dispatch timing (success call): %zu entries, want 8*25=200",
 	          per_dispatch_ok.size());
 	double per_dispatch_sum = 0.0;
 	bool all_non_negative = true;
@@ -25381,7 +25784,7 @@ static void TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject() {
 	CHECK_MSG(per_dispatch_rejected.empty(),
 	          "T2101 per-dispatch timing (guard-rejected call): %zu entries, want 0 -- a call "
 	          "rejected before recording starts must report no per-dispatch timings, not the "
-	          "PREVIOUS successful call's own stale 192",
+	          "PREVIOUS successful call's own stale 200",
 	          per_dispatch_rejected.size());
 }
 
@@ -26255,6 +26658,51 @@ struct ScopedStdoutCapture {
 	}
 };
 
+// T-2570 (S1, Claude/Poirot/cd12179-t2569-trackb-confirmation.md): the same RAII idiom as
+// ScopedStdoutCapture immediately above, one identifier changed -- redirects stderr rather than
+// stdout, so a cell can assert on a diagnostic a catch clause prints there (the `std::fprintf
+// (stderr, ...)` calls both new GpuLayerWeightsContractError clauses make, superslm_gpu.cpp)
+// without the test process's own captured-stderr channel (if any) swallowing it unread. RAII
+// restore on scope exit covers the guarded call throwing too, matching the stdout sibling's own
+// reasoning.
+struct ScopedStderrCapture {
+	int saved_fd = -1;
+	std::string path;
+	bool active = false;
+
+	ScopedStderrCapture() {
+		char dir[MAX_PATH]{};
+		char file[MAX_PATH]{};
+		if (GetTempPathA(MAX_PATH, dir) == 0) return;
+		if (GetTempFileNameA(dir, "sslmcape", 0, file) == 0) return;
+		path = file;
+		std::fflush(stderr);
+		saved_fd = _dup(_fileno(stderr));
+		if (saved_fd == -1) return;
+		if (!std::freopen(path.c_str(), "w", stderr)) {
+			_close(saved_fd);
+			saved_fd = -1;
+			return;
+		}
+		active = true;
+	}
+	~ScopedStderrCapture() {
+		if (!active) return;
+		std::fflush(stderr);
+		_dup2(saved_fd, _fileno(stderr));
+		_close(saved_fd);
+		std::remove(path.c_str());
+	}
+	std::string ReadCaptured() {
+		if (!active) return "";
+		std::fflush(stderr);
+		std::ifstream f(path, std::ios::binary);
+		std::stringstream ss;
+		ss << f.rdbuf();
+		return ss.str();
+	}
+};
+
 // Raw-enumerates adapters (independent of Device::Init(), same shape as
 // tools/t2116_list_adapters.cpp) to find the first software (WARP) adapter's own raw
 // index -- varies by machine, never assumed.
@@ -26379,6 +26827,315 @@ static void TestAdapterIndexSoftwareAdapterRefusedNotSilentlySelected() {
 	CHECK_MSG(d.init_error.find("software adapter") != std::string::npos,
 	          "a software-adapter index must be refused, naming it as software: %s",
 	          d.init_error.c_str());
+}
+
+// (T-2566, M4 -- Claude/Poirot/a5834b3-t2565-trackb-confirmation.md): M8's own remedy gave
+// the K-norm landing pointer pair (`k_norm_landing_r_t`/`e_t`) two contradictory contracts --
+// `forward_sites.h` states the pair REQUIRED non-null whenever `k_norm_gain` is non-null, and
+// `ApplyQkNormSite` (the CPU site) holds that as an honest, unchecked precondition, but
+// `PackLayerWeightsBytes` (the GPU packer) tolerated a null pair and substituted 0, calling it
+// a "safe no-op." It was not: 0 packs as `LandingRescaleGpu`'s own target reciprocal, landing
+// every K code of that head to 0 on the GPU path silently, and 0 sits outside
+// `ValidateKvLandingReciprocalsDomain`'s own artifact-facing domain (`src/model.cpp`) -- a
+// value the loader would reject on any real artifact. One contract now: the packer refuses a
+// null half of the pair by name, before packing that layer's bytes at all -- before any GPU
+// dispatch this pack could feed. `QkNormWiringFixture` (above, T-2566 S1) already carries a
+// well-formed K-norm contract (k_norm_gain, k_norm_landing_r_t/e_t all non-null); this cell
+// reuses it for the must-accept arm and knocks out one pointer at a time for the two
+// must-reject arms.
+static void TestT2566_M4_PackLayerWeightsBytesRefusesNullKNormLandingPointers() {
+	constexpr uint32_t kHiddenSize = 2, kKvHiddenSize = 2, kNumKvHeads = 1, kNumAttnHeads = 1,
+	                    kIntermediateSize = 2;
+
+	auto try_pack = [](superslm::LayerWeights& lw, bool* out_threw, std::string* out_what) {
+		const superslm_gpu::GpuLayerLayout layout = superslm_gpu::ComputeLayerLayout(
+		    kHiddenSize, kKvHiddenSize, kNumKvHeads, kNumAttnHeads, kIntermediateSize);
+		*out_threw = false;
+		out_what->clear();
+		try {
+			(void)superslm_gpu::PackLayerWeightsBytes(&lw, /*N=*/1, layout, kHiddenSize,
+			                                          kKvHiddenSize, kNumKvHeads, kNumAttnHeads,
+			                                          kIntermediateSize);
+		} catch (const std::exception& e) {
+			*out_threw = true;
+			*out_what = e.what();
+		}
+	};
+
+	// Must-accept: the fixture's own contract is well-formed (S1's own construction).
+	{
+		QkNormWiringFixture fixture;
+		bool threw = false;
+		std::string what;
+		try_pack(fixture.layer, &threw, &what);
+		CHECK_MSG(!threw,
+		          "PackLayerWeightsBytes(well-formed k_norm contract) threw: %s, want no throw",
+		          what.c_str());
+	}
+
+	// Must-reject 1/2: k_norm_gain stays non-null; k_norm_landing_r_t alone is knocked to
+	// nullptr after construction -- the exact asymmetry M4 named.
+	{
+		QkNormWiringFixture fixture;
+		fixture.layer.k_norm_landing_r_t = nullptr;
+		bool threw = false;
+		std::string what;
+		try_pack(fixture.layer, &threw, &what);
+		CHECK_MSG(threw,
+		          "PackLayerWeightsBytes(k_norm_gain set, k_norm_landing_r_t == nullptr) did "
+		          "NOT throw -- RED if the refusal is dropped back to the silent "
+		          "0-substitution M4 found (superslm_gpu.cpp)");
+		if (threw) {
+			CHECK_MSG(what.find("k_norm_landing_r_t") != std::string::npos,
+			          "PackLayerWeightsBytes's own refusal message == \"%s\", want it to name "
+			          "k_norm_landing_r_t/e_t by name, not a generic failure",
+			          what.c_str());
+		}
+	}
+
+	// Must-reject 2/2: the SAME violation on the pair's other half.
+	{
+		QkNormWiringFixture fixture;
+		fixture.layer.k_norm_landing_e_t = nullptr;
+		bool threw = false;
+		std::string what;
+		try_pack(fixture.layer, &threw, &what);
+		CHECK_MSG(threw,
+		          "PackLayerWeightsBytes(k_norm_gain set, k_norm_landing_e_t == nullptr) did "
+		          "NOT throw -- the pair's OTHER half must also be refused, not only the first");
+	}
+}
+
+// (T-2568, S1 -- Claude/Poirot/66626ef-t2567-trackb-confirmation.md): T-2566's own remedy above
+// refused a null k_norm_landing pointer by throwing `std::runtime_error`, the exact exception
+// class `superslm_gpu.cpp`'s own recording-window catch reserves for TRANSIENT device/allocation
+// failures -- so through the PUBLIC `RunLayerLoopGpu` entry point (gpu_port.h) the refusal
+// surfaced as `GpuAllocationFailed` ("retry smaller"), with the message that names the field
+// discarded by an unnamed catch. Fixed: `PackLayerWeightsBytes` now throws
+// `GpuLayerWeightsContractError` (std::logic_error-derived), caught by its own dedicated clause
+// and returned as its own dedicated status, `GpuLayerWeightsContractViolation`. This cell drives
+// the SAME public entry point the confirming review's own probe used, on the SAME
+// `QkNormWiringFixture` (T-2566, above): a control arm with the fixture's own well-formed K-norm
+// contract returns `Ok`, establishing the device and fixture are healthy so the second arm is the
+// refusal and not a broken harness; the `k_norm_landing_r_t == nullptr` arm must return the new
+// named status -- never `GpuAllocationFailed`, never an uncaught exception.
+static void TestT2568_S1_RunLayerLoopGpuRefusesNullKNormLandingByNamedStatus() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+
+	// Control: the fixture's own well-formed K-norm contract.
+	{
+		QkNormWiringFixture fixture;
+		int8_t hidden_codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		uint8_t workspace[4] = {};
+		const auto result = superslm_gpu::RunLayerLoopGpu(
+		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+		    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+		    /*intermediate_size=*/2, /*context_cap=*/1, fixture.view.rope_tables, workspace,
+		    sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::Ok,
+		          "RunLayerLoopGpu(T-2568 S1 control, well-formed K-norm contract) status == "
+		          "%s, want Ok -- establishes the device and fixture are healthy",
+		          SslmForwardStatusName(result));
+	}
+
+	// The refusal: the SAME fixture, k_norm_landing_r_t knocked to nullptr after construction --
+	// the exact asymmetry M4/S1 named.
+	//
+	// T-2570 (S1, Claude/Poirot/cd12179-t2569-trackb-confirmation.md): executed, deleting the
+	// catch clause's own `std::fprintf(stderr, ...)` left this cell's two status assertions
+	// (below, unchanged) green at 34267/0 while the process's captured stderr dropped to zero
+	// bytes -- the message is half of T-2567's own required evidence for this remedy and had no
+	// pin. ScopedStderrCapture wraps the throwing call so this cell can assert the field's name
+	// (the whole content of "refused by name") actually reaches stderr, red under that deletion.
+	{
+		QkNormWiringFixture fixture;
+		fixture.layer.k_norm_landing_r_t = nullptr;
+		int8_t hidden_codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		uint8_t workspace[4] = {};
+		superslm::SslmForwardStatus result;
+		std::string captured_stderr;
+		{
+			ScopedStderrCapture cap;
+			result = superslm_gpu::RunLayerLoopGpu(
+			    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+			    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+			    /*intermediate_size=*/2, /*context_cap=*/1, fixture.view.rope_tables, workspace,
+			    sizeof(workspace));
+			captured_stderr = cap.ReadCaptured();
+		}
+		CHECK_MSG(result == SslmForwardStatus::GpuLayerWeightsContractViolation,
+		          "RunLayerLoopGpu(T-2568 S1, k_norm_landing_r_t == nullptr) status == %s, want "
+		          "GpuLayerWeightsContractViolation -- RED if the refusal reverts to throwing "
+		          "std::runtime_error (superslm_gpu.cpp), which this file's own taxonomy "
+		          "reserves for transient device failures and which the public entry point maps "
+		          "to GpuAllocationFailed, discarding the message that names the field",
+		          SslmForwardStatusName(result));
+		CHECK_MSG(result != SslmForwardStatus::GpuAllocationFailed,
+		          "RunLayerLoopGpu(T-2568 S1, k_norm_landing_r_t == nullptr) status == "
+		          "GpuAllocationFailed -- the exact wrong-advice regression S1 closes ('retry "
+		          "smaller' fixes no null pointer at any size)");
+		CHECK_MSG(captured_stderr.find("k_norm_landing_r_t") != std::string::npos,
+		          "RunLayerLoopGpu(T-2570 S1, k_norm_landing_r_t == nullptr) captured stderr must "
+		          "name the field -- RED if the catch clause's own `std::fprintf(stderr, ...)` is "
+		          "deleted, which leaves the status assertions above green while the message is "
+		          "silently discarded; captured: \"%s\"",
+		          captured_stderr.c_str());
+	}
+}
+
+// (T-2568, S2 -- Claude/Poirot/66626ef-t2567-trackb-confirmation.md): T-2565's own O7 named the
+// GPU half of the saturation counter as having no executed evidence of any kind; the confirming
+// review measured it (same fixture, same device: GPU 2, CPU 2, agreeing) and re-opened it as a
+// Significant on new evidence -- nothing automated fails when `qk_norm_site.hlsl:236`'s own
+// `InterlockedAdd(gQkNormClamps, 1u)` is deleted: the shader compiles, the suite stays green,
+// exit 0. `QkNormWiringFixture` (T-2566, above) already forces a second-K-landing clamp on
+// identity weights, so the ORIGINAL K/V landing contributes nothing to either engine's own
+// count -- this cell drives the SAME fixture through both `RunLayerLoop` (CPU) and
+// `RunLayerLoopGpu` (GPU) and asserts the two engines' own `seq.kv_saturation_count` agree, both
+// nonzero. RED under the shader mutant named above: the GPU reading drops to 0 while the CPU
+// reading holds, so this cell's own equality assertion fails where nothing else in the suite
+// can.
+static void TestT2568_S2_GpuKvSaturationCountMatchesCpuOnQkNormWiringFixture() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+
+	uint64_t cpu_count = 0;
+	{
+		QkNormWiringFixture fixture;
+		int8_t hidden_codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		uint8_t workspace[4] = {};
+		const auto result = superslm::RunLayerLoop(
+		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+		    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+		    /*intermediate_size=*/2, /*context_cap=*/1, fixture.view.rope_tables, workspace,
+		    sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::Ok,
+		          "RunLayerLoop(T-2568 S2, CPU arm) status == %s, want Ok",
+		          SslmForwardStatusName(result));
+		cpu_count = seq.kv_saturation_count;
+		CHECK_MSG(cpu_count > 0,
+		          "seq.kv_saturation_count after RunLayerLoop (CPU) == %llu, want > 0 -- the "
+		          "K-norm fixture's own second-landing clamp must register on the CPU engine "
+		          "before this cell's own GPU-equals-CPU comparison means anything",
+		          static_cast<unsigned long long>(cpu_count));
+	}
+
+	uint64_t gpu_count = 0;
+	{
+		QkNormWiringFixture fixture;
+		int8_t hidden_codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		uint8_t workspace[4] = {};
+		const auto result = superslm_gpu::RunLayerLoopGpu(
+		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+		    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+		    /*intermediate_size=*/2, /*context_cap=*/1, fixture.view.rope_tables, workspace,
+		    sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::Ok,
+		          "RunLayerLoopGpu(T-2568 S2, GPU arm) status == %s, want Ok",
+		          SslmForwardStatusName(result));
+		gpu_count = seq.kv_saturation_count;
+	}
+
+	CHECK_MSG(gpu_count == cpu_count,
+	          "seq.kv_saturation_count: GPU == %llu, CPU == %llu, want equal -- RED if "
+	          "qk_norm_site.hlsl:236's own InterlockedAdd(gQkNormClamps, 1u) is deleted, which "
+	          "takes the GPU reading to 0 while the CPU reading holds, with the rest of the "
+	          "suite green (T-2567 S2's own measured shape)",
+	          static_cast<unsigned long long>(gpu_count), static_cast<unsigned long long>(cpu_count));
+}
+
+// (T-2568, M3 -- Claude/Poirot/66626ef-t2567-trackb-confirmation.md): the sibling T-2565's own M4
+// named as unaudited. `iexp_softmax_khead_m`/`_e` is required UNCONDITIONALLY (never gated behind
+// a presence flag the way k_norm_landing is gated behind k_norm_gain -- MarshalLayer,
+// layer_marshal.h, populates it on every layer). The old `: 0` fallback (superslm_gpu.cpp) was
+// the identical "safe no-op" shape M4 already found unsafe one field over: executed,
+// `IExpScaleConstants(m=0, e=0)` (intmath.cpp) returns `kOk` and a degenerate i-exp triple,
+// silently. Fixed the same way, same exception type, same cell shape as
+// `TestT2566_M4_PackLayerWeightsBytesRefusesNullKNormLandingPointers` above: a must-accept arm
+// (the fixture's own well-formed contract) and two must-reject arms, one pointer knocked out at a
+// time.
+static void TestT2568_M3_PackLayerWeightsBytesRefusesNullIexpSoftmaxKheadPointers() {
+	constexpr uint32_t kHiddenSize = 2, kKvHiddenSize = 2, kNumKvHeads = 1, kNumAttnHeads = 1,
+	                    kIntermediateSize = 2;
+
+	auto try_pack = [](superslm::LayerWeights& lw, bool* out_threw, std::string* out_what) {
+		const superslm_gpu::GpuLayerLayout layout = superslm_gpu::ComputeLayerLayout(
+		    kHiddenSize, kKvHiddenSize, kNumKvHeads, kNumAttnHeads, kIntermediateSize);
+		*out_threw = false;
+		out_what->clear();
+		try {
+			(void)superslm_gpu::PackLayerWeightsBytes(&lw, /*N=*/1, layout, kHiddenSize,
+			                                          kKvHiddenSize, kNumKvHeads, kNumAttnHeads,
+			                                          kIntermediateSize);
+		} catch (const std::exception& e) {
+			*out_threw = true;
+			*out_what = e.what();
+		}
+	};
+
+	// Must-accept: the fixture's own contract is well-formed.
+	{
+		QkNormWiringFixture fixture;
+		bool threw = false;
+		std::string what;
+		try_pack(fixture.layer, &threw, &what);
+		CHECK_MSG(!threw,
+		          "PackLayerWeightsBytes(well-formed iexp_softmax_khead contract) threw: %s, "
+		          "want no throw",
+		          what.c_str());
+	}
+
+	// Must-reject 1/2: iexp_softmax_khead_m knocked to nullptr after construction.
+	{
+		QkNormWiringFixture fixture;
+		fixture.layer.iexp_softmax_khead_m = nullptr;
+		bool threw = false;
+		std::string what;
+		try_pack(fixture.layer, &threw, &what);
+		CHECK_MSG(threw,
+		          "PackLayerWeightsBytes(iexp_softmax_khead_m == nullptr) did NOT throw -- RED "
+		          "if the refusal is dropped back to the silent 0-substitution M3 found "
+		          "(superslm_gpu.cpp)");
+		if (threw) {
+			CHECK_MSG(what.find("iexp_softmax_khead") != std::string::npos,
+			          "PackLayerWeightsBytes's own refusal message == \"%s\", want it to name "
+			          "iexp_softmax_khead_m/e by name, not a generic failure",
+			          what.c_str());
+		}
+	}
+
+	// Must-reject 2/2: the SAME violation on the pair's other half.
+	{
+		QkNormWiringFixture fixture;
+		fixture.layer.iexp_softmax_khead_e = nullptr;
+		bool threw = false;
+		std::string what;
+		try_pack(fixture.layer, &threw, &what);
+		CHECK_MSG(threw,
+		          "PackLayerWeightsBytes(iexp_softmax_khead_e == nullptr) did NOT throw -- the "
+		          "pair's OTHER half must also be refused, not only the first");
+	}
 }
 
 #endif  // _WIN32
@@ -27103,6 +27860,10 @@ int main(int argc, char** argv) {
 	// 2026-07-31.md §3, Cells 1-9).
 	TestRunLayerLoopQAndKWeightsAreLoadBearingOnceWidthReachesTwo();
 	TestKvRowAccessorHeadStrideIncludesContextCapFactor();
+	TestT2564_S4_ApplyQkNormSitePerHeadQScaleNotCollapsed();
+	TestT2564_S4_ApplyQkNormSiteKLandsOnNewPostNormScaleNotJustNorm();
+	TestT2564_S3_ApplyQkNormSiteSecondKLandingCountsSaturation();
+	TestT2566_S1_RunLayerLoopWiresSaturationCounterThroughBothPaths();
 	TestKvStoreEarlyWriteSurvivesLateReadAcrossEightFurtherPositions();
 	TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast();
 	TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition();
@@ -27313,6 +28074,11 @@ int main(int argc, char** argv) {
 	TestAdapterIndexNegativeRefusesSilentFallback();
 	TestAdapterIndexTooLongRefusesRatherThanParsingTruncatedValue();
 	TestAdapterIndexSoftwareAdapterRefusedNotSilentlySelected();
+
+	TestT2566_M4_PackLayerWeightsBytesRefusesNullKNormLandingPointers();
+	TestT2568_S1_RunLayerLoopGpuRefusesNullKNormLandingByNamedStatus();
+	TestT2568_S2_GpuKvSaturationCountMatchesCpuOnQkNormWiringFixture();
+	TestT2568_M3_PackLayerWeightsBytesRefusesNullIexpSoftmaxKheadPointers();
 #endif  // _WIN32
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);

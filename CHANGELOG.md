@@ -4,38 +4,12 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
-Ask 5's Qwen3-architecture support (`SuperSLM_Plan.md` §22.5) lands here in two pieces,
-both additive and tools-only, both present in this tree already -- but the architecture pin
-itself is claimed only once Track B (the forward call site) lands, as **1.4.0**. A consumer
-building against this tag today gets the converter-side support with no forward-path change;
-it does not yet get a runnable Qwen3-Embedding candidate.
-
-### Fixed
-
-- **`tools/convert_tokenizer.py` no longer crashes on the Qwen3-Embedding-0.6B candidate's
-  `tokenizer.json`.** `TokenizerTables.__init__` raised `AttributeError: 'list' object has no
-  attribute 'split'` on this checkpoint's own `model.merges` schema (a 2-element list per entry,
-  where every prior checkpoint this converter has emitted for carried a space-separated string).
-  `_parse_merge_element` now branches on the element's own schema, using a 2-element list/tuple
-  directly and rejecting any other shape by name; every prior checkpoint's own string schema is
-  parsed unchanged. **Additive: `TokenizerTables` now also reads the top-level `post_processor`
-  key and exposes `trailing_special_id`** -- `None` for every checkpoint whose post-processor is
-  absent or a bare `ByteLevel` (every checkpoint this converter previously supported), and the
-  candidate's own appended token id (`151643`) for a `Sequence` whose own `processors` are EXACTLY
-  `[ByteLevel, TemplateProcessing]` in that order, the candidate's own shape; every other shape --
-  including a `Sequence` carrying a third, sibling processor that also inserts tokens -- is an
-  explicit rejection. This reads and exposes the
-  fact only -- the emitted `.sslm` `TOK1` artifact's own format and every prior checkpoint's
-  emitted bytes are unchanged (confirmed byte-identical against the unmodified converter). A
-  second, additive parity check (`--verify-post-processor`) confirms
-  `ref_encode(text) + [trailing_special_id] == hf.encode(text, add_special_tokens=True)` for
-  every checkpoint, run unconditionally rather than skipped for one whose post-processor appends
-  nothing -- vacuity for that population is a property of the comparison's own result (it already
-  reads 0 mismatches), not of the check declining to run. **This new check's own readings are
-  quarantined pending an independent must-accept/must-reject commissioning** (not attempted this
-  round) -- it is not yet a load-bearing pass/fail gate. User-visible: the pinned candidate's
-  `tokenizer.json` now converts to a `.sslm` tokenizer artifact; every other checkpoint's
-  converted output is unchanged.
+Ask 5's Qwen3-architecture support (`SuperSLM_Plan.md` §22.5) is complete in this tree and
+**1.4.0 claims the Qwen3-architecture pin**: the converter (Track C), the tokenizer converter
+(Track E) and the forward call site with its carried-scale contract (Track B, T-2551 through
+T-2570) all land here. 1.3.1 shipped the first two unclaimed; a consumer building against this
+tree gets a runnable Qwen3-Embedding candidate on both the CPU and GPU paths. **Breaking for
+QK-norm artifacts converted by a pre-1.4.0 tree** — see the format note under Added (D-SLM6200).
 
 ### Added
 
@@ -113,6 +87,441 @@ it does not yet get a runnable Qwen3-Embedding candidate.
   is unaffected -- no calibration re-run.
   Close-out log: `Claude/Brunel/t2549-ask5-trackc-close-out-2026-09-02.md` (records
   worktree).
+
+- **The QK-norm forward call site lands, CPU and GPU (Ask 5 Track B, T-2551).** Track C
+  converts a checkpoint's `q_norm`/`k_norm` tensors into the artifact; through this round
+  no call site read them, so a loaded model ran with the norm's effect absent from every
+  head. `LayerWeights` gains `q_norm_gain`/`k_norm_gain` (nullptr when a layer carries
+  neither tensor) and `q_norm_site_constant`/`k_norm_site_constant`; a new shared
+  function, `ApplyQkNormSite` (`forward_sites.h`/`.cpp`), applies per-head RMSNorm to Q
+  (every query head, writing the new carried scale back so attention's own C30
+  derivation reads it) and to K (once per KV head, on the just-landed K row; the output
+  scale is discarded -- K has no per-token scale analog downstream), strictly after K/V
+  landing and strictly before RoPE, in BOTH the single-token path
+  (`RunLayerLoopImpl`) and the chunk-batched path (`RunLayerLoopChunkBatched`, the path
+  `sslm_prefill` actually calls) -- one implementation, not two reasoned to agree. Gated
+  on `!option_g_fused_k_landing`; the combination of QK-norm presence with that flag is a
+  defined load-time rejection (below), never a second runtime coordinate system.
+
+  **GPU**: a new shader, `qk_norm_site.hlsl`, dispatched between `kv_proj_site` and
+  `rope_guard_site` -- one Dispatch call per layer, `num_attention_heads +
+  num_key_value_heads` thread groups (Q heads then K heads), each group's own 256
+  threads cooperatively reducing that one head's own `head_dim` elements
+  (`RmsSumSqParallelGpu`'s own groupshared tree, scoped per-group by hardware, so the
+  multiple groups one Dispatch call issues never interfere). K's own funnel output is
+  staged into a disjoint int32 WorkScratch region (K's destination, `KvCache`, is packed
+  int8, unlike the funnel's native int32-per-code write) and repacked in the same
+  dispatch. `GpuLayerLayout` gains six new per-layer field offsets
+  (`q_norm_present`/`q_norm_gain`/`q_norm_site_constant`/`k_norm_present`/
+  `k_norm_gain`/`k_norm_site_constant`), serialized into the `Layout` GPU buffer strictly
+  AFTER the existing stride slot -- every pre-existing shader's own hardcoded
+  `Layout.Load<uint>(56*4)` stride read is unaffected. Issued unconditionally per layer
+  (the shader's own per-layer presence flag makes it a near-empty dispatch for a layer or
+  a whole model with neither tensor); `kDispatchesPerLayer` (`gpu_port.h`) moves 24 -> 25
+  accordingly, and every dependent cell in the C++ suite and this tree's own structural
+  citation files (`gpu_layer_loop_guards.def`, `test_geometry_site_census.py`'s own
+  self-test) is re-derived against the real, current source rather than offset by hand.
+
+  **Breaking (1.4.0, ruled D-SLM6200):** the carried-scale contract (T-2560/T-2564, above)
+  adds a fourth `kv_landing_reciprocals` key per QK-norm layer (`k_normed_head{h}`),
+  invalidating every QK-norm-bearing `.sslm` artifact converted between this round (T-2551)
+  and T-2560. Nothing shipped is affected — v1.3.1 does not claim Qwen3-architecture
+  support, so no released artifact carries `q_norm`/`k_norm` tensors. A pre-T-2560 QK-norm
+  artifact is rejected by name at load (`MarshalLayer`'s existing missing-entry diagnostic,
+  `"... missing composition_constants entry ..."`, covered by the delta's own §7 Cell 8); no
+  compatibility shim reads one at the wrong K scale, which would reproduce C2.
+
+  **Loader-side rejections (`layer_marshal.h`'s `MarshalLayer`), three cells.**
+  Asymmetric `q_norm`/`k_norm` presence (one tensor present, the other absent, on the
+  same layer) rejects with `"layer{L}: asymmetric q_norm/k_norm presence"` -- a second
+  enforcement site alongside the converter's own (Track C, D-SLM6064); this one protects
+  an artifact produced by any other tool. `q_norm`/`k_norm` presence combined with
+  `option_g_fused_k_landing=true` rejects with a named diagnostic -- built at the loader
+  (not the converter): `MarshalLayer` already receives `view.option_g_fused_k_landing`
+  on every call, so the check costs a comparison and a diagnostic string with no new
+  converter-side validation pass. A `weight_scales` entry with no matching
+  `composition_constants` site entry rejects with `"layer{L}: q_norm/k_norm tensor
+  present but missing composition_constants site entry"` (reproducing T-2425's own
+  "Failure 1" by direct construction: strip a calibrated artifact's own
+  `composition_constants` entries post-calibration, pre-conversion). All three fire
+  exactly as specified, confirmed by execution (below).
+
+  **The oracle (`tools/reference_pipeline/pipeline.py`'s `_float_layer`) gains a matching
+  QK-norm call site**, strictly between projection and RoPE, using the checkpoint's own
+  un-permuted `q_norm.weight`/`k_norm.weight` (`_layer_tensors` now fetches them at their
+  ENGINE-side lookup key, `q_norm.gain`/`k_norm.gain` -- the key `_upstream_names`, T-2543
+  C-1, maps the checkpoint's raw tensor to; a first-drafted `.weight` key raised `KeyError`
+  unconditionally and was caught by this round's own direct-execution verification before
+  landing, StandardsDocument.md §5.4). Confirmed materially non-degenerate by execution: a
+  square-geometry QK-norm-bearing fixture's Q codes differ substantially pre- vs post-norm
+  at the SAME run (not merely present-vs-absent at the checkpoint level). This function is
+  also the production calibration path's own float trajectory source (`_calibrate` ->
+  `_float_forward_many` -> `_float_layer`, once per layer) -- the shared-function decision
+  (no fork) means this change re-prices calibration for every QK-norm-bearing checkpoint,
+  including the pinned Qwen3-Embedding-0.6B candidate: **the T-2543/T-2549 artifact's own
+  staleness note above is now the live state** -- its cached scales were derived from a
+  Qwen2.5-shaped (no-QK-norm) float trajectory over an architecturally Qwen3 checkpoint,
+  and must be discarded and recalibrated, not reused, before any further Ask 5 work reads
+  a calibration-derived number for that candidate. That recalibration (~73 minutes against
+  the real checkpoint, T-2423's own precedent) is NOT executed by this round -- named as
+  owed, not run.
+
+  **Blast radius outside this round's own writable scope, filed rather than fixed
+  (`Claude/Zelda/Board.md`).** `_kv_calibration_capture` (Arm D/E's own per-head
+  calibration capture) independently reimplements `_float_layer`'s own norm/project/RoPE
+  composition by calling the same primitives directly, and its own docstring claims exact
+  parity with `_float_layer` -- a claim now false for QK-norm specifically, since that
+  function gained no matching call site here (the design's own Track B step 6 names only
+  `_float_layer`). Two tests asserting that parity, plus one pinned golden logit in a
+  third file, now fail against the corrected oracle: `test_armd_arme_kv_calibration.py::
+  test_arm_d_q_scale_matches_shipped_production_q_path_at_every_layer`,
+  `test_t1937_production_fix_pins.py::test_arm_d_q_scale_matches_the_shipped_production_
+  q_path`, `test_dynamic_bias.py::test_oversized_bias_magnitudes_reject_at_the_coarse_
+  scale_edge`. All three are outside this ticket's own writable scope
+  (`tools/reference_pipeline/tests/*.py` was not granted; `pipeline.py`'s own grant was
+  scoped to `_float_layer` alone) and outside its own exit-condition suites (the structural-check suite,
+  `superslm_tests`); `python -m pytest tools/reference_pipeline/tests -q`: 4 failed, 1683
+  passed, 13 deselected (was 1687 passed before this round -- the four now-failing cells
+  were silently passing only because a first-drafted `.weight` lookup key made this
+  round's own oracle change a no-op, corrected above).
+
+  **Acceptance for Track B alone, executed** (`tests/t2551_qk_norm_harness.cpp`, a
+  committed acceptance harness in the style of `tools/t2432_geometry_harness.cpp`; a
+  square-geometry, QK-norm-bearing fixture from `_calibrate_checkpoint_fixture.
+  build_parameterized_fixture_checkpoint(qk_norm=True)`, calibrated and converted through
+  the real, unmodified pipeline): CPU and GPU agree bit-for-bit end to end
+  (`hidden_codes`, `hidden_scale`, every K/V row) on both the single-token and the
+  chunk-batched-exercising path -- the determinism crown, unaffected by the tolerance
+  question below. The oracle comparison is executed and its reading recorded, QUARANTINED
+  per this round's own brief: the tolerance composed-acceptance item 3 already owes to the
+  deriver does not exist yet, so this cell is never headlined pass/fail. Recorded reading,
+  single token (`good.sslm`, token id 3): engine `scale_m=1802723290 scale_e=-42
+  codes=-127,-99,-4,-24,0,12,105,-49`; oracle (float64, post-layer0, same token)
+  `[-0.05203353550671877, -0.04088508394718841, -0.0018355512033354064,
+  -0.010044067807571874, 0.0002363362229337695, 0.005076312832271062,
+  0.04273748902866161, -0.019773453409268643]`. The red state (`main`@`ecadbb6`, no
+  QK-norm call site anywhere) is reproduced and quoted in the build log; at this fixture's
+  own tiny scale (`hidden_size=8`, single KV head) the red and green CPU runs converge on
+  the identical final hidden state -- traced to attention degeneracy at this scale (a
+  single KV head's context vector is a weighted average of V, which QK-norm never touches,
+  and the weighting itself washes out at this size, the same class T-2432's own build log
+  already documents for a different site) and NOT evidence the call site has no effect:
+  the direct pre-/post-norm Q comparison above shows a large, unambiguous difference
+  before it reaches attention.
+
+  Full C++ suite: **34228 checks, 0 failures** (`superslm_tests.exe`, was 34226/0 before
+  this round -- 2 new checks). FP-free scan gate: **PASS** on `build/Release/superslm.lib`
+  (17 objects, 2100 symbols ACCEPT, 0 REJECT). the structural-check suite: **423 passed**
+  (unchanged in count from T-2549's own report; two of those cells' own line-number
+  citations were re-derived against this round's own source shift, named above).
+  `tools/reference_pipeline/tests`: 1683 passed / 4 failed (named above) / 13 deselected.
+  GPU leg executed on this machine's RTX 2080 SUPER (8 GiB) -- confirmed working device,
+  every dispatch above real, not simulated.
+
+  Build log: `Claude/Brunel/t2551-ask5-trackb-build-2026-09-02.md` (records worktree).
+
+- **The oracle's QK-norm call site reaches every independent forward walk in the
+  reference pipeline, and the pinned candidate is recalibrated on it (Ask 5 Track B
+  close-out, T-2553).** T-2551 gave `_float_layer` a QK-norm call site and reported three
+  sibling tests failing as an out-of-scope finding. It was in scope: an oracle with
+  multiple forward implementations of which only one applies a real architectural
+  operation is the sibling-pinning defect `StandardsDocument.md` §7 names. Every
+  independent per-layer forward walk in `tools/reference_pipeline/` now applies the
+  identical QK-norm composition, from one shared function (`_apply_qk_norm`) for
+  `_float_layer`/`_kv_calibration_capture`, and a matching call site in each of
+  `_vec_forward` (the numpy integer parity shadow), `_scalar_forward` (the normative
+  scalar reference §6.2 holds every specialization to), `forward_dynamic` (the W8A8-
+  dynamic full-stack forward, §15's measured arm), and `composition_ref.py`'s own
+  independent big-int oracle (`forward_dynamic_logits_oracle`) -- six implementations,
+  one composition. `_derive_scales` gains q_norm/k_norm's own rescale-site derivation,
+  re-derived by direct execution (a first-drafted formula, copied unchecked from the
+  C++-engine-facing `composition_constants` convention, underflowed to a degenerate zero
+  requantizer here -- caught by execution, not by inspection); Q's own carried scale is
+  reassigned post-norm downstream, K's is deliberately left unchanged (verified by
+  execution to match the real engine's own accepted approximation -- "K has no analog of
+  Q's own q_scale").
+
+  **The tree went red before it went green, honestly.** Fixing the shared composition
+  surfaced two more real findings, both corrected rather than routed around: a stale
+  pinned golden value and a stale Arm D sweep witness/key that no longer held once RMSNorm
+  bounded the fixture's own per-head K distribution (re-measured and re-derived, not
+  deleted), and one integer-vs-float structural-tolerance test widened (0.25 -> 0.6,
+  documented, re-measured layer-by-layer) to accommodate QK-norm's own real, bounded,
+  two-layer-compounding divergence at this fixture's toy scale -- still far below what a
+  genuinely structural bug (a transposed head, a dropped residual) would produce, which is
+  that cell's own stated job. A new pinned-fixture test
+  (`test_ask5_trackb_oracle_qk_norm_parity.py`) proves materiality on the two
+  `pipeline.py`-native siblings directly. Full sweep: `pytest tools/ tests/reference/ -m
+  "not upstream"` -- **1992 passed, 13 deselected, 0 failed**; the structural-check suite -- **423
+  passed**.
+
+  **The pinned Qwen3-Embedding-0.6B candidate is recalibrated on the norm-applying
+  forward**, discharging the staleness note T-2543/T-2551 both carried: `calibrate_
+  checkpoint.py` then `convert_model.py` (with `sslm_verify` invoked, not skipped) ran end
+  to end against the real checkpoint (revision `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3`)
+  -- **`verified: independent loader accepted the artifact`**, 9 sections, unchanged size
+  **633,576,276 bytes**, new SHA-256
+  **`7fd5d3981f34c572b729f515ae4a8307780cabd8ab618fe19c7edb6089ae3476`** (supersedes the
+  T-2543-era `5cf871fb...` and the never-shipped T-2551-era intermediate). **This is a
+  LOAD-TIME claim only, same as its predecessor** -- proven to convert and load, not yet
+  proven numerically correct against a derived tolerance (below).
+
+  **Track B's own acceptance, re-executed against this real artifact** (`tests/
+  t2551_qk_norm_harness.cpp`, unmodified from T-2551): marshal OK on all 28/28 layers;
+  QK-norm's own call site fires on both the single-token and the chunk-batched-exercising
+  path, with materiality confirmed directly (pre-/post-norm Q codes differ substantially);
+  **CPU and GPU agree bit-for-bit end to end** -- `hidden_codes[1024]`, `hidden_scale`,
+  every K/V row, across all 28 layers -- on this machine's RTX 2080 SUPER, at both the
+  single-token position and the 3-token chunk-batched span (host: this machine's CPU;
+  GPU: RTX 2080 SUPER, 8 GiB; positions: single-token position 0, and chunk-batched
+  positions 0-2). The oracle comparison is executed and its reading recorded, QUARANTINED
+  per this round's own brief -- composed-acceptance item 3's own tolerance (D-SLM5276)
+  still does not exist. Recorded reading, single token (this artifact, token id 3, first
+  16 of 1024 dims): oracle (float64, post-layer0)
+  `[0.19159927, -0.32733400, -0.00527838, -0.94976745, 0.19475260, -0.00450565,
+  -0.13766608, -0.78359323, 0.81294516, -0.36960737, 0.25995328, 0.00502180,
+  -0.17362168, 0.02245454, -0.00648451, -0.12685488]`; engine (CPU, single-token,
+  same token, `scale_m=1083582878 scale_e=-28`, first 16 codes)
+  `13,-38,13,-38,25,0,13,25,13,-13,-13,-13,13,-38,-102,25`. No dequantization convention
+  is applied and no delta is computed here -- doing so would imply a judgment this round
+  is not authorized to make. Both readings are the record; the comparison is slice 3's.
+
+  Build log: `Claude/Brunel/t2553-ask5-trackb-oracle-sibling-2026-09-02.md` (records
+  worktree).
+
+- **Track B's carried-scale contract for the per-head QK-norm (T-2560).** The
+  `f1a2741`-era build resolved the norm's own output carried scale by construction, not by
+  design, and both resolutions were numeric-correctness defects (review
+  `Claude/Poirot/f1a2741-t2552-ask5-trackb-review.md`, DO-NOT-SHIP): Q kept one shared
+  scale (the last head's), overwriting every other head's own genuinely distinct value
+  (C1, measured 3.854x on the real candidate); K's post-norm codes were stored at the
+  norm's own dynamic scale and read back through the artifact's static, pre-norm landing
+  constant (C2, measured 79.2x/39.6x). The design delta
+  (`Claude/Vitruvius/t2557-trackb-carried-scale-delta-2026-09-02.md`) states the contract
+  this round builds: **Q** carries a genuinely distinct scale per query head into
+  attention's C30 derivation, re-derived per query head rather than memoized per KV head
+  (`ApplyQkNormSite`'s Q parameter widens from one `CarriedScale*` to a `num_heads`-wide
+  array, broadcast from the pre-norm `q_proj` scale for a layer without `q_norm`,
+  overwritten per head when present). **K** requantizes its post-norm codes a SECOND time,
+  through the identical `LandingRescale` primitive K's own raw pre-norm landing already
+  uses, onto a NEW static per-(layer, KV head) landing scale calibrated on post-norm data
+  (`LayerWeights` gains `k_norm_landing_r_t`/`e_t`); `softmax_khead` is recomputed from
+  that new scale when `k_norm` is present, closing C2 structurally (writer and reader now
+  agree on the same scale). **The GPU** gives every query head its own 16-byte scratch
+  slot (`ScratchLayout` index 3 widens from one slot to `num_attention_heads * 16` bytes),
+  closing C3 (the race `num_attention_heads` concurrent thread groups had on one shared
+  slot) by construction — no two groups ever write the same address.
+
+  **Three items the paired rung routed here, closed in the same round:** (1) **S7** — every
+  gain tensor the forward reads unconditionally (`q_norm.gain`/`k_norm.gain` against
+  `head_dim`, and the pre-existing `attn_norm.gain`/`mlp_norm.gain` gap the review's own S7
+  finding named) is now length-checked at `MarshalLayer`, rejecting a short tensor by name
+  before `WidenGainToInt32` ever reads it out of bounds. (2) **S8** — five items T-2553
+  re-pinned against the pre-fix tree (the golden logit, the ARMD sweep key, the structural
+  0.6 bound, the retired §31.4.4 row 5 property, and the retired ±2^52 coarse-bound rung),
+  three of which are RE-MEASURED this round against the corrected composition: the golden
+  logit and the ARMD key hold UNCHANGED (golden logit −2350; ARMD key
+  `layer1.k_head0`); the 0.6 bound's reading is also re-executed and also UNCHANGED (layer
+  0/1 structural ratios 0.128775/0.554224, matching the pre-fix reading to six decimal
+  digits) — **but "unchanged" here does not mean "healthy": see the T-2564 fix round
+  below, where the same reading is shown to be absorbing a residual composition defect,
+  not ordinary quantization noise, and the bound is corrected.** The two retirements are
+  NOT re-measured this round — T-2564, below, re-measures both. The composed-acceptance
+  tolerance (D-SLM5912)
+  stays held pending its own derivation (D-SLM6123) — this round does not derive it. (3) The
+  pinned Qwen3-Embedding-0.6B candidate is recalibrated on the corrected forward and
+  reconverted (verified, `sslm_verify` invoked): **633,588,308 bytes**, new SHA-256
+  **`09c439f69d40e058d574a30f45f8b104772117e8ad7e453ed895ed9635100b39`**, superseding the
+  T-2553-era `7fd5d398...` this branch's own prior entry recorded.
+
+  **Every cell in the delta's own §7, red-then-green, its construction quoted.** Cell 1
+  (width>1 acceptance, must-reject = identical with/without QK-norm): PASS on the real
+  28-layer candidate at width=3 — DIFFERS, unlike C4's own width==1 finding. Cell 2
+  (collapsed-Q must-reject, `forward_dynamic`'s own mutant): diverges from
+  the correct per-head build, max |logit diff| 2343 at this fixture. Cell 3 (pre-norm
+  softmax_khead must-reject): diverges from the float-grounded oracle, max |logit diff|
+  3557. Cell 4 (GPU determinism, repeated dispatch, N=100, width>1, real candidate): 0/100
+  divergences against the first GPU run and against the CPU chunk-batched reference — the
+  must-reject mutant (a second `qk_norm_site.hlsl` reverting Q's write to the pre-fix
+  shared slot) was built and executed in a follow-up round this same session (a scratch
+  copy of the whole worktree with the shader reverted there, the only route available
+  since `RunLayerLoopGpuSubmit`'s own dispatch table has no injection point for a second
+  variant without a further production-code change): **186 divergences** across the same
+  100 repeated dispatches, confirming the per-head addressing fix's own closure of the
+  race by an executed regression-catching proof, not by construction alone. Cell 5
+  (asymmetric/Option-G rejections): untouched, re-asserted. Cell 6 (S5's materiality
+  check, repaired to compare matching-width captures, and its own must-reject via the
+  gain-bypassed construction): both executed, PASS. Cell 7 (S6, strengthened to a
+  per-caller source-inspection assertion, with both single-caller-deletion must-reject
+  mutants executed): PASS. Cell 8
+  (the fourth `composition_constants` key's own rejection gate): must-accept is this
+  round's own recalibrated artifact loading clean; must-reject is the PRE-EXISTING
+  `f1a2741`-era artifact (`out/fixtures/good.sslm`), rejected by name
+  (`missing kv_landing_reciprocals entry "layer0.k_normed_head0"`) — a real artifact
+  calibrated before this delta landed, not a contrived input. Cell 9 (gain-tensor length
+  validation): both `q_norm.gain` and `attn_norm.gain`, one element short, rejected by name
+  with the exact expected/actual element counts. Cell 10 (the carried-scale composition at
+  `group=1`): the fixed build passes both Cell 2's and Cell 3's own must-reject
+  constructions, re-run at this geometry.
+
+  **CPU and GPU agree bit-for-bit on all 28 layers of the real candidate at the acceptance
+  width** — the single-token determinism crown (width=1) PASSes, and Cell 4 drives the GPU
+  as 100 sequential single-token submits (the GPU has no chunk-batched dispatch function)
+  compared against a CPU chunk-batched reference, both on this machine's RTX 2080 SUPER.
+
+  Suites, on the fixed tree: `superslm_tests.exe` → **34228 checks, 0 failures**; `ctest`
+  (build/, Release) → **13/13 passed**; `pytest tools/ tests/reference/ -m "not upstream"`
+  → **1999 passed, 13 deselected, 0 failed**; the structural-check suite → **423 passed**.
+
+  Build log: `Claude/Brunel/t2560-trackb-carried-scale-rebuild-2026-09-02.md` (records
+  worktree).
+
+  **T-2564 fix round (confirmation review FIX-THEN-SHIP,
+  `Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md`).** One Critical, four
+  Significants, and record-only findings, closed. **C1** — `softmax.input`'s own static
+  half in the reference pipeline paired the post-norm Q scale with the PRE-norm K scale on
+  every QK-norm-bearing layer (`_derive_scales`, `tools/reference_pipeline/pipeline.py`),
+  C2's exact composition, in the one arm C2's own T-2560 fix did not reach; the 0.6 bound
+  above was widened to absorb it. Fixed by the identical substitution `_derive_scales`
+  already makes for Q: the K half now reads `gain_of(k_norm.gain)` when `k_norm` is
+  present. Re-measured on the corrected tree: layer 0 unchanged at 0.128775, layer 1 drops
+  from 0.554224 to **0.125422** — back under the ORIGINAL 0.25 bound, which is restored
+  (`test_pipeline.py`). This is a reference-pipeline-only fix; it does not touch the
+  compiled engine, the artifact format, or the shipped candidate. **S2** — the GPU's new K
+  re-landing (`qk_norm_site.hlsl`) read a scale word written by thread 0 alone, from every
+  thread of the group, with no memory barrier between the store and the read (masked on
+  this machine's RTX 2080 SUPER, not absent — probe-commissioned: a poison control forced
+  behind a barrier reproduces 100/100 divergences, proving the detection apparatus fires;
+  the reviewer's own construction, poison planted before the funnel with no barrier of its
+  own, reproduces the reviewer's 0/100 reading before AND after this fix, since the race
+  was never observed on this GPU/driver either way). Fixed with one
+  `AllMemoryBarrierWithGroupSync()` before the read. **S3** — the second K landing computed
+  its own clamp signal and discarded it (`ApplyQkNormSite`'s CPU K loop passed no
+  saturation counter; the GPU shader's own `would_clamp` was read by nothing), so
+  `SslmDecodeStepStatus::saturation_count` under-reported (measured: 18 of 200,704 elements
+  clamped on the real candidate, invisible to the counter). Fixed: `ApplyQkNormSite` gains
+  an `out_saturation_count` parameter threaded to both callers' own `kv_saturation_count`;
+  the GPU shader counts `would_clamp` into a new per-group `gQkNormClamps`, flushed to the
+  same `SeqState` saturation slot `kv_proj_site.hlsl` already writes via `InterlockedAdd`
+  (this dispatch issues one thread group PER KV head, unlike `kv_proj_site.hlsl`'s single
+  group, so the flush needs to be atomic across groups, not merely within one). A new cell,
+  `TestT2564_S3_ApplyQkNormSiteSecondKLandingCountsSaturation` (`tests/test_main.cpp`),
+  forces a clamp on both elements of a synthetic K row and asserts the count rises; verified
+  RED (hand-applied and reverted) when the CPU call's own out-parameter is dropped back to
+  `nullptr`. **S4** — no
+  automated cell could fail on a regression of C1 or C2 in the shipped engine (the delta's
+  own §7 Cells 2/3/10 pin the REFERENCE implementations; the cells that reach the compiled
+  engine live in `tests/t2551_qk_norm_harness.cpp`, outside CMake and outside every hosted job). Ruled
+  (D-SLM6199): two new cells, `TestT2564_S4_ApplyQkNormSitePerHeadQScaleNotCollapsed` and
+  `TestT2564_S4_ApplyQkNormSiteKLandsOnNewPostNormScaleNotJustNorm`
+  (`tests/test_main.cpp`), call `ApplyQkNormSite` directly against small synthetic
+  fixtures — no artifact load, no `RunLayerLoop` drive — and are part of `superslm_tests`,
+  already a registered CTest target that runs in hosted CI. Verified RED on both mutants
+  (Q's per-head carry collapsed onto the last head; the second K `LandingRescale` loop
+  deleted), hand-applied and reverted this session; green on the tip. The real-candidate
+  acceptance (the 633 MB artifact, width>1, 28 layers, the N=100 GPU drive) stays a
+  **manual gate**, never a per-push hosted leg (D-SLM6161): documented in
+  `tests/manual/README.md`, run at every pin bump and before every release tag. **S5** —
+  the CHANGELOG text above claimed all five S8 constants were re-measured; the two
+  retirements were not, and neither is re-measured here either — both are disposed by
+  reading and by inspection, not by a fresh execution of the retired property itself. The
+  ±2^52 coarse-bound rung is re-confirmed by reading the same construction (the
+  magnitudes-48–59 execution is the prior reviewer's own, not re-run a second time here —
+  the chain-domain edge catches first at 2^55, `oracle_50[0][0] == -2350` holds by that
+  reading). The §31.4.4 row 5 property's own inputs (`_kv_calibration_capture`,
+  `_layer_q_scale`, `_armd_arme_candidate_sweep`) are untouched by both this round's diff
+  and T-2560's — unchanged by inspection, confirmed by a green run of
+  `test_arm_d_saturation_is_reported_and_does_not_gate_selection`, which asserts the
+  property that SURVIVED the retirement, not the retired one itself.
+  **M8** — `k_norm_landing_r_t`/`e_t` were dereferenced with no null guard
+  of their own (gated only by the outer `k_norm_gain != nullptr`, unlike the sibling
+  `iexp_softmax_khead_m`/`_e` three lines above in the same GPU packing loop); the header
+  comment now states the obligation in both directions, and the GPU marshal site at the
+  time used the identical per-element ternary guard its sibling already did. (Both sites'
+  own ternary substitution was itself later found unsafe and replaced with a named
+  refusal that throws instead of substituting zero: T-2566 for this field, T-2568 for its
+  sibling.) **M9** —
+  `k_normed_scale`
+  was derived twice from the same inputs, by `_derive_scales` and by
+  `_derive_composition_constants` independently; the latter now reads the former's own
+  `StaticScales` entry (`scales.scale(f"{prefix}.k_normed_head0.scale")`) instead of
+  re-deriving it. The CHANGELOG
+  misattributions above (Cell 2's mutant, Cell 4's must-reject status, Cell 10's own
+  re-run list, the chunk-batched-drive phrasing) are corrected in place, above.
+
+  Suites, on the fixed tree: `superslm_tests.exe` → **34236 checks, 0 failures** (34228 +
+  8 from the two new S4 cells and the one new S3 cell); `ctest` (build/, Release) →
+  **13/13 passed**;
+  `pytest tools/ tests/reference/ -m "not upstream"` → **1999 passed, 13 deselected, 0
+  failed** (unchanged — C1 and M9 are reference-pipeline-internal); the structural-check suite →
+  **423 passed**, after a scrub: `test_check_gpu_guard_status_parity.py` and
+  `test_geometry_site_census.py` both correctly reddened (10 failures) on line-citation
+  drift `ApplyQkNormSite`'s own new `out_saturation_count` parameter caused in
+  `include/superslm/gpu_layer_loop_guards.def` (all nine citations, +2 lines, uniformly)
+  and one `test_geometry_site_census.py` self-test's own hardcoded GS-12 citation
+  (:1732 → :1734) — the same discipline working as designed T-2560's own build record
+  already exercised, not a defect this round introduced silently. Each re-derived directly
+  against the real, current, mutated file (never by applying a line-count offset) and
+  corrected in place, dated. The real-candidate acceptance harness, rebuilt from the
+  fixed tree and re-run against the UNCHANGED artifact (`out/t2560_qwen3-embedding-0.6b.sslm`,
+  633,588,308 bytes, SHA-256
+  `09c439f69d40e058d574a30f45f8b104772117e8ad7e453ed895ed9635100b39` — no recalibration was
+  needed, since none of this round's fixes changes the artifact format or its composition
+  constants): `CELL 1 ... PASS`, `CELL 4 ... 0/100 divergences ... PASS`,
+  `DETERMINISM CROWN: PASS`, `RESULT: PASS`.
+
+  Build log: `Claude/Brunel/t2564-trackb-fixes-2026-09-02.md` (records worktree).
+
+- **New `SslmForwardStatus` member `GpuLayerWeightsContractViolation`, appended last, no
+  existing value moved (T-2568).** Returned by `RunLayerLoopGpu`'s public entry point when
+  a layer's `LayerWeights` violates a `PackLayerWeightsBytes`-enforced non-null pointer
+  contract (below) -- distinct from `GpuAllocationFailed`, which this file's own
+  transient/permanent taxonomy reserves for device and allocation failures a retry at a
+  smaller size can fix; no retry at any size fixes a null pointer. `SslmForwardStatusName`
+  gained the matching arm.
+
+### Changed
+
+- **`PackLayerWeightsBytes` (`src/gpu/superslm_gpu.cpp`) now refuses two previously
+  silently-substituted null-pointer contracts by throwing, instead of packing a
+  substituted zero (T-2566, T-2568).** `k_norm_landing_r_t`/`e_t` (required non-null
+  whenever the paired `k_norm_gain` is present) and `iexp_softmax_khead_m`/`_e` (required
+  non-null unconditionally, every layer) each now throw `GpuLayerWeightsContractError` --
+  a caller violating either contract is a permanent bug, never a transient/size-dependent
+  one. A caller reaching either boundary now gets `GpuLayerWeightsContractViolation`
+  (above) at both public GPU entry points (`RunLayerLoopGpu` and `sslm_gpu_model_map`),
+  with the violating field's name printed to stderr, rather than a silently zero-landed K
+  code or an unnamed status discarding the message. Unreachable through any artifact
+  `MarshalLayer` (the only in-tree producer of the pointers both refusals guard) can emit
+  today -- both fields are already rejected upstream when absent -- but the refusal is a
+  public-surface contract change on an installed header (`include/superslm/gpu_port.h`),
+  independent of today's reachability.
+### Fixed
+
+- **`tools/convert_tokenizer.py` no longer crashes on the Qwen3-Embedding-0.6B candidate's
+  `tokenizer.json`.** `TokenizerTables.__init__` raised `AttributeError: 'list' object has no
+  attribute 'split'` on this checkpoint's own `model.merges` schema (a 2-element list per entry,
+  where every prior checkpoint this converter has emitted for carried a space-separated string).
+  `_parse_merge_element` now branches on the element's own schema, using a 2-element list/tuple
+  directly and rejecting any other shape by name; every prior checkpoint's own string schema is
+  parsed unchanged. **Additive: `TokenizerTables` now also reads the top-level `post_processor`
+  key and exposes `trailing_special_id`** -- `None` for every checkpoint whose post-processor is
+  absent or a bare `ByteLevel` (every checkpoint this converter previously supported), and the
+  candidate's own appended token id (`151643`) for a `Sequence` whose own `processors` are EXACTLY
+  `[ByteLevel, TemplateProcessing]` in that order, the candidate's own shape; every other shape --
+  including a `Sequence` carrying a third, sibling processor that also inserts tokens -- is an
+  explicit rejection. This reads and exposes the
+  fact only -- the emitted `.sslm` `TOK1` artifact's own format and every prior checkpoint's
+  emitted bytes are unchanged (confirmed byte-identical against the unmodified converter). A
+  second, additive parity check (`--verify-post-processor`) confirms
+  `ref_encode(text) + [trailing_special_id] == hf.encode(text, add_special_tokens=True)` for
+  every checkpoint, run unconditionally rather than skipped for one whose post-processor appends
+  nothing -- vacuity for that population is a property of the comparison's own result (it already
+  reads 0 mismatches), not of the check declining to run. **This new check's own readings are
+  quarantined pending an independent must-accept/must-reject commissioning** (not attempted this
+  round) -- it is not yet a load-bearing pass/fail gate. User-visible: the pinned candidate's
+  `tokenizer.json` now converts to a `.sslm` tokenizer artifact; every other checkpoint's
+  converted output is unchanged.
 
 ## [1.3.1] - 2026-09-02
 

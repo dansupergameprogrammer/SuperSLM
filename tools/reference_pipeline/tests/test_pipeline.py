@@ -695,7 +695,11 @@ def test_static_scales_are_offline_constants_of_the_model():
     assert sorted(first.rescale) == sorted(model.scales.rescale)
 
     # Nonlinear: everything except the named dynamic-arm complement, exactly.
-    kv_head = re.compile(r"^layer\d+\.[kv]_head\d+\.scale$")
+    # (carried-scale delta §4, D-SLM6117/D-SLM6119): k_normed_head{h}.scale joins this
+    # complement -- the identical dynamic-arm-only A-3 pinned surface as k_head/v_head
+    # (composition_ref.py's own independent oracle reads it; the static forward does not),
+    # populated only when a layer carries k_norm (this fixture does, unconditionally, T-2539).
+    kv_head = re.compile(r"^layer\d+\.(?:[kv]_head\d+|k_normed_head\d+)\.scale$")
     artifact = dict(model.scales.nonlinear)
     dynamic_only = {name for name in artifact if kv_head.match(name)}
     assert dynamic_only, (
@@ -1299,6 +1303,20 @@ def test_integer_pipeline_tracks_the_float_reference_per_layer():
     a placeholder wide enough to catch a structurally wrong layer (a transposed head, a
     missing residual) and too wide to certify quantization damage — which is the spike's
     measurement, not this cell's.
+
+    **CORRECTED 2026-09-02 (T-2553), then RESTORED 2026-09-02 (T-2564, C1):** T-2553
+    widened this bound 0.25 -> 0.6 because `softmax.input`'s own static half paired a
+    post-norm Q scale with a pre-norm K scale on every QK-norm-bearing layer (layer 1 at
+    0.554, over the OLD 0.25 bound) — not ordinary quantization noise but the same
+    composition failure C2 named for the engine, in the one arm C2's own fix did not
+    reach (`Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md` C1). `_derive_scales`
+    now reads the post-norm `k_norm.gain` scale for `softmax.input`'s K half, symmetric
+    with `q_scale`'s own reassignment three lines above it. Re-measured against the
+    corrected tree: layer 0 unchanged at 0.129, layer 1 drops to 0.125 — both back under
+    the original 0.25 bound, which is restored below. What 0.25 now bounds is ordinary
+    int8-vs-float64 rounding noise across the fixture's quantized sites, the same class
+    this cell's own docstring above states is its actual job — a transposed head or a
+    dropped residual still produces a far larger divergence than either reading.
     """
     module = require(MODULE)
     forward_layers, forward_layers_float, fixture_model = api(

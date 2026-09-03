@@ -2083,6 +2083,83 @@ def _derive_scales(cfg: ModelConfig, maxima, weight_scales, float_biases):
         add_requant(f"{prefix}.k_proj", attn_norm_scale, k_scale)
         add_requant(f"{prefix}.v_proj", attn_norm_scale, v_scale)
 
+        # (design §3/§6 Track B steps 1/2, T-2553): QK-norm's own rescale, present only
+        # when this layer's weight_scales carries q_norm.gain/k_norm.gain -- a checkpoint
+        # without either tensor never reaches this branch, and `gain_of` would KeyError on
+        # an unconditional lookup.
+        #
+        # Derived and verified by direct execution against this file's own
+        # `_vec_rmsnorm`/`add_rescale`/`quantize_multiplier` composition (not copied
+        # unchecked from `_derive_composition_constants`'s own C++-engine-facing formula,
+        # which computes a CarriedScale mantissa/exponent pair -- a representation with no
+        # practical magnitude floor -- and is not directly transferable to this file's own
+        # (multiplier, shift) `quantize_multiplier` representation without re-deriving the
+        # relationship: a first-drafted `gain_of(...)/127` factor here underflowed to a
+        # (multiplier, shift) pair so small every requantized code rounded to zero,
+        # caught by execution, `StandardsDocument.md` §5.4, not by inspection -- the
+        # composed-forward parity test that exists precisely to catch this class
+        # (`test_the_hoisted_tables_are_the_ones_the_forward_uses`) went from a false
+        # "no change" to correctly detecting RoPE's own effect once this was fixed).
+        # `_vec_rmsnorm`'s own return is Q(NORM_FRAC_BITS) (its own header comment: "a
+        # scale-free Q(NORM_FRAC_BITS) value"), so one wide unit (normalized-value-times-
+        # raw-gain-code) has real float value `gain_of(name) / (1 << NORM_FRAC_BITS)` per
+        # unit of the RAW gain code's own int8 range, and the natural bound of that wide
+        # value is `(1 << NORM_FRAC_BITS) * 127` (a normalized code near its own
+        # Q(NORM_FRAC_BITS) unit, times a gain code near its own int8 bound) -- landing an
+        # output code near int8's own ±127 bound at that natural wide-value bound requires
+        # `output_scale = gain_of(name)` exactly (one q_norm/k_norm OUTPUT code represents
+        # one unit of the GAIN tensor's own real-valued scale), which reduces the
+        # requantization factor to the gain-scale-independent constant
+        # `1 / (1 << NORM_FRAC_BITS)`.
+        q_norm_present = f"{prefix}.q_norm.gain" in weight_scales
+        k_norm_present = f"{prefix}.k_norm.gain" in weight_scales
+        if q_norm_present:
+            add_rescale(f"{prefix}.q_norm.requant", 1.0 / (1 << NORM_FRAC_BITS))
+            # (design §3, T-2551's own C++ ApplyQkNormSite: "writing the new carried
+            # scale back into *q_scale... every head's own funnel call targets the
+            # identical artifact-derived site constant... overwriting q_scale
+            # identically on every head is exactly the composition"). This file's own
+            # downstream consumers of `q_scale` (the k_head/v_head landing scales below
+            # read k_scale, not q_scale, but `softmax.input`'s own product reads BOTH)
+            # must read the POST-norm scale once QK-norm runs, matching the real engine
+            # exactly -- q_scale is overwritten here, after q_proj's own add_requant
+            # (above) has already consumed the PRE-norm value it needed.
+            q_scale = gain_of(f"{prefix}.q_norm.gain")
+        # (carried-scale delta §4, D-SLM6117/D-SLM6119): K's post-norm landing target, once
+        # k_norm is present -- computed here rather than left unset (superseding the prior
+        # "K's own k_scale local is deliberately left unchanged" text this block carried
+        # before the delta, which described the pre-fix contract this delta closes, C2).
+        # `k_normed_scale`, computed here (this function, `_derive_scales`) via
+        # `_output_scale`'s own floor convention (the identical one `_attn_norm_scale`
+        # already establishes), is stored below as this artifact's own fourth
+        # landing-constant pair, `StaticScales.scale(f"{prefix}.k_normed_head0.scale")` --
+        # a calibrated, A-3-pinned surface `composition_ref.py`'s own independent oracle
+        # reads, symmetric with `k_head{h}.scale` below. T-2564's own M9 fix (this file's
+        # docstring on `_derive_composition_constants`, below) made that function READ this
+        # SAME stored value rather than re-deriving it a second time from the raw
+        # calibration peaks -- it takes no `maxima` parameter of its own any more; the one
+        # derivation of `k_normed_scale` is this one. `k_scale` itself stays untouched (K's
+        # own RAW, pre-norm landing target, unaffected by this delta -- still read by
+        # `_derive_composition_constants`'s own separate k_proj.requant site and by a
+        # non-QK-norm layer's own `softmax_khead`).
+        k_normed_scale = None
+        softmax_k_scale = k_scale
+        if k_norm_present:
+            add_rescale(f"{prefix}.k_norm.requant", 1.0 / (1 << NORM_FRAC_BITS))
+            k_norm_gain_scale = gain_of(f"{prefix}.k_norm.gain") / (1 << NORM_FRAC_BITS)
+            k_normed_scale = _output_scale(maxima, f"{prefix}.k_normed", k_norm_gain_scale)
+            # (T-2564, C1 -- Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md): by the
+            # identical argument the Q branch above already makes, this file's own K codes
+            # after `k_norm.requant` are landed at `gain_of(k_norm.gain)` exactly, not at
+            # the pre-norm `k_scale` -- so `softmax.input`'s own product below must read
+            # the POST-norm value once k_norm fires, symmetric with q_scale's own
+            # reassignment three lines above. `k_scale` itself stays untouched (K's own
+            # RAW, pre-norm landing target -- still read by `_derive_composition_
+            # constants`'s own separate k_proj.requant site, by a non-QK-norm layer's own
+            # `softmax_khead`, and by this same block's own `softmax.input` product when
+            # k_norm is absent, below).
+            softmax_k_scale = gain_of(f"{prefix}.k_norm.gain")
+
         # C27's A-3-pinned per-head KV landing surface: static per-head scales as
         # nonlinear entries, constants of the artifact (D-SLM5's discipline on the
         # interior). Honestly stated: this calibration derives one scale per K/V
@@ -2091,8 +2168,11 @@ def _derive_scales(cfg: ModelConfig, maxima, weight_scales, float_biases):
         for head in range(cfg.num_key_value_heads):
             nonlinear.append((f"{prefix}.k_head{head}.scale", k_scale))
             nonlinear.append((f"{prefix}.v_head{head}.scale", v_scale))
+            if k_norm_present:
+                nonlinear.append((f"{prefix}.k_normed_head{head}.scale", k_normed_scale))
 
-        nonlinear.append((f"{prefix}.softmax.input", q_scale * k_scale / math.sqrt(cfg.head_dim)))
+        nonlinear.append(
+            (f"{prefix}.softmax.input", q_scale * softmax_k_scale / math.sqrt(cfg.head_dim)))
 
         context_in = v_scale / (1 << PROB_FRAC_BITS)
         context_scale = _output_scale(maxima, f"{prefix}.attn_ctx", context_in)
@@ -2194,6 +2274,15 @@ def _derive_composition_constants(cfg: ModelConfig, weight_scales, scales: Stati
     scale here, which makes C27/D-SLM57's per-head attn_ctx pre-fold the all-identity fold
     on this artifact (every head already at `max_head S_v`) — sound, but degenerate; a
     real per-head calibration would exercise the fold's non-identity branch.
+
+    (carried-scale delta §4, D-SLM6117/D-SLM6119; M9, T-2564,
+    Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md): the fourth per-KV-head landing
+    pair this function also computes (`k_normed_head{h}`, below) reads its own scale from
+    `scales` — `StaticScales.scale(f"{prefix}.k_normed_head0.scale")`, the value
+    `_derive_scales` already stores there — rather than deriving it a second time from the
+    raw calibration peaks. `_derive_scales` DOES turn `k_normed` into a `StaticScales`
+    site (its `nonlinear` entry for that same key); this function therefore takes no
+    `maxima` parameter of its own.
     """
     def gain_of(name):
         return weight_scales[name][0]
@@ -2243,6 +2332,34 @@ def _derive_composition_constants(cfg: ModelConfig, weight_scales, scales: Stati
         m_t_v, e_t_v = canonical_scale(Fraction(v_scale) / Fraction(v_s_ref))
         r_t_k = intmath.dynamic_scale_reciprocal(m_t_k)
         r_t_v = intmath.dynamic_scale_reciprocal(m_t_v)
+
+        # (carried-scale delta §4, D-SLM6117/D-SLM6119/D-SLM6120): K's post-norm landing --
+        # present only when this layer's weight_scales carries k_norm.gain (the identical
+        # presence gate the q_norm/k_norm composition-constant loop above already uses).
+        # UNLIKE the raw K path above, no k_s_ref-style weight-reference division is needed:
+        # RmsNormSite's own funnel output (the runtime `(m_a, e_a)` `ApplyQkNormSite`'s second
+        # `LandingRescale` call passes in) is already a complete, self-describing carried scale
+        # for the post-norm int8 code -- unlike the raw path's wide GEMM accumulator, whose own
+        # implicit scale is missing the weight-fold's k_s_ref factor until the reciprocal target
+        # supplies it. So the target here is simply canonical(k_normed_scale), the identical
+        # "no ratio" shape `kv_landing[...]` (the LANDED target, above) already uses for the raw
+        # path -- just carried into the reciprocal slot instead, because this site has no
+        # separate weight-reference to divide out.
+        k_norm_present = f"{prefix}.k_norm.gain" in weight_scales
+        if k_norm_present:
+            # (T-2564, M9 -- Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md): read
+            # `_derive_scales`'s own already-computed `k_normed_scale` (the `StaticScales`
+            # entry it stores per KV head, one shared value per layer) rather than
+            # re-deriving it a second time from `maxima` here -- the exact duplication this
+            # whole ask's own governing finding named ("an oracle with two forwards is a
+            # defect"), one level down: one FORMULA in two places rather than two
+            # independent forwards, but the same fix (one computation, read twice) applies.
+            # Any KV head's own entry carries the identical value (§4's own "one scale per
+            # K/V TENSOR" discipline), so head 0 is read unconditionally.
+            k_normed_scale = scales.scale(f"{prefix}.k_normed_head0.scale")
+            m_t_kn, e_t_kn = canonical_scale(Fraction(k_normed_scale))
+            r_t_kn = intmath.dynamic_scale_reciprocal(m_t_kn)
+
         for head in range(cfg.num_key_value_heads):
             kv_landing[f"{prefix}.k_head{head}"] = canonical_scale(Fraction(k_scale))
             kv_landing[f"{prefix}.v_head{head}"] = canonical_scale(Fraction(v_scale))
@@ -2251,8 +2368,20 @@ def _derive_composition_constants(cfg: ModelConfig, weight_scales, scales: Stati
             # softmax.input's static half (C27/C30): S_k_head / sqrt(head_dim), one
             # offline canonical constant per kv head; the per-QUERY S_q(i) composes in
             # at runtime, incoming-first (D-SLM57).
+            # (carried-scale delta §4, D-SLM6120): switches its input from the raw, pre-norm
+            # k_scale to the new post-norm k_normed_scale when k_norm is present -- this single
+            # substitution is what closes C2 (the review this delta answers): the engine now
+            # writes K's stored codes at the new landing scale, and softmax_khead now describes
+            # that same scale, so writer and reader agree. Unaffected when k_norm is absent --
+            # every existing non-QK-norm artifact reads the identical raw k_scale as before.
             constants[f"{prefix}.softmax_khead{head}"] = canonical_scale(
-                Fraction(k_scale) / Fraction(math.sqrt(cfg.head_dim)))
+                Fraction(k_normed_scale if k_norm_present else k_scale) /
+                Fraction(math.sqrt(cfg.head_dim)))
+            if k_norm_present:
+                # (§7 Cell 8, D-SLM6146): the fourth per-KV-head landing constant, into the SAME
+                # kv_landing_reciprocals manifest family the raw K/V landing already occupies --
+                # no new WGT1/KVC1 section.
+                kv_reciprocals[f"{prefix}.k_normed_head{head}"] = (m_t_kn, e_t_kn, r_t_kn)
 
         # attn_ctx (C27/D-SLM57): after the per-head pre-fold to max_head S_v, the row's
         # single wide scale is 2**-PROB_FRAC_BITS * max_head_S_v; C23's chain applies from
@@ -2370,12 +2499,14 @@ def _kv_calibration_capture(cfg: ModelConfig, float_weight, records, tokenize):
     axis (steps, heads, channels) into one running scalar per site, which is exactly the
     granularity §31.4.1 exists to refute. This function instead calls the same pure
     primitives `_float_layer` itself calls (`_float_rmsnorm`, `_float_project`,
-    `_float_rope`) to capture per-head detail, then calls `_float_layer` itself
-    (`maxima=None`, its own early-return) to advance the hidden state exactly as the real
-    float reference would -- so later layers see the identical trajectory, at the cost of
-    computing each layer's norm/projection/RoPE twice (once here, once inside
-    `_float_layer`). Acceptable for a calibration tool that runs offline, never at
-    inference (D-SLM5's discipline on the interior).
+    `_float_rope`, and -- T-2553 -- `_apply_qk_norm`, the ONE shared QK-norm
+    implementation both this function and `_float_layer` call, so there is one forward in
+    this module, never two independently-drifting ones) to capture per-head detail, then
+    calls `_float_layer` itself (`maxima=None`, its own early-return) to advance the
+    hidden state exactly as the real float reference would -- so later layers see the
+    identical trajectory, at the cost of computing each layer's norm/projection/QK-norm/
+    RoPE twice (once here, once inside `_float_layer`). Acceptable for a calibration tool
+    that runs offline, never at inference (D-SLM5's discipline on the interior).
 
     `tokenize` here is the RECORD-taking bridge (`_bridge_record_tokenizer`'s own
     return), matching `_calibrate`'s own convention.
@@ -2383,11 +2514,17 @@ def _kv_calibration_capture(cfg: ModelConfig, float_weight, records, tokenize):
     Returns `(capture, maxima)`. `capture` is `{layer_index: {"k_pre": {kv_head:
     [array, ...]}, "k_post": {kv_head: [...]}, "q_post": {attention_head: [...]}}}` --
     one `(steps, head_dim)` array per calibration sequence that survived truncation to a
-    non-empty length. `maxima` is the SAME scalar-per-site running-peak dict `_observe`
-    builds for the legacy path (`_calibrate`'s own return), populated here for
-    `f"{prefix}.attn_norm.out"` and `f"{prefix}.q"` (observed twice, pre- and post-RoPE,
-    at the identical key -- matching `_float_layer`'s own two `_observe` calls at
-    `pipeline.py:2635,2643,2649`) -- the raw material Arm D/E's own Q-scale
+    non-empty length. **T-2553: `k_pre` is POST-QK-norm, PRE-RoPE** (when the checkpoint
+    carries `q_norm`/`k_norm` -- unchanged, still the raw projection output, for a
+    checkpoint that does not) -- `k_pre` names "the real production K store's own
+    pre-RoPE state", and QK-norm runs before RoPE in that store now, not after. `maxima`
+    is the SAME scalar-per-site running-peak dict `_observe` builds for the legacy path
+    (`_calibrate`'s own return), populated here for `f"{prefix}.attn_norm.out"` and
+    `f"{prefix}.q"` (observed twice, at the SAME TWO pipeline points `_float_layer`'s own
+    two `_observe` calls sit at -- pre-norm/post-projection, then post-RoPE -- an equality
+    `test_arm_d_q_scale_matches_shipped_production_q_path` asserts directly, so this is a
+    constraint on WHERE the maxima observation happens, deliberately independent of where
+    `k_pre`'s own capture happens) -- the raw material Arm D/E's own Q-scale
     (`_layer_q_scale`) needs to compute the real `projection_scale`/`_output_scale`
     chain, D-SLM2555's pinned production Q path, over this arm's own capture rather than
     a simplified stand-in (T-1936 §5.3/D-SLM2624).
@@ -2415,7 +2552,17 @@ def _kv_calibration_capture(cfg: ModelConfig, float_weight, records, tokenize):
                 -1, cfg.num_attention_heads, cfg.head_dim)
             k = _float_project(fetch, f"{prefix}.k_proj", normed).reshape(
                 -1, cfg.num_key_value_heads, cfg.head_dim)
+            # (T-2553): `maxima[f"{prefix}.q"]`'s own FIRST observation stays pre-norm,
+            # post-projection -- the identical pipeline point `_float_layer`'s own first
+            # `_observe(maxima, f"{prefix}.q", q)` call sits at, which this function's own
+            # docstring claims parity with and `test_arm_d_q_scale_matches_shipped_
+            # production_q_path` asserts as an equality. QK-norm (the ONE shared
+            # implementation, `_apply_qk_norm` -- see its own docstring) then runs strictly
+            # between projection and RoPE (design §3), so k_pre (below) is post-norm,
+            # matching what "pre-RoPE" means in the real, now-QK-norm-aware production K
+            # store -- a capture-dict decision independent of the maxima observation point.
             _observe(maxima, f"{prefix}.q", q)
+            q, k = _apply_qk_norm(q, k, tensors, prefix, cfg)
             for head in range(cfg.num_key_value_heads):
                 k_pre[head].append(np.array(k[:, head, :], copy=True))
             q_rope = _float_rope(q, cfg.rope_theta)
@@ -2813,6 +2960,33 @@ def _float_project(float_weight, name, values):
     return out
 
 
+def _apply_qk_norm(q, k, tensors, prefix, cfg):
+    """(design §3/§6 Track B step 6, T-2553): per-head QK-norm, strictly between
+    projection and RoPE -- the ONE shared implementation every independent forward walk in this
+    module calls, so there is one forward in the oracle and not two (T-2553's own governing
+    finding: an oracle with two forward implementations of which only one applies a real
+    architectural operation is the shape StandardsDocument.md §7's "a repair that pins one
+    artifact to a sibling inherits whatever the sibling is wrong about" names -- here inverted,
+    the SIBLING was never audited for the defect the primary implementation had already fixed).
+
+    `tensors[f"{prefix}.q_norm.gain"]`/`.k_norm.gain` is the checkpoint's own un-permuted,
+    unquantized float weight (`_layer_tensors`'s own lookup, at the ENGINE-side key
+    `_upstream_names` maps the checkpoint's raw `...self_attn.q_norm.weight` tensor to -- T-2543
+    C-1). `_float_rmsnorm`'s own mean-of-squares reduces over the last axis, which is head_dim
+    once q/k are shaped (steps, heads, head_dim) by the caller -- exactly the per-head RMSNorm
+    Qwen3RMSNorm(self.head_dim) applies, one module instance per head. Gated on tensor presence;
+    absent (returns q, k unchanged) for every non-QK-norm checkpoint, matching every other
+    optional-mechanism gate in this design.
+    """
+    q_norm_w = tensors.get(f"{prefix}.q_norm.gain")
+    k_norm_w = tensors.get(f"{prefix}.k_norm.gain")
+    if q_norm_w is not None:
+        q = _float_rmsnorm(q, cfg.rms_norm_eps) * q_norm_w
+    if k_norm_w is not None:
+        k = _float_rmsnorm(k, cfg.rms_norm_eps) * k_norm_w
+    return q, k
+
+
 def _float_layer(cfg, tensors, hidden, maxima, prefix):
     """One decoder layer in float64, for one sequence, over already-fetched tensors."""
     group = attention_group_size(cfg)
@@ -2831,6 +3005,26 @@ def _float_layer(cfg, tensors, hidden, maxima, prefix):
     _observe(maxima, f"{prefix}.q", q)
     _observe(maxima, f"{prefix}.k", k)
     _observe(maxima, f"{prefix}.v", v)
+
+    # (design §3/§6 Track B step 6, D-SLM5675/D-SLM5676/D-SLM5677; T-2553): QK-norm, strictly
+    # between this head's projection output and RoPE (below) -- matching
+    # modeling_qwen3.py:175-179's own order exactly (q_norm(q_proj(...)) then
+    # apply_rotary_pos_emb). `_apply_qk_norm` (above) is the ONE shared implementation --
+    # `_kv_calibration_capture` calls the identical function, so this oracle has one forward, not
+    # two independently-drifting ones.
+    q, k = _apply_qk_norm(q, k, tensors, prefix, cfg)
+    # (carried-scale delta §4, D-SLM6117/D-SLM6119): a THIRD, dedicated observation, under a NEW
+    # key -- post-norm, pre-RoPE, matching exactly what the engine stores (RoPE is a
+    # magnitude-preserving rotation applied in place on the already-landed store, per §3's
+    # existing resolution, so it needs no scale of its own). The existing pre-norm key
+    # (`f"{prefix}.k"`, above) is untouched -- this is additive, not a reassignment, so the raw K
+    # landing scale (`k_head{h}.scale`, `softmax_khead` for a non-QK-norm layer) stays bit-for-bit
+    # unaffected. `_observe` is a running max (`maxima[name] = max(maxima.get(name, 0), peak)`);
+    # a separate key is what stops the pre-norm and post-norm peaks silently sharing one slot,
+    # where whichever happens to be larger on a given checkpoint determines what the existing key
+    # describes (the review's own found mechanism gap, `Claude/Poirot/f1a2741-t2552-ask5-trackb-
+    # review.md` C2).
+    _observe(maxima, f"{prefix}.k_normed", k)
 
     q = _float_rope(q, cfg.rope_theta)
     k = _float_rope(k, cfg.rope_theta)
@@ -2880,6 +3074,28 @@ def _layer_tensors(float_weight, prefix):
         bias = _float_bias(float_weight, name)
         if bias is not None:
             tensors[f"{name}.bias"] = bias
+    # (design §6 Track B step 6): q_norm/k_norm -- OPTIONAL, present only for a QK-norm-bearing
+    # checkpoint. `.gain` (not `.weight`) is the correct lookup key: `_upstream_names` (above,
+    # T-2543 C-1) maps the checkpoint's own `{ns}layers.{L}.self_attn.q_norm.weight` tensor to
+    # the ENGINE-side name `layer{L}.q_norm.gain` -- the same `.gain`-suffixed convention
+    # `attn_norm.gain`/`mlp_norm.gain` already use two lines above, and `float_weight` (this
+    # function's own parameter, `_CheckpointFloatSource.__call__`) looks up by that mapped
+    # name, not the checkpoint's own raw key. Fetching `f"{prefix}.q_norm.weight"` here raises
+    # KeyError unconditionally (confirmed by execution against a real QK-norm-bearing fixture:
+    # every layer's own q_norm/k_norm silently absent from `tensors`, `_float_layer`'s own new
+    # call site never firing) -- `.gain` is the fix, not a second, independent presence gate.
+    # Absence of the mapped name is a fact about the checkpoint (every non-QK-norm checkpoint
+    # has neither), matching `_float_bias`'s own try/except KeyError convention above, never a
+    # config toggle. This still returns the checkpoint's OWN raw float weight, unpermuted and
+    # unquantized -- `_CheckpointFloatSource` reads the original safetensors tensor at the
+    # mapped name; the ENGINE's own int8 WGT1 tensor of the identical name (Track C step 6,
+    # permuted before quantization) is a completely different object this function never reads.
+    for leaf in ("q_norm.gain", "k_norm.gain"):
+        name = f"{prefix}.{leaf}"
+        try:
+            tensors[name] = float_weight(name)
+        except KeyError:
+            pass
     return tensors
 
 
@@ -3217,6 +3433,31 @@ def _vec_forward(model, tokens, reader, layer_outputs=None, cache=None):
         v = _clamp_int8(_requant(
             _vec_project(model, f"{prefix}.v_proj", normed),
             reader, f"{prefix}.v_proj")).reshape(steps, cfg.num_key_value_heads, cfg.head_dim)
+
+        # (design §3/§6 Track B step 1/2, T-2553): QK-norm, strictly between projection and
+        # RoPE -- the integer emulation's own site, present only when this layer's weights
+        # carry q_norm.gain/k_norm.gain (`_vec_forward` is this reference pipeline's THIRD
+        # independent layer walk, alongside `_float_layer` and `_kv_calibration_capture`;
+        # T-2553's own governing finding applies here too -- one composition, not three).
+        # `_vec_rmsnorm` reduces over its own last axis, so Q/K are flattened to
+        # (steps*heads, head_dim) for the call and reshaped back -- the SAME primitive
+        # attn_norm/mlp_norm/final_norm already use, at head_dim width instead of
+        # hidden_size, matching the C++ engine's own RmsNormSite call (per-head, not
+        # per-hidden-row).
+        q_norm_gain = model.weights.get(f"{prefix}.q_norm.gain")
+        if q_norm_gain is not None:
+            q_flat = q.reshape(-1, cfg.head_dim)
+            q_flat = _clamp_int8(_rescale(
+                _vec_rmsnorm(q_flat, cfg.head_dim) * q_norm_gain.astype(np.int64),
+                reader, f"{prefix}.q_norm.requant"))
+            q = q_flat.reshape(steps, cfg.num_attention_heads, cfg.head_dim)
+        k_norm_gain = model.weights.get(f"{prefix}.k_norm.gain")
+        if k_norm_gain is not None:
+            k_flat = k.reshape(-1, cfg.head_dim)
+            k_flat = _clamp_int8(_rescale(
+                _vec_rmsnorm(k_flat, cfg.head_dim) * k_norm_gain.astype(np.int64),
+                reader, f"{prefix}.k_norm.requant"))
+            k = k_flat.reshape(steps, cfg.num_key_value_heads, cfg.head_dim)
 
         q = _clamp_int8(_vec_rope(q, cos_table, sin_table, steps, start))
         k = _clamp_int8(_vec_rope(k, cos_table, sin_table, steps, start))
@@ -3581,6 +3822,33 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None):
             q_scale[t] = scale
 
         head_dim = cfg.head_dim
+
+        # (carried-scale delta §3, D-SLM6116 -- supersedes this block's own pre-delta
+        # "q_scale[t] is overwritten by the LAST head's own call... every head's own write
+        # converges on the identical value" text, the exact C1 defect this delta closes):
+        # QK-norm, strictly between projection and RoPE (rotate, below) -- this function's OWN
+        # chain-record composition, so composition_constants[f"{prefix}.q_norm"] (Track C's own
+        # derivation, the SAME entry the real C++ engine reads) is consumed directly rather than
+        # re-derived through this file's own StaticScales convention. `q_scale_by_head[h][t]` is
+        # broadcast from the single pre-norm q_scale[t] (the legitimate shared value for a layer
+        # without q_norm, matching the real engine's own broadcast); a layer WITH q_norm
+        # overwrites each head's own slot with its GENUINELY DISTINCT post-norm scale.
+        q_scale_by_head = [list(q_scale) for _ in range(cfg.num_attention_heads)]
+        q_norm_gain_tensor = model.weights.get(f"{prefix}.q_norm.gain")
+        if q_norm_gain_tensor is not None:
+            q_norm_gain_codes = [int(v) for v in q_norm_gain_tensor.tolist()]
+            for t in range(steps):
+                for h in range(cfg.num_attention_heads):
+                    seg = q_codes_rows[t][h * head_dim:(h + 1) * head_dim]
+                    total = sum(v * v for v in seg)
+                    root = max(intmath.i_sqrt((total << (2 * NORM_FRAC_BITS)) // head_dim), 1)
+                    wide = [((seg[i] << (2 * NORM_FRAC_BITS)) // root) * q_norm_gain_codes[i]
+                            for i in range(head_dim)]
+                    codes, scale = _chain_record(f"{prefix}.q_norm", t, wide, [], trace)
+                    q_codes_rows[t][h * head_dim:(h + 1) * head_dim] = [
+                        max(-127, min(127, c)) for c in codes]
+                    q_scale_by_head[h][t] = scale
+
         q_heads = []
         for h in range(cfg.num_attention_heads):
             head_rows = [q_codes_rows[t][h * head_dim:(h + 1) * head_dim] for t in range(steps)]
@@ -3611,13 +3879,45 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None):
                 seg = k_folded[head * head_dim:(head + 1) * head_dim]
                 landed = [max(-127, min(127, intmath.residual_reconcile(
                     int(acc_j), m_a, r_t, e_a, e_t))) for acc_j in seg]
-                k_heads_codes[head].append(landed)
+                # This "k_proj.requant" trace record's own contract (below) is
+                # unchanged: x_int (seg) -> codes (landed) via residual_reconcile alone,
+                # so `test_every_forward_dynamic_trace_record_recomputes_through_intmath`
+                # can keep recomputing it from that one primitive. QK-norm (T-2553,
+                # below) is a SEPARATE, later transformation of the landed row, applied
+                # to its own local variable rather than overwriting `landed` before this
+                # record is built.
                 if trace is not None:
                     trace.append({
                         "site": f"{prefix}.k_proj.requant", "token_index": t, "head": head,
                         "x_int": tuple(seg), "m_in": m_a, "e_in": e_a, "codes": tuple(landed),
                         "m_out": m_target, "e_out": e_target,
                     })
+                # (carried-scale delta §4, D-SLM6117 -- supersedes this block's own pre-delta
+                # "K's own output scale is discarded" text, C2): QK-norm on K -- applied to the
+                # JUST-LANDED row (matching ApplyQkNormSite's own C++ construction, forward_
+                # sites.h: "for each KV head... RmsNormSite against the just-landed K row"), ONCE
+                # per (token, kv_head), never once per query head. Own dedicated "k_norm" trace
+                # entry (via _chain_record, below), separate from the "k_proj.requant" entry
+                # above -- one entry per real composition step, matching every other site in this
+                # function. The post-norm codes then requantize a SECOND time (below), onto the
+                # new static k_normed_head{h} target -- this closes C2: softmax_khead (below)
+                # reads that same new scale, so writer and reader agree.
+                k_norm_gain_tensor = model.weights.get(f"{prefix}.k_norm.gain")
+                if k_norm_gain_tensor is not None:
+                    k_norm_gain_codes = [int(v) for v in k_norm_gain_tensor.tolist()]
+                    total = sum(v * v for v in landed)
+                    root = max(intmath.i_sqrt((total << (2 * NORM_FRAC_BITS)) // head_dim), 1)
+                    wide = [((landed[i] << (2 * NORM_FRAC_BITS)) // root) * k_norm_gain_codes[i]
+                            for i in range(head_dim)]
+                    normed_codes, k_norm_scale = _chain_record(
+                        f"{prefix}.k_norm", t, wide, [], trace)
+                    normed_codes = [max(-127, min(127, c)) for c in normed_codes]
+                    m_kn_a, e_kn_a = k_norm_scale
+                    _m_kn_t, e_kn_t, r_kn_t = model.kv_landing_reciprocals[
+                        f"{prefix}.k_normed_head{head}"]
+                    landed = [max(-127, min(127, intmath.residual_reconcile(
+                        int(c), m_kn_a, r_kn_t, e_kn_a, e_kn_t))) for c in normed_codes]
+                k_heads_codes[head].append(landed)
                 m_target_v, e_target_v = model.kv_landing_scales[f"{prefix}.v_head{head}"]
                 m_t_v, e_t_v, r_t_v = model.kv_landing_reciprocals[f"{prefix}.v_head{head}"]
                 seg_v = v_folded[head * head_dim:(head + 1) * head_dim]
@@ -3657,7 +3957,11 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None):
             transposed_keys = [[keys[j][d] for j in range(len(keys))] for d in range(head_dim)]
             scores = _scalar_matmul(q_heads[head], transposed_keys)
             for t in range(steps):
-                sm_m, sm_e = intmath.carried_scale_product([q_scale[t], softmax_static])
+                # (carried-scale delta §3, D-SLM6116): this query head's own genuinely distinct
+                # carried scale -- never the single, last-head-wins q_scale[t] this line read
+                # before the delta.
+                sm_m, sm_e = intmath.carried_scale_product(
+                    [q_scale_by_head[head][t], softmax_static])
                 q_ln2, q_b, q_c = intmath.iexp_scale_constants(
                     sm_m, sm_e, _IEXP_LN2_Q, _IEXP_QFMT, _IEXP_B_Q, _IEXP_QFMT,
                     _IEXP_CA_Q, _IEXP_QFMT)
@@ -3917,6 +4221,37 @@ def _scalar_forward(model, tokens, reader):
 
         def split(values, head):
             return [row[head * head_dim:(head + 1) * head_dim] for row in values]
+
+        def apply_qk_norm_scalar(values, head_count, site):
+            """(design §3/§6 Track B steps 1/2, T-2553): the scalar reference's own
+            QK-norm site -- strictly between projection and RoPE (rotate, below), per
+            head, matching `_apply_qk_norm`'s own composition (pipeline.py) and this
+            function's own `_scalar_rmsnorm`/gain-multiply/`_scalar_rescale` idiom every
+            other norm site in this function already uses. Absent (returns `values`
+            unchanged) when this layer carries no matching gain tensor. `site` is the
+            LOGICAL site name (`"{prefix}.q_norm"`/`"{prefix}.k_norm"`) -- the gain
+            tensor lives at `weights[f"{site}.gain"]`, the derived rescale site at
+            `f"{site}.requant"` (`_derive_scales`'s own `add_rescale` call), matching
+            every other norm site's own two-suffix convention in this function.
+            """
+            gain_tensor = model.weights.get(f"{site}.gain")
+            if gain_tensor is None:
+                return values
+            gain = [int(v) for v in gain_tensor.tolist()]
+            out = [list(row) for row in values]
+            for h in range(head_count):
+                head_slice = split(values, h)
+                normalized = _scalar_rmsnorm(head_slice, head_dim)
+                scaled = [[normalized[t][i] * gain[i] for i in range(head_dim)]
+                          for t in range(steps)]
+                normed_head = _scalar_clamp(
+                    _scalar_rescale(scaled, reader, f"{site}.requant"))
+                for t in range(steps):
+                    out[t][h * head_dim:(h + 1) * head_dim] = normed_head[t]
+            return out
+
+        q = apply_qk_norm_scalar(q, cfg.num_attention_heads, f"{prefix}.q_norm")
+        k = apply_qk_norm_scalar(k, cfg.num_key_value_heads, f"{prefix}.k_norm")
 
         q_heads = [_scalar_clamp(rotate(split(q, h))) for h in range(cfg.num_attention_heads)]
         k_heads = [_scalar_clamp(rotate(split(k, h))) for h in range(cfg.num_key_value_heads)]

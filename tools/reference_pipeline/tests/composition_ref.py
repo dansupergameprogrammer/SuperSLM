@@ -625,12 +625,86 @@ def forward_dynamic_logits_oracle(model, tokens) -> list:
             out.append(land_kv(folded, in_scale[t][0], in_scale[t][1], targets))
         return out
 
+    def qk_norm_site_per_head(rows, name, num_heads):
+        """(carried-scale delta §3/§4, D-SLM6116/D-SLM6117 -- supersedes this function's own
+        pre-delta "out_scale is the LAST head's own carried scale... every head's own write
+        converges on the identical value" text, the exact C1 defect the delta closes): QK-norm's
+        own per-head site -- the SAME C23 scale-killing composition `norm_site` (above) uses,
+        applied per head_dim-wide head slice rather than the full hidden_size row (one shared
+        gain vector reused across every head, matching Qwen3RMSNorm(self.head_dim)). Strictly
+        between projection (`project_dynamic`/`project_kv`, above) and RoPE (`_rope_rotate`,
+        below).
+
+        Returns `(out_rows, out_scale)` -- `out_scale[h][t]` is head `h`'s own GENUINELY
+        DISTINCT carried scale at position `t` (every head's own funnel targets the identical
+        gain-derived site constant, `norm_const` below, but the row's own dynamic `d_prime`
+        factor is per-row, `checked_chain_funnel.cpp`'s own `MaxAbsReduceWide` of THAT call's
+        own data -- heads are different rows, so their output scales genuinely differ, per-
+        head, per-position). Never collapsed to one shared value.
+        """
+        gain = [int(v) for v in w[name + ".gain"]]
+        c_norm = norm_const(name + ".gain")
+        out_rows = [list(row) for row in rows]
+        out_scale = [[None] * steps for _ in range(num_heads)]
+        for h in range(num_heads):
+            head_rows = [row[h * hd:(h + 1) * hd] for row in rows]
+            normed_rows = _rmsnorm_rows(head_rows, hd)
+            for t in range(steps):
+                codes, dfac = _chain([normed_rows[t][i] * gain[i] for i in range(hd)])
+                out_rows[t][h * hd:(h + 1) * hd] = codes
+                out_scale[h][t] = carried_scale_product_oracle([c_norm, dfac])
+        return out_rows, out_scale
+
+    def land_k_normed(rows, per_head_scale, targets):
+        """(carried-scale delta §4, D-SLM6117, §7 Cell 3): K's SECOND landing -- each head's
+        own post-norm (code, scale) pair (from `qk_norm_site_per_head`, above) requantized
+        onto the new static `k_normed` targets (`kv_targets`, above, over `kind="k_normed"`).
+        Unlike `land_kv` (above), the incoming scale differs PER HEAD, not once per row, since
+        Q/K's per-head norm output genuinely differs by head (this delta's own §3 finding)."""
+        out = []
+        for t in range(steps):
+            row = list(rows[t])
+            for h in range(n_kv):
+                m_a, e_a = per_head_scale[h][t]
+                _m_t, e_t, r_t = targets[h]
+                for d in range(hd):
+                    j = h * hd + d
+                    row[j] = _clamp8(residual_reconcile_oracle(int(row[j]), m_a, r_t, e_a, e_t))
+            out.append(row)
+        return out
+
     for layer in range(cfg.num_hidden_layers):
         prefix = f"layer{layer}"
 
         normed, normed_scale = norm_site(hidden_codes, f"{prefix}.attn_norm")
         q_codes, q_scale = project_dynamic(prefix, "q_proj", normed, normed_scale)
+        # (carried-scale delta §3, D-SLM6116): broadcast q_proj's own single, pre-norm scale
+        # into a per-head table BEFORE the q_norm gate -- the legitimate single shared value
+        # for a layer carrying no q_norm tensor (matching the real engine's own
+        # q_proj_site.hlsl broadcast / RunLayerLoop's identical std::vector<CarriedScale>
+        # broadcast, `forward_sites.cpp`). A layer WITH q_norm overwrites these slots with
+        # genuinely distinct per-head values next.
+        q_scale_per_head = [[q_scale[t] for t in range(steps)] for _ in range(n_heads)]
+        k_norm_present_here = f"{prefix}.k_norm.gain" in w
+        if f"{prefix}.q_norm.gain" in w:
+            # (carried-scale delta §3, D-SLM6116 -- supersedes this block's own pre-delta "q_scale
+            # is OVERWRITTEN... converges on the identical value" text, C1): every head's own
+            # GENUINELY DISTINCT post-norm scale propagates downstream (the softmax.input
+            # composition, below), one slot per head -- never collapsed to the last head's value.
+            q_codes, q_scale_per_head = qk_norm_site_per_head(q_codes, f"{prefix}.q_norm", n_heads)
         k_codes = project_kv(prefix, "k_proj", "k", normed, normed_scale)
+        if k_norm_present_here:
+            # (carried-scale delta §4, D-SLM6117 -- supersedes this block's own pre-delta "K's own
+            # norm output scale is DISCARDED" text, C2): K's post-norm codes requantize a SECOND
+            # time (`land_k_normed`, above), onto the new static `k_normed` per-head targets --
+            # `kv_targets(..., s_ref=1)`: no weight-reference division, unlike the raw K path's own
+            # `kv_targets(..., s_ref)` above, because the incoming (code, scale) pair here is
+            # already complete and self-describing (the norm funnel's own output), not a wide,
+            # weight-fold-relative accumulator.
+            k_codes, k_norm_scale_per_head = qk_norm_site_per_head(
+                k_codes, f"{prefix}.k_norm", n_kv)
+            k_normed_targets = kv_targets(prefix, "k_normed", 1)
+            k_codes = land_k_normed(k_codes, k_norm_scale_per_head, k_normed_targets)
         v_codes = project_kv(prefix, "v_proj", "v", normed, normed_scale)
 
         def split(rows, head):
@@ -644,14 +718,19 @@ def forward_dynamic_logits_oracle(model, tokens) -> list:
 
         # softmax.input is per QUERY (C27/C30): S_q(i) x [S_k_head / sqrt(hd)] offline,
         # incoming carried q scale first (D-SLM57), then the C30 derivation.
+        # (carried-scale delta §4, D-SLM6120): the static half switches from the raw k_head
+        # scale to the new k_normed_head scale when k_norm is present -- the engine now writes
+        # K's stored codes at the new landing scale, so softmax_khead must describe that same
+        # scale (closes C2). q_scale_per_head[h] carries this head's own genuinely distinct
+        # per-position Q scale (closes C1) -- never the single pre-delta q_scale[i].
         sm_consts = []
         for h in range(n_heads):
             kvh = h // group
-            s_kh = kv_raw_scale(prefix, "k", kvh)
+            s_kh = kv_raw_scale(prefix, "k_normed" if k_norm_present_here else "k", kvh)
             c_sm = canonical_scale_oracle(Fraction(s_kh) / Fraction(_math.sqrt(hd)))
             sm_consts.append([
                 _iexp_constants_from_scale(
-                    *carried_scale_product_oracle([q_scale[i], c_sm]))
+                    *carried_scale_product_oracle([q_scale_per_head[h][i], c_sm]))
                 for i in range(steps)])
 
         context = [[0] * (n_heads * hd) for _ in range(steps)]

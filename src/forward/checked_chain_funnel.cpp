@@ -84,6 +84,7 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 	if (s == SslmForwardStatus::GpuAllocationFailed) return "GpuAllocationFailed";
 	if (s == SslmForwardStatus::GpuDeviceRemoved) return "GpuDeviceRemoved";
 	if (s == SslmForwardStatus::GpuGemmGroupArithmeticInvalid) return "GpuGemmGroupArithmeticInvalid";
+	if (s == SslmForwardStatus::GpuLayerWeightsContractViolation) return "GpuLayerWeightsContractViolation";
 	if (s == SslmForwardStatus::InvalidDecodeParams) return "InvalidDecodeParams";
 	// T-2237/F3 (SuperSLM 1.2.1): D-SLM3977's first landing -- a new enumerator owes
 	// an arm HERE as well as its MapForwardStatus arm; this function silently

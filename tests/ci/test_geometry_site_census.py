@@ -1469,7 +1469,12 @@ def test_part3_reorder_gs10_plus_revert_is_caught_at_the_relocated_line():
     with _mutated(_SUPERSLM_GPU_CPP, _t):
         failures = census.run_census(_REPO_ROOT)
     assert failures, "a genuine revert of the relocated occurrence must FAIL, not be silently absorbed"
-    assert any("REGRESSED SITE" in f and "GS-10" in f and ":714" in f for f in failures), (
+    # (carried-scale delta, T-2560): ComputeScratchLayout gained a new scale_block_n helper
+    # (q_scale's own per-head widening, §5), shifting this occurrence from :714 to :723 in the
+    # mutated (chunk A/B swapped) copy this test builds -- re-derived by running the census
+    # against the real, current file (through the same mutation this test applies), not by
+    # applying a line-count offset to the unmutated file's own line number.
+    assert any("REGRESSED SITE" in f and "GS-10" in f and ":723" in f for f in failures), (
         "the finding must cite the RELOCATED occurrence's own (now-first) line, not the "
         "untouched occurrence -- a wrong-line citation is exactly what the prior ordinal "
         "keying produced"
@@ -1515,7 +1520,9 @@ def test_part3_reorder_gs11_plus_revert_is_caught_at_the_relocated_line():
     with _mutated(_SUPERSLM_GPU_CPP, _t):
         failures = census.run_census(_REPO_ROOT)
     assert failures, "a genuine revert of the relocated GS-11 occurrence must FAIL"
-    assert any("REGRESSED SITE" in f and "GS-11" in f and ":741" in f for f in failures)
+    # (carried-scale delta, T-2560): shifted from :741 to :750 in the mutated copy, the same
+    # scale_block_n insertion named at GS-10's own identical correction above.
+    assert any("REGRESSED SITE" in f and "GS-11" in f and ":750" in f for f in failures)
 
 
 _GS12_OCC0 = (
@@ -1558,7 +1565,21 @@ def test_part3_reorder_gs12_two_differently_offset_occurrences_plus_revert_is_ca
     with _mutated(_FORWARD_SITES_CPP_T2481, _t):
         failures = census.run_census(_REPO_ROOT)
     assert failures, "a genuine revert of the relocated GS-12 occurrence must FAIL"
-    assert any("REGRESSED SITE" in f and "GS-12" in f and ":1681" in f for f in failures)
+    # T-2551 (design §6 Track B steps 1/2): ApplyQkNormSite landed between LandTokenKVRow and
+    # RunLayerLoopImpl, shifting this occurrence from :1681 to :1721 in the mutated (OCC0/OCC1
+    # swapped) copy this test builds -- re-derived by running the census against the real,
+    # current file (through the same mutation this test applies), not by applying a line-count
+    # offset to the unmutated file's own line number.
+    # (carried-scale delta, T-2560): ApplyQkNormSite's own header comment (forward_sites.h,
+    # not this file) grew, but this file's own Q-per-head/K-relanding restructuring inside
+    # RunLayerLoopImpl (above ApplyWeightScaleFold's own call site, above this occurrence)
+    # added lines too -- shifting this occurrence from :1721 to :1732 in the same mutated
+    # copy. Re-derived the same way, against the real, current, mutated file.
+    # CORRECTED 2026-09-02 (T-2564, S3): ApplyQkNormSite's own signature gained an
+    # `out_saturation_count` parameter, above this occurrence -- shifting it from :1732 to
+    # :1734 in the same mutated copy. Re-derived by running the census against the real,
+    # current, mutated file, not by applying +2 as an offset to the prior citation.
+    assert any("REGRESSED SITE" in f and "GS-12" in f and ":1734" in f for f in failures)
 
 
 _GS12_OCC2 = (
