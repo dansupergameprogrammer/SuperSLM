@@ -211,17 +211,28 @@ void main(uint3 gtid : SV_GroupThreadID)
     }
     GroupMemoryBarrierWithGroupSync();
 
+    // (T-2574): this flush used to be a plain Load-then-Store, safe by construction ONLY
+    // under the reasoning that this shader's own Dispatch(1,1,1) issues exactly one thread
+    // group per call, so no OTHER group of THIS dispatch can race it. That reasoning does not
+    // cover the flush's OWN correctness requirement -- it must see the true, live count this
+    // decode step's own SeqState buffer carries, which on every call after the first (T-2574's
+    // own root cause) is a value CARRIED FORWARD from a prior call, not freshly zeroed. A plain
+    // Load is not guaranteed to observe that carried value with the same certainty an atomic
+    // instruction is -- InterlockedAdd, the identical primitive every other saturation-touching
+    // site in this tree already uses for this exact flush (qk_norm_site.hlsl,
+    // rope_guard_site.hlsl, rope_commit_site.hlsl), removes the dependency on that guarantee
+    // entirely: it composes with whatever is truly resident in device memory at the moment it
+    // executes, never with a value this thread merely believes it read.
     if (t == 0 && gTotalClamps != 0)
     {
         uint sat_lo_off = SeqSatLoOffGpu(hidden_size);
         uint sat_hi_off = SeqSatHiOffGpu(hidden_size);
-        uint old_lo = SeqState.Load(sat_lo_off);
-        uint new_lo = old_lo + gTotalClamps;
-        SeqState.Store(sat_lo_off, new_lo);
-        if (new_lo < old_lo)
+        uint old_lo;
+        SeqState.InterlockedAdd(sat_lo_off, gTotalClamps, old_lo);
+        if (old_lo + gTotalClamps < old_lo)
         {
-            uint old_hi = SeqState.Load(sat_hi_off);
-            SeqState.Store(sat_hi_off, old_hi + 1u);
+            uint old_hi;
+            SeqState.InterlockedAdd(sat_hi_off, 1u, old_hi);
         }
     }
 }
