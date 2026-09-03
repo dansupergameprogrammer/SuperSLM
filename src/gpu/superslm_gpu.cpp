@@ -2196,7 +2196,20 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	const void* sin_src = sin_t != nullptr ? sin_t->data : nullptr;
 	const uint64_t cos_need = cos_t != nullptr ? static_cast<uint64_t>(cos_t->elem_count) * 8u : 8u;
 	const uint64_t sin_need = sin_t != nullptr ? static_cast<uint64_t>(sin_t->elem_count) * 8u : 8u;
-	const bool rope_fast_hit = !external_rope && g_resident_rope.valid &&
+	// CORRECTED 2026-09-03 (T-2576, D-SLM627x): `!fresh_sequence`, the same term `lw_fast_hit`
+	// and `kv_fast_hit` above already carry for the same reason. This cache was added later
+	// (T-2113 B4) and never got it, so it was the one of the three still keyed on nothing but
+	// an address the allocator is free to hand back. Measured: a fresh `RopeSaturationFixture`
+	// whose 8-byte cos/sin tensors landed where a just-freed, unrelated fixture's had been was
+	// served that fixture's STALE resident tables -- the shader read cos=2^30, sin=0 (the
+	// identity) instead of this fixture's own 45-degree pair, so K's rotation was the identity
+	// and its landed row kept its pre-rotation bytes. That is the whole of T-2575's own open
+	// degenerate-geometry finding (D-SLM6269), and it is reachable at production geometry too
+	// (harness CELL 5, executed both ways). Gating on `fresh_sequence` costs nothing in real
+	// decode -- the first call of any sequence is already a miss by construction, and every
+	// later call is unaffected -- and it cannot make the cache less sound than before, exactly
+	// as `lw_fast_hit`'s own T-2101 correction argues one screen above.
+	const bool rope_fast_hit = !external_rope && !fresh_sequence && g_resident_rope.valid &&
 	                           g_resident_rope.cos_src == cos_src &&
 	                           g_resident_rope.sin_src == sin_src &&
 	                           g_resident_rope.cos_bytes == cos_need &&

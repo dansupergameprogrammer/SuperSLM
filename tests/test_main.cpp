@@ -27439,43 +27439,115 @@ static void TestT2572_M2_MarshalLayerAcceptsArmCsNonQkNormOutput() {
 	}
 }
 
-// (D-SLM6263, superseded by T-2575/D-SLM6269): the synthetic, degenerate-geometry
-// (hidden_size=2, one head, one KV head, head_dim=2, one RoPE pair) GPU-equals-CPU cell over
-// `RopeSaturationFixture` above. T-2572 authored it, measured it intermittently reporting a
-// one-count GPU-under-CPU divergence "on reruns of the identical binary" across three fixture
-// constructions, and removed it as a suite liability. T-2575 restored it, ran it at N=100 GPU
-// dispatches per process across six processes with a guaranteed-current shader set (the
-// freshness guard below), and measured what it actually is.
+// (D-SLM6263, T-2575/D-SLM6269, closed by T-2576/D-SLM6271): the synthetic,
+// degenerate-geometry (hidden_size=2, one head, one KV head, head_dim=2, one RoPE pair)
+// GPU-equals-CPU cell over `RopeSaturationFixture` above -- RESTORED, at N=100 per process.
 //
-// It is NOT a counter defect, and it is not the T-2575 root cause (a stale shader binary,
-// below) either. It is a FORWARD-OUTPUT divergence that the counter merely reports:
+// Its history is why it carries this comment. T-2572 authored it, measured it intermittently
+// one count under the CPU "on reruns of the identical binary", and removed it as a suite
+// liability. T-2575 restored it long enough to measure it properly: the CPU is stable at 3 in
+// every process while the GPU diverged in 0, 1, 41, 41, 100 and 100 of 100 dispatches, with
+// byte divergences tracking count divergences exactly -- a forward-output defect the counter
+// was merely reporting. T-2576 read the device state back and found the store was never lost:
+// `rope_commit_site.hlsl` wrote what it computed, and what it computed was
+// `RopeApplyPairGpu(127, -127, cos, sin) == (127, -127)` -- the identity, because the shader
+// had read `cos = 2^30, sin = 0` instead of this fixture's own 45-degree pair.
+// `g_resident_rope` (superslm_gpu.cpp) had served a previous, unrelated fixture's tables: its
+// key was the source tensor's host ADDRESS plus byte count, and a fresh fixture whose 8-byte
+// tensors land where a just-freed one's did is a hit. Whether they collide depends on the heap
+// layout, which is why it was per-process and looked like a race.
 //
-//   CPU kv_saturation_count over 100 in-process runs: min=3 max=3 (stable, every process)
-//   GPU kv_saturation_count over 100 in-process runs: 0, 1, 41, 41, 100 and 100 runs diverging
-//     from CPU, in six consecutive processes off one unchanged binary
-//   byte_divergences == count divergences EXACTLY, in every process
-//   final hidden_codes: identical CPU/GPU in every run (codes_div == 0, always)
-//   K/V workspace on a diverging run: cpu=[127,0,127,129] gpu=[127,129,127,129]
-//
-// The workspace is [K row, V row] for layer 0, kv_head 0, position 0. V matches. K's FIRST byte
-// matches. K's SECOND byte is 0 on CPU and 129 (int8 -127) on the GPU -- and -127 is exactly
-// that row's own PRE-rotation value. K lands as (127, -127); the 45-degree rotation this fixture
-// pins takes it to (127*c + 127*c) -> clamped 127 and (127*c - 127*c) -> exactly 0. So on a
-// diverging run the GPU's K row is the UNROTATED landed row: `rope_commit_site.hlsl`'s own
-// write-back did not take effect for that row, intermittently, with the count difference
-// following from the clamp that therefore never happened.
-//
-// Scope, stated as the cell it was measured in (`StandardsDocument.md` §5.4): this is the
-// degenerate geometry only. The real 28-layer candidate shows 0/100 divergences on codes, scale
-// AND `kv_saturation_count` across 100 repeated chunk-sequential dispatches, plus a passing
-// determinism crown on the single-token path, in the same session
-// (`Claude/Laplace/t2575-gpu-sat-count-2026-09-03.md`). Whether the same mechanism is latent at
-// production geometry and merely unobserved is NOT established either way.
-//
-// The cell is not restored: a suite member that is red in five processes out of six is a
-// liability, and the finding is a distinct open defect owed its own ticket rather than a
-// property this fixture should assert. `RopeSaturationFixture` stays -- the two CPU-side cells
-// above use it, and the next round's own investigation starts from it.
+// Fixed by giving that cache the `!fresh_sequence` term its two sibling caches in the same
+// function already carry for the same reason. This cell is the regression pin.
+static void TestT2576_GpuKvSaturationAndKvRowMatchCpuOnRopeSaturationFixtureN100() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+	constexpr size_t kWorkspaceSize = 1 * 1 * 1 * 2 * 2;
+	constexpr int kRepeats = 100;
+
+	// The CPU arm is repeated too: the original finding was a count that came and went, and one
+	// CPU reading cannot say which side moved. (Measured: the CPU never moves.)
+	uint64_t cpu_count = 0, cpu_min = UINT64_MAX, cpu_max = 0;
+	uint8_t cpu_ws[kWorkspaceSize] = {};
+	for (int i = 0; i < kRepeats; ++i) {
+		RopeSaturationFixture fixture;
+		int8_t hidden_codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		uint8_t ws[kWorkspaceSize] = {};
+		const auto st = superslm::RunLayerLoop(
+		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1, /*hidden_size=*/2,
+		    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2, /*context_cap=*/1,
+		    fixture.view.rope_tables, ws, sizeof(ws));
+		if (st != SslmForwardStatus::Ok) {
+			CHECK_MSG(false, "RunLayerLoop(T-2576, CPU arm) status == %s, want Ok",
+			          SslmForwardStatusName(st));
+			return;
+		}
+		cpu_count = seq.kv_saturation_count;
+		if (cpu_count < cpu_min) cpu_min = cpu_count;
+		if (cpu_count > cpu_max) cpu_max = cpu_count;
+		if (i == 0) std::memcpy(cpu_ws, ws, kWorkspaceSize);
+	}
+	CHECK_MSG(cpu_min == cpu_max,
+	          "CPU kv_saturation_count varies within one process: min=%llu max=%llu -- the CPU "
+	          "counter is single-threaded integer arithmetic over a fixed fixture and cannot "
+	          "legitimately vary",
+	          (unsigned long long)cpu_min, (unsigned long long)cpu_max);
+	CHECK_MSG(cpu_count > 0,
+	          "seq.kv_saturation_count after RunLayerLoop (CPU) == %llu, want > 0 -- this "
+	          "fixture's own RoPE clamp must register on the CPU engine before the GPU "
+	          "comparison below means anything",
+	          (unsigned long long)cpu_count);
+
+	int count_divergences = 0, byte_divergences = 0;
+	uint64_t first_gpu = 0, worst = 0;
+	uint8_t worst_ws[kWorkspaceSize] = {};
+	for (int i = 0; i < kRepeats; ++i) {
+		RopeSaturationFixture fixture;
+		int8_t hidden_codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		uint8_t ws[kWorkspaceSize] = {};
+		const auto st = superslm_gpu::RunLayerLoopGpu(
+		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1, /*hidden_size=*/2,
+		    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2, /*context_cap=*/1,
+		    fixture.view.rope_tables, ws, sizeof(ws));
+		if (st != SslmForwardStatus::Ok) {
+			++count_divergences;
+			continue;
+		}
+		if (i == 0) first_gpu = seq.kv_saturation_count;
+		if (seq.kv_saturation_count != cpu_count) {
+			++count_divergences;
+			worst = seq.kv_saturation_count;
+		}
+		if (std::memcmp(ws, cpu_ws, kWorkspaceSize) != 0) {
+			++byte_divergences;
+			std::memcpy(worst_ws, ws, kWorkspaceSize);
+		}
+	}
+	CHECK_MSG(byte_divergences == 0,
+	          "the landed K/V row diverged from CPU in %d of %d GPU dispatches -- "
+	          "cpu=[%u,%u,%u,%u] gpu=[%u,%u,%u,%u]. RED if g_resident_rope's own "
+	          "`!fresh_sequence` term is deleted, which serves a previous fixture's RoPE tables "
+	          "and leaves K's landed row unrotated",
+	          byte_divergences, kRepeats, cpu_ws[0], cpu_ws[1], cpu_ws[2], cpu_ws[3],
+	          worst_ws[0], worst_ws[1], worst_ws[2], worst_ws[3]);
+	CHECK_MSG(count_divergences == 0,
+	          "seq.kv_saturation_count diverged from CPU == %llu in %d of %d GPU dispatches "
+	          "(first GPU reading %llu, a diverging reading %llu) -- RED if either rope shader's "
+	          "own InterlockedAdd(gRope*Clamps, 1u) is deleted, and RED if a stale RoPE table is "
+	          "served to a fresh sequence",
+	          (unsigned long long)cpu_count, count_divergences, kRepeats,
+	          (unsigned long long)first_gpu, (unsigned long long)worst);
+}
 
 // ==============================================================================
 // T-2575 (D-SLM6268): the shader-binary freshness guard
@@ -28784,6 +28856,7 @@ int main(int argc, char** argv) {
 	TestT2575_ShaderStalenessGuard_UnverifiableCasesAreNotRefusals();
 	TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath();
 	TestT2575_ShaderBinariesBesideThisExecutableAreCurrent();
+	TestT2576_GpuKvSaturationAndKvRowMatchCpuOnRopeSaturationFixtureN100();
 #endif  // _WIN32
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);

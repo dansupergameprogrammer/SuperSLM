@@ -664,6 +664,160 @@ int main(int argc, char** argv) {
 		if (divergences != 0) qk_norm_ran = false;
 	}
 
+	// --- (T-2576): CELL 5 -- is the RoPE-table residency cache's stale hit reachable at
+	//     PRODUCTION geometry? Settled by construction, not by inference.
+	//
+	// `g_resident_rope` (superslm_gpu.cpp) is a process-global keyed on the source tensor's own
+	// host ADDRESS and byte count. Nothing in that key is geometry-dependent, so "the degenerate
+	// fixture broke and the real candidate did not" says only that the degenerate fixture's heap
+	// addresses collided and the real candidate's did not. This cell removes the allocator from
+	// the question: one full sequence populates the cache, then the cos/sin tables are rewritten
+	// IN PLACE -- same address, same byte count, different content -- and a second sequence runs
+	// on the mutated model. A caller reusing its own buffer for a second model is the production
+	// shape of exactly that.
+	//
+	// Two properties this cell needs, both learned by executing it wrong first:
+	//   - The rewrite must be a 45-degree rotation, NOT the identity. The real table's own row 0
+	//     IS the identity, so an identity rewrite changes nothing and the cell passes vacuously
+	//     (measured: the mutated CPU arm reproduced the pristine scale 1083582878/-28 exactly).
+	//   - The forward must run at WIDTH > 1. At width 1 the softmax is over a single position and
+	//     returns 1.0 whatever the score is, so Q/K rotations cannot reach the output at all --
+	//     the same blindness C4 found in every pre-delta reading. Measured: at width 1 the 45-degree
+	//     rewrite ALSO reproduced the pristine output, and the cell was still vacuous.
+	// The must-reject below is what makes both of those visible instead of green.
+	{
+		const SslmTensorView* cos_t = model_view.rope_tables.Tensor("cos");
+		const SslmTensorView* sin_t = model_view.rope_tables.Tensor("sin");
+		if (cos_t == nullptr || sin_t == nullptr) {
+			std::printf("CELL 5 (RoPE-table residency, production geometry): SKIPPED -- no cos/sin\n");
+		} else {
+			const size_t chunk_tokens = 3;
+			std::vector<int32_t> ids;
+			for (size_t i = 0; i < chunk_tokens; ++i) {
+				ids.push_back(static_cast<int32_t>((token_id + static_cast<int32_t>(i)) %
+				                                   model_view.config.vocab_size));
+			}
+			// One CPU chunk-batched drive over whichever tables are live when it is called.
+			auto run_cpu_chunk = [&](std::vector<int8_t>& out_codes, CarriedScale& out_scale) {
+				std::vector<int8_t> codes(chunk_tokens * hidden_size);
+				std::vector<CarriedScale> scales(chunk_tokens);
+				for (size_t t = 0; t < chunk_tokens; ++t) {
+					CarriedScale sc{};
+					EmbedEntry(ids[t], model_view.config.vocab_size, embed_weights, hidden_size,
+					           embed_site_constant, codes.data() + t * hidden_size, &sc);
+					scales[t] = sc;
+				}
+				std::vector<uint8_t> ws(kv_bytes, 0);
+				uint64_t sat = 0;
+				const SslmForwardStatus st = RunLayerLoopChunkBatched(
+				    codes.data(), scales.data(), chunk_tokens, layers.data(), num_hidden_layers,
+				    hidden_size, head_dim, num_kv_heads, intermediate_size, context_cap,
+				    /*context_length_start=*/0, model_view.rope_tables, ws.data(), ws.size(),
+				    model_view.option_g_fused_k_landing, &sat, /*site_prefix=*/{},
+				    /*trace_hook_state=*/nullptr, q_width);
+				out_codes.assign(codes.begin() + (chunk_tokens - 1) * hidden_size, codes.end());
+				out_scale = scales[chunk_tokens - 1];
+				return st;
+			};
+			// The same three tokens driven sequentially on the GPU, one fresh sequence.
+			auto run_gpu_chunk = [&](std::vector<int8_t>& out_codes, CarriedScale& out_scale) {
+				SequenceLayerState seq;
+				std::vector<int8_t> hidden(hidden_size);
+				seq.hidden_codes = hidden.data();
+				seq.layer_index = 0;
+				std::vector<uint8_t> ws(kv_bytes, 0);
+				SslmForwardStatus st = SslmForwardStatus::Ok;
+				for (size_t t = 0; t < chunk_tokens; ++t) {
+					CarriedScale sc{};
+					st = EmbedEntry(ids[t], model_view.config.vocab_size, embed_weights, hidden_size,
+					                embed_site_constant, hidden.data(), &sc);
+					if (st != SslmForwardStatus::Ok) return st;
+					seq.hidden_scale = sc;
+					seq.layer_index = 0;
+					superslm_gpu::GpuLayerLoopInFlight* infl = nullptr;
+					st = superslm_gpu::RunLayerLoopGpuSubmit(
+					    seq, layers.data(), num_hidden_layers, num_hidden_layers, hidden_size, head_dim,
+					    num_kv_heads, intermediate_size, context_cap, model_view.rope_tables, ws.data(),
+					    ws.size(), nullptr, nullptr, &infl, nullptr, nullptr, nullptr, false, 0, 0,
+					    nullptr, q_width, nullptr, 0);
+					if (infl) {
+						int32_t ready = 0;
+						st = superslm_gpu::RunLayerLoopGpuFinish(infl, seq, ws.data(), 1, &ready, nullptr);
+					}
+					if (st != SslmForwardStatus::Ok) return st;
+				}
+				out_codes.assign(hidden.begin(), hidden.end());
+				out_scale = seq.hidden_scale;
+				return st;
+			};
+
+			const size_t cos_bytes = static_cast<size_t>(cos_t->elem_count) * 8u;
+			const size_t sin_bytes = static_cast<size_t>(sin_t->elem_count) * 8u;
+			uint8_t* cos_mut = const_cast<uint8_t*>(cos_t->data);
+			uint8_t* sin_mut = const_cast<uint8_t*>(sin_t->data);
+			std::vector<uint8_t> cos_orig(cos_mut, cos_mut + cos_bytes);
+			std::vector<uint8_t> sin_orig(sin_mut, sin_mut + sin_bytes);
+
+			std::vector<int8_t> pristine_cpu;
+			CarriedScale pristine_cpu_scale{};
+			const SslmForwardStatus pristine_st = run_cpu_chunk(pristine_cpu, pristine_cpu_scale);
+			// Populate the cache with the pristine tables.
+			std::vector<int8_t> warm_codes;
+			CarriedScale warm_scale{};
+			const SslmForwardStatus warm_st = run_gpu_chunk(warm_codes, warm_scale);
+
+			{
+				const int64_t cos45_q30 = INT64_C(759250125);
+				for (size_t b = 0; b < cos_bytes; b += 8) std::memcpy(cos_mut + b, &cos45_q30, 8);
+				for (size_t b = 0; b < sin_bytes; b += 8) std::memcpy(sin_mut + b, &cos45_q30, 8);
+			}
+
+			std::vector<int8_t> mut_cpu, mut_gpu;
+			CarriedScale mut_cpu_scale{}, mut_gpu_scale{};
+			const SslmForwardStatus mut_cpu_st = run_cpu_chunk(mut_cpu, mut_cpu_scale);
+			const SslmForwardStatus mut_gpu_st = run_gpu_chunk(mut_gpu, mut_gpu_scale);
+
+			std::memcpy(cos_mut, cos_orig.data(), cos_bytes);
+			std::memcpy(sin_mut, sin_orig.data(), sin_bytes);
+
+			if (pristine_st != SslmForwardStatus::Ok || warm_st != SslmForwardStatus::Ok ||
+			    mut_cpu_st != SslmForwardStatus::Ok || mut_gpu_st != SslmForwardStatus::Ok) {
+				std::printf("CELL 5 (RoPE-table residency, production geometry): INCONCLUSIVE -- "
+				            "a status was not Ok (pristine=%s warm=%s mut_cpu=%s mut_gpu=%s); this "
+				            "cell says nothing about the cache unless every arm returns Ok\n",
+				            SslmForwardStatusName(pristine_st), SslmForwardStatusName(warm_st),
+				            SslmForwardStatusName(mut_cpu_st), SslmForwardStatusName(mut_gpu_st));
+				qk_norm_ran = false;
+			} else {
+				const bool mutation_is_live =
+				    mut_cpu != pristine_cpu || mut_cpu_scale.m != pristine_cpu_scale.m ||
+				    mut_cpu_scale.e != pristine_cpu_scale.e;
+				const bool gpu_followed = mut_gpu == mut_cpu && mut_gpu_scale.m == mut_cpu_scale.m &&
+				                          mut_gpu_scale.e == mut_cpu_scale.e;
+				if (!mutation_is_live) {
+					std::printf("CELL 5 (RoPE-table residency, production geometry): INCONCLUSIVE -- "
+					            "the rewritten tables produce the CPU's own pristine output, so this "
+					            "cell cannot tell a stale GPU hit from a live one\n");
+					qk_norm_ran = false;
+				} else {
+					std::printf(
+					    "CELL 5 (RoPE-table residency, production geometry: head_dim=%zu group=%u "
+					    "context_cap=%lld, cos/sin %zu elems / %zu B each, width=%zu; tables rewritten "
+					    "in place to a 45-degree rotation between two fresh sequences; must-reject live: "
+					    "the rewrite moves the CPU arm off its pristine output): %s\n",
+					    head_dim, num_heads / (num_kv_heads ? num_kv_heads : 1u), (long long)context_cap,
+					    static_cast<size_t>(cos_t->elem_count), cos_bytes, chunk_tokens,
+					    gpu_followed
+					        ? "PASS -- the GPU read the mutated tables, so no stale hit"
+					        : "FAIL -- the GPU disagrees with the CPU on the SAME mutated tables, so it "
+					          "rotated with the cached pre-mutation tables (stale hit REACHABLE at "
+					          "production geometry)");
+					if (!gpu_followed) qk_norm_ran = false;
+				}
+			}
+		}
+	}
+
 	if (all_match && qk_norm_ran && cpu_status == SslmForwardStatus::Ok &&
 	    gpu_status == SslmForwardStatus::Ok) {
 		std::printf("RESULT: PASS\n");
