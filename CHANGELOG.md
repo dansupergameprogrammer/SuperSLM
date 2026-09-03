@@ -514,7 +514,13 @@ QK-norm artifacts converted by a pre-1.4.0 tree** — see the format note under 
   (`StandardsDocument.md` §5.4). **CORRECTED 2026-09-03 (T-2574):** the follow-up ticket ran,
   precisely localized the defect (confined to non-fresh-sequence Submit calls; every value the
   counting decision reads proven bit-identical to CPU at every layer checked), and did not lift
-  the quarantine -- see `Claude/Brunel/t2574-gpu-sat-count-2026-09-03.md`. **`calibrate_kv_landing_arm`'s `"per_head"` arms (C, D,
+  the quarantine -- see `Claude/Brunel/t2574-gpu-sat-count-2026-09-03.md`. **CORRECTED AGAIN
+  2026-09-03 (T-2575): the divergence was never in this engine.** The acceptance harness was
+  dispatching a `rope_guard_site.cso` compiled before the counter existed, so the reading it
+  produced measured a shader that could not count. With the current binary in place the same
+  harness, the same artifact and the same 100 repeated dispatches report `0/200 divergences`
+  and the quarantine is LIFTED -- see the T-2575 entry below and
+  `Claude/Laplace/t2575-gpu-sat-count-2026-09-03.md`. **`calibrate_kv_landing_arm`'s `"per_head"` arms (C, D,
   E) now refuse a QK-norm checkpoint by name** (`CalibrationArmDoesNotSupportQkNorm`),
   closing the external review's Minor 2: those arms' own per-head policy schema still
   labels a post-norm capture under raw-K keys and emits no `k_normed_head{h}` entry the
@@ -553,6 +559,56 @@ QK-norm artifacts converted by a pre-1.4.0 tree** — see the format note under 
   hardening); and the weight-residency cache serving stale content to a non-fresh call (forced a
   miss, verified byte-for-byte unchanged). The `kv_saturation_count` Cell 4 reading stays
   quarantined. Build log: `Claude/Brunel/t2574-gpu-sat-count-2026-09-03.md` (records worktree).
+  **CORRECTED 2026-09-03 (T-2575):** every reading in this entry was taken against a stale
+  `rope_guard_site.cso`, so "confined to the second and later Submit call" was position 0 having
+  no RoPE clamp to lose rather than a property of the call. The localization stands as a
+  description of what was measured; its attribution does not. Quarantine lifted -- see the
+  T-2575 entry below.
+
+- **A shader binary older than the source it was compiled from is refused, not dispatched
+  (T-2575).** `superslm_gpu::harness::ShaderPath` is the single funnel every `.cso` load in this
+  tree passes through, and it did not check that the bytes it handed back had been compiled from
+  the sources beside them. It does now: a `.cso` must be at least as new as its own `.hlsl` and
+  as the newest shared `.hlsli` in the same directory, and a binary that is not is a named
+  refusal carrying both file names, both timestamps and the remedy. Absent sources (an installed
+  consumer, which ships no `src/gpu/shaders`) and an absent binary are unverifiable rather than
+  stale, and are not refused.
+
+  **This closes the T-2572/T-2574 `kv_saturation_count` divergence, which was never a defect in
+  the engine.** `out/shaders/rope_guard_site.cso` was a compile predating D-SLM6263 -- `dxc
+  -dumpbin` reports zero atomics and zero `groupshared` in it against 4 and 9 in the current
+  build -- while the acceptance harness beside it had been rebuilt. Q's RoPE clamp is the
+  overwhelming majority of the count at any position past 0 and does not exist at all in that
+  binary; position 0 matched only because RoPE is the identity there and there was nothing to
+  lose. Per counting site, token 1 of the real 28-layer candidate, CPU against GPU: K/V landing
+  0/0, QK-norm second K landing 2/2, RoPE Q **69/0**, RoPE K 0/0. Replacing those two `.cso`
+  files -- the only variable changed between two otherwise identical harness runs -- takes the
+  same per-site table to 69/69 and `CELL 4 kv_saturation_count (GPU determinism, repeated
+  dispatch, width>1, N=100)` from `100/200 divergences -- FAIL` to `0/200 divergences -- PASS`
+  against `cpu_ref_sat=154`, with `CELL 1`, `CELL 4 (codes/scale)` and the determinism crown
+  unchanged and passing.
+
+  Six cells commission the guard rather than assuming it fires: a must-accept, two constructed
+  must-reject arms (a binary behind its own `.hlsl`; a binary behind a shared `.hlsli`), the two
+  unverifiable cases, a must-reject on the real load path that back-dates an actual `.cso` a
+  decade and requires `ShaderPath` to refuse, and a sweep over every shader the running
+  executable would dispatch. The acceptance harness's own header now carries its build recipe
+  with the dxc step in it.
+
+  **Open, and distinct from the above (T-2575).** The synthetic degenerate-geometry fixture
+  T-2572 removed for intermittency was restored and measured at 100 GPU dispatches per process
+  across six processes on a current shader set: the CPU count is stable at 3 in every process
+  and the GPU diverges in 0, 1, 41, 41, 100 and 100 of 100 dispatches off one unchanged binary.
+  The byte-divergence count equals the count divergence exactly in every process and the final
+  hidden codes always match, so this is a forward-output divergence the counter merely reports:
+  K's second landed byte is 0 on the CPU and -127 on the GPU, and -127 is that row's own
+  pre-rotation value, so `rope_commit_site.hlsl`'s write-back intermittently does not take
+  effect at that geometry. Not restored as a suite member, and owed its own ticket. Scope, as
+  measured: `hidden_size=2`, one head, one KV head, `head_dim=2`, one RoPE pair. The real
+  28-layer candidate is `0/100` on codes, scale and `kv_saturation_count` in the same session;
+  whether the same mechanism is latent at production geometry is not established either way.
+
+  Solve record: `Claude/Laplace/t2575-gpu-sat-count-2026-09-03.md` (records worktree).
 
 ### Changed
 

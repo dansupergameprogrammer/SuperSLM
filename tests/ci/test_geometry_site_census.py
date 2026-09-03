@@ -1469,12 +1469,12 @@ def test_part3_reorder_gs10_plus_revert_is_caught_at_the_relocated_line():
     with _mutated(_SUPERSLM_GPU_CPP, _t):
         failures = census.run_census(_REPO_ROOT)
     assert failures, "a genuine revert of the relocated occurrence must FAIL, not be silently absorbed"
-    # (carried-scale delta, T-2560): ComputeScratchLayout gained a new scale_block_n helper
-    # (q_scale's own per-head widening, §5), shifting this occurrence from :714 to :723 in the
-    # mutated (chunk A/B swapped) copy this test builds -- re-derived by running the census
-    # against the real, current file (through the same mutation this test applies), not by
-    # applying a line-count offset to the unmutated file's own line number.
-    assert any("REGRESSED SITE" in f and "GS-10" in f and ":723" in f for f in failures), (
+    # (T-2575): superslm_gpu.cpp's ShaderPath gained the shader-binary freshness guard and its
+    # three helpers, shifting this occurrence from :723 to :838 in the mutated (chunk A/B
+    # swapped) copy this test builds -- re-derived, as the T-2560 correction before it was, by
+    # running the census against the real, current file through the same mutation this test
+    # applies, never by adding a line-count offset to the previous number.
+    assert any("REGRESSED SITE" in f and "GS-10" in f and ":838" in f for f in failures), (
         "the finding must cite the RELOCATED occurrence's own (now-first) line, not the "
         "untouched occurrence -- a wrong-line citation is exactly what the prior ordinal "
         "keying produced"
@@ -1520,9 +1520,9 @@ def test_part3_reorder_gs11_plus_revert_is_caught_at_the_relocated_line():
     with _mutated(_SUPERSLM_GPU_CPP, _t):
         failures = census.run_census(_REPO_ROOT)
     assert failures, "a genuine revert of the relocated GS-11 occurrence must FAIL"
-    # (carried-scale delta, T-2560): shifted from :741 to :750 in the mutated copy, the same
-    # scale_block_n insertion named at GS-10's own identical correction above.
-    assert any("REGRESSED SITE" in f and "GS-11" in f and ":750" in f for f in failures)
+    # (T-2575): shifted from :750 to :865 in the mutated copy, by the same ShaderPath freshness
+    # guard named at GS-10's own identical correction above, and re-derived the same way.
+    assert any("REGRESSED SITE" in f and "GS-11" in f and ":865" in f for f in failures)
 
 
 _GS12_OCC0 = (
