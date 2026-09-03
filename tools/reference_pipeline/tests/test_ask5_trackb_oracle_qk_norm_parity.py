@@ -466,3 +466,164 @@ def test_vec_forward_layer_outputs_differ_with_and_without_qk_norm():
         "without q_norm/k_norm -- the integer parity shadow's new QK-norm site has no "
         "measurable effect, the exact silent-no-op shape this ticket exists to close"
     )
+
+
+# ==============================================================================
+# External review Significant 1 (D-SLM6263): the k_normed calibration key must observe the
+# UNION of post-norm/pre-RoPE and post-norm/post-RoPE component maxima, not pre-RoPE alone.
+# ==============================================================================
+
+
+def test_rope_can_raise_the_component_maximum_the_reviewers_own_counterexample():
+    """(D-SLM6263, external review Significant 1): reproduces the review's own executed
+    counterexample bit-for-bit -- a two-token, one-head K input whose position-1 pair is
+    (1, 1) -- run through the real `_float_rope` primitive directly. RoPE preserves a
+    rotated pair's L2 norm, not the component-wise maximum an int8 scale is chosen from:
+    either output component can reach sqrt(x^2+y^2), up to sqrt(2) times the larger
+    pre-rotation component. This is the mechanism the union observation (below) exists to
+    enclose, quoted rather than assumed (`StandardsDocument.md` §5.4).
+    """
+    pipeline = require(MODULE)
+    k = np.zeros((2, 1, 2), dtype=np.float64)
+    k[1, 0, :] = [1.0, 1.0]
+    pre_peak = float(np.abs(k).max())
+    rotated = pipeline._float_rope(k, theta=10000.0)
+    post_peak = float(np.abs(rotated).max())
+    print(f"rope_pre_peak={pre_peak}")
+    print(f"rope_post_peak={post_peak}")
+    print(f"post_pair={rotated[1, 0, :].tolist()}")
+    assert pre_peak == 1.0
+    assert post_peak == pytest.approx(1.3817732906760363)
+    assert post_peak > pre_peak, (
+        "the constructed rotation did not raise the component maximum -- this "
+        "fixture cannot reproduce the review's own mechanism, and the union "
+        "observation this ticket adds would have nothing to enclose"
+    )
+
+
+def test_k_normed_union_maxima_encloses_the_post_rope_peak_on_the_checked_in_fixture():
+    """(D-SLM6263): must-accept. Grounded against the repository's own checked-in §11
+    fixture and calibration corpus (`_fixture_config`/`_pinned_weights`/
+    `calibration_records`) -- the SAME construction the review itself replayed to find the
+    defect ("the reviewer measured layer 1 head 1 post-RoPE codes required at 127.17
+    against a scale sized to 127: the store clips silently on the repository's own
+    fixture"). Executed pre-fix (confirmed this session, matching the review's own
+    numbers exactly): `maxima["layer1.k_normed"]` = 2.331695135661406 (pre-RoPE peak
+    only), while the true post-RoPE peak is 2.3348409208433023 -- requiring
+    2.3348409208433023 / (2.331695135661406/127) = 127.17134088929147 codes against a
+    scale sized to 127. This asserts the FIXED code's own union maxima equals the true
+    post-RoPE peak, and that the derived static scale (`_derive_scales`'s own
+    `k_normed_head{h}.scale`) encloses it -- at most 127 codes required, never more.
+    """
+    pipeline = require(MODULE)
+    cfg = _fixture_config(pipeline)
+    weights, weight_scales, floats = pipeline._pinned_weights(cfg)
+    float_weight = pipeline._dict_float_source(floats)
+    records = pipeline.calibration_records()
+    tokenize = pipeline._fixture_tokenize_prompt(cfg)
+    record_tokenize = pipeline._bridge_record_tokenizer(tokenize)
+
+    # The independent, per-head capture (`_kv_calibration_capture`, Arm C/D/E's own raw
+    # material) is a SECOND, differently-structured walk over the identical primitives --
+    # used here only to compute the ground-truth union peak this test grades the
+    # production `_calibrate`/`_derive_scales` path against, never as the thing under test.
+    capture, _ = pipeline._kv_calibration_capture(cfg, float_weight, records, record_tokenize)
+    true_union_peak = {
+        layer: pipeline._per_head_maxabs(capture, layer, "union", cfg.num_key_value_heads)
+        for layer in range(cfg.num_hidden_layers)
+    }
+    print(f"true_union_peak={true_union_peak}")
+    assert true_union_peak[1][1] == pytest.approx(2.3348409208433023), (
+        "sanity: the checked-in fixture's own layer1/head1 union peak no longer matches "
+        "the review's own quoted reading -- the fixture or corpus changed under this test"
+    )
+
+    maxima = pipeline._calibrate(cfg, float_weight, records, record_tokenize)
+    assert maxima["layer1.k_normed"] == pytest.approx(2.3348409208433023), (
+        f"maxima['layer1.k_normed'] = {maxima.get('layer1.k_normed')!r}, not the union "
+        f"peak 2.3348409208433023 -- the fix's post-RoPE observation is not landing under "
+        f"the k_normed key"
+    )
+
+    scales, _, _ = pipeline._derive_scales(cfg, maxima, weight_scales, {})
+    derived = dict(scales.nonlinear)
+    for layer in range(cfg.num_hidden_layers):
+        for head in range(cfg.num_key_value_heads):
+            scale = derived[f"layer{layer}.k_normed_head{head}.scale"]
+            peak = true_union_peak[layer][head]
+            codes_required = peak / scale
+            assert codes_required <= 127.0 + 1e-9, (
+                f"layer{layer} head{head}: the derived k_normed_head scale ({scale!r}) "
+                f"requires {codes_required} codes to cover the true post-RoPE peak "
+                f"({peak!r}) -- the store clips, the exact defect Significant 1 names"
+            )
+
+
+def test_k_normed_union_maxima_is_lost_under_the_post_rope_observation_deletion_mutant(tmp_path):
+    """Mutation-sensitive (D-SLM6263): a mutant that deletes `_float_layer`'s own SECOND
+    `_observe(maxima, f"{prefix}.k_normed", k)` call -- the fix's own post-RoPE
+    observation, added against Significant 1 -- reverts `maxima["layer1.k_normed"]` to the
+    pre-fix, review-found value (2.331695135661406, the pre-RoPE peak alone) instead of
+    the true union (2.3348409208433023). Quoted: the mutant's own derived scale then
+    requires 127.17134088929147 codes to cover the real post-RoPE peak -- the review's own
+    reading, reproduced by deleting exactly the line this ticket adds.
+    """
+    pipeline = require(MODULE)
+    cfg = _fixture_config(pipeline)
+
+    def _t(text):
+        source = inspect.getsource(pipeline._float_layer)
+        # This comment block immediately precedes ONLY the fix's own SECOND, post-RoPE
+        # `_observe(..., "k_normed", ...)` call -- unique text in the file, so replacing it
+        # (call included) deletes exactly that one call and leaves the first, pre-RoPE call
+        # (earlier in the same function, untouched) as the mutant's only k_normed observation
+        # -- reproducing exactly the pre-fix code the review found broken.
+        tail = (
+            "    # (D-SLM6263): the k_normed key's SECOND observation, post-RoPE -- the running max above\n"
+            "    # folds this into the union with the pre-RoPE peak already captured, closing Significant 1.\n"
+            "    # The engine requantizes K onto this artifact's static k_normed_head{h} scale BEFORE RoPE\n"
+            "    # (`forward_sites.cpp`'s K/V landing block, before `ApplyQkNormSite`'s K branch), then\n"
+            "    # `RopeApplySite` rotates and clamps the landed codes to [-127, 127] afterward -- the union\n"
+            "    # observed here is what makes that later clamp's own domain the one the calibration\n"
+            "    # actually covers, rather than a domain the calibration only covered half of.\n"
+            "    _observe(maxima, f\"{prefix}.k_normed\", k)\n"
+        )
+        assert tail in source, "sanity: the fix's own post-RoPE observation block must match verbatim"
+        assert text.count(source) == 1, (
+            "sanity: _float_layer's own source must appear verbatim, once, in the file"
+        )
+        mutated = source.replace(
+            tail,
+            "    # T-2572 mutant: the post-RoPE k_normed observation deleted\n",
+            1,
+        )
+        assert mutated.count('_observe(maxima, f"{prefix}.k_normed", k)') == 1, (
+            "sanity: exactly one of the two k_normed observe calls must survive the mutant"
+        )
+        return text.replace(source, mutated, 1)
+
+    mutant = _load_mutant_pipeline_module(_t, tmp_path)
+    weights, weight_scales, floats = mutant._pinned_weights(cfg)
+    float_weight = mutant._dict_float_source(floats)
+    records = mutant.calibration_records()
+    tokenize = mutant._fixture_tokenize_prompt(cfg)
+    record_tokenize = mutant._bridge_record_tokenizer(tokenize)
+
+    maxima = mutant._calibrate(cfg, float_weight, records, record_tokenize)
+    print(f"mutant maxima['layer1.k_normed']={maxima.get('layer1.k_normed')!r}")
+    assert maxima["layer1.k_normed"] == pytest.approx(2.331695135661406), (
+        "sanity: the mutant did not revert to the pre-fix, pre-RoPE-only reading -- "
+        "either the deletion targeted the wrong call or the fix's own second call "
+        "is not what supplies the union"
+    )
+
+    scales, _, _ = mutant._derive_scales(cfg, maxima, weight_scales, {})
+    derived = dict(scales.nonlinear)
+    scale = derived["layer1.k_normed_head1.scale"]
+    codes_required = 2.3348409208433023 / scale
+    print(f"mutant codes_required={codes_required}")
+    assert codes_required > 127.0, (
+        f"the mutant's derived scale ({scale!r}) still covers the true post-RoPE peak in "
+        f"{codes_required} codes -- deleting the fix's own post-RoPE observation did not "
+        f"reproduce Significant 1's own found defect, so this cell cannot discriminate it"
+    )

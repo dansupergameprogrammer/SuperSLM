@@ -54,6 +54,15 @@ def _kv_reciprocal_fixture(request):
     calibrate_kv_landing_arm = api(MODULE, "calibrate_kv_landing_arm")
     cfg = fixture_config(pipeline)
     weights, weight_scales, floats = pipeline._pinned_weights(cfg)
+    # (D-SLM6263, Minor 2/T-2572): Arms C/D/E now refuse a QK-norm checkpoint by name --
+    # stripped here since this pin's own claim (the kv_reciprocal ratio LandingRescale
+    # consumes) is orthogonal to QK-norm. `weight_scales` (used below to independently
+    # re-derive the expected ratio from `k_proj`/`k_s_ref`) is left as `_pinned_weights`
+    # returned it -- unaffected either way, since that derivation never reads q_norm/
+    # k_norm entries.
+    for layer in range(cfg.num_hidden_layers):
+        floats.pop(f"layer{layer}.q_norm.gain", None)
+        floats.pop(f"layer{layer}.k_norm.gain", None)
     float_weight = pipeline._dict_float_source(floats)
     records = pipeline.calibration_records()
     tokenize = pipeline._fixture_tokenize_prompt(cfg)

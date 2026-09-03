@@ -45,8 +45,16 @@ RWByteAddressBuffer LayerScratch   : register(u1);
 RWByteAddressBuffer KvCache        : register(u2);
 RWByteAddressBuffer WorkScratch    : register(u3);
 
+// (D-SLM6263, external review Significant 1): this group's own accumulated count of K's
+// RopeApplyPairGpu rotations RopeApplySite's own [-127,127] clamp actually clamped -- flushed
+// into SeqState's split (sat_lo, sat_hi) accumulator below, the SAME host-facing
+// SslmDecodeStepStatus::saturation_count every other saturating site already feeds. A
+// distinct groupshared variable per compiled shader file -- rope_guard_site.hlsl's own
+// gRopeGuardClamps (Q's rotation) lives in a different compiled program.
+groupshared uint gRopeCommitClamps;
+
 [numthreads(256, 1, 1)]
-void main(uint3 dtid : SV_DispatchThreadID)
+void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
 {
     uint t = dtid.x;
     int hidden_size = (int)g_hidden_size;
@@ -98,8 +106,16 @@ void main(uint3 dtid : SV_DispatchThreadID)
     uint rope_stage_base = ScratchLayout.Load<uint>(26 * 4);
 
     uint items = g_num_attention_heads * pairs;
-    if (t >= items) return;
-    {
+
+    // (D-SLM6263): the zero-init and its barrier run for EVERY thread of every group,
+    // uniformly, before the `t < items` branch below -- the identical reasoning
+    // rope_guard_site.hlsl's own comment states: `items` is uniform but `t` is not, so a
+    // barrier placed after a per-thread `t >= items` return would not be reached by every
+    // thread of a partially-filled last group.
+    if (gtid.x == 0) gRopeCommitClamps = 0;
+    GroupMemoryBarrierWithGroupSync();
+
+    if (t < items) {
         uint h2 = t / pairs;
         uint kv_head2 = h2 / max(group, 1u);
         uint row_off2 = KvRowOffsetWithinHalfGpu(g_context_cap, (uint)g_head_dim, kv_head2, g_position);
@@ -112,8 +128,32 @@ void main(uint3 dtid : SV_DispatchThreadID)
             int sin_q30b = (int)RopeSinTable.Load<int64_t>((row_offset + p2) * 8u);
             int64_t rkx, rky;
             RopeApplyPairGpu(kx, ky, cos_q30b, sin_q30b, rkx, rky);
+            // (D-SLM6263, external review Significant 1): RopeApplySite's own post-rotation
+            // clamp, counted -- the identical predicated-increment CPU's LandingRescale
+            // convention already uses, applied here to K's own committed rotation, which
+            // previously reported no saturation signal at all (the exact defect Significant 1
+            // names: "the sequence saturation counter is updated by LandingRescale, but the
+            // subsequent RoPE clamp has no counter").
+            if (rkx < -127 || rkx > 127) InterlockedAdd(gRopeCommitClamps, 1u);
+            if (rky < -127 || rky > 127) InterlockedAdd(gRopeCommitClamps, 1u);
             StoreSignedByteGpu(KvCache, kv_half_off + row_off2 + 2u * p2, (int)ClampRopeCodeGpu(rkx));
             StoreSignedByteGpu(KvCache, kv_half_off + row_off2 + 2u * p2 + 1u, (int)ClampRopeCodeGpu(rky));
+        }
+    }
+
+    // (D-SLM6263): flush this group's own accumulated clamp count into SeqState's SAME split
+    // (sat_lo, sat_hi) accumulator every other saturating site already feeds. Reached by every
+    // thread uniformly, outside the `t < items` branch, matching rope_guard_site.hlsl's own
+    // identical discipline.
+    GroupMemoryBarrierWithGroupSync();
+    if (gtid.x == 0 && gRopeCommitClamps != 0) {
+        uint sat_lo_off = SeqSatLoOffGpu(hidden_size);
+        uint sat_hi_off = SeqSatHiOffGpu(hidden_size);
+        uint old_lo;
+        SeqState.InterlockedAdd(sat_lo_off, gRopeCommitClamps, old_lo);
+        if (old_lo + gRopeCommitClamps < old_lo) {
+            uint old_hi;
+            SeqState.InterlockedAdd(sat_hi_off, 1u, old_hi);
         }
     }
 }

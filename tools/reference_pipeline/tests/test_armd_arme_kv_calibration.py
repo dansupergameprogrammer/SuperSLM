@@ -92,6 +92,23 @@ def fixture_config(pipeline):
     )
 
 
+def _without_qk_norm(floats, cfg):
+    """(D-SLM6263, external review Minor 2): the SAME §11 fixture `fixture_config` above
+    builds carries non-uniform `q_norm`/`k_norm` gains unconditionally since T-2539 --
+    `calibrate_kv_landing_arm`'s own `"per_head"` arms (C/D/E) now refuse a QK-norm
+    checkpoint by name (Minor 2's own closure). This suite's Arm D/E cells below test the
+    per-head score-error-minimizing sweep itself, a property that predates and is
+    orthogonal to QK-norm -- stripping the two tensors here is what lets them keep
+    exercising that property on an arm the checkpoint they build IS still one this policy
+    supports, matching `test_ask5_trackb_oracle_qk_norm_parity.py`'s own identical
+    `_without_qk_norm` stripping."""
+    stripped = dict(floats)
+    for layer in range(cfg.num_hidden_layers):
+        stripped.pop(f"layer{layer}.q_norm.gain", None)
+        stripped.pop(f"layer{layer}.k_norm.gain", None)
+    return stripped
+
+
 def _expect_field_settable(build, *, field, why):
     """Attempt a `dataclasses.replace` that sets `field`, converting a `TypeError` (the
     field not existing on the dataclass) into an ordinary red-unimplemented
@@ -205,7 +222,10 @@ def test_arm_d_per_head_calibration_produces_distinct_kv_head_scales():
     calibrate_kv_landing_arm = api(MODULE, "calibrate_kv_landing_arm")
     cfg = fixture_config(pipeline)
     weights, weight_scales, floats = pipeline._pinned_weights(cfg)
-    float_weight = pipeline._dict_float_source(floats)
+    # (D-SLM6263, Minor 2): Arm D is a "per_head" arm and now refuses a QK-norm checkpoint
+    # by name -- stripped here since this cell's own claim (per-head scale distinctness)
+    # is orthogonal to QK-norm (see `_without_qk_norm`'s own docstring, above).
+    float_weight = pipeline._dict_float_source(_without_qk_norm(floats, cfg))
     records = pipeline.calibration_records()
     tokenize = pipeline._fixture_tokenize_prompt(cfg)
 
@@ -253,6 +273,10 @@ def test_arm_d_softmax_khead_moves_with_only_its_own_head_scale():
     calibrate_kv_landing_arm = api(MODULE, "calibrate_kv_landing_arm")
     cfg = fixture_config(pipeline)
     weights, weight_scales, floats_a = pipeline._pinned_weights(cfg)
+    # (D-SLM6263, Minor 2): stripped for the same reason the sibling cell above strips it --
+    # Arm D refuses a QK-norm checkpoint by name, and this cell's own claim (per-head
+    # softmax_khead regeneration) is orthogonal to QK-norm.
+    floats_a = _without_qk_norm(floats_a, cfg)
     floats_b = dict(floats_a)
     k_proj = np.array(floats_a["layer0.k_proj"], copy=True)
     k_proj[cfg.head_dim:2 * cfg.head_dim, :] *= 2.5   # head 1's rows only
@@ -327,7 +351,21 @@ def test_arm_d_softmax_khead_moves_with_only_its_own_head_scale():
 # corrected docstring, below, for the full account and what is retired versus what still
 # holds).
 
-_ARMD_REAL_SWEEP_KEY = "layer1.k_head0"
+# CORRECTED 2026-09-03 (T-2572, D-SLM6263 Obligation -- StandardsDocument.md §5.4/§5.6, a
+# ruling contradicted by a measurement is re-opened, not defended): the external review
+# `Claude/External/superslm-1p4p0-2026-09-02.md` Minor 2 closed with `calibrate_kv_landing_arm`
+# refusing a QK-norm checkpoint by name for the `"per_head"` arms (C/D/E) -- this suite's own
+# shared fixture (`_armd_arme_real_calibration`, below) now drives those arms on the SAME §11
+# fixture with q_norm/k_norm STRIPPED (`_without_qk_norm`, this file's own top), since Arm D's
+# real sweep is what this cell's own claims are about, not QK-norm. Stripping restores the
+# PRE-T-2553 float data these cells were originally authored against, and re-executing against
+# it re-derives the SAME key T-2553 moved away from: `layer0.k_head1`'s real sweep selects
+# offset -3 (error 1172.115) against max-abs's offset 0 (error 1348.644) -- diverging again,
+# and by a LARGER margin than `layer1.k_head0` ever showed. `layer1.k_head0` (T-2553's own key)
+# no longer diverges from max-abs at all once QK-norm is out of this calibration's own input
+# (winner_offset == 0 == max-abs's own offset), the mirror image of T-2553's own finding about
+# `layer0.k_head1` under the OLD, QK-norm-bearing fixture. The key moves back.
+_ARMD_REAL_SWEEP_KEY = "layer0.k_head1"
 _ARMD_REAL_SWEEP_MAXABS_OFFSET = 0
 
 
@@ -345,7 +383,12 @@ def _armd_arme_real_calibration():
     calibrate_kv_landing_arm = api(MODULE, "calibrate_kv_landing_arm")
     cfg = fixture_config(pipeline)
     weights, weight_scales, floats = pipeline._pinned_weights(cfg)
-    float_weight = pipeline._dict_float_source(floats)
+    # (D-SLM6263, Minor 2): the "per_head" arms this fixture also computes (C/D/E) now
+    # refuse a QK-norm checkpoint by name -- stripped for all four arms computed here
+    # (including B, "per_layer", unaffected either way since no cell in this file reads
+    # this fixture's own "B" entry) so the single shared `float_weight` this function
+    # builds is usable by every arm it drives.
+    float_weight = pipeline._dict_float_source(_without_qk_norm(floats, cfg))
     records = pipeline.calibration_records()
     tokenize = pipeline._fixture_tokenize_prompt(cfg)
     return {
@@ -379,12 +422,13 @@ def test_arm_d_selection_is_score_error_minimizing_not_max_abs(_armd_arme_real_c
     still lower-error than max-abs, so the first two assertions alone stayed green under
     that mutation.
 
-    **CORRECTED 2026-09-02 (T-2553):** re-executed against the current tree, at the
-    re-derived key `layer1.k_head0` (this file's own header comment states why the key
-    moved). `layer1.k_head0`'s own real second-lowest-error candidate is offset -1 (error
-    598.736), against the true winner's offset -2 (error 591.078) -- confirming the
-    tie-break assertion below is genuinely load-bearing at this key too, not merely
-    carried over from the retired one.
+    **CORRECTED 2026-09-03 (T-2572, D-SLM6263 Obligation):** re-executed against the
+    QK-norm-stripped shared fixture (this file's own header comment states why), at the
+    re-derived key `layer0.k_head1` (T-2553's own key, restored -- this file's own header
+    comment states why the key moved back). `layer0.k_head1`'s own real winner is offset -3
+    (error 1172.115) against max-abs's offset 0 (error 1348.644); the real second-lowest-
+    error candidate is offset -4 (error 1225.398) -- confirming the tie-break assertion
+    below is genuinely load-bearing at this key too.
     """
     result = _armd_arme_real_calibration["D"]
     reports = {r["offset_eighths_bit"]: r for r in result["candidates"][_ARMD_REAL_SWEEP_KEY]}
@@ -424,16 +468,17 @@ def test_arm_d_finer_than_max_abs_candidates_are_reachable(_armd_arme_real_calib
     silently ignores the finer half of the enumeration."
 
     Reads the real sweep's own `selected_offset` (module-scoped fixture above, arm D).
-    `layer1.k_head0`'s real winner (-2, re-derived T-2553 -- this file's own header
-    comment states why the key moved) is one of the eight finer-than-max-abs candidates.
+    `layer0.k_head1`'s real winner (-3, re-derived T-2572 -- this file's own header
+    comment states why the key moved back) is one of the eight finer-than-max-abs
+    candidates.
 
     RED under BOTH mutations named in T-1936 §4: the always-max-abs mutation collapses
     `selected_offset` to 0 (caught by `winner_offset < 0` below); the coarser-only
     enumeration mutation (`_ARMD_ARME_SWEEP_OFFSETS` -> `(0, 8, 16, 24, 32)`) also forces
     every coarser candidate's own reported error to exceed max-abs's own at this head,
-    confirmed by execution against the current tree (T-2553): the four coarse candidates'
-    own errors (778.253, 959.467, 1667.125, 2557.832) are all higher than max-abs's own
-    665.293.
+    confirmed by execution against the QK-norm-stripped tree (T-2572): the four coarse
+    candidates' own errors (1844.531, 3794.579, 5251.738, 9464.426) are all higher than
+    max-abs's own 1348.644.
     """
     result = _armd_arme_real_calibration["D"]
     winner_offset = result["selected_offset"][_ARMD_REAL_SWEEP_KEY]
@@ -455,34 +500,19 @@ def test_arm_d_saturation_is_reported_and_does_not_gate_selection(_armd_arme_rea
     Reads the real sweep's own report (module-scoped fixture above, arm D). All 13
     candidates are present with their own saturation figures.
 
-    **CORRECTED 2026-09-02 (T-2553), retiring row 5's own strongest reading rather than
-    defending a stale witness (StandardsDocument.md §5.4/§5.6):** through T-2551, the
-    WINNER (`layer0.k_head1`, offset -3) clipped MORE codes than max-abs
-    (`saturation_rate` 0.03125 vs. 0.015625) and was still selected -- the strongest form
-    of "still selectable," proven by a real execution where the un-normalized K
-    activation this fixture built had enough heavy-tail mass for a narrower scale to both
-    clip more AND minimize attention-score error. Once `_kv_calibration_capture` and
-    `_vec_forward` gained the same QK-norm call site `_float_layer` already had (T-2553,
-    this file's own header comment states the full account), that witness stopped
-    holding: searched by direct execution across every `(layer, kv_head)` combination
-    this fixture has and multiple non-uniform gain/weight perturbations (this file's own
-    header comment), the winning (lowest-error) candidate's own `saturation_rate` ties
-    max-abs's exactly at every combination reached -- RMSNorm bounds the per-token
-    activation's own energy tightly enough, before requantization runs, that "clip more
-    and still minimize error" does not reproduce on this fixture's own scale anymore, a
-    real structural consequence of the norm this fixture now correctly applies.
-
-    What still holds, re-executed and asserted below: **saturation is reported for every
-    candidate (never silently omitted), and selection is not GATED by requiring the
-    lowest saturation** -- the winner (`layer1.k_head0`, offset -2) is not the max-abs
-    candidate and is not required to tie or beat every other candidate's own saturation
-    to be selected; it is selected purely on attention-score error (test 1, above), and
-    its own saturation figure is exactly max-abs's own, present in the report, never
-    inspected by the selection rule at all. What is retired: the STRICT "clips more" form
-    of row 5, unreachable on this fixture post-fix -- stated here rather than silently
-    weakened, per `StandardsDocument.md` §5.6's own doc/code mismatch rule (the claim
-    changed because delivering the original is no longer possible on this fixture, not
-    because the smaller claim was more convenient).
+    **CORRECTED 2026-09-03 (T-2572, D-SLM6263 Obligation), restoring row 5's own strongest
+    reading (StandardsDocument.md §5.4/§5.6, a ruling contradicted by a measurement is
+    re-opened, not defended):** T-2553 (2026-09-02) retired this row's strongest form when
+    `_kv_calibration_capture`/`_vec_forward` gained the QK-norm call site, which bounded
+    this fixture's own per-token K activation energy tightly enough that "clip more and
+    still minimize error" stopped reproducing. Minor 2's own closure (external review
+    `Claude/External/superslm-1p4p0-2026-09-02.md`) now has Arm D refuse a QK-norm
+    checkpoint by name, so this suite's own shared fixture computes Arm D with q_norm/k_norm
+    STRIPPED (`_without_qk_norm`) -- restoring the PRE-T-2553 float data. Re-executed: the
+    WINNER (`layer0.k_head1`, offset -3) once again clips MORE codes than max-abs
+    (`saturation_rate` 0.03125 vs. 0.015625) and is still selected on attention-score error
+    alone -- the strongest form of "still selectable" is reachable on this fixture again,
+    not merely the weaker "ties" form T-2553 fell back to.
 
     RED under the always-max-abs mutation (`_armd_arme_candidate_sweep` ->
     `return 0, base_scale, []`): `candidates` becomes an empty list, so
@@ -508,11 +538,12 @@ def test_arm_d_saturation_is_reported_and_does_not_gate_selection(_armd_arme_rea
         f"{_ARMD_REAL_SWEEP_MAXABS_OFFSET}) -- 'selection is not gated on saturation' is "
         f"unfalsifiable when the winner and max-abs are the same candidate"
     )
-    assert winner_saturation == pytest.approx(maxabs_saturation), (
-        f"the selected (winning) candidate's own saturation_rate ({winner_saturation}) "
-        f"no longer ties max-abs's own ({maxabs_saturation}) at this fixture's own "
-        f"re-derived key -- the docstring's own account of what changed under T-2553 is "
-        f"stale; re-derive against the current tree rather than editing this assertion"
+    assert winner_saturation > maxabs_saturation, (
+        f"the selected (winning) candidate's own saturation_rate ({winner_saturation}) no "
+        f"longer exceeds max-abs's own ({maxabs_saturation}) at this fixture's own "
+        f"re-derived key -- row 5's own strongest reading (T-2572, restored) is that the "
+        f"winner clips MORE than max-abs and is still selected on attention-score error "
+        f"alone; re-derive against the current tree rather than editing this assertion"
     )
     assert winner_saturation > 0.0, "the winning candidate's own saturation_rate must be nonzero"
 
@@ -955,3 +986,92 @@ def test_arm_d_q_scale_matches_shipped_production_q_path_at_every_layer():
             f"artifact will ship, at a layer the sibling file's own layer0-only pin "
             f"cannot see"
         )
+
+
+# ==============================================================================
+# T-2572 (D-SLM6263, external review `Claude/External/superslm-1p4p0-2026-09-02.md` Minor
+# 2): `calibrate_kv_landing_arm` labels a post-norm capture under raw-K keys for a QK-norm
+# checkpoint and emits no `k_normed_head{h}` entry the 1.4.0 loader requires. Closure:
+# reject a QK-norm configuration explicitly, by name, until the per-head policy schema
+# carries both domains.
+# ==============================================================================
+
+def test_calibrate_kv_landing_arm_c_rejects_a_qk_norm_checkpoint_by_name():
+    """Arm C, driven through the repository's own two-layer QK-norm fixture (this file's
+    `fixture_config` -- identical shape to `test_ask5_trackb_oracle_qk_norm_parity.py`'s
+    own `_fixture_config`, and carries non-uniform `q_norm`/`k_norm` gains unconditionally,
+    T-2539) -- must raise `CalibrationArmDoesNotSupportQkNorm` by name, naming the QK-norm
+    layers, rather than silently emitting raw-K-keyed entries derived from post-norm data.
+    """
+    pipeline = require(MODULE)
+    cfg = fixture_config(pipeline)
+    _, _, floats = pipeline._pinned_weights(cfg)
+    float_weight = pipeline._dict_float_source(floats)
+    records = pipeline.calibration_records()
+    tokenize = pipeline._fixture_tokenize_prompt(cfg)
+
+    assert hasattr(pipeline, "CalibrationArmDoesNotSupportQkNorm"), (
+        "red-unimplemented: pipeline.CalibrationArmDoesNotSupportQkNorm does not exist"
+    )
+    with pytest.raises(pipeline.CalibrationArmDoesNotSupportQkNorm) as excinfo:
+        pipeline.calibrate_kv_landing_arm(cfg, float_weight, records, tokenize, arm="C")
+    message = str(excinfo.value)
+    assert "[0, 1]" in message, (
+        f"the rejection must name the QK-norm-carrying layer indices; got: {message!r}"
+    )
+
+
+@pytest.mark.parametrize("arm", ["D", "E"])
+def test_calibrate_kv_landing_arm_d_e_also_reject_a_qk_norm_checkpoint_by_name(arm):
+    """The same rejection, for Arms D and E -- Minor 2's own finding names "Arms C/D/E"
+    collectively (`calibrate_kv_landing_arm`'s single QK-norm-presence check, added ahead
+    of the granularity branch, covers every arm identically rather than one at a time)."""
+    pipeline = require(MODULE)
+    cfg = fixture_config(pipeline)
+    _, _, floats = pipeline._pinned_weights(cfg)
+    float_weight = pipeline._dict_float_source(floats)
+    records = pipeline.calibration_records()
+    tokenize = pipeline._fixture_tokenize_prompt(cfg)
+
+    with pytest.raises(pipeline.CalibrationArmDoesNotSupportQkNorm):
+        pipeline.calibrate_kv_landing_arm(cfg, float_weight, records, tokenize, arm=arm)
+
+
+def test_calibrate_kv_landing_arm_c_still_accepts_a_non_qk_norm_checkpoint():
+    """Must-accept, twinned with the must-reject above: the SAME two-layer fixture geometry
+    with `q_norm.gain`/`k_norm.gain` stripped (the identical stripping
+    `test_ask5_trackb_oracle_qk_norm_parity.py`'s own `_without_qk_norm` performs) must NOT
+    raise -- the rejection is scoped to QK-norm presence, not to this arm becoming
+    permanently unusable. This is also the exact fixture
+    `tests/fixtures/t2572_arm_c_non_qknorm_fixture.sslm` (generated this round from this
+    identical stripped model, via the real converter `convert_model.build_sections`) was
+    built from -- `TestT2572_M2_MarshalLayerAcceptsArmCsNonQkNormOutput` (test_main.cpp)
+    marshals that artifact's own kv_landing_reciprocals/composition_constants entries
+    through the real C++ `MarshalLayer`, the end-to-end half key-presence tests alone do
+    not reach.
+    """
+    pipeline = require(MODULE)
+    cfg = fixture_config(pipeline)
+    _, _, floats_with = pipeline._pinned_weights(cfg)
+    floats_without = dict(floats_with)
+    for layer in range(cfg.num_hidden_layers):
+        floats_without.pop(f"layer{layer}.q_norm.gain", None)
+        floats_without.pop(f"layer{layer}.k_norm.gain", None)
+    float_weight = pipeline._dict_float_source(floats_without)
+    records = pipeline.calibration_records()
+    tokenize = pipeline._fixture_tokenize_prompt(cfg)
+
+    result = pipeline.calibrate_kv_landing_arm(cfg, float_weight, records, tokenize, arm="C")
+    assert sorted(result["kv_landing"].keys()) == [
+        "layer0.k_head0", "layer0.k_head1", "layer1.k_head0", "layer1.k_head1",
+    ], (
+        "Arm C's own kv_landing key set changed shape on a non-QK-norm checkpoint -- the "
+        "must-accept side of this policy is no longer producing what MarshalLayer expects"
+    )
+    assert sorted(result["softmax_khead"].keys()) == [
+        "layer0.softmax_khead0", "layer0.softmax_khead1",
+        "layer1.softmax_khead0", "layer1.softmax_khead1",
+    ]
+    assert not any(".k_normed_head" in key for key in result["kv_landing"]), (
+        "a non-QK-norm checkpoint must never emit a k_normed_head{h} entry"
+    )

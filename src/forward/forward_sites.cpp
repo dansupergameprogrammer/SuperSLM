@@ -662,7 +662,7 @@ int64_t ClampRopeCode(int64_t raw) {
 
 SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t position,
                                  int64_t context_cap, const SslmTensorManifest& rope_tables,
-                                 int8_t* out_row) {
+                                 int8_t* out_row, uint64_t* out_saturation_count) {
 	// §6.2 step 3 / §11 S3.3's own gate line (D-SLM376): CheckPositionOverCap
 	// is the site's documented FIRST ACT, and no ROP1 tensor is read before
 	// it returns. On rejection, `out_row` stays exactly as the caller left
@@ -753,6 +753,17 @@ SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t posi
 		const int32_t cos_q30 = static_cast<int32_t>(ReadRopeTableEntryI64(cos->data, row_offset + i));
 		const int32_t sin_q30 = static_cast<int32_t>(ReadRopeTableEntryI64(sin->data, row_offset + i));
 		const RopePair rotated = RopeApplyPair(x, y, cos_q30, sin_q30);
+		// (D-SLM6263, external review Significant 1): the clamp's own predicated increment,
+		// one component at a time -- matching LandingRescale's own convention exactly
+		// (magnitude/domain check first, THEN the clamp that would otherwise silently
+		// discard the same information). `rotated.x`/`.y` are the EXACT, UNCLAMPED rotation
+		// (RopePair's own header contract, intmath.h) -- this is the one place that
+		// unclamped value is available to test against [-127, 127] before ClampRopeCode
+		// discards it.
+		if (out_saturation_count != nullptr) {
+			if (rotated.x < -127 || rotated.x > 127) *out_saturation_count += 1;
+			if (rotated.y < -127 || rotated.y > 127) *out_saturation_count += 1;
+		}
 		out_row[2 * i] = static_cast<int8_t>(ClampRopeCode(rotated.x));
 		out_row[2 * i + 1] = static_cast<int8_t>(ClampRopeCode(rotated.y));
 	}
@@ -1842,7 +1853,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		// way -- Option G does not touch Q.
 		for (size_t h = 0; h < num_heads; ++h) {
 			st = RopeApplySite(q_codes.data() + h * head_dim, head_dim, position, context_cap,
-			                   rope_tables, q_rot.data() + h * head_dim);
+			                   rope_tables, q_rot.data() + h * head_dim, &seq.kv_saturation_count);
 			if (st != SslmForwardStatus::Ok) return st;
 			if (option_g_fused_k_landing) continue;
 			// T-1654 (S3.8a): the accessor index is `h / group`, not `h` -- the
@@ -1854,7 +1865,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			const int8_t* const k_row_before_rotate =
 			    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, position);
 			st = RopeApplySite(k_row_before_rotate, head_dim, position, context_cap, rope_tables,
-			                   k_rot.data() + h * head_dim);
+			                   k_rot.data() + h * head_dim, &seq.kv_saturation_count);
 			if (st != SslmForwardStatus::Ok) return st;
 		}
 		// S3.7 (§11 S3.7 "The mechanism", the RoPE write-back correction): each
@@ -2347,14 +2358,15 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 			std::vector<int8_t> q_rot(effective_q_width), k_rot(effective_q_width);
 			for (size_t h = 0; h < num_heads; ++h) {
 				st = RopeApplySite(q_codes.data() + t * effective_q_width + h * head_dim, head_dim,
-				                   position, context_cap, rope_tables, q_rot.data() + h * head_dim);
+				                   position, context_cap, rope_tables, q_rot.data() + h * head_dim,
+				                   kv_saturation_count);
 				if (st != SslmForwardStatus::Ok) return st;
 				if (option_g_fused_k_landing) continue;
 				const size_t kv_head = h / group;
 				const int8_t* const k_row_before_rotate = KeyRow(
 				    workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, position);
 				st = RopeApplySite(k_row_before_rotate, head_dim, position, context_cap,
-				                   rope_tables, k_rot.data() + h * head_dim);
+				                   rope_tables, k_rot.data() + h * head_dim, kv_saturation_count);
 				if (st != SslmForwardStatus::Ok) return st;
 			}
 			if (!option_g_fused_k_landing) {

@@ -1579,7 +1579,11 @@ def test_part3_reorder_gs12_two_differently_offset_occurrences_plus_revert_is_ca
     # `out_saturation_count` parameter, above this occurrence -- shifting it from :1732 to
     # :1734 in the same mutated copy. Re-derived by running the census against the real,
     # current, mutated file, not by applying +2 as an offset to the prior citation.
-    assert any("REGRESSED SITE" in f and "GS-12" in f and ":1734" in f for f in failures)
+    # CORRECTED 2026-09-03 (T-2572, D-SLM6263, external review Significant 1): RopeApplySite's
+    # own predicated-increment saturation counter (forward_sites.cpp, this ticket's own fix)
+    # added lines above this occurrence -- shifting it from :1734 to :1745 in the same mutated
+    # copy. Re-derived by running the census against the real, current, mutated file.
+    assert any("REGRESSED SITE" in f and "GS-12" in f and ":1745" in f for f in failures)
 
 
 _GS12_OCC2 = (

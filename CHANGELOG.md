@@ -307,7 +307,20 @@ QK-norm artifacts converted by a pre-1.4.0 tree** — see the format note under 
   uses, onto a NEW static per-(layer, KV head) landing scale calibrated on post-norm data
   (`LayerWeights` gains `k_norm_landing_r_t`/`e_t`); `softmax_khead` is recomputed from
   that new scale when `k_norm` is present, closing C2 structurally (writer and reader now
-  agree on the same scale). **The GPU** gives every query head its own 16-byte scratch
+  agree on the same scale). **CORRECTED 2026-09-03 (T-2572, D-SLM6263, external review
+  `Claude/External/superslm-1p4p0-2026-09-02.md` Significant 1):** as this entry originally
+  shipped, "calibrated on post-norm data" meant the K landing scale's own calibration
+  observed only the post-norm, PRE-RoPE component maxima — the false premise being that
+  RoPE, a magnitude-preserving rotation, needs no scale of its own. RoPE preserves a
+  rotated pair's L2 norm, not the component-wise maximum an int8 scale is chosen from, so
+  a rotated component can reach up to sqrt(2) times the pre-rotation maximum; the engine
+  requantizes K onto this scale BEFORE RoPE and clamps AFTER, so a pre-RoPE-only
+  calibration could silently clip the store the engine actually produces (confirmed on the
+  repository's own checked-in calibration fixture: 127.17 codes required against a store
+  sized to 127). The K landing scale is now calibrated on the UNION of post-norm/pre-RoPE
+  and post-norm/post-RoPE component maxima, closing C2 as this entry's own claim always
+  said it did — see T-2572's own entry, below, for the full account and the recalibrated
+  candidate's new identity. **The GPU** gives every query head its own 16-byte scratch
   slot (`ScratchLayout` index 3 widens from one slot to `num_attention_heads * 16` bytes),
   closing C3 (the race `num_attention_heads` concurrent thread groups had on one shared
   slot) by construction — no two groups ever write the same address.
@@ -479,6 +492,50 @@ QK-norm artifacts converted by a pre-1.4.0 tree** — see the format note under 
   transient/permanent taxonomy reserves for device and allocation failures a retry at a
   smaller size can fix; no retry at any size fixes a null pointer. `SslmForwardStatusName`
   gained the matching arm.
+
+- **The post-QK-norm K landing scale now calibrates on the union of pre-RoPE and post-RoPE
+  component maxima, closing the external review's Significant 1 (T-2572, D-SLM6263,
+  `Claude/External/superslm-1p4p0-2026-09-02.md`).** `_float_layer`'s own `k_normed`
+  observation now fires TWICE per layer under the identical running-max key -- once
+  post-norm/pre-RoPE (unchanged from T-2560's own addition) and again post-norm/post-RoPE
+  (new) -- closing the gap the entry above's own "CORRECTED" note states in full. **A
+  saturation counter on `RopeApplySite`'s own `[-127, 127]` clamp, CPU and GPU, threaded
+  like every other landing site's counter** (`ApplyQkNormSite`'s, `LandTokenKVRow`'s):
+  `RopeApplySite` and its GPU siblings (`rope_guard_site.hlsl`, `rope_commit_site.hlsl`)
+  gain an optional `out_saturation_count` parameter, feeding the SAME host-facing
+  `SslmDecodeStepStatus::saturation_count` field -- a clamp at this site was previously
+  silent (the review's own found gap). Verified by execution, not merely reasoned: the CPU
+  counter is deterministic and reliably discriminates a deletion mutant (both CPU and
+  shader forms); the GPU counter matches CPU exactly on the real 28-layer candidate's own
+  single-token decode path (`CPU=4, GPU=4`) but shows a real, reproducible divergence on
+  the chunk-batched/width>1 path (100/100 divergences against the CPU reference, stable
+  across 100 repeated GPU dispatches) -- filed and owed to a follow-up ticket; the
+  chunk-batched/width>1 GPU reading is quarantined until commissioned
+  (`StandardsDocument.md` §5.4). **`calibrate_kv_landing_arm`'s `"per_head"` arms (C, D,
+  E) now refuse a QK-norm checkpoint by name** (`CalibrationArmDoesNotSupportQkNorm`),
+  closing the external review's Minor 2: those arms' own per-head policy schema still
+  labels a post-norm capture under raw-K keys and emits no `k_normed_head{h}` entry the
+  1.4.0 loader requires on a QK-norm layer; the `"per_layer"` arms (A, B) are unaffected,
+  since they reuse the production path this same entry's own union fix already makes
+  QK-norm-correct. The per-head policy schema's own QK-norm support is owed to a later
+  ticket. **The pinned Qwen3-Embedding-0.6B candidate is recalibrated and reconverted**
+  under the corrected pipeline: **633,588,308 bytes** (unchanged size -- an additive
+  calibration-value fix, not a schema change), new SHA-256
+  **`e5212dd2d4772bb6939c3c75dae6f9bf933a0d48de57d1f26f929a1c1e506759`**, superseding the
+  T-2560-era `09c439f6...` this branch's own prior entries recorded. Real-candidate
+  acceptance, re-run on the new candidate: `CELL 1 (width>1 acceptance) ... PASS`,
+  `DETERMINISM CROWN: PASS` (including the new `kv_saturation_count` comparison, single-
+  token path), `CELL 4 (GPU determinism, N=100, codes/scale) ... 0/100 divergences ...
+  PASS`. Obligation constants (D-SLM6148) re-measured, not re-cited: the structural bound
+  (`test_pipeline.py`) holds at `<= 0.25` (layer 0 = 0.1288, layer 1 = 0.1254, unaffected
+  by this round's additive fix); the golden logit holds UNCHANGED (`oracle_50[0][0] ==
+  -2350`); the ARMD sweep key moved to `layer0.k_head1` (Minor 2's own closure has Arms
+  C/D/E compute their real sweep on the QK-norm-stripped fixture, restoring the pre-T-2553
+  float data those cells were authored against) -- see `test_armd_arme_kv_calibration.py`'s
+  own dated correction for the full account, including the restored §31.4.4 row 5
+  strongest reading (the winner clips MORE than max-abs and is still selected).
+
+  Build log: `Claude/Brunel/t2572-k-normed-rope-peak-2026-09-03.md` (records worktree).
 
 ### Changed
 

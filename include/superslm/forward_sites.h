@@ -290,10 +290,24 @@ int64_t ClampRopeCode(int64_t raw);
 // never-a-table-read ordering cell, and the ASan guard-vitality cell) and
 // against a remediation suite (the null-tensor and
 // extent-exceeded cells for Critical 1 and Critical 2).
+//
+// `out_saturation_count` (D-SLM6263, external review `Claude/External/superslm-1p4p0-
+// 2026-09-02.md` Significant 1): step 5's own `ClampRopeCode` clamp, counted -- threaded
+// exactly like `LandingRescale`'s own `out_saturation_count` (`*out_saturation_count`
+// incremented by exactly one per COMPONENT whose rotated value falls outside [-127, 127],
+// before that component is clamped; never reset, never decremented) and like
+// `ApplyQkNormSite`'s own identical parameter (this header, above) -- so a clamp at this
+// site counts toward the SAME host-facing `SslmDecodeStepStatus::saturation_count` every
+// other saturating site already feeds: "one counter, every landing site," now including the
+// one landing site that previously reported no signal at all (the review's own finding: "the
+// sequence saturation counter is updated by LandingRescale, but the subsequent RoPE clamp has
+// no counter"). Defaults to `nullptr`, matching `LandingRescale`'s own convention; every
+// pre-existing caller that does not pass it compiles unchanged.
 SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim,
                                  int64_t position, int64_t context_cap,
                                  const SslmTensorManifest& rope_tables,
-                                 int8_t* out_row);
+                                 int8_t* out_row,
+                                 uint64_t* out_saturation_count = nullptr);
 
 // C34's SwiGLU activation site (§5.4, §6.3 step 11). The declaration
 // and a stub were landed first by the test-design pass that authored this

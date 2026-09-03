@@ -326,10 +326,23 @@ int main(int argc, char** argv) {
 			}
 		}
 	}
+	// (D-SLM6263, external review Significant 1): kv_saturation_count now also carries
+	// RopeApplySite's own clamp count (both engines) alongside the pre-existing K/V and
+	// QK-norm landing counts -- compared here so the determinism crown covers the new
+	// counter on the real, 28-layer candidate, not only the K/V store bytes above.
+	if (cpu_seq.kv_saturation_count != gpu_seq.kv_saturation_count) {
+		std::printf("DIVERGENCE: kv_saturation_count: CPU=%llu GPU=%llu\n",
+		            (unsigned long long)cpu_seq.kv_saturation_count,
+		            (unsigned long long)gpu_seq.kv_saturation_count);
+		all_match = false;
+	}
+	std::printf("kv_saturation_count (single-token path): CPU=%llu GPU=%llu\n",
+	            (unsigned long long)cpu_seq.kv_saturation_count,
+	            (unsigned long long)gpu_seq.kv_saturation_count);
 	if (all_match) {
 		std::printf("DETERMINISM CROWN: PASS -- CPU/GPU bit-identical end-to-end across "
-		            "hidden_codes[%zu], hidden_scale, and every K/V row (%u layers, single-token "
-		            "path).\n", hidden_size, num_hidden_layers);
+		            "hidden_codes[%zu], hidden_scale, every K/V row, and kv_saturation_count "
+		            "(%u layers, single-token path).\n", hidden_size, num_hidden_layers);
 	} else {
 		std::printf("DETERMINISM CROWN: FAIL (see DIVERGENCE lines above)\n");
 	}
@@ -497,8 +510,8 @@ int main(int argc, char** argv) {
 			chunk_ids.push_back(static_cast<int32_t>((token_id + static_cast<int32_t>(i)) %
 			                                          model_view.config.vocab_size));
 		}
-		auto RunGpuChunkSequential = [&](std::vector<int8_t>& out_codes,
-		                                  CarriedScale& out_scale) -> SslmForwardStatus {
+		auto RunGpuChunkSequential = [&](std::vector<int8_t>& out_codes, CarriedScale& out_scale,
+		                                  uint64_t& out_sat) -> SslmForwardStatus {
 			SequenceLayerState seq;
 			std::vector<int8_t> hidden(hidden_size);
 			seq.hidden_codes = hidden.data();
@@ -532,11 +545,17 @@ int main(int argc, char** argv) {
 			}
 			out_codes.assign(hidden.begin(), hidden.end());
 			out_scale = seq.hidden_scale;
+			out_sat = seq.kv_saturation_count;
 			return st;
 		};
 
 		std::vector<int8_t> cpu_ref_codes;
 		CarriedScale cpu_ref_scale{};
+		// (D-SLM6263): the CPU chunk-batched reference's own kv_saturation_count -- Cell 4's
+		// repeated GPU drive (below) is checked against this too, alongside the codes/scale
+		// it already checks, so RopeApplySite's own new counter is covered by the SAME N=100
+		// repeated-dispatch determinism proof the codes/scale already have.
+		uint64_t cpu_ref_sat = 0;
 		{
 			// The CPU chunk-batched reference this repeated GPU drive is checked against --
 			// re-run once here (fresh workspace) rather than reusing the earlier block's own
@@ -561,17 +580,21 @@ int main(int argc, char** argv) {
 				cpu_ref_codes.assign(ref_codes.begin() + (chunk_tokens - 1) * hidden_size,
 				                     ref_codes.end());
 				cpu_ref_scale = ref_scales[chunk_tokens - 1];
+				cpu_ref_sat = ref_sat;
 			}
 		}
 
 		const int kRepeatedDispatches = 100;
 		int divergences = 0;
+		int sat_divergences = 0;
 		std::vector<int8_t> first_codes;
 		CarriedScale first_scale{};
+		uint64_t first_sat = 0;
 		for (int i = 0; i < kRepeatedDispatches; ++i) {
 			std::vector<int8_t> out_codes;
 			CarriedScale out_scale{};
-			const SslmForwardStatus st = RunGpuChunkSequential(out_codes, out_scale);
+			uint64_t out_sat = 0;
+			const SslmForwardStatus st = RunGpuChunkSequential(out_codes, out_scale, out_sat);
 			if (st != SslmForwardStatus::Ok) {
 				std::printf("CELL 4: GPU chunk-batched run %d/%d FAILED: status=%s\n", i,
 				            kRepeatedDispatches, SslmForwardStatusName(st));
@@ -581,16 +604,28 @@ int main(int argc, char** argv) {
 			if (i == 0) {
 				first_codes = out_codes;
 				first_scale = out_scale;
+				first_sat = out_sat;
 			} else if (out_codes != first_codes || out_scale.m != first_scale.m ||
 			           out_scale.e != first_scale.e) {
 				++divergences;
 			}
+			if (out_sat != first_sat) ++sat_divergences;
 			if (!cpu_ref_codes.empty() &&
 			    (out_codes != cpu_ref_codes || out_scale.m != cpu_ref_scale.m ||
 			     out_scale.e != cpu_ref_scale.e)) {
 				++divergences;
 			}
+			if (out_sat != cpu_ref_sat) ++sat_divergences;
 		}
+		// (D-SLM6263): kv_saturation_count's own N=100 determinism, reported alongside Cell
+		// 4's own codes/scale divergence count -- the identical must-accept shape, over the
+		// SAME 100 repeated dispatches, now also covering RopeApplySite's new counter.
+		std::printf(
+		    "CELL 4 kv_saturation_count (GPU determinism, repeated dispatch, width>1, N=%d): "
+		    "%d/%d divergences (against the first GPU run and against the CPU chunk-batched "
+		    "reference, cpu_ref_sat=%llu) -- %s\n",
+		    kRepeatedDispatches, sat_divergences, kRepeatedDispatches * 2,
+		    (unsigned long long)cpu_ref_sat, sat_divergences == 0 ? "PASS (must-accept)" : "FAIL");
 		std::printf(
 		    "CELL 4 (GPU determinism, repeated dispatch, width>1, N=%d): %d/%d divergences "
 		    "(against the first GPU run and against the CPU chunk-batched reference) -- %s\n",

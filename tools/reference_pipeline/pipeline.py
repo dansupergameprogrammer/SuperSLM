@@ -2727,11 +2727,40 @@ def calibrate_kv_landing_arm(cfg: ModelConfig, float_weight, records, tokenize, 
     """
     if arm not in _ARM_SPECS:
         raise ValueError(f"calibrate_kv_landing_arm: arm must be one of {sorted(_ARM_SPECS)}; got {arm!r}")
+    spec = _ARM_SPECS[arm]
+    granularity = spec["granularity"]
+    # (D-SLM6263, external review Minor 2): reject a QK-norm configuration explicitly, by
+    # name, before any capture or sweep work -- matching `check_calibration_eval_disjoint`'s
+    # own "structural, not merely stated" precedent immediately below. Scoped to the
+    # `"per_head"` arms (C/D/E) ONLY: Minor 2's own finding is that Arms C/D/E's per-head
+    # policy schema (`_kv_calibration_capture`'s own, separate capture) labels a post-norm
+    # capture under raw-K keys and emits no `k_normed_head{h}` entry. Arms A/B
+    # (`"per_layer"`) reuse the EXISTING production `_calibrate`/`_derive_scales`/
+    # `_derive_composition_constants` path unchanged -- the SAME path Significant 1's own
+    # union-observation fix (`_float_layer`'s two `k_normed` `_observe` calls, above) already
+    # makes QK-norm-correct, so rejecting A/B here would refuse a checkpoint those arms
+    # already handle correctly, contradicting the fix this same round lands. `weight_scales`
+    # is the SAME presence surface `_derive_scales` already reads (`f"{prefix}.q_norm.gain"
+    # in weight_scales` / `f"{prefix}.k_norm.gain" in weight_scales`, pipeline.py:2114-2115)
+    # -- cheap (weight shapes/dtypes only, no forward pass).
+    if granularity == "per_head":
+        qk_norm_weight_scales = _weight_scales_from_float_source(cfg, float_weight)
+        qk_norm_layers = sorted(
+            layer for layer in range(cfg.num_hidden_layers)
+            if f"layer{layer}.q_norm.gain" in qk_norm_weight_scales
+            or f"layer{layer}.k_norm.gain" in qk_norm_weight_scales
+        )
+        if qk_norm_layers:
+            raise CalibrationArmDoesNotSupportQkNorm(
+                f"calibrate_kv_landing_arm: arm {arm!r} does not support a QK-norm checkpoint "
+                f"(q_norm.gain and/or k_norm.gain present at layer(s) {qk_norm_layers}) -- Arms "
+                f"C/D/E's own per-head policy schema carries only the raw pre-RoPE K domain and "
+                f"emits no k_normed_head{{h}} entry; the 1.4.0 loader requires that entry on "
+                f"every QK-norm layer. Owed to a later ticket."
+            )
     if eval_ids is not None:
         calibration_ids = [record["id"] for record in records]
         check_calibration_eval_disjoint(calibration_ids, eval_ids)
-    spec = _ARM_SPECS[arm]
-    granularity = spec["granularity"]
     observation_domain = spec["observation_domain"]
     record_tokenize = _bridge_record_tokenizer(tokenize)
 
@@ -2839,6 +2868,22 @@ def classify_signed_ratio_resolution(candidate, reference, se, z_crit):
         return "NOT RESOLVED"
     signed_ratio = (candidate - reference) / (z_crit * se)
     return "RESOLVED" if abs(signed_ratio) >= 1.0 else "UNDERPOWERED"
+
+
+class CalibrationArmDoesNotSupportQkNorm(ValueError):
+    """(D-SLM6263, external review `Claude/External/superslm-1p4p0-2026-09-02.md` Minor 2):
+    `calibrate_kv_landing_arm` was asked to calibrate a checkpoint that carries q_norm/k_norm
+    tensors, for one of the `"per_head"` arms (C/D/E). Those arms' own per-head policy schema
+    carries only the raw pre-RoPE K domain -- the post-norm capture `_kv_calibration_capture`'s
+    own `k_pre`/`k_post` already gathers is read into `kv_landing`/`kv_reciprocals`/
+    `softmax_khead` under the RAW `k_head{h}` keys (T-2551's own QK-norm call site made that
+    capture post-norm without widening this function's own output schema to match), and no
+    `k_normed_head{h}` entry is ever emitted -- the entry `MarshalLayer` requires on every
+    QK-norm layer (§4/§6 Track B). Refused rather than silently mislabeled, until the per-head
+    policy schema carries both domains (owed to a later ticket). The `"per_layer"` arms (A/B)
+    are NOT gated by this exception -- they reuse the existing production
+    `_calibrate`/`_derive_scales`/`_derive_composition_constants` path, which Significant 1's
+    own union-observation fix already makes QK-norm-correct."""
 
 
 class CalibrationPopulationOverlap(ValueError):
@@ -3013,23 +3058,44 @@ def _float_layer(cfg, tensors, hidden, maxima, prefix):
     # `_kv_calibration_capture` calls the identical function, so this oracle has one forward, not
     # two independently-drifting ones.
     q, k = _apply_qk_norm(q, k, tensors, prefix, cfg)
-    # (carried-scale delta §4, D-SLM6117/D-SLM6119): a THIRD, dedicated observation, under a NEW
-    # key -- post-norm, pre-RoPE, matching exactly what the engine stores (RoPE is a
-    # magnitude-preserving rotation applied in place on the already-landed store, per §3's
-    # existing resolution, so it needs no scale of its own). The existing pre-norm key
-    # (`f"{prefix}.k"`, above) is untouched -- this is additive, not a reassignment, so the raw K
-    # landing scale (`k_head{h}.scale`, `softmax_khead` for a non-QK-norm layer) stays bit-for-bit
-    # unaffected. `_observe` is a running max (`maxima[name] = max(maxima.get(name, 0), peak)`);
-    # a separate key is what stops the pre-norm and post-norm peaks silently sharing one slot,
-    # where whichever happens to be larger on a given checkpoint determines what the existing key
-    # describes (the review's own found mechanism gap, `Claude/Poirot/f1a2741-t2552-ask5-trackb-
-    # review.md` C2).
+    # (carried-scale delta §4, D-SLM6117/D-SLM6119, corrected per the external review
+    # `Claude/External/superslm-1p4p0-2026-09-02.md` Significant 1 and D-SLM6263): a THIRD,
+    # dedicated key, observed TWICE under a running max -- once here, post-norm/pre-RoPE, and
+    # again below, post-norm/post-RoPE -- so `maxima[f"{prefix}.k_normed"]` holds the UNION of
+    # both component-wise peaks, which is what the engine's static landing scale must enclose.
+    # RoPE preserves a rotated pair's L2 norm, not the component-wise maximum an int8 scale is
+    # chosen from: for a pair (x, y), either rotated output component can reach
+    # sqrt(x^2 + y^2), up to sqrt(2) times the larger pre-rotation component -- so a
+    # pre-RoPE-only observation (this delta's own prior text, corrected here) can under-size
+    # the store the engine actually requantizes onto AFTER RoPE (`RopeApplySite`'s clamp,
+    # silently, before this fix -- confirmed by execution on the repository's own checked-in
+    # calibration fixture: layer1's pre-RoPE-only peak of 2.331695135661406 required only
+    # 2.331695135661406/127 = 0.018359804217806346 per code, but the true post-RoPE peak of
+    # 2.3348409208433023 needs 127.17134088929147 codes against that scale -- the review's own
+    # executed counterexample, reproduced bit-for-bit by this session). The existing pre-norm
+    # key (`f"{prefix}.k"`, above) is untouched -- this is additive, not a reassignment, so the
+    # raw K landing scale (`k_head{h}.scale`, `softmax_khead` for a non-QK-norm layer) stays
+    # bit-for-bit unaffected. `_observe` is a running max (`maxima[name] =
+    # max(maxima.get(name, 0), peak)`); the SAME key observed on both sides of RoPE is what
+    # makes the stored peak the union rather than whichever side happens to be larger on a
+    # given checkpoint (the review's own found mechanism gap, `Claude/Poirot/f1a2741-t2552-
+    # ask5-trackb-review.md` C2, and Significant 1's own restatement of the same class one
+    # level deeper: observing only one side of a value-changing transform describes that one
+    # side, never the transform's own output range).
     _observe(maxima, f"{prefix}.k_normed", k)
 
     q = _float_rope(q, cfg.rope_theta)
     k = _float_rope(k, cfg.rope_theta)
     _observe(maxima, f"{prefix}.q", q)
     _observe(maxima, f"{prefix}.k", k)
+    # (D-SLM6263): the k_normed key's SECOND observation, post-RoPE -- the running max above
+    # folds this into the union with the pre-RoPE peak already captured, closing Significant 1.
+    # The engine requantizes K onto this artifact's static k_normed_head{h} scale BEFORE RoPE
+    # (`forward_sites.cpp`'s K/V landing block, before `ApplyQkNormSite`'s K branch), then
+    # `RopeApplySite` rotates and clamps the landed codes to [-127, 127] afterward -- the union
+    # observed here is what makes that later clamp's own domain the one the calibration
+    # actually covers, rather than a domain the calibration only covered half of.
+    _observe(maxima, f"{prefix}.k_normed", k)
 
     context = np.empty((steps, cfg.num_attention_heads, cfg.head_dim), dtype=np.float64)
     for head in range(cfg.num_attention_heads):

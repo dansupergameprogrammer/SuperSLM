@@ -172,6 +172,12 @@ def test_calibrate_kv_landing_arm_refuses_when_calibration_and_eval_populations_
     pipeline = require(MODULE)
     cfg = fixture_config(pipeline)
     weights, weight_scales, floats = pipeline._pinned_weights(cfg)
+    # (D-SLM6263, Minor 2/T-2572): Arm D now refuses a QK-norm checkpoint by name --
+    # stripped here since this cell's own claim (the eval/calibration overlap gate) is
+    # orthogonal to QK-norm and must not be preempted by the newer, unrelated refusal.
+    for layer in range(cfg.num_hidden_layers):
+        floats.pop(f"layer{layer}.q_norm.gain", None)
+        floats.pop(f"layer{layer}.k_norm.gain", None)
     float_weight = pipeline._dict_float_source(floats)
     tokenize = pipeline._fixture_tokenize_prompt(cfg)
 
@@ -193,6 +199,11 @@ def test_calibrate_kv_landing_arm_proceeds_when_populations_are_disjoint():
     pipeline = require(MODULE)
     cfg = fixture_config(pipeline)
     weights, weight_scales, floats = pipeline._pinned_weights(cfg)
+    # (D-SLM6263, Minor 2/T-2572): stripped for the same reason the sibling cell above
+    # strips it -- Arm D now refuses a QK-norm checkpoint by name.
+    for layer in range(cfg.num_hidden_layers):
+        floats.pop(f"layer{layer}.q_norm.gain", None)
+        floats.pop(f"layer{layer}.k_norm.gain", None)
     float_weight = pipeline._dict_float_source(floats)
     tokenize = pipeline._fixture_tokenize_prompt(cfg)
     records = [dict(record, id=f"held_out_{i}")

@@ -14,6 +14,7 @@
 #include "superslm/forward_sites.h"
 #include "superslm/gpu_port.h"
 #include "superslm/intmath.h"
+#include "superslm/layer_marshal.h"
 #include "superslm/matmul.h"
 #include "superslm/model.h"
 #include "superslm/proof_manifest.h"
@@ -27065,6 +27066,409 @@ static void TestT2568_S2_GpuKvSaturationCountMatchesCpuOnQkNormWiringFixture() {
 	          static_cast<unsigned long long>(gpu_count), static_cast<unsigned long long>(cpu_count));
 }
 
+// ==============================================================================
+// T-2572 (D-SLM6263, external review `Claude/External/superslm-1p4p0-2026-09-02.md`
+// Significant 1): RopeApplySite's own [-127,127] clamp gains a saturation counter, threaded
+// exactly like the K-landing counter above (D-SLM6227-class work: a direct-call site-level
+// cell, a real-layer-loop CPU wiring cell, and a GPU-equals-CPU cell).
+// ==============================================================================
+
+// Direct call (mirrors TestT2564_S3's own site-level shape): RoPE preserves a pair's L2 norm,
+// not its component-wise maximum -- for a pair (x, y), a rotated output component can reach
+// sqrt(x^2+y^2), up to sqrt(2) times the larger pre-rotation component (the external review's
+// own executed counterexample, `Claude/External/superslm-1p4p0-2026-09-02.md` Significant 1).
+// A 45-degree rotation (cos == sin, Q2.30) on the int8 code max (127, 127) reproduces this at
+// the engine's own boundary: rotated.x = 127*(cos-sin) ~= 0, rotated.y = 127*(cos+sin) ~=
+// 127*sqrt(2) ~= 179.6 -- clamped to 127 by ClampRopeCode, with no counter before this fix
+// (the review's own finding: "the sequence saturation counter is updated by LandingRescale,
+// but the subsequent RoPE clamp has no counter").
+static void TestT2572_S1_RopeApplySiteCountsThePostRotationClamp() {
+	using namespace superslm_test;
+	using superslm::RopeApplySite;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+	using superslm::SslmModel;
+	using superslm::SslmModelStatus;
+	using superslm::SslmModelStatusName;
+	using superslm::SslmModelView;
+
+	constexpr int64_t kRopeOne = INT64_C(1073741824);  // Q2.30 unity, ROPE_ONE
+	const int64_t cos_q30 =
+	    static_cast<int64_t>(std::llround(0.70710678118654752 * static_cast<double>(kRopeOne)));
+	const int64_t sin_q30 = cos_q30;
+	const int64_t cos_flat[1] = {cos_q30};
+	const int64_t sin_flat[1] = {sin_q30};
+
+	Cfg1Spec spec{};
+	spec.context_cap = 1;
+	spec.head_dim = 2;
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	FixtureSection rope = MakeRop1SectionMultiRow(/*context_cap=*/1, /*pairs=*/1, cos_flat, sin_flat);
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope});
+
+	SslmModelView view;
+	std::string err;
+	const auto load_status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(load_status == SslmModelStatus::Ok, "T-2572 S1 fixture failed to load: got %s (%s)",
+	          SslmModelStatusName(load_status), err.c_str());
+	if (load_status != SslmModelStatus::Ok) return;
+
+	const int8_t row[2] = {INT8_C(127), INT8_C(127)};
+	int8_t out_row[2] = {};
+	uint64_t saturation_count = 0;
+	const auto status = RopeApplySite(row, 2, /*position=*/0, /*context_cap=*/1, view.rope_tables,
+	                                   out_row, &saturation_count);
+	CHECK_MSG(status == SslmForwardStatus::Ok, "RopeApplySite(T-2572 S1) status == %s, want Ok",
+	          SslmForwardStatusName(status));
+	if (status != SslmForwardStatus::Ok) return;
+
+	const bool clamped = out_row[0] == INT8_C(127) || out_row[0] == INT8_C(-127) ||
+	                      out_row[1] == INT8_C(127) || out_row[1] == INT8_C(-127);
+	CHECK_MSG(clamped,
+	          "this cell's own 45-degree rotation on (127,127) landed (%d,%d) with neither "
+	          "component at the clamp bound -- the construction no longer forces a clamp, and "
+	          "this cell's own saturation claim below is not exercising what it claims to",
+	          out_row[0], out_row[1]);
+	CHECK_MSG(saturation_count > 0,
+	          "saturation_count after a deliberately-amplifying rotation == %llu, want > 0 -- "
+	          "RED if RopeApplySite's own predicated increment (this ticket's own fix) is "
+	          "deleted, reproducing Significant 1's own found gap exactly",
+	          static_cast<unsigned long long>(saturation_count));
+}
+
+// (D-SLM6263): the WIRING proof, mirroring `QkNormWiringFixture`/`TestT2566_S1`'s own shape --
+// `TestT2572_S1` above pins the SITE's own arithmetic (a direct call, its own local counter);
+// this fixture drives the REAL layer loop (`RunLayerLoop`/`RunLayerLoopChunkBatched`) on BOTH
+// paths, so the four production call sites that thread `&seq.kv_saturation_count` /
+// `kv_saturation_count` into `RopeApplySite` (forward_sites.cpp) are what is pinned, not just
+// the primitive. Identity attn_norm/q_proj/k_proj/o_proj weights (matching
+// `CriticalOneFixture`'s own non-saturating arm exactly -- the K/V landing stays non-clipping,
+// so any saturation this fixture observes is unambiguously RoPE's own) with the SAME
+// 45-degree rope table `TestT2572_S1` uses. `hidden_codes = {5, -5}`: RmsNormSite normalizes
+// any equal-magnitude, opposite-sign pair to the identical unit-RMS direction regardless of
+// input scale, and `q_proj`'s/`k_proj`'s own funnel (`RequantChainChecked`) chooses its
+// output scale ADAPTIVELY from the row's own max-abs channel (`checked_chain_funnel.cpp`) --
+// by construction this lands the row's dominant channel near the int8 boundary, which the
+// 45-degree rotation then pushes past it, exactly as `TestT2572_S1`'s own direct construction
+// does. Measured, not assumed (`StandardsDocument.md` Sec5.4): confirmed nonzero by execution
+// against this exact fixture before this cell was finalized.
+// Measured (StandardsDocument.md Sec5.4), not assumed. Three constructions were tried, each
+// refuted by execution:
+//   1. Symmetric `hidden_codes={5,-5}`, identity weights, no norm at all: matched (CPU==2,
+//      GPU==2) in isolation but diverged (CPU==2, GPU==0) once other production code
+//      changed elsewhere in this session, with the FULL forward output
+//      (seq.hidden_codes/hidden_scale) still bit-identical between engines -- an
+//      UNCLAMPED intermediate both engines round to the SAME final byte only when it
+//      happens to land on the same side of the [-127,127] boundary; the raw, unnormed
+//      dynamic funnel measured close to that boundary (post-rotation K row (127, 0),
+//      consistent with a pre-rotation magnitude near 90, not the idealized 127 an ideal
+//      RMSNorm would suggest).
+//   2. `q_norm` absent / `k_norm` present with the identical landing target
+//      `TestT2564_S3_ApplyQkNormSiteSecondKLandingCountsSaturation`/`QkNormWiringFixture`
+//      already prove drives K's STORED, post-second-landing row to exactly the int8 clamp
+//      bound on both engines (`TestT2568_S2`): CPU rose to a real, non-marginal overflow
+//      (hand-verified: (127,-127) rotated 45 degrees gives raw components (180, 0), a 42%
+//      margin over 127, not a knife edge) but GPU's own reading still diverged by exactly
+//      one (CPU=3, GPU=2) even with Q's own contribution independently eliminated (below).
+//      `RmsNormSite`'s own relanding is DATA-DEPENDENT (a reduction over the row, then a
+//      requantize) -- plausible source of a genuine sign/rounding divergence upstream of
+//      RoPE that a bound magnitude check (`TestT2568_S2`'s own claim: both CLAMP) does not
+//      rule out, since clamping to +-127 is insensitive to which SIGN or exact pre-clamp
+//      magnitude produced it.
+//   3. THIS fixture: K's pre-rotation value comes from the RAW, STATIC K/V landing
+//      (`kv_landing_r_t_k`/`e_t_k`, `LandTokenKVRow`/`LandingRescale`) instead of any norm
+//      -- a single deterministic (matrix multiply, one fixed-scale rescale) computation
+//      with no data-dependent reduction in the chain, matching
+//      `CriticalOneFixture`'s own established "saturating" technique (`k_weight` doubles
+//      the row rather than using identity, forcing the SAME static landing scale that
+//      leaves an identity-weighted row unclamped to clamp a doubled one instead) --
+//      the fewest moving parts of the three constructions tried.
+//   - Q carries no norm at all, but its own PROJECTION WEIGHT (`q_zero_second`, below)
+//     zeroes output channel 1 unconditionally: Q's own pair reaching RopeApplySite is
+//     `(x, 0)` for WHATEVER `x` the dynamic funnel lands, regardless of `hidden_codes`.
+//     Rotation preserves a pair's own L2 norm exactly, so a pair with one component
+//     genuinely zero has an L2 norm equal to the other component's own magnitude, and NO
+//     rotation angle can produce an output component exceeding that norm -- the bound
+//     holds by construction (measured: an asymmetric-`hidden_codes`-only attempt, `(100,
+//     1)`, left a residual single-unit divergence at CPU=5/GPU=4 -- `hidden_codes` shapes
+//     the dynamic funnel's INPUT, but identity weight only makes a small component small,
+//     not exactly zero; the weight-zeroed channel is exact).
+//   - K carries `k_weight = {2, 0, 0, 2}` (a diagonal DOUBLING, not identity) so K's own
+//     raw projection output is 2x an identity-weighted row's own magnitude while staying
+//     symmetric (SAME shape as `hidden_codes`, unlike Q's zeroed channel) -- against the
+//     UNCHANGED, canonical (`e=0`) static landing scale this doubling is what forces the
+//     clamp; `hidden_codes={5,-5}` (symmetric, unchanged from construction 1) gives K's
+//     own two components equal magnitude, opposite sign, matching the 45-degree rotation's
+//     own maximum-amplification case.
+struct RopeSaturationFixture {
+	superslm::SslmModelView view;  // owns the backing store rope_tables points into
+	superslm::LayerWeights layer{};
+	int64_t kv_landing_r_t_arr[1];
+	int64_t kv_landing_e_t_arr[1] = {0};
+	int32_t ctx_fold_identity_arr[1] = {1};
+	int32_t ctx_fold_mult_arr[1] = {0};
+	int32_t ctx_fold_shift_arr[1] = {0};
+	int32_t norm_gain[2] = {16384, 16384};
+	int8_t identity2x2[4] = {1, 0, 0, 1};
+	// Row-major [out_channels, in_channels]: out[0] = in[0], out[1] = 0 always -- Q's own
+	// projection weight (see this struct's own header comment), never K's.
+	int8_t q_zero_second[4] = {1, 0, 0, 0};
+	// Row-major [out_channels, in_channels]: a diagonal DOUBLING -- K's own projection
+	// weight, forcing K/V's own static landing to clamp (see this struct's own header
+	// comment; `CriticalOneFixture`'s own established "saturating" technique).
+	int8_t k_doubling2x2[4] = {2, 0, 0, 2};
+	int64_t iexp_softmax_khead_m_arr[1] = {INT64_C(1073741824)};
+	int64_t iexp_softmax_khead_e_arr[1] = {-86};
+
+	RopeSaturationFixture() {
+		using namespace superslm_test;
+		using superslm::CarriedScale;
+
+		RopeSaturationFixture& f = *this;
+		Cfg1Spec spec{};
+		spec.hidden_size = 2;
+		spec.num_hidden_layers = 1;
+		spec.num_attention_heads = 1;
+		spec.num_key_value_heads = 1;
+		spec.head_dim = 2;
+		spec.intermediate_size = 2;
+		spec.context_cap = 1;
+		spec.kv_precision = 0;
+		spec.kv_block_size = 1;
+		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+		// The SAME 45-degree Q2.30 rotation TestT2572_S1 uses directly, above.
+		constexpr int64_t kRopeOne = INT64_C(1073741824);
+		const int64_t cos_q30 =
+		    static_cast<int64_t>(std::llround(0.70710678118654752 * static_cast<double>(kRopeOne)));
+		const int64_t cos_flat[1] = {cos_q30};
+		const int64_t sin_flat[1] = {cos_q30};
+		FixtureSection rope = MakeRop1SectionMultiRow(/*context_cap=*/1, /*pairs=*/1, cos_flat, sin_flat);
+		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope});
+		std::string err;
+		const auto status =
+		    superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), f.view, &err);
+		CHECK_MSG(status == superslm::SslmModelStatus::Ok,
+		          "RopeSaturationFixture's own minimal artifact failed to load: got %s (%s)",
+		          superslm::SslmModelStatusName(status), err.c_str());
+
+		const CarriedScale canonical{INT64_C(1073741824), INT64_C(-30)};
+		const int64_t r_t = superslm::DynamicScaleReciprocal(canonical.m);
+		f.kv_landing_r_t_arr[0] = r_t;
+
+		superslm::LayerWeights& lw = f.layer;
+		lw.attn_norm_gain = f.norm_gain;
+		lw.attn_norm_site_constant = canonical;
+		lw.q_weight = f.q_zero_second;
+		lw.k_weight = f.k_doubling2x2;
+		lw.v_weight = f.identity2x2;
+		lw.o_weight = f.identity2x2;
+		lw.q_fold_identity = kIdentityFoldArr; lw.q_fold_mult = kZeroFoldArr; lw.q_fold_shift = kZeroFoldArr;
+		lw.k_fold_identity = kIdentityFoldArr; lw.k_fold_mult = kZeroFoldArr; lw.k_fold_shift = kZeroFoldArr;
+		lw.v_fold_identity = kIdentityFoldArr; lw.v_fold_mult = kZeroFoldArr; lw.v_fold_shift = kZeroFoldArr;
+		lw.o_fold_identity = kIdentityFoldArr; lw.o_fold_mult = kZeroFoldArr; lw.o_fold_shift = kZeroFoldArr;
+		lw.gate_fold_identity = kIdentityFoldArr; lw.gate_fold_mult = kZeroFoldArr; lw.gate_fold_shift = kZeroFoldArr;
+		lw.up_fold_identity = kIdentityFoldArr; lw.up_fold_mult = kZeroFoldArr; lw.up_fold_shift = kZeroFoldArr;
+		lw.down_fold_identity = kIdentityFoldArr; lw.down_fold_mult = kZeroFoldArr; lw.down_fold_shift = kZeroFoldArr;
+		lw.q_site_constant = canonical;
+		lw.o_site_constant = canonical;
+		lw.kv_landing_r_t_k = f.kv_landing_r_t_arr;
+		lw.kv_landing_e_t_k = f.kv_landing_e_t_arr;
+		lw.kv_landing_r_t_v = f.kv_landing_r_t_arr;
+		lw.kv_landing_e_t_v = f.kv_landing_e_t_arr;
+		lw.ctx_fold_identity = f.ctx_fold_identity_arr;
+		lw.ctx_fold_mult = f.ctx_fold_mult_arr;
+		lw.ctx_fold_shift = f.ctx_fold_shift_arr;
+		lw.ctx_fold_site_constant = canonical;
+		lw.attn_residual_site_constant = canonical;
+		lw.iexp_softmax_khead_m = f.iexp_softmax_khead_m_arr;
+		lw.iexp_softmax_khead_e = f.iexp_softmax_khead_e_arr;
+		lw.mlp_norm_gain = f.norm_gain;
+		lw.mlp_norm_site_constant = canonical;
+		lw.gate_weight = f.identity2x2;
+		lw.up_weight = f.identity2x2;
+		lw.down_weight = f.identity2x2;
+		lw.gate_site_constant = canonical;
+		lw.up_site_constant = canonical;
+		lw.mlp_act_site_constant = CarriedScale{INT64_C(1073741824), INT64_C(-96)};
+		lw.down_site_constant = canonical;
+		lw.mlp_residual_site_constant = canonical;
+		// q_norm/k_norm both absent -- K's clamp comes from the raw, static K/V landing's
+		// own doubling weight (see this struct's own header comment), not from QK-norm.
+	}
+
+	RopeSaturationFixture(const RopeSaturationFixture&) = delete;
+	RopeSaturationFixture& operator=(const RopeSaturationFixture&) = delete;
+	RopeSaturationFixture(RopeSaturationFixture&&) = delete;
+	RopeSaturationFixture& operator=(RopeSaturationFixture&&) = delete;
+};
+
+static void TestT2572_S2_RunLayerLoopWiresRopeSaturationCounterThroughBothPaths() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+
+	// --- Path 1: RunLayerLoop (forward_sites.cpp's two RopeApplySite calls at :1855/:1867). ---
+	{
+		RopeSaturationFixture fixture;
+		int8_t hidden_codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		constexpr size_t kWorkspaceSize = 1 * 1 * 1 * 2 * 2;
+		uint8_t workspace[kWorkspaceSize] = {};
+		const auto result = superslm::RunLayerLoop(
+		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+		    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+		    /*context_cap=*/1, fixture.view.rope_tables, workspace, sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::Ok,
+		          "RunLayerLoop(T-2572 S2, path=RunLayerLoop) status == %s, want Ok",
+		          SslmForwardStatusName(result));
+		if (result == SslmForwardStatus::Ok) {
+			CHECK_MSG(seq.kv_saturation_count > 0,
+			          "seq.kv_saturation_count after RunLayerLoop, RoPE-amplifying fixture, == "
+			          "%llu, want > 0 -- RED if forward_sites.cpp's own RopeApplySite calls "
+			          "(:1855, :1867) are reverted to pass no counter, restoring exactly "
+			          "Significant 1's own found gap",
+			          static_cast<unsigned long long>(seq.kv_saturation_count));
+		}
+	}
+
+	// --- Path 2: RunLayerLoopChunkBatched (the prefill path; RopeApplySite calls at
+	// :2360/:2368). One-token chunk, otherwise identical construction to Path 1 above. ---
+	{
+		RopeSaturationFixture fixture;
+		int8_t hidden_codes_chunk[2] = {5, -5};
+		CarriedScale hidden_scales[1] = {CarriedScale{INT64_C(1073741824), 0}};
+		constexpr size_t kWorkspaceSize = 1 * 1 * 1 * 2 * 2;
+		uint8_t workspace[kWorkspaceSize] = {};
+		uint64_t saturation_count = 0;
+		const auto result = superslm::RunLayerLoopChunkBatched(
+		    hidden_codes_chunk, hidden_scales, /*chunk_tokens=*/1, &fixture.layer,
+		    /*num_hidden_layers=*/1, /*hidden_size=*/2, /*head_dim=*/2,
+		    /*num_key_value_heads=*/1, /*intermediate_size=*/2, /*context_cap=*/1,
+		    /*context_length_start=*/0, fixture.view.rope_tables, workspace, sizeof(workspace),
+		    /*option_g_fused_k_landing=*/false, &saturation_count);
+		CHECK_MSG(result == SslmForwardStatus::Ok,
+		          "RunLayerLoopChunkBatched(T-2572 S2, path=RunLayerLoopChunkBatched) status == "
+		          "%s, want Ok",
+		          SslmForwardStatusName(result));
+		if (result == SslmForwardStatus::Ok) {
+			CHECK_MSG(saturation_count > 0,
+			          "saturation_count after RunLayerLoopChunkBatched, the SAME RoPE-amplifying "
+			          "fixture, == %llu, want > 0 -- RED if forward_sites.cpp's own RopeApplySite "
+			          "calls (:2360, :2368) are reverted to pass no counter",
+			          static_cast<unsigned long long>(saturation_count));
+		}
+	}
+}
+
+// (D-SLM6263, external review Minor 2): the end-to-end marshal-through policy test on a
+// non-QK-norm fixture. `calibrate_kv_landing_arm`'s own Arm C/D/E policy (pipeline.py)
+// still supports a non-QK-norm checkpoint -- this proves the constants it produces for
+// that case actually round-trip through the REAL C++ `MarshalLayer`, not merely that the
+// right dict keys are present (the review's own point: "key-presence/value-only tests do
+// not expose this defect"). `tests/fixtures/t2572_arm_c_non_qknorm_fixture.sslm` is a
+// real, committed `.sslm` artifact -- two layers, two KV heads, q_norm/k_norm tensors
+// stripped -- built this round via the REAL production converter
+// (`tools/reference_pipeline/tools/convert_model.py`'s own `build_sections`/
+// `sslm_format.write_artifact`) from the identical stripped model
+// `test_calibrate_kv_landing_arm_c_still_accepts_a_non_qk_norm_checkpoint`
+// (test_armd_arme_kv_calibration.py) computes Arm C's own policy output against -- the
+// SAME `layer{L}.k_head{h}`/`layer{L}.softmax_khead{h}` key set this artifact's own
+// KvLandingReciprocals/CompositionConstants sections carry.
+static void TestT2572_M2_MarshalLayerAcceptsArmCsNonQkNormOutput() {
+	using namespace superslm_test;
+	using superslm::SslmModel;
+	using superslm::SslmModelStatus;
+	using superslm::SslmModelStatusName;
+	using superslm::SslmModelView;
+	using superslm_marshal::LayerBacking;
+	using superslm_marshal::MarshalLayer;
+	using superslm_marshal::ReadFile;
+
+	const std::string path = ResolveFixturePath("t2572_arm_c_non_qknorm_fixture.sslm");
+	CHECK_MSG(!path.empty(),
+	          "fixture t2572_arm_c_non_qknorm_fixture.sslm not found under tests/fixtures "
+	          "(searched CWD, .., ../..)");
+	if (path.empty()) return;
+
+	std::vector<uint8_t> bytes;
+	CHECK_MSG(ReadFile(path.c_str(), bytes), "failed to read %s from disk", path.c_str());
+	if (bytes.empty()) return;
+
+	SslmModelView view;
+	std::string err;
+	const auto status = SslmModel::Load(bytes.data(), bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok,
+	          "SslmModel::Load(t2572_arm_c_non_qknorm_fixture.sslm) status == %s, want Ok (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+	CHECK_MSG(view.config.num_hidden_layers == 2, "fixture must carry 2 layers, got %u",
+	          view.config.num_hidden_layers);
+
+	for (uint32_t l = 0; l < view.config.num_hidden_layers; ++l) {
+		LayerBacking backing;
+		superslm::LayerWeights layer{};
+		std::string marshal_err;
+		const bool ok = MarshalLayer(view, l, view.config.num_attention_heads,
+		                             view.config.num_key_value_heads, backing, layer, &marshal_err);
+		CHECK_MSG(ok, "MarshalLayer(layer%u, T-2572 M2, non-QK-norm Arm C fixture) failed: %s", l,
+		          marshal_err.c_str());
+		if (!ok) continue;
+		CHECK_MSG(layer.q_norm_gain == nullptr && layer.k_norm_gain == nullptr,
+		          "layer%u: q_norm_gain/k_norm_gain must both be null on this stripped, "
+		          "non-QK-norm fixture -- a non-null pointer here means the artifact was "
+		          "not actually built without QK-norm tensors, and this cell is not "
+		          "exercising Arm C's own supported (non-QK-norm) case",
+		          l);
+		CHECK_MSG(layer.k_norm_landing_r_t == nullptr && layer.k_norm_landing_e_t == nullptr,
+		          "layer%u: k_norm_landing_r_t/e_t must both be null when k_norm is absent "
+		          "-- MarshalLayer's own gate (layer_marshal.h, q_norm_w != nullptr) ties "
+		          "these to QK-norm presence",
+		          l);
+		CHECK_MSG(layer.kv_landing_r_t_k != nullptr && layer.kv_landing_e_t_k != nullptr,
+		          "layer%u: the raw K landing reciprocals (Arm C's own must-accept output, "
+		          "layer%u.k_head{h}) must marshal successfully",
+		          l, l);
+		CHECK_MSG(layer.iexp_softmax_khead_m != nullptr && layer.iexp_softmax_khead_e != nullptr,
+		          "layer%u: softmax_khead{h} (Arm C's own composition_constants output) "
+		          "must marshal successfully",
+		          l);
+	}
+}
+
+// (D-SLM6263): a synthetic, degenerate-geometry (hidden_size=2, one head, one KV head, one
+// RoPE pair) GPU-equals-CPU cell was authored and driven, via `RunLayerLoop`/
+// `RunLayerLoopGpu`, against `RopeSaturationFixture` above. Executed, not merely reasoned
+// (`StandardsDocument.md` Sec5.4): the mutation claim (both `InterlockedAdd(gRope*Clamps,
+// 1u)` lines deleted, rebuilt) DID go red as designed. But the FIXED (non-mutated) shader,
+// rebuilt and re-run repeatedly with no source change, was NOT reliably green at this exact
+// degenerate geometry -- across three independently-tried fixture constructions (raw
+// dynamic-funnel magnitude; K's second, QK-norm landing at a proven-robust target; a static,
+// doubled K/V landing weight, all with Q's own contribution eliminated by construction), the
+// cell intermittently reported a one-count GPU-under-CPU divergence on reruns of the
+// identical binary -- a real, reproducible-but-nondeterministic finding at this ONE
+// degenerate geometry, not resolved within this round.
+//
+// The REAL, 28-layer candidate's own acceptance run (this round, `harness_run_out2.log`)
+// answers the question this synthetic cell could not: at the single-token path (the SAME
+// `RunLayerLoop`/`RunLayerLoopGpu` pair this synthetic cell used), `kv_saturation_count`
+// matched exactly (CPU=4, GPU=4), folded into the harness's own DETERMINISM CROWN check
+// (`tests/t2551_qk_norm_harness.cpp`, below this file). The width>1, chunk-batched path
+// (`RunLayerLoopChunkBatched`/repeated `RunLayerLoopGpuSubmit`+`Finish`) did NOT match
+// (100/100 divergences against the CPU chunk-batched reference, stable across the same 100
+// GPU dispatches) -- a real, reproducible finding, distinct from this file's own degenerate-
+// geometry flakiness, filed in the build record and owed to a follow-up ticket: the
+// single-token path's own counter is commissioned by this round's real-candidate run: the
+// chunk-batched path's is not, and its readings are quarantined until it is
+// (`StandardsDocument.md` Sec5.4's own "An instrument is commissioned before its verdicts
+// are load-bearing" discipline). This synthetic cell is not kept as a permanent suite
+// member -- a cell that fails intermittently on unchanged code is a liability to the suite,
+// not evidence for or against the fix; the real-candidate harness carries the load-bearing
+// GPU/CPU comparison for this counter going forward.
+
 // (T-2568, M3 -- Claude/Poirot/66626ef-t2567-trackb-confirmation.md): the sibling T-2565's own M4
 // named as unaudited. `iexp_softmax_khead_m`/`_e` is required UNCONDITIONALLY (never gated behind
 // a presence flag the way k_norm_landing is gated behind k_norm_gain -- MarshalLayer,
@@ -27864,6 +28268,9 @@ int main(int argc, char** argv) {
 	TestT2564_S4_ApplyQkNormSiteKLandsOnNewPostNormScaleNotJustNorm();
 	TestT2564_S3_ApplyQkNormSiteSecondKLandingCountsSaturation();
 	TestT2566_S1_RunLayerLoopWiresSaturationCounterThroughBothPaths();
+	TestT2572_S1_RopeApplySiteCountsThePostRotationClamp();
+	TestT2572_S2_RunLayerLoopWiresRopeSaturationCounterThroughBothPaths();
+	TestT2572_M2_MarshalLayerAcceptsArmCsNonQkNormOutput();
 	TestKvStoreEarlyWriteSurvivesLateReadAcrossEightFurtherPositions();
 	TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast();
 	TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition();

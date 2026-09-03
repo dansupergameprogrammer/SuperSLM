@@ -87,8 +87,18 @@ RWByteAddressBuffer LayerScratch   : register(u1);
 RWByteAddressBuffer KvCache        : register(u2);
 RWByteAddressBuffer WorkScratch    : register(u3);
 
+// (D-SLM6263, external review Significant 1): this group's own accumulated count of Q's
+// RopeApplyPairGpu rotations RopeApplySite's own [-127,127] clamp actually clamped -- flushed
+// into SeqState's split (sat_lo, sat_hi) accumulator below, the SAME host-facing
+// SslmDecodeStepStatus::saturation_count qk_norm_site.hlsl's own K-landing counter and
+// kv_proj_site.hlsl's own K/V landing counter already feed (forward_sites.h's own
+// ApplyQkNormSite doc comment: "one counter, every landing site"). A distinct groupshared
+// variable per compiled shader file -- no collision with qk_norm_site.hlsl's own
+// gQkNormClamps, which lives in a different compiled program.
+groupshared uint gRopeGuardClamps;
+
 [numthreads(256, 1, 1)]
-void main(uint3 dtid : SV_DispatchThreadID)
+void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
 {
     uint t = dtid.x;
     int hidden_size = (int)g_hidden_size;
@@ -154,8 +164,18 @@ void main(uint3 dtid : SV_DispatchThreadID)
     // q_codes/q_rot slots are disjoint, and no thread ever reads another
     // thread's q_rot.
     uint items = g_num_attention_heads * pairs;
-    if (t >= items) return;
-    {
+
+    // (D-SLM6263): the zero-init and its barrier run for EVERY thread of every group,
+    // uniformly, before the `t < items` branch below -- unlike every guard-ladder `return`
+    // above (each keyed on a dispatch-uniform value: sticky, position, table presence/extent,
+    // identical for every thread of every group), `items` is uniform but `t` is not, so a
+    // partially-filled last group has threads that will and will not do per-item work. A
+    // barrier placed after that split would not be reached by every thread of such a group --
+    // placing it here, before any thread can diverge on `t`, keeps this call uniform.
+    if (gtid.x == 0) gRopeGuardClamps = 0;
+    GroupMemoryBarrierWithGroupSync();
+
+    if (t < items) {
         uint h = t / pairs;
         {
             uint p = t % pairs;
@@ -165,29 +185,53 @@ void main(uint3 dtid : SV_DispatchThreadID)
             int sin_q30 = (int)RopeSinTable.Load<int64_t>((row_offset + p) * 8u);
             int64_t rx, ry;
             RopeApplyPairGpu(x, y, cos_q30, sin_q30, rx, ry);
+            // (D-SLM6263, external review Significant 1): RopeApplySite's own post-rotation
+            // clamp, counted -- CPU's identical predicated-increment convention
+            // (LandingRescale's own out_saturation_count), applied here to Q's own write,
+            // which previously reported no saturation signal at all.
+            if (rx < -127 || rx > 127) InterlockedAdd(gRopeGuardClamps, 1u);
+            if (ry < -127 || ry > 127) InterlockedAdd(gRopeGuardClamps, 1u);
             LayerScratch.Store<int>(q_rot_off + (h * (uint)g_head_dim + 2u * p) * 4u, (int)ClampRopeCodeGpu(rx));
             LayerScratch.Store<int>(q_rot_off + (h * (uint)g_head_dim + 2u * p + 1u) * 4u, (int)ClampRopeCodeGpu(ry));
         }
+
+        // K, phase 1 (STAGE): every owned head reads its own kv_head's CURRENT
+        // (pre-rotation) row into that HEAD's own ROPE_STAGE slice (N2). No
+        // thread writes to KvCache anywhere in this phase. T-2113 (B4): the COMMIT
+        // phase that used to sit below a DeviceMemoryBarrierWithGroupSync here is its
+        // own dispatch now (rope_commit_site.hlsl) -- the read-before-write ordering
+        // comes from the global UAV barrier between the two dispatches instead of a
+        // group-scoped barrier, strictly stronger and multi-group safe. No clamp is
+        // counted in this phase -- it only stages the current, already-landed bytes; the
+        // clamp on K's own rotation is counted in rope_commit_site.hlsl's own phase 2.
+        {
+            uint h1 = t / pairs;
+            uint kv_head1 = h1 / max(group, 1u);
+            uint row_off1 = KvRowOffsetWithinHalfGpu(g_context_cap, (uint)g_head_dim, kv_head1, g_position);
+            uint stage1 = rope_stage_base + h1 * (uint)g_head_dim * 4u;
+            {
+                uint p1 = t % pairs;
+                int kx = LoadSignedByteGpu(KvCache, kv_half_off + row_off1 + 2u * p1);
+                int ky = LoadSignedByteGpu(KvCache, kv_half_off + row_off1 + 2u * p1 + 1u);
+                WorkScratch.Store<int>(stage1 + 2u * p1 * 4u, kx);
+                WorkScratch.Store<int>(stage1 + (2u * p1 + 1u) * 4u, ky);
+            }
+        }
     }
 
-    // K, phase 1 (STAGE): every owned head reads its own kv_head's CURRENT
-    // (pre-rotation) row into that HEAD's own ROPE_STAGE slice (N2). No
-    // thread writes to KvCache anywhere in this phase. T-2113 (B4): the COMMIT
-    // phase that used to sit below a DeviceMemoryBarrierWithGroupSync here is its
-    // own dispatch now (rope_commit_site.hlsl) -- the read-before-write ordering
-    // comes from the global UAV barrier between the two dispatches instead of a
-    // group-scoped barrier, strictly stronger and multi-group safe.
-    {
-        uint h1 = t / pairs;
-        uint kv_head1 = h1 / max(group, 1u);
-        uint row_off1 = KvRowOffsetWithinHalfGpu(g_context_cap, (uint)g_head_dim, kv_head1, g_position);
-        uint stage1 = rope_stage_base + h1 * (uint)g_head_dim * 4u;
-        {
-            uint p1 = t % pairs;
-            int kx = LoadSignedByteGpu(KvCache, kv_half_off + row_off1 + 2u * p1);
-            int ky = LoadSignedByteGpu(KvCache, kv_half_off + row_off1 + 2u * p1 + 1u);
-            WorkScratch.Store<int>(stage1 + 2u * p1 * 4u, kx);
-            WorkScratch.Store<int>(stage1 + (2u * p1 + 1u) * 4u, ky);
+    // (D-SLM6263): flush this group's own accumulated clamp count into SeqState's SAME split
+    // (sat_lo, sat_hi) accumulator every other saturating site already feeds. Reached by every
+    // thread uniformly -- this barrier and the zero-init's above both sit OUTSIDE the
+    // `t < items` branch, matching the guard-ladder's own uniform-branch discipline.
+    GroupMemoryBarrierWithGroupSync();
+    if (gtid.x == 0 && gRopeGuardClamps != 0) {
+        uint sat_lo_off = SeqSatLoOffGpu(hidden_size);
+        uint sat_hi_off = SeqSatHiOffGpu(hidden_size);
+        uint old_lo;
+        SeqState.InterlockedAdd(sat_lo_off, gRopeGuardClamps, old_lo);
+        if (old_lo + gRopeGuardClamps < old_lo) {
+            uint old_hi;
+            SeqState.InterlockedAdd(sat_hi_off, 1u, old_hi);
         }
     }
 }
