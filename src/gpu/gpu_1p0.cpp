@@ -635,6 +635,14 @@ SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
 		std::string marshal_err;
 		if (!superslm_marshal::MarshalLayer(*base, l, num_heads, num_kv_heads, backings[l], layers[l],
 		                                     &marshal_err)) {
+			// T-2570 (M5, Claude/Poirot/cd12179-t2569-trackb-confirmation.md): MarshalLayer
+			// names the missing or malformed manifest key on every rejecting path
+			// (layer_marshal.h); this is the RECEIVED path -- an artifact that fails to
+			// marshal today, unlike the throwing contract violations the try/catch below
+			// guards against, which no in-tree producer can reach. Preserve the diagnostic
+			// to stderr, matching the same-function catch clause's own convention 28 lines
+			// below, rather than discarding it and returning a bare SSLM_DEVICE_LOST.
+			std::fprintf(stderr, "sslm_gpu_model_map: layer %u: %s\n", l, marshal_err.c_str());
 			return SSLM_DEVICE_LOST;
 		}
 	}

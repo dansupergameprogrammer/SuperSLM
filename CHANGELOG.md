@@ -549,6 +549,31 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   Build log: `Claude/Brunel/t2553-ask5-trackb-oracle-sibling-2026-09-02.md` (records
   worktree).
 
+- **New `SslmForwardStatus` member `GpuLayerWeightsContractViolation`, appended last, no
+  existing value moved (T-2568).** Returned by `RunLayerLoopGpu`'s public entry point when
+  a layer's `LayerWeights` violates a `PackLayerWeightsBytes`-enforced non-null pointer
+  contract (below) -- distinct from `GpuAllocationFailed`, which this file's own
+  transient/permanent taxonomy reserves for device and allocation failures a retry at a
+  smaller size can fix; no retry at any size fixes a null pointer. `SslmForwardStatusName`
+  gained the matching arm.
+
+### Changed
+
+- **`PackLayerWeightsBytes` (`src/gpu/superslm_gpu.cpp`) now refuses two previously
+  silently-substituted null-pointer contracts by throwing, instead of packing a
+  substituted zero (T-2566, T-2568).** `k_norm_landing_r_t`/`e_t` (required non-null
+  whenever the paired `k_norm_gain` is present) and `iexp_softmax_khead_m`/`_e` (required
+  non-null unconditionally, every layer) each now throw `GpuLayerWeightsContractError` --
+  a caller violating either contract is a permanent bug, never a transient/size-dependent
+  one. A caller reaching either boundary now gets `GpuLayerWeightsContractViolation`
+  (above) at both public GPU entry points (`RunLayerLoopGpu` and `sslm_gpu_model_map`),
+  with the violating field's name printed to stderr, rather than a silently zero-landed K
+  code or an unnamed status discarding the message. Unreachable through any artifact
+  `MarshalLayer` (the only in-tree producer of the pointers both refusals guard) can emit
+  today -- both fields are already rejected upstream when absent -- but the refusal is a
+  public-surface contract change on an installed header (`include/superslm/gpu_port.h`),
+  independent of today's reachability.
+
 ## [1.3.0] - 2026-08-29
 
 This release ships one of five requested consumer-driven changes: the FP-free load path

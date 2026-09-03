@@ -26658,6 +26658,51 @@ struct ScopedStdoutCapture {
 	}
 };
 
+// T-2570 (S1, Claude/Poirot/cd12179-t2569-trackb-confirmation.md): the same RAII idiom as
+// ScopedStdoutCapture immediately above, one identifier changed -- redirects stderr rather than
+// stdout, so a cell can assert on a diagnostic a catch clause prints there (the `std::fprintf
+// (stderr, ...)` calls both new GpuLayerWeightsContractError clauses make, superslm_gpu.cpp)
+// without the test process's own captured-stderr channel (if any) swallowing it unread. RAII
+// restore on scope exit covers the guarded call throwing too, matching the stdout sibling's own
+// reasoning.
+struct ScopedStderrCapture {
+	int saved_fd = -1;
+	std::string path;
+	bool active = false;
+
+	ScopedStderrCapture() {
+		char dir[MAX_PATH]{};
+		char file[MAX_PATH]{};
+		if (GetTempPathA(MAX_PATH, dir) == 0) return;
+		if (GetTempFileNameA(dir, "sslmcape", 0, file) == 0) return;
+		path = file;
+		std::fflush(stderr);
+		saved_fd = _dup(_fileno(stderr));
+		if (saved_fd == -1) return;
+		if (!std::freopen(path.c_str(), "w", stderr)) {
+			_close(saved_fd);
+			saved_fd = -1;
+			return;
+		}
+		active = true;
+	}
+	~ScopedStderrCapture() {
+		if (!active) return;
+		std::fflush(stderr);
+		_dup2(saved_fd, _fileno(stderr));
+		_close(saved_fd);
+		std::remove(path.c_str());
+	}
+	std::string ReadCaptured() {
+		if (!active) return "";
+		std::fflush(stderr);
+		std::ifstream f(path, std::ios::binary);
+		std::stringstream ss;
+		ss << f.rdbuf();
+		return ss.str();
+	}
+};
+
 // Raw-enumerates adapters (independent of Device::Init(), same shape as
 // tools/t2116_list_adapters.cpp) to find the first software (WARP) adapter's own raw
 // index -- varies by machine, never assumed.
@@ -26902,6 +26947,13 @@ static void TestT2568_S1_RunLayerLoopGpuRefusesNullKNormLandingByNamedStatus() {
 
 	// The refusal: the SAME fixture, k_norm_landing_r_t knocked to nullptr after construction --
 	// the exact asymmetry M4/S1 named.
+	//
+	// T-2570 (S1, Claude/Poirot/cd12179-t2569-trackb-confirmation.md): executed, deleting the
+	// catch clause's own `std::fprintf(stderr, ...)` left this cell's two status assertions
+	// (below, unchanged) green at 34267/0 while the process's captured stderr dropped to zero
+	// bytes -- the message is half of T-2567's own required evidence for this remedy and had no
+	// pin. ScopedStderrCapture wraps the throwing call so this cell can assert the field's name
+	// (the whole content of "refused by name") actually reaches stderr, red under that deletion.
 	{
 		QkNormWiringFixture fixture;
 		fixture.layer.k_norm_landing_r_t = nullptr;
@@ -26911,11 +26963,17 @@ static void TestT2568_S1_RunLayerLoopGpuRefusesNullKNormLandingByNamedStatus() {
 		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
 		seq.layer_index = 0;
 		uint8_t workspace[4] = {};
-		const auto result = superslm_gpu::RunLayerLoopGpu(
-		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1,
-		    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
-		    /*intermediate_size=*/2, /*context_cap=*/1, fixture.view.rope_tables, workspace,
-		    sizeof(workspace));
+		superslm::SslmForwardStatus result;
+		std::string captured_stderr;
+		{
+			ScopedStderrCapture cap;
+			result = superslm_gpu::RunLayerLoopGpu(
+			    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+			    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+			    /*intermediate_size=*/2, /*context_cap=*/1, fixture.view.rope_tables, workspace,
+			    sizeof(workspace));
+			captured_stderr = cap.ReadCaptured();
+		}
 		CHECK_MSG(result == SslmForwardStatus::GpuLayerWeightsContractViolation,
 		          "RunLayerLoopGpu(T-2568 S1, k_norm_landing_r_t == nullptr) status == %s, want "
 		          "GpuLayerWeightsContractViolation -- RED if the refusal reverts to throwing "
@@ -26927,6 +26985,12 @@ static void TestT2568_S1_RunLayerLoopGpuRefusesNullKNormLandingByNamedStatus() {
 		          "RunLayerLoopGpu(T-2568 S1, k_norm_landing_r_t == nullptr) status == "
 		          "GpuAllocationFailed -- the exact wrong-advice regression S1 closes ('retry "
 		          "smaller' fixes no null pointer at any size)");
+		CHECK_MSG(captured_stderr.find("k_norm_landing_r_t") != std::string::npos,
+		          "RunLayerLoopGpu(T-2570 S1, k_norm_landing_r_t == nullptr) captured stderr must "
+		          "name the field -- RED if the catch clause's own `std::fprintf(stderr, ...)` is "
+		          "deleted, which leaves the status assertions above green while the message is "
+		          "silently discarded; captured: \"%s\"",
+		          captured_stderr.c_str());
 	}
 }
 
