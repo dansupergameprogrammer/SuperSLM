@@ -135,7 +135,7 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
             // names: "the sequence saturation counter is updated by LandingRescale, but the
             // subsequent RoPE clamp has no counter").
             //
-            // CORRECTED 2026-09-03 (T-2577, D-SLM6274 O1, external review `Claude/Poirot/
+            // CORRECTED 2026-09-03 (T-2577, D-SLM6281, external review `Claude/Poirot/
             // 5fafd98-t2573-trackb-external-fold-review.md` Observation 1): `h2` ranges over
             // QUERY heads (`items = g_num_attention_heads * pairs`, above), but this dispatch's
             // own K row is addressed by `kv_head2 = h2 / group` -- every query head sharing one
@@ -169,7 +169,7 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
             uint old_hi;
             SeqState.InterlockedAdd(sat_hi_off, 1u, old_hi);
         }
-        // (T-2577, D-SLM6274 S3): the identical flush, a second time, into this site's OWN
+        // (T-2577, D-SLM6280): the identical flush, a second time, into this site's OWN
         // per-site slot -- "rope_k" (RoPE's K rotation, this shader) -- alongside the aggregate
         // flush immediately above, never in place of it. This is the reading Significant 1's own
         // enclosure proof watches: `rope_k` clamps must stay zero on the recalibrated candidate

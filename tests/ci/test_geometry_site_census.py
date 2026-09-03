@@ -1592,7 +1592,7 @@ def test_part3_reorder_gs12_two_differently_offset_occurrences_plus_revert_is_ca
     # own predicated-increment saturation counter (forward_sites.cpp, this ticket's own fix)
     # added lines above this occurrence -- shifting it from :1734 to :1745 in the same mutated
     # copy. Re-derived by running the census against the real, current, mutated file.
-    # CORRECTED AGAIN 2026-09-03 (T-2577, D-SLM6274 S3/O1): the per-site saturation-count
+    # CORRECTED AGAIN 2026-09-03 (T-2577, D-SLM6280/D-SLM6281): the per-site saturation-count
     # parameters and their call-site wiring (LandTokenKVRow/ApplyQkNormSite/RopeApplySite, and
     # RunLayerLoopChunkBatched's own four new trailing parameters) added lines above this
     # occurrence -- shifting it from :1745 to :1775 in the same mutated copy. Re-derived the

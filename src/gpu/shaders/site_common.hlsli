@@ -423,7 +423,7 @@ uint SeqSatLoOffGpu(int hidden_size) { return SeqLayerIdxOffGpu(hidden_size) + 8
 uint SeqSatHiOffGpu(int hidden_size) { return SeqSatLoOffGpu(hidden_size) + 4u; }
 uint SeqCtxLenOffGpu(int hidden_size) { return SeqSatHiOffGpu(hidden_size) + 4u; }
 uint SeqStickyOffGpu(int hidden_size) { return SeqCtxLenOffGpu(hidden_size) + 8u; }
-// (T-2577, D-SLM6274 S3): mirrors superslm_gpu.cpp's own identical C++ family (SeqKvLandingSatLoOff/
+// (T-2577, D-SLM6280): mirrors superslm_gpu.cpp's own identical C++ family (SeqKvLandingSatLoOff/
 // .../SeqRopeKSatHiOff) byte-for-byte -- four per-site saturation-count breakdowns, appended
 // after SeqStickyOffGpu so every pre-existing offset above is unchanged.
 uint SeqKvLandingSatLoOffGpu(int hidden_size) { return SeqStickyOffGpu(hidden_size) + 8u; }

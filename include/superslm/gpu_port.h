@@ -100,7 +100,7 @@ superslm::ChainResult RequantChainCheckedGpu(const int64_t* wide_row, size_t n,
 // readback still scatters into `workspace` exactly as it does today, so a caller in this
 // mode gets the identical CPU-oracle-comparable host mirror the pre-existing path always
 // produced (never merely a GPU self-consistency proof).
-// (T-2577, D-SLM6274 S1): the trailing `model_generation` parameter is the caller's own model
+// (T-2577, D-SLM6278): the trailing `model_generation` parameter is the caller's own model
 // identity for the three pre-1.0 residency caches (`g_resident_weights`/`g_resident_kv`/
 // `g_resident_rope`, `superslm_gpu.cpp`) -- an opaque value that MUST change whenever the model
 // backing `layers`/`rope_tables`/`workspace` changes and MUST NOT change across sequences of the
@@ -252,7 +252,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
     // after the fence wait. Both default to "no readback" so every existing caller (~40 sites)
     // is unaffected.
     uint8_t* out_q_codes = nullptr, size_t out_q_codes_capacity = 0,
-    // (T-2577, D-SLM6274 S1): mirrors `RunLayerLoopGpu`'s own trailing `model_generation` --
+    // (T-2577, D-SLM6278): mirrors `RunLayerLoopGpu`'s own trailing `model_generation` --
     // see that declaration's own header comment for the full contract. Defaults to `0` so every
     // existing caller (~40 sites) is unaffected.
     uint64_t model_generation = 0);
@@ -364,7 +364,7 @@ enum class GpuLayerLoopGuard : int {
 // own catch, twenty-nine paths in all -- T-2568 added one new catch clause to each of
 // RunLayerLoopGpuSubmit and SubmitOneSubChunkToFullDepthForG5Bridge
 // (GpuLayerWeightsContractError's own, PackLayerWeightsBytes' required-pointer refusal), two more
-// than the twenty-five this paragraph named before; T-2577 (D-SLM6274 S2, GpuShaderBinaryStaleError's
+// than the twenty-five this paragraph named before; T-2577 (D-SLM6279, GpuShaderBinaryStaleError's
 // own, ShaderPath's stale-binary refusal) added a second new catch clause to each of the same two
 // functions, two more again. Every path that resolves the call AFTER the
 // decision reads exactly what the decision decided (true on a cache hit, false on a miss),
@@ -379,7 +379,7 @@ enum class GpuLayerLoopGuard : int {
 // SubmitOneSubChunkToFullDepthForG5Bridge's own return-path shape changes.
 bool LastWeightUploadWasSkipped();
 
-// (T-2577, D-SLM6274 S1): the RoPE-table residency cache's own observable, mirroring
+// (T-2577, D-SLM6278): the RoPE-table residency cache's own observable, mirroring
 // `LastWeightUploadWasSkipped`'s contract exactly -- true iff the most recent call served
 // `g_resident_rope`'s cached cos/sin tables rather than repacking and re-uploading them. Set
 // internally by `RunLayerLoopGpu`'s own rope-residency decision; read back by the caller after

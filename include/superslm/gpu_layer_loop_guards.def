@@ -96,7 +96,7 @@
 // lines, uniformly (nothing was inserted between the guards themselves). Re-derived directly
 // against the current file, never by applying the +2 as an offset to the prior citation set.
 //
-// CORRECTED 2026-09-03 (T-2577, D-SLM6274 S3/O1): LandingRescale's, RopeApplySite's,
+// CORRECTED 2026-09-03 (T-2577, D-SLM6280/D-SLM6281): LandingRescale's, RopeApplySite's,
 // LandTokenKVRow's and ApplyQkNormSite's own per-site saturation-count parameters and call-site
 // wiring (all defined above this function's own guard ladder) added lines, uniformly shifting
 // every citation below by +30 lines. Re-derived directly against the current file, never by

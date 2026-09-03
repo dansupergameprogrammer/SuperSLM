@@ -311,7 +311,7 @@ enum class SslmForwardStatus {
 	                                          // SSLM_INVALID_ARGUMENT by MapForwardStatus
 	                                          // (sslm_abi.cpp), mirroring InvalidDecodeParams'
 	                                          // own precedent exactly.
-	GpuShaderBinaryStale,                     // T-2577 (D-SLM6274 S2, external review
+	GpuShaderBinaryStale,                     // T-2577 (D-SLM6279, external review
 	                                          // `Claude/Poirot/5fafd98-t2573-trackb-external-
 	                                          // fold-review.md` Significant 2):
 	                                          // `superslm_gpu::harness::ShaderPath`

@@ -63,7 +63,7 @@ std::atomic<int64_t> g_gpu_chunk_dispatch_count_probe{0};
 namespace superslm_gpu {
 namespace harness {
 
-// T-2577 (D-SLM6274 S2, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
+// T-2577 (D-SLM6279, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
 // review.md` Significant 2): a dedicated exception type for `ShaderPath`'s own staleness
 // refusal (below), declared here -- ahead of its own throw site -- for the identical reason
 // `GpuLayerWeightsContractError` (this file, further below) is: `std::logic_error`, not
@@ -113,7 +113,7 @@ std::string ShaderPath(const std::string& name) {
 	const std::string stale = ShaderBinaryStalenessDiagnostic(ShaderSourceDirOrEmpty(), name, cso);
 	if (!stale.empty()) {
 		std::fprintf(stderr, "superslm_gpu: %s\n", stale.c_str());
-		// (T-2577, D-SLM6274 S2): a dedicated type, not `std::runtime_error` -- see
+		// (T-2577, D-SLM6279): a dedicated type, not `std::runtime_error` -- see
 		// `GpuShaderBinaryStaleError`'s own header comment above for why. The generic
 		// `catch (const std::runtime_error&)` this used to fall into mapped every staleness
 		// refusal to `GpuAllocationFailed` ("retry smaller") on every production GPU path,
@@ -435,7 +435,7 @@ namespace {
 
 uint32_t Align8U32(uint32_t x) { return (x + 7u) & ~7u; }
 
-// (T-2577, D-SLM6274 S1): the shared gate `lw_fast_hit`/`kv_fast_hit`/`rope_fast_hit`
+// (T-2577, D-SLM6278): the shared gate `lw_fast_hit`/`kv_fast_hit`/`rope_fast_hit`
 // (`PrepareGpuLayerLoopChunkOpenState`, below) each call in place of a bare `!fresh_sequence`
 // term. `cached_generation` is the identity a residency cache stored on its last successful
 // upload; `model_generation` is the CURRENT call's own caller-supplied identity (0 means "not
@@ -498,7 +498,7 @@ struct ResidentWeights {
 	const void* src_layers = nullptr;  // opaque: identity only, no LayerWeights visibility needed here
 	uint32_t src_n = 0;
 	uint32_t src_stride = 0;
-	// (T-2577, D-SLM6274 S1): the MODEL identity this resident row was uploaded for -- see
+	// (T-2577, D-SLM6278): the MODEL identity this resident row was uploaded for -- see
 	// `model_generation`'s own parameter comment on `PrepareGpuLayerLoopChunkOpenState` for the
 	// full contract. 0 means "no caller-supplied identity" (every pre-T-2577 caller), which keeps
 	// this field inert for them: the hit predicate below falls back to `!fresh_sequence` exactly as
@@ -539,7 +539,7 @@ struct ResidentKv {
 	bool valid = false;
 	const uint8_t* src_workspace = nullptr;  // opaque identity: the caller's own workspace pointer
 	size_t src_size = 0;
-	// (T-2577, D-SLM6274 S1): mirrors `ResidentWeights::generation`'s own contract exactly -- see
+	// (T-2577, D-SLM6278): mirrors `ResidentWeights::generation`'s own contract exactly -- see
 	// that field's header comment.
 	uint64_t generation = 0;
 };
@@ -575,7 +575,7 @@ struct ResidentRopeTables {
 	Microsoft::WRL::ComPtr<ID3D12Resource> cos_buf;
 	Microsoft::WRL::ComPtr<ID3D12Resource> sin_buf;
 	bool valid = false;
-	// (T-2577, D-SLM6274 S1): mirrors `ResidentWeights::generation`'s own contract exactly -- see
+	// (T-2577, D-SLM6278): mirrors `ResidentWeights::generation`'s own contract exactly -- see
 	// that field's header comment. This is the field the S1 remedy is actually about: unlike
 	// `lw_fast_hit`/`kv_fast_hit`, this cache has no content-compare fallback (`!hit` means a full
 	// pack AND a full re-upload, unconditionally), so `!fresh_sequence` alone was the only signal
@@ -585,7 +585,7 @@ struct ResidentRopeTables {
 	uint64_t generation = 0;
 };
 ResidentRopeTables g_resident_rope;
-// (T-2577, D-SLM6274 S1): mirrors `g_last_weight_upload_was_skipped` -- backs the public
+// (T-2577, D-SLM6278): mirrors `g_last_weight_upload_was_skipped` -- backs the public
 // `LastRopeUploadWasSkipped()` accessor (`gpu_port.h`), true iff this call served the rope tables
 // from `g_resident_rope` rather than repacking and re-uploading them.
 bool g_last_rope_upload_was_skipped = false;
@@ -782,7 +782,7 @@ uint32_t SeqSatLoOff(uint32_t hidden_size) { return SeqLayerIdxOff(hidden_size) 
 uint32_t SeqSatHiOff(uint32_t hidden_size) { return SeqSatLoOff(hidden_size) + 4u; }
 uint32_t SeqCtxLenOff(uint32_t hidden_size) { return SeqSatHiOff(hidden_size) + 4u; }
 uint32_t SeqStickyOff(uint32_t hidden_size) { return SeqCtxLenOff(hidden_size) + 8u; }
-// (T-2577, D-SLM6274 S3): four per-site saturation-count breakdowns, APPENDED after
+// (T-2577, D-SLM6280): four per-site saturation-count breakdowns, APPENDED after
 // `SeqStickyOff` so every pre-existing offset above is byte-for-byte unchanged -- `kv_saturation_
 // count`/`SeqSatLoOff`/`SeqSatHiOff` stay the aggregate every existing consumer already reads.
 // Each site gets the identical lo/hi uint32 split the aggregate already uses (matched
@@ -1755,7 +1755,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
     uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
     const GpuAdapterBridge* adapter_bridge, GpuLayerLoopChunkOpenState* out_state,
     size_t q_width,
-    // (T-2577, D-SLM6274 S1): the calling model's own identity, for the three residency caches'
+    // (T-2577, D-SLM6278): the calling model's own identity, for the three residency caches'
     // fast-hit keys below (`lw_fast_hit`/`kv_fast_hit`/`rope_fast_hit`) -- an opaque, caller-chosen
     // value that MUST change whenever the model backing `layers`/`rope_tables`/`workspace` changes,
     // and MUST NOT change across sequences of the same still-live model (a per-load counter, or the
@@ -1953,7 +1953,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// guarantee and always pays the real check.
 	const bool fresh_sequence = seq.layer_index == 0 && seq.context_length == 0;
 
-	// (T-2577, D-SLM6274 S1): `lw_fast_hit`/`kv_fast_hit`/`rope_fast_hit` (below) each call
+	// (T-2577, D-SLM6278): `lw_fast_hit`/`kv_fast_hit`/`rope_fast_hit` (below) each call
 	// `SameModelFastPathAllowed` (a top-level function, declared beside `Align8U32` above, not
 	// a local lambda here: keeping its own `return` in ITS OWN brace-matched extent, not
 	// textually inside this function's, is what keeps `tests/ci/check_gpu_guard_status_parity.
@@ -2099,7 +2099,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	PutI32At(seq_bytes, SeqSatHiOff(H), static_cast<int32_t>((seq.kv_saturation_count >> 32) & 0xFFFFFFFFu));
 	PutI64At(seq_bytes, SeqCtxLenOff(H), seq.context_length);
 	PutI64At(seq_bytes, SeqStickyOff(H), 0);  // sticky_status = kTagOk
-	// (T-2577, D-SLM6274 S3): the four per-site breakdowns, same lo/hi split as the aggregate
+	// (T-2577, D-SLM6280): the four per-site breakdowns, same lo/hi split as the aggregate
 	// immediately above -- carried forward across calls exactly like the aggregate is (never
 	// zeroed here; a fresh sequence starts at whatever `seq` itself carries, matching
 	// `kv_saturation_count`'s own "caller resets on sequence create" contract).
@@ -2338,7 +2338,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// degenerate-geometry finding (D-SLM6269), and it is reachable at production geometry too
 	// (harness CELL 5, executed both ways).
 	//
-	// CORRECTED AGAIN 2026-09-03 (T-2577, D-SLM6274 S1, external review `Claude/Poirot/
+	// CORRECTED AGAIN 2026-09-03 (T-2577, D-SLM6278, external review `Claude/Poirot/
 	// 5fafd98-t2573-trackb-external-fold-review.md` Significant 1): the paragraph that stood
 	// here ("gating on `fresh_sequence` costs nothing in real decode -- the first call of any
 	// sequence is already a miss by construction") was a true conclusion resting on a false
@@ -2964,7 +2964,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		dev.list->Close();
 		return superslm::SslmForwardStatus::GpuLayerWeightsContractViolation;
 	} catch (const harness::GpuShaderBinaryStaleError& e) {
-		// T-2577 (S2, Claude/Poirot/5fafd98-t2573-trackb-external-fold-review.md, D-SLM6274):
+		// T-2577 (S2, Claude/Poirot/5fafd98-t2573-trackb-external-fold-review.md, D-SLM6279):
 		// the twin of the GpuLayerWeightsContractError clause immediately above, for
 		// `harness::ShaderPath`'s own staleness refusal (thrown from inside this function's own
 		// dispatch-recording code, this function's own enclosing try). A stale shader binary is
@@ -3437,7 +3437,7 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		dev.list->Close();
 		return superslm::SslmForwardStatus::GpuLayerWeightsContractViolation;
 	} catch (const harness::GpuShaderBinaryStaleError& e) {
-		// T-2577 (S2, Claude/Poirot/5fafd98-t2573-trackb-external-fold-review.md, D-SLM6274):
+		// T-2577 (S2, Claude/Poirot/5fafd98-t2573-trackb-external-fold-review.md, D-SLM6279):
 		// the twin of the GpuLayerWeightsContractError clause immediately above, for
 		// `harness::ShaderPath`'s own staleness refusal (thrown from inside this function's own
 		// dispatch-recording code, this function's own enclosing try). A stale shader binary is
@@ -3912,7 +3912,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 	std::memcpy(&ctxlen, seq_out.data() + SeqCtxLenOff(H), 8);
 	std::memcpy(&sticky_tag, seq_out.data() + SeqStickyOff(H), 8);
 	(void)lidx32; (void)sat_lo32; (void)sat_hi32;
-	// (T-2577, D-SLM6274 S3): the four per-site breakdowns, same lo/hi split as the aggregate
+	// (T-2577, D-SLM6280): the four per-site breakdowns, same lo/hi split as the aggregate
 	// immediately above.
 	uint32_t kvl_lo_u, kvl_hi_u, knl_lo_u, knl_hi_u, rq_lo_u, rq_hi_u, rk_lo_u, rk_hi_u;
 	std::memcpy(&kvl_lo_u, seq_out.data() + SeqKvLandingSatLoOff(H), 4);
@@ -3991,7 +3991,7 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 // see gpu_port.h's own declaration comment for the full contract.
 bool LastWeightUploadWasSkipped() { return g_last_weight_upload_was_skipped; }
 
-// (T-2577, D-SLM6274 S1): mirrors `LastWeightUploadWasSkipped`'s own contract exactly, for the
+// (T-2577, D-SLM6278): mirrors `LastWeightUploadWasSkipped`'s own contract exactly, for the
 // RoPE-table residency cache -- see `gpu_port.h`'s own declaration comment.
 bool LastRopeUploadWasSkipped() { return g_last_rope_upload_was_skipped; }
 

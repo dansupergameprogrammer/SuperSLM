@@ -817,7 +817,7 @@ struct SslmDecodeStepStatus {
 	// The per-sequence saturation count (§8.2, `SequenceLayerState::kv_saturation_count`) at the
 	// moment this step returned -- the SUM of four sites, not only K/V landing.
 	//
-	// CORRECTED 2026-09-03 (T-2577, D-SLM6274 S3, external review `Claude/Poirot/
+	// CORRECTED 2026-09-03 (T-2577, D-SLM6280, external review `Claude/Poirot/
 	// 5fafd98-t2573-trackb-external-fold-review.md` Significant 3): this field's own name and the
 	// prior text here both said "K/V landing" specifically; as of the carried-scale delta and the
 	// RoPE saturation counter (T-2572, D-SLM6263) the field also carries K's post-norm re-landing

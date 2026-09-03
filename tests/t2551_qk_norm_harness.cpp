@@ -124,7 +124,7 @@ int main(int argc, char** argv) {
 	const std::string model_path = argv[1];
 	const int32_t token_id = argc >= 3 ? std::atoi(argv[2]) : 0;
 
-	// (T-2577, D-SLM6274 S1): this process loads exactly ONE model, once -- every GPU call below
+	// (T-2577, D-SLM6278): this process loads exactly ONE model, once -- every GPU call below
 	// that drives this SAME loaded candidate passes this SAME identity, so the residency caches
 	// (g_resident_weights/g_resident_kv/g_resident_rope, superslm_gpu.cpp) treat every fresh
 	// sequence of it as a legitimate hit rather than paying T-2576's own `!fresh_sequence`-gated
@@ -369,7 +369,7 @@ int main(int argc, char** argv) {
 	            (unsigned long long)cpu_seq.kv_saturation_count,
 	            (unsigned long long)gpu_seq.kv_saturation_count);
 
-	// (T-2577, D-SLM6274 S3): the per-site breakdown, single-token path -- GPU-equals-CPU per
+	// (T-2577, D-SLM6280): the per-site breakdown, single-token path -- GPU-equals-CPU per
 	// site, not only in the aggregate above.
 	{
 		struct SiteReading { const char* name; uint64_t cpu; uint64_t gpu; };
@@ -598,7 +598,7 @@ int main(int argc, char** argv) {
 			out_scale = seq.hidden_scale;
 			out_sat = seq.kv_saturation_count;
 			if (out_rope_k != nullptr) *out_rope_k = seq.rope_k_saturation_count;
-			// (T-2577, D-SLM6274 S3): O2's own zero-margin observation, answered with the margin
+			// (T-2577, D-SLM6280): O2's own zero-margin observation, answered with the margin
 			// the integer path actually has -- the peak |K store byte| this real drive reached,
 			// against the [-127, 127] pinned code range every landing site clamps to.
 			if (out_peak_k_code != nullptr) {
@@ -697,7 +697,7 @@ int main(int argc, char** argv) {
 			if (out_rope_k > rope_k_max_observed) rope_k_max_observed = out_rope_k;
 			if (out_peak_k_code > peak_k_code_observed) peak_k_code_observed = out_peak_k_code;
 		}
-		// (T-2577, D-SLM6274 S3, external review Significant 1's own required closure item 2 and
+		// (T-2577, D-SLM6280, external review Significant 1's own required closure item 2 and
 		// O2): the enclosure proof this ticket owes -- RoPE's own K clamp (rope_k) stays zero
 		// across every repeated dispatch at width > 1 on the recalibrated candidate, and the peak
 		// integer K code actually reached is reported against the pinned 127 clamp boundary, so
@@ -796,7 +796,7 @@ int main(int argc, char** argv) {
 				return st;
 			};
 			// The same three tokens driven sequentially on the GPU, one fresh sequence.
-			// (T-2577, D-SLM6274 S1): `generation` and `out_first_call_rope_hit` let this lambda
+			// (T-2577, D-SLM6278): `generation` and `out_first_call_rope_hit` let this lambda
 			// serve BOTH S1 cells this section now covers -- the recycled-address must-reject
 			// (T-2576's own construction, generation bumped between `warm` and `mut_gpu` below)
 			// and the "a second fresh sequence of the same model hits" must-accept, read directly
@@ -864,7 +864,7 @@ int main(int argc, char** argv) {
 				for (size_t b = 0; b < sin_bytes; b += 8) std::memcpy(sin_mut + b, &cos45_q30, 8);
 			}
 
-			// (T-2577, D-SLM6274 S1): a DIFFERENT generation for the mutated arm -- simulating a
+			// (T-2577, D-SLM6278): a DIFFERENT generation for the mutated arm -- simulating a
 			// different model now occupying the identical host address, T-2576's own recycled-
 			// address construction. The must-reject: this must still MISS (and read the mutated
 			// tables), even though the address and byte count are unchanged from `warm` above.
@@ -876,7 +876,7 @@ int main(int argc, char** argv) {
 			const SslmForwardStatus mut_gpu_st =
 			    run_gpu_chunk(mut_gpu, mut_gpu_scale, kMutatedGeneration, &mut_gpu_first_call_hit);
 
-			// (T-2577, D-SLM6274 S1, property 3): the cache resumes hitting once the generation
+			// (T-2577, D-SLM6278, property 3): the cache resumes hitting once the generation
 			// is held steady again -- proves the miss above was the generation mismatch, not a
 			// permanent cache trip. Same (still-mutated) tables, same kMutatedGeneration.
 			std::vector<int8_t> mut_gpu2;
@@ -925,7 +925,7 @@ int main(int argc, char** argv) {
 					          "production geometry)");
 					if (!gpu_followed) qk_norm_ran = false;
 
-					// (T-2577, D-SLM6274 S1): the three model_generation properties, on this real
+					// (T-2577, D-SLM6278): the three model_generation properties, on this real
 					// candidate at production geometry.
 					std::printf(
 					    "CELL 5a model_generation must-accept (a fresh sequence of the SAME model, "

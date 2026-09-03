@@ -643,7 +643,7 @@ int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_
 	if (out_saturation_count != nullptr && (magnitude_exceeds_clamp || raw < -127 || raw > 127)) {
 		*out_saturation_count += 1;
 	}
-	// (T-2577, D-SLM6274 S3): the identical predicate, a second time, into the caller's own
+	// (T-2577, D-SLM6280): the identical predicate, a second time, into the caller's own
 	// per-site counter -- see this parameter's own header comment (forward_sites.h) for why a
 	// second counter is needed at all.
 	if (out_site_saturation_count != nullptr && (magnitude_exceeds_clamp || raw < -127 || raw > 127)) {
@@ -772,7 +772,7 @@ SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t posi
 			if (rotated.x < -127 || rotated.x > 127) *out_saturation_count += 1;
 			if (rotated.y < -127 || rotated.y > 127) *out_saturation_count += 1;
 		}
-		// (T-2577, D-SLM6274 S3): the identical predicate, a second time, into the caller's own
+		// (T-2577, D-SLM6280): the identical predicate, a second time, into the caller's own
 		// per-call-site counter -- this ONE function serves both the Q call site and the K call
 		// site (RunLayerLoopImpl/RunLayerLoopChunkBatched, below), and `out_saturation_count`
 		// alone cannot tell them apart.
@@ -1312,7 +1312,7 @@ SslmForwardStatus LandTokenKVRow(int64_t* kacc, int64_t* vacc, const int8_t* nor
                                   int64_t position, int64_t context_cap,
                                   const SslmTensorManifest& rope_tables, uint8_t* workspace,
                                   bool option_g_fused_k_landing, uint64_t* kv_saturation_count,
-                                  // (T-2577, D-SLM6274 S3): the "kv_landing" per-site counter --
+                                  // (T-2577, D-SLM6280): the "kv_landing" per-site counter --
                                   // every LandingRescale call this function makes (K's plain
                                   // landing, K's Option-G fused rotate-then-land, V's landing)
                                   // is this ONE site. Incremented under the identical condition
@@ -1897,7 +1897,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			const size_t kv_head = h / group;
 			const int8_t* const k_row_before_rotate =
 			    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, position);
-			// CORRECTED 2026-09-03 (T-2577, D-SLM6274 O1, external review `Claude/Poirot/
+			// CORRECTED 2026-09-03 (T-2577, D-SLM6281, external review `Claude/Poirot/
 			// 5fafd98-t2573-trackb-external-fold-review.md` Observation 1): every query head
 			// sharing this `kv_head` redundantly re-rotates the SAME row (the write-back loop's
 			// own comment below: "redundant but sound") -- harmless to repeat, but counting a
@@ -2415,7 +2415,7 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 				const size_t kv_head = h / group;
 				const int8_t* const k_row_before_rotate = KeyRow(
 				    workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, position);
-				// (T-2577, D-SLM6274 O1): the batched sibling of RunLayerLoopImpl's own identical
+				// (T-2577, D-SLM6281): the batched sibling of RunLayerLoopImpl's own identical
 				// fix -- see that call site's comment for the full rationale. Count only on the
 				// first query head of this KV head's own group.
 				const bool only_representative_head = (h % group) == 0;

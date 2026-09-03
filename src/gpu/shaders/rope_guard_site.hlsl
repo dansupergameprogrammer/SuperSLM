@@ -233,7 +233,7 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
             uint old_hi;
             SeqState.InterlockedAdd(sat_hi_off, 1u, old_hi);
         }
-        // (T-2577, D-SLM6274 S3): the identical flush, a second time, into this site's OWN
+        // (T-2577, D-SLM6280): the identical flush, a second time, into this site's OWN
         // per-site slot -- "rope_q" (RoPE's Q rotation, this shader) -- alongside the aggregate
         // flush immediately above, never in place of it.
         uint rq_sat_lo_off = SeqRopeQSatLoOffGpu(hidden_size);

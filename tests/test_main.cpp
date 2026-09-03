@@ -27332,7 +27332,7 @@ static void TestT2572_S2_RunLayerLoopWiresRopeSaturationCounterThroughBothPaths(
 			          "(:1855, :1867) are reverted to pass no counter, restoring exactly "
 			          "Significant 1's own found gap",
 			          static_cast<unsigned long long>(seq.kv_saturation_count));
-			// (T-2577, D-SLM6274 S3): this fixture's own saturation comes from the raw K/V
+			// (T-2577, D-SLM6280): this fixture's own saturation comes from the raw K/V
 			// landing's doubling weight, not from RoPE or QK-norm (RopeSaturationFixture's own
 			// header comment) -- so the per-site `kv_landing` breakdown must independently pin
 			// nonzero here, the one existing cell that reaches `LandTokenKVRow`'s own per-site
@@ -27560,7 +27560,7 @@ static void TestT2576_GpuKvSaturationAndKvRowMatchCpuOnRopeSaturationFixtureN100
 }
 
 // ==============================================================================
-// T-2577 (D-SLM6274 S1, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
+// T-2577 (D-SLM6278, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
 // review.md` Significant 1): `model_generation`, the caller-supplied identity that replaces
 // `!fresh_sequence` as the fast-path gate on `g_resident_rope`/`g_resident_weights`/
 // `g_resident_kv` (superslm_gpu.cpp) when a caller supplies one. Three properties, in one
@@ -27701,7 +27701,7 @@ static void TestT2577_S1_ModelGenerationGatesTheThreeResidencyCachesCorrectly() 
 	std::memcpy(sin_mut, sin_orig.data(), sin_bytes);
 }
 
-// (T-2577, D-SLM6274 O1, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
+// (T-2577, D-SLM6281, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
 // review.md` Observation 1): K's own RoPE clamp is counted once per KV head, not once per
 // query head. Constructs a 2:1 GQA fixture (two query heads sharing one KV head) whose K
 // weight forces a saturating rotation, and asserts the K-specific count is exactly 1 (one
@@ -28049,7 +28049,7 @@ static void TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath() {
 	// `dyn_recip` is a B1 primitive-battery shader, not one of the per-layer dispatch chain --
 	// back-dating it for the length of this cell cannot perturb any other cell's own dispatch.
 	//
-	// (T-2577, D-SLM6274 M2, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
+	// (T-2577, D-SLM6282, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
 	// review.md` Minor 2): this cell mutates the REAL `dyn_recip.cso` beside the executable, not
 	// a copy, and restores it via `RestoreWriteTime`'s own destructor (below) -- which does not
 	// run on a hard kill or a crash between the back-date and the restore. RECOVERY, if that
@@ -28091,7 +28091,7 @@ static void TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath() {
 	}
 	restore.armed = true;
 
-	// (T-2577, D-SLM6274 M1, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
+	// (T-2577, D-SLM6282, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
 	// review.md` Minor 1): `ShaderPath`'s own stderr write (superslm_gpu.cpp) is about to fire,
 	// deliberately, on the binary this cell just back-dated a decade -- printed here, to stdout,
 	// so a reader scanning a CI log for "stale shader binary" on a fully green run finds this
@@ -28134,7 +28134,7 @@ static void TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath() {
 	          kName);
 }
 
-// (T-2577, D-SLM6274 S2, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
+// (T-2577, D-SLM6279, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
 // review.md` Significant 2): the six commissioning cells above call `ShaderPath` (or
 // `ShaderBinaryStalenessDiagnostic`) directly and catch the exception themselves -- none
 // drives a forward call with a stale binary and reads the STATUS a real consumer would see.
@@ -28194,7 +28194,7 @@ static void TestT2577_S2_AStaleShaderOnTheRealDispatchPathReturnsTheNamedStatus(
 	}
 	restore.armed = true;
 
-	// (T-2577, D-SLM6274 M1's own precedent): announced on stdout before the expected stderr
+	// (T-2577, D-SLM6282's own precedent): announced on stdout before the expected stderr
 	// refusal fires, so a log reader finds the context immediately above it.
 	std::printf("TestT2577_S2_AStaleShaderOnTheRealDispatchPathReturnsTheNamedStatus: about to "
 	            "trigger ShaderPath's own stale-shader stderr line on \"%s\" -- EXPECTED, this "
@@ -28370,7 +28370,7 @@ int main(int argc, char** argv) {
 		             kCrashProbeChildEnvVar, argc > 1 ? argv[1] : "(none)");
 		return 3;
 	}
-	// (T-2577, D-SLM6274 S2): MUST run before any other test that drives a real GPU forward
+	// (T-2577, D-SLM6279): MUST run before any other test that drives a real GPU forward
 	// call. `GetOrBuildComposedPipeline` (d3d12_harness.h) is a process-lifetime, name-keyed
 	// PSO cache -- once a shader name is built successfully, every later call for that name
 	// returns the cached pipeline without ever calling `ShaderPath` again, so a staleness

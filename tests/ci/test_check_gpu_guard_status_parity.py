@@ -1727,7 +1727,7 @@ def test_the_real_tree_lwuws_before_count_is_twenty_nine():
     # over BOTH RunLayerLoopGpuSubmit's own body and SubmitOneSubChunkToFullDepthForG5Bridge's own
     # body.
     #
-    # CORRECTED 2026-09-03 (T-2577, D-SLM6274 S2): a second new catch clause added to EACH of the
+    # CORRECTED 2026-09-03 (T-2577, D-SLM6279): a second new catch clause added to EACH of the
     # same two functions (GpuShaderBinaryStaleError's own, one literal return each, ShaderPath's
     # stale-binary refusal) -- twelve catch clauses total now, +2 returns again: 13 + 16 = 29,
     # matching gpu_port.h's own current prose. `model_generation`'s own gate function
@@ -1765,7 +1765,7 @@ def test_the_real_tree_lwuws_after_count_is_six():
 
 
 def test_the_real_tree_lwuws_total_is_thirty_five():
-    # CORRECTED 2026-09-03 (T-2577, D-SLM6274 S2): 27 + 6 = 33 was gpu_port.h's own prose before
+    # CORRECTED 2026-09-03 (T-2577, D-SLM6279): 27 + 6 = 33 was gpu_port.h's own prose before
     # this ticket; two new catch clauses (GpuShaderBinaryStaleError's, one per function) move the
     # before-count from 27 to 29, unchanged after-count of 6: 29 + 6 = 35.
     with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:

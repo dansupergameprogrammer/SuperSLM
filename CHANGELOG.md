@@ -514,7 +514,7 @@ QK-norm artifacts converted by a pre-1.4.0 tree** — see the format note under 
   a consumer reading only the aggregate to decide whether K's own landing is clipping was
   reading a number 97% attributable to a term its own name never named; the per-site
   breakdown gives that consumer the K-specific reading directly. **K's own count is per KV
-  head, not per query head** (T-2577, D-SLM6274 O1): every query head sharing one KV head
+  head, not per query head** (T-2577, D-SLM6281): every query head sharing one KV head
   redundantly re-rotates the identical row (harmless to repeat -- the write-back was
   already documented as "redundant but sound") and, before this fix, each redundant call
   also counted its own clamp, inflating K's count by the head-group ratio (2x on the real
@@ -541,7 +541,7 @@ QK-norm artifacts converted by a pre-1.4.0 tree** — see the format note under 
   (`superslm_gpu::harness::ShaderPath`, the single funnel every `.cso` load in this tree
   passes through): a `.cso` must be at least as new as its own `.hlsl` and as the newest
   shared `.hlsli` in the same directory. The refusal now surfaces to a caller as its own
-  named status, `GpuShaderBinaryStale` (T-2577, D-SLM6274 S2) -- it used to fall through a
+  named status, `GpuShaderBinaryStale` (T-2577, D-SLM6279) -- it used to fall through a
   generic `catch (const std::runtime_error&)` into `GpuAllocationFailed`, whose documented
   remedy ("retry smaller") is actively wrong for a shader no retry at any size fixes; a
   caller obeying that remedy would retry forever with the one real diagnostic surviving
@@ -558,7 +558,7 @@ QK-norm artifacts converted by a pre-1.4.0 tree** — see the format note under 
 
   **A RoPE cos/sin table cached against a still-live model is no longer forced to repack
   and re-upload on every fresh sequence, and a table cached against a recycled host
-  address is still never served to the wrong model** (T-2577, D-SLM6274 S1).
+  address is still never served to the wrong model** (T-2577, D-SLM6278).
   `g_resident_rope` (`src/gpu/superslm_gpu.cpp`) keeps the two model-wide rotation tables
   device-resident across a decode session, keyed on the source tensor's own host address
   and byte count -- a key identical across every sequence of ONE model. A prior fix gated
@@ -599,7 +599,7 @@ QK-norm artifacts converted by a pre-1.4.0 tree** — see the format note under 
   write-back defect until a device read-back located it one cache over -- is preserved in
   those records and in git history, not narrated here: `StandardsDocument.md` §6.6 wants
   HEAD to hold current truth, and none of that apparatus history describes the shipped
-  engine, which never carried the defect it appeared to (D-SLM6274 M4).
+  engine, which never carried the defect it appeared to (D-SLM6282).
 
 ### Changed
 
