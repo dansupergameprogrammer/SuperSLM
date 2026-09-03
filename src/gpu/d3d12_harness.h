@@ -659,6 +659,32 @@ inline std::vector<uint8_t> ReadFile(const std::string& path) {
 // current, full account of where each build puts them.
 std::string ShaderPath(const std::string& name);
 
+// (T-2575, D-SLM6268): the shader-binary freshness guard. `ShaderPath` refuses to hand back a
+// `.cso` older than the HLSL it is supposed to have been compiled from, because nothing else in
+// this tree ever checks that -- a GPU-linked executable simply loads whatever bytes sit in its
+// own `shaders\` directory, and a build recipe that compiles the executable without re-running
+// dxc leaves a previous generation's shader in place, silently. Measured: the T-2551 acceptance
+// harness ran for two tickets against a `rope_guard_site.cso` compiled before the saturation
+// counter existed, which is what produced T-2572/T-2574's quarantined "GPU loses almost every
+// RoPE saturation event" reading.
+//
+// Returns an empty string when the binary is current, and a diagnostic naming the offending
+// pair otherwise. Deliberately returns empty -- unverifiable, not stale -- in two cases: when
+// `shader_source_dir` is empty (no `src/gpu/shaders` ancestor above the executable, which is
+// every shipped/installed consumer, where the sources are genuinely absent), and when the named
+// `.hlsl` or the `.cso` itself does not exist (a missing binary is `ReadFile`'s own "cannot open
+// shader" error, not this function's). A `.cso` must be at least as new as its own `.hlsl` AND
+// as the newest `*.hlsli` in the same directory -- the shared headers are compiled into every
+// shader that includes them, and CMake's own shader rule does not depend on them.
+std::string ShaderBinaryStalenessDiagnostic(const std::string& shader_source_dir,
+                                             const std::string& shader_name,
+                                             const std::string& cso_path);
+
+// The first `src\gpu\shaders` directory found by walking up from the running executable's own
+// directory, or "" when there is none. Exposed so a test can distinguish "checked and current"
+// from "not checkable here".
+const std::string& ShaderSourceDirOrEmpty();
+
 struct CachedPipeline {
 	ComPtr<ID3D12RootSignature> root_sig;
 	ComPtr<ID3D12PipelineState> pso;

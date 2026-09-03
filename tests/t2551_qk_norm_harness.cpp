@@ -31,6 +31,26 @@
 // to compare against the (now QK-norm-bearing, D-SLM5676) float reference -- QUARANTINED per this
 // ticket's own brief, recorded and never headlined as pass/fail pending the slice 3 tolerance.
 //
+// BUILD RECIPE -- the dxc step is part of it, not an optional prerequisite (T-2575, D-SLM6268).
+// `superslm_gpu::harness::ShaderPath` resolves `.cso` files relative to the EXECUTABLE's own
+// directory, so this harness dispatches whatever shader binaries happen to sit in
+// `<exe_dir>\shaders\`. Compiling only the .cpp leaves the previous generation's shaders in
+// place and the harness runs them silently. Measured: `out\shaders\rope_guard_site.cso` was a
+// pre-D-SLM6263 compile carrying no saturation counter at all, so every GPU
+// `kv_saturation_count` reading this harness produced across T-2572 and T-2574 came from a dead
+// counter -- which is what the "GPU loses almost every RoPE saturation event" finding and its
+// quarantine actually were. `ShaderPath` now refuses a `.cso` older than its own source rather
+// than dispatching it, so the recipe below is enforced rather than remembered:
+//
+//   1. for %f in (src\gpu\shaders\*.hlsl) do dxc -T cs_6_2 -E main -Fo out\shaders\%~nf.cso %f
+//        -O3 -HV 2018 -WX            (build.bat's own loop -- run it, or run build.bat)
+//   2. cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools
+//        src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp
+//        src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp
+//        src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp
+//        src\decode_digest.cpp src\gpu\superslm_gpu.cpp tests\t2551_qk_norm_harness.cpp
+//        /Fo:out\harness\ /Fe:out\t2551_qk_norm_harness.exe /link d3d12.lib dxgi.lib dxguid.lib
+//
 // Usage: t2551_qk_norm_harness <model.sslm> [token_id]
 #include <cstdio>
 #include <cstring>

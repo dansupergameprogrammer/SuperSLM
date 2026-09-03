@@ -27469,6 +27469,274 @@ static void TestT2572_M2_MarshalLayerAcceptsArmCsNonQkNormOutput() {
 // not evidence for or against the fix; the real-candidate harness carries the load-bearing
 // GPU/CPU comparison for this counter going forward.
 
+// ==============================================================================
+// T-2575 (D-SLM6268): the shader-binary freshness guard
+// (`superslm_gpu::harness::ShaderBinaryStalenessDiagnostic`, wired into `ShaderPath`).
+//
+// Why this exists: every GPU-linked executable in this tree loads its shaders as `.cso` bytes
+// from its OWN `shaders\` directory, and nothing checked that those bytes were compiled from
+// the sources sitting beside them. Measured (T-2575, `Claude/Laplace/
+// t2575-gpu-sat-count-2026-09-03.md`): `out\shaders\rope_guard_site.cso` was a pre-D-SLM6263
+// compile carrying no saturation counter at all, while the harness executable beside it was
+// rebuilt. Every GPU `kv_saturation_count` reading T-2572 and T-2574 took came from that dead
+// binary, which is what produced the "the GPU loses almost every RoPE saturation event"
+// finding, its quarantine, and two rounds of root-causing shader statements that were never
+// the ones running.
+//
+// The guard is commissioned here rather than trusted: a must-accept (a binary newer than its
+// sources), two must-reject arms (older than its own `.hlsl`; older than a shared `.hlsli`),
+// the two unverifiable cases, and one real-workload cell over the shaders this very executable
+// would dispatch. The must-reject arms are produced the way the real defect was -- a `.cso`
+// whose last-write time precedes its source's -- not by a construction the real path cannot
+// reach.
+namespace {
+
+// A disposable directory under %TEMP% holding a `.hlsl`, a `.hlsli` and a `.cso`, with the
+// timestamps these cells need to set. Removed on destruction.
+struct ShaderFreshnessFixture {
+	std::filesystem::path dir;
+
+	ShaderFreshnessFixture() {
+		char tmp[MAX_PATH]{};
+		if (GetTempPathA(MAX_PATH, tmp) == 0) return;
+		dir = std::filesystem::path(tmp) /
+		      ("sslm_t2575_" + std::to_string(static_cast<unsigned>(_getpid())) + "_" +
+		       std::to_string(reinterpret_cast<uintptr_t>(this)));
+		std::error_code ec;
+		std::filesystem::create_directories(dir, ec);
+	}
+	~ShaderFreshnessFixture() {
+		std::error_code ec;
+		std::filesystem::remove_all(dir, ec);
+	}
+	bool ok() const { return !dir.empty() && std::filesystem::exists(dir); }
+	void Write(const char* name, const char* body) const {
+		std::ofstream f(dir / name, std::ios::binary);
+		f << body;
+	}
+	void SetAge(const char* name, int seconds_before_now) const {
+		std::error_code ec;
+		const auto t = std::filesystem::last_write_time(dir / name, ec);
+		if (ec) return;
+		std::filesystem::last_write_time(dir / name,
+		                                  t - std::chrono::seconds(seconds_before_now), ec);
+	}
+	std::string DirStr() const { return dir.string(); }
+	std::string CsoStr() const { return (dir / "probe_site.cso").string(); }
+};
+
+}  // namespace
+
+static void TestT2575_ShaderStalenessGuard_AcceptsABinaryNewerThanEverySource() {
+	ShaderFreshnessFixture fx;
+	CHECK_MSG(fx.ok(), "ShaderFreshnessFixture could not create its own temp directory");
+	if (!fx.ok()) return;
+	fx.Write("probe_site.hlsl", "// source\n");
+	fx.Write("shared_helpers.hlsli", "// header\n");
+	fx.Write("probe_site.cso", "DXBC");
+	fx.SetAge("probe_site.hlsl", 60);
+	fx.SetAge("shared_helpers.hlsli", 30);
+	const std::string diag = superslm_gpu::harness::ShaderBinaryStalenessDiagnostic(
+	    fx.DirStr(), "probe_site", fx.CsoStr());
+	CHECK_MSG(diag.empty(),
+	          "ShaderBinaryStalenessDiagnostic(must-accept: .cso newer than both its .hlsl and "
+	          "the shared .hlsli) == \"%s\", want empty",
+	          diag.c_str());
+}
+
+static void TestT2575_ShaderStalenessGuard_RefusesABinaryOlderThanItsOwnHlsl() {
+	ShaderFreshnessFixture fx;
+	CHECK_MSG(fx.ok(), "ShaderFreshnessFixture could not create its own temp directory");
+	if (!fx.ok()) return;
+	fx.Write("shared_helpers.hlsli", "// header\n");
+	fx.Write("probe_site.cso", "DXBC");
+	fx.Write("probe_site.hlsl", "// source edited after the binary was compiled\n");
+	fx.SetAge("probe_site.cso", 120);
+	fx.SetAge("shared_helpers.hlsli", 300);
+	const std::string diag = superslm_gpu::harness::ShaderBinaryStalenessDiagnostic(
+	    fx.DirStr(), "probe_site", fx.CsoStr());
+	CHECK_MSG(!diag.empty(),
+	          "ShaderBinaryStalenessDiagnostic(must-reject: .cso 120 s older than its own .hlsl) "
+	          "== \"\", want a diagnostic -- this is the exact shape that let a dead RoPE "
+	          "saturation counter be dispatched for two tickets");
+	CHECK_MSG(diag.find("probe_site.cso") != std::string::npos &&
+	              diag.find("probe_site.hlsl") != std::string::npos,
+	          "the refusal names both offending files; got \"%s\"", diag.c_str());
+}
+
+static void TestT2575_ShaderStalenessGuard_RefusesABinaryOlderThanASharedHeader() {
+	ShaderFreshnessFixture fx;
+	CHECK_MSG(fx.ok(), "ShaderFreshnessFixture could not create its own temp directory");
+	if (!fx.ok()) return;
+	fx.Write("probe_site.hlsl", "// source\n");
+	fx.Write("probe_site.cso", "DXBC");
+	fx.Write("shared_helpers.hlsli", "// header edited after the binary was compiled\n");
+	fx.SetAge("probe_site.hlsl", 300);
+	fx.SetAge("probe_site.cso", 120);
+	const std::string diag = superslm_gpu::harness::ShaderBinaryStalenessDiagnostic(
+	    fx.DirStr(), "probe_site", fx.CsoStr());
+	CHECK_MSG(!diag.empty(),
+	          "ShaderBinaryStalenessDiagnostic(must-reject: .cso newer than its own .hlsl but "
+	          "120 s older than a shared .hlsli) == \"\", want a diagnostic -- a header edit is "
+	          "compiled into every shader that includes it, and CMake's own shader rule does "
+	          "not depend on the headers");
+	CHECK_MSG(diag.find("shared_helpers.hlsli") != std::string::npos,
+	          "the refusal names the shared header that outdates the binary; got \"%s\"",
+	          diag.c_str());
+}
+
+static void TestT2575_ShaderStalenessGuard_UnverifiableCasesAreNotRefusals() {
+	ShaderFreshnessFixture fx;
+	CHECK_MSG(fx.ok(), "ShaderFreshnessFixture could not create its own temp directory");
+	if (!fx.ok()) return;
+	fx.Write("probe_site.hlsl", "// source\n");
+	fx.Write("probe_site.cso", "DXBC");
+	fx.SetAge("probe_site.cso", 120);
+
+	// (1) No source directory at all -- every installed consumer binary, where the sources are
+	//     genuinely absent. Must NOT refuse: there is nothing to compare against.
+	const std::string no_dir =
+	    superslm_gpu::harness::ShaderBinaryStalenessDiagnostic("", "probe_site", fx.CsoStr());
+	CHECK_MSG(no_dir.empty(),
+	          "ShaderBinaryStalenessDiagnostic(shader_source_dir=\"\") == \"%s\", want empty -- "
+	          "a shipped binary with no sources beside it is unverifiable, not stale",
+	          no_dir.c_str());
+
+	// (2) A source directory that carries no .hlsl of that name.
+	const std::string no_src = superslm_gpu::harness::ShaderBinaryStalenessDiagnostic(
+	    fx.DirStr(), "some_other_site", (fx.dir / "some_other_site.cso").string());
+	CHECK_MSG(no_src.empty(),
+	          "ShaderBinaryStalenessDiagnostic(no matching .hlsl) == \"%s\", want empty",
+	          no_src.c_str());
+
+	// (3) An absent binary -- ReadFile's own "cannot open shader" error owns that case.
+	const std::string no_cso = superslm_gpu::harness::ShaderBinaryStalenessDiagnostic(
+	    fx.DirStr(), "probe_site", (fx.dir / "absent.cso").string());
+	CHECK_MSG(no_cso.empty(), "ShaderBinaryStalenessDiagnostic(absent .cso) == \"%s\", want empty",
+	          no_cso.c_str());
+}
+
+// The production-path must-reject (`StandardsDocument.md` §5.4: a must-reject is producible by
+// the instrument's real data path). Back-dates one real `.cso` beside this executable by an hour
+// -- exactly the state `out\shaders\rope_guard_site.cso` was in -- and requires `ShaderPath`, the
+// one funnel every `.cso` load in this tree goes through, to REFUSE rather than return the path.
+// The original timestamp is restored by a destructor, so an assertion failure or a throw inside
+// the cell cannot leave a back-dated binary behind for the next run.
+static void TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath() {
+	const std::string& src_dir = superslm_gpu::harness::ShaderSourceDirOrEmpty();
+	CHECK_MSG(!src_dir.empty(),
+	          "ShaderSourceDirOrEmpty() == \"\" -- cannot exercise the real load path here");
+	if (src_dir.empty()) return;
+
+	// `dyn_recip` is a B1 primitive-battery shader, not one of the per-layer dispatch chain --
+	// back-dating it for the length of this cell cannot perturb any other cell's own dispatch.
+	const char* kName = "dyn_recip";
+	std::string cso;
+	try {
+		cso = superslm_gpu::harness::ShaderPath(kName);
+	} catch (const std::exception& e) {
+		CHECK_MSG(false, "ShaderPath(\"%s\") already refuses before this cell touches it: %s",
+		          kName, e.what());
+		return;
+	}
+	std::error_code ec;
+	if (!std::filesystem::exists(cso, ec)) {
+		CHECK_MSG(false, "\"%s\" does not exist -- this build put no shader binary beside the "
+		                  "executable, so the real load path cannot be exercised",
+		          cso.c_str());
+		return;
+	}
+
+	struct RestoreWriteTime {
+		std::string path;
+		std::filesystem::file_time_type original;
+		bool armed = false;
+		~RestoreWriteTime() {
+			if (!armed) return;
+			std::error_code e;
+			std::filesystem::last_write_time(path, original, e);
+		}
+	} restore;
+	restore.path = cso;
+	restore.original = std::filesystem::last_write_time(cso, ec);
+	if (ec) {
+		CHECK_MSG(false, "could not read the last-write time of \"%s\"", cso.c_str());
+		return;
+	}
+	restore.armed = true;
+
+	std::filesystem::last_write_time(cso, restore.original - std::chrono::hours(1), ec);
+	CHECK_MSG(!ec, "could not back-date \"%s\"", cso.c_str());
+	if (ec) return;
+
+	bool threw = false;
+	std::string what;
+	try {
+		(void)superslm_gpu::harness::ShaderPath(kName);
+	} catch (const std::exception& e) {
+		threw = true;
+		what = e.what();
+	}
+	CHECK_MSG(threw,
+	          "ShaderPath(\"%s\") returned a path for a binary back-dated an hour behind its own "
+	          "source, want a refusal -- that silent return is what dispatched a RoPE shader with "
+	          "no saturation counter across two tickets",
+	          kName);
+	CHECK_MSG(what.find("stale shader binary") != std::string::npos,
+	          "the refusal names itself; got \"%s\"", what.c_str());
+
+	// And the must-accept twin on the same path: with the timestamp restored, ShaderPath returns.
+	std::filesystem::last_write_time(cso, restore.original, ec);
+	bool threw_after_restore = false;
+	try {
+		(void)superslm_gpu::harness::ShaderPath(kName);
+	} catch (const std::exception&) {
+		threw_after_restore = true;
+	}
+	CHECK_MSG(!threw_after_restore,
+	          "ShaderPath(\"%s\") still refuses after the original timestamp is restored -- the "
+	          "guard is refusing unconditionally rather than on staleness",
+	          kName);
+}
+
+// The real-workload cell (`StandardsDocument.md` §5.4): every shader binary THIS executable
+// would actually dispatch, checked against the sources it was built from. When no
+// `src\gpu\shaders` ancestor exists above the executable the cell records that explicitly --
+// that is the installed-consumer layout, and it is not a pass.
+static void TestT2575_ShaderBinariesBesideThisExecutableAreCurrent() {
+	const std::string& src_dir = superslm_gpu::harness::ShaderSourceDirOrEmpty();
+	CHECK_MSG(!src_dir.empty(),
+	          "ShaderSourceDirOrEmpty() == \"\" -- this executable has no src\\gpu\\shaders "
+	          "ancestor, so the freshness of the shaders it dispatches is unverifiable here");
+	if (src_dir.empty()) return;
+	std::error_code ec;
+	int checked = 0;
+	std::string first_stale;
+	for (const auto& entry : std::filesystem::directory_iterator(src_dir, ec)) {
+		if (ec) break;
+		if (!entry.is_regular_file()) continue;
+		if (entry.path().extension() != ".hlsl") continue;
+		const std::string name = entry.path().stem().string();
+		std::string cso;
+		try {
+			cso = superslm_gpu::harness::ShaderPath(name);
+		} catch (const std::exception& e) {
+			// ShaderPath itself refuses a stale binary -- that IS the finding.
+			if (first_stale.empty()) first_stale = e.what();
+			++checked;
+			continue;
+		}
+		const std::string diag =
+		    superslm_gpu::harness::ShaderBinaryStalenessDiagnostic(src_dir, name, cso);
+		if (!diag.empty() && first_stale.empty()) first_stale = diag;
+		++checked;
+	}
+	CHECK_MSG(checked > 0, "no .hlsl sources enumerated under \"%s\"", src_dir.c_str());
+	CHECK_MSG(first_stale.empty(),
+	          "at least one shader binary beside this executable is older than its source: %s",
+	          first_stale.c_str());
+}
+
 // (T-2568, M3 -- Claude/Poirot/66626ef-t2567-trackb-confirmation.md): the sibling T-2565's own M4
 // named as unaudited. `iexp_softmax_khead_m`/`_e` is required UNCONDITIONALLY (never gated behind
 // a presence flag the way k_norm_landing is gated behind k_norm_gain -- MarshalLayer,
@@ -28486,6 +28754,16 @@ int main(int argc, char** argv) {
 	TestT2568_S1_RunLayerLoopGpuRefusesNullKNormLandingByNamedStatus();
 	TestT2568_S2_GpuKvSaturationCountMatchesCpuOnQkNormWiringFixture();
 	TestT2568_M3_PackLayerWeightsBytesRefusesNullIexpSoftmaxKheadPointers();
+
+	// T-2575 (D-SLM6268) -- the shader-binary freshness guard, commissioned: one must-accept,
+	// two must-reject arms produced the way the measured defect was, the two unverifiable
+	// cases, and one real-workload sweep over the shaders this executable would dispatch.
+	TestT2575_ShaderStalenessGuard_AcceptsABinaryNewerThanEverySource();
+	TestT2575_ShaderStalenessGuard_RefusesABinaryOlderThanItsOwnHlsl();
+	TestT2575_ShaderStalenessGuard_RefusesABinaryOlderThanASharedHeader();
+	TestT2575_ShaderStalenessGuard_UnverifiableCasesAreNotRefusals();
+	TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath();
+	TestT2575_ShaderBinariesBesideThisExecutableAreCurrent();
 #endif  // _WIN32
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);

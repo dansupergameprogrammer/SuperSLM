@@ -86,7 +86,122 @@ std::string ShaderPath(const std::string& name) {
 	} else {
 		dir = ".";
 	}
-	return dir + "\\shaders\\" + name + ".cso";
+	const std::string cso = dir + "\\shaders\\" + name + ".cso";
+	// (T-2575, D-SLM6268): refuse a shader binary older than the source it claims to be a
+	// compile of, rather than dispatching it. Every `.cso` this tree ever loads comes through
+	// this one function, so the check has no per-shader enumeration to keep current. The
+	// refusal is deliberately a hard failure rather than a warning
+	// (`StandardsDocument.md` §4): a warning on a diagnostic path nobody reads is what let a
+	// dead RoPE saturation counter be measured, root-caused and quarantined across two
+	// tickets.
+	const std::string stale = ShaderBinaryStalenessDiagnostic(ShaderSourceDirOrEmpty(), name, cso);
+	if (!stale.empty()) {
+		std::fprintf(stderr, "superslm_gpu: %s\n", stale.c_str());
+		throw std::runtime_error(stale);
+	}
+	return cso;
+}
+
+namespace {
+
+// (T-2575): NTFS last-write time in 100 ns units, or 0 when the file does not exist.
+uint64_t ShaderFileWriteTime(const std::string& path) {
+	WIN32_FILE_ATTRIBUTE_DATA fad{};
+	if (!GetFileAttributesExA(path.c_str(), GetFileExInfoStandard, &fad)) return 0;
+	ULARGE_INTEGER u{};
+	u.LowPart = fad.ftLastWriteTime.dwLowDateTime;
+	u.HighPart = fad.ftLastWriteTime.dwHighDateTime;
+	return u.QuadPart;
+}
+
+// (T-2575): the newest last-write time among `dir\<pattern>`, or 0 when none match. Not
+// cached -- the whole sweep is a handful of files and runs once per shader load, which is
+// once per process per shader.
+uint64_t NewestMatchingFileTime(const std::string& dir, const char* pattern,
+                                 std::string* out_newest_name) {
+	WIN32_FIND_DATAA fd{};
+	HANDLE h = FindFirstFileA((dir + "\\" + pattern).c_str(), &fd);
+	if (h == INVALID_HANDLE_VALUE) return 0;
+	uint64_t newest = 0;
+	do {
+		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+		ULARGE_INTEGER u{};
+		u.LowPart = fd.ftLastWriteTime.dwLowDateTime;
+		u.HighPart = fd.ftLastWriteTime.dwHighDateTime;
+		if (u.QuadPart > newest) {
+			newest = u.QuadPart;
+			if (out_newest_name != nullptr) *out_newest_name = fd.cFileName;
+		}
+	} while (FindNextFileA(h, &fd));
+	FindClose(h);
+	return newest;
+}
+
+std::string FormatShaderFileTime(uint64_t t100ns) {
+	ULARGE_INTEGER u{};
+	u.QuadPart = t100ns;
+	FILETIME ft{};
+	ft.dwLowDateTime = u.LowPart;
+	ft.dwHighDateTime = u.HighPart;
+	SYSTEMTIME st{};
+	if (!FileTimeToSystemTime(&ft, &st)) return "<unreadable>";
+	char buf[32]{};
+	std::snprintf(buf, sizeof(buf), "%04u-%02u-%02u %02u:%02u:%02u", st.wYear, st.wMonth, st.wDay,
+	              st.wHour, st.wMinute, st.wSecond);
+	return buf;
+}
+
+}  // namespace
+
+const std::string& ShaderSourceDirOrEmpty() {
+	static const std::string cached = []() -> std::string {
+		char path[MAX_PATH]{};
+		DWORD n = GetModuleFileNameA(nullptr, path, MAX_PATH);
+		if (n == 0 || n >= MAX_PATH) return {};
+		std::string dir(path, n);
+		size_t slash = dir.find_last_of("\\/");
+		if (slash == std::string::npos) return {};
+		dir = dir.substr(0, slash);
+		// Both build layouts this tree uses put the executable a bounded number of directories
+		// below the repository root (`out\`, `out\probe\`, `build\Release\`), so a short upward
+		// walk finds the sources for any developer build and finds nothing for an installed
+		// consumer binary, which is exactly the intended split.
+		for (int up = 0; up < 8; ++up) {
+			const std::string cand = dir + "\\src\\gpu\\shaders";
+			const DWORD attr = GetFileAttributesA(cand.c_str());
+			if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+				return cand;
+			}
+			const size_t s2 = dir.find_last_of("\\/");
+			if (s2 == std::string::npos) break;
+			dir = dir.substr(0, s2);
+		}
+		return {};
+	}();
+	return cached;
+}
+
+std::string ShaderBinaryStalenessDiagnostic(const std::string& shader_source_dir,
+                                             const std::string& shader_name,
+                                             const std::string& cso_path) {
+	if (shader_source_dir.empty()) return {};
+	const std::string hlsl_path = shader_source_dir + "\\" + shader_name + ".hlsl";
+	const uint64_t hlsl_t = ShaderFileWriteTime(hlsl_path);
+	if (hlsl_t == 0) return {};  // no such source beside the others -- nothing to compare against
+	const uint64_t cso_t = ShaderFileWriteTime(cso_path);
+	if (cso_t == 0) return {};  // absent binary -- ReadFile reports "cannot open shader"
+	std::string newest_header_name;
+	const uint64_t hdr_t = NewestMatchingFileTime(shader_source_dir, "*.hlsli", &newest_header_name);
+	const bool header_wins = hdr_t > hlsl_t;
+	const uint64_t src_t = header_wins ? hdr_t : hlsl_t;
+	if (cso_t >= src_t) return {};
+	const std::string src_name =
+	    header_wins ? (shader_source_dir + "\\" + newest_header_name) : hlsl_path;
+	return "stale shader binary: " + cso_path + " (compiled " + FormatShaderFileTime(cso_t) +
+	       ") is older than " + src_name + " (modified " + FormatShaderFileTime(src_t) +
+	       "). Recompile the shaders into that directory with dxc before running this "
+	       "executable -- build.bat's own dxc loop is the recipe; a build that compiles only "
+	       "the .cpp leaves the previous generation's shader in place.";
 }
 
 }  // namespace harness
