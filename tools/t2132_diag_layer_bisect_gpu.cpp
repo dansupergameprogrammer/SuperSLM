@@ -12,13 +12,16 @@
 #include "superslm/gpu_1p0.h"
 #include "superslm/gpu_1p0_bench_bridge.h"  // SslmGpuSeqHandle{LayerIndex,HiddenCodes,HiddenScale,HiddenSize}ForBench
 #include "superslm/gpu_1p0_g5_bridge.h"
+#include "superslm/gpu_port.h"  // superslm_gpu::kDispatchesPerLayer
 #include "superslm/model.h"
 #include "t2132_diag_layer_bisect_shared.h"
 
 namespace {
 
-constexpr uint32_t kDispatchBudget = 24;  // t2113's own kDispatchesPerLayer -- one whole layer's
-                                           // worth per call, verbatim from t2132_g5_gpu_parity_gpu.cpp.
+// T-2577 round 3: was a bare literal (24). T-2551 moved the real per-layer dispatch count
+// 24 -> 25 (gpu_port.h's own kDispatchesPerLayer) -- reads the named constant now, one whole
+// layer's worth per call, matching t2132_g5_gpu_parity_gpu.cpp's own fix.
+constexpr uint32_t kDispatchBudget = superslm_gpu::kDispatchesPerLayer;
 
 void Check(DiagStepResult& r, bool cond, const char* msg) {
 	if (!cond && r.last_error.empty()) r.last_error = msg;

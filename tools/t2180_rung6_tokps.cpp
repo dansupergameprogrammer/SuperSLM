@@ -14,7 +14,8 @@
 //
 //   1. genuinely-shipped: `SslmGpuSeqPrefillPromptPreBatchingBenchOnly` (gpu_1p0_bench_bridge.h),
 //      the real `e35edc1` per-token composition -- one submit-and-fence round-trip PER LAYER (28
-//      for Qwen2.5-1.5B, dispatch_budget=24), issued once per token.
+//      for Qwen2.5-1.5B, dispatch_budget=superslm_gpu::kDispatchesPerLayer, 25 as of T-2551 --
+//      was 24 when this comment was first written), issued once per token.
 //   2. chunk-of-1: N separate single-token calls into the PUBLIC bridge
 //      (SslmGpuSeqPrefillPromptForG5Bridge) -- one submit-and-fence round-trip per TOKEN, the
 //      residual per-token fence cost the chunk primitive still pays at chunk_len=1.
@@ -33,12 +34,18 @@
 
 #include "superslm/gpu_1p0.h"
 #include "superslm/gpu_1p0_bench_bridge.h"
+#include "superslm/gpu_port.h"  // superslm_gpu::kDispatchesPerLayer
 #include "superslm/model.h"
 
 using namespace superslm;
 
 namespace {
-constexpr uint32_t kDispatchBudget = 24;
+// T-2577 round 3: was a bare literal (24, one whole layer's worth per call at the time this
+// tool was written). T-2551 moved the real per-layer dispatch count 24 -> 25 (gpu_port.h's own
+// `kDispatchesPerLayer`) -- reading the named constant instead of a literal keeps this bench
+// tool from silently mis-measuring (a stale 24 now yields DispatchBudgetTooSmall on every call,
+// zero layers issued, not merely a wrong-but-plausible number).
+constexpr uint32_t kDispatchBudget = superslm_gpu::kDispatchesPerLayer;
 
 std::vector<int32_t> MakeTokens(int32_t start, size_t n) {
 	std::vector<int32_t> v(n);

@@ -16,13 +16,18 @@
 
 #include "superslm/gpu_1p0.h"
 #include "superslm/gpu_1p0_bench_bridge.h"
+#include "superslm/gpu_port.h"  // superslm_gpu::kDispatchesPerLayer
 #include "superslm/model.h"
 
 using namespace superslm;
 
 namespace {
 
-constexpr uint32_t kDispatchBudget = 24;
+// T-2577 round 3: was a bare literal (24). T-2551 moved the real per-layer dispatch count
+// 24 -> 25 (gpu_port.h's own `kDispatchesPerLayer`) -- reading the named constant keeps this
+// sweep from silently desyncing again (a stale 24 now yields DispatchBudgetTooSmall on every
+// call, zero layers issued).
+constexpr uint32_t kDispatchBudget = superslm_gpu::kDispatchesPerLayer;
 
 struct Snapshot {
 	std::vector<int8_t> hidden_codes;

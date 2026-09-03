@@ -122,6 +122,17 @@ QK-norm artifacts converted by a pre-1.4.0 tree** — see the format note under 
   citation files (`gpu_layer_loop_guards.def`, `test_geometry_site_census.py`'s own
   self-test) is re-derived against the real, current source rather than offset by hand.
 
+  **Consumer-visible consequence.** `qk_norm_site` is issued unconditionally, so this moves
+  `PlanDispatchBudgetGpu`'s own per-layer divisor for EVERY model, not only QK-norm-bearing
+  ones (`superslm_gpu.cpp`'s own body reads the one `kDispatchesPerLayer` constant with no
+  branch on model architecture). A `dispatch_budget` of 24 -- exactly one layer's worth
+  before this change -- now floor-divides to zero layers and returns
+  `SslmGpuStatus::DispatchBudgetTooSmall` where it previously returned `Ok` with one layer
+  issued; 25 is now the minimum budget that admits any progress at all. Any caller that
+  pinned `24` (or any multiple of it) as its own per-layer/per-token dispatch budget must
+  move to `25` (or read `superslm_gpu::kDispatchesPerLayer` directly) or it will silently
+  stop making progress on this release.
+
   **Breaking (1.4.0, ruled D-SLM6200):** the carried-scale contract (T-2560/T-2564, above)
   adds a fourth `kv_landing_reciprocals` key per QK-norm layer (`k_normed_head{h}`),
   invalidating every QK-norm-bearing `.sslm` artifact converted between this round (T-2551)

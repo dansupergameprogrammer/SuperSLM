@@ -80,8 +80,15 @@ namespace {
 constexpr uint64_t kModelGeneration = 1;
 
 // This project's own established per-layer dispatch count (superslm_gpu.cpp,
-// PlanDispatchBudgetGpu's own header comment; kDispatchesPerLayer = 24).
-constexpr uint32_t kDispatchesPerLayer = 24;
+// PlanDispatchBudgetGpu's own header comment). T-2577 round 3: this was its own local shadow
+// copy, pinned to 24 and never updated when T-2551 moved gpu_port.h's own
+// `superslm_gpu::kDispatchesPerLayer` from 24 to 25 -- a real bug in this file specifically,
+// since this constant directly sizes the TDR-safe chunk-token budget
+// (`chunk_tokens * num_hidden_layers * kDispatchesPerLayer`, this file's own top-of-file
+// comment): a stale, too-low per-layer count under-counts the true dispatches a chunk will
+// issue, silently admitting a chunk one dispatch closer to a real TDR timeout than intended.
+// Reads the named constant directly now; no local shadow.
+constexpr uint32_t kDispatchesPerLayer = superslm_gpu::kDispatchesPerLayer;
 
 uint32_t Align8U32(uint32_t v) { return (v + 7u) & ~7u; }
 uint32_t SeqScaleOffLocal(uint32_t hidden_size) { return Align8U32(hidden_size * 4u); }

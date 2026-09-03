@@ -355,10 +355,11 @@ int main(int argc, char** argv) {
 			}
 		}
 	}
-	// (D-SLM6263, external review Significant 1): kv_saturation_count now also carries
-	// RopeApplySite's own clamp count (both engines) alongside the pre-existing K/V and
-	// QK-norm landing counts -- compared here so the determinism crown covers the new
-	// counter on the real, 28-layer candidate, not only the K/V store bytes above.
+	// (D-SLM6263, external review Significant 1, closed T-2572 D-SLM6264):
+	// kv_saturation_count now also carries RopeApplySite's own clamp count (both engines)
+	// alongside the pre-existing K/V and QK-norm landing counts -- compared here so the
+	// determinism crown covers the new counter on the real, 28-layer candidate, not only
+	// the K/V store bytes above.
 	if (cpu_seq.kv_saturation_count != gpu_seq.kv_saturation_count) {
 		std::printf("DIVERGENCE: kv_saturation_count: CPU=%llu GPU=%llu\n",
 		            (unsigned long long)cpu_seq.kv_saturation_count,

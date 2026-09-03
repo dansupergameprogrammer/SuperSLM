@@ -165,19 +165,28 @@ int main(int argc, char** argv) {
 	// T-2101 follow-up (per-site decomposition, D-SLM3312; per-dispatch parallelism, D-SLM3313's
 	// own follow-up). T-2113 (B4, design Sec3/Sec6.1): the fixed, unconditional per-layer dispatch
 	// order `RunLayerLoopGpu` issues (`superslm_gpu.cpp`'s own `bind_and_dispatch` call sequence)
-	// -- dispatch `d` within a call is site `d % kSitesPerLayer` of layer `d / kSitesPerLayer`. 24
-	// sites/layer now, re-derived from the 22 T-2101 shipped: kv_proj_gemm is a NEW dispatch
-	// (kv_proj's own GEMM step, no longer fused into kv_proj's single dispatch) and RoPE's own
-	// commit phase is a second, separate dispatch (rope_commit) rather than a group-barrier-
-	// separated phase inside rope_guard. Summed across every timed GPU step below.
-	constexpr int kSitesPerLayer = 24;
+	// -- dispatch `d` within a call is site `d % kSitesPerLayer` of layer `d / kSitesPerLayer`.
+	// 25 sites/layer as of T-2551 (was 24, re-derived from the 22 T-2101 shipped: kv_proj_gemm
+	// is a NEW dispatch -- kv_proj's own GEMM step, no longer fused into kv_proj's single
+	// dispatch -- and RoPE's own commit phase is a second, separate dispatch (rope_commit)
+	// rather than a group-barrier-separated phase inside rope_guard). T-2577 round 3: this
+	// table itself went stale at T-2551 -- qk_norm_site is a real, unconditional dispatch
+	// (`RecordOneTokenFullDepthDispatchBody`, `superslm_gpu.cpp`, between kv_proj and
+	// rope_guard) that this table never named, so index 24 (site 25 of 25) silently read one
+	// element past a 24-element array's own bound whenever the timed step count divided evenly
+	// -- undefined behavior, not merely a wrong count. `kSitesPerLayer` now reads the named
+	// constant (`superslm_gpu::kDispatchesPerLayer`, gpu_port.h) instead of repeating the
+	// number, so this table's own size and the real per-layer count cannot desync silently
+	// again. Summed across every timed GPU step below.
+	constexpr int kSitesPerLayer = static_cast<int>(superslm_gpu::kDispatchesPerLayer);
 	const char* const kSiteNames[kSitesPerLayer] = {
 	    "attn_norm",     "q_proj_gemm",     "q_proj",          "kv_proj_gemm",
-	    "kv_proj",       "rope_guard",      "rope_commit",     "attention_score",
-	    "softmax",       "context_accumulate", "ctx_fold",     "o_proj_gemm",
-	    "o_proj",        "attn_residual",   "mlp_norm",        "gate_proj_gemm",
-	    "gate_proj",     "up_proj_gemm",    "up_proj",         "mlp_act",
-	    "down_proj_gemm", "down_proj",      "mlp_residual",    "commit"};
+	    "kv_proj",       "qk_norm",         "rope_guard",      "rope_commit",
+	    "attention_score", "softmax",       "context_accumulate", "ctx_fold",
+	    "o_proj_gemm",   "o_proj",          "attn_residual",   "mlp_norm",
+	    "gate_proj_gemm", "gate_proj",      "up_proj_gemm",    "up_proj",
+	    "mlp_act",       "down_proj_gemm",  "down_proj",       "mlp_residual",
+	    "commit"};
 	double site_ms_sum[kSitesPerLayer] = {0.0};
 
 	double per_token[2] = {0.0, 0.0};
@@ -341,8 +350,9 @@ int main(int argc, char** argv) {
 			            "--");
 		}
 	}
-	// Uniformity verdict: coefficient of variation across the `kSitesPerLayer` (T-2113 (B4): 24,
-	// re-derived from T-2101's own 22) site means. Low CoV = spread ~uniformly (per-dispatch fixed
+	// Uniformity verdict: coefficient of variation across the `kSitesPerLayer` (T-2551: 25,
+	// re-derived from T-2113 B4's own 24, itself re-derived from T-2101's own 22) site means.
+	// Low CoV = spread ~uniformly (per-dispatch fixed
 	// cost dominates); high CoV = concentrated in specific sites (those sites' own kernels are
 	// genuinely slow).
 	//

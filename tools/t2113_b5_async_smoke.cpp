@@ -246,7 +246,10 @@ int main(int argc, char** argv) {
 	const size_t head_dim = view.config.head_dim;
 	const size_t intermediate_size = view.config.intermediate_size;
 	const int64_t context_cap = static_cast<int64_t>(view.config.context_cap);
-	constexpr uint32_t kDispatchesPerLayer = 24;  // design Sec3/Sec6.1, T-2113 B4
+	// T-2577 round 3: was a bare literal (24, design Sec3/Sec6.1, T-2113 B4). T-2551 moved
+	// the real per-layer dispatch count 24 -> 25 (gpu_port.h's own kDispatchesPerLayer) --
+	// reads the named constant now instead of repeating the number.
+	constexpr uint32_t kDispatchesPerLayer = superslm_gpu::kDispatchesPerLayer;
 
 	std::vector<LayerBacking> backings(num_hidden_layers);
 	std::vector<LayerWeights> layers(num_hidden_layers);

@@ -27076,7 +27076,8 @@ static void TestT2568_S2_GpuKvSaturationCountMatchesCpuOnQkNormWiringFixture() {
 // Direct call (mirrors TestT2564_S3's own site-level shape): RoPE preserves a pair's L2 norm,
 // not its component-wise maximum -- for a pair (x, y), a rotated output component can reach
 // sqrt(x^2+y^2), up to sqrt(2) times the larger pre-rotation component (the external review's
-// own executed counterexample, `Claude/External/superslm-1p4p0-2026-09-02.md` Significant 1).
+// own executed counterexample, `Claude/External/superslm-1p4p0-2026-09-02.md` Significant 1,
+// closed T-2572 D-SLM6264).
 // A 45-degree rotation (cos == sin, Q2.30) on the int8 code max (127, 127) reproduces this at
 // the engine's own boundary: rotated.x = 127*(cos-sin) ~= 0, rotated.y = 127*(cos+sin) ~=
 // 127*sqrt(2) ~= 179.6 -- clamped to 127 by ClampRopeCode, with no counter before this fix
@@ -27132,7 +27133,8 @@ static void TestT2572_S1_RopeApplySiteCountsThePostRotationClamp() {
 	CHECK_MSG(saturation_count > 0,
 	          "saturation_count after a deliberately-amplifying rotation == %llu, want > 0 -- "
 	          "RED if RopeApplySite's own predicated increment (this ticket's own fix) is "
-	          "deleted, reproducing Significant 1's own found gap exactly",
+	          "deleted, reproducing Significant 1's own found gap exactly (closed T-2572 "
+	          "D-SLM6264)",
 	          static_cast<unsigned long long>(saturation_count));
 }
 
@@ -27330,7 +27332,7 @@ static void TestT2572_S2_RunLayerLoopWiresRopeSaturationCounterThroughBothPaths(
 			          "seq.kv_saturation_count after RunLayerLoop, RoPE-amplifying fixture, == "
 			          "%llu, want > 0 -- RED if forward_sites.cpp's own RopeApplySite calls "
 			          "(:1855, :1867) are reverted to pass no counter, restoring exactly "
-			          "Significant 1's own found gap",
+			          "Significant 1's own found gap (closed T-2572 D-SLM6264)",
 			          static_cast<unsigned long long>(seq.kv_saturation_count));
 			// (T-2577, D-SLM6280): this fixture's own saturation comes from the raw K/V
 			// landing's doubling weight, not from RoPE or QK-norm (RopeSaturationFixture's own

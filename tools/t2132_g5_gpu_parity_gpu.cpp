@@ -16,6 +16,7 @@
 // exclusively; it no longer hand-composes the embed/drive/finish sequence at all.
 #include "superslm/gpu_1p0.h"
 #include "superslm/gpu_1p0_g5_bridge.h"
+#include "superslm/gpu_port.h"  // superslm_gpu::kDispatchesPerLayer
 #include "superslm/model.h"
 #include "t2132_g5_gpu_parity_shared.h"
 
@@ -44,8 +45,10 @@ G5ParityPathResult RunGpuGates(const uint8_t* bytes, size_t byte_count,
                                 const std::string& schema_name, int32_t num_decode_steps,
                                 const std::vector<int32_t>& forced_chain) {
 	G5ParityPathResult r;
-	constexpr uint32_t kDispatchBudget = 24;  // one whole layer's worth per call, t2113's own
-	                                           // established kDispatchesPerLayer convention.
+	// T-2577 round 3: was a bare literal (24). T-2551 moved the real per-layer dispatch count
+	// 24 -> 25 (gpu_port.h's own kDispatchesPerLayer) -- reads the named constant now instead
+	// of repeating the number, one whole layer's worth per call.
+	constexpr uint32_t kDispatchBudget = superslm_gpu::kDispatchesPerLayer;
 
 	superslm::SslmModelView view;
 	std::string load_err;
@@ -159,7 +162,9 @@ G5Gate3Result RunGpuGate3(const uint8_t* bytes, size_t byte_count,
                            const std::string& schema_name,
                            const std::vector<int32_t>& chain_with_illegal_tail) {
 	G5Gate3Result r;
-	constexpr uint32_t kDispatchBudget = 24;
+	// T-2577 round 3: was a bare literal (24); see RunGpuGates's own comment above for why this
+	// now reads the named constant (T-2551: 24 -> 25).
+	constexpr uint32_t kDispatchBudget = superslm_gpu::kDispatchesPerLayer;
 
 	superslm::SslmModelView view;
 	std::string load_err;
