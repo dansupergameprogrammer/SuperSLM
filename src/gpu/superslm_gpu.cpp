@@ -2196,7 +2196,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	const void* sin_src = sin_t != nullptr ? sin_t->data : nullptr;
 	const uint64_t cos_need = cos_t != nullptr ? static_cast<uint64_t>(cos_t->elem_count) * 8u : 8u;
 	const uint64_t sin_need = sin_t != nullptr ? static_cast<uint64_t>(sin_t->elem_count) * 8u : 8u;
-	// CORRECTED 2026-09-03 (T-2576, D-SLM627x): `!fresh_sequence`, the same term `lw_fast_hit`
+	// CORRECTED 2026-09-03 (T-2576, D-SLM6271): `!fresh_sequence`, the same term `lw_fast_hit`
 	// and `kv_fast_hit` above already carry for the same reason. This cache was added later
 	// (T-2113 B4) and never got it, so it was the one of the three still keyed on nothing but
 	// an address the allocator is free to hand back. Measured: a fresh `RopeSaturationFixture`

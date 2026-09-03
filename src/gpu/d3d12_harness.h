@@ -675,7 +675,11 @@ std::string ShaderPath(const std::string& name);
 // `.hlsl` or the `.cso` itself does not exist (a missing binary is `ReadFile`'s own "cannot open
 // shader" error, not this function's). A `.cso` must be at least as new as its own `.hlsl` AND
 // as the newest `*.hlsli` in the same directory -- the shared headers are compiled into every
-// shader that includes them, and CMake's own shader rule does not depend on them.
+// shader that includes them, and not every build recipe rebuilds a shader when a header it
+// includes changes. (CMake's own rule does -- CMakeLists.txt globs every `*.hlsli` into the
+// custom command's DEPENDS, verified by touching one and watching all 34 `.cso` recompile.
+// build.bat's loop recompiles every shader unconditionally, so it is safe too. A hand-run
+// dxc over just the files someone edited is neither, and that is what this term covers.)
 std::string ShaderBinaryStalenessDiagnostic(const std::string& shader_source_dir,
                                              const std::string& shader_name,
                                              const std::string& cso_path);

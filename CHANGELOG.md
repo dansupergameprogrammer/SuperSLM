@@ -608,7 +608,59 @@ QK-norm artifacts converted by a pre-1.4.0 tree** — see the format note under 
   28-layer candidate is `0/100` on codes, scale and `kv_saturation_count` in the same session;
   whether the same mechanism is latent at production geometry is not established either way.
 
+  **CLOSED 2026-09-03 (T-2576, D-SLM6271):** that finding was `g_resident_rope`, not `rope_commit_site.hlsl`.
+  The store was never lost -- the shader wrote what it computed, and what it computed was the
+  identity rotation, because it had read `cos = 2^30, sin = 0` from a previous fixture's resident
+  tables. See the T-2576 entry below. This paragraph's readings stand; its attribution to the
+  write-back does not.
+
   Solve record: `Claude/Laplace/t2575-gpu-sat-count-2026-09-03.md` (records worktree).
+
+- **A RoPE cos/sin table cached against a recycled host address is no longer served to a fresh
+  sequence (T-2576).** `g_resident_rope` (`src/gpu/superslm_gpu.cpp`) keeps the two model-wide
+  rotation tables device-resident across the tokens of a decode session, keyed on the source
+  tensor's own host address plus byte count. That key alone is not an identity: an address the
+  allocator has handed back names a different tensor, and the cache served the previous one's
+  tables with no error. It now also requires `!fresh_sequence`, the term `lw_fast_hit` and
+  `kv_fast_hit` in the same function have carried since the identical pointer-recycling defect
+  was reproduced for the weight cache; this cache was added later and never got it. The gate is
+  free in real decode -- the first call of any sequence is already a miss by construction, and
+  every later call is unaffected.
+
+  **This closes the degenerate-geometry divergence T-2575 left open**, and it was never the
+  write-back it looked like. Read back from the device on a diverging run: the staged bytes were
+  right `(127, -127)`, the store landed (`kdword_before=0x817F817F`, `kdword_after` unchanged),
+  and the rotation itself had returned its own input -- because the shader read
+  `cos_q30=1073741824, sin_q30=0`, the identity, where this fixture's own table carries
+  `759250125` for both. Diverging runs carried `rope_fast_hit=1`; matching runs carried
+  `rope_fast_hit=0` and `cos_q30=759250125`. Whether the addresses collide depends on the heap
+  layout, which is why the same unchanged binary diverged in 0, 1, 41, 41, 100 and 100 of 100
+  dispatches across six processes and looked like a race.
+
+  **Reachable at production geometry, settled by construction rather than inferred.** The
+  acceptance harness gains CELL 5: it runs one full sequence on the real 28-layer candidate to
+  populate the cache, rewrites the 16 MiB cos/sin tables in place -- same address, same byte
+  count, a 45-degree rotation instead of the model's own -- and runs a second fresh sequence at
+  width 3 (`head_dim=128`, `group=2`, `context_cap=32768`). Before this change the GPU disagreed
+  with the CPU on the same mutated tables; after it, they agree. The cell carries its own
+  must-reject (the rewrite has to move the CPU arm off its pristine output) because two earlier
+  constructions could not fail: an identity rewrite changes nothing at position 0, where the
+  real table's own row 0 IS the identity, and at width 1 the softmax is over a single position
+  and returns 1.0 whatever the score is, so Q/K rotations cannot reach the output at all.
+
+  The synthetic degenerate-geometry cell T-2572 removed for intermittency is **restored** as the
+  regression pin, CPU and GPU arms at N=100, comparing the landed K/V row as well as the
+  counter: red in 5 of 6 processes against the pre-fix engine, green in 6 of 6 after.
+
+  **One T-2575 claim is withdrawn.** That round asserted, in the freshness guard's own header
+  and in its commissioning cell, that CMake's shader rule does not depend on the `.hlsli`
+  headers. Checked at source and by execution: it does -- `CMakeLists.txt` globs every `*.hlsli`
+  into the custom command's `DEPENDS`, and touching one rebuilt all 34 `.cso`. `build.bat`
+  recompiles every shader unconditionally, so it is safe too. The guard's header term stays,
+  since a hand-run dxc over only the edited files carries no such dependency, but the reason
+  given for it was wrong and is corrected at both sites.
+
+  Solve record: `Claude/Laplace/t2576-rope-commit-writeback-2026-09-03.md` (records worktree).
 
 ### Changed
 

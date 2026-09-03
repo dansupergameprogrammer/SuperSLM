@@ -27658,8 +27658,8 @@ static void TestT2575_ShaderStalenessGuard_RefusesABinaryOlderThanASharedHeader(
 	CHECK_MSG(!diag.empty(),
 	          "ShaderBinaryStalenessDiagnostic(must-reject: .cso newer than its own .hlsl but "
 	          "120 s older than a shared .hlsli) == \"\", want a diagnostic -- a header edit is "
-	          "compiled into every shader that includes it, and CMake's own shader rule does "
-	          "not depend on the headers");
+	          "compiled into every shader that includes it, and a hand-run dxc over only the "
+	          "files someone edited leaves every other dependent binary behind");
 	CHECK_MSG(diag.find("shared_helpers.hlsli") != std::string::npos,
 	          "the refusal names the shared header that outdates the binary; got \"%s\"",
 	          diag.c_str());
