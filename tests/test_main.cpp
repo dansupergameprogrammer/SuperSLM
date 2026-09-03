@@ -27439,35 +27439,43 @@ static void TestT2572_M2_MarshalLayerAcceptsArmCsNonQkNormOutput() {
 	}
 }
 
-// (D-SLM6263): a synthetic, degenerate-geometry (hidden_size=2, one head, one KV head, one
-// RoPE pair) GPU-equals-CPU cell was authored and driven, via `RunLayerLoop`/
-// `RunLayerLoopGpu`, against `RopeSaturationFixture` above. Executed, not merely reasoned
-// (`StandardsDocument.md` Sec5.4): the mutation claim (both `InterlockedAdd(gRope*Clamps,
-// 1u)` lines deleted, rebuilt) DID go red as designed. But the FIXED (non-mutated) shader,
-// rebuilt and re-run repeatedly with no source change, was NOT reliably green at this exact
-// degenerate geometry -- across three independently-tried fixture constructions (raw
-// dynamic-funnel magnitude; K's second, QK-norm landing at a proven-robust target; a static,
-// doubled K/V landing weight, all with Q's own contribution eliminated by construction), the
-// cell intermittently reported a one-count GPU-under-CPU divergence on reruns of the
-// identical binary -- a real, reproducible-but-nondeterministic finding at this ONE
-// degenerate geometry, not resolved within this round.
+// (D-SLM6263, superseded by T-2575/D-SLM6269): the synthetic, degenerate-geometry
+// (hidden_size=2, one head, one KV head, head_dim=2, one RoPE pair) GPU-equals-CPU cell over
+// `RopeSaturationFixture` above. T-2572 authored it, measured it intermittently reporting a
+// one-count GPU-under-CPU divergence "on reruns of the identical binary" across three fixture
+// constructions, and removed it as a suite liability. T-2575 restored it, ran it at N=100 GPU
+// dispatches per process across six processes with a guaranteed-current shader set (the
+// freshness guard below), and measured what it actually is.
 //
-// The REAL, 28-layer candidate's own acceptance run (this round, `harness_run_out2.log`)
-// answers the question this synthetic cell could not: at the single-token path (the SAME
-// `RunLayerLoop`/`RunLayerLoopGpu` pair this synthetic cell used), `kv_saturation_count`
-// matched exactly (CPU=4, GPU=4), folded into the harness's own DETERMINISM CROWN check
-// (`tests/t2551_qk_norm_harness.cpp`, below this file). The width>1, chunk-batched path
-// (`RunLayerLoopChunkBatched`/repeated `RunLayerLoopGpuSubmit`+`Finish`) did NOT match
-// (100/100 divergences against the CPU chunk-batched reference, stable across the same 100
-// GPU dispatches) -- a real, reproducible finding, distinct from this file's own degenerate-
-// geometry flakiness, filed in the build record and owed to a follow-up ticket: the
-// single-token path's own counter is commissioned by this round's real-candidate run: the
-// chunk-batched path's is not, and its readings are quarantined until it is
-// (`StandardsDocument.md` Sec5.4's own "An instrument is commissioned before its verdicts
-// are load-bearing" discipline). This synthetic cell is not kept as a permanent suite
-// member -- a cell that fails intermittently on unchanged code is a liability to the suite,
-// not evidence for or against the fix; the real-candidate harness carries the load-bearing
-// GPU/CPU comparison for this counter going forward.
+// It is NOT a counter defect, and it is not the T-2575 root cause (a stale shader binary,
+// below) either. It is a FORWARD-OUTPUT divergence that the counter merely reports:
+//
+//   CPU kv_saturation_count over 100 in-process runs: min=3 max=3 (stable, every process)
+//   GPU kv_saturation_count over 100 in-process runs: 0, 1, 41, 41, 100 and 100 runs diverging
+//     from CPU, in six consecutive processes off one unchanged binary
+//   byte_divergences == count divergences EXACTLY, in every process
+//   final hidden_codes: identical CPU/GPU in every run (codes_div == 0, always)
+//   K/V workspace on a diverging run: cpu=[127,0,127,129] gpu=[127,129,127,129]
+//
+// The workspace is [K row, V row] for layer 0, kv_head 0, position 0. V matches. K's FIRST byte
+// matches. K's SECOND byte is 0 on CPU and 129 (int8 -127) on the GPU -- and -127 is exactly
+// that row's own PRE-rotation value. K lands as (127, -127); the 45-degree rotation this fixture
+// pins takes it to (127*c + 127*c) -> clamped 127 and (127*c - 127*c) -> exactly 0. So on a
+// diverging run the GPU's K row is the UNROTATED landed row: `rope_commit_site.hlsl`'s own
+// write-back did not take effect for that row, intermittently, with the count difference
+// following from the clamp that therefore never happened.
+//
+// Scope, stated as the cell it was measured in (`StandardsDocument.md` §5.4): this is the
+// degenerate geometry only. The real 28-layer candidate shows 0/100 divergences on codes, scale
+// AND `kv_saturation_count` across 100 repeated chunk-sequential dispatches, plus a passing
+// determinism crown on the single-token path, in the same session
+// (`Claude/Laplace/t2575-gpu-sat-count-2026-09-03.md`). Whether the same mechanism is latent at
+// production geometry and merely unobserved is NOT established either way.
+//
+// The cell is not restored: a suite member that is red in five processes out of six is a
+// liability, and the finding is a distinct open defect owed its own ticket rather than a
+// property this fixture should assert. `RopeSaturationFixture` stays -- the two CPU-side cells
+// above use it, and the next round's own investigation starts from it.
 
 // ==============================================================================
 // T-2575 (D-SLM6268): the shader-binary freshness guard
