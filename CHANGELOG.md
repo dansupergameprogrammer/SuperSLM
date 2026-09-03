@@ -511,7 +511,10 @@ QK-norm artifacts converted by a pre-1.4.0 tree** — see the format note under 
   the chunk-batched/width>1 path (100/100 divergences against the CPU reference, stable
   across 100 repeated GPU dispatches) -- filed and owed to a follow-up ticket; the
   chunk-batched/width>1 GPU reading is quarantined until commissioned
-  (`StandardsDocument.md` §5.4). **`calibrate_kv_landing_arm`'s `"per_head"` arms (C, D,
+  (`StandardsDocument.md` §5.4). **CORRECTED 2026-09-03 (T-2574):** the follow-up ticket ran,
+  precisely localized the defect (confined to non-fresh-sequence Submit calls; every value the
+  counting decision reads proven bit-identical to CPU at every layer checked), and did not lift
+  the quarantine -- see `Claude/Brunel/t2574-gpu-sat-count-2026-09-03.md`. **`calibrate_kv_landing_arm`'s `"per_head"` arms (C, D,
   E) now refuse a QK-norm checkpoint by name** (`CalibrationArmDoesNotSupportQkNorm`),
   closing the external review's Minor 2: those arms' own per-head policy schema still
   labels a post-norm capture under raw-K keys and emits no `k_normed_head{h}` entry the
@@ -536,6 +539,20 @@ QK-norm artifacts converted by a pre-1.4.0 tree** — see the format note under 
   strongest reading (the winner clips MORE than max-abs and is still selected).
 
   Build log: `Claude/Brunel/t2572-k-normed-rope-peak-2026-09-03.md` (records worktree).
+
+- **The chunk-batched/width>1 GPU `kv_saturation_count` divergence (T-2572, above) is precisely
+  localized, not closed (T-2574).** Confined to the second and later `RunLayerLoopGpuSubmit` call
+  of a sequence -- the first call is exact at every layer, every run. Reproduces identically at
+  any layer-budget granularity (one 28-layer Submit or 28 separately-resumed 1-layer Submits).
+  Every value the counting decision depends on -- `hidden_codes` (all 1024 elements, every layer),
+  `hidden_scale`, the landed K/V bytes, and Q's pre-rotation codes -- is bit-identical between
+  CPU's chunk-batched reference and GPU's sequential drive at every point checked. Two structural
+  hypotheses were tested by execution and falsified: `kv_proj_site.hlsl`'s saturation-flush was
+  the one non-atomic site among four otherwise-identical ones (converted to `InterlockedAdd`,
+  matching the rest of the tree, verified not to change the measured divergence -- kept as a
+  hardening); and the weight-residency cache serving stale content to a non-fresh call (forced a
+  miss, verified byte-for-byte unchanged). The `kv_saturation_count` Cell 4 reading stays
+  quarantined. Build log: `Claude/Brunel/t2574-gpu-sat-count-2026-09-03.md` (records worktree).
 
 ### Changed
 
