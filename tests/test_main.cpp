@@ -27602,7 +27602,16 @@ static void TestT2575_ShaderStalenessGuard_UnverifiableCasesAreNotRefusals() {
 	          "a shipped binary with no sources beside it is unverifiable, not stale",
 	          no_dir.c_str());
 
-	// (2) A source directory that carries no .hlsl of that name.
+	// (2) A source directory that carries no .hlsl of that name. The binary itself must EXIST
+	//     and be old, or this arm is decided by the absent-.cso guard below instead of by the
+	//     absent-source guard it is written to exercise -- measured: with no such file on disk,
+	//     deleting the absent-source guard left every cell green (T-2575 mutant M5). A shared
+	//     header newer than that binary is what makes the arm live: without one there is no
+	//     source time at all for a mutant to compare against, and the arm goes green again for
+	//     the second reason rather than the first.
+	fx.Write("shared_helpers.hlsli", "// header\n");
+	fx.Write("some_other_site.cso", "DXBC");
+	fx.SetAge("some_other_site.cso", 600);
 	const std::string no_src = superslm_gpu::harness::ShaderBinaryStalenessDiagnostic(
 	    fx.DirStr(), "some_other_site", (fx.dir / "some_other_site.cso").string());
 	CHECK_MSG(no_src.empty(),
