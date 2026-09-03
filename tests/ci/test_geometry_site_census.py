@@ -1474,7 +1474,14 @@ def test_part3_reorder_gs10_plus_revert_is_caught_at_the_relocated_line():
     # swapped) copy this test builds -- re-derived, as the T-2560 correction before it was, by
     # running the census against the real, current file through the same mutation this test
     # applies, never by adding a line-count offset to the previous number.
-    assert any("REGRESSED SITE" in f and "GS-10" in f and ":838" in f for f in failures), (
+    # CORRECTED 2026-09-03 (T-2577): superslm_gpu.cpp gained the model_generation cache-key
+    # parameter, its own top-level gate function and header comments (S1), the
+    # GpuShaderBinaryStaleError type and catch clauses (S2), and the per-site saturation-count
+    # offsets and packing (S3) -- all landing above this occurrence, shifting it from :838 to
+    # :923 in the same mutated copy. Re-derived the same way: `python -c` driving
+    # `_swap_and_optionally_revert`/`census.run_census` directly against the real, current file
+    # through the identical mutation, never by offset.
+    assert any("REGRESSED SITE" in f and "GS-10" in f and ":923" in f for f in failures), (
         "the finding must cite the RELOCATED occurrence's own (now-first) line, not the "
         "untouched occurrence -- a wrong-line citation is exactly what the prior ordinal "
         "keying produced"
@@ -1522,7 +1529,9 @@ def test_part3_reorder_gs11_plus_revert_is_caught_at_the_relocated_line():
     assert failures, "a genuine revert of the relocated GS-11 occurrence must FAIL"
     # (T-2575): shifted from :750 to :865 in the mutated copy, by the same ShaderPath freshness
     # guard named at GS-10's own identical correction above, and re-derived the same way.
-    assert any("REGRESSED SITE" in f and "GS-11" in f and ":865" in f for f in failures)
+    # CORRECTED 2026-09-03 (T-2577): shifted from :865 to :950, by the same S1/S2/S3 additions
+    # GS-10's own identical correction above names, re-derived the same way.
+    assert any("REGRESSED SITE" in f and "GS-11" in f and ":950" in f for f in failures)
 
 
 _GS12_OCC0 = (
@@ -1583,7 +1592,12 @@ def test_part3_reorder_gs12_two_differently_offset_occurrences_plus_revert_is_ca
     # own predicated-increment saturation counter (forward_sites.cpp, this ticket's own fix)
     # added lines above this occurrence -- shifting it from :1734 to :1745 in the same mutated
     # copy. Re-derived by running the census against the real, current, mutated file.
-    assert any("REGRESSED SITE" in f and "GS-12" in f and ":1745" in f for f in failures)
+    # CORRECTED AGAIN 2026-09-03 (T-2577, D-SLM6274 S3/O1): the per-site saturation-count
+    # parameters and their call-site wiring (LandTokenKVRow/ApplyQkNormSite/RopeApplySite, and
+    # RunLayerLoopChunkBatched's own four new trailing parameters) added lines above this
+    # occurrence -- shifting it from :1745 to :1775 in the same mutated copy. Re-derived the
+    # same way, against the real, current, mutated file.
+    assert any("REGRESSED SITE" in f and "GS-12" in f and ":1775" in f for f in failures)
 
 
 _GS12_OCC2 = (

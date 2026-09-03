@@ -493,174 +493,113 @@ QK-norm artifacts converted by a pre-1.4.0 tree** — see the format note under 
   smaller size can fix; no retry at any size fixes a null pointer. `SslmForwardStatusName`
   gained the matching arm.
 
-- **The post-QK-norm K landing scale now calibrates on the union of pre-RoPE and post-RoPE
-  component maxima, closing the external review's Significant 1 (T-2572, D-SLM6263,
+- **RoPE's own post-rotation clamp is counted, CPU and GPU, per site, and the K landing
+  scale calibrates on the union of pre-RoPE and post-RoPE component maxima (T-2572/T-2577,
+  D-SLM6263/D-SLM6274, closing the external review's Significant 1,
   `Claude/External/superslm-1p4p0-2026-09-02.md`).** `_float_layer`'s own `k_normed`
-  observation now fires TWICE per layer under the identical running-max key -- once
-  post-norm/pre-RoPE (unchanged from T-2560's own addition) and again post-norm/post-RoPE
-  (new) -- closing the gap the entry above's own "CORRECTED" note states in full. **A
-  saturation counter on `RopeApplySite`'s own `[-127, 127]` clamp, CPU and GPU, threaded
-  like every other landing site's counter** (`ApplyQkNormSite`'s, `LandTokenKVRow`'s):
-  `RopeApplySite` and its GPU siblings (`rope_guard_site.hlsl`, `rope_commit_site.hlsl`)
-  gain an optional `out_saturation_count` parameter, feeding the SAME host-facing
-  `SslmDecodeStepStatus::saturation_count` field -- a clamp at this site was previously
-  silent (the review's own found gap). Verified by execution, not merely reasoned: the CPU
-  counter is deterministic and reliably discriminates a deletion mutant (both CPU and
-  shader forms); the GPU counter matches CPU exactly on the real 28-layer candidate's own
-  single-token decode path (`CPU=4, GPU=4`) but shows a real, reproducible divergence on
-  the chunk-batched/width>1 path (100/100 divergences against the CPU reference, stable
-  across 100 repeated GPU dispatches) -- filed and owed to a follow-up ticket; the
-  chunk-batched/width>1 GPU reading is quarantined until commissioned
-  (`StandardsDocument.md` §5.4). **CORRECTED 2026-09-03 (T-2574):** the follow-up ticket ran,
-  precisely localized the defect (confined to non-fresh-sequence Submit calls; every value the
-  counting decision reads proven bit-identical to CPU at every layer checked), and did not lift
-  the quarantine -- see `Claude/Brunel/t2574-gpu-sat-count-2026-09-03.md`. **CORRECTED AGAIN
-  2026-09-03 (T-2575): the divergence was never in this engine.** The acceptance harness was
-  dispatching a `rope_guard_site.cso` compiled before the counter existed, so the reading it
-  produced measured a shader that could not count. With the current binary in place the same
-  harness, the same artifact and the same 100 repeated dispatches report `0/200 divergences`
-  and the quarantine is LIFTED -- see the T-2575 entry below and
-  `Claude/Laplace/t2575-gpu-sat-count-2026-09-03.md`. **`calibrate_kv_landing_arm`'s `"per_head"` arms (C, D,
-  E) now refuse a QK-norm checkpoint by name** (`CalibrationArmDoesNotSupportQkNorm`),
-  closing the external review's Minor 2: those arms' own per-head policy schema still
-  labels a post-norm capture under raw-K keys and emits no `k_normed_head{h}` entry the
-  1.4.0 loader requires on a QK-norm layer; the `"per_layer"` arms (A, B) are unaffected,
-  since they reuse the production path this same entry's own union fix already makes
-  QK-norm-correct. The per-head policy schema's own QK-norm support is owed to a later
-  ticket. **The pinned Qwen3-Embedding-0.6B candidate is recalibrated and reconverted**
-  under the corrected pipeline: **633,588,308 bytes** (unchanged size -- an additive
-  calibration-value fix, not a schema change), new SHA-256
-  **`e5212dd2d4772bb6939c3c75dae6f9bf933a0d48de57d1f26f929a1c1e506759`**, superseding the
-  T-2560-era `09c439f6...` this branch's own prior entries recorded. Real-candidate
-  acceptance, re-run on the new candidate: `CELL 1 (width>1 acceptance) ... PASS`,
-  `DETERMINISM CROWN: PASS` (including the new `kv_saturation_count` comparison, single-
-  token path), `CELL 4 (GPU determinism, N=100, codes/scale) ... 0/100 divergences ...
-  PASS`. Obligation constants (D-SLM6148) re-measured, not re-cited: the structural bound
-  (`test_pipeline.py`) holds at `<= 0.25` (layer 0 = 0.1288, layer 1 = 0.1254, unaffected
-  by this round's additive fix); the golden logit holds UNCHANGED (`oracle_50[0][0] ==
-  -2350`); the ARMD sweep key moved to `layer0.k_head1` (Minor 2's own closure has Arms
-  C/D/E compute their real sweep on the QK-norm-stripped fixture, restoring the pre-T-2553
-  float data those cells were authored against) -- see `test_armd_arme_kv_calibration.py`'s
-  own dated correction for the full account, including the restored §31.4.4 row 5
-  strongest reading (the winner clips MORE than max-abs and is still selected).
+  observation fires TWICE per layer under the identical running-max key -- once
+  post-norm/pre-RoPE and once post-norm/post-RoPE -- so the K landing scale (`k_norm_landing_r_t`/
+  `e_t`) covers the true post-RoPE peak: the engine requantizes K onto this scale BEFORE
+  RoPE and clamps AFTER, so a pre-RoPE-only calibration could silently overflow the store
+  the engine actually produces (127.17 codes required against a store sized to 127, on the
+  repository's own checked-in fixture, before this fix). `RopeApplySite` and its GPU
+  siblings (`rope_guard_site.hlsl`, `rope_commit_site.hlsl`) each carry the SAME
+  `[-127, 127]` clamp counter every other landing site already fed into
+  `SslmDecodeStepStatus::saturation_count` -- a clamp at this site was previously silent.
 
-  Build log: `Claude/Brunel/t2572-k-normed-rope-peak-2026-09-03.md` (records worktree).
+  **The counter now also carries a per-site breakdown** (`kv_landing`, `k_normed_landing`,
+  `rope_q`, `rope_k` -- `SequenceLayerState`'s own new fields, T-2577) alongside the
+  aggregate, on both the CPU and GPU paths, GPU-equals-CPU on the real candidate. The
+  aggregate is dominated by Q's rotation on this candidate (69 of 71 clamps at token 1) --
+  a consumer reading only the aggregate to decide whether K's own landing is clipping was
+  reading a number 97% attributable to a term its own name never named; the per-site
+  breakdown gives that consumer the K-specific reading directly. **K's own count is per KV
+  head, not per query head** (T-2577, D-SLM6274 O1): every query head sharing one KV head
+  redundantly re-rotates the identical row (harmless to repeat -- the write-back was
+  already documented as "redundant but sound") and, before this fix, each redundant call
+  also counted its own clamp, inflating K's count by the head-group ratio (2x on the real
+  candidate); both CPU call sites and `rope_commit_site.hlsl` now count only on the first
+  query head of each KV head's own group. On the recalibrated candidate, `rope_k` reads
+  zero at every width measured, including width > 1 -- the enclosure the union calibration
+  claims, watched directly rather than inferred from the dominated aggregate; O2's own
+  zero-margin observation (the dominating head sits at exactly 127.000 float-domain codes)
+  is therefore inherent to int8 at that head, not evidence of an overflow the engine has
+  actually produced.
 
-- **The chunk-batched/width>1 GPU `kv_saturation_count` divergence (T-2572, above) is precisely
-  localized, not closed (T-2574).** Confined to the second and later `RunLayerLoopGpuSubmit` call
-  of a sequence -- the first call is exact at every layer, every run. Reproduces identically at
-  any layer-budget granularity (one 28-layer Submit or 28 separately-resumed 1-layer Submits).
-  Every value the counting decision depends on -- `hidden_codes` (all 1024 elements, every layer),
-  `hidden_scale`, the landed K/V bytes, and Q's pre-rotation codes -- is bit-identical between
-  CPU's chunk-batched reference and GPU's sequential drive at every point checked. Two structural
-  hypotheses were tested by execution and falsified: `kv_proj_site.hlsl`'s saturation-flush was
-  the one non-atomic site among four otherwise-identical ones (converted to `InterlockedAdd`,
-  matching the rest of the tree, verified not to change the measured divergence -- kept as a
-  hardening); and the weight-residency cache serving stale content to a non-fresh call (forced a
-  miss, verified byte-for-byte unchanged). The `kv_saturation_count` Cell 4 reading stays
-  quarantined. Build log: `Claude/Brunel/t2574-gpu-sat-count-2026-09-03.md` (records worktree).
-  **CORRECTED 2026-09-03 (T-2575):** every reading in this entry was taken against a stale
-  `rope_guard_site.cso`, so "confined to the second and later Submit call" was position 0 having
-  no RoPE clamp to lose rather than a property of the call. The localization stands as a
-  description of what was measured; its attribution does not. Quarantine lifted -- see the
-  T-2575 entry below.
+  **`calibrate_kv_landing_arm`'s `"per_head"` arms (C, D, E) refuse a QK-norm checkpoint by
+  name** (`CalibrationArmDoesNotSupportQkNorm`), closing the external review's Minor 2:
+  those arms' own per-head policy schema still labels a post-norm capture under raw-K keys
+  and emits no `k_normed_head{h}` entry the 1.4.0 loader requires on a QK-norm layer; the
+  `"per_layer"` arms (A, B) are unaffected, since they reuse the production path this same
+  entry's own union fix already makes QK-norm-correct. The per-head policy schema's own
+  QK-norm support, and a calibration arm proven against the shipping (QK-norm-bearing)
+  configuration specifically, are both owed to a later ticket -- Arms C/D/E's own refusal
+  is what stands in for that proof today, and is what the ticket's own must-reject cells
+  exercise.
 
-- **A shader binary older than the source it was compiled from is refused, not dispatched
-  (T-2575).** `superslm_gpu::harness::ShaderPath` is the single funnel every `.cso` load in this
-  tree passes through, and it did not check that the bytes it handed back had been compiled from
-  the sources beside them. It does now: a `.cso` must be at least as new as its own `.hlsl` and
-  as the newest shared `.hlsli` in the same directory, and a binary that is not is a named
-  refusal carrying both file names, both timestamps and the remedy. Absent sources (an installed
-  consumer, which ships no `src/gpu/shaders`) and an absent binary are unverifiable rather than
-  stale, and are not refused.
+  **A shader binary older than the source it was compiled from is refused, not dispatched**
+  (`superslm_gpu::harness::ShaderPath`, the single funnel every `.cso` load in this tree
+  passes through): a `.cso` must be at least as new as its own `.hlsl` and as the newest
+  shared `.hlsli` in the same directory. The refusal now surfaces to a caller as its own
+  named status, `GpuShaderBinaryStale` (T-2577, D-SLM6274 S2) -- it used to fall through a
+  generic `catch (const std::runtime_error&)` into `GpuAllocationFailed`, whose documented
+  remedy ("retry smaller") is actively wrong for a shader no retry at any size fixes; a
+  caller obeying that remedy would retry forever with the one real diagnostic surviving
+  only on stderr. Absent sources (an installed consumer, which ships no
+  `src/gpu/shaders`) and an absent binary are unverifiable rather than stale, and are not
+  refused. Six cells commission the guard: a must-accept, two constructed must-reject arms
+  (a binary behind its own `.hlsl`; a binary behind a shared `.hlsli`), the two
+  unverifiable cases, and a must-reject on the real load path that back-dates an actual
+  `.cso` a decade and requires `ShaderPath` to refuse; a seventh drives a stale binary
+  through a real forward call and asserts the named status a consumer actually sees, not
+  the guard's own API directly. The acceptance harness's own header carries its build
+  recipe with the dxc step in it -- compiling only the `.cpp` leaves a stale shader in
+  place and the harness dispatches it silently.
 
-  **This closes the T-2572/T-2574 `kv_saturation_count` divergence, which was never a defect in
-  the engine.** `out/shaders/rope_guard_site.cso` was a compile predating D-SLM6263 -- `dxc
-  -dumpbin` reports zero atomics and zero `groupshared` in it against 4 and 9 in the current
-  build -- while the acceptance harness beside it had been rebuilt. Q's RoPE clamp is the
-  overwhelming majority of the count at any position past 0 and does not exist at all in that
-  binary; position 0 matched only because RoPE is the identity there and there was nothing to
-  lose. Per counting site, token 1 of the real 28-layer candidate, CPU against GPU: K/V landing
-  0/0, QK-norm second K landing 2/2, RoPE Q **69/0**, RoPE K 0/0. Replacing those two `.cso`
-  files -- the only variable changed between two otherwise identical harness runs -- takes the
-  same per-site table to 69/69 and `CELL 4 kv_saturation_count (GPU determinism, repeated
-  dispatch, width>1, N=100)` from `100/200 divergences -- FAIL` to `0/200 divergences -- PASS`
-  against `cpu_ref_sat=154`, with `CELL 1`, `CELL 4 (codes/scale)` and the determinism crown
-  unchanged and passing.
+  **A RoPE cos/sin table cached against a still-live model is no longer forced to repack
+  and re-upload on every fresh sequence, and a table cached against a recycled host
+  address is still never served to the wrong model** (T-2577, D-SLM6274 S1).
+  `g_resident_rope` (`src/gpu/superslm_gpu.cpp`) keeps the two model-wide rotation tables
+  device-resident across a decode session, keyed on the source tensor's own host address
+  and byte count -- a key identical across every sequence of ONE model. A prior fix gated
+  the fast path on `!fresh_sequence` to close a recycled-address hazard (an address the
+  allocator hands back can name a different model's tables), but that term forced every
+  fresh sequence of a STILL-LIVE model to pay a full repack and re-upload it never needed:
+  measured on the real candidate, 102 of 103 fresh-sequence first calls matched the cache
+  key and each paid ~19 ms of host work the prior text claimed was free everywhere it is
+  not (`StandardsDocument.md` §5.4 -- true of the 1.0 handle path, which never reaches this
+  cache, false of every pre-1.0 caller, which is every caller that does). The cache (and
+  its two siblings, `g_resident_weights`/`g_resident_kv`, which shared the identical
+  `!fresh_sequence` shape for the identical reason) now accepts an optional caller-supplied
+  model identity (`model_generation`, a new trailing parameter on `RunLayerLoopGpu`/
+  `RunLayerLoopGpuSubmit`, default `0`): a fresh sequence whose identity matches what is
+  cached is a legitimate hit, and a fresh sequence whose identity does not match -- the
+  recycled-address case, unchanged -- still misses. A caller that supplies no identity
+  observes exactly the prior `!fresh_sequence`-gated behavior, byte-for-byte.
 
-  Six cells commission the guard rather than assuming it fires: a must-accept, two constructed
-  must-reject arms (a binary behind its own `.hlsl`; a binary behind a shared `.hlsli`), the two
-  unverifiable cases, a must-reject on the real load path that back-dates an actual `.cso` a
-  decade and requires `ShaderPath` to refuse, and a sweep over every shader the running
-  executable would dispatch. The acceptance harness's own header now carries its build recipe
-  with the dxc step in it.
+  **The pinned Qwen3-Embedding-0.6B candidate's identity is unaffected by this round**
+  (T-2577 touches no calibration, no shader source's forward math, no CPU forward, and no
+  `gpu_port.h` field layout): **633,588,308 bytes**, SHA-256
+  **`e5212dd2d4772bb6939c3c75dae6f9bf933a0d48de57d1f26f929a1c1e506759`**, unchanged from
+  T-2572's own recalibration. Real-candidate acceptance, re-run on the unchanged candidate:
+  `CELL 1 (width>1 acceptance) ... PASS`, `DETERMINISM CROWN: PASS`, `CELL 4 (GPU
+  determinism, N=100, codes/scale and kv_saturation_count) ... 0/100 ... PASS`, `CELL 5
+  (RoPE-table residency, production geometry) ... PASS`, the new per-site GPU-equals-CPU
+  comparison PASS, and `rope_k == 0` at width > 1. Obligation constants (D-SLM6148) hold at
+  their T-2572-era readings, unaffected by this round's own diff: the structural bound
+  (`test_pipeline.py`) `<= 0.25` (layer 0 = 0.1288, layer 1 = 0.1254); the golden logit
+  `oracle_50[0][0] == -2350`; the ARMD sweep key `layer0.k_head1`.
 
-  **Open, and distinct from the above (T-2575).** The synthetic degenerate-geometry fixture
-  T-2572 removed for intermittency was restored and measured at 100 GPU dispatches per process
-  across six processes on a current shader set: the CPU count is stable at 3 in every process
-  and the GPU diverges in 0, 1, 41, 41, 100 and 100 of 100 dispatches off one unchanged binary.
-  The byte-divergence count equals the count divergence exactly in every process and the final
-  hidden codes always match, so this is a forward-output divergence the counter merely reports:
-  K's second landed byte is 0 on the CPU and -127 on the GPU, and -127 is that row's own
-  pre-rotation value, so `rope_commit_site.hlsl`'s write-back intermittently does not take
-  effect at that geometry. Not restored as a suite member, and owed its own ticket. Scope, as
-  measured: `hidden_size=2`, one head, one KV head, `head_dim=2`, one RoPE pair. The real
-  28-layer candidate is `0/100` on codes, scale and `kv_saturation_count` in the same session;
-  whether the same mechanism is latent at production geometry is not established either way.
-
-  **CLOSED 2026-09-03 (T-2576, D-SLM6271):** that finding was `g_resident_rope`, not `rope_commit_site.hlsl`.
-  The store was never lost -- the shader wrote what it computed, and what it computed was the
-  identity rotation, because it had read `cos = 2^30, sin = 0` from a previous fixture's resident
-  tables. See the T-2576 entry below. This paragraph's readings stand; its attribution to the
-  write-back does not.
-
-  Solve record: `Claude/Laplace/t2575-gpu-sat-count-2026-09-03.md` (records worktree).
-
-- **A RoPE cos/sin table cached against a recycled host address is no longer served to a fresh
-  sequence (T-2576).** `g_resident_rope` (`src/gpu/superslm_gpu.cpp`) keeps the two model-wide
-  rotation tables device-resident across the tokens of a decode session, keyed on the source
-  tensor's own host address plus byte count. That key alone is not an identity: an address the
-  allocator has handed back names a different tensor, and the cache served the previous one's
-  tables with no error. It now also requires `!fresh_sequence`, the term `lw_fast_hit` and
-  `kv_fast_hit` in the same function have carried since the identical pointer-recycling defect
-  was reproduced for the weight cache; this cache was added later and never got it. The gate is
-  free in real decode -- the first call of any sequence is already a miss by construction, and
-  every later call is unaffected.
-
-  **This closes the degenerate-geometry divergence T-2575 left open**, and it was never the
-  write-back it looked like. Read back from the device on a diverging run: the staged bytes were
-  right `(127, -127)`, the store landed (`kdword_before=0x817F817F`, `kdword_after` unchanged),
-  and the rotation itself had returned its own input -- because the shader read
-  `cos_q30=1073741824, sin_q30=0`, the identity, where this fixture's own table carries
-  `759250125` for both. Diverging runs carried `rope_fast_hit=1`; matching runs carried
-  `rope_fast_hit=0` and `cos_q30=759250125`. Whether the addresses collide depends on the heap
-  layout, which is why the same unchanged binary diverged in 0, 1, 41, 41, 100 and 100 of 100
-  dispatches across six processes and looked like a race.
-
-  **Reachable at production geometry, settled by construction rather than inferred.** The
-  acceptance harness gains CELL 5: it runs one full sequence on the real 28-layer candidate to
-  populate the cache, rewrites the 16 MiB cos/sin tables in place -- same address, same byte
-  count, a 45-degree rotation instead of the model's own -- and runs a second fresh sequence at
-  width 3 (`head_dim=128`, `group=2`, `context_cap=32768`). Before this change the GPU disagreed
-  with the CPU on the same mutated tables; after it, they agree. The cell carries its own
-  must-reject (the rewrite has to move the CPU arm off its pristine output) because two earlier
-  constructions could not fail: an identity rewrite changes nothing at position 0, where the
-  real table's own row 0 IS the identity, and at width 1 the softmax is over a single position
-  and returns 1.0 whatever the score is, so Q/K rotations cannot reach the output at all.
-
-  The synthetic degenerate-geometry cell T-2572 removed for intermittency is **restored** as the
-  regression pin, CPU and GPU arms at N=100, comparing the landed K/V row as well as the
-  counter: red in 5 of 6 processes against the pre-fix engine, green in 6 of 6 after.
-
-  **One T-2575 claim is withdrawn.** That round asserted, in the freshness guard's own header
-  and in its commissioning cell, that CMake's shader rule does not depend on the `.hlsli`
-  headers. Checked at source and by execution: it does -- `CMakeLists.txt` globs every `*.hlsli`
-  into the custom command's `DEPENDS`, and touching one rebuilt all 34 `.cso`. `build.bat`
-  recompiles every shader unconditionally, so it is safe too. The guard's header term stays,
-  since a hand-run dxc over only the edited files carries no such dependency, but the reason
-  given for it was wrong and is corrected at both sites.
-
-  Solve record: `Claude/Laplace/t2576-rope-commit-writeback-2026-09-03.md` (records worktree).
+  Build/solve records: `Claude/Brunel/t2572-k-normed-rope-peak-2026-09-03.md`,
+  `Claude/Laplace/t2575-gpu-sat-count-2026-09-03.md`,
+  `Claude/Laplace/t2576-rope-commit-writeback-2026-09-03.md`,
+  `Claude/Brunel/t2577-external-fold-fixes-2026-09-03.md` (records worktree). The
+  measurement-apparatus history behind this entry -- a stale local shader binary that made
+  a working RoPE counter read as broken across two rounds, then a cache key that read as a
+  write-back defect until a device read-back located it one cache over -- is preserved in
+  those records and in git history, not narrated here: `StandardsDocument.md` §6.6 wants
+  HEAD to hold current truth, and none of that apparatus history describes the shipped
+  engine, which never carried the defect it appeared to (D-SLM6274 M4).
 
 ### Changed
 

@@ -237,9 +237,19 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a);
 // edit earlier in the same commit had already moved the lines it named. A
 // `file:line` citation inside a source comment goes stale on every edit
 // above it; the claim itself needs no citation at all.)
+// `out_site_saturation_count` (T-2577, D-SLM6274 S3, external review `Claude/Poirot/
+// 5fafd98-t2573-trackb-external-fold-review.md` Significant 3): a SECOND counter,
+// incremented under the identical condition as `out_saturation_count` and in the same call --
+// this primitive is shared by more than one logical site (`LandTokenKVRow`'s K/V landing,
+// `ApplyQkNormSite`'s K branch's second, post-norm landing), and the shared aggregate
+// `out_saturation_count` cannot tell a caller which one clamped. A caller passes its own
+// site's counter here (e.g. `&seq.kv_landing_saturation_count`) alongside the unchanged
+// `&seq.kv_saturation_count` total. Defaults to `nullptr`: every pre-existing call -- none of
+// which passes this new parameter yet -- compiles unchanged.
 int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_a,
                         int64_t e_t, uint64_t* out_saturation_count = nullptr,
-                        bool* out_magnitude_exceeded_int64 = nullptr);
+                        bool* out_magnitude_exceeded_int64 = nullptr,
+                        uint64_t* out_site_saturation_count = nullptr);
 
 // C33's post-rotation clamp (§5.3, §11 S3.3 §6.2 step 3): `RopeApplyPair`
 // (intmath.h) returns its rotated pair UNCLAMPED and int64-wide by its own
@@ -303,11 +313,30 @@ int64_t ClampRopeCode(int64_t raw);
 // sequence saturation counter is updated by LandingRescale, but the subsequent RoPE clamp has
 // no counter"). Defaults to `nullptr`, matching `LandingRescale`'s own convention; every
 // pre-existing caller that does not pass it compiles unchanged.
+//
+// `out_site_saturation_count` (T-2577, D-SLM6274 S3, external review `Claude/Poirot/
+// 5fafd98-t2573-trackb-external-fold-review.md` Significant 3): this ONE function is called
+// twice per layer -- once for Q's row, once for K's row -- and `out_saturation_count` alone
+// cannot tell which call clamped. A caller passes its own call's counter here (`&seq.
+// rope_q_saturation_count` at the Q call site, `&seq.rope_k_saturation_count` at the K call
+// site) alongside the unchanged shared `&seq.kv_saturation_count` total. Defaults to
+// `nullptr`: every pre-existing call compiles unchanged.
+//
+// K's own call site counts once per KV HEAD, not once per query head (T-2577, D-SLM6274 O1,
+// external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-review.md` Observation 1):
+// `RunLayerLoopImpl`/`RunLayerLoopChunkBatched` (forward_sites.cpp) call this function once per
+// QUERY head for K too (every query head sharing one KV head redundantly re-rotates the
+// identical row -- harmless to repeat, the write-back's own header comment there calls it
+// "redundant but sound"), but pass this parameter (and `out_saturation_count`) as `nullptr` on
+// every query head except the first one belonging to each KV head's own group, so a clamp is
+// counted exactly once per KV head, matching `rope_commit_site.hlsl`'s own identical GPU-side
+// gate. CPU and GPU therefore agree on the SAME convention: once per KV head.
 SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim,
                                  int64_t position, int64_t context_cap,
                                  const SslmTensorManifest& rope_tables,
                                  int8_t* out_row,
-                                 uint64_t* out_saturation_count = nullptr);
+                                 uint64_t* out_saturation_count = nullptr,
+                                 uint64_t* out_site_saturation_count = nullptr);
 
 // C34's SwiGLU activation site (§5.4, §6.3 step 11). The declaration
 // and a stub were landed first by the test-design pass that authored this
@@ -447,13 +476,40 @@ struct SequenceLayerState {
 	CarriedScale hidden_scale;
 	uint32_t layer_index = 0;
 
-	// §8.2: the K/V landing saturation counter,
-	// "granularity: per sequence" -- owned by the caller across every call for
-	// one sequence, exactly like `layer_index`. RunLayerLoop only increments
-	// this (via `LandingRescale`'s own `out_saturation_count` parameter); it
-	// never resets it -- reset on sequence create / `sslm_seq_reset` is the
+	// §8.2: the per-sequence saturation counter, "granularity: per sequence" -- owned by the
+	// caller across every call for one sequence, exactly like `layer_index`.
+	//
+	// CORRECTED 2026-09-03 (T-2577, D-SLM6274 S3, external review `Claude/Poirot/
+	// 5fafd98-t2573-trackb-external-fold-review.md` Significant 3): this comment used to say
+	// "RunLayerLoop only increments this (via LandingRescale's own out_saturation_count
+	// parameter)". Both halves of that claim are false as of the carried-scale delta
+	// (`Claude/Vitruvius/t2557-trackb-carried-scale-delta-2026-09-02.md` §4) and the RoPE
+	// saturation counter (T-2572, D-SLM6263): this field is now the SUM of four sites --
+	// `LandTokenKVRow`'s K/V landing (via `LandingRescale`), `ApplyQkNormSite`'s K branch's
+	// second, post-norm landing (also via `LandingRescale`, a K/V landing this comment's own
+	// name for the field does not cover), and `RopeApplySite`'s Q and K rotation clamps (via its
+	// own `out_saturation_count` parameter, a different primitive than `LandingRescale`
+	// entirely). On the real, recalibrated candidate at token 1, RoPE's Q rotation is 69 of 71 --
+	// this field is dominated by a term its own name never named. `kv_landing_saturation_count`/
+	// `k_normed_landing_saturation_count`/`rope_q_saturation_count`/`rope_k_saturation_count`
+	// (below) give each site its OWN reading, alongside this total, so a consumer that needs to
+	// know which site is clamping is never limited to this one aggregate. Never reset by
+	// RunLayerLoop/RunLayerLoopChunkBatched -- reset on sequence create / `sslm_seq_reset` is the
 	// caller's own responsibility, per LandingRescale's own header.
 	uint64_t kv_saturation_count = 0;
+
+	// (T-2577, D-SLM6274 S3): the four per-site breakdowns `kv_saturation_count` (above) sums --
+	// same ownership, same never-reset contract, same ordinary sequence-lifetime scope. Each
+	// name matches the per-site probe T-2575 built to find the root cause of a stale-shader
+	// measurement fault (Claude/Laplace/t2575-gpu-sat-count-2026-09-03.md §2): `kv_landing` is
+	// `LandTokenKVRow`'s own K/V landing clamp; `k_normed_landing` is `ApplyQkNormSite`'s K
+	// branch's second, post-norm landing clamp; `rope_q`/`rope_k` are `RopeApplySite`'s own two
+	// call sites (Q's row, K's row) each threading their own out-parameter now, alongside the
+	// shared aggregate `RopeApplySite` still increments.
+	uint64_t kv_landing_saturation_count = 0;
+	uint64_t k_normed_landing_saturation_count = 0;
+	uint64_t rope_q_saturation_count = 0;
+	uint64_t rope_k_saturation_count = 0;
 
 	// S3.7 (§11 S3.7 "The mechanism", §9.4): the number of positions of this
 	// sequence already committed to the K/V store -- distinct from
@@ -995,6 +1051,13 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 // overload's own header comment for the full contract (identical convention, identical
 // default). This is the path `sslm_prefill` actually calls (T-2425's own finding, §6 of that
 // spike's log) -- the real, non-square candidate's own silent-undercount defect lives here.
+// (T-2577, D-SLM6274 S3): the four trailing pointers mirror `SequenceLayerState`'s own
+// `kv_landing_saturation_count`/`k_normed_landing_saturation_count`/`rope_q_saturation_count`/
+// `rope_k_saturation_count` -- this path has no `SequenceLayerState&` of its own to read them
+// from (it takes `kv_saturation_count` as a bare pointer, above, for the identical reason), so
+// a caller that wants the per-site breakdown passes its own four counters directly. Each is
+// incremented under the identical condition as `kv_saturation_count`, alongside it, never in
+// place of it. All four default to `nullptr`: every pre-existing caller compiles unchanged.
 SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
                                             size_t chunk_tokens, const LayerWeights* layers,
                                             uint32_t num_hidden_layers, size_t hidden_size,
@@ -1007,7 +1070,11 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
                                             uint64_t* kv_saturation_count,
                                             std::string_view site_prefix = {},
                                             SslmTraceHookState* trace_hook_state = nullptr,
-                                            size_t q_width = 0);
+                                            size_t q_width = 0,
+                                            uint64_t* out_kv_landing_saturation_count = nullptr,
+                                            uint64_t* out_k_normed_landing_saturation_count = nullptr,
+                                            uint64_t* out_rope_q_saturation_count = nullptr,
+                                            uint64_t* out_rope_k_saturation_count = nullptr);
 
 // (design Sec31.2's own "int64-input, __int128-intermediate sibling of
 // the RoPE pair primitive, Q2.30 tables unchanged" -- Sec12 "Wide-RoPE
@@ -1135,12 +1202,19 @@ int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
 // feeds -- one counter, every landing site. Defaults to `nullptr`, matching
 // `LandingRescale`'s own convention; every pre-existing caller that does not pass it compiles
 // unchanged.
+//
+// `out_k_normed_landing_saturation_count` (T-2577, D-SLM6274 S3, external review
+// `Claude/Poirot/5fafd98-t2573-trackb-external-fold-review.md` Significant 3): the
+// "k_normed_landing" per-site counter -- incremented under the identical condition as
+// `out_saturation_count`, alongside it, at the SAME second-landing `LandingRescale` call.
+// Defaults to `nullptr`: every pre-existing caller compiles unchanged.
 SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8_t* workspace,
                                    uint32_t layer, int64_t context_cap, int64_t position,
                                    size_t num_heads, size_t num_key_value_heads, size_t head_dim,
                                    const LayerWeights& lw, std::string_view site_prefix,
                                    size_t token_index, SslmTraceHookState* trace_hook_state,
-                                   uint64_t* out_saturation_count = nullptr);
+                                   uint64_t* out_saturation_count = nullptr,
+                                   uint64_t* out_k_normed_landing_saturation_count = nullptr);
 
 // --- S3.6: the head and the greedy decode loop (SuperSLM_S3a_WalkingSkeleton_
 // Plan.md §11 S3.6; §9.1; master plan §6.4; C16). This is

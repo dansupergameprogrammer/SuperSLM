@@ -91,6 +91,10 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 	// degrades to "?" below when an arm is missing, degrading every diagnostic
 	// that names the status.
 	if (s == SslmForwardStatus::OutputCapacityExceeded) return "OutputCapacityExceeded";
+	// T-2577 (D-SLM6274 S2): a new enumerator owes an arm HERE as well as its MapForwardStatus
+	// arm (sslm_abi.cpp) -- see OutputCapacityExceeded's own comment above for the cost of
+	// missing one.
+	if (s == SslmForwardStatus::GpuShaderBinaryStale) return "GpuShaderBinaryStale";
 	return "?";
 }
 

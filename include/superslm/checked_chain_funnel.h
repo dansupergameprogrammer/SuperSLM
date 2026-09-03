@@ -311,6 +311,32 @@ enum class SslmForwardStatus {
 	                                          // SSLM_INVALID_ARGUMENT by MapForwardStatus
 	                                          // (sslm_abi.cpp), mirroring InvalidDecodeParams'
 	                                          // own precedent exactly.
+	GpuShaderBinaryStale,                     // T-2577 (D-SLM6274 S2, external review
+	                                          // `Claude/Poirot/5fafd98-t2573-trackb-external-
+	                                          // fold-review.md` Significant 2):
+	                                          // `superslm_gpu::harness::ShaderPath`
+	                                          // (superslm_gpu.cpp) found a `.cso` older than the
+	                                          // `.hlsl`/`.hlsli` source it claims to be a compile
+	                                          // of, and threw `GpuShaderBinaryStaleError` (a
+	                                          // dedicated exception type, superslm_gpu.cpp) --
+	                                          // caught by its own clause in
+	                                          // RunLayerLoopGpuSubmit/
+	                                          // SubmitOneSubChunkToFullDepthForG5Bridge, ahead of
+	                                          // the generic `catch (const std::runtime_error&)`,
+	                                          // so it never inherits that clause's own
+	                                          // `GpuAllocationFailed` status. Distinct from
+	                                          // `GpuAllocationFailed` on purpose, the same reason
+	                                          // `GpuGemmGroupArithmeticInvalid`/
+	                                          // `GpuLayerWeightsContractViolation` above are:
+	                                          // that status's own documented recovery ("retry
+	                                          // smaller") is actively wrong advice for a stale
+	                                          // build artifact, which no retry at any size
+	                                          // fixes -- before this status existed, a caller
+	                                          // reading `GpuAllocationFailed` would retry
+	                                          // smaller, forever, against a shader that cannot be
+	                                          // fixed by any size, with the one true diagnostic
+	                                          // (the stale-binary message naming both files and
+	                                          // both timestamps) surviving only on stderr.
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,

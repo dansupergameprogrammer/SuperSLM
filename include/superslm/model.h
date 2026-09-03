@@ -814,8 +814,17 @@ struct SslmDecodeStepStatus {
 	// token id is validated non-negative against `config.vocab_size` (§9.1,
 	// F-S3-8) before it can reach an output slot.
 	int32_t produced_token = -1;
-	// The per-sequence K/V landing saturation count (§8.2, `SequenceLayerState::kv_saturation_count`)
-	// at the moment this step returned.
+	// The per-sequence saturation count (§8.2, `SequenceLayerState::kv_saturation_count`) at the
+	// moment this step returned -- the SUM of four sites, not only K/V landing.
+	//
+	// CORRECTED 2026-09-03 (T-2577, D-SLM6274 S3, external review `Claude/Poirot/
+	// 5fafd98-t2573-trackb-external-fold-review.md` Significant 3): this field's own name and the
+	// prior text here both said "K/V landing" specifically; as of the carried-scale delta and the
+	// RoPE saturation counter (T-2572, D-SLM6263) the field also carries K's post-norm re-landing
+	// clamp and both RoPE rotation clamps -- on the real, recalibrated candidate at token 1, RoPE
+	// Q's rotation is 69 of the field's 71. `SequenceLayerState`'s own `kv_landing_saturation_
+	// count`/`k_normed_landing_saturation_count`/`rope_q_saturation_count`/`rope_k_saturation_
+	// count` give a consumer the per-site reading this one aggregate cannot.
 	uint64_t saturation_count = 0;
 	SslmCalibrationBandVerdict calibration_band_verdict = SslmCalibrationBandVerdict::BandUnknown;
 };

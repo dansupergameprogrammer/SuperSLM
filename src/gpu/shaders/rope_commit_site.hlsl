@@ -134,8 +134,22 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
             // previously reported no saturation signal at all (the exact defect Significant 1
             // names: "the sequence saturation counter is updated by LandingRescale, but the
             // subsequent RoPE clamp has no counter").
-            if (rkx < -127 || rkx > 127) InterlockedAdd(gRopeCommitClamps, 1u);
-            if (rky < -127 || rky > 127) InterlockedAdd(gRopeCommitClamps, 1u);
+            //
+            // CORRECTED 2026-09-03 (T-2577, D-SLM6274 O1, external review `Claude/Poirot/
+            // 5fafd98-t2573-trackb-external-fold-review.md` Observation 1): `h2` ranges over
+            // QUERY heads (`items = g_num_attention_heads * pairs`, above), but this dispatch's
+            // own K row is addressed by `kv_head2 = h2 / group` -- every query head sharing one
+            // KV head redundantly recomputes the IDENTICAL rotation from the IDENTICAL staged
+            // input (this file's own header comment: "redundant but sound") and converges on the
+            // identical written bytes. The write is harmless to repeat; the COUNT is not -- a
+            // saturating component was counted once per query head, `group` times too many
+            // (twice, on the real candidate's 2:1 grouping). `only_representative_head` is true
+            // for exactly the FIRST query head of each KV-head's own group -- gates the count,
+            // never the rotation or the write, so every thread still does its own identical,
+            // redundant-but-sound work; only the double bookkeeping is removed.
+            bool only_representative_head = (h2 % max(group, 1u)) == 0u;
+            if (only_representative_head && (rkx < -127 || rkx > 127)) InterlockedAdd(gRopeCommitClamps, 1u);
+            if (only_representative_head && (rky < -127 || rky > 127)) InterlockedAdd(gRopeCommitClamps, 1u);
             StoreSignedByteGpu(KvCache, kv_half_off + row_off2 + 2u * p2, (int)ClampRopeCodeGpu(rkx));
             StoreSignedByteGpu(KvCache, kv_half_off + row_off2 + 2u * p2 + 1u, (int)ClampRopeCodeGpu(rky));
         }
@@ -154,6 +168,19 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
         if (old_lo + gRopeCommitClamps < old_lo) {
             uint old_hi;
             SeqState.InterlockedAdd(sat_hi_off, 1u, old_hi);
+        }
+        // (T-2577, D-SLM6274 S3): the identical flush, a second time, into this site's OWN
+        // per-site slot -- "rope_k" (RoPE's K rotation, this shader) -- alongside the aggregate
+        // flush immediately above, never in place of it. This is the reading Significant 1's own
+        // enclosure proof watches: `rope_k` clamps must stay zero on the recalibrated candidate
+        // at width > 1.
+        uint rk_sat_lo_off = SeqRopeKSatLoOffGpu(hidden_size);
+        uint rk_sat_hi_off = SeqRopeKSatHiOffGpu(hidden_size);
+        uint rk_old_lo;
+        SeqState.InterlockedAdd(rk_sat_lo_off, gRopeCommitClamps, rk_old_lo);
+        if (rk_old_lo + gRopeCommitClamps < rk_old_lo) {
+            uint rk_old_hi;
+            SeqState.InterlockedAdd(rk_sat_hi_off, 1u, rk_old_hi);
         }
     }
 }

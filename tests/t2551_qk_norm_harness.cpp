@@ -124,6 +124,15 @@ int main(int argc, char** argv) {
 	const std::string model_path = argv[1];
 	const int32_t token_id = argc >= 3 ? std::atoi(argv[2]) : 0;
 
+	// (T-2577, D-SLM6274 S1): this process loads exactly ONE model, once -- every GPU call below
+	// that drives this SAME loaded candidate passes this SAME identity, so the residency caches
+	// (g_resident_weights/g_resident_kv/g_resident_rope, superslm_gpu.cpp) treat every fresh
+	// sequence of it as a legitimate hit rather than paying T-2576's own `!fresh_sequence`-gated
+	// repack+reupload cost every time. CELL 5 (below) deliberately uses a DIFFERENT generation
+	// for its own mutated-tables arm, simulating a different model now occupying the identical
+	// host address.
+	constexpr uint64_t kModelGeneration = 1;
+
 	std::vector<uint8_t> model_bytes;
 	if (!ReadFile(model_path.c_str(), model_bytes)) {
 		std::fprintf(stderr, "FAILED: could not read \"%s\"\n", model_path.c_str());
@@ -289,7 +298,7 @@ int main(int argc, char** argv) {
 	    &inflight, /*external_weights_resident=*/nullptr, /*external_rope_cos_resident=*/nullptr,
 	    /*external_rope_sin_resident=*/nullptr, /*external_rope_has=*/false,
 	    /*external_rope_cos_elems=*/0, /*external_rope_sin_elems=*/0, /*adapter_bridge=*/nullptr,
-	    q_width, /*out_q_codes=*/nullptr, /*out_q_codes_capacity=*/0);
+	    q_width, /*out_q_codes=*/nullptr, /*out_q_codes_capacity=*/0, kModelGeneration);
 	SslmForwardStatus gpu_status = gpu_submit_status;
 	if (inflight) {
 		int32_t ready = 0;
@@ -359,6 +368,27 @@ int main(int argc, char** argv) {
 	std::printf("kv_saturation_count (single-token path): CPU=%llu GPU=%llu\n",
 	            (unsigned long long)cpu_seq.kv_saturation_count,
 	            (unsigned long long)gpu_seq.kv_saturation_count);
+
+	// (T-2577, D-SLM6274 S3): the per-site breakdown, single-token path -- GPU-equals-CPU per
+	// site, not only in the aggregate above.
+	{
+		struct SiteReading { const char* name; uint64_t cpu; uint64_t gpu; };
+		const SiteReading sites[] = {
+		    {"kv_landing", cpu_seq.kv_landing_saturation_count, gpu_seq.kv_landing_saturation_count},
+		    {"k_normed_landing", cpu_seq.k_normed_landing_saturation_count,
+		     gpu_seq.k_normed_landing_saturation_count},
+		    {"rope_q", cpu_seq.rope_q_saturation_count, gpu_seq.rope_q_saturation_count},
+		    {"rope_k", cpu_seq.rope_k_saturation_count, gpu_seq.rope_k_saturation_count},
+		};
+		bool per_site_match = true;
+		for (const auto& s : sites) {
+			std::printf("kv_saturation_count per-site (single-token path) %s: CPU=%llu GPU=%llu%s\n",
+			            s.name, (unsigned long long)s.cpu, (unsigned long long)s.gpu,
+			            s.cpu == s.gpu ? "" : " DIVERGENCE");
+			if (s.cpu != s.gpu) per_site_match = false;
+		}
+		if (!per_site_match) all_match = false;
+	}
 	if (all_match) {
 		std::printf("DETERMINISM CROWN: PASS -- CPU/GPU bit-identical end-to-end across "
 		            "hidden_codes[%zu], hidden_scale, every K/V row, and kv_saturation_count "
@@ -531,7 +561,8 @@ int main(int argc, char** argv) {
 			                                          model_view.config.vocab_size));
 		}
 		auto RunGpuChunkSequential = [&](std::vector<int8_t>& out_codes, CarriedScale& out_scale,
-		                                  uint64_t& out_sat) -> SslmForwardStatus {
+		                                  uint64_t& out_sat, uint64_t* out_rope_k,
+		                                  int* out_peak_k_code) -> SslmForwardStatus {
 			SequenceLayerState seq;
 			std::vector<int8_t> hidden(hidden_size);
 			seq.hidden_codes = hidden.data();
@@ -555,7 +586,7 @@ int main(int argc, char** argv) {
 				    /*external_rope_sin_resident=*/nullptr, /*external_rope_has=*/false,
 				    /*external_rope_cos_elems=*/0, /*external_rope_sin_elems=*/0,
 				    /*adapter_bridge=*/nullptr, q_width, /*out_q_codes=*/nullptr,
-				    /*out_q_codes_capacity=*/0);
+				    /*out_q_codes_capacity=*/0, kModelGeneration);
 				if (inflight2) {
 					int32_t ready = 0;
 					st = superslm_gpu::RunLayerLoopGpuFinish(inflight2, seq, ws.data(), /*block=*/1,
@@ -566,6 +597,26 @@ int main(int argc, char** argv) {
 			out_codes.assign(hidden.begin(), hidden.end());
 			out_scale = seq.hidden_scale;
 			out_sat = seq.kv_saturation_count;
+			if (out_rope_k != nullptr) *out_rope_k = seq.rope_k_saturation_count;
+			// (T-2577, D-SLM6274 S3): O2's own zero-margin observation, answered with the margin
+			// the integer path actually has -- the peak |K store byte| this real drive reached,
+			// against the [-127, 127] pinned code range every landing site clamps to.
+			if (out_peak_k_code != nullptr) {
+				int peak = 0;
+				for (uint32_t l = 0; l < num_hidden_layers; ++l) {
+					for (uint32_t h = 0; h < num_kv_heads; ++h) {
+						for (int64_t pos = 0; pos < static_cast<int64_t>(chunk_tokens); ++pos) {
+							const int8_t* k_row =
+							    KeyRow(ws.data(), l, context_cap, num_kv_heads, head_dim, h, pos);
+							for (size_t d = 0; d < head_dim; ++d) {
+								const int mag = k_row[d] < 0 ? -static_cast<int>(k_row[d]) : k_row[d];
+								if (mag > peak) peak = mag;
+							}
+						}
+					}
+				}
+				*out_peak_k_code = peak;
+			}
 			return st;
 		};
 
@@ -607,6 +658,9 @@ int main(int argc, char** argv) {
 		const int kRepeatedDispatches = 100;
 		int divergences = 0;
 		int sat_divergences = 0;
+		int rope_k_nonzero_runs = 0;
+		uint64_t rope_k_max_observed = 0;
+		int peak_k_code_observed = 0;
 		std::vector<int8_t> first_codes;
 		CarriedScale first_scale{};
 		uint64_t first_sat = 0;
@@ -614,7 +668,10 @@ int main(int argc, char** argv) {
 			std::vector<int8_t> out_codes;
 			CarriedScale out_scale{};
 			uint64_t out_sat = 0;
-			const SslmForwardStatus st = RunGpuChunkSequential(out_codes, out_scale, out_sat);
+			uint64_t out_rope_k = 0;
+			int out_peak_k_code = 0;
+			const SslmForwardStatus st =
+			    RunGpuChunkSequential(out_codes, out_scale, out_sat, &out_rope_k, &out_peak_k_code);
 			if (st != SslmForwardStatus::Ok) {
 				std::printf("CELL 4: GPU chunk-batched run %d/%d FAILED: status=%s\n", i,
 				            kRepeatedDispatches, SslmForwardStatusName(st));
@@ -636,7 +693,26 @@ int main(int argc, char** argv) {
 				++divergences;
 			}
 			if (out_sat != cpu_ref_sat) ++sat_divergences;
+			if (out_rope_k != 0) ++rope_k_nonzero_runs;
+			if (out_rope_k > rope_k_max_observed) rope_k_max_observed = out_rope_k;
+			if (out_peak_k_code > peak_k_code_observed) peak_k_code_observed = out_peak_k_code;
 		}
+		// (T-2577, D-SLM6274 S3, external review Significant 1's own required closure item 2 and
+		// O2): the enclosure proof this ticket owes -- RoPE's own K clamp (rope_k) stays zero
+		// across every repeated dispatch at width > 1 on the recalibrated candidate, and the peak
+		// integer K code actually reached is reported against the pinned 127 clamp boundary, so
+		// O2's own "zero margin in the float domain" reading is answered with the margin the
+		// INTEGER path actually has (never negative here means the union calibration's own
+		// enclosure holds through RoPE's rotation at this candidate's own real geometry).
+		std::printf(
+		    "CELL 4 rope_k enclosure (GPU, repeated dispatch, width>1, N=%d): %d/%d runs with "
+		    "rope_k != 0 (max observed %llu), peak |K store code| observed = %d / 127 (integer-"
+		    "path margin = %d) -- %s\n",
+		    kRepeatedDispatches, rope_k_nonzero_runs, kRepeatedDispatches,
+		    (unsigned long long)rope_k_max_observed, peak_k_code_observed, 127 - peak_k_code_observed,
+		    rope_k_nonzero_runs == 0 ? "PASS -- rope_k == 0 at width > 1, the enclosure holds"
+		                             : "FAIL -- RoPE's own K rotation clamped at least once");
+		if (rope_k_nonzero_runs != 0) qk_norm_ran = false;
 		// (D-SLM6263): kv_saturation_count's own N=100 determinism, reported alongside Cell
 		// 4's own codes/scale divergence count -- the identical must-accept shape, over the
 		// SAME 100 repeated dispatches, now also covering RopeApplySite's new counter.
@@ -720,7 +796,14 @@ int main(int argc, char** argv) {
 				return st;
 			};
 			// The same three tokens driven sequentially on the GPU, one fresh sequence.
-			auto run_gpu_chunk = [&](std::vector<int8_t>& out_codes, CarriedScale& out_scale) {
+			// (T-2577, D-SLM6274 S1): `generation` and `out_first_call_rope_hit` let this lambda
+			// serve BOTH S1 cells this section now covers -- the recycled-address must-reject
+			// (T-2576's own construction, generation bumped between `warm` and `mut_gpu` below)
+			// and the "a second fresh sequence of the same model hits" must-accept, read directly
+			// off `LastRopeUploadWasSkipped()` on this call's own FIRST (fresh-sequence) submit,
+			// before `context_length` advances off zero.
+			auto run_gpu_chunk = [&](std::vector<int8_t>& out_codes, CarriedScale& out_scale,
+			                          uint64_t generation, bool* out_first_call_rope_hit) {
 				SequenceLayerState seq;
 				std::vector<int8_t> hidden(hidden_size);
 				seq.hidden_codes = hidden.data();
@@ -739,7 +822,10 @@ int main(int argc, char** argv) {
 					    seq, layers.data(), num_hidden_layers, num_hidden_layers, hidden_size, head_dim,
 					    num_kv_heads, intermediate_size, context_cap, model_view.rope_tables, ws.data(),
 					    ws.size(), nullptr, nullptr, &infl, nullptr, nullptr, nullptr, false, 0, 0,
-					    nullptr, q_width, nullptr, 0);
+					    nullptr, q_width, nullptr, 0, generation);
+					if (t == 0 && out_first_call_rope_hit != nullptr) {
+						*out_first_call_rope_hit = superslm_gpu::LastRopeUploadWasSkipped();
+					}
 					if (infl) {
 						int32_t ready = 0;
 						st = superslm_gpu::RunLayerLoopGpuFinish(infl, seq, ws.data(), 1, &ready, nullptr);
@@ -761,10 +847,16 @@ int main(int argc, char** argv) {
 			std::vector<int8_t> pristine_cpu;
 			CarriedScale pristine_cpu_scale{};
 			const SslmForwardStatus pristine_st = run_cpu_chunk(pristine_cpu, pristine_cpu_scale);
-			// Populate the cache with the pristine tables.
+			// Populate/confirm the cache with the pristine tables, generation kModelGeneration --
+			// this process has already primed that generation (the DETERMINISM CROWN drive and
+			// CELL 4's own 100 repeats, above), so `warm`'s own first-call cache read is the S1
+			// must-accept in the same motion: a fresh sequence of the SAME model, same
+			// generation, is a legitimate hit.
 			std::vector<int8_t> warm_codes;
 			CarriedScale warm_scale{};
-			const SslmForwardStatus warm_st = run_gpu_chunk(warm_codes, warm_scale);
+			bool warm_first_call_hit = false;
+			const SslmForwardStatus warm_st =
+			    run_gpu_chunk(warm_codes, warm_scale, kModelGeneration, &warm_first_call_hit);
 
 			{
 				const int64_t cos45_q30 = INT64_C(759250125);
@@ -772,21 +864,40 @@ int main(int argc, char** argv) {
 				for (size_t b = 0; b < sin_bytes; b += 8) std::memcpy(sin_mut + b, &cos45_q30, 8);
 			}
 
+			// (T-2577, D-SLM6274 S1): a DIFFERENT generation for the mutated arm -- simulating a
+			// different model now occupying the identical host address, T-2576's own recycled-
+			// address construction. The must-reject: this must still MISS (and read the mutated
+			// tables), even though the address and byte count are unchanged from `warm` above.
+			constexpr uint64_t kMutatedGeneration = kModelGeneration + 1;
 			std::vector<int8_t> mut_cpu, mut_gpu;
 			CarriedScale mut_cpu_scale{}, mut_gpu_scale{};
+			bool mut_gpu_first_call_hit = true;  // default true so a missing write cannot pass silently
 			const SslmForwardStatus mut_cpu_st = run_cpu_chunk(mut_cpu, mut_cpu_scale);
-			const SslmForwardStatus mut_gpu_st = run_gpu_chunk(mut_gpu, mut_gpu_scale);
+			const SslmForwardStatus mut_gpu_st =
+			    run_gpu_chunk(mut_gpu, mut_gpu_scale, kMutatedGeneration, &mut_gpu_first_call_hit);
+
+			// (T-2577, D-SLM6274 S1, property 3): the cache resumes hitting once the generation
+			// is held steady again -- proves the miss above was the generation mismatch, not a
+			// permanent cache trip. Same (still-mutated) tables, same kMutatedGeneration.
+			std::vector<int8_t> mut_gpu2;
+			CarriedScale mut_gpu2_scale{};
+			bool mut_gpu2_first_call_hit = false;
+			const SslmForwardStatus mut_gpu2_st =
+			    run_gpu_chunk(mut_gpu2, mut_gpu2_scale, kMutatedGeneration, &mut_gpu2_first_call_hit);
 
 			std::memcpy(cos_mut, cos_orig.data(), cos_bytes);
 			std::memcpy(sin_mut, sin_orig.data(), sin_bytes);
 
 			if (pristine_st != SslmForwardStatus::Ok || warm_st != SslmForwardStatus::Ok ||
-			    mut_cpu_st != SslmForwardStatus::Ok || mut_gpu_st != SslmForwardStatus::Ok) {
+			    mut_cpu_st != SslmForwardStatus::Ok || mut_gpu_st != SslmForwardStatus::Ok ||
+			    mut_gpu2_st != SslmForwardStatus::Ok) {
 				std::printf("CELL 5 (RoPE-table residency, production geometry): INCONCLUSIVE -- "
-				            "a status was not Ok (pristine=%s warm=%s mut_cpu=%s mut_gpu=%s); this "
-				            "cell says nothing about the cache unless every arm returns Ok\n",
+				            "a status was not Ok (pristine=%s warm=%s mut_cpu=%s mut_gpu=%s "
+				            "mut_gpu2=%s); this cell says nothing about the cache unless every arm "
+				            "returns Ok\n",
 				            SslmForwardStatusName(pristine_st), SslmForwardStatusName(warm_st),
-				            SslmForwardStatusName(mut_cpu_st), SslmForwardStatusName(mut_gpu_st));
+				            SslmForwardStatusName(mut_cpu_st), SslmForwardStatusName(mut_gpu_st),
+				            SslmForwardStatusName(mut_gpu2_st));
 				qk_norm_ran = false;
 			} else {
 				const bool mutation_is_live =
@@ -813,6 +924,44 @@ int main(int argc, char** argv) {
 					          "rotated with the cached pre-mutation tables (stale hit REACHABLE at "
 					          "production geometry)");
 					if (!gpu_followed) qk_norm_ran = false;
+
+					// (T-2577, D-SLM6274 S1): the three model_generation properties, on this real
+					// candidate at production geometry.
+					std::printf(
+					    "CELL 5a model_generation must-accept (a fresh sequence of the SAME model, "
+					    "same generation=%llu, is a cache hit): %s\n",
+					    (unsigned long long)kModelGeneration,
+					    warm_first_call_hit ? "PASS -- LastRopeUploadWasSkipped()==true"
+					                        : "FAIL -- the rope table was repacked/re-uploaded for "
+					                          "an unchanged, still-live model");
+					if (!warm_first_call_hit) qk_norm_ran = false;
+					std::printf(
+					    "CELL 5b model_generation must-reject (T-2576's own recycled-address "
+					    "construction, generation bumped %llu -> %llu for the mutated arm): %s\n",
+					    (unsigned long long)kModelGeneration, (unsigned long long)kMutatedGeneration,
+					    !mut_gpu_first_call_hit
+					        ? "PASS -- LastRopeUploadWasSkipped()==false, a real miss (matches "
+					          "gpu_followed reading the mutated tables above)"
+					        : "FAIL -- the cache served a wrong-model hit through model_generation, "
+					          "the exact hazard T-2576 closed via !fresh_sequence");
+					if (mut_gpu_first_call_hit) qk_norm_ran = false;
+					std::printf(
+					    "CELL 5c model_generation resumes hitting (same generation=%llu as the "
+					    "mutated arm, confirming the miss above was the generation mismatch, not a "
+					    "permanent cache trip): %s\n",
+					    (unsigned long long)kMutatedGeneration,
+					    mut_gpu2_first_call_hit
+					        ? "PASS -- LastRopeUploadWasSkipped()==true"
+					        : "FAIL -- the cache never recovered to hitting on a steady generation");
+					if (!mut_gpu2_first_call_hit) qk_norm_ran = false;
+					const bool mut_gpu2_matches_mut_gpu =
+					    mut_gpu2 == mut_gpu && mut_gpu2_scale.m == mut_gpu_scale.m &&
+					    mut_gpu2_scale.e == mut_gpu_scale.e;
+					if (!mut_gpu2_matches_mut_gpu) {
+						std::printf("CELL 5c: mut_gpu2's landed output differs from mut_gpu's despite "
+						            "an unmutated, cached hit on the same generation\n");
+						qk_norm_ran = false;
+					}
 				}
 			}
 		}

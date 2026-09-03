@@ -27332,6 +27332,16 @@ static void TestT2572_S2_RunLayerLoopWiresRopeSaturationCounterThroughBothPaths(
 			          "(:1855, :1867) are reverted to pass no counter, restoring exactly "
 			          "Significant 1's own found gap",
 			          static_cast<unsigned long long>(seq.kv_saturation_count));
+			// (T-2577, D-SLM6274 S3): this fixture's own saturation comes from the raw K/V
+			// landing's doubling weight, not from RoPE or QK-norm (RopeSaturationFixture's own
+			// header comment) -- so the per-site `kv_landing` breakdown must independently pin
+			// nonzero here, the one existing cell that reaches `LandTokenKVRow`'s own per-site
+			// counter at all.
+			CHECK_MSG(seq.kv_landing_saturation_count > 0,
+			          "seq.kv_landing_saturation_count after RunLayerLoop, RoPE-amplifying "
+			          "fixture, == %llu, want > 0 -- RED if LandingRescale's own second, "
+			          "per-site counting predicate is disabled",
+			          static_cast<unsigned long long>(seq.kv_landing_saturation_count));
 		}
 	}
 
@@ -27550,6 +27560,322 @@ static void TestT2576_GpuKvSaturationAndKvRowMatchCpuOnRopeSaturationFixtureN100
 }
 
 // ==============================================================================
+// T-2577 (D-SLM6274 S1, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
+// review.md` Significant 1): `model_generation`, the caller-supplied identity that replaces
+// `!fresh_sequence` as the fast-path gate on `g_resident_rope`/`g_resident_weights`/
+// `g_resident_kv` (superslm_gpu.cpp) when a caller supplies one. Three properties, in one
+// cell, over the SAME `RopeSaturationFixture` T-2576's own regression pin above uses:
+//
+//   1. A second fresh sequence of the SAME model (same `model_generation`) is a cache HIT --
+//      the S1 cost regression's own must-accept, read directly off `LastRopeUploadWasSkipped`/
+//      `LastWeightUploadWasSkipped` (a pack/upload COUNT of zero, not a timing).
+//   2. T-2576's own recycled-address construction -- the SAME cos/sin bytes rewritten in
+//      place, same address, different content -- still MISSES when the caller bumps
+//      `model_generation` for the mutated call, and the GPU reads the mutated tables (not a
+//      stale hit) exactly as it does under the `!fresh_sequence` gate T-2576 shipped.
+//   3. The cache resumes hitting once `model_generation` is held steady again, proving the
+//      miss above was the generation mismatch and not a permanent cache invalidation.
+static void TestT2577_S1_ModelGenerationGatesTheThreeResidencyCachesCorrectly() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+	constexpr size_t kWorkspaceSize = 1 * 1 * 1 * 2 * 2;
+
+	RopeSaturationFixture fixture;
+	const superslm::SslmTensorView* cos_t = fixture.view.rope_tables.Tensor("cos");
+	const superslm::SslmTensorView* sin_t = fixture.view.rope_tables.Tensor("sin");
+	CHECK_MSG(cos_t != nullptr && sin_t != nullptr,
+	          "RopeSaturationFixture's own artifact carries no cos/sin tensor -- cannot "
+	          "exercise the rope-cache generation gate");
+	if (cos_t == nullptr || sin_t == nullptr) return;
+	uint8_t* const cos_mut = const_cast<uint8_t*>(cos_t->data);
+	uint8_t* const sin_mut = const_cast<uint8_t*>(sin_t->data);
+	const size_t cos_bytes = static_cast<size_t>(cos_t->elem_count) * 8u;
+	const size_t sin_bytes = static_cast<size_t>(sin_t->elem_count) * 8u;
+	std::vector<uint8_t> cos_orig(cos_mut, cos_mut + cos_bytes);
+	std::vector<uint8_t> sin_orig(sin_mut, sin_mut + sin_bytes);
+
+	auto run_gpu = [&](uint64_t generation, uint8_t* ws) -> SslmForwardStatus {
+		int8_t hidden_codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		return superslm_gpu::RunLayerLoopGpu(
+		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1, /*hidden_size=*/2,
+		    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2, /*context_cap=*/1,
+		    fixture.view.rope_tables, ws, kWorkspaceSize, /*external_kv_resident=*/nullptr,
+		    /*io_external_kv_needs_resume_barrier=*/nullptr, generation);
+	};
+
+	// --- Property 1: a second fresh sequence of the SAME model hits. ---
+	uint8_t ws1[kWorkspaceSize] = {};
+	const auto st1 = run_gpu(/*generation=*/7, ws1);
+	CHECK_MSG(st1 == SslmForwardStatus::Ok, "call 1 (generation=7, first ever) status == %s, want Ok",
+	          SslmForwardStatusName(st1));
+	CHECK_MSG(!superslm_gpu::LastRopeUploadWasSkipped(),
+	          "call 1 (generation=7, first ever call against an empty cache) reported the rope "
+	          "table upload was SKIPPED -- want a miss, this is the cache's very first call");
+
+	uint8_t ws2[kWorkspaceSize] = {};
+	const auto st2 = run_gpu(/*generation=*/7, ws2);
+	CHECK_MSG(st2 == SslmForwardStatus::Ok, "call 2 (generation=7, same model) status == %s, want Ok",
+	          SslmForwardStatusName(st2));
+	CHECK_MSG(superslm_gpu::LastRopeUploadWasSkipped(),
+	          "call 2 (generation=7, SAME as call 1, a fresh sequence of the same still-live "
+	          "model) did not report the rope-table upload as skipped -- want a HIT: this is the "
+	          "S1 cost regression's own must-accept, measured as a pack/upload count of zero, "
+	          "not a timing. RED if model_generation is deleted from the cache key");
+	CHECK_MSG(superslm_gpu::LastWeightUploadWasSkipped(),
+	          "call 2 (generation=7, same model) did not report the weight upload as skipped -- "
+	          "lw_fast_hit carries the identical model_generation gate for the identical reason "
+	          "(S1's own text: \"either they move to the same key in this round\")");
+	CHECK_MSG(std::memcmp(ws2, ws1, kWorkspaceSize) == 0,
+	          "call 2's landed K/V row differs from call 1's despite an unmutated, cached hit");
+
+	// --- Property 2: T-2576's own recycled-address construction, generation-gated. Same
+	// address, same byte count, DIFFERENT content, DIFFERENT generation (simulating a
+	// different model now occupying the recycled address). `RopeSaturationFixture`'s own
+	// table is ALREADY a 45-degree rotation (cos=sin=759250125, this file's own established
+	// technique) -- rewriting it to the SAME value would be T-2576's own learned lesson in a
+	// new shape (a no-op mutation that makes the construction vacuous), so this cell mutates
+	// to the IDENTITY rotation instead (cos=2^30, sin=0), a genuine change from this
+	// fixture's own 45-degree original.
+	std::vector<int8_t> cpu_mut_codes;
+	{
+		const int64_t identity_cos_q30 = INT64_C(1073741824);
+		const int64_t identity_sin_q30 = 0;
+		std::memcpy(cos_mut, &identity_cos_q30, 8);
+		std::memcpy(sin_mut, &identity_sin_q30, 8);
+	}
+	// The CPU reference for the SAME mutated tables (fresh workspace, no cache to fool it).
+	uint8_t cpu_ws[kWorkspaceSize] = {};
+	{
+		int8_t hidden_codes[2] = {5, -5};
+		SequenceLayerState cpu_seq;
+		cpu_seq.hidden_codes = hidden_codes;
+		cpu_seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		cpu_seq.layer_index = 0;
+		const auto cpu_st = superslm::RunLayerLoop(
+		    cpu_seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1, /*hidden_size=*/2,
+		    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2, /*context_cap=*/1,
+		    fixture.view.rope_tables, cpu_ws, kWorkspaceSize);
+		CHECK_MSG(cpu_st == SslmForwardStatus::Ok, "CPU reference on the mutated tables status == %s, want Ok",
+		          SslmForwardStatusName(cpu_st));
+	}
+	CHECK_MSG(std::memcmp(cpu_ws, ws1, kWorkspaceSize) != 0,
+	          "the mutated tables reproduced the pristine CPU output -- this construction is "
+	          "vacuous (T-2576's own learned lesson: an identity rewrite, or width==1, both "
+	          "make CELL-5-shaped constructions pass with nothing measured)");
+
+	uint8_t ws3[kWorkspaceSize] = {};
+	const auto st3 = run_gpu(/*generation=*/8, ws3);
+	CHECK_MSG(st3 == SslmForwardStatus::Ok, "call 3 (generation=8, mutated tables) status == %s, want Ok",
+	          SslmForwardStatusName(st3));
+	CHECK_MSG(!superslm_gpu::LastRopeUploadWasSkipped(),
+	          "call 3 (generation=8, DIFFERENT from calls 1/2, same recycled address, mutated "
+	          "content) reported the rope-table upload as skipped -- want a MISS: this is T-2576's "
+	          "own recycled-address construction, and RED here means the new key served a stale, "
+	          "wrong-model hit exactly as the pre-T-2576 pointer+size-only key did");
+	CHECK_MSG(std::memcmp(ws3, cpu_ws, kWorkspaceSize) == 0,
+	          "call 3's landed K/V row does not match the CPU reference on the SAME mutated "
+	          "tables -- the GPU rotated with stale, cached pre-mutation tables (a wrong-model "
+	          "hit reachable through model_generation, not merely through !fresh_sequence)");
+
+	// --- Property 3: the cache resumes hitting once the generation is held steady again --
+	// proves call 3's miss was the generation mismatch specifically, not a permanent trip. ---
+	uint8_t ws4[kWorkspaceSize] = {};
+	const auto st4 = run_gpu(/*generation=*/8, ws4);
+	CHECK_MSG(st4 == SslmForwardStatus::Ok, "call 4 (generation=8, same as call 3) status == %s, want Ok",
+	          SslmForwardStatusName(st4));
+	CHECK_MSG(superslm_gpu::LastRopeUploadWasSkipped(),
+	          "call 4 (generation=8, SAME as call 3) did not report the rope-table upload as "
+	          "skipped -- want a HIT, confirming call 3's own miss was the generation mismatch "
+	          "and not a cache stuck permanently invalid");
+	CHECK_MSG(std::memcmp(ws4, ws3, kWorkspaceSize) == 0,
+	          "call 4's landed K/V row differs from call 3's despite an unmutated, cached hit "
+	          "on generation=8");
+
+	std::memcpy(cos_mut, cos_orig.data(), cos_bytes);
+	std::memcpy(sin_mut, sin_orig.data(), sin_bytes);
+}
+
+// (T-2577, D-SLM6274 O1, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
+// review.md` Observation 1): K's own RoPE clamp is counted once per KV head, not once per
+// query head. Constructs a 2:1 GQA fixture (two query heads sharing one KV head) whose K
+// weight forces a saturating rotation, and asserts the K-specific count is exactly 1 (one
+// clamp on the one real KV head, not 2 -- one per query head sharing it), on CPU and GPU,
+// single-token and chunk-batched. Would be RED at count==2 if either query head's own
+// redundant re-rotation were still counted.
+static void TestT2577_O1_RopeKCountsOncePerKvHeadNotOncePerQueryHead() {
+	using namespace superslm_test;
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+
+	// A 2:1 GQA fixture: 2 query heads, 1 KV head, head_dim=2 (one RoPE pair), matching
+	// RopeSaturationFixture's own K-doubling technique to force K's landed row into a
+	// saturating amplitude before RoPE ever rotates it.
+	superslm::SslmModelView view;
+	superslm::LayerWeights lw{};
+	Cfg1Spec spec{};
+	spec.hidden_size = 4;  // 2 query heads * head_dim 2
+	spec.num_hidden_layers = 1;
+	spec.num_attention_heads = 2;
+	spec.num_key_value_heads = 1;
+	spec.head_dim = 2;
+	spec.intermediate_size = 2;
+	spec.context_cap = 1;
+	spec.kv_precision = 0;
+	spec.kv_block_size = 1;
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	constexpr int64_t kRopeOne = INT64_C(1073741824);
+	const int64_t cos_q30 =
+	    static_cast<int64_t>(std::llround(0.70710678118654752 * static_cast<double>(kRopeOne)));
+	const int64_t cos_flat[1] = {cos_q30};
+	const int64_t sin_flat[1] = {cos_q30};
+	FixtureSection rope = MakeRop1SectionMultiRow(/*context_cap=*/1, /*pairs=*/1, cos_flat, sin_flat);
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope});
+	std::string err;
+	const auto load_status = superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(load_status == superslm::SslmModelStatus::Ok,
+	          "O1 fixture's own minimal artifact failed to load: got %s (%s)",
+	          superslm::SslmModelStatusName(load_status), err.c_str());
+	if (load_status != superslm::SslmModelStatus::Ok) return;
+
+	const CarriedScale canonical{INT64_C(1073741824), INT64_C(-30)};
+	const int64_t r_t = superslm::DynamicScaleReciprocal(canonical.m);
+	int64_t kv_landing_r_t_arr[1] = {r_t};
+	int64_t kv_landing_e_t_arr[1] = {0};
+	int32_t ctx_fold_identity_arr[2] = {1, 1};
+	int32_t ctx_fold_mult_arr[2] = {0, 0};
+	int32_t ctx_fold_shift_arr[2] = {0, 0};
+	int32_t norm_gain[4] = {16384, 16384, 16384, 16384};
+	// [out=4, in=4] identity except K's own two output rows (2,3) are DOUBLED, matching
+	// RopeSaturationFixture's own established saturating technique.
+	int8_t qkv_weight[16] = {
+	    1, 0, 0, 0,
+	    0, 1, 0, 0,
+	    0, 0, 2, 0,
+	    0, 0, 0, 2,
+	};
+	int8_t identity4x4[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+	int64_t iexp_softmax_khead_m_arr[1] = {INT64_C(1073741824)};
+	int64_t iexp_softmax_khead_e_arr[1] = {-86};
+
+	lw.attn_norm_gain = norm_gain;
+	lw.attn_norm_site_constant = canonical;
+	lw.q_weight = qkv_weight;
+	lw.k_weight = qkv_weight;
+	lw.v_weight = identity4x4;
+	lw.o_weight = identity4x4;
+	lw.q_fold_identity = kIdentityFoldArr; lw.q_fold_mult = kZeroFoldArr; lw.q_fold_shift = kZeroFoldArr;
+	lw.k_fold_identity = kIdentityFoldArr; lw.k_fold_mult = kZeroFoldArr; lw.k_fold_shift = kZeroFoldArr;
+	lw.v_fold_identity = kIdentityFoldArr; lw.v_fold_mult = kZeroFoldArr; lw.v_fold_shift = kZeroFoldArr;
+	lw.o_fold_identity = kIdentityFoldArr; lw.o_fold_mult = kZeroFoldArr; lw.o_fold_shift = kZeroFoldArr;
+	lw.gate_fold_identity = kIdentityFoldArr; lw.gate_fold_mult = kZeroFoldArr; lw.gate_fold_shift = kZeroFoldArr;
+	lw.up_fold_identity = kIdentityFoldArr; lw.up_fold_mult = kZeroFoldArr; lw.up_fold_shift = kZeroFoldArr;
+	lw.down_fold_identity = kIdentityFoldArr; lw.down_fold_mult = kZeroFoldArr; lw.down_fold_shift = kZeroFoldArr;
+	lw.q_site_constant = canonical;
+	lw.o_site_constant = canonical;
+	lw.kv_landing_r_t_k = kv_landing_r_t_arr;
+	lw.kv_landing_e_t_k = kv_landing_e_t_arr;
+	lw.kv_landing_r_t_v = kv_landing_r_t_arr;
+	lw.kv_landing_e_t_v = kv_landing_e_t_arr;
+	lw.ctx_fold_identity = ctx_fold_identity_arr;
+	lw.ctx_fold_mult = ctx_fold_mult_arr;
+	lw.ctx_fold_shift = ctx_fold_shift_arr;
+	lw.ctx_fold_site_constant = canonical;
+	lw.attn_residual_site_constant = canonical;
+	lw.iexp_softmax_khead_m = iexp_softmax_khead_m_arr;
+	lw.iexp_softmax_khead_e = iexp_softmax_khead_e_arr;
+	lw.mlp_norm_gain = norm_gain;
+	lw.mlp_norm_site_constant = canonical;
+	lw.gate_weight = identity4x4;
+	lw.up_weight = identity4x4;
+	lw.down_weight = identity4x4;
+	lw.gate_site_constant = canonical;
+	lw.up_site_constant = canonical;
+	lw.mlp_act_site_constant = CarriedScale{INT64_C(1073741824), INT64_C(-96)};
+	lw.down_site_constant = canonical;
+	lw.mlp_residual_site_constant = canonical;
+
+	constexpr size_t kWorkspaceSize = 1 * 1 * 1 * 2 * 2;  // 1 layer, 1 KV head, ctx_cap 1, head_dim 2, K+V
+
+	// --- CPU, single-token path. ---
+	{
+		int8_t hidden_codes[4] = {5, -5, 5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		uint8_t ws[kWorkspaceSize] = {};
+		const auto st = superslm::RunLayerLoop(
+		    seq, &lw, /*num_hidden_layers=*/1, /*layer_budget=*/1, /*hidden_size=*/4,
+		    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2, /*context_cap=*/1,
+		    view.rope_tables, ws, sizeof(ws));
+		CHECK_MSG(st == SslmForwardStatus::Ok, "O1 CPU single-token status == %s, want Ok",
+		          SslmForwardStatusName(st));
+		if (st == SslmForwardStatus::Ok) {
+			CHECK_MSG(seq.rope_k_saturation_count == 1,
+			          "seq.rope_k_saturation_count (CPU, single-token, 2 query heads sharing 1 KV "
+			          "head) == %llu, want exactly 1 -- RED at 2 if K's clamp is still counted once "
+			          "per query head instead of once per KV head",
+			          (unsigned long long)seq.rope_k_saturation_count);
+		}
+	}
+
+	// --- CPU, chunk-batched path (one-token chunk, same geometry). ---
+	{
+		int8_t hidden_codes_chunk[4] = {5, -5, 5, -5};
+		CarriedScale hidden_scales[1] = {CarriedScale{INT64_C(1073741824), 0}};
+		uint8_t ws[kWorkspaceSize] = {};
+		uint64_t kv_sat = 0, kv_landing = 0, k_normed = 0, rope_q = 0, rope_k = 0;
+		const auto st = superslm::RunLayerLoopChunkBatched(
+		    hidden_codes_chunk, hidden_scales, /*chunk_tokens=*/1, &lw, /*num_hidden_layers=*/1,
+		    /*hidden_size=*/4, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+		    /*context_cap=*/1, /*context_length_start=*/0, view.rope_tables, ws, sizeof(ws),
+		    /*option_g_fused_k_landing=*/false, &kv_sat, /*site_prefix=*/{},
+		    /*trace_hook_state=*/nullptr, /*q_width=*/0, &kv_landing, &k_normed, &rope_q, &rope_k);
+		CHECK_MSG(st == SslmForwardStatus::Ok, "O1 CPU chunk-batched status == %s, want Ok",
+		          SslmForwardStatusName(st));
+		if (st == SslmForwardStatus::Ok) {
+			CHECK_MSG(rope_k == 1,
+			          "rope_k (CPU, chunk-batched, 2 query heads sharing 1 KV head) == %llu, want "
+			          "exactly 1",
+			          (unsigned long long)rope_k);
+		}
+	}
+
+	// --- GPU, single-token path. ---
+	{
+		int8_t hidden_codes[4] = {5, -5, 5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		uint8_t ws[kWorkspaceSize] = {};
+		const auto st = superslm_gpu::RunLayerLoopGpu(
+		    seq, &lw, /*num_hidden_layers=*/1, /*layer_budget=*/1, /*hidden_size=*/4,
+		    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2, /*context_cap=*/1,
+		    view.rope_tables, ws, sizeof(ws));
+		CHECK_MSG(st == SslmForwardStatus::Ok, "O1 GPU single-token status == %s, want Ok",
+		          SslmForwardStatusName(st));
+		if (st == SslmForwardStatus::Ok) {
+			CHECK_MSG(seq.rope_k_saturation_count == 1,
+			          "seq.rope_k_saturation_count (GPU, single-token, 2 query heads sharing 1 KV "
+			          "head) == %llu, want exactly 1 -- RED at 2 if rope_commit_site.hlsl's own "
+			          "only_representative_head gate is deleted",
+			          (unsigned long long)seq.rope_k_saturation_count);
+			CHECK_MSG(seq.rope_k_saturation_count == 1 /* CPU reading, above */,
+			          "GPU rope_k_saturation_count does not match the CPU reading taken above");
+		}
+	}
+}
+
+// ==============================================================================
 // T-2575 (D-SLM6268): the shader-binary freshness guard
 // (`superslm_gpu::harness::ShaderBinaryStalenessDiagnostic`, wired into `ShaderPath`).
 //
@@ -27722,6 +28048,14 @@ static void TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath() {
 
 	// `dyn_recip` is a B1 primitive-battery shader, not one of the per-layer dispatch chain --
 	// back-dating it for the length of this cell cannot perturb any other cell's own dispatch.
+	//
+	// (T-2577, D-SLM6274 M2, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
+	// review.md` Minor 2): this cell mutates the REAL `dyn_recip.cso` beside the executable, not
+	// a copy, and restores it via `RestoreWriteTime`'s own destructor (below) -- which does not
+	// run on a hard kill or a crash between the back-date and the restore. RECOVERY, if that
+	// happens: re-run this build's own dxc compile loop (`build.bat`'s `for %%f in
+	// (src\gpu\shaders\*.hlsl) do dxc ...` -- or just re-run `build.bat`), which recompiles every
+	// shader unconditionally and overwrites whatever timestamp is currently on disk.
 	const char* kName = "dyn_recip";
 	std::string cso;
 	try {
@@ -27757,6 +28091,15 @@ static void TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath() {
 	}
 	restore.armed = true;
 
+	// (T-2577, D-SLM6274 M1, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
+	// review.md` Minor 1): `ShaderPath`'s own stderr write (superslm_gpu.cpp) is about to fire,
+	// deliberately, on the binary this cell just back-dated a decade -- printed here, to stdout,
+	// so a reader scanning a CI log for "stale shader binary" on a fully green run finds this
+	// line immediately above it and reads the refusal as this cell's own construction, not a
+	// build-integrity failure on a passing suite.
+	std::printf("TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath: about to trigger "
+	            "ShaderPath's own stale-shader stderr line on \"%s\" -- EXPECTED, this cell just "
+	            "back-dated it on purpose\n", cso.c_str());
 	std::filesystem::last_write_time(cso, restore.original - std::chrono::hours(24 * 3650), ec);
 	CHECK_MSG(!ec, "could not back-date \"%s\"", cso.c_str());
 	if (ec) return;
@@ -27789,6 +28132,100 @@ static void TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath() {
 	          "ShaderPath(\"%s\") still refuses after the original timestamp is restored -- the "
 	          "guard is refusing unconditionally rather than on staleness",
 	          kName);
+}
+
+// (T-2577, D-SLM6274 S2, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
+// review.md` Significant 2): the six commissioning cells above call `ShaderPath` (or
+// `ShaderBinaryStalenessDiagnostic`) directly and catch the exception themselves -- none
+// drives a forward call with a stale binary and reads the STATUS a real consumer would see.
+// This cell does: back-dates `kv_proj_site.cso` (a real per-layer dispatch shader
+// `RopeSaturationFixture`'s own forward actually dispatches, unlike `dyn_recip` above), drives
+// a real `RunLayerLoopGpu` call through it, and asserts the returned status is the named
+// `GpuShaderBinaryStale` -- not `GpuAllocationFailed`, which is what a caller read before this
+// ticket (the generic `catch (const std::runtime_error&)` in `RunLayerLoopGpuSubmit`, and its
+// documented "retry smaller" remedy, is actively wrong advice for a shader no retry fixes).
+static void TestT2577_S2_AStaleShaderOnTheRealDispatchPathReturnsTheNamedStatus() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+
+	const std::string& src_dir = superslm_gpu::harness::ShaderSourceDirOrEmpty();
+	CHECK_MSG(!src_dir.empty(),
+	          "ShaderSourceDirOrEmpty() == \"\" -- cannot exercise the real load path here");
+	if (src_dir.empty()) return;
+
+	// `kv_proj_site` is dispatched on every layer of every forward call this fixture drives --
+	// unlike `dyn_recip` (a B1 primitive-battery shader, never touched by RunLayerLoopGpu's own
+	// per-layer dispatch chain), back-dating this one is guaranteed to be reached by the call
+	// below.
+	const char* kName = "kv_proj_site";
+	std::string cso;
+	try {
+		cso = superslm_gpu::harness::ShaderPath(kName);
+	} catch (const std::exception& e) {
+		CHECK_MSG(false, "ShaderPath(\"%s\") already refuses before this cell touches it: %s",
+		          kName, e.what());
+		return;
+	}
+	std::error_code ec;
+	if (!std::filesystem::exists(cso, ec)) {
+		CHECK_MSG(false, "\"%s\" does not exist -- this build put no shader binary beside the "
+		                  "executable, so the real dispatch path cannot be exercised",
+		          cso.c_str());
+		return;
+	}
+
+	struct RestoreWriteTime {
+		std::string path;
+		std::filesystem::file_time_type original;
+		bool armed = false;
+		~RestoreWriteTime() {
+			if (!armed) return;
+			std::error_code e;
+			std::filesystem::last_write_time(path, original, e);
+		}
+	} restore;
+	restore.path = cso;
+	restore.original = std::filesystem::last_write_time(cso, ec);
+	if (ec) {
+		CHECK_MSG(false, "could not read the last-write time of \"%s\"", cso.c_str());
+		return;
+	}
+	restore.armed = true;
+
+	// (T-2577, D-SLM6274 M1's own precedent): announced on stdout before the expected stderr
+	// refusal fires, so a log reader finds the context immediately above it.
+	std::printf("TestT2577_S2_AStaleShaderOnTheRealDispatchPathReturnsTheNamedStatus: about to "
+	            "trigger ShaderPath's own stale-shader stderr line on \"%s\" -- EXPECTED, this "
+	            "cell just back-dated it on purpose\n", cso.c_str());
+	std::filesystem::last_write_time(cso, restore.original - std::chrono::hours(24 * 3650), ec);
+	CHECK_MSG(!ec, "could not back-date \"%s\"", cso.c_str());
+	if (ec) return;
+
+	RopeSaturationFixture fixture;
+	int8_t hidden_codes[2] = {5, -5};
+	SequenceLayerState seq;
+	seq.hidden_codes = hidden_codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq.layer_index = 0;
+	constexpr size_t kWorkspaceSize = 1 * 1 * 1 * 2 * 2;
+	uint8_t ws[kWorkspaceSize] = {};
+	const auto st = superslm_gpu::RunLayerLoopGpu(
+	    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1, /*hidden_size=*/2,
+	    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2, /*context_cap=*/1,
+	    fixture.view.rope_tables, ws, sizeof(ws));
+
+	std::filesystem::last_write_time(cso, restore.original, ec);
+	restore.armed = false;  // already restored above; the destructor would be a harmless repeat
+
+	CHECK_MSG(st == SslmForwardStatus::GpuShaderBinaryStale,
+	          "RunLayerLoopGpu status on a stale real-dispatch-path shader == %s, want "
+	          "GpuShaderBinaryStale -- RED at GpuAllocationFailed if ShaderPath's own dedicated "
+	          "exception type is reverted to a bare std::runtime_error, which falls into the "
+	          "generic catch and tells the caller to retry smaller, forever, against a shader no "
+	          "retry fixes",
+	          SslmForwardStatusName(st));
 }
 
 // The real-workload cell (`StandardsDocument.md` §5.4): every shader binary THIS executable
@@ -27933,6 +28370,17 @@ int main(int argc, char** argv) {
 		             kCrashProbeChildEnvVar, argc > 1 ? argv[1] : "(none)");
 		return 3;
 	}
+	// (T-2577, D-SLM6274 S2): MUST run before any other test that drives a real GPU forward
+	// call. `GetOrBuildComposedPipeline` (d3d12_harness.h) is a process-lifetime, name-keyed
+	// PSO cache -- once a shader name is built successfully, every later call for that name
+	// returns the cached pipeline without ever calling `ShaderPath` again, so a staleness
+	// check on a per-layer dispatch shader can only be observed through a real forward call
+	// on this shader name's OWN first cache miss, process-wide. Every other real-forward-call
+	// test in this file touches all fourteen composed-pipeline shader names on its own first
+	// GPU call, which would make this cell vacuous (`RunLayerLoopGpu` would return `Ok` from
+	// the warm cache, never re-checking the now-stale binary) if it ran anywhere but first.
+	TestT2577_S2_AStaleShaderOnTheRealDispatchPathReturnsTheNamedStatus();
+
 	TestSha256KnownVectors();
 	TestDtypeSizes();
 	TestKnownSectionTypes();
@@ -28857,6 +29305,8 @@ int main(int argc, char** argv) {
 	TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath();
 	TestT2575_ShaderBinariesBesideThisExecutableAreCurrent();
 	TestT2576_GpuKvSaturationAndKvRowMatchCpuOnRopeSaturationFixtureN100();
+	TestT2577_S1_ModelGenerationGatesTheThreeResidencyCachesCorrectly();
+	TestT2577_O1_RopeKCountsOncePerKvHeadNotOncePerQueryHead();
 #endif  // _WIN32
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);

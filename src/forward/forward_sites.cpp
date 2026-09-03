@@ -511,7 +511,8 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a) {
 }
 
 int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_a, int64_t e_t,
-                        uint64_t* out_saturation_count, bool* out_magnitude_exceeded_int64) {
+                        uint64_t* out_saturation_count, bool* out_magnitude_exceeded_int64,
+                        uint64_t* out_site_saturation_count) {
 	// C27's residual_reconcile (§8.1, dynamic_engine.py-vendored formula):
 	//   round_half_away_from_zero((branch_code * m_a * r_t) / 2^(62 - (e_a - e_t)))
 	// with a negative composite exponent an EXACT left shift (no rounding).
@@ -642,6 +643,12 @@ int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_
 	if (out_saturation_count != nullptr && (magnitude_exceeds_clamp || raw < -127 || raw > 127)) {
 		*out_saturation_count += 1;
 	}
+	// (T-2577, D-SLM6274 S3): the identical predicate, a second time, into the caller's own
+	// per-site counter -- see this parameter's own header comment (forward_sites.h) for why a
+	// second counter is needed at all.
+	if (out_site_saturation_count != nullptr && (magnitude_exceeds_clamp || raw < -127 || raw > 127)) {
+		*out_site_saturation_count += 1;
+	}
 	// T-1377 / D-SLM457: the SECOND, distinct signal -- written exactly once,
 	// never accumulated (unlike `out_saturation_count`'s own per-sequence
 	// accumulation) -- so `ResidualReconcileSite` can check it per element,
@@ -662,7 +669,8 @@ int64_t ClampRopeCode(int64_t raw) {
 
 SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t position,
                                  int64_t context_cap, const SslmTensorManifest& rope_tables,
-                                 int8_t* out_row, uint64_t* out_saturation_count) {
+                                 int8_t* out_row, uint64_t* out_saturation_count,
+                                 uint64_t* out_site_saturation_count) {
 	// §6.2 step 3 / §11 S3.3's own gate line (D-SLM376): CheckPositionOverCap
 	// is the site's documented FIRST ACT, and no ROP1 tensor is read before
 	// it returns. On rejection, `out_row` stays exactly as the caller left
@@ -763,6 +771,14 @@ SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t posi
 		if (out_saturation_count != nullptr) {
 			if (rotated.x < -127 || rotated.x > 127) *out_saturation_count += 1;
 			if (rotated.y < -127 || rotated.y > 127) *out_saturation_count += 1;
+		}
+		// (T-2577, D-SLM6274 S3): the identical predicate, a second time, into the caller's own
+		// per-call-site counter -- this ONE function serves both the Q call site and the K call
+		// site (RunLayerLoopImpl/RunLayerLoopChunkBatched, below), and `out_saturation_count`
+		// alone cannot tell them apart.
+		if (out_site_saturation_count != nullptr) {
+			if (rotated.x < -127 || rotated.x > 127) *out_site_saturation_count += 1;
+			if (rotated.y < -127 || rotated.y > 127) *out_site_saturation_count += 1;
 		}
 		out_row[2 * i] = static_cast<int8_t>(ClampRopeCode(rotated.x));
 		out_row[2 * i + 1] = static_cast<int8_t>(ClampRopeCode(rotated.y));
@@ -1295,7 +1311,15 @@ SslmForwardStatus LandTokenKVRow(int64_t* kacc, int64_t* vacc, const int8_t* nor
                                   size_t num_key_value_heads, size_t head_dim, uint32_t layer,
                                   int64_t position, int64_t context_cap,
                                   const SslmTensorManifest& rope_tables, uint8_t* workspace,
-                                  bool option_g_fused_k_landing, uint64_t* kv_saturation_count) {
+                                  bool option_g_fused_k_landing, uint64_t* kv_saturation_count,
+                                  // (T-2577, D-SLM6274 S3): the "kv_landing" per-site counter --
+                                  // every LandingRescale call this function makes (K's plain
+                                  // landing, K's Option-G fused rotate-then-land, V's landing)
+                                  // is this ONE site. Incremented under the identical condition
+                                  // as `kv_saturation_count`, alongside it, never in place of it.
+                                  // Defaults to `nullptr`: both pre-existing callers compile
+                                  // unchanged until they pass it.
+                                  uint64_t* kv_landing_saturation_count = nullptr) {
 	// T-1666: per-channel indexed read, the K/V-landing sibling of
 	// ProjectAndFunnel's loop above (design §5, cells 6-7).
 	for (size_t i = 0; i < kv_hidden_size; ++i) {
@@ -1394,10 +1418,12 @@ SslmForwardStatus LandTokenKVRow(int64_t* kacc, int64_t* vacc, const int8_t* nor
 				bool exceeded0 = false, exceeded1 = false;
 				const int64_t raw0 = LandingRescale(
 				    rotated.x, normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
-				    lw.kv_landing_e_t_k[h], kv_saturation_count, &exceeded0);
+				    lw.kv_landing_e_t_k[h], kv_saturation_count, &exceeded0,
+				    kv_landing_saturation_count);
 				const int64_t raw1 = LandingRescale(
 				    rotated.y, normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
-				    lw.kv_landing_e_t_k[h], kv_saturation_count, &exceeded1);
+				    lw.kv_landing_e_t_k[h], kv_saturation_count, &exceeded1,
+				    kv_landing_saturation_count);
 				if (exceeded0 || exceeded1) {
 					return SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain;
 				}
@@ -1415,14 +1441,16 @@ SslmForwardStatus LandTokenKVRow(int64_t* kacc, int64_t* vacc, const int8_t* nor
 				// call in this tree that composes the landing.
 				k_row[d] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
 				    kacc[i], normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
-				    lw.kv_landing_e_t_k[h], kv_saturation_count)));
+				    lw.kv_landing_e_t_k[h], kv_saturation_count, /*out_magnitude_exceeded_int64=*/nullptr,
+				    kv_landing_saturation_count)));
 			}
 		}
 		for (size_t d = 0; d < head_dim; ++d) {
 			const size_t i = h * head_dim + d;
 			v_row[d] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
 			    vacc[i], normed_scale.m, lw.kv_landing_r_t_v[h], normed_scale.e,
-			    lw.kv_landing_e_t_v[h], kv_saturation_count)));
+			    lw.kv_landing_e_t_v[h], kv_saturation_count, /*out_magnitude_exceeded_int64=*/nullptr,
+			    kv_landing_saturation_count)));
 		}
 	}
 	return SslmForwardStatus::Ok;
@@ -1440,7 +1468,8 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
                                    size_t num_heads, size_t num_key_value_heads, size_t head_dim,
                                    const LayerWeights& lw, std::string_view site_prefix,
                                    size_t token_index, SslmTraceHookState* trace_hook_state,
-                                   uint64_t* out_saturation_count) {
+                                   uint64_t* out_saturation_count,
+                                   uint64_t* out_k_normed_landing_saturation_count) {
 	if (lw.q_norm_gain != nullptr) {
 		for (size_t h = 0; h < num_heads; ++h) {
 			int8_t* const q_head_row = q_codes + h * head_dim;
@@ -1474,7 +1503,8 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
 				k_row[d] = static_cast<int8_t>(ClampRopeCode(
 				    LandingRescale(k_row[d], k_norm_scale.m, lw.k_norm_landing_r_t[kv_head],
 				                   k_norm_scale.e, lw.k_norm_landing_e_t[kv_head],
-				                   out_saturation_count)));
+				                   out_saturation_count, /*out_magnitude_exceeded_int64=*/nullptr,
+				                   out_k_normed_landing_saturation_count)));
 			}
 		}
 	}
@@ -1817,7 +1847,8 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			const SslmForwardStatus land_status = LandTokenKVRow(
 			    kacc.data(), vacc.data(), normed.data(), normed_scale, lw, hidden_size,
 			    kv_hidden_size, num_key_value_heads, head_dim, l, position, context_cap,
-			    rope_tables, workspace, option_g_fused_k_landing, &seq.kv_saturation_count);
+			    rope_tables, workspace, option_g_fused_k_landing, &seq.kv_saturation_count,
+			    &seq.kv_landing_saturation_count);
 			if (land_status != SslmForwardStatus::Ok) return land_status;
 		}
 
@@ -1836,7 +1867,8 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		if (!option_g_fused_k_landing) {
 			st = ApplyQkNormSite(q_codes.data(), q_scales.data(), workspace, l, context_cap, position,
 			                     num_heads, num_key_value_heads, head_dim, lw, site_prefix,
-			                     token_index, trace_hook_state, &seq.kv_saturation_count);
+			                     token_index, trace_hook_state, &seq.kv_saturation_count,
+			                     &seq.k_normed_landing_saturation_count);
 			if (st != SslmForwardStatus::Ok) return st;
 		}
 
@@ -1853,7 +1885,8 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		// way -- Option G does not touch Q.
 		for (size_t h = 0; h < num_heads; ++h) {
 			st = RopeApplySite(q_codes.data() + h * head_dim, head_dim, position, context_cap,
-			                   rope_tables, q_rot.data() + h * head_dim, &seq.kv_saturation_count);
+			                   rope_tables, q_rot.data() + h * head_dim, &seq.kv_saturation_count,
+			                   &seq.rope_q_saturation_count);
 			if (st != SslmForwardStatus::Ok) return st;
 			if (option_g_fused_k_landing) continue;
 			// T-1654 (S3.8a): the accessor index is `h / group`, not `h` -- the
@@ -1864,8 +1897,20 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			const size_t kv_head = h / group;
 			const int8_t* const k_row_before_rotate =
 			    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, position);
+			// CORRECTED 2026-09-03 (T-2577, D-SLM6274 O1, external review `Claude/Poirot/
+			// 5fafd98-t2573-trackb-external-fold-review.md` Observation 1): every query head
+			// sharing this `kv_head` redundantly re-rotates the SAME row (the write-back loop's
+			// own comment below: "redundant but sound") -- harmless to repeat, but counting a
+			// clamp on every one of those `group` redundant calls inflated the saturation count
+			// by `group`x for K specifically (double, on the real candidate's 2:1 grouping). Count
+			// only on the FIRST query head of this KV head's own group (`h % group == 0`); every
+			// other query head still rotates and still writes back identically, just with both
+			// counting pointers null.
+			const bool only_representative_head = (h % group) == 0;
 			st = RopeApplySite(k_row_before_rotate, head_dim, position, context_cap, rope_tables,
-			                   k_rot.data() + h * head_dim, &seq.kv_saturation_count);
+			                   k_rot.data() + h * head_dim,
+			                   only_representative_head ? &seq.kv_saturation_count : nullptr,
+			                   only_representative_head ? &seq.rope_k_saturation_count : nullptr);
 			if (st != SslmForwardStatus::Ok) return st;
 		}
 		// S3.7 (§11 S3.7 "The mechanism", the RoPE write-back correction): each
@@ -2211,7 +2256,11 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
                                             uint64_t* kv_saturation_count,
                                             std::string_view site_prefix,
                                             SslmTraceHookState* trace_hook_state,
-                                            size_t q_width) {
+                                            size_t q_width,
+                                            uint64_t* out_kv_landing_saturation_count,
+                                            uint64_t* out_k_normed_landing_saturation_count,
+                                            uint64_t* out_rope_q_saturation_count,
+                                            uint64_t* out_rope_k_saturation_count) {
 	// The same domain guards RunLayerLoopImpl's own top-of-function block performs (§9.3),
 	// restated here because this path has no single `SequenceLayerState` to validate against --
 	// `chunk_tokens` tokens share one `context_cap`/geometry, not `chunk_tokens` independent
@@ -2331,7 +2380,7 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 			                    normed.data() + t * hidden_size, normed_scale[t], lw, hidden_size,
 			                    kv_hidden_size, num_key_value_heads, head_dim, l, position,
 			                    context_cap, rope_tables, workspace, option_g_fused_k_landing,
-			                    kv_saturation_count);
+			                    kv_saturation_count, out_kv_landing_saturation_count);
 			if (st != SslmForwardStatus::Ok) return st;
 
 			// (design §3/§4/§6 Track B steps 1/2): QK-norm's per-head call site -- the batched
@@ -2347,7 +2396,8 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 				st = ApplyQkNormSite(q_codes.data() + t * effective_q_width, q_scales_h.data(),
 				                     workspace, l, context_cap, position, num_heads,
 				                     num_key_value_heads, head_dim, lw, site_prefix, t,
-				                     trace_hook_state, kv_saturation_count);
+				                     trace_hook_state, kv_saturation_count,
+				                     out_k_normed_landing_saturation_count);
 				if (st != SslmForwardStatus::Ok) return st;
 			}
 
@@ -2359,14 +2409,20 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 			for (size_t h = 0; h < num_heads; ++h) {
 				st = RopeApplySite(q_codes.data() + t * effective_q_width + h * head_dim, head_dim,
 				                   position, context_cap, rope_tables, q_rot.data() + h * head_dim,
-				                   kv_saturation_count);
+				                   kv_saturation_count, out_rope_q_saturation_count);
 				if (st != SslmForwardStatus::Ok) return st;
 				if (option_g_fused_k_landing) continue;
 				const size_t kv_head = h / group;
 				const int8_t* const k_row_before_rotate = KeyRow(
 				    workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, position);
+				// (T-2577, D-SLM6274 O1): the batched sibling of RunLayerLoopImpl's own identical
+				// fix -- see that call site's comment for the full rationale. Count only on the
+				// first query head of this KV head's own group.
+				const bool only_representative_head = (h % group) == 0;
 				st = RopeApplySite(k_row_before_rotate, head_dim, position, context_cap,
-				                   rope_tables, k_rot.data() + h * head_dim, kv_saturation_count);
+				                   rope_tables, k_rot.data() + h * head_dim,
+				                   only_representative_head ? kv_saturation_count : nullptr,
+				                   only_representative_head ? out_rope_k_saturation_count : nullptr);
 				if (st != SslmForwardStatus::Ok) return st;
 			}
 			if (!option_g_fused_k_landing) {

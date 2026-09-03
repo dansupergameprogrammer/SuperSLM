@@ -234,5 +234,17 @@ void main(uint3 gtid : SV_GroupThreadID)
             uint old_hi;
             SeqState.InterlockedAdd(sat_hi_off, 1u, old_hi);
         }
+        // (T-2577, D-SLM6274 S3): the identical flush, a second time, into this site's OWN
+        // per-site slot -- "kv_landing" (K/V landing, this shader) -- alongside the aggregate
+        // flush immediately above, never in place of it.
+        uint kv_landing_sat_lo_off = SeqKvLandingSatLoOffGpu(hidden_size);
+        uint kv_landing_sat_hi_off = SeqKvLandingSatHiOffGpu(hidden_size);
+        uint kv_landing_old_lo;
+        SeqState.InterlockedAdd(kv_landing_sat_lo_off, gTotalClamps, kv_landing_old_lo);
+        if (kv_landing_old_lo + gTotalClamps < kv_landing_old_lo)
+        {
+            uint kv_landing_old_hi;
+            SeqState.InterlockedAdd(kv_landing_sat_hi_off, 1u, kv_landing_old_hi);
+        }
     }
 }

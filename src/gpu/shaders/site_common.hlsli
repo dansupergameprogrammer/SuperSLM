@@ -423,6 +423,17 @@ uint SeqSatLoOffGpu(int hidden_size) { return SeqLayerIdxOffGpu(hidden_size) + 8
 uint SeqSatHiOffGpu(int hidden_size) { return SeqSatLoOffGpu(hidden_size) + 4u; }
 uint SeqCtxLenOffGpu(int hidden_size) { return SeqSatHiOffGpu(hidden_size) + 4u; }
 uint SeqStickyOffGpu(int hidden_size) { return SeqCtxLenOffGpu(hidden_size) + 8u; }
+// (T-2577, D-SLM6274 S3): mirrors superslm_gpu.cpp's own identical C++ family (SeqKvLandingSatLoOff/
+// .../SeqRopeKSatHiOff) byte-for-byte -- four per-site saturation-count breakdowns, appended
+// after SeqStickyOffGpu so every pre-existing offset above is unchanged.
+uint SeqKvLandingSatLoOffGpu(int hidden_size) { return SeqStickyOffGpu(hidden_size) + 8u; }
+uint SeqKvLandingSatHiOffGpu(int hidden_size) { return SeqKvLandingSatLoOffGpu(hidden_size) + 4u; }
+uint SeqKNormedLandingSatLoOffGpu(int hidden_size) { return SeqKvLandingSatHiOffGpu(hidden_size) + 4u; }
+uint SeqKNormedLandingSatHiOffGpu(int hidden_size) { return SeqKNormedLandingSatLoOffGpu(hidden_size) + 4u; }
+uint SeqRopeQSatLoOffGpu(int hidden_size) { return SeqKNormedLandingSatHiOffGpu(hidden_size) + 4u; }
+uint SeqRopeQSatHiOffGpu(int hidden_size) { return SeqRopeQSatLoOffGpu(hidden_size) + 4u; }
+uint SeqRopeKSatLoOffGpu(int hidden_size) { return SeqRopeQSatHiOffGpu(hidden_size) + 4u; }
+uint SeqRopeKSatHiOffGpu(int hidden_size) { return SeqRopeKSatLoOffGpu(hidden_size) + 4u; }
 
 // forward_sites.cpp's S3.7 KV addressing (KvHalfOffset / KvRowOffsetWithinHalf),
 // bit-exact -- so KeyRowGpu/ValueRowGpu (superslm_gpu.cpp, CPU-side pointer
