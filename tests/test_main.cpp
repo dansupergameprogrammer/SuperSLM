@@ -27617,8 +27617,11 @@ static void TestT2575_ShaderStalenessGuard_UnverifiableCasesAreNotRefusals() {
 }
 
 // The production-path must-reject (`StandardsDocument.md` §5.4: a must-reject is producible by
-// the instrument's real data path). Back-dates one real `.cso` beside this executable by an hour
-// -- exactly the state `out\shaders\rope_guard_site.cso` was in -- and requires `ShaderPath`, the
+// the instrument's real data path). Back-dates one real `.cso` beside this executable to a decade
+// before any source in the tree -- exactly the state `out\shaders\rope_guard_site.cso` was in,
+// and a margin no future build's own timing can close, unlike a fixed small offset which stops
+// discriminating the moment a build lands further ahead of its sources than the offset -- and
+// requires `ShaderPath`, the
 // one funnel every `.cso` load in this tree goes through, to REFUSE rather than return the path.
 // The original timestamp is restored by a destructor, so an assertion failure or a throw inside
 // the cell cannot leave a back-dated binary behind for the next run.
@@ -27665,7 +27668,7 @@ static void TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath() {
 	}
 	restore.armed = true;
 
-	std::filesystem::last_write_time(cso, restore.original - std::chrono::hours(1), ec);
+	std::filesystem::last_write_time(cso, restore.original - std::chrono::hours(24 * 3650), ec);
 	CHECK_MSG(!ec, "could not back-date \"%s\"", cso.c_str());
 	if (ec) return;
 
@@ -27678,7 +27681,7 @@ static void TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath() {
 		what = e.what();
 	}
 	CHECK_MSG(threw,
-	          "ShaderPath(\"%s\") returned a path for a binary back-dated an hour behind its own "
+	          "ShaderPath(\"%s\") returned a path for a binary back-dated a decade behind its own "
 	          "source, want a refusal -- that silent return is what dispatched a RoPE shader with "
 	          "no saturation counter across two tickets",
 	          kName);
