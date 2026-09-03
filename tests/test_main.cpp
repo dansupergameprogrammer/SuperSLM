@@ -27701,6 +27701,83 @@ static void TestT2577_S1_ModelGenerationGatesTheThreeResidencyCachesCorrectly() 
 	std::memcpy(sin_mut, sin_orig.data(), sin_bytes);
 }
 
+// (T-2577 round 2, D-SLM6278): `model_generation` threaded through the public G5-bridge chunk
+// entry point (`SubmitChunkToFullDepthForG5Bridge` -> `SubmitOneSubChunkToFullDepthForG5Bridge`
+// -> `PrepareGpuLayerLoopChunkOpenState`), not only through `RunLayerLoopGpu`/
+// `RunLayerLoopGpuSubmit`. A minimal must-accept: two single-token chunks through the SAME
+// fixture, same generation, the second must hit.
+static void TestT2577_S1b_ModelGenerationReachesTheG5BridgeChunkEntryPoint() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+	constexpr uint64_t kGeneration = 11;
+	constexpr size_t kWorkspaceSize = 1 * 1 * 1 * 2 * 2;
+
+	// The identical SeqState embedding-block packing `PrepareGpuLayerLoopChunkOpenState` itself
+	// reads (hidden_codes[H] as i32 elements, Align8U32(H*4) bytes, then hidden_scale.m/.e as two
+	// i64) -- matching tools/t2169_rung2b_selfcheck.cpp's own established `PackEmbeddingBlock`.
+	auto pack_block = [](const int8_t* codes, size_t hidden_size, CarriedScale scale) {
+		const uint32_t H = static_cast<uint32_t>(hidden_size);
+		const uint32_t aligned = (H * 4u + 7u) & ~7u;
+		std::vector<uint8_t> block(aligned + 16u, 0);
+		for (uint32_t i = 0; i < H; ++i) {
+			int32_t v = static_cast<int32_t>(codes[i]);
+			std::memcpy(block.data() + i * 4u, &v, 4);
+		}
+		std::memcpy(block.data() + aligned + 0, &scale.m, 8);
+		std::memcpy(block.data() + aligned + 8, &scale.e, 8);
+		return block;
+	};
+
+	auto run_one_chunk = [&](uint64_t generation) -> bool {
+		RopeSaturationFixture fixture;
+		int8_t hidden_codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.layer_index = 0;
+		uint8_t ws[kWorkspaceSize] = {};
+		const CarriedScale scale{INT64_C(1073741824), 0};
+		const std::vector<uint8_t> block = pack_block(hidden_codes, 2, scale);
+		superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+		const auto submit_st = superslm_gpu::SubmitChunkToFullDepthForG5Bridge(
+		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*hidden_size=*/2, /*head_dim=*/2,
+		    /*num_key_value_heads=*/1, /*intermediate_size=*/2, /*context_cap=*/1,
+		    fixture.view.rope_tables, ws, sizeof(ws), block.data(), /*chunk_len=*/1,
+		    /*external_kv_resident=*/nullptr, /*io_external_kv_needs_resume_barrier=*/nullptr,
+		    /*external_weights_resident=*/nullptr, /*external_rope_cos_resident=*/nullptr,
+		    /*external_rope_sin_resident=*/nullptr, /*external_rope_has=*/false,
+		    /*external_rope_cos_elems=*/0, /*external_rope_sin_elems=*/0, /*adapter_bridge=*/nullptr,
+		    &inflight, /*q_width=*/0, generation);
+		CHECK_MSG(submit_st == SslmForwardStatus::Ok && inflight != nullptr,
+		          "SubmitChunkToFullDepthForG5Bridge(generation=%llu) status == %s, want Ok "
+		          "with a live inflight token",
+		          (unsigned long long)generation, SslmForwardStatusName(submit_st));
+		if (submit_st != SslmForwardStatus::Ok || !inflight) return false;
+		int32_t ready = 0;
+		const auto finish_st =
+		    superslm_gpu::RunLayerLoopGpuFinish(inflight, seq, ws, /*block=*/1, &ready);
+		CHECK_MSG(finish_st == SslmForwardStatus::Ok,
+		          "RunLayerLoopGpuFinish after the G5-bridge submit status == %s, want Ok",
+		          SslmForwardStatusName(finish_st));
+		return finish_st == SslmForwardStatus::Ok;
+	};
+
+	CHECK_MSG(run_one_chunk(kGeneration), "first G5-bridge chunk (generation=%llu) did not "
+	          "complete Ok", (unsigned long long)kGeneration);
+	CHECK_MSG(!superslm_gpu::LastRopeUploadWasSkipped(),
+	          "the FIRST G5-bridge chunk (a fresh fixture, empty cache) reported the rope table "
+	          "upload as skipped -- want a miss, this is the cache's very first call");
+	CHECK_MSG(run_one_chunk(kGeneration), "second G5-bridge chunk (generation=%llu) did not "
+	          "complete Ok", (unsigned long long)kGeneration);
+	CHECK_MSG(superslm_gpu::LastRopeUploadWasSkipped(),
+	          "the SECOND G5-bridge chunk (SAME generation=%llu, a fresh sequence of the same "
+	          "still-live model) did not report the rope-table upload as skipped -- want a HIT. "
+	          "RED if model_generation is dropped anywhere in SubmitChunkToFullDepthForG5Bridge "
+	          "-> SubmitOneSubChunkToFullDepthForG5Bridge -> PrepareGpuLayerLoopChunkOpenState",
+	          (unsigned long long)kGeneration);
+}
+
 // (T-2577, D-SLM6281, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
 // review.md` Observation 1): K's own RoPE clamp is counted once per KV head, not once per
 // query head. Constructs a 2:1 GQA fixture (two query heads sharing one KV head) whose K
@@ -29306,6 +29383,7 @@ int main(int argc, char** argv) {
 	TestT2575_ShaderBinariesBesideThisExecutableAreCurrent();
 	TestT2576_GpuKvSaturationAndKvRowMatchCpuOnRopeSaturationFixtureN100();
 	TestT2577_S1_ModelGenerationGatesTheThreeResidencyCachesCorrectly();
+	TestT2577_S1b_ModelGenerationReachesTheG5BridgeChunkEntryPoint();
 	TestT2577_O1_RopeKCountsOncePerKvHeadNotOncePerQueryHead();
 #endif  // _WIN32
 

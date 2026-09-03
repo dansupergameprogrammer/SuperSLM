@@ -3222,7 +3222,11 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
     bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
     ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
     bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
-    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight, size_t q_width) {
+    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight, size_t q_width,
+    // (T-2577 round 2, D-SLM6278): mirrors `RunLayerLoopGpuSubmit`'s own trailing
+    // `model_generation` -- threaded into this call's own `PrepareGpuLayerLoopChunkOpenState`
+    // call, below.
+    uint64_t model_generation) {
 	if (out_inflight) *out_inflight = nullptr;
 	// T-2184 remedy S3 (Brunel fix round 1, D-SLM3662): this primitive's own catch clauses call
 	// the same file-scope `InvalidateResidencyCachesOnThrow()` `RunLayerLoopGpuSubmit`'s catch
@@ -3270,7 +3274,8 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 	    num_key_value_heads, intermediate_size, context_cap, rope_tables, workspace, workspace_size,
 	    external_kv_resident, io_external_kv_needs_resume_barrier, external_weights_resident,
 	    external_rope_cos_resident, external_rope_sin_resident, external_rope_has,
-	    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &state, q_width);
+	    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &state, q_width,
+	    model_generation);
 	if (prep_status != superslm::SslmForwardStatus::Ok) {
 		return prep_status;  // a guard rejected before any recording began -- nothing to close
 	}
@@ -3701,7 +3706,11 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
     bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
     ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
     bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
-    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight, size_t q_width) {
+    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight, size_t q_width,
+    // (T-2577 round 2, D-SLM6278): mirrors `RunLayerLoopGpuSubmit`'s own trailing
+    // `model_generation` -- forwarded to every `SubmitOneSubChunkToFullDepthForG5Bridge` call
+    // this function's own sub-chunk-splitting loop makes, below.
+    uint64_t model_generation) {
 	if (out_inflight) *out_inflight = nullptr;
 	if (chunk_len == 0) {
 		// Nothing to submit -- no guard ladder has run, so this is not itself a rejection; the
@@ -3723,7 +3732,8 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 		    chunk_embedding_bytes + static_cast<size_t>(submitted) * embed_block_bytes, this_sub_chunk,
 		    external_kv_resident, io_external_kv_needs_resume_barrier, external_weights_resident,
 		    external_rope_cos_resident, external_rope_sin_resident, external_rope_has,
-		    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &inflight, q_width);
+		    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &inflight, q_width,
+		    model_generation);
 		if (submit_status != superslm::SslmForwardStatus::Ok) {
 			return submit_status;
 		}

@@ -301,7 +301,12 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
     ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
     bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
     const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight,
-    size_t q_width = 0);
+    size_t q_width = 0,
+    // (T-2577 round 2, D-SLM6278): mirrors `RunLayerLoopGpuSubmit`'s own trailing
+    // `model_generation` -- see that declaration's own header comment for the full contract.
+    // Threaded through to `PrepareGpuLayerLoopChunkOpenState`'s own three residency-cache
+    // predicates. Defaults to `0` so every pre-existing caller is unaffected.
+    uint64_t model_generation = 0);
 
 // T-2169 (Rung 2, design Sec5, D-SLM3596/D-SLM3641): the measured, driver-stability-bounded
 // maximum sub-chunk size, in tokens -- see its own definition (src/gpu/superslm_gpu.cpp) for the

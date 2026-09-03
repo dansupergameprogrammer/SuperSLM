@@ -106,6 +106,12 @@ int main(int argc, char** argv) {
 	}
 	const std::string model_path = argv[1];
 	const int32_t token_id = argc >= 3 ? std::atoi(argv[2]) : 0;
+	// (T-2577 round 2, D-SLM6278): this process loads exactly ONE model, once -- a constant
+	// caller-owned identity, so the pre-1.0 residency caches (g_resident_weights/g_resident_kv/
+	// g_resident_rope, superslm_gpu.cpp) treat every fresh sequence of it as a legitimate hit
+	// rather than paying the repack+reupload cost every unwired caller (model_generation=0)
+	// still pays.
+	constexpr uint64_t kModelGeneration = 1;
 
 	std::vector<uint8_t> model_bytes;
 	if (!ReadFile(model_path.c_str(), model_bytes)) {
@@ -231,7 +237,7 @@ int main(int argc, char** argv) {
 	    &inflight, /*external_weights_resident=*/nullptr, /*external_rope_cos_resident=*/nullptr,
 	    /*external_rope_sin_resident=*/nullptr, /*external_rope_has=*/false,
 	    /*external_rope_cos_elems=*/0, /*external_rope_sin_elems=*/0, /*adapter_bridge=*/nullptr,
-	    q_width, gpu_q_codes.data(), gpu_q_codes.size());
+	    q_width, gpu_q_codes.data(), gpu_q_codes.size(), kModelGeneration);
 	SslmForwardStatus gpu_status = gpu_submit_status;
 	if (inflight) {
 		int32_t ready = 0;

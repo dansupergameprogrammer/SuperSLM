@@ -2697,6 +2697,17 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		// T-2432 (Track A step 2/3): q_width threaded explicitly -- this is the real GPU-side
 		// prefill submission path, the direct analog of sslm_abi.cpp's own
 		// RunLayerLoopChunkBatched call site.
+		// (T-2577 round 2, D-SLM6278): `model_generation`, the model's own `content_hash`
+		// (SHA-256, D-SLM3415) reduced to its first 8 bytes -- an opaque, stable-per-load
+		// identity, matching the contract every other caller of this parameter now supplies.
+		// This 1.0 handle path binds `weights_buf`/`rope_cos_buf`/`rope_sin_buf` directly
+		// (the `external_*` arguments below), which already bypasses
+		// `g_resident_weights`/`g_resident_kv`/`g_resident_rope` entirely (D-SLM3362) -- so this
+		// identity is inert on the path this call actually takes today. Wired anyway, so the
+		// identity is already correct if a future change ever routes this handle through the
+		// pre-1.0 caches instead.
+		uint64_t model_generation = 0;
+		std::memcpy(&model_generation, model->content_hash.data(), sizeof(model_generation));
 		const superslm::SslmForwardStatus submit_status =
 		    superslm_gpu::SubmitChunkToFullDepthForG5Bridge(
 		        seq->live_state, /*layers=*/nullptr, model->num_hidden_layers, model->hidden_size,
@@ -2706,7 +2717,8 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		        &seq->kv_needs_resume_barrier, model->weights_buf.Get(), model->rope_cos_buf.Get(),
 		        model->rope_sin_buf.Get(), model->has_rope_tables, model->rope_cos_elem_count,
 		        model->rope_sin_elem_count, adapter_bridge_ptr, &inflight,
-		        /*q_width=*/static_cast<size_t>(model->num_attention_heads) * model->head_dim);
+		        /*q_width=*/static_cast<size_t>(model->num_attention_heads) * model->head_dim,
+		        model_generation);
 		if (submit_status == superslm::SslmForwardStatus::Ok && inflight) {
 			// `SubmitChunkToFullDepthForG5Bridge` returns the FINAL (sub-)chunk's own inflight token
 			// genuinely unfenced (its own header comment: "the caller's own async contract... only

@@ -49,29 +49,24 @@ using superslm_marshal::PreflightScanWscFolds;
 using superslm_marshal::ReadCarriedScale;
 using superslm_marshal::ReadFile;
 
-namespace superslm_gpu {
-struct GpuLayerLoopInFlight;  // opaque, matches gpu_port.h's own forward declaration
-
-// Exact signature match to the real definition in src/gpu/superslm_gpu.cpp (T-2169 Rung 2b) --
-// forward-declared here so this harness can call it directly, ahead of Rung 3/4's own public
-// bridge wiring.
-superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
-    superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
-    uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
-    size_t intermediate_size, int64_t context_cap, const superslm::SslmTensorManifest& rope_tables,
-    uint8_t* workspace, size_t workspace_size, const uint8_t* chunk_embedding_bytes,
-    uint32_t chunk_len, ID3D12Resource* external_kv_resident,
-    bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
-    ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
-    bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
-    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight,
-    // T-2432 (Track A step 2/3): q_width, matching the real definition's own new trailing
-    // parameter (superslm_gpu.cpp) -- this harness's own square Qwen2.5-1.5B fixture needs no
-    // explicit value, so this forward declaration's default keeps its own call site unchanged.
-    size_t q_width = 0);
-}  // namespace superslm_gpu
+// (T-2577 round 2, D-SLM6278): the local forward declaration of
+// `superslm_gpu::SubmitChunkToFullDepthForG5Bridge` that stood here (this file's own comment:
+// "not reachable through any 1.0 API entry point yet") was STALE -- `include/superslm/gpu_port.h`
+// (already included above) has declared this function publicly since T-2184, and this file's own
+// second, duplicate declaration of the SAME default argument (`q_width = 0`) on the SAME
+// parameter was a pre-existing compile error (`error C2572: redefinition of default argument:
+// parameter 1`), confirmed unrelated to this ticket and reproduced against the clean, unmodified
+// `5fafd98` tree. Deleted rather than kept in sync a second time: the include already provides
+// the identical declaration, now with this round's own new `model_generation` parameter too.
 
 namespace {
+
+// (T-2577 round 2, D-SLM6278): this process loads exactly ONE model, once -- a constant
+// caller-owned identity, so the pre-1.0 residency caches (g_resident_weights/
+// g_resident_kv/g_resident_rope, superslm_gpu.cpp) treat every fresh sequence of it as
+// a legitimate hit rather than paying the repack+reupload cost every unwired caller
+// (model_generation=0) still pays.
+constexpr uint64_t kModelGeneration = 1;
 
 // The identical SeqState prefix layout PrepareGpuLayerLoopChunkOpenState packs
 // (src/gpu/superslm_gpu.cpp): hidden_codes[H] as i32 elements, Align8U32(H*4) bytes, then
@@ -130,7 +125,9 @@ bool RunSelfCheck(const char* label, const SslmModelView& model_view,
 		ref_status = superslm_gpu::RunLayerLoopGpu(
 		    ref_seq, layers.data(), num_hidden_layers, /*layer_budget=*/num_hidden_layers,
 		    hidden_size, head_dim, num_kv_heads, intermediate_size, context_cap,
-		    model_view.rope_tables, ref_ws.data(), ref_ws.size());
+		    model_view.rope_tables, ref_ws.data(), ref_ws.size(),
+		    /*external_kv_resident=*/nullptr, /*io_external_kv_needs_resume_barrier=*/nullptr,
+		    kModelGeneration);
 		if (ref_status != SslmForwardStatus::Ok) {
 			std::printf("[%s] FAILED at stage=ref_run token_index=%zu status=%s\n", label, i,
 			            SslmForwardStatusName(ref_status));
@@ -167,7 +164,7 @@ bool RunSelfCheck(const char* label, const SslmModelView& model_view,
 	    cand_seq, layers.data(), num_hidden_layers, hidden_size, head_dim, num_kv_heads,
 	    intermediate_size, context_cap, model_view.rope_tables, cand_ws.data(), cand_ws.size(),
 	    chunk_bytes.data(), static_cast<uint32_t>(token_ids.size()), nullptr, nullptr, nullptr,
-	    nullptr, nullptr, false, 0, 0, nullptr, &inflight);
+	    nullptr, nullptr, false, 0, 0, nullptr, &inflight, /*q_width=*/0, kModelGeneration);
 	if (submit_status != SslmForwardStatus::Ok || !inflight) {
 		std::printf("[%s] FAILED at stage=cand_submit status=%s\n", label,
 		            SslmForwardStatusName(submit_status));

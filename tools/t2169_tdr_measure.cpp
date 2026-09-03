@@ -41,22 +41,15 @@ using superslm_marshal::PreflightScanWscFolds;
 using superslm_marshal::ReadCarriedScale;
 using superslm_marshal::ReadFile;
 
+// (T-2577 round 2, D-SLM6278): the local forward declaration of
+// `superslm_gpu::SubmitChunkToFullDepthForG5Bridge` that stood here is STALE -- deleted for the
+// identical reason and with the identical verification as `tools/t2169_rung2b_selfcheck.cpp`'s
+// own removal (this file carried the same duplicate-default pre-existing compile error,
+// `error C2572`, never reached by `build.bat` only because it exits on the FIRST error, at that
+// other file, earlier in its own build order). `include/superslm/gpu_port.h` (already included
+// above) declares this function publicly, now with this round's own new `model_generation`
+// parameter too. `struct GpuLayerLoopInFlight;` is likewise already forward-declared there.
 namespace superslm_gpu {
-struct GpuLayerLoopInFlight;
-superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
-    superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
-    uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
-    size_t intermediate_size, int64_t context_cap, const superslm::SslmTensorManifest& rope_tables,
-    uint8_t* workspace, size_t workspace_size, const uint8_t* chunk_embedding_bytes,
-    uint32_t chunk_len, ID3D12Resource* external_kv_resident,
-    bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
-    ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
-    bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
-    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight,
-    // T-2432 (Track A step 2/3): q_width, matching the real definition's own new trailing
-    // parameter (superslm_gpu.cpp) -- this harness's own square fixture needs no explicit
-    // value.
-    size_t q_width = 0);
 #if defined(SUPERSLM_T2169_VALIDATE_UNSPLIT_CRASH_REPRO)
 // D-SLM3649's own owed evidence (Dan's review): the UNSPLIT, pre-fix primitive -- identical
 // signature, renamed in production (src/gpu/superslm_gpu.cpp) when the split-wrapper landed.
@@ -78,6 +71,13 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 }  // namespace superslm_gpu
 
 namespace {
+
+// (T-2577 round 2, D-SLM6278): this process loads exactly ONE model, once -- a constant
+// caller-owned identity, so the pre-1.0 residency caches (g_resident_weights/
+// g_resident_kv/g_resident_rope, superslm_gpu.cpp) treat every fresh sequence of it as
+// a legitimate hit rather than paying the repack+reupload cost every unwired caller
+// (model_generation=0) still pays.
+constexpr uint64_t kModelGeneration = 1;
 
 // This project's own established per-layer dispatch count (superslm_gpu.cpp,
 // PlanDispatchBudgetGpu's own header comment; kDispatchesPerLayer = 24).
@@ -166,7 +166,8 @@ bool MeasureOneChunkSize(const SslmModelView& model_view, const std::vector<Laye
 	const SslmForwardStatus submit_status = superslm_gpu::SubmitChunkToFullDepthForG5Bridge(
 	    seq, layers.data(), num_hidden_layers, hidden_size, head_dim, num_kv_heads, intermediate_size,
 	    context_cap, model_view.rope_tables, ws.data(), ws.size(), chunk_bytes.data(), chunk_tokens,
-	    nullptr, nullptr, nullptr, nullptr, nullptr, false, 0, 0, nullptr, &inflight);
+	    nullptr, nullptr, nullptr, nullptr, nullptr, false, 0, 0, nullptr, &inflight, /*q_width=*/0,
+	    kModelGeneration);
 #endif
 	if (submit_status != SslmForwardStatus::Ok || !inflight) {
 		std::fprintf(stderr, "FAILED at stage=submit chunk_tokens=%u status=%s\n", chunk_tokens,

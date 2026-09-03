@@ -39,6 +39,12 @@ int main(int argc, char** argv) {
 	}
 	const std::string model_path = argv[1];
 	const int32_t token_id = argc >= 3 ? std::atoi(argv[2]) : 0;
+	// (T-2577 round 2, D-SLM6278): this process loads exactly ONE model, once -- a
+	// constant caller-owned identity, so the pre-1.0 residency caches
+	// (g_resident_weights/g_resident_kv/g_resident_rope, superslm_gpu.cpp) treat this
+	// run's own fresh sequence as a legitimate hit rather than paying the
+	// repack+reupload cost every unwired caller (model_generation=0) still pays.
+	constexpr uint64_t kModelGeneration = 1;
 
 	std::vector<uint8_t> model_bytes;
 	if (!ReadFile(model_path.c_str(), model_bytes)) {
@@ -144,7 +150,8 @@ int main(int argc, char** argv) {
 	const SslmForwardStatus gpu_status = superslm_gpu::RunLayerLoopGpu(
 	    gpu_seq, layers.data(), num_hidden_layers, /*layer_budget=*/num_hidden_layers, hidden_size,
 	    head_dim, num_kv_heads, intermediate_size, context_cap, model_view.rope_tables, gpu_ws.data(),
-	    gpu_ws.size());
+	    gpu_ws.size(), /*external_kv_resident=*/nullptr, /*io_external_kv_needs_resume_barrier=*/nullptr,
+	    kModelGeneration);
 	std::printf("GPU port:   status=%s layer_index=%u kv_saturation_count=%llu context_length=%lld\n",
 	            SslmForwardStatusName(gpu_status), gpu_seq.layer_index,
 	            (unsigned long long)gpu_seq.kv_saturation_count, (long long)gpu_seq.context_length);

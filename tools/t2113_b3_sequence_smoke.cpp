@@ -108,6 +108,15 @@ static bool LoadModel(const std::string& path, SslmModelView* out_view,
 	return true;
 }
 
+// (T-2577 round 2, D-SLM6278): this process loads exactly ONE model, once -- a constant
+// caller-owned identity, so the pre-1.0 residency caches (g_resident_weights/
+// g_resident_rope, superslm_gpu.cpp -- g_resident_kv is bypassed on this file's own
+// external_kv_resident path, below) treat every fresh sequence of it as a legitimate hit
+// rather than paying the repack+reupload cost every unwired caller (model_generation=0)
+// still pays. File scope, not main()-local: StepGpuThroughHandle is a free function below,
+// not a closure over main()'s own locals.
+constexpr uint64_t kModelGeneration = 1;
+
 // One step of "re-embed token 0, run every layer" -- the identical convention T-2100/T-2105
 // use for a decode step (context_length advances across calls; the embedded token itself is
 // held fixed so the oracle comparison isolates the K/V-residency mechanism from any
@@ -149,7 +158,8 @@ static SslmForwardStatus StepGpuThroughHandle(SslmGpuSequenceHandle* seq_handle,
 	const SslmForwardStatus st = superslm_gpu::RunLayerLoopGpu(
 	    view, layers, num_hidden_layers, num_hidden_layers, hidden_size, head_dim, num_kv_heads,
 	    intermediate_size, context_cap, rope_tables, ws, ws_size,
-	    SslmGpuSeqHandleKvBufferForBench(seq_handle), SslmGpuSeqHandleKvResumeFlagForBench(seq_handle));
+	    SslmGpuSeqHandleKvBufferForBench(seq_handle), SslmGpuSeqHandleKvResumeFlagForBench(seq_handle),
+	    kModelGeneration);
 
 	// Write the post-call state back into the handle's own host mirror, matching what a
 	// real sslm_decode_step_gpu (B5) will do at the end of every call.

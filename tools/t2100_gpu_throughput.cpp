@@ -69,6 +69,12 @@ int main(int argc, char** argv) {
 		std::fprintf(stderr, "steps must be >= 1\n");
 		return 2;
 	}
+	// (T-2577 round 2, D-SLM6278): this process loads exactly ONE model, once -- a
+	// constant caller-owned identity, so the pre-1.0 residency caches
+	// (g_resident_weights/g_resident_kv/g_resident_rope, superslm_gpu.cpp) treat every
+	// fresh sequence of it as a legitimate hit rather than paying the repack+reupload
+	// cost every unwired caller (model_generation=0) still pays.
+	constexpr uint64_t kModelGeneration = 1;
 
 	std::vector<uint8_t> model_bytes;
 	if (!ReadFile(model_path.c_str(), model_bytes)) {
@@ -190,7 +196,10 @@ int main(int argc, char** argv) {
 				return superslm_gpu::RunLayerLoopGpu(seq, layers.data(), num_hidden_layers,
 				                                     num_hidden_layers, hidden_size, head_dim,
 				                                     num_kv_heads, intermediate_size, context_cap,
-				                                     model_view.rope_tables, ws.data(), ws.size());
+				                                     model_view.rope_tables, ws.data(), ws.size(),
+				                                     /*external_kv_resident=*/nullptr,
+				                                     /*io_external_kv_needs_resume_barrier=*/nullptr,
+				                                     kModelGeneration);
 			}
 			return RunLayerLoop(seq, layers.data(), num_hidden_layers, num_hidden_layers, hidden_size,
 			                    head_dim, num_kv_heads, intermediate_size, context_cap,
