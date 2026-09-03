@@ -641,8 +641,32 @@ SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
 
 	const superslm_gpu::GpuLayerLayout layout =
 	    superslm_gpu::ComputeLayerLayout(H, KV, num_kv_heads, NQH, I, QWIDTH);
-	const std::vector<uint8_t> lw_bytes = superslm_gpu::PackLayerWeightsBytes(
-	    layers.data(), num_hidden_layers, layout, H, KV, num_kv_heads, NQH, I, QWIDTH);
+	// T-2568 (S1, Claude/Poirot/66626ef-t2567-trackb-confirmation.md): PackLayerWeightsBytes
+	// throws `GpuLayerWeightsContractError` (superslm_gpu.cpp, std::logic_error-derived) when a
+	// layer's k_norm_gain or iexp_softmax_khead_m/e pointer contract is violated. RunLayerLoopGpu
+	// (this file's own sibling call site, superslm_gpu.cpp) contains that throw inside its own
+	// try/catch and converts it to a status; this call site did not -- an uncaught C++ exception
+	// escaping THIS function past the C ABI boundary above it, contradicting this header's own
+	// second sentence ("every fallible call returns an SslmGpuStatus"). Contained here, the same
+	// way: caught, the field's name preserved to stderr rather than discarded, and refused as a
+	// status -- `SSLM_DEVICE_LOST`, the SAME disposition every other marshal failure in this
+	// function already uses (the missing-tensor/malformed-artifact checks above), since design
+	// Sec9 assigns no more specific 1.0 status to "the artifact's own content could not be
+	// marshaled" than that one. Unreachable through any artifact today -- MarshalLayer
+	// (layer_marshal.h) is the only in-tree producer of `layers` and already rejects an artifact
+	// whose k_norm_gain is present without its landing pair, or whose composition_constants
+	// lacks a softmax_khead entry, before this call is ever reached (the identical reachability
+	// argument M4's own remedy rested on for RunLayerLoopGpu's twin path) -- but an uncaught
+	// exception crossing a status-return ABI boundary is a defect independent of today's
+	// reachability, not merely a defect while it happens to be unreachable.
+	std::vector<uint8_t> lw_bytes;
+	try {
+		lw_bytes = superslm_gpu::PackLayerWeightsBytes(layers.data(), num_hidden_layers, layout, H,
+		                                               KV, num_kv_heads, NQH, I, QWIDTH);
+	} catch (const std::exception& e) {
+		std::fprintf(stderr, "sslm_gpu_model_map: %s\n", e.what());
+		return SSLM_DEVICE_LOST;
+	}
 
 	// T-2105's own RoPE cos/sin residency construction (Claude/Laplace/
 	// t2105-gpu-speed-ceiling-2026-08-14.md Sec2 change 1), re-derived here per design Sec1's

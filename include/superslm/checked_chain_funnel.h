@@ -268,6 +268,24 @@ enum class SslmForwardStatus {
 	                                          // routed through the SAME generic catch as
 	                                          // `GpuAllocationFailed`, discarding the diagnostic string
 	                                          // and reporting a permanent bug as a recoverable one.
+	GpuLayerWeightsContractViolation,          // T-2568 (S1/M3, Claude/Poirot/
+	                                          // 66626ef-t2567-trackb-confirmation.md):
+	                                          // PackLayerWeightsBytes (superslm_gpu.cpp) found a
+	                                          // LayerWeights whose k_norm_gain is non-null but
+	                                          // k_norm_landing_r_t/e_t is null, or whose
+	                                          // iexp_softmax_khead_m/e is null -- a PERMANENT
+	                                          // caller-side contract violation (forward_sites.h's
+	                                          // own LayerWeights contract), never a transient or
+	                                          // size-dependent one. Distinct from
+	                                          // `GpuAllocationFailed` on purpose, the same reason
+	                                          // `GpuGemmGroupArithmeticInvalid` above is: that
+	                                          // status's own documented recovery ("retry smaller")
+	                                          // is actively wrong advice for a null pointer, which
+	                                          // no retry at any size fixes -- the confirming review
+	                                          // found the original refusal routed through the SAME
+	                                          // generic catch as `GpuAllocationFailed`, discarding
+	                                          // the message that names the field and reporting a
+	                                          // permanent bug as a recoverable one.
 	InvalidDecodeParams,                     // T-2199 Phase D review fix S3
 	                                          // (Claude/Poirot/7a3b10a-t2199-phaseD-review.md):
 	                                          // RunGreedyOrDampedGreedyDecodeLoop's own

@@ -812,6 +812,25 @@ GpuLayerLayout ComputeLayerLayout(uint32_t hidden_size, uint32_t kv_hidden_size,
 	return L;
 }
 
+// T-2568 (S1/M3, Claude/Poirot/66626ef-t2567-trackb-confirmation.md): PackLayerWeightsBytes
+// (below) refuses two required-pointer contracts by throwing -- a caller-constructed
+// LayerWeights whose k_norm_gain or iexp_softmax_khead_{m,e} is non-null-but-companion-null is a
+// permanent, caller-side contract violation, never a transient or environmental one. Declared
+// here, ahead of PackLayerWeightsBytes, for the identical reason GpuGemmGroupArithmeticError
+// (this file, below) is declared ahead of its own throw site: `std::logic_error`, not
+// `std::runtime_error` -- so it is never caught by the generic `catch (const
+// std::runtime_error&)` RunLayerLoopGpuSubmit/SubmitOneSubChunkToFullDepthForG5Bridge already use
+// for genuine D3D12 allocation/device failures (their own dedicated
+// `catch (const GpuLayerWeightsContractError&)` clauses, both files' own recording windows,
+// below), which is exactly the class this refusal used to fall into (T-2566's own remedy threw
+// `std::runtime_error`, surfacing through the public `RunLayerLoopGpu` entry point as
+// `GpuAllocationFailed` -- "retry smaller" -- with this exception's own message, the field's
+// name, discarded by that unnamed catch). One exception type for both fields: they are the same
+// class of defect (a required companion pointer left null), not two.
+struct GpuLayerWeightsContractError : std::logic_error {
+	using std::logic_error::logic_error;
+};
+
 // T-2113 (B2): relocated from inside the anonymous namespace above (internal linkage) to
 // here (external linkage, `superslm_gpu::PackLayerWeightsBytes`), matching its declaration
 // in include/superslm/gpu_port.h. Body byte-for-byte unchanged -- the exact loop
@@ -924,11 +943,29 @@ std::vector<uint8_t> PackLayerWeightsBytes(const superslm::LayerWeights* layers,
 		PutI64At(lw_bytes, base + layout.off[52] + 8, lw.down_site_constant.e);
 		PutI64At(lw_bytes, base + layout.off[53] + 0, lw.mlp_residual_site_constant.m);
 		PutI64At(lw_bytes, base + layout.off[53] + 8, lw.mlp_residual_site_constant.e);
+		// T-2568 (M3, Claude/Poirot/66626ef-t2567-trackb-confirmation.md): the sibling M4 left
+		// unaudited. `iexp_softmax_khead_m`/`_e` is required, UNCONDITIONALLY (unlike
+		// k_norm_landing_r_t/e_t, this pair is never optional on any layer -- MarshalLayer
+		// itself, layer_marshal.h, populates it unguarded, with no presence flag): the CPU site
+		// dereferences both with no null check of its own (forward_sites.cpp:1910, 2385) and the
+		// header declares num_key_value_heads entries with no optional-nullptr wording
+		// (forward_sites.h:782-783). The prior `: 0` fallback here was the identical "safe
+		// no-op" shape M4 already found unsafe for k_norm_landing, one field over, and it is:
+		// executed, `IExpScaleConstants(m=0, e=0)` (intmath.cpp) returns `kOk` and a degenerate
+		// i-exp triple, silently -- a null pointer packed as literal 0 is indistinguishable
+		// downstream from a genuinely stored 0, and nothing rejects either. One contract, not
+		// two: refused by name, before either pointer is read and before any GPU dispatch this
+		// pack feeds -- same shape, same exception type, as k_norm_landing's own refusal below.
+		if (lw.iexp_softmax_khead_m == nullptr || lw.iexp_softmax_khead_e == nullptr) {
+			throw GpuLayerWeightsContractError(
+			    "PackLayerWeightsBytes: layer " + std::to_string(l) +
+			    "'s iexp_softmax_khead_m/e is null -- forward_sites.h's own LayerWeights "
+			    "contract requires this pair non-null unconditionally (MarshalLayer, "
+			    "layer_marshal.h, populates it on every layer with no presence flag)");
+		}
 		for (uint32_t i = 0; i < NH; ++i) {
-			PutI64At(lw_bytes, base + layout.off[54] + i * 8,
-			         lw.iexp_softmax_khead_m != nullptr ? lw.iexp_softmax_khead_m[i] : 0);
-			PutI64At(lw_bytes, base + layout.off[55] + i * 8,
-			         lw.iexp_softmax_khead_e != nullptr ? lw.iexp_softmax_khead_e[i] : 0);
+			PutI64At(lw_bytes, base + layout.off[54] + i * 8, lw.iexp_softmax_khead_m[i]);
+			PutI64At(lw_bytes, base + layout.off[55] + i * 8, lw.iexp_softmax_khead_e[i]);
 		}
 		// (design §4/§6 Track B step 1/3, T-2551): q_norm/k_norm -- the present-flag/gain/
 		// site-constant triple, mirroring q_bias_present's own (flag-then-conditional-array)
@@ -970,8 +1007,26 @@ std::vector<uint8_t> PackLayerWeightsBytes(const superslm::LayerWeights* layers,
 				// (`[2^31+1, 2^32]`, `src/model.cpp`) -- a value the loader would reject if it
 				// ever arrived through a real artifact. One contract, not two: refused by name,
 				// before either pointer is read and before any GPU dispatch this pack feeds.
+				//
+				// T-2568 (S1, Claude/Poirot/66626ef-t2567-trackb-confirmation.md): CORRECTED --
+				// this refusal used to throw `std::runtime_error`, the exact class this file's
+				// own recording-window catch (RunLayerLoopGpuSubmit/
+				// SubmitOneSubChunkToFullDepthForG5Bridge, below) reserves for TRANSIENT device
+				// and allocation failures (documented 37 lines below their own generic catch:
+				// "device alive, this one call failed -- transient/size-dependent, retry
+				// smaller"). Through the public `RunLayerLoopGpu` entry point this surfaced as
+				// `GpuAllocationFailed`, discarding the message that names the field (the
+				// generic catch is unnamed) and advising a caller to retry smaller -- no retry
+				// at any size fixes a null pointer. `GpuLayerWeightsContractError` (this file,
+				// above), `std::logic_error`-derived like its sibling
+				// `GpuGemmGroupArithmeticError`: a caller violating this contract is a
+				// permanent bug, never transient. Caught by its own dedicated clause, both
+				// functions, returning its own dedicated status,
+				// `GpuLayerWeightsContractViolation` (declared in the SslmForwardStatus enum,
+				// this file's own status header), with the message printed to stderr rather
+				// than discarded.
 				if (lw.k_norm_landing_r_t == nullptr || lw.k_norm_landing_e_t == nullptr) {
-					throw std::runtime_error(
+					throw GpuLayerWeightsContractError(
 					    "PackLayerWeightsBytes: layer " + std::to_string(l) +
 					    "'s k_norm_gain is non-null but k_norm_landing_r_t/e_t is null -- "
 					    "forward_sites.h's own LayerWeights contract requires this pair "
@@ -2602,6 +2657,21 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		InvalidateResidencyCachesOnThrow();
 		dev.list->Close();
 		return superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid;
+	} catch (const GpuLayerWeightsContractError& e) {
+		// T-2568 (S1, Claude/Poirot/66626ef-t2567-trackb-confirmation.md): the twin of the
+		// GpuGemmGroupArithmeticError clause immediately above, for PackLayerWeightsBytes' own
+		// required-pointer refusal (thrown from inside PrepareGpuLayerLoopChunkOpenState, this
+		// function's own enclosing try -- that function throws INTO this catch rather than
+		// catching its own exceptions, matching this file's established convention). A caller
+		// violating the LayerWeights contract is a permanent bug, never transient -- caught by
+		// its own clause, ahead of the generic `catch (const std::runtime_error&)` below, so it
+		// never inherits that clause's own `GpuAllocationFailed` status ("retry smaller," wrong
+		// advice for a null pointer) and its message -- the field's name, the whole content of
+		// "refused by name" -- is preserved to stderr rather than discarded by an unnamed catch.
+		std::fprintf(stderr, "superslm_gpu: %s\n", e.what());
+		InvalidateResidencyCachesOnThrow();
+		dev.list->Close();
+		return superslm::SslmForwardStatus::GpuLayerWeightsContractViolation;
 	} catch (const std::runtime_error&) {
 		// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
 		// review.md, P3): defensively invalidate the weight-residency cache
@@ -3051,6 +3121,15 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		InvalidateResidencyCachesOnThrow();
 		dev.list->Close();
 		return superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid;
+	} catch (const GpuLayerWeightsContractError& e) {
+		// T-2568 (S1): the identical chunk-scoped discard, for PackLayerWeightsBytes' own
+		// required-pointer refusal, RunLayerLoopGpuSubmit's own twin catch clause already handles
+		// (superslm_gpu.cpp, above) -- same status mapping, same cache-invalidation contract, same
+		// message-preserved-to-stderr discipline.
+		std::fprintf(stderr, "superslm_gpu: %s\n", e.what());
+		InvalidateResidencyCachesOnThrow();
+		dev.list->Close();
+		return superslm::SslmForwardStatus::GpuLayerWeightsContractViolation;
 	} catch (const std::runtime_error&) {
 		// D-SLM3634: the identical chunk-scoped discard, for the generic allocation/device-
 		// removed failure class RunLayerLoopGpuSubmit's own twin catch clause already handles

@@ -26861,6 +26861,219 @@ static void TestT2566_M4_PackLayerWeightsBytesRefusesNullKNormLandingPointers() 
 	}
 }
 
+// (T-2568, S1 -- Claude/Poirot/66626ef-t2567-trackb-confirmation.md): T-2566's own remedy above
+// refused a null k_norm_landing pointer by throwing `std::runtime_error`, the exact exception
+// class `superslm_gpu.cpp`'s own recording-window catch reserves for TRANSIENT device/allocation
+// failures -- so through the PUBLIC `RunLayerLoopGpu` entry point (gpu_port.h) the refusal
+// surfaced as `GpuAllocationFailed` ("retry smaller"), with the message that names the field
+// discarded by an unnamed catch. Fixed: `PackLayerWeightsBytes` now throws
+// `GpuLayerWeightsContractError` (std::logic_error-derived), caught by its own dedicated clause
+// and returned as its own dedicated status, `GpuLayerWeightsContractViolation`. This cell drives
+// the SAME public entry point the confirming review's own probe used, on the SAME
+// `QkNormWiringFixture` (T-2566, above): a control arm with the fixture's own well-formed K-norm
+// contract returns `Ok`, establishing the device and fixture are healthy so the second arm is the
+// refusal and not a broken harness; the `k_norm_landing_r_t == nullptr` arm must return the new
+// named status -- never `GpuAllocationFailed`, never an uncaught exception.
+static void TestT2568_S1_RunLayerLoopGpuRefusesNullKNormLandingByNamedStatus() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+
+	// Control: the fixture's own well-formed K-norm contract.
+	{
+		QkNormWiringFixture fixture;
+		int8_t hidden_codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		uint8_t workspace[4] = {};
+		const auto result = superslm_gpu::RunLayerLoopGpu(
+		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+		    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+		    /*intermediate_size=*/2, /*context_cap=*/1, fixture.view.rope_tables, workspace,
+		    sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::Ok,
+		          "RunLayerLoopGpu(T-2568 S1 control, well-formed K-norm contract) status == "
+		          "%s, want Ok -- establishes the device and fixture are healthy",
+		          SslmForwardStatusName(result));
+	}
+
+	// The refusal: the SAME fixture, k_norm_landing_r_t knocked to nullptr after construction --
+	// the exact asymmetry M4/S1 named.
+	{
+		QkNormWiringFixture fixture;
+		fixture.layer.k_norm_landing_r_t = nullptr;
+		int8_t hidden_codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		uint8_t workspace[4] = {};
+		const auto result = superslm_gpu::RunLayerLoopGpu(
+		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+		    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+		    /*intermediate_size=*/2, /*context_cap=*/1, fixture.view.rope_tables, workspace,
+		    sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::GpuLayerWeightsContractViolation,
+		          "RunLayerLoopGpu(T-2568 S1, k_norm_landing_r_t == nullptr) status == %s, want "
+		          "GpuLayerWeightsContractViolation -- RED if the refusal reverts to throwing "
+		          "std::runtime_error (superslm_gpu.cpp), which this file's own taxonomy "
+		          "reserves for transient device failures and which the public entry point maps "
+		          "to GpuAllocationFailed, discarding the message that names the field",
+		          SslmForwardStatusName(result));
+		CHECK_MSG(result != SslmForwardStatus::GpuAllocationFailed,
+		          "RunLayerLoopGpu(T-2568 S1, k_norm_landing_r_t == nullptr) status == "
+		          "GpuAllocationFailed -- the exact wrong-advice regression S1 closes ('retry "
+		          "smaller' fixes no null pointer at any size)");
+	}
+}
+
+// (T-2568, S2 -- Claude/Poirot/66626ef-t2567-trackb-confirmation.md): T-2565's own O7 named the
+// GPU half of the saturation counter as having no executed evidence of any kind; the confirming
+// review measured it (same fixture, same device: GPU 2, CPU 2, agreeing) and re-opened it as a
+// Significant on new evidence -- nothing automated fails when `qk_norm_site.hlsl:236`'s own
+// `InterlockedAdd(gQkNormClamps, 1u)` is deleted: the shader compiles, the suite stays green,
+// exit 0. `QkNormWiringFixture` (T-2566, above) already forces a second-K-landing clamp on
+// identity weights, so the ORIGINAL K/V landing contributes nothing to either engine's own
+// count -- this cell drives the SAME fixture through both `RunLayerLoop` (CPU) and
+// `RunLayerLoopGpu` (GPU) and asserts the two engines' own `seq.kv_saturation_count` agree, both
+// nonzero. RED under the shader mutant named above: the GPU reading drops to 0 while the CPU
+// reading holds, so this cell's own equality assertion fails where nothing else in the suite
+// can.
+static void TestT2568_S2_GpuKvSaturationCountMatchesCpuOnQkNormWiringFixture() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+
+	uint64_t cpu_count = 0;
+	{
+		QkNormWiringFixture fixture;
+		int8_t hidden_codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		uint8_t workspace[4] = {};
+		const auto result = superslm::RunLayerLoop(
+		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+		    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+		    /*intermediate_size=*/2, /*context_cap=*/1, fixture.view.rope_tables, workspace,
+		    sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::Ok,
+		          "RunLayerLoop(T-2568 S2, CPU arm) status == %s, want Ok",
+		          SslmForwardStatusName(result));
+		cpu_count = seq.kv_saturation_count;
+		CHECK_MSG(cpu_count > 0,
+		          "seq.kv_saturation_count after RunLayerLoop (CPU) == %llu, want > 0 -- the "
+		          "K-norm fixture's own second-landing clamp must register on the CPU engine "
+		          "before this cell's own GPU-equals-CPU comparison means anything",
+		          static_cast<unsigned long long>(cpu_count));
+	}
+
+	uint64_t gpu_count = 0;
+	{
+		QkNormWiringFixture fixture;
+		int8_t hidden_codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		uint8_t workspace[4] = {};
+		const auto result = superslm_gpu::RunLayerLoopGpu(
+		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+		    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+		    /*intermediate_size=*/2, /*context_cap=*/1, fixture.view.rope_tables, workspace,
+		    sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::Ok,
+		          "RunLayerLoopGpu(T-2568 S2, GPU arm) status == %s, want Ok",
+		          SslmForwardStatusName(result));
+		gpu_count = seq.kv_saturation_count;
+	}
+
+	CHECK_MSG(gpu_count == cpu_count,
+	          "seq.kv_saturation_count: GPU == %llu, CPU == %llu, want equal -- RED if "
+	          "qk_norm_site.hlsl:236's own InterlockedAdd(gQkNormClamps, 1u) is deleted, which "
+	          "takes the GPU reading to 0 while the CPU reading holds, with the rest of the "
+	          "suite green (T-2567 S2's own measured shape)",
+	          static_cast<unsigned long long>(gpu_count), static_cast<unsigned long long>(cpu_count));
+}
+
+// (T-2568, M3 -- Claude/Poirot/66626ef-t2567-trackb-confirmation.md): the sibling T-2565's own M4
+// named as unaudited. `iexp_softmax_khead_m`/`_e` is required UNCONDITIONALLY (never gated behind
+// a presence flag the way k_norm_landing is gated behind k_norm_gain -- MarshalLayer,
+// layer_marshal.h, populates it on every layer). The old `: 0` fallback (superslm_gpu.cpp) was
+// the identical "safe no-op" shape M4 already found unsafe one field over: executed,
+// `IExpScaleConstants(m=0, e=0)` (intmath.cpp) returns `kOk` and a degenerate i-exp triple,
+// silently. Fixed the same way, same exception type, same cell shape as
+// `TestT2566_M4_PackLayerWeightsBytesRefusesNullKNormLandingPointers` above: a must-accept arm
+// (the fixture's own well-formed contract) and two must-reject arms, one pointer knocked out at a
+// time.
+static void TestT2568_M3_PackLayerWeightsBytesRefusesNullIexpSoftmaxKheadPointers() {
+	constexpr uint32_t kHiddenSize = 2, kKvHiddenSize = 2, kNumKvHeads = 1, kNumAttnHeads = 1,
+	                    kIntermediateSize = 2;
+
+	auto try_pack = [](superslm::LayerWeights& lw, bool* out_threw, std::string* out_what) {
+		const superslm_gpu::GpuLayerLayout layout = superslm_gpu::ComputeLayerLayout(
+		    kHiddenSize, kKvHiddenSize, kNumKvHeads, kNumAttnHeads, kIntermediateSize);
+		*out_threw = false;
+		out_what->clear();
+		try {
+			(void)superslm_gpu::PackLayerWeightsBytes(&lw, /*N=*/1, layout, kHiddenSize,
+			                                          kKvHiddenSize, kNumKvHeads, kNumAttnHeads,
+			                                          kIntermediateSize);
+		} catch (const std::exception& e) {
+			*out_threw = true;
+			*out_what = e.what();
+		}
+	};
+
+	// Must-accept: the fixture's own contract is well-formed.
+	{
+		QkNormWiringFixture fixture;
+		bool threw = false;
+		std::string what;
+		try_pack(fixture.layer, &threw, &what);
+		CHECK_MSG(!threw,
+		          "PackLayerWeightsBytes(well-formed iexp_softmax_khead contract) threw: %s, "
+		          "want no throw",
+		          what.c_str());
+	}
+
+	// Must-reject 1/2: iexp_softmax_khead_m knocked to nullptr after construction.
+	{
+		QkNormWiringFixture fixture;
+		fixture.layer.iexp_softmax_khead_m = nullptr;
+		bool threw = false;
+		std::string what;
+		try_pack(fixture.layer, &threw, &what);
+		CHECK_MSG(threw,
+		          "PackLayerWeightsBytes(iexp_softmax_khead_m == nullptr) did NOT throw -- RED "
+		          "if the refusal is dropped back to the silent 0-substitution M3 found "
+		          "(superslm_gpu.cpp)");
+		if (threw) {
+			CHECK_MSG(what.find("iexp_softmax_khead") != std::string::npos,
+			          "PackLayerWeightsBytes's own refusal message == \"%s\", want it to name "
+			          "iexp_softmax_khead_m/e by name, not a generic failure",
+			          what.c_str());
+		}
+	}
+
+	// Must-reject 2/2: the SAME violation on the pair's other half.
+	{
+		QkNormWiringFixture fixture;
+		fixture.layer.iexp_softmax_khead_e = nullptr;
+		bool threw = false;
+		std::string what;
+		try_pack(fixture.layer, &threw, &what);
+		CHECK_MSG(threw,
+		          "PackLayerWeightsBytes(iexp_softmax_khead_e == nullptr) did NOT throw -- the "
+		          "pair's OTHER half must also be refused, not only the first");
+	}
+}
+
 #endif  // _WIN32
 
 int main(int argc, char** argv) {
@@ -27799,6 +28012,9 @@ int main(int argc, char** argv) {
 	TestAdapterIndexSoftwareAdapterRefusedNotSilentlySelected();
 
 	TestT2566_M4_PackLayerWeightsBytesRefusesNullKNormLandingPointers();
+	TestT2568_S1_RunLayerLoopGpuRefusesNullKNormLandingByNamedStatus();
+	TestT2568_S2_GpuKvSaturationCountMatchesCpuOnQkNormWiringFixture();
+	TestT2568_M3_PackLayerWeightsBytesRefusesNullIexpSoftmaxKheadPointers();
 #endif  // _WIN32
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);

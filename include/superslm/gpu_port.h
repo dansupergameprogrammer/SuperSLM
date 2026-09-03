@@ -343,10 +343,13 @@ enum class GpuLayerLoopGuard : int {
 // Every return path that resolves the call BEFORE that decision runs reads false, by
 // construction (the function-entry reset, never overwritten on that path): the nine-guard
 // ladder, the two device-capability rejections, and every return inside the recording window's
-// own catch, twenty-five paths in all. Every path that resolves the call AFTER the decision
-// reads exactly what the decision decided (true on a cache hit, false on a miss), whether the
-// call's own final status is Ok or one of DecodeStickyTag's thirteen rejecting statuses -- the
-// twenty-five before them, alike, thirty-one paths' own destination in total.
+// own catch, twenty-seven paths in all -- T-2568 added one new catch clause to each of
+// RunLayerLoopGpuSubmit and SubmitOneSubChunkToFullDepthForG5Bridge
+// (GpuLayerWeightsContractError's own, PackLayerWeightsBytes' required-pointer refusal), two more
+// than the twenty-five this paragraph named before. Every path that resolves the call AFTER the
+// decision reads exactly what the decision decided (true on a cache hit, false on a miss),
+// whether the call's own final status is Ok or one of DecodeStickyTag's thirteen rejecting
+// statuses -- the twenty-seven before them, alike, thirty-three paths' own destination in total.
 //
 // Both counts are derived structurally from source, not restated by hand, by
 // tests/ci/check_gpu_guard_status_parity.py (derive_lwuws_before_decision_count/

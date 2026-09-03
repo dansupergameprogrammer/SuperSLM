@@ -2129,15 +2129,19 @@ def _derive_scales(cfg: ModelConfig, maxima, weight_scales, float_biases):
         # k_norm is present -- computed here rather than left unset (superseding the prior
         # "K's own k_scale local is deliberately left unchanged" text this block carried
         # before the delta, which described the pre-fix contract this delta closes, C2).
-        # `k_normed_scale` is the SAME value `_derive_composition_constants` derives for the
-        # artifact's own fourth landing-constant pair (`maxima[f"{prefix}.k_normed"]`,
-        # floored by the gain's own scale, the identical `_output_scale` floor convention
-        # `_attn_norm_scale` already establishes) -- read once here so
-        # `composition_ref.py`'s own independent oracle has a calibrated A-3-pinned surface
-        # to land K's post-norm codes onto, symmetric with `k_head{h}.scale` below. `k_scale`
-        # itself stays untouched (K's own RAW, pre-norm landing target, unaffected by this
-        # delta -- still read by `_derive_composition_constants`'s own separate
-        # k_proj.requant site and by a non-QK-norm layer's own `softmax_khead`).
+        # `k_normed_scale`, computed here (this function, `_derive_scales`) via
+        # `_output_scale`'s own floor convention (the identical one `_attn_norm_scale`
+        # already establishes), is stored below as this artifact's own fourth
+        # landing-constant pair, `StaticScales.scale(f"{prefix}.k_normed_head0.scale")` --
+        # a calibrated, A-3-pinned surface `composition_ref.py`'s own independent oracle
+        # reads, symmetric with `k_head{h}.scale` below. T-2564's own M9 fix (this file's
+        # docstring on `_derive_composition_constants`, below) made that function READ this
+        # SAME stored value rather than re-deriving it a second time from the raw
+        # calibration peaks -- it takes no `maxima` parameter of its own any more; the one
+        # derivation of `k_normed_scale` is this one. `k_scale` itself stays untouched (K's
+        # own RAW, pre-norm landing target, unaffected by this delta -- still read by
+        # `_derive_composition_constants`'s own separate k_proj.requant site and by a
+        # non-QK-norm layer's own `softmax_khead`).
         k_normed_scale = None
         softmax_k_scale = k_scale
         if k_norm_present:

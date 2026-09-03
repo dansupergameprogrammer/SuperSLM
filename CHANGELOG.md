@@ -153,8 +153,12 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   **M8** — `k_norm_landing_r_t`/`e_t` were dereferenced with no null guard
   of their own (gated only by the outer `k_norm_gain != nullptr`, unlike the sibling
   `iexp_softmax_khead_m`/`_e` three lines above in the same GPU packing loop); the header
-  comment now states the obligation in both directions, and the GPU marshal site now uses
-  the identical per-element ternary guard its sibling already does. **M9** — `k_normed_scale`
+  comment now states the obligation in both directions, and the GPU marshal site at the
+  time used the identical per-element ternary guard its sibling already did. (Both sites'
+  own ternary substitution was itself later found unsafe and replaced with a named
+  refusal that throws instead of substituting zero: T-2566 for this field, T-2568 for its
+  sibling.) **M9** —
+  `k_normed_scale`
   was derived twice from the same inputs, by `_derive_scales` and by
   `_derive_composition_constants` independently; the latter now reads the former's own
   `StaticScales` entry (`scales.scale(f"{prefix}.k_normed_head0.scale")`) instead of
