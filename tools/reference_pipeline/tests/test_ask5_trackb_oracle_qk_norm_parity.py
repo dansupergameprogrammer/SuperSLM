@@ -418,7 +418,7 @@ def test_vec_forward_layer_outputs_differ_with_and_without_qk_norm():
     scales_with, residual_scales_with, biases_with = pipeline._derive_scales(
         cfg, maxima_with, weight_scales, {})
     composition_with, kv_scales_with, kv_recip_with = pipeline._derive_composition_constants(
-        cfg, weight_scales, scales_with, maxima_with)
+        cfg, weight_scales, scales_with)
     model_with = pipeline.QuantizedModel(
         config=cfg, scales=scales_with, weights=weights, weight_scales=weight_scales,
         residual_scales=residual_scales_with, rope_tables=pipeline._build_rope_tables(cfg),
@@ -444,7 +444,7 @@ def test_vec_forward_layer_outputs_differ_with_and_without_qk_norm():
         cfg, maxima_without, weight_scales_without, {})
     composition_without, kv_scales_without, kv_recip_without = (
         pipeline._derive_composition_constants(
-            cfg, weight_scales_without, scales_without, maxima_without))
+            cfg, weight_scales_without, scales_without))
     model_without = pipeline.QuantizedModel(
         config=cfg, scales=scales_without, weights=weights_without,
         weight_scales=weight_scales_without, residual_scales=residual_scales_without,

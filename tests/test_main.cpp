@@ -17134,6 +17134,199 @@ static void TestT2564_S3_ApplyQkNormSiteSecondKLandingCountsSaturation() {
 	          static_cast<unsigned long long>(saturation_count));
 }
 
+// (T-2566, S1 -- Claude/Poirot/a5834b3-t2565-trackb-confirmation.md): T-2564's own S3 cell,
+// immediately above, calls `ApplyQkNormSite` DIRECTLY with its own local counter -- it pins the
+// SITE's arithmetic (the second K landing itself counts a clamp), never the WIRING (that
+// `RunLayerLoopImpl` and `RunLayerLoopChunkBatched` actually HAND `ApplyQkNormSite` a live
+// counter). Reverting only the two call sites that thread `&seq.kv_saturation_count` /
+// `kv_saturation_count` (`forward_sites.cpp:1828, 2339`) back to the implicit `nullptr` default
+// restores exactly the host-facing under-reporting S3 named, and the cell above stays green
+// regardless, because it never drives either caller. `CriticalOneFixture`'s own
+// `TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter` (above, `:16302`) drives
+// `RunLayerLoop` for real but carries no `q_norm`/`k_norm` gain (its own comment states this),
+// so it cannot reach the new landing either. This fixture goes through the REAL layer loop, on
+// BOTH paths, so the wiring itself -- not just the site -- is what is pinned.
+struct QkNormWiringFixture {
+	superslm::SslmModelView view;
+	superslm::LayerWeights layer{};
+	int64_t kv_landing_r_t_arr[1];
+	int64_t kv_landing_e_t_arr[1] = {0};
+	int32_t ctx_fold_identity_arr[1] = {1};
+	int32_t ctx_fold_mult_arr[1] = {0};
+	int32_t ctx_fold_shift_arr[1] = {0};
+	int32_t norm_gain[2] = {16384, 16384};
+	int8_t identity2x2[4] = {1, 0, 0, 1};
+	int64_t iexp_softmax_khead_m_arr[1] = {INT64_C(1073741824)};
+	int64_t iexp_softmax_khead_e_arr[1] = {-86};
+	// K-norm fields (delta Sec3/Sec4, D-SLM6117): q_norm is left unset (nullptr), matching
+	// TestT2564_S3's own K-only precedent -- Q's branch never touches
+	// `out_saturation_count` (ApplyQkNormSite, forward_sites.cpp), so it is orthogonal to
+	// this cell's own claim.
+	int32_t k_norm_gain[2] = {16384, 16384};
+	int64_t k_norm_landing_r_t_arr[1];
+	int64_t k_norm_landing_e_t_arr[1] = {INT64_C(-20)};
+
+	// Same construction family as `CriticalOneFixture` above (identity weights throughout --
+	// the ORIGINAL K/V landing stays non-saturating, matching that fixture's own
+	// `saturating=false` arm, so any saturation this cell observes is unambiguously the
+	// SECOND, QK-norm landing's own), plus the K-norm gain/site-constant/landing-target this
+	// cell adds.
+	QkNormWiringFixture() {
+		using namespace superslm_test;
+		using superslm::CarriedScale;
+
+		QkNormWiringFixture& f = *this;
+		Cfg1Spec spec{};
+		spec.hidden_size = 2;
+		spec.num_hidden_layers = 1;
+		spec.num_attention_heads = 1;
+		spec.num_key_value_heads = 1;
+		spec.head_dim = 2;
+		spec.intermediate_size = 2;
+		spec.context_cap = 1;
+		spec.kv_precision = 0;
+		spec.kv_block_size = 1;
+		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+		const int64_t cos_flat[1] = {INT64_C(1073741824)};
+		const int64_t sin_flat[1] = {0};
+		FixtureSection rope =
+		    MakeRop1SectionMultiRow(/*context_cap=*/1, /*pairs=*/1, cos_flat, sin_flat);
+		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope});
+		std::string err;
+		const auto status =
+		    superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), f.view, &err);
+		CHECK_MSG(status == superslm::SslmModelStatus::Ok,
+		          "QkNormWiringFixture's own minimal artifact failed to load: got %s (%s)",
+		          superslm::SslmModelStatusName(status), err.c_str());
+
+		const CarriedScale canonical{INT64_C(1073741824), INT64_C(-30)};
+		const int64_t r_t = superslm::DynamicScaleReciprocal(canonical.m);
+		f.kv_landing_r_t_arr[0] = r_t;
+		// A landing target 2^10 FINER than the K-norm's own requant target -- the identical
+		// choice TestT2564_S3 makes above, for the identical reason (forces a clamp on any
+		// nonzero post-norm code; verified by execution below, not assumed --
+		// StandardsDocument.md Sec5.4).
+		const CarriedScale landing_target{INT64_C(1073741824), INT64_C(-20)};
+		f.k_norm_landing_r_t_arr[0] = superslm::DynamicScaleReciprocal(landing_target.m);
+
+		superslm::LayerWeights& lw = f.layer;
+		lw.attn_norm_gain = f.norm_gain;
+		lw.attn_norm_site_constant = canonical;
+		lw.q_weight = f.identity2x2;
+		lw.k_weight = f.identity2x2;
+		lw.v_weight = f.identity2x2;
+		lw.o_weight = f.identity2x2;
+		lw.q_fold_identity = kIdentityFoldArr; lw.q_fold_mult = kZeroFoldArr; lw.q_fold_shift = kZeroFoldArr;
+		lw.k_fold_identity = kIdentityFoldArr; lw.k_fold_mult = kZeroFoldArr; lw.k_fold_shift = kZeroFoldArr;
+		lw.v_fold_identity = kIdentityFoldArr; lw.v_fold_mult = kZeroFoldArr; lw.v_fold_shift = kZeroFoldArr;
+		lw.o_fold_identity = kIdentityFoldArr; lw.o_fold_mult = kZeroFoldArr; lw.o_fold_shift = kZeroFoldArr;
+		lw.gate_fold_identity = kIdentityFoldArr; lw.gate_fold_mult = kZeroFoldArr; lw.gate_fold_shift = kZeroFoldArr;
+		lw.up_fold_identity = kIdentityFoldArr; lw.up_fold_mult = kZeroFoldArr; lw.up_fold_shift = kZeroFoldArr;
+		lw.down_fold_identity = kIdentityFoldArr; lw.down_fold_mult = kZeroFoldArr; lw.down_fold_shift = kZeroFoldArr;
+		lw.q_site_constant = canonical;
+		lw.o_site_constant = canonical;
+		lw.kv_landing_r_t_k = f.kv_landing_r_t_arr;
+		lw.kv_landing_e_t_k = f.kv_landing_e_t_arr;
+		lw.kv_landing_r_t_v = f.kv_landing_r_t_arr;
+		lw.kv_landing_e_t_v = f.kv_landing_e_t_arr;
+		lw.ctx_fold_identity = f.ctx_fold_identity_arr;
+		lw.ctx_fold_mult = f.ctx_fold_mult_arr;
+		lw.ctx_fold_shift = f.ctx_fold_shift_arr;
+		lw.ctx_fold_site_constant = canonical;
+		lw.attn_residual_site_constant = canonical;
+		lw.iexp_softmax_khead_m = f.iexp_softmax_khead_m_arr;
+		lw.iexp_softmax_khead_e = f.iexp_softmax_khead_e_arr;
+		lw.mlp_norm_gain = f.norm_gain;
+		lw.mlp_norm_site_constant = canonical;
+		lw.gate_weight = f.identity2x2;
+		lw.up_weight = f.identity2x2;
+		lw.down_weight = f.identity2x2;
+		lw.gate_site_constant = canonical;
+		lw.up_site_constant = canonical;
+		lw.mlp_act_site_constant = CarriedScale{INT64_C(1073741824), INT64_C(-96)};
+		lw.down_site_constant = canonical;
+		lw.mlp_residual_site_constant = canonical;
+		lw.k_norm_gain = f.k_norm_gain;
+		lw.k_norm_site_constant = canonical;
+		lw.k_norm_landing_r_t = f.k_norm_landing_r_t_arr;
+		lw.k_norm_landing_e_t = f.k_norm_landing_e_t_arr;
+	}
+
+	// Same reason as `CriticalOneFixture`'s own deletions above -- `layer`'s pointer fields
+	// are wired to THIS object's own sibling arrays.
+	QkNormWiringFixture(const QkNormWiringFixture&) = delete;
+	QkNormWiringFixture& operator=(const QkNormWiringFixture&) = delete;
+	QkNormWiringFixture(QkNormWiringFixture&&) = delete;
+	QkNormWiringFixture& operator=(QkNormWiringFixture&&) = delete;
+};
+
+static void TestT2566_S1_RunLayerLoopWiresSaturationCounterThroughBothPaths() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+
+	// --- Path 1: RunLayerLoop (the single-token path; calls RunLayerLoopImpl, which threads
+	// `&seq.kv_saturation_count` into ApplyQkNormSite at forward_sites.cpp:1828). ---
+	{
+		QkNormWiringFixture fixture;
+		int8_t hidden_codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		constexpr size_t kWorkspaceSize = 1 * 1 * 1 * 2 * 2;
+		uint8_t workspace[kWorkspaceSize] = {};
+		const auto result = superslm::RunLayerLoop(
+		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+		    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+		    /*context_cap=*/1, fixture.view.rope_tables, workspace, sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::Ok,
+		          "RunLayerLoop(T-2566 S1, path=RunLayerLoop) status == %s, want Ok",
+		          SslmForwardStatusName(result));
+		if (result == SslmForwardStatus::Ok) {
+			CHECK_MSG(seq.kv_saturation_count > 0,
+			          "seq.kv_saturation_count after RunLayerLoop, K-norm fixture forcing a "
+			          "second-landing clamp, == %llu, want > 0 -- RED if RunLayerLoopImpl's own "
+			          "ApplyQkNormSite call (forward_sites.cpp:1828) is reverted to pass no "
+			          "counter (the pre-S3-fix form), which restores the exact host-facing "
+			          "under-reporting S3 named",
+			          static_cast<unsigned long long>(seq.kv_saturation_count));
+		}
+	}
+
+	// --- Path 2: RunLayerLoopChunkBatched (the prefill path; threads `kv_saturation_count`
+	// into ApplyQkNormSite at forward_sites.cpp:2339). One-token chunk, otherwise identical
+	// construction to Path 1 above, so the two paths are compared on the same fixture. ---
+	{
+		QkNormWiringFixture fixture;
+		int8_t hidden_codes_chunk[2] = {5, -5};
+		CarriedScale hidden_scales[1] = {CarriedScale{INT64_C(1073741824), 0}};
+		constexpr size_t kWorkspaceSize = 1 * 1 * 1 * 2 * 2;
+		uint8_t workspace[kWorkspaceSize] = {};
+		uint64_t saturation_count = 0;
+		const auto result = superslm::RunLayerLoopChunkBatched(
+		    hidden_codes_chunk, hidden_scales, /*chunk_tokens=*/1, &fixture.layer,
+		    /*num_hidden_layers=*/1, /*hidden_size=*/2, /*head_dim=*/2,
+		    /*num_key_value_heads=*/1, /*intermediate_size=*/2, /*context_cap=*/1,
+		    /*context_length_start=*/0, fixture.view.rope_tables, workspace, sizeof(workspace),
+		    /*option_g_fused_k_landing=*/false, &saturation_count);
+		CHECK_MSG(result == SslmForwardStatus::Ok,
+		          "RunLayerLoopChunkBatched(T-2566 S1, path=RunLayerLoopChunkBatched) status == "
+		          "%s, want Ok",
+		          SslmForwardStatusName(result));
+		if (result == SslmForwardStatus::Ok) {
+			CHECK_MSG(saturation_count > 0,
+			          "saturation_count after RunLayerLoopChunkBatched, the SAME K-norm fixture, "
+			          "== %llu, want > 0 -- RED if RunLayerLoopChunkBatched's own ApplyQkNormSite "
+			          "call (forward_sites.cpp:2339) is reverted to pass no counter (the "
+			          "pre-S3-fix form), which restores the exact host-facing under-reporting S3 "
+			          "named",
+			          static_cast<unsigned long long>(saturation_count));
+		}
+	}
+}
+
 // T-1691 (design Sec7 red-first proof part 8; D-SLM725, S11 dimension 1
 // corrected from NOT APPLICABLE): the K/V store's own lifetime cell -- an
 // early write via MutableKeyRow/MutableValueRow survives at least eight
@@ -26591,6 +26784,83 @@ static void TestAdapterIndexSoftwareAdapterRefusedNotSilentlySelected() {
 	          d.init_error.c_str());
 }
 
+// (T-2566, M4 -- Claude/Poirot/a5834b3-t2565-trackb-confirmation.md): M8's own remedy gave
+// the K-norm landing pointer pair (`k_norm_landing_r_t`/`e_t`) two contradictory contracts --
+// `forward_sites.h` states the pair REQUIRED non-null whenever `k_norm_gain` is non-null, and
+// `ApplyQkNormSite` (the CPU site) holds that as an honest, unchecked precondition, but
+// `PackLayerWeightsBytes` (the GPU packer) tolerated a null pair and substituted 0, calling it
+// a "safe no-op." It was not: 0 packs as `LandingRescaleGpu`'s own target reciprocal, landing
+// every K code of that head to 0 on the GPU path silently, and 0 sits outside
+// `ValidateKvLandingReciprocalsDomain`'s own artifact-facing domain (`src/model.cpp`) -- a
+// value the loader would reject on any real artifact. One contract now: the packer refuses a
+// null half of the pair by name, before packing that layer's bytes at all -- before any GPU
+// dispatch this pack could feed. `QkNormWiringFixture` (above, T-2566 S1) already carries a
+// well-formed K-norm contract (k_norm_gain, k_norm_landing_r_t/e_t all non-null); this cell
+// reuses it for the must-accept arm and knocks out one pointer at a time for the two
+// must-reject arms.
+static void TestT2566_M4_PackLayerWeightsBytesRefusesNullKNormLandingPointers() {
+	constexpr uint32_t kHiddenSize = 2, kKvHiddenSize = 2, kNumKvHeads = 1, kNumAttnHeads = 1,
+	                    kIntermediateSize = 2;
+
+	auto try_pack = [](superslm::LayerWeights& lw, bool* out_threw, std::string* out_what) {
+		const superslm_gpu::GpuLayerLayout layout = superslm_gpu::ComputeLayerLayout(
+		    kHiddenSize, kKvHiddenSize, kNumKvHeads, kNumAttnHeads, kIntermediateSize);
+		*out_threw = false;
+		out_what->clear();
+		try {
+			(void)superslm_gpu::PackLayerWeightsBytes(&lw, /*N=*/1, layout, kHiddenSize,
+			                                          kKvHiddenSize, kNumKvHeads, kNumAttnHeads,
+			                                          kIntermediateSize);
+		} catch (const std::exception& e) {
+			*out_threw = true;
+			*out_what = e.what();
+		}
+	};
+
+	// Must-accept: the fixture's own contract is well-formed (S1's own construction).
+	{
+		QkNormWiringFixture fixture;
+		bool threw = false;
+		std::string what;
+		try_pack(fixture.layer, &threw, &what);
+		CHECK_MSG(!threw,
+		          "PackLayerWeightsBytes(well-formed k_norm contract) threw: %s, want no throw",
+		          what.c_str());
+	}
+
+	// Must-reject 1/2: k_norm_gain stays non-null; k_norm_landing_r_t alone is knocked to
+	// nullptr after construction -- the exact asymmetry M4 named.
+	{
+		QkNormWiringFixture fixture;
+		fixture.layer.k_norm_landing_r_t = nullptr;
+		bool threw = false;
+		std::string what;
+		try_pack(fixture.layer, &threw, &what);
+		CHECK_MSG(threw,
+		          "PackLayerWeightsBytes(k_norm_gain set, k_norm_landing_r_t == nullptr) did "
+		          "NOT throw -- RED if the refusal is dropped back to the silent "
+		          "0-substitution M4 found (superslm_gpu.cpp)");
+		if (threw) {
+			CHECK_MSG(what.find("k_norm_landing_r_t") != std::string::npos,
+			          "PackLayerWeightsBytes's own refusal message == \"%s\", want it to name "
+			          "k_norm_landing_r_t/e_t by name, not a generic failure",
+			          what.c_str());
+		}
+	}
+
+	// Must-reject 2/2: the SAME violation on the pair's other half.
+	{
+		QkNormWiringFixture fixture;
+		fixture.layer.k_norm_landing_e_t = nullptr;
+		bool threw = false;
+		std::string what;
+		try_pack(fixture.layer, &threw, &what);
+		CHECK_MSG(threw,
+		          "PackLayerWeightsBytes(k_norm_gain set, k_norm_landing_e_t == nullptr) did "
+		          "NOT throw -- the pair's OTHER half must also be refused, not only the first");
+	}
+}
+
 #endif  // _WIN32
 
 int main(int argc, char** argv) {
@@ -27316,6 +27586,7 @@ int main(int argc, char** argv) {
 	TestT2564_S4_ApplyQkNormSitePerHeadQScaleNotCollapsed();
 	TestT2564_S4_ApplyQkNormSiteKLandsOnNewPostNormScaleNotJustNorm();
 	TestT2564_S3_ApplyQkNormSiteSecondKLandingCountsSaturation();
+	TestT2566_S1_RunLayerLoopWiresSaturationCounterThroughBothPaths();
 	TestKvStoreEarlyWriteSurvivesLateReadAcrossEightFurtherPositions();
 	TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast();
 	TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition();
@@ -27526,6 +27797,8 @@ int main(int argc, char** argv) {
 	TestAdapterIndexNegativeRefusesSilentFallback();
 	TestAdapterIndexTooLongRefusesRatherThanParsingTruncatedValue();
 	TestAdapterIndexSoftwareAdapterRefusedNotSilentlySelected();
+
+	TestT2566_M4_PackLayerWeightsBytesRefusesNullKNormLandingPointers();
 #endif  // _WIN32
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);

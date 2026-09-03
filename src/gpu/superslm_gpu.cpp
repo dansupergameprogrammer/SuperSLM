@@ -953,17 +953,33 @@ std::vector<uint8_t> PackLayerWeightsBytes(const superslm::LayerWeights* layers,
 				PutI64At(lw_bytes, base + layout.off[61] + 8, lw.k_norm_site_constant.e);
 				// (carried-scale delta §4/§7 Cell 8, D-SLM6117/D-SLM6146): K's second, post-norm
 				// landing scale -- present iff k_norm_gain is (asymmetric presence is already a
-				// rejected marshal state, layer_marshal.h). Guarded per-element with the same
-				// ternary fallback `iexp_softmax_khead_m`/`_e` already use above (T-2564, M8):
-				// this branch's own `k_norm_gain != nullptr` gate already makes these two
-				// non-null on every path this function itself constructs, but a caller
-				// constructing `LayerWeights` by hand -- the public contract this header
-				// exports -- gets a safe no-op rather than a null dereference if it doesn't.
+				// rejected marshal state, layer_marshal.h). `forward_sites.h`'s own
+				// `LayerWeights` contract (T-2564, M8) states this pair REQUIRED non-null
+				// whenever `k_norm_gain` is non-null -- the identical obligation the CPU site
+				// (`ApplyQkNormSite`) already holds as an honest, unchecked precondition. This
+				// branch's own `k_norm_gain != nullptr` gate already makes these two non-null on
+				// every path this function itself constructs (`MarshalLayer` is the only
+				// in-tree producer and sets all three together); a caller constructing
+				// `LayerWeights` by hand -- the public contract this header exports -- and
+				// leaving either null has broken that contract. T-2566 (M4,
+				// Claude/Poirot/a5834b3-t2565-trackb-confirmation.md): the prior fix here
+				// substituted 0 and called it a "safe no-op," which is false -- 0 packs as
+				// `LandingRescaleGpu`'s target reciprocal, landing every K code of that head
+				// to 0 on the GPU path silently, and 0 sits outside
+				// `ValidateKvLandingReciprocalsDomain`'s own artifact-facing domain
+				// (`[2^31+1, 2^32]`, `src/model.cpp`) -- a value the loader would reject if it
+				// ever arrived through a real artifact. One contract, not two: refused by name,
+				// before either pointer is read and before any GPU dispatch this pack feeds.
+				if (lw.k_norm_landing_r_t == nullptr || lw.k_norm_landing_e_t == nullptr) {
+					throw std::runtime_error(
+					    "PackLayerWeightsBytes: layer " + std::to_string(l) +
+					    "'s k_norm_gain is non-null but k_norm_landing_r_t/e_t is null -- "
+					    "forward_sites.h's own LayerWeights contract requires this pair "
+					    "non-null whenever k_norm_gain is non-null");
+				}
 				for (uint32_t i = 0; i < NH; ++i) {
-					PutI64At(lw_bytes, base + layout.off[62] + i * 8,
-					         lw.k_norm_landing_r_t != nullptr ? lw.k_norm_landing_r_t[i] : 0);
-					PutI64At(lw_bytes, base + layout.off[63] + i * 8,
-					         lw.k_norm_landing_e_t != nullptr ? lw.k_norm_landing_e_t[i] : 0);
+					PutI64At(lw_bytes, base + layout.off[62] + i * 8, lw.k_norm_landing_r_t[i]);
+					PutI64At(lw_bytes, base + layout.off[63] + i * 8, lw.k_norm_landing_e_t[i]);
 				}
 			}
 		}

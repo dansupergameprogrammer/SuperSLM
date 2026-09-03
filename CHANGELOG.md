@@ -140,12 +140,16 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   **manual gate**, never a per-push hosted leg (D-SLM6161): documented in
   `tests/manual/README.md`, run at every pin bump and before every release tag. **S5** —
   the CHANGELOG text above claimed all five S8 constants were re-measured; the two
-  retirements were not. Re-measured here: the ±2^52 coarse-bound rung (the reviewer's own
-  re-execution, magnitudes 48–59, holds — the chain-domain edge catches first at 2^55,
-  `oracle_50[0][0] == -2350` holds) and the §31.4.4 row 5 property, whose own inputs
-  (`_kv_calibration_capture`, `_layer_q_scale`, `_armd_arme_candidate_sweep`) are untouched
-  by both this round's diff and T-2560's — "unchanged by inspection," confirmed by
-  re-running `test_arm_d_saturation_is_reported_and_does_not_gate_selection`, still green.
+  retirements were not, and neither is re-measured here either — both are disposed by
+  reading and by inspection, not by a fresh execution of the retired property itself. The
+  ±2^52 coarse-bound rung is re-confirmed by reading the same construction (the
+  magnitudes-48–59 execution is the prior reviewer's own, not re-run a second time here —
+  the chain-domain edge catches first at 2^55, `oracle_50[0][0] == -2350` holds by that
+  reading). The §31.4.4 row 5 property's own inputs (`_kv_calibration_capture`,
+  `_layer_q_scale`, `_armd_arme_candidate_sweep`) are untouched by both this round's diff
+  and T-2560's — unchanged by inspection, confirmed by a green run of
+  `test_arm_d_saturation_is_reported_and_does_not_gate_selection`, which asserts the
+  property that SURVIVED the retirement, not the retired one itself.
   **M8** — `k_norm_landing_r_t`/`e_t` were dereferenced with no null guard
   of their own (gated only by the outer `k_norm_gain != nullptr`, unlike the sibling
   `iexp_softmax_khead_m`/`_e` three lines above in the same GPU packing loop); the header

@@ -1081,7 +1081,7 @@ def fixture_model(cfg: ModelConfig) -> QuantizedModel:
                         lambda record: tokenize_prompt(run_prompt_messages(record)))
     scales, residual_scales, biases = _derive_scales(cfg, maxima, weight_scales, {})
     composition_constants, kv_landing_scales, kv_landing_reciprocals = _derive_composition_constants(
-        cfg, weight_scales, scales, maxima)
+        cfg, weight_scales, scales)
     return QuantizedModel(config=cfg, scales=scales, weights=weights,
                           weight_scales=weight_scales, residual_scales=residual_scales,
                           rope_tables=_build_rope_tables(cfg), biases=biases,
@@ -1731,7 +1731,7 @@ def load_model(checkpoint, extra_tensors=None, require_tensors=(),
                         lambda record: tokenize_prompt(run_prompt_messages(record)))
     scales, residual_scales, biases = _derive_scales(cfg, maxima, weight_scales, float_biases)
     composition_constants, kv_landing_scales, kv_landing_reciprocals = _derive_composition_constants(
-        cfg, weight_scales, scales, maxima)
+        cfg, weight_scales, scales)
     # C28: when the checkpoint carries projection biases (Qwen2.5 biases q/k/v), the
     # converter emits the dynamic-arm storage too — B[j] at the projection's fold
     # reference S_ref = max_j S_w[j], q_B = 30, half-even (the same emission path
@@ -2254,7 +2254,7 @@ def _reference_fold(channel_scales):
     return folds, s_ref
 
 
-def _derive_composition_constants(cfg: ModelConfig, weight_scales, scales: StaticScales, maxima):
+def _derive_composition_constants(cfg: ModelConfig, weight_scales, scales: StaticScales):
     """The §6.8 C23-C30 offline surface: `composition_constants[site] -> (m, e)` (each
     site's own folded static factor, C26's offline rule, `1/127` included);
     `kv_landing_scales[f"layer{L}.{k|v}_head{h}"] -> (m, e)` (C27's static per-head K/V
@@ -2271,15 +2271,14 @@ def _derive_composition_constants(cfg: ModelConfig, weight_scales, scales: Stati
     on this artifact (every head already at `max_head S_v`) — sound, but degenerate; a
     real per-head calibration would exercise the fold's non-identity branch.
 
-    (carried-scale delta §4, D-SLM6117/D-SLM6119): `maxima` is the raw calibration peaks
-    (`_calibrate`'s own output) -- needed here, beside `scales` (`StaticScales`, the already-
-    reduced `_derive_scales` output), because the fourth per-KV-head landing pair this function
-    now also computes (`k_normed_head{h}`, below) reads a maxima key (`f"{prefix}.k_normed"`)
-    `_derive_scales` never turns into a `StaticScales` site: it is not a projection (no weight
-    scale, no `_derive_scales`-managed `RequantSite`), and it is not a plain rescale site either
-    (its target is a per-head `LandingRescale` reciprocal, not a `RequantChainChecked` multiplier)
-    -- so it is derived directly from the maxima peak here, the same place its raw-K sibling
-    (`kv_landing`/`kv_reciprocals`, below) is already derived.
+    (carried-scale delta §4, D-SLM6117/D-SLM6119; M9, T-2564,
+    Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md): the fourth per-KV-head landing
+    pair this function also computes (`k_normed_head{h}`, below) reads its own scale from
+    `scales` — `StaticScales.scale(f"{prefix}.k_normed_head0.scale")`, the value
+    `_derive_scales` already stores there — rather than deriving it a second time from the
+    raw calibration peaks. `_derive_scales` DOES turn `k_normed` into a `StaticScales`
+    site (its `nonlinear` entry for that same key); this function therefore takes no
+    `maxima` parameter of its own.
     """
     def gain_of(name):
         return weight_scales[name][0]
@@ -2743,7 +2742,7 @@ def calibrate_kv_landing_arm(cfg: ModelConfig, float_weight, records, tokenize, 
         maxima = _calibrate(cfg, float_weight, records, record_tokenize)
         scales, _residual_scales, _bias_codes = _derive_scales(cfg, maxima, weight_scales, {})
         composition_constants, layer_kv_landing, layer_kv_reciprocals = \
-            _derive_composition_constants(cfg, weight_scales, scales, maxima)
+            _derive_composition_constants(cfg, weight_scales, scales)
         kv_landing = {k: v for k, v in layer_kv_landing.items() if ".k_head" in k}
         kv_reciprocals = {k: v for k, v in layer_kv_reciprocals.items() if ".k_head" in k}
         softmax_khead = {k: v for k, v in composition_constants.items() if ".softmax_khead" in k}
