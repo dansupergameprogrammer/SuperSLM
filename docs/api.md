@@ -1,7 +1,8 @@
 # API surfaces
 
-SuperSLM ships two public C APIs, at different points on its own build
-timeline. Both follow the same status-code philosophy: a fallible call
+SuperSLM ships two public APIs: the D3D12 GPU surface has ordinary C++ linkage,
+while the CPU embedding surface is an `extern "C"` ABI. Both follow the same
+status-code philosophy: a fallible call
 returns a status enum with one distinct value per real failure cause, never
 a single generic "failed" code, so a caller can tell "your input was
 malformed" apart from "the object is in the wrong lifecycle state" apart
@@ -99,7 +100,10 @@ supported use.
 
 ### Status causes
 
-`SslmGpuStatus` distinguishes: a dispatch budget too small to make
+`SslmGpuStatus` is a scoped C++ enum. Its values are written as
+`SslmGpuStatus::SSLM_OK`, `SslmGpuStatus::SSLM_BUSY`, and so on; this keeps the
+GPU header safe to include with the CPU C ABI header in either order. It distinguishes:
+a dispatch budget too small to make
 progress; the device busy with in-flight work on the handle you're
 releasing, or with any unfenced in-flight work elsewhere in the process
 when you're restoring; a context or model with handles
@@ -116,7 +120,10 @@ rejected on structural grounds unrelated to device health (so a healthy
 device serving other sequences in the same batch is distinguishable from
 a real device loss); a restore whose blob doesn't match the model it's
 being restored against; and `SSLM_GPU_SHADER_BINARY_STALE`, which means a
-deployed `.cso` predates one of its HLSL inputs. The last cause requires a
+deployed `.cso` predates one of its HLSL inputs; and
+`SslmGpuStatus::SSLM_GPU_ALLOCATION_FAILED`, which reports allocation failure
+without allowing a C++ exception to cross the public `noexcept` boundary. A stale
+shader requires a
 matching shader rebuild/redeployment; the model, sequence, and device are
 not condemned by it.
 

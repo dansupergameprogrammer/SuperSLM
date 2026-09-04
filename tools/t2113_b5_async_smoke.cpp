@@ -44,6 +44,7 @@
 
 #include "superslm/forward_sites.h"
 #include "superslm/gpu_1p0.h"
+using enum SslmGpuStatus;
 #include "superslm/gpu_port.h"
 #include "superslm/layer_marshal.h"
 #include "superslm/model.h"

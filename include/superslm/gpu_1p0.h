@@ -5,17 +5,19 @@
 // restoring, and releasing per-sequence decode state; and running batched decode steps on the
 // GPU.
 //
-// Every fallible call returns an SslmGpuStatus; every value it produces (a handle, a ready
+// Every fallible call returns the scoped SslmGpuStatus enum and is noexcept; every value it
+// produces (a handle, a ready
 // flag, a decoded status, a batch's per-sequence outcome) is delivered through an out-parameter,
 // never through the return value. Every function below is declared at global scope with
 // ordinary C++ linkage -- not extern "C", not inside a namespace -- and a caller linking
 // against this header's implementation must match that scope exactly.
 //
 // A per-sequence decode-time rejection (an out-of-domain input, a guard check failing on that
-// sequence's own step) is reported as SSLM_SEQUENCE_REJECTED, kept distinct from
-// SSLM_DEVICE_LOST: the device stays healthy and no other sequence in the same batch call is
+// sequence's own step) is reported as SslmGpuStatus::SSLM_SEQUENCE_REJECTED, kept distinct from
+// SslmGpuStatus::SSLM_DEVICE_LOST: the device stays healthy and no other sequence in the same batch call is
 // affected. sslm_gpu_seq_restore additionally rejects a restore blob whose recorded
-// model-content hash does not match the target model handle (SSLM_RESTORE_MODEL_MISMATCH), so
+// model-content hash does not match the target model handle
+// (SslmGpuStatus::SSLM_RESTORE_MODEL_MISMATCH), so
 // a sequence saved from one model cannot be silently replayed against a different one.
 
 #include <stdint.h>
@@ -50,14 +52,10 @@ typedef struct GpuResidencyConfig {
 } GpuResidencyConfig;
 
 /* --- status enum ---
- * Global-scope C-style enum, matching the suite's own copy exactly (SSLM_-prefixed
- * enumerators, kept here rather than
- * "corrected" to the substrate's bare-enumerator convention, because this enum's
- * whole reason to exist at global scope is link-compatibility with the suite; the
- * substrate's OWN namespaced `superslm_gpu::SslmGpuStatus` (gpu_port.h:472) is a
- * separate C++ type that this design's Sec9 conceptually extends but cannot literally
- * share across the namespace boundary the suite's header itself introduced). */
-typedef enum SslmGpuStatus {
+ * Scoped deliberately: the CPU C ABI also has SSLM_-prefixed status constants, and both
+ * installed public headers must be includable in either order. Existing ordinal spellings
+ * remain members of this type; qualify them as SslmGpuStatus::SSLM_OK, etc. */
+enum class SslmGpuStatus : uint32_t {
     SSLM_OK = 0,
     SSLM_DISPATCH_BUDGET_TOO_SMALL,      /* substrate, gpu_port.h:472           */
     SSLM_BUSY,                           /* design Sec9                         */
@@ -150,17 +148,19 @@ typedef enum SslmGpuStatus {
      * one of its HLSL inputs. The model, sequence, and device remain valid, but retrying the
      * same deployment cannot succeed; rebuild/redeploy the matching shader set first.
      * Appended LAST so every existing public GPU status keeps its ordinal. */
-    SSLM_GPU_SHADER_BINARY_STALE
-} SslmGpuStatus;
+    SSLM_GPU_SHADER_BINARY_STALE,
+    /* An allocation failed before work was submitted. The device/context remain valid. */
+    SSLM_GPU_ALLOCATION_FAILED
+};
 
 /* --- Sec4.1.1: context create/destroy. DEFINED as of B1 (src/gpu/gpu_1p0.cpp). --- */
-SslmGpuStatus sslm_gpu_context_create(GpuContextConfig cfg, SslmGpuContext** out_ctx);
-SslmGpuStatus sslm_gpu_context_destroy(SslmGpuContext* ctx);
+SslmGpuStatus sslm_gpu_context_create(GpuContextConfig cfg, SslmGpuContext** out_ctx) noexcept;
+SslmGpuStatus sslm_gpu_context_destroy(SslmGpuContext* ctx) noexcept;
 
 /* --- Sec5.1: model map/unmap. Declared for B2. --- */
 SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
-                                  GpuResidencyConfig cfg, SslmGpuModelHandle** out_model);
-SslmGpuStatus sslm_gpu_model_unmap(SslmGpuContext* ctx, SslmGpuModelHandle* model);
+                                  GpuResidencyConfig cfg, SslmGpuModelHandle** out_model) noexcept;
+SslmGpuStatus sslm_gpu_model_unmap(SslmGpuContext* ctx, SslmGpuModelHandle* model) noexcept;
 
 /* --- Sec5.2: adapter map/unmap. Declared for B6.
  * `sslm_gpu_adapter_map`: on a base-hash mismatch against `model`, returns AdapterBaseHashMismatch,
@@ -180,13 +180,13 @@ SslmGpuStatus sslm_gpu_model_unmap(SslmGpuContext* ctx, SslmGpuModelHandle* mode
  * preconditions above (matches sslm_gpu_model_unmap(ctx, nullptr)'s own precedent). --- */
 SslmGpuStatus sslm_gpu_adapter_map(SslmGpuContext* ctx, SslmGpuModelHandle* model,
                                     const SslmModelView* adapter_artifact,
-                                    SslmGpuAdapterHandle** out_adapter);
-SslmGpuStatus sslm_gpu_adapter_unmap(SslmGpuContext* ctx, SslmGpuAdapterHandle* adapter);
+                                    SslmGpuAdapterHandle** out_adapter) noexcept;
+SslmGpuStatus sslm_gpu_adapter_unmap(SslmGpuContext* ctx, SslmGpuAdapterHandle* adapter) noexcept;
 
 /* --- Sec5.3: sequence create/release. Declared for B3. --- */
 SslmGpuStatus sslm_gpu_seq_create(SslmGpuContext* ctx, SslmGpuModelHandle* model,
-                                   int64_t context_cap, SslmGpuSequenceHandle** out_seq);
-SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq);
+                                   int64_t context_cap, SslmGpuSequenceHandle** out_seq) noexcept;
+SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) noexcept;
 
 /* --- T-2243 (S2, D-SLM3954/D-SLM3996, plan Sec6.1): bind a LoRA adapter to a sequence handle,
  * across calls -- distinct from the existing per-call `adapter_or_null` argument every decode
@@ -207,7 +207,7 @@ SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
  * handle's own binding is always null; a caller that wants one re-binds explicitly after
  * restore. --- */
 SslmGpuStatus sslm_gpu_seq_bind_adapter(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
-                                         const SslmGpuAdapterHandle* adapter_or_null);
+                                         const SslmGpuAdapterHandle* adapter_or_null) noexcept;
 
 /* --- Sec5.3a: the production token-feed entry point. Host-only -- no dispatch, no
  * state transition to Submitted. DEFINED as of B3.5 (src/gpu/gpu_1p0.cpp), added at the
@@ -217,7 +217,7 @@ SslmGpuStatus sslm_gpu_seq_bind_adapter(SslmGpuContext* ctx, SslmGpuSequenceHand
  * On a hostile token_id (outside [0, vocab_size)): returns TokenIdOutOfRange, seq's own
  * state left untouched. */
 SslmGpuStatus sslm_gpu_seq_embed_token(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
-                                        int32_t token_id);
+                                        int32_t token_id) noexcept;
 
 /* --- Sec4.2: save/restore/reset. Declared for B3/B5.
  * `sslm_gpu_seq_save` writes a v4 blob ('SLM4'), carrying `model`'s own content hash (design
@@ -228,11 +228,11 @@ SslmGpuStatus sslm_gpu_seq_embed_token(SslmGpuContext* ctx, SslmGpuSequenceHandl
  * SSLM_RESTORE_MODEL_MISMATCH, distinct from the generic malformed-blob disposition (Sec22).
  * --- */
 SslmGpuStatus sslm_gpu_seq_save(SslmGpuContext* ctx, const SslmGpuSequenceHandle* seq,
-                                 void* out_blob, size_t* out_blob_size);
+                                 void* out_blob, size_t* out_blob_size) noexcept;
 SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* model,
                                     const void* blob, size_t blob_size,
-                                    SslmGpuSequenceHandle** out_seq);
-SslmGpuStatus sslm_gpu_seq_reset(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq);
+                                    SslmGpuSequenceHandle** out_seq) noexcept;
+SslmGpuStatus sslm_gpu_seq_reset(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) noexcept;
 
 /* --- Sec4.3: the two decode calls. Declared for B5/B7.
  * Thread-safety (design Sec5.4): safe to call concurrently from different threads
@@ -247,7 +247,7 @@ SslmGpuStatus sslm_decode_step_gpu(
     SslmGpuContext* ctx,
     SslmGpuSequenceHandle* seq,
     const SslmGpuAdapterHandle* adapter_or_null,   /* per-sequence, Sec8 */
-    uint32_t dispatch_budget);
+    uint32_t dispatch_budget) noexcept;
 
 SslmGpuStatus sslm_decode_step_batch_gpu(
     SslmGpuContext* ctx,
@@ -255,14 +255,14 @@ SslmGpuStatus sslm_decode_step_batch_gpu(
     const SslmGpuAdapterHandle* const* adapters_or_null,  /* parallel array, per-sequence, Sec8 */
     uint32_t n_sequences,
     uint32_t dispatch_budget,          /* BATCH-WIDE -- design Sec7 */
-    SslmGpuStatus* out_statuses);       /* [n_sequences] -- design Sec7 */
+    SslmGpuStatus* out_statuses) noexcept;       /* [n_sequences] -- design Sec7 */
 
 /* --- Sec4.2: sslm_gpu_ready. Declared for B5. --- */
 SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx,
                               SslmGpuSequenceHandle* seq,
                               int32_t block,
                               int32_t* out_ready,
-                              SslmGpuStatus* out_status);
+                              SslmGpuStatus* out_status) noexcept;
 
 /* ============================================================================
  * G5: schema-constrained GPU decoding -- PROMOTED to this shipped surface (design Sec14.2).
@@ -302,7 +302,7 @@ int32_t SslmGpuSchemaLookupForG5Bridge(SslmGpuModelHandle* model, const char* na
  * SSLM_SEQUENCE_KV_BUFFER_MISMATCH, the existing "malformed handle" bucket every 1.0 entry point
  * already uses. */
 SslmGpuStatus SslmGpuSeqSetSchemaForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
-                                              int32_t schema_index);
+                                              int32_t schema_index) noexcept;
 
 /* Reads `seq`'s own current DFA-walk-state -- kSslmGpuDfaWalkStateUnused if no schema is bound. */
 uint32_t SslmGpuSeqWalkStateForG5Bridge(SslmGpuSequenceHandle* seq);
@@ -332,7 +332,7 @@ uint32_t SslmGpuSeqWalkStateForG5Bridge(SslmGpuSequenceHandle* seq);
  * terminal for the context regardless of cause. */
 SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                   const int32_t* tokens, int32_t count,
-                                                  uint32_t dispatch_budget);
+                                                  uint32_t dispatch_budget) noexcept;
 
 /* Finishes a token once `seq`'s own layer loop has reached full depth (caller-ensures: drained
  * via `sslm_gpu_ready` to Idle, `seq`'s own layer_index == model->num_hidden_layers) -- runs
@@ -344,7 +344,7 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSeq
  * produced token id and `seq`'s own layer_index resets to 0. Returns SSLM_SEQUENCE_REJECTED if
  * the precondition (full depth reached) does not hold. */
 SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
-                                                int32_t* out_token);
+                                                int32_t* out_token) noexcept;
 
 /* THE RECOMMENDED one-call-per-decode-step entry point -- the GPU-1.0 twin of
  * `sslm_decode_step`'s own composition (embed-if-needed, layer-loop-to-depth, finish), including
@@ -358,7 +358,7 @@ SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx, SslmGpuSeque
  * bug an earlier build round found and fixed, by construction. */
 SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                int32_t token_to_embed_if_needed,
-                                               uint32_t dispatch_budget, int32_t* out_token);
+                                               uint32_t dispatch_budget, int32_t* out_token) noexcept;
 
 /* Jump-forward's own GPU twin. Drives `count` FORCED tokens (already known -- never chosen, no
  * masking/argmax involved, exactly `PrefillWholeTokensImpl`'s own SSLM_SPAN_SCHEMA_CONTENT
@@ -395,6 +395,6 @@ SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(SslmGpuContext* ctx,
                                                           SslmGpuSequenceHandle* seq,
                                                           const int32_t* tokens, int32_t count,
                                                           uint32_t dispatch_budget_per_token,
-                                                          int32_t* consumed);
+                                                          int32_t* consumed) noexcept;
 
 #endif /* SSLM_GPU_1P0_H */

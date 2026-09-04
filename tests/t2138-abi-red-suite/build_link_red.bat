@@ -61,7 +61,7 @@ for %%f in (dim1_lifetime_red.cpp dim2_hostile_red.cpp dim3_concurrency_red.cpp 
     rem pre-implementation RED BY LINK state, indistinguishable from a real link-list defect.
     rem Fixed: the four damped_greedy_*.cpp translation units appended, matching
     rem build_green_phaseD.bat's own source list exactly.
-    cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /I%ENG%\include /I. ^
+    cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /I%ENG%\include /I%ENG%\tests /I. ^
         %ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp ^
         %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp ^
         %ENG%\src\trace_hook.cpp %ENG%\src\forward\checked_chain_funnel.cpp ^

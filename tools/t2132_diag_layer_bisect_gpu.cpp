@@ -10,6 +10,7 @@
 // behavioral risk; the only addition is a snapshot capture point inside the bisected step's own
 // per-layer loop, never a change to the driving algorithm itself.
 #include "superslm/gpu_1p0.h"
+using enum SslmGpuStatus;
 #include "superslm/gpu_1p0_bench_bridge.h"  // SslmGpuSeqHandle{LayerIndex,HiddenCodes,HiddenScale,HiddenSize}ForBench
 #include "superslm/gpu_1p0_g5_bridge.h"
 #include "superslm/gpu_port.h"  // superslm_gpu::kDispatchesPerLayer

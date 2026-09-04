@@ -1885,6 +1885,10 @@ extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
 	std::memset(seq->kv_block, 0, seq->block_size);
 	seq->state.context_length = 0;
 	seq->state.kv_saturation_count = 0;
+	seq->state.kv_landing_saturation_count = 0;
+	seq->state.k_normed_landing_saturation_count = 0;
+	seq->state.rope_q_saturation_count = 0;
+	seq->state.rope_k_saturation_count = 0;
 	seq->state.layer_index = 0;
 	seq->state.hidden_scale = superslm::CarriedScale{};
 	std::fill(seq->hidden_codes_storage.begin(), seq->hidden_codes_storage.end(), int8_t{0});
@@ -1908,6 +1912,14 @@ extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
 	ClearDampedGreedyState(seq);
 	return SSLM_OK;
 }
+
+#if defined(SUPERSLM_ENABLE_BAD_ALLOC_INJECTION)
+// Test-only state accessor. The production ABI keeps sslm_seq opaque; the injected test build
+// uses this seam to seed otherwise data-dependent counters before exercising the real reset.
+extern "C" superslm::SequenceLayerState* SslmSeqLiveStateForTest(sslm_seq seq) {
+	return seq ? &seq->state : nullptr;
+}
+#endif
 
 // RULED, copy-on-adopt (design Sec7.2, design commit fab235c1c6): an eager, whole-block copy of
 // the frozen prefix's own occupied bytes into the adopting sequence's own already-drawn block,

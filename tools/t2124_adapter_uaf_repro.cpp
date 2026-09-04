@@ -42,6 +42,7 @@
 
 #include "superslm/artifact.h"
 #include "superslm/gpu_1p0.h"
+using enum SslmGpuStatus;
 #include "superslm/model.h"
 
 static bool LoadRealModel(const std::string& path, superslm::SslmModelView* out_view,

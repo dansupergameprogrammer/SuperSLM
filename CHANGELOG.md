@@ -4,6 +4,26 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+No user-visible changes yet.
+
+## [1.4.0] - 2026-09-03
+
+SuperSLM 1.4.0 adds end-to-end Qwen3/QK-norm support to conversion, calibration,
+the CPU engine, and the D3D12 GPU path. Legacy GPU models retain their existing
+24-dispatch-per-layer budget contract; models carrying QK norm use 25. The GPU
+status type is now a scoped C++ enum, public status-returning GPU calls are
+`noexcept`, installed CMake targets propagate C++20, and the installed GPU
+package exports `superslm_deploy_gpu_shaders()` for runtime deployment.
+
+QK-norm artifacts made by pre-final 1.4 development trees are not compatible
+with the final carried-scale/reciprocal contract and must be reconverted. Released
+1.3.1 artifacts are unaffected. GPU callers migrate unqualified status constants
+such as `SSLM_OK` to `SslmGpuStatus::SSLM_OK`; the CPU C ABI status names do not
+change. See [docs/releases/1.4.0.md](docs/releases/1.4.0.md) for the consumer-facing
+release and migration guide.
+
+### Detailed engineering record
+
 Ask 5's Qwen3-architecture support (`SuperSLM_Plan.md` §22.5) is complete in this tree and
 **1.4.0 claims the Qwen3-architecture pin**: the converter (Track C), the tokenizer converter
 (Track E) and the forward call site with its carried-scale contract (Track B, T-2551 through
@@ -115,23 +135,17 @@ QK-norm artifacts converted by a pre-1.4.0 tree** — see the format note under 
   (`q_norm_present`/`q_norm_gain`/`q_norm_site_constant`/`k_norm_present`/
   `k_norm_gain`/`k_norm_site_constant`), serialized into the `Layout` GPU buffer strictly
   AFTER the existing stride slot -- every pre-existing shader's own hardcoded
-  `Layout.Load<uint>(56*4)` stride read is unaffected. Issued unconditionally per layer
-  (the shader's own per-layer presence flag makes it a near-empty dispatch for a layer or
-  a whole model with neither tensor); `kDispatchesPerLayer` (`gpu_port.h`) moves 24 -> 25
-  accordingly, and every dependent cell in the C++ suite and this tree's own structural
-  citation files (`gpu_layer_loop_guards.def`, `test_geometry_site_census.py`'s own
-  self-test) is re-derived against the real, current source rather than offset by hand.
+  `Layout.Load<uint>(56*4)` stride read is unaffected. The pipeline is loaded and the
+  dispatch issued only for a model carrying QK norm. Legacy models therefore retain the
+  existing 24 dispatches per layer; QK-norm models use 25. The fixed scratch binding layout
+  reserves QK staging regions for both shapes so ADAPTER_U and every subsequent binding keep
+  one offset contract, but legacy models pay no per-layer QK submission or shader execution.
 
-  **Consumer-visible consequence.** `qk_norm_site` is issued unconditionally, so this moves
-  `PlanDispatchBudgetGpu`'s own per-layer divisor for EVERY model, not only QK-norm-bearing
-  ones (`superslm_gpu.cpp`'s own body reads the one `kDispatchesPerLayer` constant with no
-  branch on model architecture). A `dispatch_budget` of 24 -- exactly one layer's worth
-  before this change -- now floor-divides to zero layers and returns
-  `SslmGpuStatus::DispatchBudgetTooSmall` where it previously returned `Ok` with one layer
-  issued; 25 is now the minimum budget that admits any progress at all. Any caller that
-  pinned `24` (or any multiple of it) as its own per-layer/per-token dispatch budget must
-  move to `25` (or read `superslm_gpu::kDispatchesPerLayer` directly) or it will silently
-  stop making progress on this release.
+  **Consumer-visible consequence.** `PlanDispatchBudgetGpu` and batch budget spending are
+  model-aware. A legacy `dispatch_budget` of 24 continues to advance exactly one layer;
+  QK-norm models require 25. Callers that already derive budgets from the model need no
+  migration. Callers introducing QK-norm models must use 25 dispatches per layer for those
+  models rather than assuming the legacy constant.
 
   **Breaking (1.4.0, ruled D-SLM6200):** the carried-scale contract (T-2560/T-2564, above)
   adds a fourth `kv_landing_reciprocals` key per QK-norm layer (`k_normed_head{h}`),

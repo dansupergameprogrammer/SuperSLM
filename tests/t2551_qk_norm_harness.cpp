@@ -309,6 +309,16 @@ int main(int argc, char** argv) {
 	            SslmForwardStatusName(gpu_status), gpu_seq.layer_index);
 
 	bool all_match = true;
+	const size_t expected_dispatches =
+	    static_cast<size_t>(superslm_gpu::DispatchesPerLayer(layers_with_qk_norm > 0)) *
+	    num_hidden_layers;
+	const size_t observed_dispatches = superslm_gpu::LastCallPerDispatchTimingsMs().size();
+	if (observed_dispatches != expected_dispatches) {
+		std::printf("DIVERGENCE: dispatch count: observed=%zu expected=%zu (%s model)\n",
+		            observed_dispatches, expected_dispatches,
+		            layers_with_qk_norm > 0 ? "QK-norm" : "legacy non-QK-norm");
+		all_match = false;
+	}
 	if (cpu_status != gpu_status) {
 		std::printf("DIVERGENCE: status: CPU=%s GPU=%s\n", SslmForwardStatusName(cpu_status),
 		            SslmForwardStatusName(gpu_status));

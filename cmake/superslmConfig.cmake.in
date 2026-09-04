@@ -13,11 +13,11 @@ include("${CMAKE_CURRENT_LIST_DIR}/superslmTargets.cmake")
 # dispatch, where a missing-file exception is caught and converted into a
 # generic status with no indication a file was ever missing. CMake installs
 # the library but has no way to know where a consumer's own executable will
-# end up, so it cannot place the 33 compiled .cso shaders "next to" anything
+# end up, so it cannot place the compiled .cso shaders "next to" anything
 # itself the way build.bat places them next to out\superslm_tests.exe.
-# superslm_GPU_SHADER_DIR names the absolute, installed location instead: a
-# consumer of superslm::superslm_gpu copies this directory's contents next to
-# its own binary's own output directory (matching superslm_gpu::harness::
+# superslm_GPU_SHADER_DIR names the absolute, installed location. The helper
+# below performs the required deployment beside a consumer executable (matching
+# superslm_gpu::harness::
 # ShaderPath()'s "<exe_dir>/shaders/<name>.cso" runtime lookup,
 # src/gpu/superslm_gpu.cpp) before its first GPU dispatch. Only set when the
 # GPU target was actually built and installed as part of this package --
@@ -25,6 +25,18 @@ include("${CMAKE_CURRENT_LIST_DIR}/superslmTargets.cmake")
 # fail hard on a path nothing installed anything into.
 if(TARGET superslm::superslm_gpu)
 	set_and_check(superslm_GPU_SHADER_DIR "@PACKAGE_SUPERSLM_INSTALL_GPU_SHADER_DIR@")
+
+	function(superslm_deploy_gpu_shaders target)
+		if(NOT TARGET "${target}")
+			message(FATAL_ERROR "superslm_deploy_gpu_shaders: '${target}' is not a CMake target")
+		endif()
+		add_custom_command(TARGET "${target}" POST_BUILD
+			COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:${target}>/shaders"
+			COMMAND "${CMAKE_COMMAND}" -E copy_directory
+				"${superslm_GPU_SHADER_DIR}" "$<TARGET_FILE_DIR:${target}>/shaders"
+			COMMENT "Deploying SuperSLM GPU shaders for ${target}"
+			VERBATIM)
+	endfunction()
 endif()
 
 check_required_components(superslm)

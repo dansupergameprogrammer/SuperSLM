@@ -1527,7 +1527,8 @@ void RecordOneTokenFullDepthDispatchBody(
     uint32_t NH, uint32_t NQH, uint32_t I, uint32_t N, uint32_t context_cap_u32,
     uint32_t position_u32, uint32_t width_u32, const GpuScratchLayout& scratch_layout,
     uint64_t work_wide_a_off, uint64_t work_wide_b_off, uint64_t work_adapter_u_off,
-    const GpuAdapterBridge* adapter_bridge, uint32_t& dispatch_query_index) {
+    const GpuAdapterBridge* adapter_bridge, bool has_qk_norm,
+    uint32_t& dispatch_query_index) {
 	// T-2432 (Track A step 9): q_width = num_attention_heads * head_dim -- NQH is already
 	// correct by the time this function runs (Track A step 8 fixes its own derivation, at this
 	// function's own caller). Declared before the dispatch lambdas below so their `[&]` capture
@@ -1537,7 +1538,8 @@ void RecordOneTokenFullDepthDispatchBody(
 	auto& q_proj_pipe = harness::GetOrBuildComposedPipeline("q_proj_site");
 	auto& kv_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("kv_proj_gemm_site");
 	auto& kv_proj_pipe = harness::GetOrBuildComposedPipeline("kv_proj_site");
-	auto& qk_norm_pipe = harness::GetOrBuildComposedPipeline("qk_norm_site");
+	harness::CachedPipeline* qk_norm_pipe =
+	    has_qk_norm ? &harness::GetOrBuildComposedPipeline("qk_norm_site") : nullptr;
 	auto& rope_pipe = harness::GetOrBuildComposedPipeline("rope_guard_site");
 	auto& rope_commit_pipe = harness::GetOrBuildComposedPipeline("rope_commit_site");
 	auto& attention_score_pipe = harness::GetOrBuildComposedPipeline("attention_score_site");
@@ -1678,12 +1680,13 @@ void RecordOneTokenFullDepthDispatchBody(
 		// (kv_proj_pipe, above) and strictly before RoPE (rope_pipe, below), matching §3's own
 		// ordering resolution and the CPU forward's own call-site placement
 		// (forward_sites.cpp's ApplyQkNormSite call sites). ONE Dispatch call, NQH+NH thread
-		// groups (Q heads then K heads, SV_GroupID.x selects which) -- issued unconditionally
-		// per layer; qk_norm_site.hlsl's own per-layer q_norm_present/k_norm_present gate
-		// (Layout indices 57/60) makes every group a near-immediate no-op for a layer (or a
-		// whole model) that carries neither tensor, matching every existing artifact's forward
-		// OUTPUT byte-for-byte (§4's own promise -- dispatch count is not part of that promise).
-		bind_and_dispatch(qk_norm_pipe.pso.Get(), l, /*num_groups=*/NQH + NH);
+		// groups (Q heads then K heads, SV_GroupID.x selects which). The mapped model loads this
+		// pipeline only when at least one layer carries QK norm, so legacy models issue no QK
+		// dispatch and retain their 24-dispatch budget contract. Per-layer presence flags still
+		// make a mixed model's individual non-QK layer a near-immediate no-op.
+		if (qk_norm_pipe) {
+			bind_and_dispatch(qk_norm_pipe->pso.Get(), l, /*num_groups=*/NQH + NH);
+		}
 		bind_and_dispatch(rope_pipe.pso.Get(), l, rope_groups);
 		bind_and_dispatch(rope_commit_pipe.pso.Get(), l, rope_groups);
 		bind_and_dispatch(attention_score_pipe.pso.Get(), l, attn_score_groups);
@@ -2233,6 +2236,11 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	const uint64_t work_wide_a_off = 0;
 	const uint64_t work_wide_b_off = static_cast<uint64_t>(max_width) * 8u;
 	const uint64_t work_rope_stage_off = work_wide_b_off + static_cast<uint64_t>(max_width) * 8u;
+	// The scratch binding table deliberately keeps one model-independent layout. Legacy
+	// models reserve the QK regions below at sequence creation, but never load the QK
+	// pipeline and never issue its per-layer dispatch. Omitting these regions dynamically
+	// would move ADAPTER_U and require a second binding-layout variant; retaining them costs
+	// fixed sequence residency, not per-layer submission or execution work.
 	// (design §6 Track B step 3, T-2551): QK_NORM_WIDE -- one Align(head_dim)*8-byte int64
 	// "wide" slice per (Q-head|KV-head) group the qk_norm_site.hlsl dispatch issues (NQH Q
 	// groups then NH K groups, ONE Dispatch call, group index == SV_GroupID.x) -- matching
@@ -2747,7 +2755,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
     ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
     bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
     const GpuAdapterBridge* adapter_bridge, size_t q_width, uint8_t* out_q_codes,
-    size_t out_q_codes_capacity, uint64_t model_generation) {
+    size_t out_q_codes_capacity, uint64_t model_generation, bool model_has_qk_norm) {
 	if (out_inflight) *out_inflight = nullptr;
 	// T-2169 (Rung 2b-prep, D-SLM3632/D-SLM3633): the guard ladder, the weight/rope/K-V
 	// pack-and-residency decision, and the once-per-call root-signature/binding setup now live in
@@ -2834,6 +2842,12 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	// `seq.layer_index < N`, so `N - start_layer` cannot underflow.
 	const uint32_t start_layer = seq.layer_index;
 	const uint32_t layers_to_record = std::min(layer_budget, N - start_layer);
+	bool has_qk_norm = model_has_qk_norm;
+	for (uint32_t layer_index = 0; !has_qk_norm && layers != nullptr && layer_index < N;
+	     ++layer_index) {
+		has_qk_norm = layers[layer_index].q_norm_gain != nullptr ||
+		              layers[layer_index].k_norm_gain != nullptr;
+	}
 	// T-2169 (Rung 2, D-SLM3595): the single-token, non-chunked call shape -- one call into the
 	// extracted per-token dispatch body (above), for this call's own [start_layer,
 	// start_layer + layers_to_record) slice, at the constant position_u32/width_u32 this whole
@@ -2843,7 +2857,8 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	RecordOneTokenFullDepthDispatchBody(dev, start_layer, layers_to_record, H, HD, NH, NQH, I, N,
 	                                     context_cap_u32, position_u32, width_u32, state.scratch_layout,
 	                                     state.work_wide_a_off, state.work_wide_b_off,
-	                                     state.work_adapter_u_off, adapter_bridge, dispatch_query_index);
+	                                     state.work_adapter_u_off, adapter_bridge, has_qk_norm,
+	                                     dispatch_query_index);
 #if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
 	// T-2169 (Rung 2b): the SAME per-token-dispatch-body-invocation event
 	// SubmitChunkToFullDepthForG5Bridge's own identical increment counts (below), for the
@@ -3237,7 +3252,7 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
     // (T-2577 round 2, D-SLM6278): mirrors `RunLayerLoopGpuSubmit`'s own trailing
     // `model_generation` -- threaded into this call's own `PrepareGpuLayerLoopChunkOpenState`
     // call, below.
-    uint64_t model_generation) {
+    uint64_t model_generation, bool model_has_qk_norm) {
 	if (out_inflight) *out_inflight = nullptr;
 	// T-2184 remedy S3 (Brunel fix round 1, D-SLM3662): this primitive's own catch clauses call
 	// the same file-scope `InvalidateResidencyCachesOnThrow()` `RunLayerLoopGpuSubmit`'s catch
@@ -3354,11 +3369,17 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		// happens at the command-list boundary rather than at the per-token layer-budget
 		// boundary (§5's own "the chunk primitive's own token-body calls always request full
 		// depth").
+		bool has_qk_norm = model_has_qk_norm;
+		for (uint32_t layer_index = 0; !has_qk_norm && layers != nullptr && layer_index < N;
+		     ++layer_index) {
+			has_qk_norm = layers[layer_index].q_norm_gain != nullptr ||
+			              layers[layer_index].k_norm_gain != nullptr;
+		}
 		RecordOneTokenFullDepthDispatchBody(dev, /*start_layer=*/0, /*layers_to_record=*/N, H, HD,
 		                                     NH, NQH, I, N, context_cap_u32, position_u32,
 		                                     width_u32, state.scratch_layout,
 		                                     state.work_wide_a_off, state.work_wide_b_off,
-		                                     state.work_adapter_u_off, adapter_bridge,
+		                                     state.work_adapter_u_off, adapter_bridge, has_qk_norm,
 		                                     dispatch_query_index);
 		// T-2180/T-2183 (D-SLM3655/D-SLM3660): the tenth-failure-origin seam -- immediately after
 		// this token's own dispatches are recorded and before the loop advances (gpu_port.h's own
@@ -3721,7 +3742,7 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
     // (T-2577 round 2, D-SLM6278): mirrors `RunLayerLoopGpuSubmit`'s own trailing
     // `model_generation` -- forwarded to every `SubmitOneSubChunkToFullDepthForG5Bridge` call
     // this function's own sub-chunk-splitting loop makes, below.
-    uint64_t model_generation) {
+    uint64_t model_generation, bool model_has_qk_norm) {
 	if (out_inflight) *out_inflight = nullptr;
 	if (chunk_len == 0) {
 		// Nothing to submit -- no guard ladder has run, so this is not itself a rejection; the
@@ -3744,7 +3765,7 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 		    external_kv_resident, io_external_kv_needs_resume_barrier, external_weights_resident,
 		    external_rope_cos_resident, external_rope_sin_resident, external_rope_has,
 		    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &inflight, q_width,
-		    model_generation);
+		    model_generation, model_has_qk_norm);
 		if (submit_status != superslm::SslmForwardStatus::Ok) {
 			return submit_status;
 		}
@@ -3990,7 +4011,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              uint8_t* workspace, size_t workspace_size,
                                              ID3D12Resource* external_kv_resident,
                                              bool* io_external_kv_needs_resume_barrier,
-                                             uint64_t model_generation) {
+	                                         uint64_t model_generation,
+	                                         bool model_has_qk_norm) {
 	GpuLayerLoopInFlight* inflight = nullptr;
 	const superslm::SslmForwardStatus submit_status = RunLayerLoopGpuSubmit(
 	    seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim, num_key_value_heads,
@@ -3999,7 +4021,7 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	    /*external_rope_cos_resident=*/nullptr, /*external_rope_sin_resident=*/nullptr,
 	    /*external_rope_has=*/false, /*external_rope_cos_elems=*/0, /*external_rope_sin_elems=*/0,
 	    /*adapter_bridge=*/nullptr, /*q_width=*/0, /*out_q_codes=*/nullptr,
-	    /*out_q_codes_capacity=*/0, model_generation);
+	    /*out_q_codes_capacity=*/0, model_generation, model_has_qk_norm);
 	if (!inflight) {
 		return submit_status;  // rejected (a guard, or an exception) before submission
 	}
@@ -4164,20 +4186,22 @@ const int8_t* ValueRowGpu(const uint8_t* workspace, uint32_t layer, int64_t cont
 // answer this question, only planned (gpu_port.h's own header note) -- so
 // this is a direct, executed realization of Sec5.8's own formula, matching
 // t2019_b7::ExpectedDispatchBudgetPlan (tests/test_main.cpp) exactly: floor
-// division by 24 -- T-2113 (B4, design Sec3/Sec6.1) re-derived from the
-// 17 = 16 sites + 1 commit figure this constant carried before B4 ported
-// the per-layer dispatch chain onto its own production geometry -- capped
-// at the layers remaining in the current token, DispatchBudgetTooSmall iff
-// the capped result is zero.
+// division by the model-derived dispatch count (24 for legacy, 25 for QK
+// norm), capped at the layers remaining in the current token, with
+// DispatchBudgetTooSmall iff the capped result is zero.
 // ===========================================================================
 
 SslmGpuStatus PlanDispatchBudgetGpu(uint32_t dispatch_budget, uint32_t num_hidden_layers,
-                                     uint32_t current_layer_position, uint32_t* out_layers_to_issue) {
-	// T-2114 (M1): kDispatchesPerLayer now lives at namespace scope (gpu_port.h), the one
-	// source this function and sslm_decode_step_batch_gpu's own budget arithmetic (gpu_1p0.cpp)
-	// both read.
+                                     uint32_t current_layer_position, uint32_t* out_layers_to_issue,
+                                     uint32_t dispatches_per_layer) {
+	// The mapped model supplies one of gpu_port.h's two named dispatch counts; batch
+	// arithmetic consumes the same stored value after a successful submission.
 	const uint32_t remaining = num_hidden_layers - current_layer_position;
-	uint32_t layers = dispatch_budget / kDispatchesPerLayer;  // floor division, never a ceiling
+	if (dispatches_per_layer == 0) {
+		if (out_layers_to_issue) *out_layers_to_issue = 0;
+		return SslmGpuStatus::DispatchBudgetTooSmall;
+	}
+	uint32_t layers = dispatch_budget / dispatches_per_layer;  // floor division, never a ceiling
 	if (layers > remaining) layers = remaining;                // token-boundary cap (never spills a token)
 	if (out_layers_to_issue) *out_layers_to_issue = layers;
 	return (layers == 0) ? SslmGpuStatus::DispatchBudgetTooSmall : SslmGpuStatus::Ok;

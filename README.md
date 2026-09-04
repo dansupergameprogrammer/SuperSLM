@@ -14,23 +14,13 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.3.1**, a patch on 1.3.0. It fixes the six CI jobs behind
-1.3.0's own guarantees at source (the reciprocal seed's signed-overflow made
-well-defined with no emitted bit moved, the FP-free scan's frozen allow-list,
-the VsDevCmd discovery, the coverage floors, the converter's path-separator
-handling) and the engine's non-square-geometry handling (adapter-marshal
-geometry sites, Track A's own geometry generalization) -- see
-[CHANGELOG.md](CHANGELOG.md) for the complete list and what each entry does
-and does not claim. 1.3.0's own guarantee is unchanged by this patch: the
-compiled `superslm` static archive's own object code contains no
-floating-point arithmetic instruction, decided by disassembling every archive
-member the build produces — a claim about SuperSLM's own compiled objects,
-not about arithmetic an external callee might itself perform. The scanner is
-`scan_build_output.py`, driven by the `fp-free-scan-gate` job;
-[docs/platform-support.md](docs/platform-support.md) records where the
-guarantee is enforced and where each leg has run.
-[CHANGELOG.md](CHANGELOG.md) has what changed; [Status](#status) below has
-what is measured where.
+Current release: **1.4.0**. It adds Qwen3/QK-norm model support across
+conversion, calibration, CPU inference, and D3D12 GPU inference while retaining
+legacy models' 24-dispatch-per-layer GPU budget semantics. QK-norm models use
+25 dispatches per layer. QK-norm artifacts produced by pre-final 1.4 development
+trees must be reconverted because the finalized carried-scale and reciprocal
+contract is intentionally incompatible. See the concise
+[1.4.0 release note](docs/releases/1.4.0.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## Capabilities
 
@@ -107,7 +97,7 @@ GPUs.
 Both measurements, their exact hardware and span-length cells, and what
 remains open are in
 [docs/platform-support.md](docs/platform-support.md) and
-[the roadmap](#roadmap-beyond-12).
+[the roadmap](#roadmap-beyond-14).
 
 ### Schema-constrained generation
 
@@ -210,7 +200,9 @@ cmake -B build && cmake --build build && ctest --test-dir build
 ```
 
 This builds the CPU-only product library (`superslm`), the public headers,
-and the test suite. On Linux and macOS this is standard-library only, no
+and the test suite. To build only the CPU product on Windows, with no DXC or
+D3D12 test dependency, use `cmake -B build -DBUILD_TESTING=OFF` and build the
+`superslm` target. On Linux and macOS this is standard-library only, no
 third-party runtime dependency, and works from CMake 3.16. On Windows, the
 test suite's own GPU-serial-port section calls the D3D12 GPU path
 directly and unconditionally, so `superslm_tests` also compiles and links
@@ -229,7 +221,14 @@ cmake -B build -DSUPERSLM_BUILD_GPU=ON && cmake --build build --target superslm_
 This is for a consumer who wants the GPU acceleration library itself
 installed and exported via `find_package(superslm)`; it reuses the same
 shader compilation the default Windows configure already performs above,
-and needs nothing further.
+and installs the compiled shaders with the package. A consuming CMake target
+must deploy them beside its executable:
+
+```cmake
+find_package(superslm REQUIRED)
+target_link_libraries(my_app PRIVATE superslm::superslm_gpu)
+superslm_deploy_gpu_shaders(my_app)
+```
 
 On Windows with Visual Studio installed, `build.bat` is a one-shot MSVC
 build that compiles the full local development suite, GPU included (it
@@ -253,10 +252,9 @@ build or to pass the suite.
 
 ## API surfaces
 
-Two public C APIs are documented in [docs/api.md](docs/api.md), both
-shipped: the GPU handle-based API (`SslmGpu*`) and the CPU-side, from-scratch
-consumer ABI (`sslm_*`) for embedding SuperSLM directly in another process
-without the GPU handle types.
+Two public APIs are documented in [docs/api.md](docs/api.md), both shipped:
+the C++-linkage GPU handle API (`SslmGpu*`) and the CPU-side C ABI (`sslm_*`)
+for embedding SuperSLM directly in another process without the GPU handle types.
 
 ## License
 
@@ -264,9 +262,9 @@ SuperSLM is licensed under Apache License 2.0. The permissive license and
 express patent grant are deliberate: they make adoption safe for consumers,
 and closed forks remain permitted.
 
-## Roadmap beyond 1.3
+## Roadmap beyond 1.4
 
-Named follow-on work after 1.3:
+Named follow-on work after 1.4:
 
 - **True shared-prefix KV memory.** 1.0 ships a straightforward per-sequence
   KV layout; a block-table indirection layer is the next step, giving a

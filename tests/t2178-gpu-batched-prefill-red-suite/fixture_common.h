@@ -35,6 +35,8 @@
 #include "superslm/model.h"
 #include "support/gpu_chunk_dispatch_instrument.h"
 
+using enum SslmGpuStatus;
+
 static int GChecks = 0;
 static int GFailures = 0;
 static int GSkips = 0;

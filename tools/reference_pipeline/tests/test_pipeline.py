@@ -1617,6 +1617,66 @@ def _write_synthetic_safetensors(path, tensors):
         f.write(bytes(payload))
 
 
+def _write_safetensors_parts(path, header, payload=b""):
+    header_bytes = json.dumps(header).encode("utf-8")
+    with open(path, "wb") as f:
+        f.write(len(header_bytes).to_bytes(8, "little"))
+        f.write(header_bytes)
+        f.write(payload)
+
+
+def test_safetensors_accepts_adjacent_valid_tensor_ranges(tmp_path):
+    reader = api(MODULE, "_SafeTensors")
+    path = tmp_path / "valid.safetensors"
+    _write_safetensors_parts(path, {
+        "a": {"dtype": "F32", "shape": [1], "data_offsets": [0, 4]},
+        "b": {"dtype": "F16", "shape": [2], "data_offsets": [4, 8]},
+        "empty": {"dtype": "F32", "shape": [0], "data_offsets": [8, 8]},
+    }, b"\0" * 8)
+    assert reader(path).keys() == {"a", "b", "empty"}
+
+
+def test_safetensors_rejects_overlapping_tensor_ranges(tmp_path):
+    reader, config_error = api(MODULE, "_SafeTensors", "ConfigError")
+    path = tmp_path / "overlap.safetensors"
+    _write_safetensors_parts(path, {
+        "a": {"dtype": "F32", "shape": [1], "data_offsets": [0, 4]},
+        "b": {"dtype": "F32", "shape": [1], "data_offsets": [2, 6]},
+    }, b"\0" * 6)
+    with pytest.raises(config_error, match="overlap"):
+        reader(path)
+
+
+@pytest.mark.parametrize("header,payload,match", [
+    ({"a": {"dtype": "F32", "shape": [2], "data_offsets": [0, 4]}}, b"\0" * 4,
+     "requires exactly 8"),
+    ({"a": {"dtype": "F32", "shape": [1], "data_offsets": [0, 5]}}, b"\0" * 4,
+     "exceed"),
+    ({"a": {"dtype": "F32", "shape": [-1], "data_offsets": [0, 0]}}, b"", "shape"),
+    ({"a": {"dtype": "F32", "shape": [1], "data_offsets": [False, 4]}}, b"\0" * 4,
+     "data_offsets"),
+])
+def test_safetensors_rejects_invalid_bounds_shape_and_byte_count(
+        tmp_path, header, payload, match):
+    reader, config_error = api(MODULE, "_SafeTensors", "ConfigError")
+    path = tmp_path / "invalid.safetensors"
+    _write_safetensors_parts(path, header, payload)
+    with pytest.raises(config_error, match=match):
+        reader(path)
+
+
+def test_safetensors_rejects_truncated_prefix_and_header(tmp_path):
+    reader, config_error = api(MODULE, "_SafeTensors", "ConfigError")
+    short = tmp_path / "short.safetensors"
+    short.write_bytes(b"tiny")
+    with pytest.raises(config_error, match="8-byte header"):
+        reader(short)
+    truncated = tmp_path / "truncated.safetensors"
+    truncated.write_bytes((100).to_bytes(8, "little") + b"{}")
+    with pytest.raises(config_error, match="header length"):
+        reader(truncated)
+
+
 def test_load_model_rejects_an_unmapped_tensor(tmp_path):
     """§11's reject-over-degrade discipline (N3): "an unrecognized … constant in the config
     is a hard rejection, never a silent drop". The same rule governs the weight map.

@@ -27,6 +27,7 @@
 #include <cstdio>
 
 #include "superslm/gpu_1p0.h"
+using enum SslmGpuStatus;
 #include "superslm/gpu_port.h"
 
 static int g_checks = 0;

@@ -1,6 +1,14 @@
 @echo off
 rem Quick MSVC build + test. For other compilers / the full matrix use CMake.
 setlocal
+rem Some process hosts supply both PATH and Path entries. MSBuild imports the raw
+rem environment into a case-insensitive table and rejects that duplicate before CL runs.
+rem Collapse the pair before VsDevCmd adds the compiler toolchain directories.
+set "SSLM_PRE_VS_PATH=%PATH%"
+set "PATH="
+set "Path="
+set "PATH=%SSLM_PRE_VS_PATH%"
+set "SSLM_PRE_VS_PATH="
 set VSDEVCMD="C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat"
 if not exist %VSDEVCMD% (
 	echo VsDevCmd.bat not found at %VSDEVCMD%
@@ -25,7 +33,7 @@ for %%f in (src\gpu\shaders\*.hlsl) do (
 	)
 )
 
-cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_O11_ALLOC_INJECTION ^
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_O11_ALLOC_INJECTION /DSUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
 	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^
@@ -1682,7 +1690,7 @@ where python >nul 2>nul
 if not errorlevel 1 (
 	python -c "import pytest" >nul 2>nul
 	if not errorlevel 1 (
-		python -m pytest tests\t2296-fp-free-open-red-suite -q
+		python -m pytest tests\t2296-fp-free-open-red-suite -q --basetemp out\pytest-t2296
 		if errorlevel 1 (
 			set t2326_scan_ec=1
 		)

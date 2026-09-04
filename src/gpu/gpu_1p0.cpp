@@ -29,6 +29,9 @@
 #include "superslm/gpu_1p0.h"
 #include "superslm/gpu_1p0_bench_bridge.h"
 
+// Keep the implementation readable while the installed API exposes scoped status members.
+using enum SslmGpuStatus;
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -206,6 +209,8 @@ struct SslmGpuModelHandle {
 	uint32_t num_attention_heads = 0;
 	uint32_t intermediate_size = 0;
 	int64_t context_cap = 0;
+	bool has_qk_norm = false;
+	uint32_t dispatches_per_layer = superslm_gpu::kLegacyDispatchesPerLayer;
 
 	// ModelHasLiveSequences guard (design Sec9, Sec4.2's own model_unmap row): T-2113 (B3)
 	// incremented by sslm_gpu_seq_create, decremented on release, below.
@@ -597,7 +602,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> UploadResidentUavBufferSync(superslm_gpu:
 // the pre-1.0 substrate and this handle's upload path compute identical bytes from one
 // implementation), and uploads weights + RoPE cos/sin tables as three independent resident
 // buffers -- no process-global cache anywhere in this path (D-SLM3294).
-SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
+SslmGpuStatus sslm_gpu_model_mapImpl(SslmGpuContext* ctx, const SslmModelView* base,
                                   GpuResidencyConfig cfg, SslmGpuModelHandle** out_model) {
 	(void)cfg;  // GpuResidencyConfig carries no fields the design assigns yet (Sec5.1).
 	if (!out_model) {
@@ -646,6 +651,9 @@ SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
 			return SSLM_DEVICE_LOST;
 		}
 	}
+	const bool has_qk_norm = std::any_of(layers.begin(), layers.end(), [](const auto& layer) {
+		return layer.q_norm_gain != nullptr || layer.k_norm_gain != nullptr;
+	});
 
 	const superslm_gpu::GpuLayerLayout layout =
 	    superslm_gpu::ComputeLayerLayout(H, KV, num_kv_heads, NQH, I, QWIDTH);
@@ -671,6 +679,8 @@ SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
 	try {
 		lw_bytes = superslm_gpu::PackLayerWeightsBytes(layers.data(), num_hidden_layers, layout, H,
 		                                               KV, num_kv_heads, NQH, I, QWIDTH);
+	} catch (const std::bad_alloc&) {
+		throw;
 	} catch (const std::exception& e) {
 		std::fprintf(stderr, "sslm_gpu_model_map: %s\n", e.what());
 		return SSLM_DEVICE_LOST;
@@ -782,6 +792,8 @@ SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
 			h->mask_pages_buf = UploadResidentBufferSync(ctx->device, schema_section_bytes.data(),
 			                                              schema_section_bytes.size());
 		}
+	} catch (const std::bad_alloc&) {
+		throw;
 	} catch (const std::exception&) {
 		return SSLM_DEVICE_LOST;
 	}
@@ -830,6 +842,8 @@ SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
 	h->num_attention_heads = NQH;
 	h->intermediate_size = I;
 	h->context_cap = static_cast<int64_t>(base->config.context_cap);
+	h->has_qk_norm = has_qk_norm;
+	h->dispatches_per_layer = superslm_gpu::DispatchesPerLayer(has_qk_norm);
 
 	ctx->live_handles += 1;
 	*out_model = h.release();
@@ -851,7 +865,7 @@ SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
 // (SslmGpuModelHandle's own field, above) is checked FIRST, so a model with at least one
 // Submitted sequence bound returns `Busy`; only once that count is zero does the broader
 // `live_sequences` (any state) check run.
-SslmGpuStatus sslm_gpu_model_unmap(SslmGpuContext* ctx, SslmGpuModelHandle* model) {
+SslmGpuStatus sslm_gpu_model_unmapImpl(SslmGpuContext* ctx, SslmGpuModelHandle* model) {
 	if (!model) {
 		return SSLM_OK;  // same null-is-a-no-op reasoning as sslm_gpu_context_destroy(nullptr).
 	}
@@ -910,7 +924,7 @@ SslmGpuStatus sslm_gpu_model_unmap(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 // from a path a view does not retain) for the parse/validate half -- the identical B0b checks
 // (ValidateAmplifyingFoldBaseHash/Dimension/Projection) the CPU path already runs, run here for
 // real against a real converted artifact for the first time on the GPU path.
-SslmGpuStatus sslm_gpu_adapter_map(SslmGpuContext* ctx, SslmGpuModelHandle* model,
+SslmGpuStatus sslm_gpu_adapter_mapImpl(SslmGpuContext* ctx, SslmGpuModelHandle* model,
                                     const SslmModelView* adapter_artifact,
                                     SslmGpuAdapterHandle** out_adapter) {
 	if (!out_adapter) {
@@ -1044,6 +1058,8 @@ SslmGpuStatus sslm_gpu_adapter_map(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 	try {
 		h->lora_ab_buf = UploadResidentBufferSync(ctx->device, ab_bytes.data(), ab_bytes.size());
 		h->fold_buf = UploadResidentBufferSync(ctx->device, fold_bytes.data(), fold_bytes.size());
+	} catch (const std::bad_alloc&) {
+		throw;
 	} catch (const std::exception&) {
 		return SSLM_DEVICE_LOST;
 	}
@@ -1088,7 +1104,7 @@ SslmGpuStatus sslm_gpu_adapter_map(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 // continues decoding against whatever its own buffers still contain until that sequence's next
 // call rebinds or releases -- the documented residual design Sec5.2 already names explicitly,
 // unaffected by this fix, not a guarded case this call adds one for.
-SslmGpuStatus sslm_gpu_adapter_unmap(SslmGpuContext* ctx, SslmGpuAdapterHandle* adapter) {
+SslmGpuStatus sslm_gpu_adapter_unmapImpl(SslmGpuContext* ctx, SslmGpuAdapterHandle* adapter) {
 	if (!adapter) {
 		return SSLM_OK;  // same null-is-a-no-op reasoning as sslm_gpu_model_unmap(nullptr).
 	}
@@ -1135,7 +1151,7 @@ SslmGpuStatus sslm_gpu_adapter_unmap(SslmGpuContext* ctx, SslmGpuAdapterHandle* 
 // try/catch inside harness::GetDevice()'s lambda for the singleton path; here, since
 // this context owns its Device value directly (no lambda-wrapped static), the
 // equivalent guard is applied at the call site instead.
-SslmGpuStatus sslm_gpu_context_create(GpuContextConfig cfg, SslmGpuContext** out_ctx) {
+SslmGpuStatus sslm_gpu_context_createImpl(GpuContextConfig cfg, SslmGpuContext** out_ctx) {
 	(void)cfg;  // GpuContextConfig carries no fields the design assigns yet (Sec4.1.1
 	            // does not name any -- the parameter exists for forward compatibility
 	            // with a future field, per the design's own declared surface).
@@ -1152,6 +1168,9 @@ SslmGpuStatus sslm_gpu_context_create(GpuContextConfig cfg, SslmGpuContext** out
 	SslmGpuContext* ctx = new SslmGpuContext();
 	try {
 		ctx->device.Init();
+	} catch (const std::bad_alloc&) {
+		delete ctx;
+		throw;
 	} catch (const std::exception&) {
 		ctx->device.available = false;
 	}
@@ -1173,7 +1192,7 @@ SslmGpuStatus sslm_gpu_context_create(GpuContextConfig cfg, SslmGpuContext** out
 // constructible yet (B2/B3/B6 land those), so `live_handles` is always 0 today --
 // the guard is real code, exercised honestly (it reads the same field B2+ will
 // increment), not a stand-in that merely returns Ok unconditionally.
-SslmGpuStatus sslm_gpu_context_destroy(SslmGpuContext* ctx) {
+SslmGpuStatus sslm_gpu_context_destroyImpl(SslmGpuContext* ctx) {
 	if (!ctx) {
 		// Destroying a null context is a caller no-op under the same "no status
 		// exists for a null-pointer contract violation" reasoning as create()
@@ -1195,7 +1214,7 @@ SslmGpuStatus sslm_gpu_context_destroy(SslmGpuContext* ctx) {
 // `kv_bytes_needed` = num_hidden_layers * context_cap * num_key_value_heads * head_dim
 // * 2) -- the same formula, so a buffer this call sizes and the buffer RunLayerLoopGpu's
 // own guard would separately compute for the identical inputs can never disagree.
-SslmGpuStatus sslm_gpu_seq_create(SslmGpuContext* ctx, SslmGpuModelHandle* model,
+SslmGpuStatus sslm_gpu_seq_createImpl(SslmGpuContext* ctx, SslmGpuModelHandle* model,
                                    int64_t context_cap, SslmGpuSequenceHandle** out_seq) {
 	if (!out_seq) {
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // no live object to report through,
@@ -1246,6 +1265,8 @@ SslmGpuStatus sslm_gpu_seq_create(SslmGpuContext* ctx, SslmGpuModelHandle* model
 	std::vector<uint8_t> zero_kv(kv_bytes_needed, 0);
 	try {
 		h->kv_buf = UploadResidentUavBufferSync(ctx->device, zero_kv.data(), zero_kv.size());
+	} catch (const std::bad_alloc&) {
+		throw;
 	} catch (const std::exception&) {
 		return SSLM_DEVICE_LOST;  // mirrors sslm_gpu_model_map's own upload-failure
 		                          // disposition (design Sec5.1/Sec5.3 symmetry).
@@ -1297,7 +1318,7 @@ SslmGpuStatus sslm_gpu_seq_create(SslmGpuContext* ctx, SslmGpuModelHandle* model
 // the `Submitted` state -- `CallProceedsOrBusy_SeqRelease` is reused verbatim anyway
 // (not reimplemented as "always proceed"), so B5's own async lifecycle needs no change
 // here when it starts setting `state = Submitted` for real.
-SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) {
+SslmGpuStatus sslm_gpu_seq_releaseImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) {
 	if (!seq) {
 		return SSLM_OK;  // same null-is-a-no-op reasoning as sslm_gpu_context_destroy/
 		                  // sslm_gpu_model_unmap(nullptr) above.
@@ -1340,7 +1361,7 @@ SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
 // SslmGpuSeqFinishTokenForG5Bridge's own body already tests the SAME two-sided condition,
 // `:2029` above) -- only the OPEN interval `0 < layer_index < num_hidden_layers` is genuinely
 // mid-token.
-SslmGpuStatus sslm_gpu_seq_bind_adapter(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+SslmGpuStatus sslm_gpu_seq_bind_adapterImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                          const SslmGpuAdapterHandle* adapter_or_null) {
 	if (!ctx || !seq || seq->ctx != ctx) {  // no channel exists for a malformed handle, the same
 	                                          // disposition every other 1.0 entry point uses.
@@ -1396,7 +1417,7 @@ SslmGpuStatus sslm_gpu_seq_bind_adapter(SslmGpuContext* ctx, SslmGpuSequenceHand
 // -- the identical arithmetic RunWholeToken's own closure calls (forward_sites.cpp),
 // called with the same trailing defaults (site="", token_index=0, no trace hook) so a
 // caller driving this call pair reproduces that closure's own output byte-for-byte.
-SslmGpuStatus sslm_gpu_seq_embed_token(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+SslmGpuStatus sslm_gpu_seq_embed_tokenImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                         int32_t token_id) {
 	if (!ctx || !seq || !seq->model || seq->ctx != ctx) {  // T-2114 (S2): ->destroyed reads
 	                                     // removed, see the sequence/model handles' own field
@@ -1581,7 +1602,8 @@ SslmGpuStatus SubmitOneSequenceDecode(SslmGpuContext* ctx, SslmGpuSequenceHandle
 	    model->rope_cos_buf.Get(), model->rope_sin_buf.Get(), model->has_rope_tables,
 	    model->rope_cos_elem_count, model->rope_sin_elem_count, adapter_bridge_ptr,
 	    /*q_width=*/static_cast<size_t>(model->num_attention_heads) * model->head_dim,
-	    /*out_q_codes=*/nullptr, /*out_q_codes_capacity=*/0, model_generation);
+	    /*out_q_codes=*/nullptr, /*out_q_codes_capacity=*/0, model_generation,
+	    model->has_qk_norm);
 
 	if (!inflight) {
 		// Rejected before submission (a guard, or an exception) -- seq/host state untouched,
@@ -1618,7 +1640,7 @@ SslmGpuStatus SubmitOneSequenceDecode(SslmGpuContext* ctx, SslmGpuSequenceHandle
 // external-KV bridge) -- this is the production measurement path that retires
 // `g_resident_rope`/`g_resident_weights` for every call that reaches here (D-SLM3362):
 // neither process-global cache is ever read or written on this path.
-SslmGpuStatus sslm_decode_step_gpu(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+SslmGpuStatus sslm_decode_step_gpuImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                     const SslmGpuAdapterHandle* adapter_or_null,
                                     uint32_t dispatch_budget) {
 	// Design Sec8/Sec10 B6: per-sequence adapter binding is a call argument, checked at every
@@ -1655,7 +1677,8 @@ SslmGpuStatus sslm_decode_step_gpu(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
 	SslmGpuModelHandle* model = seq->model;
 	uint32_t layers_to_issue = 0;
 	const superslm_gpu::SslmGpuStatus plan = superslm_gpu::PlanDispatchBudgetGpu(
-	    dispatch_budget, model->num_hidden_layers, seq->layer_index, &layers_to_issue);
+	    dispatch_budget, model->num_hidden_layers, seq->layer_index, &layers_to_issue,
+	    model->dispatches_per_layer);
 	if (plan == superslm_gpu::SslmGpuStatus::DispatchBudgetTooSmall) {
 		return SSLM_DISPATCH_BUDGET_TOO_SMALL;
 	}
@@ -1724,7 +1747,7 @@ SslmGpuStatus sslm_decode_step_gpu(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
 // this implementation avoids needing that fusion by never having two sequences in flight
 // simultaneously in the first place, at the cost named above (no cross-sequence submission
 // overlap, so no submission-side amortization either).
-SslmGpuStatus sslm_decode_step_batch_gpu(SslmGpuContext* ctx, SslmGpuSequenceHandle* const* seqs,
+SslmGpuStatus sslm_decode_step_batch_gpuImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* const* seqs,
                                           const SslmGpuAdapterHandle* const* adapters_or_null,
                                           uint32_t n_sequences, uint32_t dispatch_budget,
                                           SslmGpuStatus* out_statuses) {
@@ -1789,7 +1812,8 @@ SslmGpuStatus sslm_decode_step_batch_gpu(SslmGpuContext* ctx, SslmGpuSequenceHan
 		// single-sequence call alone, never naming it as a batch-call channel.
 		uint32_t layers_to_issue = 0;
 		const superslm_gpu::SslmGpuStatus plan = superslm_gpu::PlanDispatchBudgetGpu(
-		    remaining_budget, seq->model->num_hidden_layers, seq->layer_index, &layers_to_issue);
+		    remaining_budget, seq->model->num_hidden_layers, seq->layer_index, &layers_to_issue,
+		    seq->model->dispatches_per_layer);
 		if (plan == superslm_gpu::SslmGpuStatus::DispatchBudgetTooSmall) {
 			out_statuses[i] = SSLM_BATCH_BUDGET_EXHAUSTED;  // seq->state stays Idle -- nothing
 			                                                  // recorded, nothing submitted.
@@ -1799,16 +1823,14 @@ SslmGpuStatus sslm_decode_step_batch_gpu(SslmGpuContext* ctx, SslmGpuSequenceHan
 		out_statuses[i] = SubmitOneSequenceDecode(ctx, seq, adapter_or_null, layers_to_issue);
 		if (out_statuses[i] == SSLM_OK) {
 			// Design Sec7's own budget arithmetic: exactly this sequence's own consumed
-			// dispatches (layers_to_issue whole layers, 24 dispatches/layer, T-2113 B4) leave
+			// dispatches (layers_to_issue whole layers, using this model's 24-or-25 divisor) leave
 			// the running remainder for seqs[i+1..]. A submission REJECTED after planning
 			// succeeded (e.g. a device-lost mid-batch, design Sec9's own DeviceLost row: "every
 			// not-yet-reached out_statuses[i] reading DeviceLost") consumes no budget either --
 			// only a call that actually reached SSLM_OK genuinely used GPU dispatch slots.
-			// T-2114 (M1): kDispatchesPerLayer (gpu_port.h) is now the one source this line and
-			// PlanDispatchBudgetGpu's own body (superslm_gpu.cpp) both read -- a bare `24u` here
-			// used to be a second copy that could silently drift from PlanDispatchBudgetGpu's
-			// own constant and wrap this unsigned subtraction.
-			remaining_budget -= layers_to_issue * superslm_gpu::kDispatchesPerLayer;
+			// Model mapping derives dispatches_per_layer once; planning and subtraction both
+			// read that value so the two operations cannot drift by architecture.
+			remaining_budget -= layers_to_issue * seq->model->dispatches_per_layer;
 
 			// T-2113 (B7): a REAL device hang found at the bench, fixed here, not merely
 			// worked around -- see this function's own header comment for the fuller account.
@@ -1863,7 +1885,7 @@ SslmGpuStatus sslm_decode_step_batch_gpu(SslmGpuContext* ctx, SslmGpuSequenceHan
 // the fence rather than returning *out_ready=0 -- the only call this design allows to
 // legitimately fence-wait." `Idle`/`Completed` (nothing outstanding): `*out_ready=1`
 // immediately, `*out_status=Ok`.
-SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t block,
+SslmGpuStatus sslm_gpu_readyImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t block,
                               int32_t* out_ready, SslmGpuStatus* out_status) {
 	if (out_ready) *out_ready = 0;
 	if (out_status) *out_status = SSLM_OK;
@@ -1953,7 +1975,7 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, in
 // existing blob mechanism, D-SLM3080) rather than a second implementation. T-2114 (C1)
 // extended both functions to also round-trip `hidden_codes` -- see gpu_port.h's own
 // header comment on the pair for the current contract.
-SslmGpuStatus sslm_gpu_seq_save(SslmGpuContext* ctx, const SslmGpuSequenceHandle* seq,
+SslmGpuStatus sslm_gpu_seq_saveImpl(SslmGpuContext* ctx, const SslmGpuSequenceHandle* seq,
                                  void* out_blob, size_t* out_blob_size) {
 	if (!ctx || !seq || seq->ctx != ctx) {  // T-2114 (S2): ->destroyed read removed, see sequence
 	                                         // handle's own field comment. T-2124 (D-SLM3446
@@ -1983,7 +2005,7 @@ SslmGpuStatus sslm_gpu_seq_save(SslmGpuContext* ctx, const SslmGpuSequenceHandle
 	return ok ? SSLM_OK : SSLM_DEVICE_LOST;
 }
 
-SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* model,
+SslmGpuStatus sslm_gpu_seq_restoreImpl(SslmGpuContext* ctx, SslmGpuModelHandle* model,
                                     const void* blob, size_t blob_size,
                                     SslmGpuSequenceHandle** out_seq) {
 	if (!out_seq) {
@@ -2120,6 +2142,9 @@ SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 		                                            fresh->hidden_codes.size(),
 		                                            fresh->host_kv_mirror.data(),
 		                                            fresh->host_kv_mirror.size());
+	} catch (const std::bad_alloc&) {
+		sslm_gpu_seq_release(ctx, fresh);
+		throw;
 	} catch (const std::exception&) {
 		sslm_gpu_seq_release(ctx, fresh);
 		return SSLM_DEVICE_LOST;
@@ -2135,6 +2160,9 @@ SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 	try {
 		fresh->kv_buf = UploadResidentUavBufferSync(ctx->device, fresh->host_kv_mirror.data(),
 		                                             fresh->host_kv_mirror.size());
+	} catch (const std::bad_alloc&) {
+		sslm_gpu_seq_release(ctx, fresh);
+		throw;
 	} catch (const std::exception&) {
 		sslm_gpu_seq_release(ctx, fresh);
 		return SSLM_DEVICE_LOST;
@@ -2148,7 +2176,7 @@ SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 	return SSLM_OK;
 }
 
-SslmGpuStatus sslm_gpu_seq_reset(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) {
+SslmGpuStatus sslm_gpu_seq_resetImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) {
 	if (!ctx || !seq || seq->ctx != ctx) {  // T-2114 (S2): ->destroyed read removed, see sequence
 	                                         // handle's own field comment. T-2124 (D-SLM3446
 	                                         // P1-4): `seq->ctx != ctx`.
@@ -2166,6 +2194,10 @@ SslmGpuStatus sslm_gpu_seq_reset(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq
 	seq->live_state.hidden_scale = seq->hidden_scale;
 	seq->live_state.layer_index = 0;
 	seq->live_state.kv_saturation_count = 0;
+	seq->live_state.kv_landing_saturation_count = 0;
+	seq->live_state.k_normed_landing_saturation_count = 0;
+	seq->live_state.rope_q_saturation_count = 0;
+	seq->live_state.rope_k_saturation_count = 0;
 	seq->live_state.context_length = 0;
 	std::fill(seq->host_kv_mirror.begin(), seq->host_kv_mirror.end(), 0);
 	// G5-5 (T-2132, Brunel): mirrors `sslm_seq_reset`'s own extension (design Sec5,
@@ -2205,6 +2237,9 @@ uint32_t* SslmGpuSeqHandleLayerIndexForBench(SslmGpuSequenceHandle* seq) {
 }
 uint64_t* SslmGpuSeqHandleKvSaturationForBench(SslmGpuSequenceHandle* seq) {
 	return seq ? &seq->kv_saturation_count : nullptr;
+}
+superslm::SequenceLayerState* SslmGpuSeqHandleLiveStateForBench(SslmGpuSequenceHandle* seq) {
+	return seq ? &seq->live_state : nullptr;
 }
 int64_t* SslmGpuSeqHandleContextLengthForBench(SslmGpuSequenceHandle* seq) {
 	return seq ? &seq->context_length : nullptr;
@@ -2267,7 +2302,7 @@ int32_t SslmGpuSchemaLookupForG5Bridge(SslmGpuModelHandle* model, const char* na
 	return static_cast<int32_t>(index);
 }
 
-SslmGpuStatus SslmGpuSeqSetSchemaForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+SslmGpuStatus SslmGpuSeqSetSchemaForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                               int32_t schema_index) {
 	if (!ctx || !seq || !seq->model || seq->ctx != ctx) {
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
@@ -2299,7 +2334,7 @@ uint32_t SslmGpuSeqWalkStateForG5Bridge(SslmGpuSequenceHandle* seq) {
 	return seq ? seq->dfa_walk_state : kSslmGpuDfaWalkStateUnused;
 }
 
-SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+SslmGpuStatus SslmGpuSeqFinishTokenForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                 int32_t* out_token) {
 	if (!out_token) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	*out_token = -1;
@@ -2735,7 +2770,7 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		        model->rope_sin_buf.Get(), model->has_rope_tables, model->rope_cos_elem_count,
 		        model->rope_sin_elem_count, adapter_bridge_ptr, &inflight,
 		        /*q_width=*/static_cast<size_t>(model->num_attention_heads) * model->head_dim,
-		        model_generation);
+		        model_generation, model->has_qk_norm);
 		if (submit_status == superslm::SslmForwardStatus::Ok && inflight) {
 			// `SubmitChunkToFullDepthForG5Bridge` returns the FINAL (sub-)chunk's own inflight token
 			// genuinely unfenced (its own header comment: "the caller's own async contract... only
@@ -2755,6 +2790,7 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		             "submit/finish call, contained at the SslmGpuStatus boundary: %s\n",
 		             e.what());
 		seq->in_flight = nullptr;
+		throw;
 	} catch (const std::runtime_error& e) {
 		std::fprintf(stderr,
 		             "gpu_1p0: SubmitAdmittedChunkForG5Bridge: runtime_error escaped the "
@@ -2878,7 +2914,7 @@ SslmGpuStatus SslmGpuSeqPrefillPromptPreBatchingBenchOnly(SslmGpuContext* ctx,
 // "reuse the already-computed final residual, do not re-embed" shortcut the CPU ABI already gives
 // every real caller, closing the exact duplicate-KV-commit gap session 3 diagnosed in this
 // bridge's own prior caller (`tools/t2132_g5_gpu_parity_gpu.cpp`'s hand-rolled `PrefillPrompt`).
-SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+SslmGpuStatus SslmGpuSeqPrefillPromptForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                   const int32_t* tokens, int32_t count,
                                                   uint32_t dispatch_budget) {
 	if (!ctx || !seq || !seq->model || seq->ctx != ctx || (count > 0 && !tokens) || count < 0 ||
@@ -2949,7 +2985,7 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSeq
 // embed/`sslm_decode_step_gpu`/`sslm_gpu_ready`/finish primitives stay available (this bridge/
 // `gpu_1p0.h` do not remove them) for a caller that genuinely needs to interleave other GPU work
 // between layers, but composing them by hand is exactly what re-trips this session's own bug.
-SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+SslmGpuStatus SslmGpuSeqDecodeStepForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                int32_t token_to_embed_if_needed,
                                                uint32_t dispatch_budget, int32_t* out_token) {
 	if (!out_token) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
@@ -2971,7 +3007,7 @@ SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx, SslmGpuSequen
 	return SslmGpuSeqFinishTokenForG5Bridge(ctx, seq, out_token);
 }
 
-SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(SslmGpuContext* ctx,
+SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5BridgeImpl(SslmGpuContext* ctx,
                                                           SslmGpuSequenceHandle* seq,
                                                           const int32_t* tokens, int32_t count,
                                                           uint32_t dispatch_budget_per_token,
@@ -3071,4 +3107,167 @@ SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(SslmGpuContext* ctx,
 			if (*consumed > 0) seq->ready_for_logits = true;
 			return SSLM_OK;
 	}
+}
+
+// Every installed status-returning GPU entry point terminates exceptions here. Allocation
+// failures are recoverable and distinguishable; all other unexpected failures retain the
+// existing device-failure disposition. No C++ exception crosses the public API boundary.
+namespace {
+#if defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
+std::atomic<int> g_gpu_api_failure_point{-1};
+char g_gpu_api_failure_name[96] = {};
+
+void MaybeThrowGpuApiFailure(const char* name, SslmGpuApiFailureInjectionPoint point) {
+	if (g_gpu_api_failure_point.load() == static_cast<int>(point) &&
+	    std::strcmp(g_gpu_api_failure_name, name) == 0) {
+		g_gpu_api_failure_point.store(-1);
+		throw std::bad_alloc();
+	}
+}
+#else
+void MaybeThrowGpuApiFailure(const char*, int) {}
+#endif
+
+template <typename Fn>
+SslmGpuStatus InvokeGpuApiBoundary(const char* name, Fn&& fn) noexcept {
+	try {
+#if defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
+		MaybeThrowGpuApiFailure(name, SslmGpuApiFailureInjectionPoint::BeforeHandler);
+		const SslmGpuStatus status = fn();
+		MaybeThrowGpuApiFailure(name, SslmGpuApiFailureInjectionPoint::AfterHandler);
+		return status;
+#else
+		return fn();
+#endif
+	} catch (const std::bad_alloc&) {
+		return SSLM_GPU_ALLOCATION_FAILED;
+	} catch (const std::length_error&) {
+		return SSLM_GPU_ALLOCATION_FAILED;
+	} catch (const std::exception& e) {
+		std::fprintf(stderr, "%s: contained exception: %s\n", name, e.what());
+		return SSLM_DEVICE_LOST;
+	} catch (...) {
+		std::fprintf(stderr, "%s: contained non-standard exception\n", name);
+		return SSLM_DEVICE_LOST;
+	}
+}
+}  // namespace
+
+#if defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
+void ArmSslmGpuApiFailureInjection(const char* api_name,
+                                   SslmGpuApiFailureInjectionPoint point) {
+	std::snprintf(g_gpu_api_failure_name, sizeof(g_gpu_api_failure_name), "%s",
+	              api_name ? api_name : "");
+	g_gpu_api_failure_point.store(static_cast<int>(point));
+}
+void ClearSslmGpuApiFailureInjection() {
+	g_gpu_api_failure_point.store(-1);
+	g_gpu_api_failure_name[0] = '\0';
+}
+#endif
+
+SslmGpuStatus sslm_gpu_context_create(GpuContextConfig cfg, SslmGpuContext** out_ctx) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_context_createImpl(cfg, out_ctx); });
+}
+SslmGpuStatus sslm_gpu_context_destroy(SslmGpuContext* ctx) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_context_destroyImpl(ctx); });
+}
+SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
+                                  GpuResidencyConfig cfg,
+                                  SslmGpuModelHandle** out_model) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_model_mapImpl(ctx, base, cfg, out_model); });
+}
+SslmGpuStatus sslm_gpu_model_unmap(SslmGpuContext* ctx, SslmGpuModelHandle* model) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_model_unmapImpl(ctx, model); });
+}
+SslmGpuStatus sslm_gpu_adapter_map(SslmGpuContext* ctx, SslmGpuModelHandle* model,
+                                    const SslmModelView* artifact,
+                                    SslmGpuAdapterHandle** out_adapter) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] {
+		return sslm_gpu_adapter_mapImpl(ctx, model, artifact, out_adapter);
+	});
+}
+SslmGpuStatus sslm_gpu_adapter_unmap(SslmGpuContext* ctx,
+                                      SslmGpuAdapterHandle* adapter) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_adapter_unmapImpl(ctx, adapter); });
+}
+SslmGpuStatus sslm_gpu_seq_create(SslmGpuContext* ctx, SslmGpuModelHandle* model,
+                                   int64_t cap, SslmGpuSequenceHandle** out_seq) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_seq_createImpl(ctx, model, cap, out_seq); });
+}
+SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_seq_releaseImpl(ctx, seq); });
+}
+SslmGpuStatus sslm_gpu_seq_bind_adapter(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                         const SslmGpuAdapterHandle* adapter) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_seq_bind_adapterImpl(ctx, seq, adapter); });
+}
+SslmGpuStatus sslm_gpu_seq_embed_token(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                        int32_t token) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_seq_embed_tokenImpl(ctx, seq, token); });
+}
+SslmGpuStatus sslm_gpu_seq_save(SslmGpuContext* ctx, const SslmGpuSequenceHandle* seq,
+                                 void* blob, size_t* size) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_seq_saveImpl(ctx, seq, blob, size); });
+}
+SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* model,
+                                    const void* blob, size_t size,
+                                    SslmGpuSequenceHandle** out_seq) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] {
+		return sslm_gpu_seq_restoreImpl(ctx, model, blob, size, out_seq);
+	});
+}
+SslmGpuStatus sslm_gpu_seq_reset(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_seq_resetImpl(ctx, seq); });
+}
+SslmGpuStatus sslm_decode_step_gpu(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                    const SslmGpuAdapterHandle* adapter,
+                                    uint32_t budget) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_decode_step_gpuImpl(ctx, seq, adapter, budget); });
+}
+SslmGpuStatus sslm_decode_step_batch_gpu(SslmGpuContext* ctx,
+                                          SslmGpuSequenceHandle* const* seqs,
+                                          const SslmGpuAdapterHandle* const* adapters,
+                                          uint32_t count, uint32_t budget,
+                                          SslmGpuStatus* statuses) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] {
+		return sslm_decode_step_batch_gpuImpl(ctx, seqs, adapters, count, budget, statuses);
+	});
+}
+SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t block,
+                              int32_t* ready, SslmGpuStatus* status) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_readyImpl(ctx, seq, block, ready, status); });
+}
+SslmGpuStatus SslmGpuSeqSetSchemaForG5Bridge(SslmGpuContext* ctx,
+                                              SslmGpuSequenceHandle* seq,
+                                              int32_t schema) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return SslmGpuSeqSetSchemaForG5BridgeImpl(ctx, seq, schema); });
+}
+SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx,
+                                                SslmGpuSequenceHandle* seq,
+                                                int32_t* token) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return SslmGpuSeqFinishTokenForG5BridgeImpl(ctx, seq, token); });
+}
+SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx,
+                                                  SslmGpuSequenceHandle* seq,
+                                                  const int32_t* tokens, int32_t count,
+                                                  uint32_t budget) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] {
+		return SslmGpuSeqPrefillPromptForG5BridgeImpl(ctx, seq, tokens, count, budget);
+	});
+}
+SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx,
+                                               SslmGpuSequenceHandle* seq, int32_t token,
+                                               uint32_t budget, int32_t* out_token) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] {
+		return SslmGpuSeqDecodeStepForG5BridgeImpl(ctx, seq, token, budget, out_token);
+	});
+}
+SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(
+    SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, const int32_t* tokens, int32_t count,
+    uint32_t budget, int32_t* consumed) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] {
+		return SslmGpuSeqPrefillSchemaContentForG5BridgeImpl(
+		    ctx, seq, tokens, count, budget, consumed);
+	});
 }

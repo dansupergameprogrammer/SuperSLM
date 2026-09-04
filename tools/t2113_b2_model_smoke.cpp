@@ -39,6 +39,7 @@
 #include <vector>
 
 #include "superslm/gpu_1p0.h"
+using enum SslmGpuStatus;
 #include "superslm/model.h"
 
 static int g_checks = 0;

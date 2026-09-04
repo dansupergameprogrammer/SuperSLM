@@ -12,6 +12,7 @@
 #include <cstdint>
 
 #include "superslm/checked_chain_funnel.h"  // superslm::CarriedScale
+#include "superslm/forward_sites.h"          // superslm::SequenceLayerState
 #include "superslm/gpu_1p0.h"               // SslmGpuSequenceHandle (opaque)
 
 struct ID3D12Resource;
@@ -22,9 +23,17 @@ int8_t* SslmGpuSeqHandleHiddenCodesForBench(SslmGpuSequenceHandle* seq);
 superslm::CarriedScale* SslmGpuSeqHandleHiddenScaleForBench(SslmGpuSequenceHandle* seq);
 uint32_t* SslmGpuSeqHandleLayerIndexForBench(SslmGpuSequenceHandle* seq);
 uint64_t* SslmGpuSeqHandleKvSaturationForBench(SslmGpuSequenceHandle* seq);
+superslm::SequenceLayerState* SslmGpuSeqHandleLiveStateForBench(SslmGpuSequenceHandle* seq);
 int64_t* SslmGpuSeqHandleContextLengthForBench(SslmGpuSequenceHandle* seq);
 size_t SslmGpuSeqHandleHiddenSizeForBench(SslmGpuSequenceHandle* seq);
 int64_t SslmGpuSeqHandleContextCapForBench(SslmGpuSequenceHandle* seq);  // T-2113 (N1)
+
+#if defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
+enum class SslmGpuApiFailureInjectionPoint { BeforeHandler, AfterHandler };
+void ArmSslmGpuApiFailureInjection(const char* api_name,
+                                   SslmGpuApiFailureInjectionPoint point);
+void ClearSslmGpuApiFailureInjection();
+#endif
 
 // T-2184 remedy C1 (Brunel fix round 1, Claude/Poirot/efeb9ba-t2184-t2169-gpu-batched-prefill-
 // review.md; D-SLM3662): a bench-only entry point reproducing the GENUINELY shipped (pre-T-2169,

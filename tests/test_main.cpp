@@ -56,10 +56,12 @@
 // itself -- this is the CMake side gaining the same shape).
 #ifdef _WIN32
 #include "superslm/gpu_1p0.h"
+#include "superslm/gpu_1p0_bench_bridge.h"
 #include "../src/gpu/d3d12_harness.h"
 #endif
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <stdexcept>
 #include <cmath>
@@ -72,7 +74,12 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <type_traits>
+
+#ifdef _WIN32
+using enum SslmGpuStatus;
+#endif
 #include <vector>
 
 #ifdef _WIN32
@@ -25180,6 +25187,78 @@ static void TestT2047_S6_SaveRestoreRoundTripsThroughRealDevice() {
 	          ws.size());
 }
 
+static void TestT2585_DispatchBudget_IsModelAwareAtExactBoundaries() {
+	CHECK(superslm_gpu::DispatchesPerLayer(false) == 24);
+	CHECK(superslm_gpu::DispatchesPerLayer(true) == 25);
+	for (const auto& cell : std::array<std::tuple<uint32_t, uint32_t, uint32_t>, 6>{
+	         std::tuple{23u, 24u, 0u}, std::tuple{24u, 24u, 1u}, std::tuple{25u, 24u, 1u},
+	         std::tuple{24u, 25u, 0u}, std::tuple{25u, 25u, 1u}, std::tuple{50u, 25u, 2u}}) {
+		const auto [budget, per_layer, expected_layers] = cell;
+		uint32_t layers = 999;
+		const auto status =
+		    superslm_gpu::PlanDispatchBudgetGpu(budget, 28, 0, &layers, per_layer);
+		CHECK(layers == expected_layers);
+		CHECK(status == (expected_layers == 0 ? superslm_gpu::SslmGpuStatus::DispatchBudgetTooSmall
+		                                      : superslm_gpu::SslmGpuStatus::Ok));
+	}
+	uint32_t legacy_two_layers = 0;
+	CHECK(superslm_gpu::PlanDispatchBudgetGpu(48, 28, 0, &legacy_two_layers, 24) ==
+	      superslm_gpu::SslmGpuStatus::Ok);
+	CHECK(legacy_two_layers == 2);
+}
+
+#if defined(_WIN32) && defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
+static void TestGpuPublicApiContainsInjectedAllocationFailuresAtBothHandlerEdges() {
+	auto verify = [&](const char* name, auto&& call) {
+		for (const auto point : {SslmGpuApiFailureInjectionPoint::BeforeHandler,
+		                         SslmGpuApiFailureInjectionPoint::AfterHandler}) {
+			ArmSslmGpuApiFailureInjection(name, point);
+			bool escaped = false;
+			SslmGpuStatus status = SslmGpuStatus::SSLM_DEVICE_LOST;
+			try {
+				status = call();
+			} catch (...) {
+				escaped = true;
+			}
+			CHECK_MSG(!escaped, "%s let an injected allocation failure unwind", name);
+			CHECK_MSG(status == SslmGpuStatus::SSLM_GPU_ALLOCATION_FAILED,
+			          "%s mapped injected allocation failure to %u, want AllocationFailed", name,
+			          static_cast<unsigned>(status));
+		}
+	};
+	SslmGpuContext* context = nullptr;
+	SslmGpuModelHandle* model = nullptr;
+	SslmGpuAdapterHandle* adapter = nullptr;
+	SslmGpuSequenceHandle* seq = nullptr;
+	SslmGpuStatus nested = SslmGpuStatus::SSLM_OK;
+	int32_t scalar = 0;
+	size_t size = 0;
+	verify("sslm_gpu_context_create", [&] { return sslm_gpu_context_create({}, nullptr); });
+	verify("sslm_gpu_context_destroy", [&] { return sslm_gpu_context_destroy(nullptr); });
+	verify("sslm_gpu_model_map", [&] { return sslm_gpu_model_map(nullptr, nullptr, {}, &model); });
+	verify("sslm_gpu_model_unmap", [&] { return sslm_gpu_model_unmap(nullptr, nullptr); });
+	verify("sslm_gpu_adapter_map", [&] { return sslm_gpu_adapter_map(nullptr, nullptr, nullptr, &adapter); });
+	verify("sslm_gpu_adapter_unmap", [&] { return sslm_gpu_adapter_unmap(nullptr, nullptr); });
+	verify("sslm_gpu_seq_create", [&] { return sslm_gpu_seq_create(nullptr, nullptr, 0, &seq); });
+	verify("sslm_gpu_seq_release", [&] { return sslm_gpu_seq_release(nullptr, nullptr); });
+	verify("sslm_gpu_seq_bind_adapter", [&] { return sslm_gpu_seq_bind_adapter(nullptr, nullptr, nullptr); });
+	verify("sslm_gpu_seq_embed_token", [&] { return sslm_gpu_seq_embed_token(nullptr, nullptr, 0); });
+	verify("sslm_gpu_seq_save", [&] { return sslm_gpu_seq_save(nullptr, nullptr, nullptr, &size); });
+	verify("sslm_gpu_seq_restore", [&] { return sslm_gpu_seq_restore(nullptr, nullptr, nullptr, 0, &seq); });
+	verify("sslm_gpu_seq_reset", [&] { return sslm_gpu_seq_reset(nullptr, nullptr); });
+	verify("sslm_decode_step_gpu", [&] { return sslm_decode_step_gpu(nullptr, nullptr, nullptr, 0); });
+	verify("sslm_decode_step_batch_gpu", [&] { return sslm_decode_step_batch_gpu(nullptr, nullptr, nullptr, 0, 0, nullptr); });
+	verify("sslm_gpu_ready", [&] { return sslm_gpu_ready(nullptr, nullptr, 0, &scalar, &nested); });
+	verify("SslmGpuSeqSetSchemaForG5Bridge", [&] { return SslmGpuSeqSetSchemaForG5Bridge(nullptr, nullptr, -1); });
+	verify("SslmGpuSeqFinishTokenForG5Bridge", [&] { return SslmGpuSeqFinishTokenForG5Bridge(nullptr, nullptr, &scalar); });
+	verify("SslmGpuSeqPrefillPromptForG5Bridge", [&] { return SslmGpuSeqPrefillPromptForG5Bridge(nullptr, nullptr, nullptr, 0, 0); });
+	verify("SslmGpuSeqDecodeStepForG5Bridge", [&] { return SslmGpuSeqDecodeStepForG5Bridge(nullptr, nullptr, 0, 0, &scalar); });
+	verify("SslmGpuSeqPrefillSchemaContentForG5Bridge", [&] { return SslmGpuSeqPrefillSchemaContentForG5Bridge(nullptr, nullptr, nullptr, 0, 0, &scalar); });
+	ClearSslmGpuApiFailureInjection();
+	(void)context;
+}
+#endif
+
 // T-2578 confirmation remedy S3: the smallest exact construction for the lost-state defect.
 // Zero residual/workspace bytes keep this about the sequence header alone; unequal site values
 // prove each field independently, and their sum pins the aggregate provenance invariant.
@@ -25791,14 +25870,15 @@ static void TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject() {
 	// dispatches this call issued -- q/o/kv/gate/up/down_proj each split into a GEMM dispatch plus
 	// their own requant dispatch, and RoPE split into stage+commit (re-derived from the 22
 	// sites/layer T-2101 shipped: kv_proj no longer stays fused-and-single-dispatch, and RoPE's
-	// commit phase is its own dispatch). Re-derived again to 8 layers * 25 sites/layer = 200
-	// (design §6 Track B step 3, T-2551): the new qk_norm_site.hlsl dispatch, inserted between
-	// kv_proj_site and rope_guard_site. One GPU-measured figure per dispatch, every one
-	// non-negative, summing to (approximately) gpu_busy_ms above.
+	// commit phase is its own dispatch). This fixture carries no QK norm, so 1.4 retains the
+	// legacy 24-dispatch count; QK-bearing fixtures add qk_norm_site.hlsl and use 25. One
+	// GPU-measured figure per dispatch, every one non-negative, summing to (approximately)
+	// gpu_busy_ms above.
 	const auto per_dispatch_ok = superslm_gpu::LastCallPerDispatchTimingsMs();
-	CHECK_MSG(per_dispatch_ok.size() == 8 * 25,
-	          "T2101/T2113 per-dispatch timing (success call): %zu entries, want 8*25=200",
-	          per_dispatch_ok.size());
+	CHECK_MSG(per_dispatch_ok.size() == 8 * superslm_gpu::kLegacyDispatchesPerLayer,
+	          "T2101/T2113 per-dispatch timing (legacy success call): %zu entries, want 8*%u=%u",
+	          per_dispatch_ok.size(), superslm_gpu::kLegacyDispatchesPerLayer,
+	          8 * superslm_gpu::kLegacyDispatchesPerLayer);
 	double per_dispatch_sum = 0.0;
 	bool all_non_negative = true;
 	for (double v : per_dispatch_ok) {
@@ -27589,6 +27669,13 @@ static void TestT2576_GpuKvSaturationAndKvRowMatchCpuOnRopeSaturationFixtureN100
 			++count_divergences;
 			continue;
 		}
+		if (i == 0) {
+			CHECK_MSG(superslm_gpu::LastCallPerDispatchTimingsMs().size() ==
+			              superslm_gpu::kLegacyDispatchesPerLayer,
+			          "non-QK-norm layer recorded %zu dispatches, want exactly %u",
+			          superslm_gpu::LastCallPerDispatchTimingsMs().size(),
+			          superslm_gpu::kLegacyDispatchesPerLayer);
+		}
 		if (i == 0) first_gpu = seq.kv_saturation_count;
 		if (seq.kv_saturation_count != cpu_count) {
 			++count_divergences;
@@ -29365,6 +29452,10 @@ int main(int argc, char** argv) {
 	TestT2019_B2_ApplyBiasReconcileRow_KBiasVBias_ScalarGuard_GpuMatchesCpu();
 	TestT2019_B5_MaxAbsReduceWide_FixtureDomainAbove2Pow31_GpuMatchesCpu();
 	TestT2019_B7_DispatchBudget_EveryRemainderAndBoundary();
+	TestT2585_DispatchBudget_IsModelAwareAtExactBoundaries();
+#if defined(_WIN32) && defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
+	TestGpuPublicApiContainsInjectedAllocationFailuresAtBothHandlerEdges();
+#endif
 	TestT2019_B7_DispatchBudget_RejectingLayerStillRecordsFullQuantum();
 	TestT2019_Sec59_BusyOnEachOfTheFiveNamedCallsWhileSubmitted();
 	TestT2019_Sec59_ModelUnmapRequiresNoLiveSequences();

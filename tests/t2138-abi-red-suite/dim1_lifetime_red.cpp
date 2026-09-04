@@ -2,8 +2,11 @@
 // product. RED BY LINK: sslm_abi.h declares the surface; no .cpp in this repo defines it
 // (D-SLM3450, grep confirmed at authoring commit main@e2feb7d0).
 #include "fixture_common.h"
+#include "superslm/forward_sites.h"
 
 using namespace superslm;
+
+extern "C" superslm::SequenceLayerState* SslmSeqLiveStateForTest(sslm_seq);
 
 // --- Mechanism cell 1 (design Sec9 C1 gate / Sec10 dim1): workspace create->destroy->re-create
 // at the SAME caller buffer address reuses cleanly -- the construction verb's own bookkeeping
@@ -77,6 +80,22 @@ static void TestDim1_M2_SeqReleaseRestoresPoolFreeCountExactly(sslm_model model)
 		          "sequence %u of %u should fit again after every block was released", i,
 		          block_count);
 	}
+	// Reset must clear the complete saturation census, not only its historical aggregate.
+	// Seed through the test-only accessor so this does not depend on a particular model input
+	// happening to saturate all four sites in one run.
+	SequenceLayerState* state = SslmSeqLiveStateForTest(second_round[0]);
+	CHECK(state != nullptr);
+	state->kv_saturation_count = 46;
+	state->kv_landing_saturation_count = 5;
+	state->k_normed_landing_saturation_count = 7;
+	state->rope_q_saturation_count = 11;
+	state->rope_k_saturation_count = 23;
+	CHECK(sslm_seq_reset(second_round[0]) == SSLM_OK);
+	CHECK(state->kv_saturation_count == 0);
+	CHECK(state->kv_landing_saturation_count == 0);
+	CHECK(state->k_normed_landing_saturation_count == 0);
+	CHECK(state->rope_q_saturation_count == 0);
+	CHECK(state->rope_k_saturation_count == 0);
 	for (uint32_t i = 0; i < block_count; ++i) {
 		CHECK(sslm_seq_release(second_round[i]) == SSLM_OK);
 	}

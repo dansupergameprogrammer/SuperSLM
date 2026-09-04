@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "superslm/gpu_1p0.h"
+using enum SslmGpuStatus;
 #include "superslm/gpu_1p0_bench_bridge.h"
 #include "superslm/gpu_port.h"  // superslm_gpu::kDispatchesPerLayer
 #include "superslm/model.h"

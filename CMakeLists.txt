@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(superslm VERSION 1.3.1 LANGUAGES CXX)
+project(superslm VERSION 1.4.0 LANGUAGES CXX)
 
 # C++20: the S-LoRA delta path is specified at -std=c++20 (SuperSLM_Plan.md §19),
 # and the core carries wide-integer (int64) composition arithmetic throughout. One
@@ -12,6 +12,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # find_package() config) needed by every install() rule below.
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+include(CTest)
 
 # T-2115 fix round (S1, Claude/Poirot/6f60491-t2115-cmake-product-surface.md):
 # the fixed, non-config-dependent install destination for the compiled GPU
@@ -47,6 +48,7 @@ set(SUPERSLM_CORE_SOURCES
 )
 
 add_library(superslm STATIC ${SUPERSLM_CORE_SOURCES})
+target_compile_features(superslm PUBLIC cxx_std_20)
 # BUILD_INTERFACE/INSTALL_INTERFACE: consumers building against this tree see
 # the source-tree include/ path; consumers of an installed package see the
 # installed header destination (CMAKE_INSTALL_INCLUDEDIR) instead — the same
@@ -108,8 +110,9 @@ endif()
 # target. T-2578 adds src/gpu/gpu_1p0.cpp too: the stale-shader real-path cell now consumes the
 # production public-status mapper doors, so the test binary proves the actual 1.0 mapping rather
 # than a suite-side transcription. build.bat carries the identical source pair.
-if(WIN32)
+if(WIN32 AND BUILD_TESTING)
 	target_sources(superslm_tests PRIVATE src/gpu/superslm_gpu.cpp src/gpu/gpu_1p0.cpp)
+	target_compile_definitions(superslm_tests PRIVATE SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
 	target_include_directories(superslm_tests PRIVATE src/gpu)
 	target_link_libraries(superslm_tests PRIVATE d3d12 dxgi dxguid)
 endif()
@@ -578,37 +581,21 @@ add_test(NAME t2141_gate_c_t2138_suite_side_must_reject_fails_to_compile
 		-DMARKER_TEXT=SSLM_ARTIFACT_REJECTED\ diverges\ \(deliberate\ corruption,\ must-reject\ construction\)
 		-P ${CMAKE_SOURCE_DIR}/tools/ci/check_negative_compile_marker.cmake)
 
-# T-2115 (D-SLM3432)/T-2152 (outside strike item 1): the GPU acceleration sources
-# (src/gpu/gpu_1p0.cpp, src/gpu/superslm_gpu.cpp) and their compiled shaders are
-# D3D12/HLSL and Windows-only -- build.bat is the build recipe that has always
-# compiled and shaded them, UNCONDITIONALLY (dxc.exe is build.bat's own first,
-# non-optional step). T-2115 originally gated shader compilation itself behind
-# SUPERSLM_BUILD_GPU, matching a superslm_gpu STATIC library that was ALSO fully
-# opt-in -- correct for that library (a consumer who never wants GPU acceleration
-# should not need dxc.exe installed to link the CPU-only product), wrong for
-# tests/test_main.cpp, which calls `superslm_gpu::*` directly and unconditionally
-# on WIN32 (see the `if(WIN32)` block on the superslm_tests target above) and so
-# needs the SAME compiled shaders at test-run time on every Windows configure,
-# not only an opted-in one. Split here: shader compilation (this block) now runs
-# on every WIN32 configure, matching build.bat's own unconditional posture and
-# giving superslm_tests real shaders to dispatch against; the PUBLIC, installable
-# superslm_gpu library stays under SUPERSLM_BUILD_GPU below (a consumer who wants
-# only the CPU-only product library still never links GPU code, only now compiles
-# its shaders as a byproduct of being on Windows -- see the version/dxc checks
-# just below for what that costs, and why it is honest cost rather than a papered
-# gap: it is exactly what build.bat has always required).
+# D3D12/HLSL sources and shaders are needed only by the opt-in public GPU target
+# or the Windows test suite. BUILD_TESTING=OFF plus the default GPU option keeps
+# a CPU product configure independent of DXC, D3D12 sources, and shader builds.
 option(SUPERSLM_BUILD_GPU "Build and install the D3D12/HLSL GPU acceleration library (Windows/MSVC only)" OFF)
 
 if(SUPERSLM_BUILD_GPU AND NOT WIN32)
 	message(FATAL_ERROR "SUPERSLM_BUILD_GPU requires Windows: src/gpu/*.cpp is a D3D12/HLSL implementation with no non-Windows backend.")
 endif()
 
-if(WIN32)
+if(WIN32 AND (SUPERSLM_BUILD_GPU OR BUILD_TESTING))
 	# T-2115 round 4 (NEW-3, Claude/Poirot/6f60491-t2115-cmake-product-
 	# surface.md, second confirmation), narrowed by T-2152: the project's own
-	# declared floor is 3.16 for Linux/macOS, which never reach this block at
-	# all (CPU-only Layer 1 embeddability, D-SLM13, stays reachable there on
-	# CMake 3.16-3.19). On WIN32 specifically, shader compilation below needs
+	# declared floor is 3.16 for CPU-only builds, which never reach this block
+	# (CPU-only Layer 1 embeddability, D-SLM13, stays reachable on CMake
+	# 3.16-3.19). On WIN32, GPU and GPU-bearing test builds need
 	# 3.20: SUPERSLM_GPU_SHADER_OUT_DIR carries a $<CONFIG> generator
 	# expression on multi-config generators, and that string reaches
 	# add_custom_command(OUTPUT ...) -- CMake's own Help/command/
@@ -617,12 +604,10 @@ if(WIN32)
 	# build would attempt to create and write into a directory literally
 	# named "$<CONFIG>" -- an illegible path error (`<`/`>` are invalid
 	# Windows path characters) instead of the legible one-line refusal
-	# cmake_minimum_required exists to give. This is now the real floor for
-	# ANY Windows configure (T-2152: shader compilation is no longer gated
-	# behind SUPERSLM_BUILD_GPU, because tests/test_main.cpp needs it
-	# unconditionally on WIN32) -- Linux/macOS are unaffected.
+	# cmake_minimum_required exists to give. CPU-only BUILD_TESTING=OFF
+	# configures do not enter this block.
 	if(CMAKE_VERSION VERSION_LESS "3.20")
-		message(FATAL_ERROR "A Windows configure of this project requires CMake 3.20 or higher: tests/test_main.cpp calls superslm_gpu::* directly and unconditionally on WIN32 (T-2152), so the GPU shader compilation below -- which needs CMake 3.20's own generator-expression support in add_custom_command(OUTPUT ...), CMake Help/command/add_custom_command.rst -- now runs on every Windows configure, not only an opted-in SUPERSLM_BUILD_GPU=ON one. Linux/macOS configures are unaffected and still work on CMake 3.16+.")
+		message(FATAL_ERROR "A Windows GPU or test build requires CMake 3.20 or higher because shader outputs use generator expressions in add_custom_command(OUTPUT). Configure with -DBUILD_TESTING=OFF and leave SUPERSLM_BUILD_GPU=OFF for the CMake 3.16-compatible CPU-only product build.")
 	endif()
 
 	# dxc.exe (the DirectX Shader Compiler) is not reliably on PATH; build.bat
@@ -644,7 +629,7 @@ if(WIN32)
 		endif()
 	endif()
 	if(NOT SUPERSLM_DXC_EXECUTABLE)
-		message(FATAL_ERROR "dxc.exe (DirectX Shader Compiler) was not found on PATH or under any installed Windows Kits 10 SDK. A Windows configure of this project needs it unconditionally (T-2152: tests/test_main.cpp calls superslm_gpu::* directly on WIN32, so its shaders must exist to run the test suite, matching build.bat's own always-on requirement) -- install the Windows SDK, or pass -DSUPERSLM_DXC_EXECUTABLE=<path to dxc.exe>.")
+		message(FATAL_ERROR "dxc.exe (DirectX Shader Compiler) was not found on PATH or under any installed Windows Kits 10 SDK. Install the Windows SDK, pass -DSUPERSLM_DXC_EXECUTABLE=<path to dxc.exe>, or configure the CPU-only product with -DBUILD_TESTING=OFF and SUPERSLM_BUILD_GPU=OFF.")
 	endif()
 	message(STATUS "SuperSLM GPU: compiling shaders with ${SUPERSLM_DXC_EXECUTABLE}")
 
@@ -723,7 +708,9 @@ if(WIN32)
 	# T-2152: superslm_tests dispatches real GPU shaders on WIN32 (the T-2019
 	# GPU-serial-port suite) and must not start until they exist -- matching
 	# build.bat's own ordering (dxc runs before the test binary compiles).
-	add_dependencies(superslm_tests superslm_gpu_shaders)
+	if(BUILD_TESTING)
+		add_dependencies(superslm_tests superslm_gpu_shaders)
+	endif()
 
 	if(SUPERSLM_BUILD_GPU)
 		add_library(superslm_gpu STATIC

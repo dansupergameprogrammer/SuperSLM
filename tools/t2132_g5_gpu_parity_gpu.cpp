@@ -15,6 +15,7 @@
 // points cannot re-trip the bug by construction. This driver now calls those entry points
 // exclusively; it no longer hand-composes the embed/drive/finish sequence at all.
 #include "superslm/gpu_1p0.h"
+using enum SslmGpuStatus;
 #include "superslm/gpu_1p0_g5_bridge.h"
 #include "superslm/gpu_port.h"  // superslm_gpu::kDispatchesPerLayer
 #include "superslm/model.h"

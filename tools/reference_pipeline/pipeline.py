@@ -1139,14 +1139,83 @@ class _SafeTensors:
     """
 
     _DIRECT = {"F64": np.float64, "F32": np.float32, "F16": np.float16}
+    _ITEM_SIZES = {"F64": 8, "F32": 4, "F16": 2, "BF16": 2}
 
     def __init__(self, path):
         self._path = Path(path)
+        file_size = self._path.stat().st_size
+        if file_size < 8:
+            raise ConfigError(f"{self._path}: safetensors file is shorter than its 8-byte header")
         with open(self._path, "rb") as handle:
-            header_length = int.from_bytes(handle.read(8), "little")
-            header = json.loads(handle.read(header_length))
+            prefix = handle.read(8)
+            header_length = int.from_bytes(prefix, "little")
+            if header_length == 0 or header_length > file_size - 8:
+                raise ConfigError(
+                    f"{self._path}: safetensors header length {header_length} exceeds the "
+                    f"{file_size - 8}-byte file remainder"
+                )
+            header_bytes = handle.read(header_length)
+            if len(header_bytes) != header_length:
+                raise ConfigError(f"{self._path}: truncated safetensors header")
+            try:
+                header = json.loads(header_bytes)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ConfigError(f"{self._path}: invalid safetensors JSON header: {exc}") from exc
+        if not isinstance(header, dict):
+            raise ConfigError(f"{self._path}: safetensors header must be a JSON object")
         self._offset = 8 + header_length
-        self._header = {k: v for k, v in header.items() if k != "__metadata__"}
+        payload_size = file_size - self._offset
+        self._header = {}
+        occupied = []
+        for name, spec in header.items():
+            if name == "__metadata__":
+                if not isinstance(spec, dict):
+                    raise ConfigError(f"{self._path}: __metadata__ must be a JSON object")
+                continue
+            if not isinstance(name, str) or not isinstance(spec, dict):
+                raise ConfigError(f"{self._path}: every tensor entry must be a named object")
+            dtype = spec.get("dtype")
+            if dtype not in self._ITEM_SIZES:
+                raise UnsupportedOpSet(
+                    f"{self._path}: {name} is stored as {dtype}, which this loader does not "
+                    f"widen exactly; a lossy read here would be attributed to quantization"
+                )
+            shape = spec.get("shape")
+            if (not isinstance(shape, list) or
+                    any(isinstance(dim, bool) or not isinstance(dim, int) or dim < 0
+                        for dim in shape)):
+                raise ConfigError(f"{self._path}: {name} has an invalid shape")
+            offsets = spec.get("data_offsets")
+            if (not isinstance(offsets, list) or len(offsets) != 2 or
+                    any(isinstance(value, bool) or not isinstance(value, int)
+                        for value in offsets)):
+                raise ConfigError(f"{self._path}: {name} has invalid data_offsets")
+            start, end = offsets
+            if start < 0 or end < start or end > payload_size:
+                raise ConfigError(
+                    f"{self._path}: {name} data_offsets [{start}, {end}] exceed the "
+                    f"{payload_size}-byte tensor payload"
+                )
+            element_count = 1
+            for dim in shape:
+                element_count *= dim
+            expected_bytes = element_count * self._ITEM_SIZES[dtype]
+            if end - start != expected_bytes:
+                raise ConfigError(
+                    f"{self._path}: {name} occupies {end - start} bytes but dtype={dtype}, "
+                    f"shape={shape} requires exactly {expected_bytes}"
+                )
+            self._header[name] = spec
+            if end > start:
+                occupied.append((start, end, name))
+
+        occupied.sort()
+        for (_, previous_end, previous_name), (start, _, name) in zip(occupied, occupied[1:]):
+            if start < previous_end:
+                raise ConfigError(
+                    f"{self._path}: tensor byte ranges overlap: {previous_name} ends at "
+                    f"{previous_end}, {name} starts at {start}"
+                )
 
     def keys(self):
         return set(self._header)

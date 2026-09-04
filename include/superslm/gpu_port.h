@@ -125,7 +125,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              uint8_t* workspace, size_t workspace_size,
                                              ID3D12Resource* external_kv_resident = nullptr,
                                              bool* io_external_kv_needs_resume_barrier = nullptr,
-                                             uint64_t model_generation = 0);
+                                             uint64_t model_generation = 0,
+                                             bool model_has_qk_norm = false);
 
 // (design Sec4.2/Sec4.3/Sec6.2/Sec10 B5): the async submission boundary.
 // `RunLayerLoopGpu` above is UNCHANGED -- every one of its existing ~40 callers still
@@ -257,7 +258,8 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
     // (T-2577, D-SLM6278): mirrors `RunLayerLoopGpu`'s own trailing `model_generation` --
     // see that declaration's own header comment for the full contract. Defaults to `0` so every
     // existing caller (~40 sites) is unaffected.
-    uint64_t model_generation = 0);
+    uint64_t model_generation = 0,
+    bool model_has_qk_norm = false);
 
 // FINISH: `block == 0` and the fence has not yet signaled: `*out_ready = 0`, returns
 // `superslm::SslmForwardStatus::Ok` (design Sec4.2: "the call itself succeeded; nothing
@@ -309,7 +311,8 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
     // Threaded through to `PrepareGpuLayerLoopChunkOpenState`'s own read-only residency-cache
     // predicates and the mutable K/V predicate's model-identity conjunct. Defaults to `0` so
     // every pre-existing caller is unaffected.
-    uint64_t model_generation = 0);
+    uint64_t model_generation = 0,
+    bool model_has_qk_norm = false);
 
 // T-2169 (Rung 2, design Sec5, D-SLM3596/D-SLM3641): the measured, driver-stability-bounded
 // maximum sub-chunk size, in tokens -- see its own definition (src/gpu/superslm_gpu.cpp) for the
@@ -674,27 +677,22 @@ const int8_t* ValueRowGpu(const uint8_t* workspace, uint32_t layer, int64_t cont
 // --- B7 (Sec5.8, Sec11 B7): the dispatch_budget contract, whole-
 // layer quanta. This is the ARITHMETIC/policy half of `sslm_decode_step_gpu`'s own
 // contract -- how many layers a call at a given budget will record, and what status
-// it returns -- and is testable without a device (no dispatch is actually issued to
-// answer this question, only planned). `complete_layers = min(dispatch_budget / 25,
-// num_hidden_layers - current_layer_position)`, floor division, 25 = the real per-layer
-// dispatch count this design's own geometry ships (design §6 Track B step 3, T-2551: re-
-// derived from 24 to 25 -- the new qk_norm_site.hlsl dispatch, inserted between kv_proj_site
-// and rope_guard_site in RecordOneTokenFullDepthDispatchBody -- itself re-derived from 17 =
-// 16 sites + 1 commit before B4 ported the dispatch chain onto its own production geometry,
-// then from that to 24 at B4). Returns SslmGpuStatus::DispatchBudgetTooSmall,
-// `*out_layers_to_issue = 0`, for any `dispatch_budget` in [0, 24] -- floor division by 25 is
-// uniformly zero there. Never records a partial layer. ---
+// it returns -- and is testable without a device. Legacy models retain 24 dispatches
+// per layer. A model carrying QK norm adds qk_norm_site.hlsl between kv_proj_site and
+// rope_guard_site and therefore uses 25. The caller passes the model-derived divisor;
+// floor division means a budget one below that divisor makes no progress, and a
+// partial layer is never recorded. ---
 enum class SslmGpuStatus { Ok, DispatchBudgetTooSmall, Busy };
 
-// The ONE source for
-// the real per-layer dispatch count -- `PlanDispatchBudgetGpu`'s own body (superslm_gpu.cpp)
-// and `sslm_decode_step_batch_gpu`'s own budget-spend line (gpu_1p0.cpp,
-// `remaining_budget -= layers_to_issue * kDispatchesPerLayer`) both read this constant rather
-// than each carrying its own `25u` literal. Before this fix the two agreed only because no one
-// had changed either copy since B4; a future change to one and not the other would have made
-// the batch call's own unsigned subtraction wrap (an effectively unlimited budget for every
-// later sequence in the same call), silently.
-constexpr uint32_t kDispatchesPerLayer = 25;  // the real per-layer dispatch count (T-2551: 24 -> 25)
+// The one source for both model shapes' real per-layer dispatch counts. Model mapping
+// records the appropriate value and both planning and batch budget spending consume it.
+constexpr uint32_t kLegacyDispatchesPerLayer = 24;
+constexpr uint32_t kQkNormDispatchesPerLayer = 25;
+// Compatibility name for callers whose model is already known to carry QK norm.
+constexpr uint32_t kDispatchesPerLayer = kQkNormDispatchesPerLayer;
+constexpr uint32_t DispatchesPerLayer(bool has_qk_norm) {
+	return has_qk_norm ? kQkNormDispatchesPerLayer : kLegacyDispatchesPerLayer;
+}
 
 // T-2240/O3 (SuperSLM 1.2.1, plan Sec10 Phase 2 O3): the ADAPTER_U region's own byte size,
 // extracted from the work_total site (superslm_gpu.cpp, `work_adapter_u_off + ...`) into
@@ -713,7 +711,8 @@ constexpr uint64_t AdapterURegionBytes(uint64_t adapter_rank) {
 
 SslmGpuStatus PlanDispatchBudgetGpu(uint32_t dispatch_budget, uint32_t num_hidden_layers,
                                      uint32_t current_layer_position,
-                                     uint32_t* out_layers_to_issue);
+                                     uint32_t* out_layers_to_issue,
+                                     uint32_t dispatches_per_layer = kQkNormDispatchesPerLayer);
 
 // (design Sec10 B2):
 // GpuLayerLayout/ComputeLayerLayout/PackLayerWeightsBytes, promoted from

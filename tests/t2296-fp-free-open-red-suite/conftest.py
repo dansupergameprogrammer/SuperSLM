@@ -232,6 +232,13 @@ def _run_ci_recipe(vsdevcmd: str, cmake_exe: str, build_dir: str):
     try:
         with open(bat_path, "w") as f:
             f.write("@echo off\r\n")
+            # MSBuild rejects a raw environment containing both PATH and Path.
+            # Normalize before VsDevCmd extends the one remaining entry.
+            f.write('set "SSLM_PRE_VS_PATH=%PATH%"\r\n')
+            f.write('set "PATH="\r\n')
+            f.write('set "Path="\r\n')
+            f.write('set "PATH=%SSLM_PRE_VS_PATH%"\r\n')
+            f.write('set "SSLM_PRE_VS_PATH="\r\n')
             f.write('call "{}" -arch=x64 -no_logo\r\n'.format(vsdevcmd))
             f.write('cd /d "{}"\r\n'.format(_REPO_ROOT))
             f.write('"{}" -B "{}"\r\n'.format(cmake_exe, build_dir))

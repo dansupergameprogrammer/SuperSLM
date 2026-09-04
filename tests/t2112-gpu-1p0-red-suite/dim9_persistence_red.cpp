@@ -36,8 +36,54 @@ using namespace superslm;
 // not a second drifting copy per file), reused verbatim by every dim file that needs them.
 // `SslmGpuSeqHandleContextCapForBench` (N1's own accessor) is dim9-specific and stays declared here.
 extern int64_t SslmGpuSeqHandleContextCapForBench(SslmGpuSequenceHandle*);
+extern superslm::SequenceLayerState* SslmGpuSeqHandleLiveStateForBench(SslmGpuSequenceHandle*);
 
 namespace {
+
+void TestDim9_ResetClearsAllSaturationCountersInLiveAndSerializedState(
+    SslmGpuContext* ctx, SslmGpuModelHandle* model, int64_t context_cap) {
+	SslmGpuSequenceHandle* seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, context_cap, &seq) == SSLM_OK);
+	if (!seq) return;
+
+	SequenceLayerState* state = SslmGpuSeqHandleLiveStateForBench(seq);
+	CHECK(state != nullptr);
+	state->kv_saturation_count = 46;
+	state->kv_landing_saturation_count = 5;
+	state->k_normed_landing_saturation_count = 7;
+	state->rope_q_saturation_count = 11;
+	state->rope_k_saturation_count = 23;
+	*SslmGpuSeqHandleKvSaturationForBench(seq) = 46;
+
+	CHECK(sslm_gpu_seq_reset(ctx, seq) == SSLM_OK);
+	CHECK(*SslmGpuSeqHandleKvSaturationForBench(seq) == 0);
+	CHECK(state->kv_saturation_count == 0);
+	CHECK(state->kv_landing_saturation_count == 0);
+	CHECK(state->k_normed_landing_saturation_count == 0);
+	CHECK(state->rope_q_saturation_count == 0);
+	CHECK(state->rope_k_saturation_count == 0);
+
+	size_t required_size = 0;
+	uint8_t probe = 0;
+	CHECK(sslm_gpu_seq_save(ctx, seq, &probe, &required_size) != SSLM_OK);
+	CHECK(required_size > 0);
+	std::vector<uint8_t> blob(required_size);
+	size_t blob_size = blob.size();
+	CHECK(sslm_gpu_seq_save(ctx, seq, blob.data(), &blob_size) == SSLM_OK);
+
+	SslmGpuSequenceHandle* restored = nullptr;
+	CHECK(sslm_gpu_seq_restore(ctx, model, blob.data(), blob_size, &restored) == SSLM_OK);
+	if (restored) {
+		const SequenceLayerState* restored_state = SslmGpuSeqHandleLiveStateForBench(restored);
+		CHECK(restored_state->kv_saturation_count == 0);
+		CHECK(restored_state->kv_landing_saturation_count == 0);
+		CHECK(restored_state->k_normed_landing_saturation_count == 0);
+		CHECK(restored_state->rope_q_saturation_count == 0);
+		CHECK(restored_state->rope_k_saturation_count == 0);
+		CHECK(sslm_gpu_seq_release(ctx, restored) == SSLM_OK);
+	}
+	CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
+}
 
 // N2 (`Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md` Sec8): a decode session's own
 // `layer_index` reaching `num_hidden_layers` means the CURRENT TOKEN is complete
@@ -520,6 +566,8 @@ int main(int argc, char** argv) {
 		CHECK(sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model) == SSLM_OK);
 		const int64_t model_context_cap = static_cast<int64_t>(view.config.context_cap);
 		const uint32_t num_hidden_layers = view.config.num_hidden_layers;
+		TestDim9_ResetClearsAllSaturationCountersInLiveAndSerializedState(ctx, model,
+		                                                                  kSmallContextCap);
 		TestDim9_M1_SaveMidDecodeRestoreFreshHandleBitIdentical(ctx, model, nullptr, kSmallContextCap,
 		                                                         num_hidden_layers);
 		TestDim9_P1_RealArtifactSaveRestoreThen64FurtherSteps(ctx, model, nullptr, kSmallContextCap,
