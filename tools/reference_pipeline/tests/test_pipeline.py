@@ -1625,6 +1625,13 @@ def _write_safetensors_parts(path, header, payload=b""):
         f.write(payload)
 
 
+def _write_safetensors_raw_header(path, header_bytes, payload=b""):
+    with open(path, "wb") as f:
+        f.write(len(header_bytes).to_bytes(8, "little"))
+        f.write(header_bytes)
+        f.write(payload)
+
+
 def test_safetensors_accepts_adjacent_valid_tensor_ranges(tmp_path):
     reader = api(MODULE, "_SafeTensors")
     path = tmp_path / "valid.safetensors"
@@ -1644,6 +1651,58 @@ def test_safetensors_rejects_overlapping_tensor_ranges(tmp_path):
         "b": {"dtype": "F32", "shape": [1], "data_offsets": [2, 6]},
     }, b"\0" * 6)
     with pytest.raises(config_error, match="overlap"):
+        reader(path)
+
+
+@pytest.mark.parametrize("header,payload", [
+    ({"a": {"dtype": "F32", "shape": [1], "data_offsets": [4, 8]}}, b"\0" * 8),
+    ({
+        "a": {"dtype": "F32", "shape": [1], "data_offsets": [0, 4]},
+        "b": {"dtype": "F32", "shape": [1], "data_offsets": [8, 12]},
+    }, b"\0" * 12),
+    ({"a": {"dtype": "F32", "shape": [1], "data_offsets": [0, 4]}}, b"\0" * 8),
+])
+def test_safetensors_rejects_leading_interior_and_trailing_unindexed_bytes(
+        tmp_path, header, payload):
+    reader, config_error = api(MODULE, "_SafeTensors", "ConfigError")
+    path = tmp_path / "unindexed.safetensors"
+    _write_safetensors_parts(path, header, payload)
+    with pytest.raises(config_error, match="fully index the payload"):
+        reader(path)
+
+
+def test_safetensors_rejects_a_header_over_100_mb_before_reading_it(tmp_path):
+    reader, config_error = api(MODULE, "_SafeTensors", "ConfigError")
+    path = tmp_path / "oversized-header.safetensors"
+    path.write_bytes((100_000_001).to_bytes(8, "little") + b"{}")
+    with pytest.raises(config_error, match="100000000-byte format limit"):
+        reader(path)
+
+
+@pytest.mark.parametrize("header_bytes", [
+    b'{"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4]},'
+    b'"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}',
+    b'{"a":{"dtype":"F32","dtype":"F16","shape":[1],'
+    b'"data_offsets":[0,4]}}',
+])
+def test_safetensors_rejects_duplicate_json_keys(tmp_path, header_bytes):
+    reader, config_error = api(MODULE, "_SafeTensors", "ConfigError")
+    path = tmp_path / "duplicate-key.safetensors"
+    _write_safetensors_raw_header(path, header_bytes, b"\0" * 4)
+    with pytest.raises(config_error, match="duplicate JSON key"):
+        reader(path)
+
+
+@pytest.mark.parametrize("metadata", [
+    {"owner": 7},
+    {"owner": None},
+    {"owner": ["not", "a", "string"]},
+])
+def test_safetensors_rejects_non_string_metadata_values(tmp_path, metadata):
+    reader, config_error = api(MODULE, "_SafeTensors", "ConfigError")
+    path = tmp_path / "invalid-metadata.safetensors"
+    _write_safetensors_parts(path, {"__metadata__": metadata})
+    with pytest.raises(config_error, match="string-to-string"):
         reader(path)
 
 

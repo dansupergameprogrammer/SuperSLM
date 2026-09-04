@@ -1140,6 +1140,7 @@ class _SafeTensors:
 
     _DIRECT = {"F64": np.float64, "F32": np.float32, "F16": np.float16}
     _ITEM_SIZES = {"F64": 8, "F32": 4, "F16": 2, "BF16": 2}
+    _MAX_HEADER_BYTES = 100_000_000
 
     def __init__(self, path):
         self._path = Path(path)
@@ -1149,6 +1150,11 @@ class _SafeTensors:
         with open(self._path, "rb") as handle:
             prefix = handle.read(8)
             header_length = int.from_bytes(prefix, "little")
+            if header_length > self._MAX_HEADER_BYTES:
+                raise ConfigError(
+                    f"{self._path}: safetensors header length {header_length} exceeds the "
+                    f"{self._MAX_HEADER_BYTES}-byte format limit"
+                )
             if header_length == 0 or header_length > file_size - 8:
                 raise ConfigError(
                     f"{self._path}: safetensors header length {header_length} exceeds the "
@@ -1157,8 +1163,19 @@ class _SafeTensors:
             header_bytes = handle.read(header_length)
             if len(header_bytes) != header_length:
                 raise ConfigError(f"{self._path}: truncated safetensors header")
+
+            def reject_duplicate_keys(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ConfigError(
+                            f"{self._path}: duplicate JSON key {key!r} in safetensors header"
+                        )
+                    result[key] = value
+                return result
+
             try:
-                header = json.loads(header_bytes)
+                header = json.loads(header_bytes, object_pairs_hook=reject_duplicate_keys)
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise ConfigError(f"{self._path}: invalid safetensors JSON header: {exc}") from exc
         if not isinstance(header, dict):
@@ -1169,8 +1186,12 @@ class _SafeTensors:
         occupied = []
         for name, spec in header.items():
             if name == "__metadata__":
-                if not isinstance(spec, dict):
-                    raise ConfigError(f"{self._path}: __metadata__ must be a JSON object")
+                if (not isinstance(spec, dict) or
+                        any(not isinstance(key, str) or not isinstance(value, str)
+                            for key, value in spec.items())):
+                    raise ConfigError(
+                        f"{self._path}: __metadata__ must be a string-to-string JSON object"
+                    )
                 continue
             if not isinstance(name, str) or not isinstance(spec, dict):
                 raise ConfigError(f"{self._path}: every tensor entry must be a named object")
@@ -1210,12 +1231,28 @@ class _SafeTensors:
                 occupied.append((start, end, name))
 
         occupied.sort()
+        if occupied and occupied[0][0] != 0:
+            raise ConfigError(
+                f"{self._path}: tensor byte ranges do not fully index the payload: "
+                f"leading gap [0, {occupied[0][0]})"
+            )
         for (_, previous_end, previous_name), (start, _, name) in zip(occupied, occupied[1:]):
             if start < previous_end:
                 raise ConfigError(
                     f"{self._path}: tensor byte ranges overlap: {previous_name} ends at "
                     f"{previous_end}, {name} starts at {start}"
                 )
+            if start != previous_end:
+                raise ConfigError(
+                    f"{self._path}: tensor byte ranges do not fully index the payload: "
+                    f"gap [{previous_end}, {start}) between {previous_name} and {name}"
+                )
+        indexed_end = occupied[-1][1] if occupied else 0
+        if indexed_end != payload_size:
+            raise ConfigError(
+                f"{self._path}: tensor byte ranges do not fully index the payload: "
+                f"indexed through {indexed_end} of {payload_size} bytes"
+            )
 
     def keys(self):
         return set(self._header)

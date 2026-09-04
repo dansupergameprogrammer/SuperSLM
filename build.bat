@@ -19,6 +19,13 @@ pushd %~dp0
 if not exist out mkdir out
 if not exist out\shaders mkdir out\shaders
 
+rem SuperSLM 1.4.0 external re-review P1: prove the advertised Windows CPU-only
+rem configuration survives a clean DEFAULT build with tests and GPU both off.
+call tests\cmake-cpu-only\run_windows.bat
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 rem T-1986 GPU-serial port (Sec5.7): every dxc invocation this design's build
 rem issues adds -WX, at the pinned compile target (cs_6_2 -HV 2018 -O3).
 set DXC="C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\dxc.exe"

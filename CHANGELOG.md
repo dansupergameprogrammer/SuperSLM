@@ -14,6 +14,9 @@ the CPU engine, and the D3D12 GPU path. Legacy GPU models retain their existing
 status type is now a scoped C++ enum, public status-returning GPU calls are
 `noexcept`, installed CMake targets propagate C++20, and the installed GPU
 package exports `superslm_deploy_gpu_shaders()` for runtime deployment.
+The test-disabled Windows CMake configuration now supports an ordinary default CPU-only
+build without DXC, and the reference safetensors reader enforces complete payload coverage,
+the 100 MB header limit, unique JSON keys, and string-only metadata.
 
 QK-norm artifacts made by pre-final 1.4 development trees are not compatible
 with the final carried-scale/reciprocal contract and must be reconverted. Released

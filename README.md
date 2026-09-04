@@ -201,13 +201,14 @@ cmake -B build && cmake --build build && ctest --test-dir build
 
 This builds the CPU-only product library (`superslm`), the public headers,
 and the test suite. To build only the CPU product on Windows, with no DXC or
-D3D12 test dependency, use `cmake -B build -DBUILD_TESTING=OFF` and build the
-`superslm` target. On Linux and macOS this is standard-library only, no
+D3D12 test dependency, use `cmake -B build -DBUILD_TESTING=OFF` followed by
+the ordinary default `cmake --build build --config Release`; no test target
+is created. On Linux and macOS this is standard-library only, no
 third-party runtime dependency, and works from CMake 3.16. On Windows, the
-test suite's own GPU-serial-port section calls the D3D12 GPU path
-directly and unconditionally, so `superslm_tests` also compiles and links
-`src/gpu/superslm_gpu.cpp` and its compiled shaders on every Windows
-configure — this needs CMake 3.20+ and the DirectX Shader Compiler
+enabled test suite's own GPU-serial-port section calls the D3D12 GPU path
+directly, so `superslm_tests` compiles and links `src/gpu/superslm_gpu.cpp`
+and its compiled shaders when `BUILD_TESTING=ON` — this needs CMake 3.20+
+and the DirectX Shader Compiler
 (`dxc.exe`, from the Windows SDK), matching `build.bat`'s own long-standing
 requirement below; a Windows configure without `dxc.exe` fails at
 `cmake -B build` with a one-line diagnostic naming what is missing, rather
@@ -219,9 +220,9 @@ cmake -B build -DSUPERSLM_BUILD_GPU=ON && cmake --build build --target superslm_
 ```
 
 This is for a consumer who wants the GPU acceleration library itself
-installed and exported via `find_package(superslm)`; it reuses the same
-shader compilation the default Windows configure already performs above,
-and installs the compiled shaders with the package. A consuming CMake target
+installed and exported via `find_package(superslm)`; it enables the same
+shader compilation used by the Windows test build and installs the compiled
+shaders with the package. A consuming CMake target
 must deploy them beside its executable:
 
 ```cmake

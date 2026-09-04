@@ -78,6 +78,7 @@ endif()
 # defines the macro and so never even includes the seam header
 # (src/bad_alloc_wrap.h #ifdef-gates it out entirely -- Layer 1 stays
 # independently embeddable, D-SLM13).
+if(BUILD_TESTING)
 add_library(superslm_test_injection STATIC ${SUPERSLM_CORE_SOURCES})
 target_include_directories(superslm_test_injection PUBLIC include)
 target_include_directories(superslm_test_injection PRIVATE tests)
@@ -110,7 +111,7 @@ endif()
 # target. T-2578 adds src/gpu/gpu_1p0.cpp too: the stale-shader real-path cell now consumes the
 # production public-status mapper doors, so the test binary proves the actual 1.0 mapping rather
 # than a suite-side transcription. build.bat carries the identical source pair.
-if(WIN32 AND BUILD_TESTING)
+if(WIN32)
 	target_sources(superslm_tests PRIVATE src/gpu/superslm_gpu.cpp src/gpu/gpu_1p0.cpp)
 	target_compile_definitions(superslm_tests PRIVATE SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
 	target_include_directories(superslm_tests PRIVATE src/gpu)
@@ -119,6 +120,7 @@ endif()
 
 enable_testing()
 add_test(NAME superslm_tests COMMAND superslm_tests)
+endif()
 
 # The §13 item 7 independent converter verifier (S-HARDEN-3, F13): loads a
 # `.sslm` through the same SslmModel::Load every other consumer uses, then
@@ -203,7 +205,7 @@ endif()
 option(SUPERSLM_T2149_AVX_TIERS_BUILT
 	"T-2149: the AVX2/AVX-512 matmul tiers and cached dispatch exist in src/matmul.cpp. ON (default) builds T-2158's tier-dependent red-suite cells (dispatch-cache lifetime, first-call race) into every non-forced and forced-tier test/digest binary. OFF reproduces the pre-T-2149 test-suite shape."
 	ON)
-if(SUPERSLM_T2149_AVX_TIERS_BUILT)
+if(BUILD_TESTING AND SUPERSLM_T2149_AVX_TIERS_BUILT)
 	target_compile_definitions(superslm_test_injection PUBLIC
 		SUPERSLM_T2149_AVX_TIERS_BUILT
 		SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT)
@@ -442,6 +444,7 @@ endif()
 # whole job is catching header drift silently saying the opposite of what it finds. Fixed here:
 # WILL_FAIL removed (the target now must actually compile, matching its Gate A sibling), and the
 # entry renamed off its own now-false "known_pending" name.
+if(BUILD_TESTING)
 add_executable(t2139_gate_a_must_accept EXCLUDE_FROM_ALL
 	tools/t2139_gate_a_header_parity_check.cpp)
 target_include_directories(t2139_gate_a_must_accept PRIVATE include tests)
@@ -580,6 +583,7 @@ add_test(NAME t2141_gate_c_t2138_suite_side_must_reject_fails_to_compile
 		-DSOURCE_FILE=tools/t2141_gate_c_t2138_suite_side_check_negative.cpp
 		-DMARKER_TEXT=SSLM_ARTIFACT_REJECTED\ diverges\ \(deliberate\ corruption,\ must-reject\ construction\)
 		-P ${CMAKE_SOURCE_DIR}/tools/ci/check_negative_compile_marker.cmake)
+endif()
 
 # D3D12/HLSL sources and shaders are needed only by the opt-in public GPU target
 # or the Windows test suite. BUILD_TESTING=OFF plus the default GPU option keeps
