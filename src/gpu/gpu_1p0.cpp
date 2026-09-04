@@ -1466,6 +1466,8 @@ namespace {
 // a poisoned adapter delta or a pathological activation value reaches them exactly the
 // way the CPU path always could.
 //
+}  // namespace
+
 // T-2114 (S1, Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md): `st` is
 // whatever `RunLayerLoopGpuSubmit` RETURNED when `inflight == nullptr` -- confirmed by
 // execution (not assumed) to include TWO distinct classes, not one: the ordinary
@@ -1479,9 +1481,12 @@ namespace {
 // real `GpuAllocationFailed` through this exact path. Design Sec9 still assigns no
 // per-guard 1.0 status to the CPU-domain family (SSLM_SEQUENCE_REJECTED covers all of
 // it, undifferentiated, on purpose), but the two device-derived statuses must map to
-// SSLM_DEVICE_LOST -- the SAME distinction MapDecodedStatusToGpuStatus below draws for
-// the identical two statuses arriving through the FINISH path instead.
+// SSLM_DEVICE_LOST. T-2578 adds the one deployment-derived exception:
+// GpuShaderBinaryStale maps to SSLM_GPU_SHADER_BINARY_STALE, never to either family.
 SslmGpuStatus MapSubmitRejectionToGpuStatus(superslm::SslmForwardStatus st) {
+	if (st == superslm::SslmForwardStatus::GpuShaderBinaryStale) {
+		return SSLM_GPU_SHADER_BINARY_STALE;
+	}
 	if (st == superslm::SslmForwardStatus::GpuDeviceRemoved ||
 	    st == superslm::SslmForwardStatus::GpuAllocationFailed) {
 		return SSLM_DEVICE_LOST;
@@ -1499,18 +1504,24 @@ SslmGpuStatus MapSubmitRejectionToGpuStatus(superslm::SslmForwardStatus st) {
 // unwound the finish call. Every OTHER non-Ok value `DecodeStickyTag` can produce is a
 // CPU-domain-equivalent guard rejection the GPU dispatch chain itself found (mirroring
 // the CPU oracle's own sticky-tag family) -- a healthy-device, per-sequence fact, not a
-// device loss. Only the two device-derived statuses map to SSLM_DEVICE_LOST; every other
-// rejecting value maps to SSLM_SEQUENCE_REJECTED, the same status
+// device loss. Only the two device-derived statuses map to SSLM_DEVICE_LOST;
+// GpuShaderBinaryStale maps to its deployment-specific public status; every other rejecting
+// value maps to SSLM_SEQUENCE_REJECTED, the same status
 // MapSubmitRejectionToGpuStatus uses for the identical class of fact discovered before
 // submission instead of after.
 SslmGpuStatus MapDecodedStatusToGpuStatus(superslm::SslmForwardStatus st) {
 	if (st == superslm::SslmForwardStatus::Ok) return SSLM_OK;
+	if (st == superslm::SslmForwardStatus::GpuShaderBinaryStale) {
+		return SSLM_GPU_SHADER_BINARY_STALE;
+	}
 	if (st == superslm::SslmForwardStatus::GpuDeviceRemoved ||
 	    st == superslm::SslmForwardStatus::GpuAllocationFailed) {
 		return SSLM_DEVICE_LOST;
 	}
 	return SSLM_SEQUENCE_REJECTED;
 }
+
+namespace {
 
 // T-2113 (B7, design Sec4.3/Sec7/Sec10 B7): the actual submission logic shared, byte-for-byte,
 // between the single-sequence call (`sslm_decode_step_gpu`) and every per-sequence slot of the
@@ -1557,6 +1568,11 @@ SslmGpuStatus SubmitOneSequenceDecode(SslmGpuContext* ctx, SslmGpuSequenceHandle
 	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
 	// T-2432 (Track A step 2/3): q_width threaded explicitly, matching
 	// SubmitChunkToFullDepthForG5Bridge's own call site above.
+	// T-2578 confirmation remedy: pass the same stable model identity as the sibling G5
+	// chunk path. This external-residency path does not consume the process-global caches
+	// today, but its call contract is now complete if that routing ever changes.
+	uint64_t model_generation = 0;
+	std::memcpy(&model_generation, model->content_hash.data(), sizeof(model_generation));
 	const superslm::SslmForwardStatus submit_status = superslm_gpu::RunLayerLoopGpuSubmit(
 	    seq->live_state, /*layers=*/nullptr, model->num_hidden_layers, layers_to_issue,
 	    model->hidden_size, model->head_dim, model->num_key_value_heads, model->intermediate_size,
@@ -1564,7 +1580,8 @@ SslmGpuStatus SubmitOneSequenceDecode(SslmGpuContext* ctx, SslmGpuSequenceHandle
 	    seq->kv_buf.Get(), &seq->kv_needs_resume_barrier, &inflight, model->weights_buf.Get(),
 	    model->rope_cos_buf.Get(), model->rope_sin_buf.Get(), model->has_rope_tables,
 	    model->rope_cos_elem_count, model->rope_sin_elem_count, adapter_bridge_ptr,
-	    /*q_width=*/static_cast<size_t>(model->num_attention_heads) * model->head_dim);
+	    /*q_width=*/static_cast<size_t>(model->num_attention_heads) * model->head_dim,
+	    /*out_q_codes=*/nullptr, /*out_q_codes_capacity=*/0, model_generation);
 
 	if (!inflight) {
 		// Rejected before submission (a guard, or an exception) -- seq/host state untouched,

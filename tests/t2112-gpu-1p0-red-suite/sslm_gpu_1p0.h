@@ -104,7 +104,7 @@ typedef enum SslmGpuStatus {
                                            * for the full account.               */
     SSLM_RESTORE_MODEL_MISMATCH,         /* design Sec9/Sec22, ADDED at the 2026-08-15
                                            * mini-fold (P2, D-SLM3415): sslm_gpu_seq_restore's
-                                           * v3 blob model_content_hash does not match the
+                                           * v4 blob model_content_hash does not match the
                                            * target model handle's own RawIntegrityHash() --
                                            * see gpu_1p0.h's own header comment for the full
                                            * account. Appended LAST, same S1 precedent. */
@@ -113,12 +113,14 @@ typedef enum SslmGpuStatus {
                                            * mapped against the model -- persistent liveness,
                                            * not SSLM_BUSY. See gpu_1p0.h's own header comment
                                            * for the full account. Appended LAST. */
-    SSLM_ADAPTER_HAS_BOUND_SEQUENCES      /* T-2243 (S2, D-SLM3965), ADDED this fold: rejects
+    SSLM_ADAPTER_HAS_BOUND_SEQUENCES,     /* T-2243 (S2, D-SLM3965), ADDED this fold: rejects
                                            * sslm_gpu_adapter_unmap while any sequence still
                                            * holds a bind to the adapter (sslm_gpu_seq_bind_
                                            * adapter) -- persistent liveness, not SSLM_BUSY.
                                            * See gpu_1p0.h's own header comment for the full
                                            * account. Appended LAST. */
+    SSLM_GPU_SHADER_BINARY_STALE          /* T-2578 confirmation remedy: deployed .cso predates
+                                           * an HLSL input; rebuild/redeploy before retrying. */
 } SslmGpuStatus;
 
 /* --- Sec4.1.1: context create/destroy --- */
@@ -156,8 +158,8 @@ SslmGpuStatus sslm_gpu_seq_bind_adapter(SslmGpuContext* ctx, SslmGpuSequenceHand
 SslmGpuStatus sslm_gpu_seq_embed_token(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                         int32_t token_id);
 
-/* --- Sec4.2: save/restore/reset. sslm_gpu_seq_save writes a v3 blob ('SLM3'), carrying the
- * model's own content hash (P2, Sec22, D-SLM3415). sslm_gpu_seq_restore rejects a model-hash
+/* --- Sec4.2: save/restore/reset. sslm_gpu_seq_save writes a v4 blob ('SLM4'), carrying the
+ * model's own content hash plus all four per-site K/V saturation counters. sslm_gpu_seq_restore rejects a model-hash
  * mismatch under SSLM_RESTORE_MODEL_MISMATCH, distinct from the generic malformed-blob
  * disposition its size-derivation ladder (N1, Sec21) uses. --- */
 SslmGpuStatus sslm_gpu_seq_save(SslmGpuContext* ctx, const SslmGpuSequenceHandle* seq,

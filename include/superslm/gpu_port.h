@@ -100,19 +100,21 @@ superslm::ChainResult RequantChainCheckedGpu(const int64_t* wide_row, size_t n,
 // readback still scatters into `workspace` exactly as it does today, so a caller in this
 // mode gets the identical CPU-oracle-comparable host mirror the pre-existing path always
 // produced (never merely a GPU self-consistency proof).
-// (T-2577, D-SLM6278): the trailing `model_generation` parameter is the caller's own model
-// identity for the three pre-1.0 residency caches (`g_resident_weights`/`g_resident_kv`/
-// `g_resident_rope`, `superslm_gpu.cpp`) -- an opaque value that MUST change whenever the model
+// (T-2577, D-SLM6278; T-2578 correction): the trailing `model_generation` parameter is the
+// caller's own model identity for the read-only weight/RoPE caches and one conjunct of the
+// mutable K/V cache key (`g_resident_weights`/`g_resident_kv`/`g_resident_rope`,
+// `superslm_gpu.cpp`) -- an opaque value that MUST change whenever the model
 // backing `layers`/`rope_tables`/`workspace` changes and MUST NOT change across sequences of the
 // same still-live model (a per-load counter, or the artifact's own integrity hash reduced to 64
 // bits, are both sound). Defaults to `0`, the "not supplied" sentinel: every pre-T-2577 caller
 // compiles and behaves unchanged (`!fresh_sequence` alone gates the fast path, exactly as before
 // this ticket). A caller that supplies a nonzero value gets the cheaper, identity-keyed path
-// instead -- a fresh sequence of the SAME model is then a legitimate cache hit, closing the ~19
-// ms/sequence cost the external review's Significant 1 measured
+// instead -- a fresh sequence of the SAME model is then a legitimate weight/RoPE cache hit,
+// closing the ~19 ms/sequence cost the external review's Significant 1 measured
 // (`Claude/Poirot/5fafd98-t2573-trackb-external-fold-review.md`) without reopening the recycled-
 // host-address hazard T-2576 closed (a fresh sequence of a DIFFERENT model, even one that
-// recycled the same address, still misses, because the identity does not match).
+// recycled the same address, still misses, because the identity does not match). K/V still
+// requires `!fresh_sequence`: model identity cannot identify mutable sequence history.
 superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              const superslm::LayerWeights* layers,
                                              uint32_t num_hidden_layers, uint32_t layer_budget,
@@ -304,8 +306,9 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
     size_t q_width = 0,
     // (T-2577 round 2, D-SLM6278): mirrors `RunLayerLoopGpuSubmit`'s own trailing
     // `model_generation` -- see that declaration's own header comment for the full contract.
-    // Threaded through to `PrepareGpuLayerLoopChunkOpenState`'s own three residency-cache
-    // predicates. Defaults to `0` so every pre-existing caller is unaffected.
+    // Threaded through to `PrepareGpuLayerLoopChunkOpenState`'s own read-only residency-cache
+    // predicates and the mutable K/V predicate's model-identity conjunct. Defaults to `0` so
+    // every pre-existing caller is unaffected.
     uint64_t model_generation = 0);
 
 // T-2169 (Rung 2, design Sec5, D-SLM3596/D-SLM3641): the measured, driver-stability-bounded
@@ -387,11 +390,18 @@ bool LastWeightUploadWasSkipped();
 // (T-2577, D-SLM6278): the RoPE-table residency cache's own observable, mirroring
 // `LastWeightUploadWasSkipped`'s contract exactly -- true iff the most recent call served
 // `g_resident_rope`'s cached cos/sin tables rather than repacking and re-uploading them. Set
-// internally by `RunLayerLoopGpu`'s own rope-residency decision; read back by the caller after
-// `RunLayerLoopGpu` returns. This is the instrument the S1 must-accept cell reads: a second
+// internally by the shared residency preparation reached from `RunLayerLoopGpu`,
+// `RunLayerLoopGpuSubmit`, and `SubmitChunkToFullDepthForG5Bridge`; read back by the caller after
+// that call (or its finish half) returns. This is the instrument the S1 must-accept cell reads: a second
 // fresh sequence of the SAME model (the caller's own `model_generation` unchanged) is required
 // to report `true` here -- a pack/upload COUNT of zero, not a timing.
 bool LastRopeUploadWasSkipped();
+
+// (T-2578 confirmation remedy): true iff the most recent pre-1.0 call reused
+// `g_resident_kv` instead of uploading the caller's workspace. A fresh sequence always reports
+// false, even when both workspace address and model_generation match the preceding sequence.
+// This is mutable sequence history; unlike weights/RoPE, model identity cannot make it reusable.
+bool LastKvUploadWasSkipped();
 
 // A per-call timing
 // breakdown for the most recent `RunLayerLoopGpu` call that reached command-list recording (a call
@@ -814,10 +824,12 @@ bool GpuReadySignalsCompletion(bool fence_signaled, int32_t* out_ready,
 // (both already-set pointers, never allocated here).
 //
 // (design Sec4.2/Sec22): `model_content_hash` is the SAVING model's own 32-byte
-// `SslmModelView::RawIntegrityHash()` (design Sec5.1) -- written into the v3 blob's own new,
-// append-only trailing field so a later restore against a DIFFERENT model can detect the mismatch
-// the N1 size-admissibility widening left open (a foreign blob whose derived context_cap happens to
-// be admissible against a same-shape-but-different model used to restore silently). Restore's own
+// `SslmModelView::RawIntegrityHash()` (design Sec5.1) -- written into the v4 blob's v3-prefix
+// field so a later restore against a DIFFERENT model can detect the mismatch the N1
+// size-admissibility widening left open (a foreign blob whose derived context_cap happens to be
+// admissible against a same-shape-but-different model used to restore silently). The v4
+// append-only tail carries all four per-site K/V saturation counters, preserving their provenance
+// alongside `kv_saturation_count` across save/restore. Restore's own
 // identity check is NOT threaded through this function -- it runs in the caller
 // (`sslm_gpu_seq_restore`, gpu_1p0.cpp) via `PeekGpuSeqBlobModelHash` below, before this function (or
 // the fresh handle it restores into) is ever reached, matching the peek-then-validate-then-allocate

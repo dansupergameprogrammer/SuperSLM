@@ -435,9 +435,11 @@ namespace {
 
 uint32_t Align8U32(uint32_t x) { return (x + 7u) & ~7u; }
 
-// (T-2577, D-SLM6278): the shared gate `lw_fast_hit`/`kv_fast_hit`/`rope_fast_hit`
-// (`PrepareGpuLayerLoopChunkOpenState`, below) each call in place of a bare `!fresh_sequence`
-// term. `cached_generation` is the identity a residency cache stored on its last successful
+// (T-2577, D-SLM6278): the shared gate the read-only `lw_fast_hit`/`rope_fast_hit` caches
+// (`PrepareGpuLayerLoopChunkOpenState`, below) call in place of a bare `!fresh_sequence`
+// term. K/V deliberately retains its independent `!fresh_sequence` gate: model identity cannot
+// prove that mutable sequence history belongs to a newly created sequence. `cached_generation`
+// is the identity a residency cache stored on its last successful
 // upload; `model_generation` is the CURRENT call's own caller-supplied identity (0 means "not
 // supplied"); `fresh_sequence` is `seq.layer_index == 0 && seq.context_length == 0` for the
 // current call. When the caller supplies no identity (`model_generation == 0`, every
@@ -544,6 +546,10 @@ struct ResidentKv {
 	uint64_t generation = 0;
 };
 ResidentKv g_resident_kv;
+// T-2578 confirmation remedy: direct, per-call evidence for the mutable K/V residency decision,
+// parallel to the existing weight/RoPE observables below. A fresh sequence must read false even
+// when its workspace pointer and model generation match the previous sequence.
+bool g_last_kv_upload_was_skipped = false;
 
 // T-2113 (B4, design Sec3/Sec6.1, re-derived from Claude/Laplace/t2105-gpu-speed-ceiling-
 // 2026-08-14.md Sec2 change 1 -- "RoPE cos/sin tables made resident, keyed on source-tensor
@@ -1755,16 +1761,17 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
     uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
     const GpuAdapterBridge* adapter_bridge, GpuLayerLoopChunkOpenState* out_state,
     size_t q_width,
-    // (T-2577, D-SLM6278): the calling model's own identity, for the three residency caches'
-    // fast-hit keys below (`lw_fast_hit`/`kv_fast_hit`/`rope_fast_hit`) -- an opaque, caller-chosen
+    // (T-2577, D-SLM6278; T-2578 correction): the calling model's own identity, for the
+    // read-only weight/RoPE cache fast-hit keys below and as one conjunct of the mutable K/V key --
+    // an opaque, caller-chosen
     // value that MUST change whenever the model backing `layers`/`rope_tables`/`workspace` changes,
     // and MUST NOT change across sequences of the same still-live model (a per-load counter, or the
     // artifact's own integrity hash reduced to 64 bits, are both sound; this function does not care
     // which). `0` is the "not supplied" sentinel: every pre-T-2577 caller defaults to it, and the
-    // three predicates below treat `0` identically to how they always behaved -- `!fresh_sequence`
+    // predicates below treat `0` identically to how they always behaved -- `!fresh_sequence`
     // alone gates the fast path, exactly as before this ticket. A caller that supplies a nonzero
-    // value gets the cheaper, model-identity-keyed path instead, and `!fresh_sequence` no longer
-    // gates it at all: a fresh sequence of the SAME model (same generation) is now a legitimate hit.
+    // value gets the cheaper, model-identity-keyed path for read-only weights/RoPE. K/V remains
+    // gated by `!fresh_sequence` because its contents are sequence history, not model content.
     uint64_t model_generation = 0) {
 	// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
 	// review.md, P2): set BEFORE every one of this function's eleven
@@ -1786,6 +1793,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// below never reaches the rope-cache decision further down, and without this reset would
 	// report the PREVIOUS successful call's own stale answer.
 	g_last_rope_upload_was_skipped = false;
+	g_last_kv_upload_was_skipped = false;
 	// T-2101: reset at function entry, for the identical reason the line above is -- a call
 	// rejected by any guard below never reaches the recording-window reset further down, and
 	// without this line would report the PREVIOUS successful call's own stale timing rather than
@@ -2172,10 +2180,12 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// own residency, so there is no "hit"/"miss" decision to make against a shared slot;
 	// `kv_fast_hit` stays meaningful only for the pre-1.0 process-global-cache path below.
 	const bool external_kv = external_kv_resident != nullptr;
-	const bool kv_fast_hit = !external_kv && SameModelFastPathAllowed(model_generation, fresh_sequence, g_resident_kv.generation) &&
+	const bool kv_fast_hit = !external_kv && !fresh_sequence &&
+	                          SameModelFastPathAllowed(model_generation, fresh_sequence, g_resident_kv.generation) &&
 	                          g_resident_kv.valid &&
 	                          g_resident_kv.src_workspace == workspace &&
 	                          g_resident_kv.src_size == workspace_size;
+	g_last_kv_upload_was_skipped = kv_fast_hit;
 
 	// T-2039/T-2049 (N6, Claude/Poirot/34ef30f-gpu-serial-port-confirmation-
 	// review.md, correcting T-2049's own left-behind paragraph per M4,
@@ -2354,7 +2364,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// `lw_fast_hit` this cache has no content-compare fallback, so a miss is unconditionally the
 	// full cost, not a cheap byte-compare that usually short-circuits it.
 	//
-	// The fix is `SameModelFastPathAllowed` (this function's own local lambda, declared beside
+	// The fix is `SameModelFastPathAllowed` (a file-scope free function declared beside
 	// `fresh_sequence` above): keyed on the CALLER's own model identity (`model_generation`) when
 	// the caller supplies one, so a fresh sequence of the SAME model is a legitimate hit and a
 	// fresh sequence of a DIFFERENT model -- even one that recycled the same host address, the
@@ -2719,6 +2729,7 @@ void InvalidateResidencyCachesOnThrow() {
 	// not extend). Only the newly added observable is reset, matching `LastWeightUploadWasSkipped`'s
 	// own "false" answer on a rejected/thrown call.
 	g_last_rope_upload_was_skipped = false;
+	g_last_kv_upload_was_skipped = false;
 }
 }  // namespace
 
@@ -4005,6 +4016,9 @@ bool LastWeightUploadWasSkipped() { return g_last_weight_upload_was_skipped; }
 // RoPE-table residency cache -- see `gpu_port.h`'s own declaration comment.
 bool LastRopeUploadWasSkipped() { return g_last_rope_upload_was_skipped; }
 
+// (T-2578): mirrors the weight/RoPE observables for the mutable K/V cache; see gpu_port.h.
+bool LastKvUploadWasSkipped() { return g_last_kv_upload_was_skipped; }
+
 // T-2101 (S3, code review 6d9e04e-t2101-gpu-throughput-review.md): the ceiling-division primitive
 // `ComputeGpuGemmSiteGroupPlan` (below) builds on.
 uint32_t ComputeGpuGemmGroupCount(uint32_t out_channels, uint32_t threads_per_group) {
@@ -4243,17 +4257,18 @@ bool GpuReadySignalsCompletion(bool fence_signaled, int32_t* out_ready,
 // hidden_size and gets the full round-trip). The blob format is versioned
 // honestly: the magic changed from the pre-fix 'SSLM' (v1) to 'SLM2' (v2,
 // T-2114 C1: +hidden_codes_size/bytes) to 'SLM3' (v3, T-2113 P2, design
-// Sec4.2/Sec22, D-SLM3415: +model_content_hash) -- an older-format blob is
+// Sec4.2/Sec22, D-SLM3415: +model_content_hash), then 'SLM4' (v4, T-2578:
+// +the four per-site K/V saturation counters) -- an older-format blob is
 // rejected cleanly at the first check below, never misread against a newer,
 // larger header layout.
 // ===========================================================================
 
 namespace {
 struct GpuSeqBlobHeader {
-	uint32_t magic;  // 'SLM3' little-endian -- v3 format (T-2113 P2: +model_content_hash). Every
-	                  // older magic ('SSLM' v1, 'SLM2' v2) is a DIFFERENT value on purpose: an
-	                  // older-format blob fails the magic check below rather than being misread
-	                  // against this larger header.
+	uint32_t magic;  // 'SLM4' little-endian -- v4 format (T-2578: +per-site counters). Every
+	                  // older magic ('SSLM' v1, 'SLM2' v2, 'SLM3' v3) is a DIFFERENT value on
+	                  // purpose: an older-format blob fails the magic check below rather than
+	                  // being misread against this larger header.
 	uint32_t layer_index;
 	int64_t hidden_scale_m;
 	int64_t hidden_scale_e;
@@ -4271,8 +4286,14 @@ struct GpuSeqBlobHeader {
 	// context_cap happens to be admissible against a same-shape-but-different model used to
 	// restore silently.
 	std::array<uint8_t, superslm::kIntegrityHashBytes> model_content_hash;
+	// T-2578 confirmation remedy: appended after the complete v3 header so the aggregate's
+	// four provenance fields survive save/restore instead of silently resetting to zero.
+	uint64_t kv_landing_saturation_count;
+	uint64_t k_normed_landing_saturation_count;
+	uint64_t rope_q_saturation_count;
+	uint64_t rope_k_saturation_count;
 };
-constexpr uint32_t kGpuSeqBlobMagic = 0x334D4C53u;  // "SLM3" little-endian u32 (v3: +model_content_hash)
+constexpr uint32_t kGpuSeqBlobMagic = 0x344D4C53u;  // "SLM4" little-endian u32 (v4: +per-site counters)
 }  // namespace
 
 bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, size_t hidden_codes_size,
@@ -4295,6 +4316,10 @@ bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, size_t hidden
 	hdr.hidden_codes_size = static_cast<uint64_t>(hidden_codes_size);
 	hdr.workspace_size = static_cast<uint64_t>(workspace_size);
 	hdr.model_content_hash = model_content_hash;
+	hdr.kv_landing_saturation_count = seq.kv_landing_saturation_count;
+	hdr.k_normed_landing_saturation_count = seq.k_normed_landing_saturation_count;
+	hdr.rope_q_saturation_count = seq.rope_q_saturation_count;
+	hdr.rope_k_saturation_count = seq.rope_k_saturation_count;
 	uint8_t* dst = static_cast<uint8_t*>(out_blob);
 	std::memcpy(dst, &hdr, sizeof(hdr));
 	size_t off = sizeof(hdr);
@@ -4324,6 +4349,10 @@ bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::Seque
 	out_seq->hidden_scale.m = hdr.hidden_scale_m;
 	out_seq->hidden_scale.e = hdr.hidden_scale_e;
 	out_seq->kv_saturation_count = hdr.kv_saturation_count;
+	out_seq->kv_landing_saturation_count = hdr.kv_landing_saturation_count;
+	out_seq->k_normed_landing_saturation_count = hdr.k_normed_landing_saturation_count;
+	out_seq->rope_q_saturation_count = hdr.rope_q_saturation_count;
+	out_seq->rope_k_saturation_count = hdr.rope_k_saturation_count;
 	out_seq->context_length = hdr.context_length;
 	// T-2114 (C1): hidden_codes now round-trips through the blob body, immediately after the
 	// header and before the workspace bytes -- gated on hidden_codes_size exactly like

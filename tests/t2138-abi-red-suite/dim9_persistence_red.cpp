@@ -36,7 +36,7 @@ static void TestDim9_C1_SaveRestoreMidTokenRoundTripBitEqual(sslm_model model, s
 // --- Cell 2 (design Sec6/Sec7.3/Sec10 dim2/dim7/dim9, filed jointly per dim7's own
 // instruction: "the handle-type half... N/A; the persisted-state half... gets a real cell,
 // filed jointly with dimension 2's own blob-rejection cell"). sslm_seq_restore given a
-// well-formed GPU-format ('SLM3'-magic) blob rejects on magic mismatch (SSLM_RESTORE_MODEL_
+// well-formed GPU-format ('SLM4'-magic) blob rejects on magic mismatch (SSLM_RESTORE_MODEL_
 // MISMATCH is the closest-named enumerator this suite's own taxonomy has for "the blob does not
 // belong to this surface" -- the design's own §6 does not carve out a dedicated
 // cross-surface-magic enumerator distinct from RESTORE_MODEL_MISMATCH, so this cell asserts
@@ -45,7 +45,7 @@ static void TestDim9_C1_SaveRestoreMidTokenRoundTripBitEqual(sslm_model model, s
 // named enumerator the rejection surfaces as). ---
 static void TestDim9_C2_RestoreRejectsWellFormedGpuFormatBlobOnMagicMismatch(sslm_model model,
                                                                              sslm_kv_pool* pool) {
-	// A synthetic buffer carrying the GPU ABI's own 'SLM3' magic (design Sec7.3's own citation:
+	// A synthetic buffer carrying the GPU ABI's own 'SLM4' magic (design Sec7.3's own citation:
 	// GpuSeqBlobHeader, superslm_gpu.cpp) followed by plausible-looking but CPU-format-
 	// incompatible field bytes -- genuinely well-formed AS a GPU blob's own header shape, never
 	// merely random/truncated bytes (which SSLM_INVALID_ARGUMENT or a generic parse failure
@@ -54,7 +54,7 @@ static void TestDim9_C2_RestoreRejectsWellFormedGpuFormatBlobOnMagicMismatch(ssl
 	gpu_format_blob[0] = 'S';
 	gpu_format_blob[1] = 'L';
 	gpu_format_blob[2] = 'M';
-	gpu_format_blob[3] = '3';
+	gpu_format_blob[3] = '4';
 	sslm_seq restored = nullptr;
 	const sslm_status st =
 	    sslm_seq_restore(model, pool, gpu_format_blob, sizeof(gpu_format_blob), &restored);
@@ -68,7 +68,7 @@ static void TestDim9_C2_RestoreRejectsWellFormedGpuFormatBlobOnMagicMismatch(ssl
 // hard-reject strategy: "construct a byte buffer that is a valid v1 blob... with its magic
 // bytes corrupted to an unrecognized value, and confirm sslm_seq_restore rejects on the magic
 // check before parsing any field"). A REAL v1 blob (from a genuine sslm_seq_save) with its
-// magic corrupted -- distinct from cell 2's cross-format ('SLM3') construction, since this
+// magic corrupted -- distinct from cell 2's cross-format ('SLM4') construction, since this
 // cell's own subject is an UNRECOGNIZED magic, not a recognized-but-foreign one. ---
 static void TestDim9_C3_CorruptedMagicOnRealV1BlobRejectedBeforeFieldParsing(sslm_model model,
                                                                               sslm_seq seq,

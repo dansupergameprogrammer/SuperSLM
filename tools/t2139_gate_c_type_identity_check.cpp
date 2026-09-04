@@ -18,7 +18,8 @@
 // a per-shared-NAME check structurally cannot see -- is closed by COMPLETE per-name coverage
 // against a COMPLETE mirror, per the T-2133 enum-governance ruling (design Sec6, design commit
 // 4f4eb23896): design Sec6 is the single-authority complete ordinal registry for sslm_status,
-// and sslm_g5.h mirrors it VERBATIM (all 26 entries, 0..25, no gaps; next-free is a Sec6 fact).
+// and sslm_g5.h mirrors it VERBATIM (all 29 current entries, 0..28, no gaps; next-free is a
+// Sec6 fact).
 //
 // FOLD RULING on the third confirmation pass's F1 (Claude/Poirot/
 // 4466666-t2139-third-confirmation-review.md, design commit dated 2026-08-17): F1 proved, by
@@ -48,10 +49,11 @@
 #include "superslm/sslm_abi.h"
 
 namespace t2139_gate_c_suite_side {
-// Transcribed from tests/t2130-g5-red-suite/sslm_g5.h@52dc6cd, verbatim (the complete 26-entry
-// Sec6 registry mirror -- every enumerator is transcribed, even though only the names sslm_abi.h
+// Transcribed from tests/t2130-g5-red-suite/sslm_g5.h@52dc6cd, verbatim (the then-complete
+// 26-entry Sec6 registry mirror) and extended in lockstep -- every enumerator is transcribed,
+// even though only the names sslm_abi.h
 // also declares are checked below, so this namespace stays a faithful copy of the real header
-// rather than a pre-filtered stand-in).
+// rather than a pre-filtered stand-in.
 typedef enum sslm_status {
 	SSLM_OK = 0,
 	SSLM_INVALID_ARGUMENT = 1,
@@ -92,6 +94,8 @@ typedef enum sslm_status {
 	// tests/t2130-g5-red-suite/sslm_g5.h's own identical addition for the full rationale
 	// (sslm_seq_restore's new legacy-'SSB3' rejection status, D-SLM4065's safety net).
 	SSLM_RESTORE_RESIDUAL_LOST = 27,
+	// T-2578 confirmation remedy: the public C registry's append-only stale-shader status.
+	SSLM_GPU_SHADER_BINARY_STALE = 28,
 	// SSLM_STATUS_NEXT_FREE -- CONFIRMED (M1, Claude/Poirot/3bcbe43-t2139-fourth-confirmation-
 	// review.md), not re-derived: the real tests/t2130-g5-red-suite/sslm_g5.h now carries this
 	// same sentinel, landed by curie/t2130-g5-red-suite@beb2355 (this line's own prior comment

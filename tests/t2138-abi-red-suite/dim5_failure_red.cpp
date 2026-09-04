@@ -2,11 +2,11 @@
 // dedicated cells target the base rejection families this suite's sslm_abi.h declares (18 base
 // enumerators as of the padded-vocabulary fold, SSLM_OK(1) + argument/precondition(3) +
 // artifact/content(4) + lifecycle/precondition-on-state(7) + numeric/domain(3) = 18) -- the
-// registry has since grown to 26 entries total across both real headers (Sec6's GOVERNANCE
-// RULING, design commit 4f4eb23896): G5's own 7 schema statuses (18-24), SSLM_ALLOCATION_FAILED
-// (25), and the SSLM_STATUS_NEXT_FREE sentinel are covered by Gate C's own construction, not by
-// this dimension's cells, which stay scoped to the base family this suite's own sslm_abi.h
-// declares functionally. Cells NOT already exercised elsewhere are authored here; the rest are
+// registry has since grown under Sec6's GOVERNANCE RULING (design commit 4f4eb23896): G5's own
+// 7 schema statuses (18-24), SSLM_ALLOCATION_FAILED (25), later append-only statuses (26-28),
+// and the SSLM_STATUS_NEXT_FREE sentinel are covered by Gate C's construction. This dimension's
+// cells stay scoped to the base family this suite's own sslm_abi.h declares functionally. Cells
+// NOT already exercised elsewhere are authored here; the rest are
 // cross-cited so no enumerator is asserted twice under a different name:
 //   SSLM_BUFFER_TOO_SMALL, SSLM_MISALIGNED_BUFFER -- dim2 M1/M2/M3.
 //   SSLM_ARTIFACT_REJECTED -- dim2 M5. SSLM_ADAPTER_MODEL_MISMATCH -- dim2 M6.
@@ -372,6 +372,11 @@ static void TestDim5_C12_UndersizedOutputCapacityRejected(const SslmModelView& v
 	                  SSLM_INVALID_ARGUMENT,
 	          "dim5 C12: MapForwardStatus(OutputCapacityExceeded) must map to "
 	          "SSLM_INVALID_ARGUMENT");
+	// T-2578 confirmation remedy S1: a stale deployed GPU shader is not a bad model artifact.
+	CHECK_MSG(MapForwardStatus(SslmForwardStatus::GpuShaderBinaryStale) ==
+	                  SSLM_GPU_SHADER_BINARY_STALE,
+	          "dim5 C12: MapForwardStatus(GpuShaderBinaryStale) must preserve the public "
+	          "SSLM_GPU_SHADER_BINARY_STALE cause");
 	// SslmForwardStatusName owes the new member a REAL arm: the switch has no default and
 	// silently degrades to "?" under /W4-without-/WX when the arm is missing.
 	CHECK_MSG(std::strcmp(SslmForwardStatusName(SslmForwardStatus::OutputCapacityExceeded),

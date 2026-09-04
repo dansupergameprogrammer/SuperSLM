@@ -1624,6 +1624,12 @@ sslm_status MapForwardStatus(superslm::SslmForwardStatus st) {
 	if (st == superslm::SslmForwardStatus::OutputCapacityExceeded) {
 		return SSLM_INVALID_ARGUMENT;
 	}
+	// T-2578 confirmation remedy: a stale deployed shader is a build/deployment mismatch,
+	// not a corrupt model artifact. Preserve the internal cause at the public C boundary so
+	// the caller gets the only effective remedy: rebuild/redeploy the matching shader set.
+	if (st == superslm::SslmForwardStatus::GpuShaderBinaryStale) {
+		return SSLM_GPU_SHADER_BINARY_STALE;
+	}
 	return st == superslm::SslmForwardStatus::Ok ? SSLM_OK : SSLM_ARTIFACT_REJECTED;
 }
 
@@ -2812,9 +2818,10 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 
 	const uint8_t* p = static_cast<const uint8_t*>(buf);
 	// design Sec7.3, corrected (Mendeleev audit 4.5): recognize only explicitly supported
-	// magic versions, checked first before any other field is trusted. SSB3 is current; shipped
-	// SSB2 has an explicit compatibility parser and defaults its absent anti-LM state to empty.
-	// A well-formed GPU-format ('SLM3') blob is rejected here on the magic check alone, never
+	// magic versions, checked first before any other field is trusted. SSB4 is current; shipped
+	// SSB3 and SSB2 have explicit compatibility parsers, with SSB2 defaulting its absent anti-LM
+	// state to empty.
+	// A well-formed GPU-format ('SLM4') blob is rejected here on the magic check alone, never
 	// mis-parsed as a CPU blob (design Sec10 dim7/dim9). M1 (Claude/Poirot/
 	// 2c18dab-t2139-abi-build-review.md): a bad magic is a malformed/foreign-format BLOB, not a
 	// model mismatch -- SSLM_INVALID_ARGUMENT states the actual cause (the blob itself is

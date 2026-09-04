@@ -55,6 +55,7 @@
 // link step (build.bat's own recipe already does this unconditionally, being Windows-only
 // itself -- this is the CMake side gaining the same shape).
 #ifdef _WIN32
+#include "superslm/gpu_1p0.h"
 #include "../src/gpu/d3d12_harness.h"
 #endif
 
@@ -83,6 +84,13 @@
 
 using namespace superslm;
 using namespace superslm_test;
+
+#ifdef _WIN32
+// T-2578 confirmation remedy: production mapper doors promoted to external linkage so this
+// real stale-dispatch cell can assert the statuses the public GPU API actually returns.
+SslmGpuStatus MapSubmitRejectionToGpuStatus(superslm::SslmForwardStatus st);
+SslmGpuStatus MapDecodedStatusToGpuStatus(superslm::SslmForwardStatus st);
+#endif
 
 static int GChecks = 0;
 static int GFailures = 0;
@@ -24669,7 +24677,6 @@ static void TestT2019_B11_SequenceLayerStateComplete_L2K0() {
 
 namespace t2019_b7 {
 using superslm::SslmForwardStatus;
-using superslm_gpu::SslmGpuStatus;
 
 // T-2113 (B4, design Sec3/Sec6.1): re-derived from 17 (16 sites + 1 commit) to 24, then to 25
 // (design §6 Track B step 3, T-2551 -- the new qk_norm_site.hlsl dispatch), the real per-layer
@@ -24684,14 +24691,16 @@ constexpr uint32_t kDispatchesPerLayer = 25;
 // one more isn't "too small," it has nothing left to do -- Ok with 0 layers is a
 // distinct, unnamed-by-this-fixture case this suite does not need to construct
 // since every cell below keeps current_layer_position at 0).
-SslmGpuStatus ExpectedDispatchBudgetPlan(uint32_t dispatch_budget, uint32_t num_hidden_layers,
-                                          uint32_t current_layer_position,
-                                          uint32_t* out_layers) {
+superslm_gpu::SslmGpuStatus ExpectedDispatchBudgetPlan(uint32_t dispatch_budget,
+                                                       uint32_t num_hidden_layers,
+                                                       uint32_t current_layer_position,
+                                                       uint32_t* out_layers) {
 	const uint32_t remaining = num_hidden_layers - current_layer_position;
 	uint32_t layers = dispatch_budget / kDispatchesPerLayer;  // floor
 	if (layers > remaining) layers = remaining;               // token-boundary cap
 	*out_layers = layers;
-	return (layers == 0) ? SslmGpuStatus::DispatchBudgetTooSmall : SslmGpuStatus::Ok;
+	return (layers == 0) ? superslm_gpu::SslmGpuStatus::DispatchBudgetTooSmall
+	                     : superslm_gpu::SslmGpuStatus::Ok;
 }
 }  // namespace t2019_b7
 
@@ -24705,7 +24714,7 @@ static void TestT2019_B7_DispatchBudget_EveryRemainderAndBoundary() {
 	for (uint32_t budget = 0; budget <= 24; ++budget) {
 		uint32_t cpu_layers = 0;
 		const auto cpu_status = ExpectedDispatchBudgetPlan(budget, N, 0, &cpu_layers);
-		CHECK_MSG(cpu_status == SslmGpuStatus::DispatchBudgetTooSmall && cpu_layers == 0,
+		CHECK_MSG(cpu_status == superslm_gpu::SslmGpuStatus::DispatchBudgetTooSmall && cpu_layers == 0,
 		          "dispatch_budget=%u: reference formula gives DispatchBudgetTooSmall/0 layers "
 		          "(Sec5.8's own floor-division-is-uniformly-zero-here property, executed)",
 		          budget);
@@ -24726,7 +24735,7 @@ static void TestT2019_B7_DispatchBudget_EveryRemainderAndBoundary() {
 		CHECK_MSG(cpu_layers == 1, "dispatch_budget=25: reference formula gives exactly 1 layer");
 		uint32_t gpu_layers = 999;
 		const auto gpu_status = superslm_gpu::PlanDispatchBudgetGpu(25, N, 0, &gpu_layers);  // LINK-RED
-		CHECK_MSG(gpu_status == SslmGpuStatus::Ok && gpu_layers == 1,
+		CHECK_MSG(gpu_status == superslm_gpu::SslmGpuStatus::Ok && gpu_layers == 1,
 		          "dispatch_budget=25: GPU plan gives Ok/1 layer, got layers=%u", gpu_layers);
 	}
 
@@ -24744,7 +24753,7 @@ static void TestT2019_B7_DispatchBudget_EveryRemainderAndBoundary() {
 			uint32_t gpu_layers = 999;
 			const auto gpu_status =
 			    superslm_gpu::PlanDispatchBudgetGpu(budget, N, 0, &gpu_layers);  // LINK-RED
-			CHECK_MSG(gpu_status == SslmGpuStatus::Ok && gpu_layers == k,
+			CHECK_MSG(gpu_status == superslm_gpu::SslmGpuStatus::Ok && gpu_layers == k,
 			          "dispatch_budget=%u: GPU plan gives Ok/%u layers, got layers=%u", budget, k,
 			          gpu_layers);
 		}
@@ -24762,7 +24771,7 @@ static void TestT2019_B7_DispatchBudget_EveryRemainderAndBoundary() {
 		uint32_t gpu_layers = 999;
 		const auto gpu_status =
 		    superslm_gpu::PlanDispatchBudgetGpu(budget, N, 0, &gpu_layers);  // LINK-RED
-		CHECK_MSG(gpu_status == SslmGpuStatus::Ok && gpu_layers == N,
+		CHECK_MSG(gpu_status == superslm_gpu::SslmGpuStatus::Ok && gpu_layers == N,
 		          "dispatch_budget=%u: GPU plan caps at %u layers, got layers=%u -- must not spill "
 		          "into a second token's dispatches regardless of leftover budget",
 		          budget, N, gpu_layers);
@@ -24801,7 +24810,7 @@ static void TestT2019_B7_DispatchBudget_RejectingLayerStillRecordsFullQuantum() 
 	uint32_t gpu_layers = 999;
 	const auto gpu_status =
 	    superslm_gpu::PlanDispatchBudgetGpu(8 * kDispatchesPerLayer, 8, 0, &gpu_layers);  // LINK-RED
-	CHECK_MSG(gpu_status == SslmGpuStatus::Ok && gpu_layers == 8,
+	CHECK_MSG(gpu_status == superslm_gpu::SslmGpuStatus::Ok && gpu_layers == 8,
 	          "GPU plan for an 8-layer budget spanning a rejecting layer still plans all 8 "
 	          "layers (the rejection is executed, not pre-empted by the planner) -- got %u",
 	          gpu_layers);
@@ -25118,6 +25127,10 @@ static void TestT2047_S6_SaveRestoreRoundTripsThroughRealDevice() {
 	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 3};
 	seq.layer_index = 2;
 	seq.kv_saturation_count = 7;
+	seq.kv_landing_saturation_count = 1;
+	seq.k_normed_landing_saturation_count = 2;
+	seq.rope_q_saturation_count = 3;
+	seq.rope_k_saturation_count = 1;
 	seq.context_length = 4;
 
 	std::vector<uint8_t> blob(ws.size() + 256);  // generous over the header + workspace
@@ -25150,8 +25163,13 @@ static void TestT2047_S6_SaveRestoreRoundTripsThroughRealDevice() {
 	          "mutation quoted in the casebook");
 	CHECK_MSG(restored.layer_index == seq.layer_index &&
 	              restored.kv_saturation_count == seq.kv_saturation_count &&
+	              restored.kv_landing_saturation_count == seq.kv_landing_saturation_count &&
+	              restored.k_normed_landing_saturation_count == seq.k_normed_landing_saturation_count &&
+	              restored.rope_q_saturation_count == seq.rope_q_saturation_count &&
+	              restored.rope_k_saturation_count == seq.rope_k_saturation_count &&
 	              restored.context_length == seq.context_length,
-	          "S6 restore: header fields round-trip exactly");
+	          "S6 restore: header fields, including all four saturation-provenance counters, "
+	          "round-trip exactly");
 	bool workspace_matches = true;
 	for (size_t i = 0; i < ws.size(); ++i) {
 		if (restored_ws[i] != ws[i]) { workspace_matches = false; break; }
@@ -25160,6 +25178,42 @@ static void TestT2047_S6_SaveRestoreRoundTripsThroughRealDevice() {
 	          "S6 restore: the %zu-byte workspace round-trips bit-for-bit through the real "
 	          "device path (upload heap -> DEFAULT-heap device buffer -> readback heap)",
 	          ws.size());
+}
+
+// T-2578 confirmation remedy S3: the smallest exact construction for the lost-state defect.
+// Zero residual/workspace bytes keep this about the sequence header alone; unequal site values
+// prove each field independently, and their sum pins the aggregate provenance invariant.
+static void TestT2578_S3_SaveRestorePreservesPerSiteSaturationCounters() {
+	SequenceLayerState seq{};
+	seq.kv_landing_saturation_count = 17;
+	seq.k_normed_landing_saturation_count = 19;
+	seq.rope_q_saturation_count = 23;
+	seq.rope_k_saturation_count = 29;
+	seq.kv_saturation_count = 17 + 19 + 23 + 29;
+	const std::array<uint8_t, superslm::kIntegrityHashBytes> kNoHash{};
+	std::array<uint8_t, 256> blob{};
+	size_t blob_size = blob.size();
+	CHECK_MSG(superslm_gpu::SaveGpuSequenceState(seq, /*hidden_codes_size=*/0,
+	                                             /*workspace=*/nullptr, /*workspace_size=*/0,
+	                                             kNoHash, blob.data(), &blob_size),
+	          "T-2578 S3: header-only sequence save must succeed");
+
+	SequenceLayerState restored{};
+	CHECK_MSG(superslm_gpu::RestoreGpuSequenceState(blob.data(), blob_size, &restored,
+	                                                /*hidden_codes_size=*/0,
+	                                                /*out_workspace=*/nullptr,
+	                                                /*workspace_size=*/0),
+	          "T-2578 S3: header-only sequence restore must succeed");
+	CHECK_MSG(restored.kv_landing_saturation_count == 17 &&
+	              restored.k_normed_landing_saturation_count == 19 &&
+	              restored.rope_q_saturation_count == 23 &&
+	              restored.rope_k_saturation_count == 29,
+	          "T-2578 S3: all four per-site saturation counters must survive save/restore");
+	CHECK_MSG(restored.kv_saturation_count ==
+	              restored.kv_landing_saturation_count +
+	                  restored.k_normed_landing_saturation_count +
+	                  restored.rope_q_saturation_count + restored.rope_k_saturation_count,
+	          "T-2578 S3: restored aggregate must equal the restored per-site sum");
 }
 
 // ---------------------------------------------------------------------------
@@ -27564,8 +27618,9 @@ static void TestT2576_GpuKvSaturationAndKvRowMatchCpuOnRopeSaturationFixtureN100
 // ==============================================================================
 // T-2577 (D-SLM6278, external review `Claude/Poirot/5fafd98-t2573-trackb-external-fold-
 // review.md` Significant 1): `model_generation`, the caller-supplied identity that replaces
-// `!fresh_sequence` as the fast-path gate on `g_resident_rope`/`g_resident_weights`/
-// `g_resident_kv` (superslm_gpu.cpp) when a caller supplies one. Three properties, in one
+// `!fresh_sequence` as the fast-path gate on the read-only `g_resident_rope`/
+// `g_resident_weights` caches when a caller supplies one. Mutable `g_resident_kv` retains
+// `!fresh_sequence` independently. Four properties, in one
 // cell, over the SAME `RopeSaturationFixture` T-2576's own regression pin above uses:
 //
 //   1. A second fresh sequence of the SAME model (same `model_generation`) is a cache HIT --
@@ -27577,7 +27632,9 @@ static void TestT2576_GpuKvSaturationAndKvRowMatchCpuOnRopeSaturationFixtureN100
 //      stale hit) exactly as it does under the `!fresh_sequence` gate T-2576 shipped.
 //   3. The cache resumes hitting once `model_generation` is held steady again, proving the
 //      miss above was the generation mismatch and not a permanent cache invalidation.
-static void TestT2577_S1_ModelGenerationGatesTheThreeResidencyCachesCorrectly() {
+//   4. A second fresh sequence at the SAME workspace address and generation still uploads K/V;
+//      model identity cannot prove ownership of mutable sequence history.
+static void TestT2577_S1_ModelGenerationGatesReadOnlyCachesWithoutWeakeningKvFreshness() {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -27620,8 +27677,11 @@ static void TestT2577_S1_ModelGenerationGatesTheThreeResidencyCachesCorrectly() 
 	          "call 1 (generation=7, first ever call against an empty cache) reported the rope "
 	          "table upload was SKIPPED -- want a miss, this is the cache's very first call");
 
-	uint8_t ws2[kWorkspaceSize] = {};
-	const auto st2 = run_gpu(/*generation=*/7, ws2);
+	uint8_t ws1_after_first[kWorkspaceSize] = {};
+	std::memcpy(ws1_after_first, ws1, kWorkspaceSize);
+	// Deliberately reuse the identical workspace address across a new, fresh SequenceLayerState.
+	// Current K/V code without `!fresh_sequence` reports a false hit here.
+	const auto st2 = run_gpu(/*generation=*/7, ws1);
 	CHECK_MSG(st2 == SslmForwardStatus::Ok, "call 2 (generation=7, same model) status == %s, want Ok",
 	          SslmForwardStatusName(st2));
 	CHECK_MSG(superslm_gpu::LastRopeUploadWasSkipped(),
@@ -27633,8 +27693,12 @@ static void TestT2577_S1_ModelGenerationGatesTheThreeResidencyCachesCorrectly() 
 	          "call 2 (generation=7, same model) did not report the weight upload as skipped -- "
 	          "lw_fast_hit carries the identical model_generation gate for the identical reason "
 	          "(S1's own text: \"either they move to the same key in this round\")");
-	CHECK_MSG(std::memcmp(ws2, ws1, kWorkspaceSize) == 0,
-	          "call 2's landed K/V row differs from call 1's despite an unmutated, cached hit");
+	CHECK_MSG(!superslm_gpu::LastKvUploadWasSkipped(),
+	          "call 2 reused the SAME workspace address and model generation across a fresh "
+	          "sequence but reported a K/V hit -- mutable history must retain the independent "
+	          "!fresh_sequence guard");
+	CHECK_MSG(std::memcmp(ws1_after_first, ws1, kWorkspaceSize) == 0,
+	          "call 2's landed K/V row differs from call 1's despite an unmutated, fresh upload");
 
 	// --- Property 2: T-2576's own recycled-address construction, generation-gated. Same
 	// address, same byte count, DIFFERENT content, DIFFERENT generation (simulating a
@@ -28305,6 +28369,12 @@ static void TestT2577_S2_AStaleShaderOnTheRealDispatchPathReturnsTheNamedStatus(
 	          "generic catch and tells the caller to retry smaller, forever, against a shader no "
 	          "retry fixes",
 	          SslmForwardStatusName(st));
+	CHECK_MSG(MapSubmitRejectionToGpuStatus(st) == SSLM_GPU_SHADER_BINARY_STALE,
+	          "the production GPU submit-status mapper collapsed the real stale-shader result "
+	          "instead of returning SSLM_GPU_SHADER_BINARY_STALE");
+	CHECK_MSG(MapDecodedStatusToGpuStatus(st) == SSLM_GPU_SHADER_BINARY_STALE,
+	          "the production GPU finish-status mapper collapsed GpuShaderBinaryStale instead "
+	          "of returning SSLM_GPU_SHADER_BINARY_STALE");
 }
 
 // The real-workload cell (`StandardsDocument.md` §5.4): every shader binary THIS executable
@@ -29384,9 +29454,10 @@ int main(int argc, char** argv) {
 	TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath();
 	TestT2575_ShaderBinariesBesideThisExecutableAreCurrent();
 	TestT2576_GpuKvSaturationAndKvRowMatchCpuOnRopeSaturationFixtureN100();
-	TestT2577_S1_ModelGenerationGatesTheThreeResidencyCachesCorrectly();
+	TestT2577_S1_ModelGenerationGatesReadOnlyCachesWithoutWeakeningKvFreshness();
 	TestT2577_S1b_ModelGenerationReachesTheG5BridgeChunkEntryPoint();
 	TestT2577_O1_RopeKCountsOncePerKvHeadNotOncePerQueryHead();
+	TestT2578_S3_SaveRestorePreservesPerSiteSaturationCounters();
 #endif  // _WIN32
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);

@@ -162,7 +162,7 @@ typedef enum sslm_status {
                                                 * enumerators AT THE TIME; the registry has since
                                                 * grown past that shape entirely -- Sec6's
                                                 * GOVERNANCE RULING (below) makes this a single
-                                                * 26-entry registry, one interleaved ordinal
+                                                * registry (29 real entries as of T-2578), one interleaved ordinal
                                                 * sequence spanning base (0-17, then 25) and G5
                                                 * (18-24) together, not two independently-counted
                                                 * blocks. G5's own seven sit at 18-24, immediately
@@ -232,6 +232,9 @@ typedef enum sslm_status {
      * include/superslm/sslm_abi.h's own identical addition for the full rationale
      * (sslm_seq_restore's new legacy-'SSB3' rejection status, D-SLM4065's safety net). */
     SSLM_RESTORE_RESIDUAL_LOST = 27,
+    /* T-2578 confirmation remedy: mirrored in the SAME commit per this header's standing
+     * full-registry rule; see include/superslm/sslm_abi.h for the public contract. */
+    SSLM_GPU_SHADER_BINARY_STALE = 28,
 
     /* Sentinel, FOLD RULING 2026-08-17 (design Sec6, on F1) -- the enum's own final member, no
      * explicit value, so it auto-values to one past whichever entry above it is this header's own

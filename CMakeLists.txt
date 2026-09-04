@@ -105,12 +105,11 @@ endif()
 # SUPERSLM_BUILD_GPU option above: that option controls whether the public superslm_gpu
 # library and its install() rule exist; superslm_tests needs the same GPU sources compiled in
 # to link *at all* on Windows regardless of whether a consumer opts into the installed GPU
-# target. Only src/gpu/superslm_gpu.cpp is added here, not src/gpu/gpu_1p0.cpp -- every symbol
-# tests/test_main.cpp calls (SaveGpuSequenceState, RestoreGpuSequenceState,
-# LastWeightUploadWasSkipped, RunLayerLoopGpu, etc.) is defined in superslm_gpu.cpp, matching
-# build.bat's own main test recipe, which also omits gpu_1p0.cpp from this exact binary.
+# target. T-2578 adds src/gpu/gpu_1p0.cpp too: the stale-shader real-path cell now consumes the
+# production public-status mapper doors, so the test binary proves the actual 1.0 mapping rather
+# than a suite-side transcription. build.bat carries the identical source pair.
 if(WIN32)
-	target_sources(superslm_tests PRIVATE src/gpu/superslm_gpu.cpp)
+	target_sources(superslm_tests PRIVATE src/gpu/superslm_gpu.cpp src/gpu/gpu_1p0.cpp)
 	target_include_directories(superslm_tests PRIVATE src/gpu)
 	target_link_libraries(superslm_tests PRIVATE d3d12 dxgi dxguid)
 endif()
@@ -275,7 +274,8 @@ foreach(_sslm_tier SSE2 AVX2 AVX512)
 		target_compile_options(superslm_tests_${_sslm_tier_lower}_forced PRIVATE -Wall -Wextra -ffp-contract=off)
 	endif()
 	if(WIN32)
-		target_sources(superslm_tests_${_sslm_tier_lower}_forced PRIVATE src/gpu/superslm_gpu.cpp)
+		target_sources(superslm_tests_${_sslm_tier_lower}_forced PRIVATE
+			src/gpu/superslm_gpu.cpp src/gpu/gpu_1p0.cpp)
 		target_include_directories(superslm_tests_${_sslm_tier_lower}_forced PRIVATE src/gpu)
 		target_link_libraries(superslm_tests_${_sslm_tier_lower}_forced PRIVATE d3d12 dxgi dxguid)
 	endif()
@@ -516,7 +516,7 @@ add_test(NAME t2139_gate_c_must_reject_fails_to_compile
 # Gate C must-accept: a plain must-pass compile check, matching its Gate A sibling. The known
 # ordinal-interleaving block this entry previously disclosed (P2, Claude/Poirot/
 # 2c18dab-t2139-abi-build-review.md Sec7.4) closed when sslm_g5.h took the T-2133 Sec6 registry
-# mirror (curie/t2130-g5-red-suite@52dc6cd): sslm_g5.h now mirrors sslm_status's full 26-entry
+# mirror (curie/t2130-g5-red-suite@52dc6cd): sslm_g5.h mirrors sslm_status's full append-only
 # ordinal registry verbatim, so the type-identity construction compiles and this entry must pass.
 add_test(NAME t2139_gate_c_must_accept_compiles
 	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_c_must_accept --config $<CONFIG>)

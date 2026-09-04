@@ -79,17 +79,17 @@ typedef struct sslm_detok_state {
     uint8_t pending_count;     /* how many of pending_bytes[] are valid, in [0, 3] */
 } sslm_detok_state;
 
-/* status enum -- RECONCILED to Sec6's COMPLETE 26-entry ordinal registry (design commit
+/* status enum -- RECONCILED to Sec6's COMPLETE 29-entry ordinal registry (design commit
  * 4f4eb23896, Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md Sec6 GOVERNANCE RULING,
  * FOLD RULING 2026-08-17 on Poirot's third confirmation casebook
  * 4466666-t2139-third-confirmation-review.md F1, correction 1: "sslm_abi.h also mirrors the
- * complete 26-entry registry, verbatim -- the identical convention already ruled for sslm_g5.h,
+ * complete registry, verbatim -- the identical convention already ruled for sslm_g5.h,
  * applied symmetrically. Neither header owns a subset of the registry to extend independently").
  * This is this suite's own THIRD, independently-maintained transcription of the enum (the same
  * casebook's F5, Minor: distinct from both include/superslm/sslm_abi.h and
  * tests/t2130-g5-red-suite/sslm_g5.h) -- carried here in the SAME implicit-sequential-value style
  * this file already used before this fold (no `= N` needed per entry; the declaration order below
- * IS the registry's own ordinal order, 0 through 25, then the sentinel).
+ * IS the registry's own ordinal order, 0 through 28, then the sentinel).
  *
  * SSLM_RESTORE_SCHEMA_MISMATCH (ordinal 22) was previously named here as "explicitly NOT one of
  * these... reserved-but-unbuilt" -- that carve-out is retired by the symmetric-mirroring ruling
@@ -169,6 +169,9 @@ typedef enum sslm_status {
      * include/superslm/sslm_abi.h's own identical addition for the full rationale
      * (sslm_seq_restore's new legacy-'SSB3' rejection status, D-SLM4065's safety net). */
     SSLM_RESTORE_RESIDUAL_LOST,
+    /* T-2578 confirmation remedy: mirrored in the SAME commit; see the production header's
+     * identical entry for the rebuild/redeploy contract. */
+    SSLM_GPU_SHADER_BINARY_STALE,
 
     /* Sentinel, FOLD RULING 2026-08-17 (design Sec6, F1) -- the enum's own final member, no
      * explicit value, auto-valuing to one past this header's own last explicit member and moving

@@ -50,7 +50,9 @@ never through the return value itself.
   clears a sequence back to empty; `sslm_gpu_seq_save` / `sslm_gpu_seq_
   restore` serialize a sequence's full state to a caller buffer and back,
   rejecting a restore against a model that isn't the one the state was
-  saved from.
+  saved from. The current `SLM4` blob carries the aggregate K/V saturation
+  count and all four per-site counters that compose it; older `SSLM`, `SLM2`,
+  and `SLM3` layouts are rejected on their versioned magic rather than misread.
 - **Adapter binding**: `sslm_gpu_seq_bind_adapter` binds (or, passed a
   null adapter, unbinds) a LoRA adapter to a sequence handle *across*
   calls — distinct from the per-call `adapter_or_null` argument every
@@ -112,8 +114,11 @@ into; a lost/reset device; a batch call that ran out of its shared
 budget; an out-of-range token id; a single sequence's decode step
 rejected on structural grounds unrelated to device health (so a healthy
 device serving other sequences in the same batch is distinguishable from
-a real device loss); and a restore whose blob doesn't match the model
-it's being restored against.
+a real device loss); a restore whose blob doesn't match the model it's
+being restored against; and `SSLM_GPU_SHADER_BINARY_STALE`, which means a
+deployed `.cso` predates one of its HLSL inputs. The last cause requires a
+matching shader rebuild/redeployment; the model, sequence, and device are
+not condemned by it.
 
 ## The CPU consumer API (`sslm_*`) — shipped
 
@@ -283,7 +288,8 @@ otherwise valid model and valid params, `SSLM_NUMERIC_STEP_REFUSED`,
 (an unknown schema name; binding a schema to a non-fresh sequence; a
 schema-content span on an unbound sequence; a prefix or restore whose
 schema doesn't match; a fixed span the schema's own DFA cannot reach; a
-schema the offline compiler could not prove satisfiable) plus one
+schema the offline compiler could not prove satisfiable), the shared
+`SSLM_GPU_SHADER_BINARY_STALE` deployment-mismatch cause, plus one
 process-level resource-exhaustion cause distinct from a caller-supplied
 buffer running out.
 

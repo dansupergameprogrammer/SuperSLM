@@ -55,7 +55,7 @@ typedef struct sslm_detok_state {
 } sslm_detok_state;
 
 /* status enum -- FULL-REGISTRY MIRROR, design Sec6's own single-authority complete ordinal
- * registry, 26 entries (0-25) plus one auto-valued sentinel (design Sec6 GOVERNANCE RULING,
+ * registry, 29 entries (0-28) plus one auto-valued sentinel (design Sec6 GOVERNANCE RULING,
  * design commit 4f4eb23896; symmetric-mirroring FOLD RULING on the third confirmation pass's F1,
  * design commit dated 2026-08-17).
  *
@@ -72,7 +72,7 @@ typedef struct sslm_detok_state {
  * only which header's enum body carries which NAMES changed.
  *
  * SSLM_STATUS_NEXT_FREE -- the enum's final member, auto-valued (no explicit numeric value:
- * the compiler assigns one past SSLM_ALLOCATION_FAILED, i.e. 26). This is the fold's OTHER
+ * the compiler assigns one past the current final real status, i.e. 29). This is the fold's OTHER
  * ruling: a plain #define "top" macro (SSLM_STATUS_BASE_MAX, retired this fold -- no design
  * record, no consumer beyond one test tool, F1 collateral) cannot move itself
  * when a header appends a new enumerator, so F1's four compiled mutations proved it silently
@@ -158,7 +158,13 @@ typedef struct sslm_detok_state {
      * residual. Never returned for the current 'SSB4' format, which serializes the
      * residual unconditionally and cannot lose it. Appended at the END of this list,
      * same additive-only discipline as SSLM_NUMERIC_STEP_REFUSED above. */ \
-    X(SSLM_RESTORE_RESIDUAL_LOST) /* 27 */
+    X(SSLM_RESTORE_RESIDUAL_LOST) /* 27 */ \
+    /* T-2578 confirmation remedy: the deployed GPU shader binary is older than one of the
+     * HLSL sources that produced it. This is neither a model-artifact rejection nor a
+     * per-sequence numeric rejection: retrying with the same deployment cannot succeed.
+     * Rebuild/redeploy the matching shader set, then retry. Appended at the END so every
+     * already-published ordinal remains stable. */ \
+    X(SSLM_GPU_SHADER_BINARY_STALE) /* 28 */
 
 typedef enum sslm_status {
 #define SSLM_STATUS_ENUM_VALUE_(name) name,
