@@ -2626,10 +2626,10 @@ def _kv_calibration_capture(cfg: ModelConfig, float_weight, records, tokenize):
     pre-RoPE state", and QK-norm runs before RoPE in that store now, not after. `maxima`
     is the SAME scalar-per-site running-peak dict `_observe` builds for the legacy path
     (`_calibrate`'s own return), populated here for `f"{prefix}.attn_norm.out"` and
-    `f"{prefix}.q"` (observed twice, at the SAME TWO pipeline points `_float_layer`'s own
-    two `_observe` calls sit at -- pre-norm/post-projection, then post-RoPE -- an equality
+    `f"{prefix}.q"` (observed once, at the raw post-projection pipeline point that
+    `_float_layer` also uses -- the equality
     `test_arm_d_q_scale_matches_shipped_production_q_path` asserts directly, so this is a
-    constraint on WHERE the maxima observation happens, deliberately independent of where
+    constraint on the raw-Q landing domain, deliberately independent of where
     `k_pre`'s own capture happens) -- the raw material Arm D/E's own Q-scale
     (`_layer_q_scale`) needs to compute the real `projection_scale`/`_output_scale`
     chain, D-SLM2555's pinned production Q path, over this arm's own capture rather than
@@ -2673,7 +2673,6 @@ def _kv_calibration_capture(cfg: ModelConfig, float_weight, records, tokenize):
                 k_pre[head].append(np.array(k[:, head, :], copy=True))
             q_rope = _float_rope(q, cfg.rope_theta)
             k_rope = _float_rope(k, cfg.rope_theta)
-            _observe(maxima, f"{prefix}.q", q_rope)
             for head in range(cfg.num_key_value_heads):
                 k_post[head].append(np.array(k_rope[:, head, :], copy=True))
             for head in range(cfg.num_attention_heads):
@@ -2717,12 +2716,11 @@ def _layer_q_scale(maxima, weight_scales, prefix):
     `_derive_scales` calls for the shipped path (`_attn_norm_scale`, `_projection_scale`
     -- both module-level, not restated here), over `maxima`/`weight_scales` built from
     this arm's own calibration capture (`_kv_calibration_capture`'s own `maxima`, which
-    observes Q as a union of pre- and post-RoPE activations, matching `_float_layer`'s
-    own two `_observe` calls at the identical key) rather than a bare max-abs/127
+    observes raw post-projection Q exactly as `_float_layer` does) rather than a bare
+    max-abs/127
     (T-1936 §5.3/D-SLM2624 -- corrected from the prior round's honestly-stated
-    simplification, which took Q's own bare max-abs and omitted both the pre-RoPE half
-    of the observation union and the weight-channel dominance floor `_output_scale`
-    enforces).
+    simplification, which took Q's own bare max-abs and omitted the weight-channel
+    dominance floor `_output_scale` enforces).
     """
     attn_norm_scale = _attn_norm_scale(maxima, weight_scales, prefix)
     return _projection_scale(maxima, weight_scales, f"{prefix}.q", f"{prefix}.q_proj", attn_norm_scale)
@@ -3179,9 +3177,9 @@ def _float_layer(cfg, tensors, hidden, maxima, prefix):
     # 2.331695135661406/127 = 0.018359804217806346 per code, but the true post-RoPE peak of
     # 2.3348409208433023 needs 127.17134088929147 codes against that scale -- the review's own
     # executed counterexample, reproduced bit-for-bit by this session). The existing pre-norm
-    # key (`f"{prefix}.k"`, above) is untouched -- this is additive, not a reassignment, so the
-    # raw K landing scale (`k_head{h}.scale`, `softmax_khead` for a non-QK-norm layer) stays
-    # bit-for-bit unaffected. `_observe` is a running max (`maxima[name] =
+    # raw key (`f"{prefix}.k"`, above) is observed only on the raw projection output, so the
+    # raw K landing scale (`k_head{h}.scale`, `softmax_khead` for a non-QK-norm layer) is
+    # derived from its own landing domain. `_observe` is a running max (`maxima[name] =
     # max(maxima.get(name, 0), peak)`); the SAME key observed on both sides of RoPE is what
     # makes the stored peak the union rather than whichever side happens to be larger on a
     # given checkpoint (the review's own found mechanism gap, `Claude/Poirot/f1a2741-t2552-
@@ -3192,8 +3190,8 @@ def _float_layer(cfg, tensors, hidden, maxima, prefix):
 
     q = _float_rope(q, cfg.rope_theta)
     k = _float_rope(k, cfg.rope_theta)
-    _observe(maxima, f"{prefix}.q", q)
-    _observe(maxima, f"{prefix}.k", k)
+    # Raw Q/K calibration keys above remain on the pre-QK-norm projection domain.  The
+    # transformed values below are consumed only by the dedicated `k_normed` union.
     # (D-SLM6263): the k_normed key's SECOND observation, post-RoPE -- the running max above
     # folds this into the union with the pre-RoPE peak already captured, closing Significant 1.
     # The engine requantizes K onto this artifact's static k_normed_head{h} scale BEFORE RoPE

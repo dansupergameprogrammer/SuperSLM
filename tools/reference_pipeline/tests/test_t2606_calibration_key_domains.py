@@ -43,6 +43,7 @@ import importlib.util
 import sys
 
 import numpy as np
+import pytest
 
 import conftest
 from conftest import require
@@ -590,10 +591,10 @@ def test_every_derive_scales_consumed_key_carries_a_domain_assertion():
 
 
 # ==============================================================================
-# Mutation proofs (green at faef137): each loads a scratch deleted-observation mutant
-# -- a copy of pipeline.py transformed in tmp_path, never committed, never touching the
-# imported module -- and shows the SAME shared predicate that is red on the real tree
-# is green on the corrected behavior. Modeled on
+# Mutation proofs: each loads a scratch restored-foreign-observation mutant -- a copy of
+# pipeline.py transformed in tmp_path, never committed, never touching the imported module
+# -- and shows the SAME shared predicate that is green on the corrected tree turns red.
+# Modeled on
 # test_k_normed_union_maxima_is_lost_under_the_post_rope_observation_deletion_mutant
 # (test_ask5_trackb_oracle_qk_norm_parity.py:562).
 # ==============================================================================
@@ -622,129 +623,106 @@ def _load_mutant(transform, tmp_path):
     return module
 
 
-# The first line of the comment block that immediately follows pipeline.py's two
-# post-transform raw-key observations (:3195-:3196 at faef137) -- unique text in the
-# file, so anchoring on it targets exactly that block and cannot match the raw
-# projection observations at :3156-:3158 (which are followed by the v observation).
+# The first line of the comment block at the corrected location where the former
+# post-transform raw-key observations were removed. It is unique, so mutations target the
+# transformed values after RoPE and cannot match the raw projection observations.
 _POST_TRANSFORM_BLOCK_COMMENT = (
-    "    # (D-SLM6263): the k_normed key's SECOND observation, post-RoPE -- the running max above\n"
+    "    # Raw Q/K calibration keys above remain on the pre-QK-norm projection domain.  The\n"
 )
 
 
-def _delete_raw_k_post_transform_observation(text):
-    """Delete `_float_layer`'s post-transform raw-K observation (pipeline.py:3196 at
-    faef137) -- the exact line whose presence the instance cell pins red."""
-    anchor = (
-        '    _observe(maxima, f"{prefix}.k", k)\n'
-        + _POST_TRANSFORM_BLOCK_COMMENT
-    )
+def _restore_raw_k_post_transform_observation(text):
+    """Restore `_float_layer`'s former post-transform raw-K observation as a mutant."""
+    anchor = _POST_TRANSFORM_BLOCK_COMMENT
     assert text.count(anchor) == 1, (
-        "sanity: the post-transform raw-K observation block must match verbatim, once"
+        "sanity: the corrected post-transform raw-key location must match verbatim, once"
     )
     mutated = text.replace(
         anchor,
-        "    # T-2606 mutant: the post-transform raw-K observation deleted\n"
-        + _POST_TRANSFORM_BLOCK_COMMENT,
+        '    _observe(maxima, f"{prefix}.k", k)\n'
+        "    # T-2606 mutant: restored foreign post-transform raw-K observation\n"
+        + anchor,
         1,
     )
-    # The leading "\n" pins the 4-space indentation of `_float_layer`'s own raw
-    # observations: the capture's 12-space-indented raw-q observation (pipeline.py:2670)
-    # contains the un-anchored form as a substring, so an anchor without it cannot
-    # count _float_layer's observations alone.
-    assert mutated.count('\n    _observe(maxima, f"{prefix}.k", k)\n') == 1, (
-        "sanity: exactly the raw projection's own k observation must survive"
+    assert mutated.count('\n    _observe(maxima, f"{prefix}.k", k)\n') == 2, (
+        "sanity: the mutant must retain the raw K observation and restore one foreign one"
     )
     return mutated
 
 
-def _delete_both_raw_key_post_transform_observations(text):
-    """Delete both post-transform raw-key observations (pipeline.py:3195 and :3196 at
-    faef137) -- the full corrected behavior for the maxima keys on the calibrated walk."""
-    anchor = (
+def _restore_both_raw_key_post_transform_observations(text):
+    """Restore both former post-transform raw-key observations as a mutant."""
+    anchor = _POST_TRANSFORM_BLOCK_COMMENT
+    assert text.count(anchor) == 1, (
+        "sanity: the corrected post-transform raw-key location must match verbatim, once"
+    )
+    mutated = text.replace(
+        anchor,
         '    _observe(maxima, f"{prefix}.q", q)\n'
         '    _observe(maxima, f"{prefix}.k", k)\n'
-        + _POST_TRANSFORM_BLOCK_COMMENT
-    )
-    assert text.count(anchor) == 1, (
-        "sanity: the post-transform raw-key observation block must match verbatim, once"
-    )
-    mutated = text.replace(
-        anchor,
-        "    # T-2606 mutant: the post-transform raw-Q and raw-K observations deleted\n"
-        + _POST_TRANSFORM_BLOCK_COMMENT,
+        "    # T-2606 mutant: restored foreign post-transform raw-Q/raw-K observations\n"
+        + anchor,
         1,
     )
-    assert mutated.count('\n    _observe(maxima, f"{prefix}.k", k)\n') == 1, (
-        "sanity: exactly the raw projection's own k observation must survive"
+    assert mutated.count('\n    _observe(maxima, f"{prefix}.k", k)\n') == 2, (
+        "sanity: the mutant must retain raw K and restore foreign K"
     )
-    assert mutated.count('\n    _observe(maxima, f"{prefix}.q", q)\n') == 1, (
-        "sanity: exactly the raw projection's own q observation must survive in "
-        "_float_layer (the capture's own 12-space-indented raw-q observation is "
-        "untouched by this mutant; the leading newline pins the indentation so it "
-        "cannot be counted here)"
+    assert mutated.count('\n    _observe(maxima, f"{prefix}.q", q)\n') == 2, (
+        "sanity: the mutant must retain raw Q and restore foreign Q"
     )
     return mutated
 
 
-def _delete_capture_post_rope_q_observation(text):
-    """Delete `_kv_calibration_capture`'s post-RoPE q observation (pipeline.py:2676 at
-    faef137) -- the capture walk's own foreign-domain observation."""
-    anchor = '            _observe(maxima, f"{prefix}.q", q_rope)\n'
+def _restore_capture_post_rope_q_observation(text):
+    """Restore the capture walk's former post-RoPE raw-Q observation as a mutant."""
+    anchor = (
+        '            q_rope = _float_rope(q, cfg.rope_theta)\n'
+        '            k_rope = _float_rope(k, cfg.rope_theta)\n'
+        '            for head in range(cfg.num_key_value_heads):\n'
+    )
     assert text.count(anchor) == 1, (
-        "sanity: the capture's post-RoPE q observation must match verbatim, once"
+        "sanity: the capture's post-RoPE insertion point must match verbatim, once"
     )
     mutated = text.replace(
         anchor,
-        "            # T-2606 mutant: the capture's post-RoPE q observation deleted\n",
+        '            q_rope = _float_rope(q, cfg.rope_theta)\n'
+        '            k_rope = _float_rope(k, cfg.rope_theta)\n'
+        '            _observe(maxima, f"{prefix}.q", q_rope)\n'
+        "            # T-2606 mutant: restored foreign capture post-RoPE Q observation\n"
+        '            for head in range(cfg.num_key_value_heads):\n',
         1,
     )
-    assert '_observe(maxima, f"{prefix}.q", q_rope)' not in mutated, (
-        "sanity: the capture's post-RoPE q observation must be gone"
+    assert mutated.count('            _observe(maxima, f"{prefix}.q", q_rope)\n') == 1, (
+        "sanity: the mutant must restore exactly one capture post-RoPE Q observation"
     )
     return mutated
 
 
-def test_the_instance_predicate_is_green_under_the_raw_k_observation_deletion_mutant(tmp_path):
-    """Mutation proof 1 (T-2606): delete `_float_layer`'s own post-transform raw-K
-    observation (pipeline.py:3196) -- the exact line whose presence the instance cell
-    pins -- and the instance predicate (the SAME shared implementation the red cell
-    runs) is GREEN on the mutant: maxima[layer{L}.k] equals the raw k_proj peak exactly
-    at every layer. Re-inserting the line -- the real tree at faef137, which IS the
-    re-inserted state -- turns the same predicate red (quoted in this session's run of
-    the red cell above)."""
-    mutant = _load_mutant(_delete_raw_k_post_transform_observation, tmp_path)
+def test_the_instance_predicate_rejects_the_restored_raw_k_observation_mutant(tmp_path):
+    """Mutation proof 1: restoring foreign post-transform K makes the raw-K pin red."""
+    mutant = _load_mutant(_restore_raw_k_post_transform_observation, tmp_path)
     cfg, _, float_weight = _scaled_qk_norm_fixture(mutant)
     maxima, walk = _run_calibrate(mutant, cfg, float_weight)
-    _assert_raw_projection_key_pure(cfg, maxima, walk, "k")
-    for layer in range(cfg.num_hidden_layers):
-        print(f"mutant maxima[layer{layer}.k]={maxima[f'layer{layer}.k']!r} "
-              f"raw={walk.project_out[f'layer{layer}.k_proj']!r}")
+    with pytest.raises(AssertionError, match="not the raw k_proj output peak"):
+        _assert_raw_projection_key_pure(cfg, maxima, walk, "k")
 
 
-def test_the_class_and_q_predicates_are_green_under_both_raw_key_observations_deleted(tmp_path):
-    """Mutation proof 2 (T-2606): delete BOTH post-transform raw-key observations
-    (pipeline.py:3195 and :3196) -- the full corrected behavior on the calibrated walk --
-    and the class predicate (zero violations across the whole domain table) and the
-    raw-Q instance predicate are GREEN on the mutant. The k_normed union observations
-    are untouched by this mutant and stay green by design (D-SLM6263/6264)."""
-    mutant = _load_mutant(_delete_both_raw_key_post_transform_observations, tmp_path)
+def test_the_class_and_q_predicates_reject_restored_raw_key_observations(tmp_path):
+    """Mutation proof 2: restoring both foreign raw-key observations fails the class pin."""
+    mutant = _load_mutant(_restore_both_raw_key_post_transform_observations, tmp_path)
     cfg, _, float_weight = _scaled_qk_norm_fixture(mutant)
     maxima, walk = _run_calibrate(mutant, cfg, float_weight)
     violations = _grade_walk(walk, maxima, "the mutant calibrated walk",
                              demand_full_table=True)
-    assert not violations, "\n".join(violations)
-    _assert_raw_projection_key_pure(cfg, maxima, walk, "q")
-    _assert_raw_projection_key_pure(cfg, maxima, walk, "k")
+    assert any("layer0.q" in violation and "post_rope" in violation for violation in violations)
+    assert any("layer0.k" in violation and "post_rope" in violation for violation in violations)
 
 
-def test_the_capture_predicate_is_green_under_the_capture_post_rope_q_observation_deleted(tmp_path):
-    """Mutation proof 3 (T-2606): delete `_kv_calibration_capture`'s own post-RoPE q
-    observation (pipeline.py:2676) and the capture predicate is GREEN on the mutant --
-    the capture's maxima[layer{L}.q] equals its raw q_proj peak alone, the sibling walk's
-    own share of the corrected behavior."""
-    mutant = _load_mutant(_delete_capture_post_rope_q_observation, tmp_path)
+def test_the_capture_predicate_rejects_restored_post_rope_q_observation(tmp_path):
+    """Mutation proof 3: restoring foreign capture Q makes the capture pin red."""
+    mutant = _load_mutant(_restore_capture_post_rope_q_observation, tmp_path)
     cfg, _, float_weight = _scaled_qk_norm_fixture(mutant)
     maxima, walk = _run_capture(mutant, cfg, float_weight)
     violations = _grade_walk(walk, maxima, "the mutant capture walk",
                              demand_full_table=False)
-    assert not violations, "\n".join(violations)
+    assert any("layer0.q" in violation and "post_rope" in violation for violation in violations)

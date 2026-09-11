@@ -934,17 +934,11 @@ def test_arm_d_q_scale_matches_shipped_production_q_path_at_every_layer():
     """T-1939 §5.2 (Significant): `test_arm_d_q_scale_matches_the_shipped_production_
     q_path` (`Tools/superslm_spike/tests/test_t1937_production_fix_pins.py`) checks the
     equality between Arm D/E's own captured Q scale and the shipped `_derive_scales`
-    Q-scale chain at `"layer0"` ONLY -- the one layer of two on the §11 fixture where the
-    pre-RoPE half of `_kv_calibration_capture`'s Q observation union has ZERO effect
-    (union and post-RoPE-only max-abs coincide there: `4.59892462371` both ways, confirmed
-    by execution this round). At `"layer1"` the two diverge (`3.41027051431` union vs.
-    `3.39751225947` post-RoPE-only), so a mutation that drops the pre-RoPE
-    `_observe(maxima, "{prefix}.q", q)` call from `_kv_calibration_capture` reproduces the
-    ORIGINAL T-1936 defect's own measured `layer1` Q scale digit-for-digit
-    (`0.026752065035162028`, confirmed by execution this round). When this cell was
-    authored the sibling file's then-layer0-only pin stayed green under that mutation;
-    commit `3cb010510e` has since extended the sibling pin to every layer, so the same
-    mutation is now caught by BOTH tests (re-confirmed by execution, T-1939 §11).
+    Q-scale chain at `"layer0"` ONLY.  T-2607 corrects both walks to observe the raw
+    post-projection Q landing domain once: this test's equality remains the proof that
+    Arm D/E quantize Q against the same raw-Q scale the artifact ships.  The loop below
+    preserves that equality for every layer, including the layers where a foreign
+    post-QK-norm/post-RoPE observation previously enlarged the raw-Q maximum.
 
     That sibling file is outside T-1940's own writable scope (this suite's own file is
     `test_armd_arme_kv_calibration.py`; the flagged pin lives in `test_t1937_production_
@@ -952,14 +946,9 @@ def test_arm_d_q_scale_matches_shipped_production_q_path_at_every_layer():
     states "no T-1937 pin file" among what this suite's rounds do not touch). This test
     closes the coverage gap at the SUITE level instead of editing that file: it re-derives
     the identical equality the sibling pin states, but loops over every layer, so the full
-    suite discriminates the dropped-pre-RoPE mutation regardless of which file's pin
-    catches it. The sibling pin's layer0-only scope was closed separately at `3cb010510e`
-    (every-layer loop, proven red at layer1 under the same mutation).
-
-    RED under the mutation: `layer1`'s built Q scale diverges from shipped by ~0.37%,
-    caught by the loop below. Confirmed by execution this round
-    (`Claude/Curie/t1933-armd-arme-red-suite-2026-08-11.md`'s T-1940 addendum): RED under
-    the dropped-pre-RoPE mutation, GREEN after revert.
+    suite discriminates a divergence between the capture and production raw-Q scales
+    regardless of which file's pin catches it. The sibling pin's layer0-only scope was
+    closed separately at `3cb010510e`; this cell retains the every-layer coverage.
     """
     pipeline = require(MODULE)
     cfg = fixture_config(pipeline)
