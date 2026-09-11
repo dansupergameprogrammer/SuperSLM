@@ -70,11 +70,14 @@ project's own citation of this file as Arm D/E's home.
 """
 
 import dataclasses
+import importlib.util
 import json
+import sys
 
 import numpy as np
 import pytest
 
+import conftest
 from conftest import api, require
 
 MODULE = "reference_pipeline.pipeline"
@@ -931,24 +934,28 @@ def test_source_fingerprint_differs_when_only_kv_calibration_provenance_differs(
 # ==============================================================================
 
 def test_arm_d_q_scale_matches_shipped_production_q_path_at_every_layer():
-    """T-1939 §5.2 (Significant): `test_arm_d_q_scale_matches_the_shipped_production_
-    q_path` (`Tools/superslm_spike/tests/test_t1937_production_fix_pins.py`) checks the
-    equality between Arm D/E's own captured Q scale and the shipped `_derive_scales`
-    Q-scale chain at `"layer0"` ONLY.  T-2607 corrects both walks to observe the raw
+    """T-1939 §5.2 (Significant), as it stands since `3cb010510e`: this test and its
+    sibling `test_arm_d_q_scale_matches_the_shipped_production_q_path`
+    (`Tools/superslm_spike/tests/test_t1937_production_fix_pins.py`) are BOTH every-layer
+    pins of the equality between Arm D/E's own captured Q scale and the shipped
+    `_derive_scales` Q-scale chain. T-2607 corrects both walks to observe the raw
     post-projection Q landing domain once: this test's equality remains the proof that
     Arm D/E quantize Q against the same raw-Q scale the artifact ships.  The loop below
     preserves that equality for every layer, including the layers where a foreign
     post-QK-norm/post-RoPE observation previously enlarged the raw-Q maximum.
 
-    That sibling file is outside T-1940's own writable scope (this suite's own file is
-    `test_armd_arme_kv_calibration.py`; the flagged pin lives in `test_t1937_production_
-    fix_pins.py`, authored and owned by a different round -- T-1933's own casebook already
-    states "no T-1937 pin file" among what this suite's rounds do not touch). This test
-    closes the coverage gap at the SUITE level instead of editing that file: it re-derives
-    the identical equality the sibling pin states, but loops over every layer, so the full
-    suite discriminates a divergence between the capture and production raw-Q scales
-    regardless of which file's pin catches it. The sibling pin's layer0-only scope was
-    closed separately at `3cb010510e`; this cell retains the every-layer coverage.
+    Before `3cb010510e` the sibling pin checked `"layer0"` only, a scope T-1939 §5.2
+    showed cannot fail on the dropped-pre-RoPE defect it exists to catch (on that
+    fixture the pre- and post-RoPE observations coincide at layer0 and differ at
+    layer1); the sibling now loops over `range(cfg.num_hidden_layers)`, identically to
+    this test. That sibling file is outside T-1940's own writable scope (this suite's
+    own file is `test_armd_arme_kv_calibration.py`; the flagged pin lives in
+    `test_t1937_production_fix_pins.py`, authored and owned by a different round --
+    T-1933's own casebook already states "no T-1937 pin file" among what this suite's
+    rounds do not touch). This test closes the coverage gap at the SUITE level instead
+    of editing that file: it re-derives the identical equality the sibling pin states,
+    looping over every layer, so the full suite discriminates a divergence between the
+    capture and production raw-Q scales regardless of which file's pin catches it.
     """
     pipeline = require(MODULE)
     cfg = fixture_config(pipeline)
@@ -972,8 +979,7 @@ def test_arm_d_q_scale_matches_shipped_production_q_path_at_every_layer():
             f"Arm D/E's own Q-scale at {prefix} ({built_q_scale}) must equal the shipped "
             f"production `projection_scale` chain ({shipped_q_scale}) -- a divergence "
             f"here means the sweep is quantizing Q against a different scale than the "
-            f"artifact will ship, at a layer the sibling file's own layer0-only pin "
-            f"cannot see"
+            f"artifact will ship"
         )
 
 
@@ -1064,3 +1070,156 @@ def test_calibrate_kv_landing_arm_c_still_accepts_a_non_qk_norm_checkpoint():
     assert not any(".k_normed_head" in key for key in result["kv_landing"]), (
         "a non-QK-norm checkpoint must never emit a k_normed_head{h} entry"
     )
+
+
+# ==============================================================================
+# T-2606 round 2 (Poirot e6a07d8-t2608-k-calibration-review.md, S-1): the Q-scale
+# equality cells above run on this suite's own `_pinned_weights` fixture, which carries
+# `q_norm.gain`/`k_norm.gain` unconditionally (T-2539) -- a fixture on which
+# `_kv_calibration_capture`'s conditional post-RoPE raw-Q observation
+# (pipeline.py:2680-2681) never executes. Arms C/D/E reject a QK-norm checkpoint before
+# the capture runs (pipeline.py:2856-2870), so the non-QK-norm branch IS the capture's
+# entire production population, and deleting it moved the shipped Arm D/E Q scale
+# (Poirot's own measurement: Q maximum 0.07798804709462445 -> 0.07126088591358645, Q
+# scale 0.0006140791109812949 -> 0.0005611093379022555) while every then-touched test
+# stayed green. These cells run the identical equality on the converter's real legacy
+# non-QK-norm fixture -- `_calibrate_checkpoint_fixture.build_fixture_checkpoint`, the
+# same construction repair 1's legacy class case and the base-engine golden use -- and
+# pin it with the capture-only deletion mutant.
+# ==============================================================================
+
+
+def _legacy_checkpoint_model(pipeline, tmp_path):
+    """The converter's real legacy (Qwen2-shaped, non-QK-norm) on-disk checkpoint, loaded
+    through the same `pipeline.load_model` the converter's CLI uses."""
+    import _calibrate_checkpoint_fixture as fixture_mod
+    return pipeline.load_model(fixture_mod.build_fixture_checkpoint(tmp_path / "legacy"))
+
+
+def test_arm_d_q_scale_matches_the_shipped_production_q_path_on_the_legacy_checkpoint(tmp_path):
+    """The S-1 half in this suite: on the converter's real legacy non-QK-norm fixture,
+    Arm D/E's own Q-scale (`_layer_q_scale`, over `_kv_calibration_capture`'s own
+    `maxima`) must equal the shipped per-layer `projection_scale` chain at EVERY layer,
+    over the identical calibration corpus and weights -- both walks observing the same
+    raw-projection-plus-RoPE-image union (`_float_layer` conditionally at
+    pipeline.py:3215-3217, the capture conditionally at :2680-2681). A capture that
+    drops the post-RoPE half of the union ships a sweep that quantizes Q against a scale
+    the artifact does not execute -- the exact divergence the deletion-mutant cell below
+    turns red."""
+    pipeline = require(MODULE)
+    legacy = _legacy_checkpoint_model(pipeline, tmp_path)
+    cfg = legacy.config
+    float_weight = legacy.float_source
+    weight_scales = pipeline._weight_scales_from_float_source(cfg, float_weight)
+    records = pipeline.calibration_records()
+    record_tokenize = pipeline._bridge_record_tokenizer(legacy.tokenize_prompt)
+
+    shipped_maxima = pipeline._calibrate(cfg, float_weight, records, record_tokenize)
+    capture, capture_maxima = pipeline._kv_calibration_capture(
+        cfg, float_weight, records, record_tokenize)
+
+    for layer in range(cfg.num_hidden_layers):
+        prefix = f"layer{layer}"
+        shipped_attn_norm_scale = pipeline._attn_norm_scale(shipped_maxima, weight_scales, prefix)
+        shipped_q_scale = pipeline._projection_scale(
+            shipped_maxima, weight_scales, f"{prefix}.q", f"{prefix}.q_proj", shipped_attn_norm_scale)
+        built_q_scale = pipeline._layer_q_scale(capture_maxima, weight_scales, prefix)
+        assert built_q_scale == pytest.approx(shipped_q_scale, rel=1e-9), (
+            f"{prefix}: Arm D/E's own Q-scale on the legacy non-QK-norm checkpoint "
+            f"({built_q_scale}) must equal the shipped production `projection_scale` "
+            f"chain ({shipped_q_scale}) -- a divergence here means the sweep is "
+            f"quantizing Q against a different scale than the artifact will ship"
+        )
+
+
+def _load_mutant_pipeline(transform, tmp_path):
+    """A MUTATED copy of pipeline.py loaded as an isolated module in tmp_path, never
+    committed, never touching the imported module (inlined from
+    test_t2606_calibration_key_domains.py's own `_load_mutant` per this suite's
+    no-cross-module-imports convention)."""
+    pipeline = require(MODULE)
+    real_path = conftest.TOOLS_DIR / "reference_pipeline" / "pipeline.py"
+    real_source = real_path.read_text(encoding="utf-8")
+    mutated = transform(real_source)
+    assert mutated != real_source, "sanity: the transform must actually change the source"
+    mutant_path = tmp_path / "pipeline_mutant.py"
+    mutant_path.write_text(mutated, encoding="utf-8")
+    module_name = f"_armd_pipeline_mutant_{id(mutant_path)}"
+    spec = importlib.util.spec_from_file_location(module_name, mutant_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(module_name, None)
+    module.CALIBRATION_CORPUS_PATH = pipeline.CALIBRATION_CORPUS_PATH
+    return module
+
+
+def _remove_capture_post_rope_q_observation(text):
+    """Delete `_kv_calibration_capture`'s conditional post-RoPE raw-Q observation
+    (pipeline.py:2680-2681) -- the capture-only half of the non-QK-norm repair, and the
+    branch Arms C/D/E's production population executes. `_float_layer`'s own
+    conditional union at :3215-3217 must survive: this mutant deletes the capture branch
+    only, the exact deletion Poirot's S-1 executed."""
+    anchor = (
+        "            # Arm C/D/E's production callers reject QK-norm checkpoints, so their raw-Q\n"
+        "            # landing grid is the same pre-/post-RoPE union that the legacy engine stores.\n"
+        "            # Keep that union conditional nevertheless: this shared walk can execute a\n"
+        "            # QK-norm fixture, where q_rope is a foreign, post-norm domain.\n"
+        "            if not _has_qk_norm(tensors, prefix):\n"
+        "                _observe(maxima, f\"{prefix}.q\", q_rope)\n"
+    )
+    assert text.count(anchor) == 1, (
+        "sanity: the capture's conditional post-RoPE Q observation must match verbatim, once"
+    )
+    mutated = text.replace(
+        anchor,
+        "            # T-2606 round-2 mutant: capture post-RoPE Q observation deleted\n",
+        1,
+    )
+    assert '                _observe(maxima, f"{prefix}.q", q_rope)\n' not in mutated, (
+        "sanity: the mutant must remove the capture's post-RoPE Q observation entirely"
+    )
+    assert mutated.count("    if not _has_qk_norm(tensors, prefix):\n") == 1, (
+        "sanity: _float_layer's own non-QK-norm conditional must survive -- the mutant "
+        "deletes the capture branch only"
+    )
+    return mutated
+
+
+def test_the_legacy_q_scale_equality_rejects_the_capture_post_rope_deletion_mutant(tmp_path):
+    """The S-1 proof in this suite: with only `_kv_calibration_capture`'s conditional
+    post-RoPE raw-Q observation deleted, the equality cell above goes RED on the legacy
+    fixture -- the capture's `maxima[q]` loses the RoPE half of its union, so
+    `_layer_q_scale` builds a Q scale the shipped `_derive_scales` chain (whose own
+    union, in `_float_layer`, the mutant leaves intact) does not match. This is the
+    cell Poirot's review found missing: under this deletion every then-touched test
+    stayed green."""
+    mutant = _load_mutant_pipeline(_remove_capture_post_rope_q_observation, tmp_path)
+    legacy = _legacy_checkpoint_model(mutant, tmp_path)
+    cfg = legacy.config
+    float_weight = legacy.float_source
+    weight_scales = mutant._weight_scales_from_float_source(cfg, float_weight)
+    records = mutant.calibration_records()
+    record_tokenize = mutant._bridge_record_tokenizer(legacy.tokenize_prompt)
+
+    shipped_maxima = mutant._calibrate(cfg, float_weight, records, record_tokenize)
+    capture, capture_maxima = mutant._kv_calibration_capture(
+        cfg, float_weight, records, record_tokenize)
+
+    with pytest.raises(AssertionError, match="quantizing Q against a different scale"):
+        for layer in range(cfg.num_hidden_layers):
+            prefix = f"layer{layer}"
+            shipped_attn_norm_scale = mutant._attn_norm_scale(
+                shipped_maxima, weight_scales, prefix)
+            shipped_q_scale = mutant._projection_scale(
+                shipped_maxima, weight_scales, f"{prefix}.q", f"{prefix}.q_proj",
+                shipped_attn_norm_scale)
+            built_q_scale = mutant._layer_q_scale(capture_maxima, weight_scales, prefix)
+            assert built_q_scale == pytest.approx(shipped_q_scale, rel=1e-9), (
+                f"{prefix}: Arm D/E's own Q-scale on the legacy non-QK-norm checkpoint "
+                f"({built_q_scale}) must equal the shipped production `projection_scale` "
+                f"chain ({shipped_q_scale}) -- a divergence here means the sweep is "
+                f"quantizing Q against a different scale than the artifact will ship"
+            )

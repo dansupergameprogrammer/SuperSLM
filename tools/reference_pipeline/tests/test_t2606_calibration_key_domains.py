@@ -343,11 +343,13 @@ def _run_calibrate(pipeline, cfg, float_weight, tokenize=None):
     return _instrumented(pipeline, walk, run), walk
 
 
-def _run_capture(pipeline, cfg, float_weight):
+def _run_capture(pipeline, cfg, float_weight, tokenize=None):
     """One instrumented `_kv_calibration_capture` run -- the sibling walk whose own
-    maxima Arm D/E's `_layer_q_scale` derives Q's production landing scale from."""
+    maxima Arm D/E's `_layer_q_scale` derives Q's production landing scale from.
+    `tokenize` overrides the fixture tokenizer for a checkpoint-loaded model (the
+    legacy fixture's own `tokenize_prompt`)."""
     records = pipeline.calibration_records()
-    tokenize = pipeline._fixture_tokenize_prompt(cfg)
+    tokenize = tokenize or pipeline._fixture_tokenize_prompt(cfg)
     record_tokenize = pipeline._bridge_record_tokenizer(tokenize)
     walk = _Walk()
 
@@ -578,6 +580,47 @@ def test_the_kv_calibration_capture_observes_q_on_its_consumers_landing_domain()
               f"raw={walk.project_out[f'layer{layer}.q_proj']!r}")
 
 
+def test_the_legacy_capture_walk_observes_the_rope_union_on_its_landing_domain(tmp_path):
+    """T-2606 round 2 (Poirot e6a07d8-t2608-k-calibration-review.md S-1): the QK-norm
+    capture cell above guards the side of the conditional that must NOT run; this cell
+    guards the side that must. Arms C/D/E's production population is the non-QK-norm
+    family -- `calibrate_kv_landing_arm` refuses a QK-norm checkpoint before
+    `_kv_calibration_capture` runs (pipeline.py:2856-2870) -- so the conditional
+    post-RoPE observation at :2680-2681 is the branch every shipped per-head arm
+    actually executes. On the converter's real legacy (Qwen2-shaped, non-QK-norm)
+    fixture -- the same `_calibrate_checkpoint_fixture.build_fixture_checkpoint`
+    construction the legacy class cell above and the base-engine golden use -- the
+    capture walk's `maxima[layer{L}.q]` must span the raw projection AND its RoPE
+    image (`_DOMAIN_TABLE`'s `without_qk_norm` row): the engine lands the raw codes
+    and `RopeApplySite` rotates them in place, so the same raw-key scale must enclose
+    both peaks. A capture that skips the post-RoPE half sizes Q's landing grid from
+    the raw peak alone, and Arm D/E's `_layer_q_scale` then quantizes Q against a
+    scale the artifact does not ship."""
+    pipeline = require(MODULE)
+    import _calibrate_checkpoint_fixture as fixture_mod
+    legacy = pipeline.load_model(fixture_mod.build_fixture_checkpoint(tmp_path / "legacy"))
+    maxima, walk = _run_capture(
+        pipeline, legacy.config, legacy.float_source, legacy.tokenize_prompt)
+    violations = _grade_walk(walk, maxima, "the legacy _kv_calibration_capture walk",
+                             demand_full_table=False, has_qk_norm=False)
+    assert not violations, "\n".join(violations)
+    for layer in range(legacy.config.num_hidden_layers):
+        print(f"legacy capture maxima[layer{layer}.q]={maxima[f'layer{layer}.q']!r} "
+              f"raw={walk.project_out[f'layer{layer}.q_proj']!r}")
+    # Materiality (this file's own discipline): the union must actually exceed the raw
+    # peak on at least one layer, or the value pin could not discriminate a deleted
+    # post-RoPE observation -- and the shipped-vs-capture equality cell this walk feeds
+    # (test_armd_arme_kv_calibration.py's legacy cell) could not either.
+    assert any(
+        maxima[f"layer{layer}.q"] > walk.project_out[f"layer{layer}.q_proj"]
+        for layer in range(legacy.config.num_hidden_layers)
+    ), (
+        "the legacy fixture no longer separates the domains (the union maximum never "
+        "exceeds the raw q_proj peak) -- the capture post-RoPE deletion mutant would be "
+        "invisible to the value pin, and this cell cannot pin what it exists to pin"
+    )
+
+
 class _TrackingMaxima(dict):
     """A maxima dict that records every key read out of it -- the run-time enumeration
     of `_derive_scales`'s consumed-key set, so the committed domain list is checked
@@ -796,3 +839,64 @@ def test_the_legacy_class_cell_rejects_the_4dcfd3d_unconditional_removal_mutant(
         has_qk_norm=False)
     assert any("layer0.q" in violation and "post_rope" in violation for violation in violations)
     assert any("layer0.k" in violation and "post_rope" in violation for violation in violations)
+
+
+def _remove_capture_post_rope_q_observation(text):
+    """Delete `_kv_calibration_capture`'s conditional post-RoPE raw-Q observation
+    (pipeline.py:2680-2681) -- the capture-only half of the non-QK-norm repair, and the
+    branch Arms C/D/E's production population executes (they reject QK-norm checkpoints
+    before the capture runs). `_float_layer`'s own conditional union must survive: the
+    mutant deletes the capture branch only, the exact deletion Poirot's S-1 executed."""
+    anchor = (
+        "            # Arm C/D/E's production callers reject QK-norm checkpoints, so their raw-Q\n"
+        "            # landing grid is the same pre-/post-RoPE union that the legacy engine stores.\n"
+        "            # Keep that union conditional nevertheless: this shared walk can execute a\n"
+        "            # QK-norm fixture, where q_rope is a foreign, post-norm domain.\n"
+        "            if not _has_qk_norm(tensors, prefix):\n"
+        "                _observe(maxima, f\"{prefix}.q\", q_rope)\n"
+    )
+    assert text.count(anchor) == 1, (
+        "sanity: the capture's conditional post-RoPE Q observation must match verbatim, once"
+    )
+    mutated = text.replace(
+        anchor,
+        "            # T-2606 round-2 mutant: capture post-RoPE Q observation deleted\n",
+        1,
+    )
+    assert '                _observe(maxima, f"{prefix}.q", q_rope)\n' not in mutated, (
+        "sanity: the mutant must remove the capture's post-RoPE Q observation entirely"
+    )
+    assert mutated.count("    if not _has_qk_norm(tensors, prefix):\n") == 1, (
+        "sanity: _float_layer's own non-QK-norm conditional must survive -- the mutant "
+        "deletes the capture branch only"
+    )
+    return mutated
+
+
+def test_the_legacy_capture_cell_rejects_the_capture_post_rope_deletion_mutant(tmp_path):
+    """The S-1 proof: deleting only the capture's conditional post-RoPE Q observation
+    leaves `_float_layer`'s own union intact, so the calibrated walk stays green while
+    the capture walk loses the RoPE half of its raw-Q union -- the shape the next
+    cleanup would ship as "apparently redundant" (Poirot's own prediction, S-1: the
+    shipped Arm D/E Q scale moves 0.0006140791109812949 -> 0.0005611093379022555 while
+    every then-touched test stayed green). On the converter's real legacy fixture this
+    must turn the legacy capture cell red: `layer{L}.q` misses its required post_rope
+    phase. The isolation half asserts the mutant is capture-only -- the same mutant's
+    calibrated walk stays green, so the red names the capture branch, not collateral
+    damage."""
+    pipeline = require(MODULE)
+    import _calibrate_checkpoint_fixture as fixture_mod
+    legacy = pipeline.load_model(fixture_mod.build_fixture_checkpoint(tmp_path / "legacy"))
+    mutant = _load_mutant(_remove_capture_post_rope_q_observation, tmp_path)
+    maxima, walk = _run_capture(
+        mutant, legacy.config, legacy.float_source, legacy.tokenize_prompt)
+    violations = _grade_walk(walk, maxima, "the capture-deletion legacy mutant walk",
+                            demand_full_table=False, has_qk_norm=False)
+    assert any("layer0.q" in violation and "post_rope" in violation for violation in violations)
+    # Isolation: the same mutant's CALIBRATED walk (`_float_layer`'s union untouched)
+    # grades green, so the violation above is the capture deletion's, alone.
+    calibrate_maxima, calibrate_walk = _run_calibrate(
+        mutant, legacy.config, legacy.float_source, legacy.tokenize_prompt)
+    assert not _grade_walk(
+        calibrate_walk, calibrate_maxima, "the capture-deletion legacy calibrated walk",
+        demand_full_table=True, has_qk_norm=False), "the mutant must not touch _float_layer"
