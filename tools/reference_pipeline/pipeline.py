@@ -2673,6 +2673,12 @@ def _kv_calibration_capture(cfg: ModelConfig, float_weight, records, tokenize):
                 k_pre[head].append(np.array(k[:, head, :], copy=True))
             q_rope = _float_rope(q, cfg.rope_theta)
             k_rope = _float_rope(k, cfg.rope_theta)
+            # Arm C/D/E's production callers reject QK-norm checkpoints, so their raw-Q
+            # landing grid is the same pre-/post-RoPE union that the legacy engine stores.
+            # Keep that union conditional nevertheless: this shared walk can execute a
+            # QK-norm fixture, where q_rope is a foreign, post-norm domain.
+            if not _has_qk_norm(tensors, prefix):
+                _observe(maxima, f"{prefix}.q", q_rope)
             for head in range(cfg.num_key_value_heads):
                 k_post[head].append(np.array(k_rope[:, head, :], copy=True))
             for head in range(cfg.num_attention_heads):
@@ -3109,6 +3115,17 @@ def _float_project(float_weight, name, values):
     return out
 
 
+def _has_qk_norm(tensors, prefix):
+    """Whether `_apply_qk_norm` changes either projected attention operand.
+
+    QK-norm is an optional paired checkpoint feature.  Keep its presence predicate in
+    this one helper so calibration sites cannot classify a layer differently from the
+    shared transform that they bracket.
+    """
+    return (tensors.get(f"{prefix}.q_norm.gain") is not None or
+            tensors.get(f"{prefix}.k_norm.gain") is not None)
+
+
 def _apply_qk_norm(q, k, tensors, prefix, cfg):
     """(design §3/§6 Track B step 6, T-2553): per-head QK-norm, strictly between
     projection and RoPE -- the ONE shared implementation every independent forward walk in this
@@ -3129,10 +3146,11 @@ def _apply_qk_norm(q, k, tensors, prefix, cfg):
     """
     q_norm_w = tensors.get(f"{prefix}.q_norm.gain")
     k_norm_w = tensors.get(f"{prefix}.k_norm.gain")
-    if q_norm_w is not None:
-        q = _float_rmsnorm(q, cfg.rms_norm_eps) * q_norm_w
-    if k_norm_w is not None:
-        k = _float_rmsnorm(k, cfg.rms_norm_eps) * k_norm_w
+    if _has_qk_norm(tensors, prefix):
+        if q_norm_w is not None:
+            q = _float_rmsnorm(q, cfg.rms_norm_eps) * q_norm_w
+        if k_norm_w is not None:
+            k = _float_rmsnorm(k, cfg.rms_norm_eps) * k_norm_w
     return q, k
 
 
@@ -3190,8 +3208,13 @@ def _float_layer(cfg, tensors, hidden, maxima, prefix):
 
     q = _float_rope(q, cfg.rope_theta)
     k = _float_rope(k, cfg.rope_theta)
-    # Raw Q/K calibration keys above remain on the pre-QK-norm projection domain.  The
-    # transformed values below are consumed only by the dedicated `k_normed` union.
+    # QK-norm creates a separate post-norm K landing domain (`k_normed`), so raw Q/K
+    # stay on the pre-norm projection domain there.  Without QK-norm, the engine lands
+    # those raw codes and then rotates them in place; their calibration domain therefore
+    # includes the RoPE image as well as the projection output.
+    if not _has_qk_norm(tensors, prefix):
+        _observe(maxima, f"{prefix}.q", q)
+        _observe(maxima, f"{prefix}.k", k)
     # (D-SLM6263): the k_normed key's SECOND observation, post-RoPE -- the running max above
     # folds this into the union with the pre-RoPE peak already captured, closing Significant 1.
     # The engine requantizes K onto this artifact's static k_normed_head{h} scale BEFORE RoPE
