@@ -20,8 +20,17 @@ void SslmSetTraceHook(SslmTraceHookState& state, SslmTraceHookFn fn, void* user)
 	state.user = (fn != nullptr) ? user : nullptr;
 }
 
+void SslmSetSiteTraceHook(SslmTraceHookState& state, SslmSiteTraceHookFn fn, void* user) {
+	state.site_fn = fn;
+	state.site_user = (fn != nullptr) ? user : nullptr;
+}
+
 bool SslmTraceHookInstalled(const SslmTraceHookState& state) noexcept {
 	return state.fn != nullptr;
+}
+
+bool SslmSiteTraceHookInstalled(const SslmTraceHookState& state) noexcept {
+	return state.site_fn != nullptr;
 }
 
 void SslmEmitChainTrace(const SslmTraceHookState& state, const SslmChainTraceRecord& record) {
@@ -33,6 +42,11 @@ void SslmEmitKvLandingTrace(const SslmTraceHookState& state,
                              const SslmKvLandingTraceRecord& record) {
 	if (state.fn == nullptr) return;
 	state.fn(nullptr, &record, state.user);
+}
+
+void SslmEmitSiteTrace(const SslmTraceHookState& state, const SslmSiteTraceRecord& record) {
+	if (state.site_fn == nullptr) return;
+	state.site_fn(&record, state.site_user);
 }
 
 }  // namespace superslm

@@ -67,11 +67,25 @@ struct SslmKvLandingTraceRecord {
 	int64_t e_out = 0;
 };
 
+// Probe-only observation for integer intermediates which do not pass through
+// either checked-chain funnel above.  The spans are callback-lifetime views,
+// just like SslmChainTraceRecord's fields.  A record carries either `codes`
+// (narrow int8 sites such as RoPE) or `x_int` (wide scores/probabilities/
+// weighted sums); the unused span is empty.
+struct SslmSiteTraceRecord {
+	std::string_view site;
+	size_t token_index = 0;
+	uint32_t head = 0;
+	std::span<const int64_t> x_int;
+	std::span<const int8_t> codes;
+};
+
 // A hook receives exactly one of the two record pointers non-null per call --
 // the chain record for a chain-funnel emission, the K/V-landing record for a
 // landing-site emission -- and the other nullptr. Never both, never neither.
 using SslmTraceHookFn = void (*)(const SslmChainTraceRecord*,
                                   const SslmKvLandingTraceRecord*, void* user);
+using SslmSiteTraceHookFn = void (*)(const SslmSiteTraceRecord*, void* user);
 
 // Per-model trace-hook state: a function
 // pointer + opaque user pointer, exactly the same pair the process-global it
@@ -84,6 +98,8 @@ using SslmTraceHookFn = void (*)(const SslmChainTraceRecord*,
 struct SslmTraceHookState {
 	SslmTraceHookFn fn = nullptr;
 	void* user = nullptr;
+	SslmSiteTraceHookFn site_fn = nullptr;
+	void* site_user = nullptr;
 };
 
 // Installs (or, with fn == nullptr, uninstalls) the trace hook carried by
@@ -92,6 +108,7 @@ struct SslmTraceHookState {
 // call through this same `state`; it is discarded (reset to nullptr) when fn
 // is nullptr, so a stale user pointer never survives past an uninstall.
 void SslmSetTraceHook(SslmTraceHookState& state, SslmTraceHookFn fn, void* user);
+void SslmSetSiteTraceHook(SslmTraceHookState& state, SslmSiteTraceHookFn fn, void* user);
 
 // True when `state` currently carries an installed hook. Emission sites
 // branch on this before doing any work to build a record, so with no hook
@@ -99,6 +116,7 @@ void SslmSetTraceHook(SslmTraceHookState& state, SslmTraceHookFn fn, void* user)
 // S3.1a's third red cell: "a forward with no hook installed emits no records
 // and touches no sink").
 bool SslmTraceHookInstalled(const SslmTraceHookState& state) noexcept;
+bool SslmSiteTraceHookInstalled(const SslmTraceHookState& state) noexcept;
 
 // Invokes the hook installed in `state`, if any, with a chain record (the
 // K/V-landing pointer is passed as nullptr). No-op when `state` carries no
@@ -111,6 +129,7 @@ void SslmEmitChainTrace(const SslmTraceHookState& state, const SslmChainTraceRec
 // sub-slot; no production call site exists yet.
 void SslmEmitKvLandingTrace(const SslmTraceHookState& state,
                              const SslmKvLandingTraceRecord& record);
+void SslmEmitSiteTrace(const SslmTraceHookState& state, const SslmSiteTraceRecord& record);
 
 }  // namespace superslm
 

@@ -1319,7 +1319,9 @@ SslmForwardStatus LandTokenKVRow(int64_t* kacc, int64_t* vacc, const int8_t* nor
                                   // as `kv_saturation_count`, alongside it, never in place of it.
                                   // Defaults to `nullptr`: both pre-existing callers compile
                                   // unchanged until they pass it.
-                                  uint64_t* kv_landing_saturation_count = nullptr) {
+	                              uint64_t* kv_landing_saturation_count = nullptr,
+	                              std::string_view site_prefix = {}, size_t token_index = 0,
+	                              SslmTraceHookState* trace_hook_state = nullptr) {
 	// T-1666: per-channel indexed read, the K/V-landing sibling of
 	// ProjectAndFunnel's loop above (design §5, cells 6-7).
 	for (size_t i = 0; i < kv_hidden_size; ++i) {
@@ -1452,6 +1454,18 @@ SslmForwardStatus LandTokenKVRow(int64_t* kacc, int64_t* vacc, const int8_t* nor
 			    lw.kv_landing_e_t_v[h], kv_saturation_count, /*out_magnitude_exceeded_int64=*/nullptr,
 			    kv_landing_saturation_count)));
 		}
+		if (trace_hook_state != nullptr && SslmSiteTraceHookInstalled(*trace_hook_state)) {
+			SslmEmitSiteTrace(*trace_hook_state,
+			                  SslmSiteTraceRecord{LayerSite(site_prefix, layer, "k_proj.requant"),
+			                                      token_index, static_cast<uint32_t>(h),
+			                                      std::span<const int64_t>(kacc + h * head_dim, head_dim),
+			                                      std::span<const int8_t>(k_row, head_dim)});
+			SslmEmitSiteTrace(*trace_hook_state,
+			                  SslmSiteTraceRecord{LayerSite(site_prefix, layer, "v_proj.requant"),
+			                                      token_index, static_cast<uint32_t>(h),
+			                                      std::span<const int64_t>(vacc + h * head_dim, head_dim),
+			                                      std::span<const int8_t>(v_row, head_dim)});
+		}
 	}
 	return SslmForwardStatus::Ok;
 }
@@ -1505,6 +1519,12 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
 				                   k_norm_scale.e, lw.k_norm_landing_e_t[kv_head],
 				                   out_saturation_count, /*out_magnitude_exceeded_int64=*/nullptr,
 				                   out_k_normed_landing_saturation_count)));
+			}
+			if (trace_hook_state != nullptr && SslmSiteTraceHookInstalled(*trace_hook_state)) {
+				SslmEmitSiteTrace(*trace_hook_state,
+				                  SslmSiteTraceRecord{LayerSite(site_prefix, layer, "k_norm_landed"),
+				                                      token_index, static_cast<uint32_t>(kv_head), {},
+				                                      std::span<const int8_t>(k_row, head_dim)});
 			}
 		}
 	}
@@ -1848,7 +1868,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			    kacc.data(), vacc.data(), normed.data(), normed_scale, lw, hidden_size,
 			    kv_hidden_size, num_key_value_heads, head_dim, l, position, context_cap,
 			    rope_tables, workspace, option_g_fused_k_landing, &seq.kv_saturation_count,
-			    &seq.kv_landing_saturation_count);
+			    &seq.kv_landing_saturation_count, site_prefix, token_index, trace_hook_state);
 			if (land_status != SslmForwardStatus::Ok) return land_status;
 		}
 
@@ -1888,6 +1908,13 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			                   rope_tables, q_rot.data() + h * head_dim, &seq.kv_saturation_count,
 			                   &seq.rope_q_saturation_count);
 			if (st != SslmForwardStatus::Ok) return st;
+			if (trace_hook_state != nullptr && SslmSiteTraceHookInstalled(*trace_hook_state)) {
+				SslmEmitSiteTrace(*trace_hook_state,
+				                  SslmSiteTraceRecord{LayerSite(site_prefix, l, "rope_q"), token_index,
+				                                      static_cast<uint32_t>(h), {},
+				                                      std::span<const int8_t>(q_rot.data() + h * head_dim,
+				                                                              head_dim)});
+			}
 			if (option_g_fused_k_landing) continue;
 			// T-1654 (S3.8a): the accessor index is `h / group`, not `h` -- the
 			// reference's own grouping (`dynamic_engine.py:410`,
@@ -1912,6 +1939,14 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			                   only_representative_head ? &seq.kv_saturation_count : nullptr,
 			                   only_representative_head ? &seq.rope_k_saturation_count : nullptr);
 			if (st != SslmForwardStatus::Ok) return st;
+			if (only_representative_head && trace_hook_state != nullptr &&
+			    SslmSiteTraceHookInstalled(*trace_hook_state)) {
+				SslmEmitSiteTrace(*trace_hook_state,
+				                  SslmSiteTraceRecord{LayerSite(site_prefix, l, "rope_k"), token_index,
+				                                      static_cast<uint32_t>(kv_head), {},
+				                                      std::span<const int8_t>(k_rot.data() + h * head_dim,
+				                                                              head_dim)});
+			}
 		}
 		// S3.7 (§11 S3.7 "The mechanism", the RoPE write-back correction): each
 		// head's row is written back individually, through `MutableKeyRow` at
@@ -2014,6 +2049,11 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 				    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
 				GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_rows_base, head_dim, width,
 				                      scores.data());
+				if (trace_hook_state != nullptr && SslmSiteTraceHookInstalled(*trace_hook_state)) {
+					SslmEmitSiteTrace(*trace_hook_state,
+					                  SslmSiteTraceRecord{LayerSite(site_prefix, l, "attention_scores"),
+					                                      token_index, static_cast<uint32_t>(h), scores, {}});
+				}
 				if (!SoftmaxRowQ15(scores.data(), width, derived_q_ln2, derived_q_b,
 				                   derived_q_c, probs.data())) {
 					// Minor A (Poirot e4b398c review): the kernel refused after
@@ -2024,10 +2064,20 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 					// already in domain).
 					return SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted;
 				}
+				if (trace_hook_state != nullptr && SslmSiteTraceHookInstalled(*trace_hook_state)) {
+					SslmEmitSiteTrace(*trace_hook_state,
+					                  SslmSiteTraceRecord{LayerSite(site_prefix, l, "softmax"), token_index,
+					                                      static_cast<uint32_t>(h), probs, {}});
+				}
 				const int8_t* const v_rows_base =
 				    ValueRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
 				GemmProbQ15Accumulate(probs.data(), v_rows_base, width, head_dim,
 				                      ctx_acc.data());
+				if (trace_hook_state != nullptr && SslmSiteTraceHookInstalled(*trace_hook_state)) {
+					SslmEmitSiteTrace(*trace_hook_state,
+					                  SslmSiteTraceRecord{LayerSite(site_prefix, l, "weighted_sum"),
+					                                      token_index, static_cast<uint32_t>(h), ctx_acc, {}});
+				}
 				for (size_t d = 0; d < head_dim; ++d) {
 					// D-SLM57's per-head dispatch (§6.2 step 6): WSC1's
 					// `layer{L}.ctx_fold` row for THIS head, not one triple
