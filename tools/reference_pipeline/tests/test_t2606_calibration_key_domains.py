@@ -111,11 +111,13 @@ def _scaled_qk_norm_fixture(pipeline):
 # landing scale must enclose the QK-normed K's pre- AND post-RoPE component peaks. Both
 # observations are on that one tensor; the cells keep them green and this entry says so.
 #
-# `q` and `k` are the keys the defect lives on: their consumers land the RAW projection
-# outputs, so every observation of them must be pre-QK-norm. `_kv_calibration_capture`'s
+# `q` and `k` are conditional domains. With QK-norm, their consumers land the RAW
+# projection outputs and the post-RoPE values are foreign, post-norm values. Without
+# QK-norm, the engine lands those raw codes and rotates them in place, so the same raw-key
+# scale must enclose the projection output AND its RoPE image. `_kv_calibration_capture`'s
 # own maxima observes `q` (and `attn_norm.out`) too -- the sibling walk Arm D/E's
 # `_layer_q_scale` derives Q's production landing scale from -- so its observations are
-# graded by the same rows.
+# graded by the same conditional rows.
 
 _DOMAIN_TABLE = {
     "attn_norm.out": (
@@ -125,18 +127,26 @@ _DOMAIN_TABLE = {
         "the attn-normed residual stream",
     ),
     "q": (
-        {"pre_qk_norm"},
+        {
+            "with_qk_norm": ({"pre_qk_norm"}, {"pre_qk_norm"}),
+            "without_qk_norm": (
+                {"pre_qk_norm", "post_rope"}, {"pre_qk_norm", "post_rope"}),
+        },
         "layer{L}.q_proj.requant, funneled by ProjectAndFunnel (forward_sites.cpp) onto "
         "the raw q_proj accumulator BEFORE ApplyQkNormSite's Q branch normalizes from "
         "those raw codes",
-        "the raw q_proj output",
+        "the raw q_proj output alone with QK-norm; otherwise that output and its RoPE image",
     ),
     "k": (
-        {"pre_qk_norm"},
+        {
+            "with_qk_norm": ({"pre_qk_norm"}, {"pre_qk_norm"}),
+            "without_qk_norm": (
+                {"pre_qk_norm", "post_rope"}, {"pre_qk_norm", "post_rope"}),
+        },
         "layer{L}.k_proj.requant / layer{L}.k_head{h}.scale, landed by LandTokenKVRow "
         "(forward_sites.cpp) onto the raw k_proj accumulator BEFORE ApplyQkNormSite's K "
         "branch relands the post-norm codes",
-        "the raw k_proj output",
+        "the raw k_proj output alone with QK-norm; otherwise that output and its RoPE image",
     ),
     "v": (
         {"pre_qk_norm"},
@@ -320,10 +330,10 @@ def _instrumented(pipeline, walk, run):
             setattr(pipeline, name, fn)
 
 
-def _run_calibrate(pipeline, cfg, float_weight):
+def _run_calibrate(pipeline, cfg, float_weight, tokenize=None):
     """One instrumented `_calibrate` run over the checked-in calibration corpus."""
     records = pipeline.calibration_records()
-    tokenize = pipeline._fixture_tokenize_prompt(cfg)
+    tokenize = tokenize or pipeline._fixture_tokenize_prompt(cfg)
     record_tokenize = pipeline._bridge_record_tokenizer(tokenize)
     walk = _Walk()
 
@@ -353,7 +363,15 @@ def _run_capture(pipeline, cfg, float_weight):
 # ==============================================================================
 
 
-def _grade_walk(walk, maxima, walk_name, demand_full_table):
+def _phase_rule(entry, has_qk_norm):
+    """The allowed and required phases for one domain-table row and layer family."""
+    rule = entry[0]
+    if isinstance(rule, dict):
+        return rule["with_qk_norm" if has_qk_norm else "without_qk_norm"]
+    return rule, rule
+
+
+def _grade_walk(walk, maxima, walk_name, demand_full_table, has_qk_norm):
     """Grade one instrumented walk against `_DOMAIN_TABLE`. Three checks per key:
 
     1. every observation's pipeline phase is one the key's domain spans (magnitude-
@@ -378,7 +396,8 @@ def _grade_walk(walk, maxima, walk_name, demand_full_table):
                 f"committed domain table -- a calibration key was observed that no "
                 f"domain assertion covers")
             continue
-        allowed, consumer, domain = entry
+        allowed, required = _phase_rule(entry, has_qk_norm)
+        consumer, domain = entry[1:]
         for phase, peak in sorted(phase_peaks.items()):
             if phase not in allowed:
                 violations.append(
@@ -388,11 +407,17 @@ def _grade_walk(walk, maxima, walk_name, demand_full_table):
                     f"phase(s) {sorted(allowed)}; an observation at {phase!r} folds a "
                     f"foreign tensor domain into the key (the class T-2604 localized "
                     f"at pipeline.py:3196, D-SLM6652)")
+        missing_required = required - set(phase_peaks)
+        if missing_required:
+            violations.append(
+                f"{walk_name}: maxima[{key!r}] from {caller} missed required domain phase(s) "
+                f"{sorted(missing_required)}; its consumer -- {consumer} -- lands {domain}, "
+                f"so this layer family needs the full observation union {sorted(required)}")
     for key, value in sorted(maxima.items()):
         entry = _DOMAIN_TABLE.get(_suffix_of(key))
         if entry is None:
             continue
-        allowed = entry[0]
+        allowed, _ = _phase_rule(entry, has_qk_norm)
         on_domain = [
             peak for (_, observed_key), phase_peaks in walk.observed.items()
             if observed_key == key
@@ -507,20 +532,32 @@ def test_raw_q_calibration_key_equals_the_raw_q_proj_peak_exactly():
               f"raw={walk.project_out[f'layer{layer}.q_proj']!r}")
 
 
-def test_every_consumed_maxima_key_is_observed_on_its_consumers_landing_domain():
+def test_every_consumed_maxima_key_is_observed_on_its_consumers_landing_domain(tmp_path):
     """T-2606's class cell, RED at faef137: on the calibrated walk, every key the domain
     table covers is observed only at the pipeline phase(s) its consumer's tensor domain
-    spans, its running max equals that domain's peak alone, and every tabled key is
-    observed somewhere. At faef137 the violations are `layer{L}.q` and `layer{L}.k`
-    observed at post_rope (the post-QK-norm, rotated tensors) in addition to pre_qk_norm
-    -- the instance and the second instance. `k_normed`'s two observations (post_qk_norm
-    AND post_rope) are both on the QK-normed K, one domain by design (D-SLM6263/6264),
-    and stay green under this grading."""
+    spans, its running max equals that domain's peak alone, and every required phase is
+    observed. On the QK-norm fixture, `layer{L}.q` and `layer{L}.k` must stop at the raw
+    projection; their post-RoPE values are foreign, post-norm tensors. On the real legacy
+    fixture, the raw codes are rotated in place, so both projection and post-RoPE phases
+    are required. `k_normed`'s two observations (post_qk_norm AND post_rope) are both on
+    the QK-normed K, one domain by design (D-SLM6263/6264), and stay green."""
     pipeline = require(MODULE)
     cfg, _, float_weight = _scaled_qk_norm_fixture(pipeline)
-    maxima, walk = _run_calibrate(pipeline, cfg, float_weight)
-    violations = _grade_walk(walk, maxima, "the calibrated walk", demand_full_table=True)
-    assert not violations, "\n".join(violations)
+    cases = [("the QK-norm fixture", cfg, float_weight,
+              pipeline._fixture_tokenize_prompt(cfg), True)]
+
+    # This is the converter's actual Qwen2/Qwen2.5-shaped legacy fixture, not a
+    # hand-stripped QK-norm twin: the same fixture the base-engine golden uses.
+    import _calibrate_checkpoint_fixture as fixture_mod
+    legacy = pipeline.load_model(fixture_mod.build_fixture_checkpoint(tmp_path / "legacy"))
+    cases.append(("the legacy non-QK-norm fixture", legacy.config, legacy.float_source,
+                  legacy.tokenize_prompt, False))
+
+    for label, cfg, float_weight, tokenize, has_qk_norm in cases:
+        maxima, walk = _run_calibrate(pipeline, cfg, float_weight, tokenize)
+        violations = _grade_walk(
+            walk, maxima, label, demand_full_table=True, has_qk_norm=has_qk_norm)
+        assert not violations, "\n".join(violations)
 
 
 def test_the_kv_calibration_capture_observes_q_on_its_consumers_landing_domain():
@@ -534,7 +571,7 @@ def test_the_kv_calibration_capture_observes_q_on_its_consumers_landing_domain()
     cfg, _, float_weight = _scaled_qk_norm_fixture(pipeline)
     maxima, walk = _run_capture(pipeline, cfg, float_weight)
     violations = _grade_walk(walk, maxima, "the _kv_calibration_capture walk",
-                             demand_full_table=False)
+                             demand_full_table=False, has_qk_norm=True)
     assert not violations, "\n".join(violations)
     for layer in range(cfg.num_hidden_layers):
         print(f"capture maxima[layer{layer}.q]={maxima[f'layer{layer}.q']!r} "
@@ -627,7 +664,7 @@ def _load_mutant(transform, tmp_path):
 # post-transform raw-key observations were removed. It is unique, so mutations target the
 # transformed values after RoPE and cannot match the raw projection observations.
 _POST_TRANSFORM_BLOCK_COMMENT = (
-    "    # Raw Q/K calibration keys above remain on the pre-QK-norm projection domain.  The\n"
+    "    # QK-norm creates a separate post-norm K landing domain (`k_normed`), so raw Q/K\n"
 )
 
 
@@ -678,7 +715,7 @@ def _restore_capture_post_rope_q_observation(text):
     anchor = (
         '            q_rope = _float_rope(q, cfg.rope_theta)\n'
         '            k_rope = _float_rope(k, cfg.rope_theta)\n'
-        '            for head in range(cfg.num_key_value_heads):\n'
+        '            # Arm C/D/E\'s production callers reject QK-norm checkpoints, so their raw-Q\n'
     )
     assert text.count(anchor) == 1, (
         "sanity: the capture's post-RoPE insertion point must match verbatim, once"
@@ -689,13 +726,30 @@ def _restore_capture_post_rope_q_observation(text):
         '            k_rope = _float_rope(k, cfg.rope_theta)\n'
         '            _observe(maxima, f"{prefix}.q", q_rope)\n'
         "            # T-2606 mutant: restored foreign capture post-RoPE Q observation\n"
-        '            for head in range(cfg.num_key_value_heads):\n',
+        '            # Arm C/D/E\'s production callers reject QK-norm checkpoints, so their raw-Q\n',
         1,
     )
-    assert mutated.count('            _observe(maxima, f"{prefix}.q", q_rope)\n') == 1, (
-        "sanity: the mutant must restore exactly one capture post-RoPE Q observation"
+    assert mutated.count('            _observe(maxima, f"{prefix}.q", q_rope)\n') == 2, (
+        "sanity: the mutant must add one unconditional capture post-RoPE Q observation"
     )
     return mutated
+
+
+def _remove_non_qk_norm_raw_key_rope_union(text):
+    """Restore 4dcfd3d's unconditional removal in `_float_layer` as a mutant."""
+    removed = (
+        '    if not _has_qk_norm(tensors, prefix):\n'
+        '        _observe(maxima, f"{prefix}.q", q)\n'
+        '        _observe(maxima, f"{prefix}.k", k)\n'
+    )
+    assert text.count(removed) == 1, (
+        "sanity: the non-QK-norm RoPE union must exist exactly once before removal"
+    )
+    return text.replace(
+        removed,
+        "    # T-2607 repair-1 mutant: 4dcfd3d unconditional removal\n",
+        1,
+    )
 
 
 def test_the_instance_predicate_rejects_the_restored_raw_k_observation_mutant(tmp_path):
@@ -713,7 +767,7 @@ def test_the_class_and_q_predicates_reject_restored_raw_key_observations(tmp_pat
     cfg, _, float_weight = _scaled_qk_norm_fixture(mutant)
     maxima, walk = _run_calibrate(mutant, cfg, float_weight)
     violations = _grade_walk(walk, maxima, "the mutant calibrated walk",
-                             demand_full_table=True)
+                             demand_full_table=True, has_qk_norm=True)
     assert any("layer0.q" in violation and "post_rope" in violation for violation in violations)
     assert any("layer0.k" in violation and "post_rope" in violation for violation in violations)
 
@@ -724,5 +778,21 @@ def test_the_capture_predicate_rejects_restored_post_rope_q_observation(tmp_path
     cfg, _, float_weight = _scaled_qk_norm_fixture(mutant)
     maxima, walk = _run_capture(mutant, cfg, float_weight)
     violations = _grade_walk(walk, maxima, "the mutant capture walk",
-                             demand_full_table=False)
+                             demand_full_table=False, has_qk_norm=True)
     assert any("layer0.q" in violation and "post_rope" in violation for violation in violations)
+
+
+def test_the_legacy_class_cell_rejects_the_4dcfd3d_unconditional_removal_mutant(tmp_path):
+    """The R-1 proof: 4dcfd3d's removal leaves non-QK-norm raw keys without their
+    required RoPE image, so the legacy fixture turns the conditional class cell red."""
+    pipeline = require(MODULE)
+    import _calibrate_checkpoint_fixture as fixture_mod
+    legacy = pipeline.load_model(fixture_mod.build_fixture_checkpoint(tmp_path / "legacy"))
+    mutant = _load_mutant(_remove_non_qk_norm_raw_key_rope_union, tmp_path)
+    maxima, walk = _run_calibrate(
+        mutant, legacy.config, legacy.float_source, legacy.tokenize_prompt)
+    violations = _grade_walk(
+        walk, maxima, "the 4dcfd3d legacy mutant", demand_full_table=True,
+        has_qk_norm=False)
+    assert any("layer0.q" in violation and "post_rope" in violation for violation in violations)
+    assert any("layer0.k" in violation and "post_rope" in violation for violation in violations)
