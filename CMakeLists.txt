@@ -144,6 +144,16 @@ else()
 	target_compile_options(sslm_generate PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 
+# PROBE-ONLY (T-2604): exact block-0 intermediate trace; not used by runtime.
+add_executable(sslm_t2604_trace EXCLUDE_FROM_ALL tools/t2604/cpp_trace.cpp)
+target_link_libraries(sslm_t2604_trace PRIVATE superslm)
+target_include_directories(sslm_t2604_trace PRIVATE tools)
+if(MSVC)
+	target_compile_options(sslm_t2604_trace PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(sslm_t2604_trace PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+
 # T-2046 (design §24.2 D-SLM3162, closing Poirot c81e48c review Significant 6): dumps an adapter
 # artifact's DeltaFoldScales/UFoldScales/Weights sections, loaded through the REAL B0b typed path,
 # as JSON -- the write->load round-trip proof's own read side (tools/sslm_adapter_dump.cpp).
