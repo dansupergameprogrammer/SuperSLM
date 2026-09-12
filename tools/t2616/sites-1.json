@@ -1,0 +1,3439 @@
+{
+  "provenance": {
+    "corpus": "D:\\SuperEmbedder\\.worktrees\\te234-query-localization\\tests\\fixtures\\c12b\\corpus-239.jsonl",
+    "corpus_sha256": "275b0749a25cfd141e747111d4cbed66d7772ce58a50b5c13a394c5c0da222c0",
+    "hf_model": "D:\\hf_cache\\hub\\models--Qwen--Qwen3-Embedding-0.6B\\snapshots\\97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "float_dtype": "torch.float32",
+    "population": "seven ASCII one-per-class T-2604 specimens per path",
+    "input_grid": "per-row absmax/127, canonical (m,e), round-half-away-from-zero, clamp [-127,127]",
+    "cases": [
+      {
+        "id": "query-0",
+        "path": "query",
+        "sample_index": 0,
+        "label": "id_plain-001",
+        "class": "plain",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          25,
+          7134,
+          752,
+          448,
+          57368,
+          11,
+          7794,
+          13354,
+          13,
+          151643
+        ],
+        "token_count": 28
+      },
+      {
+        "id": "query-1",
+        "path": "query",
+        "sample_index": 1,
+        "label": "id_multi-001",
+        "class": "multi_slot",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          25,
+          34253,
+          3691,
+          1778,
+          6573,
+          389,
+          847,
+          1182,
+          448,
+          53969,
+          11,
+          7728,
+          6556,
+          11,
+          2163,
+          2326,
+          7739,
+          13,
+          151643
+        ],
+        "token_count": 37
+      },
+      {
+        "id": "query-2",
+        "path": "query",
+        "sample_index": 2,
+        "label": "id_neg-001",
+        "class": "negation",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          25,
+          40695,
+          714,
+          386,
+          5131,
+          13,
+          151643
+        ],
+        "token_count": 25
+      },
+      {
+        "id": "query-3",
+        "path": "query",
+        "sample_index": 3,
+        "label": "id_corr-005",
+        "class": "correction",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          25,
+          33674,
+          6556,
+          4278,
+          13,
+          7405,
+          429,
+          7728,
+          11458,
+          13,
+          151643
+        ],
+        "token_count": 29
+      },
+      {
+        "id": "query-4",
+        "path": "query",
+        "sample_index": 4,
+        "label": "id_under-001",
+        "class": "underspecified",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          57155,
+          1366,
+          264,
+          31794,
+          13,
+          151643
+        ],
+        "token_count": 24
+      },
+      {
+        "id": "query-5",
+        "path": "query",
+        "sample_index": 5,
+        "label": "id_ood-001",
+        "class": "out_of_domain",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          25,
+          3838,
+          594,
+          279,
+          33417,
+          3552,
+          30,
+          151643
+        ],
+        "token_count": 26
+      },
+      {
+        "id": "query-6",
+        "path": "query",
+        "sample_index": 6,
+        "label": "ood_ood-000",
+        "class": "ood",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          74045,
+          5828,
+          311,
+          279,
+          10200,
+          3108,
+          10901,
+          1449,
+          17073,
+          4420,
+          389,
+          71995,
+          13,
+          151643
+        ],
+        "token_count": 32
+      },
+      {
+        "id": "document-0",
+        "path": "document",
+        "sample_index": 0,
+        "label": "id_plain-001",
+        "class": "plain",
+        "token_ids": [
+          7134,
+          752,
+          448,
+          57368,
+          11,
+          7794,
+          13354,
+          13,
+          151643
+        ],
+        "token_count": 9
+      },
+      {
+        "id": "document-1",
+        "path": "document",
+        "sample_index": 1,
+        "label": "id_multi-001",
+        "class": "multi_slot",
+        "token_ids": [
+          34253,
+          3691,
+          1778,
+          6573,
+          389,
+          847,
+          1182,
+          448,
+          53969,
+          11,
+          7728,
+          6556,
+          11,
+          2163,
+          2326,
+          7739,
+          13,
+          151643
+        ],
+        "token_count": 18
+      },
+      {
+        "id": "document-2",
+        "path": "document",
+        "sample_index": 2,
+        "label": "id_neg-001",
+        "class": "negation",
+        "token_ids": [
+          40695,
+          714,
+          386,
+          5131,
+          13,
+          151643
+        ],
+        "token_count": 6
+      },
+      {
+        "id": "document-3",
+        "path": "document",
+        "sample_index": 3,
+        "label": "id_corr-005",
+        "class": "correction",
+        "token_ids": [
+          33674,
+          6556,
+          4278,
+          13,
+          7405,
+          429,
+          7728,
+          11458,
+          13,
+          151643
+        ],
+        "token_count": 10
+      },
+      {
+        "id": "document-4",
+        "path": "document",
+        "sample_index": 4,
+        "label": "id_under-001",
+        "class": "underspecified",
+        "token_ids": [
+          40,
+          1366,
+          264,
+          31794,
+          13,
+          151643
+        ],
+        "token_count": 6
+      },
+      {
+        "id": "document-5",
+        "path": "document",
+        "sample_index": 5,
+        "label": "id_ood-001",
+        "class": "out_of_domain",
+        "token_ids": [
+          3838,
+          594,
+          279,
+          33417,
+          3552,
+          30,
+          151643
+        ],
+        "token_count": 7
+      },
+      {
+        "id": "document-6",
+        "path": "document",
+        "sample_index": 6,
+        "label": "ood_ood-000",
+        "class": "ood",
+        "token_ids": [
+          785,
+          5828,
+          311,
+          279,
+          10200,
+          3108,
+          10901,
+          1449,
+          17073,
+          4420,
+          389,
+          71995,
+          13,
+          151643
+        ],
+        "token_count": 14
+      }
+    ],
+    "elapsed_seconds": 7.033637299988186,
+    "layer": 1,
+    "arm": "local",
+    "integer_cache": "D:\\SuperSLM\\.worktrees\\t2607-k-calibration-fix\\out\\t2607_recalibrated",
+    "cpp_trace": "out\\t2616\\capture\\sites-1.jsonl"
+  },
+  "cpp_vs_python_integer": {
+    "exact_records": 35501,
+    "mismatch_records": 0
+  },
+  "clamps": {
+    "kv_landing": 0,
+    "k_norm_landing": 0,
+    "rope_q": 880,
+    "rope_k": 0
+  },
+  "aggregate": {
+    "query": {
+      "input_rmsnorm": {
+        "cosine": 0.9990586938225056,
+        "terminal_cosine": 0.9996256308281767,
+        "max_abs_relative_error": 0.018878911170843837
+      },
+      "q_proj": {
+        "cosine": 0.9991803439048867,
+        "terminal_cosine": 0.9995204588630691,
+        "max_abs_relative_error": 0.033549443888912386
+      },
+      "k_proj": {
+        "cosine": 0.9991652500390763,
+        "terminal_cosine": 0.9992652399627152,
+        "max_abs_relative_error": 0.03968295631335909
+      },
+      "v_proj": {
+        "cosine": 0.9984406827957546,
+        "terminal_cosine": 0.9992576805408208,
+        "max_abs_relative_error": 0.04558352440153702
+      },
+      "q_norm": {
+        "cosine": 0.9988349117524312,
+        "terminal_cosine": 0.999290285588373,
+        "max_abs_relative_error": 0.05091119454990821
+      },
+      "k_norm": {
+        "cosine": 0.9995307845173539,
+        "terminal_cosine": 0.9995633786828569,
+        "max_abs_relative_error": 0.024324886219015605
+      },
+      "k_norm_landed": {
+        "cosine": 0.9986948411151878,
+        "terminal_cosine": 0.9986774052322479,
+        "max_abs_relative_error": 0.024654565514089927
+      },
+      "rope_q": {
+        "cosine": 0.9986928514811142,
+        "terminal_cosine": 0.9992393624091017,
+        "max_abs_relative_error": 0.1292867412246579
+      },
+      "rope_k": {
+        "cosine": 0.9985107915959343,
+        "terminal_cosine": 0.9983916322220306,
+        "max_abs_relative_error": 0.024654135632485884
+      },
+      "attention_scores": {
+        "cosine": 0.9919214222256102,
+        "terminal_cosine": 0.9910471067704624,
+        "max_abs_relative_error": 0.15941546179903035
+      },
+      "softmax": {
+        "cosine": 0.8588595974741697,
+        "terminal_cosine": 0.8346922527701715,
+        "max_abs_relative_error": 0.788036586450679
+      },
+      "weighted_sum": {
+        "cosine": 0.8791425429413737,
+        "terminal_cosine": 0.852000395657482,
+        "max_abs_relative_error": 0.6659574550515919
+      },
+      "attention_context": {
+        "cosine": 0.8790719993009471,
+        "terminal_cosine": 0.8519522291980086,
+        "max_abs_relative_error": 0.6642999451653976
+      },
+      "o_proj": {
+        "cosine": 0.8842978640794029,
+        "terminal_cosine": 0.8337828395336978,
+        "max_abs_relative_error": 0.283030528383655
+      },
+      "residual1": {
+        "cosine": 0.9860124597667362,
+        "terminal_cosine": 0.9902963809111311,
+        "max_abs_relative_error": 0.06019271699878648
+      },
+      "post_attention_rmsnorm": {
+        "cosine": 0.9882142812013932,
+        "terminal_cosine": 0.9929560470076029,
+        "max_abs_relative_error": 0.08674299723864339
+      },
+      "gate_proj": {
+        "cosine": 0.9960822534597727,
+        "terminal_cosine": 0.9977927904854612,
+        "max_abs_relative_error": 0.2576676555762863
+      },
+      "up_proj": {
+        "cosine": 0.9747858619227772,
+        "terminal_cosine": 0.9858861386723182,
+        "max_abs_relative_error": 0.20504008585675665
+      },
+      "silu": {
+        "cosine": 0.9659210840632191,
+        "terminal_cosine": 0.9742151487069666,
+        "max_abs_relative_error": 0.32163268483580115
+      },
+      "mlp_activation": {
+        "cosine": 0.9512451107420511,
+        "terminal_cosine": 0.9627089218058629,
+        "max_abs_relative_error": 0.0920106079561247
+      },
+      "down_proj": {
+        "cosine": 0.9607040318971048,
+        "terminal_cosine": 0.9676251718907469,
+        "max_abs_relative_error": 0.14831396247983256
+      },
+      "residual2": {
+        "cosine": 0.9848252180139543,
+        "terminal_cosine": 0.9905145344891787,
+        "max_abs_relative_error": 0.07099586021966578
+      }
+    },
+    "document": {
+      "input_rmsnorm": {
+        "cosine": 0.9989547617915958,
+        "terminal_cosine": 0.9994560303713487,
+        "max_abs_relative_error": 0.015429788282546597
+      },
+      "q_proj": {
+        "cosine": 0.9991159609406954,
+        "terminal_cosine": 0.9993831009707336,
+        "max_abs_relative_error": 0.03446567333169359
+      },
+      "k_proj": {
+        "cosine": 0.9992354894951038,
+        "terminal_cosine": 0.999381109228704,
+        "max_abs_relative_error": 0.036378078254116306
+      },
+      "v_proj": {
+        "cosine": 0.9982794936791111,
+        "terminal_cosine": 0.9990285983014273,
+        "max_abs_relative_error": 0.040765212496957436
+      },
+      "q_norm": {
+        "cosine": 0.9986510727119587,
+        "terminal_cosine": 0.9991563987731251,
+        "max_abs_relative_error": 0.054265453876820954
+      },
+      "k_norm": {
+        "cosine": 0.9995437617268527,
+        "terminal_cosine": 0.9995877317499116,
+        "max_abs_relative_error": 0.02215260719197153
+      },
+      "k_norm_landed": {
+        "cosine": 0.9987331962389808,
+        "terminal_cosine": 0.9988302860191538,
+        "max_abs_relative_error": 0.023530278895869863
+      },
+      "rope_q": {
+        "cosine": 0.9984766218272637,
+        "terminal_cosine": 0.9991030515162033,
+        "max_abs_relative_error": 0.13110523967326584
+      },
+      "rope_k": {
+        "cosine": 0.9986017019966272,
+        "terminal_cosine": 0.9986585796211075,
+        "max_abs_relative_error": 0.0235285456868605
+      },
+      "attention_scores": {
+        "cosine": 0.992292128240255,
+        "terminal_cosine": 0.9915086912321652,
+        "max_abs_relative_error": 0.13796313198264315
+      },
+      "softmax": {
+        "cosine": 0.9158992657558763,
+        "terminal_cosine": 0.911304693264921,
+        "max_abs_relative_error": 0.7139723391405174
+      },
+      "weighted_sum": {
+        "cosine": 0.9281298504939814,
+        "terminal_cosine": 0.9220494288272928,
+        "max_abs_relative_error": 0.5073280266387695
+      },
+      "attention_context": {
+        "cosine": 0.928032619395554,
+        "terminal_cosine": 0.9219173776524288,
+        "max_abs_relative_error": 0.5070656335955485
+      },
+      "o_proj": {
+        "cosine": 0.9295616006400419,
+        "terminal_cosine": 0.9130876567959738,
+        "max_abs_relative_error": 0.31983781012578716
+      },
+      "residual1": {
+        "cosine": 0.9914280621971683,
+        "terminal_cosine": 0.9921674130472701,
+        "max_abs_relative_error": 0.0639192561150326
+      },
+      "post_attention_rmsnorm": {
+        "cosine": 0.991830961956653,
+        "terminal_cosine": 0.9928248271294063,
+        "max_abs_relative_error": 0.10534294486838902
+      },
+      "gate_proj": {
+        "cosine": 0.9974607739647606,
+        "terminal_cosine": 0.9980742577903908,
+        "max_abs_relative_error": 0.23215996318629192
+      },
+      "up_proj": {
+        "cosine": 0.9834635196089464,
+        "terminal_cosine": 0.9879702927784855,
+        "max_abs_relative_error": 0.16634858449627066
+      },
+      "silu": {
+        "cosine": 0.9815736274607871,
+        "terminal_cosine": 0.9843503547270267,
+        "max_abs_relative_error": 0.24172768154921062
+      },
+      "mlp_activation": {
+        "cosine": 0.9722901041460753,
+        "terminal_cosine": 0.967182760710327,
+        "max_abs_relative_error": 0.1562397302189322
+      },
+      "down_proj": {
+        "cosine": 0.9779478842443324,
+        "terminal_cosine": 0.9724283243069329,
+        "max_abs_relative_error": 0.13434927152498527
+      },
+      "residual2": {
+        "cosine": 0.9908660328497462,
+        "terminal_cosine": 0.9923164399256972,
+        "max_abs_relative_error": 0.07665622161040034
+      }
+    }
+  },
+  "specimens": [
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "input_rmsnorm",
+      "cosine": 0.9990304115810045,
+      "terminal_cosine": 0.9996142849034911,
+      "max_abs_relative_error": 0.017871683962096617
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "q_proj",
+      "cosine": 0.9991587684093617,
+      "terminal_cosine": 0.9995075730147537,
+      "max_abs_relative_error": 0.03420579939136682
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "k_proj",
+      "cosine": 0.9991622719044139,
+      "terminal_cosine": 0.9992682866651207,
+      "max_abs_relative_error": 0.03921359242650096
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "v_proj",
+      "cosine": 0.9983847816883572,
+      "terminal_cosine": 0.9992407337714267,
+      "max_abs_relative_error": 0.046600828610593004
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "q_norm",
+      "cosine": 0.9988367122749734,
+      "terminal_cosine": 0.9992326894935927,
+      "max_abs_relative_error": 0.05055519197566906
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "k_norm",
+      "cosine": 0.999534765956711,
+      "terminal_cosine": 0.9995556027311013,
+      "max_abs_relative_error": 0.024393627339673367
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "k_norm_landed",
+      "cosine": 0.9987022237287109,
+      "terminal_cosine": 0.9986353605928973,
+      "max_abs_relative_error": 0.024588900407035184
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "rope_q",
+      "cosine": 0.9986990415132223,
+      "terminal_cosine": 0.9991737191839138,
+      "max_abs_relative_error": 0.1268317245604597
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "rope_k",
+      "cosine": 0.9985173632465992,
+      "terminal_cosine": 0.9984209246832743,
+      "max_abs_relative_error": 0.024587822185856763
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "attention_scores",
+      "cosine": 0.9920275070615812,
+      "terminal_cosine": 0.9913703753410014,
+      "max_abs_relative_error": 0.16031197568360525
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "softmax",
+      "cosine": 0.8635403121429369,
+      "terminal_cosine": 0.8689944635799322,
+      "max_abs_relative_error": 0.7786604166030884
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "weighted_sum",
+      "cosine": 0.8845100472814961,
+      "terminal_cosine": 0.8812266014513349,
+      "max_abs_relative_error": 0.6441517052380278
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "attention_context",
+      "cosine": 0.8844483380704984,
+      "terminal_cosine": 0.881075103320894,
+      "max_abs_relative_error": 0.6421598785050096
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "o_proj",
+      "cosine": 0.8895362143198432,
+      "terminal_cosine": 0.8552042438479349,
+      "max_abs_relative_error": 0.2830304871115043
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "residual1",
+      "cosine": 0.9865118672865025,
+      "terminal_cosine": 0.9918097477134884,
+      "max_abs_relative_error": 0.05980138333141969
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "post_attention_rmsnorm",
+      "cosine": 0.988347329373922,
+      "terminal_cosine": 0.9939568697940423,
+      "max_abs_relative_error": 0.087275109115414
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "gate_proj",
+      "cosine": 0.9961564559377478,
+      "terminal_cosine": 0.9978866223117563,
+      "max_abs_relative_error": 0.2577173790841461
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "up_proj",
+      "cosine": 0.9757828496434986,
+      "terminal_cosine": 0.9878058049154723,
+      "max_abs_relative_error": 0.1735860260951208
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "silu",
+      "cosine": 0.967827735323586,
+      "terminal_cosine": 0.9751491450727395,
+      "max_abs_relative_error": 0.3110691489535801
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "mlp_activation",
+      "cosine": 0.9530640124739165,
+      "terminal_cosine": 0.9678801675106161,
+      "max_abs_relative_error": 0.07693230385797115
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "down_proj",
+      "cosine": 0.9632300402638859,
+      "terminal_cosine": 0.9725581422521489,
+      "max_abs_relative_error": 0.1369067260532697
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "layer": 1,
+      "site": "residual2",
+      "cosine": 0.9858000939893042,
+      "terminal_cosine": 0.9913799477790001,
+      "max_abs_relative_error": 0.0637488408483431
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "input_rmsnorm",
+      "cosine": 0.9990691084942589,
+      "terminal_cosine": 0.9996383539034022,
+      "max_abs_relative_error": 0.020878568880331665
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "q_proj",
+      "cosine": 0.999215130487703,
+      "terminal_cosine": 0.9994941094644657,
+      "max_abs_relative_error": 0.03420583252213725
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "k_proj",
+      "cosine": 0.9991681193756564,
+      "terminal_cosine": 0.9992294636932401,
+      "max_abs_relative_error": 0.0392136687060798
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "v_proj",
+      "cosine": 0.9984706180889951,
+      "terminal_cosine": 0.9992665168312721,
+      "max_abs_relative_error": 0.043664738480296346
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "q_norm",
+      "cosine": 0.9988285864021317,
+      "terminal_cosine": 0.9992621833677614,
+      "max_abs_relative_error": 0.05055537622142268
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "k_norm",
+      "cosine": 0.9995259499375138,
+      "terminal_cosine": 0.9995376921306155,
+      "max_abs_relative_error": 0.024253003974701166
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "k_norm_landed",
+      "cosine": 0.9986921784243673,
+      "terminal_cosine": 0.9986570938291598,
+      "max_abs_relative_error": 0.024447150002098073
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "rope_q",
+      "cosine": 0.9986568804413811,
+      "terminal_cosine": 0.9992091244105602,
+      "max_abs_relative_error": 0.1377664382362089
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "rope_k",
+      "cosine": 0.9984878030934551,
+      "terminal_cosine": 0.9984039014954432,
+      "max_abs_relative_error": 0.02444607179235821
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "attention_scores",
+      "cosine": 0.9915271881787326,
+      "terminal_cosine": 0.989822821721167,
+      "max_abs_relative_error": 0.17119158093784245
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "softmax",
+      "cosine": 0.8607545709257235,
+      "terminal_cosine": 0.8094803325245447,
+      "max_abs_relative_error": 0.8442936055362225
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "weighted_sum",
+      "cosine": 0.8822373778743905,
+      "terminal_cosine": 0.830575542714282,
+      "max_abs_relative_error": 0.644151617515903
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "attention_context",
+      "cosine": 0.8821289468476233,
+      "terminal_cosine": 0.8302838542671185,
+      "max_abs_relative_error": 0.642159790978296
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "o_proj",
+      "cosine": 0.887378525442976,
+      "terminal_cosine": 0.8096615637512511,
+      "max_abs_relative_error": 0.2830307760165589
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "residual1",
+      "cosine": 0.9872764929614645,
+      "terminal_cosine": 0.9892252070188435,
+      "max_abs_relative_error": 0.06254071900298717
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "post_attention_rmsnorm",
+      "cosine": 0.9892192423464223,
+      "terminal_cosine": 0.9923545795835879,
+      "max_abs_relative_error": 0.0872755239271905
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "gate_proj",
+      "cosine": 0.9964652721849854,
+      "terminal_cosine": 0.997804936061491,
+      "max_abs_relative_error": 0.2577169374265861
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "up_proj",
+      "cosine": 0.9768815028244136,
+      "terminal_cosine": 0.9849081384361077,
+      "max_abs_relative_error": 0.2937271943489828
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "silu",
+      "cosine": 0.9663124157138259,
+      "terminal_cosine": 0.9713056277680807,
+      "max_abs_relative_error": 0.40433116382414974
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "mlp_activation",
+      "cosine": 0.9487927695724848,
+      "terminal_cosine": 0.9584070315035972,
+      "max_abs_relative_error": 0.14518480431940894
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "down_proj",
+      "cosine": 0.9587331046765651,
+      "terminal_cosine": 0.9634042088710234,
+      "max_abs_relative_error": 0.17943695505773732
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "layer": 1,
+      "site": "residual2",
+      "cosine": 0.9848240403241916,
+      "terminal_cosine": 0.9895548589933317,
+      "max_abs_relative_error": 0.0944793351618986
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "input_rmsnorm",
+      "cosine": 0.9990428406412677,
+      "terminal_cosine": 0.9996267254963326,
+      "max_abs_relative_error": 0.020872330155843305
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "q_proj",
+      "cosine": 0.9991770231835357,
+      "terminal_cosine": 0.9995151226156582,
+      "max_abs_relative_error": 0.02961127774341536
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "k_proj",
+      "cosine": 0.9991631646341884,
+      "terminal_cosine": 0.9992671582841476,
+      "max_abs_relative_error": 0.03921359242650096
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "v_proj",
+      "cosine": 0.9984164244478793,
+      "terminal_cosine": 0.9992910116456892,
+      "max_abs_relative_error": 0.04357359921839097
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "q_norm",
+      "cosine": 0.998794876189275,
+      "terminal_cosine": 0.9993186323333183,
+      "max_abs_relative_error": 0.05055519197566906
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "k_norm",
+      "cosine": 0.999527120586743,
+      "terminal_cosine": 0.9995980505602907,
+      "max_abs_relative_error": 0.024393627339673367
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "k_norm_landed",
+      "cosine": 0.9986913848367197,
+      "terminal_cosine": 0.9987316530593525,
+      "max_abs_relative_error": 0.024588900407035184
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "rope_q",
+      "cosine": 0.998666969328242,
+      "terminal_cosine": 0.9992728427981017,
+      "max_abs_relative_error": 0.1268317245604597
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "rope_k",
+      "cosine": 0.998513267423998,
+      "terminal_cosine": 0.9984328547416835,
+      "max_abs_relative_error": 0.024587822185856763
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "attention_scores",
+      "cosine": 0.9919723143527006,
+      "terminal_cosine": 0.9913542145185129,
+      "max_abs_relative_error": 0.16977733192836533
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "softmax",
+      "cosine": 0.8638321570362583,
+      "terminal_cosine": 0.8333448120761066,
+      "max_abs_relative_error": 0.7786604166030884
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "weighted_sum",
+      "cosine": 0.8835519431076624,
+      "terminal_cosine": 0.8651693263828887,
+      "max_abs_relative_error": 0.6961511363320043
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "attention_context",
+      "cosine": 0.8834829942415926,
+      "terminal_cosine": 0.8651581462568093,
+      "max_abs_relative_error": 0.6952433087073773
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "o_proj",
+      "cosine": 0.8887971976632879,
+      "terminal_cosine": 0.8568053482426345,
+      "max_abs_relative_error": 0.2830304871115043
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "residual1",
+      "cosine": 0.9854915224716114,
+      "terminal_cosine": 0.9906900847748837,
+      "max_abs_relative_error": 0.05980138333141969
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "post_attention_rmsnorm",
+      "cosine": 0.9877477085085402,
+      "terminal_cosine": 0.9930979886476282,
+      "max_abs_relative_error": 0.087275109115414
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "gate_proj",
+      "cosine": 0.9959104096076288,
+      "terminal_cosine": 0.9979253724511472,
+      "max_abs_relative_error": 0.25334401130974793
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "up_proj",
+      "cosine": 0.9744783579520905,
+      "terminal_cosine": 0.9864286725762026,
+      "max_abs_relative_error": 0.19793066538200366
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "silu",
+      "cosine": 0.9659632156512049,
+      "terminal_cosine": 0.9791178680183051,
+      "max_abs_relative_error": 0.2745632177557034
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "mlp_activation",
+      "cosine": 0.9528084984866906,
+      "terminal_cosine": 0.9627109621218674,
+      "max_abs_relative_error": 0.07693230385797115
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "down_proj",
+      "cosine": 0.9616528318675257,
+      "terminal_cosine": 0.9699378579323448,
+      "max_abs_relative_error": 0.1369067260532697
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "layer": 1,
+      "site": "residual2",
+      "cosine": 0.9847399128744443,
+      "terminal_cosine": 0.9914663254293162,
+      "max_abs_relative_error": 0.0637488408483431
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "input_rmsnorm",
+      "cosine": 0.9990513579490581,
+      "terminal_cosine": 0.9995950091007546,
+      "max_abs_relative_error": 0.017925961306020016
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "q_proj",
+      "cosine": 0.999173539708293,
+      "terminal_cosine": 0.9995222926680809,
+      "max_abs_relative_error": 0.03420579939136682
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "k_proj",
+      "cosine": 0.9991529631868002,
+      "terminal_cosine": 0.999245281016636,
+      "max_abs_relative_error": 0.041423658329561616
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "v_proj",
+      "cosine": 0.9984507557916037,
+      "terminal_cosine": 0.999241618897877,
+      "max_abs_relative_error": 0.046600828610593004
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "q_norm",
+      "cosine": 0.9988418878954501,
+      "terminal_cosine": 0.9993119111054819,
+      "max_abs_relative_error": 0.05055519197566906
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "k_norm",
+      "cosine": 0.9995287411127455,
+      "terminal_cosine": 0.9995728734036299,
+      "max_abs_relative_error": 0.024393627339673367
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "k_norm_landed",
+      "cosine": 0.9986899934783594,
+      "terminal_cosine": 0.9986884989989249,
+      "max_abs_relative_error": 0.025533597288693487
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "rope_q",
+      "cosine": 0.9986959335208141,
+      "terminal_cosine": 0.9992719392630035,
+      "max_abs_relative_error": 0.1268317245604597
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "rope_k",
+      "cosine": 0.9985099975596136,
+      "terminal_cosine": 0.9983822838716572,
+      "max_abs_relative_error": 0.025537016457071838
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "attention_scores",
+      "cosine": 0.9920820303189272,
+      "terminal_cosine": 0.9912193218579348,
+      "max_abs_relative_error": 0.15480725530870382
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "softmax",
+      "cosine": 0.8474323677490876,
+      "terminal_cosine": 0.7990325232863973,
+      "max_abs_relative_error": 0.7786604166030884
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "weighted_sum",
+      "cosine": 0.868532009906644,
+      "terminal_cosine": 0.8151924168756999,
+      "max_abs_relative_error": 0.6441517052380278
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "attention_context",
+      "cosine": 0.8685119498236631,
+      "terminal_cosine": 0.8154513418099075,
+      "max_abs_relative_error": 0.6421598785050096
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "o_proj",
+      "cosine": 0.8745734094106816,
+      "terminal_cosine": 0.7956150871400098,
+      "max_abs_relative_error": 0.2830304871115043
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "residual1",
+      "cosine": 0.985424756363782,
+      "terminal_cosine": 0.9901919018338661,
+      "max_abs_relative_error": 0.05980138333141969
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "post_attention_rmsnorm",
+      "cosine": 0.9879010466008397,
+      "terminal_cosine": 0.9927881209429452,
+      "max_abs_relative_error": 0.087275109115414
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "gate_proj",
+      "cosine": 0.9960863535021774,
+      "terminal_cosine": 0.9978818879079,
+      "max_abs_relative_error": 0.2577173790841461
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "up_proj",
+      "cosine": 0.9739692994947778,
+      "terminal_cosine": 0.9856559107948274,
+      "max_abs_relative_error": 0.17785708751538554
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "silu",
+      "cosine": 0.965692766925504,
+      "terminal_cosine": 0.9736124590081646,
+      "max_abs_relative_error": 0.31651700677753186
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "mlp_activation",
+      "cosine": 0.9490355943808684,
+      "terminal_cosine": 0.964181481297091,
+      "max_abs_relative_error": 0.09498197589281253
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "down_proj",
+      "cosine": 0.9595980897725493,
+      "terminal_cosine": 0.9674718498106196,
+      "max_abs_relative_error": 0.1369067260532697
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "layer": 1,
+      "site": "residual2",
+      "cosine": 0.9843792958857828,
+      "terminal_cosine": 0.9900064968099408,
+      "max_abs_relative_error": 0.0637488408483431
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "input_rmsnorm",
+      "cosine": 0.9990601265885267,
+      "terminal_cosine": 0.999602823566034,
+      "max_abs_relative_error": 0.017721151935715797
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "q_proj",
+      "cosine": 0.9991604184939858,
+      "terminal_cosine": 0.9995043429756698,
+      "max_abs_relative_error": 0.03420579939136682
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "k_proj",
+      "cosine": 0.9991644639311702,
+      "terminal_cosine": 0.9992714068189321,
+      "max_abs_relative_error": 0.04028899745186834
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "v_proj",
+      "cosine": 0.9984122199917707,
+      "terminal_cosine": 0.9992099382704261,
+      "max_abs_relative_error": 0.046600828610593004
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "q_norm",
+      "cosine": 0.9988329366239866,
+      "terminal_cosine": 0.9992556556250076,
+      "max_abs_relative_error": 0.05236192531872953
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "k_norm",
+      "cosine": 0.9995427052907676,
+      "terminal_cosine": 0.9995849831773597,
+      "max_abs_relative_error": 0.024393627339673367
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "k_norm_landed",
+      "cosine": 0.9986970216175052,
+      "terminal_cosine": 0.9986783485688626,
+      "max_abs_relative_error": 0.024588900407035184
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "rope_q",
+      "cosine": 0.9987013915842268,
+      "terminal_cosine": 0.9992045605159106,
+      "max_abs_relative_error": 0.13136384761382752
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "rope_k",
+      "cosine": 0.9985192199334763,
+      "terminal_cosine": 0.998344041699488,
+      "max_abs_relative_error": 0.024587822185856763
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "attention_scores",
+      "cosine": 0.9922424362228117,
+      "terminal_cosine": 0.9914927472855031,
+      "max_abs_relative_error": 0.1388029038605969
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "softmax",
+      "cosine": 0.8659379636132183,
+      "terminal_cosine": 0.8170800859333619,
+      "max_abs_relative_error": 0.7786604166030884
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "weighted_sum",
+      "cosine": 0.8816531859932066,
+      "terminal_cosine": 0.8305847101260475,
+      "max_abs_relative_error": 0.6441517052380278
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "attention_context",
+      "cosine": 0.8815600378901276,
+      "terminal_cosine": 0.8303241162174547,
+      "max_abs_relative_error": 0.6421598785050096
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "o_proj",
+      "cosine": 0.8838036053871611,
+      "terminal_cosine": 0.8208677746691881,
+      "max_abs_relative_error": 0.2830304871115043
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "residual1",
+      "cosine": 0.985756953623289,
+      "terminal_cosine": 0.9884092575234211,
+      "max_abs_relative_error": 0.05980138333141969
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "post_attention_rmsnorm",
+      "cosine": 0.9877842617886003,
+      "terminal_cosine": 0.9918379414314293,
+      "max_abs_relative_error": 0.08618571996877619
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "gate_proj",
+      "cosine": 0.9959844194638307,
+      "terminal_cosine": 0.9973286393796696,
+      "max_abs_relative_error": 0.2577173790841461
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "up_proj",
+      "cosine": 0.9736599879366634,
+      "terminal_cosine": 0.9831967776151569,
+      "max_abs_relative_error": 0.17785708751538554
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "silu",
+      "cosine": 0.9652427339737298,
+      "terminal_cosine": 0.9675671390654641,
+      "max_abs_relative_error": 0.31882211269871125
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "mlp_activation",
+      "cosine": 0.9518713065508795,
+      "terminal_cosine": 0.9541809463853063,
+      "max_abs_relative_error": 0.07693230385797115
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "down_proj",
+      "cosine": 0.960579166993578,
+      "terminal_cosine": 0.9631733492505792,
+      "max_abs_relative_error": 0.17014497291440928
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "layer": 1,
+      "site": "residual2",
+      "cosine": 0.9844974672499636,
+      "terminal_cosine": 0.9889494814363139,
+      "max_abs_relative_error": 0.06568531996015128
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "input_rmsnorm",
+      "cosine": 0.9990733833308388,
+      "terminal_cosine": 0.9996609233008386,
+      "max_abs_relative_error": 0.017914544437181813
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "q_proj",
+      "cosine": 0.9991498767290422,
+      "terminal_cosine": 0.9995499726120889,
+      "max_abs_relative_error": 0.03420579939136682
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "k_proj",
+      "cosine": 0.999173403449883,
+      "terminal_cosine": 0.999275895290983,
+      "max_abs_relative_error": 0.03921359242650096
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "v_proj",
+      "cosine": 0.9984829328423759,
+      "terminal_cosine": 0.9992836651946813,
+      "max_abs_relative_error": 0.045443018669699804
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "q_norm",
+      "cosine": 0.998841465710719,
+      "terminal_cosine": 0.9993305120387184,
+      "max_abs_relative_error": 0.05055519197566906
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "k_norm",
+      "cosine": 0.9995268398663592,
+      "terminal_cosine": 0.9995141077493214,
+      "max_abs_relative_error": 0.024393627339673367
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "k_norm_landed",
+      "cosine": 0.99868705951458,
+      "terminal_cosine": 0.9986301466713219,
+      "max_abs_relative_error": 0.024588900407035184
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "rope_q",
+      "cosine": 0.9987069004165386,
+      "terminal_cosine": 0.9992635118642579,
+      "max_abs_relative_error": 0.1268317245604597
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "rope_k",
+      "cosine": 0.9985158202731625,
+      "terminal_cosine": 0.9983511565272263,
+      "max_abs_relative_error": 0.024587822185856763
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "attention_scores",
+      "cosine": 0.9919252480552259,
+      "terminal_cosine": 0.9918260830602582,
+      "max_abs_relative_error": 0.15072997144394434
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "softmax",
+      "cosine": 0.8581441203569735,
+      "terminal_cosine": 0.8766016662552719,
+      "max_abs_relative_error": 0.7786604166030884
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "weighted_sum",
+      "cosine": 0.8780568440167447,
+      "terminal_cosine": 0.902653509736392,
+      "max_abs_relative_error": 0.6333122672395892
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "attention_context",
+      "cosine": 0.8779721273521334,
+      "terminal_cosine": 0.9024994022173838,
+      "max_abs_relative_error": 0.6313539578941687
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "o_proj",
+      "cosine": 0.8834238287662558,
+      "terminal_cosine": 0.882827256763754,
+      "max_abs_relative_error": 0.2830304871115043
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "residual1",
+      "cosine": 0.9856153041883436,
+      "terminal_cosine": 0.9917886732293407,
+      "max_abs_relative_error": 0.05980138333141969
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "post_attention_rmsnorm",
+      "cosine": 0.988042515248704,
+      "terminal_cosine": 0.9937702977283989,
+      "max_abs_relative_error": 0.087275109115414
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "gate_proj",
+      "cosine": 0.9959175441910886,
+      "terminal_cosine": 0.997967322548382,
+      "max_abs_relative_error": 0.2577173790841461
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "up_proj",
+      "cosine": 0.9743643480021702,
+      "terminal_cosine": 0.9874268714544097,
+      "max_abs_relative_error": 0.17785708751538554
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "silu",
+      "cosine": 0.9649572648580101,
+      "terminal_cosine": 0.9782637434208669,
+      "max_abs_relative_error": 0.2777608934071647
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "mlp_activation",
+      "cosine": 0.9508814899221514,
+      "terminal_cosine": 0.967391414488765,
+      "max_abs_relative_error": 0.0961782600487668
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "down_proj",
+      "cosine": 0.9602211652321567,
+      "terminal_cosine": 0.9712585400734903,
+      "max_abs_relative_error": 0.1369067260532697
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "layer": 1,
+      "site": "residual2",
+      "cosine": 0.9843396528487957,
+      "terminal_cosine": 0.9918610606668657,
+      "max_abs_relative_error": 0.07447821305274296
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "input_rmsnorm",
+      "cosine": 0.9990836281725839,
+      "terminal_cosine": 0.9996412955263837,
+      "max_abs_relative_error": 0.01896813751871764
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "q_proj",
+      "cosine": 0.999227650322285,
+      "terminal_cosine": 0.999549798690767,
+      "max_abs_relative_error": 0.03420579939136682
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "k_proj",
+      "cosine": 0.9991723637914226,
+      "terminal_cosine": 0.9992991879699473,
+      "max_abs_relative_error": 0.03921359242650096
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "v_proj",
+      "cosine": 0.998467046719301,
+      "terminal_cosine": 0.9992702791743733,
+      "max_abs_relative_error": 0.046600828610593004
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "q_norm",
+      "cosine": 0.9988679171704826,
+      "terminal_cosine": 0.9993204151547298,
+      "max_abs_relative_error": 0.051240292406529046
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "k_norm",
+      "cosine": 0.9995293688706374,
+      "terminal_cosine": 0.9995803410276808,
+      "max_abs_relative_error": 0.024053062860041226
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "k_norm_landed",
+      "cosine": 0.9987040262060718,
+      "terminal_cosine": 0.9987207349052176,
+      "max_abs_relative_error": 0.024245609679697185
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "rope_q",
+      "cosine": 0.9987228435633739,
+      "terminal_cosine": 0.999279838827964,
+      "max_abs_relative_error": 0.1285500044807299
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "rope_k",
+      "cosine": 0.9985120696412351,
+      "terminal_cosine": 0.9984062625354418,
+      "max_abs_relative_error": 0.024244572434544094
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "attention_scores",
+      "cosine": 0.9916732313892913,
+      "terminal_cosine": 0.9902441836088596,
+      "max_abs_relative_error": 0.17028721343015435
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "softmax",
+      "cosine": 0.8523756904949903,
+      "terminal_cosine": 0.8383118857355851,
+      "max_abs_relative_error": 0.7786604166030884
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "weighted_sum",
+      "cosine": 0.8754563924094726,
+      "terminal_cosine": 0.8386006623157293,
+      "max_abs_relative_error": 0.7556320485595632
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "attention_context",
+      "cosine": 0.8753996008809916,
+      "terminal_cosine": 0.8388736402964926,
+      "max_abs_relative_error": 0.7548629230629131
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "o_proj",
+      "cosine": 0.8825722675656147,
+      "terminal_cosine": 0.8154986023211122,
+      "max_abs_relative_error": 0.2830304871115043
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "residual1",
+      "cosine": 0.9860103214721607,
+      "terminal_cosine": 0.9899597942840751,
+      "max_abs_relative_error": 0.05980138333141969
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "post_attention_rmsnorm",
+      "cosine": 0.9884578645427237,
+      "terminal_cosine": 0.9928865309251883,
+      "max_abs_relative_error": 0.08463930031288094
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "gate_proj",
+      "cosine": 0.9960553193309508,
+      "terminal_cosine": 0.9977547527378817,
+      "max_abs_relative_error": 0.26174312396108573
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "up_proj",
+      "cosine": 0.9743646876058262,
+      "terminal_cosine": 0.9857807949140508,
+      "max_abs_relative_error": 0.2364654526250325
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "silu",
+      "cosine": 0.9654514559966721,
+      "terminal_cosine": 0.9744900585951441,
+      "max_abs_relative_error": 0.3483652504337669
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "mlp_activation",
+      "cosine": 0.9522621038073658,
+      "terminal_cosine": 0.9642104493337962,
+      "max_abs_relative_error": 0.07693230385797115
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "down_proj",
+      "cosine": 0.9609138244734732,
+      "terminal_cosine": 0.9655722550450228,
+      "max_abs_relative_error": 0.14098890517360246
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "layer": 1,
+      "site": "residual2",
+      "cosine": 0.9851960629251979,
+      "terminal_cosine": 0.9903835703094831,
+      "max_abs_relative_error": 0.07108163081783839
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "input_rmsnorm",
+      "cosine": 0.9989205058112718,
+      "terminal_cosine": 0.9994712737244841,
+      "max_abs_relative_error": 0.015362590983002463
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "q_proj",
+      "cosine": 0.9990846659078251,
+      "terminal_cosine": 0.999393652203008,
+      "max_abs_relative_error": 0.032151790583645465
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "k_proj",
+      "cosine": 0.9992505314813913,
+      "terminal_cosine": 0.9993553364367029,
+      "max_abs_relative_error": 0.035377939089830245
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "v_proj",
+      "cosine": 0.9981819929319623,
+      "terminal_cosine": 0.9990743007170754,
+      "max_abs_relative_error": 0.03566447029636438
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "q_norm",
+      "cosine": 0.9986398269600444,
+      "terminal_cosine": 0.9991737308284886,
+      "max_abs_relative_error": 0.064151970059681
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "k_norm",
+      "cosine": 0.9995455759630377,
+      "terminal_cosine": 0.9995941855440574,
+      "max_abs_relative_error": 0.02127210770107407
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "k_norm_landed",
+      "cosine": 0.9987668637942639,
+      "terminal_cosine": 0.9988430330453519,
+      "max_abs_relative_error": 0.019320324193608397
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "rope_q",
+      "cosine": 0.9984074993374208,
+      "terminal_cosine": 0.9991270156600189,
+      "max_abs_relative_error": 0.14082351036625504
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "rope_k",
+      "cosine": 0.9986373447256083,
+      "terminal_cosine": 0.9986527843126796,
+      "max_abs_relative_error": 0.019322352474061142
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "attention_scores",
+      "cosine": 0.9937605371941177,
+      "terminal_cosine": 0.9924810348258819,
+      "max_abs_relative_error": 0.12428625194166931
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "softmax",
+      "cosine": 0.9338706621750682,
+      "terminal_cosine": 0.9128292273837074,
+      "max_abs_relative_error": 0.5692277550697327
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "weighted_sum",
+      "cosine": 0.9330559077734288,
+      "terminal_cosine": 0.9127056792746638,
+      "max_abs_relative_error": 0.43719442771908534
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "attention_context",
+      "cosine": 0.9329333617610513,
+      "terminal_cosine": 0.9124029346914467,
+      "max_abs_relative_error": 0.43513246463326705
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "o_proj",
+      "cosine": 0.931540445098244,
+      "terminal_cosine": 0.9122661152329339,
+      "max_abs_relative_error": 0.3248634425739654
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "residual1",
+      "cosine": 0.9912816460135127,
+      "terminal_cosine": 0.990820390003028,
+      "max_abs_relative_error": 0.05115431041512998
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "post_attention_rmsnorm",
+      "cosine": 0.9901733033089495,
+      "terminal_cosine": 0.9897475429293627,
+      "max_abs_relative_error": 0.1164474808988817
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "gate_proj",
+      "cosine": 0.9969571209547357,
+      "terminal_cosine": 0.9971229779441793,
+      "max_abs_relative_error": 0.23915556390676307
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "up_proj",
+      "cosine": 0.9835199784836324,
+      "terminal_cosine": 0.9854991132012477,
+      "max_abs_relative_error": 0.12390045207039893
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "silu",
+      "cosine": 0.9837547850519579,
+      "terminal_cosine": 0.9821543592154489,
+      "max_abs_relative_error": 0.2198315811732721
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "mlp_activation",
+      "cosine": 0.9731012401832461,
+      "terminal_cosine": 0.9649939276252401,
+      "max_abs_relative_error": 0.12138274940028823
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "down_proj",
+      "cosine": 0.9793875061126894,
+      "terminal_cosine": 0.9709672865600111,
+      "max_abs_relative_error": 0.09625329758667188
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "layer": 1,
+      "site": "residual2",
+      "cosine": 0.9917382719182677,
+      "terminal_cosine": 0.9907262868282402,
+      "max_abs_relative_error": 0.0632157271715094
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "input_rmsnorm",
+      "cosine": 0.9990494930300021,
+      "terminal_cosine": 0.9995049473445872,
+      "max_abs_relative_error": 0.016126262222876928
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "q_proj",
+      "cosine": 0.999251395008672,
+      "terminal_cosine": 0.9994530274506721,
+      "max_abs_relative_error": 0.03133120114597861
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "k_proj",
+      "cosine": 0.9992476710105935,
+      "terminal_cosine": 0.9993568890354729,
+      "max_abs_relative_error": 0.038956997763871806
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "v_proj",
+      "cosine": 0.9984196397571713,
+      "terminal_cosine": 0.999043314251887,
+      "max_abs_relative_error": 0.04305700033900545
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "q_norm",
+      "cosine": 0.9987179314191501,
+      "terminal_cosine": 0.9992460639009726,
+      "max_abs_relative_error": 0.06905303304091825
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "k_norm",
+      "cosine": 0.9995360895639291,
+      "terminal_cosine": 0.9995630286969568,
+      "max_abs_relative_error": 0.02100853821789828
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "k_norm_landed",
+      "cosine": 0.9986847496311294,
+      "terminal_cosine": 0.9987833864620485,
+      "max_abs_relative_error": 0.024780891483120942
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "rope_q",
+      "cosine": 0.9984994213165223,
+      "terminal_cosine": 0.9992089960757323,
+      "max_abs_relative_error": 0.18828312739591843
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "rope_k",
+      "cosine": 0.9985031437569626,
+      "terminal_cosine": 0.9985740177787992,
+      "max_abs_relative_error": 0.024770071671155223
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "attention_scores",
+      "cosine": 0.9918403218400463,
+      "terminal_cosine": 0.9910008954881756,
+      "max_abs_relative_error": 0.1534617024283803
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "softmax",
+      "cosine": 0.8888863547971673,
+      "terminal_cosine": 0.9101075713657186,
+      "max_abs_relative_error": 0.8405066691339016
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "weighted_sum",
+      "cosine": 0.9194505237095983,
+      "terminal_cosine": 0.9247374032768771,
+      "max_abs_relative_error": 0.5270178927410433
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "attention_context",
+      "cosine": 0.9194117949127965,
+      "terminal_cosine": 0.9247190055847503,
+      "max_abs_relative_error": 0.5246646698170222
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "o_proj",
+      "cosine": 0.9272981370499138,
+      "terminal_cosine": 0.9171610172941164,
+      "max_abs_relative_error": 0.26816692958994137
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "residual1",
+      "cosine": 0.9905248603468056,
+      "terminal_cosine": 0.9937936153285941,
+      "max_abs_relative_error": 0.09122221499581065
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "post_attention_rmsnorm",
+      "cosine": 0.9904953093822018,
+      "terminal_cosine": 0.9959447822810273,
+      "max_abs_relative_error": 0.1902185511330661
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "gate_proj",
+      "cosine": 0.997098022327293,
+      "terminal_cosine": 0.9989767815221737,
+      "max_abs_relative_error": 0.3590601310819679
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "up_proj",
+      "cosine": 0.9814258136236311,
+      "terminal_cosine": 0.9904479894964313,
+      "max_abs_relative_error": 0.14441630118818158
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "silu",
+      "cosine": 0.9803342031390802,
+      "terminal_cosine": 0.9855209537093619,
+      "max_abs_relative_error": 0.20260841468806826
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "mlp_activation",
+      "cosine": 0.9617546121471771,
+      "terminal_cosine": 0.9703081892710785,
+      "max_abs_relative_error": 0.3300342714264296
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "down_proj",
+      "cosine": 0.9704097456086721,
+      "terminal_cosine": 0.970582059782341,
+      "max_abs_relative_error": 0.12429158349355651
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "layer": 1,
+      "site": "residual2",
+      "cosine": 0.9894095839666259,
+      "terminal_cosine": 0.9927064103592458,
+      "max_abs_relative_error": 0.10073153786876113
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "input_rmsnorm",
+      "cosine": 0.9987994535517468,
+      "terminal_cosine": 0.9993531070360432,
+      "max_abs_relative_error": 0.013244229888224235
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "q_proj",
+      "cosine": 0.9991506105328017,
+      "terminal_cosine": 0.9993330359369629,
+      "max_abs_relative_error": 0.02335343218516448
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "k_proj",
+      "cosine": 0.9992458827640004,
+      "terminal_cosine": 0.9993782166246314,
+      "max_abs_relative_error": 0.03812759245674763
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "v_proj",
+      "cosine": 0.9981698653067204,
+      "terminal_cosine": 0.9988242280643566,
+      "max_abs_relative_error": 0.03835661996534012
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "q_norm",
+      "cosine": 0.9985512172862514,
+      "terminal_cosine": 0.9989886431981835,
+      "max_abs_relative_error": 0.05006540651965927
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "k_norm",
+      "cosine": 0.9995580805597873,
+      "terminal_cosine": 0.9996302775826497,
+      "max_abs_relative_error": 0.028499206753800948
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "k_norm_landed",
+      "cosine": 0.9987674663254853,
+      "terminal_cosine": 0.9988702064454221,
+      "max_abs_relative_error": 0.03104303514729288
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "rope_q",
+      "cosine": 0.9983963324490774,
+      "terminal_cosine": 0.9988770109697022,
+      "max_abs_relative_error": 0.11993695786672416
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "rope_k",
+      "cosine": 0.9986603512838693,
+      "terminal_cosine": 0.9987277959634288,
+      "max_abs_relative_error": 0.031043095631934973
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "attention_scores",
+      "cosine": 0.9926452953861614,
+      "terminal_cosine": 0.9914509891390131,
+      "max_abs_relative_error": 0.12633777935338272
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "softmax",
+      "cosine": 0.9460932488098636,
+      "terminal_cosine": 0.9357686472061092,
+      "max_abs_relative_error": 0.6017434298992157
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "weighted_sum",
+      "cosine": 0.955423871450045,
+      "terminal_cosine": 0.9208472450049062,
+      "max_abs_relative_error": 0.41442102186647406
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "attention_context",
+      "cosine": 0.9551861240791174,
+      "terminal_cosine": 0.9206755771264891,
+      "max_abs_relative_error": 0.4136725658873167
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "o_proj",
+      "cosine": 0.9589036264044626,
+      "terminal_cosine": 0.9198052361935106,
+      "max_abs_relative_error": 0.24242063069002695
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "residual1",
+      "cosine": 0.9928048939585168,
+      "terminal_cosine": 0.9898431163851849,
+      "max_abs_relative_error": 0.04265913301169481
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "post_attention_rmsnorm",
+      "cosine": 0.9921257421170577,
+      "terminal_cosine": 0.9886005256139644,
+      "max_abs_relative_error": 0.1228861846985027
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "gate_proj",
+      "cosine": 0.9975042984376351,
+      "terminal_cosine": 0.9968814414054991,
+      "max_abs_relative_error": 0.20258370490450928
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "up_proj",
+      "cosine": 0.9874991729142335,
+      "terminal_cosine": 0.984253226514121,
+      "max_abs_relative_error": 0.15611464574005218
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "silu",
+      "cosine": 0.9887476321913189,
+      "terminal_cosine": 0.9848956060595072,
+      "max_abs_relative_error": 0.12943087347509832
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "mlp_activation",
+      "cosine": 0.9826992224267436,
+      "terminal_cosine": 0.9562144089003154,
+      "max_abs_relative_error": 0.08323228751472674
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "down_proj",
+      "cosine": 0.9821397458385354,
+      "terminal_cosine": 0.9698541333646419,
+      "max_abs_relative_error": 0.13567972533542497
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "layer": 1,
+      "site": "residual2",
+      "cosine": 0.9916720753829404,
+      "terminal_cosine": 0.9919785125336644,
+      "max_abs_relative_error": 0.07896057687765687
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "input_rmsnorm",
+      "cosine": 0.9989937808931364,
+      "terminal_cosine": 0.9994667036926099,
+      "max_abs_relative_error": 0.0145362696387865
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "q_proj",
+      "cosine": 0.9991813458524488,
+      "terminal_cosine": 0.9993663396120881,
+      "max_abs_relative_error": 0.042059270577126495
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "k_proj",
+      "cosine": 0.9992350798312643,
+      "terminal_cosine": 0.9993821828737528,
+      "max_abs_relative_error": 0.03541097612779131
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "v_proj",
+      "cosine": 0.99834645576184,
+      "terminal_cosine": 0.999083824639643,
+      "max_abs_relative_error": 0.04412641145733882
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "q_norm",
+      "cosine": 0.9988213017149298,
+      "terminal_cosine": 0.9991325437089611,
+      "max_abs_relative_error": 0.048859825520863924
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "k_norm",
+      "cosine": 0.9995433842572787,
+      "terminal_cosine": 0.9995832394609359,
+      "max_abs_relative_error": 0.016765066295369967
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "k_norm_landed",
+      "cosine": 0.998723489564604,
+      "terminal_cosine": 0.9988622144519211,
+      "max_abs_relative_error": 0.018533901319446395
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "rope_q",
+      "cosine": 0.9985756225998179,
+      "terminal_cosine": 0.9990818760651975,
+      "max_abs_relative_error": 0.1487496343283582
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "rope_k",
+      "cosine": 0.9985875819784222,
+      "terminal_cosine": 0.998662213507128,
+      "max_abs_relative_error": 0.0185339275831276
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "attention_scores",
+      "cosine": 0.9929012253019757,
+      "terminal_cosine": 0.9922516225929364,
+      "max_abs_relative_error": 0.12210637579444628
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "softmax",
+      "cosine": 0.9165300401586075,
+      "terminal_cosine": 0.8805009776074476,
+      "max_abs_relative_error": 0.6538280248641968
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "weighted_sum",
+      "cosine": 0.9422580559712682,
+      "terminal_cosine": 0.9189868077962793,
+      "max_abs_relative_error": 0.5123895816170124
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "attention_context",
+      "cosine": 0.9421602876117863,
+      "terminal_cosine": 0.9189015569484195,
+      "max_abs_relative_error": 0.5127410992813359
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "o_proj",
+      "cosine": 0.9393684043593604,
+      "terminal_cosine": 0.9006658444478989,
+      "max_abs_relative_error": 0.3340947389215345
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "residual1",
+      "cosine": 0.9924741280009137,
+      "terminal_cosine": 0.9922570121743284,
+      "max_abs_relative_error": 0.06988609037268513
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "post_attention_rmsnorm",
+      "cosine": 0.9923178973187694,
+      "terminal_cosine": 0.9946881350457291,
+      "max_abs_relative_error": 0.09626963384882639
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "gate_proj",
+      "cosine": 0.9978199572226284,
+      "terminal_cosine": 0.9986606131927355,
+      "max_abs_relative_error": 0.1926228957566737
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "up_proj",
+      "cosine": 0.983513896537851,
+      "terminal_cosine": 0.9886277116129788,
+      "max_abs_relative_error": 0.2331961957548778
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "silu",
+      "cosine": 0.9820809425320915,
+      "terminal_cosine": 0.9851211645573271,
+      "max_abs_relative_error": 0.26051519735669004
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "mlp_activation",
+      "cosine": 0.969454719406509,
+      "terminal_cosine": 0.9671617201362993,
+      "max_abs_relative_error": 0.16892566757380154
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "down_proj",
+      "cosine": 0.9705583489743282,
+      "terminal_cosine": 0.9689442392940338,
+      "max_abs_relative_error": 0.24547662733796055
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "layer": 1,
+      "site": "residual2",
+      "cosine": 0.990139936917534,
+      "terminal_cosine": 0.9915478160572707,
+      "max_abs_relative_error": 0.10763969825306806
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "input_rmsnorm",
+      "cosine": 0.9988704197128501,
+      "terminal_cosine": 0.9994335653479048,
+      "max_abs_relative_error": 0.01641533293295201
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "q_proj",
+      "cosine": 0.9988600881460448,
+      "terminal_cosine": 0.9993846145373738,
+      "max_abs_relative_error": 0.037593949664683386
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "k_proj",
+      "cosine": 0.9992130210740144,
+      "terminal_cosine": 0.9994005566828973,
+      "max_abs_relative_error": 0.041559383563167226
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "v_proj",
+      "cosine": 0.9981258443084474,
+      "terminal_cosine": 0.9990491833742545,
+      "max_abs_relative_error": 0.03242336955936406
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "q_norm",
+      "cosine": 0.9984181693765134,
+      "terminal_cosine": 0.9991414366434868,
+      "max_abs_relative_error": 0.04697977504242309
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "k_norm",
+      "cosine": 0.9995251025163451,
+      "terminal_cosine": 0.9995801959649047,
+      "max_abs_relative_error": 0.02338659365915709
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "k_norm_landed",
+      "cosine": 0.9986953928592895,
+      "terminal_cosine": 0.9988419281190607,
+      "max_abs_relative_error": 0.023820162726809577
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "rope_q",
+      "cosine": 0.9983428244551047,
+      "terminal_cosine": 0.9990847386919794,
+      "max_abs_relative_error": 0.064927478637297
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "rope_k",
+      "cosine": 0.9985864257064349,
+      "terminal_cosine": 0.9987076614628275,
+      "max_abs_relative_error": 0.0238173702981387
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "attention_scores",
+      "cosine": 0.9899988587950433,
+      "terminal_cosine": 0.990952102069645,
+      "max_abs_relative_error": 0.15296825562325542
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "softmax",
+      "cosine": 0.9130361183962955,
+      "terminal_cosine": 0.8924069657371917,
+      "max_abs_relative_error": 0.9128997325897217
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "weighted_sum",
+      "cosine": 0.9140764608704997,
+      "terminal_cosine": 0.8965083846254386,
+      "max_abs_relative_error": 0.4572380943439504
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "attention_context",
+      "cosine": 0.9140603567799579,
+      "terminal_cosine": 0.8965879620355326,
+      "max_abs_relative_error": 0.4610962951337607
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "o_proj",
+      "cosine": 0.9093908275792428,
+      "terminal_cosine": 0.8802239227696671,
+      "max_abs_relative_error": 0.4092323420583595
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "residual1",
+      "cosine": 0.9897755848592704,
+      "terminal_cosine": 0.9886422922519069,
+      "max_abs_relative_error": 0.08610225388076442
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "post_attention_rmsnorm",
+      "cosine": 0.991399146553976,
+      "terminal_cosine": 0.9885545088443726,
+      "max_abs_relative_error": 0.1019359176080504
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "gate_proj",
+      "cosine": 0.9973071975188389,
+      "terminal_cosine": 0.9970497705809853,
+      "max_abs_relative_error": 0.29230784832364975
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "up_proj",
+      "cosine": 0.9809293605976767,
+      "terminal_cosine": 0.9837039377708846,
+      "max_abs_relative_error": 0.18127430848975445
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "silu",
+      "cosine": 0.9786124279962825,
+      "terminal_cosine": 0.9755681188425234,
+      "max_abs_relative_error": 0.3016833579287155
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "mlp_activation",
+      "cosine": 0.9695079618446734,
+      "terminal_cosine": 0.9594209924390741,
+      "max_abs_relative_error": 0.1855578686511022
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "down_proj",
+      "cosine": 0.9828051066994485,
+      "terminal_cosine": 0.9659828249854697,
+      "max_abs_relative_error": 0.2146137402940224
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "layer": 1,
+      "site": "residual2",
+      "cosine": 0.9909289798670374,
+      "terminal_cosine": 0.9909268203697893,
+      "max_abs_relative_error": 0.08331062852870558
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "input_rmsnorm",
+      "cosine": 0.9990191369123077,
+      "terminal_cosine": 0.9994349506419331,
+      "max_abs_relative_error": 0.012923515988332614
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "q_proj",
+      "cosine": 0.9990564621968973,
+      "terminal_cosine": 0.9993866899368418,
+      "max_abs_relative_error": 0.0417806780981132
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "k_proj",
+      "cosine": 0.9992570060308155,
+      "terminal_cosine": 0.9993891115323907,
+      "max_abs_relative_error": 0.035506559658789835
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "v_proj",
+      "cosine": 0.9983215510176519,
+      "terminal_cosine": 0.9989964211167749,
+      "max_abs_relative_error": 0.0439332790196815
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "q_norm",
+      "cosine": 0.9986652944473551,
+      "terminal_cosine": 0.9992281527720187,
+      "max_abs_relative_error": 0.03759959583102517
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "k_norm",
+      "cosine": 0.9995639623231257,
+      "terminal_cosine": 0.9995863931829614,
+      "max_abs_relative_error": 0.014797249813110702
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "k_norm_landed",
+      "cosine": 0.9987807879212861,
+      "terminal_cosine": 0.9988062848946679,
+      "max_abs_relative_error": 0.01570102374353714
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "rope_q",
+      "cosine": 0.9985272104497788,
+      "terminal_cosine": 0.9991886408177677,
+      "max_abs_relative_error": 0.11492444346713986
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "rope_k",
+      "cosine": 0.9986787070563709,
+      "terminal_cosine": 0.9987254346618063,
+      "max_abs_relative_error": 0.01570071421345737
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "attention_scores",
+      "cosine": 0.9932276701874004,
+      "terminal_cosine": 0.9927503719835205,
+      "max_abs_relative_error": 0.12614690780093885
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "softmax",
+      "cosine": 0.9361781150877944,
+      "terminal_cosine": 0.9252347628569462,
+      "max_abs_relative_error": 0.6863287091255188
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "weighted_sum",
+      "cosine": 0.9441666819111467,
+      "terminal_cosine": 0.9502002704848157,
+      "max_abs_relative_error": 0.4390452217160548
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "attention_context",
+      "cosine": 0.9440657377427567,
+      "terminal_cosine": 0.9501283854654349,
+      "max_abs_relative_error": 0.4406772912574886
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "o_proj",
+      "cosine": 0.9423368001513599,
+      "terminal_cosine": 0.9429088147872153,
+      "max_abs_relative_error": 0.29930372605721806
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "residual1",
+      "cosine": 0.992978965504459,
+      "terminal_cosine": 0.9952534219240078,
+      "max_abs_relative_error": 0.06138559265734344
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "post_attention_rmsnorm",
+      "cosine": 0.9941410335153811,
+      "terminal_cosine": 0.995921095222921,
+      "max_abs_relative_error": 0.052259821264143705
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "gate_proj",
+      "cosine": 0.9980862922874362,
+      "terminal_cosine": 0.9987527241500065,
+      "max_abs_relative_error": 0.1532591547635811
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "up_proj",
+      "cosine": 0.9865889727897724,
+      "terminal_cosine": 0.9915628749906237,
+      "max_abs_relative_error": 0.16569415930125564
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "silu",
+      "cosine": 0.9811141057311744,
+      "terminal_cosine": 0.9871978544693109,
+      "max_abs_relative_error": 0.21263685150485623
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "mlp_activation",
+      "cosine": 0.9824266359076347,
+      "terminal_cosine": 0.9769192584546404,
+      "max_abs_relative_error": 0.0776736443754709
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "down_proj",
+      "cosine": 0.9846496458612931,
+      "terminal_cosine": 0.9831250681809912,
+      "max_abs_relative_error": 0.05763506327579536
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "layer": 1,
+      "site": "residual2",
+      "cosine": 0.9920990149143216,
+      "terminal_cosine": 0.994814204920598,
+      "max_abs_relative_error": 0.06063100732603709
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "input_rmsnorm",
+      "cosine": 0.9990305426298562,
+      "terminal_cosine": 0.9995276648118783,
+      "max_abs_relative_error": 0.019400316323651447
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "q_proj",
+      "cosine": 0.999227158940179,
+      "terminal_cosine": 0.9993643471181871,
+      "max_abs_relative_error": 0.03298939106714351
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "k_proj",
+      "cosine": 0.9991992342736469,
+      "terminal_cosine": 0.9994054714150797,
+      "max_abs_relative_error": 0.029707099118616083
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "v_proj",
+      "cosine": 0.9983911066699847,
+      "terminal_cosine": 0.9991289159459997,
+      "max_abs_relative_error": 0.047795336841607756
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "q_norm",
+      "cosine": 0.9987437677794657,
+      "terminal_cosine": 0.999184220359766,
+      "max_abs_relative_error": 0.06314857112317596
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "k_norm",
+      "cosine": 0.999534136904466,
+      "terminal_cosine": 0.9995768018169157,
+      "max_abs_relative_error": 0.029339487903389666
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "k_norm_landed",
+      "cosine": 0.9987136235768063,
+      "terminal_cosine": 0.9988049487156042,
+      "max_abs_relative_error": 0.031512613657273716
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "rope_q",
+      "cosine": 0.9985874421831245,
+      "terminal_cosine": 0.9991530823330246,
+      "max_abs_relative_error": 0.1400915256511683
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "rope_k",
+      "cosine": 0.9985583594687236,
+      "terminal_cosine": 0.9985601496610833,
+      "max_abs_relative_error": 0.03151228793614849
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "attention_scores",
+      "cosine": 0.991670988977041,
+      "terminal_cosine": 0.9896738225259839,
+      "max_abs_relative_error": 0.16043465093642909
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "softmax",
+      "cosine": 0.8767003208663376,
+      "terminal_cosine": 0.9222847006973263,
+      "max_abs_relative_error": 0.7332720533013344
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "weighted_sum",
+      "cosine": 0.8884774517718838,
+      "terminal_cosine": 0.9303602113280685,
+      "max_abs_relative_error": 0.7639899464677667
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "attention_context",
+      "cosine": 0.8884106728814112,
+      "terminal_cosine": 0.9300062217149283,
+      "max_abs_relative_error": 0.7614750491586484
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "o_proj",
+      "cosine": 0.8980929638377091,
+      "terminal_cosine": 0.9185826468464743,
+      "max_abs_relative_error": 0.3607828609894644
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "residual1",
+      "cosine": 0.9901563566967004,
+      "terminal_cosine": 0.9945620432638405,
+      "max_abs_relative_error": 0.045025197471799776
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "post_attention_rmsnorm",
+      "cosine": 0.9921643015002353,
+      "terminal_cosine": 0.9963171999684672,
+      "max_abs_relative_error": 0.05738302462725209
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "gate_proj",
+      "cosine": 0.9974525290047561,
+      "terminal_cosine": 0.9990754957371578,
+      "max_abs_relative_error": 0.1861304435668987
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "up_proj",
+      "cosine": 0.9807674423158276,
+      "terminal_cosine": 0.9916971958631112,
+      "max_abs_relative_error": 0.15984402892937416
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "silu",
+      "cosine": 0.9763712955836029,
+      "terminal_cosine": 0.9899944262357071,
+      "max_abs_relative_error": 0.36538749471777393
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "mlp_activation",
+      "cosine": 0.9670863371065436,
+      "terminal_cosine": 0.9752608281456414,
+      "max_abs_relative_error": 0.126871622590706
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "down_proj",
+      "cosine": 0.9756850906153598,
+      "terminal_cosine": 0.9775426579810418,
+      "max_abs_relative_error": 0.0664948633514653
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "layer": 1,
+      "site": "residual2",
+      "cosine": 0.990074366981496,
+      "terminal_cosine": 0.9935150284110718,
+      "max_abs_relative_error": 0.04210437524706427
+    }
+  ],
+  "elapsed_seconds": 29.580572100006975
+}

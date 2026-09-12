@@ -110,16 +110,37 @@ def rotate_integer(rows: np.ndarray, cos_table, sin_table):
     return out, raw, count
 
 
-def integer_block0(model, token_ids: list[int]) -> dict[str, np.ndarray | list | dict]:
+def integer_block0(model, token_ids: list[int], *, layer_index: int = 0,
+                   input_codes=None, input_scales=None,
+                   site_overrides=None) -> dict[str, np.ndarray | list | dict]:
     cfg = model.config
     steps = len(token_ids)
-    prefix = "layer0"
+    prefix = f"layer{layer_index}"
     captures: dict[str, object] = {}
     clamp_counts: dict[str, int] = {}
     site_records: list[dict] = []
+    site_overrides = site_overrides or {}
 
-    embed_wide = np.asarray(model.weights["embed"])[token_ids].astype(np.int64)
-    hidden, hidden_scales, embed_trace = chain(model, "embed", embed_wide, [])
+    def override(name, codes, scales):
+        supplied = site_overrides.get(name)
+        if supplied is None:
+            return codes, scales
+        supplied_codes, supplied_scales = supplied
+        supplied_codes = np.asarray(supplied_codes, dtype=np.int8)
+        supplied_scales = [tuple(int(v) for v in scale) for scale in supplied_scales]
+        if supplied_codes.shape != np.asarray(codes).shape or len(supplied_scales) != steps:
+            raise ValueError(f"override shape/scale mismatch at {name}")
+        return supplied_codes.copy(), supplied_scales
+
+    if input_codes is None:
+        embed_wide = np.asarray(model.weights["embed"])[token_ids].astype(np.int64)
+        hidden, hidden_scales, embed_trace = chain(model, "embed", embed_wide, [])
+    else:
+        hidden = np.asarray(input_codes, dtype=np.int8).copy()
+        hidden_scales = [tuple(int(v) for v in scale) for scale in input_scales]
+        if hidden.shape != (steps, cfg.hidden_size) or len(hidden_scales) != steps:
+            raise ValueError("layer-local input shape/scale count mismatch")
+        embed_trace = []
     captures["embedding"] = np.stack([dequant(hidden[t], hidden_scales[t]) for t in range(steps)])
     captures["_trace_embedding"] = embed_trace
 
@@ -316,6 +337,7 @@ def integer_block0(model, token_ids: list[int]) -> dict[str, np.ndarray | list |
     captures["weighted_sum"] = weighted
 
     attn_codes, attn_scales, trace = chain(model, f"{prefix}.attn_ctx", context_wide, [])
+    attn_codes, attn_scales = override("attention_context", attn_codes, attn_scales)
     captures["attention_context"] = np.stack([
         dequant(attn_codes[t], attn_scales[t]) for t in range(steps)]).reshape(
             steps, cfg.num_attention_heads, head_dim)
@@ -383,6 +405,7 @@ def integer_block0(model, token_ids: list[int]) -> dict[str, np.ndarray | list |
     act_codes, act_scales, trace = chain(
         model, f"{prefix}.mlp_act", act_wide,
         [[mlp_scales["gate_proj"][t], mlp_scales["up_proj"][t]] for t in range(steps)])
+    act_codes, act_scales = override("mlp_activation", act_codes, act_scales)
     captures["mlp_activation"] = np.stack([
         dequant(act_codes[t], act_scales[t]) for t in range(steps)])
     captures["_trace_mlp_activation"] = trace
@@ -393,22 +416,25 @@ def integer_block0(model, token_ids: list[int]) -> dict[str, np.ndarray | list |
     down_codes, down_scales, trace = chain(
         model, f"{prefix}.down_proj.requant", down_folded,
         [[act_scales[t]] for t in range(steps)])
+    down_codes, down_scales = override("down_proj", down_codes, down_scales)
     captures["down_proj"] = np.stack([
         dequant(down_codes[t], down_scales[t]) for t in range(steps)])
     captures["_trace_down_proj"] = trace
 
+    residual1_add, residual1_add_scales = override(
+        "residual1_at_final_add", residual1, residual1_scales)
     residual2_wide = np.empty(residual1.shape, dtype=np.int64)
     for t in range(steps):
-        m_h, e_h = residual1_scales[t]
+        m_h, e_h = residual1_add_scales[t]
         m_b, e_b = down_scales[t]
         r_h = intmath.dynamic_scale_reciprocal(m_h)
         residual2_wide[t] = np.asarray([
-            int(residual1[t, i]) + intmath.residual_reconcile(
+            int(residual1_add[t, i]) + intmath.residual_reconcile(
                 int(down_codes[t, i]), m_b, r_h, e_b, e_h)
             for i in range(cfg.hidden_size)], dtype=np.int64)
     residual2, residual2_scales, trace = chain(
         model, f"{prefix}.mlp_residual", residual2_wide,
-        [[residual1_scales[t]] for t in range(steps)])
+        [[residual1_add_scales[t]] for t in range(steps)])
     captures["residual2"] = np.stack([
         dequant(residual2[t], residual2_scales[t]) for t in range(steps)])
     captures["_trace_residual2"] = trace
@@ -452,7 +478,8 @@ def integer_block0(model, token_ids: list[int]) -> dict[str, np.ndarray | list |
     return captures
 
 
-def float_block0(model, token_ids: list[int]) -> dict[str, np.ndarray | list]:
+def float_block0(model, token_ids: list[int], *, layer_index: int = 0,
+                 input_hidden=None) -> dict[str, np.ndarray | list]:
     import torch
     import torch.nn.functional as F
     from transformers.models.qwen3.modeling_qwen3 import apply_rotary_pos_emb, repeat_kv
@@ -461,10 +488,11 @@ def float_block0(model, token_ids: list[int]) -> dict[str, np.ndarray | list]:
     ids = torch.tensor([token_ids], dtype=torch.long, device=device)
     steps = len(token_ids)
     position_ids = torch.arange(steps, device=device).unsqueeze(0)
-    layer = model.layers[0]
+    layer = model.layers[layer_index]
     captures: dict[str, object] = {}
     with torch.no_grad():
-        hidden = model.embed_tokens(ids)
+        hidden = (model.embed_tokens(ids) if input_hidden is None else
+                  torch.as_tensor(input_hidden, dtype=torch.float32, device=device).unsqueeze(0))
         captures["embedding"] = hidden[0].float().cpu().numpy()
         normed = layer.input_layernorm(hidden)
         captures["input_rmsnorm"] = normed[0].float().cpu().numpy()

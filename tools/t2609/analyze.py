@@ -89,18 +89,19 @@ def run_block0_override(t2604, model_int, ids, probabilities):
     return result
 
 
-def kernel_probabilities_from_float_scores(model_int, int_sites, float_scores):
+def kernel_probabilities_from_float_scores(model_int, int_sites, float_scores, layer_index=0):
     q_records = {(int(r["token_index"]), int(r["head"])): r
                  for r in int_sites["_trace_q_norm"]}
     group = model_int.config.num_attention_heads // model_int.config.num_key_value_heads
     output = []
     quantization = []
+    prefix = f"layer{layer_index}"
     for t, token in enumerate(float_scores):
         rows = []
         for head, float_row in enumerate(np.asarray(token, dtype=np.float64)):
             kv_head = head // group
             qr = q_records[(t, head)]
-            static = model_int.composition_constants[f"layer0.softmax_khead{kv_head}"]
+            static = model_int.composition_constants[f"{prefix}.softmax_khead{kv_head}"]
             sm_scale = intmath.carried_scale_product(
                 [(int(qr["m_out"]), int(qr["e_out"])), static])
             scale = math.ldexp(float(sm_scale[0]), int(sm_scale[1]))
@@ -152,8 +153,9 @@ def centered_score_diagnostics(integer_scores, float_scores) -> dict:
     }
 
 
-def score_hybrids(model_int, int_sites, float_sites):
+def score_hybrids(model_int, int_sites, float_sites, layer_index=0):
     cfg = model_int.config
+    prefix = f"layer{layer_index}"
     group = cfg.num_attention_heads // cfg.num_key_value_heads
     q_records = {(int(r["token_index"]), int(r["head"])): r
                  for r in int_sites["_trace_q_norm"]}

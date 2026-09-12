@@ -1,0 +1,613 @@
+{
+  "provenance": {
+    "corpus": "D:\\SuperEmbedder\\.worktrees\\te234-query-localization\\tests\\fixtures\\c12b\\corpus-239.jsonl",
+    "corpus_sha256": "275b0749a25cfd141e747111d4cbed66d7772ce58a50b5c13a394c5c0da222c0",
+    "hf_model": "D:\\hf_cache\\hub\\models--Qwen--Qwen3-Embedding-0.6B\\snapshots\\97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "float_dtype": "torch.float32",
+    "population": "seven ASCII one-per-class T-2604 specimens per path",
+    "input_grid": "per-row absmax/127, canonical (m,e), round-half-away-from-zero, clamp [-127,127]",
+    "cases": [
+      {
+        "id": "query-0",
+        "path": "query",
+        "sample_index": 0,
+        "label": "id_plain-001",
+        "class": "plain",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          25,
+          7134,
+          752,
+          448,
+          57368,
+          11,
+          7794,
+          13354,
+          13,
+          151643
+        ],
+        "token_count": 28
+      },
+      {
+        "id": "query-1",
+        "path": "query",
+        "sample_index": 1,
+        "label": "id_multi-001",
+        "class": "multi_slot",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          25,
+          34253,
+          3691,
+          1778,
+          6573,
+          389,
+          847,
+          1182,
+          448,
+          53969,
+          11,
+          7728,
+          6556,
+          11,
+          2163,
+          2326,
+          7739,
+          13,
+          151643
+        ],
+        "token_count": 37
+      },
+      {
+        "id": "query-2",
+        "path": "query",
+        "sample_index": 2,
+        "label": "id_neg-001",
+        "class": "negation",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          25,
+          40695,
+          714,
+          386,
+          5131,
+          13,
+          151643
+        ],
+        "token_count": 25
+      },
+      {
+        "id": "query-3",
+        "path": "query",
+        "sample_index": 3,
+        "label": "id_corr-005",
+        "class": "correction",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          25,
+          33674,
+          6556,
+          4278,
+          13,
+          7405,
+          429,
+          7728,
+          11458,
+          13,
+          151643
+        ],
+        "token_count": 29
+      },
+      {
+        "id": "query-4",
+        "path": "query",
+        "sample_index": 4,
+        "label": "id_under-001",
+        "class": "underspecified",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          57155,
+          1366,
+          264,
+          31794,
+          13,
+          151643
+        ],
+        "token_count": 24
+      },
+      {
+        "id": "query-5",
+        "path": "query",
+        "sample_index": 5,
+        "label": "id_ood-001",
+        "class": "out_of_domain",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          25,
+          3838,
+          594,
+          279,
+          33417,
+          3552,
+          30,
+          151643
+        ],
+        "token_count": 26
+      },
+      {
+        "id": "query-6",
+        "path": "query",
+        "sample_index": 6,
+        "label": "ood_ood-000",
+        "class": "ood",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          74045,
+          5828,
+          311,
+          279,
+          10200,
+          3108,
+          10901,
+          1449,
+          17073,
+          4420,
+          389,
+          71995,
+          13,
+          151643
+        ],
+        "token_count": 32
+      },
+      {
+        "id": "document-0",
+        "path": "document",
+        "sample_index": 0,
+        "label": "id_plain-001",
+        "class": "plain",
+        "token_ids": [
+          7134,
+          752,
+          448,
+          57368,
+          11,
+          7794,
+          13354,
+          13,
+          151643
+        ],
+        "token_count": 9
+      },
+      {
+        "id": "document-1",
+        "path": "document",
+        "sample_index": 1,
+        "label": "id_multi-001",
+        "class": "multi_slot",
+        "token_ids": [
+          34253,
+          3691,
+          1778,
+          6573,
+          389,
+          847,
+          1182,
+          448,
+          53969,
+          11,
+          7728,
+          6556,
+          11,
+          2163,
+          2326,
+          7739,
+          13,
+          151643
+        ],
+        "token_count": 18
+      },
+      {
+        "id": "document-2",
+        "path": "document",
+        "sample_index": 2,
+        "label": "id_neg-001",
+        "class": "negation",
+        "token_ids": [
+          40695,
+          714,
+          386,
+          5131,
+          13,
+          151643
+        ],
+        "token_count": 6
+      },
+      {
+        "id": "document-3",
+        "path": "document",
+        "sample_index": 3,
+        "label": "id_corr-005",
+        "class": "correction",
+        "token_ids": [
+          33674,
+          6556,
+          4278,
+          13,
+          7405,
+          429,
+          7728,
+          11458,
+          13,
+          151643
+        ],
+        "token_count": 10
+      },
+      {
+        "id": "document-4",
+        "path": "document",
+        "sample_index": 4,
+        "label": "id_under-001",
+        "class": "underspecified",
+        "token_ids": [
+          40,
+          1366,
+          264,
+          31794,
+          13,
+          151643
+        ],
+        "token_count": 6
+      },
+      {
+        "id": "document-5",
+        "path": "document",
+        "sample_index": 5,
+        "label": "id_ood-001",
+        "class": "out_of_domain",
+        "token_ids": [
+          3838,
+          594,
+          279,
+          33417,
+          3552,
+          30,
+          151643
+        ],
+        "token_count": 7
+      },
+      {
+        "id": "document-6",
+        "path": "document",
+        "sample_index": 6,
+        "label": "ood_ood-000",
+        "class": "ood",
+        "token_ids": [
+          785,
+          5828,
+          311,
+          279,
+          10200,
+          3108,
+          10901,
+          1449,
+          17073,
+          4420,
+          389,
+          71995,
+          13,
+          151643
+        ],
+        "token_count": 14
+      }
+    ],
+    "elapsed_seconds": 7.033637299988186,
+    "layer": 1
+  },
+  "aggregate": {
+    "query": {
+      "baseline": 0.8588595974741697,
+      "exact_on_integer_scores": 0.8593655025206274,
+      "integer_kernel_on_float_scores": 0.9999938129792217,
+      "float_q_integer_k": 0.8588698489621631,
+      "integer_q_float_k": 0.9993623518887024,
+      "integer_q_unlanded_integer_k": 0.9617659894487743
+    },
+    "document": {
+      "baseline": 0.9158992657558763,
+      "exact_on_integer_scores": 0.9162344099163237,
+      "integer_kernel_on_float_scores": 0.9999960300027354,
+      "float_q_integer_k": 0.9164520265328753,
+      "integer_q_float_k": 0.9994908379389701,
+      "integer_q_unlanded_integer_k": 0.9788976015634988
+    }
+  },
+  "specimens": [
+    {
+      "case": "query-0",
+      "path": "query",
+      "metrics": {
+        "baseline": 0.8635403121429369,
+        "exact_on_integer_scores": 0.8640695589835352,
+        "integer_kernel_on_float_scores": 0.999993755471503,
+        "float_q_integer_k": 0.8640237702378594,
+        "integer_q_float_k": 0.999365091441018,
+        "integer_q_unlanded_integer_k": 0.9614387145825735
+      }
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "metrics": {
+        "baseline": 0.8607545709257235,
+        "exact_on_integer_scores": 0.8612474866654479,
+        "integer_kernel_on_float_scores": 0.9999930221539644,
+        "float_q_integer_k": 0.8605228946076955,
+        "integer_q_float_k": 0.9993421327923709,
+        "integer_q_unlanded_integer_k": 0.9615364478867934
+      }
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "metrics": {
+        "baseline": 0.8638321570362583,
+        "exact_on_integer_scores": 0.8642846444355444,
+        "integer_kernel_on_float_scores": 0.999994514441991,
+        "float_q_integer_k": 0.8634047342951435,
+        "integer_q_float_k": 0.9993689699189726,
+        "integer_q_unlanded_integer_k": 0.9624831855145667
+      }
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "metrics": {
+        "baseline": 0.8474323677490876,
+        "exact_on_integer_scores": 0.8479922133718364,
+        "integer_kernel_on_float_scores": 0.9999940285811602,
+        "float_q_integer_k": 0.8471892304425105,
+        "integer_q_float_k": 0.9993713003639878,
+        "integer_q_unlanded_integer_k": 0.9590874626568667
+      }
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "metrics": {
+        "baseline": 0.8659379636132183,
+        "exact_on_integer_scores": 0.8664220454806568,
+        "integer_kernel_on_float_scores": 0.9999942957406405,
+        "float_q_integer_k": 0.8660522909885946,
+        "integer_q_float_k": 0.9993516004675941,
+        "integer_q_unlanded_integer_k": 0.9638883879223784
+      }
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "metrics": {
+        "baseline": 0.8581441203569735,
+        "exact_on_integer_scores": 0.8586400436974774,
+        "integer_kernel_on_float_scores": 0.9999936566177968,
+        "float_q_integer_k": 0.8582535135714032,
+        "integer_q_float_k": 0.9994100170882466,
+        "integer_q_unlanded_integer_k": 0.9640846506946325
+      }
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "metrics": {
+        "baseline": 0.8523756904949903,
+        "exact_on_integer_scores": 0.8529025250098937,
+        "integer_kernel_on_float_scores": 0.9999934178474973,
+        "float_q_integer_k": 0.852642508591935,
+        "integer_q_float_k": 0.9993273511487264,
+        "integer_q_unlanded_integer_k": 0.9598430768836101
+      }
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "metrics": {
+        "baseline": 0.9338706621750682,
+        "exact_on_integer_scores": 0.9341421773303842,
+        "integer_kernel_on_float_scores": 0.9999955949104015,
+        "float_q_integer_k": 0.9324512894296543,
+        "integer_q_float_k": 0.9993611606900599,
+        "integer_q_unlanded_integer_k": 0.9823593754228848
+      }
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "metrics": {
+        "baseline": 0.8888863547971673,
+        "exact_on_integer_scores": 0.8893975073816048,
+        "integer_kernel_on_float_scores": 0.9999942874329677,
+        "float_q_integer_k": 0.8897176498398583,
+        "integer_q_float_k": 0.9994006199471066,
+        "integer_q_unlanded_integer_k": 0.9766473142228955
+      }
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "metrics": {
+        "baseline": 0.9460932488098636,
+        "exact_on_integer_scores": 0.9462907433900813,
+        "integer_kernel_on_float_scores": 0.9999976624277853,
+        "float_q_integer_k": 0.9463286377213008,
+        "integer_q_float_k": 0.9995901974750575,
+        "integer_q_unlanded_integer_k": 0.9859769022542756
+      }
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "metrics": {
+        "baseline": 0.9165300401586075,
+        "exact_on_integer_scores": 0.9168691606258549,
+        "integer_kernel_on_float_scores": 0.9999953338186445,
+        "float_q_integer_k": 0.9165643718712042,
+        "integer_q_float_k": 0.999512299817914,
+        "integer_q_unlanded_integer_k": 0.9657495775106238
+      }
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "metrics": {
+        "baseline": 0.9130361183962955,
+        "exact_on_integer_scores": 0.9133326190205885,
+        "integer_kernel_on_float_scores": 0.9999971045960118,
+        "float_q_integer_k": 0.9151251353533667,
+        "integer_q_float_k": 0.9995557029931057,
+        "integer_q_unlanded_integer_k": 0.9853555165223911
+      }
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "metrics": {
+        "baseline": 0.9361781150877944,
+        "exact_on_integer_scores": 0.9365230937640862,
+        "integer_kernel_on_float_scores": 0.9999965186229829,
+        "float_q_integer_k": 0.9373988725807305,
+        "integer_q_float_k": 0.9996383423331968,
+        "integer_q_unlanded_integer_k": 0.9818657476737307
+      }
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "metrics": {
+        "baseline": 0.8767003208663376,
+        "exact_on_integer_scores": 0.8770855679016657,
+        "integer_kernel_on_float_scores": 0.9999957082103537,
+        "float_q_integer_k": 0.8775782289340127,
+        "integer_q_float_k": 0.9993775423163501,
+        "integer_q_unlanded_integer_k": 0.9743287773376903
+      }
+    }
+  ]
+}

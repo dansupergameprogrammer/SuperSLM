@@ -1,0 +1,3666 @@
+{
+  "provenance": {
+    "corpus": "D:\\SuperEmbedder\\.worktrees\\te234-query-localization\\tests\\fixtures\\c12b\\corpus-239.jsonl",
+    "corpus_sha256": "275b0749a25cfd141e747111d4cbed66d7772ce58a50b5c13a394c5c0da222c0",
+    "hf_model": "D:\\hf_cache\\hub\\models--Qwen--Qwen3-Embedding-0.6B\\snapshots\\97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "float_dtype": "torch.float32",
+    "population": "seven ASCII one-per-class T-2604 specimens per path",
+    "input_grid": "per-row absmax/127, canonical (m,e), round-half-away-from-zero, clamp [-127,127]",
+    "cases": [
+      {
+        "id": "query-0",
+        "path": "query",
+        "sample_index": 0,
+        "label": "id_plain-001",
+        "class": "plain",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          25,
+          7134,
+          752,
+          448,
+          57368,
+          11,
+          7794,
+          13354,
+          13,
+          151643
+        ],
+        "token_count": 28
+      },
+      {
+        "id": "query-1",
+        "path": "query",
+        "sample_index": 1,
+        "label": "id_multi-001",
+        "class": "multi_slot",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          25,
+          34253,
+          3691,
+          1778,
+          6573,
+          389,
+          847,
+          1182,
+          448,
+          53969,
+          11,
+          7728,
+          6556,
+          11,
+          2163,
+          2326,
+          7739,
+          13,
+          151643
+        ],
+        "token_count": 37
+      },
+      {
+        "id": "query-2",
+        "path": "query",
+        "sample_index": 2,
+        "label": "id_neg-001",
+        "class": "negation",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          25,
+          40695,
+          714,
+          386,
+          5131,
+          13,
+          151643
+        ],
+        "token_count": 25
+      },
+      {
+        "id": "query-3",
+        "path": "query",
+        "sample_index": 3,
+        "label": "id_corr-005",
+        "class": "correction",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          25,
+          33674,
+          6556,
+          4278,
+          13,
+          7405,
+          429,
+          7728,
+          11458,
+          13,
+          151643
+        ],
+        "token_count": 29
+      },
+      {
+        "id": "query-4",
+        "path": "query",
+        "sample_index": 4,
+        "label": "id_under-001",
+        "class": "underspecified",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          57155,
+          1366,
+          264,
+          31794,
+          13,
+          151643
+        ],
+        "token_count": 24
+      },
+      {
+        "id": "query-5",
+        "path": "query",
+        "sample_index": 5,
+        "label": "id_ood-001",
+        "class": "out_of_domain",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          25,
+          3838,
+          594,
+          279,
+          33417,
+          3552,
+          30,
+          151643
+        ],
+        "token_count": 26
+      },
+      {
+        "id": "query-6",
+        "path": "query",
+        "sample_index": 6,
+        "label": "ood_ood-000",
+        "class": "ood",
+        "token_ids": [
+          641,
+          1235,
+          25,
+          16246,
+          264,
+          3482,
+          2711,
+          3239,
+          11,
+          17179,
+          9760,
+          46769,
+          429,
+          4226,
+          279,
+          3239,
+          198,
+          2859,
+          74045,
+          5828,
+          311,
+          279,
+          10200,
+          3108,
+          10901,
+          1449,
+          17073,
+          4420,
+          389,
+          71995,
+          13,
+          151643
+        ],
+        "token_count": 32
+      },
+      {
+        "id": "document-0",
+        "path": "document",
+        "sample_index": 0,
+        "label": "id_plain-001",
+        "class": "plain",
+        "token_ids": [
+          7134,
+          752,
+          448,
+          57368,
+          11,
+          7794,
+          13354,
+          13,
+          151643
+        ],
+        "token_count": 9
+      },
+      {
+        "id": "document-1",
+        "path": "document",
+        "sample_index": 1,
+        "label": "id_multi-001",
+        "class": "multi_slot",
+        "token_ids": [
+          34253,
+          3691,
+          1778,
+          6573,
+          389,
+          847,
+          1182,
+          448,
+          53969,
+          11,
+          7728,
+          6556,
+          11,
+          2163,
+          2326,
+          7739,
+          13,
+          151643
+        ],
+        "token_count": 18
+      },
+      {
+        "id": "document-2",
+        "path": "document",
+        "sample_index": 2,
+        "label": "id_neg-001",
+        "class": "negation",
+        "token_ids": [
+          40695,
+          714,
+          386,
+          5131,
+          13,
+          151643
+        ],
+        "token_count": 6
+      },
+      {
+        "id": "document-3",
+        "path": "document",
+        "sample_index": 3,
+        "label": "id_corr-005",
+        "class": "correction",
+        "token_ids": [
+          33674,
+          6556,
+          4278,
+          13,
+          7405,
+          429,
+          7728,
+          11458,
+          13,
+          151643
+        ],
+        "token_count": 10
+      },
+      {
+        "id": "document-4",
+        "path": "document",
+        "sample_index": 4,
+        "label": "id_under-001",
+        "class": "underspecified",
+        "token_ids": [
+          40,
+          1366,
+          264,
+          31794,
+          13,
+          151643
+        ],
+        "token_count": 6
+      },
+      {
+        "id": "document-5",
+        "path": "document",
+        "sample_index": 5,
+        "label": "id_ood-001",
+        "class": "out_of_domain",
+        "token_ids": [
+          3838,
+          594,
+          279,
+          33417,
+          3552,
+          30,
+          151643
+        ],
+        "token_count": 7
+      },
+      {
+        "id": "document-6",
+        "path": "document",
+        "sample_index": 6,
+        "label": "ood_ood-000",
+        "class": "ood",
+        "token_ids": [
+          785,
+          5828,
+          311,
+          279,
+          10200,
+          3108,
+          10901,
+          1449,
+          17073,
+          4420,
+          389,
+          71995,
+          13,
+          151643
+        ],
+        "token_count": 14
+      }
+    ],
+    "elapsed_seconds": 7.033637299988186,
+    "layer": 27,
+    "arm": "local",
+    "variants": [
+      "attention_context",
+      "mlp_activation",
+      "down_proj",
+      "residual1_at_final_add",
+      "both_final_operands",
+      "residual2_ceiling"
+    ]
+  },
+  "aggregate": {
+    "query": {
+      "baseline": {
+        "mean_cosine": 0.9391310647014782,
+        "terminal_cosine": 0.8946262389976406,
+        "mean_loss_recovered_fraction": 0.0,
+        "terminal_loss_recovered_fraction": 0.0
+      },
+      "attention_context": {
+        "mean_cosine": 0.9412532046294082,
+        "terminal_cosine": 0.8996692924637401,
+        "mean_loss_recovered_fraction": 0.03492064213091571,
+        "terminal_loss_recovered_fraction": 0.034244133837311196
+      },
+      "mlp_activation": {
+        "mean_cosine": 0.967193842576374,
+        "terminal_cosine": 0.9129982301668624,
+        "mean_loss_recovered_fraction": 0.460655366327253,
+        "terminal_loss_recovered_fraction": 0.17161202543237128
+      },
+      "down_proj": {
+        "mean_cosine": 0.9750101658545148,
+        "terminal_cosine": 0.9555468971369399,
+        "mean_loss_recovered_fraction": 0.5892534910429887,
+        "terminal_loss_recovered_fraction": 0.5459245217908034
+      },
+      "residual1_at_final_add": {
+        "mean_cosine": 0.9408893584607949,
+        "terminal_cosine": 0.9012960131837231,
+        "mean_loss_recovered_fraction": 0.028941430223113938,
+        "terminal_loss_recovered_fraction": 0.0696655559147106
+      },
+      "both_final_operands": {
+        "mean_cosine": 0.9779978952453743,
+        "terminal_cosine": 0.9710612596304843,
+        "mean_loss_recovered_fraction": 0.6386640905045053,
+        "terminal_loss_recovered_fraction": 0.6997761251875393
+      },
+      "residual2_ceiling": {
+        "mean_cosine": 0.999578469718754,
+        "terminal_cosine": 0.9996695847225713,
+        "mean_loss_recovered_fraction": 0.9930725623301228,
+        "terminal_loss_recovered_fraction": 0.9959077243001014
+      }
+    },
+    "document": {
+      "baseline": {
+        "mean_cosine": 0.8353713304814571,
+        "terminal_cosine": 0.9535315580451026,
+        "mean_loss_recovered_fraction": 0.0,
+        "terminal_loss_recovered_fraction": 0.0
+      },
+      "attention_context": {
+        "mean_cosine": 0.8365994914671829,
+        "terminal_cosine": 0.9575411875410282,
+        "mean_loss_recovered_fraction": 0.008577770406315346,
+        "terminal_loss_recovered_fraction": 0.08163158837420882
+      },
+      "mlp_activation": {
+        "mean_cosine": 0.9570997994362314,
+        "terminal_cosine": 0.9619996077462247,
+        "mean_loss_recovered_fraction": 0.7077184610424085,
+        "terminal_loss_recovered_fraction": 0.1648274086772412
+      },
+      "down_proj": {
+        "mean_cosine": 0.9658444975085063,
+        "terminal_cosine": 0.9744050248290547,
+        "mean_loss_recovered_fraction": 0.7689550307886339,
+        "terminal_loss_recovered_fraction": 0.42977639153937064
+      },
+      "residual1_at_final_add": {
+        "mean_cosine": 0.8360084972808066,
+        "terminal_cosine": 0.9587619969442571,
+        "mean_loss_recovered_fraction": 0.006130194596927699,
+        "terminal_loss_recovered_fraction": 0.12479284839179786
+      },
+      "both_final_operands": {
+        "mean_cosine": 0.9672161972785702,
+        "terminal_cosine": 0.9835884131770846,
+        "mean_loss_recovered_fraction": 0.778742256278523,
+        "terminal_loss_recovered_fraction": 0.6327547710613185
+      },
+      "residual2_ceiling": {
+        "mean_cosine": 0.9995667356934034,
+        "terminal_cosine": 0.9995752638860411,
+        "mean_loss_recovered_fraction": 0.996797882717788,
+        "terminal_loss_recovered_fraction": 0.9896004635379966
+      }
+    }
+  },
+  "dependence": {
+    "query": {
+      "tokens": 201,
+      "width_vs_weighted_sum_loss_pearson": -0.4717965370469883,
+      "sharpness_vs_weighted_sum_loss_pearson": 0.30990917107305965,
+      "cancellation_ratio_vs_residual2_loss_pearson": -0.7605792580819152,
+      "terminal": {
+        "attention_sharpness_mean_max_probability": 0.8819772792713982,
+        "weighted_sum_loss": 0.02314272698372344,
+        "residual2_loss": 0.10537376100235958,
+        "float_final_residual_cancellation_ratio": 0.16809386505988602
+      }
+    },
+    "document": {
+      "tokens": 70,
+      "width_vs_weighted_sum_loss_pearson": -0.46945676424136756,
+      "sharpness_vs_weighted_sum_loss_pearson": 0.7259638984552635,
+      "cancellation_ratio_vs_residual2_loss_pearson": -0.7551536544751861,
+      "terminal": {
+        "attention_sharpness_mean_max_probability": 0.8791812243206161,
+        "weighted_sum_loss": 0.01883417603238697,
+        "residual2_loss": 0.04646844195489747,
+        "float_final_residual_cancellation_ratio": 0.23976029853068442
+      }
+    }
+  },
+  "specimens": [
+    {
+      "case": "query-0",
+      "path": "query",
+      "metrics": {
+        "baseline": {
+          "mean_cosine": 0.9375862661440295,
+          "terminal_cosine": 0.8715377826162776,
+          "mean_loss_recovered_fraction": 0.0,
+          "terminal_loss_recovered_fraction": 0.0
+        },
+        "attention_context": {
+          "mean_cosine": 0.9403015414836535,
+          "terminal_cosine": 0.8956892731023091,
+          "mean_loss_recovered_fraction": 0.04350445281626537,
+          "terminal_loss_recovered_fraction": 0.18800462095317802
+        },
+        "mlp_activation": {
+          "mean_cosine": 0.9662489052777495,
+          "terminal_cosine": 0.888341456181352,
+          "mean_loss_recovered_fraction": 0.4592360905672392,
+          "terminal_loss_recovered_fraction": 0.13080634841356556
+        },
+        "down_proj": {
+          "mean_cosine": 0.9745999834093683,
+          "terminal_cosine": 0.9567584838199641,
+          "mean_loss_recovered_fraction": 0.5930380219000153,
+          "terminal_loss_recovered_fraction": 0.6633911739910923
+        },
+        "residual1_at_final_add": {
+          "mean_cosine": 0.9395495693966627,
+          "terminal_cosine": 0.8821348513627807,
+          "mean_loss_recovered_fraction": 0.03145626981977709,
+          "terminal_loss_recovered_fraction": 0.08249171594827141
+        },
+        "both_final_operands": {
+          "mean_cosine": 0.9775844871074744,
+          "terminal_cosine": 0.9746253318517745,
+          "mean_loss_recovered_fraction": 0.6408560823447454,
+          "terminal_loss_recovered_fraction": 0.8024736870886304
+        },
+        "residual2_ceiling": {
+          "mean_cosine": 0.9995858432302419,
+          "terminal_cosine": 0.9999010914098975,
+          "mean_loss_recovered_fraction": 0.9933643327490417,
+          "terminal_loss_recovered_fraction": 0.9992300569605841
+        }
+      }
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "metrics": {
+        "baseline": {
+          "mean_cosine": 0.9451432177134412,
+          "terminal_cosine": 0.9384696936126453,
+          "mean_loss_recovered_fraction": 0.0,
+          "terminal_loss_recovered_fraction": 0.0
+        },
+        "attention_context": {
+          "mean_cosine": 0.9474795605509191,
+          "terminal_cosine": 0.9437349229036776,
+          "mean_loss_recovered_fraction": 0.04258986291382089,
+          "terminal_loss_recovered_fraction": 0.08557131599322432
+        },
+        "mlp_activation": {
+          "mean_cosine": 0.969696825520666,
+          "terminal_cosine": 0.9481056050156089,
+          "mean_loss_recovered_fraction": 0.4475947509819774,
+          "terminal_loss_recovered_fraction": 0.15660431369059322
+        },
+        "down_proj": {
+          "mean_cosine": 0.9769045729781375,
+          "terminal_cosine": 0.9606068306327343,
+          "mean_loss_recovered_fraction": 0.5789868443027245,
+          "terminal_loss_recovered_fraction": 0.3597761545461522
+        },
+        "residual1_at_final_add": {
+          "mean_cosine": 0.946779224411363,
+          "terminal_cosine": 0.9450388293248516,
+          "mean_loss_recovered_fraction": 0.029823234789376346,
+          "terminal_loss_recovered_fraction": 0.10676260363228655
+        },
+        "both_final_operands": {
+          "mean_cosine": 0.9803887488820816,
+          "terminal_cosine": 0.974225295436684,
+          "mean_loss_recovered_fraction": 0.6425008850232249,
+          "terminal_loss_recovered_fraction": 0.5811055384470987
+        },
+        "residual2_ceiling": {
+          "mean_cosine": 0.9996112463971674,
+          "terminal_cosine": 0.9993806156342755,
+          "mean_loss_recovered_fraction": 0.9929132992015121,
+          "terminal_loss_recovered_fraction": 0.9899336700547976
+        }
+      }
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "metrics": {
+        "baseline": {
+          "mean_cosine": 0.9393807619024084,
+          "terminal_cosine": 0.9349162903783715,
+          "mean_loss_recovered_fraction": 0.0,
+          "terminal_loss_recovered_fraction": 0.0
+        },
+        "attention_context": {
+          "mean_cosine": 0.9411221672795941,
+          "terminal_cosine": 0.9259309577775795,
+          "mean_loss_recovered_fraction": 0.028726942664343485,
+          "terminal_loss_recovered_fraction": -0.13805808939025283
+        },
+        "mlp_activation": {
+          "mean_cosine": 0.967790429632063,
+          "terminal_cosine": 0.9446771692259737,
+          "mean_loss_recovered_fraction": 0.46865761796473804,
+          "terminal_loss_recovered_fraction": 0.14997422403160646
+        },
+        "down_proj": {
+          "mean_cosine": 0.974855403333283,
+          "terminal_cosine": 0.9602145705776257,
+          "mean_loss_recovered_fraction": 0.5852043434423178,
+          "terminal_loss_recovered_fraction": 0.38870372242652734
+        },
+        "residual1_at_final_add": {
+          "mean_cosine": 0.9410612961745103,
+          "terminal_cosine": 0.9408230235373074,
+          "mean_loss_recovered_fraction": 0.027722787762465704,
+          "terminal_loss_recovered_fraction": 0.09075593867152512
+        },
+        "both_final_operands": {
+          "mean_cosine": 0.977593478390132,
+          "terminal_cosine": 0.9705475698195781,
+          "mean_loss_recovered_fraction": 0.6303727609740742,
+          "terminal_loss_recovered_fraction": 0.5474684778779986
+        },
+        "residual2_ceiling": {
+          "mean_cosine": 0.999554232672603,
+          "terminal_cosine": 0.9993957357893262,
+          "mean_loss_recovered_fraction": 0.9926464379727218,
+          "terminal_loss_recovered_fraction": 0.9907155843730053
+        }
+      }
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "metrics": {
+        "baseline": {
+          "mean_cosine": 0.9390874590497698,
+          "terminal_cosine": 0.8801038097814523,
+          "mean_loss_recovered_fraction": 0.0,
+          "terminal_loss_recovered_fraction": 0.0
+        },
+        "attention_context": {
+          "mean_cosine": 0.9419955455754215,
+          "terminal_cosine": 0.8852503078025242,
+          "mean_loss_recovered_fraction": 0.047741999927861885,
+          "terminal_loss_recovered_fraction": 0.0429246168013416
+        },
+        "mlp_activation": {
+          "mean_cosine": 0.9676111783867581,
+          "terminal_cosine": 0.9037766206009994,
+          "mean_loss_recovered_fraction": 0.4682733455544768,
+          "terminal_loss_recovered_fraction": 0.1974442288482737
+        },
+        "down_proj": {
+          "mean_cosine": 0.9752288215363546,
+          "terminal_cosine": 0.9549782624394031,
+          "mean_loss_recovered_fraction": 0.5933320449743646,
+          "terminal_loss_recovered_fraction": 0.6244940103723818
+        },
+        "residual1_at_final_add": {
+          "mean_cosine": 0.9408474710985758,
+          "terminal_cosine": 0.8872864678320264,
+          "mean_loss_recovered_fraction": 0.028894083572118576,
+          "terminal_loss_recovered_fraction": 0.05990730845977215
+        },
+        "both_final_operands": {
+          "mean_cosine": 0.9781811999114024,
+          "terminal_cosine": 0.9723992232964563,
+          "mean_loss_recovered_fraction": 0.6418011833322621,
+          "terminal_loss_recovered_fraction": 0.7697943808453567
+        },
+        "residual2_ceiling": {
+          "mean_cosine": 0.999585025170952,
+          "terminal_cosine": 0.9997665286722447,
+          "mean_loss_recovered_fraction": 0.9931873663029914,
+          "terminal_loss_recovered_fraction": 0.9980527210470179
+        }
+      }
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "metrics": {
+        "baseline": {
+          "mean_cosine": 0.9340169812739455,
+          "terminal_cosine": 0.8966649290865529,
+          "mean_loss_recovered_fraction": 0.0,
+          "terminal_loss_recovered_fraction": 0.0
+        },
+        "attention_context": {
+          "mean_cosine": 0.9358595326507414,
+          "terminal_cosine": 0.8938281874188275,
+          "mean_loss_recovered_fraction": 0.027924629887664348,
+          "terminal_loss_recovered_fraction": -0.027451877108609593
+        },
+        "mlp_activation": {
+          "mean_cosine": 0.9647246082550803,
+          "terminal_cosine": 0.9116926989926942,
+          "mean_loss_recovered_fraction": 0.4653868157900664,
+          "terminal_loss_recovered_fraction": 0.1454275859425159
+        },
+        "down_proj": {
+          "mean_cosine": 0.9730102899898546,
+          "terminal_cosine": 0.9469831838397726,
+          "mean_loss_recovered_fraction": 0.5909597570520361,
+          "terminal_loss_recovered_fraction": 0.4869426643677056
+        },
+        "residual1_at_final_add": {
+          "mean_cosine": 0.9357815799871773,
+          "terminal_cosine": 0.9044735720916496,
+          "mean_loss_recovered_fraction": 0.026743224958499453,
+          "terminal_loss_recovered_fraction": 0.07556624228416245
+        },
+        "both_final_operands": {
+          "mean_cosine": 0.975798915885119,
+          "terminal_cosine": 0.9627613522227055,
+          "mean_loss_recovered_fraction": 0.633222538432835,
+          "terminal_loss_recovered_fraction": 0.6396320489441056
+        },
+        "residual2_ceiling": {
+          "mean_cosine": 0.9995562842971728,
+          "terminal_cosine": 0.9996492282885734,
+          "mean_loss_recovered_fraction": 0.9932753045951201,
+          "terminal_loss_recovered_fraction": 0.9966054921303493
+        }
+      }
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "metrics": {
+        "baseline": {
+          "mean_cosine": 0.9366010479186114,
+          "terminal_cosine": 0.8535829474326868,
+          "mean_loss_recovered_fraction": 0.0,
+          "terminal_loss_recovered_fraction": 0.0
+        },
+        "attention_context": {
+          "mean_cosine": 0.9387600751012843,
+          "terminal_cosine": 0.8646963953957912,
+          "mean_loss_recovered_fraction": 0.03405461938710368,
+          "terminal_loss_recovered_fraction": 0.07590268871172076
+        },
+        "mlp_activation": {
+          "mean_cosine": 0.9663354811482353,
+          "terminal_cosine": 0.880539853914612,
+          "mean_loss_recovered_fraction": 0.4690051215902153,
+          "terminal_loss_recovered_fraction": 0.18411042982532455
+        },
+        "down_proj": {
+          "mean_cosine": 0.9741860870911346,
+          "terminal_cosine": 0.949855994234894,
+          "mean_loss_recovered_fraction": 0.5928337604740425,
+          "terminal_loss_recovered_fraction": 0.6575261905231085
+        },
+        "residual1_at_final_add": {
+          "mean_cosine": 0.9383111374298989,
+          "terminal_cosine": 0.8556627169910623,
+          "mean_loss_recovered_fraction": 0.026973466518691834,
+          "terminal_loss_recovered_fraction": 0.014204421697529914
+        },
+        "both_final_operands": {
+          "mean_cosine": 0.9771269623108532,
+          "terminal_cosine": 0.9684364920877998,
+          "mean_loss_recovered_fraction": 0.6392205716620756,
+          "terminal_loss_recovered_fraction": 0.7844273781041363
+        },
+        "residual2_ceiling": {
+          "mean_cosine": 0.9995414531427094,
+          "terminal_cosine": 0.9997959528658261,
+          "mean_loss_recovered_fraction": 0.9927672801799315,
+          "terminal_loss_recovered_fraction": 0.9986063977481033
+        }
+      }
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "metrics": {
+        "baseline": {
+          "mean_cosine": 0.9421017189081412,
+          "terminal_cosine": 0.8871082200754965,
+          "mean_loss_recovered_fraction": 0.0,
+          "terminal_loss_recovered_fraction": 0.0
+        },
+        "attention_context": {
+          "mean_cosine": 0.9432540097642436,
+          "terminal_cosine": 0.8885550028454714,
+          "mean_loss_recovered_fraction": 0.01990198731935035,
+          "terminal_loss_recovered_fraction": 0.012815660900576061
+        },
+        "mlp_activation": {
+          "mean_cosine": 0.9679494698140655,
+          "terminal_cosine": 0.9138542072367973,
+          "mean_loss_recovered_fraction": 0.446433821842058,
+          "terminal_loss_recovered_fraction": 0.23691704727471957
+        },
+        "down_proj": {
+          "mean_cosine": 0.9762860026434709,
+          "terminal_cosine": 0.9594309544141854,
+          "mean_loss_recovered_fraction": 0.5904196651554202,
+          "terminal_loss_recovered_fraction": 0.6406377363086556
+        },
+        "residual1_at_final_add": {
+          "mean_cosine": 0.943895230727376,
+          "terminal_cosine": 0.8936526311463832,
+          "mean_loss_recovered_fraction": 0.030976944140868566,
+          "terminal_loss_recovered_fraction": 0.05797066070942667
+        },
+        "both_final_operands": {
+          "mean_cosine": 0.9793114742305572,
+          "terminal_cosine": 0.9744335526983924,
+          "mean_loss_recovered_fraction": 0.6426746117623194,
+          "terminal_loss_recovered_fraction": 0.7735313650054485
+        },
+        "residual2_ceiling": {
+          "mean_cosine": 0.9996152031204315,
+          "terminal_cosine": 0.999797940397856,
+          "mean_loss_recovered_fraction": 0.993353915309541,
+          "terminal_loss_recovered_fraction": 0.9982101477868525
+        }
+      }
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "metrics": {
+        "baseline": {
+          "mean_cosine": 0.9138528540666241,
+          "terminal_cosine": 0.932423636249949,
+          "mean_loss_recovered_fraction": 0.0,
+          "terminal_loss_recovered_fraction": 0.0
+        },
+        "attention_context": {
+          "mean_cosine": 0.9148505775853116,
+          "terminal_cosine": 0.9409047214138966,
+          "mean_loss_recovered_fraction": 0.011581620120754298,
+          "terminal_loss_recovered_fraction": 0.12550372191254855
+        },
+        "mlp_activation": {
+          "mean_cosine": 0.963361299857225,
+          "terminal_cosine": 0.9456313025184551,
+          "mean_loss_recovered_fraction": 0.5746962972968308,
+          "terminal_loss_recovered_fraction": 0.19544801666686507
+        },
+        "down_proj": {
+          "mean_cosine": 0.9728816550553211,
+          "terminal_cosine": 0.966862771803275,
+          "mean_loss_recovered_fraction": 0.685209014751904,
+          "terminal_loss_recovered_fraction": 0.5096328603993581
+        },
+        "residual1_at_final_add": {
+          "mean_cosine": 0.9151717107328036,
+          "terminal_cosine": 0.9386665292443505,
+          "mean_loss_recovered_fraction": 0.015309348346832653,
+          "terminal_loss_recovered_fraction": 0.09238278960218231
+        },
+        "both_final_operands": {
+          "mean_cosine": 0.9737138216344574,
+          "terminal_cosine": 0.9800320160169866,
+          "mean_loss_recovered_fraction": 0.6948688423656928,
+          "terminal_loss_recovered_fraction": 0.70451230467401
+        },
+        "residual2_ceiling": {
+          "mean_cosine": 0.9993448787282413,
+          "terminal_cosine": 0.9997408619369853,
+          "mean_loss_recovered_fraction": 0.992395322391001,
+          "terminal_loss_recovered_fraction": 0.9961652558877955
+        }
+      }
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "metrics": {
+        "baseline": {
+          "mean_cosine": 0.9164383242216309,
+          "terminal_cosine": 0.954376053926243,
+          "mean_loss_recovered_fraction": 0.0,
+          "terminal_loss_recovered_fraction": 0.0
+        },
+        "attention_context": {
+          "mean_cosine": 0.9174173036034738,
+          "terminal_cosine": 0.9535962001856605,
+          "mean_loss_recovered_fraction": 0.011715650418973671,
+          "terminal_loss_recovered_fraction": -0.017093079571017442
+        },
+        "mlp_activation": {
+          "mean_cosine": 0.9623325815931016,
+          "terminal_cosine": 0.9622497645243435,
+          "mean_loss_recovered_fraction": 0.549226148757431,
+          "terminal_loss_recovered_fraction": 0.1725784653824469
+        },
+        "down_proj": {
+          "mean_cosine": 0.9697210503391693,
+          "terminal_cosine": 0.9736511337525416,
+          "mean_loss_recovered_fraction": 0.6376454950336371,
+          "terminal_loss_recovered_fraction": 0.42247726216268033
+        },
+        "residual1_at_final_add": {
+          "mean_cosine": 0.9181310710230197,
+          "terminal_cosine": 0.9596404065374805,
+          "mean_loss_recovered_fraction": 0.02025745397780848,
+          "terminal_loss_recovered_fraction": 0.1153857363132723
+        },
+        "both_final_operands": {
+          "mean_cosine": 0.9715609051328222,
+          "terminal_cosine": 0.9824703747652274,
+          "mean_loss_recovered_fraction": 0.6596634210327847,
+          "terminal_loss_recovered_fraction": 0.6157801605666957
+        },
+        "residual2_ceiling": {
+          "mean_cosine": 0.999672466837617,
+          "terminal_cosine": 0.9993164187924065,
+          "mean_loss_recovered_fraction": 0.9960803423419642,
+          "terminal_loss_recovered_fraction": 0.9850170520873317
+        }
+      }
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "metrics": {
+        "baseline": {
+          "mean_cosine": 0.7954469318425252,
+          "terminal_cosine": 0.9690294398730263,
+          "mean_loss_recovered_fraction": 0.0,
+          "terminal_loss_recovered_fraction": 0.0
+        },
+        "attention_context": {
+          "mean_cosine": 0.7967578049280536,
+          "terminal_cosine": 0.9732336201069235,
+          "mean_loss_recovered_fraction": 0.006408474325690287,
+          "terminal_loss_recovered_fraction": 0.13574763312839197
+        },
+        "mlp_activation": {
+          "mean_cosine": 0.9565222956910074,
+          "terminal_cosine": 0.9689957716373646,
+          "mean_loss_recovered_fraction": 0.7874502460382489,
+          "terminal_loss_recovered_fraction": -0.0010871045122726173
+        },
+        "down_proj": {
+          "mean_cosine": 0.9649236274833032,
+          "terminal_cosine": 0.9792125063113296,
+          "mean_loss_recovered_fraction": 0.828521894916319,
+          "terminal_loss_recovered_fraction": 0.32879826507995363
+        },
+        "residual1_at_final_add": {
+          "mean_cosine": 0.7947558836928406,
+          "terminal_cosine": 0.9735682038011733,
+          "mean_loss_recovered_fraction": -0.0033783318720630433,
+          "terminal_loss_recovered_fraction": 0.14655091511225132
+        },
+        "both_final_operands": {
+          "mean_cosine": 0.9664412755990347,
+          "terminal_cosine": 0.98645923872652,
+          "mean_loss_recovered_fraction": 0.8359412317632401,
+          "terminal_loss_recovered_fraction": 0.5627860388070046
+        },
+        "residual2_ceiling": {
+          "mean_cosine": 0.9993411675641165,
+          "terminal_cosine": 0.9994018493210234,
+          "mean_loss_recovered_fraction": 0.9967791613109597,
+          "terminal_loss_recovered_fraction": 0.9806864752679866
+        }
+      }
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "metrics": {
+        "baseline": {
+          "mean_cosine": 0.8169727731686885,
+          "terminal_cosine": 0.9332810793474751,
+          "mean_loss_recovered_fraction": 0.0,
+          "terminal_loss_recovered_fraction": 0.0
+        },
+        "attention_context": {
+          "mean_cosine": 0.8185189232337271,
+          "terminal_cosine": 0.9418023229223107,
+          "mean_loss_recovered_fraction": 0.008447650613553665,
+          "terminal_loss_recovered_fraction": 0.1277185465756355
+        },
+        "mlp_activation": {
+          "mean_cosine": 0.9562216111982712,
+          "terminal_cosine": 0.9479448231815369,
+          "mean_loss_recovered_fraction": 0.7608094185785949,
+          "terminal_loss_recovered_fraction": 0.21978388874771074
+        },
+        "down_proj": {
+          "mean_cosine": 0.9659722746738296,
+          "terminal_cosine": 0.9661296721312702,
+          "mean_loss_recovered_fraction": 0.8140838064626729,
+          "terminal_loss_recovered_fraction": 0.492342988503547
+        },
+        "residual1_at_final_add": {
+          "mean_cosine": 0.8169767932954517,
+          "terminal_cosine": 0.9377696288247522,
+          "mean_loss_recovered_fraction": 2.1964637899770968e-05,
+          "terminal_loss_recovered_fraction": 0.06727551095518665
+        },
+        "both_final_operands": {
+          "mean_cosine": 0.9675246787071575,
+          "terminal_cosine": 0.9772923570217592,
+          "mean_loss_recovered_fraction": 0.8225656266825612,
+          "terminal_loss_recovered_fraction": 0.6596521233234094
+        },
+        "residual2_ceiling": {
+          "mean_cosine": 0.9994492069685373,
+          "terminal_cosine": 0.9995991442742425,
+          "mean_loss_recovered_fraction": 0.9969906497464975,
+          "terminal_loss_recovered_fraction": 0.9939918733421181
+        }
+      }
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "metrics": {
+        "baseline": {
+          "mean_cosine": 0.7335036105949986,
+          "terminal_cosine": 0.9710680909992282,
+          "mean_loss_recovered_fraction": 0.0,
+          "terminal_loss_recovered_fraction": 0.0
+        },
+        "attention_context": {
+          "mean_cosine": 0.7337026395829335,
+          "terminal_cosine": 0.9720147616288335,
+          "mean_loss_recovered_fraction": 0.000746835588952093,
+          "terminal_loss_recovered_fraction": 0.032720641751639724
+        },
+        "mlp_activation": {
+          "mean_cosine": 0.9425793937212043,
+          "terminal_cosine": 0.9721573764754178,
+          "mean_loss_recovered_fraction": 0.7845351435830068,
+          "terminal_loss_recovered_fraction": 0.03764996897233863
+        },
+        "down_proj": {
+          "mean_cosine": 0.9534692733119302,
+          "terminal_cosine": 0.9798328553634995,
+          "mean_loss_recovered_fraction": 0.8253982847874316,
+          "terminal_loss_recovered_fraction": 0.3029445573065193
+        },
+        "residual1_at_final_add": {
+          "mean_cosine": 0.734474500213313,
+          "terminal_cosine": 0.9777644840364467,
+          "mean_loss_recovered_fraction": 0.0036431623726011857,
+          "terminal_loss_recovered_fraction": 0.231453549679001
+        },
+        "both_final_operands": {
+          "mean_cosine": 0.9544223048572923,
+          "terminal_cosine": 0.9866507346365403,
+          "mean_loss_recovered_fraction": 0.8289744365975551,
+          "terminal_loss_recovered_fraction": 0.5385971467315346
+        },
+        "residual2_ceiling": {
+          "mean_cosine": 0.9997634529710749,
+          "terminal_cosine": 0.9995846328769035,
+          "mean_loss_recovered_fraction": 0.9991123818620838,
+          "terminal_loss_recovered_fraction": 0.9856432866878763
+        }
+      }
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "metrics": {
+        "baseline": {
+          "mean_cosine": 0.8500951998510805,
+          "terminal_cosine": 0.9600550050119023,
+          "mean_loss_recovered_fraction": 0.0,
+          "terminal_loss_recovered_fraction": 0.0
+        },
+        "attention_context": {
+          "mean_cosine": 0.8512104697896639,
+          "terminal_cosine": 0.9665013029917836,
+          "mean_loss_recovered_fraction": 0.007439854744313809,
+          "terminal_loss_recovered_fraction": 0.1613793663461985
+        },
+        "mlp_activation": {
+          "mean_cosine": 0.9556774572992617,
+          "terminal_cosine": 0.9716746019014557,
+          "mean_loss_recovered_fraction": 0.7043287295889985,
+          "terminal_loss_recovered_fraction": 0.29088993234360533
+        },
+        "down_proj": {
+          "mean_cosine": 0.9641526120285713,
+          "terminal_cosine": 0.9796783916305885,
+          "mean_loss_recovered_fraction": 0.7608656431560766,
+          "terminal_loss_recovered_fraction": 0.49126020980934565
+        },
+        "residual1_at_final_add": {
+          "mean_cosine": 0.850597873183154,
+          "terminal_cosine": 0.9647432266666673,
+          "mean_loss_recovered_fraction": 0.003353283761254977,
+          "terminal_loss_recovered_fraction": 0.11736693561138141
+        },
+        "both_final_operands": {
+          "mean_cosine": 0.9651664462563435,
+          "terminal_cosine": 0.9864376605736651,
+          "mean_loss_recovered_fraction": 0.7676288303706627,
+          "terminal_loss_recovered_fraction": 0.6604746244084889
+        },
+        "residual2_ceiling": {
+          "mean_cosine": 0.9996347110515674,
+          "terminal_cosine": 0.9997503235280987,
+          "mean_loss_recovered_fraction": 0.9975631937865252,
+          "terminal_loss_recovered_fraction": 0.9937494929721302
+        }
+      }
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "metrics": {
+        "baseline": {
+          "mean_cosine": 0.8212896196246526,
+          "terminal_cosine": 0.9544876009078939,
+          "mean_loss_recovered_fraction": 0.0,
+          "terminal_loss_recovered_fraction": 0.0
+        },
+        "attention_context": {
+          "mean_cosine": 0.8237387215471165,
+          "terminal_cosine": 0.9547353835377891,
+          "mean_loss_recovered_fraction": 0.01370430703196961,
+          "terminal_loss_recovered_fraction": 0.0054442884760649264
+        },
+        "mlp_activation": {
+          "mean_cosine": 0.9630039566935488,
+          "terminal_cosine": 0.9653436139849998,
+          "mean_loss_recovered_fraction": 0.7929832434537488,
+          "terminal_loss_recovered_fraction": 0.23852869313999409
+        },
+        "down_proj": {
+          "mean_cosine": 0.9697909896674201,
+          "terminal_cosine": 0.9754678428108791,
+          "mean_loss_recovered_fraction": 0.8309610764123962,
+          "terminal_loss_recovered_fraction": 0.46097859751419035
+        },
+        "residual1_at_final_add": {
+          "mean_cosine": 0.8219516488250638,
+          "terminal_cosine": 0.9591814994989305,
+          "mean_loss_recovered_fraction": 0.0037044809541598722,
+          "terminal_loss_recovered_fraction": 0.10313450146930989
+        },
+        "both_final_operands": {
+          "mean_cosine": 0.9716839487628842,
+          "terminal_cosine": 0.9857765104988936,
+          "mean_loss_recovered_fraction": 0.8415534051371651,
+          "terminal_loss_recovered_fraction": 0.6874809989180861
+        },
+        "residual2_ceiling": {
+          "mean_cosine": 0.9997612657326691,
+          "terminal_cosine": 0.9996336164726279,
+          "mean_loss_recovered_fraction": 0.9986641275854851,
+          "terminal_loss_recovered_fraction": 0.9919498085207377
+        }
+      }
+    }
+  ],
+  "token_diagnostics": [
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 1,
+      "attention_sharpness_mean_max_probability": 1.0,
+      "weighted_sum_loss": 0.0948775457236527,
+      "residual2_loss": 0.1077419942469805,
+      "float_final_residual_cancellation_ratio": 0.13097404923515144
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 2,
+      "attention_sharpness_mean_max_probability": 0.9273238070309162,
+      "weighted_sum_loss": 0.040503623304644076,
+      "residual2_loss": 0.019543562428884442,
+      "float_final_residual_cancellation_ratio": 0.3119474599995915
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 3,
+      "attention_sharpness_mean_max_probability": 0.8852895796298981,
+      "weighted_sum_loss": 0.032680753167222076,
+      "residual2_loss": 0.01107988023626627,
+      "float_final_residual_cancellation_ratio": 0.43165784972903987
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 4,
+      "attention_sharpness_mean_max_probability": 0.8263233341276646,
+      "weighted_sum_loss": 0.03008164803867064,
+      "residual2_loss": 0.017493169014245247,
+      "float_final_residual_cancellation_ratio": 0.32524990702143575
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 5,
+      "attention_sharpness_mean_max_probability": 0.7942727990448475,
+      "weighted_sum_loss": 0.038177864952650076,
+      "residual2_loss": 0.03532069753181377,
+      "float_final_residual_cancellation_ratio": 0.28484628108021265
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 6,
+      "attention_sharpness_mean_max_probability": 0.8398671690374613,
+      "weighted_sum_loss": 0.01995825331815504,
+      "residual2_loss": 0.02890828416739999,
+      "float_final_residual_cancellation_ratio": 0.4636036023623178
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 7,
+      "attention_sharpness_mean_max_probability": 0.7042954843491316,
+      "weighted_sum_loss": 0.04407501525063506,
+      "residual2_loss": 0.021241872431140285,
+      "float_final_residual_cancellation_ratio": 0.4063562379139811
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 8,
+      "attention_sharpness_mean_max_probability": 0.7248093243688345,
+      "weighted_sum_loss": 0.04829283581735444,
+      "residual2_loss": 0.02744933073591649,
+      "float_final_residual_cancellation_ratio": 0.3366241194462555
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 9,
+      "attention_sharpness_mean_max_probability": 0.8077502101659775,
+      "weighted_sum_loss": 0.03376269670721266,
+      "residual2_loss": 0.011134674934528577,
+      "float_final_residual_cancellation_ratio": 0.42148371584970595
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 10,
+      "attention_sharpness_mean_max_probability": 0.7518309522420168,
+      "weighted_sum_loss": 0.03877185951747153,
+      "residual2_loss": 0.01844659015779726,
+      "float_final_residual_cancellation_ratio": 0.3432575774610914
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 11,
+      "attention_sharpness_mean_max_probability": 0.7712082602083683,
+      "weighted_sum_loss": 0.02933057702839026,
+      "residual2_loss": 0.030610812846204594,
+      "float_final_residual_cancellation_ratio": 0.28027577454141106
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 12,
+      "attention_sharpness_mean_max_probability": 0.7124256752431393,
+      "weighted_sum_loss": 0.0317875676154169,
+      "residual2_loss": 0.024970330878561375,
+      "float_final_residual_cancellation_ratio": 0.33375263930410576
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 13,
+      "attention_sharpness_mean_max_probability": 0.783213228918612,
+      "weighted_sum_loss": 0.01828289778139336,
+      "residual2_loss": 0.026622851262430358,
+      "float_final_residual_cancellation_ratio": 0.3176380499343348
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 14,
+      "attention_sharpness_mean_max_probability": 0.7552329208701849,
+      "weighted_sum_loss": 0.016460894064148746,
+      "residual2_loss": 0.03121414392685795,
+      "float_final_residual_cancellation_ratio": 0.3113789592219284
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 15,
+      "attention_sharpness_mean_max_probability": 0.8642022646963596,
+      "weighted_sum_loss": 0.01722021160427789,
+      "residual2_loss": 0.015370121787922963,
+      "float_final_residual_cancellation_ratio": 0.3572830425802993
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 16,
+      "attention_sharpness_mean_max_probability": 0.8127985876053572,
+      "weighted_sum_loss": 0.013403012168766826,
+      "residual2_loss": 0.02438385765940887,
+      "float_final_residual_cancellation_ratio": 0.31965875819864525
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 17,
+      "attention_sharpness_mean_max_probability": 0.8542859628796577,
+      "weighted_sum_loss": 0.037192422687138516,
+      "residual2_loss": 0.0255990262830752,
+      "float_final_residual_cancellation_ratio": 0.3141046659457601
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 18,
+      "attention_sharpness_mean_max_probability": 0.8364492878317833,
+      "weighted_sum_loss": 0.021946701130613366,
+      "residual2_loss": 0.021964785212892246,
+      "float_final_residual_cancellation_ratio": 0.2911999149548988
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 19,
+      "attention_sharpness_mean_max_probability": 0.8659974411129951,
+      "weighted_sum_loss": 0.052974403275761084,
+      "residual2_loss": 0.019615020935056515,
+      "float_final_residual_cancellation_ratio": 0.31973401002279295
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 20,
+      "attention_sharpness_mean_max_probability": 0.8458741325885057,
+      "weighted_sum_loss": 0.06594857190553882,
+      "residual2_loss": 0.016493107744949942,
+      "float_final_residual_cancellation_ratio": 0.31661814730797716
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 21,
+      "attention_sharpness_mean_max_probability": 0.7978652976453304,
+      "weighted_sum_loss": 0.0429342839989586,
+      "residual2_loss": 0.020064654531315895,
+      "float_final_residual_cancellation_ratio": 0.34107303342979606
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 22,
+      "attention_sharpness_mean_max_probability": 0.848212905228138,
+      "weighted_sum_loss": 0.01898397051475964,
+      "residual2_loss": 0.027994448561386998,
+      "float_final_residual_cancellation_ratio": 0.29074924308486505
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 23,
+      "attention_sharpness_mean_max_probability": 0.8614410720765591,
+      "weighted_sum_loss": 0.03932903580784808,
+      "residual2_loss": 0.016340637116125545,
+      "float_final_residual_cancellation_ratio": 0.4994200302409682
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 24,
+      "attention_sharpness_mean_max_probability": 0.8847687616944313,
+      "weighted_sum_loss": 0.031583288097292606,
+      "residual2_loss": 0.0440623758500599,
+      "float_final_residual_cancellation_ratio": 0.25715533089158027
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 25,
+      "attention_sharpness_mean_max_probability": 0.8523380942642689,
+      "weighted_sum_loss": 0.02566289060679594,
+      "residual2_loss": 0.019885475841780353,
+      "float_final_residual_cancellation_ratio": 0.3300712066769921
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 26,
+      "attention_sharpness_mean_max_probability": 0.7924752105027437,
+      "weighted_sum_loss": 0.03036356624628045,
+      "residual2_loss": 0.055225042527790036,
+      "float_final_residual_cancellation_ratio": 0.30729151606408744
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 27,
+      "attention_sharpness_mean_max_probability": 0.872992504388094,
+      "weighted_sum_loss": 0.01775895433518393,
+      "residual2_loss": 0.02660657010145162,
+      "float_final_residual_cancellation_ratio": 0.30314701975961184
+    },
+    {
+      "case": "query-0",
+      "path": "query",
+      "width": 28,
+      "attention_sharpness_mean_max_probability": 0.8911616653203964,
+      "weighted_sum_loss": 0.029827594870883378,
+      "residual2_loss": 0.12846221738372243,
+      "float_final_residual_cancellation_ratio": 0.15786920993233736
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 1,
+      "attention_sharpness_mean_max_probability": 1.0,
+      "weighted_sum_loss": 0.09487757583660617,
+      "residual2_loss": 0.10774183605502097,
+      "float_final_residual_cancellation_ratio": 0.1309743958641493
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 2,
+      "attention_sharpness_mean_max_probability": 0.9273237362504005,
+      "weighted_sum_loss": 0.04050373625904735,
+      "residual2_loss": 0.019543485613401246,
+      "float_final_residual_cancellation_ratio": 0.3119473038400054
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 3,
+      "attention_sharpness_mean_max_probability": 0.885289628058672,
+      "weighted_sum_loss": 0.03268071036012821,
+      "residual2_loss": 0.011079864954558816,
+      "float_final_residual_cancellation_ratio": 0.43165800495647205
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 4,
+      "attention_sharpness_mean_max_probability": 0.8263241779059172,
+      "weighted_sum_loss": 0.030081775227159047,
+      "residual2_loss": 0.01749290789174418,
+      "float_final_residual_cancellation_ratio": 0.325250398065272
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 5,
+      "attention_sharpness_mean_max_probability": 0.7942725010216236,
+      "weighted_sum_loss": 0.038177818173052214,
+      "residual2_loss": 0.03532040769477307,
+      "float_final_residual_cancellation_ratio": 0.284846270848135
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 6,
+      "attention_sharpness_mean_max_probability": 0.8398667648434639,
+      "weighted_sum_loss": 0.01995864148385884,
+      "residual2_loss": 0.028908299215013922,
+      "float_final_residual_cancellation_ratio": 0.46360331216756795
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 7,
+      "attention_sharpness_mean_max_probability": 0.7042961269617081,
+      "weighted_sum_loss": 0.04407571888139816,
+      "residual2_loss": 0.02124188294869156,
+      "float_final_residual_cancellation_ratio": 0.4063557652818121
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 8,
+      "attention_sharpness_mean_max_probability": 0.7248107213526964,
+      "weighted_sum_loss": 0.04829356973937826,
+      "residual2_loss": 0.027448843847167725,
+      "float_final_residual_cancellation_ratio": 0.3366238949752411
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 9,
+      "attention_sharpness_mean_max_probability": 0.8077503275126219,
+      "weighted_sum_loss": 0.03376232772712573,
+      "residual2_loss": 0.011134468556417643,
+      "float_final_residual_cancellation_ratio": 0.4214842206826263
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 10,
+      "attention_sharpness_mean_max_probability": 0.7518307585269213,
+      "weighted_sum_loss": 0.03877186463097493,
+      "residual2_loss": 0.018446392655210753,
+      "float_final_residual_cancellation_ratio": 0.34325805482921273
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 11,
+      "attention_sharpness_mean_max_probability": 0.7712083421647549,
+      "weighted_sum_loss": 0.029330564319323127,
+      "residual2_loss": 0.030610198494209206,
+      "float_final_residual_cancellation_ratio": 0.2802762169532388
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 12,
+      "attention_sharpness_mean_max_probability": 0.7124259490519762,
+      "weighted_sum_loss": 0.031787470320498334,
+      "residual2_loss": 0.02496946933136568,
+      "float_final_residual_cancellation_ratio": 0.3337527735364886
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 13,
+      "attention_sharpness_mean_max_probability": 0.7832134002819657,
+      "weighted_sum_loss": 0.018282869119832346,
+      "residual2_loss": 0.026622040465121732,
+      "float_final_residual_cancellation_ratio": 0.3176387129803853
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 14,
+      "attention_sharpness_mean_max_probability": 0.7552331183105707,
+      "weighted_sum_loss": 0.01646079252497068,
+      "residual2_loss": 0.031213804964459357,
+      "float_final_residual_cancellation_ratio": 0.31137900195272944
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 15,
+      "attention_sharpness_mean_max_probability": 0.8642019126564264,
+      "weighted_sum_loss": 0.01722013496716346,
+      "residual2_loss": 0.015370013215802447,
+      "float_final_residual_cancellation_ratio": 0.3572834153238994
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 16,
+      "attention_sharpness_mean_max_probability": 0.8127987831830978,
+      "weighted_sum_loss": 0.013403021434340134,
+      "residual2_loss": 0.024383537043328518,
+      "float_final_residual_cancellation_ratio": 0.31965875522043136
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 17,
+      "attention_sharpness_mean_max_probability": 0.8542858846485615,
+      "weighted_sum_loss": 0.0371928258925166,
+      "residual2_loss": 0.02559905037775201,
+      "float_final_residual_cancellation_ratio": 0.31410526473790396
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 18,
+      "attention_sharpness_mean_max_probability": 0.8364490941166878,
+      "weighted_sum_loss": 0.021946760408726118,
+      "residual2_loss": 0.021964568369737147,
+      "float_final_residual_cancellation_ratio": 0.29120026098967283
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 19,
+      "attention_sharpness_mean_max_probability": 0.8659976497292519,
+      "weighted_sum_loss": 0.05297441042816087,
+      "residual2_loss": 0.019615018090196723,
+      "float_final_residual_cancellation_ratio": 0.31973439877572885
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 20,
+      "attention_sharpness_mean_max_probability": 0.8599376231431961,
+      "weighted_sum_loss": 0.02385648545231156,
+      "residual2_loss": 0.01606916380512513,
+      "float_final_residual_cancellation_ratio": 0.3284981561901683
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 21,
+      "attention_sharpness_mean_max_probability": 0.8148525003343821,
+      "weighted_sum_loss": 0.018476013323025953,
+      "residual2_loss": 0.014230323280192136,
+      "float_final_residual_cancellation_ratio": 0.3599871175906541
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 22,
+      "attention_sharpness_mean_max_probability": 0.8380718138068914,
+      "weighted_sum_loss": 0.021401531749864144,
+      "residual2_loss": 0.03316575068802985,
+      "float_final_residual_cancellation_ratio": 0.3030059591332573
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 23,
+      "attention_sharpness_mean_max_probability": 0.7955986112356186,
+      "weighted_sum_loss": 0.032139357403981106,
+      "residual2_loss": 0.03455731406445006,
+      "float_final_residual_cancellation_ratio": 0.3096341488552367
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 24,
+      "attention_sharpness_mean_max_probability": 0.8275076393038034,
+      "weighted_sum_loss": 0.019626835556875166,
+      "residual2_loss": 0.021336912235420002,
+      "float_final_residual_cancellation_ratio": 0.3585867374857372
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 25,
+      "attention_sharpness_mean_max_probability": 0.795489614829421,
+      "weighted_sum_loss": 0.015727878631895065,
+      "residual2_loss": 0.022429804788076435,
+      "float_final_residual_cancellation_ratio": 0.3164557605260987
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 26,
+      "attention_sharpness_mean_max_probability": 0.8208889178931713,
+      "weighted_sum_loss": 0.028050539887487735,
+      "residual2_loss": 0.021644585380213743,
+      "float_final_residual_cancellation_ratio": 0.3329695639044264
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 27,
+      "attention_sharpness_mean_max_probability": 0.8559804707765579,
+      "weighted_sum_loss": 0.023051484123499222,
+      "residual2_loss": 0.0309111102147398,
+      "float_final_residual_cancellation_ratio": 0.3350956121511711
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 28,
+      "attention_sharpness_mean_max_probability": 0.8641664367169142,
+      "weighted_sum_loss": 0.01933606577985314,
+      "residual2_loss": 0.017031333304612373,
+      "float_final_residual_cancellation_ratio": 0.3972680501351454
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 29,
+      "attention_sharpness_mean_max_probability": 0.8356864210218191,
+      "weighted_sum_loss": 0.01937752990813657,
+      "residual2_loss": 0.024263280587805247,
+      "float_final_residual_cancellation_ratio": 0.3159707648119181
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 30,
+      "attention_sharpness_mean_max_probability": 0.849010968580842,
+      "weighted_sum_loss": 0.024688182396369385,
+      "residual2_loss": 0.01351889282834684,
+      "float_final_residual_cancellation_ratio": 0.3388508179899604
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 31,
+      "attention_sharpness_mean_max_probability": 0.7836384065449238,
+      "weighted_sum_loss": 0.024019504290338722,
+      "residual2_loss": 0.024139535944533663,
+      "float_final_residual_cancellation_ratio": 0.34213658238106287
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 32,
+      "attention_sharpness_mean_max_probability": 0.7922247163951397,
+      "weighted_sum_loss": 0.018104163453439903,
+      "residual2_loss": 0.04970412760366327,
+      "float_final_residual_cancellation_ratio": 0.29547812442067445
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 33,
+      "attention_sharpness_mean_max_probability": 0.7982299188151956,
+      "weighted_sum_loss": 0.026916679373111596,
+      "residual2_loss": 0.040392911007964605,
+      "float_final_residual_cancellation_ratio": 0.29855120125187645
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 34,
+      "attention_sharpness_mean_max_probability": 0.8201825097203255,
+      "weighted_sum_loss": 0.02324399530975052,
+      "residual2_loss": 0.014714072536390899,
+      "float_final_residual_cancellation_ratio": 0.33625207116202255
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 35,
+      "attention_sharpness_mean_max_probability": 0.8332473821938038,
+      "weighted_sum_loss": 0.01757265279881448,
+      "residual2_loss": 0.01641198431616342,
+      "float_final_residual_cancellation_ratio": 0.3716225701670935
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 36,
+      "attention_sharpness_mean_max_probability": 0.8274139910936356,
+      "weighted_sum_loss": 0.02377099396100535,
+      "residual2_loss": 0.017882667846816136,
+      "float_final_residual_cancellation_ratio": 0.32884529322666056
+    },
+    {
+      "case": "query-1",
+      "path": "query",
+      "width": 37,
+      "attention_sharpness_mean_max_probability": 0.878223642706871,
+      "weighted_sum_loss": 0.024047746384270652,
+      "residual2_loss": 0.06153030638735468,
+      "float_final_residual_cancellation_ratio": 0.19383485987007007
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 1,
+      "attention_sharpness_mean_max_probability": 1.0,
+      "weighted_sum_loss": 0.0948775457236527,
+      "residual2_loss": 0.1077419942469805,
+      "float_final_residual_cancellation_ratio": 0.13097404923515144
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 2,
+      "attention_sharpness_mean_max_probability": 0.9273238070309162,
+      "weighted_sum_loss": 0.040503623304644076,
+      "residual2_loss": 0.019543562428884442,
+      "float_final_residual_cancellation_ratio": 0.3119474599995915
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 3,
+      "attention_sharpness_mean_max_probability": 0.8852895796298981,
+      "weighted_sum_loss": 0.032680753167222076,
+      "residual2_loss": 0.01107988023626627,
+      "float_final_residual_cancellation_ratio": 0.43165784972903987
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 4,
+      "attention_sharpness_mean_max_probability": 0.8263233341276646,
+      "weighted_sum_loss": 0.03008164803867064,
+      "residual2_loss": 0.017493169014245247,
+      "float_final_residual_cancellation_ratio": 0.32524990702143575
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 5,
+      "attention_sharpness_mean_max_probability": 0.7942727990448475,
+      "weighted_sum_loss": 0.038177864952650076,
+      "residual2_loss": 0.03532069753181377,
+      "float_final_residual_cancellation_ratio": 0.28484628108021265
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 6,
+      "attention_sharpness_mean_max_probability": 0.8398671690374613,
+      "weighted_sum_loss": 0.01995825331815504,
+      "residual2_loss": 0.02890828416739999,
+      "float_final_residual_cancellation_ratio": 0.4636036023623178
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 7,
+      "attention_sharpness_mean_max_probability": 0.7042954843491316,
+      "weighted_sum_loss": 0.04407501525063506,
+      "residual2_loss": 0.021241872431140285,
+      "float_final_residual_cancellation_ratio": 0.4063562379139811
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 8,
+      "attention_sharpness_mean_max_probability": 0.7248093243688345,
+      "weighted_sum_loss": 0.04829283581735444,
+      "residual2_loss": 0.02744933073591649,
+      "float_final_residual_cancellation_ratio": 0.3366241194462555
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 9,
+      "attention_sharpness_mean_max_probability": 0.8077502101659775,
+      "weighted_sum_loss": 0.03376269670721266,
+      "residual2_loss": 0.011134674934528577,
+      "float_final_residual_cancellation_ratio": 0.42148371584970595
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 10,
+      "attention_sharpness_mean_max_probability": 0.7518309522420168,
+      "weighted_sum_loss": 0.03877185951747153,
+      "residual2_loss": 0.01844659015779726,
+      "float_final_residual_cancellation_ratio": 0.3432575774610914
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 11,
+      "attention_sharpness_mean_max_probability": 0.7712082602083683,
+      "weighted_sum_loss": 0.02933057702839026,
+      "residual2_loss": 0.030610812846204594,
+      "float_final_residual_cancellation_ratio": 0.28027577454141106
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 12,
+      "attention_sharpness_mean_max_probability": 0.7124256752431393,
+      "weighted_sum_loss": 0.0317875676154169,
+      "residual2_loss": 0.024970330878561375,
+      "float_final_residual_cancellation_ratio": 0.33375263930410576
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 13,
+      "attention_sharpness_mean_max_probability": 0.783213228918612,
+      "weighted_sum_loss": 0.01828289778139336,
+      "residual2_loss": 0.026622851262430358,
+      "float_final_residual_cancellation_ratio": 0.3176380499343348
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 14,
+      "attention_sharpness_mean_max_probability": 0.7552329208701849,
+      "weighted_sum_loss": 0.016460894064148746,
+      "residual2_loss": 0.03121414392685795,
+      "float_final_residual_cancellation_ratio": 0.3113789592219284
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 15,
+      "attention_sharpness_mean_max_probability": 0.8642022646963596,
+      "weighted_sum_loss": 0.01722021160427789,
+      "residual2_loss": 0.015370121787922963,
+      "float_final_residual_cancellation_ratio": 0.3572830425802993
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 16,
+      "attention_sharpness_mean_max_probability": 0.8127985876053572,
+      "weighted_sum_loss": 0.013403012168766826,
+      "residual2_loss": 0.02438385765940887,
+      "float_final_residual_cancellation_ratio": 0.31965875819864525
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 17,
+      "attention_sharpness_mean_max_probability": 0.8542859628796577,
+      "weighted_sum_loss": 0.037192422687138516,
+      "residual2_loss": 0.0255990262830752,
+      "float_final_residual_cancellation_ratio": 0.3141046659457601
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 18,
+      "attention_sharpness_mean_max_probability": 0.8364492878317833,
+      "weighted_sum_loss": 0.021946701130613366,
+      "residual2_loss": 0.021964785212892246,
+      "float_final_residual_cancellation_ratio": 0.2911999149548988
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 19,
+      "attention_sharpness_mean_max_probability": 0.8659974411129951,
+      "weighted_sum_loss": 0.052974403275761084,
+      "residual2_loss": 0.019615020935056515,
+      "float_final_residual_cancellation_ratio": 0.31973401002279295
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 20,
+      "attention_sharpness_mean_max_probability": 0.8441543821245432,
+      "weighted_sum_loss": 0.022129301670096857,
+      "residual2_loss": 0.021007579792674647,
+      "float_final_residual_cancellation_ratio": 0.30310176777238024
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 21,
+      "attention_sharpness_mean_max_probability": 0.8651328943669796,
+      "weighted_sum_loss": 0.021908993587109182,
+      "residual2_loss": 0.01835988921633469,
+      "float_final_residual_cancellation_ratio": 0.3230055062728287
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 22,
+      "attention_sharpness_mean_max_probability": 0.8106181286275387,
+      "weighted_sum_loss": 0.02451700295420367,
+      "residual2_loss": 0.013825555258353717,
+      "float_final_residual_cancellation_ratio": 0.5198539978367246
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 23,
+      "attention_sharpness_mean_max_probability": 0.8525336533784866,
+      "weighted_sum_loss": 0.054864000210975594,
+      "residual2_loss": 0.022548637217268963,
+      "float_final_residual_cancellation_ratio": 0.5075779539925992
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 24,
+      "attention_sharpness_mean_max_probability": 0.8559268787503242,
+      "weighted_sum_loss": 0.030867566528115176,
+      "residual2_loss": 0.013722630603541952,
+      "float_final_residual_cancellation_ratio": 0.3671759754350237
+    },
+    {
+      "case": "query-2",
+      "path": "query",
+      "width": 25,
+      "attention_sharpness_mean_max_probability": 0.8746918849647045,
+      "weighted_sum_loss": 0.02273000025178107,
+      "residual2_loss": 0.06508370962162846,
+      "float_final_residual_cancellation_ratio": 0.19016445687156888
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 1,
+      "attention_sharpness_mean_max_probability": 1.0,
+      "weighted_sum_loss": 0.0948775457236527,
+      "residual2_loss": 0.1077419942469805,
+      "float_final_residual_cancellation_ratio": 0.13097404923515144
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 2,
+      "attention_sharpness_mean_max_probability": 0.9273238070309162,
+      "weighted_sum_loss": 0.040503623304644076,
+      "residual2_loss": 0.019543562428884442,
+      "float_final_residual_cancellation_ratio": 0.3119474599995915
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 3,
+      "attention_sharpness_mean_max_probability": 0.8852895796298981,
+      "weighted_sum_loss": 0.032680753167222076,
+      "residual2_loss": 0.01107988023626627,
+      "float_final_residual_cancellation_ratio": 0.43165784972903987
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 4,
+      "attention_sharpness_mean_max_probability": 0.8263233341276646,
+      "weighted_sum_loss": 0.03008164803867064,
+      "residual2_loss": 0.017493169014245247,
+      "float_final_residual_cancellation_ratio": 0.32524990702143575
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 5,
+      "attention_sharpness_mean_max_probability": 0.7942727990448475,
+      "weighted_sum_loss": 0.038177864952650076,
+      "residual2_loss": 0.03532069753181377,
+      "float_final_residual_cancellation_ratio": 0.28484628108021265
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 6,
+      "attention_sharpness_mean_max_probability": 0.8398671690374613,
+      "weighted_sum_loss": 0.01995825331815504,
+      "residual2_loss": 0.02890828416739999,
+      "float_final_residual_cancellation_ratio": 0.4636036023623178
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 7,
+      "attention_sharpness_mean_max_probability": 0.7042954843491316,
+      "weighted_sum_loss": 0.04407501525063506,
+      "residual2_loss": 0.021241872431140285,
+      "float_final_residual_cancellation_ratio": 0.4063562379139811
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 8,
+      "attention_sharpness_mean_max_probability": 0.7248093243688345,
+      "weighted_sum_loss": 0.04829283581735444,
+      "residual2_loss": 0.02744933073591649,
+      "float_final_residual_cancellation_ratio": 0.3366241194462555
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 9,
+      "attention_sharpness_mean_max_probability": 0.8077502101659775,
+      "weighted_sum_loss": 0.03376269670721266,
+      "residual2_loss": 0.011134674934528577,
+      "float_final_residual_cancellation_ratio": 0.42148371584970595
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 10,
+      "attention_sharpness_mean_max_probability": 0.7518309522420168,
+      "weighted_sum_loss": 0.03877185951747153,
+      "residual2_loss": 0.01844659015779726,
+      "float_final_residual_cancellation_ratio": 0.3432575774610914
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 11,
+      "attention_sharpness_mean_max_probability": 0.7712082602083683,
+      "weighted_sum_loss": 0.02933057702839026,
+      "residual2_loss": 0.030610812846204594,
+      "float_final_residual_cancellation_ratio": 0.28027577454141106
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 12,
+      "attention_sharpness_mean_max_probability": 0.7124256752431393,
+      "weighted_sum_loss": 0.0317875676154169,
+      "residual2_loss": 0.024970330878561375,
+      "float_final_residual_cancellation_ratio": 0.33375263930410576
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 13,
+      "attention_sharpness_mean_max_probability": 0.783213228918612,
+      "weighted_sum_loss": 0.01828289778139336,
+      "residual2_loss": 0.026622851262430358,
+      "float_final_residual_cancellation_ratio": 0.3176380499343348
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 14,
+      "attention_sharpness_mean_max_probability": 0.7552329208701849,
+      "weighted_sum_loss": 0.016460894064148746,
+      "residual2_loss": 0.03121414392685795,
+      "float_final_residual_cancellation_ratio": 0.3113789592219284
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 15,
+      "attention_sharpness_mean_max_probability": 0.8642022646963596,
+      "weighted_sum_loss": 0.01722021160427789,
+      "residual2_loss": 0.015370121787922963,
+      "float_final_residual_cancellation_ratio": 0.3572830425802993
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 16,
+      "attention_sharpness_mean_max_probability": 0.8127985876053572,
+      "weighted_sum_loss": 0.013403012168766826,
+      "residual2_loss": 0.02438385765940887,
+      "float_final_residual_cancellation_ratio": 0.31965875819864525
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 17,
+      "attention_sharpness_mean_max_probability": 0.8542859628796577,
+      "weighted_sum_loss": 0.037192422687138516,
+      "residual2_loss": 0.0255990262830752,
+      "float_final_residual_cancellation_ratio": 0.3141046659457601
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 18,
+      "attention_sharpness_mean_max_probability": 0.8364492878317833,
+      "weighted_sum_loss": 0.021946701130613366,
+      "residual2_loss": 0.021964785212892246,
+      "float_final_residual_cancellation_ratio": 0.2911999149548988
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 19,
+      "attention_sharpness_mean_max_probability": 0.8659974411129951,
+      "weighted_sum_loss": 0.052974403275761084,
+      "residual2_loss": 0.019615020935056515,
+      "float_final_residual_cancellation_ratio": 0.31973401002279295
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 20,
+      "attention_sharpness_mean_max_probability": 0.8515297509729862,
+      "weighted_sum_loss": 0.019664457017842252,
+      "residual2_loss": 0.03497260401651958,
+      "float_final_residual_cancellation_ratio": 0.3035430459309185
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 21,
+      "attention_sharpness_mean_max_probability": 0.7854760549962521,
+      "weighted_sum_loss": 0.02856653309824797,
+      "residual2_loss": 0.027469228956004565,
+      "float_final_residual_cancellation_ratio": 0.34142603321934994
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 22,
+      "attention_sharpness_mean_max_probability": 0.8503390252590179,
+      "weighted_sum_loss": 0.011360854822525579,
+      "residual2_loss": 0.03425551023804907,
+      "float_final_residual_cancellation_ratio": 0.4052783812259992
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 23,
+      "attention_sharpness_mean_max_probability": 0.870778501033783,
+      "weighted_sum_loss": 0.017284522778150735,
+      "residual2_loss": 0.024406108258320125,
+      "float_final_residual_cancellation_ratio": 0.32055214837596113
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 24,
+      "attention_sharpness_mean_max_probability": 0.8527035918086767,
+      "weighted_sum_loss": 0.01642029291901348,
+      "residual2_loss": 0.02445119953143904,
+      "float_final_residual_cancellation_ratio": 0.3668988273395821
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 25,
+      "attention_sharpness_mean_max_probability": 0.7945727165788412,
+      "weighted_sum_loss": 0.02001702522041493,
+      "residual2_loss": 0.02188179112921851,
+      "float_final_residual_cancellation_ratio": 0.3294206900910012
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 26,
+      "attention_sharpness_mean_max_probability": 0.8786822073161602,
+      "weighted_sum_loss": 0.014665474129023082,
+      "residual2_loss": 0.015945314092859153,
+      "float_final_residual_cancellation_ratio": 0.3395491738011883
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 27,
+      "attention_sharpness_mean_max_probability": 0.8205864448100328,
+      "weighted_sum_loss": 0.029893447612665436,
+      "residual2_loss": 0.018433603449395486,
+      "float_final_residual_cancellation_ratio": 0.30506655380140973
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 28,
+      "attention_sharpness_mean_max_probability": 0.7927517294883728,
+      "weighted_sum_loss": 0.024297808307414792,
+      "residual2_loss": 0.02421301507640894,
+      "float_final_residual_cancellation_ratio": 0.29682482626922296
+    },
+    {
+      "case": "query-3",
+      "path": "query",
+      "width": 29,
+      "attention_sharpness_mean_max_probability": 0.8643371500074863,
+      "weighted_sum_loss": 0.020972466635886255,
+      "residual2_loss": 0.1198961902185477,
+      "float_final_residual_cancellation_ratio": 0.16462451118201227
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 1,
+      "attention_sharpness_mean_max_probability": 1.0,
+      "weighted_sum_loss": 0.0948775457236527,
+      "residual2_loss": 0.1077419942469805,
+      "float_final_residual_cancellation_ratio": 0.13097404923515144
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 2,
+      "attention_sharpness_mean_max_probability": 0.9273238070309162,
+      "weighted_sum_loss": 0.040503623304644076,
+      "residual2_loss": 0.019543562428884442,
+      "float_final_residual_cancellation_ratio": 0.3119474599995915
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 3,
+      "attention_sharpness_mean_max_probability": 0.8852895796298981,
+      "weighted_sum_loss": 0.032680753167222076,
+      "residual2_loss": 0.01107988023626627,
+      "float_final_residual_cancellation_ratio": 0.43165784972903987
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 4,
+      "attention_sharpness_mean_max_probability": 0.8263233341276646,
+      "weighted_sum_loss": 0.03008164803867064,
+      "residual2_loss": 0.017493169014245247,
+      "float_final_residual_cancellation_ratio": 0.32524990702143575
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 5,
+      "attention_sharpness_mean_max_probability": 0.7942727990448475,
+      "weighted_sum_loss": 0.038177864952650076,
+      "residual2_loss": 0.03532069753181377,
+      "float_final_residual_cancellation_ratio": 0.28484628108021265
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 6,
+      "attention_sharpness_mean_max_probability": 0.8398671690374613,
+      "weighted_sum_loss": 0.01995825331815504,
+      "residual2_loss": 0.02890828416739999,
+      "float_final_residual_cancellation_ratio": 0.4636036023623178
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 7,
+      "attention_sharpness_mean_max_probability": 0.7042954843491316,
+      "weighted_sum_loss": 0.04407501525063506,
+      "residual2_loss": 0.021241872431140285,
+      "float_final_residual_cancellation_ratio": 0.4063562379139811
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 8,
+      "attention_sharpness_mean_max_probability": 0.7248093243688345,
+      "weighted_sum_loss": 0.04829283581735444,
+      "residual2_loss": 0.02744933073591649,
+      "float_final_residual_cancellation_ratio": 0.3366241194462555
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 9,
+      "attention_sharpness_mean_max_probability": 0.8077502101659775,
+      "weighted_sum_loss": 0.03376269670721266,
+      "residual2_loss": 0.011134674934528577,
+      "float_final_residual_cancellation_ratio": 0.42148371584970595
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 10,
+      "attention_sharpness_mean_max_probability": 0.7518309522420168,
+      "weighted_sum_loss": 0.03877185951747153,
+      "residual2_loss": 0.01844659015779726,
+      "float_final_residual_cancellation_ratio": 0.3432575774610914
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 11,
+      "attention_sharpness_mean_max_probability": 0.7712082602083683,
+      "weighted_sum_loss": 0.02933057702839026,
+      "residual2_loss": 0.030610812846204594,
+      "float_final_residual_cancellation_ratio": 0.28027577454141106
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 12,
+      "attention_sharpness_mean_max_probability": 0.7124256752431393,
+      "weighted_sum_loss": 0.0317875676154169,
+      "residual2_loss": 0.024970330878561375,
+      "float_final_residual_cancellation_ratio": 0.33375263930410576
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 13,
+      "attention_sharpness_mean_max_probability": 0.783213228918612,
+      "weighted_sum_loss": 0.01828289778139336,
+      "residual2_loss": 0.026622851262430358,
+      "float_final_residual_cancellation_ratio": 0.3176380499343348
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 14,
+      "attention_sharpness_mean_max_probability": 0.7552329208701849,
+      "weighted_sum_loss": 0.016460894064148746,
+      "residual2_loss": 0.03121414392685795,
+      "float_final_residual_cancellation_ratio": 0.3113789592219284
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 15,
+      "attention_sharpness_mean_max_probability": 0.8642022646963596,
+      "weighted_sum_loss": 0.01722021160427789,
+      "residual2_loss": 0.015370121787922963,
+      "float_final_residual_cancellation_ratio": 0.3572830425802993
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 16,
+      "attention_sharpness_mean_max_probability": 0.8127985876053572,
+      "weighted_sum_loss": 0.013403012168766826,
+      "residual2_loss": 0.02438385765940887,
+      "float_final_residual_cancellation_ratio": 0.31965875819864525
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 17,
+      "attention_sharpness_mean_max_probability": 0.8542859628796577,
+      "weighted_sum_loss": 0.037192422687138516,
+      "residual2_loss": 0.0255990262830752,
+      "float_final_residual_cancellation_ratio": 0.3141046659457601
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 18,
+      "attention_sharpness_mean_max_probability": 0.8364492878317833,
+      "weighted_sum_loss": 0.021946701130613366,
+      "residual2_loss": 0.021964785212892246,
+      "float_final_residual_cancellation_ratio": 0.2911999149548988
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 19,
+      "attention_sharpness_mean_max_probability": 0.8158815037459135,
+      "weighted_sum_loss": 0.04432319447395339,
+      "residual2_loss": 0.019617415519480264,
+      "float_final_residual_cancellation_ratio": 0.3340253883252877
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 20,
+      "attention_sharpness_mean_max_probability": 0.8226197250187397,
+      "weighted_sum_loss": 0.022106451163596774,
+      "residual2_loss": 0.04543644707797734,
+      "float_final_residual_cancellation_ratio": 0.28802365677847963
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 21,
+      "attention_sharpness_mean_max_probability": 0.7874174043536186,
+      "weighted_sum_loss": 0.022356861427561214,
+      "residual2_loss": 0.02635790452119502,
+      "float_final_residual_cancellation_ratio": 0.3537714612376951
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 22,
+      "attention_sharpness_mean_max_probability": 0.8545907698571682,
+      "weighted_sum_loss": 0.017261358376532976,
+      "residual2_loss": 0.026071486578599368,
+      "float_final_residual_cancellation_ratio": 0.2708706407592495
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 23,
+      "attention_sharpness_mean_max_probability": 0.835414694622159,
+      "weighted_sum_loss": 0.01191581906759076,
+      "residual2_loss": 0.020227161509411618,
+      "float_final_residual_cancellation_ratio": 0.30938138661973424
+    },
+    {
+      "case": "query-4",
+      "path": "query",
+      "width": 24,
+      "attention_sharpness_mean_max_probability": 0.8902301006019115,
+      "weighted_sum_loss": 0.021579682654554233,
+      "residual2_loss": 0.10333507091344707,
+      "float_final_residual_cancellation_ratio": 0.14920337272328665
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 1,
+      "attention_sharpness_mean_max_probability": 1.0,
+      "weighted_sum_loss": 0.0948775457236527,
+      "residual2_loss": 0.1077419942469805,
+      "float_final_residual_cancellation_ratio": 0.13097404923515144
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 2,
+      "attention_sharpness_mean_max_probability": 0.9273238070309162,
+      "weighted_sum_loss": 0.040503623304644076,
+      "residual2_loss": 0.019543562428884442,
+      "float_final_residual_cancellation_ratio": 0.3119474599995915
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 3,
+      "attention_sharpness_mean_max_probability": 0.8852895796298981,
+      "weighted_sum_loss": 0.032680753167222076,
+      "residual2_loss": 0.01107988023626627,
+      "float_final_residual_cancellation_ratio": 0.43165784972903987
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 4,
+      "attention_sharpness_mean_max_probability": 0.8263233341276646,
+      "weighted_sum_loss": 0.03008164803867064,
+      "residual2_loss": 0.017493169014245247,
+      "float_final_residual_cancellation_ratio": 0.32524990702143575
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 5,
+      "attention_sharpness_mean_max_probability": 0.7942727990448475,
+      "weighted_sum_loss": 0.038177864952650076,
+      "residual2_loss": 0.03532069753181377,
+      "float_final_residual_cancellation_ratio": 0.28484628108021265
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 6,
+      "attention_sharpness_mean_max_probability": 0.8398671690374613,
+      "weighted_sum_loss": 0.01995825331815504,
+      "residual2_loss": 0.02890828416739999,
+      "float_final_residual_cancellation_ratio": 0.4636036023623178
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 7,
+      "attention_sharpness_mean_max_probability": 0.7042954843491316,
+      "weighted_sum_loss": 0.04407501525063506,
+      "residual2_loss": 0.021241872431140285,
+      "float_final_residual_cancellation_ratio": 0.4063562379139811
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 8,
+      "attention_sharpness_mean_max_probability": 0.7248093243688345,
+      "weighted_sum_loss": 0.04829283581735444,
+      "residual2_loss": 0.02744933073591649,
+      "float_final_residual_cancellation_ratio": 0.3366241194462555
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 9,
+      "attention_sharpness_mean_max_probability": 0.8077502101659775,
+      "weighted_sum_loss": 0.03376269670721266,
+      "residual2_loss": 0.011134674934528577,
+      "float_final_residual_cancellation_ratio": 0.42148371584970595
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 10,
+      "attention_sharpness_mean_max_probability": 0.7518309522420168,
+      "weighted_sum_loss": 0.03877185951747153,
+      "residual2_loss": 0.01844659015779726,
+      "float_final_residual_cancellation_ratio": 0.3432575774610914
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 11,
+      "attention_sharpness_mean_max_probability": 0.7712082602083683,
+      "weighted_sum_loss": 0.02933057702839026,
+      "residual2_loss": 0.030610812846204594,
+      "float_final_residual_cancellation_ratio": 0.28027577454141106
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 12,
+      "attention_sharpness_mean_max_probability": 0.7124256752431393,
+      "weighted_sum_loss": 0.0317875676154169,
+      "residual2_loss": 0.024970330878561375,
+      "float_final_residual_cancellation_ratio": 0.33375263930410576
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 13,
+      "attention_sharpness_mean_max_probability": 0.783213228918612,
+      "weighted_sum_loss": 0.01828289778139336,
+      "residual2_loss": 0.026622851262430358,
+      "float_final_residual_cancellation_ratio": 0.3176380499343348
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 14,
+      "attention_sharpness_mean_max_probability": 0.7552329208701849,
+      "weighted_sum_loss": 0.016460894064148746,
+      "residual2_loss": 0.03121414392685795,
+      "float_final_residual_cancellation_ratio": 0.3113789592219284
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 15,
+      "attention_sharpness_mean_max_probability": 0.8642022646963596,
+      "weighted_sum_loss": 0.01722021160427789,
+      "residual2_loss": 0.015370121787922963,
+      "float_final_residual_cancellation_ratio": 0.3572830425802993
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 16,
+      "attention_sharpness_mean_max_probability": 0.8127985876053572,
+      "weighted_sum_loss": 0.013403012168766826,
+      "residual2_loss": 0.02438385765940887,
+      "float_final_residual_cancellation_ratio": 0.31965875819864525
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 17,
+      "attention_sharpness_mean_max_probability": 0.8542859628796577,
+      "weighted_sum_loss": 0.037192422687138516,
+      "residual2_loss": 0.0255990262830752,
+      "float_final_residual_cancellation_ratio": 0.3141046659457601
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 18,
+      "attention_sharpness_mean_max_probability": 0.8364492878317833,
+      "weighted_sum_loss": 0.021946701130613366,
+      "residual2_loss": 0.021964785212892246,
+      "float_final_residual_cancellation_ratio": 0.2911999149548988
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 19,
+      "attention_sharpness_mean_max_probability": 0.8659974411129951,
+      "weighted_sum_loss": 0.052974403275761084,
+      "residual2_loss": 0.019615020935056515,
+      "float_final_residual_cancellation_ratio": 0.31973401002279295
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 20,
+      "attention_sharpness_mean_max_probability": 0.80905681848526,
+      "weighted_sum_loss": 0.050216021238978614,
+      "residual2_loss": 0.021462962468680624,
+      "float_final_residual_cancellation_ratio": 0.36294907363806833
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 21,
+      "attention_sharpness_mean_max_probability": 0.8020537290722132,
+      "weighted_sum_loss": 0.04093546730550357,
+      "residual2_loss": 0.020424839259650995,
+      "float_final_residual_cancellation_ratio": 0.37731063660546604
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 22,
+      "attention_sharpness_mean_max_probability": 0.7910783495754004,
+      "weighted_sum_loss": 0.03766641355814648,
+      "residual2_loss": 0.0202931142764049,
+      "float_final_residual_cancellation_ratio": 0.3822390772403938
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 23,
+      "attention_sharpness_mean_max_probability": 0.8542363792657852,
+      "weighted_sum_loss": 0.017219247800858373,
+      "residual2_loss": 0.028211728705625938,
+      "float_final_residual_cancellation_ratio": 0.3326180988567479
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 24,
+      "attention_sharpness_mean_max_probability": 0.7905226889997721,
+      "weighted_sum_loss": 0.022136758756802988,
+      "residual2_loss": 0.05267014947123805,
+      "float_final_residual_cancellation_ratio": 0.2712491231273796
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 25,
+      "attention_sharpness_mean_max_probability": 0.8684320840984583,
+      "weighted_sum_loss": 0.01623719986750216,
+      "residual2_loss": 0.020661436481384188,
+      "float_final_residual_cancellation_ratio": 0.35362472037772574
+    },
+    {
+      "case": "query-5",
+      "path": "query",
+      "width": 26,
+      "attention_sharpness_mean_max_probability": 0.8926175385713577,
+      "weighted_sum_loss": 0.021754934053286656,
+      "residual2_loss": 0.1464170525673132,
+      "float_final_residual_cancellation_ratio": 0.14995456543128058
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 1,
+      "attention_sharpness_mean_max_probability": 1.0,
+      "weighted_sum_loss": 0.0948775457236527,
+      "residual2_loss": 0.1077419942469805,
+      "float_final_residual_cancellation_ratio": 0.13097404923515144
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 2,
+      "attention_sharpness_mean_max_probability": 0.9273238070309162,
+      "weighted_sum_loss": 0.040503623304644076,
+      "residual2_loss": 0.019543562428884442,
+      "float_final_residual_cancellation_ratio": 0.3119474599995915
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 3,
+      "attention_sharpness_mean_max_probability": 0.8852895796298981,
+      "weighted_sum_loss": 0.032680753167222076,
+      "residual2_loss": 0.01107988023626627,
+      "float_final_residual_cancellation_ratio": 0.43165784972903987
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 4,
+      "attention_sharpness_mean_max_probability": 0.8263233341276646,
+      "weighted_sum_loss": 0.03008164803867064,
+      "residual2_loss": 0.017493169014245247,
+      "float_final_residual_cancellation_ratio": 0.32524990702143575
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 5,
+      "attention_sharpness_mean_max_probability": 0.7942727990448475,
+      "weighted_sum_loss": 0.038177864952650076,
+      "residual2_loss": 0.03532069753181377,
+      "float_final_residual_cancellation_ratio": 0.28484628108021265
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 6,
+      "attention_sharpness_mean_max_probability": 0.8398671690374613,
+      "weighted_sum_loss": 0.01995825331815504,
+      "residual2_loss": 0.02890828416739999,
+      "float_final_residual_cancellation_ratio": 0.4636036023623178
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 7,
+      "attention_sharpness_mean_max_probability": 0.7042954843491316,
+      "weighted_sum_loss": 0.04407501525063506,
+      "residual2_loss": 0.021241872431140285,
+      "float_final_residual_cancellation_ratio": 0.4063562379139811
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 8,
+      "attention_sharpness_mean_max_probability": 0.7248093243688345,
+      "weighted_sum_loss": 0.04829283581735444,
+      "residual2_loss": 0.02744933073591649,
+      "float_final_residual_cancellation_ratio": 0.3366241194462555
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 9,
+      "attention_sharpness_mean_max_probability": 0.8077502101659775,
+      "weighted_sum_loss": 0.03376269670721266,
+      "residual2_loss": 0.011134674934528577,
+      "float_final_residual_cancellation_ratio": 0.42148371584970595
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 10,
+      "attention_sharpness_mean_max_probability": 0.7518309522420168,
+      "weighted_sum_loss": 0.03877185951747153,
+      "residual2_loss": 0.01844659015779726,
+      "float_final_residual_cancellation_ratio": 0.3432575774610914
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 11,
+      "attention_sharpness_mean_max_probability": 0.7712082602083683,
+      "weighted_sum_loss": 0.02933057702839026,
+      "residual2_loss": 0.030610812846204594,
+      "float_final_residual_cancellation_ratio": 0.28027577454141106
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 12,
+      "attention_sharpness_mean_max_probability": 0.7124256752431393,
+      "weighted_sum_loss": 0.0317875676154169,
+      "residual2_loss": 0.024970330878561375,
+      "float_final_residual_cancellation_ratio": 0.33375263930410576
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 13,
+      "attention_sharpness_mean_max_probability": 0.783213228918612,
+      "weighted_sum_loss": 0.01828289778139336,
+      "residual2_loss": 0.026622851262430358,
+      "float_final_residual_cancellation_ratio": 0.3176380499343348
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 14,
+      "attention_sharpness_mean_max_probability": 0.7552329208701849,
+      "weighted_sum_loss": 0.016460894064148746,
+      "residual2_loss": 0.03121414392685795,
+      "float_final_residual_cancellation_ratio": 0.3113789592219284
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 15,
+      "attention_sharpness_mean_max_probability": 0.8642022646963596,
+      "weighted_sum_loss": 0.01722021160427789,
+      "residual2_loss": 0.015370121787922963,
+      "float_final_residual_cancellation_ratio": 0.3572830425802993
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 16,
+      "attention_sharpness_mean_max_probability": 0.8127985876053572,
+      "weighted_sum_loss": 0.013403012168766826,
+      "residual2_loss": 0.02438385765940887,
+      "float_final_residual_cancellation_ratio": 0.31965875819864525
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 17,
+      "attention_sharpness_mean_max_probability": 0.8542859628796577,
+      "weighted_sum_loss": 0.037192422687138516,
+      "residual2_loss": 0.0255990262830752,
+      "float_final_residual_cancellation_ratio": 0.3141046659457601
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 18,
+      "attention_sharpness_mean_max_probability": 0.8364492878317833,
+      "weighted_sum_loss": 0.021946701130613366,
+      "residual2_loss": 0.021964785212892246,
+      "float_final_residual_cancellation_ratio": 0.2911999149548988
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 19,
+      "attention_sharpness_mean_max_probability": 0.8417008984833956,
+      "weighted_sum_loss": 0.053135461668947226,
+      "residual2_loss": 0.01999631531279078,
+      "float_final_residual_cancellation_ratio": 0.33297983618786203
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 20,
+      "attention_sharpness_mean_max_probability": 0.8203276619315147,
+      "weighted_sum_loss": 0.023387127804131103,
+      "residual2_loss": 0.015178168188557772,
+      "float_final_residual_cancellation_ratio": 0.3868723241932115
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 21,
+      "attention_sharpness_mean_max_probability": 0.8566766940057278,
+      "weighted_sum_loss": 0.03149035267617317,
+      "residual2_loss": 0.027297578193518524,
+      "float_final_residual_cancellation_ratio": 0.3133304973933408
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 22,
+      "attention_sharpness_mean_max_probability": 0.7748609930276871,
+      "weighted_sum_loss": 0.02359192327797388,
+      "residual2_loss": 0.02601500634867604,
+      "float_final_residual_cancellation_ratio": 0.32937045527486586
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 23,
+      "attention_sharpness_mean_max_probability": 0.7860677819699049,
+      "weighted_sum_loss": 0.016410184696605823,
+      "residual2_loss": 0.026513126019543032,
+      "float_final_residual_cancellation_ratio": 0.34324230562553304
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 24,
+      "attention_sharpness_mean_max_probability": 0.811814796179533,
+      "weighted_sum_loss": 0.01672704447059825,
+      "residual2_loss": 0.040995793021495586,
+      "float_final_residual_cancellation_ratio": 0.2905164287366802
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 25,
+      "attention_sharpness_mean_max_probability": 0.8308949768543243,
+      "weighted_sum_loss": 0.012818356876832415,
+      "residual2_loss": 0.032128418055348495,
+      "float_final_residual_cancellation_ratio": 0.31295816153995876
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 26,
+      "attention_sharpness_mean_max_probability": 0.7684676330536604,
+      "weighted_sum_loss": 0.017588940572359157,
+      "residual2_loss": 0.022032463285750037,
+      "float_final_residual_cancellation_ratio": 0.3217185304664118
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 27,
+      "attention_sharpness_mean_max_probability": 0.8158081565052271,
+      "weighted_sum_loss": 0.017101773624403682,
+      "residual2_loss": 0.010187949316750933,
+      "float_final_residual_cancellation_ratio": 0.38889291781625906
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 28,
+      "attention_sharpness_mean_max_probability": 0.8086576983332634,
+      "weighted_sum_loss": 0.011512614476716143,
+      "residual2_loss": 0.02060551130206678,
+      "float_final_residual_cancellation_ratio": 0.39779386917573656
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 29,
+      "attention_sharpness_mean_max_probability": 0.7631285032257438,
+      "weighted_sum_loss": 0.02513700835308008,
+      "residual2_loss": 0.02134528246133316,
+      "float_final_residual_cancellation_ratio": 0.3236709102290678
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 30,
+      "attention_sharpness_mean_max_probability": 0.7973046395927668,
+      "weighted_sum_loss": 0.0277828203450603,
+      "residual2_loss": 0.016936368352335363,
+      "float_final_residual_cancellation_ratio": 0.3317951914233628
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 31,
+      "attention_sharpness_mean_max_probability": 0.8860126435756683,
+      "weighted_sum_loss": 0.015278554306245806,
+      "residual2_loss": 0.027113942180170714,
+      "float_final_residual_cancellation_ratio": 0.29340981939599925
+    },
+    {
+      "case": "query-6",
+      "path": "query",
+      "width": 32,
+      "attention_sharpness_mean_max_probability": 0.8825789727270603,
+      "weighted_sum_loss": 0.021086664035401825,
+      "residual2_loss": 0.1128917799245035,
+      "float_final_residual_cancellation_ratio": 0.1710060794086463
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "width": 1,
+      "attention_sharpness_mean_max_probability": 1.0,
+      "weighted_sum_loss": 0.09444101025533447,
+      "residual2_loss": 0.11723301477636339,
+      "float_final_residual_cancellation_ratio": 0.14528051273687373
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "width": 2,
+      "attention_sharpness_mean_max_probability": 0.8890243321657181,
+      "weighted_sum_loss": 0.01815131226002864,
+      "residual2_loss": 0.009184991538628284,
+      "float_final_residual_cancellation_ratio": 0.4613237053352889
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "width": 3,
+      "attention_sharpness_mean_max_probability": 0.8346344586461782,
+      "weighted_sum_loss": 0.013947338596313363,
+      "residual2_loss": 0.009096132046831351,
+      "float_final_residual_cancellation_ratio": 0.44257420658657354
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "width": 4,
+      "attention_sharpness_mean_max_probability": 0.8623243309557438,
+      "weighted_sum_loss": 0.0297251269754788,
+      "residual2_loss": 0.009136383060523334,
+      "float_final_residual_cancellation_ratio": 0.5515641196691214
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "width": 5,
+      "attention_sharpness_mean_max_probability": 0.8894019648432732,
+      "weighted_sum_loss": 0.02809115299940612,
+      "residual2_loss": 0.024031666094878168,
+      "float_final_residual_cancellation_ratio": 0.31371412160719525
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "width": 6,
+      "attention_sharpness_mean_max_probability": 0.863990031182766,
+      "weighted_sum_loss": 0.025253377827646695,
+      "residual2_loss": 0.02976968555701187,
+      "float_final_residual_cancellation_ratio": 0.3646747899193479
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "width": 7,
+      "attention_sharpness_mean_max_probability": 0.7893411088734865,
+      "weighted_sum_loss": 0.022083340582217836,
+      "residual2_loss": 0.030278505600650818,
+      "float_final_residual_cancellation_ratio": 0.34775034832275964
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "width": 8,
+      "attention_sharpness_mean_max_probability": 0.8855046257376671,
+      "weighted_sum_loss": 0.012626780782891478,
+      "residual2_loss": 0.017247508225481822,
+      "float_final_residual_cancellation_ratio": 0.3218762560295613
+    },
+    {
+      "case": "document-0",
+      "path": "document",
+      "width": 9,
+      "attention_sharpness_mean_max_probability": 0.8990091942250729,
+      "weighted_sum_loss": 0.01756878324615352,
+      "residual2_loss": 0.06757636375005105,
+      "float_final_residual_cancellation_ratio": 0.20053947574591519
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 1,
+      "attention_sharpness_mean_max_probability": 1.0,
+      "weighted_sum_loss": 0.09291762853722119,
+      "residual2_loss": 0.16202957432440346,
+      "float_final_residual_cancellation_ratio": 0.11113250484545742
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 2,
+      "attention_sharpness_mean_max_probability": 0.8693051300942898,
+      "weighted_sum_loss": 0.020782834938469774,
+      "residual2_loss": 0.014210125000596374,
+      "float_final_residual_cancellation_ratio": 0.38163833735716696
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 3,
+      "attention_sharpness_mean_max_probability": 0.8826141469180584,
+      "weighted_sum_loss": 0.018509662663017012,
+      "residual2_loss": 0.02158528829286499,
+      "float_final_residual_cancellation_ratio": 0.3438326924928447
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 4,
+      "attention_sharpness_mean_max_probability": 0.828060332685709,
+      "weighted_sum_loss": 0.033893960375196985,
+      "residual2_loss": 0.0200664473403791,
+      "float_final_residual_cancellation_ratio": 0.367757061362296
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 5,
+      "attention_sharpness_mean_max_probability": 0.8229949157685041,
+      "weighted_sum_loss": 0.013810339152124151,
+      "residual2_loss": 0.015165987413534698,
+      "float_final_residual_cancellation_ratio": 0.4071833133812167
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 6,
+      "attention_sharpness_mean_max_probability": 0.7977665979415178,
+      "weighted_sum_loss": 0.01279772815936775,
+      "residual2_loss": 0.015902572224419376,
+      "float_final_residual_cancellation_ratio": 0.3528309412518887
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 7,
+      "attention_sharpness_mean_max_probability": 0.804437343031168,
+      "weighted_sum_loss": 0.018402412010581126,
+      "residual2_loss": 0.013958754858231615,
+      "float_final_residual_cancellation_ratio": 0.3557014925220822
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 8,
+      "attention_sharpness_mean_max_probability": 0.8664529621601105,
+      "weighted_sum_loss": 0.010853031425946735,
+      "residual2_loss": 0.019383507428697766,
+      "float_final_residual_cancellation_ratio": 0.37129209512436717
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 9,
+      "attention_sharpness_mean_max_probability": 0.855122771114111,
+      "weighted_sum_loss": 0.01835282702071217,
+      "residual2_loss": 0.011763896882843072,
+      "float_final_residual_cancellation_ratio": 0.4094517965995706
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 10,
+      "attention_sharpness_mean_max_probability": 0.837709428742528,
+      "weighted_sum_loss": 0.01630977305195569,
+      "residual2_loss": 0.028714085578302906,
+      "float_final_residual_cancellation_ratio": 0.3106874163969696
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 11,
+      "attention_sharpness_mean_max_probability": 0.8467695973813534,
+      "weighted_sum_loss": 0.013450800865321688,
+      "residual2_loss": 0.015625325837856696,
+      "float_final_residual_cancellation_ratio": 0.3646394492020179
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 12,
+      "attention_sharpness_mean_max_probability": 0.7938616182655096,
+      "weighted_sum_loss": 0.02809698178644815,
+      "residual2_loss": 0.03365551386685639,
+      "float_final_residual_cancellation_ratio": 0.3299790945591687
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 13,
+      "attention_sharpness_mean_max_probability": 0.8191099315881729,
+      "weighted_sum_loss": 0.029647884757025067,
+      "residual2_loss": 0.039356158446195555,
+      "float_final_residual_cancellation_ratio": 0.28499690376854203
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 14,
+      "attention_sharpness_mean_max_probability": 0.8420364540070295,
+      "weighted_sum_loss": 0.023427783053051265,
+      "residual2_loss": 0.02873162583936184,
+      "float_final_residual_cancellation_ratio": 0.31761519431837176
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 15,
+      "attention_sharpness_mean_max_probability": 0.7969278991222382,
+      "weighted_sum_loss": 0.024372401045392622,
+      "residual2_loss": 0.016374565726664847,
+      "float_final_residual_cancellation_ratio": 0.36998808143447875
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 16,
+      "attention_sharpness_mean_max_probability": 0.8128348365426064,
+      "weighted_sum_loss": 0.02212657883983027,
+      "residual2_loss": 0.008716784533393862,
+      "float_final_residual_cancellation_ratio": 0.4214099004798356
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 17,
+      "attention_sharpness_mean_max_probability": 0.8450873419642448,
+      "weighted_sum_loss": 0.02522601762584431,
+      "residual2_loss": 0.018445355761560145,
+      "float_final_residual_cancellation_ratio": 0.35417883902526526
+    },
+    {
+      "case": "document-1",
+      "path": "document",
+      "width": 18,
+      "attention_sharpness_mean_max_probability": 0.8733572028577328,
+      "weighted_sum_loss": 0.022658871871612862,
+      "residual2_loss": 0.04562394607375697,
+      "float_final_residual_cancellation_ratio": 0.2365058684433957
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "width": 1,
+      "attention_sharpness_mean_max_probability": 1.0,
+      "weighted_sum_loss": 0.10206389539563865,
+      "residual2_loss": 0.19337734110959925,
+      "float_final_residual_cancellation_ratio": 0.12405584875820604
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "width": 2,
+      "attention_sharpness_mean_max_probability": 0.9137797728180885,
+      "weighted_sum_loss": 0.03440701457468409,
+      "residual2_loss": 0.015732547345717385,
+      "float_final_residual_cancellation_ratio": 0.3528257235028341
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "width": 3,
+      "attention_sharpness_mean_max_probability": 0.8140274565666914,
+      "weighted_sum_loss": 0.02599458376832864,
+      "residual2_loss": 0.016758666026822855,
+      "float_final_residual_cancellation_ratio": 0.5488373385547181
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "width": 4,
+      "attention_sharpness_mean_max_probability": 0.8686489220708609,
+      "weighted_sum_loss": 0.09695391062407888,
+      "residual2_loss": 0.018170445008760194,
+      "float_final_residual_cancellation_ratio": 0.5629362470333172
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "width": 5,
+      "attention_sharpness_mean_max_probability": 0.8931472823023796,
+      "weighted_sum_loss": 0.028336520074742966,
+      "residual2_loss": 0.013651686328724488,
+      "float_final_residual_cancellation_ratio": 0.38436161966552357
+    },
+    {
+      "case": "document-2",
+      "path": "document",
+      "width": 6,
+      "attention_sharpness_mean_max_probability": 0.8842978589236736,
+      "weighted_sum_loss": 0.02229673398410048,
+      "residual2_loss": 0.030970560126973745,
+      "float_final_residual_cancellation_ratio": 0.2633891164052633
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "width": 1,
+      "attention_sharpness_mean_max_probability": 1.0,
+      "weighted_sum_loss": 0.09946209508414794,
+      "residual2_loss": 0.22952131470427184,
+      "float_final_residual_cancellation_ratio": 0.12184655174928685
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "width": 2,
+      "attention_sharpness_mean_max_probability": 0.8730290234088898,
+      "weighted_sum_loss": 0.024257788999263674,
+      "residual2_loss": 0.022508611979794813,
+      "float_final_residual_cancellation_ratio": 0.3591479492950646
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "width": 3,
+      "attention_sharpness_mean_max_probability": 0.8882693815976381,
+      "weighted_sum_loss": 0.02919338077334621,
+      "residual2_loss": 0.01918744156354102,
+      "float_final_residual_cancellation_ratio": 0.3982761337903212
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "width": 4,
+      "attention_sharpness_mean_max_probability": 0.9090458750724792,
+      "weighted_sum_loss": 0.019428673609689695,
+      "residual2_loss": 0.01637766146170705,
+      "float_final_residual_cancellation_ratio": 0.3520195851144178
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "width": 5,
+      "attention_sharpness_mean_max_probability": 0.8750707451254129,
+      "weighted_sum_loss": 0.02179390326694597,
+      "residual2_loss": 0.01410277531316606,
+      "float_final_residual_cancellation_ratio": 0.39718520736942586
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "width": 6,
+      "attention_sharpness_mean_max_probability": 0.83590417355299,
+      "weighted_sum_loss": 0.01821567928383705,
+      "residual2_loss": 0.021130691788632916,
+      "float_final_residual_cancellation_ratio": 0.33668989435037083
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "width": 7,
+      "attention_sharpness_mean_max_probability": 0.8638639505952597,
+      "weighted_sum_loss": 0.024367477190217035,
+      "residual2_loss": 0.014735455515904272,
+      "float_final_residual_cancellation_ratio": 0.33482091559966604
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "width": 8,
+      "attention_sharpness_mean_max_probability": 0.8138284739106894,
+      "weighted_sum_loss": 0.034432187757655774,
+      "residual2_loss": 0.028588012081088188,
+      "float_final_residual_cancellation_ratio": 0.32211107887790985
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "width": 9,
+      "attention_sharpness_mean_max_probability": 0.8433686420321465,
+      "weighted_sum_loss": 0.020168644212387066,
+      "residual2_loss": 0.018743603312881607,
+      "float_final_residual_cancellation_ratio": 0.3273630356336268
+    },
+    {
+      "case": "document-3",
+      "path": "document",
+      "width": 10,
+      "attention_sharpness_mean_max_probability": 0.8673721738159657,
+      "weighted_sum_loss": 0.022643037308183067,
+      "residual2_loss": 0.06671892065252494,
+      "float_final_residual_cancellation_ratio": 0.20973094859612423
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "width": 1,
+      "attention_sharpness_mean_max_probability": 1.0,
+      "weighted_sum_loss": 0.09156418989741322,
+      "residual2_loss": 0.3473839910970443,
+      "float_final_residual_cancellation_ratio": 0.1069156435340157
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "width": 2,
+      "attention_sharpness_mean_max_probability": 0.8635845109820366,
+      "weighted_sum_loss": 0.03908593778218028,
+      "residual2_loss": 0.019926783518528057,
+      "float_final_residual_cancellation_ratio": 0.3521963894964061
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "width": 3,
+      "attention_sharpness_mean_max_probability": 0.799296060577035,
+      "weighted_sum_loss": 0.0278967579090742,
+      "residual2_loss": 0.015830492767678117,
+      "float_final_residual_cancellation_ratio": 0.4187662577081944
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "width": 4,
+      "attention_sharpness_mean_max_probability": 0.8531646355986595,
+      "weighted_sum_loss": 0.011777974851222672,
+      "residual2_loss": 0.026504017334888497,
+      "float_final_residual_cancellation_ratio": 0.2834683845718741
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "width": 5,
+      "attention_sharpness_mean_max_probability": 0.8523864448070526,
+      "weighted_sum_loss": 0.012685983858655492,
+      "residual2_loss": 0.020057110053695704,
+      "float_final_residual_cancellation_ratio": 0.32555269110550755
+    },
+    {
+      "case": "document-4",
+      "path": "document",
+      "width": 6,
+      "attention_sharpness_mean_max_probability": 0.865914162248373,
+      "weighted_sum_loss": 0.01319215744914759,
+      "residual2_loss": 0.028931909000771805,
+      "float_final_residual_cancellation_ratio": 0.26276803863663856
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "width": 1,
+      "attention_sharpness_mean_max_probability": 1.0,
+      "weighted_sum_loss": 0.10112812241126234,
+      "residual2_loss": 0.19478168111398786,
+      "float_final_residual_cancellation_ratio": 0.12563214988335414
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "width": 2,
+      "attention_sharpness_mean_max_probability": 0.87806785851717,
+      "weighted_sum_loss": 0.06892607131431006,
+      "residual2_loss": 0.014713903759481672,
+      "float_final_residual_cancellation_ratio": 0.4313124640815814
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "width": 3,
+      "attention_sharpness_mean_max_probability": 0.8076179437339306,
+      "weighted_sum_loss": 0.05156724624656517,
+      "residual2_loss": 0.01586738628643858,
+      "float_final_residual_cancellation_ratio": 0.4193627606789934
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "width": 4,
+      "attention_sharpness_mean_max_probability": 0.8713118620216846,
+      "weighted_sum_loss": 0.019683242864992012,
+      "residual2_loss": 0.016275483209630792,
+      "float_final_residual_cancellation_ratio": 0.37267314296822723
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "width": 5,
+      "attention_sharpness_mean_max_probability": 0.7847334258258343,
+      "weighted_sum_loss": 0.018873421746188,
+      "residual2_loss": 0.026141399222809447,
+      "float_final_residual_cancellation_ratio": 0.30258495606387076
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "width": 6,
+      "attention_sharpness_mean_max_probability": 0.8538200594484806,
+      "weighted_sum_loss": 0.018141383943454104,
+      "residual2_loss": 0.0215323742971798,
+      "float_final_residual_cancellation_ratio": 0.34435655459875225
+    },
+    {
+      "case": "document-5",
+      "path": "document",
+      "width": 7,
+      "attention_sharpness_mean_max_probability": 0.8921861238777637,
+      "weighted_sum_loss": 0.015418579962333978,
+      "residual2_loss": 0.03994499498809767,
+      "float_final_residual_cancellation_ratio": 0.2542839181417754
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "width": 1,
+      "attention_sharpness_mean_max_probability": 1.0,
+      "weighted_sum_loss": 0.09790700257830154,
+      "residual2_loss": 0.32647366710666437,
+      "float_final_residual_cancellation_ratio": 0.11535622521815754
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "width": 2,
+      "attention_sharpness_mean_max_probability": 0.872178565710783,
+      "weighted_sum_loss": 0.02725213079903077,
+      "residual2_loss": 0.009777808582150715,
+      "float_final_residual_cancellation_ratio": 0.502867030411468
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "width": 3,
+      "attention_sharpness_mean_max_probability": 0.8855341263115406,
+      "weighted_sum_loss": 0.024844079945845032,
+      "residual2_loss": 0.0269344193974953,
+      "float_final_residual_cancellation_ratio": 0.32830301197593537
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "width": 4,
+      "attention_sharpness_mean_max_probability": 0.7858344446867704,
+      "weighted_sum_loss": 0.020778504949986787,
+      "residual2_loss": 0.02172114851844431,
+      "float_final_residual_cancellation_ratio": 0.3366121829665029
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "width": 5,
+      "attention_sharpness_mean_max_probability": 0.7669891994446516,
+      "weighted_sum_loss": 0.014194319880558859,
+      "residual2_loss": 0.021878206183650772,
+      "float_final_residual_cancellation_ratio": 0.3543278229772267
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "width": 6,
+      "attention_sharpness_mean_max_probability": 0.8080978505313396,
+      "weighted_sum_loss": 0.012554744870456158,
+      "residual2_loss": 0.027417893267476234,
+      "float_final_residual_cancellation_ratio": 0.3051468709075984
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "width": 7,
+      "attention_sharpness_mean_max_probability": 0.8226588629186153,
+      "weighted_sum_loss": 0.014490454741074243,
+      "residual2_loss": 0.029032666231700643,
+      "float_final_residual_cancellation_ratio": 0.3337349127879202
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "width": 8,
+      "attention_sharpness_mean_max_probability": 0.7897557504475117,
+      "weighted_sum_loss": 0.01747094121756443,
+      "residual2_loss": 0.015785594610226106,
+      "float_final_residual_cancellation_ratio": 0.3819672760021609
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "width": 9,
+      "attention_sharpness_mean_max_probability": 0.8243233766406775,
+      "weighted_sum_loss": 0.013703731287817322,
+      "residual2_loss": 0.012559151390144296,
+      "float_final_residual_cancellation_ratio": 0.4100160546043006
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "width": 10,
+      "attention_sharpness_mean_max_probability": 0.8130015134811401,
+      "weighted_sum_loss": 0.014740126332939085,
+      "residual2_loss": 0.010439433183534463,
+      "float_final_residual_cancellation_ratio": 0.40541638345518616
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "width": 11,
+      "attention_sharpness_mean_max_probability": 0.7565101953223348,
+      "weighted_sum_loss": 0.015394799158003014,
+      "residual2_loss": 0.02708587594965206,
+      "float_final_residual_cancellation_ratio": 0.35421389337807657
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "width": 12,
+      "attention_sharpness_mean_max_probability": 0.8048399724066257,
+      "weighted_sum_loss": 0.020328207968882572,
+      "residual2_loss": 0.01554415974188883,
+      "float_final_residual_cancellation_ratio": 0.3445474689722527
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "width": 13,
+      "attention_sharpness_mean_max_probability": 0.8929018974304199,
+      "weighted_sum_loss": 0.01299381350888218,
+      "residual2_loss": 0.03861541783254774,
+      "float_final_residual_cancellation_ratio": 0.2997999239362728
+    },
+    {
+      "case": "document-6",
+      "path": "document",
+      "width": 14,
+      "attention_sharpness_mean_max_probability": 0.8721318542957306,
+      "weighted_sum_loss": 0.018061068405177294,
+      "residual2_loss": 0.04551239909210614,
+      "float_final_residual_cancellation_ratio": 0.2511047237456785
+    }
+  ],
+  "elapsed_seconds": 131.95204390000436
+}
