@@ -105,6 +105,7 @@ Each section's bytes live at `[offset, offset + byte_size)`, aligned as declared
 |    40 | `DeltaFoldScales`       | `Int32`      | S-LoRA | adapter delta fold triples — a `DFS1` tensor manifest; adapter artifacts only |
 |    41 | `UFoldScales`           | `Int32`      | S-LoRA | adapter intermediate fold triples — a `UFS1` tensor manifest; adapter artifacts only |
 |    42 | `DampedGreedyConstants` | `Raw`        | 1.2 | opt-in decoder scale — a 12-byte `DGC1` payload (§ "Damped-greedy constants"); **optional** |
+|    43 | `QkChannelTable`        | `Int64`      | 1.5 | bit-2-gated `QKC1` dense source/landing/ratio vectors; required iff bit 2 is set |
 
 The tokenizer types (20–22) are emitted and interpreted at S1. `SchemaMasks` (30) is
 **optional at the current container version** — a v2
@@ -501,7 +502,8 @@ and a v1 loader rejects a v2 artifact — a rejection with a diagnostic, never a
 additions — distinct from `format_version`.** A version bump is for a field-layout
 change, a new required section, or an integrity-hash change; `flags` is for a
 capability that is optional (an old loader keeps working, unmodified, on an artifact
-that does not set the bit) and requires no new section or field. The loader accepts
+that does not set the bit). A capability may require its own flag-gated section; container
+layout, `CFG1`, and integrity construction remain version-owned. The loader accepts
 `flags` values that set only known bits and rejects (`BadHeader`) any unknown bit, so
 a future artifact carrying a capability an older loader does not recognize is refused
 rather than silently mis-loaded. Every artifact produced before a given bit existed has
@@ -520,7 +522,8 @@ bit is now a recorded fact here, not something a reader has to reconstruct from 
 |---|---|---|---|---|
 | 0 | `0x1` | `kOptionGFusedKLandingFlag` — Option-G fused post-RoPE K landing | 2 | `D-SLM2355` |
 | 1 | `0x2` | `kDampedGreedyArtifactConstantsFlag` — damped greedy anti-repetition decoding's carried scale constants (`SslmSectionType::DampedGreedyConstants`) | 2 | `D-SLM3794` |
-| 2–30 | `0x4`–`0x40000000` | Unclaimed — available for future allocation, sequentially from bit 2 | — | — |
+| 2 | `0x4` | `kQkNormFusedKChannelTableFlag` — requires `SslmSectionType::QkChannelTable` (`QKC1`, four dense Int64 vectors) | 2 | `D-SLM7036` |
+| 3–30 | `0x8`–`0x40000000` | Unclaimed — available for future allocation, sequentially from bit 3 | — | — |
 | 31 | `0x80000000` | **PERMANENTLY RESERVED FOR TESTING — never allocated to a real capability.** Every "the loader rejects an unknown `flags` bit" fixture (this file's own canary, any red-suite fixture exercising the same claim) uses this bit and only this bit, so the claim under test can never collide with a real allocation growing sequentially from bit 0. Chosen at the opposite end of the 32-bit space from where real allocations grow, specifically so this class of collision cannot recur without exhausting every other bit first. | n/a | ruled at T-2199 fold 23 (plan §3, above) |
 
 **Why a table now, not before.** Two collisions in one project's history (T-1894's bit-0 canary,

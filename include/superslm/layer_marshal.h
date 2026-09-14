@@ -78,6 +78,23 @@ inline superslm::CarriedScale ReadCarriedScale(const superslm::SslmKeyedConstant
 	                               superslm::SslmKeyedConstants::Value(*e, 1)};
 }
 
+inline superslm::CarriedScale CanonicalScaleTimes127(superslm::CarriedScale in) {
+	// `in.m` is admitted by ValidateFusedKCompositionDomains as a positive
+	// canonical 31-bit mantissa. Multiply exactly, then perform C26's one
+	// half-even normalization step without a binary64 round-trip.
+	const uint64_t product = static_cast<uint64_t>(in.m) * 127u;
+	uint32_t shift = 0;
+	while ((product >> shift) >= (uint64_t{1} << 31)) ++shift;
+	uint64_t m = product >> shift;
+	if (shift != 0) {
+		const uint64_t remainder = product & ((uint64_t{1} << shift) - 1u);
+		const uint64_t half = uint64_t{1} << (shift - 1);
+		if (remainder > half || (remainder == half && (m & 1u) != 0)) ++m;
+	}
+	if (m == (uint64_t{1} << 31)) { m >>= 1; ++shift; }
+	return superslm::CarriedScale{static_cast<int64_t>(m), in.e + static_cast<int64_t>(shift)};
+}
+
 // Backing storage for one layer's marshaled arrays -- LayerWeights itself
 // holds only pointers, so every owned array a layer needs lives here, one
 // instance per layer, kept alive for the whole decode call.
@@ -431,6 +448,7 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 		    ReadCarriedScale(view.composition_constants, prefix + ".q_norm", &qk_ok);
 		out.k_norm_site_constant =
 		    ReadCarriedScale(view.composition_constants, prefix + ".k_norm", &qk_ok);
+		if (qk_ok) out.k_wide_source_scale = CanonicalScaleTimes127(out.k_norm_site_constant);
 	}
 	if (!qk_ok) {
 		*err = prefix + ": q_norm/k_norm tensor present but missing composition_constants site entry";

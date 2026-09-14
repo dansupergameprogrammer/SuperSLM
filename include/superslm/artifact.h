@@ -82,6 +82,8 @@ enum class SslmSectionType : uint32_t {
 	// kDampedGreedyArtifactConstantsFlag (below): absence (flag unset) loads exactly as before
 	// this type existed, matching CalibrationBand's own precedent.
 	DampedGreedyConstants = 42,
+	// D-SLM7036: dense, flag-gated QK-norm channel landing source/derived table.
+	QkChannelTable = 43,
 };
 
 enum class SslmDtype : uint32_t {
@@ -151,8 +153,10 @@ inline constexpr uint32_t kOptionGFusedKLandingFlag = 0x1u;
 // rejects any artifact setting this bit with BadHeader, per D-SLM3794's own ruling and
 // docs/sslm_format.md's Versioning section.
 inline constexpr uint32_t kDampedGreedyArtifactConstantsFlag = 0x2u;
+inline constexpr uint32_t kQkNormFusedKChannelTableFlag = 0x4u;
 inline constexpr uint32_t kKnownArtifactFlagsMask =
-    kOptionGFusedKLandingFlag | kDampedGreedyArtifactConstantsFlag;
+    kOptionGFusedKLandingFlag | kDampedGreedyArtifactConstantsFlag |
+    kQkNormFusedKChannelTableFlag;
 
 inline constexpr uint32_t kNoSection = 0xFFFFFFFFu;
 
@@ -244,6 +248,7 @@ public:
 	// `kDampedGreedyArtifactConstantsFlag` -- mirrors `OptionGFusedKLandingEnabled()` above exactly,
 	// same precedent, new bit.
 	bool DampedGreedyConstantsFlagSet() const noexcept;
+	bool QkNormFusedKChannelTableFlagSet() const noexcept;
 
 private:
 	// S-HARDEN-7: grants src/artifact.cpp's SslmArtifactAccess (defined only

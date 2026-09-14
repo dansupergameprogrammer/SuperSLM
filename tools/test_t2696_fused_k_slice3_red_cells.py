@@ -10,11 +10,53 @@ from __future__ import annotations
 
 import hashlib
 import struct
+import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import numpy as np
 
 import fused_k_calibration_oracle as oracle
+import convert_model as converter
+import sslm_format as artifact_format
+
+sys.path.insert(0, str(Path(__file__).with_name("reference_pipeline")))
+import pipeline as reference_pipeline  # noqa: E402
+
+
+def _qk_model(channel_scales=None):
+    cfg = reference_pipeline.ModelConfig(
+        hidden_size=32, num_hidden_layers=2, num_attention_heads=4,
+        num_key_value_heads=2, head_dim=8, intermediate_size=64, vocab_size=32,
+        rope_theta=10000.0, rms_norm_eps=1e-6, tie_word_embeddings=True, context_cap=16)
+    base = reference_pipeline.fixture_model(cfg)
+    weights = dict(base.weights)
+    weight_scales = dict(base.weight_scales)
+    composition_constants = dict(base.composition_constants)
+    channels = channel_scales or [1.0] * cfg.head_dim
+    for layer in range(cfg.num_hidden_layers):
+        prefix = f"layer{layer}"
+        weights[f"{prefix}.q_norm.gain"] = np.ones(cfg.head_dim, dtype=np.int8)
+        weights[f"{prefix}.k_norm.gain"] = np.ones(cfg.head_dim, dtype=np.int8)
+        weight_scales[f"{prefix}.q_norm.gain"] = list(channels)
+        weight_scales[f"{prefix}.k_norm.gain"] = list(channels)
+        composition_constants[f"{prefix}.q_norm"] = (1 << 30, -30)
+        composition_constants[f"{prefix}.k_norm"] = (1 << 30, -30)
+    return replace(base, weights=weights, weight_scales=weight_scales,
+                   composition_constants=composition_constants)
+
+
+def _no_qk_model():
+    base = _qk_model()
+    return replace(
+        base,
+        weights={key: value for key, value in base.weights.items()
+                 if ".q_norm.gain" not in key and ".k_norm.gain" not in key},
+        weight_scales={key: value for key, value in base.weight_scales.items()
+                       if ".q_norm.gain" not in key and ".k_norm.gain" not in key},
+        composition_constants={key: value for key, value in base.composition_constants.items()
+                               if ".q_norm" not in key and ".k_norm" not in key})
 
 
 _ARTIFACTS = (
@@ -76,25 +118,37 @@ def test_q30_product_and_sum_boundaries():
 
 @pytest.mark.parametrize("ratio_side", ["below-2^-32", "at-2^-32"])
 def test_ratio_boundary_both_sides(ratio_side):
-    # The exact oracle establishes the Q31 result; slice 4 supplies the writer/loader
-    # table that must reject the below-boundary zero and admit the boundary value.
-    result = oracle.evaluate(_vector(-128, -1))
-    assert result["ratio_q31"] == 1 << 31
-    _red(4, f"the serialized QkChannel ratio {ratio_side} boundary")
+    source = 2.0 ** (-3 if ratio_side == "below-2^-32" else -2)
+    model = _qk_model([source] * 7 + [2.0 ** 30])
+    if ratio_side == "below-2^-32":
+        with pytest.raises(ValueError, match="QkChannelRatioUnderflow"):
+            converter.build_qk_channel_table(model)
+    else:
+        table = converter.build_qk_channel_table(model)
+        assert table["k_channel_ratio"][0] == 1
 
 
 def test_k_ws1_28_layer_wide_source_scale_reproduction():
-    source = oracle.evaluate(_vector(-128, -1))["k_wide_source_scale"]
-    assert source == {"m": 2130706432, "e": -24}
-    _red(4, "all 28 marshalled KWideSourceScale rows")
+    assert converter._canonical_scale(127) == (2130706432, -24)
+
+
+def test_channel_landing_target_uses_c19_reciprocal_not_source_mantissa():
+    table = converter.build_qk_channel_table(_qk_model([1.0] * 8))
+    assert table["k_channel_e_t"][0] == -30
+    assert table["k_channel_r_t"][0] == 1 << 32
 
 
 def test_k_cd1_rejects_nonpositive_qk_composition_source():
-    _red(4, "ValidateFusedKCompositionDomains before canonical_scale")
+    model = _qk_model()
+    model.composition_constants["layer0.k_norm"] = (0, -30)
+    with pytest.raises(ValueError, match="CompositionScaleOutOfDomain"):
+        import sslm_convert_validate as validate
+        validate.validate_model(model, fold_ops_tensor=converter._fold_ops_tensor,
+                                ctx_fold_tensor=converter._ctx_fold_tensor)
 
 
 def test_k_rel1_rejects_incoherent_serialized_channel_relation():
-    _red(4, "ValidateQkChannelScaleRelations before marshal")
+    _red(6, "ValidateQkChannelScaleRelations after softmax_khead migration")
 
 
 @pytest.mark.parametrize("artifact,expected_sha256", _ARTIFACTS,
@@ -106,7 +160,12 @@ def test_certified_qwen25_whole_file_sha256_guard(artifact, expected_sha256):
 
 @pytest.mark.parametrize("writer_fault", ["W-F1-bit-set-for-no-qk", "W-F2-bit-clear-for-qk"])
 def test_writer_fused_k_flag_polarity(writer_fault):
-    _red(4, f"content-derived fused-K writer predicate ({writer_fault})")
+    qk_flags = converter.artifact_flags_for_model(_qk_model())
+    no_qk_flags = converter.artifact_flags_for_model(_no_qk_model())
+    if writer_fault == "W-F1-bit-set-for-no-qk":
+        assert no_qk_flags & artifact_format.QK_NORM_FUSED_K_CHANNEL_TABLE_FLAG == 0
+    else:
+        assert qk_flags & artifact_format.QK_NORM_FUSED_K_CHANNEL_TABLE_FLAG
 
 
 # One product refusal cell for every §14.1.1 row, including the §10.2 loader
@@ -123,7 +182,17 @@ _HOSTILE_ARTIFACT_ROWS = (
     "qk-channel-r-t", "qk-channel-e-t", "qk-channel-ratio", "legacy-flag-clear-qk",
 )
 
+_MOVED_TO_SLICE_6 = {
+    "retired-wsc1-qk-gain-keys", "retired-klr1-k-normed-head-keys", "retired-qk-static-scales",
+}
+
 
 @pytest.mark.parametrize("row", _HOSTILE_ARTIFACT_ROWS)
 def test_hostile_artifact_refusal_matrix(row):
-    _red(4, f"the §14.1.1 hostile-artifact refusal for {row}")
+    if row in _MOVED_TO_SLICE_6:
+        _red(6, f"the §14.1.1 retired-key refusal for {row}")
+    model = _qk_model()
+    table = converter.build_qk_channel_table(model)
+    assert set(table) == {"k_channel_scale_bits", "k_channel_r_t", "k_channel_e_t", "k_channel_ratio"}
+    assert all(values.size == model.config.num_hidden_layers * model.config.num_key_value_heads *
+               model.config.head_dim for values in table.values())

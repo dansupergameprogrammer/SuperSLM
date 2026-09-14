@@ -39,6 +39,7 @@ inline constexpr uint8_t kBiasesMagic[4] = {'B', 'I', 'A', '1'};
 inline constexpr uint8_t kRopeMagic[4] = {'R', 'O', 'P', '1'};
 // WeightScales is a tensor manifest too (int32 (identity,mult,shift) fold ops); its magic.
 inline constexpr uint8_t kWeightScalesMagic[4] = {'W', 'S', 'C', '1'};
+inline constexpr uint8_t kQkChannelTableMagic[4] = {'Q', 'K', 'C', '1'};
 // The two new runtime-additive-LoRA adapter arrays
 // get their OWN magics, distinct from WSC1's -- never reused or aliased.
 inline constexpr uint8_t kDeltaFoldScalesMagic[4] = {'D', 'F', 'S', '1'};
@@ -191,6 +192,11 @@ enum class SslmModelStatus {
 	                              // reads from THIS section at runtime). Enforced by
 	                              // ValidateKvLandingReciprocalsDomain (model.cpp), wired into
 	                              // ValidateSectionValues.
+	LegacyQkNormArtifactUnsupported,
+	QkChannelTableFlagMismatch,
+	QkChannelTableGeometryMismatch,
+	QkChannelScaleSourceOutOfDomain,
+	QkChannelRatioOutOfDomain,
 	// --- S-HARDEN-2 tokenizer joins (F18, F6, F7, F15) ---
 	TokenizerRejected,           // SslmModel::Load: TOK1/UnicodeTables present but TokenizerView::Open rejected
 	                              // them (structurally, or exactly one of the two sections is present)
@@ -548,6 +554,8 @@ struct SslmModelView {
 
 	SslmTensorManifest weight_scales;
 	bool has_weight_scales = false;
+	SslmTensorManifest qk_channel_table;
+	bool has_qk_channel_table = false;
 
 	SslmKeyedConstants composition_constants;
 	bool has_composition_constants = false;
@@ -608,6 +616,7 @@ struct SslmModelView {
 	// field directly rather than reaching into the private `backing_` only
 	// `SslmModelAccess` may touch.
 	bool option_g_fused_k_landing = false;
+	bool qk_norm_fused_k_channel_table = false;
 
 	// The numeric-record trace hook's own state: owned here, per
 	// model handle, instead of a process-wide static -- the corrected reading
@@ -664,6 +673,9 @@ struct SslmModelView {
 	bool DampedGreedyConstantsFlagSet() const noexcept {
 		return backing_.DampedGreedyConstantsFlagSet();
 	}
+	bool QkNormFusedKChannelTableFlagSet() const noexcept {
+		return backing_.QkNormFusedKChannelTableFlagSet();
+	}
 
 	// `RawIntegrityHash()`: this view's own artifact's integrity hash -- what a second, independent
 	// `SslmArtifact::OpenFromMemory` over the identical bytes would also compute, without paying for
@@ -697,6 +709,8 @@ private:
 		has_rope_tables = other.has_rope_tables;
 		weight_scales = std::move(other.weight_scales);
 		has_weight_scales = other.has_weight_scales;
+		qk_channel_table = std::move(other.qk_channel_table);
+		has_qk_channel_table = other.has_qk_channel_table;
 		composition_constants = std::move(other.composition_constants);
 		has_composition_constants = other.has_composition_constants;
 		kv_landing_scales = std::move(other.kv_landing_scales);
@@ -712,6 +726,7 @@ private:
 		tokenizer = std::move(other.tokenizer);
 		has_tokenizer = other.has_tokenizer;
 		option_g_fused_k_landing = other.option_g_fused_k_landing;
+		qk_norm_fused_k_channel_table = other.qk_norm_fused_k_channel_table;
 		trace_hook = other.trace_hook;
 		backing_ = std::move(other.backing_);
 
@@ -729,6 +744,7 @@ private:
 		other.has_biases = false;
 		other.has_rope_tables = false;
 		other.has_weight_scales = false;
+		other.has_qk_channel_table = false;
 		other.has_composition_constants = false;
 		other.has_kv_landing_scales = false;
 		other.has_kv_landing_reciprocals = false;
@@ -737,6 +753,7 @@ private:
 		other.has_u_fold_scales = false;
 		other.has_tokenizer = false;
 		other.option_g_fused_k_landing = false;
+		other.qk_norm_fused_k_channel_table = false;
 		other.trace_hook = SslmTraceHookState{};
 	}
 

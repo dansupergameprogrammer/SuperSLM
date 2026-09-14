@@ -789,6 +789,10 @@ struct LayerWeights {
 	// only when the gain tensor is present (§6 Track B step 1's own corrected text).
 	CarriedScale q_norm_site_constant;
 	CarriedScale k_norm_site_constant;
+	// D-SLM7036: source scale for slice 6's wide post-K-RMSNorm carry. This
+	// additive slice derives it once at marshal from KVC1 layerL.k_norm; no
+	// serialized duplicate exists and today's forward does not consume it yet.
+	CarriedScale k_wide_source_scale;
 	// (carried-scale delta §4, D-SLM6117): K's post-norm codes requantize a SECOND time, back
 	// onto this static, per-(layer, KV head) landing scale -- a NEW scale, calibrated on
 	// post-norm data, distinct from `kv_landing_r_t_k`/`kv_landing_e_t_k` below (K's raw,

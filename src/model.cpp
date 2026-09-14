@@ -18,6 +18,8 @@
 #include "bad_alloc_wrap.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -120,6 +122,11 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 	if (s == SslmModelStatus::RopeTableEntryOutOfDomain) return "RopeTableEntryOutOfDomain";
 	if (s == SslmModelStatus::KvLandingScaleOutOfDomain) return "KvLandingScaleOutOfDomain";
 	if (s == SslmModelStatus::KvLandingReciprocalOutOfDomain) return "KvLandingReciprocalOutOfDomain";
+	if (s == SslmModelStatus::LegacyQkNormArtifactUnsupported) return "LegacyQkNormArtifactUnsupported";
+	if (s == SslmModelStatus::QkChannelTableFlagMismatch) return "QkChannelTableFlagMismatch";
+	if (s == SslmModelStatus::QkChannelTableGeometryMismatch) return "QkChannelTableGeometryMismatch";
+	if (s == SslmModelStatus::QkChannelScaleSourceOutOfDomain) return "QkChannelScaleSourceOutOfDomain";
+	if (s == SslmModelStatus::QkChannelRatioOutOfDomain) return "QkChannelRatioOutOfDomain";
 	if (s == SslmModelStatus::TokenizerRejected) return "TokenizerRejected";
 	if (s == SslmModelStatus::TokenizerVocabSizeMismatch) return "TokenizerVocabSizeMismatch";
 	if (s == SslmModelStatus::BadConfigHeadDimParity) return "BadConfigHeadDimParity";
@@ -166,6 +173,7 @@ const uint8_t* ManifestMagicFor(SslmSectionType type) noexcept {
 		case SslmSectionType::Biases: return kBiasesMagic;
 		case SslmSectionType::RopeTables: return kRopeMagic;
 		case SslmSectionType::WeightScales: return kWeightScalesMagic;
+		case SslmSectionType::QkChannelTable: return kQkChannelTableMagic;
 		default: return nullptr;
 	}
 }
@@ -1183,6 +1191,147 @@ SslmModelStatus ValidateKvLandingReciprocalsDomain(const SslmKeyedConstants& kv_
 	return SslmModelStatus::Ok;
 }
 
+// D-SLM7036's additive QKC1 contract. Relations between the persisted
+// derived images and current softmax_khead stay deliberately out of this
+// slice: their consumers migrate with the forward in slice 6. This gate owns
+// only bit/table/tensor geometry, source finiteness, and the serialized ratio
+// range, before any marshal path can see a QK artifact.
+SslmModelStatus ValidateQkChannelTableAdditive(const SslmModelView& view, std::string* err) {
+	const bool flag = view.qk_norm_fused_k_channel_table;
+	if (view.has_qk_channel_table && !flag) {
+		if (err) *err = "QkChannelTable is present but kQkNormFusedKChannelTableFlag is clear";
+		return SslmModelStatus::QkChannelTableFlagMismatch;
+	}
+	if (!flag) {
+		for (uint32_t l = 0; l < view.config.num_hidden_layers; ++l) {
+			const std::string prefix = "layer" + std::to_string(l);
+			if (view.weights.Tensor(prefix + ".q_norm.gain") != nullptr ||
+			    view.weights.Tensor(prefix + ".k_norm.gain") != nullptr) {
+				if (err) {
+					*err = "layer " + std::to_string(l) +
+					       " carries QK-norm tensors but kQkNormFusedKChannelTableFlag is clear; "
+					       "legacy single-scale K is unsupported";
+				}
+				return SslmModelStatus::LegacyQkNormArtifactUnsupported;
+			}
+		}
+		return SslmModelStatus::Ok;
+	}
+	if (!view.has_qk_channel_table) {
+		// Structural OpenFromMemory already reports MissingSection. Keep this
+		// defensive boundary for callers constructing views internally.
+		if (err) *err = "required QkChannelTable section is absent when kQkNormFusedKChannelTableFlag is set";
+		return SslmModelStatus::QkChannelTableGeometryMismatch;
+	}
+	const char* const names[] = {"k_channel_scale_bits", "k_channel_r_t", "k_channel_e_t",
+	                             "k_channel_ratio"};
+	const uint64_t rows = static_cast<uint64_t>(view.config.num_hidden_layers) *
+	                      view.config.num_key_value_heads * view.config.head_dim;
+	const SslmTensorView* table[4] = {};
+	if (view.qk_channel_table.Tensors().size() != 4) {
+		if (err) *err = "QkChannelTable must contain exactly four dense Int64 tensors";
+		return SslmModelStatus::QkChannelTableGeometryMismatch;
+	}
+	for (uint32_t i = 0; i < 4; ++i) {
+		table[i] = view.qk_channel_table.Tensor(names[i]);
+		if (table[i] == nullptr || table[i]->elem_count != rows) {
+			if (err) *err = "QkChannelTable tensor \"" + std::string(names[i]) +
+			                "\" does not have dense layer*kv_head*head_dim geometry";
+			return SslmModelStatus::QkChannelTableGeometryMismatch;
+		}
+	}
+	bool any_paired = false;
+	const uint64_t per_layer = static_cast<uint64_t>(view.config.num_key_value_heads) * view.config.head_dim;
+	for (uint32_t l = 0; l < view.config.num_hidden_layers; ++l) {
+		const std::string prefix = "layer" + std::to_string(l);
+		const bool q = view.weights.Tensor(prefix + ".q_norm.gain") != nullptr;
+		const bool k = view.weights.Tensor(prefix + ".k_norm.gain") != nullptr;
+		bool all_zero = true;
+		for (uint64_t i = 0; i < per_layer * 4; ++i) {
+			const uint32_t field = static_cast<uint32_t>(i / per_layer);
+			const uint64_t row = static_cast<uint64_t>(l) * per_layer + (i % per_layer);
+			if (RdI64(table[field]->data + row * 8) != 0) { all_zero = false; break; }
+		}
+		if (q != k || all_zero == q) {
+			if (err) {
+				*err = "layer " + std::to_string(l) + " QkChannelTable row state " +
+				       (all_zero ? "all-zero" : "nonzero") + " disagrees with q_norm.gain=" +
+				       std::to_string(q ? 1 : 0) + ", k_norm.gain=" + std::to_string(k ? 1 : 0);
+			}
+			return SslmModelStatus::QkChannelTableGeometryMismatch;
+		}
+		if (!q) continue;
+		any_paired = true;
+		for (uint32_t h = 0; h < view.config.num_key_value_heads; ++h) {
+			for (uint32_t d = 0; d < view.config.head_dim; ++d) {
+				const uint64_t row = (static_cast<uint64_t>(l) * view.config.num_key_value_heads + h) *
+				                     view.config.head_dim + d;
+				const uint64_t bits = RdU64(table[0]->data + row * 8);
+				double source;
+				std::memcpy(&source, &bits, sizeof(source));
+				if (!std::isfinite(source) || !(source > 0.0)) {
+					char hex[17];
+					std::snprintf(hex, sizeof(hex), "%016llx", static_cast<unsigned long long>(bits));
+					if (err) *err = "QkChannelTable row (layer " + std::to_string(l) + ", head " +
+					                std::to_string(h) + ", channel " + std::to_string(d) +
+					                ") k_channel_scale_bits=0x" + hex +
+					                " is not finite and strictly positive";
+					return SslmModelStatus::QkChannelScaleSourceOutOfDomain;
+				}
+				const int64_t r_t = RdI64(table[1]->data + row * 8);
+				if (r_t < kKvLandingReciprocalMin || r_t > kKvLandingReciprocalMax) {
+					if (err) *err = "QkChannelTable row (layer " + std::to_string(l) + ", head " +
+					                std::to_string(h) + ", channel " + std::to_string(d) +
+					                ") k_channel_r_t=" + std::to_string(r_t) + " outside [" +
+					                std::to_string(kKvLandingReciprocalMin) + "," +
+					                std::to_string(kKvLandingReciprocalMax) + "]";
+					return SslmModelStatus::KvLandingReciprocalOutOfDomain;
+				}
+				const int64_t e_t = RdI64(table[2]->data + row * 8);
+				if (e_t < kKvLandingExponentMin) {
+					if (err) *err = "QkChannelTable row (layer " + std::to_string(l) + ", head " +
+					                std::to_string(h) + ", channel " + std::to_string(d) +
+					                ") k_channel_e_t=" + std::to_string(e_t) + " below the joint-bound floor " +
+					                std::to_string(kKvLandingExponentMin);
+					return SslmModelStatus::KvLandingReciprocalOutOfDomain;
+				}
+				const int64_t ratio = RdI64(table[3]->data + row * 8);
+				if (ratio < 1 || ratio > (int64_t{1} << 31)) {
+					if (err) *err = "QkChannelTable row (layer " + std::to_string(l) + ", head " +
+					                std::to_string(h) + ", channel " + std::to_string(d) +
+					                ") k_channel_ratio=" + std::to_string(ratio) +
+					                " outside [1,2147483648]";
+					return SslmModelStatus::QkChannelRatioOutOfDomain;
+				}
+			}
+		}
+	}
+	if (!any_paired) {
+		if (err) *err = "kQkNormFusedKChannelTableFlag is set but no layer carries paired q_norm.gain and k_norm.gain tensors";
+		return SslmModelStatus::QkChannelTableGeometryMismatch;
+	}
+	return SslmModelStatus::Ok;
+}
+
+SslmModelStatus ValidateFusedKCompositionDomains(const SslmModelView& view, std::string* err) {
+	if (!view.qk_norm_fused_k_channel_table) return SslmModelStatus::Ok;
+	for (uint32_t l = 0; l < view.config.num_hidden_layers; ++l) {
+		const std::string prefix = "layer" + std::to_string(l);
+		if (view.weights.Tensor(prefix + ".q_norm.gain") == nullptr) continue;
+		for (const char* role : {"q_norm", "k_norm"}) {
+			const std::string name = prefix + "." + role;
+			const SslmConstantEntry* entry = view.composition_constants.Entry(name);
+			const int64_t m = entry == nullptr ? 0 : SslmKeyedConstants::Value(*entry, 0);
+			if (entry == nullptr || m < (int64_t{1} << 30) || m > ((int64_t{1} << 31) - 1)) {
+				if (err) *err = "CompositionConstants entry \"" + name + "\" m=" + std::to_string(m) +
+				                " outside the QK canonical-positive domain [1073741824,2147483647]";
+				return SslmModelStatus::CompositionScaleOutOfDomain;
+			}
+		}
+	}
+	return SslmModelStatus::Ok;
+}
+
 // S3.7 (§8.3): the calibration band's own hostile-value gate -- "hostile
 // bands min > max and max == 0 are load rejections" (test design §3 Cell
 // 13), walked over every entry the same way ValidateKvLandingScalesDomain
@@ -1448,6 +1597,14 @@ SslmModelStatus ValidateSectionValues(const SslmModelView& view, std::string* er
 		    view.rope_tables, view.config.context_cap, view.config.head_dim, err);
 		if (s != SslmModelStatus::Ok) return s;
 	}
+	{
+		const SslmModelStatus s = ValidateQkChannelTableAdditive(view, err);
+		if (s != SslmModelStatus::Ok) return s;
+	}
+	{
+		const SslmModelStatus s = ValidateFusedKCompositionDomains(view, err);
+		if (s != SslmModelStatus::Ok) return s;
+	}
 	return SslmModelStatus::Ok;
 }
 
@@ -1481,6 +1638,7 @@ SslmModelStatus SslmModelAccess::LoadImpl(const uint8_t* data, size_t size, Sslm
 	// own default (`false`) exactly like every other member already is -- no
 	// special-casing added.
 	out.option_g_fused_k_landing = out.backing_.OptionGFusedKLandingEnabled();
+	out.qk_norm_fused_k_channel_table = out.backing_.QkNormFusedKChannelTableFlagSet();
 
 	for (const SslmSectionView& section : out.backing_.Sections()) {
 		SslmModelStatus s = SslmModelStatus::Ok;
@@ -1508,6 +1666,10 @@ SslmModelStatus SslmModelAccess::LoadImpl(const uint8_t* data, size_t size, Sslm
 			case SslmSectionType::WeightScales:
 				s = SslmTensorManifest::Parse(section, out.weight_scales, err);
 				out.has_weight_scales = (s == SslmModelStatus::Ok);
+				break;
+			case SslmSectionType::QkChannelTable:
+				s = SslmTensorManifest::Parse(section, out.qk_channel_table, err);
+				out.has_qk_channel_table = (s == SslmModelStatus::Ok);
 				break;
 			case SslmSectionType::CompositionConstants:
 				s = SslmKeyedConstants::Parse(section, out.composition_constants, err);

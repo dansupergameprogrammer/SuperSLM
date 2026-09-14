@@ -21,6 +21,7 @@ int8 [-128,127] silently — this module's own defect finding.
 import argparse
 import os
 import struct
+from fractions import Fraction
 
 import numpy as np
 
@@ -36,6 +37,113 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # location: production conversion and its tests must not transcribe the derived triple.
 DAMPED_GREEDY_SCALE_M = 2883584
 DAMPED_GREEDY_SCALE_E = -36
+
+
+def has_qk_norm(model):
+    """Content-only artifact capability predicate; unrelated writer switches do not enter."""
+    return any(
+        f"layer{layer}.q_norm.gain" in model.weight_scales or
+        f"layer{layer}.k_norm.gain" in model.weight_scales
+        for layer in range(model.config.num_hidden_layers))
+
+
+def artifact_flags_for_model(model, *, option_g=False, enable_damped_greedy=False):
+    flags = F.OPTION_G_FUSED_K_LANDING_FLAG if option_g else 0
+    if enable_damped_greedy:
+        flags |= F.DAMPED_GREEDY_CONSTANTS_FLAG
+    if has_qk_norm(model):
+        flags |= F.QK_NORM_FUSED_K_CHANNEL_TABLE_FLAG
+    return flags
+
+
+def _round_nearest_away(numerator, denominator):
+    return (2 * numerator + denominator) // (2 * denominator)
+
+
+def _canonical_scale(value):
+    """C26-compatible positive Fraction -> canonical `(m,e)` without float arithmetic."""
+    value = Fraction(value)
+    if value <= 0:
+        raise ValueError("canonical scale must be positive")
+    exponent = value.numerator.bit_length() - value.denominator.bit_length() - 31
+    while value / Fraction(2) ** (exponent + 31) >= 1:
+        exponent += 1
+    while value / Fraction(2) ** (exponent + 30) < 1:
+        exponent -= 1
+    scaled = value / Fraction(2) ** exponent
+    # Python's round is insufficient at ties; converter emission uses half-even.
+    quotient, remainder = divmod(scaled.numerator, scaled.denominator)
+    mantissa = quotient + (remainder * 2 > scaled.denominator or
+                           (remainder * 2 == scaled.denominator and quotient & 1))
+    if mantissa == 1 << 31:
+        mantissa >>= 1
+        exponent += 1
+    return mantissa, exponent
+
+
+def _dynamic_scale_reciprocal(mantissa):
+    """C19's exact positive half-up reciprocal of a canonical mantissa."""
+    if not (1 << 30) <= mantissa < (1 << 31):
+        raise ValueError("dynamic reciprocal requires a canonical mantissa")
+    return ((1 << 63) + mantissa) // (2 * mantissa)
+
+
+def build_qk_channel_table(model):
+    """Serialize QKC1's four dense Int64 vectors for the bit-2 capability.
+
+    The legacy forward remains the consumer of existing KLR1/KVC1 images until
+    slice 6. This writer therefore persists the channel source and its bounded
+    landing images additively without retiring those live inputs.
+    """
+    cfg = model.config
+    total = cfg.num_hidden_layers * cfg.num_key_value_heads * cfg.head_dim
+    table = {name: np.zeros(total, dtype=np.int64) for name in (
+        "k_channel_scale_bits", "k_channel_r_t", "k_channel_e_t", "k_channel_ratio")}
+    for layer in range(cfg.num_hidden_layers):
+        key = f"layer{layer}.k_norm.gain"
+        if key not in model.weight_scales:
+            continue
+        channels = tuple(float(v) for v in model.weight_scales[key])
+        # Norm gains are currently quantized per tensor by the calibrated
+        # pipeline.  QKC1 is deliberately dense per channel, so expand that
+        # one source scale rather than inventing a second quantization.
+        if len(channels) == 1:
+            channels *= cfg.head_dim
+        if len(channels) != cfg.head_dim:
+            raise V.ConverterValidationError(
+                "QkChannelTableGeometryMismatch",
+                f"{key} has {len(channels)} channel scales, expected {cfg.head_dim}")
+        if any(not np.isfinite(v) or v <= 0.0 for v in channels):
+            raise V.ConverterValidationError("QkChannelScaleSourceOutOfDomain",
+                                             f"{key} contains a non-positive or non-finite source scale")
+        head_max = max(Fraction(v) for v in channels)
+        for head in range(cfg.num_key_value_heads):
+            for channel, source_float in enumerate(channels):
+                source = Fraction(source_float)
+                ratio = _round_nearest_away(source.numerator * head_max.denominator * (1 << 31),
+                                             source.denominator * head_max.numerator)
+                if ratio == 0:
+                    raise V.ConverterValidationError(
+                        "QkChannelRatioUnderflow",
+                        f"layer {layer} head {head} channel {channel} ratio rounds to zero")
+                if ratio > (1 << 31):
+                    raise V.ConverterValidationError(
+                        "QkChannelRatioOutOfDomain",
+                        f"layer {layer} head {head} channel {channel} ratio={ratio} outside [1,2147483648]")
+                row = (layer * cfg.num_key_value_heads + head) * cfg.head_dim + channel
+                bits = struct.unpack("<Q", struct.pack("<d", source_float))[0]
+                m_t, e_t = _canonical_scale(source)
+                r_t = _dynamic_scale_reciprocal(m_t)
+                if e_t < -60 or not ((1 << 31) + 1 <= r_t <= (1 << 32)):
+                    raise V.ConverterValidationError(
+                        "KvLandingReciprocalOutOfDomain",
+                        f"layer {layer} head {head} channel {channel} has "
+                        f"k_channel_r_t={r_t}, k_channel_e_t={e_t} outside the landing domain")
+                table["k_channel_scale_bits"][row] = bits
+                table["k_channel_r_t"][row] = r_t
+                table["k_channel_e_t"][row] = e_t
+                table["k_channel_ratio"][row] = ratio
+    return table
 
 # The reference forward pass + calibration (T-2123/T-2137: vendored in-tree at
 # tools/reference_pipeline/, no longer an out-of-tree cross-repo import) is a LAZY
@@ -215,6 +323,12 @@ def build_sections(model, *, fold_ops_tensor=None, ctx_fold_tensor=None,
     # content check (ParseSigmoidLut, src/model.cpp) validates against byte-for-byte.
     sections.append(F.Section(F.SectionType.SIGMOID_LUT, W.write_sil1()))
 
+    if has_qk_norm(model):
+        table = build_qk_channel_table(model)
+        sections.append(F.Section(
+            F.SectionType.QK_CHANNEL_TABLE,
+            W.write_tensor_manifest(W.QKC1, np.int64, table)))
+
     # DGC1 is opt-in at artifact-conversion time because its flag is intentionally rejected by
     # pre-1.2 runtimes.  The default path therefore remains byte-identical to 1.1.  A 1.2
     # consumer selecting damped greedy gets a self-contained artifact; no post-conversion byte
@@ -269,9 +383,8 @@ def main():
     # Phase 2: serialize (explicit little-endian dtypes throughout sslm_model_writer.py).
     sections, fold_approximation_error = build_sections(
         model, enable_damped_greedy=args.enable_damped_greedy)
-    flags = F.OPTION_G_FUSED_K_LANDING_FLAG if args.option_g_fused_k_landing else 0
-    if args.enable_damped_greedy:
-        flags |= F.DAMPED_GREEDY_CONSTANTS_FLAG
+    flags = artifact_flags_for_model(
+        model, option_g=args.option_g_fused_k_landing, enable_damped_greedy=args.enable_damped_greedy)
     fp = F.write_artifact(args.out, sections, flags=flags)
     print(f"wrote {args.out}")
     print(f"fingerprint {fp}")

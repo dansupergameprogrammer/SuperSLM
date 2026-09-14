@@ -340,4 +340,24 @@ def validate_model(model, *, fold_ops_tensor, ctx_fold_tensor, unicode_major=15,
             _reject("CompositionScaleEOutOfDomain", f"composition_constants[{name!r}] e={e} outside "
                     f"[{e_min},{e_max}]")
 
+    # D-SLM7036: the bit-2 capability is content-derived from paired QK gain
+    # scales. Its source-scale roles need the stronger canonical-positive
+    # domain before build_sections can emit QKC1 or marshal can derive 127*K.
+    for layer in range(cfg.num_hidden_layers):
+        prefix = f"layer{layer}"
+        q_key, k_key = f"{prefix}.q_norm.gain", f"{prefix}.k_norm.gain"
+        q_present, k_present = q_key in model.weight_scales, k_key in model.weight_scales
+        if q_present != k_present:
+            _reject("QkChannelTableGeometryMismatch",
+                    f"{prefix} has asymmetric q_norm.gain/k_norm.gain weight-scale presence")
+        if not q_present:
+            continue
+        for role in ("q_norm", "k_norm"):
+            key = f"{prefix}.{role}"
+            m, _e = model.composition_constants.get(key, (0, 0))
+            if not ((1 << 30) <= int(m) <= (1 << 31) - 1):
+                _reject("CompositionScaleOutOfDomain",
+                        f'CompositionConstants entry "{key}" m={m} outside the QK '
+                        "canonical-positive domain [1073741824,2147483647]")
+
     check_unicode_version_coherence(unicode_major, unicode_minor, unicode_patch, running_unicode_version)

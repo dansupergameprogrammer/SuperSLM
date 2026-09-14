@@ -23,6 +23,7 @@ SIL1 = b"SIL1"
 # byte layout exactly (design's own "storage-shape-identical" framing).
 DFS1 = b"DFS1"
 UFS1 = b"UFS1"
+QKC1 = b"QKC1"
 MANIFEST_VERSION = 1
 
 # Sigmoid-LUT geometry (mirror include/superslm/model.h + silu_lut.h). Pinned, not per-artifact.

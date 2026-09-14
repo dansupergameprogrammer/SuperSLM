@@ -55,6 +55,7 @@ bool IsKnownSectionType(uint32_t type) noexcept {
 	if (t == SslmSectionType::DeltaFoldScales) return true;
 	if (t == SslmSectionType::UFoldScales) return true;
 	if (t == SslmSectionType::DampedGreedyConstants) return true;
+	if (t == SslmSectionType::QkChannelTable) return true;
 	return false;
 }
 
@@ -115,6 +116,7 @@ SslmDtype ExpectedDtype(uint32_t type) noexcept {
 	if (t == SslmSectionType::SchemaMasks) return SslmDtype::Raw;
 	if (t == SslmSectionType::CalibrationBand) return SslmDtype::Raw;
 	if (t == SslmSectionType::DampedGreedyConstants) return SslmDtype::Raw;
+	if (t == SslmSectionType::QkChannelTable) return SslmDtype::Int64;
 	// Every value outside the twenty-one enumerators above (including any
 	// value not yet assigned to an enumerator) -- callers gate on
 	// IsKnownSectionType first.
@@ -446,6 +448,22 @@ SslmStatus SslmArtifactAccess::OpenFromMemoryImpl(const uint8_t* data, size_t si
 			}
 		}
 	}
+	// This capability owns its own required section. Keep it separate from the
+	// version base set: v2/flags=0 artifacts remain byte-compatible.
+	{
+		bool has_qk_table = false;
+		for (const Placed& p : placed) {
+			if (static_cast<SslmSectionType>(p.type) == SslmSectionType::QkChannelTable) {
+				has_qk_table = true;
+				break;
+			}
+		}
+		if ((flags & kQkNormFusedKChannelTableFlag) != 0 && !has_qk_table) {
+			return Reject(err, SslmStatus::MissingSection, kNoSection,
+			              "required QkChannelTable section is absent when "
+			              "kQkNormFusedKChannelTableFlag is set");
+		}
+	}
 
 	// --- Accepted: take ownership of the bytes and build views into them. bytes_
 	//     is assigned once and never resized, so the view pointers stay valid. ---
@@ -548,6 +566,10 @@ bool SslmArtifact::OptionGFusedKLandingEnabled() const noexcept {
 // T-2199 Phase D1: mirrors OptionGFusedKLandingEnabled() exactly, new bit.
 bool SslmArtifact::DampedGreedyConstantsFlagSet() const noexcept {
 	return (flags_ & kDampedGreedyArtifactConstantsFlag) != 0;
+}
+
+bool SslmArtifact::QkNormFusedKChannelTableFlagSet() const noexcept {
+	return (flags_ & kQkNormFusedKChannelTableFlag) != 0;
 }
 
 } // namespace superslm
