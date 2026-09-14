@@ -1228,10 +1228,33 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
                                    uint64_t* out_k_normed_landing_saturation_count = nullptr,
                                    const int64_t* k_wide = nullptr);
 
+// Source compatibility for pre-QKC1 unit callers.  Their legacy K path never
+// reaches wide RoPE (k_wide is null), therefore an empty manifest is exact.
+inline SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales,
+                                         uint8_t* workspace, uint32_t layer,
+                                         int64_t context_cap, int64_t position,
+                                         size_t num_heads, size_t num_key_value_heads,
+                                         size_t head_dim, const LayerWeights& lw,
+                                         std::string_view site_prefix, size_t token_index,
+                                         SslmTraceHookState* trace_hook_state,
+                                         uint64_t* out_saturation_count = nullptr,
+                                         uint64_t* out_k_normed_landing_saturation_count = nullptr) {
+	static const SslmTensorManifest kNoRopeTables{};
+	return ApplyQkNormSite(q_codes, q_scales, workspace, kNoRopeTables, layer, context_cap,
+	                       position, num_heads, num_key_value_heads, head_dim, lw, site_prefix,
+	                       token_index, trace_hook_state, out_saturation_count,
+	                       out_k_normed_landing_saturation_count, nullptr);
+}
+
 // Fixed-order, per-channel Q31 score reduction used by fused-QK layers.
 // The result is the C3/ties-away-from-zero division of
 // sum(q[d] * k[d] * ratio_q31[d]) by 2^31.  Keeping this separate from the
 // ordinary GEMM makes the table's channel ratios explicit at the one consumer.
+enum class QkQ31ScoreTier : uint8_t { Scalar = 0, Sse2 = 1, Avx2 = 2, Avx512 = 3 };
+int64_t QkQ31ScoreScalarRef(const int8_t* q, const int8_t* k, const int64_t* ratio_q31,
+                             size_t head_dim);
+int64_t QkQ31ScoreForTier(const int8_t* q, const int8_t* k, const int64_t* ratio_q31,
+                           size_t head_dim, QkQ31ScoreTier tier);
 int64_t QkQ31Score(const int8_t* q, const int8_t* k, const int64_t* ratio_q31, size_t head_dim);
 
 // --- S3.6: the head and the greedy decode loop (SuperSLM_S3a_WalkingSkeleton_

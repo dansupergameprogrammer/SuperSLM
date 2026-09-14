@@ -9329,6 +9329,36 @@ static void TestFloorDivI64C31UnitWitnessDivergesFromNativeTruncatingDivision() 
 	}
 }
 
+static void TestQkQ31ScoreSimdTiersEqualScalarReference() {
+	// Boundary signs, exact Q31=1, and real-Qwen's head width exercise each
+	// vector main loop against the normative scalar reduction.
+	constexpr size_t kWidth = 128;
+	std::array<int8_t, kWidth> q{};
+	std::array<int8_t, kWidth> k{};
+	std::array<int64_t, kWidth> ratio{};
+	for (size_t i = 0; i < kWidth; ++i) {
+		q[i] = static_cast<int8_t>((static_cast<int>(i * 37) % 255) - 127);
+		k[i] = static_cast<int8_t>((static_cast<int>(i * 71) % 255) - 127);
+		ratio[i] = (i % 3 == 0) ? (INT64_C(1) << 31) :
+		           (i % 3 == 1) ? INT64_C(1073741824) : INT64_C(1);
+	}
+	q[0] = -128;
+	k[0] = -128;
+	const int64_t scalar = superslm::QkQ31ScoreScalarRef(q.data(), k.data(), ratio.data(), kWidth);
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+	const int cpu_tier = superslm::DetectBestDotRowTierForCpu();
+#else
+	const int cpu_tier = -1;
+#endif
+	for (const auto tier : {superslm::QkQ31ScoreTier::Sse2, superslm::QkQ31ScoreTier::Avx2,
+	                        superslm::QkQ31ScoreTier::Avx512}) {
+		if (static_cast<int>(tier) > cpu_tier + 1) continue;
+		const int64_t got = superslm::QkQ31ScoreForTier(q.data(), k.data(), ratio.data(), kWidth, tier);
+		CHECK_MSG(got == scalar, "QkQ31 SIMD tier %d == scalar %lld, got %lld",
+		          static_cast<int>(tier), static_cast<long long>(scalar), static_cast<long long>(got));
+	}
+}
+
 // T-1267 (D-SLM360): pins RmsNormSite's own USE of FloorDivI64 -- a mechanism
 // claim the very next test's own comment (below) proves CANNOT be discharged
 // by any assertion on out_codes or *out_scale: floor-vs-truncation divergence
@@ -29123,6 +29153,7 @@ int main(int argc, char** argv) {
 	//     Claude/Curie/superslm-s3.2-weightless-and-projection-sites-test-
 	//     design-2026-07-28.md Sec4/Sec9. ---
 	TestFloorDivI64C31UnitWitnessDivergesFromNativeTruncatingDivision();
+	TestQkQ31ScoreSimdTiersEqualScalarReference();
 	TestRmsNormSiteC31UsesFloorDivisionMechanismPin();
 	TestRmsNormSiteC31FloorDivisionWitnessAgainstTheRealFunnel();
 	TestApplyWeightScaleFoldC24IdentityVsNearIdentityAgainstTheRealFunnel();

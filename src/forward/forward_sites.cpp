@@ -20,6 +20,7 @@
 // suite (Claude/Brunel/superslm-s3.4-mlp-act-site-body-build-2026-07-29.md).
 #include "superslm/forward_sites.h"
 
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -27,6 +28,19 @@
 #include "superslm/silu_lut.h"  // SiluSigmoidQ15 (C34's LUT construction, MlpActSite step 2)
 #include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable (RunLayerLoop's MlpActSite call)
 #include "superslm/matmul.h"  // GemmInt8AccumulateRow / GemmProbQ15Accumulate (RunLayerLoop)
+
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+#include <emmintrin.h>
+#include <immintrin.h>
+#endif
+
+#if defined(__clang__) || (defined(__GNUC__) && !defined(_MSC_VER))
+#define SUPERSLM_QK_AVX2_TARGET __attribute__((target("avx2")))
+#define SUPERSLM_QK_AVX512_TARGET __attribute__((target("avx512f,avx512bw")))
+#else
+#define SUPERSLM_QK_AVX2_TARGET
+#define SUPERSLM_QK_AVX512_TARGET
+#endif
 
 namespace superslm {
 
@@ -422,14 +436,123 @@ static void RmsNormWideI64(const int64_t* h, const int32_t* g, size_t width, int
 	}
 }
 
-int64_t QkQ31Score(const int8_t* q, const int8_t* k, const int64_t* ratio_q31, size_t head_dim) {
-	// Scalar reference.  The loop's order is the format contract; platform
-	// vector kernels may partition it only when they preserve this reduction.
+int64_t QkQ31ScoreScalarRef(const int8_t* q, const int8_t* k, const int64_t* ratio_q31,
+                             size_t head_dim) {
 	int64_t total = 0;
 	for (size_t d = 0; d < head_dim; ++d) {
 		total += static_cast<int64_t>(q[d]) * static_cast<int64_t>(k[d]) * ratio_q31[d];
 	}
 	return RoundingDivideByPOT(total, 31);
+}
+
+namespace {
+
+inline void AddQ31Terms(const int32_t* signed_terms, const uint64_t* products, size_t count,
+	                    int64_t* total) {
+	for (size_t i = 0; i < count; ++i) {
+		*total += signed_terms[i] < 0 ? -static_cast<int64_t>(products[i])
+		                              : static_cast<int64_t>(products[i]);
+	}
+}
+
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+int64_t QkQ31ScoreSse2(const int8_t* q, const int8_t* k, const int64_t* ratio, size_t n) {
+	int64_t total = 0;
+	size_t d = 0;
+	for (; d + 2 <= n; d += 2) {
+		const int32_t terms[2] = {static_cast<int32_t>(q[d]) * k[d],
+		                          static_cast<int32_t>(q[d + 1]) * k[d + 1]};
+		const __m128i a = _mm_set_epi32(0, std::abs(terms[1]), 0, std::abs(terms[0]));
+		const __m128i b = _mm_set_epi32(0, static_cast<int32_t>(ratio[d + 1]), 0,
+		                                static_cast<int32_t>(ratio[d]));
+		alignas(16) uint64_t products[2];
+		_mm_store_si128(reinterpret_cast<__m128i*>(products), _mm_mul_epu32(a, b));
+		AddQ31Terms(terms, products, 2, &total);
+	}
+	for (; d < n; ++d) total += static_cast<int64_t>(q[d]) * k[d] * ratio[d];
+	return RoundingDivideByPOT(total, 31);
+}
+
+SUPERSLM_QK_AVX2_TARGET
+int64_t QkQ31ScoreAvx2(const int8_t* q, const int8_t* k, const int64_t* ratio, size_t n) {
+	int64_t total = 0;
+	size_t d = 0;
+	for (; d + 4 <= n; d += 4) {
+		alignas(32) int32_t a_lanes[8] = {};
+		alignas(32) int32_t b_lanes[8] = {};
+		int32_t terms[4];
+		for (size_t i = 0; i < 4; ++i) {
+			terms[i] = static_cast<int32_t>(q[d + i]) * k[d + i];
+			a_lanes[i * 2] = std::abs(terms[i]);
+			b_lanes[i * 2] = static_cast<int32_t>(ratio[d + i]);
+		}
+		alignas(32) uint64_t products[4];
+		_mm256_store_si256(reinterpret_cast<__m256i*>(products),
+		                   _mm256_mul_epu32(_mm256_load_si256(reinterpret_cast<const __m256i*>(a_lanes)),
+		                                    _mm256_load_si256(reinterpret_cast<const __m256i*>(b_lanes))));
+		AddQ31Terms(terms, products, 4, &total);
+	}
+	for (; d < n; ++d) total += static_cast<int64_t>(q[d]) * k[d] * ratio[d];
+	return RoundingDivideByPOT(total, 31);
+}
+
+SUPERSLM_QK_AVX512_TARGET
+int64_t QkQ31ScoreAvx512(const int8_t* q, const int8_t* k, const int64_t* ratio, size_t n) {
+	int64_t total = 0;
+	size_t d = 0;
+	for (; d + 8 <= n; d += 8) {
+		alignas(64) int32_t a_lanes[16] = {};
+		alignas(64) int32_t b_lanes[16] = {};
+		int32_t terms[8];
+		for (size_t i = 0; i < 8; ++i) {
+			terms[i] = static_cast<int32_t>(q[d + i]) * k[d + i];
+			a_lanes[i * 2] = std::abs(terms[i]);
+			b_lanes[i * 2] = static_cast<int32_t>(ratio[d + i]);
+		}
+		alignas(64) uint64_t products[8];
+		_mm512_store_si512(reinterpret_cast<void*>(products),
+		                  _mm512_mul_epu32(_mm512_load_si512(reinterpret_cast<const void*>(a_lanes)),
+		                                   _mm512_load_si512(reinterpret_cast<const void*>(b_lanes))));
+		AddQ31Terms(terms, products, 8, &total);
+	}
+	for (; d < n; ++d) total += static_cast<int64_t>(q[d]) * k[d] * ratio[d];
+	return RoundingDivideByPOT(total, 31);
+}
+#endif
+}  // namespace
+
+int64_t QkQ31ScoreForTier(const int8_t* q, const int8_t* k, const int64_t* ratio, size_t n,
+                           QkQ31ScoreTier tier) {
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+	switch (tier) {
+		case QkQ31ScoreTier::Sse2: return QkQ31ScoreSse2(q, k, ratio, n);
+		case QkQ31ScoreTier::Avx2: return QkQ31ScoreAvx2(q, k, ratio, n);
+		case QkQ31ScoreTier::Avx512: return QkQ31ScoreAvx512(q, k, ratio, n);
+		case QkQ31ScoreTier::Scalar: break;
+	}
+#else
+	(void)tier;
+#endif
+	return QkQ31ScoreScalarRef(q, k, ratio, n);
+}
+
+int64_t QkQ31Score(const int8_t* q, const int8_t* k, const int64_t* ratio, size_t n) {
+#if defined(SUPERSLM_FORCE_SCALAR_MATMUL)
+	return QkQ31ScoreScalarRef(q, k, ratio, n);
+#elif defined(SUPERSLM_FORCE_SSE2_MATMUL)
+	return QkQ31ScoreForTier(q, k, ratio, n, QkQ31ScoreTier::Sse2);
+#elif defined(SUPERSLM_FORCE_AVX2_MATMUL)
+	return QkQ31ScoreForTier(q, k, ratio, n, QkQ31ScoreTier::Avx2);
+#elif defined(SUPERSLM_FORCE_AVX512_MATMUL)
+	return QkQ31ScoreForTier(q, k, ratio, n, QkQ31ScoreTier::Avx512);
+#elif SUPERSLM_MATMUL_HAVE_SIMD_X64
+	const int tier = DetectBestDotRowTierForCpu();
+	return QkQ31ScoreForTier(q, k, ratio, n,
+	                         tier == 2 ? QkQ31ScoreTier::Avx512 :
+	                         tier == 1 ? QkQ31ScoreTier::Avx2 : QkQ31ScoreTier::Sse2);
+#else
+	return QkQ31ScoreScalarRef(q, k, ratio, n);
+#endif
 }
 
 SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_size,

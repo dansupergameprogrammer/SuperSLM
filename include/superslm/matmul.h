@@ -115,6 +115,9 @@ int64_t DotRowScalarRef(const int8_t* activations, const int8_t* weights, size_t
 // 0=SSE2, 1=AVX2, 2=AVX512, matching the internal DotRowTier enum's declaration order.
 int ResolveDotRowTier(int max_basic_leaf, int leaf1_ecx, int leaf7_ebx,
                        unsigned long long xcr0);
+// Shipping CPU probe, sharing DotRow's cached CPUID/XGETBV result.  Exposed
+// for other integer SIMD kernels that must select the same safe ISA tier.
+int DetectBestDotRowTierForCpu();
 #endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
 
 // F-S3-6/C32 (SuperSLM_S3a_WalkingSkeleton_Plan.md §4.6, §11 S3.3 §6.4) — the

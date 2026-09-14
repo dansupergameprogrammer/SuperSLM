@@ -450,6 +450,16 @@ int ResolveDotRowTier(int max_basic_leaf, int leaf1_ecx, int leaf7_ebx,
 	}
 	return 0;  // unreachable; every enumerator handled above
 }
+
+int DetectBestDotRowTierForCpu() {
+	static const DotRowTier tier = DetectBestDotRowTier();
+	switch (tier) {
+		case DotRowTier::kSse2: return 0;
+		case DotRowTier::kAvx2: return 1;
+		case DotRowTier::kAvx512: return 2;
+	}
+	return 0;
+}
 #endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
 
 void GemmInt8AccumulateRow(const int8_t* activations, const int8_t* weights,
