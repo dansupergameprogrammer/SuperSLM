@@ -138,6 +138,45 @@ def test_channel_landing_target_uses_c19_reciprocal_not_source_mantissa():
     assert table["k_channel_r_t"][0] == 1 << 32
 
 
+def test_provisional_qkc1_payload_drives_scalar_and_vector_qk_reference(tmp_path):
+    """Slice 5's product path: float peaks -> real QKC1 -> loader -> both forwards.
+
+    The loaded payload is deliberately checked against the reference's derived table
+    rather than a sibling reimplementation.  Vector/scalar equality is then the
+    forward equivalence gate over the same provisional table.
+    """
+    model = _qk_model()
+    peaks = {
+        f"layer{layer}": np.asarray([
+            [0.25 + 0.125 * (head + channel)
+             for channel in range(model.config.head_dim)]
+            for head in range(model.config.num_key_value_heads)], dtype=np.float64)
+        for layer in range(model.config.num_hidden_layers)
+    }
+    model = reference_pipeline.with_provisional_qk_channel_table(model, peaks)
+    payload = converter.build_qk_channel_table(model, model.qk_channel_peaks)
+    for layer in range(model.config.num_hidden_layers):
+        prefix = f"layer{layer}"
+        base = layer * model.config.num_key_value_heads * model.config.head_dim
+        size = model.config.num_key_value_heads * model.config.head_dim
+        assert np.array_equal(payload["k_channel_r_t"][base:base + size],
+                              model.qk_channel_table[prefix]["r_t"].reshape(-1))
+        assert np.array_equal(payload["k_channel_e_t"][base:base + size],
+                              model.qk_channel_table[prefix]["e_t"].reshape(-1))
+        assert np.array_equal(payload["k_channel_ratio"][base:base + size],
+                              model.qk_channel_table[prefix]["ratio"].reshape(-1))
+
+    sections, _ = converter.build_sections(model)
+    path = tmp_path / "provisional-qwen3-shape.sslm"
+    artifact_format.write_artifact(
+        str(path), sections, flags=converter.artifact_flags_for_model(model))
+    assert path.is_file() and path.stat().st_size > 0
+
+    tokens = [1, 2, 3, 4, 5]
+    assert np.array_equal(reference_pipeline.forward(model, tokens),
+                          reference_pipeline.forward_scalar_reference(model, tokens))
+
+
 def test_k_cd1_rejects_nonpositive_qk_composition_source():
     model = _qk_model()
     model.composition_constants["layer0.k_norm"] = (0, -30)

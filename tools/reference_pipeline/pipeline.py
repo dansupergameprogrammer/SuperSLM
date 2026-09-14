@@ -120,6 +120,7 @@ __all__ = [
     "load_model",
     "new_kv_cache",
     "with_rope_tables",
+    "with_provisional_qk_channel_table",
     "forward_float_layers",
     "attention_group_size",
     "is_degenerate_grouping",
@@ -895,6 +896,11 @@ class QuantizedModel:
     # whole calibration to tell which policy produced a saved artifact. Default empty —
     # a legacy-calibrated or fixture-built model carries no per-head policy to mark.
     kv_calibration_provenance: dict = dataclasses.field(default_factory=dict)
+    # Slice 5's provisional QKC1 authority.  The raw float peaks are retained solely so
+    # the real writer can build the identical QKC1 payload; the derived images are what
+    # the Python reference consumes.
+    qk_channel_peaks: dict = dataclasses.field(default_factory=dict)
+    qk_channel_table: dict = dataclasses.field(default_factory=dict)
 
     def weight_names(self) -> list[str]:
         return list(self.weights)
@@ -926,6 +932,102 @@ def with_rope_tables(model: QuantizedModel, tables) -> QuantizedModel:
     perturbing the carried tables can see that.
     """
     return dataclasses.replace(model, rope_tables=_as_rope_tables(tables))
+
+
+def _round_nearest_away(numerator: int, denominator: int) -> int:
+    """Positive rational rounding, ties away, for Q31 source/head ratios."""
+    return (2 * numerator + denominator) // (2 * denominator)
+
+
+def _qk_channel_table_from_peaks(model: QuantizedModel, channel_peaks: dict) -> dict:
+    """The QKC1 images of §5's provisional `float_post_RoPE_peak / 127` source.
+
+    This is deliberately the reference-side representation of the writer's four arrays:
+    the writer remains the artifact authority, while both consumers derive the same exact
+    binary64 source images from the recorded float peaks.
+    """
+    cfg = model.config
+    table = {}
+    for layer in range(cfg.num_hidden_layers):
+        prefix = f"layer{layer}"
+        if f"{prefix}.k_norm.gain" not in model.weights:
+            continue
+        peaks = np.asarray(channel_peaks.get(prefix), dtype=np.float64)
+        expected = (cfg.num_key_value_heads, cfg.head_dim)
+        if peaks.shape != expected:
+            raise ValueError(f"{prefix} post-RoPE peaks have {peaks.shape}, expected {expected}")
+        if not np.isfinite(peaks).all() or np.any(peaks <= 0.0):
+            raise ValueError(f"{prefix} post-RoPE peaks must be finite and positive")
+        r_t = np.empty(expected, dtype=np.int64)
+        e_t = np.empty(expected, dtype=np.int64)
+        ratio = np.empty(expected, dtype=np.int64)
+        source = peaks / 127.0
+        for head in range(cfg.num_key_value_heads):
+            sources = [Fraction(float(value)) for value in source[head]]
+            head_max = max(sources)
+            for channel, value in enumerate(sources):
+                mantissa, exponent = canonical_scale(value)
+                r_t[head, channel] = intmath.dynamic_scale_reciprocal(mantissa)
+                e_t[head, channel] = exponent
+                q31 = _round_nearest_away(
+                    value.numerator * head_max.denominator * (1 << 31),
+                    value.denominator * head_max.numerator)
+                if not 1 <= q31 <= (1 << 31):
+                    raise ValueError(f"{prefix} head {head} channel {channel} Q31 ratio={q31}")
+                ratio[head, channel] = q31
+        table[prefix] = {"r_t": r_t, "e_t": e_t, "ratio": ratio}
+    return table
+
+
+def with_provisional_qk_channel_table(model: QuantizedModel, channel_peaks: dict) -> QuantizedModel:
+    """Attach the same provisional table that the QKC1 writer serializes."""
+    copied = {key: np.asarray(value, dtype=np.float64).copy() for key, value in channel_peaks.items()}
+    return dataclasses.replace(
+        model, qk_channel_peaks=copied,
+        qk_channel_table=_qk_channel_table_from_peaks(model, copied))
+
+
+def _qk_wide_source_scale(model: QuantizedModel, prefix: str) -> tuple[int, int]:
+    """`KWideSourceScale[L] = canonical_scale(127 * value(layerL.k_norm))`."""
+    m_kn, e_kn = model.composition_constants[f"{prefix}.k_norm"]
+    return canonical_scale(Fraction(127 * int(m_kn)) * Fraction(2) ** int(e_kn))
+
+
+def _qk_direct_k_vector(model, prefix, k, cos_table, sin_table, steps, start):
+    """Wide QK K -> RoPE -> one per-channel QKC1 landing (no legacy K requant)."""
+    cfg = model.config
+    gain = model.weights[f"{prefix}.k_norm.gain"].astype(np.int64)
+    wide = (_vec_rmsnorm(k.reshape(-1, cfg.head_dim), cfg.head_dim) * gain).reshape(k.shape)
+    rotated = _vec_rope(wide, cos_table, sin_table, steps, start)
+    table = model.qk_channel_table[prefix]
+    m_wide, e_wide = _qk_wide_source_scale(model, prefix)
+    out = np.empty(rotated.shape, dtype=np.int64)
+    for token in range(steps):
+        for head in range(cfg.num_key_value_heads):
+            for channel in range(cfg.head_dim):
+                out[token, head, channel] = intmath.residual_reconcile(
+                    int(rotated[token, head, channel]), m_wide,
+                    int(table["r_t"][head, channel]), e_wide,
+                    int(table["e_t"][head, channel]))
+    return _clamp_int8(out)
+
+
+def _qk_q31_scores_vector(q, k, ratios):
+    """Fixed-order Q31 channel-ratio score reduction, one Q/KV head pair."""
+    scores = np.empty((q.shape[0], k.shape[0]), dtype=np.int64)
+    for query in range(q.shape[0]):
+        for key in range(k.shape[0]):
+            total = sum(int(q[query, channel]) * int(k[key, channel]) * int(ratios[channel])
+                        for channel in range(q.shape[1]))
+            scores[query, key] = intmath.rounding_divide_by_pot(total, 31)
+    return scores
+
+
+def _qk_direct_softmax_scale(model, prefix, kv_head):
+    """The QK score's `S_q * B_h / sqrt(head_dim)` physical input scale."""
+    q_scale = Fraction(float(model.weight_scales[f"{prefix}.q_norm.gain"][0]))
+    source = model.qk_channel_peaks[prefix][kv_head] / 127.0
+    return float(q_scale * Fraction(float(np.max(source))) / Fraction(math.sqrt(model.config.head_dim)))
 
 
 def embedding_weight(model: QuantizedModel):
@@ -1077,12 +1179,13 @@ def fixture_model(cfg: ModelConfig) -> QuantizedModel:
     float_weight = _dict_float_source(floats)
     tokenize_prompt = _fixture_tokenize_prompt(cfg)
     records = calibration_records()
-    maxima = _calibrate(cfg, float_weight, records,
-                        lambda record: tokenize_prompt(run_prompt_messages(record)))
+    maxima, channel_peaks = _calibrate(
+        cfg, float_weight, records,
+        lambda record: tokenize_prompt(run_prompt_messages(record)), return_channel_peaks=True)
     scales, residual_scales, biases = _derive_scales(cfg, maxima, weight_scales, {})
     composition_constants, kv_landing_scales, kv_landing_reciprocals = _derive_composition_constants(
         cfg, weight_scales, scales)
-    return QuantizedModel(config=cfg, scales=scales, weights=weights,
+    model = QuantizedModel(config=cfg, scales=scales, weights=weights,
                           weight_scales=weight_scales, residual_scales=residual_scales,
                           rope_tables=_build_rope_tables(cfg), biases=biases,
                           float_source=float_weight, tokenize_prompt=tokenize_prompt,
@@ -1090,6 +1193,8 @@ def fixture_model(cfg: ModelConfig) -> QuantizedModel:
                           gemm_weights={}, composition_constants=composition_constants,
                           kv_landing_scales=kv_landing_scales,
                           kv_landing_reciprocals=kv_landing_reciprocals)
+    return (with_provisional_qk_channel_table(model, channel_peaks)
+            if channel_peaks else model)
 
 
 def fixture_model_biased(cfg: ModelConfig) -> QuantizedModel:
@@ -1833,8 +1938,9 @@ def load_model(checkpoint, extra_tensors=None, require_tensors=(),
     if tokenize_prompt is None:
         tokenize_prompt = _checkpoint_tokenize_prompt(checkpoint)
     records = calibration_records()
-    maxima = _calibrate(cfg, float_weight, records,
-                        lambda record: tokenize_prompt(run_prompt_messages(record)))
+    maxima, channel_peaks = _calibrate(
+        cfg, float_weight, records,
+        lambda record: tokenize_prompt(run_prompt_messages(record)), return_channel_peaks=True)
     scales, residual_scales, biases = _derive_scales(cfg, maxima, weight_scales, float_biases)
     composition_constants, kv_landing_scales, kv_landing_reciprocals = _derive_composition_constants(
         cfg, weight_scales, scales)
@@ -1846,7 +1952,7 @@ def load_model(checkpoint, extra_tensors=None, require_tensors=(),
         name: (30, emit_dynamic_bias(
             np.asarray(values, dtype=np.float64).tolist(), max(weight_scales[name])))
         for name, values in float_biases.items()}
-    return QuantizedModel(config=cfg, scales=scales, weights=weights,
+    model = QuantizedModel(config=cfg, scales=scales, weights=weights,
                           weight_scales=weight_scales, residual_scales=residual_scales,
                           rope_tables=_build_rope_tables(cfg), biases=biases,
                           float_source=float_weight, tokenize_prompt=tokenize_prompt,
@@ -1855,6 +1961,8 @@ def load_model(checkpoint, extra_tensors=None, require_tensors=(),
                           kv_landing_scales=kv_landing_scales,
                           kv_landing_reciprocals=kv_landing_reciprocals,
                           dynamic_biases=dynamic_biases)
+    return (with_provisional_qk_channel_table(model, channel_peaks)
+            if channel_peaks else model)
 
 
 def _check_shape(checkpoint, name, values, cfg: ModelConfig):
@@ -3930,7 +4038,8 @@ def _vec_forward(model, tokens, reader, layer_outputs=None, cache=None):
                 reader, f"{prefix}.q_norm.requant"))
             q = q_flat.reshape(steps, cfg.num_attention_heads, cfg.head_dim)
         k_norm_gain = model.weights.get(f"{prefix}.k_norm.gain")
-        if k_norm_gain is not None:
+        direct_qk = k_norm_gain is not None and prefix in model.qk_channel_table
+        if k_norm_gain is not None and not direct_qk:
             k_flat = k.reshape(-1, cfg.head_dim)
             k_flat = _clamp_int8(_rescale(
                 _vec_rmsnorm(k_flat, cfg.head_dim) * k_norm_gain.astype(np.int64),
@@ -3938,18 +4047,26 @@ def _vec_forward(model, tokens, reader, layer_outputs=None, cache=None):
             k = k_flat.reshape(steps, cfg.num_key_value_heads, cfg.head_dim)
 
         q = _clamp_int8(_vec_rope(q, cos_table, sin_table, steps, start))
-        k = _clamp_int8(_vec_rope(k, cos_table, sin_table, steps, start))
+        k = (_qk_direct_k_vector(model, prefix, k, cos_table, sin_table, steps, start)
+             if direct_qk else _clamp_int8(_vec_rope(k, cos_table, sin_table, steps, start)))
 
         if cache is not None:
             k, v = cache.extend(layer, k, v)
 
-        softmax_scale = reader.scale(f"{prefix}.softmax.input")
+        softmax_scale = None if direct_qk else reader.scale(f"{prefix}.softmax.input")
         mask = _causal_mask(steps, start, k.shape[0])
         context = np.empty((steps, cfg.num_attention_heads, cfg.head_dim), dtype=np.int64)
         for head in range(cfg.num_attention_heads):
             kv_head = head // group
-            scores = int_matmul(q[:, head, :], k[:, kv_head, :].T)
-            probabilities = _vec_softmax(scores, mask, softmax_scale)
+            if direct_qk:
+                scores = _qk_q31_scores_vector(
+                    q[:, head, :], k[:, kv_head, :],
+                    model.qk_channel_table[prefix]["ratio"][kv_head])
+                probabilities = _vec_softmax(
+                    scores, mask, _qk_direct_softmax_scale(model, prefix, kv_head))
+            else:
+                scores = int_matmul(q[:, head, :], k[:, kv_head, :].T)
+                probabilities = _vec_softmax(scores, mask, softmax_scale)
             context[:, head, :] = int_matmul(probabilities, v[:, kv_head, :])
         context = _clamp_int8(_rescale(context, reader, f"{prefix}.attn_ctx.requant"))
 
@@ -4729,22 +4846,52 @@ def _scalar_forward(model, tokens, reader):
             return out
 
         q = apply_qk_norm_scalar(q, cfg.num_attention_heads, f"{prefix}.q_norm")
-        k = apply_qk_norm_scalar(k, cfg.num_key_value_heads, f"{prefix}.k_norm")
+        direct_qk = (f"{prefix}.k_norm.gain" in model.weights and
+                     prefix in model.qk_channel_table)
+        if not direct_qk:
+            k = apply_qk_norm_scalar(k, cfg.num_key_value_heads, f"{prefix}.k_norm")
 
         q_heads = [_scalar_clamp(rotate(split(q, h))) for h in range(cfg.num_attention_heads)]
-        k_heads = [_scalar_clamp(rotate(split(k, h))) for h in range(cfg.num_key_value_heads)]
+        if direct_qk:
+            gain = [int(v) for v in model.weights[f"{prefix}.k_norm.gain"].tolist()]
+            m_wide, e_wide = _qk_wide_source_scale(model, prefix)
+            table = model.qk_channel_table[prefix]
+            k_heads = []
+            for head in range(cfg.num_key_value_heads):
+                raw = split(k, head)
+                normalized = _scalar_rmsnorm(raw, head_dim)
+                wide = [[normalized[t][channel] * gain[channel] for channel in range(head_dim)]
+                        for t in range(steps)]
+                rotated = rotate(wide)
+                k_heads.append(_scalar_clamp([[
+                    intmath.residual_reconcile(
+                        int(rotated[t][channel]), m_wide,
+                        int(table["r_t"][head, channel]), e_wide,
+                        int(table["e_t"][head, channel]))
+                    for channel in range(head_dim)] for t in range(steps)]))
+        else:
+            k_heads = [_scalar_clamp(rotate(split(k, h))) for h in range(cfg.num_key_value_heads)]
         v_heads = [split(v, h) for h in range(cfg.num_key_value_heads)]
 
-        softmax_scale = reader.scale(f"{prefix}.softmax.input")
+        softmax_scale = None if direct_qk else reader.scale(f"{prefix}.softmax.input")
         context = [[0] * (cfg.num_attention_heads * head_dim) for _ in range(steps)]
         for head in range(cfg.num_attention_heads):
             kv_head = head // group
             keys = k_heads[kv_head]
-            transposed = [[keys[j][d] for j in range(steps)] for d in range(head_dim)]
-            scores = _scalar_matmul(q_heads[head], transposed)
+            if direct_qk:
+                ratios = table["ratio"][kv_head]
+                scores = [[intmath.rounding_divide_by_pot(
+                    sum(int(q_heads[head][position][channel]) * int(keys[key][channel]) *
+                        int(ratios[channel]) for channel in range(head_dim)), 31)
+                    for key in range(steps)] for position in range(steps)]
+                head_softmax_scale = _qk_direct_softmax_scale(model, prefix, kv_head)
+            else:
+                transposed = [[keys[j][d] for j in range(steps)] for d in range(head_dim)]
+                scores = _scalar_matmul(q_heads[head], transposed)
+                head_softmax_scale = softmax_scale
             for position in range(steps):
                 width = position + 1
-                probabilities = _scalar_softmax_row(scores[position], width, softmax_scale)
+                probabilities = _scalar_softmax_row(scores[position], width, head_softmax_scale)
                 for d in range(head_dim):
                     total = 0
                     for j in range(width):

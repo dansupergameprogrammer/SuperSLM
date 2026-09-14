@@ -334,7 +334,10 @@ def build_sections(model, *, fold_ops_tensor=None, ctx_fold_tensor=None,
     sections.append(F.Section(F.SectionType.SIGMOID_LUT, W.write_sil1()))
 
     if has_qk_norm(model):
-        table = build_qk_channel_table(model)
+        # Slice 5's provisional authority is the float post-RoPE per-channel peak.
+        # Legacy models retain the existing gain-scale construction until their producer
+        # is migrated; QK models loaded by the reference carry these peaks explicitly.
+        table = build_qk_channel_table(model, getattr(model, "qk_channel_peaks", None))
         sections.append(F.Section(
             F.SectionType.QK_CHANNEL_TABLE,
             W.write_tensor_manifest(W.QKC1, np.int64, table)))

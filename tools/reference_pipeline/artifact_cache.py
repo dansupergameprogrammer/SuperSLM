@@ -231,6 +231,13 @@ def _compute_fingerprint(model) -> str:
         hasher.update(key.encode("utf-8"))
         hasher.update(json.dumps(val, sort_keys=True).encode("utf-8"))
 
+    # The provisional QKC1 source is calibration-derived artifact content.  Hash its
+    # binary64 peak bytes rather than a text rendering so a changed table source cannot
+    # reuse a cache fingerprint.
+    for key in sorted(getattr(model, "qk_channel_peaks", {})):
+        hasher.update(key.encode("utf-8"))
+        hasher.update(np.asarray(model.qk_channel_peaks[key], dtype=np.float64).tobytes())
+
     return hasher.hexdigest()
 
 
@@ -348,6 +355,10 @@ def save_artifact(model, artifact_path, checkpoint_path=None):
         "kv_landing_scales": kv_landing_scales_json,
         "kv_landing_reciprocals": kv_landing_reciprocals_json,
         "kv_calibration_provenance": kv_calibration_provenance_json,
+        "qk_channel_peaks": {
+            key: np.asarray(value, dtype=np.float64).tolist()
+            for key, value in getattr(model, "qk_channel_peaks", {}).items()
+        },
         "residual_scales": {
             key: (val.tolist() if isinstance(val, np.ndarray) else val)
             for key, val in model.residual_scales.items()
@@ -625,5 +636,9 @@ def load_artifact(artifact_path, expect_fingerprint=None):
         dynamic_biases=dynamic_biases,
         kv_calibration_provenance=kv_calibration_provenance,
     )
-
-    return model
+    qk_channel_peaks = {
+        key: np.asarray(value, dtype=np.float64)
+        for key, value in metadata.get("qk_channel_peaks", {}).items()
+    }
+    return (pipeline.with_provisional_qk_channel_table(model, qk_channel_peaks)
+            if qk_channel_peaks else model)
