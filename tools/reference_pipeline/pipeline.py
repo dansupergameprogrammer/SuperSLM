@@ -4006,7 +4006,8 @@ def _vec_project(model, name, values):
     return accumulator
 
 
-def _vec_forward(model, tokens, reader, layer_outputs=None, attention_outputs=None, cache=None):
+def _vec_forward(model, tokens, reader, layer_outputs=None, attention_outputs=None,
+                 attention_stop_layer=None, cache=None):
     cfg = model.config
     group = attention_group_size(cfg)
     steps = len(tokens)
@@ -4093,6 +4094,8 @@ def _vec_forward(model, tokens, reader, layer_outputs=None, attention_outputs=No
             + _rescale(attention, reader, f"{prefix}.attn_residual.branch"))
         if attention_outputs is not None:
             attention_outputs.append(hidden.copy())
+        if attention_stop_layer == layer:
+            return hidden
 
         gain = model.weights[f"{prefix}.mlp_norm.gain"].astype(np.int64)
         normed = _clamp_int8(_rescale(
@@ -4164,6 +4167,11 @@ def forward_attention_layers(model: QuantizedModel, tokens):
     outputs: list = []
     _vec_forward(model, list(tokens), _ScaleReader(model.scales), attention_outputs=outputs)
     return outputs
+
+
+def forward_attention_layer(model: QuantizedModel, tokens, layer: int):
+    """Integer residual stream after one requested attention residual site."""
+    return _vec_forward(model, list(tokens), _ScaleReader(model.scales), attention_stop_layer=layer)
 
 
 def scales_used_by_forward(model: QuantizedModel, tokens) -> StaticScales:
