@@ -308,6 +308,7 @@ const char* SectionTypeName(SslmSectionType t) {
 	if (t == SslmSectionType::DeltaFoldScales) return "DeltaFoldScales";
 	if (t == SslmSectionType::UFoldScales) return "UFoldScales";
 	if (t == SslmSectionType::DampedGreedyConstants) return "DampedGreedyConstants";
+	if (t == SslmSectionType::QkChannelTable) return "QkChannelTable";
 	return "Unknown";
 }
 

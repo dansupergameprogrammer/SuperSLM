@@ -18,7 +18,6 @@
 #include "bad_alloc_wrap.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -1267,9 +1266,12 @@ SslmModelStatus ValidateQkChannelTableAdditive(const SslmModelView& view, std::s
 				const uint64_t row = (static_cast<uint64_t>(l) * view.config.num_key_value_heads + h) *
 				                     view.config.head_dim + d;
 				const uint64_t bits = RdU64(table[0]->data + row * 8);
-				double source;
-				std::memcpy(&source, &bits, sizeof(source));
-				if (!std::isfinite(source) || !(source > 0.0)) {
+				// Classify the serialized IEEE-754 source by its bits: this loader
+				// must not introduce a host-FP operation merely to reject NaN,
+				// infinity, signed/unsigned zero, or a negative source.
+				const uint64_t exponent = (bits >> 52) & UINT64_C(0x7ff);
+				if ((bits >> 63) != 0 || (bits & UINT64_C(0x7fffffffffffffff)) == 0 ||
+				    exponent == UINT64_C(0x7ff)) {
 					char hex[17];
 					std::snprintf(hex, sizeof(hex), "%016llx", static_cast<unsigned long long>(bits));
 					if (err) *err = "QkChannelTable row (layer " + std::to_string(l) + ", head " +
@@ -1642,6 +1644,19 @@ SslmModelStatus SslmModelAccess::LoadImpl(const uint8_t* data, size_t size, Sslm
 
 	for (const SslmSectionView& section : out.backing_.Sections()) {
 		SslmModelStatus s = SslmModelStatus::Ok;
+		// Keep QKC1 outside the established section-type switch.  This parser is
+		// an additive capability and the CPU-only build's instruction census
+		// requires the legacy dispatch remain a branch chain rather than acquire
+		// a compiler-generated jump table.
+		if (section.type == SslmSectionType::QkChannelTable) {
+			s = SslmTensorManifest::Parse(section, out.qk_channel_table, err);
+			out.has_qk_channel_table = (s == SslmModelStatus::Ok);
+			if (s != SslmModelStatus::Ok) {
+				out = SslmModelView{};
+				return s;
+			}
+			continue;
+		}
 		switch (section.type) {
 			case SslmSectionType::Config:
 				s = ParseConfig(section, out.config, err);
@@ -1666,10 +1681,6 @@ SslmModelStatus SslmModelAccess::LoadImpl(const uint8_t* data, size_t size, Sslm
 			case SslmSectionType::WeightScales:
 				s = SslmTensorManifest::Parse(section, out.weight_scales, err);
 				out.has_weight_scales = (s == SslmModelStatus::Ok);
-				break;
-			case SslmSectionType::QkChannelTable:
-				s = SslmTensorManifest::Parse(section, out.qk_channel_table, err);
-				out.has_qk_channel_table = (s == SslmModelStatus::Ok);
 				break;
 			case SslmSectionType::CompositionConstants:
 				s = SslmKeyedConstants::Parse(section, out.composition_constants, err);
