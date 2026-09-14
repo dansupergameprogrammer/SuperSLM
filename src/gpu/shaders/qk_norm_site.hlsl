@@ -48,6 +48,7 @@ void main(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID) {
     if (pairs == 0u || pairs > cos_count || pairs > sin_count || g_position >= cos_count / pairs || g_position >= sin_count / pairs) { if (t == 0) SeqState.Store<int64_t>(sticky_off, kTagRopeTableExtentExceeded); return; }
     if (t == 0) gQkNormClamps = 0; AllMemoryBarrierWithGroupSync();
     uint qkc_base = layer_base + Layout.Load<uint>(65 * 4) + head * (uint)head_dim * 8u, qkc_block = g_num_kv_heads * (uint)head_dim * 8u;
+    // The compact shader layout places GpuLayerLayout::off[62] in slot 63.
     uint source_off = layer_base + Layout.Load<uint>(63 * 4); int64_t wide_m = LayerWeights.Load<int64_t>(source_off), wide_e = LayerWeights.Load<int64_t>(source_off + 8u) - kRopeFracBitsGpu;
     uint row_offset = g_position * pairs;
     for (uint p = t; p < pairs; p += 256) {

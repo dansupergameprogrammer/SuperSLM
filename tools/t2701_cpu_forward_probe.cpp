@@ -2,6 +2,7 @@
 // Usage: t2701_cpu_forward_probe <model.sslm> <comma-separated-token-ids>
 // Prints the SHA-256 of the final raw int32 logits in little-endian row-major order.
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -38,15 +39,39 @@ bool ParseTokenIds(const char* spec, std::vector<int32_t>* out) {
 	return !out->empty();
 }
 
+uint32_t Align8U32(uint32_t value) { return (value + 7u) & ~7u; }
+uint32_t SeqScaleOff(uint32_t hidden_size) { return Align8U32(hidden_size * 4u); }
+
+void PackEmbeddingBlock(const int8_t* codes, size_t hidden_size, const CarriedScale& scale,
+                        uint8_t* out) {
+	for (uint32_t i = 0; i < hidden_size; ++i) {
+		const int32_t code = static_cast<int32_t>(codes[i]);
+		std::memcpy(out + i * 4u, &code, sizeof(code));
+	}
+	const uint32_t scale_off = SeqScaleOff(static_cast<uint32_t>(hidden_size));
+	std::memcpy(out + scale_off, &scale.m, sizeof(scale.m));
+	std::memcpy(out + scale_off + sizeof(scale.m), &scale.e, sizeof(scale.e));
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
 	if (argc != 3 && argc != 4) {
-		std::fprintf(stderr, "usage: %s <model.sslm> <comma-separated-token-ids> [--gpu]\n", argv[0]);
+		std::fprintf(stderr, "usage: %s <model.sslm> <comma-separated-token-ids> [--gpu|--chunk|--gpu-chunk|--raw-k-cpu|--raw-k-gpu|--no-qnorm-cpu|--no-qnorm-gpu]\n", argv[0]);
 		return 2;
 	}
-	const bool use_gpu = argc == 4 && std::strcmp(argv[3], "--gpu") == 0;
-	if (argc == 4 && !use_gpu) return std::fprintf(stderr, "unknown option: %s\n", argv[3]), 2;
+	const bool use_gpu = argc == 4 &&
+	                     (std::strcmp(argv[3], "--gpu") == 0 || std::strcmp(argv[3], "--gpu-chunk") == 0);
+	const bool use_chunk = argc == 4 &&
+	                       (std::strcmp(argv[3], "--chunk") == 0 || std::strcmp(argv[3], "--gpu-chunk") == 0);
+	const bool raw_k = argc == 4 &&
+	                   (std::strcmp(argv[3], "--raw-k-cpu") == 0 || std::strcmp(argv[3], "--raw-k-gpu") == 0);
+	const bool raw_k_gpu = argc == 4 && std::strcmp(argv[3], "--raw-k-gpu") == 0;
+	const bool no_qnorm = argc == 4 &&
+	                      (std::strcmp(argv[3], "--no-qnorm-cpu") == 0 || std::strcmp(argv[3], "--no-qnorm-gpu") == 0);
+	const bool no_qnorm_gpu = argc == 4 && std::strcmp(argv[3], "--no-qnorm-gpu") == 0;
+	if (argc == 4 && !use_gpu && !use_chunk && !raw_k && !no_qnorm)
+		return std::fprintf(stderr, "unknown option: %s\n", argv[3]), 2;
 	std::vector<int32_t> tokens;
 	if (!ParseTokenIds(argv[2], &tokens)) {
 		std::fprintf(stderr, "invalid token-id list: %s\n", argv[2]);
@@ -60,6 +85,13 @@ int main(int argc, char** argv) {
 		return std::fprintf(stderr, "model load: %s\n", error.c_str()), 1;
 
 	const uint32_t layers_n = model.config.num_hidden_layers;
+	uint32_t layer_budget = layers_n;
+	if (const char* budget_spec = std::getenv("T2701_LAYER_BUDGET")) {
+		try { layer_budget = static_cast<uint32_t>(std::stoul(budget_spec)); }
+		catch (...) { return std::fprintf(stderr, "invalid T2701_LAYER_BUDGET\n"), 2; }
+		if (layer_budget == 0 || layer_budget > layers_n || use_chunk)
+			return std::fprintf(stderr, "T2701_LAYER_BUDGET must be in [1,layers] and stepped-only\n"), 2;
+	}
 	const size_t hidden = model.config.hidden_size;
 	const size_t head_dim = model.config.head_dim;
 	const size_t kv_heads = model.config.num_key_value_heads;
@@ -71,6 +103,15 @@ int main(int argc, char** argv) {
 		if (!MarshalLayer(model, layer, model.config.num_attention_heads, model.config.num_key_value_heads,
 		                  backing[layer], layers[layer], &error))
 			return std::fprintf(stderr, "marshal layer %u: %s\n", layer, error.c_str()), 1;
+	}
+	if (raw_k) {
+		for (LayerWeights& layer : layers) {
+			layer.q_norm_gain = nullptr;
+			layer.k_norm_gain = nullptr;
+		}
+	}
+	if (no_qnorm) {
+		for (LayerWeights& layer : layers) layer.q_norm_gain = nullptr;
 	}
 	const SslmTensorView* embed = model.weights.Tensor("embed");
 	const SslmTensorView* final_gain = model.weights.Tensor("final_norm.gain");
@@ -94,20 +135,59 @@ int main(int argc, char** argv) {
 	seq.hidden_codes = hidden_codes.data();
 	const OptionGKLandingMode k_mode = model.option_g_fused_k_landing ? OptionGKLandingMode::kFused
 	                                                                    : OptionGKLandingMode::kLegacy;
-	for (const int32_t token : tokens) {
+	if (use_chunk) {
+		std::vector<int8_t> chunk_codes(tokens.size() * hidden);
+		std::vector<CarriedScale> chunk_scales(tokens.size());
+		for (size_t i = 0; i < tokens.size(); ++i) {
+			SslmForwardStatus st = EmbedEntry(tokens[i], static_cast<int32_t>(model.config.vocab_size),
+			                                  embed_weights, hidden, embed_scale, chunk_codes.data() + i * hidden,
+			                                  &chunk_scales[i]);
+			if (st != SslmForwardStatus::Ok)
+				return std::fprintf(stderr, "embed: %s\n", SslmForwardStatusName(st)), 1;
+		}
+		SslmForwardStatus st;
+		if (use_gpu || raw_k_gpu || no_qnorm_gpu) {
+			const uint32_t block_bytes = SeqScaleOff(static_cast<uint32_t>(hidden)) + 16u;
+			std::vector<uint8_t> blocks(block_bytes * tokens.size());
+			for (size_t i = 0; i < tokens.size(); ++i)
+				PackEmbeddingBlock(chunk_codes.data() + i * hidden, hidden, chunk_scales[i],
+				                   blocks.data() + i * block_bytes);
+			superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+			st = superslm_gpu::SubmitChunkToFullDepthForG5Bridge(
+			    seq, layers.data(), layers_n, hidden, head_dim, kv_heads, model.config.intermediate_size,
+			    context_cap, model.rope_tables, workspace.data(), workspace.size(), blocks.data(),
+			    static_cast<uint32_t>(tokens.size()), nullptr, nullptr, nullptr, nullptr, nullptr, false,
+			    0, 0, nullptr, &inflight, 0, 1, layers_n != 0 && layers[0].k_norm_gain != nullptr);
+			if (st == SslmForwardStatus::Ok && inflight != nullptr) {
+				int32_t ready = 0;
+				st = superslm_gpu::RunLayerLoopGpuFinish(inflight, seq, workspace.data(), 1, &ready);
+			}
+		} else {
+			st = RunLayerLoopChunkBatched(chunk_codes.data(), chunk_scales.data(), tokens.size(), layers.data(),
+			                              layers_n, hidden, head_dim, kv_heads, model.config.intermediate_size,
+			                              context_cap, 0, model.rope_tables, workspace.data(), workspace.size(),
+			                              model.option_g_fused_k_landing, &seq.kv_saturation_count, {}, nullptr,
+			                              model.config.num_attention_heads * model.config.head_dim);
+			std::memcpy(hidden_codes.data(), chunk_codes.data() + (tokens.size() - 1) * hidden, hidden);
+			seq.hidden_scale = chunk_scales.back();
+			seq.context_length = static_cast<int64_t>(tokens.size());
+		}
+		if (st != SslmForwardStatus::Ok)
+			return std::fprintf(stderr, "forward: %s\n", SslmForwardStatusName(st)), 1;
+	} else for (const int32_t token : tokens) {
 		CarriedScale token_scale{};
 		SslmForwardStatus st = EmbedEntry(token, static_cast<int32_t>(model.config.vocab_size), embed_weights,
 		                                 hidden, embed_scale, hidden_codes.data(), &token_scale);
 		if (st != SslmForwardStatus::Ok) return std::fprintf(stderr, "embed: %s\n", SslmForwardStatusName(st)), 1;
 		seq.hidden_scale = token_scale;
 		seq.layer_index = 0;
-		if (use_gpu) {
+		if (use_gpu || raw_k_gpu || no_qnorm_gpu) {
 			st = superslm_gpu::RunLayerLoopGpu(
-			    seq, layers.data(), layers_n, layers_n, hidden, head_dim, kv_heads,
+			    seq, layers.data(), layers_n, layer_budget, hidden, head_dim, kv_heads,
 			    model.config.intermediate_size, context_cap, model.rope_tables, workspace.data(), workspace.size(),
 			    nullptr, nullptr, 1);
 		} else {
-			st = RunLayerLoop(seq, layers.data(), layers_n, layers_n, hidden, head_dim, kv_heads,
+			st = RunLayerLoop(seq, layers.data(), layers_n, layer_budget, hidden, head_dim, kv_heads,
 			                  model.config.intermediate_size, context_cap, model.rope_tables, workspace.data(),
 			                  workspace.size(), k_mode, {}, 0, nullptr,
 			                  model.config.num_attention_heads * model.config.head_dim);
@@ -125,7 +205,10 @@ int main(int argc, char** argv) {
 	if (st != SslmForwardStatus::Ok) return std::fprintf(stderr, "logits: %s\n", SslmForwardStatusName(st)), 1;
 	uint8_t digest[32];
 	Sha256Hash(reinterpret_cast<const uint8_t*>(logits.data()), logits.size() * sizeof(int32_t), digest);
-	std::printf("backend=%s tokens=%s logits_sha256=%s\n", use_gpu ? "gpu" : "cpu", argv[2],
-	            ToHex(digest).c_str());
+	uint8_t kv_digest[32];
+	Sha256Hash(workspace.data(), workspace.size(), kv_digest);
+	std::printf("backend=%s mode=%s layer_budget=%u tokens=%s logits_sha256=%s kv_sha256=%s\n", (use_gpu || raw_k_gpu || no_qnorm_gpu) ? "gpu" : "cpu",
+	            use_chunk ? "chunk" : "stepped", layer_budget, argv[2],
+	            ToHex(digest).c_str(), ToHex(kv_digest).c_str());
 	return 0;
 }
