@@ -455,6 +455,20 @@ def _rope_rotate(rows, cos_table, sin_table, head_dim: int):
     return out
 
 
+def _rope_rotate_wide(rows, cos_table, sin_table, head_dim: int):
+    """C13's one-rounded RoPE, deliberately retaining the pre-landing width."""
+    out = []
+    for position, row in enumerate(rows):
+        rotated = []
+        for p in range(head_dim // 2):
+            x, y = int(row[2 * p]), int(row[2 * p + 1])
+            c, s_ = int(cos_table[position][p]), int(sin_table[position][p])
+            rotated.extend([rdbpot_oracle(x * c - y * s_, 30),
+                            rdbpot_oracle(x * s_ + y * c, 30)])
+        out.append(rotated)
+    return out
+
+
 def _matmul(rows, weight_t):
     """Exact integer matmul: rows x weight_t (weight_t indexed [in][out])."""
     n_in = len(weight_t)
@@ -686,6 +700,7 @@ def forward_dynamic_logits_oracle(model, tokens) -> list:
         # genuinely distinct per-head values next.
         q_scale_per_head = [[q_scale[t] for t in range(steps)] for _ in range(n_heads)]
         k_norm_present_here = f"{prefix}.k_norm.gain" in w
+        direct_qk = k_norm_present_here and prefix in model.qk_channel_table
         if f"{prefix}.q_norm.gain" in w:
             # (carried-scale delta §3, D-SLM6116 -- supersedes this block's own pre-delta "q_scale
             # is OVERWRITTEN... converges on the identical value" text, C1): every head's own
@@ -693,7 +708,28 @@ def forward_dynamic_logits_oracle(model, tokens) -> list:
             # composition, below), one slot per head -- never collapsed to the last head's value.
             q_codes, q_scale_per_head = qk_norm_site_per_head(q_codes, f"{prefix}.q_norm", n_heads)
         k_codes = project_kv(prefix, "k_proj", "k", normed, normed_scale)
-        if k_norm_present_here:
+        if direct_qk:
+            # The fused construction retains the raw K landing, normalizes that
+            # int8 row at wide precision, rotates it wide, and lands only once
+            # at the QKC1 channel targets.  This is independently expressed
+            # here rather than calling the production reference helpers.
+            table = model.qk_channel_table[prefix]
+            m_kn, e_kn = model.composition_constants[f"{prefix}.k_norm"]
+            m_wide, e_wide = canonical_scale_oracle(Fraction(127 * int(m_kn)) *
+                                                     (Fraction(2) ** int(e_kn)))
+            e_wide -= 30
+            gain = [int(v) for v in w[f"{prefix}.k_norm.gain"]]
+            fused_rows = []
+            for kvh in range(n_kv):
+                raw_rows = [row[kvh * hd:(kvh + 1) * hd] for row in k_codes]
+                normalized = _rmsnorm_rows(raw_rows, hd)
+                wide = [[normalized[t][d] * gain[d] for d in range(hd)] for t in range(steps)]
+                rotated = _rope_rotate_wide(wide, cos_table, sin_table, hd)
+                fused_rows.append([[_clamp8(residual_reconcile_oracle(
+                    int(rotated[t][d]), m_wide, int(table["r_t"][kvh, d]), e_wide,
+                    int(table["e_t"][kvh, d]))) for d in range(hd)] for t in range(steps)])
+            k_heads = fused_rows
+        elif k_norm_present_here:
             # (carried-scale delta §4, D-SLM6117 -- supersedes this block's own pre-delta "K's own
             # norm output scale is DISCARDED" text, C2): K's post-norm codes requantize a SECOND
             # time (`land_k_normed`, above), onto the new static `k_normed` per-head targets --
@@ -712,8 +748,9 @@ def forward_dynamic_logits_oracle(model, tokens) -> list:
 
         q_heads = [_rope_rotate(split(q_codes, h), cos_table, sin_table, hd)
                    for h in range(n_heads)]
-        k_heads = [_rope_rotate(split(k_codes, h), cos_table, sin_table, hd)
-                   for h in range(n_kv)]
+        if not direct_qk:
+            k_heads = [_rope_rotate(split(k_codes, h), cos_table, sin_table, hd)
+                       for h in range(n_kv)]
         v_heads = [split(v_codes, h) for h in range(n_kv)]
 
         # softmax.input is per QUERY (C27/C30): S_q(i) x [S_k_head / sqrt(hd)] offline,
@@ -726,8 +763,11 @@ def forward_dynamic_logits_oracle(model, tokens) -> list:
         sm_consts = []
         for h in range(n_heads):
             kvh = h // group
-            s_kh = kv_raw_scale(prefix, "k_normed" if k_norm_present_here else "k", kvh)
-            c_sm = canonical_scale_oracle(Fraction(s_kh) / Fraction(_math.sqrt(hd)))
+            if direct_qk:
+                c_sm = model.composition_constants[f"{prefix}.softmax_khead{kvh}"]
+            else:
+                s_kh = kv_raw_scale(prefix, "k_normed" if k_norm_present_here else "k", kvh)
+                c_sm = canonical_scale_oracle(Fraction(s_kh) / Fraction(_math.sqrt(hd)))
             sm_consts.append([
                 _iexp_constants_from_scale(
                     *carried_scale_product_oracle([q_scale_per_head[h][i], c_sm]))
@@ -736,7 +776,13 @@ def forward_dynamic_logits_oracle(model, tokens) -> list:
         context = [[0] * (n_heads * hd) for _ in range(steps)]
         for h in range(n_heads):
             kvh = h // group
-            scores = _matmul(q_heads[h], _transpose_weight(k_heads[kvh]))
+            if direct_qk:
+                ratios = table["ratio"][kvh]
+                scores = [[rdbpot_oracle(sum(int(q_heads[h][i][d]) * int(k_heads[kvh][j][d]) *
+                                               int(ratios[d]) for d in range(hd)), 31)
+                           for j in range(steps)] for i in range(steps)]
+            else:
+                scores = _matmul(q_heads[h], _transpose_weight(k_heads[kvh]))
             for i in range(steps):
                 q_ln2, q_b, q_c = sm_consts[h][i]
                 probs = _softmax_row(scores[i], i + 1, q_ln2, q_b, q_c)

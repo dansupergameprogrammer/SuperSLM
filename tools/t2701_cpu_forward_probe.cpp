@@ -55,6 +55,14 @@ void PackEmbeddingBlock(const int8_t* codes, size_t hidden_size, const CarriedSc
 }
 
 struct TraceCapture {
+	struct Record {
+		std::string site;
+		size_t token_index = 0;
+		std::string codes_sha256;
+		size_t count = 0;
+		CarriedScale scale{};
+	};
+	std::vector<Record> records;
 	std::vector<int8_t> q_proj_codes;
 	CarriedScale q_proj_scale{};
 	std::vector<int8_t> q_norm_codes;
@@ -66,6 +74,12 @@ struct TraceCapture {
 void CaptureTrace(const SslmChainTraceRecord* chain, const SslmKvLandingTraceRecord*, void* user) {
 	if (chain == nullptr) return;
 	auto* capture = static_cast<TraceCapture*>(user);
+	if (chain->site.starts_with("layer0.")) {
+		uint8_t digest[32];
+		Sha256Hash(reinterpret_cast<const uint8_t*>(chain->codes.data()), chain->codes.size(), digest);
+		capture->records.push_back({std::string(chain->site), chain->token_index, ToHex(digest),
+		                            chain->codes.size(), {chain->m_out, chain->e_out}});
+	}
 	if (chain->site == "layer0.q_proj.requant") {
 		capture->q_proj_codes.assign(chain->codes.begin(), chain->codes.end());
 		capture->q_proj_scale = CarriedScale{chain->m_out, chain->e_out};
@@ -88,6 +102,14 @@ void PrintTraceDigest(const char* name, const std::vector<int8_t>& codes,
 		std::printf(" scale[%zu]=%lld,%lld", i, static_cast<long long>(scales[i].m),
 		            static_cast<long long>(scales[i].e));
 	std::printf("\n");
+}
+
+void PrintTraceRecords(const TraceCapture& capture) {
+	for (const TraceCapture::Record& record : capture.records) {
+		std::printf("cpu_chain site=%s token=%zu codes_sha256=%s count=%zu scale=%lld,%lld\n",
+		            record.site.c_str(), record.token_index, record.codes_sha256.c_str(), record.count,
+		            static_cast<long long>(record.scale.m), static_cast<long long>(record.scale.e));
+	}
 }
 
 }  // namespace
@@ -277,6 +299,7 @@ int main(int argc, char** argv) {
 		PrintTraceDigest("cpu_q_norm", trace.q_norm_codes, trace.q_norm_scales);
 		PrintTraceDigest("cpu_attn_residual", trace.attention_residual_codes,
 		                 {trace.attention_residual_scale});
+		PrintTraceRecords(trace);
 	}
 	return 0;
 }
