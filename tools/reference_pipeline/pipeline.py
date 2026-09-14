@@ -4319,7 +4319,8 @@ def _chain_record(site, token_index, wide_row, incoming, trace):
 _CURRENT_COMPOSITION_CONSTANTS: list = [{}]
 
 
-def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None):
+def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None,
+                    attention_outputs=None, attention_stop_layer=None):
     """The W8A8-dynamic FULL-STACK integer forward -> int32 logits, one row per token —
     the §15 eval's measured arm (D-SLM48/D-SLM55), realizing §6.8 C23-C30's site-level
     composition over the C19-C22 per-token chain (§6.2). See `dynamic_scale_trace` for the
@@ -4461,6 +4462,8 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None):
         # overwrites each head's own slot with its GENUINELY DISTINCT post-norm scale.
         q_scale_by_head = [list(q_scale) for _ in range(cfg.num_attention_heads)]
         q_norm_gain_tensor = model.weights.get(f"{prefix}.q_norm.gain")
+        k_norm_gain_tensor = model.weights.get(f"{prefix}.k_norm.gain")
+        direct_qk = k_norm_gain_tensor is not None and prefix in model.qk_channel_table
         if q_norm_gain_tensor is not None:
             q_norm_gain_codes = [int(v) for v in q_norm_gain_tensor.tolist()]
             for t in range(steps):
@@ -4484,6 +4487,11 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None):
         k_folds, _ = _reference_fold(model.weight_scales[f"{prefix}.k_proj"])
         v_folds, _ = _reference_fold(model.weight_scales[f"{prefix}.v_proj"])
         num_kv_heads = cfg.num_key_value_heads
+        k_norm_gain_codes = (None if k_norm_gain_tensor is None else
+                             [int(v) for v in k_norm_gain_tensor.tolist()])
+        if direct_qk:
+            qk_table = model.qk_channel_table[prefix]
+            m_wide, e_wide = _qk_rotated_landing_scale(model, prefix)
         k_heads_codes = [[] for _ in range(num_kv_heads)]
         v_heads_codes = [[] for _ in range(num_kv_heads)]
         for t in range(steps):
@@ -4528,9 +4536,31 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None):
                 # function. The post-norm codes then requantize a SECOND time (below), onto the
                 # new static k_normed_head{h} target -- this closes C2: softmax_khead (below)
                 # reads that same new scale, so writer and reader agree.
-                k_norm_gain_tensor = model.weights.get(f"{prefix}.k_norm.gain")
-                if k_norm_gain_tensor is not None:
-                    k_norm_gain_codes = [int(v) for v in k_norm_gain_tensor.tolist()]
+                if direct_qk:
+                    total = sum(v * v for v in landed)
+                    root = max(intmath.i_sqrt((total << (2 * NORM_FRAC_BITS)) // head_dim), 1)
+                    wide = [((landed[i] << (2 * NORM_FRAC_BITS)) // root) * k_norm_gain_codes[i]
+                            for i in range(head_dim)]
+                    rotated_wide = rotate([wide], [positions[t]])[0]
+                    landed = []
+                    for channel in range(head_dim):
+                        value = intmath.residual_reconcile(
+                            int(rotated_wide[channel]), m_wide,
+                            int(qk_table["r_t"][head, channel]), e_wide,
+                            int(qk_table["e_t"][head, channel]))
+                        landed.append(max(-127, min(127, value)))
+                    if trace is not None:
+                        trace.append({"site": f"{prefix}.k_norm.wide", "token_index": t,
+                                      "head": head, "x_int": tuple(wide),
+                                      "codes": tuple(wide), "m_out": m_wide, "e_out": e_wide})
+                        trace.append({"site": f"{prefix}.k_rope.wide", "token_index": t,
+                                      "head": head, "x_int": tuple(wide),
+                                      "codes": tuple(rotated_wide), "m_in": m_wide, "e_in": e_wide,
+                                      "m_out": m_wide, "e_out": e_wide})
+                        trace.append({"site": f"{prefix}.k_qkc_landing", "token_index": t,
+                                      "head": head, "x_int": tuple(rotated_wide),
+                                      "codes": tuple(landed), "m_in": m_wide, "e_in": e_wide})
+                elif k_norm_gain_tensor is not None:
                     total = sum(v * v for v in landed)
                     root = max(intmath.i_sqrt((total << (2 * NORM_FRAC_BITS)) // head_dim), 1)
                     wide = [((landed[i] << (2 * NORM_FRAC_BITS)) // root) * k_norm_gain_codes[i]
@@ -4557,7 +4587,8 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None):
                         "m_out": m_target_v, "e_out": e_target_v,
                     })
 
-        k_heads = [rotate(k_heads_codes[h], positions) for h in range(num_kv_heads)]
+        k_heads = (k_heads_codes if direct_qk else
+                   [rotate(k_heads_codes[h], positions) for h in range(num_kv_heads)])
         k_heads = [[[max(-127, min(127, c)) for c in row] for row in head_rows]
                    for head_rows in k_heads]
         v_heads = v_heads_codes
@@ -4580,8 +4611,19 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None):
             keys = k_heads[kv_head]
             values = v_heads[kv_head]
             softmax_static = model.composition_constants[f"{prefix}.softmax_khead{kv_head}"]
-            transposed_keys = [[keys[j][d] for j in range(len(keys))] for d in range(head_dim)]
-            scores = _scalar_matmul(q_heads[head], transposed_keys)
+            if direct_qk:
+                ratios = qk_table["ratio"][kv_head]
+                scores = [[intmath.rounding_divide_by_pot(
+                    sum(int(q_heads[head][query][channel]) * int(keys[key][channel]) *
+                        int(ratios[channel]) for channel in range(head_dim)), 31)
+                    for key in range(len(keys))] for query in range(steps)]
+                if trace is not None:
+                    for t, row in enumerate(scores):
+                        trace.append({"site": f"{prefix}.qk_q31", "token_index": t,
+                                      "head": head, "codes": tuple(row)})
+            else:
+                transposed_keys = [[keys[j][d] for j in range(len(keys))] for d in range(head_dim)]
+                scores = _scalar_matmul(q_heads[head], transposed_keys)
             for t in range(steps):
                 # (carried-scale delta §3, D-SLM6116): this query head's own genuinely distinct
                 # carried scale -- never the single, last-head-wins q_scale[t] this line read
@@ -4651,6 +4693,10 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None):
             new_hidden.append([max(-127, min(127, c)) for c in codes])
             new_hidden_scale[t] = scale
         hidden, hidden_scale = new_hidden, new_hidden_scale
+        if attention_outputs is not None:
+            attention_outputs.append([list(row) for row in hidden])
+        if attention_stop_layer == layer:
+            return hidden
 
         # --- mlp_norm (C23 scale-killing) ---
         gain = [int(v) for v in model.weights[f"{prefix}.mlp_norm.gain"].tolist()]
@@ -4745,6 +4791,11 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None):
                   for i in range(len(head_weight[0]))]
     logits = np.asarray(_scalar_matmul(final_codes, transposed), dtype=np.int64)
     return _to_int32(logits)
+
+
+def forward_dynamic_attention_layer(model: QuantizedModel, tokens, layer: int, trace=None, cache=None):
+    """Return the carried-scale hidden codes immediately after ``layer`` attention."""
+    return forward_dynamic(model, tokens, cache=cache, trace=trace, attention_stop_layer=layer)
 
 
 # ==============================================================================
