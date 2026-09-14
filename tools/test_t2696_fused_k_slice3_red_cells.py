@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import struct
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -89,7 +90,7 @@ def _red(slice_number: int, capability: str) -> None:
 
 
 @pytest.mark.parametrize("backend,green_slice", [
-    ("cpu", 6), ("gpu-turing", 7), ("gpu-rdna3", 7),
+    ("cpu", 6), ("gpu-rdna3", 7),
 ])
 def test_signed_one_sparse_census_32512_expected_oracle_rows(backend, green_slice):
     """256 legal gains × 127 nonzero signed codes; future runners consume these values."""
@@ -101,6 +102,43 @@ def test_signed_one_sparse_census_32512_expected_oracle_rows(backend, green_slic
     assert expected[-128, -1]["wide"][0] >= 0  # signed floor is an executed oracle value.
     if green_slice != 6:
         _red(green_slice, f"the {backend} fused-K signed-census runner")
+
+
+_T2701_QWEN3_FINAL2 = Path("D:/_t2700/conductor/qwen3-embedding-0.6b-final2.sslm")
+_T2701_PROBE = Path("out/t2701_cpu_forward_probe.exe")
+_T2701_GPU_TOKENS = Path("out/t2701_gpu_tokens.exe")
+_T2701_TURING_CASES = (
+    ("hello", "9707,151643"),
+    ("explain-gravity", "840,20772,23249,13,151643"),
+    ("two-plus-two", "17,5519,220,17,16819,151643"),
+    ("ids-42-7-151", "42,7,151"),
+)
+
+
+def _t2701_run(*args: str) -> str:
+    result = subprocess.run(args, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    return result.stdout
+
+
+def _t2701_probe_digest(output: str, backend: str) -> str:
+    line = next((line for line in output.splitlines() if line.startswith(f"backend={backend} ")), "")
+    digest = next((field.split("=", 1)[1] for field in line.split()
+                   if field.startswith("logits_sha256=")), "")
+    assert len(digest) == 64, output
+    return digest
+
+
+def test_gpu_turing_slice7_real_prompt_logit_and_greedy_parity():
+    """Turing row: four Qwen3 prompts through shipped CPU/GPU product surfaces."""
+    for required in (_T2701_QWEN3_FINAL2, _T2701_PROBE, _T2701_GPU_TOKENS):
+        assert required.is_file(), f"missing T-2701 Turing input: {required}"
+    for name, tokens in _T2701_TURING_CASES:
+        cpu = _t2701_run(str(_T2701_PROBE), str(_T2701_QWEN3_FINAL2), tokens)
+        gpu = _t2701_run(str(_T2701_PROBE), str(_T2701_QWEN3_FINAL2), tokens, "--gpu")
+        assert _t2701_probe_digest(cpu, "cpu") == _t2701_probe_digest(gpu, "gpu"), name
+        greedy = _t2701_run(str(_T2701_GPU_TOKENS), str(_T2701_QWEN3_FINAL2), tokens)
+        assert "token_identity=PASS" in greedy, name
 
 
 def test_code_minus_one_signed_floor_discriminator():
