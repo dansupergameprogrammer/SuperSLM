@@ -18,22 +18,44 @@ Every command below is the real CLI, run as documented by its own `--help`.
   Qwen2.5-1.5B-Instruct (Apache-2.0) as the running example; any checkpoint
   in the Qwen2.5 tokenizer lineage works the same way.
 
-Build the two binaries this walkthrough needs before starting:
+Build the conversion and decode binaries before starting:
 
 ```
-cmake -B build && cmake --build build --target sslm_verify --target sslm_generate
+cmake -B build && cmake --build build --target sslm_verify --target sslm_generate --target t2700_fused_k_capture
 ```
 
-## 1. Calibrate the checkpoint
+## 1. Convert a QK-norm checkpoint
+
+QK-norm checkpoints, including Qwen3-Embedding-0.6B, use one conversion command. It runs the
+factored float calibration, makes the provisional table, captures the full 600-record corpus three
+times (A/B/C, one shared prefix per pass), rebuilds the table from `max(float, A)` then
+`max(float, A, B)`, verifies the final artifact, and writes every peak table plus pass-C clipping
+details to `<work>/flow-report.json` and `<work>/peak-tables.npz`.
+
+```
+python tools/t2700_fused_k_calibration.py flow \
+  --checkpoint <path to HF checkpoint> \
+  --out <final model output path>.sslm \
+  --work <new empty conversion work directory> \
+  --capture build/t2700_fused_k_capture \
+  --verifier build/sslm_verify
+```
+
+`--out` and `--work` must not exist. The command refuses pass C only when clipped direct-K
+landings exceed one per million observations; at or below that rate its report records the count
+and every overshooting `(layer, head, channel)`. On the Ryzen 9 3950X, Qwen3-Embedding-0.6B took
+about 80 minutes end to end: 308 s float calibration, 1,423/1,421/1,424 s for A/B/C and 111 s for
+each table/artifact merge.
+
+## 1a. Calibrate a non-QK-norm checkpoint
 
 ```
 python tools/calibrate_checkpoint.py --checkpoint <path to HF checkpoint> --out <artifact dir>
 ```
 
 This is calibration only: it reads the raw checkpoint and writes a
-calibrated artifact directory that the next step consumes. At full scale —
-the entire calibration corpus — this takes roughly 105 minutes; at a
-reduced, fixture-sized corpus it takes minutes. The command prints a
+calibrated artifact directory that the next step consumes. At a reduced,
+fixture-sized corpus it takes minutes. The command prints a
 `written fingerprint: ...` line and the calibrated artifact directory's
 path on success.
 
@@ -48,7 +70,7 @@ the tokenizer, chat template, and the pinned Unicode tables the runtime's
 integer-only tokenizer needs — no platform Unicode or regex library on the
 inference path. Prints a `wrote ... fingerprint ...` line on success.
 
-## 3. Convert the model
+## 3. Convert the model (non-QK-norm path only)
 
 ```
 python tools/convert_model.py --artifact <artifact dir from step 1> --out <model output path>.sslm
@@ -73,7 +95,7 @@ That switch adds the DGC1 constants and feature bit. Omitting it preserves the
 ordinary greedy-only artifact shape.
 
 You now have two `.sslm` files — the tokenizer artifact from step 2 and the
-model artifact from this step — and both are what the engine needs to
+model artifact from step 1 or 3 — and both are what the engine needs to
 decode.
 
 ## 4. Decode

@@ -127,7 +127,7 @@ if (-not (Test-Path $Verify)) { Fail "3-4" "sslm_verify binary not produced" }
 if (-not (Test-Path $Generate)) { Fail "3-4" "sslm_generate binary not produced" }
 
 # --- step 5: calibrate the checkpoint (build item B1) ----------------------------------------
-Step 5 "calibrate_checkpoint.py (the dominant real-cost step -- ~105 min at full scale)"
+Step 5 "calibrate_checkpoint.py (full-corpus calibration; QK-norm conversion continues through the A/B/C capture flow)"
 $ArtifactDir = Join-Path $Artifacts "clean-checkout-artifact"
 Push-Location (Join-Path $Clean "tools")
 try {

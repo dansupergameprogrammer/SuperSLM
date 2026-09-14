@@ -8,6 +8,7 @@ Python implementation of the landing.
 
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import json
 import math
@@ -16,6 +17,7 @@ import subprocess
 import sys
 
 import numpy as np
+import pytest
 
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
@@ -184,3 +186,77 @@ def test_merge_cli_persists_explicit_checkpoint_on_fixture_capture(tmp_path):
     assert json.loads(run.stdout.splitlines()[-1])["landing_saturation_count"] == 0
     assert json.loads((out_cache / "metadata.json").read_text(encoding="utf-8"))["checkpoint_path"] == "fixture-checkpoint"
     assert out_sslm.is_file()
+
+
+def _fixture_capture_runner(path):
+    path.write_text(
+        """import math
+import os
+from pathlib import Path
+import sys
+
+report = Path(sys.argv[3])
+is_c = report.stem == 'pass-c'
+clipped = int(os.environ.get('T2700_FIXTURE_PASS_C_CLIPPED', '1')) if is_c else 0
+m, e = 2130706432, -54
+lines = ['T2700_FUSED_K_CAPTURE_V1', 'summary\\tcallback_count\\t1000000',
+         f'summary\\tlanding_saturation_count\\t{clipped}',
+         'layer\\thead\\tchannel\\traw_abs_peak\\twide_scale_m\\twide_scale_e\\treal_peak\\tlanding_saturation_count']
+for layer in range(2):
+    for head in range(2):
+        for channel in range(8):
+            count = clipped if (layer, head, channel) == (0, 0, 0) else 0
+            lines.append(f'{layer}\\t{head}\\t{channel}\\t1\\t{m}\\t{e}\\t{math.ldexp(float(m), e).hex()}\\t{count}')
+report.write_text('\\n'.join(lines) + '\\n', encoding='utf-8')
+""", encoding="utf-8")
+
+
+def _fixture_flow(tmp_path, monkeypatch, *, clipped, name):
+    monkeypatch.setenv("T2700_FIXTURE_PASS_C_CLIPPED", str(clipped))
+    model = _fixture_qk_model()
+    source = tmp_path / f"{name}-source-cache"
+    artifact_cache.save_artifact(model, source)
+    inputs = tmp_path / f"{name}-inputs"
+    inputs.mkdir()
+    (inputs / "prefix-453.txt").write_text("1\n", encoding="utf-8")
+    for index in range(600):
+        (inputs / f"suffix-{index:03d}.txt").write_text("1\n", encoding="utf-8")
+    capture = tmp_path / f"{name}-capture.py"
+    _fixture_capture_runner(capture)
+    verifier = Path("D:/SuperSLM/.worktrees/t2693-fused-k-slice2/out/cmake-cpu-only-default/Release/sslm_verify.exe")
+    args = argparse.Namespace(checkpoint="fixture-checkpoint", out=str(tmp_path / f"{name}.sslm"),
+                              work=str(tmp_path / f"{name}-work"), capture=str(capture),
+                              verifier=str(verifier), skip_verify=True)
+    work = Path(args.work)
+    work.mkdir()
+    return calibration._flow_from_cache(args, source, inputs, work), args
+
+
+def test_fixture_flow_runs_a_b_c_records_one_allowed_clip_and_is_deterministic(tmp_path, monkeypatch):
+    first, first_args = _fixture_flow(tmp_path, monkeypatch, clipped=1, name="first")
+    second, second_args = _fixture_flow(tmp_path, monkeypatch, clipped=1, name="second")
+    assert first["pass_c_landing_saturation_count"] == 1
+    assert first["pass_c_overshooting_channels"] == [{"layer": 0, "head": 0, "channel": 0, "count": 1}]
+    assert Path(first["peak_tables"]).is_file()
+    assert Path(first_args.out).read_bytes() == Path(second_args.out).read_bytes()
+    assert first["artifact_sha256"] == second["artifact_sha256"]
+
+
+def test_fixture_flow_refuses_pass_c_above_one_clip_per_million(tmp_path, monkeypatch):
+    with pytest.raises(calibration.ChannelScaleDidNotConverge, match="ChannelScaleDidNotConverge: pass C clipped 2/1000000"):
+        _fixture_flow(tmp_path, monkeypatch, clipped=2, name="refused")
+
+
+def test_compiled_capture_accepts_a_suffix_manifest_before_opening_the_artifact(tmp_path):
+    capture = Path("D:/SuperSLM/.worktrees/t2693-fused-k-slice2/out/cmake-cpu-only-default/Release/t2700_fused_k_capture.exe")
+    assert capture.is_file(), f"missing compiled capture driver: {capture}"
+    prefix = tmp_path / "prefix.txt"
+    prefix.write_text(" ".join(["1"] * 453) + "\n", encoding="utf-8")
+    suffix = tmp_path / "suffix.txt"
+    suffix.write_text("1\n", encoding="utf-8")
+    suffixes = tmp_path / "suffixes.txt"
+    suffixes.write_text(str(suffix) + "\n", encoding="utf-8")
+    result = subprocess.run([str(capture), str(tmp_path / "missing.sslm"), str(prefix), str(tmp_path / "report.tsv"),
+                             "--suffix-list", str(suffixes)], text=True, capture_output=True)
+    assert result.returncode == 2
+    assert "artifact read failed" in result.stderr

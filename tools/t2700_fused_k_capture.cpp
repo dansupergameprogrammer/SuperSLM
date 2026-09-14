@@ -3,6 +3,8 @@
 // Usage:
 //   t2700_fused_k_capture <artifact.sslm> <453-token-prefix.txt> <report.tsv>
 //                         <suffix.txt> [suffix.txt ...]
+//   t2700_fused_k_capture <artifact.sslm> <453-token-prefix.txt> <report.tsv>
+//                         --suffix-list <one-suffix-path-per-line.txt>
 //
 // This is deliberately the slice-2 ABI snapshot/clone route.  Its one private
 // binder only attaches a caller-owned observation sink before the first
@@ -46,6 +48,7 @@ struct AlignedBytes {
 struct Peak {
 	uint64_t raw_abs = 0;
 	double real = 0.0;
+	uint64_t landing_saturation_count = 0;
 	bool seen = false;
 };
 
@@ -90,7 +93,10 @@ struct Capture {
 		peak.real = std::max(peak.real, real);
 		peak.seen = true;
 		++self->callback_count;
-		if (landing_raw < -127 || landing_raw > 127) ++self->landing_saturation_count;
+		if (landing_raw < -127 || landing_raw > 127) {
+			++self->landing_saturation_count;
+			++peak.landing_saturation_count;
+		}
 	}
 };
 
@@ -100,6 +106,16 @@ bool ReadTokens(const char* path, std::vector<int32_t>* out) {
 	while (input >> value) {
 		if (value < INT32_MIN || value > INT32_MAX) return false;
 		out->push_back(static_cast<int32_t>(value));
+	}
+	return input.eof() && !out->empty();
+}
+
+bool ReadSuffixList(const char* path, std::vector<std::string>* out) {
+	std::ifstream input(path);
+	std::string line;
+	while (std::getline(input, line)) {
+		if (!line.empty() && line.back() == '\r') line.pop_back();
+		if (!line.empty()) out->push_back(line);
 	}
 	return input.eof() && !out->empty();
 }
@@ -138,7 +154,7 @@ bool WriteReport(const char* path, const Capture& capture, const std::string& sn
 	output << "summary\tsuffix_seconds\t" << suffix_seconds << "\n";
 	output << "summary\tcallback_count\t" << capture.callback_count << "\n";
 	output << "summary\tlanding_saturation_count\t" << capture.landing_saturation_count << "\n";
-	output << "layer\thead\tchannel\traw_abs_peak\twide_scale_m\twide_scale_e\treal_peak\n";
+	output << "layer\thead\tchannel\traw_abs_peak\twide_scale_m\twide_scale_e\treal_peak\tlanding_saturation_count\n";
 	for (uint32_t layer = 0; layer < capture.layers; ++layer) {
 		if (!capture.scale_seen[layer]) return false;
 		for (uint32_t head = 0; head < capture.heads; ++head) {
@@ -147,7 +163,8 @@ bool WriteReport(const char* path, const Capture& capture, const std::string& sn
 				if (!peak.seen || !std::isfinite(peak.real)) return false;
 				output << layer << '\t' << head << '\t' << channel << '\t' << peak.raw_abs << '\t'
 				       << capture.scales[layer].m << '\t' << capture.scales[layer].e << '\t'
-				       << std::hexfloat << peak.real << std::defaultfloat << '\n';
+				       << std::hexfloat << peak.real << std::defaultfloat << '\t'
+				       << peak.landing_saturation_count << '\n';
 			}
 		}
 	}
@@ -158,7 +175,8 @@ bool WriteReport(const char* path, const Capture& capture, const std::string& sn
 
 int main(int argc, char** argv) {
 	if (argc < 5) {
-		std::fprintf(stderr, "usage: t2700_fused_k_capture <artifact.sslm> <453-token-prefix.txt> <report.tsv> <suffix.txt> [suffix.txt ...]\n");
+		std::fprintf(stderr, "usage: t2700_fused_k_capture <artifact.sslm> <453-token-prefix.txt> <report.tsv> <suffix.txt> [suffix.txt ...]\n"
+		                     "   or: t2700_fused_k_capture <artifact.sslm> <453-token-prefix.txt> <report.tsv> --suffix-list <paths.txt>\n");
 		return 2;
 	}
 	std::ifstream artifact_file(argv[1], std::ios::binary);
@@ -168,10 +186,18 @@ int main(int argc, char** argv) {
 	if (!ReadTokens(argv[2], &prefix) || prefix.size() != 453) {
 		std::fprintf(stderr, "prefix must be exactly 453 signed int32 token IDs\n"); return 2;
 	}
-	std::vector<std::vector<int32_t>> suffixes(static_cast<size_t>(argc - 4));
-	for (int index = 4; index < argc; ++index) {
-		if (!ReadTokens(argv[index], &suffixes[static_cast<size_t>(index - 4)])) {
-			std::fprintf(stderr, "invalid suffix token file: %s\n", argv[index]); return 2;
+	std::vector<std::string> suffix_paths;
+	if (argc == 6 && std::strcmp(argv[4], "--suffix-list") == 0) {
+		if (!ReadSuffixList(argv[5], &suffix_paths)) {
+			std::fprintf(stderr, "invalid suffix path list: %s\n", argv[5]); return 2;
+		}
+	} else {
+		for (int index = 4; index < argc; ++index) suffix_paths.emplace_back(argv[index]);
+	}
+	std::vector<std::vector<int32_t>> suffixes(suffix_paths.size());
+	for (size_t index = 0; index < suffix_paths.size(); ++index) {
+		if (!ReadTokens(suffix_paths[index].c_str(), &suffixes[index])) {
+			std::fprintf(stderr, "invalid suffix token file: %s\n", suffix_paths[index].c_str()); return 2;
 		}
 	}
 
