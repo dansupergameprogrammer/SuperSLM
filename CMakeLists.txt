@@ -144,6 +144,17 @@ else()
 	target_compile_options(sslm_generate PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 
+# T-2693 slice 2: a converter-adjacent, CPU-only prefix snapshot/clone probe.
+# It is intentionally an ABI consumer: the existing prefill path remains the
+# only forward path, and no forward-site arithmetic changes here.
+add_executable(t2693_prefix_clone tools/t2693_prefix_clone.cpp)
+target_link_libraries(t2693_prefix_clone PRIVATE superslm)
+if(MSVC)
+	target_compile_options(t2693_prefix_clone PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(t2693_prefix_clone PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+
 # T-2046 (design §24.2 D-SLM3162, closing Poirot c81e48c review Significant 6): dumps an adapter
 # artifact's DeltaFoldScales/UFoldScales/Weights sections, loaded through the REAL B0b typed path,
 # as JSON -- the write->load round-trip proof's own read side (tools/sslm_adapter_dump.cpp).

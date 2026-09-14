@@ -2020,7 +2020,61 @@ def _fixture_tokenize_prompt(cfg: ModelConfig):
     return tokenize_prompt
 
 
-def _calibrate(cfg: ModelConfig, float_weight, records, tokenize) -> dict:
+def _longest_common_token_prefix(token_lists):
+    """The exact shared token-ID prefix, never a shared-text approximation."""
+    if not token_lists:
+        return []
+    limit = min(len(tokens) for tokens in token_lists)
+    for index in range(limit):
+        token = token_lists[0][index]
+        if any(tokens[index] != token for tokens in token_lists[1:]):
+            return list(token_lists[0][:index])
+    return list(token_lists[0][:limit])
+
+
+def _float_calibration_factored(cfg, float_weight, token_lists, maxima):
+    """Calibration-only float prefix factoring.
+
+    This is deliberately separate from `_float_forward_many`: ordinary reference
+    logits retain their existing path, while calibration can evaluate the exact
+    shared token prefix once and each suffix against copied per-layer K/V state.
+    The output is the same set of per-site values as whole-prompt walks.
+    """
+    prefix_tokens = _longest_common_token_prefix(token_lists)
+    if not prefix_tokens or any(len(tokens) == len(prefix_tokens) for tokens in token_lists):
+        _float_forward_many(cfg, float_weight, token_lists, maxima=maxima, need_logits=False,
+                            deterministic_attention=True)
+        return 0
+
+    prefix_length = len(prefix_tokens)
+    embed = float_weight("embed")
+    prefix_hidden = embed[prefix_tokens, :]
+    suffix_hiddens = [embed[list(tokens[prefix_length:]), :] for tokens in token_lists]
+    del embed
+
+    for layer in range(cfg.num_hidden_layers):
+        prefix = f"layer{layer}"
+        tensors = _layer_tensors(float_weight, prefix)
+        prefix_hidden, prefix_keys, prefix_values = _float_layer(
+            cfg, tensors, prefix_hidden, maxima, prefix, return_kv=True,
+            deterministic_attention=True)
+        suffix_hiddens = [
+            _float_layer(cfg, tensors, hidden, maxima, prefix,
+                         position_offset=prefix_length,
+                         prefix_keys=prefix_keys, prefix_values=prefix_values,
+                         deterministic_attention=True)
+            for hidden in suffix_hiddens
+        ]
+        del tensors
+
+    gain = float_weight("final_norm.gain")
+    _observe(maxima, "final_norm.out", _float_rmsnorm(prefix_hidden, cfg.rms_norm_eps) * gain)
+    for hidden in suffix_hiddens:
+        _observe(maxima, "final_norm.out", _float_rmsnorm(hidden, cfg.rms_norm_eps) * gain)
+    return prefix_length
+
+
+def _calibrate(cfg: ModelConfig, float_weight, records, tokenize, *, factored=True) -> dict:
     """Per-site max-abs over the calibration corpus, measured on the float reference.
 
     Max-abs is order-independent by construction, and that is the property rather than a
@@ -2048,7 +2102,11 @@ def _calibrate(cfg: ModelConfig, float_weight, records, tokenize) -> dict:
     sequences = [tokens[: cfg.context_cap]
                  for tokens in (list(tokenize(record)) for record in records) if tokens]
     if sequences:
-        _float_forward_many(cfg, float_weight, sequences, maxima=maxima, need_logits=False)
+        if factored:
+            _float_calibration_factored(cfg, float_weight, sequences, maxima)
+        else:
+            _float_forward_many(cfg, float_weight, sequences, maxima=maxima, need_logits=False,
+                                deterministic_attention=True)
     return maxima
 
 
@@ -3077,12 +3135,15 @@ def _float_rmsnorm(x, eps):
     return x / np.sqrt(mean_square + eps)
 
 
-def _float_rope(vectors, theta):
+def _float_rope(vectors, theta, position_offset=0):
     """The float rotation, from the angles §6.4's tables quantize."""
     steps, heads, head_dim = vectors.shape
     pairs = head_dim // 2
     inv_freq = np.array([theta ** (-2.0 * index / head_dim) for index in range(pairs)])
-    positions = np.arange(steps, dtype=np.float64).reshape(steps, 1)
+    # A factored calibration walks a suffix after an already-evaluated causal
+    # prefix.  The RoPE position is absolute; the default keeps every existing
+    # caller's position-zero behaviour unchanged.
+    positions = (position_offset + np.arange(steps, dtype=np.float64)).reshape(steps, 1)
     angles = positions * inv_freq.reshape(1, pairs)
     cos = np.cos(angles).reshape(steps, 1, pairs)
     sin = np.sin(angles).reshape(steps, 1, pairs)
@@ -3106,9 +3167,12 @@ def _float_bias(float_weight, name):
         return None
 
 
-def _float_project(float_weight, name, values):
+def _float_project(float_weight, name, values, *, rowwise=False):
     weight = float_weight(name)
-    out = values @ weight.T
+    if rowwise and values.ndim == 2:
+        out = np.stack([row @ weight.T for row in values])
+    else:
+        out = values @ weight.T
     bias = _float_bias(float_weight, name)
     if bias is not None:
         out = out + bias
@@ -3154,7 +3218,9 @@ def _apply_qk_norm(q, k, tensors, prefix, cfg):
     return q, k
 
 
-def _float_layer(cfg, tensors, hidden, maxima, prefix):
+def _float_layer(cfg, tensors, hidden, maxima, prefix, *, position_offset=0,
+                 prefix_keys=None, prefix_values=None, return_kv=False,
+                 deterministic_attention=False):
     """One decoder layer in float64, for one sequence, over already-fetched tensors."""
     group = attention_group_size(cfg)
     steps = hidden.shape[0]
@@ -3163,11 +3229,14 @@ def _float_layer(cfg, tensors, hidden, maxima, prefix):
     normed = _float_rmsnorm(hidden, cfg.rms_norm_eps) * fetch(f"{prefix}.attn_norm.gain")
     _observe(maxima, f"{prefix}.attn_norm.out", normed)
 
-    q = _float_project(fetch, f"{prefix}.q_proj", normed).reshape(
+    q = _float_project(fetch, f"{prefix}.q_proj", normed,
+                       rowwise=deterministic_attention).reshape(
         steps, cfg.num_attention_heads, cfg.head_dim)
-    k = _float_project(fetch, f"{prefix}.k_proj", normed).reshape(
+    k = _float_project(fetch, f"{prefix}.k_proj", normed,
+                       rowwise=deterministic_attention).reshape(
         steps, cfg.num_key_value_heads, cfg.head_dim)
-    v = _float_project(fetch, f"{prefix}.v_proj", normed).reshape(
+    v = _float_project(fetch, f"{prefix}.v_proj", normed,
+                       rowwise=deterministic_attention).reshape(
         steps, cfg.num_key_value_heads, cfg.head_dim)
     _observe(maxima, f"{prefix}.q", q)
     _observe(maxima, f"{prefix}.k", k)
@@ -3206,8 +3275,8 @@ def _float_layer(cfg, tensors, hidden, maxima, prefix):
     # side, never the transform's own output range).
     _observe(maxima, f"{prefix}.k_normed", k)
 
-    q = _float_rope(q, cfg.rope_theta)
-    k = _float_rope(k, cfg.rope_theta)
+    q = _float_rope(q, cfg.rope_theta, position_offset)
+    k = _float_rope(k, cfg.rope_theta, position_offset)
     # QK-norm creates a separate post-norm K landing domain (`k_normed`), so raw Q/K
     # stay on the pre-norm projection domain there.  Without QK-norm, the engine lands
     # those raw codes and then rotates them in place; their calibration domain therefore
@@ -3224,15 +3293,31 @@ def _float_layer(cfg, tensors, hidden, maxima, prefix):
     # actually covers, rather than a domain the calibration only covered half of.
     _observe(maxima, f"{prefix}.k_normed", k)
 
+    if (prefix_keys is None) != (prefix_values is None):
+        raise ValueError("float prefix state requires both keys and values")
+    prefix_length = 0 if prefix_keys is None else prefix_keys.shape[0]
+    keys = k if prefix_keys is None else np.concatenate((prefix_keys, k), axis=0)
+    values = v if prefix_values is None else np.concatenate((prefix_values, v), axis=0)
+
     context = np.empty((steps, cfg.num_attention_heads, cfg.head_dim), dtype=np.float64)
     for head in range(cfg.num_attention_heads):
         kv_head = head // group
-        scores = q[:, head, :] @ k[:, kv_head, :].T / math.sqrt(cfg.head_dim)
-        scores = np.where(_causal_mask(steps), scores, -np.inf)
+        if deterministic_attention:
+            # The calibration factorization may present a suffix as a smaller
+            # left matrix.  BLAS may choose a different reduction tree for that
+            # shape, so both calibration walks use a fixed one-query-row shape.
+            scores = np.empty((steps, keys.shape[0]), dtype=np.float64)
+            for row in range(steps):
+                scores[row, :] = q[row, head, :] @ keys[:, kv_head, :].T
+            scores /= math.sqrt(cfg.head_dim)
+        else:
+            scores = q[:, head, :] @ keys[:, kv_head, :].T / math.sqrt(cfg.head_dim)
+        scores = np.where(_causal_mask(steps, start=prefix_length,
+                                       total=prefix_length + steps), scores, -np.inf)
         shifted = scores - scores.max(axis=-1, keepdims=True)
         weights_row = np.exp(shifted)
         weights_row = weights_row / weights_row.sum(axis=-1, keepdims=True)
-        context[:, head, :] = weights_row @ v[:, kv_head, :]
+        context[:, head, :] = weights_row @ values[:, kv_head, :]
     _observe(maxima, f"{prefix}.attn_ctx", context)
 
     attention = _float_project(
@@ -3254,6 +3339,10 @@ def _float_layer(cfg, tensors, hidden, maxima, prefix):
     _observe(maxima, f"{prefix}.mlp_out", down)
     hidden = hidden + down
     _observe(maxima, f"{prefix}.mlp_residual", hidden)
+    if return_kv:
+        # These are independently allocated by the projection/rotation path;
+        # make ownership explicit so a suffix cannot alias and mutate the prefix.
+        return hidden, k.copy(), v.copy()
     return hidden
 
 
@@ -3293,7 +3382,7 @@ def _layer_tensors(float_weight, prefix):
 
 
 def _float_forward_many(cfg, float_weight, token_lists, maxima=None, layer_outputs=None,
-                        trace=None, need_logits=True):
+                        trace=None, need_logits=True, deterministic_attention=False):
     """The float64 pipeline over several sequences, **layer-major**.
 
     Never calls the integer path — a parity gate whose reference is the thing under test
@@ -3325,7 +3414,9 @@ def _float_forward_many(cfg, float_weight, token_lists, maxima=None, layer_outpu
     for layer in range(cfg.num_hidden_layers):
         prefix = f"layer{layer}"
         tensors = _layer_tensors(float_weight, prefix)
-        hiddens = [_float_layer(cfg, tensors, hidden, maxima, prefix) for hidden in hiddens]
+        hiddens = [_float_layer(cfg, tensors, hidden, maxima, prefix,
+                                deterministic_attention=deterministic_attention)
+                   for hidden in hiddens]
         del tensors
         if layer_outputs is not None:
             layer_outputs.append(hiddens[0].copy())
