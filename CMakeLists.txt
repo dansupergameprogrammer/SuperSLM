@@ -155,6 +155,14 @@ else()
 	target_compile_options(t2693_prefix_clone PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 
+# T-2700 step 0: the independent Python oracle drives these compiled forced tiers.
+add_executable(t2700_fused_k_oracle_sse2_forced tools/t2700_fused_k_oracle.cpp)
+target_link_libraries(t2700_fused_k_oracle_sse2_forced PRIVATE superslm_sse2_forced)
+add_executable(t2700_fused_k_oracle_avx2_forced tools/t2700_fused_k_oracle.cpp)
+target_link_libraries(t2700_fused_k_oracle_avx2_forced PRIVATE superslm_avx2_forced)
+add_executable(t2700_fused_k_oracle_avx512_forced tools/t2700_fused_k_oracle.cpp)
+target_link_libraries(t2700_fused_k_oracle_avx512_forced PRIVATE superslm_avx512_forced)
+
 # T-2046 (design §24.2 D-SLM3162, closing Poirot c81e48c review Significant 6): dumps an adapter
 # artifact's DeltaFoldScales/UFoldScales/Weights sections, loaded through the REAL B0b typed path,
 # as JSON -- the write->load round-trip proof's own read side (tools/sslm_adapter_dump.cpp).
