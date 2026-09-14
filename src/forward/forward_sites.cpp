@@ -421,21 +421,6 @@ int64_t FloorDivI64(int64_t a, int64_t b) {
 	return (r != 0 && r < 0) ? q - 1 : q;
 }
 
-// The fused-QK K path intentionally stops before RmsNormSite's funnel.  Its
-// normalised values remain wide through RoPE and take their one and only
-// narrowing boundary at QKC1's per-channel landing.  This is deliberately
-// factored from RmsNormSite rather than "undoing" a requantized code: the
-// latter loses information and was the retired two-landing construction.
-static void RmsNormWideI64(const int64_t* h, const int32_t* g, size_t width, int64_t* wide) {
-	int64_t sumsq = 0;
-	for (size_t i = 0; i < width; ++i) sumsq += h[i] * h[i];
-	int64_t root = ISqrt(FloorDivI64(sumsq << (2 * kNormFracBits), static_cast<int64_t>(width)));
-	root = root > 1 ? root : 1;
-	for (size_t i = 0; i < width; ++i) {
-		wide[i] = FloorDivI64(h[i] << (2 * kNormFracBits), root) * static_cast<int64_t>(g[i]);
-	}
-}
-
 int64_t QkQ31ScoreScalarRef(const int8_t* q, const int8_t* k, const int64_t* ratio_q31,
                              size_t head_dim) {
 	int64_t total = 0;
@@ -1529,10 +1514,7 @@ SslmForwardStatus LandTokenKVRow(int64_t* kacc, int64_t* vacc, const int8_t* nor
 		                                    num_key_value_heads, head_dim, h, position);
 		int8_t* const v_row = MutableValueRow(workspace, layer, context_cap,
 		                                      num_key_value_heads, head_dim, h, position);
-		if (lw.k_norm_gain != nullptr && lw.k_channel_r_t != nullptr) {
-			// Fused QK owns K's landing below in ApplyQkNormSite.  V still
-			// lands here, after the shared fold/bias work above.
-		} else if (option_g_fused_k_landing) {
+		if (option_g_fused_k_landing) {
 			// T-1894 (design Sec31.2's own construction, carried from
 			// T-1891 Sec2, confirmed sound by T-1892): rotate the WIDE
 			// pre-landing K accumulator pairwise at this token's own
@@ -1621,8 +1603,7 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
                                    const LayerWeights& lw, std::string_view site_prefix,
                                    size_t token_index, SslmTraceHookState* trace_hook_state,
                                    uint64_t* out_saturation_count,
-                                   uint64_t* out_k_normed_landing_saturation_count,
-                                   const int64_t* k_wide) {
+                                   uint64_t* out_k_normed_landing_saturation_count) {
 	if (lw.q_norm_gain != nullptr) {
 		for (size_t h = 0; h < num_heads; ++h) {
 			int8_t* const q_head_row = q_codes + h * head_dim;
@@ -1637,17 +1618,27 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
 		}
 	}
 	if (lw.k_norm_gain != nullptr) {
-		if (lw.k_channel_r_t != nullptr && lw.k_channel_e_t != nullptr && k_wide != nullptr) {
+		if (lw.k_channel_r_t != nullptr && lw.k_channel_e_t != nullptr) {
 			std::vector<int64_t> normalized(head_dim);
 			OptionGRopeTableRow table;
 			const SslmForwardStatus resolve = ResolveOptionGRopeTableRow(
 			    position, context_cap, head_dim, rope_tables, &table);
 			if (resolve != SslmForwardStatus::Ok) return resolve;
 			for (size_t kv_head = 0; kv_head < num_key_value_heads; ++kv_head) {
-				const int64_t* raw = k_wide + kv_head * head_dim;
-				RmsNormWideI64(raw, lw.k_norm_gain, head_dim, normalized.data());
 				int8_t* const k_row = MutableKeyRow(workspace, layer, context_cap,
 				                                            num_key_value_heads, head_dim, kv_head, position);
+				int64_t sumsq = 0;
+				for (size_t d = 0; d < head_dim; ++d) {
+					const int64_t code = k_row[d];
+					sumsq += code * code;
+				}
+				int64_t root = ISqrt(FloorDivI64(
+				    sumsq << (2 * kNormFracBits), static_cast<int64_t>(head_dim)));
+				root = root > 1 ? root : 1;
+				for (size_t d = 0; d < head_dim; ++d) {
+					normalized[d] = FloorDivI64(static_cast<int64_t>(k_row[d]) << (2 * kNormFracBits), root) *
+					                static_cast<int64_t>(lw.k_norm_gain[d]);
+				}
 				for (size_t p = 0; p < table.pairs; ++p) {
 					const size_t i0 = 2 * p, i1 = i0 + 1;
 					const int32_t c = static_cast<int32_t>(ReadRopeTableEntryI64(
@@ -1667,15 +1658,17 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
 				                                 lw.k_wide_source_scale.e - ROPE_FRAC_BITS};
 				const int64_t landing0 = LandingRescale(rotated.x, rotated_scale.m,
 				    lw.k_channel_r_t[offset], rotated_scale.e, lw.k_channel_e_t[offset],
-				    out_saturation_count);
+				    out_saturation_count, /*out_magnitude_exceeded_int64=*/nullptr,
+				    out_k_normed_landing_saturation_count);
 				const int64_t landing1 = LandingRescale(rotated.y, rotated_scale.m,
 				    lw.k_channel_r_t[offset + 1], rotated_scale.e, lw.k_channel_e_t[offset + 1],
-				    out_saturation_count);
+				    out_saturation_count, /*out_magnitude_exceeded_int64=*/nullptr,
+				    out_k_normed_landing_saturation_count);
 					if (lw.fused_k_capture_sink != nullptr && lw.fused_k_capture_sink->observe != nullptr) {
 						lw.fused_k_capture_sink->observe(lw.fused_k_capture_sink->context, layer, kv_head, i0,
-					    raw[i0], rotated.x, rotated_scale, landing0);
+					    normalized[i0], rotated.x, rotated_scale, landing0);
 						lw.fused_k_capture_sink->observe(lw.fused_k_capture_sink->context, layer, kv_head, i1,
-					    raw[i1], rotated.y, rotated_scale, landing1);
+					    normalized[i1], rotated.y, rotated_scale, landing1);
 					}
 					k_row[i0] = static_cast<int8_t>(ClampRopeCode(landing0));
 					k_row[i1] = static_cast<int8_t>(ClampRopeCode(landing1));
@@ -2045,7 +2038,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			st = ApplyQkNormSite(q_codes.data(), q_scales.data(), workspace, rope_tables, l, context_cap, position,
 			                     num_heads, num_key_value_heads, head_dim, lw, site_prefix,
 			                     token_index, trace_hook_state, &seq.kv_saturation_count,
-			                     &seq.k_normed_landing_saturation_count, kacc.data());
+			                     &seq.k_normed_landing_saturation_count);
 			if (st != SslmForwardStatus::Ok) return st;
 		}
 
@@ -2583,8 +2576,7 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 				                     workspace, rope_tables, l, context_cap, position, num_heads,
 				                     num_key_value_heads, head_dim, lw, site_prefix, t,
 				                     trace_hook_state, kv_saturation_count,
-				                     out_k_normed_landing_saturation_count,
-				                     kacc_all.data() + t * kv_hidden_size);
+				                     out_k_normed_landing_saturation_count);
 				if (st != SslmForwardStatus::Ok) return st;
 			}
 

@@ -1180,19 +1180,10 @@ int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
 // every head rather than memoized per KV head, because two query heads sharing one KV head can
 // now carry different Q scales.
 //
-// K: for each KV head `kv_head` in `[0, num_key_value_heads)`, ONCE (never once per query head
-// -- applying `RmsNormSite` twice to an already-normalized row is not idempotent), when
-// `lw.k_norm_gain != nullptr`, `RmsNormSite` against the just-landed K row (`MutableKeyRow`), in
-// place, into a local `CarriedScale`. K's post-norm codes are then requantized a SECOND time,
-// through `LandingRescale` (the identical primitive `LandTokenKVRow`'s own raw K landing already
-// uses, §8.1) -- onto `lw.k_norm_landing_r_t[kv_head]`/`lw.k_norm_landing_e_t[kv_head]`, a NEW,
-// static, per-(layer, KV head) landing scale calibrated on POST-norm data, distinct from
-// `lw.kv_landing_r_t_k`/`e_t_k` (K's raw, pre-norm landing scale). This second landing is what
-// makes the K/V store's static-scale contract (§8.1: the store carries codes at a fixed,
-// per-head static landing scale) true of the post-norm row too -- the attention score GEMM still
-// takes no scale parameter, and `softmax_khead` (the artifact's own `iexp_softmax_khead_{m,e}`
-// constant, below) is derived from this SAME new landing scale when `k_norm` is present (design
-// delta §4, `_derive_composition_constants`), so writer and reader agree.
+// K: for each KV head, the input is the just-landed raw int8 K row. RMSNorm's
+// numerator remains wide through RoPE and takes its sole post-norm narrowing at
+// QKC1's per-channel landing. The raw K landing remains part of every layer's
+// K/V-store contract and is never skipped for fused-QK layers.
 //
 // Both `RmsNormSite` calls pass `CarriedScale{}` for `incoming_scale` -- its own contract
 // (above): RMS normalization's arithmetic annihilates any input scale, so this is a correctness
@@ -1223,11 +1214,9 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
                                    const LayerWeights& lw, std::string_view site_prefix,
                                    size_t token_index, SslmTraceHookState* trace_hook_state,
                                    uint64_t* out_saturation_count = nullptr,
-                                   uint64_t* out_k_normed_landing_saturation_count = nullptr,
-                                   const int64_t* k_wide = nullptr);
+                                   uint64_t* out_k_normed_landing_saturation_count = nullptr);
 
-// Source compatibility for pre-QKC1 unit callers.  Their legacy K path never
-// reaches wide RoPE (k_wide is null), therefore an empty manifest is exact.
+// Source compatibility for pre-QKC1 unit callers.
 inline SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales,
                                          uint8_t* workspace, uint32_t layer,
                                          int64_t context_cap, int64_t position,
@@ -1241,7 +1230,7 @@ inline SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales
 	return ApplyQkNormSite(q_codes, q_scales, workspace, kNoRopeTables, layer, context_cap,
 	                       position, num_heads, num_key_value_heads, head_dim, lw, site_prefix,
 	                       token_index, trace_hook_state, out_saturation_count,
-	                       out_k_normed_landing_saturation_count, nullptr);
+	                       out_k_normed_landing_saturation_count);
 }
 
 // Fixed-order, per-channel Q31 score reduction used by fused-QK layers.
