@@ -155,6 +155,16 @@ else()
 	target_compile_options(t2693_prefix_clone PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 
+# T-2700: the same ABI snapshot/clone driver, with the converter-only capture
+# sink bound before the first sequence is created.
+add_executable(t2700_fused_k_capture tools/t2700_fused_k_capture.cpp)
+target_link_libraries(t2700_fused_k_capture PRIVATE superslm)
+if(MSVC)
+	target_compile_options(t2700_fused_k_capture PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(t2700_fused_k_capture PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+
 # T-2700 step 0: the independent Python oracle drives these compiled forced tiers.
 add_executable(t2700_fused_k_oracle_sse2_forced tools/t2700_fused_k_oracle.cpp)
 target_link_libraries(t2700_fused_k_oracle_sse2_forced PRIVATE superslm_sse2_forced)

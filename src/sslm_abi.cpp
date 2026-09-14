@@ -177,6 +177,18 @@ struct sslm_model_s {
 	int64_t damped_greedy_q_c = 0;
 };
 
+// T-2700 converter-only observation binding.  This intentionally remains
+// outside sslm_abi.h: it is a build-time tool seam, not an embeddable ABI
+// feature.  Binding is permitted only before a sequence exists, so the base
+// marshaled layer array remains immutable for every ordinary/live ABI caller.
+extern "C" sslm_status sslm_t2700_set_fused_k_capture_sink(
+    sslm_model model, superslm::FusedKCaptureSink* sink) {
+	if (!model) return SSLM_INVALID_ARGUMENT;
+	if (model->live_refs.load(std::memory_order_acquire) != 0) return SSLM_INVALID_ARGUMENT;
+	for (auto& layer : model->engine.layers) layer.fused_k_capture_sink = sink;
+	return SSLM_OK;
+}
+
 // C6. A mapped LoRA adapter (design Sec9 C6, S-LoRA-serial's own outstanding ABI debt): wraps
 // the already-proven V5 delta kernel and converter adapter mode via
 // include/superslm/adapter_marshal.h's own AdapterHandle/PopulateAdapterFromView/
