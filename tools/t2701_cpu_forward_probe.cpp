@@ -59,6 +59,8 @@ struct TraceCapture {
 	CarriedScale q_proj_scale{};
 	std::vector<int8_t> q_norm_codes;
 	std::vector<CarriedScale> q_norm_scales;
+	std::vector<int8_t> attention_residual_codes;
+	CarriedScale attention_residual_scale{};
 };
 
 void CaptureTrace(const SslmChainTraceRecord* chain, const SslmKvLandingTraceRecord*, void* user) {
@@ -70,6 +72,9 @@ void CaptureTrace(const SslmChainTraceRecord* chain, const SslmKvLandingTraceRec
 	} else if (chain->site == "layer0.q_norm") {
 		capture->q_norm_codes.insert(capture->q_norm_codes.end(), chain->codes.begin(), chain->codes.end());
 		capture->q_norm_scales.push_back(CarriedScale{chain->m_out, chain->e_out});
+	} else if (chain->site == "layer0.attn_residual") {
+		capture->attention_residual_codes.assign(chain->codes.begin(), chain->codes.end());
+		capture->attention_residual_scale = CarriedScale{chain->m_out, chain->e_out};
 	}
 }
 
@@ -270,6 +275,8 @@ int main(int argc, char** argv) {
 	} else {
 		PrintTraceDigest("cpu_q_proj", trace.q_proj_codes, {trace.q_proj_scale});
 		PrintTraceDigest("cpu_q_norm", trace.q_norm_codes, trace.q_norm_scales);
+		PrintTraceDigest("cpu_attn_residual", trace.attention_residual_codes,
+		                 {trace.attention_residual_scale});
 	}
 	return 0;
 }
