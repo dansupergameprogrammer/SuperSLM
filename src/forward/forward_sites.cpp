@@ -1659,12 +1659,20 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
 					                                                 &in_domain);
 					if (!in_domain) return SslmForwardStatus::OptionGWideRopeMagnitudeOutOfDomain;
 					const size_t offset = kv_head * head_dim + i0;
-					k_row[i0] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
-					    rotated.x, lw.k_wide_source_scale.m, lw.k_channel_r_t[offset],
-					    lw.k_wide_source_scale.e, lw.k_channel_e_t[offset], out_saturation_count)));
-					k_row[i1] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
-					    rotated.y, lw.k_wide_source_scale.m, lw.k_channel_r_t[offset + 1],
-					    lw.k_wide_source_scale.e, lw.k_channel_e_t[offset + 1], out_saturation_count)));
+					const int64_t landing0 = LandingRescale(rotated.x, lw.k_wide_source_scale.m,
+					    lw.k_channel_r_t[offset], lw.k_wide_source_scale.e, lw.k_channel_e_t[offset],
+					    out_saturation_count);
+					const int64_t landing1 = LandingRescale(rotated.y, lw.k_wide_source_scale.m,
+					    lw.k_channel_r_t[offset + 1], lw.k_wide_source_scale.e, lw.k_channel_e_t[offset + 1],
+					    out_saturation_count);
+					if (lw.fused_k_capture_sink != nullptr && lw.fused_k_capture_sink->observe != nullptr) {
+						lw.fused_k_capture_sink->observe(lw.fused_k_capture_sink->context, layer, kv_head, i0,
+						    raw[i0], rotated.x, lw.k_wide_source_scale, landing0);
+						lw.fused_k_capture_sink->observe(lw.fused_k_capture_sink->context, layer, kv_head, i1,
+						    raw[i1], rotated.y, lw.k_wide_source_scale, landing1);
+					}
+					k_row[i0] = static_cast<int8_t>(ClampRopeCode(landing0));
+					k_row[i1] = static_cast<int8_t>(ClampRopeCode(landing1));
 				}
 			}
 			return SslmForwardStatus::Ok;

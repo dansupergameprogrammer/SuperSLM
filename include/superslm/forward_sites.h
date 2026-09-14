@@ -689,6 +689,20 @@ struct LayerAdapter {
 	LayerAdapterProjection q, o, gate, up, down, k, v;
 };
 
+// T-2700 converter-only observation seam.  The caller owns both the sink and
+// its context; normal forward supplies nullptr and takes no observation path.
+// `wide` is the post-RMSNorm/pre-RoPE integer and `rotated` is the exact
+// post-RoPE integer whose absolute value is calibrated in KWideSourceScale's
+// real unit. `landing_raw` is supplied after the same C27 call that writes the
+// channel, so the sink can count its own saturation without changing it.
+using FusedKCaptureObserve = void (*)(void* context, uint32_t layer, size_t kv_head,
+                                      size_t channel, int64_t wide, int64_t rotated,
+                                      CarriedScale wide_scale, int64_t landing_raw);
+struct FusedKCaptureSink {
+	void* context = nullptr;
+	FusedKCaptureObserve observe = nullptr;
+};
+
 struct LayerWeights {
 	const int32_t* attn_norm_gain;  // hidden_size
 	CarriedScale attn_norm_site_constant;
@@ -799,6 +813,7 @@ struct LayerWeights {
 	const int64_t* k_channel_r_t = nullptr;   // num_key_value_heads * head_dim
 	const int64_t* k_channel_e_t = nullptr;   // num_key_value_heads * head_dim
 	const int64_t* k_channel_ratio = nullptr; // num_key_value_heads * head_dim, Q31
+	FusedKCaptureSink* fused_k_capture_sink = nullptr;  // converter-only; nullptr is ordinary forward
 	// (carried-scale delta §4, D-SLM6117): K's post-norm codes requantize a SECOND time, back
 	// onto this static, per-(layer, KV head) landing scale -- a NEW scale, calibrated on
 	// post-norm data, distinct from `kv_landing_r_t_k`/`kv_landing_e_t_k` below (K's raw,
