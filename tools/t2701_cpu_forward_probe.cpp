@@ -12,6 +12,7 @@
 #include "superslm/gpu_port.h"
 #include "superslm/model.h"
 #include "superslm/sha256.h"
+#include "superslm/trace_hook.h"
 #include "sslm_marshal.h"
 
 using namespace superslm;
@@ -51,6 +52,37 @@ void PackEmbeddingBlock(const int8_t* codes, size_t hidden_size, const CarriedSc
 	const uint32_t scale_off = SeqScaleOff(static_cast<uint32_t>(hidden_size));
 	std::memcpy(out + scale_off, &scale.m, sizeof(scale.m));
 	std::memcpy(out + scale_off + sizeof(scale.m), &scale.e, sizeof(scale.e));
+}
+
+struct TraceCapture {
+	std::vector<int8_t> q_proj_codes;
+	CarriedScale q_proj_scale{};
+	std::vector<int8_t> q_norm_codes;
+	std::vector<CarriedScale> q_norm_scales;
+};
+
+void CaptureTrace(const SslmChainTraceRecord* chain, const SslmKvLandingTraceRecord*, void* user) {
+	if (chain == nullptr) return;
+	auto* capture = static_cast<TraceCapture*>(user);
+	if (chain->site == "layer0.q_proj.requant") {
+		capture->q_proj_codes.assign(chain->codes.begin(), chain->codes.end());
+		capture->q_proj_scale = CarriedScale{chain->m_out, chain->e_out};
+	} else if (chain->site == "layer0.q_norm") {
+		capture->q_norm_codes.insert(capture->q_norm_codes.end(), chain->codes.begin(), chain->codes.end());
+		capture->q_norm_scales.push_back(CarriedScale{chain->m_out, chain->e_out});
+	}
+}
+
+void PrintTraceDigest(const char* name, const std::vector<int8_t>& codes,
+	                  const std::vector<CarriedScale>& scales) {
+	if (codes.empty()) return;
+	uint8_t digest[32];
+	Sha256Hash(reinterpret_cast<const uint8_t*>(codes.data()), codes.size(), digest);
+	std::printf("%s_codes_sha256=%s count=%zu", name, ToHex(digest).c_str(), codes.size());
+	for (size_t i = 0; i < scales.size(); ++i)
+		std::printf(" scale[%zu]=%lld,%lld", i, static_cast<long long>(scales[i].m),
+		            static_cast<long long>(scales[i].e));
+	std::printf("\n");
 }
 
 }  // namespace
@@ -135,6 +167,10 @@ int main(int argc, char** argv) {
 	seq.hidden_codes = hidden_codes.data();
 	const OptionGKLandingMode k_mode = model.option_g_fused_k_landing ? OptionGKLandingMode::kFused
 	                                                                    : OptionGKLandingMode::kLegacy;
+	TraceCapture trace;
+	if (!(use_gpu || raw_k_gpu || no_qnorm_gpu)) SslmSetTraceHook(model.trace_hook, CaptureTrace, &trace);
+	std::vector<uint8_t> gpu_q_codes(model.config.num_attention_heads * head_dim);
+	SslmForwardStatus forward_status = SslmForwardStatus::Ok;
 	if (use_chunk) {
 		std::vector<int8_t> chunk_codes(tokens.size() * hidden);
 		std::vector<CarriedScale> chunk_scales(tokens.size());
@@ -157,7 +193,8 @@ int main(int argc, char** argv) {
 			    seq, layers.data(), layers_n, hidden, head_dim, kv_heads, model.config.intermediate_size,
 			    context_cap, model.rope_tables, workspace.data(), workspace.size(), blocks.data(),
 			    static_cast<uint32_t>(tokens.size()), nullptr, nullptr, nullptr, nullptr, nullptr, false,
-			    0, 0, nullptr, &inflight, 0, 1, layers_n != 0 && layers[0].k_norm_gain != nullptr);
+			    0, 0, nullptr, &inflight, model.config.num_attention_heads * model.config.head_dim, 1,
+			    layers_n != 0 && layers[0].q_norm_gain != nullptr && layers[0].k_norm_gain != nullptr);
 			if (st == SslmForwardStatus::Ok && inflight != nullptr) {
 				int32_t ready = 0;
 				st = superslm_gpu::RunLayerLoopGpuFinish(inflight, seq, workspace.data(), 1, &ready);
@@ -172,6 +209,7 @@ int main(int argc, char** argv) {
 			seq.hidden_scale = chunk_scales.back();
 			seq.context_length = static_cast<int64_t>(tokens.size());
 		}
+		forward_status = st;
 		if (st != SslmForwardStatus::Ok)
 			return std::fprintf(stderr, "forward: %s\n", SslmForwardStatusName(st)), 1;
 	} else for (const int32_t token : tokens) {
@@ -182,16 +220,25 @@ int main(int argc, char** argv) {
 		seq.hidden_scale = token_scale;
 		seq.layer_index = 0;
 		if (use_gpu || raw_k_gpu || no_qnorm_gpu) {
-			st = superslm_gpu::RunLayerLoopGpu(
+			superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+			st = superslm_gpu::RunLayerLoopGpuSubmit(
 			    seq, layers.data(), layers_n, layer_budget, hidden, head_dim, kv_heads,
 			    model.config.intermediate_size, context_cap, model.rope_tables, workspace.data(), workspace.size(),
-			    nullptr, nullptr, 1);
+			    nullptr, nullptr, &inflight, nullptr, nullptr, nullptr, false, 0, 0, nullptr,
+			    gpu_q_codes.size(), gpu_q_codes.data(), gpu_q_codes.size(), 1,
+			    layers[0].q_norm_gain != nullptr && layers[0].k_norm_gain != nullptr);
+			if (st == SslmForwardStatus::Ok && inflight != nullptr) {
+				int32_t ready = 0;
+				st = superslm_gpu::RunLayerLoopGpuFinish(inflight, seq, workspace.data(), 1, &ready,
+				                                         gpu_q_codes.data());
+			}
 		} else {
 			st = RunLayerLoop(seq, layers.data(), layers_n, layer_budget, hidden, head_dim, kv_heads,
 			                  model.config.intermediate_size, context_cap, model.rope_tables, workspace.data(),
-			                  workspace.size(), k_mode, {}, 0, nullptr,
+			                  workspace.size(), k_mode, {}, 0, &model.trace_hook,
 			                  model.config.num_attention_heads * model.config.head_dim);
 		}
+		forward_status = st;
 		if (st != SslmForwardStatus::Ok) return std::fprintf(stderr, "forward: %s\n", SslmForwardStatusName(st)), 1;
 	}
 	std::vector<int8_t> final_codes(hidden);
@@ -210,5 +257,19 @@ int main(int argc, char** argv) {
 	std::printf("backend=%s mode=%s layer_budget=%u tokens=%s logits_sha256=%s kv_sha256=%s\n", (use_gpu || raw_k_gpu || no_qnorm_gpu) ? "gpu" : "cpu",
 	            use_chunk ? "chunk" : "stepped", layer_budget, argv[2],
 	            ToHex(digest).c_str(), ToHex(kv_digest).c_str());
+	std::printf("forward_status=%s gpu_sticky_tag=%d kv_saturation=%llu kv_landing=%llu k_normed_landing=%llu rope_q=%llu rope_k=%llu\n",
+	            SslmForwardStatusName(forward_status), (use_gpu || raw_k_gpu || no_qnorm_gpu) ? 0 : -1,
+	            static_cast<unsigned long long>(seq.kv_saturation_count),
+	            static_cast<unsigned long long>(seq.kv_landing_saturation_count),
+	            static_cast<unsigned long long>(seq.k_normed_landing_saturation_count),
+	            static_cast<unsigned long long>(seq.rope_q_saturation_count),
+	            static_cast<unsigned long long>(seq.rope_k_saturation_count));
+	if (use_gpu || raw_k_gpu || no_qnorm_gpu) {
+		std::vector<int8_t> signed_q(gpu_q_codes.begin(), gpu_q_codes.end());
+		PrintTraceDigest("gpu_q", signed_q, {});
+	} else {
+		PrintTraceDigest("cpu_q_proj", trace.q_proj_codes, {trace.q_proj_scale});
+		PrintTraceDigest("cpu_q_norm", trace.q_norm_codes, trace.q_norm_scales);
+	}
 	return 0;
 }
