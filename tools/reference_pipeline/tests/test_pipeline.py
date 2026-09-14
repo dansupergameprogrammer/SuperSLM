@@ -690,9 +690,14 @@ def test_static_scales_are_offline_constants_of_the_model():
     second = scales_used(model, [31, 30, 29, 28, 27, 26])     # different tokens, different range
     assert first == second, "the scales moved with the data; that is the dynamic fallback, not the baseline"
 
-    # The static forward reads every requant and rescale constant in the artifact.
+    # The static forward reads every requant constant.  Slice 5 moves QK K directly from
+    # wide post-RoPE values to QKC1's per-channel landing and derives its score scale from
+    # that same table, so these two retained compatibility values remain serialized for the
+    # C++ consumer until slice 6 but are intentionally not read by this reference.
     assert first.requant == model.scales.requant
-    assert sorted(first.rescale) == sorted(model.scales.rescale)
+    qk_compatibility = re.compile(r"^layer\d+\.(?:k_norm\.requant|softmax\.input)$")
+    assert sorted(first.rescale) == sorted(
+        entry for entry in model.scales.rescale if not qk_compatibility.match(entry[0]))
 
     # Nonlinear: everything except the named dynamic-arm complement, exactly.
     # (carried-scale delta §4, D-SLM6117/D-SLM6119): k_normed_head{h}.scale joins this
