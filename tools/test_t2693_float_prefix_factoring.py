@@ -3,6 +3,8 @@
 import dataclasses
 import struct
 
+import numpy as np
+
 import reference_pipeline.pipeline as pl
 
 
@@ -45,3 +47,28 @@ def test_factored_float_calibration_is_bit_identical_to_whole_prompt_calibration
     factored_scales = pl._derive_scales(cfg, factored, model.weight_scales, {})[0]
     unfactored_scales = pl._derive_scales(cfg, unfactored, model.weight_scales, {})[0]
     assert dataclasses.asdict(factored_scales) == dataclasses.asdict(unfactored_scales)
+
+
+def test_fixed_height_projection_is_vital_to_factored_equality(monkeypatch):
+    """A projection whose output depends on its input row count reopens the real defect."""
+    cfg = _cfg()
+    model = pl.fixture_model(cfg)
+    token_lists = {
+        "a": [1, 2, 3, 4, 5, 6],
+        "b": [1, 2, 3, 7, 8],
+        "c": [1, 2, 3, 9, 10, 11, 12],
+    }
+    original = pl._calibration_block_project
+
+    def height_dependent_projection(tensors, name, values):
+        if name != "layer0.o_proj":
+            return original(tensors, name, values)
+        # This is the projection mutant the fixed-height block prevents: the direct
+        # GEMM result is made observably dependent on left-matrix height.
+        out = values @ tensors[name].T
+        return out + np.spacing(out) * values.shape[0]
+
+    monkeypatch.setattr(pl, "_calibration_block_project", height_dependent_projection)
+    factored = pl._calibrate(cfg, model.float_weight, token_lists, token_lists.__getitem__, factored=True)
+    unfactored = pl._calibrate(cfg, model.float_weight, token_lists, token_lists.__getitem__, factored=False)
+    assert _maxima_bytes(factored) != _maxima_bytes(unfactored)

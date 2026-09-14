@@ -2042,8 +2042,7 @@ def _float_calibration_factored(cfg, float_weight, token_lists, maxima):
     """
     prefix_tokens = _longest_common_token_prefix(token_lists)
     if not prefix_tokens or any(len(tokens) == len(prefix_tokens) for tokens in token_lists):
-        _float_forward_many(cfg, float_weight, token_lists, maxima=maxima, need_logits=False,
-                            deterministic_attention=True)
+        _float_calibration_unfactored(cfg, float_weight, token_lists, maxima, 0)
         return 0
 
     prefix_length = len(prefix_tokens)
@@ -2055,16 +2054,15 @@ def _float_calibration_factored(cfg, float_weight, token_lists, maxima):
     for layer in range(cfg.num_hidden_layers):
         prefix = f"layer{layer}"
         tensors = _layer_tensors(float_weight, prefix)
-        prefix_hidden, prefix_keys, prefix_values = _float_layer(
-            cfg, tensors, prefix_hidden, maxima, prefix, return_kv=True,
-            deterministic_attention=True)
-        suffix_hiddens = [
-            _float_layer(cfg, tensors, hidden, maxima, prefix,
-                         position_offset=prefix_length,
-                         prefix_keys=prefix_keys, prefix_values=prefix_values,
-                         deterministic_attention=True)
-            for hidden in suffix_hiddens
-        ]
+        prefix_result, prefix_state = _float_calibration_layer_batch(
+            cfg, tensors, [prefix_hidden], maxima, prefix, position_offsets=[0], return_kv=True)
+        prefix_hidden = prefix_result[0]
+        prefix_keys, prefix_values = prefix_state[0]
+        suffix_hiddens = _float_calibration_layer_batch(
+            cfg, tensors, suffix_hiddens, maxima, prefix,
+            position_offsets=[prefix_length] * len(suffix_hiddens),
+            prefix_key_values=[(prefix_keys, prefix_values)] * len(suffix_hiddens),
+            attention_query_starts=[prefix_length] * len(suffix_hiddens))
         del tensors
 
     gain = float_weight("final_norm.gain")
@@ -2072,6 +2070,23 @@ def _float_calibration_factored(cfg, float_weight, token_lists, maxima):
     for hidden in suffix_hiddens:
         _observe(maxima, "final_norm.out", _float_rmsnorm(hidden, cfg.rms_norm_eps) * gain)
     return prefix_length
+
+
+def _float_calibration_unfactored(cfg, float_weight, token_lists, maxima, prefix_length):
+    """Whole-prompt calibration with the factored walk's fixed arithmetic schedule."""
+    embed = float_weight("embed")
+    hiddens = [embed[list(tokens), :] for tokens in token_lists]
+    del embed
+    for layer in range(cfg.num_hidden_layers):
+        prefix = f"layer{layer}"
+        tensors = _layer_tensors(float_weight, prefix)
+        hiddens = _float_calibration_layer_batch(
+            cfg, tensors, hiddens, maxima, prefix, position_offsets=[0] * len(hiddens),
+            attention_query_starts=[prefix_length] * len(hiddens))
+        del tensors
+    gain = float_weight("final_norm.gain")
+    for hidden in hiddens:
+        _observe(maxima, "final_norm.out", _float_rmsnorm(hidden, cfg.rms_norm_eps) * gain)
 
 
 def _calibrate(cfg: ModelConfig, float_weight, records, tokenize, *, factored=True) -> dict:
@@ -2105,8 +2120,8 @@ def _calibrate(cfg: ModelConfig, float_weight, records, tokenize, *, factored=Tr
         if factored:
             _float_calibration_factored(cfg, float_weight, sequences, maxima)
         else:
-            _float_forward_many(cfg, float_weight, sequences, maxima=maxima, need_logits=False,
-                                deterministic_attention=True)
+            _float_calibration_unfactored(
+                cfg, float_weight, sequences, maxima, len(_longest_common_token_prefix(sequences)))
     return maxima
 
 
@@ -3135,7 +3150,10 @@ def _float_rmsnorm(x, eps):
     return x / np.sqrt(mean_square + eps)
 
 
-def _float_rope(vectors, theta, position_offset=0):
+_CALIBRATION_GEMM_BLOCK_ROWS = 128
+
+
+def _float_rope(vectors, theta, position_offset=0, positions=None):
     """The float rotation, from the angles §6.4's tables quantize."""
     steps, heads, head_dim = vectors.shape
     pairs = head_dim // 2
@@ -3143,7 +3161,9 @@ def _float_rope(vectors, theta, position_offset=0):
     # A factored calibration walks a suffix after an already-evaluated causal
     # prefix.  The RoPE position is absolute; the default keeps every existing
     # caller's position-zero behaviour unchanged.
-    positions = (position_offset + np.arange(steps, dtype=np.float64)).reshape(steps, 1)
+    if positions is None:
+        positions = position_offset + np.arange(steps, dtype=np.float64)
+    positions = np.asarray(positions, dtype=np.float64).reshape(steps, 1)
     angles = positions * inv_freq.reshape(1, pairs)
     cos = np.cos(angles).reshape(steps, 1, pairs)
     sin = np.sin(angles).reshape(steps, 1, pairs)
@@ -3177,6 +3197,36 @@ def _float_project(float_weight, name, values, *, rowwise=False):
     if bias is not None:
         out = out + bias
     return out
+
+
+def _calibration_block_matmul(values, right):
+    """Fixed-height float64 GEMM for calibration's row-independent transforms.
+
+    OpenBLAS selects a different reduction tree from the left-hand matrix height.  A
+    factored suffix has a different height from its unfactored prompt, so calibration
+    always supplies a zero-padded 128-row left matrix and discards its padding rows.
+    Zero padding is intentional: it makes the operand bytes outside each real row
+    deterministic without changing any retained dot product.
+    """
+    if values.ndim != 2:
+        raise ValueError("calibration block matmul requires rank-2 values")
+    rows, inner = values.shape
+    if inner != right.shape[0]:
+        raise ValueError("calibration block matmul inner dimensions disagree")
+    out = np.empty((rows, right.shape[1]), dtype=np.float64)
+    for start in range(0, rows, _CALIBRATION_GEMM_BLOCK_ROWS):
+        count = min(_CALIBRATION_GEMM_BLOCK_ROWS, rows - start)
+        block = np.zeros((_CALIBRATION_GEMM_BLOCK_ROWS, inner), dtype=np.float64)
+        block[:count] = values[start:start + count]
+        out[start:start + count] = (block @ right)[:count]
+    return out
+
+
+def _calibration_block_project(tensors, name, values):
+    """A calibration projection whose GEMM height is independent of batch shape."""
+    out = _calibration_block_matmul(values, tensors[name].T)
+    bias = tensors.get(f"{name}.bias")
+    return out if bias is None else out + bias
 
 
 def _has_qk_norm(tensors, prefix):
@@ -3216,6 +3266,133 @@ def _apply_qk_norm(q, k, tensors, prefix, cfg):
         if k_norm_w is not None:
             k = _float_rmsnorm(k, cfg.rms_norm_eps) * k_norm_w
     return q, k
+
+
+def _calibration_attention(cfg, q, keys, values, start):
+    """Causal attention for one calibration segment.
+
+    The caller splits a whole prompt at its common prefix.  Thus the prefix and a
+    factored suffix use identical score and value GEMM shapes in both calibration
+    walks.  Attention can therefore use its efficient ordinary GEMMs; only the
+    row-independent projections need the fixed-height schedule.
+    """
+    group = attention_group_size(cfg)
+    steps = q.shape[0]
+    context = np.empty((steps, cfg.num_attention_heads, cfg.head_dim), dtype=np.float64)
+    for head in range(cfg.num_attention_heads):
+        kv_head = head // group
+        scores = q[:, head, :] @ keys[:, kv_head, :].T / math.sqrt(cfg.head_dim)
+        scores = np.where(_causal_mask(steps, start=start, total=keys.shape[0]), scores, -np.inf)
+        shifted = scores - scores.max(axis=-1, keepdims=True)
+        weights_row = np.exp(shifted)
+        weights_row = weights_row / weights_row.sum(axis=-1, keepdims=True)
+        context[:, head, :] = weights_row @ values[:, kv_head, :]
+    return context
+
+
+def _float_calibration_layer_batch(cfg, tensors, hiddens, maxima, prefix, *,
+                                   position_offsets, prefix_key_values=None,
+                                   attention_query_starts=None, return_kv=False):
+    """One calibration layer over independent sequences, batched at every projection.
+
+    `hiddens` are concatenated only for row-independent operations.  Attention is
+    deliberately restored per sequence afterwards; its key/value history is causal
+    and therefore not a row-independent transform.  All projection, score, and
+    value GEMMs go through the same fixed-height helper in both factored and
+    unfactored walks.
+    """
+    if not hiddens:
+        return ([], []) if return_kv else []
+    lengths = [hidden.shape[0] for hidden in hiddens]
+    offsets = np.cumsum([0] + lengths)
+    flat_hidden = np.concatenate(hiddens, axis=0)
+    fetch = tensors.__getitem__
+
+    normed = _float_rmsnorm(flat_hidden, cfg.rms_norm_eps) * fetch(f"{prefix}.attn_norm.gain")
+    _observe(maxima, f"{prefix}.attn_norm.out", normed)
+    q = _calibration_block_project(tensors, f"{prefix}.q_proj", normed).reshape(
+        len(flat_hidden), cfg.num_attention_heads, cfg.head_dim)
+    k = _calibration_block_project(tensors, f"{prefix}.k_proj", normed).reshape(
+        len(flat_hidden), cfg.num_key_value_heads, cfg.head_dim)
+    v = _calibration_block_project(tensors, f"{prefix}.v_proj", normed).reshape(
+        len(flat_hidden), cfg.num_key_value_heads, cfg.head_dim)
+    _observe(maxima, f"{prefix}.q", q)
+    _observe(maxima, f"{prefix}.k", k)
+    _observe(maxima, f"{prefix}.v", v)
+    q, k = _apply_qk_norm(q, k, tensors, prefix, cfg)
+    _observe(maxima, f"{prefix}.k_normed", k)
+
+    positions = np.concatenate([
+        offset + np.arange(length, dtype=np.float64)
+        for offset, length in zip(position_offsets, lengths)
+    ])
+    q = _float_rope(q, cfg.rope_theta, positions=positions)
+    k = _float_rope(k, cfg.rope_theta, positions=positions)
+    if not _has_qk_norm(tensors, prefix):
+        _observe(maxima, f"{prefix}.q", q)
+        _observe(maxima, f"{prefix}.k", k)
+    _observe(maxima, f"{prefix}.k_normed", k)
+
+    if prefix_key_values is None:
+        prefix_key_values = [None] * len(hiddens)
+    if attention_query_starts is None:
+        attention_query_starts = [0] * len(hiddens)
+    contexts = []
+    keys_out = []
+    values_out = []
+    for index, (begin, end, length) in enumerate(zip(offsets[:-1], offsets[1:], lengths)):
+        own_k, own_v = k[begin:end], v[begin:end]
+        cached = prefix_key_values[index]
+        if cached is None:
+            keys, values = own_k, own_v
+        else:
+            cached_k, cached_v = cached
+            keys = np.concatenate((cached_k, own_k), axis=0)
+            values = np.concatenate((cached_v, own_v), axis=0)
+        start = attention_query_starts[index]
+        if cached is not None and start != cached[0].shape[0]:
+            raise ValueError("calibration suffix start does not match its prefix state")
+        if cached is not None:
+            context = _calibration_attention(cfg, q[begin:end], keys, values, start)
+        elif not 0 <= start <= length:
+            raise ValueError("calibration attention split is outside the sequence")
+        elif start == 0:
+            context = _calibration_attention(cfg, q[begin:end], keys, values, 0)
+        elif start == length:
+            context = _calibration_attention(cfg, q[begin:end], keys, values, start)
+        else:
+            # A whole prompt's prefix cannot attend its suffix.  Splitting here gives
+            # it the exact same key matrix as the factored prefix walk.
+            prefix_context = _calibration_attention(
+                cfg, q[begin:begin + start], keys[:start], values[:start], 0)
+            suffix_context = _calibration_attention(
+                cfg, q[begin + start:end], keys, values, start)
+            context = np.concatenate((prefix_context, suffix_context), axis=0)
+        contexts.append(context)
+        keys_out.append(own_k.copy())
+        values_out.append(own_v.copy())
+    flat_context = np.concatenate(contexts, axis=0)
+    _observe(maxima, f"{prefix}.attn_ctx", flat_context)
+
+    attention = _calibration_block_project(
+        tensors, f"{prefix}.o_proj", flat_context.reshape(len(flat_hidden), -1))
+    _observe(maxima, f"{prefix}.attn_out", attention)
+    flat_hidden = flat_hidden + attention
+    _observe(maxima, f"{prefix}.attn_residual", flat_hidden)
+    normed = _float_rmsnorm(flat_hidden, cfg.rms_norm_eps) * fetch(f"{prefix}.mlp_norm.gain")
+    _observe(maxima, f"{prefix}.mlp_norm.out", normed)
+    gate = _calibration_block_project(tensors, f"{prefix}.gate_proj", normed)
+    up = _calibration_block_project(tensors, f"{prefix}.up_proj", normed)
+    _observe(maxima, f"{prefix}.gate", gate)
+    _observe(maxima, f"{prefix}.up", up)
+    activation = (gate / (1.0 + np.exp(-gate))) * up
+    _observe(maxima, f"{prefix}.mlp_act", activation)
+    down = _calibration_block_project(tensors, f"{prefix}.down_proj", activation)
+    _observe(maxima, f"{prefix}.mlp_out", down)
+    flat_hidden = flat_hidden + down
+    _observe(maxima, f"{prefix}.mlp_residual", flat_hidden)
+    output = [flat_hidden[begin:end] for begin, end in zip(offsets[:-1], offsets[1:])]
+    return (output, list(zip(keys_out, values_out))) if return_kv else output
 
 
 def _float_layer(cfg, tensors, hidden, maxima, prefix, *, position_offset=0,
