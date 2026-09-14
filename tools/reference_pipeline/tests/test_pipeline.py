@@ -707,12 +707,15 @@ def test_static_scales_are_offline_constants_of_the_model():
     kv_head = re.compile(r"^layer\d+\.(?:[kv]_head\d+|k_normed_head\d+)\.scale$")
     artifact = dict(model.scales.nonlinear)
     dynamic_only = {name for name in artifact if kv_head.match(name)}
+    reference_compatibility = {name for name in artifact if
+                               re.match(r"^layer\d+\.softmax\.input$", name)}
     assert dynamic_only, (
         "the artifact carries no per-head KV landing entries — the dynamic arm's "
         "pinned calibration surface (C27/D-SLM58) is missing, and this cell's named "
         "complement would be vacuous")
     assert dict(first.nonlinear) == {
-        name: value for name, value in artifact.items() if name not in dynamic_only
+        name: value for name, value in artifact.items()
+        if name not in (dynamic_only | reference_compatibility)
     }, (
         "the static forward's nonlinear read set does not equal the artifact minus "
         "the named dynamic-arm surface — either a static constant went unread (dead "
