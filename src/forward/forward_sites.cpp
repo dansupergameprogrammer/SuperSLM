@@ -2215,6 +2215,11 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 					    ctx_acc[d], lw.ctx_fold_identity[h], lw.ctx_fold_mult[h],
 					    lw.ctx_fold_shift[h]);
 				}
+				if (lw.attention_capture_sink != nullptr && lw.attention_capture_sink->observe != nullptr) {
+					lw.attention_capture_sink->observe(lw.attention_capture_sink->context, l, position, h,
+					    scores.data(), width, derived_q_ln2, derived_q_b, derived_q_c, probs.data(),
+					    ctx_acc.data(), ctx_wide.data() + h * head_dim, head_dim);
+				}
 			}
 			// §6.2 step 6: the context funnel takes an EMPTY incoming span --
 			// the per-head static scale was already consumed at the landing.

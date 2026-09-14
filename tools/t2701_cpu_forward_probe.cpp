@@ -112,6 +112,24 @@ void PrintTraceRecords(const TraceCapture& capture) {
 	}
 }
 
+void CaptureAttention(void*, uint32_t layer, int64_t position, size_t head,
+                      const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b, int64_t q_c,
+                      const int64_t* probs, const int64_t* ctx_acc, const int64_t* ctx_wide,
+                      size_t head_dim) {
+	if (layer != 0 || position != 1) return;
+	uint8_t acc_digest[32], wide_digest[32];
+	Sha256Hash(reinterpret_cast<const uint8_t*>(ctx_acc), head_dim * sizeof(*ctx_acc), acc_digest);
+	Sha256Hash(reinterpret_cast<const uint8_t*>(ctx_wide), head_dim * sizeof(*ctx_wide), wide_digest);
+	std::printf("cpu_attention layer=%u position=%lld head=%zu scores=", layer,
+	            static_cast<long long>(position), head);
+	for (size_t i = 0; i < width; ++i) std::printf("%s%lld", i ? "," : "", static_cast<long long>(scores[i]));
+	std::printf(" iexp=%lld,%lld,%lld probs=", static_cast<long long>(q_ln2),
+	            static_cast<long long>(q_b), static_cast<long long>(q_c));
+	for (size_t i = 0; i < width; ++i) std::printf("%s%lld", i ? "," : "", static_cast<long long>(probs[i]));
+	std::printf(" ctx_acc_sha256=%s ctx_wide_sha256=%s\n", ToHex(acc_digest).c_str(),
+	            ToHex(wide_digest).c_str());
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -163,6 +181,8 @@ int main(int argc, char** argv) {
 		                  backing[layer], layers[layer], &error))
 			return std::fprintf(stderr, "marshal layer %u: %s\n", layer, error.c_str()), 1;
 	}
+	AttentionCaptureSink attention_capture{nullptr, CaptureAttention};
+	layers[0].attention_capture_sink = &attention_capture;
 	if (raw_k) {
 		for (LayerWeights& layer : layers) {
 			layer.q_norm_gain = nullptr;

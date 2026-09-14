@@ -703,6 +703,18 @@ struct FusedKCaptureSink {
 	FusedKCaptureObserve observe = nullptr;
 };
 
+// Test-only attention interior observation.  The forward never branches on
+// this sink and invokes it only after all four quantities are computed.
+using AttentionCaptureObserve = void (*)(void* context, uint32_t layer, int64_t position,
+                                         size_t head, const int64_t* scores, size_t width,
+                                         int64_t q_ln2, int64_t q_b, int64_t q_c,
+                                         const int64_t* probs, const int64_t* ctx_acc,
+                                         const int64_t* ctx_wide, size_t head_dim);
+struct AttentionCaptureSink {
+	void* context = nullptr;
+	AttentionCaptureObserve observe = nullptr;
+};
+
 struct LayerWeights {
 	const int32_t* attn_norm_gain;  // hidden_size
 	CarriedScale attn_norm_site_constant;
@@ -814,6 +826,7 @@ struct LayerWeights {
 	const int64_t* k_channel_e_t = nullptr;   // num_key_value_heads * head_dim
 	const int64_t* k_channel_ratio = nullptr; // num_key_value_heads * head_dim, Q31
 	FusedKCaptureSink* fused_k_capture_sink = nullptr;  // converter-only; nullptr is ordinary forward
+	AttentionCaptureSink* attention_capture_sink = nullptr;  // test-only; nullptr is ordinary forward
 	// §8.1: per-(head, projection) K/V landing reciprocal/exponent, from
 	// KvLandingReciprocals'/KvLandingScales' own per-head rows -- K and V are
 	// separate arrays because §8.1 states the reciprocal/exponent as

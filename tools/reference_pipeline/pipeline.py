@@ -4320,7 +4320,8 @@ _CURRENT_COMPOSITION_CONSTANTS: list = [{}]
 
 
 def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None,
-                    attention_outputs=None, attention_stop_layer=None):
+                    attention_outputs=None, attention_stop_layer=None,
+                    attention_capture=None):
     """The W8A8-dynamic FULL-STACK integer forward -> int32 logits, one row per token —
     the §15 eval's measured arm (D-SLM48/D-SLM55), realizing §6.8 C23-C30's site-level
     composition over the C19-C22 per-token chain (§6.2). See `dynamic_scale_trace` for the
@@ -4645,6 +4646,15 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None,
                     for j in range(width):
                         acc += probabilities[j] * int(values[j][d])
                     context_rows[t][head * head_dim + d] = acc
+                # Test-only observation seam.  It records the arithmetic immediately
+                # before the C27 per-head context fold; it has no bearing on the forward.
+                if attention_capture is not None:
+                    attention_capture.append({
+                        "layer": layer, "position": t + start, "head": head,
+                        "scores": tuple(present), "iexp": (q_ln2, q_b, q_c),
+                        "probabilities": tuple(probabilities),
+                        "ctx_acc": tuple(context_rows[t][head * head_dim:(head + 1) * head_dim]),
+                    })
 
         # attn_ctx per-head pre-fold (C27/D-SLM57): each head SEGMENT folds to the
         # common reference max_head S_v by an offline (0,1] constant through the pinned
@@ -4663,6 +4673,11 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None,
         attn_scale = [None] * steps
         for t in range(steps):
             folded_ctx = fold_projection_accumulator(context_rows[t], ctx_folds)
+            if attention_capture is not None:
+                for entry in attention_capture:
+                    if entry["layer"] == layer and entry["position"] == t + start:
+                        head = entry["head"]
+                        entry["ctx_wide"] = tuple(folded_ctx[head * head_dim:(head + 1) * head_dim])
             codes, scale = _chain_record(f"{prefix}.attn_ctx", t, folded_ctx, [], trace)
             attn_out.append([max(-127, min(127, c)) for c in codes])
             attn_scale[t] = scale
@@ -4793,9 +4808,11 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None,
     return _to_int32(logits)
 
 
-def forward_dynamic_attention_layer(model: QuantizedModel, tokens, layer: int, trace=None, cache=None):
+def forward_dynamic_attention_layer(model: QuantizedModel, tokens, layer: int, trace=None, cache=None,
+                                    attention_capture=None):
     """Return the carried-scale hidden codes immediately after ``layer`` attention."""
-    return forward_dynamic(model, tokens, cache=cache, trace=trace, attention_stop_layer=layer)
+    return forward_dynamic(model, tokens, cache=cache, trace=trace, attention_stop_layer=layer,
+                           attention_capture=attention_capture)
 
 
 # ==============================================================================

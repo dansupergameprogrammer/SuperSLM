@@ -5,6 +5,25 @@ import struct
 import fused_k_calibration_oracle as oracle
 
 
+def test_composition_fused_sites_equal_the_independent_calibration_oracle():
+    """The composition oracle's fused wide-RoPE/Q31 sites use this vector verbatim.
+
+    This is deliberately an operator cell, rather than a second call to the
+    forward implementation: the per-site values must agree with the independent
+    calibration oracle on the same signed, Q30-domain input.
+    """
+    import composition_ref
+
+    vector = _vector()
+    expected = oracle.evaluate(vector)
+    rotated = composition_ref._rope_rotate_wide(
+        [expected["wide"]], [[vector["cos_q30"]]], [[vector["sin_q30"]]], 2)[0]
+    assert rotated == expected["rotated"]
+    score = composition_ref.rdbpot_oracle(
+        sum(q * k * expected["ratio_q31"] for q, k in zip(vector["q_codes"], rotated)), 31)
+    assert score == expected["score_q31"]
+
+
 def _vector(**overrides):
     vector = {
         "gain_code": -128,
