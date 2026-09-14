@@ -407,6 +407,31 @@ int64_t FloorDivI64(int64_t a, int64_t b) {
 	return (r != 0 && r < 0) ? q - 1 : q;
 }
 
+// The fused-QK K path intentionally stops before RmsNormSite's funnel.  Its
+// normalised values remain wide through RoPE and take their one and only
+// narrowing boundary at QKC1's per-channel landing.  This is deliberately
+// factored from RmsNormSite rather than "undoing" a requantized code: the
+// latter loses information and was the retired two-landing construction.
+static void RmsNormWideI64(const int64_t* h, const int32_t* g, size_t width, int64_t* wide) {
+	int64_t sumsq = 0;
+	for (size_t i = 0; i < width; ++i) sumsq += h[i] * h[i];
+	int64_t root = ISqrt(FloorDivI64(sumsq << (2 * kNormFracBits), static_cast<int64_t>(width)));
+	root = root > 1 ? root : 1;
+	for (size_t i = 0; i < width; ++i) {
+		wide[i] = FloorDivI64(h[i] << (2 * kNormFracBits), root) * static_cast<int64_t>(g[i]);
+	}
+}
+
+int64_t QkQ31Score(const int8_t* q, const int8_t* k, const int64_t* ratio_q31, size_t head_dim) {
+	// Scalar reference.  The loop's order is the format contract; platform
+	// vector kernels may partition it only when they preserve this reduction.
+	int64_t total = 0;
+	for (size_t d = 0; d < head_dim; ++d) {
+		total += static_cast<int64_t>(q[d]) * static_cast<int64_t>(k[d]) * ratio_q31[d];
+	}
+	return RoundingDivideByPOT(total, 31);
+}
+
 SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_size,
                                CarriedScale /*incoming_scale*/, CarriedScale site_constant,
                                int8_t* out_codes, CarriedScale* out_scale,
@@ -1381,7 +1406,10 @@ SslmForwardStatus LandTokenKVRow(int64_t* kacc, int64_t* vacc, const int8_t* nor
 		                                    num_key_value_heads, head_dim, h, position);
 		int8_t* const v_row = MutableValueRow(workspace, layer, context_cap,
 		                                      num_key_value_heads, head_dim, h, position);
-		if (option_g_fused_k_landing) {
+		if (lw.k_norm_gain != nullptr && lw.k_channel_r_t != nullptr) {
+			// Fused QK owns K's landing below in ApplyQkNormSite.  V still
+			// lands here, after the shared fold/bias work above.
+		} else if (option_g_fused_k_landing) {
 			// T-1894 (design Sec31.2's own construction, carried from
 			// T-1891 Sec2, confirmed sound by T-1892): rotate the WIDE
 			// pre-landing K accumulator pairwise at this token's own
@@ -1464,12 +1492,14 @@ SslmForwardStatus LandTokenKVRow(int64_t* kacc, int64_t* vacc, const int8_t* nor
 // second, distinct symbol from the one forward_sites.h declares, leaving the declared external
 // symbol undefined at link time.
 SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8_t* workspace,
+                                   const SslmTensorManifest& rope_tables,
                                    uint32_t layer, int64_t context_cap, int64_t position,
                                    size_t num_heads, size_t num_key_value_heads, size_t head_dim,
                                    const LayerWeights& lw, std::string_view site_prefix,
                                    size_t token_index, SslmTraceHookState* trace_hook_state,
                                    uint64_t* out_saturation_count,
-                                   uint64_t* out_k_normed_landing_saturation_count) {
+                                   uint64_t* out_k_normed_landing_saturation_count,
+                                   const int64_t* k_wide) {
 	if (lw.q_norm_gain != nullptr) {
 		for (size_t h = 0; h < num_heads; ++h) {
 			int8_t* const q_head_row = q_codes + h * head_dim;
@@ -1484,6 +1514,38 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
 		}
 	}
 	if (lw.k_norm_gain != nullptr) {
+		if (lw.k_channel_r_t != nullptr && lw.k_channel_e_t != nullptr && k_wide != nullptr) {
+			std::vector<int64_t> normalized(head_dim);
+			OptionGRopeTableRow table;
+			const SslmForwardStatus resolve = ResolveOptionGRopeTableRow(
+			    position, context_cap, head_dim, rope_tables, &table);
+			if (resolve != SslmForwardStatus::Ok) return resolve;
+			for (size_t kv_head = 0; kv_head < num_key_value_heads; ++kv_head) {
+				const int64_t* raw = k_wide + kv_head * head_dim;
+				RmsNormWideI64(raw, lw.k_norm_gain, head_dim, normalized.data());
+				int8_t* const k_row = MutableKeyRow(workspace, layer, context_cap,
+				                                            num_key_value_heads, head_dim, kv_head, position);
+				for (size_t p = 0; p < table.pairs; ++p) {
+					const size_t i0 = 2 * p, i1 = i0 + 1;
+					const int32_t c = static_cast<int32_t>(ReadRopeTableEntryI64(
+					    table.cos->data, table.row_offset + p));
+					const int32_t s = static_cast<int32_t>(ReadRopeTableEntryI64(
+					    table.sin->data, table.row_offset + p));
+					bool in_domain = false;
+					const RopePairWide rotated = RopeApplyPairWide(normalized[i0], normalized[i1], c, s,
+					                                                 &in_domain);
+					if (!in_domain) return SslmForwardStatus::OptionGWideRopeMagnitudeOutOfDomain;
+					const size_t offset = kv_head * head_dim + i0;
+					k_row[i0] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
+					    rotated.x, lw.k_wide_source_scale.m, lw.k_channel_r_t[offset],
+					    lw.k_wide_source_scale.e, lw.k_channel_e_t[offset], out_saturation_count)));
+					k_row[i1] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
+					    rotated.y, lw.k_wide_source_scale.m, lw.k_channel_r_t[offset + 1],
+					    lw.k_wide_source_scale.e, lw.k_channel_e_t[offset + 1], out_saturation_count)));
+				}
+			}
+			return SslmForwardStatus::Ok;
+		}
 		for (size_t kv_head = 0; kv_head < num_key_value_heads; ++kv_head) {
 			int8_t* const k_row = MutableKeyRow(workspace, layer, context_cap, num_key_value_heads,
 			                                    head_dim, kv_head, position);
@@ -1827,6 +1889,8 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		// through the S3.7 accessor -- one row per head, at THIS token's own
 		// `position`, never a whole-hidden_size flat write (§9.4's real
 		// per-(layer, head)-major, position-minor layout).
+		const size_t kv_hidden_size = num_key_value_heads * head_dim;
+		std::vector<int64_t> kacc(kv_hidden_size), vacc(kv_hidden_size);
 		{
 			// T-1654 (S3.8a): kacc/vacc are `kv_hidden_size`-wide, not `hidden_size`-wide -- the
 			// K/V store holds one row per KV head, never per query head.
@@ -1838,8 +1902,6 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			// GemmInt8Accumulate call per layer across the whole chunk instead. Everything
 			// after the GEMM -- WSC1 fold, LoRA delta-add, bias, per-head landing, Option-G's
 			// fused rotate-then-land -- is LandTokenKVRow, shared verbatim by both paths.
-			const size_t kv_hidden_size = num_key_value_heads * head_dim;
-			std::vector<int64_t> kacc(kv_hidden_size), vacc(kv_hidden_size);
 			GemmInt8AccumulateRow(normed.data(), lw.k_weight, hidden_size, kv_hidden_size,
 			                      kacc.data());
 			GemmInt8AccumulateRow(normed.data(), lw.v_weight, hidden_size, kv_hidden_size,
@@ -1865,10 +1927,10 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		// per-head table to the attention block below.
 		std::vector<CarriedScale> q_scales(num_heads, q_scale);
 		if (!option_g_fused_k_landing) {
-			st = ApplyQkNormSite(q_codes.data(), q_scales.data(), workspace, l, context_cap, position,
+			st = ApplyQkNormSite(q_codes.data(), q_scales.data(), workspace, rope_tables, l, context_cap, position,
 			                     num_heads, num_key_value_heads, head_dim, lw, site_prefix,
 			                     token_index, trace_hook_state, &seq.kv_saturation_count,
-			                     &seq.k_normed_landing_saturation_count);
+			                     &seq.k_normed_landing_saturation_count, kacc.data());
 			if (st != SslmForwardStatus::Ok) return st;
 		}
 
@@ -1883,12 +1945,14 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		// this loop's own K-rotation half, and the write-back loop below it,
 		// run ONLY when the flag is off. Q's own call is unconditional either
 		// way -- Option G does not touch Q.
+		const bool direct_qk = lw.k_norm_gain != nullptr && lw.k_channel_r_t != nullptr &&
+		                       lw.k_channel_e_t != nullptr && lw.k_channel_ratio != nullptr;
 		for (size_t h = 0; h < num_heads; ++h) {
 			st = RopeApplySite(q_codes.data() + h * head_dim, head_dim, position, context_cap,
 			                   rope_tables, q_rot.data() + h * head_dim, &seq.kv_saturation_count,
 			                   &seq.rope_q_saturation_count);
 			if (st != SslmForwardStatus::Ok) return st;
-			if (option_g_fused_k_landing) continue;
+			if (option_g_fused_k_landing || direct_qk) continue;
 			// T-1654 (S3.8a): the accessor index is `h / group`, not `h` -- the
 			// reference's own grouping (`dynamic_engine.py:410`,
 			// `kv_head = head // group`). This loop's own bound stays `num_heads`
@@ -1924,7 +1988,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		// carries the fused, rotated-then-landed value from the landing block
 		// above, and this loop's own read-then-rotate source (`k_rot`) was
 		// never populated for K on this flag's path (the `continue` above).
-		if (!option_g_fused_k_landing) {
+		if (!option_g_fused_k_landing && !direct_qk) {
 			for (size_t h = 0; h < num_heads; ++h) {
 				// T-1654 (S3.8a): `h / group`, matching the read loop above -- the
 				// same KV row is written once per query head sharing it (redundant
@@ -2012,8 +2076,15 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 				// mutation cell (§3 Cell 1) would fail to distinguish).
 				const int8_t* const k_rows_base =
 				    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
-				GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_rows_base, head_dim, width,
-				                      scores.data());
+				if (direct_qk) {
+					const int64_t* ratio = lw.k_channel_ratio + kv_head * head_dim;
+					for (size_t row = 0; row < width; ++row)
+						scores[row] = QkQ31Score(q_rot.data() + h * head_dim,
+						                         k_rows_base + row * head_dim, ratio, head_dim);
+				} else {
+					GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_rows_base, head_dim, width,
+					                      scores.data());
+				}
 				if (!SoftmaxRowQ15(scores.data(), width, derived_q_ln2, derived_q_b,
 				                   derived_q_c, probs.data())) {
 					// Minor A (Poirot e4b398c review): the kernel refused after
@@ -2394,10 +2465,11 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 			std::vector<CarriedScale> q_scales_h(num_heads, q_scale[t]);
 			if (!option_g_fused_k_landing) {
 				st = ApplyQkNormSite(q_codes.data() + t * effective_q_width, q_scales_h.data(),
-				                     workspace, l, context_cap, position, num_heads,
+				                     workspace, rope_tables, l, context_cap, position, num_heads,
 				                     num_key_value_heads, head_dim, lw, site_prefix, t,
 				                     trace_hook_state, kv_saturation_count,
-				                     out_k_normed_landing_saturation_count);
+				                     out_k_normed_landing_saturation_count,
+				                     kacc_all.data() + t * kv_hidden_size);
 				if (st != SslmForwardStatus::Ok) return st;
 			}
 
@@ -2406,12 +2478,14 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 			// num_heads), sized effective_q_width -- see RunLayerLoopImpl's own identical
 			// comment on why k_rot needs the same widening q_rot does.
 			std::vector<int8_t> q_rot(effective_q_width), k_rot(effective_q_width);
+			const bool direct_qk = lw.k_norm_gain != nullptr && lw.k_channel_r_t != nullptr &&
+			                       lw.k_channel_e_t != nullptr && lw.k_channel_ratio != nullptr;
 			for (size_t h = 0; h < num_heads; ++h) {
 				st = RopeApplySite(q_codes.data() + t * effective_q_width + h * head_dim, head_dim,
 				                   position, context_cap, rope_tables, q_rot.data() + h * head_dim,
 				                   kv_saturation_count, out_rope_q_saturation_count);
 				if (st != SslmForwardStatus::Ok) return st;
-				if (option_g_fused_k_landing) continue;
+				if (option_g_fused_k_landing || direct_qk) continue;
 				const size_t kv_head = h / group;
 				const int8_t* const k_row_before_rotate = KeyRow(
 				    workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, position);
@@ -2425,7 +2499,7 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 				                   only_representative_head ? out_rope_k_saturation_count : nullptr);
 				if (st != SslmForwardStatus::Ok) return st;
 			}
-			if (!option_g_fused_k_landing) {
+			if (!option_g_fused_k_landing && !direct_qk) {
 				for (size_t h = 0; h < num_heads; ++h) {
 					const size_t kv_head = h / group;
 					int8_t* const k_row = MutableKeyRow(workspace, l, context_cap,
@@ -2480,8 +2554,15 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 
 					const int8_t* const k_rows_base =
 					    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
-					GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_rows_base, head_dim, width,
-					                      scores.data());
+					if (direct_qk) {
+						const int64_t* ratio = lw.k_channel_ratio + kv_head * head_dim;
+						for (size_t row = 0; row < width; ++row)
+							scores[row] = QkQ31Score(q_rot.data() + h * head_dim,
+							                         k_rows_base + row * head_dim, ratio, head_dim);
+					} else {
+						GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_rows_base, head_dim, width,
+						                      scores.data());
+					}
 					if (!SoftmaxRowQ15(scores.data(), width, derived_q_ln2, derived_q_b,
 					                   derived_q_c, probs.data())) {
 						return SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted;

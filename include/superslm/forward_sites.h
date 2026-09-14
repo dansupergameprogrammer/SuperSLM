@@ -793,6 +793,12 @@ struct LayerWeights {
 	// additive slice derives it once at marshal from KVC1 layerL.k_norm; no
 	// serialized duplicate exists and today's forward does not consume it yet.
 	CarriedScale k_wide_source_scale;
+	// QKC1's dense per-(KV-head, channel) landing and score images.  These are
+	// populated only for the fused-QK artifact form; nullptr retains the
+	// established non-QK path.
+	const int64_t* k_channel_r_t = nullptr;   // num_key_value_heads * head_dim
+	const int64_t* k_channel_e_t = nullptr;   // num_key_value_heads * head_dim
+	const int64_t* k_channel_ratio = nullptr; // num_key_value_heads * head_dim, Q31
 	// (carried-scale delta §4, D-SLM6117): K's post-norm codes requantize a SECOND time, back
 	// onto this static, per-(layer, KV head) landing scale -- a NEW scale, calibrated on
 	// post-norm data, distinct from `kv_landing_r_t_k`/`kv_landing_e_t_k` below (K's raw,
@@ -1213,12 +1219,20 @@ int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
 // `out_saturation_count`, alongside it, at the SAME second-landing `LandingRescale` call.
 // Defaults to `nullptr`: every pre-existing caller compiles unchanged.
 SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8_t* workspace,
+                                   const SslmTensorManifest& rope_tables,
                                    uint32_t layer, int64_t context_cap, int64_t position,
                                    size_t num_heads, size_t num_key_value_heads, size_t head_dim,
                                    const LayerWeights& lw, std::string_view site_prefix,
                                    size_t token_index, SslmTraceHookState* trace_hook_state,
                                    uint64_t* out_saturation_count = nullptr,
-                                   uint64_t* out_k_normed_landing_saturation_count = nullptr);
+                                   uint64_t* out_k_normed_landing_saturation_count = nullptr,
+                                   const int64_t* k_wide = nullptr);
+
+// Fixed-order, per-channel Q31 score reduction used by fused-QK layers.
+// The result is the C3/ties-away-from-zero division of
+// sum(q[d] * k[d] * ratio_q31[d]) by 2^31.  Keeping this separate from the
+// ordinary GEMM makes the table's channel ratios explicit at the one consumer.
+int64_t QkQ31Score(const int8_t* q, const int8_t* k, const int64_t* ratio_q31, size_t head_dim);
 
 // --- S3.6: the head and the greedy decode loop (SuperSLM_S3a_WalkingSkeleton_
 // Plan.md §11 S3.6; §9.1; master plan §6.4; C16). This is

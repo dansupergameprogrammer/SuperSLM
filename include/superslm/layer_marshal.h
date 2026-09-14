@@ -120,6 +120,7 @@ struct LayerBacking {
 	// (carried-scale delta §4/§7 Cell 8, D-SLM6117/D-SLM6146): K's post-norm landing constants --
 	// num_key_value_heads-sized, present only when this layer's artifact carries k_norm.gain.
 	std::vector<int64_t> k_norm_landing_r_t, k_norm_landing_e_t;
+	std::vector<int64_t> k_channel_r_t, k_channel_e_t, k_channel_ratio;
 };
 
 // Marshals one projection's per-output-channel WSC1 fold tensor into three
@@ -449,6 +450,31 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 		out.k_norm_site_constant =
 		    ReadCarriedScale(view.composition_constants, prefix + ".k_norm", &qk_ok);
 		if (qk_ok) out.k_wide_source_scale = CanonicalScaleTimes127(out.k_norm_site_constant);
+		// QKC1 is dense in layer/KV-head/channel order.  Keep the byte-wise
+		// reader discipline: artifact tensors need not be naturally aligned.
+		const uint64_t table_base = static_cast<uint64_t>(l) * kv_hidden_size;
+		const superslm::SslmTensorView* qkc_r = view.qk_channel_table.Tensor("k_channel_r_t");
+		const superslm::SslmTensorView* qkc_e = view.qk_channel_table.Tensor("k_channel_e_t");
+		const superslm::SslmTensorView* qkc_ratio = view.qk_channel_table.Tensor("k_channel_ratio");
+		if (!view.qk_norm_fused_k_channel_table || !qkc_r || !qkc_e || !qkc_ratio) {
+			*err = prefix + ": q_norm/k_norm requires the fused QKC1 table";
+			return false;
+		}
+		backing.k_channel_r_t.resize(kv_hidden_size);
+		backing.k_channel_e_t.resize(kv_hidden_size);
+		backing.k_channel_ratio.resize(kv_hidden_size);
+		for (uint64_t i = 0; i < kv_hidden_size; ++i) {
+			backing.k_channel_r_t[i] = RdI64(qkc_r->data + (table_base + i) * 8);
+			backing.k_channel_e_t[i] = RdI64(qkc_e->data + (table_base + i) * 8);
+			backing.k_channel_ratio[i] = RdI64(qkc_ratio->data + (table_base + i) * 8);
+		}
+		out.k_channel_r_t = backing.k_channel_r_t.data();
+		out.k_channel_e_t = backing.k_channel_e_t.data();
+		out.k_channel_ratio = backing.k_channel_ratio.data();
+	} else {
+		out.k_channel_r_t = nullptr;
+		out.k_channel_e_t = nullptr;
+		out.k_channel_ratio = nullptr;
 	}
 	if (!qk_ok) {
 		*err = prefix + ": q_norm/k_norm tensor present but missing composition_constants site entry";
