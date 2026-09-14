@@ -80,6 +80,9 @@ struct Capture {
 			return;  // impossible for one marshaled layer; retain the first authoritative pair.
 		}
 		const uint64_t raw_abs = AbsI64(rotated);
+		// `rotated` is the Q30-rounded output of RopeApplyPairWide.  The sink
+		// supplies its already-adjusted source scale, so this is exactly the
+		// post-RoPE real quantity the float path observes.
 		const double real = std::ldexp(static_cast<double>(raw_abs) * static_cast<double>(scale.m),
 		                               static_cast<int>(scale.e));
 		Peak& peak = self->peaks[(static_cast<size_t>(layer) * self->heads + head) * self->channels + channel];
