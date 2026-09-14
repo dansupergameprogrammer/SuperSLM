@@ -9,9 +9,7 @@ missing production surface.  The two no-QK whole-file checks are guards and are 
 from __future__ import annotations
 
 import hashlib
-import os
 import struct
-import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -101,20 +99,6 @@ def test_signed_one_sparse_census_32512_expected_oracle_rows(backend, green_slic
             expected[gain, code] = oracle.evaluate(_vector(gain, code))
     assert len(expected) == 32_512
     assert expected[-128, -1]["wide"][0] >= 0  # signed floor is an executed oracle value.
-    if backend == "gpu-turing":
-        # Slice 7's product cell is intentionally opt-in: a normal source-only test
-        # run has neither a Turing adapter nor the 605 MiB final artifact.  Product
-        # runners provide both paths and this row drives the full compiled CPU/GPU
-        # forward, then requires the driver's own per-step bit-identity verdict.
-        probe = os.environ.get("T2701_TURING_PROBE")
-        artifact = os.environ.get("T2701_TURING_ARTIFACT")
-        if not probe or not artifact:
-            pytest.skip("set T2701_TURING_PROBE and T2701_TURING_ARTIFACT for the Turing product row")
-        result = subprocess.run([probe, artifact, "1", "42"], text=True,
-                                capture_output=True, check=False)
-        assert result.returncode == 0, result.stderr + result.stdout
-        assert "per-step CPU/GPU equality over 1 timed steps: IDENTICAL (0 mismatched)" in result.stdout
-        return
     if green_slice != 6:
         _red(green_slice, f"the {backend} fused-K signed-census runner")
 
