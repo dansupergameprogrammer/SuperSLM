@@ -88,7 +88,7 @@ def _dynamic_scale_reciprocal(mantissa):
     return ((1 << 63) + mantissa) // (2 * mantissa)
 
 
-def build_qk_channel_table(model):
+def build_qk_channel_table(model, channel_peaks=None):
     """Serialize QKC1's four dense Int64 vectors for the bit-2 capability.
 
     The legacy forward remains the consumer of existing KLR1/KVC1 images until
@@ -103,6 +103,14 @@ def build_qk_channel_table(model):
         key = f"layer{layer}.k_norm.gain"
         if key not in model.weight_scales:
             continue
+        provisional_peaks = None if channel_peaks is None else channel_peaks.get(f"layer{layer}")
+        if provisional_peaks is not None:
+            provisional_peaks = np.asarray(provisional_peaks, dtype=np.float64)
+            if provisional_peaks.shape != (cfg.num_key_value_heads, cfg.head_dim):
+                raise V.ConverterValidationError(
+                    "QkChannelTableGeometryMismatch",
+                    f"layer{layer} post-RoPE peaks have {provisional_peaks.shape}, expected "
+                    f"({cfg.num_key_value_heads}, {cfg.head_dim})")
         channels = tuple(float(v) for v in model.weight_scales[key])
         # Norm gains are currently quantized per tensor by the calibrated
         # pipeline.  QKC1 is deliberately dense per channel, so expand that
@@ -116,9 +124,11 @@ def build_qk_channel_table(model):
         if any(not np.isfinite(v) or v <= 0.0 for v in channels):
             raise V.ConverterValidationError("QkChannelScaleSourceOutOfDomain",
                                              f"{key} contains a non-positive or non-finite source scale")
-        head_max = max(Fraction(v) for v in channels)
         for head in range(cfg.num_key_value_heads):
-            for channel, source_float in enumerate(channels):
+            sources = (tuple(float(v) / 127.0 for v in provisional_peaks[head])
+                       if provisional_peaks is not None else channels)
+            head_max = max(Fraction(v) for v in sources)
+            for channel, source_float in enumerate(sources):
                 source = Fraction(source_float)
                 ratio = _round_nearest_away(source.numerator * head_max.denominator * (1 << 31),
                                              source.denominator * head_max.numerator)

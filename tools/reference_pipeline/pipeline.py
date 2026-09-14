@@ -2032,7 +2032,7 @@ def _longest_common_token_prefix(token_lists):
     return list(token_lists[0][:limit])
 
 
-def _float_calibration_factored(cfg, float_weight, token_lists, maxima):
+def _float_calibration_factored(cfg, float_weight, token_lists, maxima, channel_peaks=None):
     """Calibration-only float prefix factoring.
 
     This is deliberately separate from `_float_forward_many`: ordinary reference
@@ -2042,7 +2042,7 @@ def _float_calibration_factored(cfg, float_weight, token_lists, maxima):
     """
     prefix_tokens = _longest_common_token_prefix(token_lists)
     if not prefix_tokens or any(len(tokens) == len(prefix_tokens) for tokens in token_lists):
-        _float_calibration_unfactored(cfg, float_weight, token_lists, maxima, 0)
+        _float_calibration_unfactored(cfg, float_weight, token_lists, maxima, 0, channel_peaks)
         return 0
 
     prefix_length = len(prefix_tokens)
@@ -2055,14 +2055,15 @@ def _float_calibration_factored(cfg, float_weight, token_lists, maxima):
         prefix = f"layer{layer}"
         tensors = _layer_tensors(float_weight, prefix)
         prefix_result, prefix_state = _float_calibration_layer_batch(
-            cfg, tensors, [prefix_hidden], maxima, prefix, position_offsets=[0], return_kv=True)
+            cfg, tensors, [prefix_hidden], maxima, prefix, position_offsets=[0], return_kv=True,
+            channel_peaks=channel_peaks)
         prefix_hidden = prefix_result[0]
         prefix_keys, prefix_values = prefix_state[0]
         suffix_hiddens = _float_calibration_layer_batch(
             cfg, tensors, suffix_hiddens, maxima, prefix,
             position_offsets=[prefix_length] * len(suffix_hiddens),
             prefix_key_values=[(prefix_keys, prefix_values)] * len(suffix_hiddens),
-            attention_query_starts=[prefix_length] * len(suffix_hiddens))
+            attention_query_starts=[prefix_length] * len(suffix_hiddens), channel_peaks=channel_peaks)
         del tensors
 
     gain = float_weight("final_norm.gain")
@@ -2072,7 +2073,8 @@ def _float_calibration_factored(cfg, float_weight, token_lists, maxima):
     return prefix_length
 
 
-def _float_calibration_unfactored(cfg, float_weight, token_lists, maxima, prefix_length):
+def _float_calibration_unfactored(cfg, float_weight, token_lists, maxima, prefix_length,
+                                  channel_peaks=None):
     """Whole-prompt calibration with the factored walk's fixed arithmetic schedule."""
     embed = float_weight("embed")
     hiddens = [embed[list(tokens), :] for tokens in token_lists]
@@ -2082,14 +2084,15 @@ def _float_calibration_unfactored(cfg, float_weight, token_lists, maxima, prefix
         tensors = _layer_tensors(float_weight, prefix)
         hiddens = _float_calibration_layer_batch(
             cfg, tensors, hiddens, maxima, prefix, position_offsets=[0] * len(hiddens),
-            attention_query_starts=[prefix_length] * len(hiddens))
+            attention_query_starts=[prefix_length] * len(hiddens), channel_peaks=channel_peaks)
         del tensors
     gain = float_weight("final_norm.gain")
     for hidden in hiddens:
         _observe(maxima, "final_norm.out", _float_rmsnorm(hidden, cfg.rms_norm_eps) * gain)
 
 
-def _calibrate(cfg: ModelConfig, float_weight, records, tokenize, *, factored=True) -> dict:
+def _calibrate(cfg: ModelConfig, float_weight, records, tokenize, *, factored=True,
+               return_channel_peaks=False):
     """Per-site max-abs over the calibration corpus, measured on the float reference.
 
     Max-abs is order-independent by construction, and that is the property rather than a
@@ -2114,15 +2117,17 @@ def _calibrate(cfg: ModelConfig, float_weight, records, tokenize, *, factored=Tr
     460-484 tokens. The divergence is reachable only in the fixture.
     """
     maxima: dict[str, float] = {}
+    channel_peaks = {} if return_channel_peaks else None
     sequences = [tokens[: cfg.context_cap]
                  for tokens in (list(tokenize(record)) for record in records) if tokens]
     if sequences:
         if factored:
-            _float_calibration_factored(cfg, float_weight, sequences, maxima)
+            _float_calibration_factored(cfg, float_weight, sequences, maxima, channel_peaks)
         else:
             _float_calibration_unfactored(
-                cfg, float_weight, sequences, maxima, len(_longest_common_token_prefix(sequences)))
-    return maxima
+                cfg, float_weight, sequences, maxima, len(_longest_common_token_prefix(sequences)),
+                channel_peaks)
+    return (maxima, channel_peaks) if return_channel_peaks else maxima
 
 
 def calibrate(model: QuantizedModel, records, tokenize=None) -> StaticScales:
@@ -3229,6 +3234,15 @@ def _calibration_block_project(tensors, name, values):
     return out if bias is None else out + bias
 
 
+def _observe_qk_channel_peak(channel_peaks, prefix, values):
+    """Record QK-norm K's post-RoPE float peak at its `(KV head, channel)` authority."""
+    if channel_peaks is None:
+        return
+    peak = np.abs(np.asarray(values, dtype=np.float64)).max(axis=0)
+    existing = channel_peaks.get(prefix)
+    channel_peaks[prefix] = peak if existing is None else np.maximum(existing, peak)
+
+
 def _has_qk_norm(tensors, prefix):
     """Whether `_apply_qk_norm` changes either projected attention operand.
 
@@ -3292,7 +3306,8 @@ def _calibration_attention(cfg, q, keys, values, start):
 
 def _float_calibration_layer_batch(cfg, tensors, hiddens, maxima, prefix, *,
                                    position_offsets, prefix_key_values=None,
-                                   attention_query_starts=None, return_kv=False):
+                                   attention_query_starts=None, return_kv=False,
+                                   channel_peaks=None):
     """One calibration layer over independent sequences, batched at every projection.
 
     `hiddens` are concatenated only for row-independent operations.  Attention is
@@ -3328,6 +3343,8 @@ def _float_calibration_layer_batch(cfg, tensors, hiddens, maxima, prefix, *,
     ])
     q = _float_rope(q, cfg.rope_theta, positions=positions)
     k = _float_rope(k, cfg.rope_theta, positions=positions)
+    if _has_qk_norm(tensors, prefix):
+        _observe_qk_channel_peak(channel_peaks, prefix, k)
     if not _has_qk_norm(tensors, prefix):
         _observe(maxima, f"{prefix}.q", q)
         _observe(maxima, f"{prefix}.k", k)

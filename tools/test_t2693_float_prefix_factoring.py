@@ -49,6 +49,31 @@ def test_factored_float_calibration_is_bit_identical_to_whole_prompt_calibration
     assert dataclasses.asdict(factored_scales) == dataclasses.asdict(unfactored_scales)
 
 
+def test_factored_qk_channel_peaks_are_bit_identical_to_whole_prompt_calibration():
+    cfg = _cfg()
+    base = pl.fixture_model(cfg)
+    weights = dict(base.weights)
+    weight_scales = dict(base.weight_scales)
+    floats = {name: np.asarray(base.float_weight(name)).copy() for name in base.weights}
+    for layer in range(cfg.num_hidden_layers):
+        prefix = f"layer{layer}"
+        for norm in ("q_norm", "k_norm"):
+            key = f"{prefix}.{norm}.gain"
+            weights[key] = np.ones(cfg.head_dim, dtype=np.int8)
+            weight_scales[key] = [1.0] * cfg.head_dim
+            floats[key] = np.ones(cfg.head_dim, dtype=np.float64)
+    source = pl._dict_float_source(floats)
+    token_lists = {"a": [1, 2, 3, 4], "b": [1, 2, 3, 5, 6]}
+    records = list(token_lists)
+    factored, factored_channels = pl._calibrate(
+        cfg, source, records, token_lists.__getitem__, factored=True, return_channel_peaks=True)
+    unfactored, unfactored_channels = pl._calibrate(
+        cfg, source, records, token_lists.__getitem__, factored=False, return_channel_peaks=True)
+    assert _maxima_bytes(factored) == _maxima_bytes(unfactored)
+    assert set(factored_channels) == {"layer0"}
+    assert np.array_equal(factored_channels["layer0"], unfactored_channels["layer0"])
+
+
 def test_fixed_height_projection_is_vital_to_factored_equality(monkeypatch):
     """A projection whose output depends on its input row count reopens the real defect."""
     cfg = _cfg()
