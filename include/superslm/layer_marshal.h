@@ -117,9 +117,6 @@ struct LayerBacking {
 	// this layer's artifact carries the matching q_norm.gain/k_norm.gain tensor -- left empty
 	// (LayerWeights::q_norm_gain/k_norm_gain stay nullptr) otherwise.
 	std::vector<int32_t> q_norm_gain, k_norm_gain;
-	// (carried-scale delta §4/§7 Cell 8, D-SLM6117/D-SLM6146): K's post-norm landing constants --
-	// num_key_value_heads-sized, present only when this layer's artifact carries k_norm.gain.
-	std::vector<int64_t> k_norm_landing_r_t, k_norm_landing_e_t;
 	std::vector<int64_t> k_channel_r_t, k_channel_e_t, k_channel_ratio;
 };
 
@@ -354,10 +351,6 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 	backing.kv_e_t_k.resize(num_key_value_heads);
 	backing.kv_r_t_v.resize(num_key_value_heads);
 	backing.kv_e_t_v.resize(num_key_value_heads);
-	if (q_norm_w != nullptr) {
-		backing.k_norm_landing_r_t.resize(num_key_value_heads);
-		backing.k_norm_landing_e_t.resize(num_key_value_heads);
-	}
 	for (uint32_t h = 0; h < num_key_value_heads; ++h) {
 		const std::string kname = prefix + ".k_head" + std::to_string(h);
 		const std::string vname = prefix + ".v_head" + std::to_string(h);
@@ -371,34 +364,11 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 		backing.kv_r_t_k[h] = superslm::SslmKeyedConstants::Value(*ke, 2);
 		backing.kv_e_t_v[h] = superslm::SslmKeyedConstants::Value(*ve, 1);
 		backing.kv_r_t_v[h] = superslm::SslmKeyedConstants::Value(*ve, 2);
-		// (§4 D-SLM6117, §7 Cell 8, D-SLM6146): the fourth per-KV-head landing constant --
-		// present only when this layer carries q_norm/k_norm (asymmetric presence is already
-		// rejected above, so q_norm_w != nullptr implies k_norm_w != nullptr too). K's post-norm
-		// codes requantize onto this scale a second time, through the SAME
-		// kv_landing_reciprocals manifest family the raw K/V landing constants above already
-		// occupy -- read the identical way, under a new key.
-		if (q_norm_w != nullptr) {
-			const std::string k_normed_name = prefix + ".k_normed_head" + std::to_string(h);
-			const superslm::SslmConstantEntry* kne = view.kv_landing_reciprocals.Entry(k_normed_name);
-			if (!kne || kne->value_words < 3) {
-				*err = prefix + ": missing kv_landing_reciprocals entry \"" + k_normed_name + "\"";
-				return false;
-			}
-			backing.k_norm_landing_e_t[h] = superslm::SslmKeyedConstants::Value(*kne, 1);
-			backing.k_norm_landing_r_t[h] = superslm::SslmKeyedConstants::Value(*kne, 2);
-		}
 	}
 	out.kv_landing_r_t_k = backing.kv_r_t_k.data();
 	out.kv_landing_e_t_k = backing.kv_e_t_k.data();
 	out.kv_landing_r_t_v = backing.kv_r_t_v.data();
 	out.kv_landing_e_t_v = backing.kv_e_t_v.data();
-	if (q_norm_w != nullptr) {
-		out.k_norm_landing_r_t = backing.k_norm_landing_r_t.data();
-		out.k_norm_landing_e_t = backing.k_norm_landing_e_t.data();
-	} else {
-		out.k_norm_landing_r_t = nullptr;
-		out.k_norm_landing_e_t = nullptr;
-	}
 
 	// --- per-query i-exp composition inputs (KVC1 composition_constants)
 	// -------------------------------------------------------------------------

@@ -195,6 +195,8 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
             LayerScratch.Store<int>(q_rot_off + (h * (uint)g_head_dim + 2u * p + 1u) * 4u, (int)ClampRopeCodeGpu(ry));
         }
 
+        // Fused QKC1 K has already been rotated wide and landed by qk_norm_site.
+        if (LayerWeights.Load<int64_t>(g_layer_index * Layout.Load<uint>(56 * 4) + Layout.Load<uint>(60 * 4)) == 0) {
         // K, phase 1 (STAGE): every owned head reads its own kv_head's CURRENT
         // (pre-rotation) row into that HEAD's own ROPE_STAGE slice (N2). No
         // thread writes to KvCache anywhere in this phase. T-2113 (B4): the COMMIT
@@ -216,6 +218,7 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
                 WorkScratch.Store<int>(stage1 + 2u * p1 * 4u, kx);
                 WorkScratch.Store<int>(stage1 + (2u * p1 + 1u) * 4u, ky);
             }
+        }
         }
     }
 

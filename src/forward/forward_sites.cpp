@@ -1683,29 +1683,7 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
 			}
 			return SslmForwardStatus::Ok;
 		}
-		for (size_t kv_head = 0; kv_head < num_key_value_heads; ++kv_head) {
-			int8_t* const k_row = MutableKeyRow(workspace, layer, context_cap, num_key_value_heads,
-			                                    head_dim, kv_head, position);
-			CarriedScale k_norm_scale{};
-			const SslmForwardStatus st =
-			    RmsNormSite(k_row, lw.k_norm_gain, head_dim, CarriedScale{}, lw.k_norm_site_constant,
-			                k_row, &k_norm_scale, LayerSite(site_prefix, layer, "k_norm"),
-			                token_index, trace_hook_state);
-			if (st != SslmForwardStatus::Ok) return st;
-			// (delta §4, D-SLM6117): requantize the post-norm codes a SECOND time, onto the new
-			// static per-(layer, KV head) landing scale -- the identical LandingRescale primitive
-			// K's own raw pre-norm landing already uses (LandTokenKVRow, above), called again here
-			// with the norm's own just-produced (m, e) as the incoming scale and
-			// k_norm_landing_r_t/e_t as the target. k_row already holds the post-norm int8 codes
-			// (RmsNormSite's own in-place write, immediately above); this rescales them in place.
-			for (size_t d = 0; d < head_dim; ++d) {
-				k_row[d] = static_cast<int8_t>(ClampRopeCode(
-				    LandingRescale(k_row[d], k_norm_scale.m, lw.k_norm_landing_r_t[kv_head],
-				                   k_norm_scale.e, lw.k_norm_landing_e_t[kv_head],
-				                   out_saturation_count, /*out_magnitude_exceeded_int64=*/nullptr,
-				                   out_k_normed_landing_saturation_count)));
-			}
-		}
+		return SslmForwardStatus::KvPrecisionUnsupported;
 	}
 	return SslmForwardStatus::Ok;
 }

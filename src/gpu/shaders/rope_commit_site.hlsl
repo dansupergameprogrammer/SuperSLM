@@ -115,7 +115,7 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
     if (gtid.x == 0) gRopeCommitClamps = 0;
     GroupMemoryBarrierWithGroupSync();
 
-    if (t < items) {
+    if (LayerWeights.Load<int64_t>(g_layer_index * Layout.Load<uint>(56 * 4) + Layout.Load<uint>(60 * 4)) == 0 && t < items) {
         uint h2 = t / pairs;
         uint kv_head2 = h2 / max(group, 1u);
         uint row_off2 = KvRowOffsetWithinHalfGpu(g_context_cap, (uint)g_head_dim, kv_head2, g_position);

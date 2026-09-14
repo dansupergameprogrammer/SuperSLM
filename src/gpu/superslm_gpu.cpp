@@ -1008,12 +1008,10 @@ GpuLayerLayout ComputeLayerLayout(uint32_t hidden_size, uint32_t kv_hidden_size,
 	L.off[59] = cur; cur += 8;                                      // k_norm_present (int64 flag)
 	L.off[60] = cur; cur += Align8U32(head_dim * 4);                // k_norm_gain
 	L.off[61] = cur; cur += 16;                                     // k_norm_site_constant
-	// (carried-scale delta §4/§7 Cell 8, D-SLM6117/D-SLM6146): k_norm_landing_r_t/e_t -- K's
-	// second, post-norm landing scale, num_kv_heads-sized, appended after the six q_norm/k_norm
-	// fields for the identical reason those were appended after off[0..55] (gpu_port.h's own
-	// header comment on GpuLayerLayout).
-	L.off[62] = cur; cur += Align8U32(num_kv_heads * 8);            // k_norm_landing_r_t
-	L.off[63] = cur; cur += Align8U32(num_kv_heads * 8);            // k_norm_landing_e_t
+	// Fused QKC1 K path: one wide source scale and a dense, channel-major triple image.
+	L.off[62] = cur; cur += 16;                                     // k_wide_source_scale
+	L.off[63] = cur;                                                 // reserved
+	L.off[64] = cur; cur += Align8U32(kv_hidden_size * 8 * 3);     // QKC1 r_t/e_t/ratio
 	L.stride = cur;
 	return L;
 }
@@ -1149,9 +1147,7 @@ std::vector<uint8_t> PackLayerWeightsBytes(const superslm::LayerWeights* layers,
 		PutI64At(lw_bytes, base + layout.off[52] + 8, lw.down_site_constant.e);
 		PutI64At(lw_bytes, base + layout.off[53] + 0, lw.mlp_residual_site_constant.m);
 		PutI64At(lw_bytes, base + layout.off[53] + 8, lw.mlp_residual_site_constant.e);
-		// T-2568 (M3, Claude/Poirot/66626ef-t2567-trackb-confirmation.md): the sibling M4 left
-		// unaudited. `iexp_softmax_khead_m`/`_e` is required, UNCONDITIONALLY (unlike
-		// k_norm_landing_r_t/e_t, this pair is never optional on any layer -- MarshalLayer
+		// `iexp_softmax_khead_m`/`_e` is required, UNCONDITIONALLY. MarshalLayer
 		// itself, layer_marshal.h, populates it unguarded, with no presence flag): the CPU site
 		// dereferences both with no null check of its own (forward_sites.cpp:1910, 2385) and the
 		// header declares num_key_value_heads entries with no optional-nullptr wording
@@ -1194,53 +1190,18 @@ std::vector<uint8_t> PackLayerWeightsBytes(const superslm::LayerWeights* layers,
 				}
 				PutI64At(lw_bytes, base + layout.off[61] + 0, lw.k_norm_site_constant.m);
 				PutI64At(lw_bytes, base + layout.off[61] + 8, lw.k_norm_site_constant.e);
-				// (carried-scale delta §4/§7 Cell 8, D-SLM6117/D-SLM6146): K's second, post-norm
-				// landing scale -- present iff k_norm_gain is (asymmetric presence is already a
-				// rejected marshal state, layer_marshal.h). `forward_sites.h`'s own
-				// `LayerWeights` contract (T-2564, M8) states this pair REQUIRED non-null
-				// whenever `k_norm_gain` is non-null -- the identical obligation the CPU site
-				// (`ApplyQkNormSite`) already holds as an honest, unchecked precondition. This
-				// branch's own `k_norm_gain != nullptr` gate already makes these two non-null on
-				// every path this function itself constructs (`MarshalLayer` is the only
-				// in-tree producer and sets all three together); a caller constructing
-				// `LayerWeights` by hand -- the public contract this header exports -- and
-				// leaving either null has broken that contract. T-2566 (M4,
-				// Claude/Poirot/a5834b3-t2565-trackb-confirmation.md): the prior fix here
-				// substituted 0 and called it a "safe no-op," which is false -- 0 packs as
-				// `LandingRescaleGpu`'s target reciprocal, landing every K code of that head
-				// to 0 on the GPU path silently, and 0 sits outside
-				// `ValidateKvLandingReciprocalsDomain`'s own artifact-facing domain
-				// (`[2^31+1, 2^32]`, `src/model.cpp`) -- a value the loader would reject if it
-				// ever arrived through a real artifact. One contract, not two: refused by name,
-				// before either pointer is read and before any GPU dispatch this pack feeds.
-				//
-				// T-2568 (S1, Claude/Poirot/66626ef-t2567-trackb-confirmation.md): CORRECTED --
-				// this refusal used to throw `std::runtime_error`, the exact class this file's
-				// own recording-window catch (RunLayerLoopGpuSubmit/
-				// SubmitOneSubChunkToFullDepthForG5Bridge, below) reserves for TRANSIENT device
-				// and allocation failures (documented 37 lines below their own generic catch:
-				// "device alive, this one call failed -- transient/size-dependent, retry
-				// smaller"). Through the public `RunLayerLoopGpu` entry point this surfaced as
-				// `GpuAllocationFailed`, discarding the message that names the field (the
-				// generic catch is unnamed) and advising a caller to retry smaller -- no retry
-				// at any size fixes a null pointer. `GpuLayerWeightsContractError` (this file,
-				// above), `std::logic_error`-derived like its sibling
-				// `GpuGemmGroupArithmeticError`: a caller violating this contract is a
-				// permanent bug, never transient. Caught by its own dedicated clause, both
-				// functions, returning its own dedicated status,
-				// `GpuLayerWeightsContractViolation` (declared in the SslmForwardStatus enum,
-				// this file's own status header), with the message printed to stderr rather
-				// than discarded.
-				if (lw.k_norm_landing_r_t == nullptr || lw.k_norm_landing_e_t == nullptr) {
+				if (lw.k_channel_r_t == nullptr || lw.k_channel_e_t == nullptr ||
+				    lw.k_channel_ratio == nullptr) {
 					throw GpuLayerWeightsContractError(
 					    "PackLayerWeightsBytes: layer " + std::to_string(l) +
-					    "'s k_norm_gain is non-null but k_norm_landing_r_t/e_t is null -- "
-					    "forward_sites.h's own LayerWeights contract requires this pair "
-					    "non-null whenever k_norm_gain is non-null");
+					    "'s k_norm_gain is non-null but QKC1 k_channel_r_t/e_t/ratio is null");
 				}
-				for (uint32_t i = 0; i < NH; ++i) {
-					PutI64At(lw_bytes, base + layout.off[62] + i * 8, lw.k_norm_landing_r_t[i]);
-					PutI64At(lw_bytes, base + layout.off[63] + i * 8, lw.k_norm_landing_e_t[i]);
+				PutI64At(lw_bytes, base + layout.off[62] + 0, lw.k_wide_source_scale.m);
+				PutI64At(lw_bytes, base + layout.off[62] + 8, lw.k_wide_source_scale.e);
+				for (uint32_t i = 0; i < KV; ++i) {
+					PutI64At(lw_bytes, base + layout.off[64] + i * 8, lw.k_channel_r_t[i]);
+					PutI64At(lw_bytes, base + layout.off[64] + KV * 8 + i * 8, lw.k_channel_e_t[i]);
+					PutI64At(lw_bytes, base + layout.off[64] + KV * 16 + i * 8, lw.k_channel_ratio[i]);
 				}
 			}
 		}
@@ -2058,7 +2019,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// (carried-scale delta §4/§7 Cell 8): grown from 63 to 65 uint32 values -- positions 0-62
 	// are byte-identical to before this ask; positions 63-64 are the two NEW
 	// k_norm_landing_r_t/e_t field offsets (off[62..63]).
-	std::vector<uint8_t> layout_bytes(65 * 4, 0);
+	std::vector<uint8_t> layout_bytes(66 * 4, 0);
 	for (int i = 0; i < 56; ++i) PutI32At(layout_bytes, static_cast<size_t>(i) * 4, static_cast<int32_t>(layout.off[i]));
 	PutI32At(layout_bytes, 56 * 4, static_cast<int32_t>(layout.stride));
 	for (int i = 0; i < 6; ++i) {
@@ -2066,6 +2027,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	}
 	PutI32At(layout_bytes, 63 * 4, static_cast<int32_t>(layout.off[62]));
 	PutI32At(layout_bytes, 64 * 4, static_cast<int32_t>(layout.off[63]));
+	PutI32At(layout_bytes, 65 * 4, static_cast<int32_t>(layout.off[64]));
 
 	// --- RopeGuardInfo: resolved HOST-SIDE, once, from the SAME
 	// SslmTensorManifest::Tensor("cos")/Tensor("sin") lookup RopeApplySite
@@ -2248,23 +2210,9 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// above, so no cross-group WorkScratch aliasing occurs within that single dispatch.
 	const uint64_t work_qk_norm_wide_off =
 	    work_rope_stage_off + static_cast<uint64_t>(NQH) * static_cast<uint64_t>(HD) * 4u;
-	// QK_NORM_K_STAGE -- K's own destination (KvCache) is packed int8, unlike LayerScratch's
-	// int32-per-code convention RequantChainCheckedFullGpuP natively writes (Q's own
-	// destination), so K's own funnel call stages its int32-per-code output here (one
-	// head_dim*4-byte slice per KV head, disjoint from work_qk_norm_wide_off's own input region
-	// so the funnel's own read-then-write loop never aliases input against output within one
-	// thread group -- rope_guard_site.hlsl/rope_commit_site.hlsl's own stage-then-commit
-	// precedent for the identical packed-KvCache constraint), then a repack loop in the same
-	// dispatch re-stores each staged code packed into KvCache.
-	const uint64_t work_qk_norm_k_stage_off =
+	const uint64_t work_after_qk_norm =
 	    work_qk_norm_wide_off +
 	    (static_cast<uint64_t>(NQH) + static_cast<uint64_t>(NH)) * static_cast<uint64_t>(HD) * 8u;
-	// QK_NORM_K_SCALE -- K's own funnel call still writes a 16-byte carried-scale pair (the
-	// funnel primitive's own contract); K has no per-token scale local a caller reads
-	// (ApplyQkNormSite's own header comment, forward_sites.h), so this is a discard target, one
-	// 16-byte slot per KV head, never read by anything downstream.
-	const uint64_t work_qk_norm_k_scale_off =
-	    work_qk_norm_k_stage_off + static_cast<uint64_t>(NH) * static_cast<uint64_t>(HD) * 4u;
 	// T-2113 (B6b, design Sec8): ADAPTER_U -- the adapter-delta dispatch's own transient
 	// scratch for the narrowed, folded rank-wide intermediate (`u_i8`, forward_sites.cpp's
 	// own `AddAmplifyingLoraDelta`), one signed byte per rank element (never a fixed-capacity
@@ -2273,7 +2221,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// is null at every pre-B6b caller and every base-only decode call, so this region costs
 	// nothing beyond the 4-byte floor `MakeBuffer` already needs to be a legal resource).
 	const uint64_t work_adapter_u_off =
-	    work_qk_norm_k_scale_off + static_cast<uint64_t>(NH) * 16u;
+	    work_after_qk_norm;
 	const uint32_t adapter_rank = adapter_bridge ? adapter_bridge->rank : 0;
 	// T-2240/O3 (plan Sec10 Phase 2 O3): the region's byte size reads the ONE shared
 	// definition (gpu_port.h, beside kDispatchesPerLayer) rather than an inline expression
@@ -2289,9 +2237,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// binding table, `kComposedResourceBindingCount` (`d3d12_harness.h`))
 	// rather than re-derived in HLSL from index 24
 	// the way `rope_guard_site.hlsl` used to.
-	// (design §6 Track B step 3, T-2551): grown from 27 to 30 -- indices 27-29 are the three new
-	// QK-norm WorkScratch regions (work_qk_norm_wide_off/work_qk_norm_k_stage_off/
-	// work_qk_norm_k_scale_off, above), read only by qk_norm_site.hlsl.
+	// Indices 28-29 remain zeroed reserved slots; QKC1 uses only QK_NORM_WIDE.
 	std::vector<uint8_t> scratch_layout_bytes(30 * 4, 0);
 	{
 		auto put = [&](int idx, uint32_t v) { PutI32At(scratch_layout_bytes, static_cast<size_t>(idx) * 4, static_cast<int32_t>(v)); };
@@ -2313,8 +2259,6 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 		put(25, scratch_layout.scores);  // T-2045 (C3): persistent cross-dispatch scores/probs region
 		put(26, static_cast<uint32_t>(work_rope_stage_off));  // T-2049 (N6): WorkScratch ROPE_STAGE
 		put(27, static_cast<uint32_t>(work_qk_norm_wide_off));    // T-2551: QK_NORM_WIDE
-		put(28, static_cast<uint32_t>(work_qk_norm_k_stage_off)); // T-2551: QK_NORM_K_STAGE
-		put(29, static_cast<uint32_t>(work_qk_norm_k_scale_off)); // T-2551: QK_NORM_K_SCALE (discard)
 	}
 
 	// ModelConstants (t3): kIExpLn2Q/kIExpBQ/kIExpCaQ, the i-exp derivation's

@@ -78,6 +78,9 @@ void main(uint3 dtid : SV_DispatchThreadID)
     uint q_rot_off = ScratchLayout.Load<uint>(4 * 4);
     uint scores_base_all = ScratchLayout.Load<uint>(25 * 4);
     uint kv_half_off = KvHalfOffsetGpu(g_layer_index, g_context_cap, g_num_kv_heads, (uint)g_head_dim);
+    uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
+    bool direct_qk = LayerWeights.Load<int64_t>(layer_base + Layout.Load<uint>(60 * 4)) != 0;
+    uint qkc_block = g_num_kv_heads * (uint)g_head_dim * 8u;
 
     // One work item per (head, key position): num_attention_heads * width of them, each an
     // independent head_dim-long dot product. The host dispatches
@@ -97,8 +100,15 @@ void main(uint3 dtid : SV_DispatchThreadID)
             {
                 int qv = (int)LayerScratch.Load<int>(q_rot_off + (h * (uint)g_head_dim + (uint)d) * 4u);
                 int kv = LoadSignedByteGpu(KvCache, kv_half_off + k_row_off + (uint)d);
-                dot += (int64_t)qv * (int64_t)kv;
+                int64_t term = (int64_t)qv * (int64_t)kv;
+                if (direct_qk) {
+                    uint ratio_off = layer_base + Layout.Load<uint>(65 * 4) +
+                        kv_head * (uint)g_head_dim * 8u + 2u * qkc_block + (uint)d * 8u;
+                    term *= LayerWeights.Load<int64_t>(ratio_off);
+                }
+                dot += term;
             }
+            if (direct_qk) dot = RoundingDivideByPotI64Gpu(dot, 31);
             LayerScratch.Store<int64_t>(my_scores_base + (uint)k * 8u, dot);
         }
     }

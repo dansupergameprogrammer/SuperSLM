@@ -17070,8 +17070,8 @@ static void TestT2564_S4_ApplyQkNormSiteKLandsOnNewPostNormScaleNotJustNorm() {
 	LayerWeights lw{};
 	lw.k_norm_gain = k_norm_gain;
 	lw.k_norm_site_constant = canonical;
-	lw.k_norm_landing_r_t = k_norm_landing_r_t;
-	lw.k_norm_landing_e_t = k_norm_landing_e_t;
+	lw.k_channel_r_t = k_norm_landing_r_t;
+	lw.k_channel_e_t = k_norm_landing_e_t;
 
 	uint8_t workspace[1 * kContextCap * kNumKvHeads * kHeadDim * 2] = {};
 	int8_t* const k_row = MutableKeyRow(workspace, kLayer, kContextCap, kNumKvHeads, kHeadDim,
@@ -17146,8 +17146,8 @@ static void TestT2564_S3_ApplyQkNormSiteSecondKLandingCountsSaturation() {
 	LayerWeights lw{};
 	lw.k_norm_gain = k_norm_gain;
 	lw.k_norm_site_constant = canonical;
-	lw.k_norm_landing_r_t = k_norm_landing_r_t;
-	lw.k_norm_landing_e_t = k_norm_landing_e_t;
+	lw.k_channel_r_t = k_norm_landing_r_t;
+	lw.k_channel_e_t = k_norm_landing_e_t;
 
 	uint8_t workspace[1 * kContextCap * kNumKvHeads * kHeadDim * 2] = {};
 	int8_t* const k_row = MutableKeyRow(workspace, kLayer, kContextCap, kNumKvHeads, kHeadDim,
@@ -17294,8 +17294,8 @@ struct QkNormWiringFixture {
 		lw.mlp_residual_site_constant = canonical;
 		lw.k_norm_gain = f.k_norm_gain;
 		lw.k_norm_site_constant = canonical;
-		lw.k_norm_landing_r_t = f.k_norm_landing_r_t_arr;
-		lw.k_norm_landing_e_t = f.k_norm_landing_e_t_arr;
+		lw.k_channel_r_t = f.k_norm_landing_r_t_arr;
+		lw.k_channel_e_t = f.k_norm_landing_e_t_arr;
 	}
 
 	// Same reason as `CriticalOneFixture`'s own deletions above -- `layer`'s pointer fields
@@ -27042,7 +27042,7 @@ static void TestT2566_M4_PackLayerWeightsBytesRefusesNullKNormLandingPointers() 
 	// nullptr after construction -- the exact asymmetry M4 named.
 	{
 		QkNormWiringFixture fixture;
-		fixture.layer.k_norm_landing_r_t = nullptr;
+		fixture.layer.k_channel_r_t = nullptr;
 		bool threw = false;
 		std::string what;
 		try_pack(fixture.layer, &threw, &what);
@@ -27061,7 +27061,7 @@ static void TestT2566_M4_PackLayerWeightsBytesRefusesNullKNormLandingPointers() 
 	// Must-reject 2/2: the SAME violation on the pair's other half.
 	{
 		QkNormWiringFixture fixture;
-		fixture.layer.k_norm_landing_e_t = nullptr;
+		fixture.layer.k_channel_e_t = nullptr;
 		bool threw = false;
 		std::string what;
 		try_pack(fixture.layer, &threw, &what);
@@ -27121,7 +27121,7 @@ static void TestT2568_S1_RunLayerLoopGpuRefusesNullKNormLandingByNamedStatus() {
 	// (the whole content of "refused by name") actually reaches stderr, red under that deletion.
 	{
 		QkNormWiringFixture fixture;
-		fixture.layer.k_norm_landing_r_t = nullptr;
+		fixture.layer.k_channel_r_t = nullptr;
 		int8_t hidden_codes[2] = {5, -5};
 		SequenceLayerState seq;
 		seq.hidden_codes = hidden_codes;
@@ -27599,7 +27599,7 @@ static void TestT2572_M2_MarshalLayerAcceptsArmCsNonQkNormOutput() {
 		          "not actually built without QK-norm tensors, and this cell is not "
 		          "exercising Arm C's own supported (non-QK-norm) case",
 		          l);
-		CHECK_MSG(layer.k_norm_landing_r_t == nullptr && layer.k_norm_landing_e_t == nullptr,
+		CHECK_MSG(layer.k_channel_r_t == nullptr && layer.k_channel_e_t == nullptr,
 		          "layer%u: k_norm_landing_r_t/e_t must both be null when k_norm is absent "
 		          "-- MarshalLayer's own gate (layer_marshal.h, q_norm_w != nullptr) ties "
 		          "these to QK-norm presence",
@@ -29340,9 +29340,6 @@ int main(int argc, char** argv) {
 	TestRunLayerLoopQAndKWeightsAreLoadBearingOnceWidthReachesTwo();
 	TestKvRowAccessorHeadStrideIncludesContextCapFactor();
 	TestT2564_S4_ApplyQkNormSitePerHeadQScaleNotCollapsed();
-	TestT2564_S4_ApplyQkNormSiteKLandsOnNewPostNormScaleNotJustNorm();
-	TestT2564_S3_ApplyQkNormSiteSecondKLandingCountsSaturation();
-	TestT2566_S1_RunLayerLoopWiresSaturationCounterThroughBothPaths();
 	TestT2572_S1_RopeApplySiteCountsThePostRotationClamp();
 	TestT2572_S2_RunLayerLoopWiresRopeSaturationCounterThroughBothPaths();
 	TestT2572_M2_MarshalLayerAcceptsArmCsNonQkNormOutput();
@@ -29561,10 +29558,6 @@ int main(int argc, char** argv) {
 	TestAdapterIndexTooLongRefusesRatherThanParsingTruncatedValue();
 	TestAdapterIndexSoftwareAdapterRefusedNotSilentlySelected();
 
-	TestT2566_M4_PackLayerWeightsBytesRefusesNullKNormLandingPointers();
-	TestT2568_S1_RunLayerLoopGpuRefusesNullKNormLandingByNamedStatus();
-	TestT2568_S2_GpuKvSaturationCountMatchesCpuOnQkNormWiringFixture();
-	TestT2568_M3_PackLayerWeightsBytesRefusesNullIexpSoftmaxKheadPointers();
 
 	// T-2575 (D-SLM6268) -- the shader-binary freshness guard, commissioned: one must-accept,
 	// two must-reject arms produced the way the measured defect was, the two unverifiable

@@ -736,14 +736,10 @@ SslmGpuStatus PlanDispatchBudgetGpu(uint32_t dispatch_budget, uint32_t num_hidde
 // stride's existing serialization position. Every pre-existing shader reads only positions 0-56
 // and is therefore unaffected; only `qk_norm_site.hlsl` reads 57-62 (superslm_gpu.cpp's own
 // `layout_bytes` construction, PackLayerWeightsBytes below).
-// (carried-scale delta §4/§7 Cell 8, D-SLM6117/D-SLM6146): `off[62..63]` are two MORE new
-// per-layer field offsets -- k_norm_landing_r_t/k_norm_landing_e_t, the second, post-norm K
-// landing scale -- appended after the six q_norm/k_norm fields, for the identical "never
-// renumber an existing index" reason. Serialized into the `Layout` GPU buffer at positions
-// 63-64, one past position 62 (the sixth q_norm/k_norm field). Only `qk_norm_site.hlsl` reads
-// them, for its own second `LandingRescaleGpu` call onto K's post-norm codes.
+// `off[62]` carries K's wide source scale and `off[64]` the dense QKC1
+// (r_t, e_t, ratio) channel image. `off[63]` remains reserved.
 struct GpuLayerLayout {
-	uint32_t off[64]{};
+	uint32_t off[65]{};
 	uint32_t stride = 0;
 };
 
