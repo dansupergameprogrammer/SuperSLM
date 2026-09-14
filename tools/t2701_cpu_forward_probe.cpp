@@ -183,6 +183,28 @@ int main(int argc, char** argv) {
 	}
 	AttentionCaptureSink attention_capture{nullptr, CaptureAttention};
 	layers[0].attention_capture_sink = &attention_capture;
+	// Calibration provenance for the attention comparison.  These are artifact
+	// inputs, printed by the diagnostic only; the product forward never reads this path.
+	for (size_t h = 0; h < kv_heads; ++h) {
+		const std::string k_name = "layer0.k_head" + std::to_string(h);
+		const std::string v_name = "layer0.v_head" + std::to_string(h);
+		const std::string sm_name = "layer0.softmax_khead" + std::to_string(h);
+		const SslmConstantEntry* k = model.kv_landing_scales.Entry(k_name);
+		const SslmConstantEntry* v = model.kv_landing_scales.Entry(v_name);
+		const SslmConstantEntry* sm = model.composition_constants.Entry(sm_name);
+		std::printf("cpu_attention_constants kv_head=%zu k_scale=%lld,%lld v_scale=%lld,%lld softmax_khead=%lld,%lld\n",
+		            h, static_cast<long long>(SslmKeyedConstants::Value(*k, 0)),
+		            static_cast<long long>(SslmKeyedConstants::Value(*k, 1)),
+		            static_cast<long long>(SslmKeyedConstants::Value(*v, 0)),
+		            static_cast<long long>(SslmKeyedConstants::Value(*v, 1)),
+		            static_cast<long long>(SslmKeyedConstants::Value(*sm, 0)),
+		            static_cast<long long>(SslmKeyedConstants::Value(*sm, 1)));
+	}
+	for (size_t h = 0; h < model.config.num_attention_heads; ++h) {
+		std::printf("cpu_attention_ctx_fold head=%zu triple=%d,%d,%d\n", h,
+		            layers[0].ctx_fold_identity[h], layers[0].ctx_fold_mult[h],
+		            layers[0].ctx_fold_shift[h]);
+	}
 	if (raw_k) {
 		for (LayerWeights& layer : layers) {
 			layer.q_norm_gain = nullptr;
