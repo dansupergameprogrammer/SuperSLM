@@ -988,9 +988,23 @@ def with_provisional_qk_channel_table(model: QuantizedModel, channel_peaks: dict
 
 
 def _qk_wide_source_scale(model: QuantizedModel, prefix: str) -> tuple[int, int]:
-    """`KWideSourceScale[L] = canonical_scale(127 * value(layerL.k_norm))`."""
+    """The pre-RoPE wide-code scale: `canonical_scale(127 * value(layerL.k_norm))`."""
     m_kn, e_kn = model.composition_constants[f"{prefix}.k_norm"]
     return canonical_scale(Fraction(127 * int(m_kn)) * Fraction(2) ** int(e_kn))
+
+
+def _qk_rotated_landing_scale(model: QuantizedModel, prefix: str) -> tuple[int, int]:
+    """The post-RoPE wide-code scale accepted by the QKC1 landing.
+
+    K RMSNorm returns a Q(NORM_FRAC_BITS) numerator, whose factor is already
+    represented by the k-norm composition constant.  RoPE then multiplies the
+    resulting wide codes by Q(rope.ROPE_FRAC_BITS) sin/cos coefficients and
+    returns the one-rounded integer quotient.  That quotient therefore carries
+    one additional `2^-ROPE_FRAC_BITS`; the landing source must name it once,
+    here, for both scalar and vector forwards.
+    """
+    m_wide, e_wide = _qk_wide_source_scale(model, prefix)
+    return m_wide, e_wide - rope.ROPE_FRAC_BITS
 
 
 def _qk_direct_k_vector(model, prefix, k, cos_table, sin_table, steps, start):
@@ -1000,7 +1014,7 @@ def _qk_direct_k_vector(model, prefix, k, cos_table, sin_table, steps, start):
     wide = (_vec_rmsnorm(k.reshape(-1, cfg.head_dim), cfg.head_dim) * gain).reshape(k.shape)
     rotated = _vec_rope(wide, cos_table, sin_table, steps, start)
     table = model.qk_channel_table[prefix]
-    m_wide, e_wide = _qk_wide_source_scale(model, prefix)
+    m_wide, e_wide = _qk_rotated_landing_scale(model, prefix)
     out = np.empty(rotated.shape, dtype=np.int64)
     for token in range(steps):
         for head in range(cfg.num_key_value_heads):
@@ -4854,7 +4868,7 @@ def _scalar_forward(model, tokens, reader):
         q_heads = [_scalar_clamp(rotate(split(q, h))) for h in range(cfg.num_attention_heads)]
         if direct_qk:
             gain = [int(v) for v in model.weights[f"{prefix}.k_norm.gain"].tolist()]
-            m_wide, e_wide = _qk_wide_source_scale(model, prefix)
+            m_wide, e_wide = _qk_rotated_landing_scale(model, prefix)
             table = model.qk_channel_table[prefix]
             k_heads = []
             for head in range(cfg.num_key_value_heads):

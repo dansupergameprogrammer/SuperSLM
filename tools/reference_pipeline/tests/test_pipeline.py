@@ -45,6 +45,7 @@ Test-design record: Claude/Curie/superslm-t066-pipeline-test-design-2026-07-15.m
 import json
 import os
 import pathlib
+from dataclasses import replace
 
 import pytest
 
@@ -2050,6 +2051,18 @@ def test_the_hoisted_tables_are_the_ones_the_forward_uses():
     forward, fixture_model = api(MODULE, "forward", "fixture_model")
     cfg = fixture_config(module)
     model = fixture_model(cfg)
+    # This is the ordinary RoPE-table consumer, not a direct-QKC1 landing
+    # calibration cell.  Remove the optional QK-norm tensors so its value flow
+    # cannot be intentionally dominated by the per-channel K landing table.
+    model = replace(
+        model,
+        weights={key: value for key, value in model.weights.items()
+                 if ".q_norm.gain" not in key and ".k_norm.gain" not in key},
+        weight_scales={key: value for key, value in model.weight_scales.items()
+                       if ".q_norm.gain" not in key and ".k_norm.gain" not in key},
+        composition_constants={key: value for key, value in model.composition_constants.items()
+                               if ".q_norm" not in key and ".k_norm" not in key},
+        qk_channel_table={})
     baseline = np.asarray(forward(model, [1, 7, 3, 11]))
 
     cos_table, sin_table = model.rope_tables

@@ -111,11 +111,14 @@ def merge(args):
     final_peak = np.maximum(float_peak, integer_peak)
     final_model = pipeline.with_provisional_qk_channel_table(
         model, {f"layer{layer}": final_peak[layer] for layer in range(expected[0])})
-    artifact_cache.save_artifact(final_model, out_cache, model.calibration.checkpoint_path)
+    artifact_cache.save_artifact(final_model, out_cache, args.checkpoint)
     out_sslm.parent.mkdir(parents=True, exist_ok=True)
     converter = Path(__file__).with_name("convert_model.py")
-    subprocess.run([sys.executable, str(converter), "--artifact", str(out_cache), "--out", str(out_sslm),
-                    "--verifier", args.verifier], check=True)
+    convert_command = [sys.executable, str(converter), "--artifact", str(out_cache), "--out", str(out_sslm),
+                       "--verifier", args.verifier]
+    if args.skip_verify:
+        convert_command.append("--skip-verify")
+    subprocess.run(convert_command, check=True)
     summary = {
         "capture_report_sha256": [hashlib.sha256(Path(report).read_bytes()).hexdigest()
                                   for report in args.capture_report],
@@ -140,10 +143,14 @@ def main():
     prepare_parser.set_defaults(fn=prepare)
     merge_parser = sub.add_parser("merge")
     merge_parser.add_argument("--cache", required=True)
+    merge_parser.add_argument("--checkpoint", required=True,
+                              help="checkpoint directory to persist with the merged cache")
     merge_parser.add_argument("--capture-report", required=True, nargs="+")
     merge_parser.add_argument("--out-cache", required=True)
     merge_parser.add_argument("--out-sslm", required=True)
     merge_parser.add_argument("--verifier", required=True)
+    merge_parser.add_argument("--skip-verify", action="store_true",
+                              help="fixture-only writer path; production merges verify independently")
     merge_parser.set_defaults(fn=merge)
     args = parser.parse_args()
     args.fn(args)
