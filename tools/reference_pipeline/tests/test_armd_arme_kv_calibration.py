@@ -1181,7 +1181,10 @@ def _remove_capture_post_rope_q_observation(text):
     assert '                _observe(maxima, f"{prefix}.q", q_rope)\n' not in mutated, (
         "sanity: the mutant must remove the capture's post-RoPE Q observation entirely"
     )
-    assert mutated.count("    if not _has_qk_norm(tensors, prefix):\n") == 1, (
+    layer_start = mutated.index("def _float_layer(")
+    layer_end = mutated.find("\ndef ", layer_start)
+    assert layer_end != -1, "sanity: `_float_layer` must be followed by another top-level function"
+    assert mutated[layer_start:layer_end].count("    if not _has_qk_norm(tensors, prefix):\n") == 1, (
         "sanity: _float_layer's own non-QK-norm conditional must survive -- the mutant "
         "deletes the capture branch only"
     )

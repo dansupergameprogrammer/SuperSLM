@@ -265,8 +265,9 @@ def _instrumented(pipeline, walk, run):
     phased by the same crossings -- the two walks' observations are graded by one table.
     """
     orig = {name: getattr(pipeline, name) for name in (
-        "_observe", "_apply_qk_norm", "_float_rope", "_float_project", "_float_rmsnorm",
-        "_float_layer")}
+        "_observe", "_apply_qk_norm", "_float_rope", "_float_project",
+        "_calibration_block_project", "_float_rmsnorm", "_float_layer",
+        "_float_calibration_layer_batch")}
 
     def observe(maxima, name, values):
         if maxima is None:
@@ -280,12 +281,20 @@ def _instrumented(pipeline, walk, run):
             walk.observed[key][phase] = peak
         return orig["_observe"](maxima, name, values)
 
-    def project(float_weight, name, values):
-        out = orig["_float_project"](float_weight, name, values)
+    def record_project(name, values, out):
         for book, arr in ((walk.project_in, values), (walk.project_out, out)):
             peak = float(np.abs(np.asarray(arr, dtype=np.float64)).max(initial=0.0))
             if peak > book.get(name, 0.0):
                 book[name] = peak
+        return out
+
+    def project(float_weight, name, values, *args, **kwargs):
+        out = orig["_float_project"](float_weight, name, values, *args, **kwargs)
+        return record_project(name, values, out)
+
+    def calibration_block_project(tensors, name, values, *args, **kwargs):
+        out = orig["_calibration_block_project"](tensors, name, values, *args, **kwargs)
+        return record_project(name, values, out)
         return out
 
     def apply_qk_norm(q, k, tensors, prefix, cfg):
@@ -301,28 +310,37 @@ def _instrumented(pipeline, walk, run):
         walk.phase["now"] = "post_qk_norm"
         return q2, k2
 
-    def rope(vectors, theta):
-        out = orig["_float_rope"](vectors, theta)
+    def rope(vectors, theta, *args, **kwargs):
+        out = orig["_float_rope"](vectors, theta, *args, **kwargs)
         walk.phase["now"] = "post_rope"
         return out
 
     def rmsnorm(x, eps):
-        if sys._getframe(1).f_code.co_name == "_kv_calibration_capture":
+        caller = sys._getframe(1).f_code.co_name
+        if caller == "_kv_calibration_capture":
             walk.phase["now"] = "pre_qk_norm"
+        elif caller in ("_float_calibration_unfactored", "_float_calibration_factored"):
+            walk.phase["now"] = "post_layer"
         return orig["_float_rmsnorm"](x, eps)
 
-    def float_layer(cfg, tensors, hidden, maxima, prefix):
+    def float_layer(cfg, tensors, hidden, maxima, prefix, *args, **kwargs):
         walk.phase["now"] = "pre_qk_norm"
-        out = orig["_float_layer"](cfg, tensors, hidden, maxima, prefix)
+        out = orig["_float_layer"](cfg, tensors, hidden, maxima, prefix, *args, **kwargs)
         walk.phase["now"] = "post_layer"
         return out
+
+    def calibration_layer_batch(*args, **kwargs):
+        walk.phase["now"] = "pre_qk_norm"
+        return orig["_float_calibration_layer_batch"](*args, **kwargs)
 
     pipeline._observe = observe
     pipeline._apply_qk_norm = apply_qk_norm
     pipeline._float_rope = rope
     pipeline._float_project = project
+    pipeline._calibration_block_project = calibration_block_project
     pipeline._float_rmsnorm = rmsnorm
     pipeline._float_layer = float_layer
+    pipeline._float_calibration_layer_batch = calibration_layer_batch
     try:
         return run()
     finally:
@@ -710,44 +728,72 @@ _POST_TRANSFORM_BLOCK_COMMENT = (
     "    # QK-norm creates a separate post-norm K landing domain (`k_normed`), so raw Q/K\n"
 )
 
+_BATCH_POST_ROPE_ANCHOR = (
+    "    if not _has_qk_norm(tensors, prefix):\n"
+)
+
+
+def _function_source(text, function_name):
+    """Return one top-level function's source without matching a sibling implementation."""
+    start = text.index(f"def {function_name}(")
+    end = text.find("\ndef ", start)
+    assert end != -1, f"sanity: `{function_name}` must be followed by another top-level function"
+    return text[start:end]
+
+
+def _replace_function_once(text, function_name, old, new):
+    """Apply one mutation to the function the exercised walk actually invokes."""
+    start = text.index(f"def {function_name}(")
+    end = text.find("\ndef ", start)
+    assert end != -1, f"sanity: `{function_name}` must be followed by another top-level function"
+    block = text[start:end]
+    assert block.count(old) == 1, (
+        f"sanity: the target must occur once in `{function_name}`"
+    )
+    return text[:start] + block.replace(old, new, 1) + text[end:]
+
+
+def _float_layer_source(text):
+    """Return `_float_layer` for the capture-only source mutation assertion."""
+    return _function_source(text, "_float_layer")
+
 
 def _restore_raw_k_post_transform_observation(text):
-    """Restore `_float_layer`'s former post-transform raw-K observation as a mutant."""
-    anchor = _POST_TRANSFORM_BLOCK_COMMENT
-    assert text.count(anchor) == 1, (
-        "sanity: the corrected post-transform raw-key location must match verbatim, once"
-    )
-    mutated = text.replace(
+    """Restore batch calibration's foreign post-RoPE raw-K observation as a mutant."""
+    anchor = _BATCH_POST_ROPE_ANCHOR
+    mutated = _replace_function_once(
+        text,
+        "_float_calibration_layer_batch",
         anchor,
         '    _observe(maxima, f"{prefix}.k", k)\n'
         "    # T-2606 mutant: restored foreign post-transform raw-K observation\n"
         + anchor,
-        1,
     )
-    assert mutated.count('\n    _observe(maxima, f"{prefix}.k", k)\n') == 2, (
+    assert _function_source(mutated, "_float_calibration_layer_batch").count(
+        '\n    _observe(maxima, f"{prefix}.k", k)\n') == 2, (
         "sanity: the mutant must retain the raw K observation and restore one foreign one"
     )
     return mutated
 
 
 def _restore_both_raw_key_post_transform_observations(text):
-    """Restore both former post-transform raw-key observations as a mutant."""
-    anchor = _POST_TRANSFORM_BLOCK_COMMENT
-    assert text.count(anchor) == 1, (
-        "sanity: the corrected post-transform raw-key location must match verbatim, once"
-    )
-    mutated = text.replace(
+    """Restore batch calibration's foreign post-RoPE raw-Q/raw-K observations as a mutant."""
+    anchor = _BATCH_POST_ROPE_ANCHOR
+    mutated = _replace_function_once(
+        text,
+        "_float_calibration_layer_batch",
         anchor,
         '    _observe(maxima, f"{prefix}.q", q)\n'
         '    _observe(maxima, f"{prefix}.k", k)\n'
         "    # T-2606 mutant: restored foreign post-transform raw-Q/raw-K observations\n"
         + anchor,
-        1,
     )
-    assert mutated.count('\n    _observe(maxima, f"{prefix}.k", k)\n') == 2, (
+    assert _function_source(mutated, "_float_calibration_layer_batch").count(
+        '\n    _observe(maxima, f"{prefix}.k", k)\n') == 2, (
         "sanity: the mutant must retain raw K and restore foreign K"
     )
-    assert mutated.count('\n    _observe(maxima, f"{prefix}.q", q)\n') == 2, (
+    assert _function_source(mutated, "_float_calibration_layer_batch").count(
+        '\n    _observe(maxima, f"{prefix}.q", q)\n') == 2, (
         "sanity: the mutant must retain raw Q and restore foreign Q"
     )
     return mutated
@@ -779,19 +825,17 @@ def _restore_capture_post_rope_q_observation(text):
 
 
 def _remove_non_qk_norm_raw_key_rope_union(text):
-    """Restore 4dcfd3d's unconditional removal in `_float_layer` as a mutant."""
+    """Remove batch calibration's non-QK-norm raw-key RoPE union as a mutant."""
     removed = (
         '    if not _has_qk_norm(tensors, prefix):\n'
         '        _observe(maxima, f"{prefix}.q", q)\n'
         '        _observe(maxima, f"{prefix}.k", k)\n'
     )
-    assert text.count(removed) == 1, (
-        "sanity: the non-QK-norm RoPE union must exist exactly once before removal"
-    )
-    return text.replace(
+    return _replace_function_once(
+        text,
+        "_float_calibration_layer_batch",
         removed,
         "    # T-2607 repair-1 mutant: 4dcfd3d unconditional removal\n",
-        1,
     )
 
 
@@ -866,7 +910,7 @@ def _remove_capture_post_rope_q_observation(text):
     assert '                _observe(maxima, f"{prefix}.q", q_rope)\n' not in mutated, (
         "sanity: the mutant must remove the capture's post-RoPE Q observation entirely"
     )
-    assert mutated.count("    if not _has_qk_norm(tensors, prefix):\n") == 1, (
+    assert _float_layer_source(mutated).count("    if not _has_qk_norm(tensors, prefix):\n") == 1, (
         "sanity: _float_layer's own non-QK-norm conditional must survive -- the mutant "
         "deletes the capture branch only"
     )

@@ -213,7 +213,11 @@ _BASE_ENGINE_GOLDEN_HASHES = {
     "weights": "50f12149241434d15825c64495d5a5ebf1a5c1e66e10fbca2df6b19009e8ac8f",
     "weight_scales": "164ef153488bd10d39ceb25cc7ec2deedbe1d3393279dbef4867622f8f43136f",
     "composition_constants": "7adfdf093298bd5e26ed950a8037196ae5c66f3854d0d80b93e75e359b555041",
-    "scales": "352fb2f285c8e666d340e73586e3a909543ad8ea383ad3dcd16f2d175adbf5f7",
+    # 2026-09-14, D-SLM7031/D-SLM7037: fixed-height calibration changes only
+    # layer0.down_proj.requant's input/output binary64 values by one ULP each
+    # (relative -2.08677152255505e-16 and -2.317402193949158e-16); their
+    # canonical `(m, e)` pairs remain (1142523638, -46) and (2057636605, -51).
+    "scales": "aad698e72fd7d320c8d5204ce6457be574aa7d55bd4a7195d923ecd6e4da5bab",
     "residual_scales": "7afd4b346692f91e4e744df0fbad773200b6b86ba1d98e4780656f042965a40d",
     "biases": "f285db8c86cd3b66b1d99fce37ed7a7a276f783bb8d10274a10c06c345fc4be7",
     "dynamic_biases": "1f8474413794b2f8ed9355f7ba1a1c977b6c1e2a31d9b6f8ba0d2c765ed666fc",

@@ -560,7 +560,7 @@ def test_k_normed_union_maxima_encloses_the_post_rope_peak_on_the_checked_in_fix
 
 
 def test_k_normed_union_maxima_is_lost_under_the_post_rope_observation_deletion_mutant(tmp_path):
-    """Mutation-sensitive (D-SLM6263): a mutant that deletes `_float_layer`'s own SECOND
+    """Mutation-sensitive (D-SLM6263): a mutant that deletes batched calibration's SECOND
     `_observe(maxima, f"{prefix}.k_normed", k)` call -- the fix's own post-RoPE
     observation, added against Significant 1 -- reverts `maxima["layer1.k_normed"]` to the
     pre-fix, review-found value (2.331695135661406, the pre-RoPE peak alone) instead of
@@ -572,28 +572,25 @@ def test_k_normed_union_maxima_is_lost_under_the_post_rope_observation_deletion_
     cfg = _fixture_config(pipeline)
 
     def _t(text):
-        source = inspect.getsource(pipeline._float_layer)
-        # This comment block immediately precedes ONLY the fix's own SECOND, post-RoPE
-        # `_observe(..., "k_normed", ...)` call -- unique text in the file, so replacing it
-        # (call included) deletes exactly that one call and leaves the first, pre-RoPE call
-        # (earlier in the same function, untouched) as the mutant's only k_normed observation
-        # -- reproducing exactly the pre-fix code the review found broken.
+        source = inspect.getsource(pipeline._float_calibration_layer_batch)
+        # The batch path is the production calibration walk after T-2693. Its conditional
+        # raw-key union is followed immediately by the post-RoPE k_normed observation;
+        # deleting that one line leaves only the pre-RoPE observation above.
         tail = (
-            "    # (D-SLM6263): the k_normed key's SECOND observation, post-RoPE -- the running max above\n"
-            "    # folds this into the union with the pre-RoPE peak already captured, closing Significant 1.\n"
-            "    # The engine requantizes K onto this artifact's static k_normed_head{h} scale BEFORE RoPE\n"
-            "    # (`forward_sites.cpp`'s K/V landing block, before `ApplyQkNormSite`'s K branch), then\n"
-            "    # `RopeApplySite` rotates and clamps the landed codes to [-127, 127] afterward -- the union\n"
-            "    # observed here is what makes that later clamp's own domain the one the calibration\n"
-            "    # actually covers, rather than a domain the calibration only covered half of.\n"
+            "    if not _has_qk_norm(tensors, prefix):\n"
+            "        _observe(maxima, f\"{prefix}.q\", q)\n"
+            "        _observe(maxima, f\"{prefix}.k\", k)\n"
             "    _observe(maxima, f\"{prefix}.k_normed\", k)\n"
         )
-        assert tail in source, "sanity: the fix's own post-RoPE observation block must match verbatim"
+        assert tail in source, "sanity: the batch path's post-RoPE observation block must match verbatim"
         assert text.count(source) == 1, (
-            "sanity: _float_layer's own source must appear verbatim, once, in the file"
+                "sanity: the batched calibration source must appear verbatim, once, in the file"
         )
         mutated = source.replace(
             tail,
+            "    if not _has_qk_norm(tensors, prefix):\n"
+            "        _observe(maxima, f\"{prefix}.q\", q)\n"
+            "        _observe(maxima, f\"{prefix}.k\", k)\n"
             "    # T-2572 mutant: the post-RoPE k_normed observation deleted\n",
             1,
         )
