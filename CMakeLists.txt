@@ -165,9 +165,9 @@ else()
 	target_compile_options(t2700_fused_k_capture PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 
-# T-2701 slice 7: artifact-backed CPU/GPU diagnostics.  These are Windows-only
-# because their evidence path includes the D3D12 GPU substrate and public 1.0 API.
-if(WIN32)
+# T-2701 slice 7: artifact-backed CPU/GPU diagnostics. These need the D3D12
+# substrate and generated shaders, so keep them out of the CPU-only default.
+if(WIN32 AND (SUPERSLM_BUILD_GPU OR BUILD_TESTING))
 	foreach(_t2701_tool IN ITEMS t2701_cpu_forward_probe t2701_gpu_tokens)
 		add_executable(${_t2701_tool} tools/${_t2701_tool}.cpp)
 		target_link_libraries(${_t2701_tool} PRIVATE superslm d3d12 dxgi dxguid)
