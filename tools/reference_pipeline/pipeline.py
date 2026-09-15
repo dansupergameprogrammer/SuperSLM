@@ -4550,17 +4550,11 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None,
                             int(qk_table["r_t"][head, channel]), e_wide,
                             int(qk_table["e_t"][head, channel]))
                         landed.append(max(-127, min(127, value)))
-                    if trace is not None:
-                        trace.append({"site": f"{prefix}.k_norm.wide", "token_index": t,
-                                      "head": head, "x_int": tuple(wide),
-                                      "codes": tuple(wide), "m_out": m_wide, "e_out": e_wide})
-                        trace.append({"site": f"{prefix}.k_rope.wide", "token_index": t,
-                                      "head": head, "x_int": tuple(wide),
-                                      "codes": tuple(rotated_wide), "m_in": m_wide, "e_in": e_wide,
-                                      "m_out": m_wide, "e_out": e_wide})
-                        trace.append({"site": f"{prefix}.k_qkc_landing", "token_index": t,
-                                      "head": head, "x_int": tuple(rotated_wide),
-                                      "codes": tuple(landed), "m_in": m_wide, "e_in": e_wide})
+                    # The direct-QKC K path has no C++ SslmChainTraceRecord emission:
+                    # it performs wide normalization, RoPE, and channel landing inline,
+                    # rather than through RequantChainChecked.  Do not fabricate partial
+                    # Python chain records for it; a trace must contain precisely the
+                    # fields the C++ trace hook emits for the same site.
                 elif k_norm_gain_tensor is not None:
                     total = sum(v * v for v in landed)
                     root = max(intmath.i_sqrt((total << (2 * NORM_FRAC_BITS)) // head_dim), 1)

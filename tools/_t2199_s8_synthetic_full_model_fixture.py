@@ -71,7 +71,10 @@ def build_artifact_bytes():
     sections.append(F.Section(
         F.SectionType.SCHEMA_MASKS,
         _serialize_scm1([("g5_minimal_one_field", masks)], cfg.vocab_size)))
-    data, fingerprint = F.build_artifact(sections, flags=F.DAMPED_GREEDY_CONSTANTS_FLAG)
+    # Keep this synthetic writer on the product writer's flag rule: QKC1 is
+    # present exactly for a QK-norm-bearing model, and the container bit says so.
+    data, fingerprint = F.build_artifact(
+        sections, flags=C.artifact_flags_for_model(model) | F.DAMPED_GREEDY_CONSTANTS_FLAG)
     return data, fingerprint, fold_approximation_error
 
 

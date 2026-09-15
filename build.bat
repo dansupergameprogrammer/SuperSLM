@@ -894,7 +894,10 @@ if not errorlevel 1 (
 				echo sslm_verify REJECTED the S8 fixture -- a real defect in the generated artifact,
 				echo surfaced here rather than silently trusted just because the runtime pin below
 				echo happens to accept it.
-				popd & exit /b 1
+				rem Do not `exit /b` from this nested conditional: the conductor's
+				rem cmd /c invocation observed that form as a false success.  Route
+				rem every S8 verifier hard stop through the top-level exit label.
+				goto :s8_hard_fail
 			)
 			echo sslm_verify: S8 fixture confirmed byte-valid.
 		)
@@ -2033,3 +2036,8 @@ if not errorlevel 1 (
 
 popd
 exit /b %ec%
+
+:s8_hard_fail
+popd
+endlocal
+exit /b 1

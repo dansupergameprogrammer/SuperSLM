@@ -453,7 +453,8 @@ def _mutated(rel_path: str, transform):
     """
     full = os.path.join(_REPO_ROOT, rel_path)
     with open(full, "rb") as f:
-        _write_newline = _write_newline_for(f.read())
+        original_bytes = f.read()
+    _write_newline = _write_newline_for(original_bytes)
     with open(full, "r", encoding="utf-8") as f:
         original = f.read()
     try:
@@ -461,8 +462,11 @@ def _mutated(rel_path: str, transform):
             f.write(transform(original))
         yield
     finally:
-        with open(full, "w", encoding="utf-8", newline=_write_newline) as f:
-            f.write(original)
+        # The mutation's text form may normalize newlines for source matching,
+        # but teardown is a byte-for-byte restoration contract.  Re-encoding the
+        # text leaks a checkout's newline convention into the restored source.
+        with open(full, "wb") as f:
+            f.write(original_bytes)
 
 
 def test_write_newline_for_picks_the_convention_from_raw_bytes():

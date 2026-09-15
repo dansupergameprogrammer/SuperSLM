@@ -310,10 +310,16 @@ def test_iexp_constants_are_derived_through_the_pinned_intmath_function(monkeypa
                   "m_out", "e_out"}
     kv_base = {"site", "token_index", "head", "x_int", "m_in", "e_in", "codes",
                "m_out", "e_out"}   # R_key RETIRED by D-SLM58 (no runtime reciprocal)
+    qkc_score_base = {"site", "token_index", "head", "codes"}
     for rec in trace:
         keys = set(rec)
         if rec["site"].endswith(("k_proj.requant", "v_proj.requant")):
             assert keys >= kv_base, f"{rec['site']}: missing {kv_base - keys}"
+        elif rec["site"].endswith("qk_q31"):
+            # Direct QKC score observation is not a RequantChainChecked site;
+            # this is the same compact score record C++ exposes, not a partial
+            # chain record with invented funnel fields.
+            assert keys >= qkc_score_base, f"{rec['site']}: missing {qkc_score_base - keys}"
         else:
             assert keys >= chain_base, f"{rec['site']}: missing {chain_base - keys}"
         assert "out_scale" not in keys, (

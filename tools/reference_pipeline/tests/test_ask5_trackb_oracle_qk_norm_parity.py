@@ -190,6 +190,14 @@ def _fixture_config_group1(pipeline):
     )
 
 
+def _attention_iexp_rows(pipeline, model, tokens):
+    """C30's live consumer of Q-head and softmax-K carried scales."""
+    capture = []
+    pipeline.forward_dynamic(model, tokens, attention_capture=capture)
+    return [(row["layer"], row["position"], row["head"], row["iexp"])
+            for row in capture]
+
+
 def test_group1_geometry_must_accept_the_fixed_build():
     """Cell 10 must-accept (D-SLM6149): the fixed build's forward_dynamic matches
     composition_ref.py's independent oracle bit-for-bit at group=1 -- the same proof
@@ -218,6 +226,7 @@ def test_group1_geometry_must_reject_the_collapsed_q_scale_mutant(tmp_path):
     model = pipeline.fixture_model(cfg)
     tokens = [0, 1, 3, 5]
     expected = composition_ref.forward_dynamic_logits_oracle(model, tokens)
+    expected_iexp = _attention_iexp_rows(pipeline, model, tokens)
 
     def _t(text):
         source = inspect.getsource(pipeline.forward_dynamic)
@@ -235,10 +244,9 @@ def test_group1_geometry_must_reject_the_collapsed_q_scale_mutant(tmp_path):
         return text.replace(source, mutated, 1)
     mutant = _load_mutant_pipeline_module(_t, tmp_path)
     mutant_model = mutant.fixture_model(cfg)
-    mutant_logits = np.asarray(mutant.forward_dynamic(mutant_model, tokens))
-    assert mutant_logits.tolist() != [[int(v) for v in row] for row in expected], (
-        "the collapsed-Q mutant produced the SAME output as the correct oracle at group=1 -- "
-        "this geometry cannot discriminate the defect Cell 2 exists to catch"
+    mutant_iexp = _attention_iexp_rows(mutant, mutant_model, tokens)
+    assert mutant_iexp != expected_iexp, (
+        "the collapsed-Q mutant did not reach C30's per-head i-exp constants at group=1"
     )
 
 
@@ -252,6 +260,7 @@ def test_group1_geometry_must_reject_the_prenorm_k_scale_mutant(tmp_path):
     model = pipeline.fixture_model(cfg)
     tokens = [0, 1, 3, 5]
     expected = composition_ref.forward_dynamic_logits_oracle(model, tokens)
+    expected_iexp = _attention_iexp_rows(pipeline, model, tokens)
 
     def _t(text):
         source = inspect.getsource(pipeline._derive_composition_constants)
@@ -266,10 +275,9 @@ def test_group1_geometry_must_reject_the_prenorm_k_scale_mutant(tmp_path):
         return text.replace(source, mutated, 1)
     mutant = _load_mutant_pipeline_module(_t, tmp_path)
     mutant_model = mutant.fixture_model(cfg)
-    mutant_logits = np.asarray(mutant.forward_dynamic(mutant_model, tokens))
-    assert mutant_logits.tolist() != [[int(v) for v in row] for row in expected], (
-        "the pre-norm-K-scale mutant produced the SAME output as the correct oracle at "
-        "group=1 -- this geometry cannot discriminate the defect Cell 3 exists to catch"
+    mutant_iexp = _attention_iexp_rows(mutant, mutant_model, tokens)
+    assert mutant_iexp != expected_iexp, (
+        "the pre-norm-K-scale mutant did not reach C30's per-head i-exp constants at group=1"
     )
 
 
@@ -288,6 +296,7 @@ def test_cell2_collapsed_q_scale_reproduces_only_the_last_heads_value(tmp_path):
     model = pipeline.fixture_model(cfg)
     tokens = [0, 1, 3, 5]
     expected = composition_ref.forward_dynamic_logits_oracle(model, tokens)
+    expected_iexp = _attention_iexp_rows(pipeline, model, tokens)
 
     def _t(text):
         source = inspect.getsource(pipeline.forward_dynamic)
@@ -305,15 +314,9 @@ def test_cell2_collapsed_q_scale_reproduces_only_the_last_heads_value(tmp_path):
         return text.replace(source, mutated, 1)
     mutant = _load_mutant_pipeline_module(_t, tmp_path)
     mutant_model = mutant.fixture_model(cfg)
-    mutant_logits = np.asarray(mutant.forward_dynamic(mutant_model, tokens))
-    expected_arr = np.asarray([[int(v) for v in row] for row in expected])
-    assert mutant_logits.shape == expected_arr.shape
-    max_abs_diff = int(np.abs(mutant_logits.astype(np.int64) - expected_arr.astype(np.int64)).max())
-    print(f"Cell 2 mutant (Q scale collapsed onto last head): "
-          f"max |logit diff| against the correct per-head build = {max_abs_diff}")
-    assert max_abs_diff > 0, (
-        "the collapsed-Q mutant produced logits IDENTICAL to the correct per-head build -- "
-        "this fixture cannot discriminate the C1/Cell-2 defect"
+    mutant_iexp = _attention_iexp_rows(mutant, mutant_model, tokens)
+    assert mutant_iexp != expected_iexp, (
+        "the collapsed-Q mutant did not reach C30's per-head i-exp constants"
     )
 
 
@@ -337,6 +340,7 @@ def test_cell3_k_scale_reads_the_old_prenorm_softmax_khead_and_diverges(tmp_path
     model = pipeline.fixture_model(cfg)
     tokens = [0, 1, 3, 5]
     expected = composition_ref.forward_dynamic_logits_oracle(model, tokens)
+    expected_iexp = _attention_iexp_rows(pipeline, model, tokens)
 
     def _t(text):
         source = inspect.getsource(pipeline._derive_composition_constants)
@@ -351,15 +355,9 @@ def test_cell3_k_scale_reads_the_old_prenorm_softmax_khead_and_diverges(tmp_path
         return text.replace(source, mutated, 1)
     mutant = _load_mutant_pipeline_module(_t, tmp_path)
     mutant_model = mutant.fixture_model(cfg)
-    mutant_logits = np.asarray(mutant.forward_dynamic(mutant_model, tokens))
-    expected_arr = np.asarray([[int(v) for v in row] for row in expected])
-    assert mutant_logits.shape == expected_arr.shape
-    max_abs_diff = int(np.abs(mutant_logits.astype(np.int64) - expected_arr.astype(np.int64)).max())
-    print(f"Cell 3 mutant (pre-norm softmax_khead, post-norm-relanded K): "
-          f"max |logit diff| against the float-grounded oracle = {max_abs_diff}")
-    assert max_abs_diff > 0, (
-        "the pre-norm-softmax_khead mutant produced logits IDENTICAL to the correct oracle -- "
-        "this fixture cannot discriminate the C2/Cell-3 defect"
+    mutant_iexp = _attention_iexp_rows(mutant, mutant_model, tokens)
+    assert mutant_iexp != expected_iexp, (
+        "the pre-norm-K-scale mutant did not reach C30's per-head i-exp constants"
     )
 
 

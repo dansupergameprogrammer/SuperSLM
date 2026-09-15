@@ -68,6 +68,8 @@ if POWERSHELL_7 is None:
     _missing.append("pwsh (PowerShell 7) not found on PATH")
 if not MODEL_ARTIFACT.exists():
     _missing.append(f"model artifact not found: {MODEL_ARTIFACT}")
+if not os.environ.get("SUPERSLM_ASK_MODEL"):
+    _missing.append("SUPERSLM_ASK_MODEL is not configured (ask.ps1 requires -Model or this environment variable)")
 if not TOKENIZER_ARTIFACT.exists():
     _missing.append(f"tokenizer artifact not found: {TOKENIZER_ARTIFACT}")
 if os.name != "nt":
