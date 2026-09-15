@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+from fractions import Fraction
 import json
 import math
+import struct
 from pathlib import Path
 import subprocess
 import sys
@@ -24,6 +26,7 @@ sys.path.insert(0, str(TOOLS))
 sys.path.insert(0, str(TOOLS / "reference_pipeline"))
 
 import t2700_fused_k_calibration as calibration  # noqa: E402
+import convert_model as converter  # noqa: E402
 from reference_pipeline import artifact_cache, intmath, pipeline  # noqa: E402
 
 
@@ -105,8 +108,31 @@ def test_scalar_vector_full_fixture_still_agree_after_rotated_unit_fix():
     assert np.array_equal(pipeline.forward(model, tokens), pipeline.forward_scalar_reference(model, tokens))
 
 
-def test_compiled_qwen3_capture_has_adjusted_unit_and_low_saturation():
-    """Real Qwen3 / real calibration corpus: compiled capture's observable unit."""
+def test_converter_derives_qk_softmax_head_scale_from_qkc1_head_maximum():
+    model = _fixture_qk_model()
+    peaks = {"layer0": np.array([[2.0] * 8, [6.0] * 8]),
+             "layer1": np.array([[3.0] * 8, [9.0] * 8])}
+    model = pipeline.with_provisional_qk_channel_table(model, peaks)
+    sections, _ = converter.build_sections(model)
+    payload = next(section.data for section in sections
+                   if section.type == converter.F.SectionType.COMPOSITION_CONSTANTS)
+    _magic, _version, count, words, names_size, _reserved = struct.unpack_from("<4sIIIII", payload)
+    names = [struct.unpack_from("<II", payload, 24 + 8 * index) for index in range(count)]
+    values_offset = 24 + 8 * count
+    name_blob = payload[values_offset + 8 * words * count:values_offset + 8 * words * count + names_size]
+    constants = {
+        name_blob[offset:offset + length].decode("utf-8"): struct.unpack_from(
+            "<qq", payload, values_offset + 16 * index)
+        for index, (offset, length) in enumerate(names)}
+    for layer, expected_peaks in enumerate((peaks["layer0"], peaks["layer1"])):
+        for head in range(2):
+            b = Fraction(float(expected_peaks[head, 0]) / 127.0)
+            assert constants[f"layer{layer}.softmax_khead{head}"] == converter._canonical_scale(
+                b / Fraction(math.sqrt(model.config.head_dim)))
+
+
+def test_historical_qwen3_capture_is_explicitly_the_withdrawn_e_minus_30_evidence():
+    """The old capture remains readable evidence of the withdrawn scale rule, not a green cell."""
     cache = Path("D:/_t2698/qwen3-embedding-0.6b-provisional-cache")
     report = Path("D:/_t2700/conductor/pass-a-fixed.tsv")
     assert cache.is_dir(), f"missing real Qwen3 provisional cache: {cache}"
@@ -121,8 +147,8 @@ def test_compiled_qwen3_capture_has_adjusted_unit_and_low_saturation():
     assert saturation / callback_count < 2e-6
     for layer in range(expected[0]):
         m, e = pipeline._qk_wide_source_scale(model, f"layer{layer}")
-        assert scales[layer] == (m, e)
-        observed = np.ldexp(raw[layer].astype(np.float64) * float(m), e)
+        assert scales[layer] == (m, e - pipeline.rope.ROPE_FRAC_BITS)
+        observed = np.ldexp(raw[layer].astype(np.float64) * float(m), e - pipeline.rope.ROPE_FRAC_BITS)
         assert np.array_equal(observed, real[layer])
 
 

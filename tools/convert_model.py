@@ -19,6 +19,7 @@ int8 [-128,127] silently — this module's own defect finding.
 """
 
 import argparse
+import math
 import os
 import struct
 from fractions import Fraction
@@ -312,10 +313,31 @@ def build_sections(model, *, fold_ops_tensor=None, ctx_fold_tensor=None,
         fold_errors.append(_fold_max_relative_error(rows, _ctx_channel_scales(model, L)))
     sections.append(F.Section(F.SectionType.WEIGHT_SCALES, W.write_tensor_manifest(W.WSC1, np.int32, wsc)))
 
+    # QKC1 is the authority for a QK-norm layer's K-side softmax scale.  Build
+    # it before CompositionConstants so both persisted images come from the
+    # same exact binary64 source, rather than the retired tensor-wide
+    # k_normed scale.
+    qk_table = None
+    if has_qk_norm(model):
+        qk_table = build_qk_channel_table(model, getattr(model, "qk_channel_peaks", None))
+
     # Composition constants (KVC1, 2 words) — plus the uniform bias q_b, stored so the
     # runtime C28 bias reconcile has it (value 0 unused).
     cc = {k: (int(model.composition_constants[k][0]), int(model.composition_constants[k][1]))
           for k in sorted(model.composition_constants)}
+    if qk_table is not None:
+        rows_per_layer = cfg.num_key_value_heads * cfg.head_dim
+        for layer in range(cfg.num_hidden_layers):
+            prefix = f"layer{layer}"
+            if f"{prefix}.k_norm.gain" not in model.weight_scales:
+                continue
+            for head in range(cfg.num_key_value_heads):
+                start = layer * rows_per_layer + head * cfg.head_dim
+                sources = [Fraction(struct.unpack("<d", struct.pack(
+                    "<Q", int(qk_table["k_channel_scale_bits"][start + channel])))[0])
+                           for channel in range(cfg.head_dim)]
+                cc[f"{prefix}.softmax_khead{head}"] = _canonical_scale(
+                    max(sources) / Fraction(math.sqrt(cfg.head_dim)))
     cc["bias.q_b"] = (30, 0)
     sections.append(F.Section(F.SectionType.COMPOSITION_CONSTANTS, W.write_kvc1(2, cc)))
 
@@ -333,14 +355,13 @@ def build_sections(model, *, fold_ops_tensor=None, ctx_fold_tensor=None,
     # content check (ParseSigmoidLut, src/model.cpp) validates against byte-for-byte.
     sections.append(F.Section(F.SectionType.SIGMOID_LUT, W.write_sil1()))
 
-    if has_qk_norm(model):
+    if qk_table is not None:
         # Slice 5's provisional authority is the float post-RoPE per-channel peak.
         # Legacy models retain the existing gain-scale construction until their producer
         # is migrated; QK models loaded by the reference carry these peaks explicitly.
-        table = build_qk_channel_table(model, getattr(model, "qk_channel_peaks", None))
         sections.append(F.Section(
             F.SectionType.QK_CHANNEL_TABLE,
-            W.write_tensor_manifest(W.QKC1, np.int64, table)))
+            W.write_tensor_manifest(W.QKC1, np.int64, qk_table)))
 
     # DGC1 is opt-in at artifact-conversion time because its flag is intentionally rejected by
     # pre-1.2 runtimes.  The default path therefore remains byte-identical to 1.1.  A 1.2
