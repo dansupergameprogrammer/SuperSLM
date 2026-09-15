@@ -1898,7 +1898,7 @@ extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
 	seq->state.context_length = 0;
 	seq->state.kv_saturation_count = 0;
 	seq->state.kv_landing_saturation_count = 0;
-	seq->state.k_normed_landing_saturation_count = 0;
+	seq->state.k_channel_landing_saturation_count = 0;
 	seq->state.rope_q_saturation_count = 0;
 	seq->state.rope_k_saturation_count = 0;
 	seq->state.layer_index = 0;

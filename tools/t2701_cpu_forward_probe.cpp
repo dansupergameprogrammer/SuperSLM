@@ -147,7 +147,7 @@ std::string HashSequenceState(const SequenceLayerState& seq) {
 	};
 	append(seq.hidden_scale.m); append(seq.hidden_scale.e); append(seq.layer_index);
 	append(seq.kv_saturation_count); append(seq.kv_landing_saturation_count);
-	append(seq.k_normed_landing_saturation_count); append(seq.rope_q_saturation_count);
+	append(seq.k_channel_landing_saturation_count); append(seq.rope_q_saturation_count);
 	append(seq.rope_k_saturation_count); append(seq.context_length);
 	return HashBytes(state.data(), state.size());
 }
@@ -381,7 +381,7 @@ int main(int argc, char** argv) {
 	            SslmForwardStatusName(forward_status), (use_gpu || raw_k_gpu || no_qnorm_gpu) ? 0 : -1,
 	            static_cast<unsigned long long>(seq.kv_saturation_count),
 	            static_cast<unsigned long long>(seq.kv_landing_saturation_count),
-	            static_cast<unsigned long long>(seq.k_normed_landing_saturation_count),
+	            static_cast<unsigned long long>(seq.k_channel_landing_saturation_count),
 	            static_cast<unsigned long long>(seq.rope_q_saturation_count),
 	            static_cast<unsigned long long>(seq.rope_k_saturation_count));
 	if (forward_hash) PrintForwardHash(forward_status, seq, hidden_codes, workspace, final_codes,

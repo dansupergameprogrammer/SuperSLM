@@ -127,6 +127,7 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 	if (s == SslmModelStatus::QkChannelScaleSourceOutOfDomain) return "QkChannelScaleSourceOutOfDomain";
 	if (s == SslmModelStatus::QkChannelRatioOutOfDomain) return "QkChannelRatioOutOfDomain";
 	if (s == SslmModelStatus::QkChannelScaleRelationMismatch) return "QkChannelScaleRelationMismatch";
+	if (s == SslmModelStatus::LegacyFusedKKeyPresent) return "LegacyFusedKKeyPresent";
 	if (s == SslmModelStatus::TokenizerRejected) return "TokenizerRejected";
 	if (s == SslmModelStatus::TokenizerVocabSizeMismatch) return "TokenizerVocabSizeMismatch";
 	if (s == SslmModelStatus::BadConfigHeadDimParity) return "BadConfigHeadDimParity";
@@ -1442,6 +1443,54 @@ SslmModelStatus ValidateQkChannelTableAdditive(const SslmModelView& view, std::s
 	return SslmModelStatus::Ok;
 }
 
+// Fold-8's retired-key gate is deliberately exact and narrow: only an
+// already-structurally-valid bit-2 artifact is in scope, and no prefix or
+// leading-zero spelling is a legacy key.  This runs before the QKC relation
+// gate and before marshal, so restored compatibility data cannot acquire a
+// second authority over the channel construction.
+bool DecimalNoLeadingZero(std::string_view text) {
+	if (text.empty()) return false;
+	if (text.size() > 1 && text.front() == '0') return false;
+	for (char c : text) if (c < '0' || c > '9') return false;
+	return true;
+}
+
+bool IsRetiredFusedKWeightScaleKey(std::string_view name) {
+	constexpr std::string_view kLayer = "layer";
+	if (name.substr(0, kLayer.size()) != kLayer) return false;
+	const size_t dot = name.find('.', kLayer.size());
+	if (dot == std::string_view::npos || !DecimalNoLeadingZero(name.substr(kLayer.size(), dot - kLayer.size()))) return false;
+	const std::string_view suffix = name.substr(dot + 1);
+	return suffix == "q_norm.gain" || suffix == "k_norm.gain";
+}
+
+bool IsRetiredFusedKKvLandingKey(std::string_view name) {
+	constexpr std::string_view kLayer = "layer";
+	constexpr std::string_view kHead = ".k_normed_head";
+	if (name.substr(0, kLayer.size()) != kLayer) return false;
+	const size_t marker = name.find(kHead, kLayer.size());
+	if (marker == std::string_view::npos ||
+	    !DecimalNoLeadingZero(name.substr(kLayer.size(), marker - kLayer.size()))) return false;
+	return DecimalNoLeadingZero(name.substr(marker + kHead.size()));
+}
+
+SslmModelStatus ValidateNoLegacyFusedKKeys(const SslmModelView& view, std::string* err) {
+	if (!view.qk_norm_fused_k_channel_table) return SslmModelStatus::Ok;
+	for (const SslmTensorView& tensor : view.weight_scales.Tensors()) {
+		if (!IsRetiredFusedKWeightScaleKey(tensor.name)) continue;
+		if (err) *err = "fused-QK artifact contains retired WeightScales key \"" +
+		                std::string(tensor.name) + "\"";
+		return SslmModelStatus::LegacyFusedKKeyPresent;
+	}
+	for (const SslmConstantEntry& entry : view.kv_landing_reciprocals.Entries()) {
+		if (!IsRetiredFusedKKvLandingKey(entry.name)) continue;
+		if (err) *err = "fused-QK artifact contains retired KvLandingReciprocals key \"" +
+		                std::string(entry.name) + "\"";
+		return SslmModelStatus::LegacyFusedKKeyPresent;
+	}
+	return SslmModelStatus::Ok;
+}
+
 SslmModelStatus ValidateFusedKCompositionDomains(const SslmModelView& view, std::string* err) {
 	if (!view.qk_norm_fused_k_channel_table) return SslmModelStatus::Ok;
 	for (uint32_t l = 0; l < view.config.num_hidden_layers; ++l) {
@@ -1789,6 +1838,10 @@ SslmModelStatus ValidateSectionValues(const SslmModelView& view, std::string* er
 	}
 	{
 		const SslmModelStatus s = ValidateQkChannelTableAdditive(view, err);
+		if (s != SslmModelStatus::Ok) return s;
+	}
+	{
+		const SslmModelStatus s = ValidateNoLegacyFusedKKeys(view, err);
 		if (s != SslmModelStatus::Ok) return s;
 	}
 	{

@@ -1603,7 +1603,7 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
                                    const LayerWeights& lw, std::string_view site_prefix,
                                    size_t token_index, SslmTraceHookState* trace_hook_state,
                                    uint64_t* out_saturation_count,
-                                   uint64_t* out_k_normed_landing_saturation_count) {
+                                   uint64_t* out_k_channel_landing_saturation_count) {
 	if (lw.q_norm_gain != nullptr) {
 		for (size_t h = 0; h < num_heads; ++h) {
 			int8_t* const q_head_row = q_codes + h * head_dim;
@@ -1659,11 +1659,11 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
 				const int64_t landing0 = LandingRescale(rotated.x, rotated_scale.m,
 				    lw.k_channel_r_t[offset], rotated_scale.e, lw.k_channel_e_t[offset],
 				    out_saturation_count, &exceeded0,
-				    out_k_normed_landing_saturation_count);
+				    out_k_channel_landing_saturation_count);
 				const int64_t landing1 = LandingRescale(rotated.y, rotated_scale.m,
 				    lw.k_channel_r_t[offset + 1], rotated_scale.e, lw.k_channel_e_t[offset + 1],
 				    out_saturation_count, &exceeded1,
-				    out_k_normed_landing_saturation_count);
+				    out_k_channel_landing_saturation_count);
 				// The pair is transactional at the cache boundary: neither component
 				// is written when LandingRescale says its real magnitude was lost.
 				if (exceeded0 || exceeded1) {
@@ -2043,7 +2043,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			st = ApplyQkNormSite(q_codes.data(), q_scales.data(), workspace, rope_tables, l, context_cap, position,
 			                     num_heads, num_key_value_heads, head_dim, lw, site_prefix,
 			                     token_index, trace_hook_state, &seq.kv_saturation_count,
-			                     &seq.k_normed_landing_saturation_count);
+			                     &seq.k_channel_landing_saturation_count);
 			if (st != SslmForwardStatus::Ok) return st;
 		}
 
@@ -2447,7 +2447,7 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
                                             SslmTraceHookState* trace_hook_state,
                                             size_t q_width,
                                             uint64_t* out_kv_landing_saturation_count,
-                                            uint64_t* out_k_normed_landing_saturation_count,
+                                            uint64_t* out_k_channel_landing_saturation_count,
                                             uint64_t* out_rope_q_saturation_count,
                                             uint64_t* out_rope_k_saturation_count) {
 	// The same domain guards RunLayerLoopImpl's own top-of-function block performs (§9.3),
@@ -2586,7 +2586,7 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 				                     workspace, rope_tables, l, context_cap, position, num_heads,
 				                     num_key_value_heads, head_dim, lw, site_prefix, t,
 				                     trace_hook_state, kv_saturation_count,
-				                     out_k_normed_landing_saturation_count);
+				                     out_k_channel_landing_saturation_count);
 				if (st != SslmForwardStatus::Ok) return st;
 			}
 

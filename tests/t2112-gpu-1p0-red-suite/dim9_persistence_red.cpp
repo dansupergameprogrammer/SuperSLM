@@ -50,7 +50,7 @@ void TestDim9_ResetClearsAllSaturationCountersInLiveAndSerializedState(
 	CHECK(state != nullptr);
 	state->kv_saturation_count = 46;
 	state->kv_landing_saturation_count = 5;
-	state->k_normed_landing_saturation_count = 7;
+	state->k_channel_landing_saturation_count = 7;
 	state->rope_q_saturation_count = 11;
 	state->rope_k_saturation_count = 23;
 	*SslmGpuSeqHandleKvSaturationForBench(seq) = 46;
@@ -59,7 +59,7 @@ void TestDim9_ResetClearsAllSaturationCountersInLiveAndSerializedState(
 	CHECK(*SslmGpuSeqHandleKvSaturationForBench(seq) == 0);
 	CHECK(state->kv_saturation_count == 0);
 	CHECK(state->kv_landing_saturation_count == 0);
-	CHECK(state->k_normed_landing_saturation_count == 0);
+	CHECK(state->k_channel_landing_saturation_count == 0);
 	CHECK(state->rope_q_saturation_count == 0);
 	CHECK(state->rope_k_saturation_count == 0);
 
@@ -77,7 +77,7 @@ void TestDim9_ResetClearsAllSaturationCountersInLiveAndSerializedState(
 		const SequenceLayerState* restored_state = SslmGpuSeqHandleLiveStateForBench(restored);
 		CHECK(restored_state->kv_saturation_count == 0);
 		CHECK(restored_state->kv_landing_saturation_count == 0);
-		CHECK(restored_state->k_normed_landing_saturation_count == 0);
+		CHECK(restored_state->k_channel_landing_saturation_count == 0);
 		CHECK(restored_state->rope_q_saturation_count == 0);
 		CHECK(restored_state->rope_k_saturation_count == 0);
 		CHECK(sslm_gpu_seq_release(ctx, restored) == SSLM_OK);

@@ -2195,7 +2195,7 @@ SslmGpuStatus sslm_gpu_seq_resetImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle*
 	seq->live_state.layer_index = 0;
 	seq->live_state.kv_saturation_count = 0;
 	seq->live_state.kv_landing_saturation_count = 0;
-	seq->live_state.k_normed_landing_saturation_count = 0;
+	seq->live_state.k_channel_landing_saturation_count = 0;
 	seq->live_state.rope_q_saturation_count = 0;
 	seq->live_state.rope_k_saturation_count = 0;
 	seq->live_state.context_length = 0;

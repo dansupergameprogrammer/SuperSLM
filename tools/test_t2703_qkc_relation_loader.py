@@ -78,9 +78,9 @@ def _load_legal_qk_model(channel_scales=None):
                    composition_constants=composition_constants)
 
 
-def _parse_kvc1(payload: bytes) -> dict[str, tuple[int, int]]:
+def _parse_kvc1(payload: bytes) -> dict[str, tuple[int, ...]]:
     magic, version, count, words, names_size, reserved = struct.unpack_from("<4sIIIII", payload)
-    assert (magic, version, words, reserved) == (b"KVC1", 1, 2, 0)
+    assert (magic, version, reserved) == (b"KVC1", 1, 0)
     descriptor_offset = 24
     values_offset = descriptor_offset + 8 * count
     names_offset = values_offset + 8 * words * count
@@ -89,7 +89,7 @@ def _parse_kvc1(payload: bytes) -> dict[str, tuple[int, int]]:
              for index in range(count)]
     return {
         payload[names_offset + offset:names_offset + offset + length].decode("utf-8"):
-        struct.unpack_from("<qq", payload, values_offset + 16 * index)
+        struct.unpack_from("<" + "q" * words, payload, values_offset + 8 * words * index)
         for index, (offset, length) in enumerate(names)
     }
 
@@ -122,6 +122,10 @@ def _artifact_sections(mutation: str | None):
                 m, _e = constants["layer0.k_norm"]
                 constants["layer0.k_norm"] = (m, 7)
             replaced.append(artifact_format.Section(section.type, writer.write_kvc1(2, constants)))
+        elif section.type == artifact_format.SectionType.KV_LANDING_RECIPROCALS and mutation == "legacy_klr":
+            constants = _parse_kvc1(section.data)
+            constants["layer0.k_normed_head0"] = ((1 << 30), -30, (1 << 31) + 1)
+            replaced.append(artifact_format.Section(section.type, writer.write_kvc1(3, constants)))
         else:
             replaced.append(section)
     return model, replaced
@@ -148,6 +152,33 @@ def test_qkc1_magnitude_witness_is_load_legal(tmp_path):
     result = _verify(tmp_path, "magnitude")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "OK" in result.stdout
+
+
+def test_fused_qk_converter_retires_wsc_gain_rows_and_rejects_static_metadata():
+    model = _load_legal_qk_model()
+    sections, _ = converter.build_sections(model)
+    weight_scales = next(section for section in sections
+                         if section.type == artifact_format.SectionType.WEIGHT_SCALES)
+    reciprocal = next(section for section in sections
+                      if section.type == artifact_format.SectionType.KV_LANDING_RECIPROCALS)
+    assert b"layer0.q_norm.gain" not in weight_scales.data
+    assert b"layer0.k_norm.gain" not in weight_scales.data
+    assert b"layer0.k_normed_head0" not in reciprocal.data
+
+    retired = replace(
+        model.scales,
+        nonlinear=model.scales.nonlinear + (("layer0.softmax.input", 1.0),))
+    with pytest.raises(converter.V.ConverterValidationError,
+                       match="LegacyFusedKMetadataPresent"):
+        converter.build_sections(replace(model, scales=retired))
+
+
+def test_fused_qk_loader_refuses_a_restored_legacy_klr_key_before_marshal(tmp_path):
+    result = _verify(tmp_path, "legacy_klr")
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "REJECTED: LegacyFusedKKeyPresent" in output
+    assert 'fused-QK artifact contains retired KvLandingReciprocals key "layer0.k_normed_head0"' in output
 
 
 @pytest.mark.parametrize(("mutation", "field"), [

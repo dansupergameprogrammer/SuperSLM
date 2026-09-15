@@ -25239,7 +25239,7 @@ static void TestT2047_S6_SaveRestoreRoundTripsThroughRealDevice() {
 	seq.layer_index = 2;
 	seq.kv_saturation_count = 7;
 	seq.kv_landing_saturation_count = 1;
-	seq.k_normed_landing_saturation_count = 2;
+	seq.k_channel_landing_saturation_count = 2;
 	seq.rope_q_saturation_count = 3;
 	seq.rope_k_saturation_count = 1;
 	seq.context_length = 4;
@@ -25275,7 +25275,7 @@ static void TestT2047_S6_SaveRestoreRoundTripsThroughRealDevice() {
 	CHECK_MSG(restored.layer_index == seq.layer_index &&
 	              restored.kv_saturation_count == seq.kv_saturation_count &&
 	              restored.kv_landing_saturation_count == seq.kv_landing_saturation_count &&
-	              restored.k_normed_landing_saturation_count == seq.k_normed_landing_saturation_count &&
+	              restored.k_channel_landing_saturation_count == seq.k_channel_landing_saturation_count &&
 	              restored.rope_q_saturation_count == seq.rope_q_saturation_count &&
 	              restored.rope_k_saturation_count == seq.rope_k_saturation_count &&
 	              restored.context_length == seq.context_length,
@@ -25369,7 +25369,7 @@ static void TestGpuPublicApiContainsInjectedAllocationFailuresAtBothHandlerEdges
 static void TestT2578_S3_SaveRestorePreservesPerSiteSaturationCounters() {
 	SequenceLayerState seq{};
 	seq.kv_landing_saturation_count = 17;
-	seq.k_normed_landing_saturation_count = 19;
+	seq.k_channel_landing_saturation_count = 19;
 	seq.rope_q_saturation_count = 23;
 	seq.rope_k_saturation_count = 29;
 	seq.kv_saturation_count = 17 + 19 + 23 + 29;
@@ -25388,13 +25388,13 @@ static void TestT2578_S3_SaveRestorePreservesPerSiteSaturationCounters() {
 	                                                /*workspace_size=*/0),
 	          "T-2578 S3: header-only sequence restore must succeed");
 	CHECK_MSG(restored.kv_landing_saturation_count == 17 &&
-	              restored.k_normed_landing_saturation_count == 19 &&
+	              restored.k_channel_landing_saturation_count == 19 &&
 	              restored.rope_q_saturation_count == 23 &&
 	              restored.rope_k_saturation_count == 29,
 	          "T-2578 S3: all four per-site saturation counters must survive save/restore");
 	CHECK_MSG(restored.kv_saturation_count ==
 	              restored.kv_landing_saturation_count +
-	                  restored.k_normed_landing_saturation_count +
+	                  restored.k_channel_landing_saturation_count +
 	                  restored.rope_q_saturation_count + restored.rope_k_saturation_count,
 	          "T-2578 S3: restored aggregate must equal the restored per-site sum");
 }

@@ -2082,9 +2082,9 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	PutI32At(seq_bytes, SeqKvLandingSatHiOff(H),
 	         static_cast<int32_t>((seq.kv_landing_saturation_count >> 32) & 0xFFFFFFFFu));
 	PutI32At(seq_bytes, SeqKNormedLandingSatLoOff(H),
-	         static_cast<int32_t>(seq.k_normed_landing_saturation_count & 0xFFFFFFFFu));
+	         static_cast<int32_t>(seq.k_channel_landing_saturation_count & 0xFFFFFFFFu));
 	PutI32At(seq_bytes, SeqKNormedLandingSatHiOff(H),
-	         static_cast<int32_t>((seq.k_normed_landing_saturation_count >> 32) & 0xFFFFFFFFu));
+	         static_cast<int32_t>((seq.k_channel_landing_saturation_count >> 32) & 0xFFFFFFFFu));
 	PutI32At(seq_bytes, SeqRopeQSatLoOff(H),
 	         static_cast<int32_t>(seq.rope_q_saturation_count & 0xFFFFFFFFu));
 	PutI32At(seq_bytes, SeqRopeQSatHiOff(H),
@@ -3916,7 +3916,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 	seq.kv_saturation_count = (static_cast<uint64_t>(hi_u) << 32) | static_cast<uint64_t>(lo_u);
 	seq.kv_landing_saturation_count =
 	    (static_cast<uint64_t>(kvl_hi_u) << 32) | static_cast<uint64_t>(kvl_lo_u);
-	seq.k_normed_landing_saturation_count =
+	seq.k_channel_landing_saturation_count =
 	    (static_cast<uint64_t>(knl_hi_u) << 32) | static_cast<uint64_t>(knl_lo_u);
 	seq.rope_q_saturation_count = (static_cast<uint64_t>(rq_hi_u) << 32) | static_cast<uint64_t>(rq_lo_u);
 	seq.rope_k_saturation_count = (static_cast<uint64_t>(rk_hi_u) << 32) | static_cast<uint64_t>(rk_lo_u);
@@ -4258,7 +4258,7 @@ struct GpuSeqBlobHeader {
 	// T-2578 confirmation remedy: appended after the complete v3 header so the aggregate's
 	// four provenance fields survive save/restore instead of silently resetting to zero.
 	uint64_t kv_landing_saturation_count;
-	uint64_t k_normed_landing_saturation_count;
+	uint64_t k_channel_landing_saturation_count;
 	uint64_t rope_q_saturation_count;
 	uint64_t rope_k_saturation_count;
 };
@@ -4286,7 +4286,7 @@ bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, size_t hidden
 	hdr.workspace_size = static_cast<uint64_t>(workspace_size);
 	hdr.model_content_hash = model_content_hash;
 	hdr.kv_landing_saturation_count = seq.kv_landing_saturation_count;
-	hdr.k_normed_landing_saturation_count = seq.k_normed_landing_saturation_count;
+	hdr.k_channel_landing_saturation_count = seq.k_channel_landing_saturation_count;
 	hdr.rope_q_saturation_count = seq.rope_q_saturation_count;
 	hdr.rope_k_saturation_count = seq.rope_k_saturation_count;
 	uint8_t* dst = static_cast<uint8_t*>(out_blob);
@@ -4319,7 +4319,7 @@ bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::Seque
 	out_seq->hidden_scale.e = hdr.hidden_scale_e;
 	out_seq->kv_saturation_count = hdr.kv_saturation_count;
 	out_seq->kv_landing_saturation_count = hdr.kv_landing_saturation_count;
-	out_seq->k_normed_landing_saturation_count = hdr.k_normed_landing_saturation_count;
+	out_seq->k_channel_landing_saturation_count = hdr.k_channel_landing_saturation_count;
 	out_seq->rope_q_saturation_count = hdr.rope_q_saturation_count;
 	out_seq->rope_k_saturation_count = hdr.rope_k_saturation_count;
 	out_seq->context_length = hdr.context_length;

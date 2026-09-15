@@ -491,7 +491,7 @@ struct SequenceLayerState {
 	// own `out_saturation_count` parameter, a different primitive than `LandingRescale`
 	// entirely). On the real, recalibrated candidate at token 1, RoPE's Q rotation is 69 of 71 --
 	// this field is dominated by a term its own name never named. `kv_landing_saturation_count`/
-	// `k_normed_landing_saturation_count`/`rope_q_saturation_count`/`rope_k_saturation_count`
+	// `k_channel_landing_saturation_count`/`rope_q_saturation_count`/`rope_k_saturation_count`
 	// (below) give each site its OWN reading, alongside this total, so a consumer that needs to
 	// know which site is clamping is never limited to this one aggregate. Never reset by
 	// RunLayerLoop/RunLayerLoopChunkBatched -- reset on sequence create / `sslm_seq_reset` is the
@@ -507,7 +507,7 @@ struct SequenceLayerState {
 	// call sites (Q's row, K's row) each threading their own out-parameter now, alongside the
 	// shared aggregate `RopeApplySite` still increments.
 	uint64_t kv_landing_saturation_count = 0;
-	uint64_t k_normed_landing_saturation_count = 0;
+	uint64_t k_channel_landing_saturation_count = 0;
 	uint64_t rope_q_saturation_count = 0;
 	uint64_t rope_k_saturation_count = 0;
 
@@ -1073,7 +1073,7 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 // default). This is the path `sslm_prefill` actually calls (T-2425's own finding, §6 of that
 // spike's log) -- the real, non-square candidate's own silent-undercount defect lives here.
 // (T-2577, D-SLM6280): the four trailing pointers mirror `SequenceLayerState`'s own
-// `kv_landing_saturation_count`/`k_normed_landing_saturation_count`/`rope_q_saturation_count`/
+// `kv_landing_saturation_count`/`k_channel_landing_saturation_count`/`rope_q_saturation_count`/
 // `rope_k_saturation_count` -- this path has no `SequenceLayerState&` of its own to read them
 // from (it takes `kv_saturation_count` as a bare pointer, above, for the identical reason), so
 // a caller that wants the per-site breakdown passes its own four counters directly. Each is
@@ -1093,7 +1093,7 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
                                             SslmTraceHookState* trace_hook_state = nullptr,
                                             size_t q_width = 0,
                                             uint64_t* out_kv_landing_saturation_count = nullptr,
-                                            uint64_t* out_k_normed_landing_saturation_count = nullptr,
+                                            uint64_t* out_k_channel_landing_saturation_count = nullptr,
                                             uint64_t* out_rope_q_saturation_count = nullptr,
                                             uint64_t* out_rope_k_saturation_count = nullptr);
 
@@ -1215,7 +1215,7 @@ int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
 // `LandingRescale`'s own convention; every pre-existing caller that does not pass it compiles
 // unchanged.
 //
-// `out_k_normed_landing_saturation_count` (T-2577, D-SLM6280, external review
+// `out_k_channel_landing_saturation_count` (T-2577, D-SLM6280, external review
 // `Claude/Poirot/5fafd98-t2573-trackb-external-fold-review.md` Significant 3): the
 // "k_normed_landing" per-site counter -- incremented under the identical condition as
 // `out_saturation_count`, alongside it, at the SAME second-landing `LandingRescale` call.
@@ -1227,7 +1227,7 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
                                    const LayerWeights& lw, std::string_view site_prefix,
                                    size_t token_index, SslmTraceHookState* trace_hook_state,
                                    uint64_t* out_saturation_count = nullptr,
-                                   uint64_t* out_k_normed_landing_saturation_count = nullptr);
+                                   uint64_t* out_k_channel_landing_saturation_count = nullptr);
 
 // Source compatibility for pre-QKC1 unit callers.
 inline SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales,
@@ -1238,12 +1238,12 @@ inline SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales
                                          std::string_view site_prefix, size_t token_index,
                                          SslmTraceHookState* trace_hook_state,
                                          uint64_t* out_saturation_count = nullptr,
-                                         uint64_t* out_k_normed_landing_saturation_count = nullptr) {
+                                         uint64_t* out_k_channel_landing_saturation_count = nullptr) {
 	static const SslmTensorManifest kNoRopeTables{};
 	return ApplyQkNormSite(q_codes, q_scales, workspace, kNoRopeTables, layer, context_cap,
 	                       position, num_heads, num_key_value_heads, head_dim, lw, site_prefix,
 	                       token_index, trace_hook_state, out_saturation_count,
-	                       out_k_normed_landing_saturation_count);
+	                       out_k_channel_landing_saturation_count);
 }
 
 // Fixed-order, per-channel Q31 score reduction used by fused-QK layers.

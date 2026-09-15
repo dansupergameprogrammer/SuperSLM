@@ -198,6 +198,7 @@ enum class SslmModelStatus {
 	QkChannelScaleSourceOutOfDomain,
 	QkChannelRatioOutOfDomain,
 	QkChannelScaleRelationMismatch,
+	LegacyFusedKKeyPresent,       // bit-2 artifact restored a retired WSC1/KLR1 key
 	// --- S-HARDEN-2 tokenizer joins (F18, F6, F7, F15) ---
 	TokenizerRejected,           // SslmModel::Load: TOK1/UnicodeTables present but TokenizerView::Open rejected
 	                              // them (structurally, or exactly one of the two sections is present)
@@ -841,7 +842,7 @@ struct SslmDecodeStepStatus {
 	// RoPE saturation counter (T-2572, D-SLM6263) the field also carries K's post-norm re-landing
 	// clamp and both RoPE rotation clamps -- on the real, recalibrated candidate at token 1, RoPE
 	// Q's rotation is 69 of the field's 71. `SequenceLayerState`'s own `kv_landing_saturation_
-	// count`/`k_normed_landing_saturation_count`/`rope_q_saturation_count`/`rope_k_saturation_
+	// count`/`k_channel_landing_saturation_count`/`rope_q_saturation_count`/`rope_k_saturation_
 	// count` give a consumer the per-site reading this one aggregate cannot.
 	uint64_t saturation_count = 0;
 	SslmCalibrationBandVerdict calibration_band_verdict = SslmCalibrationBandVerdict::BandUnknown;

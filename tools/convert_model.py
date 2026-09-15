@@ -21,6 +21,7 @@ int8 [-128,127] silently — this module's own defect finding.
 import argparse
 import math
 import os
+import re
 import struct
 from fractions import Fraction
 
@@ -55,6 +56,32 @@ def artifact_flags_for_model(model, *, option_g=False, enable_damped_greedy=Fals
     if has_qk_norm(model):
         flags |= F.QK_NORM_FUSED_K_CHANNEL_TABLE_FLAG
     return flags
+
+
+_RETIRED_QK_REQUANT = re.compile(r"^layer(?:0|[1-9][0-9]*)\.k_norm\.requant$")
+_RETIRED_QK_NONLINEAR = re.compile(
+    r"^layer(?:0|[1-9][0-9]*)\.(?:k_normed_head(?:0|[1-9][0-9]*)\.scale|softmax\.input)$")
+_QK_GAIN_WSC = re.compile(r"^layer(?:0|[1-9][0-9]*)\.(?:q_norm|k_norm)\.gain$")
+
+
+def reject_retired_qk_static_scales(model):
+    """Refuse retired StaticScales names before section construction.
+
+    This applies only to a fused-QK input.  In particular, no-QK
+    ``softmax.input`` remains compatibility metadata and is not filtered.
+    """
+    if not has_qk_norm(model):
+        return
+    for site in getattr(model.scales, "requant", ()):
+        if _RETIRED_QK_REQUANT.fullmatch(site.name):
+            raise V.ConverterValidationError(
+                "LegacyFusedKMetadataPresent",
+                f'fused-QK conversion input contains retired StaticScales key "{site.name}"')
+    for name, _scale in getattr(model.scales, "nonlinear", ()):
+        if _RETIRED_QK_NONLINEAR.fullmatch(name):
+            raise V.ConverterValidationError(
+                "LegacyFusedKMetadataPresent",
+                f'fused-QK conversion input contains retired StaticScales key "{name}"')
 
 
 def _round_nearest_away(numerator, denominator):
@@ -263,6 +290,7 @@ def build_sections(model, *, fold_ops_tensor=None, ctx_fold_tensor=None,
     WeightScales section -- no second pass over the tensors, no new data
     crossing the cache boundary.
     """
+    reject_retired_qk_static_scales(model)
     fold_ops_tensor = fold_ops_tensor or _fold_ops_tensor
     ctx_fold_tensor = ctx_fold_tensor or _ctx_fold_tensor
     cfg = model.config
@@ -303,6 +331,10 @@ def build_sections(model, *, fold_ops_tensor=None, ctx_fold_tensor=None,
     # WeightScales (WSC1, int32) — per-channel fold ops + the per-layer ctx-fold.
     wsc = {}
     for k in sorted(model.weight_scales):
+        # WGT1 still carries the live Q/K gains.  Their redundant WSC1 fold
+        # rows are retired only under the fused-QK capability.
+        if has_qk_norm(model) and _QK_GAIN_WSC.fullmatch(k):
+            continue
         channel_scales = model.weight_scales[k]
         rows = fold_ops_tensor(channel_scales)
         wsc[k] = rows

@@ -87,13 +87,13 @@ static void TestDim1_M2_SeqReleaseRestoresPoolFreeCountExactly(sslm_model model)
 	CHECK(state != nullptr);
 	state->kv_saturation_count = 46;
 	state->kv_landing_saturation_count = 5;
-	state->k_normed_landing_saturation_count = 7;
+	state->k_channel_landing_saturation_count = 7;
 	state->rope_q_saturation_count = 11;
 	state->rope_k_saturation_count = 23;
 	CHECK(sslm_seq_reset(second_round[0]) == SSLM_OK);
 	CHECK(state->kv_saturation_count == 0);
 	CHECK(state->kv_landing_saturation_count == 0);
-	CHECK(state->k_normed_landing_saturation_count == 0);
+	CHECK(state->k_channel_landing_saturation_count == 0);
 	CHECK(state->rope_q_saturation_count == 0);
 	CHECK(state->rope_k_saturation_count == 0);
 	for (uint32_t i = 0; i < block_count; ++i) {

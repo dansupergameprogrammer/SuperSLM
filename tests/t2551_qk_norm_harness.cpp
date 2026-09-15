@@ -386,8 +386,8 @@ int main(int argc, char** argv) {
 		struct SiteReading { const char* name; uint64_t cpu; uint64_t gpu; };
 		const SiteReading sites[] = {
 		    {"kv_landing", cpu_seq.kv_landing_saturation_count, gpu_seq.kv_landing_saturation_count},
-		    {"k_normed_landing", cpu_seq.k_normed_landing_saturation_count,
-		     gpu_seq.k_normed_landing_saturation_count},
+		    {"k_normed_landing", cpu_seq.k_channel_landing_saturation_count,
+		     gpu_seq.k_channel_landing_saturation_count},
 		    {"rope_q", cpu_seq.rope_q_saturation_count, gpu_seq.rope_q_saturation_count},
 		    {"rope_k", cpu_seq.rope_k_saturation_count, gpu_seq.rope_k_saturation_count},
 		};
