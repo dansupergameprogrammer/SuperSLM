@@ -49,7 +49,9 @@ void main(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID) {
     if (t == 0) gQkNormClamps = 0; AllMemoryBarrierWithGroupSync();
     uint qkc_base = layer_base + Layout.Load<uint>(65 * 4) + head * (uint)head_dim * 8u, qkc_block = g_num_kv_heads * (uint)head_dim * 8u;
     // The compact shader layout places GpuLayerLayout::off[62] in slot 63.
-    uint source_off = layer_base + Layout.Load<uint>(63 * 4); int64_t wide_m = LayerWeights.Load<int64_t>(source_off), wide_e = LayerWeights.Load<int64_t>(source_off + 8u) - kRopeFracBitsGpu;
+    // RopeApplyPairWideGpu returns the Q30-rounded quotient, so its output
+    // retains KWideSourceScale's unit.
+    uint source_off = layer_base + Layout.Load<uint>(63 * 4); int64_t wide_m = LayerWeights.Load<int64_t>(source_off), wide_e = LayerWeights.Load<int64_t>(source_off + 8u);
     uint row_offset = g_position * pairs;
     for (uint p = t; p < pairs; p += 256) {
         int64_t rx, ry; int c = (int)RopeCosTable.Load<int64_t>((row_offset + p) * 8u), s = (int)RopeSinTable.Load<int64_t>((row_offset + p) * 8u);

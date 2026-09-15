@@ -1650,12 +1650,10 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
 					                                                 &in_domain);
 				if (!in_domain) return SslmForwardStatus::OptionGWideRopeMagnitudeOutOfDomain;
 				const size_t offset = kv_head * head_dim + i0;
-				// RopeApplyPairWide returns a Q30-rounded code: its two products use
-				// Q2.30 RoPE coefficients and the primitive divides once by 2^30.
-				// LandingRescale receives the rotated code, so its source scale is the
-				// pre-RoPE wide real unit divided by 2^30.
-				const CarriedScale rotated_scale{lw.k_wide_source_scale.m,
-				                                 lw.k_wide_source_scale.e - ROPE_FRAC_BITS};
+				// RopeApplyPairWide returns the Q30-rounded quotient.  Its one division
+				// cancels the Q2.30 coefficient unit, so the rotated code retains the
+				// pre-RoPE wide-code real unit.
+				const CarriedScale rotated_scale = lw.k_wide_source_scale;
 				const int64_t landing0 = LandingRescale(rotated.x, rotated_scale.m,
 				    lw.k_channel_r_t[offset], rotated_scale.e, lw.k_channel_e_t[offset],
 				    out_saturation_count, /*out_magnitude_exceeded_int64=*/nullptr,

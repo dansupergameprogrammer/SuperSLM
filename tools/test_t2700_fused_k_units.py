@@ -60,13 +60,21 @@ def _direct_fixture_observation(model):
         [[107, -109, 113, -127, 97, -89, 83, -79], [-71, 67, -61, 59, -53, 47, -43, 41]],
     ], dtype=np.int64)
     cos, sin = model.rope_tables
-    landed = pipeline._qk_direct_k_vector(model, "layer0", k, cos, sin, len(k), 0)
     gain = model.weights["layer0.k_norm.gain"].astype(np.int64)
     wide = (pipeline._vec_rmsnorm(k.reshape(-1, cfg.head_dim), cfg.head_dim) * gain).reshape(k.shape)
     rotated = pipeline._vec_rope(wide, cos, sin, len(k), 0)
-    m, e = pipeline._qk_rotated_landing_scale(model, "layer0")
+    # This is deliberately independent of the landing helper.  The RoPE
+    # primitive returns the Q30-rounded quotient, so its code retains the
+    # pre-RoPE wide-code unit.  Supplying a scale with e-30 here would decode
+    # the same integer as a value 2**-30 too small.
+    m, e = pipeline._qk_wide_source_scale(model, "layer0")
     reference = np.ldexp(rotated.astype(np.float64) * float(m), e)
-    channel_scale = model.qk_channel_peaks["layer0"] / 127.0
+    # Build a legal per-channel authority from the independent post-RoPE
+    # values before asking the production landing to encode them.
+    peaks = np.maximum(np.max(np.abs(reference), axis=0) * 1.02, 1.0)
+    model = pipeline.with_provisional_qk_channel_table(model, {"layer0": peaks, "layer1": peaks})
+    landed = pipeline._qk_direct_k_vector(model, "layer0", k, cos, sin, len(k), 0)
+    channel_scale = peaks / 127.0
     decoded = landed.astype(np.float64) * channel_scale.reshape(1, *channel_scale.shape)
     # The pre-fix call had exactly the same inputs but omitted RoPE's Q30 unit.
     old_m, old_e = pipeline._qk_wide_source_scale(model, "layer0")
@@ -77,18 +85,18 @@ def _direct_fixture_observation(model):
             for channel in range(cfg.head_dim):
                 old[token, head, channel] = intmath.residual_reconcile(
                     int(rotated[token, head, channel]), old_m, int(table["r_t"][head, channel]),
-                    old_e, int(table["e_t"][head, channel]))
-    return reference, decoded, landed, np.clip(old, -127, 127)
+                    old_e - pipeline.rope.ROPE_FRAC_BITS, int(table["e_t"][head, channel]))
+    return reference, decoded, landed, np.clip(old, -127, 127), channel_scale
 
 
-def test_fixture_landing_decodes_to_post_rope_float_quantity_and_rejects_old_unit():
+def test_fixture_landing_decodes_to_post_rope_float_quantity_and_rejects_wrong_unit():
     model = _fixture_qk_model()
-    reference, decoded, landed, old = _direct_fixture_observation(model)
-    channel_quantum = 1.0 / 127.0
-    assert float(np.max(np.abs(decoded - reference))) <= channel_quantum
+    reference, decoded, landed, old, channel_scale = _direct_fixture_observation(model)
+    assert float(np.max(np.abs(decoded - reference) / channel_scale.reshape(1, *channel_scale.shape))) <= 1.0
     assert float(np.mean(np.abs(landed) == 127)) == 0.0
-    assert float(np.mean(np.abs(old) == 127)) == 1.0
-    assert float(np.max(np.abs(old.astype(np.float64) / 127.0 - reference))) > 0.9
+    assert float(np.mean(old == 0)) == 1.0
+    old_decoded = old.astype(np.float64) * channel_scale.reshape(1, *channel_scale.shape)
+    assert float(np.max(np.abs(old_decoded - reference) / channel_scale.reshape(1, *channel_scale.shape))) > 1.0
 
 
 def test_scalar_vector_full_fixture_still_agree_after_rotated_unit_fix():
@@ -113,8 +121,8 @@ def test_compiled_qwen3_capture_has_adjusted_unit_and_low_saturation():
     assert saturation / callback_count < 2e-6
     for layer in range(expected[0]):
         m, e = pipeline._qk_wide_source_scale(model, f"layer{layer}")
-        assert scales[layer] == (m, e - pipeline.rope.ROPE_FRAC_BITS)
-        observed = np.ldexp(raw[layer].astype(np.float64) * float(m), e - pipeline.rope.ROPE_FRAC_BITS)
+        assert scales[layer] == (m, e)
+        observed = np.ldexp(raw[layer].astype(np.float64) * float(m), e)
         assert np.array_equal(observed, real[layer])
 
 
@@ -138,7 +146,7 @@ def test_python_qwen3_direct_k_decodes_to_the_real_post_rope_quantity():
     gain = model.weights[f"{prefix}.k_norm.gain"].astype(np.int64)
     wide = (pipeline._vec_rmsnorm(k.reshape(-1, cfg.head_dim), cfg.head_dim) * gain).reshape(k.shape)
     rotated = pipeline._vec_rope(wide, cos, sin, 1, 0)
-    m, e = pipeline._qk_rotated_landing_scale(model, prefix)
+    m, e = pipeline._qk_wide_source_scale(model, prefix)
     reference = np.ldexp(rotated.astype(np.float64) * float(m), e)
     quantum = model.qk_channel_peaks[prefix] / 127.0
     decoded = landed.astype(np.float64) * quantum.reshape(1, *quantum.shape)
@@ -149,7 +157,7 @@ def test_python_qwen3_direct_k_decodes_to_the_real_post_rope_quantity():
         for channel in range(cfg.head_dim):
             old[0, head, channel] = intmath.residual_reconcile(
                 int(rotated[0, head, channel]), old_m, int(table["r_t"][head, channel]),
-                old_e, int(table["e_t"][head, channel]) )
+                old_e - pipeline.rope.ROPE_FRAC_BITS, int(table["e_t"][head, channel]) )
     assert float(np.max(np.abs(decoded - reference) / quantum.reshape(1, *quantum.shape))) <= 1.0
     assert float(np.mean(np.abs(landed) == 127)) < 0.02
     old_decoded = np.clip(old, -127, 127).astype(np.float64) * quantum.reshape(1, *quantum.shape)
@@ -158,7 +166,7 @@ def test_python_qwen3_direct_k_decodes_to_the_real_post_rope_quantity():
 
 def _capture_report(path, model):
     cfg = model.config
-    m, e = pipeline._qk_rotated_landing_scale(model, "layer0")
+    m, e = pipeline._qk_post_rope_wide_scale(model, "layer0")
     lines = ["T2700_FUSED_K_CAPTURE_V1", "summary\tlanding_saturation_count\t0",
              "layer\thead\tchannel\traw_abs_peak\twide_scale_m\twide_scale_e\treal_peak"]
     for layer in range(cfg.num_hidden_layers):
