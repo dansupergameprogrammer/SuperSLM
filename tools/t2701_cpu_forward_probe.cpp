@@ -1,9 +1,11 @@
 // T-2701: artifact-backed CPU full-forward digest for the Python parity cell.
 // Usage: t2701_cpu_forward_probe <model.sslm> <comma-separated-token-ids>
 // Prints the SHA-256 of the final raw int32 logits in little-endian row-major order.
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -70,6 +72,58 @@ struct TraceCapture {
 	std::vector<int8_t> attention_residual_codes;
 	CarriedScale attention_residual_scale{};
 };
+
+struct AttentionSmokeCapture {
+	struct Row {
+		bool seen = false;
+		bool scores_nonzero = false;
+		bool scores_varied = false;
+		bool probabilities_nonuniform = false;
+	};
+	uint32_t last_layer = 0;
+	int64_t position = 0;
+	size_t heads = 0;
+	std::vector<Row> rows;
+};
+
+void CaptureSmokeAttention(void* user, uint32_t layer, int64_t position, size_t head,
+	                         const int64_t* scores, size_t width, int64_t, int64_t, int64_t,
+	                         const int64_t* probabilities, const int64_t*, const int64_t*, size_t) {
+	auto* capture = static_cast<AttentionSmokeCapture*>(user);
+	if (position != capture->position || (layer != 0 && layer != capture->last_layer) ||
+	    head >= capture->heads || width == 0) return;
+	AttentionSmokeCapture::Row& row = capture->rows[(layer == 0 ? 0 : 1) * capture->heads + head];
+	row.seen = true;
+	int64_t score_min = scores[0], score_max = scores[0];
+	int64_t probability_min = probabilities[0], probability_max = probabilities[0];
+	for (size_t i = 0; i < width; ++i) {
+		row.scores_nonzero = row.scores_nonzero || scores[i] != 0;
+		score_min = std::min(score_min, scores[i]);
+		score_max = std::max(score_max, scores[i]);
+		probability_min = std::min(probability_min, probabilities[i]);
+		probability_max = std::max(probability_max, probabilities[i]);
+	}
+	row.scores_varied = score_min != score_max;
+	row.probabilities_nonuniform = probability_min != probability_max;
+	std::printf("smoke_attention layer=%u position=%lld head=%zu width=%zu scores_nonzero=%d "
+	            "scores_varied=%d probabilities_nonuniform=%d\n", layer,
+	            static_cast<long long>(position), head, width, row.scores_nonzero ? 1 : 0,
+	            row.scores_varied ? 1 : 0, row.probabilities_nonuniform ? 1 : 0);
+}
+
+bool WriteFinalHiddenDump(const char* path, const std::vector<int8_t>& codes,
+	                      const CarriedScale& scale) {
+	std::ofstream output(path, std::ios::binary | std::ios::trunc);
+	if (!output) return false;
+	const uint64_t magic = UINT64_C(0x54474D5331373032);  // "T2701SMT", v2 diagnostic dump.
+	const uint64_t count = static_cast<uint64_t>(codes.size());
+	output.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
+	output.write(reinterpret_cast<const char*>(&count), sizeof(count));
+	output.write(reinterpret_cast<const char*>(&scale.m), sizeof(scale.m));
+	output.write(reinterpret_cast<const char*>(&scale.e), sizeof(scale.e));
+	output.write(reinterpret_cast<const char*>(codes.data()), static_cast<std::streamsize>(codes.size()));
+	return static_cast<bool>(output);
+}
 
 void CaptureTrace(const SslmChainTraceRecord* chain, const SslmKvLandingTraceRecord*, void* user) {
 	if (chain == nullptr) return;
@@ -179,27 +233,43 @@ void PrintForwardHash(SslmForwardStatus status, const SequenceLayerState& seq,
 }  // namespace
 
 int main(int argc, char** argv) {
-	if (argc != 3 && argc != 4) {
-		std::fprintf(stderr, "usage: %s <model.sslm> <comma-separated-token-ids> [--gpu|--chunk|--gpu-chunk|--raw-k-cpu|--raw-k-gpu|--no-qnorm-cpu|--no-qnorm-gpu|--forward-hash|--forward-hash-gpu|--forward-hash-gpu-chunk]\n", argv[0]);
+	if (argc < 3) {
+		std::fprintf(stderr, "usage: %s <model.sslm> <comma-separated-token-ids> [mode] [--smoke-attention] [--dump-final-hidden <path>]\n", argv[0]);
 		return 2;
 	}
-	const bool use_gpu = argc == 4 &&
-	                     (std::strcmp(argv[3], "--gpu") == 0 || std::strcmp(argv[3], "--gpu-chunk") == 0 ||
-	                      std::strcmp(argv[3], "--forward-hash-gpu") == 0 || std::strcmp(argv[3], "--forward-hash-gpu-chunk") == 0);
-	const bool use_chunk = argc == 4 &&
-	                       (std::strcmp(argv[3], "--chunk") == 0 || std::strcmp(argv[3], "--gpu-chunk") == 0 ||
-	                        std::strcmp(argv[3], "--forward-hash-gpu-chunk") == 0);
-	const bool raw_k = argc == 4 &&
-	                   (std::strcmp(argv[3], "--raw-k-cpu") == 0 || std::strcmp(argv[3], "--raw-k-gpu") == 0);
-	const bool raw_k_gpu = argc == 4 && std::strcmp(argv[3], "--raw-k-gpu") == 0;
-	const bool no_qnorm = argc == 4 &&
-	                      (std::strcmp(argv[3], "--no-qnorm-cpu") == 0 || std::strcmp(argv[3], "--no-qnorm-gpu") == 0);
-	const bool no_qnorm_gpu = argc == 4 && std::strcmp(argv[3], "--no-qnorm-gpu") == 0;
-	const bool forward_hash = argc == 4 &&
-	    (std::strcmp(argv[3], "--forward-hash") == 0 || std::strcmp(argv[3], "--forward-hash-gpu") == 0 ||
-	     std::strcmp(argv[3], "--forward-hash-gpu-chunk") == 0);
-	if (argc == 4 && !use_gpu && !use_chunk && !raw_k && !no_qnorm && !forward_hash)
-		return std::fprintf(stderr, "unknown option: %s\n", argv[3]), 2;
+	const char* mode = nullptr;
+	const char* final_hidden_dump = nullptr;
+	bool smoke_attention = false;
+	for (int i = 3; i < argc; ++i) {
+		if (std::strcmp(argv[i], "--dump-final-hidden") == 0 && i + 1 < argc) {
+			final_hidden_dump = argv[++i];
+		} else if (std::strcmp(argv[i], "--smoke-attention") == 0) {
+			smoke_attention = true;
+		} else if (mode == nullptr) {
+			mode = argv[i];
+		} else {
+			return std::fprintf(stderr, "unknown or duplicate option: %s\n", argv[i]), 2;
+		}
+	}
+	const bool use_gpu = mode != nullptr &&
+	                     (std::strcmp(mode, "--gpu") == 0 || std::strcmp(mode, "--gpu-chunk") == 0 ||
+	                      std::strcmp(mode, "--forward-hash-gpu") == 0 || std::strcmp(mode, "--forward-hash-gpu-chunk") == 0);
+	const bool use_chunk = mode != nullptr &&
+	                       (std::strcmp(mode, "--chunk") == 0 || std::strcmp(mode, "--gpu-chunk") == 0 ||
+	                        std::strcmp(mode, "--forward-hash-gpu-chunk") == 0);
+	const bool raw_k = mode != nullptr &&
+	                   (std::strcmp(mode, "--raw-k-cpu") == 0 || std::strcmp(mode, "--raw-k-gpu") == 0);
+	const bool raw_k_gpu = mode != nullptr && std::strcmp(mode, "--raw-k-gpu") == 0;
+	const bool no_qnorm = mode != nullptr &&
+	                      (std::strcmp(mode, "--no-qnorm-cpu") == 0 || std::strcmp(mode, "--no-qnorm-gpu") == 0);
+	const bool no_qnorm_gpu = mode != nullptr && std::strcmp(mode, "--no-qnorm-gpu") == 0;
+	const bool forward_hash = mode != nullptr &&
+	    (std::strcmp(mode, "--forward-hash") == 0 || std::strcmp(mode, "--forward-hash-gpu") == 0 ||
+	     std::strcmp(mode, "--forward-hash-gpu-chunk") == 0);
+	if (mode != nullptr && !use_gpu && !use_chunk && !raw_k && !no_qnorm && !forward_hash)
+		return std::fprintf(stderr, "unknown mode: %s\n", mode), 2;
+	if (smoke_attention && use_gpu)
+		return std::fprintf(stderr, "--smoke-attention is CPU-only\n"), 2;
 	std::vector<int32_t> tokens;
 	if (!ParseTokenIds(argv[2], &tokens)) {
 		std::fprintf(stderr, "invalid token-id list: %s\n", argv[2]);
@@ -233,7 +303,17 @@ int main(int argc, char** argv) {
 			return std::fprintf(stderr, "marshal layer %u: %s\n", layer, error.c_str()), 1;
 	}
 	AttentionCaptureSink attention_capture{nullptr, CaptureAttention};
-	layers[0].attention_capture_sink = &attention_capture;
+	AttentionSmokeCapture smoke_capture;
+	if (smoke_attention) {
+		smoke_capture.last_layer = layers_n - 1;
+		smoke_capture.position = static_cast<int64_t>(tokens.size() - 1);
+		smoke_capture.heads = model.config.num_attention_heads;
+		smoke_capture.rows.resize(smoke_capture.heads * 2);
+		attention_capture = AttentionCaptureSink{&smoke_capture, CaptureSmokeAttention};
+		for (LayerWeights& layer : layers) layer.attention_capture_sink = &attention_capture;
+	} else {
+		layers[0].attention_capture_sink = &attention_capture;
+	}
 	// Calibration provenance for the attention comparison.  These are artifact
 	// inputs, printed by the diagnostic only; the product forward never reads this path.
 	for (size_t h = 0; h < kv_heads; ++h) {
@@ -366,6 +446,30 @@ int main(int argc, char** argv) {
 	SslmForwardStatus st = RmsNormSite(hidden_codes.data(), gains.data(), hidden, seq.hidden_scale,
 	                                  final_scale, final_codes.data(), &ignored, "final_norm");
 	if (st != SslmForwardStatus::Ok) return std::fprintf(stderr, "final norm: %s\n", SslmForwardStatusName(st)), 1;
+	if (final_hidden_dump != nullptr) {
+		if (!WriteFinalHiddenDump(final_hidden_dump, final_codes, ignored))
+			return std::fprintf(stderr, "could not write final hidden dump: %s\n", final_hidden_dump), 1;
+		std::printf("final_hidden_dump=%s count=%zu scale=%lld,%lld\n", final_hidden_dump,
+		            final_codes.size(), static_cast<long long>(ignored.m), static_cast<long long>(ignored.e));
+	}
+	if (smoke_attention) {
+		for (uint32_t layer : {uint32_t{0}, smoke_capture.last_layer}) {
+			for (size_t head = 0; head < smoke_capture.heads; ++head) {
+				const AttentionSmokeCapture::Row& row = smoke_capture.rows[
+				    (layer == 0 ? 0 : 1) * smoke_capture.heads + head];
+				if (!row.seen || !row.scores_nonzero || !row.scores_varied ||
+				    !row.probabilities_nonuniform)
+					return std::fprintf(stderr,
+					                    "attention smoke failed: layer=%u head=%zu seen=%d nonzero=%d varied=%d "
+					                    "nonuniform=%d\n", layer, head, row.seen ? 1 : 0,
+					                    row.scores_nonzero ? 1 : 0, row.scores_varied ? 1 : 0,
+					                    row.probabilities_nonuniform ? 1 : 0), 1;
+			}
+		}
+		std::printf("smoke_attention: PASS layers=0,%u heads=%zu position=%lld\n",
+		            smoke_capture.last_layer, smoke_capture.heads,
+		            static_cast<long long>(smoke_capture.position));
+	}
 	std::vector<int64_t> wide(model.config.vocab_size);
 	std::vector<int32_t> logits(model.config.vocab_size);
 	st = LogitsSite(final_codes.data(), hidden, head_weights, model.config.vocab_size, wide.data(), logits.data());
