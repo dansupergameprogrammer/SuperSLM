@@ -710,7 +710,7 @@ def test_real_tree_decode_sticky_tag_range_matches_the_citation_today():
     assert failures == [], f"DecodeStickyTag's own real body should match gpu_port.h's citation today: {failures}"
 
 
-def test_real_tree_decode_sticky_tag_status_set_is_the_named_fourteen():
+def test_real_tree_decode_sticky_tag_status_set_is_the_named_fifteen():
     with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
         gpu_text = f.read()
     names = chk.decode_sticky_tag_status_set(gpu_text)
@@ -720,7 +720,8 @@ def test_real_tree_decode_sticky_tag_status_set_is_the_named_fourteen():
         "RopeTableTensorMissing", "RopeTableExtentExceeded", "PositionOverCap",
         "SoftmaxRowWidthOutOfDomain", "IExpScaleDerivationOutOfDomain",
         "SoftmaxKernelRefusedAfterGateAccepted", "ResidualReconciliationMagnitudeOutOfDomain",
-        "SiluCompositionScaleOutOfDomain", "KvPrecisionUnsupported",
+        "SiluCompositionScaleOutOfDomain", "QkNormFusedLandingMagnitudeOutOfDomain",
+        "KvPrecisionUnsupported",
     }
 
 

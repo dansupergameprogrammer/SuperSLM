@@ -294,7 +294,6 @@ CPU_GUARD_REGION_END_MARKER = "const int64_t position = seq.context_length;"
 CPU_BELOW_GUARD_ARITHMETIC_STATUSES = frozenset({
     "CarriedScaleMantissaOutOfDomain",
     "IExpScaleDerivationOutOfDomain",
-    "QkNormFusedLandingMagnitudeOutOfDomain",
     "SoftmaxKernelRefusedAfterGateAccepted",
     "Ok",
 })
