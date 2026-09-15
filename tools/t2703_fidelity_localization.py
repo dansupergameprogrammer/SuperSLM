@@ -143,11 +143,16 @@ def _tensor_output(output):
 
 
 class CaptureController:
-    def __init__(self, torch, quantized_model, floor: bool, active_layers=None):
+    def __init__(self, torch, quantized_model, floor: bool, active_layers=None,
+                 qkc_headroom: float = 1.0, mixed_precision: str | None = None,
+                 emulate_attention_residual: bool = False):
         self.torch = torch
         self.quantized_model = quantized_model
         self.floor = floor
         self.active_layers = active_layers
+        self.qkc_headroom = qkc_headroom
+        self.mixed_precision = mixed_precision
+        self.emulate_attention_residual = emulate_attention_residual
         self.handles = []
         self.sites: dict[str, np.ndarray] = {}
         self.layer_rows: dict[int, np.ndarray] = {}
@@ -159,6 +164,20 @@ class CaptureController:
         self.rope_q = {}
         self.rope_k = {}
         self.rope_layer = 0
+        self.block_inputs = {}
+        self.attn_branches = {}
+
+    def _exact_site(self, name: str) -> bool:
+        if not self.floor or self.mixed_precision is None or not name.startswith("layer27."):
+            return False
+        leaf = name.split(".", 1)[1]
+        if self.mixed_precision == "v":
+            return leaf == "v_proj"
+        if self.mixed_precision == "mlp":
+            return leaf in {"gate_proj", "up_proj", "mlp_act", "down_proj"}
+        if self.mixed_precision == "down_residual":
+            return leaf in {"mlp_act", "down_proj", "mlp_residual"}
+        raise ValueError(f"unknown mixed-precision candidate: {self.mixed_precision}")
 
     def reset(self):
         self.sites = {}
@@ -171,6 +190,8 @@ class CaptureController:
         self.rope_q = {}
         self.rope_k = {}
         self.rope_layer = 0
+        self.block_inputs = {}
+        self.attn_branches = {}
 
     def _save(self, name, tensor):
         self.sites[name] = tensor.detach().float().cpu().numpy()
@@ -192,11 +213,12 @@ class CaptureController:
     def _dynamic_hook(self, name, scale_slot=None):
         def hook(_module, _inputs, output):
             value = _tensor_output(output)
-            landed, scale = self.dynamic(value) if self.floor else (value, None)
+            landed, scale = (self.dynamic(value)
+                             if self.floor and not self._exact_site(name) else (value, None))
             self._save(name, landed[0, -1])
             if scale_slot is not None and self.floor:
                 scale_slot(landed, scale)
-            if not self.floor:
+            if not self.floor or self._exact_site(name):
                 return None
             if isinstance(output, tuple):
                 return (landed, *output[1:])
@@ -218,32 +240,64 @@ class CaptureController:
         def hook(_module, _inputs, output):
             shaped = output.reshape(output.shape[0], output.shape[1], heads, dim)
             scale = self.torch.tensor(physical, dtype=output.dtype, device=output.device).reshape(1, 1, heads, 1)
-            landed = self.fixed(shaped, scale) if self.floor else shaped
+            name = f"layer{layer}.{kind}_proj"
+            landed = self.fixed(shaped, scale) if self.floor and not self._exact_site(name) else shaped
             self._save(f"layer{layer}.{kind}_proj", landed[0, -1])
             if kind == "k":
                 self.k_scales[layer] = scale.transpose(1, 2)
             else:
                 self.v_rows[layer] = landed
-            return landed.reshape_as(output) if self.floor else None
+            return landed.reshape_as(output) if self.floor and not self._exact_site(name) else None
         return hook
 
     def _pre_dynamic(self, name):
         def hook(_module, inputs):
             value = inputs[0]
-            landed, _scale = self.dynamic(value) if self.floor else (value, None)
+            landed, _scale = (self.dynamic(value)
+                              if self.floor and not self._exact_site(name) else (value, None))
             self._save(name, landed[0, -1])
-            if not self.floor:
+            if not self.floor or self._exact_site(name):
                 return None
             return (landed, *inputs[1:])
+        return hook
+
+    def _layer_input_hook(self, layer):
+        def hook(_module, inputs):
+            self.block_inputs[layer] = inputs[0]
+        return hook
+
+    def _attn_residual_pre(self, layer):
+        name = f"layer{layer}.attn_residual"
+        def hook(_module, inputs):
+            value = inputs[0]
+            if self.floor and self.emulate_attention_residual:
+                hidden = self.block_inputs[layer]
+                branch = self.attn_branches[layer]
+                hidden_peak = hidden.detach().abs().amax(dim=-1, keepdim=True)
+                hidden_scale = self.torch.where(hidden_peak > 0, hidden_peak / 127.0,
+                                                self.torch.ones_like(hidden_peak))
+                hidden_code = self.torch.round(hidden / hidden_scale).clamp(-127, 127)
+                # Reconcile the already-landed branch onto the residual
+                # stream's integer grid, then funnel the wide sum.  This is
+                # the float-host diagnostic analogue of ResidualReconcileSite.
+                branch_on_hidden = self.torch.round(branch / hidden_scale)
+                wide_physical = (hidden_code + branch_on_hidden) * hidden_scale
+                landed, _scale = self.dynamic(wide_physical)
+            else:
+                landed, _scale = self.dynamic(value) if self.floor else (value, None)
+            self._save(name, landed[0, -1])
+            return (landed, *inputs[1:]) if self.floor else None
         return hook
 
     def _layer_hook(self, layer):
         def hook(_module, _inputs, output):
             value = _tensor_output(output)
-            landed, _scale = self.dynamic(value) if self.floor else (value, None)
+            name = f"layer{layer}.mlp_residual"
+            landed, _scale = (self.dynamic(value)
+                              if self.floor and not self._exact_site(name) else (value, None))
             self.layer_rows[layer] = landed[0, -1].detach().float().cpu().numpy()
             self._save(f"layer{layer}.mlp_residual", landed[0, -1])
-            if not self.floor:
+            if not self.floor or self._exact_site(name):
                 return None
             if isinstance(output, tuple):
                 return (landed, *output[1:])
@@ -259,6 +313,7 @@ class CaptureController:
             if self.active_layers is not None and layer_index not in self.active_layers:
                 continue
             prefix = f"layer{layer_index}"
+            self.handles.append(layer.register_forward_pre_hook(self._layer_input_hook(layer_index)))
             attn = layer.self_attn
             mlp = layer.mlp
             self.handles.append(layer.input_layernorm.register_forward_hook(
@@ -287,10 +342,12 @@ class CaptureController:
                     self._record_only_hook(f"{prefix}.k_norm")))
             self.handles.append(attn.o_proj.register_forward_pre_hook(
                 self._pre_dynamic(f"{prefix}.attn_ctx")))
+            def o_slot(landed, _scale, layer_index=layer_index):
+                self.attn_branches[layer_index] = landed
             self.handles.append(attn.o_proj.register_forward_hook(
-                self._dynamic_hook(f"{prefix}.o_proj")))
+                self._dynamic_hook(f"{prefix}.o_proj", o_slot)))
             self.handles.append(layer.post_attention_layernorm.register_forward_pre_hook(
-                self._pre_dynamic(f"{prefix}.attn_residual")))
+                self._attn_residual_pre(layer_index)))
             self.handles.append(layer.post_attention_layernorm.register_forward_hook(
                 self._dynamic_hook(f"{prefix}.mlp_norm")))
             self.handles.append(mlp.gate_proj.register_forward_hook(
@@ -330,8 +387,10 @@ class CaptureController:
                 q_scale = self.q_scales[layer]
                 q_rot = self.fixed(q_rot, q_scale)
                 prefix = f"layer{layer}"
+                self._save(f"{prefix}.k_rope_pre_qkc_all", k_rot[0])
                 if prefix in self.quantized_model.qk_channel_peaks:
-                    source = np.asarray(self.quantized_model.qk_channel_peaks[prefix], dtype=np.float32) / 127.0
+                    source = (np.asarray(self.quantized_model.qk_channel_peaks[prefix], dtype=np.float32)
+                              * self.qkc_headroom / 127.0)
                     # QKC1 is stored in the engine's adjacent-pair RoPE order;
                     # this floor runs inside the upstream half-split HF layout.
                     order = pipeline._rope_pair_permutation(self.quantized_model.config.head_dim)
@@ -409,7 +468,8 @@ def _dequantized_weight(model, name: str) -> np.ndarray:
     return values
 
 
-def install_artifact_weights(torch, hf_model, quantized_model, active_layers=None):
+def install_artifact_weights(torch, hf_model, quantized_model, active_layers=None,
+                             mixed_precision: str | None = None):
     assignments = [] if active_layers is not None else [
         (hf_model.embed_tokens.weight, "embed"),
         (hf_model.norm.weight, "final_norm.gain")]
@@ -434,6 +494,17 @@ def install_artifact_weights(torch, hf_model, quantized_model, active_layers=Non
             assignments.append((layer.self_attn.k_norm.weight, f"{prefix}.k_norm.gain"))
     with torch.no_grad():
         for parameter, name in assignments:
+            leaf = name.split(".", 1)[-1]
+            preserve = name.startswith("layer27.") and (
+                (mixed_precision == "v" and leaf == "v_proj") or
+                (mixed_precision == "mlp" and leaf in {"gate_proj", "up_proj", "down_proj"}) or
+                (mixed_precision == "down_residual" and leaf == "down_proj"))
+            if preserve:
+                # Diagnostic price point is FP16 storage/arithmetic.  The HF
+                # graph stays float32, so round the source checkpoint weight to
+                # FP16 and widen it back before execution.
+                parameter.copy_(parameter.half().float())
+                continue
             values = _dequantized_weight(quantized_model, name)
             if tuple(values.shape) != tuple(parameter.shape):
                 raise ValueError(f"weight shape mismatch {name}: {values.shape} != {tuple(parameter.shape)}")
@@ -453,7 +524,9 @@ def patched_rope(controller, hf_model):
 
 
 def capture_hf(hf_path: Path, quantized_model, token_ids: list[list[int]], floor: bool,
-               active_layers=None):
+               active_layers=None, qkc_headroom: float = 1.0,
+               mixed_precision: str | None = None,
+               emulate_attention_residual: bool = False):
     import torch
     from transformers import AutoModel
 
@@ -462,8 +535,9 @@ def capture_hf(hf_path: Path, quantized_model, token_ids: list[list[int]], floor
     model = AutoModel.from_pretrained(str(hf_path), local_files_only=True, dtype=torch.float32,
                                       attn_implementation="eager").cuda().eval()
     if floor:
-        install_artifact_weights(torch, model, quantized_model, active_layers)
-    controller = CaptureController(torch, quantized_model, floor, active_layers)
+        install_artifact_weights(torch, model, quantized_model, active_layers, mixed_precision)
+    controller = CaptureController(torch, quantized_model, floor, active_layers,
+                                   qkc_headroom, mixed_precision, emulate_attention_residual)
     controller.install(model)
     all_rows = []
     all_sites = []

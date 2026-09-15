@@ -10,7 +10,7 @@
 // Usage:
 //   sslm_layer_trace <model.sslm> <tokenizer.sslm> "<prompt>" --dump <path>
 //   sslm_layer_trace <model.sslm> <tokenizer.sslm> --token-ids <csv> --dump <path>
-//       [--site-dump <jsonl-path> --site-layer <index>]
+//       [--site-dump <jsonl-path> (--site-layer <index> | --site-layers <csv>)]
 //
 // "<prompt>" is the FULL chat-templated prompt text (system + user +
 // assistant-open), the same shape tools/sslm_generate.cpp's argv[3] already
@@ -60,7 +60,7 @@ void PrintUsage(const char* argv0) {
 	std::fprintf(stderr,
 	             "usage: %s <model.sslm> <tokenizer.sslm> (\"<prompt>\" | --token-ids <csv>) "
 	             "--dump <path> [--include-final-norm] "
-	             "[--site-dump <jsonl-path> --site-layer <index>]\n", argv0);
+	             "[--site-dump <jsonl-path> (--site-layer <index> | --site-layers <csv>)]\n", argv0);
 }
 
 bool ParseTokenIds(const char* spec, std::vector<int32_t>* out) {
@@ -132,8 +132,24 @@ bool WriteDump(const char* path, const std::vector<LayerSnapshot>& rows, uint64_
 
 struct SiteDumpCapture {
 	std::ofstream output;
-	uint32_t layer = 0;
+	std::vector<uint32_t> layers;
 	bool enabled = false;
+
+	bool Selects(uint32_t layer) const {
+		for (uint32_t candidate : layers) {
+			if (candidate == layer) return true;
+		}
+		return false;
+	}
+
+	bool Selects(std::string_view site) const {
+		if (site == "final_norm") return true;
+		for (uint32_t layer : layers) {
+			const std::string prefix = "layer" + std::to_string(layer) + ".";
+			if (site.starts_with(prefix)) return true;
+		}
+		return false;
+	}
 };
 
 template <typename T>
@@ -150,18 +166,24 @@ void CaptureSiteTrace(const SslmChainTraceRecord* chain,
 	                  const SslmKvLandingTraceRecord* landing, void* user) {
 	auto* capture = static_cast<SiteDumpCapture*>(user);
 	if (!capture->enabled) return;
-	const std::string prefix = "layer" + std::to_string(capture->layer) + ".";
-	if (chain != nullptr && chain->site.starts_with(prefix)) {
+	if (chain != nullptr && capture->Selects(chain->site)) {
 		capture->output << "{\"type\":\"chain\",\"site\":\"" << chain->site
-		                << "\",\"token\":" << chain->token_index << ",\"m\":" << chain->m_out
-		                << ",\"e\":" << chain->e_out << ",\"codes\":";
+		                << "\",\"token\":" << chain->token_index << ",\"d_prime\":"
+		                << chain->d_prime << ",\"dn\":" << chain->dn << ",\"s\":" << chain->s
+		                << ",\"r\":" << chain->r << ",\"m\":" << chain->m_out
+		                << ",\"e\":" << chain->e_out << ",\"x_int\":";
+		WriteJsonArray(capture->output, chain->x_int.data(), chain->x_int.size());
+		capture->output << ",\"codes\":";
 		WriteJsonArray(capture->output, chain->codes.data(), chain->codes.size());
 		capture->output << "}\n";
-	} else if (landing != nullptr && landing->site.starts_with(prefix)) {
+	} else if (landing != nullptr && capture->Selects(landing->site)) {
 		capture->output << "{\"type\":\"landing\",\"site\":\"" << landing->site
 		                << "\",\"token\":" << landing->token_index << ",\"head\":" << landing->head
+		                << ",\"m_in\":" << landing->m_in << ",\"e_in\":" << landing->e_in
 		                << ",\"m\":" << landing->m_out << ",\"e\":" << landing->e_out
-		                << ",\"codes\":";
+		                << ",\"x_int\":";
+		WriteJsonArray(capture->output, landing->x_int.data(), landing->x_int.size());
+		capture->output << ",\"codes\":";
 		WriteJsonArray(capture->output, landing->codes.data(), landing->codes.size());
 		capture->output << "}\n";
 	}
@@ -171,7 +193,7 @@ void CaptureFusedK(void* user, uint32_t layer, size_t kv_head, size_t channel,
 	               int64_t wide, int64_t rotated, CarriedScale wide_scale,
 	               int64_t landing_raw) {
 	auto* capture = static_cast<SiteDumpCapture*>(user);
-	if (!capture->enabled || layer != capture->layer) return;
+	if (!capture->enabled || !capture->Selects(layer)) return;
 	capture->output << "{\"type\":\"fused_k\",\"layer\":" << layer
 	                << ",\"head\":" << kv_head << ",\"channel\":" << channel
 	                << ",\"wide\":" << wide << ",\"rotated\":" << rotated
@@ -184,7 +206,7 @@ void CaptureAttention(void* user, uint32_t layer, int64_t position, size_t head,
 	                  int64_t q_c, const int64_t* probabilities, const int64_t* ctx_acc,
 	                  const int64_t* ctx_wide, size_t head_dim) {
 	auto* capture = static_cast<SiteDumpCapture*>(user);
-	if (!capture->enabled || layer != capture->layer) return;
+	if (!capture->enabled || !capture->Selects(layer)) return;
 	capture->output << "{\"type\":\"attention\",\"layer\":" << layer
 	                << ",\"position\":" << position << ",\"head\":" << head
 	                << ",\"q_ln2\":" << q_ln2 << ",\"q_b\":" << q_b << ",\"q_c\":" << q_c
@@ -197,6 +219,22 @@ void CaptureAttention(void* user, uint32_t layer, int64_t position, size_t head,
 	capture->output << ",\"ctx_wide\":";
 	WriteJsonArray(capture->output, ctx_wide, head_dim);
 	capture->output << "}\n";
+}
+
+void CaptureValueRows(SiteDumpCapture* capture, const uint8_t* workspace, uint32_t layer,
+	                  int64_t context_cap, size_t num_kv_heads, size_t head_dim, size_t width) {
+	if (!capture->enabled || !capture->Selects(layer)) return;
+	for (size_t head = 0; head < num_kv_heads; ++head) {
+		capture->output << "{\"type\":\"value\",\"layer\":" << layer << ",\"head\":" << head
+		                << ",\"width\":" << width << ",\"codes\":[";
+		for (size_t position = 0; position < width; ++position) {
+			if (position != 0) capture->output << ',';
+			const int8_t* row = ValueRow(workspace, layer, context_cap, num_kv_heads, head_dim,
+			                              head, static_cast<int64_t>(position));
+			WriteJsonArray(capture->output, row, head_dim);
+		}
+		capture->output << "]}\n";
+	}
 }
 
 }  // namespace
@@ -222,6 +260,7 @@ int main(int argc, char** argv) {
 	std::string dump_path;
 	std::string site_dump_path;
 	uint32_t site_layer = UINT32_MAX;
+	std::vector<uint32_t> site_layers;
 	bool include_final_norm = false;
 	for (int i = token_id_mode ? 5 : 4; i < argc; ++i) {
 		if (std::strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
@@ -241,6 +280,13 @@ int main(int argc, char** argv) {
 				std::fprintf(stderr, "invalid --site-layer value\n");
 				return 2;
 			}
+		} else if (std::strcmp(argv[i], "--site-layers") == 0 && i + 1 < argc) {
+			std::vector<int32_t> parsed;
+			if (!ParseTokenIds(argv[++i], &parsed)) {
+				std::fprintf(stderr, "invalid --site-layers value\n");
+				return 2;
+			}
+			for (int32_t value : parsed) site_layers.push_back(static_cast<uint32_t>(value));
 		} else {
 			std::fprintf(stderr, "unrecognized argument: %s\n", argv[i]);
 			PrintUsage(argv[0]);
@@ -252,8 +298,15 @@ int main(int argc, char** argv) {
 		PrintUsage(argv[0]);
 		return 2;
 	}
-	if (site_dump_path.empty() != (site_layer == UINT32_MAX)) {
-		std::fprintf(stderr, "FAILED at stage=args: --site-dump and --site-layer are required together\n");
+	if (site_layer != UINT32_MAX) {
+		if (!site_layers.empty()) {
+			std::fprintf(stderr, "FAILED at stage=args: use only one of --site-layer/--site-layers\n");
+			return 2;
+		}
+		site_layers.push_back(site_layer);
+	}
+	if (site_dump_path.empty() != site_layers.empty()) {
+		std::fprintf(stderr, "FAILED at stage=args: --site-dump and a site-layer selector are required together\n");
 		return 2;
 	}
 
@@ -316,9 +369,11 @@ int main(int argc, char** argv) {
 	const uint32_t num_kv_heads = model_view.config.num_key_value_heads;
 	const uint32_t num_hidden_layers = model_view.config.num_hidden_layers;
 	const size_t hidden_size = model_view.config.hidden_size;
-	if (site_layer != UINT32_MAX && site_layer >= num_hidden_layers) {
-		std::fprintf(stderr, "FAILED at stage=args: --site-layer must be less than %u\n", num_hidden_layers);
-		return 2;
+	for (uint32_t layer : site_layers) {
+		if (layer >= num_hidden_layers) {
+			std::fprintf(stderr, "FAILED at stage=args: site layer must be less than %u\n", num_hidden_layers);
+			return 2;
+		}
 	}
 
 	PreflightScanWscFolds(model_view);
@@ -438,15 +493,17 @@ int main(int argc, char** argv) {
 	FusedKCaptureSink fused_k_capture{&site_capture, CaptureFusedK};
 	AttentionCaptureSink attention_capture{&site_capture, CaptureAttention};
 	if (!site_dump_path.empty()) {
-		site_capture.layer = site_layer;
+		site_capture.layers = site_layers;
 		site_capture.output.open(site_dump_path, std::ios::out | std::ios::trunc);
 		if (!site_capture.output) {
 			std::fprintf(stderr, "FAILED at stage=site_dump_open: could not open \"%s\"\n",
 			             site_dump_path.c_str());
 			return 1;
 		}
-		layers[site_layer].fused_k_capture_sink = &fused_k_capture;
-		layers[site_layer].attention_capture_sink = &attention_capture;
+		for (uint32_t layer : site_layers) {
+			layers[layer].fused_k_capture_sink = &fused_k_capture;
+			layers[layer].attention_capture_sink = &attention_capture;
+		}
 		SslmSetTraceHook(model_view.trace_hook, CaptureSiteTrace, &site_capture);
 	}
 
@@ -502,7 +559,7 @@ int main(int argc, char** argv) {
 	if (!site_dump_path.empty()) site_capture.enabled = true;
 
 	for (uint32_t step = 0; step < num_hidden_layers; ++step) {
-		SslmTraceHookState* site_trace = step == site_layer ? &model_view.trace_hook : nullptr;
+		SslmTraceHookState* site_trace = site_capture.Selects(step) ? &model_view.trace_hook : nullptr;
 		const SslmForwardStatus st =
 		    RunLayerLoop(trace_seq, layers.data(), num_hidden_layers, /*layer_budget=*/1, hidden_size,
 		                 model_view.config.head_dim, num_kv_heads, model_view.config.intermediate_size,
@@ -518,7 +575,12 @@ int main(int argc, char** argv) {
 		rows.push_back(LayerSnapshot{
 		    std::vector<int8_t>(trace_seq.hidden_codes, trace_seq.hidden_codes + hidden_size),
 		    trace_seq.hidden_scale.m, trace_seq.hidden_scale.e});
+		CaptureValueRows(&site_capture, trace_workspace.data(), step, context_cap, num_kv_heads,
+		                 model_view.config.head_dim, prompt_tokens.size());
 	}
+	// The independent row oracle below intentionally runs the same public
+	// forward sites many more times.  It verifies row labels; it is not part of
+	// the requested last-token numeric observation and must not duplicate it.
 	if (!site_dump_path.empty()) site_capture.enabled = false;
 
 	// --- Step 3.5 (N1 remedy, D-SLM705; design S4.2 step 6's own shape --------
@@ -660,9 +722,13 @@ int main(int argc, char** argv) {
 	// final_norm -> logits -> argmax, from the trace's own captured state.
 	std::vector<int8_t> trace_final_codes(hidden_size);
 	CarriedScale trace_final_scale{};
+	if (!site_dump_path.empty()) site_capture.enabled = true;
 	SslmForwardStatus st =
 	    RmsNormSite(trace_seq.hidden_codes, final_norm_gain.data(), hidden_size, trace_seq.hidden_scale,
-	                final_norm_site_constant, trace_final_codes.data(), &trace_final_scale, "final_norm");
+	                final_norm_site_constant, trace_final_codes.data(), &trace_final_scale, "final_norm",
+	                /*token_index=*/0,
+	                site_dump_path.empty() ? nullptr : &model_view.trace_hook);
+	if (!site_dump_path.empty()) site_capture.enabled = false;
 	if (st != SslmForwardStatus::Ok) {
 		std::fprintf(stderr, "FAILED at stage=trace_final_norm: status=%s\n", SslmForwardStatusName(st));
 		return 1;
@@ -711,7 +777,12 @@ int main(int argc, char** argv) {
 			std::fprintf(stderr, "FAILED at stage=site_dump_write: %s\n", site_dump_path.c_str());
 			return 1;
 		}
-		std::printf("site_trace_dumped: layer=%u -> %s\n", site_layer, site_dump_path.c_str());
+		std::printf("site_trace_dumped: layers=");
+		for (size_t i = 0; i < site_layers.size(); ++i) {
+			if (i != 0) std::printf(",");
+			std::printf("%u", site_layers[i]);
+		}
+		std::printf(" -> %s\n", site_dump_path.c_str());
 	}
 	std::printf("layer_trace_dumped: %zu rows x %zu hidden_size, input_fingerprint=0x%016llX -> %s\n",
 	            rows.size(), hidden_size, static_cast<unsigned long long>(fingerprint), dump_path.c_str());
