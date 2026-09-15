@@ -127,6 +127,7 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 	if (s == SslmModelStatus::QkChannelScaleSourceOutOfDomain) return "QkChannelScaleSourceOutOfDomain";
 	if (s == SslmModelStatus::QkChannelRatioOutOfDomain) return "QkChannelRatioOutOfDomain";
 	if (s == SslmModelStatus::QkChannelScaleRelationMismatch) return "QkChannelScaleRelationMismatch";
+	if (s == SslmModelStatus::UnsupportedFusedKHeadDim) return "UnsupportedFusedKHeadDim";
 	if (s == SslmModelStatus::LegacyFusedKKeyPresent) return "LegacyFusedKKeyPresent";
 	if (s == SslmModelStatus::TokenizerRejected) return "TokenizerRejected";
 	if (s == SslmModelStatus::TokenizerVocabSizeMismatch) return "TokenizerVocabSizeMismatch";
@@ -1758,6 +1759,21 @@ SslmModelStatus ValidateRopeTablesShapeAgainstConfig(const SslmTensorManifest& r
 	return SslmModelStatus::Ok;
 }
 
+// The fused-QK arithmetic is parameterized by head width, but 1.5.0's shipped
+// capability is intentionally narrower: bit 2 admits only the Qwen3-family
+// head_dim=128 geometry. This runs after CFG1's ordinary geometry joins and
+// before QKC1 source/derived validation, so an unsupported artifact cannot
+// satisfy the hard-coded sqrt(128) carried-scale relation and reach marshal.
+SslmModelStatus ValidateFusedKHeadDim(const SslmModelView& view, std::string* err) {
+	if (!view.qk_norm_fused_k_channel_table || view.config.head_dim == 128)
+		return SslmModelStatus::Ok;
+	if (err) {
+		*err = "fused-QK artifact head_dim=" + std::to_string(view.config.head_dim) +
+		       " is unsupported; required head_dim=128";
+	}
+	return SslmModelStatus::UnsupportedFusedKHeadDim;
+}
+
 // S-HARDEN-1's schema-value gate (D-SLM141): one pass over the already
 // sub-parsed views, applying each present section's domain descriptor. Runs
 // AFTER every present section's structural sub-parse has already succeeded
@@ -1834,6 +1850,10 @@ SslmModelStatus ValidateSectionValues(const SslmModelView& view, std::string* er
 	if (view.has_rope_tables && view.has_config) {
 		const SslmModelStatus s = ValidateRopeTablesShapeAgainstConfig(
 		    view.rope_tables, view.config.context_cap, view.config.head_dim, err);
+		if (s != SslmModelStatus::Ok) return s;
+	}
+	{
+		const SslmModelStatus s = ValidateFusedKHeadDim(view, err);
 		if (s != SslmModelStatus::Ok) return s;
 	}
 	{

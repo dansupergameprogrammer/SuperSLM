@@ -198,6 +198,7 @@ enum class SslmModelStatus {
 	QkChannelScaleSourceOutOfDomain,
 	QkChannelRatioOutOfDomain,
 	QkChannelScaleRelationMismatch,
+	UnsupportedFusedKHeadDim,      // bit-2 fused-QK support is deliberately limited to head_dim == 128
 	LegacyFusedKKeyPresent,       // bit-2 artifact restored a retired WSC1/KLR1 key
 	// --- S-HARDEN-2 tokenizer joins (F18, F6, F7, F15) ---
 	TokenizerRejected,           // SslmModel::Load: TOK1/UnicodeTables present but TokenizerView::Open rejected

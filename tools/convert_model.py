@@ -290,6 +290,7 @@ def build_sections(model, *, fold_ops_tensor=None, ctx_fold_tensor=None,
     WeightScales section -- no second pass over the tensors, no new data
     crossing the cache boundary.
     """
+    V.check_fused_k_head_dim(model)
     reject_retired_qk_static_scales(model)
     fold_ops_tensor = fold_ops_tensor or _fold_ops_tensor
     ctx_fold_tensor = ctx_fold_tensor or _ctx_fold_tensor

@@ -156,6 +156,18 @@ def check_config_geometry(cfg):
     del hidden_size, head_dim
 
 
+def check_fused_k_head_dim(model):
+    """Mirror the bit-2 loader wall before converter QKC1 arithmetic or serialization."""
+    qk_gain_present = any(
+        f"layer{layer}.{role}_norm.gain" in model.weight_scales
+        for layer in range(model.config.num_hidden_layers)
+        for role in ("q", "k"))
+    if qk_gain_present and int(model.config.head_dim) != 128:
+        _reject("UnsupportedFusedKHeadDim",
+                f"fused-QK conversion input head_dim={model.config.head_dim} is unsupported; "
+                "required head_dim=128")
+
+
 def check_unicode_version_coherence(major, minor, patch, running_version=None):
     """The CFG1 unicode_major/minor/patch fields the converter writes must
     agree with the running interpreter's `unicodedata.unidata_version` --
@@ -278,6 +290,7 @@ def validate_model(model, *, fold_ops_tensor, ctx_fold_tensor, unicode_major=15,
     """
     check_required_groups(model)
     check_config_geometry(model.config)
+    check_fused_k_head_dim(model)
 
     cfg = model.config
 

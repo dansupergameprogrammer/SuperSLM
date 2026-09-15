@@ -14,6 +14,7 @@ import subprocess
 import sys
 import math
 from dataclasses import replace
+from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
@@ -47,11 +48,11 @@ _VERIFIER = _verifier()
 pytestmark = pytest.mark.skipif(_VERIFIER is None, reason="sslm_verify not built")
 
 
-def _load_legal_qk_model(channel_scales=None):
+def _load_legal_qk_model(channel_scales=None, *, head_dim=128):
     """A production-width, converter-emitted QKC1 artifact source."""
     cfg = pipeline.ModelConfig(
-        hidden_size=128, num_hidden_layers=1, num_attention_heads=1,
-        num_key_value_heads=1, head_dim=128, intermediate_size=256,
+        hidden_size=head_dim, num_hidden_layers=1, num_attention_heads=1,
+        num_key_value_heads=1, head_dim=head_dim, intermediate_size=2 * head_dim,
         vocab_size=32, rope_theta=10000.0, rms_norm_eps=1e-6,
         tie_word_embeddings=True, context_cap=16)
     base = pipeline.fixture_model(cfg)
@@ -94,9 +95,10 @@ def _parse_kvc1(payload: bytes) -> dict[str, tuple[int, ...]]:
     }
 
 
-def _artifact_sections(mutation: str | None):
+def _artifact_sections(mutation: str | None, *, head_dim=128):
     model = _load_legal_qk_model(
-        [2.0 ** -30] * 128 if mutation == "magnitude" else None)
+        [2.0 ** -30] * head_dim if mutation == "magnitude" else None,
+        head_dim=head_dim)
     qkc = converter.build_qk_channel_table(model)
     if mutation == "ratio":
         qkc["k_channel_ratio"][0] -= 1
@@ -142,10 +144,100 @@ def _verify(tmp_path: Path, mutation: str | None):
     return result
 
 
+def _verify_unsupported_width(tmp_path: Path, monkeypatch, head_dim: int, *,
+                              loader_sqrt128_relation=False):
+    """Construct one integrity-valid hostile bit-2 artifact for the loader.
+
+    The test bypasses only the converter's new width preflight so it can exercise
+    the compiled loader's independent trust boundary.  It does not bypass the
+    writer's QKC1 construction or mutate the loader under test.
+    """
+    monkeypatch.setattr(converter.V, "check_fused_k_head_dim", lambda _model: None)
+    # The reference fixture correctly declines to construct an odd pairwise
+    # RoPE shape. Serialize a legal QKC1 source first, then make CFG1 hostile;
+    # ParseConfig must reject parity before any QKC1 table interpretation.
+    source_head_dim = 128 if head_dim % 2 else head_dim
+    model, sections = _artifact_sections(None, head_dim=source_head_dim)
+    if source_head_dim != head_dim:
+        replaced = []
+        for section in sections:
+            if section.type != artifact_format.SectionType.CONFIG:
+                replaced.append(section)
+                continue
+            config = bytearray(section.data)
+            struct.pack_into("<I", config, 24, head_dim)
+            replaced.append(artifact_format.Section(section.type, bytes(config)))
+        sections = replaced
+    if loader_sqrt128_relation:
+        replaced = []
+        for section in sections:
+            if section.type != artifact_format.SectionType.COMPOSITION_CONSTANTS:
+                replaced.append(section)
+                continue
+            constants = _parse_kvc1(section.data)
+            head_max = max(Fraction(value) for value in model.weight_scales["layer0.k_norm.gain"])
+            constants["layer0.softmax_khead0"] = converter._canonical_scale(
+                head_max / Fraction(math.sqrt(128)))
+            replaced.append(artifact_format.Section(section.type, writer.write_kvc1(2, constants)))
+        sections = replaced
+    artifact = tmp_path / f"qkc-head{head_dim}-hostile.sslm"
+    artifact_format.write_artifact(artifact, sections, flags=converter.artifact_flags_for_model(model))
+    manifest = artifact.with_suffix(".manifest.json")
+    return subprocess.run([str(_VERIFIER), str(artifact), str(manifest)],
+                          capture_output=True, text=True, check=False)
+
+
 def test_coherent_qkc1_artifact_loads_before_relation_refusal_cells(tmp_path):
     result = _verify(tmp_path, None)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "OK" in result.stdout
+
+
+def test_fused_qk_width_wall_accepts_the_pinned_qwen3_family_geometry(tmp_path):
+    """The fused-QK production fixture remains the shipped 128-wide Qwen3 geometry."""
+    model = _load_legal_qk_model()
+    converter.V.check_fused_k_head_dim(model)
+    result = _verify(tmp_path, None)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_fused_qk_odd_head_dim_still_fires_the_generic_parity_refusal(tmp_path, monkeypatch):
+    result = _verify_unsupported_width(tmp_path, monkeypatch, 127)
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "REJECTED: BadConfigHeadDimParity" in output
+
+
+@pytest.mark.parametrize("head_dim", [126, 64])
+def test_fused_qk_even_non128_width_refuses_in_converter_and_loader(tmp_path, monkeypatch, head_dim):
+    model = _load_legal_qk_model(head_dim=head_dim)
+    with pytest.raises(converter.V.ConverterValidationError,
+                       match="UnsupportedFusedKHeadDim"):
+        converter.build_sections(model)
+    result = _verify_unsupported_width(tmp_path, monkeypatch, head_dim)
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "REJECTED: UnsupportedFusedKHeadDim" in output
+
+
+def test_fused_qk_converter_width_wall_vitality(monkeypatch):
+    """Disabling the converter check admits the same hostile 64-wide input."""
+    model = _load_legal_qk_model(head_dim=64)
+    with pytest.raises(converter.V.ConverterValidationError,
+                       match="UnsupportedFusedKHeadDim"):
+        converter.build_sections(model)
+    monkeypatch.setattr(converter.V, "check_fused_k_head_dim", lambda _model: None)
+    sections, _fold_error = converter.build_sections(model)
+    assert any(section.type == artifact_format.SectionType.QK_CHANNEL_TABLE for section in sections)
+
+
+def test_fused_qk_width_wall_rejects_a_head64_artifact_with_sqrt128_softmax(tmp_path, monkeypatch):
+    """A relation-consistent forged carry cannot bypass the width support wall."""
+    result = _verify_unsupported_width(
+        tmp_path, monkeypatch, 64, loader_sqrt128_relation=True)
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "REJECTED: UnsupportedFusedKHeadDim" in output
 
 
 def test_qkc1_magnitude_witness_is_load_legal(tmp_path):
