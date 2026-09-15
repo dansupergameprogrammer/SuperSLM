@@ -429,9 +429,9 @@ uint SeqStickyOffGpu(int hidden_size) { return SeqCtxLenOffGpu(hidden_size) + 8u
 // after SeqStickyOffGpu so every pre-existing offset above is unchanged.
 uint SeqKvLandingSatLoOffGpu(int hidden_size) { return SeqStickyOffGpu(hidden_size) + 8u; }
 uint SeqKvLandingSatHiOffGpu(int hidden_size) { return SeqKvLandingSatLoOffGpu(hidden_size) + 4u; }
-uint SeqKNormedLandingSatLoOffGpu(int hidden_size) { return SeqKvLandingSatHiOffGpu(hidden_size) + 4u; }
-uint SeqKNormedLandingSatHiOffGpu(int hidden_size) { return SeqKNormedLandingSatLoOffGpu(hidden_size) + 4u; }
-uint SeqRopeQSatLoOffGpu(int hidden_size) { return SeqKNormedLandingSatHiOffGpu(hidden_size) + 4u; }
+uint SeqKChannelLandingSatLoOffGpu(int hidden_size) { return SeqKvLandingSatHiOffGpu(hidden_size) + 4u; }
+uint SeqKChannelLandingSatHiOffGpu(int hidden_size) { return SeqKChannelLandingSatLoOffGpu(hidden_size) + 4u; }
+uint SeqRopeQSatLoOffGpu(int hidden_size) { return SeqKChannelLandingSatHiOffGpu(hidden_size) + 4u; }
 uint SeqRopeQSatHiOffGpu(int hidden_size) { return SeqRopeQSatLoOffGpu(hidden_size) + 4u; }
 uint SeqRopeKSatLoOffGpu(int hidden_size) { return SeqRopeQSatHiOffGpu(hidden_size) + 4u; }
 uint SeqRopeKSatHiOffGpu(int hidden_size) { return SeqRopeKSatLoOffGpu(hidden_size) + 4u; }

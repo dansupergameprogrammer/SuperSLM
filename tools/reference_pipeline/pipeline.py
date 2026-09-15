@@ -3520,8 +3520,6 @@ def _float_layer(cfg, tensors, hidden, maxima, prefix, *, position_offset=0,
     # ask5-trackb-review.md` C2, and Significant 1's own restatement of the same class one
     # level deeper: observing only one side of a value-changing transform describes that one
     # side, never the transform's own output range).
-    _observe(maxima, f"{prefix}.k_normed", k)
-
     q = _float_rope(q, cfg.rope_theta, position_offset)
     k = _float_rope(k, cfg.rope_theta, position_offset)
     # QK-norm creates a separate post-norm K landing domain (`k_normed`), so raw Q/K
@@ -3538,8 +3536,6 @@ def _float_layer(cfg, tensors, hidden, maxima, prefix, *, position_offset=0,
     # `RopeApplySite` rotates and clamps the landed codes to [-127, 127] afterward -- the union
     # observed here is what makes that later clamp's own domain the one the calibration
     # actually covers, rather than a domain the calibration only covered half of.
-    _observe(maxima, f"{prefix}.k_normed", k)
-
     if (prefix_keys is None) != (prefix_values is None):
         raise ValueError("float prefix state requires both keys and values")
     prefix_length = 0 if prefix_keys is None else prefix_keys.shape[0]

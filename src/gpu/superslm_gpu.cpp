@@ -794,16 +794,16 @@ uint32_t SeqStickyOff(uint32_t hidden_size) { return SeqCtxLenOff(hidden_size) +
 // Each site gets the identical lo/hi uint32 split the aggregate already uses (matched
 // shader-side by site_common.hlsli's own SeqKvLandingSatLoOffGpu/.../SeqRopeKSatHiOffGpu
 // family): `kv_landing` (kv_proj_site.hlsl's K/V landing, `LandTokenKVRow` on CPU),
-// `k_normed_landing` (qk_norm_site.hlsl's K branch's second, post-norm landing,
+// `k_channel_landing` (qk_norm_site.hlsl's K branch's second, post-norm landing,
 // `ApplyQkNormSite` on CPU), `rope_q` (rope_guard_site.hlsl's Q rotation, `RopeApplySite`'s Q
 // call on CPU), `rope_k` (rope_commit_site.hlsl's K rotation, `RopeApplySite`'s K call on CPU)
 // -- the same four names T-2575's own per-site probe used (Claude/Laplace/t2575-gpu-sat-count-
 // 2026-09-03.md §2).
 uint32_t SeqKvLandingSatLoOff(uint32_t hidden_size) { return SeqStickyOff(hidden_size) + 8u; }
 uint32_t SeqKvLandingSatHiOff(uint32_t hidden_size) { return SeqKvLandingSatLoOff(hidden_size) + 4u; }
-uint32_t SeqKNormedLandingSatLoOff(uint32_t hidden_size) { return SeqKvLandingSatHiOff(hidden_size) + 4u; }
-uint32_t SeqKNormedLandingSatHiOff(uint32_t hidden_size) { return SeqKNormedLandingSatLoOff(hidden_size) + 4u; }
-uint32_t SeqRopeQSatLoOff(uint32_t hidden_size) { return SeqKNormedLandingSatHiOff(hidden_size) + 4u; }
+uint32_t SeqKChannelLandingSatLoOff(uint32_t hidden_size) { return SeqKvLandingSatHiOff(hidden_size) + 4u; }
+uint32_t SeqKChannelLandingSatHiOff(uint32_t hidden_size) { return SeqKChannelLandingSatLoOff(hidden_size) + 4u; }
+uint32_t SeqRopeQSatLoOff(uint32_t hidden_size) { return SeqKChannelLandingSatHiOff(hidden_size) + 4u; }
 uint32_t SeqRopeQSatHiOff(uint32_t hidden_size) { return SeqRopeQSatLoOff(hidden_size) + 4u; }
 uint32_t SeqRopeKSatLoOff(uint32_t hidden_size) { return SeqRopeQSatHiOff(hidden_size) + 4u; }
 uint32_t SeqRopeKSatHiOff(uint32_t hidden_size) { return SeqRopeKSatLoOff(hidden_size) + 4u; }
@@ -1008,10 +1008,13 @@ GpuLayerLayout ComputeLayerLayout(uint32_t hidden_size, uint32_t kv_hidden_size,
 	L.off[58] = cur; cur += 16;                                     // q_norm_site_constant
 	L.off[59] = cur; cur += 8;                                      // k_norm_present (int64 flag)
 	L.off[60] = cur; cur += Align8U32(head_dim * 4);                // k_norm_gain
-	L.off[61] = cur; cur += 16;                                     // k_norm_site_constant
-	// Fused QKC1 K path: one wide source scale and a dense, channel-major triple image.
-	L.off[62] = cur; cur += 16;                                     // k_wide_source_scale
-	L.off[63] = cur;                                                 // reserved
+	// Fused QKC1 K path: the former K-norm funnel constant is retired;
+	// its ABI slot carries the one live wide source pair instead.
+	L.off[61] = cur; cur += 16;                                     // k_wide_source_scale
+	// Fold-8 preserves both old landing-pair ranges as allocated zero bytes.
+	// They must never be reclaimed or repurposed.
+	L.off[62] = cur; cur += 16;                                     // reserved-zero
+	L.off[63] = cur; cur += 16;                                     // reserved-zero
 	L.off[64] = cur; cur += Align8U32(kv_hidden_size * 8 * 3);     // QKC1 r_t/e_t/ratio
 	L.stride = cur;
 	return L;
@@ -1189,16 +1192,14 @@ std::vector<uint8_t> PackLayerWeightsBytes(const superslm::LayerWeights* layers,
 				for (uint32_t i = 0; i < head_dim_local; ++i) {
 					PutI32At(lw_bytes, base + layout.off[60] + i * 4, lw.k_norm_gain[i]);
 				}
-				PutI64At(lw_bytes, base + layout.off[61] + 0, lw.k_norm_site_constant.m);
-				PutI64At(lw_bytes, base + layout.off[61] + 8, lw.k_norm_site_constant.e);
 				if (lw.k_channel_r_t == nullptr || lw.k_channel_e_t == nullptr ||
 				    lw.k_channel_ratio == nullptr) {
 					throw GpuLayerWeightsContractError(
 					    "PackLayerWeightsBytes: layer " + std::to_string(l) +
 					    "'s k_norm_gain is non-null but QKC1 k_channel_r_t/e_t/ratio is null");
 				}
-				PutI64At(lw_bytes, base + layout.off[62] + 0, lw.k_wide_source_scale.m);
-				PutI64At(lw_bytes, base + layout.off[62] + 8, lw.k_wide_source_scale.e);
+	PutI64At(lw_bytes, base + layout.off[61] + 0, lw.k_wide_source_scale.m);
+	PutI64At(lw_bytes, base + layout.off[61] + 8, lw.k_wide_source_scale.e);
 				for (uint32_t i = 0; i < KV; ++i) {
 					PutI64At(lw_bytes, base + layout.off[64] + i * 8, lw.k_channel_r_t[i]);
 					PutI64At(lw_bytes, base + layout.off[64] + KV * 8 + i * 8, lw.k_channel_e_t[i]);
@@ -2019,7 +2020,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// on GpuLayerLayout states why they land AFTER the stride slot rather than before it).
 	// (carried-scale delta §4/§7 Cell 8): grown from 63 to 65 uint32 values -- positions 0-62
 	// are byte-identical to before this ask; positions 63-64 are the two NEW
-	// k_norm_landing_r_t/e_t field offsets (off[62..63]).
+// Fold-8's reserved-zero legacy landing ranges (off[62..63]).
 	std::vector<uint8_t> layout_bytes(66 * 4, 0);
 	for (int i = 0; i < 56; ++i) PutI32At(layout_bytes, static_cast<size_t>(i) * 4, static_cast<int32_t>(layout.off[i]));
 	PutI32At(layout_bytes, 56 * 4, static_cast<int32_t>(layout.stride));
@@ -2081,9 +2082,9 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	         static_cast<int32_t>(seq.kv_landing_saturation_count & 0xFFFFFFFFu));
 	PutI32At(seq_bytes, SeqKvLandingSatHiOff(H),
 	         static_cast<int32_t>((seq.kv_landing_saturation_count >> 32) & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqKNormedLandingSatLoOff(H),
+	PutI32At(seq_bytes, SeqKChannelLandingSatLoOff(H),
 	         static_cast<int32_t>(seq.k_channel_landing_saturation_count & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqKNormedLandingSatHiOff(H),
+	PutI32At(seq_bytes, SeqKChannelLandingSatHiOff(H),
 	         static_cast<int32_t>((seq.k_channel_landing_saturation_count >> 32) & 0xFFFFFFFFu));
 	PutI32At(seq_bytes, SeqRopeQSatLoOff(H),
 	         static_cast<int32_t>(seq.rope_q_saturation_count & 0xFFFFFFFFu));
@@ -3904,8 +3905,8 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 	uint32_t kvl_lo_u, kvl_hi_u, knl_lo_u, knl_hi_u, rq_lo_u, rq_hi_u, rk_lo_u, rk_hi_u;
 	std::memcpy(&kvl_lo_u, seq_out.data() + SeqKvLandingSatLoOff(H), 4);
 	std::memcpy(&kvl_hi_u, seq_out.data() + SeqKvLandingSatHiOff(H), 4);
-	std::memcpy(&knl_lo_u, seq_out.data() + SeqKNormedLandingSatLoOff(H), 4);
-	std::memcpy(&knl_hi_u, seq_out.data() + SeqKNormedLandingSatHiOff(H), 4);
+	std::memcpy(&knl_lo_u, seq_out.data() + SeqKChannelLandingSatLoOff(H), 4);
+	std::memcpy(&knl_hi_u, seq_out.data() + SeqKChannelLandingSatHiOff(H), 4);
 	std::memcpy(&rq_lo_u, seq_out.data() + SeqRopeQSatLoOff(H), 4);
 	std::memcpy(&rq_hi_u, seq_out.data() + SeqRopeQSatHiOff(H), 4);
 	std::memcpy(&rk_lo_u, seq_out.data() + SeqRopeKSatLoOff(H), 4);

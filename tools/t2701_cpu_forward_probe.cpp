@@ -377,7 +377,7 @@ int main(int argc, char** argv) {
 	std::printf("backend=%s mode=%s layer_budget=%u tokens=%s logits_sha256=%s kv_sha256=%s\n", (use_gpu || raw_k_gpu || no_qnorm_gpu) ? "gpu" : "cpu",
 	            use_chunk ? "chunk" : "stepped", layer_budget, argv[2],
 	            ToHex(digest).c_str(), ToHex(kv_digest).c_str());
-	std::printf("forward_status=%s gpu_sticky_tag=%d kv_saturation=%llu kv_landing=%llu k_normed_landing=%llu rope_q=%llu rope_k=%llu\n",
+	std::printf("forward_status=%s gpu_sticky_tag=%d kv_saturation=%llu kv_landing=%llu k_channel_landing=%llu rope_q=%llu rope_k=%llu\n",
 	            SslmForwardStatusName(forward_status), (use_gpu || raw_k_gpu || no_qnorm_gpu) ? 0 : -1,
 	            static_cast<unsigned long long>(seq.kv_saturation_count),
 	            static_cast<unsigned long long>(seq.kv_landing_saturation_count),

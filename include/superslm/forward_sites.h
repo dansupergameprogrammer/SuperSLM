@@ -502,7 +502,7 @@ struct SequenceLayerState {
 	// same ownership, same never-reset contract, same ordinary sequence-lifetime scope. Each
 	// name matches the per-site probe T-2575 built to find the root cause of a stale-shader
 	// measurement fault (Claude/Laplace/t2575-gpu-sat-count-2026-09-03.md §2): `kv_landing` is
-	// `LandTokenKVRow`'s own K/V landing clamp; `k_normed_landing` is `ApplyQkNormSite`'s K
+	// `LandTokenKVRow`'s own K/V landing clamp; `k_channel_landing` is `ApplyQkNormSite`'s K
 	// branch's second, post-norm landing clamp; `rope_q`/`rope_k` are `RopeApplySite`'s own two
 	// call sites (Q's row, K's row) each threading their own out-parameter now, alongside the
 	// shared aggregate `RopeApplySite` still increments.
@@ -1217,7 +1217,7 @@ int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
 //
 // `out_k_channel_landing_saturation_count` (T-2577, D-SLM6280, external review
 // `Claude/Poirot/5fafd98-t2573-trackb-external-fold-review.md` Significant 3): the
-// "k_normed_landing" per-site counter -- incremented under the identical condition as
+// "k_channel_landing" per-site counter -- incremented under the identical condition as
 // `out_saturation_count`, alongside it, at the SAME second-landing `LandingRescale` call.
 // Defaults to `nullptr`: every pre-existing caller compiles unchanged.
 SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8_t* workspace,
