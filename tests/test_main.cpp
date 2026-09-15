@@ -17209,8 +17209,9 @@ struct QkNormWiringFixture {
 	// `out_saturation_count` (ApplyQkNormSite, forward_sites.cpp), so it is orthogonal to
 	// this cell's own claim.
 	int32_t k_norm_gain[2] = {16384, 16384};
-	int64_t k_norm_landing_r_t_arr[1];
-	int64_t k_norm_landing_e_t_arr[1] = {INT64_C(-20)};
+	int64_t k_norm_landing_r_t_arr[2];
+	int64_t k_norm_landing_e_t_arr[2] = {INT64_C(-20), INT64_C(-20)};
+	int64_t k_channel_ratio_arr[2] = {INT64_C(2147483648), INT64_C(2147483648)};
 
 	// Same construction family as `CriticalOneFixture` above (identity weights throughout --
 	// the ORIGINAL K/V landing stays non-saturating, matching that fixture's own
@@ -17254,6 +17255,7 @@ struct QkNormWiringFixture {
 		// StandardsDocument.md Sec5.4).
 		const CarriedScale landing_target{INT64_C(1073741824), INT64_C(-20)};
 		f.k_norm_landing_r_t_arr[0] = superslm::DynamicScaleReciprocal(landing_target.m);
+		f.k_norm_landing_r_t_arr[1] = f.k_norm_landing_r_t_arr[0];
 
 		superslm::LayerWeights& lw = f.layer;
 		lw.attn_norm_gain = f.norm_gain;
@@ -17296,6 +17298,7 @@ struct QkNormWiringFixture {
 		lw.k_norm_site_constant = canonical;
 		lw.k_channel_r_t = f.k_norm_landing_r_t_arr;
 		lw.k_channel_e_t = f.k_norm_landing_e_t_arr;
+		lw.k_channel_ratio = f.k_channel_ratio_arr;
 	}
 
 	// Same reason as `CriticalOneFixture`'s own deletions above -- `layer`'s pointer fields
@@ -17305,6 +17308,77 @@ struct QkNormWiringFixture {
 	QkNormWiringFixture(QkNormWiringFixture&&) = delete;
 	QkNormWiringFixture& operator=(QkNormWiringFixture&&) = delete;
 };
+
+// T-2703 F3: the QKC1 witness's source/table/reciprocal domains are legal at
+// load time, while its boundary-exponent k_norm carry makes LandingRescale's
+// real result exceed int64. Call the actual K-side site directly with a
+// loaded ROP1 view and a poisoned cache row: its status must name the loss and
+// neither component of the pair may reach the cache boundary.
+static void TestT2703_F3_QkNormLandingMagnitudeRefusesBeforeCpuKWrite() {
+	using superslm::CarriedScale;
+	using superslm::MutableKeyRow;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+
+	QkNormWiringFixture fixture;
+	// The QKC1 artifact cell in tools/test_t2703_qkc_relation_loader.py pins
+	// this same legal [e=-60, e=7] witness through SslmModel::Load.
+	fixture.layer.k_wide_source_scale = CarriedScale{INT64_C(1073741824), INT64_C(7)};
+	fixture.k_norm_landing_e_t_arr[0] = INT64_C(-60);
+	fixture.k_norm_landing_e_t_arr[1] = INT64_C(-60);
+	int8_t q_codes_unused[1] = {0};
+	CarriedScale q_scales_unused[1] = {CarriedScale{INT64_C(1073741824), INT64_C(-30)}};
+	uint8_t workspace[4] = {0};
+	int8_t* const k_row = MutableKeyRow(workspace, /*layer=*/0, /*context_cap=*/1,
+	                                     /*num_key_value_heads=*/1, /*head_dim=*/2,
+	                                     /*kv_head=*/0, /*position=*/0);
+	const int8_t sentinel[2] = {INT8_C(60), INT8_C(-40)};
+	std::memcpy(k_row, sentinel, sizeof(sentinel));
+
+	const auto status = superslm::ApplyQkNormSite(
+	    q_codes_unused, q_scales_unused, workspace, fixture.view.rope_tables,
+	    /*layer=*/0, /*context_cap=*/1, /*position=*/0, /*num_heads=*/0,
+	    /*num_key_value_heads=*/1, /*head_dim=*/2, fixture.layer, "t2703_f3_cpu",
+	    /*token_index=*/0, /*trace_hook_state=*/nullptr);
+	CHECK_MSG(status == SslmForwardStatus::QkNormFusedLandingMagnitudeOutOfDomain,
+	          "ApplyQkNormSite(T-2703 F3 CPU) status == %s, want "
+	          "QkNormFusedLandingMagnitudeOutOfDomain",
+	          SslmForwardStatusName(status));
+	CHECK_MSG(std::memcmp(k_row, sentinel, sizeof(sentinel)) == 0,
+	          "ApplyQkNormSite(T-2703 F3 CPU) altered K (%d,%d) after its magnitude refusal; "
+	          "the pair must remain (%d,%d) until both LandingRescale results are known in-domain",
+	          k_row[0], k_row[1], sentinel[0], sentinel[1]);
+}
+
+// The GPU's corresponding public path packs and dispatches the same witness.
+// Its sticky tag must decode to the CPU's named refusal; the direct CPU cell
+// above owns the more precise no-pair-write observation.
+static void TestT2703_F3_QkNormLandingMagnitudeGpuMatchesCpuStatus() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmForwardStatusName;
+
+	QkNormWiringFixture fixture;
+	fixture.layer.k_wide_source_scale = CarriedScale{INT64_C(1073741824), INT64_C(7)};
+	fixture.k_norm_landing_e_t_arr[0] = INT64_C(-60);
+	fixture.k_norm_landing_e_t_arr[1] = INT64_C(-60);
+	int8_t hidden_codes[2] = {5, -5};
+	SequenceLayerState seq;
+	seq.hidden_codes = hidden_codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq.layer_index = 0;
+	uint8_t workspace[4] = {};
+	const auto status = superslm_gpu::RunLayerLoopGpu(
+	    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+	    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+	    /*intermediate_size=*/2, /*context_cap=*/1, fixture.view.rope_tables, workspace,
+	    sizeof(workspace));
+	CHECK_MSG(status == SslmForwardStatus::QkNormFusedLandingMagnitudeOutOfDomain,
+	          "RunLayerLoopGpu(T-2703 F3) status == %s, want "
+	          "QkNormFusedLandingMagnitudeOutOfDomain (the CPU's exact status)",
+	          SslmForwardStatusName(status));
+}
 
 static void TestT2566_S1_RunLayerLoopWiresSaturationCounterThroughBothPaths() {
 	using superslm::CarriedScale;
@@ -29340,6 +29414,7 @@ int main(int argc, char** argv) {
 	TestRunLayerLoopQAndKWeightsAreLoadBearingOnceWidthReachesTwo();
 	TestKvRowAccessorHeadStrideIncludesContextCapFactor();
 	TestT2564_S4_ApplyQkNormSitePerHeadQScaleNotCollapsed();
+	TestT2703_F3_QkNormLandingMagnitudeRefusesBeforeCpuKWrite();
 	TestT2572_S1_RopeApplySiteCountsThePostRotationClamp();
 	TestT2572_S2_RunLayerLoopWiresRopeSaturationCounterThroughBothPaths();
 	TestT2572_M2_MarshalLayerAcceptsArmCsNonQkNormOutput();
@@ -29573,6 +29648,7 @@ int main(int argc, char** argv) {
 	TestT2577_S1b_ModelGenerationReachesTheG5BridgeChunkEntryPoint();
 	TestT2577_O1_RopeKCountsOncePerKvHeadNotOncePerQueryHead();
 	TestT2578_S3_SaveRestorePreservesPerSiteSaturationCounters();
+	TestT2703_F3_QkNormLandingMagnitudeGpuMatchesCpuStatus();
 #endif  // _WIN32
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);

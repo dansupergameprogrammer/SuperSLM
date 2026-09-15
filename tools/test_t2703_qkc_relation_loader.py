@@ -47,7 +47,7 @@ _VERIFIER = _verifier()
 pytestmark = pytest.mark.skipif(_VERIFIER is None, reason="sslm_verify not built")
 
 
-def _load_legal_qk_model():
+def _load_legal_qk_model(channel_scales=None):
     """A production-width, converter-emitted QKC1 artifact source."""
     cfg = pipeline.ModelConfig(
         hidden_size=128, num_hidden_layers=1, num_attention_heads=1,
@@ -67,8 +67,9 @@ def _load_legal_qk_model():
         1.25, 1.5, 1.75, math.nextafter(1.0, 2.0),
         math.nextafter(1.0, 0.0), 0.1, 2.0 ** -10, 2.0 ** -20,
     )
-    channels = [source_population[index % len(source_population)]
-                for index in range(cfg.head_dim)]
+    channels = (list(channel_scales) if channel_scales is not None else
+                [source_population[index % len(source_population)]
+                 for index in range(cfg.head_dim)])
     weight_scales["layer0.q_norm.gain"] = channels
     weight_scales["layer0.k_norm.gain"] = channels
     composition_constants["layer0.q_norm"] = (1 << 30, -30)
@@ -94,7 +95,8 @@ def _parse_kvc1(payload: bytes) -> dict[str, tuple[int, int]]:
 
 
 def _artifact_sections(mutation: str | None):
-    model = _load_legal_qk_model()
+    model = _load_legal_qk_model(
+        [2.0 ** -30] * 128 if mutation == "magnitude" else None)
     qkc = converter.build_qk_channel_table(model)
     if mutation == "ratio":
         qkc["k_channel_ratio"][0] -= 1
@@ -107,10 +109,18 @@ def _artifact_sections(mutation: str | None):
         if section.type == artifact_format.SectionType.QK_CHANNEL_TABLE and mutation in {"ratio", "landing"}:
             replaced.append(artifact_format.Section(
                 section.type, writer.write_tensor_manifest(writer.QKC1, np.int64, qkc)))
-        elif section.type == artifact_format.SectionType.COMPOSITION_CONSTANTS and mutation == "head":
+        elif section.type == artifact_format.SectionType.COMPOSITION_CONSTANTS and mutation in {"head", "magnitude"}:
             constants = _parse_kvc1(section.data)
-            m, e = constants["layer0.softmax_khead0"]
-            constants["layer0.softmax_khead0"] = (m + 1, e)
+            if mutation == "head":
+                m, e = constants["layer0.softmax_khead0"]
+                constants["layer0.softmax_khead0"] = (m + 1, e)
+            else:
+                # F3's load-legal witness: exponent domains currently do not
+                # permit the pinned [e=-60, e=7] boundary pair. The retained
+                # canonical mantissa therefore loads, but the real
+                # per-channel landing exceeds int64 and must refuse in CPU/GPU.
+                m, _e = constants["layer0.k_norm"]
+                constants["layer0.k_norm"] = (m, 7)
             replaced.append(artifact_format.Section(section.type, writer.write_kvc1(2, constants)))
         else:
             replaced.append(section)
@@ -130,6 +140,12 @@ def _verify(tmp_path: Path, mutation: str | None):
 
 def test_coherent_qkc1_artifact_loads_before_relation_refusal_cells(tmp_path):
     result = _verify(tmp_path, None)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OK" in result.stdout
+
+
+def test_qkc1_magnitude_witness_is_load_legal(tmp_path):
+    result = _verify(tmp_path, "magnitude")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "OK" in result.stdout
 
