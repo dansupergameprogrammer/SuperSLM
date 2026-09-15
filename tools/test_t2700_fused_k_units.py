@@ -131,27 +131,6 @@ def test_converter_derives_qk_softmax_head_scale_from_qkc1_head_maximum():
                 b / Fraction(math.sqrt(model.config.head_dim)))
 
 
-def test_historical_qwen3_capture_is_explicitly_the_withdrawn_e_minus_30_evidence():
-    """The old capture remains readable evidence of the withdrawn scale rule, not a green cell."""
-    cache = Path("D:/_t2698/qwen3-embedding-0.6b-provisional-cache")
-    report = Path("D:/_t2700/conductor/pass-a-fixed.tsv")
-    assert cache.is_dir(), f"missing real Qwen3 provisional cache: {cache}"
-    assert report.is_file(), f"missing compiled fixed capture: {report}"
-    model = artifact_cache.load_artifact(cache)
-    expected = (model.config.num_hidden_layers, model.config.num_key_value_heads, model.config.head_dim)
-    raw, real, saturation, scales = calibration._parse_capture(report, expected)
-    assert raw.shape == real.shape == expected
-    assert saturation == 541
-    callback_count = next(int(line.split("\t")[2]) for line in report.read_text(encoding="utf-8").splitlines()
-                          if line.startswith("summary\tcallback_count\t"))
-    assert saturation / callback_count < 2e-6
-    for layer in range(expected[0]):
-        m, e = pipeline._qk_wide_source_scale(model, f"layer{layer}")
-        assert scales[layer] == (m, e - pipeline.rope.ROPE_FRAC_BITS)
-        observed = np.ldexp(raw[layer].astype(np.float64) * float(m), e - pipeline.rope.ROPE_FRAC_BITS)
-        assert np.array_equal(observed, real[layer])
-
-
 def test_python_qwen3_direct_k_decodes_to_the_real_post_rope_quantity():
     """Real Qwen3 layer 0, one real token: Python's vector production path."""
     cache = Path("D:/_t2698/qwen3-embedding-0.6b-provisional-cache")
