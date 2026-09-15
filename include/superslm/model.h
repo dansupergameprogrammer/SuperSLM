@@ -197,6 +197,7 @@ enum class SslmModelStatus {
 	QkChannelTableGeometryMismatch,
 	QkChannelScaleSourceOutOfDomain,
 	QkChannelRatioOutOfDomain,
+	QkChannelScaleRelationMismatch,
 	// --- S-HARDEN-2 tokenizer joins (F18, F6, F7, F15) ---
 	TokenizerRejected,           // SslmModel::Load: TOK1/UnicodeTables present but TokenizerView::Open rejected
 	                              // them (structurally, or exactly one of the two sections is present)

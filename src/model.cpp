@@ -126,6 +126,7 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 	if (s == SslmModelStatus::QkChannelTableGeometryMismatch) return "QkChannelTableGeometryMismatch";
 	if (s == SslmModelStatus::QkChannelScaleSourceOutOfDomain) return "QkChannelScaleSourceOutOfDomain";
 	if (s == SslmModelStatus::QkChannelRatioOutOfDomain) return "QkChannelRatioOutOfDomain";
+	if (s == SslmModelStatus::QkChannelScaleRelationMismatch) return "QkChannelScaleRelationMismatch";
 	if (s == SslmModelStatus::TokenizerRejected) return "TokenizerRejected";
 	if (s == SslmModelStatus::TokenizerVocabSizeMismatch) return "TokenizerVocabSizeMismatch";
 	if (s == SslmModelStatus::BadConfigHeadDimParity) return "BadConfigHeadDimParity";
@@ -1190,11 +1191,137 @@ SslmModelStatus ValidateKvLandingReciprocalsDomain(const SslmKeyedConstants& kv_
 	return SslmModelStatus::Ok;
 }
 
-// D-SLM7036's additive QKC1 contract. Relations between the persisted
-// derived images and current softmax_khead stay deliberately out of this
-// slice: their consumers migrate with the forward in slice 6. This gate owns
-// only bit/table/tensor geometry, source finiteness, and the serialized ratio
-// range, before any marshal path can see a QK artifact.
+// T-2703 F2 — exact, host-FP-free source arithmetic for QKC1.  A source
+// binary64 is represented as an integer significand and a power of two.  The
+// relation pass never reconstructs it through `double`: the serialized bits
+// are the authority and every rounding below is over integers.
+struct ExactBinaryScale {
+	uint64_t significand = 0;  // normalized to [2^52, 2^53)
+	int64_t exponent = 0;
+};
+
+int BitLengthU64(uint64_t value) {
+	int result = 0;
+	while (value != 0) { ++result; value >>= 1; }
+	return result;
+}
+
+ExactBinaryScale DecodeExactPositiveBinary64(uint64_t bits) {
+	const uint64_t exponent_field = (bits >> 52) & UINT64_C(0x7ff);
+	uint64_t significand = bits & ((UINT64_C(1) << 52) - 1);
+	int64_t exponent = 0;
+	if (exponent_field == 0) {
+		exponent = -1074;
+	} else {
+		significand |= UINT64_C(1) << 52;
+		exponent = static_cast<int64_t>(exponent_field) - 1023 - 52;
+	}
+	const int bits_used = BitLengthU64(significand);
+	const int normalize_shift = 53 - bits_used;
+	significand <<= normalize_shift;
+	exponent -= normalize_shift;
+	return ExactBinaryScale{significand, exponent};
+}
+
+struct ExactPair { int64_t m; int64_t e; };
+
+uint64_t RoundHalfEvenRight(uint64_t value, int shift) {
+	if (shift <= 0) return value << -shift;
+	const uint64_t quotient = value >> shift;
+	const uint64_t remainder = value & ((UINT64_C(1) << shift) - 1);
+	const uint64_t half = UINT64_C(1) << (shift - 1);
+	return quotient + (remainder > half || (remainder == half && (quotient & 1)) ? 1 : 0);
+}
+
+ExactPair CanonicalScale(ExactBinaryScale source) {
+	// The normalized source has 53 significant bits.  The canonical artifact
+	// image retains 31 with exactly the converter's half-even tie rule.
+	uint64_t mantissa = RoundHalfEvenRight(source.significand, 22);
+	int64_t exponent = source.exponent + 22;
+	if (mantissa == (UINT64_C(1) << 31)) { mantissa >>= 1; ++exponent; }
+	return ExactPair{static_cast<int64_t>(mantissa), exponent};
+}
+
+// A minimal unsigned 128-bit value for the one exact B/sqrt(128) division.
+// It is local instead of a host floating operation because the reader must
+// reproduce the converter's exact binary64 sqrt operand on every platform.
+struct U128 { uint64_t lo = 0; uint64_t hi = 0; };
+
+U128 MulU64(uint64_t a, uint64_t b) {
+	const uint64_t mask = UINT64_C(0xffffffff);
+	const uint64_t a0 = a & mask, a1 = a >> 32, b0 = b & mask, b1 = b >> 32;
+	const uint64_t p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
+	const uint64_t carry = (p00 >> 32) + (p01 & mask) + (p10 & mask);
+	return U128{(p00 & mask) | (carry << 32), p11 + (p01 >> 32) + (p10 >> 32) + (carry >> 32)};
+}
+int BitLengthU128(U128 value) { return value.hi ? 64 + BitLengthU64(value.hi) : BitLengthU64(value.lo); }
+bool LessU128(U128 a, U128 b) { return a.hi != b.hi ? a.hi < b.hi : a.lo < b.lo; }
+U128 ShiftLeftU128(U128 value, int shift) {
+	if (shift == 0) return value;
+	if (shift >= 64) return U128{0, value.lo << (shift - 64)};
+	return U128{value.lo << shift, (value.hi << shift) | (value.lo >> (64 - shift))};
+}
+U128 SubU128(U128 a, U128 b) {
+	return U128{a.lo - b.lo, a.hi - b.hi - (a.lo < b.lo ? 1u : 0u)};
+}
+bool BitU128(U128 value, int bit) { return bit < 64 ? ((value.lo >> bit) & 1) != 0 : ((value.hi >> (bit - 64)) & 1) != 0; }
+uint64_t DivideU128(U128 numerator, U128 denominator, U128* remainder) {
+	U128 rem{};
+	uint64_t quotient = 0;
+	for (int bit = 127; bit >= 0; --bit) {
+		rem = ShiftLeftU128(rem, 1);
+		rem.lo |= BitU128(numerator, bit) ? 1u : 0u;
+		if (!LessU128(rem, denominator)) {
+			rem = SubU128(rem, denominator);
+			if (bit < 64) quotient |= UINT64_C(1) << bit;
+		}
+	}
+	if (remainder) *remainder = rem;
+	return quotient;
+}
+
+uint64_t DeriveQ31Ratio(ExactBinaryScale source, ExactBinaryScale head_max) {
+	const int64_t power = source.exponent - head_max.exponent + 31;
+	if (power >= 0) {
+		uint64_t remainder = 0, quotient = 0;
+		const int top_bit = 52 + static_cast<int>(power);
+		for (int bit = top_bit; bit >= 0; --bit) {
+			remainder = (remainder << 1) | (bit >= power && ((source.significand >> (bit - power)) & 1) ? 1u : 0u);
+			if (remainder >= head_max.significand) { remainder -= head_max.significand; if (bit < 64) quotient |= UINT64_C(1) << bit; }
+		}
+		return quotient + (remainder * 2 >= head_max.significand ? 1 : 0);
+	}
+	const int shift = static_cast<int>(-power);
+	if (shift + 53 > 63) return 0;
+	const uint64_t denominator = head_max.significand << shift;
+	const uint64_t quotient = source.significand / denominator;
+	const uint64_t remainder = source.significand % denominator;
+	return quotient + (remainder * 2 >= denominator ? 1 : 0);
+}
+
+ExactPair DeriveHeadCarried(ExactBinaryScale head_max) {
+	// sqrt(128)'s exact binary64: 6369051672525773 / 562949953421312.
+	constexpr uint64_t kSqrt128Numerator = UINT64_C(6369051672525773);
+	constexpr uint64_t kSqrt128Denominator = UINT64_C(562949953421312);
+	const U128 numerator = MulU64(head_max.significand, kSqrt128Denominator);
+	const int candidate = BitLengthU128(numerator) - BitLengthU64(kSqrt128Numerator);
+	const int whole_bits = LessU128(numerator, ShiftLeftU128(U128{kSqrt128Numerator, 0}, candidate)) ? candidate - 1 : candidate;
+	const int shift = whole_bits - 30;
+	U128 remainder{};
+	uint64_t mantissa = DivideU128(numerator, ShiftLeftU128(U128{kSqrt128Numerator, 0}, shift), &remainder);
+	const U128 denominator = ShiftLeftU128(U128{kSqrt128Numerator, 0}, shift);
+	const U128 twice_remainder = ShiftLeftU128(remainder, 1);
+	if (LessU128(denominator, twice_remainder) || (!LessU128(twice_remainder, denominator) && (mantissa & 1))) ++mantissa;
+	int64_t exponent = head_max.exponent + shift;
+	if (mantissa == (UINT64_C(1) << 31)) { mantissa >>= 1; ++exponent; }
+	return ExactPair{static_cast<int64_t>(mantissa), exponent};
+}
+
+// D-SLM7036's additive QKC1 contract. This gate owns bit/table/tensor
+// geometry, source finiteness, and individual field domains. The exact
+// source-to-derived relations are checked immediately after the composition
+// domain gate by ValidateQkChannelScaleRelations, before marshal can see a
+// QK artifact.
 SslmModelStatus ValidateQkChannelTableAdditive(const SslmModelView& view, std::string* err) {
 	const bool flag = view.qk_norm_fused_k_channel_table;
 	if (view.has_qk_channel_table && !flag) {
@@ -1328,6 +1455,67 @@ SslmModelStatus ValidateFusedKCompositionDomains(const SslmModelView& view, std:
 				if (err) *err = "CompositionConstants entry \"" + name + "\" m=" + std::to_string(m) +
 				                " outside the QK canonical-positive domain [1073741824,2147483647]";
 				return SslmModelStatus::CompositionScaleOutOfDomain;
+			}
+		}
+	}
+	return SslmModelStatus::Ok;
+}
+
+SslmModelStatus ValidateQkChannelScaleRelations(const SslmModelView& view, std::string* err) {
+	if (!view.qk_norm_fused_k_channel_table) return SslmModelStatus::Ok;
+	const SslmTensorView* source_table = view.qk_channel_table.Tensor("k_channel_scale_bits");
+	const SslmTensorView* reciprocal_table = view.qk_channel_table.Tensor("k_channel_r_t");
+	const SslmTensorView* exponent_table = view.qk_channel_table.Tensor("k_channel_e_t");
+	const SslmTensorView* ratio_table = view.qk_channel_table.Tensor("k_channel_ratio");
+	const uint64_t per_layer = static_cast<uint64_t>(view.config.num_key_value_heads) * view.config.head_dim;
+	for (uint32_t l = 0; l < view.config.num_hidden_layers; ++l) {
+		const std::string prefix = "layer" + std::to_string(l);
+		if (view.weights.Tensor(prefix + ".q_norm.gain") == nullptr) continue;
+		for (uint32_t h = 0; h < view.config.num_key_value_heads; ++h) {
+			ExactBinaryScale head_max{};
+			for (uint32_t d = 0; d < view.config.head_dim; ++d) {
+				const uint64_t row = static_cast<uint64_t>(l) * per_layer +
+				                     static_cast<uint64_t>(h) * view.config.head_dim + d;
+				const ExactBinaryScale source = DecodeExactPositiveBinary64(RdU64(source_table->data + row * 8));
+				if (d == 0 || source.exponent > head_max.exponent ||
+				    (source.exponent == head_max.exponent && source.significand > head_max.significand)) head_max = source;
+			}
+			for (uint32_t d = 0; d < view.config.head_dim; ++d) {
+				const uint64_t row = static_cast<uint64_t>(l) * per_layer +
+				                     static_cast<uint64_t>(h) * view.config.head_dim + d;
+				const uint64_t bits = RdU64(source_table->data + row * 8);
+				const ExactBinaryScale source = DecodeExactPositiveBinary64(bits);
+				const ExactPair target = CanonicalScale(source);
+				const int64_t expected_r = DynamicScaleReciprocal(target.m);
+				const int64_t expected_e = target.e;
+				const int64_t expected_ratio = static_cast<int64_t>(DeriveQ31Ratio(source, head_max));
+				const struct { const char* name; int64_t actual; int64_t expected; } fields[] = {
+					{"k_channel_r_t", RdI64(reciprocal_table->data + row * 8), expected_r},
+					{"k_channel_e_t", RdI64(exponent_table->data + row * 8), expected_e},
+					{"k_channel_ratio", RdI64(ratio_table->data + row * 8), expected_ratio},
+				};
+				for (const auto& field : fields) {
+					if (field.actual == field.expected) continue;
+					char hex[17]; std::snprintf(hex, sizeof(hex), "%016llx", static_cast<unsigned long long>(bits));
+					if (err) *err = "QkChannelTable row (layer " + std::to_string(l) + ", head " +
+					                std::to_string(h) + ", channel " + std::to_string(d) + ") " + field.name +
+					                "=" + std::to_string(field.actual) + " does not equal " + std::to_string(field.expected) +
+					                " derived from k_channel_scale_bits=0x" + hex + " and same-head maximum";
+					return SslmModelStatus::QkChannelScaleRelationMismatch;
+				}
+			}
+			const ExactPair expected_head = DeriveHeadCarried(head_max);
+			const std::string name = prefix + ".softmax_khead" + std::to_string(h);
+			const SslmConstantEntry* entry = view.composition_constants.Entry(name);
+			const int64_t actual_m = entry == nullptr ? 0 : SslmKeyedConstants::Value(*entry, 0);
+			const int64_t actual_e = entry == nullptr ? 0 : SslmKeyedConstants::Value(*entry, 1);
+			if (entry == nullptr || actual_m != expected_head.m || actual_e != expected_head.e) {
+				if (err) *err = "CompositionConstants entry \"" + name + "\" (m=" +
+				                std::to_string(actual_m) + ",e=" + std::to_string(actual_e) +
+				                ") does not equal derived (m=" + std::to_string(expected_head.m) +
+				                ",e=" + std::to_string(expected_head.e) +
+				                ") from QkChannelTable head maximum";
+				return SslmModelStatus::QkChannelScaleRelationMismatch;
 			}
 		}
 	}
@@ -1605,6 +1793,10 @@ SslmModelStatus ValidateSectionValues(const SslmModelView& view, std::string* er
 	}
 	{
 		const SslmModelStatus s = ValidateFusedKCompositionDomains(view, err);
+		if (s != SslmModelStatus::Ok) return s;
+	}
+	{
+		const SslmModelStatus s = ValidateQkChannelScaleRelations(view, err);
 		if (s != SslmModelStatus::Ok) return s;
 	}
 	return SslmModelStatus::Ok;
