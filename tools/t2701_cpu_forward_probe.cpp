@@ -130,24 +130,75 @@ void CaptureAttention(void*, uint32_t layer, int64_t position, size_t head,
 	            ToHex(wide_digest).c_str());
 }
 
+std::string HashBytes(const void* data, size_t bytes) {
+	uint8_t digest[32];
+	Sha256Hash(static_cast<const uint8_t*>(data), bytes, digest);
+	return ToHex(digest);
+}
+
+// The state is serialized field-by-field: hashing the native struct would make
+// the result depend on the caller-owned hidden pointer and compiler padding.
+std::string HashSequenceState(const SequenceLayerState& seq) {
+	std::vector<uint8_t> state;
+	auto append = [&state](const auto& value) {
+		const size_t offset = state.size();
+		state.resize(offset + sizeof(value));
+		std::memcpy(state.data() + offset, &value, sizeof(value));
+	};
+	append(seq.hidden_scale.m); append(seq.hidden_scale.e); append(seq.layer_index);
+	append(seq.kv_saturation_count); append(seq.kv_landing_saturation_count);
+	append(seq.k_normed_landing_saturation_count); append(seq.rope_q_saturation_count);
+	append(seq.rope_k_saturation_count); append(seq.context_length);
+	return HashBytes(state.data(), state.size());
+}
+
+void PrintForwardHash(SslmForwardStatus status, const SequenceLayerState& seq,
+	                  const std::vector<int8_t>& hidden_codes,
+	                  const std::vector<uint8_t>& workspace,
+	                  const std::vector<int8_t>& final_codes,
+	                  const CarriedScale& final_scale,
+	                  const std::vector<int32_t>& logits) {
+	const int32_t status_value = static_cast<int32_t>(status);
+	const std::string status_hash = HashBytes(&status_value, sizeof(status_value));
+	const std::string state_hash = HashSequenceState(seq);
+	const std::string hidden_hash = HashBytes(hidden_codes.data(), hidden_codes.size());
+	const std::string kv_hash = HashBytes(workspace.data(), workspace.size());
+	std::vector<uint8_t> final_payload(final_codes.size() + sizeof(final_scale.m) + sizeof(final_scale.e));
+	std::memcpy(final_payload.data(), final_codes.data(), final_codes.size());
+	std::memcpy(final_payload.data() + final_codes.size(), &final_scale.m, sizeof(final_scale.m));
+	std::memcpy(final_payload.data() + final_codes.size() + sizeof(final_scale.m), &final_scale.e, sizeof(final_scale.e));
+	const std::string final_hash = HashBytes(final_payload.data(), final_payload.size());
+	const std::string head_hash = HashBytes(logits.data(), logits.size() * sizeof(int32_t));
+	const std::string joined = status_hash + state_hash + hidden_hash + kv_hash + final_hash + head_hash;
+	const std::string aggregate = HashBytes(joined.data(), joined.size());
+	std::printf("forward_hash status=%s sequence_state=%s hidden=%s kv_rows=%s final_norm=%s output_head=%s aggregate=%s\n",
+	            status_hash.c_str(), state_hash.c_str(), hidden_hash.c_str(), kv_hash.c_str(),
+	            final_hash.c_str(), head_hash.c_str(), aggregate.c_str());
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
 	if (argc != 3 && argc != 4) {
-		std::fprintf(stderr, "usage: %s <model.sslm> <comma-separated-token-ids> [--gpu|--chunk|--gpu-chunk|--raw-k-cpu|--raw-k-gpu|--no-qnorm-cpu|--no-qnorm-gpu]\n", argv[0]);
+		std::fprintf(stderr, "usage: %s <model.sslm> <comma-separated-token-ids> [--gpu|--chunk|--gpu-chunk|--raw-k-cpu|--raw-k-gpu|--no-qnorm-cpu|--no-qnorm-gpu|--forward-hash|--forward-hash-gpu|--forward-hash-gpu-chunk]\n", argv[0]);
 		return 2;
 	}
 	const bool use_gpu = argc == 4 &&
-	                     (std::strcmp(argv[3], "--gpu") == 0 || std::strcmp(argv[3], "--gpu-chunk") == 0);
+	                     (std::strcmp(argv[3], "--gpu") == 0 || std::strcmp(argv[3], "--gpu-chunk") == 0 ||
+	                      std::strcmp(argv[3], "--forward-hash-gpu") == 0 || std::strcmp(argv[3], "--forward-hash-gpu-chunk") == 0);
 	const bool use_chunk = argc == 4 &&
-	                       (std::strcmp(argv[3], "--chunk") == 0 || std::strcmp(argv[3], "--gpu-chunk") == 0);
+	                       (std::strcmp(argv[3], "--chunk") == 0 || std::strcmp(argv[3], "--gpu-chunk") == 0 ||
+	                        std::strcmp(argv[3], "--forward-hash-gpu-chunk") == 0);
 	const bool raw_k = argc == 4 &&
 	                   (std::strcmp(argv[3], "--raw-k-cpu") == 0 || std::strcmp(argv[3], "--raw-k-gpu") == 0);
 	const bool raw_k_gpu = argc == 4 && std::strcmp(argv[3], "--raw-k-gpu") == 0;
 	const bool no_qnorm = argc == 4 &&
 	                      (std::strcmp(argv[3], "--no-qnorm-cpu") == 0 || std::strcmp(argv[3], "--no-qnorm-gpu") == 0);
 	const bool no_qnorm_gpu = argc == 4 && std::strcmp(argv[3], "--no-qnorm-gpu") == 0;
-	if (argc == 4 && !use_gpu && !use_chunk && !raw_k && !no_qnorm)
+	const bool forward_hash = argc == 4 &&
+	    (std::strcmp(argv[3], "--forward-hash") == 0 || std::strcmp(argv[3], "--forward-hash-gpu") == 0 ||
+	     std::strcmp(argv[3], "--forward-hash-gpu-chunk") == 0);
+	if (argc == 4 && !use_gpu && !use_chunk && !raw_k && !no_qnorm && !forward_hash)
 		return std::fprintf(stderr, "unknown option: %s\n", argv[3]), 2;
 	std::vector<int32_t> tokens;
 	if (!ParseTokenIds(argv[2], &tokens)) {
@@ -333,6 +384,8 @@ int main(int argc, char** argv) {
 	            static_cast<unsigned long long>(seq.k_normed_landing_saturation_count),
 	            static_cast<unsigned long long>(seq.rope_q_saturation_count),
 	            static_cast<unsigned long long>(seq.rope_k_saturation_count));
+	if (forward_hash) PrintForwardHash(forward_status, seq, hidden_codes, workspace, final_codes,
+	                                  ignored, logits);
 	if (use_gpu || raw_k_gpu || no_qnorm_gpu) {
 		std::vector<int8_t> signed_q(gpu_q_codes.begin(), gpu_q_codes.end());
 		PrintTraceDigest("gpu_q", signed_q, {});
