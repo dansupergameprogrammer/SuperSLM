@@ -177,30 +177,46 @@ def _qk_codes_for_real_prompt(model, prefix, tokens):
 def test_python_qwen3_direct_k_decodes_to_independent_float64_post_rope_quantity():
     """Real Qwen3 prompt IDs at layer 0 and a later QK-norm layer.
 
-    Measured against the preserved provisional cache: the worst measured
-    channel error is below 115 channel quanta; changing the landing exponent
-    by either one makes the same reading exceed 120 quanta.  The 120-quantum
-    bar is intentionally chosen from those measurements, rather than from the
-    integer implementation's own arithmetic.
+    The landing contract is ``clamp(round(float / quantum), -127, 127)``.
+    Its independent float64 population is split at the pre-clamp rounding
+    boundary (127.5 quanta), not at code 127: an unclipped 126.7-quantum
+    value correctly rounds to 127.  On the preserved provisional cache the
+    unclipped maximum is 0.501 quanta and the p99 is 0.495; 0.51 leaves a
+    float-rounding margin without fitting a saturation error.
     """
     cache = Path("D:/_t2698/qwen3-embedding-0.6b-provisional-cache")
     assert cache.is_dir(), f"missing real Qwen3 provisional cache: {cache}"
     model = artifact_cache.load_artifact(cache)
     cfg = model.config
     tokens = [9707, 151643]
-    bar_quanta = 120.0
+    unclipped_bound = 0.51
+    clipped_fraction_bounds = {"layer0": 0.011, f"layer{cfg.num_hidden_layers - 1}": 0.034}
     for prefix in ("layer0", f"layer{cfg.num_hidden_layers - 1}"):
         k_codes = _qk_codes_for_real_prompt(model, prefix, tokens)
         landed = pipeline._qk_direct_k_vector(model, prefix, k_codes, *model.rope_tables, len(tokens), 0)
         reference = _float64_post_rope_from_source(model, prefix, k_codes, range(len(tokens)))
         quantum = model.qk_channel_peaks[prefix] / 127.0
         decoded = landed.astype(np.float64) * quantum.reshape(1, *quantum.shape)
-        error_quanta = np.abs(decoded - reference) / quantum.reshape(1, *quantum.shape)
-        assert float(np.max(error_quanta)) < bar_quanta
+        quantum_view = quantum.reshape(1, *quantum.shape)
+        error_quanta = np.abs(decoded - reference) / quantum_view
+        float_quanta = np.abs(reference) / quantum_view
+        clipped = float_quanta >= 127.5
+        unclipped = ~clipped
+        assert float(np.max(error_quanta[unclipped])) <= unclipped_bound
+        assert float(np.quantile(error_quanta[unclipped], 0.99)) <= 0.50
+        assert float(np.mean(clipped)) <= clipped_fraction_bounds[prefix]
+        assert np.all(np.abs(landed[clipped]) == 127)
+        assert np.all(np.sign(landed[clipped]) == np.sign(reference[clipped]))
+        for position in range(len(tokens)):
+            for head in range(cfg.num_key_value_heads):
+                mask = unclipped[position, head]
+                cosine = np.dot(decoded[position, head][mask], reference[position, head][mask])
+                cosine /= np.linalg.norm(decoded[position, head][mask]) * np.linalg.norm(reference[position, head][mask])
+                assert float(cosine) >= 0.9999
         for exponent_delta in (-1, 1):
             wrong = landed.astype(np.float64) * (quantum * (2.0 ** exponent_delta)).reshape(1, *quantum.shape)
             wrong_error_quanta = np.abs(wrong - reference) / quantum.reshape(1, *quantum.shape)
-            assert float(np.max(wrong_error_quanta)) > bar_quanta
+            assert float(np.max(wrong_error_quanta[unclipped])) >= 57.0
 
 
 def _capture_report(path, model):
