@@ -243,18 +243,6 @@ def test_arm_d_per_head_calibration_produces_distinct_kv_head_scales():
 # Cell 2 -- softmax_khead regeneration (§31.4.4 row 2; pipeline.py:1917, 2061-2065)
 # ==============================================================================
 
-def test_today_softmax_khead_is_derived_from_the_layer_level_k_scale_standing_pin():
-    """GREEN standing pin: today's `softmax_khead{head}` constants (`pipeline.py:2064-2065`)
-    are both derived from the SAME layer-level `k_scale`, so they are identical across
-    heads -- the exact defect §31.4.1 names as "the single highest-value correctness
-    obligation this converter change carries"."""
-    pipeline = require(MODULE)
-    cfg = fixture_config(pipeline)
-    model = pipeline.fixture_model(cfg)
-    assert (model.composition_constants["layer0.softmax_khead0"]
-            == model.composition_constants["layer0.softmax_khead1"])
-
-
 def test_arm_d_softmax_khead_moves_with_only_its_own_head_scale():
     """§31.4.4 row 2: "Every `softmax_khead{head}` constant is derived from *that head's
     own* `k_scale`, not a layer-collapsed one, once any per-head calibration runs -- a

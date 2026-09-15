@@ -17,8 +17,8 @@ harmless.
 This file pins the instance RED (it fails at faef137 for exactly this reason, naming
 both peaks) and the CLASS it belongs to: one domain per consumed key, enumerated from
 the code at run time (`_derive_scales`'s own maxima reads), with `f"{prefix}.q` -- the
-same shape at :3195 -- dispositioned as a second instance, and `k_normed`'s deliberate
-pre/post-RoPE union (D-SLM6263/6264) kept GREEN as one domain by design.
+same shape at :3195 -- dispositioned as a second instance. QK-norm K is calibrated by the
+QKC1 channel table rather than a maxima key consumed by `_derive_scales`.
 
 The consumer domains are derived from `_derive_scales` (pipeline.py:2112-2332) and the
 C++ landings its site constants feed: K's raw accumulator lands through LandTokenKVRow
@@ -106,11 +106,6 @@ def _scaled_qk_norm_fixture(pipeline):
 # phase its domain does not span is an observation on a foreign tensor folded into the
 # key -- the class T-2604 localized, of which pipeline.py:3196 is the K instance.
 #
-# k_normed is ONE domain by design (D-SLM6263/6264): the engine lands the QK-normed K
-# once and `RopeApplySite` rotates the landed codes in place afterward, so that key's
-# landing scale must enclose the QK-normed K's pre- AND post-RoPE component peaks. Both
-# observations are on that one tensor; the cells keep them green and this entry says so.
-#
 # `q` and `k` are conditional domains. With QK-norm, their consumers land the RAW
 # projection outputs and the post-RoPE values are foreign, post-norm values. Without
 # QK-norm, the engine lands those raw codes and rotates them in place, so the same raw-key
@@ -152,13 +147,6 @@ _DOMAIN_TABLE = {
         {"pre_qk_norm"},
         "layer{L}.v_proj.requant / layer{L}.v_head{h}.scale, landed by LandTokenKVRow",
         "the raw v_proj output",
-    ),
-    "k_normed": (
-        {"post_qk_norm", "post_rope"},
-        "layer{L}.k_normed_head{h}.scale, landed by ApplyQkNormSite's second "
-        "LandingRescale and clamped by RopeApplySite after it rotates the landed codes",
-        "the QK-normed K, pre- and post-RoPE union -- ONE domain by design "
-        "(D-SLM6263/6264)",
     ),
     "attn_ctx": (
         {"post_rope"},
@@ -559,8 +547,8 @@ def test_every_consumed_maxima_key_is_observed_on_its_consumers_landing_domain(t
     observed. On the QK-norm fixture, `layer{L}.q` and `layer{L}.k` must stop at the raw
     projection; their post-RoPE values are foreign, post-norm tensors. On the real legacy
     fixture, the raw codes are rotated in place, so both projection and post-RoPE phases
-    are required. `k_normed`'s two observations (post_qk_norm AND post_rope) are both on
-    the QK-normed K, one domain by design (D-SLM6263/6264), and stay green."""
+    are required. QK-norm K is covered by its QKC1 channel authority, not by this
+    `_derive_scales` maxima-key table."""
     pipeline = require(MODULE)
     cfg, _, float_weight = _scaled_qk_norm_fixture(pipeline)
     cases = [("the QK-norm fixture", cfg, float_weight,
@@ -665,9 +653,8 @@ def test_every_derive_scales_consumed_key_carries_a_domain_assertion():
     them must carry an entry in the committed domain table -- and the table must carry
     nothing the code no longer consumes, so the list cannot rot in either direction. A
     consumed key with no domain assertion fails here by name; so does a tabled key that
-    stopped being consumed. `k_normed` drops out of both sets together on a checkpoint
-    without QK-norm (its consumption is presence-gated at pipeline.py:2253-2256), which
-    is why the fixture used here carries QK-norm."""
+    stopped being consumed. The fixture carries QK-norm so the enumeration also covers every
+    current fused-QK consumer."""
     pipeline = require(MODULE)
     cfg, weight_scales, float_weight = _scaled_qk_norm_fixture(pipeline)
     maxima, _ = _run_calibrate(pipeline, cfg, float_weight)
@@ -692,9 +679,7 @@ def test_every_derive_scales_consumed_key_carries_a_domain_assertion():
 # Mutation proofs: each loads a scratch restored-foreign-observation mutant -- a copy of
 # pipeline.py transformed in tmp_path, never committed, never touching the imported module
 # -- and shows the SAME shared predicate that is green on the corrected tree turns red.
-# Modeled on
-# test_k_normed_union_maxima_is_lost_under_the_post_rope_observation_deletion_mutant
-# (test_ask5_trackb_oracle_qk_norm_parity.py:562).
+# Modeled on the reference pipeline's scratch-mutant loading convention.
 # ==============================================================================
 
 
