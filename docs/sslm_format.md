@@ -56,7 +56,7 @@ All integers little-endian. Offsets are absolute from the start of the file.
 |      4 | `u32`      | `format_version`   | `== 2`                                      |
 |      8 | `u32`      | `header_bytes`     | `== 64`                                     |
 |     12 | `u32`      | `section_count`    | `<= 4096`                                   |
-|     16 | `u32`      | `flags`            | `& ~0x1 == 0` (bit 0: Option-G fused K-landing; every other bit reserved) |
+|     16 | `u32`      | `flags`            | `& ~0x7 == 0` (bit 0: Option-G fused K-landing; bit 1: DGC1; bit 2: QKC1; every other bit rejected) |
 |     20 | `u32`      | `reserved0`        | `== 0`                                      |
 |     24 | `u64`      | `file_bytes`       | `== actual file size`                       |
 |     32 | `u8[32]`   | `integrity_sha256` | SHA-256 of the file, these 32 bytes zeroed  |

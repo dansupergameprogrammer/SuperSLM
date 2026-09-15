@@ -146,9 +146,9 @@ bit 2 and a table; no-QK implies neither. The known mask is `0x7`; unknown bits 
 The table has four dense Int64 fields: binary64 source bits, target reciprocal, target
 exponent, and ratio. A non-QK row is canonical all zero.
 
-Validation order is structural/header and generic KVC checks; QK composition domain;
-bit/tensor/table/layer join; source binary64 domain; row domains; exact source-to-derived
-relations; then marshal. `QkChannelScaleSourceOutOfDomain`,
+Validation order is structural/header and generic KVC checks; QK bit/tensor/table/layer
+join; source binary64 and row domains; retired-key refusal; QK composition domain; exact
+source-to-derived relations; then marshal. `QkChannelScaleSourceOutOfDomain`,
 `QkChannelScaleRelationMismatch`, `QkChannelRatioUnderflow`,
 `QkChannelRatioOutOfDomain`, `LegacyFusedKMetadataPresent`, and
 `LegacyFusedKKeyPresent` are loud before marshal. `k_norm.m=0` never reaches a canonicalizer.

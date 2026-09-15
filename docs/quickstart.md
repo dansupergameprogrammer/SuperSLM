@@ -32,6 +32,12 @@ times (A/B/C, one shared prefix per pass), rebuilds the table from `max(float, A
 `max(float, A, B)`, verifies the final artifact, and writes every peak table plus pass-C clipping
 details to `<work>/flow-report.json` and `<work>/peak-tables.npz`.
 
+The resulting QK artifact carries the `QKC1` channel table and header flag bit 2 (`0x4`). Its
+source scales are serialized as exact binary64 bits; the landing reciprocal, exponent, ratio, and
+carried softmax scale are loader-checked derivations. A QK artifact containing retired fused-K
+metadata or keys is rejected. Do not reuse a QK artifact made by a pre-1.5.0 conversion tree:
+rerun this flow from the checkpoint when a replacement is required.
+
 ```
 python tools/t2700_fused_k_calibration.py flow \
   --checkpoint <path to HF checkpoint> \

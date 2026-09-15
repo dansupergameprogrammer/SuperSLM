@@ -143,7 +143,7 @@ const char* SslmStatusName(SslmStatus s) noexcept;
 // build loosens artifact.cpp's `flags != 0` check to
 // `flags & ~kKnownArtifactFlagsMask` and wires `flags_`/the accessor for
 // real. `kKnownArtifactFlagsMask` is every bit a legal artifact may set
-// (currently just the one flag); an unknown bit stays a BadHeader rejection
+// (currently the three flags below); an unknown bit stays a BadHeader rejection
 // under the loosened check (design's own "reject-over-degrade preserved").
 inline constexpr uint32_t kOptionGFusedKLandingFlag = 0x1u;
 // T-2199 Phase D1 (plan Sec8 D1, D-SLM3794): the damped-greedy decoder's own artifact-carried

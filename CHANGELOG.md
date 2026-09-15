@@ -6,6 +6,19 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 No user-visible changes yet.
 
+## [1.5.0] - 2026-09-15
+
+QK-norm artifact loading now has a complete `QKC1` source-to-derived contract. The loader
+requires bit 2 (`0x4`) and the `QkChannelTable` section exactly when the paired QK gains are
+present, validates each serialized binary64 source scale and its exact landing/ratio/carried-scale
+derivations, and refuses invalid magnitudes before CPU or GPU arithmetic can overflow.
+
+The obsolete fused-K metadata, KLR1 keys, WSC1 gain duplicates, nonlinear rows, telemetry, and
+GPU staging slots are retired from the QK path; their reserved GPU slots remain zero. The header's
+known-flags mask is `0x7` (Option-G, DGC1, and QKC1), documented and checked against the compiled
+contract by the test suite. Existing pre-1.5.0 QK artifacts must be reconverted from their source
+checkpoint; no replacement QK artifact is introduced by this release.
+
 ## [1.4.0] - 2026-09-03
 
 SuperSLM 1.4.0 adds end-to-end Qwen3/QK-norm support to conversion, calibration,
