@@ -3,6 +3,7 @@
 import os
 import struct
 import sys
+from dataclasses import replace
 
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -13,13 +14,22 @@ from reference_pipeline import pipeline as P  # noqa: E402
 
 
 def _model():
+    """DGC1 is independent of QK; retain the compact no-QK fixture."""
     cfg = P.ModelConfig(
         hidden_size=32, num_hidden_layers=2, num_attention_heads=4,
         num_key_value_heads=2, head_dim=8, intermediate_size=64, vocab_size=32,
         rope_theta=10000.0, rms_norm_eps=1e-6, tie_word_embeddings=True,
         context_cap=16,
     )
-    return P.fixture_model(cfg)
+    base = P.fixture_model(cfg)
+    return replace(
+        base,
+        weights={key: value for key, value in base.weights.items()
+                 if ".q_norm.gain" not in key and ".k_norm.gain" not in key},
+        weight_scales={key: value for key, value in base.weight_scales.items()
+                       if ".q_norm.gain" not in key and ".k_norm.gain" not in key},
+        composition_constants={key: value for key, value in base.composition_constants.items()
+                               if ".q_norm" not in key and ".k_norm" not in key})
 
 
 def test_default_conversion_remains_unflagged_and_has_no_dgc1_section():

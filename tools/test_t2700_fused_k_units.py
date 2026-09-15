@@ -32,8 +32,8 @@ from reference_pipeline import artifact_cache, intmath, pipeline  # noqa: E402
 
 def _fixture_qk_model():
     cfg = pipeline.ModelConfig(
-        hidden_size=32, num_hidden_layers=2, num_attention_heads=4,
-        num_key_value_heads=2, head_dim=8, intermediate_size=64, vocab_size=32,
+        hidden_size=256, num_hidden_layers=2, num_attention_heads=2,
+        num_key_value_heads=2, head_dim=128, intermediate_size=512, vocab_size=32,
         rope_theta=10000.0, rms_norm_eps=1e-6, tie_word_embeddings=True, context_cap=16)
     base = pipeline.fixture_model(cfg)
     weights = dict(base.weights)
@@ -57,11 +57,12 @@ def _fixture_qk_model():
 def _direct_fixture_observation(model):
     """A float-dimensional post-RoPE reference over the exact direct-K inputs."""
     cfg = model.config
-    k = np.asarray([
+    seed = np.asarray([
         [[17, -11, 31, -7, 13, -19, 23, -29], [-23, 29, -31, 11, -17, 7, 19, -13]],
         [[-37, 41, -43, 47, -53, 59, -61, 67], [71, -73, 79, -83, 89, -97, 101, -103]],
         [[107, -109, 113, -127, 97, -89, 83, -79], [-71, 67, -61, 59, -53, 47, -43, 41]],
     ], dtype=np.int64)
+    k = np.tile(seed, (1, 1, cfg.head_dim // seed.shape[-1]))
     cos, sin = model.rope_tables
     gain = model.weights["layer0.k_norm.gain"].astype(np.int64)
     wide = (pipeline._vec_rmsnorm(k.reshape(-1, cfg.head_dim), cfg.head_dim) * gain).reshape(k.shape)
@@ -110,8 +111,10 @@ def test_scalar_vector_full_fixture_still_agree_after_rotated_unit_fix():
 
 def test_converter_derives_qk_softmax_head_scale_from_qkc1_head_maximum():
     model = _fixture_qk_model()
-    peaks = {"layer0": np.array([[2.0] * 8, [6.0] * 8]),
-             "layer1": np.array([[3.0] * 8, [9.0] * 8])}
+    peaks = {"layer0": np.array([[2.0] * model.config.head_dim,
+                                  [6.0] * model.config.head_dim]),
+             "layer1": np.array([[3.0] * model.config.head_dim,
+                                  [9.0] * model.config.head_dim])}
     model = pipeline.with_provisional_qk_channel_table(model, peaks)
     sections, _ = converter.build_sections(model)
     payload = next(section.data for section in sections
@@ -267,7 +270,7 @@ lines = ['T2700_FUSED_K_CAPTURE_V1', 'summary\\tcallback_count\\t1000000',
          'layer\\thead\\tchannel\\traw_abs_peak\\twide_scale_m\\twide_scale_e\\treal_peak\\tlanding_saturation_count']
 for layer in range(2):
     for head in range(2):
-        for channel in range(8):
+        for channel in range(128):
             count = clipped if (layer, head, channel) == (0, 0, 0) else 0
             lines.append(f'{layer}\\t{head}\\t{channel}\\t1\\t{m}\\t{e}\\t{math.ldexp(float(m), e).hex()}\\t{count}')
 report.write_text('\\n'.join(lines) + '\\n', encoding='utf-8')

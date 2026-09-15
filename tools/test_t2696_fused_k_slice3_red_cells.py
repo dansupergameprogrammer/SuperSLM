@@ -28,8 +28,8 @@ import pipeline as reference_pipeline  # noqa: E402
 
 def _qk_model(channel_scales=None):
     cfg = reference_pipeline.ModelConfig(
-        hidden_size=32, num_hidden_layers=2, num_attention_heads=4,
-        num_key_value_heads=2, head_dim=8, intermediate_size=64, vocab_size=32,
+        hidden_size=256, num_hidden_layers=2, num_attention_heads=2,
+        num_key_value_heads=2, head_dim=128, intermediate_size=512, vocab_size=32,
         rope_theta=10000.0, rms_norm_eps=1e-6, tie_word_embeddings=True, context_cap=16)
     base = reference_pipeline.fixture_model(cfg)
     weights = dict(base.weights)
@@ -163,7 +163,7 @@ def test_q30_product_and_sum_boundaries():
 @pytest.mark.parametrize("ratio_side", ["below-2^-32", "at-2^-32"])
 def test_ratio_boundary_both_sides(ratio_side):
     source = 2.0 ** (-3 if ratio_side == "below-2^-32" else -2)
-    model = _qk_model([source] * 7 + [2.0 ** 30])
+    model = _qk_model([source] * 127 + [2.0 ** 30])
     if ratio_side == "below-2^-32":
         with pytest.raises(ValueError, match="QkChannelRatioUnderflow"):
             converter.build_qk_channel_table(model)
@@ -177,7 +177,7 @@ def test_k_ws1_28_layer_wide_source_scale_reproduction():
 
 
 def test_channel_landing_target_uses_c19_reciprocal_not_source_mantissa():
-    table = converter.build_qk_channel_table(_qk_model([1.0] * 8))
+    table = converter.build_qk_channel_table(_qk_model([1.0] * 128))
     assert table["k_channel_e_t"][0] == -30
     assert table["k_channel_r_t"][0] == 1 << 32
 
@@ -234,7 +234,7 @@ def test_k_rel1_rejects_incoherent_serialized_channel_relation():
     # The current product relation is QKC1-local: source-derived target and
     # Q31 ratio are validated by the converter before serialization.  There
     # is intentionally no legacy softmax_khead relation to validate.
-    table = converter.build_qk_channel_table(_qk_model([1.0] * 8))
+    table = converter.build_qk_channel_table(_qk_model([1.0] * 128))
     assert np.all(table["k_channel_ratio"] == 1 << 31)
 
 
