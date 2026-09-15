@@ -669,10 +669,10 @@ def forward_dynamic_logits_oracle(model, tokens) -> list:
                 out_scale[h][t] = carried_scale_product_oracle([c_norm, dfac])
         return out_rows, out_scale
 
-    def land_k_normed(rows, per_head_scale, targets):
+    def land_retired_k(rows, per_head_scale, targets):
         """(carried-scale delta §4, D-SLM6117, §7 Cell 3): K's SECOND landing -- each head's
         own post-norm (code, scale) pair (from `qk_norm_site_per_head`, above) requantized
-        onto the new static `k_normed` targets (`kv_targets`, above, over `kind="k_normed"`).
+        onto the new static `retired_k` targets (`kv_targets`, above, over `kind="retired_k"`).
         Unlike `land_kv` (above), the incoming scale differs PER HEAD, not once per row, since
         Q/K's per-head norm output genuinely differs by head (this delta's own §3 finding)."""
         out = []
@@ -717,7 +717,6 @@ def forward_dynamic_logits_oracle(model, tokens) -> list:
             m_kn, e_kn = model.composition_constants[f"{prefix}.k_norm"]
             m_wide, e_wide = canonical_scale_oracle(Fraction(127 * int(m_kn)) *
                                                      (Fraction(2) ** int(e_kn)))
-            e_wide -= 30
             gain = [int(v) for v in w[f"{prefix}.k_norm.gain"]]
             fused_rows = []
             for kvh in range(n_kv):
@@ -732,15 +731,15 @@ def forward_dynamic_logits_oracle(model, tokens) -> list:
         elif k_norm_present_here:
             # (carried-scale delta §4, D-SLM6117 -- supersedes this block's own pre-delta "K's own
             # norm output scale is DISCARDED" text, C2): K's post-norm codes requantize a SECOND
-            # time (`land_k_normed`, above), onto the new static `k_normed` per-head targets --
+            # time (`land_retired_k`, above), onto the new static `retired_k` per-head targets --
             # `kv_targets(..., s_ref=1)`: no weight-reference division, unlike the raw K path's own
             # `kv_targets(..., s_ref)` above, because the incoming (code, scale) pair here is
             # already complete and self-describing (the norm funnel's own output), not a wide,
             # weight-fold-relative accumulator.
             k_codes, k_norm_scale_per_head = qk_norm_site_per_head(
                 k_codes, f"{prefix}.k_norm", n_kv)
-            k_normed_targets = kv_targets(prefix, "k_normed", 1)
-            k_codes = land_k_normed(k_codes, k_norm_scale_per_head, k_normed_targets)
+            retired_k_targets = kv_targets(prefix, "retired_k", 1)
+            k_codes = land_retired_k(k_codes, k_norm_scale_per_head, retired_k_targets)
         v_codes = project_kv(prefix, "v_proj", "v", normed, normed_scale)
 
         def split(rows, head):
@@ -756,7 +755,7 @@ def forward_dynamic_logits_oracle(model, tokens) -> list:
         # softmax.input is per QUERY (C27/C30): S_q(i) x [S_k_head / sqrt(hd)] offline,
         # incoming carried q scale first (D-SLM57), then the C30 derivation.
         # (carried-scale delta §4, D-SLM6120): the static half switches from the raw k_head
-        # scale to the new k_normed_head scale when k_norm is present -- the engine now writes
+        # scale to the new retired_k_head scale when k_norm is present -- the engine now writes
         # K's stored codes at the new landing scale, so softmax_khead must describe that same
         # scale (closes C2). q_scale_per_head[h] carries this head's own genuinely distinct
         # per-position Q scale (closes C1) -- never the single pre-delta q_scale[i].
@@ -764,9 +763,14 @@ def forward_dynamic_logits_oracle(model, tokens) -> list:
         for h in range(n_heads):
             kvh = h // group
             if direct_qk:
-                c_sm = model.composition_constants[f"{prefix}.softmax_khead{kvh}"]
+                if prefix in model.qk_channel_peaks:
+                    source = model.qk_channel_peaks[prefix][kvh] / 127.0
+                else:
+                    source = model.weight_scales[f"{prefix}.k_norm.gain"]
+                c_sm = canonical_scale_oracle(
+                    Fraction(float(max(source))) / Fraction(_math.sqrt(hd)))
             else:
-                s_kh = kv_raw_scale(prefix, "k_normed" if k_norm_present_here else "k", kvh)
+                s_kh = kv_raw_scale(prefix, "retired_k" if k_norm_present_here else "k", kvh)
                 c_sm = canonical_scale_oracle(Fraction(s_kh) / Fraction(_math.sqrt(hd)))
             sm_consts.append([
                 _iexp_constants_from_scale(

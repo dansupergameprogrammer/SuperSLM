@@ -982,9 +982,59 @@ def _qk_channel_table_from_peaks(model: QuantizedModel, channel_peaks: dict) -> 
 def with_provisional_qk_channel_table(model: QuantizedModel, channel_peaks: dict) -> QuantizedModel:
     """Attach the same provisional table that the QKC1 writer serializes."""
     copied = {key: np.asarray(value, dtype=np.float64).copy() for key, value in channel_peaks.items()}
-    return dataclasses.replace(
-        model, qk_channel_peaks=copied,
-        qk_channel_table=_qk_channel_table_from_peaks(model, copied))
+    table = _qk_channel_table_from_peaks(model, copied)
+    constants = dict(model.composition_constants)
+    for prefix, peaks in copied.items():
+        for head in range(model.config.num_key_value_heads):
+            constants[f"{prefix}.softmax_khead{head}"] = canonical_scale(
+                Fraction(float(np.max(peaks[head] / 127.0))) /
+                Fraction(math.sqrt(model.config.head_dim)))
+    return dataclasses.replace(model, qk_channel_peaks=copied,
+                               qk_channel_table=table,
+                               composition_constants=constants)
+
+
+def _qk_table_for_layer(model: QuantizedModel, prefix: str) -> dict:
+    """Return QKC1's one authority, including for synthetic reference models.
+
+    Production-calibrated models carry post-RoPE peaks.  Small test fixtures
+    that add paired Q/K gains after calibration have no such capture; derive
+    their provisional source from the same K gain scale the converter's QKC1
+    writer uses when no peak capture is supplied.  Neither case revives a
+    tensor-wide retired-K or softmax metadata value.
+    """
+    table = model.qk_channel_table.get(prefix)
+    if table is not None:
+        return table
+    fallback_peaks = {}
+    for layer in range(model.config.num_hidden_layers):
+        layer_prefix = f"layer{layer}"
+        key = f"{layer_prefix}.k_norm.gain"
+        if key not in model.weights:
+            continue
+        scales = np.atleast_1d(np.asarray(model.weight_scales[key], dtype=np.float64))
+        if scales.size == 1:
+            scales = np.repeat(scales, model.config.head_dim)
+        if scales.shape != (model.config.head_dim,):
+            raise ValueError(f"{key} has {scales.shape}, expected ({model.config.head_dim},)")
+        fallback_peaks[layer_prefix] = np.tile(
+            scales * 127.0, (model.config.num_key_value_heads, 1))
+    return _qk_channel_table_from_peaks(model, fallback_peaks)[prefix]
+
+
+def _qk_softmax_khead_pair(model: QuantizedModel, prefix: str, head: int) -> tuple[int, int]:
+    """Derive the QK score's static B/sqrt(head_dim) pair from QKC authority."""
+    key = f"{prefix}.softmax_khead{head}"
+    if key in model.composition_constants:
+        return model.composition_constants[key]
+    if prefix in model.qk_channel_peaks:
+        source = np.asarray(model.qk_channel_peaks[prefix][head], dtype=np.float64) / 127.0
+    else:
+        source = np.atleast_1d(np.asarray(model.weight_scales[f"{prefix}.k_norm.gain"], dtype=np.float64))
+        if source.size == 1:
+            source = np.repeat(source, model.config.head_dim)
+    return canonical_scale(Fraction(float(np.max(source))) /
+                           Fraction(math.sqrt(model.config.head_dim)))
 
 
 def _qk_wide_source_scale(model: QuantizedModel, prefix: str) -> tuple[int, int]:
@@ -1009,7 +1059,7 @@ def _qk_direct_k_vector(model, prefix, k, cos_table, sin_table, steps, start):
     gain = model.weights[f"{prefix}.k_norm.gain"].astype(np.int64)
     wide = (_vec_rmsnorm(k.reshape(-1, cfg.head_dim), cfg.head_dim) * gain).reshape(k.shape)
     rotated = _vec_rope(wide, cos_table, sin_table, steps, start)
-    table = model.qk_channel_table[prefix]
+    table = _qk_table_for_layer(model, prefix)
     m_wide, e_wide = _qk_post_rope_wide_scale(model, prefix)
     out = np.empty(rotated.shape, dtype=np.int64)
     for token in range(steps):
@@ -1035,8 +1085,11 @@ def _qk_q31_scores_vector(q, k, ratios):
 
 def _qk_direct_softmax_scale(model, prefix, kv_head):
     """The QK score's `S_q * B_h / sqrt(head_dim)` physical input scale."""
-    q_scale = Fraction(float(model.weight_scales[f"{prefix}.q_norm.gain"][0]))
-    source = model.qk_channel_peaks[prefix][kv_head] / 127.0
+    q_scale = Fraction(float(np.atleast_1d(model.weight_scales[f"{prefix}.q_norm.gain"])[0]))
+    if prefix in model.qk_channel_peaks:
+        source = model.qk_channel_peaks[prefix][kv_head] / 127.0
+    else:
+        source = np.atleast_1d(model.weight_scales[f"{prefix}.k_norm.gain"])
     return float(q_scale * Fraction(float(np.max(source))) / Fraction(math.sqrt(model.config.head_dim)))
 
 
@@ -2415,6 +2468,7 @@ def _derive_scales(cfg: ModelConfig, maxima, weight_scales, float_biases):
         # `1 / (1 << NORM_FRAC_BITS)`.
         q_norm_present = f"{prefix}.q_norm.gain" in weight_scales
         k_norm_present = f"{prefix}.k_norm.gain" in weight_scales
+        fused_qk = q_norm_present and k_norm_present
         if q_norm_present:
             add_rescale(f"{prefix}.q_norm.requant", 1.0 / (1 << NORM_FRAC_BITS))
             # (design §3, T-2551's own C++ ApplyQkNormSite: "writing the new carried
@@ -2429,7 +2483,7 @@ def _derive_scales(cfg: ModelConfig, maxima, weight_scales, float_biases):
             q_scale = gain_of(f"{prefix}.q_norm.gain")
         # Fused-QK lands directly from the exact QKC1 channel table after
         # wide RoPE.  The retired tensor-wide K domain has no requant row or
-        # k_normed_head static scale.
+        # retired-K_head static scale.
 
         # C27's A-3-pinned per-head KV landing surface: static per-head scales as
         # nonlinear entries, constants of the artifact (D-SLM5's discipline on the
@@ -2439,7 +2493,7 @@ def _derive_scales(cfg: ModelConfig, maxima, weight_scales, float_biases):
         for head in range(cfg.num_key_value_heads):
             nonlinear.append((f"{prefix}.k_head{head}.scale", k_scale))
             nonlinear.append((f"{prefix}.v_head{head}.scale", v_scale))
-        if not k_norm_present:
+        if not fused_qk:
             nonlinear.append(
                 (f"{prefix}.softmax.input", q_scale * k_scale / math.sqrt(cfg.head_dim)))
 
@@ -2546,10 +2600,10 @@ def _derive_composition_constants(cfg: ModelConfig, weight_scales, scales: Stati
 
     (carried-scale delta §4, D-SLM6117/D-SLM6119; M9, T-2564,
     Claude/Poirot/36185a3-t2563-trackb-rebuild-review.md): the fourth per-KV-head landing
-    pair this function also computes (`k_normed_head{h}`, below) reads its own scale from
-    `scales` — `StaticScales.scale(f"{prefix}.k_normed_head0.scale")`, the value
+    pair this function also computes (`retired-K-head`, below) reads its own scale from
+    `scales` — `StaticScales.scale(f"{prefix}.retired-K-head scale")`, the value
     `_derive_scales` already stores there — rather than deriving it a second time from the
-    raw calibration peaks. `_derive_scales` DOES turn `k_normed` into a `StaticScales`
+    raw calibration peaks. `_derive_scales` DOES turn `retired-K` into a `StaticScales`
     site (its `nonlinear` entry for that same key); this function therefore takes no
     `maxima` parameter of its own.
     """
@@ -2602,7 +2656,8 @@ def _derive_composition_constants(cfg: ModelConfig, weight_scales, scales: Stati
         r_t_k = intmath.dynamic_scale_reciprocal(m_t_k)
         r_t_v = intmath.dynamic_scale_reciprocal(m_t_v)
 
-        k_norm_present = f"{prefix}.k_norm.gain" in weight_scales
+        k_norm_present = (f"{prefix}.q_norm.gain" in weight_scales and
+                          f"{prefix}.k_norm.gain" in weight_scales)
 
         for head in range(cfg.num_key_value_heads):
             kv_landing[f"{prefix}.k_head{head}"] = canonical_scale(Fraction(k_scale))
@@ -2613,7 +2668,7 @@ def _derive_composition_constants(cfg: ModelConfig, weight_scales, scales: Stati
             # offline canonical constant per kv head; the per-QUERY S_q(i) composes in
             # at runtime, incoming-first (D-SLM57).
             # (carried-scale delta §4, D-SLM6120): switches its input from the raw, pre-norm
-            # k_scale to the new post-norm k_normed_scale when k_norm is present -- this single
+            # k_scale to the new post-norm retired-K_scale when k_norm is present -- this single
             # substitution is what closes C2 (the review this delta answers): the engine now
             # writes K's stored codes at the new landing scale, and softmax_khead now describes
             # that same scale, so writer and reader agree. Unaffected when k_norm is absent --
@@ -2977,10 +3032,10 @@ def calibrate_kv_landing_arm(cfg: ModelConfig, float_weight, records, tokenize, 
     # own "structural, not merely stated" precedent immediately below. Scoped to the
     # `"per_head"` arms (C/D/E) ONLY: Minor 2's own finding is that Arms C/D/E's per-head
     # policy schema (`_kv_calibration_capture`'s own, separate capture) labels a post-norm
-    # capture under raw-K keys and emits no `k_normed_head{h}` entry. Arms A/B
+    # capture under raw-K keys and emits no `retired-K-head` entry. Arms A/B
     # (`"per_layer"`) reuse the EXISTING production `_calibrate`/`_derive_scales`/
     # `_derive_composition_constants` path unchanged -- the SAME path Significant 1's own
-    # union-observation fix (`_float_layer`'s two `k_normed` `_observe` calls, above) already
+    # union-observation fix (`_float_layer`'s two `retired-K` `_observe` calls, above) already
     # makes QK-norm-correct, so rejecting A/B here would refuse a checkpoint those arms
     # already handle correctly, contradicting the fix this same round lands. `weight_scales`
     # is the SAME presence surface `_derive_scales` already reads (`f"{prefix}.q_norm.gain"
@@ -2998,7 +3053,7 @@ def calibrate_kv_landing_arm(cfg: ModelConfig, float_weight, records, tokenize, 
                 f"calibrate_kv_landing_arm: arm {arm!r} does not support a QK-norm checkpoint "
                 f"(q_norm.gain and/or k_norm.gain present at layer(s) {qk_norm_layers}) -- Arms "
                 f"C/D/E's own per-head policy schema carries only the raw pre-RoPE K domain and "
-                f"emits no k_normed_head{{h}} entry; the 1.4.0 loader requires that entry on "
+                f"emits no retired-K_head{{h}} entry; the 1.4.0 loader requires that entry on "
                 f"every QK-norm layer. Owed to a later ticket."
             )
     if eval_ids is not None:
@@ -3121,7 +3176,7 @@ class CalibrationArmDoesNotSupportQkNorm(ValueError):
     own `k_pre`/`k_post` already gathers is read into `kv_landing`/`kv_reciprocals`/
     `softmax_khead` under the RAW `k_head{h}` keys (T-2551's own QK-norm call site made that
     capture post-norm without widening this function's own output schema to match), and no
-    `k_normed_head{h}` entry is ever emitted -- the entry `MarshalLayer` requires on every
+    `retired-K-head` entry is ever emitted -- the entry `MarshalLayer` requires on every
     QK-norm layer (§4/§6 Track B). Refused rather than silently mislabeled, until the per-head
     policy schema carries both domains (owed to a later ticket). The `"per_layer"` arms (A/B)
     are NOT gated by this exception -- they reuse the existing production
@@ -3499,7 +3554,7 @@ def _float_layer(cfg, tensors, hidden, maxima, prefix, *, position_offset=0,
     # (carried-scale delta §4, D-SLM6117/D-SLM6119, corrected per the external review
     # `Claude/External/superslm-1p4p0-2026-09-02.md` Significant 1 and D-SLM6263): a THIRD,
     # dedicated key, observed TWICE under a running max -- once here, post-norm/pre-RoPE, and
-    # again below, post-norm/post-RoPE -- so `maxima[f"{prefix}.k_normed"]` holds the UNION of
+    # again below, post-norm/post-RoPE -- so `maxima[f"{prefix}.retired-K"]` holds the UNION of
     # both component-wise peaks, which is what the engine's static landing scale must enclose.
     # RoPE preserves a rotated pair's L2 norm, not the component-wise maximum an int8 scale is
     # chosen from: for a pair (x, y), either rotated output component can reach
@@ -3522,16 +3577,16 @@ def _float_layer(cfg, tensors, hidden, maxima, prefix, *, position_offset=0,
     # side, never the transform's own output range).
     q = _float_rope(q, cfg.rope_theta, position_offset)
     k = _float_rope(k, cfg.rope_theta, position_offset)
-    # QK-norm creates a separate post-norm K landing domain (`k_normed`), so raw Q/K
+    # QK-norm creates a separate post-norm K landing domain (`retired-K`), so raw Q/K
     # stay on the pre-norm projection domain there.  Without QK-norm, the engine lands
     # those raw codes and then rotates them in place; their calibration domain therefore
     # includes the RoPE image as well as the projection output.
     if not _has_qk_norm(tensors, prefix):
         _observe(maxima, f"{prefix}.q", q)
         _observe(maxima, f"{prefix}.k", k)
-    # (D-SLM6263): the k_normed key's SECOND observation, post-RoPE -- the running max above
+    # (D-SLM6263): the retired-K key's SECOND observation, post-RoPE -- the running max above
     # folds this into the union with the pre-RoPE peak already captured, closing Significant 1.
-    # The engine requantizes K onto this artifact's static k_normed_head{h} scale BEFORE RoPE
+    # The engine requantizes K onto this artifact's static retired-K-head scale BEFORE RoPE
     # (`forward_sites.cpp`'s K/V landing block, before `ApplyQkNormSite`'s K branch), then
     # `RopeApplySite` rotates and clamps the landed codes to [-127, 127] afterward -- the union
     # observed here is what makes that later clamp's own domain the one the calibration
@@ -3980,13 +4035,7 @@ def _vec_forward(model, tokens, reader, layer_outputs=None, attention_outputs=No
                 reader, f"{prefix}.q_norm.requant"))
             q = q_flat.reshape(steps, cfg.num_attention_heads, cfg.head_dim)
         k_norm_gain = model.weights.get(f"{prefix}.k_norm.gain")
-        direct_qk = k_norm_gain is not None and prefix in model.qk_channel_table
-        if k_norm_gain is not None and not direct_qk:
-            k_flat = k.reshape(-1, cfg.head_dim)
-            k_flat = _clamp_int8(_rescale(
-                _vec_rmsnorm(k_flat, cfg.head_dim) * k_norm_gain.astype(np.int64),
-                reader, f"{prefix}.k_norm.requant"))
-            k = k_flat.reshape(steps, cfg.num_key_value_heads, cfg.head_dim)
+        direct_qk = k_norm_gain is not None
 
         q = _clamp_int8(_vec_rope(q, cos_table, sin_table, steps, start))
         k = (_qk_direct_k_vector(model, prefix, k, cos_table, sin_table, steps, start)
@@ -4003,7 +4052,7 @@ def _vec_forward(model, tokens, reader, layer_outputs=None, attention_outputs=No
             if direct_qk:
                 scores = _qk_q31_scores_vector(
                     q[:, head, :], k[:, kv_head, :],
-                    model.qk_channel_table[prefix]["ratio"][kv_head])
+                    _qk_table_for_layer(model, prefix)["ratio"][kv_head])
                 probabilities = _vec_softmax(
                     scores, mask, _qk_direct_softmax_scale(model, prefix, kv_head))
             else:
@@ -4391,7 +4440,7 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None,
         q_scale_by_head = [list(q_scale) for _ in range(cfg.num_attention_heads)]
         q_norm_gain_tensor = model.weights.get(f"{prefix}.q_norm.gain")
         k_norm_gain_tensor = model.weights.get(f"{prefix}.k_norm.gain")
-        direct_qk = k_norm_gain_tensor is not None and prefix in model.qk_channel_table
+        direct_qk = k_norm_gain_tensor is not None
         if q_norm_gain_tensor is not None:
             q_norm_gain_codes = [int(v) for v in q_norm_gain_tensor.tolist()]
             for t in range(steps):
@@ -4418,7 +4467,7 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None,
         k_norm_gain_codes = (None if k_norm_gain_tensor is None else
                              [int(v) for v in k_norm_gain_tensor.tolist()])
         if direct_qk:
-            qk_table = model.qk_channel_table[prefix]
+            qk_table = _qk_table_for_layer(model, prefix)
             m_wide, e_wide = _qk_post_rope_wide_scale(model, prefix)
         k_heads_codes = [[] for _ in range(num_kv_heads)]
         v_heads_codes = [[] for _ in range(num_kv_heads)]
@@ -4462,7 +4511,7 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None,
                 # entry (via _chain_record, below), separate from the "k_proj.requant" entry
                 # above -- one entry per real composition step, matching every other site in this
                 # function. The post-norm codes then requantize a SECOND time (below), onto the
-                # new static k_normed_head{h} target -- this closes C2: softmax_khead (below)
+                # new static retired-K-head target -- this closes C2: softmax_khead (below)
                 # reads that same new scale, so writer and reader agree.
                 if direct_qk:
                     total = sum(v * v for v in landed)
@@ -4482,19 +4531,6 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None,
                     # rather than through RequantChainChecked.  Do not fabricate partial
                     # Python chain records for it; a trace must contain precisely the
                     # fields the C++ trace hook emits for the same site.
-                elif k_norm_gain_tensor is not None:
-                    total = sum(v * v for v in landed)
-                    root = max(intmath.i_sqrt((total << (2 * NORM_FRAC_BITS)) // head_dim), 1)
-                    wide = [((landed[i] << (2 * NORM_FRAC_BITS)) // root) * k_norm_gain_codes[i]
-                            for i in range(head_dim)]
-                    normed_codes, k_norm_scale = _chain_record(
-                        f"{prefix}.k_norm", t, wide, [], trace)
-                    normed_codes = [max(-127, min(127, c)) for c in normed_codes]
-                    m_kn_a, e_kn_a = k_norm_scale
-                    _m_kn_t, e_kn_t, r_kn_t = model.kv_landing_reciprocals[
-                        f"{prefix}.k_normed_head{head}"]
-                    landed = [max(-127, min(127, intmath.residual_reconcile(
-                        int(c), m_kn_a, r_kn_t, e_kn_a, e_kn_t))) for c in normed_codes]
                 k_heads_codes[head].append(landed)
                 m_target_v, e_target_v = model.kv_landing_scales[f"{prefix}.v_head{head}"]
                 m_t_v, e_t_v, r_t_v = model.kv_landing_reciprocals[f"{prefix}.v_head{head}"]
@@ -4532,7 +4568,9 @@ def forward_dynamic(model: QuantizedModel, tokens, cache=None, trace=None,
             kv_head = head // group
             keys = k_heads[kv_head]
             values = v_heads[kv_head]
-            softmax_static = model.composition_constants[f"{prefix}.softmax_khead{kv_head}"]
+            softmax_static = (_qk_softmax_khead_pair(model, prefix, kv_head)
+                               if direct_qk else
+                               model.composition_constants[f"{prefix}.softmax_khead{kv_head}"])
             if direct_qk:
                 ratios = qk_table["ratio"][kv_head]
                 scores = [[intmath.rounding_divide_by_pot(
@@ -4866,16 +4904,15 @@ def _scalar_forward(model, tokens, reader):
             return out
 
         q = apply_qk_norm_scalar(q, cfg.num_attention_heads, f"{prefix}.q_norm")
-        direct_qk = (f"{prefix}.k_norm.gain" in model.weights and
-                     prefix in model.qk_channel_table)
-        if not direct_qk:
+        direct_qk = f"{prefix}.k_norm.gain" in model.weights
+        if f"{prefix}.k_norm.gain" not in model.weights:
             k = apply_qk_norm_scalar(k, cfg.num_key_value_heads, f"{prefix}.k_norm")
 
         q_heads = [_scalar_clamp(rotate(split(q, h))) for h in range(cfg.num_attention_heads)]
         if direct_qk:
             gain = [int(v) for v in model.weights[f"{prefix}.k_norm.gain"].tolist()]
             m_wide, e_wide = _qk_post_rope_wide_scale(model, prefix)
-            table = model.qk_channel_table[prefix]
+            table = _qk_table_for_layer(model, prefix)
             k_heads = []
             for head in range(cfg.num_key_value_heads):
                 raw = split(k, head)
