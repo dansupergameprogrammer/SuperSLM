@@ -35,6 +35,7 @@ DO import the spike, are not: .github/workflows/tests.yml's own comment).
 """
 
 import math
+import re
 import unicodedata
 
 import numpy as np
@@ -62,6 +63,46 @@ class ConverterValidationError(ValueError):
     def __init__(self, code, message):
         self.code = code
         super().__init__(f"{code}: {message}")
+
+
+_RETIRED_QK_REQUANT = re.compile(r"^layer(?P<layer>0|[1-9][0-9]*)\.k_norm\.requant$")
+_RETIRED_QK_HEAD_SCALE = re.compile(
+    r"^layer(?P<layer>0|[1-9][0-9]*)\.k_normed_head(?:0|[1-9][0-9]*)\.scale$")
+_RETIRED_QK_SOFTMAX_INPUT = re.compile(
+    r"^layer(?P<layer>0|[1-9][0-9]*)\.softmax\.input$")
+
+
+def reject_retired_qk_static_scales(model):
+    """Apply the §10 converter-input retirement boundary before serialization.
+
+    In a model carrying any paired Q/K gain, old K requant and per-head
+    K-normalized scale metadata are retired on every layer. The only
+    layer-local compatibility exception is ``softmax.input`` on a layer
+    without paired Q/K gains.
+    """
+    def has_paired_qk_gains(layer):
+        prefix = f"layer{layer}"
+        return (f"{prefix}.q_norm.gain" in model.weight_scales and
+                f"{prefix}.k_norm.gain" in model.weight_scales)
+
+    carries_fused_qk = any(has_paired_qk_gains(layer)
+                            for layer in range(model.config.num_hidden_layers))
+    if not carries_fused_qk:
+        return
+    names = [site.name for site in getattr(model.scales, "requant", ())]
+    names.extend(name for name, _scale in getattr(model.scales, "nonlinear", ()))
+    for name in sorted(names):
+        requant = _RETIRED_QK_REQUANT.fullmatch(name)
+        head_scale = _RETIRED_QK_HEAD_SCALE.fullmatch(name)
+        softmax = _RETIRED_QK_SOFTMAX_INPUT.fullmatch(name)
+        if requant is not None or head_scale is not None:
+            raise ConverterValidationError(
+                "LegacyFusedKMetadataPresent",
+                f'fused-QK conversion input contains retired StaticScales key "{name}"')
+        if softmax is not None and has_paired_qk_gains(softmax["layer"]):
+            raise ConverterValidationError(
+                "LegacyFusedKMetadataPresent",
+                f'fused-QK conversion input contains retired StaticScales key "{name}"')
 
 
 def _reject(code, message):
@@ -291,6 +332,7 @@ def validate_model(model, *, fold_ops_tensor, ctx_fold_tensor, unicode_major=15,
     check_required_groups(model)
     check_config_geometry(model.config)
     check_fused_k_head_dim(model)
+    reject_retired_qk_static_scales(model)
 
     cfg = model.config
 

@@ -58,35 +58,12 @@ def artifact_flags_for_model(model, *, option_g=False, enable_damped_greedy=Fals
     return flags
 
 
-_RETIRED_QK_REQUANT = re.compile(r"^layer(?P<layer>0|[1-9][0-9]*)\.k_norm\.requant$")
-_RETIRED_QK_NONLINEAR = re.compile(
-    r"^layer(?P<layer>0|[1-9][0-9]*)\.(?:k_normed_head(?:0|[1-9][0-9]*)\.scale|softmax\.input)$")
 _QK_GAIN_WSC = re.compile(r"^layer(?:0|[1-9][0-9]*)\.(?:q_norm|k_norm)\.gain$")
 
 
 def reject_retired_qk_static_scales(model):
-    """Refuse retired StaticScales names before section construction.
-
-    Retirement is layer-local: a no-QK layer's ``softmax.input`` remains
-    compatibility metadata even when another layer carries paired Q/K gains.
-    """
-    def has_paired_qk_gains(layer):
-        prefix = f"layer{layer}"
-        return (f"{prefix}.q_norm.gain" in model.weight_scales and
-                f"{prefix}.k_norm.gain" in model.weight_scales)
-
-    for site in getattr(model.scales, "requant", ()):
-        match = _RETIRED_QK_REQUANT.fullmatch(site.name)
-        if match is not None and has_paired_qk_gains(match["layer"]):
-            raise V.ConverterValidationError(
-                "LegacyFusedKMetadataPresent",
-                f'fused-QK conversion input contains retired StaticScales key "{site.name}"')
-    for name, _scale in getattr(model.scales, "nonlinear", ()):
-        match = _RETIRED_QK_NONLINEAR.fullmatch(name)
-        if match is not None and has_paired_qk_gains(match["layer"]):
-            raise V.ConverterValidationError(
-                "LegacyFusedKMetadataPresent",
-                f'fused-QK conversion input contains retired StaticScales key "{name}"')
+    """Compatibility wrapper; validation owns the retirement boundary."""
+    V.reject_retired_qk_static_scales(model)
 
 
 def _round_nearest_away(numerator, denominator):

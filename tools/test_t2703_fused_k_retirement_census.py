@@ -10,11 +10,10 @@ renamed second landing is still a reader even if no serialized key survives.
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 
 _ROOT = Path(__file__).resolve().parents[1]
-_SEARCH_ROOTS = ("src", "include", "tools", "tests", "docs")
-_SOURCE_SUFFIXES = {".cpp", ".h", ".hpp", ".hlsl", ".hlsli", ".py", ".md"}
 _TERMS = (
     "k_normed" + "_head", ".k_normed", "k_norm" + ".requant",
     "softmax" + ".input", "k_norm" + "_landing", "QK_NORM_K_" + "STAGE",
@@ -24,6 +23,10 @@ _TERMS = (
 _ACTIVE_READER_TERMS = ("land" + "_" + "retired" + "_k", "retired" + "_k")
 _REFUSAL_ANCHOR = ("src/model.cpp", "k_normed" + "_head")
 _HISTORICAL_REFERENCE = "tests/reference/superslm_spike/pipeline.py"
+_HISTORICAL_TEXT = {
+    "CHANGELOG.md",  # release history records retired pre-1.5 spellings
+    _HISTORICAL_REFERENCE,
+}
 _COVERAGE_TEXT = {
     "tools/reference_pipeline/tests/test_armd_arme_kv_calibration.py",
     "tools/reference_pipeline/tests/test_pipeline.py",
@@ -32,12 +35,22 @@ _COVERAGE_TEXT = {
 
 
 def _sources():
-    return {
-        path.relative_to(_ROOT).as_posix(): path.read_text(encoding="utf-8")
-        for directory in _SEARCH_ROOTS
-        for path in (_ROOT / directory).rglob("*")
-        if path.is_file() and path.suffix in _SOURCE_SUFFIXES
-    }
+    """Every UTF-8 tracked file; new text suffixes enter without a whitelist."""
+    tracked = subprocess.run(["git", "ls-files", "-z"], cwd=_ROOT, check=True,
+                             capture_output=True).stdout.split(b"\0")
+    sources = {}
+    for encoded in tracked:
+        if not encoded:
+            continue
+        relative_path = encoded.decode("utf-8")
+        payload = (_ROOT / relative_path).read_bytes()
+        if b"\0" in payload:
+            continue
+        try:
+            sources[relative_path] = payload.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+    return sources
 
 
 def _allowlisted(relative_path: str, term: str) -> bool:
@@ -46,6 +59,8 @@ def _allowlisted(relative_path: str, term: str) -> bool:
         return term in {"k_normed" + "_head", ".k_normed"}  # exact KLR1 refusal recognizer
     if relative_path == "tools/convert_model.py":
         return term in {"k_normed" + "_head", "k_norm" + ".requant", "softmax" + ".input"}
+    if relative_path == "tools/sslm_convert_validate.py":
+        return term in {"k_normed" + "_head", ".k_normed", "k_norm" + ".requant", "softmax" + ".input"}
     if relative_path == "tools/reference_pipeline/pipeline.py":
         return term == "softmax" + ".input"  # live no-QK compatibility branch
     if relative_path == "tools/reference_pipeline/tests/composition_ref.py":
@@ -54,6 +69,8 @@ def _allowlisted(relative_path: str, term: str) -> bool:
         return True  # normative retirement disposition, not an executable reader
     if relative_path == _HISTORICAL_REFERENCE:
         return True  # frozen pre-repair historical reference
+    if relative_path == "CHANGELOG.md":
+        return True  # root-level immutable release history
     if relative_path in _COVERAGE_TEXT:
         return True  # named coverage text; active-reader rule remains independent
     if relative_path == "tools/test_t2703_qkc_relation_loader.py":
@@ -88,7 +105,7 @@ def _active_reader_hits(sources):
 
 def test_retired_fused_k_source_census_is_exhaustive_and_classified():
     sources = _sources()
-    assert set(_SEARCH_ROOTS).issubset({Path(path).parts[0] for path in sources})
+    assert "CHANGELOG.md" in sources  # root-level history is census population, not invisible
     assert not _unclassified_legacy_hits(sources)
     assert not _active_reader_hits(sources)
 
@@ -108,4 +125,13 @@ def test_retirement_census_rejects_a_restored_oracle_reader():
     oracle = "tools/reference_pipeline/tests/composition_ref.py"
     sources[oracle] += "\n" + "def land" + "_" + "retired" + "_k(rows):\n    return rows\n"
     assert any(hit.startswith(f"{oracle}:") and hit.endswith(":" + _ACTIVE_READER_TERMS[0])
+               for hit in _active_reader_hits(sources))
+
+
+def test_retirement_census_rejects_a_restored_root_level_ps1_reader():
+    """R3a vitality: a formerly omitted suffix and root level are both live."""
+    sources = _sources()
+    restored = "CENSUS_VITALITY.ps1"
+    sources[restored] = "function land" + "_retired" + "_k($rows) { return $rows }\n"
+    assert any(hit.startswith(f"{restored}:") and hit.endswith(":" + _ACTIVE_READER_TERMS[0])
                for hit in _active_reader_hits(sources))
