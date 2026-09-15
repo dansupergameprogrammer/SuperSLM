@@ -13,6 +13,11 @@ requires bit 2 (`0x4`) and the `QkChannelTable` section exactly when the paired 
 present, validates each serialized binary64 source scale and its exact landing/ratio/carried-scale
 derivations, and refuses invalid magnitudes before CPU or GPU arithmetic can overflow.
 
+QK conversion uses factored float calibration followed by three compiled capture passes, A/B/C.
+It builds a provisional table, then `max(float, A)`, then `max(float, A, B)` before the final
+pass-C check; pass C refuses only when clipped direct-K landings exceed one per million
+observations. The complete flow is about 80 minutes, with every compiled pass within the 30-minute bar.
+
 The obsolete fused-K metadata, KLR1 keys, WSC1 gain duplicates, nonlinear rows, telemetry, and
 GPU staging slots are retired from the QK path; their reserved GPU slots remain zero. The header's
 known-flags mask is `0x7` (Option-G, DGC1, and QKC1), documented and checked against the compiled

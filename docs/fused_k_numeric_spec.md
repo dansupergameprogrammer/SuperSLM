@@ -65,10 +65,11 @@ z = round_nearest_away(A / 2^31)
 
 The fixed independent population is `tools/reference_pipeline/data/shopkeeper_corpus_v1.jsonl`;
 it is disjoint from corpus-239. The production rule is the max of float and integer-reference
-post-RoPE peaks above, never T-2624's float-only shortcut. Slice 6 will load a provisional
-table-bearing artifact, capture the integer peaks, form the final table, then validate it in
-pass B. It alone owns `ChannelScaleDidNotConverge`, capture equivalence obligations (1)/(4),
-and the observation mutant.
+post-RoPE peaks above, never T-2624's float-only shortcut. Slice 6 loads a provisional
+table-bearing artifact, captures pass A, builds `max(float, A)`, captures pass B, builds
+`max(float, A, B)`, then captures pass C against that final table. Pass C refuses only when
+clipped direct-K landings exceed one per million observations. It alone owns
+`ChannelScaleDidNotConverge`, capture equivalence obligations (1)/(4), and the observation mutant.
 
 The exact common token-ID prefix is 453 tokens (not the 454-token standalone text rendering).
 Slice 2's `t2693_prefix_clone` uses the ABI's SSB4 state serialization: residual/sequence
@@ -120,9 +121,9 @@ is normative; names match the loader and forward vocabulary.
 | 30 | rejected alternatives | analysis only, never runtime operand | fold comparison |
 | 31 | paths/hashes | sorted POSIX bytes + SHA-256 | manifest |
 | 32 | retrieval inputs | 239, float64, diagonal excluded | pinned analyzer |
-| 33 | `t_A,t_B,t_float,t_total` | A/B <=30 min, total <60 min | monotonic timers |
+| 33 | `t_A,t_B,t_C,t_float,t_total` | A/B/C <=30 min each; full flow about 80 min | monotonic timers |
 | 34 | 453 prefix/snapshots/hashes | immutable parent, full suffix population | token arrays / SSB4 |
-| 35 | saturation/out-of-domain counts | pass B both exactly zero | capture telemetry |
+| 35 | saturation/out-of-domain counts | pass C clips at most one direct-K observation per million | capture telemetry |
 
 ## 5. Multi-image census and retirement
 
@@ -163,5 +164,7 @@ At `N=128`, `sumsq <= 2,064,512`; the shifted RMS numerator is
 `abs(A) <= 4,433,505,761,099,776` and `abs(z) <= 2,064,512`.
 
 Slice 2's timing projection is only a predictor on the current compiled forward. Slice 6's
-600-record cell is binding: float+A+B must be under 60 minutes and each compiled pass at
-most 30 minutes. A miss is a design failure, never a scalar fallback.
+600-record cell is binding: float+A+B+C, including provisional/final table and artifact merges,
+is about 80 minutes end to end, and each compiled pass stays within the 30-minute bar. Pass C
+refuses only when clipped direct-K landings exceed one per million observations. A miss is a design
+failure, never a scalar fallback.

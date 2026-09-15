@@ -51,7 +51,7 @@ python tools/t2700_fused_k_calibration.py flow \
 landings exceed one per million observations; at or below that rate its report records the count
 and every overshooting `(layer, head, channel)`. On the Ryzen 9 3950X, Qwen3-Embedding-0.6B took
 about 80 minutes end to end: 308 s float calibration, 1,423/1,421/1,424 s for A/B/C and 111 s for
-each table/artifact merge.
+each table/artifact merge. Each compiled pass remains within the 30-minute bar.
 
 ## 1a. Calibrate a non-QK-norm checkpoint
 
