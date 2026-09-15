@@ -4,10 +4,23 @@
 set -euo pipefail
 
 self_test=false
-if [[ "${1:-}" == "--self-test" ]]; then
-    self_test=true
-    shift
-fi
+selected_case=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --self-test)
+            self_test=true
+            shift
+            ;;
+        --case)
+            [[ $# -ge 2 ]] || { echo "FAIL: --case requires a case name" >&2; exit 2; }
+            selected_case="$2"
+            shift 2
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
 repo="${1:-$(git rev-parse --show-toplevel)}"
 repo="$(cd "$repo" && pwd)"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/t2701-buildbat-exit-proof.XXXXXX")"
@@ -91,10 +104,22 @@ else:
 ' "$position" "$path" "$message"
 }
 
-mutate_s8_fixture_flag() {
-    replace_once "$1/tools/_t2199_s8_synthetic_full_model_fixture.py" \
+mutate_s8_fixture_unknown_header_flag() {
+    # Preserve the real DGC1 pairing but add an unknown container-header bit.  Artifact::Open
+    # refuses that bit with BadHeader before S8's remaining gates can run.  This remains a
+    # current-fixture refusal, unlike the retired QK-flag mutation which became a no-op once S8
+    # was made non-QK.
+    local target="$1/tools/_t2199_s8_synthetic_full_model_fixture.py"
+    local before after
+    before="$("${PYTHON_CMD[@]}" -c 'from pathlib import Path; import hashlib, sys; print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())' "$target")"
+    replace_once "$target" \
         'sections, flags=C.artifact_flags_for_model(model) | F.DAMPED_GREEDY_CONSTANTS_FLAG' \
-        'sections, flags=F.DAMPED_GREEDY_CONSTANTS_FLAG'
+        'sections, flags=C.artifact_flags_for_model(model) | F.DAMPED_GREEDY_CONSTANTS_FLAG | 0x80000000'
+    after="$("${PYTHON_CMD[@]}" -c 'from pathlib import Path; import hashlib, sys; print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())' "$target")"
+    [[ "$before" != "$after" ]] || {
+        echo "FAIL: s8_unknown_header_flag mutation left $target byte-identical" >&2
+        return 1
+    }
 }
 
 mutate_early_shader() {
@@ -194,9 +219,24 @@ if "$self_test"; then
 fi
 
 if ! resolve_python; then exit 1; fi
+
+if [[ -n "$selected_case" ]]; then
+    case "$selected_case" in
+        s8_unknown_header_flag)
+            run_case s8_unknown_header_flag 1 mutate_s8_fixture_unknown_header_flag \
+                'sslm_verify REJECTED the S8 fixture' 'BadHeader'
+            ;;
+        *)
+            echo "FAIL: unknown case: $selected_case" >&2
+            exit 2
+            ;;
+    esac
+    exit $?
+fi
+
 overall=0
-if ! run_case s8_fixture_flag_reverted 1 mutate_s8_fixture_flag \
-    'sslm_verify REJECTED the S8 fixture'; then overall=1; fi
+if ! run_case s8_unknown_header_flag 1 mutate_s8_fixture_unknown_header_flag \
+    'sslm_verify REJECTED the S8 fixture' 'BadHeader'; then overall=1; fi
 if ! run_case early_broken_shader 1 mutate_early_shader \
     'T2701 forced early shader failure' 'T2701_SHADER_COMPILE_FAILED'; then overall=1; fi
 if ! run_case late_per_tool_build 1 mutate_late_per_tool_build \
