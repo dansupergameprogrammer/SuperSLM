@@ -145,7 +145,8 @@ def _tensor_output(output):
 class CaptureController:
     def __init__(self, torch, quantized_model, floor: bool, active_layers=None,
                  qkc_headroom: float = 1.0, mixed_precision: str | None = None,
-                 emulate_attention_residual: bool = False):
+                 emulate_attention_residual: bool = False,
+                 injected_gains: dict[str, float] | None = None):
         self.torch = torch
         self.quantized_model = quantized_model
         self.floor = floor
@@ -153,6 +154,7 @@ class CaptureController:
         self.qkc_headroom = qkc_headroom
         self.mixed_precision = mixed_precision
         self.emulate_attention_residual = emulate_attention_residual
+        self.injected_gains = injected_gains or {}
         self.handles = []
         self.sites: dict[str, np.ndarray] = {}
         self.layer_rows: dict[int, np.ndarray] = {}
@@ -178,6 +180,9 @@ class CaptureController:
         if self.mixed_precision == "down_residual":
             return leaf in {"mlp_act", "down_proj", "mlp_residual"}
         raise ValueError(f"unknown mixed-precision candidate: {self.mixed_precision}")
+
+    def _gain(self, name: str, value):
+        return value * self.injected_gains.get(name, 1.0)
 
     def reset(self):
         self.sites = {}
@@ -285,6 +290,7 @@ class CaptureController:
                 landed, _scale = self.dynamic(wide_physical)
             else:
                 landed, _scale = self.dynamic(value) if self.floor else (value, None)
+            landed = self._gain(name, landed)
             self._save(name, landed[0, -1])
             return (landed, *inputs[1:]) if self.floor else None
         return hook
@@ -295,6 +301,7 @@ class CaptureController:
             name = f"layer{layer}.mlp_residual"
             landed, _scale = (self.dynamic(value)
                               if self.floor and not self._exact_site(name) else (value, None))
+            landed = self._gain(name, landed)
             self.layer_rows[layer] = landed[0, -1].detach().float().cpu().numpy()
             self._save(f"layer{layer}.mlp_residual", landed[0, -1])
             if not self.floor or self._exact_site(name):
@@ -526,7 +533,8 @@ def patched_rope(controller, hf_model):
 def capture_hf(hf_path: Path, quantized_model, token_ids: list[list[int]], floor: bool,
                active_layers=None, qkc_headroom: float = 1.0,
                mixed_precision: str | None = None,
-               emulate_attention_residual: bool = False):
+               emulate_attention_residual: bool = False,
+               injected_gains: dict[str, float] | None = None):
     import torch
     from transformers import AutoModel
 
@@ -537,7 +545,8 @@ def capture_hf(hf_path: Path, quantized_model, token_ids: list[list[int]], floor
     if floor:
         install_artifact_weights(torch, model, quantized_model, active_layers, mixed_precision)
     controller = CaptureController(torch, quantized_model, floor, active_layers,
-                                   qkc_headroom, mixed_precision, emulate_attention_residual)
+                                   qkc_headroom, mixed_precision, emulate_attention_residual,
+                                   injected_gains)
     controller.install(model)
     all_rows = []
     all_sites = []

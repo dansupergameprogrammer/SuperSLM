@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import math
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -74,10 +75,36 @@ def loss(left, right) -> float:
     return cosine_loss(np.asarray(left).reshape(-1), np.asarray(right).reshape(-1))
 
 
-def capture_engine(layer_trace: Path, artifact: Path, token_ids, output: Path) -> None:
+def magnitude_metrics(out, ideal):
+    out = np.asarray(out, dtype=np.float64).reshape(-1)
+    ideal = np.asarray(ideal, dtype=np.float64).reshape(-1)
+    ideal_norm_sq = float(np.dot(ideal, ideal))
+    if not math.isfinite(ideal_norm_sq) or ideal_norm_sq == 0.0:
+        raise ValueError("zero or non-finite ideal norm")
+    ideal_norm = math.sqrt(ideal_norm_sq)
+    return {
+        "cosine_loss": loss(out, ideal),
+        "projection_gain_minus_one": float(np.dot(out, ideal) / ideal_norm_sq - 1.0),
+        "norm_ratio_minus_one": float(np.linalg.norm(out) / ideal_norm - 1.0),
+        "relative_l2": float(np.linalg.norm(out - ideal) / ideal_norm),
+    }
+
+
+def summarize_distribution(values):
+    array = np.asarray(values, dtype=np.float64)
+    return {
+        "median": float(np.median(array)),
+        "p10": float(np.quantile(array, 0.10)),
+        "p90": float(np.quantile(array, 0.90)),
+        "min": float(array.min()),
+        "max": float(array.max()),
+    }
+
+
+def capture_engine(layer_trace: Path, artifact: Path, token_ids, output: Path, layers=LAYERS) -> None:
     dump_dir = output / "engine-dumps"
     dump_dir.mkdir(parents=True, exist_ok=True)
-    selected = ",".join(map(str, LAYERS))
+    selected = ",".join(map(str, layers))
     for index, ids in enumerate(token_ids):
         dump = dump_dir / f"item-{index:02d}.bin"
         sites = dump_dir / f"item-{index:02d}.sites.jsonl"
@@ -94,7 +121,26 @@ def capture_engine(layer_trace: Path, artifact: Path, token_ids, output: Path) -
 
 
 def read_jsonl(path: Path):
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    # The fused-K stream is large (one row per channel) and the magnitude
+    # attribution consumes only chain, attention, and V-value records.
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+            if '"type":"fused_k"' not in line]
+
+
+def read_engine_raw(path: Path):
+    data = path.read_bytes()
+    rows, hidden, _fingerprint, mode = struct.unpack_from("<QQQQ", data)
+    if mode != 1 or len(data) != 32 + rows * (16 + hidden):
+        raise ValueError(f"invalid engine dump framing: {path}")
+    result = []
+    offset = 32
+    for _ in range(rows):
+        m, e = struct.unpack_from("<qq", data, offset)
+        offset += 16
+        codes = np.frombuffer(data, dtype=np.int8, count=hidden, offset=offset).astype(np.float64)
+        offset += hidden
+        result.append({"codes": codes, "scale": physical((m, e)), "m": m, "e": e})
+    return result
 
 
 def engine_value(rows, layer: int, head: int) -> np.ndarray:
@@ -105,15 +151,15 @@ def engine_value(rows, layer: int, head: int) -> np.ndarray:
     return np.asarray(matching[0]["codes"], dtype=np.float64)
 
 
-def engine_attention(rows, layer: int):
+def engine_attention(rows, layer: int, expected_heads: int):
     matching = [row for row in rows if row["type"] == "attention" and row["layer"] == layer]
     matching.sort(key=lambda row: row["head"])
-    if len(matching) != 16:
-        raise ValueError(f"expected 16 attention heads at layer {layer}, got {len(matching)}")
+    if len(matching) != expected_heads:
+        raise ValueError(f"expected {expected_heads} attention heads at layer {layer}, got {len(matching)}")
     return matching
 
 
-def local_item(model, vectors, floor_sites, float_sites, rows, item: int, layer: int):
+def local_item(model, vectors, floor_sites, float_sites, rows, raw_rows, item: int, layer: int):
     cfg = model.config
     prefix = f"layer{layer}"
     group = cfg.num_attention_heads // cfg.num_key_value_heads
@@ -124,7 +170,10 @@ def local_item(model, vectors, floor_sites, float_sites, rows, item: int, layer:
     floor_block_in = vectors["floor"][item, layer]
 
     def compare(name, engine_out, engine_ideal, floor_out, floor_ideal):
-        result[name] = (loss(engine_out, engine_ideal), loss(floor_out, floor_ideal))
+        result[name] = {
+            "engine": magnitude_metrics(engine_out, engine_ideal),
+            "floor": magnitude_metrics(floor_out, floor_ideal),
+        }
 
     # Attention RMSNorm.
     attn_gain = raw_weight(model, f"{prefix}.attn_norm.gain")
@@ -171,7 +220,7 @@ def local_item(model, vectors, floor_sites, float_sites, rows, item: int, layer:
     global_result["v_proj"] = (loss(engine_v, float_sites[f"{prefix}.v_proj"]),
                                loss(floor_v, float_sites[f"{prefix}.v_proj"]))
 
-    attention = engine_attention(rows, layer)
+    attention = engine_attention(rows, layer, cfg.num_attention_heads)
     softmax_engine, softmax_ideal = [], []
     ctx_acc, ctx_acc_ideal, ctx_wide = [], [], []
     for head, entry in enumerate(attention):
@@ -244,6 +293,17 @@ def local_item(model, vectors, floor_sites, float_sites, rows, item: int, layer:
     floor_attn_res = floor_sites[f"{prefix}.attn_residual"].reshape(-1)
     compare("attn_residual", engine_attn_res, engine_block_in + engine_o,
             floor_attn_res, floor_block_in + floor_o)
+    attn_res_record = [row for row in rows if row["type"] == "chain" and
+                       row["site"] == f"{prefix}.attn_residual"]
+    if len(attn_res_record) != 1:
+        raise ValueError(f"expected one attention residual record for {prefix}")
+    attn_wide = np.asarray(attn_res_record[0]["x_int"], dtype=np.float64)
+    stream_code = raw_rows[layer]["codes"]
+    stream_scale = raw_rows[layer]["scale"]
+    reconciled_o = (attn_wide - stream_code) * stream_scale
+    compare("attn_branch_rescale", reconciled_o, engine_o, floor_o, floor_o)
+    compare("attn_residual_landing", engine_attn_res, attn_wide * stream_scale,
+            floor_attn_res, floor_block_in + floor_o)
 
     # MLP norm, projections, SwiGLU, down projection, and residual.
     mlp_gain = raw_weight(model, f"{prefix}.mlp_norm.gain")
@@ -273,6 +333,17 @@ def local_item(model, vectors, floor_sites, float_sites, rows, item: int, layer:
     floor_mlp_res = floor_sites[f"{prefix}.mlp_residual"].reshape(-1)
     compare("mlp_residual", engine_mlp_res, engine_attn_res + engine_down,
             floor_mlp_res, floor_attn_res + floor_down)
+    mlp_res_record = [row for row in rows if row["type"] == "chain" and
+                      row["site"] == f"{prefix}.mlp_residual"]
+    if len(mlp_res_record) != 1:
+        raise ValueError(f"expected one MLP residual record for {prefix}")
+    mlp_wide = np.asarray(mlp_res_record[0]["x_int"], dtype=np.float64)
+    attn_stream_code = np.asarray(attn_res_record[0]["codes"], dtype=np.float64)
+    attn_stream_scale = physical((attn_res_record[0]["m"], attn_res_record[0]["e"]))
+    reconciled_down = (mlp_wide - attn_stream_code) * attn_stream_scale
+    compare("mlp_branch_rescale", reconciled_down, engine_down, floor_down, floor_down)
+    compare("mlp_residual_landing", engine_mlp_res, mlp_wide * attn_stream_scale,
+            floor_mlp_res, floor_attn_res + floor_down)
     return result, global_result
 
 
@@ -282,28 +353,34 @@ def final_norm_item(model, vectors, rows, item: int):
     floor_in = vectors["floor"][item, -2]
     engine_out = chain_vector(rows, "final_norm")
     floor_out = vectors["floor"][item, -1]
-    return (loss(engine_out, rmsnorm(engine_in, gain, model.config.rms_norm_eps)),
-            loss(floor_out, rmsnorm(floor_in, gain, model.config.rms_norm_eps)))
+    return {
+        "engine": magnitude_metrics(engine_out, rmsnorm(engine_in, gain, model.config.rms_norm_eps)),
+        "floor": magnitude_metrics(floor_out, rmsnorm(floor_in, gain, model.config.rms_norm_eps)),
+    }
 
 
-def aggregate(model, baseline: Path, output: Path, item_count: int):
+def aggregate(model, baseline: Path, output: Path, item_count: int, layers=LAYERS,
+              engine_dump_dir: Path | None = None):
     vectors = np.load(baseline / "vectors.npz")
     if vectors["engine"].shape[0] != item_count:
         raise ValueError("baseline vector item count does not match capture")
-    local = {layer: {} for layer in LAYERS}
-    global_sites = {layer: {} for layer in LAYERS}
+    local = {layer: {} for layer in layers}
+    global_sites = {layer: {} for layer in layers}
+    dump_dir = engine_dump_dir if engine_dump_dir is not None else output / "engine-dumps"
     final = []
     for item in range(item_count):
         floor_sites = dict(np.load(baseline / "floor-site-dumps" / f"item-{item:02d}.npz"))
         float_sites = dict(np.load(baseline / "float-site-dumps" / f"item-{item:02d}.npz"))
-        rows = read_jsonl(output / "engine-dumps" / f"item-{item:02d}.sites.jsonl")
-        for layer in LAYERS:
+        rows = read_jsonl(dump_dir / f"item-{item:02d}.sites.jsonl")
+        raw_rows = read_engine_raw(dump_dir / f"item-{item:02d}.bin")
+        for layer in layers:
             item_local, item_global = local_item(model, vectors, floor_sites, float_sites,
-                                                 rows, item, layer)
-            for name, pair in item_local.items():
-                local[layer].setdefault(name, [[], []])
-                local[layer][name][0].append(pair[0])
-                local[layer][name][1].append(pair[1])
+                                                 rows, raw_rows, item, layer)
+            for name, paths in item_local.items():
+                local[layer].setdefault(name, {"engine": {}, "floor": {}})
+                for path in ("engine", "floor"):
+                    for metric, value in paths[path].items():
+                        local[layer][name][path].setdefault(metric, []).append(value)
             for name, pair in item_global.items():
                 global_sites[layer].setdefault(name, [[], []])
                 global_sites[layer][name][0].append(pair[0])
@@ -312,32 +389,88 @@ def aggregate(model, baseline: Path, output: Path, item_count: int):
 
     local_table = []
     region_carriers = []
-    for layer in LAYERS:
+    for layer in layers:
         candidates = []
         for name, values in local[layer].items():
-            engine_summary, floor_summary = summarize(values[0]), summarize(values[1])
+            engine_metrics = {metric: summarize_distribution(samples)
+                              for metric, samples in values["engine"].items()}
+            floor_metrics = {metric: summarize_distribution(samples)
+                             for metric, samples in values["floor"].items()}
+            engine_summary = engine_metrics["cosine_loss"]
+            floor_summary = floor_metrics["cosine_loss"]
             excess = engine_summary["median"] - floor_summary["median"]
             local_table.append({"region": f"layer{layer}", "operation": name,
                                 "engine_local": engine_summary, "floor_local": floor_summary,
+                                "engine_metrics": engine_metrics, "floor_metrics": floor_metrics,
                                 "median_excess": excess})
             candidates.append((excess, name))
         region_carriers.append({"region": f"layer{layer}",
                                 "largest_local_excess_operation": max(candidates)[1],
                                 "median_excess": max(candidates)[0]})
-    final_engine = summarize([pair[0] for pair in final])
-    final_floor = summarize([pair[1] for pair in final])
+    final_engine_metrics = {metric: summarize_distribution([pair["engine"][metric] for pair in final])
+                            for metric in final[0]["engine"]}
+    final_floor_metrics = {metric: summarize_distribution([pair["floor"][metric] for pair in final])
+                           for metric in final[0]["floor"]}
+    final_engine = final_engine_metrics["cosine_loss"]
+    final_floor = final_floor_metrics["cosine_loss"]
     local_table.append({"region": "final_norm", "operation": "rmsnorm",
                         "engine_local": final_engine, "floor_local": final_floor,
+                        "engine_metrics": final_engine_metrics,
+                        "floor_metrics": final_floor_metrics,
                         "median_excess": final_engine["median"] - final_floor["median"]})
     region_carriers.append({"region": "final_norm", "largest_local_excess_operation": "rmsnorm",
                             "median_excess": final_engine["median"] - final_floor["median"]})
     global_table = []
-    for layer in LAYERS:
+    for layer in layers:
         for name, values in global_sites[layer].items():
             global_table.append({"region": f"layer{layer}", "stage": name,
                                  "engine_vs_float": summarize(values[0]),
                                  "floor_vs_float": summarize(values[1])})
     return local_table, global_table, region_carriers
+
+
+def audit_residual_funnels(dump_dir: Path, item_count: int, layers):
+    reciprocal_errors = []
+    code_mismatch_rates = []
+    output_scale_errors = []
+    mismatched_values = 0
+    observed_values = 0
+    for item in range(item_count):
+        rows = read_jsonl(dump_dir / f"item-{item:02d}.sites.jsonl")
+        raw_rows = read_engine_raw(dump_dir / f"item-{item:02d}.bin")
+        for layer in layers:
+            attn = [row for row in rows if row["type"] == "chain" and
+                    row["site"] == f"layer{layer}.attn_residual"][0]
+            for leaf, record, input_scale in (
+                    ("attn", attn, raw_rows[layer]["scale"]),
+                    ("mlp", [row for row in rows if row["type"] == "chain" and
+                             row["site"] == f"layer{layer}.mlp_residual"][0],
+                     physical((attn["m"], attn["e"]))),):
+                del leaf
+                exact_reciprocal = ((1 << 62) + record["dn"] // 2) // record["dn"]
+                reciprocal_errors.append(record["r"] - exact_reciprocal)
+                actual = np.asarray(record["codes"], dtype=np.int64)
+                exact_codes = []
+                for value in record["x_int"]:
+                    magnitude = ((2 * abs(int(value)) * 127 + record["d_prime"]) //
+                                 (2 * record["d_prime"]))
+                    magnitude = min(magnitude, 127)
+                    exact_codes.append(-magnitude if value < 0 else magnitude)
+                mismatches = int(np.count_nonzero(actual != np.asarray(exact_codes, dtype=np.int64)))
+                mismatched_values += mismatches
+                observed_values += len(exact_codes)
+                code_mismatch_rates.append(mismatches / len(exact_codes))
+                actual_scale = physical((record["m"], record["e"]))
+                ideal_scale = input_scale * record["d_prime"] / 127.0
+                output_scale_errors.append(actual_scale / ideal_scale - 1.0)
+    return {
+        "calls": len(reciprocal_errors),
+        "reciprocal_error_integer": summarize_distribution(reciprocal_errors),
+        "code_mismatch_rate_against_exact_round_away": summarize_distribution(code_mismatch_rates),
+        "code_mismatched_values": mismatched_values,
+        "code_observed_values": observed_values,
+        "output_scale_ratio_minus_one": summarize_distribution(output_scale_errors),
+    }
 
 
 def final_curve(rows: np.ndarray, floating: np.ndarray):
@@ -354,6 +487,79 @@ def final_curve(rows: np.ndarray, floating: np.ndarray):
 def loss_curve(rows: np.ndarray, floating: np.ndarray):
     return [summarize([loss(rows[item, row], floating[item, row])
                        for item in range(rows.shape[0])]) for row in range(rows.shape[1])]
+
+
+def magnitude_curve(rows: np.ndarray, floating: np.ndarray):
+    curve = []
+    for row in range(rows.shape[1]):
+        samples = [magnitude_metrics(rows[item, row], floating[item, row])
+                   for item in range(rows.shape[0])]
+        curve.append({metric: summarize_distribution([sample[metric] for sample in samples])
+                      for metric in samples[0]})
+    return curve
+
+
+def run_magnitude_addback(hf_model: Path, model, token_ids, baseline: Path,
+                          output: Path, local_table, layers):
+    gains = {}
+    rows_by_key = {(row["region"], row["operation"]): row for row in local_table}
+    for layer in layers:
+        for operation, site in (("attn_residual_landing", "attn_residual"),
+                                ("mlp_residual_landing", "mlp_residual")):
+            row = rows_by_key[(f"layer{layer}", operation)]
+            engine_gain = row["engine_metrics"]["projection_gain_minus_one"]["median"]
+            floor_gain = row["floor_metrics"]["projection_gain_minus_one"]["median"]
+            gains[f"layer{layer}.{site}"] = (1.0 + engine_gain) / (1.0 + floor_gain)
+
+    injected, _ = capture_hf(hf_model, model, token_ids, floor=True, injected_gains=gains)
+    stacked, _ = capture_hf(hf_model, model, token_ids, floor=True,
+                            mixed_precision="down_residual")
+    vector_dir = output / "vectors"
+    vector_dir.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(vector_dir / "measured-residual-gain-addback.npz", rows=injected)
+    np.savez_compressed(vector_dir / "repaired-plus-block27-down-residual.npz", rows=stacked)
+
+    vectors = np.load(baseline / "vectors.npz")
+    floating = vectors["floating"]
+    engine_curve = magnitude_curve(vectors["engine"], floating)
+    injected_curve = magnitude_curve(injected, floating)
+    floor_curve = magnitude_curve(vectors["floor"], floating)
+    relevant = range(13, 29)  # residual rows 13..28, excluding final norm row 29
+    norm_errors = [abs(injected_curve[row]["norm_ratio_minus_one"]["median"] -
+                       engine_curve[row]["norm_ratio_minus_one"]["median"])
+                   for row in relevant]
+    cosine_errors = [abs(injected_curve[row]["cosine_loss"]["median"] -
+                         engine_curve[row]["cosine_loss"]["median"])
+                     for row in relevant]
+    final_cosine_error = abs(final_curve(injected, floating)["cosine_median"] -
+                             final_curve(vectors["engine"], floating)["cosine_median"])
+    gate = {
+        "declared_before_measurement": {
+            "rows": "13 through 28 inclusive",
+            "maximum_row_median_norm_ratio_error": 0.02,
+            "maximum_row_median_cosine_loss_error": 0.02,
+            "final_median_cosine_error": 0.02,
+        },
+        "observed": {
+            "maximum_row_median_norm_ratio_error": max(norm_errors),
+            "maximum_row_median_cosine_loss_error": max(cosine_errors),
+            "final_median_cosine_error": final_cosine_error,
+        },
+    }
+    gate["status"] = "PASS" if (
+        max(norm_errors) <= 0.02 and max(cosine_errors) <= 0.02 and final_cosine_error <= 0.02
+    ) else "FAIL"
+    return {
+        "injected_gains": gains,
+        "gate": gate,
+        "engine_curve": engine_curve,
+        "addback_curve": injected_curve,
+        "repaired_floor_curve": floor_curve,
+        "engine_final": final_curve(vectors["engine"], floating),
+        "addback_final": final_curve(injected, floating),
+        "predicted_repaired_final": final_curve(vectors["floor"], floating),
+        "predicted_repaired_plus_block27_down_residual_final": final_curve(stacked, floating),
+    }
 
 
 def run_option1_reproduction(hf_model: Path, model, token_ids, baseline: Path, output: Path):
@@ -480,10 +686,16 @@ def control_residual_summary(control_model, baseline: Path, capture: Path, layer
             table.append({"region": f"layer{slot['layer']}", "operation": f"{kind}_residual",
                           "engine_local": engine, "floor_local": floor,
                           "median_excess": engine["median"] - floor["median"]})
-    final_engine = summarize([pair[0] for pair in final_pairs])
-    final_floor = summarize([pair[1] for pair in final_pairs])
+    final_engine_metrics = {metric: summarize_distribution(
+        [pair["engine"][metric] for pair in final_pairs]) for metric in final_pairs[0]["engine"]}
+    final_floor_metrics = {metric: summarize_distribution(
+        [pair["floor"][metric] for pair in final_pairs]) for metric in final_pairs[0]["floor"]}
+    final_engine = final_engine_metrics["cosine_loss"]
+    final_floor = final_floor_metrics["cosine_loss"]
     return {"local_residual_table": table,
             "final_norm": {"engine_local": final_engine, "floor_local": final_floor,
+                           "engine_metrics": final_engine_metrics,
+                           "floor_metrics": final_floor_metrics,
                            "median_excess": final_engine["median"] - final_floor["median"]}}
 
 
@@ -495,8 +707,14 @@ def main() -> int:
     parser.add_argument("--layer-trace", required=True, type=Path)
     parser.add_argument("--baseline", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--engine-capture", type=Path,
+                        help="reuse an existing directory containing item-XX.sites.jsonl")
     parser.add_argument("--skip-engine", action="store_true")
     parser.add_argument("--skip-prices", action="store_true")
+    parser.add_argument("--layers", default=",".join(map(str, LAYERS)),
+                        help="comma-separated engine/local-attribution layers")
+    parser.add_argument("--magnitude-addback", action="store_true",
+                        help="inject measured residual gains into the floor and evaluate the gate")
     parser.add_argument("--control-artifact-cache", type=Path)
     parser.add_argument("--control-baseline", type=Path)
     parser.add_argument("--control-capture", type=Path)
@@ -507,9 +725,22 @@ def main() -> int:
     sentences = SMOKE_SENTENCES + LONG_SENTENCES
     token_ids = [tokenizer(sentence, add_special_tokens=True)["input_ids"] for sentence in sentences]
     model = artifact_cache.load_artifact(args.artifact_cache)
+    layers = tuple(int(value) for value in args.layers.split(","))
+    if not layers or any(layer < 0 or layer >= model.config.num_hidden_layers for layer in layers):
+        parser.error("--layers contains a layer outside the model")
     if not args.skip_engine:
-        capture_engine(args.layer_trace.resolve(), args.artifact.resolve(), token_ids, args.output)
-    local, global_sites, carriers = aggregate(model, args.baseline, args.output, len(token_ids))
+        capture_engine(args.layer_trace.resolve(), args.artifact.resolve(), token_ids, args.output, layers)
+    local, global_sites, carriers = aggregate(model, args.baseline, args.output, len(token_ids),
+                                              layers=layers, engine_dump_dir=args.engine_capture)
+    dump_dir = args.engine_capture if args.engine_capture is not None else args.output / "engine-dumps"
+    residual_funnel_audit = audit_residual_funnels(dump_dir, len(token_ids), layers)
+    if args.magnitude_addback:
+        magnitude_addback = run_magnitude_addback(args.hf_model, model, token_ids, args.baseline,
+                                                  args.output, local, layers)
+    else:
+        prior_summary = args.output / "summary.json"
+        magnitude_addback = (json.loads(prior_summary.read_text(encoding="utf-8"))
+                             .get("magnitude_addback") if prior_summary.is_file() else None)
     if args.skip_prices:
         prior = json.loads((args.output / "summary.json").read_text(encoding="utf-8")) \
             if (args.output / "summary.json").is_file() else {}
@@ -524,18 +755,26 @@ def main() -> int:
     control = None
     if args.control_artifact_cache and args.control_baseline and args.control_capture:
         control_model = artifact_cache.load_artifact(args.control_artifact_cache)
-        control = control_residual_summary(control_model, args.control_baseline,
-                                           args.control_capture, [0, 3, 8, 13, 18, 22, 23])
+        control_layers = [0, 3, 8, 13, 18, 22, 23]
+        control_local, control_global, control_carriers = aggregate(
+            control_model, args.control_baseline, args.output,
+            int(np.load(args.control_baseline / "vectors.npz")["engine"].shape[0]),
+            layers=control_layers, engine_dump_dir=args.control_capture)
+        control = {"local_operation_table": control_local,
+                   "global_stage_table": control_global,
+                   "region_carriers": control_carriers}
     result = {
         "artifact": str(args.artifact.resolve()), "artifact_sha256": sha256(args.artifact),
         "baseline_summary": str((args.baseline / "summary.json").resolve()),
         "baseline_summary_sha256": sha256(args.baseline / "summary.json"),
-        "layers": list(LAYERS), "item_count": len(token_ids),
+        "layers": list(layers), "item_count": len(token_ids),
         "local_operation_table": local, "global_stage_table": global_sites,
         "region_carriers": carriers, "mixed_precision_prices": mixed,
         "option1_exact_operations": option1,
         "pass_c_clipping_prices": clipping,
         "qwen2p5_control_local": control,
+        "magnitude_addback": magnitude_addback,
+        "residual_funnel_arithmetic_audit": residual_funnel_audit,
         "definitions": {
             "local_engine": "engine operation output vs float operation on the engine operation's own input",
             "local_floor": "artifact-weight float operation plus that site's int8 landing, on the floor's own input",
