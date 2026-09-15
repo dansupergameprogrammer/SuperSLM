@@ -165,6 +165,23 @@ else()
 	target_compile_options(t2700_fused_k_capture PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 
+# T-2701 slice 7: artifact-backed CPU/GPU diagnostics.  These are Windows-only
+# because their evidence path includes the D3D12 GPU substrate and public 1.0 API.
+if(WIN32)
+	foreach(_t2701_tool IN ITEMS t2701_cpu_forward_probe t2701_gpu_tokens)
+		add_executable(${_t2701_tool} tools/${_t2701_tool}.cpp)
+		target_link_libraries(${_t2701_tool} PRIVATE superslm d3d12 dxgi dxguid)
+		target_sources(${_t2701_tool} PRIVATE src/gpu/superslm_gpu.cpp src/gpu/gpu_1p0.cpp)
+		target_include_directories(${_t2701_tool} PRIVATE tools src/gpu)
+		if(MSVC)
+			target_compile_options(${_t2701_tool} PRIVATE /W4 /fp:precise)
+		else()
+			target_compile_options(${_t2701_tool} PRIVATE -Wall -Wextra -ffp-contract=off)
+		endif()
+	endforeach()
+	unset(_t2701_tool)
+endif()
+
 # T-2700 step 0: the independent Python oracle drives these compiled forced tiers.
 add_executable(t2700_fused_k_oracle_sse2_forced tools/t2700_fused_k_oracle.cpp)
 target_link_libraries(t2700_fused_k_oracle_sse2_forced PRIVATE superslm_sse2_forced)

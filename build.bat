@@ -217,6 +217,30 @@ if errorlevel 1 (
 	goto :hard_fail
 )
 
+rem T-2701 slice 7 CPU/GPU evidence tools. These are artifact-backed diagnostics,
+rem not auto-run: t2701_cpu_forward_probe supports the CPU/GPU forward comparison and
+rem t2701_gpu_tokens drives the shipped GPU-1.0 decode API against CPU greedy decode.
+rem Both need the T-2100 GPU source shape plus gpu_1p0.cpp for the public API bridge.
+if not exist out\t2701 mkdir out\t2701
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^
+	tools\t2701_cpu_forward_probe.cpp /Fo:out\t2701\ /Fe:out\t2701_cpu_forward_probe.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	goto :hard_fail
+)
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^
+	tools\t2701_gpu_tokens.cpp /Fo:out\t2701\ /Fe:out\t2701_gpu_tokens.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	goto :hard_fail
+)
+
 rem T-2113 (B1, Claude/Vitruvius/t2107-gpu-core-1p0-design-2026-08-14.md Sec10 B1):
 rem the context-lifecycle bench proof (tools/t2113_b1_context_smoke.cpp) -- built and
 rem RUN here (unlike the C5 harness above, this needs no external .sslm artifact),
