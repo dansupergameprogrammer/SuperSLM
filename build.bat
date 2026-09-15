@@ -1,6 +1,6 @@
 @echo off
 rem Quick MSVC build + test. For other compilers / the full matrix use CMake.
-setlocal
+setlocal EnableExtensions EnableDelayedExpansion
 rem Some process hosts supply both PATH and Path entries. MSBuild imports the raw
 rem environment into a case-insensitive table and rejects that duplicate before CL runs.
 rem Collapse the pair before VsDevCmd adds the compiler toolchain directories.
@@ -35,7 +35,12 @@ if not exist %DXC% (
 )
 for %%f in (src\gpu\shaders\*.hlsl) do (
 	%DXC% -T cs_6_2 -E main -Fo out\shaders\%%~nf.cso %%f -O3 -HV 2018 -WX
-	if errorlevel 1 (
+	rem dxc returns a negative HRESULT for some failures.  `if errorlevel 1`
+	rem only recognizes positive statuses, so it let a forced #error fall through
+	rem into the native build.  Delayed expansion observes this invocation's exact
+	rem signed status and rejects every nonzero value.
+	if not "!errorlevel!"=="0" (
+		echo T2701_SHADER_COMPILE_FAILED: %%~nxf exit=!errorlevel!
 		goto :hard_fail
 	)
 )
@@ -2064,6 +2069,7 @@ if not errorlevel 1 (
 )
 
 popd
+if "%ec%"=="0" echo T2701_BUILD_COMPLETED
 exit /b %ec%
 
 :hard_fail

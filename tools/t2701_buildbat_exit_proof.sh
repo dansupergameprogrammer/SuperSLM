@@ -112,8 +112,15 @@ run_case() {
     local name="$1"
     local expected="$2"
     local mutator="$3"
-    local batch_override="${4:-}"
-    local worktree="" batch status remove_ec=0
+    shift 3
+    local batch_override="" worktree="" batch status remove_ec=0 log marker
+    local -a markers=()
+
+    if [[ "${1:-}" == "--batch" ]]; then
+        batch_override="$2"
+        shift 2
+    fi
+    markers=("$@")
 
     if [[ -n "$batch_override" ]]; then
         batch="$batch_override"
@@ -133,7 +140,8 @@ run_case() {
 
     # Git Bash rewrites bare /d and /c for native cmd.exe; doubled slashes preserve cmd switches.
     set +e
-    cmd.exe //d //c "$batch"
+    log="$scratch/$name.log"
+    cmd.exe //d //c "$batch" >"$log" 2>&1
     status=$?
     set -e
     if [[ -n "$worktree" ]]; then
@@ -144,12 +152,21 @@ run_case() {
         printf 'FAIL %-30s worktree cleanup exit=%s\n' "$name" "$remove_ec" >&2
         return 1
     fi
-    if [[ "$status" == "$expected" ]]; then
-        printf 'PASS %-30s expected=%s actual=%s\n' "$name" "$expected" "$status"
-        return 0
+    if [[ "$status" != "$expected" ]]; then
+        printf 'FAIL %-30s expected=%s actual=%s\n' "$name" "$expected" "$status" >&2
+        tail -n 80 "$log" >&2 || true
+        return 1
     fi
-    printf 'FAIL %-30s expected=%s actual=%s\n' "$name" "$expected" "$status" >&2
-    return 1
+    for marker in "${markers[@]}"; do
+        if ! grep -Fq -- "$marker" "$log"; then
+            printf 'FAIL %-30s missing stop marker: %s\n' "$name" "$marker" >&2
+            tail -n 80 "$log" >&2 || true
+            return 1
+        fi
+    done
+    printf 'PASS %-30s expected=%s actual=%s markers=%s\n' \
+        "$name" "$expected" "$status" "${#markers[@]}"
+    return 0
 }
 
 run_self_test() {
@@ -158,9 +175,9 @@ run_self_test() {
     printf '@echo off\r\nexit /b 3\r\n' > "$stub_dir/exit_three.bat"
     printf '@echo off\r\nexit /b 0\r\n' > "$stub_dir/exit_zero.bat"
     printf '@echo off\r\nif 1==1 (\r\n  exit /b 1\r\n)\r\nexit /b 9\r\n' > "$stub_dir/nested_exit.bat"
-    if ! run_case self_exit_three_space_path 3 none "$(to_windows_path "$stub_dir")\\exit_three.bat"; then overall=1; fi
-    if ! run_case self_exit_zero_space_path 0 none "$(to_windows_path "$stub_dir")\\exit_zero.bat"; then overall=1; fi
-    if ! run_case self_nested_exit_path 1 none "$(to_windows_path "$stub_dir")\\nested_exit.bat"; then overall=1; fi
+    if ! run_case self_exit_three_space_path 3 none --batch "$(to_windows_path "$stub_dir")\\exit_three.bat"; then overall=1; fi
+    if ! run_case self_exit_zero_space_path 0 none --batch "$(to_windows_path "$stub_dir")\\exit_zero.bat"; then overall=1; fi
+    if ! run_case self_nested_exit_path 1 none --batch "$(to_windows_path "$stub_dir")\\nested_exit.bat"; then overall=1; fi
     rm -f "$stub_dir/exit_three.bat" "$stub_dir/exit_zero.bat" "$stub_dir/nested_exit.bat"
     rmdir "$stub_dir"
     return "$overall"
@@ -178,8 +195,11 @@ fi
 
 if ! resolve_python; then exit 1; fi
 overall=0
-if ! run_case s8_fixture_flag_reverted 1 mutate_s8_fixture_flag; then overall=1; fi
-if ! run_case early_broken_shader 1 mutate_early_shader; then overall=1; fi
-if ! run_case late_per_tool_build 1 mutate_late_per_tool_build; then overall=1; fi
-if ! run_case clean_tree 0 none; then overall=1; fi
+if ! run_case s8_fixture_flag_reverted 1 mutate_s8_fixture_flag \
+    'sslm_verify REJECTED the S8 fixture'; then overall=1; fi
+if ! run_case early_broken_shader 1 mutate_early_shader \
+    'T2701 forced early shader failure' 'T2701_SHADER_COMPILE_FAILED'; then overall=1; fi
+if ! run_case late_per_tool_build 1 mutate_late_per_tool_build \
+    'T2701 forced late per-tool build failure'; then overall=1; fi
+if ! run_case clean_tree 0 none 'T2701_BUILD_COMPLETED'; then overall=1; fi
 exit "$overall"
