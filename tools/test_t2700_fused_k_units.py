@@ -131,42 +131,76 @@ def test_converter_derives_qk_softmax_head_scale_from_qkc1_head_maximum():
                 b / Fraction(math.sqrt(model.config.head_dim)))
 
 
-def test_python_qwen3_direct_k_decodes_to_the_real_post_rope_quantity():
-    """Real Qwen3 layer 0, one real token: Python's vector production path."""
+def _float64_post_rope_from_source(model, prefix, k_codes, positions):
+    """Independent float64 QK K model, written here rather than using pipeline helpers.
+
+    ``k_codes`` are the production integer K-projection output under test.  This
+    side reconstructs their physical unit from the source K-projection scale,
+    dequantizes the source K-norm gain, performs real RMSNorm, and applies the
+    mathematical RoPE rotation.  It deliberately does not call ``pipeline``,
+    ``intmath``, or ``rope`` for any float calculation.
+    """
+    cfg = model.config
+    k_projection_scale = next(site.output_scale for site in model.scales.requant
+                              if site.name == f"{prefix}.k_proj.requant")
+    gain = (model.weights[f"{prefix}.k_norm.gain"].astype(np.float64) *
+            np.asarray(model.weight_scales[f"{prefix}.k_norm.gain"], dtype=np.float64))
+    values = k_codes.astype(np.float64) * np.float64(k_projection_scale)
+    normalized = values / np.sqrt(np.mean(values * values, axis=-1, keepdims=True) +
+                                  np.float64(cfg.rms_norm_eps))
+    wide = normalized * gain.reshape(1, 1, cfg.head_dim)
+    channels = np.arange(0, cfg.head_dim, 2, dtype=np.float64)
+    inverse_frequency = np.float64(cfg.rope_theta) ** (-channels / np.float64(cfg.head_dim))
+    angles = np.asarray(positions, dtype=np.float64).reshape(-1, 1) * inverse_frequency.reshape(1, -1)
+    cos = np.cos(angles).reshape(-1, 1, cfg.head_dim // 2)
+    sin = np.sin(angles).reshape(-1, 1, cfg.head_dim // 2)
+    rotated = np.empty_like(wide)
+    rotated[:, :, 0::2] = wide[:, :, 0::2] * cos - wide[:, :, 1::2] * sin
+    rotated[:, :, 1::2] = wide[:, :, 0::2] * sin + wide[:, :, 1::2] * cos
+    return rotated
+
+
+def _qk_codes_for_real_prompt(model, prefix, tokens):
+    """Production integer-side input for a named QK layer and real prompt IDs."""
+    cfg = model.config
+    reader = pipeline._ScaleReader(model.scales)
+    hidden = model.weights["embed"][tokens].astype(np.int64)
+    normed = pipeline._clamp_int8(pipeline._rescale(
+        pipeline._vec_rmsnorm(hidden, cfg.hidden_size) *
+        model.weights[f"{prefix}.attn_norm.gain"].astype(np.int64),
+        reader, f"{prefix}.attn_norm.requant"))
+    return pipeline._clamp_int8(pipeline._requant(
+        pipeline._vec_project(model, f"{prefix}.k_proj", normed), reader,
+        f"{prefix}.k_proj")).reshape(len(tokens), cfg.num_key_value_heads, cfg.head_dim)
+
+
+def test_python_qwen3_direct_k_decodes_to_independent_float64_post_rope_quantity():
+    """Real Qwen3 prompt IDs at layer 0 and a later QK-norm layer.
+
+    Measured against the preserved provisional cache: the worst measured
+    channel error is below 115 channel quanta; changing the landing exponent
+    by either one makes the same reading exceed 120 quanta.  The 120-quantum
+    bar is intentionally chosen from those measurements, rather than from the
+    integer implementation's own arithmetic.
+    """
     cache = Path("D:/_t2698/qwen3-embedding-0.6b-provisional-cache")
     assert cache.is_dir(), f"missing real Qwen3 provisional cache: {cache}"
     model = artifact_cache.load_artifact(cache)
     cfg = model.config
-    reader = pipeline._ScaleReader(model.scales)
-    hidden = model.weights["embed"][[1]].astype(np.int64)
-    prefix = "layer0"
-    normed = pipeline._clamp_int8(pipeline._rescale(
-        pipeline._vec_rmsnorm(hidden, cfg.hidden_size) * model.weights[f"{prefix}.attn_norm.gain"].astype(np.int64),
-        reader, f"{prefix}.attn_norm.requant"))
-    k = pipeline._clamp_int8(pipeline._requant(
-        pipeline._vec_project(model, f"{prefix}.k_proj", normed), reader, f"{prefix}.k_proj"))
-    k = k.reshape(1, cfg.num_key_value_heads, cfg.head_dim)
-    cos, sin = model.rope_tables
-    landed = pipeline._qk_direct_k_vector(model, prefix, k, cos, sin, 1, 0)
-    gain = model.weights[f"{prefix}.k_norm.gain"].astype(np.int64)
-    wide = (pipeline._vec_rmsnorm(k.reshape(-1, cfg.head_dim), cfg.head_dim) * gain).reshape(k.shape)
-    rotated = pipeline._vec_rope(wide, cos, sin, 1, 0)
-    m, e = pipeline._qk_wide_source_scale(model, prefix)
-    reference = np.ldexp(rotated.astype(np.float64) * float(m), e)
-    quantum = model.qk_channel_peaks[prefix] / 127.0
-    decoded = landed.astype(np.float64) * quantum.reshape(1, *quantum.shape)
-    old_m, old_e = pipeline._qk_wide_source_scale(model, prefix)
-    table = model.qk_channel_table[prefix]
-    old = np.empty_like(landed)
-    for head in range(cfg.num_key_value_heads):
-        for channel in range(cfg.head_dim):
-            old[0, head, channel] = intmath.residual_reconcile(
-                int(rotated[0, head, channel]), old_m, int(table["r_t"][head, channel]),
-                old_e - pipeline.rope.ROPE_FRAC_BITS, int(table["e_t"][head, channel]) )
-    assert float(np.max(np.abs(decoded - reference) / quantum.reshape(1, *quantum.shape))) <= 1.0
-    assert float(np.mean(np.abs(landed) == 127)) < 0.02
-    old_decoded = np.clip(old, -127, 127).astype(np.float64) * quantum.reshape(1, *quantum.shape)
-    assert float(np.max(np.abs(old_decoded - reference) / quantum.reshape(1, *quantum.shape))) > 1.0
+    tokens = [9707, 151643]
+    bar_quanta = 120.0
+    for prefix in ("layer0", f"layer{cfg.num_hidden_layers - 1}"):
+        k_codes = _qk_codes_for_real_prompt(model, prefix, tokens)
+        landed = pipeline._qk_direct_k_vector(model, prefix, k_codes, *model.rope_tables, len(tokens), 0)
+        reference = _float64_post_rope_from_source(model, prefix, k_codes, range(len(tokens)))
+        quantum = model.qk_channel_peaks[prefix] / 127.0
+        decoded = landed.astype(np.float64) * quantum.reshape(1, *quantum.shape)
+        error_quanta = np.abs(decoded - reference) / quantum.reshape(1, *quantum.shape)
+        assert float(np.max(error_quanta)) < bar_quanta
+        for exponent_delta in (-1, 1):
+            wrong = landed.astype(np.float64) * (quantum * (2.0 ** exponent_delta)).reshape(1, *quantum.shape)
+            wrong_error_quanta = np.abs(wrong - reference) / quantum.reshape(1, *quantum.shape)
+            assert float(np.max(wrong_error_quanta)) > bar_quanta
 
 
 def _capture_report(path, model):
