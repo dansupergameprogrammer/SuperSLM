@@ -21,6 +21,7 @@ establish for this class of claim (`StandardsDocument.md` §5.4).
 import importlib.util
 import inspect
 import sys
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -213,6 +214,17 @@ def test_group1_geometry_must_accept_the_fixed_build():
         "forward_dynamic and the independent oracle diverge at group=1 -- the carried-scale "
         "contract does not hold at this geometry"
     )
+
+
+def test_composition_oracle_refuses_a_qk_model_missing_its_qkc1_table():
+    """R3: the independent oracle has the same no-legacy-representation floor as load."""
+    pipeline = require(MODULE)
+    import composition_ref
+    model = pipeline.fixture_model(_fixture_config(pipeline))
+    assert model.qk_channel_table
+    with pytest.raises(ValueError, match="QkChannelTableRequired: QK-norm layer layer0"):
+        composition_ref.forward_dynamic_logits_oracle(
+            replace(model, qk_channel_table={}), [0, 1, 3, 5])
 
 
 def test_group1_geometry_must_reject_the_collapsed_q_scale_mutant(tmp_path):
