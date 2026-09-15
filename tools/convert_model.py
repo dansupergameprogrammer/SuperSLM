@@ -58,27 +58,32 @@ def artifact_flags_for_model(model, *, option_g=False, enable_damped_greedy=Fals
     return flags
 
 
-_RETIRED_QK_REQUANT = re.compile(r"^layer(?:0|[1-9][0-9]*)\.k_norm\.requant$")
+_RETIRED_QK_REQUANT = re.compile(r"^layer(?P<layer>0|[1-9][0-9]*)\.k_norm\.requant$")
 _RETIRED_QK_NONLINEAR = re.compile(
-    r"^layer(?:0|[1-9][0-9]*)\.(?:k_normed_head(?:0|[1-9][0-9]*)\.scale|softmax\.input)$")
+    r"^layer(?P<layer>0|[1-9][0-9]*)\.(?:k_normed_head(?:0|[1-9][0-9]*)\.scale|softmax\.input)$")
 _QK_GAIN_WSC = re.compile(r"^layer(?:0|[1-9][0-9]*)\.(?:q_norm|k_norm)\.gain$")
 
 
 def reject_retired_qk_static_scales(model):
     """Refuse retired StaticScales names before section construction.
 
-    This applies only to a fused-QK input.  In particular, no-QK
-    ``softmax.input`` remains compatibility metadata and is not filtered.
+    Retirement is layer-local: a no-QK layer's ``softmax.input`` remains
+    compatibility metadata even when another layer carries paired Q/K gains.
     """
-    if not has_qk_norm(model):
-        return
+    def has_paired_qk_gains(layer):
+        prefix = f"layer{layer}"
+        return (f"{prefix}.q_norm.gain" in model.weight_scales and
+                f"{prefix}.k_norm.gain" in model.weight_scales)
+
     for site in getattr(model.scales, "requant", ()):
-        if _RETIRED_QK_REQUANT.fullmatch(site.name):
+        match = _RETIRED_QK_REQUANT.fullmatch(site.name)
+        if match is not None and has_paired_qk_gains(match["layer"]):
             raise V.ConverterValidationError(
                 "LegacyFusedKMetadataPresent",
                 f'fused-QK conversion input contains retired StaticScales key "{site.name}"')
     for name, _scale in getattr(model.scales, "nonlinear", ()):
-        if _RETIRED_QK_NONLINEAR.fullmatch(name):
+        match = _RETIRED_QK_NONLINEAR.fullmatch(name)
+        if match is not None and has_paired_qk_gains(match["layer"]):
             raise V.ConverterValidationError(
                 "LegacyFusedKMetadataPresent",
                 f'fused-QK conversion input contains retired StaticScales key "{name}"')

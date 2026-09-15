@@ -265,6 +265,50 @@ def test_fused_qk_converter_retires_wsc_gain_rows_and_rejects_static_metadata():
         converter.build_sections(replace(model, scales=retired))
 
 
+def _mixed_qk_layers_model(*, restored_qk_softmax=False):
+    cfg = pipeline.ModelConfig(
+        hidden_size=128, num_hidden_layers=2, num_attention_heads=1,
+        num_key_value_heads=1, head_dim=128, intermediate_size=256,
+        vocab_size=32, rope_theta=10000.0, rms_norm_eps=1e-6,
+        tie_word_embeddings=True, context_cap=16)
+    base = pipeline.fixture_model(cfg)
+    weights = dict(base.weights)
+    weight_scales = dict(base.weight_scales)
+    constants = dict(base.composition_constants)
+    for role in ("q_norm", "k_norm"):
+        weights.pop(f"layer1.{role}.gain", None)
+        weight_scales.pop(f"layer1.{role}.gain", None)
+        constants.pop(f"layer1.{role}", None)
+    weights["layer0.q_norm.gain"] = np.ones(cfg.head_dim, dtype=np.int8)
+    weights["layer0.k_norm.gain"] = np.ones(cfg.head_dim, dtype=np.int8)
+    weight_scales["layer0.q_norm.gain"] = [1.0] * cfg.head_dim
+    weight_scales["layer0.k_norm.gain"] = [1.0] * cfg.head_dim
+    constants["layer0.q_norm"] = (1 << 30, -30)
+    constants["layer0.k_norm"] = (1 << 30, -30)
+    legacy_layer = 0 if restored_qk_softmax else 1
+    return replace(base, weights=weights, weight_scales=weight_scales,
+                   composition_constants=constants,
+                   scales=replace(base.scales, nonlinear=base.scales.nonlinear +
+                                  ((f"layer{legacy_layer}.softmax.input", 1.0),)))
+
+
+def test_mixed_qk_layers_keep_noqk_softmax_input_byte_for_byte():
+    """R2: retirement follows the matched layer, not a model-global capability bit."""
+    model = _mixed_qk_layers_model()
+    before = tuple(model.scales.nonlinear)
+    converter.reject_retired_qk_static_scales(model)
+    assert tuple(model.scales.nonlinear) == before
+    assert ("layer1.softmax.input", 1.0) in model.scales.nonlinear
+
+
+def test_mixed_qk_layers_refuse_softmax_input_restored_on_the_qk_layer():
+    model = _mixed_qk_layers_model(restored_qk_softmax=True)
+    with pytest.raises(converter.V.ConverterValidationError,
+                       match='LegacyFusedKMetadataPresent: fused-QK conversion input contains retired '
+                             'StaticScales key "layer0.softmax.input"'):
+        converter.reject_retired_qk_static_scales(model)
+
+
 def test_fused_qk_loader_refuses_a_restored_legacy_klr_key_before_marshal(tmp_path):
     result = _verify(tmp_path, "legacy_klr")
     output = result.stdout + result.stderr
