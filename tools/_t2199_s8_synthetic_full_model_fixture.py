@@ -21,6 +21,7 @@ Deterministic, hermetic, regenerated fresh every run (S-HARDEN-5's own disciplin
 
 import os
 import sys
+from dataclasses import replace
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "reference_pipeline"))
@@ -56,6 +57,16 @@ def build_artifact_bytes():
     """Returns (data, fingerprint) -- a complete, real .sslm model artifact byte string."""
     cfg = build_config()
     model = P.fixture_model(cfg)
+    # This compact Phase-D fixture has head_dim=8.  Fused-QK's QKC1 contract is
+    # deliberately head_dim=128-only, so keep this unrelated decoder fixture on
+    # the ordinary (no-QK) path rather than serializing an invalid QKC1 table.
+    model = replace(
+        model,
+        weights={k: v for k, v in model.weights.items()
+                 if not (k.endswith(".q_norm.gain") or k.endswith(".k_norm.gain"))},
+        weight_scales={k: v for k, v in model.weight_scales.items()
+                       if not (k.endswith(".q_norm.gain") or k.endswith(".k_norm.gain"))},
+    )
     # S8 is the hermetic model used by the Phase D damped-greedy gate, so carry the same DGC1
     # section and feature flag that production conversion emits with --enable-damped-greedy.
     sections, fold_approximation_error = C.build_sections(model, enable_damped_greedy=True)
@@ -86,6 +97,13 @@ def build_plain_artifact_bytes():
     in nothing but `damped_greedy_available`."""
     cfg = build_config()
     model = P.fixture_model(cfg)
+    model = replace(
+        model,
+        weights={k: v for k, v in model.weights.items()
+                 if not (k.endswith(".q_norm.gain") or k.endswith(".k_norm.gain"))},
+        weight_scales={k: v for k, v in model.weight_scales.items()
+                       if not (k.endswith(".q_norm.gain") or k.endswith(".k_norm.gain"))},
+    )
     sections, _ = C.build_sections(model)  # default: no DGC1 section, no feature bit
     return F.build_artifact(sections)
 
