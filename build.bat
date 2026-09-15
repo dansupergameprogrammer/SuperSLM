@@ -23,7 +23,7 @@ rem SuperSLM 1.4.0 external re-review P1: prove the advertised Windows CPU-only
 rem configuration survives a clean DEFAULT build with tests and GPU both off.
 call tests\cmake-cpu-only\run_windows.bat
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-1986 GPU-serial port (Sec5.7): every dxc invocation this design's build
@@ -31,12 +31,12 @@ rem issues adds -WX, at the pinned compile target (cs_6_2 -HV 2018 -O3).
 set DXC="C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\dxc.exe"
 if not exist %DXC% (
 	echo dxc.exe not found at %DXC%
-	popd & exit /b 1
+	goto :hard_fail
 )
 for %%f in (src\gpu\shaders\*.hlsl) do (
 	%DXC% -T cs_6_2 -E main -Fo out\shaders\%%~nf.cso %%f -O3 -HV 2018 -WX
 	if errorlevel 1 (
-		popd & exit /b 1
+		goto :hard_fail
 	)
 )
 
@@ -47,7 +47,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENA
 	tests\test_main.cpp /Fo:out\ /Fe:out\superslm_tests.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2045 (S5, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md): the C5
@@ -68,7 +68,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPE
 	tools\t2039_c5_harness.cpp /Fo:out\c5\ /Fe:out\t2039_c5_harness.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Significant 5, D-SLM5439): the T-2432
@@ -102,7 +102,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools ^
 	tools\t2432_geometry_harness.cpp /Fo:out\geoharness\ /Fe:out\t2432_geometry_harness.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2169 (Brunel, Rung 2b, Claude/Brunel/t2180-t2169-gpu-batched-prefill-build-2026-08-18.md):
@@ -120,7 +120,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPE
 	tools\t2169_rung2b_selfcheck.cpp /Fo:out\t2169selfcheck\ /Fe:out\t2169_rung2b_selfcheck.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2169 (Brunel, Rung 2, D-SLM3596): the TDR-safe bound measurement harness
@@ -144,7 +144,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPE
 	tools\t2169_tdr_measure.cpp /Fo:out\t2169tdr\ /Fe:out\t2169_tdr_measure.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib advapi32.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2180 (Brunel, Rung 6, Claude/Brunel/t2180-t2169-gpu-batched-prefill-build-2026-08-18.md):
@@ -162,7 +162,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPE
 	tools\t2180_rung6_public_bridge_sweep.cpp /Fo:out\t2180\ /Fe:out\t2180_rung6_sweep.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2180 (Brunel, Rung 6): the product cell -- tok/s on a long forced span, chunked (one
@@ -183,7 +183,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPE
 	tools\t2180_rung6_tokps.cpp /Fo:out\t2180\ /Fe:out\t2180_rung6_tokps.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2116 (cross-vendor certification package): a minimal, dependency-free adapter
@@ -195,7 +195,7 @@ cl /nologo /std:c++20 /O2 /W4 /EHsc ^
 	tools\t2116_list_adapters.cpp /Fo:out\t2116\ /Fe:out\t2116_list_adapters.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2100 (dispatch-path throughput benchmark, tools\t2100_gpu_throughput.cpp) -- same
@@ -214,7 +214,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPE
 	tools\t2100_gpu_throughput.cpp /Fo:out\t2100\ /Fe:out\t2100_gpu_throughput.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2113 (B1, Claude/Vitruvius/t2107-gpu-core-1p0-design-2026-08-14.md Sec10 B1):
@@ -232,7 +232,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENA
 	tools\t2113_b1_context_smoke.cpp /Fo:out\b1\ /Fe:out\t2113_b1_context_smoke.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 out\t2113_b1_context_smoke.exe
 set b1_ec=%errorlevel%
@@ -250,7 +250,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENA
 	tools\t2113_b2_model_smoke.cpp /Fo:out\b2\ /Fe:out\t2113_b2_model_smoke.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2113 (B3, design Sec10 B3): the sequence-handle bench proof
@@ -266,7 +266,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENA
 	tools\t2113_b3_sequence_smoke.cpp /Fo:out\b3\ /Fe:out\t2113_b3_sequence_smoke.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2113 (B3.5, design Sec5.3a/Sec10 B3.5, mini-fold 2026-08-15 routing D-SLM3367): the
@@ -282,7 +282,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENA
 	tools\t2113_b35_embed_smoke.cpp /Fo:out\b35\ /Fe:out\t2113_b35_embed_smoke.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2113 (B5, design Sec10 B5): the async-boundary bench proof
@@ -300,7 +300,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENA
 	tools\t2113_b5_async_smoke.cpp /Fo:out\b5\ /Fe:out\t2113_b5_async_smoke.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2113 (B6 checkpoint, design Sec10 B6): the adapter-residency/guard bench proof
@@ -317,7 +317,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENA
 	tools\t2113_b6_adapter_smoke.cpp /Fo:out\b6\ /Fe:out\t2113_b6_adapter_smoke.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2113 (B6b, design Sec10 B6): the GEMM-site adapter delta-application divergence proof
@@ -332,7 +332,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENA
 	tools\t2113_b6b_adapter_delta_smoke.cpp /Fo:out\b6b\ /Fe:out\t2113_b6b_adapter_delta_smoke.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2113 (B7, design Sec4.3/Sec7/Sec10 B7): the batch-decode bench proof
@@ -347,7 +347,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENA
 	tools\t2113_b7_batch_smoke.cpp /Fo:out\b7\ /Fe:out\t2113_b7_batch_smoke.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2113 (B8, design Sec5.4/Sec10 B8): the thread-safety bench proof
@@ -361,7 +361,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENA
 	tools\t2113_b8_thread_smoke.cpp /Fo:out\b8\ /Fe:out\t2113_b8_thread_smoke.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2124 (D-SLM3446, adapter UAF fix -- Claude/Poirot/435f730-t2124-adapter-uaf-review.md's own
@@ -377,7 +377,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENA
 	tools\t2124_adapter_uaf_repro.cpp /Fo:out\t2124\ /Fe:out\t2124_adapter_uaf_repro.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2139 (Brunel, C1/C2): the Layer-1 CPU-side sslm_* ABI's own sizing/construction/model-
@@ -386,25 +386,25 @@ rem Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md Sec9), and C2's own
 if not exist out\t2139 mkdir out\t2139
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /c src\sslm_abi.cpp /Fo:out\t2139\sslm_abi.obj
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem Gate A must-accept: compiles, links, runs to exit 0.
 cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude /Itools /Itests tools\t2139_gate_a_header_parity_check.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_a_header_parity_check.exe
 if errorlevel 1 (
 	echo Gate A must-accept construction FAILED TO COMPILE -- this is a real regression, not expected
-	popd & exit /b 1
+	goto :hard_fail
 )
 out\t2139_gate_a_header_parity_check.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem Gate A must-reject: MUST fail to compile. errorlevel 0 here is the regression.
 cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude /Itools /Itests tools\t2139_gate_a_header_parity_check_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_a_header_parity_check_negative.exe >out\t2139\gate_a_negative.log 2>&1
 if not errorlevel 1 (
 	echo Gate A must-reject construction COMPILED CLEAN -- Gate A has regressed, see out\t2139\gate_a_negative.log
-	popd & exit /b 1
+	goto :hard_fail
 )
 rem T-2139 sixth confirmation review (Claude/Poirot/5fbd04d-t2139-sixth-confirmation-review.md S1):
 rem same marker-text treatment as the X-macro/sentinel negatives below -- a compile failure alone
@@ -415,7 +415,7 @@ rem assertion, and exit-code-only reports that as correct).
 findstr /C:"sslm_model_map: library signature diverges from tests/t2130-g5-red-suite/sslm_g5.h" out\t2139\gate_a_negative.log >nul
 if errorlevel 1 (
 	echo Gate A must-reject construction failed to compile, but NOT for its own assertion -- see out\t2139\gate_a_negative.log
-	popd & exit /b 1
+	goto :hard_fail
 )
 echo Gate A must-reject construction correctly failed to compile, for its own reason ^(marker text confirmed, see out\t2139\gate_a_negative.log^)
 
@@ -434,11 +434,11 @@ cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude tools\t2139_gate_c_type_identity_c
 if errorlevel 1 (
 	echo Gate C must-accept construction FAILED TO COMPILE -- this is a real regression, not expected -- see out\t2139\gate_c_must_accept.log
 	type out\t2139\gate_c_must_accept.log
-	popd & exit /b 1
+	goto :hard_fail
 )
 out\t2139_gate_c_type_identity_check.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 echo Gate C must-accept construction: PASS
 
@@ -446,7 +446,7 @@ rem Gate C must-reject: MUST fail to compile. errorlevel 0 here is the regressio
 cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude tools\t2139_gate_c_type_identity_check_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_c_type_identity_check_negative.exe >out\t2139\gate_c_negative.log 2>&1
 if not errorlevel 1 (
 	echo Gate C must-reject construction COMPILED CLEAN -- Gate C has regressed, see out\t2139\gate_c_negative.log
-	popd & exit /b 1
+	goto :hard_fail
 )
 rem T-2139 sixth confirmation review (Claude/Poirot/5fbd04d-t2139-sixth-confirmation-review.md S1):
 rem same marker-text treatment as the X-macro/sentinel negatives below -- a compile failure alone
@@ -454,7 +454,7 @@ rem is not proof the INTENDED assertion fired.
 findstr /C:"SSLM_ARTIFACT_REJECTED diverges" out\t2139\gate_c_negative.log >nul
 if errorlevel 1 (
 	echo Gate C must-reject construction failed to compile, but NOT for its own assertion -- see out\t2139\gate_c_negative.log
-	popd & exit /b 1
+	goto :hard_fail
 )
 echo Gate C must-reject construction correctly failed to compile, for its own reason ^(marker text confirmed, see out\t2139\gate_c_negative.log^)
 
@@ -468,11 +468,11 @@ cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude /Itests tools\t2139_gate_c_real_su
 if errorlevel 1 (
 	echo Gate C real-suite-side construction FAILED TO COMPILE -- this is a real regression, not expected -- see out\t2139\gate_c_real_suite_side.log
 	type out\t2139\gate_c_real_suite_side.log
-	popd & exit /b 1
+	goto :hard_fail
 )
 out\t2139_gate_c_real_suite_side_check.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 echo Gate C real-suite-side construction: PASS
 
@@ -489,7 +489,7 @@ if not errorlevel 1 (
 	python tools\ci\gate_c_third_tu_can_fail_probe.py
 	if errorlevel 1 (
 		echo gate_c_third_tu_can_fail_probe.py FAILED -- see output above
-		popd & exit /b 1
+		goto :hard_fail
 	)
 ) else (
 	echo python not found on PATH -- skipping tools\ci\gate_c_third_tu_can_fail_probe.py ^(non-fatal^)
@@ -499,7 +499,7 @@ rem Gate C must-reject, X-MACRO GENERATION mechanism specifically (S4): MUST fai
 cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude tools\t2139_gate_c_xmacro_check_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_c_xmacro_check_negative.exe >out\t2139\gate_c_xmacro_negative.log 2>&1
 if not errorlevel 1 (
 	echo Gate C X-macro must-reject construction COMPILED CLEAN -- Gate C has regressed, see out\t2139\gate_c_xmacro_negative.log
-	popd & exit /b 1
+	goto :hard_fail
 )
 rem T-2139 fifth confirmation review (Claude/Poirot/ce5aff2-t2139-fifth-confirmation-review.md S3):
 rem a compile failure alone is not proof the INTENDED assertion fired -- findstr the log this step
@@ -515,7 +515,7 @@ rem CMakeLists.txt's own -DMARKER_TEXT= fix for the same target.
 findstr /C:"SSLM_ARTIFACT_REJECTED diverges (deliberate corruption, must-reject construction)" out\t2139\gate_c_xmacro_negative.log >nul
 if errorlevel 1 (
 	echo Gate C X-macro must-reject construction failed to compile, but NOT for its own assertion -- see out\t2139\gate_c_xmacro_negative.log
-	popd & exit /b 1
+	goto :hard_fail
 )
 echo Gate C X-macro must-reject construction correctly failed to compile, for its own reason ^(marker text confirmed, see out\t2139\gate_c_xmacro_negative.log^)
 
@@ -523,7 +523,7 @@ rem Gate C must-reject, SENTINEL IDENTITY mechanism specifically (S4): MUST fail
 cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude tools\t2139_gate_c_sentinel_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_c_sentinel_negative.exe >out\t2139\gate_c_sentinel_negative.log 2>&1
 if not errorlevel 1 (
 	echo Gate C sentinel must-reject construction COMPILED CLEAN -- Gate C has regressed, see out\t2139\gate_c_sentinel_negative.log
-	popd & exit /b 1
+	goto :hard_fail
 )
 rem Same marker-text treatment as the X-macro negative above (S3): this is the exact gap the
 rem fifth confirmation review found live -- one governed append to both real headers desynchronizes
@@ -538,7 +538,7 @@ rem Same class as the X-macro fix above, same fix (full text, matching CMakeList
 findstr /C:"registry-top divergence (deliberate one-sided append, must-reject construction): the two SSLM_STATUS_NEXT_FREE sentinels no longer agree" out\t2139\gate_c_sentinel_negative.log >nul
 if errorlevel 1 (
 	echo Gate C sentinel must-reject construction failed to compile, but NOT for its own assertion -- see out\t2139\gate_c_sentinel_negative.log
-	popd & exit /b 1
+	goto :hard_fail
 )
 echo Gate C sentinel must-reject construction correctly failed to compile, for its own reason ^(marker text confirmed, see out\t2139\gate_c_sentinel_negative.log^)
 
@@ -554,23 +554,23 @@ cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude /Itests tools\t2141_gate_c_t2138_s
 if errorlevel 1 (
 	echo T-2141 t2138-suite-side must-accept construction FAILED TO COMPILE -- this is a real regression, not expected -- see out\t2139\t2141_must_accept.log
 	type out\t2139\t2141_must_accept.log
-	popd & exit /b 1
+	goto :hard_fail
 )
 out\t2141_gate_c_t2138_suite_side_check.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 echo T-2141 t2138-suite-side must-accept construction: PASS
 
 cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude tools\t2141_gate_c_t2138_suite_side_check_negative.cpp /Fo:out\t2139\ /Fe:out\t2141_gate_c_t2138_suite_side_check_negative.exe >out\t2139\t2141_negative.log 2>&1
 if not errorlevel 1 (
 	echo T-2141 t2138-suite-side must-reject construction COMPILED CLEAN -- has regressed, see out\t2139\t2141_negative.log
-	popd & exit /b 1
+	goto :hard_fail
 )
 findstr /C:"SSLM_ARTIFACT_REJECTED diverges (deliberate corruption, must-reject construction)" out\t2139\t2141_negative.log >nul
 if errorlevel 1 (
 	echo T-2141 t2138-suite-side must-reject construction failed to compile, but NOT for its own assertion -- see out\t2139\t2141_negative.log
-	popd & exit /b 1
+	goto :hard_fail
 )
 echo T-2141 t2138-suite-side must-reject construction correctly failed to compile, for its own reason ^(marker text confirmed, see out\t2139\t2141_negative.log^)
 
@@ -591,12 +591,12 @@ rem and this step does not want to turn on globally -- goto/labels sidestep it i
 powershell -NoLogo -NoProfile -NonInteractive -Command "$n = Get-Content 'include/superslm/sslm_abi_functions.inc','include/superslm/sslm_abi_functions_g5_comparable.inc' | Select-String -AllMatches 'sslm_[a-z0-9_]+\s*\(' | ForEach-Object { $_.Matches.Value -replace '\s*\($','' } | Sort-Object -Unique; $n.Count | Set-Content -Encoding ascii 'out/t2139/verb_count.txt'"
 if errorlevel 1 (
 	echo ABI verb inventory command failed ^(exit %errorlevel%^) -- this is not a measured verb-count drift
-	popd & exit /b 1
+	goto :hard_fail
 )
 set /p T2139_VERB_COUNT=<out\t2139\verb_count.txt
 if "%T2139_VERB_COUNT%"=="36" goto :t2139_verb_count_ok
 echo count_abi_verbs.sh reports %T2139_VERB_COUNT%, expected 36 -- verb count drifted, see design Sec4 / T-2132 / T-2199
-popd & exit /b 1
+goto :hard_fail
 :t2139_verb_count_ok
 echo count_abi_verbs.sh: 36 verbs, matches T-2139 Sec4's 29 plus T-2132/G5's five verbs and T-2199's versioned decode and params-initializer verbs
 goto :t2139_verb_count_done
@@ -613,7 +613,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c2_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_c2_smoke.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 rem S9 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): Gate B's own must-accept half was
 rem compiled but never RUN by this build. Auto-run when a real artifact is available (set
@@ -621,7 +621,7 @@ rem T2139_MODEL, and optionally T2139_MODEL2 for the C2 pool/model-mismatch pin)
 rem silently passes, when unset, since not every machine carries these artifacts.
 if defined T2139_MODEL (
 	out\t2139_c2_smoke.exe %T2139_MODEL% %T2139_MODEL2%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_c2_smoke: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)
 )
@@ -632,11 +632,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c2_smoke_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_c2_smoke_negative.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2139_MODEL (
 	out\t2139_c2_smoke_negative.exe %T2139_MODEL%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_c2_smoke_negative: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)
 )
@@ -652,11 +652,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c3_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_c3_smoke.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2139_MODEL (
 	out\t2139_c3_smoke.exe %T2139_MODEL%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_c3_smoke: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)
 )
@@ -667,11 +667,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c3_smoke_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_c3_smoke_negative.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2139_MODEL (
 	out\t2139_c3_smoke_negative.exe %T2139_MODEL%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_c3_smoke_negative: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)
 )
@@ -689,11 +689,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests\t2138-abi-red-
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c4_oracle.cpp /Fo:out\t2139\ /Fe:out\t2139_c4_oracle.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2139_MODEL (
 	out\t2139_c4_oracle.exe %T2139_MODEL%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_c4_oracle: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)
 )
@@ -704,11 +704,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c4_smoke_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_c4_smoke_negative.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2139_MODEL (
 	out\t2139_c4_smoke_negative.exe %T2139_MODEL%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_c4_smoke_negative: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)
 )
@@ -724,11 +724,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c5_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_c5_smoke.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2139_MODEL (
 	out\t2139_c5_smoke.exe %T2139_MODEL%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_c5_smoke: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)
 )
@@ -739,11 +739,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c5_smoke_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_c5_smoke_negative.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2139_MODEL (
 	out\t2139_c5_smoke_negative.exe %T2139_MODEL%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_c5_smoke_negative: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)
 )
@@ -761,7 +761,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c6_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_c6_smoke.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 rem Conductor observation (Claude/Bach/t2139-battery-varsunset-failure-2026-08-16.md): a chained
 rem `if defined A if defined B (block) else (block)` binds its `else` to the SECOND `if` only --
@@ -772,7 +772,7 @@ set "c6_ready="
 if defined T2139_MODEL if defined T2139_ADAPTER set "c6_ready=1"
 if defined c6_ready (
 	out\t2139_c6_smoke.exe %T2139_MODEL% %T2139_ADAPTER% %T2139_FOREIGN%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_c6_smoke: built, NOT run ^(set T2139_MODEL and T2139_ADAPTER to run^)
 )
@@ -783,14 +783,14 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c6_smoke_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_c6_smoke_negative.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 rem Same chained-if-defined defect as C6's own smoke above -- same sequential-guard fix.
 set "c6neg_ready="
 if defined T2139_MODEL if defined T2139_ADAPTER if defined T2139_FOREIGN set "c6neg_ready=1"
 if defined c6neg_ready (
 	out\t2139_c6_smoke_negative.exe %T2139_MODEL% %T2139_ADAPTER% %T2139_FOREIGN%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_c6_smoke_negative: built, NOT run ^(set T2139_MODEL, T2139_ADAPTER, T2139_FOREIGN to run^)
 )
@@ -807,7 +807,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c7_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_c7_smoke.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 rem T2139_MODEL_TOK (distinct from T2139_MODEL): C7's own verbs need a REAL bound tokenizer,
 rem which the plain base artifact T2139_MODEL names for C2-C6 does not carry (adapter-compat
@@ -816,7 +816,7 @@ rem tokenizer section) -- set T2139_MODEL_TOK to a combined model+tokenizer .ssl
 rem ticket's own tools/t2139_build_combined_fixture.py output) to run C7's own smokes/pins.
 if defined T2139_MODEL_TOK (
 	out\t2139_c7_smoke.exe %T2139_MODEL_TOK%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_c7_smoke: built, NOT run ^(set T2139_MODEL_TOK=path\to\a-model+tokenizer.sslm to run^)
 )
@@ -833,11 +833,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c7_unmapped_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_c7_unmapped_pin.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2139_MODEL_TOK (
 	out\t2139_c7_unmapped_pin.exe %T2139_MODEL_TOK%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_c7_unmapped_pin: built, NOT run ^(set T2139_MODEL_TOK=path\to\a-model+tokenizer.sslm to run^)
 )
@@ -897,7 +897,7 @@ if not errorlevel 1 (
 				rem Do not `exit /b` from this nested conditional: the conductor's
 				rem cmd /c invocation observed that form as a false success.  Route
 				rem every S8 verifier hard stop through the top-level exit label.
-				goto :s8_hard_fail
+				goto :hard_fail
 			)
 			echo sslm_verify: S8 fixture confirmed byte-valid.
 		)
@@ -919,7 +919,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_dim9_current_token_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_dim9_current_token_pin.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 rem T-2199 Phase D closing round, item 3: T2139_MODEL (a real checkpoint) wins if the caller set
 rem it; otherwise falls back to T2199_DIM9_MODEL (the S8 synthetic fixture provisioned above,
@@ -931,7 +931,7 @@ set DIM9_MODEL=%T2139_MODEL%
 if not defined DIM9_MODEL set DIM9_MODEL=%T2199_DIM9_MODEL%
 if defined DIM9_MODEL (
 	out\t2139_dim9_current_token_pin.exe %DIM9_MODEL%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_dim9_current_token_pin: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)
 )
@@ -947,11 +947,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_n2_odd_budget_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_n2_odd_budget_smoke.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2139_MODEL (
 	out\t2139_n2_odd_budget_smoke.exe %T2139_MODEL%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_n2_odd_budget_smoke: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)
 )
@@ -969,11 +969,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENA
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_n3_bad_alloc_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_n3_bad_alloc_pin.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2139_MODEL (
 	out\t2139_n3_bad_alloc_pin.exe %T2139_MODEL%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_n3_bad_alloc_pin: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)
 )
@@ -991,14 +991,14 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENA
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_d3464_foreignfault_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_d3464_foreignfault_pin.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 rem Sequential-guard form (see the C6-smoke fix above) -- the adapter arg is OPTIONAL for this
 rem pin (sslm_model_map's own cell runs with T2139_MODEL alone), so this is a plain single-var
 rem gate, not a chained one; wired the same way regardless, for consistency.
 if defined T2139_MODEL (
 	out\t2139_d3464_foreignfault_pin.exe %T2139_MODEL% %T2139_ADAPTER%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_d3464_foreignfault_pin: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run; optionally also T2139_ADAPTER=path\to\real-adapter.sslm^)
 )
@@ -1015,11 +1015,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENA
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_f2_length_error_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_f2_length_error_pin.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2139_MODEL (
 	out\t2139_f2_length_error_pin.exe %T2139_MODEL%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_f2_length_error_pin: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)
 )
@@ -1032,11 +1032,11 @@ rem real .sslm artifact needed -- self-contained, always built AND run. Committe
 rem NO build recipe until this round (S3's own named finding).
 cl /nologo /std:c++20 /O2 /W4 /EHsc tools\t2139_f2_catchall_construction_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_f2_catchall_construction_pin.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 out\t2139_f2_catchall_construction_pin.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem D-SLM3466's owed pin (Claude/Poirot/3bcbe43-t2139-fourth-confirmation-review.md S2/S3):
@@ -1052,11 +1052,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENA
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_d3466_postload_region_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_d3466_postload_region_pin.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2139_MODEL (
 	out\t2139_d3466_postload_region_pin.exe %T2139_MODEL% %T2139_ADAPTER%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_d3466_postload_region_pin: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run; optionally also T2139_ADAPTER=path\to\real-adapter.sslm^)
 )
@@ -1074,13 +1074,13 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_sfreeze_example.cpp /Fo:out\t2139\ /Fe:out\t2139_sfreeze_example.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 rem S-FREEZE needs a REAL bound tokenizer (real text in, real text out, D-SLM3452) -- same
 rem T2139_MODEL_TOK distinction as C7's own smokes/pins above.
 if defined T2139_MODEL_TOK (
 	out\t2139_sfreeze_example.exe %T2139_MODEL_TOK% "The old wizard said"
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2139_sfreeze_example: built, NOT run ^(set T2139_MODEL_TOK=path\to\a-model+tokenizer.sslm to run^)
 )
@@ -1099,14 +1099,14 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2132_g5_smoke.cpp /Fo:out\t2139\ /Fe:out\t2132_g5_smoke.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 rem G5 needs a real fixture WITH a compiled SchemaMasks section (tools/t2132_build_g5_fixture.py) --
 rem a distinct env var from T2139_MODEL_TOK, since an ordinary combined model+tokenizer artifact
 rem has no schema to bind.
 if defined T2132_G5_FIXTURE (
 	out\t2132_g5_smoke.exe %T2132_G5_FIXTURE% "Book me with Rin, Thursday afternoon."
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2132_g5_smoke: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
 )
@@ -1125,11 +1125,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2147_chunk_batched_pins.cpp /Fo:out\t2147\ /Fe:out\t2147_chunk_batched_pins.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2132_G5_FIXTURE (
 	out\t2147_chunk_batched_pins.exe %T2132_G5_FIXTURE% "Book me with Rin, Thursday afternoon."
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2147_chunk_batched_pins: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
 )
@@ -1158,7 +1158,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itools ^
 	/Fo:out\t2132g5gpu\ /Fe:out\t2132_g5_gpu_parity.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 rem T-2132 (G5-5) build log finding, Claude/Brunel/t2132-g5-build-2026-08-16.md: real, reproducible,
 rem dispatch-budget-independent CPU/GPU divergence found starting at decode step 19 of a real,
@@ -1170,7 +1170,7 @@ rem for -- so this step gives a real PASS/FAIL signal instead of a known-red one
 rem >18-step run is documented, not silently dropped, in the build log above.
 if defined T2132_G5_FIXTURE (
 	out\t2132_g5_gpu_parity.exe %T2132_G5_FIXTURE% "Book me with Rin, Thursday afternoon." shopkeeper_intent_extraction 18
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2132_g5_gpu_parity: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
 )
@@ -1186,11 +1186,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2132_c1_restore_walk_state_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_c1_restore_walk_state_pin.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2132_G5_FIXTURE (
 	out\t2132_c1_restore_walk_state_pin.exe %T2132_G5_FIXTURE%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2132_c1_restore_walk_state_pin: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
 )
@@ -1207,12 +1207,12 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2132_c2_cross_model_schema_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_c2_cross_model_schema_pin.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2132_G5_FIXTURE (
 if defined T2132_MODEL_0P5B (
 	out\t2132_c2_cross_model_schema_pin.exe %T2132_G5_FIXTURE% %T2132_MODEL_0P5B%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2132_c2_cross_model_schema_pin: built, NOT run ^(set T2132_MODEL_0P5B=path\to\a-0.5b-plain.sslm too^)
 )
@@ -1231,11 +1231,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2132_s7_set_schema_freshness_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_s7_set_schema_freshness_pin.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2132_G5_FIXTURE (
 	out\t2132_s7_set_schema_freshness_pin.exe %T2132_G5_FIXTURE%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2132_s7_set_schema_freshness_pin: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
 )
@@ -1251,11 +1251,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2132_s2_dead_end_sentinel_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_s2_dead_end_sentinel_pin.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2132_G5_FIXTURE (
 	out\t2132_s2_dead_end_sentinel_pin.exe %T2132_G5_FIXTURE%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2132_s2_dead_end_sentinel_pin: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
 )
@@ -1272,11 +1272,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2132_s4_leak_guard_mutation_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_s4_leak_guard_mutation_pin.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2132_G5_FIXTURE (
 	out\t2132_s4_leak_guard_mutation_pin.exe %T2132_G5_FIXTURE%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2132_s4_leak_guard_mutation_pin: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
 )
@@ -1293,11 +1293,11 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2132_m4_forced_token_count_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_m4_forced_token_count_pin.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 if defined T2132_G5_FIXTURE (
 	out\t2132_m4_forced_token_count_pin.exe %T2132_G5_FIXTURE%
-	if errorlevel 1 ( popd & exit /b 1 )
+	if errorlevel 1 ( goto :hard_fail )
 ) else (
 	echo t2132_m4_forced_token_count_pin: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
 )
@@ -1317,7 +1317,7 @@ call tests\t2112-gpu-1p0-red-suite\interface_probe\build_probe.bat
 set probe_ec=%errorlevel%
 popd
 if not %probe_ec%==0 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2199 Phase D review fix S8 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md), 2026-08-20:
@@ -1337,14 +1337,14 @@ call tests\t2199-damped-greedy-red-suite\build_green.bat
 set phaseAC_ec=%errorlevel%
 popd
 if not %phaseAC_ec%==0 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 pushd .
 call tests\t2199-damped-greedy-red-suite\build_green_phaseD.bat %T2199_PHASED_MODEL%
 set phaseD_ec=%errorlevel%
 popd
 if not %phaseD_ec%==0 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem D-SLM3798 suite-wiring closure: the T-2138 ABI suite previously had a correct executable
@@ -1358,7 +1358,7 @@ call tests\t2138-abi-red-suite\run_green.bat %T2199_PHASED_MODEL%
 set t2138_ec=%errorlevel%
 popd
 if not %t2138_ec%==0 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2314 (gate-reachability sweep, Claude/Brunel/t2314-gate-reachability-2026-08-27.md): three
@@ -1375,33 +1375,33 @@ call tests\t2018-slora-serial\build.bat
 set t2018_offline_ec=%errorlevel%
 popd
 if not %t2018_offline_ec%==0 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 tests\t2018-slora-serial\t2018_offline_red.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 pushd .
 call tests\t2018-slora-serial\build_b0b.bat
 set t2018_b0b_ec=%errorlevel%
 popd
 if not %t2018_b0b_ec%==0 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 tests\t2018-slora-serial\t2029_b0b_red.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 pushd .
 call tests\t2018-slora-serial\build_b2.bat
 set t2018_b2_ec=%errorlevel%
 popd
 if not %t2018_b2_ec%==0 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 tests\t2018-slora-serial\t2029_b2_red.exe
 if errorlevel 1 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2314: tests\t2178-gpu-batched-prefill-red-suite\ wired calling its own single entry point,
@@ -1426,7 +1426,7 @@ call tests\t2178-gpu-batched-prefill-red-suite\build_red_suite.bat
 set t2178_ec=%errorlevel%
 popd
 if %t2178_ec%==2 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2314: tests\t2296-fp-free-open-red-suite\ -- this arc's own pin, six cells each
@@ -1447,14 +1447,14 @@ call tests\t2296-fp-free-open-red-suite\build_link_red.bat
 set t2296_link_ec=%errorlevel%
 popd
 if not %t2296_link_ec%==0 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 pushd .
 call tests\t2296-fp-free-open-red-suite\build_liveness_red.bat
 set t2296_liveness_ec=%errorlevel%
 popd
 if not %t2296_liveness_ec%==0 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem T-2326/T-2333 (Curie): tests\t2296-fp-free-open-red-suite\test_check_fp_free_scan.py -- the red
@@ -1764,10 +1764,10 @@ if exist "out\t2368_fp_scan_corpus_build" (
 )
 if not %t2371_gate_ec%==0 (
 	echo scan_build_output.py FAILED against the real corpus this build's own red suite produced -- this IS the ship gate CI runs.
-	popd & exit /b 1
+	goto :hard_fail
 )
 if not %t2326_scan_ec%==0 (
-	popd & exit /b 1
+	goto :hard_fail
 )
 
 rem NON-ZERO-EXIT PATHS (O2, Claude/Poirot/aea6116-t2139-seventh-confirmation-review.md; RoPE
@@ -1963,6 +1963,11 @@ if not errorlevel 1 (
 		echo check_gpu_guard_status_parity.py FAILED -- see output above
 		set ec=1
 	)
+	python tests\ci\check_build_bat_exit_paths.py
+	if errorlevel 1 (
+		echo check_build_bat_exit_paths.py FAILED -- see output above
+		set ec=1
+	)
 	rem T-2101 (the reviewer's own named residual, code review 6d9e04e-t2101-gpu-throughput-review.md,
 	rem second confirmation pass): the shader half of the original S3 class -- each split GEMM site's
 	rem own [numthreads(N,1,1)] and stride formula, cross-checked against ComputeGpuGemmSiteGroupPlan's
@@ -2031,13 +2036,13 @@ if not errorlevel 1 (
 		set ec=1
 	)
 ) else (
-	echo python not found on PATH -- skipping tests\ci\check_gpu_guard_status_parity.py, check_gemm_site_thread_width_parity.py, tools\ci\check_tools_have_build_recipe.py, tools\ci\check_tests_have_build_recipe.py, and tools\ci\check_abi_header_inventory.py ^(non-fatal^)
+	echo python not found on PATH -- skipping tests\ci\check_gpu_guard_status_parity.py, check_build_bat_exit_paths.py, check_gemm_site_thread_width_parity.py, tools\ci\check_tools_have_build_recipe.py, tools\ci\check_tests_have_build_recipe.py, and tools\ci\check_abi_header_inventory.py ^(non-fatal^)
 )
 
 popd
 exit /b %ec%
 
-:s8_hard_fail
+:hard_fail
 popd
 endlocal
 exit /b 1
