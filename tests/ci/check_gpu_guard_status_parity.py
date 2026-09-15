@@ -294,6 +294,7 @@ CPU_GUARD_REGION_END_MARKER = "const int64_t position = seq.context_length;"
 CPU_BELOW_GUARD_ARITHMETIC_STATUSES = frozenset({
     "CarriedScaleMantissaOutOfDomain",
     "IExpScaleDerivationOutOfDomain",
+    "QkNormFusedLandingMagnitudeOutOfDomain",
     "SoftmaxKernelRefusedAfterGateAccepted",
     "Ok",
 })
@@ -430,8 +431,8 @@ _DECODE_STICKY_TAG_RETURN_RE = re.compile(r"return\s+S::([A-Za-z_][A-Za-z0-9_]*)
 # (executed at T-2083) and therefore covered where the function
 # ENDS, not what is inside it -- deleting an interior `case` while
 # preserving the file's own total line count left that citation green.
-DECODE_STICKY_TAG_EXPECTED_TOTAL = 14
-DECODE_STICKY_TAG_EXPECTED_REJECTING = 13
+DECODE_STICKY_TAG_EXPECTED_TOTAL = 15
+DECODE_STICKY_TAG_EXPECTED_REJECTING = 14
 
 _STATUS_RETURN_RE = re.compile(r"return\s+(?:superslm::)?SslmForwardStatus::([A-Za-z_][A-Za-z0-9_]*)")
 _DEF_ROW_RE = re.compile(
