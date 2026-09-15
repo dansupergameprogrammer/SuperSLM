@@ -7,7 +7,10 @@
 // (forward_sites.cpp) -- then asserts the two agree, bit-for-bit, before
 // writing anything.
 //
-// Usage: sslm_layer_trace <model.sslm> <tokenizer.sslm> "<prompt>" --dump <path>
+// Usage:
+//   sslm_layer_trace <model.sslm> <tokenizer.sslm> "<prompt>" --dump <path>
+//   sslm_layer_trace <model.sslm> <tokenizer.sslm> --token-ids <csv> --dump <path>
+//       [--site-dump <jsonl-path> --site-layer <index>]
 //
 // "<prompt>" is the FULL chat-templated prompt text (system + user +
 // assistant-open), the same shape tools/sslm_generate.cpp's argv[3] already
@@ -15,10 +18,13 @@
 // (design S3): the prompt's own last token's forward pass, no force-feeding.
 //
 // Dump format (design S4.1 step 5): uint64 rows (29), uint64 hidden_size,
-// uint64 prompt_fingerprint (FNV-1a 64-bit hash of the raw prompt argument,
-// UTF-8, before tokenization), uint64 capture_mode (always 1 on this side --
+// uint64 input_fingerprint (FNV-1a 64-bit hash of the raw prompt argument,
+// UTF-8, before tokenization; in --token-ids mode, of "token_ids:" followed
+// by the canonical comma-separated decimal ids), uint64 capture_mode (always 1 on this side --
 // the int8 engine's own composition is inherently one-token-at-a-time), then
-// per row: int64 m, int64 e, then hidden_size int8 codes.
+// per row: int64 m, int64 e, then hidden_size int8 codes. By default the rows
+// are embedding + one residual-stream row after each decoder layer. With
+// --include-final-norm, one post-final-norm row is appended.
 //
 // On a self-check mismatch (production vs. manual-replay token id or logit
 // row), this tool exits non-zero with a loud diagnostic and writes no dump --
@@ -29,6 +35,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -36,6 +43,7 @@
 #include "superslm/forward_sites.h"
 #include "superslm/model.h"
 #include "superslm/tokenizer.h"
+#include "superslm/trace_hook.h"
 #include "sslm_marshal.h"
 
 using namespace superslm;
@@ -50,7 +58,38 @@ namespace {
 
 void PrintUsage(const char* argv0) {
 	std::fprintf(stderr,
-	             "usage: %s <model.sslm> <tokenizer.sslm> \"<prompt>\" --dump <path>\n", argv0);
+	             "usage: %s <model.sslm> <tokenizer.sslm> (\"<prompt>\" | --token-ids <csv>) "
+	             "--dump <path> [--include-final-norm] "
+	             "[--site-dump <jsonl-path> --site-layer <index>]\n", argv0);
+}
+
+bool ParseTokenIds(const char* spec, std::vector<int32_t>* out) {
+	std::string text(spec);
+	for (size_t pos = 0; pos < text.size();) {
+		const size_t end = text.find(',', pos);
+		const std::string field = text.substr(pos, end == std::string::npos ? end : end - pos);
+		if (field.empty()) return false;
+		try {
+			size_t consumed = 0;
+			const long value = std::stol(field, &consumed, 10);
+			if (consumed != field.size() || value < 0 || value > INT32_MAX) return false;
+			out->push_back(static_cast<int32_t>(value));
+		} catch (...) {
+			return false;
+		}
+		if (end == std::string::npos) break;
+		pos = end + 1;
+	}
+	return !out->empty();
+}
+
+std::string CanonicalTokenIds(const std::vector<int32_t>& ids) {
+	std::string result = "token_ids:";
+	for (size_t i = 0; i < ids.size(); ++i) {
+		if (i != 0) result.push_back(',');
+		result += std::to_string(ids[i]);
+	}
+	return result;
 }
 
 // FNV-1a, 64-bit (design S4.1 step 5): the offset basis and prime are the
@@ -91,6 +130,75 @@ bool WriteDump(const char* path, const std::vector<LayerSnapshot>& rows, uint64_
 	return static_cast<bool>(f);
 }
 
+struct SiteDumpCapture {
+	std::ofstream output;
+	uint32_t layer = 0;
+	bool enabled = false;
+};
+
+template <typename T>
+void WriteJsonArray(std::ofstream& output, const T* values, size_t count) {
+	output << '[';
+	for (size_t i = 0; i < count; ++i) {
+		if (i != 0) output << ',';
+		output << static_cast<long long>(values[i]);
+	}
+	output << ']';
+}
+
+void CaptureSiteTrace(const SslmChainTraceRecord* chain,
+	                  const SslmKvLandingTraceRecord* landing, void* user) {
+	auto* capture = static_cast<SiteDumpCapture*>(user);
+	if (!capture->enabled) return;
+	const std::string prefix = "layer" + std::to_string(capture->layer) + ".";
+	if (chain != nullptr && chain->site.starts_with(prefix)) {
+		capture->output << "{\"type\":\"chain\",\"site\":\"" << chain->site
+		                << "\",\"token\":" << chain->token_index << ",\"m\":" << chain->m_out
+		                << ",\"e\":" << chain->e_out << ",\"codes\":";
+		WriteJsonArray(capture->output, chain->codes.data(), chain->codes.size());
+		capture->output << "}\n";
+	} else if (landing != nullptr && landing->site.starts_with(prefix)) {
+		capture->output << "{\"type\":\"landing\",\"site\":\"" << landing->site
+		                << "\",\"token\":" << landing->token_index << ",\"head\":" << landing->head
+		                << ",\"m\":" << landing->m_out << ",\"e\":" << landing->e_out
+		                << ",\"codes\":";
+		WriteJsonArray(capture->output, landing->codes.data(), landing->codes.size());
+		capture->output << "}\n";
+	}
+}
+
+void CaptureFusedK(void* user, uint32_t layer, size_t kv_head, size_t channel,
+	               int64_t wide, int64_t rotated, CarriedScale wide_scale,
+	               int64_t landing_raw) {
+	auto* capture = static_cast<SiteDumpCapture*>(user);
+	if (!capture->enabled || layer != capture->layer) return;
+	capture->output << "{\"type\":\"fused_k\",\"layer\":" << layer
+	                << ",\"head\":" << kv_head << ",\"channel\":" << channel
+	                << ",\"wide\":" << wide << ",\"rotated\":" << rotated
+	                << ",\"wide_m\":" << wide_scale.m << ",\"wide_e\":" << wide_scale.e
+	                << ",\"landing_raw\":" << landing_raw << "}\n";
+}
+
+void CaptureAttention(void* user, uint32_t layer, int64_t position, size_t head,
+	                  const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b,
+	                  int64_t q_c, const int64_t* probabilities, const int64_t* ctx_acc,
+	                  const int64_t* ctx_wide, size_t head_dim) {
+	auto* capture = static_cast<SiteDumpCapture*>(user);
+	if (!capture->enabled || layer != capture->layer) return;
+	capture->output << "{\"type\":\"attention\",\"layer\":" << layer
+	                << ",\"position\":" << position << ",\"head\":" << head
+	                << ",\"q_ln2\":" << q_ln2 << ",\"q_b\":" << q_b << ",\"q_c\":" << q_c
+	                << ",\"scores\":";
+	WriteJsonArray(capture->output, scores, width);
+	capture->output << ",\"probs\":";
+	WriteJsonArray(capture->output, probabilities, width);
+	capture->output << ",\"ctx_acc\":";
+	WriteJsonArray(capture->output, ctx_acc, head_dim);
+	capture->output << ",\"ctx_wide\":";
+	WriteJsonArray(capture->output, ctx_wide, head_dim);
+	capture->output << "}\n";
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -100,11 +208,39 @@ int main(int argc, char** argv) {
 	}
 	const std::string model_path = argv[1];
 	const std::string tokenizer_path = argv[2];
-	const std::string prompt = argv[3];
+	const bool token_id_mode = std::strcmp(argv[3], "--token-ids") == 0;
+	if (token_id_mode && argc < 5) {
+		PrintUsage(argv[0]);
+		return 2;
+	}
+	const std::string prompt = token_id_mode ? std::string{} : std::string(argv[3]);
+	std::vector<int32_t> prompt_tokens;
+	if (token_id_mode && !ParseTokenIds(argv[4], &prompt_tokens)) {
+		std::fprintf(stderr, "FAILED at stage=args: invalid token-id list: %s\n", argv[4]);
+		return 2;
+	}
 	std::string dump_path;
-	for (int i = 4; i < argc; ++i) {
+	std::string site_dump_path;
+	uint32_t site_layer = UINT32_MAX;
+	bool include_final_norm = false;
+	for (int i = token_id_mode ? 5 : 4; i < argc; ++i) {
 		if (std::strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
 			dump_path = argv[++i];
+		} else if (std::strcmp(argv[i], "--include-final-norm") == 0) {
+			include_final_norm = true;
+		} else if (std::strcmp(argv[i], "--site-dump") == 0 && i + 1 < argc) {
+			site_dump_path = argv[++i];
+		} else if (std::strcmp(argv[i], "--site-layer") == 0 && i + 1 < argc) {
+			try {
+				size_t consumed = 0;
+				const char* text = argv[++i];
+				const unsigned long value = std::stoul(text, &consumed, 10);
+				if (consumed != std::strlen(text) || value > UINT32_MAX) throw std::out_of_range("layer");
+				site_layer = static_cast<uint32_t>(value);
+			} catch (...) {
+				std::fprintf(stderr, "invalid --site-layer value\n");
+				return 2;
+			}
 		} else {
 			std::fprintf(stderr, "unrecognized argument: %s\n", argv[i]);
 			PrintUsage(argv[0]);
@@ -116,29 +252,37 @@ int main(int argc, char** argv) {
 		PrintUsage(argv[0]);
 		return 2;
 	}
+	if (site_dump_path.empty() != (site_layer == UINT32_MAX)) {
+		std::fprintf(stderr, "FAILED at stage=args: --site-dump and --site-layer are required together\n");
+		return 2;
+	}
 
 	// --- Stage 1: tokenizer + prompt encode (identical to sslm_generate.cpp). --
-	std::vector<uint8_t> tok_bytes;
-	if (!ReadFile(tokenizer_path.c_str(), tok_bytes)) {
-		std::fprintf(stderr, "FAILED at stage=tokenizer_file_read: could not read \"%s\"\n",
-		             tokenizer_path.c_str());
-		return 1;
+	if (!token_id_mode) {
+		std::vector<uint8_t> tok_bytes;
+		if (!ReadFile(tokenizer_path.c_str(), tok_bytes)) {
+			std::fprintf(stderr, "FAILED at stage=tokenizer_file_read: could not read \"%s\"\n",
+			             tokenizer_path.c_str());
+			return 1;
+		}
+		SslmArtifact tok_artifact;
+		SslmError tok_open_err;
+		if (SslmArtifact::OpenFromMemory(tok_bytes.data(), tok_bytes.size(), tok_artifact,
+		                                  &tok_open_err) != SslmStatus::Ok) {
+			std::fprintf(stderr,
+			             "FAILED at stage=tokenizer_artifact_open: status=%s diagnostic=\"%s\"\n",
+			             SslmStatusName(tok_open_err.code), tok_open_err.message.c_str());
+			return 1;
+		}
+		TokenizerView tokenizer;
+		std::string tok_err;
+		if (!TokenizerView::Open(tok_artifact, tokenizer, &tok_err)) {
+			std::fprintf(stderr, "FAILED at stage=tokenizer_view_open: diagnostic=\"%s\"\n",
+			             tok_err.c_str());
+			return 1;
+		}
+		prompt_tokens = tokenizer.Encode(prompt);
 	}
-	SslmArtifact tok_artifact;
-	SslmError tok_open_err;
-	if (SslmArtifact::OpenFromMemory(tok_bytes.data(), tok_bytes.size(), tok_artifact,
-	                                  &tok_open_err) != SslmStatus::Ok) {
-		std::fprintf(stderr, "FAILED at stage=tokenizer_artifact_open: status=%s diagnostic=\"%s\"\n",
-		             SslmStatusName(tok_open_err.code), tok_open_err.message.c_str());
-		return 1;
-	}
-	TokenizerView tokenizer;
-	std::string tok_err;
-	if (!TokenizerView::Open(tok_artifact, tokenizer, &tok_err)) {
-		std::fprintf(stderr, "FAILED at stage=tokenizer_view_open: diagnostic=\"%s\"\n", tok_err.c_str());
-		return 1;
-	}
-	const std::vector<int32_t> prompt_tokens = tokenizer.Encode(prompt);
 	if (prompt_tokens.empty()) {
 		std::fprintf(stderr, "FAILED at stage=tokenizer_encode: prompt encoded to zero tokens\n");
 		return 1;
@@ -172,6 +316,10 @@ int main(int argc, char** argv) {
 	const uint32_t num_kv_heads = model_view.config.num_key_value_heads;
 	const uint32_t num_hidden_layers = model_view.config.num_hidden_layers;
 	const size_t hidden_size = model_view.config.hidden_size;
+	if (site_layer != UINT32_MAX && site_layer >= num_hidden_layers) {
+		std::fprintf(stderr, "FAILED at stage=args: --site-layer must be less than %u\n", num_hidden_layers);
+		return 2;
+	}
 
 	PreflightScanWscFolds(model_view);
 
@@ -286,6 +434,21 @@ int main(int argc, char** argv) {
 
 	std::vector<LayerSnapshot> rows;
 	rows.reserve(num_hidden_layers + 1);
+	SiteDumpCapture site_capture;
+	FusedKCaptureSink fused_k_capture{&site_capture, CaptureFusedK};
+	AttentionCaptureSink attention_capture{&site_capture, CaptureAttention};
+	if (!site_dump_path.empty()) {
+		site_capture.layer = site_layer;
+		site_capture.output.open(site_dump_path, std::ios::out | std::ios::trunc);
+		if (!site_capture.output) {
+			std::fprintf(stderr, "FAILED at stage=site_dump_open: could not open \"%s\"\n",
+			             site_dump_path.c_str());
+			return 1;
+		}
+		layers[site_layer].fused_k_capture_sink = &fused_k_capture;
+		layers[site_layer].attention_capture_sink = &attention_capture;
+		SslmSetTraceHook(model_view.trace_hook, CaptureSiteTrace, &site_capture);
+	}
 
 	auto EmbedWholeToken = [&](int32_t token) -> SslmForwardStatus {
 		std::vector<int8_t> embed_codes(hidden_size);
@@ -336,14 +499,16 @@ int main(int argc, char** argv) {
 	rows.push_back(LayerSnapshot{
 	    std::vector<int8_t>(trace_seq.hidden_codes, trace_seq.hidden_codes + hidden_size),
 	    trace_seq.hidden_scale.m, trace_seq.hidden_scale.e});
+	if (!site_dump_path.empty()) site_capture.enabled = true;
 
 	for (uint32_t step = 0; step < num_hidden_layers; ++step) {
+		SslmTraceHookState* site_trace = step == site_layer ? &model_view.trace_hook : nullptr;
 		const SslmForwardStatus st =
 		    RunLayerLoop(trace_seq, layers.data(), num_hidden_layers, /*layer_budget=*/1, hidden_size,
 		                 model_view.config.head_dim, num_kv_heads, model_view.config.intermediate_size,
 		                 context_cap, model_view.rope_tables, trace_workspace.data(),
 		                 trace_workspace.size(), option_g_mode, /*site_prefix=*/{}, /*token_index=*/0,
-		                 /*trace_hook_state=*/nullptr,
+		                 /*trace_hook_state=*/site_trace,
 		                 /*q_width=*/model_view.config.num_attention_heads * model_view.config.head_dim);
 		if (st != SslmForwardStatus::Ok) {
 			std::fprintf(stderr, "FAILED at stage=trace_layer_step: layer=%u status=%s\n", step,
@@ -354,6 +519,7 @@ int main(int argc, char** argv) {
 		    std::vector<int8_t>(trace_seq.hidden_codes, trace_seq.hidden_codes + hidden_size),
 		    trace_seq.hidden_scale.m, trace_seq.hidden_scale.e});
 	}
+	if (!site_dump_path.empty()) site_capture.enabled = false;
 
 	// --- Step 3.5 (N1 remedy, D-SLM705; design S4.2 step 6's own shape --------
 	// moved to where the int8 rows are actually produced): an independent
@@ -529,14 +695,25 @@ int main(int argc, char** argv) {
 	std::printf("self_check: production and manual-replay paths agree bit-for-bit (token=%d, %zu "
 	            "logits)\n",
 	            trace_token, vocab_size_z);
+	if (include_final_norm) {
+		rows.push_back(LayerSnapshot{trace_final_codes, trace_final_scale.m, trace_final_scale.e});
+	}
 
 	// --- Step 5 (design S4.1 step 5): dump. -----------------------------------
-	const uint64_t fingerprint = Fnv1a64(prompt);
+	const uint64_t fingerprint = Fnv1a64(token_id_mode ? CanonicalTokenIds(prompt_tokens) : prompt);
 	if (!WriteDump(dump_path.c_str(), rows, static_cast<uint64_t>(hidden_size), fingerprint)) {
 		std::fprintf(stderr, "FAILED at stage=dump_write: could not write \"%s\"\n", dump_path.c_str());
 		return 1;
 	}
-	std::printf("layer_trace_dumped: %zu rows x %zu hidden_size, prompt_fingerprint=0x%016llX -> %s\n",
+	if (!site_dump_path.empty()) {
+		site_capture.output.flush();
+		if (!site_capture.output) {
+			std::fprintf(stderr, "FAILED at stage=site_dump_write: %s\n", site_dump_path.c_str());
+			return 1;
+		}
+		std::printf("site_trace_dumped: layer=%u -> %s\n", site_layer, site_dump_path.c_str());
+	}
+	std::printf("layer_trace_dumped: %zu rows x %zu hidden_size, input_fingerprint=0x%016llX -> %s\n",
 	            rows.size(), hidden_size, static_cast<unsigned long long>(fingerprint), dump_path.c_str());
 	return 0;
 }
