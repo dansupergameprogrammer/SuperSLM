@@ -879,6 +879,7 @@ superslm::SslmForwardStatus DecodeStickyTag(int64_t tag) {
 		case 11: return S::SoftmaxKernelRefusedAfterGateAccepted;
 		case 12: return S::ResidualReconciliationMagnitudeOutOfDomain;
 		case 13: return S::SiluCompositionScaleOutOfDomain;
+		case 14: return S::QkNormFusedLandingMagnitudeOutOfDomain;
 		default: return S::KvPrecisionUnsupported;  // 8 = NotYetImplemented, and any unmapped tag
 	}
 }

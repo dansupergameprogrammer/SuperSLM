@@ -1654,14 +1654,21 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
 				// cancels the Q2.30 coefficient unit, so the rotated code retains the
 				// pre-RoPE wide-code real unit.
 				const CarriedScale rotated_scale = lw.k_wide_source_scale;
+				bool exceeded0 = false;
+				bool exceeded1 = false;
 				const int64_t landing0 = LandingRescale(rotated.x, rotated_scale.m,
 				    lw.k_channel_r_t[offset], rotated_scale.e, lw.k_channel_e_t[offset],
-				    out_saturation_count, /*out_magnitude_exceeded_int64=*/nullptr,
+				    out_saturation_count, &exceeded0,
 				    out_k_normed_landing_saturation_count);
 				const int64_t landing1 = LandingRescale(rotated.y, rotated_scale.m,
 				    lw.k_channel_r_t[offset + 1], rotated_scale.e, lw.k_channel_e_t[offset + 1],
-				    out_saturation_count, /*out_magnitude_exceeded_int64=*/nullptr,
+				    out_saturation_count, &exceeded1,
 				    out_k_normed_landing_saturation_count);
+				// The pair is transactional at the cache boundary: neither component
+				// is written when LandingRescale says its real magnitude was lost.
+				if (exceeded0 || exceeded1) {
+					return SslmForwardStatus::QkNormFusedLandingMagnitudeOutOfDomain;
+				}
 					if (lw.fused_k_capture_sink != nullptr && lw.fused_k_capture_sink->observe != nullptr) {
 						lw.fused_k_capture_sink->observe(lw.fused_k_capture_sink->context, layer, kv_head, i0,
 					    normalized[i0], rotated.x, rotated_scale, landing0);

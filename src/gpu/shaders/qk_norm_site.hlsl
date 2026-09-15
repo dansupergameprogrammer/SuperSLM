@@ -59,6 +59,10 @@ void main(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID) {
         bool clamp0, mag0, clamp1, mag1;
         int64_t raw0 = LandingRescaleGpu(rx, wide_m, LayerWeights.Load<int64_t>(qkc_base + 2u * p * 8u), wide_e, LayerWeights.Load<int64_t>(qkc_base + qkc_block + 2u * p * 8u), clamp0, mag0);
         int64_t raw1 = LandingRescaleGpu(ry, wide_m, LayerWeights.Load<int64_t>(qkc_base + (2u * p + 1u) * 8u), wide_e, LayerWeights.Load<int64_t>(qkc_base + qkc_block + (2u * p + 1u) * 8u), clamp1, mag1);
+        // Match the CPU's pair-transaction boundary.  LandingRescaleGpu can
+        // return a saturated low word after a true magnitude loss; that word
+        // must never reach K storage.
+        if (mag0 || mag1) { if (t == 0) SeqState.Store<int64_t>(sticky_off, kTagQkNormFusedLandingMagnitudeOutOfDomain); return; }
         if (clamp0) InterlockedAdd(gQkNormClamps, 1u); if (clamp1) InterlockedAdd(gQkNormClamps, 1u);
         StoreSignedByteGpu(KvCache, k_row_off + 2u * p, (int)ClampRopeCodeGpu(raw0)); StoreSignedByteGpu(KvCache, k_row_off + 2u * p + 1u, (int)ClampRopeCodeGpu(raw1));
     }

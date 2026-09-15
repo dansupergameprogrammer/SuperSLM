@@ -53,6 +53,7 @@ static const int64_t kTagIExpScaleDerivationOutOfDomain = 10;
 static const int64_t kTagSoftmaxKernelRefusedAfterGateAccepted = 11;
 static const int64_t kTagResidualReconciliationMagnitudeOutOfDomain = 12;
 static const int64_t kTagSiluCompositionScaleOutOfDomain = 13;
+static const int64_t kTagQkNormFusedLandingMagnitudeOutOfDomain = 14;
 
 // forward_sites.cpp FloorDivI64.
 int64_t FloorDivI64Gpu(int64_t a, int64_t b)

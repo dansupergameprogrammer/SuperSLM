@@ -211,6 +211,11 @@ enum class SslmForwardStatus {
 	                                          // rotation's own in-domain output) lose magnitude" --
 	                                          // two different arithmetic stages, two different
 	                                          // guards, per the design's own repaired text.
+	QkNormFusedLandingMagnitudeOutOfDomain,   // T-2703 F3: the fused-QK K landing observes
+	                                          // LandingRescale's exact int64-magnitude signal before
+	                                          // writing either member of its RoPE pair.  CPU and GPU
+	                                          // surface this identical sticky status; a clamp is not a
+	                                          // permitted substitute for refusal.
 	// --- (design §22): the GPU-serial port's recording-window catch
 	// (superslm_gpu.cpp, RunLayerLoopGpu) used to reuse KvPrecisionUnsupported
 	// for "an allocation inside the command-list recording window threw" --

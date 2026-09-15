@@ -81,6 +81,8 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 		return "OptionGWideRopeMagnitudeOutOfDomain";
 	if (s == SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain)
 		return "OptionGFusedLandingExponentOutOfDomain";
+	if (s == SslmForwardStatus::QkNormFusedLandingMagnitudeOutOfDomain)
+		return "QkNormFusedLandingMagnitudeOutOfDomain";
 	if (s == SslmForwardStatus::GpuAllocationFailed) return "GpuAllocationFailed";
 	if (s == SslmForwardStatus::GpuDeviceRemoved) return "GpuDeviceRemoved";
 	if (s == SslmForwardStatus::GpuGemmGroupArithmeticInvalid) return "GpuGemmGroupArithmeticInvalid";
