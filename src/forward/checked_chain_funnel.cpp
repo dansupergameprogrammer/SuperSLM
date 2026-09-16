@@ -294,86 +294,82 @@ CarriedScaleNormalizedReciprocalResult CarriedScaleNormalizedReciprocal(uint64_t
 	    DynamicScaleReciprocal(normalized.dn), normalized.s};
 }
 
+namespace {
+
+struct RequantChainPreflight {
+	SslmForwardStatus status = SslmForwardStatus::Ok;
+	int64_t d_prime = 0;
+	NormalizedScale normalized{};
+	int64_t reciprocal = 0;
+	CarriedScale output_scale{};
+};
+
+RequantChainPreflight BuildRequantChainPreflight(const int64_t* wide_row, size_t n,
+	                                                std::span<const CarriedScale> incoming,
+	                                                CarriedScale site_constant) {
+	for (const CarriedScale& factor : incoming) {
+		if (!CarriedScaleMantissaFitsInt32(factor)) {
+			return {.status = SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
+		}
+	}
+	if (!CarriedScaleMantissaFitsInt32(site_constant)) {
+		return {.status = SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
+	}
+
+	const int64_t d_prime = MaxAbsReduceWide(wide_row, n);
+	if (d_prime > (int64_t{1} << 31)) {
+		return {.status = SslmForwardStatus::ChainInputOutOfDomain};
+	}
+
+	const NormalizedScale normalized = NormalizeScale(d_prime);
+	const int64_t reciprocal = DynamicScaleReciprocal(normalized.dn);
+	const CarriedScale d_prime_factor{normalized.dn, -static_cast<int64_t>(normalized.s)};
+	bool have_running = false;
+	CarriedScale running{};
+	auto fold_in = [&](const CarriedScale& next) -> bool {
+		running = have_running ? CombineCarriedScale(running, next) : next;
+		have_running = true;
+		return CarriedScaleMantissaFitsInt32(running);
+	};
+	for (const CarriedScale& factor : incoming) {
+		if (!fold_in(factor)) {
+			return {.status = SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
+		}
+	}
+	if (!fold_in(site_constant) || !fold_in(d_prime_factor)) {
+		return {.status = SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
+	}
+	return {.d_prime = d_prime,
+	        .normalized = normalized,
+	        .reciprocal = reciprocal,
+	        .output_scale = running};
+}
+
+}  // namespace
+
+ChainResult PreflightRequantChain(const int64_t* wide_row, size_t n,
+                                  std::span<const CarriedScale> incoming,
+                                  CarriedScale site_constant) {
+	return ChainResult{BuildRequantChainPreflight(wide_row, n, incoming, site_constant).status};
+}
+
 ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
                                  std::span<const CarriedScale> incoming,
                                  CarriedScale site_constant, int8_t* out_codes,
                                  CarriedScale* out_scale,
                                  std::string_view site, size_t token_index,
                                  SslmTraceHookState* trace_hook_state) {
-	// Step 0 (ac34677 S5): every CarriedScale that will reach CombineCarriedScale
-	// below must fit that function's own precondition (mantissa within int32_t's
-	// range) before anything else runs — checked here, ahead of step 1, so a
-	// rejection at this step leaves out_codes and *out_scale untouched exactly like
-	// every other rejection path (step 5 has not run yet).
-	for (const CarriedScale& factor : incoming) {
-		if (!CarriedScaleMantissaFitsInt32(factor)) {
-			return ChainResult{SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
-		}
-	}
-	if (!CarriedScaleMantissaFitsInt32(site_constant)) {
-		return ChainResult{SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
-	}
-
-	// Steps 1-2 (§7.2): MaxAbsReduceWide already returns D' with C20's all-zero-row
-	// guard (D' = max(D, 1)) baked in — same contract shape as the narrow
-	// MaxAbsReduce sibling.
-	const int64_t d_prime = MaxAbsReduceWide(wide_row, n);
-
-	// Step 3: C29's own domain check — C21's precondition for NormalizeScale, and
-	// nothing else (T-1254's correction: this entitles step 4 alone, never a later
-	// narrowing to int32).
-	if (d_prime > (int64_t{1} << 31)) {
-		return ChainResult{SslmForwardStatus::ChainInputOutOfDomain};
-	}
-
-	// Step 4: NormalizeScale -> DynamicScaleReciprocal, both already int64-domain.
-	const NormalizedScale ns = NormalizeScale(d_prime);
-	const int64_t r = DynamicScaleReciprocal(ns.dn);
-
-	// Step 5's own carried_scale_product, computed here -- ahead of step 6's
-	// per-element write below -- in C26's pinned LEFT-ASSOCIATED order: the
-	// incoming carried scale(s) first, then the site constant, then this token's
-	// own D'-factor. D' itself is already exact and canonical from NormalizeScale's
-	// own decomposition (Dn = D' << s for s >= 0, or D' >> 1 at the single s == -1
-	// case), so D' == Dn * 2^(-s) with no further rounding: the D'-factor is
-	// CarriedScale{ns.dn, -ns.s} exactly, needing no separate derivation.
-	//
-	// 380b75f review N1: step 0 above checks every `incoming` factor and
-	// `site_constant` against CombineCarriedScale's own precondition, but never
-	// `running` -- the fold's own left operand on every combine after the first,
-	// and exactly what step 0 cannot see because it does not exist until the fold
-	// runs. Checked here instead, after every fold step and before `running` is
-	// ever used as the next combine's operand or written to `*out_scale`: a fold
-	// whose own product drifts out of int32_t's range is rejected with the same
-	// CarriedScaleMantissaOutOfDomain status step 0 uses. Computing and validating
-	// the fold before step 6's loop -- rather than after, in the order the two
-	// steps' own numbering might otherwise suggest -- means this rejection path
-	// leaves out_codes untouched exactly like every other rejection (step 6 has
-	// not run yet); step 5 and step 6 do not depend on each other's outputs, so
-	// running the fold first changes nothing step 6 itself does.
-	const CarriedScale d_prime_factor{ns.dn, -static_cast<int64_t>(ns.s)};
-	bool have_running = false;
-	bool fold_in_domain = true;
-	CarriedScale running{};
-	auto fold_in = [&](const CarriedScale& next) {
-		if (!fold_in_domain) return;
-		running = have_running ? CombineCarriedScale(running, next) : next;
-		have_running = true;
-		fold_in_domain = CarriedScaleMantissaFitsInt32(running);
-	};
-	for (const CarriedScale& factor : incoming) fold_in(factor);
-	fold_in(site_constant);
-	fold_in(d_prime_factor);
-	if (!fold_in_domain) {
-		return ChainResult{SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
-	}
+	const RequantChainPreflight preflight =
+	    BuildRequantChainPreflight(wide_row, n, incoming, site_constant);
+	if (preflight.status != SslmForwardStatus::Ok) return ChainResult{preflight.status};
 
 	// Step 6: RequantTokenCodeWide per element, directly on the int64 row — never
 	// narrowed to int32 first (T-1254's fold).
 	for (size_t i = 0; i < n; ++i) {
-		out_codes[i] = RequantTokenCodeWide(wide_row[i], r, ns.s);
+		out_codes[i] = RequantTokenCodeWide(wide_row[i], preflight.reciprocal,
+		                                    preflight.normalized.s);
 	}
-	*out_scale = running;
+	*out_scale = preflight.output_scale;
 
 	// §11 S3.1a's instrumentation seam (trace_hook.h), attached to this
 	// already-green funnel per the sub-slot's own routing option. Runs
@@ -390,13 +386,13 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
 		record.site = site;
 		record.token_index = token_index;
 		record.x_int = std::span<const int64_t>(wide_row, n);
-		record.d_prime = d_prime;
-		record.dn = ns.dn;
-		record.s = ns.s;
-		record.r = r;
+		record.d_prime = preflight.d_prime;
+		record.dn = preflight.normalized.dn;
+		record.s = preflight.normalized.s;
+		record.r = preflight.reciprocal;
 		record.codes = std::span<const int8_t>(out_codes, n);
-		record.m_out = running.m;
-		record.e_out = running.e;
+		record.m_out = preflight.output_scale.m;
+		record.e_out = preflight.output_scale.e;
 		SslmEmitChainTrace(*trace_hook_state, record);
 	}
 

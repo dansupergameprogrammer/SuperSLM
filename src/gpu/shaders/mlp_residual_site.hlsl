@@ -30,6 +30,47 @@ RWByteAddressBuffer WorkScratch    : register(u3);
 
 groupshared uint gResidualMagOutOfDomain2;
 
+bool BuildResidualCandidateGpu(uint t, int hidden_size, uint branch_codes_off, uint stream_codes_off,
+                               bool select_branch, int64_t branch_m, int64_t branch_e,
+                               int64_t stream_m, int64_t stream_e, out int64_t selected_m,
+                               out int64_t selected_e, out int64_t status_tag)
+{
+    selected_m = select_branch ? branch_m : stream_m;
+    selected_e = select_branch ? branch_e : stream_e;
+    int64_t other_m = select_branch ? stream_m : branch_m;
+    int64_t other_e = select_branch ? stream_e : branch_e;
+    int64_t reciprocal, normalization_shift;
+    CarriedScaleNormalizedReciprocalSharedGpu(AbsUnsignedI64Gpu(selected_m), reciprocal, normalization_shift);
+
+    if (t == 0) gResidualMagOutOfDomain2 = 0;
+    GroupMemoryBarrierWithGroupSync();
+    for (int i = (int)t; i < hidden_size; i += 256)
+    {
+        int direct_code = select_branch ? LayerScratch.Load<int>(branch_codes_off + (uint)i * 4u)
+                                        : LayerScratch.Load<int>(stream_codes_off + (uint)i * 4u);
+        int other_code = select_branch ? LayerScratch.Load<int>(stream_codes_off + (uint)i * 4u)
+                                       : LayerScratch.Load<int>(branch_codes_off + (uint)i * 4u);
+        bool would_clamp, magnitude_exceeded;
+        int64_t landed = LandingRescaleGpu((int64_t)other_code, other_m, reciprocal, other_e,
+                                            selected_e, normalization_shift, would_clamp,
+                                            magnitude_exceeded);
+        int64_t wide_sum;
+        if (magnitude_exceeded || (selected_m < 0 && landed == (int64_t)0x8000000000000000ULL))
+            InterlockedOr(gResidualMagOutOfDomain2, 1u);
+        else
+        {
+            if (selected_m < 0) landed = -landed;
+            if (!CheckedAddI64Gpu((int64_t)direct_code, landed, wide_sum))
+                InterlockedOr(gResidualMagOutOfDomain2, 1u);
+            else
+                WorkScratch.Store<int64_t>((uint)i * 8u, wide_sum);
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+    status_tag = gResidualMagOutOfDomain2 != 0 ? kTagResidualReconciliationMagnitudeOutOfDomain : kTagOk;
+    return status_tag == kTagOk;
+}
+
 [numthreads(256, 1, 1)]
 void main(uint3 gtid : SV_GroupThreadID)
 {
@@ -60,53 +101,35 @@ void main(uint3 gtid : SV_GroupThreadID)
         if (t == 0) SeqState.Store<int64_t>(sticky_off, kTagCarriedScaleMantissaOutOfDomain);
         return;
     }
-    bool branch_selected = ResidualBranchGridIsFinerGpu(branch_m, branch_e, stream_m, stream_e);
-    int64_t selected_m = branch_selected ? branch_m : stream_m;
-    int64_t selected_e = branch_selected ? branch_e : stream_e;
-    int64_t nonselected_m = branch_selected ? stream_m : branch_m;
-    int64_t nonselected_e = branch_selected ? stream_e : branch_e;
-    int64_t reciprocal, normalization_shift;
-    CarriedScaleNormalizedReciprocalSharedGpu(AbsUnsignedI64Gpu(selected_m), reciprocal, normalization_shift);
-
-    if (t == 0) gResidualMagOutOfDomain2 = 0;
-    GroupMemoryBarrierWithGroupSync();
-    for (int i = (int)t; i < hidden_size; i += 256)
-    {
-        int selected_code = branch_selected ? LayerScratch.Load<int>(down_codes_off + (uint)i * 4u)
-                                            : LayerScratch.Load<int>(attn_stream_off + (uint)i * 4u);
-        int nonselected_code = branch_selected ? LayerScratch.Load<int>(attn_stream_off + (uint)i * 4u)
-                                               : LayerScratch.Load<int>(down_codes_off + (uint)i * 4u);
-        bool would_clamp, magnitude_exceeded;
-        int64_t landed = LandingRescaleGpu((int64_t)nonselected_code, nonselected_m, reciprocal,
-                                            nonselected_e, selected_e, normalization_shift,
-                                            would_clamp, magnitude_exceeded);
-        int64_t wide_sum;
-        if (magnitude_exceeded || (selected_m < 0 && landed == (int64_t)0x8000000000000000ULL))
-        {
-            InterlockedOr(gResidualMagOutOfDomain2, 1u);
-        }
-        else
-        {
-            if (selected_m < 0) landed = -landed;
-            if (!CheckedAddI64Gpu((int64_t)selected_code, landed, wide_sum))
-                InterlockedOr(gResidualMagOutOfDomain2, 1u);
-            else
-                WorkScratch.Store<int64_t>(0u + (uint)i * 8u, wide_sum);
-        }
-    }
-    GroupMemoryBarrierWithGroupSync();
-    if (gResidualMagOutOfDomain2 != 0)
-    {
-        if (t == 0) SeqState.Store<int64_t>(sticky_off, kTagResidualReconciliationMagnitudeOutOfDomain);
-        return;
-    }
-
     uint off_site = layer_base + Layout.Load<uint>(53 * 4);
     int64_t site_m = LayerWeights.Load<int64_t>(off_site + 0);
     int64_t site_e = LayerWeights.Load<int64_t>(off_site + 8);
+    bool branch_selected = ResidualBranchGridIsFinerGpu(branch_m, branch_e, stream_m, stream_e);
+    int64_t selected_m, selected_e, candidate_status;
+    bool candidate_ok = BuildResidualCandidateGpu(t, hidden_size, down_codes_off, attn_stream_off,
+                                                   branch_selected, branch_m, branch_e, stream_m,
+                                                   stream_e, selected_m, selected_e, candidate_status);
     int64_t incoming_m[kMaxIncoming], incoming_e[kMaxIncoming];
     [unroll] for (int z = 0; z < kMaxIncoming; ++z) { incoming_m[z] = 0; incoming_e[z] = 0; }
     incoming_m[0] = selected_m; incoming_e[0] = selected_e;
+    if (candidate_ok)
+        candidate_ok = PreflightRequantChainFullGpuP(t, WorkScratch, 0u, hidden_size, incoming_m,
+                                                       incoming_e, 1, site_m, site_e, candidate_status);
+    if (!candidate_ok)
+    {
+        candidate_ok = BuildResidualCandidateGpu(t, hidden_size, down_codes_off, attn_stream_off,
+                                                  !branch_selected, branch_m, branch_e, stream_m,
+                                                  stream_e, selected_m, selected_e, candidate_status);
+        incoming_m[0] = selected_m; incoming_e[0] = selected_e;
+        if (candidate_ok)
+            candidate_ok = PreflightRequantChainFullGpuP(t, WorkScratch, 0u, hidden_size, incoming_m,
+                                                           incoming_e, 1, site_m, site_e, candidate_status);
+    }
+    if (!candidate_ok)
+    {
+        if (t == 0) SeqState.Store<int64_t>(sticky_off, candidate_status);
+        return;
+    }
 
     uint stream_next_off = ScratchLayout.Load<uint>(19 * 4);
     uint stream_next_scale_off = ScratchLayout.Load<uint>(20 * 4);

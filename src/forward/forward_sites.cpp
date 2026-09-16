@@ -1071,33 +1071,53 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
 		branch_selected = d >= 0 ? (branch_magnitude << d) < stream_magnitude
 		                         : branch_magnitude < (stream_magnitude << -d);
 	}
-	const CarriedScale selected_scale = branch_selected ? branch_scale : stream_scale;
-	const CarriedScale nonselected_scale = branch_selected ? stream_scale : branch_scale;
-	const int8_t* selected_code = branch_selected ? branch_code : stream_code;
-	const int8_t* nonselected_code = branch_selected ? stream_code : branch_code;
-	const auto reciprocal = CarriedScaleNormalizedReciprocal(magnitude(selected_scale.m));
+	struct Candidate {
+		SslmForwardStatus status = SslmForwardStatus::Ok;
+		CarriedScale scale{};
+		std::vector<int64_t> wide;
+	};
+	const auto build_and_preflight = [&](bool select_branch) {
+		Candidate candidate;
+		candidate.scale = select_branch ? branch_scale : stream_scale;
+		const CarriedScale other_scale = select_branch ? stream_scale : branch_scale;
+		const int8_t* direct_code = select_branch ? branch_code : stream_code;
+		const int8_t* other_code = select_branch ? stream_code : branch_code;
+		const auto reciprocal = CarriedScaleNormalizedReciprocal(magnitude(candidate.scale.m));
+		candidate.wide.resize(hidden_size);
+		for (size_t i = 0; i < hidden_size; ++i) {
+			bool magnitude_exceeded = false;
+			int64_t landed = LandingRescale(static_cast<int64_t>(other_code[i]), other_scale.m,
+			                                reciprocal.r, other_scale.e, candidate.scale.e, nullptr,
+			                                &magnitude_exceeded, nullptr, reciprocal.s);
+			if (magnitude_exceeded || (candidate.scale.m < 0 && landed == INT64_MIN)) {
+				candidate.status = SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain;
+				return candidate;
+			}
+			if (candidate.scale.m < 0) landed = -landed;
+			const int64_t direct = static_cast<int64_t>(direct_code[i]);
+			if ((landed > 0 && direct > INT64_MAX - landed) ||
+			    (landed < 0 && direct < INT64_MIN - landed)) {
+				candidate.status = SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain;
+				return candidate;
+			}
+			candidate.wide[i] = direct + landed;
+		}
+		const CarriedScale incoming[1] = {candidate.scale};
+		candidate.status =
+		    PreflightRequantChain(candidate.wide.data(), hidden_size,
+		                          std::span<const CarriedScale>{incoming, 1}, site_constant)
+		        .status;
+		return candidate;
+	};
 
-	std::vector<int64_t> wide(hidden_size);
-	for (size_t i = 0; i < hidden_size; ++i) {
-		bool magnitude_exceeded = false;
-		int64_t landed = LandingRescale(static_cast<int64_t>(nonselected_code[i]),
-		                                nonselected_scale.m, reciprocal.r, nonselected_scale.e,
-		                                selected_scale.e, nullptr, &magnitude_exceeded, nullptr,
-		                                reciprocal.s);
-		if (magnitude_exceeded || (selected_scale.m < 0 && landed == INT64_MIN))
-			return SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain;
-		if (selected_scale.m < 0) landed = -landed;
-		const int64_t direct = static_cast<int64_t>(selected_code[i]);
-		if ((landed > 0 && direct > INT64_MAX - landed) ||
-		    (landed < 0 && direct < INT64_MIN - landed))
-			return SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain;
-		wide[i] = direct + landed;
-	}
+	Candidate candidate = build_and_preflight(branch_selected);
+	if (candidate.status != SslmForwardStatus::Ok) candidate = build_and_preflight(!branch_selected);
+	if (candidate.status != SslmForwardStatus::Ok) return candidate.status;
 
-	const CarriedScale incoming[1] = {selected_scale};
+	const CarriedScale incoming[1] = {candidate.scale};
 	const ChainResult result = RequantChainChecked(
-	    wide.data(), hidden_size, std::span<const CarriedScale>{incoming, 1}, site_constant,
-	    out_codes, out_scale, site, token_index, trace_hook_state);
+	    candidate.wide.data(), hidden_size, std::span<const CarriedScale>{incoming, 1},
+	    site_constant, out_codes, out_scale, site, token_index, trace_hook_state);
 	return result.status;
 }
 

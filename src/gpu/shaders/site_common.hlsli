@@ -707,6 +707,117 @@ bool ApplyBiasReconcileRowGpuP(uint t, RWByteAddressBuffer scratch, uint wide_ba
     return true;
 }
 
+// Cooperative checked_chain_funnel.cpp pre-write path (steps 0-5).  This is
+// the residual candidate preflight: it reads only the staged wide row and
+// writes neither output codes/scales nor trace state.
+bool PreflightRequantChainFullGpuP(uint t, RWByteAddressBuffer scratch, uint wide_base, int n,
+                                   int64_t incoming_m[kMaxIncoming], int64_t incoming_e[kMaxIncoming],
+                                   int n_incoming, int64_t site_m, int64_t site_e,
+                                   out int64_t status_tag)
+{
+    bool rejected = false;
+    int64_t tag = kTagOk;
+    for (int i0 = 0; i0 < n_incoming; ++i0)
+    {
+        if (!CarriedScaleMantissaFitsInt32Gpu(incoming_m[i0]))
+        {
+            tag = kTagCarriedScaleMantissaOutOfDomain;
+            rejected = true;
+        }
+    }
+    if (!rejected && !CarriedScaleMantissaFitsInt32Gpu(site_m))
+    {
+        tag = kTagCarriedScaleMantissaOutOfDomain;
+        rejected = true;
+    }
+
+    int64_t d_prime = 0;
+    if (!rejected)
+    {
+        uint64_t local = 0;
+        for (int i1 = (int)t; i1 < n; i1 += 256)
+        {
+            int64_t xi = scratch.Load<int64_t>(wide_base + (uint)i1 * 8u);
+            uint64_t a = (xi < 0) ? (~(uint64_t)xi + 1ULL) : (uint64_t)xi;
+            if (a > local) local = a;
+        }
+        gFunnelMax[t] = local;
+        GroupMemoryBarrierWithGroupSync();
+        for (uint s = 128; s > 0; s >>= 1)
+        {
+            if (t < s) gFunnelMax[t] = max(gFunnelMax[t], gFunnelMax[t + s]);
+            GroupMemoryBarrierWithGroupSync();
+        }
+        uint64_t d = gFunnelMax[0];
+        if (d < 1ULL) d = 1ULL;
+        d_prime = (d > 0x7FFFFFFFFFFFFFFFULL) ? 0x7FFFFFFFFFFFFFFFLL : (int64_t)d;
+        if (d_prime > ((int64_t)1 << 31))
+        {
+            tag = kTagChainInputOutOfDomain;
+            rejected = true;
+        }
+    }
+
+    int64_t ns_dn = 0;
+    int ns_s = 0;
+    if (!rejected) NormalizeScaleGpu(d_prime, ns_dn, ns_s);
+
+    int64_t run_m = 0, run_e = 0;
+    if (!rejected)
+    {
+        bool have_running = false;
+        for (int i2 = 0; i2 < n_incoming && !rejected; ++i2)
+        {
+            if (have_running)
+            {
+                int64_t new_m, new_e;
+                CombineCarriedScaleGpu_(run_m, run_e, incoming_m[i2], incoming_e[i2], new_m, new_e);
+                run_m = new_m; run_e = new_e;
+            }
+            else
+            {
+                run_m = incoming_m[i2]; run_e = incoming_e[i2]; have_running = true;
+            }
+            if (!CarriedScaleMantissaFitsInt32Gpu(run_m))
+            {
+                tag = kTagCarriedScaleMantissaOutOfDomain;
+                rejected = true;
+            }
+        }
+        if (!rejected)
+        {
+            if (have_running)
+            {
+                int64_t new_m, new_e;
+                CombineCarriedScaleGpu_(run_m, run_e, site_m, site_e, new_m, new_e);
+                run_m = new_m; run_e = new_e;
+            }
+            else
+            {
+                run_m = site_m; run_e = site_e; have_running = true;
+            }
+            if (!CarriedScaleMantissaFitsInt32Gpu(run_m))
+            {
+                tag = kTagCarriedScaleMantissaOutOfDomain;
+                rejected = true;
+            }
+        }
+        if (!rejected)
+        {
+            int64_t new_m, new_e;
+            CombineCarriedScaleGpu_(run_m, run_e, ns_dn, -(int64_t)ns_s, new_m, new_e);
+            run_m = new_m; run_e = new_e;
+            if (!CarriedScaleMantissaFitsInt32Gpu(run_m))
+            {
+                tag = kTagCarriedScaleMantissaOutOfDomain;
+                rejected = true;
+            }
+        }
+    }
+    status_tag = tag;
+    return !rejected;
+}
+
 // Cooperative checked_chain_funnel.cpp RequantChainChecked, IN FULL (steps
 // 0-6): the wide row lives in `scratch` at `wide_base` (n int64 elements,
 // thread t owns elements t, t+256, ...) rather than a per-call local array.

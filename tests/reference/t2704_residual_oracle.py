@@ -72,6 +72,25 @@ def generate() -> str:
     assert (denominator, shift, target_reciprocal, raw, oriented, wide_sum) == (
         1 << 30, 30, 1 << 32, -127, -127, -254)
 
+    # Fine-then-coarse retry witness.  The stream grid is finer and its
+    # complete candidate cannot land the branch contribution in int64.  The
+    # independently rebuilt branch-grid candidate lands the stream once and
+    # reaches the funnel boundary with its own wide row.
+    retry_branch_m, retry_branch_e, retry_branch_code = 1 << 30, 56, 127
+    retry_stream_m, retry_stream_e, retry_stream_code = 1392366989, -40, 0
+    fine_den, fine_shift = normalize(abs_unsigned(retry_stream_m))
+    fine_reciprocal = reciprocal(fine_den)
+    fine_raw = landing(retry_branch_code, retry_branch_m, fine_reciprocal,
+                       retry_branch_e, retry_stream_e, fine_shift)
+    coarse_den, coarse_shift = normalize(abs_unsigned(retry_branch_m))
+    coarse_reciprocal = reciprocal(coarse_den)
+    coarse_raw = landing(retry_stream_code, retry_stream_m, coarse_reciprocal,
+                         retry_stream_e, retry_branch_e, coarse_shift)
+    coarse_wide = retry_branch_code + coarse_raw
+    assert abs_unsigned(fine_raw) > (1 << 63) - 1
+    assert (coarse_den, coarse_shift, coarse_reciprocal, coarse_raw, coarse_wide) == (
+        1 << 30, 0, 1 << 32, 0, 127)
+
     lines = [
         "// GENERATED FILE. Do not hand-edit.",
         "// Produced by tests/reference/t2704_residual_oracle.py.",
@@ -92,6 +111,19 @@ def generate() -> str:
         f"  {branch_m}LL, {branch_e}LL, {stream_m}LL, {stream_e}LL, {branch_code}, {stream_code},",
         f"  {abs_unsigned(stream_m)}LL, {denominator}LL, {shift}LL, {target_reciprocal}LL,",
         f"  {stream_code}LL, {raw}LL, {oriented}LL, {wide_sum}LL,",
+        "};",
+        "struct T2704ResidualRetryRow {",
+        "  int64_t branch_m, branch_e, stream_m, stream_e;",
+        "  int8_t branch_code, stream_code;",
+        "  int64_t fine_normalized_denominator, fine_normalization_shift, fine_reciprocal;",
+        "  int64_t coarse_normalized_denominator, coarse_normalization_shift, coarse_reciprocal;",
+        "  int64_t coarse_raw, coarse_wide;",
+        "};",
+        "inline constexpr T2704ResidualRetryRow kT2704FineRejectCoarseCommit = {",
+        f"  {retry_branch_m}LL, {retry_branch_e}LL, {retry_stream_m}LL, {retry_stream_e}LL, {retry_branch_code}, {retry_stream_code},",
+        f"  {fine_den}LL, {fine_shift}LL, {fine_reciprocal}LL,",
+        f"  {coarse_den}LL, {coarse_shift}LL, {coarse_reciprocal}LL,",
+        f"  {coarse_raw}LL, {coarse_wide}LL,",
         "};",
         "}  // namespace superslm_test",
         "",

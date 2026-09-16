@@ -461,6 +461,14 @@ CarriedScaleNormalizedReciprocalResult CarriedScaleNormalizedReciprocal(uint64_t
 // `a.m` and `b.m` fit int32_t's own range.
 CarriedScale CombineCarriedScale(CarriedScale a, CarriedScale b);
 
+// Runs RequantChainChecked's complete pre-write path (factor validation, D',
+// C29, normalization/reciprocal, and C26's left-associated scale fold).
+// It never writes output or emits trace records.  Residual candidate selection
+// uses this door before committing the one selected row through the funnel.
+ChainResult PreflightRequantChain(const int64_t* wide_row, size_t n,
+                                  std::span<const CarriedScale> incoming,
+                                  CarriedScale site_constant);
+
 ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
                                  std::span<const CarriedScale> incoming,
                                  CarriedScale site_constant, int8_t* out_codes,

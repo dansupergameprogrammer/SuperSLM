@@ -13334,6 +13334,81 @@ static void TestLandingRescaleMagnitudeFlagAcceptsAtOperatingPointRejectsOneExpo
 	          (long long)kWitnessStreamERejected);
 }
 
+// T-2736 transaction oracle: prove the finer candidate rejects before the
+// output-capable funnel, then compare the site result with one complete coarse
+// candidate passed through the real funnel.  The hook sees only that final
+// funnel invocation because PreflightRequantChain emits no trace.
+static void CheckT2704FineStreamRejectsThenCoarseCommits(
+    const int8_t* branch_code, superslm::CarriedScale branch_scale,
+    const int8_t* stream_code, superslm::CarriedScale stream_scale, size_t hidden_size,
+    superslm::CarriedScale site_constant, superslm::SslmForwardStatus fine_status) {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+	auto magnitude = [](int64_t value) -> uint64_t {
+		return value < 0 ? ~static_cast<uint64_t>(value) + 1u : static_cast<uint64_t>(value);
+	};
+	const auto fine_reciprocal = superslm::CarriedScaleNormalizedReciprocal(magnitude(stream_scale.m));
+	std::vector<int64_t> fine_wide(hidden_size);
+	bool fine_magnitude_rejected = false;
+	for (size_t i = 0; i < hidden_size; ++i) {
+		bool exceeded = false;
+		const int64_t landed = superslm::LandingRescale(branch_code[i], branch_scale.m,
+		                                                fine_reciprocal.r, branch_scale.e,
+		                                                stream_scale.e, nullptr, &exceeded, nullptr,
+		                                                fine_reciprocal.s);
+		fine_magnitude_rejected = fine_magnitude_rejected || exceeded ||
+		                          (stream_scale.m < 0 && landed == INT64_MIN);
+		fine_wide[i] = static_cast<int64_t>(stream_code[i]) + landed;
+	}
+	const CarriedScale fine_incoming[] = {stream_scale};
+	const SslmForwardStatus observed_fine = fine_magnitude_rejected
+	                                            ? SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain
+	                                            : superslm::PreflightRequantChain(
+	                                                  fine_wide.data(), hidden_size,
+	                                                  std::span<const CarriedScale>{fine_incoming, 1},
+	                                                  site_constant).status;
+	CHECK_MSG(observed_fine == fine_status,
+	          "fine residual candidate status == %s, want %s before coarse retry",
+	          SslmForwardStatusName(observed_fine), SslmForwardStatusName(fine_status));
+
+	const auto coarse_reciprocal = superslm::CarriedScaleNormalizedReciprocal(magnitude(branch_scale.m));
+	std::vector<int64_t> coarse_wide(hidden_size);
+	for (size_t i = 0; i < hidden_size; ++i) {
+		bool exceeded = false;
+		int64_t landed = superslm::LandingRescale(stream_code[i], stream_scale.m,
+		                                          coarse_reciprocal.r, stream_scale.e,
+		                                          branch_scale.e, nullptr, &exceeded, nullptr,
+		                                          coarse_reciprocal.s);
+		CHECK_MSG(!exceeded && !(branch_scale.m < 0 && landed == INT64_MIN),
+		          "coarse residual candidate must be constructible");
+		if (branch_scale.m < 0) landed = -landed;
+		coarse_wide[i] = static_cast<int64_t>(branch_code[i]) + landed;
+	}
+	const CarriedScale coarse_incoming[] = {branch_scale};
+	std::vector<int8_t> expected_codes(hidden_size, INT8_C(-98));
+	CarriedScale expected_scale{INT64_C(-98), INT64_C(-98)};
+	const auto expected = superslm::RequantChainChecked(
+	    coarse_wide.data(), hidden_size, std::span<const CarriedScale>{coarse_incoming, 1},
+	    site_constant, expected_codes.data(), &expected_scale);
+	std::vector<int8_t> actual_codes(hidden_size, INT8_C(-99));
+	CarriedScale actual_scale{INT64_C(-99), INT64_C(-99)};
+	const auto actual = superslm::ResidualReconcileSite(
+	    branch_code, branch_scale, stream_code, stream_scale, hidden_size, site_constant,
+	    actual_codes.data(), &actual_scale);
+	CHECK_MSG(actual == expected.status && actual == SslmForwardStatus::Ok,
+	          "fine-reject/coarse-commit transaction status == %s, coarse funnel status == %s",
+	          SslmForwardStatusName(actual), SslmForwardStatusName(expected.status));
+	for (size_t i = 0; i < hidden_size; ++i) {
+		CHECK_MSG(actual_codes[i] == expected_codes[i],
+		          "coarse transaction code[%zu] == %d, coarse funnel code == %d", i,
+		          static_cast<int>(actual_codes[i]), static_cast<int>(expected_codes[i]));
+	}
+	CHECK_MSG(actual_scale.m == expected_scale.m && actual_scale.e == expected_scale.e,
+	          "coarse transaction scale == (%lld, %lld), coarse funnel scale == (%lld, %lld)",
+	          static_cast<long long>(actual_scale.m), static_cast<long long>(actual_scale.e),
+	          static_cast<long long>(expected_scale.m), static_cast<long long>(expected_scale.e));
+}
+
 // §11 S3.5's own red cell, §13 dim 5/6/7: the `ResidualReconcileSite`-level
 // half -- the same witness pair, driven through the real site composition, so
 // the wiring (not only `LandingRescale` in isolation) is proven. Accepted at
@@ -13367,46 +13442,17 @@ static void TestResidualReconcileSiteRejectsResidualReconciliationMagnitudeOutOf
 	// above; this cell's own job is only the residual predicate's boundary.
 	{
 		const CarriedScale stream_scale{/*m=*/kWitnessStreamM, /*e=*/kWitnessStreamEAccepted};
-		std::vector<int8_t> out_codes(kHidden, INT8_C(-99));
-		CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
-		auto result = superslm::ResidualReconcileSite(branch_code, branch_scale, stream_code,
-		                                                stream_scale, kHidden, site_constant,
-		                                                out_codes.data(), &out_scale);
-		CHECK_MSG(result != SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain,
-		          "ResidualReconcileSite status == %s at the ACCEPTED operating point "
-		          "(stream_e=%lld) -- must not be ResidualReconciliationMagnitudeOutOfDomain, "
-		          "the true magnitude fits int64 here",
-		          SslmForwardStatusName(result), (long long)kWitnessStreamEAccepted);
-		CHECK_MSG(result == SslmForwardStatus::ChainInputOutOfDomain,
-		          "ResidualReconcileSite status == %s at the ACCEPTED operating point "
-		          "(stream_e=%lld), want ChainInputOutOfDomain (the funnel's own C29 domain check, "
-		          "unrelated to this predicate, rejects this witness's own large-but-in-int64-"
-		          "domain magnitude downstream)",
-		          SslmForwardStatusName(result), (long long)kWitnessStreamEAccepted);
+		CheckT2704FineStreamRejectsThenCoarseCommits(
+		    branch_code, branch_scale, stream_code, stream_scale, kHidden, site_constant,
+		    SslmForwardStatus::ChainInputOutOfDomain);
 	}
 
 	// Rejected operating point: one exponent step away, same everything else.
 	{
 		const CarriedScale stream_scale{/*m=*/kWitnessStreamM, /*e=*/kWitnessStreamERejected};
-		std::vector<int8_t> out_codes(kHidden, INT8_C(-99));
-		CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
-		auto result = superslm::ResidualReconcileSite(branch_code, branch_scale, stream_code,
-		                                                stream_scale, kHidden, site_constant,
-		                                                out_codes.data(), &out_scale);
-		CHECK_MSG(result == SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain,
-		          "ResidualReconcileSite status == %s at the REJECTED operating point "
-		          "(stream_e=%lld), want ResidualReconciliationMagnitudeOutOfDomain -- one "
-		          "exponent step from the accepted point above, the unguarded construction's own "
-		          "wrong-sign result (§7.2b) is exactly what this predicate must now catch",
-		          SslmForwardStatusName(result), (long long)kWitnessStreamERejected);
-		CHECK_MSG(out_codes[0] == INT8_C(-99),
-		          "out_codes[0] == %d after rejection, want the sentinel -99 untouched (§7.2's "
-		          "convention: a rejection leaves output untouched)",
-		          static_cast<int>(out_codes[0]));
-		CHECK_MSG(out_scale.m == INT64_C(-99) && out_scale.e == INT64_C(-99),
-		          "out_scale == (%lld, %lld) after rejection, want the sentinel (-99, -99) "
-		          "untouched",
-		          static_cast<long long>(out_scale.m), static_cast<long long>(out_scale.e));
+		CheckT2704FineStreamRejectsThenCoarseCommits(
+		    branch_code, branch_scale, stream_code, stream_scale, kHidden, site_constant,
+		    SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain);
 	}
 }
 
@@ -13567,27 +13613,9 @@ static void TestResidualReconcileSiteRejectsNegativeKMagnitudeOutOfDomain() {
 	const CarriedScale stream_scale{/*m=*/kNegKStreamM, /*e=*/kNegKStreamE};
 	const CarriedScale site_constant{/*m=*/INT64_C(1958312769), /*e=*/-9};
 
-	std::vector<int8_t> out_codes(kHidden, INT8_C(-99));
-	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
-	auto result = superslm::ResidualReconcileSite(branch_code, branch_scale, stream_code,
-	                                                stream_scale, kHidden, site_constant,
-	                                                out_codes.data(), &out_scale);
-	CHECK_MSG(result == SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain,
-	          "ResidualReconcileSite status == %s at the negative-k witness, want "
-	          "ResidualReconciliationMagnitudeOutOfDomain -- an executed revert of both negative-k "
-	          "assignments in LandingRescale returns Ok with out_codes[0]==0 at these exact "
-	          "operands instead (Poirot Significant 1, closed: LandingRescale's shipped negative-k "
-	          "assignments are exactly what the two sentinel CHECK_MSGs below confirm are in "
-	          "place), which is the clause's own stated negative control this cell must catch",
-	          SslmForwardStatusName(result));
-	CHECK_MSG(out_codes[0] == INT8_C(-99),
-	          "out_codes[0] == %d after rejection, want the sentinel -99 untouched -- the unguarded "
-	          "construction returns 0 here, a silently-accepted wrong value distinct from both the "
-	          "sentinel and a rejection",
-	          static_cast<int>(out_codes[0]));
-	CHECK_MSG(out_scale.m == INT64_C(-99) && out_scale.e == INT64_C(-99),
-	          "out_scale == (%lld, %lld) after rejection, want the sentinel (-99, -99) untouched",
-	          static_cast<long long>(out_scale.m), static_cast<long long>(out_scale.e));
+	CheckT2704FineStreamRejectsThenCoarseCommits(
+	    branch_code, branch_scale, stream_code, stream_scale, kHidden, site_constant,
+	    SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain);
 }
 
 // ---------------------------------------------------------------------------
@@ -13681,21 +13709,9 @@ static void TestResidualReconcileSitePinsInt64MinWitnessAgainstUnguardedAdd() {
 	const CarriedScale stream_scale{/*m=*/kStreamM, /*e=*/kStreamE};
 	const CarriedScale site_constant{/*m=*/INT64_C(1958312769), /*e=*/-9};
 
-	std::vector<int8_t> out_codes(kHidden, INT8_C(-99));
-	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
-	auto result = superslm::ResidualReconcileSite(branch_code, branch_scale, stream_code,
-	                                                stream_scale, kHidden, site_constant,
-	                                                out_codes.data(), &out_scale);
-	CHECK_MSG(result == SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain,
-	          "ResidualReconcileSite status == %s at the INT64_MIN witness (stream_code[0]=-1), want "
-	          "ResidualReconciliationMagnitudeOutOfDomain",
-	          SslmForwardStatusName(result));
-	CHECK_MSG(out_codes[0] == INT8_C(-99),
-	          "out_codes[0] == %d after rejection, want the sentinel -99 untouched",
-	          static_cast<int>(out_codes[0]));
-	CHECK_MSG(out_scale.m == INT64_C(-99) && out_scale.e == INT64_C(-99),
-	          "out_scale == (%lld, %lld) after rejection, want the sentinel (-99, -99) untouched",
-	          static_cast<long long>(out_scale.m), static_cast<long long>(out_scale.e));
+	CheckT2704FineStreamRejectsThenCoarseCommits(
+	    branch_code, branch_scale, stream_code, stream_scale, kHidden, site_constant,
+	    SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain);
 }
 
 namespace {

@@ -18,6 +18,19 @@ inline constexpr T2704ResidualOracleRow kT2704M1ExactTie = {
   1LL, 1073741824LL, 30LL, 4294967296LL,
   -127LL, -127LL, -127LL, -254LL,
 };
+struct T2704ResidualRetryRow {
+  int64_t branch_m, branch_e, stream_m, stream_e;
+  int8_t branch_code, stream_code;
+  int64_t fine_normalized_denominator, fine_normalization_shift, fine_reciprocal;
+  int64_t coarse_normalized_denominator, coarse_normalization_shift, coarse_reciprocal;
+  int64_t coarse_raw, coarse_wide;
+};
+inline constexpr T2704ResidualRetryRow kT2704FineRejectCoarseCommit = {
+  1073741824LL, 56LL, 1392366989LL, -40LL, 127, 0,
+  1392366989LL, 0LL, 3312119617LL,
+  1073741824LL, 0LL, 4294967296LL,
+  0LL, 127LL,
+};
 }  // namespace superslm_test
 
 #endif  // SUPERSLM_TESTS_SSLM_T2704_RESIDUAL_ORACLE_FIXTURES_H
