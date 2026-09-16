@@ -58,9 +58,9 @@ def landing(code: int, source_m: int, target_reciprocal: int, source_e: int,
 
 def generate() -> str:
     # This row is the gate's independently stated physical witness.  The
-    # selected stream code is retained directly; a current residual site
-    # re-lands branch onto stream through an out-of-contract reciprocal and
-    # returns final scale (0,19), whereas the physical result is (0,20).
+    # selected stream code is retained directly.  This oracle ends at the
+    # changed construction boundary: the unchanged production funnel owns
+    # the final status, code, and carried scale.
     branch_m = stream_m = 1
     branch_e = stream_e = -17
     branch_code = stream_code = -127
@@ -87,13 +87,11 @@ def generate() -> str:
         "  int8_t branch_code, stream_code;",
         "  int64_t selected_magnitude, normalized_denominator, normalization_shift, reciprocal;",
         "  int64_t selected_direct, nonselected_raw, nonselected_oriented, wide_sum;",
-        "  int8_t final_code; int64_t final_scale_m, final_scale_e;",
         "};",
         "inline constexpr T2704ResidualOracleRow kT2704M1ExactTie = {",
         f"  {branch_m}LL, {branch_e}LL, {stream_m}LL, {stream_e}LL, {branch_code}, {stream_code},",
         f"  {abs_unsigned(stream_m)}LL, {denominator}LL, {shift}LL, {target_reciprocal}LL,",
         f"  {stream_code}LL, {raw}LL, {oriented}LL, {wide_sum}LL,",
-        "  -127, 0LL, 20LL,",
         "};",
         "}  // namespace superslm_test",
         "",

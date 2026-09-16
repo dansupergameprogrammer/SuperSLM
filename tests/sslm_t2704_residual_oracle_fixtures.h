@@ -12,13 +12,11 @@ struct T2704ResidualOracleRow {
   int8_t branch_code, stream_code;
   int64_t selected_magnitude, normalized_denominator, normalization_shift, reciprocal;
   int64_t selected_direct, nonselected_raw, nonselected_oriented, wide_sum;
-  int8_t final_code; int64_t final_scale_m, final_scale_e;
 };
 inline constexpr T2704ResidualOracleRow kT2704M1ExactTie = {
   1LL, -17LL, 1LL, -17LL, -127, -127,
   1LL, 1073741824LL, 30LL, 4294967296LL,
   -127LL, -127LL, -127LL, -254LL,
-  -127, 0LL, 20LL,
 };
 }  // namespace superslm_test
 
