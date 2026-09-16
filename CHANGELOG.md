@@ -30,7 +30,7 @@ built or is refused, the complete row is rebuilt on the coarser grid. The CPU pa
 residual shaders produce byte-identical results.
 
 This changes int8 forward outputs, logits, and carried scales for every model, including models
-with no QK path. Outputs are not bit-identical to 1.4.0 or earlier 1.5.0 candidates. Existing
+with no QK path. Outputs are not bit-identical to 1.4.0. Existing
 artifacts do not need reconversion for this change: the artifact format is unchanged. A residual
 operand with a zero carried-scale mantissa is refused as `SSLM_ARTIFACT_REJECTED`.
 
