@@ -24,6 +24,21 @@ known-flags mask is `0x7` (Option-G, DGC1, and QKC1), documented and checked aga
 contract by the test suite. Existing pre-1.5.0 QK artifacts must be reconverted from their source
 checkpoint; no replacement QK artifact is introduced by this release.
 
+Residual adds now combine both operands on the finer of their carried-scale grids and requantize
+once, rather than first rounding the branch onto the stream's grid. If the finer-grid row cannot be
+built or is refused, the complete row is rebuilt on the coarser grid. The CPU path and both GPU
+residual shaders produce byte-identical results.
+
+This changes int8 forward outputs, logits, and carried scales for every model, including models
+with no QK path. Outputs are not bit-identical to 1.4.0 or earlier 1.5.0 candidates. Existing
+artifacts do not need reconversion for this change: the artifact format is unchanged. A residual
+operand with a zero carried-scale mantissa is refused as `SSLM_ARTIFACT_REJECTED`.
+
+Fused-K calibration now stages its candidate artifact and publishes the requested output only after
+pass-C convergence succeeds, so a failed convergence cannot leave a final-looking output artifact.
+The accepted pass-C clipped/callback rate is configurable with
+`--pass-c-clipped-per-callback` (default: one per million).
+
 ## [1.4.0] - 2026-09-03
 
 SuperSLM 1.4.0 adds end-to-end Qwen3/QK-norm support to conversion, calibration,
