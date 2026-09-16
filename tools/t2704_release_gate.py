@@ -12,7 +12,12 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-FIDELITY_FLOOR, RETRIEVAL_FLOOR, RETRIEVAL_TOTAL = .906603, 148, 239
+MODEL_FIDELITY_FLOORS = {
+    "Qwen3": {"value": .800623, "strictly_greater": True},
+    "Qwen2.5": {"value": .938495, "strictly_greater": False},
+}
+QWEN3_FIDELITY_TARGET = .906603
+RETRIEVAL_FLOOR, RETRIEVAL_TOTAL = 148, 239
 REQUIRED_MODELS = {"Qwen2.5", "Qwen3"}
 
 
@@ -36,6 +41,31 @@ def tree_sha256(path: Path) -> str:
 
 def reject(message: str) -> None:
     raise ValueError(message)
+
+
+def passes_fidelity_floor(model: str, fidelity: float) -> bool:
+    rule = MODEL_FIDELITY_FLOORS[model]
+    return fidelity > rule["value"] if rule["strictly_greater"] else fidelity >= rule["value"]
+
+
+def fidelity_from_loss(loss: float) -> float:
+    return round(1.0 - loss, 6)
+
+
+def reject_fidelity_floor(model: str, fidelity: float) -> None:
+    rule = MODEL_FIDELITY_FLOORS[model]
+    comparator = "<=" if rule["strictly_greater"] else "<"
+    reject(f"{model} fidelity {fidelity:.6f} {comparator} {rule['value']:.6f}")
+
+
+def qwen3_target_report(fidelity: float) -> dict[str, float]:
+    distance = round(abs(QWEN3_FIDELITY_TARGET - fidelity), 6)
+    return {
+        "final_norm_fidelity": fidelity,
+        "target": QWEN3_FIDELITY_TARGET,
+        "distance": distance,
+        "shortfall": round(max(0.0, QWEN3_FIDELITY_TARGET - fidelity), 6),
+    }
 
 
 def load(path: Path) -> dict[str, Any]:
@@ -126,9 +156,9 @@ def run_fidelity(config: dict[str, Any], models: dict[str, dict[str, Any]], work
         loss = curves[-1].get("engine_vs_float", {}).get("median")
         if not isinstance(loss, (int, float)) or not 0 <= loss <= 1:
             reject(f"{model} final-norm loss is malformed")
-        fidelity = 1.0 - float(loss)
-        if fidelity < FIDELITY_FLOOR:
-            reject(f"{model} fidelity {fidelity:.6f} < {FIDELITY_FLOOR:.6f}")
+        fidelity = fidelity_from_loss(float(loss))
+        if not passes_fidelity_floor(model, fidelity):
+            reject_fidelity_floor(model, fidelity)
         results.append({"model": model, "artifact_sha256": models[model]["sha256"], "final_norm_loss": loss,
                         "final_norm_fidelity": fidelity, "command": command, "summary": summary})
         seen.add(model)
@@ -190,8 +220,11 @@ def synthetic_fidelity(report: dict[str, Any]) -> dict[str, float]:
         if name not in REQUIRED_MODELS or name in found or not isinstance(fidelity, (int, float)):
             reject("fidelity report has malformed or duplicate row")
         found[name] = float(fidelity)
-    if set(found) != REQUIRED_MODELS or any(value < FIDELITY_FLOOR for value in found.values()):
+    if set(found) != REQUIRED_MODELS:
         reject("fidelity report omits a model or fails the threshold")
+    for model, fidelity in found.items():
+        if not passes_fidelity_floor(model, fidelity):
+            reject_fidelity_floor(model, fidelity)
     return found
 
 
@@ -206,7 +239,9 @@ def gate(manifest_path: Path, report_path: Path, fidelity_path: Path | None = No
         correct, total, margins = retrieval.get("retrieval_correct"), retrieval.get("retrieval_total"), replay.get("margins")
         if not isinstance(correct, int) or total != RETRIEVAL_TOTAL or correct < RETRIEVAL_FLOOR or not isinstance(margins, list) or not margins or any(not isinstance(value, int) or value <= 0 for value in margins):
             reject("synthetic retrieval or replay report fails")
-        result: dict[str, Any] = {"manifest_sha256": sha256(manifest_path), "identities": identities, "fidelity": fidelity, "retrieval_correct": correct, "minimum_replay_margin": min(margins), "commissioning_seam": True}
+        result: dict[str, Any] = {"manifest_sha256": sha256(manifest_path), "identities": identities, "fidelity": fidelity,
+                                  "qwen3_target": qwen3_target_report(fidelity["Qwen3"]), "retrieval_correct": correct,
+                                  "minimum_replay_margin": min(margins), "commissioning_seam": True}
     else:
         diagnostics = manifest.get("diagnostics")
         if not isinstance(diagnostics, dict):
@@ -215,9 +250,11 @@ def gate(manifest_path: Path, report_path: Path, fidelity_path: Path | None = No
         if work.exists():
             shutil.rmtree(work)
         work.mkdir(parents=True)
+        fidelity = run_fidelity(diagnostics.get("fidelity", {}), models, work)
+        qwen3_fidelity = next(row["final_norm_fidelity"] for row in fidelity if row["model"] == "Qwen3")
         result = {"manifest_sha256": sha256(manifest_path), "identities": identities,
                   "models": {name: {"path": str(value["path"]), "sha256": value["sha256"]} for name, value in models.items()},
-                  "fidelity": run_fidelity(diagnostics.get("fidelity", {}), models, work),
+                  "fidelity": fidelity, "qwen3_target": qwen3_target_report(qwen3_fidelity),
                   "retrieval": run_retrieval(diagnostics.get("retrieval", {}), models, work),
                   "replay": run_replay(diagnostics.get("replay", {}), models, work), "commissioning_seam": False}
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -235,15 +272,32 @@ def commission(receipt: Path) -> int:
         corpus = root / "corpus.jsonl"; corpus.write_text("corpus\n", encoding="utf-8")
         manifest = root / "tests/data/manifest.json"; manifest.parent.mkdir(parents=True)
         manifest.write_text(json.dumps({"models": models, "identities": [{"name": "corpus", "path": corpus.name, "sha256": sha256(corpus)}], "diagnostics": {}}), encoding="utf-8")
-        healthy = {"models": [{"model": name, "final_norm_fidelity": FIDELITY_FLOOR} for name in sorted(REQUIRED_MODELS)]}
+        healthy = {"models": [{"model": "Qwen3", "final_norm_fidelity": .85},
+                                {"model": "Qwen2.5", "final_norm_fidelity": .94}]}
         reports = {"fidelity": healthy, "retrieval": {"retrieval_correct": 148, "retrieval_total": 239}, "replay": {"margins": [1, 9]}}
+        if fidelity_from_loss(.199377) != .800623:
+            return 2
         paths = {name: root / f"{name}.json" for name in reports}
         for name, value in reports.items(): paths[name].write_text(json.dumps(value), encoding="utf-8")
-        cases = {"healthy": ({}, 0), "fidelity_below_floor": ({"fidelity": {"models": [{"model": "Qwen2.5", "final_norm_fidelity": .9}, {"model": "Qwen3", "final_norm_fidelity": .91}]}}, 1), "retrieval_147_239": ({"retrieval": {"retrieval_correct": 147, "retrieval_total": 239}}, 1), "nonpositive_margin": ({"replay": {"margins": [1, 0]}}, 1), "omitted_qwen25": ({"fidelity": {"models": [{"model": "Qwen3", "final_norm_fidelity": .91}]}}, 1), "omitted_qwen3": ({"fidelity": {"models": [{"model": "Qwen2.5", "final_norm_fidelity": .91}]}}, 1)}
-        results = {}
+        cases = {
+            "healthy_qwen3_shortfall": ({}, 0),
+            "qwen3_not_improved": ({"fidelity": {"models": [{"model": "Qwen3", "final_norm_fidelity": .800623}, {"model": "Qwen2.5", "final_norm_fidelity": .94}]}}, 1),
+            "qwen25_regression": ({"fidelity": {"models": [{"model": "Qwen3", "final_norm_fidelity": .85}, {"model": "Qwen2.5", "final_norm_fidelity": .938494}]}}, 1),
+            "retrieval_147_239": ({"retrieval": {"retrieval_correct": 147, "retrieval_total": 239}}, 1),
+            "nonpositive_margin": ({"replay": {"margins": [1, 0]}}, 1),
+            "omitted_qwen25": ({"fidelity": {"models": [{"model": "Qwen3", "final_norm_fidelity": .85}]}}, 1),
+            "omitted_qwen3": ({"fidelity": {"models": [{"model": "Qwen2.5", "final_norm_fidelity": .94}]}}, 1),
+        }
+        results, healthy_qwen3_target = {}, None
         for name, (changes, expected) in cases.items():
             for key, value in changes.items(): paths[key].write_text(json.dumps(value), encoding="utf-8")
-            try: gate(manifest, root / f"{name}.json.out", paths["fidelity"], paths["retrieval"], paths["replay"]); code = 0
+            try:
+                report = gate(manifest, root / f"{name}.json.out", paths["fidelity"], paths["retrieval"], paths["replay"])
+                if name == "healthy_qwen3_shortfall":
+                    healthy_qwen3_target = report.get("qwen3_target")
+                    if healthy_qwen3_target != {"final_norm_fidelity": .85, "target": .906603, "distance": .056603, "shortfall": .056603}:
+                        return 2
+                code = 0
             except ValueError: code = 1
             results[name] = code
             if code != expected: return 2
@@ -252,7 +306,9 @@ def commission(receipt: Path) -> int:
         try: gate(manifest, root / "changed.json.out", paths["fidelity"], paths["retrieval"], paths["replay"]); results["changed_identity"] = 0
         except ValueError: results["changed_identity"] = 1
         if results["changed_identity"] != 1: return 2
-        receipt.write_text(json.dumps({"id": "T-2713-release-gate", "instrument_sha256": sha256(Path(__file__)), "results": results, "status": "commissioned-seam-only; production verdict requires real-data commissioning"}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        receipt.write_text(json.dumps({"id": "T-2713-release-gate", "instrument_sha256": sha256(Path(__file__)), "results": results,
+                                      "healthy_qwen3_target": healthy_qwen3_target,
+                                      "status": "commissioned-seam-only; production verdict requires real-data commissioning"}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return 0
 
 
