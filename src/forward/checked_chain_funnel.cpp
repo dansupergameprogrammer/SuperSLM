@@ -307,6 +307,11 @@ struct RequantChainPreflight {
 RequantChainPreflight BuildRequantChainPreflight(const int64_t* wide_row, size_t n,
 	                                                std::span<const CarriedScale> incoming,
 	                                                CarriedScale site_constant) {
+	// Step 0 (ac34677 S5): every CarriedScale that will reach CombineCarriedScale
+	// below must fit that function's own precondition (mantissa within int32_t's
+	// range) before anything else runs.  Because this helper is the shared,
+	// side-effect-free preflight, an early return here leaves the caller's output
+	// untouched; RequantChainChecked has not reached step 6's writes yet.
 	for (const CarriedScale& factor : incoming) {
 		if (!CarriedScaleMantissaFitsInt32(factor)) {
 			return {.status = SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
@@ -316,13 +321,41 @@ RequantChainPreflight BuildRequantChainPreflight(const int64_t* wide_row, size_t
 		return {.status = SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
 	}
 
+	// Steps 1-2 (§7.2): MaxAbsReduceWide already returns D' with C20's all-zero-row
+	// guard (D' = max(D, 1)) baked in — same contract shape as the narrow
+	// MaxAbsReduce sibling.
 	const int64_t d_prime = MaxAbsReduceWide(wide_row, n);
+	// Step 3: C29's own domain check — C21's precondition for NormalizeScale, and
+	// nothing else (T-1254's correction: this entitles step 4 alone, never a later
+	// narrowing to int32).
 	if (d_prime > (int64_t{1} << 31)) {
 		return {.status = SslmForwardStatus::ChainInputOutOfDomain};
 	}
 
+	// Step 4: NormalizeScale -> DynamicScaleReciprocal, both already int64-domain.
 	const NormalizedScale normalized = NormalizeScale(d_prime);
 	const int64_t reciprocal = DynamicScaleReciprocal(normalized.dn);
+
+	// Step 5's own carried_scale_product, computed before RequantChainChecked's
+	// step-6 per-element write loop, in C26's pinned LEFT-ASSOCIATED order: the
+	// incoming carried scale(s) first, then the site constant, then this token's
+	// own D'-factor. D' itself is already exact and canonical from NormalizeScale's
+	// own decomposition (Dn = D' << s for s >= 0, or D' >> 1 at the single s == -1
+	// case), so D' == Dn * 2^(-s) with no further rounding: the D'-factor is
+	// CarriedScale{normalized.dn, -normalized.s} exactly, needing no separate
+	// derivation.
+	//
+	// 380b75f review N1: step 0 above checks every `incoming` factor and
+	// `site_constant` against CombineCarriedScale's own precondition, but never
+	// `running` -- the fold's own left operand on every combine after the first,
+	// and exactly what step 0 cannot see because it does not exist until the fold
+	// runs. Checked here instead, after every fold step and before `running` is
+	// ever used as the next combine's operand or returned to be written to
+	// `*out_scale`: a fold whose own product drifts out of int32_t's range is
+	// rejected with the same CarriedScaleMantissaOutOfDomain status step 0 uses.
+	// Computing and validating the fold in this helper before the write loop means
+	// that rejection leaves out_codes untouched exactly like every other rejection;
+	// the fold and per-element requantization do not depend on each other's output.
 	const CarriedScale d_prime_factor{normalized.dn, -static_cast<int64_t>(normalized.s)};
 	bool have_running = false;
 	CarriedScale running{};

@@ -13409,6 +13409,98 @@ static void CheckT2704FineStreamRejectsThenCoarseCommits(
 	          static_cast<long long>(expected_scale.m), static_cast<long long>(expected_scale.e));
 }
 
+// T-2736: the generated oracle's retry row must reach the output-capable funnel
+// exactly once, and only after the finer candidate has been preflighted away.
+static void TestT2736_GeneratedRetryFixtureCommitsCoarseCandidateExactlyOnce() {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+	using namespace superslm_test;
+
+	constexpr const auto& fixture = kT2704FineRejectCoarseCommit;
+	const int8_t branch_code[1] = {fixture.branch_code};
+	const int8_t stream_code[1] = {fixture.stream_code};
+	const CarriedScale branch_scale{fixture.branch_m, fixture.branch_e};
+	const CarriedScale stream_scale{fixture.stream_m, fixture.stream_e};
+	const CarriedScale site_constant{INT64_C(1958312769), -9};
+	int8_t out_codes[1] = {INT8_C(-99)};
+	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
+
+	SslmTraceHookState hook_state;
+	std::vector<ChainTraceSinkRecord> sink;
+	SslmSetTraceHook(hook_state, &ChainTraceSinkHookFn, &sink);
+	const SslmForwardStatus status = ResidualReconcileSite(
+	    branch_code, branch_scale, stream_code, stream_scale, 1, site_constant, out_codes, &out_scale,
+	    "t2736.generated_retry", /*token_index=*/2736, &hook_state);
+	SslmSetTraceHook(hook_state, nullptr, nullptr);
+
+	CHECK_MSG(status == SslmForwardStatus::Ok,
+	          "generated retry fixture status == %s, want Ok", SslmForwardStatusName(status));
+	CHECK_MSG(sink.size() == 1,
+	          "generated retry fixture emits exactly one chain record (preflight none, funnel once); got %zu",
+	          sink.size());
+	if (sink.size() == 1) {
+		const ChainTraceSinkRecord& rec = sink[0];
+		CHECK_MSG(rec.x_int.size() == 1 && rec.x_int[0] == fixture.coarse_wide,
+		          "the sole chain record x_int == generated coarse wide row (%lld)",
+		          static_cast<long long>(fixture.coarse_wide));
+		CHECK_MSG(rec.codes.size() == 1 && rec.codes[0] == out_codes[0],
+		          "the sole chain record's codes equal ResidualReconcileSite output");
+		CHECK_MSG(rec.m_out == out_scale.m && rec.e_out == out_scale.e,
+		          "the sole chain record's scale equals ResidualReconcileSite output");
+	}
+	const NormalizedScale normalized = NormalizeScale(fixture.branch_m);
+	const auto reciprocal = CarriedScaleNormalizedReciprocal(static_cast<uint64_t>(fixture.branch_m));
+	CHECK_MSG(normalized.dn == fixture.coarse_normalized_denominator &&
+	              normalized.s == fixture.coarse_normalization_shift &&
+	              reciprocal.r == fixture.coarse_reciprocal &&
+	              reciprocal.s == fixture.coarse_normalization_shift,
+	          "generated coarse normalization (dn=%lld, s=%d, r=%lld) equals branch-mantissa reciprocal",
+	          static_cast<long long>(normalized.dn), normalized.s, static_cast<long long>(reciprocal.r));
+}
+
+// T-2736: if neither candidate can pass preflight, the second (coarse) status
+// is returned and the site remains wholly atomic to its caller.
+static void TestT2736_BothCandidatesFailLeavesOutputsAtomic() {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+
+	const int8_t branch_code[1] = {1};
+	const int8_t stream_code[1] = {2};
+	const CarriedScale branch_scale{INT64_C(1073741824), 0};
+	const CarriedScale stream_scale{INT64_C(1073741824), 0};
+	const CarriedScale invalid_site_constant{INT64_C(2147483648), 0};
+	const int64_t fine_wide[1] = {3};
+	const int64_t coarse_wide[1] = {3};
+	const CarriedScale fine_incoming[] = {stream_scale};
+	const CarriedScale coarse_incoming[] = {branch_scale};
+	const SslmForwardStatus fine_status =
+	    PreflightRequantChain(fine_wide, 1, std::span<const CarriedScale>{fine_incoming, 1},
+	                          invalid_site_constant)
+	        .status;
+	const SslmForwardStatus coarse_status =
+	    PreflightRequantChain(coarse_wide, 1, std::span<const CarriedScale>{coarse_incoming, 1},
+	                          invalid_site_constant)
+	        .status;
+	CHECK_MSG(fine_status == SslmForwardStatus::CarriedScaleMantissaOutOfDomain &&
+	              coarse_status == SslmForwardStatus::CarriedScaleMantissaOutOfDomain,
+	          "both retry candidates must fail their preflight with the poisoned site constant");
+
+	int8_t out_codes[1] = {INT8_C(-99)};
+	const int8_t out_codes_sentinel[1] = {INT8_C(-99)};
+	CarriedScale out_scale{INT64_C(-99), INT64_C(99)};
+	const CarriedScale out_scale_sentinel = out_scale;
+	const SslmForwardStatus status = ResidualReconcileSite(
+	    branch_code, branch_scale, stream_code, stream_scale, 1, invalid_site_constant, out_codes,
+	    &out_scale);
+	CHECK_MSG(status == coarse_status,
+	          "both-candidate failure returns the coarse candidate status: got %s, coarse %s",
+	          SslmForwardStatusName(status), SslmForwardStatusName(coarse_status));
+	CHECK_MSG(std::memcmp(out_codes, out_codes_sentinel, sizeof(out_codes)) == 0,
+	          "both-candidate failure leaves every out_codes sentinel byte unchanged");
+	CHECK_MSG(std::memcmp(&out_scale, &out_scale_sentinel, sizeof(out_scale)) == 0,
+	          "both-candidate failure leaves every out_scale sentinel byte unchanged");
+}
+
 // §11 S3.5's own red cell, §13 dim 5/6/7: the `ResidualReconcileSite`-level
 // half -- the same witness pair, driven through the real site composition, so
 // the wiring (not only `LandingRescale` in isolation) is proven. Accepted at
@@ -29387,6 +29479,8 @@ int main(int argc, char** argv) {
 	TestResidualReconcileSiteC26AssociationOrderWitnessDivergesUnderRightAssociation();
 	// T-1377 / D-SLM457 (§7.2b, §14.14, §11 S3.5's new red cell).
 	TestLandingRescaleMagnitudeFlagAcceptsAtOperatingPointRejectsOneExponentLater();
+	TestT2736_GeneratedRetryFixtureCommitsCoarseCandidateExactlyOnce();
+	TestT2736_BothCandidatesFailLeavesOutputsAtomic();
 	TestResidualReconcileSiteRejectsResidualReconciliationMagnitudeOutOfDomain();
 	// T-1606 (Poirot 8f63577-t1602, Significant 4): the Step-0 guard's own
 	// vitality cell -- fails without the guard, for the reason named above it.
