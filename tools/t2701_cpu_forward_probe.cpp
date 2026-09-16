@@ -234,17 +234,20 @@ void PrintForwardHash(SslmForwardStatus status, const SequenceLayerState& seq,
 
 int main(int argc, char** argv) {
 	if (argc < 3) {
-		std::fprintf(stderr, "usage: %s <model.sslm> <comma-separated-token-ids> [mode] [--smoke-attention] [--dump-final-hidden <path>]\n", argv[0]);
+		std::fprintf(stderr, "usage: %s <model.sslm> <comma-separated-token-ids> [mode] [--smoke-attention] [--dump-final-hidden <path>] [--final-hidden-only]\n", argv[0]);
 		return 2;
 	}
 	const char* mode = nullptr;
 	const char* final_hidden_dump = nullptr;
 	bool smoke_attention = false;
+	bool final_hidden_only = false;
 	for (int i = 3; i < argc; ++i) {
 		if (std::strcmp(argv[i], "--dump-final-hidden") == 0 && i + 1 < argc) {
 			final_hidden_dump = argv[++i];
 		} else if (std::strcmp(argv[i], "--smoke-attention") == 0) {
 			smoke_attention = true;
+		} else if (std::strcmp(argv[i], "--final-hidden-only") == 0) {
+			final_hidden_only = true;
 		} else if (mode == nullptr) {
 			mode = argv[i];
 		} else {
@@ -270,6 +273,8 @@ int main(int argc, char** argv) {
 		return std::fprintf(stderr, "unknown mode: %s\n", mode), 2;
 	if (smoke_attention && use_gpu)
 		return std::fprintf(stderr, "--smoke-attention is CPU-only\n"), 2;
+	if (final_hidden_only && final_hidden_dump == nullptr)
+		return std::fprintf(stderr, "--final-hidden-only requires --dump-final-hidden\n"), 2;
 	std::vector<int32_t> tokens;
 	if (!ParseTokenIds(argv[2], &tokens)) {
 		std::fprintf(stderr, "invalid token-id list: %s\n", argv[2]);
@@ -311,7 +316,7 @@ int main(int argc, char** argv) {
 		smoke_capture.rows.resize(smoke_capture.heads * 2);
 		attention_capture = AttentionCaptureSink{&smoke_capture, CaptureSmokeAttention};
 		for (LayerWeights& layer : layers) layer.attention_capture_sink = &attention_capture;
-	} else {
+	} else if (!final_hidden_only) {
 		layers[0].attention_capture_sink = &attention_capture;
 	}
 	// Calibration provenance for the attention comparison.  These are artifact
@@ -368,7 +373,8 @@ int main(int argc, char** argv) {
 	const OptionGKLandingMode k_mode = model.option_g_fused_k_landing ? OptionGKLandingMode::kFused
 	                                                                    : OptionGKLandingMode::kLegacy;
 	TraceCapture trace;
-	if (!(use_gpu || raw_k_gpu || no_qnorm_gpu)) SslmSetTraceHook(model.trace_hook, CaptureTrace, &trace);
+	if (!(use_gpu || raw_k_gpu || no_qnorm_gpu || final_hidden_only))
+		SslmSetTraceHook(model.trace_hook, CaptureTrace, &trace);
 	std::vector<uint8_t> gpu_q_codes(model.config.num_attention_heads * head_dim);
 	SslmForwardStatus forward_status = SslmForwardStatus::Ok;
 	if (use_chunk) {
@@ -451,6 +457,11 @@ int main(int argc, char** argv) {
 			return std::fprintf(stderr, "could not write final hidden dump: %s\n", final_hidden_dump), 1;
 		std::printf("final_hidden_dump=%s count=%zu scale=%lld,%lld\n", final_hidden_dump,
 		            final_codes.size(), static_cast<long long>(ignored.m), static_cast<long long>(ignored.e));
+	}
+	if (final_hidden_only) {
+		std::printf("forward_status=%s mode=%s final_hidden_only=1\n",
+		            SslmForwardStatusName(forward_status), use_chunk ? "chunk" : "stepped");
+		return 0;
 	}
 	if (smoke_attention) {
 		for (uint32_t layer : {uint32_t{0}, smoke_capture.last_layer}) {
