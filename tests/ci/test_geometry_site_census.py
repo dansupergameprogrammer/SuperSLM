@@ -1488,7 +1488,8 @@ def test_part3_reorder_gs10_plus_revert_is_caught_at_the_relocated_line():
     # CORRECTED 2026-09-03 (T-2578): the confirmation remedies add six lines above the relocated
     # occurrence, shifting :923 to :930. Re-derived by executing this test's exact mutation and
     # printing census.run_census()'s real finding against the current source.
-    assert any("REGRESSED SITE" in f and "GS-10" in f and ":930" in f for f in failures), (
+    # T-2739 re-derived this exact mutation at current HEAD: :931.
+    assert any("REGRESSED SITE" in f and "GS-10" in f and ":931" in f for f in failures), (
         "the finding must cite the RELOCATED occurrence's own (now-first) line, not the "
         "untouched occurrence -- a wrong-line citation is exactly what the prior ordinal "
         "keying produced"
@@ -1540,7 +1541,8 @@ def test_part3_reorder_gs11_plus_revert_is_caught_at_the_relocated_line():
     # GS-10's own identical correction above names, re-derived the same way.
     # CORRECTED 2026-09-03 (T-2578): shifted from :950 to :957 by the same six confirmation-remedy
     # lines named at GS-10 above, re-derived by executing this test's exact mutation.
-    assert any("REGRESSED SITE" in f and "GS-11" in f and ":957" in f for f in failures)
+    # T-2739 re-derived this exact mutation at current HEAD: :958.
+    assert any("REGRESSED SITE" in f and "GS-11" in f and ":958" in f for f in failures)
 
 
 _GS12_OCC0 = (

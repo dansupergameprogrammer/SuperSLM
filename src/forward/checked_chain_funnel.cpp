@@ -304,9 +304,16 @@ struct RequantChainPreflight {
 	CarriedScale output_scale{};
 };
 
-RequantChainPreflight BuildRequantChainPreflight(const int64_t* wide_row, size_t n,
-	                                                std::span<const CarriedScale> incoming,
-	                                                CarriedScale site_constant) {
+// The private overload keeps the public PreflightRequantChain door as the one
+// source-visible owner of C26's no-write work. RequantChainChecked asks that
+// same door for the derived operands it needs for step 6; the public four-arg
+// overload below asks it only for the status. This is deliberately not a
+// separately named Build* helper: the forward-door census must name the
+// design's pre-write funnel, rather than an implementation detail beneath it.
+ChainResult PreflightRequantChain(const int64_t* wide_row, size_t n,
+	                              std::span<const CarriedScale> incoming,
+	                              CarriedScale site_constant,
+	                              RequantChainPreflight* out_preflight) {
 	// Step 0 (ac34677 S5): every CarriedScale that will reach CombineCarriedScale
 	// below must fit that function's own precondition (mantissa within int32_t's
 	// range) before anything else runs.  Because this helper is the shared,
@@ -314,11 +321,11 @@ RequantChainPreflight BuildRequantChainPreflight(const int64_t* wide_row, size_t
 	// untouched; RequantChainChecked has not reached step 6's writes yet.
 	for (const CarriedScale& factor : incoming) {
 		if (!CarriedScaleMantissaFitsInt32(factor)) {
-			return {.status = SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
+			return ChainResult{SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
 		}
 	}
 	if (!CarriedScaleMantissaFitsInt32(site_constant)) {
-		return {.status = SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
+		return ChainResult{SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
 	}
 
 	// Steps 1-2 (§7.2): MaxAbsReduceWide already returns D' with C20's all-zero-row
@@ -329,7 +336,7 @@ RequantChainPreflight BuildRequantChainPreflight(const int64_t* wide_row, size_t
 	// nothing else (T-1254's correction: this entitles step 4 alone, never a later
 	// narrowing to int32).
 	if (d_prime > (int64_t{1} << 31)) {
-		return {.status = SslmForwardStatus::ChainInputOutOfDomain};
+		return ChainResult{SslmForwardStatus::ChainInputOutOfDomain};
 	}
 
 	// Step 4: NormalizeScale -> DynamicScaleReciprocal, both already int64-domain.
@@ -366,16 +373,19 @@ RequantChainPreflight BuildRequantChainPreflight(const int64_t* wide_row, size_t
 	};
 	for (const CarriedScale& factor : incoming) {
 		if (!fold_in(factor)) {
-			return {.status = SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
+			return ChainResult{SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
 		}
 	}
 	if (!fold_in(site_constant) || !fold_in(d_prime_factor)) {
-		return {.status = SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
+		return ChainResult{SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
 	}
-	return {.d_prime = d_prime,
-	        .normalized = normalized,
-	        .reciprocal = reciprocal,
-	        .output_scale = running};
+	if (out_preflight != nullptr) {
+		*out_preflight = {.d_prime = d_prime,
+		                  .normalized = normalized,
+		                  .reciprocal = reciprocal,
+		                  .output_scale = running};
+	}
+	return ChainResult{SslmForwardStatus::Ok};
 }
 
 }  // namespace
@@ -383,7 +393,7 @@ RequantChainPreflight BuildRequantChainPreflight(const int64_t* wide_row, size_t
 ChainResult PreflightRequantChain(const int64_t* wide_row, size_t n,
                                   std::span<const CarriedScale> incoming,
                                   CarriedScale site_constant) {
-	return ChainResult{BuildRequantChainPreflight(wide_row, n, incoming, site_constant).status};
+	return PreflightRequantChain(wide_row, n, incoming, site_constant, nullptr);
 }
 
 ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
@@ -392,9 +402,10 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
                                  CarriedScale* out_scale,
                                  std::string_view site, size_t token_index,
                                  SslmTraceHookState* trace_hook_state) {
-	const RequantChainPreflight preflight =
-	    BuildRequantChainPreflight(wide_row, n, incoming, site_constant);
-	if (preflight.status != SslmForwardStatus::Ok) return ChainResult{preflight.status};
+	RequantChainPreflight preflight;
+	const ChainResult preflight_result =
+	    PreflightRequantChain(wide_row, n, incoming, site_constant, &preflight);
+	if (preflight_result.status != SslmForwardStatus::Ok) return preflight_result;
 
 	// Step 6: RequantTokenCodeWide per element, directly on the int64 row — never
 	// narrowed to int32 first (T-1254's fold).

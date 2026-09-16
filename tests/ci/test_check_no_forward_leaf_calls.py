@@ -1051,8 +1051,8 @@ def test_t1381_ast_mechanism_finds_a_door_hidden_inside_a_lambda_in_real_declare
     with tempfile.TemporaryDirectory() as tmp:
         path = _write(tmp, "checked_chain_funnel_with_lambda_door.cpp", real_content + lambda_door)
         doors = sorted(cnfl.find_leaf_forwarding_doors(path))
-        assert doors == ["CarriedScaleDoorLambda", "CarriedScaleReciprocal"], (
-            f"expected both the real door and the lambda-hiding one against "
+        assert doors == sorted(["CarriedScaleDoorLambda", *cnfl._EXPECTED_DOOR_FUNCTIONS]), (
+            f"expected every real door and the lambda-hiding one against "
             f"real declared code, got {doors}"
         )
 
@@ -1220,8 +1220,8 @@ def test_t1383_lambda_regression_control_still_reports_exactly_one_door():
     with tempfile.TemporaryDirectory() as tmp:
         path = _write(tmp, "checked_chain_funnel_with_lambda_door.cpp", real_content + lambda_door)
         doors = sorted(cnfl.find_leaf_forwarding_doors(path))
-        assert doors == ["CarriedScaleDoorLambda", "CarriedScaleReciprocal"], (
-            f"expected exactly two doors (no spurious 'operator()' entry from "
+        assert doors == sorted(["CarriedScaleDoorLambda", *cnfl._EXPECTED_DOOR_FUNCTIONS]), (
+            f"expected every real door plus the lambda door (no spurious 'operator()' entry from "
             f"the lambda's own closure type), got {doors}"
         )
 
@@ -1382,8 +1382,8 @@ def test_t1386_local_class_member_inside_function_body_is_not_double_counted_wit
     with tempfile.TemporaryDirectory() as tmp:
         path = _write(tmp, "checked_chain_funnel_with_local_class.cpp", real_content + local_class_door)
         doors = sorted(cnfl.find_leaf_forwarding_doors(path))
-        assert doors == ["CarriedScaleReciprocal", "OuterDoorDeclared"], (
-            f"expected exactly two doors against declared code (no spurious "
+        assert doors == sorted(["OuterDoorDeclared", *cnfl._EXPECTED_DOOR_FUNCTIONS]), (
+            f"expected every real door plus OuterDoorDeclared against declared code (no spurious "
             f"'Go' entry from the local class's member function), got {doors}"
         )
 
@@ -1411,8 +1411,8 @@ def test_t1386_declared_code_shape_was_also_a_miss_under_the_pre_t1386_mechanism
     with tempfile.TemporaryDirectory() as tmp:
         path = _write(tmp, "checked_chain_funnel_with_local_class.cpp", real_content + local_class_door)
         old_doors = sorted(_pre_t1386_find_leaf_forwarding_doors_for_comparison(path))
-        assert old_doors == ["CarriedScaleReciprocal", "Go", "OuterDoorDeclared"], (
-            f"expected the pre-T-1386 mechanism to report THREE doors against "
+        assert old_doors == sorted(["Go", "OuterDoorDeclared", *cnfl._EXPECTED_DOOR_FUNCTIONS]), (
+            f"expected the pre-T-1386 mechanism to double-count Go alongside "
             f"declared code too (the local class's member function "
             f"double-counted alongside the enclosing function), got {old_doors}"
         )

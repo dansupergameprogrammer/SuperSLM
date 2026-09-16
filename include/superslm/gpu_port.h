@@ -379,8 +379,9 @@ enum class GpuLayerLoopGuard : int {
 // own, ShaderPath's stale-binary refusal) added a second new catch clause to each of the same two
 // functions, two more again. Every path that resolves the call AFTER the
 // decision reads exactly what the decision decided (true on a cache hit, false on a miss),
-// whether the call's own final status is Ok or one of DecodeStickyTag's thirteen rejecting
-// statuses -- the twenty-nine before them, alike, thirty-five paths' own destination in total.
+// whether the call's own final status is Ok or one of DecodeStickyTag's fifteen rejecting
+// statuses, including ResidualReconciliationScaleOutOfDomain -- the twenty-nine before them,
+// alike, thirty-five paths' own destination in total.
 //
 // Both counts are derived structurally from source, not restated by hand, by
 // tests/ci/check_gpu_guard_status_parity.py (derive_lwuws_before_decision_count/

@@ -421,7 +421,8 @@ GPU_BELOW_LADDER_STATUSES = frozenset({
 DECODE_STICKY_TAG_FUNC_SIGNATURE = "superslm::SslmForwardStatus DecodeStickyTag(int64_t tag) {"
 _DECODE_STICKY_TAG_RETURN_RE = re.compile(r"return\s+S::([A-Za-z_][A-Za-z0-9_]*)")
 # `gpu_port.h`'s own citation claims this function "maps the device's own
-# sticky tag to FOURTEEN statuses, THIRTEEN of them rejecting" -- the number
+# sticky tag to SIXTEEN statuses, FIFTEEN of them rejecting, including
+# ResidualReconciliationScaleOutOfDomain" -- the number
 # this module now pins directly against the function's own real body,
 # instead of via the two-endpoint range citation T-2083 retired (it read
 # `superslm_gpu.cpp:583`, `:601` then -- quoted as history, not a live
@@ -430,8 +431,8 @@ _DECODE_STICKY_TAG_RETURN_RE = re.compile(r"return\s+S::([A-Za-z_][A-Za-z0-9_]*)
 # (executed at T-2083) and therefore covered where the function
 # ENDS, not what is inside it -- deleting an interior `case` while
 # preserving the file's own total line count left that citation green.
-DECODE_STICKY_TAG_EXPECTED_TOTAL = 15
-DECODE_STICKY_TAG_EXPECTED_REJECTING = 14
+DECODE_STICKY_TAG_EXPECTED_TOTAL = 16
+DECODE_STICKY_TAG_EXPECTED_REJECTING = 15
 
 _STATUS_RETURN_RE = re.compile(r"return\s+(?:superslm::)?SslmForwardStatus::([A-Za-z_][A-Za-z0-9_]*)")
 _DEF_ROW_RE = re.compile(
@@ -628,7 +629,8 @@ def decode_sticky_tag_status_set(gpu_text: str) -> set[str]:
 
 def check_decode_sticky_tag_range(gpu_text: str) -> list[str]:
     """T-2083 (O35): pins the EXACT claim `gpu_port.h`'s own citation exists
-    to protect -- "fourteen statuses, THIRTEEN of them rejecting" -- against
+    to protect -- "sixteen statuses, FIFTEEN of them rejecting, including
+    ResidualReconciliationScaleOutOfDomain" -- against
     `DecodeStickyTag`'s own real body, rather than the two-endpoint range
     citation whose own range-end needle (a bare `"}"`) is satisfied by a great
     many of `superslm_gpu.cpp`'s own lines and therefore proves only that the

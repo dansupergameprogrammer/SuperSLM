@@ -159,14 +159,20 @@ _FUNNEL_ENTRY_POINTS = (
 )
 
 # The named, sized set of functions inside the funnel's own file that are
-# PERMITTED to forward a banned leaf to an outside caller (Poirot e4b398c
-# review, Significant 9; T-1357/D-SLM433): `CarriedScaleReciprocal` is the one
-# door C26's runtime reciprocal derivation opens. Sized to N, the same
+# PERMITTED to forward a banned leaf to an outside caller. T-2739 re-derived
+# this list against T2704 design §2.2: the legacy C19 reciprocal door,
+# the residual site's fused NormalizeScale+DynamicScaleReciprocal door, and
+# the pre-write C26 funnel are the complete designed surface. In particular,
+# the C26 door is named PreflightRequantChain rather than an internal Build*
+# helper, so the census follows the design's public seam rather than a
+# refactorable implementation detail. Sized to N, the same
 # _EXPECTED_REAL_FORWARD_FILES idiom above -- a second door landing without a
 # matching update here is caught by the equality assertion in
 # find_leaf_forwarding_doors' caller, not silently accepted.
 _EXPECTED_DOOR_FUNCTIONS = (
     "CarriedScaleReciprocal",
+    "CarriedScaleNormalizedReciprocal",
+    "PreflightRequantChain",
 )
 
 # --- T-1381: a Clang-AST derivation of the door count, replacing the text
@@ -695,10 +701,10 @@ def check_door_count(
 ) -> list[str]:
     """Significant 9 (Poirot e4b398c review, T-1357/D-SLM433): `scan_files` above
     holds every OTHER forward TU off the eight banned leaves; nothing holds the
-    DOOR COUNT itself at one inside the funnel's own file. Asserts the exact,
+    DOOR COUNT itself inside the funnel's own file. Asserts the exact,
     named set of functions in `funnel_path` that forward a banned leaf to an
     outside caller equals `expected` -- a second door opened alongside
-    `CarriedScaleReciprocal` (or a rename of it) is caught here, the same
+    one of the designed doors (or a rename of one) is caught here, the same
     named-set idiom `_EXPECTED_REAL_FORWARD_FILES` already uses one level up."""
     if not os.path.isfile(funnel_path):
         # Not a failure: this check is auxiliary to scan_files' own glob-driven
