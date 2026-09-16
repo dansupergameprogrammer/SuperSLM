@@ -11,6 +11,7 @@
 //   sslm_layer_trace <model.sslm> <tokenizer.sslm> "<prompt>" --dump <path>
 //   sslm_layer_trace <model.sslm> <tokenizer.sslm> --token-ids <csv> --dump <path>
 //       [--site-dump <jsonl-path> (--site-layer <index> | --site-layers <csv>)]
+//       [--all-position-residual-only]
 //
 // "<prompt>" is the FULL chat-templated prompt text (system + user +
 // assistant-open), the same shape tools/sslm_generate.cpp's argv[3] already
@@ -60,7 +61,8 @@ void PrintUsage(const char* argv0) {
 	std::fprintf(stderr,
 	             "usage: %s <model.sslm> <tokenizer.sslm> (\"<prompt>\" | --token-ids <csv>) "
 	             "--dump <path> [--include-final-norm] "
-	             "[--site-dump <jsonl-path> (--site-layer <index> | --site-layers <csv>)]\n", argv0);
+	             "[--site-dump <jsonl-path> (--site-layer <index> | --site-layers <csv>)] "
+	             "[--all-position-residual-only]\n", argv0);
 }
 
 bool ParseTokenIds(const char* spec, std::vector<int32_t>* out) {
@@ -134,6 +136,7 @@ struct SiteDumpCapture {
 	std::ofstream output;
 	std::vector<uint32_t> layers;
 	bool enabled = false;
+	bool all_position_residual_only = false;
 
 	bool Selects(uint32_t layer) const {
 		for (uint32_t candidate : layers) {
@@ -149,6 +152,12 @@ struct SiteDumpCapture {
 			if (site.starts_with(prefix)) return true;
 		}
 		return false;
+	}
+
+	bool SelectsResidualChain(std::string_view site) const {
+		if (!all_position_residual_only) return true;
+		return site.ends_with(".o_proj.requant") || site.ends_with(".attn_residual") ||
+		       site.ends_with(".down_proj.requant") || site.ends_with(".mlp_residual");
 	}
 };
 
@@ -166,7 +175,8 @@ void CaptureSiteTrace(const SslmChainTraceRecord* chain,
 	                  const SslmKvLandingTraceRecord* landing, void* user) {
 	auto* capture = static_cast<SiteDumpCapture*>(user);
 	if (!capture->enabled) return;
-	if (chain != nullptr && capture->Selects(chain->site)) {
+	if (chain != nullptr && capture->Selects(chain->site) &&
+	    capture->SelectsResidualChain(chain->site)) {
 		capture->output << "{\"type\":\"chain\",\"site\":\"" << chain->site
 		                << "\",\"token\":" << chain->token_index << ",\"d_prime\":"
 		                << chain->d_prime << ",\"dn\":" << chain->dn << ",\"s\":" << chain->s
@@ -193,7 +203,7 @@ void CaptureFusedK(void* user, uint32_t layer, size_t kv_head, size_t channel,
 	               int64_t wide, int64_t rotated, CarriedScale wide_scale,
 	               int64_t landing_raw) {
 	auto* capture = static_cast<SiteDumpCapture*>(user);
-	if (!capture->enabled || !capture->Selects(layer)) return;
+	if (!capture->enabled || capture->all_position_residual_only || !capture->Selects(layer)) return;
 	capture->output << "{\"type\":\"fused_k\",\"layer\":" << layer
 	                << ",\"head\":" << kv_head << ",\"channel\":" << channel
 	                << ",\"wide\":" << wide << ",\"rotated\":" << rotated
@@ -206,7 +216,7 @@ void CaptureAttention(void* user, uint32_t layer, int64_t position, size_t head,
 	                  int64_t q_c, const int64_t* probabilities, const int64_t* ctx_acc,
 	                  const int64_t* ctx_wide, size_t head_dim) {
 	auto* capture = static_cast<SiteDumpCapture*>(user);
-	if (!capture->enabled || !capture->Selects(layer)) return;
+	if (!capture->enabled || capture->all_position_residual_only || !capture->Selects(layer)) return;
 	capture->output << "{\"type\":\"attention\",\"layer\":" << layer
 	                << ",\"position\":" << position << ",\"head\":" << head
 	                << ",\"q_ln2\":" << q_ln2 << ",\"q_b\":" << q_b << ",\"q_c\":" << q_c
@@ -223,7 +233,7 @@ void CaptureAttention(void* user, uint32_t layer, int64_t position, size_t head,
 
 void CaptureValueRows(SiteDumpCapture* capture, const uint8_t* workspace, uint32_t layer,
 	                  int64_t context_cap, size_t num_kv_heads, size_t head_dim, size_t width) {
-	if (!capture->enabled || !capture->Selects(layer)) return;
+	if (!capture->enabled || capture->all_position_residual_only || !capture->Selects(layer)) return;
 	for (size_t head = 0; head < num_kv_heads; ++head) {
 		capture->output << "{\"type\":\"value\",\"layer\":" << layer << ",\"head\":" << head
 		                << ",\"width\":" << width << ",\"codes\":[";
@@ -235,6 +245,16 @@ void CaptureValueRows(SiteDumpCapture* capture, const uint8_t* workspace, uint32
 		}
 		capture->output << "]}\n";
 	}
+}
+
+void CaptureResidualStream(SiteDumpCapture* capture, uint32_t layer, size_t token,
+	                       const SequenceLayerState& seq, size_t hidden_size) {
+	if (!capture->enabled || !capture->all_position_residual_only || !capture->Selects(layer)) return;
+	capture->output << "{\"type\":\"stream\",\"layer\":" << layer << ",\"token\":" << token
+	                << ",\"m\":" << seq.hidden_scale.m << ",\"e\":" << seq.hidden_scale.e
+	                << ",\"codes\":";
+	WriteJsonArray(capture->output, seq.hidden_codes, hidden_size);
+	capture->output << "}\n";
 }
 
 }  // namespace
@@ -262,6 +282,7 @@ int main(int argc, char** argv) {
 	uint32_t site_layer = UINT32_MAX;
 	std::vector<uint32_t> site_layers;
 	bool include_final_norm = false;
+	bool all_position_residual_only = false;
 	for (int i = token_id_mode ? 5 : 4; i < argc; ++i) {
 		if (std::strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
 			dump_path = argv[++i];
@@ -287,6 +308,8 @@ int main(int argc, char** argv) {
 				return 2;
 			}
 			for (int32_t value : parsed) site_layers.push_back(static_cast<uint32_t>(value));
+		} else if (std::strcmp(argv[i], "--all-position-residual-only") == 0) {
+			all_position_residual_only = true;
 		} else {
 			std::fprintf(stderr, "unrecognized argument: %s\n", argv[i]);
 			PrintUsage(argv[0]);
@@ -307,6 +330,11 @@ int main(int argc, char** argv) {
 	}
 	if (site_dump_path.empty() != site_layers.empty()) {
 		std::fprintf(stderr, "FAILED at stage=args: --site-dump and a site-layer selector are required together\n");
+		return 2;
+	}
+	if (all_position_residual_only && site_dump_path.empty()) {
+		std::fprintf(stderr,
+		             "FAILED at stage=args: --all-position-residual-only requires a site dump and layer selector\n");
 		return 2;
 	}
 
@@ -490,6 +518,7 @@ int main(int argc, char** argv) {
 	std::vector<LayerSnapshot> rows;
 	rows.reserve(num_hidden_layers + 1);
 	SiteDumpCapture site_capture;
+	site_capture.all_position_residual_only = all_position_residual_only;
 	FusedKCaptureSink fused_k_capture{&site_capture, CaptureFusedK};
 	AttentionCaptureSink attention_capture{&site_capture, CaptureAttention};
 	if (!site_dump_path.empty()) {
@@ -522,6 +551,7 @@ int main(int argc, char** argv) {
 
 	// Prefill: every prompt token except the last -- embed + full-budget
 	// RunLayerLoop, exactly RunWholeToken's own composition.
+	if (!site_dump_path.empty() && all_position_residual_only) site_capture.enabled = true;
 	for (size_t i = 0; i + 1 < prompt_tokens.size(); ++i) {
 		SslmForwardStatus st = EmbedWholeToken(prompt_tokens[i]);
 		if (st != SslmForwardStatus::Ok) {
@@ -529,13 +559,30 @@ int main(int argc, char** argv) {
 			             SslmForwardStatusName(st));
 			return 1;
 		}
-		st = RunLayerLoop(trace_seq, layers.data(), num_hidden_layers,
-		                   /*layer_budget=*/num_hidden_layers, hidden_size, model_view.config.head_dim,
-		                   num_kv_heads, model_view.config.intermediate_size, context_cap,
-		                   model_view.rope_tables, trace_workspace.data(), trace_workspace.size(),
-		                   option_g_mode, /*site_prefix=*/{}, /*token_index=*/0,
-		                   /*trace_hook_state=*/nullptr,
-		                   /*q_width=*/model_view.config.num_attention_heads * model_view.config.head_dim);
+		if (all_position_residual_only) {
+			for (uint32_t step = 0; step < num_hidden_layers; ++step) {
+				CaptureResidualStream(&site_capture, step, i, trace_seq, hidden_size);
+				SslmTraceHookState* site_trace =
+				    site_capture.Selects(step) ? &model_view.trace_hook : nullptr;
+				st = RunLayerLoop(
+				    trace_seq, layers.data(), num_hidden_layers, /*layer_budget=*/1, hidden_size,
+				    model_view.config.head_dim, num_kv_heads, model_view.config.intermediate_size,
+				    context_cap, model_view.rope_tables, trace_workspace.data(), trace_workspace.size(),
+				    option_g_mode, /*site_prefix=*/{}, /*token_index=*/i,
+				    /*trace_hook_state=*/site_trace,
+				    /*q_width=*/model_view.config.num_attention_heads * model_view.config.head_dim);
+				if (st != SslmForwardStatus::Ok) break;
+			}
+		} else {
+			st = RunLayerLoop(trace_seq, layers.data(), num_hidden_layers,
+			                   /*layer_budget=*/num_hidden_layers, hidden_size,
+			                   model_view.config.head_dim, num_kv_heads,
+			                   model_view.config.intermediate_size, context_cap,
+			                   model_view.rope_tables, trace_workspace.data(), trace_workspace.size(),
+			                   option_g_mode, /*site_prefix=*/{}, /*token_index=*/0,
+			                   /*trace_hook_state=*/nullptr,
+			                   /*q_width=*/model_view.config.num_attention_heads * model_view.config.head_dim);
+		}
 		if (st != SslmForwardStatus::Ok) {
 			std::fprintf(stderr, "FAILED at stage=trace_prefill_layers: position=%zu status=%s\n", i,
 			             SslmForwardStatusName(st));
@@ -559,12 +606,14 @@ int main(int argc, char** argv) {
 	if (!site_dump_path.empty()) site_capture.enabled = true;
 
 	for (uint32_t step = 0; step < num_hidden_layers; ++step) {
+		CaptureResidualStream(&site_capture, step, prompt_tokens.size() - 1, trace_seq, hidden_size);
 		SslmTraceHookState* site_trace = site_capture.Selects(step) ? &model_view.trace_hook : nullptr;
 		const SslmForwardStatus st =
 		    RunLayerLoop(trace_seq, layers.data(), num_hidden_layers, /*layer_budget=*/1, hidden_size,
 		                 model_view.config.head_dim, num_kv_heads, model_view.config.intermediate_size,
 		                 context_cap, model_view.rope_tables, trace_workspace.data(),
-		                 trace_workspace.size(), option_g_mode, /*site_prefix=*/{}, /*token_index=*/0,
+		                 trace_workspace.size(), option_g_mode, /*site_prefix=*/{},
+		                 /*token_index=*/all_position_residual_only ? prompt_tokens.size() - 1 : 0,
 		                 /*trace_hook_state=*/site_trace,
 		                 /*q_width=*/model_view.config.num_attention_heads * model_view.config.head_dim);
 		if (st != SslmForwardStatus::Ok) {
