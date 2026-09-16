@@ -62,9 +62,9 @@ def read_rows(corpus: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def verify_hash(path: Path, name: str) -> str:
+def verify_hash(path: Path, name: str, expected_override: str | None = None) -> str:
     actual = sha256(path)
-    expected = EXPECTED_HASHES.get(name)
+    expected = expected_override or EXPECTED_HASHES.get(name)
     if expected is not None and actual != expected:
         raise RuntimeError(f"{name} SHA-256 mismatch: {actual} != {expected}")
     return actual
@@ -263,7 +263,8 @@ def engine_phase(args: argparse.Namespace, arm: str) -> None:
     if sha256(args.output / "token-ids.jsonl") != expected_token_hash:
         raise RuntimeError("frozen token IDs changed after the float phase")
     artifact = args.candidate if arm == "candidate" else args.provisional
-    artifact_hash = verify_hash(artifact, arm)
+    expected = args.candidate_sha256 if arm == "candidate" else args.provisional_sha256
+    artifact_hash = verify_hash(artifact, arm, expected)
     probe_hash = sha256(args.probe)
     hidden_size = int(float_result["hidden_size"])
     sequences = [row["query_ids"] for row in frozen] + [row["document_ids"] for row in frozen]
@@ -507,6 +508,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--candidate", required=True, type=Path)
     parser.add_argument("--provisional", required=True, type=Path)
+    parser.add_argument("--candidate-sha256", help="pinned candidate identity from the release manifest")
+    parser.add_argument("--provisional-sha256", help="pinned provisional control identity from the release manifest")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--workers", type=int, default=8)

@@ -1,13 +1,53 @@
 {
+  "models": [
+    {
+      "name": "Qwen3",
+      "artifact": {
+        "path": "D:/_t2703conv/flow-final/qwen3-embedding-0.6b-1p5.sslm",
+        "sha256": "87e58a201f4749f10c096ca2ef873e8af5840ac4432618d6b2240a686681c100"
+      }
+    },
+    {
+      "name": "Qwen2.5",
+      "artifact": {
+        "path": "D:/hf_cache/superslm_artifacts/qwen2.5-0.5b-instruct.sslm",
+        "sha256": "8dcd082d1dace85874d6924aab7c2389126638a3dc8531566fb6b2298863a980"
+      }
+    }
+  ],
   "identities": [
-    {"name": "artifact", "path": "release/qwen-residual.sslm", "sha256": "REPLACE_WITH_SHIPPED_ARTIFACT_SHA256"},
-    {"name": "fidelity-input", "path": "release/fidelity-input.json", "sha256": "REPLACE_WITH_FIDELITY_INPUT_SHA256"},
-    {"name": "retrieval-corpus", "path": "release/retrieval-corpus.jsonl", "sha256": "REPLACE_WITH_RETRIEVAL_CORPUS_SHA256"},
-    {"name": "residual-trace", "path": "release/residual-trace.jsonl", "sha256": "REPLACE_WITH_RESIDUAL_TRACE_SHA256"}
+    {"name": "Qwen3 artifact cache", "kind": "tree", "path": "D:/_t2703conv/flow-work/final-cache", "sha256": "0d8eb7a9c3d7e38ef0c5cd01406342fecdf5e2048ecba79ed6cd8ebce7890eb8"},
+    {"name": "Qwen2.5 artifact cache", "kind": "tree", "path": "D:/hf_cache/superslm_artifacts/qwen2.5-0.5b-instruct-w8a8", "sha256": "f60eeb49145bd114f72011cc810fb04c54bbe021be0946c5a84bb6d16fa2a687"},
+    {"name": "Qwen3 HF snapshot", "kind": "tree", "path": "D:/hf_cache/hub/models--Qwen--Qwen3-Embedding-0.6B/snapshots/97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3", "sha256": "9c0fc2f0360187c5180467c890b0ad0a869a6350a4ef8c12eb85777521690a44"},
+    {"name": "Qwen2.5 HF snapshot", "kind": "tree", "path": "D:/hf_cache/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775", "sha256": "0bf1753aa715338cfec581b0db75baaabdbbe3a5dbb7b3cb8026568a948454c4"},
+    {"name": "baseline layer tracer", "path": "D:/SuperSLM/.worktrees/t2703-fidelity/out/sslm_layer_trace.exe", "sha256": "b86774b0df90e40a543b6f3928e4ba182707a87307f2ca79661ebed069a2649c"},
+    {"name": "retrieval corpus", "path": "D:/SuperEmbedder/tests/fixtures/c12b/corpus-239.jsonl", "sha256": "275b0749a25cfd141e747111d4cbed66d7772ce58a50b5c13a394c5c0da222c0"},
+    {"name": "retrieval query source", "path": "D:/SuperEmbedder/src/superembedder/encoder.cpp", "sha256": "0042a1e8d73f2648670be1e95c357c9388075fae278ea2b46605421da1af2ec4"},
+    {"name": "retrieval CPU probe", "path": "D:/_t2703fid/retrieval/t2701_cpu_forward_probe.exe", "sha256": "a14f50982ff8a2ade60b5597bf111bfef5126003e0ce85ae7a80b62288ec7601"},
+    {"name": "retrieval provisional control", "path": "D:/_t2703/qwen3-embedding-0.6b-provisional-r5.sslm", "sha256": "0d53db25017d49664f0b234515d5b4ea351d8dfce7b9a9005314141498a3ae5a"},
+    {"name": "fidelity diagnostic", "path": "tools/t2703_fidelity_localization.py", "sha256": "e4006220b0b6908fd83522769ab418b33743674a8402b3676a69c55af2e8eb73"},
+    {"name": "retrieval diagnostic", "path": "tools/t2703_retrieval_measure.py", "sha256": "a1480be1dcecd57bfe77dfea12fe2baab64016ee47c2b4a2d9f54bc291771f2e"},
+    {"name": "two-model replay diagnostic", "path": "tools/t2723_t2704_production_refusal_replay.py", "sha256": "096f2436c08bb49bfb888069b0ac6c4390d8fe45fe90a22d1958812033f1f3f4"}
   ],
   "diagnostics": {
-    "fidelity_command": ["python", "tools/t2703_fidelity_localization.py", "--artifact", "release/qwen-residual.sslm", "--artifact-cache", "release/artifact-cache", "--hf-model", "release/hf-model", "--layer-trace", "release/layer-trace", "--output", "release/fidelity-output"],
-    "retrieval_command": ["python", "tools/t2703_retrieval_measure.py", "analyze", "--corpus", "release/retrieval-corpus.jsonl", "--query-source", "release/retrieval-queries.jsonl", "--hf-model", "release/hf-model", "--probe", "release/forward-probe", "--candidate", "release/qwen-residual.sslm", "--provisional", "release/qwen-residual.sslm", "--output", "release/retrieval-output"],
-    "replay_command": ["python", "tools/t2703_residual_add_order.py", "--trace", "release/residual-trace.jsonl"]
+    "fidelity": {
+      "runs": [
+        {"model": "Qwen3", "artifact_cache": "D:/_t2703conv/flow-work/final-cache", "hf_model": "D:/hf_cache/hub/models--Qwen--Qwen3-Embedding-0.6B/snapshots/97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3", "layer_trace": "D:/SuperSLM/.worktrees/t2703-fidelity/out/sslm_layer_trace.exe"},
+        {"model": "Qwen2.5", "artifact_cache": "D:/hf_cache/superslm_artifacts/qwen2.5-0.5b-instruct-w8a8", "hf_model": "D:/hf_cache/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775", "layer_trace": "D:/SuperSLM/.worktrees/t2703-fidelity/out/sslm_layer_trace.exe", "control": true}
+      ]
+    },
+    "retrieval": {
+      "model": "Qwen3",
+      "corpus": "D:/SuperEmbedder/tests/fixtures/c12b/corpus-239.jsonl",
+      "query_source": "D:/SuperEmbedder/src/superembedder/encoder.cpp",
+      "hf_model": "D:/hf_cache/hub/models--Qwen--Qwen3-Embedding-0.6B/snapshots/97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+      "probe": "D:/_t2703fid/retrieval/t2701_cpu_forward_probe.exe",
+      "provisional": "D:/_t2703/qwen3-embedding-0.6b-provisional-r5.sslm",
+      "provisional_sha256": "0d53db25017d49664f0b234515d5b4ea351d8dfce7b9a9005314141498a3ae5a"
+    },
+    "replay": {
+      "qwen3_traces": "D:/_t2703fid/resadd/qwen3/engine",
+      "qwen2p5_traces": "D:/_t2703fid/resadd/qwen2p5/engine"
+    }
   }
 }
