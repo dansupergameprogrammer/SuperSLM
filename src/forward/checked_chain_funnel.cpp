@@ -74,6 +74,8 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 		return "SoftmaxKernelRefusedAfterGateAccepted";
 	if (s == SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain)
 		return "ResidualReconciliationMagnitudeOutOfDomain";
+	if (s == SslmForwardStatus::ResidualReconciliationScaleOutOfDomain)
+		return "ResidualReconciliationScaleOutOfDomain";
 	if (s == SslmForwardStatus::InvalidHiddenCodes) return "InvalidHiddenCodes";
 	if (s == SslmForwardStatus::IExpScaleDerivationOutOfDomain) return "IExpScaleDerivationOutOfDomain";
 	if (s == SslmForwardStatus::BiasReconcileProductOutOfDomain) return "BiasReconcileProductOutOfDomain";
@@ -285,6 +287,12 @@ inline bool S128FitsI64(S128 v) {
 // It forwards and does nothing else -- see the header for why exactly one of
 // the eight leaves is opened this way and the other seven are not.
 int64_t CarriedScaleReciprocal(int64_t m) { return DynamicScaleReciprocal(m); }
+
+CarriedScaleNormalizedReciprocalResult CarriedScaleNormalizedReciprocal(uint64_t magnitude) {
+	const NormalizedScale normalized = NormalizeScale(static_cast<int64_t>(magnitude));
+	return CarriedScaleNormalizedReciprocalResult{
+	    DynamicScaleReciprocal(normalized.dn), normalized.s};
+}
 
 ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
                                  std::span<const CarriedScale> incoming,

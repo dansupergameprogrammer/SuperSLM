@@ -880,6 +880,7 @@ superslm::SslmForwardStatus DecodeStickyTag(int64_t tag) {
 		case 12: return S::ResidualReconciliationMagnitudeOutOfDomain;
 		case 13: return S::SiluCompositionScaleOutOfDomain;
 		case 14: return S::QkNormFusedLandingMagnitudeOutOfDomain;
+		case 15: return S::ResidualReconciliationScaleOutOfDomain;
 		default: return S::KvPrecisionUnsupported;  // 8 = NotYetImplemented, and any unmapped tag
 	}
 }

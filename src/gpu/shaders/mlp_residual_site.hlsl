@@ -45,34 +45,53 @@ void main(uint3 gtid : SV_GroupThreadID)
 
     int64_t stream_m = LayerScratch.Load<int64_t>(attn_stream_scale_off + 0);
     int64_t stream_e = LayerScratch.Load<int64_t>(attn_stream_scale_off + 8);
-    if (stream_m < -2147483648LL || stream_m > 2147483647LL)
-    {
-        if (t == 0) SeqState.Store<int64_t>(sticky_off, kTagCarriedScaleMantissaOutOfDomain);
-        return;
-    }
-    int64_t r_h = DynamicScaleReciprocalSharedGpu(stream_m);
-
     uint down_codes_off = ScratchLayout.Load<uint>(17 * 4);
     uint down_scale_off = ScratchLayout.Load<uint>(18 * 4);
     int64_t branch_m = LayerScratch.Load<int64_t>(down_scale_off + 0);
     int64_t branch_e = LayerScratch.Load<int64_t>(down_scale_off + 8);
+    if (branch_m == 0 || stream_m == 0)
+    {
+        if (t == 0) SeqState.Store<int64_t>(sticky_off, kTagResidualReconciliationScaleOutOfDomain);
+        return;
+    }
+    if (branch_m < -2147483648LL || branch_m > 2147483647LL ||
+        stream_m < -2147483648LL || stream_m > 2147483647LL)
+    {
+        if (t == 0) SeqState.Store<int64_t>(sticky_off, kTagCarriedScaleMantissaOutOfDomain);
+        return;
+    }
+    bool branch_selected = ResidualBranchGridIsFinerGpu(branch_m, branch_e, stream_m, stream_e);
+    int64_t selected_m = branch_selected ? branch_m : stream_m;
+    int64_t selected_e = branch_selected ? branch_e : stream_e;
+    int64_t nonselected_m = branch_selected ? stream_m : branch_m;
+    int64_t nonselected_e = branch_selected ? stream_e : branch_e;
+    int64_t reciprocal, normalization_shift;
+    CarriedScaleNormalizedReciprocalSharedGpu(AbsUnsignedI64Gpu(selected_m), reciprocal, normalization_shift);
 
     if (t == 0) gResidualMagOutOfDomain2 = 0;
     GroupMemoryBarrierWithGroupSync();
     for (int i = (int)t; i < hidden_size; i += 256)
     {
-        int branch_code = LayerScratch.Load<int>(down_codes_off + (uint)i * 4u);
+        int selected_code = branch_selected ? LayerScratch.Load<int>(down_codes_off + (uint)i * 4u)
+                                            : LayerScratch.Load<int>(attn_stream_off + (uint)i * 4u);
+        int nonselected_code = branch_selected ? LayerScratch.Load<int>(attn_stream_off + (uint)i * 4u)
+                                               : LayerScratch.Load<int>(down_codes_off + (uint)i * 4u);
         bool would_clamp, magnitude_exceeded;
-        int64_t reconciled = LandingRescaleGpu((int64_t)branch_code, branch_m, r_h, branch_e, stream_e,
-                                                 would_clamp, magnitude_exceeded);
-        if (magnitude_exceeded)
+        int64_t landed = LandingRescaleGpu((int64_t)nonselected_code, nonselected_m, reciprocal,
+                                            nonselected_e, selected_e, normalization_shift,
+                                            would_clamp, magnitude_exceeded);
+        int64_t wide_sum;
+        if (magnitude_exceeded || (selected_m < 0 && landed == (int64_t)0x8000000000000000ULL))
         {
             InterlockedOr(gResidualMagOutOfDomain2, 1u);
         }
         else
         {
-            int stream_code = LayerScratch.Load<int>(attn_stream_off + (uint)i * 4u);
-            WorkScratch.Store<int64_t>(0u + (uint)i * 8u, reconciled + (int64_t)stream_code);
+            if (selected_m < 0) landed = -landed;
+            if (!CheckedAddI64Gpu((int64_t)selected_code, landed, wide_sum))
+                InterlockedOr(gResidualMagOutOfDomain2, 1u);
+            else
+                WorkScratch.Store<int64_t>(0u + (uint)i * 8u, wide_sum);
         }
     }
     GroupMemoryBarrierWithGroupSync();
@@ -87,7 +106,7 @@ void main(uint3 gtid : SV_GroupThreadID)
     int64_t site_e = LayerWeights.Load<int64_t>(off_site + 8);
     int64_t incoming_m[kMaxIncoming], incoming_e[kMaxIncoming];
     [unroll] for (int z = 0; z < kMaxIncoming; ++z) { incoming_m[z] = 0; incoming_e[z] = 0; }
-    incoming_m[0] = stream_m; incoming_e[0] = stream_e;
+    incoming_m[0] = selected_m; incoming_e[0] = selected_e;
 
     uint stream_next_off = ScratchLayout.Load<uint>(19 * 4);
     uint stream_next_scale_off = ScratchLayout.Load<uint>(20 * 4);

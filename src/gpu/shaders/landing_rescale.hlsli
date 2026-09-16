@@ -26,10 +26,23 @@ int64_t SaturatingSub64Wide(int64_t a, int64_t b)
     return a_neg ? (int64_t)0x8000000000000000ULL : 0x7FFFFFFFFFFFFFFFLL;
 }
 
-// forward_sites.cpp ComposedExponent -- k = clamp(62 - (e_a - e_t), +-4096).
-int64_t ComposedExponentGpu(int64_t e_a, int64_t e_t)
+int64_t SaturatingAdd64Wide(int64_t a, int64_t b)
 {
-    int64_t diff = SaturatingSub64Wide(e_a, e_t);
+    uint64_t ua = (uint64_t)a;
+    uint64_t ub = (uint64_t)b;
+    int64_t out_val = (int64_t)(ua + ub);
+    bool a_neg = a < 0;
+    bool b_neg = b < 0;
+    bool out_neg = out_val < 0;
+    if (a_neg == b_neg && out_neg != a_neg)
+        return a_neg ? (int64_t)0x8000000000000000ULL : 0x7FFFFFFFFFFFFFFFLL;
+    return out_val;
+}
+
+// forward_sites.cpp ComposedExponent -- k = clamp(62 - (e_a - e_t), +-4096).
+int64_t ComposedExponentGpu(int64_t e_a, int64_t e_t, int64_t target_normalization_shift)
+{
+    int64_t diff = SaturatingAdd64Wide(SaturatingSub64Wide(e_a, e_t), target_normalization_shift);
     int64_t k = SaturatingSub64Wide((int64_t)62, diff);
     const int64_t kClamp = 4096;
     if (k > kClamp) k = kClamp;
@@ -57,7 +70,8 @@ int64_t ComposedExponentGpu(int64_t e_a, int64_t e_t)
 //                                 ResidualReconcileSite's own caller, which
 //                                 composes no clamp of its own).
 int64_t LandingRescaleGpu(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_a, int64_t e_t,
-                          out bool out_would_clamp, out bool out_magnitude_exceeded_i64)
+                          int64_t target_normalization_shift, out bool out_would_clamp,
+                          out bool out_magnitude_exceeded_i64)
 {
     bool branch_negative = branch_code < 0;
     bool m_a_negative = m_a < 0;
@@ -67,7 +81,7 @@ int64_t LandingRescaleGpu(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t
 
     U128 mag = UMulWide(UMul(abs_branch, abs_m_a), (uint64_t)r_t);  // intmath.cpp-family 64x64->128, then *scalar
 
-    int64_t k = ComposedExponentGpu(e_a, e_t);
+    int64_t k = ComposedExponentGpu(e_a, e_t, target_normalization_shift);
     int64_t raw;
     bool magnitude_exceeds_clamp = false;
     bool magnitude_exceeds_int64 = false;

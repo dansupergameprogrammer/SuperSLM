@@ -54,6 +54,7 @@ static const int64_t kTagSoftmaxKernelRefusedAfterGateAccepted = 11;
 static const int64_t kTagResidualReconciliationMagnitudeOutOfDomain = 12;
 static const int64_t kTagSiluCompositionScaleOutOfDomain = 13;
 static const int64_t kTagQkNormFusedLandingMagnitudeOutOfDomain = 14;
+static const int64_t kTagResidualReconciliationScaleOutOfDomain = 15;
 
 // forward_sites.cpp FloorDivI64.
 int64_t FloorDivI64Gpu(int64_t a, int64_t b)
@@ -219,6 +220,44 @@ int64_t DynamicScaleReciprocalSharedGpu(int64_t dn)
         else if (SLt(residual_2x, SFromI64(-dn))) { y -= 1; }
     }
     return y;
+}
+
+void CarriedScaleNormalizedReciprocalSharedGpu(uint64_t magnitude, out int64_t reciprocal,
+                                                out int64_t normalization_shift)
+{
+    int64_t denominator;
+    int shift;
+    NormalizeScaleGpu((int64_t)magnitude, denominator, shift);
+    normalization_shift = (int64_t)shift;
+    reciprocal = DynamicScaleReciprocalSharedGpu(denominator);
+}
+
+uint64_t AbsUnsignedI64Gpu(int64_t value)
+{
+    return value < 0 ? (~(uint64_t)value + 1ULL) : (uint64_t)value;
+}
+
+bool ResidualBranchGridIsFinerGpu(int64_t branch_m, int64_t branch_e, int64_t stream_m, int64_t stream_e)
+{
+    if (branch_e > stream_e && (uint64_t)branch_e - (uint64_t)stream_e > 31ULL) return false;
+    if (stream_e > branch_e && (uint64_t)stream_e - (uint64_t)branch_e > 31ULL) return true;
+    int d = (int)(branch_e - stream_e);
+    uint64_t branch_magnitude = AbsUnsignedI64Gpu(branch_m);
+    uint64_t stream_magnitude = AbsUnsignedI64Gpu(stream_m);
+    return d >= 0 ? (branch_magnitude << d) < stream_magnitude
+                  : branch_magnitude < (stream_magnitude << -d);
+}
+
+bool CheckedAddI64Gpu(int64_t a, int64_t b, out int64_t sum)
+{
+    if ((b > 0 && a > 0x7FFFFFFFFFFFFFFFLL - b) ||
+        (b < 0 && a < (int64_t)0x8000000000000000ULL - b))
+    {
+        sum = 0;
+        return false;
+    }
+    sum = a + b;
+    return true;
 }
 
 // intmath.cpp RequantTokenCodeWide (C22's formula), bit-exact copy of
