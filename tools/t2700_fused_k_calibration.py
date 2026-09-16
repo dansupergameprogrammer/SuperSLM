@@ -201,6 +201,7 @@ def _flow_from_cache(args, source_cache: Path, inputs: Path, work: Path):
     report_a, report_b, report_c = (work / "pass-a.tsv", work / "pass-b.tsv", work / "pass-c.tsv")
     after_a_cache, after_a_sslm = work / "after-a-cache", work / "after-a.sslm"
     final_cache, final_sslm = work / "final-cache", Path(args.out)
+    staged_sslm = work / "final-pending.sslm"
     _convert(source_cache, provisional, args.verifier, args.skip_verify)
     _run_capture(Path(args.capture), provisional, inputs, report_a)
     merge(argparse.Namespace(cache=str(source_cache), checkpoint=args.checkpoint,
@@ -210,15 +211,20 @@ def _flow_from_cache(args, source_cache: Path, inputs: Path, work: Path):
     _run_capture(Path(args.capture), after_a_sslm, inputs, report_b)
     merge(argparse.Namespace(cache=str(source_cache), checkpoint=args.checkpoint,
                              capture_report=[str(report_a), str(report_b)], out_cache=str(final_cache),
-                             out_sslm=str(final_sslm), verifier=args.verifier, skip_verify=args.skip_verify,
+                             out_sslm=str(staged_sslm), verifier=args.verifier, skip_verify=args.skip_verify,
                              summary=str(work / "final-summary.json")))
-    _run_capture(Path(args.capture), final_sslm, inputs, report_c)
+    _run_capture(Path(args.capture), staged_sslm, inputs, report_c)
 
     callback_count, clipped, overshoots = _capture_metadata(report_c)
-    if clipped / callback_count > 1 / 1_000_000:
+    if clipped / callback_count > args.pass_c_clipped_per_callback:
         raise ChannelScaleDidNotConverge(
             f"ChannelScaleDidNotConverge: pass C clipped {clipped}/{callback_count} "
             f"({clipped * 1_000_000 / callback_count:.6g} per million); channels={overshoots}")
+
+    # A candidate artifact remains inside the new work directory until its
+    # convergence gate succeeds.  A failure therefore cannot leave args.out
+    # looking like a completed conversion to a later step.
+    staged_sslm.replace(final_sslm)
 
     float_peak = np.stack([np.asarray(model.qk_channel_peaks[f"layer{layer}"], dtype=np.float64)
                            for layer in range(model.config.num_hidden_layers)])
@@ -285,6 +291,8 @@ def main():
     flow_parser.add_argument("--verifier", required=True, help="compiled sslm_verify executable")
     flow_parser.add_argument("--skip-verify", action="store_true",
                              help="fixture-only writer path; production flow verifies independently")
+    flow_parser.add_argument("--pass-c-clipped-per-callback", type=float, default=1 / 1_000_000,
+                             help="maximum accepted pass-C clipped/callback rate (default: 1e-6)")
     flow_parser.set_defaults(fn=flow)
     args = parser.parse_args()
     args.fn(args)

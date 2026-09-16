@@ -292,7 +292,8 @@ def _fixture_flow(tmp_path, monkeypatch, *, clipped, name):
     verifier = Path("D:/SuperSLM/.worktrees/t2693-fused-k-slice2/out/cmake-cpu-only-default/Release/sslm_verify.exe")
     args = argparse.Namespace(checkpoint="fixture-checkpoint", out=str(tmp_path / f"{name}.sslm"),
                               work=str(tmp_path / f"{name}-work"), capture=str(capture),
-                              verifier=str(verifier), skip_verify=True)
+                              verifier=str(verifier), skip_verify=True,
+                              pass_c_clipped_per_callback=1 / 1_000_000)
     work = Path(args.work)
     work.mkdir()
     return calibration._flow_from_cache(args, source, inputs, work), args
@@ -311,6 +312,30 @@ def test_fixture_flow_runs_a_b_c_records_one_allowed_clip_and_is_deterministic(t
 def test_fixture_flow_refuses_pass_c_above_one_clip_per_million(tmp_path, monkeypatch):
     with pytest.raises(calibration.ChannelScaleDidNotConverge, match="ChannelScaleDidNotConverge: pass C clipped 2/1000000"):
         _fixture_flow(tmp_path, monkeypatch, clipped=2, name="refused")
+    assert not (tmp_path / "refused.sslm").exists(), "failed convergence must not publish a final-looking artifact"
+
+
+def test_fixture_flow_accepts_explicit_pass_c_headroom(tmp_path, monkeypatch):
+    monkeypatch.setenv("T2700_FIXTURE_PASS_C_CLIPPED", "2")
+    model = _fixture_qk_model()
+    source = tmp_path / "headroom-source-cache"
+    artifact_cache.save_artifact(model, source)
+    inputs = tmp_path / "headroom-inputs"
+    inputs.mkdir()
+    (inputs / "prefix-453.txt").write_text("1\n", encoding="utf-8")
+    for index in range(600):
+        (inputs / f"suffix-{index:03d}.txt").write_text("1\n", encoding="utf-8")
+    capture = tmp_path / "headroom-capture.py"
+    _fixture_capture_runner(capture)
+    verifier = Path("D:/SuperSLM/.worktrees/t2693-fused-k-slice2/out/cmake-cpu-only-default/Release/sslm_verify.exe")
+    args = argparse.Namespace(checkpoint="fixture-checkpoint", out=str(tmp_path / "headroom.sslm"),
+                              work=str(tmp_path / "headroom-work"), capture=str(capture),
+                              verifier=str(verifier), skip_verify=True,
+                              pass_c_clipped_per_callback=2 / 1_000_000)
+    work = Path(args.work)
+    work.mkdir()
+    calibration._flow_from_cache(args, source, inputs, work)
+    assert Path(args.out).is_file()
 
 
 def test_compiled_capture_accepts_a_suffix_manifest_before_opening_the_artifact(tmp_path):
