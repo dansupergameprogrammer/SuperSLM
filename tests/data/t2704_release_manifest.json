@@ -1,0 +1,13 @@
+{
+  "identities": [
+    {"name": "artifact", "path": "release/qwen-residual.sslm", "sha256": "REPLACE_WITH_SHIPPED_ARTIFACT_SHA256"},
+    {"name": "fidelity-input", "path": "release/fidelity-input.json", "sha256": "REPLACE_WITH_FIDELITY_INPUT_SHA256"},
+    {"name": "retrieval-corpus", "path": "release/retrieval-corpus.jsonl", "sha256": "REPLACE_WITH_RETRIEVAL_CORPUS_SHA256"},
+    {"name": "residual-trace", "path": "release/residual-trace.jsonl", "sha256": "REPLACE_WITH_RESIDUAL_TRACE_SHA256"}
+  ],
+  "diagnostics": {
+    "fidelity_command": ["python", "tools/t2703_fidelity_localization.py", "--artifact", "release/qwen-residual.sslm", "--artifact-cache", "release/artifact-cache", "--hf-model", "release/hf-model", "--layer-trace", "release/layer-trace", "--output", "release/fidelity-output"],
+    "retrieval_command": ["python", "tools/t2703_retrieval_measure.py", "analyze", "--corpus", "release/retrieval-corpus.jsonl", "--query-source", "release/retrieval-queries.jsonl", "--hf-model", "release/hf-model", "--probe", "release/forward-probe", "--candidate", "release/qwen-residual.sslm", "--provisional", "release/qwen-residual.sslm", "--output", "release/retrieval-output"],
+    "replay_command": ["python", "tools/t2703_residual_add_order.py", "--trace", "release/residual-trace.jsonl"]
+  }
+}
