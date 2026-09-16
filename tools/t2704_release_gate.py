@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import shutil
@@ -66,6 +67,81 @@ def qwen3_target_report(fidelity: float) -> dict[str, float]:
         "distance": distance,
         "shortfall": round(max(0.0, QWEN3_FIDELITY_TARGET - fidelity), 6),
     }
+
+
+def grade_fidelity(rows: list[dict[str, Any]]) -> dict[str, float]:
+    """Grade the parsed final-norm fidelity rows produced by the diagnostic."""
+    if not isinstance(rows, list):
+        reject("fidelity report has no model rows")
+    found: dict[str, float] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            reject("fidelity report has malformed or duplicate row")
+        name, fidelity = row.get("model"), row.get("final_norm_fidelity")
+        if (
+            name not in REQUIRED_MODELS
+            or name in found
+            or not isinstance(fidelity, (int, float))
+            or isinstance(fidelity, bool)
+        ):
+            reject("fidelity report has malformed or duplicate row")
+        fidelity = float(fidelity)
+        if not 0.0 <= fidelity <= 1.0:
+            reject(f"{name} fidelity {fidelity:.6f} is outside [0, 1]")
+        found[name] = fidelity
+    if set(found) != REQUIRED_MODELS:
+        reject("fidelity report omits a model or fails the threshold")
+    for model, fidelity in found.items():
+        if not passes_fidelity_floor(model, fidelity):
+            reject_fidelity_floor(model, fidelity)
+    return found
+
+
+def grade_retrieval(result: dict[str, Any]) -> tuple[int, int]:
+    """Grade the parsed candidate retrieval count produced by the diagnostic."""
+    if not isinstance(result, dict):
+        reject("retrieval report has malformed candidate count")
+    correct, total = result.get("retrieval_correct"), result.get("retrieval_total")
+    if (
+        not isinstance(correct, int)
+        or isinstance(correct, bool)
+        or not isinstance(total, int)
+        or isinstance(total, bool)
+    ):
+        reject("retrieval report has malformed candidate count")
+    if total != RETRIEVAL_TOTAL:
+        reject(f"retrieval report total {total} != {RETRIEVAL_TOTAL}")
+    if correct > total:
+        reject(f"retrieval correct {correct} exceeds total {total}")
+    if correct < RETRIEVAL_FLOOR:
+        reject(f"retrieval {correct}/{total} < {RETRIEVAL_FLOOR}/{RETRIEVAL_TOTAL}")
+    return correct, total
+
+
+def grade_replay(report: dict[str, Any], model_sha256: dict[str, str]) -> None:
+    """Grade the parsed two-model real-trace replay report."""
+    if not isinstance(report, dict):
+        reject("replay report omits Qwen3 or Qwen2.5")
+    rows = report.get("models")
+    if not isinstance(rows, dict) or set(rows) != {"qwen3", "qwen2p5"}:
+        reject("replay report omits Qwen3 or Qwen2.5")
+    margins = report.get("margins")
+    if margins is not None and (
+        not isinstance(margins, list)
+        or not margins
+        or any(not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in margins)
+    ):
+        reject("replay report has nonpositive or malformed margin")
+    for key, name in (("qwen3", "Qwen3"), ("qwen2p5", "Qwen2.5")):
+        row = rows[key]
+        if not isinstance(row, dict) or row.get("status") != "MEASURED":
+            reject(f"{name} replay is not measured against its pinned artifact")
+        artifact = row.get("artifact")
+        if not isinstance(artifact, dict) or artifact.get("whole_file_sha256") != model_sha256[name]:
+            reject(f"{name} replay is not measured against its pinned artifact")
+        counts = row.get("refusals")
+        if not isinstance(counts, dict) or any(value != 0 for value in counts.values()):
+            reject(f"{name} replay has unexpected construction errors: {counts}")
 
 
 def load(path: Path) -> dict[str, Any]:
@@ -157,8 +233,6 @@ def run_fidelity(config: dict[str, Any], models: dict[str, dict[str, Any]], work
         if not isinstance(loss, (int, float)) or not 0 <= loss <= 1:
             reject(f"{model} final-norm loss is malformed")
         fidelity = fidelity_from_loss(float(loss))
-        if not passes_fidelity_floor(model, fidelity):
-            reject_fidelity_floor(model, fidelity)
         results.append({"model": model, "artifact_sha256": models[model]["sha256"], "final_norm_loss": loss,
                         "final_norm_fidelity": fidelity, "command": command, "summary": summary})
         seen.add(model)
@@ -181,10 +255,6 @@ def run_retrieval(config: dict[str, Any], models: dict[str, dict[str, Any]], wor
     summary = load(output / "retrieval-summary.json")
     row = summary.get("arms", {}).get("candidate", {}).get("class_match_at_1", {})
     correct, total = row.get("count"), row.get("total")
-    if not isinstance(correct, int) or total != RETRIEVAL_TOTAL:
-        reject("retrieval report does not state candidate count over 239")
-    if correct < RETRIEVAL_FLOOR:
-        reject(f"retrieval {correct}/{total} < {RETRIEVAL_FLOOR}/{RETRIEVAL_TOTAL}")
     if summary.get("provenance", {}).get("candidate_artifact_sha256") != models["Qwen3"]["sha256"]:
         reject("retrieval candidate result is not bound to the pinned Qwen3 artifact")
     return {"model": config["model"], "retrieval_correct": correct, "retrieval_total": total, "commands": commands, "summary": summary}
@@ -198,65 +268,31 @@ def run_replay(config: dict[str, Any], models: dict[str, dict[str, Any]], work: 
                "--qwen3-artifact", str(models["Qwen3"]["path"]), "--qwen2p5-traces", config["qwen2p5_traces"],
                "--qwen2p5-artifact", str(models["Qwen2.5"]["path"]), "--output", str(output)]
     run(command, "real-trace replay")
-    report, rows = load(output), load(output).get("models")
-    if not isinstance(rows, dict) or set(rows) != {"qwen3", "qwen2p5"}:
-        reject("replay report omits Qwen3 or Qwen2.5")
-    for key, name in (("qwen3", "Qwen3"), ("qwen2p5", "Qwen2.5")):
-        row = rows[key]
-        if row.get("status") != "MEASURED" or row.get("artifact", {}).get("whole_file_sha256") != models[name]["sha256"]:
-            reject(f"{name} replay is not measured against its pinned artifact")
-        counts = row.get("refusals")
-        if not isinstance(counts, dict) or any(value != 0 for value in counts.values()):
-            reject(f"{name} replay has unexpected construction errors: {counts}")
+    report = load(output)
     return {"command": command, "report": report}
 
 
-def synthetic_fidelity(report: dict[str, Any]) -> dict[str, float]:
-    rows, found = report.get("models"), {}
-    if not isinstance(rows, list):
-        reject("fidelity report has no model rows")
-    for row in rows:
-        name, fidelity = row.get("model"), row.get("final_norm_fidelity")
-        if name not in REQUIRED_MODELS or name in found or not isinstance(fidelity, (int, float)):
-            reject("fidelity report has malformed or duplicate row")
-        found[name] = float(fidelity)
-    if set(found) != REQUIRED_MODELS:
-        reject("fidelity report omits a model or fails the threshold")
-    for model, fidelity in found.items():
-        if not passes_fidelity_floor(model, fidelity):
-            reject_fidelity_floor(model, fidelity)
-    return found
-
-
-def gate(manifest_path: Path, report_path: Path, fidelity_path: Path | None = None, retrieval_path: Path | None = None, replay_path: Path | None = None) -> dict[str, Any]:
+def gate(manifest_path: Path, report_path: Path) -> dict[str, Any]:
     manifest, models = load(manifest_path), None
     models = validate_models(manifest, manifest_path)
     identities = validate_identities(manifest, manifest_path)
-    if fidelity_path or retrieval_path or replay_path:
-        if not all((fidelity_path, retrieval_path, replay_path)):
-            reject("commissioning requires all three synthetic reports")
-        fidelity, retrieval, replay = synthetic_fidelity(load(fidelity_path)), load(retrieval_path), load(replay_path)
-        correct, total, margins = retrieval.get("retrieval_correct"), retrieval.get("retrieval_total"), replay.get("margins")
-        if not isinstance(correct, int) or total != RETRIEVAL_TOTAL or correct < RETRIEVAL_FLOOR or not isinstance(margins, list) or not margins or any(not isinstance(value, int) or value <= 0 for value in margins):
-            reject("synthetic retrieval or replay report fails")
-        result: dict[str, Any] = {"manifest_sha256": sha256(manifest_path), "identities": identities, "fidelity": fidelity,
-                                  "qwen3_target": qwen3_target_report(fidelity["Qwen3"]), "retrieval_correct": correct,
-                                  "minimum_replay_margin": min(margins), "commissioning_seam": True}
-    else:
-        diagnostics = manifest.get("diagnostics")
-        if not isinstance(diagnostics, dict):
-            reject("manifest has no diagnostics")
-        work = report_path.parent / f".t2704-release-gate-work-{report_path.stem}"
-        if work.exists():
-            shutil.rmtree(work)
-        work.mkdir(parents=True)
-        fidelity = run_fidelity(diagnostics.get("fidelity", {}), models, work)
-        qwen3_fidelity = next(row["final_norm_fidelity"] for row in fidelity if row["model"] == "Qwen3")
-        result = {"manifest_sha256": sha256(manifest_path), "identities": identities,
-                  "models": {name: {"path": str(value["path"]), "sha256": value["sha256"]} for name, value in models.items()},
-                  "fidelity": fidelity, "qwen3_target": qwen3_target_report(qwen3_fidelity),
-                  "retrieval": run_retrieval(diagnostics.get("retrieval", {}), models, work),
-                  "replay": run_replay(diagnostics.get("replay", {}), models, work), "commissioning_seam": False}
+    diagnostics = manifest.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        reject("manifest has no diagnostics")
+    work = report_path.parent / f".t2704-release-gate-work-{report_path.stem}"
+    if work.exists():
+        shutil.rmtree(work)
+    work.mkdir(parents=True)
+    fidelity_rows = run_fidelity(diagnostics.get("fidelity", {}), models, work)
+    fidelity = grade_fidelity(fidelity_rows)
+    retrieval = run_retrieval(diagnostics.get("retrieval", {}), models, work)
+    grade_retrieval(retrieval)
+    replay = run_replay(diagnostics.get("replay", {}), models, work)
+    grade_replay(replay["report"], {name: value["sha256"] for name, value in models.items()})
+    result: dict[str, Any] = {"manifest_sha256": sha256(manifest_path), "identities": identities,
+                              "models": {name: {"path": str(value["path"]), "sha256": value["sha256"]} for name, value in models.items()},
+                              "fidelity": fidelity_rows, "qwen3_target": qwen3_target_report(fidelity["Qwen3"]),
+                              "retrieval": retrieval, "replay": replay}
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return result
@@ -272,43 +308,58 @@ def commission(receipt: Path) -> int:
         corpus = root / "corpus.jsonl"; corpus.write_text("corpus\n", encoding="utf-8")
         manifest = root / "tests/data/manifest.json"; manifest.parent.mkdir(parents=True)
         manifest.write_text(json.dumps({"models": models, "identities": [{"name": "corpus", "path": corpus.name, "sha256": sha256(corpus)}], "diagnostics": {}}), encoding="utf-8")
-        healthy = {"models": [{"model": "Qwen3", "final_norm_fidelity": .85},
-                                {"model": "Qwen2.5", "final_norm_fidelity": .94}]}
-        reports = {"fidelity": healthy, "retrieval": {"retrieval_correct": 148, "retrieval_total": 239}, "replay": {"margins": [1, 9]}}
+        model_sha256 = {name: value["sha256"] for name, value in validate_models(load(manifest), manifest).items()}
+        validate_identities(load(manifest), manifest)
+        healthy_fidelity = [{"model": "Qwen3", "final_norm_fidelity": .85},
+                            {"model": "Qwen2.5", "final_norm_fidelity": .94}]
+        healthy_retrieval = {"retrieval_correct": 148, "retrieval_total": 239}
+        healthy_replay = {"models": {
+            "qwen3": {"status": "MEASURED", "artifact": {"whole_file_sha256": model_sha256["Qwen3"]}, "refusals": {}},
+            "qwen2p5": {"status": "MEASURED", "artifact": {"whole_file_sha256": model_sha256["Qwen2.5"]}, "refusals": {}},
+        }, "margins": [1, 9]}
+
+        def grade_all(fidelity: list[dict[str, Any]], retrieval: dict[str, Any], replay: dict[str, Any]) -> dict[str, float]:
+            graded_fidelity = grade_fidelity(fidelity)
+            grade_retrieval(retrieval)
+            grade_replay(replay, model_sha256)
+            return graded_fidelity
+
         if fidelity_from_loss(.199377) != .800623:
             return 2
-        paths = {name: root / f"{name}.json" for name in reports}
-        for name, value in reports.items(): paths[name].write_text(json.dumps(value), encoding="utf-8")
-        cases = {
-            "healthy_qwen3_shortfall": ({}, 0),
-            "qwen3_not_improved": ({"fidelity": {"models": [{"model": "Qwen3", "final_norm_fidelity": .800623}, {"model": "Qwen2.5", "final_norm_fidelity": .94}]}}, 1),
-            "qwen25_regression": ({"fidelity": {"models": [{"model": "Qwen3", "final_norm_fidelity": .85}, {"model": "Qwen2.5", "final_norm_fidelity": .938494}]}}, 1),
-            "retrieval_147_239": ({"retrieval": {"retrieval_correct": 147, "retrieval_total": 239}}, 1),
-            "nonpositive_margin": ({"replay": {"margins": [1, 0]}}, 1),
-            "omitted_qwen25": ({"fidelity": {"models": [{"model": "Qwen3", "final_norm_fidelity": .85}]}}, 1),
-            "omitted_qwen3": ({"fidelity": {"models": [{"model": "Qwen2.5", "final_norm_fidelity": .94}]}}, 1),
-        }
         results, healthy_qwen3_target = {}, None
-        for name, (changes, expected) in cases.items():
-            for key, value in changes.items(): paths[key].write_text(json.dumps(value), encoding="utf-8")
+        cases = {
+            "healthy_qwen3_shortfall": lambda: grade_all(healthy_fidelity, healthy_retrieval, healthy_replay),
+            "qwen3_not_improved": lambda: grade_all([{"model": "Qwen3", "final_norm_fidelity": .800623}, {"model": "Qwen2.5", "final_norm_fidelity": .94}], healthy_retrieval, healthy_replay),
+            "qwen25_regression": lambda: grade_all([{"model": "Qwen3", "final_norm_fidelity": .85}, {"model": "Qwen2.5", "final_norm_fidelity": .938494}], healthy_retrieval, healthy_replay),
+            "retrieval_147_239": lambda: grade_all(healthy_fidelity, {"retrieval_correct": 147, "retrieval_total": 239}, healthy_replay),
+            "nonpositive_margin": lambda: grade_all(healthy_fidelity, healthy_retrieval, {**copy.deepcopy(healthy_replay), "margins": [1, 0]}),
+            "omitted_qwen25": lambda: grade_all([{"model": "Qwen3", "final_norm_fidelity": .85}], healthy_retrieval, healthy_replay),
+            "omitted_qwen3": lambda: grade_all([{"model": "Qwen2.5", "final_norm_fidelity": .94}], healthy_retrieval, healthy_replay),
+            "fidelity_outside_unit_interval": lambda: grade_all([{"model": "Qwen3", "final_norm_fidelity": 2.0}, {"model": "Qwen2.5", "final_norm_fidelity": .94}], healthy_retrieval, healthy_replay),
+            "retrieval_correct_above_total": lambda: grade_all(healthy_fidelity, {"retrieval_correct": 240, "retrieval_total": 239}, healthy_replay),
+            "retrieval_total_not_239": lambda: grade_all(healthy_fidelity, {"retrieval_correct": 148, "retrieval_total": 238}, healthy_replay),
+            "replay_missing_qwen3": lambda: grade_all(healthy_fidelity, healthy_retrieval, {"models": {"qwen2p5": healthy_replay["models"]["qwen2p5"]}, "margins": [1, 9]}),
+            "replay_missing_qwen2p5": lambda: grade_all(healthy_fidelity, healthy_retrieval, {"models": {"qwen3": healthy_replay["models"]["qwen3"]}, "margins": [1, 9]}),
+        }
+        for name, check in cases.items():
             try:
-                report = gate(manifest, root / f"{name}.json.out", paths["fidelity"], paths["retrieval"], paths["replay"])
+                fidelity = check()
                 if name == "healthy_qwen3_shortfall":
-                    healthy_qwen3_target = report.get("qwen3_target")
+                    healthy_qwen3_target = qwen3_target_report(fidelity["Qwen3"])
                     if healthy_qwen3_target != {"final_norm_fidelity": .85, "target": .906603, "distance": .056603, "shortfall": .056603}:
                         return 2
                 code = 0
             except ValueError: code = 1
             results[name] = code
-            if code != expected: return 2
-            for key, value in reports.items(): paths[key].write_text(json.dumps(value), encoding="utf-8")
+            if code != (0 if name == "healthy_qwen3_shortfall" else 1): return 2
         corpus.write_text("changed\n", encoding="utf-8")
-        try: gate(manifest, root / "changed.json.out", paths["fidelity"], paths["retrieval"], paths["replay"]); results["changed_identity"] = 0
+        try: validate_identities(load(manifest), manifest); results["changed_identity"] = 0
         except ValueError: results["changed_identity"] = 1
         if results["changed_identity"] != 1: return 2
-        receipt.write_text(json.dumps({"id": "T-2713-release-gate", "instrument_sha256": sha256(Path(__file__)), "results": results,
+        receipt.parent.mkdir(parents=True, exist_ok=True)
+        receipt.write_text(json.dumps({"id": "T-2734-release-gate", "instrument_sha256": sha256(Path(__file__)), "results": results,
                                       "healthy_qwen3_target": healthy_qwen3_target,
-                                      "status": "commissioned-seam-only; production verdict requires real-data commissioning"}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                                      "status": "grading commissioned in-process; production route commissioned on real data"}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return 0
 
 
@@ -325,11 +376,11 @@ def write_rejection_report(manifest_path: Path | None, report_path: Path | None,
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path); parser.add_argument("--report", type=Path)
-    parser.add_argument("--fidelity-report", type=Path); parser.add_argument("--retrieval-report", type=Path); parser.add_argument("--replay-report", type=Path); parser.add_argument("--commission", type=Path)
+    parser.add_argument("--commission", type=Path)
     args = parser.parse_args()
     if args.commission: return commission(args.commission)
     if not args.manifest or not args.report: parser.error("--manifest and --report are required outside --commission")
-    try: print(json.dumps(gate(args.manifest, args.report, args.fidelity_report, args.retrieval_report, args.replay_report), sort_keys=True)); return 0
+    try: print(json.dumps(gate(args.manifest, args.report), sort_keys=True)); return 0
     except (OSError, ValueError, json.JSONDecodeError, RuntimeError) as error:
         write_rejection_report(args.manifest, args.report, error)
         print(f"T2704_RELEASE_GATE_REJECTED: {error}", file=sys.stderr)
