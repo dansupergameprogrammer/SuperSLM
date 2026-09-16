@@ -18032,8 +18032,9 @@ static void TestRunLayerLoopRopeWriteBackDoesNotOverwriteEarlierPositions() {
 	          "cell 5: token 1's committed hidden_codes == {%d,%d}, want {127,10} -- the context "
 	          "accumulate must read the V store, not the K store",
 	          static_cast<int>(seq.hidden_codes[0]), static_cast<int>(seq.hidden_codes[1]));
-	CHECK_MSG(seq.hidden_scale.m == INT64_C(1899082752) && seq.hidden_scale.e == INT64_C(21),
-	          "cell 5: token 1's committed hidden_scale == (%lld,%lld), want (1899082752,21) -- the "
+	// T-2736: fine-to-coarse residual grid selection re-pins this measured scale.
+	CHECK_MSG(seq.hidden_scale.m == INT64_C(1906830750) && seq.hidden_scale.e == INT64_C(21),
+	          "cell 5: token 1's committed hidden_scale == (%lld,%lld), want (1906830750,21) -- the "
 	          "context accumulate must read the V store, not the K store",
 	          static_cast<long long>(seq.hidden_scale.m), static_cast<long long>(seq.hidden_scale.e));
 
