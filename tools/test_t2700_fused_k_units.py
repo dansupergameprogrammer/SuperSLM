@@ -277,7 +277,7 @@ report.write_text('\\n'.join(lines) + '\\n', encoding='utf-8')
 """, encoding="utf-8")
 
 
-def _fixture_flow(tmp_path, monkeypatch, *, clipped, name):
+def _fixture_flow(tmp_path, monkeypatch, *, clipped, name, channel_scale_headroom=1.0):
     monkeypatch.setenv("T2700_FIXTURE_PASS_C_CLIPPED", str(clipped))
     model = _fixture_qk_model()
     source = tmp_path / f"{name}-source-cache"
@@ -293,7 +293,8 @@ def _fixture_flow(tmp_path, monkeypatch, *, clipped, name):
     args = argparse.Namespace(checkpoint="fixture-checkpoint", out=str(tmp_path / f"{name}.sslm"),
                               work=str(tmp_path / f"{name}-work"), capture=str(capture),
                               verifier=str(verifier), skip_verify=True,
-                              pass_c_clipped_per_callback=1 / 1_000_000)
+                              pass_c_clipped_per_callback=1 / 1_000_000,
+                              channel_scale_headroom=channel_scale_headroom)
     work = Path(args.work)
     work.mkdir()
     return calibration._flow_from_cache(args, source, inputs, work), args
@@ -303,10 +304,51 @@ def test_fixture_flow_runs_a_b_c_records_one_allowed_clip_and_is_deterministic(t
     first, first_args = _fixture_flow(tmp_path, monkeypatch, clipped=1, name="first")
     second, second_args = _fixture_flow(tmp_path, monkeypatch, clipped=1, name="second")
     assert first["pass_c_landing_saturation_count"] == 1
+    assert first["channel_scale_headroom"] == 1.0
     assert first["pass_c_overshooting_channels"] == [{"layer": 0, "head": 0, "channel": 0, "count": 1}]
     assert Path(first["peak_tables"]).is_file()
     assert Path(first_args.out).read_bytes() == Path(second_args.out).read_bytes()
     assert first["artifact_sha256"] == second["artifact_sha256"]
+
+
+def test_fixture_flow_default_headroom_is_the_historical_final_table_and_artifact(tmp_path, monkeypatch):
+    report, args = _fixture_flow(tmp_path, monkeypatch, clipped=1, name="default")
+    baseline_cache = tmp_path / "historical-cache"
+    baseline_sslm = tmp_path / "historical.sslm"
+    calibration.merge(argparse.Namespace(
+        cache=str(tmp_path / "default-source-cache"), checkpoint="fixture-checkpoint",
+        capture_report=[str(Path(args.work) / "pass-a.tsv"), str(Path(args.work) / "pass-b.tsv")],
+        out_cache=str(baseline_cache), out_sslm=str(baseline_sslm), verifier=args.verifier,
+        skip_verify=True))
+    assert Path(args.out).read_bytes() == baseline_sslm.read_bytes()
+    assert (Path(args.work) / "final-cache" / "metadata.json").read_bytes() == (baseline_cache / "metadata.json").read_bytes()
+    assert report["final_peak_sha256"] == json.loads(
+        (Path(args.work) / "final-summary.json").read_text(encoding="utf-8"))["final_peak_sha256"]
+
+
+def test_fixture_flow_widens_only_the_final_channel_table_and_reports_it(tmp_path, monkeypatch):
+    baseline, baseline_args = _fixture_flow(tmp_path, monkeypatch, clipped=1, name="baseline")
+    widened, widened_args = _fixture_flow(
+        tmp_path, monkeypatch, clipped=1, name="widened", channel_scale_headroom=1.25)
+    with np.load(baseline["peak_tables"]) as tables:
+        expected = tables["final_peak"] * 1.25
+    with np.load(widened["peak_tables"]) as tables:
+        assert np.array_equal(tables["final_peak"], expected)
+    widened_summary = json.loads((Path(widened_args.work) / "final-summary.json").read_text(encoding="utf-8"))
+    assert widened["channel_scale_headroom"] == widened_summary["channel_scale_headroom"] == 1.25
+    assert Path(baseline_args.out).read_bytes() != Path(widened_args.out).read_bytes()
+
+
+@pytest.mark.parametrize("value", ["0.999999", "nan", "inf", "-inf", "not-a-float"])
+def test_flow_refuses_invalid_channel_scale_headroom(value, tmp_path):
+    run = subprocess.run([
+        sys.executable, str(TOOLS / "t2700_fused_k_calibration.py"), "flow",
+        "--checkpoint", "unused", "--out", str(tmp_path / "unused.sslm"),
+        "--work", str(tmp_path / "unused-work"), "--capture", "unused-capture",
+        "--verifier", "unused-verifier", f"--channel-scale-headroom={value}",
+    ], text=True, capture_output=True)
+    assert run.returncode == 2
+    assert "channel-scale headroom" in run.stderr
 
 
 def test_fixture_flow_refuses_pass_c_above_one_clip_per_million(tmp_path, monkeypatch):

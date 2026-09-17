@@ -23,6 +23,25 @@ class ChannelScaleDidNotConverge(RuntimeError):
     """Pass C exceeded the accepted clipped-landing rate."""
 
 
+def _channel_scale_headroom(value: str) -> float:
+    """Parse a finite, non-shrinking final channel-table multiplier."""
+    try:
+        headroom = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("channel-scale headroom must be a float") from error
+    if not math.isfinite(headroom) or headroom < 1.0:
+        raise argparse.ArgumentTypeError(
+            "channel-scale headroom must be finite and at least 1.0")
+    return headroom
+
+
+def _apply_channel_scale_headroom(final_peak: np.ndarray, headroom: float) -> np.ndarray:
+    """Widen the final table, preserving the historical h=1 bytes exactly."""
+    if headroom == 1.0:
+        return final_peak
+    return final_peak * headroom
+
+
 def _tokens(path: Path):
     return [int(value) for value in path.read_text(encoding="utf-8").split()]
 
@@ -155,7 +174,8 @@ def merge(args):
                            for layer in range(expected[0])])
     if float_peak.shape != expected:
         raise RuntimeError(f"float peak geometry {float_peak.shape}, expected {expected}")
-    final_peak = np.maximum(float_peak, integer_peak)
+    headroom = getattr(args, "channel_scale_headroom", 1.0)
+    final_peak = _apply_channel_scale_headroom(np.maximum(float_peak, integer_peak), headroom)
     final_model = pipeline.with_provisional_qk_channel_table(
         model, {f"layer{layer}": final_peak[layer] for layer in range(expected[0])})
     artifact_cache.save_artifact(final_model, out_cache, args.checkpoint)
@@ -168,6 +188,7 @@ def merge(args):
         "final_peak_sha256": hashlib.sha256(final_peak.tobytes()).hexdigest(),
         "raw_peak_sha256": hashlib.sha256(raw.tobytes()).hexdigest(),
         "landing_saturation_count": saturation,
+        "channel_scale_headroom": headroom,
         "wide_source_scales": {str(layer): list(scales[layer]) for layer in sorted(scales)},
         "artifact_sha256": hashlib.sha256(out_sslm.read_bytes()).hexdigest(),
     }
@@ -196,6 +217,7 @@ def _peak_table(model, capture: Path):
 
 def _flow_from_cache(args, source_cache: Path, inputs: Path, work: Path):
     """Run A/B/C from an already-calibrated cache; shared by the checkpoint CLI and fixture cell."""
+    headroom = getattr(args, "channel_scale_headroom", 1.0)
     model = artifact_cache.load_artifact(source_cache)
     provisional = work / "provisional.sslm"
     report_a, report_b, report_c = (work / "pass-a.tsv", work / "pass-b.tsv", work / "pass-c.tsv")
@@ -212,7 +234,8 @@ def _flow_from_cache(args, source_cache: Path, inputs: Path, work: Path):
     merge(argparse.Namespace(cache=str(source_cache), checkpoint=args.checkpoint,
                              capture_report=[str(report_a), str(report_b)], out_cache=str(final_cache),
                              out_sslm=str(staged_sslm), verifier=args.verifier, skip_verify=args.skip_verify,
-                             summary=str(work / "final-summary.json")))
+                             summary=str(work / "final-summary.json"),
+                             channel_scale_headroom=headroom))
     _run_capture(Path(args.capture), staged_sslm, inputs, report_c)
 
     callback_count, clipped, overshoots = _capture_metadata(report_c)
@@ -229,7 +252,8 @@ def _flow_from_cache(args, source_cache: Path, inputs: Path, work: Path):
     float_peak = np.stack([np.asarray(model.qk_channel_peaks[f"layer{layer}"], dtype=np.float64)
                            for layer in range(model.config.num_hidden_layers)])
     a_peak, b_peak, c_peak = (_peak_table(model, report) for report in (report_a, report_b, report_c))
-    final_peak = np.maximum.reduce([float_peak, a_peak, b_peak])
+    final_peak = _apply_channel_scale_headroom(
+        np.maximum.reduce([float_peak, a_peak, b_peak]), headroom)
     tables_path = work / "peak-tables.npz"
     np.savez(tables_path, float_peak=float_peak, pass_a_peak=a_peak, pass_b_peak=b_peak,
              pass_c_peak=c_peak, final_peak=final_peak)
@@ -241,6 +265,7 @@ def _flow_from_cache(args, source_cache: Path, inputs: Path, work: Path):
         "pass_c_landing_saturation_count": clipped,
         "pass_c_clipped_per_million": clipped * 1_000_000 / callback_count,
         "pass_c_overshooting_channels": overshoots,
+        "channel_scale_headroom": headroom,
         "peak_tables": str(tables_path),
         "peak_tables_sha256": hashlib.sha256(tables_path.read_bytes()).hexdigest(),
         "final_peak_sha256": hashlib.sha256(final_peak.tobytes()).hexdigest(),
@@ -293,6 +318,8 @@ def main():
                              help="fixture-only writer path; production flow verifies independently")
     flow_parser.add_argument("--pass-c-clipped-per-callback", type=float, default=1 / 1_000_000,
                              help="maximum accepted pass-C clipped/callback rate (default: 1e-6)")
+    flow_parser.add_argument("--channel-scale-headroom", type=_channel_scale_headroom, default=1.0,
+                             help="uniform final channel-peak multiplier; finite and at least 1.0 (default: 1.0)")
     flow_parser.set_defaults(fn=flow)
     args = parser.parse_args()
     args.fn(args)
