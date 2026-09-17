@@ -13,11 +13,11 @@ codes plus carried scale; this script decodes, last-token-pools, and L2
 normalizes that vector before comparing it to the checkpoint's own float model
 on exactly the same unpadded token IDs.
 
-This is a smoke harness, not a calibration or release-quality threshold
-deriver. The default floors are deliberately below the provisional-artifact
-baseline recorded for this repair (minimum cosine 0.781811; pair-rank Spearman
-0.872727), leaving narrow drift tolerance while still rejecting a materially
-different final-hidden result.
+This is a structural smoke harness, not a calibration or release-quality
+threshold deriver. It proves loading, the probe's CPU/GPU agreement path, and
+finite non-degenerate final-hidden outputs. Cosine and rank agreement are
+reported as observations only; the T-2704 Section 5 release gate grades
+product quality.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import struct
 import subprocess
 import tempfile
@@ -137,16 +138,31 @@ def _float_embeddings(model_dir: Path, sentences: tuple[str, ...]):
     return embeddings, token_ids
 
 
+_FORWARD_HASH_FIELDS = {"status", "sequence_state", "hidden", "kv_rows", "final_norm", "output_head", "aggregate"}
+
+
+def _forward_hashes(output: str) -> dict[str, str]:
+    fields = dict(re.findall(r"\b(status|sequence_state|hidden|kv_rows|final_norm|output_head|aggregate)=([0-9a-f]{64})\b", output))
+    if set(fields) != _FORWARD_HASH_FIELDS:
+        raise AssertionError("probe did not emit the complete forward byte-identity digest")
+    return fields
+
+
+def _assert_structural_smoke(verify_stdout: str, attention_passes: list[bool], cpu_gpu_agree: list[bool]) -> None:
+    if "OK" not in verify_stdout:
+        raise AssertionError("artifact verifier returned successfully without its acceptance marker")
+    if not all(attention_passes):
+        raise AssertionError("probe returned successfully without its attention PASS marker")
+    if not all(cpu_gpu_agree):
+        raise AssertionError("CPU and GPU forward byte-identity digests differ")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact", required=True, type=Path)
     parser.add_argument("--verify", required=True, type=Path)
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--hf-model", required=True, type=Path)
-    parser.add_argument("--min-cosine", type=float, default=0.770,
-                        help="minimum engine/float final-hidden cosine (baseline: 0.781811)")
-    parser.add_argument("--min-rank-agreement", type=float, default=0.850,
-                        help="minimum engine/float pair-rank Spearman rho (baseline: 0.872727)")
     parser.add_argument("--limit", type=int, default=len(_SENTENCES),
                         help="provisional-only plumbing limit; real smoke uses the default 24")
     args = parser.parse_args()
@@ -163,18 +179,18 @@ def main() -> int:
         verify_stdout = _run([str(args.verify), str(args.artifact), str(verify_output)])
         engine_embeddings = []
         attention_passes = []
+        cpu_gpu_agree = []
         for index, ids in enumerate(token_ids):
             dump = root / f"final-{index:02d}.bin"
             output = _run([str(args.probe), str(args.artifact), ",".join(map(str, ids)),
-                           "--smoke-attention", "--dump-final-hidden", str(dump)])
+                           "--forward-hash", "--smoke-attention", "--dump-final-hidden", str(dump)])
+            gpu_output = _run([str(args.probe), str(args.artifact), ",".join(map(str, ids)), "--forward-hash-gpu"])
             attention_passes.append("smoke_attention: PASS" in output)
+            cpu_gpu_agree.append(_forward_hashes(output) == _forward_hashes(gpu_output))
             engine_embeddings.append(_normalize(_read_final_hidden(dump)))
 
     cosine = [float(np.dot(engine, floating)) for engine, floating in zip(engine_embeddings, float_embeddings)]
-    if not all(attention_passes):
-        raise AssertionError("probe returned successfully without its attention PASS marker")
-    if min(cosine) < args.min_cosine:
-        raise AssertionError(f"engine/float cosine minimum {min(cosine):.9f} < {args.min_cosine:.9f}")
+    _assert_structural_smoke(verify_stdout, attention_passes, cpu_gpu_agree)
 
     usable_related = tuple(pair for pair in _RELATED_PAIRS if max(pair) < len(sentences))
     usable_unrelated = tuple(pair for pair in _UNRELATED_PAIRS if max(pair) < len(sentences))
@@ -193,9 +209,9 @@ def main() -> int:
         "sslm_verify": "accepted" if "OK" in verify_stdout else "unexpected output",
         "sentence_count": len(sentences),
         "attention": "PASS",
+        "cpu_gpu_byte_identity": "PASS",
+        "quality_grading": "T-2704 Section 5 release gate",
         "cosine": _summary(cosine),
-        "minimum_cosine_bar": args.min_cosine,
-        "minimum_rank_agreement_bar": args.min_rank_agreement,
         "related_engine": engine_related,
         "unrelated_engine": engine_unrelated,
         "related_float": float_related,
@@ -205,13 +221,6 @@ def main() -> int:
         "float_pair_rank": _rank(float_pairs),
     }
     print(json.dumps(result, sort_keys=True))
-    if min(engine_related) <= max(engine_unrelated):
-        raise AssertionError("engine related/unrelated similarity ordering failed")
-    if min(float_related) <= max(float_unrelated):
-        raise AssertionError("float related/unrelated similarity ordering failed")
-    if rank_agreement < args.min_rank_agreement:
-        raise AssertionError(f"engine/float pair-rank agreement {rank_agreement:.9f} < "
-                             f"{args.min_rank_agreement:.9f}")
     return 0
 
 

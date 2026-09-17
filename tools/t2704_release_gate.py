@@ -20,6 +20,8 @@ MODEL_FIDELITY_FLOORS = {
 QWEN3_FIDELITY_TARGET = .906603
 RETRIEVAL_FLOOR, RETRIEVAL_TOTAL = 148, 239
 REQUIRED_MODELS = {"Qwen2.5", "Qwen3"}
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_GLOBAL_PROVENANCE_INPUTS = {"build.bat", "CMakeLists.txt", "tools/build_layer_trace.bat"}
 
 
 def sha256(path: Path) -> str:
@@ -42,6 +44,13 @@ def tree_sha256(path: Path) -> str:
 
 def reject(message: str) -> None:
     raise ValueError(message)
+
+
+def captured_text(payload: bytes | None) -> str:
+    """A decisive, locale-independent rendering of captured child output."""
+    if payload is None:
+        return "<not captured>"
+    return payload.decode("utf-8", errors="backslashreplace")
 
 
 def passes_fidelity_floor(model: str, fidelity: float) -> bool:
@@ -197,10 +206,121 @@ def validate_identities(manifest: dict[str, Any], path: Path) -> dict[str, str]:
     return found
 
 
-def run(command: list[str], label: str) -> None:
-    completed = subprocess.run(command, text=True, capture_output=True, check=False)
+def _provenance_inputs_changed(changed_paths: list[str], source_inputs: tuple[str, ...]) -> list[str]:
+    relevant = []
+    for changed in changed_paths:
+        normalized = changed.replace("\\", "/")
+        if (
+            normalized.startswith(("src/", "include/"))
+            or normalized in _GLOBAL_PROVENANCE_INPUTS
+            or normalized in source_inputs
+            or normalized.endswith((".hlsl", ".hlsli"))
+        ):
+            relevant.append(normalized)
+    return relevant
+
+
+def _git_output(arguments: list[str], repository: Path) -> str:
+    try:
+        completed = subprocess.run(["git", "-C", str(repository), *arguments], text=False,
+                                   capture_output=True, check=False)
+    except OSError as error:
+        reject(f"cannot query diagnostic provenance: {error}")
     if completed.returncode:
-        reject(f"{label} diagnostic exited {completed.returncode}: {completed.stderr.strip()}")
+        reject(f"cannot query diagnostic provenance: {captured_text(completed.stderr).strip()}")
+    return captured_text(completed.stdout).strip()
+
+
+def _git_is_ancestor(source_commit: str, head: str, repository: Path) -> bool:
+    try:
+        completed = subprocess.run(["git", "-C", str(repository), "merge-base", "--is-ancestor",
+                                   source_commit, head], text=False, capture_output=True, check=False)
+    except OSError as error:
+        reject(f"cannot query diagnostic provenance: {error}")
+    if completed.returncode in (0, 1):
+        return completed.returncode == 0
+    reject(f"cannot query diagnostic provenance: {captured_text(completed.stderr).strip()}")
+
+
+def _validate_compiled_diagnostic_records(
+    records: list[dict[str, Any]], head: str, is_ancestor: Any, changed_paths: list[str]
+) -> dict[str, dict[str, Any]]:
+    if not records:
+        reject("manifest has no compiled diagnostic provenance")
+    found: dict[str, dict[str, Any]] = {}
+    for record in records:
+        required = ("name", "path", "source_commit", "build_command", "sha256", "source_inputs")
+        if (
+            not isinstance(record, dict)
+            or not all(isinstance(record.get(key), str) and record[key] for key in ("name", "source_commit", "sha256"))
+            or not isinstance(record.get("path"), Path)
+            or not isinstance(record.get("build_command"), list)
+            or not record["build_command"]
+            or not all(isinstance(item, str) and item for item in record["build_command"])
+            or not isinstance(record.get("source_inputs"), tuple)
+            or not record["source_inputs"]
+            or not all(isinstance(item, str) and item for item in record["source_inputs"])
+            or record["name"] in found
+        ):
+            reject("compiled diagnostic provenance requires name, path, source commit, build command, SHA-256, and source inputs")
+        executable = record["path"]
+        if not executable.is_file():
+            reject(f"missing compiled diagnostic: {record['name']}: {executable}")
+        actual = sha256(executable)
+        if actual != record["sha256"]:
+            reject(f"changed compiled diagnostic: {record['name']}: expected {record['sha256']}, got {actual}")
+        if not is_ancestor(record["source_commit"], head):
+            reject(f"compiled diagnostic source is not an ancestor of gate HEAD: {record['name']}: {record['source_commit']}")
+        changed = _provenance_inputs_changed(changed_paths, record["source_inputs"])
+        if changed:
+            reject(f"compiled diagnostic source predates changed build input: {record['name']}: {changed[0]}")
+        found[record["name"]] = {
+            "path": str(executable), "source_commit": record["source_commit"],
+            "build_command": record["build_command"], "sha256": actual,
+        }
+    return found
+
+
+def validate_compiled_diagnostic_provenance(manifest: dict[str, Any], manifest_path: Path) -> dict[str, dict[str, Any]]:
+    rows = manifest.get("compiled_diagnostics")
+    if not isinstance(rows, list):
+        reject("manifest has no compiled diagnostic provenance")
+    parsed = []
+    for row in rows:
+        if not isinstance(row, dict):
+            reject("compiled diagnostic provenance is malformed")
+        copied = dict(row)
+        if isinstance(copied.get("path"), str):
+            copied["path"] = resolve(copied["path"], manifest_path)
+        if isinstance(copied.get("source_inputs"), list):
+            copied["source_inputs"] = tuple(copied["source_inputs"])
+        parsed.append(copied)
+    head = _git_output(["rev-parse", "HEAD"], _REPO_ROOT)
+    changed = [path for path in _git_output(["diff", "--name-only", "-z", f"{head}..{head}"], _REPO_ROOT).split("\0") if path]
+    # The preceding command only establishes Git availability and a canonical HEAD. Each source
+    # commit gets its own range below, because its build boundary is record-specific.
+    def is_ancestor(source_commit: str, candidate_head: str) -> bool:
+        return _git_is_ancestor(source_commit, candidate_head, _REPO_ROOT)
+    for record in parsed:
+        source = record.get("source_commit")
+        if isinstance(source, str):
+            record["_changed_paths"] = [
+                path for path in _git_output(["diff", "--name-only", "-z", f"{source}..{head}"], _REPO_ROOT).split("\0") if path
+            ]
+    # `_validate_compiled_diagnostic_records` accepts one range population. Validate records one
+    # at a time so each compares its own source commit to this gate's actual HEAD.
+    results = {}
+    for record in parsed:
+        record_changed = record.pop("_changed_paths", [])
+        results.update(_validate_compiled_diagnostic_records([record], head, is_ancestor, record_changed))
+    return results
+
+
+def run(command: list[str], label: str) -> None:
+    completed = subprocess.run(command, text=False, capture_output=True, check=False)
+    if completed.returncode:
+        reject(f"{label} diagnostic exited {completed.returncode}; stdout: "
+               f"{captured_text(completed.stdout).strip()}; stderr: {captured_text(completed.stderr).strip()}")
 
 
 def run_fidelity(config: dict[str, Any], models: dict[str, dict[str, Any]], work: Path) -> list[dict[str, Any]]:
@@ -275,6 +395,7 @@ def run_replay(config: dict[str, Any], models: dict[str, dict[str, Any]], work: 
 def gate(manifest_path: Path, report_path: Path) -> dict[str, Any]:
     manifest, models = load(manifest_path), None
     models = validate_models(manifest, manifest_path)
+    compiled_diagnostics = validate_compiled_diagnostic_provenance(manifest, manifest_path)
     identities = validate_identities(manifest, manifest_path)
     diagnostics = manifest.get("diagnostics")
     if not isinstance(diagnostics, dict):
@@ -290,6 +411,7 @@ def gate(manifest_path: Path, report_path: Path) -> dict[str, Any]:
     replay = run_replay(diagnostics.get("replay", {}), models, work)
     grade_replay(replay["report"], {name: value["sha256"] for name, value in models.items()})
     result: dict[str, Any] = {"manifest_sha256": sha256(manifest_path), "identities": identities,
+                              "compiled_diagnostics": compiled_diagnostics,
                               "models": {name: {"path": str(value["path"]), "sha256": value["sha256"]} for name, value in models.items()},
                               "fidelity": fidelity_rows, "qwen3_target": qwen3_target_report(fidelity["Qwen3"]),
                               "retrieval": retrieval, "replay": replay}
@@ -317,6 +439,21 @@ def commission(receipt: Path) -> int:
             "qwen3": {"status": "MEASURED", "artifact": {"whole_file_sha256": model_sha256["Qwen3"]}, "refusals": {}},
             "qwen2p5": {"status": "MEASURED", "artifact": {"whole_file_sha256": model_sha256["Qwen2.5"]}, "refusals": {}},
         }, "margins": [1, 9]}
+
+        diagnostic = root / "diagnostic.exe"; diagnostic.write_bytes(b"T-2704 commissioned diagnostic")
+        provenance_record = {
+            "name": "commissioned diagnostic", "path": diagnostic, "source_commit": "a" * 40,
+            "build_command": ["cmake", "--build", "build", "--target", "diagnostic"],
+            "sha256": sha256(diagnostic), "source_inputs": ("tools/diagnostic.cpp",),
+        }
+
+        def provenance_case(record: dict[str, Any], ancestor: bool = True, changes: list[str] | None = None) -> int:
+            try:
+                _validate_compiled_diagnostic_records([record], "b" * 40,
+                                                     lambda _source, _head: ancestor, changes or [])
+                return 0
+            except ValueError:
+                return 1
 
         def grade_all(fidelity: list[dict[str, Any]], retrieval: dict[str, Any], replay: dict[str, Any]) -> dict[str, float]:
             graded_fidelity = grade_fidelity(fidelity)
@@ -356,6 +493,29 @@ def commission(receipt: Path) -> int:
         try: validate_identities(load(manifest), manifest); results["changed_identity"] = 0
         except ValueError: results["changed_identity"] = 1
         if results["changed_identity"] != 1: return 2
+        results["provenance_healthy"] = provenance_case(provenance_record)
+        stale_commit = dict(provenance_record); results["provenance_nonancestor"] = provenance_case(stale_commit, ancestor=False)
+        changed_source = dict(provenance_record); results["provenance_changed_source"] = provenance_case(changed_source, changes=["src/forward/forward_sites.cpp"])
+        changed_hash = dict(provenance_record); changed_hash["sha256"] = "0" * 64
+        results["provenance_changed_executable"] = provenance_case(changed_hash)
+        if results["provenance_healthy"] != 0 or any(
+            results[name] != 1 for name in ("provenance_nonancestor", "provenance_changed_source", "provenance_changed_executable")
+        ):
+            return 2
+        undecodable_report = root / "undecodable-child-rejection.json"
+        code, _unused, error = execute_with_rejection_report(
+            None, undecodable_report,
+            lambda: run([sys.executable, "-c", "import sys; sys.stderr.buffer.write(b'\\x8f'); sys.exit(1)"], "undecodable child"),
+        )
+        if error is not None:
+            report = load(undecodable_report)
+            results["undecodable_child_rejection"] = int(
+                code == 1 and report.get("verdict") == "REJECTED" and "\\x8f" in report.get("decisive_witness", "")
+            )
+        else:
+            results["undecodable_child_rejection"] = 0
+        if results["undecodable_child_rejection"] != 1:
+            return 2
         receipt.parent.mkdir(parents=True, exist_ok=True)
         receipt.write_text(json.dumps({"id": "T-2734-release-gate", "instrument_sha256": sha256(Path(__file__)), "results": results,
                                       "healthy_qwen3_target": healthy_qwen3_target,
@@ -373,6 +533,14 @@ def write_rejection_report(manifest_path: Path | None, report_path: Path | None,
     report_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def execute_with_rejection_report(manifest_path: Path | None, report_path: Path | None, operation: Any) -> tuple[int, Any, Exception | None]:
+    try:
+        return 0, operation(), None
+    except (OSError, ValueError, json.JSONDecodeError, RuntimeError) as error:
+        write_rejection_report(manifest_path, report_path, error)
+        return 1, None, error
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path); parser.add_argument("--report", type=Path)
@@ -380,11 +548,13 @@ def main() -> int:
     args = parser.parse_args()
     if args.commission: return commission(args.commission)
     if not args.manifest or not args.report: parser.error("--manifest and --report are required outside --commission")
-    try: print(json.dumps(gate(args.manifest, args.report), sort_keys=True)); return 0
-    except (OSError, ValueError, json.JSONDecodeError, RuntimeError) as error:
-        write_rejection_report(args.manifest, args.report, error)
+    code, result, error = execute_with_rejection_report(args.manifest, args.report,
+                                                        lambda: gate(args.manifest, args.report))
+    if error is not None:
         print(f"T2704_RELEASE_GATE_REJECTED: {error}", file=sys.stderr)
-        return 1
+        return code
+    print(json.dumps(result, sort_keys=True))
+    return code
 
 
 if __name__ == "__main__": raise SystemExit(main())

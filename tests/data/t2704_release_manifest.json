@@ -29,6 +29,24 @@
     {"name": "retrieval diagnostic", "path": "tools/t2703_retrieval_measure.py", "sha256": "a1480be1dcecd57bfe77dfea12fe2baab64016ee47c2b4a2d9f54bc291771f2e"},
     {"name": "two-model replay diagnostic", "path": "tools/t2723_t2704_production_refusal_replay.py", "sha256": "096f2436c08bb49bfb888069b0ac6c4390d8fe45fe90a22d1958812033f1f3f4"}
   ],
+  "compiled_diagnostics": [
+    {
+      "name": "baseline layer tracer",
+      "path": "D:/SuperSLM/.worktrees/t2703-fidelity/out/sslm_layer_trace.exe",
+      "source_commit": "65af065d797d83e9e31fc787bfc18b8665e10a88",
+      "build_command": ["tools\\build_layer_trace.bat"],
+      "source_inputs": ["tools/sslm_layer_trace.cpp", "tools/build_layer_trace.bat"],
+      "sha256": "b86774b0df90e40a543b6f3928e4ba182707a87307f2ca79661ebed069a2649c"
+    },
+    {
+      "name": "retrieval CPU probe",
+      "path": "D:/_t2703fid/retrieval/t2701_cpu_forward_probe.exe",
+      "source_commit": "61d60b55f9fe8316276e577ca8a84a2decb90d9a",
+      "build_command": ["cmake -S . -B build-retrieval -DSUPERSLM_BUILD_GPU=OFF -DBUILD_TESTING=OFF", "cmake --build build-retrieval --config Release --target t2701_cpu_forward_probe"],
+      "source_inputs": ["tools/t2701_cpu_forward_probe.cpp"],
+      "sha256": "a14f50982ff8a2ade60b5597bf111bfef5126003e0ce85ae7a80b62288ec7601"
+    }
+  ],
   "diagnostics": {
     "fidelity": {
       "runs": [
