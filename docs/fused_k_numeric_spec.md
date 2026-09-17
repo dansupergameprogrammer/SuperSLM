@@ -167,6 +167,6 @@ Slice 2's timing projection is only a predictor on the current compiled forward.
 600-record Qwen3 cell at `--channel-scale-headroom 1.25` is binding: float+A+B+C, including
 provisional/final table and artifact merges, took 5,226 s end to end, and each compiled pass took
 about 1,495 s, within the 30-minute bar. Pass C clipped 7 of 282,103,808 callbacks
-(0.024813560829352578 per million). At the default 1.0 it clipped 7,713 (27.341 per million),
+(0.025 per million). At the default 1.0 it clipped 7,713 (27.341 per million),
 which exceeds the one-per-million limit and raises `ChannelScaleDidNotConverge`; use 1.25 for
 Qwen3-Embedding-0.6B. A miss is a design failure, never a scalar fallback.

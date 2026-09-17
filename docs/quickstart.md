@@ -54,7 +54,7 @@ landings exceed one per million observations; at or below that rate its report r
 and every overshooting `(layer, head, channel)`. On the Ryzen 9 3950X, Qwen3-Embedding-0.6B took
 about 5,226 s end to end at `--channel-scale-headroom 1.25`; A/B/C each took about 1,495 s and
 remained within the 30-minute bar. Its pass C clipped 7 of 282,103,808 callbacks
-(0.024813560829352578 per million). At the default 1.0, pass C clipped 7,713 of 282,103,808
+(0.025 per million). At the default 1.0, pass C clipped 7,713 of 282,103,808
 (27.341 per million), exceeded the one-per-million limit, and raised `ChannelScaleDidNotConverge`.
 
 ## 1a. Calibrate a non-QK-norm checkpoint

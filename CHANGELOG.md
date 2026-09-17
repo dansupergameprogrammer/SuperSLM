@@ -23,7 +23,7 @@ the 30-minute bar.
 Fused-K conversion exposes `--channel-scale-headroom` (default: 1.0). Qwen3-Embedding-0.6B
 requires `--channel-scale-headroom 1.25`: the default pass C clipped 7,713 of 282,103,808
 callbacks (27.341 per million) and raised `ChannelScaleDidNotConverge`, while 1.25 completed
-with 7 of 282,103,808 clipped (0.024813560829352578 per million).
+with 7 of 282,103,808 clipped (0.025 per million).
 
 The obsolete fused-K metadata, KLR1 keys, WSC1 gain duplicates, nonlinear rows, telemetry, and
 GPU staging slots are retired from the QK path; their reserved GPU slots remain zero. The header's
