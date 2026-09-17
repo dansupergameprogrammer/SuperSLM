@@ -144,6 +144,20 @@ else()
 	target_compile_options(sslm_generate PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 
+# T-2776: baseline-only runner.  It uses the same artifact loader, layer
+# marshaller, stepped forward loop, and final norm as the production probe.
+if(WIN32)
+	add_executable(t2776_batched_embed_driver tools/t2776_batched_embed_driver.cpp)
+	target_link_libraries(t2776_batched_embed_driver PRIVATE superslm d3d12 dxgi dxguid)
+	target_sources(t2776_batched_embed_driver PRIVATE src/gpu/superslm_gpu.cpp src/gpu/gpu_1p0.cpp)
+	target_include_directories(t2776_batched_embed_driver PRIVATE tools src/gpu)
+	if(MSVC)
+		target_compile_options(t2776_batched_embed_driver PRIVATE /W4 /fp:precise)
+	else()
+		target_compile_options(t2776_batched_embed_driver PRIVATE -Wall -Wextra -ffp-contract=off)
+	endif()
+endif()
+
 # T-2046 (design §24.2 D-SLM3162, closing Poirot c81e48c review Significant 6): dumps an adapter
 # artifact's DeltaFoldScales/UFoldScales/Weights sections, loaded through the REAL B0b typed path,
 # as JSON -- the write->load round-trip proof's own read side (tools/sslm_adapter_dump.cpp).
