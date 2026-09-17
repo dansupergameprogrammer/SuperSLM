@@ -17,7 +17,8 @@ _REQUIRED = (
     "max(float, A, B)",
     "pass C",
     "one per million",
-    "80 minutes",
+    "5,226 s",
+    "1,495 s",
     "30-minute",
 )
 

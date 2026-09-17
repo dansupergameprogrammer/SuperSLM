@@ -14,13 +14,12 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.4.0**. It adds Qwen3/QK-norm model support across
-conversion, calibration, CPU inference, and D3D12 GPU inference while retaining
-legacy models' 24-dispatch-per-layer GPU budget semantics. QK-norm models use
-25 dispatches per layer. QK-norm artifacts produced by pre-final 1.4 development
-trees must be reconverted because the finalized carried-scale and reciprocal
-contract is intentionally incompatible. See the concise
-[1.4.0 release note](docs/releases/1.4.0.md) and [CHANGELOG.md](CHANGELOG.md).
+Current release: **1.5.0**. It adds the QKC1 source-to-derived conversion contract,
+fail-closed A/B/C publication, channel-scale headroom control, and the residual-add
+repair across CPU and D3D12 GPU inference. QK artifacts must be reconverted because
+the finalized carried-scale and reciprocal contract is intentionally incompatible;
+forward outputs change for every model and are not bit-identical to 1.4.0. See the
+concise [1.5.0 release note](docs/releases/1.5.0.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## Capabilities
 
@@ -263,9 +262,9 @@ SuperSLM is licensed under Apache License 2.0. The permissive license and
 express patent grant are deliberate: they make adoption safe for consumers,
 and closed forks remain permitted.
 
-## Roadmap beyond 1.4
+## Roadmap beyond 1.5
 
-Named follow-on work after 1.4:
+Named follow-on work after 1.5:
 
 - **True shared-prefix KV memory.** 1.0 ships a straightforward per-sequence
   KV layout; a block-table indirection layer is the next step, giving a

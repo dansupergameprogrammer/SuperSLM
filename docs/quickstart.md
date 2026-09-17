@@ -30,7 +30,8 @@ QK-norm checkpoints, including Qwen3-Embedding-0.6B, use one conversion command.
 factored float calibration, makes the provisional table, captures the full 600-record corpus three
 times (A/B/C, one shared prefix per pass), rebuilds the table from `max(float, A)` then
 `max(float, A, B)`, verifies the final artifact, and writes every peak table plus pass-C clipping
-details to `<work>/flow-report.json` and `<work>/peak-tables.npz`.
+details to `<work>/flow-report.json` and `<work>/peak-tables.npz`. Qwen3-Embedding-0.6B requires
+`--channel-scale-headroom 1.25`; the default remains 1.0 for other models.
 
 The resulting QK artifact carries the `QKC1` channel table and header flag bit 2 (`0x4`). Its
 source scales are serialized as exact binary64 bits; the landing reciprocal, exponent, ratio, and
@@ -44,14 +45,17 @@ python tools/t2700_fused_k_calibration.py flow \
   --out <final model output path>.sslm \
   --work <new empty conversion work directory> \
   --capture build/t2700_fused_k_capture \
+  --channel-scale-headroom 1.25 \
   --verifier build/sslm_verify
 ```
 
 `--out` and `--work` must not exist. The command refuses pass C only when clipped direct-K
 landings exceed one per million observations; at or below that rate its report records the count
 and every overshooting `(layer, head, channel)`. On the Ryzen 9 3950X, Qwen3-Embedding-0.6B took
-about 80 minutes end to end: 308 s float calibration, 1,423/1,421/1,424 s for A/B/C and 111 s for
-each table/artifact merge. Each compiled pass remains within the 30-minute bar.
+about 5,226 s end to end at `--channel-scale-headroom 1.25`; A/B/C each took about 1,495 s and
+remained within the 30-minute bar. Its pass C clipped 7 of 282,103,808 callbacks
+(0.024813560829352578 per million). At the default 1.0, pass C clipped 7,713 of 282,103,808
+(27.341 per million), exceeded the one-per-million limit, and raised `ChannelScaleDidNotConverge`.
 
 ## 1a. Calibrate a non-QK-norm checkpoint
 

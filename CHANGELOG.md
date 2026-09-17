@@ -6,7 +6,7 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 No user-visible changes yet.
 
-## [1.5.0] - 2026-09-15
+## [1.5.0] - 2026-09-17
 
 QK-norm artifact loading now has a complete `QKC1` source-to-derived contract. The loader
 requires bit 2 (`0x4`) and the `QkChannelTable` section exactly when the paired QK gains are
@@ -16,7 +16,14 @@ derivations, and refuses invalid magnitudes before CPU or GPU arithmetic can ove
 QK conversion uses factored float calibration followed by three compiled capture passes, A/B/C.
 It builds a provisional table, then `max(float, A)`, then `max(float, A, B)` before the final
 pass-C check; pass C refuses only when clipped direct-K landings exceed one per million
-observations. The complete flow is about 80 minutes, with every compiled pass within the 30-minute bar.
+observations. The measured Qwen3-Embedding-0.6B flow at channel-scale headroom 1.25
+took 5,226 s end to end; each A/B/C compiled capture pass took about 1,495 s, within
+the 30-minute bar.
+
+Fused-K conversion exposes `--channel-scale-headroom` (default: 1.0). Qwen3-Embedding-0.6B
+requires `--channel-scale-headroom 1.25`: the default pass C clipped 7,713 of 282,103,808
+callbacks (27.341 per million) and raised `ChannelScaleDidNotConverge`, while 1.25 completed
+with 7 of 282,103,808 clipped (0.024813560829352578 per million).
 
 The obsolete fused-K metadata, KLR1 keys, WSC1 gain duplicates, nonlinear rows, telemetry, and
 GPU staging slots are retired from the QK path; their reserved GPU slots remain zero. The header's
@@ -38,6 +45,9 @@ Fused-K calibration now stages its candidate artifact and publishes the requeste
 pass-C convergence succeeds, so a failed convergence cannot leave a final-looking output artifact.
 The accepted pass-C clipped/callback rate is configurable with
 `--pass-c-clipped-per-callback` (default: one per million).
+
+See [docs/releases/1.5.0.md](docs/releases/1.5.0.md) for the consumer-facing release and
+conversion guide.
 
 ## [1.4.0] - 2026-09-03
 

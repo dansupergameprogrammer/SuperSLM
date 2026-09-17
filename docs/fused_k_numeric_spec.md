@@ -121,7 +121,7 @@ is normative; names match the loader and forward vocabulary.
 | 30 | rejected alternatives | analysis only, never runtime operand | fold comparison |
 | 31 | paths/hashes | sorted POSIX bytes + SHA-256 | manifest |
 | 32 | retrieval inputs | 239, float64, diagonal excluded | pinned analyzer |
-| 33 | `t_A,t_B,t_C,t_float,t_total` | A/B/C <=30 min each; full flow about 80 min | monotonic timers |
+| 33 | `t_A,t_B,t_C,t_float,t_total` | Qwen3 at headroom 1.25: A/B/C about 1,495 s each; full flow 5,226 s | monotonic timers |
 | 34 | 453 prefix/snapshots/hashes | immutable parent, full suffix population | token arrays / SSB4 |
 | 35 | saturation/out-of-domain counts | pass C clips at most one direct-K observation per million | capture telemetry |
 
@@ -164,7 +164,9 @@ At `N=128`, `sumsq <= 2,064,512`; the shifted RMS numerator is
 `abs(A) <= 4,433,505,761,099,776` and `abs(z) <= 2,064,512`.
 
 Slice 2's timing projection is only a predictor on the current compiled forward. Slice 6's
-600-record cell is binding: float+A+B+C, including provisional/final table and artifact merges,
-is about 80 minutes end to end, and each compiled pass stays within the 30-minute bar. Pass C
-refuses only when clipped direct-K landings exceed one per million observations. A miss is a design
-failure, never a scalar fallback.
+600-record Qwen3 cell at `--channel-scale-headroom 1.25` is binding: float+A+B+C, including
+provisional/final table and artifact merges, took 5,226 s end to end, and each compiled pass took
+about 1,495 s, within the 30-minute bar. Pass C clipped 7 of 282,103,808 callbacks
+(0.024813560829352578 per million). At the default 1.0 it clipped 7,713 (27.341 per million),
+which exceeds the one-per-million limit and raises `ChannelScaleDidNotConverge`; use 1.25 for
+Qwen3-Embedding-0.6B. A miss is a design failure, never a scalar fallback.
