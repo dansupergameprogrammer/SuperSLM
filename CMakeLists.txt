@@ -168,7 +168,7 @@ endif()
 # T-2701 slice 7: artifact-backed CPU/GPU diagnostics. These need the D3D12
 # substrate and generated shaders, so keep them out of the CPU-only default.
 if(WIN32 AND (SUPERSLM_BUILD_GPU OR BUILD_TESTING))
-	foreach(_t2701_tool IN ITEMS t2701_cpu_forward_probe t2701_gpu_tokens)
+	foreach(_t2701_tool IN ITEMS t2701_cpu_forward_probe t2701_gpu_tokens t2776_batched_embed_driver)
 		add_executable(${_t2701_tool} tools/${_t2701_tool}.cpp)
 		target_link_libraries(${_t2701_tool} PRIVATE superslm d3d12 dxgi dxguid)
 		target_sources(${_t2701_tool} PRIVATE src/gpu/superslm_gpu.cpp src/gpu/gpu_1p0.cpp)
