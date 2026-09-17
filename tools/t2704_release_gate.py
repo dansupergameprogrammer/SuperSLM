@@ -296,9 +296,6 @@ def validate_compiled_diagnostic_provenance(manifest: dict[str, Any], manifest_p
             copied["source_inputs"] = tuple(copied["source_inputs"])
         parsed.append(copied)
     head = _git_output(["rev-parse", "HEAD"], _REPO_ROOT)
-    changed = [path for path in _git_output(["diff", "--name-only", "-z", f"{head}..{head}"], _REPO_ROOT).split("\0") if path]
-    # The preceding command only establishes Git availability and a canonical HEAD. Each source
-    # commit gets its own range below, because its build boundary is record-specific.
     def is_ancestor(source_commit: str, candidate_head: str) -> bool:
         return _git_is_ancestor(source_commit, candidate_head, _REPO_ROOT)
     for record in parsed:
