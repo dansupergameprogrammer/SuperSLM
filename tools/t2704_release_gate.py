@@ -42,6 +42,15 @@ def tree_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def residual_trace_population_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    for member in sorted(path.glob("*.residual.jsonl"), key=lambda item: item.name):
+        digest.update(member.name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(bytes.fromhex(sha256(member)))
+    return digest.hexdigest()
+
+
 def reject(message: str) -> None:
     raise ValueError(message)
 
@@ -198,6 +207,8 @@ def validate_identities(manifest: dict[str, Any], path: Path) -> dict[str, str]:
             digest = sha256(file)
         elif kind == "tree" and file.is_dir():
             digest = tree_sha256(file)
+        elif kind == "residual-trace-population" and file.is_dir():
+            digest = residual_trace_population_sha256(file)
         else:
             reject(f"missing pinned {kind} identity: {row['name']}: {file}")
         if digest != row["sha256"]:
@@ -359,14 +370,18 @@ def run_fidelity(config: dict[str, Any], models: dict[str, dict[str, Any]], work
 
 
 def run_retrieval(config: dict[str, Any], models: dict[str, dict[str, Any]], work: Path) -> dict[str, Any]:
-    needed = ("model", "corpus", "query_source", "hf_model", "probe", "provisional", "provisional_sha256")
-    if not all(isinstance(config.get(key), str) for key in needed):
+    needed = ("model", "corpus", "query_source", "hf_model", "probe", "provisional", "provisional_sha256", "phases")
+    if not all(isinstance(config.get(key), str) for key in needed[:-1]) or not isinstance(config.get("phases"), list):
         reject("retrieval configuration is incomplete")
     output = work / "retrieval"
     arguments = ["--corpus", config["corpus"], "--query-source", config["query_source"], "--hf-model", config["hf_model"],
                  "--probe", config["probe"], "--candidate", str(models["Qwen3"]["path"]), "--candidate-sha256", models["Qwen3"]["sha256"],
                  "--provisional", config["provisional"], "--provisional-sha256", config["provisional_sha256"], "--output", str(output)]
-    commands = [["python", "tools/t2703_retrieval_measure.py", phase, *arguments] for phase in ("float", "candidate", "provisional", "analyze")]
+    phases = config["phases"]
+    expected_phases = ["float", "candidate", "provisional", "equivalence", "analyze"]
+    if phases != expected_phases:
+        reject(f"retrieval phases must be exactly {expected_phases}")
+    commands = [["python", "tools/t2703_retrieval_measure.py", phase, *arguments] for phase in phases]
     for command in commands:
         run(command, f"retrieval {command[2]}")
     summary = load(output / "retrieval-summary.json")
@@ -378,12 +393,16 @@ def run_retrieval(config: dict[str, Any], models: dict[str, dict[str, Any]], wor
 
 
 def run_replay(config: dict[str, Any], models: dict[str, dict[str, Any]], work: Path) -> dict[str, Any]:
-    if not all(isinstance(config.get(key), str) for key in ("qwen3_traces", "qwen2p5_traces")):
+    needed = ("qwen3_traces", "qwen2p5_traces", "qwen3_trace_population_sha256", "qwen2p5_trace_population_sha256")
+    if not all(isinstance(config.get(key), str) for key in needed):
         reject("replay configuration is incomplete")
     output = work / "replay.json"
     command = ["python", "tools/t2723_t2704_production_refusal_replay.py", "--model", "both", "--qwen3-traces", config["qwen3_traces"],
-               "--qwen3-artifact", str(models["Qwen3"]["path"]), "--qwen2p5-traces", config["qwen2p5_traces"],
-               "--qwen2p5-artifact", str(models["Qwen2.5"]["path"]), "--output", str(output)]
+               "--qwen3-artifact", str(models["Qwen3"]["path"]), "--qwen3-artifact-sha256", models["Qwen3"]["sha256"],
+               "--qwen3-trace-population-sha256", config["qwen3_trace_population_sha256"],
+               "--qwen2p5-traces", config["qwen2p5_traces"], "--qwen2p5-artifact", str(models["Qwen2.5"]["path"]),
+               "--qwen2p5-artifact-sha256", models["Qwen2.5"]["sha256"],
+               "--qwen2p5-trace-population-sha256", config["qwen2p5_trace_population_sha256"], "--output", str(output)]
     run(command, "real-trace replay")
     report = load(output)
     return {"command": command, "report": report}

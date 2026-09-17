@@ -26,8 +26,10 @@
     {"name": "retrieval CPU probe", "path": "D:/_t2744diag/retrieval-probe/build/Release/t2701_cpu_forward_probe.exe", "sha256": "75c8356be078e78e9aed7938479741c23b0abc6a1308ce9f6586693f9e2d3b16"},
     {"name": "retrieval provisional control", "path": "D:/_t2703/qwen3-embedding-0.6b-provisional-r5.sslm", "sha256": "0d53db25017d49664f0b234515d5b4ea351d8dfce7b9a9005314141498a3ae5a"},
     {"name": "fidelity diagnostic", "path": "tools/t2703_fidelity_localization.py", "sha256": "e4006220b0b6908fd83522769ab418b33743674a8402b3676a69c55af2e8eb73"},
-    {"name": "retrieval diagnostic", "path": "tools/t2703_retrieval_measure.py", "sha256": "a1480be1dcecd57bfe77dfea12fe2baab64016ee47c2b4a2d9f54bc291771f2e"},
-    {"name": "two-model replay diagnostic", "path": "tools/t2723_t2704_production_refusal_replay.py", "sha256": "1fc935e80d7269bc7e073b516643520c8923155dfb7f3cdfe7a6752a19f15e18"}
+    {"name": "retrieval diagnostic", "path": "tools/t2703_retrieval_measure.py", "sha256": "c587cb52dee6a6f88c5800be4f2804cca119d68dcdf17bfdf6352cc411f9139c"},
+    {"name": "two-model replay diagnostic", "path": "tools/t2723_t2704_production_refusal_replay.py", "sha256": "dde6251e88cbbee53b7d9bd84d5fd059d8dade74705b1ed98f1baaf18a8f1d32"},
+    {"name": "Qwen3 residual trace population", "kind": "residual-trace-population", "path": "D:/_t2745traces/qwen3/engine", "sha256": "14e017497baadcb2048879af3ea7d86aa9f65817d67a8931fcf16f2ba0ad36d2"},
+    {"name": "Qwen2.5 residual trace population", "kind": "residual-trace-population", "path": "D:/_t2745traces/qwen2p5/engine", "sha256": "2c8be205823db9785e3d1dc2ec3397accc1a8d9bad2b6e252851133378291de6"}
   ],
   "compiled_diagnostics": [
     {
@@ -61,11 +63,14 @@
       "hf_model": "D:/hf_cache/hub/models--Qwen--Qwen3-Embedding-0.6B/snapshots/97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
       "probe": "D:/_t2744diag/retrieval-probe/build/Release/t2701_cpu_forward_probe.exe",
       "provisional": "D:/_t2703/qwen3-embedding-0.6b-provisional-r5.sslm",
-      "provisional_sha256": "0d53db25017d49664f0b234515d5b4ea351d8dfce7b9a9005314141498a3ae5a"
+      "provisional_sha256": "0d53db25017d49664f0b234515d5b4ea351d8dfce7b9a9005314141498a3ae5a",
+      "phases": ["float", "candidate", "provisional", "equivalence", "analyze"]
     },
     "replay": {
-      "qwen3_traces": "D:/_t2703fid/resadd/qwen3/engine",
-      "qwen2p5_traces": "D:/_t2703fid/resadd/qwen2p5/engine"
+      "qwen3_traces": "D:/_t2745traces/qwen3/engine",
+      "qwen3_trace_population_sha256": "14e017497baadcb2048879af3ea7d86aa9f65817d67a8931fcf16f2ba0ad36d2",
+      "qwen2p5_traces": "D:/_t2745traces/qwen2p5/engine",
+      "qwen2p5_trace_population_sha256": "2c8be205823db9785e3d1dc2ec3397accc1a8d9bad2b6e252851133378291de6"
     }
   }
 }

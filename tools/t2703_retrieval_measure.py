@@ -18,6 +18,7 @@ import json
 import math
 import os
 import re
+import shutil
 import struct
 import subprocess
 import time
@@ -253,6 +254,89 @@ def read_final_hidden(path: Path) -> np.ndarray:
     return codes * math.ldexp(float(mantissa), exponent)
 
 
+def probe_equivalence_phase(args: argparse.Namespace) -> None:
+    """Prove the retrieval fast path preserves the ordinary final-hidden bytes."""
+    args.output.mkdir(parents=True, exist_ok=True)
+    frozen = load_token_rows(args.output)
+    ids = frozen[0]["query_ids"]
+    artifact_hash = verify_hash(args.candidate, "candidate", args.candidate_sha256)
+    probe_hash = sha256(args.probe)
+    copied_probe = args.output / args.probe.name
+    shutil.copy2(args.probe, copied_probe)
+    if sha256(copied_probe) != probe_hash:
+        raise RuntimeError("copied equivalence probe hash mismatch")
+    full_dump = args.output / "equivalence-full.bin"
+    final_only_dump = args.output / "equivalence-final-only.bin"
+    for dump in (full_dump, final_only_dump):
+        if dump.exists():
+            dump.unlink()
+
+    def run_probe(dump: Path, final_hidden_only: bool) -> None:
+        command = [
+            str(args.probe), str(args.candidate), ",".join(map(str, ids)),
+            "--dump-final-hidden", str(dump),
+        ]
+        if final_hidden_only:
+            command.append("--final-hidden-only")
+        completed = subprocess.run(command, text=True, capture_output=True, check=False)
+        if completed.returncode:
+            raise RuntimeError(
+                f"equivalence probe {'final-hidden-only' if final_hidden_only else 'ordinary'} "
+                f"path exited {completed.returncode}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+            )
+        if "forward_status=Ok" not in completed.stdout or not dump.is_file():
+            raise RuntimeError(
+                f"equivalence probe {'final-hidden-only' if final_hidden_only else 'ordinary'} "
+                "path did not produce a successful final-hidden dump"
+            )
+        read_final_hidden(dump)
+
+    run_probe(full_dump, False)
+    run_probe(final_only_dump, True)
+    equivalent = full_dump.read_bytes() == final_only_dump.read_bytes()
+    result = {
+        "artifact": str(args.candidate.resolve()),
+        "artifact_sha256": artifact_hash,
+        "comparison": "ordinary probe path versus --final-hidden-only on corpus row 0 query IDs",
+        "equivalent": equivalent,
+        "final_hidden_only_dump_sha256": sha256(final_only_dump),
+        "full_path_dump_sha256": sha256(full_dump),
+        "probe_sha256": probe_hash,
+    }
+    write_json(args.output / "probe-equivalence.json", result)
+    if not equivalent:
+        raise RuntimeError("ordinary and --final-hidden-only final-hidden dumps differ")
+    print(json.dumps(result, sort_keys=True))
+
+
+def validate_probe_equivalence(args: argparse.Namespace) -> dict[str, Any]:
+    path = args.output / "probe-equivalence.json"
+    if not path.is_file():
+        raise RuntimeError("probe equivalence phase is required before analyze")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(record, dict) or record.get("equivalent") is not True:
+        raise RuntimeError("probe equivalence phase did not establish byte identity")
+    expected = {
+        "artifact": str(args.candidate.resolve()),
+        "artifact_sha256": verify_hash(args.candidate, "candidate", args.candidate_sha256),
+        "probe_sha256": sha256(args.probe),
+    }
+    for key, value in expected.items():
+        if record.get(key) != value:
+            raise RuntimeError(f"probe equivalence {key} does not match current input")
+    full_dump = args.output / "equivalence-full.bin"
+    final_only_dump = args.output / "equivalence-final-only.bin"
+    if not full_dump.is_file() or not final_only_dump.is_file():
+        raise RuntimeError("probe equivalence dumps are missing")
+    if record.get("full_path_dump_sha256") != sha256(full_dump):
+        raise RuntimeError("ordinary probe equivalence dump hash mismatch")
+    if record.get("final_hidden_only_dump_sha256") != sha256(final_only_dump):
+        raise RuntimeError("final-hidden-only equivalence dump hash mismatch")
+    if full_dump.read_bytes() != final_only_dump.read_bytes():
+        raise RuntimeError("probe equivalence dumps differ")
+    return record
+
+
 def engine_phase(args: argparse.Namespace, arm: str) -> None:
     args.output.mkdir(parents=True, exist_ok=True)
     float_result = json.loads((args.output / "float-result.json").read_text(encoding="utf-8"))
@@ -361,6 +445,7 @@ def paired(engine: np.ndarray, floating: np.ndarray) -> dict[str, Any]:
 
 
 def analyze_phase(args: argparse.Namespace) -> None:
+    equivalence = validate_probe_equivalence(args)
     frozen = load_token_rows(args.output)
     float_result = json.loads((args.output / "float-result.json").read_text(encoding="utf-8"))
     if not float_result.get("anchor_valid"):
@@ -468,9 +553,7 @@ def analyze_phase(args: argparse.Namespace) -> None:
             "probe": str(args.probe.resolve()),
             "probe_sha256": progress["candidate"]["probe_sha256"],
             "token_ids_sha256": sha256(args.output / "token-ids.jsonl"),
-            "probe_final_hidden_equivalence": json.loads(
-                (args.output / "probe-equivalence.json").read_text(encoding="utf-8")
-            ),
+            "probe_final_hidden_equivalence": equivalence,
         },
     }
     write_json(args.output / "retrieval-summary.json", summary)
@@ -501,7 +584,7 @@ def analyze_phase(args: argparse.Namespace) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=("float", "candidate", "provisional", "analyze"))
+    parser.add_argument("phase", choices=("float", "candidate", "provisional", "equivalence", "analyze"))
     parser.add_argument("--corpus", required=True, type=Path)
     parser.add_argument("--query-source", required=True, type=Path)
     parser.add_argument("--hf-model", required=True, type=Path)
@@ -533,6 +616,8 @@ def main() -> int:
         float_phase(args)
     elif args.phase in ("candidate", "provisional"):
         engine_phase(args, args.phase)
+    elif args.phase == "equivalence":
+        probe_equivalence_phase(args)
     else:
         analyze_phase(args)
     return 0

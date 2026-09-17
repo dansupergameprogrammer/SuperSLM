@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Replay T-2704's one-grid residual construction on the frozen production traces.
+"""Replay T-2704's one-grid residual construction on pinned production traces.
 
-The default invocation measures both shipped models.  It also reconstructs the
-captured, pre-T-2704 residual rows from their original operands and checks every
-recorded D', normalization, reciprocal, and C26 output scale before reporting the
-new-construction refusal counts.
+The default invocation measures both shipped models. It reconstructs the captured
+current-engine selected-grid residual rows and checks every recorded D',
+normalization, reciprocal, and C26 output scale before reporting refusal counts.
 """
 
 from __future__ import annotations
@@ -49,46 +48,7 @@ REFUSAL_REASONS = (
     "operand_mantissa_out_of_int32",
 )
 
-FROZEN_TRACE_SHA256 = {
-    "qwen3": {
-        "item-00.residual.jsonl": "89d042146f56d30d044b2f2c31d23203085f038241c2db14dad71bf52f3151f5",
-        "item-01.residual.jsonl": "73b04b3e9e182dbe275373e9a53b83be89a5b7ca46afafccd69538835a3f53d9",
-        "item-02.residual.jsonl": "7a40d7677586272218ec0595938328b2e90f39a57cf369fc7f9b77875b4eba9d",
-        "item-03.residual.jsonl": "1c373293034723e7b03a5407ef7338836dc1f3d685dc3cd38fac272daf9e8eeb",
-        "item-04.residual.jsonl": "f7c224a38fbed7e39527f61c622199c6244c0601811c9faf7149fca39026e50f",
-        "item-05.residual.jsonl": "9ad83f4bbc6cee7de5721d88a5b7d1335f06ab00c321db5df90efbbdb71e37c8",
-        "item-06.residual.jsonl": "7b329c6d6d09b0b12ce9c8ce39ba96e96536ba1a1ab5e16efe61c0dea9c4f921",
-        "item-07.residual.jsonl": "1a51e67214ef54436df27d5322e1599532c461077eab67befc26e4a944c05907",
-        "item-08.residual.jsonl": "1515431d00fc156eb35fd14756e3027786f38879cf60ade5927a487da527d6eb",
-        "item-09.residual.jsonl": "b04c18ab60b6cda5b56f6210b512ce64de78b794964d04f1ba8dcada109d517c",
-        "item-10.residual.jsonl": "cd94ec8354a45e1c300c5c8731b8a2d55c59495d6342cfeb89df764b2c326995",
-        "item-11.residual.jsonl": "bc4ee3a8518efd31e2d05caaf2a60ecd380339b17d98378923bae91ceb700907",
-        "item-12.residual.jsonl": "d8d0404f641394ff2f87535aa23c211747f3d359066cf5fcf6fea18da8a694a3",
-        "item-13.residual.jsonl": "dc8afd4f54b7f13125c32091a99907cae14561c180695802c9411505f649c3b6",
-        "item-14.residual.jsonl": "610c56451db3edded97fecf3f9e755d74870d99711d616305807f884e6a31238",
-        "item-15.residual.jsonl": "215da74473ff1afb39eb0ee4751e1c3650efd6ce9fbb26ef1727b70405bab68a",
-        "item-16.residual.jsonl": "41f5ae3f07975684153571d20dfa342dc3dcff215cabbb59b2b1bfba6102aea0",
-        "item-17.residual.jsonl": "3ab91c25374908dde4ca663a666451b66ab94f704742169b5753007db9c8f4e4",
-        "item-18.residual.jsonl": "f9d26e712ad9b754ec650b84fb3b1b0b1b26a267b8b565bed75aa55d4e535bda",
-        "item-19.residual.jsonl": "228dd59a59f6326bdf4da43ab8c228116e1f898075a9723339a30bcfd24cb3f6",
-        "item-20.residual.jsonl": "e366ee49f2f333ea9e3c2f0c069d7beb2ede87981405431761306968b05dc639",
-        "item-21.residual.jsonl": "b12e486f88e51bdbf772bc3d0d8d9090d5688b42613b3f9082f657b7f4786bca",
-        "item-22.residual.jsonl": "97d24106104f09a0a28b2f62ec493f257f6668147efd5260218341a67c53dbcf",
-        "item-23.residual.jsonl": "64b63c78b2216480630499eca57fa50dd1a70ee650f7250a77ae656b891e2456",
-        "item-24.residual.jsonl": "d523188445c5fa40c50cae0d4b470f05d42d1911a5d759732dd715455738caae",
-        "item-25.residual.jsonl": "b52ead2e430c8e6d19eb330c0a0fc444fa0764a506cfa0393a33603f117feca7",
-        "item-26.residual.jsonl": "be5953161c8a9f6e9fad67b382cfb9454922e4124e528d63f243deee17849654",
-        "item-27.residual.jsonl": "4377dd9f5b6c12a7988deec3fcc03e082c4ab4e8f84c4a6fccec461d079cb1da",
-    },
-    "qwen2p5": {
-        "item-00.residual.jsonl": "2e2323aa88a0449c28b0a3b06c72d1a937073ab253af4dd813850cf89ba7ceea",
-        "item-01.residual.jsonl": "836c1e6e709ba2e168a054ac1864b3a12735b0f27591f9acd3dc5a788555e0f5",
-        "item-02.residual.jsonl": "d95a605222c1d3ee6615ecd9f798a6455c82ae4d1574e41173d15e0ca17e72e9",
-        "item-03.residual.jsonl": "3ad496e547c447668b6590f0ba7571a0725d6e2ce9fc6cdce5637d9581cc3cb9",
-        "item-04.residual.jsonl": "e5e5213ff1e490a489173f37e14b84d9c14ded7283742ed3c017b71a7fa007da",
-        "item-05.residual.jsonl": "dd15d9667a5f835b7b754815e7b0d0837ff806842f4d52be45d92c4d6bdaa80f",
-    },
-}
+TRACE_ITEM_COUNTS = {"qwen3": 28, "qwen2p5": 6}
 
 
 @dataclass(frozen=True)
@@ -102,7 +62,8 @@ class ModelInput:
     name: str
     trace_dir: Path
     artifact: Path
-    expected_integrity_sha256: str | None = None
+    expected_whole_file_sha256: str
+    expected_trace_population_sha256: str
 
 
 def file_sha256(path: Path) -> str:
@@ -303,23 +264,30 @@ def record_site_suffix(record: dict[str, Any]) -> tuple[int, str]:
     return int(prefix[5:]), suffix
 
 
-def trace_files(model: str, trace_dir: Path) -> list[tuple[Path, str]]:
-    expected = FROZEN_TRACE_SHA256[model]
+def trace_files(model: str, trace_dir: Path, expected_population_sha256: str) -> tuple[list[tuple[Path, str]], str]:
+    expected_names = [f"item-{index:02d}.residual.jsonl" for index in range(TRACE_ITEM_COUNTS[model])]
     actual_paths = sorted(trace_dir.glob("*.residual.jsonl"), key=lambda path: path.name)
     actual_names = [path.name for path in actual_paths]
-    if actual_names != list(expected):
+    if actual_names != expected_names:
         raise ValueError(
-            f"{model}: trace file set mismatch; got {actual_names}, expected {list(expected)}"
+            f"{model}: trace file set mismatch; got {actual_names}, expected {expected_names}"
         )
     result = []
     for path in actual_paths:
         digest = file_sha256(path)
-        if digest != expected[path.name]:
-            raise ValueError(
-                f"{model}: {path.name} SHA-256 {digest} != frozen {expected[path.name]}"
-            )
         result.append((path, digest))
-    return result
+    population = hashlib.sha256()
+    for path, digest in result:
+        population.update(path.name.encode("utf-8"))
+        population.update(b"\x00")
+        population.update(bytes.fromhex(digest))
+    actual_population_sha256 = population.hexdigest()
+    if actual_population_sha256 != expected_population_sha256:
+        raise ValueError(
+            f"{model}: trace population SHA-256 {actual_population_sha256} != "
+            f"pinned {expected_population_sha256}"
+        )
+    return result, actual_population_sha256
 
 
 def read_trace_groups(path: Path) -> dict[tuple[int, int], dict[str, dict[str, Any]]]:
@@ -359,29 +327,52 @@ def validate_captured_residual(
 ) -> int:
     stream_scale = scale_from_record(stream)
     branch_scale = scale_from_record(branch)
-    if stream_scale.m <= 0:
-        raise ValueError(f"{location}: captured stream mantissa is not positive")
-    ns_target = normalize_scale(stream_scale.m)
-    if ns_target.e != 0 or ns_target.m != stream_scale.m:
-        raise ValueError(f"{location}: captured stream scale is not canonical")
     stream_codes = stream["codes"]
     branch_codes = branch["codes"]
     captured_wide = residual["x_int"]
     if not len(stream_codes) == len(branch_codes) == len(captured_wide):
         raise ValueError(f"{location}: residual operand widths differ")
-    for index, (stream_code, branch_code, expected) in enumerate(
-        zip(stream_codes, branch_codes, captured_wide)
-    ):
-        landed, exceeded = landing_rescale(branch_code, branch_scale, stream_scale, 0)
-        if exceeded:
-            raise ValueError(f"{location}: captured baseline landing overflows at element {index}")
-        actual = int(stream_code) + landed
-        if actual != int(expected):
-            raise ValueError(
-                f"{location}: baseline reconstruction differs at element {index}: "
-                f"computed {actual}, captured {expected}"
-            )
-    d_prime = max(1, max(abs(int(value)) for value in captured_wide))
+
+    def reconstruct(select_branch: bool) -> tuple[list[int], Scale] | None:
+        selected_scale = branch_scale if select_branch else stream_scale
+        other_scale = stream_scale if select_branch else branch_scale
+        direct_codes = branch_codes if select_branch else stream_codes
+        other_codes = stream_codes if select_branch else branch_codes
+        target_shift = normalize_scale(abs(selected_scale.m)).e
+        wide: list[int] = []
+        for index, (direct, other) in enumerate(zip(direct_codes, other_codes)):
+            landed, exceeded = landing_rescale(int(other), other_scale, selected_scale, target_shift)
+            if exceeded or (selected_scale.m < 0 and landed == I64_MIN):
+                return None
+            if selected_scale.m < 0:
+                landed = -landed
+            value = int(direct) + landed
+            if not I64_MIN <= value <= I64_MAX:
+                return None
+            wide.append(value)
+        d_prime = max(1, max(abs(value) for value in wide))
+        running, in_domain = c26_left_fold(selected_scale, site_constant, d_prime)
+        if not in_domain or running is None:
+            return None
+        return wide, selected_scale
+
+    branch_selected = select_branch_grid(branch_scale, stream_scale)
+    reconstructed = reconstruct(branch_selected)
+    if reconstructed is None:
+        reconstructed = reconstruct(not branch_selected)
+    if reconstructed is None:
+        raise ValueError(f"{location}: captured residual has no viable selected-grid preflight")
+    wide, selected_scale = reconstructed
+    if wide != [int(value) for value in captured_wide]:
+        for index, (actual, expected) in enumerate(zip(wide, captured_wide)):
+            if actual != int(expected):
+                raise ValueError(
+                    f"{location}: selected-grid reconstruction differs at element {index}: "
+                    f"computed {actual}, captured {expected}"
+                )
+        raise AssertionError("selected-grid reconstruction width changed after validation")
+
+    d_prime = max(1, max(abs(value) for value in wide))
     ns = normalize_scale(d_prime)
     reciprocal = dynamic_scale_reciprocal(ns.m)
     captured_primitives = (
@@ -396,9 +387,9 @@ def validate_captured_residual(
             f"{location}: funnel primitive tuple {computed_primitives} != captured "
             f"{captured_primitives}"
         )
-    running, in_domain = c26_left_fold(stream_scale, site_constant, d_prime)
+    running, in_domain = c26_left_fold(selected_scale, site_constant, d_prime)
     if not in_domain or running is None:
-        raise ValueError(f"{location}: captured baseline unexpectedly fails C26")
+        raise ValueError(f"{location}: captured selected-grid row unexpectedly fails C26")
     captured_scale = scale_from_record(residual)
     if running != captured_scale:
         raise ValueError(
@@ -563,15 +554,14 @@ def replay_residual(
 
 def measure_model(model_input: ModelInput) -> dict[str, Any]:
     constants, artifact = read_composition_constants(model_input.artifact)
-    if (
-        model_input.expected_integrity_sha256 is not None
-        and artifact["embedded_integrity_sha256"] != model_input.expected_integrity_sha256
-    ):
+    if artifact["whole_file_sha256"] != model_input.expected_whole_file_sha256:
         raise ValueError(
-            f"{model_input.name}: artifact integrity {artifact['embedded_integrity_sha256']} != "
-            f"required {model_input.expected_integrity_sha256}"
+            f"{model_input.name}: artifact SHA-256 {artifact['whole_file_sha256']} != "
+            f"pinned {model_input.expected_whole_file_sha256}"
         )
-    pinned_files = trace_files(model_input.name, model_input.trace_dir)
+    pinned_files, trace_population_sha256 = trace_files(
+        model_input.name, model_input.trace_dir, model_input.expected_trace_population_sha256
+    )
     counts = {reason: 0 for reason in REFUSAL_REASONS}
     witnesses: list[dict[str, Any]] = []
     total_calls = 0
@@ -652,12 +642,6 @@ def measure_model(model_input: ModelInput) -> dict[str, Any]:
     if peak is None and accepted:
         raise AssertionError("accepted population has no peak")
 
-    trace_population_digest = hashlib.sha256()
-    for path, digest in pinned_files:
-        trace_population_digest.update(path.name.encode("utf-8"))
-        trace_population_digest.update(b"\x00")
-        trace_population_digest.update(bytes.fromhex(digest))
-
     return {
         "model": model_input.name,
         "status": "MEASURED",
@@ -666,7 +650,7 @@ def measure_model(model_input: ModelInput) -> dict[str, Any]:
             "path": str(model_input.trace_dir.resolve()),
             "file_count": len(pinned_files),
             "files": {path.name: digest for path, digest in pinned_files},
-            "manifest_sha256": trace_population_digest.hexdigest(),
+            "manifest_sha256": trace_population_sha256,
         },
         "residual_site_constant_count": len(residual_constants),
         "residual_site_constants": residual_constants,
@@ -686,7 +670,7 @@ def measure_model(model_input: ModelInput) -> dict[str, Any]:
             "captured_residual_calls_reconstructed_exactly": total_calls,
             "captured_residual_elements_reconstructed_exactly": validated_elements,
             "checks_per_call": [
-                "captured pre-T-2704 wide row",
+                "captured selected-grid wide row",
                 "D'",
                 "normalized denominator and shift",
                 "C19 reciprocal",
@@ -705,11 +689,15 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path(r"D:\_t2703fid\resadd\qwen3\engine"),
     )
+    parser.add_argument("--qwen3-artifact-sha256", required=True)
+    parser.add_argument("--qwen3-trace-population-sha256", required=True)
     parser.add_argument(
         "--qwen3-artifact",
         type=Path,
         default=Path(r"D:\_t2703conv\flow-final\qwen3-embedding-0.6b-1p5.sslm"),
     )
+    parser.add_argument("--qwen2p5-artifact-sha256", required=True)
+    parser.add_argument("--qwen2p5-trace-population-sha256", required=True)
     parser.add_argument(
         "--qwen2p5-traces",
         type=Path,
@@ -731,9 +719,13 @@ def main() -> int:
             "qwen3",
             args.qwen3_traces,
             args.qwen3_artifact,
-            "f0248cf757d94808ec146cf07379e9d5dfb2de3ef99e876b99f7a1cfca9b3497",
+            args.qwen3_artifact_sha256,
+            args.qwen3_trace_population_sha256,
         ),
-        "qwen2p5": ModelInput("qwen2p5", args.qwen2p5_traces, args.qwen2p5_artifact),
+        "qwen2p5": ModelInput(
+            "qwen2p5", args.qwen2p5_traces, args.qwen2p5_artifact,
+            args.qwen2p5_artifact_sha256, args.qwen2p5_trace_population_sha256,
+        ),
     }
     selected = ("qwen3", "qwen2p5") if args.model == "both" else (args.model,)
     result = {
@@ -743,6 +735,7 @@ def main() -> int:
     }
     encoded = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(encoded, encoding="utf-8")
     sys.stdout.write(encoded)
     return 0
