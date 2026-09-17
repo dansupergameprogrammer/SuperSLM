@@ -498,18 +498,26 @@ the bump follows the "new required section" rule. v1 and v2 artifacts are theref
 incompatible by the version check: a v2 loader rejects a v1 artifact (missing the required table),
 and a v1 loader rejects a v2 artifact — a rejection with a diagnostic, never a silent degrade.
 
-**The `flags` field is a reserved-bit mechanism for optional, backward-compatible
-additions — distinct from `format_version`.** A version bump is for a field-layout
-change, a new required section, or an integrity-hash change; `flags` is for a
-capability that is optional (an old loader keeps working, unmodified, on an artifact
-that does not set the bit). A capability may require its own flag-gated section; container
-layout, `CFG1`, and integrity construction remain version-owned. The loader accepts
-`flags` values that set only known bits and rejects (`BadHeader`) any unknown bit, so
-a future artifact carrying a capability an older loader does not recognize is refused
-rather than silently mis-loaded. Every artifact produced before a given bit existed has
-that bit clear, which every loader — before and after the bit's own introduction —
-accepts identically; introducing a new flag bit changes no existing artifact's bytes,
-loadability, or computed output.
+**The `flags` field is a reserved-bit mechanism for optional capabilities and corrected
+semantic contracts — distinct from `format_version`.** A version bump is for a field-layout
+change, a new required section, or an integrity-hash change; `flags` identifies a capability
+whose container layout, `CFG1`, and integrity construction remain version-owned. The loader
+accepts `flags` values that set only known bits and rejects (`BadHeader`) any unknown bit, so
+a future artifact carrying a capability an older loader does not recognize is refused rather
+than silently mis-loaded.
+
+An **optional capability** preserves the ordinary backward-compatibility rule: an old loader
+keeps working, unmodified, on an artifact that does not set the bit. A capability may require
+its own flag-gated section. Every artifact produced before that optional bit existed has the bit
+clear and remains accepted identically; allocating the optional bit changes no existing
+artifact's bytes, loadability, or computed output.
+
+A **corrected semantic contract** marks artifacts carrying a named tensor family whose legacy
+interpretation is unsafe. Its bit-clear legacy artifacts are refused after the loader identifies
+that content; they are never silently loaded under the retired interpretation. QKC1 is this kind
+of capability: bit 2 (`kQkNormFusedKChannelTableFlag`) requires `QkChannelTable`, and a bit-clear
+artifact carrying QK-norm tensors is rejected with `LegacyQkNormArtifactUnsupported`. Reconvert
+the artifact from its source checkpoint to emit QKC1 before loading it.
 
 **Bit allocation table — ADDED 2026-08-20 (T-2199 fold 23,
 `Claude/Plans/superslm-1p2-fsd-plan-2026-08-19.md` §3 in the SuperSLM-Wizard records repo),
@@ -522,7 +530,7 @@ bit is now a recorded fact here, not something a reader has to reconstruct from 
 |---|---|---|---|---|
 | 0 | `0x1` | `kOptionGFusedKLandingFlag` — Option-G fused post-RoPE K landing | 2 | `D-SLM2355` |
 | 1 | `0x2` | `kDampedGreedyArtifactConstantsFlag` — damped greedy anti-repetition decoding's carried scale constants (`SslmSectionType::DampedGreedyConstants`) | 2 | `D-SLM3794` |
-| 2 | `0x4` | `kQkNormFusedKChannelTableFlag` — requires `SslmSectionType::QkChannelTable` (`QKC1`, four dense Int64 vectors) | 2 | `D-SLM7036` |
+| 2 | `0x4` | `kQkNormFusedKChannelTableFlag` — corrected QK-norm semantic contract; requires `SslmSectionType::QkChannelTable` (`QKC1`, four dense Int64 vectors). A bit-clear artifact carrying QK-norm tensors is rejected with `LegacyQkNormArtifactUnsupported`; reconvert it. | 2 | `D-SLM7036` |
 | 3–30 | `0x8`–`0x40000000` | Unclaimed — available for future allocation, sequentially from bit 3 | — | — |
 | 31 | `0x80000000` | **PERMANENTLY RESERVED FOR TESTING — never allocated to a real capability.** Every "the loader rejects an unknown `flags` bit" fixture (this file's own canary, any red-suite fixture exercising the same claim) uses this bit and only this bit, so the claim under test can never collide with a real allocation growing sequentially from bit 0. Chosen at the opposite end of the 32-bit space from where real allocations grow, specifically so this class of collision cannot recur without exhausting every other bit first. | n/a | ruled at T-2199 fold 23 (plan §3, above) |
 
@@ -530,6 +538,7 @@ bit is now a recorded fact here, not something a reader has to reconstruct from 
 this ticket's bit-1 canary) is `StandardsDocument.md` §4's own "failed by search twice" shape — the
 fix is a structure a future allocation cannot miss, not a third ad-hoc bit picked without checking
 this file. **Allocating a new capability bit:** add a row above, claim the next unclaimed bit in the
-2–30 range (never bit 31), cite the ruling decision/commit, and update any `kKnownArtifactFlagsMask`-
-style constant in the same commit — this table and the code must never diverge on which bits are
-claimed.
+2–30 range (never bit 31), state whether it is optional or a corrected semantic contract and, for
+the latter, name the affected content, refusal, and remedy, cite the ruling decision/commit, and
+update any `kKnownArtifactFlagsMask`-style constant in the same commit — this table and the code
+must never diverge on which bits are claimed.
