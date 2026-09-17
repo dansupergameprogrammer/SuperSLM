@@ -36,7 +36,23 @@ def test_byte_capture_preserves_invalid_utf8_as_a_decisive_witness():
                  "invalid-byte child")
 
 
-def test_current_manifest_refuses_the_nonancestor_compiled_diagnostic_before_execution():
+def test_current_manifest_accepts_the_rebuilt_compiled_diagnostics_before_execution():
     manifest = gate.load(_MANIFEST_PATH)
-    with pytest.raises(ValueError, match="source is not an ancestor of gate HEAD"):
-        gate.validate_compiled_diagnostic_provenance(manifest, _MANIFEST_PATH)
+    records = gate.validate_compiled_diagnostic_provenance(manifest, _MANIFEST_PATH)
+    assert records == {
+        "baseline layer tracer": {
+            "path": "D:\\_t2741diag\\layer-tracer\\sslm_layer_trace.exe",
+            "source_commit": "0ad219f745687bd207aa29397b4051b879886e71",
+            "build_command": ["cmd /c tools\\build_layer_trace.bat"],
+            "sha256": "7cf58e99eb99826ed8933593c02369e26ddd8e27f041aa0cfbfa11681e60f7fc",
+        },
+        "retrieval CPU probe": {
+            "path": "D:\\_t2741diag\\retrieval-probe\\build\\Release\\t2701_cpu_forward_probe.exe",
+            "source_commit": "0ad219f745687bd207aa29397b4051b879886e71",
+            "build_command": [
+                "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe -S . -B D:/_t2741diag/retrieval-probe/build -DSUPERSLM_BUILD_GPU=ON -DBUILD_TESTING=OFF",
+                "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe --build D:/_t2741diag/retrieval-probe/build --config Release --target t2701_cpu_forward_probe",
+            ],
+            "sha256": "a8671f5f4eaae75880d12eaf033d399240c7af840f3eac052504c1c83319f763",
+        },
+    }

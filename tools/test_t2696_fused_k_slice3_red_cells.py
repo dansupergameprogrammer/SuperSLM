@@ -104,9 +104,9 @@ def test_signed_one_sparse_census_32512_expected_oracle_rows(backend, green_slic
         _red(green_slice, f"the {backend} fused-K signed-census runner")
 
 
-_T2703_QWEN3_PROVISIONAL_R5 = Path("D:/_t2703/qwen3-embedding-0.6b-provisional-r5.sslm")
-_T2703_QWEN3_PROVISIONAL_R5_SHA256 = (
-    "0d53db25017d49664f0b234515d5b4ea351d8dfce7b9a9005314141498a3ae5a"
+_T2743_QWEN3_RELEASE_1P5 = Path("D:/_t2743conv/flow-final/qwen3-embedding-0.6b-1p5.sslm")
+_T2743_QWEN3_RELEASE_1P5_SHA256 = (
+    "0be28bf42637264df85481eb925c46f674da7db97fd7601c6732881ad8f99fbf"
 )
 _T2701_PROBE = Path("out/t2701_cpu_forward_probe.exe")
 _T2701_GPU_TOKENS = Path("out/t2701_gpu_tokens.exe")
@@ -133,16 +133,16 @@ def _t2701_probe_digest(output: str, backend: str) -> str:
 
 
 def test_gpu_turing_slice7_real_prompt_logit_and_greedy_parity():
-    """Turing row: four Qwen3 prompts through provisional CPU/GPU product surfaces."""
-    for required in (_T2703_QWEN3_PROVISIONAL_R5, _T2701_PROBE, _T2701_GPU_TOKENS):
+    """Turing row: four Qwen3 prompts through release CPU/GPU product surfaces."""
+    for required in (_T2743_QWEN3_RELEASE_1P5, _T2701_PROBE, _T2701_GPU_TOKENS):
         assert required.is_file(), f"missing T-2701 Turing input: {required}"
-    assert (hashlib.sha256(_T2703_QWEN3_PROVISIONAL_R5.read_bytes()).hexdigest()
-            == _T2703_QWEN3_PROVISIONAL_R5_SHA256)
+    assert (hashlib.sha256(_T2743_QWEN3_RELEASE_1P5.read_bytes()).hexdigest()
+            == _T2743_QWEN3_RELEASE_1P5_SHA256)
     for name, tokens in _T2701_TURING_CASES:
-        cpu = _t2701_run(str(_T2701_PROBE), str(_T2703_QWEN3_PROVISIONAL_R5), tokens)
-        gpu = _t2701_run(str(_T2701_PROBE), str(_T2703_QWEN3_PROVISIONAL_R5), tokens, "--gpu")
+        cpu = _t2701_run(str(_T2701_PROBE), str(_T2743_QWEN3_RELEASE_1P5), tokens)
+        gpu = _t2701_run(str(_T2701_PROBE), str(_T2743_QWEN3_RELEASE_1P5), tokens, "--gpu")
         assert _t2701_probe_digest(cpu, "cpu") == _t2701_probe_digest(gpu, "gpu"), name
-        greedy = _t2701_run(str(_T2701_GPU_TOKENS), str(_T2703_QWEN3_PROVISIONAL_R5), tokens)
+        greedy = _t2701_run(str(_T2701_GPU_TOKENS), str(_T2743_QWEN3_RELEASE_1P5), tokens)
         assert "token_identity=PASS" in greedy, name
 
 
