@@ -28,6 +28,27 @@ def test_commission_exercises_each_provenance_refusal_and_undecodable_child(tmp_
     assert results["undecodable_child_rejection"] == 1
 
 
+def test_commission_exercises_the_exact_paired_retrieval_rule(tmp_path: Path):
+    receipt = tmp_path / "receipt.json"
+    assert gate.commission(receipt) == 0
+    report = json.loads(receipt.read_text(encoding="utf-8"))
+    results = report["results"]
+    assert all(results[name] == 0 for name in (
+        "retrieval_observed_19_11", "retrieval_boundary_accept_19_11", "retrieval_zero_discordant",
+    ))
+    assert all(results[name] == 1 for name in (
+        "retrieval_worse_25_5", "retrieval_boundary_reject_20_10", "retrieval_missing_b",
+        "retrieval_missing_c", "retrieval_malformed_paired_count", "retrieval_float_anchor_outside",
+    ))
+    assert report["observed_retrieval_significance"] == {
+        "b": 19,
+        "c": 11,
+        "discordant_total": 30,
+        "one_sided_exact_p": 107636402 / 1073741824,
+        "one_sided_exact_p_fraction": "107636402/1073741824",
+    }
+
+
 def test_byte_capture_preserves_invalid_utf8_as_a_decisive_witness():
     assert gate.captured_text(None) == "<not captured>"
     assert gate.captured_text(b"\x8f") == "\\x8f"

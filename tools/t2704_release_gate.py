@@ -6,6 +6,7 @@ import argparse
 import copy
 import hashlib
 import json
+import math
 import shutil
 import subprocess
 import sys
@@ -18,7 +19,8 @@ MODEL_FIDELITY_FLOORS = {
     "Qwen2.5": {"value": .938495, "strictly_greater": False},
 }
 QWEN3_FIDELITY_TARGET = .906603
-RETRIEVAL_FLOOR, RETRIEVAL_TOTAL = 148, 239
+RETRIEVAL_TOTAL = 239
+FLOAT_RETRIEVAL_ANCHOR = {146, 147}
 REQUIRED_MODELS = {"Qwen2.5", "Qwen3"}
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _GLOBAL_PROVENANCE_INPUTS = {"build.bat", "CMakeLists.txt", "tools/build_layer_trace.bat"}
@@ -115,25 +117,56 @@ def grade_fidelity(rows: list[dict[str, Any]]) -> dict[str, float]:
     return found
 
 
-def grade_retrieval(result: dict[str, Any]) -> tuple[int, int]:
-    """Grade the parsed candidate retrieval count produced by the diagnostic."""
+def one_sided_mcnemar_worse_p(b: int, c: int) -> tuple[int, int]:
+    """Return exact P(X >= b | X ~ Binomial(b + c, 1/2))."""
+    discordant_total = b + c
+    if discordant_total == 0:
+        return 1, 1
+    return sum(math.comb(discordant_total, count) for count in range(b, discordant_total + 1)), 1 << discordant_total
+
+
+def grade_retrieval(result: dict[str, Any]) -> dict[str, Any]:
+    """Grade paired candidate/float retrieval correctness on corpus-239."""
     if not isinstance(result, dict):
-        reject("retrieval report has malformed candidate count")
+        reject("retrieval report has malformed candidate/float counts")
     correct, total = result.get("retrieval_correct"), result.get("retrieval_total")
+    float_correct, float_total = result.get("float_correct"), result.get("float_total")
+    b, c = result.get("engine_wrong_float_correct"), result.get("engine_correct_float_wrong")
     if (
         not isinstance(correct, int)
         or isinstance(correct, bool)
         or not isinstance(total, int)
         or isinstance(total, bool)
+        or not isinstance(float_correct, int)
+        or isinstance(float_correct, bool)
+        or not isinstance(float_total, int)
+        or isinstance(float_total, bool)
+        or not isinstance(b, int)
+        or isinstance(b, bool)
+        or not isinstance(c, int)
+        or isinstance(c, bool)
     ):
-        reject("retrieval report has malformed candidate count")
-    if total != RETRIEVAL_TOTAL:
-        reject(f"retrieval report total {total} != {RETRIEVAL_TOTAL}")
-    if correct > total:
-        reject(f"retrieval correct {correct} exceeds total {total}")
-    if correct < RETRIEVAL_FLOOR:
-        reject(f"retrieval {correct}/{total} < {RETRIEVAL_FLOOR}/{RETRIEVAL_TOTAL}")
-    return correct, total
+        reject("retrieval report has malformed candidate/float or paired count")
+    if total != RETRIEVAL_TOTAL or float_total != RETRIEVAL_TOTAL:
+        reject(f"retrieval report totals must both equal {RETRIEVAL_TOTAL}: candidate={total}, float={float_total}")
+    if not 0 <= correct <= total or not 0 <= float_correct <= float_total:
+        reject(f"retrieval report has out-of-range correctness count: candidate={correct}/{total}, float={float_correct}/{float_total}")
+    if float_correct not in FLOAT_RETRIEVAL_ANCHOR:
+        reject(f"retrieval float anchor {float_correct}/{float_total} is outside 146-147/{RETRIEVAL_TOTAL}")
+    if b < 0 or c < 0 or b + c > total or correct - float_correct != c - b:
+        reject(f"retrieval report has malformed paired counts: b={b}, c={c}, candidate={correct}, float={float_correct}")
+    numerator, denominator = one_sided_mcnemar_worse_p(b, c)
+    significance = {
+        "b": b,
+        "c": c,
+        "discordant_total": b + c,
+        "one_sided_exact_p": numerator / denominator,
+        "one_sided_exact_p_fraction": f"{numerator}/{denominator}",
+    }
+    if numerator * 20 < denominator:
+        reject("retrieval candidate significantly worse than float: "
+               f"b={b}, c={c}, p={significance['one_sided_exact_p_fraction']} ({significance['one_sided_exact_p']:.12g})")
+    return significance
 
 
 def grade_replay(report: dict[str, Any], model_sha256: dict[str, str]) -> None:
@@ -385,11 +418,28 @@ def run_retrieval(config: dict[str, Any], models: dict[str, dict[str, Any]], wor
     for command in commands:
         run(command, f"retrieval {command[2]}")
     summary = load(output / "retrieval-summary.json")
-    row = summary.get("arms", {}).get("candidate", {}).get("class_match_at_1", {})
-    correct, total = row.get("count"), row.get("total")
-    if summary.get("provenance", {}).get("candidate_artifact_sha256") != models["Qwen3"]["sha256"]:
+    if not isinstance(summary, dict):
+        reject("retrieval summary is malformed")
+    arms, comparisons, provenance = summary.get("arms"), summary.get("paired_comparisons"), summary.get("provenance")
+    if not isinstance(arms, dict) or not isinstance(comparisons, dict) or not isinstance(provenance, dict):
+        reject("retrieval summary has malformed arms, paired comparisons, or provenance")
+    candidate_arm, float_arm = arms.get("candidate"), arms.get("float")
+    paired = comparisons.get("candidate_vs_float")
+    if not isinstance(candidate_arm, dict) or not isinstance(float_arm, dict) or not isinstance(paired, dict):
+        reject("retrieval summary has missing or malformed candidate/float paired results")
+    candidate_row, float_row = candidate_arm.get("class_match_at_1"), float_arm.get("class_match_at_1")
+    if not isinstance(candidate_row, dict) or not isinstance(float_row, dict):
+        reject("retrieval summary has missing or malformed class-match counts")
+    correct, total = candidate_row.get("count"), candidate_row.get("total")
+    if provenance.get("candidate_artifact_sha256") != models["Qwen3"]["sha256"]:
         reject("retrieval candidate result is not bound to the pinned Qwen3 artifact")
-    return {"model": config["model"], "retrieval_correct": correct, "retrieval_total": total, "commands": commands, "summary": summary}
+    return {
+        "model": config["model"], "retrieval_correct": correct, "retrieval_total": total,
+        "float_correct": float_row.get("count"), "float_total": float_row.get("total"),
+        "engine_wrong_float_correct": paired.get("engine_wrong_float_correct"),
+        "engine_correct_float_wrong": paired.get("engine_correct_float_wrong"),
+        "commands": commands, "summary": summary,
+    }
 
 
 def run_replay(config: dict[str, Any], models: dict[str, dict[str, Any]], work: Path) -> dict[str, Any]:
@@ -423,7 +473,7 @@ def gate(manifest_path: Path, report_path: Path) -> dict[str, Any]:
     fidelity_rows = run_fidelity(diagnostics.get("fidelity", {}), models, work)
     fidelity = grade_fidelity(fidelity_rows)
     retrieval = run_retrieval(diagnostics.get("retrieval", {}), models, work)
-    grade_retrieval(retrieval)
+    retrieval["candidate_vs_float"] = grade_retrieval(retrieval)
     replay = run_replay(diagnostics.get("replay", {}), models, work)
     grade_replay(replay["report"], {name: value["sha256"] for name, value in models.items()})
     result: dict[str, Any] = {"manifest_sha256": sha256(manifest_path), "identities": identities,
@@ -450,7 +500,11 @@ def commission(receipt: Path) -> int:
         validate_identities(load(manifest), manifest)
         healthy_fidelity = [{"model": "Qwen3", "final_norm_fidelity": .85},
                             {"model": "Qwen2.5", "final_norm_fidelity": .94}]
-        healthy_retrieval = {"retrieval_correct": 148, "retrieval_total": 239}
+        healthy_retrieval = {
+            "retrieval_correct": 139, "retrieval_total": 239,
+            "float_correct": 147, "float_total": 239,
+            "engine_wrong_float_correct": 19, "engine_correct_float_wrong": 11,
+        }
         healthy_replay = {"models": {
             "qwen3": {"status": "MEASURED", "artifact": {"whole_file_sha256": model_sha256["Qwen3"]}, "refusals": {}},
             "qwen2p5": {"status": "MEASURED", "artifact": {"whole_file_sha256": model_sha256["Qwen2.5"]}, "refusals": {}},
@@ -480,17 +534,35 @@ def commission(receipt: Path) -> int:
         if fidelity_from_loss(.199377) != .800623:
             return 2
         results, healthy_qwen3_target = {}, None
+        def retrieval_with(**updates: Any) -> dict[str, Any]:
+            result = dict(healthy_retrieval)
+            result.update(updates)
+            return result
+
+        def retrieval_without(key: str) -> dict[str, Any]:
+            result = dict(healthy_retrieval)
+            result.pop(key)
+            return result
+
         cases = {
             "healthy_qwen3_shortfall": lambda: grade_all(healthy_fidelity, healthy_retrieval, healthy_replay),
             "qwen3_not_improved": lambda: grade_all([{"model": "Qwen3", "final_norm_fidelity": .800623}, {"model": "Qwen2.5", "final_norm_fidelity": .94}], healthy_retrieval, healthy_replay),
             "qwen25_regression": lambda: grade_all([{"model": "Qwen3", "final_norm_fidelity": .85}, {"model": "Qwen2.5", "final_norm_fidelity": .938494}], healthy_retrieval, healthy_replay),
-            "retrieval_147_239": lambda: grade_all(healthy_fidelity, {"retrieval_correct": 147, "retrieval_total": 239}, healthy_replay),
+            "retrieval_observed_19_11": lambda: grade_all(healthy_fidelity, healthy_retrieval, healthy_replay),
+            "retrieval_worse_25_5": lambda: grade_all(healthy_fidelity, retrieval_with(retrieval_correct=127, engine_wrong_float_correct=25, engine_correct_float_wrong=5), healthy_replay),
+            "retrieval_boundary_reject_20_10": lambda: grade_all(healthy_fidelity, retrieval_with(retrieval_correct=137, engine_wrong_float_correct=20, engine_correct_float_wrong=10), healthy_replay),
+            "retrieval_boundary_accept_19_11": lambda: grade_all(healthy_fidelity, healthy_retrieval, healthy_replay),
+            "retrieval_zero_discordant": lambda: grade_all(healthy_fidelity, retrieval_with(retrieval_correct=147, engine_wrong_float_correct=0, engine_correct_float_wrong=0), healthy_replay),
+            "retrieval_missing_b": lambda: grade_all(healthy_fidelity, retrieval_without("engine_wrong_float_correct"), healthy_replay),
+            "retrieval_missing_c": lambda: grade_all(healthy_fidelity, retrieval_without("engine_correct_float_wrong"), healthy_replay),
+            "retrieval_malformed_paired_count": lambda: grade_all(healthy_fidelity, retrieval_with(engine_wrong_float_correct=True), healthy_replay),
+            "retrieval_float_anchor_outside": lambda: grade_all(healthy_fidelity, retrieval_with(float_correct=145, retrieval_correct=137, engine_wrong_float_correct=18, engine_correct_float_wrong=8), healthy_replay),
             "nonpositive_margin": lambda: grade_all(healthy_fidelity, healthy_retrieval, {**copy.deepcopy(healthy_replay), "margins": [1, 0]}),
             "omitted_qwen25": lambda: grade_all([{"model": "Qwen3", "final_norm_fidelity": .85}], healthy_retrieval, healthy_replay),
             "omitted_qwen3": lambda: grade_all([{"model": "Qwen2.5", "final_norm_fidelity": .94}], healthy_retrieval, healthy_replay),
             "fidelity_outside_unit_interval": lambda: grade_all([{"model": "Qwen3", "final_norm_fidelity": 2.0}, {"model": "Qwen2.5", "final_norm_fidelity": .94}], healthy_retrieval, healthy_replay),
-            "retrieval_correct_above_total": lambda: grade_all(healthy_fidelity, {"retrieval_correct": 240, "retrieval_total": 239}, healthy_replay),
-            "retrieval_total_not_239": lambda: grade_all(healthy_fidelity, {"retrieval_correct": 148, "retrieval_total": 238}, healthy_replay),
+            "retrieval_correct_above_total": lambda: grade_all(healthy_fidelity, retrieval_with(retrieval_correct=240), healthy_replay),
+            "retrieval_total_not_239": lambda: grade_all(healthy_fidelity, retrieval_with(retrieval_total=238), healthy_replay),
             "replay_missing_qwen3": lambda: grade_all(healthy_fidelity, healthy_retrieval, {"models": {"qwen2p5": healthy_replay["models"]["qwen2p5"]}, "margins": [1, 9]}),
             "replay_missing_qwen2p5": lambda: grade_all(healthy_fidelity, healthy_retrieval, {"models": {"qwen3": healthy_replay["models"]["qwen3"]}, "margins": [1, 9]}),
         }
@@ -504,7 +576,14 @@ def commission(receipt: Path) -> int:
                 code = 0
             except ValueError: code = 1
             results[name] = code
-            if code != (0 if name == "healthy_qwen3_shortfall" else 1): return 2
+            if code != (0 if name in {"healthy_qwen3_shortfall", "retrieval_observed_19_11", "retrieval_boundary_accept_19_11", "retrieval_zero_discordant"} else 1): return 2
+        observed_retrieval = grade_retrieval(healthy_retrieval)
+        if observed_retrieval != {
+            "b": 19, "c": 11, "discordant_total": 30,
+            "one_sided_exact_p": 107636402 / 1073741824,
+            "one_sided_exact_p_fraction": "107636402/1073741824",
+        }:
+            return 2
         corpus.write_text("changed\n", encoding="utf-8")
         try: validate_identities(load(manifest), manifest); results["changed_identity"] = 0
         except ValueError: results["changed_identity"] = 1
@@ -535,6 +614,7 @@ def commission(receipt: Path) -> int:
         receipt.parent.mkdir(parents=True, exist_ok=True)
         receipt.write_text(json.dumps({"id": "T-2734-release-gate", "instrument_sha256": sha256(Path(__file__)), "results": results,
                                       "healthy_qwen3_target": healthy_qwen3_target,
+                                      "observed_retrieval_significance": observed_retrieval,
                                       "status": "grading commissioned in-process; production route commissioned on real data"}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return 0
 
