@@ -27,7 +27,7 @@
     {"name": "retrieval provisional control", "path": "D:/_t2703/qwen3-embedding-0.6b-provisional-r5.sslm", "sha256": "0d53db25017d49664f0b234515d5b4ea351d8dfce7b9a9005314141498a3ae5a"},
     {"name": "fidelity diagnostic", "path": "tools/t2703_fidelity_localization.py", "sha256": "e4006220b0b6908fd83522769ab418b33743674a8402b3676a69c55af2e8eb73"},
     {"name": "retrieval diagnostic", "path": "tools/t2703_retrieval_measure.py", "sha256": "a1480be1dcecd57bfe77dfea12fe2baab64016ee47c2b4a2d9f54bc291771f2e"},
-    {"name": "two-model replay diagnostic", "path": "tools/t2723_t2704_production_refusal_replay.py", "sha256": "096f2436c08bb49bfb888069b0ac6c4390d8fe45fe90a22d1958812033f1f3f4"}
+    {"name": "two-model replay diagnostic", "path": "tools/t2723_t2704_production_refusal_replay.py", "sha256": "1fc935e80d7269bc7e073b516643520c8923155dfb7f3cdfe7a6752a19f15e18"}
   ],
   "compiled_diagnostics": [
     {
