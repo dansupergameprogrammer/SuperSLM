@@ -838,6 +838,12 @@ if(TARGET superslm_gpu)
 	)
 endif()
 
+# T-2776: this standalone GPU-capable diagnostic directly compiles the GPU
+# implementation, so it must stage the same shader payload as superslm_gpu.
+if(TARGET t2776_batched_embed_driver AND TARGET superslm_gpu_shaders)
+	add_dependencies(t2776_batched_embed_driver superslm_gpu_shaders)
+endif()
+
 # T-2150 (D-SLM3423 scrub gate, P2-8): gpu_1p0_bench_bridge.h is a build-seat-only bench
 # accessor header (its own banner: "NOT part of the shipped 1.0 API surface"; its only
 # intended includers are tools/t2113_b3_sequence_smoke.cpp and the other in-tree diagnostic/
