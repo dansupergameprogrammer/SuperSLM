@@ -1319,7 +1319,7 @@ ExactPair DeriveHeadCarried(ExactBinaryScale head_max) {
 	return ExactPair{static_cast<int64_t>(mantissa), exponent};
 }
 
-// D-SLM7036's corrected-semantic-contract QKC1 gate. This gate owns bit/table/tensor
+// D-SLM7036's additive QKC1 contract. This gate owns bit/table/tensor
 // geometry, source finiteness, and individual field domains. The exact
 // source-to-derived relations are checked immediately after the composition
 // domain gate by ValidateQkChannelScaleRelations, before marshal can see a

@@ -58,6 +58,12 @@ def test_byte_capture_preserves_invalid_utf8_as_a_decisive_witness():
 
 
 def test_current_manifest_accepts_the_rebuilt_compiled_diagnostics_before_execution():
+    # Dev-box compiled diagnostics: present on the release machine, absent on CI runners. Skip rather than
+    # fail when any is missing; when all are present, the check runs unchanged.
+    for required in (Path("D:/_t2748diag/layer-tracer/sslm_layer_trace.exe"),
+                     Path("D:/_t2748diag/retrieval-probe/build/Release/t2701_cpu_forward_probe.exe")):
+        if not required.is_file():
+            pytest.skip(f"dev-box diagnostic absent: {required}")
     manifest = gate.load(_MANIFEST_PATH)
     records = gate.validate_compiled_diagnostic_provenance(manifest, _MANIFEST_PATH)
     assert records == {

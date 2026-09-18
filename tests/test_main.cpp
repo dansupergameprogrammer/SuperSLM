@@ -27430,6 +27430,10 @@ static void TestT2568_S2_GpuKvSaturationCountMatchesCpuOnQkNormWiringFixture() {
 	          static_cast<unsigned long long>(gpu_count), static_cast<unsigned long long>(cpu_count));
 }
 
+#endif  // _WIN32 -- T-2572's three cells below are CPU-only and must build and run everywhere;
+        // they sat inside this Windows-only block while main() called them unconditionally,
+        // which broke every non-Windows build of superslm_tests (the 1.4.0 CI red).
+
 // ==============================================================================
 // T-2572 (D-SLM6263, external review `Claude/External/superslm-1p4p0-2026-09-02.md`
 // Significant 1): RopeApplySite's own [-127,127] clamp gains a saturation counter, threaded
@@ -27814,6 +27818,8 @@ static void TestT2572_M2_MarshalLayerAcceptsArmCsNonQkNormOutput() {
 		          l);
 	}
 }
+
+#ifdef _WIN32  // resumes the Windows/D3D12 block closed above T-2572
 
 // (D-SLM6263, T-2575/D-SLM6269, closed by T-2576/D-SLM6271): the synthetic,
 // degenerate-geometry (hidden_size=2, one head, one KV head, head_dim=2, one RoPE pair)
@@ -28845,7 +28851,9 @@ int main(int argc, char** argv) {
 	// test in this file touches all fourteen composed-pipeline shader names on its own first
 	// GPU call, which would make this cell vacuous (`RunLayerLoopGpu` would return `Ok` from
 	// the warm cache, never re-checking the now-stale binary) if it ran anywhere but first.
+#ifdef _WIN32
 	TestT2577_S2_AStaleShaderOnTheRealDispatchPathReturnsTheNamedStatus();
+#endif  // _WIN32
 
 	TestSha256KnownVectors();
 	TestDtypeSizes();
