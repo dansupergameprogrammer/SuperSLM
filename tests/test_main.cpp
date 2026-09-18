@@ -13356,9 +13356,17 @@ static void CheckT2704FineStreamRejectsThenCoarseCommits(
 		                                                fine_reciprocal.r, branch_scale.e,
 		                                                stream_scale.e, nullptr, &exceeded, nullptr,
 		                                                fine_reciprocal.s);
-		fine_magnitude_rejected = fine_magnitude_rejected || exceeded ||
-		                          (stream_scale.m < 0 && landed == INT64_MIN);
-		fine_wide[i] = static_cast<int64_t>(stream_code[i]) + landed;
+		// Mirror ResidualReconcileSite's own guards: an element the site refuses is never summed, and
+		// an int64 overflow in the sum is a refusal -- computing it anyway is signed-overflow UB
+		// (caught by UBSan: INT64_MIN + -1 on the rejected-magnitude witness).
+		const int64_t direct = static_cast<int64_t>(stream_code[i]);
+		if (exceeded || (stream_scale.m < 0 && landed == INT64_MIN) ||
+		    (landed > 0 && direct > INT64_MAX - landed) || (landed < 0 && direct < INT64_MIN - landed)) {
+			fine_magnitude_rejected = true;
+			fine_wide[i] = 0;
+			continue;
+		}
+		fine_wide[i] = direct + landed;
 	}
 	const CarriedScale fine_incoming[] = {stream_scale};
 	const SslmForwardStatus observed_fine = fine_magnitude_rejected
@@ -17475,6 +17483,7 @@ static void TestT2703_F3_QkNormLandingMagnitudeRefusesBeforeCpuKWrite() {
 	          k_row[0], k_row[1], sentinel[0], sentinel[1]);
 }
 
+#ifdef _WIN32  // D3D12 cell; its only call in main() is inside the same guard
 // The GPU's corresponding public path packs and dispatches the same witness.
 // Its sticky tag must decode to the CPU's named refusal; the direct CPU cell
 // above owns the more precise no-pair-write observation.
@@ -17504,6 +17513,7 @@ static void TestT2703_F3_QkNormLandingMagnitudeGpuMatchesCpuStatus() {
 	          "QkNormFusedLandingMagnitudeOutOfDomain (the CPU's exact status)",
 	          SslmForwardStatusName(status));
 }
+#endif  // _WIN32
 
 static void TestT2566_S1_RunLayerLoopWiresSaturationCounterThroughBothPaths() {
 	using superslm::CarriedScale;

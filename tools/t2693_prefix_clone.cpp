@@ -158,12 +158,21 @@ int main(int argc, char** argv) {
 	              snapshot_digest.c_str(), snapshot.size(), prefix_seconds, suffixes.size(), suffix_seconds,
 	              suffix_seconds / static_cast<double>(suffixes.size()));
 	std::printf("%s", report);
-	char* report_path = nullptr;
+	// _dupenv_s is MSVC-only; std::getenv is portable but MSVC flags it as unsafe (C4996).
+	std::string report_path;
+#ifdef _MSC_VER
+	char* report_path_raw = nullptr;
 	size_t report_path_length = 0;
-	if (_dupenv_s(&report_path, &report_path_length, "T2693_PREFIX_CLONE_REPORT") == 0 && report_path) {
+	if (_dupenv_s(&report_path_raw, &report_path_length, "T2693_PREFIX_CLONE_REPORT") == 0 && report_path_raw) {
+		report_path = report_path_raw;
+	}
+	std::free(report_path_raw);
+#else
+	if (const char* env = std::getenv("T2693_PREFIX_CLONE_REPORT")) report_path = env;
+#endif
+	if (!report_path.empty()) {
 		std::ofstream output(report_path, std::ios::binary);
 		output << report;
-		std::free(report_path);
 		if (!output) {
 			std::fprintf(stderr, "failed to write T2693_PREFIX_CLONE_REPORT\n");
 			return 1;
