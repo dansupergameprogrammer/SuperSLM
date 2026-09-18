@@ -156,6 +156,19 @@ if(WIN32)
 	else()
 		target_compile_options(t2776_batched_embed_driver PRIVATE -Wall -Wextra -ffp-contract=off)
 	endif()
+
+	# T-2781: independent, one-text final-hidden probe for the v1.4 GPU
+	# identity cell. It uses the product layer loop directly rather than the
+	# batch driver's row reader/output loop.
+	add_executable(t2781_per_text_probe tools/t2781_per_text_probe.cpp)
+	target_link_libraries(t2781_per_text_probe PRIVATE superslm d3d12 dxgi dxguid)
+	target_sources(t2781_per_text_probe PRIVATE src/gpu/superslm_gpu.cpp src/gpu/gpu_1p0.cpp)
+	target_include_directories(t2781_per_text_probe PRIVATE tools src/gpu)
+	if(MSVC)
+		target_compile_options(t2781_per_text_probe PRIVATE /W4 /fp:precise)
+	else()
+		target_compile_options(t2781_per_text_probe PRIVATE -Wall -Wextra -ffp-contract=off)
+	endif()
 endif()
 
 # T-2046 (design §24.2 D-SLM3162, closing Poirot c81e48c review Significant 6): dumps an adapter
@@ -810,6 +823,9 @@ endif()
 # implementation, so it must stage the same shader payload as superslm_gpu.
 if(TARGET t2776_batched_embed_driver AND TARGET superslm_gpu_shaders)
 	add_dependencies(t2776_batched_embed_driver superslm_gpu_shaders)
+endif()
+if(TARGET t2781_per_text_probe AND TARGET superslm_gpu_shaders)
+	add_dependencies(t2781_per_text_probe superslm_gpu_shaders)
 endif()
 
 # T-2150 (D-SLM3423 scrub gate, P2-8): gpu_1p0_bench_bridge.h is a build-seat-only bench
