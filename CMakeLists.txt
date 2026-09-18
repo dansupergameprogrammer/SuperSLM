@@ -183,12 +183,16 @@ if(WIN32 AND (SUPERSLM_BUILD_GPU OR BUILD_TESTING))
 endif()
 
 # T-2700 step 0: the independent Python oracle drives these compiled forced tiers.
-add_executable(t2700_fused_k_oracle_sse2_forced tools/t2700_fused_k_oracle.cpp)
-target_link_libraries(t2700_fused_k_oracle_sse2_forced PRIVATE superslm_sse2_forced)
-add_executable(t2700_fused_k_oracle_avx2_forced tools/t2700_fused_k_oracle.cpp)
-target_link_libraries(t2700_fused_k_oracle_avx2_forced PRIVATE superslm_avx2_forced)
-add_executable(t2700_fused_k_oracle_avx512_forced tools/t2700_fused_k_oracle.cpp)
-target_link_libraries(t2700_fused_k_oracle_avx512_forced PRIVATE superslm_avx512_forced)
+# The forced tiers are x86-64 SIMD (matmul.cpp #errors on any other target), so these
+# default-build executables exist only on x86-64 -- on arm64 they broke the macOS build.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|x64|X64)$")
+	add_executable(t2700_fused_k_oracle_sse2_forced tools/t2700_fused_k_oracle.cpp)
+	target_link_libraries(t2700_fused_k_oracle_sse2_forced PRIVATE superslm_sse2_forced)
+	add_executable(t2700_fused_k_oracle_avx2_forced tools/t2700_fused_k_oracle.cpp)
+	target_link_libraries(t2700_fused_k_oracle_avx2_forced PRIVATE superslm_avx2_forced)
+	add_executable(t2700_fused_k_oracle_avx512_forced tools/t2700_fused_k_oracle.cpp)
+	target_link_libraries(t2700_fused_k_oracle_avx512_forced PRIVATE superslm_avx512_forced)
+endif()
 
 # T-2046 (design §24.2 D-SLM3162, closing Poirot c81e48c review Significant 6): dumps an adapter
 # artifact's DeltaFoldScales/UFoldScales/Weights sections, loaded through the REAL B0b typed path,
