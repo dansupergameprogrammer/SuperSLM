@@ -151,6 +151,12 @@ enum class SslmForwardStatus {
 	                                          // `out_saturation_count`/[-127,127] clamp signal, which
 	                                          // is C27's own and stays coupled to that caller's clamp
 	                                          // range.
+	ResidualReconciliationScaleOutOfDomain,  // T-2704: either residual operand
+	                                          // has a zero mantissa.  A zero scale
+	                                          // has no physical grid to select, so
+	                                          // the residual site refuses before a
+	                                          // reciprocal, landing, funnel, or
+	                                          // caller-visible write.
 	// --- Poirot cd2e75a-t1585-t1587-t1588-confirmation-2026-07-31.md ---
 	InvalidHiddenCodes,                       // RunLayerLoop's `seq.hidden_codes == nullptr`
 	                                          // -- a caller-restored `SequenceLayerState` carries no
@@ -433,6 +439,16 @@ struct ChainResult {
 // canonical: no, unguarded by this door itself; guarded only by whatever the
 // caller does with it downstream.**
 int64_t CarriedScaleReciprocal(int64_t m);
+
+// T-2704's residual-grid door.  `magnitude` is the unsigned magnitude of the
+// selected signed scale and must be in [1, 2^31].  The door owns the required
+// normalization before opening C19 and returns both the positive reciprocal
+// and the normalization shift consumed by LandingRescale.
+struct CarriedScaleNormalizedReciprocalResult {
+	int64_t r = 0;
+	int64_t s = 0;
+};
+CarriedScaleNormalizedReciprocalResult CarriedScaleNormalizedReciprocal(uint64_t magnitude);
 
 // §4.3: the second door this design opens, onto C26's own carried-scale
 // combine step (`carried_scale_product` of exactly two factors). `CombineCarriedScale`

@@ -57,8 +57,8 @@ void main(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID) {
         int64_t rx, ry; int c = (int)RopeCosTable.Load<int64_t>((row_offset + p) * 8u), s = (int)RopeSinTable.Load<int64_t>((row_offset + p) * 8u);
         if (!RopeApplyPairWideGpu(WorkScratch.Load<int64_t>(wide_base + 2u * p * 8u), WorkScratch.Load<int64_t>(wide_base + (2u * p + 1u) * 8u), c, s, rx, ry)) { if (t == 0) SeqState.Store<int64_t>(sticky_off, kTagChainInputOutOfDomain); return; }
         bool clamp0, mag0, clamp1, mag1;
-        int64_t raw0 = LandingRescaleGpu(rx, wide_m, LayerWeights.Load<int64_t>(qkc_base + 2u * p * 8u), wide_e, LayerWeights.Load<int64_t>(qkc_base + qkc_block + 2u * p * 8u), clamp0, mag0);
-        int64_t raw1 = LandingRescaleGpu(ry, wide_m, LayerWeights.Load<int64_t>(qkc_base + (2u * p + 1u) * 8u), wide_e, LayerWeights.Load<int64_t>(qkc_base + qkc_block + (2u * p + 1u) * 8u), clamp1, mag1);
+        int64_t raw0 = LandingRescaleGpu(rx, wide_m, LayerWeights.Load<int64_t>(qkc_base + 2u * p * 8u), wide_e, LayerWeights.Load<int64_t>(qkc_base + qkc_block + 2u * p * 8u), 0, clamp0, mag0);
+        int64_t raw1 = LandingRescaleGpu(ry, wide_m, LayerWeights.Load<int64_t>(qkc_base + (2u * p + 1u) * 8u), wide_e, LayerWeights.Load<int64_t>(qkc_base + qkc_block + (2u * p + 1u) * 8u), 0, clamp1, mag1);
         // Match the CPU's pair-transaction boundary.  LandingRescaleGpu can
         // return a saturated low word after a true magnitude loss; that word
         // must never reach K storage.

@@ -395,13 +395,22 @@ inline int64_t SaturatingSub64(int64_t a, int64_t b) {
 	return (a >= 0) ? INT64_MAX : INT64_MIN;
 }
 
+inline int64_t SaturatingAdd64(int64_t a, int64_t b) {
+	const uint64_t ua = static_cast<uint64_t>(a);
+	const uint64_t ub = static_cast<uint64_t>(b);
+	const int64_t out = static_cast<int64_t>(ua + ub);
+	if ((a >= 0) == (b >= 0) && (out >= 0) != (a >= 0))
+		return a >= 0 ? INT64_MAX : INT64_MIN;
+	return out;
+}
+
 // Comfortably past the 128-bit shift ceiling either branch below treats
 // specially, and comfortably inside `int`'s own range -- see the comment
 // above `SubOverflows64`.
 constexpr int64_t kComposedExponentClamp = 4096;
 
-inline int64_t ComposedExponent(int64_t e_a, int64_t e_t) {
-	const int64_t diff = SaturatingSub64(e_a, e_t);
+inline int64_t ComposedExponent(int64_t e_a, int64_t e_t, int64_t target_normalization_shift = 0) {
+	const int64_t diff = SaturatingAdd64(SaturatingSub64(e_a, e_t), target_normalization_shift);
 	int64_t k = SaturatingSub64(int64_t{62}, diff);
 	if (k > kComposedExponentClamp) k = kComposedExponentClamp;
 	if (k < -kComposedExponentClamp) k = -kComposedExponentClamp;
@@ -645,7 +654,7 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a) {
 
 int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_a, int64_t e_t,
                         uint64_t* out_saturation_count, bool* out_magnitude_exceeded_int64,
-                        uint64_t* out_site_saturation_count) {
+                        uint64_t* out_site_saturation_count, int64_t target_normalization_shift) {
 	// C27's residual_reconcile (§8.1, dynamic_engine.py-vendored formula):
 	//   round_half_away_from_zero((branch_code * m_a * r_t) / 2^(62 - (e_a - e_t)))
 	// with a negative composite exponent an EXACT left shift (no rounding).
@@ -683,7 +692,7 @@ int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_
 	// that an input which used to execute signed-overflow UB here now
 	// resolves to a clamped, defined k that reaches the same saturating
 	// path (below) an in-range but merely-large k already reaches.
-	const int64_t k = ComposedExponent(e_a, e_t);
+	const int64_t k = ComposedExponent(e_a, e_t, target_normalization_shift);
 	int64_t raw;
 	// Popper 2026-07-28 §3.2 / finding 3: neither e_t nor e_a carries a domain
 	// check anywhere in this tree, and an extreme composed exponent drives
@@ -1034,114 +1043,58 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
                                           int8_t* out_codes, CarriedScale* out_scale,
                                           std::string_view site, size_t token_index,
                                           SslmTraceHookState* trace_hook_state) {
-	// Step 0 (Poirot 76a9776-t1599, Significant 2; the claim below corrected
-	// by Poirot 8f63577-t1602, Significant 2, and T-1604): `stream_scale.m`
-	// must fit int32_t's own range before it reaches the reciprocal below --
-	// `CarriedScaleReciprocal` (checked_chain_funnel.h's own exported door,
-	// T-1357/D-SLM433) forwards straight to the funnel's own C19 leaf --
-	// deliberately unnamed here, matching this file's own convention below
-	// (§7.3's CI source check matches text, not calls) -- whose seed
-	// computation is signed-overflow UB once its operand's magnitude exceeds
-	// 2281701375 (`INT64_MAX / kC32_2`, intmath.cpp's own reciprocal seed),
-	// a bound 2^27 values per sign WIDER than int32_t's own range. This check
-	// does not track that wider UB boundary -- it enforces the funnel's own
-	// narrower int32 precondition at the door instead, the SAME test as
-	// `CarriedScaleMantissaFitsInt32` (checked_chain_funnel.cpp, TU-local),
-	// deliberately: `RequantChainChecked`'s own step-0 rejection
-	// (`CarriedScaleMantissaOutOfDomain`) runs on `incoming`/`site_constant`
-	// only AFTER this call, at step 5 (the exemption at this loop's own
-	// guard block below claims the mantissa "reaches only pure arithmetic
-	// ... confirmed at source", true of the call but not of the domain it is
-	// applied to), so this hoists that SAME funnel precondition to the door
-	// instead of leaving it to be enforced two steps later.
-	//
-	// That hoist is NOT status-neutral on the whole domain it covers.
-	// `stream_scale.m` in `(kInt32Max, 2281701375]` per sign -- 2^27 values,
-	// the gap between int32's range and the reciprocal's own UB boundary --
-	// executed no undefined behaviour before this check existed (verified
-	// under this project's own UBSan instrument at interior points) and
-	// returned whatever the loop's per-element magnitude predicate
-	// (`LandingRescale`'s `out_magnitude_exceeded_int64`, T-1377/D-SLM457) or
-	// `RequantChainChecked`'s own step 0 returned, two steps later. Poirot
-	// 8f63577-t1602 (Significant 2) swept 1,408 inputs to this exported
-	// function and measured 481 that changed returned status because of
-	// this check alone; an independently constructed 1,408-input sweep of a
-	// different shape (T-1604 build log, `Claude/Brunel/`) reproduces the
-	// same class of change (220 of 1,408 on that sweep's own grid). This
-	// check is the funnel's own precondition, returned earlier and at the
-	// door -- the better place for it to live -- not the no-op the prior
-	// version of this comment claimed.
-	if (stream_scale.m < static_cast<int64_t>(kInt32Min) ||
-	    stream_scale.m > static_cast<int64_t>(kInt32Max)) {
+	// T-2704: zero has no physical grid.  This deliberately precedes both the
+	// funnel-domain checks and every arithmetic operation, preserving outputs.
+	if (branch_scale.m == 0 || stream_scale.m == 0)
+		return SslmForwardStatus::ResidualReconciliationScaleOutOfDomain;
+	if (branch_scale.m < static_cast<int64_t>(kInt32Min) ||
+	    branch_scale.m > static_cast<int64_t>(kInt32Max) ||
+	    stream_scale.m < static_cast<int64_t>(kInt32Min) ||
+	    stream_scale.m > static_cast<int64_t>(kInt32Max))
 		return SslmForwardStatus::CarriedScaleMantissaOutOfDomain;
-	}
 
-	// C26 (§6.2 step 8 / §6.3 step 13), the header's four steps in order.
-	//
-	// Step 1: C19 over the STREAM's own mantissa, never the branch's -- the
-	// branch is what gets rescaled INTO the stream's scale, so the stream's is
-	// the target. It is taken through the funnel's own exported door
-	// (CarriedScaleReciprocal, checked_chain_funnel.h) rather than the leaf
-	// itself: §7.3's check fires on any site that names one of the eight leaves,
-	// and this was the first site that had to derive a reciprocal at runtime
-	// rather than receive one. T-1357 / D-SLM433 is the ruling, and the door is
-	// its resolution. The leaf's own name is deliberately absent from this
-	// comment too -- the check matches text, not calls, and a site has no
-	// business naming it in either.
-	const int64_t r_h = CarriedScaleReciprocal(stream_scale.m);
+	const auto magnitude = [](int64_t m) -> uint64_t {
+		return m < 0 ? ~static_cast<uint64_t>(m) + 1u : static_cast<uint64_t>(m);
+	};
+	const uint64_t branch_magnitude = magnitude(branch_scale.m);
+	const uint64_t stream_magnitude = magnitude(stream_scale.m);
+	const auto exceeds_by_31 = [](int64_t a, int64_t b) {
+		return a > b && static_cast<uint64_t>(a) - static_cast<uint64_t>(b) > 31u;
+	};
+	bool branch_selected;
+	if (exceeds_by_31(branch_scale.e, stream_scale.e)) {
+		branch_selected = false;
+	} else if (exceeds_by_31(stream_scale.e, branch_scale.e)) {
+		branch_selected = true;
+	} else {
+		const int d = static_cast<int>(branch_scale.e - stream_scale.e);
+		branch_selected = d >= 0 ? (branch_magnitude << d) < stream_magnitude
+		                         : branch_magnitude < (stream_magnitude << -d);
+	}
+	const CarriedScale selected_scale = branch_selected ? branch_scale : stream_scale;
+	const CarriedScale nonselected_scale = branch_selected ? stream_scale : branch_scale;
+	const int8_t* selected_code = branch_selected ? branch_code : stream_code;
+	const int8_t* nonselected_code = branch_selected ? stream_code : branch_code;
+	const auto reciprocal = CarriedScaleNormalizedReciprocal(magnitude(selected_scale.m));
 
 	std::vector<int64_t> wide(hidden_size);
-	// T-1377 / D-SLM457 (§7.2b, §14.14): checked across the WHOLE row before
-	// step 4's funnel call runs, on the funnel's own "reject leaves output
-	// untouched" convention -- a rejection midway through the loop must not
-	// leave `out_codes`/`*out_scale` partially written, and neither is touched
-	// by this loop regardless (only the local `wide` buffer is).
-	bool any_magnitude_out_of_domain = false;
 	for (size_t i = 0; i < hidden_size; ++i) {
-		// Step 2: the SAME primitive C27's landing composite uses, at a
-		// different call site -- there the reciprocal is the static offline
-		// one, here it is derived from the stream at runtime. Unclamped in the
-		// saturation-counting sense: T-518's counter belongs to C27's landing
-		// site, not to this one, so no counter is passed. The second,
-		// distinct out-parameter IS checked here -- this site's own derived-
-		// operand predicate (§7.2's second limb, fourth bullet).
 		bool magnitude_exceeded = false;
-		const int64_t reconciled = LandingRescale(
-		    static_cast<int64_t>(branch_code[i]), branch_scale.m, r_h, branch_scale.e,
-		    stream_scale.e, /*out_saturation_count=*/nullptr, &magnitude_exceeded);
-		if (magnitude_exceeded) {
-			// T-1382 (Poirot, `5af6ab5-t1377-t1378-review-2026-07-31.md`,
-			// Significant 3): the row is rejected below regardless, so
-			// `wide[i]` is never read -- but `reconciled` is a value this
-			// call has already declared does not fit int64, and adding to it
-			// is not a computation this site is entitled to perform (the
-			// prior "no observable effect" comment was true only in the
-			// sense that `wide` is discarded, not in the sense that the add
-			// itself is well-defined). The loop still runs every index,
-			// matching the funnel's own step-5-before-step-6 ordering (the
-			// check governs write-out, not loop completion) -- it just does
-			// not compute on an element it has already flagged.
-			any_magnitude_out_of_domain = true;
-			continue;
-		}
-		// Step 3: the wide add, both operands now nominally at the stream's
-		// own scale -- only reached for an element this call has NOT
-		// flagged. `wide` is a local buffer never exposed to the caller
-		// regardless of which branch runs.
-		wide[i] = reconciled + static_cast<int64_t>(stream_code[i]);
-	}
-	if (any_magnitude_out_of_domain) {
-		return SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain;
+		int64_t landed = LandingRescale(static_cast<int64_t>(nonselected_code[i]),
+		                                nonselected_scale.m, reciprocal.r, nonselected_scale.e,
+		                                selected_scale.e, nullptr, &magnitude_exceeded, nullptr,
+		                                reciprocal.s);
+		if (magnitude_exceeded || (selected_scale.m < 0 && landed == INT64_MIN))
+			return SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain;
+		if (selected_scale.m < 0) landed = -landed;
+		const int64_t direct = static_cast<int64_t>(selected_code[i]);
+		if ((landed > 0 && direct > INT64_MAX - landed) ||
+		    (landed < 0 && direct < INT64_MIN - landed))
+			return SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain;
+		wide[i] = direct + landed;
 	}
 
-	// Step 4: the funnel's own left-associated fold (D-SLM57). The incoming
-	// span is the stream's scale alone -- the branch's scale was already
-	// consumed by the rescale in step 2 and folding it again here would double-
-	// count it. This call IS the association-order pin at this site: a
-	// right-associated fold, or one that pre-combines stream_scale with
-	// site_constant outside the funnel, diverges from what the funnel's own
-	// proven order produces.
-	const CarriedScale incoming[1] = {stream_scale};
+	const CarriedScale incoming[1] = {selected_scale};
 	const ChainResult result = RequantChainChecked(
 	    wide.data(), hidden_size, std::span<const CarriedScale>{incoming, 1}, site_constant,
 	    out_codes, out_scale, site, token_index, trace_hook_state);

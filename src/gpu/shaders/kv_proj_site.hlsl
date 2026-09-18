@@ -196,14 +196,14 @@ void main(uint3 gtid : SV_GroupThreadID)
         int64_t vacc_i = WorkScratch.Load<int64_t>(wide_b_off + (uint)i * 8u);
 
         bool k_clamp, k_mag_exceeded;
-        int64_t k_raw = LandingRescaleGpu(kacc_i, normed_scale_m, r_t_k, normed_scale_e, e_t_k, k_clamp,
+        int64_t k_raw = LandingRescaleGpu(kacc_i, normed_scale_m, r_t_k, normed_scale_e, e_t_k, 0, k_clamp,
                                            k_mag_exceeded);
         if (k_clamp) InterlockedAdd(gTotalClamps, 1u);
         int64_t k_val = ClampRopeCodeGpu(k_raw);
         StoreSignedByteGpu(KvCache, kv_half_off + row_off + (uint)d, (int)k_val);
 
         bool v_clamp, v_mag_exceeded;
-        int64_t v_raw = LandingRescaleGpu(vacc_i, normed_scale_m, r_t_v, normed_scale_e, e_t_v, v_clamp,
+        int64_t v_raw = LandingRescaleGpu(vacc_i, normed_scale_m, r_t_v, normed_scale_e, e_t_v, 0, v_clamp,
                                            v_mag_exceeded);
         if (v_clamp) InterlockedAdd(gTotalClamps, 1u);
         int64_t v_val = ClampRopeCodeGpu(v_raw);

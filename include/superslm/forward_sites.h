@@ -249,7 +249,8 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a);
 int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_a,
                         int64_t e_t, uint64_t* out_saturation_count = nullptr,
                         bool* out_magnitude_exceeded_int64 = nullptr,
-                        uint64_t* out_site_saturation_count = nullptr);
+                        uint64_t* out_site_saturation_count = nullptr,
+                        int64_t target_normalization_shift = 0);
 
 // C33's post-rotation clamp (§5.3, §11 S3.3 §6.2 step 3): `RopeApplyPair`
 // (intmath.h) returns its rotated pair UNCLAMPED and int64-wide by its own
