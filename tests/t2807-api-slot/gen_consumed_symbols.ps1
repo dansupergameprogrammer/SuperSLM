@@ -19,7 +19,8 @@
 #   - a consumer imports an `sslm_*` name that c_abi_verbs.txt does not hold. The C part of the slot is the
 #     header's whole C surface, so an import outside it is a verb this engine does not declare, a stale
 #     consumer, or a consumer of another engine -- never something to add to the list;
-#   - a live consumer read fails any of the four criteria below (-Consumer);
+#   - a live consumer read fails any of the five criteria below (-Consumer);
+#   - a -Recorded input fails its admission (below);
 #   - -Release is given together with any -Recorded input.
 #
 # Usage:
@@ -51,17 +52,30 @@
 #        develop's, not the ones compiled), and so does naming the worktree after the restore;
 #     4. the link output is older than the last commit touching the source roots
 #        (`git log -1 --format=%ct <commit> -- <source roots>`), or older than the newest object: a build of
-#        sources committed later, or a build that failed part-way (fresh objects, no new link output).
-#   False refusals are loud and safe: a build of uncommitted edits committed afterwards trips criterion 4, and
-#   the remedy is a rebuild. Nothing is repaired by hand.
+#        sources committed later, or a build that failed part-way (fresh objects, no new link output);
+#     5. any file in <build source tree> within the source roots (exclusions applied, as for criterion 3) was
+#        modified after the link output (T-2837, the coverage audit's T-2834 F1). The documented restore of a
+#        mirrored UE build is `git checkout` and `git clean` in place, which rewrites every file that differs with
+#        the current time: naming the main checkout after that restore passes criteria 1-4 (the build source tree
+#        is then the checkout's own files, and the restore makes no commit) and fails criterion 5 alone. Not
+#        closed: a restore that keeps older modification times (robocopy /MIR back from a pristine copy).
+#   False refusals are loud and safe: a build of uncommitted edits committed afterwards trips criterion 4, a
+#   checkout, pull or branch switch after the build trips criterion 5, and the remedy for both is a rebuild.
+#   Nothing is repaired by hand.
 #
-# -Recorded '<label>|<commit>|<tsv>|<disposition>'   BETWEEN RELEASES ONLY: an earlier per-object dumpbin read,
-#   for a consumer the generator cannot read live, admitted only as a mechanical, hash-pinned conversion of a
-#   recorded census. The TSV's LAST column is an imported name and its second-to-last the object it came from;
-#   lines starting with '#' are provenance comments. The same case-sensitive filter and the same
-#   undeclared-verb refusal apply. No criterion above can be run on a recorded read, so <disposition> is
-#   mandatory: one sentence stating why no live read was possible, the census's provenance, and which live read
-#   replaces it, copied into the list's header.
+# -Recorded '<label>|<commit>|<tsv>|<disposition>|<census>'   BETWEEN RELEASES ONLY: an earlier per-object dumpbin
+#   read, for a consumer the generator cannot read live, admitted only as a mechanical, hash-pinned conversion of a
+#   recorded census (census_to_tsv.ps1). The TSV's LAST column is an imported name and its second-to-last the
+#   object it came from; lines starting with '#' are provenance comments. The same case-sensitive filter and the
+#   same undeclared-verb refusal apply. ADMISSION: the input is REFUSED, naming the check, when
+#     - <disposition> is missing, or lacks any of its three labelled parts: "why no live read:" (why no live
+#       read was possible), "provenance:" (the census's provenance) and "replaced by:" (which live read replaces
+#       it); the sentence is copied into the list's header;
+#     - the TSV has no pin in -CensusPins (default recorded\census_pins.txt), <census> does not hash to the
+#       pinned SHA-256 (the refusal names both hashes), or the TSV's header names another census hash;
+#     - the TSV's rows are not exactly the rows census_to_tsv.ps1 produces from <census> (a hand-typed row).
+#   These are the checks that keep a hand-typed list out of the build between releases; -Release keeps a
+#   recorded read out of the tag.
 #
 # -Release   the release reading (plan Sec3.5 step 5): every input must be live, and ANY -Recorded input is
 #   refused. A recorded read can reach the tag only through a run without -Release.
@@ -72,11 +86,13 @@ param(
     [string[]]$Exclude = @('SuperSLMVendored_*'),
     [string]$Out = (Join-Path $PSScriptRoot 'consumed_symbols.txt'),
     [string]$CVerbsOut = (Join-Path $PSScriptRoot 'c_abi_verbs.txt'),
+    [string]$CensusPins = (Join-Path $PSScriptRoot 'recorded\census_pins.txt'),
     [switch]$Release
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'vsenv.ps1')
 . (Join-Path $PSScriptRoot 'c_abi_verbs.ps1')
+. (Join-Path $PSScriptRoot 'census_to_tsv.ps1')
 
 function Refuse([string]$why) { Write-Output "gen_consumed_symbols: REFUSED -- $why"; exit 1 }
 if ($Release -and $Recorded.Count -gt 0) {
@@ -200,6 +216,20 @@ foreach ($spec in $Consumer) {
         Refuse ("$label : criterion 4 -- the link output $($linkItem.Name) ($($linkItem.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))) is older than the newest object " +
                 "$($newestObj.Name) ($($newestObj.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))): the build did not finish linking what it compiled")
     }
+    # Criterion 5: no file the compiler could have read was modified after the link output.
+    $buildBase = (Resolve-Path $buildTree).Path.TrimEnd('\')
+    $c5 = @()
+    foreach ($k in $buildFiles.Keys) {
+        $fi = Get-Item -LiteralPath (Join-Path $buildBase ($k -replace '/', '\'))
+        if ($fi.LastWriteTimeUtc -gt $linkItem.LastWriteTimeUtc) {
+            $c5 += "$k (modified $($fi.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss.fff')))"
+        }
+    }
+    if ($c5.Count -gt 0) {
+        Refuse ("$label : criterion 5 -- files in the build source tree $buildTree were modified after the link output $($linkItem.Name) " +
+                "($($linkItem.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss.fff'))), so the objects were not compiled from them: " +
+                (($c5 | Select-Object -First 10) -join '; ') + $(if ($c5.Count -gt 10) { " (and $($c5.Count - 10) more)" } else { '' }))
+    }
     $mine = New-Object 'System.Collections.Generic.SortedSet[string]' ([System.StringComparer]::Ordinal)
     foreach ($o in $objs) {
         $lines = & dumpbin.exe /nologo /symbols $o.FullName
@@ -214,15 +244,53 @@ foreach ($spec in $Consumer) {
     $oldest = ($objs | Sort-Object LastWriteTime | Select-Object -First 1).LastWriteTime.ToString('yyyy-MM-dd HH:mm')
     $nC = @($mine | Where-Object { $_ -cmatch '^sslm_' }).Count
     $header += "# consumer: $label @ $want -- LIVE read of $($objs.Count) objects (written $oldest .. $($newestObj.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))), $($mine.Count - $nC) C++ and $nC C engine symbols"
-    $header += "#   live-read criteria (plan Sec3.7 item 3): 1 HEAD = the named commit; 2 roots clean ($($rootSpec -join '; ')); 3 build source tree $buildTree equals the checkout over $($mineFiles.Count) files by SHA-256; 4 link output $linkOut ($($linkItem.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))) not older than the roots' last commit ($srcTimeText) nor the newest object"
+    $header += "#   live-read criteria (plan Sec3.7 item 3): 1 HEAD = the named commit; 2 roots clean ($($rootSpec -join '; ')); 3 build source tree $buildTree equals the checkout over $($mineFiles.Count) files by SHA-256; 4 link output $linkOut ($($linkItem.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))) not older than the roots' last commit ($srcTimeText) nor the newest object; 5 no build-source-tree file modified after the link output"
     foreach ($d in $dirs) { $header += "#   objects: $d (excluding $($Exclude -join ', '))" }
     Add-Consumer $label $mine
 }
+# The census pins: <tsv file name> TAB <census sha256> TAB <description>.
+$pins = @{}
+if (Test-Path $CensusPins) {
+    foreach ($l in (Get-Content -LiteralPath $CensusPins)) {
+        if ($l -match '^\s*#' -or -not $l.Trim()) { continue }
+        $f = $l -split "`t"
+        if ($f.Count -ge 2) { $pins[$f[0].Trim()] = $f[1].Trim().ToLower() }
+    }
+}
+$dispLabels = @('why no live read:', 'provenance:', 'replaced by:')
 foreach ($spec in $Recorded) {
     $parts = $spec -split '\|'
-    if ($parts.Count -ne 4 -or -not $parts[3].Trim()) { throw "bad -Recorded '$spec' (want <label>|<commit>|<tsv>|<disposition>; the disposition is mandatory)" }
-    $label = $parts[0]; $commit = $parts[1]; $tsv = $parts[2]; $disp = $parts[3].Trim()
-    if (-not (Test-Path $tsv)) { throw "recorded TSV not found: $tsv" }
+    if ($parts.Count -ne 5) { Refuse "bad -Recorded '$spec' (want <label>|<commit>|<tsv>|<disposition>|<census>)" }
+    $label = $parts[0]; $commit = $parts[1]; $tsv = $parts[2]; $disp = $parts[3].Trim(); $census = $parts[4]
+    # Admission 1: the disposition sentence and its three labelled parts.
+    if (-not $disp) { Refuse "$label : recorded-read admission -- the disposition sentence is missing" }
+    $at = @($dispLabels | ForEach-Object { $disp.IndexOf($_, [StringComparison]::Ordinal) })
+    $missing = @()
+    for ($i = 0; $i -lt $dispLabels.Count; $i++) {
+        if ($at[$i] -lt 0) { $missing += "'$($dispLabels[$i])'"; continue }
+        $start = $at[$i] + $dispLabels[$i].Length
+        $ends = @($at | Where-Object { $_ -gt $at[$i] }) + $disp.Length
+        $text = $disp.Substring($start, ($ends | Measure-Object -Minimum).Minimum - $start).Trim(" ;.`t")
+        if ($text -notmatch '[A-Za-z0-9]') { $missing += "'$($dispLabels[$i])' (empty)" }
+    }
+    if ($missing.Count -gt 0) { Refuse "$label : recorded-read admission -- the disposition lacks $($missing -join ', ') (it states why no live read was possible, the census's provenance, and which live read replaces it)" }
+    if (-not (Test-Path $tsv)) { Refuse "$label : recorded TSV not found: $tsv" }
+    # Admission 2: the census is the pinned one, and the TSV names it.
+    $leaf = Split-Path -Leaf $tsv
+    if (-not $pins.ContainsKey($leaf)) { Refuse "$label : recorded-read admission -- $leaf has no census pin in $CensusPins" }
+    if (-not $census -or -not (Test-Path -LiteralPath $census)) { Refuse "$label : recorded-read admission -- the census '$census' is not readable, so the conversion cannot be checked" }
+    $censusSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $census).Hash.ToLower()
+    if ($censusSha -ne $pins[$leaf]) { Refuse "$label : recorded-read admission -- the census $census hashes to $censusSha, not the pinned $($pins[$leaf])" }
+    $stated = @(Get-Content -LiteralPath $tsv | Where-Object { $_ -match '^#' } | Select-String -Pattern 'sha256 ([0-9a-f]{64})' -AllMatches |
+                ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value })
+    if ($stated -notcontains $pins[$leaf]) { Refuse "$label : recorded-read admission -- the header of $leaf does not name the pinned census hash $($pins[$leaf])" }
+    # Admission 3: the rows are exactly the mechanical conversion of that census.
+    $conv = @(ConvertFrom-ObjectCensus $census)
+    $have = @(Get-Content -LiteralPath $tsv | Where-Object { $_ -notmatch '^#' -and $_ })
+    if (($conv -join "`n") -cne ($have -join "`n")) {
+        $extra = @($have | Where-Object { $conv -cnotcontains $_ }); $lost = @($conv | Where-Object { $have -cnotcontains $_ })
+        Refuse "$label : recorded-read admission -- $leaf is not the mechanical conversion of its census ($($have.Count) rows, conversion $($conv.Count); not produced by the census: $((($extra | Select-Object -First 3) -join ' / ')); missing: $((($lost | Select-Object -First 3) -join ' / ')))"
+    }
     $mine = New-Object 'System.Collections.Generic.SortedSet[string]' ([System.StringComparer]::Ordinal)
     $objs = New-Object 'System.Collections.Generic.HashSet[string]'
     $rows = 0; $dropped = 0
@@ -240,6 +308,7 @@ foreach ($spec in $Recorded) {
     $rel = $tsv
     if ($tsv.StartsWith($PSScriptRoot, [StringComparison]::OrdinalIgnoreCase)) { $rel = $tsv.Substring($PSScriptRoot.Length).TrimStart('\', '/') }
     $header += "# consumer: $label @ $commit -- RECORDED per-object dumpbin read $rel (sha256 $sha): $rows rows, $($objs.Count) importing objects, $($mine.Count - $nC) C++ and $nC C engine symbols, $dropped rows dropped by the case-sensitive filter"
+    $header += "#   admission: census $census sha256 $censusSha = the pin; the TSV's $($have.Count) rows = its mechanical conversion"
     $header += "#   disposition (no commit check is possible on a recorded read): $disp"
     Add-Consumer $label $mine
 }

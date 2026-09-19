@@ -1,0 +1,7 @@
+# The census each recorded-read TSV converts, pinned by SHA-256 (plan Sec3.7 item 3: a -Recorded input is admitted
+# only as a mechanical conversion of a recorded census, which the converter pins by hash). gen_consumed_symbols.ps1
+# refuses a -Recorded input whose TSV has no line here, whose census does not hash to the value here, or whose TSV
+# header names a different census hash. One line per TSV: <tsv file name> TAB <census sha256> TAB <what the census is>.
+# superslmunreal-develop-v150-imports.tsv has no line: it predates the census conversion (T-2807's read, no census
+# file), so it cannot be admitted; it is a subset of the upgrade census's C++ names.
+superslmunreal-upgrade-census-imports.tsv	6d75b5020e9880b0b0546604e4e2478abe74b39d5f121a86ca0dc99e7e087d0e	the planner's census Claude/Vitruvius/t2823-probe/census-output.txt (T-2823 record Sec2), SuperSLMUnreal upgrade objects of 2026-09-18 23:15-23:17
