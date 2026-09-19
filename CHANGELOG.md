@@ -25,6 +25,12 @@ ABI verb (36) and by the 25 C++ engine declarations that sibling Unreal modules 
 the compiler command line (export when building the engine's shared library, import in a consumer)
 lets a modular build share one engine copy. By default the macro expands to nothing.
 
+A process now uses one GPU adapter for its lifetime, selected when it creates its first GPU context
+(`SSLM_GPU_ADAPTER_INDEX` if set, else the highest-performance hardware adapter). A later
+`sslm_gpu_context_create` whose selection names a different adapter returns `SSLM_DEVICE_LOST` and
+creates nothing; before, such a context's buffers and its submissions could land on two different
+adapters. `SSLM_GPU_ENABLE_DEBUG_LAYER` is read once, at the same moment.
+
 ## [1.5.0] - 2026-09-17
 
 QK-norm artifact loading now has a complete `QKC1` source-to-derived contract. The loader

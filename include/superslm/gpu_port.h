@@ -677,6 +677,12 @@ void ClearT2169ChunkRecordingTailBadAllocFaultInjection();
 // cannot be constructed deterministically, so this single-shot seam makes the NEXT such query
 // report a removed device, and is consumed by it. Defined in gpu_1p0.cpp.
 void ArmPrefillGuardDeviceRemovedQueryInjection();
+
+// `sslm_gpu_context_create` refuses a context whose device sits on a different adapter from the
+// process-wide submission device (plan te266 Sec3.8). A one-adapter host can never produce the
+// mismatch, so this single-shot seam makes the NEXT comparison report one, and is consumed by it.
+// Defined in gpu_1p0.cpp.
+void ArmContextAdapterMismatchInjection();
 #endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 
 // Read back the device-resident K/V cache in the SAME layout and argument order

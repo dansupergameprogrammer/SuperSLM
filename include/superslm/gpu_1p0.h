@@ -165,7 +165,12 @@ enum class SslmGpuStatus : uint32_t {
     SSLM_PREFILL_HIDDEN_UNAVAILABLE
 };
 
-/* --- Sec4.1.1: context create/destroy. DEFINED as of B1 (src/gpu/gpu_1p0.cpp). --- */
+/* --- Sec4.1.1: context create/destroy. DEFINED as of B1 (src/gpu/gpu_1p0.cpp).
+ * A process uses one GPU adapter for its lifetime. It is selected when the process creates its
+ * first context, by SSLM_GPU_ADAPTER_INDEX if set, else the highest-performance hardware adapter.
+ * A later sslm_gpu_context_create whose selection names a different adapter returns
+ * SSLM_DEVICE_LOST and creates nothing. Existing contexts are unaffected.
+ * SSLM_GPU_ENABLE_DEBUG_LAYER is read once, at the same moment. --- */
 SslmGpuStatus sslm_gpu_context_create(GpuContextConfig cfg, SslmGpuContext** out_ctx) noexcept;
 SslmGpuStatus sslm_gpu_context_destroy(SslmGpuContext* ctx) noexcept;
 

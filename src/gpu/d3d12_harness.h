@@ -166,7 +166,11 @@ struct Device {
 	// which adapter a context landed on. `run_crossvendor.ps1` sets the env var for every
 	// cell it runs, so certification output is unaffected; every other consumer of the 1.0
 	// API (unset env var) gets byte-identical stdout to before this ticket.
-	void Init() {
+	// `apply_debug_layer` (plan te266 Sec3.8 change 2): only the process device (`GetDevice()`,
+	// below) reads SSLM_GPU_ENABLE_DEBUG_LAYER. `sslm_gpu_context_create` builds that device before
+	// its own and passes false here, so the debug layer is enabled at most once per process, before
+	// any device exists -- enabling it while a device is live is documented to remove that device.
+	void Init(bool apply_debug_layer = true) {
 		// T-2169 (D-SLM3649's own owed evidence, Dan's review): SSLM_GPU_ENABLE_DEBUG_LAYER, when
 		// set, turns on the D3D12 debug layer (and GPU-based validation, when the installed SDK
 		// supports it) BEFORE any device is created -- the only order the API allows a debug
@@ -176,7 +180,7 @@ struct Device {
 		// driver's own recursion fires. Off by default (unset env var): zero behavioral change,
 		// zero performance cost, matching this file's own established SSLM_GPU_ADAPTER_INDEX
 		// convention for a diagnostic-only, opt-in override.
-		{
+		if (apply_debug_layer) {
 			char buf[8] = {0};
 			DWORD n = GetEnvironmentVariableA("SSLM_GPU_ENABLE_DEBUG_LAYER", buf, sizeof(buf));
 			if (n > 0 && buf[0] == '1') {

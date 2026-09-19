@@ -608,7 +608,34 @@ Microsoft::WRL::ComPtr<ID3D12Resource> UploadResidentUavBufferSync(superslm_gpu:
 	                                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 }
 
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+bool g_context_adapter_mismatch_injection_armed = false;
+#endif
+
+// Plan te266 Sec3.8 change 3: true when a new context's device sits on a different adapter from the
+// process device every submission records on, compared by adapter LUID (both halves).
+bool ContextAdapterDiffersFromProcessDevice(superslm_gpu::harness::Device& context_device,
+                                            superslm_gpu::harness::Device& process_device) {
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+	if (g_context_adapter_mismatch_injection_armed) {
+		g_context_adapter_mismatch_injection_armed = false;  // single-shot
+		return true;
+	}
+#endif
+	const LUID a = context_device.dev->GetAdapterLuid();
+	const LUID b = process_device.dev->GetAdapterLuid();
+	return a.LowPart != b.LowPart || a.HighPart != b.HighPart;
+}
+
 }  // namespace
+
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+namespace superslm_gpu {
+// Declared in gpu_port.h beside the T-2169 seams; consumed by
+// `ContextAdapterDiffersFromProcessDevice` at the next sslm_gpu_context_create.
+void ArmContextAdapterMismatchInjection() { g_context_adapter_mismatch_injection_armed = true; }
+}  // namespace superslm_gpu
+#endif
 
 // Design Sec5.1: "uploads the model's weights, fold-scale tables, and RoPE cos/sin tables
 // ... into DEFAULT-heap buffers owned by the returned handle, keyed by the artifact's own
@@ -1182,9 +1209,22 @@ SslmGpuStatus sslm_gpu_context_createImpl(GpuContextConfig cfg, SslmGpuContext**
 		return SSLM_DEVICE_LOST;
 	}
 
+	// Plan te266 Sec3.8 (T-2823): one GPU adapter per process. Every submission records on the
+	// process-wide `harness::GetDevice()` singleton, while this context's model and sequence buffers
+	// are created on `ctx->device`. Both read SSLM_GPU_ADAPTER_INDEX when they are built, so the
+	// process device is built FIRST, here, no later than the first context and under the same
+	// environment; a context whose own selection names another adapter is refused below rather
+	// than left to bind resources from one adapter into command lists recorded on another.
+	superslm_gpu::harness::Device& process_device = superslm_gpu::harness::GetDevice();
+	if (!process_device.available || !process_device.dev) {
+		*out_ctx = nullptr;
+		return SSLM_DEVICE_LOST;
+	}
+
 	SslmGpuContext* ctx = new SslmGpuContext();
 	try {
-		ctx->device.Init();
+		// The debug layer is the process device's alone (d3d12_harness.h, `Init`'s parameter).
+		ctx->device.Init(/*apply_debug_layer=*/false);
 	} catch (const std::bad_alloc&) {
 		delete ctx;
 		throw;
@@ -1192,6 +1232,11 @@ SslmGpuStatus sslm_gpu_context_createImpl(GpuContextConfig cfg, SslmGpuContext**
 		ctx->device.available = false;
 	}
 	if (!ctx->device.available) {
+		delete ctx;
+		*out_ctx = nullptr;
+		return SSLM_DEVICE_LOST;
+	}
+	if (ContextAdapterDiffersFromProcessDevice(ctx->device, process_device)) {
 		delete ctx;
 		*out_ctx = nullptr;
 		return SSLM_DEVICE_LOST;
