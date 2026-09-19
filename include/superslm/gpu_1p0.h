@@ -64,18 +64,14 @@ enum class SslmGpuStatus : uint32_t {
     SSLM_ADAPTER_MODEL_MISMATCH,         /* design Sec9 -- B6                   */
     SSLM_ADAPTER_BASE_HASH_MISMATCH,     /* design Sec9 -- B6                   */
     SSLM_SEQUENCE_KV_BUFFER_MISMATCH,    /* design Sec9 -- B3                   */
-    /* design Sec9 -- B1/B2. Two distinct causes resolve to this ONE status, indistinguishable
+    /* design Sec9 -- B1/B2. Three distinct causes resolve to this ONE status, indistinguishable
      * at the ABI:
      * (a) an ordinary, healthy rejection -- most visibly, the batched G5 prefill entry points
      *     (SslmGpuSeqPrefillPromptForG5Bridge/SslmGpuSeqPrefillSchemaContentForG5Bridge, below)
      *     returning it when a chunk's own derived admit count comes back short of what was
      *     requested at a saturated context cap; the shipped per-token decode loop's own
      *     cap-boundary behavior, mirrored. The device and the context stay fully usable; a
-     *     caller may continue issuing calls against the same context and sequence. A
-     *     device-side domain guard refusal found by the prompt twin's post-chunk readback on a
-     *     device not reported removed is NOT this status: the prompt twin reports it as
-     *     SSLM_SEQUENCE_REJECTED (see that function's comment). The schema twin still reports
-     *     its own device-side guard refusal here.
+     *     caller may continue issuing calls against the same context and sequence.
      * (b) a real device/allocation fault -- a lost/removed device, or an infrastructural
      *     submit/finish failure (an exception caught and contained at this boundary from the
      *     GPU command-submission tail). The command list is recovered at the point the fault is
@@ -102,7 +98,14 @@ enum class SslmGpuStatus : uint32_t {
      *       the GPU has not finished, indistinguishable from here from a genuinely removed device,
      *       and `GetDeviceRemovedReason()` is what a caller must consult, exactly as the two cases
      *       above. Only when the retry `Signal()` succeeds does the context genuinely recover on
-     *       this path -- waited out before this function returns. */
+     *       this path -- waited out before this function returns.
+     * (c) SslmGpuSeqPrefillSchemaContentForG5Bridge only: a device-side domain guard refused
+     *     one of the admitted tokens, found by the post-chunk readback. The context and the
+     *     device stay usable, but THE SEQUENCE DOES NOT, unlike cause (a): its live residual and
+     *     layer index are not a resting state, and a decode call issued on it without a reset
+     *     returns a token computed from that state. Call sslm_gpu_seq_reset before reusing the
+     *     sequence. The prompt twin reports the same refusal as SSLM_SEQUENCE_REJECTED instead,
+     *     with the same reset requirement (see that function's comment). */
     SSLM_DEVICE_LOST,
     SSLM_BATCH_BUDGET_EXHAUSTED,         /* design Sec9 -- B7                   */
     SSLM_TOKEN_ID_OUT_OF_RANGE,          /* design Sec9 -- B3.5                 */
@@ -399,13 +402,22 @@ SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx, SslmGpuSequen
  * contract (`sslm_decode_step_gpu`/`SslmGpuSeqDecodeStepForG5Bridge`'s layer-loop-to-depth
  * step), unchanged by this call.
  *
- * Returns SSLM_DEVICE_LOST for two distinct causes (see the status enum's own comment,
- * above): an ordinary, healthy rejection when the chunk's own derived admit count comes back
- * short of what was requested at a saturated context cap -- the context and device stay
- * usable, and a caller may continue -- or a real, contained device/allocation fault from the
- * GPU submit/finish tail, after which the command list is recovered and the context stays
- * usable for a caller that continues, unless the device is confirmed removed, which is
- * terminal for the context regardless of cause. */
+ * Returns SSLM_DEVICE_LOST for three distinct causes (see the status enum's own comment,
+ * above), which the status does not tell apart:
+ *  - an ordinary, healthy rejection when the chunk's own derived admit count comes back short
+ *    of what was requested at a saturated context cap -- the context and device stay usable,
+ *    and a caller may continue;
+ *  - a real, contained device/allocation fault from the GPU submit/finish tail, after which the
+ *    command list is recovered and the context stays usable for a caller that continues, unless
+ *    the device is confirmed removed, which is terminal for the context;
+ *  - a device-side domain guard refused one of the admitted tokens, found by the post-chunk
+ *    readback. Tokens before the refused one are committed and `*consumed` counts them; the
+ *    sequence's live residual and layer index are not a resting state, and the "ready for
+ *    logits" flag may still be set from an earlier call, so a decode call issued without a reset
+ *    returns a token computed from that state. The sequence must be reset before reuse.
+ * The status alone cannot say which cause applied, so a caller that cannot rule out the third
+ * resets the sequence before issuing anything further on it. (The prompt twin reports the guard
+ * refusal as SSLM_SEQUENCE_REJECTED instead.) */
 SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(SslmGpuContext* ctx,
                                                           SslmGpuSequenceHandle* seq,
                                                           const int32_t* tokens, int32_t count,

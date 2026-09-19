@@ -5,9 +5,14 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 ## [Unreleased]
 
 The GPU API gains an embedding read. `sslm_gpu_seq_read_prefill_final_hidden` returns the
-post-`final_norm` hidden state at the last position of a sequence's most recent successful prompt
-or schema-content prefill, from a per-sequence snapshot taken only when a prefill succeeds, so no
-later embed, decode, finish or failed prefill call changes what it returns. `sslm_gpu_model_hidden_size`
+post-`final_norm` hidden state at the last position left by a sequence's most recent prompt or
+schema-content prefill call that reached its admission pre-scan, when that call returned `SSLM_OK`.
+It reads a per-sequence snapshot taken only when such a call succeeds, so no later embed, decode or
+finish call changes what it returns. A prefill call that reaches its pre-scan and then fails, and
+`sslm_gpu_seq_reset`, empty the snapshot: the read then returns `SSLM_PREFILL_HIDDEN_UNAVAILABLE`,
+not an earlier frame. A prefill call refused before its pre-scan (malformed arguments, a zero count,
+`SSLM_BUSY`, or the schema-content prefill's unbound-schema and unreachable-first-token refusals)
+leaves the snapshot as it was. `sslm_gpu_model_hidden_size`
 gives the width to size the buffer with. Two statuses are appended to `SslmGpuStatus`, so no
 existing ordinal moves: `SSLM_OUTPUT_BUFFER_TOO_SMALL` and `SSLM_PREFILL_HIDDEN_UNAVAILABLE`.
 
