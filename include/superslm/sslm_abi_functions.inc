@@ -14,20 +14,21 @@
  * The text-I/O declaration below takes the incremental-detokenize state struct, the same
  * residual's other type, for the identical reason.
  */
+#include "superslm/api.h"
 #include "superslm/sslm_abi_functions_g5_comparable.inc"
 
 /* Versioned decode entry point. The legacy sslm_decode_step declaration lives in the
  * g5-comparable inventory because it is the v1.1 surface mirrored by that suite. This v2 symbol
  * is deliberately separate: it may validate and consume sslm_decode_params fields beyond the
  * shipped four-byte layer_budget prefix without reading past an old caller's allocation. */
-sslm_status sslm_decode_step_v2(sslm_model model, sslm_seq* seqs, int32_t n,
+SUPERSLM_API sslm_status sslm_decode_step_v2(sslm_model model, sslm_seq* seqs, int32_t n,
                                 const sslm_decode_params* params, sslm_workspace ws,
                                 int32_t* out_tokens);
 
 /* Initializes the complete v2 params shape. Greedy needs no artifact extension. Damped greedy
  * selects the B0-ruled alpha/n/k defaults and derives q_ln2/q_b/q_c from this mapped model's
  * DGC1 section; a model converted without --enable-damped-greedy is rejected. */
-sslm_status sslm_decode_params_init(sslm_model model, int32_t mode, int32_t layer_budget,
+SUPERSLM_API sslm_status sslm_decode_params_init(sslm_model model, int32_t mode, int32_t layer_budget,
                                     sslm_decode_params* out);
 
 /* Takes the caller-memory call-shape struct (design Sec7.1) -- not part of the g5-comparable
@@ -42,11 +43,11 @@ sslm_status sslm_decode_params_init(sslm_model model, int32_t mode, int32_t laye
  * concurrently needs one workspace per concurrently-active call (one per thread is the common
  * shape), exactly as sslm_kv_pool's own per-block accounting already requires one pool sized for
  * every concurrently-resident sequence (design Sec7.2). */
-size_t sslm_workspace_size(sslm_model model, const sslm_config* config);
-sslm_status sslm_workspace_create(sslm_model model, const sslm_config* config,
+SUPERSLM_API size_t sslm_workspace_size(sslm_model model, const sslm_config* config);
+SUPERSLM_API sslm_status sslm_workspace_create(sslm_model model, const sslm_config* config,
                                    void* buf, size_t buf_size, sslm_workspace* out);
 
 /* Takes the incremental-detokenize state struct (design Sec7.4) -- not part of the
  * g5-comparable subset (see above). */
-sslm_status sslm_detokenize_stream(sslm_model model, sslm_detok_state* state, const int32_t* tokens,
+SUPERSLM_API sslm_status sslm_detokenize_stream(sslm_model model, sslm_detok_state* state, const int32_t* tokens,
                                     int32_t n, char* utf8, int32_t* out_n);

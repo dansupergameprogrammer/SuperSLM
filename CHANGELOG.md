@@ -20,10 +20,10 @@ The installed GPU library no longer reads `SSLM_B5_ASYNC_DROP_UAV_REBIND` or
 `SSLM_B5_ASYNC_SWAP_SRV_REBIND`. Both changed GPU output; they are compiled in only under
 `SUPERSLM_GPU_T2106_FAULT_PINS`, which only the fault-pin harness defines.
 
-New header `superslm/api.h` defines an empty `SUPERSLM_API` export slot, which 24 engine
-declarations consumed by sibling Unreal modules now carry. Defining it on the compiler command line
-(export when building the engine's shared library, import in a consumer) lets a modular build share
-one engine copy. By default the macro expands to nothing.
+New header `superslm/api.h` defines an empty `SUPERSLM_API` export slot. It is carried by every C
+ABI verb (36) and by the 25 C++ engine declarations that sibling Unreal modules call. Defining it on
+the compiler command line (export when building the engine's shared library, import in a consumer)
+lets a modular build share one engine copy. By default the macro expands to nothing.
 
 ## [1.5.0] - 2026-09-17
 

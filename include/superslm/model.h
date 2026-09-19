@@ -484,7 +484,7 @@ SslmModelStatus ValidateAmplifyingFoldBaseHash(const std::array<uint8_t, kIntegr
 // SslmArtifact. Rejects (fails closed, `out` left default) on a wrong size/magic/version,
 // a zero dimension, an out-of-range enum/bool, or a nonzero reserved field — the §11
 // reject-over-degrade law for config. Throws only std::bad_alloc (S-HARDEN-7, F5).
-SslmModelStatus ParseConfig(const SslmSectionView& section, SslmModelConfig& out, std::string* err);
+SUPERSLM_API SslmModelStatus ParseConfig(const SslmSectionView& section, SslmModelConfig& out, std::string* err);
 
 // A validated view of the SIL1 sigmoid LUT: kSigmoidLutEntries Q15 nodes. `values` points
 // into the artifact's owned buffer (valid for its lifetime). Read a node with SigmoidLutValue
