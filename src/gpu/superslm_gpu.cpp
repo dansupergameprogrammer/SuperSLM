@@ -4711,4 +4711,7 @@ bool MapModelGpuResidencyWithInjection(uint64_t required_bytes) {
 	return true;  // every allocation call succeeded (including the N==0 vacuous case)
 }
 
+// T-2790 spike only (no shipped target defines the macro): the row-widened prompt prefill.
+#include "t2790_widened_prefill.inl"
+
 }  // namespace superslm_gpu

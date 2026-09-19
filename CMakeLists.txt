@@ -876,3 +876,51 @@ install(FILES
 	"${CMAKE_CURRENT_BINARY_DIR}/superslmConfigVersion.cmake"
 	DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/superslm
 )
+
+# T-2790 spike (not a release target, OFF by default): the row-widened GPU prompt prefill, built as
+# one probe per compile-time chunk height H, with the widened shaders compiled per H beside the
+# shipped ones. No installed target, library or header changes when this is OFF.
+option(SUPERSLM_T2790_SPIKE "T-2790 spike: row-widened GPU prefill probes (not a release target)" OFF)
+if(SUPERSLM_T2790_SPIKE AND WIN32 AND SUPERSLM_BUILD_GPU)
+	set(_t2790_dir "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/shaders_t2790")
+	file(GLOB _t2790_site_srcs CONFIGURE_DEPENDS "${_t2790_dir}/*_site_wide.hlsl")
+	set(_t2790_outs "")
+	foreach(_h 8 16 32)
+		foreach(_s ${_t2790_site_srcs})
+			get_filename_component(_n "${_s}" NAME_WE)
+			set(_o "${SUPERSLM_GPU_SHADER_OUT_DIR}/${_n}_h${_h}.cso")
+			add_custom_command(OUTPUT "${_o}"
+				COMMAND "${CMAKE_COMMAND}" -E make_directory "${SUPERSLM_GPU_SHADER_OUT_DIR}"
+				COMMAND "${SUPERSLM_DXC_EXECUTABLE}" -T cs_6_2 -E main -Fo "${_o}" "${_s}" -O3 -HV 2018 -WX
+				        -D SSLM_WIDE_H=${_h} -I "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/shaders"
+				DEPENDS "${_s}" ${SUPERSLM_GPU_SHADER_HEADERS}
+				VERBATIM)
+			list(APPEND _t2790_outs "${_o}")
+		endforeach()
+		set(_gi 1)
+		foreach(_g q_proj kv_proj o_proj gate_proj up_proj down_proj)
+			set(_o "${SUPERSLM_GPU_SHADER_OUT_DIR}/${_g}_gemm_wide_h${_h}.cso")
+			add_custom_command(OUTPUT "${_o}"
+				COMMAND "${CMAKE_COMMAND}" -E make_directory "${SUPERSLM_GPU_SHADER_OUT_DIR}"
+				COMMAND "${SUPERSLM_DXC_EXECUTABLE}" -T cs_6_2 -E main -Fo "${_o}" "${_t2790_dir}/proj_gemm_wide.hlsl"
+				        -O3 -HV 2018 -WX -D SSLM_WIDE_H=${_h} -D SSLM_GEMM_SITE=${_gi}
+				        -I "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/shaders"
+				DEPENDS "${_t2790_dir}/proj_gemm_wide.hlsl" ${SUPERSLM_GPU_SHADER_HEADERS}
+				VERBATIM)
+			list(APPEND _t2790_outs "${_o}")
+			math(EXPR _gi "${_gi} + 1")
+		endforeach()
+	endforeach()
+	add_custom_target(t2790_wide_shaders DEPENDS ${_t2790_outs})
+	foreach(_h 8 16 32)
+		add_executable(t2790_probe_h${_h} tools/t2790_widened_prefill_probe.cpp src/gpu/superslm_gpu.cpp
+		               src/gpu/gpu_1p0.cpp)
+		target_compile_definitions(t2790_probe_h${_h} PRIVATE SUPERSLM_T2790_WIDE_H=${_h})
+		target_link_libraries(t2790_probe_h${_h} PRIVATE superslm d3d12 dxgi dxguid)
+		target_include_directories(t2790_probe_h${_h} PRIVATE tools src/gpu)
+		if(MSVC)
+			target_compile_options(t2790_probe_h${_h} PRIVATE /W4 /fp:precise)
+		endif()
+		add_dependencies(t2790_probe_h${_h} superslm_gpu_shaders t2790_wide_shaders)
+	endforeach()
+endif()

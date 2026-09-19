@@ -45,6 +45,20 @@ using enum SslmGpuStatus;
 #include <vector>
 
 #include "d3d12_harness.h"
+#if defined(SUPERSLM_T2790_WIDE_H)
+// T-2790 spike: defined in t2790_widened_prefill.inl (included by superslm_gpu.cpp).
+namespace superslm_gpu {
+bool T2790WidenedEnabled();
+superslm::SslmForwardStatus T2790SubmitWidenedChunk(
+    superslm::SequenceLayerState& seq, uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim,
+    size_t num_key_value_heads, size_t intermediate_size, int64_t context_cap, uint8_t* workspace,
+    size_t workspace_size, const uint8_t* chunk_embedding_bytes, uint32_t chunk_len,
+    ID3D12Resource* external_kv_resident, bool* io_external_kv_needs_resume_barrier,
+    ID3D12Resource* external_weights_resident, ID3D12Resource* external_rope_cos_resident,
+    ID3D12Resource* external_rope_sin_resident, bool external_rope_has, uint64_t external_rope_cos_elems,
+    uint64_t external_rope_sin_elems, size_t q_width, uint64_t model_generation, bool model_has_qk_norm);
+}  // namespace superslm_gpu
+#endif
 #include "superslm/adapter_marshal.h"  // T-2113 B6: LoadAdapterArtifact (relocated, tools/sslm_adapter_loader.h)
 #include "superslm/gpu_1p0_g5_bridge.h"  // G5-5 (T-2132): the build-seat-owned schema/parity bridge
 #include "superslm/gpu_port.h"       // T-2113 B2: GpuLayerLayout/ComputeLayerLayout/PackLayerWeightsBytes
@@ -2760,6 +2774,23 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		// pre-1.0 caches instead.
 		uint64_t model_generation = 0;
 		std::memcpy(&model_generation, model->content_hash.data(), sizeof(model_generation));
+#if defined(SUPERSLM_T2790_WIDE_H)
+		// T-2790 spike: the row-widened prompt prefill, synchronous (it fences and reads back
+		// itself). Its outcome reaches the caller exactly as the per-token path's does: through
+		// live_state, copied back below. Adapter-bound sequences stay on the per-token path.
+		if (superslm_gpu::T2790WidenedEnabled() && adapter_bridge_ptr == nullptr) {
+			(void)superslm_gpu::T2790SubmitWidenedChunk(
+			    seq->live_state, model->num_hidden_layers, model->hidden_size, model->head_dim,
+			    model->num_key_value_heads, model->intermediate_size, seq->context_cap,
+			    seq->host_kv_mirror.data(), seq->host_kv_mirror.size(), chunk_embedding_bytes, admit_count,
+			    seq->kv_buf.Get(), &seq->kv_needs_resume_barrier, model->weights_buf.Get(),
+			    model->rope_cos_buf.Get(), model->rope_sin_buf.Get(), model->has_rope_tables,
+			    model->rope_cos_elem_count, model->rope_sin_elem_count,
+			    /*q_width=*/static_cast<size_t>(model->num_attention_heads) * model->head_dim, model_generation,
+			    model->has_qk_norm);
+		} else
+#endif
+		{
 		const superslm::SslmForwardStatus submit_status =
 		    superslm_gpu::SubmitChunkToFullDepthForG5Bridge(
 		        seq->live_state, /*layers=*/nullptr, model->num_hidden_layers, model->hidden_size,
@@ -2784,6 +2815,7 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 			                                      /*block=*/1, &ready);
 			seq->in_flight = nullptr;
 		}
+		}  // T-2790 spike: closes the per-token branch
 	} catch (const std::bad_alloc& e) {
 		std::fprintf(stderr,
 		             "gpu_1p0: SubmitAdmittedChunkForG5Bridge: bad_alloc escaped the batched-prefill "
