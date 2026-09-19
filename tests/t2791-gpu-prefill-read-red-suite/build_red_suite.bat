@@ -78,7 +78,7 @@ if exist "%SHADERS%" (
 )
 
 set UNEXPECTED=0
-for %%f in (cell_status_ordinals cell_census_lifetime cell_hostile_capacity cell_prefill_faults_schema ^
+for %%f in (cell_status_ordinals cell_census_lifetime cell_hostile_capacity cell_prefill_faults_schema cell_final_norm_guard ^
             cell_concurrency cell_determinism_composition cell_functional_commission ^
             cell_env_pins_shipping_leg cell_wrapper_census_standing) do (
     set VARIANT=gpu_fi

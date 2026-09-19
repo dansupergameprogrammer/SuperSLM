@@ -18,11 +18,19 @@
 //   S3b schema unbound (before the pre-scan) -> the prior frame;
 //   S4 / S5 kPositionCap with 2 and with 0 admitted -> refuse;
 //   F5 the device override on the schema twin -> refuse.
-// NOT A CELL: the schema twin's kEmbed exit. It is unreachable on any loadable artifact:
-// SchemaMasksTable::Parse rejects a transition token >= vocab_size, EmbedEntry rejects only
-// token < 0 or >= vocab_size, and the pre-scan ranks DFA before EMBED at a tie, so any token that
-// fails embed fails DFA at the same index first (gpu_1p0.cpp RunChunkAdmissionPreScan;
-// schema_masks.h Parse). Recorded as a finding for the planner, not papered over here.
+// NOT A CELL, per plan Sec2.6 and Sec3.4 row 5:
+//   - the schema twin's kEmbed exit. It is dead code: no loadable artifact reaches it.
+//     SchemaMasksTable::Parse rejects a transition token >= vocab_size, the embed scan rejects only
+//     token < 0 or >= vocab_size, and a tie between the DFA and embed counts resolves to kDfa, so
+//     any token that fails embed fails DFA at the same index first (gpu_1p0.cpp
+//     RunChunkAdmissionPreScan; schema_masks.h Parse). The snapshot is invalidated at the pre-scan
+//     whatever the exit, so the dead exit needs no writer of its own.
+//   - a std::bad_alloc unwinding a chunk (gpu_1p0.cpp's rethrow before the scale copy-back). No
+//     existing seam reaches it: F4's tail bad_alloc seam is caught inside the submit primitive and
+//     ends in the device override (SSLM_DEVICE_LOST), as do the allocation sites. Plan Sec3.1's
+//     writer table covers the member instead -- valid = false before the pre-scan, valid = true
+//     only as the kNone exit's last statement, which an unwinding exception never reaches -- and
+//     the code reviewer checks that table.
 //
 // ORACLE: "refuse" is SSLM_PREFILL_HIDDEN_UNAVAILABLE with no frame output written; a frame is
 // final_norm of the live residual right after a successful PROMPT-twin prefill over the same

@@ -100,11 +100,19 @@ inline int FinishSuite(const char* name) {
 
 // argv convention, every flag optional; a cell whose artifact is not supplied SKIPs:
 //   --qwen3=PATH       the 1.5.0 Qwen3-Embedding-0.6B artifact (plan Sec2.6's executed cell)
-//   --synthetic=PATH   the synthetic fused-K fixture, head_dim 128 (plan Sec3.4 row 4)
+//   --synthetic=PATH   the synthetic fused-K fixture (plan Sec3.4 row 4): SuperEmbedder's
+//                      u1_pair_model.sslm, SHA-256
+//                      a231d9ed9dd3944a253201aa9be418fb3b7f7ad258f79e57cf39297dc8954f70, 729,680 bytes,
+//                      written by tests/fixtures/regenerate_tokenizer_pair_fixture.py at SuperEmbedder
+//                      701ef1a or later against v1.5.0 (hidden 32, 8 layers, 4 heads and 2 K/V heads at
+//                      head_dim 128, QK-norm fused-K, vocab 384, cap 64, tied embeddings)
+//   --a2fn=PATH        fixture A2-fn (plan Sec3.4 row 5): the --synthetic fixture with its final_norm
+//                      composition constant patched, built by make_a2fn_fixture.py
 //   --g5fixture=PATH   a schema-bearing artifact that loads at 1.5.0 (plan Sec3.4 row 5)
 //   --commission=PATH  T-2780's 256-row token file (plan Sec3.4 row 10)
 static std::string g_qwen3_path;
 static std::string g_synthetic_path;
+static std::string g_a2fn_path;
 static std::string g_g5_path;
 static std::string g_commission_path;
 static std::string g_schema_name = "shopkeeper_intent_extraction";
@@ -118,6 +126,7 @@ inline void ParseFixtureArgs(int argc, char** argv) {
 		};
 		if (const char* v = take("--qwen3=")) g_qwen3_path = v;
 		else if (const char* v = take("--synthetic=")) g_synthetic_path = v;
+		else if (const char* v = take("--a2fn=")) g_a2fn_path = v;
 		else if (const char* v = take("--g5fixture=")) g_g5_path = v;
 		else if (const char* v = take("--commission=")) g_commission_path = v;
 		else if (const char* v = take("--schema=")) g_schema_name = v;
