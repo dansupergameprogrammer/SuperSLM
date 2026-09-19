@@ -508,6 +508,23 @@ struct SslmGpuSequenceHandle {
 	// mirroring `sslm_seq_reset`'s own identical clear (src/sslm_abi.cpp:1488).
 	bool ready_for_logits = false;
 
+	// The prefill snapshot (sslm_gpu_seq_read_prefill_final_hidden, gpu_1p0.h): a copy of the
+	// completed last-position residual of this sequence's most recent prefill call that reached
+	// its admission pre-scan and returned SSLM_OK. `hidden_codes` above is the LIVE residual that
+	// embed, the decode calls, finish and the failure exits of either prefill twin all write, and
+	// `ready_for_logits` is the decode wrapper's shortcut flag, which several of those leave set;
+	// neither is a record of a prefill. This pair is. It has exactly these writers, and no other
+	// code in this file writes it:
+	//   - sslm_gpu_seq_create (and so sslm_gpu_seq_restore): sized to hidden_size, invalid;
+	//   - sslm_gpu_seq_reset: invalid;
+	//   - either prefill twin, immediately before its RunChunkAdmissionPreScan call: invalid;
+	//   - either prefill twin's kNone exit, as its last statement before `return SSLM_OK`: copies
+	//     `hidden_codes`, valid.
+	// No scale is stored: the read's only computation is RmsNormSite, which does not read its
+	// incoming scale (forward_sites.h), so a stored scale would be state nothing consumes.
+	std::vector<int8_t> prefill_hidden_codes;
+	bool prefill_hidden_valid = false;
+
 	// T-2114 (S2): see SslmGpuModelHandle's own comment on its `destroyed` field
 	// (gpu_1p0.cpp) -- identical disposition here.
 	bool destroyed = false;
@@ -1292,6 +1309,8 @@ SslmGpuStatus sslm_gpu_seq_createImpl(SslmGpuContext* ctx, SslmGpuModelHandle* m
 	                                      // first call through this handle needs no
 	                                      // resume barrier (gpu_port.h's own B3 comment).
 	h->hidden_codes.assign(model->hidden_size, 0);
+	h->prefill_hidden_codes.assign(model->hidden_size, 0);
+	h->prefill_hidden_valid = false;  // prefill snapshot writer: create (and restore through it)
 	h->hidden_scale = superslm::CarriedScale{};
 	h->layer_index = 0;
 	h->kv_saturation_count = 0;
@@ -2212,6 +2231,7 @@ SslmGpuStatus sslm_gpu_seq_resetImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle*
 	// `ready_for_logits = false` clear (src/sslm_abi.cpp:1488) -- a reset sequence must not carry
 	// a stale "finish without embedding" flag into whatever decode call comes next.
 	seq->ready_for_logits = false;
+	seq->prefill_hidden_valid = false;  // prefill snapshot writer: reset
 	return SSLM_OK;
 }
 
@@ -2602,10 +2622,20 @@ ChunkPreScanResult RunChunkAdmissionPreScan(SslmGpuModelHandle* model, int64_t c
 // D-SLM3634) both show up here as a short count, which the caller checks against `admit_count` to
 // decide whether the device-computed override (D-SLM3622) applies -- this function itself reports
 // no status of its own beyond the derived count.
+//
+// `*out_guard_rejected` (plan te266 Sec3.6 item 2) says which of those two a short count came from:
+// true iff a device-side domain guard refused, i.e. a non-final sub-chunk's finish decoded a
+// sticky tag (`SubmitChunkToFullDepthForG5Bridge`'s own flag) or this function's final
+// `RunLayerLoopGpuFinish` returned a status other than `Ok`, `GpuDeviceRemoved` or
+// `GpuAllocationFailed`. It is classified by where the status came from, never by its value alone:
+// a submission failure (including the recording fault, whose status is an arithmetic-guard value)
+// and both catch clauses below leave it false.
 void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHandle* seq,
                                      const uint8_t* chunk_embedding_bytes, uint32_t admit_count,
-                                     int64_t chunk_open_ctxlen, int64_t* out_derived_count) {
+                                     int64_t chunk_open_ctxlen, int64_t* out_derived_count,
+                                     bool* out_guard_rejected) {
 	*out_derived_count = 0;
+	*out_guard_rejected = false;
 	if (admit_count == 0) return;
 	// Mirrors `sslm_gpu_seq_embed_token`'s own unconditional `layer_index = 0` reset for a VALID
 	// token, which the shipped per-token loop always performs for token 0 before any guard or
@@ -2760,6 +2790,7 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		// pre-1.0 caches instead.
 		uint64_t model_generation = 0;
 		std::memcpy(&model_generation, model->content_hash.data(), sizeof(model_generation));
+		bool nonfinal_guard_rejected = false;
 		const superslm::SslmForwardStatus submit_status =
 		    superslm_gpu::SubmitChunkToFullDepthForG5Bridge(
 		        seq->live_state, /*layers=*/nullptr, model->num_hidden_layers, model->hidden_size,
@@ -2770,7 +2801,8 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		        model->rope_sin_buf.Get(), model->has_rope_tables, model->rope_cos_elem_count,
 		        model->rope_sin_elem_count, adapter_bridge_ptr, &inflight,
 		        /*q_width=*/static_cast<size_t>(model->num_attention_heads) * model->head_dim,
-		        model_generation, model->has_qk_norm);
+		        model_generation, model->has_qk_norm, &nonfinal_guard_rejected);
+		*out_guard_rejected = nonfinal_guard_rejected;
 		if (submit_status == superslm::SslmForwardStatus::Ok && inflight) {
 			// `SubmitChunkToFullDepthForG5Bridge` returns the FINAL (sub-)chunk's own inflight token
 			// genuinely unfenced (its own header comment: "the caller's own async contract... only
@@ -2780,9 +2812,17 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 			// observes the window while `RunLayerLoopGpuFinish` below blocks on it.
 			seq->in_flight = inflight;
 			int32_t ready = 0;
-			superslm_gpu::RunLayerLoopGpuFinish(inflight, seq->live_state, seq->host_kv_mirror.data(),
-			                                      /*block=*/1, &ready);
+			const superslm::SslmForwardStatus final_finish_status = superslm_gpu::RunLayerLoopGpuFinish(
+			    inflight, seq->live_state, seq->host_kv_mirror.data(), /*block=*/1, &ready);
 			seq->in_flight = nullptr;
+			// The final sub-chunk's finish: `GpuDeviceRemoved`/`GpuAllocationFailed` come only from
+			// its catch; any other non-`Ok` value is a sticky-tag decode (gpu_port.h, the
+			// `out_readback_guard_rejected` comment).
+			if (final_finish_status != superslm::SslmForwardStatus::Ok &&
+			    final_finish_status != superslm::SslmForwardStatus::GpuDeviceRemoved &&
+			    final_finish_status != superslm::SslmForwardStatus::GpuAllocationFailed) {
+				*out_guard_rejected = true;
+			}
 		}
 	} catch (const std::bad_alloc& e) {
 		std::fprintf(stderr,
@@ -2790,6 +2830,7 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		             "submit/finish call, contained at the SslmGpuStatus boundary: %s\n",
 		             e.what());
 		seq->in_flight = nullptr;
+		*out_guard_rejected = false;
 		throw;
 	} catch (const std::runtime_error& e) {
 		std::fprintf(stderr,
@@ -2798,6 +2839,7 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		             "%s\n",
 		             e.what());
 		seq->in_flight = nullptr;
+		*out_guard_rejected = false;
 	}
 	// `submitted_window_guard`'s destructor closes the window here, unconditionally, on this
 	// normal-return path exactly as it would on an exception unwind -- `sslm_gpu_ready`'s own
@@ -2847,7 +2889,39 @@ void ReproducePositionCapBoundaryEmbedSideEffect(SslmGpuModelHandle* model,
 	seq->layer_index = 0;
 }
 
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+bool g_prefill_guard_device_removed_query_injection_armed = false;
+#endif
+
+// Plan te266 Sec3.6 item 3: whether the device the prefill chunk ran on is reported removed,
+// asked at the moment the prompt twin classifies a guard refusal. The chunk is recorded and
+// submitted on the process-wide `harness::GetDevice()` singleton
+// (`SubmitOneSubChunkToFullDepthForG5Bridge`, superslm_gpu.cpp), not on
+// `SslmGpuContext::device`, which serves only the residency uploads at map/create time (see
+// `sslm_decode_step_batch_gpuImpl`'s comment) -- so the singleton is the device asked. A
+// successful readback does not by itself prove the device alive, which is why the query is made
+// at all rather than inferred from the finish having reached its normal path.
+bool PrefillGuardDeviceReportedRemoved() {
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+	if (g_prefill_guard_device_removed_query_injection_armed) {
+		g_prefill_guard_device_removed_query_injection_armed = false;  // single-shot
+		return true;
+	}
+#endif
+	superslm_gpu::harness::Device& dev = superslm_gpu::harness::GetDevice();
+	return !dev.dev || dev.dev->GetDeviceRemovedReason() != S_OK;
+}
+
 }  // namespace
+
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+namespace superslm_gpu {
+// Declared in gpu_port.h beside the T-2169 seams; consumed by `PrefillGuardDeviceReportedRemoved`.
+void ArmPrefillGuardDeviceRemovedQueryInjection() {
+	g_prefill_guard_device_removed_query_injection_armed = true;
+}
+}  // namespace superslm_gpu
+#endif
 
 // T-2184 remedy C1 (Brunel fix round 1, D-SLM3662): a bench-only entry point that reproduces the
 // GENUINELY shipped (pre-T-2169, `e35edc1`) per-token prefill composition -- `sslm_gpu_seq_embed_
@@ -2937,18 +3011,33 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5BridgeImpl(SslmGpuContext* ctx, SslmGp
 	seq->live_state.context_length = seq->context_length;
 	const int64_t chunk_open_ctxlen = seq->context_length;
 
+	// Prefill snapshot writer: invalid from here until this call's kNone exit, so every exit
+	// after the pre-scan other than kNone -- including an exception unwinding a chunk -- leaves
+	// the read refusing.
+	seq->prefill_hidden_valid = false;
 	const ChunkPreScanResult scan = RunChunkAdmissionPreScan(
 	    model, chunk_open_ctxlen, seq->context_cap, tokens, count, /*dfa_entry=*/nullptr,
 	    /*dfa_walk_state_start=*/0);
 
 	int64_t derived_count = 0;
+	bool guard_rejected = false;
 	SubmitAdmittedChunkForG5Bridge(model, seq, scan.chunk_embedding_bytes.data(), scan.admit_count,
-	                                chunk_open_ctxlen, &derived_count);
+	                                chunk_open_ctxlen, &derived_count, &guard_rejected);
 
 	// D-SLM3622 (design Sec5 step 5): the device-computed fallback -- a rejection the pre-scan
 	// could not see, discovered only via the post-chunk readback -- overrides whatever the
 	// host-computable cause predicted, regardless of cause. ready_for_logits stays untouched.
+	// A guard refusal always lands here: the refused token's last-layer commit never runs, so the
+	// derived count is short.
+	//
+	// D-SLM7282 (plan te266 Sec3.6): a device-side domain guard refusal on a device not reported
+	// removed is a per-sequence refusal, SSLM_SEQUENCE_REJECTED, the class the decode path already
+	// reports for the identical sticky-tag fact (MapDecodedStatusToGpuStatus). Every other short
+	// count -- a submission or infrastructure fault, a removed device -- stays SSLM_DEVICE_LOST.
 	if (derived_count < static_cast<int64_t>(scan.admit_count)) {
+		if (guard_rejected && !PrefillGuardDeviceReportedRemoved()) {
+			return SSLM_SEQUENCE_REJECTED;
+		}
 		return SSLM_DEVICE_LOST;
 	}
 
@@ -2968,6 +3057,9 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5BridgeImpl(SslmGpuContext* ctx, SslmGp
 		case ChunkAdmissionCause::kNone:
 		default:
 			seq->ready_for_logits = true;  // count > 0 already established above -- P4's own row.
+			// Prefill snapshot writer: this call's completed last-position residual.
+			seq->prefill_hidden_codes = seq->hidden_codes;
+			seq->prefill_hidden_valid = true;
 			return SSLM_OK;
 	}
 }
@@ -3057,13 +3149,20 @@ SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5BridgeImpl(SslmGpuContext* ctx,
 	seq->live_state.context_length = seq->context_length;
 	const int64_t chunk_open_ctxlen = seq->context_length;
 
+	// Prefill snapshot writer: invalid from here until this call's kNone exit (the prompt twin's
+	// identical rule). The kDfa exit sets ready_for_logits but never the snapshot.
+	seq->prefill_hidden_valid = false;
 	const ChunkPreScanResult scan = RunChunkAdmissionPreScan(model, chunk_open_ctxlen,
 	                                                          seq->context_cap, tokens, count, entry,
 	                                                          seq->dfa_walk_state);
 
 	int64_t derived_count = 0;
+	// The schema twin does not classify its device override (plan te266 Sec3.3, TE266-Q5): a guard
+	// refusal here stays SSLM_DEVICE_LOST below, because this twin's SSLM_SEQUENCE_REJECTED already
+	// means "tokens landed, carry on decoding" (kDfa). The flag is therefore not read.
+	bool guard_rejected_unused = false;
 	SubmitAdmittedChunkForG5Bridge(model, seq, scan.chunk_embedding_bytes.data(), scan.admit_count,
-	                                chunk_open_ctxlen, &derived_count);
+	                                chunk_open_ctxlen, &derived_count, &guard_rejected_unused);
 
 	// D-SLM3622 (design Sec5 step 5): the device-computed fallback overrides whatever the
 	// host-computable cause predicted, regardless of cause -- ready_for_logits stays untouched,
@@ -3105,8 +3204,71 @@ SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5BridgeImpl(SslmGpuContext* ctx,
 			// S5's own disposition: ready_for_logits set iff *consumed > 0 -- always true here
 			// since admit_count == count > 0 on the all-admitted path.
 			if (*consumed > 0) seq->ready_for_logits = true;
+			// Prefill snapshot writer: this call's completed last-position residual.
+			seq->prefill_hidden_codes = seq->hidden_codes;
+			seq->prefill_hidden_valid = true;
 			return SSLM_OK;
 	}
+}
+
+// gpu_1p0.h: the model's hidden width, the element count the read below writes.
+SslmGpuStatus sslm_gpu_model_hidden_sizeImpl(const SslmGpuModelHandle* model,
+                                             uint32_t* out_hidden_size) {
+	if (!model || !out_hidden_size) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	*out_hidden_size = model->hidden_size;
+	return SSLM_OK;
+}
+
+// gpu_1p0.h: the post-final_norm hidden state of this sequence's most recent successful prefill,
+// read from the prefill snapshot (SslmGpuSequenceHandle::prefill_hidden_codes), never from the
+// live residual. Host-side: no command list, no dispatch, and nothing on the sequence is written.
+// The checks run in the header's stated order; each refusal before step 4 writes nothing at all.
+SslmGpuStatus sslm_gpu_seq_read_prefill_final_hiddenImpl(SslmGpuContext* ctx,
+                                                         SslmGpuSequenceHandle* seq,
+                                                         int8_t* out_codes, size_t out_capacity,
+                                                         size_t* out_required, int64_t* out_scale_m,
+                                                         int64_t* out_scale_e) {
+	// 1. Malformed handle or output pointer.
+	if (!ctx || !seq || !seq->model || seq->ctx != ctx || !out_required || !out_scale_m ||
+	    !out_scale_e || (out_codes == nullptr && out_capacity != 0)) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	// 2. Submitted.
+	if (seq->state == superslm_gpu::SslmSequenceGpuState::Submitted) {
+		return SSLM_BUSY;
+	}
+	// 3. No snapshot.
+	if (!seq->prefill_hidden_valid) {
+		return SSLM_PREFILL_HIDDEN_UNAVAILABLE;
+	}
+	// 4. Required size, written on every outcome from here on.
+	const SslmGpuModelHandle* model = seq->model;
+	const size_t hidden = model->hidden_size;
+	*out_required = hidden;
+	if (out_capacity < hidden) {
+		return SSLM_OUTPUT_BUFFER_TOO_SMALL;
+	}
+	// 5. final_norm over the snapshot: the RmsNormSite call SslmGpuSeqFinishTokenForG5BridgeImpl
+	// makes before logits, with the same gain and site constant. The incoming scale is
+	// CarriedScale{} because RmsNormSite does not read it (forward_sites.h), which is why the
+	// snapshot stores none. Computed into local storage first, so a guard refusal writes nothing.
+	std::vector<int8_t> final_codes(hidden);
+	superslm::CarriedScale final_scale{};
+	const superslm::SslmForwardStatus st = superslm::RmsNormSite(
+	    seq->prefill_hidden_codes.data(), model->final_norm_gain.data(), hidden,
+	    superslm::CarriedScale{}, model->final_norm_site_constant, final_codes.data(), &final_scale,
+	    "final_norm", /*token_index=*/0, /*trace_hook_state=*/nullptr,
+	    /*external_wide_scratch=*/nullptr);
+	if (st != superslm::SslmForwardStatus::Ok) {
+		return SSLM_SEQUENCE_REJECTED;
+	}
+	// 6. Success.
+	std::memcpy(out_codes, final_codes.data(), hidden);
+	*out_scale_m = final_scale.m;
+	*out_scale_e = final_scale.e;
+	return SSLM_OK;
 }
 
 // Every installed status-returning GPU entry point terminates exceptions here. Allocation
@@ -3269,5 +3431,20 @@ SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(
 	return InvokeGpuApiBoundary(__func__, [&] {
 		return SslmGpuSeqPrefillSchemaContentForG5BridgeImpl(
 		    ctx, seq, tokens, count, budget, consumed);
+	});
+}
+SslmGpuStatus sslm_gpu_model_hidden_size(const SslmGpuModelHandle* model,
+                                         uint32_t* out_hidden_size) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] {
+		return sslm_gpu_model_hidden_sizeImpl(model, out_hidden_size);
+	});
+}
+SslmGpuStatus sslm_gpu_seq_read_prefill_final_hidden(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                                     int8_t* out_codes, size_t out_capacity,
+                                                     size_t* out_required, int64_t* out_scale_m,
+                                                     int64_t* out_scale_e) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] {
+		return sslm_gpu_seq_read_prefill_final_hiddenImpl(ctx, seq, out_codes, out_capacity,
+		                                                   out_required, out_scale_m, out_scale_e);
 	});
 }

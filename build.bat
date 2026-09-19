@@ -321,8 +321,10 @@ rem session invokes it manually against the real 1.5B artifact on disk (once wit
 rem environment, and twice more with each of SSLM_B5_ASYNC_DROP_UAV_REBIND/
 rem SSLM_B5_ASYNC_SWAP_SRV_REBIND=1 set, for the plant-and-revert violation-pin protocol --
 rem see that tool's own header comment). Same full source list as B1/B2/B3's own smoke builds.
+rem SUPERSLM_GPU_T2106_FAULT_PINS compiles the two pins' environment reads in (superslm_gpu.cpp);
+rem this is the only target that defines it, so the installed library cannot read them.
 if not exist out\b5 mkdir out\b5
-cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_O11_ALLOC_INJECTION ^
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_O11_ALLOC_INJECTION /DSUPERSLM_GPU_T2106_FAULT_PINS ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
 	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^

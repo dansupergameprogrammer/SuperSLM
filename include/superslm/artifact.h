@@ -13,6 +13,7 @@
 // Deviation is rejection with a versioned diagnostic, never a silent partial load.
 #ifndef SUPERSLM_ARTIFACT_H
 #define SUPERSLM_ARTIFACT_H
+#include "superslm/api.h"
 
 #include <array>
 #include <cstddef>
@@ -133,7 +134,7 @@ enum class SslmStatus {
 };
 
 // Human-readable name for a status, for diagnostics and test messages.
-const char* SslmStatusName(SslmStatus s) noexcept;
+SUPERSLM_API const char* SslmStatusName(SslmStatus s) noexcept;
 
 // The production Option-G selection mechanism is a header `flags` bit, not an
 // environment variable and not a format_version bump. Declared here (the
@@ -201,7 +202,7 @@ public:
 	// structural check. `data == nullptr` is rejected explicitly (NullData) before
 	// any other check, regardless of `size` — the caller's null pointer is never
 	// dereferenced (F14).
-	static SslmStatus OpenFromMemory(const uint8_t* data, size_t size,
+	static SUPERSLM_API SslmStatus OpenFromMemory(const uint8_t* data, size_t size,
 	                                 SslmArtifact& out, SslmError* err);
 
 	// Read the file at `path`, then OpenFromMemory. `path == nullptr` is rejected
@@ -231,7 +232,7 @@ public:
 	const std::vector<SslmSectionView>& Sections() const noexcept { return sections_; }
 
 	// The section of the given type, or nullptr if absent.
-	const SslmSectionView* Section(SslmSectionType type) const noexcept;
+	SUPERSLM_API const SslmSectionView* Section(SslmSectionType type) const noexcept;
 
 	// (design Sec31.2.1/Sec31.2.5): true iff this artifact's header `flags` field sets
 	// `kOptionGFusedKLandingFlag` -- the ONE dispatch point

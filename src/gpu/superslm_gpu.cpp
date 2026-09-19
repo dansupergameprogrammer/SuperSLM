@@ -2591,12 +2591,22 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// return-path census (tests/ci/check_gpu_guard_status_parity.py's own LWUWS
 	// derivation), from a real control-flow exit of THIS function -- a plain boolean
 	// expression, evaluated once via `static const`, carries no such statement at all.
+	//
+	// Both pins change the GPU output, so the environment reads exist only in a build that
+	// defines SUPERSLM_GPU_T2106_FAULT_PINS (the T-2106 plant-and-revert harness,
+	// build.bat's tools\t2113_b5_async_smoke.cpp line). The installed library defines it
+	// nowhere, so no environment variable can change what it computes.
+#ifdef SUPERSLM_GPU_T2106_FAULT_PINS
 	static const bool b5_async_drop_uav_rebind =
 	    std::getenv("SSLM_B5_ASYNC_DROP_UAV_REBIND") != nullptr &&
 	    std::getenv("SSLM_B5_ASYNC_DROP_UAV_REBIND")[0] == '1';
 	static const bool b5_async_swap_srv_rebind =
 	    std::getenv("SSLM_B5_ASYNC_SWAP_SRV_REBIND") != nullptr &&
 	    std::getenv("SSLM_B5_ASYNC_SWAP_SRV_REBIND")[0] == '1';
+#else
+	static const bool b5_async_drop_uav_rebind = false;
+	static const bool b5_async_swap_srv_rebind = false;
+#endif
 	// The swapped-SRV-rebind violation pin (T-2106): cos/sin land in each other's slot.
 	if (b5_async_swap_srv_rebind) {
 		dev.list->SetComputeRootShaderResourceView(6, sin_table_buf->GetGPUVirtualAddress());
@@ -3689,8 +3699,9 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
     // (T-2577 round 2, D-SLM6278): mirrors `RunLayerLoopGpuSubmit`'s own trailing
     // `model_generation` -- forwarded to every `SubmitOneSubChunkToFullDepthForG5Bridge` call
     // this function's own sub-chunk-splitting loop makes, below.
-    uint64_t model_generation, bool model_has_qk_norm) {
+    uint64_t model_generation, bool model_has_qk_norm, bool* out_readback_guard_rejected) {
 	if (out_inflight) *out_inflight = nullptr;
+	if (out_readback_guard_rejected) *out_readback_guard_rejected = false;
 	if (chunk_len == 0) {
 		// Nothing to submit -- no guard ladder has run, so this is not itself a rejection; the
 		// caller (Rung 3/4's own admit_count==0 case) is expected to handle a zero-length chunk
@@ -3735,6 +3746,16 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 		const superslm::SslmForwardStatus finish_status =
 		    RunLayerLoopGpuFinish(inflight, seq, workspace, /*block=*/1, &ready);
 		if (finish_status != superslm::SslmForwardStatus::Ok) {
+			// `RunLayerLoopGpuFinish` returns `GpuDeviceRemoved`/`GpuAllocationFailed` only from
+			// its catch (a fault in the fence wait or a readback `Map`, or a null token); every
+			// other non-`Ok` value is `DecodeStickyTag`'s decode of a device-side guard refusal,
+			// read on the normal path after both readbacks succeeded (gpu_port.h, the parameter's
+			// own comment). A submission failure returns above and never sets this.
+			if (out_readback_guard_rejected &&
+			    finish_status != superslm::SslmForwardStatus::GpuDeviceRemoved &&
+			    finish_status != superslm::SslmForwardStatus::GpuAllocationFailed) {
+				*out_readback_guard_rejected = true;
+			}
 			return finish_status;
 		}
 		// D-SLM3649 (fold, found by execution): `commit_site.hlsl`'s own per-layer increment

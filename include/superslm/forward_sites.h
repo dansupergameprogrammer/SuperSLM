@@ -17,6 +17,7 @@
 // src/forward/forward_sites.cpp.
 #ifndef SUPERSLM_FORWARD_SITES_H
 #define SUPERSLM_FORWARD_SITES_H
+#include "superslm/api.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -68,7 +69,7 @@ int64_t FloorDivI64(int64_t a, int64_t b);
 // this call with zero allocations of its own. nullptr (every existing call site, unchanged) keeps
 // the original internally-allocated behavior exactly as before -- this is additive, not a
 // behavior change for any caller that does not pass it.
-SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_size,
+SUPERSLM_API SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_size,
                                CarriedScale incoming_scale, CarriedScale site_constant,
                                int8_t* out_codes, CarriedScale* out_scale,
                                std::string_view site = {}, size_t token_index = 0,
@@ -414,7 +415,7 @@ SslmForwardStatus MlpActSite(const int8_t* gate_code, CarriedScale gate_scale,
 // "embed"); the caller supplies that literal rather than this function fixing
 // it, matching RmsNormSite's own convention rather than special-casing the
 // single-instance site.
-SslmForwardStatus EmbedEntry(int32_t token_id, int32_t vocab_size,
+SUPERSLM_API SslmForwardStatus EmbedEntry(int32_t token_id, int32_t vocab_size,
                               const int8_t* embed_weights, size_t hidden_size,
                               CarriedScale site_constant, int8_t* out_codes,
                               CarriedScale* out_scale,
@@ -990,7 +991,7 @@ struct LayerWeights {
 // derive as `hidden_size`" (the pre-widening identity), which is bit-identical to this
 // function's pre-T-2432 behavior for every existing (square) incumbent, per the design's own
 // additive/backward-compatible framing (§2.1 closing paragraph).
-SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
+SUPERSLM_API SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
                                  uint32_t num_hidden_layers, uint32_t layer_budget,
                                  size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
                                  size_t intermediate_size, int64_t context_cap,
@@ -1047,7 +1048,7 @@ enum class OptionGKLandingMode : uint8_t { kLegacy = 0, kFused = 1 };
 // T-2432 (Track A step 2): `q_width`, appended LAST for the identical reason the sibling
 // overload's own comment states -- see that comment, immediately above this enum's
 // declaration/header block, for the full contract. Default `0` means "derive as hidden_size."
-SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
+SUPERSLM_API SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
                                  uint32_t num_hidden_layers, uint32_t layer_budget,
                                  size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
                                  size_t intermediate_size, int64_t context_cap,
@@ -1080,7 +1081,7 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 // a caller that wants the per-site breakdown passes its own four counters directly. Each is
 // incremented under the identical condition as `kv_saturation_count`, alongside it, never in
 // place of it. All four default to `nullptr`: every pre-existing caller compiles unchanged.
-SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
+SUPERSLM_API SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
                                             size_t chunk_tokens, const LayerWeights* layers,
                                             uint32_t num_hidden_layers, size_t hidden_size,
                                             size_t head_dim, size_t num_key_value_heads,

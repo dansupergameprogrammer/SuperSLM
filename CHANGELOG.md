@@ -4,7 +4,26 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
-No user-visible changes yet.
+The GPU API gains an embedding read. `sslm_gpu_seq_read_prefill_final_hidden` returns the
+post-`final_norm` hidden state at the last position of a sequence's most recent successful prompt
+or schema-content prefill, from a per-sequence snapshot taken only when a prefill succeeds, so no
+later embed, decode, finish or failed prefill call changes what it returns. `sslm_gpu_model_hidden_size`
+gives the width to size the buffer with. Two statuses are appended to `SslmGpuStatus`, so no
+existing ordinal moves: `SSLM_OUTPUT_BUFFER_TOO_SMALL` and `SSLM_PREFILL_HIDDEN_UNAVAILABLE`.
+
+`SslmGpuSeqPrefillPromptForG5Bridge` now returns `SSLM_SEQUENCE_REJECTED`, not `SSLM_DEVICE_LOST`,
+when a device-side domain guard refuses an admitted token and the device is not reported removed.
+The context stays usable; reset the sequence before reusing it. The schema-content prefill still
+returns `SSLM_DEVICE_LOST` for the same refusal.
+
+The installed GPU library no longer reads `SSLM_B5_ASYNC_DROP_UAV_REBIND` or
+`SSLM_B5_ASYNC_SWAP_SRV_REBIND`. Both changed GPU output; they are compiled in only under
+`SUPERSLM_GPU_T2106_FAULT_PINS`, which only the fault-pin harness defines.
+
+New header `superslm/api.h` defines an empty `SUPERSLM_API` export slot, which 24 engine
+declarations consumed by sibling Unreal modules now carry. Defining it on the compiler command line
+(export when building the engine's shared library, import in a consumer) lets a modular build share
+one engine copy. By default the macro expands to nothing.
 
 ## [1.5.0] - 2026-09-17
 

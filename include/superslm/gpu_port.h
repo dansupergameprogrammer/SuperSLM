@@ -312,7 +312,14 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
     // predicates and the mutable K/V predicate's model-identity conjunct. Defaults to `0` so
     // every pre-existing caller is unaffected.
     uint64_t model_generation = 0,
-    bool model_has_qk_norm = false);
+    bool model_has_qk_norm = false,
+    // Set true exactly when this call returns because a NON-FINAL sub-chunk's
+    // `RunLayerLoopGpuFinish` returned a status other than `Ok`, `GpuDeviceRemoved` or
+    // `GpuAllocationFailed` -- by construction a device-side guard's sticky-tag decode. False on
+    // every other return, including a submission failure in any sub-chunk. The final sub-chunk's
+    // finish is the caller's, so its classification is the caller's too. Defaults to null so
+    // every caller that does not classify is unaffected.
+    bool* out_readback_guard_rejected = nullptr);
 
 // T-2169 (Rung 2, design Sec5, D-SLM3596/D-SLM3641): the measured, driver-stability-bounded
 // maximum sub-chunk size, in tokens -- see its own definition (src/gpu/superslm_gpu.cpp) for the
@@ -663,6 +670,13 @@ void ArmT2169ChunkRecordingTailSignalFaultInjection();
 void ClearT2169ChunkRecordingTailSignalFaultInjection();
 void ArmT2169ChunkRecordingTailBadAllocFaultInjection();
 void ClearT2169ChunkRecordingTailBadAllocFaultInjection();
+
+// The prompt twin (`SslmGpuSeqPrefillPromptForG5Bridge`, gpu_1p0.cpp) reports a device-side guard
+// refusal as `SSLM_SEQUENCE_REJECTED` only when `GetDeviceRemovedReason()` on the device the chunk
+// ran on returns `S_OK` at classification time. A real removal between the readback and that query
+// cannot be constructed deterministically, so this single-shot seam makes the NEXT such query
+// report a removed device, and is consumed by it. Defined in gpu_1p0.cpp.
+void ArmPrefillGuardDeviceRemovedQueryInjection();
 #endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 
 // Read back the device-resident K/V cache in the SAME layout and argument order

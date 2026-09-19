@@ -23,6 +23,7 @@
 // src/forward/checked_chain_funnel.cpp.
 #ifndef SUPERSLM_CHECKED_CHAIN_FUNNEL_H
 #define SUPERSLM_CHECKED_CHAIN_FUNNEL_H
+#include "superslm/api.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -352,7 +353,7 @@ enum class SslmForwardStatus {
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,
 // artifact.h, and SslmModelStatusName's convention).
-const char* SslmForwardStatusName(SslmForwardStatus s) noexcept;
+SUPERSLM_API const char* SslmForwardStatusName(SslmForwardStatus s) noexcept;
 
 // A checked chain call's outcome. Only the status rides in the return value; the
 // codes and the carried output scale are written through `out_codes`/`out_scale`

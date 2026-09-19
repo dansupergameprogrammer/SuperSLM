@@ -15,6 +15,7 @@
 // silent partial view.
 #ifndef SUPERSLM_MODEL_H
 #define SUPERSLM_MODEL_H
+#include "superslm/api.h"
 
 #include <array>
 #include <cstdint>
@@ -285,7 +286,7 @@ enum class SslmModelStatus {
 };
 
 // Human-readable name for a status, for diagnostics and test messages.
-const char* SslmModelStatusName(SslmModelStatus s) noexcept;
+SUPERSLM_API const char* SslmModelStatusName(SslmModelStatus s) noexcept;
 
 // The magic a section type's manifest must carry, or nullptr if the type has no
 // tensor manifest. Only Weights/Biases/RopeTables carry one.
@@ -309,7 +310,7 @@ public:
 	const std::vector<SslmTensorView>& Tensors() const noexcept { return tensors_; }
 
 	// The tensor with the given name, or nullptr if absent.
-	const SslmTensorView* Tensor(std::string_view name) const noexcept;
+	SUPERSLM_API const SslmTensorView* Tensor(std::string_view name) const noexcept;
 
 private:
 	// S-HARDEN-7 (design Sec3.1): grants src/model.cpp's
@@ -359,11 +360,11 @@ public:
 	const std::vector<SslmConstantEntry>& Entries() const noexcept { return entries_; }
 
 	// The entry with the given name, or nullptr if absent.
-	const SslmConstantEntry* Entry(std::string_view name) const noexcept;
+	SUPERSLM_API const SslmConstantEntry* Entry(std::string_view name) const noexcept;
 
 	// Read value index `w` (< value_words) of `entry` as a signed int64 (little-endian
 	// byte assembly). Behavior is undefined if `w >= entry.value_words`.
-	static int64_t Value(const SslmConstantEntry& entry, uint32_t w) noexcept;
+	static SUPERSLM_API int64_t Value(const SslmConstantEntry& entry, uint32_t w) noexcept;
 
 private:
 	// S-HARDEN-7 (design Sec3.1): see SslmTensorManifest's identical
@@ -779,7 +780,7 @@ private:
 // failed.
 class SslmModel {
 public:
-	static SslmModelStatus Load(const uint8_t* data, size_t size, SslmModelView& out, std::string* err);
+	static SUPERSLM_API SslmModelStatus Load(const uint8_t* data, size_t size, SslmModelView& out, std::string* err);
 };
 
 // S3.7 (§8.3, §8.4): the calibration band's own verdict. `InBand` and the

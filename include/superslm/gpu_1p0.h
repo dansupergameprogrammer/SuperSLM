@@ -71,7 +71,11 @@ enum class SslmGpuStatus : uint32_t {
      *     returning it when a chunk's own derived admit count comes back short of what was
      *     requested at a saturated context cap; the shipped per-token decode loop's own
      *     cap-boundary behavior, mirrored. The device and the context stay fully usable; a
-     *     caller may continue issuing calls against the same context and sequence.
+     *     caller may continue issuing calls against the same context and sequence. A
+     *     device-side domain guard refusal found by the prompt twin's post-chunk readback on a
+     *     device not reported removed is NOT this status: the prompt twin reports it as
+     *     SSLM_SEQUENCE_REJECTED (see that function's comment). The schema twin still reports
+     *     its own device-side guard refusal here.
      * (b) a real device/allocation fault -- a lost/removed device, or an infrastructural
      *     submit/finish failure (an exception caught and contained at this boundary from the
      *     GPU command-submission tail). The command list is recovered at the point the fault is
@@ -103,8 +107,10 @@ enum class SslmGpuStatus : uint32_t {
     SSLM_BATCH_BUDGET_EXHAUSTED,         /* design Sec9 -- B7                   */
     SSLM_TOKEN_ID_OUT_OF_RANGE,          /* design Sec9 -- B3.5                 */
     /* A per-sequence
-     * decode-time rejection that the CPU-domain guard ladder (RunLayerLoopGpuSubmit's own
-     * pre-submission checks, or DecodeStickyTag's own post-dispatch decode) produced --
+     * decode-time rejection, or a prompt-prefill rejection found by
+     * SslmGpuSeqPrefillPromptForG5Bridge's post-chunk readback, that the CPU-domain guard ladder
+     * (RunLayerLoopGpuSubmit's own pre-submission checks, or DecodeStickyTag's own post-dispatch
+     * decode) produced --
      * InvalidLayerBudget, ChainInputOutOfDomain, SoftmaxRowWidthOutOfDomain, and every other
      * superslm::SslmForwardStatus value that is neither Ok nor a real device-level failure
      * (GpuDeviceRemoved/GpuAllocationFailed, which map to SSLM_DEVICE_LOST below instead).
@@ -150,7 +156,13 @@ enum class SslmGpuStatus : uint32_t {
      * Appended LAST so every existing public GPU status keeps its ordinal. */
     SSLM_GPU_SHADER_BINARY_STALE,
     /* An allocation failed before work was submitted. The device/context remain valid. */
-    SSLM_GPU_ALLOCATION_FAILED
+    SSLM_GPU_ALLOCATION_FAILED,
+    /* sslm_gpu_seq_read_prefill_final_hidden: `out_capacity` is below the required element count.
+     * Nothing is written except `*out_required`. Appended LAST; no existing ordinal moves. */
+    SSLM_OUTPUT_BUFFER_TOO_SMALL,
+    /* sslm_gpu_seq_read_prefill_final_hidden: the sequence holds no prefill snapshot (see that
+     * function's comment). Appended LAST; no existing ordinal moves. */
+    SSLM_PREFILL_HIDDEN_UNAVAILABLE
 };
 
 /* --- Sec4.1.1: context create/destroy. DEFINED as of B1 (src/gpu/gpu_1p0.cpp). --- */
@@ -323,13 +335,16 @@ uint32_t SslmGpuSeqWalkStateForG5Bridge(SslmGpuSequenceHandle* seq);
  * (`sslm_decode_step_gpu`/`SslmGpuSeqDecodeStepForG5Bridge`'s layer-loop-to-depth step),
  * unchanged by this call.
  *
- * Returns SSLM_DEVICE_LOST for two distinct causes (see the status enum's own comment,
- * above): an ordinary, healthy rejection when the chunk's own derived admit count comes back
- * short of what was requested at a saturated context cap -- the context and device stay
- * usable, and a caller may continue -- or a real, contained device/allocation fault from the
- * GPU submit/finish tail, after which the command list is recovered and the context stays
- * usable for a caller that continues, unless the device is confirmed removed, which is
- * terminal for the context regardless of cause. */
+ * Returns SSLM_SEQUENCE_REJECTED when a device-side domain guard refused one of the admitted
+ * tokens (the guard family the CPU forward reports by name, found here by the post-chunk
+ * readback) and the device was not reported removed when this call classified the refusal. The
+ * context and the device remain usable. Tokens before the refused one are committed; the
+ * refused token and every later one are not; the sequence's live residual and layer index are
+ * unspecified and the prefill snapshot is empty. Call sslm_gpu_seq_reset before reusing the
+ * sequence. Returns SSLM_DEVICE_LOST when the committed count falls short for any other reason:
+ * a saturated context cap, or a device or infrastructure fault in submission, fence wait or
+ * readback, including a removed device. This surface offers no query that tells a recovered
+ * context from a removed device after SSLM_DEVICE_LOST. */
 SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                   const int32_t* tokens, int32_t count,
                                                   uint32_t dispatch_budget) noexcept;
@@ -396,5 +411,54 @@ SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(SslmGpuContext* ctx,
                                                           const int32_t* tokens, int32_t count,
                                                           uint32_t dispatch_budget_per_token,
                                                           int32_t* consumed) noexcept;
+
+/* ============================================================================
+ * The embedding read: the final hidden state a successful prefill leaves behind.
+ * ============================================================================ */
+
+/* The model's hidden width: the element count sslm_gpu_seq_read_prefill_final_hidden writes.
+ * Needs no sequence and no prefill. A null `model` or `out_hidden_size` returns
+ * SSLM_SEQUENCE_KV_BUFFER_MISMATCH and writes nothing. */
+SslmGpuStatus sslm_gpu_model_hidden_size(const SslmGpuModelHandle* model,
+                                         uint32_t* out_hidden_size) noexcept;
+
+/* Post-final_norm hidden state at the last position of this sequence's most recent SUCCESSFUL
+ * prefill: the most recent SslmGpuSeqPrefillPromptForG5Bridge or
+ * SslmGpuSeqPrefillSchemaContentForG5Bridge call that reached its admission pre-scan returned
+ * SSLM_OK, and no sslm_gpu_seq_reset has run since. Every other public call leaves what this
+ * returns unchanged.
+ *
+ * out_capacity == 0 does NOT act as a prefill-independent size query: the no-snapshot check
+ * (SSLM_PREFILL_HIDDEN_UNAVAILABLE) runs before the capacity check, so a sequence holding no
+ * prefill snapshot refuses here at any capacity, including 0. Callers size their buffer from
+ * sslm_gpu_model_hidden_size, which needs no sequence and no prefill, not from a zero-capacity
+ * call to this verb. *out_required is written only once the handle, busy and snapshot checks
+ * pass; SSLM_SEQUENCE_KV_BUFFER_MISMATCH, SSLM_BUSY and SSLM_PREFILL_HIDDEN_UNAVAILABLE write
+ * nothing.
+ *
+ * Checked in order:
+ *  1. `ctx` or `seq` null, `seq` not created against `ctx`, any of `out_required`,
+ *     `out_scale_m`, `out_scale_e` null, or `out_codes` null with `out_capacity` nonzero ->
+ *     SSLM_SEQUENCE_KV_BUFFER_MISMATCH, nothing written.
+ *  2. `seq` Submitted -> SSLM_BUSY, nothing written.
+ *  3. No prefill snapshot -> SSLM_PREFILL_HIDDEN_UNAVAILABLE, nothing written. A fresh,
+ *     restored or reset sequence holds none, and neither does one whose most recent prefill
+ *     call that reached its admission pre-scan did not return SSLM_OK.
+ *  4. `*out_required` = the hidden width, on this and every later outcome. `out_capacity`
+ *     below it -> SSLM_OUTPUT_BUFFER_TOO_SMALL, nothing else written.
+ *  5. final_norm (the RmsNormSite call SslmGpuSeqFinishTokenForG5Bridge makes before logits)
+ *     over the snapshot. A guard refusal -> SSLM_SEQUENCE_REJECTED, nothing written to
+ *     `out_codes`, `out_scale_m` or `out_scale_e`.
+ *  6. Writes exactly the hidden width of codes and the scale, returns SSLM_OK.
+ *
+ * Host-side: records no command list and adds no dispatch. Writes nothing on the sequence, so a
+ * decode step issued after a read produces what it would have produced without it. `out_codes`
+ * needs no alignment. Thread-safety as the rest of this header: calls on distinct sequences may
+ * run concurrently; a read and another call driving the same sequence from two threads is a
+ * caller error. */
+SslmGpuStatus sslm_gpu_seq_read_prefill_final_hidden(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                                     int8_t* out_codes, size_t out_capacity,
+                                                     size_t* out_required,
+                                                     int64_t* out_scale_m, int64_t* out_scale_e) noexcept;
 
 #endif /* SSLM_GPU_1P0_H */

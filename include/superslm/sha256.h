@@ -3,6 +3,7 @@
 // third-party dependency, so the hash implementation is in-tree.
 #ifndef SUPERSLM_SHA256_H
 #define SUPERSLM_SHA256_H
+#include "superslm/api.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -15,11 +16,11 @@ namespace superslm {
 class Sha256 {
 public:
 	Sha256() { Reset(); }
-	void Reset();
+	SUPERSLM_API void Reset();
 	// Throws only std::bad_alloc (S-HARDEN-7, F5).
-	void Update(const uint8_t* data, size_t len);
+	SUPERSLM_API void Update(const uint8_t* data, size_t len);
 	// Writes 32 bytes to out[0..31]. The object is single-use after Final.
-	void Final(uint8_t out[32]);
+	SUPERSLM_API void Final(uint8_t out[32]);
 
 private:
 	// S-HARDEN-7 (design Sec3.1): grants src/sha256.cpp's Sha256Access
@@ -38,7 +39,7 @@ private:
 
 // One-shot: SHA-256 of a buffer into out[0..31]. Throws only std::bad_alloc
 // (S-HARDEN-7, F5).
-void Sha256Hash(const uint8_t* data, size_t len, uint8_t out[32]);
+SUPERSLM_API void Sha256Hash(const uint8_t* data, size_t len, uint8_t out[32]);
 
 // Lowercase hex of a 32-byte digest. Throws only std::bad_alloc (S-HARDEN-7,
 // F5).
