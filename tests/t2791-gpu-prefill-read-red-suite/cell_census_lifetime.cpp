@@ -8,6 +8,9 @@
 //   - "F_PQ": SSLM_OK and the whole frame equal to the continuation's frame;
 //   - "refuse": SSLM_PREFILL_HIDDEN_UNAVAILABLE and no frame output written;
 //   - "busy": SSLM_BUSY and no frame output written.
+// "No frame output written" on refuse and busy includes *out_required, which a Frame seeds with a
+// sentinel (plan Sec3.1 check 4 writes it only once checks 1-3 pass; Sec3.4 row 7, T-2806 N4): the
+// fresh-sequence and M04 cells pin check 3, M14a pins check 2.
 //
 // ORACLE (independent of the snapshot and the read): F_P is final_norm applied, by this file, to
 // the live residual the bench accessor exposes immediately after the base prefill returned
@@ -75,11 +78,17 @@ struct Census {
 		          "[%s] %s: read returned %s, want SSLM_PREFILL_HIDDEN_UNAVAILABLE", tag, member,
 		          StatusName(got.status));
 		CHECK_MSG(got.OutputsUntouched(), "[%s] %s: a refused read wrote its codes or scale", tag, member);
+		// Plan Sec3.4 row 7 (T-2806 N4, T-2814): check 3 leaves *out_required unwritten.
+		CHECK_MSG(got.required == kRequiredSentinel, "[%s] %s: a check-3 refusal wrote *out_required (%zu)", tag,
+		          member, got.required);
 	}
 	void ExpectBusy(const char* member, const Frame& got) {
 		CHECK_MSG(got.status == SSLM_BUSY, "[%s] %s: read returned %s, want SSLM_BUSY", tag, member,
 		          StatusName(got.status));
 		CHECK_MSG(got.OutputsUntouched(), "[%s] %s: a BUSY read wrote its codes or scale", tag, member);
+		// Plan Sec3.4 row 7 (T-2806 N4, T-2814): check 2 leaves *out_required unwritten.
+		CHECK_MSG(got.required == kRequiredSentinel, "[%s] %s: a check-2 refusal wrote *out_required (%zu)", tag,
+		          member, got.required);
 	}
 	// The member moved the live residual away from F_P (mutant (a) is killable here).
 	void ExpectDiscriminating(const char* member) {

@@ -46,8 +46,21 @@
 //
 // Red at v1.5.0 by LINK: LNK2019 on sslm_gpu_seq_read_prefill_final_hidden and on the seam.
 //
+// N3 (T-2806 audit; T-2814): plan Sec3.6 item 4, "ready_for_logits stays untouched" after the guard
+// refusal. The bench bridge does not expose the bit; the observable is the NEXT decode-wrapper call,
+// whose ready-bit shortcut finishes the residual without embedding (the context length does not grow)
+// and whose other branch embeds the given token and drives it (the context length grows by one). After
+// Q4-1a (bit clear before the call) and Q4-1a+ (bit set by the prefix) the cell calls
+// SslmGpuSeqDecodeStepForG5Bridge(token 0) once and asserts the status, the context-length change and
+// the token that v1.5.0 gives for the same calls on the same fixture -- read from the v1.5.0 engine by
+// Claude/Curie/t2814-probe/n3_wrapper_v150.cpp, never from the build under test. At v1.5.0 this refusal
+// is the device override, which leaves the bit untouched, the behaviour Sec3.6 item 4 keeps.
+//
+// *out_required (plan Sec3.4 row 7, T-2806 N4): every refused read also leaves *out_required at its
+// sentinel -- plan Sec3.1 check 4 writes it only after checks 1-3 pass.
+//
 // Run: cell_prompt_guard_status.exe --synthetic=PATH --gan=PATH
-#include "fixture_common.h"
+#include "cpu_oracle.h"
 
 // Plan Sec3.6 item 3's seam, beside the T-2169 seams and under their macro. Declared here as the
 // verb is in fixture_common.h: the cell compiles at v1.5.0 and fails to link on this symbol; once
@@ -71,97 +84,7 @@ constexpr int32_t kPassA = 0;
 constexpr int32_t kPassB = 1;
 constexpr int32_t kTrip = 3;
 
-bool FileSha256(const std::string& path, std::string* out) {
-	std::vector<uint8_t> b;
-	if (!ReadFileBytes(path, &b)) return false;
-	*out = Sha256Hex(b.data(), b.size());
-	return true;
-}
-
-// ---- O-CPU ---------------------------------------------------------------------------------
-struct CpuResult {
-	superslm::SslmForwardStatus st = superslm::SslmForwardStatus::Ok;
-	int refused_index = -1;
-	uint32_t refused_layer = 0;
-	Frame frame;  // status SSLM_OK with the final_norm frame when every token passed
-};
-
-class CpuOracle {
-public:
-	explicit CpuOracle(GpuModelFixture& fx) : fx_(fx) {
-		superslm::SslmModelView& v = fx.view;
-		superslm_marshal::PreflightScanWscFolds(v);
-		backing_.resize(fx.layers);
-		layers_.resize(fx.layers);
-		std::string err;
-		ok_ = true;
-		for (uint32_t l = 0; l < fx.layers; ++l) {
-			if (!superslm_marshal::MarshalLayer(v, l, v.config.num_attention_heads, v.config.num_key_value_heads,
-			                                    backing_[l], layers_[l], &err)) {
-				ok_ = false;
-			}
-		}
-		embed_scale_ = superslm_marshal::ReadCarriedScale(v.composition_constants, "embed", &ok_);
-		const superslm::SslmTensorView* e = v.weights.Tensor("embed");
-		if (!e) ok_ = false;
-		embed_ = e ? reinterpret_cast<const int8_t*>(e->data) : nullptr;
-	}
-	bool ok() const { return ok_; }
-
-	CpuResult Run(const std::vector<int32_t>& toks) {
-		superslm::SslmModelView& v = fx_.view;
-		std::vector<uint8_t> ws(static_cast<size_t>(v.config.num_hidden_layers) * v.config.context_cap *
-		                            v.config.num_key_value_heads * v.config.head_dim * 2,
-		                        0);
-		std::vector<int8_t> codes(fx_.hidden, 0);
-		superslm::SequenceLayerState seq{};
-		seq.hidden_codes = codes.data();
-		const auto k_mode = v.option_g_fused_k_landing ? superslm::OptionGKLandingMode::kFused
-		                                               : superslm::OptionGKLandingMode::kLegacy;
-		CpuResult r;
-		r.frame.status = SSLM_SEQUENCE_REJECTED;
-		for (size_t i = 0; i < toks.size(); ++i) {
-			superslm::CarriedScale s{};
-			superslm::EmbedEntry(toks[i], fx_.vocab, embed_, fx_.hidden, embed_scale_, codes.data(), &s);
-			seq.hidden_scale = s;
-			seq.layer_index = 0;
-			const auto st = superslm::RunLayerLoop(
-			    seq, layers_.data(), fx_.layers, fx_.layers, fx_.hidden, v.config.head_dim,
-			    v.config.num_key_value_heads, v.config.intermediate_size, v.config.context_cap, v.rope_tables,
-			    ws.data(), ws.size(), k_mode, {}, 0, &v.trace_hook,
-			    static_cast<size_t>(v.config.num_attention_heads) * v.config.head_dim);
-			if (st != superslm::SslmForwardStatus::Ok) {
-				r.st = st;
-				r.refused_index = static_cast<int>(i);
-				r.refused_layer = seq.layer_index;
-				return r;
-			}
-		}
-		r.frame.codes.assign(fx_.hidden, 0);
-		superslm::CarriedScale out{};
-		const auto fst = superslm::RmsNormSite(codes.data(), fx_.final_gain.data(), fx_.hidden, superslm::CarriedScale{},
-		                                       fx_.final_const, r.frame.codes.data(), &out, "final_norm");
-		r.frame.status = fst == superslm::SslmForwardStatus::Ok ? SSLM_OK : SSLM_SEQUENCE_REJECTED;
-		r.frame.m = out.m;
-		r.frame.e = out.e;
-		r.frame.required = fx_.hidden;
-		return r;
-	}
-
-private:
-	GpuModelFixture& fx_;
-	std::vector<superslm_marshal::LayerBacking> backing_;
-	std::vector<superslm::LayerWeights> layers_;
-	superslm::CarriedScale embed_scale_{};
-	const int8_t* embed_ = nullptr;
-	bool ok_ = false;
-};
-
-std::string Ids(const std::vector<int32_t>& t) {
-	std::string s = "[";
-	for (size_t i = 0; i < t.size(); ++i) s += (i ? "," : "") + std::to_string(t[i]);
-	return s + "]";
-}
+// O-CPU (CpuOracle), Ids and FileSha256 live in cpu_oracle.h, shared with cell_schema_guard_status.cpp.
 
 // The whole-vocabulary label sweep (fold record Sec5 item 1). Returns false on a SETUP failure.
 bool LabelSweep(GpuModelFixture& fx, CpuOracle& cpu, bool patched, std::vector<uint8_t>* labels) {
@@ -270,6 +193,30 @@ void RefusalCell(GpuModelFixture& g, SslmGpuSequenceHandle* s, const Shape& sh, 
 	CHECK_MSG(rd.status == kPrefillHiddenUnavailable && rd.OutputsUntouched(),
 	          "%s: the read returned %s (untouched=%d), want SSLM_PREFILL_HIDDEN_UNAVAILABLE and nothing written", label,
 	          StatusName(rd.status), rd.OutputsUntouched() ? 1 : 0);
+	CHECK_MSG(rd.required == kRequiredSentinel, "%s: a check-3 refusal wrote *out_required (%zu)", label, rd.required);
+}
+
+// N3: the next decode-wrapper call after the refusal, against v1.5.0's reading of the same calls.
+struct WrapperReading {
+	int ctx_delta;      // +1: the wrapper embedded token 0 (bit clear); 0: the ready-bit shortcut (bit set)
+	int32_t out_token;  // v1.5.0's token
+};
+// Claude/Curie/t2814-probe/n3-wrapper-v150-output.txt, G-an rows R0 and R1 (both SSLM_OK at v1.5.0).
+constexpr WrapperReading kV150AfterQ41a = {1, 47};
+constexpr WrapperReading kV150AfterQ41aPlus = {0, 3};
+
+void WrapperAfterRefusal(GpuModelFixture& g, SslmGpuSequenceHandle* s, const WrapperReading& want, const char* label) {
+	const int64_t before = ContextLength(s);
+	int32_t tok = -7;
+	const SslmGpuStatus st = SslmGpuSeqDecodeStepForG5Bridge(g.ctx, s, kPassA, g.one_layer_budget, &tok);
+	const int64_t delta = ContextLength(s) - before;
+	std::printf("    N3 %-7s next wrapper(0): %s out_token=%d ctxlen %+lld (v1.5.0: SSLM_OK, %d, %+d)\n", label,
+	            StatusName(st), tok, static_cast<long long>(delta), want.out_token, want.ctx_delta);
+	CHECK_MSG(st == SSLM_OK && delta == want.ctx_delta && tok == want.out_token,
+	          "N3 %s: after the guard refusal the next decode-wrapper call gave %s, token %d, context %+lld; v1.5.0 gives "
+	          "SSLM_OK, token %d, context %+d (ready_for_logits %s before the call must be left untouched, Sec3.6 item 4)",
+	          label, StatusName(st), tok, static_cast<long long>(delta), want.out_token, want.ctx_delta,
+	          want.ctx_delta == 0 ? "set" : "clear");
 }
 
 // A fresh-context control: map, prefill `ids`, read. The frame is compared with O-LIVE and O-CPU.
@@ -352,7 +299,10 @@ int main(int argc, char** argv) {
 	if (swept && s) {
 		std::printf("Q4-1 refusal cells on G-an\n");
 		for (const Shape& sh : Shapes()) {
-			if (Precondition(cpu_g, sh)) RefusalCell(g, s, sh, SSLM_SEQUENCE_REJECTED, sh.name);
+			if (!Precondition(cpu_g, sh)) continue;
+			RefusalCell(g, s, sh, SSLM_SEQUENCE_REJECTED, sh.name);
+			if (std::string(sh.name) == "Q4-1a") WrapperAfterRefusal(g, s, kV150AfterQ41a, sh.name);
+			if (std::string(sh.name) == "Q4-1a+") WrapperAfterRefusal(g, s, kV150AfterQ41aPlus, sh.name);
 		}
 		std::printf("Q4-1d the device-alive conjunct (seam armed), then single-shot\n");
 		const Shape q4a = Shapes()[0];

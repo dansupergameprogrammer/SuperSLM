@@ -11,6 +11,14 @@
 //   F1-F4 each return exactly SSLM_DEVICE_LOST (plan Sec3.4 row 5, tightened by T-2798 / T-2801:
 //   plan Sec3.6 moves only the device-guard refusal to SSLM_SEQUENCE_REJECTED; every infrastructure
 //   fault stays SSLM_DEVICE_LOST, and F1 is mutant (j)'s in-suite killer);
+//   F1b (T-2806 G2, T-2814) the recording seam fires in a NON-FINAL sub-chunk: after the base prefill,
+//   ArmT2169ChunkRecordingFaultInjection(1) and a 6-token continuation. The seam's index counts within
+//   the sub-chunk (superslm_gpu.cpp's SubmitOneSubChunkToFullDepthForG5Bridge), and sub-chunks are
+//   kT2169TdrSafeMaxChunkTokens = 4 tokens, so it fires in sub-chunk 1 of 2, whose submit fails. Asserts
+//   exactly SSLM_DEVICE_LOST, the context length unchanged by the call (sub-chunk 1's tokens are not
+//   committed and sub-chunk 2 is never submitted), and that the read refuses. F1b0 is its must-accept
+//   neighbour: the same 6 tokens unarmed read their frame. F1b is mutant (n)'s killer: F1 returns
+//   through the final sub-chunk, where plan Sec3.6 item 1's flag is not consulted;
 //   F6 recovery: reset + prefill afterwards reads the correct frame.
 // Schema twin, on a schema-bearing artifact (--g5fixture; plan Sec3.4 row 5 names the G5
 // suite's argv artifact, and the re-strike executed these members on it, Claude/Loki/te270-*):
@@ -20,7 +28,12 @@
 //   S3 a schema bound across reset, SSLM_OK -> that call's frame;
 //   S3b schema unbound (before the pre-scan) -> the prior frame;
 //   S4 / S5 kPositionCap with 2 and with 0 admitted -> refuse;
-//   F5 the device override on the schema twin -> refuse.
+//   F5 the device override on the schema twin -> exactly SSLM_DEVICE_LOST (tightened from `!= SSLM_OK`
+//   by T-2814, plan Sec3.4 row 5 and T-2806 G1: the schema twin keeps SSLM_DEVICE_LOST, D-SLM7311, so a
+//   leak of Sec3.6's classification into it that classifies by value turns F5 red), and refuse.
+// Every refused read also leaves *out_required at its sentinel (plan Sec3.4 row 7, T-2806 N4).
+// --g5fixture must carry a SchemaMasks section: an artifact without one fails the cell, it does not
+// skip it (T-2806 M2).
 // NOT A CELL, per plan Sec2.6 and Sec3.4 row 5:
 //   - the schema twin's kEmbed exit. It is dead code: no loadable artifact reaches it.
 //     SchemaMasksTable::Parse rejects a transition token >= vocab_size, the embed scan rejects only
@@ -51,6 +64,8 @@ void ExpectRefuse(const char* tag, const char* cell, const Frame& f) {
 	CHECK_MSG(f.status == kPrefillHiddenUnavailable, "[%s] %s: read returned %s, want SSLM_PREFILL_HIDDEN_UNAVAILABLE",
 	          tag, cell, StatusName(f.status));
 	CHECK_MSG(f.OutputsUntouched(), "[%s] %s: a refused read wrote its codes or scale", tag, cell);
+	CHECK_MSG(f.required == kRequiredSentinel, "[%s] %s: a check-3 refusal wrote *out_required (%zu)", tag, cell,
+	          f.required);
 }
 void ExpectFrame(const char* tag, const char* cell, const Frame& f, const Frame& want, size_t H) {
 	CHECK_MSG(f.status == SSLM_OK && f.SameFrame(want, H),
@@ -86,6 +101,29 @@ void PromptFaults(GpuModelFixture& fx) {
 	          StatusName(f1));
 	std::printf("    [%s] F1 prefill status under the override: %s\n", tag, StatusName(f1));
 	ExpectRefuse(tag, "F1 prompt device-computed override", ReadVerb(fx, s));
+
+	// F1b0 / F1b (T-2806 G2): the recording fault in the FIRST of two sub-chunks of a 6-token
+	// continuation. Must-accept first: the same 6 tokens, unarmed.
+	const std::vector<int32_t> six = fx.Run(6, P[1]);
+	CHECK_MSG(base(), "[%s] SETUP base", tag);
+	CHECK_MSG(Prefill(fx, s, six) == SSLM_OK, "[%s] F1b0 SETUP: the unarmed 6-token continuation", tag);
+	ExpectFrame(tag, "F1b0 unarmed 6-token continuation (must-accept)", ReadVerb(fx, s), OracleFromLive(fx, s),
+	            fx.hidden);
+	CHECK_MSG(base(), "[%s] SETUP base", tag);
+	const int64_t open_len = ContextLength(s);
+	superslm_gpu::ArmT2169ChunkRecordingFaultInjection(1);
+	const SslmGpuStatus f1b = Prefill(fx, s, six);
+	superslm_gpu::ClearT2169ChunkRecordingFaultInjection();
+	const int64_t after_len = ContextLength(s);
+	std::printf("    [%s] F1b 6-token continuation, fault in sub-chunk 1 of 2: status %s, context %lld -> %lld\n", tag,
+	            StatusName(f1b), static_cast<long long>(open_len), static_cast<long long>(after_len));
+	CHECK_MSG(f1b == SSLM_DEVICE_LOST,
+	          "[%s] F1b: the recording fault in a non-final sub-chunk returned %s, want SSLM_DEVICE_LOST", tag,
+	          StatusName(f1b));
+	CHECK_MSG(after_len == open_len,
+	          "[%s] F1b: the context length moved from %lld to %lld; no token of the failed call may commit", tag,
+	          static_cast<long long>(open_len), static_cast<long long>(after_len));
+	ExpectRefuse(tag, "F1b recording fault in a non-final sub-chunk", ReadVerb(fx, s));
 
 	struct Tail { const char* cell; void (*arm)(); void (*clr)(); } tails[] = {
 	    {"F2 prompt recording-tail fault (pre-Close)", superslm_gpu::ArmT2169ChunkRecordingTailFaultInjection,
@@ -124,7 +162,8 @@ void SchemaMembers(GpuModelFixture& fx) {
 	const char* tag = fx.path.c_str();
 	SslmGpuContext* ctx = fx.ctx;
 	if (!SslmGpuModelHasSchemasForG5Bridge(fx.model)) {
-		SKIP_MSG("[%s] schema members: the artifact carries no SchemaMasks section", tag);
+		// Not a SKIP (T-2806 M2): a --g5fixture without schemas is the wrong artifact, not a missing one.
+		CHECK_MSG(false, "[%s] schema members: --g5fixture carries no SchemaMasks section", tag);
 		return;
 	}
 	IndependentSchema ds;
@@ -245,7 +284,10 @@ void SchemaMembers(GpuModelFixture& fx) {
 		superslm_gpu::ArmT2169ChunkRecordingFaultInjection(1);
 		const SslmGpuStatus st = schema_prefill({chain[2], chain[3]});
 		superslm_gpu::ClearT2169ChunkRecordingFaultInjection();
-		CHECK_MSG(st != SSLM_OK, "[%s] F5 SETUP: the armed override failed the call (%s)", tag, StatusName(st));
+		// T-2814 (plan Sec3.4 row 5, T-2806 G1): tightened from `!= SSLM_OK`. The schema twin's device
+		// override stays SSLM_DEVICE_LOST in 1.6.0 (Sec3.3, D-SLM7311).
+		CHECK_MSG(st == SSLM_DEVICE_LOST, "[%s] F5: the armed override on the schema twin returned %s, want SSLM_DEVICE_LOST",
+		          tag, StatusName(st));
 		ExpectRefuse(tag, "F5 schema device-computed override", ReadVerb(fx, s));
 	}
 	sslm_gpu_seq_release(ctx, s);

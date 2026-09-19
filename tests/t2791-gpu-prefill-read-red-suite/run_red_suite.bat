@@ -5,8 +5,13 @@ rem reading is build_red_suite.bat's output). Cell_functional_commission is excl
 rem --with-commission is given: it is about 11 GPU minutes (plan Sec3.4 row 10) and belongs to the
 rem release reading (plan Sec3.5 step 5).
 rem
+rem A SKIPPED CELL FAILS THE RUN (plan Sec3.5 step 1, T-2806 M2): each cell exits non-zero when it
+rem skipped anything because an artifact flag was left out, unless --allow-skip is passed for a
+rem deliberate partial run. An acceptance run passes every artifact flag below and never --allow-skip.
+rem
 rem Usage: run_red_suite.bat ["--bin=DIR"] ["--qwen3=PATH"] ["--synthetic=PATH"] ["--a2fn=PATH"] ["--gan=PATH"]
-rem            ["--g5fixture=PATH"] ["--commission=PATH"] [--with-commission]   (quote each flag carrying '=')
+rem            ["--g5fixture=PATH"] ["--g5an=PATH"] ["--commission=PATH"] [--with-commission] [--allow-skip]
+rem            (quote each flag carrying '=')
 rem   --bin defaults to <repo>\build\t2791\bin.
 rem Artifacts this suite was authored against (read-only; SHA-256):
 rem   --qwen3      qwen3-embedding-0.6b-1p5.sslm         0be28bf42637264df85481eb925c46f674da7db97fd7601c6732881ad8f99fbf
@@ -21,6 +26,9 @@ rem   --gan        G-an (plan Sec3.4 row 5, Sec3.6), built from --synthetic by t
 rem                make_gan_fixture.py <u1_pair_model.sslm> <out>
 rem                                                       cf48079cd3b50eb053c8f8cd57d4feb0f102d8ec9622aaf86300a15daf96e76b
 rem   --g5fixture  t2132_g5_fixture_1p5b.sslm           078df885060d5dea23a88983bb68014843d142cb6ad55c7f70ef9ff9a932a019
+rem   --g5an       G5-an (plan Sec3.4 row 5, Q5-1), built from --g5fixture by this directory's
+rem                make_g5an_fixture.py <t2132_g5_fixture_1p5b.sslm> <out>   (about 1.6 GB)
+rem                                                       05b5d5c58ea14dbb15a3adb7f24668edcd4d7ab83344bc4381c5f7347b5a128b
 rem   --commission T-2780 tokens.txt                      01c9b0471695086cd708e02ad9826d70d8745fc3296610b2c2420f6df9091f82
 setlocal enabledelayedexpansion
 for %%I in ("%~dp0..\..") do set ENG=%%~fI
@@ -42,7 +50,8 @@ goto :parse_args
 :args_done
 set ANYFAIL=0
 for %%f in (cell_status_ordinals cell_census_lifetime cell_hostile_capacity cell_prefill_faults_schema cell_final_norm_guard ^
-            cell_prompt_guard_status cell_prompt_guard_removal cell_concurrency cell_determinism_composition cell_env_pins_shipping_leg ^
+            cell_prompt_guard_status cell_schema_guard_status cell_prompt_guard_removal cell_concurrency ^
+            cell_determinism_composition cell_env_pins_shipping_leg ^
             cell_wrapper_census_standing cell_functional_commission) do (
     set SKIPTHIS=0
     if "%%f"=="cell_functional_commission" if "!WITHCOMM!"=="0" set SKIPTHIS=1

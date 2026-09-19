@@ -15,6 +15,10 @@
 // the prefill (fixture_common.h, OracleFromLive); the width is the artifact's own
 // config.hidden_size from this file's independent parse. Neither comes from the code under test.
 //
+// *out_required (plan Sec3.4 row 7, T-2806 N4): H1-H3 and H5-H7 pass a sentinel-seeded *out_required
+// and assert it unchanged (check 1 writes nothing; H4 passes it null). O1, O3 and O5 assert the same for
+// checks 3 and 2. Plan Sec3.1 check 4 writes *out_required only once checks 1-3 pass.
+//
 // Every malformed-input cell runs against a sequence that HAS a snapshot, so an implementation
 // cannot pass it by refusing for a different reason (no snapshot); every precedence cell pairs two
 // violated checks so only the Sec3.1 order yields the asserted status.
@@ -161,9 +165,10 @@ void RunOn(const std::string& path, const char* flag, SslmGpuContext* ctx) {
 		CHECK(sslm_gpu_seq_create(ctx, fx.model, 64, &fresh) == SSLM_OK && fresh);
 		if (fresh) {
 			const Frame f = ReadVerb(ctx, fresh, H - 1);
-			CHECK_MSG(f.status == kPrefillHiddenUnavailable && f.OutputsUntouched(),
-			          "[%s] O1 no snapshot + short buffer: %s, want SSLM_PREFILL_HIDDEN_UNAVAILABLE", tag,
-			          StatusName(f.status));
+			CHECK_MSG(f.status == kPrefillHiddenUnavailable && f.OutputsUntouched() && f.required == kRequiredSentinel,
+			          "[%s] O1 no snapshot + short buffer: %s (required %zu), want SSLM_PREFILL_HIDDEN_UNAVAILABLE and "
+			          "*out_required unwritten",
+			          tag, StatusName(f.status), f.required);
 			// 1 before 3: malformed AND no snapshot -> MISMATCH.
 			Out o(H);
 			const SslmGpuStatus st =
@@ -173,8 +178,9 @@ void RunOn(const std::string& path, const char* flag, SslmGpuContext* ctx) {
 			CHECK(sslm_gpu_seq_embed_token(ctx, fresh, fx.SomeToken()) == SSLM_OK);
 			CHECK(sslm_decode_step_gpu(ctx, fresh, nullptr, fx.one_layer_budget) == SSLM_OK);
 			const Frame b = ReadVerb(ctx, fresh, H);
-			CHECK_MSG(b.status == SSLM_BUSY && b.OutputsUntouched(),
-			          "[%s] O3 Submitted + no snapshot: %s, want SSLM_BUSY", tag, StatusName(b.status));
+			CHECK_MSG(b.status == SSLM_BUSY && b.OutputsUntouched() && b.required == kRequiredSentinel,
+			          "[%s] O3 Submitted + no snapshot: %s (required %zu), want SSLM_BUSY and *out_required unwritten", tag,
+			          StatusName(b.status), b.required);
 			// 1 before 2: malformed AND Submitted -> MISMATCH.
 			Out o2(H);
 			const SslmGpuStatus st2 =
@@ -182,8 +188,9 @@ void RunOn(const std::string& path, const char* flag, SslmGpuContext* ctx) {
 			CHECK_MSG(st2 == SSLM_SEQUENCE_KV_BUFFER_MISMATCH, "[%s] O4 malformed + Submitted: %s", tag, StatusName(st2));
 			// 2 before 4: Submitted AND short buffer -> BUSY.
 			const Frame b2 = ReadVerb(ctx, fresh, H - 1);
-			CHECK_MSG(b2.status == SSLM_BUSY, "[%s] O5 Submitted + short buffer: %s, want SSLM_BUSY", tag,
-			          StatusName(b2.status));
+			CHECK_MSG(b2.status == SSLM_BUSY && b2.required == kRequiredSentinel,
+			          "[%s] O5 Submitted + short buffer: %s (required %zu), want SSLM_BUSY and *out_required unwritten", tag,
+			          StatusName(b2.status), b2.required);
 			CHECK(Drain(ctx, fresh) == SSLM_OK);
 			sslm_gpu_seq_release(ctx, fresh);
 		}
