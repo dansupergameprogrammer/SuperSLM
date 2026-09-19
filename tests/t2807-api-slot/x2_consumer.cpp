@@ -1,11 +1,12 @@
-// T-2814 (Curie) -- X2's consumer DLL (plan Sec3.7 item 5, TE-266; D-SLM7313). Compiled with
-// /DSUPERSLM_API=__declspec(dllimport) and linked against sslm_engine.dll's import library ONLY, so every
-// engine symbol it calls must cross the DLL boundary. It calls every symbol in consumed_symbols.txt at
-// least once and nothing else from the engine: build_x2.ps1 checks that this DLL's import table from
-// sslm_engine.dll EQUALS the list, so a call silently dropped here fails X2 (the harness mutant,
-// /DX2_DROP_CHUNK_BATCHED, proves it).
+// T-2814, T-2825 (Curie) -- X2's consumer DLL (plan Sec3.7 item 5, TE-266; D-SLM7313, widened to the whole
+// C ABI by the T-2823 fold). Compiled with /DSUPERSLM_API=__declspec(dllimport) and linked against
+// sslm_engine.dll's import library ONLY, so every engine symbol it calls must cross the DLL boundary. It calls
+// every symbol of X2's expected set at least once and nothing else from the engine -- the 25 C++ entries of
+// consumed_symbols.txt and the 36 C verbs of c_abi_verbs.txt, 61 at v1.5.0: build_x2.ps1 checks that this
+// DLL's import table from sslm_engine.dll EQUALS that set, so a call silently dropped here fails X2 (the
+// harness mutant, /DX2_DROP_CHUNK_BATCHED, proves it).
 //
-// Known answers, per symbol (24):
+// Known answers, per C++ symbol (25):
 //   Sha256::Reset / Update / Final, Sha256Hash    SHA-256("abc") both ways, equal to each other and to the
 //                                                 FIPS 180-4 digest ba7816bf...f20015ad
 //   SslmStatusName, SslmModelStatusName,          "Ok" for each enum's Ok
@@ -26,6 +27,13 @@
 //   EmbedEntry                                    token -1 -> TokenIdOutOfRange (checked at entry)
 //   RunLayerLoop (both overloads)                 layer_budget 0 -> InvalidLayerBudget (checked at entry)
 //   RunLayerLoopChunkBatched                      chunk_tokens 0 -> InvalidLayerBudget (checked at entry)
+//   ParseConfig                                   an empty section view -> BadConfigSize (the exact-size check
+//                                                 is the first check, src/model.cpp ParseConfigImpl)
+// The C verbs (36), each called with null handles and null out-pointers, which every verb's contract refuses
+// at entry: the 30 that return sslm_status return SSLM_INVALID_ARGUMENT; the six sizing verbs
+// (sslm_kv_block_size, sslm_kv_pool_overhead_size, sslm_seq_state_size, sslm_workspace_size,
+// sslm_adapter_residency, sslm_schema_count) return 0 for a null model or adapter. Executed on all 36 by the
+// planner's probe (T-2823 P2) and asserted here per verb.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -38,6 +46,7 @@
 #include "superslm/forward_sites.h"
 #include "superslm/model.h"
 #include "superslm/sha256.h"
+#include "superslm/sslm_abi.h"
 #include "superslm/tokenizer.h"
 
 using namespace superslm;
@@ -147,6 +156,73 @@ extern "C" __declspec(dllexport) int x2_run() {
 		                                  &sat) == SslmForwardStatus::InvalidLayerBudget,
 		         "RunLayerLoopChunkBatched(chunk_tokens 0) == InvalidLayerBudget");
 #endif
+	}
+	{
+		SslmSectionView view{};
+		SslmModelConfig mc{};
+		std::string err;
+		X2_CHECK(ParseConfig(view, mc, &err) == SslmModelStatus::BadConfigSize,
+		         "ParseConfig(empty section view) == BadConfigSize");
+	}
+
+	// The C ABI, every verb (T-2823).
+	{
+		sslm_model m = nullptr;
+		sslm_seq s = nullptr;
+		sslm_prefix p = nullptr;
+		sslm_adapter a = nullptr;
+		sslm_kv_pool kp = nullptr;
+		sslm_workspace ws = nullptr;
+		sslm_schema sc = nullptr;
+		sslm_config cfg{};
+		sslm_detok_state ds{};
+		sslm_decode_params dp{};
+		sslm_stats_out so{};
+		int32_t n = 0;
+		size_t sz = 0;
+		char buf[8] = {};
+		int32_t tok[4] = {0, 0, 0, 0};
+#define X2_INVALID(call) X2_CHECK((call) == SSLM_INVALID_ARGUMENT, #call " == SSLM_INVALID_ARGUMENT")
+#define X2_ZERO(call) X2_CHECK((call) == 0, #call " == 0")
+		X2_INVALID(sslm_model_map(nullptr, 0, nullptr));
+		X2_INVALID(sslm_model_unmap(m));
+		X2_ZERO(sslm_kv_block_size(m));
+		X2_ZERO(sslm_kv_pool_overhead_size(m, 1));
+		X2_ZERO(sslm_seq_state_size(m));
+		X2_INVALID(sslm_kv_pool_create(m, nullptr, 0, 1, nullptr));
+		X2_INVALID(sslm_kv_pool_destroy(kp));
+		X2_INVALID(sslm_workspace_destroy(ws));
+		X2_INVALID(sslm_prefix_begin(m, nullptr, nullptr));
+		X2_INVALID(sslm_prefix_prefill(m, p, tok, 1, 1, SSLM_SPAN_PROMPT, ws, &n));
+		X2_INVALID(sslm_prefix_freeze(p));
+		X2_INVALID(sslm_prefix_release(p));
+		X2_INVALID(sslm_seq_create(m, nullptr, nullptr));
+		X2_INVALID(sslm_seq_release(s));
+		X2_INVALID(sslm_seq_reset(s));
+		X2_INVALID(sslm_seq_adopt_prefix(s, p));
+		X2_INVALID(sslm_seq_save(s, nullptr, &sz));
+		X2_INVALID(sslm_seq_restore(m, nullptr, nullptr, 0, nullptr));
+		X2_INVALID(sslm_seq_set_adapter(s, a));
+		X2_INVALID(sslm_adapter_map(nullptr, 0, m, nullptr));
+		X2_INVALID(sslm_adapter_release(a));
+		X2_ZERO(sslm_adapter_residency(a));
+		X2_INVALID(sslm_prefill(m, s, tok, 1, 1, SSLM_SPAN_PROMPT, ws, &n));
+		X2_INVALID(sslm_decode_step(m, &s, 1, &dp, ws, tok));
+		X2_INVALID(sslm_tokenize(m, "a", tok, &n));
+		X2_INVALID(sslm_stats(m, s, &so));
+		X2_INVALID(sslm_schema_lookup(m, "x", &sc));
+		X2_ZERO(sslm_schema_count(m));
+		sz = sizeof buf;
+		X2_INVALID(sslm_schema_name(m, 0, buf, &sz));
+		X2_INVALID(sslm_seq_set_schema(s, sc));
+		X2_INVALID(sslm_prefix_set_schema(p, sc));
+		X2_INVALID(sslm_decode_step_v2(m, &s, 1, &dp, ws, tok));
+		X2_INVALID(sslm_decode_params_init(m, 0, 1, &dp));
+		X2_ZERO(sslm_workspace_size(m, &cfg));
+		X2_INVALID(sslm_workspace_create(m, &cfg, nullptr, 0, &ws));
+		X2_INVALID(sslm_detokenize_stream(m, &ds, tok, 1, buf, &n));
+#undef X2_INVALID
+#undef X2_ZERO
 	}
 	std::printf("X2 consumer: checks=%d failures=%d\n", g_checks, g_fail);
 	return g_fail;

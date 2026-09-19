@@ -1,6 +1,11 @@
-# T-2814 (Curie) -- cell X2, the modular-build cell of plan Sec3.7 item 5 (TE-266 GPU-path plan;
-# D-SLM7313, the SUPERSLM_API export slot). Batch-built on the dev box, like t2130/t2178: MSVC x64, no
-# CMake ctest, no hosted CI minutes.
+# T-2814, T-2825 (Curie) -- cell X2, the modular-build cell of plan Sec3.7 item 5 (TE-266 GPU-path plan;
+# D-SLM7313, the SUPERSLM_API export slot, widened to the whole C ABI by the T-2823 fold). Batch-built on the
+# dev box, like t2130/t2178: MSVC x64, no CMake ctest, no hosted CI minutes.
+#
+# THE EXPECTED SET is consumed_symbols.txt's C++ entries (every line not starting `sslm_`) united with the C
+# ABI's declared verbs: 25 + 36 = 61 at v1.5.0. The C verbs are re-derived here from the headers under test
+# (c_abi_verbs.ps1) and must EQUAL the committed c_abi_verbs.txt ("X2 CVERBS"), so a verb appended to the ABI
+# fails X2 whether or not it was slotted and whether or not the list was regenerated.
 #
 #  (a) the core sources (CMakeLists.txt's SUPERSLM_CORE_SOURCES, read from the file) are compiled with
 #      /DSUPERSLM_API=__declspec(dllexport) and linked as sslm_engine.dll;
@@ -9,12 +14,12 @@
 #      answer and exports x2_run;
 #  (c) x2_loader.exe links the consumer DLL, calls x2_run and exits 0 only on ALL=PASS;
 #  (d) two exact structural checks, each printing the differing names:
-#      - the engine DLL's export names (dumpbin /exports) EQUAL consumed_symbols.txt;
-#      - the consumer DLL's imports from sslm_engine.dll (dumpbin /imports) EQUAL consumed_symbols.txt.
-# X2 passes only when all four verdicts pass: EXPORTS, CONSUMER-LINK, IMPORTS, RUN.
+#      - the engine DLL's export names (dumpbin /exports) EQUAL the expected set;
+#      - the consumer DLL's imports from sslm_engine.dll (dumpbin /imports) EQUAL the expected set.
+# X2 passes only when all five verdicts pass: CVERBS, EXPORTS, CONSUMER-LINK, IMPORTS, RUN.
 #
 # Usage: build_x2.ps1 [-Engine <repo root>] [-Out <dir>] [-IncludeFirst <dir>] [-ConsumerDefine <NAME>]
-#                     [-List <consumed_symbols.txt>] [-Quiet]
+#                     [-List <consumed_symbols.txt>] [-CVerbs <c_abi_verbs.txt>] [-Quiet]
 #   -Engine         the tree whose include/ and src/ are built (default: this checkout)
 #   -IncludeFirst   an include directory searched before <Engine>\include (how X3's mutants are built)
 #   -ConsumerDefine one extra definition for the consumer only (X3's harness mutant: X2_DROP_CHUNK_BATCHED)
@@ -26,17 +31,30 @@ param(
     [string]$IncludeFirst = '',
     [string]$ConsumerDefine = '',
     [string]$List = (Join-Path $PSScriptRoot 'consumed_symbols.txt'),
+    [string]$CVerbs = (Join-Path $PSScriptRoot 'c_abi_verbs.txt'),
     [switch]$Quiet
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'vsenv.ps1')
+. (Join-Path $PSScriptRoot 'c_abi_verbs.ps1')
 if (-not $Out) { $Out = Join-Path $Engine 'build\t2807-x2' }
 foreach ($d in 'engine', 'consumer', 'bin') { New-Item -ItemType Directory -Force (Join-Path $Out $d) | Out-Null }
 Get-ChildItem (Join-Path $Out 'engine'), (Join-Path $Out 'consumer'), (Join-Path $Out 'bin') -File | Remove-Item -Force
 
 function Say($s) { if (-not $Quiet) { Write-Output $s } }
-$want = @(Get-Content $List | Where-Object { $_ -and $_ -notmatch '^#' })
+# The expected set: the list's C++ entries united with the C verbs the headers under test declare.
+$cpp = @(Get-Content $List | Where-Object { $_ -and $_ -notmatch '^#' -and $_ -cnotmatch '^sslm_' })
+$hdrDir = Join-Path $Engine 'include\superslm'
+if ($IncludeFirst -and (Test-Path (Join-Path $IncludeFirst 'superslm\sslm_abi_functions.inc'))) { $hdrDir = Join-Path $IncludeFirst 'superslm' }
+$derived = @(Get-CAbiVerbs $hdrDir | ForEach-Object Name)
+$committed = @(Get-Content $CVerbs | Where-Object { $_ -and $_ -notmatch '^#' })
+$cvDiff = @(Compare-Object -CaseSensitive $committed $derived | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" })
+$cvOk = $cvDiff.Count -eq 0
+Write-Output ("X2 CVERBS: {0} -- the headers declare {1} C verbs, c_abi_verbs.txt holds {2}" -f ($(if ($cvOk) { 'EQUAL' } else { 'DIFFER (regenerate c_abi_verbs.txt with gen_consumed_symbols.ps1)' })), $derived.Count, $committed.Count)
+$cvDiff | ForEach-Object { Write-Output "  X2 CVERB $_  (=> only in the headers, <= only in c_abi_verbs.txt)" }
+$want = @($cpp + $derived)
 $wantSet = New-Object 'System.Collections.Generic.HashSet[string]' ([string[]]$want), ([System.StringComparer]::Ordinal)
+Say ("X2 expected set: {0} C++ (consumed_symbols.txt) + {1} C (the headers) = {2}" -f $cpp.Count, $derived.Count, $want.Count)
 
 # The core sources, from CMakeLists.txt.
 $cm = Get-Content (Join-Path $Engine 'CMakeLists.txt') -Raw
@@ -49,7 +67,7 @@ $common = @('/nologo', '/O2', '/Ob2', '/DNDEBUG', '/MD', '/EHsc', '/std:c++20', 
 
 # (a) engine DLL
 $elog = Join-Path $Out 'engine\build.log'
-& cl.exe /c @common /MP4 @inc '/DSUPERSLM_API=__declspec(dllexport)' "/Fo$(Join-Path $Out 'engine')\" @sources *> $elog
+& cl.exe /c @common /MP @inc '/DSUPERSLM_API=__declspec(dllexport)' "/Fo$(Join-Path $Out 'engine')\" @sources *> $elog
 if ($LASTEXITCODE -ne 0) { Get-Content $elog | Select-String 'error' | Select-Object -First 20 | ForEach-Object Line; Write-Output 'X2 ENV: engine compile failed'; exit 2 }
 $attrWarn = @(Select-String -Path $elog -Pattern 'warning C4(251|273|275|297|190)' | ForEach-Object Line)
 $allWarn = @(Select-String -Path $elog -Pattern 'warning C' | ForEach-Object Line)
@@ -84,8 +102,12 @@ if (Test-Path $implib) {
     # The unresolved symbol is the FIRST decorated name, right after its quoted undecorated form; a
     # trailing "referenced in function ... (name)" names the referencer, not the missing symbol. One
     # symbol can be reported once per referencing function, so the names are de-duplicated.
-    $unresolved = @(Select-String -Path $clog -Pattern 'LNK2019: unresolved external symbol "[^"]*" \((\S+?)\)' |
-        ForEach-Object { $_.Matches[0].Groups[1].Value } | Sort-Object -Unique -CaseSensitive)
+    # A C verb has no quoted undecorated form: the line names it bare ("unresolved external symbol
+    # sslm_prefill referenced in function x2_run", T-2825). Both shapes are parsed; an __imp_ prefix is
+    # stripped so the name compares with the list.
+    $unresolved = @(Select-String -Path $clog -Pattern 'LNK2019: unresolved external symbol (?:"[^"]*" \((\S+?)\)|(\S+) referenced in function)' |
+        ForEach-Object { $g = $_.Matches[0].Groups; $n = if ($g[1].Success) { $g[1].Value } else { $g[2].Value }; $n -replace '^__imp_', '' } |
+        Sort-Object -Unique -CaseSensitive)
 } else {
     Add-Content $clog 'no sslm_engine.lib: the engine DLL exports nothing, so the linker wrote no import library'
     $unresolved = $want
@@ -122,6 +144,6 @@ if ($linkOk) {
     Write-Output 'X2 IMPORTS: NOT CHECKED (the consumer did not link)'
     Write-Output 'X2 RUN: NOT RUN (the consumer did not link)'
 }
-$pass = $exOk -and $linkOk -and $imOk -and $runOk
+$pass = $cvOk -and $exOk -and $linkOk -and $imOk -and $runOk
 Write-Output ("X2: {0}" -f ($(if ($pass) { 'PASS' } else { 'FAIL' })))
 exit ($(if ($pass) { 0 } else { 1 }))

@@ -1,0 +1,41 @@
+# SuperSLMUnreal upgrade (claude/superslm-unreal-upgrade-a596b8): per-object engine imports of the plugin's
+# non-vendored objects, built 2026-09-18 23:15-23:17. Converted mechanically by the test author's
+# Claude/Curie/t2825-probe/census_to_tsv.ps1 from the planner's census Claude/Vitruvius/t2823-probe/census-output.txt
+# (sha256 6d75b5020e9880b0b0546604e4e2478abe74b39d5f121a86ca0dc99e7e087d0e; census.ps1: dumpbin /symbols UNDEF External, intersected with the 17 vendored objects' externals, no name filter).
+SuperSLMUnreal	SuperSLMIntegrity.cpp.obj	?Sha256Hash@superslm@@YAXPEBE_KQEAE@Z
+SuperSLMUnreal	SuperSLMModelImport.cpp.obj	??0TokenizerView@superslm@@QEAA@XZ
+SuperSLMUnreal	SuperSLMModelImport.cpp.obj	??1TokenizerView@superslm@@QEAA@XZ
+SuperSLMUnreal	SuperSLMModelImport.cpp.obj	?Load@SslmModel@superslm@@SA?AW4SslmModelStatus@2@PEBE_KAEAUSslmModelView@2@PEAV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z
+SuperSLMUnreal	SuperSLMModelImport.cpp.obj	?OpenFromMemory@SslmArtifact@superslm@@SA?AW4SslmStatus@2@PEBE_KAEAV12@PEAUSslmError@2@@Z
+SuperSLMUnreal	SuperSLMModelImport.cpp.obj	?Section@SslmArtifact@superslm@@QEBAPEBUSslmSectionView@2@W4SslmSectionType@2@@Z
+SuperSLMUnreal	SuperSLMModelImport.cpp.obj	?SslmModelStatusName@superslm@@YAPEBDW4SslmModelStatus@1@@Z
+SuperSLMUnreal	SuperSLMModelImport.cpp.obj	?SslmStatusName@superslm@@YAPEBDW4SslmStatus@1@@Z
+SuperSLMUnreal	SuperSLMRuntimeRegistry.cpp.obj	?ParseConfig@superslm@@YA?AW4SslmModelStatus@1@AEBUSslmSectionView@1@AEAUSslmModelConfig@1@PEAV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z
+SuperSLMUnreal	SuperSLMRuntimeRegistry.cpp.obj	?SslmModelStatusName@superslm@@YAPEBDW4SslmModelStatus@1@@Z
+SuperSLMUnreal	SuperSLMRuntimeRegistry.cpp.obj	sslm_adapter_map
+SuperSLMUnreal	SuperSLMRuntimeRegistry.cpp.obj	sslm_adapter_release
+SuperSLMUnreal	SuperSLMRuntimeRegistry.cpp.obj	sslm_model_map
+SuperSLMUnreal	SuperSLMRuntimeRegistry.cpp.obj	sslm_model_unmap
+SuperSLMUnreal	SuperSLMRuntimeRegistry.cpp.obj	sslm_schema_lookup
+SuperSLMUnreal	SuperSLMSequenceLifecycleBudget.cpp.obj	sslm_kv_block_size
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_decode_params_init
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_decode_step_v2
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_kv_block_size
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_kv_pool_create
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_kv_pool_destroy
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_kv_pool_overhead_size
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_prefill
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_schema_lookup
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_seq_create
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_seq_release
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_seq_reset
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_seq_restore
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_seq_save
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_seq_set_adapter
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_seq_set_schema
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_seq_state_size
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_stats
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_tokenize
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_workspace_create
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_workspace_destroy
+SuperSLMUnreal	SuperSLMSubsystem.cpp.obj	sslm_workspace_size
