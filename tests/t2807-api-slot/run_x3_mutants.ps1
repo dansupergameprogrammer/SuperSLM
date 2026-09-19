@@ -25,9 +25,15 @@
 #                whether or not -Harness is given.
 #   -Harness     also run the harness mutant. -HarnessOnly runs the harness mutant and no single-drop mutant.
 # The acceptance invocation is `run_x3_mutants.ps1 -Harness` with no -Indices: 61 single-drop mutants, the
-# harness mutant, and the reconciliation (X3 RECONCILE: EQUAL). A run narrowed by -Indices or -HarnessOnly
-# prints X3 RECONCILE: PARTIAL RUN and is never an acceptance run.
-# Exit code: 0 when every mutant run was killed as specified and the reconciliation holds, 1 otherwise.
+# harness mutant, and the reconciliation (X3 RECONCILE: EQUAL). A run narrowed by -Indices or -HarnessOnly,
+# or run without -Harness, prints X3 RECONCILE: PARTIAL RUN and is never an acceptance run.
+# Exit code (T-2835, the code reviewer's T-2832 M-2: a narrowed run must never read as acceptance):
+#   0  the acceptance run -- every single-drop mutant AND the harness mutant ran, every one was killed as
+#      specified, and the reconciliation is EQUAL. Nothing else exits 0.
+#   1  a mutant was not killed as specified, the reconciliation differs, or the enumeration was refused.
+#   3  PARTIAL RUN: every mutant that ran was killed as specified, but the run was narrowed (-Indices,
+#      -HarnessOnly, or no -Harness). Distinct from 0 and from 1, so a script that tests the exit status
+#      cannot take a partial run for acceptance, and cannot take it for a killed-mutant failure either.
 param(
     [string]$Engine = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
     [string]$Out = '',
@@ -78,6 +84,8 @@ Write-Output ("X3: {0} slots enumerated ({1} C++ + {2} C), equal to X2's expecte
 if ($HarnessOnly) { $Harness = [switch]$true; $Indices = @() }
 elseif ($Indices.Count -eq 0) { $Indices = 0..($slots.Count - 1) }
 $fullRun = @($Indices | Sort-Object -Unique).Count -eq $slots.Count
+# An acceptance run is every slot AND the harness mutant (plan Sec3.5 step 2, Sec3.7 item 5).
+$acceptanceShape = $fullRun -and [bool]$Harness
 
 function Verdicts($lines) {
     $v = @{}
@@ -135,14 +143,20 @@ foreach ($n in $dropped.Keys) {
     if ($dropped[$n].Count -gt 1) { $recon += "the name $n was removed by more than one mutant ($($dropped[$n] -join ', '))" }
     if (-not $expected.Contains($n)) { $recon += "mutant $($dropped[$n] -join ', ') removed $n, which X2's expected set does not hold" }
 }
-if ($fullRun) {
+if ($acceptanceShape) {
     $never = @($expected | Where-Object { -not $dropped.ContainsKey($_) })
     if ($never.Count -gt 0) { $recon += "$($never.Count) expected name(s) removed by no mutant: $($never -join ', ')" }
     Write-Output ("X3 RECONCILE: {0} -- {1} mutants run, {2} distinct names removed, {3} expected" -f ($(if ($recon.Count -eq 0) { 'EQUAL' } else { 'DIFFER' })), $slots.Count, $dropped.Count, $expected.Count)
 } else {
-    Write-Output ("X3 RECONCILE: PARTIAL RUN ({0} of {1} slots) -- distinctness checked; coverage of the expected set is checked only on a full run" -f @($Indices).Count, $slots.Count)
+    Write-Output ("X3 RECONCILE: PARTIAL RUN ({0} of {1} slots, harness mutant {2}) -- distinctness checked; coverage of the expected set is checked only on the acceptance run (-Harness, no -Indices)" -f @($Indices).Count, $slots.Count, $(if ($Harness) { 'run' } else { 'NOT run' }))
 }
 $recon | ForEach-Object { Write-Output "  X3 RECONCILE $_" }
 if ($recon.Count -gt 0) { $allOk = $false }
 Write-Output ("X3: {0}" -f ($(if ($allOk) { 'every mutant run was killed as specified' } else { 'AT LEAST ONE MUTANT WAS NOT KILLED AS SPECIFIED' })))
-exit ($(if ($allOk) { 0 } else { 1 }))
+if (-not $allOk) { exit 1 }
+if (-not $acceptanceShape) {
+    Write-Output 'X3: PARTIAL RUN -- NOT an acceptance run (exit 3). Acceptance is run_x3_mutants.ps1 -Harness with no -Indices.'
+    exit 3
+}
+Write-Output 'X3: ACCEPTANCE RUN -- all slots and the harness mutant, reconciliation EQUAL'
+exit 0

@@ -7,6 +7,15 @@
 # (c_abi_verbs.ps1) and must EQUAL the committed c_abi_verbs.txt ("X2 CVERBS"), so a verb appended to the ABI
 # fails X2 whether or not it was slotted and whether or not the list was regenerated.
 #
+# THE READER IS CROSS-CHECKED ("X2 CVERBS-MENTION", T-2835 for plan Sec3.7 item 3, T-2824 G6, T-2825 F-3).
+# CVERBS re-reads with the same reader that wrote c_abi_verbs.txt, so a declaration form the reader misses
+# hides from both. X2 therefore also requires c_abi_verbs.txt to EQUAL an independent enumeration: the name
+# set of tools/t2139_count_abi_verbs.sh's OWN pipeline (its grep -oE and sed, read out of that script, then
+# sort -u, without its final wc -l), run by Git's bash over the two .inc files under test. That pipeline
+# matches every `sslm_x(`, so its set is a MENTION set: it sees a declaration split across lines and one
+# behind an unknown prefix macro, and it also fails loudly on a comment that writes `sslm_x(` -- the remedy
+# is to reword the comment. A counter script whose pipeline cannot be read is an environment error (exit 2).
+#
 #  (a) the core sources (CMakeLists.txt's SUPERSLM_CORE_SOURCES, read from the file) are compiled with
 #      /DSUPERSLM_API=__declspec(dllexport) and linked as sslm_engine.dll;
 #  (b) x2_consumer.cpp is compiled with /DSUPERSLM_API=__declspec(dllimport) and linked as
@@ -16,13 +25,16 @@
 #  (d) two exact structural checks, each printing the differing names:
 #      - the engine DLL's export names (dumpbin /exports) EQUAL the expected set;
 #      - the consumer DLL's imports from sslm_engine.dll (dumpbin /imports) EQUAL the expected set.
-# X2 passes only when all five verdicts pass: CVERBS, EXPORTS, CONSUMER-LINK, IMPORTS, RUN.
+# X2 passes only when all six verdicts pass: CVERBS, CVERBS-MENTION, EXPORTS, CONSUMER-LINK, IMPORTS, RUN.
 #
 # Usage: build_x2.ps1 [-Engine <repo root>] [-Out <dir>] [-IncludeFirst <dir>] [-ConsumerDefine <NAME>]
-#                     [-List <consumed_symbols.txt>] [-CVerbs <c_abi_verbs.txt>] [-Quiet]
+#                     [-List <consumed_symbols.txt>] [-CVerbs <c_abi_verbs.txt>] [-Reader <c_abi_verbs.ps1>]
+#                     [-Quiet]
 #   -Engine         the tree whose include/ and src/ are built (default: this checkout)
 #   -IncludeFirst   an include directory searched before <Engine>\include (how X3's mutants are built)
 #   -ConsumerDefine one extra definition for the consumer only (X3's harness mutant: X2_DROP_CHUNK_BATCHED)
+#   -Reader         a different C verb reader to dot-source (the cross-check's must-reject grades a reader that
+#                   misses a declaration form; see Claude/Curie/t2835-s3p8-cells-2026-09-19.md)
 # Exit code: 0 when X2 passes, 1 when it fails, 2 on an environment error. The verdict lines
 # ("X2 EXPORTS: ...", etc.) are the machine-readable output run_x3_mutants.ps1 reads.
 param(
@@ -32,11 +44,12 @@ param(
     [string]$ConsumerDefine = '',
     [string]$List = (Join-Path $PSScriptRoot 'consumed_symbols.txt'),
     [string]$CVerbs = (Join-Path $PSScriptRoot 'c_abi_verbs.txt'),
+    [string]$Reader = (Join-Path $PSScriptRoot 'c_abi_verbs.ps1'),
     [switch]$Quiet
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'vsenv.ps1')
-. (Join-Path $PSScriptRoot 'c_abi_verbs.ps1')
+. $Reader
 if (-not $Out) { $Out = Join-Path $Engine 'build\t2807-x2' }
 foreach ($d in 'engine', 'consumer', 'bin') { New-Item -ItemType Directory -Force (Join-Path $Out $d) | Out-Null }
 Get-ChildItem (Join-Path $Out 'engine'), (Join-Path $Out 'consumer'), (Join-Path $Out 'bin') -File | Remove-Item -Force
@@ -52,6 +65,30 @@ $cvDiff = @(Compare-Object -CaseSensitive $committed $derived | ForEach-Object {
 $cvOk = $cvDiff.Count -eq 0
 Write-Output ("X2 CVERBS: {0} -- the headers declare {1} C verbs, c_abi_verbs.txt holds {2}" -f ($(if ($cvOk) { 'EQUAL' } else { 'DIFFER (regenerate c_abi_verbs.txt with gen_consumed_symbols.ps1)' })), $derived.Count, $committed.Count)
 $cvDiff | ForEach-Object { Write-Output "  X2 CVERB $_  (=> only in the headers, <= only in c_abi_verbs.txt)" }
+
+# CVERBS-MENTION: the counter script's own pipeline, read out of the script, run by Git's bash.
+# The counter is this checkout's tool; the .inc files it reads are the headers under test (-Engine or
+# -IncludeFirst), so a scratch or mutant tree without tools/ is still cross-checked.
+$counter = Join-Path $PSScriptRoot '..\..\tools\t2139_count_abi_verbs.sh'
+if (-not (Test-Path $counter)) { Write-Output "X2 ENV: $counter not found"; exit 2 }
+$pipeLine = @(Get-Content $counter | Where-Object { $_ -match "^\s*grep -oE '[^']+' `"\`$TARGET`" \| sed -E '[^']+' \| sort -u \| wc -l\s*$" })
+if ($pipeLine.Count -ne 1) { Write-Output "X2 ENV: the verb counter's pipeline (grep -oE '...' `"`$TARGET`" | sed -E '...' | sort -u | wc -l) is not found once in $counter"; exit 2 }
+$null = $pipeLine[0] -match "grep -oE '([^']+)'.*sed -E '([^']+)'"
+$grepRe = $Matches[1]; $sedRe = $Matches[2]
+$gitExe = (Get-Command git -ErrorAction SilentlyContinue).Source
+# git.exe sits in <Git>\cmd or <Git>\mingw64\bin; bash.exe is <Git>\bin\bash.exe. Never a bare `bash` (WSL's may win on PATH).
+$gitBash = ''
+if ($gitExe) { $d = Split-Path $gitExe; for ($i = 0; $i -lt 3 -and $d; $i++) { $c = Join-Path $d 'bin\bash.exe'; if (Test-Path $c) { $gitBash = $c; break }; $d = Split-Path $d } }
+if (-not $gitBash -or -not (Test-Path $gitBash)) { Write-Output 'X2 ENV: Git''s bash.exe not found beside git.exe (the mention set needs its grep, sed and sort)'; exit 2 }
+$incA = (Join-Path $hdrDir 'sslm_abi_functions.inc') -replace '\\', '/'
+$incB = (Join-Path $hdrDir 'sslm_abi_functions_g5_comparable.inc') -replace '\\', '/'
+$bashCmd = "grep -ohE '$grepRe' '$incA' '$incB' | sed -E '$sedRe' | LC_ALL=C sort -u"
+$mention = @(& $gitBash -c $bashCmd | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+if ($LASTEXITCODE -ne 0) { Write-Output "X2 ENV: the mention pipeline failed ($bashCmd)"; exit 2 }
+$mnDiff = @(Compare-Object -CaseSensitive $committed $mention | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" })
+$mnOk = $mnDiff.Count -eq 0
+Write-Output ("X2 CVERBS-MENTION: {0} -- the verb counter's pipeline mentions {1} names in the two .inc files, c_abi_verbs.txt holds {2}" -f ($(if ($mnOk) { 'EQUAL' } else { 'DIFFER (a declaration form the reader misses, or a comment that writes sslm_x( -- reword it)' })), $mention.Count, $committed.Count)
+$mnDiff | ForEach-Object { Write-Output "  X2 CVERB-MENTION $_  (=> mentioned in the .inc files, <= only in c_abi_verbs.txt)" }
 $want = @($cpp + $derived)
 $wantSet = New-Object 'System.Collections.Generic.HashSet[string]' ([string[]]$want), ([System.StringComparer]::Ordinal)
 Say ("X2 expected set: {0} C++ (consumed_symbols.txt) + {1} C (the headers) = {2}" -f $cpp.Count, $derived.Count, $want.Count)
@@ -144,6 +181,6 @@ if ($linkOk) {
     Write-Output 'X2 IMPORTS: NOT CHECKED (the consumer did not link)'
     Write-Output 'X2 RUN: NOT RUN (the consumer did not link)'
 }
-$pass = $cvOk -and $exOk -and $linkOk -and $imOk -and $runOk
+$pass = $cvOk -and $mnOk -and $exOk -and $linkOk -and $imOk -and $runOk
 Write-Output ("X2: {0}" -f ($(if ($pass) { 'PASS' } else { 'FAIL' })))
 exit ($(if ($pass) { 0 } else { 1 }))

@@ -19,50 +19,88 @@
 #   - a consumer imports an `sslm_*` name that c_abi_verbs.txt does not hold. The C part of the slot is the
 #     header's whole C surface, so an import outside it is a verb this engine does not declare, a stale
 #     consumer, or a consumer of another engine -- never something to add to the list;
-#   - a live consumer's objects are not attributable to the commit named for them (see -Consumer).
+#   - a live consumer read fails any of the four criteria below (-Consumer);
+#   - -Release is given together with any -Recorded input.
 #
 # Usage:
-#   gen_consumed_symbols.ps1 [-Engine <tree>] -Consumer '<spec>', ... [-Recorded '<spec>', ...]
+#   gen_consumed_symbols.ps1 [-Engine <tree>] -Consumer '<spec>', ... [-Recorded '<spec>', ...] [-Release]
 #                            [-Exclude 'SuperSLMVendored_*'] [-Out consumed_symbols.txt] [-CVerbsOut c_abi_verbs.txt]
 #   (-Consumer and -Recorded take comma-separated arrays; PowerShell rejects a flag given twice.)
 #
-# -Consumer '<label>|<repo>|<commit>|<source paths>|<objdir>[|<objdir>...]'   a LIVE read.
-#   <repo> is the git worktree the objects were built from, <commit> the commit they are attributed to,
-#   <source paths> the consumer's compiled sources relative to <repo>, separated by ';' (for example
-#   'src;include;CMakeLists.txt'). Each <objdir> is searched recursively for *.obj; -Exclude drops objects by
-#   file name (a consumer that compiles the engine's own sources into its module, SuperSLMUnreal's vendored
-#   SuperSLMVendored_*.cpp, must exclude them). The read is REFUSED unless all three hold:
-#     1. <repo>'s HEAD is <commit>;
-#     2. `git status --porcelain -- <source paths>` is empty (the objects cannot have been built from
-#        uncommitted sources, and no source changed after the commit);
-#     3. the newest object is not older than the last commit that touched <source paths> at <commit>:
-#        the build ran after the sources last changed.
-#   What this does not detect, stated so it is not mistaken for detected: (a) a build that ran after the
-#   last source change and failed part-way, leaving some objects stale -- the consumer's build log is the
-#   evidence for that; (b) objects that were not built from <repo> at all. A UE plugin built from a
-#   worktree by mirroring it into the main checkout writes its objects under the main checkout from the
-#   worktree's sources; naming the main checkout and its commit then passes all three checks while the
-#   objects belong to another tree. Name the checkout the build actually compiled.
+# -Consumer '<label>|<checkout>|<commit>|<source roots>|<link output>|<build source tree>|<objdir>[|<objdir>...]'
+#   a LIVE read (plan Sec3.7 item 3, T-2830: T-2824 G5 states the criterion, T-2825 F-4 adds the mirrored build).
+#   <checkout>          the NAMED checkout: the git working tree whose files the compiler read, and
+#   <commit>            the commit named for it in the list's header;
+#   <source roots>      paths relative to <checkout>, separated by ';'. An entry starting with '!' is an
+#                       exclusion glob over the same relative paths ('/' separators, `**` any depth), for
+#                       example 'Plugins/SuperSLMUnreal/Source;!Plugins/SuperSLMUnreal/Source/**/Private/Vendored/**'
+#                       (the census reads only non-vendored objects, so the vendored engine is not a root);
+#   <link output>       the module DLL or static library the build linked from those objects;
+#   <build source tree> the directory the compiler actually read, standing for <checkout>'s root: each root is
+#                       compared as <build source tree>\<root> against <checkout>\<root>. Empty means <checkout>
+#                       itself. A UE plugin built from a worktree is mirrored into the main checkout and compiled
+#                       there: name the WORKTREE and its commit as <checkout>, the MAIN checkout as <build source
+#                       tree>, and take the read while the mirror is still in place;
+#   <objdir>            searched recursively for *.obj; -Exclude drops objects by file name (SuperSLMUnreal's
+#                       vendored SuperSLMVendored_*.cpp).
+#   The read is REFUSED, naming the file or commit, when any of these holds:
+#     1. `git -C <checkout> rev-parse HEAD` is not <commit>;
+#     2. `git -C <checkout> status --porcelain -- <source roots>` is not empty;
+#     3. <build source tree> differs from <checkout> over the source roots in any relative path, or in any
+#        file's SHA-256 -- so naming the main checkout after a mirror was restored fails (its files are
+#        develop's, not the ones compiled), and so does naming the worktree after the restore;
+#     4. the link output is older than the last commit touching the source roots
+#        (`git log -1 --format=%ct <commit> -- <source roots>`), or older than the newest object: a build of
+#        sources committed later, or a build that failed part-way (fresh objects, no new link output).
+#   False refusals are loud and safe: a build of uncommitted edits committed afterwards trips criterion 4, and
+#   the remedy is a rebuild. Nothing is repaired by hand.
 #
-# -Recorded '<label>|<commit>|<tsv>|<disposition>'   an earlier per-object dumpbin read, for a consumer whose
-#   objects at the named commit no longer exist on disk. The TSV's LAST column is an imported name and its
-#   second-to-last the object it came from; lines starting with '#' are provenance comments. The same
-#   case-sensitive filter and the same undeclared-verb refusal apply. The commit check above CANNOT be run on
-#   a recorded read, so <disposition> is mandatory: one sentence stating when the objects were built against
-#   their sources, copied into the list's header, so the reader sees what the read does and does not stand on.
+# -Recorded '<label>|<commit>|<tsv>|<disposition>'   BETWEEN RELEASES ONLY: an earlier per-object dumpbin read,
+#   for a consumer the generator cannot read live, admitted only as a mechanical, hash-pinned conversion of a
+#   recorded census. The TSV's LAST column is an imported name and its second-to-last the object it came from;
+#   lines starting with '#' are provenance comments. The same case-sensitive filter and the same
+#   undeclared-verb refusal apply. No criterion above can be run on a recorded read, so <disposition> is
+#   mandatory: one sentence stating why no live read was possible, the census's provenance, and which live read
+#   replaces it, copied into the list's header.
+#
+# -Release   the release reading (plan Sec3.5 step 5): every input must be live, and ANY -Recorded input is
+#   refused. A recorded read can reach the tag only through a run without -Release.
 param(
     [string]$Engine = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
     [string[]]$Consumer = @(),
     [string[]]$Recorded = @(),
     [string[]]$Exclude = @('SuperSLMVendored_*'),
     [string]$Out = (Join-Path $PSScriptRoot 'consumed_symbols.txt'),
-    [string]$CVerbsOut = (Join-Path $PSScriptRoot 'c_abi_verbs.txt')
+    [string]$CVerbsOut = (Join-Path $PSScriptRoot 'c_abi_verbs.txt'),
+    [switch]$Release
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'vsenv.ps1')
 . (Join-Path $PSScriptRoot 'c_abi_verbs.ps1')
 
 function Refuse([string]$why) { Write-Output "gen_consumed_symbols: REFUSED -- $why"; exit 1 }
+if ($Release -and $Recorded.Count -gt 0) {
+    Refuse ("-Release refuses every -Recorded input; at the release reading every consumer is read live (plan Sec3.5 step 5). Recorded: " + (($Recorded | ForEach-Object { ($_ -split '\|')[0] }) -join '; '))
+}
+
+# The files under <base>\<root> for every root, keyed by '/'-separated path relative to <base>, valued by
+# SHA-256; exclusion globs ('!' entries) drop paths. A root that does not exist contributes nothing (so a
+# build tree missing a whole root differs from a checkout that has it).
+function Get-RootFiles([string]$base, [string[]]$roots, [string[]]$excl) {
+    $h = [ordered]@{}
+    $baseFull = (Resolve-Path $base).Path.TrimEnd('\')
+    foreach ($r in $roots) {
+        $p = Join-Path $base $r
+        if (-not (Test-Path $p)) { continue }
+        $items = if ((Get-Item $p).PSIsContainer) { Get-ChildItem -Path $p -Recurse -File } else { @(Get-Item $p) }
+        foreach ($f in $items) {
+            $rel = $f.FullName.Substring($baseFull.Length).TrimStart('\').Replace('\', '/')
+            if ($excl | Where-Object { $rel -like ($_ -replace '\*\*', '*') }) { continue }
+            $h[$rel] = (Get-FileHash -Algorithm SHA256 $f.FullName).Hash.ToLower()
+        }
+    }
+    return $h
+}
 
 # --- the C part, from the header ------------------------------------------------------------------
 $incDir = Join-Path $Engine 'include\superslm'
@@ -107,16 +145,44 @@ function Add-Consumer([string]$label, $names) {
 
 foreach ($spec in $Consumer) {
     $parts = $spec -split '\|'
-    if ($parts.Count -lt 5) { throw "bad -Consumer '$spec' (want <label>|<repo>|<commit>|<source paths>|<objdir>[|<objdir>...])" }
-    $label = $parts[0]; $repo = $parts[1]; $commit = $parts[2]; $srcs = @($parts[3] -split ';' | Where-Object { $_ })
-    $dirs = $parts[4..($parts.Count - 1)]
-    $head = (& git -C $repo rev-parse HEAD).Trim()
-    $want = (& git -C $repo rev-parse --verify "$commit^{commit}").Trim()
-    if ($LASTEXITCODE -ne 0 -or -not $want) { Refuse "$label : commit '$commit' does not resolve in $repo" }
-    if ($head -ne $want) { Refuse "$label : $repo is at $head, not the named commit $want" }
-    $dirty = @(& git -C $repo status --porcelain -- @srcs)
-    if ($dirty.Count -gt 0) { Refuse "$label : sources modified in $repo, so its objects are not attributable to $commit : $($dirty -join '; ')" }
-    $srcTime = [int64](& git -C $repo log -1 --format=%ct $want -- @srcs)
+    if ($parts.Count -lt 7) { throw "bad -Consumer '$spec' (want <label>|<checkout>|<commit>|<source roots>|<link output>|<build source tree>|<objdir>[|<objdir>...])" }
+    $label = $parts[0]; $repo = $parts[1]; $commit = $parts[2]
+    $rootSpec = @($parts[3] -split ';' | Where-Object { $_ })
+    $srcs = @($rootSpec | Where-Object { -not $_.StartsWith('!') })
+    $excl = @($rootSpec | Where-Object { $_.StartsWith('!') } | ForEach-Object { $_.Substring(1) })
+    $linkOut = $parts[4]; $buildTree = if ($parts[5]) { $parts[5] } else { $repo }
+    $dirs = $parts[6..($parts.Count - 1)]
+    if ($srcs.Count -eq 0) { throw "consumer '$label' names no source root" }
+    $pathspec = @($srcs) + @($excl | ForEach-Object { ":(exclude,glob)$_" })
+    # Criterion 1: HEAD is the named commit.
+    $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    $head = "$(& git -C $repo rev-parse HEAD 2>$null)".Trim()
+    $want = "$(& git -C $repo rev-parse --verify "$commit^{commit}" 2>$null)".Trim()
+    $ErrorActionPreference = $eap
+    if (-not $head) { Refuse "$label : $repo is not a git working tree" }
+    if (-not $want) { Refuse "$label : commit '$commit' does not resolve in $repo" }
+    if ($head -ne $want) { Refuse "$label : criterion 1 -- $repo is at $head, not the named commit $want" }
+    # Criterion 2: the source roots are clean.
+    $dirty = @(& git -C $repo status --porcelain -- @pathspec)
+    if ($dirty.Count -gt 0) { Refuse "$label : criterion 2 -- source roots modified in $repo, so its objects are not attributable to $commit : $($dirty -join '; ')" }
+    # Criterion 3: the build source tree the compiler read equals the named checkout, file by file.
+    if (-not (Test-Path $buildTree)) { Refuse "$label : criterion 3 -- the build source tree $buildTree does not exist" }
+    $mineFiles = Get-RootFiles $repo $srcs $excl
+    $sameTree = (Resolve-Path $buildTree).Path.TrimEnd('\') -ieq (Resolve-Path $repo).Path.TrimEnd('\')
+    $buildFiles = if ($sameTree) { $mineFiles } else { Get-RootFiles $buildTree $srcs $excl }
+    if ($mineFiles.Count -eq 0) { Refuse "$label : criterion 3 -- no files under the source roots $($srcs -join ', ') in $repo" }
+    $c3 = @()
+    foreach ($k in $mineFiles.Keys) {
+        if (-not $buildFiles.Contains($k)) { $c3 += "$k is in $repo but not in the build source tree $buildTree" }
+        elseif ($buildFiles[$k] -ne $mineFiles[$k]) { $c3 += "$k differs (SHA-256 $($mineFiles[$k].Substring(0,12)) in $repo, $($buildFiles[$k].Substring(0,12)) in $buildTree)" }
+    }
+    foreach ($k in $buildFiles.Keys) { if (-not $mineFiles.Contains($k)) { $c3 += "$k is in the build source tree $buildTree but not in $repo" } }
+    if ($c3.Count -gt 0) { Refuse ("$label : criterion 3 -- the build source tree is not the named checkout's files: " + (($c3 | Select-Object -First 10) -join '; ') + $(if ($c3.Count -gt 10) { " (and $($c3.Count - 10) more)" } else { '' })) }
+    # Criterion 4: the link output is no older than the last commit touching the roots, nor than the newest object.
+    if (-not (Test-Path $linkOut)) { Refuse "$label : criterion 4 -- the link output $linkOut does not exist" }
+    $linkItem = Get-Item $linkOut
+    $linkT = [DateTimeOffset]::new($linkItem.LastWriteTimeUtc).ToUnixTimeSeconds()
+    $srcTime = [int64](& git -C $repo log -1 --format=%ct $want -- @pathspec)
     $objs = foreach ($d in $dirs) {
         if (-not (Test-Path $d)) { throw "object directory not found: $d" }
         Get-ChildItem -Path $d -Recurse -Filter *.obj -File |
@@ -125,10 +191,14 @@ foreach ($spec in $Consumer) {
     $objs = @($objs | Sort-Object FullName)
     if ($objs.Count -eq 0) { throw "no objects for consumer '$label'" }
     $newestObj = ($objs | Sort-Object LastWriteTimeUtc | Select-Object -Last 1)
-    $newestT = [DateTimeOffset]::new($newestObj.LastWriteTimeUtc).ToUnixTimeSeconds()
-    if ($newestT -lt $srcTime) {
-        Refuse ("$label : the newest object ($($newestObj.Name), $($newestObj.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))) is older than " +
-                "the last commit touching $($srcs -join ', ') at $commit ($([DateTimeOffset]::FromUnixTimeSeconds($srcTime).LocalDateTime.ToString('yyyy-MM-dd HH:mm:ss')))")
+    $srcTimeText = [DateTimeOffset]::FromUnixTimeSeconds($srcTime).LocalDateTime.ToString('yyyy-MM-dd HH:mm:ss')
+    if ($linkT -lt $srcTime) {
+        Refuse ("$label : criterion 4 -- the link output $($linkItem.Name) ($($linkItem.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))) is older than the last commit touching " +
+                "$($srcs -join ', ') at $commit ($srcTimeText): the build did not compile the committed sources")
+    }
+    if ($linkItem.LastWriteTimeUtc -lt $newestObj.LastWriteTimeUtc) {
+        Refuse ("$label : criterion 4 -- the link output $($linkItem.Name) ($($linkItem.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))) is older than the newest object " +
+                "$($newestObj.Name) ($($newestObj.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))): the build did not finish linking what it compiled")
     }
     $mine = New-Object 'System.Collections.Generic.SortedSet[string]' ([System.StringComparer]::Ordinal)
     foreach ($o in $objs) {
@@ -144,7 +214,7 @@ foreach ($spec in $Consumer) {
     $oldest = ($objs | Sort-Object LastWriteTime | Select-Object -First 1).LastWriteTime.ToString('yyyy-MM-dd HH:mm')
     $nC = @($mine | Where-Object { $_ -cmatch '^sslm_' }).Count
     $header += "# consumer: $label @ $want -- LIVE read of $($objs.Count) objects (written $oldest .. $($newestObj.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))), $($mine.Count - $nC) C++ and $nC C engine symbols"
-    $header += "#   commit check: HEAD = the named commit; $($srcs -join ', ') clean; newest object not older than their last commit ($([DateTimeOffset]::FromUnixTimeSeconds($srcTime).LocalDateTime.ToString('yyyy-MM-dd HH:mm')))"
+    $header += "#   live-read criteria (plan Sec3.7 item 3): 1 HEAD = the named commit; 2 roots clean ($($rootSpec -join '; ')); 3 build source tree $buildTree equals the checkout over $($mineFiles.Count) files by SHA-256; 4 link output $linkOut ($($linkItem.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))) not older than the roots' last commit ($srcTimeText) nor the newest object"
     foreach ($d in $dirs) { $header += "#   objects: $d (excluding $($Exclude -join ', '))" }
     Add-Consumer $label $mine
 }
@@ -174,6 +244,7 @@ foreach ($spec in $Recorded) {
     Add-Consumer $label $mine
 }
 if ($Consumer.Count + $Recorded.Count -eq 0) { throw 'give at least one -Consumer or -Recorded' }
+if ($Release) { $header += '# -Release: the release reading; every input above is a live read (no -Recorded input is admitted)' }
 if ($undeclared.Count -gt 0) {
     Refuse ("a consumer imports an sslm_* name the header does not declare (c_abi_verbs.txt holds $($verbs.Count)): " + ($undeclared -join '; '))
 }
