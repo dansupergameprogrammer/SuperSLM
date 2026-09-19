@@ -10,6 +10,7 @@ rem   every cell calling the verb     RED BY LINK: LNK2019 on sslm_gpu_seq_read_
 rem                                   and/or sslm_gpu_model_hidden_size, nothing else
 rem   cell_prompt_guard_status        RED BY LINK: LNK2019 on sslm_gpu_seq_read_prefill_final_hidden and
 rem                                   superslm_gpu::ArmPrefillGuardDeviceRemovedQueryInjection (plan Sec3.6)
+rem   cell_schema_guard_status        RED BY LINK: LNK2019 on sslm_gpu_seq_read_prefill_final_hidden (Q5-1, T-2814)
 rem   cell_prompt_guard_removal       LINKS; GREEN AT RUN (Q4-1e: a real removal is SSLM_DEVICE_LOST at 1.5.0
 rem                                   too -- a liveness and cleanliness cell, not a classification cell)
 rem   cell_env_pins_shipping_leg      LINKS; RED AT RUN (the shipping build still reads the pins)
@@ -88,7 +89,8 @@ if exist "%SHADERS%" (
 
 set UNEXPECTED=0
 for %%f in (cell_status_ordinals cell_census_lifetime cell_hostile_capacity cell_prefill_faults_schema cell_final_norm_guard ^
-            cell_prompt_guard_status cell_prompt_guard_removal cell_concurrency cell_determinism_composition cell_functional_commission ^
+            cell_prompt_guard_status cell_schema_guard_status cell_prompt_guard_removal cell_concurrency ^
+            cell_determinism_composition cell_functional_commission ^
             cell_env_pins_shipping_leg cell_wrapper_census_standing) do (
     set VARIANT=gpu_fi
     set CELLINC=

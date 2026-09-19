@@ -92,13 +92,26 @@ static int GSkips = 0;
 		std::printf("\n"); \
 	} while (0)
 
+// A skipped cell fails the run (plan Sec3.5 step 1, T-2806 M2, T-2814). A cell prints SKIP only when an
+// argv artifact it needs is missing, and a run that left an artifact out is not a green run: every cell's
+// exit status is non-zero whenever it skipped anything, unless --allow-skip is passed for a deliberate
+// partial run. No acceptance run passes --allow-skip (plan Sec3.5 step 3: every summary shows skips=0).
+// Enforced here, in the one function every cell returns through, so a runner cannot drop it.
+static bool g_allow_skip = false;
+
 inline int FinishSuite(const char* name) {
-	std::printf("%s: checks=%d failures=%d skips=%d -> %s\n", name, GChecks, GFailures, GSkips,
-	            GFailures == 0 ? "PASS" : "FAIL");
-	return GFailures == 0 ? 0 : 1;
+	const bool skip_fails = GSkips > 0 && !g_allow_skip;
+	const bool pass = GFailures == 0 && !skip_fails;
+	std::printf("%s: checks=%d failures=%d skips=%d%s -> %s\n", name, GChecks, GFailures, GSkips,
+	            GSkips > 0 ? (g_allow_skip ? " (allowed by --allow-skip: not an acceptance run)"
+	                                       : " (a skipped cell fails the run; pass every artifact flag)")
+	                       : "",
+	            pass ? "PASS" : "FAIL");
+	return pass ? 0 : 1;
 }
 
-// argv convention, every flag optional; a cell whose artifact is not supplied SKIPs:
+// argv convention. A cell whose artifact is not supplied SKIPs, and a skip fails the run unless
+// --allow-skip is given (see FinishSuite):
 //   --qwen3=PATH       the 1.5.0 Qwen3-Embedding-0.6B artifact (plan Sec2.6's executed cell)
 //   --synthetic=PATH   the synthetic fused-K fixture (plan Sec3.4 row 4): SuperEmbedder's
 //                      u1_pair_model.sslm, SHA-256
@@ -111,12 +124,16 @@ inline int FinishSuite(const char* name) {
 //   --gan=PATH         fixture G-an (plan Sec3.4 row 5, Sec3.6): the --synthetic fixture with its
 //                      layer0.attn_norm composition constant patched, built by make_gan_fixture.py
 //   --g5fixture=PATH   a schema-bearing artifact that loads at 1.5.0 (plan Sec3.4 row 5)
+//   --g5an=PATH        fixture G5-an (plan Sec3.4 row 5, cell Q5-1): the --g5fixture artifact with its
+//                      layer0.attn_norm composition constant patched, built by make_g5an_fixture.py
 //   --commission=PATH  T-2780's 256-row token file (plan Sec3.4 row 10)
+//   --allow-skip       a deliberate partial run: skipped cells do not fail it (never an acceptance run)
 static std::string g_qwen3_path;
 static std::string g_synthetic_path;
 static std::string g_a2fn_path;
 static std::string g_gan_path;
 static std::string g_g5_path;
+static std::string g_g5an_path;
 static std::string g_commission_path;
 static std::string g_schema_name = "shopkeeper_intent_extraction";
 
@@ -132,6 +149,8 @@ inline void ParseFixtureArgs(int argc, char** argv) {
 		else if (const char* v = take("--a2fn=")) g_a2fn_path = v;
 		else if (const char* v = take("--gan=")) g_gan_path = v;
 		else if (const char* v = take("--g5fixture=")) g_g5_path = v;
+		else if (const char* v = take("--g5an=")) g_g5an_path = v;
+		else if (a == "--allow-skip") g_allow_skip = true;
 		else if (const char* v = take("--commission=")) g_commission_path = v;
 		else if (const char* v = take("--schema=")) g_schema_name = v;
 	}

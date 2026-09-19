@@ -27,3 +27,7 @@ tests/golden/**  -text
 # left to core.autocrlf so a tool-written LF working copy cannot recur.
 # (Claude/Bach/t2139-battery-varsunset-failure-2026-08-16.md, Wizard repo.)
 *.bat  text eol=crlf
+
+# T-2814: the recorded dumpbin read that tests/t2807-api-slot/consumed_symbols.txt is generated from, and
+# whose SHA-256 its header states. Byte-exact on every platform.
+tests/t2807-api-slot/recorded/*.tsv  -text
