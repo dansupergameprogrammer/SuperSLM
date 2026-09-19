@@ -108,11 +108,14 @@ inline int FinishSuite(const char* name) {
 //                      head_dim 128, QK-norm fused-K, vocab 384, cap 64, tied embeddings)
 //   --a2fn=PATH        fixture A2-fn (plan Sec3.4 row 5): the --synthetic fixture with its final_norm
 //                      composition constant patched, built by make_a2fn_fixture.py
+//   --gan=PATH         fixture G-an (plan Sec3.4 row 5, Sec3.6): the --synthetic fixture with its
+//                      layer0.attn_norm composition constant patched, built by make_gan_fixture.py
 //   --g5fixture=PATH   a schema-bearing artifact that loads at 1.5.0 (plan Sec3.4 row 5)
 //   --commission=PATH  T-2780's 256-row token file (plan Sec3.4 row 10)
 static std::string g_qwen3_path;
 static std::string g_synthetic_path;
 static std::string g_a2fn_path;
+static std::string g_gan_path;
 static std::string g_g5_path;
 static std::string g_commission_path;
 static std::string g_schema_name = "shopkeeper_intent_extraction";
@@ -127,6 +130,7 @@ inline void ParseFixtureArgs(int argc, char** argv) {
 		if (const char* v = take("--qwen3=")) g_qwen3_path = v;
 		else if (const char* v = take("--synthetic=")) g_synthetic_path = v;
 		else if (const char* v = take("--a2fn=")) g_a2fn_path = v;
+		else if (const char* v = take("--gan=")) g_gan_path = v;
 		else if (const char* v = take("--g5fixture=")) g_g5_path = v;
 		else if (const char* v = take("--commission=")) g_commission_path = v;
 		else if (const char* v = take("--schema=")) g_schema_name = v;

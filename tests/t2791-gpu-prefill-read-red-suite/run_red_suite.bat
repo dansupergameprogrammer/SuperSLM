@@ -5,7 +5,7 @@ rem reading is build_red_suite.bat's output). Cell_functional_commission is excl
 rem --with-commission is given: it is about 11 GPU minutes (plan Sec3.4 row 10) and belongs to the
 rem release reading (plan Sec3.5 step 5).
 rem
-rem Usage: run_red_suite.bat ["--bin=DIR"] ["--qwen3=PATH"] ["--synthetic=PATH"] ["--a2fn=PATH"]
+rem Usage: run_red_suite.bat ["--bin=DIR"] ["--qwen3=PATH"] ["--synthetic=PATH"] ["--a2fn=PATH"] ["--gan=PATH"]
 rem            ["--g5fixture=PATH"] ["--commission=PATH"] [--with-commission]   (quote each flag carrying '=')
 rem   --bin defaults to <repo>\build\t2791\bin.
 rem Artifacts this suite was authored against (read-only; SHA-256):
@@ -17,7 +17,10 @@ rem                                                       a231d9ed9dd3944a253201
 rem   --a2fn       A2-fn (plan Sec3.4 row 5), built from --synthetic by this directory's
 rem                make_a2fn_fixture.py <u1_pair_model.sslm> <out>
 rem                                                       73a1ec9e1846be16af7f8dc13511207d4129a9e825cc5271f783f6bc1ff4f940
-rem   --g5fixture  t2132_g5_fixture_1p5b.sslm            078df885060d5dea23a88983bb68014843d142cb6ad55c7f70ef9ff9a932a019
+rem   --gan        G-an (plan Sec3.4 row 5, Sec3.6), built from --synthetic by this directory's
+rem                make_gan_fixture.py <u1_pair_model.sslm> <out>
+rem                                                       cf48079cd3b50eb053c8f8cd57d4feb0f102d8ec9622aaf86300a15daf96e76b
+rem   --g5fixture  t2132_g5_fixture_1p5b.sslm           078df885060d5dea23a88983bb68014843d142cb6ad55c7f70ef9ff9a932a019
 rem   --commission T-2780 tokens.txt                      01c9b0471695086cd708e02ad9826d70d8745fc3296610b2c2420f6df9091f82
 setlocal enabledelayedexpansion
 for %%I in ("%~dp0..\..") do set ENG=%%~fI
@@ -39,7 +42,7 @@ goto :parse_args
 :args_done
 set ANYFAIL=0
 for %%f in (cell_status_ordinals cell_census_lifetime cell_hostile_capacity cell_prefill_faults_schema cell_final_norm_guard ^
-            cell_concurrency cell_determinism_composition cell_env_pins_shipping_leg ^
+            cell_prompt_guard_status cell_prompt_guard_removal cell_concurrency cell_determinism_composition cell_env_pins_shipping_leg ^
             cell_wrapper_census_standing cell_functional_commission) do (
     set SKIPTHIS=0
     if "%%f"=="cell_functional_commission" if "!WITHCOMM!"=="0" set SKIPTHIS=1

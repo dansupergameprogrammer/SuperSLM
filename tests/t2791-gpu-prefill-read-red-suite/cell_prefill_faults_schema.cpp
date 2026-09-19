@@ -8,6 +8,9 @@
 // INJECTION, as tests/t2178-gpu-batched-prefill-red-suite does):
 //   F1 the device-computed override: ArmT2169ChunkRecordingFaultInjection(1) on a 2-token chunk;
 //   F2 / F3 / F4 the recording tail's pre-Close, Signal and bad_alloc faults;
+//   F1-F4 each return exactly SSLM_DEVICE_LOST (plan Sec3.4 row 5, tightened by T-2798 / T-2801:
+//   plan Sec3.6 moves only the device-guard refusal to SSLM_SEQUENCE_REJECTED; every infrastructure
+//   fault stays SSLM_DEVICE_LOST, and F1 is mutant (j)'s in-suite killer);
 //   F6 recovery: reset + prefill afterwards reads the correct frame.
 // Schema twin, on a schema-bearing artifact (--g5fixture; plan Sec3.4 row 5 names the G5
 // suite's argv artifact, and the re-strike executed these members on it, Claude/Loki/te270-*):
@@ -75,7 +78,12 @@ void PromptFaults(GpuModelFixture& fx) {
 	superslm_gpu::ArmT2169ChunkRecordingFaultInjection(1);
 	const SslmGpuStatus f1 = Prefill(fx, s, two);
 	superslm_gpu::ClearT2169ChunkRecordingFaultInjection();
-	CHECK_MSG(f1 != SSLM_OK, "[%s] F1 SETUP: the armed override did not fail the call (%s)", tag, StatusName(f1));
+	// Plan Sec3.4 row 5 (T-2798): tightened from `!= SSLM_OK` to `== SSLM_DEVICE_LOST`. The recording
+	// seam's status is GpuGemmGroupArithmeticInvalid, an infrastructure fault; Sec3.6 classifies by
+	// provenance, so it must stay SSLM_DEVICE_LOST. Classification by value (mutant (j)) maps it to
+	// SSLM_SEQUENCE_REJECTED and turns F1 red.
+	CHECK_MSG(f1 == SSLM_DEVICE_LOST, "[%s] F1: the armed recording fault returned %s, want SSLM_DEVICE_LOST", tag,
+	          StatusName(f1));
 	std::printf("    [%s] F1 prefill status under the override: %s\n", tag, StatusName(f1));
 	ExpectRefuse(tag, "F1 prompt device-computed override", ReadVerb(fx, s));
 
@@ -91,14 +99,17 @@ void PromptFaults(GpuModelFixture& fx) {
 		CHECK_MSG(base(), "[%s] SETUP base", tag);
 		t.arm();
 		SslmGpuStatus st = SSLM_OK;
+		bool threw = false;
 		try {
 			st = Prefill(fx, s, two);
 		} catch (...) {
-			st = SSLM_DEVICE_LOST;  // an escaping throw is also a failed call; the read must still refuse
+			threw = true;  // a failed call, so the read must still refuse -- but not the status Sec3.4 requires
 			std::printf("    [%s] %s: the call threw\n", tag, t.cell);
 		}
 		t.clr();
-		CHECK_MSG(st != SSLM_OK, "[%s] %s SETUP: the armed fault did not fail the call", tag, t.cell);
+		// Plan Sec3.4 row 5 (T-2798): tightened from `!= SSLM_OK` to `== SSLM_DEVICE_LOST`.
+		CHECK_MSG(!threw && st == SSLM_DEVICE_LOST, "[%s] %s: the armed fault returned %s, want SSLM_DEVICE_LOST", tag,
+		          t.cell, threw ? "an exception" : StatusName(st));
 		std::printf("    [%s] %s: prefill status %s\n", tag, t.cell, StatusName(st));
 		ExpectRefuse(tag, t.cell, ReadVerb(fx, s));
 	}
