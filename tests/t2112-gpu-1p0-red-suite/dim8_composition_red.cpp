@@ -110,45 +110,59 @@ static void TestDim8_2_BatchWideBudgetCutRealModelTwoTokensPlusOneLayer(
 
 // --- Cell 3: adapter x KV-residency -- a sequence's adapter binding changed (base -> A -> B ->
 // base) across successive calls on the SAME sequence handle, K/V state carried forward unchanged.
-// ---
-static void TestDim8_3_AdapterSwapMidSessionPreservesKvState(SslmGpuContext* ctx,
-                                                              SslmGpuModelHandle* model,
-                                                              SslmGpuSequenceHandle* seq,
-                                                              SslmGpuAdapterHandle* adapter_a,
-                                                              SslmGpuAdapterHandle* adapter_b,
-                                                              uint32_t num_hidden_layers) {
+//
+// D-SLM7363/T-2833/T-2836 REPAIR (Curie, 2026-09-19,
+// Claude/Laplace/t2833-t2112-dim8-kvsat-2026-09-19.md): the ORIGINAL oracle here was wrong, not
+// the engine. `kv_saturation_count` counts int8-range clamp events on activation values that
+// depend on the sequence's WHOLE K/V history (T-2833 Sec1/Sec4) -- a base/A/B/base run and a
+// base-only run have no reason to reach the same count, and the two matched pre-1.5.0 only
+// because this cell's own token-5-repeated fixture makes attention over identical V rows
+// position-invariant on those engines (T-2833 Sec3 E3), not because the counter is a function of
+// context alone. The correct oracle is a CPU reference computing the SAME schedule Cell5 already
+// uses this shape for (CpuOracleRunner::StepMatchesGpu) -- extended here
+// (StepMatchesGpuWithAdapter, fixture_common.h) to switch adapters per step. Two genuinely
+// DISTINCT real adapters (not one handle reused for both slots, the prior cell's own documented
+// workaround) and varied tokens (not token 5 repeated) close the two degenerate-input gaps the
+// triage named: a repeated adapter cannot show a slot-identity leak, and a repeated token makes
+// attention degenerate over identical rows, which is what let the old oracle pass by coincidence.
+static void TestDim8_3_AdapterSwapMidSessionPreservesKvState(
+    SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, const SslmGpuAdapterHandle* gpu_adapter_a,
+    const SslmGpuAdapterHandle* gpu_adapter_b, const superslm_adapter::AdapterHandle* cpu_adapter_a,
+    const superslm_adapter::AdapterHandle* cpu_adapter_b, CpuOracleModel* oracle,
+    uint32_t num_hidden_layers) {
 	// Each of the four calls is its own full token (RunFullTokenStep, fixture_common.h) -- the
 	// cell's own claim is that context_length (the K/V-row count) advances by exactly ONE PER
 	// STEP/TOKEN regardless of adapter churn; a per-layer budget would leave context_length
 	// unmoved until every layer of a token lands, not advance predictably per call.
-	CHECK(RunFullTokenStep(ctx, seq, /*adapter_or_null=*/nullptr, num_hidden_layers, 5));  // base
-	CHECK(RunFullTokenStep(ctx, seq, adapter_a, num_hidden_layers, 5));                     // -> A
-	CHECK(RunFullTokenStep(ctx, seq, adapter_b, num_hidden_layers, 5));                     // -> B
-	CHECK(RunFullTokenStep(ctx, seq, nullptr, num_hidden_layers, 5));                        // -> base
+	const SslmGpuAdapterHandle* gpu_sched[4] = {nullptr, gpu_adapter_a, gpu_adapter_b, nullptr};
+	const superslm_adapter::AdapterHandle* cpu_sched[4] = {nullptr, cpu_adapter_a, cpu_adapter_b,
+	                                                        nullptr};
+	const char* names[4] = {"none", "A", "B", "none"};
+	const int32_t tokens[4] = {5, 9, 13, 20};  // varied -- a repeated token makes attention over
+	                                            // identical V rows degenerate (T-2833 Sec3 E3),
+	                                            // the exact degeneracy that let the OLD oracle
+	                                            // pass by coincidence.
+	CpuOracleRunner cpu;
+	cpu.Init(*oracle);
 	SeqSnapshot final_state{};
-	CHECK(CaptureSnapshot(seq, &final_state));
+	for (int step = 0; step < 4; ++step) {
+		CHECK(RunFullTokenStep(ctx, seq, gpu_sched[step], num_hidden_layers, tokens[step]));
+		CHECK(CaptureSnapshot(seq, &final_state));
+		// FEATURE ORACLE, executed (T-2836 repair): the GPU step is checked against a CPU
+		// reference running the IDENTICAL adapter schedule (ApplyAdapterToLayers switched to the
+		// same per-step adapter before the CPU forward, StepMatchesGpuWithAdapter), never a
+		// base-only comparator -- a leak of adapter state into the K/V bookkeeping now shows up
+		// as a per-step divergence from a reference that binds the SAME adapter at the SAME step
+		// and therefore cannot itself carry the leak.
+		CHECK_MSG(cpu.StepMatchesGpuWithAdapter(tokens[step], *oracle, cpu_sched[step], final_state),
+		          "Cell3: step %d (adapter=%s, token=%d) diverges from the CPU reference running "
+		          "the identical adapter schedule -- hidden_codes/context_length/"
+		          "kv_saturation_count no longer match",
+		          step, names[step], tokens[step]);
+	}
 	CHECK_MSG(final_state.context_length == 4,
 	          "Cell3: K/V context_length must advance by exactly one per step regardless of "
 	          "adapter churn (base/A/B/base) -- got %lld", (long long)final_state.context_length);
-	// FEATURE ORACLE, executed (N2 repair, 2026-08-15): the header's own claim that
-	// `kv_saturation_count` "is a function of context alone" is checked directly, not merely
-	// asserted -- a SECOND, dedicated sequence run for the SAME four full-token steps with NO
-	// adapter bound at all (base/base/base/base) must reach the identical `kv_saturation_count`
-	// as the base/A/B/base sequence above. If adapter identity leaked into the K/V bookkeeping
-	// (rather than only the residual stream's content, which this cell does not itself compare),
-	// the two counts would diverge.
-	SslmGpuSequenceHandle* base_only = nullptr;
-	CHECK(sslm_gpu_seq_create(ctx, model, 64, &base_only) == SSLM_OK);
-	for (int i = 0; i < 4; ++i) CHECK(RunFullTokenStep(ctx, base_only, nullptr, num_hidden_layers, 5));
-	SeqSnapshot base_only_state{};
-	CHECK(CaptureSnapshot(base_only, &base_only_state));
-	CHECK_MSG(base_only_state.kv_saturation_count == final_state.kv_saturation_count,
-	          "Cell3: kv_saturation_count after base/A/B/base (%llu) diverges from a base-only "
-	          "four-step run (%llu) -- adapter identity leaked into K/V bookkeeping, not only the "
-	          "residual stream's own content",
-	          (unsigned long long)final_state.kv_saturation_count,
-	          (unsigned long long)base_only_state.kv_saturation_count);
-	CHECK(sslm_gpu_seq_release(ctx, base_only) == SSLM_OK);
 }
 
 // --- Cell 4: context x adapter -- a sequence bound to an adapter decoded to context >=64 so
@@ -412,6 +426,41 @@ int main(int argc, char** argv) {
 		SKIP_MSG("dim8 cells 1/3/4 need --adapter=PATH -- not run");
 	}
 
+	// T-2836 (Claude/Laplace/t2833-t2112-dim8-kvsat-2026-09-19.md Sec5): Cell3 needs a SECOND,
+	// genuinely distinct real adapter (--adapter2) plus its CPU-side AdapterHandle, so the
+	// per-step CPU reference can bind the SAME schedule the GPU runs. Absent --adapter2, Cell3
+	// SKIPs (fixture_common.h's own documented convention for every other two-adapter cell in
+	// this suite -- s2_bind_red.cpp S2-C, cell_rebind_serial.cpp) rather than falling back to one
+	// handle reused for both slots, which is exactly the degenerate construction the repair
+	// closes.
+	std::vector<uint8_t> adapter2_bytes;
+	SslmModelView adapter2_view{};
+	const bool have_adapter2 = !g_adapter2_path.empty() &&
+	                            LoadRealModel(g_adapter2_path, &adapter2_view, &adapter2_bytes, &err);
+	SslmGpuAdapterHandle* adapter2 = nullptr;
+	superslm_adapter::AdapterHandle cpu_adapter_a, cpu_adapter_b;
+	bool have_cpu_adapters = false;
+	if (have_adapter && have_adapter2) {
+		CHECK(sslm_gpu_adapter_map(ctx, model, &adapter2_view, &adapter2) == SSLM_OK);
+		if (have_oracle) {
+			const superslm_adapter::BaseModelGeometry geom = MakeBaseModelGeometry(view, oracle);
+			std::string a_err, b_err;
+			const superslm_adapter::AdapterLoadStatus sta =
+			    superslm_adapter::LoadAdapterArtifact(g_adapter_path, geom, cpu_adapter_a, &a_err);
+			const superslm_adapter::AdapterLoadStatus stb =
+			    superslm_adapter::LoadAdapterArtifact(g_adapter2_path, geom, cpu_adapter_b, &b_err);
+			CHECK_MSG(sta == superslm_adapter::AdapterLoadStatus::Ok,
+			          "dim8: CPU-side adapter A failed to load -- %s", a_err.c_str());
+			CHECK_MSG(stb == superslm_adapter::AdapterLoadStatus::Ok,
+			          "dim8: CPU-side adapter B failed to load -- %s", b_err.c_str());
+			have_cpu_adapters = sta == superslm_adapter::AdapterLoadStatus::Ok &&
+			                    stb == superslm_adapter::AdapterLoadStatus::Ok;
+		}
+	} else {
+		SKIP_MSG("dim8 Cell3 needs --adapter=PATH --adapter2=PATH (two DISTINCT real adapters) "
+		         "-- not run");
+	}
+
 	// Cell 1: batch of 3, mixed adapters {none, adapter, adapter} -- ONLY ONE real adapter
 	// artifact is available this session (the shopkeeper-v2 runtime adapter); the SAME handle
 	// is bound to two DIFFERENT sequences in the batch to exercise mixed composition (two
@@ -459,13 +508,16 @@ int main(int argc, char** argv) {
 			if (s) sslm_gpu_seq_release(ctx, s);
 	}
 
-	// Cell 3: adapter swap mid-session -- needs TWO adapter handles (A, B); only one real
-	// artifact available, same handle reused for both slots (named, same reasoning as Cell 1).
-	if (adapter) {
+	// Cell 3: adapter swap mid-session -- needs TWO DISTINCT adapter handles (A, B) plus their
+	// CPU-side counterparts, for the per-step schedule oracle (T-2836).
+	if (have_cpu_adapters) {
 		SslmGpuSequenceHandle* seq = nullptr;
 		CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
-		if (seq) TestDim8_3_AdapterSwapMidSessionPreservesKvState(ctx, model, seq, adapter, adapter,
-		                                                           num_hidden_layers_top);
+		if (seq) {
+			TestDim8_3_AdapterSwapMidSessionPreservesKvState(ctx, seq, adapter, adapter2,
+			                                                  &cpu_adapter_a, &cpu_adapter_b,
+			                                                  &oracle, num_hidden_layers_top);
+		}
 		if (seq) sslm_gpu_seq_release(ctx, seq);
 	}
 
@@ -494,6 +546,7 @@ int main(int argc, char** argv) {
 	}
 
 	if (adapter) sslm_gpu_adapter_unmap(ctx, adapter);
+	if (adapter2) sslm_gpu_adapter_unmap(ctx, adapter2);
 	CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
 	CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);

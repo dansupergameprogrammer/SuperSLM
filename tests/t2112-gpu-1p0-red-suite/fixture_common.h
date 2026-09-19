@@ -23,6 +23,11 @@
 #include <string>
 #include <vector>
 
+#include "superslm/adapter_marshal.h" // superslm_adapter::AdapterHandle/LoadAdapterArtifact/
+                                       // ApplyAdapterToLayers/BaseModelGeometry -- the CPU-side
+                                       // adapter machinery T-2836's per-step schedule oracle needs
+                                       // (dim8 Cell3); every other cell in this suite that only
+                                       // reads the type declarations pays nothing extra for it.
 #include "superslm/artifact.h"
 #include "superslm/forward_sites.h"   // superslm::EmbedEntry/RunLayerLoop/SequenceLayerState -- the CPU oracle
 #include "superslm/layer_marshal.h"   // superslm_marshal::LayerBacking/MarshalLayer/ReadCarriedScale
@@ -324,6 +329,24 @@ inline bool LoadCpuOracleModel(const superslm::SslmModelView& view, CpuOracleMod
 	return true;
 }
 
+// Builds the BaseModelGeometry superslm_adapter::LoadAdapterArtifact needs, from an already-
+// loaded model view and its CpuOracleModel -- the exact construction T-2833's own probe
+// (D:\_t2833\probe\t2833_probe.cpp, disposable, not in this tree) established for building a
+// CPU-side adapter handle alongside the GPU-mapped one. Centralized here so a cell needing the
+// CPU-side handle (not merely the GPU one sslm_gpu_adapter_map already builds) does not
+// re-derive this per file.
+inline superslm_adapter::BaseModelGeometry MakeBaseModelGeometry(const superslm::SslmModelView& view,
+                                                                    const CpuOracleModel& m) {
+	superslm_adapter::BaseModelGeometry g;
+	g.num_hidden_layers = m.num_hidden_layers;
+	g.hidden_size = m.hidden_size;
+	g.intermediate_size = m.intermediate_size;
+	g.kv_hidden_size = static_cast<uint64_t>(m.num_kv_heads) * m.head_dim;
+	g.q_width = static_cast<uint64_t>(view.config.num_attention_heads) * m.head_dim;
+	g.base_artifact_hash = view.RawIntegrityHash();
+	return g;
+}
+
 // One CPU decode step: EmbedEntry(token) then RunLayerLoop over every layer -- byte-for-byte the
 // same construction tools/t2113_b7_batch_smoke.cpp/tools/t2113_b8_thread_smoke.cpp already run as
 // their own oracle.
@@ -365,6 +388,31 @@ struct CpuOracleRunner {
 	// checks, hidden_scale is re-derived from hidden_codes by RunLayerLoop and not carried
 	// separately here since CpuOracleModel's own seq owns hidden_scale directly).
 	bool StepMatchesGpu(int32_t token, const CpuOracleModel& m, const SeqSnapshot& gpu) {
+		const superslm::SslmForwardStatus st = StepCpu(seq, token, m, ws.data(), ws.size());
+		if (st != superslm::SslmForwardStatus::Ok) return false;
+		if (seq.kv_saturation_count != gpu.kv_saturation_count) return false;
+		if (seq.context_length != gpu.context_length) return false;
+		for (size_t j = 0; j < m.hidden_size; ++j) {
+			if (codes[j] != gpu.hidden_codes[j]) return false;
+		}
+		return true;
+	}
+
+	// T-2836 (Claude/Laplace/t2833-t2112-dim8-kvsat-2026-09-19.md Sec5): the adapter-aware
+	// sibling of StepMatchesGpu above, for a cell whose own claim spans an adapter SCHEDULE
+	// (base/A/B/base) rather than one fixed bind for the whole run. Switches `m`'s own per-layer
+	// LayerWeights::adapter pointer to `adapter_or_null` (superslm_adapter::ApplyAdapterToLayers)
+	// BEFORE running the CPU step, so this step's reference is bound to the SAME adapter the GPU
+	// step it is compared against was bound to. `m` is non-const because ApplyAdapterToLayers
+	// writes into its own `layers[i].adapter` pointer -- the CPU reference shares no derived
+	// constant with the GPU path (StandardsDocument.md Sec5.4's independent-reference rule): it
+	// loads the adapter file itself via a separate superslm_adapter::LoadAdapterArtifact call and
+	// runs its own forward, so a leak of adapter identity into the GPU's K/V bookkeeping cannot
+	// also be present in this reference.
+	bool StepMatchesGpuWithAdapter(int32_t token, CpuOracleModel& m,
+	                                const superslm_adapter::AdapterHandle* adapter_or_null,
+	                                const SeqSnapshot& gpu) {
+		superslm_adapter::ApplyAdapterToLayers(adapter_or_null, m.layers.data(), m.num_hidden_layers);
 		const superslm::SslmForwardStatus st = StepCpu(seq, token, m, ws.data(), ws.size());
 		if (st != superslm::SslmForwardStatus::Ok) return false;
 		if (seq.kv_saturation_count != gpu.kv_saturation_count) return false;
