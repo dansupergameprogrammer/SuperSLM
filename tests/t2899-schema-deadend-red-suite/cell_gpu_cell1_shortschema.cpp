@@ -56,12 +56,51 @@
 
 namespace {
 
+// T-2909 (TE-365 M3): `sslm_gpu_seq_save`'s own byte layout (src/gpu/superslm_gpu.cpp's
+// GpuSeqBlobHeader + T-2895's own 12-byte 'SLM5' tail) is private to that translation unit --
+// no header declares it, and no bench accessor exposes `ready_for_logits` directly (unlike
+// `layer_index`/`live_state.layer_index`, both read below via their own existing ForBench
+// accessors). This mirrors the CPU twin's own established technique in this exact suite
+// (`cell_cpu_deadend_retry_reset.cpp`'s `BlobContextLength`/`BlobDfaWalkState`): read the field
+// back through the PUBLIC `sslm_gpu_seq_save` API's own documented byte layout (the header
+// comment above `GpuSeqBlobHeader`/`kGpuSeqBlobV5TailBytes`), never a new production accessor.
+// Header = magic(4)+layer_index(4)+hidden_scale_m(8)+hidden_scale_e(8)+kv_saturation_count(8)+
+// context_length(8)+hidden_codes_size(8)+workspace_size(8)+model_content_hash(32)+
+// kv_landing_saturation_count(8)+k_channel_landing_saturation_count(8)+
+// rope_q_saturation_count(8)+rope_k_saturation_count(8) = 120 bytes (every member already
+// lands on its own natural alignment boundary, so no compiler padding). The v5 tail then adds
+// bound_schema_index(4)/dfa_walk_state(4)/ready_for_logits-as-LE32(4) immediately after --
+// `ready_for_logits` is the LE32 at byte offset 128. Pinned by a SETUP self-check against the
+// real returned blob size, below, rather than assumed.
+constexpr size_t kGpuBlobHeaderBytes = 120;
+constexpr size_t kGpuBlobV5TailBytes = 12;
+constexpr size_t kGpuBlobReadyOffset = kGpuBlobHeaderBytes + 4 + 4;  // 128
+
+bool ReadGpuReadyForLogits(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, bool* out_ready) {
+	size_t need = 0;
+	sslm_gpu_seq_save(ctx, seq, nullptr, &need);
+	std::vector<uint8_t> blob(need);
+	size_t n = need;
+	if (sslm_gpu_seq_save(ctx, seq, blob.data(), &n) != SSLM_OK) return false;
+	// SETUP self-check: a lower bound only -- the blob's own total length also carries
+	// hidden_codes_size and workspace_size (host_kv_mirror, sized to the KV cache capacity at
+	// creation and never zero), neither of which this helper's own offset arithmetic depends
+	// on. Guards against the header/tail layout moving without pinning an unrelated size.
+	if (n < kGpuBlobReadyOffset + 4) return false;
+	uint32_t word = 0;
+	std::memcpy(&word, blob.data() + kGpuBlobReadyOffset, sizeof(word));
+	*out_ready = word != 0;
+	return true;
+}
+
 // Cell 1 (i): drive `route` to its first dead end. Returns the live handle plus the
-// context_length/walk observed right after the first -2.
+// context_length/walk/layer_index observed right after the first -2.
 struct DeadEndState {
 	SslmGpuSequenceHandle* seq = nullptr;
 	int64_t ctx0 = -1;
 	uint32_t walk0 = 0xFFFFFFFFu;
+	uint32_t layer0 = 0xFFFFFFFFu;
+	uint32_t live0 = 0xFFFFFFFFu;
 };
 
 DeadEndState ReachDeadEnd(const GpuModelFixture& fx, const std::string& route, const std::vector<int32_t>& P,
@@ -89,6 +128,21 @@ DeadEndState ReachDeadEnd(const GpuModelFixture& fx, const std::string& route, c
 		const SslmGpuStatus st1 = SslmGpuSeqDecodeStepForG5Bridge(fx.ctx, d.seq, caller, fx.one_layer_budget, &out1);
 		CHECK_MSG(st1 == SSLM_OK && out1 == t0, "[D] first decode should PRODUCE the accepting token %d: st=%s out=%d",
 		          t0, StatusName(st1), out1);
+		// Must-accept neighbour (plan Sec3.10.2): a produced (non-dead-end) token resets BOTH
+		// layer_index mirrors to 0 and does NOT re-arm ready_for_logits -- the caller must still
+		// embed the next token itself on the FOLLOWING call, unlike the dead-end's own resting
+		// shape. Observed here on route D specifically, the only route where `ReachDeadEnd`
+		// itself passes through a genuine production before reaching the dead end.
+		CHECK_MSG(LayerIndex(d.seq) == 0, "[D] must-accept neighbour: layer_index is %u after a produced token, want 0",
+		          LayerIndex(d.seq));
+		CHECK_MSG(SslmGpuSeqHandleLiveStateForBench(d.seq)->layer_index == 0,
+		          "[D] must-accept neighbour: live_state.layer_index is %u after a produced token, want 0",
+		          SslmGpuSeqHandleLiveStateForBench(d.seq)->layer_index);
+		bool ready_after_produce = true;
+		CHECK_MSG(ReadGpuReadyForLogits(fx.ctx, d.seq, &ready_after_produce), "[D] must-accept neighbour: save failed");
+		CHECK_MSG(!ready_after_produce,
+		          "[D] must-accept neighbour: ready_for_logits is armed after a produced token -- the caller's "
+		          "next decode call would skip embedding it");
 		int32_t out2 = 12345;
 		const SslmGpuStatus st2 = SslmGpuSeqDecodeStepForG5Bridge(fx.ctx, d.seq, caller + 1, fx.one_layer_budget, &out2);
 		CHECK_MSG(st2 == SSLM_OK && out2 == -2, "[D] second decode should dead-end: st=%s out=%d", StatusName(st2), out2);
@@ -108,6 +162,8 @@ DeadEndState ReachDeadEnd(const GpuModelFixture& fx, const std::string& route, c
 	}
 	d.ctx0 = ContextLength(d.seq);
 	d.walk0 = SslmGpuSeqWalkStateForG5Bridge(d.seq);
+	d.layer0 = LayerIndex(d.seq);
+	d.live0 = SslmGpuSeqHandleLiveStateForBench(d.seq)->layer_index;
 	return d;
 }
 
@@ -172,6 +228,15 @@ int main(int argc, char** argv) {
 				CHECK_MSG(walk == d_iii.walk0,
 				          "[%s] Cell1(iii) repeat call #%d: dfa_walk_state moved %u -> %u", route.c_str(), call,
 				          d_iii.walk0, walk);
+				// Cell 1 (ii): a dead-end call -- the first one (captured as d_iii.layer0/live0
+				// right after ReachDeadEnd returns) and every repeat call alike -- leaves BOTH
+				// layer_index mirrors unchanged.
+				CHECK_MSG(LayerIndex(d_iii.seq) == d_iii.layer0,
+				          "[%s] Cell1(ii) repeat call #%d: layer_index moved %u -> %u on a dead-end call",
+				          route.c_str(), call, d_iii.layer0, LayerIndex(d_iii.seq));
+				CHECK_MSG(SslmGpuSeqHandleLiveStateForBench(d_iii.seq)->layer_index == d_iii.live0,
+				          "[%s] Cell1(ii) repeat call #%d: live_state.layer_index moved %u -> %u on a dead-end call",
+				          route.c_str(), call, d_iii.live0, SslmGpuSeqHandleLiveStateForBench(d_iii.seq)->layer_index);
 			}
 			sslm_gpu_seq_release(fx.ctx, d_iii.seq);
 		}
