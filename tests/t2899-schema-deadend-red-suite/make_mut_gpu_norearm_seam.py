@@ -40,6 +40,10 @@ def main(argv: list[str]) -> None:
     src, dst = argv[1], argv[2]
     with open(src, "r", encoding="utf-8", newline="") as f:
         text = f.read()
+    # T-2916 (TE-370 M1): normalize CRLF -> LF before matching -- see
+    # make_mut_gpu_checkedreturn_seam.py's identical comment for why (a fresh checkout of
+    # gpu_1p0.cpp is CRLF; the worktree these anchors were authored against happened to be LF).
+    text = text.replace("\r\n", "\n")
     count = text.count(_ORIGINAL)
     if count != 1:
         sys.exit(f"expected exactly 1 occurrence of the has_transition-miss block, found {count} "

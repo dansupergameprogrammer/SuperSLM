@@ -38,6 +38,13 @@ def main(argv):
     src, dst = argv[1], argv[2]
     with open(src, "r", encoding="utf-8", newline="") as f:
         text = f.read()
+    # T-2916 (TE-370 M1): normalize CRLF -> LF before matching. `.gitattributes` declares `*.cpp
+    # text` (tool-native, not `eol=lf`), so a genuinely fresh checkout on Windows (this box's own
+    # `core.autocrlf=true`) produces CRLF here even though the worktree this pattern was authored
+    # against happened to hold LF -- confirmed by execution (clean-clone proof run, T-2916 M1):
+    # the pattern found 0 occurrences against a fresh clone's own CRLF checkout. Output is written
+    # LF-only, which the toolchain compiles identically either way.
+    text = text.replace("\r\n", "\n")
     hits = list(_PAT.finditer(text))
     if len(hits) != 1:
         sys.exit("expected exactly 1 occurrence of the checked-return block, found %d -- source "
