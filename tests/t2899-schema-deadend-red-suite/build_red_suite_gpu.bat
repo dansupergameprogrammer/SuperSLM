@@ -74,17 +74,21 @@ rem (SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION above is a second, independent r
 rem is no longer "unmodified"). Reusing it here would both fail to compile (gpu_1p0_fixed.cpp's
 rem own Save/RestoreGpuSequenceState calls predate the v5 tail parameters gpu_port.h now
 rem declares) and, if it somehow linked, would write 'SLM5' regardless of the source file's own
-rem intent -- defeating the one property this configuration exists for. `pristine_pre_slm5\`
-rem (checked in alongside this script) is `git show`'d from this same branch's own commit
-rem immediately before T-2905's GPU fold (confirmed zero 'SLM5'/kGpuSeqBlobMagicV5 occurrences),
-rem so this configuration keeps meaning what its own name says regardless of what the live tree
-rem goes on to carry. Needed because a genuine legacy 'SLM4' blob (cell_gpu_slm4_dump) requires
-rem the GPU to actually dead-end (gpu_asbuilt PRE-T-2905 could not: the unfixed finish bridge
-rem never returned -2) while still saving through the OLD, pre-SLM5 format (gpu_fixed/v5 cannot:
-rem it always writes 'SLM5').
+rem intent -- defeating the one property this configuration exists for. The pristine pair is
+rem `git show`'d fresh into a SCRATCH root outside this repo (`D:\_t2905\pristine_pre_slm5\`),
+rem from commit `ccf87c1` on this same branch (the tip immediately before T-2905's GPU fold;
+rem confirmed zero 'SLM5'/kGpuSeqBlobMagicV5 occurrences) -- NOT checked into the tracked tree:
+rem a first attempt did check it in, and tests\ci\test_geometry_site_census.py's own tree-wide
+rem GS-marker sweep (tools\geometry_site_census.py, unnarrowed by design outside `_SKIP_DIR_NAMES`)
+rem then double-counted every GS marker superslm_gpu.cpp carries, since a byte-identical copy of a
+rem production file inside the tracked test tree is exactly what that census exists to catch.
+rem Regenerated every run so it always tracks the pinned commit, never a stale local copy.
+if not exist D:\_t2905\pristine_pre_slm5\superslm mkdir D:\_t2905\pristine_pre_slm5\superslm
+git -C "%ENG%" show ccf87c1:src/gpu/superslm_gpu.cpp > D:\_t2905\pristine_pre_slm5\superslm_gpu_pristine.cpp
+git -C "%ENG%" show ccf87c1:include/superslm/gpu_port.h > D:\_t2905\pristine_pre_slm5\superslm\gpu_port.h
 if not exist obj_gpu\gpu_fixed_noslm5 mkdir obj_gpu\gpu_fixed_noslm5
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /Ipristine_pre_slm5 /I%ENG%\include /I%ENG%\src\gpu ^
-    /c D:\_te338\gpu_1p0_fixed.cpp pristine_pre_slm5\superslm_gpu_pristine.cpp /Fo"obj_gpu\gpu_fixed_noslm5\\" ^
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /ID:\_t2905\pristine_pre_slm5 /I%ENG%\include /I%ENG%\src\gpu ^
+    /c D:\_te338\gpu_1p0_fixed.cpp D:\_t2905\pristine_pre_slm5\superslm_gpu_pristine.cpp /Fo"obj_gpu\gpu_fixed_noslm5\\" ^
     > obj_gpu\gpu_fixed_noslm5.buildlog 2>&1 || (echo BUILD FAILED: gpu_fixed_noslm5 & type obj_gpu\gpu_fixed_noslm5.buildlog & set OVERALL_OK=0)
 
 rem MUT_CHECKEDRETURN / MUT_NOREARM: single-line reverts of gpu_1p0_v5.cpp (Claude/Curie/t2900-

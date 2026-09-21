@@ -25392,16 +25392,23 @@ static void TestT2047_S6_SaveRestoreRoundTripsThroughRealDevice() {
 	// the substrate's own RestoreGpuSequenceState, which does not check this field; the
 	// identity check lives only in the 1.0 sslm_gpu_seq_restore path, gpu_1p0.cpp).
 	const std::array<uint8_t, superslm::kIntegrityHashBytes> kNoHash{};
-	const bool saved = superslm_gpu::SaveGpuSequenceState(seq, /*hidden_codes_size=*/0, ws.data(),
-	                                                       ws.size(), kNoHash, blob.data(), &blob_size);
+	// T-2895: this pre-1.0 substrate cell has no schema binding to carry -- the same "unbound, no
+	// walk, not ready" triple RestoreGpuSequenceState itself defaults a legacy 'SLM4' blob to.
+	const bool saved = superslm_gpu::SaveGpuSequenceState(
+	    seq, /*hidden_codes_size=*/0, ws.data(), ws.size(), kNoHash,
+	    /*bound_schema_index=*/-1, /*dfa_walk_state=*/0xFFFFFFFFu, /*ready_for_logits=*/false,
+	    blob.data(), &blob_size);
 	CHECK_MSG(saved, "S6 save: SaveGpuSequenceState succeeds at a realistic workspace size");
 
 	SequenceLayerState restored{};
 	std::vector<uint8_t> restored_ws(ws.size(), 0);
-	const bool restored_ok =
-	    superslm_gpu::RestoreGpuSequenceState(blob.data(), blob_size, &restored,
-	                                           /*hidden_codes_size=*/0, restored_ws.data(),
-	                                           restored_ws.size());
+	int32_t restored_schema_index = -1;
+	uint32_t restored_walk_state = 0xFFFFFFFFu;
+	bool restored_ready_for_logits = false;
+	const bool restored_ok = superslm_gpu::RestoreGpuSequenceState(
+	    blob.data(), blob_size, &restored,
+	    /*hidden_codes_size=*/0, restored_ws.data(), restored_ws.size(), &restored_schema_index,
+	    &restored_walk_state, &restored_ready_for_logits);
 	CHECK_MSG(restored_ok,
 	          "S6 restore: RestoreGpuSequenceState succeeds at a realistic workspace size -- "
 	          "this call now depends on a present, working device (D-SLM3177 S6); a plain host "
@@ -25514,14 +25521,21 @@ static void TestT2578_S3_SaveRestorePreservesPerSiteSaturationCounters() {
 	size_t blob_size = blob.size();
 	CHECK_MSG(superslm_gpu::SaveGpuSequenceState(seq, /*hidden_codes_size=*/0,
 	                                             /*workspace=*/nullptr, /*workspace_size=*/0,
-	                                             kNoHash, blob.data(), &blob_size),
+	                                             kNoHash,
+	                                             /*bound_schema_index=*/-1,
+	                                             /*dfa_walk_state=*/0xFFFFFFFFu,
+	                                             /*ready_for_logits=*/false, blob.data(), &blob_size),
 	          "T-2578 S3: header-only sequence save must succeed");
 
 	SequenceLayerState restored{};
+	int32_t restored_schema_index = -1;
+	uint32_t restored_walk_state = 0xFFFFFFFFu;
+	bool restored_ready_for_logits = false;
 	CHECK_MSG(superslm_gpu::RestoreGpuSequenceState(blob.data(), blob_size, &restored,
 	                                                /*hidden_codes_size=*/0,
 	                                                /*out_workspace=*/nullptr,
-	                                                /*workspace_size=*/0),
+	                                                /*workspace_size=*/0, &restored_schema_index,
+	                                                &restored_walk_state, &restored_ready_for_logits),
 	          "T-2578 S3: header-only sequence restore must succeed");
 	CHECK_MSG(restored.kv_landing_saturation_count == 17 &&
 	              restored.k_channel_landing_saturation_count == 19 &&
@@ -26777,12 +26791,18 @@ static void TestT2019_B8_SaveRestoreRoundTrip_GpuMatchesCpu() {
 	size_t blob_size = sizeof(blob);
 	// T-2113 (P2): see the S6 cell above for the same "no model handle to hash" disposition.
 	const std::array<uint8_t, superslm::kIntegrityHashBytes> kNoHash{};
-	const bool saved = superslm_gpu::SaveGpuSequenceState(seq, /*hidden_codes_size=*/0, ws,
-	                                                       sizeof(ws), kNoHash, blob, &blob_size);  // LINK-RED
+	const bool saved = superslm_gpu::SaveGpuSequenceState(
+	    seq, /*hidden_codes_size=*/0, ws, sizeof(ws), kNoHash,
+	    /*bound_schema_index=*/-1, /*dfa_walk_state=*/0xFFFFFFFFu, /*ready_for_logits=*/false, blob,
+	    &blob_size);  // LINK-RED
 	SequenceLayerState restored_seq;
 	uint8_t restored_ws[kWs] = {};
+	int32_t restored_schema_index = -1;
+	uint32_t restored_walk_state = 0xFFFFFFFFu;
+	bool restored_ready_for_logits = false;
 	const bool restored = superslm_gpu::RestoreGpuSequenceState(  // LINK-RED
-	    blob, blob_size, &restored_seq, /*hidden_codes_size=*/0, restored_ws, sizeof(restored_ws));
+	    blob, blob_size, &restored_seq, /*hidden_codes_size=*/0, restored_ws, sizeof(restored_ws),
+	    &restored_schema_index, &restored_walk_state, &restored_ready_for_logits);
 	CHECK_MSG(saved && restored, "B8 save/restore: both calls report success");
 	CHECK_MSG(restored_seq.layer_index == seq.layer_index &&
 	              restored_seq.kv_saturation_count == seq.kv_saturation_count &&
