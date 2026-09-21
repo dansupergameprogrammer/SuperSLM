@@ -1,0 +1,9 @@
+obj/
+obj_mutants/
+obj_mutants_cpu/
+obj_link_check/
+*.exe
+*.obj
+*.log
+*.buildlog
+*.runlog
