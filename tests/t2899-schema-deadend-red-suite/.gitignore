@@ -4,6 +4,8 @@ obj_mutants_cpu/
 obj_link_check/
 obj_gpu/
 bin_gpu/
+obj_t2916_s3/
+bin_t2916_s3/
 *.exe
 *.obj
 *.log
