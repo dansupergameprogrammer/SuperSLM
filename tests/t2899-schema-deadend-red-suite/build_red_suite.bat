@@ -23,7 +23,12 @@ set SRC=%ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG
 set OVERALL_OK=1
 for %%f in (cell_adopt_prefix_census cell_cpu_deadend_retry_reset) do (
     echo ===== %%f.cpp =====
-    cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc ^
+    rem T-2905: SUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION defined for every cell in this loop --
+    rem it gates ArmCpuFinishDegenerateLogitRowInjection's own definition in sslm_abi.cpp (%SRC%,
+    rem recompiled fresh below for every cell) and cell_cpu_deadend_retry_reset.cpp's own
+    rem extern "C" reservation of it (CpuCell2DegenerateRowTwin). Harmless for
+    rem cell_adopt_prefix_census, which does not reference the symbol.
+    cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /DSUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION ^
         /I%ENG%\include /I%ENG%\src /I%TESTS% /I%TESTS%\t2199-damped-greedy-red-suite /I. %SRC% ^
         "%%f.cpp" /Fo:"obj\\" /Fe:"obj\%%f.exe" ^
         /link > "obj\%%f.buildlog" 2>&1

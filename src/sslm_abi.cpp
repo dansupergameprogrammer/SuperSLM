@@ -1978,14 +1978,34 @@ extern "C" sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix) {
 	}
 	if (prefix_has_real_progress) {
 		seq->dfa_walk_state = prefix->dfa_walk_state;
+	} else {
+		// T-2898 (folding TE-363's fracture of T-2897, D-SLM7575): the prefix is prompt-only (or
+		// bound-but-unadvanced), so it carries no schema-content progress of its own -- but this
+		// function unconditionally overwrites the adopting sequence's own content (KV block,
+		// current_token, layer_index, hidden state) below, RULED, shipped, 1.2.0+ copy-on-adopt
+		// behaviour (TE-363's own census: 8 of 16 resting states this branch used to leave alone
+		// were sound, tested adoptions, not a defect). A walk state left over from BEFORE that
+		// content replacement is stale relative to the content the sequence now holds -- reachable
+		// exactly when the adopting sequence's own schema-bound walk had already advanced past its
+		// own start (TE-363's own `BOUND_ADVANCED` state, 2 of 16 rows). Reset to the bound
+		// schema's own start state, the identical convention sslm_seq_reset already uses (`:1920`,
+		// design Sec5) -- a no-op for every one of the other 14 states, whose own dfa_walk_state
+		// already holds this same value, and a correction only where the walk had genuinely
+		// advanced. The BINDING (seq->bound_schema) is still left exactly as it already was -- a
+		// prompt-only prefix carries no schema to bind, matching the design's own stated intent;
+		// only the WALK is corrected. No precondition on the adopting sequence's own resting state
+		// is reinstated here: adoption onto a dead-ended or mid-token sequence is accepted, exactly
+		// as at 1.5.0.
+		seq->dfa_walk_state = seq->bound_schema ? 0u : kDfaWalkStateUnused;
 	}
-	// else: prefix is prompt-only (or bound-but-unadvanced) -- the adopting sequence's own
-	// walk-state (and binding) is left exactly as it already was, per design Sec5.
 
 	std::memcpy(seq->kv_block, prefix->kv_block, seq->block_size);
 	// A frozen prefix contains prompt/forced forward state, never this sequence's prior generated
 	// token history. Adoption replaces the sequence origin, so any warm anti-LM must be discarded.
 	ClearDampedGreedyState(seq);
+	// T-2897: the identical discard applies to the damped-greedy forced-token counter -- a warm
+	// count from the sequence's own PRIOR generation must not survive into the adopted origin.
+	seq->forced_token_count = 0;
 	std::copy(prefix->hidden_codes_storage.begin(), prefix->hidden_codes_storage.end(),
 	          seq->hidden_codes_storage.begin());
 	seq->state.hidden_scale = prefix->state.hidden_scale;
@@ -2057,6 +2077,40 @@ extern "C" sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_
 // (src/gpu/gpu_1p0.cpp) can call the identical implementation instead of a parallel
 // reimplementation -- ONE implementation, never two, exactly the discipline this file's own
 // prior comment already named, now enforced across TUs rather than only within this one.
+
+// T-2872 (closing T-2870 F4, correcting the audit's finding that Cell 2's CPU twin had no seam
+// as precisely named as GPU's own `ArmGpuFinishDegenerateLogitRowInjection`, gpu_1p0.cpp):
+// mirrors that seam's single-shot armed-flag idiom exactly (`SUPERSLM_T2169_CHUNK_RECORDING_
+// FAULT_INJECTION`'s own convention, src/gpu/superslm_gpu.cpp) and this file's own existing
+// compile-time fault-injection precedent (`SUPERSLM_ENABLE_BAD_ALLOC_INJECTION`, above). Fires
+// once, immediately before the greedy branch's own `ApplyMaskAndArgmax` call
+// (`sslm_decode_stepImpl`, below), overwriting every element of `logit_row` (size
+// `c.vocab_size`) to `INT32_MIN` -- the same degenerate-row construction GPU's own seam
+// presents, on the host code both backends already share for this step
+// (`superslm::ApplyMaskAndArgmax`). Scoped to the greedy path only, matching Cell 1 (iii)'s own
+// CPU twin: the damped-greedy branch scores its own masked row via `DampedGreedyScoreAndArgmax`
+// directly over `mask_bits`, never through `ApplyMaskAndArgmax`, so this seam cannot reach it and
+// a degenerate-row cell in damped-greedy mode is a distinct construction this fold does not
+// build.
+#if defined(SUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION)
+namespace {
+bool g_cpu_g5_finish_row_fault_armed = false;
+}  // namespace
+
+inline void MaybeInjectCpuFinishDegenerateLogitRow(int32_t* logit_row, int32_t vocab_size) {
+	if (g_cpu_g5_finish_row_fault_armed) {
+		// Single-shot: cleared before presenting the degenerate row, matching every other seam in
+		// this codebase's own idiom -- a re-armed-forever flag would fire on every later, unrelated
+		// call in the same process.
+		g_cpu_g5_finish_row_fault_armed = false;
+		std::fill(logit_row, logit_row + vocab_size, INT32_MIN);
+	}
+}
+
+extern "C" void ArmCpuFinishDegenerateLogitRowInjection() { g_cpu_g5_finish_row_fault_armed = true; }
+#else
+inline void MaybeInjectCpuFinishDegenerateLogitRow(int32_t*, int32_t) {}
+#endif  // SUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION
 
 // P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, third confirmation pass): renamed
 // to *Impl and wrapped (same rename-and-wrap convention as PrefillWholeTokens/*Impl, above) --
@@ -2461,7 +2515,20 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 				const bool has_transition = model->schemas.Transition(
 				    *entry, seq->dfa_walk_state, static_cast<uint32_t>(produced_dg), &next_state);
 				if (!has_transition) {
+					// T-2866/T-2894 (D-SLM3476's CPU retry guarantee, D-SLM7483's own principal
+					// ruling; damped-greedy's own copy of the greedy site's identical fix, below):
+					// re-arm ready_for_logits AND reset layer_index to 0 so a miss reached via this
+					// branch rests identically to the ready-branch miss and to an ordinary
+					// post-prefill sequence -- resettable and adapter-swappable via sslm_seq_reset/
+					// sslm_seq_set_adapter (both refuse outright whenever layer_index != 0), not only
+					// re-decodable. The next sslm_decode_step call takes the ready_for_logits branch
+					// unconditionally (that branch's own dispatch never reads layer_index), so this
+					// reset changes nothing about the retry guarantee itself -- it is a no-op on the
+					// dispatch the retry depends on, and it converges this miss's own resting shape
+					// onto the one an ordinary post-prefill sequence already leaves.
 					out_tokens[i] = -2;
+					seq->state.layer_index = 0;
+					seq->ready_for_logits = true;
 					continue;
 				}
 				seq->dfa_walk_state = next_state;
@@ -2483,6 +2550,7 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 			const superslm::SchemaEntry* entry = model->schemas.ByIndex(seq->bound_schema->index);
 			const uint8_t* page = entry->mask_pages +
 			                       static_cast<size_t>(seq->dfa_walk_state) * model->schemas.MaskPageBytes();
+			MaybeInjectCpuFinishDegenerateLogitRow(logit_row, static_cast<int32_t>(c.vocab_size));
 			superslm::ApplyMaskAndArgmax(logit_row, page, static_cast<int32_t>(c.vocab_size), &produced);
 			// S2/D-SLM3476 (design Sec14.1, Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): the walk
 			// advances to whatever state `produced` reaches ONLY when a matching CSR transition
@@ -2495,18 +2563,36 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 			// forever at SSLM_OK. Ruled (Sec14.1): this is a genuine, defined dead end, not a
 			// caller error -- `out_tokens[i]` reserves -2 for it (alongside the existing -1
 			// "pending" sentinel), no new sslm_status ordinal. Nothing schema-related advances for
-			// this sequence when it fires: `seq->dfa_walk_state` stays exactly at the state that
-			// had no legal continuation, and neither `current_token` nor `state.layer_index` are
-			// touched, so a caller that calls sslm_decode_step on this sequence again gets -2
-			// again, deterministically -- a defined, resumable stop, never a torn state (design
-			// Sec7 dim5's own "reject leaves state unperturbed" contract, applied to a per-sequence
-			// outcome rather than a call-level fault, mirroring how -1/pending already coexists
-			// with an overall SSLM_OK call).
+			// this sequence when it fires: `seq->dfa_walk_state` and `current_token` stay exactly
+			// as this call found them, so a caller that calls sslm_decode_step on this sequence
+			// again gets -2 again, deterministically -- a defined, resumable stop, never a torn
+			// state (design Sec7 dim5's own "reject leaves state unperturbed" contract, applied to
+			// a per-sequence outcome rather than a call-level fault, mirroring how -1/pending
+			// already coexists with an overall SSLM_OK call). **T-2866/T-2894 (D-SLM3476's CPU
+			// retry guarantee, D-SLM7483's own principal ruling):** that promise held on 0 of 3
+			// executed routes as originally written (TE-338) -- leaving `layer_index` alone is not
+			// by itself sufficient, because the NEXT call's own dispatch reads `ready_for_logits`
+			// and `layer_index` to decide whether it re-embeds/re-drives RunLayerLoop (committing a
+			// fresh KV row before dead-ending again, or hitting SequenceAlreadyComplete at full
+			// depth) rather than re-entering this same masked argmax over the unchanged residual.
+			// Re-arming `ready_for_logits` and resetting `layer_index` to 0 makes the next call take
+			// the ready branch unconditionally (that branch's own dispatch never reads
+			// `layer_index`), skip the embed and RunLayerLoop entirely, and recompute the identical
+			// masked argmax over the identical row -- reproducing this exact dead end with zero
+			// state perturbation, and converging this miss's own rest onto the SAME resting
+			// convention an ordinary post-prefill sequence already saves/restores (`has_pending_embed
+			// = (layer_index == 0) && !ready_for_logits` is false either way), rather than a second,
+			// distinct combination. It is also what makes `sslm_seq_reset`/`sslm_seq_set_adapter`
+			// (both refuse outright whenever `layer_index != 0`) succeed on a dead-ended sequence
+			// reached mid-generation, delivering the header's "safe to retry" promise as a lifecycle
+			// guarantee, not only a retry guarantee.
 			uint32_t next_state = seq->dfa_walk_state;
 			const bool has_transition = model->schemas.Transition(
 			    *entry, seq->dfa_walk_state, static_cast<uint32_t>(produced), &next_state);
 			if (!has_transition) {
 				out_tokens[i] = -2;
+				seq->state.layer_index = 0;
+				seq->ready_for_logits = true;
 				continue;
 			}
 			seq->dfa_walk_state = next_state;

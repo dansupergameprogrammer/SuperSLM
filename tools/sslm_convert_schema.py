@@ -3,11 +3,24 @@
 
 Offline converter tooling (Sec4: "the schema compiler is a converter component... like every
 other Sec11 converter stage"). Compiles a D-SLM45 per-field schema subset (objects with known,
-required, in-order keys; enums; booleans; no `additionalProperties`) into a token-level DFA with
-per-state valid-token bitmask pages, over a caller-supplied vocabulary. Proves at compile time that
-every reachable non-accepting state has a non-empty valid-token set (G-7a) and rejects the schema
-otherwise with a which-state/why diagnostic -- a reject-over-degrade rejection, never a degraded
-runtime check (D-SLM40's positive requirement: the runtime never checks for an all-masked vector).
+required, in-order keys; enums; booleans; unbounded free-text strings; no `additionalProperties`)
+into a token-level DFA with per-state valid-token bitmask pages, over a caller-supplied vocabulary.
+Proves at compile time that every reachable non-accepting state has a non-empty valid-token set
+(G-7a) and rejects the schema otherwise with a which-state/why diagnostic -- a reject-over-degrade
+rejection, never a degraded runtime check (D-SLM40's positive requirement: the runtime never checks
+for an all-masked vector).
+
+A `"type": "string"` leaf (T-2853, `Claude/Vitruvius/t2853-schema-string-fields-design-2026-09-19.md`
+Sec3.2, Wizard repo, D-SLM7434/D-SLM7442) compiles to a small cyclic character sub-automaton --
+a content self-loop, an escape branch, and a `\\uXXXX` hex chain -- rather than the forward-only
+literal chain every other leaf produces. This is genuinely new capability in `_groups()`/`_char_dfa()`
+(a repeat/character-class combinator; the existing literal-tuple representation cannot express
+repetition), and it is the only capability this fold adds: the token-level layer downstream
+(`compile_schema_to_mask_pages`, `_token_targets`, `_vocab_trie`, `MaskPages`) needs no change and
+already generalizes to whatever graph shape the character-level automaton has, cyclic or not.
+`maxLength` on a string field is a deferred capability (D-SLM7435): no length bound is added to the
+DFA, and a schema naming one is REJECTED at compile time rather than silently compiling an unbounded
+field and discarding the author's own stated constraint (T-2859 F2, D-SLM7462).
 
 The DFA-construction algorithm (schema -> alternation groups -> character NFA/DFA -> token-level
 DFA via a vocabulary trie) is this project's own already-proven construction, first built as the
@@ -30,7 +43,7 @@ from __future__ import annotations
 
 import json
 from collections import deque
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 __all__ = [
     "SchemaCompileError",
@@ -66,12 +79,38 @@ class SchemaCompileError(Exception):
 # --- schema -> ordered alternation groups (D-SLM45's compilable subset) -----------------
 
 
-def _groups(schema: Mapping[str, Any], path: str) -> list[tuple[str, ...]]:
+class _StringLeaf:
+    """Sentinel marking a free-text `"type": "string"` leaf's own cyclic sub-automaton
+    (T-2853 design Sec3.2) in place of an ordinary alternation group of literal choices.
+    `_groups()` emits a one-element group holding this sentinel for a string leaf;
+    `_char_dfa()` recognizes it and builds the content/escape/`\\uXXXX` cycle directly,
+    rather than the straight-line per-alternative chain every other group uses. A plain
+    string equality/`is` check on the sentinel, not on `str`, is what keeps this from
+    ever colliding with a real literal alternative (every real alternative is a `str`)."""
+
+    __slots__ = ()
+
+
+_STRING_LEAF = _StringLeaf()
+
+# T-2853 Sec3.2's eight short escapes, `S_e -> S_c`, keyed by the literal character that
+# follows the backslash in the token stream (not by the character it unescapes to).
+_SHORT_ESCAPE_CHARS = ('"', "\\", "/", "b", "f", "n", "r", "t")
+_HEX_DIGITS = "0123456789abcdefABCDEF"
+
+# A group is ordinarily a tuple of literal alternative strings; the one exception is the
+# single-element `(_STRING_LEAF,)` group a `"type": "string"` leaf emits (T-2853).
+_Group = tuple[Any, ...]
+
+
+def _groups(schema: Mapping[str, Any], path: str) -> list[_Group]:
     """`schema`'s canonical serialization as an ordered list of alternation groups.
 
     Each group is the set of strings the serialization may take at that position; a
     literal is a group of one. Concatenating one choice from each group, in order,
-    produces exactly the canonical serializations D-SLM40 admits for this schema.
+    produces exactly the canonical serializations D-SLM40 admits for this schema --
+    except `_STRING_LEAF` (T-2853), which names a cyclic sub-automaton rather than a
+    finite set of choices; `_char_dfa()` is what expands it.
     """
     if "enum" in schema:
         values = schema["enum"]
@@ -83,6 +122,21 @@ def _groups(schema: Mapping[str, Any], path: str) -> list[tuple[str, ...]]:
 
     if node_type == "boolean":
         return [("true", "false")]
+
+    if node_type == "string":
+        if "maxLength" in schema:
+            raise SchemaCompileError(
+                f"maxLength is not supported at {path}",
+                reason=(
+                    "D-SLM7435 rules only that no length bound is added to the DFA -- an "
+                    "unbounded self-loop ships regardless of what value a schema names -- and "
+                    "says nothing about schema-ingestion; silently accepting the keyword and "
+                    "compiling an unbounded field anyway would discard the schema author's own "
+                    "stated constraint with no diagnostic, wrong independent of whether the "
+                    "bound is ever implemented (T-2859 F2, D-SLM7462)"
+                ),
+            )
+        return [(_STRING_LEAF,)]
 
     if node_type == "object":
         properties = schema.get("properties") or {}
@@ -97,7 +151,7 @@ def _groups(schema: Mapping[str, Any], path: str) -> list[tuple[str, ...]]:
                 f"object at {path} has optional or reordered keys",
                 reason="every property must be required, in properties order (D-SLM45); optional/reordered keys are outside the compilable subset",
             )
-        groups: list[tuple[str, ...]] = [("{",)]
+        groups: list[_Group] = [("{",)]
         for index, (key, sub_schema) in enumerate(properties.items()):
             if index:
                 groups.append((",",))
@@ -108,14 +162,72 @@ def _groups(schema: Mapping[str, Any], path: str) -> list[tuple[str, ...]]:
 
     raise SchemaCompileError(
         f"unsupported construct at {path}",
-        reason=f"type {node_type!r} is outside D-SLM45's compilable subset (objects with known keys, enums, booleans; cross-field constraints are scored, not compiled)",
+        reason=f"type {node_type!r} is outside D-SLM45's compilable subset (objects with known keys, enums, booleans, unbounded free-text strings; cross-field constraints are scored, not compiled)",
     )
 
 
 # --- the character-level DFA (thompson-construction-by-hand over the alternation groups) --
 
 
-def _char_dfa(groups: Sequence[Sequence[str]]) -> tuple[list[dict[str, int]], int, frozenset[int]]:
+def _add_string_leaf(
+    edges: list[dict[str, set[int]]], add_node: Callable[[], int], cursor: int
+) -> int:
+    """T-2853 design Sec3.2's cyclic sub-automaton for a `"type": "string"` leaf, wired
+    from `cursor` (the position immediately before the value's opening quote) to the
+    returned `following` node (immediately after the closing quote) -- the identical
+    cursor->following convention every other group already uses, so the leaf composes
+    into the existing group-chain model rather than replacing it.
+
+    - A content state `S_c`, reached from `cursor` on the opening quote.
+    - A self-loop on `S_c`: every ordinary allowed character -- any codepoint that is
+      not `"`, not `\\`, and not a C0 control character (0x00-0x1F), per JSON's own
+      string-content grammar (RFC 8259 Sec7) -- transitions `S_c -> S_c`. This is the
+      cycle: the same state is re-entered on every ordinary content character, for as
+      many characters as the model chooses to emit.
+    - An escape branch: `S_c` on `\\` goes to an escape state `S_e`; `S_e` on each of
+      the eight short escapes goes back to `S_c` (a second, shorter cycle); `S_e` on
+      `u` chains through four hex-digit states (`S_u1`..`S_u4`) which return to `S_c`
+      on the fourth digit (a third cycle, of length five).
+    - `S_c` on the closing quote exits to `following`.
+    """
+    s_c = add_node()
+    edges[cursor].setdefault('"', set()).add(s_c)
+
+    # The self-loop's target is the same singleton set, {s_c}, for every one of the ~1.1M
+    # ordinary content characters -- one shared object, assigned (not setdefault/add'ed)
+    # into each row, since no other code path ever adds a second target for one of these
+    # keys. This keeps construction to one dict-insert per character instead of a
+    # setdefault-plus-set-allocation-plus-add per character, which matters here (nowhere
+    # else in this module builds a row anywhere near this size).
+    same_target = {s_c}
+    quote_cp, backslash_cp = ord('"'), ord("\\")
+    for lo, hi in (
+        (0x20, quote_cp),
+        (quote_cp + 1, backslash_cp),
+        (backslash_cp + 1, 0xD800),
+        (0xE000, 0x110000),
+    ):
+        for codepoint in range(lo, hi):
+            edges[s_c][chr(codepoint)] = same_target
+
+    s_e = add_node()
+    edges[s_c].setdefault("\\", set()).add(s_e)
+    for escape_char in _SHORT_ESCAPE_CHARS:
+        edges[s_e].setdefault(escape_char, set()).add(s_c)
+
+    hex_states = [add_node() for _ in range(4)]  # S_u1..S_u4
+    edges[s_e].setdefault("u", set()).add(hex_states[0])
+    for index, state in enumerate(hex_states):
+        target = hex_states[index + 1] if index + 1 < len(hex_states) else s_c
+        for digit in _HEX_DIGITS:
+            edges[state].setdefault(digit, set()).add(target)
+
+    following = add_node()
+    edges[s_c].setdefault('"', set()).add(following)
+    return following
+
+
+def _char_dfa(groups: Sequence[_Group]) -> tuple[list[dict[str, int]], int, frozenset[int]]:
     edges: list[dict[str, set[int]]] = [{}]
 
     def add_node() -> int:
@@ -124,6 +236,9 @@ def _char_dfa(groups: Sequence[Sequence[str]]) -> tuple[list[dict[str, int]], in
 
     cursor = 0
     for group in groups:
+        if len(group) == 1 and group[0] is _STRING_LEAF:
+            cursor = _add_string_leaf(edges, add_node, cursor)
+            continue
         following = add_node()
         for alternative in group:
             if not alternative:
