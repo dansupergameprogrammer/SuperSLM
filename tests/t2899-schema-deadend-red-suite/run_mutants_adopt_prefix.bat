@@ -71,6 +71,18 @@ for %%v in (FIXED MUT_WALKRESET MUT_FORCED) do (
             )
             set "FAILN=!TOK_FAILURES:~9!"
             set "SKIPN=!TOK_SKIPS:~6!"
+            rem T-2909 (TE-365 S1 residual): cell_adopt_prefix_census's own summary line has a
+            rem SEPARATE acceptance contract -- a row mismatch is reported in `mismatch=`/
+            rem `acceptance=`, never asserted through CHECK/CHECK_MSG (that cell's own header
+            rem comment: "the mutant runner checks THOSE, not GFailures"), so `failures=0` stays
+            rem true under every mismatch. `ACCEPT0` is true whenever the line carries
+            rem `acceptance=` and it is not `acceptance=1`.
+            set ACCEPT0=0
+            echo !SUMMARY_LINE! | findstr /C:"acceptance=" >nul
+            if not errorlevel 1 (
+                echo !SUMMARY_LINE! | findstr /C:"acceptance=1" >nul
+                if errorlevel 1 set ACCEPT0=1
+            )
             if "!EXPECT!"=="PASS" (
                 if not "!FAILN!"=="0" (
                     echo    EXPECTED THE GREEN TIP, GOT FAILURES=!FAILN!
@@ -84,9 +96,13 @@ for %%v in (FIXED MUT_WALKRESET MUT_FORCED) do (
                     echo    EXPECTED THE GREEN TIP, GOT NONZERO EXIT !RUN_EC!
                     set OVERALL_OK=0
                 )
+                if "!ACCEPT0!"=="1" (
+                    echo    EXPECTED THE GREEN TIP, GOT ACCEPTANCE=0
+                    set OVERALL_OK=0
+                )
             ) else (
-                if "!FAILN!"=="0" (
-                    echo    SURVIVING MUTANT -- expected a kill, got failures=0
+                if "!FAILN!"=="0" if "!ACCEPT0!"=="0" (
+                    echo    SURVIVING MUTANT -- expected a kill, got failures=0 and no acceptance=0
                     set OVERALL_OK=0
                 )
             )

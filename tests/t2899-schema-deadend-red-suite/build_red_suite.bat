@@ -93,6 +93,21 @@ for %%f in (cell_adopt_prefix_census cell_cpu_deadend_retry_reset) do (
                 echo    SKIPS=!SKIPN! -- a skipped cell fails the run
                 set OVERALL_OK=0
             )
+            rem T-2909 (TE-365 S1 residual): cell_adopt_prefix_census's own summary line carries
+            rem a SEPARATE acceptance contract -- its own header comment (Sec3.10.7's promise):
+            rem "the mutant runner checks THOSE [rows/mismatch/acceptance], not GFailures" -- a
+            rem row mismatch is reported, never asserted through CHECK/CHECK_MSG, so failures=0
+            rem stays true under every mismatch. A summary line carrying `acceptance=` is only
+            rem genuinely green at `acceptance=1`; harmless no-op for every cell that carries no
+            rem such field.
+            echo !SUMMARY_LINE! | findstr /C:"acceptance=" >nul
+            if not errorlevel 1 (
+                echo !SUMMARY_LINE! | findstr /C:"acceptance=1" >nul
+                if errorlevel 1 (
+                    echo    ACCEPTANCE=0 -- !SUMMARY_LINE!
+                    set OVERALL_OK=0
+                )
+            )
         )
     )
 )
