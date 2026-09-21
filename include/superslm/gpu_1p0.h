@@ -240,12 +240,22 @@ SslmGpuStatus sslm_gpu_seq_embed_token(SslmGpuContext* ctx, SslmGpuSequenceHandl
                                         int32_t token_id) noexcept;
 
 /* --- Sec4.2: save/restore/reset. Declared for B3/B5.
- * `sslm_gpu_seq_save` writes a v4 blob ('SLM4'), carrying `model`'s own content hash (design
- * Sec22) plus the four per-site K/V saturation counters whose sum is kv_saturation_count.
+ * `sslm_gpu_seq_save` writes a v5 blob ('SLM5', v1.6.0, T-2895/D-SLM7572), carrying `model`'s
+ * own content hash (design Sec22), the four per-site K/V saturation counters whose sum is
+ * kv_saturation_count, and a twelve-byte tail (bound_schema_index int32, dfa_walk_state
+ * uint32, ready_for_logits uint32-as-bool) written immediately after the unchanged v4-sized
+ * header and before the residual stream -- the schema binding and walk state a §3.9/§3.10
+ * caller needs to resume a schema-bound sequence across a save/restore round trip.
  * `sslm_gpu_seq_restore` sizes the fresh handle to the blob's own recorded
- * context_cap (Sec21) and rejects a v1/v2/v3 blob outright on magic, a malformed/inadmissible
+ * context_cap (Sec21), rejects a v1/v2/v3 blob outright on magic, a malformed/inadmissible
  * size derivation, OR a model_content_hash that does not match `model`'s own hash --
- * SSLM_RESTORE_MODEL_MISMATCH, distinct from the generic malformed-blob disposition (Sec22).
+ * SSLM_RESTORE_MODEL_MISMATCH, distinct from the generic malformed-blob disposition (Sec22) --
+ * and still restores an 'SLM4' blob exactly as before: a v4 blob carries no tail, so its
+ * restored schema binding defaults to unbound (bound_schema_index -1), no walk
+ * (dfa_walk_state unused), not ready (ready_for_logits false). On an 'SLM5' blob, the
+ * restored bound_schema_index and dfa_walk_state are validated against the target model's own
+ * schema count and that schema's own state_count before use, mirroring
+ * `sslm_seq_restore`'s own CPU-side validation.
  * --- */
 SslmGpuStatus sslm_gpu_seq_save(SslmGpuContext* ctx, const SslmGpuSequenceHandle* seq,
                                  void* out_blob, size_t* out_blob_size) noexcept;
@@ -363,9 +373,29 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSeq
  * finishing block uses) then, if a schema is bound, `superslm::ApplyMaskAndArgmax` indexed by
  * `seq`'s own walk-state -- advances the walk-state via `SchemaMasksTable::Transition`, exactly
  * `sslm_decode_step`'s own masked-argmax step. No schema bound: plain
- * `ArgmaxLowestIndexTieBreak`, byte-for-byte the pre-G5 path. On success, `*out_token` is the
- * produced token id and `seq`'s own layer_index resets to 0. Returns SSLM_SEQUENCE_REJECTED if
- * the precondition (full depth reached) does not hold. */
+ * `ArgmaxLowestIndexTieBreak`, byte-for-byte the pre-G5 path. On an ordinary produced token,
+ * `*out_token` is that token id and `seq`'s own layer_index resets to 0. When the bound
+ * schema's own walk-state is inside a `"type": "string"` leaf's content sub-automaton (v1.6.0,
+ * Sec3.9 of `Claude/Plans/te266-gpu-path.md`, Wizard repo), see `schema_masks.h`'s own top-of-
+ * file documentation for the field's value promise (the model's own free text up to its first
+ * unescaped quote) and its consumer guidance -- a property of the compiled table itself,
+ * identical on this path and on `sslm_decode_step`'s own CPU equivalent.
+ *
+ * SCHEMA DEAD END (v1.6.0, D-SLM3476): when a schema is bound and `Transition` finds no CSR row
+ * entry for the masked-argmax winner at `seq`'s own walk-state (an accepting state's own
+ * legitimately all-zero mask page, or a synthetic degenerate row where every admitted logit ties
+ * at INT32_MIN and the lowest-index tie-break returns a token with no transition), this call
+ * returns `*out_token == -2` at `SSLM_OK` -- never `SSLM_SEQUENCE_REJECTED`, which this bridge
+ * reserves for the layer-loop-not-at-full-depth precondition failure below. This is the identical
+ * status the CPU path returns for the same event (`sslm_abi.cpp`'s own two miss sites). On this
+ * path `seq`'s own layer_index is NOT reset (the walk state and layer index are both left exactly
+ * as they were), and `ready_for_logits` IS re-armed: a further call to this function, or to
+ * `SslmGpuSeqDecodeStepForG5Bridge`, takes the `ready_for_logits` shortcut and calls Finish again
+ * directly on the unchanged residual, deterministically reproducing the identical `-2`/`SSLM_OK`
+ * result and consuming no new token from the caller -- retrying after a dead end is therefore
+ * always safe and never re-drives the layer loop or embeds a stray token.
+ *
+ * Returns SSLM_SEQUENCE_REJECTED if the precondition (full depth reached) does not hold. */
 SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                 int32_t* out_token) noexcept;
 
@@ -378,7 +408,13 @@ SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx, SslmGpuSeque
  * drives it to full depth, and finishes. A caller that always calls this once per decode step --
  * rather than hand-composing embed/`sslm_decode_step_gpu`/`sslm_gpu_ready`/
  * `SslmGpuSeqFinishTokenForG5Bridge` itself -- cannot reproduce the duplicate-KV-commit class of
- * bug an earlier build round found and fixed, by construction. */
+ * bug an earlier build round found and fixed, by construction.
+ *
+ * Inherits `SslmGpuSeqFinishTokenForG5Bridge`'s own schema-dead-end contract (v1.6.0,
+ * D-SLM3476) unchanged: `*out_token == -2` at `SSLM_OK` on a schema dead end, with
+ * `ready_for_logits` re-armed by the underlying Finish call, so a caller that always retries
+ * through this same entry point after a `-2` reproduces the identical result deterministically
+ * and never re-embeds or re-drives the layer loop. */
 SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                int32_t token_to_embed_if_needed,
                                                uint32_t dispatch_budget, int32_t* out_token) noexcept;

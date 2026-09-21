@@ -14,6 +14,26 @@
 // used as requested, no more specific status applies" -- not a dedicated per-reason status.
 // The rejection's own diagnostic string still names the specific reason for a caller that logs
 // or displays it.
+//
+// A `"type": "string"` leaf (T-2853/T-2908/T-2910/T-2912, v1.6.0, `Claude/Plans/
+// te266-gpu-path.md` Sec3.9, Wizard repo) compiles to a small cyclic byte sub-automaton rather
+// than the forward-only literal chain every other leaf produces -- an unbounded free-text field
+// with no length bound in the compiled table (a schema declaring `maxLength`, or any other
+// keyword this compiler does not implement, is refused at compile time instead, naming the
+// keyword). THE PROMISE THIS LEAF KEEPS: the field's decoded value is the model's own free text
+// up to its first unescaped quote. This is a measured promise, not guaranteed free of every
+// grammar-induced cut -- a caller's prompt whose natural answer contains an internal quote
+// (nested JSON-like structure, a quoted word, dialogue) can have that quote read as the value's
+// own close under JSON's own grammar, truncating what the model meant to write after it; a
+// candidate fix that reserved the close for a token also carrying the schema's own required
+// next byte closed this case but cost real-model clean-accept 10-37.5 points against every
+// population's own forced-canonical baseline, and was measured and rejected. CONSUMER
+// GUIDANCE: a caller whose prompt's natural answer may contain an internal quote should ask for
+// plain, unstructured text, or should treat the returned value as potentially truncated at an
+// internal quote and validate it accordingly, rather than relying on the compiler to detect the
+// model's intent to open a nested structure from the byte stream alone. This is a property of
+// the compiled table itself and holds identically on both the CPU and GPU decode paths, since
+// both walk the same `SchemaMasksTable::Transition`/mask-page mechanism this file parses.
 #ifndef SUPERSLM_SCHEMA_MASKS_H
 #define SUPERSLM_SCHEMA_MASKS_H
 
