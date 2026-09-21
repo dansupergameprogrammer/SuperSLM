@@ -30,6 +30,43 @@ ABI verb (36) and by the 25 C++ engine declarations that sibling Unreal modules 
 the compiler command line (export when building the engine's shared library, import in a consumer)
 lets a modular build share one engine copy. By default the macro expands to nothing.
 
+A schema-bound sequence that reaches a completed schema's own dead end now returns `-2` at
+`SSLM_OK` on the GPU decode path (`SslmGpuSeqFinishTokenForG5Bridge`,
+`SslmGpuSeqDecodeStepForG5Bridge`), matching the CPU path's existing convention, instead of
+silently re-emitting token 0 forever. The GPU path leaves `dfa_walk_state` and `layer_index`
+exactly as they were and re-arms `ready_for_logits`, so a further call to either GPU entry point
+reproduces the identical `-2` result deterministically, with no new embed or layer-loop drive; the
+CPU path additionally resets `layer_index` to 0 on this same event, matching an ordinary
+post-prefill sequence's own resting shape, so a dead-ended CPU sequence is also
+`sslm_seq_reset`/`sslm_seq_set_adapter`-eligible rather than only re-decodable. Both backends'
+CPU-side damped-greedy decode step gain the identical fix.
+
+The GPU sequence save/restore format moves to `'SLM5'`. A 1.5.0 build cannot read a `'SLM5'` blob a
+1.6.0 build saves; a 1.6.0 build still restores an older `'SLM4'` blob exactly as before, defaulting
+the schema binding it carries to unbound. The new format adds a schema binding, walk state, and
+"ready for logits" flag to the saved blob, so a schema-bound sequence's generation position survives
+a save/restore round trip; the restored binding and walk state are validated against the target
+model's own schema count and state count before use.
+
+The schema compiler (`tools/sslm_convert_schema.py`) gains an unbounded free-text `"type": "string"`
+field. The field's decoded value is the model's own free text up to its first unescaped quote --
+measured, not guaranteed free of every grammar-induced cut (an internal quote the model writes with
+genuine intent to continue, such as a nested JSON-like structure or a quoted word, can be read as
+the value's own close under JSON's own grammar). A caller whose prompt's natural answer may contain
+an internal quote should ask for plain, unstructured text, or should treat the returned value as
+potentially truncated there. A schema declaring `maxLength` on a string field, or any other
+JSON-Schema keyword this compiler does not implement (`minLength`, `pattern`, `format`, `const`,
+`title`, `description`, `default`, `examples`, `multipleOf`, and any keyword not yet named), is
+rejected at compile time, naming the keyword, rather than silently compiled with the constraint
+unenforced.
+
+`sslm_seq_adopt_prefix` no longer leaves a stale walk state on a sequence adopting a prompt-only (or
+bound-but-unadvanced) prefix: the adopting sequence's own walk state is reset to its bound schema's
+start state (unbound sequences: unused), correcting the one case where the walk had already
+advanced past its own start before adoption overwrote the sequence's content. Adoption also now
+clears the damped-greedy forced-token counter (visible through `sslm_stats`), so a warm count from
+the sequence's own prior generation never survives into an adopted origin.
+
 ## [1.5.0] - 2026-09-17
 
 QK-norm artifact loading now has a complete `QKC1` source-to-derived contract. The loader
