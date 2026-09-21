@@ -4286,34 +4286,20 @@ struct GpuSeqBlobHeader {
 	uint64_t rope_k_saturation_count;
 };
 constexpr uint32_t kGpuSeqBlobMagic = 0x344D4C53u;  // "SLM4" little-endian u32 (v4: +per-site counters)
-// T-2895 (§3.10.1 of Claude/Plans/te266-gpu-path.md, Wizard repo, D-SLM7572, closing TE-362):
-// "SLM5" -- the current magic, +a twelve-byte tail (bound_schema_index int32, dfa_walk_state
-// uint32, ready_for_logits uint32-as-bool) written immediately after this SAME v4-sized header
-// and before the residual stream -- never inside GpuSeqBlobHeader itself, so a legacy 'SLM4'
-// blob (which has no tail) is still exactly sizeof(GpuSeqBlobHeader) and is never mis-measured
-// against a larger struct. 'SLM4' remains a read-only accepted legacy magic: a v4 blob has no
-// schema state to restore, so its own restore defaults the three fields to "unbound, no walk,
-// not ready" -- the identical behaviour this call already has today, unchanged.
-constexpr uint32_t kGpuSeqBlobMagicV5 = 0x354D4C53u;  // "SLM5" little-endian u32
-constexpr size_t kGpuSeqBlobV5TailBytes = sizeof(int32_t) + sizeof(uint32_t) + sizeof(uint32_t);  // 12
 }  // namespace
 
 bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, size_t hidden_codes_size,
                            const uint8_t* workspace, size_t workspace_size,
                            const std::array<uint8_t, superslm::kIntegrityHashBytes>& model_content_hash,
-                           int32_t bound_schema_index, uint32_t dfa_walk_state, bool ready_for_logits,
                            void* out_blob, size_t* out_blob_size) {
-	// T-2895: the v5 tail (bound_schema_index/dfa_walk_state/ready_for_logits) sits between
-	// the unchanged v4 header and the residual stream -- sized in `required` like every other
-	// body segment, never inside sizeof(GpuSeqBlobHeader).
-	const size_t required = sizeof(GpuSeqBlobHeader) + kGpuSeqBlobV5TailBytes + hidden_codes_size + workspace_size;
+	const size_t required = sizeof(GpuSeqBlobHeader) + hidden_codes_size + workspace_size;
 	if (!out_blob_size) return false;
 	if (!out_blob || *out_blob_size < required) {
 		*out_blob_size = required;  // report the size a real call needs, not silently truncate
 		return false;
 	}
 	GpuSeqBlobHeader hdr{};
-	hdr.magic = kGpuSeqBlobMagicV5;
+	hdr.magic = kGpuSeqBlobMagic;
 	hdr.layer_index = seq.layer_index;
 	hdr.hidden_scale_m = seq.hidden_scale.m;
 	hdr.hidden_scale_e = seq.hidden_scale.e;
@@ -4329,14 +4315,6 @@ bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, size_t hidden
 	uint8_t* dst = static_cast<uint8_t*>(out_blob);
 	std::memcpy(dst, &hdr, sizeof(hdr));
 	size_t off = sizeof(hdr);
-	// T-2895: the v5 tail, raw little-endian, immediately after the header.
-	std::memcpy(dst + off, &bound_schema_index, sizeof(bound_schema_index));
-	off += sizeof(bound_schema_index);
-	std::memcpy(dst + off, &dfa_walk_state, sizeof(dfa_walk_state));
-	off += sizeof(dfa_walk_state);
-	const uint32_t ready_word = ready_for_logits ? 1u : 0u;
-	std::memcpy(dst + off, &ready_word, sizeof(ready_word));
-	off += sizeof(ready_word);
 	if (hidden_codes_size > 0) {
 		if (!seq.hidden_codes) return false;
 		std::memcpy(dst + off, seq.hidden_codes, hidden_codes_size);
@@ -4351,32 +4329,14 @@ bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, size_t hidden
 }
 
 bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::SequenceLayerState* out_seq,
-                              size_t hidden_codes_size, uint8_t* out_workspace, size_t workspace_size,
-                              int32_t* out_bound_schema_index, uint32_t* out_dfa_walk_state,
-                              bool* out_ready_for_logits) {
+                              size_t hidden_codes_size, uint8_t* out_workspace, size_t workspace_size) {
 	if (!blob || !out_seq || blob_size < sizeof(GpuSeqBlobHeader)) return false;
 	GpuSeqBlobHeader hdr{};
 	std::memcpy(&hdr, blob, sizeof(hdr));
-	const bool is_v5 = hdr.magic == kGpuSeqBlobMagicV5;
-	if (hdr.magic != kGpuSeqBlobMagic && !is_v5) return false;
-	// T-2895: the v5 tail sits between the (unchanged-size) header and the residual
-	// stream, present only on 'SLM5'; a 'SLM4' blob has none, exactly like today.
-	const size_t tail_bytes = is_v5 ? kGpuSeqBlobV5TailBytes : 0;
+	if (hdr.magic != kGpuSeqBlobMagic) return false;
 	if (hdr.hidden_codes_size != static_cast<uint64_t>(hidden_codes_size)) return false;  // size mismatch, refuse
 	if (hdr.workspace_size != static_cast<uint64_t>(workspace_size)) return false;  // size mismatch, refuse
-	if (blob_size < sizeof(hdr) + tail_bytes + hdr.hidden_codes_size + hdr.workspace_size) return false;
-	int32_t tail_schema_index = -1;
-	uint32_t tail_walk_state = 0xFFFFFFFFu;
-	uint32_t tail_ready = 0;
-	if (is_v5) {
-		const uint8_t* tail_ptr = static_cast<const uint8_t*>(blob) + sizeof(hdr);
-		std::memcpy(&tail_schema_index, tail_ptr, sizeof(tail_schema_index));
-		std::memcpy(&tail_walk_state, tail_ptr + sizeof(tail_schema_index), sizeof(tail_walk_state));
-		std::memcpy(&tail_ready, tail_ptr + sizeof(tail_schema_index) + sizeof(tail_walk_state), sizeof(tail_ready));
-	}
-	if (out_bound_schema_index) *out_bound_schema_index = tail_schema_index;
-	if (out_dfa_walk_state) *out_dfa_walk_state = tail_walk_state;
-	if (out_ready_for_logits) *out_ready_for_logits = tail_ready != 0;
+	if (blob_size < sizeof(hdr) + hdr.hidden_codes_size + hdr.workspace_size) return false;
 	out_seq->layer_index = hdr.layer_index;
 	out_seq->hidden_scale.m = hdr.hidden_scale_m;
 	out_seq->hidden_scale.e = hdr.hidden_scale_e;
@@ -4393,7 +4353,7 @@ bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::Seque
 	// sslm_gpu_seq_restore, guarantees this: it builds `fresh` through sslm_gpu_seq_create
 	// first, which sets `fresh->live_state.hidden_codes = fresh->hidden_codes.data()` before
 	// this function is ever called).
-	const uint8_t* hidden_codes_src = static_cast<const uint8_t*>(blob) + sizeof(hdr) + tail_bytes;
+	const uint8_t* hidden_codes_src = static_cast<const uint8_t*>(blob) + sizeof(hdr);
 	if (hidden_codes_size > 0) {
 		if (!out_seq->hidden_codes) return false;
 		std::memcpy(out_seq->hidden_codes, hidden_codes_src, hidden_codes_size);
@@ -4463,7 +4423,7 @@ bool PeekGpuSeqBlobWorkspaceSize(const void* blob, size_t blob_size, uint64_t* o
 	if (!blob || !out_workspace_size || blob_size < sizeof(GpuSeqBlobHeader)) return false;
 	GpuSeqBlobHeader hdr{};
 	std::memcpy(&hdr, blob, sizeof(hdr));
-	if (hdr.magic != kGpuSeqBlobMagic && hdr.magic != kGpuSeqBlobMagicV5) return false;
+	if (hdr.magic != kGpuSeqBlobMagic) return false;
 	*out_workspace_size = hdr.workspace_size;
 	return true;
 }
@@ -4481,7 +4441,7 @@ bool PeekGpuSeqBlobModelHash(const void* blob, size_t blob_size,
 	if (!blob || !out_hash || blob_size < sizeof(GpuSeqBlobHeader)) return false;
 	GpuSeqBlobHeader hdr{};
 	std::memcpy(&hdr, blob, sizeof(hdr));
-	if (hdr.magic != kGpuSeqBlobMagic && hdr.magic != kGpuSeqBlobMagicV5) return false;
+	if (hdr.magic != kGpuSeqBlobMagic) return false;
 	*out_hash = hdr.model_content_hash;
 	return true;
 }

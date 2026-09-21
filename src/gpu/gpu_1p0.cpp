@@ -35,6 +35,7 @@ using enum SslmGpuStatus;
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -2013,11 +2014,12 @@ SslmGpuStatus sslm_gpu_seq_saveImpl(SslmGpuContext* ctx, const SslmGpuSequenceHa
 	// sequence was created against, already retained (design Sec5.1) -- is written into the v3
 	// blob's own trailing `model_content_hash` field so a later restore can detect a mismatch
 	// against a DIFFERENT target model.
-	const bool ok = superslm_gpu::SaveGpuSequenceState(seq->live_state, seq->hidden_codes.size(),
-	                                                    seq->host_kv_mirror.data(),
-	                                                    seq->host_kv_mirror.size(),
-	                                                    seq->model->content_hash, out_blob,
-	                                                    out_blob_size);
+	const bool ok = superslm_gpu::SaveGpuSequenceState(
+	    seq->live_state, seq->hidden_codes.size(), seq->host_kv_mirror.data(),
+	    seq->host_kv_mirror.size(), seq->model->content_hash,
+	    // T-2895: the G5-5 lifecycle triple, appended to the v5 blob (closing TE-362).
+	    seq->bound_schema_index, seq->dfa_walk_state, seq->ready_for_logits, out_blob,
+	    out_blob_size);
 	// SaveGpuSequenceState's own contract (gpu_port.h): a too-small out_blob reports the
 	// required size via *out_blob_size and returns false -- not a device/guard failure,
 	// no dedicated 1.0 status exists for it either, same disposition as the guards above.
@@ -2156,11 +2158,15 @@ SslmGpuStatus sslm_gpu_seq_restoreImpl(SslmGpuContext* ctx, SslmGpuModelHandle* 
 	// below releases `fresh` exactly like the `ok == false` and `UploadResidentUavBufferSync`
 	// failure paths immediately around it already do, and returns a status instead of unwinding.
 	bool ok = false;
+	int32_t restored_schema_index = -1;
+	uint32_t restored_walk_state = 0xFFFFFFFFu;
+	bool restored_ready_for_logits = false;
 	try {
-		ok = superslm_gpu::RestoreGpuSequenceState(blob, blob_size, &fresh->live_state,
-		                                            fresh->hidden_codes.size(),
-		                                            fresh->host_kv_mirror.data(),
-		                                            fresh->host_kv_mirror.size());
+		ok = superslm_gpu::RestoreGpuSequenceState(
+		    blob, blob_size, &fresh->live_state, fresh->hidden_codes.size(),
+		    fresh->host_kv_mirror.data(), fresh->host_kv_mirror.size(),
+		    // T-2895: the G5-5 lifecycle triple, read back from the v5 blob (closing TE-362).
+		    &restored_schema_index, &restored_walk_state, &restored_ready_for_logits);
 	} catch (const std::bad_alloc&) {
 		sslm_gpu_seq_release(ctx, fresh);
 		throw;
@@ -2191,6 +2197,31 @@ SslmGpuStatus sslm_gpu_seq_restoreImpl(SslmGpuContext* ctx, SslmGpuModelHandle* 
 	fresh->layer_index = fresh->live_state.layer_index;
 	fresh->kv_saturation_count = fresh->live_state.kv_saturation_count;
 	fresh->context_length = fresh->live_state.context_length;
+	// T-2895 (closing TE-362): untrusted-input validation on the restored schema binding,
+	// mirroring sslm_seq_restore's own C1 fix (src/sslm_abi.cpp) -- bound the restored
+	// walk-state against the RESOLVED schema's own state_count before it is ever used to
+	// index mask_pages, and reject a bound index this model does not have. Unbound
+	// (restored_schema_index < 0) always passes: no state to validate.
+	if (restored_schema_index >= 0) {
+		if (static_cast<size_t>(restored_schema_index) >= model->schemas.Count()) {
+			sslm_gpu_seq_release(ctx, fresh);
+			return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+		}
+		const superslm::SchemaEntry* resolved_entry =
+		    model->schemas.ByIndex(static_cast<size_t>(restored_schema_index));
+		if (!resolved_entry || restored_walk_state >= resolved_entry->state_count) {
+			sslm_gpu_seq_release(ctx, fresh);
+			return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+		}
+	} else if (restored_walk_state != 0xFFFFFFFFu) {
+		// Symmetric malformation, mirroring sslm_seq_restore's own identical check: an unbound
+		// blob (schema index < 0) must carry the unused-walk sentinel, never a real state id.
+		sslm_gpu_seq_release(ctx, fresh);
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	fresh->bound_schema_index = restored_schema_index;
+	fresh->dfa_walk_state = restored_walk_state;
+	fresh->ready_for_logits = restored_ready_for_logits;
 	*out_seq = fresh;
 	return SSLM_OK;
 }
@@ -2354,6 +2385,48 @@ uint32_t SslmGpuSeqWalkStateForG5Bridge(SslmGpuSequenceHandle* seq) {
 	return seq ? seq->dfa_walk_state : kSslmGpuDfaWalkStateUnused;
 }
 
+// T-2866 (correcting TE-338 Sec8's finding that this cell had no seam on the real GPU path).
+// Mirrors `SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION`'s own single-shot armed-flag idiom
+// exactly (this file, below) but is its OWN macro, not a third named site under that one: this
+// seam fires unconditionally, once, on the NEXT finish call, with no token-index or site
+// selector to match -- a different parameter shape that does not fit the existing macros' own
+// convention. Fires once inside `SslmGpuSeqFinishTokenForG5BridgeImpl` (below), after `LogitsSite`
+// populates `logit_row` and before the schema branch's `ApplyMaskAndArgmax` call: overwrites
+// every element of `logit_row` to `INT32_MIN`, presenting the degenerate row to the REAL finish
+// bridge's own masking/argmax/transition code on a live forward's own logits buffer, not a
+// host-only latch model -- the CPU twin (`ArmCpuFinishDegenerateLogitRowInjection`,
+// src/sslm_abi.cpp) presents the identical construction on the host code both backends share for
+// this step (`superslm::ApplyMaskAndArgmax`).
+#if defined(SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION)
+namespace {
+bool g_gpu_g5_finish_row_fault_armed = false;
+}  // namespace
+
+// `extern "C"` linkage, global scope -- matches the test author's own reservation
+// (`tests/t2899-schema-deadend-red-suite/cell_gpu_cell2_degenerate.cpp`:
+// `extern "C" void ArmGpuFinishDegenerateLogitRowInjection();`) and the CPU twin's own identical
+// placement (`ArmCpuFinishDegenerateLogitRowInjection`, src/sslm_abi.cpp), so a different
+// translation unit's own local `extern "C"` declaration resolves against this definition with no
+// header of its own needed -- the same pattern `SslmSeqLiveStateForTest` already uses.
+extern "C" void ArmGpuFinishDegenerateLogitRowInjection() { g_gpu_g5_finish_row_fault_armed = true; }
+
+namespace {
+inline void MaybeInjectGpuFinishDegenerateLogitRow(int32_t* logit_row, int32_t vocab_size) {
+	if (g_gpu_g5_finish_row_fault_armed) {
+		// Single-shot: cleared before presenting the degenerate row, matching every other seam in
+		// this file's own idiom -- a re-armed-forever flag would fire on every later, unrelated
+		// call in the same process.
+		g_gpu_g5_finish_row_fault_armed = false;
+		std::fill(logit_row, logit_row + vocab_size, INT32_MIN);
+	}
+}
+}  // namespace
+#else
+namespace {
+inline void MaybeInjectGpuFinishDegenerateLogitRow(int32_t*, int32_t) {}
+}  // namespace
+#endif  // SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION
+
 SslmGpuStatus SslmGpuSeqFinishTokenForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                 int32_t* out_token) {
 	if (!out_token) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
@@ -2392,6 +2465,8 @@ SslmGpuStatus SslmGpuSeqFinishTokenForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuS
 	                            model->vocab_size, wide_logits.data(), logit_row.data());
 	if (fst != superslm::SslmForwardStatus::Ok) return MapDecodedStatusToGpuStatus(fst);
 
+	MaybeInjectGpuFinishDegenerateLogitRow(logit_row.data(), model->vocab_size);
+
 	// G5-5: masking applies to int32 logits BEFORE argmax, indexed by this sequence's own
 	// DFA-walk-state -- SAME code (superslm::ApplyMaskAndArgmax) as the CPU path's masked-argmax
 	// step; no schema bound is byte-for-byte the pre-G5 path (plain ArgmaxLowestIndexTieBreak),
@@ -2404,9 +2479,35 @@ SslmGpuStatus SslmGpuSeqFinishTokenForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuS
 		const uint8_t* page = entry->mask_pages +
 		                       static_cast<size_t>(seq->dfa_walk_state) * model->schemas.MaskPageBytes();
 		superslm::ApplyMaskAndArgmax(logit_row.data(), page, model->vocab_size, &produced);
+		// T-2844/D-SLM7463 (§3.10.1): the walk advances to whatever state `produced` reaches ONLY
+		// when a matching CSR transition entry actually exists -- Sec13.2 permits an accepting
+		// state's own mask page to be legitimately all-zero, and at such a state (or at a
+		// synthetic degenerate row, above) masked argmax forces every logit to INT32_MIN and the
+		// lowest-index tie-break returns token 0, for which no CSR row entry exists. Before this
+		// fix that failure was silently discarded (`next_state` written unconditionally) and the
+		// walk froze in place, emitting token 0 forever at SSLM_OK. This is a genuine, defined
+		// dead end, not a caller error -- `*out_token` reserves -2 for it (D-SLM3476), the
+		// identical status the CPU path returns for the same event (`sslm_abi.cpp`'s own two miss
+		// sites) -- never `SSLM_SEQUENCE_REJECTED`, which this bridge already uses for a different
+		// condition (layer loop not at full depth, above). `dfa_walk_state` is left unchanged
+		// (`Transition` does not write `next_state` on a miss, so simply not writing it back closes
+		// the pre-existing unconditional-write bug at this same call site). `ready_for_logits` is
+		// re-armed: GPU's own composition gates its embed-skip on `ready_for_logits`, not on
+		// `layer_index` the way CPU's ABI does, and `sslm_gpu_seq_embed_tokenImpl` carries no
+		// `layer_index` precondition at all -- left un-re-armed, a further decode call on the same
+		// sequence would embed the caller's next token and re-drive the full layer loop before
+		// Finish runs again. With `ready_for_logits` re-armed, the next composed call takes its own
+		// `ready_for_logits` branch, skips the embed and the layer drive, and calls Finish directly
+		// on the unchanged `hidden_codes`, reproducing the identical `-2`/`SSLM_OK` result
+		// deterministically and consuming no new token from the caller.
 		uint32_t next_state = seq->dfa_walk_state;
-		model->schemas.Transition(*entry, seq->dfa_walk_state, static_cast<uint32_t>(produced),
-		                           &next_state);
+		const bool has_transition = model->schemas.Transition(
+		    *entry, seq->dfa_walk_state, static_cast<uint32_t>(produced), &next_state);
+		if (!has_transition) {
+			*out_token = -2;
+			seq->ready_for_logits = true;
+			return SSLM_OK;
+		}
 		seq->dfa_walk_state = next_state;
 	} else {
 		produced = superslm::ArgmaxLowestIndexTieBreak(logit_row.data(),

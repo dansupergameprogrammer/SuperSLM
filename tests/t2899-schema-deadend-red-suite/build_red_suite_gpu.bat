@@ -47,9 +47,12 @@ set SYSLIBS=d3d12.lib dxgi.lib dxguid.lib
 set OVERALL_OK=1
 
 echo ================= Compiling shared GPU object sets =================
-rem AS_BUILT GPU: the two translation units, unmodified, exactly as the live tree carries them.
+rem AS_BUILT GPU: the two translation units, unmodified, exactly as the live tree carries them --
+rem plus SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION (T-2905: the production seam now lives here,
+rem gated by this macro exactly like every other test-only injection seam in this file; inert to
+rem every cell but cell_gpu_cell2_degenerate, since nothing else in this suite ever arms it).
 if not exist obj_gpu\gpu_asbuilt mkdir obj_gpu\gpu_asbuilt
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I%ENG%\include /I%ENG%\src\gpu ^
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION /I%ENG%\include /I%ENG%\src\gpu ^
     /c %ENG%\src\gpu\gpu_1p0.cpp %ENG%\src\gpu\superslm_gpu.cpp /Fo"obj_gpu\gpu_asbuilt\\" ^
     > obj_gpu\gpu_asbuilt.buildlog 2>&1 || (echo BUILD FAILED: gpu_asbuilt & type obj_gpu\gpu_asbuilt.buildlog & set OVERALL_OK=0)
 
@@ -60,17 +63,28 @@ cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I%REFS%\include_override /I%ENG
     /c %REFS%\gpu_1p0_v5.cpp %REFS%\superslm_gpu_v5.cpp /Fo"obj_gpu\gpu_fixed\\" ^
     > obj_gpu\gpu_fixed.buildlog 2>&1 || (echo BUILD FAILED: gpu_fixed & type obj_gpu\gpu_fixed.buildlog & set OVERALL_OK=0)
 
-rem GPU_FIXED_NOSLM5 (T-2903 fix): the checked-return + ready_for_logits re-arm ALONE, no SLM5 blob
-rem format -- T-2866/T-2864's own single-file patch (`D:\_te338\gpu_1p0_fixed.cpp`, read-only,
-rem still present on the dev box per the plan's own reproduction recipe), paired with the ENGINE's
-rem own pristine (pre-T-2895) superslm_gpu.cpp -- reused unchanged from the gpu_asbuilt step below,
-rem since T-2895's own SLM5 patch is superslm_gpu.cpp-only and this configuration must NOT carry
-rem it. Needed because a genuine legacy 'SLM4' blob (cell_gpu_slm4_dump) requires the GPU to
-rem actually dead-end (gpu_asbuilt alone cannot: the unfixed finish bridge never returns -2) while
-rem still saving through the OLD, pre-SLM5 format (gpu_fixed/v5 cannot: it always writes 'SLM5').
+rem GPU_FIXED_NOSLM5 (T-2903 fix, corrected T-2905): the checked-return + ready_for_logits re-arm
+rem ALONE, no SLM5 blob format -- T-2866/T-2864's own single-file patch
+rem (`D:\_te338\gpu_1p0_fixed.cpp`, read-only, still present on the dev box per the plan's own
+rem reproduction recipe), paired with a genuinely PRISTINE, pre-T-2895 superslm_gpu.cpp +
+rem gpu_port.h. T-2903's own comment said this pairing came from "the engine's own pristine
+rem superslm_gpu.cpp, reused unchanged from the gpu_asbuilt step below" -- true only until T-2905
+rem landed T-2895's own SLM5 fix into the live tree, which is what gpu_asbuilt now compiles from
+rem (SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION above is a second, independent reason gpu_asbuilt
+rem is no longer "unmodified"). Reusing it here would both fail to compile (gpu_1p0_fixed.cpp's
+rem own Save/RestoreGpuSequenceState calls predate the v5 tail parameters gpu_port.h now
+rem declares) and, if it somehow linked, would write 'SLM5' regardless of the source file's own
+rem intent -- defeating the one property this configuration exists for. `pristine_pre_slm5\`
+rem (checked in alongside this script) is `git show`'d from this same branch's own commit
+rem immediately before T-2905's GPU fold (confirmed zero 'SLM5'/kGpuSeqBlobMagicV5 occurrences),
+rem so this configuration keeps meaning what its own name says regardless of what the live tree
+rem goes on to carry. Needed because a genuine legacy 'SLM4' blob (cell_gpu_slm4_dump) requires
+rem the GPU to actually dead-end (gpu_asbuilt PRE-T-2905 could not: the unfixed finish bridge
+rem never returned -2) while still saving through the OLD, pre-SLM5 format (gpu_fixed/v5 cannot:
+rem it always writes 'SLM5').
 if not exist obj_gpu\gpu_fixed_noslm5 mkdir obj_gpu\gpu_fixed_noslm5
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I%ENG%\include /I%ENG%\src\gpu ^
-    /c D:\_te338\gpu_1p0_fixed.cpp /Fo"obj_gpu\gpu_fixed_noslm5\\" ^
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /Ipristine_pre_slm5 /I%ENG%\include /I%ENG%\src\gpu ^
+    /c D:\_te338\gpu_1p0_fixed.cpp pristine_pre_slm5\superslm_gpu_pristine.cpp /Fo"obj_gpu\gpu_fixed_noslm5\\" ^
     > obj_gpu\gpu_fixed_noslm5.buildlog 2>&1 || (echo BUILD FAILED: gpu_fixed_noslm5 & type obj_gpu\gpu_fixed_noslm5.buildlog & set OVERALL_OK=0)
 
 rem MUT_CHECKEDRETURN / MUT_NOREARM: single-line reverts of gpu_1p0_v5.cpp (Claude/Curie/t2900-
@@ -172,7 +186,14 @@ for %%v in (ASBUILT FIXED) do (
     )
 )
 
-rem ---- cell_gpu_cell2_degenerate: no-macro (always green/skip) and macro-defined (expects LINK FAILURE) ----
+rem ---- cell_gpu_cell2_degenerate: no-macro (always green/skip) and macro-defined ----
+rem T-2905: the production seam (ArmGpuFinishDegenerateLogitRowInjection, gpu_1p0.cpp, compiled
+rem under SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION) now exists in obj_gpu\gpu_asbuilt -- this
+rem block no longer expects LNK2019. It links against the live tree's own gpu_asbuilt objects
+rem (built above from %ENG%\src\gpu, this ticket's own fix) and runs the placeholder body a real
+rem cell is still owed (T-2900's own header comment: "exercise once the seam exists" -- driving a
+rem real schema to a reachable interior state, arming the seam, asserting -2/SSLM_OK, is the test
+rem author's to author, not this build script's).
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I. /c cell_gpu_cell2_degenerate.cpp /Fo"obj_gpu\cell2_nomacro.obj" ^
     > obj_gpu\cell2_nomacro.buildlog 2>&1 || (echo BUILD FAILED: cell2_nomacro & type obj_gpu\cell2_nomacro.buildlog & set OVERALL_OK=0)
 link /nologo /OUT:"bin_gpu\cell2_nomacro.exe" obj_gpu\cell2_nomacro.obj > obj_gpu\cell2_nomacro.linklog 2>&1
@@ -186,23 +207,17 @@ if errorlevel 1 (
 )
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I. /DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION /c cell_gpu_cell2_degenerate.cpp ^
     /Fo"obj_gpu\cell2_macro.obj" > obj_gpu\cell2_macro.buildlog 2>&1 || (echo BUILD FAILED: cell2_macro.obj & type obj_gpu\cell2_macro.buildlog & set OVERALL_OK=0)
-echo ===== cell_gpu_cell2_degenerate [macro defined, expect LNK2019 unresolved ArmGpuFinishDegenerateLogitRowInjection] =====
-link /nologo /OUT:"bin_gpu\cell2_macro.exe" obj_gpu\cell2_macro.obj > obj_gpu\cell2_macro.linklog 2>&1
-set CELL2_LINK_RC=%ERRORLEVEL%
-set CELL2_NAMEDSYM=0
-findstr /C:"ArmGpuFinishDegenerateLogitRowInjection" obj_gpu\cell2_macro.linklog >nul
-if %ERRORLEVEL% EQU 0 set CELL2_NAMEDSYM=1
-if %CELL2_LINK_RC% NEQ 0 (
-    if %CELL2_NAMEDSYM% EQU 1 (
-        echo    RED BY LINK, as expected -- the production seam does not exist yet.
-    ) else (
-        echo    UNEXPECTED LINK FAILURE, not the named symbol:
-        type obj_gpu\cell2_macro.linklog
-        set OVERALL_OK=0
-    )
-) else (
-    echo    UNEXPECTED: cell2 with the injection macro LINKED -- the seam now exists; this cell is owed a real body.
+echo ===== cell_gpu_cell2_degenerate [macro defined, seam now landed -- T-2905] =====
+link /nologo /OUT:"bin_gpu\cell2_macro.exe" obj_gpu\cell2_macro.obj obj_gpu\gpu_asbuilt\gpu_1p0.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj !CPU_COMMON_OBJS! %SYSLIBS% ^
+    > obj_gpu\cell2_macro.linklog 2>&1
+if errorlevel 1 (
+    echo    LINK FAILED unexpectedly, now that the seam exists:
+    type obj_gpu\cell2_macro.linklog
     set OVERALL_OK=0
+) else (
+    "bin_gpu\cell2_macro.exe" > obj_gpu\cell2_macro.runlog 2>&1
+    type obj_gpu\cell2_macro.runlog
+    findstr /R "^checks=[0-9]* failures=[0-9]*" obj_gpu\cell2_macro.runlog >nul || (echo    CRASHED OR NO SUMMARY LINE & set OVERALL_OK=0)
 )
 
 rem ---- cell_gpu_cell3_agreement (+ CPU-side helper): AS_BUILT, FIXED, and FIXED+--mutant ----
@@ -275,7 +290,7 @@ rem dead-end at all, so linking against it made the pre-save assertion below unw
 rem cell_gpu_slm4_restore (FIXED only) ----
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /c cell_gpu_slm4_dump.cpp /Fo"obj_gpu\slm4_dump.obj" ^
     > obj_gpu\slm4_dump.buildlog 2>&1 || (echo BUILD FAILED: slm4_dump.obj & type obj_gpu\slm4_dump.buildlog & set OVERALL_OK=0)
-link /nologo /OUT:"bin_gpu\slm4_dump.exe" obj_gpu\slm4_dump.obj obj_gpu\gpu_fixed_noslm5\gpu_1p0_fixed.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj !CPU_COMMON_OBJS! %SYSLIBS% ^
+link /nologo /OUT:"bin_gpu\slm4_dump.exe" obj_gpu\slm4_dump.obj obj_gpu\gpu_fixed_noslm5\gpu_1p0_fixed.obj obj_gpu\gpu_fixed_noslm5\superslm_gpu_pristine.obj !CPU_COMMON_OBJS! %SYSLIBS% ^
     > obj_gpu\slm4_dump.linklog 2>&1 || (echo LINK FAILED: slm4_dump & type obj_gpu\slm4_dump.linklog & set OVERALL_OK=0)
 echo ===== cell_gpu_slm4_dump [FIXED, pre-SLM5 -- checked-return fix only, T-2903] =====
 "bin_gpu\slm4_dump.exe" %MODELARG% --out=obj_gpu\slm4_blob.bin > obj_gpu\slm4_dump.runlog 2>&1

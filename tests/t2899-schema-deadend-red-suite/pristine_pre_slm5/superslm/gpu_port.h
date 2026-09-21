@@ -679,13 +679,6 @@ void ClearT2169ChunkRecordingTailBadAllocFaultInjection();
 void ArmPrefillGuardDeviceRemovedQueryInjection();
 #endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 
-// T-2866's own `ArmGpuFinishDegenerateLogitRowInjection` (gpu_1p0.cpp, plan Sec3.10.1/Sec3.10.2)
-// is declared `extern "C"` at global scope, not here: it matches the test author's own
-// reservation (`tests/t2899-schema-deadend-red-suite/cell_gpu_cell2_degenerate.cpp`) and the CPU
-// twin's own identical placement (`ArmCpuFinishDegenerateLogitRowInjection`, src/sslm_abi.cpp) --
-// the same header-free, locally-`extern`-declared pattern `SslmSeqLiveStateForTest` already uses,
-// deliberately not folded into this namespace.
-
 // Read back the device-resident K/V cache in the SAME layout and argument order
 // superslm::KeyRow/ValueRow already define (forward_sites.h) -- the GPU port's
 // `workspace` is the device-resident twin of the identical buffer RunLayerLoop uses.
@@ -854,12 +847,9 @@ bool GpuReadySignalsCompletion(bool fence_signaled, int32_t* out_ready,
 bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, size_t hidden_codes_size,
                            const uint8_t* workspace, size_t workspace_size,
                            const std::array<uint8_t, superslm::kIntegrityHashBytes>& model_content_hash,
-                           int32_t bound_schema_index, uint32_t dfa_walk_state, bool ready_for_logits,
                            void* out_blob, size_t* out_blob_size);
 bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::SequenceLayerState* out_seq,
-                              size_t hidden_codes_size, uint8_t* out_workspace, size_t workspace_size,
-                              int32_t* out_bound_schema_index, uint32_t* out_dfa_walk_state,
-                              bool* out_ready_for_logits);
+                              size_t hidden_codes_size, uint8_t* out_workspace, size_t workspace_size);
 
 // (design Sec4.2/Sec21): reads only the blob's header (magic + `workspace_size`) -- never the body, never a device
 // call -- so `sslm_gpu_seq_restore` can derive the blob's own `context_cap` (Sec5.1's K/V sizing
