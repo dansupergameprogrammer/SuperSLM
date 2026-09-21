@@ -1,50 +1,170 @@
-// T-2900 (Curie) -- plan Sec3.10.2 Cell 2: the degenerate-row dead end at a reachable
-// non-accepting, non-S_c state, through the named seam `ArmGpuFinishDegenerateLogitRowInjection()`
-// (`gpu_1p0.cpp:2406-2410` at Stage 1, compiled under `SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION`).
+// T-2909 (Curie) -- plan Sec3.10.2 Cell 2, for real: the degenerate-row dead end at a
+// reachable non-accepting, non-S_c state, through the named seam
+// `ArmGpuFinishDegenerateLogitRowInjection()` (`gpu_1p0.cpp:2400-2428` at this tip, compiled
+// under `SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION`). TE-365 C2: the prior form of this file
+// armed the seam and printed `checks=0 failures=0 skips=0` without ever calling Finish --
+// the seam had never been fired by a cell. Closed below.
 //
-// NOT YET AUTHORABLE AS A RUNNABLE CELL, for the same reason CPU's own twin
-// (`cell_cpu_deadend_retry_reset.cpp`'s `CpuCell2DegenerateRowTwin`) is not: the seam itself does
-// not exist anywhere -- not in tracked source, not in EITHER of the plan's own cumulative
-// reference-fix files (`Claude/Vitruvius/t2895-probe/gpu_1p0_v5.cpp`/`superslm_gpu_v5.cpp`,
-// confirmed absent by grep) -- because it is production code the builder owes (plan Sec3.10.2:
-// "Not yet built; owed to Sec3.10.4's builder alongside the CPU fix"), not this seat's to add.
-// Curie writes tests, never implementation; authoring the seam herself -- even in a scratch
-// reference-fix copy -- would make her the author of the mechanism her own cell is meant to gate,
-// which is exactly the seam the test-author/implementer split exists to keep separate.
+// FIXTURE. `--stringschema=PATH`, `make_t2909_string_schema_fixture.py`'s own hermetic
+// artifact: a real schema (T-2853's own free-text string leaf, TE-365 C1's own fixed
+// vocabularies) compiled by the production compiler over a real, index-identical
+// vocabulary. The C39 synthetic (`g5_minimal_one_field`) cannot serve this cell -- it
+// compiles to 2 states and 1 transition, so its only non-start state IS the accepting
+// state Cell 1 already dead-ends at, with no interior state distinct from it (that
+// generator's own docstring; also this file's prior header comment, T-2900). The five
+// meaningful vocabulary ids this cell drives (`kTok*` below) are reproduced from that
+// generator's own module constants, not re-derived independently -- the CPU twin
+// (`cell_cpu_deadend_retry_reset.cpp`'s `CpuCell2DegenerateRowTwin`) reads the identical
+// fixture and the identical ids.
 //
-// This declaration reserves the call so the cell is RED BY LINK the moment the builder adds the
-// production seam -- the SAME pattern `sslm_gpu_seq_read_prefill_final_hidden` used before
-// Sec3.1's builder built it (`tests/t2791-gpu-prefill-read-red-suite/fixture_common.h`'s own
-// header comment), and the SAME pattern CPU's own twin already carries. Compiling under the macro
-// but failing to LINK (`LNK2019: unresolved external symbol
-// ArmGpuFinishDegenerateLogitRowInjection`) is the correct, intended state; it becomes a real cell
-// -- drive a real schema-bound sequence to a reachable interior state via real transitions, arm
-// the seam, present the degenerate row, assert `-2`/`SSLM_OK` -- the moment the symbol exists.
+// CONSTRUCTION. `ReachSe` prefills a prompt (three filler ids the schema's own DFA never
+// transitions on), binds schema index 0, then drives TWO real, admitted schema-content
+// transitions in two `SslmGpuSeqPrefillSchemaContentForG5Bridge` calls: `kTokOpen` (state 0
+// -> S_c, the literal prefix through the string's opening quote) and `kTokBackslash` (S_c ->
+// S_e) -- both ordinary, correct transitions the compiler's own DFA admits; neither is the
+// degenerate-row construction. The resulting sequence rests at S_e with `layer_index == 0`/
+// `ready_for_logits == true` (the schema-content prefill's own documented postcondition,
+// identical to Cell 1's route R), so the next decode call reaches Finish directly over the
+// unchanged residual.
 //
-// A real, reachable, non-accepting, non-start interior state IS available on this machine to
-// drive to once the seam lands: the G5 production-scale fixture's own `shopkeeper_intent_extraction`
-// schema (`t2132_g5_fixture_1p5b.sslm`, 594 states) reaches many such states along
-// `cell_gpu_cell1_realschema.cpp`'s own 251-token census-discovered path before its terminal dead
-// end at state 592 -- for example the state reached after the first 50 tokens of that path. The
-// C39 synthetic (`g5_minimal_one_field`) cannot serve this cell: it compiles to 2 states and 1
-// transition (`tests/t2791-gpu-prefill-read-red-suite/make_g5an_fixture.py`'s own header), so its
-// only non-start state IS the accepting state Cell 1 already dead-ends at, with no interior state
-// distinct from it.
+// ASSERTIONS (plan Sec3.10.2 Cell 2 (i)/(ii)). With the seam armed, Finish presents a
+// synthetic all-`INT32_MIN` row at S_e: `-2` at `SSLM_OK` (never a produced token), and
+// `dfa_walk_state` PINNED at S_e -- the seam is single-shot and is fully consumed by THIS
+// call, never left armed for a later, unrelated cell (the exact side effect TE-365 named on
+// the CPU twin). Must-accept neighbour: the IDENTICAL construction, un-armed -- the real,
+// non-degenerate row lets the masked argmax select one of S_e's own three admitted escapes
+// (`kTokBackslash`/`kTokEscapeN`/`kTokClose`, each admitted from S_e per the generator's own
+// SETUP self-check) and the walk leaves S_e (every one of S_e's admitted tokens returns to
+// S_c, since an escape sequence can never itself close the string).
+//
+// GUARD VITALITY (plan Sec3.10.3 row 11: "a single-point mutant that reverts the checked
+// return to the unconditional `next_state` write must turn both Cell 1 and Cell 2 red").
+// `build_red_suite_gpu.bat` links this SAME cell against BOTH `gpu_asbuilt` (ASBUILT: the
+// live tree, checked return in place -- must be GREEN) and the EXISTING `gpu_mut_cr` object
+// (`MUT_CHECKEDRETURN`, `D:\_t2900\refs\gpu_1p0_mut_checkedreturn.cpp`, already built for
+// Cell 1's own guard-vitality proof, reused rather than re-derived): under that mutant, a
+// degenerate row's own lowest-index tie-break (token 0, `kTokOpen`) is written to
+// `*out_token` unconditionally instead of `-2`, and `dfa_walk_state` advances off S_e
+// instead of staying pinned -- Cell 2(i)/(ii) must both turn red.
+//
+// Run: cell_gpu_cell2_degenerate.exe --stringschema=PATH
+#include "fixture_common.h"
+
 #if defined(SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION)
 extern "C" void ArmGpuFinishDegenerateLogitRowInjection();
-#endif
 
-#include <cstdio>
+namespace {
 
-int main() {
-#if defined(SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION)
-	ArmGpuFinishDegenerateLogitRowInjection();  // TODO(builder): exercise once the seam exists.
-	std::printf("checks=0 failures=0 skips=0\n");
-	return 0;
-#else
-	std::printf("SKIP cell_gpu_cell2_degenerate -- the injection seam does not exist yet; "
-	            "compile with -DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION to confirm red-by-link\n");
+// Token ids from `make_t2909_string_schema_fixture.py` (kept in lockstep with that
+// generator's own module constants TOK_OPEN/TOK_CONTENT/TOK_BACKSLASH/TOK_ESCAPE_N/
+// TOK_CLOSE).
+constexpr int32_t kTokOpen = 0;
+constexpr int32_t kTokBackslash = 2;
+constexpr int32_t kTokEscapeN = 3;
+constexpr int32_t kTokClose = 4;
+constexpr int32_t kFillerBase = 5;  // "<unused-N>" pieces: harmless prompt filler.
+constexpr int32_t kCallerToken = 6;  // the decode call's own caller-supplied token; ignored
+                                     // by the ready branch (schema-content prefill already
+                                     // left ready_for_logits armed), matching Cell 1's route R.
+
+// Drives a fresh sequence to S_e (the escape state, prefix `{"Prompt_Result":"\`) via two
+// real, admitted schema-content transitions from a fresh bind.
+SslmGpuSequenceHandle* ReachSe(const GpuModelFixture& fx) {
+	SslmGpuSequenceHandle* seq = nullptr;
+	sslm_gpu_seq_create(fx.ctx, fx.model, fx.model_cap, &seq);
+	CHECK_MSG(seq != nullptr, "sslm_gpu_seq_create failed");
+	if (!seq) return nullptr;
+	const std::vector<int32_t> P = {kFillerBase, kFillerBase + 1, kFillerBase + 2};
+	CHECK_MSG(Prefill(fx, seq, P) == SSLM_OK, "prompt prefill");
+	CHECK_MSG(SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, seq, 0) == SSLM_OK, "bind schema 0");
+	const std::vector<int32_t> content = {kTokOpen, kTokBackslash};
+	int32_t consumed = -1;
+	CHECK_MSG(SslmGpuSeqPrefillSchemaContentForG5Bridge(fx.ctx, seq, content.data(),
+	                                                    static_cast<int32_t>(content.size()),
+	                                                    fx.one_layer_budget,
+	                                                    &consumed) == SSLM_OK &&
+	              consumed == static_cast<int32_t>(content.size()),
+	          "schema-content prefill: open+backslash to reach S_e (consumed=%d)", consumed);
+	return seq;
+}
+
+}  // namespace
+#endif  // SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION
+
+int main(int argc, char** argv) {
+#if !defined(SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION)
+	(void)argc;
+	(void)argv;
+	std::printf("SKIP cell_gpu_cell2_degenerate -- built without "
+	            "SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION\n");
 	std::printf("checks=0 failures=0 skips=1\n");
 	return 0;
-#endif
+#else
+	std::string model_path;
+	for (int i = 1; i < argc; ++i) {
+		const std::string a = argv[i];
+		if (a.rfind("--stringschema=", 0) == 0) model_path = a.substr(15);
+	}
+	if (model_path.empty()) {
+		std::printf("SKIP cell_gpu_cell2_degenerate -- needs --stringschema=PATH\n");
+		std::printf("checks=0 failures=0 skips=1\n");
+		return 0;
+	}
+
+	SslmGpuContext* ctx = nullptr;
+	if (sslm_gpu_context_create(GpuContextConfig{}, &ctx) != SSLM_OK) {
+		std::printf("FAIL cell_gpu_cell2_degenerate -- sslm_gpu_context_create failed\n");
+		return 1;
+	}
+	GpuModelFixture fx;
+	if (!fx.Open(model_path, ctx)) {
+		std::printf("FAIL cell_gpu_cell2_degenerate -- fixture open failed\n");
+		return 1;
+	}
+
+	// Cell 2(i)/(ii): the degenerate row at S_e.
+	{
+		SslmGpuSequenceHandle* seq = ReachSe(fx);
+		if (seq) {
+			const uint32_t s_e = SslmGpuSeqWalkStateForG5Bridge(seq);
+			ArmGpuFinishDegenerateLogitRowInjection();
+			int32_t out = 12345;
+			const SslmGpuStatus st =
+			    SslmGpuSeqDecodeStepForG5Bridge(fx.ctx, seq, kCallerToken, fx.one_layer_budget, &out);
+			CHECK_MSG(st == SSLM_OK && out == -2,
+			          "degenerate row at S_e: st=%s out=%d, want -2/SSLM_OK", StatusName(st), out);
+			CHECK_MSG(SslmGpuSeqWalkStateForG5Bridge(seq) == s_e,
+			          "degenerate row at S_e: dfa_walk_state moved %u -> %u", s_e,
+			          SslmGpuSeqWalkStateForG5Bridge(seq));
+			sslm_gpu_seq_release(fx.ctx, seq);
+		}
+	}
+
+	// Must-accept neighbour (plan Sec3.10.2): the identical construction, un-armed -- the
+	// real finish bridge selects one of S_e's own admitted escapes and advances to S_c.
+	{
+		SslmGpuSequenceHandle* seq = ReachSe(fx);
+		if (seq) {
+			const uint32_t s_e = SslmGpuSeqWalkStateForG5Bridge(seq);
+			int32_t out = 12345;
+			const SslmGpuStatus st =
+			    SslmGpuSeqDecodeStepForG5Bridge(fx.ctx, seq, kCallerToken, fx.one_layer_budget, &out);
+			CHECK_MSG(st == SSLM_OK && out >= 0,
+			          "must-accept neighbour: st=%s out=%d, want a real, non-negative token",
+			          StatusName(st), out);
+			CHECK_MSG(out == kTokBackslash || out == kTokEscapeN || out == kTokClose,
+			          "must-accept neighbour: produced token %d is not one of S_e's own admitted "
+			          "escapes {%d,%d,%d}",
+			          out, kTokBackslash, kTokEscapeN, kTokClose);
+			const uint32_t moved = SslmGpuSeqWalkStateForG5Bridge(seq);
+			CHECK_MSG(moved != s_e, "must-accept neighbour: dfa_walk_state did not leave S_e (%u)", s_e);
+			sslm_gpu_seq_release(fx.ctx, seq);
+		}
+	}
+
+	fx.Close();
+	sslm_gpu_context_destroy(ctx);
+	std::printf("checks=%d failures=%d skips=0\n", GChecks, GFailures);
+	return GFailures == 0 ? 0 : 1;
+#endif  // SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION
 }

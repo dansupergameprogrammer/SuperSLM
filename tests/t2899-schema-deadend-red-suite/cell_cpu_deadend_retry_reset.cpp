@@ -62,6 +62,7 @@
 
 static int GChecks = 0;
 static int GFailures = 0;
+static int GSkips = 0;
 
 #define CHECK(cond)                                                     \
 	do {                                                                \
@@ -103,6 +104,20 @@ int64_t BlobContextLength(sslm_seq s) {
 	size_t nn = n;
 	if (sslm_seq_save(s, b.data(), &nn) != SSLM_OK || nn < 68) return -1;
 	return static_cast<int64_t>(Le64(&b[60]));
+}
+
+// Offset 48: dfa_walk_state, LE32 -- the SAME 'SSB3'/'SSB4' fixed-header layout
+// BlobContextLength's own offset-60 read is grounded in (src/sslm_abi.cpp's own save-side
+// comment: magic(4) + model_hash(32) + kv_precision(4) + schema_name_hash(8) =
+// 48, then dfa_walk_state(4) at 48..52). No public accessor exists for this field either;
+// the blob is the only host-visible read, exactly as for context_length above.
+uint32_t BlobDfaWalkState(sslm_seq s) {
+	size_t n = 0;
+	if (sslm_seq_save(s, nullptr, &n) != SSLM_BUFFER_TOO_SMALL) return 0xFFFFFFFFu;
+	std::vector<uint8_t> b(n);
+	size_t nn = n;
+	if (sslm_seq_save(s, b.data(), &nn) != SSLM_OK || nn < 52) return 0xFFFFFFFFu;
+	return Le32(&b[48]);
 }
 
 struct Cpu {
@@ -455,25 +470,118 @@ void DampedGreedyRoute(Cpu& g, const std::vector<int32_t>& P, int32_t t0) {
 	}
 }
 
-// CPU Cell 2 twin -- the degenerate-row construction (plan Sec3.10.6, T-2872 closing T-2870
-// F4). NOT YET AUTHORABLE AS A RUNNABLE CELL: the named seam,
-// `ArmCpuFinishDegenerateLogitRowInjection()` under `SUPERSLM_CPU_G5_FINISH_ROW_FAULT_
-// INJECTION`, does not exist anywhere in tracked source or in any of the plan's own reference
-// fixes (`Claude/Vitruvius/t2898-probe/sslm_abi_cpu_fixed_v5.cpp` has no such symbol) -- it is
-// "owed to Sec3.10.4's test author alongside the GPU seam," but the seam ITSELF is a production
-// change (a fault-injection hook inside `sslm_abi.cpp`'s own greedy branch), which is the
-// builder's to add, not this seat's. This declaration reserves the call so the cell is RED BY
-// LINK the moment the builder adds the seam (the SAME pattern `sslm_gpu_seq_read_prefill_
-// final_hidden` used before Sec3.1's builder built it, `tests/t2791-gpu-prefill-read-red-suite/
-// fixture_common.h`'s own header comment) -- compiling but failing to link today is the correct,
-// intended state; it becomes a real cell (compile a schema to reach S_e via a real backslash
-// transition, arm the seam, assert `-2`/`SSLM_OK`) once the symbol exists.
+// CPU Cell 2 twin -- the degenerate-row construction, for real (plan Sec3.10.6, T-2872
+// closing T-2870 F4; TE-365 C2: the seam was armed and returned without asserting, and the
+// unconsumed arm then fired inside the NEXT cell's own route R -- both closed below).
+//
+// FIXTURE. A SEPARATE model from every other cell in this file: the C39 synthetic
+// (`t2199_s8_fixture.sslm`) carries only `g5_minimal_one_field`, a single boolean leaf that
+// compiles to 2 states and 1 transition (`tools/_t2199_s8_synthetic_full_model_fixture.py`'s
+// own docstring) -- its only non-start state IS the accepting state, with no interior state
+// to reach S_e from. `g` here is opened by `main` against
+// `make_t2909_string_schema_fixture.py`'s own hermetic artifact instead: a real schema
+// compiled by the production compiler (T-2853's own leaf, TE-365 C1) with a `Prompt_Result`
+// string field, and a real vocabulary whose first five ids are that generator's own
+// TOK_OPEN/TOK_CONTENT/TOK_BACKSLASH/TOK_ESCAPE_N/TOK_CLOSE pieces -- reproduced here as the
+// `kT2909Tok*` constants below, kept in lockstep with that file's own module constants
+// rather than re-derived independently (both this cell and the GPU twin,
+// `cell_gpu_cell2_degenerate.cpp`, read the identical fixture and the identical ids).
+//
+// CONSTRUCTION. `ReachSeCpu` prefills a prompt (three filler ids, ordinary vocabulary
+// pieces the schema's own DFA never transitions on), binds the schema, then drives TWO REAL,
+// ADMITTED schema-content transitions in one `sslm_prefill` span: TOK_OPEN (state 0 -> S_c)
+// and TOK_BACKSLASH (S_c -> S_e) -- neither is the degenerate-row construction; both are
+// ordinary, correct transitions the compiler's own DFA admits, exactly as the plan's own
+// "a real, admitted backslash transition from S_c" specifies. The resulting sequence rests
+// at S_e with `layer_index == 0`/`ready_for_logits == true` (the SAME resting shape Cell
+// 1's own routes reach), so the next `sslm_decode_step` call reaches Finish directly.
+//
+// ASSERTIONS. (i)/(ii): with the seam armed, Finish presents a synthetic all-`INT32_MIN` row
+// at S_e -- `-2` at `SSLM_OK` (never a produced token), and `dfa_walk_state` PINNED at S_e
+// (this closes the C2 finding's own "unconsumed arm" side effect: the seam is single-shot and
+// is always exercised by THIS call, on THIS handle, never left to fire unconsumed on a later,
+// unrelated cell). Must-accept neighbour (plan Sec3.10.2): the IDENTICAL construction, un-
+// armed -- the real, non-degenerate row lets the masked argmax select one of S_e's own three
+// admitted escapes (TOK_BACKSLASH/TOK_ESCAPE_N/TOK_CLOSE, each admitted from S_e per the
+// generator's own SETUP self-check) and the walk leaves S_e (advances to S_c, per the
+// compiler's own construction -- every one of S_e's admitted tokens returns to S_c, since an
+// escape sequence can never itself close the string).
+//
+// GUARD VITALITY (T-2909, closing the C2 residual the plan's own row 11 names for the GPU
+// twin -- "must turn both Cell 1 and Cell 2 red" -- CPU-side: the seam's own consumption
+// call is what stands in for CPU's "checked return," since CPU's pre-existing masked-argmax
+// `has_transition` check was already correct at a3f89cb, D-SLM3476, Sec3.10.4's own cost
+// table). `run_mutants_cpu_deadend.bat`'s own `MUT_NOSEAM` variant links this SAME cell
+// against a scratch copy of `sslm_abi.cpp` with ONLY the
+// `MaybeInjectCpuFinishDegenerateLogitRow(logit_row, ...)` call deleted (the seam's
+// consumption site, `sslm_abi.cpp:2553`) -- the flag still arms, but nothing ever reads it,
+// so Finish presents the REAL (uncorrupted) row at S_e regardless. Cell 2(i)'s own assertion
+// (`out == -2`) must turn red under that mutant while every other cell in this same binary
+// (Cell 1's routes, D1, damped-greedy, save/restore) stays green, since nothing else in this
+// file ever arms the flag the deleted call would have consumed.
 #if defined(SUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION)
 extern "C" void ArmCpuFinishDegenerateLogitRowInjection();
-void CpuCell2DegenerateRowTwin(Cpu& g, const std::vector<int32_t>& P) {
-	(void)g;
-	(void)P;
-	ArmCpuFinishDegenerateLogitRowInjection();  // TODO(builder): exercise once the seam exists.
+
+// Token ids from `make_t2909_string_schema_fixture.py` (kept in lockstep with that
+// generator's own module constants TOK_OPEN/TOK_CONTENT/TOK_BACKSLASH/TOK_ESCAPE_N/
+// TOK_CLOSE).
+constexpr int32_t kT2909TokOpen = 0;
+constexpr int32_t kT2909TokBackslash = 2;
+constexpr int32_t kT2909TokEscapeN = 3;
+constexpr int32_t kT2909TokClose = 4;
+constexpr int32_t kT2909FillerBase = 5;  // "<unused-N>" pieces: harmless prompt filler.
+
+// Drives a fresh sequence on `g` (the string-schema fixture) to S_e via two real, admitted
+// schema-content transitions from a fresh bind. Returns the live handle, or nullptr on setup
+// failure (already recorded via CHECK_MSG).
+sslm_seq ReachSeCpu(Cpu& g) {
+	sslm_seq s = NewSeq(g);
+	if (!s) return nullptr;
+	const std::vector<int32_t> P = {kT2909FillerBase, kT2909FillerBase + 1, kT2909FillerBase + 2};
+	CHECK_MSG(PrefillAll(g, s, P, SSLM_SPAN_PROMPT) == SSLM_OK, "[CPU C2] prompt prefill");
+	const std::vector<int32_t> content = {kT2909TokOpen, kT2909TokBackslash};
+	CHECK_MSG(PrefillAll(g, s, content, SSLM_SPAN_SCHEMA_CONTENT) == SSLM_OK,
+	          "[CPU C2] schema-content prefill: open+backslash to reach S_e");
+	return s;
+}
+
+void CpuCell2DegenerateRowTwin(Cpu& g) {
+	{
+		sslm_seq s = ReachSeCpu(g);
+		if (s) {
+			const uint32_t s_e = BlobDfaWalkState(s);
+			ArmCpuFinishDegenerateLogitRowInjection();
+			sslm_status st{};
+			const int32_t out = Decode1(g, s, &st, -1);
+			CHECK_MSG(st == SSLM_OK && out == -2,
+			          "[CPU C2] degenerate row at S_e: st=%d out=%d, want -2/SSLM_OK",
+			          static_cast<int>(st), out);
+			CHECK_MSG(BlobDfaWalkState(s) == s_e,
+			          "[CPU C2] degenerate row at S_e: dfa_walk_state moved %u -> %u", s_e,
+			          BlobDfaWalkState(s));
+			sslm_seq_release(s);
+		}
+	}
+	{
+		// Must-accept neighbour: the identical construction, un-armed.
+		sslm_seq s = ReachSeCpu(g);
+		if (s) {
+			const uint32_t s_e = BlobDfaWalkState(s);
+			sslm_status st{};
+			const int32_t out = Decode1(g, s, &st, -1);
+			CHECK_MSG(st == SSLM_OK && out >= 0,
+			          "[CPU C2] must-accept neighbour: st=%d out=%d, want a real, non-negative token",
+			          static_cast<int>(st), out);
+			CHECK_MSG(out == kT2909TokBackslash || out == kT2909TokEscapeN || out == kT2909TokClose,
+			          "[CPU C2] must-accept neighbour: produced token %d is not one of S_e's own "
+			          "admitted escapes {%d,%d,%d}",
+			          out, kT2909TokBackslash, kT2909TokEscapeN, kT2909TokClose);
+			const uint32_t moved = BlobDfaWalkState(s);
+			CHECK_MSG(moved != s_e, "[CPU C2] must-accept neighbour: dfa_walk_state did not leave S_e (%u)",
+			          s_e);
+			sslm_seq_release(s);
+		}
+	}
 }
 #endif
 
@@ -481,9 +589,11 @@ void CpuCell2DegenerateRowTwin(Cpu& g, const std::vector<int32_t>& P) {
 
 int main(int argc, char** argv) {
 	std::string model_path;
+	std::string string_schema_path;
 	for (int i = 1; i < argc; ++i) {
 		std::string a = argv[i];
 		if (a.rfind("--model=", 0) == 0) model_path = a.substr(8);
+		else if (a.rfind("--stringschema=", 0) == 0) string_schema_path = a.substr(15);
 	}
 	if (model_path.empty()) {
 		std::printf("SKIP cell_cpu_deadend_retry_reset -- needs --model=PATH\n");
@@ -526,12 +636,28 @@ int main(int argc, char** argv) {
 	RouteD1PartialBudget(g, P);
 	DampedGreedyRoute(g, P, t0);
 #if defined(SUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION)
-	CpuCell2DegenerateRowTwin(g, P);
+	if (string_schema_path.empty()) {
+		std::printf("SKIP cell_cpu_deadend_retry_reset -- Cell 2 twin needs --stringschema=PATH\n");
+		++GSkips;
+	} else {
+		Cpu g2;
+		std::string err2;
+		if (!CpuOpen(&g2, string_schema_path, &err2)) {
+			std::printf("FAIL cell_cpu_deadend_retry_reset -- string-schema fixture load failed: %s\n",
+			            err2.c_str());
+			++GChecks;
+			++GFailures;
+		} else {
+			CpuCell2DegenerateRowTwin(g2);
+		}
+	}
 #endif
 	for (const std::string& route : {std::string("R"), std::string("D"), std::string("C")}) {
 		CheckSaveRestoreRoundTrip(g, route, P, t0);
 	}
 
-	std::printf("checks=%d failures=%d skips=0\n", GChecks, GFailures);
-	return GFailures == 0 ? 0 : 1;
+	// S1 (TE-365): a skipped cell fails the run -- an acceptance run supplies every fixture
+	// flag, so skips=0 here is a genuine claim, not a summary line nobody consulted.
+	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
+	return (GFailures == 0 && GSkips == 0) ? 0 : 1;
 }

@@ -46,6 +46,20 @@ set OVRINC=/I%REFS%\include_override /I%ENG%\include /I%ENG%\src /I%TESTS% /I%GP
 set SYSLIBS=d3d12.lib dxgi.lib dxguid.lib
 set OVERALL_OK=1
 
+rem T-2909 (TE-365 C2): the string-schema fixture cell_gpu_cell2_degenerate needs (a real
+rem schema with a string field; the C39 synthetic's own schema has no interior state -- see
+rem that generator's own header comment). Regenerated fresh every run, never committed as a
+rem binary blob, matching this suite's own S8-fixture discipline.
+if not defined SSLM_PYTHON set SSLM_PYTHON=C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe
+"%SSLM_PYTHON%" make_t2909_string_schema_fixture.py "obj_gpu\t2909_string_schema_fixture.sslm" ^
+    > obj_gpu\make_t2909_string_schema_fixture.log 2>&1
+if errorlevel 1 (
+    echo BUILD FAILED: make_t2909_string_schema_fixture.py
+    type obj_gpu\make_t2909_string_schema_fixture.log
+    set OVERALL_OK=0
+)
+set STRINGSCHEMAARG=--stringschema=obj_gpu\t2909_string_schema_fixture.sslm
+
 echo ================= Compiling shared GPU object sets =================
 rem AS_BUILT GPU: the two translation units, unmodified, exactly as the live tree carries them --
 rem plus SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION (T-2905: the production seam now lives here,
@@ -132,20 +146,24 @@ for %%v in (ASBUILT FIXED MUT_CHECKEDRETURN MUT_NOREARM) do (
     if "%%v"=="ASBUILT" (
         set CELLOBJ=obj_gpu\cell1_short_stock.obj
         set GPUOBJS=obj_gpu\gpu_asbuilt\gpu_1p0.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
+        set EXPECT=PASS
     )
     if "%%v"=="FIXED" (
         set CELLOBJ=obj_gpu\cell1_short_ovr.obj
         set GPUOBJS=obj_gpu\gpu_fixed\gpu_1p0_v5.obj obj_gpu\gpu_fixed\superslm_gpu_v5.obj
+        set EXPECT=PASS
     )
     if "%%v"=="MUT_CHECKEDRETURN" (
         set CELLOBJ=obj_gpu\cell1_short_ovr.obj
         set GPUOBJS=obj_gpu\gpu_mut_cr\gpu_1p0_mut_checkedreturn.obj obj_gpu\gpu_fixed\superslm_gpu_v5.obj
+        set EXPECT=KILL
     )
     if "%%v"=="MUT_NOREARM" (
         set CELLOBJ=obj_gpu\cell1_short_ovr.obj
         set GPUOBJS=obj_gpu\gpu_mut_nr\gpu_1p0_mut_norearm.obj obj_gpu\gpu_fixed\superslm_gpu_v5.obj
+        set EXPECT=KILL
     )
-    echo ===== cell_gpu_cell1_shortschema [%%v] =====
+    echo ===== cell_gpu_cell1_shortschema [%%v] expect=!EXPECT! =====
     link /nologo /OUT:"bin_gpu\cell1_short_%%v.exe" !CELLOBJ! !GPUOBJS! !CPU_COMMON_OBJS! %SYSLIBS% ^
         > "obj_gpu\cell1_short_%%v.linklog" 2>&1
     if errorlevel 1 (
@@ -153,7 +171,25 @@ for %%v in (ASBUILT FIXED MUT_CHECKEDRETURN MUT_NOREARM) do (
     ) else (
         "bin_gpu\cell1_short_%%v.exe" %MODELARG% > "obj_gpu\cell1_short_%%v.runlog" 2>&1
         type "obj_gpu\cell1_short_%%v.runlog"
-        findstr /R "^checks=[0-9]* failures=[0-9]*" "obj_gpu\cell1_short_%%v.runlog" >nul || (echo    CRASHED OR NO SUMMARY LINE & set OVERALL_OK=0)
+        set SUMMARY_LINE=
+        for /f "delims=" %%s in ('findstr /R "^checks=[0-9]* failures=[0-9]*" "obj_gpu\cell1_short_%%v.runlog"') do set SUMMARY_LINE=%%s
+        if "!SUMMARY_LINE!"=="" (
+            echo    CRASHED OR NO SUMMARY LINE
+            set OVERALL_OK=0
+        ) else (
+            set TOK_CHECKS=
+            set TOK_FAILURES=
+            set TOK_SKIPS=
+            for /f "tokens=1,2,3 delims= " %%a in ("!SUMMARY_LINE!") do (set TOK_CHECKS=%%a& set TOK_FAILURES=%%b& set TOK_SKIPS=%%c)
+            set "FAILN=!TOK_FAILURES:~9!"
+            set "SKIPN=!TOK_SKIPS:~6!"
+            if not "!SKIPN!"=="0" (echo    SKIPS=!SKIPN! -- a skipped cell fails the run ^("obj_gpu\cell1_short_%%v.runlog"^)& set OVERALL_OK=0)
+            if "!EXPECT!"=="PASS" (
+                if not "!FAILN!"=="0" (echo    FAILURES=!FAILN! -- the green tip must be green ^("obj_gpu\cell1_short_%%v.runlog"^)& set OVERALL_OK=0)
+            ) else (
+                if "!FAILN!"=="0" (echo    SURVIVING MUTANT -- expected a kill, got failures=0 ^("obj_gpu\cell1_short_%%v.runlog"^)& set OVERALL_OK=0)
+            )
+        )
     )
 )
 
@@ -186,42 +222,86 @@ for %%v in (ASBUILT FIXED) do (
     ) else (
         "bin_gpu\cell1_real_%%v.exe" %G5ARG% > "obj_gpu\cell1_real_%%v.runlog" 2>&1
         type "obj_gpu\cell1_real_%%v.runlog"
-        findstr /R "^checks=[0-9]* failures=[0-9]*" "obj_gpu\cell1_real_%%v.runlog" >nul || (echo    CRASHED OR NO SUMMARY LINE & set OVERALL_OK=0)
+        set SUMMARY_LINE=
+        for /f "delims=" %%s in ('findstr /R "^checks=[0-9]* failures=[0-9]*" "obj_gpu\cell1_real_%%v.runlog"') do set SUMMARY_LINE=%%s
+        if "!SUMMARY_LINE!"=="" (
+            echo    CRASHED OR NO SUMMARY LINE
+            set OVERALL_OK=0
+        ) else (
+            set TOK_CHECKS=
+            set TOK_FAILURES=
+            set TOK_SKIPS=
+            for /f "tokens=1,2,3 delims= " %%a in ("!SUMMARY_LINE!") do (set TOK_CHECKS=%%a& set TOK_FAILURES=%%b& set TOK_SKIPS=%%c)
+            set "FAILN=!TOK_FAILURES:~9!"
+            set "SKIPN=!TOK_SKIPS:~6!"
+            if not "!FAILN!"=="0" (echo    FAILURES=!FAILN! -- a red cell ^("obj_gpu\cell1_real_%%v.runlog"^)& set OVERALL_OK=0)
+            if not "!SKIPN!"=="0" (echo    SKIPS=!SKIPN! -- a skipped cell fails the run ^("obj_gpu\cell1_real_%%v.runlog"^)& set OVERALL_OK=0)
+        )
     )
 )
 
-rem ---- cell_gpu_cell2_degenerate: no-macro (always green/skip) and macro-defined ----
-rem T-2905: the production seam (ArmGpuFinishDegenerateLogitRowInjection, gpu_1p0.cpp, compiled
-rem under SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION) now exists in obj_gpu\gpu_asbuilt -- this
-rem block no longer expects LNK2019. It links against the live tree's own gpu_asbuilt objects
-rem (built above from %ENG%\src\gpu, this ticket's own fix) and runs the placeholder body a real
-rem cell is still owed (T-2900's own header comment: "exercise once the seam exists" -- driving a
-rem real schema to a reachable interior state, arming the seam, asserting -2/SSLM_OK, is the test
-rem author's to author, not this build script's).
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I. /c cell_gpu_cell2_degenerate.cpp /Fo"obj_gpu\cell2_nomacro.obj" ^
-    > obj_gpu\cell2_nomacro.buildlog 2>&1 || (echo BUILD FAILED: cell2_nomacro & type obj_gpu\cell2_nomacro.buildlog & set OVERALL_OK=0)
-link /nologo /OUT:"bin_gpu\cell2_nomacro.exe" obj_gpu\cell2_nomacro.obj > obj_gpu\cell2_nomacro.linklog 2>&1
-if errorlevel 1 (
-    echo LINK FAILED unexpectedly: cell2_nomacro
-    type obj_gpu\cell2_nomacro.linklog
-    set OVERALL_OK=0
-) else (
-    "bin_gpu\cell2_nomacro.exe" > obj_gpu\cell2_nomacro.runlog 2>&1
-    type obj_gpu\cell2_nomacro.runlog
-)
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I. /DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION /c cell_gpu_cell2_degenerate.cpp ^
-    /Fo"obj_gpu\cell2_macro.obj" > obj_gpu\cell2_macro.buildlog 2>&1 || (echo BUILD FAILED: cell2_macro.obj & type obj_gpu\cell2_macro.buildlog & set OVERALL_OK=0)
-echo ===== cell_gpu_cell2_degenerate [macro defined, seam now landed -- T-2905] =====
-link /nologo /OUT:"bin_gpu\cell2_macro.exe" obj_gpu\cell2_macro.obj obj_gpu\gpu_asbuilt\gpu_1p0.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj !CPU_COMMON_OBJS! %SYSLIBS% ^
-    > obj_gpu\cell2_macro.linklog 2>&1
-if errorlevel 1 (
-    echo    LINK FAILED unexpectedly, now that the seam exists:
-    type obj_gpu\cell2_macro.linklog
-    set OVERALL_OK=0
-) else (
-    "bin_gpu\cell2_macro.exe" > obj_gpu\cell2_macro.runlog 2>&1
-    type obj_gpu\cell2_macro.runlog
-    findstr /R "^checks=[0-9]* failures=[0-9]*" obj_gpu\cell2_macro.runlog >nul || (echo    CRASHED OR NO SUMMARY LINE & set OVERALL_OK=0)
+rem ---- cell_gpu_cell2_degenerate: written for real, T-2909 (TE-365 C2) ----
+rem T-2905 built the production seam (ArmGpuFinishDegenerateLogitRowInjection, gpu_1p0.cpp,
+rem compiled under SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION); T-2909 writes the cell that
+rem actually fires it -- against a real schema with a string field (STRINGSCHEMAARG, generated
+rem above), driving to S_e via a real backslash transition. Two link configurations, matching
+rem plan Sec3.10.3 row 11's own requirement ("a single-point mutant that reverts the checked
+rem return... must turn both Cell 1 and Cell 2 red"): ASBUILT (the live tree, checked return in
+rem place -- must be GREEN) and MUT_CHECKEDRETURN (RED). The EXISTING gpu_mut_cr object
+rem (D:\_t2900\refs\gpu_1p0_mut_checkedreturn.cpp) predates T-2905's own seam entirely --
+rem `ArmGpuFinishDegenerateLogitRowInjection` is undefined there, so Cell 2 cannot link against
+rem it. T-2909 generates its OWN checked-return mutant straight from the LIVE TIP's own
+rem gpu_1p0.cpp (which already carries the seam), via make_mut_gpu_checkedreturn_seam.py --
+rem the identical single-line revert D:\_t2900\refs\make_mut_checkedreturn.py applies, just
+rem regenerated from source that has not gone stale. Compiled with the tree's own STOCKINC
+rem headers throughout (no v5 override needed -- this mutant never touches the SLM5 struct
+rem layout), so both link configurations share the SAME cell object.
+if not exist obj_gpu\cell2_stock mkdir obj_gpu\cell2_stock
+if not exist obj_gpu\cell2_mut_cr mkdir obj_gpu\cell2_mut_cr
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION /c cell_gpu_cell2_degenerate.cpp ^
+    /Fo"obj_gpu\cell2_stock\\" > obj_gpu\cell2_stock.buildlog 2>&1 || (echo BUILD FAILED: cell2_stock & type obj_gpu\cell2_stock.buildlog & set OVERALL_OK=0)
+"%SSLM_PYTHON%" make_mut_gpu_checkedreturn_seam.py "%ENG%\src\gpu\gpu_1p0.cpp" "obj_gpu\cell2_mut_cr\gpu_1p0_mut_checkedreturn_seam.cpp" ^
+    > obj_gpu\make_mut_gpu_checkedreturn_seam.log 2>&1 || (echo BUILD FAILED: make_mut_gpu_checkedreturn_seam.py & type obj_gpu\make_mut_gpu_checkedreturn_seam.log & set OVERALL_OK=0)
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION /I%ENG%\include /I%ENG%\src\gpu ^
+    /c "obj_gpu\cell2_mut_cr\gpu_1p0_mut_checkedreturn_seam.cpp" /Fo"obj_gpu\cell2_mut_cr\\" ^
+    > obj_gpu\cell2_mut_cr.buildlog 2>&1 || (echo BUILD FAILED: cell2_mut_cr & type obj_gpu\cell2_mut_cr.buildlog & set OVERALL_OK=0)
+
+for %%v in (ASBUILT MUT_CHECKEDRETURN) do (
+    set CELLOBJ=obj_gpu\cell2_stock\cell_gpu_cell2_degenerate.obj
+    if "%%v"=="ASBUILT" (
+        set GPUOBJS=obj_gpu\gpu_asbuilt\gpu_1p0.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
+    )
+    if "%%v"=="MUT_CHECKEDRETURN" (
+        set GPUOBJS=obj_gpu\cell2_mut_cr\gpu_1p0_mut_checkedreturn_seam.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
+    )
+    echo ===== cell_gpu_cell2_degenerate [%%v] =====
+    link /nologo /OUT:"bin_gpu\cell2_%%v.exe" !CELLOBJ! !GPUOBJS! !CPU_COMMON_OBJS! %SYSLIBS% ^
+        > "obj_gpu\cell2_%%v.linklog" 2>&1
+    if errorlevel 1 (
+        echo    LINK FAILED: & type "obj_gpu\cell2_%%v.linklog" & set OVERALL_OK=0
+    ) else (
+        "bin_gpu\cell2_%%v.exe" %STRINGSCHEMAARG% > "obj_gpu\cell2_%%v.runlog" 2>&1
+        type "obj_gpu\cell2_%%v.runlog"
+        set SUMMARY_LINE=
+        for /f "delims=" %%s in ('findstr /R "^checks=[0-9]* failures=[0-9]*" "obj_gpu\cell2_%%v.runlog"') do set SUMMARY_LINE=%%s
+        if "!SUMMARY_LINE!"=="" (
+            echo    CRASHED OR NO SUMMARY LINE
+            set OVERALL_OK=0
+        ) else (
+            set TOK_CHECKS=
+            set TOK_FAILURES=
+            set TOK_SKIPS=
+            for /f "tokens=1,2,3 delims= " %%a in ("!SUMMARY_LINE!") do (set TOK_CHECKS=%%a& set TOK_FAILURES=%%b& set TOK_SKIPS=%%c)
+            set "FAILN=!TOK_FAILURES:~9!"
+            set "SKIPN=!TOK_SKIPS:~6!"
+            if not "!SKIPN!"=="0" (echo    SKIPS=!SKIPN! -- a skipped cell fails the run ^(obj_gpu\cell2_%%v.runlog^)& set OVERALL_OK=0)
+            if "%%v"=="ASBUILT" (
+                if not "!FAILN!"=="0" (echo    FAILURES=!FAILN! -- the green tip must be green ^(obj_gpu\cell2_%%v.runlog^)& set OVERALL_OK=0)
+            ) else (
+                if "!FAILN!"=="0" (echo    SURVIVING MUTANT -- expected a kill, got failures=0 ^(obj_gpu\cell2_%%v.runlog^)& set OVERALL_OK=0)
+            )
+        )
+    )
 )
 
 rem ---- cell_gpu_cell3_agreement (+ CPU-side helper): AS_BUILT, FIXED, and FIXED+--mutant ----
@@ -253,11 +333,43 @@ for %%v in (ASBUILT FIXED) do (
     ) else (
         "bin_gpu\cell3_%%v.exe" %MODELARG% > "obj_gpu\cell3_%%v.runlog" 2>&1
         type "obj_gpu\cell3_%%v.runlog"
-        findstr /R "^checks=[0-9]* failures=[0-9]*" "obj_gpu\cell3_%%v.runlog" >nul || (echo    CRASHED OR NO SUMMARY LINE & set OVERALL_OK=0)
+        set SUMMARY_LINE=
+        for /f "delims=" %%s in ('findstr /R "^checks=[0-9]* failures=[0-9]*" "obj_gpu\cell3_%%v.runlog"') do set SUMMARY_LINE=%%s
+        if "!SUMMARY_LINE!"=="" (
+            echo    CRASHED OR NO SUMMARY LINE
+            set OVERALL_OK=0
+        ) else (
+            set TOK_CHECKS=
+            set TOK_FAILURES=
+            set TOK_SKIPS=
+            for /f "tokens=1,2,3 delims= " %%a in ("!SUMMARY_LINE!") do (set TOK_CHECKS=%%a& set TOK_FAILURES=%%b& set TOK_SKIPS=%%c)
+            set "FAILN=!TOK_FAILURES:~9!"
+            set "SKIPN=!TOK_SKIPS:~6!"
+            if not "!FAILN!"=="0" (echo    FAILURES=!FAILN! -- a red cell ^("obj_gpu\cell3_%%v.runlog"^)& set OVERALL_OK=0)
+            if not "!SKIPN!"=="0" (echo    SKIPS=!SKIPN! -- a skipped cell fails the run ^("obj_gpu\cell3_%%v.runlog"^)& set OVERALL_OK=0)
+        )
         if "%%v"=="FIXED" (
             "bin_gpu\cell3_%%v.exe" %MODELARG% --mutant > "obj_gpu\cell3_%%v_mutant.runlog" 2>&1
             type "obj_gpu\cell3_%%v_mutant.runlog"
-            findstr /R "^checks=[0-9]* failures=[0-9]*" "obj_gpu\cell3_%%v_mutant.runlog" >nul || (echo    CRASHED OR NO SUMMARY LINE & set OVERALL_OK=0)
+            set SUMMARY_LINE=
+            for /f "delims=" %%s in ('findstr /R "^checks=[0-9]* failures=[0-9]*" "obj_gpu\cell3_%%v_mutant.runlog"') do set SUMMARY_LINE=%%s
+            if "!SUMMARY_LINE!"=="" (
+                echo    CRASHED OR NO SUMMARY LINE
+                set OVERALL_OK=0
+            ) else (
+                set TOK_CHECKS=
+                set TOK_FAILURES=
+                set TOK_SKIPS=
+                for /f "tokens=1,2,3 delims= " %%a in ("!SUMMARY_LINE!") do (set TOK_CHECKS=%%a& set TOK_FAILURES=%%b& set TOK_SKIPS=%%c)
+                set "FAILN=!TOK_FAILURES:~9!"
+                set "SKIPN=!TOK_SKIPS:~6!"
+                rem T-2909: --mutant is TE-361's own divergent-input construction (plan Sec3.10.2
+                rem Cell 3's own guard-vitality mutant) -- it MUST be killed (c) failing on every
+                rem route while (a)/(b) stay green under the same run), so failures=0 here is a
+                rem surviving mutant, not a green run.
+                if not "!SKIPN!"=="0" (echo    SKIPS=!SKIPN! -- a skipped cell fails the run ^("obj_gpu\cell3_%%v_mutant.runlog"^)& set OVERALL_OK=0)
+                if "!FAILN!"=="0" (echo    SURVIVING MUTANT -- expected the divergent-input mutant to be killed, got failures=0 ^("obj_gpu\cell3_%%v_mutant.runlog"^)& set OVERALL_OK=0)
+            )
         )
     )
 )
@@ -284,7 +396,21 @@ for %%v in (ASBUILT FIXED) do (
     ) else (
         "bin_gpu\slm5_%%v.exe" %MODELARG% > "obj_gpu\slm5_%%v.runlog" 2>&1
         type "obj_gpu\slm5_%%v.runlog"
-        findstr /R "^checks=[0-9]* failures=[0-9]*" "obj_gpu\slm5_%%v.runlog" >nul || (echo    CRASHED OR NO SUMMARY LINE & set OVERALL_OK=0)
+        set SUMMARY_LINE=
+        for /f "delims=" %%s in ('findstr /R "^checks=[0-9]* failures=[0-9]*" "obj_gpu\slm5_%%v.runlog"') do set SUMMARY_LINE=%%s
+        if "!SUMMARY_LINE!"=="" (
+            echo    CRASHED OR NO SUMMARY LINE
+            set OVERALL_OK=0
+        ) else (
+            set TOK_CHECKS=
+            set TOK_FAILURES=
+            set TOK_SKIPS=
+            for /f "tokens=1,2,3 delims= " %%a in ("!SUMMARY_LINE!") do (set TOK_CHECKS=%%a& set TOK_FAILURES=%%b& set TOK_SKIPS=%%c)
+            set "FAILN=!TOK_FAILURES:~9!"
+            set "SKIPN=!TOK_SKIPS:~6!"
+            if not "!FAILN!"=="0" (echo    FAILURES=!FAILN! -- a red cell ^("obj_gpu\slm5_%%v.runlog"^)& set OVERALL_OK=0)
+            if not "!SKIPN!"=="0" (echo    SKIPS=!SKIPN! -- a skipped cell fails the run ^("obj_gpu\slm5_%%v.runlog"^)& set OVERALL_OK=0)
+        )
     )
 )
 
@@ -299,7 +425,21 @@ link /nologo /OUT:"bin_gpu\slm4_dump.exe" obj_gpu\slm4_dump.obj obj_gpu\gpu_fixe
 echo ===== cell_gpu_slm4_dump [FIXED, pre-SLM5 -- checked-return fix only, T-2903] =====
 "bin_gpu\slm4_dump.exe" %MODELARG% --out=obj_gpu\slm4_blob.bin > obj_gpu\slm4_dump.runlog 2>&1
 type obj_gpu\slm4_dump.runlog
-findstr /R "^checks=[0-9]* failures=[0-9]*" obj_gpu\slm4_dump.runlog >nul || (echo    CRASHED OR NO SUMMARY LINE & set OVERALL_OK=0)
+set SUMMARY_LINE=
+for /f "delims=" %%s in ('findstr /R "^checks=[0-9]* failures=[0-9]*" obj_gpu\slm4_dump.runlog') do set SUMMARY_LINE=%%s
+if "!SUMMARY_LINE!"=="" (
+    echo    CRASHED OR NO SUMMARY LINE
+    set OVERALL_OK=0
+) else (
+    set TOK_CHECKS=
+    set TOK_FAILURES=
+    set TOK_SKIPS=
+    for /f "tokens=1,2,3 delims= " %%a in ("!SUMMARY_LINE!") do (set TOK_CHECKS=%%a& set TOK_FAILURES=%%b& set TOK_SKIPS=%%c)
+    set "FAILN=!TOK_FAILURES:~9!"
+    set "SKIPN=!TOK_SKIPS:~6!"
+    if not "!FAILN!"=="0" (echo    FAILURES=!FAILN! -- a red cell ^(obj_gpu\slm4_dump.runlog^)& set OVERALL_OK=0)
+    if not "!SKIPN!"=="0" (echo    SKIPS=!SKIPN! -- a skipped cell fails the run ^(obj_gpu\slm4_dump.runlog^)& set OVERALL_OK=0)
+)
 
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %OVRINC% /c cell_gpu_slm4_restore.cpp /Fo"obj_gpu\slm4_restore.obj" ^
     > obj_gpu\slm4_restore.buildlog 2>&1 || (echo BUILD FAILED: slm4_restore.obj & type obj_gpu\slm4_restore.buildlog & set OVERALL_OK=0)
@@ -308,7 +448,21 @@ link /nologo /OUT:"bin_gpu\slm4_restore.exe" obj_gpu\slm4_restore.obj obj_gpu\gp
 echo ===== cell_gpu_slm4_restore [FIXED, reading the ASBUILT-written blob] =====
 "bin_gpu\slm4_restore.exe" %MODELARG% --in=obj_gpu\slm4_blob.bin > obj_gpu\slm4_restore.runlog 2>&1
 type obj_gpu\slm4_restore.runlog
-findstr /R "^checks=[0-9]* failures=[0-9]*" obj_gpu\slm4_restore.runlog >nul || (echo    CRASHED OR NO SUMMARY LINE & set OVERALL_OK=0)
+set SUMMARY_LINE=
+for /f "delims=" %%s in ('findstr /R "^checks=[0-9]* failures=[0-9]*" obj_gpu\slm4_restore.runlog') do set SUMMARY_LINE=%%s
+if "!SUMMARY_LINE!"=="" (
+    echo    CRASHED OR NO SUMMARY LINE
+    set OVERALL_OK=0
+) else (
+    set TOK_CHECKS=
+    set TOK_FAILURES=
+    set TOK_SKIPS=
+    for /f "tokens=1,2,3 delims= " %%a in ("!SUMMARY_LINE!") do (set TOK_CHECKS=%%a& set TOK_FAILURES=%%b& set TOK_SKIPS=%%c)
+    set "FAILN=!TOK_FAILURES:~9!"
+    set "SKIPN=!TOK_SKIPS:~6!"
+    if not "!FAILN!"=="0" (echo    FAILURES=!FAILN! -- a red cell ^(obj_gpu\slm4_restore.runlog^)& set OVERALL_OK=0)
+    if not "!SKIPN!"=="0" (echo    SKIPS=!SKIPN! -- a skipped cell fails the run ^(obj_gpu\slm4_restore.runlog^)& set OVERALL_OK=0)
+)
 
 echo DEBUG_OVERALL_OK=[%OVERALL_OK%]
 if "%OVERALL_OK%"=="1" (

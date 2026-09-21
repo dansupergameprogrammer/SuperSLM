@@ -2,12 +2,20 @@
 rem T-2899 (Curie) -- mutant runner for cell_adopt_prefix_census: builds the cell against three
 rem scratch sslm_abi.cpp variants in place of the tree's own copy --
 rem   FIXED         : Claude/Vitruvius/t2898-probe/sslm_abi_cpu_fixed_v5.cpp verbatim (Sec3.10.7's
-rem                   reference fix, cumulative through T-2866/T-2894/T-2896/T-2897/T-2898).
+rem                   reference fix, cumulative through T-2866/T-2894/T-2896/T-2897/T-2898). Must
+rem                   be the green tip.
 rem   MUT_WALKRESET : the SAME file with T-2898's own reset line reverted to a no-op
 rem                   (Claude/Vitruvius/t2898-probe/sslm_abi_cpu_mutant_v5.cpp verbatim) --
-rem                   Sec3.10.3 row 11's own named mutant.
+rem                   Sec3.10.3 row 11's own named mutant. Must be killed.
 rem   MUT_FORCED    : the SAME fixed file with ONLY line 2018's `forced_token_count = 0;`
-rem                   commented out -- the TE-364 mutant this cell exists to kill.
+rem                   commented out -- the TE-364 mutant this cell exists to kill. Must be killed.
+rem
+rem T-2909 (TE-365 S1): this runner used to `echo` a summary line and then unconditionally
+rem `exit /b 0` -- a build failure, a regressed FIXED variant, or a SURVIVING mutant (zero
+rem failures where a kill was required) all read as a clean run. Every variant now has an
+rem expected verdict, and a mismatch, a build failure, or a crashed/summary-less run all set
+rem OVERALL_OK=0, gating the script's own exit code.
+rem
 rem Usage: run_mutants_adopt_prefix.bat <path-to-refs-dir> <path-to-model.sslm> [schema-name]
 setlocal enabledelayedexpansion
 set HEREDIR=%~dp0
@@ -29,10 +37,10 @@ set SRC_NOABI=%ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cp
 
 set OVERALL_OK=1
 for %%v in (FIXED MUT_WALKRESET MUT_FORCED) do (
-    if "%%v"=="FIXED" set ABIFILE=%REFS%\sslm_abi_fixed.cpp
-    if "%%v"=="MUT_WALKRESET" set ABIFILE=%REFS%\sslm_abi_mutant_walkreset.cpp
-    if "%%v"=="MUT_FORCED" set ABIFILE=%REFS%\sslm_abi_mutant_forced.cpp
-    echo ===== %%v ^(!ABIFILE!^) =====
+    if "%%v"=="FIXED" (set ABIFILE=%REFS%\sslm_abi_fixed.cpp& set EXPECT=PASS)
+    if "%%v"=="MUT_WALKRESET" (set ABIFILE=%REFS%\sslm_abi_mutant_walkreset.cpp& set EXPECT=KILL)
+    if "%%v"=="MUT_FORCED" (set ABIFILE=%REFS%\sslm_abi_mutant_forced.cpp& set EXPECT=KILL)
+    echo ===== %%v ^(!ABIFILE!^) expect=!EXPECT! =====
     if not exist "obj_mutants\%%v" mkdir "obj_mutants\%%v"
     cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc ^
         /I%ENG%\include /I%ENG%\src /I%TESTS% /I%TESTS%\t2199-damped-greedy-red-suite /I. %SRC_NOABI% "!ABIFILE!" ^
@@ -44,10 +52,52 @@ for %%v in (FIXED MUT_WALKRESET MUT_FORCED) do (
         set OVERALL_OK=0
     ) else (
         "obj_mutants\%%v.exe" %MODELARG% > "obj_mutants\%%v.runlog" 2>&1
+        set RUN_EC=!errorlevel!
         findstr /B "SUMMARY" "obj_mutants\%%v.runlog"
-        findstr /B "checks=" "obj_mutants\%%v.runlog"
+        set SUMMARY_LINE=
+        for /f "delims=" %%s in ('findstr /R "^checks=[0-9]* failures=[0-9]*" "obj_mutants\%%v.runlog"') do set SUMMARY_LINE=%%s
+        echo    !SUMMARY_LINE! ^(exit !RUN_EC!^)
+        if "!SUMMARY_LINE!"=="" (
+            echo    CRASHED OR NO SUMMARY LINE -- exit code !RUN_EC!
+            set OVERALL_OK=0
+        ) else (
+            set TOK_CHECKS=
+            set TOK_FAILURES=
+            set TOK_SKIPS=
+            for /f "tokens=1,2,3 delims= " %%a in ("!SUMMARY_LINE!") do (
+                set TOK_CHECKS=%%a
+                set TOK_FAILURES=%%b
+                set TOK_SKIPS=%%c
+            )
+            set "FAILN=!TOK_FAILURES:~9!"
+            set "SKIPN=!TOK_SKIPS:~6!"
+            if "!EXPECT!"=="PASS" (
+                if not "!FAILN!"=="0" (
+                    echo    EXPECTED THE GREEN TIP, GOT FAILURES=!FAILN!
+                    set OVERALL_OK=0
+                )
+                if not "!SKIPN!"=="0" (
+                    echo    EXPECTED THE GREEN TIP, GOT SKIPS=!SKIPN!
+                    set OVERALL_OK=0
+                )
+                if not "!RUN_EC!"=="0" (
+                    echo    EXPECTED THE GREEN TIP, GOT NONZERO EXIT !RUN_EC!
+                    set OVERALL_OK=0
+                )
+            ) else (
+                if "!FAILN!"=="0" (
+                    echo    SURVIVING MUTANT -- expected a kill, got failures=0
+                    set OVERALL_OK=0
+                )
+            )
+        )
     )
 )
 
-echo ===== run_mutants_adopt_prefix: done =====
-exit /b 0
+if "%OVERALL_OK%"=="1" (
+    echo ===== run_mutants_adopt_prefix: FIXED is the green tip, every mutant was killed =====
+    exit /b 0
+) else (
+    echo ===== run_mutants_adopt_prefix: FAILURES ABOVE =====
+    exit /b 1
+)
