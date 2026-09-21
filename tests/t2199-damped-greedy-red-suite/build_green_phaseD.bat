@@ -4,13 +4,27 @@ rem implementation (src/damped_greedy_phaseD.cpp, src/damped_greedy_phaseD_loop.
 rem widened src/sslm_abi.cpp/include/superslm/artifact.h) and runs each, mirroring
 rem build_link_red_phaseD.bat's own source list plus the new production files. A real base
 rem artifact is required for D2/D2a/D3's own product cells (--model=PATH); D1 needs none.
-rem Usage: build_green_phaseD.bat [PATH-TO-.sslm]
+rem T-2899 (Curie, plan Sec3.5 step 1's own suite-wiring obligation): this script is now part
+rem of the Stage 1 acceptance run, plan Claude/Plans/te266-gpu-path.md Sec3.5 step 3 -- make
+rem the damped-greedy suite a required run, since CI does not run it. So it now also, first,
+rem accepts an ADAPTER path as its second argument and forwards it as --adapter=PATH, which is
+rem what TestD2_DampedGreedy_ComposesWithRuntimeAdapter, in phaseD2_wiring_red.cpp, needs to
+rem run instead of SKIP -- the shopkeeper LoRA artifacts under D:/SuperSLM-t2116-package/
+rem artifacts/ are qwen2.5-1.5b-instruct.sslm, the model, paired with
+rem qwen2.5-1.5b-shopkeeper-lora-v2-t2102-runtime.sslm, the runtime-format adapter this base
+rem model was built against, Claude/Brunel/t2116-crossvendor-package-2026-08-15.md Sec4. And,
+rem second, it now fails the run on ANY skip, matching this project's own skip-fails-the-run
+rem convention, T-2806 M2, tests/t2791-gpu-prefill-read-red-suite: a skip here means the
+rem acceptance run did not actually exercise the adapter-composition cell, which is exactly the
+rem gap this fold exists to close, so it is never silently accepted.
+rem Usage: build_green_phaseD.bat [PATH-TO-.sslm] [PATH-TO-ADAPTER.sslm]
 setlocal enabledelayedexpansion
 set HEREDIR=%~dp0
 set ENG=%HEREDIR%..\..
 set TESTS=%ENG%\tests
 set MODELARG=
 if not "%~1"=="" set MODELARG=--model=%~1
+if not "%~2"=="" set MODELARG=%MODELARG% --adapter=%~2
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 -no_logo
 cd /d "%HEREDIR%"
 if not exist obj_green_D mkdir obj_green_D
@@ -61,6 +75,15 @@ for %%f in (phaseD1_artifact_flag_red phaseD2_wiring_red phaseD2a_cost_ratio_red
             echo !SUMMARY_LINE! | findstr /R "failures=0 " >nul
             if errorlevel 1 (
                 echo    FAILURES: !SUMMARY_LINE!
+                set OVERALL_OK=0
+            )
+            rem T-2899: skip-fails-the-run, T-2806 M2's own convention. skips=0 must appear;
+            rem any other skips= value means a cell that should have run this pass instead
+            rem SKIPped most commonly TestD2_DampedGreedy_ComposesWithRuntimeAdapter for want of
+            rem --model=/--adapter=, and this acceptance run does not pass with that unexercised.
+            echo !SUMMARY_LINE! | findstr /C:"skips=0" >nul
+            if errorlevel 1 (
+                echo    SKIPPED CELLS, acceptance requires skips=0: !SUMMARY_LINE!
                 set OVERALL_OK=0
             )
         )
