@@ -1,260 +1,298 @@
 """T-2899 (Curie) -- G5-1 schema compiler's free-text string field (T-2853, plan
-`Claude/Plans/te266-gpu-path.md` Sec3.9.3), the five owed compiler unit-cell groups.
+`Claude/Plans/te266-gpu-path.md` Sec3.9.3), the five owed base compiler unit-cell groups plus the
+literal-to-literal crossing control -- REVISED (T-2913) to byte-level and value-level semantics
+now that Sec3.9.3's design is final across T-2908 (byte alphabet), T-2910 (open/close boundary,
+special-token exclusion) and T-2912 (value-level close, superseding T-2911).
 
-RED BY BEHAVIOUR (not by import: `tools.sslm_convert_schema` exists and compiles the
-object/enum/boolean subset today -- `g5_1_schema_compiler_fuzz_red.py`, this directory,
-already proves that). `{"type": "string"}` is not yet a leaf `_groups()` recognizes: every
-cell below drives `compile_schema_to_mask_pages` over a schema with a string field and is red
-today because that call raises `SchemaCompileError` naming `"unsupported construct"` /
-`"type 'string' is outside D-SLM45's compilable subset"` (confirmed at authoring time,
-`D:/_t2899/smoke_check.py`'s captured run) rather than compiling the packet's own cyclic
-sub-automaton (Sec3.2: `S_c` content / `S_e` escape / `S_u1`-`S_u4` the `\\uXXXX` hex chain).
-The `maxLength` cell is red for a narrower reason: the schema already fails to compile today,
-but for the WRONG reason (the whole `string` type is unsupported), not because `maxLength`
-was named -- once the leaf lands, this cell's own assertion (the error text names the
-`maxLength` keyword) is what must still hold.
+WHY REVISED. This branch's own `tools/sslm_convert_schema.py` is T-2853's reviewed, PRE-FOLD
+design: a character-level alphabet (`Sequence[str]`, decode-then-collapse) with no boundary
+discipline and no value-level closure -- confirmed at authoring time by reading the module
+(`_add_string_leaf`'s content branch is one `str`-keyed self-loop; `_token_targets` takes no
+`content_states` parameter). Every cell below is therefore authored against a BYTE-piece
+vocabulary (`list[bytes]`), decoded to `str` for the current (RED) compiler and passed as raw
+bytes to the T-2912 reference chain (GREEN) -- the exact alphabet difference T-2908 fixes.
 
-BUILD-TIME/LOCAL, matching `g5_1_schema_compiler_fuzz_red.py`'s own documented scope --
-run manually: `python -m pytest tests/t2130-g5-red-suite/t2899_string_leaf_red.py -v` from
-a checkout with T-2853's own `_groups()`/`_char_dfa()` combinator built (plan Sec3.5 step 2).
+ORACLE. Every acceptance/rejection claim is checked THREE ways:
+  (1) `_compile_red(...).accepts(...)` -- this branch's own in-tree compiler, over the
+      byte-piece vocabulary decoded to `str`.
+  (2) Python's own `json.loads` over the bare JSON string literal -- an independent, mature
+      RFC 8259 implementation sharing no line with either compiler. This is the definition every
+      cell is grounded in.
+  (3) `_compile_green(...).accepts(...)` -- the T-2912 reference compiler
+      (`Claude/Vitruvius/t2912-probe/`), over the same content as real bytes.
+Every positive cell asserts all three oracles admit the string; every negative cell asserts all
+three reject it.
 
-ORACLE. Every acceptance/rejection claim below is checked TWICE, independently:
-  (1) `compile_schema_to_mask_pages(...).accepts(...)` -- the production compiler's own
-      token-level walk over a real vocabulary, exercising the actual compiled DFA.
-  (2) Python's own `json` module (`json.loads`) over the SAME string, stripped to its bare
-      JSON string literal -- an independent, mature implementation of RFC 8259's string
-      grammar, never sharing a line with `tools/sslm_convert_schema.py`. This is the
-      definition every cell here is grounded in (Curie's own discipline: a feature oracle
-      is grounded in the definition, not a recode of the implementation's steps).
-Every positive cell asserts BOTH oracles admit the string; every negative cell asserts BOTH
-reject it. Where they could ever disagree that disagreement IS the finding -- none is
-observed at authoring time (see `MutationProofBothOraclesAgreeOnEveryFixture`, below).
+RED BY BEHAVIOUR. The escape/hex/control-byte/rejection groups already compile under the
+in-tree module (the character-level leaf implements this much); they are true regression
+controls, held green today and required to stay green under the byte-level/value-level design.
+The literal-to-literal crossing cell is the same: a must-accept control the boundary-discipline
+fix does not touch (Sec3.9.3: "T-2910 does not touch this"). Nothing in this file's base groups
+is red BECAUSE of a missing feature -- T-2908/T-2910/T-2912's own new capabilities (the byte
+alphabet, the open/close asymmetry, the value-level closure) are covered by the sibling files
+`t2908_byte_level_red.py`, `t2910_boundary_red.py` and `t2912_value_level_red.py`, which ARE red
+on this branch for the reasons those folds give.
 
-MUTATION PROOF (StandardsDocument.md Sec5.4/Curie's own "pin the documented claim"
-discipline). Nothing in this project has yet built ANY compiler that implements the string
-leaf -- pristine and the eventual fix both live in `tools/sslm_convert_schema.py`, one file
-this seat never writes to. So there is no in-tree "wrong version" to run these cells
-against. What this file pins instead is that ITS OWN assertions genuinely discriminate valid
-from invalid JSON string content -- proven against `json.loads`, an oracle this suite does
-not author and cannot tune to its own expectations: `MutationProofBothOraclesAgreeOnEveryFixture`
-drives every fixture used by the five cell groups through `json.loads` alone and shows it
-lands on the SAME accept/reject verdict this file's own cells assert, then constructs one
-corrupted variant per group (the "wrong version" the discipline asks for) and shows
-`json.loads` -- and, on the object-shaped literals, the exact code paths cells 1-4
-exercise -- refuses it. A cell whose stated verdict could never be produced by a real
-defect (as opposed to always passing regardless of content) would fail this proof, because
-`json.loads` would not reproduce the same split.
+MUTATION PROOF (StandardsDocument.md Sec5.4 / Curie's "pin the documented claim"). Each fixture's
+stated verdict is reproduced by `json.loads`, an oracle this suite neither authors nor tunes, and
+a deliberately corrupted ("wrong version") variant of each fixture flips that oracle's verdict --
+`MutationProofBothOraclesAgreeOnEveryFixture`, unchanged in method from the pre-revision file.
 """
 from __future__ import annotations
 
 import json
+import sys
 import unittest
+from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import t2913_common as common
 from tools.sslm_convert_schema import SchemaCompileError, compile_schema_to_mask_pages
 
-# Every C0 control byte, plus the eight short JSON escapes, plus the sixteen hex digits.
 _SHORT_ESCAPES = ['"', "\\", "/", "b", "f", "n", "r", "t"]
 _HEX_DIGITS = list("0123456789abcdefABCDEF")
 
-_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {"Prompt_Result": {"type": "string"}},
-    "required": ["Prompt_Result"],
-}
+_SCHEMA = common.PROMPT_RESULT_SCHEMA
 
 
-def _wrap(inner: str) -> str:
-    """The schema's own canonical serialization with `inner` as the string field's raw
-    (already-escaped, if applicable) content."""
-    return '{"Prompt_Result":"' + inner + '"}'
+def _wrap(inner: bytes) -> bytes:
+    return b'{"Prompt_Result":"' + inner + b'"}'
 
 
-def _bare_literal_is_valid_json_string(inner: str) -> bool:
+def _bare_literal_is_valid_json_string(inner: bytes) -> bool:
     """Independent oracle 2: does `"` + inner + `"` parse as a JSON string, strictly (RFC
-    8259 -- raw control bytes rejected, only the eight short escapes and \\uXXXX admitted)?
-    Never touches tools/sslm_convert_schema.py."""
+    8259)? Never touches either compiler."""
     try:
-        decoded = json.loads('"' + inner + '"')
+        decoded = json.loads(b'"' + inner + b'"')
     except json.JSONDecodeError:
         return False
     return isinstance(decoded, str)
 
 
-def _compile(schema=_SCHEMA, vocab=None) -> object:
-    """Oracle 1: the production compiler, over a vocabulary this test constructs. Raises
-    exactly as `compile_schema_to_mask_pages` raises -- callers assert on that directly, so
-    the red reason (SchemaCompileError, not a wrong assertion) stays visible in the failure."""
-    return compile_schema_to_mask_pages(schema, vocab)
+def _decode_pieces(pieces: list[bytes]) -> list[str]:
+    return [piece.decode("utf-8", errors="replace") for piece in pieces]
+
+
+def _compile_red(pieces: list[bytes], schema=_SCHEMA):
+    """Oracle 1: this branch's own in-tree compiler, over the byte pieces decoded exactly as
+    the shipped, pre-fold producer decodes them today."""
+    return compile_schema_to_mask_pages(schema, _decode_pieces(pieces))
+
+
+def _compile_green(pieces: list[bytes], schema=_SCHEMA):
+    """Oracle 3: the T-2912 reference compiler, over the raw byte pieces -- the alphabet T-2908
+    ships. No special ids appear in these small synthetic fixtures, so `zero_special_ids` is not
+    needed here."""
+    ref = common.reference_t2912()
+    return ref.compile_schema_to_mask_pages(schema, list(pieces))
 
 
 class G5_1_T2853_Escapes(unittest.TestCase):
-    """Sec3.9.3 group 1: each of the eight short escapes accepted from `S_e` back to `S_c`;
-    a ninth (any byte outside that set) rejected from `S_e` (no admitted transition in that
-    state's row)."""
+    """Sec3.9.3 group 1: each of the eight short escapes accepted from `S_e` back to content; a
+    ninth (any byte outside that set) rejected from `S_e`. Byte-level revision (T-2913): pieces
+    are `bytes`, decoded for RED, raw for GREEN."""
 
     def test_each_short_escape_is_admitted(self) -> None:
+        # Content is prefixed with a plain 'a' so the decoded value always reaches at least one
+        # meaningful (M) byte regardless of which escape is under test -- three of the eight
+        # short escapes (\n, \r, \t) decode to bytes in T-2912's own ten-byte insignificant set,
+        # and a value consisting SOLELY of those bytes has no closing edge under the value-level
+        # design (Sec3.9.3 V2/V4). That value-level distinction is this base group's own escape
+        # MECHANISM cell's concern only insofar as it must not corrupt an otherwise-meaningful
+        # value; the insignificant-alone case is covered by the sibling `t2912_value_level_red.py`.
         for esc in _SHORT_ESCAPES:
             with self.subTest(escape=esc):
-                vocab = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "\\", esc]
-                content = "\\" + esc
+                esc_b = esc.encode("ascii")
+                vocab = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"\\", esc_b, b"a"]
+                content = b"a\\" + esc_b
                 self.assertTrue(
                     _bare_literal_is_valid_json_string(content),
                     f"SETUP: {content!r} is not valid JSON per json.loads -- fixture is wrong",
                 )
                 try:
-                    mp = _compile(vocab=vocab)
+                    mp_red = _compile_red(vocab)
                 except SchemaCompileError as exc:
-                    self.fail(
-                        f"the string leaf is not yet implemented: escape \\{esc} did not "
-                        f"compile ({exc})"
-                    )
+                    self.fail(f"regression: escape \\{esc} no longer compiles on the branch ({exc})")
                 self.assertTrue(
-                    mp.accepts(_wrap(content)),
-                    f"escape \\{esc}: compiled DFA does not admit a JSON-valid string",
+                    mp_red.accepts(_wrap(content).decode("utf-8", errors="replace")),
+                    f"escape \\{esc}: branch DFA does not admit a JSON-valid string",
+                )
+                mp_green = _compile_green(vocab)
+                self.assertTrue(
+                    mp_green.accepts(_wrap(content)),
+                    f"escape \\{esc}: T-2912 reference DFA does not admit a JSON-valid string",
                 )
 
     def test_invalid_escape_char_has_no_admitted_transition(self) -> None:
-        # 'q' is not one of the eight short escapes and is not the '\uXXXX' introducer.
-        bad = "q"
-        vocab = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "\\", bad]
-        content = "\\" + bad
+        bad = b"q"  # not one of the eight short escapes, not the '\uXXXX' introducer
+        vocab = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"\\", bad]
+        content = b"\\" + bad
         self.assertFalse(
             _bare_literal_is_valid_json_string(content),
             "SETUP: \\q is somehow valid JSON per json.loads -- fixture is wrong",
         )
-        try:
-            mp = _compile(vocab=vocab)
-        except SchemaCompileError:
-            self.fail(
-                "the string leaf is not yet implemented (whole schema fails to compile, "
-                "not merely the \\q escape) -- this cell needs the leaf built to be "
-                "meaningful; see the escapes-accepted cell above for the current red reason"
-            )
+        mp_red = _compile_red(vocab)
         self.assertFalse(
-            mp.accepts(_wrap(content)),
-            "\\q: compiled DFA wrongly admits an escape outside the eight short escapes",
+            mp_red.accepts(_wrap(content).decode("utf-8", errors="replace")),
+            "\\q: branch DFA wrongly admits an escape outside the eight short escapes",
+        )
+        mp_green = _compile_green(vocab)
+        self.assertFalse(
+            mp_green.accepts(_wrap(content)),
+            "\\q: T-2912 reference DFA wrongly admits an escape outside the eight short escapes",
         )
 
 
 class G5_1_T2853_UnicodeEscape(unittest.TestCase):
-    """Sec3.9.3 group 2: the four-state hex chain S_u1-S_u4 accepts exactly four hex digits
-    (0-9, a-f, A-F) per state and returns to S_c on the fourth; a non-hex character at any of
-    the four positions has no admitted transition at that state."""
+    """Sec3.9.3 group 2: the four-state hex chain accepts exactly four hex digits and returns to
+    content on the fourth; a non-hex character at any of the four positions has no admitted
+    transition at that state."""
 
     def test_four_hex_digits_admitted_then_returns_to_content_state(self) -> None:
-        vocab = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "\\", "u"] + _HEX_DIGITS + ["z"]
-        content = "\\u4Fa0z"  # \uXXXX then an ordinary content char, proving S_c is resumed
+        vocab = ([b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"\\", b"u", b"z"]
+                 + [d.encode("ascii") for d in _HEX_DIGITS])
+        content = b"\\u4Fa0z"  # \uXXXX then ordinary content, proving content is resumed
         self.assertTrue(_bare_literal_is_valid_json_string(content), "SETUP: fixture is invalid JSON")
-        try:
-            mp = _compile(vocab=vocab)
-        except SchemaCompileError as exc:
-            self.fail(f"the string leaf is not yet implemented: \\uXXXX did not compile ({exc})")
+        mp_red = _compile_red(vocab)
         self.assertTrue(
-            mp.accepts(_wrap(content)),
-            "\\u4Fa0 followed by ordinary content 'z': compiled DFA does not admit it, or "
-            "does not return to the content state after the fourth hex digit",
+            mp_red.accepts(_wrap(content).decode("utf-8", errors="replace")),
+            "\\u4Fa0 followed by 'z': branch DFA does not admit it or does not resume content",
+        )
+        mp_green = _compile_green(vocab)
+        self.assertTrue(
+            mp_green.accepts(_wrap(content)),
+            "\\u4Fa0 followed by 'z': T-2912 reference DFA does not admit it",
         )
 
     def test_non_hex_character_rejected_at_each_of_the_four_positions(self) -> None:
-        # 'g' is a valid vocabulary token (ordinary S_c content elsewhere) but is not a hex
-        # digit -- it must have no admitted transition specifically from S_u1..S_u4.
-        vocab = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "\\", "u", "g"] + _HEX_DIGITS
+        vocab = ([b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"\\", b"u", b"g"]
+                 + [d.encode("ascii") for d in _HEX_DIGITS])
         for position in range(4):
             with self.subTest(position=position):
                 digits = ["4", "F", "a", "0"]
                 digits[position] = "g"
-                content = "\\u" + "".join(digits)
+                content = ("\\u" + "".join(digits)).encode("ascii")
                 self.assertFalse(
                     _bare_literal_is_valid_json_string(content),
                     f"SETUP: {content!r} is somehow valid JSON per json.loads",
                 )
-                try:
-                    mp = _compile(vocab=vocab)
-                except SchemaCompileError:
-                    self.fail(
-                        "the string leaf is not yet implemented -- this cell needs the "
-                        "hex chain built to be meaningful"
-                    )
+                mp_red = _compile_red(vocab)
                 self.assertFalse(
-                    mp.accepts(_wrap(content)),
-                    f"a non-hex byte at \\uXXXX position {position}: compiled DFA wrongly admits it",
+                    mp_red.accepts(_wrap(content).decode("utf-8", errors="replace")),
+                    f"non-hex byte at \\uXXXX position {position}: branch DFA wrongly admits it",
+                )
+                mp_green = _compile_green(vocab)
+                self.assertFalse(
+                    mp_green.accepts(_wrap(content)),
+                    f"non-hex byte at \\uXXXX position {position}: reference DFA wrongly admits it",
                 )
 
 
 class G5_1_T2853_MultiCharacterCrossing(unittest.TestCase):
-    """Sec3.9.3 group 3: a vocabulary token whose spelling is ordinary content characters
-    followed immediately by the closing quote (the packet's own worked example, `lo"`) walks
-    S_c -> S_c -> following within one token's trie descent and lands the token-level
-    transition on `following`, not on an intermediate state."""
+    """Sec3.9.3 group 3, content-then-close crossing: a vocabulary token spanning ordinary
+    content characters and the closing quote in one piece walks content -> content -> following
+    in one token's trie descent. This is the packet's own `lo"` worked example -- still admitted
+    under T-2910's asymmetric rule (close-side crossings are unrestricted) and under T-2912's
+    M-mode automaton (the same close behaviour, unaffected by the U/M split)."""
 
     def test_token_crossing_the_closing_quote_lands_past_the_string(self) -> None:
-        # The merged token 'lo"' spans two content characters and the closing quote in one
-        # vocabulary piece. Greedy longest-match (MaskPages.accepts) prefers it over the
-        # single-character alternatives also present, so this cell genuinely drives the
-        # crossing transition rather than a character-by-character walk that happens to
-        # reach the same place.
-        vocab = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "l", "o", 'lo"']
+        vocab = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"l", b"o", b'lo"']
+        self.assertTrue(_bare_literal_is_valid_json_string(b"lo"), "SETUP: fixture is invalid JSON")
+        full = _wrap(b"lo")
+        mp_red = _compile_red(vocab)
         self.assertTrue(
-            _bare_literal_is_valid_json_string("lo"), "SETUP: fixture is invalid JSON"
+            mp_red.accepts(full.decode("utf-8", errors="replace")),
+            'the multi-character token \'lo"\' is not admitted on the branch, or the walk does '
+            "not land past the string on the object's own closing-brace continuation",
         )
-        try:
-            mp = _compile(vocab=vocab)
-        except SchemaCompileError as exc:
-            self.fail(f"the string leaf is not yet implemented ({exc})")
-        full = '{"Prompt_Result":"lo"}'
+        mp_green = _compile_green(vocab)
         self.assertTrue(
-            mp.accepts(full),
-            "the multi-character token 'lo\"' (content plus the closing quote) is not "
-            "admitted, or the walk does not land past the string on the object's own "
-            "closing-brace continuation",
+            mp_green.accepts(full),
+            'the multi-character token \'lo"\' is not admitted by the T-2912 reference (close-'
+            "side crossings must remain admitted)",
         )
-        # The SAME content, spelled with only the single-character tokens (no crossing
-        # token in the vocabulary), must ALSO accept -- the crossing token is one admitted
-        # path to 'following', not the only one.
-        vocab_no_cross = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "l", "o"]
-        mp2 = _compile(vocab=vocab_no_cross)
+        vocab_no_cross = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"l", b"o"]
         self.assertTrue(
-            mp2.accepts(full),
-            "without the crossing token, the character-by-character path to the same "
-            "string is not admitted -- the two constructions should agree",
+            _compile_red(vocab_no_cross).accepts(full.decode("utf-8", errors="replace")),
+            "without the crossing token, the character-by-character path is not admitted on the "
+            "branch -- the two constructions should agree",
+        )
+        self.assertTrue(
+            _compile_green(vocab_no_cross).accepts(full),
+            "without the crossing token, the character-by-character path is not admitted by the "
+            "reference -- the two constructions should agree",
+        )
+
+
+class G5_1_T2910_LiteralToLiteralCrossing(unittest.TestCase):
+    """Sec3.9.3: 'Multi-character tokens crossing between two LITERAL states ... remain admitted
+    -- T-2910 does not touch this.' A must-accept regression control, distinct from the
+    content-then-close crossing above: this token spans a key's closing quote and the following
+    colon -- two literal/skeleton states, never touching the string leaf's own content
+    sub-automaton at all. Green on the branch today (the object/enum/boolean subset already
+    exercises this crossing shape) and required to stay green under every fold."""
+
+    def test_key_quote_and_colon_crossing_is_unaffected_by_the_boundary_fix(self) -> None:
+        # {"Prompt_Result":"x"} -- the token '":' spans the key's closing quote and the
+        # following colon, both literal-skeleton bytes, with no content-state endpoint. The
+        # whole-literal and missing-leading-quote tokens stay in the vocabulary (matching the
+        # base escape/hex cells' own established fixture shape) so every OTHER reachable state
+        # in the key literal's own chain still has a covering token -- only the crossing token's
+        # own path is the thing under test.
+        vocab = [
+            b"{", b"}",
+            b'"Prompt_Result":',   # whole key literal, one token
+            b'Prompt_Result":',    # covers the state reached after a standalone leading quote
+            b'"Prompt_Result',     # covers everything up to (not including) the key's own close
+            b'":',                 # THE crossing token: key-closing-quote + colon, one token
+            b'"',                  # standalone quote (key open, value open, value close)
+            b":",                  # standalone colon, covering the closing-quote-then-colon path
+            b"x",
+        ]
+        full = _wrap(b"x")
+        self.assertTrue(_bare_literal_is_valid_json_string(b"x"), "SETUP: fixture is invalid JSON")
+        mp_red = _compile_red(vocab)
+        self.assertTrue(
+            mp_red.accepts(full.decode("utf-8", errors="replace")),
+            "a literal-to-literal crossing token (key-close-quote + colon) regressed on the branch",
+        )
+        mp_green = _compile_green(vocab)
+        self.assertTrue(
+            mp_green.accepts(full),
+            "a literal-to-literal crossing token regressed under the T-2912 reference -- the "
+            "boundary discipline must never restrict a crossing with no content endpoint",
         )
 
 
 class G5_1_T2853_RawControlByteDeadEnd(unittest.TestCase):
     """Sec3.9.3 group 4 (T-2859 F1): a token spelling a single C0 control byte (0x00-0x1F),
-    presented directly to S_c with no preceding backslash, has no admitted transition in
-    S_c's own CSR row. Distinct from the escape/\\uXXXX cells above, which drive a bad byte
-    AFTER a backslash, not a bare byte reaching S_c directly."""
+    presented directly to content with no preceding backslash, has no admitted transition."""
 
     def test_raw_control_byte_in_content_position_has_no_admitted_transition(self) -> None:
         for code in (0x00, 0x01, 0x08, 0x1F):
             with self.subTest(byte=hex(code)):
-                raw = chr(code)
-                vocab = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "a", raw]
+                raw = bytes([code])
+                vocab = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"a", raw]
                 self.assertFalse(
-                    _bare_literal_is_valid_json_string("a" + raw),
+                    _bare_literal_is_valid_json_string(b"a" + raw),
                     f"SETUP: a raw 0x{code:02x} byte is somehow valid JSON per json.loads",
                 )
-                try:
-                    mp = _compile(vocab=vocab)
-                except SchemaCompileError:
-                    self.fail(
-                        "the string leaf is not yet implemented -- this cell needs S_c's "
-                        "content transitions built to be meaningful"
-                    )
+                mp_red = _compile_red(vocab)
                 self.assertFalse(
-                    mp.accepts(_wrap("a" + raw)),
-                    f"a raw, unescaped 0x{code:02x} control byte in content position is "
-                    f"wrongly admitted at S_c",
+                    mp_red.accepts(_wrap(b"a" + raw).decode("utf-8", errors="replace")),
+                    f"a raw, unescaped 0x{code:02x} control byte is wrongly admitted on the branch",
+                )
+                mp_green = _compile_green(vocab)
+                self.assertFalse(
+                    mp_green.accepts(_wrap(b"a" + raw)),
+                    f"a raw, unescaped 0x{code:02x} control byte is wrongly admitted by the reference",
                 )
 
 
 class G5_1_T2853_RejectionGroup(unittest.TestCase):
     """Sec3.9.3 group 5: `"type": "number"` and `"type": "array"` still raise
-    SchemaCompileError (unaffected, must-accept-neighbour control -- `_groups()` line 108's
-    fallthrough is unchanged by this fold, only `"type": "string"` gains a leaf). A schema
-    declaring `maxLength` on a string field is REJECTED with SchemaCompileError NAMING the
+    SchemaCompileError. A schema declaring `maxLength` on a string field is REJECTED naming the
     `maxLength` keyword (T-2859 F2, D-SLM7462)."""
 
     def _schema_with(self, field: dict) -> dict:
@@ -267,70 +305,65 @@ class G5_1_T2853_RejectionGroup(unittest.TestCase):
 
     def test_number_type_still_rejected(self) -> None:
         with self.assertRaises(SchemaCompileError):
-            _compile(schema=self._schema_with({"type": "number"}), vocab=["{", "}", '"f":', "0"])
+            _compile_red([b"{", b"}", b'"f":', b"0"], schema=self._schema_with({"type": "number"}))
+        with self.assertRaises(common.reference_t2912().SchemaCompileError):
+            _compile_green([b"{", b"}", b'"f":', b"0"], schema=self._schema_with({"type": "number"}))
 
     def test_array_type_still_rejected(self) -> None:
         with self.assertRaises(SchemaCompileError):
-            _compile(schema=self._schema_with({"type": "array"}), vocab=["{", "}", '"f":', "[", "]"])
+            _compile_red([b"{", b"}", b'"f":', b"[", b"]"], schema=self._schema_with({"type": "array"}))
+        with self.assertRaises(common.reference_t2912().SchemaCompileError):
+            _compile_green([b"{", b"}", b'"f":', b"[", b"]"], schema=self._schema_with({"type": "array"}))
 
     def test_maxlength_on_string_field_rejected_naming_the_keyword(self) -> None:
         schema = self._schema_with({"type": "string", "maxLength": 5})
-        vocab = ["{", "}", '"f":', '"', "a"]
+        vocab = [b"{", b"}", b'"f":', b'"', b"a"]
         with self.assertRaises(SchemaCompileError) as ctx:
-            _compile(schema=schema, vocab=vocab)
-        self.assertIn(
-            "maxLength",
-            str(ctx.exception),
-            "a maxLength-bearing string field must be rejected NAMING the maxLength "
-            f"keyword; got: {ctx.exception!r}",
-        )
+            _compile_red(vocab, schema=schema)
+        self.assertIn("maxLength", str(ctx.exception))
+        with self.assertRaises(common.reference_t2912().SchemaCompileError) as ctx_green:
+            _compile_green(vocab, schema=schema)
+        self.assertIn("maxLength", str(ctx_green.exception))
 
 
 class MutationProofBothOraclesAgreeOnEveryFixture(unittest.TestCase):
-    """StandardsDocument.md Sec5.4 / Curie's own mutation-proof discipline: since no in-tree
-    implementation of the string leaf exists yet to mutate, this class instead pins that the
-    cells above are not vacuously true -- each fixture's stated verdict is reproduced by
-    `json.loads`, an oracle this suite neither authors nor tunes, and a deliberately
-    corrupted ("wrong version") variant of each fixture flips that oracle's verdict, proving
-    the assertion genuinely discriminates rather than always agreeing."""
+    """StandardsDocument.md Sec5.4 / Curie's "pin the documented claim": pins that this file's
+    assertions genuinely discriminate valid from invalid JSON string content, proven against
+    `json.loads`, an oracle this suite neither authors nor tunes."""
 
     def test_escape_fixtures_agree_with_json_and_flip_under_corruption(self) -> None:
         for esc in _SHORT_ESCAPES:
-            good = "\\" + esc
-            self.assertTrue(_bare_literal_is_valid_json_string(good))
-        # Wrong version: an escape character outside the eight short escapes.
-        self.assertFalse(_bare_literal_is_valid_json_string("\\q"))
+            self.assertTrue(_bare_literal_is_valid_json_string(b"\\" + esc.encode("ascii")))
+        self.assertFalse(_bare_literal_is_valid_json_string(b"\\q"))
 
     def test_unicode_escape_fixture_agrees_with_json_and_flips_under_corruption(self) -> None:
-        self.assertTrue(_bare_literal_is_valid_json_string("\\u4Fa0z"))
-        # Wrong version: a non-hex byte at each position, one at a time.
+        self.assertTrue(_bare_literal_is_valid_json_string(b"\\u4Fa0z"))
         for position in range(4):
             digits = ["4", "F", "a", "0"]
             digits[position] = "g"
-            self.assertFalse(_bare_literal_is_valid_json_string("\\u" + "".join(digits)))
-        # Wrong version: only three hex digits (an incomplete escape).
-        self.assertFalse(_bare_literal_is_valid_json_string("\\u4Fa"))
+            self.assertFalse(_bare_literal_is_valid_json_string(("\\u" + "".join(digits)).encode("ascii")))
+        self.assertFalse(_bare_literal_is_valid_json_string(b"\\u4Fa"))
 
     def test_crossing_fixture_agrees_with_json_and_flips_under_corruption(self) -> None:
-        self.assertTrue(_bare_literal_is_valid_json_string("lo"))
-        # Wrong version: an unescaped, unpaired backslash at the crossing point.
-        self.assertFalse(_bare_literal_is_valid_json_string("lo\\"))
+        self.assertTrue(_bare_literal_is_valid_json_string(b"lo"))
+        self.assertFalse(_bare_literal_is_valid_json_string(b"lo\\"))
+
+    def test_literal_crossing_fixture_agrees_with_json_and_flips_under_corruption(self) -> None:
+        self.assertTrue(_bare_literal_is_valid_json_string(b"x"))
+        # Wrong version: an unescaped bare quote inside the content, breaking the string early.
+        self.assertFalse(_bare_literal_is_valid_json_string(b'x"y'))
 
     def test_control_byte_fixtures_agree_with_json_and_flip_under_correction(self) -> None:
         for code in (0x00, 0x01, 0x08, 0x1F):
-            raw = chr(code)
-            self.assertFalse(_bare_literal_is_valid_json_string("a" + raw))
-        # Wrong version, corrected: the SAME byte, properly escaped, is valid.
-        self.assertTrue(_bare_literal_is_valid_json_string("a\\u0001"))
+            raw = bytes([code])
+            self.assertFalse(_bare_literal_is_valid_json_string(b"a" + raw))
+        self.assertTrue(_bare_literal_is_valid_json_string(b"a\\u0001"))
 
     def test_rejection_group_reference_keyword_text_is_specific(self) -> None:
-        # Pins that this file's own maxLength assertion could actually fail: a message
-        # naming "string" instead of "maxLength" (today's real message, captured at
-        # authoring time) does NOT satisfy the assertion the cell above makes.
         today_message = (
             "unsupported construct at $.f: type 'string' is outside D-SLM45's compilable "
-            "subset (objects with known keys, enums, booleans; cross-field constraints are "
-            "scored, not compiled)"
+            "subset (objects with known keys, enums, booleans, unbounded free-text strings; "
+            "cross-field constraints are scored, not compiled)"
         )
         self.assertNotIn("maxLength", today_message)
 
