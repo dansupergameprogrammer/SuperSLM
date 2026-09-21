@@ -324,8 +324,14 @@ class T2908_RealVocabularyFragmentReachability(unittest.TestCase):
 # `t2899_string_leaf_red.py`'s rejection group).
 # ================================================================================================
 
-_EXTRA_KEYWORDS = ["minLength", "pattern", "format", "const", "title", "description", "default",
-                   "examples", "multipleOf"]
+# TE-370 S1 (T-2916): `title`, `description`, `default` and `examples` are non-constraining
+# JSON-Schema annotation keywords -- they were wrongly included here as must-reject (this
+# generalized allowlist check does not distinguish "unimplemented constraint" from "not a
+# constraint at all"), and 1.5.0 always compiled schemas carrying them. Moved to
+# `t2916_s1_keyword_allowlist_red.py::T2916_S1_AnnotationKeywordsAcceptedEverywhere`, which pins
+# ACCEPTANCE across every branch shape instead. Only genuinely constraining, unimplemented
+# keywords stay here as must-reject.
+_EXTRA_KEYWORDS = ["minLength", "pattern", "format", "const", "multipleOf"]
 
 
 class T2908_KeywordAllowlistGroup(unittest.TestCase):
