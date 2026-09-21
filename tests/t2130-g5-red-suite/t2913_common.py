@@ -22,7 +22,9 @@ from __future__ import annotations
 import functools
 import importlib.util
 import struct
+import subprocess
 import sys
+import types
 from pathlib import Path
 from typing import Any
 
@@ -190,6 +192,72 @@ def real_byte_vocab_zeroed() -> list[bytes]:
     tokenizer special ids zeroed to an empty piece before the trie is built."""
     ref = reference_t2910()
     return ref.zero_special_ids(list(real_raw_vocab()), real_special_ids())
+
+
+@functools.lru_cache(maxsize=1)
+def reference_v150():
+    """The `v1.5.0`-tagged `tools/sslm_convert_schema.py`, loaded straight from THIS repo's own
+    git history via `git show` -- never a scratch-file copy -- so this suite carries no
+    out-of-repo input (T-2916/M1: the same bar TE-370's M1 finding sets for the GPU mutant
+    suites, applied here to the one Python-side reference this fold needs). `git show` reads a
+    committed object; a fresh clone of this repo has it. Executed once per process and cached;
+    the module is built with `exec()` against a synthetic module object, so no temp file is
+    written to disk at all.
+
+    v1.5.0 predates T-2908's byte-level port (`compile_schema_to_mask_pages` there takes
+    `Sequence[str]`, not `Sequence[bytes]`) and predates the S1 regression entirely -- it is the
+    GREEN oracle for T-2916's S1 cells (`{"type":"string","enum":[...]}`, annotation keywords),
+    which 1.5.0 always compiled and 0062c99 wrongly rejects."""
+    source = subprocess.run(
+        ["git", "-C", str(_ENGINE_ROOT), "show", "v1.5.0:tools/sslm_convert_schema.py"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    if not source.strip():
+        raise RuntimeError("git show v1.5.0:tools/sslm_convert_schema.py returned empty output")
+    module = types.ModuleType("_t2916_ref_v150")
+    exec(compile(source, "v1.5.0:tools/sslm_convert_schema.py", "exec"), module.__dict__)
+    return module
+
+
+# --- T-2916's generic pre-fix/post-fix mutant harness -------------------------------------------
+#
+# C1/S1/S2 pin a fix that T-2917 (the builder) lands AFTER this suite is authored (red-first).
+# Rather than inventing a candidate implementation of that fix to mutate (which would let this
+# suite's own guess of the mechanism substitute for the design), the "wrong version" required by
+# the mutation-proof discipline (StandardsDocument.md Sec5.4, Curie's "pin the documented claim")
+# is simply named directly: the shipped module AS IT STANDS AT 0062c99, the commit TE-370 reviewed
+# and ruled DO NOT SHIP over exactly these findings. `frozen_module` loads any tracked file from
+# any commit-ish via `git show` (a committed object -- no out-of-repo input, same bar M1 sets for
+# the GPU mutant suites). `fix_has_landed` tells a cell whether HEAD still equals that known-bad
+# commit for the file in question, so a cell run before T-2917 lands reports "pending", never a
+# fabricated pass or a silent skip.
+
+
+@functools.lru_cache(maxsize=None)
+def frozen_module(commit_ish: str, repo_relative_path: str):
+    """Load `repo_relative_path` as it read at `commit_ish`, via `git show` against this repo's
+    own history -- never a scratch-file copy. Cached per (commit, path)."""
+    source = subprocess.run(
+        ["git", "-C", str(_ENGINE_ROOT), "show", f"{commit_ish}:{repo_relative_path}"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    if not source.strip():
+        raise RuntimeError(f"git show {commit_ish}:{repo_relative_path} returned empty output")
+    module = types.ModuleType(f"_t2916_frozen_{commit_ish}_{repo_relative_path.replace('/', '_')}")
+    exec(compile(source, f"{commit_ish}:{repo_relative_path}", "exec"), module.__dict__)
+    return module
+
+
+def fix_has_landed(commit_ish: str, repo_relative_path: str) -> bool:
+    """True once the shipped file at HEAD differs from its content at `commit_ish` -- i.e. once a
+    fix has actually landed on top of the known-bad commit. False means the mutant proof below is
+    not yet meaningful (there is no delta to discriminate) and must report PENDING, not PASS."""
+    frozen = subprocess.run(
+        ["git", "-C", str(_ENGINE_ROOT), "show", f"{commit_ish}:{repo_relative_path}"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    shipped = (_ENGINE_ROOT / repo_relative_path).read_text(encoding="utf-8")
+    return frozen != shipped
 
 
 def single_byte_token_ids(vocab: list[bytes]) -> dict[int, int]:
