@@ -248,9 +248,14 @@ struct Census {
 		size_t got = need;
 		Setup_(need > 4 && sslm_gpu_seq_save(fx.ctx, seq, blob.data(), &got) == SSLM_OK, "M15", "save");
 		ExpectFrame("M15a save (source sequence)", ReadVerb(fx, seq), FP);
-		// Row 9, stated not changed: the blob format stays v4 (magic 'SLM4', gpu_1p0.h Sec4.2).
-		CHECK_MSG(got >= 4 && std::memcmp(blob.data(), "SLM4", 4) == 0,
-		          "[%s] M15: the save blob no longer starts with the v4 magic 'SLM4'", tag);
+		// Row 9, stated not changed BY THIS PLAN: the read verb adds no blob writer of its own.
+		// T-2905 landed a concurrent, unrelated format bump (T-2895/D-SLM7572, closing TE-362): every
+		// fresh save now writes 'SLM5' (the v4 header plus a twelve-byte bound_schema_index/
+		// dfa_walk_state/ready_for_logits tail); an old 'SLM4' blob still restores unchanged. This
+		// cell saves fresh, so 'SLM5' is now the correct magic -- corrected here (T-2906), not a
+		// row-11 mutant target.
+		CHECK_MSG(got >= 4 && std::memcmp(blob.data(), "SLM5", 4) == 0,
+		          "[%s] M15: a fresh save blob no longer starts with the v5 magic 'SLM5'", tag);
 		SslmGpuSequenceHandle* restored = nullptr;
 		Setup_(sslm_gpu_seq_restore(fx.ctx, fx.model, blob.data(), got, &restored) == SSLM_OK && restored, "M15",
 		       "restore");
@@ -357,6 +362,7 @@ void RunOn(const std::string& path, const char* flag, SslmGpuContext* ctx) {
 }  // namespace
 
 int main(int argc, char** argv) {
+	RunAsLegDriverIfRequested(argc, argv, "cell_census_lifetime");
 	ParseFixtureArgs(argc, argv);
 	SslmGpuContext* ctx = nullptr;
 	if (sslm_gpu_context_create(GpuContextConfig{}, &ctx) != SSLM_OK || !ctx) {

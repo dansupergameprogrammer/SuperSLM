@@ -135,6 +135,7 @@ void GuardRefusal(SslmGpuContext* ctx) {
 }  // namespace
 
 int main(int argc, char** argv) {
+	RunAsLegDriverIfRequested(argc, argv, "cell_final_norm_guard");
 	ParseFixtureArgs(argc, argv);
 	if (g_synthetic_path.empty() || g_a2fn_path.empty()) {
 		SKIP_MSG("the final-norm guard cell needs --synthetic=PATH and --a2fn=PATH");

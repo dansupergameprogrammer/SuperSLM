@@ -256,6 +256,7 @@ Frame ControlRead(const std::string& path, const std::vector<int32_t>& ids, cons
 }  // namespace
 
 int main(int argc, char** argv) {
+	RunAsLegDriverIfRequested(argc, argv, "cell_prompt_guard_status");
 	ParseFixtureArgs(argc, argv);
 	if (g_synthetic_path.empty() || g_gan_path.empty()) {
 		SKIP_MSG("the prompt-twin guard-status cell needs --synthetic=PATH and --gan=PATH");

@@ -25,8 +25,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <sstream>
 #include <string>
 #include <vector>
+
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
 
 #include "superslm/checked_chain_funnel.h"  // superslm::CarriedScale
 #include "superslm/forward_sites.h"         // RmsNormSite, LogitsSite, EmbedEntry, RunLayerLoop
@@ -154,6 +159,116 @@ inline void ParseFixtureArgs(int argc, char** argv) {
 		else if (const char* v = take("--commission=")) g_commission_path = v;
 		else if (const char* v = take("--schema=")) g_schema_name = v;
 	}
+}
+
+// T-2906 (Curie) -- the self-relaunching --cells=/--repeat= leg protocol run_fullcopy_mutants.ps1's
+// Run-Cell requires of the -Cell it drives (T-2905: no cell in this suite implemented it, which
+// left every row-11 mutant unscoreable through the runner). Every cell in this suite is exactly
+// one leg, named for itself (own_leg). Call this FIRST in main(), before any real work: when argv
+// carries neither --cells= nor --repeat=, it returns false and the cell runs exactly as it always
+// has. When both are present it never returns -- for each of --repeat=<n> runs of each named leg
+// (this suite's cells recognize only own_leg; any other name is the caller's error) it relaunches
+// THIS SAME EXECUTABLE with the original argv minus --cells=/--repeat=, captures the child's
+// stdout+stderr, and prints exactly one line the runner's own regex parses:
+//   LEG <leg> run=<i> exit=<n> summary=<present|absent> -> PASS|FAIL|CRASH
+// A clean exit (0 or 1) whose captured output carries FinishSuite's own "<name>: checks=... ->
+// PASS|FAIL" line is scored PASS/FAIL from that line; anything else -- a crash, an unhandled
+// exception, or a process that printed no summary at all -- is CRASH (T-2834 F2's "an abnormal
+// exit or a missing summary line is scored red", enforced here since the runner sees only this
+// text). The child's own FAIL lines are echoed (indented) so the runner's -Expect substring match
+// and a human reader both see which check actually failed.
+inline bool RunAsLegDriverIfRequested(int argc, char** argv, const char* own_leg) {
+	std::string cells_arg, repeat_arg;
+	std::vector<std::string> passthrough;
+	for (int i = 1; i < argc; ++i) {
+		const std::string a = argv[i];
+		if (a.compare(0, 8, "--cells=") == 0) { cells_arg = a.substr(8); continue; }
+		if (a.compare(0, 9, "--repeat=") == 0) { repeat_arg = a.substr(9); continue; }
+		passthrough.push_back(a);
+	}
+	if (cells_arg.empty() && repeat_arg.empty()) return false;  // ordinary, single-shot invocation
+
+	std::vector<std::string> legs;
+	{
+		std::string cur;
+		for (char c : cells_arg) {
+			if (c == ',') { if (!cur.empty()) legs.push_back(cur); cur.clear(); }
+			else cur += c;
+		}
+		if (!cur.empty()) legs.push_back(cur);
+	}
+	const int repeat = repeat_arg.empty() ? 1 : std::atoi(repeat_arg.c_str());
+
+	char self_path[MAX_PATH] = {};
+	GetModuleFileNameA(nullptr, self_path, MAX_PATH);
+
+	for (const std::string& leg : legs) {
+		if (leg != own_leg) {
+			std::printf("LEG %s run=1 exit=%d summary=absent -> CRASH\n", leg.c_str(), -1);
+			std::printf("  UNKNOWN LEG: this cell is only its own leg, \"%s\"\n", own_leg);
+			continue;
+		}
+		for (int run = 1; run <= repeat; ++run) {
+			std::string cmdline = "\"" + std::string(self_path) + "\"";
+			for (const std::string& a : passthrough) cmdline += " \"" + a + "\"";
+
+			SECURITY_ATTRIBUTES sa{};
+			sa.nLength = sizeof(sa);
+			sa.bInheritHandle = TRUE;
+			HANDLE read_pipe = nullptr, write_pipe = nullptr;
+			CreatePipe(&read_pipe, &write_pipe, &sa, 0);
+			SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0);
+
+			STARTUPINFOA si{};
+			si.cb = sizeof(si);
+			si.dwFlags = STARTF_USESTDHANDLES;
+			si.hStdOutput = write_pipe;
+			si.hStdError = write_pipe;
+			si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+			PROCESS_INFORMATION pi{};
+
+			std::vector<char> mutable_cmdline(cmdline.begin(), cmdline.end());
+			mutable_cmdline.push_back('\0');
+			const BOOL ok = CreateProcessA(nullptr, mutable_cmdline.data(), nullptr, nullptr, TRUE, 0,
+			                               nullptr, nullptr, &si, &pi);
+			CloseHandle(write_pipe);
+			std::string captured;
+			if (ok) {
+				char buf[4096];
+				DWORD n = 0;
+				while (ReadFile(read_pipe, buf, sizeof(buf), &n, nullptr) && n > 0) {
+					captured.append(buf, n);
+				}
+			}
+			CloseHandle(read_pipe);
+			DWORD exit_code = 0xFFFFFFFFu;
+			if (ok) {
+				WaitForSingleObject(pi.hProcess, INFINITE);
+				GetExitCodeProcess(pi.hProcess, &exit_code);
+				CloseHandle(pi.hProcess);
+				CloseHandle(pi.hThread);
+			}
+			const bool have_summary = captured.find(": checks=") != std::string::npos &&
+			                           (captured.find("-> PASS") != std::string::npos ||
+			                            captured.find("-> FAIL") != std::string::npos);
+			const char* verdict = "CRASH";
+			if (have_summary && exit_code == 0) verdict = "PASS";
+			else if (have_summary && exit_code == 1) verdict = "FAIL";
+			std::printf("LEG %s run=%d exit=%lu summary=%s -> %s\n", leg.c_str(), run,
+			            static_cast<unsigned long>(exit_code),
+			            have_summary ? "present" : "absent", verdict);
+			if (!captured.empty()) {
+				std::istringstream iss(captured);
+				std::string line;
+				while (std::getline(iss, line)) {
+					if (line.rfind("FAIL ", 0) == 0 || line.find(": checks=") != std::string::npos) {
+						std::printf("  %s\n", line.c_str());
+					}
+				}
+			}
+		}
+	}
+	std::exit(0);
 }
 
 inline const char* StatusName(SslmGpuStatus s) {

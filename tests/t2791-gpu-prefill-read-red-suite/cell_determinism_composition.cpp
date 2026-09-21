@@ -198,6 +198,7 @@ void RunOn(const std::string& path, const char* flag, SslmGpuContext* ctx) {
 }  // namespace
 
 int main(int argc, char** argv) {
+	RunAsLegDriverIfRequested(argc, argv, "cell_determinism_composition");
 	ParseFixtureArgs(argc, argv);
 	SslmGpuContext* ctx = nullptr;
 	if (sslm_gpu_context_create(GpuContextConfig{}, &ctx) != SSLM_OK || !ctx) {

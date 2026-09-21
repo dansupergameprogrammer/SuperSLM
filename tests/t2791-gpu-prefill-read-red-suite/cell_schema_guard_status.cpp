@@ -141,6 +141,7 @@ SchemaRun Drive(GpuModelFixture& fx, SslmGpuSequenceHandle* s, int32_t idx, cons
 }  // namespace
 
 int main(int argc, char** argv) {
+	RunAsLegDriverIfRequested(argc, argv, "cell_schema_guard_status");
 	ParseFixtureArgs(argc, argv);
 	if (g_g5_path.empty() || g_g5an_path.empty()) {
 		SKIP_MSG("Q5-1 needs --g5fixture=PATH and --g5an=PATH");
