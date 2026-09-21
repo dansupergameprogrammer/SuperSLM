@@ -3,11 +3,14 @@ named mutants, and the commissioned answer-value oracle's own re-confirmation. S
 T-2911's token-local structural-close blacklist (deleted, not retained as a second guard --
 V3/V4 below prove it contributes no accepted-language closure).
 
-RED BY BEHAVIOUR. This branch's own `tools/sslm_convert_schema.py` has no value-level concept at
-all: its content self-loop admits every legal JSON-string byte identically regardless of what the
-decoded value so far contains, so a value made SOLELY of JSON punctuation and whitespace closes
-exactly as readily as a real answer. This is the exact class TE-368 fractured T-2911 on, and it
-is live on this branch by construction, not by a narrower or superseded design.
+STATUS (T-2915: the compiler port landed). This branch's own `tools/sslm_convert_schema.py` now
+carries T-2912's own U/M value-level closure: a decoded value made SOLELY of JSON punctuation and
+whitespace cannot close, on the branch exactly as on the reference. V2/V3 below confirm this
+directly, over the branch's own real vocabulary (`t2913_common.real_red_mask_pages`, now compiled
+byte-level like the reference). The three required mutants (dropping U's own close guard,
+admitting specials, relaxing opening strictness) are checked against the reference chain, per the
+plan's own Sec3.9.3 -- unaffected by which module "branch" resolves to, since a mutant
+characterizes the DESIGN's own defect class, not a live divergence from the branch.
 
 GREEN oracle: the T-2912 reference compiler (`Claude/Vitruvius/t2912-probe/
 sslm_convert_schema_value_level.py`), loaded via `t2913_common.reference_t2912()`.
@@ -16,8 +19,11 @@ V1 and V5 run the REAL A-EX artifact through the real, unmodified TE-366 C++ har
 (`D:/_te368/probe/te368_schema_run.exe`, the CPU decode path both R-T2853a/R-T2853b already
 adopt) -- genuine live decode, not a proxy. V5 additionally reuses T-2912's own pre-registered,
 hashed heldout prompts and its commissioned `T2912-answer-value-oracle` UNALTERED (the brief's
-hard rule). Both cells build the RED artifact locally and verify the pinned GREEN artifact's own
-SHA-256 before using it, so a drifted or missing artifact fails loudly rather than silently.
+hard rule). Both cells build the branch's own artifact locally (`_build_red_artifact`, now the
+SAME production compiler and vocabulary producer the reference chain's own construction uses)
+and verify the pinned GREEN artifact's own SHA-256 before using it, so a drifted or missing
+artifact fails loudly rather than silently; both are now expected to agree, which V1/V5 confirm
+by execution rather than by assuming the port is complete.
 
 Filtered/capped reads only in every helper below -- no raw token lists, byte/hex dumps, or bulk
 model-output prints; only counts, short verdicts, and small named examples.
@@ -113,42 +119,36 @@ def _green_completes(content: bytes, tail: bytes = b"") -> bool:
 
 @lru_cache(maxsize=1)
 def _red_states():
+    """T-2915 (the compiler port landed): the branch now carries the identical U/M value-level
+    closure the reference does (`_green_states`, above) -- mirrored here over the branch's own
+    unzeroed real vocabulary (`common.real_red_mask_pages`) rather than duplicated by a separate
+    single-content-state walk, since the branch is no longer a single-content-state design."""
     mp = common.real_red_mask_pages()
-    vocab = common.real_str_vocab()
-    single = common.single_char_token_ids(vocab)
-    pre_value = common.walk_literal(mp, vocab, mp.start, _PREFIX.decode("ascii"))
-    quote_id = single['"']
-    s_c = mp.transitions[pre_value][quote_id]
-    return mp, vocab, single, pre_value, s_c
-
-
-def _walk_single_chars(mp, single: dict[str, int], state: int, data: bytes) -> int | None:
-    for byte_val in data:
-        char = chr(byte_val)
-        token_id = single.get(char)
-        if token_id is None or token_id not in mp.transitions.get(state, {}):
-            return None
-        state = mp.transitions[state][token_id]
-    return state
+    vocab = common.real_raw_vocab()
+    single = common.single_byte_token_ids(vocab)
+    pre_value = common.walk_literal(mp, vocab, mp.start, _PREFIX)
+    u_state = mp.transitions[pre_value][single[0x22]]
+    m_state = mp.transitions[u_state][single[ord("A")]]
+    return mp, vocab, single, pre_value, u_state, m_state
 
 
 def _red_completes(content: bytes, tail: bytes = b"") -> bool:
-    """RED has no value-level distinction (a single content state), so this is a plain
-    admit-then-close walk -- included so V2/V4's RED contrast is measured the same way GREEN's
-    is, not asserted from the design description alone. Mirrors `_green_completes`'s own
-    content/close/tail/close shape."""
-    mp, _vocab, single, _pre_value, s_c = _red_states()
-    state = _walk_single_chars(mp, single, s_c, content)
+    """Mirrors `_green_completes`'s own content/close/tail/close shape exactly, over the
+    branch's own real vocabulary (unzeroed) -- included so V2/V4's branch-vs-reference
+    agreement is measured the same way on both sides, not asserted from the design description
+    alone."""
+    mp, _vocab, single, _pre_value, u_state, _m_state = _red_states()
+    state = _walk_single_bytes(mp, single, u_state, content)
     if state is None:
         return False
-    quote_id = single['"']
+    quote_id = single[0x22]
     if quote_id not in mp.transitions.get(state, {}):
         return False
     state = mp.transitions[state][quote_id]
-    state = _walk_single_chars(mp, single, state, tail)
+    state = _walk_single_bytes(mp, single, state, tail)
     if state is None:
         return False
-    close_id = single["}"]
+    close_id = single[0x7D]
     if close_id not in mp.transitions.get(state, {}):
         return False
     state = mp.transitions[state][close_id]
@@ -161,11 +161,12 @@ def _red_completes(content: bytes, tail: bytes = b"") -> bool:
 
 
 class T2912_V2_CompleteClassCensus(unittest.TestCase):
-    def test_punctuation_only_value_admitted_on_branch_refused_on_reference(self) -> None:
-        self.assertTrue(
+    def test_punctuation_only_value_refused_on_branch_and_reference(self) -> None:
+        """T-2915 (the compiler port landed): a bare '{' is refused as a complete string value
+        on both the branch and the reference -- the class T-2912 closes."""
+        self.assertFalse(
             _red_completes(b"{"),
-            "regression: the branch no longer admits a bare '{' as a complete string value -- "
-            "this cell needs that (wrong) admission to demonstrate the class T-2912 closes",
+            "a punctuation-only value ('{') is wrongly closable on the branch",
         )
         self.assertFalse(
             _green_completes(b"{"),
@@ -173,19 +174,15 @@ class T2912_V2_CompleteClassCensus(unittest.TestCase):
         )
 
     def test_te368_structural_only_values_length_one_to_three(self) -> None:
-        """Sec3.9.3's own executed figure: 0 of 84 accepted on the reference."""
+        """Sec3.9.3's own executed figure: 0 of 84 accepted, now on both branch and reference."""
         population = list(itertools.chain.from_iterable(
             itertools.product(b"{},:", repeat=length) for length in (1, 2, 3)
         ))
         self.assertEqual(len(population), 84)
         green_accepted = sum(_green_completes(bytes(value)) for value in population)
         red_accepted = sum(_red_completes(bytes(value)) for value in population)
-        self.assertEqual(green_accepted, 0, f"{green_accepted} of 84 structural-only values wrongly closable")
-        self.assertGreater(
-            red_accepted, 0,
-            "the branch admits zero of these on its own -- this cell needs at least some to "
-            "demonstrate the branch has no value-level restriction at all",
-        )
+        self.assertEqual(green_accepted, 0, f"{green_accepted} of 84 structural-only values wrongly closable on reference")
+        self.assertEqual(red_accepted, 0, f"{red_accepted} of 84 structural-only values wrongly closable on the branch")
 
 
 # ================================================================================================
@@ -223,10 +220,11 @@ class T2912_V3_SplitPaths(unittest.TestCase):
             green_completed += int(_green_completes(content, tail))
             red_completed += int(_red_completes(content, tail))
         self.assertEqual(green_completed, 0, f"{green_completed} of 8 split paths wrongly complete on reference")
-        self.assertGreater(
+        self.assertEqual(
             red_completed, 0,
-            "the branch admits zero of these split paths on its own -- this cell needs at "
-            "least some to demonstrate the branch has no value-level restriction at all",
+            f"{red_completed} of 8 split paths wrongly complete on the branch (T-2915: the "
+            "compiler port landed, so the branch now carries the identical value-level "
+            "closure the reference does)",
         )
 
 
@@ -333,11 +331,19 @@ def _build_red_artifact(out_path: Path) -> None:
     sys.path.insert(0, str(_ENGINE / "tools"))
     import sslm_format as fmt
     from t2132_build_g5_fixture import _serialize_scm1, _real_vocab
-    from sslm_convert_schema import compile_schema_to_mask_pages
+    from sslm_convert_schema import compile_schema_to_mask_pages, zero_special_ids
 
     config = fmt.read_section_bytes(str(common.A_EX_ARTIFACT), fmt.SectionType.CONFIG)
     (vocab_size,) = struct.unpack_from("<I", config, 32)
     vocab = _real_vocab(str(common.QWEN25_0P5B_CHECKPOINT), vocab_size)
+    # T-2910 (Sec3.9.1): a caller compiling a string-leaf schema must zero every tokenizer
+    # special/added id before the vocabulary reaches the compiler -- `_real_vocab` itself does
+    # not (correctly: `t2132_build_g5_fixture.py`'s own two schemas have no string leaf, so
+    # zeroing there would be a no-op; this schema, `_SCHEMA` (Prompt_Result), DOES have one).
+    # Found live: without this step, `_build_red_artifact`'s own output could select a special
+    # id as string content on the real engine, diverging from the properly-zeroed GREEN
+    # reference on some heldout prompts (V5, below) for a reason unrelated to the compiler port.
+    vocab = zero_special_ids(vocab, common.real_special_ids())
     mask_pages = compile_schema_to_mask_pages(_SCHEMA, vocab)
     scm1 = _serialize_scm1([("prompt_result", mask_pages)], vocab_size)
     header = fmt.read_header(str(common.A_EX_ARTIFACT))
@@ -355,7 +361,12 @@ def _build_red_artifact(out_path: Path) -> None:
 
 
 class T2912_V1_TE368Prompt01(unittest.TestCase):
-    def test_red_artifact_produces_a_non_answer_on_the_real_engine(self) -> None:
+    def test_branch_artifact_answers_te368_prompt_01_on_the_real_engine(self) -> None:
+        """T-2915 (the compiler port landed): executed fresh against real hardware and the real
+        A-EX model, the branch's own artifact (built by the SAME production compiler and
+        vocabulary producer T-2915 ported) now answers TE-368 prompt 01, matching the T-2912
+        reference exactly -- confirmed by execution, not assumed from the port's own static
+        agreement with the reference (V2-V4, above)."""
         _require_engine_artifacts()
         te368_prompts_path = common.RECORDS_ROOT / "Claude" / "Loki" / "te368-probe" / "te368_prompts.json"
         prompts = json.loads(te368_prompts_path.read_bytes().decode("utf-8-sig"))
@@ -378,11 +389,9 @@ class T2912_V1_TE368Prompt01(unittest.TestCase):
         red_run = _run_harness(red_artifact, prompt_ids_path)
         red_value, red_special = _decode_value(red_run["ids"], forced_prefix=False)
         oracle = common.reference_oracle()
-        self.assertFalse(
+        self.assertTrue(
             oracle.is_answer(red_value, red_special),
-            f"regression: the branch's own artifact now answers TE-368 prompt 01 ({red_value!r}) "
-            "-- this cell needs the known non-answer defect to reproduce for the reference "
-            "comparison below to mean anything",
+            f"the branch's own artifact must answer TE-368 prompt 01; got {red_value!r}",
         )
 
         green_run = _run_harness(_GREEN_ARTIFACT, prompt_ids_path)
@@ -492,10 +501,10 @@ class T2912_V5_HeldoutCensus(unittest.TestCase):
         green_free_answers = sum(grade(run, False) for run in green_free)
         green_control_answers = sum(grade(run, True) for run in green_control)
 
-        self.assertLess(
+        self.assertEqual(
             red_answers, 40,
-            "the branch answers all 40 heldout prompts -- this cell needs at least one "
-            "grammar-induced non-answer to demonstrate the branch's own defect",
+            "the branch's own artifact must answer all 40 heldout prompts, matching the "
+            "T-2912 reference (T-2915: the compiler port landed)",
         )
         self.assertEqual(green_free_answers, 40, "the T-2912 reference must answer all 40 heldout prompts")
         self.assertEqual(green_control_answers, 40, "the forced-canonical control must answer all 40 prompts")

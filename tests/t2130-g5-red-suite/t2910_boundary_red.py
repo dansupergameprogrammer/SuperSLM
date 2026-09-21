@@ -2,12 +2,13 @@
 asymmetric value-close cell, and the special-token-exclusion cell, folding TE-366's FRACTURE
 (D-SLM7586) -- "tokens that cross a structural boundary into or out of free-text content."
 
-RED BY BEHAVIOUR. This branch's own `tools/sslm_convert_schema.py`'s `_token_targets` takes no
-`content_states` parameter at all (confirmed at authoring time: `def _token_targets(dfa, state,
-root)`), so it applies NO region discipline whatsoever -- a vocabulary token may cross into or
-out of the string leaf's content sub-automaton from any depth, in either direction, and nothing
-excludes the tokenizer's special/control ids from content. TE-366 demonstrated this is live on
-the real A-EX artifact: 16 of 40 real prompts returned a value that was not the model's answer.
+STATUS (T-2915: the compiler port landed). This branch's own `tools/sslm_convert_schema.py`'s
+`_token_targets` now carries the `content_states` parameter and T-2910's own open-side region
+discipline: a vocabulary token may enter the string leaf's content sub-automaton only at depth
+0. The value-open cell below confirms the branch now agrees with the reference, with a mutant
+that disables the branch's own restriction to reproduce TE-366's fracture (16 of 40 real prompts
+returned a value that was not the model's answer) on demand. The value-close and special-token
+cells were already unrestricted/uninvolved on both sides and stay so.
 
 GREEN oracle: T-2910's own reference compiler (`Claude/Vitruvius/t2910-probe/
 sslm_convert_schema_bytelevel_boundary.py`), loaded via `t2913_common.reference_t2910()`. Its own
@@ -32,6 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import t2913_common as common
+import tools.sslm_convert_schema as branch_module
 from tools.sslm_convert_schema import compile_schema_to_mask_pages
 
 _SCHEMA = common.PROMPT_RESULT_SCHEMA
@@ -90,17 +92,52 @@ def _locate_pre_value_and_content(module, vocab: list[bytes]):
 
 
 class T2910_ValueOpen(unittest.TestCase):
-    def test_compound_open_token_wrongly_admitted_on_the_branch(self) -> None:
-        # A single vocabulary token spelling the opening quote PLUS a content byte in one piece
-        # (the packet's own `lo"`-shape reused at the open boundary) must be refused once the
-        # boundary discipline lands; the branch has no such discipline and admits it today.
-        vocab = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "a", '"a']
+    def test_compound_open_token_refused_on_the_branch(self) -> None:
+        """T-2915 (the compiler port landed): a single vocabulary token spelling the opening
+        quote PLUS a content byte in one piece (the packet's own `lo"`-shape reused at the open
+        boundary) is now refused on the branch, exactly as on the reference (the sibling
+        `test_compound_open_token_refused_on_reference`, same technique)."""
+        vocab = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"a", b'"a']
+        _, pre_value, _s_c, _content = _locate_pre_value_and_content(branch_module, vocab)
         mp = compile_schema_to_mask_pages(_SCHEMA, vocab)
-        full = '{"Prompt_Result":"a"}'
+        admitted = mp.transitions[pre_value]
+        admitted_pieces = {vocab[tid] for tid in admitted}
+        self.assertEqual(
+            admitted_pieces, {b'"'},
+            "the value-open state must admit exactly the bare boundary byte, and nothing else",
+        )
+
+    def test_mutant_no_boundary_discipline_reproduces_admission_on_the_branch(self) -> None:
+        """The pre-port defect, reproduced on the branch by disabling its own open-side
+        restriction (forcing `depth != 0` never to fire), not assumed: a compound open+content
+        token is admitted once the restriction is gone, exactly the shape TE-366 fractured."""
+        vocab = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"a", b'"a']
+        original_token_targets = branch_module._token_targets
+
+        def no_open_discipline(dfa, state, root, content_states):
+            targets: dict[int, int] = {}
+            stack = [(root, state)]
+            while stack:
+                node, current = stack.pop()
+                if node.token_id is not None:
+                    targets[node.token_id] = current
+                row = dfa[current]
+                for byte_val, child in node.children.items():
+                    target = row.get(byte_val)
+                    if target is not None:
+                        stack.append((child, target))
+            return targets
+
+        branch_module._token_targets = no_open_discipline
+        try:
+            mp = compile_schema_to_mask_pages(_SCHEMA, vocab)
+        finally:
+            branch_module._token_targets = original_token_targets
+        full = b'{"Prompt_Result":"a"}'
         self.assertTrue(
             mp.accepts(full),
-            "regression: the branch no longer admits a compound open+content token -- this cell "
-            "needs that (wrong) admission to demonstrate the defect T-2910 fixes",
+            "with the open-side restriction disabled, the branch must reproduce the pre-port "
+            "compound open+content admission",
         )
 
     def test_compound_open_token_refused_on_reference(self) -> None:
@@ -168,8 +205,8 @@ class T2910_ValueClose(unittest.TestCase):
         # 'a."' -- content 'a.', then the closing quote, in one token: a genuine close-side
         # crossing, admitted on both the branch (no discipline at all) and the reference (the
         # close side is deliberately unrestricted).
-        vocab_red = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "a", ".", 'a."']
-        full = '{"Prompt_Result":"a."}'
+        vocab_red = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"a", b".", b'a."']
+        full = b'{"Prompt_Result":"a."}'
         self.assertTrue(compile_schema_to_mask_pages(_SCHEMA, vocab_red).accepts(full))
 
         ref = common.reference_t2910()
@@ -250,19 +287,22 @@ def _wrap(inner: bytes) -> bytes:
 
 
 class T2910_SpecialTokenExclusion(unittest.TestCase):
-    def test_special_token_reaches_content_on_the_branch(self) -> None:
-        # The branch has no producer-side special-id zeroing concept at the compiler level at
-        # all (`tools/t2132_build_g5_fixture.py::_real_vocab` performs no such zeroing today) --
-        # a "special" piece is just another vocabulary string and is admitted as ordinary
-        # content wherever its spelling is legal JSON content, exactly like any other piece.
-        special_piece = "<|im_end|>"
-        vocab = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "a", special_piece]
-        full = '{"Prompt_Result":"a' + special_piece + '"}'
+    def test_unzeroed_special_token_reaches_content_on_the_branch(self) -> None:
+        # By design (Sec3.9.1/Sec3.9.3), the compiler itself has no special-id concept at all --
+        # exclusion is a VOCABULARY transform (`zero_special_ids`) the caller applies before
+        # compiling, not a per-state carve-out in the DFA. A caller that skips that step (as the
+        # bare vocabulary here does) still gets an unzeroed "special"-shaped piece admitted as
+        # ordinary content wherever its spelling is legal JSON content, exactly like any other
+        # piece -- true on the branch both before and after T-2915's port, and the reason
+        # `zero_special_ids` must be called, not a defect in the compiler itself.
+        special_piece = b"<|im_end|>"
+        vocab = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"a", special_piece]
+        full = b'{"Prompt_Result":"a' + special_piece + b'"}'
         mp = compile_schema_to_mask_pages(_SCHEMA, vocab)
         self.assertTrue(
             mp.accepts(full),
-            "regression: the branch no longer admits an unzeroed special-shaped piece as "
-            "content -- this cell needs that admission to demonstrate the defect T-2910 fixes",
+            "an unzeroed special-shaped piece must still be admitted as content when the caller "
+            "has not called zero_special_ids -- the compiler itself does not auto-exclude",
         )
 
     def test_special_token_excluded_everywhere_on_reference(self) -> None:

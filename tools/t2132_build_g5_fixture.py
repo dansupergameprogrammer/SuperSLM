@@ -62,21 +62,27 @@ MINIMAL_ONE_FIELD_SCHEMA = {
 }
 
 
-def _real_vocab(ckpt_dir: str, vocab_size: int) -> list[str]:
-    """The real tokenizer's own per-token text, index == token id, padded/truncated to
-    `vocab_size` (CFG1's own declared width -- may exceed the tokenizer's own base+added vocab
-    count, the padded-vocabulary case this codebase already names, SSLM_TOKEN_ID_UNMAPPED). A
-    byte that fails to decode as UTF-8 on its own (a multi-byte BPE piece split across a
-    non-boundary) decodes with 'replace' -- imprecise, but the compiler only needs vocab pieces
-    to walk a DFA over ASCII structural/literal characters (every one of which IS a real,
-    correctly-decoding single-byte token in any byte-level BPE vocabulary by construction), so
-    imprecision on genuinely multi-byte pieces costs nothing this schema's own literal text ever
-    touches."""
+def _real_vocab(ckpt_dir: str, vocab_size: int) -> list[bytes]:
+    """The real tokenizer's own per-token bytes, undecoded, index == token id,
+    padded/truncated to `vocab_size` (CFG1's own declared width -- may exceed the
+    tokenizer's own base+added vocab count, the padded-vocabulary case this codebase already
+    names, SSLM_TOKEN_ID_UNMAPPED).
+
+    T-2908 (folding code review TE-365 S2): this function previously decoded each token's
+    raw bytes to `str` with `errors="replace"` before the compiler ever saw it, on the
+    premise that "the compiler only needs vocab pieces to walk a DFA over ASCII
+    structural/literal characters." T-2853's own free-text string leaf falsifies that
+    premise: a byte-level BPE token can be a fragment of a multi-byte UTF-8 sequence, and
+    the lossy decode collapsed every such fragment to the same replacement-character
+    spelling, making all but one byte-fragment id per collapsed spelling unreachable while
+    admitting the one that WAS reachable as an ordinary Unicode content character regardless
+    of what raw byte it actually contributes at decode time. `tools/sslm_convert_schema.py`
+    is now byte-level throughout (`Sequence[bytes]`, not `Sequence[str]`), so this function
+    returns each token's own undecoded bytes directly -- exact and lossless."""
     t = TokenizerTables(ckpt_dir)
     pieces = []
     for i in range(vocab_size):
-        raw = t.id_to_bytes[i] if i < len(t.id_to_bytes) else b""
-        pieces.append(raw.decode("utf-8", errors="replace"))
+        pieces.append(t.id_to_bytes[i] if i < len(t.id_to_bytes) else b"")
     return pieces
 
 

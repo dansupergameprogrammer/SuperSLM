@@ -73,7 +73,7 @@ def build_artifact_bytes():
     # One real compiled schema keeps the Phase D gate's mask-first composition live without a
     # checkpoint dependency. Token 0 spells the complete accepted document; the remaining
     # vocabulary entries are deliberately unrelated pieces.
-    vocab = ['{"ok":true}'] + [f"<unused-{i}>" for i in range(1, cfg.vocab_size)]
+    vocab = [b'{"ok":true}'] + [f"<unused-{i}>".encode("ascii") for i in range(1, cfg.vocab_size)]
     schema = {
         "type": "object",
         "properties": {"ok": {"type": "boolean"}},

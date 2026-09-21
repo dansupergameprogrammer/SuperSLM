@@ -188,11 +188,15 @@ def _reference_vocab(schemas: list[dict]) -> list[str]:
 	genuinely unsatisfiable schema (see the sibling class below,
 	G5_1_UnsatisfiableSchemaRejectionGuardVitality, which constructs one on purpose and requires
 	rejection) -- this fix only removes an unsatisfiability the FIXTURE was accidentally
-	introducing, it does not weaken what the compiler is required to catch."""
-	vocab: list[str] = list(sorted(set('{}",:_0123456789abcdefghijklmnopqrstuvwxyz')))
+	introducing, it does not weaken what the compiler is required to catch.
+
+	T-2915 (the compiler port landed): returns `list[bytes]`, not `list[str]` -- the compiler
+	is byte-level throughout (`Sequence[bytes]`); every literal this function builds is
+	ASCII-only schema text, so `.encode("ascii")` is exact and lossless."""
+	vocab: list[bytes] = [c.encode("ascii") for c in sorted(set('{}",:_0123456789abcdefghijklmnopqrstuvwxyz'))]
 	for s in schemas:
 		for lit in sorted(_schema_literals(s)):
-			piece = lit.strip('"').rstrip(":")
+			piece = lit.strip('"').rstrip(":").encode("ascii")
 			if piece and piece not in vocab:
 				vocab.append(piece)
 	return vocab
@@ -226,9 +230,11 @@ class G5_1_CompilerConformanceFuzz(unittest.TestCase):
 		pages = compile_schema_to_mask_pages(schema, vocab)
 		# ACCEPTS every string the schema admits: each canonical serialization walks the
 		# compiled DFA from start to an accepting state without ever hitting an empty mask.
+		# T-2915: the compiler is byte-level (`Sequence[bytes]`); every serialization here is
+		# ASCII-only schema text, so `.encode("ascii")` at the call site is exact and lossless.
 		for s in admitted:
 			self.assertTrue(
-				pages.accepts(s),  # type: ignore[attr-defined]
+				pages.accepts(s.encode("ascii")),  # type: ignore[attr-defined]
 				f"compiled DFA rejects an admitted serialization: {s!r}",
 			)
 		# REJECTS strings the schema does NOT admit: a single-character corruption of each
@@ -240,7 +246,7 @@ class G5_1_CompilerConformanceFuzz(unittest.TestCase):
 			if corrupted in admitted:
 				continue
 			self.assertFalse(
-				pages.accepts(corrupted),  # type: ignore[attr-defined]
+				pages.accepts(corrupted.encode("ascii")),  # type: ignore[attr-defined]
 				f"compiled DFA accepts a non-admitted corruption: {corrupted!r}",
 			)
 
@@ -314,7 +320,7 @@ class G5_1_UnsatisfiableSchemaRejectionGuardVitality(unittest.TestCase):
 				"field": {"enum": ["needs_a_z_character"]},
 			},
 		}
-		vocab_missing_z = list("abcdefghijklmnopqrstuvwxy0123456789{}\":,_")  # no 'z'
+		vocab_missing_z = [c.encode("ascii") for c in "abcdefghijklmnopqrstuvwxy0123456789{}\":,_"]  # no 'z'
 		with self.assertRaises(SchemaCompileError) as ctx:
 			compile_schema_to_mask_pages(unsatisfiable_schema, vocab_missing_z)
 		exc = ctx.exception
@@ -335,7 +341,7 @@ class G5_1_UnsatisfiableSchemaRejectionGuardVitality(unittest.TestCase):
 				"field": {"enum": ["needs_a_z_character"]},
 			},
 		}
-		vocab_with_z = list("abcdefghijklmnopqrstuvwxyz0123456789{}\":,_")
+		vocab_with_z = [c.encode("ascii") for c in "abcdefghijklmnopqrstuvwxyz0123456789{}\":,_"]
 		compile_schema_to_mask_pages(satisfiable_schema, vocab_with_z)  # must not raise
 
 

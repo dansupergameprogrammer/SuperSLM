@@ -11,17 +11,19 @@
 // vocabulary. The C39 synthetic (`g5_minimal_one_field`) cannot serve this cell -- it
 // compiles to 2 states and 1 transition, so its only non-start state IS the accepting
 // state Cell 1 already dead-ends at, with no interior state distinct from it (that
-// generator's own docstring; also this file's prior header comment, T-2900). The five
+// generator's own docstring; also this file's prior header comment, T-2900). The
 // meaningful vocabulary ids this cell drives (`kTok*` below) are reproduced from that
 // generator's own module constants, not re-derived independently -- the CPU twin
 // (`cell_cpu_deadend_retry_reset.cpp`'s `CpuCell2DegenerateRowTwin`) reads the identical
 // fixture and the identical ids.
 //
 // CONSTRUCTION. `ReachSe` prefills a prompt (three filler ids the schema's own DFA never
-// transitions on), binds schema index 0, then drives TWO real, admitted schema-content
-// transitions in two `SslmGpuSeqPrefillSchemaContentForG5Bridge` calls: `kTokOpen` (state 0
-// -> S_c, the literal prefix through the string's opening quote) and `kTokBackslash` (S_c ->
-// S_e) -- both ordinary, correct transitions the compiler's own DFA admits; neither is the
+// transitions on), binds schema index 0, then drives THREE real, admitted schema-content
+// transitions in one `SslmGpuSeqPrefillSchemaContentForG5Bridge` call: `kTokOpen` (state 0 ->
+// the pre-value literal state, the literal prefix up to the key's own colon), `kTokOpenQuote`
+// (-> S_c, T-2910's own depth-0-only opening -- the literal object skeleton and the value's
+// opening quote no longer share one vocabulary piece, T-2915) and `kTokBackslash` (S_c ->
+// S_e) -- all three ordinary, correct transitions the compiler's own DFA admits; none is the
 // degenerate-row construction. The resulting sequence rests at S_e with `layer_index == 0`/
 // `ready_for_logits == true` (the schema-content prefill's own documented postcondition,
 // identical to Cell 1's route R), so the next decode call reaches Finish directly over the
@@ -56,18 +58,23 @@ extern "C" void ArmGpuFinishDegenerateLogitRowInjection();
 namespace {
 
 // Token ids from `make_t2909_string_schema_fixture.py` (kept in lockstep with that
-// generator's own module constants TOK_OPEN/TOK_CONTENT/TOK_BACKSLASH/TOK_ESCAPE_N/
-// TOK_CLOSE).
+// generator's own module constants TOK_OPEN/TOK_OPEN_QUOTE/TOK_CONTENT/TOK_BACKSLASH/
+// TOK_ESCAPE_N/TOK_CLOSE/TOK_BRACE). T-2915 (porting the plan's final Sec3.9 design): T-2910's
+// boundary discipline refuses a token that opens the string's content sub-automaton past its
+// own first byte, so the generator's own literal object skeleton and the value's opening
+// quote no longer share one vocabulary piece -- reaching S_e now takes three fed tokens
+// (open, open-quote, backslash) rather than two.
 constexpr int32_t kTokOpen = 0;
-constexpr int32_t kTokBackslash = 2;
-constexpr int32_t kTokEscapeN = 3;
-constexpr int32_t kTokClose = 4;
-constexpr int32_t kFillerBase = 5;  // "<unused-N>" pieces: harmless prompt filler.
-constexpr int32_t kCallerToken = 6;  // the decode call's own caller-supplied token; ignored
+constexpr int32_t kTokOpenQuote = 1;
+constexpr int32_t kTokBackslash = 3;
+constexpr int32_t kTokEscapeN = 4;
+constexpr int32_t kTokClose = 5;
+constexpr int32_t kFillerBase = 7;  // "<unused-N>" pieces: harmless prompt filler.
+constexpr int32_t kCallerToken = 8;  // the decode call's own caller-supplied token; ignored
                                      // by the ready branch (schema-content prefill already
                                      // left ready_for_logits armed), matching Cell 1's route R.
 
-// Drives a fresh sequence to S_e (the escape state, prefix `{"Prompt_Result":"\`) via two
+// Drives a fresh sequence to S_e (the escape state, prefix `{"Prompt_Result":"\`) via three
 // real, admitted schema-content transitions from a fresh bind.
 SslmGpuSequenceHandle* ReachSe(const GpuModelFixture& fx) {
 	SslmGpuSequenceHandle* seq = nullptr;
@@ -77,14 +84,15 @@ SslmGpuSequenceHandle* ReachSe(const GpuModelFixture& fx) {
 	const std::vector<int32_t> P = {kFillerBase, kFillerBase + 1, kFillerBase + 2};
 	CHECK_MSG(Prefill(fx, seq, P) == SSLM_OK, "prompt prefill");
 	CHECK_MSG(SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, seq, 0) == SSLM_OK, "bind schema 0");
-	const std::vector<int32_t> content = {kTokOpen, kTokBackslash};
+	const std::vector<int32_t> content = {kTokOpen, kTokOpenQuote, kTokBackslash};
 	int32_t consumed = -1;
 	CHECK_MSG(SslmGpuSeqPrefillSchemaContentForG5Bridge(fx.ctx, seq, content.data(),
 	                                                    static_cast<int32_t>(content.size()),
 	                                                    fx.one_layer_budget,
 	                                                    &consumed) == SSLM_OK &&
 	              consumed == static_cast<int32_t>(content.size()),
-	          "schema-content prefill: open+backslash to reach S_e (consumed=%d)", consumed);
+	          "schema-content prefill: open+open-quote+backslash to reach S_e (consumed=%d)",
+	          consumed);
 	return seq;
 }
 

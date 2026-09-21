@@ -2,11 +2,16 @@
 cell, the lone-continuation-byte dead-end cell, and the real-vocabulary fragment-reachability
 cell -- plus Sec3.9.6's keyword-allowlist group (S3), folding TE-365 S2/S3.
 
-RED BY BEHAVIOUR. This branch's own `tools/sslm_convert_schema.py` operates on Python `str`
-(Unicode codepoints), not raw bytes: `_add_string_leaf`'s content branch is a single self-loop
-keyed by `chr(codepoint)` over the whole legal-scalar range, and `_groups()` names only
-`maxLength` in its string-leaf rejection surface. Confirmed at authoring time by reading the
-module (no `content_states`/byte-level construction anywhere in it).
+STATUS (T-2915: the compiler port landed). This branch's own `tools/sslm_convert_schema.py`
+now operates on raw bytes throughout: `_add_string_leaf`'s content sub-automaton is the
+byte-level UTF-8-validity construction, and `_groups()` carries the per-branch keyword
+allowlist. The structural UTF-8-validity cell (Cell 1) exercises the reference module directly
+(a property of the NEW byte-level content automaton this port introduces, checked against the
+one committed implementation rather than duplicated against the branch's own copy of the same
+construction); Cells 2 and 3 and the keyword-allowlist group compare the branch against the
+reference directly, and now confirm agreement rather than divergence -- each carries its own
+pre-port mutant, reproducing the historical defect by construction, not by assuming the branch
+still has it.
 
 GREEN oracle: T-2908's own reference compiler (`Claude/Vitruvius/t2908-probe/
 sslm_convert_schema_bytelevel.py`), loaded via `t2913_common.reference_t2908()`.
@@ -181,34 +186,53 @@ class T2908_StructuralUTF8ValidityExhaustive(unittest.TestCase):
 
 
 class T2908_LoneContinuationByteDeadEnd(unittest.TestCase):
-    def test_lone_continuation_byte_dead_ends_on_reference_but_is_admitted_on_the_branch(self) -> None:
+    def test_lone_continuation_byte_dead_ends_on_branch_and_reference(self) -> None:
+        """T-2915 (the compiler port landed): both the branch's own in-tree compiler and the
+        T-2908 reference now see the RAW byte directly (the branch's own vocabulary producer,
+        `tools/t2132_build_g5_fixture.py::_real_vocab`, was ported alongside the compiler to
+        stop decoding with `errors="replace"` before the compiler ever sees a piece) and both
+        refuse it -- no admitted transition at S_c for a bare 0x80-0xBF byte."""
         raw_byte = bytes([0xA1])  # a bare UTF-8 continuation byte -- never a legal position alone
-        # RED: the producer decodes with errors="replace" before the compiler ever sees it
-        # (T-2908 Sec3.9.1's own named defect, `tools/t2132_build_g5_fixture.py::_real_vocab`,
-        # reproduced directly rather than assumed) -- the raw byte becomes the replacement
-        # character U+FFFD, an ORDINARY, printable Unicode scalar that RED's own content self-
-        # loop admits like any other.
-        decoded_piece = raw_byte.decode("utf-8", errors="replace")
-        self.assertEqual(decoded_piece, "�", "SETUP: the decode-collapse assumption changed")
-        vocab_red = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "a", decoded_piece]
-        mp_red = compile_schema_to_mask_pages(_SCHEMA, vocab_red)
-        wrapped_red = '{"Prompt_Result":"a' + decoded_piece + '"}'
-        self.assertTrue(
-            mp_red.accepts(wrapped_red),
-            "regression: the branch no longer admits the decode-collapsed replacement character "
-            "as content -- this cell needs that (wrong) behaviour to demonstrate the defect T-2908 fixes",
+        vocab = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"a", raw_byte]
+        wrapped = b'{"Prompt_Result":"a' + raw_byte + b'"}'
+
+        mp_red = compile_schema_to_mask_pages(_SCHEMA, vocab)
+        self.assertFalse(
+            mp_red.accepts(wrapped),
+            "a lone UTF-8 continuation byte (0x80-0xBF) is wrongly admitted as content by the "
+            "branch's own compiler",
         )
 
-        # GREEN: the reference compiler sees the RAW byte directly and must refuse it -- no
-        # admitted transition at S_c for a bare 0x80-0xBF byte.
         ref = common.reference_t2908()
-        vocab_green = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"a", raw_byte]
-        mp_green = ref.compile_schema_to_mask_pages(_SCHEMA, vocab_green)
-        wrapped_green = b'{"Prompt_Result":"a' + raw_byte + b'"}'
+        mp_green = ref.compile_schema_to_mask_pages(_SCHEMA, list(vocab))
         self.assertFalse(
-            mp_green.accepts(wrapped_green),
+            mp_green.accepts(wrapped),
             "a lone UTF-8 continuation byte (0x80-0xBF) is wrongly admitted as content by the "
             "T-2908 reference compiler",
+        )
+
+    def test_mutant_decode_then_collapse_reproduces_the_pre_port_defect(self) -> None:
+        """The pre-port defect this cell exists to guard against, reproduced by DIRECT
+        construction of the decode-then-collapse rule T-2908 replaced (`tools/
+        t2132_build_g5_fixture.py::_real_vocab`'s own pre-T2915 behaviour), not by assuming
+        the current compiler still has it: a raw continuation byte, decoded with
+        `errors="replace"` before the compiler ever sees it, becomes the replacement character
+        U+FFFD -- an ordinary, printable Unicode scalar the OLD character-level content
+        self-loop admitted like any other. Simulated inline (not via a live import of the
+        retired character-level module, which no longer exists in this tree) so this cell's
+        own discriminating claim is checked by construction rather than asserted."""
+        raw_byte = bytes([0xA1])
+        decoded_piece = raw_byte.decode("utf-8", errors="replace")
+        self.assertEqual(decoded_piece, "�", "SETUP: the decode-collapse assumption changed")
+        # The old character-level design's own S_c admitted any codepoint outside {'"', '\\'}
+        # plus the C0 controls -- U+FFFD (0xFFFD) is well inside that admitted range, which is
+        # exactly why the collapsed byte was wrongly reachable as ordinary content.
+        codepoint = ord(decoded_piece)
+        old_design_admits_it = codepoint >= 0x20 and decoded_piece not in ('"', "\\")
+        self.assertTrue(
+            old_design_admits_it,
+            "the replacement character no longer falls in the old character-level design's own "
+            "admitted range -- this mutant no longer reproduces the pre-port defect",
         )
 
 
@@ -313,28 +337,49 @@ class T2908_KeywordAllowlistGroup(unittest.TestCase):
             "required": ["f"],
         }
 
-    def test_each_extra_keyword_silently_ignored_on_the_branch(self) -> None:
-        """RED's own defect, reproduced directly: `_groups()` checks only `maxLength` on a
-        string field, so every other unimplemented keyword compiles silently, discarding the
-        author's own stated constraint -- exactly TE-365 S3's own finding (`const: "x"` accepts
-        `"ab"`)."""
+    def test_each_extra_keyword_rejected_naming_itself_on_the_branch(self) -> None:
+        """T-2915 (the compiler port landed): the branch's own `_groups()` now carries T-2908's
+        per-branch keyword allowlist, so every keyword outside a branch's own accepted surface
+        is rejected BY NAME -- closing TE-365 S3's own finding (`const: "x"` used to silently
+        accept `"ab"`)."""
         for keyword in _EXTRA_KEYWORDS:
             with self.subTest(keyword=keyword):
                 schema = self._schema_with({"type": "string", keyword: "irrelevant-value"})
-                vocab = ["{", "}", '"f":', 'f":', '"', "a", "b"]
-                try:
-                    mp = compile_schema_to_mask_pages(schema, vocab)
-                except SchemaCompileError as exc:
-                    self.fail(
-                        f"regression: the branch now rejects {keyword!r} on a string field "
-                        f"({exc}) -- this cell needs the silent-accept defect to demonstrate it"
-                    )
-                self.assertTrue(
-                    mp.accepts('{"f":"ab"}'),
-                    f"the branch's own leaf must still accept unconstrained content when "
-                    f"{keyword!r} is silently ignored, for this to be the S3 defect and not "
-                    "some unrelated compile failure",
+                vocab = [b"{", b"}", b'"f":', b'f":', b'"', b"a", b"b"]
+                with self.assertRaises(SchemaCompileError) as ctx:
+                    compile_schema_to_mask_pages(schema, vocab)
+                self.assertIn(
+                    keyword, str(ctx.exception),
+                    f"the branch's own compiler must name {keyword!r} in its rejection, not a "
+                    "generic message",
                 )
+
+    def test_mutant_removing_the_branch_allowlist_check_reproduces_the_const_defect(self) -> None:
+        """The pre-port S3 defect (TE-365), reproduced by disabling the branch's own allowlist
+        check rather than assumed: with it removed, `const: "x"` recompiles and a non-matching
+        value (`"ab"`) is accepted despite the declared constant."""
+        import tools.sslm_convert_schema as branch_module
+
+        schema = self._schema_with({"type": "string", "const": "x"})
+        vocab = [b"{", b"}", b'"f":', b'f":', b'"', b"a", b"b", b"x"]
+        with self.assertRaises(SchemaCompileError):
+            compile_schema_to_mask_pages(schema, vocab)
+
+        original_reject = branch_module._reject_unimplemented_keywords
+
+        def no_op_reject(schema_node, path, allowed):  # noqa: ARG001 -- signature must match
+            return None
+
+        branch_module._groups.__globals__["_reject_unimplemented_keywords"] = no_op_reject
+        try:
+            mp = compile_schema_to_mask_pages(schema, vocab)
+        finally:
+            branch_module._groups.__globals__["_reject_unimplemented_keywords"] = original_reject
+        self.assertTrue(
+            mp.accepts(b'{"f":"ab"}'),
+            "with the allowlist check removed, the branch must reproduce the pre-port "
+            "const-ignored defect (a non-matching value silently accepted)",
+        )
 
     def test_each_extra_keyword_rejected_naming_itself_on_reference(self) -> None:
         ref = common.reference_t2908()

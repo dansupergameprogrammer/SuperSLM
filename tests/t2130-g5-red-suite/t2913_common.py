@@ -192,14 +192,6 @@ def real_byte_vocab_zeroed() -> list[bytes]:
     return ref.zero_special_ids(list(real_raw_vocab()), real_special_ids())
 
 
-@functools.lru_cache(maxsize=1)
-def real_str_vocab() -> list[str]:
-    """The real vocabulary as the CURRENT (pre-fold, red) compiler consumes it: each token's raw
-    bytes decoded to `str` with `errors="replace"` -- T-2908 Sec3.9.1's own named defect,
-    reproduced by construction rather than assumed."""
-    return [piece.decode("utf-8", errors="replace") for piece in real_raw_vocab()]
-
-
 def single_byte_token_ids(vocab: list[bytes]) -> dict[int, int]:
     """Map raw byte value -> lowest token id spelling that single byte, for a bytes-vocab."""
     table: dict[int, int] = {}
@@ -211,12 +203,14 @@ def single_byte_token_ids(vocab: list[bytes]) -> dict[int, int]:
 
 @functools.lru_cache(maxsize=1)
 def real_red_mask_pages():
-    """This branch's own compiler over the real vocabulary, decoded exactly as the shipped
-    (pre-fold) producer decodes it. Cached: real-vocabulary compiles are re-used across every
-    cell in this suite that needs the SAME compiled table rather than recompiled per cell."""
+    """T-2915 (the compiler port landed): this branch's own compiler over the real vocabulary,
+    RAW bytes, unzeroed -- exactly what `tools/t2132_build_g5_fixture.py::_real_vocab` (also
+    ported alongside the compiler) actually returns when a caller does not additionally call
+    `zero_special_ids`. Cached: real-vocabulary compiles are re-used across every cell in this
+    suite that needs the SAME compiled table rather than recompiled per cell."""
     from tools.sslm_convert_schema import compile_schema_to_mask_pages
 
-    return compile_schema_to_mask_pages(PROMPT_RESULT_SCHEMA, real_str_vocab())
+    return compile_schema_to_mask_pages(PROMPT_RESULT_SCHEMA, real_raw_vocab())
 
 
 @functools.lru_cache(maxsize=1)
@@ -227,14 +221,6 @@ def real_green_mask_pages():
     return ref.compile_schema_to_mask_pages(PROMPT_RESULT_SCHEMA, real_byte_vocab_zeroed())
 
 
-def single_char_token_ids(vocab: list[str]) -> dict[str, int]:
-    """Map single ASCII character -> lowest token id spelling exactly that character, for a
-    str-vocab (the branch's own alphabet)."""
-    table: dict[str, int] = {}
-    for token_id, piece in enumerate(vocab):
-        if len(piece) == 1 and piece not in table:
-            table[piece] = token_id
-    return table
 
 
 def canonical_escape_spelling(byte_val: int) -> bytes:

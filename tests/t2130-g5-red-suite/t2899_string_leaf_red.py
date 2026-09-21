@@ -4,17 +4,17 @@ literal-to-literal crossing control -- REVISED (T-2913) to byte-level and value-
 now that Sec3.9.3's design is final across T-2908 (byte alphabet), T-2910 (open/close boundary,
 special-token exclusion) and T-2912 (value-level close, superseding T-2911).
 
-WHY REVISED. This branch's own `tools/sslm_convert_schema.py` is T-2853's reviewed, PRE-FOLD
-design: a character-level alphabet (`Sequence[str]`, decode-then-collapse) with no boundary
-discipline and no value-level closure -- confirmed at authoring time by reading the module
-(`_add_string_leaf`'s content branch is one `str`-keyed self-loop; `_token_targets` takes no
-`content_states` parameter). Every cell below is therefore authored against a BYTE-piece
-vocabulary (`list[bytes]`), decoded to `str` for the current (RED) compiler and passed as raw
-bytes to the T-2912 reference chain (GREEN) -- the exact alphabet difference T-2908 fixes.
+STATUS (T-2915: the compiler port landed). This branch's own `tools/sslm_convert_schema.py` now
+IS T-2908/T-2910/T-2912's shipped byte-level, value-level design (`compile_schema_to_mask_pages`
+takes `Sequence[bytes]`; `_token_targets` carries the `content_states` open/close boundary
+discipline). Every cell below is authored against a BYTE-piece vocabulary (`list[bytes]`), passed
+as raw bytes to both the branch (oracle 1) and the T-2912 reference chain (oracle 3) -- the two
+now run the identical algorithm, which is what this file's own regression-control groups (below)
+exist to confirm stays true.
 
 ORACLE. Every acceptance/rejection claim is checked THREE ways:
-  (1) `_compile_red(...).accepts(...)` -- this branch's own in-tree compiler, over the
-      byte-piece vocabulary decoded to `str`.
+  (1) `_compile_red(...).accepts(...)` -- this branch's own in-tree compiler, over the raw
+      byte-piece vocabulary.
   (2) Python's own `json.loads` over the bare JSON string literal -- an independent, mature
       RFC 8259 implementation sharing no line with either compiler. This is the definition every
       cell is grounded in.
@@ -23,15 +23,16 @@ ORACLE. Every acceptance/rejection claim is checked THREE ways:
 Every positive cell asserts all three oracles admit the string; every negative cell asserts all
 three reject it.
 
-RED BY BEHAVIOUR. The escape/hex/control-byte/rejection groups already compile under the
-in-tree module (the character-level leaf implements this much); they are true regression
-controls, held green today and required to stay green under the byte-level/value-level design.
-The literal-to-literal crossing cell is the same: a must-accept control the boundary-discipline
-fix does not touch (Sec3.9.3: "T-2910 does not touch this"). Nothing in this file's base groups
-is red BECAUSE of a missing feature -- T-2908/T-2910/T-2912's own new capabilities (the byte
-alphabet, the open/close asymmetry, the value-level closure) are covered by the sibling files
-`t2908_byte_level_red.py`, `t2910_boundary_red.py` and `t2912_value_level_red.py`, which ARE red
-on this branch for the reasons those folds give.
+REGRESSION CONTROLS, NOT RED. The escape/hex/control-byte/rejection groups compile under the
+in-tree module both before and after T-2915's port (the string leaf's escape/hex/rejection
+mechanism is unchanged by the byte-level/value-level redesign); they are true regression
+controls, held green and required to stay green. The literal-to-literal crossing cell is the
+same: a must-accept control the boundary-discipline fix does not touch (Sec3.9.3: "T-2910 does
+not touch this"). T-2908/T-2910/T-2912's own capabilities (the byte alphabet, the open/close
+asymmetry, the value-level closure) are exercised by the sibling files `t2908_byte_level_red.py`,
+`t2910_boundary_red.py` and `t2912_value_level_red.py`, whose own branch-vs-reference
+characterizations of the pre-port defect are, correspondingly, now branch-vs-reference
+confirmations that the port closed each one (named per file, at each site T-2915 touched).
 
 MUTATION PROOF (StandardsDocument.md Sec5.4 / Curie's "pin the documented claim"). Each fixture's
 stated verdict is reproduced by `json.loads`, an oracle this suite neither authors nor tunes, and
@@ -70,14 +71,14 @@ def _bare_literal_is_valid_json_string(inner: bytes) -> bool:
     return isinstance(decoded, str)
 
 
-def _decode_pieces(pieces: list[bytes]) -> list[str]:
-    return [piece.decode("utf-8", errors="replace") for piece in pieces]
-
-
 def _compile_red(pieces: list[bytes], schema=_SCHEMA):
-    """Oracle 1: this branch's own in-tree compiler, over the byte pieces decoded exactly as
-    the shipped, pre-fold producer decodes them today."""
-    return compile_schema_to_mask_pages(schema, _decode_pieces(pieces))
+    """Oracle 1: this branch's own in-tree compiler, over the raw byte pieces (T-2915: ported
+    to T-2908/T-2910/T-2912's byte-level/value-level design -- the branch no longer decodes a
+    vocabulary piece to `str` before compiling; it is byte-level throughout, exactly like
+    oracle 3 below). Kept as its own named oracle, rather than folded into `_compile_green`,
+    because the two remain independently callable checks on the SAME production module the
+    branch ships versus the records-tree reference chain."""
+    return compile_schema_to_mask_pages(schema, list(pieces))
 
 
 def _compile_green(pieces: list[bytes], schema=_SCHEMA):
@@ -115,7 +116,7 @@ class G5_1_T2853_Escapes(unittest.TestCase):
                 except SchemaCompileError as exc:
                     self.fail(f"regression: escape \\{esc} no longer compiles on the branch ({exc})")
                 self.assertTrue(
-                    mp_red.accepts(_wrap(content).decode("utf-8", errors="replace")),
+                    mp_red.accepts(_wrap(content)),
                     f"escape \\{esc}: branch DFA does not admit a JSON-valid string",
                 )
                 mp_green = _compile_green(vocab)
@@ -134,7 +135,7 @@ class G5_1_T2853_Escapes(unittest.TestCase):
         )
         mp_red = _compile_red(vocab)
         self.assertFalse(
-            mp_red.accepts(_wrap(content).decode("utf-8", errors="replace")),
+            mp_red.accepts(_wrap(content)),
             "\\q: branch DFA wrongly admits an escape outside the eight short escapes",
         )
         mp_green = _compile_green(vocab)
@@ -156,7 +157,7 @@ class G5_1_T2853_UnicodeEscape(unittest.TestCase):
         self.assertTrue(_bare_literal_is_valid_json_string(content), "SETUP: fixture is invalid JSON")
         mp_red = _compile_red(vocab)
         self.assertTrue(
-            mp_red.accepts(_wrap(content).decode("utf-8", errors="replace")),
+            mp_red.accepts(_wrap(content)),
             "\\u4Fa0 followed by 'z': branch DFA does not admit it or does not resume content",
         )
         mp_green = _compile_green(vocab)
@@ -179,7 +180,7 @@ class G5_1_T2853_UnicodeEscape(unittest.TestCase):
                 )
                 mp_red = _compile_red(vocab)
                 self.assertFalse(
-                    mp_red.accepts(_wrap(content).decode("utf-8", errors="replace")),
+                    mp_red.accepts(_wrap(content)),
                     f"non-hex byte at \\uXXXX position {position}: branch DFA wrongly admits it",
                 )
                 mp_green = _compile_green(vocab)
@@ -202,7 +203,7 @@ class G5_1_T2853_MultiCharacterCrossing(unittest.TestCase):
         full = _wrap(b"lo")
         mp_red = _compile_red(vocab)
         self.assertTrue(
-            mp_red.accepts(full.decode("utf-8", errors="replace")),
+            mp_red.accepts(full),
             'the multi-character token \'lo"\' is not admitted on the branch, or the walk does '
             "not land past the string on the object's own closing-brace continuation",
         )
@@ -214,7 +215,7 @@ class G5_1_T2853_MultiCharacterCrossing(unittest.TestCase):
         )
         vocab_no_cross = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"l", b"o"]
         self.assertTrue(
-            _compile_red(vocab_no_cross).accepts(full.decode("utf-8", errors="replace")),
+            _compile_red(vocab_no_cross).accepts(full),
             "without the crossing token, the character-by-character path is not admitted on the "
             "branch -- the two constructions should agree",
         )
@@ -254,7 +255,7 @@ class G5_1_T2910_LiteralToLiteralCrossing(unittest.TestCase):
         self.assertTrue(_bare_literal_is_valid_json_string(b"x"), "SETUP: fixture is invalid JSON")
         mp_red = _compile_red(vocab)
         self.assertTrue(
-            mp_red.accepts(full.decode("utf-8", errors="replace")),
+            mp_red.accepts(full),
             "a literal-to-literal crossing token (key-close-quote + colon) regressed on the branch",
         )
         mp_green = _compile_green(vocab)
@@ -280,7 +281,7 @@ class G5_1_T2853_RawControlByteDeadEnd(unittest.TestCase):
                 )
                 mp_red = _compile_red(vocab)
                 self.assertFalse(
-                    mp_red.accepts(_wrap(b"a" + raw).decode("utf-8", errors="replace")),
+                    mp_red.accepts(_wrap(b"a" + raw)),
                     f"a raw, unescaped 0x{code:02x} control byte is wrongly admitted on the branch",
                 )
                 mp_green = _compile_green(vocab)

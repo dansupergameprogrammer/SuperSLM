@@ -481,18 +481,21 @@ void DampedGreedyRoute(Cpu& g, const std::vector<int32_t>& P, int32_t t0) {
 // to reach S_e from. `g` here is opened by `main` against
 // `make_t2909_string_schema_fixture.py`'s own hermetic artifact instead: a real schema
 // compiled by the production compiler (T-2853's own leaf, TE-365 C1) with a `Prompt_Result`
-// string field, and a real vocabulary whose first five ids are that generator's own
-// TOK_OPEN/TOK_CONTENT/TOK_BACKSLASH/TOK_ESCAPE_N/TOK_CLOSE pieces -- reproduced here as the
-// `kT2909Tok*` constants below, kept in lockstep with that file's own module constants
-// rather than re-derived independently (both this cell and the GPU twin,
+// string field, and a real vocabulary whose first ids are that generator's own
+// TOK_OPEN/TOK_OPEN_QUOTE/TOK_CONTENT/TOK_BACKSLASH/TOK_ESCAPE_N/TOK_CLOSE/TOK_BRACE pieces --
+// reproduced here as the `kT2909Tok*` constants below, kept in lockstep with that file's own
+// module constants rather than re-derived independently (both this cell and the GPU twin,
 // `cell_gpu_cell2_degenerate.cpp`, read the identical fixture and the identical ids).
 //
 // CONSTRUCTION. `ReachSeCpu` prefills a prompt (three filler ids, ordinary vocabulary
-// pieces the schema's own DFA never transitions on), binds the schema, then drives TWO REAL,
-// ADMITTED schema-content transitions in one `sslm_prefill` span: TOK_OPEN (state 0 -> S_c)
-// and TOK_BACKSLASH (S_c -> S_e) -- neither is the degenerate-row construction; both are
-// ordinary, correct transitions the compiler's own DFA admits, exactly as the plan's own
-// "a real, admitted backslash transition from S_c" specifies. The resulting sequence rests
+// pieces the schema's own DFA never transitions on), binds the schema, then drives THREE
+// REAL, ADMITTED schema-content transitions in one `sslm_prefill` span: TOK_OPEN (state 0 ->
+// the pre-value literal state), TOK_OPEN_QUOTE (-> S_c, T-2910's own depth-0-only opening --
+// the literal object skeleton and the value's opening quote no longer share one vocabulary
+// piece, T-2915) and TOK_BACKSLASH (S_c -> S_e) -- none is the degenerate-row construction;
+// all three are ordinary, correct transitions the compiler's own DFA admits, exactly as the
+// plan's own "a real, admitted backslash transition from S_c" specifies. The resulting
+// sequence rests
 // at S_e with `layer_index == 0`/`ready_for_logits == true` (the SAME resting shape Cell
 // 1's own routes reach), so the next `sslm_decode_step` call reaches Finish directly.
 //
@@ -523,15 +526,20 @@ void DampedGreedyRoute(Cpu& g, const std::vector<int32_t>& P, int32_t t0) {
 extern "C" void ArmCpuFinishDegenerateLogitRowInjection();
 
 // Token ids from `make_t2909_string_schema_fixture.py` (kept in lockstep with that
-// generator's own module constants TOK_OPEN/TOK_CONTENT/TOK_BACKSLASH/TOK_ESCAPE_N/
-// TOK_CLOSE).
+// generator's own module constants TOK_OPEN/TOK_OPEN_QUOTE/TOK_CONTENT/TOK_BACKSLASH/
+// TOK_ESCAPE_N/TOK_CLOSE/TOK_BRACE). T-2915 (porting the plan's final Sec3.9 design): T-2910's
+// boundary discipline refuses a token that opens the string's content sub-automaton past its
+// own first byte, so the generator's own literal object skeleton and the value's opening
+// quote no longer share one vocabulary piece -- reaching S_e now takes three fed tokens
+// (open, open-quote, backslash) rather than two.
 constexpr int32_t kT2909TokOpen = 0;
-constexpr int32_t kT2909TokBackslash = 2;
-constexpr int32_t kT2909TokEscapeN = 3;
-constexpr int32_t kT2909TokClose = 4;
-constexpr int32_t kT2909FillerBase = 5;  // "<unused-N>" pieces: harmless prompt filler.
+constexpr int32_t kT2909TokOpenQuote = 1;
+constexpr int32_t kT2909TokBackslash = 3;
+constexpr int32_t kT2909TokEscapeN = 4;
+constexpr int32_t kT2909TokClose = 5;
+constexpr int32_t kT2909FillerBase = 7;  // "<unused-N>" pieces: harmless prompt filler.
 
-// Drives a fresh sequence on `g` (the string-schema fixture) to S_e via two real, admitted
+// Drives a fresh sequence on `g` (the string-schema fixture) to S_e via three real, admitted
 // schema-content transitions from a fresh bind. Returns the live handle, or nullptr on setup
 // failure (already recorded via CHECK_MSG).
 sslm_seq ReachSeCpu(Cpu& g) {
@@ -539,9 +547,9 @@ sslm_seq ReachSeCpu(Cpu& g) {
 	if (!s) return nullptr;
 	const std::vector<int32_t> P = {kT2909FillerBase, kT2909FillerBase + 1, kT2909FillerBase + 2};
 	CHECK_MSG(PrefillAll(g, s, P, SSLM_SPAN_PROMPT) == SSLM_OK, "[CPU C2] prompt prefill");
-	const std::vector<int32_t> content = {kT2909TokOpen, kT2909TokBackslash};
+	const std::vector<int32_t> content = {kT2909TokOpen, kT2909TokOpenQuote, kT2909TokBackslash};
 	CHECK_MSG(PrefillAll(g, s, content, SSLM_SPAN_SCHEMA_CONTENT) == SSLM_OK,
-	          "[CPU C2] schema-content prefill: open+backslash to reach S_e");
+	          "[CPU C2] schema-content prefill: open+open-quote+backslash to reach S_e");
 	return s;
 }
 
