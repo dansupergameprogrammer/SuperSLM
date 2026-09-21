@@ -2,8 +2,11 @@ obj/
 obj_mutants/
 obj_mutants_cpu/
 obj_link_check/
+obj_gpu/
+bin_gpu/
 *.exe
 *.obj
 *.log
 *.buildlog
 *.runlog
+*.linklog
