@@ -1,15 +1,20 @@
 @echo off
 rem T-2899 (Curie) -- mutant runner for cell_cpu_deadend_retry_reset: builds the cell against
 rem scratch sslm_abi.cpp variants --
-rem   FIXED         : Claude/Vitruvius/t2898-probe/sslm_abi_cpu_fixed_v5.cpp verbatim (cumulative
-rem                   reference fix through T-2866/T-2894/T-2896/T-2897/T-2898). Every assertion
-rem                   in the cell, including TE-365 C2's own degenerate-row twin, must be GREEN.
+rem   FIXED         : the LIVE TIP's own src/sslm_abi.cpp, verbatim (every fold this once needed
+rem                   an external reference for -- T-2866/T-2894/T-2896/T-2897/T-2898 -- is
+rem                   already landed in the committed tree). Every assertion in the cell,
+rem                   including TE-365 C2's own degenerate-row twin, must be GREEN.
 rem   MUT_NOREARM   : the SAME file with BOTH miss sites' `ready_for_logits = true;` reverted --
 rem                   must turn Cell 1(iii) red on every route.
 rem   MUT_NORESET   : the SAME file with BOTH miss sites' `state.layer_index = 0;` (T-2894's own
 rem                   line) reverted -- must turn Cell 1(iv) red on exactly routes D and D1
 rem                   while Cell 1(iii) STAYS GREEN on every route (the two assertions are
 rem                   independent -- TE-361's own finding).
+rem   T-2916 (TE-370 M1): FIXED/MUT_NOREARM/MUT_NORESET are now generated from the live tip by
+rem   `make_mut_cpu_deadend.py` (T-2909 built this generator already; this runner had simply
+rem   never been switched over to call it) -- no external scratch directory (`D:\_t2909\refs`)
+rem   is read any more, so this runner has no out-of-repo input.
 rem   MUT_NOSEAM    : T-2909's own guard-vitality mutant for TE-365 C2 -- a fresh copy of the
 rem                   LIVE TIP's sslm_abi.cpp (%ENG%\src\sslm_abi.cpp, generated here by
 rem                   make_mut_noseam.py, never staged by the planner) with ONLY the seam's own
@@ -28,13 +33,15 @@ rem expected verdict -- FIXED must be the green tip (checks>0, failures=0, skips
 rem MUT_* must be KILLED (failures>0) -- and a mismatch, a build failure, or a crashed/summary-
 rem less run all set OVERALL_OK=0, gating the script's own exit code.
 rem
-rem Usage: run_mutants_cpu_deadend.bat <path-to-refs-dir> <path-to-model.sslm> <path-to-stringschema.sslm>
+rem Usage: run_mutants_cpu_deadend.bat <path-to-model.sslm> <path-to-stringschema.sslm>
+rem T-2916 (TE-370 M1): dropped the <path-to-refs-dir> argument this runner used to take --
+rem every source configuration below is now generated from the tracked tree, no scratch
+rem directory input needed.
 setlocal enabledelayedexpansion
 set HEREDIR=%~dp0
 set ENG=%HEREDIR%..\..
 set TESTS=%ENG%\tests
-set REFS=%~1
-set MODELARG=--model=%~2 --stringschema=%~3
+set MODELARG=--model=%~1 --stringschema=%~2
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 -no_logo
 cd /d "%HEREDIR%"
 if not exist obj_mutants_cpu mkdir obj_mutants_cpu
@@ -46,15 +53,21 @@ set SRC_NOABI=%ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cp
     %ENG%\src\damped_greedy_antilm.cpp %ENG%\src\damped_greedy_topk.cpp ^
     %ENG%\src\damped_greedy_phaseD.cpp %ENG%\src\damped_greedy_phaseD_loop.cpp
 
+set REFS=obj_mutants_cpu
 if not defined SSLM_PYTHON set SSLM_PYTHON=C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe
+set OVERALL_OK=1
 "%SSLM_PYTHON%" make_mut_noseam.py "%ENG%\src\sslm_abi.cpp" "obj_mutants_cpu\sslm_abi_mut_noseam.cpp" ^
     > obj_mutants_cpu\make_mut_noseam.log 2>&1
-if errorlevel 1 (
-    echo BUILD FAILED: make_mut_noseam.py
-    type obj_mutants_cpu\make_mut_noseam.log
-    set OVERALL_OK=0
-) else (
-    set OVERALL_OK=1
+if errorlevel 1 (echo BUILD FAILED: make_mut_noseam.py & type obj_mutants_cpu\make_mut_noseam.log & set OVERALL_OK=0)
+rem T-2916: FIXED/MUT_NOREARM/MUT_NORESET generated from the live tip (make_mut_cpu_deadend.py
+rem already existed for this purpose; this runner had simply never been switched over to call it
+rem instead of an external scratch refs directory).
+for %%m in (FIXED:sslm_abi_fixed.cpp NOREARM:sslm_abi_mutant_norearm.cpp NORESET:sslm_abi_mutant_noreset.cpp) do (
+    for /f "tokens=1,2 delims=:" %%a in ("%%m") do (
+        "%SSLM_PYTHON%" make_mut_cpu_deadend.py "%ENG%\src\sslm_abi.cpp" %%a "obj_mutants_cpu\%%b" ^
+            > "obj_mutants_cpu\make_mut_cpu_deadend_%%a.log" 2>&1
+        if errorlevel 1 (echo BUILD FAILED: make_mut_cpu_deadend.py %%a & type "obj_mutants_cpu\make_mut_cpu_deadend_%%a.log" & set OVERALL_OK=0)
+    )
 )
 
 for %%v in (FIXED MUT_NOREARM MUT_NORESET MUT_NOSEAM) do (

@@ -1,12 +1,14 @@
 @echo off
 rem T-2900 (Curie) -- builds and runs every GPU-side Sec3.10 cell in this suite, against FOUR
 rem source configurations: AS_BUILT (the tree as it stands, `curie/t2809-stage1-build` HEAD,
-rem compiled fresh from %ENG%\src -- no dependency on any external scratch checkout), FIXED (the
-rem planner's own cumulative reference fix, `Claude/Vitruvius/t2895-probe/gpu_1p0_v5.cpp`/
-rem `superslm_gpu_v5.cpp` plus `Claude/Vitruvius/t2898-probe/sslm_abi_cpu_fixed_v5.cpp`, staged at
-rem D:\_t2900\refs by this ticket), MUT_CHECKEDRETURN and MUT_NOREARM (T-2900's own single-line
-rem reverts of the reference fix, `D:\_t2900\refs\gpu_1p0_mut_*.cpp`, plan Sec3.10.3 row 11's own
-rem guard-vitality mutants). Mirrors this suite's own `build_red_suite.bat`/`run_mutants_cpu_
+rem compiled fresh from %ENG%\src -- no dependency on any external scratch checkout), FIXED
+rem (T-2916, TE-370 M1: an alias for AS_BUILT -- the planner's own cumulative reference fix is
+rem already landed in the live tree, confirmed by execution against the scratch copies this
+rem configuration used to compile separately), MUT_CHECKEDRETURN and MUT_NOREARM (single-line
+rem reverts of the live tip, generated fresh by `make_mut_gpu_checkedreturn_seam.py`/
+rem `make_mut_gpu_norearm_seam.py`, plan Sec3.10.3 row 11's own guard-vitality mutants -- T-2916
+rem replaced the out-of-repo `D:\_t2900\refs\gpu_1p0_mut_*.cpp` static copies these generators
+rem superseded). Mirrors this suite's own `build_red_suite.bat`/`run_mutants_cpu_
 rem deadend.bat` conventions: skip-fails-the-run, a bare `checks=/failures=/skips=` summary line
 rem per binary, one build log per failed step.
 rem
@@ -22,7 +24,6 @@ setlocal enabledelayedexpansion
 set HEREDIR=%~dp0
 set ENG=%HEREDIR%..\..
 set TESTS=%ENG%\tests
-set REFS=D:\_t2900\refs
 set MODELARG=
 set G5ARG=
 if not "%~1"=="" set MODELARG=--model=%~1
@@ -42,7 +43,6 @@ set SRC_NOABI=%ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cp
 
 set GPUINC=%TESTS%\t2791-gpu-prefill-read-red-suite
 set STOCKINC=/I%ENG%\include /I%ENG%\src /I%TESTS% /I%GPUINC% /I.
-set OVRINC=/I%REFS%\include_override /I%ENG%\include /I%ENG%\src /I%TESTS% /I%GPUINC% /I.
 set SYSLIBS=d3d12.lib dxgi.lib dxguid.lib
 set OVERALL_OK=1
 
@@ -70,51 +70,69 @@ cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /DSUPERSLM_GPU_G5_FINISH_ROW_FAU
     /c %ENG%\src\gpu\gpu_1p0.cpp %ENG%\src\gpu\superslm_gpu.cpp /Fo"obj_gpu\gpu_asbuilt\\" ^
     > obj_gpu\gpu_asbuilt.buildlog 2>&1 || (echo BUILD FAILED: gpu_asbuilt & type obj_gpu\gpu_asbuilt.buildlog & set OVERALL_OK=0)
 
-rem FIXED GPU: T-2895's own v5 reference (checked return + SLM5 blob format), needs the patched
-rem gpu_port.h override for the struct/signature changes.
-if not exist obj_gpu\gpu_fixed mkdir obj_gpu\gpu_fixed
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I%REFS%\include_override /I%ENG%\include /I%ENG%\src\gpu ^
-    /c %REFS%\gpu_1p0_v5.cpp %REFS%\superslm_gpu_v5.cpp /Fo"obj_gpu\gpu_fixed\\" ^
-    > obj_gpu\gpu_fixed.buildlog 2>&1 || (echo BUILD FAILED: gpu_fixed & type obj_gpu\gpu_fixed.buildlog & set OVERALL_OK=0)
+rem FIXED GPU (T-2916, TE-370 M1): T-2895's own v5 design (checked return + SLM5 blob format) is
+rem already landed in the live tree -- this configuration used to compile a separate scratch copy
+rem (`D:\_t2900\refs\gpu_1p0_v5.cpp`/`superslm_gpu_v5.cpp`, plus an `include_override\gpu_port.h`
+rem for the struct/signature changes those now-landed folds needed). Confirmed by execution
+rem (Poirot's own TE-370 M1 evidence, re-verified here): the scratch copies differ from the
+rem shipped `gpu_1p0.cpp`/`superslm_gpu.cpp` only by test-injection seams, and the override
+rem header is a strict subset of the tracked `include/superslm/gpu_port.h` (one comment block
+rem short). FIXED is therefore an alias for ASBUILT (`obj_gpu\gpu_asbuilt\*.obj`, built above) --
+rem no separate compile, no scratch directory read.
 
 rem GPU_FIXED_NOSLM5 (T-2903 fix, corrected T-2905): the checked-return + ready_for_logits re-arm
-rem ALONE, no SLM5 blob format -- T-2866/T-2864's own single-file patch
-rem (`D:\_te338\gpu_1p0_fixed.cpp`, read-only, still present on the dev box per the plan's own
-rem reproduction recipe), paired with a genuinely PRISTINE, pre-T-2895 superslm_gpu.cpp +
+rem ALONE, no SLM5 blob format, paired with a genuinely PRISTINE, pre-T-2895 superslm_gpu.cpp +
 rem gpu_port.h. T-2903's own comment said this pairing came from "the engine's own pristine
 rem superslm_gpu.cpp, reused unchanged from the gpu_asbuilt step below" -- true only until T-2905
 rem landed T-2895's own SLM5 fix into the live tree, which is what gpu_asbuilt now compiles from
 rem (SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION above is a second, independent reason gpu_asbuilt
-rem is no longer "unmodified"). Reusing it here would both fail to compile (gpu_1p0_fixed.cpp's
-rem own Save/RestoreGpuSequenceState calls predate the v5 tail parameters gpu_port.h now
-rem declares) and, if it somehow linked, would write 'SLM5' regardless of the source file's own
-rem intent -- defeating the one property this configuration exists for. The pristine pair is
-rem `git show`'d fresh into a SCRATCH root outside this repo (`D:\_t2905\pristine_pre_slm5\`),
-rem from commit `ccf87c1` on this same branch (the tip immediately before T-2905's GPU fold;
-rem confirmed zero 'SLM5'/kGpuSeqBlobMagicV5 occurrences) -- NOT checked into the tracked tree:
-rem a first attempt did check it in, and tests\ci\test_geometry_site_census.py's own tree-wide
-rem GS-marker sweep (tools\geometry_site_census.py, unnarrowed by design outside `_SKIP_DIR_NAMES`)
-rem then double-counted every GS marker superslm_gpu.cpp carries, since a byte-identical copy of a
-rem production file inside the tracked test tree is exactly what that census exists to catch.
-rem Regenerated every run so it always tracks the pinned commit, never a stale local copy.
+rem is no longer "unmodified"). Reusing it here would both fail to compile (the v5 tail
+rem parameters gpu_port.h now declares) and, if it somehow linked, would write 'SLM5' regardless
+rem of the source file's own intent -- defeating the one property this configuration exists for.
+rem The pristine base is `git show`'d fresh into a SCRATCH root outside this repo
+rem (`D:\_t2905\pristine_pre_slm5\`, a build-time OUTPUT cache, not a source dependency -- every
+rem byte in it is regenerated from tracked git history on every run, never read back as an input
+rem to anything else), from commit `ccf87c1` on this same branch (the tip immediately before
+rem T-2905's GPU fold; confirmed zero 'SLM5'/kGpuSeqBlobMagicV5 occurrences) -- NOT checked into
+rem the tracked tree: a first attempt did check it in, and tests\ci\test_geometry_site_census.py's
+rem own tree-wide GS-marker sweep (tools\geometry_site_census.py, unnarrowed by design outside
+rem `_SKIP_DIR_NAMES`) then double-counted every GS marker superslm_gpu.cpp carries, since a
+rem byte-identical copy of a production file inside the tracked test tree is exactly what that
+rem census exists to catch. Regenerated every run so it always tracks the pinned commit, never a
+rem stale local copy.
+rem T-2916 (TE-370 M1): the checked-return+rearm fix itself, previously `D:\_te338\
+rem gpu_1p0_fixed.cpp` (a hand-patched, out-of-repo, unversioned single file), is now applied to
+rem the SAME `ccf87c1` pristine base by `make_gpu_fixed_noslm5.py`, anchored on the unique
+rem unconditional-Transition block that commit still carries -- confirmed by execution to produce
+rem code byte-identical to the retired external file (comments only differ).
 if not exist D:\_t2905\pristine_pre_slm5\superslm mkdir D:\_t2905\pristine_pre_slm5\superslm
 git -C "%ENG%" show ccf87c1:src/gpu/superslm_gpu.cpp > D:\_t2905\pristine_pre_slm5\superslm_gpu_pristine.cpp
 git -C "%ENG%" show ccf87c1:include/superslm/gpu_port.h > D:\_t2905\pristine_pre_slm5\superslm\gpu_port.h
+git -C "%ENG%" show ccf87c1:src/gpu/gpu_1p0.cpp > D:\_t2905\pristine_pre_slm5\gpu_1p0_pristine.cpp
+"%SSLM_PYTHON%" make_gpu_fixed_noslm5.py D:\_t2905\pristine_pre_slm5\gpu_1p0_pristine.cpp D:\_t2905\pristine_pre_slm5\gpu_1p0_fixed.cpp ^
+    > obj_gpu\make_gpu_fixed_noslm5.log 2>&1 || (echo GENERATE FAILED: gpu_fixed_noslm5 & type obj_gpu\make_gpu_fixed_noslm5.log & set OVERALL_OK=0)
 if not exist obj_gpu\gpu_fixed_noslm5 mkdir obj_gpu\gpu_fixed_noslm5
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /ID:\_t2905\pristine_pre_slm5 /I%ENG%\include /I%ENG%\src\gpu ^
-    /c D:\_te338\gpu_1p0_fixed.cpp D:\_t2905\pristine_pre_slm5\superslm_gpu_pristine.cpp /Fo"obj_gpu\gpu_fixed_noslm5\\" ^
+    /c D:\_t2905\pristine_pre_slm5\gpu_1p0_fixed.cpp D:\_t2905\pristine_pre_slm5\superslm_gpu_pristine.cpp /Fo"obj_gpu\gpu_fixed_noslm5\\" ^
     > obj_gpu\gpu_fixed_noslm5.buildlog 2>&1 || (echo BUILD FAILED: gpu_fixed_noslm5 & type obj_gpu\gpu_fixed_noslm5.buildlog & set OVERALL_OK=0)
 
-rem MUT_CHECKEDRETURN / MUT_NOREARM: single-line reverts of gpu_1p0_v5.cpp (Claude/Curie/t2900-
-rem probe/ carries the two make_mut_*.py generators); reuse gpu_fixed's own superslm_gpu_v5.obj
-rem unchanged (the mutants touch gpu_1p0.cpp only).
+rem MUT_CHECKEDRETURN / MUT_NOREARM (T-2916, TE-370 M1): single-line reverts, generated fresh
+rem from the LIVE TIP's own gpu_1p0.cpp by `make_mut_gpu_checkedreturn_seam.py`/
+rem `make_mut_gpu_norearm_seam.py` (structural anchor match, refuses on drift) -- replacing the
+rem out-of-repo `D:\_t2900\refs\gpu_1p0_mut_*.cpp` static copies. Pair with `gpu_asbuilt`'s own
+rem `superslm_gpu.obj` unchanged (the mutants touch gpu_1p0.cpp only).
+if not defined SSLM_PYTHON set SSLM_PYTHON=C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe
 if not exist obj_gpu\gpu_mut_cr mkdir obj_gpu\gpu_mut_cr
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I%REFS%\include_override /I%ENG%\include /I%ENG%\src\gpu ^
-    /c %REFS%\gpu_1p0_mut_checkedreturn.cpp /Fo"obj_gpu\gpu_mut_cr\\" ^
+"%SSLM_PYTHON%" make_mut_gpu_checkedreturn_seam.py "%ENG%\src\gpu\gpu_1p0.cpp" "obj_gpu\gpu_mut_cr\gpu_1p0_mut_checkedreturn.cpp" ^
+    > obj_gpu\make_mut_checkedreturn.log 2>&1 || (echo GENERATE FAILED: gpu_mut_cr & type obj_gpu\make_mut_checkedreturn.log & set OVERALL_OK=0)
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I%ENG%\include /I%ENG%\src\gpu ^
+    /c obj_gpu\gpu_mut_cr\gpu_1p0_mut_checkedreturn.cpp /Fo"obj_gpu\gpu_mut_cr\\" ^
     > obj_gpu\gpu_mut_cr.buildlog 2>&1 || (echo BUILD FAILED: gpu_mut_cr & type obj_gpu\gpu_mut_cr.buildlog & set OVERALL_OK=0)
 if not exist obj_gpu\gpu_mut_nr mkdir obj_gpu\gpu_mut_nr
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I%REFS%\include_override /I%ENG%\include /I%ENG%\src\gpu ^
-    /c %REFS%\gpu_1p0_mut_norearm.cpp /Fo"obj_gpu\gpu_mut_nr\\" ^
+"%SSLM_PYTHON%" make_mut_gpu_norearm_seam.py "%ENG%\src\gpu\gpu_1p0.cpp" "obj_gpu\gpu_mut_nr\gpu_1p0_mut_norearm.cpp" ^
+    > obj_gpu\make_mut_norearm.log 2>&1 || (echo GENERATE FAILED: gpu_mut_nr & type obj_gpu\make_mut_norearm.log & set OVERALL_OK=0)
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I%ENG%\include /I%ENG%\src\gpu ^
+    /c obj_gpu\gpu_mut_nr\gpu_1p0_mut_norearm.cpp /Fo"obj_gpu\gpu_mut_nr\\" ^
     > obj_gpu\gpu_mut_nr.buildlog 2>&1 || (echo BUILD FAILED: gpu_mut_nr & type obj_gpu\gpu_mut_nr.buildlog & set OVERALL_OK=0)
 
 rem CPU_COMMON: backend-agnostic sources shared by every configuration (unaffected by either fix).
@@ -130,16 +148,13 @@ rem CPU sslm_abi variants (AS_BUILT and FIXED).
 if not exist obj_gpu\cpu_asbuilt mkdir obj_gpu\cpu_asbuilt
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I%ENG%\include /I%ENG%\src /c %ENG%\src\sslm_abi.cpp ^
     /Fo"obj_gpu\cpu_asbuilt\sslm_abi.obj" > obj_gpu\cpu_asbuilt.buildlog 2>&1 || (echo BUILD FAILED: cpu_asbuilt & type obj_gpu\cpu_asbuilt.buildlog & set OVERALL_OK=0)
-if not exist obj_gpu\cpu_fixed mkdir obj_gpu\cpu_fixed
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I%ENG%\include /I%ENG%\src /c %REFS%\sslm_abi_cpu_fixed_v5.cpp ^
-    /Fo"obj_gpu\cpu_fixed\sslm_abi.obj" > obj_gpu\cpu_fixed.buildlog 2>&1 || (echo BUILD FAILED: cpu_fixed & type obj_gpu\cpu_fixed.buildlog & set OVERALL_OK=0)
 
 echo ================= Compiling and linking cells =================
 
 rem ---- cell_gpu_cell1_shortschema: GPU-only, four linkage variants (AS_BUILT/FIXED/MUT_CR/MUT_NR) ----
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /c cell_gpu_cell1_shortschema.cpp ^
     /Fo"obj_gpu\cell1_short_stock.obj" > obj_gpu\cell1_short_stock.buildlog 2>&1 || (echo BUILD FAILED: cell1_short_stock.obj & type obj_gpu\cell1_short_stock.buildlog & set OVERALL_OK=0)
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %OVRINC% /c cell_gpu_cell1_shortschema.cpp ^
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /c cell_gpu_cell1_shortschema.cpp ^
     /Fo"obj_gpu\cell1_short_ovr.obj" > obj_gpu\cell1_short_ovr.buildlog 2>&1 || (echo BUILD FAILED: cell1_short_ovr.obj & type obj_gpu\cell1_short_ovr.buildlog & set OVERALL_OK=0)
 
 for %%v in (ASBUILT FIXED MUT_CHECKEDRETURN MUT_NOREARM) do (
@@ -150,17 +165,17 @@ for %%v in (ASBUILT FIXED MUT_CHECKEDRETURN MUT_NOREARM) do (
     )
     if "%%v"=="FIXED" (
         set CELLOBJ=obj_gpu\cell1_short_ovr.obj
-        set GPUOBJS=obj_gpu\gpu_fixed\gpu_1p0_v5.obj obj_gpu\gpu_fixed\superslm_gpu_v5.obj
+        set GPUOBJS=obj_gpu\gpu_asbuilt\gpu_1p0.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
         set EXPECT=PASS
     )
     if "%%v"=="MUT_CHECKEDRETURN" (
         set CELLOBJ=obj_gpu\cell1_short_ovr.obj
-        set GPUOBJS=obj_gpu\gpu_mut_cr\gpu_1p0_mut_checkedreturn.obj obj_gpu\gpu_fixed\superslm_gpu_v5.obj
+        set GPUOBJS=obj_gpu\gpu_mut_cr\gpu_1p0_mut_checkedreturn.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
         set EXPECT=KILL
     )
     if "%%v"=="MUT_NOREARM" (
         set CELLOBJ=obj_gpu\cell1_short_ovr.obj
-        set GPUOBJS=obj_gpu\gpu_mut_nr\gpu_1p0_mut_norearm.obj obj_gpu\gpu_fixed\superslm_gpu_v5.obj
+        set GPUOBJS=obj_gpu\gpu_mut_nr\gpu_1p0_mut_norearm.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
         set EXPECT=KILL
     )
     echo ===== cell_gpu_cell1_shortschema [%%v] expect=!EXPECT! =====
@@ -198,7 +213,7 @@ if not exist obj_gpu\cell1_real_stock_ mkdir obj_gpu\cell1_real_stock_
 if not exist obj_gpu\cell1_real_ovr_ mkdir obj_gpu\cell1_real_ovr_
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /c cell_gpu_cell1_realschema.cpp cell_gpu_cell1_realschema_cpu_side.cpp ^
     /Fo"obj_gpu\cell1_real_stock_\\" > obj_gpu\cell1_real_stock.buildlog 2>&1 || (echo BUILD FAILED: cell1_real stock & type obj_gpu\cell1_real_stock.buildlog & set OVERALL_OK=0)
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %OVRINC% /c cell_gpu_cell1_realschema.cpp cell_gpu_cell1_realschema_cpu_side.cpp ^
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /c cell_gpu_cell1_realschema.cpp cell_gpu_cell1_realschema_cpu_side.cpp ^
     /Fo"obj_gpu\cell1_real_ovr_\\" > obj_gpu\cell1_real_ovr.buildlog 2>&1 || (echo BUILD FAILED: cell1_real ovr & type obj_gpu\cell1_real_ovr.buildlog & set OVERALL_OK=0)
 
 for %%v in (ASBUILT FIXED) do (
@@ -211,8 +226,8 @@ for %%v in (ASBUILT FIXED) do (
     if "%%v"=="FIXED" (
         set CELLMAIN=obj_gpu\cell1_real_ovr_\cell_gpu_cell1_realschema.obj
         set CELLCPU=obj_gpu\cell1_real_ovr_\cell_gpu_cell1_realschema_cpu_side.obj
-        set GPUOBJS=obj_gpu\gpu_fixed\gpu_1p0_v5.obj obj_gpu\gpu_fixed\superslm_gpu_v5.obj
-        set ABIOBJ=obj_gpu\cpu_fixed\sslm_abi.obj
+        set GPUOBJS=obj_gpu\gpu_asbuilt\gpu_1p0.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
+        set ABIOBJ=obj_gpu\cpu_asbuilt\sslm_abi.obj
     )
     echo ===== cell_gpu_cell1_realschema [%%v] =====
     link /nologo /OUT:"bin_gpu\cell1_real_%%v.exe" !CELLMAIN! !CELLCPU! !GPUOBJS! !CPU_COMMON_OBJS! !ABIOBJ! %SYSLIBS% ^
@@ -309,7 +324,7 @@ if not exist obj_gpu\cell3_stock_ mkdir obj_gpu\cell3_stock_
 if not exist obj_gpu\cell3_ovr_ mkdir obj_gpu\cell3_ovr_
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /c cell_gpu_cell3_agreement.cpp cell_gpu_cell3_cpu_side.cpp ^
     /Fo"obj_gpu\cell3_stock_\\" > obj_gpu\cell3_stock.buildlog 2>&1 || (echo BUILD FAILED: cell3 stock & type obj_gpu\cell3_stock.buildlog & set OVERALL_OK=0)
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %OVRINC% /c cell_gpu_cell3_agreement.cpp cell_gpu_cell3_cpu_side.cpp ^
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /c cell_gpu_cell3_agreement.cpp cell_gpu_cell3_cpu_side.cpp ^
     /Fo"obj_gpu\cell3_ovr_\\" > obj_gpu\cell3_ovr.buildlog 2>&1 || (echo BUILD FAILED: cell3 ovr & type obj_gpu\cell3_ovr.buildlog & set OVERALL_OK=0)
 
 for %%v in (ASBUILT FIXED) do (
@@ -322,8 +337,8 @@ for %%v in (ASBUILT FIXED) do (
     if "%%v"=="FIXED" (
         set CELLMAIN=obj_gpu\cell3_ovr_\cell_gpu_cell3_agreement.obj
         set CELLCPU=obj_gpu\cell3_ovr_\cell_gpu_cell3_cpu_side.obj
-        set GPUOBJS=obj_gpu\gpu_fixed\gpu_1p0_v5.obj obj_gpu\gpu_fixed\superslm_gpu_v5.obj
-        set ABIOBJ=obj_gpu\cpu_fixed\sslm_abi.obj
+        set GPUOBJS=obj_gpu\gpu_asbuilt\gpu_1p0.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
+        set ABIOBJ=obj_gpu\cpu_asbuilt\sslm_abi.obj
     )
     echo ===== cell_gpu_cell3_agreement [%%v] =====
     link /nologo /OUT:"bin_gpu\cell3_%%v.exe" !CELLMAIN! !CELLCPU! !GPUOBJS! !CPU_COMMON_OBJS! !ABIOBJ! %SYSLIBS% ^
@@ -377,7 +392,7 @@ for %%v in (ASBUILT FIXED) do (
 rem ---- cell_gpu_slm5_saverestore: GPU-only, AS_BUILT and FIXED ----
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /c cell_gpu_slm5_saverestore.cpp /Fo"obj_gpu\slm5_stock.obj" ^
     > obj_gpu\slm5_stock.buildlog 2>&1 || (echo BUILD FAILED: slm5_stock.obj & type obj_gpu\slm5_stock.buildlog & set OVERALL_OK=0)
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %OVRINC% /c cell_gpu_slm5_saverestore.cpp /Fo"obj_gpu\slm5_ovr.obj" ^
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /c cell_gpu_slm5_saverestore.cpp /Fo"obj_gpu\slm5_ovr.obj" ^
     > obj_gpu\slm5_ovr.buildlog 2>&1 || (echo BUILD FAILED: slm5_ovr.obj & type obj_gpu\slm5_ovr.buildlog & set OVERALL_OK=0)
 for %%v in (ASBUILT FIXED) do (
     if "%%v"=="ASBUILT" (
@@ -386,7 +401,7 @@ for %%v in (ASBUILT FIXED) do (
     )
     if "%%v"=="FIXED" (
         set CELLOBJ=obj_gpu\slm5_ovr.obj
-        set GPUOBJS=obj_gpu\gpu_fixed\gpu_1p0_v5.obj obj_gpu\gpu_fixed\superslm_gpu_v5.obj
+        set GPUOBJS=obj_gpu\gpu_asbuilt\gpu_1p0.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
     )
     echo ===== cell_gpu_slm5_saverestore [%%v] =====
     link /nologo /OUT:"bin_gpu\slm5_%%v.exe" !CELLOBJ! !GPUOBJS! !CPU_COMMON_OBJS! %SYSLIBS% ^
@@ -441,9 +456,9 @@ if "!SUMMARY_LINE!"=="" (
     if not "!SKIPN!"=="0" (echo    SKIPS=!SKIPN! -- a skipped cell fails the run ^(obj_gpu\slm4_dump.runlog^)& set OVERALL_OK=0)
 )
 
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %OVRINC% /c cell_gpu_slm4_restore.cpp /Fo"obj_gpu\slm4_restore.obj" ^
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /c cell_gpu_slm4_restore.cpp /Fo"obj_gpu\slm4_restore.obj" ^
     > obj_gpu\slm4_restore.buildlog 2>&1 || (echo BUILD FAILED: slm4_restore.obj & type obj_gpu\slm4_restore.buildlog & set OVERALL_OK=0)
-link /nologo /OUT:"bin_gpu\slm4_restore.exe" obj_gpu\slm4_restore.obj obj_gpu\gpu_fixed\gpu_1p0_v5.obj obj_gpu\gpu_fixed\superslm_gpu_v5.obj !CPU_COMMON_OBJS! %SYSLIBS% ^
+link /nologo /OUT:"bin_gpu\slm4_restore.exe" obj_gpu\slm4_restore.obj obj_gpu\gpu_asbuilt\gpu_1p0.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj !CPU_COMMON_OBJS! %SYSLIBS% ^
     > obj_gpu\slm4_restore.linklog 2>&1 || (echo LINK FAILED: slm4_restore & type obj_gpu\slm4_restore.linklog & set OVERALL_OK=0)
 echo ===== cell_gpu_slm4_restore [FIXED, reading the ASBUILT-written blob] =====
 "bin_gpu\slm4_restore.exe" %MODELARG% --in=obj_gpu\slm4_blob.bin > obj_gpu\slm4_restore.runlog 2>&1

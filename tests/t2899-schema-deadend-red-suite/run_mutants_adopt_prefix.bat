@@ -1,14 +1,21 @@
 @echo off
 rem T-2899 (Curie) -- mutant runner for cell_adopt_prefix_census: builds the cell against three
 rem scratch sslm_abi.cpp variants in place of the tree's own copy --
-rem   FIXED         : Claude/Vitruvius/t2898-probe/sslm_abi_cpu_fixed_v5.cpp verbatim (Sec3.10.7's
-rem                   reference fix, cumulative through T-2866/T-2894/T-2896/T-2897/T-2898). Must
-rem                   be the green tip.
-rem   MUT_WALKRESET : the SAME file with T-2898's own reset line reverted to a no-op
-rem                   (Claude/Vitruvius/t2898-probe/sslm_abi_cpu_mutant_v5.cpp verbatim) --
+rem   FIXED         : the LIVE TIP's own src/sslm_abi.cpp, verbatim (Sec3.10.7's reference fix,
+rem                   cumulative through T-2866/T-2894/T-2896/T-2897/T-2898, is already landed in
+rem                   the committed tree). Must be the green tip.
+rem   MUT_WALKRESET : the SAME file with T-2898's own reset line reverted to a no-op --
 rem                   Sec3.10.3 row 11's own named mutant. Must be killed.
-rem   MUT_FORCED    : the SAME fixed file with ONLY line 2018's `forced_token_count = 0;`
-rem                   commented out -- the TE-364 mutant this cell exists to kill. Must be killed.
+rem   MUT_FORCED    : the SAME fixed file with ONLY the `forced_token_count = 0;` line inside
+rem                   `adopt_prefix` commented out -- the TE-364 mutant this cell exists to kill.
+rem                   Must be killed.
+rem
+rem T-2916 (TE-370 M1): all three are now generated from the live tip by
+rem `make_mut_adopt_prefix.py`, anchored on unique surrounding comments (never by line number,
+rem which drifts) -- no external scratch directory (`D:\_t2909\refs_adopt`) is read any more, so
+rem this runner has no out-of-repo input. Confirmed equivalent to the retired external copies by
+rem `diff --strip-trailing-cr` before this switch (139 changed lines, all prose/comment, none
+rem semantic).
 rem
 rem T-2909 (TE-365 S1): this runner used to `echo` a summary line and then unconditionally
 rem `exit /b 0` -- a build failure, a regressed FIXED variant, or a SURVIVING mutant (zero
@@ -16,14 +23,15 @@ rem failures where a kill was required) all read as a clean run. Every variant n
 rem expected verdict, and a mismatch, a build failure, or a crashed/summary-less run all set
 rem OVERALL_OK=0, gating the script's own exit code.
 rem
-rem Usage: run_mutants_adopt_prefix.bat <path-to-refs-dir> <path-to-model.sslm> [schema-name]
+rem Usage: run_mutants_adopt_prefix.bat <path-to-model.sslm> [schema-name]
+rem T-2916: dropped the <path-to-refs-dir> argument this runner used to take.
 setlocal enabledelayedexpansion
 set HEREDIR=%~dp0
 set ENG=%HEREDIR%..\..
 set TESTS=%ENG%\tests
-set REFS=%~1
-set MODELARG=--model=%~2
-if not "%~3"=="" set MODELARG=%MODELARG% --schema=%~3
+set REFS=obj_mutants
+set MODELARG=--model=%~1
+if not "%~2"=="" set MODELARG=%MODELARG% --schema=%~2
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 -no_logo
 cd /d "%HEREDIR%"
 if not exist obj_mutants mkdir obj_mutants
@@ -35,7 +43,15 @@ set SRC_NOABI=%ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cp
     %ENG%\src\damped_greedy_antilm.cpp %ENG%\src\damped_greedy_topk.cpp ^
     %ENG%\src\damped_greedy_phaseD.cpp %ENG%\src\damped_greedy_phaseD_loop.cpp
 
+if not defined SSLM_PYTHON set SSLM_PYTHON=C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe
 set OVERALL_OK=1
+for %%m in (FIXED:sslm_abi_fixed.cpp MUT_WALKRESET:sslm_abi_mutant_walkreset.cpp MUT_FORCED:sslm_abi_mutant_forced.cpp) do (
+    for /f "tokens=1,2 delims=:" %%a in ("%%m") do (
+        "%SSLM_PYTHON%" make_mut_adopt_prefix.py %%a "%ENG%\src\sslm_abi.cpp" "obj_mutants\%%b" ^
+            > "obj_mutants\make_mut_adopt_prefix_%%a.log" 2>&1
+        if errorlevel 1 (echo BUILD FAILED: make_mut_adopt_prefix.py %%a & type "obj_mutants\make_mut_adopt_prefix_%%a.log" & set OVERALL_OK=0)
+    )
+)
 for %%v in (FIXED MUT_WALKRESET MUT_FORCED) do (
     if "%%v"=="FIXED" (set ABIFILE=%REFS%\sslm_abi_fixed.cpp& set EXPECT=PASS)
     if "%%v"=="MUT_WALKRESET" (set ABIFILE=%REFS%\sslm_abi_mutant_walkreset.cpp& set EXPECT=KILL)
