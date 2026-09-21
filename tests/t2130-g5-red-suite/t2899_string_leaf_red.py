@@ -96,7 +96,7 @@ class G5_1_T2853_Escapes(unittest.TestCase):
     def test_each_short_escape_is_admitted(self) -> None:
         for esc in _SHORT_ESCAPES:
             with self.subTest(escape=esc):
-                vocab = ["{", "}", '"Prompt_Result":', '"', "\\", esc]
+                vocab = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "\\", esc]
                 content = "\\" + esc
                 self.assertTrue(
                     _bare_literal_is_valid_json_string(content),
@@ -117,7 +117,7 @@ class G5_1_T2853_Escapes(unittest.TestCase):
     def test_invalid_escape_char_has_no_admitted_transition(self) -> None:
         # 'q' is not one of the eight short escapes and is not the '\uXXXX' introducer.
         bad = "q"
-        vocab = ["{", "}", '"Prompt_Result":', '"', "\\", bad]
+        vocab = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "\\", bad]
         content = "\\" + bad
         self.assertFalse(
             _bare_literal_is_valid_json_string(content),
@@ -143,7 +143,7 @@ class G5_1_T2853_UnicodeEscape(unittest.TestCase):
     the four positions has no admitted transition at that state."""
 
     def test_four_hex_digits_admitted_then_returns_to_content_state(self) -> None:
-        vocab = ["{", "}", '"Prompt_Result":', '"', "\\", "u"] + _HEX_DIGITS + ["z"]
+        vocab = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "\\", "u"] + _HEX_DIGITS + ["z"]
         content = "\\u4Fa0z"  # \uXXXX then an ordinary content char, proving S_c is resumed
         self.assertTrue(_bare_literal_is_valid_json_string(content), "SETUP: fixture is invalid JSON")
         try:
@@ -159,7 +159,7 @@ class G5_1_T2853_UnicodeEscape(unittest.TestCase):
     def test_non_hex_character_rejected_at_each_of_the_four_positions(self) -> None:
         # 'g' is a valid vocabulary token (ordinary S_c content elsewhere) but is not a hex
         # digit -- it must have no admitted transition specifically from S_u1..S_u4.
-        vocab = ["{", "}", '"Prompt_Result":', '"', "\\", "u", "g"] + _HEX_DIGITS
+        vocab = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "\\", "u", "g"] + _HEX_DIGITS
         for position in range(4):
             with self.subTest(position=position):
                 digits = ["4", "F", "a", "0"]
@@ -194,7 +194,7 @@ class G5_1_T2853_MultiCharacterCrossing(unittest.TestCase):
         # single-character alternatives also present, so this cell genuinely drives the
         # crossing transition rather than a character-by-character walk that happens to
         # reach the same place.
-        vocab = ["{", "}", '"Prompt_Result":', '"', "l", "o", 'lo"']
+        vocab = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "l", "o", 'lo"']
         self.assertTrue(
             _bare_literal_is_valid_json_string("lo"), "SETUP: fixture is invalid JSON"
         )
@@ -212,7 +212,7 @@ class G5_1_T2853_MultiCharacterCrossing(unittest.TestCase):
         # The SAME content, spelled with only the single-character tokens (no crossing
         # token in the vocabulary), must ALSO accept -- the crossing token is one admitted
         # path to 'following', not the only one.
-        vocab_no_cross = ["{", "}", '"Prompt_Result":', '"', "l", "o"]
+        vocab_no_cross = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "l", "o"]
         mp2 = _compile(vocab=vocab_no_cross)
         self.assertTrue(
             mp2.accepts(full),
@@ -231,7 +231,7 @@ class G5_1_T2853_RawControlByteDeadEnd(unittest.TestCase):
         for code in (0x00, 0x01, 0x08, 0x1F):
             with self.subTest(byte=hex(code)):
                 raw = chr(code)
-                vocab = ["{", "}", '"Prompt_Result":', '"', "a", raw]
+                vocab = ["{", "}", '"Prompt_Result":', 'Prompt_Result":', '"', "a", raw]
                 self.assertFalse(
                     _bare_literal_is_valid_json_string("a" + raw),
                     f"SETUP: a raw 0x{code:02x} byte is somehow valid JSON per json.loads",
