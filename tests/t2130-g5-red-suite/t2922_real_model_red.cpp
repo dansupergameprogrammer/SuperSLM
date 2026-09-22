@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
     const std::vector<int32_t> prompt = ReadIds(argv[2]); if (prompt.empty()) return 2;
     std::vector<uint8_t> bytes; if (!ReadFileBytes(argv[1], &bytes)) return 2;
     sslm_model model = nullptr; CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
-    sslm_schema schema = nullptr; CHECK(sslm_schema_lookup(model, "potion_shop_order", &schema) == SSLM_OK);
+    sslm_schema schema = nullptr; CHECK(sslm_schema_lookup(model, "prompt_result", &schema) == SSLM_OK);
     const size_t block = sslm_kv_block_size(model), overhead = sslm_kv_pool_overhead_size(model, 1);
     std::vector<uint8_t> storage(block + overhead + 63); void* aligned = storage.data(); size_t space = storage.size();
     CHECK(std::align(64, block + overhead, aligned, space) != nullptr);
@@ -53,7 +53,7 @@ int main(int argc, char** argv) {
     const int64_t wait_before = superslm_test::g_gpu_fence_wait_count_probe.load();
     const int64_t ready_before = superslm_test::g_gpu_ready_poll_count_probe.load();
 #endif
-    const int32_t gpu_schema = SslmGpuSchemaLookupForG5Bridge(fx.model, "potion_shop_order");
+    const int32_t gpu_schema = SslmGpuSchemaLookupForG5Bridge(fx.model, "prompt_result");
     CHECK(gpu_schema >= 0);
     SslmGpuSequenceHandle* gpu = nullptr;
     CHECK(sslm_gpu_seq_create(ctx, fx.model, fx.model_cap, &gpu) == SslmGpuStatus::SSLM_OK);

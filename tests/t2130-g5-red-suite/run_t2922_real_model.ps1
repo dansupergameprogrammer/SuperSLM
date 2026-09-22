@@ -32,7 +32,7 @@ $PromptHash = Get-Sha256Hex -Bytes $PromptBytes
 if ($ArtifactItem.Length -ne [int64]$Manifest.artifact_bytes -or
     $ArtifactHash -ne [string]$Manifest.artifact_sha256 -or
     $PromptHash -ne [string]$Manifest.prompt_ids_text_without_final_newline_sha256 -or
-    [string]$Manifest.schema_name -ne 'potion_shop_order' -or
+    [string]$Manifest.schema_name -ne 'prompt_result' -or
     [int]$Manifest.decode_budget -ne 300 -or [string]$Manifest.expected_stop -ne 'budget') {
     Write-Error 'real-model manifest/input mismatch'; exit 2
 }
