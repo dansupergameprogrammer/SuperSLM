@@ -86,6 +86,17 @@ def _real_vocab(ckpt_dir: str, vocab_size: int) -> list[bytes]:
     return pieces
 
 
+def _real_special_ids(ckpt_dir: str) -> frozenset[int]:
+    """T-2917 (folding TE-370 C1, D-SLM7600): every tokenizer-added/special id, for this
+    file's own callers to pass to `compile_schema_to_mask_pages`'s required `special_ids`
+    argument. `_real_vocab` itself stays a plain vocabulary producer (it returns the tokenizer's
+    real bytes unmodified, for every one of this file's schemas, string-leaf or not) -- the
+    exclusion is the compile call's own job now, structurally, so a future schema compiled
+    against this vocabulary cannot admit a special id by a caller forgetting to ask for it."""
+    t = TokenizerTables(ckpt_dir)
+    return frozenset(token_id for _, token_id in t.specials)
+
+
 def _read_config_vocab_size(base_path: str) -> int:
     data = F.read_section_bytes(base_path, F.SectionType.CONFIG)
     if data is None:
@@ -168,16 +179,22 @@ def main():
     header = F.read_header(args.base)
     vocab_size = _read_config_vocab_size(args.base)
     vocab = _real_vocab(args.ckpt, vocab_size)
+    # T-2917 (folding TE-370 C1, D-SLM7600): the real special ids are threaded through every
+    # compile call this tool makes, whether or not today's two schemas happen to have a string
+    # leaf -- the compiler's own `special_ids` argument is required, and supplying the real ids
+    # unconditionally means a future schema added here is safe by construction, not by whoever
+    # adds it remembering the step.
+    special_ids = _real_special_ids(args.ckpt)
 
     print(f"compiling shopkeeper_intent_extraction against {vocab_size}-token real vocab...")
-    mp_shopkeeper = SC.compile_schema_to_mask_pages(SHOPKEEPER_SCHEMA, vocab)
+    mp_shopkeeper = SC.compile_schema_to_mask_pages(SHOPKEEPER_SCHEMA, vocab, special_ids=special_ids)
     n_states = len(set(mp_shopkeeper.transitions.keys()) |
                     set(t for row in mp_shopkeeper.transitions.values() for t in row.values()) |
                     {0})
     print(f"  compiled: {n_states} states")
 
     print("compiling g5_minimal_one_field...")
-    mp_minimal = SC.compile_schema_to_mask_pages(MINIMAL_ONE_FIELD_SCHEMA, vocab)
+    mp_minimal = SC.compile_schema_to_mask_pages(MINIMAL_ONE_FIELD_SCHEMA, vocab, special_ids=special_ids)
     n_states2 = len(set(mp_minimal.transitions.keys()) |
                      set(t for row in mp_minimal.transitions.values() for t in row.values()) |
                      {0})

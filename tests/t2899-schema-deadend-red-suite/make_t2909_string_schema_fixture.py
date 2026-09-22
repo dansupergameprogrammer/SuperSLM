@@ -115,7 +115,10 @@ def build_artifact_bytes():
     )
     sections, fold_approximation_error = C.build_sections(model, enable_damped_greedy=True)
     vocab = _vocab(cfg.vocab_size)
-    masks = SC.compile_schema_to_mask_pages(SCHEMA, vocab)
+    # T-2917 (folding TE-370 C1, D-SLM7600): every id in this synthetic vocabulary is either
+    # one of the six meaningful pieces or an inert filler piece -- no tokenizer special ids
+    # exist here to exclude, so special_ids=frozenset() is the correct, deliberate call.
+    masks = SC.compile_schema_to_mask_pages(SCHEMA, vocab, special_ids=frozenset())
     # SETUP self-check: the compiled DFA has the interior escape state (S_e) this fixture
     # exists to reach, and the six hand-picked ids above actually drive it -- fail loudly
     # at generation time, not inside a cell's own red run, if the compiler's own output

@@ -241,6 +241,13 @@ typedef struct sslm_decode_params {
 typedef struct sslm_stats_out {
     int64_t decode_step_ceiling;
     int64_t decode_step_actual;
+    /* (design Sec6 G5-3/Sec7 dim7): the schema-content forced-span counter -- this SEQUENCE's
+     * own count of tokens admitted through a SSLM_SPAN_SCHEMA_CONTENT prefill call since its
+     * last sslm_seq_reset or sslm_seq_adopt_prefix. Not a damped-greedy statistic (damped-greedy
+     * decoding does not touch this field). sslm_seq_adopt_prefix always writes 0 here, even when
+     * the adopted prefix's own history holds forced positions: a prefix does not track its own
+     * forced_token_count, so the count transplanted is exactly what a fresh sequence would read,
+     * never the prefix's -- stated here rather than left implicit, T-2917 folding TE-370 M2. */
     int64_t forced_token_count;
     int32_t kv_blocks_resident;
     /* (design Sec14.1): 1 iff the

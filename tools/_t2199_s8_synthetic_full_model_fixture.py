@@ -78,7 +78,11 @@ def build_artifact_bytes():
         "type": "object",
         "properties": {"ok": {"type": "boolean"}},
     }
-    masks = SC.compile_schema_to_mask_pages(schema, vocab)
+    # T-2917 (folding TE-370 C1, D-SLM7600): this synthetic vocabulary carries no tokenizer
+    # special ids at all (every entry is either the one meaningful token or an inert filler
+    # piece), so there is nothing to exclude -- special_ids=frozenset() is the correct,
+    # deliberate "no exclusion" call, not an omission.
+    masks = SC.compile_schema_to_mask_pages(schema, vocab, special_ids=frozenset())
     sections.append(F.Section(
         F.SectionType.SCHEMA_MASKS,
         _serialize_scm1([("g5_minimal_one_field", masks)], cfg.vocab_size)))

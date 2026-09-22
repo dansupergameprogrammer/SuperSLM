@@ -2003,8 +2003,17 @@ extern "C" sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix) {
 	// A frozen prefix contains prompt/forced forward state, never this sequence's prior generated
 	// token history. Adoption replaces the sequence origin, so any warm anti-LM must be discarded.
 	ClearDampedGreedyState(seq);
-	// T-2897: the identical discard applies to the damped-greedy forced-token counter -- a warm
-	// count from the sequence's own PRIOR generation must not survive into the adopted origin.
+	// T-2897: the identical discard applies to forced_token_count, the schema-content
+	// forced-span counter (design Sec6 G5-3/Sec7 dim7, see this sequence's own field comment
+	// above) -- a warm count from the sequence's own PRIOR generation must not survive into
+	// the adopted origin. T-2917 (folding TE-370 M2, D-SLM7600): stated truthfully, this also
+	// clears any forced-span progress the ADOPTED prefix itself carries -- a prefix does not
+	// track its own forced_token_count (design Sec6 G5-3 assigns the field to sslm_seq_s only),
+	// so adopting a prefix with real schema progress reports 0 here, not the count of forced
+	// positions the adopted history actually holds. Unaffected by this fold and stays specified
+	// (plan `te266-gpu-path.md` Sec3.10.7): the design's own `sslm_stats` contract for this
+	// field is "this sequence's own count since its last reset or adoption," not a transplant
+	// of the prefix's history.
 	seq->forced_token_count = 0;
 	std::copy(prefix->hidden_codes_storage.begin(), prefix->hidden_codes_storage.end(),
 	          seq->hidden_codes_storage.begin());

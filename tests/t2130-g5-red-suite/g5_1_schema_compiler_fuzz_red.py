@@ -227,7 +227,10 @@ class G5_1_CompilerConformanceFuzz(unittest.TestCase):
 		# bounded sample for any schema whose product is larger.
 		admitted = _canonical_serializations(schema, limit=2000)
 		vocab = _reference_vocab([schema])
-		pages = compile_schema_to_mask_pages(schema, vocab)
+		# T-2917 (folding TE-370 C1, D-SLM7600): this corpus's own schemas are D-SLM45's
+		# object/enum/boolean subset only (no string leaf), and `_reference_vocab` carries no
+		# tokenizer special ids -- special_ids=frozenset() is the correct, deliberate call.
+		pages = compile_schema_to_mask_pages(schema, vocab, special_ids=frozenset())
 		# ACCEPTS every string the schema admits: each canonical serialization walks the
 		# compiled DFA from start to an accepting state without ever hitting an empty mask.
 		# T-2915: the compiler is byte-level (`Sequence[bytes]`); every serialization here is
@@ -290,7 +293,7 @@ class G5_1_CompilerConformanceFuzz(unittest.TestCase):
 		}
 		vocab = _reference_vocab([shopkeeper_schema])
 		try:
-			compile_schema_to_mask_pages(shopkeeper_schema, vocab)
+			compile_schema_to_mask_pages(shopkeeper_schema, vocab, special_ids=frozenset())
 		except SchemaCompileError as exc:
 			self.fail(
 				f"the reference task's own schema (D-SLM32) was REJECTED as unsatisfiable -- "
@@ -322,7 +325,7 @@ class G5_1_UnsatisfiableSchemaRejectionGuardVitality(unittest.TestCase):
 		}
 		vocab_missing_z = [c.encode("ascii") for c in "abcdefghijklmnopqrstuvwxy0123456789{}\":,_"]  # no 'z'
 		with self.assertRaises(SchemaCompileError) as ctx:
-			compile_schema_to_mask_pages(unsatisfiable_schema, vocab_missing_z)
+			compile_schema_to_mask_pages(unsatisfiable_schema, vocab_missing_z, special_ids=frozenset())
 		exc = ctx.exception
 		# The which-state/why diagnostic (design Sec3/Sec9): the rejection names a concrete
 		# state id and a human-readable reason, not merely "compile failed."
@@ -342,7 +345,7 @@ class G5_1_UnsatisfiableSchemaRejectionGuardVitality(unittest.TestCase):
 			},
 		}
 		vocab_with_z = [c.encode("ascii") for c in "abcdefghijklmnopqrstuvwxyz0123456789{}\":,_"]
-		compile_schema_to_mask_pages(satisfiable_schema, vocab_with_z)  # must not raise
+		compile_schema_to_mask_pages(satisfiable_schema, vocab_with_z, special_ids=frozenset())  # must not raise
 
 
 if __name__ == "__main__":

@@ -84,10 +84,10 @@ enum class SslmGpuStatus : uint32_t {
      *       genuinely terminal for the context regardless of the command-list state, and no call
      *       against it can be trusted afterward. At 1.6.0, a removed device stays this process's
      *       submission device, so every later sslm_gpu_context_create in the process returns
-     *       SSLM_DEVICE_LOST until the process restarts (T-2845; 1.6.x, once contexts on the
-     *       removed device carry their own device rather than sharing the process's one, builds a
-     *       fresh device once every context on it has been destroyed -- sslm_gpu_context_create's
-     *       own comment);
+     *       SSLM_DEVICE_LOST until the process restarts (T-2845, D-SLM7386); a 1.6.x point
+     *       release gives every context its own device instead of sharing the process's one, so
+     *       a fresh device is built once every context on the removed one has been destroyed;
+     *
      *     - a fault raised before the command list reaches Closed (e.g. `Close()` itself
      *       failing) is retried once; if that retry also fails, the list is left recording and
      *       every later call against this context fails too (`ID3D12CommandAllocator::Reset()`

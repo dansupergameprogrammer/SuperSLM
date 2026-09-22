@@ -196,7 +196,7 @@ class T2908_LoneContinuationByteDeadEnd(unittest.TestCase):
         vocab = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"a", raw_byte]
         wrapped = b'{"Prompt_Result":"a' + raw_byte + b'"}'
 
-        mp_red = compile_schema_to_mask_pages(_SCHEMA, vocab)
+        mp_red = compile_schema_to_mask_pages(_SCHEMA, vocab, special_ids=frozenset())
         self.assertFalse(
             mp_red.accepts(wrapped),
             "a lone UTF-8 continuation byte (0x80-0xBF) is wrongly admitted as content by the "
@@ -353,7 +353,7 @@ class T2908_KeywordAllowlistGroup(unittest.TestCase):
                 schema = self._schema_with({"type": "string", keyword: "irrelevant-value"})
                 vocab = [b"{", b"}", b'"f":', b'f":', b'"', b"a", b"b"]
                 with self.assertRaises(SchemaCompileError) as ctx:
-                    compile_schema_to_mask_pages(schema, vocab)
+                    compile_schema_to_mask_pages(schema, vocab, special_ids=frozenset())
                 self.assertIn(
                     keyword, str(ctx.exception),
                     f"the branch's own compiler must name {keyword!r} in its rejection, not a "
@@ -369,7 +369,7 @@ class T2908_KeywordAllowlistGroup(unittest.TestCase):
         schema = self._schema_with({"type": "string", "const": "x"})
         vocab = [b"{", b"}", b'"f":', b'f":', b'"', b"a", b"b", b"x"]
         with self.assertRaises(SchemaCompileError):
-            compile_schema_to_mask_pages(schema, vocab)
+            compile_schema_to_mask_pages(schema, vocab, special_ids=frozenset())
 
         original_reject = branch_module._reject_unimplemented_keywords
 
@@ -378,7 +378,7 @@ class T2908_KeywordAllowlistGroup(unittest.TestCase):
 
         branch_module._groups.__globals__["_reject_unimplemented_keywords"] = no_op_reject
         try:
-            mp = compile_schema_to_mask_pages(schema, vocab)
+            mp = compile_schema_to_mask_pages(schema, vocab, special_ids=frozenset())
         finally:
             branch_module._groups.__globals__["_reject_unimplemented_keywords"] = original_reject
         self.assertTrue(

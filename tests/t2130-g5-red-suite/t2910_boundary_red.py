@@ -40,7 +40,7 @@ _SCHEMA = common.PROMPT_RESULT_SCHEMA
 _PREFIX = b'{"Prompt_Result":'
 
 
-def _locate_pre_value_and_content(module, vocab: list[bytes]):
+def _locate_pre_value_and_content(module, vocab: list[bytes], *, special_ids: frozenset[int] | None = None):
     """Compile `_SCHEMA` under a T-2910-shaped reference `module` (one that returns a 4-tuple
     `(char_dfa, char_start, char_accepting, content_states)` from `_char_dfa` and takes
     `content_states` as `_token_targets`'s fourth argument) and return
@@ -50,7 +50,13 @@ def _locate_pre_value_and_content(module, vocab: list[bytes]):
     BFS exactly (same start state, same `sorted(targets)` discovery order) so its numbering is
     identical to the real, returned `mask_pages` -- an independent BFS in a different iteration
     order assigns different ids to the same states, which silently makes a content-membership
-    check meaningless (the bug this docstring exists to warn a future editor away from)."""
+    check meaningless (the bug this docstring exists to warn a future editor away from).
+
+    `special_ids` (T-2917, folding TE-370 C1, D-SLM7600): `None` (the default) calls `module`'s
+    own `compile_schema_to_mask_pages` with the old two-positional-argument signature, for the
+    T-2910/T-2908 reference modules this helper is also called with, which never gained the
+    required `special_ids` argument. Any other value is passed through as the live branch
+    module's own required keyword argument."""
     char_dfa, char_start, _char_accepting, content_states = module._char_dfa(module._groups(_SCHEMA, "$"))
     trie = module._vocab_trie(tuple(vocab))
     ids: dict[int, int] = {char_start: 0}
@@ -65,7 +71,10 @@ def _locate_pre_value_and_content(module, vocab: list[bytes]):
                 queue.append(target)
     content_states_new = {ids[state] for state in content_states if state in ids}
 
-    mp = module.compile_schema_to_mask_pages(_SCHEMA, vocab)
+    if special_ids is None:
+        mp = module.compile_schema_to_mask_pages(_SCHEMA, vocab)
+    else:
+        mp = module.compile_schema_to_mask_pages(_SCHEMA, vocab, special_ids=special_ids)
 
     def _walk_literal(state: int, remaining: bytes) -> int:
         while remaining:
@@ -98,8 +107,9 @@ class T2910_ValueOpen(unittest.TestCase):
         boundary) is now refused on the branch, exactly as on the reference (the sibling
         `test_compound_open_token_refused_on_reference`, same technique)."""
         vocab = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"a", b'"a']
-        _, pre_value, _s_c, _content = _locate_pre_value_and_content(branch_module, vocab)
-        mp = compile_schema_to_mask_pages(_SCHEMA, vocab)
+        _, pre_value, _s_c, _content = _locate_pre_value_and_content(
+            branch_module, vocab, special_ids=frozenset())
+        mp = compile_schema_to_mask_pages(_SCHEMA, vocab, special_ids=frozenset())
         admitted = mp.transitions[pre_value]
         admitted_pieces = {vocab[tid] for tid in admitted}
         self.assertEqual(
@@ -130,7 +140,7 @@ class T2910_ValueOpen(unittest.TestCase):
 
         branch_module._token_targets = no_open_discipline
         try:
-            mp = compile_schema_to_mask_pages(_SCHEMA, vocab)
+            mp = compile_schema_to_mask_pages(_SCHEMA, vocab, special_ids=frozenset())
         finally:
             branch_module._token_targets = original_token_targets
         full = b'{"Prompt_Result":"a"}'
@@ -207,7 +217,8 @@ class T2910_ValueClose(unittest.TestCase):
         # close side is deliberately unrestricted).
         vocab_red = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"a", b".", b'a."']
         full = b'{"Prompt_Result":"a."}'
-        self.assertTrue(compile_schema_to_mask_pages(_SCHEMA, vocab_red).accepts(full))
+        self.assertTrue(
+            compile_schema_to_mask_pages(_SCHEMA, vocab_red, special_ids=frozenset()).accepts(full))
 
         ref = common.reference_t2910()
         vocab_green = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"a", b".", b'a."']
@@ -288,21 +299,24 @@ def _wrap(inner: bytes) -> bytes:
 
 class T2910_SpecialTokenExclusion(unittest.TestCase):
     def test_unzeroed_special_token_reaches_content_on_the_branch(self) -> None:
-        # By design (Sec3.9.1/Sec3.9.3), the compiler itself has no special-id concept at all --
-        # exclusion is a VOCABULARY transform (`zero_special_ids`) the caller applies before
-        # compiling, not a per-state carve-out in the DFA. A caller that skips that step (as the
-        # bare vocabulary here does) still gets an unzeroed "special"-shaped piece admitted as
-        # ordinary content wherever its spelling is legal JSON content, exactly like any other
-        # piece -- true on the branch both before and after T-2915's port, and the reason
-        # `zero_special_ids` must be called, not a defect in the compiler itself.
+        # T-2917 (folding TE-370 C1, D-SLM7600): the compiler does not guess which ids are
+        # "special" from a token's own spelling -- exclusion is driven entirely by the caller's
+        # own `special_ids` argument, structural (required) but not automatic. Passing an EMPTY
+        # set, deliberately, still lets a special-shaped piece through wherever its spelling is
+        # legal JSON content, exactly like any other piece: the compiler has no per-state
+        # carve-out for a piece merely because it looks like a special token, before or after
+        # T-2915's port or T-2917's own structural fix. The distinction T-2917 closed is that a
+        # caller can no longer reach this state by FORGETTING the argument -- only by asking for
+        # it, in `special_ids`, explicitly.
         special_piece = b"<|im_end|>"
         vocab = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"a", special_piece]
         full = b'{"Prompt_Result":"a' + special_piece + b'"}'
-        mp = compile_schema_to_mask_pages(_SCHEMA, vocab)
+        mp = compile_schema_to_mask_pages(_SCHEMA, vocab, special_ids=frozenset())
         self.assertTrue(
             mp.accepts(full),
-            "an unzeroed special-shaped piece must still be admitted as content when the caller "
-            "has not called zero_special_ids -- the compiler itself does not auto-exclude",
+            "an unexcluded special-shaped piece must still be admitted as content when its id "
+            "is not named in special_ids -- the compiler excludes exactly what it is told to, "
+            "nothing more, nothing less",
         )
 
     def test_special_token_excluded_everywhere_on_reference(self) -> None:

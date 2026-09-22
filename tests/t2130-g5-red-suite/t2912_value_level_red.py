@@ -331,20 +331,21 @@ def _build_red_artifact(out_path: Path) -> None:
     sys.path.insert(0, str(_ENGINE / "tools"))
     import sslm_format as fmt
     from t2132_build_g5_fixture import _serialize_scm1, _real_vocab
-    from sslm_convert_schema import compile_schema_to_mask_pages, zero_special_ids
+    from sslm_convert_schema import compile_schema_to_mask_pages
 
     config = fmt.read_section_bytes(str(common.A_EX_ARTIFACT), fmt.SectionType.CONFIG)
     (vocab_size,) = struct.unpack_from("<I", config, 32)
     vocab = _real_vocab(str(common.QWEN25_0P5B_CHECKPOINT), vocab_size)
-    # T-2910 (Sec3.9.1): a caller compiling a string-leaf schema must zero every tokenizer
-    # special/added id before the vocabulary reaches the compiler -- `_real_vocab` itself does
-    # not (correctly: `t2132_build_g5_fixture.py`'s own two schemas have no string leaf, so
-    # zeroing there would be a no-op; this schema, `_SCHEMA` (Prompt_Result), DOES have one).
-    # Found live: without this step, `_build_red_artifact`'s own output could select a special
-    # id as string content on the real engine, diverging from the properly-zeroed GREEN
-    # reference on some heldout prompts (V5, below) for a reason unrelated to the compiler port.
-    vocab = zero_special_ids(vocab, common.real_special_ids())
-    mask_pages = compile_schema_to_mask_pages(_SCHEMA, vocab)
+    # T-2917 (folding TE-370 C1, D-SLM7600): the compiler itself now takes `special_ids` and
+    # applies the exclusion -- no caller-side `zero_special_ids` step to forget. `_real_vocab`
+    # itself still returns the RAW vocabulary (correctly: `t2132_build_g5_fixture.py`'s own two
+    # schemas have no string leaf, so a producer-side exclusion would be a no-op there); this
+    # schema, `_SCHEMA` (Prompt_Result), DOES have one, so its own compile call supplies the
+    # real special ids directly. Found live at T-2915: without this exclusion,
+    # `_build_red_artifact`'s own output could select a special id as string content on the
+    # real engine, diverging from the properly-zeroed GREEN reference on some heldout prompts
+    # (V5, below) for a reason unrelated to the compiler port.
+    mask_pages = compile_schema_to_mask_pages(_SCHEMA, vocab, special_ids=common.real_special_ids())
     scm1 = _serialize_scm1([("prompt_result", mask_pages)], vocab_size)
     header = fmt.read_header(str(common.A_EX_ARTIFACT))
     sections = []

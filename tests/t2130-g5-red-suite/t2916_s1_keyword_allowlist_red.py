@@ -46,14 +46,15 @@ prior finding introduced the next defect, and neither remedy carried a cell for 
 changed." Fixing the allowlist for four schemas and leaving the string branch's own annotation
 handling untested would be exactly that pattern one more time.
 
-CALLING CONVENTION: every cell below calls `compile_schema_to_mask_pages(schema, vocab)` --
-today's true two-positional-argument signature -- deliberately, not C1's pinned
-`special_ids=`-required contract (`t2916_c1_special_exclusion_red.py`). S1 is about the keyword
-allowlist, not the special-id exclusion; presupposing C1's own signature here would make these
-cells fail for C1's reason instead of S1's the moment C1 lands first, which is exactly the
-"fails for the wrong reason" defect Curie's own discipline rules out. Whoever changes
-`compile_schema_to_mask_pages`'s signature (T-2917, landing C1) owns updating every call site
-that signature change touches, across this whole suite, in the same round -- these included.
+CALLING CONVENTION: at authoring time every cell below called `compile_schema_to_mask_pages(schema,
+vocab)` -- the then-true two-positional-argument signature -- deliberately, not C1's pinned
+`special_ids=`-required contract (`t2916_c1_special_exclusion_red.py`), so S1 would fail for its
+own reason rather than C1's the moment C1 landed first. **T-2917 (landing C1): every live call
+below now carries `special_ids=frozenset()`** -- the mechanical, signature-forced consequence this
+docstring pre-authorized ("whoever changes `compile_schema_to_mask_pages`'s signature owns
+updating every call site that signature change touches, across this whole suite, in the same
+round"), and none of this file's own schemas carry a real tokenizer special id, so an empty set
+changes nothing S1 is testing.
 
 MUTATION PROOF: as in `t2916_c1_special_exclusion_red.py`, the wrong version is `0062c99` itself,
 loaded via `t2913_common.frozen_module`, no invented reference.
@@ -127,7 +128,7 @@ class T2916_S1_ReviewSchemasCompileAndMatch1p5p0(unittest.TestCase):
         ref150 = common.reference_v150()
         mp15 = ref150.compile_schema_to_mask_pages(schema, _VOCAB_STR)
         try:
-            mp16 = compile_schema_to_mask_pages(schema, _VOCAB_BYTES)
+            mp16 = compile_schema_to_mask_pages(schema, _VOCAB_BYTES, special_ids=frozenset())
         except SchemaCompileError as exc:
             self.fail(
                 f"rejected at {getattr(exc, 'state_id', None)} / {exc}: v1.5.0 compiled this "
@@ -183,9 +184,18 @@ class T2916_S1_AnnotationKeywordsAcceptedEverywhere(unittest.TestCase):
                         "type": "object", "additionalProperties": False, "required": ["f"],
                         "properties": {"f": field},
                     }
-                    vocab = [b"{", b"}", b'"f":', b'"', b"a", b"b", b"true", b"false"]
+                    # T-2917 RECONCILIATION: a bare `"` token alongside the whole `"f":` literal
+                    # gives the trie a spurious partial spelling of the key's own literal (`"`
+                    # landing mid-literal, then no token can spell the rest, `f":`) -- a reachable
+                    # G-7a dead end this cell's own allowlist fix now reaches for the first time
+                    # (0062c99 always rejected these schemas earlier, on the keyword itself, so
+                    # this vocab gap was never exercised). `t2908_byte_level_red.py`'s own
+                    # `_schema_with` vocab already carries the same `f":`-without-quote covering
+                    # token for exactly this reason; added here too, mechanically, not a product
+                    # fix (`tools/sslm_convert_schema.py` is unchanged by this line).
+                    vocab = [b"{", b"}", b'"f":', b'f":', b'"', b"a", b"b", b"true", b"false"]
                     try:
-                        compile_schema_to_mask_pages(schema, vocab)
+                        compile_schema_to_mask_pages(schema, vocab, special_ids=frozenset())
                     except SchemaCompileError as exc:
                         self.fail(
                             f"{keyword!r} on the {branch_name} branch was rejected ({exc}) -- "
@@ -204,7 +214,7 @@ class T2916_S1_AnnotationKeywordsAcceptedEverywhere(unittest.TestCase):
                 }
                 vocab = [b"{", b"}", b'"ok":', b"true", b"false"]
                 try:
-                    compile_schema_to_mask_pages(schema, vocab)
+                    compile_schema_to_mask_pages(schema, vocab, special_ids=frozenset())
                 except SchemaCompileError as exc:
                     self.fail(f"{keyword!r} at the object root was rejected ({exc})")
 
@@ -226,7 +236,7 @@ class T2916_S1_ConstrainingKeywordsStillRejected(unittest.TestCase):
                 }
                 vocab = [b"{", b"}", b'"f":', b'"', b"a", b"b"]
                 with self.assertRaises(SchemaCompileError) as ctx:
-                    compile_schema_to_mask_pages(schema, vocab)
+                    compile_schema_to_mask_pages(schema, vocab, special_ids=frozenset())
                 self.assertIn(keyword, str(ctx.exception))
 
 
@@ -252,7 +262,7 @@ class T2916_S1_MutationProof(unittest.TestCase):
         sc_frozen = common.frozen_module(_BAD_COMMIT, _SC_PATH)
         for name, schema in _REVIEW_SCHEMAS.items():
             with self.subTest(schema=name):
-                compile_schema_to_mask_pages(schema, _VOCAB_BYTES)  # shipped: must not raise
+                compile_schema_to_mask_pages(schema, _VOCAB_BYTES, special_ids=frozenset())  # shipped: must not raise
                 with self.assertRaises(sc_frozen.SchemaCompileError):
                     sc_frozen.compile_schema_to_mask_pages(schema, _VOCAB_BYTES)  # frozen: must still raise
 

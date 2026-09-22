@@ -61,11 +61,23 @@ class T2916_C1_ShippedProducerAdmitsZeroSpecials(unittest.TestCase):
     executed on the real Qwen2.5-0.5B-Instruct checkpoint -- not a toy vocabulary."""
 
     def test_real_vocab_producer_plus_compiler_admits_zero_of_22_specials(self) -> None:
+        """T-2917 RECONCILIATION (per this file's own line 22-23 allowance): authored assuming
+        `_real_vocab` itself would gain the exclusion, so this cell called
+        `compile_schema_to_mask_pages(_SCHEMA, vocab)` with no `special_ids`. That call cannot
+        both succeed here (claim 1) AND raise `TypeError` in the sibling class below (claim 2) --
+        the two claims pinned the SAME two-positional call to opposite outcomes. T-2917 lands
+        claim 2's own shape (the pinned contract, explicitly adopted by this file): the compiler
+        itself applies the exclusion from a required `special_ids` argument; `_real_vocab` keeps
+        returning the raw vocabulary (correct for its OTHER, string-leaf-free callers, see
+        `tools/t2132_build_g5_fixture.py`). This cell now supplies `special_ids` explicitly,
+        which is exactly `test_compiling_with_special_ids_supplied_succeeds_and_admits_zero`
+        below's own positive control -- kept here too as claim 1's own outcome check, over the
+        shipped producer's own real vocabulary rather than a hand-zeroed one."""
         vocab = FX._real_vocab(str(common.QWEN25_0P5B_CHECKPOINT), common.real_vocab_size())
         special_ids = common.real_special_ids()
         self.assertEqual(len(special_ids), 22, "the real tokenizer's own special-id count moved")
 
-        mp = compile_schema_to_mask_pages(_SCHEMA, vocab)
+        mp = compile_schema_to_mask_pages(_SCHEMA, vocab, special_ids=special_ids)
         admitted = _admitted_special_ids(mp, special_ids)
         self.assertEqual(
             admitted, set(),

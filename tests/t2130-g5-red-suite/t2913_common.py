@@ -271,14 +271,16 @@ def single_byte_token_ids(vocab: list[bytes]) -> dict[int, int]:
 
 @functools.lru_cache(maxsize=1)
 def real_red_mask_pages():
-    """T-2915 (the compiler port landed): this branch's own compiler over the real vocabulary,
-    RAW bytes, unzeroed -- exactly what `tools/t2132_build_g5_fixture.py::_real_vocab` (also
-    ported alongside the compiler) actually returns when a caller does not additionally call
-    `zero_special_ids`. Cached: real-vocabulary compiles are re-used across every cell in this
-    suite that needs the SAME compiled table rather than recompiled per cell."""
+    """T-2917 (folding TE-370 C1, D-SLM7600): this branch's own compiler over the real
+    vocabulary, RAW bytes, with `special_ids=frozenset()` -- explicitly asking for no
+    exclusion, the only way left to reach that state now that `special_ids` is a required
+    keyword-only argument the compiler applies itself (a caller can no longer reach an
+    admitting compile by omitting the argument silently). Cached: real-vocabulary compiles are
+    re-used across every cell in this suite that needs the SAME compiled table rather than
+    recompiled per cell."""
     from tools.sslm_convert_schema import compile_schema_to_mask_pages
 
-    return compile_schema_to_mask_pages(PROMPT_RESULT_SCHEMA, real_raw_vocab())
+    return compile_schema_to_mask_pages(PROMPT_RESULT_SCHEMA, real_raw_vocab(), special_ids=frozenset())
 
 
 @functools.lru_cache(maxsize=1)

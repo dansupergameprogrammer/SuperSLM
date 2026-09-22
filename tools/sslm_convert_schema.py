@@ -31,7 +31,16 @@ design, closed across four folds (`Claude/Plans/te266-gpu-path.md` Sec3.9.1):
   D-SLM7589).** `_token_targets` refuses a token that crosses from a non-content state into a
   content state past its own first byte -- an opening crossing is admitted only at depth 0. Every
   tokenizer "added"/special id is zeroed out of the compiler's own vocabulary before the trie is
-  built (`zero_special_ids`, applied by the caller), never admitted at any state of any schema.
+  built (`zero_special_ids`).
+- **The exclusion is structural, not a step a caller can forget (T-2917, folding TE-370 C1,
+  D-SLM7600).** `compile_schema_to_mask_pages` takes `special_ids` as a required keyword-only
+  argument and applies `zero_special_ids` to its own copy of `vocab` itself, before the trie is
+  built -- the only in-repo real-vocabulary producer (`tools/t2132_build_g5_fixture.py::
+  _real_vocab`) previously returned every tokenizer special id spelled out as literal bytes, and
+  nothing forced a caller compiling a string-leaf schema to zero them first, so a caller who
+  forgot admitted every special id as string content (22 of 22, executed on the real
+  Qwen2.5-0.5B-Instruct tokenizer). Omitting the argument now raises `TypeError` naming
+  `special_ids`, at the call itself, before any vocabulary is touched.
 - **A value closes at the byte-decoded level, not the token-spelling level (T-2912, folding
   TE-368's fracture, D-SLM7593; T-2911's own token-local close blacklist is deleted as redundant).**
   The content sub-automaton carries a monotone two-mode semantic product: `U` means the decoded
@@ -155,12 +164,28 @@ _INSIGNIFICANT_UESCAPE_CODEPOINTS = frozenset(INSIGNIFICANT_VALUE_BYTES)
 # --- S3 (T-2908, folding TE-365 S3, Sec3.9.6): the compiler's own accepted-keyword surface,
 # by branch -- derived from the keys each branch actually reads, so a schema naming any other
 # key is rejected at ingestion time rather than silently compiling with the constraint unenforced.
+#
+# T-2917 (folding TE-370 S1, D-SLM7600): the allowlist over-rejected two shapes 1.5.0 always
+# compiled. The full JSON-Schema (2020-12) annotation vocabulary -- keywords this compiler never
+# enforces and were never claimed as enforced, so silently ignoring them discards nothing a
+# schema author asked for -- is `title`, `description`, `default`, `examples`, `deprecated`,
+# `readOnly`, `writeOnly` and `$comment` (the Meta-Data and Core "annotation" vocabularies this
+# subset can reach); `$schema` and `$id` are Core identifier keywords, non-constraining for the
+# same reason, accepted only at the schema root (`path == "$"`), where they are ever meaningful.
+# Every one of these is accepted and ignored on every branch (or at the root); a genuinely
+# constraining, unimplemented keyword (`maxLength`, `minLength`, `pattern`, `format`, `const`,
+# `multipleOf`, ...) still names itself and is refused, unchanged.
+_ANNOTATION_KEYWORDS: frozenset[str] = frozenset({
+    "title", "description", "default", "examples", "deprecated", "readOnly", "writeOnly",
+    "$comment",
+})
+_ROOT_ONLY_ANNOTATION_KEYWORDS: frozenset[str] = frozenset({"$schema", "$id"})
 
 _ALLOWED_KEYWORDS: dict[str, frozenset[str]] = {
-    "enum": frozenset({"enum"}),
-    "boolean": frozenset({"type"}),
-    "string": frozenset({"type"}),
-    "object": frozenset({"type", "properties", "required", "additionalProperties"}),
+    "enum": frozenset({"enum", "type"}) | _ANNOTATION_KEYWORDS,
+    "boolean": frozenset({"type"}) | _ANNOTATION_KEYWORDS,
+    "string": frozenset({"type"}) | _ANNOTATION_KEYWORDS,
+    "object": frozenset({"type", "properties", "required", "additionalProperties"}) | _ANNOTATION_KEYWORDS,
 }
 
 _KEYWORD_REASON_OVERRIDES: dict[str, str] = {
@@ -171,6 +196,21 @@ _KEYWORD_REASON_OVERRIDES: dict[str, str] = {
         "anyway would discard the schema author's own stated constraint with no diagnostic, "
         "wrong independent of whether the bound is ever implemented (T-2859 F2, D-SLM7462)"
     ),
+}
+
+# T-2917 (TE-370 S1): `type` alongside `enum` is the pydantic/usual JSON-Schema enum form
+# (every enum value already carries its own JSON type, so `type` is redundant, not
+# constraining) -- accepted, and checked for agreement with every enum value's own JSON type
+# rather than silently ignored, so a schema naming a `type` its own values contradict is still
+# caught rather than compiling a field that can never accept what it names.
+_JSON_SCHEMA_TYPE_CHECKS: dict[str, Callable[[Any], bool]] = {
+    "string": lambda v: isinstance(v, str),
+    "boolean": lambda v: isinstance(v, bool),
+    "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "null": lambda v: v is None,
+    "array": lambda v: isinstance(v, list),
+    "object": lambda v: isinstance(v, dict),
 }
 
 
@@ -196,25 +236,39 @@ def _groups(schema: Mapping[str, Any], path: str) -> list[_Group]:
     except `_STRING_LEAF` (T-2853), which names a cyclic sub-automaton rather than a
     finite set of choices; `_char_dfa()` is what expands it.
     """
+    root_extra = _ROOT_ONLY_ANNOTATION_KEYWORDS if path == "$" else frozenset()
+    node_type = schema.get("type")
+
     if "enum" in schema:
-        _reject_unimplemented_keywords(schema, path, _ALLOWED_KEYWORDS["enum"])
+        _reject_unimplemented_keywords(schema, path, _ALLOWED_KEYWORDS["enum"] | root_extra)
         values = schema["enum"]
         if not values:
             raise SchemaCompileError(f"empty enum at {path}", reason=f"empty enum at {path}")
+        if node_type is not None:
+            checker = _JSON_SCHEMA_TYPE_CHECKS.get(node_type)
+            if checker is None:
+                raise SchemaCompileError(
+                    f"unsupported type {node_type!r} alongside enum at {path}",
+                    reason=f"{node_type!r} is not one of the JSON-Schema primitive type names this compiler recognizes",
+                )
+            mismatched = [v for v in values if not checker(v)]
+            if mismatched:
+                raise SchemaCompileError(
+                    f"enum value(s) {mismatched!r} do not match the declared type {node_type!r} at {path}",
+                    reason="type is redundant with enum but must agree with every value when both are present",
+                )
         return [tuple(json.dumps(v, ensure_ascii=False) for v in values)]
 
-    node_type = schema.get("type")
-
     if node_type == "boolean":
-        _reject_unimplemented_keywords(schema, path, _ALLOWED_KEYWORDS["boolean"])
+        _reject_unimplemented_keywords(schema, path, _ALLOWED_KEYWORDS["boolean"] | root_extra)
         return [("true", "false")]
 
     if node_type == "string":
-        _reject_unimplemented_keywords(schema, path, _ALLOWED_KEYWORDS["string"])
+        _reject_unimplemented_keywords(schema, path, _ALLOWED_KEYWORDS["string"] | root_extra)
         return [(_STRING_LEAF,)]
 
     if node_type == "object":
-        _reject_unimplemented_keywords(schema, path, _ALLOWED_KEYWORDS["object"])
+        _reject_unimplemented_keywords(schema, path, _ALLOWED_KEYWORDS["object"] | root_extra)
         properties = schema.get("properties") or {}
         required = list(schema.get("required", list(properties)))
         if schema.get("additionalProperties", False) is not False:
@@ -509,10 +563,11 @@ def zero_special_ids(vocab: Sequence[bytes], special_ids: frozenset[int]) -> lis
     """T-2910 (folding TE-366 group 2): zeroes every special/added tokenizer id's bytes so
     `_vocab_trie`'s existing empty-piece guard (`if not piece: continue`) excludes it --
     structurally, for every state of every schema this compiler ever compiles, not only the
-    string leaf's own content states. Applied by the caller to the vocabulary BEFORE it
-    reaches `compile_schema_to_mask_pages`; the compiler itself takes no special-id
-    parameter, so there is exactly one place in the compile path that decides whether an id
-    is in the compiler's alphabet at all."""
+    string leaf's own content states. T-2917 (folding TE-370 C1, D-SLM7600):
+    `compile_schema_to_mask_pages` applies this itself, to its own copy of `vocab`, from its
+    own required `special_ids` argument -- exposed as its own public function too, for a
+    reference/probe module that wants the zeroed vocabulary directly without compiling
+    anything."""
     out = list(vocab)
     for i in special_ids:
         if 0 <= i < len(out):
@@ -650,11 +705,25 @@ class MaskPages:
 # --- the compiler ---------------------------------------------------------------------------
 
 
-def compile_schema_to_mask_pages(schema: Mapping[str, Any], vocab: Sequence[bytes]) -> MaskPages:
+def compile_schema_to_mask_pages(
+    schema: Mapping[str, Any],
+    vocab: Sequence[bytes],
+    *,
+    special_ids: frozenset[int],
+) -> MaskPages:
     """Compile `schema` (D-SLM45's per-field subset) to a token-level DFA with per-state
-    valid-token bitmask pages, over `vocab` (each token's own undecoded bytes -- special or
-    control ids the caller wants excluded from every state of every schema are zeroed first,
-    via `zero_special_ids`).
+    valid-token bitmask pages, over `vocab` (each token's own undecoded bytes).
+
+    `special_ids` (T-2917, folding TE-370 C1, D-SLM7600) is required and keyword-only: this
+    function applies `zero_special_ids(vocab, special_ids)` to its own copy of `vocab` before
+    the trie is built, so every id in `special_ids` is excluded from every state of every
+    schema, structurally -- a caller cannot reach an admitting compile by forgetting the step
+    (pass `special_ids=frozenset()` to compile deliberately without excluding any id).
+
+    Raises `TypeError` if any `vocab` element is not `bytes` -- this compiler moved from
+    `Sequence[str]` to `Sequence[bytes]` at T-2908; a caller still constructing a `str`
+    vocabulary must encode each piece first (`tools/convert_tokenizer.py`'s own
+    `TokenizerTables.id_to_bytes`, or `str.encode`).
 
     Raises `SchemaCompileError` -- naming the offending state, the serialization prefix
     that reaches it, and the continuation no vocabulary token can spell -- for any
@@ -664,7 +733,14 @@ def compile_schema_to_mask_pages(schema: Mapping[str, Any], vocab: Sequence[byte
     structural, here, at compile time -- the runtime must not (and, by this design, does
     not) check for it.
     """
-    vocab = tuple(vocab)
+    for index, piece in enumerate(vocab):
+        if not isinstance(piece, bytes):
+            raise TypeError(
+                f"vocab[{index}] is {type(piece).__name__!r}, not bytes -- this compiler takes "
+                "Sequence[bytes] (each token's own undecoded bytes), not Sequence[str]. Encode "
+                "each vocabulary piece to bytes before calling (T-2908's byte-level port)."
+            )
+    vocab = tuple(zero_special_ids(vocab, special_ids))
     char_dfa, char_start, char_accepting, content_states = _char_dfa(_groups(schema, "$"))
     trie = _vocab_trie(vocab)
 

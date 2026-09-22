@@ -45,7 +45,7 @@ class T2916_S2_StrVocabularyRefusedNamingBytes(unittest.TestCase):
 
     def test_str_vocabulary_raises_typeerror_naming_bytes(self) -> None:
         with self.assertRaises(TypeError) as ctx:
-            compile_schema_to_mask_pages(_SCHEMA, _STR_VOCAB)
+            compile_schema_to_mask_pages(_SCHEMA, _STR_VOCAB, special_ids=frozenset())
         self.assertIn(
             "bytes", str(ctx.exception).lower(),
             "the refusal must name the actual requirement (a bytes vocabulary), not report a "
@@ -58,7 +58,7 @@ class T2916_S2_StrVocabularyRefusedNamingBytes(unittest.TestCase):
         message wording changes, it must not be `SchemaCompileError`'s own G-7a coverage
         diagnostic, which is true of the symptom and wrong about the cause."""
         try:
-            compile_schema_to_mask_pages(_SCHEMA, _STR_VOCAB)
+            compile_schema_to_mask_pages(_SCHEMA, _STR_VOCAB, special_ids=frozenset())
         except SchemaCompileError as exc:
             self.fail(
                 f"still raising the misleading vocabulary-coverage diagnostic ({exc}) instead "
@@ -71,7 +71,7 @@ class T2916_S2_StrVocabularyRefusedNamingBytes(unittest.TestCase):
         """Positive control: the identical schema, a `bytes` vocabulary, compiles cleanly both
         before and after S2's fix -- proving the refusal above is about the vocabulary's
         element type, not this schema shape."""
-        compile_schema_to_mask_pages(_SCHEMA, _BYTES_VOCAB)  # must not raise
+        compile_schema_to_mask_pages(_SCHEMA, _BYTES_VOCAB, special_ids=frozenset())  # must not raise
 
 
 class T2916_S2_MutationProof(unittest.TestCase):
@@ -91,7 +91,7 @@ class T2916_S2_MutationProof(unittest.TestCase):
                 "landed yet. Re-run after T-2917 lands."
             )
         with self.assertRaises(TypeError) as ctx:
-            compile_schema_to_mask_pages(_SCHEMA, _STR_VOCAB)  # shipped: TypeError naming bytes
+            compile_schema_to_mask_pages(_SCHEMA, _STR_VOCAB, special_ids=frozenset())  # shipped: TypeError naming bytes
         self.assertIn("bytes", str(ctx.exception).lower())
 
         sc_frozen = common.frozen_module(_BAD_COMMIT, _SC_PATH)

@@ -35,11 +35,13 @@ A schema-bound sequence that reaches a completed schema's own dead end now retur
 `SslmGpuSeqDecodeStepForG5Bridge`), matching the CPU path's existing convention, instead of
 silently re-emitting token 0 forever. The GPU path leaves `dfa_walk_state` and `layer_index`
 exactly as they were and re-arms `ready_for_logits`, so a further call to either GPU entry point
-reproduces the identical `-2` result deterministically, with no new embed or layer-loop drive; the
-CPU path additionally resets `layer_index` to 0 on this same event, matching an ordinary
-post-prefill sequence's own resting shape, so a dead-ended CPU sequence is also
-`sslm_seq_reset`/`sslm_seq_set_adapter`-eligible rather than only re-decodable. Both backends'
-CPU-side damped-greedy decode step gain the identical fix.
+reproduces the identical `-2` result deterministically, with no new embed or layer-loop drive; a
+dead-ended GPU sequence is likewise `sslm_gpu_seq_reset`/`sslm_gpu_seq_bind_adapter`-eligible,
+since neither guards on `layer_index`. The CPU path additionally resets `layer_index` to 0 on this
+same event, matching an ordinary post-prefill sequence's own resting shape, so a dead-ended CPU
+sequence is also `sslm_seq_reset`/`sslm_seq_set_adapter`-eligible rather than only re-decodable.
+The CPU backend's own damped-greedy decode branch gains the identical fix, at its own separate
+miss site.
 
 The GPU sequence save/restore format moves to `'SLM5'`. A 1.5.0 build cannot read a `'SLM5'` blob a
 1.6.0 build saves; a 1.6.0 build still restores an older `'SLM4'` blob exactly as before, defaulting
@@ -56,16 +58,36 @@ the value's own close under JSON's own grammar). A caller whose prompt's natural
 an internal quote should ask for plain, unstructured text, or should treat the returned value as
 potentially truncated there. A schema declaring `maxLength` on a string field, or any other
 JSON-Schema keyword this compiler does not implement (`minLength`, `pattern`, `format`, `const`,
-`title`, `description`, `default`, `examples`, `multipleOf`, and any keyword not yet named), is
-rejected at compile time, naming the keyword, rather than silently compiled with the constraint
-unenforced.
+`multipleOf`, and any keyword not yet named), is rejected at compile time, naming the keyword,
+rather than silently compiled with the constraint unenforced. Non-constraining JSON-Schema
+annotation keywords (`title`, `description`, `default`, `examples`, `deprecated`, `readOnly`,
+`writeOnly`, `$comment`, plus `$schema`/`$id` at the schema root) are accepted and ignored on every
+branch, since this compiler never claimed to enforce them; `type` alongside `enum` (the form
+`pydantic` and plain JSON-Schema both emit) is accepted too, and is checked for agreement with
+every enum value's own JSON type rather than silently ignored.
+
+`compile_schema_to_mask_pages` moved from `Sequence[str]` to `Sequence[bytes]` at the byte-level
+port and now raises `TypeError` naming `bytes` when given a `str` vocabulary, instead of the
+misleading "no token in the vocabulary can spell the required continuation" diagnostic a `str`
+vocabulary produced before: the vocabulary was never insufficient, it was the wrong element type.
+`compile_schema_to_mask_pages` also gains a required keyword-only `special_ids` argument that it
+applies to its own copy of the vocabulary before compiling (`zero_special_ids`) -- the exclusion of
+every tokenizer special/added id from every state of every schema is now structural, at the compile
+call itself, rather than a step a caller applies to the vocabulary beforehand and can forget. The
+only shipped real-vocabulary producer (`tools/t2132_build_g5_fixture.py::_real_vocab`) previously
+left this step to its own caller and no in-repo caller took it, so every tokenizer special id was
+admitted as ordinary string content (22 of 22, executed on the real Qwen2.5-0.5B-Instruct
+tokenizer); both public entry points a schema compiles through now supply the real special ids.
 
 `sslm_seq_adopt_prefix` no longer leaves a stale walk state on a sequence adopting a prompt-only (or
 bound-but-unadvanced) prefix: the adopting sequence's own walk state is reset to its bound schema's
 start state (unbound sequences: unused), correcting the one case where the walk had already
 advanced past its own start before adoption overwrote the sequence's content. Adoption also now
-clears the damped-greedy forced-token counter (visible through `sslm_stats`), so a warm count from
-the sequence's own prior generation never survives into an adopted origin.
+clears `forced_token_count`, the schema-content forced-span counter visible through `sslm_stats`
+(not a damped-greedy statistic), so a warm count from the sequence's own prior generation never
+survives into an adopted origin -- including when the adopted prefix's own history holds forced
+positions of its own: a prefix does not track its own `forced_token_count`, so the field reads 0
+after adoption regardless, exactly as a fresh sequence's does.
 
 ## [1.5.0] - 2026-09-17
 

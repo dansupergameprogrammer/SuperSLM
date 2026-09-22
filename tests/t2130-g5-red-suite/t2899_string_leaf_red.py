@@ -77,8 +77,9 @@ def _compile_red(pieces: list[bytes], schema=_SCHEMA):
     vocabulary piece to `str` before compiling; it is byte-level throughout, exactly like
     oracle 3 below). Kept as its own named oracle, rather than folded into `_compile_green`,
     because the two remain independently callable checks on the SAME production module the
-    branch ships versus the records-tree reference chain."""
-    return compile_schema_to_mask_pages(schema, list(pieces))
+    branch ships versus the records-tree reference chain. `special_ids=frozenset()` (T-2917):
+    no special ids appear in these small synthetic fixtures, so there is nothing to exclude."""
+    return compile_schema_to_mask_pages(schema, list(pieces), special_ids=frozenset())
 
 
 def _compile_green(pieces: list[bytes], schema=_SCHEMA):
