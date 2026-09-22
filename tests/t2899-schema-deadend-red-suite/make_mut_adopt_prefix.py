@@ -14,8 +14,10 @@ Modes:
                   the unique comment immediately above it ("...as at 1.5.0.") so the OTHER,
                   textually identical reset line in `sslm_seq_reset` (`:1920`) is never touched.
   MUT_FORCED    : `adopt_prefix`'s own `seq->forced_token_count = 0;` reverted (commented out) --
-                  the TE-364 mutant this cell exists to kill. Anchored on the unique T-2897
-                  comment immediately above it, for the same reason.
+                  the TE-364 mutant this cell exists to kill. Anchored on the unique closing line
+                  of the comment immediately above it (T-2917 folding TE-370 M2 rewrote the body
+                  of that comment; the anchor tracks only its last line plus the code line, so a
+                  future prose edit above it does not also require re-anchoring this generator).
 
 The source file is CRLF throughout (`sslm_abi.cpp`, confirmed by execution); every anchor and
 replacement below uses `\\r\\n` to match it exactly, opened with `newline=""` so nothing is
@@ -37,13 +39,11 @@ _WALKRESET_REPLACEMENT = (
 )
 
 _FORCED_ANCHOR = (
-    "\t// T-2897: the identical discard applies to the damped-greedy forced-token counter -- a warm\r\n"
-    "\t// count from the sequence's own PRIOR generation must not survive into the adopted origin.\r\n"
+    "\t// of the prefix's history.\r\n"
     "\tseq->forced_token_count = 0;\r\n"
 )
 _FORCED_REPLACEMENT = (
-    "\t// T-2897: the identical discard applies to the damped-greedy forced-token counter -- a warm\r\n"
-    "\t// count from the sequence's own PRIOR generation must not survive into the adopted origin.\r\n"
+    "\t// of the prefix's history.\r\n"
     "\t// T-2916 MUT_FORCED (TE-364): seq->forced_token_count = 0; deleted.\r\n"
 )
 
