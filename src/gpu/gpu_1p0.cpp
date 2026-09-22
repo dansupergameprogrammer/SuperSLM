@@ -32,6 +32,12 @@
 // Keep the implementation readable while the installed API exposes scoped status members.
 using enum SslmGpuStatus;
 
+// GpuContextConfig's layout is ABI: the suite that links against this file compiles its cells
+// against a mirror of the header and asserts the same layout there, so a drift on either side
+// fails the compile rather than passing a short struct by value.
+static_assert(sizeof(GpuContextConfig) == 16 && offsetof(GpuContextConfig, shader_dir) == 8,
+              "GpuContextConfig layout (x64): 16 bytes, shader_dir at offset 8");
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -1178,10 +1184,12 @@ SslmGpuStatus sslm_gpu_adapter_unmapImpl(SslmGpuContext* ctx, SslmGpuAdapterHand
 // try/catch inside harness::GetDevice()'s lambda for the singleton path; here, since
 // this context owns its Device value directly (no lambda-wrapped static), the
 // equivalent guard is applied at the call site instead.
+//
+// GpuContextConfig::shader_dir (include/superslm/gpu_1p0.h, sslm_gpu_context_create's comment):
+// a non-null value is validated and checked against the process's fixed shader directory
+// BEFORE the device is created, so a refusal creates no device; it fixes the process's
+// directory only after device acquisition succeeds. A null value takes the unchanged path.
 SslmGpuStatus sslm_gpu_context_createImpl(GpuContextConfig cfg, SslmGpuContext** out_ctx) {
-	(void)cfg;  // GpuContextConfig carries no fields the design assigns yet (Sec4.1.1
-	            // does not name any -- the parameter exists for forward compatibility
-	            // with a future field, per the design's own declared surface).
 	if (!out_ctx) {
 		// Not a case the design's own Sec9 table assigns a status to (a null
 		// out-parameter is a caller contract violation the design does not model
@@ -1190,6 +1198,18 @@ SslmGpuStatus sslm_gpu_context_createImpl(GpuContextConfig cfg, SslmGpuContext**
 		// call can do except decline to dereference a null pointer. Documented
 		// here rather than silently invoking undefined behavior.
 		return SSLM_DEVICE_LOST;
+	}
+
+	std::wstring shader_dir;  // normalized override; empty when cfg.shader_dir is null
+	if (cfg.shader_dir != nullptr) {
+		const superslm_gpu::harness::ShaderDirCheck check =
+		    superslm_gpu::harness::CheckShaderDirOverride(cfg.shader_dir, &shader_dir);
+		if (check != superslm_gpu::harness::ShaderDirCheck::Ok) {
+			*out_ctx = nullptr;
+			return check == superslm_gpu::harness::ShaderDirCheck::Conflict
+			           ? SSLM_GPU_SHADER_DIR_CONFLICT
+			           : SSLM_GPU_SHADER_DIR_INVALID;
+		}
 	}
 
 	SslmGpuContext* ctx = new SslmGpuContext();
@@ -1205,6 +1225,20 @@ SslmGpuStatus sslm_gpu_context_createImpl(GpuContextConfig cfg, SslmGpuContext**
 		delete ctx;
 		*out_ctx = nullptr;
 		return SSLM_DEVICE_LOST;
+	}
+
+	if (!shader_dir.empty()) {
+		// Re-checked under the state's mutex: a concurrent create or default-path shader load
+		// may have fixed a different directory since the pre-device check.
+		const superslm_gpu::harness::ShaderDirCheck commit =
+		    superslm_gpu::harness::CommitShaderDirOverride(shader_dir);
+		if (commit != superslm_gpu::harness::ShaderDirCheck::Ok) {
+			delete ctx;
+			*out_ctx = nullptr;
+			return commit == superslm_gpu::harness::ShaderDirCheck::Conflict
+			           ? SSLM_GPU_SHADER_DIR_CONFLICT
+			           : SSLM_GPU_SHADER_DIR_INVALID;
+		}
 	}
 
 	*out_ctx = ctx;

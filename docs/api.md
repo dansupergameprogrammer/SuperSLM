@@ -35,6 +35,22 @@ never through the return value itself.
 ### Lifecycle
 
 - **Context**: `sslm_gpu_context_create` / `sslm_gpu_context_destroy`.
+  `GpuContextConfig::shader_dir` chooses where the compiled `.cso` shader
+  set is loaded from. Left `NULL` (a zero-initialized config), shaders load
+  from a `shaders` directory beside the host executable, as in every earlier
+  release. Otherwise it is an absolute directory path in UTF-8 holding the
+  compiled set, read only during the create call. **The shader directory is
+  process-wide**, whichever context supplies it: compiled pipelines are
+  cached per process by shader name, so one process loads every shader from
+  one directory for its whole lifetime. That directory is fixed by the
+  first successful create that names one, or by the first shader load
+  through the default location, whichever comes first. After that, a create
+  with `NULL` uses it, a create naming the same directory in any spelling
+  succeeds, and a create naming a different directory is refused with
+  `SSLM_GPU_SHADER_DIR_CONFLICT`. A value that is empty, not valid UTF-8,
+  relative, not an existing directory, or a directory with no `.cso` file
+  is refused with `SSLM_GPU_SHADER_DIR_INVALID`. Both refusals happen
+  before any device is created and leave `*out_ctx` null.
 - **Model**: `sslm_gpu_model_map` maps an already-loaded model view onto a
   context; `sslm_gpu_model_unmap` releases it, and refuses (`Busy`) while
   any sequence still has decode work in flight against it.
@@ -153,6 +169,12 @@ Two more statuses cover the prefill-hidden read below: `SSLM_OUTPUT_BUFFER_TOO_S
 a caller buffer too small for the hidden state's width; and
 `SSLM_PREFILL_HIDDEN_UNAVAILABLE`, no live snapshot to read (see
 [Reading the prefill hidden state](#reading-the-prefill-hidden-state) below).
+
+Two cover the context's shader directory (see Lifecycle above):
+`SSLM_GPU_SHADER_DIR_INVALID`, a `GpuContextConfig::shader_dir` that cannot
+name a compiled shader set — fix the path; and `SSLM_GPU_SHADER_DIR_CONFLICT`,
+a directory that differs from the one this process already loads shaders
+from — supply the same directory, or `NULL`.
 
 `SslmGpuSeqPrefillPromptForG5Bridge` and `SslmGpuSeqPrefillSchemaContentForG5Bridge`
 diverge on one refusal: when a device-side domain guard refuses one of the admitted

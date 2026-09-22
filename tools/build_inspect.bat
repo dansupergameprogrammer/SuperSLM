@@ -7,11 +7,11 @@ call %VSDEVCMD% -arch=x64 -no_logo
 pushd %~dp0\..
 if not exist out mkdir out
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
-	src\artifact.cpp src\sha256.cpp src\model.cpp src\tokenizer.cpp src\proof_manifest.cpp tools\sslm_inspect.cpp ^
+	src\artifact.cpp src\sha256.cpp src\model.cpp src\tokenizer.cpp src\intmath.cpp src\proof_manifest.cpp tools\sslm_inspect.cpp ^
 	/Fo:out\ /Fe:out\sslm_inspect.exe
 if errorlevel 1 (popd & exit /b 1)
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
-	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp tools\tok_verify.cpp ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\intmath.cpp tools\tok_verify.cpp ^
 	/Fo:out\ /Fe:out\tok_verify.exe
 set ec=%errorlevel%
 popd

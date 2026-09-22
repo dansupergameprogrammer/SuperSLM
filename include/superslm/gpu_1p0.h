@@ -36,16 +36,31 @@ typedef struct SslmGpuSequenceHandle SslmGpuSequenceHandle;
 namespace superslm { struct SslmModelView; }
 using superslm::SslmModelView;
 
-/* Design Sec4.1.1/Sec5.1 name these two config types as call parameters but assign
- * no fields to either -- the suite's own dim1_lifetime_red.cpp names this
- * explicitly as "the build seat defines alongside B1/B2, design Sec10." Defined
- * here (B1) as reserved, zero-behavior structs: real by-value C++ types (not
- * incomplete forward declarations, which cannot be passed by value -- the gap
- * that broke the first B1 build attempt), with one reserved field each so a future field can be added
- * without changing either struct's calling convention (an all-zero-initialized
- * value is always a valid "no options requested" config under either shape). */
+/* The two by-value configuration structs of the context and model-map calls. An
+ * all-zero-initialized value (`{}` or `{0}`) is always a valid "no options requested"
+ * config. `reserved` is the first field of each and is ignored.
+ *
+ * GpuContextConfig::shader_dir (1.7.0) selects the directory the compiled .cso shader set
+ * is loaded from:
+ * - NULL (the default): shaders load from `<directory of the host executable>\shaders`,
+ *   unchanged from earlier releases.
+ * - Otherwise: an absolute directory path, UTF-8, NUL-terminated, holding the compiled .cso
+ *   set. It is read only during sslm_gpu_context_create; the caller may free it afterwards.
+ * The shader directory is PROCESS-WIDE, whichever context supplies it: compiled pipelines are
+ * cached per process by shader name, so a process loads every shader from one directory for its
+ * whole lifetime. The directory is fixed by the first of (a) a successful create with a
+ * non-NULL shader_dir, or (b) the first shader load through the default path. After that, a
+ * create with NULL uses the fixed directory; a create naming the same directory (any spelling
+ * of it) succeeds; a create naming a different directory returns SSLM_GPU_SHADER_DIR_CONFLICT.
+ * See sslm_gpu_context_create below for validation.
+ *
+ * Adding shader_dir grew GpuContextConfig from 4 to 16 bytes (x64). This is source-compatible
+ * and binary-incompatible: code compiled against an earlier header must be recompiled. */
 typedef struct GpuContextConfig {
-	int reserved;  /* design Sec4.1.1 assigns no fields yet; zero-initialize */
+	int reserved;            /* ignored; zero-initialize */
+	const char* shader_dir;  /* NULL = default. Otherwise an absolute directory path, UTF-8,
+	                            NUL-terminated, holding the compiled .cso set. Read during
+	                            sslm_gpu_context_create only; the caller may free it after. */
 } GpuContextConfig;
 typedef struct GpuResidencyConfig {
 	int reserved;  /* design Sec5.1 assigns no fields yet; zero-initialize */
@@ -169,10 +184,33 @@ enum class SslmGpuStatus : uint32_t {
     SSLM_OUTPUT_BUFFER_TOO_SMALL,
     /* sslm_gpu_seq_read_prefill_final_hidden: the sequence holds no prefill snapshot (see that
      * function's comment). Appended LAST; no existing ordinal moves. */
-    SSLM_PREFILL_HIDDEN_UNAVAILABLE
+    SSLM_PREFILL_HIDDEN_UNAVAILABLE,
+    /* sslm_gpu_context_create: GpuContextConfig::shader_dir is unusable -- empty, not valid
+     * UTF-8, relative, not an existing directory, or a directory holding no .cso file. No
+     * context and no device are created. Remedy: supply the absolute path of the directory that
+     * holds the compiled shader set. Appended LAST; no existing ordinal moves. */
+    SSLM_GPU_SHADER_DIR_INVALID,
+    /* sslm_gpu_context_create: this process already loads shaders from a different directory
+     * (see GpuContextConfig above). No context is created. Remedy: supply the same directory, or
+     * NULL. Appended LAST; no existing ordinal moves. */
+    SSLM_GPU_SHADER_DIR_CONFLICT
 };
 
-/* --- Sec4.1.1: context create/destroy. DEFINED as of B1 (src/gpu/gpu_1p0.cpp). --- */
+/* --- Sec4.1.1: context create/destroy. DEFINED as of B1 (src/gpu/gpu_1p0.cpp). ---
+ * sslm_gpu_context_create checks, in order, before any device is created, and sets `*out_ctx`
+ * to nullptr on every refusal:
+ * 1. `out_ctx` null: SSLM_DEVICE_LOST.
+ * 2. `cfg.shader_dir` NULL: no shader-directory check; the process's shader directory applies
+ *    (GpuContextConfig above).
+ * 3. `cfg.shader_dir` empty, or not valid UTF-8: SSLM_GPU_SHADER_DIR_INVALID.
+ * 4. A relative path: SSLM_GPU_SHADER_DIR_INVALID.
+ * 5. Not an existing directory, after full-path normalization and trailing-separator removal:
+ *    SSLM_GPU_SHADER_DIR_INVALID.
+ * 6. No `*.cso` file in the directory: SSLM_GPU_SHADER_DIR_INVALID.
+ * 7. The process's shader directory is already fixed to a different directory (ordinal,
+ *    case-insensitive comparison of the normalized paths): SSLM_GPU_SHADER_DIR_CONFLICT.
+ * 8. Device acquisition: SSLM_DEVICE_LOST on failure. On success, a non-NULL shader_dir fixes
+ *    the process's shader directory if nothing fixed it yet. */
 SslmGpuStatus sslm_gpu_context_create(GpuContextConfig cfg, SslmGpuContext** out_ctx) noexcept;
 SslmGpuStatus sslm_gpu_context_destroy(SslmGpuContext* ctx) noexcept;
 

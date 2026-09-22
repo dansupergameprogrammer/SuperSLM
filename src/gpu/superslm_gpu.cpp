@@ -31,11 +31,15 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "d3d12_harness.h"
+
+#include <shlwapi.h>  // PathIsRelativeW (shader-directory override validation)
+#pragma comment(lib, "shlwapi.lib")
 
 // T-2169 (Rung 2b, design Sec5/Sec8/Sec9): the two chunk-dispatch instrumentation counters
 // (tests/support/gpu_chunk_dispatch_instrument.h) -- this suite's own gating symbols
@@ -92,19 +96,148 @@ struct GpuShaderBinaryStaleError : std::logic_error {
 // beside them the way build.bat's test binary does. An installed
 // superslm::superslm_gpu package exposes their location as
 // superslm_GPU_SHADER_DIR (cmake/superslmConfig.cmake.in) for a consumer to
-// copy next to its own binary.
-std::string ShaderPath(const std::string& name) {
-	char path[MAX_PATH]{};
-	DWORD n = GetModuleFileNameA(nullptr, path, MAX_PATH);
-	std::string dir;
-	if (n > 0 && n < MAX_PATH) {
-		std::string full(path, n);
-		size_t slash = full.find_last_of("\\/");
-		dir = (slash == std::string::npos) ? "." : full.substr(0, slash);
-	} else {
-		dir = ".";
+// copy next to its own binary, or name directly as GpuContextConfig::shader_dir.
+//
+// Under a shader-directory override (GpuContextConfig::shader_dir, fixed by
+// CommitShaderDirOverride below) the result is `<override>\<name>.cso` in UTF-8
+// instead; ReadFile and the staleness check open it through the wide calls.
+
+namespace {
+
+// The process's shader directory (d3d12_harness.h, ShaderDirOverrideActive). Written only
+// under g_shader_dir_mutex, and only while g_shader_dir_fixed is false.
+std::mutex g_shader_dir_mutex;
+bool g_shader_dir_fixed = false;
+bool g_shader_dir_is_override = false;
+std::wstring g_shader_dir_normalized;  // comparison form: full path, no trailing separator
+std::string g_shader_dir_override_utf8;  // override only: the directory ShaderPath joins onto
+
+bool IsPathSeparatorW(wchar_t c) { return c == L'\\' || c == L'/'; }
+
+std::wstring MultiByteToWide(UINT code_page, DWORD flags, const char* s) {
+	const int n = MultiByteToWideChar(code_page, flags, s, -1, nullptr, 0);
+	if (n <= 0) return {};
+	std::wstring w(static_cast<size_t>(n), L'\0');
+	if (MultiByteToWideChar(code_page, flags, s, -1, w.data(), n) != n) return {};
+	w.resize(static_cast<size_t>(n - 1));
+	return w;
+}
+
+std::string WideToUtf8(const std::wstring& w) {
+	const int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
+	if (n <= 0) return {};
+	std::string s(static_cast<size_t>(n), '\0');
+	if (WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, s.data(), n, nullptr, nullptr) != n) {
+		return {};
 	}
-	const std::string cso = dir + "\\shaders\\" + name + ".cso";
+	s.resize(static_cast<size_t>(n - 1));
+	return s;
+}
+
+// GetFullPathNameW, then trailing separators removed (a drive root keeps its one separator, so
+// "C:\" does not become the drive-relative "C:"). Empty on failure.
+std::wstring NormalizeDirectoryW(const std::wstring& dir) {
+	const DWORD need = GetFullPathNameW(dir.c_str(), 0, nullptr, nullptr);
+	if (need == 0) return {};
+	std::wstring full(static_cast<size_t>(need), L'\0');
+	const DWORD got = GetFullPathNameW(dir.c_str(), need, full.data(), nullptr);
+	if (got == 0 || got >= need) return {};
+	full.resize(got);
+	while (full.size() > 1 && IsPathSeparatorW(full.back()) &&
+	       !(full.size() == 3 && full[1] == L':')) {
+		full.pop_back();
+	}
+	return full;
+}
+
+bool SameDirectory(const std::wstring& a, const std::wstring& b) {
+	return CompareStringOrdinal(a.c_str(), static_cast<int>(a.size()), b.c_str(),
+	                            static_cast<int>(b.size()), TRUE) == CSTR_EQUAL;
+}
+
+}  // namespace
+
+bool ShaderDirOverrideActive() {
+	std::lock_guard<std::mutex> lock(g_shader_dir_mutex);
+	return g_shader_dir_fixed && g_shader_dir_is_override;
+}
+
+ShaderDirCheck CheckShaderDirOverride(const char* utf8_dir, std::wstring* out_normalized) {
+	if (utf8_dir == nullptr || utf8_dir[0] == '\0') return ShaderDirCheck::Invalid;
+	const std::wstring wide = MultiByteToWide(CP_UTF8, MB_ERR_INVALID_CHARS, utf8_dir);
+	if (wide.empty()) return ShaderDirCheck::Invalid;
+	if (PathIsRelativeW(wide.c_str())) return ShaderDirCheck::Invalid;
+	const std::wstring normalized = NormalizeDirectoryW(wide);
+	if (normalized.empty()) return ShaderDirCheck::Invalid;
+	const DWORD attr = GetFileAttributesW(normalized.c_str());
+	if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+		return ShaderDirCheck::Invalid;
+	}
+	const std::wstring pattern =
+	    normalized + (IsPathSeparatorW(normalized.back()) ? L"*.cso" : L"\\*.cso");
+	WIN32_FIND_DATAW fd{};
+	HANDLE h = FindFirstFileW(pattern.c_str(), &fd);
+	if (h == INVALID_HANDLE_VALUE) return ShaderDirCheck::Invalid;
+	bool has_cso = false;
+	do {
+		if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) has_cso = true;
+	} while (!has_cso && FindNextFileW(h, &fd));
+	FindClose(h);
+	if (!has_cso) return ShaderDirCheck::Invalid;
+	{
+		std::lock_guard<std::mutex> lock(g_shader_dir_mutex);
+		if (g_shader_dir_fixed && !SameDirectory(g_shader_dir_normalized, normalized)) {
+			return ShaderDirCheck::Conflict;
+		}
+	}
+	*out_normalized = normalized;
+	return ShaderDirCheck::Ok;
+}
+
+ShaderDirCheck CommitShaderDirOverride(const std::wstring& normalized) {
+	std::lock_guard<std::mutex> lock(g_shader_dir_mutex);
+	if (g_shader_dir_fixed) {
+		return SameDirectory(g_shader_dir_normalized, normalized) ? ShaderDirCheck::Ok
+		                                                          : ShaderDirCheck::Conflict;
+	}
+	const std::string utf8 = WideToUtf8(normalized);
+	if (utf8.empty()) return ShaderDirCheck::Invalid;
+	g_shader_dir_fixed = true;
+	g_shader_dir_is_override = true;
+	g_shader_dir_normalized = normalized;
+	g_shader_dir_override_utf8 = utf8;
+	return ShaderDirCheck::Ok;
+}
+
+std::string ShaderPath(const std::string& name) {
+	std::string cso;
+	{
+		std::lock_guard<std::mutex> lock(g_shader_dir_mutex);
+		if (g_shader_dir_fixed && g_shader_dir_is_override) {
+			const std::string& dir = g_shader_dir_override_utf8;
+			const bool ends_in_separator = dir.back() == '\\' || dir.back() == '/';
+			cso = dir + (ends_in_separator ? "" : "\\") + name + ".cso";
+		} else {
+			char path[MAX_PATH]{};
+			DWORD n = GetModuleFileNameA(nullptr, path, MAX_PATH);
+			std::string dir;
+			if (n > 0 && n < MAX_PATH) {
+				std::string full(path, n);
+				size_t slash = full.find_last_of("\\/");
+				dir = (slash == std::string::npos) ? "." : full.substr(0, slash);
+			} else {
+				dir = ".";
+			}
+			cso = dir + "\\shaders\\" + name + ".cso";
+			// The default path fixes the process's shader directory on its first load (event
+			// (b), d3d12_harness.h). This records the comparison form only; `cso` is unchanged.
+			if (!g_shader_dir_fixed) {
+				g_shader_dir_normalized =
+				    NormalizeDirectoryW(MultiByteToWide(CP_ACP, 0, (dir + "\\shaders").c_str()));
+				g_shader_dir_fixed = true;
+			}
+		}
+	}
 	// (T-2575, D-SLM6268): refuse a shader binary older than the source it claims to be a
 	// compile of, rather than dispatching it. Every `.cso` this tree ever loads comes through
 	// this one function, so the check has no per-shader enumeration to keep current. The
@@ -127,10 +260,19 @@ std::string ShaderPath(const std::string& name) {
 
 namespace {
 
-// (T-2575): NTFS last-write time in 100 ns units, or 0 when the file does not exist.
+// (T-2575): NTFS last-write time in 100 ns units, or 0 when the file does not exist. Under a
+// shader-directory override the path is UTF-8 (ShaderDirOverrideActive) and is read through
+// the wide call; otherwise the unchanged ANSI call.
 uint64_t ShaderFileWriteTime(const std::string& path) {
 	WIN32_FILE_ATTRIBUTE_DATA fad{};
-	if (!GetFileAttributesExA(path.c_str(), GetFileExInfoStandard, &fad)) return 0;
+	if (ShaderDirOverrideActive()) {
+		const std::wstring wpath = MultiByteToWide(CP_UTF8, 0, path.c_str());
+		if (wpath.empty() || !GetFileAttributesExW(wpath.c_str(), GetFileExInfoStandard, &fad)) {
+			return 0;
+		}
+	} else if (!GetFileAttributesExA(path.c_str(), GetFileExInfoStandard, &fad)) {
+		return 0;
+	}
 	ULARGE_INTEGER u{};
 	u.LowPart = fad.ftLastWriteTime.dwLowDateTime;
 	u.HighPart = fad.ftLastWriteTime.dwHighDateTime;

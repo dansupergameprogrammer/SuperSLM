@@ -4,6 +4,29 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+## [1.7.0] - Unreleased
+
+`GpuContextConfig` gains `shader_dir`, the directory the compiled `.cso` shader set is loaded
+from. `NULL`, which every zero-initialized config already holds, keeps the existing behaviour:
+shaders load from a `shaders` directory beside the host executable. A non-null value is an
+absolute UTF-8 directory path, read only during `sslm_gpu_context_create`. The shader directory is
+process-wide: the first successful create that names one, or the first shader load through the
+default location, fixes it for the process's lifetime. Two statuses are appended to
+`SslmGpuStatus`, so no existing ordinal moves: `SSLM_GPU_SHADER_DIR_INVALID` (19), for a value
+that is empty, not valid UTF-8, relative, not an existing directory, or a directory holding no
+`.cso` file; and `SSLM_GPU_SHADER_DIR_CONFLICT` (20), for a directory that differs from the one the
+process already uses. Both refusals are returned before any device is created.
+
+`GpuContextConfig` grows from 4 to 16 bytes on x64, and it is passed by value. The change is
+source-compatible: `GpuContextConfig{}`, `{0}` and every existing call site compile unchanged and
+behave as before. It is not binary-compatible: code compiled against an earlier `gpu_1p0.h` must be
+recompiled against this one before it links with this release.
+
+`tools/build_inspect.bat` links again. Both of its link lines were missing `src/intmath.cpp`, so
+`sslm_inspect` and `tok_verify` failed with unresolved externals from 1.3.0 onward. CMake now
+builds both tools as targets (`sslm_inspect`, `tok_verify`) linking the `superslm` library, so a
+source file the library needs cannot be missing from them again.
+
 ## [1.6.0] - 2026-09-22
 
 CPU and GPU callers can now query schema binding explicitly with `sslm_seq_schema_bound` and

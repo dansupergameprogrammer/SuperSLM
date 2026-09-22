@@ -247,14 +247,20 @@ cmake -B build -DSUPERSLM_BUILD_GPU=ON && cmake --build build --target superslm_
 This is for a consumer who wants the GPU acceleration library itself
 installed and exported via `find_package(superslm)`; it enables the same
 shader compilation used by the Windows test build and installs the compiled
-shaders with the package. A consuming CMake target
-must deploy them beside its executable:
+shaders with the package. By default the GPU library loads them from a
+`shaders` directory beside the host executable, so a consuming CMake target
+deploys them there:
 
 ```cmake
 find_package(superslm REQUIRED)
 target_link_libraries(my_app PRIVATE superslm::superslm_gpu)
 superslm_deploy_gpu_shaders(my_app)
 ```
+
+A host that does not own its executable's directory (an editor plugin, for
+example) can skip the copy and point `GpuContextConfig::shader_dir` at the
+installed `superslm_GPU_SHADER_DIR` instead. The shader directory is
+process-wide; [docs/api.md](docs/api.md) describes the rule.
 
 On Windows with Visual Studio installed, `build.bat` is a one-shot MSVC
 build that compiles the full local development suite, GPU included (it

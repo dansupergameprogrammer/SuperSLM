@@ -636,8 +636,43 @@ inline Device& GetDevice() {
 	return dev;
 }
 
+// The process's shader directory (GpuContextConfig::shader_dir, include/superslm/gpu_1p0.h).
+// One value under one mutex, defined in superslm_gpu.cpp. It is fixed by the first of (a) a
+// successful sslm_gpu_context_create with a non-null shader_dir (CommitShaderDirOverride), or
+// (b) the first ShaderPath call through the default path; once fixed it never changes, because
+// the pipeline caches below are process-static, keyed by shader name alone, and never flushed.
+//
+// True once (a) has fixed it. From then on ShaderPath returns UTF-8 paths under the override,
+// and ReadFile and the staleness check open them through the wide Win32/CRT calls; before it,
+// and for the process's lifetime when (b) fixed it, every path is the unchanged ANSI one.
+bool ShaderDirOverrideActive();
+
+enum class ShaderDirCheck { Ok, Invalid, Conflict };
+
+// sslm_gpu_context_create's pre-device checks on a non-null shader_dir, in order: empty or not
+// valid UTF-8, relative, not an existing directory after full-path normalization, no *.cso
+// file (all Invalid), then a fixed directory that differs (Conflict). On Ok,
+// `*out_normalized` holds the normalized directory for CommitShaderDirOverride.
+ShaderDirCheck CheckShaderDirOverride(const char* utf8_dir, std::wstring* out_normalized);
+
+// After device acquisition: fixes the process's shader directory to `normalized` when nothing
+// fixed it yet and returns Ok; returns Ok when it is already fixed to the same directory, and
+// Conflict when it is fixed to a different one (a concurrent create or default-path load won).
+ShaderDirCheck CommitShaderDirOverride(const std::wstring& normalized);
+
 inline std::vector<uint8_t> ReadFile(const std::string& path) {
-	FILE* f = std::fopen(path.c_str(), "rb");
+	FILE* f = nullptr;
+	if (ShaderDirOverrideActive()) {
+		// Under an override ShaderPath returned UTF-8 (see ShaderDirOverrideActive).
+		const int wn = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
+		if (wn > 0) {
+			std::wstring wpath(static_cast<size_t>(wn), L'\0');
+			MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), wn);
+			f = _wfopen(wpath.c_str(), L"rb");
+		}
+	} else {
+		f = std::fopen(path.c_str(), "rb");
+	}
 	if (!f) throw std::runtime_error("cannot open shader: " + path);
 	std::fseek(f, 0, SEEK_END);
 	long n = std::ftell(f);
@@ -651,7 +686,8 @@ inline std::vector<uint8_t> ReadFile(const std::string& path) {
 	return b;
 }
 
-// Locates `<exe_dir>/shaders/<name>.cso`. build.bat places its compiled
+// Locates `<exe_dir>/shaders/<name>.cso`, or `<override>\<name>.cso` (UTF-8) once a
+// shader-directory override is fixed (ShaderDirOverrideActive above). build.bat places its compiled
 // shaders next to its own built test binary (out\superslm_tests.exe).
 // CMakeLists.txt (T-2115, D-SLM3432) also compiles these shaders, behind
 // SUPERSLM_BUILD_GPU, but builds no GPU-linked executable of its own to sit

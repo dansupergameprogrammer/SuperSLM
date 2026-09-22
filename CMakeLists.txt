@@ -73,8 +73,9 @@ endif()
 # contract without any production consumer of this library ever compiling a
 # reference to tests/support/*. A second compile of the SAME sources, built
 # only with SUPERSLM_ENABLE_BAD_ALLOC_INJECTION defined, backs the test
-# binary; every other consumer (sslm_verify, and every tool built outside
-# CMake by build_inspect.bat) links the clean `superslm` above, which never
+# binary; every other consumer (sslm_verify, sslm_inspect, tok_verify, and every
+# tool built outside CMake by a tools/build_*.bat recipe) links the clean
+# `superslm` above, or compiles the same clean sources, which never
 # defines the macro and so never even includes the seam header
 # (src/bad_alloc_wrap.h #ifdef-gates it out entirely -- Layer 1 stays
 # independently embeddable, D-SLM13).
@@ -142,6 +143,25 @@ if(MSVC)
 	target_compile_options(sslm_generate PRIVATE /W4 /fp:precise)
 else()
 	target_compile_options(sslm_generate PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+
+# The artifact inspector and the tokenizer golden-file verifier. Linking `superslm` takes the
+# library's own source list, so a translation unit the library needs cannot be missing from
+# these tools (tools/build_inspect.bat is the no-CMake recipe for the same two binaries).
+add_executable(sslm_inspect tools/sslm_inspect.cpp)
+target_link_libraries(sslm_inspect PRIVATE superslm)
+if(MSVC)
+	target_compile_options(sslm_inspect PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(sslm_inspect PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+
+add_executable(tok_verify tools/tok_verify.cpp)
+target_link_libraries(tok_verify PRIVATE superslm)
+if(MSVC)
+	target_compile_options(tok_verify PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(tok_verify PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 
 # T-2693 slice 2: a converter-adjacent, CPU-only prefix snapshot/clone probe.
