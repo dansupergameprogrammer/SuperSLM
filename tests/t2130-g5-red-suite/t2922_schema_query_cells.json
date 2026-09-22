@@ -1,0 +1,26 @@
+{
+  "plan": "Claude/Plans/te266-gpu-path.md#3-10-8",
+  "source_pin": "e822c70201eb388bac3f2e6acc9cd6ed4c8702c6",
+  "cells": [
+    "UNBOUND_APPLICATION_FINAL", "BOUND_MID_WALK", "BOUND_ACCEPTING",
+    "DEAD_END_PREDECESSOR", "SLM5_RESTORE_BOUND", "SLM4_RESTORE_UNBOUND",
+    "RESET_PRESERVES_BINDING", "CPU_ADOPT_PREFIX_PROGRESS",
+    "CPU_ADOPT_PREFIX_PROMPT_ONLY_RESET", "SUBMITTED_BUSY_UNCHANGED_OUT",
+    "MALFORMED_AND_FOREIGN_UNCHANGED_OUT", "DRAIN_THEN_FINALIZE_QUERY",
+    "DISTINCT_SCHEMA_RESTORE_REBIND", "LATE_LIVE_BIND_REJECT",
+    "LATE_SLM5_BIND_REJECT", "FRESH_BIND_ACCEPT", "RESET_BIND_ACCEPT",
+    "GPU_IDLE_RESET_REUSE", "GPU_SUBMITTED_RESET_BUSY",
+    "ADAPTER_SWAP_MIDTOKEN_THEN_RESET_ACCEPT", "NO_DEVICE_WORK",
+    "FOUR_SURFACE_PUBLIC_WORDING", "REAL_MODEL_BUDGET_DECODE",
+    "REAL_MODEL_LATE_BIND"
+  ],
+  "mutants": {
+    "a": "unbound accepting writes 1", "b": "unbound bound writes 1",
+    "c": "SLM5 restore reports unbound", "d": "mid-walk uses state != 0",
+    "e": "accepting search always returns 0", "f": "dead-end overwrites walk",
+    "g": "CPU prompt-only adoption leaves stale walk", "h": "GPU membership cache",
+    "i": "GPU rebind uses prior schema index", "j": "contract accepts universal rule",
+    "k": "GPU late-bind context-length guard removed", "l": "GPU Idle reset layer guard restored"
+  },
+  "red_reason_at_e822c70": "RED_API_SURFACE_ABSENT"
+}
