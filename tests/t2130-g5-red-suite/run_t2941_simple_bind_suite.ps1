@@ -4,11 +4,11 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Here = $PSScriptRoot
+. (Join-Path $Here 'resolve_toolchain.ps1')
 $Engine = (Resolve-Path (Join-Path $Here '..\..')).Path
 if (-not $ScratchRoot) { $ScratchRoot = Join-Path $Engine 'build\t2941-simple-bind-suite' }
 if (-not $ShaderDir) { $ShaderDir = Join-Path $Engine 'build\gpu-shaders-staged' }
-$Python = 'C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe'
-if (-not (Test-Path -LiteralPath $Python)) { $Python = 'python' }
+$Python = Resolve-SuperSlmPython
 New-Item -ItemType Directory -Force $ScratchRoot | Out-Null
 
 function Invoke-Logged {

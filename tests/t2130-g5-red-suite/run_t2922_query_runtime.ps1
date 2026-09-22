@@ -4,15 +4,16 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Here = $PSScriptRoot; $Engine = (Resolve-Path (Join-Path $Here '..\..')).Path
+. (Join-Path $Here 'resolve_toolchain.ps1')
 if (-not $ScratchRoot) { $ScratchRoot = Join-Path $Engine 'build\t2933-query-runtime' }
 if (-not $ShaderDir) { $ShaderDir = Join-Path $Engine 'build\gpu-shaders-staged' }
 if (-not $GpuSource) { $GpuSource = Join-Path $Engine 'src\gpu\gpu_1p0.cpp' }
 if (-not $CpuSource) { $CpuSource = Join-Path $Engine 'src\sslm_abi.cpp' }
-$Vs = 'C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Launch-VsDevShell.ps1'
+$Python = Resolve-SuperSlmPython
 $Obj = Join-Path $ScratchRoot 'obj'; $Bin = Join-Path $ScratchRoot 'bin'
 New-Item -ItemType Directory -Force $Obj,$Bin,(Join-Path $Bin 'shaders') | Out-Null
 Get-ChildItem $Obj -File -ErrorAction SilentlyContinue | Remove-Item -Force
-& $Vs -Arch amd64 -HostArch amd64 -SkipAutomaticLocation | Out-Null
+Enter-SuperSlmVsDevShell
 $Common = @('artifact.cpp','sha256.cpp','tokenizer.cpp','model.cpp','intmath.cpp','silu_lut.cpp',
  'matmul.cpp','proof_manifest.cpp','trace_hook.cpp','forward\checked_chain_funnel.cpp',
  'forward\forward_sites.cpp','decode_digest.cpp','damped_greedy_antilm.cpp',
@@ -30,7 +31,7 @@ if ($LASTEXITCODE) { exit 2 }
 if (-not (Test-Path $ShaderDir)) { throw "shader directory missing: $ShaderDir" }
 Copy-Item (Join-Path $ShaderDir '*') (Join-Path $Bin 'shaders') -Force
 $Fixture = Join-Path $ScratchRoot 'dual.sslm'
-& python "$Here\make_t2922_dual_schema_fixture.py" $Fixture
+& $Python "$Here\make_t2922_dual_schema_fixture.py" $Fixture
 if ($LASTEXITCODE) { exit 2 }
 Push-Location $Bin
 try { & $Exe $Fixture; exit $LASTEXITCODE } finally { Pop-Location }

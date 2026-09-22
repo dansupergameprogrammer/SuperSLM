@@ -1464,32 +1464,26 @@ def test_part3_reorder_gs10_plus_revert_is_caught_at_the_relocated_line():
     # (D-SLM5647): under the pre-T2481 ordinal keying this produced BYTE-IDENTICAL output to the
     # healthy-swap cell above, citing the UNTOUCHED occurrence's own line while the RELOCATED
     # occurrence's own genuine revert went silently absorbed.
+    relocated_line = []
     def _t(text):
-        return _swap_and_optionally_revert(
+        mutated = _swap_and_optionally_revert(
             text, _GS10_CHUNK_A, _GS10_CHUNK_B,
             revert_from="for (uint32_t i = 0; i < QW * H; ++i)",
             revert_to="for (uint32_t i = 0; i < H * H; ++i)",
         )
+        lines = mutated.splitlines()
+        marker = _GS10_CHUNK_B.splitlines()[0]
+        assert lines.count(marker) == 1
+        line = lines.index(marker) + 1
+        assert "for (uint32_t i = 0; i < H * H; ++i)" in lines[line]
+        relocated_line.append(line)
+        return mutated
     with _mutated(_SUPERSLM_GPU_CPP, _t):
         failures = census.run_census(_REPO_ROOT)
     assert failures, "a genuine revert of the relocated occurrence must FAIL, not be silently absorbed"
-    # (T-2575): superslm_gpu.cpp's ShaderPath gained the shader-binary freshness guard and its
-    # three helpers, shifting this occurrence from :723 to :838 in the mutated (chunk A/B
-    # swapped) copy this test builds -- re-derived, as the T-2560 correction before it was, by
-    # running the census against the real, current file through the same mutation this test
-    # applies, never by adding a line-count offset to the previous number.
-    # CORRECTED 2026-09-03 (T-2577): superslm_gpu.cpp gained the model_generation cache-key
-    # parameter, its own top-level gate function and header comments (S1), the
-    # GpuShaderBinaryStaleError type and catch clauses (S2), and the per-site saturation-count
-    # offsets and packing (S3) -- all landing above this occurrence, shifting it from :838 to
-    # :923 in the same mutated copy. Re-derived the same way: `python -c` driving
-    # `_swap_and_optionally_revert`/`census.run_census` directly against the real, current file
-    # through the identical mutation, never by offset.
-    # CORRECTED 2026-09-03 (T-2578): the confirmation remedies add six lines above the relocated
-    # occurrence, shifting :923 to :930. Re-derived by executing this test's exact mutation and
-    # printing census.run_census()'s real finding against the current source.
-    # T-2739 re-derived this exact mutation at current HEAD: :931.
-    assert any("REGRESSED SITE" in f and "GS-10" in f and ":931" in f for f in failures), (
+    # Derive the relocated marker's 1-based line from this test's mutated copy.
+    assert any("REGRESSED SITE" in f and "GS-10" in f and
+               f":{relocated_line[0]} --" in f for f in failures), (
         "the finding must cite the RELOCATED occurrence's own (now-first) line, not the "
         "untouched occurrence -- a wrong-line citation is exactly what the prior ordinal "
         "keying produced"
@@ -1526,23 +1520,26 @@ def test_part3_reorder_gs11_healthy_swap_stays_clean():
 
 
 def test_part3_reorder_gs11_plus_revert_is_caught_at_the_relocated_line():
+    relocated_line = []
     def _t(text):
-        return _swap_and_optionally_revert(
+        mutated = _swap_and_optionally_revert(
             text, _GS11_CHUNK_A, _GS11_CHUNK_B,
             revert_from="for (uint32_t i = 0; i < H * QW; ++i)",
             revert_to="for (uint32_t i = 0; i < H * H; ++i)",
         )
+        lines = mutated.splitlines()
+        marker = _GS11_CHUNK_B.splitlines()[0]
+        assert lines.count(marker) == 1
+        line = lines.index(marker) + 1
+        assert "for (uint32_t i = 0; i < H * H; ++i)" in lines[line]
+        relocated_line.append(line)
+        return mutated
     with _mutated(_SUPERSLM_GPU_CPP, _t):
         failures = census.run_census(_REPO_ROOT)
     assert failures, "a genuine revert of the relocated GS-11 occurrence must FAIL"
-    # (T-2575): shifted from :750 to :865 in the mutated copy, by the same ShaderPath freshness
-    # guard named at GS-10's own identical correction above, and re-derived the same way.
-    # CORRECTED 2026-09-03 (T-2577): shifted from :865 to :950, by the same S1/S2/S3 additions
-    # GS-10's own identical correction above names, re-derived the same way.
-    # CORRECTED 2026-09-03 (T-2578): shifted from :950 to :957 by the same six confirmation-remedy
-    # lines named at GS-10 above, re-derived by executing this test's exact mutation.
-    # T-2739 re-derived this exact mutation at current HEAD: :958.
-    assert any("REGRESSED SITE" in f and "GS-11" in f and ":958" in f for f in failures)
+    # Derive the relocated marker's 1-based line from this test's mutated copy.
+    assert any("REGRESSED SITE" in f and "GS-11" in f and
+               f":{relocated_line[0]} --" in f for f in failures)
 
 
 _GS12_OCC0 = (

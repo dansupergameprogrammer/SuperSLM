@@ -6,18 +6,17 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Here = $PSScriptRoot
+. (Join-Path $Here 'resolve_toolchain.ps1')
 $Engine = (Resolve-Path (Join-Path $Here '..\..')).Path
 if (-not $ScratchRoot) { $ScratchRoot = Join-Path $Engine 'build\t2933-lifecycle' }
 if (-not $ShaderDir) { $ShaderDir = Join-Path $Engine 'build\gpu-shaders-staged' }
 if (-not $GpuSource) { $GpuSource = Join-Path $Engine 'src\gpu\gpu_1p0.cpp' }
 if (-not $CpuSource) { $CpuSource = Join-Path $Engine 'src\sslm_abi.cpp' }
-$Python = 'C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe'
-if (-not (Test-Path -LiteralPath $Python)) { $Python = 'python' }
-$Vs = 'C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Launch-VsDevShell.ps1'
+$Python = Resolve-SuperSlmPython
 $Obj = Join-Path $ScratchRoot 'obj'; $Bin = Join-Path $ScratchRoot 'bin'
 New-Item -ItemType Directory -Force $ScratchRoot,$Obj,$Bin,(Join-Path $Bin 'shaders') | Out-Null
 Get-ChildItem -LiteralPath $Obj -File -ErrorAction SilentlyContinue | Remove-Item -Force
-& $Vs -Arch amd64 -HostArch amd64 -SkipAutomaticLocation | Out-Null
+Enter-SuperSlmVsDevShell
 
 $Common = @('artifact.cpp','sha256.cpp','tokenizer.cpp','model.cpp','intmath.cpp','silu_lut.cpp',
  'matmul.cpp','proof_manifest.cpp','trace_hook.cpp','forward\checked_chain_funnel.cpp',
