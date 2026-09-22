@@ -23,6 +23,27 @@ rem                        product half SKIPs, per fixture_common.h's own docume
 setlocal enabledelayedexpansion
 set HEREDIR=%~dp0
 
+if "%~1"=="shaderdir" (
+    if not defined T2112_MODEL (echo T2112_MODEL is required & exit /b 2)
+    if not defined T2948_SHADER_DIR (echo T2948_SHADER_DIR is required & exit /b 2)
+    call "%HEREDIR%build_link_red.bat" shaderdir
+    if errorlevel 1 exit /b 2
+    if not exist "%HEREDIR%obj\shaders" mkdir "%HEREDIR%obj\shaders"
+    xcopy /Y /I /Q "%T2948_SHADER_DIR%\*.cso" "%HEREDIR%obj\shaders\" >nul
+    if errorlevel 1 (echo No real compiled shaders copied & exit /b 2)
+    if not exist "%HEREDIR%obj\t2808\shaders" mkdir "%HEREDIR%obj\t2808\shaders"
+    if not exist "%HEREDIR%obj\t2808\empty" mkdir "%HEREDIR%obj\t2808\empty"
+    for %%F in ("%HEREDIR%obj\shaders\*.cso") do type nul >"%HEREDIR%obj\t2808\shaders\%%~nxF"
+    "%HEREDIR%obj\t2808\cell_shader_dir.exe" "--arm=poisoned-default" "--model1p5b=%T2112_MODEL%"
+    if errorlevel 1 (echo T-2948 construction arm B failed & exit /b 1)
+    set T2948_RESULT=0
+    "%HEREDIR%obj\t2808\cell_shader_dir.exe" "--arm=invalid-only" "--shader-dir=%HEREDIR%obj\shaders" "--model1p5b=%T2112_MODEL%"
+    if errorlevel 1 set T2948_RESULT=1
+    "%HEREDIR%obj\t2808\cell_shader_dir.exe" "--arm=override" "--shader-dir=%HEREDIR%obj\shaders" "--model1p5b=%T2112_MODEL%"
+    if errorlevel 1 set T2948_RESULT=1
+    exit /b !T2948_RESULT!
+)
+
 call "%HEREDIR%build_link_red.bat"
 if errorlevel 1 exit /b 1
 

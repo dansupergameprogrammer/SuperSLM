@@ -18,6 +18,7 @@
 #define SSLM_T2112_FIXTURE_COMMON_H
 
 #include <cstdio>
+#include <cstddef>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -32,6 +33,9 @@
 // t2107-gpu-core-1p0-design-2026-08-14.md Sec4/Sec5, post T-2111-rung-5 fold). Promoted copy,
 // this directory -- see sslm_gpu_1p0.h's own header comment.
 #include "sslm_gpu_1p0.h"
+
+static_assert(sizeof(GpuContextConfig) == 16 && offsetof(GpuContextConfig, shader_dir) == 8,
+              "T-2948 mirror config ABI must match the production header on x64");
 
 static int GChecks = 0;
 static int GFailures = 0;

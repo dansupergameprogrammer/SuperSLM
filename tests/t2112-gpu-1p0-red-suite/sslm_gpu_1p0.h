@@ -70,6 +70,7 @@ using superslm::SslmModelView;
  * header's now-complete one, a duplicate-definition error, not merely dead code). */
 typedef struct GpuContextConfig {
 	int reserved;  /* design Sec4.1.1 assigns no fields yet; zero-initialize */
+	const char* shader_dir;  /* NULL keeps the process default; UTF-8 absolute path otherwise */
 } GpuContextConfig;
 typedef struct GpuResidencyConfig {
 	int reserved;  /* design Sec5.1 assigns no fields yet; zero-initialize */
@@ -119,8 +120,12 @@ typedef enum SslmGpuStatus {
                                            * adapter) -- persistent liveness, not SSLM_BUSY.
                                            * See gpu_1p0.h's own header comment for the full
                                            * account. Appended LAST. */
-    SSLM_GPU_SHADER_BINARY_STALE          /* T-2578 confirmation remedy: deployed .cso predates
-                                           * an HLSL input; rebuild/redeploy before retrying. */
+    SSLM_GPU_SHADER_BINARY_STALE,         /* deployed .cso predates an HLSL input */
+    SSLM_GPU_ALLOCATION_FAILED,
+    SSLM_OUTPUT_BUFFER_TOO_SMALL,
+    SSLM_PREFILL_HIDDEN_UNAVAILABLE,
+    SSLM_GPU_SHADER_DIR_INVALID,
+    SSLM_GPU_SHADER_DIR_CONFLICT
 } SslmGpuStatus;
 
 /* --- Sec4.1.1: context create/destroy --- */

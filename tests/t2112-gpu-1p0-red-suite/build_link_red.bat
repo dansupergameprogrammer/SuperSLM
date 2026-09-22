@@ -11,6 +11,7 @@ rem build seat (T-2113) lands the 1.0 API's own .cpp; this script's own exit cod
 rem ONLY once linking succeeds, at which point this suite has gone from red to buildable and the
 rem individual CHECK/FAIL output governs pass/fail from then on.
 setlocal enabledelayedexpansion
+set "T2948_ONLY=%~1"
 set HEREDIR=%~dp0
 set ENG=%HEREDIR%..\..
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 -no_logo
@@ -21,6 +22,24 @@ rem resolves <exe_dir>\shaders\*.cso, so binaries built into obj\ MUST have the 
 rem shaders beside them or every shader load surfaces as SSLM_DEVICE_LOST (the false
 rem D-SLM3388 signature). Copy the engine build's shaders next to the suite binaries.
 if exist ..\..\out\shaders xcopy /Y /I /Q ..\..\out\shaders obj\shaders >nul
+
+rem T-2948 targeted build: place this executable away from obj\shaders so its default
+rem lookup is deliberately poisoned by run_green.bat. Build only the added cell.
+if "%T2948_ONLY%"=="shaderdir" (
+    if not exist obj\t2808 mkdir obj\t2808
+    cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_O11_ALLOC_INJECTION /I%ENG%\include /I%ENG%\tests /I. ^
+        %ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp ^
+        %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp ^
+        %ENG%\src\trace_hook.cpp %ENG%\src\forward\checked_chain_funnel.cpp ^
+        %ENG%\src\forward\forward_sites.cpp %ENG%\src\decode_digest.cpp %ENG%\src\gpu\superslm_gpu.cpp ^
+        %ENG%\src\gpu\gpu_1p0.cpp cell_shader_dir.cpp /Fo:"obj\t2808\\" /Fe:"obj\t2808\cell_shader_dir.exe" ^
+        /link d3d12.lib dxgi.lib dxguid.lib >"obj\t2808\cell_shader_dir.build.log" 2>&1
+    if errorlevel 1 (type "obj\t2808\cell_shader_dir.build.log" & exit /b 2)
+    findstr /C:"error C" /C:"fatal error" /C:"LNK1120" "obj\t2808\cell_shader_dir.build.log" >nul
+    if not errorlevel 1 (type "obj\t2808\cell_shader_dir.build.log" & exit /b 2)
+    echo T-2948 cell_shader_dir linked clean
+    exit /b 0
+)
 
 set OVERALL_LINK_OK=1
 rem T-2243 review finding 5 (D-SLM4113): ANY_LINK_FAILURE tracks a genuine RED BY LINK cell

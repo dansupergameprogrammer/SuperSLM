@@ -28843,8 +28843,58 @@ static void TestT2568_M3_PackLayerWeightsBytesRefusesNullIexpSoftmaxKheadPointer
 
 #endif  // _WIN32
 
+#ifdef _WIN32
+template <typename Config>
+static constexpr bool T2948HasShaderDir = requires(Config cfg) { cfg.shader_dir; };
+
+template <typename Config>
+static void TestT2948_ShaderDirInvalidBeforeDeviceInit() {
+	if constexpr (!T2948HasShaderDir<Config>) {
+		// The standalone mirror-header cell exercises these same rows red on v1.6.0.
+		return;
+	} else {
+	namespace fs = std::filesystem;
+	const fs::path empty = fs::temp_directory_path() /
+	    ("superslm-t2948-empty-" + std::to_string(GetCurrentProcessId()));
+	fs::create_directories(empty);
+	const std::string missing = (empty / "absent").string();
+	const std::string file = fs::absolute(GSelfPath).string();
+	const std::string empty_string = empty.string();
+	const char bad_utf8[] = "\xC3\x28";
+	const char* values[] = {"", "shaders", missing.c_str(), file.c_str(),
+	                        empty_string.c_str(), bad_utf8};
+	const char* labels[] = {"empty", "relative", "missing", "file", "no-cso", "invalid-utf8"};
+	for (size_t i = 0; i < 6; ++i) {
+		Config cfg{};
+		cfg.shader_dir = values[i];
+		SslmGpuContext* out = reinterpret_cast<SslmGpuContext*>(uintptr_t{1});
+		const SslmGpuStatus st = sslm_gpu_context_create(cfg, &out);
+		CHECK_MSG(st == static_cast<SslmGpuStatus>(19), "%s returned %u instead of INVALID",
+		          labels[i], static_cast<unsigned>(st));
+		CHECK_MSG(out == nullptr, "%s left a context on refusal", labels[i]);
+		if (out && out != reinterpret_cast<SslmGpuContext*>(uintptr_t{1}))
+			sslm_gpu_context_destroy(out);
+	}
+	fs::remove(empty);
+	}
+}
+#endif
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
+	if (argc > 1 && std::strcmp(argv[1], "--t2948-shader-dir-invalid-only") == 0) {
+#ifdef _WIN32
+		if (!T2948HasShaderDir<GpuContextConfig>) {
+			std::printf("t2948 no-GPU rows unavailable: production config has no shader_dir\n");
+			return 1;
+		}
+		TestT2948_ShaderDirInvalidBeforeDeviceInit<GpuContextConfig>();
+		std::printf("t2948 no-GPU rows: %d checks, %d failures\n", GChecks, GFailures);
+		return GFailures == 0 ? 0 : 1;
+#else
+		return 0;
+#endif
+	}
 	if (argc > 1) {
 		const std::string arg1 = argv[1];
 		const std::string prefix = "--crash-probe=";
@@ -29810,6 +29860,7 @@ int main(int argc, char** argv) {
 	TestT2575_ShaderStalenessGuard_UnverifiableCasesAreNotRefusals();
 	TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath();
 	TestT2575_ShaderBinariesBesideThisExecutableAreCurrent();
+	TestT2948_ShaderDirInvalidBeforeDeviceInit<GpuContextConfig>();
 	TestT2576_GpuKvSaturationAndKvRowMatchCpuOnRopeSaturationFixtureN100();
 	TestT2577_S1_ModelGenerationGatesReadOnlyCachesWithoutWeakeningKvFreshness();
 	TestT2577_S1b_ModelGenerationReachesTheG5BridgeChunkEntryPoint();

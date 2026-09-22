@@ -47,6 +47,8 @@ PIN(SSLM_GPU_ALLOCATION_FAILED, 16);
 // The two 1.6.0 statuses, appended last and in the order plan Sec3.1 lists them.
 PIN(SSLM_OUTPUT_BUFFER_TOO_SMALL, 17);
 PIN(SSLM_PREFILL_HIDDEN_UNAVAILABLE, 18);
+PIN(SSLM_GPU_SHADER_DIR_INVALID, 19);
+PIN(SSLM_GPU_SHADER_DIR_CONFLICT, 20);
 
 // "Last": no enumerator follows them. An enum class has no count, so this is asserted through
 // the one property an appended enumerator would change -- the value after the last is not a
@@ -76,13 +78,15 @@ constexpr int AllNamed(SslmGpuStatus s) {
 		case SSLM_GPU_ALLOCATION_FAILED:
 		case SSLM_OUTPUT_BUFFER_TOO_SMALL:
 		case SSLM_PREFILL_HIDDEN_UNAVAILABLE:
+		case SSLM_GPU_SHADER_DIR_INVALID:
+		case SSLM_GPU_SHADER_DIR_CONFLICT:
 			return 1;
 	}
 	return 0;
 }
-static_assert(AllNamed(SSLM_PREFILL_HIDDEN_UNAVAILABLE) == 1, "the switch above names every status");
+static_assert(AllNamed(SSLM_GPU_SHADER_DIR_CONFLICT) == 1, "the switch above names every status");
 
 int main() {
-	std::printf("cell_status_ordinals: 19 ordinals pinned at compile time -> PASS\n");
+	std::printf("cell_status_ordinals: 21 ordinals pinned at compile time -> PASS\n");
 	return 0;
 }
