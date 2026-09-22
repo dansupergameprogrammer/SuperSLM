@@ -8,9 +8,11 @@ CPU and GPU callers can now query schema binding explicitly with `sslm_seq_schem
 `SslmGpuSeqSchemaBoundForG5Bridge`, and GPU callers can query exact current accept-set membership
 with `SslmGpuSeqSchemaAcceptingForG5Bridge`. GPU queries are host-only and leave outputs unchanged
 on malformed or busy calls. Schema binding on GPU now rejects every sequence with retained
-generation history, including restored SLM5 history whose DFA happens to be at state 0. CPU and
-GPU reset are symmetric restart operations: any valid Idle/CPU sequence state can be reset;
-the shipped `SSLM_SEQ_RESET_MIDTOKEN_REJECTED` ordinal remains reserved but is no longer returned.
+generation history. CPU and GPU schema bind, rebind, and unbind are valid only after create or
+reset; any generation call, including a no-op call or CPU empty-prefix adoption, makes a sequence
+ineligible until reset, and every restored sequence must be reset before binding. CPU and GPU reset
+are symmetric restart operations: any valid Idle/CPU sequence state can be reset; the shipped
+`SSLM_SEQ_RESET_MIDTOKEN_REJECTED` ordinal remains reserved but is no longer returned.
 
 The GPU API gains an embedding read. `sslm_gpu_seq_read_prefill_final_hidden` returns the
 post-`final_norm` hidden state at the last position left by a sequence's most recent prompt or

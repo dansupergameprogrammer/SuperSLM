@@ -9,6 +9,10 @@
 // handles, POD config/state structs, and a single closed `sslm_status` enum whose enumerator
 // values never change once shipped. New functionality is added by appending new enumerators
 // and new functions, never by renumbering or repurposing an existing one.
+//
+// Schema bind, rebind, and unbind are valid only on a newly created or successfully reset
+// sequence. Any generation call makes the sequence ineligible until reset, including a no-op
+// call or an empty-prefix adoption. A restored sequence must be reset before schema binding.
 
 #include <stdint.h>
 #include <stddef.h>
@@ -126,7 +130,7 @@ typedef struct sslm_detok_state {
      * declared so the registry is complete and Gate C's per-name checks have something to
      * compare on both sides for every entry, not only the 19 that happened to already coincide. */ \
     X(SSLM_SCHEMA_NOT_FOUND) /* 18 -- sslm_schema_lookup: unknown name */ \
-    X(SSLM_SCHEMA_BIND_REJECTED) /* 19 -- sslm_seq_set_schema on a non-fresh walk */ \
+    X(SSLM_SCHEMA_BIND_REJECTED) /* 19 -- sslm_seq_set_schema outside create/reset eligibility */ \
     X(SSLM_SCHEMA_SPAN_UNBOUND) /* 20 -- schema-content span, unbound sequence */ \
     X(SSLM_PREFIX_SCHEMA_MISMATCH) /* 21 -- sslm_seq_adopt_prefix schema mismatch */ \
     X(SSLM_RESTORE_SCHEMA_MISMATCH) /* 22 -- sslm_seq_restore schema does not resolve */ \

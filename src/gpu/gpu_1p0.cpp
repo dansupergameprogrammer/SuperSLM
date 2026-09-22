@@ -500,6 +500,9 @@ struct SslmGpuSequenceHandle {
 	// binds, matching `kDfaWalkStateUnused`'s identical CPU-side semantics.
 	int32_t bound_schema_index = -1;
 	uint32_t dfa_walk_state = kSslmGpuDfaWalkStateUnused;
+	// Runtime-only bind authority. Create/reset set it; restore and every admitted generation
+	// call clear it. It is deliberately absent from the save format.
+	bool bind_eligible = false;
 
 	// G5-5 session 3 fix (T-2132, Brunel, Claude/Brunel/t2132-g5-build-2026-08-16.md session 3):
 	// the GPU-1.0 twin of `sslm_seq_s::ready_for_logits` (src/sslm_abi.cpp) -- session 3's own
@@ -1322,6 +1325,7 @@ SslmGpuStatus sslm_gpu_seq_createImpl(SslmGpuContext* ctx, SslmGpuModelHandle* m
 	h->layer_index = 0;
 	h->kv_saturation_count = 0;
 	h->context_length = 0;
+	h->bind_eligible = true;
 	h->state = superslm_gpu::SslmSequenceGpuState::Idle;
 	// T-2113 (B5): `live_state.hidden_codes` aliases `hidden_codes.data()` for this handle's
 	// whole lifetime -- `hidden_codes` never reallocates after this construction (fixed size,
@@ -1473,6 +1477,7 @@ SslmGpuStatus sslm_gpu_seq_embed_tokenImpl(SslmGpuContext* ctx, SslmGpuSequenceH
 	if (token_id < 0 || token_id >= model->vocab_size) {
 		return SSLM_TOKEN_ID_OUT_OF_RANGE;
 	}
+	seq->bind_eligible = false;
 
 	std::vector<int8_t> embed_codes(model->hidden_size);
 	superslm::CarriedScale embed_scale{};
@@ -1708,6 +1713,7 @@ SslmGpuStatus sslm_decode_step_gpuImpl(SslmGpuContext* ctx, SslmGpuSequenceHandl
 	if (plan == superslm_gpu::SslmGpuStatus::DispatchBudgetTooSmall) {
 		return SSLM_DISPATCH_BUDGET_TOO_SMALL;
 	}
+	seq->bind_eligible = false;
 
 	// T-2113 (B7): submission itself is shared, byte-for-byte, with every per-sequence slot
 	// of sslm_decode_step_batch_gpu (below) -- see SubmitOneSequenceDecode's own header
@@ -1827,6 +1833,7 @@ SslmGpuStatus sslm_decode_step_batch_gpuImpl(SslmGpuContext* ctx, SslmGpuSequenc
 			out_statuses[i] = SSLM_BUSY;
 			continue;
 		}
+		seq->bind_eligible = false;
 
 		// Design Sec7: "dispatch_budget is consumed by sequences strictly in the recording
 		// order... each sequence taking whole layers only... from whatever remains" -- planned
@@ -1920,6 +1927,7 @@ SslmGpuStatus sslm_gpu_readyImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq
 	                                         // P1-4): `seq->ctx != ctx`.
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // no channel exists for a malformed handle
 	}
+	seq->bind_eligible = false;
 #if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
 	++superslm_test::g_gpu_ready_poll_count_probe;
 #endif
@@ -2236,6 +2244,7 @@ SslmGpuStatus sslm_gpu_seq_restoreImpl(SslmGpuContext* ctx, SslmGpuModelHandle* 
 	fresh->bound_schema_index = restored_schema_index;
 	fresh->dfa_walk_state = restored_walk_state;
 	fresh->ready_for_logits = restored_ready_for_logits;
+	fresh->bind_eligible = false;
 	*out_seq = fresh;
 	return SSLM_OK;
 }
@@ -2277,6 +2286,7 @@ SslmGpuStatus sslm_gpu_seq_resetImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle*
 	// a stale "finish without embedding" flag into whatever decode call comes next.
 	seq->ready_for_logits = false;
 	seq->prefill_hidden_valid = false;  // prefill snapshot writer: reset
+	seq->bind_eligible = true;
 	return SSLM_OK;
 }
 
@@ -2373,22 +2383,7 @@ SslmGpuStatus SslmGpuSeqSetSchemaForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuSeq
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
 	if (seq->state == superslm_gpu::SslmSequenceGpuState::Submitted) return SSLM_BUSY;
-	// Binding is a generation-origin operation. A restored SLM5 sequence retains its saved
-	// context_length, so this guard also rejects a restored history even when its DFA walk happens
-	// to be at state 0. Reset is the only operation that makes an existing history fresh again.
-	if (seq->context_length != 0) {
-		return SSLM_SEQUENCE_REJECTED;
-	}
-	// Mirrors `sslm_seq_set_schema`'s own precondition (src/sslm_abi.cpp): valid ONLY when the
-	// sequence's own DFA-walk-state is at its start -- kSslmGpuDfaWalkStateUnused (never bound)
-	// or 0 (bound, unadvanced). SSLM_SEQUENCE_REJECTED is the closest existing per-sequence
-	// structural-rejection disposition this bridge's own small surface has (gpu_1p0.h's own
-	// SSLM_SEQUENCE_REJECTED comment; the CPU ABI's distinct SSLM_SCHEMA_BIND_REJECTED has no
-	// counterpart on this file's own SslmGpuStatus enum, which this header deliberately does
-	// not extend).
-	if (seq->dfa_walk_state != kSslmGpuDfaWalkStateUnused && seq->dfa_walk_state != 0u) {
-		return SSLM_SEQUENCE_REJECTED;
-	}
+	if (!seq->bind_eligible) return SSLM_SEQUENCE_REJECTED; // D-SLM7625 bind gate
 	if (schema_index < 0) {
 		seq->bound_schema_index = -1;
 		seq->dfa_walk_state = kSslmGpuDfaWalkStateUnused;
@@ -2507,6 +2502,7 @@ SslmGpuStatus SslmGpuSeqFinishTokenForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuS
 	if (seq->state != superslm_gpu::SslmSequenceGpuState::Idle) {
 		return SSLM_BUSY;  // an in-flight Submitted call must be drained (sslm_gpu_ready) first.
 	}
+	seq->bind_eligible = false;
 	SslmGpuModelHandle* model = seq->model;
 	if (seq->layer_index != model->num_hidden_layers) {
 		// This token's own layer loop has not reached full depth yet -- the caller's own
@@ -3167,10 +3163,9 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5BridgeImpl(SslmGpuContext* ctx, SslmGp
 	    dispatch_budget < 1) {
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
-	if (count == 0) return SSLM_OK;  // matches the shipped per-token loop's own vacuous-loop exit
-	                                  // (the busy check below is never reached for count == 0
-	                                  // either, on either path).
 	if (seq->state != superslm_gpu::SslmSequenceGpuState::Idle) return SSLM_BUSY;
+	seq->bind_eligible = false; // D-SLM7625 generation entry: gpu prompt prefill
+	if (count == 0) return SSLM_OK;  // matches the shipped per-token loop's own vacuous-loop exit
 
 	// T-2169 (Rung 4, design Sec5/Sec8): the pre-scan-then-batch composition -- host-side
 	// sequential admission, then ONE call into the chunk-submission primitive for exactly
@@ -3257,6 +3252,8 @@ SslmGpuStatus SslmGpuSeqDecodeStepForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuSe
 	if (!ctx || !seq || !seq->model || seq->ctx != ctx || dispatch_budget < 1) {
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
+	if (seq->state == superslm_gpu::SslmSequenceGpuState::Submitted) return SSLM_BUSY;
+	seq->bind_eligible = false;
 	if (seq->ready_for_logits) {
 		// This sequence's hidden_codes already hold a fully-computed final hidden state (from a
 		// prior prefill call) -- no embed, no layer loop this call; jump straight to finishing,
@@ -3282,6 +3279,8 @@ SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5BridgeImpl(SslmGpuContext* ctx,
 	    dispatch_budget_per_token < 1) {
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
+	if (seq->state == superslm_gpu::SslmSequenceGpuState::Submitted) return SSLM_BUSY;
+	seq->bind_eligible = false;
 	if (seq->bound_schema_index < 0) {
 		return SSLM_SEQUENCE_REJECTED;  // the GPU twin of SSLM_SCHEMA_SPAN_UNBOUND.
 	}
@@ -3305,8 +3304,6 @@ SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5BridgeImpl(SslmGpuContext* ctx,
 			return SSLM_SEQUENCE_REJECTED;
 		}
 	}
-	if (seq->state != superslm_gpu::SslmSequenceGpuState::Idle) return SSLM_BUSY;
-
 	// T-2169 (Rung 3, design Sec5/Sec8): the pre-scan-then-batch composition -- host-side
 	// sequential admission (DFA reachability, embed validity, position cap, in that priority),
 	// then ONE call into the chunk-submission primitive for exactly `admit_count` tokens,

@@ -293,10 +293,14 @@ A schema is compiled offline (see [sslm_format.md](sslm_format.md)'s
 per-token-id valid-continuation masks, indexed by parser state, and shipped
 inside the `.sslm` artifact. `sslm_schema_lookup` resolves a schema by name;
 `sslm_schema_count` / `sslm_schema_name` enumerate every schema an artifact
-carries. `sslm_seq_set_schema` binds a schema to a sequence (only valid at a
-fresh or just-reset sequence — no mid-generation rebinding) and
-`sslm_prefix_set_schema` does the same for a prefix under construction, both
-using `SSLM_SCHEMA_NONE` to mean unconstrained. `sslm_seq_schema_bound`
+carries. `sslm_seq_set_schema` binds, rebinds, or unbinds a schema only after
+`sslm_seq_create` or `sslm_seq_reset`. Any generation call makes the sequence
+ineligible until reset, including a no-op call or an empty-prefix
+`sslm_seq_adopt_prefix`. A restored sequence must be reset before binding. The
+call returns `SSLM_SCHEMA_BIND_REJECTED` without changing the binding or walk
+state when the sequence is ineligible. `sslm_prefix_set_schema` does the same
+for a prefix under construction, using `SSLM_SCHEMA_NONE` to mean
+unconstrained. `sslm_seq_schema_bound`
 reports whether a sequence is bound, so callers can distinguish an unbound
 zero from a bound, non-accepting zero in `sslm_stats::schema_accepting`.
 `sslm_seq_reset` accepts every valid sequence state, including partial and
@@ -358,8 +362,12 @@ The two schema-state queries are host-only and never submit, poll, or wait on
 GPU work. They return `SSLM_BUSY` while a sequence is Submitted. An Idle
 sequence that has been drained but not yet finished still reports its
 pre-finish acceptance membership; drain and finish before treating the query
-as an output-finality decision. Schema bind/rebind/unbind is accepted only on
-a fresh or reset Idle sequence; a restored SLM5 history must be reset first.
+as an output-finality decision. Schema bind/rebind/unbind is accepted only
+after sequence creation or `sslm_gpu_seq_reset`. Any generation call makes the
+sequence ineligible until reset, including a no-op call. A restored sequence
+must be reset before binding. `SSLM_BUSY` and malformed-handle refusals leave
+eligibility unchanged; an ineligible Idle sequence returns
+`SSLM_SEQUENCE_REJECTED` without changing its binding or walk state.
 `SslmGpuSeqDecodeStepForG5Bridge` is the recommended one-call-per-decode-step
 entry point; a caller that always uses it (rather than hand-composing the
 lower-level embed/decode/ready calls) cannot reproduce a class of

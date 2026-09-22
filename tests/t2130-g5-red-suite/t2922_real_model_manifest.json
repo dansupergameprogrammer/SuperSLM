@@ -1,8 +1,8 @@
 {
-  "artifact": "D:/hf_cache/superslm_artifacts/example/qwen2.5-0.5b-instruct-cap4096-aex.sslm",
-  "artifact_bytes": 502852745,
-  "artifact_sha256": "696c2a4ac412f1c5866a446eb32aa6500db77e5ae8aff0018438103c607e61bd",
-  "schema_name": "potion_shop_order",
+  "artifact": "D:/hf_cache/superslm_artifacts/example/qwen2.5-0.5b-instruct-cap4096-aex-prompt-result.sslm",
+  "artifact_bytes": 504042025,
+  "artifact_sha256": "6a41f87d3a48c91751b41fe716c4f8289b7ce97761850c3f1f2c53d01201205c",
+  "schema_name": "prompt_result",
   "prompt_source": "Claude/Vitruvius/t2912-probe/t2912_heldout_prompts.json#1",
   "prompt_source_sha256": "44ffc54de4b62d5ff5f9ff84044b93947dc38bf316489b5e140ed8002e27fa76",
   "prompt_ids": [151644,8948,198,2610,525,1207,16948,11,3465,553,54364,14817,13,1446,525,264,10950,17847,13,151645,198,151644,872,198,65743,264,1378,47740,42439,438,4718,448,12026,11,42086,11,323,51542,13,151645,198,151644,77091,198],

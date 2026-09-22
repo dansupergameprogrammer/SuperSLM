@@ -126,6 +126,11 @@ guaranteed-parseable result checks both facts before treating the output as
 final. GPU callers use `SslmGpuSeqSchemaBoundForG5Bridge` and
 `SslmGpuSeqSchemaAcceptingForG5Bridge` after draining and finishing the step.
 
+Schema bind, rebind, and unbind are valid only on a newly created or reset
+sequence. Any generation call makes the sequence ineligible until reset,
+including a no-op call or a CPU empty-prefix adoption. A restored CPU or GPU
+sequence must be reset before binding.
+
 The determinism guarantee above carries through even when the engine skips
 ahead through the parts of the output your schema already dictates (for
 example, a fixed key name or punctuation your schema forces regardless of

@@ -323,6 +323,9 @@ struct sslm_seq_s {
 	// mechanism is required" text).
 	sslm_schema bound_schema = nullptr;
 	uint32_t dfa_walk_state = kDfaWalkStateUnused;
+	// Runtime-only bind authority. Create/reset set it; restore and every admitted generation
+	// call clear it. It is deliberately absent from the save format.
+	bool bind_eligible = false;
 	int64_t forced_token_count = 0;
 	// T-2199 Phase D2: this sequence's own damped-greedy anti-LM state (plan Sec7.2, "a
 	// warm-object class, not fresh-per-call") -- created lazily on the first decode_step call
@@ -1793,6 +1796,7 @@ extern "C" sslm_status sslm_seq_create(sslm_model model, sslm_kv_pool* pool, ssl
 	}
 	h->state.hidden_codes = h->hidden_codes_storage.data();
 	h->current_token = -1;
+	h->bind_eligible = true;
 	model->live_refs.fetch_add(1, std::memory_order_acq_rel);
 	// T-2199 Phase D3 fix (Sec9 dim3, GATE, D-SLM3719): registered as live BEFORE the handle is
 	// ever handed to the caller -- no concurrent decode_step call can name this pointer before
@@ -1846,33 +1850,12 @@ extern "C" sslm_status sslm_seq_release(sslm_seq seq) {
 	return SSLM_OK;
 }
 
-// G5 (design Sec5, T-2132): "valid ONLY when the sequence's DFA-walk state is at its start (a
-// fresh sslm_seq_create, or immediately after sslm_seq_reset)". Both of those states leave
-// dfa_walk_state at kDfaWalkStateUnused (never bound) or 0 (bound, unadvanced) -- see
-// sslm_seq_s's own field comment. Any other value means the walk has genuinely advanced (some
-// SSLM_SPAN_SCHEMA_CONTENT content was admitted), so re-binding -- even to a different schema --
-// rejects: schema re-binding mid-generation is out of 1.0 scope (design Sec11).
+// D-SLM7625: binding is a lifecycle permission, not a progress inference. Create/reset grant it;
+// restore and every admitted generation call revoke it. The flag is the sole authority for bind,
+// rebind, and unbind, including no-op generation and prompt-only prefix adoption.
 extern "C" sslm_status sslm_seq_set_schema(sslm_seq seq, sslm_schema schema) {
 	if (!seq) return SSLM_INVALID_ARGUMENT;
-	// S7 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): the shipped header's own condition is
-	// "valid ONLY when the sequence's DFA-walk state is at its start (a fresh sslm_seq_create, or
-	// immediately after sslm_seq_reset)" (design Sec5, ABI surface). `dfa_walk_state` alone does
-	// not detect that: an unbound sequence's walk-state stays at kDfaWalkStateUnused forever, no
-	// matter how much UNCONSTRAINED content has already been prefilled/decoded on it (nothing
-	// touches dfa_walk_state while bound_schema is null), so the pre-fix guard would accept a
-	// first-time bind on a sequence that is neither freshly created nor freshly reset -- not "at
-	// its start" by the header's own two named examples. `current_token == -1` is exactly what
-	// both of those examples share (sslm_seq_create's own default; sslm_seq_reset's own explicit
-	// reset, src/sslm_abi.cpp) and what changes the instant either a prompt or schema-content
-	// token is prefilled/decoded -- the same discriminator sslm_prefix_set_schema already uses
-	// for the mirrored precondition on a prefix (above), which this fix now makes symmetric
-	// across both handle types.
-	if (seq->current_token != -1) {
-		return SSLM_SCHEMA_BIND_REJECTED;
-	}
-	if (seq->dfa_walk_state != kDfaWalkStateUnused && seq->dfa_walk_state != 0) {
-		return SSLM_SCHEMA_BIND_REJECTED;
-	}
+	if (!seq->bind_eligible) return SSLM_SCHEMA_BIND_REJECTED;
 	// C2 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): see sslm_prefix_set_schema's own
 	// identical fix and comment, above.
 	if (schema && schema->model != seq->model) return SSLM_INVALID_ARGUMENT;
@@ -1918,6 +1901,7 @@ extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
 	// discipline this dimension already applies to KV-block recycling, applied here).
 	seq->dfa_walk_state = seq->bound_schema ? 0u : kDfaWalkStateUnused;
 	seq->forced_token_count = 0;
+	seq->bind_eligible = true;
 	// Damped-greedy history belongs to the generation being reset, just like K/V and the
 	// pending token above. Keeping it would make reset-and-restart depend on the prior run.
 	ClearDampedGreedyState(seq);
@@ -1966,6 +1950,7 @@ extern "C" sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix) {
 	// once sslm_kv_pool_s is itself bound to one model, below).
 	if (seq->model != prefix->model) return SSLM_INVALID_ARGUMENT;  // different models
 	if (seq->block_size != prefix->block_size) return SSLM_INVALID_ARGUMENT;
+	seq->bind_eligible = false;
 
 	// G5 (design Sec5, T-2132): the prefix's own recorded walk-state transfers IFF the
 	// adopting sequence's bound schema matches the prefix's recorded origin schema, OR the
@@ -2065,6 +2050,7 @@ extern "C" sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_
 	*consumed = 0;
 	if (!model || !seq) return SSLM_INVALID_ARGUMENT;
 	if (count < 0 || chunk_budget < 1 || (count > 0 && !tokens)) return SSLM_INVALID_ARGUMENT;
+	seq->bind_eligible = false;
 	if (!model->engine.ok) return SSLM_ARTIFACT_REJECTED;
 	if (kind == SSLM_SPAN_SCHEMA_CONTENT && !seq->bound_schema) {
 		return SSLM_SCHEMA_SPAN_UNBOUND;
@@ -2263,6 +2249,9 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 		}
 	}
 	(void)seq_locks_count;  // held for the RAII duration of this call; never re-read by index
+	for (int32_t i = 0; i < n; ++i) {
+		if (live[i]) seqs[i]->bind_eligible = false;
+	}
 
 	// Every LIVE sequence validated before any is touched -- a malformed entry anywhere in the
 	// batch leaves every sequence's state exactly as it was (this call's own "reject leaves state
@@ -3177,6 +3166,7 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	// verbatim, bit-equal (design Sec7 dim9's own round-trip cell).
 	h->bound_schema = resolved_schema;
 	h->dfa_walk_state = saved_dfa_walk_state;
+	h->bind_eligible = false;
 	if (saved_anti_lm_order > 0) {
 		const sslm_status anti_lm_st = CatchAllocationFailure([&]() -> sslm_status {
 			h->damped_greedy_antilm = superslm::AntiLmCreate(saved_anti_lm_order);
