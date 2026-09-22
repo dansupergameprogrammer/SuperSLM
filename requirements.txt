@@ -28,3 +28,10 @@ tokenizers~=0.22.2
 # install dependency in this configuration -- calibrate_checkpoint.py's chat-template
 # path is core converter behavior, so the dependency is declared directly.
 jinja2~=3.1.4
+# T-2919 (TE-372 S3, wiring tests/t2130-g5-red-suite/ into CI for the first time):
+# t2916_s1_keyword_allowlist_red.py::test_pydantic_generated_schema calls
+# `pydantic.BaseModel.model_json_schema()` to produce a genuinely pydantic-generated schema,
+# not a hand-typed imitation of pydantic's shape -- a real, direct dependency this file
+# already had, uncaught until this suite ran anywhere it was not already installed
+# ambient-globally (nothing in ctest or CI ran this suite before T-2919).
+pydantic~=2.8.2

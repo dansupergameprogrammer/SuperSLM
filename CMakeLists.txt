@@ -457,7 +457,12 @@ if(Python3_Interpreter_FOUND)
 	# suite (SETTLED, D-SLM3442/D-SLM3444 -- its own module docstring), not per-commit CI.
 	# Every real-model/real-checkpoint cell inside these files is gated on
 	# SUPERSLM_G5_REAL_MODEL_TESTS (tests/t2130-g5-red-suite/t2913_common.py) and skips
-	# cleanly when it is unset, which it is here and in every CI job below.
+	# cleanly when it is unset, which it is here and in every CI job below. Running this
+	# entry needs `pip install -r requirements.txt` on the invoking interpreter (pydantic,
+	# added in this same fold, is a real cell dependency -- t2916_s1_keyword_allowlist_red.py's
+	# pydantic-generated-schema cell) -- ${Python3_EXECUTABLE} is whatever `find_package(Python3)`
+	# resolved, which is not necessarily the interpreter `pip install` was run against on a
+	# box with more than one Python installed.
 	# WORKING_DIRECTORY is CMAKE_SOURCE_DIR, not the default CMAKE_CURRENT_BINARY_DIR: these
 	# test files do `from tools.sslm_convert_schema import ...`, a dotted import over `tools/`
 	# as an implicit namespace package (no `tools/__init__.py`), which `python -m pytest` only
