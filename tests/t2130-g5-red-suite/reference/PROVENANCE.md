@@ -28,6 +28,22 @@ comment at the top of the file, above its original docstring.
 as its own base module at import time, by a path relative to its own `__file__` two levels up
 (`../t2911-probe/...`) -- the two directories must stay siblings under `reference/`.
 
+## Historical compiler mutation fixtures (T-2921, TE-373 S1)
+
+The CTest-registered compiler suite also needs four historical modules for its mutation controls.
+They are frozen under `historical/`, each with a source commit/path header and its original-source
+SHA-256. `t2921_frozen_fixture_integrity.py` pins the complete fixture bytes (including that
+provenance header) and runs in the required compiler CTest target. The loader in
+`t2913_common.py` reads only these files; it never invokes Git, so a depth-one clone and a
+Git-free source archive exercise the same mutation controls.
+
+| Fixture | Source commit and path |
+|---|---|
+| `historical/v1_5_0_sslm_convert_schema.py` | `v1.5.0:tools/sslm_convert_schema.py` |
+| `historical/0062c99_sslm_convert_schema.py` | `0062c99:tools/sslm_convert_schema.py` |
+| `historical/0062c99_t2132_build_g5_fixture.py` | `0062c99:tools/t2132_build_g5_fixture.py` |
+| `historical/60eb357_sslm_convert_schema.py` | `60eb357:tools/sslm_convert_schema.py` |
+
 **T-2919's own reconsideration (TE-372 S3's second remedy clause):** `t2912-probe`'s module was,
 at authoring time, the target design `tools/sslm_convert_schema.py` had not yet folded in.
 T-2915 ported that exact design into the shipped module, so a test that only asserts "the

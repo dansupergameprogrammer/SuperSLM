@@ -30,7 +30,6 @@ import hashlib
 import importlib.util
 import os
 import struct
-import subprocess
 import sys
 import types
 from pathlib import Path
@@ -67,6 +66,31 @@ T2912_CANONICAL_CONTROL_PATH = _T2912_REF_DIR / "t2912_canonical_control.ids"
 TE368_PROMPTS_PATH = _REFERENCE_ROOT / "te368-probe" / "te368_prompts.json"
 TE368_HARNESS_SOURCE = _REFERENCE_ROOT / "te368-probe" / "te366_schema_run.cpp"
 TE368_HARNESS_BUILD_SCRIPT = _REFERENCE_ROOT / "te368-probe" / "build_te368_harness.bat"
+
+# Historical mutation controls are frozen files, not Git-object lookups.  The required CTest
+# target must run unchanged from a depth-one clone and from a Git-free source archive.
+_HISTORICAL_ROOT = _REFERENCE_ROOT / "historical"
+_FROZEN_FIXTURES: dict[tuple[str, str], Path] = {
+    ("v1.5.0", "tools/sslm_convert_schema.py"): _HISTORICAL_ROOT / "v1_5_0_sslm_convert_schema.py",
+    ("0062c99", "tools/sslm_convert_schema.py"): _HISTORICAL_ROOT / "0062c99_sslm_convert_schema.py",
+    ("0062c99", "tools/t2132_build_g5_fixture.py"): _HISTORICAL_ROOT / "0062c99_t2132_build_g5_fixture.py",
+    ("60eb357", "tools/sslm_convert_schema.py"): _HISTORICAL_ROOT / "60eb357_sslm_convert_schema.py",
+}
+# These pin the complete vendored fixture (provenance header plus exact historical source).
+_FROZEN_FIXTURE_SHA256: dict[tuple[str, str], str] = {
+    ("v1.5.0", "tools/sslm_convert_schema.py"): "819c44d325b6fe67cda636d175d59b736702e1c1fab00f02913df65b1f885214",
+    ("0062c99", "tools/sslm_convert_schema.py"): "f498aa7a5a55c3e84a1a724531328c2e732aad296400a4e0c52248e966930cf5",
+    ("0062c99", "tools/t2132_build_g5_fixture.py"): "a4d0044e81c58c5e431de4a9a2ab8a22fbe58334b66fbc2d8ed7df9550c68b37",
+    ("60eb357", "tools/sslm_convert_schema.py"): "72a4294e3bbf805dcdf1ae9339df776e6ad0bdb00212f4804e770c5aa487cc18",
+}
+# Raw historical source hashes, recorded in each fixture header, identify whether HEAD still
+# equals the named bad version without asking Git for history.
+_FROZEN_SOURCE_SHA256: dict[tuple[str, str], str] = {
+    ("v1.5.0", "tools/sslm_convert_schema.py"): "a8e9f9940dce2c9668aa05db6ea3c0ce63dec0c22e579f214cc70bba17252f2f",
+    ("0062c99", "tools/sslm_convert_schema.py"): "4433aaa39ae1758476899d312bb51a109c37fdf759761a567061f6ecf313fad2",
+    ("0062c99", "tools/t2132_build_g5_fixture.py"): "423790e2ec1a0eb81729d963b34cb982888789157d3634a2b80cf9d82098631b",
+    ("60eb357", "tools/sslm_convert_schema.py"): "d6a14c9c70e2356ef0395a5a437f1f6499f3d8d2cff255ac0d57712776a48b5b",
+}
 
 # The commissioned oracle and the heldout prompts are never altered (the brief's hard rule,
 # T-2912's own design); these pins guard the VENDORED copy exactly as they guarded the
@@ -162,6 +186,27 @@ def _verify_sha256(path: Path, expected: str, label: str) -> None:
             f"{label} at {path} has drifted: sha256={actual}, expected {expected} -- refusing "
             "to grade against an unverified copy"
         )
+
+
+def frozen_fixture_inventory() -> dict[tuple[str, str], tuple[Path, str]]:
+    """The integrity-test inventory for all historical inputs this suite loads."""
+    return {
+        key: (path, _FROZEN_FIXTURE_SHA256[key]) for key, path in _FROZEN_FIXTURES.items()
+    }
+
+
+def _frozen_source(commit_ish: str, repo_relative_path: str) -> tuple[Path, str]:
+    key = (commit_ish, repo_relative_path)
+    try:
+        path = _FROZEN_FIXTURES[key]
+    except KeyError as exc:
+        raise ValueError(
+            f"no frozen fixture registered for {commit_ish}:{repo_relative_path}; "
+            "add and hash-pin it before making it a suite input"
+        ) from exc
+    _require(path)
+    _verify_sha256(path, _FROZEN_FIXTURE_SHA256[key], f"frozen fixture {commit_ish}:{repo_relative_path}")
+    return path, _FROZEN_SOURCE_SHA256[key]
 
 
 def _load_module(name: str, path: Path):
@@ -279,26 +324,19 @@ def real_byte_vocab_zeroed() -> list[bytes]:
 
 @functools.lru_cache(maxsize=1)
 def reference_v150():
-    """The `v1.5.0`-tagged `tools/sslm_convert_schema.py`, loaded straight from THIS repo's own
-    git history via `git show` -- never a scratch-file copy -- so this suite carries no
-    out-of-repo input (T-2916/M1: the same bar TE-370's M1 finding sets for the GPU mutant
-    suites, applied here to the one Python-side reference this fold needs). `git show` reads a
-    committed object; a fresh clone of this repo has it (tags are cloned by default). Executed
-    once per process and cached; the module is built with `exec()` against a synthetic module
-    object, so no temp file is written to disk at all.
+    """The `v1.5.0` `tools/sslm_convert_schema.py` frozen fixture. It is a committed historical
+    input with provenance and a content pin in-tree, so this suite has no repository dependency.
 
     v1.5.0 predates T-2908's byte-level port (`compile_schema_to_mask_pages` there takes
     `Sequence[str]`, not `Sequence[bytes]`) and predates the S1 regression entirely -- it is the
     GREEN oracle for T-2916's S1 cells (`{"type":"string","enum":[...]}`, annotation keywords),
     which 1.5.0 always compiled and 0062c99 wrongly rejects."""
-    source = subprocess.run(
-        ["git", "-C", str(_ENGINE_ROOT), "show", "v1.5.0:tools/sslm_convert_schema.py"],
-        capture_output=True, text=True, check=True,
-    ).stdout
+    path, _ = _frozen_source("v1.5.0", "tools/sslm_convert_schema.py")
+    source = path.read_text(encoding="utf-8")
     if not source.strip():
-        raise RuntimeError("git show v1.5.0:tools/sslm_convert_schema.py returned empty output")
+        raise RuntimeError("frozen v1.5.0 tools/sslm_convert_schema.py fixture is empty")
     module = types.ModuleType("_t2916_ref_v150")
-    exec(compile(source, "v1.5.0:tools/sslm_convert_schema.py", "exec"), module.__dict__)
+    exec(compile(source, str(path), "exec"), module.__dict__)
     return module
 
 
@@ -310,8 +348,7 @@ def reference_v150():
 # the mutation-proof discipline (StandardsDocument.md Sec5.4, Curie's "pin the documented claim")
 # is simply named directly: the shipped module AS IT STANDS AT 0062c99, the commit TE-370 reviewed
 # and ruled DO NOT SHIP over exactly these findings. `frozen_module` loads any tracked file from
-# any commit-ish via `git show` (a committed object -- no out-of-repo input, same bar M1 sets for
-# the GPU mutant suites). `fix_has_landed` tells a cell whether HEAD still equals that known-bad
+# its named frozen fixture. `fix_has_landed` tells a cell whether HEAD still equals that known-bad
 # commit for the file in question, so a cell run before T-2917 lands reports "pending", never a
 # fabricated pass or a silent skip. T-2919 (TE-372 S2) reuses the identical pattern, pinned to
 # `60eb357` instead (the commit TE-372 reviewed and ruled DO NOT SHIP over the nullable-enum
@@ -320,16 +357,13 @@ def reference_v150():
 
 @functools.lru_cache(maxsize=None)
 def frozen_module(commit_ish: str, repo_relative_path: str):
-    """Load `repo_relative_path` as it read at `commit_ish`, via `git show` against this repo's
-    own history -- never a scratch-file copy. Cached per (commit, path)."""
-    source = subprocess.run(
-        ["git", "-C", str(_ENGINE_ROOT), "show", f"{commit_ish}:{repo_relative_path}"],
-        capture_output=True, text=True, check=True,
-    ).stdout
+    """Load the named historical module from its hash-pinned in-tree fixture."""
+    path, _ = _frozen_source(commit_ish, repo_relative_path)
+    source = path.read_text(encoding="utf-8")
     if not source.strip():
-        raise RuntimeError(f"git show {commit_ish}:{repo_relative_path} returned empty output")
+        raise RuntimeError(f"frozen fixture {commit_ish}:{repo_relative_path} is empty")
     module = types.ModuleType(f"_t2916_frozen_{commit_ish}_{repo_relative_path.replace('/', '_')}")
-    exec(compile(source, f"{commit_ish}:{repo_relative_path}", "exec"), module.__dict__)
+    exec(compile(source, str(path), "exec"), module.__dict__)
     return module
 
 
@@ -337,12 +371,9 @@ def fix_has_landed(commit_ish: str, repo_relative_path: str) -> bool:
     """True once the shipped file at HEAD differs from its content at `commit_ish` -- i.e. once a
     fix has actually landed on top of the known-bad commit. False means the mutant proof below is
     not yet meaningful (there is no delta to discriminate) and must report PENDING, not PASS."""
-    frozen = subprocess.run(
-        ["git", "-C", str(_ENGINE_ROOT), "show", f"{commit_ish}:{repo_relative_path}"],
-        capture_output=True, text=True, check=True,
-    ).stdout
-    shipped = (_ENGINE_ROOT / repo_relative_path).read_text(encoding="utf-8")
-    return frozen != shipped
+    _, frozen_source_hash = _frozen_source(commit_ish, repo_relative_path)
+    shipped = (_ENGINE_ROOT / repo_relative_path).read_bytes()
+    return hashlib.sha256(shipped).hexdigest() != frozen_source_hash
 
 
 def single_byte_token_ids(vocab: list[bytes]) -> dict[int, int]:

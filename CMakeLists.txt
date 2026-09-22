@@ -480,6 +480,7 @@ if(Python3_Interpreter_FOUND)
 			tests/t2130-g5-red-suite/t2916_s2_str_vocab_refused_red.py
 			tests/t2130-g5-red-suite/t2919_te372_s2_nullable_enum_red.py
 			tests/t2130-g5-red-suite/t2920_te372_s2_list_type_mismatch_pin.py
+			tests/t2130-g5-red-suite/t2921_frozen_fixture_integrity.py
 			-q
 		WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 elseif(SUPERSLM_REQUIRE_CI_CHECK_TOOLS)
