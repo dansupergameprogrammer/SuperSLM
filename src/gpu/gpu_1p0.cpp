@@ -500,7 +500,7 @@ struct SslmGpuSequenceHandle {
 	// binds, matching `kDfaWalkStateUnused`'s identical CPU-side semantics.
 	int32_t bound_schema_index = -1;
 	uint32_t dfa_walk_state = kSslmGpuDfaWalkStateUnused;
-	// Runtime-only bind authority. Create/reset set it; restore and every admitted generation
+	// Runtime-only bind authority. Create/reset set it; restore and every non-malformed generation
 	// call clear it. It is deliberately absent from the save format.
 	bool bind_eligible = false;
 

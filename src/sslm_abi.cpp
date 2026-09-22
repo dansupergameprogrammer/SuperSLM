@@ -323,7 +323,7 @@ struct sslm_seq_s {
 	// mechanism is required" text).
 	sslm_schema bound_schema = nullptr;
 	uint32_t dfa_walk_state = kDfaWalkStateUnused;
-	// Runtime-only bind authority. Create/reset set it; restore and every admitted generation
+	// Runtime-only bind authority. Create/reset set it; restore and every non-malformed generation
 	// call clear it. It is deliberately absent from the save format.
 	bool bind_eligible = false;
 	int64_t forced_token_count = 0;
