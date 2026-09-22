@@ -94,6 +94,7 @@ from __future__ import annotations
 
 import json
 from collections import deque
+from collections.abc import Hashable
 from typing import Any, Callable, Mapping, Sequence
 
 __all__ = [
@@ -203,6 +204,16 @@ _KEYWORD_REASON_OVERRIDES: dict[str, str] = {
 # constraining) -- accepted, and checked for agreement with every enum value's own JSON type
 # rather than silently ignored, so a schema naming a `type` its own values contradict is still
 # caught rather than compiling a field that can never accept what it names.
+#
+# T-2920 (TE-372 S2): JSON Schema (and OpenAPI 3.1) also allow `type` to be a LIST of type
+# names -- e.g. `["string", "null"]` for a nullable string -- meaning a value is valid if it
+# matches ANY ONE of the listed types (the spec's own union/anyOf reading of a type array).
+# `_groups()` normalizes a scalar `type` into a one-element list and a list `type` into itself,
+# then checks each enum value against every listed type's checker with `any(...)` -- the direct
+# generalization of the scalar rule immediately above (mismatch raises SchemaCompileError) to a
+# union of types rather than a single one, so a value matching none of the listed types is
+# refused by the identical mechanism a single mismatched scalar type already used, and a value
+# matching at least one is accepted exactly as the scalar case already accepts a match.
 _JSON_SCHEMA_TYPE_CHECKS: dict[str, Callable[[Any], bool]] = {
     "string": lambda v: isinstance(v, str),
     "boolean": lambda v: isinstance(v, bool),
@@ -245,17 +256,30 @@ def _groups(schema: Mapping[str, Any], path: str) -> list[_Group]:
         if not values:
             raise SchemaCompileError(f"empty enum at {path}", reason=f"empty enum at {path}")
         if node_type is not None:
-            checker = _JSON_SCHEMA_TYPE_CHECKS.get(node_type)
-            if checker is None:
+            node_types = node_type if isinstance(node_type, list) else [node_type]
+            if not node_types:
                 raise SchemaCompileError(
-                    f"unsupported type {node_type!r} alongside enum at {path}",
-                    reason=f"{node_type!r} is not one of the JSON-Schema primitive type names this compiler recognizes",
+                    f"empty type list alongside enum at {path}",
+                    reason=f"a type list at {path} names no candidate type, so no enum value could ever satisfy it",
                 )
-            mismatched = [v for v in values if not checker(v)]
+            checkers: list[Callable[[Any], bool]] = []
+            for t in node_types:
+                checker = _JSON_SCHEMA_TYPE_CHECKS.get(t) if isinstance(t, Hashable) else None
+                if checker is None:
+                    raise SchemaCompileError(
+                        f"unsupported type {t!r} alongside enum at {path}",
+                        reason=f"{t!r} is not one of the JSON-Schema primitive type names this compiler recognizes",
+                    )
+                checkers.append(checker)
+            mismatched = [v for v in values if not any(checker(v) for checker in checkers)]
             if mismatched:
                 raise SchemaCompileError(
                     f"enum value(s) {mismatched!r} do not match the declared type {node_type!r} at {path}",
-                    reason="type is redundant with enum but must agree with every value when both are present",
+                    reason=(
+                        "type is redundant with enum but must agree with every value when both "
+                        "are present; a type list is a union, so agreement means matching at "
+                        "least one listed type"
+                    ),
                 )
         return [tuple(json.dumps(v, ensure_ascii=False) for v in values)]
 
