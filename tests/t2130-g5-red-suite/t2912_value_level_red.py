@@ -18,9 +18,15 @@ sslm_convert_schema_value_level.py`, `reference/PROVENANCE.md`), loaded via
 
 V1 and V5 run the REAL A-EX artifact through the real TE-366/TE-368 C++ harness (T-2919, TE-372
 S3: vendored in-repo as `reference/te368-probe/te366_schema_run.cpp`, built via
-`reference/te368-probe/build_te368_harness.bat` against an explicitly named engine install --
-previously an uncommitted local `.exe`, unbuildable from a fresh clone; the CPU decode path both
-R-T2853a/R-T2853b already adopt) -- genuine live decode, not a proxy. V5 additionally reuses
+`reference/te368-probe/build_te368_harness.bat` -- previously an uncommitted local `.exe`,
+unbuildable from a fresh clone; the CPU decode path both R-T2853a/R-T2853b already adopt). T-2920
+(TE-372 M6): the build script's engine-install-dir argument is now OPTIONAL and defaults to THIS
+CHECKOUT'S OWN engine (built and installed on demand at `build/install-checkout-under-test` if
+not already present) -- every prior run had named an explicit v1.5.0 install instead (the
+operator's own available build, not this branch's), so no 1.6.0 engine had run this leaf on a
+real model before TE-372's own review built one to check. Linking a different engine (v1.5.0, or
+any other build) remains available, as an explicit override: name its install directory as the
+build script's first argument. Genuine live decode, not a proxy. V5 additionally reuses
 T-2912's own pre-registered, hashed heldout prompts and its commissioned
 `T2912-answer-value-oracle` UNALTERED (the brief's hard rule), both vendored byte-identical and
 hash-pinned (`reference/PROVENANCE.md`). Both cells build the branch's own artifact locally
@@ -82,7 +88,9 @@ def _require_engine_artifacts() -> None:
     if not _HARNESS.exists():
         raise FileNotFoundError(
             f"{_HARNESS} is missing -- build it first: "
-            f"{common.TE368_HARNESS_BUILD_SCRIPT} <engine-install-dir> {_HARNESS.parent}"
+            f"{common.TE368_HARNESS_BUILD_SCRIPT} [engine-install-dir] {_HARNESS.parent} "
+            "-- omit engine-install-dir to build and link this checkout's own engine (the "
+            "default, T-2920); name one explicitly only to link a different engine on purpose"
         )
     actual = hashlib.sha256(_GREEN_ARTIFACT.read_bytes()).hexdigest()
     if actual != _GREEN_ARTIFACT_SHA256:
