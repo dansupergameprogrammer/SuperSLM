@@ -97,13 +97,13 @@ class T2933SchemaQueryContract(unittest.TestCase):
         manifest = json.loads((HERE / "t2922_real_model_manifest.json").read_text())
         runner = (HERE / "run_t2922_real_model.ps1").read_text(encoding="utf-8")
         self.assertEqual(manifest["artifact_sha256"],
-                         "696c2a4ac412f1c5866a446eb32aa6500db77e5ae8aff0018438103c607e61bd")
+                         "6a41f87d3a48c91751b41fe716c4f8289b7ce97761850c3f1f2c53d01201205c")
         prompt_path = ROOT / manifest["prompt_ids_file"]
         prompt_bytes = prompt_path.read_text(encoding="utf-8").rstrip("\r\n").encode()
         self.assertEqual(hashlib.sha256(prompt_bytes).hexdigest(),
                          manifest["prompt_ids_text_without_final_newline_sha256"])
         self.assertEqual(manifest["decode_budget"], 300)
-        self.assertEqual(manifest["schema_name"], "potion_shop_order")
+        self.assertEqual(manifest["schema_name"], "prompt_result")
         self.assertEqual(manifest["expected_stop"], "budget")
         self.assertNotIn("Get-FileHash", runner)
         self.assertNotIn("SHA256]::HashData", runner)
