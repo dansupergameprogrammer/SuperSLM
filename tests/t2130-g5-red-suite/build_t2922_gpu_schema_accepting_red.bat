@@ -9,7 +9,29 @@ if not exist "%OBJ%" mkdir "%OBJ%"
 if not exist "%OBJ%\accepting" mkdir "%OBJ%\accepting"
 if not exist "%OBJ%\gpu_bound" mkdir "%OBJ%\gpu_bound"
 if not exist "%OBJ%\cpu_bound" mkdir "%OBJ%\cpu_bound"
-call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 -no_logo
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not exist "%VSWHERE%" (
+  echo ERROR: vswhere.exe not found: "%VSWHERE%" 1>&2
+  exit /b 2
+)
+set "VSINSTALL="
+for /f "usebackq delims=" %%I in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%I"
+if not defined VSINSTALL (
+  echo ERROR: Visual Studio installation with Microsoft.VisualStudio.Component.VC.Tools.x86.x64 not found by vswhere 1>&2
+  exit /b 2
+)
+set "VSDEVCMD=%VSINSTALL%\Common7\Tools\VsDevCmd.bat"
+if not exist "%VSDEVCMD%" (
+  echo ERROR: Visual Studio developer command file not found: "%VSDEVCMD%" 1>&2
+  exit /b 2
+)
+echo VS DEV CMD RESOLVED %VSDEVCMD%
+set "PATH=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer;%PATH%"
+call "%VSDEVCMD%" -arch=x64 -no_logo
+if errorlevel 1 (
+  echo ERROR: Visual Studio developer command initialization failed: "%VSDEVCMD%" 1>&2
+  exit /b 2
+)
 set COMMON=%ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp %ENG%\src\trace_hook.cpp %ENG%\src\forward\checked_chain_funnel.cpp %ENG%\src\forward\forward_sites.cpp %ENG%\src\decode_digest.cpp %ENG%\src\damped_greedy_antilm.cpp %ENG%\src\damped_greedy_topk.cpp %ENG%\src\damped_greedy_phaseD.cpp %ENG%\src\damped_greedy_phaseD_loop.cpp
 set GPU=%ENG%\src\gpu\gpu_1p0.cpp %ENG%\src\gpu\superslm_gpu.cpp
 set RED=0

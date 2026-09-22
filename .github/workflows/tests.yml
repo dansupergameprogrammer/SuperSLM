@@ -32,10 +32,10 @@ jobs:
           $out = & build/Release/superslm_tests.exe
           Write-Output $out
           if ($LASTEXITCODE -ne 0) { exit 1 }
-      # T-2933 §3.10.8: portable contract plus native red/green state runners.
-      # The lifecycle and real-model legs are registered but gated; when their
-      # environment variables are set, a missing artifact is a failure, not a skip.
-      - run: ctest --test-dir build -C Release --output-on-failure --no-tests=error -R '^t2933_'
+      # Native GPU state cells (t2933_schema_query_native_state and
+      # t2933_schema_lifecycle_native_state) need a hardware D3D12 device unavailable
+      # on hosted runners; run them on the developer bench under these CTest names.
+      - run: ctest --test-dir build -C Release --output-on-failure --no-tests=error -R '^t2933_schema_(query_contract|real_model)$'
 
   # T-2367 (Brunel), design Sec4.1/Sec5.5 fold round 39 (D-SLM4981/D-SLM4985/D-SLM4996), replacing
   # the non-gating fp-free-scan-report job this comment used to sit on: the membership-derivation
