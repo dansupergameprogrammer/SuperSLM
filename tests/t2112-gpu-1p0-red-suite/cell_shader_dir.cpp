@@ -5,6 +5,10 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <utility>
+
+#include "../../src/gpu/d3d12_harness.h"
+#include <shlwapi.h>
 
 namespace fs = std::filesystem;
 
@@ -24,10 +28,23 @@ static void InvalidRows() {
 	const std::string file = g_model_1p5b_path;
 	const std::string empty = empty_dir.string();
 	const char invalid_utf8[] = "\xC3\x28";
+	const std::string rooted = selected.string().substr(2);
+	const std::string drive_relative = std::string(1, selected.string()[0]) + ":shaders";
 	const char* values[] = {"", "shaders", missing.c_str(), file.c_str(),
-	                        empty.c_str(), invalid_utf8};
-	const char* names[] = {"empty", "relative", "missing", "file", "no-cso", "invalid-utf8"};
-	for (size_t i = 0; i < 6; ++i) {
+	                        empty.c_str(), invalid_utf8, "\\shaders", "C:shaders",
+	                        rooted.c_str(), drive_relative.c_str()};
+	const char* names[] = {"empty", "relative", "missing", "file", "no-cso", "invalid-utf8",
+	                       "rooted-literal", "drive-relative-literal", "rooted-existing",
+	                       "drive-relative-existing"};
+	const fs::path original_cwd = fs::current_path();
+	fs::current_path(selected.parent_path());
+	for (size_t i = 0; i < 10; ++i) {
+		std::wstring normalized;
+		const auto pre = superslm_gpu::harness::CheckShaderDirOverride(values[i], &normalized);
+		CHECK_MSG(pre == superslm_gpu::harness::ShaderDirCheck::Invalid,
+		          "%s: pre-device validator accepted a path dependent on current directory",
+		          names[i]);
+		if (pre != superslm_gpu::harness::ShaderDirCheck::Invalid) continue;
 		GpuContextConfig cfg{};
 		cfg.shader_dir = values[i];
 		SslmGpuContext* rejected = reinterpret_cast<SslmGpuContext*>(uintptr_t{1});
@@ -39,6 +56,38 @@ static void InvalidRows() {
 			sslm_gpu_context_destroy(rejected);
 		}
 	}
+	fs::current_path(original_cwd);
+}
+
+static void AbsolutePathControls() {
+	const std::string backslash = g_shader_dir;
+	std::string slash = backslash;
+	std::replace(slash.begin(), slash.end(), '\\', '/');
+	const std::string unc = "\\\\localhost\\" + std::string(1, backslash[0]) + "$" +
+	                        backslash.substr(2);
+	for (const auto& row : {std::pair{"drive-backslash", backslash},
+	                        std::pair{"drive-forward-slash", slash}}) {
+		std::wstring normalized;
+		const auto st = superslm_gpu::harness::CheckShaderDirOverride(row.second.c_str(),
+		                                                            &normalized);
+		CHECK_MSG(st == superslm_gpu::harness::ShaderDirCheck::Ok,
+		          "%s: existing absolute shader directory rejected (%u)", row.first,
+		          static_cast<unsigned>(st));
+	}
+	std::error_code unc_ec;
+	if (fs::is_directory(unc, unc_ec)) {
+		std::wstring normalized;
+		const auto st = superslm_gpu::harness::CheckShaderDirOverride(unc.c_str(), &normalized);
+		CHECK_MSG(st == superslm_gpu::harness::ShaderDirCheck::Ok,
+		          "UNC: existing absolute shader directory rejected (%u)", static_cast<unsigned>(st));
+	} else {
+		std::printf("UNC control: local administrative share unavailable; syntax-only pin applies\n");
+	}
+	// These exact spellings are syntactically absolute. Their absent directories can still
+	// make the production validator return INVALID at the later existence check.
+	CHECK(PathIsRelativeW(L"C:\\shaders") == FALSE);
+	CHECK(PathIsRelativeW(L"D:/x") == FALSE);
+	CHECK(PathIsRelativeW(L"\\\\server\\share") == FALSE);
 }
 
 static void OverrideAndConflict() {
@@ -201,7 +250,7 @@ int main(int argc, char** argv) {
 		            "--shader-dir=<absolute compiled .cso directory>\n");
 		return 2;
 	}
-	if (g_arm == "invalid-only") InvalidRows();
+	if (g_arm == "invalid-only") { InvalidRows(); AbsolutePathControls(); }
 	else if (g_arm == "poisoned-default") PoisonedDefault();
 	else OverrideAndConflict();
 	std::printf("arm=%s checks=%d failures=%d skips=%d\n", g_arm.c_str(), GChecks, GFailures, GSkips);

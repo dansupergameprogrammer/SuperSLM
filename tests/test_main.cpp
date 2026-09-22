@@ -28860,11 +28860,28 @@ static void TestT2948_ShaderDirInvalidBeforeDeviceInit() {
 	const std::string missing = (empty / "absent").string();
 	const std::string file = fs::absolute(GSelfPath).string();
 	const std::string empty_string = empty.string();
+	const fs::path valid = empty / "shaders";
+	fs::create_directory(valid);
+	const fs::path cso = valid / "probe.cso";
+	{ std::ofstream out(cso, std::ios::binary); out << "probe"; }
+	const std::string valid_string = valid.string();
+	const std::string rooted = valid_string.substr(2);
+	const std::string drive_relative = std::string(1, valid_string[0]) + ":shaders";
 	const char bad_utf8[] = "\xC3\x28";
 	const char* values[] = {"", "shaders", missing.c_str(), file.c_str(),
-	                        empty_string.c_str(), bad_utf8};
-	const char* labels[] = {"empty", "relative", "missing", "file", "no-cso", "invalid-utf8"};
-	for (size_t i = 0; i < 6; ++i) {
+	                        empty_string.c_str(), bad_utf8, "\\shaders", "C:shaders",
+	                        rooted.c_str(), drive_relative.c_str()};
+	const char* labels[] = {"empty", "relative", "missing", "file", "no-cso", "invalid-utf8",
+	                        "rooted-literal", "drive-relative-literal", "rooted-existing",
+	                        "drive-relative-existing"};
+	const fs::path original_cwd = fs::current_path();
+	fs::current_path(empty);
+	for (size_t i = 0; i < 10; ++i) {
+		std::wstring normalized;
+		const auto pre = superslm_gpu::harness::CheckShaderDirOverride(values[i], &normalized);
+		CHECK_MSG(pre == superslm_gpu::harness::ShaderDirCheck::Invalid,
+		          "%s pre-device validator accepted a working-directory-dependent path", labels[i]);
+		if (pre != superslm_gpu::harness::ShaderDirCheck::Invalid) continue;
 		Config cfg{};
 		cfg.shader_dir = values[i];
 		SslmGpuContext* out = reinterpret_cast<SslmGpuContext*>(uintptr_t{1});
@@ -28875,6 +28892,29 @@ static void TestT2948_ShaderDirInvalidBeforeDeviceInit() {
 		if (out && out != reinterpret_cast<SslmGpuContext*>(uintptr_t{1}))
 			sslm_gpu_context_destroy(out);
 	}
+	std::string valid_slashes = valid_string;
+	std::replace(valid_slashes.begin(), valid_slashes.end(), '\\', '/');
+	for (const std::string& absolute : {valid_string, valid_slashes}) {
+		std::wstring normalized;
+		const auto st = superslm_gpu::harness::CheckShaderDirOverride(absolute.c_str(),
+		                                                            &normalized);
+		CHECK_MSG(st != superslm_gpu::harness::ShaderDirCheck::Invalid,
+		          "existing drive-absolute or UNC shader directory refused as INVALID");
+	}
+	const std::string unc = std::string("\\\\localhost\\") + valid_string[0] + "$" +
+	                        valid_string.substr(2);
+	std::error_code unc_ec;
+	if (fs::is_directory(unc, unc_ec)) {
+		std::wstring normalized;
+		const auto st = superslm_gpu::harness::CheckShaderDirOverride(unc.c_str(), &normalized);
+		CHECK_MSG(st != superslm_gpu::harness::ShaderDirCheck::Invalid,
+		          "existing UNC shader directory refused as INVALID");
+	} else {
+		std::printf("t2948 UNC control: local administrative share unavailable\n");
+	}
+	fs::current_path(original_cwd);
+	fs::remove(cso);
+	fs::remove(valid);
 	fs::remove(empty);
 	}
 }
