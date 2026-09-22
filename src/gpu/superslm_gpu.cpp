@@ -57,6 +57,8 @@
 namespace superslm_test {
 std::atomic<int64_t> g_gpu_chunk_submit_count_probe{0};
 std::atomic<int64_t> g_gpu_chunk_dispatch_count_probe{0};
+std::atomic<int64_t> g_gpu_fence_wait_count_probe{0};
+std::atomic<int64_t> g_gpu_ready_poll_count_probe{0};
 }  // namespace superslm_test
 #endif
 
@@ -3803,6 +3805,9 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 		// `inflight` is NOT consumed; the caller polls again later against the SAME token.
 		return superslm::SslmForwardStatus::Ok;
 	}
+#if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
+	++superslm_test::g_gpu_fence_wait_count_probe;
+#endif
 	// T-2113 (B5, design Sec9's own DeviceLost row): the pre-split synchronous function
 	// left this whole tail (the wait, the readback Maps) OUTSIDE any try/catch, on the
 	// pre-1.0 substrate's own footing where an uncaught exception merely terminated a

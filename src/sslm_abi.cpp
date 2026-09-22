@@ -1884,7 +1884,6 @@ extern "C" sslm_status sslm_seq_set_schema(sslm_seq seq, sslm_schema schema) {
 extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
 	if (!seq) return SSLM_INVALID_ARGUMENT;
 	std::lock_guard<std::mutex> lifecycle_lock(seq->lifecycle_mutex);
-	if (seq->state.layer_index != 0) return SSLM_SEQ_RESET_MIDTOKEN_REJECTED;
 	// T-2132 M2 fix (same class as DrawBlock's own zero-fill, above): reset re-exposes this
 	// block's not-yet-written region to the NEXT generation exactly the way a fresh draw does --
 	// left at 0xCD (the poison this call used before this fix), a reset-and-reused sequence's
@@ -1922,6 +1921,12 @@ extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
 	// Damped-greedy history belongs to the generation being reset, just like K/V and the
 	// pending token above. Keeping it would make reset-and-restart depend on the prior run.
 	ClearDampedGreedyState(seq);
+	return SSLM_OK;
+}
+
+extern "C" sslm_status sslm_seq_schema_bound(sslm_seq seq, int32_t* out_schema_bound) {
+	if (!seq || !out_schema_bound) return SSLM_INVALID_ARGUMENT;
+	*out_schema_bound = seq->bound_schema ? 1 : 0;
 	return SSLM_OK;
 }
 

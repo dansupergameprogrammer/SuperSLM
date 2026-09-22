@@ -1,6 +1,7 @@
-param([string]$ScratchRoot = 'D:\_t2933\query-runtime', [string]$ShaderDir = '')
+param([string]$ScratchRoot = '', [string]$ShaderDir = '')
 $ErrorActionPreference = 'Stop'
 $Here = $PSScriptRoot; $Engine = (Resolve-Path (Join-Path $Here '..\..')).Path
+if (-not $ScratchRoot) { $ScratchRoot = Join-Path $Engine 'build\t2933-query-runtime' }
 if (-not $ShaderDir) { $ShaderDir = Join-Path $Engine 'build\gpu-shaders-staged' }
 $Vs = 'C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Launch-VsDevShell.ps1'
 $Obj = Join-Path $ScratchRoot 'obj'; $Bin = Join-Path $ScratchRoot 'bin'

@@ -4,7 +4,7 @@ rem an expected RED result, but any unrelated compiler failure is infrastructure
 setlocal enabledelayedexpansion
 set HERE=%~dp0
 set ENG=%HERE%..\..
-set OBJ=%HERE%obj_t2922
+set OBJ=%ENG%\build\t2933-query-api
 if not exist "%OBJ%" mkdir "%OBJ%"
 if not exist "%OBJ%\accepting" mkdir "%OBJ%\accepting"
 if not exist "%OBJ%\gpu_bound" mkdir "%OBJ%\gpu_bound"

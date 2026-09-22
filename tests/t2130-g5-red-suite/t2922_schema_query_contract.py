@@ -6,6 +6,7 @@ import hashlib
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -18,14 +19,14 @@ QUERY_SOURCES = {
     "sslm_seq_schema_bound": HERE / "t2922_cpu_schema_bound_red.cpp",
 }
 SURFACES = {
-    "README.md": ("schema accepting", "schema bound"),
-    "docs/api.md": ("schema accepting", "schema bound"),
+    "README.md": ("schema_accepting", "schema_bound"),
+    "docs/api.md": ("schema_accepting", "schema_bound"),
     "include/superslm/gpu_1p0.h": (
         "SslmGpuSeqSchemaAcceptingForG5Bridge",
         "SslmGpuSeqSchemaBoundForG5Bridge",
     ),
     "include/superslm/schema_masks.h": ("accepting_le", "accepting_count"),
-    "include/superslm/sslm_abi_functions.inc": ("sslm_seq_schema_bound",),
+    "include/superslm/sslm_abi_functions_g5_comparable.inc": ("sslm_seq_schema_bound",),
 }
 
 
@@ -60,21 +61,16 @@ class T2933SchemaQueryContract(unittest.TestCase):
         for source in QUERY_SOURCES.values():
             self.assertIn(source.name, runner)
 
-    def test_surface_oracle_is_currently_red_for_the_new_contract(self) -> None:
+    def test_public_surfaces_carry_the_landed_contract(self) -> None:
         missing: list[str] = []
         for relative, needles in SURFACES.items():
             text = (ROOT / relative).read_text(encoding="utf-8").lower()
             for needle in needles:
                 if needle.lower() not in text:
                     missing.append(f"{relative}:{needle}")
-        expected = {
-            "README.md:schema accepting", "README.md:schema bound",
-            "docs/api.md:schema accepting", "docs/api.md:schema bound",
-            "include/superslm/gpu_1p0.h:SslmGpuSeqSchemaAcceptingForG5Bridge",
-            "include/superslm/gpu_1p0.h:SslmGpuSeqSchemaBoundForG5Bridge",
-            "include/superslm/sslm_abi_functions.inc:sslm_seq_schema_bound",
-        }
-        self.assertTrue(expected.issubset(set(missing)), sorted(missing))
+        self.assertEqual(missing, [])
+        api = (ROOT / "docs/api.md").read_text(encoding="utf-8")
+        self.assertNotIn("caller never needs to special-case", api)
 
     def test_real_model_manifest_is_pinned_and_gate_fails_closed(self) -> None:
         manifest = json.loads((HERE / "t2922_real_model_manifest.json").read_text())
@@ -90,16 +86,18 @@ class T2933SchemaQueryContract(unittest.TestCase):
             artifact = Path(manifest["artifact"])
             self.assertTrue(artifact.is_file(), f"required real artifact missing: {artifact}")
 
-    def test_mutator_refuses_every_unlanded_future_anchor(self) -> None:
-        for mutant in "abcdefhij":
-            result = subprocess.run(
-                [sys.executable, str(HERE / "make_t2922_gpu_schema_accepting_mutants.py"),
-                 "--engine", str(ROOT), "--out", str(HERE / "_mutant_should_not_exist.cpp"),
-                 "--mutant", mutant], text=True, capture_output=True
-            )
-            self.assertNotEqual(result.returncode, 0, mutant)
-            self.assertIn("REFUSED", result.stderr, mutant)
-        self.assertFalse((HERE / "_mutant_should_not_exist.cpp").exists())
+    def test_every_mutant_has_one_live_exact_anchor(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT / "build") as scratch:
+            for mutant in "abcdefghijkl":
+                output = Path(scratch) / f"mutant-{mutant}.cpp"
+                result = subprocess.run(
+                    [sys.executable, str(HERE / "make_t2922_gpu_schema_accepting_mutants.py"),
+                     "--engine", str(ROOT), "--out", str(output), "--mutant", mutant],
+                    text=True, capture_output=True
+                )
+                self.assertEqual(result.returncode, 0, f"{mutant}: {result.stderr}")
+                self.assertIn(f"MUTANT {mutant} READY", result.stdout)
+                self.assertIn(f"MUT {mutant}", output.read_text(encoding="utf-8"))
 
     def test_ctest_and_ci_name_this_contract(self) -> None:
         cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")

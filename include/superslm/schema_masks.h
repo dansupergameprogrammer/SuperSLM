@@ -40,13 +40,11 @@
 // closing, unescaped quote. If the caller's own decode-step budget is reached first, the
 // returned sequence is legal so far -- every token emitted obeyed the compiled table -- but the
 // string leaf's own content region never closed, and the overall value will not parse as JSON.
-// Measured on a real 40-prompt heldout population at a 300-token budget: 5 of 40 stopped at
-// budget with an unclosed value, identically on the CPU and GPU decode paths
-// (`Claude/Poirot/te372-probe/census_summary.txt`, Wizard repo). A caller detects this without
-// guessing from the token count alone: `sslm_stats_out::schema_accepting` (sslm_abi.h) is 1 iff
-// the sequence's current parse state is one where stopping is valid, 0 otherwise -- a decode
-// that stops (budget reached, or any other reason) while `schema_accepting == 0` returned an
-// incomplete value.
+// The public reproduction is `tests/t2130-g5-red-suite/t2922_real_model_red.cpp`, pinned by
+// `t2922_real_model_manifest.json`. A caller detects this without guessing from token count:
+// `sslm_stats_out::schema_accepting` (sslm_abi.h) is 1 iff a schema is bound AND the sequence's
+// current parse state is one where stopping is valid. A zero also represents an unbound sequence;
+// use `sslm_seq_schema_bound` to distinguish that case before classifying output as incomplete.
 //
 // THE VALUE THIS LEAF CANNOT PRODUCE (T-2912's own value-level close rule): the leaf's content
 // region only reaches its close edge after at least one content byte, so an empty value (`""`)

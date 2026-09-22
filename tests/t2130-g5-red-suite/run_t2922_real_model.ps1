@@ -1,10 +1,11 @@
 param(
  [string]$Artifact = 'D:\hf_cache\superslm_artifacts\example\qwen2.5-0.5b-instruct-cap4096-aex.sslm',
- [string]$ScratchRoot = 'D:\_t2933\real-model', [string]$ShaderDir = ''
+ [string]$ScratchRoot = '', [string]$ShaderDir = ''
 )
 if (-not $env:SUPERSLM_G5_REAL_MODEL_TESTS) { Write-Output 'SKIP real_model gate unset'; exit 0 }
 if (-not (Test-Path $Artifact)) { Write-Error "required real artifact missing: $Artifact"; exit 2 }
 $Here = $PSScriptRoot; $Engine = (Resolve-Path (Join-Path $Here '..\..')).Path
+if (-not $ScratchRoot) { $ScratchRoot = Join-Path $Engine 'build\t2933-real-model' }
 if (-not $ShaderDir) { $ShaderDir = Join-Path $Engine 'build\gpu-shaders-staged' }
 $Vs = 'C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Launch-VsDevShell.ps1'
 $Obj = Join-Path $ScratchRoot 'obj'; $Bin = Join-Path $ScratchRoot 'bin'

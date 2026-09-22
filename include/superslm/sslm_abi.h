@@ -109,6 +109,7 @@ typedef struct sslm_detok_state {
     X(SSLM_POOL_HAS_LIVE_HANDLES) /* 9 */ \
     X(SSLM_ADAPTER_HAS_LIVE_SEQUENCES) /* 10 */ \
     X(SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED) /* 11 */ \
+    /* Reserved shipped ordinal: sslm_seq_reset no longer returns this value. */ \
     X(SSLM_SEQ_RESET_MIDTOKEN_REJECTED) /* 12 */ \
     X(SSLM_PREFIX_FROZEN_REJECTED) /* 13 */ \
     X(SSLM_KV_POOL_EXHAUSTED) /* 14 */ \
@@ -250,14 +251,10 @@ typedef struct sslm_stats_out {
      * never the prefix's -- stated here rather than left implicit, T-2917 folding TE-370 M2. */
     int64_t forced_token_count;
     int32_t kv_blocks_resident;
-    /* (design Sec14.1): 1 iff the
-     * sequence's current dfa_walk_state is a member of its bound schema's accept set
-     * (accepting_le/accepting_count, design Sec13.2); 0 when it is not, and 0 when no schema is
-     * bound (SSLM_SCHEMA_NONE) -- a host never needs to special-case whether a schema is even
-     * bound before reading it. The query dim10's own placeholder comment named ("pending the
-     * build seat's own accepting-state query"), added to this existing per-sequence stats
-     * accessor rather than as a new verb, per the ruling's own "smallest sound thing" reasoning
-     * (the same one already applied to forced_token_count). */
+    /* (design Sec14.1): 1 iff a schema is bound AND the sequence's current dfa_walk_state is a
+     * member of that schema's accept set (accepting_le/accepting_count, design Sec13.2); 0 when it
+     * is not, and 0 when no schema is bound. Use sslm_seq_schema_bound when those two zero cases
+     * must be distinguished. */
     int32_t schema_accepting;
 } sslm_stats_out;
 

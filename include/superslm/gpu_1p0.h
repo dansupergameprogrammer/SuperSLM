@@ -261,6 +261,9 @@ SslmGpuStatus sslm_gpu_seq_save(SslmGpuContext* ctx, const SslmGpuSequenceHandle
 SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* model,
                                     const void* blob, size_t blob_size,
                                     SslmGpuSequenceHandle** out_seq) noexcept;
+/* Reset accepts every valid Idle sequence, including one resting at partial or full layer depth;
+ * only a Submitted sequence returns SSLM_BUSY. It clears generation history and returns a bound
+ * schema's walk to state 0 while preserving that binding. */
 SslmGpuStatus sslm_gpu_seq_reset(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) noexcept;
 
 /* --- Sec4.3: the two decode calls. Declared for B5/B7.
@@ -324,14 +327,27 @@ bool SslmGpuModelHasSchemasForG5Bridge(SslmGpuModelHandle* model);
 int32_t SslmGpuSchemaLookupForG5Bridge(SslmGpuModelHandle* model, const char* name);
 
 /* Binds `schema_index` (as returned by the lookup above; -1 unbinds, mirroring
- * SSLM_SCHEMA_NONE) to `seq`, valid ONLY when `seq`'s own DFA-walk-state is at a fresh/reset
- * start (mirrors `sslm_seq_set_schema`'s own "valid only when the sequence's DFA-walk state is
- * at its start" precondition, design Sec5) -- returns SSLM_SEQUENCE_REJECTED on a non-fresh walk
- * state. A caller-malformed handle (`seq`/`model` null, `ctx` mismatch) returns
+ * SSLM_SCHEMA_NONE) to `seq`, valid ONLY when `seq` has no generation history (freshly created or
+ * just reset) and is Idle. DFA state 0 alone is not sufficient: an SLM5 restore retains its saved
+ * context length and therefore cannot bind, rebind, or unbind until reset. A Submitted sequence
+ * returns SSLM_BUSY; any Idle sequence with history returns SSLM_SEQUENCE_REJECTED. A
+ * caller-malformed handle (`seq`/`model` null, `ctx` mismatch) returns
  * SSLM_SEQUENCE_KV_BUFFER_MISMATCH, the existing "malformed handle" bucket every 1.0 entry point
  * already uses. */
 SslmGpuStatus SslmGpuSeqSetSchemaForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                               int32_t schema_index) noexcept;
+
+/* Host-only sequence-state queries: neither submits GPU work nor polls/waits a fence. They return
+ * SSLM_BUSY without changing the output while the sequence is Submitted, and
+ * SSLM_SEQUENCE_KV_BUFFER_MISMATCH without changing it for a null output or malformed/foreign
+ * handle. On SSLM_OK, `out_schema_bound` is 1 iff a schema is bound; `out_schema_accepting` is 1
+ * iff a schema is bound and the current DFA state is in that schema's exact SCM1 accept set.
+ * Unbound reads are 0. On a drained-but-not-yet-finished Idle sequence, accepting reports the
+ * current pre-finish membership; drain and finish before using it to decide output finality. */
+SslmGpuStatus SslmGpuSeqSchemaAcceptingForG5Bridge(
+    SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t* out_schema_accepting) noexcept;
+SslmGpuStatus SslmGpuSeqSchemaBoundForG5Bridge(
+    SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t* out_schema_bound) noexcept;
 
 /* Reads `seq`'s own current DFA-walk-state -- kSslmGpuDfaWalkStateUnused if no schema is bound. */
 uint32_t SslmGpuSeqWalkStateForG5Bridge(SslmGpuSequenceHandle* seq);

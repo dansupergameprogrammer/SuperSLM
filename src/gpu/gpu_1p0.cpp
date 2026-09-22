@@ -54,6 +54,12 @@ using enum SslmGpuStatus;
 #include "superslm/schema_masks.h"   // G5-5 (T-2132): SchemaMasksTable -- the SAME SCM1 reader the CPU
                                       // ABI (sslm_abi.cpp) already uses, reused here, not re-derived.
 
+#if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
+namespace superslm_test {
+extern std::atomic<int64_t> g_gpu_ready_poll_count_probe;
+}
+#endif
+
 // The real SslmGpuContext this handle type opaquely names to every 1.0 API caller.
 // Owns everything B1's own gate requires be OWNED rather than reached through a
 // process-global name: its own harness::Device (never harness::GetDevice()'s
@@ -1906,7 +1912,7 @@ SslmGpuStatus sslm_decode_step_batch_gpuImpl(SslmGpuContext* ctx, SslmGpuSequenc
 // legitimately fence-wait." `Idle`/`Completed` (nothing outstanding): `*out_ready=1`
 // immediately, `*out_status=Ok`.
 SslmGpuStatus sslm_gpu_readyImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t block,
-                              int32_t* out_ready, SslmGpuStatus* out_status) {
+                               int32_t* out_ready, SslmGpuStatus* out_status) {
 	if (out_ready) *out_ready = 0;
 	if (out_status) *out_status = SSLM_OK;
 	if (!ctx || !seq || seq->ctx != ctx) {  // T-2114 (S2): ->destroyed read removed, see sequence
@@ -1914,6 +1920,9 @@ SslmGpuStatus sslm_gpu_readyImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq
 	                                         // P1-4): `seq->ctx != ctx`.
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // no channel exists for a malformed handle
 	}
+#if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
+	++superslm_test::g_gpu_ready_poll_count_probe;
+#endif
 	if (seq->state != superslm_gpu::SslmSequenceGpuState::Submitted) {
 		// design Sec4.2: "Idle/Completed: *out_ready=1 immediately, *out_status=Ok
 		// (nothing outstanding)."
@@ -2359,9 +2368,16 @@ int32_t SslmGpuSchemaLookupForG5Bridge(SslmGpuModelHandle* model, const char* na
 }
 
 SslmGpuStatus SslmGpuSeqSetSchemaForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
-                                              int32_t schema_index) {
+                                               int32_t schema_index) {
 	if (!ctx || !seq || !seq->model || seq->ctx != ctx) {
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	if (seq->state == superslm_gpu::SslmSequenceGpuState::Submitted) return SSLM_BUSY;
+	// Binding is a generation-origin operation. A restored SLM5 sequence retains its saved
+	// context_length, so this guard also rejects a restored history even when its DFA walk happens
+	// to be at state 0. Reset is the only operation that makes an existing history fresh again.
+	if (seq->context_length != 0) {
+		return SSLM_SEQUENCE_REJECTED;
 	}
 	// Mirrors `sslm_seq_set_schema`'s own precondition (src/sslm_abi.cpp): valid ONLY when the
 	// sequence's own DFA-walk-state is at its start -- kSslmGpuDfaWalkStateUnused (never bound)
@@ -2383,6 +2399,55 @@ SslmGpuStatus SslmGpuSeqSetSchemaForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuSeq
 	}
 	seq->bound_schema_index = schema_index;
 	seq->dfa_walk_state = 0u;
+	return SSLM_OK;
+}
+
+namespace {
+// Exact host-side twin of the CPU ABI's accepting-set lookup. SCM1 stores strictly ascending
+// little-endian uint32 values, so this performs O(log accepting_count) host reads and no GPU work.
+bool IsAcceptingState(const superslm::SchemaEntry& entry, uint32_t state) {
+	using superslm::schema_masks_detail::ReadLE32;
+	uint32_t lo = 0, hi = entry.accepting_count;
+	while (lo < hi) {
+		const uint32_t mid = lo + (hi - lo) / 2;
+		const uint32_t value = ReadLE32(entry.accepting_le + static_cast<size_t>(mid) * 4);
+		if (value == state) return true;
+		if (value < state) lo = mid + 1; else hi = mid;
+	}
+	return false;
+}
+}  // namespace
+
+SslmGpuStatus SslmGpuSeqSchemaAcceptingForG5BridgeImpl(
+    SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t* out_schema_accepting) {
+	if (!ctx || !seq || !seq->model || seq->ctx != ctx || !out_schema_accepting) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	if (seq->state == superslm_gpu::SslmSequenceGpuState::Submitted) return SSLM_BUSY;
+	if (seq->bound_schema_index < 0) {
+		*out_schema_accepting = 0; // unbound contract
+		return SSLM_OK;
+	}
+	const superslm::SchemaEntry* entry =
+	    seq->model->schemas.ByIndex(static_cast<size_t>(seq->bound_schema_index));
+	if (!entry) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	const bool accepting = IsAcceptingState(*entry, seq->dfa_walk_state);
+	*out_schema_accepting = accepting ? 1 : 0;
+	return SSLM_OK;
+}
+
+SslmGpuStatus SslmGpuSeqSchemaBoundForG5BridgeImpl(
+    SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t* out_schema_bound) {
+	if (!ctx || !seq || !seq->model || seq->ctx != ctx || !out_schema_bound) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	if (seq->state == superslm_gpu::SslmSequenceGpuState::Submitted) return SSLM_BUSY;
+	if (seq->bound_schema_index < 0) {
+		*out_schema_bound = 0; // unbound contract
+		return SSLM_OK;
+	}
+	const int32_t schema_index = seq->bound_schema_index;
+	*out_schema_bound = schema_index >= 0 ? 1 : 0;
 	return SSLM_OK;
 }
 
@@ -2509,6 +2574,7 @@ SslmGpuStatus SslmGpuSeqFinishTokenForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuS
 		const bool has_transition = model->schemas.Transition(
 		    *entry, seq->dfa_walk_state, static_cast<uint32_t>(produced), &next_state);
 		if (!has_transition) {
+			// dead-end preserves dfa_walk_state
 			*out_token = -2;
 			seq->ready_for_logits = true;
 			return SSLM_OK;
@@ -3510,6 +3576,18 @@ SslmGpuStatus SslmGpuSeqSetSchemaForG5Bridge(SslmGpuContext* ctx,
                                               SslmGpuSequenceHandle* seq,
                                               int32_t schema) noexcept {
 	return InvokeGpuApiBoundary(__func__, [&] { return SslmGpuSeqSetSchemaForG5BridgeImpl(ctx, seq, schema); });
+}
+SslmGpuStatus SslmGpuSeqSchemaAcceptingForG5Bridge(
+    SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t* out_schema_accepting) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] {
+		return SslmGpuSeqSchemaAcceptingForG5BridgeImpl(ctx, seq, out_schema_accepting);
+	});
+}
+SslmGpuStatus SslmGpuSeqSchemaBoundForG5Bridge(
+    SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t* out_schema_bound) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] {
+		return SslmGpuSeqSchemaBoundForG5BridgeImpl(ctx, seq, out_schema_bound);
+	});
 }
 SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx,
                                                 SslmGpuSequenceHandle* seq,

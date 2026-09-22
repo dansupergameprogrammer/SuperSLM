@@ -116,11 +116,15 @@ no length bound the engine enforces, so its own close is up to the model —
 if a caller's decode budget is reached first, the returned sequence is
 legal so far but not closed, and will not parse as JSON on its own. A
 caller detects this without guessing from the token count alone:
-`sslm_stats`'s `schema_accepting` field is 1 iff the sequence's current
-parse state is one where stopping is valid, and 0 otherwise. A decode that
-stops (budget reached, or any other reason) while `schema_accepting == 0`
-returned an incomplete value; a caller that needs a guaranteed-parseable
-result checks this before treating the output as final.
+`sslm_stats`'s `schema_accepting` field is 1 iff a schema is bound and the
+sequence's current parse state is one where stopping is valid, and 0
+otherwise. Because 0 also means no schema is bound, callers that need to
+distinguish those cases use `sslm_seq_schema_bound`. A schema-bound decode
+that stops (budget reached, or any other reason) while
+`schema_accepting == 0` returned an incomplete value; a caller that needs a
+guaranteed-parseable result checks both facts before treating the output as
+final. GPU callers use `SslmGpuSeqSchemaBoundForG5Bridge` and
+`SslmGpuSeqSchemaAcceptingForG5Bridge` after draining and finishing the step.
 
 The determinism guarantee above carries through even when the engine skips
 ahead through the parts of the output your schema already dictates (for

@@ -282,10 +282,9 @@ silently accepted.
 - `sslm_stats` reports per-sequence counters: the decode-step ceiling and
   actual layers run, `forced_token_count` (how many tokens this sequence
   has had forced onto it by schema jump-forward rather than chosen by
-  argmax), the resident KV block count, and `schema_accepting` (1 iff the
-  sequence's current parse state is one where stopping is valid; 0 if not,
-  and 0 when no schema is bound — a caller never needs to special-case
-  whether a schema is bound before reading it).
+  argmax), the resident KV block count, and `schema_accepting` (1 iff a
+  schema is bound and the sequence's current parse state is one where
+  stopping is valid; 0 if not, and 0 when no schema is bound).
 
 ### Schema-constrained generation
 
@@ -297,7 +296,11 @@ inside the `.sslm` artifact. `sslm_schema_lookup` resolves a schema by name;
 carries. `sslm_seq_set_schema` binds a schema to a sequence (only valid at a
 fresh or just-reset sequence — no mid-generation rebinding) and
 `sslm_prefix_set_schema` does the same for a prefix under construction, both
-using `SSLM_SCHEMA_NONE` to mean unconstrained.
+using `SSLM_SCHEMA_NONE` to mean unconstrained. `sslm_seq_schema_bound`
+reports whether a sequence is bound, so callers can distinguish an unbound
+zero from a bound, non-accepting zero in `sslm_stats::schema_accepting`.
+`sslm_seq_reset` accepts every valid sequence state, including partial and
+full token depth; it restarts generation while preserving the schema binding.
 
 Once bound, `sslm_prefill` and `sslm_decode_step` carry the constraint
 automatically: a masked argmax step forbids the model from emitting a token
@@ -322,7 +325,7 @@ rejections (a bad argument, a buffer too small, a misaligned buffer);
 artifact/content rejections (a rejected artifact, an adapter that doesn't
 match its base model, a restore whose content or KV shape doesn't match);
 lifecycle rejections (a model, pool, or adapter with live handles still
-attached to it; an adapter swap or sequence reset mid-token; a frozen
+attached to it; an adapter swap mid-token; a frozen
 prefix reused; a KV pool with no room left); numeric/domain rejections (a
 token id out of range, a context length exceeded, a legal decode-output
 token id with no tokenizer entry for the padded-vocabulary case, or —
@@ -341,6 +344,7 @@ buffer running out.
 
 The G5 schema-constrained-decoding verbs (`SslmGpuModelHasSchemasForG5Bridge`,
 `SslmGpuSchemaLookupForG5Bridge`, `SslmGpuSeqSetSchemaForG5Bridge`,
+`SslmGpuSeqSchemaBoundForG5Bridge`, `SslmGpuSeqSchemaAcceptingForG5Bridge`,
 `SslmGpuSeqWalkStateForG5Bridge`, `SslmGpuSeqPrefillPromptForG5Bridge`,
 `SslmGpuSeqFinishTokenForG5Bridge`, `SslmGpuSeqDecodeStepForG5Bridge`,
 `SslmGpuSeqPrefillSchemaContentForG5Bridge`) live on the same shipped
@@ -350,6 +354,12 @@ calls, proven bit-identical against the CPU path (matching digest across 80
 real decode steps) on the certified NVIDIA GPU. The same check passed
 bit-identical on the certified AMD GPU as well (measured 2026-08-17 on the
 Radeon RX 7900 XTX) — see [Certified platforms](platform-support.md).
+The two schema-state queries are host-only and never submit, poll, or wait on
+GPU work. They return `SSLM_BUSY` while a sequence is Submitted. An Idle
+sequence that has been drained but not yet finished still reports its
+pre-finish acceptance membership; drain and finish before treating the query
+as an output-finality decision. Schema bind/rebind/unbind is accepted only on
+a fresh or reset Idle sequence; a restored SLM5 history must be reset first.
 `SslmGpuSeqDecodeStepForG5Bridge` is the recommended one-call-per-decode-step
 entry point; a caller that always uses it (rather than hand-composing the
 lower-level embed/decode/ready calls) cannot reproduce a class of

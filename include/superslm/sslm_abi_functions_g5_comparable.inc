@@ -76,6 +76,9 @@ SUPERSLM_API sslm_status sslm_prefix_release(sslm_prefix prefix);
 
 SUPERSLM_API sslm_status sslm_seq_create(sslm_model model, sslm_kv_pool* pool, sslm_seq* out);
 SUPERSLM_API sslm_status sslm_seq_release(sslm_seq seq);
+/* Reset is a symmetric restart operation: every valid sequence state is accepted, including a
+ * partial or full-depth token. The shipped SSLM_SEQ_RESET_MIDTOKEN_REJECTED ordinal remains
+ * reserved for ABI stability but this verb no longer returns it. */
 SUPERSLM_API sslm_status sslm_seq_reset(sslm_seq seq);
 SUPERSLM_API sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix);
 /* Save emits the current SSB3 format. Restore accepts SSB3 and the shipped SSB2 predecessor;
@@ -152,6 +155,10 @@ SUPERSLM_API sslm_status sslm_schema_name(sslm_model model, int32_t index, char*
  * immediately after sslm_seq_reset) -- a non-fresh walk state rejects
  * (SSLM_SCHEMA_BIND_REJECTED). No mid-generation re-binding (design Sec5/Sec11, out of scope). */
 SUPERSLM_API sslm_status sslm_seq_set_schema(sslm_seq seq, sslm_schema schema);
+
+/* Writes 1 iff `seq` currently has a schema bound, otherwise 0. Null arguments return
+ * SSLM_INVALID_ARGUMENT and leave the output unchanged. */
+SUPERSLM_API sslm_status sslm_seq_schema_bound(sslm_seq seq, int32_t* out_schema_bound);
 
 /* G5 design Sec5: "Prefix construction inherits the same discriminator." Valid only before any
  * content has been prefilled into the prefix under construction. */

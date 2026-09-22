@@ -1,7 +1,8 @@
 // Full A/B state-membership and persistence oracle. This cell is built only after
 // the three independent declaration cells compile, so API absence never masks a sibling.
-#include "../t2791-gpu-prefill-read-red-suite/fixture_common.h"
 #include "superslm/sslm_abi.h"
+#define SUPERSLM_T2791_SUPPRESS_GPU_STATUS_USING_ENUM
+#include "../t2791-gpu-prefill-read-red-suite/fixture_common.h"
 #if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
 #include "support/gpu_chunk_dispatch_instrument.h"
 namespace superslm_test {
@@ -24,6 +25,7 @@ bool ReadFile(const char* path, std::vector<uint8_t>* bytes) {
     const bool ok = n >= 0 && (n == 0 || std::fread(bytes->data(), 1, bytes->size(), f) == bytes->size());
     std::fclose(f); return ok;
 }
+#undef CHECK
 #define CHECK(x) do { ++checks; if (!(x)) { ++failures; std::printf("FAIL line=%d %s\n", __LINE__, #x); } } while (0)
 }
 
@@ -46,9 +48,10 @@ int main(int argc, char** argv) {
     out = -77; CHECK(sslm_seq_schema_bound(cpu_seq, &out) == SSLM_OK && out == 1);
     out = 0x10203040; CHECK(sslm_seq_schema_bound(nullptr, &out) == SSLM_INVALID_ARGUMENT && out == 0x10203040);
 
-    SslmGpuContext* ctx = nullptr; CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
+    SslmGpuContext* ctx = nullptr;
+    CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SslmGpuStatus::SSLM_OK);
     GpuModelFixture fx; CHECK(fx.Open(argv[1], ctx));
-    SslmGpuSequenceHandle* seq = nullptr; CHECK(sslm_gpu_seq_create(ctx, fx.model, fx.model_cap, &seq) == SSLM_OK);
+    SslmGpuSequenceHandle* seq = nullptr; CHECK(sslm_gpu_seq_create(ctx, fx.model, fx.model_cap, &seq) == SslmGpuStatus::SSLM_OK);
     int32_t accepting = -1, bound = -1;
 #if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
     const int64_t submit_before = superslm_test::g_gpu_chunk_submit_count_probe.load();
@@ -56,8 +59,8 @@ int main(int argc, char** argv) {
     const int64_t wait_before = superslm_test::g_gpu_fence_wait_count_probe.load();
     const int64_t ready_before = superslm_test::g_gpu_ready_poll_count_probe.load();
 #endif
-    CHECK(SslmGpuSeqSchemaAcceptingForG5Bridge(ctx, seq, &accepting) == SSLM_OK && accepting == 0);
-    CHECK(SslmGpuSeqSchemaBoundForG5Bridge(ctx, seq, &bound) == SSLM_OK && bound == 0);
+    CHECK(SslmGpuSeqSchemaAcceptingForG5Bridge(ctx, seq, &accepting) == SslmGpuStatus::SSLM_OK && accepting == 0);
+    CHECK(SslmGpuSeqSchemaBoundForG5Bridge(ctx, seq, &bound) == SslmGpuStatus::SSLM_OK && bound == 0);
 #if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
     CHECK(superslm_test::g_gpu_chunk_submit_count_probe.load() == submit_before);
     CHECK(superslm_test::g_gpu_chunk_dispatch_count_probe.load() == dispatch_before);
@@ -67,46 +70,46 @@ int main(int argc, char** argv) {
     const int32_t a = SslmGpuSchemaLookupForG5Bridge(fx.model, "t2922_accepts_q");
     const int32_t b = SslmGpuSchemaLookupForG5Bridge(fx.model, "t2922_rejects_q");
     CHECK(a >= 0 && b >= 0 && a != b);
-    CHECK(SslmGpuSeqSetSchemaForG5Bridge(ctx, seq, a) == SSLM_OK);
+    CHECK(SslmGpuSeqSetSchemaForG5Bridge(ctx, seq, a) == SslmGpuStatus::SSLM_OK);
     accepting = bound = -1;
-    CHECK(SslmGpuSeqSchemaAcceptingForG5Bridge(ctx, seq, &accepting) == SSLM_OK && accepting == 0);
-    CHECK(SslmGpuSeqSchemaBoundForG5Bridge(ctx, seq, &bound) == SSLM_OK && bound == 1);
+    CHECK(SslmGpuSeqSchemaAcceptingForG5Bridge(ctx, seq, &accepting) == SslmGpuStatus::SSLM_OK && accepting == 0);
+    CHECK(SslmGpuSeqSchemaBoundForG5Bridge(ctx, seq, &bound) == SslmGpuStatus::SSLM_OK && bound == 1);
     const int32_t token_q = 0; int32_t consumed = 0;
-    CHECK(SslmGpuSeqPrefillSchemaContentForG5Bridge(ctx, seq, &token_q, 1, fx.one_layer_budget, &consumed) == SSLM_OK && consumed == 1);
+    CHECK(SslmGpuSeqPrefillSchemaContentForG5Bridge(ctx, seq, &token_q, 1, fx.one_layer_budget, &consumed) == SslmGpuStatus::SSLM_OK && consumed == 1);
     CHECK(SslmGpuSeqWalkStateForG5Bridge(seq) == 1);
-    accepting = -1; CHECK(SslmGpuSeqSchemaAcceptingForG5Bridge(ctx, seq, &accepting) == SSLM_OK && accepting == 1);
+    accepting = -1; CHECK(SslmGpuSeqSchemaAcceptingForG5Bridge(ctx, seq, &accepting) == SslmGpuStatus::SSLM_OK && accepting == 1);
 
-    size_t need = 0; CHECK(sslm_gpu_seq_save(ctx, seq, nullptr, &need) == SSLM_DEVICE_LOST && need > 0);
+    size_t need = 0; CHECK(sslm_gpu_seq_save(ctx, seq, nullptr, &need) == SslmGpuStatus::SSLM_DEVICE_LOST && need > 0);
     std::vector<uint8_t> blob(need); size_t written = need;
-    CHECK(sslm_gpu_seq_save(ctx, seq, blob.data(), &written) == SSLM_OK);
+    CHECK(sslm_gpu_seq_save(ctx, seq, blob.data(), &written) == SslmGpuStatus::SSLM_OK);
     SslmGpuSequenceHandle* restored = nullptr;
-    CHECK(sslm_gpu_seq_restore(ctx, fx.model, blob.data(), written, &restored) == SSLM_OK);
+    CHECK(sslm_gpu_seq_restore(ctx, fx.model, blob.data(), written, &restored) == SslmGpuStatus::SSLM_OK);
     accepting = bound = -1;
-    CHECK(SslmGpuSeqSchemaAcceptingForG5Bridge(ctx, restored, &accepting) == SSLM_OK && accepting == 1);
-    CHECK(SslmGpuSeqSchemaBoundForG5Bridge(ctx, restored, &bound) == SSLM_OK && bound == 1);
+    CHECK(SslmGpuSeqSchemaAcceptingForG5Bridge(ctx, restored, &accepting) == SslmGpuStatus::SSLM_OK && accepting == 1);
+    CHECK(SslmGpuSeqSchemaBoundForG5Bridge(ctx, restored, &bound) == SslmGpuStatus::SSLM_OK && bound == 1);
 
-    CHECK(sslm_gpu_seq_reset(ctx, seq) == SSLM_OK);
-    CHECK(SslmGpuSeqSetSchemaForG5Bridge(ctx, seq, b) == SSLM_OK);
-    consumed = 0; CHECK(SslmGpuSeqPrefillSchemaContentForG5Bridge(ctx, seq, &token_q, 1, fx.one_layer_budget, &consumed) == SSLM_OK && consumed == 1);
+    CHECK(sslm_gpu_seq_reset(ctx, seq) == SslmGpuStatus::SSLM_OK);
+    CHECK(SslmGpuSeqSetSchemaForG5Bridge(ctx, seq, b) == SslmGpuStatus::SSLM_OK);
+    consumed = 0; CHECK(SslmGpuSeqPrefillSchemaContentForG5Bridge(ctx, seq, &token_q, 1, fx.one_layer_budget, &consumed) == SslmGpuStatus::SSLM_OK && consumed == 1);
     CHECK(SslmGpuSeqWalkStateForG5Bridge(seq) == 1);
     accepting = bound = -1;
-    CHECK(SslmGpuSeqSchemaAcceptingForG5Bridge(ctx, seq, &accepting) == SSLM_OK && accepting == 0);
-    CHECK(SslmGpuSeqSchemaBoundForG5Bridge(ctx, seq, &bound) == SSLM_OK && bound == 1);
+    CHECK(SslmGpuSeqSchemaAcceptingForG5Bridge(ctx, seq, &accepting) == SslmGpuStatus::SSLM_OK && accepting == 0);
+    CHECK(SslmGpuSeqSchemaBoundForG5Bridge(ctx, seq, &bound) == SslmGpuStatus::SSLM_OK && bound == 1);
 
     accepting = 0x13572468;
-    CHECK(SslmGpuSeqSchemaAcceptingForG5Bridge(nullptr, seq, &accepting) == SSLM_SEQUENCE_KV_BUFFER_MISMATCH && accepting == 0x13572468);
+    CHECK(SslmGpuSeqSchemaAcceptingForG5Bridge(nullptr, seq, &accepting) == SslmGpuStatus::SSLM_SEQUENCE_KV_BUFFER_MISMATCH && accepting == 0x13572468);
     bound = 0x24681357;
-    CHECK(SslmGpuSeqSchemaBoundForG5Bridge(nullptr, seq, &bound) == SSLM_SEQUENCE_KV_BUFFER_MISMATCH && bound == 0x24681357);
+    CHECK(SslmGpuSeqSchemaBoundForG5Bridge(nullptr, seq, &bound) == SslmGpuStatus::SSLM_SEQUENCE_KV_BUFFER_MISMATCH && bound == 0x24681357);
 
 #if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
     SslmGpuSequenceHandle* commissioned = nullptr;
-    CHECK(sslm_gpu_seq_create(ctx, fx.model, fx.model_cap, &commissioned) == SSLM_OK);
+    CHECK(sslm_gpu_seq_create(ctx, fx.model, fx.model_cap, &commissioned) == SslmGpuStatus::SSLM_OK);
     const int64_t submit_control = superslm_test::g_gpu_chunk_submit_count_probe.load();
     const int64_t dispatch_control = superslm_test::g_gpu_chunk_dispatch_count_probe.load();
     const int64_t wait_control = superslm_test::g_gpu_fence_wait_count_probe.load();
     const int64_t ready_control = superslm_test::g_gpu_ready_poll_count_probe.load();
     int32_t produced = -99;
-    CHECK(SslmGpuSeqDecodeStepForG5Bridge(ctx, commissioned, 7, fx.one_layer_budget, &produced) == SSLM_OK);
+    CHECK(SslmGpuSeqDecodeStepForG5Bridge(ctx, commissioned, 7, fx.one_layer_budget, &produced) == SslmGpuStatus::SSLM_OK);
     CHECK(superslm_test::g_gpu_chunk_submit_count_probe.load() > submit_control);
     CHECK(superslm_test::g_gpu_chunk_dispatch_count_probe.load() > dispatch_control);
     CHECK(superslm_test::g_gpu_fence_wait_count_probe.load() > wait_control);

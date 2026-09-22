@@ -44,7 +44,9 @@
 #include "superslm/schema_masks.h"
 #include "superslm/sha256.h"
 
+#if !defined(SUPERSLM_T2791_SUPPRESS_GPU_STATUS_USING_ENUM)
 using enum SslmGpuStatus;
+#endif
 
 // ---------------------------------------------------------------------------------------------
 // The surface under test, exactly as plan Sec3.1 specifies it.
@@ -370,7 +372,7 @@ struct GpuModelFixture {
 			return false;
 		}
 		ctx = shared_ctx;
-		if (sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model) != SSLM_OK || !model) {
+		if (sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model) != SslmGpuStatus::SSLM_OK || !model) {
 			std::printf("fixture: sslm_gpu_model_map(%s) failed\n", p.c_str());
 			return false;
 		}
@@ -414,15 +416,15 @@ constexpr int64_t kScaleESentinel = INT64_C(0x2222222222222222);
 constexpr size_t kRequiredSentinel = static_cast<size_t>(0x3333333333333333ull);
 
 struct Frame {
-	SslmGpuStatus status = SSLM_DEVICE_LOST;
+	SslmGpuStatus status = SslmGpuStatus::SSLM_DEVICE_LOST;
 	std::vector<int8_t> codes;  // capacity-sized, sentinel-filled before the call
 	int64_t m = kScaleMSentinel, e = kScaleESentinel;
 	size_t required = kRequiredSentinel;
 
-	bool IsOk() const { return status == SSLM_OK; }
+	bool IsOk() const { return status == SslmGpuStatus::SSLM_OK; }
 	// The first `n` codes plus the scale equal `o`'s (a frame compared byte for byte).
 	bool SameFrame(const Frame& o, size_t n) const {
-		if (status != SSLM_OK || o.status != SSLM_OK) return false;
+		if (status != SslmGpuStatus::SSLM_OK || o.status != SslmGpuStatus::SSLM_OK) return false;
 		if (codes.size() < n || o.codes.size() < n) return false;
 		return std::equal(codes.begin(), codes.begin() + n, o.codes.begin()) && m == o.m && e == o.e;
 	}
@@ -463,7 +465,8 @@ inline Frame OracleFromLive(const GpuModelFixture& fx, SslmGpuSequenceHandle* se
 	const superslm::SslmForwardStatus st =
 	    superslm::RmsNormSite(live, fx.final_gain.data(), fx.hidden, live_scale, fx.final_const,
 	                          f.codes.data(), &out, "final_norm");
-	f.status = st == superslm::SslmForwardStatus::Ok ? SSLM_OK : SSLM_SEQUENCE_REJECTED;
+	f.status = st == superslm::SslmForwardStatus::Ok ? SslmGpuStatus::SSLM_OK
+	                                                : SslmGpuStatus::SSLM_SEQUENCE_REJECTED;
 	f.m = out.m;
 	f.e = out.e;
 	f.required = fx.hidden;
@@ -478,11 +481,11 @@ inline SslmGpuStatus Prefill(const GpuModelFixture& fx, SslmGpuSequenceHandle* s
 
 inline SslmGpuStatus Drain(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) {
 	int32_t ready = 0;
-	SslmGpuStatus out_status = SSLM_OK;
-	SslmGpuStatus st = SSLM_OK;
+	SslmGpuStatus out_status = SslmGpuStatus::SSLM_OK;
+	SslmGpuStatus st = SslmGpuStatus::SSLM_OK;
 	while (!ready) {
 		st = sslm_gpu_ready(ctx, seq, /*block=*/1, &ready, &out_status);
-		if (st != SSLM_OK) return st;
+		if (st != SslmGpuStatus::SSLM_OK) return st;
 	}
 	return out_status;
 }

@@ -2,7 +2,7 @@
 // C ABI by the T-2823 fold). Compiled with /DSUPERSLM_API=__declspec(dllimport) and linked against
 // sslm_engine.dll's import library ONLY, so every engine symbol it calls must cross the DLL boundary. It calls
 // every symbol of X2's expected set at least once and nothing else from the engine -- the 25 C++ entries of
-// consumed_symbols.txt and the 36 C verbs of c_abi_verbs.txt, 61 at v1.5.0: build_x2.ps1 checks that this
+// consumed_symbols.txt and the 37 C verbs of c_abi_verbs.txt, 62 at v1.6.0: build_x2.ps1 checks that this
 // DLL's import table from sslm_engine.dll EQUALS that set, so a call silently dropped here fails X2 (the
 // harness mutant, /DX2_DROP_CHUNK_BATCHED, proves it).
 //
@@ -29,10 +29,10 @@
 //   RunLayerLoopChunkBatched                      chunk_tokens 0 -> InvalidLayerBudget (checked at entry)
 //   ParseConfig                                   an empty section view -> BadConfigSize (the exact-size check
 //                                                 is the first check, src/model.cpp ParseConfigImpl)
-// The C verbs (36), each called with null handles and null out-pointers, which every verb's contract refuses
-// at entry: the 30 that return sslm_status return SSLM_INVALID_ARGUMENT; the six sizing verbs
+// The C verbs (37), each called with null handles and null out-pointers, which every verb's contract refuses
+// at entry: the 31 that return sslm_status return SSLM_INVALID_ARGUMENT; the six sizing verbs
 // (sslm_kv_block_size, sslm_kv_pool_overhead_size, sslm_seq_state_size, sslm_workspace_size,
-// sslm_adapter_residency, sslm_schema_count) return 0 for a null model or adapter. Executed on all 36 by the
+// sslm_adapter_residency, sslm_schema_count) return 0 for a null model or adapter. Executed on all 37 by the
 // planner's probe (T-2823 P2) and asserted here per verb.
 #include <cstdint>
 #include <cstdio>
@@ -215,6 +215,7 @@ extern "C" __declspec(dllexport) int x2_run() {
 		sz = sizeof buf;
 		X2_INVALID(sslm_schema_name(m, 0, buf, &sz));
 		X2_INVALID(sslm_seq_set_schema(s, sc));
+		X2_INVALID(sslm_seq_schema_bound(s, &n));
 		X2_INVALID(sslm_prefix_set_schema(p, sc));
 		X2_INVALID(sslm_decode_step_v2(m, &s, 1, &dp, ws, tok));
 		X2_INVALID(sslm_decode_params_init(m, 0, 1, &dp));

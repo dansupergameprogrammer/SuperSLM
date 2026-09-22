@@ -29,26 +29,38 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> bytes; if (!ReadFile(argv[1], &bytes)) return 2;
     superslm::SslmModelView view; std::string error;
     if (superslm::SslmModel::Load(bytes.data(), bytes.size(), view, &error) !=
-        superslm::SslmModelStatus::Ok) return 2;
-    sslm_model model = nullptr; if (sslm_model_map(bytes.data(), bytes.size(), &model) != SSLM_OK) return 2;
+        superslm::SslmModelStatus::Ok) { std::fprintf(stderr, "model load failed: %s\n", error.c_str()); return 2; }
+    sslm_model model = nullptr; const sslm_status map_status = sslm_model_map(bytes.data(), bytes.size(), &model);
+    if (map_status != SSLM_OK) { std::fprintf(stderr, "model map failed: %d\n", int(map_status)); return 2; }
     const size_t block = sslm_kv_block_size(model); const size_t overhead = sslm_kv_pool_overhead_size(model, 2);
     std::vector<uint8_t> storage(block * 2 + overhead + 63); void* aligned = storage.data(); size_t space = storage.size();
     if (!std::align(64, block * 2 + overhead, aligned, space)) return 2;
     sslm_kv_pool pool = nullptr; if (sslm_kv_pool_create(model, aligned, block * 2 + overhead, 2, &pool) != SSLM_OK) return 2;
+    sslm_config config{};
+    config.max_batch = 1;
+    config.max_chunk_budget = 8;
+    config.max_layer_budget = static_cast<int32_t>(view.config.num_hidden_layers);
+    const size_t ws_bytes = sslm_workspace_size(model, &config);
+    std::vector<uint8_t> ws_storage(ws_bytes + 63); void* ws_aligned = ws_storage.data();
+    size_t ws_space = ws_storage.size();
+    if (!std::align(64, ws_bytes, ws_aligned, ws_space)) return 2;
+    sslm_workspace ws = nullptr;
+    if (sslm_workspace_create(model, &config, ws_aligned, ws_bytes, &ws) != SSLM_OK) return 2;
     bool held = false; int32_t chosen = -1; sslm_status reset_status = SSLM_INVALID_ARGUMENT;
     for (int32_t token = 0; token < static_cast<int32_t>(view.config.vocab_size) && !held; ++token) {
         sslm_seq seq = nullptr; if (sslm_seq_create(model, &pool, &seq) != SSLM_OK) return 2;
-        int32_t consumed = 0; if (sslm_prefill(model, seq, &token, 1, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) != SSLM_OK) { sslm_seq_release(seq); continue; }
+        int32_t consumed = 0; if (sslm_prefill(model, seq, &token, 1, 8, SSLM_SPAN_PROMPT, ws, &consumed) != SSLM_OK) { sslm_seq_release(seq); continue; }
         sslm_decode_params p{}; p.layer_budget = static_cast<int32_t>(view.config.num_hidden_layers); int32_t first = -9;
-        if (sslm_decode_step(model, &seq, 1, &p, nullptr, &first) != SSLM_OK || first < 0) { sslm_seq_release(seq); continue; }
-        int32_t second = -9; const sslm_status refusal = sslm_decode_step(model, &seq, 1, &p, nullptr, &second);
+        if (sslm_decode_step(model, &seq, 1, &p, ws, &first) != SSLM_OK || first < 0) { sslm_seq_release(seq); continue; }
+        int32_t second = -9; const sslm_status refusal = sslm_decode_step(model, &seq, 1, &p, ws, &second);
         if (refusal != SSLM_OK && Layer(seq) == target) {
             chosen = token; reset_status = sslm_seq_reset(seq); consumed = 0;
-            const sslm_status reuse = sslm_prefill(model, seq, &token, 1, 8, SSLM_SPAN_PROMPT, nullptr, &consumed);
+            const sslm_status reuse = sslm_prefill(model, seq, &token, 1, 8, SSLM_SPAN_PROMPT, ws, &consumed);
             held = reset_status == SSLM_OK && Layer(seq) == 0 && reuse == SSLM_OK && consumed == 1;
         }
         sslm_seq_release(seq);
     }
     std::printf("CELL cpu_terminal_reset layer=%u token=%d reset=%d held=%d\n", target, chosen, int(reset_status), held);
-    sslm_kv_pool_destroy(pool); sslm_model_unmap(model); return chosen < 0 ? 2 : held ? 0 : 1;
+    sslm_workspace_destroy(ws); sslm_kv_pool_destroy(pool); sslm_model_unmap(model);
+    return chosen < 0 ? 2 : held ? 0 : 1;
 }

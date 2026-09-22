@@ -1,15 +1,14 @@
 param(
-    [string]$ScratchRoot = 'D:\_t2933\suite',
+    [string]$ScratchRoot = '',
     [string]$ShaderDir = '',
-    [string]$CpuGuardBase = 'D:\_t2791\fixtures\u1_pair_model.sslm',
     [string]$GpuSource = '',
     [switch]$ExpectResetRed
 )
 $ErrorActionPreference = 'Stop'
 $Here = $PSScriptRoot
 $Engine = (Resolve-Path (Join-Path $Here '..\..')).Path
+if (-not $ScratchRoot) { $ScratchRoot = Join-Path $Engine 'build\t2933-lifecycle' }
 if (-not $ShaderDir) { $ShaderDir = Join-Path $Engine 'build\gpu-shaders-staged' }
-if (-not (Test-Path $CpuGuardBase)) { throw "CPU guard base missing: $CpuGuardBase" }
 if (-not $GpuSource) { $GpuSource = Join-Path $Engine 'src\gpu\gpu_1p0.cpp' }
 $Vs = 'C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Launch-VsDevShell.ps1'
 $Obj = Join-Path $ScratchRoot 'obj'; $Bin = Join-Path $ScratchRoot 'bin'
@@ -46,9 +45,12 @@ if ($LASTEXITCODE) { throw "CPU reset link failed: $LASTEXITCODE" }
 if (-not (Test-Path $ShaderDir)) { throw "shader directory missing: $ShaderDir" }
 Copy-Item (Join-Path $ShaderDir '*') (Join-Path $Bin 'shaders') -Force
 
-$Base = Join-Path $ScratchRoot 'base.sslm'; $Dual = Join-Path $ScratchRoot 'dual.sslm'
+$Base = Join-Path $ScratchRoot 'base.sslm'; $CpuBase = Join-Path $ScratchRoot 'cpu-base.sslm'
+$Dual = Join-Path $ScratchRoot 'dual.sslm'
 & python "$Engine\tools\_t2199_s8_synthetic_full_model_fixture.py" $Base
 if ($LASTEXITCODE) { throw "base fixture failed" }
+& python "$Here\make_t2922_cpu_reset_base.py" $CpuBase
+if ($LASTEXITCODE) { throw "CPU base fixture failed" }
 & python "$Here\make_t2922_dual_schema_fixture.py" $Dual
 if ($LASTEXITCODE) { throw "dual fixture failed" }
 $red = 0; $green = 0; $bad = 0
@@ -67,7 +69,7 @@ try {
     } else {
       if ($LASTEXITCODE -eq 0) { ++$green } else { ++$bad }
     }
-    & python "$Here\make_t2922_reset_guard_fixture.py" $CpuGuardBase $layer $CpuGuard
+    & python "$Here\make_t2922_reset_guard_fixture.py" $CpuBase $layer $CpuGuard
     if ($LASTEXITCODE) { ++$bad; continue }
     & "$Bin\cpu_terminal_reset.exe" $CpuGuard $layer
     if ($LASTEXITCODE -eq 1) { ++$red } elseif ($LASTEXITCODE -eq 0) { ++$green } else { ++$bad }

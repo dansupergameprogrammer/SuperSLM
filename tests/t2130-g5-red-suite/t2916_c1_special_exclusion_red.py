@@ -120,8 +120,8 @@ class T2916_C1_CompilerRefusesAnUnzeroedVocabulary(unittest.TestCase):
 
 
 class T2916_C1_MutationProof(unittest.TestCase):
-    """Sec5.4's mutation-proof discipline, applied without inventing the fix: the wrong version
-    is `0062c99` itself, the commit TE-370 reviewed and ruled DO NOT SHIP for this exact defect.
+    """Sec5.4's mutation-proof discipline against the landed fix: the wrong version is
+    `0062c99` itself, the commit TE-370 reviewed and ruled DO NOT SHIP for this exact defect.
     Loaded via `git show` against this repo's own history (no out-of-repo input, M1's own bar).
     """
 
