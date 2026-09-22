@@ -4,14 +4,18 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-09-22
+
 CPU and GPU callers can now query schema binding explicitly with `sslm_seq_schema_bound` and
 `SslmGpuSeqSchemaBoundForG5Bridge`, and GPU callers can query exact current accept-set membership
 with `SslmGpuSeqSchemaAcceptingForG5Bridge`. GPU queries are host-only and leave outputs unchanged
 on malformed or busy calls. Schema binding on GPU now rejects every sequence with retained
 generation history. CPU and GPU schema bind, rebind, and unbind are valid only after create or
-reset; any generation call, including a no-op call or CPU empty-prefix adoption, makes a sequence
-ineligible until reset, and every restored sequence must be reset before binding. CPU and GPU reset
-are symmetric restart operations: any valid Idle/CPU sequence state can be reset; the shipped
+reset. A generation call that passes argument validation makes the sequence
+ineligible until reset, including a valid no-op call or CPU empty-prefix adoption. A call rejected
+for invalid arguments leaves the sequence untouched and still bindable; a GPU busy refusal likewise
+preserves eligibility. Every restored sequence must be reset before binding. CPU and GPU reset are
+symmetric restart operations: any valid Idle/CPU sequence state can be reset; the shipped
 `SSLM_SEQ_RESET_MIDTOKEN_REJECTED` ordinal remains reserved but is no longer returned.
 
 The GPU API gains an embedding read. `sslm_gpu_seq_read_prefill_final_hidden` returns the
@@ -114,6 +118,9 @@ clears `forced_token_count`, the schema-content forced-span counter visible thro
 survives into an adopted origin -- including when the adopted prefix's own history holds forced
 positions of its own: a prefix does not track its own `forced_token_count`, so the field reads 0
 after adoption regardless, exactly as a fresh sequence's does.
+
+See [docs/releases/1.6.0.md](docs/releases/1.6.0.md) for the consumer-facing release note and
+compatibility guidance.
 
 ## [1.5.0] - 2026-09-17
 

@@ -151,10 +151,12 @@ SUPERSLM_API size_t      sslm_schema_count(sslm_model model);
 SUPERSLM_API sslm_status sslm_schema_name(sslm_model model, int32_t index, char* buf, size_t* n);
 
 /* G5 design Sec5: binds a compiled schema to a sequence (SSLM_SCHEMA_NONE = unconstrained).
- * Bind, rebind, and unbind are valid ONLY after sslm_seq_create or sslm_seq_reset. Any generation
- * call makes the sequence ineligible until reset, including a no-op call or an empty-prefix
- * sslm_seq_adopt_prefix. A restored sequence must be reset first. An ineligible sequence returns
- * SSLM_SCHEMA_BIND_REJECTED without changing its binding or walk state. */
+ * Bind, rebind, and unbind are valid ONLY after sslm_seq_create or sslm_seq_reset. A generation
+ * call that passes argument validation makes the sequence ineligible until reset, including a
+ * valid no-op call or empty-prefix sslm_seq_adopt_prefix. A call rejected for invalid arguments
+ * leaves the sequence untouched and still bindable. A restored sequence must be reset first. An
+ * ineligible sequence returns SSLM_SCHEMA_BIND_REJECTED without changing its binding or walk
+ * state. */
 SUPERSLM_API sslm_status sslm_seq_set_schema(sslm_seq seq, sslm_schema schema);
 
 /* Writes 1 iff `seq` currently has a schema bound, otherwise 0. Null arguments return

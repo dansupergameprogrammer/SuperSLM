@@ -328,11 +328,12 @@ int32_t SslmGpuSchemaLookupForG5Bridge(SslmGpuModelHandle* model, const char* na
 
 /* Binds `schema_index` (as returned by the lookup above; -1 unbinds, mirroring
  * SSLM_SCHEMA_NONE) to `seq`. Bind, rebind, and unbind are valid ONLY after sequence creation or
- * `sslm_gpu_seq_reset`. Any generation call makes the sequence ineligible until reset, including
- * a no-op call. A restored sequence must be reset first. A Submitted sequence returns SSLM_BUSY;
- * any other ineligible sequence returns SSLM_SEQUENCE_REJECTED without changing its binding or
- * walk state. A
- * caller-malformed handle (`seq`/`model` null, `ctx` mismatch) returns
+ * `sslm_gpu_seq_reset`. A generation call that passes argument validation makes the
+ * sequence ineligible until reset, including a valid no-op call. A call rejected for invalid
+ * arguments leaves the sequence untouched and still bindable. A restored sequence must be reset
+ * first. A Submitted sequence returns SSLM_BUSY and likewise leaves eligibility unchanged; any
+ * other ineligible sequence returns SSLM_SEQUENCE_REJECTED without changing its binding or walk
+ * state. A caller-malformed handle (`seq`/`model` null, `ctx` mismatch) returns
  * SSLM_SEQUENCE_KV_BUFFER_MISMATCH, the existing "malformed handle" bucket every 1.0 entry point
  * already uses. */
 SslmGpuStatus SslmGpuSeqSetSchemaForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,

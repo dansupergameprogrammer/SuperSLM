@@ -14,12 +14,12 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.5.0**. It adds the QKC1 source-to-derived conversion contract,
-fail-closed A/B/C publication, channel-scale headroom control, and the residual-add
-repair across CPU and D3D12 GPU inference. QK artifacts must be reconverted because
-the finalized carried-scale and reciprocal contract is intentionally incompatible;
-forward outputs change for every model and are not bit-identical to 1.4.0. See the
-concise [1.5.0 release note](docs/releases/1.5.0.md) and [CHANGELOG.md](CHANGELOG.md).
+Current release: **1.6.0**. It expands schema-constrained generation with unbounded free-text
+fields, structural special-token exclusion, persisted schema progress, explicit bound/accepting
+queries, deterministic dead-end and reset behavior, and a GPU prefill-hidden read. It also adds
+the `SUPERSLM_API` modular export slot. GPU sequence saves now use `SLM5`; 1.6.0 still reads
+`SLM4`, but 1.5.0 cannot read a new `SLM5` save. See the concise
+[1.6.0 release note](docs/releases/1.6.0.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## Capabilities
 
@@ -127,9 +127,11 @@ final. GPU callers use `SslmGpuSeqSchemaBoundForG5Bridge` and
 `SslmGpuSeqSchemaAcceptingForG5Bridge` after draining and finishing the step.
 
 Schema bind, rebind, and unbind are valid only on a newly created or reset
-sequence. Any generation call makes the sequence ineligible until reset,
-including a no-op call or a CPU empty-prefix adoption. A restored CPU or GPU
-sequence must be reset before binding.
+sequence. A generation call that passes argument validation makes
+the sequence ineligible until reset, including a valid no-op call or CPU
+empty-prefix adoption. A call rejected for invalid arguments leaves the sequence
+untouched and still bindable; a GPU Submitted/busy refusal likewise preserves
+eligibility. A restored CPU or GPU sequence must be reset before binding.
 
 The determinism guarantee above carries through even when the engine skips
 ahead through the parts of the output your schema already dictates (for

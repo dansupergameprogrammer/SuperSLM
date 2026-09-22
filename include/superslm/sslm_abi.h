@@ -11,8 +11,10 @@
 // and new functions, never by renumbering or repurposing an existing one.
 //
 // Schema bind, rebind, and unbind are valid only on a newly created or successfully reset
-// sequence. Any generation call makes the sequence ineligible until reset, including a no-op
-// call or an empty-prefix adoption. A restored sequence must be reset before schema binding.
+// sequence. A generation call that passes argument validation makes the sequence ineligible until
+// reset, including a valid no-op call or empty-prefix adoption. A call rejected for invalid
+// arguments leaves the sequence untouched and still bindable. A restored sequence must be reset
+// before schema binding.
 
 #include <stdint.h>
 #include <stddef.h>
