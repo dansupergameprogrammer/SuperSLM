@@ -267,8 +267,12 @@ struct Census {
 
 	void M16() {
 		Setup_(Base(), "M16", "base prefill");
+		// T-2934 reconciliation: binding (including unbinding) is fresh-or-reset only.
+		// Recreate the same F_P snapshot after exercising the two fresh-state no-ops.
+		Setup_(sslm_gpu_seq_reset(fx.ctx, seq) == SSLM_OK, "M16", "reset before bind operations");
 		Setup_(sslm_gpu_seq_bind_adapter(fx.ctx, seq, nullptr) == SSLM_OK, "M16", "bind(nullptr)");
 		Setup_(SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, seq, -1) == SSLM_OK, "M16", "set-schema(-1)");
+		Setup_(Prefill(fx, seq, P) == SSLM_OK, "M16", "recreate base prefill");
 		int32_t r = 0;
 		SslmGpuStatus rs = SSLM_OK;
 		Setup_(sslm_gpu_ready(fx.ctx, seq, 0, &r, &rs) == SSLM_OK, "M16", "idle ready");

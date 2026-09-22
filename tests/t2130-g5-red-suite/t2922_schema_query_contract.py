@@ -75,13 +75,15 @@ class T2933SchemaQueryContract(unittest.TestCase):
     def test_real_model_manifest_is_pinned_and_gate_fails_closed(self) -> None:
         manifest = json.loads((HERE / "t2922_real_model_manifest.json").read_text())
         self.assertEqual(manifest["artifact_sha256"],
-                         "696c2a4ac412f1c5866a446eb32aa6500db77e5ae8aff0018438103c607e61bd")
+                         "6a41f87d3a48c91751b41fe716c4f8289b7ce97761850c3f1f2c53d01201205c")
         self.assertEqual(manifest["prompt_ids_sha256"],
-                         "207d0c68f9aa4de5bd6446c67df2226a6b582c1bff923138f08c7549d4d9ab81")
+                         "9a998103fffcac7bcdb0607ce83f456f889df3ff4c721ac7c67bbb6ae12863dc")
         prompt_path = ROOT / manifest["prompt_ids_file"]
         self.assertEqual(hashlib.sha256(prompt_path.read_bytes()).hexdigest(),
                          manifest["prompt_ids_sha256"])
         self.assertEqual(manifest["decode_budget"], 300)
+        self.assertEqual(manifest["schema_name"], "prompt_result")
+        self.assertEqual(manifest["expected_stop"], "budget")
         if os.environ.get("SUPERSLM_G5_REAL_MODEL_TESTS"):
             artifact = Path(manifest["artifact"])
             self.assertTrue(artifact.is_file(), f"required real artifact missing: {artifact}")

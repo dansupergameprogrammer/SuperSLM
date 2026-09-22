@@ -25,8 +25,9 @@
 //     P ++ [4913] passes. Otherwise the cell fails as SETUP.
 //
 // CELLS (sequence cap 64, schema "shopkeeper_intent_extraction", P = [0, 1, 3], which passes):
-//   Q5-1   G5-an: reset; prompt P (the read returns P's frame, so the refusal below is discriminating);
-//          bind the schema; schema-prefill [4913, 72]. Asserts exactly SSLM_DEVICE_LOST, *consumed == 1,
+//   Q5-1   G5-an: reset; bind the schema; prompt P (prompt spans do not advance the DFA, and the
+//          read returns P's frame, so the refusal below is discriminating); schema-prefill [4913, 72].
+//          Asserts exactly SSLM_DEVICE_LOST, *consumed == 1,
 //          the context length |P| + 1, and that the read refuses (SSLM_PREFILL_HIDDEN_UNAVAILABLE, nothing
 //          written, *out_required untouched).
 //   Q5-1c  must-accept: the same calls on the unpatched --g5fixture return SSLM_OK with *consumed == 2 and
@@ -122,10 +123,11 @@ SchemaRun Drive(GpuModelFixture& fx, SslmGpuSequenceHandle* s, int32_t idx, cons
                 const std::vector<int32_t>& chain) {
 	SchemaRun r;
 	CHECK_MSG(sslm_gpu_seq_reset(fx.ctx, s) == SSLM_OK, "[%s] reset", fx.path.c_str());
+	// T-2934 reconciliation: bind while fresh; prompt spans leave the DFA at its start state.
+	r.bind = SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, s, idx);
 	r.prompt = Prefill(fx, s, P);
 	r.live_before = OracleFromLive(fx, s);
 	r.before = ReadVerb(fx, s);
-	r.bind = SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, s, idx);
 	r.st = SslmGpuSeqPrefillSchemaContentForG5Bridge(fx.ctx, s, chain.data(), static_cast<int32_t>(chain.size()),
 	                                                 fx.one_layer_budget, &r.consumed);
 	r.ctxlen = ContextLength(s);

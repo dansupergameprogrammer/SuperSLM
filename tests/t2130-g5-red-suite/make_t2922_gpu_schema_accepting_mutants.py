@@ -33,8 +33,12 @@ MUTANTS = {
                  "/* MUT g: stale prompt-only adoption walk */\n\t}"),
     "h": Mutant(GPU, "const bool accepting = IsAcceptingState(*entry, seq->dfa_walk_state);",
                  "static const bool accepting = IsAcceptingState(*entry, seq->dfa_walk_state); // MUT h: stale cache"),
-    "i": Mutant(GPU, "const int32_t schema_index = seq->bound_schema_index;",
-                 "static const int32_t schema_index = seq->bound_schema_index; // MUT i: stale binding"),
+    "i": Mutant(GPU,
+                 "const superslm::SchemaEntry* entry =\n"
+                 "\t    seq->model->schemas.ByIndex(static_cast<size_t>(seq->bound_schema_index));",
+                 "static const int32_t schema_index = seq->bound_schema_index; // MUT i: stale binding\n"
+                 "\tconst superslm::SchemaEntry* entry =\n"
+                 "\t    seq->model->schemas.ByIndex(static_cast<size_t>(schema_index));"),
     "j": Mutant(GPU, "IsAcceptingState(*entry, seq->dfa_walk_state)",
                  "true /* MUT j: universal acceptance */"),
     "k": Mutant(GPU, "if (seq->context_length != 0) {\n\t\treturn SSLM_SEQUENCE_REJECTED;\n\t}",

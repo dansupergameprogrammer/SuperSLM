@@ -202,10 +202,13 @@ void SchemaMembers(GpuModelFixture& fx) {
 		CHECK(Prefill(fx, s, t) == SSLM_OK);
 		return OracleFromLive(fx, s);
 	};
-	// reset; prompt P; bind; schema [t0, t1] -> the schema kNone frame.
+	// T-2934 reconciliation: schema binding is fresh-or-reset only. Bind before the
+	// prompt; prompt spans do not advance the DFA, so the schema-content oracle is unchanged.
+	// reset; bind; prompt P; schema [t0, t1] -> the schema kNone frame.
 	auto base_schema = [&]() -> bool {
-		return sslm_gpu_seq_reset(ctx, s) == SSLM_OK && Prefill(fx, s, P) == SSLM_OK &&
-		       SslmGpuSeqSetSchemaForG5Bridge(ctx, s, idx) == SSLM_OK && schema_prefill({chain[0], chain[1]}) == SSLM_OK &&
+		return sslm_gpu_seq_reset(ctx, s) == SSLM_OK &&
+		       SslmGpuSeqSetSchemaForG5Bridge(ctx, s, idx) == SSLM_OK && Prefill(fx, s, P) == SSLM_OK &&
+		       schema_prefill({chain[0], chain[1]}) == SSLM_OK &&
 		       consumed == 2;
 	};
 
@@ -242,6 +245,7 @@ void SchemaMembers(GpuModelFixture& fx) {
 		p_t0.push_back(chain[0]);
 		const Frame ref_pt0 = prompt_ref(p_t0);
 		CHECK(sslm_gpu_seq_reset(ctx, s) == SSLM_OK);
+		CHECK(SslmGpuSeqSetSchemaForG5Bridge(ctx, s, idx) == SSLM_OK);
 		CHECK(Prefill(fx, s, P) == SSLM_OK);
 		const SslmGpuStatus st = schema_prefill({chain[0]});
 		CHECK_MSG(st == SSLM_OK && consumed == 1, "[%s] S3 SETUP: bound-across-reset schema prefill (%s)", tag,
@@ -261,18 +265,18 @@ void SchemaMembers(GpuModelFixture& fx) {
 	// S4 / S5: kPositionCap on the cap-64 sequence, 2 and 0 admitted.
 	{
 		CHECK(sslm_gpu_seq_reset(ctx, s) == SSLM_OK);
+		CHECK(SslmGpuSeqSetSchemaForG5Bridge(ctx, s, idx) == SSLM_OK);
 		const std::vector<int32_t> fill62 = fx.Run(62, P[0]);
 		CHECK(Prefill(fx, s, fill62) == SSLM_OK);
-		CHECK(SslmGpuSeqSetSchemaForG5Bridge(ctx, s, idx) == SSLM_OK);
 		const SslmGpuStatus st = schema_prefill(chain);
 		CHECK_MSG(st != SSLM_OK && consumed == 2, "[%s] S4 SETUP: kPositionCap with 2 admitted (%s, consumed=%d)", tag,
 		          StatusName(st), consumed);
 		ExpectRefuse(tag, "S4 schema kPositionCap, 2 admitted", ReadVerb(fx, s));
 
 		CHECK(sslm_gpu_seq_reset(ctx, s) == SSLM_OK);
+		CHECK(SslmGpuSeqSetSchemaForG5Bridge(ctx, s, idx) == SSLM_OK);
 		const std::vector<int32_t> fill64 = fx.Run(64, P[0]);
 		CHECK(Prefill(fx, s, fill64) == SSLM_OK);
-		CHECK(SslmGpuSeqSetSchemaForG5Bridge(ctx, s, idx) == SSLM_OK);
 		const SslmGpuStatus st5 = schema_prefill({chain[0]});
 		CHECK_MSG(st5 != SSLM_OK && consumed == 0, "[%s] S5 SETUP: kPositionCap with 0 admitted (%s, consumed=%d)", tag,
 		          StatusName(st5), consumed);

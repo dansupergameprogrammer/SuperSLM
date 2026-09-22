@@ -101,6 +101,29 @@ int main(int argc, char** argv) {
     bound = 0x24681357;
     CHECK(SslmGpuSeqSchemaBoundForG5Bridge(nullptr, seq, &bound) == SslmGpuStatus::SSLM_SEQUENCE_KV_BUFFER_MISMATCH && bound == 0x24681357);
 
+    // Dead-end predecessor: reach A's independently constructed terminal accepting
+    // state, then finish against its all-zero continuation mask. The miss must not
+    // rewrite the walk state; the accepting query therefore remains true.
+    SslmGpuSequenceHandle* dead = nullptr;
+    CHECK(sslm_gpu_seq_create(ctx, fx.model, fx.model_cap, &dead) == SslmGpuStatus::SSLM_OK);
+    CHECK(SslmGpuSeqSetSchemaForG5Bridge(ctx, dead, a) == SslmGpuStatus::SSLM_OK);
+    const int32_t terminal_path[] = {0, 1, 2, 5};
+    consumed = 0;
+    CHECK(SslmGpuSeqPrefillSchemaContentForG5Bridge(ctx, dead, terminal_path, 4,
+          fx.one_layer_budget, &consumed) == SslmGpuStatus::SSLM_OK && consumed == 4);
+    CHECK(SslmGpuSeqWalkStateForG5Bridge(dead) == 7);
+    accepting = -1;
+    CHECK(SslmGpuSeqSchemaAcceptingForG5Bridge(ctx, dead, &accepting) ==
+          SslmGpuStatus::SSLM_OK && accepting == 1);
+    int32_t dead_token = -99;
+    CHECK(SslmGpuSeqDecodeStepForG5Bridge(ctx, dead, 7, fx.one_layer_budget, &dead_token) ==
+          SslmGpuStatus::SSLM_OK && dead_token == -2);
+    CHECK(SslmGpuSeqWalkStateForG5Bridge(dead) == 7);
+    accepting = -1;
+    CHECK(SslmGpuSeqSchemaAcceptingForG5Bridge(ctx, dead, &accepting) ==
+          SslmGpuStatus::SSLM_OK && accepting == 1);
+    sslm_gpu_seq_release(ctx, dead);
+
 #if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
     SslmGpuSequenceHandle* commissioned = nullptr;
     CHECK(sslm_gpu_seq_create(ctx, fx.model, fx.model_cap, &commissioned) == SslmGpuStatus::SSLM_OK);
