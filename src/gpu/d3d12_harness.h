@@ -643,8 +643,9 @@ inline Device& GetDevice() {
 // the pipeline caches below are process-static, keyed by shader name alone, and never flushed.
 //
 // True once (a) has fixed it. From then on ShaderPath returns UTF-8 paths under the override,
-// and ReadFile and the staleness check open them through the wide Win32/CRT calls; before it,
-// and for the process's lifetime when (b) fixed it, every path is the unchanged ANSI one.
+// and ReadFile and the staleness check open those .cso paths through the wide Win32/CRT calls;
+// before it, and for the process's lifetime when (b) fixed it, every .cso path is the unchanged
+// ANSI one. The staleness check's .hlsl source path is ANSI in every case.
 bool ShaderDirOverrideActive();
 
 enum class ShaderDirCheck { Ok, Invalid, Conflict };

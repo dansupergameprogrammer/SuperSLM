@@ -186,7 +186,8 @@ enum class SslmGpuStatus : uint32_t {
      * function's comment). Appended LAST; no existing ordinal moves. */
     SSLM_PREFILL_HIDDEN_UNAVAILABLE,
     /* sslm_gpu_context_create: GpuContextConfig::shader_dir is unusable -- empty, not valid
-     * UTF-8, relative, not an existing directory, or a directory holding no .cso file. No
+     * UTF-8, not fully qualified (see sslm_gpu_context_create, step 4), not an existing
+     * directory, or a directory holding no .cso file. No
      * context and no device are created. Remedy: supply the absolute path of the directory that
      * holds the compiled shader set. Appended LAST; no existing ordinal moves. */
     SSLM_GPU_SHADER_DIR_INVALID,
@@ -203,7 +204,10 @@ enum class SslmGpuStatus : uint32_t {
  * 2. `cfg.shader_dir` NULL: no shader-directory check; the process's shader directory applies
  *    (GpuContextConfig above).
  * 3. `cfg.shader_dir` empty, or not valid UTF-8: SSLM_GPU_SHADER_DIR_INVALID.
- * 4. A relative path: SSLM_GPU_SHADER_DIR_INVALID.
+ * 4. Not fully qualified -- the value does not begin with a drive root (`X:\` or `X:/`) or a
+ *    UNC prefix (two leading separators): SSLM_GPU_SHADER_DIR_INVALID. This refuses a relative
+ *    path, a path rooted on the current drive (`\shaders`), and a drive-relative path
+ *    (`C:shaders`), each of which resolves against the process's current directory.
  * 5. Not an existing directory, after full-path normalization and trailing-separator removal:
  *    SSLM_GPU_SHADER_DIR_INVALID.
  * 6. No `*.cso` file in the directory: SSLM_GPU_SHADER_DIR_INVALID.

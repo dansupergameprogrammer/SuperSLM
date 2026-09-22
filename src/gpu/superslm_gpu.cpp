@@ -100,7 +100,8 @@ struct GpuShaderBinaryStaleError : std::logic_error {
 //
 // Under a shader-directory override (GpuContextConfig::shader_dir, fixed by
 // CommitShaderDirOverride below) the result is `<override>\<name>.cso` in UTF-8
-// instead; ReadFile and the staleness check open it through the wide calls.
+// instead; ReadFile and the staleness check open it through the wide calls (the
+// staleness check's .hlsl source path stays ANSI).
 
 namespace {
 
@@ -150,6 +151,18 @@ std::wstring NormalizeDirectoryW(const std::wstring& dir) {
 	return full;
 }
 
+// A drive root (`X:\` or `X:/`) or a UNC prefix (two leading separators). PathIsRelativeW
+// alone also admits `\dir` (rooted on the current drive) and `X:dir` (relative to drive X's
+// current directory); both resolve against process state that an editor host does not hold
+// stable, so neither names one directory.
+bool IsFullyQualifiedW(const std::wstring& p) {
+	if (p.size() >= 3 && ((p[0] >= L'A' && p[0] <= L'Z') || (p[0] >= L'a' && p[0] <= L'z')) &&
+	    p[1] == L':' && IsPathSeparatorW(p[2])) {
+		return true;
+	}
+	return p.size() >= 2 && IsPathSeparatorW(p[0]) && IsPathSeparatorW(p[1]);
+}
+
 bool SameDirectory(const std::wstring& a, const std::wstring& b) {
 	return CompareStringOrdinal(a.c_str(), static_cast<int>(a.size()), b.c_str(),
 	                            static_cast<int>(b.size()), TRUE) == CSTR_EQUAL;
@@ -166,7 +179,7 @@ ShaderDirCheck CheckShaderDirOverride(const char* utf8_dir, std::wstring* out_no
 	if (utf8_dir == nullptr || utf8_dir[0] == '\0') return ShaderDirCheck::Invalid;
 	const std::wstring wide = MultiByteToWide(CP_UTF8, MB_ERR_INVALID_CHARS, utf8_dir);
 	if (wide.empty()) return ShaderDirCheck::Invalid;
-	if (PathIsRelativeW(wide.c_str())) return ShaderDirCheck::Invalid;
+	if (PathIsRelativeW(wide.c_str()) || !IsFullyQualifiedW(wide)) return ShaderDirCheck::Invalid;
 	const std::wstring normalized = NormalizeDirectoryW(wide);
 	if (normalized.empty()) return ShaderDirCheck::Invalid;
 	const DWORD attr = GetFileAttributesW(normalized.c_str());
@@ -260,12 +273,14 @@ std::string ShaderPath(const std::string& name) {
 
 namespace {
 
-// (T-2575): NTFS last-write time in 100 ns units, or 0 when the file does not exist. Under a
-// shader-directory override the path is UTF-8 (ShaderDirOverrideActive) and is read through
-// the wide call; otherwise the unchanged ANSI call.
-uint64_t ShaderFileWriteTime(const std::string& path) {
+// (T-2575): NTFS last-write time in 100 ns units, or 0 when the file does not exist. The
+// caller names the path's encoding: `utf8` reads it through the wide call (a `.cso` path
+// ShaderPath built under a shader-directory override); otherwise the unchanged ANSI call (the
+// default `.cso` path, and every `.hlsl` source path, which ShaderSourceDirOrEmpty derives
+// from GetModuleFileNameA whether or not an override is fixed).
+uint64_t ShaderFileWriteTime(const std::string& path, bool utf8) {
 	WIN32_FILE_ATTRIBUTE_DATA fad{};
-	if (ShaderDirOverrideActive()) {
+	if (utf8) {
 		const std::wstring wpath = MultiByteToWide(CP_UTF8, 0, path.c_str());
 		if (wpath.empty() || !GetFileAttributesExW(wpath.c_str(), GetFileExInfoStandard, &fad)) {
 			return 0;
@@ -351,9 +366,11 @@ std::string ShaderBinaryStalenessDiagnostic(const std::string& shader_source_dir
                                              const std::string& cso_path) {
 	if (shader_source_dir.empty()) return {};
 	const std::string hlsl_path = shader_source_dir + "\\" + shader_name + ".hlsl";
-	const uint64_t hlsl_t = ShaderFileWriteTime(hlsl_path);
+	// The source path is ANSI always; the .cso path is UTF-8 exactly when an override is fixed,
+	// because only then does ShaderPath build it from the override (d3d12_harness.h).
+	const uint64_t hlsl_t = ShaderFileWriteTime(hlsl_path, /*utf8=*/false);
 	if (hlsl_t == 0) return {};  // no such source beside the others -- nothing to compare against
-	const uint64_t cso_t = ShaderFileWriteTime(cso_path);
+	const uint64_t cso_t = ShaderFileWriteTime(cso_path, /*utf8=*/ShaderDirOverrideActive());
 	if (cso_t == 0) return {};  // absent binary -- ReadFile reports "cannot open shader"
 	std::string newest_header_name;
 	const uint64_t hdr_t = NewestMatchingFileTime(shader_source_dir, "*.hlsli", &newest_header_name);

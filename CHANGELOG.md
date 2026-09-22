@@ -13,8 +13,9 @@ absolute UTF-8 directory path, read only during `sslm_gpu_context_create`. The s
 process-wide: the first successful create that names one, or the first shader load through the
 default location, fixes it for the process's lifetime. Two statuses are appended to
 `SslmGpuStatus`, so no existing ordinal moves: `SSLM_GPU_SHADER_DIR_INVALID` (19), for a value
-that is empty, not valid UTF-8, relative, not an existing directory, or a directory holding no
-`.cso` file; and `SSLM_GPU_SHADER_DIR_CONFLICT` (20), for a directory that differs from the one the
+that is empty, not valid UTF-8, not fully qualified (it must begin with a drive root such as
+`C:\` or `C:/`, or a UNC prefix; `\shaders` and `C:shaders` are refused), not an existing
+directory, or a directory holding no `.cso` file; and `SSLM_GPU_SHADER_DIR_CONFLICT` (20), for a directory that differs from the one the
 process already uses. Both refusals are returned before any device is created.
 
 `GpuContextConfig` grows from 4 to 16 bytes on x64, and it is passed by value. The change is

@@ -48,8 +48,12 @@ never through the return value itself.
   with `NULL` uses it, a create naming the same directory in any spelling
   succeeds, and a create naming a different directory is refused with
   `SSLM_GPU_SHADER_DIR_CONFLICT`. A value that is empty, not valid UTF-8,
-  relative, not an existing directory, or a directory with no `.cso` file
-  is refused with `SSLM_GPU_SHADER_DIR_INVALID`. Both refusals happen
+  not an existing directory, a directory with no `.cso` file, or not fully
+  qualified is refused with `SSLM_GPU_SHADER_DIR_INVALID`. Fully qualified
+  means it begins with a drive root (`X:\` or `X:/`) or a UNC prefix
+  (`\\server\share`), so a relative path, `\shaders` (rooted on the current
+  drive) and `C:shaders` (relative to drive C's current directory) are all
+  refused. Both refusals happen
   before any device is created and leave `*out_ctx` null.
 - **Model**: `sslm_gpu_model_map` maps an already-loaded model view onto a
   context; `sslm_gpu_model_unmap` releases it, and refuses (`Busy`) while
