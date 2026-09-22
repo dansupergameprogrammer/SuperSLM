@@ -28,6 +28,10 @@ jobs:
           $out = & build/Release/superslm_tests.exe
           Write-Output $out
           if ($LASTEXITCODE -ne 0) { exit 1 }
+      # T-2933 §3.10.8: portable contract plus native red/green state runners.
+      # The lifecycle and real-model legs are registered but gated; when their
+      # environment variables are set, a missing artifact is a failure, not a skip.
+      - run: ctest --test-dir build -C Release --output-on-failure --no-tests=error -R '^t2933_'
 
   # T-2367 (Brunel), design Sec4.1/Sec5.5 fold round 39 (D-SLM4981/D-SLM4985/D-SLM4996), replacing
   # the non-gating fp-free-scan-report job this comment used to sit on: the membership-derivation
@@ -1075,6 +1079,10 @@ jobs:
       - run: pip install -r requirements.txt
       - run: cmake -B build
       - run: ctest --test-dir build --output-on-failure --no-tests=error -R '^t2919_g5_schema_compiler_tests$'
+      # T-2933: separate name prevents the §3.10.8 population from being hidden
+      # inside the older compiler-suite aggregate. Real-model execution remains
+      # fail-closed behind SUPERSLM_G5_REAL_MODEL_TESTS and is unset in CI.
+      - run: ctest --test-dir build --output-on-failure --no-tests=error -R '^t2933_schema_query_contract$'
 
   # T-2177 Finding 5: the branch-coverage job's own comment (above) claimed
   # tools/ci/branch_coverage_floors.json was not yet committed and that job

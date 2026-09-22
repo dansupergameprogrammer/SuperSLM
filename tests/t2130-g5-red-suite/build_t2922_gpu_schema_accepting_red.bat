@@ -1,24 +1,48 @@
 @echo off
-rem T-2932: red-first public API witness.  Exit 0 means the expected red API absence was
-rem observed and named; exit nonzero means the instrument itself did not establish that state.
+rem T-2933: three independent compile/link/run cells.  A missing declaration is
+rem an expected RED result, but any unrelated compiler failure is infrastructure.
 setlocal enabledelayedexpansion
 set HERE=%~dp0
 set ENG=%HERE%..\..
 set OBJ=%HERE%obj_t2922
 if not exist "%OBJ%" mkdir "%OBJ%"
+if not exist "%OBJ%\accepting" mkdir "%OBJ%\accepting"
+if not exist "%OBJ%\gpu_bound" mkdir "%OBJ%\gpu_bound"
+if not exist "%OBJ%\cpu_bound" mkdir "%OBJ%\cpu_bound"
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 -no_logo
-cl /nologo /std:c++20 /W4 /EHsc /I"%ENG%\include" /c "%HERE%t2922_gpu_schema_accepting_red.cpp" /Fo"%OBJ%\red.obj" > "%OBJ%\red.compile.log" 2>&1
+set COMMON=%ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp %ENG%\src\trace_hook.cpp %ENG%\src\forward\checked_chain_funnel.cpp %ENG%\src\forward\forward_sites.cpp %ENG%\src\decode_digest.cpp %ENG%\src\damped_greedy_antilm.cpp %ENG%\src\damped_greedy_topk.cpp %ENG%\src\damped_greedy_phaseD.cpp %ENG%\src\damped_greedy_phaseD_loop.cpp
+set GPU=%ENG%\src\gpu\gpu_1p0.cpp %ENG%\src\gpu\superslm_gpu.cpp
+set RED=0
+set GREEN=0
+set BAD=0
+
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I"%ENG%\include" /I"%ENG%\src" /I"%ENG%\src\gpu" %COMMON% %GPU% "%HERE%t2922_gpu_schema_accepting_red.cpp" /Fo"%OBJ%\accepting\\" /Fe"%OBJ%\accepting.exe" /link d3d12.lib dxgi.lib dxguid.lib >"%OBJ%\accepting.log" 2>&1
 if errorlevel 1 (
-    findstr /C:"SslmGpuSeqSchemaAcceptingForG5Bridge" "%OBJ%\red.compile.log" >nul || goto :unexpected
-    findstr /C:"SslmGpuSeqSchemaBoundForG5Bridge" "%OBJ%\red.compile.log" >nul || goto :unexpected
-    findstr /C:"sslm_seq_schema_bound" "%OBJ%\red.compile.log" >nul || goto :unexpected
-    for %%C in (UNBOUND_APPLICATION_FINAL BOUND_MID_WALK BOUND_ACCEPTING DEAD_END_PREDECESSOR SLM5_RESTORE_BOUND SLM4_RESTORE_UNBOUND RESET_PRESERVES_BINDING CPU_ADOPT_PREFIX_PROGRESS CPU_ADOPT_PREFIX_PROMPT_ONLY_RESET SUBMITTED_BUSY_UNCHANGED_OUT MALFORMED_AND_FOREIGN_UNCHANGED_OUT DRAIN_THEN_FINALIZE_QUERY DISTINCT_SCHEMA_RESTORE_REBIND LATE_LIVE_BIND_REJECT LATE_SLM5_BIND_REJECT FRESH_BIND_ACCEPT RESET_BIND_ACCEPT GPU_IDLE_RESET_REUSE GPU_SUBMITTED_RESET_BUSY ADAPTER_SWAP_MIDTOKEN_THEN_RESET_ACCEPT NO_DEVICE_WORK FOUR_SURFACE_PUBLIC_WORDING REAL_MODEL_BUDGET_DECODE REAL_MODEL_LATE_BIND) do echo CELL %%C RED: API_SURFACE_ABSENT
-    echo checks=24 failures=24 skips=0 red_reason=API_SURFACE_ABSENT
-    exit /b 0
+  findstr /C:"SslmGpuSeqSchemaAcceptingForG5Bridge" "%OBJ%\accepting.log" >nul && (echo RED gpu_accepting_api reason=API_ABSENT& set /a RED+=1) || (type "%OBJ%\accepting.log"& set /a BAD+=1)
+) else (
+  "%OBJ%\accepting.exe" && (echo GREEN gpu_accepting_api& set /a GREEN+=1) || (echo RED gpu_accepting_api reason=CONTRACT_MISMATCH& set /a RED+=1)
 )
-echo API declarations now compile. The red witness must be replaced by the live fixture runner before this invocation is accepted.
+
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I"%ENG%\include" /I"%ENG%\src" /I"%ENG%\src\gpu" %COMMON% %GPU% "%HERE%t2922_gpu_schema_bound_red.cpp" /Fo"%OBJ%\gpu_bound\\" /Fe"%OBJ%\gpu_bound.exe" /link d3d12.lib dxgi.lib dxguid.lib >"%OBJ%\gpu_bound.log" 2>&1
+if errorlevel 1 (
+  findstr /C:"SslmGpuSeqSchemaBoundForG5Bridge" "%OBJ%\gpu_bound.log" >nul && (echo RED gpu_bound_api reason=API_ABSENT& set /a RED+=1) || (type "%OBJ%\gpu_bound.log"& set /a BAD+=1)
+) else (
+  "%OBJ%\gpu_bound.exe" && (echo GREEN gpu_bound_api& set /a GREEN+=1) || (echo RED gpu_bound_api reason=CONTRACT_MISMATCH& set /a RED+=1)
+)
+
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I"%ENG%\include" /I"%ENG%\src" %COMMON% "%ENG%\src\sslm_abi.cpp" "%HERE%t2922_cpu_schema_bound_red.cpp" /Fo"%OBJ%\cpu_bound\\" /Fe"%OBJ%\cpu_bound.exe" >"%OBJ%\cpu_bound.log" 2>&1
+if errorlevel 1 (
+  findstr /C:"sslm_seq_schema_bound" "%OBJ%\cpu_bound.log" >nul && (echo RED cpu_bound_api reason=API_ABSENT& set /a RED+=1) || (type "%OBJ%\cpu_bound.log"& set /a BAD+=1)
+) else (
+  "%OBJ%\cpu_bound.exe" && (echo GREEN cpu_bound_api& set /a GREEN+=1) || (echo RED cpu_bound_api reason=CONTRACT_MISMATCH& set /a RED+=1)
+)
+
+if not "!BAD!"=="0" exit /b 2
+if "!RED!"=="0" (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%run_t2922_query_runtime.ps1"
+  if errorlevel 1 (set /a BAD+=1) else (set /a GREEN+=1)
+)
+echo SUMMARY checks=3 red=!RED! green=!GREEN! infrastructure_failures=!BAD!
+if not "!BAD!"=="0" exit /b 2
+if "!RED!"=="0" exit /b 0
 exit /b 1
-:unexpected
-type "%OBJ%\red.compile.log"
-echo checks=0 failures=1 skips=0 red_reason=UNEXPECTED_COMPILER_FAILURE
-exit /b 2

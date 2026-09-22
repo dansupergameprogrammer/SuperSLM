@@ -1,26 +1,46 @@
 {
-  "plan": "Claude/Plans/te266-gpu-path.md#3-10-8",
-  "source_pin": "e822c70201eb388bac3f2e6acc9cd6ed4c8702c6",
+  "plan": "Claude/Plans/te266-gpu-path.md#3.10.8",
+  "plan_commit": "669d2ce24e",
+  "engine_red_pin": "fa04cf44c6dae4f24950e00d6ef9cd278da07b12",
+  "fixture": {
+    "schemas": ["t2922_accepts_q", "t2922_rejects_q"],
+    "same_reachable_state": "q",
+    "acceptance": {"t2922_accepts_q": 1, "t2922_rejects_q": 0}
+  },
   "cells": [
-    "UNBOUND_APPLICATION_FINAL", "BOUND_MID_WALK", "BOUND_ACCEPTING",
-    "DEAD_END_PREDECESSOR", "SLM5_RESTORE_BOUND", "SLM4_RESTORE_UNBOUND",
-    "RESET_PRESERVES_BINDING", "CPU_ADOPT_PREFIX_PROGRESS",
-    "CPU_ADOPT_PREFIX_PROMPT_ONLY_RESET", "SUBMITTED_BUSY_UNCHANGED_OUT",
-    "MALFORMED_AND_FOREIGN_UNCHANGED_OUT", "DRAIN_THEN_FINALIZE_QUERY",
-    "DISTINCT_SCHEMA_RESTORE_REBIND", "LATE_LIVE_BIND_REJECT",
-    "LATE_SLM5_BIND_REJECT", "FRESH_BIND_ACCEPT", "RESET_BIND_ACCEPT",
-    "GPU_IDLE_RESET_REUSE", "GPU_SUBMITTED_RESET_BUSY",
-    "ADAPTER_SWAP_MIDTOKEN_THEN_RESET_ACCEPT", "NO_DEVICE_WORK",
-    "FOUR_SURFACE_PUBLIC_WORDING", "REAL_MODEL_BUDGET_DECODE",
-    "REAL_MODEL_LATE_BIND"
+    {"id":"gpu_accepting_api","kind":"new_api","oracle":"separate compile/link failure until SslmGpuSeqSchemaAcceptingForG5Bridge exists"},
+    {"id":"gpu_bound_api","kind":"new_api","oracle":"separate compile/link failure until SslmGpuSeqSchemaBoundForG5Bridge exists"},
+    {"id":"cpu_bound_api","kind":"new_api","oracle":"separate compile/link failure until sslm_seq_schema_bound exists"},
+    {"id":"unbound_application_final","kind":"query","oracle":"accepting=0,bound=0"},
+    {"id":"bound_mid_walk","kind":"query","oracle":"membership, not state!=0"},
+    {"id":"bound_accepting","kind":"query","oracle":"membership=1"},
+    {"id":"dead_end_predecessor","kind":"query","oracle":"failed finish preserves pre-dead-end membership"},
+    {"id":"slm5_restore_bound","kind":"persistence","oracle":"bound=1 and membership preserved"},
+    {"id":"slm4_restore_unbound","kind":"persistence","oracle":"accepting=0,bound=0"},
+    {"id":"reset_preserves_binding","kind":"lifecycle","oracle":"bound=1,walk=0,membership from state zero"},
+    {"id":"cpu_adopt_prefix_progress","kind":"composition","oracle":"walk and membership follow progressed prefix"},
+    {"id":"cpu_adopt_prefix_prompt_only","kind":"composition","oracle":"binding retained, stale walk reset to zero"},
+    {"id":"submitted_busy_unchanged_out","kind":"status","oracle":"GPU busy leaves both outputs unchanged"},
+    {"id":"malformed_foreign_unchanged_out","kind":"status","oracle":"documented error leaves outputs unchanged"},
+    {"id":"drain_then_finalize_query","kind":"status","oracle":"Idle query works before and after finish"},
+    {"id":"distinct_schema_restore_rebind","kind":"identity","oracle":"same q reports opposite membership under A and B"},
+    {"id":"gpu_late_live_bind_reject","kind":"existing_behavior","oracle":"generated unbound history rejects bind"},
+    {"id":"gpu_late_slm5_bind_reject","kind":"existing_behavior","oracle":"restored generated unbound history rejects bind"},
+    {"id":"fresh_reset_bind_accept","kind":"control","oracle":"fresh and reset sequences accept bind"},
+    {"id":"cpu_terminal_reset_reuse","kind":"existing_behavior","oracle":"Idle terminal guard refusal resets and reuses"},
+    {"id":"gpu_idle_partial_reset_reuse","kind":"existing_behavior","oracle":"all Idle strict partial layers reset and reuse"},
+    {"id":"gpu_submitted_reset_busy","kind":"control","oracle":"Submitted alone returns busy"},
+    {"id":"no_device_work","kind":"instrumentation","oracle":"both queries leave dispatch,ready,wait counters unchanged; commissioned decode increments"},
+    {"id":"public_surface_wording_and_export","kind":"surface","oracle":"four surfaces plus CPU ABI declaration and derived DLL export population"},
+    {"id":"real_model_budget_decode","kind":"real_model","gate":"SUPERSLM_G5_REAL_MODEL_TESTS","oracle":"budget stop, cpu=0,gpu=0,bound=1"},
+    {"id":"real_model_late_bind","kind":"real_model","gate":"SUPERSLM_G5_REAL_MODEL_TESTS","oracle":"live and SLM5-restored late bind reject"}
   ],
   "mutants": {
-    "a": "unbound accepting writes 1", "b": "unbound bound writes 1",
-    "c": "SLM5 restore reports unbound", "d": "mid-walk uses state != 0",
-    "e": "accepting search always returns 0", "f": "dead-end overwrites walk",
-    "g": "CPU prompt-only adoption leaves stale walk", "h": "GPU membership cache",
-    "i": "GPU rebind uses prior schema index", "j": "contract accepts universal rule",
-    "k": "GPU late-bind context-length guard removed", "l": "GPU Idle reset layer guard restored"
-  },
-  "red_reason_at_e822c70": "RED_API_SURFACE_ABSENT"
+    "a":"unbound accepting writes one","b":"unbound bound writes one",
+    "c":"SLM5 restore reports unbound","d":"membership implemented as state-nonzero",
+    "e":"accepting search always false","f":"dead-end overwrites walk",
+    "g":"CPU prompt-only adoption leaves stale walk","h":"GPU caches membership",
+    "i":"GPU rebind uses prior schema identity","j":"universal acceptance rule",
+    "k":"GPU late-bind context-length guard removed","l":"GPU Idle reset layer guard restored"
+  }
 }

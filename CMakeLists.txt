@@ -484,6 +484,25 @@ if(Python3_Interpreter_FOUND)
 			tests/t2130-g5-red-suite/t2922_schema_query_contract.py
 			-q
 		WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+	# T-2933 / §3.10.8: keep the schema-query/lifecycle red population as its own
+	# named CTest boundary.  This portable contract test verifies the independent
+	# native cells, exact mutation anchors, public-surface oracle, and fail-closed
+	# real-model gate; the native Windows runner remains directly executable.
+	add_test(NAME t2933_schema_query_contract
+		COMMAND ${Python3_EXECUTABLE} -m pytest
+			tests/t2130-g5-red-suite/t2922_schema_query_contract.py -q
+		WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+	if(WIN32)
+		add_test(NAME t2933_schema_query_native_state
+			COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
+				${CMAKE_SOURCE_DIR}/tests/t2130-g5-red-suite/verify_t2922_query_state.ps1)
+		add_test(NAME t2933_schema_lifecycle_native_state
+			COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
+				${CMAKE_SOURCE_DIR}/tests/t2130-g5-red-suite/verify_t2922_lifecycle_state.ps1)
+		add_test(NAME t2933_schema_real_model
+			COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
+				${CMAKE_SOURCE_DIR}/tests/t2130-g5-red-suite/run_t2922_real_model.ps1)
+	endif()
 elseif(SUPERSLM_REQUIRE_CI_CHECK_TOOLS)
 	# T-2177 Finding 2: this branch used to print a message(STATUS) no CI step
 	# reads and configure clean -- the matmul-avx-isolation-guard job's own
