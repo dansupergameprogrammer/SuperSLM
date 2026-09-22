@@ -111,16 +111,15 @@ static void TestDim5_C5_AdapterSwapMidTokenRejected(sslm_model model, sslm_seq s
 	CHECK(sslm_seq_set_adapter(seq, adapter) == SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED);
 }
 
-// --- Cell 6 (SSLM_SEQ_RESET_MIDTOKEN_REJECTED -- design Sec17's lifecycle addendum, this
-// design's own Sec6): sslm_seq_reset against a non-zero residual marker rejects, symmetric with
-// cell 5's adapter-swap rejection under the identical mid-token precondition. ---
-static void TestDim5_C6_SeqResetMidTokenRejected(sslm_model model, sslm_seq seq) {
+// --- Cell 6 (T-2934 reconciliation): reset is deliberately asymmetric with adapter swap.
+// A genuine mid-token sequence is accepted and restarted; ordinal 12 remains reserved only. ---
+static void TestDim5_C6_SeqResetMidTokenRestarts(sslm_model model, sslm_seq seq) {
 	int32_t setup_prompt[1] = {0};
 	int32_t setup_consumed = 0;
 	CHECK(sslm_prefill(model, seq, setup_prompt, 1, 8, SSLM_SPAN_PROMPT, nullptr,
 	                    &setup_consumed) == SSLM_OK);
 	CHECK(EnterMidToken(model, seq));
-	CHECK(sslm_seq_reset(seq) == SSLM_SEQ_RESET_MIDTOKEN_REJECTED);
+	CHECK(sslm_seq_reset(seq) == SSLM_OK);
 }
 
 // --- Cell 7 (SSLM_PREFIX_FROZEN_REJECTED -- design Sec7.2/Sec6, Mendeleev audit §8.3 folded):
@@ -683,7 +682,7 @@ int main(int argc, char** argv) {
 			if (seq_c5) CHECK(sslm_seq_release(seq_c5) == SSLM_OK);
 
 			if (seq_c6) {
-				TestDim5_C6_SeqResetMidTokenRejected(model, seq_c6);
+				TestDim5_C6_SeqResetMidTokenRestarts(model, seq_c6);
 				CHECK(sslm_seq_release(seq_c6) == SSLM_OK);
 			}
 			if (seq_c10) {

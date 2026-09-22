@@ -88,8 +88,8 @@ struct SinglePool {
 // completed prefill is always the free ready_for_logits step -- no RunLayerLoop work, so a real
 // token completes in one call regardless of layer_budget. A SECOND, bounded call is what
 // genuinely starts a new token and leaves it mid-token." Every cell in this suite that needs a
-// mid-token precondition (SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED, SSLM_SEQ_RESET_MIDTOKEN_REJECTED,
-// a mid-token save/restore) calls this rather than re-deriving the two-call shape per file.
+// mid-token precondition (adapter-swap rejection, symmetric-reset acceptance, or a mid-token
+// save/restore) calls this rather than re-deriving the two-call shape per file.
 // Returns true iff the sequence is confirmed pending (out_token < 0) after the second call.
 inline bool EnterMidToken(sslm_model model, sslm_seq seq) {
 	sslm_decode_params params{};
