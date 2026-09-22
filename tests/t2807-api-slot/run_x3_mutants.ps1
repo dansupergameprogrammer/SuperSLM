@@ -1,10 +1,11 @@
 # T-2814, T-2825 (Curie) -- X3, the export slot's guard-vitality cell (plan Sec3.7 item 5 and item 6
-# dimension 11; TE-266, D-SLM7313, widened to the whole C ABI by the T-2823 fold).
+# dimension 11; TE-266, D-SLM7313, widened to the whole C ABI by the T-2823 fold and the
+# v1.6.0 schema-bound query).
 #
 # SINGLE-DROP MUTANTS. The runner enumerates every SUPERSLM_API slot in <Engine>\include\superslm\*.h and
 # *.inc -- the C++ declarations and the C ABI's verb declarations (api.h's own definition, preprocessor lines
 # and comment lines are not slots). The enumerated count must equal X2's expected set (the C++ entries of
-# consumed_symbols.txt plus the header's C verbs, 61 at v1.5.0); a mismatch fails X3 before any mutant runs,
+# consumed_symbols.txt plus the header's C verbs, 62 at v1.6.0); a mismatch fails X3 before any mutant runs,
 # so a slot the enumeration cannot see is reported rather than silently never dropped. Mutant k copies the
 # headers into
 # <Out>\mut_<k>\include\superslm with slot k's `SUPERSLM_API ` token removed, and runs build_x2.ps1 with
@@ -24,7 +25,7 @@
 #   -Indices     run only these slots. Without it EVERY slot runs (61 mutants, about 6 minutes on the dev box),
 #                whether or not -Harness is given.
 #   -Harness     also run the harness mutant. -HarnessOnly runs the harness mutant and no single-drop mutant.
-# The acceptance invocation is `run_x3_mutants.ps1 -Harness` with no -Indices: 61 single-drop mutants, the
+# The acceptance invocation is `run_x3_mutants.ps1 -Harness` with no -Indices: 62 single-drop mutants, the
 # harness mutant, and the reconciliation (X3 RECONCILE: EQUAL). A run narrowed by -Indices or -HarnessOnly
 # prints X3 RECONCILE: PARTIAL RUN and is never an acceptance run.
 # Exit code: 0 when every mutant run was killed as specified and the reconciliation holds, 1 otherwise.
