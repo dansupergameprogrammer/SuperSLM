@@ -449,6 +449,33 @@ if(Python3_Interpreter_FOUND)
 	add_test(NAME check_matmul_avx_isolation_population_vitality
 		COMMAND ${Python3_EXECUTABLE} -m pytest
 			${CMAKE_SOURCE_DIR}/tests/ci/test_matmul_avx_isolation_population.py -q)
+	# T-2919 (TE-372 S3): "Nothing in ctest or CI runs any compiler test" -- the G5-1 schema
+	# compiler's pytest suite (tests/t2130-g5-red-suite/) had no ctest entry and no CI
+	# workflow step at all. Registered here, unconditionally like geometry_site_census
+	# above (pure Python, no build/GPU dependency): every file except
+	# g5_1_schema_compiler_fuzz_red.py, which is a deliberately BUILD-TIME/LOCAL-only fuzz
+	# suite (SETTLED, D-SLM3442/D-SLM3444 -- its own module docstring), not per-commit CI.
+	# Every real-model/real-checkpoint cell inside these files is gated on
+	# SUPERSLM_G5_REAL_MODEL_TESTS (tests/t2130-g5-red-suite/t2913_common.py) and skips
+	# cleanly when it is unset, which it is here and in every CI job below.
+	# WORKING_DIRECTORY is CMAKE_SOURCE_DIR, not the default CMAKE_CURRENT_BINARY_DIR: these
+	# test files do `from tools.sslm_convert_schema import ...`, a dotted import over `tools/`
+	# as an implicit namespace package (no `tools/__init__.py`), which `python -m pytest` only
+	# resolves when the process's own working directory is the repo root (that is what puts
+	# the repo root at sys.path[0] -- `-m`'s own documented behavior, distinct from the
+	# `sys.path.insert` each file does for its own directory and for `tools/` itself).
+	add_test(NAME t2919_g5_schema_compiler_tests
+		COMMAND ${Python3_EXECUTABLE} -m pytest
+			tests/t2130-g5-red-suite/t2899_string_leaf_red.py
+			tests/t2130-g5-red-suite/t2908_byte_level_red.py
+			tests/t2130-g5-red-suite/t2910_boundary_red.py
+			tests/t2130-g5-red-suite/t2912_value_level_red.py
+			tests/t2130-g5-red-suite/t2916_c1_special_exclusion_red.py
+			tests/t2130-g5-red-suite/t2916_s1_keyword_allowlist_red.py
+			tests/t2130-g5-red-suite/t2916_s2_str_vocab_refused_red.py
+			tests/t2130-g5-red-suite/t2919_te372_s2_nullable_enum_red.py
+			-q
+		WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 elseif(SUPERSLM_REQUIRE_CI_CHECK_TOOLS)
 	# T-2177 Finding 2: this branch used to print a message(STATUS) no CI step
 	# reads and configure clean -- the matmul-avx-isolation-guard job's own

@@ -1,0 +1,8 @@
+[
+  {"value": ":"},
+  {"value": "{"},
+  {"value": "["},
+  {"value": "111111111111"},
+  {"value": " \t\r\n,:{}[]"},
+  {"value": "answer", "special_selected": true}
+]

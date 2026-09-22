@@ -1052,6 +1052,26 @@ jobs:
       # --no-tests=error turns an empty selection into a hard failure (exit 8).
       - run: ctest --test-dir build --output-on-failure --no-tests=error -R '^check_matmul_avx_isolation'
 
+  # T-2919 (TE-372 S3): "Nothing in ctest or CI runs any compiler test." The G5-1 schema
+  # compiler's pytest suite (tests/t2130-g5-red-suite/) had a `ctest` entry
+  # (t2919_g5_schema_compiler_tests, CMakeLists.txt) added in the same fold, but no CI
+  # workflow job ever ran `ctest` against it -- mirrors matmul-avx-isolation-guard above (a
+  # bare `cmake -B build` with no build step, since neither ctest entry has a binary
+  # dependency). Every real-model/real-checkpoint cell inside the suite is gated on
+  # SUPERSLM_G5_REAL_MODEL_TESTS (tests/t2130-g5-red-suite/t2913_common.py) and skips
+  # cleanly here, where it is unset; a release-verification pass or a local box with the
+  # checkpoint cached sets it to get full coverage.
+  g5-schema-compiler-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      - run: pip install pytest
+      - run: cmake -B build
+      - run: ctest --test-dir build --output-on-failure --no-tests=error -R '^t2919_g5_schema_compiler_tests$'
+
   # T-2177 Finding 5: the branch-coverage job's own comment (above) claimed
   # tools/ci/branch_coverage_floors.json was not yet committed and that job
   # had never started -- both false, and false in the repository's own

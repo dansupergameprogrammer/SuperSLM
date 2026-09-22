@@ -7,21 +7,26 @@ special-token exclusion) and T-2912 (value-level close, superseding T-2911).
 STATUS (T-2915: the compiler port landed). This branch's own `tools/sslm_convert_schema.py` now
 IS T-2908/T-2910/T-2912's shipped byte-level, value-level design (`compile_schema_to_mask_pages`
 takes `Sequence[bytes]`; `_token_targets` carries the `content_states` open/close boundary
-discipline). Every cell below is authored against a BYTE-piece vocabulary (`list[bytes]`), passed
-as raw bytes to both the branch (oracle 1) and the T-2912 reference chain (oracle 3) -- the two
-now run the identical algorithm, which is what this file's own regression-control groups (below)
-exist to confirm stays true.
+discipline). Every cell below is authored against a BYTE-piece vocabulary (`list[bytes]`).
 
-ORACLE. Every acceptance/rejection claim is checked THREE ways:
+ORACLE (T-2919, TE-372 S3: reduced from three to two). Every acceptance/rejection claim is
+checked TWO ways:
   (1) `_compile_red(...).accepts(...)` -- this branch's own in-tree compiler, over the raw
       byte-piece vocabulary.
   (2) Python's own `json.loads` over the bare JSON string literal -- an independent, mature
-      RFC 8259 implementation sharing no line with either compiler. This is the definition every
+      RFC 8259 implementation sharing no line with the compiler. This is the definition every
       cell is grounded in.
-  (3) `_compile_green(...).accepts(...)` -- the T-2912 reference compiler
-      (`Claude/Vitruvius/t2912-probe/`), over the same content as real bytes.
-Every positive cell asserts all three oracles admit the string; every negative cell asserts all
-three reject it.
+
+Before T-2919, a third oracle compared the branch against the T-2912 reference compiler
+(`reference/t2912-probe/`). T-2915 had already ported that exact design into
+`tools/sslm_convert_schema.py`, so that comparison was, by this file's own prior docstring,
+checking that "the two now run the identical algorithm" -- a claim about the branch matching a
+copy of its own design, not a claim checked against independent ground truth
+(`reference/PROVENANCE.md` explains why in general terms). The reference chain remains in this
+suite's sibling files (`t2908_byte_level_red.py`, `t2910_boundary_red.py`,
+`t2912_value_level_red.py`) as a cross-implementation consistency check and as a source of
+MUTANTS (fixed, deliberately superseded designs proving the suite can still discriminate a
+known-wrong shape) -- never, in this file, as the sole oracle for a correctness claim.
 
 REGRESSION CONTROLS, NOT RED. The escape/hex/control-byte/rejection groups compile under the
 in-tree module both before and after T-2915's port (the string leaf's escape/hex/rejection
@@ -29,10 +34,7 @@ mechanism is unchanged by the byte-level/value-level redesign); they are true re
 controls, held green and required to stay green. The literal-to-literal crossing cell is the
 same: a must-accept control the boundary-discipline fix does not touch (Sec3.9.3: "T-2910 does
 not touch this"). T-2908/T-2910/T-2912's own capabilities (the byte alphabet, the open/close
-asymmetry, the value-level closure) are exercised by the sibling files `t2908_byte_level_red.py`,
-`t2910_boundary_red.py` and `t2912_value_level_red.py`, whose own branch-vs-reference
-characterizations of the pre-port defect are, correspondingly, now branch-vs-reference
-confirmations that the port closed each one (named per file, at each site T-2915 touched).
+asymmetry, the value-level closure) are exercised by the sibling files named above.
 
 MUTATION PROOF (StandardsDocument.md Sec5.4 / Curie's "pin the documented claim"). Each fixture's
 stated verdict is reproduced by `json.loads`, an oracle this suite neither authors nor tunes, and
@@ -48,8 +50,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import t2913_common as common
 from tools.sslm_convert_schema import SchemaCompileError, compile_schema_to_mask_pages
+import t2913_common as common  # noqa: F401 -- imported for module-load side effects/consistency with siblings
 
 _SHORT_ESCAPES = ['"', "\\", "/", "b", "f", "n", "r", "t"]
 _HEX_DIGITS = list("0123456789abcdefABCDEF")
@@ -62,8 +64,8 @@ def _wrap(inner: bytes) -> bytes:
 
 
 def _bare_literal_is_valid_json_string(inner: bytes) -> bool:
-    """Independent oracle 2: does `"` + inner + `"` parse as a JSON string, strictly (RFC
-    8259)? Never touches either compiler."""
+    """Independent oracle: does `"` + inner + `"` parse as a JSON string, strictly (RFC 8259)?
+    Never touches the compiler."""
     try:
         decoded = json.loads(b'"' + inner + b'"')
     except json.JSONDecodeError:
@@ -72,28 +74,15 @@ def _bare_literal_is_valid_json_string(inner: bytes) -> bool:
 
 
 def _compile_red(pieces: list[bytes], schema=_SCHEMA):
-    """Oracle 1: this branch's own in-tree compiler, over the raw byte pieces (T-2915: ported
-    to T-2908/T-2910/T-2912's byte-level/value-level design -- the branch no longer decodes a
-    vocabulary piece to `str` before compiling; it is byte-level throughout, exactly like
-    oracle 3 below). Kept as its own named oracle, rather than folded into `_compile_green`,
-    because the two remain independently callable checks on the SAME production module the
-    branch ships versus the records-tree reference chain. `special_ids=frozenset()` (T-2917):
-    no special ids appear in these small synthetic fixtures, so there is nothing to exclude."""
+    """The branch's own in-tree compiler, over the raw byte pieces. `special_ids=frozenset()`
+    (T-2917): no special ids appear in these small synthetic fixtures, so there is nothing to
+    exclude."""
     return compile_schema_to_mask_pages(schema, list(pieces), special_ids=frozenset())
-
-
-def _compile_green(pieces: list[bytes], schema=_SCHEMA):
-    """Oracle 3: the T-2912 reference compiler, over the raw byte pieces -- the alphabet T-2908
-    ships. No special ids appear in these small synthetic fixtures, so `zero_special_ids` is not
-    needed here."""
-    ref = common.reference_t2912()
-    return ref.compile_schema_to_mask_pages(schema, list(pieces))
 
 
 class G5_1_T2853_Escapes(unittest.TestCase):
     """Sec3.9.3 group 1: each of the eight short escapes accepted from `S_e` back to content; a
-    ninth (any byte outside that set) rejected from `S_e`. Byte-level revision (T-2913): pieces
-    are `bytes`, decoded for RED, raw for GREEN."""
+    ninth (any byte outside that set) rejected from `S_e`."""
 
     def test_each_short_escape_is_admitted(self) -> None:
         # Content is prefixed with a plain 'a' so the decoded value always reaches at least one
@@ -120,11 +109,6 @@ class G5_1_T2853_Escapes(unittest.TestCase):
                     mp_red.accepts(_wrap(content)),
                     f"escape \\{esc}: branch DFA does not admit a JSON-valid string",
                 )
-                mp_green = _compile_green(vocab)
-                self.assertTrue(
-                    mp_green.accepts(_wrap(content)),
-                    f"escape \\{esc}: T-2912 reference DFA does not admit a JSON-valid string",
-                )
 
     def test_invalid_escape_char_has_no_admitted_transition(self) -> None:
         bad = b"q"  # not one of the eight short escapes, not the '\uXXXX' introducer
@@ -138,11 +122,6 @@ class G5_1_T2853_Escapes(unittest.TestCase):
         self.assertFalse(
             mp_red.accepts(_wrap(content)),
             "\\q: branch DFA wrongly admits an escape outside the eight short escapes",
-        )
-        mp_green = _compile_green(vocab)
-        self.assertFalse(
-            mp_green.accepts(_wrap(content)),
-            "\\q: T-2912 reference DFA wrongly admits an escape outside the eight short escapes",
         )
 
 
@@ -161,11 +140,6 @@ class G5_1_T2853_UnicodeEscape(unittest.TestCase):
             mp_red.accepts(_wrap(content)),
             "\\u4Fa0 followed by 'z': branch DFA does not admit it or does not resume content",
         )
-        mp_green = _compile_green(vocab)
-        self.assertTrue(
-            mp_green.accepts(_wrap(content)),
-            "\\u4Fa0 followed by 'z': T-2912 reference DFA does not admit it",
-        )
 
     def test_non_hex_character_rejected_at_each_of_the_four_positions(self) -> None:
         vocab = ([b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"\\", b"u", b"g"]
@@ -183,11 +157,6 @@ class G5_1_T2853_UnicodeEscape(unittest.TestCase):
                 self.assertFalse(
                     mp_red.accepts(_wrap(content)),
                     f"non-hex byte at \\uXXXX position {position}: branch DFA wrongly admits it",
-                )
-                mp_green = _compile_green(vocab)
-                self.assertFalse(
-                    mp_green.accepts(_wrap(content)),
-                    f"non-hex byte at \\uXXXX position {position}: reference DFA wrongly admits it",
                 )
 
 
@@ -208,22 +177,11 @@ class G5_1_T2853_MultiCharacterCrossing(unittest.TestCase):
             'the multi-character token \'lo"\' is not admitted on the branch, or the walk does '
             "not land past the string on the object's own closing-brace continuation",
         )
-        mp_green = _compile_green(vocab)
-        self.assertTrue(
-            mp_green.accepts(full),
-            'the multi-character token \'lo"\' is not admitted by the T-2912 reference (close-'
-            "side crossings must remain admitted)",
-        )
         vocab_no_cross = [b"{", b"}", b'"Prompt_Result":', b'Prompt_Result":', b'"', b"l", b"o"]
         self.assertTrue(
             _compile_red(vocab_no_cross).accepts(full),
             "without the crossing token, the character-by-character path is not admitted on the "
-            "branch -- the two constructions should agree",
-        )
-        self.assertTrue(
-            _compile_green(vocab_no_cross).accepts(full),
-            "without the crossing token, the character-by-character path is not admitted by the "
-            "reference -- the two constructions should agree",
+            "branch",
         )
 
 
@@ -259,12 +217,6 @@ class G5_1_T2910_LiteralToLiteralCrossing(unittest.TestCase):
             mp_red.accepts(full),
             "a literal-to-literal crossing token (key-close-quote + colon) regressed on the branch",
         )
-        mp_green = _compile_green(vocab)
-        self.assertTrue(
-            mp_green.accepts(full),
-            "a literal-to-literal crossing token regressed under the T-2912 reference -- the "
-            "boundary discipline must never restrict a crossing with no content endpoint",
-        )
 
 
 class G5_1_T2853_RawControlByteDeadEnd(unittest.TestCase):
@@ -285,11 +237,6 @@ class G5_1_T2853_RawControlByteDeadEnd(unittest.TestCase):
                     mp_red.accepts(_wrap(b"a" + raw)),
                     f"a raw, unescaped 0x{code:02x} control byte is wrongly admitted on the branch",
                 )
-                mp_green = _compile_green(vocab)
-                self.assertFalse(
-                    mp_green.accepts(_wrap(b"a" + raw)),
-                    f"a raw, unescaped 0x{code:02x} control byte is wrongly admitted by the reference",
-                )
 
 
 class G5_1_T2853_RejectionGroup(unittest.TestCase):
@@ -308,14 +255,10 @@ class G5_1_T2853_RejectionGroup(unittest.TestCase):
     def test_number_type_still_rejected(self) -> None:
         with self.assertRaises(SchemaCompileError):
             _compile_red([b"{", b"}", b'"f":', b"0"], schema=self._schema_with({"type": "number"}))
-        with self.assertRaises(common.reference_t2912().SchemaCompileError):
-            _compile_green([b"{", b"}", b'"f":', b"0"], schema=self._schema_with({"type": "number"}))
 
     def test_array_type_still_rejected(self) -> None:
         with self.assertRaises(SchemaCompileError):
             _compile_red([b"{", b"}", b'"f":', b"[", b"]"], schema=self._schema_with({"type": "array"}))
-        with self.assertRaises(common.reference_t2912().SchemaCompileError):
-            _compile_green([b"{", b"}", b'"f":', b"[", b"]"], schema=self._schema_with({"type": "array"}))
 
     def test_maxlength_on_string_field_rejected_naming_the_keyword(self) -> None:
         schema = self._schema_with({"type": "string", "maxLength": 5})
@@ -323,9 +266,6 @@ class G5_1_T2853_RejectionGroup(unittest.TestCase):
         with self.assertRaises(SchemaCompileError) as ctx:
             _compile_red(vocab, schema=schema)
         self.assertIn("maxLength", str(ctx.exception))
-        with self.assertRaises(common.reference_t2912().SchemaCompileError) as ctx_green:
-            _compile_green(vocab, schema=schema)
-        self.assertIn("maxLength", str(ctx_green.exception))
 
 
 class MutationProofBothOraclesAgreeOnEveryFixture(unittest.TestCase):

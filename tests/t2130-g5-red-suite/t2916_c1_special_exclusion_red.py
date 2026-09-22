@@ -73,6 +73,7 @@ class T2916_C1_ShippedProducerAdmitsZeroSpecials(unittest.TestCase):
         which is exactly `test_compiling_with_special_ids_supplied_succeeds_and_admits_zero`
         below's own positive control -- kept here too as claim 1's own outcome check, over the
         shipped producer's own real vocabulary rather than a hand-zeroed one."""
+        common._require_real_model(common.QWEN25_0P5B_CHECKPOINT)
         vocab = FX._real_vocab(str(common.QWEN25_0P5B_CHECKPOINT), common.real_vocab_size())
         special_ids = common.real_special_ids()
         self.assertEqual(len(special_ids), 22, "the real tokenizer's own special-id count moved")
@@ -96,6 +97,7 @@ class T2916_C1_CompilerRefusesAnUnzeroedVocabulary(unittest.TestCase):
     structural check would still pass claim 1 and fail this one."""
 
     def test_compiling_an_unzeroed_real_vocabulary_is_refused(self) -> None:
+        common._require_real_model(common.QWEN25_0P5B_CHECKPOINT)
         vocab = FX._real_vocab(str(common.QWEN25_0P5B_CHECKPOINT), common.real_vocab_size())
         with self.assertRaises(TypeError) as ctx:
             compile_schema_to_mask_pages(_SCHEMA, vocab)  # no special_ids supplied
@@ -110,6 +112,7 @@ class T2916_C1_CompilerRefusesAnUnzeroedVocabulary(unittest.TestCase):
         the SAME call succeed, and it must then admit zero specials (claim 1, restated through
         the pinned contract's own calling convention rather than a caller doing the zeroing by
         hand first)."""
+        common._require_real_model(common.QWEN25_0P5B_CHECKPOINT)
         vocab = FX._real_vocab(str(common.QWEN25_0P5B_CHECKPOINT), common.real_vocab_size())
         special_ids = common.real_special_ids()
         mp = compile_schema_to_mask_pages(_SCHEMA, vocab, special_ids=special_ids)
@@ -124,6 +127,7 @@ class T2916_C1_MutationProof(unittest.TestCase):
 
     def test_frozen_0062c99_reproduces_22_of_22_admitted(self) -> None:
         """Sanity: the named 'wrong version' actually IS wrong, by execution -- not asserted."""
+        common._require_real_model(common.QWEN25_0P5B_CHECKPOINT)
         sc = common.frozen_module(_BAD_COMMIT, _SC_PATH)
         fx = common.frozen_module(_BAD_COMMIT, _FX_PATH)
         vocab = fx._real_vocab(str(common.QWEN25_0P5B_CHECKPOINT), common.real_vocab_size())
@@ -153,6 +157,7 @@ class T2916_C1_MutationProof(unittest.TestCase):
                 "this mutant to discriminate against. Re-run after T-2917 lands."
             )
 
+        common._require_real_model(common.QWEN25_0P5B_CHECKPOINT)
         vocab_shipped = FX._real_vocab(str(common.QWEN25_0P5B_CHECKPOINT), common.real_vocab_size())
         special_ids = common.real_special_ids()
 

@@ -12,18 +12,26 @@ admitting specials, relaxing opening strictness) are checked against the referen
 plan's own Sec3.9.3 -- unaffected by which module "branch" resolves to, since a mutant
 characterizes the DESIGN's own defect class, not a live divergence from the branch.
 
-GREEN oracle: the T-2912 reference compiler (`Claude/Vitruvius/t2912-probe/
-sslm_convert_schema_value_level.py`), loaded via `t2913_common.reference_t2912()`.
+GREEN oracle: the T-2912 reference compiler, vendored in-repo (`reference/t2912-probe/
+sslm_convert_schema_value_level.py`, `reference/PROVENANCE.md`), loaded via
+`t2913_common.reference_t2912()`.
 
-V1 and V5 run the REAL A-EX artifact through the real, unmodified TE-366 C++ harness
-(`D:/_te368/probe/te368_schema_run.exe`, the CPU decode path both R-T2853a/R-T2853b already
-adopt) -- genuine live decode, not a proxy. V5 additionally reuses T-2912's own pre-registered,
-hashed heldout prompts and its commissioned `T2912-answer-value-oracle` UNALTERED (the brief's
-hard rule). Both cells build the branch's own artifact locally (`_build_red_artifact`, now the
-SAME production compiler and vocabulary producer the reference chain's own construction uses)
-and verify the pinned GREEN artifact's own SHA-256 before using it, so a drifted or missing
-artifact fails loudly rather than silently; both are now expected to agree, which V1/V5 confirm
-by execution rather than by assuming the port is complete.
+V1 and V5 run the REAL A-EX artifact through the real TE-366/TE-368 C++ harness (T-2919, TE-372
+S3: vendored in-repo as `reference/te368-probe/te366_schema_run.cpp`, built via
+`reference/te368-probe/build_te368_harness.bat` against an explicitly named engine install --
+previously an uncommitted local `.exe`, unbuildable from a fresh clone; the CPU decode path both
+R-T2853a/R-T2853b already adopt) -- genuine live decode, not a proxy. V5 additionally reuses
+T-2912's own pre-registered, hashed heldout prompts and its commissioned
+`T2912-answer-value-oracle` UNALTERED (the brief's hard rule), both vendored byte-identical and
+hash-pinned (`reference/PROVENANCE.md`). Both cells build the branch's own artifact locally
+(`_build_red_artifact`, now the SAME production compiler and vocabulary producer the reference
+chain's own construction uses) and verify the pinned GREEN artifact's own SHA-256 before using
+it, so a drifted or missing artifact fails loudly rather than silently; both are now expected to
+agree, which V1/V5 confirm by execution rather than by assuming the port is complete.
+
+Every real-model/real-harness cell in this file is gated on `SUPERSLM_G5_REAL_MODEL_TESTS`
+(`t2913_common._require_real_model`): unset, skipped; set but the artifact is missing, failed
+loudly (T-2919, TE-372 S3).
 
 Filtered/capped reads only in every helper below -- no raw token lists, byte/hex dumps, or bulk
 model-output prints; only counts, short verdicts, and small named examples.
@@ -46,18 +54,36 @@ import t2913_common as common
 
 _SCHEMA = common.PROMPT_RESULT_SCHEMA
 _PREFIX = b'{"Prompt_Result":'
-_ENGINE = Path("D:/SuperSLM/.worktrees/t2809-stage1-build")
-_HARNESS = Path("D:/_te368/probe/te368_schema_run.exe")
+# T-2919 (TE-372 S3): the harness is built on demand from the vendored source
+# (`reference/te368-probe/te366_schema_run.cpp`, `build_te368_harness.bat`) into this suite's
+# own scratch directory, never hand-copied from another worktree the way `_ENGINE` used to
+# point at `D:/SuperSLM/.worktrees/t2809-stage1-build` -- a DIFFERENT worktree a code reviewer
+# and a mutant re-run are concurrently reading (TE-372's own finding: "After merge, V1/V5 would
+# build their artifact from whatever that worktree holds, not from the checkout under test").
+# `_build_red_artifact` below now imports this checkout's own `tools/` (already on `sys.path`
+# via `t2913_common`'s own import), never another worktree's.
+_SCRATCH = Path("D:/_t2913/probe")
+_HARNESS = _SCRATCH / "te368_harness" / "te368_schema_run.exe"
 _GREEN_ARTIFACT = Path("D:/_t2912/probe/aex-prompt-result-t2912.sslm")
 _GREEN_ARTIFACT_SHA256 = "6a41f87d3a48c91751b41fe716c4f8289b7ce97761850c3f1f2c53d01201205c"
-_CANONICAL_CONTROL_IDS = common._VITRUVIUS / "t2912-probe" / "t2912_canonical_control.ids"
-_SCRATCH = Path("D:/_t2913/probe")
+_CANONICAL_CONTROL_IDS = common.T2912_CANONICAL_CONTROL_PATH
 
 
 def _require_engine_artifacts() -> None:
-    for path in (_HARNESS, _GREEN_ARTIFACT, common.QWEN25_0P5B_CHECKPOINT, common.A_EX_ARTIFACT):
-        if not path.exists():
-            raise FileNotFoundError(f"real-model cell needs {path}, which is missing on this box")
+    """Gates every real-model/real-harness path this file's V1/V5 cells need on
+    `SUPERSLM_G5_REAL_MODEL_TESTS` (T-2919, TE-372 S3): unset, skipped; set but one is missing,
+    failed loudly, naming the harness's own vendored build script when that is the missing
+    piece."""
+    for path in (common.QWEN25_0P5B_CHECKPOINT, common.A_EX_ARTIFACT, _GREEN_ARTIFACT):
+        common._require_real_model(path)
+    # The three checks above already skipped (env var unset) or passed (env var set) -- reaching
+    # here means SUPERSLM_G5_REAL_MODEL_TESTS is set, so a missing harness is a setup gap, named
+    # with its own vendored build script rather than a generic "missing" message.
+    if not _HARNESS.exists():
+        raise FileNotFoundError(
+            f"{_HARNESS} is missing -- build it first: "
+            f"{common.TE368_HARNESS_BUILD_SCRIPT} <engine-install-dir> {_HARNESS.parent}"
+        )
     actual = hashlib.sha256(_GREEN_ARTIFACT.read_bytes()).hexdigest()
     if actual != _GREEN_ARTIFACT_SHA256:
         raise AssertionError(
@@ -328,7 +354,9 @@ def _build_red_artifact(out_path: Path) -> None:
     import struct
     import time
 
-    sys.path.insert(0, str(_ENGINE / "tools"))
+    # T-2919 (TE-372 S3): `tools/` is THIS checkout's own (already on `sys.path` via
+    # `t2913_common`'s import-time insert) -- no longer another worktree's, per this file's
+    # own module-level comment on the removed `_ENGINE` constant.
     import sslm_format as fmt
     from t2132_build_g5_fixture import _serialize_scm1, _real_vocab
     from sslm_convert_schema import compile_schema_to_mask_pages
@@ -369,8 +397,7 @@ class T2912_V1_TE368Prompt01(unittest.TestCase):
         reference exactly -- confirmed by execution, not assumed from the port's own static
         agreement with the reference (V2-V4, above)."""
         _require_engine_artifacts()
-        te368_prompts_path = common.RECORDS_ROOT / "Claude" / "Loki" / "te368-probe" / "te368_prompts.json"
-        prompts = json.loads(te368_prompts_path.read_bytes().decode("utf-8-sig"))
+        prompts = json.loads(common.TE368_PROMPTS_PATH.read_bytes().decode("utf-8-sig"))
         prompt_text = prompts[1]
         self.assertEqual(prompt_text, "Return the player's inventory as a JSON object.")
 
@@ -522,25 +549,20 @@ class T2912_V5_HeldoutCensus(unittest.TestCase):
 # ================================================================================================
 
 
-def _pinned_json(relative_path: str) -> object:
-    """Read a records-tree JSON file AS IT STOOD at this plan's own pinned commit
-    (`2fe6a7299b`, the brief's own "at records commit" reference) rather than the live working
-    tree, which a concurrent session is actively editing (confirmed: this exact records worktree
-    shows uncommitted edits to `t2912_oracle_must_reject.json` from an in-flight T-2914 fold
-    responding to a later adversary strike, TE-369, on this same design -- out of this ticket's
-    own scope, per the brief's pinned commit and its "stay out of concurrent work" instruction)."""
-    result = subprocess.run(
-        ["git", "show", f"2fe6a7299b:Claude/Vitruvius/t2912-probe/{relative_path}"],
-        cwd=common.RECORDS_ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
-    )
-    return json.loads(result.stdout)
-
-
 class T2912_AnswerOracleReconfirmation(unittest.TestCase):
     def test_must_accept_and_must_reject_fixtures(self) -> None:
+        """T-2919 (TE-372 S3): both fixtures are now vendored in-repo (`reference/PROVENANCE.md`)
+        rather than read live via `git show` against the private records worktree, which a
+        concurrent session was actively editing at authoring time (the records worktree showed
+        uncommitted edits to `t2912_oracle_must_reject.json` from an in-flight T-2914 fold
+        responding to a later adversary strike, TE-369, on this same design -- out of this
+        ticket's own scope). The vendored `must_reject.json` is pinned at commit `2fe6a7299b`
+        (5 rows), matching what this cell read before T-2919 -- the "stay out of concurrent
+        work" boundary is preserved by vendoring that exact snapshot, not by reaching for a live
+        commit any more."""
         oracle = common.reference_oracle()
-        must_accept = _pinned_json("t2912_oracle_must_accept.json")
-        must_reject = _pinned_json("t2912_oracle_must_reject.json")
+        must_accept = json.loads(common.oracle_must_accept_path().read_bytes())
+        must_reject = json.loads(common.oracle_must_reject_path().read_bytes())
         for row in must_accept:
             self.assertTrue(
                 oracle.is_answer(row["value"], bool(row.get("special_selected", False))),

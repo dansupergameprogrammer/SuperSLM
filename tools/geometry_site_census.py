@@ -227,6 +227,27 @@ _SOURCE_GLOBS = (".cpp", ".h", ".hlsl", ".py")
 # are, below.
 _SKIP_DIR_NAMES = {".git", "out", "build", "__pycache__", "node_modules", ".worktrees"}
 
+# T-2919 (TE-372 M4): every GPU/CPU mutant-suite `.bat` under `tests/` builds into a scratch
+# directory named `obj*`/`bin_*` (cl.exe's own object/binary output convention -- `build_red_
+# suite*.bat`, `run_mutants_*.bat`, `build_t2916_s3_bounds_tamper.bat`), and each suite's own
+# `.gitignore` excludes it from source control by that same prefix. Nothing kept this census's
+# own tree walk in sync with a NEW scratch directory a future mutant suite invents, so this
+# recurred as a census failure three times by hand (T-2905, T-2915, T-2917) before this file was
+# ever touched -- each time "fixed" by deleting the directory, a rule held by memory (SS4). A
+# generated mutant `.cpp` a `make_mut_*.py` script writes into one of these directories is a
+# byte-for-byte copy of a marked production file with the SAME `SSLM-GEOMETRY-SITE: GS-NN`
+# markers, which is what actually breaks the census (a duplicate marker count) if the walk ever
+# descends into one. Skipping by NAME PREFIX, not by enumerating each suite's own scratch
+# directory, closes the class structurally: no tracked source directory in this repository is
+# named `obj*` or `bin_*` (confirmed repo-wide via `git ls-files`), so the prefix can never
+# exclude production source -- only a `cl.exe`/`link.exe` output directory a test's own build
+# script created, whatever it ends up named.
+_SKIP_DIR_PREFIXES = ("obj", "bin_")
+
+
+def _skip_dir(name: str) -> bool:
+    return name in _SKIP_DIR_NAMES or name.startswith(_SKIP_DIR_PREFIXES)
+
 # T-2432's own narrowing, stated rather than silently applied: the pattern-coverage half
 # (part 2) sweeps PRODUCTION source only -- src/, include/, and the shipped conversion
 # pipeline's own three Python modules (T-2441 Minor 4 fix, D-SLM5449: this comment said
@@ -365,7 +386,7 @@ def _part2_excise_excluded_text(rel_path: str, line: str, matched=None) -> str:
 
 def _iter_source_files(repo_root: str, *, production_only: bool = False):
     for dirpath, dirnames, filenames in os.walk(repo_root):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIR_NAMES]
+        dirnames[:] = [d for d in dirnames if not _skip_dir(d)]
         for fn in filenames:
             if not fn.endswith(_SOURCE_GLOBS):
                 continue

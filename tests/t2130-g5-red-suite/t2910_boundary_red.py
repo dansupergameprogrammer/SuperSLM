@@ -10,8 +10,9 @@ that disables the branch's own restriction to reproduce TE-366's fracture (16 of
 returned a value that was not the model's answer) on demand. The value-close and special-token
 cells were already unrestricted/uninvolved on both sides and stay so.
 
-GREEN oracle: T-2910's own reference compiler (`Claude/Vitruvius/t2910-probe/
-sslm_convert_schema_bytelevel_boundary.py`), loaded via `t2913_common.reference_t2910()`. Its own
+GREEN oracle: T-2910's own reference compiler, vendored in-repo (`reference/t2910-probe/
+sslm_convert_schema_bytelevel_boundary.py`, `reference/PROVENANCE.md`), loaded via
+`t2913_common.reference_t2910()`. Its own
 "no boundary discipline at all" mutant is T-2908's reference compiler
 (`common.reference_t2908()`) directly, reused as the required mutant rather than re-derived by
 hand -- T-2910 layers only the region check and special-id zeroing on top of T-2908's own

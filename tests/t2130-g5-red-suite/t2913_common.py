@@ -5,28 +5,38 @@ Every cell in this suite is checked against TWO compilers:
   - RED: `tools.sslm_convert_schema`, this branch's own in-tree module -- T-2853's reviewed,
     pre-fold, character-level design (confirmed at authoring time: no byte-level alphabet, no
     value-open/value-close boundary discipline, no special-token exclusion, no U/M value-level
-    closure, and only `maxLength` named in its rejection surface).
-  - GREEN: the T-2912 reference compiler chain, loaded directly from its own filed location in
-    the records tree (`Claude/Vitruvius/t2908-probe/` .. `t2912-probe/`) rather than copied --
-    the records tree is the artifact this suite is graded against, and importing it by path
-    means there is exactly one copy of the reference to drift from. This module never writes to
-    that tree.
+    closure, and only `maxLength` named in its rejection surface). T-2915 folded T-2908/T-2910/
+    T-2912's design into this module, so RED now implements the same design GREEN does; see
+    `reference/PROVENANCE.md` and `t2899_string_leaf_red.py`'s own docstring for what that
+    means for a test that used to compare the two as though GREEN were independent ground
+    truth.
+  - GREEN: the T-2912 reference compiler chain, loaded from this repo's own vendored copy
+    (`reference/t2912-probe/`, `reference/PROVENANCE.md`) rather than an out-of-repo records
+    worktree (T-2919, TE-372 S3: the suite must be self-contained and reproducible from a
+    fresh clone). This module never writes to the vendored copy.
 
 Real vocabulary: the real Qwen2.5-0.5B-Instruct checkpoint (the A-EX artifact's own tokenizer),
 loaded through this repo's own `tools/convert_tokenizer.py` (read, not modified) -- the same
-`TokenizerTables` class T-2908/T-2910/T-2912's own probes used. Real-vocabulary cells fail loudly
-(FileNotFoundError) rather than skip when the checkpoint or artifact is not present on this box.
+`TokenizerTables` class T-2908/T-2910/T-2912's own probes used. Real-vocabulary cells are gated
+on `SUPERSLM_G5_REAL_MODEL_TESTS` (T-2919, TE-372 S3): unset, the cell is skipped (a bare CI
+runner never has these checkpoints); set but the checkpoint or artifact is not present on this
+box, the cell fails loudly rather than skipping silently (T-2909's fail-closed rule, preserved
+for the opted-in case).
 """
 from __future__ import annotations
 
 import functools
+import hashlib
 import importlib.util
+import os
 import struct
 import subprocess
 import sys
 import types
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 # --- this repo's own tools/, read-only imports -------------------------------------------------
 
@@ -35,17 +45,34 @@ _TOOLS_DIR = _ENGINE_ROOT / "tools"
 if str(_TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(_TOOLS_DIR))
 
-# --- the records tree, where the reference compiler chain and T-2912's pinned instruments live --
+# --- vendored reference material, in this repo (T-2919, TE-372 S3) -----------------------------
+#
+# Every reference compiler, the commissioned answer oracle, and the pre-registered prompt sets
+# this suite grades against are copied into `reference/` alongside this file, with their
+# provenance recorded in `reference/PROVENANCE.md` -- resolved relative to this file's own
+# location, never against a private, per-session records worktree.
 
-RECORDS_ROOT = Path("D:/Wizard/.claude/worktrees/superslm-super-embedder-fixes-c20ddf")
-_VITRUVIUS = RECORDS_ROOT / "Claude" / "Vitruvius"
+_REFERENCE_ROOT = Path(__file__).resolve().parent / "reference"
+_T2912_REF_DIR = _REFERENCE_ROOT / "t2912-probe"
 
-T2908_PROBE_PATH = _VITRUVIUS / "t2908-probe" / "sslm_convert_schema_bytelevel.py"
-T2910_PROBE_PATH = _VITRUVIUS / "t2910-probe" / "sslm_convert_schema_bytelevel_boundary.py"
-T2911_PROBE_PATH = _VITRUVIUS / "t2911-probe" / "sslm_convert_schema_close_structural.py"
-T2912_PROBE_PATH = _VITRUVIUS / "t2912-probe" / "sslm_convert_schema_value_level.py"
-T2912_ORACLE_PATH = _VITRUVIUS / "t2912-probe" / "t2912_answer_oracle.py"
-T2912_HELDOUT_PATH = _VITRUVIUS / "t2912-probe" / "t2912_heldout_prompts.json"
+T2908_PROBE_PATH = _REFERENCE_ROOT / "t2908-probe" / "sslm_convert_schema_bytelevel.py"
+T2910_PROBE_PATH = _REFERENCE_ROOT / "t2910-probe" / "sslm_convert_schema_bytelevel_boundary.py"
+T2911_PROBE_PATH = _REFERENCE_ROOT / "t2911-probe" / "sslm_convert_schema_close_structural.py"
+T2912_PROBE_PATH = _T2912_REF_DIR / "sslm_convert_schema_value_level.py"
+T2912_ORACLE_PATH = _T2912_REF_DIR / "t2912_answer_oracle.py"
+T2912_HELDOUT_PATH = _T2912_REF_DIR / "t2912_heldout_prompts.json"
+T2912_MUST_ACCEPT_PATH = _T2912_REF_DIR / "t2912_oracle_must_accept.json"
+T2912_MUST_REJECT_PATH = _T2912_REF_DIR / "t2912_oracle_must_reject.json"
+T2912_CANONICAL_CONTROL_PATH = _T2912_REF_DIR / "t2912_canonical_control.ids"
+TE368_PROMPTS_PATH = _REFERENCE_ROOT / "te368-probe" / "te368_prompts.json"
+TE368_HARNESS_SOURCE = _REFERENCE_ROOT / "te368-probe" / "te366_schema_run.cpp"
+TE368_HARNESS_BUILD_SCRIPT = _REFERENCE_ROOT / "te368-probe" / "build_te368_harness.bat"
+
+# The commissioned oracle and the heldout prompts are never altered (the brief's hard rule,
+# T-2912's own design); these pins guard the VENDORED copy exactly as they guarded the
+# records-tree original, so a drift is caught the same way whichever copy is live.
+T2912_ORACLE_SHA256 = "5dcdbebc212cba5c11cd00fa27edfd72f150d8ca69b2932044e260cc2e1fb97e"
+T2912_HELDOUT_SHA256 = "44ffc54de4b62d5ff5f9ff84044b93947dc38bf316489b5e140ed8002e27fa76"
 
 PROMPT_RESULT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -53,6 +80,10 @@ PROMPT_RESULT_SCHEMA: dict[str, Any] = {
     "properties": {"Prompt_Result": {"type": "string"}},
     "required": ["Prompt_Result"],
 }
+
+# --- real-model artifact gate (T-2919, TE-372 S3) -----------------------------------------------
+
+REAL_MODEL_ENV = "SUPERSLM_G5_REAL_MODEL_TESTS"
 
 # A-EX's real checkpoint and shipped artifact (Qwen2.5-0.5B-Instruct, context_cap 4096).
 QWEN25_0P5B_CHECKPOINT = Path(
@@ -92,12 +123,45 @@ TE365_REGRESSION_SAMPLES: dict[str, str] = {
 
 
 def _require(path: Path) -> Path:
+    """Fails loudly if `path` (in-repo, vendored content this suite always ships) is missing.
+    Never used for a real-model artifact -- see `_require_real_model` below for those."""
     if not path.exists():
         raise FileNotFoundError(
-            f"real-model cell needs {path}, which is not present on this box -- this cell "
-            "fails loudly rather than skipping silently (T-2909's fail-closed rule)"
+            f"this suite needs {path}, which is not present -- it should be vendored in-repo "
+            "(reference/PROVENANCE.md); this is not a real-model artifact and is never gated "
+            "on SUPERSLM_G5_REAL_MODEL_TESTS"
         )
     return path
+
+
+def _require_real_model(path: Path) -> Path:
+    """Gates a real-model artifact (a cached HF checkpoint, the shipped A-EX .sslm artifact, or
+    the TE-368 harness binary) on `SUPERSLM_G5_REAL_MODEL_TESTS` (T-2919, TE-372 S3).
+
+    Unset: the calling cell is skipped -- none of these artifacts is provisioned on a bare CI
+    runner, so real-model coverage is opt-in there. Set (any non-empty value) but `path` is
+    missing: fails loudly, never skips -- a box that opted in and then can't find the artifact
+    has a real setup gap, not an absent feature (T-2909's fail-closed rule, preserved for the
+    opted-in case)."""
+    if not os.environ.get(REAL_MODEL_ENV):
+        pytest.skip(
+            f"{REAL_MODEL_ENV} is not set -- real-model cell opted out (would need {path})"
+        )
+    if not path.exists():
+        raise FileNotFoundError(
+            f"{REAL_MODEL_ENV} is set but {path} is missing -- opting into real-model tests "
+            "requires the artifact actually be provisioned on this box"
+        )
+    return path
+
+
+def _verify_sha256(path: Path, expected: str, label: str) -> None:
+    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    if actual != expected:
+        raise AssertionError(
+            f"{label} at {path} has drifted: sha256={actual}, expected {expected} -- refusing "
+            "to grade against an unverified copy"
+        )
 
 
 def _load_module(name: str, path: Path):
@@ -136,29 +200,48 @@ def reference_t2911():
 @functools.lru_cache(maxsize=1)
 def reference_t2912():
     """The shipping design: T-2910's open side and special-token exclusion, plus the U/M
-    value-level close product. THE reference compiler this suite's Proof section names. Its own
-    `_BASE_PATH` resolves relative to its real, filed location in the records tree, so no path
-    patching is needed after loading it from there."""
+    value-level close product. Loaded from its own vendored, filed location
+    (`reference/t2912-probe/`) so no path patching is needed after loading it -- it chain-loads
+    `../t2911-probe/sslm_convert_schema_close_structural.py` as its own base module. T-2915
+    ported this same design into `tools/sslm_convert_schema.py`; a cell that treats agreement
+    with this module as its ONLY correctness evidence is comparing the shipped compiler to a
+    copy of its own design, not to an independent oracle -- see `reference/PROVENANCE.md`."""
     return _load_module("_t2913_ref_t2912", T2912_PROBE_PATH)
 
 
 @functools.lru_cache(maxsize=1)
 def reference_oracle():
-    """`T2912-answer-value-oracle`, COMMISSIONED and RECONFIRMED (Claude/Vitruvius/t2912-probe/
-    attestations/T2912-answer-value-oracle.json). Loaded unaltered from its own filed path --
-    the brief's hard rule ("do not alter either")."""
+    """`T2912-answer-value-oracle`, COMMISSIONED and RECONFIRMED (Wizard repo,
+    `Claude/Vitruvius/t2912-probe/attestations/T2912-answer-value-oracle.json`). Loaded
+    unaltered from its own vendored, hash-pinned copy (`reference/t2912-probe/`) -- the brief's
+    hard rule ("do not alter either")."""
+    _verify_sha256(T2912_ORACLE_PATH, T2912_ORACLE_SHA256, "the commissioned T2912-answer-value-oracle")
     return _load_module("_t2913_ref_oracle", T2912_ORACLE_PATH)
 
 
 def heldout_prompts_path() -> Path:
-    return _require(T2912_HELDOUT_PATH)
+    _require(T2912_HELDOUT_PATH)
+    _verify_sha256(T2912_HELDOUT_PATH, T2912_HELDOUT_SHA256, "the pre-registered heldout prompts")
+    return T2912_HELDOUT_PATH
+
+
+def oracle_must_accept_path() -> Path:
+    """T-2912's must-accept fixture, vendored byte-identical (`reference/PROVENANCE.md`)."""
+    return _require(T2912_MUST_ACCEPT_PATH)
+
+
+def oracle_must_reject_path() -> Path:
+    """T-2912's must-reject fixture, vendored at its pinned commit `2fe6a7299b` (5 rows) --
+    deliberately NOT the live records-tree file, which carries 4 additional rows from an
+    in-flight, out-of-scope fold (`reference/PROVENANCE.md`)."""
+    return _require(T2912_MUST_REJECT_PATH)
 
 
 @functools.lru_cache(maxsize=1)
 def real_vocab_size() -> int:
     import sslm_format as fmt
 
-    config = fmt.read_section_bytes(str(_require(A_EX_ARTIFACT)), fmt.SectionType.CONFIG)
+    config = fmt.read_section_bytes(str(_require_real_model(A_EX_ARTIFACT)), fmt.SectionType.CONFIG)
     (vocab_size,) = struct.unpack_from("<I", config, 32)
     return vocab_size
 
@@ -167,7 +250,7 @@ def real_vocab_size() -> int:
 def real_tokenizer_tables():
     from convert_tokenizer import TokenizerTables
 
-    return TokenizerTables(str(_require(QWEN25_0P5B_CHECKPOINT)))
+    return TokenizerTables(str(_require_real_model(QWEN25_0P5B_CHECKPOINT)))
 
 
 @functools.lru_cache(maxsize=1)
@@ -200,9 +283,9 @@ def reference_v150():
     git history via `git show` -- never a scratch-file copy -- so this suite carries no
     out-of-repo input (T-2916/M1: the same bar TE-370's M1 finding sets for the GPU mutant
     suites, applied here to the one Python-side reference this fold needs). `git show` reads a
-    committed object; a fresh clone of this repo has it. Executed once per process and cached;
-    the module is built with `exec()` against a synthetic module object, so no temp file is
-    written to disk at all.
+    committed object; a fresh clone of this repo has it (tags are cloned by default). Executed
+    once per process and cached; the module is built with `exec()` against a synthetic module
+    object, so no temp file is written to disk at all.
 
     v1.5.0 predates T-2908's byte-level port (`compile_schema_to_mask_pages` there takes
     `Sequence[str]`, not `Sequence[bytes]`) and predates the S1 regression entirely -- it is the
@@ -230,7 +313,9 @@ def reference_v150():
 # any commit-ish via `git show` (a committed object -- no out-of-repo input, same bar M1 sets for
 # the GPU mutant suites). `fix_has_landed` tells a cell whether HEAD still equals that known-bad
 # commit for the file in question, so a cell run before T-2917 lands reports "pending", never a
-# fabricated pass or a silent skip.
+# fabricated pass or a silent skip. T-2919 (TE-372 S2) reuses the identical pattern, pinned to
+# `60eb357` instead (the commit TE-372 reviewed and ruled DO NOT SHIP over the nullable-enum
+# TypeError, among others).
 
 
 @functools.lru_cache(maxsize=None)

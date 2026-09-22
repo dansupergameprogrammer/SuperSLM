@@ -13,8 +13,9 @@ reference directly, and now confirm agreement rather than divergence -- each car
 pre-port mutant, reproducing the historical defect by construction, not by assuming the branch
 still has it.
 
-GREEN oracle: T-2908's own reference compiler (`Claude/Vitruvius/t2908-probe/
-sslm_convert_schema_bytelevel.py`), loaded via `t2913_common.reference_t2908()`.
+GREEN oracle: T-2908's own reference compiler, vendored in-repo (`reference/t2908-probe/
+sslm_convert_schema_bytelevel.py`, `reference/PROVENANCE.md`), loaded via
+`t2913_common.reference_t2908()`.
 
 Real-vocabulary cells load the real Qwen2.5 tokenizer via this repo's own
 `tools/convert_tokenizer.py` and FAIL LOUDLY (not skip) if the checkpoint is missing (T-2909's
@@ -35,13 +36,21 @@ _SCHEMA = common.PROMPT_RESULT_SCHEMA
 
 
 # ================================================================================================
-# Cell 1 -- structural UTF-8 validity, exhaustive over the character automaton (GREEN + mutant).
-# This is a property of the NEW byte-level content automaton T-2908 introduces; the branch's own
-# compiler has no byte-keyed content states to audit this way at all (its `_char_dfa` is keyed by
-# Python characters, never by raw byte value 0-255 -- confirmed structurally below rather than
-# forcing an artificial byte-shaped query onto a module that has no byte concept). The comparable
-# RED-vs-GREEN contrast for this exact defect is Cell 2 (a raw byte RED cannot tell apart from a
-# decoded Unicode scalar).
+# Cell 1 -- structural UTF-8 validity, exhaustive over the character automaton.
+#
+# T-2919 (TE-372 S3) correction: this docstring previously claimed "the branch's own compiler
+# has no byte-keyed content states to audit this way at all", which was true only pre-port. By
+# inspection of the shipped `tools/sslm_convert_schema.py::_char_dfa` (T-2915, T-2917), the
+# branch's own `_char_dfa` now ALSO returns a byte-keyed `(dfa, start, accepting,
+# content_states)` 4-tuple, identically shaped to this reference module's. This cell is kept on
+# the reference alone -- it is an exhaustive structural audit of one committed module's own
+# automaton (~11 states, ~0x110000 scalars), not a branch-vs-reference comparison, and per
+# `reference/PROVENANCE.md` the reference module is a fixed historical artifact, not an
+# independent oracle for the branch's own behaviour. The branch's OWN UTF-8-validity behaviour is
+# exercised directly (not merely audited via a structurally-identical predecessor) by Cell 2
+# below and by `t2899_string_leaf_red.py`'s escape/control-byte groups, both of which call the
+# branch's own `compile_schema_to_mask_pages` and check its output against `json.loads`, an
+# independent oracle.
 # ================================================================================================
 
 
@@ -248,7 +257,7 @@ class T2908_RealVocabularyFragmentReachability(unittest.TestCase):
     def test_natural_tokenization_fragments_are_lost_on_the_branch_and_recovered_on_reference(self) -> None:
         from tokenizers import Tokenizer
 
-        checkpoint = common._require(common.SHOPKEEPER_LORA_CHECKPOINT)
+        checkpoint = common._require_real_model(common.SHOPKEEPER_LORA_CHECKPOINT)
         tables_module = __import__("convert_tokenizer")
         tables = tables_module.TokenizerTables(str(checkpoint))
         tokenizer = Tokenizer.from_file(str(checkpoint / "tokenizer.json"))

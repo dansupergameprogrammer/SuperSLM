@@ -1,0 +1,8 @@
+[
+  {"value": "Paris"},
+  {"value": 42},
+  {"value": "[1, 2, 3, 4]"},
+  {"value": "C++"},
+  {"value": {"name": "healing potion", "price": 25}},
+  {"value": "A lantern costs 8 gold."}
+]
