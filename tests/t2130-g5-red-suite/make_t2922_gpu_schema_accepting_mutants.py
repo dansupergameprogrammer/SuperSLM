@@ -41,12 +41,25 @@ MUTANTS = {
                  "\t    seq->model->schemas.ByIndex(static_cast<size_t>(schema_index));"),
     "j": Mutant(GPU, "IsAcceptingState(*entry, seq->dfa_walk_state)",
                  "true /* MUT j: universal acceptance */"),
-    "k": Mutant(GPU, "if (seq->context_length != 0) {\n\t\treturn SSLM_SEQUENCE_REJECTED;\n\t}",
-                 "if (false) { // MUT k: late-bind guard removed\n\t\treturn SSLM_SEQUENCE_REJECTED;\n\t}"),
-    "l": Mutant(GPU,
+    "m": Mutant(GPU,
                  "\tstd::fill(seq->hidden_codes.begin(), seq->hidden_codes.end(), 0);",
-                 "\tif (seq->layer_index != 0) return SSLM_BUSY; // MUT l\n"
+                 "\tif (seq->layer_index != 0) return SSLM_BUSY; // MUT m: reset refusal\n"
                  "\tstd::fill(seq->hidden_codes.begin(), seq->hidden_codes.end(), 0);"),
+}
+
+# D-SLM7625's flag and entry-clear anchors do not exist at the red pin. Their exact
+# source-copy recipes are committed here before the builder writes either anchor.
+PREPARED = {
+    "k": Mutant(
+        GPU,
+        "\tif (!seq->bind_eligible) return SSLM_SEQUENCE_REJECTED; // D-SLM7625 bind gate",
+        "\tif (false) return SSLM_SEQUENCE_REJECTED; // MUT k: bind flag deleted",
+    ),
+    "l": Mutant(
+        GPU,
+        "\tseq->bind_eligible = false; // D-SLM7625 generation entry: gpu prompt prefill",
+        "\t// MUT l: omitted D-SLM7625 generation-entry clear",
+    ),
 }
 
 
@@ -54,8 +67,17 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--engine", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--mutant", choices=sorted(MUTANTS), required=True)
+    parser.add_argument("--mutant", choices=sorted(set(MUTANTS) | set(PREPARED)), required=True)
     args = parser.parse_args()
+    if args.mutant in PREPARED:
+        mutant = PREPARED[args.mutant]
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(
+            f"file={mutant.file}\nanchor={mutant.anchor}\nreplacement={mutant.replacement}\n",
+            encoding="utf-8",
+        )
+        print(f"MUTANT {args.mutant} PREPARED source={mutant.file} exact_anchor_absent_at_red_pin")
+        return 0
     mutant = MUTANTS[args.mutant]
     source_path = args.engine / mutant.file
     source = source_path.read_text(encoding="utf-8")

@@ -35,10 +35,11 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> bytes; if (!ReadFile(argv[1], &bytes)) return 2;
 
     sslm_model cpu_model = nullptr; CHECK(sslm_model_map(bytes.data(), bytes.size(), &cpu_model) == SSLM_OK);
-    const size_t block = sslm_kv_block_size(cpu_model), overhead = sslm_kv_pool_overhead_size(cpu_model, 1);
-    std::vector<uint8_t> storage(block + overhead + 63); void* aligned = storage.data(); size_t space = storage.size();
-    CHECK(std::align(64, block + overhead, aligned, space) != nullptr);
-    sslm_kv_pool pool = nullptr; CHECK(sslm_kv_pool_create(cpu_model, aligned, block + overhead, 1, &pool) == SSLM_OK);
+    constexpr int32_t kCpuBlocks = 3;
+    const size_t block = sslm_kv_block_size(cpu_model), overhead = sslm_kv_pool_overhead_size(cpu_model, kCpuBlocks);
+    std::vector<uint8_t> storage(block * kCpuBlocks + overhead + 63); void* aligned = storage.data(); size_t space = storage.size();
+    CHECK(std::align(64, block * kCpuBlocks + overhead, aligned, space) != nullptr);
+    sslm_kv_pool pool = nullptr; CHECK(sslm_kv_pool_create(cpu_model, aligned, block * kCpuBlocks + overhead, kCpuBlocks, &pool) == SSLM_OK);
     sslm_seq cpu_seq = nullptr; CHECK(sslm_seq_create(cpu_model, &pool, &cpu_seq) == SSLM_OK);
     int32_t out = -77; CHECK(sslm_seq_schema_bound(cpu_seq, &out) == SSLM_OK && out == 0);
     sslm_schema cpu_a = nullptr; CHECK(sslm_schema_lookup(cpu_model, "t2922_accepts_q", &cpu_a) == SSLM_OK);
@@ -47,6 +48,38 @@ int main(int argc, char** argv) {
     CHECK(sslm_seq_reset(cpu_seq) == SSLM_OK);
     out = -77; CHECK(sslm_seq_schema_bound(cpu_seq, &out) == SSLM_OK && out == 1);
     out = 0x10203040; CHECK(sslm_seq_schema_bound(nullptr, &out) == SSLM_INVALID_ARGUMENT && out == 0x10203040);
+
+    // CPU adoption cells retained by §3.10.8. A prompt-only frozen prefix replaces
+    // the adopting origin and therefore returns the bound walk to state zero. A
+    // schema-progress prefix transfers its independently observed accepting state.
+    sslm_stats_out cpu_stats{};
+    const int32_t q_token = 0;
+    int32_t cpu_consumed = 0;
+    CHECK(sslm_prefill(cpu_model, cpu_seq, &q_token, 1, 8, SSLM_SPAN_SCHEMA_CONTENT,
+                       nullptr, &cpu_consumed) == SSLM_OK && cpu_consumed == 1);
+    CHECK(sslm_stats(cpu_model, cpu_seq, &cpu_stats) == SSLM_OK && cpu_stats.schema_accepting == 1);
+    sslm_prefix prompt_prefix = nullptr;
+    CHECK(sslm_prefix_begin(cpu_model, &pool, &prompt_prefix) == SSLM_OK);
+    cpu_consumed = 0;
+    CHECK(sslm_prefix_prefill(cpu_model, prompt_prefix, &q_token, 1, 8, SSLM_SPAN_PROMPT,
+                              nullptr, &cpu_consumed) == SSLM_OK && cpu_consumed == 1);
+    CHECK(sslm_prefix_freeze(prompt_prefix) == SSLM_OK);
+    CHECK(sslm_seq_adopt_prefix(cpu_seq, prompt_prefix) == SSLM_OK);
+    CHECK(sslm_stats(cpu_model, cpu_seq, &cpu_stats) == SSLM_OK && cpu_stats.schema_accepting == 0);
+    CHECK(sslm_prefix_release(prompt_prefix) == SSLM_OK);
+
+    sslm_prefix progressed_prefix = nullptr;
+    CHECK(sslm_prefix_begin(cpu_model, &pool, &progressed_prefix) == SSLM_OK);
+    CHECK(sslm_prefix_set_schema(progressed_prefix, cpu_a) == SSLM_OK);
+    cpu_consumed = 0;
+    CHECK(sslm_prefix_prefill(cpu_model, progressed_prefix, &q_token, 1, 8,
+                              SSLM_SPAN_SCHEMA_CONTENT, nullptr, &cpu_consumed) == SSLM_OK &&
+          cpu_consumed == 1);
+    CHECK(sslm_prefix_freeze(progressed_prefix) == SSLM_OK);
+    CHECK(sslm_seq_reset(cpu_seq) == SSLM_OK);
+    CHECK(sslm_seq_adopt_prefix(cpu_seq, progressed_prefix) == SSLM_OK);
+    CHECK(sslm_stats(cpu_model, cpu_seq, &cpu_stats) == SSLM_OK && cpu_stats.schema_accepting == 1);
+    CHECK(sslm_prefix_release(progressed_prefix) == SSLM_OK);
 
     SslmGpuContext* ctx = nullptr;
     CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SslmGpuStatus::SSLM_OK);

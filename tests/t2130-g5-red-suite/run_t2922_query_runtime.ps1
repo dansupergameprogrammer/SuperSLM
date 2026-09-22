@@ -1,8 +1,13 @@
-param([string]$ScratchRoot = '', [string]$ShaderDir = '')
+param(
+ [string]$ScratchRoot = '', [string]$ShaderDir = '',
+ [string]$GpuSource = '', [string]$CpuSource = ''
+)
 $ErrorActionPreference = 'Stop'
 $Here = $PSScriptRoot; $Engine = (Resolve-Path (Join-Path $Here '..\..')).Path
 if (-not $ScratchRoot) { $ScratchRoot = Join-Path $Engine 'build\t2933-query-runtime' }
 if (-not $ShaderDir) { $ShaderDir = Join-Path $Engine 'build\gpu-shaders-staged' }
+if (-not $GpuSource) { $GpuSource = Join-Path $Engine 'src\gpu\gpu_1p0.cpp' }
+if (-not $CpuSource) { $CpuSource = Join-Path $Engine 'src\sslm_abi.cpp' }
 $Vs = 'C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Launch-VsDevShell.ps1'
 $Obj = Join-Path $ScratchRoot 'obj'; $Bin = Join-Path $ScratchRoot 'bin'
 New-Item -ItemType Directory -Force $Obj,$Bin,(Join-Path $Bin 'shaders') | Out-Null
@@ -13,8 +18,8 @@ $Common = @('artifact.cpp','sha256.cpp','tokenizer.cpp','model.cpp','intmath.cpp
  'forward\forward_sites.cpp','decode_digest.cpp','damped_greedy_antilm.cpp',
  'damped_greedy_topk.cpp','damped_greedy_phaseD.cpp','damped_greedy_phaseD_loop.cpp') |
  ForEach-Object { Join-Path "$Engine\src" $_ }
-$Sources = @($Common) + @("$Engine\src\gpu\gpu_1p0.cpp", "$Engine\src\gpu\superslm_gpu.cpp",
- "$Engine\src\sslm_abi.cpp", "$Here\t2922_schema_query_runtime.cpp")
+$Sources = @($Common) + @($GpuSource, "$Engine\src\gpu\superslm_gpu.cpp",
+ $CpuSource, "$Here\t2922_schema_query_runtime.cpp")
 & cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /DSUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT `
  /I"$Engine\include" /I"$Engine\src" /I"$Engine\src\gpu" /I"$Engine\tests" `
  /I"$Engine\tests\t2791-gpu-prefill-read-red-suite" /c $Sources /Fo"$Obj\\"

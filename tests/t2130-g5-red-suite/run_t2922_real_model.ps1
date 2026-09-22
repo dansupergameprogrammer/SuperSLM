@@ -8,16 +8,31 @@ $Manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
 if (-not $Artifact) { $Artifact = [string]$Manifest.artifact }
 if (-not $env:SUPERSLM_G5_REAL_MODEL_TESTS) { Write-Output 'SKIP real_model gate unset'; exit 0 }
 if (-not (Test-Path $Artifact)) { Write-Error "required real artifact missing: $Artifact"; exit 2 }
+function Get-Sha256Hex {
+    param([byte[]]$Bytes, [string]$Path)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        if ($Path) {
+            $stream = [IO.File]::OpenRead($Path)
+            try { $digest = $sha.ComputeHash($stream) } finally { $stream.Dispose() }
+        } else {
+            $digest = $sha.ComputeHash($Bytes)
+        }
+        return ([BitConverter]::ToString($digest)).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+}
 $ArtifactItem = Get-Item -LiteralPath $Artifact
-$ArtifactHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Artifact).Hash.ToLowerInvariant()
+$ArtifactHash = Get-Sha256Hex -Path $Artifact
 $Prompt = Join-Path $Here 't2922_real_prompt.ids'
 $PromptText = (Get-Content -LiteralPath $Prompt -Raw).TrimEnd("`r", "`n")
 $PromptBytes = [Text.Encoding]::UTF8.GetBytes($PromptText)
-$PromptHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($PromptBytes)).ToLowerInvariant()
+$PromptHash = Get-Sha256Hex -Bytes $PromptBytes
 if ($ArtifactItem.Length -ne [int64]$Manifest.artifact_bytes -or
     $ArtifactHash -ne [string]$Manifest.artifact_sha256 -or
     $PromptHash -ne [string]$Manifest.prompt_ids_text_without_final_newline_sha256 -or
-    [string]$Manifest.schema_name -ne 'prompt_result' -or
+    [string]$Manifest.schema_name -ne 'potion_shop_order' -or
     [int]$Manifest.decode_budget -ne 300 -or [string]$Manifest.expected_stop -ne 'budget') {
     Write-Error 'real-model manifest/input mismatch'; exit 2
 }
