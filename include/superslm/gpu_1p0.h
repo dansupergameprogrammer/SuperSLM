@@ -86,8 +86,7 @@ enum class SslmGpuStatus : uint32_t {
      *       submission device, so every later sslm_gpu_context_create in the process returns
      *       SSLM_DEVICE_LOST until the process restarts (T-2845, D-SLM7386); a 1.6.x point
      *       release gives every context its own device instead of sharing the process's one, so
-     *       a fresh device is built once every context on the removed one has been destroyed;
-     *
+     *       a fresh device is built once every context on the removed one has been destroyed.
      *     - a fault raised before the command list reaches Closed (e.g. `Close()` itself
      *       failing) is retried once; if that retry also fails, the list is left recording and
      *       every later call against this context fails too (`ID3D12CommandAllocator::Reset()`
@@ -389,11 +388,14 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSeq
  * reserves for the layer-loop-not-at-full-depth precondition failure below. This is the identical
  * status the CPU path returns for the same event (`sslm_abi.cpp`'s own two miss sites). On this
  * path `seq`'s own layer_index is NOT reset (the walk state and layer index are both left exactly
- * as they were), and `ready_for_logits` IS re-armed: a further call to this function, or to
- * `SslmGpuSeqDecodeStepForG5Bridge`, takes the `ready_for_logits` shortcut and calls Finish again
- * directly on the unchanged residual, deterministically reproducing the identical `-2`/`SSLM_OK`
- * result and consuming no new token from the caller -- retrying after a dead end is therefore
- * always safe and never re-drives the layer loop or embeds a stray token.
+ * as they were), and `ready_for_logits` IS re-armed. A further call to THIS function re-runs
+ * directly on the unchanged residual -- its own precondition (layer_index == num_hidden_layers)
+ * is still satisfied, unconditionally, since layer_index was never reset; it does not read
+ * `ready_for_logits` at all. A further call to `SslmGpuSeqDecodeStepForG5Bridge` is the one that
+ * takes the `ready_for_logits` shortcut: composed call skips the embed and the layer drive and
+ * calls this function directly instead. Either path deterministically reproduces the identical
+ * `-2`/`SSLM_OK` result and consumes no new token from the caller -- retrying after a dead end is
+ * therefore always safe and never re-drives the layer loop or embeds a stray token.
  *
  * Returns SSLM_SEQUENCE_REJECTED if the precondition (full depth reached) does not hold. */
 SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,

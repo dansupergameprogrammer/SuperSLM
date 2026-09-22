@@ -36,8 +36,11 @@ A schema-bound sequence that reaches a completed schema's own dead end now retur
 silently re-emitting token 0 forever. The GPU path leaves `dfa_walk_state` and `layer_index`
 exactly as they were and re-arms `ready_for_logits`, so a further call to either GPU entry point
 reproduces the identical `-2` result deterministically, with no new embed or layer-loop drive; a
-dead-ended GPU sequence is likewise `sslm_gpu_seq_reset`/`sslm_gpu_seq_bind_adapter`-eligible,
-since neither guards on `layer_index`. The CPU path additionally resets `layer_index` to 0 on this
+dead-ended GPU sequence is likewise `sslm_gpu_seq_reset`/`sslm_gpu_seq_bind_adapter`-eligible:
+`sslm_gpu_seq_reset` does not guard on `layer_index` at all, and `sslm_gpu_seq_bind_adapter` does
+guard (refusing the open interval `0 < layer_index < num_hidden_layers` as genuinely mid-token),
+but a dead end always leaves `layer_index` at `num_hidden_layers`, full depth -- one of the two
+boundary values the guard admits. The CPU path additionally resets `layer_index` to 0 on this
 same event, matching an ordinary post-prefill sequence's own resting shape, so a dead-ended CPU
 sequence is also `sslm_seq_reset`/`sslm_seq_set_adapter`-eligible rather than only re-decodable.
 The CPU backend's own damped-greedy decode branch gains the identical fix, at its own separate
@@ -56,7 +59,17 @@ measured, not guaranteed free of every grammar-induced cut (an internal quote th
 genuine intent to continue, such as a nested JSON-like structure or a quoted word, can be read as
 the value's own close under JSON's own grammar). A caller whose prompt's natural answer may contain
 an internal quote should ask for plain, unstructured text, or should treat the returned value as
-potentially truncated there. A schema declaring `maxLength` on a string field, or any other
+potentially truncated there. The field also has no length bound the engine enforces, so its close
+is otherwise up to the model: a decode that reaches the caller's own token budget before the model
+writes a closing quote returns a value that is legal so far but not closed, and the overall output
+will not parse -- measured 5 of 40 on a real 40-prompt heldout population at a 300-token budget,
+identically on the CPU and GPU decode paths. `sslm_stats_out::schema_accepting` (1 iff the
+sequence's current parse state is one where stopping is valid) is how a caller detects this without
+guessing from the token count alone. Separately, the value-level close rule means the field cannot
+produce an empty string or a value made only of JSON structural punctuation/whitespace (`{}[],:`
+and the JSON whitespace set) -- the model's own closing quote is masked at that position, so a
+schema whose only truthful answer is `""` or punctuation-only cannot be satisfied by this leaf. A
+schema declaring `maxLength` on a string field, or any other
 JSON-Schema keyword this compiler does not implement (`minLength`, `pattern`, `format`, `const`,
 `multipleOf`, and any keyword not yet named), is rejected at compile time, naming the keyword,
 rather than silently compiled with the constraint unenforced. Non-constraining JSON-Schema
@@ -64,7 +77,10 @@ annotation keywords (`title`, `description`, `default`, `examples`, `deprecated`
 `writeOnly`, `$comment`, plus `$schema`/`$id` at the schema root) are accepted and ignored on every
 branch, since this compiler never claimed to enforce them; `type` alongside `enum` (the form
 `pydantic` and plain JSON-Schema both emit) is accepted too, and is checked for agreement with
-every enum value's own JSON type rather than silently ignored.
+every enum value's own JSON type rather than silently ignored -- `type` may itself be a list (the
+JSON-Schema/OpenAPI 3.1 form for a nullable or multi-typed field, e.g. `["string", "null"]`), in
+which case agreement means matching at least one of the listed types, the union reading the
+JSON-Schema spec itself gives a type array.
 
 `compile_schema_to_mask_pages` moved from `Sequence[str]` to `Sequence[bytes]` at the byte-level
 port and now raises `TypeError` naming `bytes` when given a `str` vocabulary, instead of the

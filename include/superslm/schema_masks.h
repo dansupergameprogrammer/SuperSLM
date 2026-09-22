@@ -34,6 +34,26 @@
 // model's intent to open a nested structure from the byte stream alone. This is a property of
 // the compiled table itself and holds identically on both the CPU and GPU decode paths, since
 // both walk the same `SchemaMasksTable::Transition`/mask-page mechanism this file parses.
+//
+// SECOND WAY THIS LEAF CAN LEAVE A VALUE UNCLOSED (TE-372 S1, T-2920): the field has no length
+// bound the engine enforces, so its close is entirely up to the model choosing to emit a
+// closing, unescaped quote. If the caller's own decode-step budget is reached first, the
+// returned sequence is legal so far -- every token emitted obeyed the compiled table -- but the
+// string leaf's own content region never closed, and the overall value will not parse as JSON.
+// Measured on a real 40-prompt heldout population at a 300-token budget: 5 of 40 stopped at
+// budget with an unclosed value, identically on the CPU and GPU decode paths
+// (`Claude/Poirot/te372-probe/census_summary.txt`, Wizard repo). A caller detects this without
+// guessing from the token count alone: `sslm_stats_out::schema_accepting` (sslm_abi.h) is 1 iff
+// the sequence's current parse state is one where stopping is valid, 0 otherwise -- a decode
+// that stops (budget reached, or any other reason) while `schema_accepting == 0` returned an
+// incomplete value.
+//
+// THE VALUE THIS LEAF CANNOT PRODUCE (T-2912's own value-level close rule): the leaf's content
+// region only reaches its close edge after at least one content byte, so an empty value (`""`)
+// or a value made only of JSON structural punctuation/whitespace (`{}[],:` and the JSON
+// whitespace set) cannot close -- the model's own closing quote is masked at that position and
+// it is forced to keep writing. A schema whose only truthful answer to a prompt is `""` or a
+// punctuation-only string cannot be satisfied by this leaf.
 #ifndef SUPERSLM_SCHEMA_MASKS_H
 #define SUPERSLM_SCHEMA_MASKS_H
 

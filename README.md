@@ -100,13 +100,27 @@ remains open are in
 
 ### Schema-constrained generation
 
-Schema-constrained generation means your output format is always correct —
-the model cannot emit a token that breaks your schema, so the output always
-parses. A compiled schema is a table of valid-token masks, one per parser
-state; the engine indexes into that table by the sequence's own parse state
-before every decode step and masks out any token that would break the
-schema, so an invalid token is never a candidate in the first place — not a
-post-hoc filter on the model's raw output.
+Schema-constrained generation means the model cannot emit a token that
+breaks your schema — so the output parses whenever the decode completes
+within its token budget. A compiled schema is a table of valid-token masks,
+one per parser state; the engine indexes into that table by the sequence's
+own parse state before every decode step and masks out any token that would
+break the schema, so an invalid token is never a candidate in the first
+place — not a post-hoc filter on the model's raw output. Every token the
+engine does emit is legal at the moment it is emitted; format validity
+holds for whatever was emitted, not only for a decode that ran to
+completion.
+
+An unbounded field (the free-text `"type": "string"` leaf, for example) has
+no length bound the engine enforces, so its own close is up to the model —
+if a caller's decode budget is reached first, the returned sequence is
+legal so far but not closed, and will not parse as JSON on its own. A
+caller detects this without guessing from the token count alone:
+`sslm_stats`'s `schema_accepting` field is 1 iff the sequence's current
+parse state is one where stopping is valid, and 0 otherwise. A decode that
+stops (budget reached, or any other reason) while `schema_accepting == 0`
+returned an incomplete value; a caller that needs a guaranteed-parseable
+result checks this before treating the output as final.
 
 The determinism guarantee above carries through even when the engine skips
 ahead through the parts of the output your schema already dictates (for
@@ -114,10 +128,11 @@ example, a fixed key name or punctuation your schema forces regardless of
 what the model would otherwise produce) without running a real decode step
 for those tokens — a schema-constrained decode is exactly as reproducible,
 on the same certified platform, as an unconstrained one. Format — grammar
-and parse validity — is what this guarantees by construction; cross-field
-semantic validity (e.g. "this value must be less than that one") is
-reported, not enforced, since that is a property of your schema's meaning
-rather than its shape.
+validity for every token emitted, and parse validity for a decode that
+completes within its budget — is what this guarantees by construction;
+cross-field semantic validity (e.g. "this value must be less than that
+one") is reported, not enforced, since that is a property of your schema's
+meaning rather than its shape.
 
 Schema-constrained decoding is proven bit-identical between the CPU and GPU
 paths on both certified GPUs — NVIDIA and AMD (see

@@ -51,9 +51,15 @@ never through the return value itself.
   clears a sequence back to empty; `sslm_gpu_seq_save` / `sslm_gpu_seq_
   restore` serialize a sequence's full state to a caller buffer and back,
   rejecting a restore against a model that isn't the one the state was
-  saved from. The current `SLM4` blob carries the aggregate K/V saturation
-  count and all four per-site counters that compose it; older `SSLM`, `SLM2`,
-  and `SLM3` layouts are rejected on their versioned magic rather than misread.
+  saved from. The current `SLM5` blob adds a schema binding, walk state,
+  and "ready for logits" flag to the `SLM4` shape, so a schema-bound
+  sequence's generation position survives a save/restore round trip; the
+  restored binding and walk state are validated against the target model's
+  own schema count and state count before use. A save always writes the
+  current `SLM5` format; restore also still accepts an older `SLM4` blob
+  exactly as before, defaulting the schema binding it carries to unbound.
+  Older `SSLM`, `SLM2`, and `SLM3` layouts are rejected on their versioned
+  magic rather than misread.
 - **Adapter binding**: `sslm_gpu_seq_bind_adapter` binds (or, passed a
   null adapter, unbinds) a LoRA adapter to a sequence handle *across*
   calls — distinct from the per-call `adapter_or_null` argument every
@@ -82,6 +88,22 @@ never through the return value itself.
   `out_statuses`) does not abort the others.
 - `sslm_gpu_ready` polls (or, with `block`, waits for) a sequence's
   in-flight GPU work to complete.
+
+### Reading the prefill hidden state
+
+`sslm_gpu_seq_read_prefill_final_hidden` returns the post-`final_norm`
+hidden state at the last position left by a sequence's most recent prompt
+or schema-content prefill call that reached its admission pre-scan and
+returned `SSLM_OK`. It reads a per-sequence snapshot taken only when such a
+call succeeds, so no later embed, decode, or finish call changes what it
+returns; `sslm_gpu_model_hidden_size` gives the width to size the caller's
+buffer with (`SSLM_OUTPUT_BUFFER_TOO_SMALL` if it's short). A prefill call
+that reaches its pre-scan and then fails, and `sslm_gpu_seq_reset`, empty
+the snapshot — the read then returns `SSLM_PREFILL_HIDDEN_UNAVAILABLE`, not
+an earlier frame. A prefill call refused before its pre-scan (malformed
+arguments, a zero count, `SSLM_BUSY`, or the schema-content prefill's
+unbound-schema and unreachable-first-token refusals) leaves the snapshot as
+it was.
 
 ### Thread safety
 
@@ -126,6 +148,21 @@ without allowing a C++ exception to cross the public `noexcept` boundary. A stal
 shader requires a
 matching shader rebuild/redeployment; the model, sequence, and device are
 not condemned by it.
+
+Two more statuses cover the prefill-hidden read below: `SSLM_OUTPUT_BUFFER_TOO_SMALL`,
+a caller buffer too small for the hidden state's width; and
+`SSLM_PREFILL_HIDDEN_UNAVAILABLE`, no live snapshot to read (see
+[Reading the prefill hidden state](#reading-the-prefill-hidden-state) below).
+
+`SslmGpuSeqPrefillPromptForG5Bridge` and `SslmGpuSeqPrefillSchemaContentForG5Bridge`
+diverge on one refusal: when a device-side domain guard refuses one of the admitted
+tokens and the device is not reported removed, the prompt entry point returns
+`SSLM_SEQUENCE_REJECTED` — the context and the sequence's own device state stay
+usable, but a decode issued on the sequence without a reset reads a residual that is
+not a resting state, so `sslm_gpu_seq_reset` is required before reuse. The
+schema-content entry point reports the identical refusal as `SSLM_DEVICE_LOST`
+instead, with the same reset requirement (see each function's own header comment,
+`include/superslm/gpu_1p0.h`, for why the two calls are not unified).
 
 ## The CPU consumer API (`sslm_*`) — shipped
 
@@ -329,3 +366,19 @@ token. Per-call, per-token submission slicing by a dispatch budget remains
 the decode path's own contract — `sslm_decode_step_gpu` and
 `SslmGpuSeqDecodeStepForG5Bridge`'s layer-loop-to-depth step — unchanged
 by either prefill call.
+
+A schema-bound sequence that reaches its schema's own dead end (an
+accepting state whose mask page is legitimately all-zero, or a synthetic
+degenerate row where every admitted logit ties and the tie-break returns a
+token with no transition) returns `*out_token == -2` at `SSLM_OK` from
+`SslmGpuSeqFinishTokenForG5Bridge`/`SslmGpuSeqDecodeStepForG5Bridge` —
+never `SSLM_SEQUENCE_REJECTED`, which those calls reserve for their own
+precondition failures — matching the CPU path's identical `-2` convention
+for the same event. The walk state and layer index are left exactly as
+they were and `ready_for_logits` is re-armed, so a further call to either
+GPU entry point reproduces the identical `-2` result deterministically,
+consuming no new token from the caller: retrying after a dead end is
+always safe. A dead-ended sequence is `sslm_gpu_seq_reset`- and
+`sslm_gpu_seq_bind_adapter`-eligible (see the CHANGELOG), and is proven
+bit-identical between the CPU and GPU paths at real scale (see
+[Certified platforms](#certified-platforms)).
