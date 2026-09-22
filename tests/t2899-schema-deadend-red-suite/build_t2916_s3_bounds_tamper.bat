@@ -1,12 +1,18 @@
 @echo off
-rem T-2916 (Curie) -- TE-370 S3: builds and runs cell_gpu_slm5_bounds_tamper against the tree's
-rem own gpu_1p0.cpp/superslm_gpu.cpp (ASBUILT -- the checks exist at 0062c99, so this must be
-rem GREEN), then against three mutants, each with exactly one of the three bounds checks deleted
-rem from a scratch copy of gpu_1p0.cpp (make_mut_slm5_bounds.py) -- each MUST be killed (at least
-rem one CHECK failure). Self-contained: builds its own CPU_COMMON and ASBUILT GPU object sets
-rem fresh, independent of this suite's own build_red_suite_gpu.bat (which this cell does not need
-rem any of the FIXED/MUT_CHECKEDRETURN/refs machinery from -- the checks under test already exist
-rem in the live tree).
+rem T-2916/T-2917 (Curie/Brunel) -- TE-370 S3: builds and runs cell_gpu_slm5_bounds_tamper against
+rem the tree's own gpu_1p0.cpp/superslm_gpu.cpp (ASBUILT, must be GREEN), then against two
+rem mutants, each with one of the two REMAINING bounds checks deleted from a scratch copy of
+rem gpu_1p0.cpp (make_mut_slm5_bounds.py) -- each MUST be killed (at least one CHECK failure).
+rem T-2917 (D-SLM7600): the third check this runner used to test as MUT_INDEXCOUNT (its own
+rem deletion mutant provably survives -- SchemaMasksTable::ByIndex is bounds-safe and the
+rem adjacent null-check catches everything it would have) is REMOVED from the tree, replaced by a
+rem comment naming the null-check as the bound; there is no longer a check to mutate. Check 1's
+rem own tamper input (schema_index=999999) is still exercised below, as part of ASBUILT, and is
+rem still refused, now by check 2's own null-guard alone. Self-contained: builds its own
+rem CPU_COMMON and ASBUILT GPU object sets fresh, independent of this suite's own
+rem build_red_suite_gpu.bat (which this cell does not need any of the
+rem FIXED/MUT_CHECKEDRETURN/refs machinery from -- the checks under test already exist in the
+rem live tree).
 rem
 rem Usage: build_t2916_s3_bounds_tamper.bat <path-to-C39.sslm>
 setlocal enabledelayedexpansion
@@ -51,9 +57,9 @@ cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I%ENG%\include /I%ENG%\src\gpu 
     /c %ENG%\src\gpu\gpu_1p0.cpp %ENG%\src\gpu\superslm_gpu.cpp /Fo"obj_t2916_s3\gpu_asbuilt\\" ^
     > obj_t2916_s3\gpu_asbuilt.buildlog 2>&1 || (echo BUILD FAILED: gpu_asbuilt & type obj_t2916_s3\gpu_asbuilt.buildlog & set OVERALL_OK=0)
 
-echo ================= Generating three MUT_SLM5 variants of gpu_1p0.cpp =================
+echo ================= Generating two MUT_SLM5 variants of gpu_1p0.cpp =================
 if not defined SSLM_PYTHON set SSLM_PYTHON=C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe
-for %%c in (INDEXCOUNT WALKSTATE UNBOUNDWALK) do (
+for %%c in (WALKSTATE UNBOUNDWALK) do (
     "%SSLM_PYTHON%" make_mut_slm5_bounds.py %%c "%ENG%\src\gpu\gpu_1p0.cpp" "%MUTDIR%\gpu_1p0_mut_%%c.cpp" ^
         > "obj_t2916_s3\make_mut_%%c.log" 2>&1
     if errorlevel 1 (
@@ -70,19 +76,13 @@ echo ================= Building cell_gpu_slm5_bounds_tamper =================
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /c cell_gpu_slm5_bounds_tamper.cpp ^
     /Fo"obj_t2916_s3\cell.obj" > obj_t2916_s3\cell.buildlog 2>&1 || (echo BUILD FAILED: cell.obj & type obj_t2916_s3\cell.buildlog & set OVERALL_OK=0)
 
-rem MUT_INDEXCOUNT's own EXPECT is SURVIVE_REDUNDANT, not KILL: executed (see this run's own
-rem history), deleting ONLY the index>=schemas.Count() check does not change any observable
-rem status, because `SchemaMasksTable::ByIndex(size_t)` (include/superslm/schema_masks.h) is
-rem itself bounds-safe (`index < entries_.size() ? &entries_[index] : nullptr`) and every
-rem consumer of `bound_schema_index` in this file (lines 2258/2475/3214, plus this restore path)
-rem routes through it and null-checks the result -- so ANY out-of-range index that check 1 would
-rem catch is, by construction, ALSO caught by check 2's own `!resolved_entry` guard. This is a
-rem genuine, provable redundancy (an index >= Count() can never make ByIndex return non-null), not
-rem a gap in this cell -- documented as a finding in Claude/Curie/t2916-te370-red-cells-2026-09-21.md,
-rem not silently forced to a fabricated KILL.
-for %%v in (ASBUILT MUT_INDEXCOUNT MUT_WALKSTATE MUT_UNBOUNDWALK) do (
+rem check 1's own tamper input (schema_index=999999, below in ASBUILT) is refused by check 2's
+rem own `!resolved_entry` null-guard now that the redundant early check is removed from the tree
+rem (T-2917, D-SLM7600) -- SchemaMasksTable::ByIndex(size_t) (include/superslm/schema_masks.h) is
+rem itself bounds-safe (`index < entries_.size() ? &entries_[index] : nullptr`), so an
+rem out-of-range index can never make it return non-null. No MUT_INDEXCOUNT variant exists to run.
+for %%v in (ASBUILT MUT_WALKSTATE MUT_UNBOUNDWALK) do (
     if "%%v"=="ASBUILT" (set GPUOBJS=obj_t2916_s3\gpu_asbuilt\gpu_1p0.obj obj_t2916_s3\gpu_asbuilt\superslm_gpu.obj& set EXPECT=PASS)
-    if "%%v"=="MUT_INDEXCOUNT" (set GPUOBJS=obj_t2916_s3\gpu_mut_INDEXCOUNT\gpu_1p0_mut_INDEXCOUNT.obj obj_t2916_s3\gpu_asbuilt\superslm_gpu.obj& set EXPECT=SURVIVE_REDUNDANT)
     if "%%v"=="MUT_WALKSTATE" (set GPUOBJS=obj_t2916_s3\gpu_mut_WALKSTATE\gpu_1p0_mut_WALKSTATE.obj obj_t2916_s3\gpu_asbuilt\superslm_gpu.obj& set EXPECT=KILL)
     if "%%v"=="MUT_UNBOUNDWALK" (set GPUOBJS=obj_t2916_s3\gpu_mut_UNBOUNDWALK\gpu_1p0_mut_UNBOUNDWALK.obj obj_t2916_s3\gpu_asbuilt\superslm_gpu.obj& set EXPECT=KILL)
     echo ===== cell_gpu_slm5_bounds_tamper [%%v] expect=!EXPECT! =====
@@ -112,15 +112,12 @@ for %%v in (ASBUILT MUT_INDEXCOUNT MUT_WALKSTATE MUT_UNBOUNDWALK) do (
             if "!EXPECT!"=="KILL" (
                 if "!FAILN!"=="0" (echo    SURVIVING MUTANT -- expected a kill, got failures=0 ^("obj_t2916_s3\%%v.runlog"^)& set OVERALL_OK=0)
             )
-            if "!EXPECT!"=="SURVIVE_REDUNDANT" (
-                if not "!FAILN!"=="0" (echo    UNEXPECTED KILL -- MUT_INDEXCOUNT was expected to survive as a documented redundancy; it killed instead, meaning the redundancy claim needs re-checking ^("obj_t2916_s3\%%v.runlog"^)& set OVERALL_OK=0) else (echo    confirmed: MUT_INDEXCOUNT survives as expected -- the index^>=Count^(^) check is redundant with check 2's own null-guard, per ByIndex's bounds safety)
-            )
         )
     )
 )
 
 if "%OVERALL_OK%"=="1" (
-    echo ===== build_t2916_s3_bounds_tamper: ASBUILT is green; MUT_WALKSTATE/MUT_UNBOUNDWALK killed; MUT_INDEXCOUNT survives as the documented redundancy =====
+    echo ===== build_t2916_s3_bounds_tamper: ASBUILT is green [including check 1's own tamper, now refused by check 2's null-guard]; MUT_WALKSTATE/MUT_UNBOUNDWALK killed =====
     exit /b 0
 ) else (
     echo ===== build_t2916_s3_bounds_tamper: FAILURES ABOVE =====

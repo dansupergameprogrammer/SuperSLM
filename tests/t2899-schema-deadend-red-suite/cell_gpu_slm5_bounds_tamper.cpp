@@ -139,22 +139,22 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	// --- S3 check 1: bound_schema_index >= model->schemas.Count(). Any value larger than any
-	// real model's own schema count refuses.
+	// --- S3 check 1: an out-of-range restored_schema_index. Any value larger than any real
+	// model's own schema count refuses.
 	//
-	// FINDING (executed, not assumed): this check's own deletion mutant does NOT kill this cell.
-	// `SchemaMasksTable::ByIndex(size_t)` (include/superslm/schema_masks.h) is itself bounds-safe
-	// (`index < entries_.size() ? &entries_[index] : nullptr`), and EVERY consumer of
-	// `bound_schema_index` in this file (this restore path, plus lines ~2258/2475/3214) routes
-	// through `ByIndex` and null-checks the result. An index >= Count() can, by that contract,
-	// never make `ByIndex` return non-null -- so any index this check would catch is ALSO caught
-	// by check 2's own `!resolved_entry` guard immediately below. Confirmed by execution
-	// (`make_mut_slm5_bounds.py INDEXCOUNT`, `build_t2916_s3_bounds_tamper.bat`): deleting ONLY
-	// this check leaves every assertion in this file green. This assertion is kept as a
-	// behavioral regression pin (it protects the overall contract: an out-of-range index is
-	// always refused, whichever guard is actually doing the refusing), not as an independent
-	// mutation-proof of this one line -- no such proof exists to author, since the line is
-	// provably redundant, not undertested. ---
+	// T-2916 FOUND, T-2917 ACTED ON (D-SLM7600): the explicit `>= model->schemas.Count()`
+	// pre-check this input used to exercise had its own deletion mutant survive (T-2916,
+	// `make_mut_slm5_bounds.py INDEXCOUNT`, since removed from that generator) -- provably dead,
+	// not merely redundant: `SchemaMasksTable::ByIndex(size_t)` (include/superslm/schema_masks.h)
+	// is itself bounds-safe (`index < entries_.size() ? &entries_[index] : nullptr`), and EVERY
+	// consumer of `bound_schema_index` in this file (this restore path, plus lines
+	// ~2258/2475/3214) routes through `ByIndex` and null-checks the result. An index >= Count()
+	// can, by that contract, never make `ByIndex` return non-null. The conductor ruled the check
+	// removed and replaced with a comment naming the null-check as the bound (`gpu_1p0.cpp`,
+	// `sslm_gpu_seq_restoreImpl`); this assertion is UNCHANGED and now exercises check 2's own
+	// `!resolved_entry` guard directly -- kept as a behavioral regression pin (an out-of-range
+	// index is always refused, whichever guard is doing the refusing), not as a mutation-proof
+	// of a specific line, since no such line exists here to mutate any more. ---
 	{
 		std::vector<uint8_t> blob = good_blob;
 		WriteSchemaIndex(blob, 999999);

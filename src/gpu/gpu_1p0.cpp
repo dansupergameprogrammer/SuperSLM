@@ -2203,10 +2203,15 @@ SslmGpuStatus sslm_gpu_seq_restoreImpl(SslmGpuContext* ctx, SslmGpuModelHandle* 
 	// index mask_pages, and reject a bound index this model does not have. Unbound
 	// (restored_schema_index < 0) always passes: no state to validate.
 	if (restored_schema_index >= 0) {
-		if (static_cast<size_t>(restored_schema_index) >= model->schemas.Count()) {
-			sslm_gpu_seq_release(ctx, fresh);
-			return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
-		}
+		// T-2917 (folding TE-370 S3, D-SLM7600): the `>= model->schemas.Count()` pre-check
+		// this comment used to gate on is removed -- provably dead, not merely redundant.
+		// SchemaMasksTable::ByIndex (include/superslm/schema_masks.h) is itself bounds-safe
+		// (`index < entries_.size() ? &entries_[index] : nullptr`), so no `restored_schema_index`
+		// this check could have caught can ever make it return non-null; the null-check below
+		// already refuses every input the removed check refused, by the same mechanism. T-2916
+		// confirmed by execution (mutant deletion): the removed check's own mutant survives
+		// (failures=0) because the adjacent null-check kills every input that would exercise it.
+		// The null-check IS the bound.
 		const superslm::SchemaEntry* resolved_entry =
 		    model->schemas.ByIndex(static_cast<size_t>(restored_schema_index));
 		if (!resolved_entry || restored_walk_state >= resolved_entry->state_count) {
