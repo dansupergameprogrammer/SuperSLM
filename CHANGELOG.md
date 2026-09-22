@@ -28,6 +28,11 @@ recompiled against this one before it links with this release.
 builds both tools as targets (`sslm_inspect`, `tok_verify`) linking the `superslm` library, so a
 source file the library needs cannot be missing from them again.
 
+`build.bat` completes again. 1.6.0 added the C ABI verb `sslm_seq_schema_bound`, the 37th, but the
+script's ABI verb-count gate still expected 36, so the Windows quick build stopped at that gate in
+1.6.0; CMake builds were unaffected. The gate now expects 37. Correction to the 1.6.0 entry below:
+`SUPERSLM_API` is carried by all 37 C ABI verbs, including `sslm_seq_schema_bound`, not 36.
+
 ## [1.6.0] - 2026-09-22
 
 CPU and GPU callers can now query schema binding explicitly with `sslm_seq_schema_bound` and

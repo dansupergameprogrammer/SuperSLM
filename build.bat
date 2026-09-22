@@ -613,6 +613,7 @@ rem t2119-g5-constrained-decoding-design-2026-08-16.md Sec5, Wizard repo) -- a d
 rem documented extension of the ABI surface this counter is meant to CATCH undocumented drift
 rem against, not itself an instance of that drift. T-2199 then raised it to 35 for
 rem sslm_decode_step_v2 and the 1.2 candidate raises it to 36 for sslm_decode_params_init.
+rem 1.6.0 added sslm_seq_schema_bound, which makes 37; this gate was not raised with it.
 rem Count with native PowerShell so the gate does not depend on WSL, Git Bash's installation
 rem layout, or a separately configured Unix-tool PATH on Windows.
 rem T2139_VERB_COUNT is read and compared OUTSIDE any parenthesized if-block on purpose: %VAR%
@@ -625,11 +626,11 @@ if errorlevel 1 (
 	goto :hard_fail
 )
 set /p T2139_VERB_COUNT=<out\t2139\verb_count.txt
-if "%T2139_VERB_COUNT%"=="36" goto :t2139_verb_count_ok
-echo count_abi_verbs.sh reports %T2139_VERB_COUNT%, expected 36 -- verb count drifted, see design Sec4 / T-2132 / T-2199
+if "%T2139_VERB_COUNT%"=="37" goto :t2139_verb_count_ok
+echo count_abi_verbs.sh reports %T2139_VERB_COUNT%, expected 37 -- verb count drifted, see design Sec4 / T-2132 / T-2199
 goto :hard_fail
 :t2139_verb_count_ok
-echo count_abi_verbs.sh: 36 verbs, matches T-2139 Sec4's 29 plus T-2132/G5's five verbs and T-2199's versioned decode and params-initializer verbs
+echo count_abi_verbs.sh: 37 verbs, matches T-2139 Sec4's 29 plus T-2132/G5's five verbs, T-2199's versioned decode and params-initializer verbs, and 1.6.0's sslm_seq_schema_bound
 goto :t2139_verb_count_done
 :t2139_verb_count_done
 
