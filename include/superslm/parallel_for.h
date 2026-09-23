@@ -3,7 +3,7 @@
 /* A caller-supplied parallel-for hook. SuperSLM never creates a thread: a host that wants the
  * token finish's logits rows computed on several threads installs one of these, and the library
  * hands its row blocks to the host's `run`. With no hook installed the finish runs serially on
- * the calling thread, exactly as in releases before 1.7.0.
+ * the calling thread, as in releases before 1.7.0, and its tokens are identical to 1.6.0.
  *
  * Installed with sslm_workspace_set_parallel_for (CPU backend, sslm_abi.h) or
  * sslm_gpu_context_set_host_parallel_for (GPU backend, gpu_1p0.h). Only the token finish's

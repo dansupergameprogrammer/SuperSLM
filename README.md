@@ -14,12 +14,16 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.6.0**. It expands schema-constrained generation with unbounded free-text
-fields, structural special-token exclusion, persisted schema progress, explicit bound/accepting
-queries, deterministic dead-end and reset behavior, and a GPU prefill-hidden read. It also adds
-the `SUPERSLM_API` modular export slot. GPU sequence saves now use `SLM5`; 1.6.0 still reads
-`SLM4`, but 1.5.0 cannot read a new `SLM5` save. See the concise
-[1.6.0 release note](docs/releases/1.6.0.md) and [CHANGELOG.md](CHANGELOG.md).
+Current release: **1.7.0**. The token finish can take its logits off the calling thread, through
+a caller-supplied host parallel-for hook on both backends or an opt-in device-resident head on the
+GPU, with tokens identical to 1.6.0. On an RTX 2080 SUPER the device head took Qwen2.5-0.5B from
+42.67 to 73.21 tok/s and Qwen2.5-1.5B from 27.85 to 55.49 tok/s, for 137,433,088 B and
+234,627,072 B of VRAM per mapped model. A host can also choose the directory GPU shaders load
+from, and a GPU context stays usable after an out-of-memory failure during an upload. With no hook
+and no device head, tokens are identical to 1.6.0 and the path is measurably slower in some cells
+(−1.98% tok/s on the CPU at 0.5B). `GpuContextConfig` grew, so code compiled against an earlier
+`gpu_1p0.h` must be recompiled. See the [1.7.0 release note](docs/releases/1.7.0.md) for every
+figure with its hardware and settings, and [CHANGELOG.md](CHANGELOG.md).
 
 ## Capabilities
 

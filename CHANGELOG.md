@@ -4,7 +4,7 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
-## [1.7.0] - Unreleased
+## [1.7.0] - 2026-09-23
 
 `GpuContextConfig` gains `shader_dir`, the directory the compiled `.cso` shader set is loaded
 from. `NULL`, which every zero-initialized config already holds, keeps the existing behaviour:
@@ -96,6 +96,27 @@ and are reported as skipped otherwise.
 CMake gains `SUPERSLM_GPU_TEST_SEAMS` (default `OFF`), which builds a test variant of the GPU
 library carrying the allocation-fault and device-logits test seams. It is not for a library that
 ships.
+
+Measured on an AMD Ryzen 9 3950X (DDR4 at 2133 MT/s) with an NVIDIA GeForce RTX 2080 SUPER
+(driver 32.0.15.6094), Qwen2.5-0.5B-Instruct and Qwen2.5-1.5B-Instruct, greedy decoding from an
+11-token prompt at the full layer budget, CMake Release builds of 1.6.0 and 1.7.0. Tokens were
+identical to 1.6.0 in every cell. `docs/releases/1.7.0.md` has every figure with its settings and
+how it was measured.
+
+- **Device head, GPU, 100 tokens:** 0.5B 42.67 to 73.21 tok/s and 1.5B 27.85 to 55.49 tok/s;
+  host finish 11.118 to 1.379 ms and 18.047 to 1.661 ms. Its VRAM cost per mapped model is
+  137,433,088 B at 0.5B and 234,627,072 B at 1.5B. With the flag clear, model-map VRAM is the same
+  as 1.6.0.
+- **Host hook, 64 tokens, T = 4 threads (the calling thread plus three workers of the reference
+  `run`):** GPU 0.5B 42.61 to 59.64 tok/s and 1.5B 27.85 to 39.37 tok/s; CPU 0.5B 21.78 to 24.16
+  tok/s and 1.5B 7.68 to 8.09 tok/s. T = 4 was best or equal-best in every row; 8 and 16 were
+  flat or slightly worse.
+- **No hook, device head off:** tokens are identical to 1.6.0, and the cost against 1.6.0,
+  measured over ten processes per build with 95% intervals, is +0.210 ms on the CPU finish
+  ([0.175, 0.246]) and +0.355 ms on the GPU host finish ([0.318, 0.392]) at 0.5B. Over whole
+  tokens it is −1.98% tok/s on the CPU at 0.5B ([−0.495, −0.365] tok/s) and −0.95% on the GPU at
+  1.5B ([−0.476, −0.038] tok/s); at CPU 1.5B and GPU 0.5B no difference was resolved. The cause
+  has not been identified yet.
 
 ## [1.6.0] - 2026-09-22
 
