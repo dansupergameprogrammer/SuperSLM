@@ -1,5 +1,6 @@
 // T-2851 row 5(xiii): count actual allocations for each claim-5 call, then
 // fault every occurrence and retry on the same GPU context.
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
@@ -8,7 +9,8 @@
 #include <vector>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <dxgi.h>
+#include <dxgi1_4.h>
+#include <wrl/client.h>
 #include "superslm/gpu_1p0.h"
 #include "superslm/model.h"
 
@@ -19,6 +21,21 @@ bool SslmGpuAllocInBundleForTest(uint32_t) noexcept;
 void ArmGpuMapDeviceRemovedQueryInjection() noexcept;
 
 namespace {
+uint64_t Vram() {
+    Microsoft::WRL::ComPtr<IDXGIFactory4> factory;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return UINT64_MAX;
+    uint64_t best = 0;
+    for (UINT i = 0;; ++i) {
+        Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+        if (factory->EnumAdapters1(i, &adapter) == DXGI_ERROR_NOT_FOUND) break;
+        Microsoft::WRL::ComPtr<IDXGIAdapter3> modern;
+        if (FAILED(adapter.As(&modern))) continue;
+        DXGI_QUERY_VIDEO_MEMORY_INFO info{};
+        if (SUCCEEDED(modern->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)))
+            best = std::max<uint64_t>(best, info.CurrentUsage);
+    }
+    return best;
+}
 std::vector<uint8_t> Read(const char* path) {
     FILE* f = nullptr;
     if (fopen_s(&f, path, "rb") || !f) return {};
@@ -135,8 +152,10 @@ int main(int argc, char** argv) {
         const auto count = SslmGpuAllocCountForTest();
         std::vector<bool> bundle(count + 1);
         for (uint32_t k = 1; k <= count; ++k) bundle[k] = SslmGpuAllocInBundleForTest(k);
+        const uint64_t clean_vram = kind == 1 ? Vram() : 0;
         fx.Release(kind, clean);
-        if (clean_status != SslmGpuStatus::SSLM_OK || !clean || count == 0) {
+        if (clean_status != SslmGpuStatus::SSLM_OK || !clean || count == 0 ||
+            (kind == 1 && clean_vram == UINT64_MAX)) {
             std::fprintf(stderr, "FAIL allocation setup %s count=%u status=%u\n", kNames[kind],
                          count, static_cast<unsigned>(clean_status));
             return 4;
@@ -167,11 +186,20 @@ int main(int argc, char** argv) {
             void* retry = nullptr;
             const auto retry_status = fx.Call(kind, &retry);
             const auto retry_count = SslmGpuAllocCountForTest();
+            const uint64_t retry_vram = kind == 1 ? Vram() : 0;
             fx.Release(kind, retry);
             if (retry_status != SslmGpuStatus::SSLM_OK || !retry || retry_count != count) {
                 std::fprintf(stderr, "FAIL retry %s k=%u status=%u count=%u expected=%u\n",
                              kNames[kind], k, static_cast<unsigned>(retry_status), retry_count, count);
                 return 6;
+            }
+            constexpr uint64_t tolerance = 6 * 65536u;
+            if (kind == 1 && (retry_vram == UINT64_MAX ||
+                retry_vram > clean_vram + tolerance || clean_vram > retry_vram + tolerance)) {
+                std::fprintf(stderr, "FAIL model_head retry VRAM k=%u clean=%llu retry=%llu\n",
+                             k, static_cast<unsigned long long>(clean_vram),
+                             static_cast<unsigned long long>(retry_vram));
+                return 12;
             }
             std::printf("FAULT %s k=%u status=%u retry=0\n", kNames[kind], k,
                         static_cast<unsigned>(got));

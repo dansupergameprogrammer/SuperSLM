@@ -13,7 +13,7 @@ if defined T2956_SHADERS (
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 -no_logo
 if errorlevel 1 exit /b 2
 set BAD=0
-for %%C in (cell_status_ordinals cell_flags cell_setters cell_real_decode cell_rows cell_device_logits cell_alloc_faults cell_residency cell_hook_lifecycle cell_close_faults cell_missing_shader cell_private_bytes) do (
+for %%C in (cell_status_ordinals cell_flags cell_setters cell_setter_atomicity cell_real_decode cell_rows cell_device_logits cell_alloc_faults cell_residency cell_hook_lifecycle cell_gpu_hook_lifecycle cell_batch_four cell_close_faults cell_missing_shader cell_private_bytes) do (
   echo ===== %%C =====
   cl /nologo /std:c++20 /W4 /EHsc /MD /fp:precise /c /DT2956_CANDIDATE ^
     /I"%REPO%\include" /Fo"%HERE%out\%%C.obj" ^

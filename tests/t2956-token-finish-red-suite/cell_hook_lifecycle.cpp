@@ -133,6 +133,17 @@ int main(int argc, char** argv) {
     auto hook_a = Hook(&state_a), hook_b = Hook(&state_b);
     if (sslm_workspace_set_parallel_for(a.handle, &hook_a) != SSLM_OK ||
         sslm_workspace_set_parallel_for(b.handle, &hook_b) != SSLM_OK) return 12;
+    sslm_seq saved_under_hook = nullptr;
+    if (sslm_seq_restore(model, &pool, blob.data(), blob.size(), &saved_under_hook) != SSLM_OK)
+        return 30;
+    std::vector<uint8_t> hook_blob(blob.size());
+    size_t hook_written = hook_blob.size();
+    const auto save_status = sslm_seq_save(saved_under_hook, hook_blob.data(), &hook_written);
+    sslm_seq_release(saved_under_hook);
+    if (save_status != SSLM_OK || hook_written != blob.size() || hook_blob != blob) {
+        std::fprintf(stderr, "FAIL CPU hook leaked into save blob\n");
+        return 31;
+    }
     sslm_prefix prefix = nullptr;
     if (sslm_prefix_begin(model, &pool, &prefix) != SSLM_OK) return 25;
     int32_t prefix_consumed = 0;

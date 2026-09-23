@@ -18,6 +18,7 @@ $cases = @(
     @('cell_status_ordinals'),
     @('cell_flags',$R05),
     @('cell_setters',$R05),
+    @('cell_setter_atomicity',$R05),
     @('cell_rows',$R05),
     @('cell_rows',$R15),
     @('cell_rows',$ru),
@@ -25,6 +26,8 @@ $cases = @(
     @('cell_alloc_faults',$R15,$Adapter),
     @('cell_residency',$R05,$R15,$ru),
     @('cell_hook_lifecycle',$R05),
+    @('cell_gpu_hook_lifecycle',$R05),
+    @('cell_batch_four',$R05),
     @('cell_close_faults'),
     @('cell_missing_shader',$R05,$missing)
 )
@@ -35,8 +38,10 @@ for ($index = 0; $index -lt $cases.Count; ++$index) {
     if ($case.Count -gt 1) { $arguments = $case[1..($case.Count-1)] }
     $exe = Join-Path $bin "$name.exe"
     $log = Join-Path $out ("{0:D2}_{1}.txt" -f $index,$name)
+    $ErrorActionPreference = 'Continue' # fault cells intentionally write diagnostics on stderr
     & $exe @arguments *> $log
     $status = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
     Write-Output "$index $name exit=$status"
     if ($status -ne 0) { Get-Content $log -Tail 20; exit $status }
 }

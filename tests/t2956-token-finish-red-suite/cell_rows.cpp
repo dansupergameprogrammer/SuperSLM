@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -34,8 +35,10 @@ void SleepConcurrent(void* host, int32_t count, sslm_task_fn task, void* ctx) {
     if (count < 1 || count > state.max_tasks) ++state.bad_count;
     std::vector<std::thread> workers;
     workers.reserve(static_cast<size_t>(count));
-    for (int32_t i = 0; i < count; ++i) workers.emplace_back([=] {
-        std::this_thread::sleep_for(std::chrono::milliseconds((i * 7 + 1) % 3));
+    std::mt19937 random{std::random_device{}()};
+    std::uniform_int_distribution<int> delay_ms(0, 2);
+    for (int32_t i = 0; i < count; ++i) workers.emplace_back([=, delay = delay_ms(random)] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay));
         task(ctx, i);
     });
     for (auto& worker : workers) worker.join();

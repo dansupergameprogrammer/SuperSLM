@@ -1,5 +1,5 @@
 param([Parameter(Mandatory=$true)][string]$Id)
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue' # MSVC setup and deliberate fault cells write to stderr
 $suite = Split-Path -Parent $MyInvocation.MyCommand.Path
 $tree = 'D:\_t2956-mutants\src'
 $log = Join-Path 'D:\_t2956-mutants\logs' $Id
@@ -61,7 +61,7 @@ $cellExit = $LASTEXITCODE
 Get-Content (Join-Path $log 'mutation.txt')
 Write-Output "MUTANT $Id build=0 link=0 cell_exit=$cellExit"
 $cellText = Get-Content -Raw (Join-Path $log 'cell.txt')
-($cellText -split "`r?`n") | Where-Object { $_ -match '^FAIL ' } | Select-Object -First 3
+($cellText -split "`r?`n") | Where-Object { $_ -match 'FAIL ' } | Select-Object -First 3
 $expected = switch -Regex ($Id) {
     '^a$' { 'FAIL rows vector=0 max_tasks=3'; break }
     '^b$' { 'FAIL malformed CPU omit0'; break }
