@@ -21,7 +21,10 @@ call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build
 if exist "%SRC%" rmdir /s /q "%SRC%"
 mkdir "%SRC%"
 pushd "%ENG%"
-git archive HEAD | (cd /d "%SRC%" && tar -x)
+git archive HEAD -o "%SCRATCH%\te399-archive.tar" || (popd & exit /b 1)
+popd
+pushd "%SRC%"
+tar -xf "%SCRATCH%\te399-archive.tar" || (popd & exit /b 1)
 popd
 if not exist "%SRC%\CMakeLists.txt" (
 	echo ARCHIVE FAILED: %SRC%\CMakeLists.txt missing
