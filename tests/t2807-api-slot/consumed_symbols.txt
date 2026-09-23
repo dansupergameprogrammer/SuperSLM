@@ -10,7 +10,7 @@
 # consumer: SuperSLMUnreal upgrade runtime module, objects of 2026-09-18 23:15-23:17 @ cabc702bef -- RECORDED per-object dumpbin read tests\t2807-api-slot\recorded\superslmunreal-upgrade-census-imports.tsv (sha256 231fe80f74f8ba0dbb5d38c9a027d5c97ca059e2ffe446219d05cf6c20c55833): 37 rows, 5 importing objects, 9 C++ and 25 C engine symbols, 0 rows dropped by the case-sensitive filter
 #   disposition (no commit check is possible on a recorded read): NOT attributable to a commit: the objects predate the branch's later sources (tip cabc702bef at 23:43 plus uncommitted edits, which added five C verb calls); the C part is superseded by c_abi_verbs.txt, and the planner's source census found the C++ calls unchanged at these 9 (T-2823 record Sec2). Admitted for ParseConfig at the conductor's direction (T-2825: X2 expects 25 C++ + 37 C); replaced at the release reading (plan Sec3.5 step 5) by a live read of the upgrade's re-pinning commit
 # union: 50 symbols (25 C++, 25 C)
-# X2 expected set: 25 C++ + 37 C (c_abi_verbs.txt) = 62
+# X2 expected set: 25 C++ + 38 C (c_abi_verbs.txt) = 63
 ??0TokenizerView@superslm@@QEAA@XZ
 ??1TokenizerView@superslm@@QEAA@XZ
 ??4TokenizerView@superslm@@QEAAAEAV01@$$QEAV01@@Z

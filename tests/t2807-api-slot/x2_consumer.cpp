@@ -2,7 +2,7 @@
 // C ABI by the T-2823 fold). Compiled with /DSUPERSLM_API=__declspec(dllimport) and linked against
 // sslm_engine.dll's import library ONLY, so every engine symbol it calls must cross the DLL boundary. It calls
 // every symbol of X2's expected set at least once and nothing else from the engine -- the 25 C++ entries of
-// consumed_symbols.txt and the 37 C verbs of c_abi_verbs.txt, 62 at v1.6.0: build_x2.ps1 checks that this
+// consumed_symbols.txt and the 38 C verbs of c_abi_verbs.txt, 63 at v1.7.0: build_x2.ps1 checks that this
 // DLL's import table from sslm_engine.dll EQUALS that set, so a call silently dropped here fails X2 (the
 // harness mutant, /DX2_DROP_CHUNK_BATCHED, proves it).
 //
@@ -29,11 +29,11 @@
 //   RunLayerLoopChunkBatched                      chunk_tokens 0 -> InvalidLayerBudget (checked at entry)
 //   ParseConfig                                   an empty section view -> BadConfigSize (the exact-size check
 //                                                 is the first check, src/model.cpp ParseConfigImpl)
-// The C verbs (37), each called with null handles and null out-pointers, which every verb's contract refuses
-// at entry: the 31 that return sslm_status return SSLM_INVALID_ARGUMENT; the six sizing verbs
+// The C verbs (38), each called with null handles and null out-pointers, which every verb's contract refuses
+// at entry: the 32 that return sslm_status return SSLM_INVALID_ARGUMENT; the six sizing verbs
 // (sslm_kv_block_size, sslm_kv_pool_overhead_size, sslm_seq_state_size, sslm_workspace_size,
-// sslm_adapter_residency, sslm_schema_count) return 0 for a null model or adapter. Executed on all 37 by the
-// planner's probe (T-2823 P2) and asserted here per verb.
+// sslm_adapter_residency, sslm_schema_count) return 0 for a null model or adapter. Each row below asserts
+// its refusal; sslm_workspace_set_parallel_for adds the new import.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -192,6 +192,7 @@ extern "C" __declspec(dllexport) int x2_run() {
 		X2_INVALID(sslm_kv_pool_create(m, nullptr, 0, 1, nullptr));
 		X2_INVALID(sslm_kv_pool_destroy(kp));
 		X2_INVALID(sslm_workspace_destroy(ws));
+		X2_INVALID(sslm_workspace_set_parallel_for(ws, nullptr));
 		X2_INVALID(sslm_prefix_begin(m, nullptr, nullptr));
 		X2_INVALID(sslm_prefix_prefill(m, p, tok, 1, 1, SSLM_SPAN_PROMPT, ws, &n));
 		X2_INVALID(sslm_prefix_freeze(p));
