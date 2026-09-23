@@ -77,9 +77,11 @@ typedef struct GpuContextConfig {
  * flag, so tokens are identical. Opt-in per model. New VRAM per mapped model: the head table
  * (vocab_size x hidden_size bytes: 136,134,656 B at Qwen2.5-0.5B, 233,373,696 B at 1.5B) plus a
  * hidden_size x 4 B input row and a vocab_size x 8 B output row, each rounded up to the 64 KiB
- * allocation granule; nothing per sequence. With the flag set the model keeps no host copy of
- * the head, and the host parallel-for hook (sslm_gpu_context_set_host_parallel_for) is not used
- * for that model's finish. */
+ * allocation granule; nothing per sequence. With the flag set no separate host copy of the head
+ * is taken: an untied model's lm_head is not copied to the host, and a tied model's head is its
+ * embedding table, which the handle keeps on the host in every case for token embedding. The
+ * host parallel-for hook (sslm_gpu_context_set_host_parallel_for) is not used for that model's
+ * finish. */
 typedef struct GpuResidencyConfig {
 	uint32_t flags;  /* SSLM_GPU_RESIDENCY_* bits; 0 = no options */
 } GpuResidencyConfig;

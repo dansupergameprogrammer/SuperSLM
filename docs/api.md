@@ -148,8 +148,10 @@ installs an `sslm_parallel_for` (`include/superslm/parallel_for.h`) on a
 CPU workspace with `sslm_workspace_set_parallel_for`, or on a GPU context
 with `sslm_gpu_context_set_host_parallel_for`. The finish then splits the
 rows into contiguous blocks and hands them to the hook's `run`. With no hook
-installed the finish runs serially on the calling thread, exactly as in
-every earlier release.
+installed the finish runs serially on the calling thread, as in every
+earlier release, and its tokens are identical to 1.6.0; its measured cost
+against 1.6.0 is in the
+[1.7.0 release note](releases/1.7.0.md#no-hook-cost).
 
 - `run` must invoke each task index in `[0, task_count)` exactly once, on
   any threads, and return only after every invocation has returned. The
@@ -177,8 +179,11 @@ every earlier release.
 with `SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE` uploads its output head table (the
 tied embedding, or `lm_head` when untied) to the device. The finish then
 computes the exact int64 logits row on the device, reads it back and
-narrows it on the host. The host keeps no copy of that head, and the
-context's host hook is not used for that model. New VRAM per mapped model is
+narrows it on the host. With the flag set no separate host copy of the
+head is taken: an untied model's `lm_head` is not copied to the host, and a
+tied model's head is its embedding table, which the handle keeps on the host
+in every case for token embedding. The context's host hook is not used for
+that model. New VRAM per mapped model is
 the head table (`vocab_size × hidden_size` bytes: 136,134,656 B for
 Qwen2.5-0.5B and 233,373,696 B for 1.5B) plus a `hidden_size × 4` B input
 row and a `vocab_size × 8` B output row, each rounded up to the 64 KiB
@@ -193,9 +198,11 @@ flag clear a model maps exactly as before and uses no new VRAM.
   `SSLM_GPU_ALLOCATION_FAILED`; the context stays usable, and the map can
   be retried on it, with or without the flag.
 
-The GPU handle keeps one host copy of a tied head in every case: a tied
-model's head is its embedding, which the handle already holds, so no second
-copy is taken (before 1.7.0 there were two).
+The GPU handle keeps one host copy of a tied head, with the flag set or
+clear: a tied model's head is its embedding table, which the handle keeps on
+the host in every case for token embedding, so no second copy is taken
+(before 1.7.0 there were two). An untied model mapped without the flag keeps
+a host copy of its `lm_head`.
 
 ### Thread safety
 
