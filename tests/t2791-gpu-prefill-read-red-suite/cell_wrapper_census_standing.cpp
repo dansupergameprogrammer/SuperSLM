@@ -1,11 +1,10 @@
-// T-2791 (Curie) -- plan Sec3.4 row 7, "The snapshot changes no existing behaviour": "Every
-// Sec2.6 member's next decode-wrapper status equals the 1.5.0 status recorded in
-// te269-census-output.txt, reproduced on the 1.6.0 build."
+// T-2791 -- plan Sec3.4 row 7: each Sec2.6 member's next decode-wrapper status equals the
+// 1.5.0 status recorded in te269-census-output.txt. M16's intervening schema-unbind status
+// follows D-SLM7625, which changed that separate contract in 1.6.0.
 //
-// A STANDING cell, not a red one: it asserts preserved 1.5.0 behaviour, so it is green at
-// v1.5.0 by construction and must stay green after the build (the same disposition as
-// tests/t2178-gpu-batched-prefill-red-suite/cell_exit_census.cpp). What it pins is that adding
-// the snapshot's writers to create, reset and the two prefill twins moves no decode observable.
+// A standing cell for the decode-wrapper census. The M16 bind-status assertion is green from
+// 1.6.0 onward, after D-SLM7625. Adding the snapshot's writers to create, reset and the two
+// prefill twins must preserve each recorded next-decode status.
 //
 // ORACLE: the "next_wrapper" column of the planner's executed census at v1.5.0
 // (Claude/Vitruvius/te269-probe/te269-census-output.txt, Qwen3-Embedding-0.6B), identical on the
@@ -14,10 +13,17 @@
 // rows are the shipped decode-shortcut defect plan Sec3.3 leaves unrepaired in 1.6.0 (P-9) --
 // pinned here as they are, so a 1.6.0 build that silently changes them fails this cell and the
 // change has to be made on purpose.
+// M16 retains the post-prefill population: base() has already called the generation prefill.
+// D-SLM7625 clears schema bind_eligible on every generation entry, so the schema unbind must
+// return SSLM_SEQUENCE_REJECTED without changing the saved sequence state. The adapter unbind is
+// governed by its separate adapter-binding contract and remains SSLM_OK. The next decode-wrapper
+// status remains the census's SSLM_OK. Resetting before schema unbind would test a newly eligible
+// sequence instead of this census member.
 //
-// It calls no read verb, so it links and runs at v1.5.0.
+// It calls no read verb, so it links at v1.5.0; M16's bind-status assertion rejects that version.
 //
 // Run: cell_wrapper_census_standing.exe [--qwen3=PATH] [--synthetic=PATH] [--g5fixture=PATH]
+// Focused M16 check: --t2959-synthetic-only --synthetic=PATH
 #include "fixture_common.h"
 
 namespace {
@@ -99,8 +105,17 @@ void RunOn(const std::string& path, const char* flag, SslmGpuContext* ctx) {
 	}
 	base();
 	{
+		size_t need = 0;
+		(void)sslm_gpu_seq_save(ctx, seq, nullptr, &need);
+		CHECK(need > 0);
+		std::vector<uint8_t> before(need), after(need);
+		size_t written = need;
+		CHECK(sslm_gpu_seq_save(ctx, seq, before.data(), &written) == SSLM_OK && written == need);
 		CHECK(sslm_gpu_seq_bind_adapter(ctx, seq, nullptr) == SSLM_OK);
-		CHECK(SslmGpuSeqSetSchemaForG5Bridge(ctx, seq, -1) == SSLM_OK);
+		CHECK(SslmGpuSeqSetSchemaForG5Bridge(ctx, seq, -1) == SSLM_SEQUENCE_REJECTED);
+		written = need;
+		CHECK(sslm_gpu_seq_save(ctx, seq, after.data(), &written) == SSLM_OK && written == need);
+		CHECK(before == after);
 		int32_t r = 0; SslmGpuStatus rs = SSLM_OK;
 		CHECK(sslm_gpu_ready(ctx, seq, 0, &r, &rs) == SSLM_OK);
 	}
@@ -127,14 +142,18 @@ void RunOn(const std::string& path, const char* flag, SslmGpuContext* ctx) {
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
+	bool synthetic_only = false;
+	for (int i = 1; i < argc; ++i) {
+		if (std::strcmp(argv[i], "--t2959-synthetic-only") == 0) synthetic_only = true;
+	}
 	SslmGpuContext* ctx = nullptr;
 	if (sslm_gpu_context_create(GpuContextConfig{}, &ctx) != SSLM_OK || !ctx) {
 		std::printf("FATAL: sslm_gpu_context_create failed\n");
 		return 2;
 	}
-	RunOn(g_qwen3_path, "--qwen3", ctx);
+	if (!synthetic_only) RunOn(g_qwen3_path, "--qwen3", ctx);
 	RunOn(g_synthetic_path, "--synthetic", ctx);
-	RunOn(g_g5_path, "--g5fixture", ctx);
+	if (!synthetic_only) RunOn(g_g5_path, "--g5fixture", ctx);
 	sslm_gpu_context_destroy(ctx);
 	return FinishSuite("cell_wrapper_census_standing");
 }

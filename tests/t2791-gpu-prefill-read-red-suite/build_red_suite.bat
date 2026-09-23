@@ -14,7 +14,8 @@ rem   cell_schema_guard_status        RED BY LINK: LNK2019 on sslm_gpu_seq_read_
 rem   cell_prompt_guard_removal       LINKS; GREEN AT RUN (Q4-1e: a real removal is SSLM_DEVICE_LOST at 1.5.0
 rem                                   too -- a liveness and cleanliness cell, not a classification cell)
 rem   cell_env_pins_shipping_leg      LINKS; RED AT RUN (the shipping build still reads the pins)
-rem   cell_wrapper_census_standing    LINKS; GREEN AT RUN (a standing 1.5.0 baseline that must stay green)
+rem   cell_wrapper_census_standing    LINKS; M16 RED AT RUN on v1.5.0's post-prefill schema unbind;
+rem                                   GREEN from v1.6.0 under D-SLM7625, with next-decode census preserved
 rem
 rem Usage (from any directory):
 rem   tests\t2791-gpu-prefill-read-red-suite\build_red_suite.bat ["--out=DIR"] ["--shaders=DIR"]

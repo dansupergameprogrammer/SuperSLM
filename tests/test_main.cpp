@@ -25455,6 +25455,51 @@ static void TestT2585_DispatchBudget_IsModelAwareAtExactBoundaries() {
 }
 
 #if defined(_WIN32) && defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
+static void TestT2959_GpuOutputHandlesNullOnRefusal() {
+	auto verify = [&](const char* name, auto& output, auto&& call, SslmGpuStatus real_status) {
+		using Handle = std::remove_reference_t<decltype(output)>;
+		const Handle sentinel = reinterpret_cast<Handle>(static_cast<uintptr_t>(1));
+		for (const auto point : {SslmGpuApiFailureInjectionPoint::BeforeHandler,
+		                         SslmGpuApiFailureInjectionPoint::AfterHandler}) {
+			output = sentinel;
+			ArmSslmGpuApiFailureInjection(name, point);
+			const SslmGpuStatus status = call();
+			CHECK_MSG(status == SslmGpuStatus::SSLM_GPU_ALLOCATION_FAILED,
+			          "%s injection point %u returned %u", name, static_cast<unsigned>(point),
+			          static_cast<unsigned>(status));
+			CHECK_MSG(output == nullptr, "%s injection point %u retained output handle", name,
+			          static_cast<unsigned>(point));
+			ClearSslmGpuApiFailureInjection();
+		}
+		output = sentinel;
+		const SslmGpuStatus status = call();
+		CHECK_MSG(status == real_status, "%s real refusal returned %u", name,
+		          static_cast<unsigned>(status));
+		CHECK_MSG(output == nullptr, "%s real refusal retained output handle", name);
+	};
+	GpuContextConfig invalid_dir{};
+	invalid_dir.shader_dir = "";
+	SslmGpuContext* context = nullptr;
+	verify("sslm_gpu_context_create", context,
+	       [&] { return sslm_gpu_context_create(invalid_dir, &context); },
+	       SslmGpuStatus::SSLM_GPU_SHADER_DIR_INVALID);
+	SslmGpuModelHandle* model = nullptr;
+	verify("sslm_gpu_model_map", model,
+	       [&] { return sslm_gpu_model_map(nullptr, nullptr, {}, &model); },
+	       SslmGpuStatus::SSLM_DEVICE_LOST);
+	SslmGpuAdapterHandle* adapter = nullptr;
+	verify("sslm_gpu_adapter_map", adapter,
+	       [&] { return sslm_gpu_adapter_map(nullptr, nullptr, nullptr, &adapter); },
+	       SslmGpuStatus::SSLM_DEVICE_LOST);
+	SslmGpuSequenceHandle* seq = nullptr;
+	verify("sslm_gpu_seq_create", seq,
+	       [&] { return sslm_gpu_seq_create(nullptr, nullptr, 0, &seq); },
+	       SslmGpuStatus::SSLM_SEQUENCE_KV_BUFFER_MISMATCH);
+	verify("sslm_gpu_seq_restore", seq,
+	       [&] { return sslm_gpu_seq_restore(nullptr, nullptr, nullptr, 0, &seq); },
+	       SslmGpuStatus::SSLM_SEQUENCE_KV_BUFFER_MISMATCH);
+}
+
 static void TestGpuPublicApiContainsInjectedAllocationFailuresAtBothHandlerEdges() {
 	auto verify = [&](const char* name, auto&& call) {
 		for (const auto point : {SslmGpuApiFailureInjectionPoint::BeforeHandler,
@@ -28922,6 +28967,15 @@ static void TestT2948_ShaderDirInvalidBeforeDeviceInit() {
 
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
+	if (argc > 1 && std::strcmp(argv[1], "--t2959-gpu-output-null-only") == 0) {
+#if defined(_WIN32) && defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
+		TestT2959_GpuOutputHandlesNullOnRefusal();
+		std::printf("t2959 GPU output-null: %d checks, %d failures\n", GChecks, GFailures);
+		return GFailures == 0 ? 0 : 1;
+#else
+		return 2;
+#endif
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--t2948-shader-dir-invalid-only") == 0) {
 #ifdef _WIN32
 		if (!T2948HasShaderDir<GpuContextConfig>) {
@@ -29814,6 +29868,7 @@ int main(int argc, char** argv) {
 	TestT2019_B7_DispatchBudget_EveryRemainderAndBoundary();
 	TestT2585_DispatchBudget_IsModelAwareAtExactBoundaries();
 #if defined(_WIN32) && defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
+	TestT2959_GpuOutputHandlesNullOnRefusal();
 	TestGpuPublicApiContainsInjectedAllocationFailuresAtBothHandlerEdges();
 #endif
 	TestT2019_B7_DispatchBudget_RejectingLayerStillRecordsFullQuantum();
