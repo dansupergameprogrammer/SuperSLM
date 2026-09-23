@@ -19,6 +19,7 @@ candidate hit. The real candidate's own end-to-end conversion-and-load is a sepa
 one-off product proof recorded in the build log — no fixture cell here substitutes for it.
 """
 
+import dataclasses
 import hashlib
 import sys
 from pathlib import Path
@@ -199,6 +200,65 @@ def _hash_group(group):
     return hashlib.sha256(_hash_value(group)).hexdigest()
 
 
+def _canonical_float(pipeline, value):
+    """Pin an offline float scale at the converter's C26 rounding boundary."""
+    return pipeline.canonical_scale(float(value))
+
+
+def _golden_group(model, name, pipeline):
+    """Retain the eleven legacy groups without hashing intermediate float bits.
+
+    The final .sslm section hashes below are the engine-facing oracle. These group
+    hashes also identify which conversion stage changed when a section differs.
+    """
+    group = getattr(model, name)
+    if name in ("weight_scales", "residual_scales"):
+        return {key: tuple(_canonical_float(pipeline, value) for value in values)
+                if isinstance(values, tuple) else _canonical_float(pipeline, values)
+                for key, values in group.items()}
+    if name == "scales":
+        return (
+            tuple((site.name, _canonical_float(pipeline, site.input_scale),
+                   _canonical_float(pipeline, site.output_scale),
+                   tuple(_canonical_float(pipeline, value) for value in site.weight_scales),
+                   site.multipliers, site.shifts)
+                  for site in group.requant),
+            group.rescale,
+            tuple((site, _canonical_float(pipeline, value))
+                  for site, value in group.nonlinear),
+        )
+    return group
+
+
+def _golden_mismatches(model, pipeline):
+    import convert_model
+
+    mismatched = []
+    for name, expected in _BASE_ENGINE_GOLDEN_HASHES.items():
+        actual = _hash_group(_golden_group(model, name, pipeline))
+        if actual != expected:
+            mismatched.append((name, expected, actual))
+    sections, _fold_error = convert_model.build_sections(model)
+    actual_sections = {int(section.type): hashlib.sha256(section.data).hexdigest()
+                       for section in sections}
+    if len(actual_sections) != len(sections):
+        mismatched.append(("duplicate section type", len(sections), len(actual_sections)))
+    for section_type, expected in _BASE_ENGINE_SECTION_HASHES.items():
+        actual = actual_sections.pop(section_type, None)
+        if actual != expected:
+            mismatched.append((f"section {section_type}", expected, actual))
+    for section_type, actual in actual_sections.items():
+        mismatched.append((f"unexpected section {section_type}", None, actual))
+    return mismatched
+
+
+def _assert_pinned_golden(model, pipeline):
+    mismatched = _golden_mismatches(model, pipeline)
+    assert not mismatched, (
+        f"{len(mismatched)} base-engine (fdd4739) golden mismatches: {mismatched}"
+    )
+
+
 # T-2543 M-2: pinned against the base engine (`fdd4739`, this branch's own pre-fold tip),
 # computed once by loading that commit's own `pipeline.py` standalone (its unchanged
 # sibling modules -- intmath/rope/constrain -- resolved normally) and running it against
@@ -207,24 +267,36 @@ def _hash_group(group):
 # which cannot answer the brief's own exit condition ("converts byte-identically before
 # AND after") because the reference was produced by the artifact under test (Poirot
 # 2a46a85-t2540-ask5-trackc-review.md M-2). These are golden values, not derived at test
-# time -- a change to any of these eleven groups' own content for the unchanged legacy
-# fixture is exactly the regression this pin exists to catch.
+# time. Float calibration intermediates in weight_scales, scales, and residual_scales
+# are hashed after C26 canonicalization; the final .sslm sections below pin every byte
+# the C++ engine loads. Both sets were recomputed with fdd4739's own pipeline.py and
+# convert_model.py, loaded standalone against the unchanged legacy fixture.
 _BASE_ENGINE_GOLDEN_HASHES = {
     "weights": "50f12149241434d15825c64495d5a5ebf1a5c1e66e10fbca2df6b19009e8ac8f",
-    "weight_scales": "164ef153488bd10d39ceb25cc7ec2deedbe1d3393279dbef4867622f8f43136f",
+    "weight_scales": "72536fd952ef30961d86f1bac4a0ac03c9e7d03d23ea9eec210889d1697b4e3a",
     "composition_constants": "7adfdf093298bd5e26ed950a8037196ae5c66f3854d0d80b93e75e359b555041",
-    # 2026-09-14, D-SLM7031/D-SLM7037: fixed-height calibration changes only
-    # layer0.down_proj.requant's input/output binary64 values by one ULP each
-    # (relative -2.08677152255505e-16 and -2.317402193949158e-16); their
-    # canonical `(m, e)` pairs remain (1142523638, -46) and (2057636605, -51).
-    "scales": "aad698e72fd7d320c8d5204ce6457be574aa7d55bd4a7195d923ecd6e4da5bab",
-    "residual_scales": "7afd4b346692f91e4e744df0fbad773200b6b86ba1d98e4780656f042965a40d",
+    "scales": "1d73b439187477439180f2eb638b96ac8030413bb596d0f10e47d8553c70e092",
+    "residual_scales": "98e16d0bace1b3e67126923fee3ec321c388d7598490ef1128e7412e6a98481a",
     "biases": "f285db8c86cd3b66b1d99fce37ed7a7a276f783bb8d10274a10c06c345fc4be7",
     "dynamic_biases": "1f8474413794b2f8ed9355f7ba1a1c977b6c1e2a31d9b6f8ba0d2c765ed666fc",
     "kv_landing_scales": "b611b6dfe6cb4ad256a6ac8bddb12ae1eb60f10477780aeda578ddbe41efba1d",
     "kv_landing_reciprocals": "a400467118aa7b9f0512aa6513d5a2748a9b643ff1ff75976da0a9f3b1b6d537",
     "rope_tables": "fb5ca6c71c517b5395a7e8c218f90ece5c9de4642f12ec89a0ccbdb981c3306d",
     "calibration": "31d5ebbe3faba788f000bff7d0fff8dfc467e930e53f6b895c3a5502297cf4c8",
+}
+
+_BASE_ENGINE_SECTION_HASHES = {
+    # Section IDs: CFG1, WGT1, BIA1, ROP1, WSC1, composition constants, K/V landing
+    # scales, K/V landing reciprocals, SIL1 (sslm_format.SectionType).
+    0: "bb9c4b720ba84129083725f43acbe1cad80adf26697aff2b889b34f219773b34",
+    2: "2ba16da1e7a39aeab9a5e6ed951e90f7b0767a2f8bf865e7c0a84474a20fc839",
+    3: "1175ab6f0e6470b67fb6ebdbc77c1ec3b1ac50f0fd98aa8526ebe811ade9d087",
+    4: "3e144ea6b81091bec2b9bcd52f67fa5bd8cd55ef4a7b4cd8a1f8d8228f25e57a",
+    6: "6e2af148da71135215d7ab99d4ba5426b99236d6f5cd5c4f0d79206fbb9c0837",
+    7: "4108f6bc0563d83ca45f2cf9ea7f27936148c92e785e5b2194d0558b9c1a2a7d",
+    8: "8fc86a2dc20b979c3d601231fd66cad54cb818bbf2f53162cc66641594eb7c31",
+    9: "4e8e37d6cce5902964b681587c8edb965591d68b97b0676ca0d3511df753a4cb",
+    12: "4e49bf62fffce2470fddd0c637918637a8e97886f44913c1683f0f20de1d3490",
 }
 
 
@@ -236,23 +308,44 @@ def test_the_legacy_fixture_converts_identically_to_the_pinned_base_engine_golde
     Every one of the eleven groups the brief's own comparison names (weights,
     weight_scales, composition_constants, scales, residual_scales, biases,
     dynamic_biases, kv_landing_scales, kv_landing_reciprocals, rope_tables, calibration)
-    is included -- the cell above this one keeps the on-disk-bytes and tip-vs-tip checks,
-    which are real properties in their own right; this cell is the base-vs-tip proof
-    those cannot substitute for."""
+    is included. The nine emitted .sslm section payloads also have independent base
+    golden hashes, so the final engine-facing bytes are pinned. The cell above keeps
+    the on-disk-bytes and tip-vs-tip checks; this is the base-vs-tip proof."""
     fixture_mod = _fixture_builder()
     pipeline = require(MODULE)
     ckpt = fixture_mod.build_fixture_checkpoint(tmp_path / "golden_legacy")
     model = pipeline.load_model(ckpt)
 
-    mismatched = []
-    for group_name, golden_hash in _BASE_ENGINE_GOLDEN_HASHES.items():
-        tip_hash = _hash_group(getattr(model, group_name))
-        if tip_hash != golden_hash:
-            mismatched.append((group_name, golden_hash, tip_hash))
-    assert not mismatched, (
-        f"{len(mismatched)} of {len(_BASE_ENGINE_GOLDEN_HASHES)} groups diverged from the "
-        f"base-engine (fdd4739) golden: {mismatched}"
-    )
+    _assert_pinned_golden(model, pipeline)
+
+
+def test_the_base_engine_golden_rejects_loaded_value_changes_and_ignores_one_ulp(tmp_path):
+    fixture_mod = _fixture_builder()
+    pipeline = require(MODULE)
+    model = pipeline.load_model(fixture_mod.build_fixture_checkpoint(tmp_path / "golden_vitality"))
+
+    # D-SLM7031/D-SLM7037's one-ULP case: the input float moves while the
+    # converter's canonical pair and the emitted .sslm sections stay fixed.
+    site = next(site for site in model.scales.requant
+                if site.name == "layer0.down_proj.requant")
+    moved = dataclasses.replace(site, input_scale=float(np.nextafter(site.input_scale, np.inf)))
+    assert moved.input_scale != site.input_scale
+    assert pipeline.canonical_scale(moved.input_scale) == pipeline.canonical_scale(site.input_scale)
+    ulp_scales = dataclasses.replace(
+        model.scales, requant=tuple(moved if entry is site else entry
+                                    for entry in model.scales.requant))
+    _assert_pinned_golden(dataclasses.replace(model, scales=ulp_scales), pipeline)
+
+    # A changed C26 mantissa is loaded from KVC1 and must make the same golden
+    # assertion fail, including its final-section hash.
+    changed_constants = dict(model.composition_constants)
+    mantissa, exponent = changed_constants["embed"]
+    changed_constants["embed"] = (mantissa + 1, exponent)
+    mutated_model = dataclasses.replace(model, composition_constants=changed_constants)
+    mismatched_names = {name for name, _, _ in _golden_mismatches(mutated_model, pipeline)}
+    assert {"composition_constants", "section 7"} <= mismatched_names
+    with pytest.raises(AssertionError, match="composition_constants"):
+        _assert_pinned_golden(mutated_model, pipeline)
 
 
 # ==============================================================================
