@@ -95,23 +95,44 @@ int main(int argc, char** argv) {
 	for (int route_idx = 0; route_idx < 3; ++route_idx) {
 		const char* route = kRouteName[route_idx];
 		void* cs = CpuBuildRoute(route, P.data(), static_cast<int32_t>(P.size()), t0, cap);
+		CHECK_MSG(cs != nullptr, "[%s] CPU setup failed", route);
+		if (!cs) continue;
 
 		SslmGpuSequenceHandle* gs = nullptr;
-		sslm_gpu_seq_create(fx.ctx, fx.model, fx.model_cap, &gs);
-		SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, gs, 0);
+		const SslmGpuStatus created = sslm_gpu_seq_create(fx.ctx, fx.model, fx.model_cap, &gs);
+		CHECK_MSG(created == SSLM_OK && gs, "[%s] GPU create returned %s", route, StatusName(created));
+		if (!gs) { CpuReleaseSeq(cs); continue; }
+		const SslmGpuStatus bound = SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, gs, 0);
+		CHECK_MSG(bound == SSLM_OK, "[%s] GPU bind returned %s", route, StatusName(bound));
+		bool setup_ok = bound == SSLM_OK;
 		if (!std::strcmp(route, "R")) {
-			Prefill(fx, gs, P);
+			const SslmGpuStatus prefill = setup_ok ? Prefill(fx, gs, P) : bound;
+			CHECK_MSG(prefill == SSLM_OK, "[R] GPU prompt prefill returned %s", StatusName(prefill));
+			setup_ok = setup_ok && prefill == SSLM_OK;
 			int32_t consumed = 0;
-			SslmGpuSeqPrefillSchemaContentForG5Bridge(fx.ctx, gs, &t0, 1, fx.one_layer_budget, &consumed);
+			const SslmGpuStatus content = setup_ok ? SslmGpuSeqPrefillSchemaContentForG5Bridge(
+			    fx.ctx, gs, &t0, 1, fx.one_layer_budget, &consumed) : prefill;
+			CHECK_MSG(content == SSLM_OK && consumed == 1,
+			          "[R] GPU content prefill returned %s, consumed=%d", StatusName(content), consumed);
+			setup_ok = setup_ok && content == SSLM_OK && consumed == 1;
 		} else if (!std::strcmp(route, "D")) {
-			Prefill(fx, gs, P);
+			const SslmGpuStatus prefill = setup_ok ? Prefill(fx, gs, P) : bound;
+			CHECK_MSG(prefill == SSLM_OK, "[D] GPU prompt prefill returned %s", StatusName(prefill));
+			setup_ok = setup_ok && prefill == SSLM_OK;
 		} else {  // C
 			std::vector<int32_t> fill;
 			for (int64_t i = 0; i < cap - 1; ++i) fill.push_back(P[static_cast<size_t>(i) % P.size()]);
-			Prefill(fx, gs, fill);
+			const SslmGpuStatus prefill = setup_ok ? Prefill(fx, gs, fill) : bound;
+			CHECK_MSG(prefill == SSLM_OK, "[C] GPU prompt prefill returned %s", StatusName(prefill));
+			setup_ok = setup_ok && prefill == SSLM_OK;
 			int32_t consumed = 0;
-			SslmGpuSeqPrefillSchemaContentForG5Bridge(fx.ctx, gs, &t0, 1, fx.one_layer_budget, &consumed);
+			const SslmGpuStatus content = setup_ok ? SslmGpuSeqPrefillSchemaContentForG5Bridge(
+			    fx.ctx, gs, &t0, 1, fx.one_layer_budget, &consumed) : prefill;
+			CHECK_MSG(content == SSLM_OK && consumed == 1,
+			          "[C] GPU content prefill returned %s, consumed=%d", StatusName(content), consumed);
+			setup_ok = setup_ok && content == SSLM_OK && consumed == 1;
 		}
+		if (!setup_ok) { CpuReleaseSeq(cs); sslm_gpu_seq_release(fx.ctx, gs); continue; }
 
 		const int n_calls = (!std::strcmp(route, "D")) ? 4 : 3;
 		uint64_t prev_cpu_hash = 0, prev_gpu_hash = 0;
@@ -153,6 +174,14 @@ int main(int argc, char** argv) {
 			CHECK_MSG(static_cast<long long>(cpu_ctx) == gpu_ctx,
 			          "[%s] call #%d: context_length disagrees -- CPU=%lld GPU=%lld", route, k,
 			          static_cast<long long>(cpu_ctx), gpu_ctx);
+			const int32_t want_out = std::strcmp(route, "D") == 0 && k == 1 ? t0 : -2;
+			const int64_t want_ctx = std::strcmp(route, "C") == 0 ? cap :
+			                         static_cast<int64_t>(P.size()) + (std::strcmp(route, "R") == 0 || k > 1 ? 1 : 0);
+			CHECK_MSG(cpu_out == want_out && gpu_out == want_out,
+			          "[%s] call #%d tokens CPU=%d GPU=%d, want %d", route, k, cpu_out, gpu_out, want_out);
+			CHECK_MSG(cpu_ctx == want_ctx && gpu_ctx == want_ctx,
+			          "[%s] call #%d contexts CPU=%lld GPU=%lld, want %lld", route, k,
+			          static_cast<long long>(cpu_ctx), gpu_ctx, static_cast<long long>(want_ctx));
 
 			// (b) per-backend content self-consistency across repeat calls at the dead end -- the
 			// check the mutant does NOT fail (both post-divergence calls read the SAME wrong hash).

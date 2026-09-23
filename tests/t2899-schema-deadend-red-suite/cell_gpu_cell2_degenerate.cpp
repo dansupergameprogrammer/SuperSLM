@@ -44,8 +44,10 @@
 // `build_red_suite_gpu.bat` links this cell against `gpu_asbuilt` and the generated
 // `gpu_mut_cr` object. Under MUT_CHECKEDRETURN, a
 // degenerate row's own lowest-index tie-break (token 0, `kTokOpen`) is written to
-// `*out_token` unconditionally instead of `-2`, and `dfa_walk_state` advances off S_e
-// instead of staying pinned. MUT_LATE restores late binding after prompt prefill and must
+// `*out_token` unconditionally instead of `-2`. Transition leaves next_state unchanged on
+// a miss, so this mutant cannot move the walk. The walk-pinned assertion independently
+// guards the state postcondition; MUT_WALKMISS below writes a wrong state on that miss.
+// MUT_LATE restores late binding after prompt prefill and must
 // turn the D-SLM7625 assertion red.
 //
 // Run: cell_gpu_cell2_degenerate.exe --stringschema=PATH
@@ -77,8 +79,8 @@ constexpr int32_t kCallerToken = 8;  // the decode call's own caller-supplied to
 // real, admitted schema-content transitions from a fresh bind.
 SslmGpuSequenceHandle* ReachSe(const GpuModelFixture& fx) {
 	SslmGpuSequenceHandle* seq = nullptr;
-	sslm_gpu_seq_create(fx.ctx, fx.model, fx.model_cap, &seq);
-	CHECK_MSG(seq != nullptr, "sslm_gpu_seq_create failed");
+	const SslmGpuStatus created = sslm_gpu_seq_create(fx.ctx, fx.model, fx.model_cap, &seq);
+	CHECK_MSG(created == SSLM_OK && seq, "sslm_gpu_seq_create returned %s", StatusName(created));
 	if (!seq) return nullptr;
 	const std::vector<int32_t> P = {kFillerBase, kFillerBase + 1, kFillerBase + 2};
 	CHECK_MSG(SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, seq, 0) == SSLM_OK, "bind schema 0");

@@ -53,40 +53,64 @@ GDec Decode(const GpuModelFixture& fx, SslmGpuSequenceHandle* s, int32_t tok) {
 SslmGpuSequenceHandle* Build(const GpuModelFixture& fx, int pt, const std::vector<int32_t>& P, int32_t t0,
                              int32_t other, int32_t* last) {
 	SslmGpuSequenceHandle* s = nullptr;
-	sslm_gpu_seq_create(fx.ctx, fx.model, fx.model_cap, &s);
+	const SslmGpuStatus create = sslm_gpu_seq_create(fx.ctx, fx.model, fx.model_cap, &s);
+	CHECK_MSG(create == SSLM_OK && s, "[pt%d] create returned %s", pt, StatusName(create));
+	if (!s) return nullptr;
 	*last = -1;
-	auto step = [&]() {
+	auto step = [&](bool dead_end = false) -> bool {
 		GDec d = Decode(fx, s, *last >= 0 ? *last : other);
+		CHECK_MSG(d.st == SSLM_OK, "[pt%d] decode returned %s", pt, StatusName(d.st));
+		CHECK_MSG(dead_end ? d.out == -2 : d.out >= 0,
+		          "[pt%d] decode token=%d, want %s", pt, d.out,
+		          dead_end ? "-2 dead end" : "produced token");
 		if (d.st == SSLM_OK && d.out >= 0) *last = d.out;
+		return d.st == SSLM_OK && (dead_end ? d.out == -2 : d.out >= 0);
 	};
-	int32_t consumed = -1;
+	auto bind_prefill = [&](const std::vector<int32_t>& prompt) -> bool {
+#ifdef T2963_OLD_ORDER
+		const SslmGpuStatus prefill = Prefill(fx, s, prompt);
+		CHECK_MSG(prefill == SSLM_OK, "[pt%d] prefill returned %s", pt, StatusName(prefill));
+		const SslmGpuStatus bind = SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, s, 0);
+#else
+		const SslmGpuStatus bind = SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, s, 0);
+		const SslmGpuStatus prefill = bind == SSLM_OK ? Prefill(fx, s, prompt) : bind;
+		CHECK_MSG(prefill == SSLM_OK, "[pt%d] prefill returned %s", pt, StatusName(prefill));
+#endif
+		CHECK_MSG(bind == SSLM_OK, "[pt%d] bind returned %s", pt, StatusName(bind));
+		return bind == SSLM_OK && prefill == SSLM_OK;
+	};
+	auto content = [&]() -> bool {
+		int32_t consumed = -1;
+		const SslmGpuStatus st = SslmGpuSeqPrefillSchemaContentForG5Bridge(
+		    fx.ctx, s, &t0, 1, fx.one_layer_budget, &consumed);
+		CHECK_MSG(st == SSLM_OK && consumed == 1, "[pt%d] content prefill returned %s, consumed=%d",
+		          pt, StatusName(st), consumed);
+		return st == SSLM_OK && consumed == 1;
+	};
 	if (pt == 4) {
 		std::vector<int32_t> fill;
 		for (int64_t i = 0; i < fx.model_cap - 1; ++i) fill.push_back(P[static_cast<size_t>(i) % P.size()]);
-		SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, s, 0);
-		Prefill(fx, s, fill);
-		SslmGpuSeqPrefillSchemaContentForG5Bridge(fx.ctx, s, &t0, 1, fx.one_layer_budget, &consumed);
-		step();
-		step();
+		if (!bind_prefill(fill) || !content() || !step(true) || !step(true)) {
+			sslm_gpu_seq_release(fx.ctx, s);
+			return nullptr;
+		}
 		return s;
 	}
-	SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, s, 0);
-	Prefill(fx, s, P);
+	if (!bind_prefill(P)) {
+		sslm_gpu_seq_release(fx.ctx, s);
+		return nullptr;
+	}
 	if (pt == 0) return s;
 	if (pt == 1) {
-		step();
+		if (!step()) { sslm_gpu_seq_release(fx.ctx, s); return nullptr; }
 		return s;
 	}
 	if (pt == 2) {
-		SslmGpuSeqPrefillSchemaContentForG5Bridge(fx.ctx, s, &t0, 1, fx.one_layer_budget, &consumed);
-		step();
-		step();
+		if (!content() || !step(true) || !step(true)) { sslm_gpu_seq_release(fx.ctx, s); return nullptr; }
 		return s;
 	}
 	if (pt == 3) {
-		step();
-		step();
-		step();
+		if (!step() || !step(true) || !step(true)) { sslm_gpu_seq_release(fx.ctx, s); return nullptr; }
 		return s;
 	}
 	return s;
@@ -95,7 +119,14 @@ SslmGpuSequenceHandle* Build(const GpuModelFixture& fx, int pt, const std::vecto
 SslmGpuSequenceHandle* SaveRestore(const GpuModelFixture& fx, SslmGpuSequenceHandle* o, SslmGpuStatus* sv,
                                    SslmGpuStatus* rs) {
 	size_t need = 0;
-	sslm_gpu_seq_save(fx.ctx, o, nullptr, &need);
+	const SslmGpuStatus probe = sslm_gpu_seq_save(fx.ctx, o, nullptr, &need);
+	CHECK_MSG(probe == SSLM_DEVICE_LOST && need > 0,
+	          "save size probe returned %s, need=%zu", StatusName(probe), need);
+	if (probe != SSLM_DEVICE_LOST || !need) {
+		*sv = probe;
+		*rs = probe;
+		return nullptr;
+	}
 	std::vector<uint8_t> blob(need);
 	size_t n = need;
 	*sv = sslm_gpu_seq_save(fx.ctx, o, blob.data(), &n);
@@ -106,11 +137,37 @@ SslmGpuSequenceHandle* SaveRestore(const GpuModelFixture& fx, SslmGpuSequenceHan
 
 std::vector<uint8_t> SaveBytes(const GpuModelFixture& fx, SslmGpuSequenceHandle* s) {
 	size_t need = 0;
-	(void)sslm_gpu_seq_save(fx.ctx, s, nullptr, &need);
-	CHECK(need > 0);
+	const SslmGpuStatus probe = sslm_gpu_seq_save(fx.ctx, s, nullptr, &need);
+	CHECK_MSG(probe == SSLM_DEVICE_LOST && need > 0,
+	          "save size probe returned %s, need=%zu", StatusName(probe), need);
 	std::vector<uint8_t> blob(need);
 	CHECK(sslm_gpu_seq_save(fx.ctx, s, blob.data(), &need) == SSLM_OK);
 	return blob;
+}
+
+void CheckPoint(const GpuModelFixture& fx, SslmGpuSequenceHandle* s, int pt,
+                const std::vector<int32_t>& P) {
+	const std::vector<uint8_t> blob = SaveBytes(fx, s);
+	CHECK_MSG(blob.size() >= 132, "[pt%d] SLM5 blob too short (%zu)", pt, blob.size());
+	if (blob.size() < 132) return;
+	CHECK_MSG(std::memcmp(blob.data(), "SLM5", 4) == 0, "[pt%d] missing SLM5 header", pt);
+	int32_t bound = -1;
+	uint32_t walk = 0, ready = 0;
+	std::memcpy(&bound, blob.data() + 120, sizeof bound);
+	std::memcpy(&walk, blob.data() + 124, sizeof walk);
+	std::memcpy(&ready, blob.data() + 128, sizeof ready);
+	CHECK_MSG(bound == 0, "[pt%d] schema index=%d, want 0", pt, bound);
+	const uint32_t observed_walk = SslmGpuSeqWalkStateForG5Bridge(s);
+	const uint32_t want_walk = pt == 0 ? 0u : 1u;
+	CHECK_MSG(observed_walk == want_walk && walk == want_walk,
+	          "[pt%d] walk=%u, blob walk=%u, want %u", pt, observed_walk, walk, want_walk);
+	const int64_t want_context = pt == 4 ? fx.model_cap :
+	                             static_cast<int64_t>(P.size()) + (pt == 2 || pt == 3 ? 1 : 0);
+	CHECK_MSG(ContextLength(s) == want_context,
+	          "[pt%d] context=%lld, want %lld", pt, static_cast<long long>(ContextLength(s)),
+	          static_cast<long long>(want_context));
+	const uint32_t want_ready = pt == 1 ? 0u : 1u;
+	CHECK_MSG(ready == want_ready, "[pt%d] ready_for_logits=%u, want %u", pt, ready, want_ready);
 }
 
 const char* kPointName[5] = {"P0 bound, prompt only (walk 0)", "P1 accepting, token pending (route D after #1)",
@@ -119,9 +176,11 @@ const char* kPointName[5] = {"P0 bound, prompt only (walk 0)", "P1 accepting, to
 
 int main(int argc, char** argv) {
 	std::string model_path;
+	std::string shader_dir;
 	for (int i = 1; i < argc; ++i) {
 		const std::string a = argv[i];
 		if (a.rfind("--model=", 0) == 0) model_path = a.substr(8);
+		if (a.rfind("--shader-dir=", 0) == 0) shader_dir = a.substr(13);
 	}
 	if (model_path.empty()) {
 		std::printf("SKIP cell_gpu_slm5_saverestore -- needs --model=PATH\n");
@@ -130,7 +189,10 @@ int main(int argc, char** argv) {
 	}
 
 	SslmGpuContext* ctx = nullptr;
-	CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
+	GpuContextConfig cfg{};
+	if (!shader_dir.empty()) cfg.shader_dir = shader_dir.c_str();
+	CHECK(sslm_gpu_context_create(cfg, &ctx) == SSLM_OK && ctx);
+	if (!ctx) return 1;
 	GpuModelFixture fx;
 	CHECK_MSG(fx.Open(model_path, ctx), "GPU open failed");
 	IndependentSchema ds;
@@ -148,6 +210,8 @@ int main(int argc, char** argv) {
 		std::printf("\n[GPU] %s\n", kPointName[pt]);
 		int32_t last = -1;
 		SslmGpuSequenceHandle* o = Build(fx, pt, P, t0, other, &last);
+		if (!o) continue;
+		CheckPoint(fx, o, pt, P);
 		SslmGpuStatus sv, rs;
 		SslmGpuSequenceHandle* r = SaveRestore(fx, o, &sv, &rs);
 		CHECK_MSG(sv == SSLM_OK, "[pt%d] save returned %s", pt, StatusName(sv));
@@ -156,6 +220,7 @@ int main(int argc, char** argv) {
 			sslm_gpu_seq_release(fx.ctx, o);
 			continue;
 		}
+		CheckPoint(fx, r, pt, P);
 		bool same = true;
 		int32_t lo = last, lr = last;
 		for (int k = 1; k <= 2; ++k) {
@@ -186,6 +251,8 @@ int main(int argc, char** argv) {
 		// rejected without changing the restored schema state or context.
 		int32_t last2 = -1;
 		SslmGpuSequenceHandle* o2 = Build(fx, pt, P, t0, other, &last2);
+		if (!o2) { sslm_gpu_seq_release(fx.ctx, o); continue; }
+		CheckPoint(fx, o2, pt, P);
 		SslmGpuSequenceHandle* r2 = SaveRestore(fx, o2, &sv, &rs);
 		CHECK_MSG(sv == SSLM_OK && rs == SSLM_OK && r2, "[pt%d] second restore failed", pt);
 		if (!r2) {
@@ -193,6 +260,7 @@ int main(int argc, char** argv) {
 			sslm_gpu_seq_release(fx.ctx, o);
 			continue;
 		}
+		CheckPoint(fx, r2, pt, P);
 		const uint32_t wr2_pre_rebind = SslmGpuSeqWalkStateForG5Bridge(r2);
 		const int64_t ctx2_pre_rebind = ContextLength(r2);
 		const std::vector<uint8_t> before_rebind = SaveBytes(fx, r2);

@@ -72,7 +72,7 @@ def substituted(src: Path, dst: Path):
 
 
 def decode(backend: str, path: Path, steps=16):
-    exe = HERE / "out" / "cell_real_decode_base.exe"
+    exe = HERE / "out" / "cell_real_decode.exe"
     result = subprocess.run(
         [str(exe), backend, str(path), "-", str(steps), "0", "0", "0,1,2"],
         cwd=exe.parent, text=True, capture_output=True, timeout=120,

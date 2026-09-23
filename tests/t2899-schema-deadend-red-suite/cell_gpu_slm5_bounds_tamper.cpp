@@ -70,16 +70,20 @@ SslmGpuSequenceHandle* BuildBoundProgressed(const GpuModelFixture& fx, const Ind
 	int32_t last = -1;
 	auto step = [&]() {
 		GDec d = Decode(fx, s, last >= 0 ? last : other);
+		CHECK_MSG(d.st == SSLM_OK, "P2 decode returned %s", StatusName(d.st));
 		if (d.st == SSLM_OK && d.out >= 0) last = d.out;
 	};
 	step();
 	step();
+	CHECK_MSG(SslmGpuSeqWalkStateForG5Bridge(s) == 1u,
+	          "P2 walk=%u, want progressed state 1", SslmGpuSeqWalkStateForG5Bridge(s));
 	return s;
 }
 
 std::vector<uint8_t> Save(const GpuModelFixture& fx, SslmGpuSequenceHandle* s) {
 	size_t need = 0;
-	sslm_gpu_seq_save(fx.ctx, s, nullptr, &need);
+	CHECK_MSG(sslm_gpu_seq_save(fx.ctx, s, nullptr, &need) == SSLM_DEVICE_LOST && need > 0,
+	          "P2 save size probe did not return a nonzero size");
 	std::vector<uint8_t> blob(need);
 	size_t n = need;
 	CHECK(sslm_gpu_seq_save(fx.ctx, s, blob.data(), &n) == SSLM_OK);

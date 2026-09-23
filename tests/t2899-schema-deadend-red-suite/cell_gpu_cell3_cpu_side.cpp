@@ -67,19 +67,21 @@ extern "C" bool CpuOpenForCell3(const char* path, int32_t layers) {
 extern "C" void* CpuBuildRoute(const char* route, const int32_t* p_tokens, int32_t p_count, int32_t t0, int64_t cap) {
 	std::vector<int32_t> P(p_tokens, p_tokens + p_count);
 	sslm_seq s = nullptr;
-	sslm_seq_create(g.model, &g.pool, &s);
-	sslm_seq_set_schema(s, g.schema);
+	if (sslm_seq_create(g.model, &g.pool, &s) != SSLM_OK || !s) return nullptr;
+	if (sslm_seq_set_schema(s, g.schema) != SSLM_OK) { sslm_seq_release(s); return nullptr; }
+	sslm_status setup = SSLM_OK;
 	if (!std::strcmp(route, "R")) {
-		PrefillAll(s, P, SSLM_SPAN_PROMPT);
-		PrefillAll(s, {t0}, SSLM_SPAN_SCHEMA_CONTENT);
+		setup = PrefillAll(s, P, SSLM_SPAN_PROMPT);
+		if (setup == SSLM_OK) setup = PrefillAll(s, {t0}, SSLM_SPAN_SCHEMA_CONTENT);
 	} else if (!std::strcmp(route, "D")) {
-		PrefillAll(s, P, SSLM_SPAN_PROMPT);
+		setup = PrefillAll(s, P, SSLM_SPAN_PROMPT);
 	} else {  // C
 		std::vector<int32_t> fill;
 		for (int64_t i = 0; i < cap - 1; ++i) fill.push_back(P[static_cast<size_t>(i) % P.size()]);
-		PrefillAll(s, fill, SSLM_SPAN_PROMPT);
-		PrefillAll(s, {t0}, SSLM_SPAN_SCHEMA_CONTENT);
+		setup = PrefillAll(s, fill, SSLM_SPAN_PROMPT);
+		if (setup == SSLM_OK) setup = PrefillAll(s, {t0}, SSLM_SPAN_SCHEMA_CONTENT);
 	}
+	if (setup != SSLM_OK) { sslm_seq_release(s); return nullptr; }
 	return s;
 }
 

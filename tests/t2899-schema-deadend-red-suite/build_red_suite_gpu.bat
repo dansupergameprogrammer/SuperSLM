@@ -142,6 +142,12 @@ if not exist obj_gpu\gpu_mut_nr mkdir obj_gpu\gpu_mut_nr
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION /I%ENG%\include /I%ENG%\src\gpu ^
     /c obj_gpu\gpu_mut_nr\gpu_1p0_mut_norearm.cpp /Fo"obj_gpu\gpu_mut_nr\\" ^
     > obj_gpu\gpu_mut_nr.buildlog 2>&1 || (echo BUILD FAILED: gpu_mut_nr & type obj_gpu\gpu_mut_nr.buildlog & set OVERALL_OK=0)
+if not exist obj_gpu\gpu_mut_walkmiss mkdir obj_gpu\gpu_mut_walkmiss
+"%SSLM_PYTHON%" make_mut_gpu_walkmiss.py "%ENG%\src\gpu\gpu_1p0.cpp" "obj_gpu\gpu_mut_walkmiss\gpu_1p0_mut_walkmiss.cpp" ^
+    > obj_gpu\make_mut_walkmiss.log 2>&1 || (echo GENERATE FAILED: gpu_mut_walkmiss & type obj_gpu\make_mut_walkmiss.log & set OVERALL_OK=0)
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION /I%ENG%\include /I%ENG%\src\gpu ^
+    /c obj_gpu\gpu_mut_walkmiss\gpu_1p0_mut_walkmiss.cpp /Fo"obj_gpu\gpu_mut_walkmiss\\" ^
+    > obj_gpu\gpu_mut_walkmiss.buildlog 2>&1 || (echo BUILD FAILED: gpu_mut_walkmiss & type obj_gpu\gpu_mut_walkmiss.buildlog & set OVERALL_OK=0)
 for %%v in (LATE RESTORE) do (
     if not exist "obj_gpu\gpu_mut_%%v" mkdir "obj_gpu\gpu_mut_%%v"
     "%SSLM_PYTHON%" make_mut_gpu_oldbind.py %%v "%ENG%\src\gpu\gpu_1p0.cpp" "obj_gpu\gpu_mut_%%v\gpu_1p0_mut_%%v.cpp" > "obj_gpu\make_mut_%%v.log" 2>&1
@@ -287,13 +293,16 @@ if not exist obj_gpu\cell2_stock mkdir obj_gpu\cell2_stock
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION /c cell_gpu_cell2_degenerate.cpp ^
     /Fo"obj_gpu\cell2_stock\\" > obj_gpu\cell2_stock.buildlog 2>&1 || (echo BUILD FAILED: cell2_stock & type obj_gpu\cell2_stock.buildlog & set OVERALL_OK=0)
 
-for %%v in (ASBUILT MUT_CHECKEDRETURN MUT_LATE) do (
+for %%v in (ASBUILT MUT_CHECKEDRETURN MUT_WALKMISS MUT_LATE) do (
     set CELLOBJ=obj_gpu\cell2_stock\cell_gpu_cell2_degenerate.obj
     if "%%v"=="ASBUILT" (
         set GPUOBJS=obj_gpu\gpu_asbuilt\gpu_1p0.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
     )
     if "%%v"=="MUT_CHECKEDRETURN" (
         set GPUOBJS=obj_gpu\gpu_mut_cr\gpu_1p0_mut_checkedreturn.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
+    )
+    if "%%v"=="MUT_WALKMISS" (
+        set GPUOBJS=obj_gpu\gpu_mut_walkmiss\gpu_1p0_mut_walkmiss.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
     )
     if "%%v"=="MUT_LATE" (
         set GPUOBJS=obj_gpu\gpu_mut_LATE\gpu_1p0_mut_LATE.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
@@ -403,7 +412,11 @@ cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /c cell_gpu_slm5_save
     > obj_gpu\slm5_stock.buildlog 2>&1 || (echo BUILD FAILED: slm5_stock.obj & type obj_gpu\slm5_stock.buildlog & set OVERALL_OK=0)
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /c cell_gpu_slm5_saverestore.cpp /Fo"obj_gpu\slm5_ovr.obj" ^
     > obj_gpu\slm5_ovr.buildlog 2>&1 || (echo BUILD FAILED: slm5_ovr.obj & type obj_gpu\slm5_ovr.buildlog & set OVERALL_OK=0)
-for %%v in (ASBUILT FIXED MUT_RESTORE) do (
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /DT2963_OLD_ORDER /c cell_gpu_slm5_saverestore.cpp /Fo"obj_gpu\slm5_old_order.obj" ^
+    > obj_gpu\slm5_old_order.buildlog 2>&1 || (echo BUILD FAILED: slm5_old_order.obj & type obj_gpu\slm5_old_order.buildlog & set OVERALL_OK=0)
+if not exist bin_gpu\bad_shaders mkdir bin_gpu\bad_shaders
+echo invalid > bin_gpu\bad_shaders\missing_set.cso
+for %%v in (ASBUILT FIXED MUT_RESTORE OLD_ORDER NO_GPU) do (
     if "%%v"=="ASBUILT" (
         set CELLOBJ=obj_gpu\slm5_stock.obj
         set GPUOBJS=obj_gpu\gpu_asbuilt\gpu_1p0.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
@@ -416,13 +429,25 @@ for %%v in (ASBUILT FIXED MUT_RESTORE) do (
         set CELLOBJ=obj_gpu\slm5_stock.obj
         set GPUOBJS=obj_gpu\gpu_mut_RESTORE\gpu_1p0_mut_RESTORE.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
     )
+    if "%%v"=="OLD_ORDER" (
+        set CELLOBJ=obj_gpu\slm5_old_order.obj
+        set GPUOBJS=obj_gpu\gpu_asbuilt\gpu_1p0.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
+    )
+    if "%%v"=="NO_GPU" (
+        set CELLOBJ=obj_gpu\slm5_stock.obj
+        set GPUOBJS=obj_gpu\gpu_asbuilt\gpu_1p0.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
+    )
     echo ===== cell_gpu_slm5_saverestore [%%v] =====
     link /nologo /OUT:"bin_gpu\slm5_%%v.exe" !CELLOBJ! !GPUOBJS! !CPU_COMMON_OBJS! %SYSLIBS% ^
         > "obj_gpu\slm5_%%v.linklog" 2>&1
     if errorlevel 1 (
         echo    LINK FAILED: & type "obj_gpu\slm5_%%v.linklog" & set OVERALL_OK=0
     ) else (
-        "bin_gpu\slm5_%%v.exe" %MODELARG% > "obj_gpu\slm5_%%v.runlog" 2>&1
+        if "%%v"=="NO_GPU" (
+            "bin_gpu\slm5_%%v.exe" %MODELARG% --shader-dir=%CD%\bin_gpu\bad_shaders > "obj_gpu\slm5_%%v.runlog" 2>&1
+        ) else (
+            "bin_gpu\slm5_%%v.exe" %MODELARG% > "obj_gpu\slm5_%%v.runlog" 2>&1
+        )
         type "obj_gpu\slm5_%%v.runlog"
         set SUMMARY_LINE=
         for /f "delims=" %%s in ('findstr /R "^checks=[0-9]* failures=[0-9]*" "obj_gpu\slm5_%%v.runlog"') do set SUMMARY_LINE=%%s
@@ -438,6 +463,10 @@ for %%v in (ASBUILT FIXED MUT_RESTORE) do (
             set "SKIPN=!TOK_SKIPS:~6!"
             if "%%v"=="MUT_RESTORE" (
                 if "!FAILN!"=="0" (echo    SURVIVING MUTANT -- restored-bind regression was not detected & set OVERALL_OK=0)
+            ) else if "%%v"=="OLD_ORDER" (
+                if "!FAILN!"=="0" (echo    SURVIVING MUTANT -- old prefill-then-bind order was not detected & set OVERALL_OK=0)
+            ) else if "%%v"=="NO_GPU" (
+                if "!FAILN!"=="0" (echo    SURVIVING MUTANT -- refused GPU calls were not detected & set OVERALL_OK=0)
             ) else (
                 if not "!FAILN!"=="0" (echo    FAILURES=!FAILN! -- a red cell ^("obj_gpu\slm5_%%v.runlog"^)& set OVERALL_OK=0)
             )
