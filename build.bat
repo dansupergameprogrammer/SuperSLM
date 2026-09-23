@@ -1496,6 +1496,263 @@ if not %t2296_liveness_ec%==0 (
 	goto :hard_fail
 )
 
+rem T-2957 (round 2): four suites tools\ci\check_tests_have_build_recipe.py found with no build
+rem recipe -- T-2791, T-2807 and T-2899 shipped unwired in 1.6.0, T-2956 is 1.7.0's token-finish
+rem suite. Each gets a compile-and-link gate that always runs and needs no artifact, and, where the
+rem suite has runtime cells that read model artifacts, a runtime step gated on environment
+rem variables the way T2199_PHASED_MODEL gates Phase D: when every variable a suite's run needs is
+rem set, its own run script runs and a failure fails this build; when any is unset, the step
+rem prints SKIPPED with the variables to set, and passes. Each suite's own run script fails on any
+rem skipped cell, so a partial set of artifacts is not run half-way.
+
+rem T-2791 (1.6.0 GPU prefill-hidden read). Its own build_red_suite.bat builds every cell but is a
+rem red-suite reporter: it exits 0 when a cell is RED BY COMPILE or RED BY LINK and prints that
+rem class per cell, so the gate is its exit code AND the absence of every failure class in its
+rem output. The output directory is emptied first, so no executable from an earlier build is
+rem counted.
+if exist out\t2791 rmdir /s /q out\t2791
+pushd .
+call tests\t2791-gpu-prefill-read-red-suite\build_red_suite.bat "--out=%CD%\out\t2791" "--shaders=%CD%\out\shaders" > out\t2791_build.log 2>&1
+set t2791_ec=%errorlevel%
+popd
+type out\t2791_build.log
+if not %t2791_ec%==0 (
+	echo T-2791 suite build FAILED ^(exit %t2791_ec%^) -- see out\t2791_build.log
+	goto :hard_fail
+)
+findstr /C:"RED BY" /C:"UNEXPECTED" /C:"NO SUCH CELL" out\t2791_build.log >nul
+if not errorlevel 1 (
+	echo T-2791 suite build: a cell did not compile or link -- see out\t2791_build.log
+	goto :hard_fail
+)
+echo T-2791 suite build: every cell linked.
+rem Runtime: run_red_suite.bat with the six artifact flags its header names (SHA-256 pinned there).
+rem Cell_functional_commission is the ~11-minute release reading and runs only with
+rem --with-commission, which this build does not pass.
+set T2791_RUN=1
+if not defined T2791_QWEN3 set T2791_RUN=0
+if not defined T2791_SYNTHETIC set T2791_RUN=0
+if not defined T2791_A2FN set T2791_RUN=0
+if not defined T2791_GAN set T2791_RUN=0
+if not defined T2791_G5FIXTURE set T2791_RUN=0
+if not defined T2791_G5AN set T2791_RUN=0
+if "%T2791_RUN%"=="0" goto :t2791_runtime_skipped
+pushd .
+call tests\t2791-gpu-prefill-read-red-suite\run_red_suite.bat "--bin=%CD%\out\t2791\bin" "--qwen3=%T2791_QWEN3%" "--synthetic=%T2791_SYNTHETIC%" "--a2fn=%T2791_A2FN%" "--gan=%T2791_GAN%" "--g5fixture=%T2791_G5FIXTURE%" "--g5an=%T2791_G5AN%"
+set t2791_run_ec=%errorlevel%
+popd
+if not %t2791_run_ec%==0 (
+	echo T-2791 runtime cells FAILED ^(exit %t2791_run_ec%^)
+	goto :hard_fail
+)
+goto :t2791_runtime_done
+:t2791_runtime_skipped
+echo T-2791 runtime cells SKIPPED: set T2791_QWEN3, T2791_SYNTHETIC, T2791_A2FN, T2791_GAN, T2791_G5FIXTURE and T2791_G5AN ^(the artifacts tests\t2791-gpu-prefill-read-red-suite\run_red_suite.bat names^) to run them.
+:t2791_runtime_done
+
+rem T-2807 (the SUPERSLM_API export slot). Its cell X2, build_x2.ps1, needs no artifact: it builds
+rem the core sources as a DLL with the slot set to dllexport, builds a consumer DLL that calls every
+rem listed symbol, checks the engine's exports and the consumer's imports against
+rem consumed_symbols.txt plus the C verbs the headers declare, and runs the consumer. Its exit code
+rem is the gate (0 pass, 1 fail, 2 environment error). X3 (run_x3_mutants.ps1) is that cell's
+rem mutant runner -- one full engine build per export slot -- and is not part of this build, like
+rem every other suite's mutant runner.
+pushd .
+powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\t2807-api-slot\build_x2.ps1 -Out "%CD%\out\t2807-x2"
+set t2807_ec=%errorlevel%
+popd
+if not %t2807_ec%==0 (
+	echo T-2807 X2 FAILED ^(exit %t2807_ec%^)
+	goto :hard_fail
+)
+
+rem T-2899 (the schema dead-end suite). Its own scripts build AND run in one pass, and every one
+rem needs a model argument and fails on a skip, so none can be called as an artifact-free gate.
+rem The compile-and-link gate is therefore built here, with the suite's own flags, sources and link
+rem sets for its as-built variant (build_red_suite.bat for the two CPU cells;
+rem build_red_suite_gpu.bat and build_t2916_s3_bounds_tamper.bat for the GPU cells), linking every
+rem cell against the current engine and running none. The mutant variants those scripts also
+rem build, and cell_gpu_slm4_dump's link against the pre-SLM5 engine they extract from git history,
+rem belong to the runtime step.
+if exist out\t2899 rmdir /s /q out\t2899
+mkdir out\t2899\cpu_fi out\t2899\cpu_common out\t2899\cpu_abi out\t2899\gpu out\t2899\cells
+set T2899_DIR=tests\t2899-schema-deadend-red-suite
+set T2899_INC=/Iinclude /Isrc /Itests /Itests\t2791-gpu-prefill-read-red-suite /I%T2899_DIR%
+set T2899_SRC_NOABI=src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp src\damped_greedy_phaseD_loop.cpp
+rem The two CPU cells: build_red_suite.bat's own line, /DSUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION
+rem included (cell_cpu_deadend_retry_reset reserves the seam it defines).
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /DSUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION /c %T2899_INC% /Itests\t2199-damped-greedy-red-suite %T2899_SRC_NOABI% src\sslm_abi.cpp /Fo:out\t2899\cpu_fi\ > out\t2899\cpu_fi.log 2>&1
+if errorlevel 1 (
+	type out\t2899\cpu_fi.log
+	echo T-2899 CPU engine build FAILED
+	goto :hard_fail
+)
+for %%f in (cell_adopt_prefix_census cell_cpu_deadend_retry_reset) do (
+	cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /DSUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION %T2899_INC% /Itests\t2199-damped-greedy-red-suite tests\t2899-schema-deadend-red-suite\%%f.cpp out\t2899\cpu_fi\*.obj /Fo:out\t2899\cells\ /Fe:out\t2899\%%f.exe > out\t2899\%%f.log 2>&1 || (type out\t2899\%%f.log & echo T-2899 %%f did not compile or link & goto :hard_fail)
+)
+rem The GPU cells: build_red_suite_gpu.bat's shared object sets -- the as-built GPU sources with
+rem /DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION, the CPU sources without sslm_abi.cpp, and
+rem sslm_abi.cpp alone for the cells with a CPU-side twin.
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION /Iinclude /Isrc\gpu /c src\gpu\gpu_1p0.cpp src\gpu\superslm_gpu.cpp /Fo:out\t2899\gpu\ > out\t2899\gpu.log 2>&1
+if errorlevel 1 (
+	type out\t2899\gpu.log
+	echo T-2899 GPU engine build FAILED
+	goto :hard_fail
+)
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /Iinclude /Isrc /c %T2899_SRC_NOABI% /Fo:out\t2899\cpu_common\ > out\t2899\cpu_common.log 2>&1
+if errorlevel 1 (
+	type out\t2899\cpu_common.log
+	echo T-2899 CPU common build FAILED
+	goto :hard_fail
+)
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /Iinclude /Isrc /c src\sslm_abi.cpp /Fo:out\t2899\cpu_abi\ > out\t2899\cpu_abi.log 2>&1
+if errorlevel 1 (
+	type out\t2899\cpu_abi.log
+	echo T-2899 sslm_abi build FAILED
+	goto :hard_fail
+)
+rem Single-source GPU cells, linked with the GPU and CPU-common sets; cell2 carries the G5
+rem finish-row seam define its script compiles it with.
+for %%f in (cell_gpu_cell1_shortschema cell_gpu_slm5_saverestore cell_gpu_slm4_restore) do (
+	cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %T2899_INC% tests\t2899-schema-deadend-red-suite\%%f.cpp out\t2899\gpu\*.obj out\t2899\cpu_common\*.obj /Fo:out\t2899\cells\ /Fe:out\t2899\%%f.exe /link d3d12.lib dxgi.lib dxguid.lib > out\t2899\%%f.log 2>&1 || (type out\t2899\%%f.log & echo T-2899 %%f did not compile or link & goto :hard_fail)
+)
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION %T2899_INC% tests\t2899-schema-deadend-red-suite\cell_gpu_cell2_degenerate.cpp out\t2899\gpu\*.obj out\t2899\cpu_common\*.obj /Fo:out\t2899\cells\ /Fe:out\t2899\cell_gpu_cell2_degenerate.exe /link d3d12.lib dxgi.lib dxguid.lib > out\t2899\cell_gpu_cell2_degenerate.log 2>&1
+if errorlevel 1 (
+	type out\t2899\cell_gpu_cell2_degenerate.log
+	echo T-2899 cell_gpu_cell2_degenerate did not compile or link
+	goto :hard_fail
+)
+rem Cells linked with sslm_abi.obj too: the two with a CPU-side twin, and the SLM5 bounds tamper.
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %T2899_INC% tests\t2899-schema-deadend-red-suite\cell_gpu_cell1_realschema.cpp tests\t2899-schema-deadend-red-suite\cell_gpu_cell1_realschema_cpu_side.cpp out\t2899\gpu\*.obj out\t2899\cpu_common\*.obj out\t2899\cpu_abi\*.obj /Fo:out\t2899\cells\ /Fe:out\t2899\cell_gpu_cell1_realschema.exe /link d3d12.lib dxgi.lib dxguid.lib > out\t2899\cell_gpu_cell1_realschema.log 2>&1
+if errorlevel 1 (
+	type out\t2899\cell_gpu_cell1_realschema.log
+	echo T-2899 cell_gpu_cell1_realschema did not compile or link
+	goto :hard_fail
+)
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %T2899_INC% tests\t2899-schema-deadend-red-suite\cell_gpu_cell3_agreement.cpp tests\t2899-schema-deadend-red-suite\cell_gpu_cell3_cpu_side.cpp out\t2899\gpu\*.obj out\t2899\cpu_common\*.obj out\t2899\cpu_abi\*.obj /Fo:out\t2899\cells\ /Fe:out\t2899\cell_gpu_cell3_agreement.exe /link d3d12.lib dxgi.lib dxguid.lib > out\t2899\cell_gpu_cell3_agreement.log 2>&1
+if errorlevel 1 (
+	type out\t2899\cell_gpu_cell3_agreement.log
+	echo T-2899 cell_gpu_cell3_agreement did not compile or link
+	goto :hard_fail
+)
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %T2899_INC% tests\t2899-schema-deadend-red-suite\cell_gpu_slm5_bounds_tamper.cpp out\t2899\gpu\*.obj out\t2899\cpu_common\*.obj out\t2899\cpu_abi\*.obj /Fo:out\t2899\cells\ /Fe:out\t2899\cell_gpu_slm5_bounds_tamper.exe /link d3d12.lib dxgi.lib dxguid.lib > out\t2899\cell_gpu_slm5_bounds_tamper.log 2>&1
+if errorlevel 1 (
+	type out\t2899\cell_gpu_slm5_bounds_tamper.log
+	echo T-2899 cell_gpu_slm5_bounds_tamper did not compile or link
+	goto :hard_fail
+)
+rem cell_gpu_slm4_dump writes an SLM4 blob, which only a pre-SLM5 engine can: its script links it
+rem against sources extracted from git history. Against the current engine it is compiled only.
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %T2899_INC% /c tests\t2899-schema-deadend-red-suite\cell_gpu_slm4_dump.cpp /Fo:out\t2899\cells\ > out\t2899\cell_gpu_slm4_dump.log 2>&1
+if errorlevel 1 (
+	type out\t2899\cell_gpu_slm4_dump.log
+	echo T-2899 cell_gpu_slm4_dump did not compile
+	goto :hard_fail
+)
+echo T-2899 suite: every cell compiled and linked against the current engine ^(cell_gpu_slm4_dump compiled^).
+rem Runtime: the suite's own three scripts, which build every variant (mutants included) and run
+rem them. T2899_MODEL is the C39 synthetic model their headers name; T2899_G5_MODEL the 1.5B G5
+rem fixture build_red_suite_gpu.bat's real-schema cell needs. build_red_suite_gpu.bat and
+rem build_t2916_s3_bounds_tamper.bat write scratch copies under D:\_t2905 and D:\_t2916.
+set T2899_RUN=1
+if not defined T2899_MODEL set T2899_RUN=0
+if not defined T2899_G5_MODEL set T2899_RUN=0
+if "%T2899_RUN%"=="0" goto :t2899_runtime_skipped
+pushd .
+call tests\t2899-schema-deadend-red-suite\build_red_suite.bat "--model=%T2899_MODEL%"
+set t2899_cpu_ec=%errorlevel%
+popd
+if not %t2899_cpu_ec%==0 (
+	echo T-2899 CPU runtime cells FAILED ^(exit %t2899_cpu_ec%^)
+	goto :hard_fail
+)
+pushd .
+call tests\t2899-schema-deadend-red-suite\build_red_suite_gpu.bat "%T2899_MODEL%" "%T2899_G5_MODEL%"
+set t2899_gpu_ec=%errorlevel%
+popd
+if not %t2899_gpu_ec%==0 (
+	echo T-2899 GPU runtime cells FAILED ^(exit %t2899_gpu_ec%^)
+	goto :hard_fail
+)
+pushd .
+call tests\t2899-schema-deadend-red-suite\build_t2916_s3_bounds_tamper.bat "%T2899_MODEL%"
+set t2899_tamper_ec=%errorlevel%
+popd
+if not %t2899_tamper_ec%==0 (
+	echo T-2899 SLM5 bounds-tamper cells FAILED ^(exit %t2899_tamper_ec%^)
+	goto :hard_fail
+)
+goto :t2899_runtime_done
+:t2899_runtime_skipped
+echo T-2899 runtime cells SKIPPED: set T2899_MODEL ^(the C39 synthetic^) and T2899_G5_MODEL ^(the 1.5B G5 fixture^) to run them.
+:t2899_runtime_done
+
+rem T-2956 (1.7.0 token finish). Its own build_cells.bat compiles and links every cell against a
+rem CPU library and a GPU library carrying the SUPERSLM_GPU_ALLOC_FAULT_INJECTION test seams
+rem (CMake's SUPERSLM_GPU_TEST_SEAMS). Both are built here from the same sources and flags CMake
+rem uses (/MD, matching the cells), then passed in through its T2956_* variables.
+if exist out\t2956 rmdir /s /q out\t2956
+mkdir out\t2956\cpu out\t2956\gpu
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /MD /Iinclude /c src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp src\sslm_abi.cpp src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp src\damped_greedy_phaseD_loop.cpp /Fo:out\t2956\cpu\ > out\t2956\cpu.log 2>&1
+if errorlevel 1 (
+	type out\t2956\cpu.log
+	echo T-2956 CPU library build FAILED
+	goto :hard_fail
+)
+lib /nologo /OUT:out\t2956\superslm.lib out\t2956\cpu\*.obj > out\t2956\cpu_lib.log 2>&1
+if errorlevel 1 (
+	type out\t2956\cpu_lib.log
+	goto :hard_fail
+)
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /MD /DSUPERSLM_GPU_ALLOC_FAULT_INJECTION /Iinclude /Isrc\gpu /c src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp /Fo:out\t2956\gpu\ > out\t2956\gpu.log 2>&1
+if errorlevel 1 (
+	type out\t2956\gpu.log
+	echo T-2956 GPU test-seam library build FAILED
+	goto :hard_fail
+)
+lib /nologo /OUT:out\t2956\superslm_gpu.lib out\t2956\gpu\*.obj > out\t2956\gpu_lib.log 2>&1
+if errorlevel 1 (
+	type out\t2956\gpu_lib.log
+	goto :hard_fail
+)
+set T2956_CPU_LIB=%CD%\out\t2956\superslm.lib
+set T2956_GPU_LIB=%CD%\out\t2956\superslm_gpu.lib
+set T2956_SHADERS=%CD%\out\shaders
+pushd .
+call tests\t2956-token-finish-red-suite\build_cells.bat
+set t2956_ec=%errorlevel%
+popd
+if not %t2956_ec%==0 (
+	echo T-2956 cells did not all compile and link ^(exit %t2956_ec%^)
+	goto :hard_fail
+)
+rem Runtime: run_green_cells.ps1, the suite's green-cell runner, with its three artifacts and the
+rem shaders compiled above. Its RU fixture (out\ru\ru.sslm under the suite) is generated by the
+rem suite's own make_ru.py when absent; that needs Python with the converter's dependencies. The
+rem row-10 identity matrix (run_identity.py) needs a v1.6.0 baseline build and is the release
+rem reading, not part of this build.
+set T2956_RUN=1
+if not defined T2956_R05 set T2956_RUN=0
+if not defined T2956_R15 set T2956_RUN=0
+if not defined T2956_ADAPTER set T2956_RUN=0
+if "%T2956_RUN%"=="0" goto :t2956_runtime_skipped
+if exist tests\t2956-token-finish-red-suite\out\ru\ru.sslm goto :t2956_ru_ready
+python tests\t2956-token-finish-red-suite\make_ru.py
+if errorlevel 1 (
+	echo T-2956 RU fixture generation FAILED
+	goto :hard_fail
+)
+:t2956_ru_ready
+powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\t2956-token-finish-red-suite\run_green_cells.ps1 -R05 "%T2956_R05%" -R15 "%T2956_R15%" -Adapter "%T2956_ADAPTER%" -Shaders "%CD%\out\shaders"
+if errorlevel 1 (
+	echo T-2956 runtime cells FAILED
+	goto :hard_fail
+)
+goto :t2956_runtime_done
+:t2956_runtime_skipped
+echo T-2956 runtime cells SKIPPED: set T2956_R05 ^(Qwen2.5-0.5B A-EX^), T2956_R15 ^(Qwen2.5-1.5B^) and T2956_ADAPTER ^(its runtime LoRA^) to run them.
+:t2956_runtime_done
+
 rem T-2326/T-2333 (Curie): tests\t2296-fp-free-open-red-suite\test_check_fp_free_scan.py -- the red
 rem suite for design Sec4.1's own deciding instrument (Sec7 dimension 11's fourteen commissioning
 rem populations, plus ci_gate's own enforcement contract: Claude/Vitruvius/

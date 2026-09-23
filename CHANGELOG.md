@@ -61,7 +61,7 @@ narrowing, mask, argmax and dead-end rule run unchanged on the host, on the iden
 Three statuses are appended to `SslmGpuStatus`, so no existing ordinal moves:
 `SSLM_GPU_PARALLEL_FOR_INVALID` (21), `SSLM_GPU_PARALLEL_FOR_INCOMPLETE` (22) and
 `SSLM_GPU_RESIDENCY_FLAGS_INVALID` (23). The CPU surface adds no status. `SUPERSLM_API` is carried
-by the new C ABI verb and by `LogitsSiteParallel`.
+by the new C ABI verb. `LogitsSiteParallel` does not carry it: no sibling module calls it.
 
 The GPU model handle keeps one host copy of a tied head instead of two: a tied model's head is its
 embedding, which the handle already held, so the duplicate head copy (vocab x hidden bytes per
@@ -77,6 +77,13 @@ in those uploads is retried once. The statuses those calls return are unchanged.
 `build.bat` passes a Phase D adapter through: set `T2199_PHASED_ADAPTER` beside
 `T2199_PHASED_MODEL`. The Phase D suite fails on any skip, and without an adapter its
 adapter-composition cell skipped, which failed the build whenever the suite ran.
+
+`build.bat` now gates four test suites that had no build recipe: the 1.6.0 GPU prefill-read suite
+(t2791), the export-slot suite (t2807), the schema dead-end suite (t2899) and the 1.7.0
+token-finish suite (t2956). Each compiles and links on every run; t2807's export check also runs,
+since it needs no artifact. Their model-reading cells run when the variables `build.bat` names
+(`T2791_*`, `T2899_MODEL`/`T2899_G5_MODEL`, `T2956_R05`/`T2956_R15`/`T2956_ADAPTER`) are all set,
+and are reported as skipped otherwise.
 
 CMake gains `SUPERSLM_GPU_TEST_SEAMS` (default `OFF`), which builds a test variant of the GPU
 library carrying the allocation-fault and device-logits test seams. It is not for a library that

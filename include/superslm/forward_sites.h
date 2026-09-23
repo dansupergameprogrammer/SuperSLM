@@ -1327,10 +1327,13 @@ SslmForwardStatus LogitsSite(const int8_t* final_codes, size_t hidden_size,
 // - Narrowing: NarrowRowChecked over the whole row, once, serially, after `run` returns -- the
 //   same call on the same row as LogitsSite.
 // No heap allocation; the check's state is a fixed array on the stack.
-SUPERSLM_API SslmForwardStatus LogitsSiteParallel(const int8_t* final_codes, size_t hidden_size,
-                                                  const int8_t* head_weights, size_t vocab_size,
-                                                  int64_t* wide_logits, int32_t* out_logits,
-                                                  const sslm_parallel_for* pf);
+// No SUPERSLM_API export slot: that slot is for the C ABI and for the C++ declarations sibling
+// Unreal modules call (api.h), and no such module calls this function; the engine's own decode
+// paths do.
+SslmForwardStatus LogitsSiteParallel(const int8_t* final_codes, size_t hidden_size,
+                                     const int8_t* head_weights, size_t vocab_size,
+                                     int64_t* wide_logits, int32_t* out_logits,
+                                     const sslm_parallel_for* pf);
 
 // C16 (master plan §6.8 row C16; §6.4 step 16): the pinned argmax
 // tie-break -- LOWEST token index. Caller-ensures `n >= 1` (the same
