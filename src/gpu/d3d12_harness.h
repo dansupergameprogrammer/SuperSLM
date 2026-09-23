@@ -332,8 +332,8 @@ struct Device {
 			// Only when SSLM_GPU_ADAPTER_INDEX was set -- see the Init() header comment (S2).
 			DXGI_ADAPTER_DESC1 d;
 			adapter->GetDesc1(&d);
-			std::wprintf(L"# adapter: %s\n", d.Description);
-			std::fflush(stdout);
+			std::fwprintf(stderr, L"# adapter: %s\n", d.Description);
+			std::fflush(stderr);
 		}
 		D3D12_COMMAND_QUEUE_DESC qd{};
 		qd.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
