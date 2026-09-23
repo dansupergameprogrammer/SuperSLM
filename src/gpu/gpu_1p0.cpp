@@ -37,6 +37,11 @@ using enum SslmGpuStatus;
 // fails the compile rather than passing a short struct by value.
 static_assert(sizeof(GpuContextConfig) == 16 && offsetof(GpuContextConfig, shader_dir) == 8,
               "GpuContextConfig layout (x64): 16 bytes, shader_dir at offset 8");
+// T-2851 (design Sec4.9): GpuResidencyConfig kept its size, offset and alignment when `int reserved`
+// became `uint32_t flags`. Design Sec4.9 puts the same assertion on the t2112 suite's mirror side
+// (fixture_common.h), which is the test suite's to carry.
+static_assert(sizeof(GpuResidencyConfig) == 4 && offsetof(GpuResidencyConfig, flags) == 0,
+              "GpuResidencyConfig layout: 4 bytes, flags at offset 0");
 
 #include <algorithm>
 #include <array>
@@ -46,6 +51,7 @@ static_assert(sizeof(GpuContextConfig) == 16 && offsetof(GpuContextConfig, shade
 #include <cstring>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -167,6 +173,44 @@ struct SslmGpuContext {
 	// flag is defensive documentation of that invariant rather than a runtime
 	// branch anything reads today).
 	bool destroyed = false;
+
+	// T-2851 (A): the host parallel-for hook (sslm_gpu_context_set_host_parallel_for), copied in;
+	// `run == NULL` means none. Read only by SslmGpuSeqFinishTokenForG5BridgeImpl's host logits
+	// step (LogitsSiteParallel), for a model without a device-resident head.
+	sslm_parallel_for host_parallel_for{};
+};
+
+// T-2851 (B, design Sec4.6 item 2): everything the device logits step reuses, owned by one mapped
+// model (SslmGpuModelHandle::device_logits; null when the model was mapped without
+// SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE). Created by CreateDeviceLogitsBuffers and passed explicitly
+// to RunDeviceLogits, so the finish reaches every resource it reuses through its own model, and
+// two mapped models never share scratch. The context supplies the device, queue and command list.
+// Roman numerals follow the design's buffer list; (i), the head's upload-heap staging buffer, is
+// local to CreateDeviceLogitsBuffers and released once its copy has completed.
+struct DeviceLogitsBuffers {
+	uint32_t V = 0, H = 0;
+	Microsoft::WRL::ComPtr<ID3D12Resource> head;      // (ii) default heap, V x H B (padded to 4)
+	Microsoft::WRL::ComPtr<ID3D12Resource> x_upload;  // (iii) upload heap, H x 4 B, mapped
+	int32_t* x_upload_ptr = nullptr;
+	Microsoft::WRL::ComPtr<ID3D12Resource> x;         // (iv) default heap, H x 4 B
+	Microsoft::WRL::ComPtr<ID3D12Resource> out;       // (v) default heap, V x 8 B, UAV
+	Microsoft::WRL::ComPtr<ID3D12Resource> readback;  // (vi) readback heap, V x 8 B, mapped
+	const int64_t* readback_ptr = nullptr;
+	Microsoft::WRL::ComPtr<ID3D12RootSignature> root;
+	Microsoft::WRL::ComPtr<ID3D12PipelineState> pso;
+	uint32_t groups_x = 0, groups_y = 0;  // the logits_site dispatch grid
+
+	DeviceLogitsBuffers() = default;
+	DeviceLogitsBuffers(const DeviceLogitsBuffers&) = delete;
+	DeviceLogitsBuffers& operator=(const DeviceLogitsBuffers&) = delete;
+	~DeviceLogitsBuffers() {
+		// The two persistent mappings end with the bundle (sslm_gpu_model_unmap's release).
+		if (x_upload && x_upload_ptr) x_upload->Unmap(0, nullptr);
+		if (readback && readback_ptr) {
+			D3D12_RANGE none{0, 0};
+			readback->Unmap(0, &none);
+		}
+	}
 };
 
 // T-2113 (B2, design Sec5.1/Sec10 B2): the real SslmGpuModelHandle. Owns the model's own
@@ -313,7 +357,17 @@ struct SslmGpuModelHandle {
 	// caller's view afterward (the identical caller-view-lifetime reasoning).
 	std::vector<int32_t> final_norm_gain;
 	superslm::CarriedScale final_norm_site_constant{};
+	// T-2851 (design Sec4.6a): a host copy of `lm_head`, taken only for an UNTIED artifact mapped
+	// without SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE. Empty for a tied artifact, whose head is the
+	// embedding `embed_weights` already holds, and empty when the head lives on the device.
 	std::vector<int8_t> head_weights;
+	// The host head the finish reads, set once at map: `embed_weights.data()` when tied,
+	// `head_weights.data()` when untied and flag clear, null when the head is on the device (the
+	// host logits path does not run for such a model). Lifetime: the handle's.
+	const int8_t* head_rows = nullptr;
+	// T-2851 (B): the device logits bundle, present only for a model mapped with
+	// SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE. Released with the handle.
+	std::unique_ptr<DeviceLogitsBuffers> device_logits;
 
 	// T-2114 (S2, Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md): set at the START
 	// of unmap(), before `delete this`, matching `SslmGpuContext::destroyed`'s own established
@@ -564,11 +618,17 @@ namespace {
 Microsoft::WRL::ComPtr<ID3D12Resource> UploadResidentBufferSyncTo(
     superslm_gpu::harness::Device& dev, const void* data, size_t bytes,
     D3D12_RESOURCE_FLAGS resource_flags, D3D12_RESOURCE_STATES final_state) {
-	SSLM_GPU_HR(dev.alloc->Reset());
-	SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
+	// T-2851 (design Sec4.6 item 4, R16): phase A allocates both buffers BEFORE the command list
+	// is reset, so an allocation failure throws with the list still Closed -- the state every call
+	// on this context leaves it in -- and the next upload on the same context can reset it. (The
+	// previous order reset first; a failed allocation then left the list recording and every later
+	// upload on the context failed.) The throw, and the caller's SSLM_DEVICE_LOST, are unchanged.
 	Microsoft::WRL::ComPtr<ID3D12Resource> upload = dev.Upload(data, bytes);
 	Microsoft::WRL::ComPtr<ID3D12Resource> resident =
 	    dev.MakeBuffer(bytes, D3D12_HEAP_TYPE_DEFAULT, resource_flags, D3D12_RESOURCE_STATE_COPY_DEST);
+	// Phase B: reset, record, Close (with one retry), execute, wait.
+	SSLM_GPU_HR(dev.alloc->Reset());
+	SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
 	dev.list->CopyResource(resident.Get(), upload.Get());
 	D3D12_RESOURCE_BARRIER barrier{};
 	barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -577,7 +637,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> UploadResidentBufferSyncTo(
 	barrier.Transition.StateAfter = final_state;
 	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 	dev.list->ResourceBarrier(1, &barrier);
-	SSLM_GPU_HR(dev.list->Close());
+	dev.CloseListWithRetry();
 	ID3D12CommandList* lists[] = {dev.list.Get()};
 	dev.queue->ExecuteCommandLists(1, lists);
 	SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
@@ -624,6 +684,282 @@ Microsoft::WRL::ComPtr<ID3D12Resource> UploadResidentUavBufferSync(superslm_gpu:
 	                                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 }
 
+// ---------------------------------------------------------------------------------------------
+// T-2851 (B): the device-resident head and its logits step (design Sec4.6).
+// ---------------------------------------------------------------------------------------------
+
+// Test builds only: marks the calls that run inside CreateDeviceLogitsBuffers (the allocation
+// seam's in-bundle record) and inside either device logits routine (the phase-B Close seam's
+// scope). A no-op in product builds.
+class DeviceLogitsSeamScope {
+public:
+	explicit DeviceLogitsSeamScope(bool bundle_creation) : bundle_(bundle_creation) {
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+		superslm_gpu::harness::GpuTestSeamState& seam = superslm_gpu::harness::TestSeamState();
+		std::lock_guard<std::mutex> lock(seam.mutex);
+		seam.device_logits_scope += 1;
+		if (bundle_) seam.bundle_scope += 1;
+#endif
+	}
+	~DeviceLogitsSeamScope() {
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+		superslm_gpu::harness::GpuTestSeamState& seam = superslm_gpu::harness::TestSeamState();
+		std::lock_guard<std::mutex> lock(seam.mutex);
+		seam.device_logits_scope -= 1;
+		if (bundle_) seam.bundle_scope -= 1;
+#endif
+	}
+	DeviceLogitsSeamScope(const DeviceLogitsSeamScope&) = delete;
+	DeviceLogitsSeamScope& operator=(const DeviceLogitsSeamScope&) = delete;
+
+private:
+	bool bundle_;
+};
+
+// Whether the context's device reports itself removed, asked when a map-time allocation fails
+// with E_OUTOFMEMORY: only a live device makes that a recoverable SSLM_GPU_ALLOCATION_FAILED.
+// Test builds can make the next query report removed (ArmGpuMapDeviceRemovedQueryInjection).
+bool MapDeviceReportedRemoved(superslm_gpu::harness::Device& dev) {
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+	{
+		superslm_gpu::harness::GpuTestSeamState& seam = superslm_gpu::harness::TestSeamState();
+		std::lock_guard<std::mutex> lock(seam.mutex);
+		if (seam.map_removed_query) {
+			seam.map_removed_query = false;  // single-shot
+			return true;
+		}
+	}
+#endif
+	return !dev.dev || dev.dev->GetDeviceRemovedReason() != S_OK;
+}
+
+void WaitForFence(superslm_gpu::harness::Device& dev) {
+	if (dev.fence->GetCompletedValue() < dev.fence_val) {
+		SSLM_GPU_HR(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event));
+		WaitForSingleObject(dev.fence_event, INFINITE);
+	}
+}
+
+// Phase B's submission tail for the device logits routines: execute, then Signal. A failed Signal
+// is retried once at a FRESH fence value, never the value the failed call attempted, as the chunk
+// path does (gpu_1p0.h, SSLM_DEVICE_LOST cause (b)); if the retry succeeds the work is waited out
+// before the throw, so no buffer is released while the GPU may still use it. Either failure
+// throws, and the caller reports SSLM_DEVICE_LOST.
+void ExecuteSignalAndWait(superslm_gpu::harness::Device& dev) {
+	ID3D12CommandList* lists[] = {dev.list.Get()};
+	dev.queue->ExecuteCommandLists(1, lists);
+	if (FAILED(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val))) {
+		const HRESULT retry = dev.queue->Signal(dev.fence.Get(), ++dev.fence_val);
+		if (SUCCEEDED(retry)) WaitForFence(dev);
+		std::fprintf(stderr, "superslm_gpu: fence Signal failed; fresh-value retry %s\n",
+		             SUCCEEDED(retry) ? "succeeded and was waited out" : "failed");
+		throw std::runtime_error("D3D12 fence Signal failed");
+	}
+	WaitForFence(dev);
+}
+
+void TransitionBuffer(ID3D12GraphicsCommandList* list, ID3D12Resource* r, D3D12_RESOURCE_STATES before,
+                D3D12_RESOURCE_STATES after) {
+	D3D12_RESOURCE_BARRIER b{};
+	b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	b.Transition.pResource = r;
+	b.Transition.StateBefore = before;
+	b.Transition.StateAfter = after;
+	b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	list->ResourceBarrier(1, &b);
+}
+
+// logits_site.hlsl's root signature: four root constants (hidden, vocab, groups_x, unused) at
+// b0, the head at t0, the int32 x row at t1, the int64 output row at u0.
+Microsoft::WRL::ComPtr<ID3D12RootSignature> MakeLogitsSiteRootSignature(ID3D12Device* device) {
+	D3D12_ROOT_PARAMETER ps[4]{};
+	ps[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+	ps[0].Constants.Num32BitValues = 4;
+	ps[0].Constants.ShaderRegister = 0;
+	ps[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	ps[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+	ps[1].Descriptor.ShaderRegister = 0;
+	ps[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+	ps[2].Descriptor.ShaderRegister = 1;
+	ps[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+	ps[3].Descriptor.ShaderRegister = 0;
+	D3D12_ROOT_SIGNATURE_DESC rs{};
+	rs.NumParameters = 4;
+	rs.pParameters = ps;
+	Microsoft::WRL::ComPtr<ID3DBlob> blob, err;
+	if (FAILED(D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err))) {
+		if (err) std::fprintf(stderr, "%s\n", static_cast<const char*>(err->GetBufferPointer()));
+		throw std::runtime_error("logits_site root signature serialization failed");
+	}
+	Microsoft::WRL::ComPtr<ID3D12RootSignature> root;
+	SSLM_GPU_HR(device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
+	                                        IID_PPV_ARGS(&root)));
+	return root;
+}
+
+constexpr uint32_t kLogitsSiteRowsPerGroup = 8;  // 256 threads / 32 lanes per row (logits_site.hlsl)
+
+// Creates the bundle for one model's head table (`head_rows`, vocab V x hidden H, row-major), in
+// two phases so a failure never leaves the context's command list recording (design Sec4.6 item 4,
+// R16):
+// - Phase A, no command list touched: TryMakeBuffer for (i)-(vi) in order, each failure
+//   classified at its own site; the head copied into (i); (iii) and (vi) persistently mapped; the
+//   logits_site root signature and pipeline built and stored in the bundle.
+// - Phase B: reset, record the head copy (ii) <- (i) and its transition, Close with one retry,
+//   execute, Signal with a fresh-value retry, wait. (i) is released when this function returns.
+// Returns SSLM_GPU_ALLOCATION_FAILED for E_OUTOFMEMORY on a device that is not removed, and
+// SSLM_GPU_SHADER_BINARY_STALE for a stale logits_site.cso. Every other failure is
+// SSLM_DEVICE_LOST (a missing .cso among them, as for every other shader load). On any failure
+// `out` holds no usable bundle and the list is Closed, except in the documented terminal case
+// where both Close attempts fail.
+SslmGpuStatus CreateDeviceLogitsBuffers(SslmGpuContext* ctx, const int8_t* head_rows, uint32_t V,
+                                        uint32_t H, DeviceLogitsBuffers* out) {
+	DeviceLogitsSeamScope scope(/*bundle_creation=*/true);
+	superslm_gpu::harness::Device& dev = ctx->device;
+	try {
+		out->V = V;
+		out->H = H;
+		// The shader reads the head a dword at a time, so the resident table is padded to a
+		// multiple of four bytes (zero padding, never read into a row's sum).
+		const UINT64 head_table_bytes = static_cast<UINT64>(V) * H;
+		const UINT64 head_bytes = std::max<UINT64>(4, (head_table_bytes + 3) & ~UINT64{3});
+		const UINT64 x_bytes = static_cast<UINT64>(H) * 4;
+		const UINT64 row_bytes = static_cast<UINT64>(V) * 8;
+		Microsoft::WRL::ComPtr<ID3D12Resource> staging;  // (i)
+		struct Allocation {
+			UINT64 bytes;
+			D3D12_HEAP_TYPE heap;
+			D3D12_RESOURCE_FLAGS flags;
+			D3D12_RESOURCE_STATES state;
+			Microsoft::WRL::ComPtr<ID3D12Resource>* target;
+		};
+		const Allocation allocations[] = {
+		    {head_bytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE,
+		     D3D12_RESOURCE_STATE_GENERIC_READ, &staging},
+		    {head_bytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_NONE,
+		     D3D12_RESOURCE_STATE_COPY_DEST, &out->head},
+		    {x_bytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE,
+		     D3D12_RESOURCE_STATE_GENERIC_READ, &out->x_upload},
+		    {x_bytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_NONE,
+		     D3D12_RESOURCE_STATE_COPY_DEST, &out->x},
+		    {row_bytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+		     D3D12_RESOURCE_STATE_UNORDERED_ACCESS, &out->out},
+		    {row_bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
+		     D3D12_RESOURCE_STATE_COPY_DEST, &out->readback},
+		};
+		for (const Allocation& a : allocations) {
+			const HRESULT hr = dev.TryMakeBuffer(a.bytes, a.heap, a.flags, a.state, a.target);
+			if (FAILED(hr)) {
+				if (hr == E_OUTOFMEMORY && !MapDeviceReportedRemoved(dev)) {
+					return SSLM_GPU_ALLOCATION_FAILED;
+				}
+				std::fprintf(stderr, "superslm_gpu: device logits buffer allocation failed 0x%08lx\n",
+				             static_cast<unsigned long>(hr));
+				return SSLM_DEVICE_LOST;
+			}
+		}
+
+		void* mapped = nullptr;
+		D3D12_RANGE no_read{0, 0};
+		SSLM_GPU_HR(staging->Map(0, &no_read, &mapped));
+		std::memcpy(mapped, head_rows, static_cast<size_t>(head_table_bytes));
+		std::memset(static_cast<uint8_t*>(mapped) + head_table_bytes, 0,
+		            static_cast<size_t>(head_bytes - head_table_bytes));
+		staging->Unmap(0, nullptr);
+		SSLM_GPU_HR(out->x_upload->Map(0, &no_read, &mapped));
+		out->x_upload_ptr = static_cast<int32_t*>(mapped);
+		SSLM_GPU_HR(out->readback->Map(0, nullptr, &mapped));
+		out->readback_ptr = static_cast<const int64_t*>(mapped);
+
+		std::string cso_path;
+		try {
+			cso_path = superslm_gpu::harness::ShaderPath("logits_site");
+		} catch (const std::logic_error&) {
+			// ShaderPath's only logic_error is its stale-binary refusal (GpuShaderBinaryStaleError,
+			// superslm_gpu.cpp), whose diagnostic it has already printed.
+			return SSLM_GPU_SHADER_BINARY_STALE;
+		}
+		const std::vector<uint8_t> cso = superslm_gpu::harness::ReadFile(cso_path);
+		out->root = MakeLogitsSiteRootSignature(dev.dev.Get());
+		out->pso = dev.MakePSO(out->root.Get(), cso);
+		const uint32_t groups = (V + kLogitsSiteRowsPerGroup - 1) / kLogitsSiteRowsPerGroup;
+		out->groups_x = std::min<uint32_t>(groups, 65535u);
+		out->groups_y = (groups + out->groups_x - 1) / out->groups_x;
+
+		// Phase B.
+		SSLM_GPU_HR(dev.alloc->Reset());
+		SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
+		dev.list->CopyResource(out->head.Get(), staging.Get());
+		TransitionBuffer(dev.list.Get(), out->head.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+		           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		dev.CloseListWithRetry();
+		ExecuteSignalAndWait(dev);
+		return SSLM_OK;
+	} catch (const std::bad_alloc&) {
+		throw;
+	} catch (const std::exception&) {
+		return SSLM_DEVICE_LOST;
+	}
+}
+
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+void ApplyReadbackOverrideSeam(int64_t* wide_out, uint32_t V) {
+	superslm_gpu::harness::GpuTestSeamState& seam = superslm_gpu::harness::TestSeamState();
+	std::lock_guard<std::mutex> lock(seam.mutex);
+	if (!seam.readback_override_armed) return;
+	seam.readback_override_armed = false;  // single-shot
+	if (seam.readback_override_row >= 0 && static_cast<uint32_t>(seam.readback_override_row) < V) {
+		wide_out[seam.readback_override_row] = seam.readback_override_value;
+	}
+}
+#endif
+
+// One device logits dispatch through the bundle: the exact int64 row for `x_codes` (H codes) into
+// `wide_out` (V elements). Allocates nothing and maps nothing: the codes are written through the
+// persistent (iii) mapping before the list is reset, and the row is copied out of the persistent
+// (vi) mapping after the fence wait. Its only fallible steps are Reset, Close and Signal, with
+// the phase-B dispositions; any failure returns SSLM_DEVICE_LOST.
+SslmGpuStatus RunDeviceLogits(SslmGpuContext* ctx, const DeviceLogitsBuffers& b,
+                              const int8_t* x_codes, int64_t* wide_out) {
+	DeviceLogitsSeamScope scope(/*bundle_creation=*/false);
+	superslm_gpu::harness::Device& dev = ctx->device;
+	try {
+		for (uint32_t k = 0; k < b.H; ++k) b.x_upload_ptr[k] = x_codes[k];
+		SSLM_GPU_HR(dev.alloc->Reset());
+		SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), b.pso.Get()));
+		ID3D12GraphicsCommandList* list = dev.list.Get();
+		list->CopyBufferRegion(b.x.Get(), 0, b.x_upload.Get(), 0, static_cast<UINT64>(b.H) * 4);
+		TransitionBuffer(list, b.x.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+		           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		list->SetComputeRootSignature(b.root.Get());
+		const uint32_t constants[4] = {b.H, b.V, b.groups_x, 0u};
+		list->SetComputeRoot32BitConstants(0, 4, constants, 0);
+		list->SetComputeRootShaderResourceView(1, b.head->GetGPUVirtualAddress());
+		list->SetComputeRootShaderResourceView(2, b.x->GetGPUVirtualAddress());
+		list->SetComputeRootUnorderedAccessView(3, b.out->GetGPUVirtualAddress());
+		list->Dispatch(b.groups_x, b.groups_y, 1);
+		TransitionBuffer(list, b.out.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+		           D3D12_RESOURCE_STATE_COPY_SOURCE);
+		list->CopyBufferRegion(b.readback.Get(), 0, b.out.Get(), 0, static_cast<UINT64>(b.V) * 8);
+		// Back to the resting states the next dispatch starts from.
+		TransitionBuffer(list, b.out.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+		           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		TransitionBuffer(list, b.x.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+		           D3D12_RESOURCE_STATE_COPY_DEST);
+		dev.CloseListWithRetry();
+		ExecuteSignalAndWait(dev);
+		std::memcpy(wide_out, b.readback_ptr, static_cast<size_t>(b.V) * 8);
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+		ApplyReadbackOverrideSeam(wide_out, b.V);
+#endif
+		return SSLM_OK;
+	} catch (const std::bad_alloc&) {
+		throw;
+	} catch (const std::exception&) {
+		return SSLM_DEVICE_LOST;
+	}
+}
+
 }  // namespace
 
 // Design Sec5.1: "uploads the model's weights, fold-scale tables, and RoPE cos/sin tables
@@ -637,7 +973,6 @@ Microsoft::WRL::ComPtr<ID3D12Resource> UploadResidentUavBufferSync(superslm_gpu:
 // buffers -- no process-global cache anywhere in this path (D-SLM3294).
 SslmGpuStatus sslm_gpu_model_mapImpl(SslmGpuContext* ctx, const SslmModelView* base,
                                   GpuResidencyConfig cfg, SslmGpuModelHandle** out_model) {
-	(void)cfg;  // GpuResidencyConfig carries no fields the design assigns yet (Sec5.1).
 	if (!out_model) {
 		return SSLM_DEVICE_LOST;  // same "no live object to report through" reasoning as
 		                          // sslm_gpu_context_create's own null-out-parameter case.
@@ -646,6 +981,11 @@ SslmGpuStatus sslm_gpu_model_mapImpl(SslmGpuContext* ctx, const SslmModelView* b
 	if (!ctx || !base) {
 		return SSLM_DEVICE_LOST;
 	}
+	// T-2851 (design Sec4.6): a bit this release does not define is refused before any work.
+	if ((cfg.flags & ~SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE) != 0) {
+		return SSLM_GPU_RESIDENCY_FLAGS_INVALID;
+	}
+	const bool head_on_device = (cfg.flags & SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE) != 0;
 
 	const uint32_t num_heads = base->config.num_attention_heads;
 	const uint32_t num_kv_heads = base->config.num_key_value_heads;
@@ -831,6 +1171,19 @@ SslmGpuStatus sslm_gpu_model_mapImpl(SslmGpuContext* ctx, const SslmModelView* b
 		return SSLM_DEVICE_LOST;
 	}
 
+	// T-2851 (B, design Sec4.6): the device-resident head. `head_w` above is the one table the
+	// host path would read (the tied embedding, or lm_head), selected once; the upload reads that
+	// pointer and nothing else. A failure leaves no bundle and no handle (the handle's buffers
+	// above are released with `h`).
+	if (head_on_device) {
+		auto bundle = std::make_unique<DeviceLogitsBuffers>();
+		const SslmGpuStatus bundle_status = CreateDeviceLogitsBuffers(
+		    ctx, reinterpret_cast<const int8_t*>(head_w->data), static_cast<uint32_t>(vocab_size),
+		    H, bundle.get());
+		if (bundle_status != SSLM_OK) return bundle_status;
+		h->device_logits = std::move(bundle);
+	}
+
 	// Host-only copy (Sec5.3a: "not new residency, no additional GPU upload") -- taken
 	// after the three real device uploads above have already succeeded, so a failure here
 	// never leaves a half-uploaded device handle: this is a plain host memcpy that cannot
@@ -841,8 +1194,18 @@ SslmGpuStatus sslm_gpu_model_mapImpl(SslmGpuContext* ctx, const SslmModelView* b
 	h->vocab_size = vocab_size;
 	h->final_norm_gain = superslm_marshal::WidenGainToInt32(*final_gain_w);
 	h->final_norm_site_constant = final_norm_site_constant;
-	h->head_weights.assign(reinterpret_cast<const int8_t*>(head_w->data),
-	                        reinterpret_cast<const int8_t*>(head_w->data) + head_bytes_needed);
+	// T-2851 (design Sec4.6a): one host copy of a tied head. A tied artifact's head IS the
+	// embedding, which `embed_weights` already holds, so the finish reads that copy; only an
+	// untied artifact's lm_head is copied, and only when the host path can run for this model.
+	if (head_on_device) {
+		h->head_rows = nullptr;
+	} else if (base->config.tie_word_embeddings) {
+		h->head_rows = h->embed_weights.data();
+	} else {
+		h->head_weights.assign(reinterpret_cast<const int8_t*>(head_w->data),
+		                        reinterpret_cast<const int8_t*>(head_w->data) + head_bytes_needed);
+		h->head_rows = h->head_weights.data();
+	}
 
 	// G5-5: parse the host-owned copy (schema_section_bytes, moved into the handle here) --
 	// `schemas`'s own SchemaEntry pointers point INTO `h->schema_section_bytes`, never the local
@@ -1265,6 +1628,23 @@ SslmGpuStatus sslm_gpu_context_destroyImpl(SslmGpuContext* ctx) {
 	}
 	ctx->destroyed = true;
 	delete ctx;
+	return SSLM_OK;
+}
+
+// T-2851 (A, design Sec4.4): copies the host parallel-for hook into the context, or clears it.
+// The same field validation as the CPU workspace's setter (sslm_workspace_set_parallel_for).
+SslmGpuStatus sslm_gpu_context_set_host_parallel_forImpl(SslmGpuContext* ctx,
+                                                        const sslm_parallel_for* pf) {
+	if (!ctx) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // this surface's null-handle status
+	if (!pf) {
+		ctx->host_parallel_for = sslm_parallel_for{};
+		return SSLM_OK;
+	}
+	if (pf->reserved != 0 || pf->max_tasks < 0 || pf->max_tasks > SSLM_PARALLEL_FOR_MAX_TASKS ||
+	    (pf->run == nullptr && pf->max_tasks > 1)) {
+		return SSLM_GPU_PARALLEL_FOR_INVALID;
+	}
+	ctx->host_parallel_for = *pf;
 	return SSLM_OK;
 }
 
@@ -2561,8 +2941,30 @@ SslmGpuStatus SslmGpuSeqFinishTokenForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuS
 
 	std::vector<int64_t> wide_logits(static_cast<size_t>(model->vocab_size));
 	std::vector<int32_t> logit_row(static_cast<size_t>(model->vocab_size));
-	fst = superslm::LogitsSite(final_codes.data(), model->hidden_size, model->head_weights.data(),
-	                            model->vocab_size, wide_logits.data(), logit_row.data());
+	if (model->device_logits) {
+		// T-2851 (B): the exact int64 row, computed on the device from the resident head, then the
+		// unchanged host narrowing -- the same call on the same values as the host path below.
+		const SslmGpuStatus device_status = RunDeviceLogits(ctx, *model->device_logits,
+		                                                    final_codes.data(), wide_logits.data());
+		if (device_status != SSLM_OK) return device_status;
+		fst = superslm::NarrowRowChecked(wide_logits.data(), static_cast<size_t>(model->vocab_size),
+		                                 logit_row.data());
+	} else {
+		// T-2851 (A): the host row, through the context's parallel-for hook when one is installed;
+		// with none, LogitsSiteParallel runs LogitsSite itself. Reads `head_rows`, the model's one
+		// host copy of its head (design Sec4.6a).
+		fst = superslm::LogitsSiteParallel(final_codes.data(), model->hidden_size, model->head_rows,
+		                                   static_cast<size_t>(model->vocab_size),
+		                                   wide_logits.data(), logit_row.data(),
+		                                   &ctx->host_parallel_for);
+		if (fst == superslm::SslmForwardStatus::ParallelForIncomplete) {
+			// The host's run broke the exactly-once contract; no token was produced. Rest as the
+			// dead end does: ready_for_logits re-armed, walk state and layer index unchanged, so
+			// the finish can be retried.
+			seq->ready_for_logits = true;
+			return SSLM_GPU_PARALLEL_FOR_INCOMPLETE;
+		}
+	}
 	if (fst != superslm::SslmForwardStatus::Ok) return MapDecodedStatusToGpuStatus(fst);
 
 	MaybeInjectGpuFinishDegenerateLogitRow(logit_row.data(), model->vocab_size);
@@ -3537,6 +3939,11 @@ SslmGpuStatus sslm_gpu_context_create(GpuContextConfig cfg, SslmGpuContext** out
 SslmGpuStatus sslm_gpu_context_destroy(SslmGpuContext* ctx) noexcept {
 	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_context_destroyImpl(ctx); });
 }
+SslmGpuStatus sslm_gpu_context_set_host_parallel_for(SslmGpuContext* ctx,
+                                                     const sslm_parallel_for* pf) noexcept {
+	return InvokeGpuApiBoundary(
+	    __func__, [&] { return sslm_gpu_context_set_host_parallel_forImpl(ctx, pf); });
+}
 SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
                                   GpuResidencyConfig cfg,
                                   SslmGpuModelHandle** out_model) noexcept {
@@ -3663,3 +4070,102 @@ SslmGpuStatus sslm_gpu_seq_read_prefill_final_hidden(SslmGpuContext* ctx, SslmGp
 		                                                   out_required, out_scale_m, out_scale_e);
 	});
 }
+
+// -------------------------------------------------------------------------------------------------
+// T-2851 test-build seams (SUPERSLM_GPU_ALLOC_FAULT_INJECTION only; design Sec4.6 items 2 and 4,
+// Sec4.9). Global scope and C++ linkage, matching the red suite's own local declarations
+// (tests/t2956-token-finish-red-suite/) and gpu_port.h's declarations. None is in a product build.
+// -------------------------------------------------------------------------------------------------
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+
+void SslmGpuAllocCounterResetForTest() noexcept {
+	superslm_gpu::harness::GpuTestSeamState& seam = superslm_gpu::harness::TestSeamState();
+	std::lock_guard<std::mutex> lock(seam.mutex);
+	seam.alloc_count = 0;
+	seam.alloc_in_bundle.clear();
+}
+
+uint32_t SslmGpuAllocCountForTest() noexcept {
+	superslm_gpu::harness::GpuTestSeamState& seam = superslm_gpu::harness::TestSeamState();
+	std::lock_guard<std::mutex> lock(seam.mutex);
+	return seam.alloc_count;
+}
+
+void ArmGpuAllocFaultAtOccurrence(uint32_t k, HRESULT hr) noexcept {
+	superslm_gpu::harness::GpuTestSeamState& seam = superslm_gpu::harness::TestSeamState();
+	std::lock_guard<std::mutex> lock(seam.mutex);
+	seam.alloc_fault_countdown = k;  // 0 disarms
+	seam.alloc_fault_hr = hr;
+}
+
+bool SslmGpuAllocInBundleForTest(uint32_t k) noexcept {
+	superslm_gpu::harness::GpuTestSeamState& seam = superslm_gpu::harness::TestSeamState();
+	std::lock_guard<std::mutex> lock(seam.mutex);
+	return k >= 1 && k <= seam.alloc_in_bundle.size() && seam.alloc_in_bundle[k - 1];
+}
+
+void ArmGpuMapDeviceRemovedQueryInjection() noexcept {
+	superslm_gpu::harness::GpuTestSeamState& seam = superslm_gpu::harness::TestSeamState();
+	std::lock_guard<std::mutex> lock(seam.mutex);
+	seam.map_removed_query = true;
+}
+
+void ArmGpuDeviceLogitsReadbackOverride(int32_t row, int64_t value) noexcept {
+	superslm_gpu::harness::GpuTestSeamState& seam = superslm_gpu::harness::TestSeamState();
+	std::lock_guard<std::mutex> lock(seam.mutex);
+	seam.readback_override_armed = true;
+	seam.readback_override_row = row;
+	seam.readback_override_value = value;
+}
+
+void ArmGpuDeviceLogitsCloseFaultForTest(uint32_t consecutive_failures) noexcept {
+	superslm_gpu::harness::GpuTestSeamState& seam = superslm_gpu::harness::TestSeamState();
+	std::lock_guard<std::mutex> lock(seam.mutex);
+	seam.close_failures = consecutive_failures;  // 0 disarms
+}
+
+size_t SslmGpuHeadWeightCopySizeForTest(const SslmGpuModelHandle* model) noexcept {
+	return model ? model->head_weights.size() : 0;
+}
+
+struct SslmGpuDeviceLogitsBundleForTest {
+	DeviceLogitsBuffers buffers;
+};
+
+SslmGpuStatus SslmGpuDeviceLogitsBundleCreateForTest(
+    SslmGpuContext* ctx, const int8_t* head_rows, uint32_t V, uint32_t H,
+    SslmGpuDeviceLogitsBundleForTest** out_bundle) noexcept {
+	if (!out_bundle) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	*out_bundle = nullptr;
+	if (!ctx || !head_rows || V == 0 || H == 0) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	return InvokeGpuApiBoundary(__func__, [&]() -> SslmGpuStatus {
+		auto bundle = std::make_unique<SslmGpuDeviceLogitsBundleForTest>();
+		const SslmGpuStatus st = CreateDeviceLogitsBuffers(ctx, head_rows, V, H, &bundle->buffers);
+		if (st == SSLM_OK) *out_bundle = bundle.release();
+		return st;
+	});
+}
+
+SslmGpuStatus SslmGpuDeviceLogitsRunForTest(SslmGpuContext* ctx,
+                                            SslmGpuDeviceLogitsBundleForTest* bundle,
+                                            const int8_t* x_codes, int64_t* wide_out) noexcept {
+	if (!ctx || !bundle || !x_codes || !wide_out) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	return InvokeGpuApiBoundary(
+	    __func__, [&] { return RunDeviceLogits(ctx, bundle->buffers, x_codes, wide_out); });
+}
+
+void SslmGpuDeviceLogitsBundleResourcesForTest(const SslmGpuDeviceLogitsBundleForTest* bundle,
+                                               uint64_t out_gpu_vas[5]) noexcept {
+	const DeviceLogitsBuffers& b = bundle->buffers;
+	ID3D12Resource* resources[5] = {b.head.Get(), b.x_upload.Get(), b.x.Get(), b.out.Get(),
+	                                b.readback.Get()};
+	for (int i = 0; i < 5; ++i) {
+		out_gpu_vas[i] = resources[i] ? resources[i]->GetGPUVirtualAddress() : 0;
+	}
+}
+
+void SslmGpuDeviceLogitsBundleDestroyForTest(SslmGpuDeviceLogitsBundleForTest* bundle) noexcept {
+	delete bundle;
+}
+
+#endif  // SUPERSLM_GPU_ALLOC_FAULT_INJECTION

@@ -20,6 +20,8 @@
 // suite (Claude/Brunel/superslm-s3.4-mlp-act-site-body-build-2026-07-29.md).
 #include "superslm/forward_sites.h"
 
+#include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -2778,6 +2780,76 @@ SslmForwardStatus LogitsSite(const int8_t* final_codes, size_t hidden_size,
                               const int8_t* head_weights, size_t vocab_size,
                               int64_t* wide_logits, int32_t* out_logits) {
 	GemmInt8AccumulateRow(final_codes, head_weights, hidden_size, vocab_size, wide_logits);
+	return NarrowRowChecked(wide_logits, vocab_size, out_logits);
+}
+
+namespace {
+
+// Call-local state one LogitsSiteParallel call hands to the host's `run` as `task_ctx`. It lives
+// on that call's stack and ends when the call returns (parallel_for.h's precondition).
+struct LogitsTaskCtx {
+	const int8_t* final_codes;
+	size_t hidden_size;
+	const int8_t* head_weights;
+	size_t vocab_size;
+	int64_t* wide_logits;
+	size_t rows_per_task;
+	int32_t task_count;
+	std::atomic<uint8_t>* state;  // [task_count]: 0 = not started, 1 = admitted, 2 = done
+	std::atomic<bool>* violation;
+};
+
+void LogitsTask(void* task_ctx, int32_t task_index) {
+	LogitsTaskCtx& c = *static_cast<LogitsTaskCtx*>(task_ctx);
+	if (task_index < 0 || task_index >= c.task_count) {
+		c.violation->store(true, std::memory_order_release);
+		return;
+	}
+	// Admission: exactly one invocation of an index can take 0 -> 1, so exactly one can reach the
+	// row write. A later or concurrent second invocation fails the exchange and writes nothing.
+	uint8_t expected = 0;
+	if (!c.state[task_index].compare_exchange_strong(expected, uint8_t{1},
+	                                                 std::memory_order_acq_rel)) {
+		c.violation->store(true, std::memory_order_release);
+		return;
+	}
+	const size_t begin = static_cast<size_t>(task_index) * c.rows_per_task;
+	const size_t end = std::min(c.vocab_size, begin + c.rows_per_task);
+	GemmInt8AccumulateRow(c.final_codes, c.head_weights + begin * c.hidden_size, c.hidden_size,
+	                      end - begin, c.wide_logits + begin);
+	// Release: publishes this block's row writes to the acquire scan after `run` returns.
+	c.state[task_index].store(uint8_t{2}, std::memory_order_release);
+}
+
+}  // namespace
+
+SslmForwardStatus LogitsSiteParallel(const int8_t* final_codes, size_t hidden_size,
+                                      const int8_t* head_weights, size_t vocab_size,
+                                      int64_t* wide_logits, int32_t* out_logits,
+                                      const sslm_parallel_for* pf) {
+	if (pf == nullptr || pf->run == nullptr || pf->max_tasks <= 1 || vocab_size == 0) {
+		return LogitsSite(final_codes, hidden_size, head_weights, vocab_size, wide_logits,
+		                  out_logits);
+	}
+	const size_t max_tasks =
+	    std::min<size_t>(static_cast<size_t>(pf->max_tasks), SSLM_PARALLEL_FOR_MAX_TASKS);
+	const size_t per_task = (vocab_size + max_tasks - 1) / max_tasks;
+	const size_t rows_per_task = ((per_task + 63) / 64) * 64;
+	const size_t task_count = (vocab_size + rows_per_task - 1) / rows_per_task;
+
+	// Value-initialized (C++20): every entry starts at 0 = not started.
+	std::atomic<uint8_t> state[SSLM_PARALLEL_FOR_MAX_TASKS];
+	std::atomic<bool> violation{false};
+	LogitsTaskCtx ctx{final_codes,   hidden_size, head_weights,
+	                  vocab_size,    wide_logits, rows_per_task,
+	                  static_cast<int32_t>(task_count), state, &violation};
+	pf->run(pf->host_ctx, static_cast<int32_t>(task_count), &LogitsTask, &ctx);
+
+	bool complete = !violation.load(std::memory_order_acquire);
+	for (size_t i = 0; complete && i < task_count; ++i) {
+		complete = state[i].load(std::memory_order_acquire) == 2;
+	}
+	if (!complete) return SslmForwardStatus::ParallelForIncomplete;
 	return NarrowRowChecked(wide_logits, vocab_size, out_logits);
 }
 

@@ -713,6 +713,7 @@ endif()
 # or the Windows test suite. BUILD_TESTING=OFF plus the default GPU option keeps
 # a CPU product configure independent of DXC, D3D12 sources, and shader builds.
 option(SUPERSLM_BUILD_GPU "Build and install the D3D12/HLSL GPU acceleration library (Windows/MSVC only)" OFF)
+option(SUPERSLM_GPU_TEST_SEAMS "Test builds only: compile the GPU library with the T-2851 allocation and device-logits test seams" OFF)
 
 if(SUPERSLM_BUILD_GPU AND NOT WIN32)
 	message(FATAL_ERROR "SUPERSLM_BUILD_GPU requires Windows: src/gpu/*.cpp is a D3D12/HLSL implementation with no non-Windows backend.")
@@ -872,6 +873,13 @@ if(WIN32 AND (SUPERSLM_BUILD_GPU OR BUILD_TESTING))
 			target_compile_options(superslm_gpu PRIVATE -Wall -Wextra -ffp-contract=off)
 		endif()
 		add_dependencies(superslm_gpu superslm_gpu_shaders)
+		# T-2851: a TEST build of the GPU library carrying the occurrence-indexed allocation
+		# fault seam and its siblings (SUPERSLM_GPU_ALLOC_FAULT_INJECTION; gpu_port.h), which the
+		# token-finish red suite (tests/t2956-token-finish-red-suite/) links against. Never set
+		# for a library that ships: the seams count every device allocation.
+		if(SUPERSLM_GPU_TEST_SEAMS)
+			target_compile_definitions(superslm_gpu PRIVATE SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+		endif()
 	endif()
 endif()
 
@@ -897,7 +905,7 @@ if(TARGET superslm_gpu)
 	)
 
 	# S1 (Claude/Poirot/6f60491-t2115-cmake-product-surface.md): superslm_gpu
-	# is unusable without its 33 compiled .cso shaders -- every real GPU
+	# is unusable without its compiled .cso shaders -- every real GPU
 	# dispatch reaches superslm_gpu::harness::GetOrBuildPipeline/
 	# GetOrBuildComposedPipeline (src/gpu/superslm_gpu.cpp), which throws if
 	# ShaderPath()'s file is missing, and every call site along that path

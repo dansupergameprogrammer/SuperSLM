@@ -23,6 +23,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "superslm/parallel_for.h"  // sslm_parallel_for (sslm_gpu_context_set_host_parallel_for)
+
 /* --- opaque handle types, design Sec4.1 --- */
 typedef struct SslmGpuContext        SslmGpuContext;
 typedef struct SslmGpuModelHandle    SslmGpuModelHandle;
@@ -38,7 +40,8 @@ using superslm::SslmModelView;
 
 /* The two by-value configuration structs of the context and model-map calls. An
  * all-zero-initialized value (`{}` or `{0}`) is always a valid "no options requested"
- * config. `reserved` is the first field of each and is ignored.
+ * config. GpuContextConfig's first field, `reserved`, is ignored; GpuResidencyConfig's only
+ * field is `flags` (1.7.0, below).
  *
  * GpuContextConfig::shader_dir (1.7.0) selects the directory the compiled .cso shader set
  * is loaded from:
@@ -62,9 +65,25 @@ typedef struct GpuContextConfig {
 	                            NUL-terminated, holding the compiled .cso set. Read during
 	                            sslm_gpu_context_create only; the caller may free it after. */
 } GpuContextConfig;
+/* GpuResidencyConfig::flags (1.7.0; the field was `int reserved` before, with the same size,
+ * offset and alignment, so a zero-initializing caller is binary-compatible). 0 is the behaviour
+ * of every earlier release. sslm_gpu_model_map refuses any bit other than those below with
+ * SSLM_GPU_RESIDENCY_FLAGS_INVALID and creates no handle.
+ *
+ * SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE: upload the model's output head table (the tied embedding,
+ * or lm_head when untied) to the device at map time, so the token finish
+ * (SslmGpuSeqFinishTokenForG5Bridge) computes the exact int64 logits row on the device and reads
+ * it back; the host then runs the same narrowing, mask, argmax and dead-end rule as without the
+ * flag, so tokens are identical. Opt-in per model. New VRAM per mapped model: the head table
+ * (vocab_size x hidden_size bytes: 136,134,656 B at Qwen2.5-0.5B, 233,373,696 B at 1.5B) plus a
+ * hidden_size x 4 B input row and a vocab_size x 8 B output row, each rounded up to the 64 KiB
+ * allocation granule; nothing per sequence. With the flag set the model keeps no host copy of
+ * the head, and the host parallel-for hook (sslm_gpu_context_set_host_parallel_for) is not used
+ * for that model's finish. */
 typedef struct GpuResidencyConfig {
-	int reserved;  /* design Sec5.1 assigns no fields yet; zero-initialize */
+	uint32_t flags;  /* SSLM_GPU_RESIDENCY_* bits; 0 = no options */
 } GpuResidencyConfig;
+constexpr uint32_t SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE = 0x1u;
 
 /* --- status enum ---
  * Scoped deliberately: the CPU C ABI also has SSLM_-prefixed status constants, and both
@@ -194,7 +213,18 @@ enum class SslmGpuStatus : uint32_t {
     /* sslm_gpu_context_create: this process already loads shaders from a different directory
      * (see GpuContextConfig above). No context is created. Remedy: supply the same directory, or
      * NULL. Appended LAST; no existing ordinal moves. */
-    SSLM_GPU_SHADER_DIR_CONFLICT
+    SSLM_GPU_SHADER_DIR_CONFLICT,
+    /* sslm_gpu_context_set_host_parallel_for: a field of the hook is invalid (see that
+     * function's comment). The context's hook is unchanged. Appended LAST. */
+    SSLM_GPU_PARALLEL_FOR_INVALID,
+    /* SslmGpuSeqFinishTokenForG5Bridge: the host parallel-for hook's `run` omitted a task index,
+     * invoked one twice, or invoked one outside [0, task_count) (superslm/parallel_for.h). No
+     * token is produced; `ready_for_logits` is re-armed and the walk state is unchanged, so the
+     * finish can be retried through a correct hook. Appended LAST. */
+    SSLM_GPU_PARALLEL_FOR_INCOMPLETE,
+    /* sslm_gpu_model_map: GpuResidencyConfig::flags carries a bit this release does not define.
+     * No handle is created. Appended LAST. */
+    SSLM_GPU_RESIDENCY_FLAGS_INVALID
 };
 
 /* --- Sec4.1.1: context create/destroy. DEFINED as of B1 (src/gpu/gpu_1p0.cpp). ---
@@ -218,7 +248,28 @@ enum class SslmGpuStatus : uint32_t {
 SslmGpuStatus sslm_gpu_context_create(GpuContextConfig cfg, SslmGpuContext** out_ctx) noexcept;
 SslmGpuStatus sslm_gpu_context_destroy(SslmGpuContext* ctx) noexcept;
 
-/* --- Sec5.1: model map/unmap. Declared for B2. --- */
+/* Installs a host parallel-for hook on the context, or clears it when `pf` is NULL
+ * (superslm/parallel_for.h states the contract the hook's `run` must meet). Copies *pf.
+ * - Used only by SslmGpuSeqFinishTokenForG5Bridge's host logits step, for a model mapped without
+ *   SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE. With no hook the finish is serial on the calling thread,
+ *   as in every earlier release. Tokens are identical with any hook and no hook.
+ * - Returns SSLM_SEQUENCE_KV_BUFFER_MISMATCH for a null ctx, and SSLM_GPU_PARALLEL_FOR_INVALID,
+ *   changing nothing, for pf->reserved != 0, pf->max_tasks < 0 or
+ *   > SSLM_PARALLEL_FOR_MAX_TASKS, or pf->run NULL with pf->max_tasks > 1.
+ * - Must be externally serialized with every other call on the context, as submission already
+ *   is. pf->host_ctx must outlive every finish made on the context while the hook is installed. */
+SslmGpuStatus sslm_gpu_context_set_host_parallel_for(SslmGpuContext* ctx,
+                                                     const sslm_parallel_for* pf) noexcept;
+
+/* --- Sec5.1: model map/unmap. Declared for B2. ---
+ * sslm_gpu_model_map: `cfg.flags` with an undefined bit returns SSLM_GPU_RESIDENCY_FLAGS_INVALID
+ * and creates no handle. With SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE set (GpuResidencyConfig above),
+ * an out-of-memory failure while allocating the head's device buffers, on a device that is not
+ * removed, returns SSLM_GPU_ALLOCATION_FAILED with no handle; the context stays usable, and the
+ * same map without the flag may be retried on it. The flag also loads `logits_site.cso` from the
+ * process's shader directory at map time: a stale binary returns SSLM_GPU_SHADER_BINARY_STALE,
+ * and a missing one SSLM_DEVICE_LOST, the statuses every other shader load already has. Every
+ * other allocation or device failure during the map returns SSLM_DEVICE_LOST, as before. */
 SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
                                   GpuResidencyConfig cfg, SslmGpuModelHandle** out_model) noexcept;
 SslmGpuStatus sslm_gpu_model_unmap(SslmGpuContext* ctx, SslmGpuModelHandle* model) noexcept;
@@ -457,7 +508,16 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSeq
  * `-2`/`SSLM_OK` result and consumes no new token from the caller -- retrying after a dead end is
  * therefore always safe and never re-drives the layer loop or embeds a stray token.
  *
- * Returns SSLM_SEQUENCE_REJECTED if the precondition (full depth reached) does not hold. */
+ * Returns SSLM_SEQUENCE_REJECTED if the precondition (full depth reached) does not hold.
+ *
+ * THE LOGITS STEP (1.7.0). For a model mapped with SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE the exact
+ * int64 logits row is computed on the device from the model's resident head table, read back,
+ * and narrowed on the host with the same check the host path uses; a device submission failure
+ * returns SSLM_DEVICE_LOST. Otherwise the host computes it, through the context's host
+ * parallel-for hook when one is installed (sslm_gpu_context_set_host_parallel_for). A hook whose
+ * `run` breaks its exactly-once contract returns SSLM_GPU_PARALLEL_FOR_INCOMPLETE with
+ * `ready_for_logits` re-armed and the walk state and layer index unchanged. The row, and so the
+ * token, is identical on every path. */
 SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                 int32_t* out_token) noexcept;
 

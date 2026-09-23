@@ -950,3 +950,57 @@ uint32_t AllocationCallsAttempted();
 bool MapModelGpuResidencyWithInjection(uint64_t required_bytes);
 
 }  // namespace superslm_gpu
+
+// T-2851 test-build seams (SUPERSLM_GPU_ALLOC_FAULT_INJECTION only; T-2851 design Sec4.6 items 2
+// and 4, Sec4.9), defined in gpu_1p0.cpp. Global scope with C++ linkage, not in superslm_gpu,
+// because the red suite (tests/t2956-token-finish-red-suite/) declares them there itself. None is
+// in a product build. `hr` is an HRESULT (Windows' `long`), spelled `long` so this header needs no
+// <windows.h>.
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+struct SslmGpuContext;
+struct SslmGpuModelHandle;
+enum class SslmGpuStatus : uint32_t;
+
+// Occurrence-indexed allocation faults. Every device allocation passes through one counted
+// primitive (harness::Device::TryMakeBuffer).
+//   SslmGpuAllocCounterResetForTest: zero the count and the in-bundle record.
+//   SslmGpuAllocCountForTest: allocations since the last reset.
+//   ArmGpuAllocFaultAtOccurrence: the k-th allocation after arming (1-based) returns `hr` without
+//     calling D3D12, once; k = 0 disarms.
+//   SslmGpuAllocInBundleForTest: whether the k-th allocation since the last reset ran inside the
+//     device logits bundle's creation (a test's expected-status choice only; it never selects
+//     what is faulted).
+void SslmGpuAllocCounterResetForTest() noexcept;
+uint32_t SslmGpuAllocCountForTest() noexcept;
+void ArmGpuAllocFaultAtOccurrence(uint32_t k, long hr) noexcept;
+bool SslmGpuAllocInBundleForTest(uint32_t k) noexcept;
+// The map-time twin of ArmPrefillGuardDeviceRemovedQueryInjection: the next removed-device query
+// made while classifying a map-time allocation failure reports removed. Single-shot.
+void ArmGpuMapDeviceRemovedQueryInjection() noexcept;
+// The next device logits read-back row has element `row` replaced by `value` before it is
+// returned. Single-shot.
+void ArmGpuDeviceLogitsReadbackOverride(int32_t row, int64_t value) noexcept;
+// Phase-B Close faults: the next `consecutive_failures` Close attempts made inside the device
+// logits bundle's creation or its run fail without closing the list. 1: the retry succeeds, the
+// call returns SSLM_DEVICE_LOST and the context stays usable. 2: both attempts fail and the
+// context is left in the documented terminal state. 0 disarms.
+void ArmGpuDeviceLogitsCloseFaultForTest(uint32_t consecutive_failures) noexcept;
+// The model handle's host lm_head copy, in bytes: 0 for a tied head or a device-resident head,
+// vocab_size x hidden_size for an untied head mapped without the flag.
+size_t SslmGpuHeadWeightCopySizeForTest(const SslmGpuModelHandle* model) noexcept;
+
+// One device logits bundle driven directly, through the model map's own creation path
+// (CreateDeviceLogitsBuffers) and the finish's own run (RunDeviceLogits).
+struct SslmGpuDeviceLogitsBundleForTest;
+SslmGpuStatus SslmGpuDeviceLogitsBundleCreateForTest(
+    SslmGpuContext* ctx, const int8_t* head_rows, uint32_t vocab_size, uint32_t hidden_size,
+    SslmGpuDeviceLogitsBundleForTest** out_bundle) noexcept;
+SslmGpuStatus SslmGpuDeviceLogitsRunForTest(SslmGpuContext* ctx,
+                                            SslmGpuDeviceLogitsBundleForTest* bundle,
+                                            const int8_t* x_codes, int64_t* wide_out) noexcept;
+// GPU virtual addresses of the bundle's head, x staging, x, output row and readback buffers, in
+// that order: identical before and after a run shows the run reused the bundle's buffers.
+void SslmGpuDeviceLogitsBundleResourcesForTest(const SslmGpuDeviceLogitsBundleForTest* bundle,
+                                               uint64_t out_gpu_vas[5]) noexcept;
+void SslmGpuDeviceLogitsBundleDestroyForTest(SslmGpuDeviceLogitsBundleForTest* bundle) noexcept;
+#endif  // SUPERSLM_GPU_ALLOC_FAULT_INJECTION

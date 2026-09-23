@@ -19,6 +19,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "superslm/parallel_for.h" /* sslm_parallel_for (sslm_workspace_set_parallel_for) */
+
 #ifdef __cplusplus
 extern "C" {
 #endif

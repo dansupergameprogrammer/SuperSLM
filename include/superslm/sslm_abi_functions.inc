@@ -47,6 +47,26 @@ SUPERSLM_API size_t sslm_workspace_size(sslm_model model, const sslm_config* con
 SUPERSLM_API sslm_status sslm_workspace_create(sslm_model model, const sslm_config* config,
                                    void* buf, size_t buf_size, sslm_workspace* out);
 
+/* Installs a caller-supplied parallel-for hook on this workspace, or clears it when `pf` is NULL
+ * (superslm/parallel_for.h states the contract the hook's `run` must meet). Takes a type the
+ * g5-comparable subset does not define, so it is declared here, outside that subset.
+ *
+ * - Copies *pf into the workspace. With no hook installed, or with ws NULL at the decode call,
+ *   the token finish runs serially on the calling thread, as in every earlier release.
+ * - Read only by the logits step of the token finish in sslm_decode_step and
+ *   sslm_decode_step_v2 when this workspace is passed. Prefill, prefix prefill and every other
+ *   call ignore it. Tokens are identical with any hook, any max_tasks, and no hook.
+ * - Returns SSLM_INVALID_ARGUMENT, and changes nothing, for: a NULL ws; pf->reserved != 0;
+ *   pf->max_tasks < 0 or > SSLM_PARALLEL_FOR_MAX_TASKS; pf->run NULL with pf->max_tasks > 1.
+ * - Must not run concurrently with a call using the same workspace (the workspace's existing
+ *   rule). pf->host_ctx must outlive every call made with this workspace while the hook is
+ *   installed.
+ * - A hook whose run omits, repeats or invents a task index fails that decode call with
+ *   SSLM_INVALID_ARGUMENT. The sequence is left resting with its final hidden state ready for
+ *   logits and its schema walk and current token unchanged, so a retry recomputes the finish. */
+SUPERSLM_API sslm_status sslm_workspace_set_parallel_for(sslm_workspace ws,
+                                                          const sslm_parallel_for* pf);
+
 /* Takes the incremental-detokenize state struct (design Sec7.4) -- not part of the
  * g5-comparable subset (see above). */
 SUPERSLM_API sslm_status sslm_detokenize_stream(sslm_model model, sslm_detok_state* state, const int32_t* tokens,

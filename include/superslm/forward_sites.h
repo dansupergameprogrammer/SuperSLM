@@ -25,6 +25,7 @@
 
 #include "superslm/checked_chain_funnel.h"
 #include "superslm/model.h"  // SslmTensorManifest (RopeApplySite's rope_tables parameter)
+#include "superslm/parallel_for.h"  // sslm_parallel_for (LogitsSiteParallel)
 
 namespace superslm {
 
@@ -1305,6 +1306,31 @@ int64_t QkQ31Score(const int8_t* q, const int8_t* k, const int64_t* ratio_q31, s
 SslmForwardStatus LogitsSite(const int8_t* final_codes, size_t hidden_size,
                               const int8_t* head_weights, size_t vocab_size,
                               int64_t* wide_logits, int32_t* out_logits);
+
+// LogitsSite with its rows split across a caller-supplied parallel-for hook (parallel_for.h).
+// Same arguments and outputs as LogitsSite, plus the hook.
+//
+// - Serial fallback: when `pf` is null, `pf->run` is null or `pf->max_tasks <= 1`, this returns
+//   LogitsSite(...) itself, unchanged.
+// - Partition: `rows = roundup(ceil(vocab_size / max_tasks), 64)` and
+//   `task_count = ceil(vocab_size / rows)`; task i computes rows [i*rows, min(vocab, (i+1)*rows))
+//   through GemmInt8AccumulateRow on that slice. `max_tasks` above SSLM_PARALLEL_FOR_MAX_TASKS is
+//   treated as that maximum. Every row's value is DotRow's exact integer sum whichever thread
+//   computes it, so the wide row equals LogitsSite's byte for byte for any partition.
+// - Exactly-once check: each task index is admitted once, by compare-exchange on call-local state
+//   (0 = not started, 1 = admitted, 2 = done), before it writes any row. A second invocation of an
+//   index, or an index outside [0, task_count), writes nothing and marks a violation. After `run`
+//   returns, the call succeeds only with no violation and every index done; otherwise it returns
+//   ParallelForIncomplete and writes nothing to `out_logits`. This covers a `run` that meets
+//   parallel_for.h's "return only after every invocation has returned" precondition; a `run` that
+//   returns early is undefined behaviour and outside this check.
+// - Narrowing: NarrowRowChecked over the whole row, once, serially, after `run` returns -- the
+//   same call on the same row as LogitsSite.
+// No heap allocation; the check's state is a fixed array on the stack.
+SUPERSLM_API SslmForwardStatus LogitsSiteParallel(const int8_t* final_codes, size_t hidden_size,
+                                                  const int8_t* head_weights, size_t vocab_size,
+                                                  int64_t* wide_logits, int32_t* out_logits,
+                                                  const sslm_parallel_for* pf);
 
 // C16 (master plan §6.8 row C16; §6.4 step 16): the pinned argmax
 // tie-break -- LOWEST token index. Caller-ensures `n >= 1` (the same

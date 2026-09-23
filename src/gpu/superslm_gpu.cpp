@@ -4582,11 +4582,18 @@ bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::Seque
 		// confirm the exception this throws is caught by sslm_gpu_seq_restore's own try (gpu_1p0.cpp)
 		// rather than escaping the status-returning API boundary.
 		MaybeThrowInjectedO11AllocFault(superslm_gpu::kO11AllocInjectionSiteSeqRestore);
-		SSLM_GPU_HR(dev.alloc->Reset());
-		SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
+		// T-2851 (design Sec4.6 item 4, R16): all three buffers are allocated BEFORE the command
+		// list is reset, so an allocation failure throws with the list still Closed and the next
+		// call on this device can reset it. The previous order reset first, and a failed
+		// allocation left the list recording. The throw, and sslm_gpu_seq_restore's
+		// SSLM_DEVICE_LOST, are unchanged.
 		auto upload_buf = dev.Upload(src, workspace_size);
 		auto device_buf = dev.MakeBuffer(workspace_size, D3D12_HEAP_TYPE_DEFAULT,
 		                                  D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
+		auto readback_buf = dev.MakeBuffer(workspace_size, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
+		                                    D3D12_RESOURCE_STATE_COPY_DEST);
+		SSLM_GPU_HR(dev.alloc->Reset());
+		SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
 		dev.list->CopyResource(device_buf.Get(), upload_buf.Get());
 		D3D12_RESOURCE_BARRIER b{};
 		b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -4595,10 +4602,8 @@ bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::Seque
 		b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
 		b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 		dev.list->ResourceBarrier(1, &b);
-		auto readback_buf = dev.MakeBuffer(workspace_size, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
-		                                    D3D12_RESOURCE_STATE_COPY_DEST);
 		dev.list->CopyResource(readback_buf.Get(), device_buf.Get());
-		SSLM_GPU_HR(dev.list->Close());
+		dev.CloseListWithRetry();
 		ID3D12CommandList* lists[] = {dev.list.Get()};
 		dev.queue->ExecuteCommandLists(1, lists);
 		SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));

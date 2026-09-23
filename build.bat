@@ -614,6 +614,7 @@ rem documented extension of the ABI surface this counter is meant to CATCH undoc
 rem against, not itself an instance of that drift. T-2199 then raised it to 35 for
 rem sslm_decode_step_v2 and the 1.2 candidate raises it to 36 for sslm_decode_params_init.
 rem 1.6.0 added sslm_seq_schema_bound, which makes 37; this gate was not raised with it.
+rem 1.7.0 adds sslm_workspace_set_parallel_for (T-2851), which makes 38.
 rem Count with native PowerShell so the gate does not depend on WSL, Git Bash's installation
 rem layout, or a separately configured Unix-tool PATH on Windows.
 rem T2139_VERB_COUNT is read and compared OUTSIDE any parenthesized if-block on purpose: %VAR%
@@ -626,11 +627,11 @@ if errorlevel 1 (
 	goto :hard_fail
 )
 set /p T2139_VERB_COUNT=<out\t2139\verb_count.txt
-if "%T2139_VERB_COUNT%"=="37" goto :t2139_verb_count_ok
-echo count_abi_verbs.sh reports %T2139_VERB_COUNT%, expected 37 -- verb count drifted, see design Sec4 / T-2132 / T-2199
+if "%T2139_VERB_COUNT%"=="38" goto :t2139_verb_count_ok
+echo count_abi_verbs.sh reports %T2139_VERB_COUNT%, expected 38 -- verb count drifted, see design Sec4 / T-2132 / T-2199 / T-2851
 goto :hard_fail
 :t2139_verb_count_ok
-echo count_abi_verbs.sh: 37 verbs, matches T-2139 Sec4's 29 plus T-2132/G5's five verbs, T-2199's versioned decode and params-initializer verbs, and 1.6.0's sslm_seq_schema_bound
+echo count_abi_verbs.sh: 38 verbs, matches T-2139 Sec4's 29 plus T-2132/G5's five verbs, T-2199's versioned decode and params-initializer verbs, 1.6.0's sslm_seq_schema_bound, and 1.7.0's sslm_workspace_set_parallel_for
 goto :t2139_verb_count_done
 :t2139_verb_count_done
 
@@ -1371,8 +1372,14 @@ popd
 if not %phaseAC_ec%==0 (
 	goto :hard_fail
 )
+rem The suite takes the runtime-format adapter as its second argument and fails on ANY skip, so
+rem without an adapter its adapter-composition cell skips and fails this build. Set
+rem T2199_PHASED_ADAPTER=path\to\adapter.sslm (paired with T2199_PHASED_MODEL's base model) to
+rem pass it through. Both are quoted so an unset variable passes an empty argument, which the
+rem suite reads as absent, and a path with spaces stays one argument.
+if not defined T2199_PHASED_ADAPTER echo T2199_PHASED_ADAPTER is not set -- the Phase D suite's adapter-composition cell will skip, and a skip fails that suite.
 pushd .
-call tests\t2199-damped-greedy-red-suite\build_green_phaseD.bat %T2199_PHASED_MODEL%
+call tests\t2199-damped-greedy-red-suite\build_green_phaseD.bat "%T2199_PHASED_MODEL%" "%T2199_PHASED_ADAPTER%"
 set phaseD_ec=%errorlevel%
 popd
 if not %phaseD_ec%==0 (

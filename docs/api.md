@@ -58,6 +58,11 @@ never through the return value itself.
 - **Model**: `sslm_gpu_model_map` maps an already-loaded model view onto a
   context; `sslm_gpu_model_unmap` releases it, and refuses (`Busy`) while
   any sequence still has decode work in flight against it.
+  `GpuResidencyConfig::flags` (1.7.0) takes one option,
+  `SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE`, which moves the token finish's logits
+  onto the device for that model (see
+  [The token finish](#the-token-finish) below). Any other bit is refused
+  with `SSLM_GPU_RESIDENCY_FLAGS_INVALID` and no handle.
 - **Adapter**: `sslm_gpu_adapter_map` maps a LoRA adapter artifact against
   an already-mapped model, rejecting a base-model mismatch; `sslm_gpu_
   adapter_unmap` releases it, with the same in-flight-work refusal as model
@@ -125,6 +130,73 @@ arguments, a zero count, `SSLM_BUSY`, or the schema-content prefill's
 unbound-schema and unreachable-first-token refusals) leaves the snapshot as
 it was.
 
+### The token finish
+
+The token finish is the work after a token's last layer: the final norm,
+the logits over the whole vocabulary, then the argmax, schema mask,
+damped-greedy selection and dead-end rule. In the GPU API it is
+`SslmGpuSeqFinishTokenForG5Bridge` (and the composed bridge calls that use
+it); on the CPU it is the end of `sslm_decode_step`/`sslm_decode_step_v2`.
+The logits are the expensive part, and 1.7.0 offers two independent ways to
+take them off the calling thread. Neither changes a single token: each logit
+is an exact integer sum, and the narrowing, mask, argmax and dead-end rule
+run unchanged, on the host, on the identical row.
+
+**A host parallel-for hook, both backends.** SuperSLM never creates a
+thread. A host that wants the logits rows computed on several threads
+installs an `sslm_parallel_for` (`include/superslm/parallel_for.h`) on a
+CPU workspace with `sslm_workspace_set_parallel_for`, or on a GPU context
+with `sslm_gpu_context_set_host_parallel_for`. The finish then splits the
+rows into contiguous blocks and hands them to the hook's `run`. With no hook
+installed the finish runs serially on the calling thread, exactly as in
+every earlier release.
+
+- `run` must invoke each task index in `[0, task_count)` exactly once, on
+  any threads, and return only after every invocation has returned. The
+  header states the whole contract.
+- A `run` that omits, repeats or invents a task index, while still waiting
+  for its invocations, fails the call without producing a token:
+  `SSLM_INVALID_ARGUMENT` on the CPU, `SSLM_GPU_PARALLEL_FOR_INCOMPLETE` on
+  the GPU. The sequence is left with its final hidden state ready for
+  logits, so the same finish can be retried through a correct hook. A `run`
+  that returns while an invocation is still running has undefined behaviour;
+  that part of the contract cannot be checked.
+- `max_tasks` is at most `SSLM_PARALLEL_FOR_MAX_TASKS` (256). A setter
+  refuses a `reserved` field that is not 0, a `max_tasks` outside
+  `[0, 256]`, or a null `run` with `max_tasks` above 1
+  (`SSLM_INVALID_ARGUMENT` on the CPU, `SSLM_GPU_PARALLEL_FOR_INVALID` on
+  the GPU). Passing `NULL` clears the hook.
+- Only the finish's logits step reads the hook. Prefill, prefix prefill and
+  every other call ignore it.
+- A host with no job system can use the reference `run` in
+  [`docs/parallel_for_reference.hpp`](parallel_for_reference.hpp): a small
+  `std::thread` pool that meets the contract. It is documentation, not a
+  library API, and the test suite compiles it as it stands.
+
+**A device-resident head, GPU backend, opt-in per model.** Mapping a model
+with `SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE` uploads its output head table (the
+tied embedding, or `lm_head` when untied) to the device. The finish then
+computes the exact int64 logits row on the device, reads it back and
+narrows it on the host. The host keeps no copy of that head, and the
+context's host hook is not used for that model. New VRAM per mapped model is
+the head table (`vocab_size × hidden_size` bytes: 136,134,656 B for
+Qwen2.5-0.5B and 233,373,696 B for 1.5B) plus a `hidden_size × 4` B input
+row and a `vocab_size × 8` B output row, each rounded up to the 64 KiB
+allocation granule; nothing is allocated per sequence or per token. With the
+flag clear a model maps exactly as before and uses no new VRAM.
+
+- The map loads `logits_site.cso` from the process's shader directory: a
+  stale binary refuses the map with `SSLM_GPU_SHADER_BINARY_STALE`, a
+  missing one with `SSLM_DEVICE_LOST`.
+- An out-of-memory failure while allocating the head's device buffers, on a
+  device that is not removed, refuses the map with
+  `SSLM_GPU_ALLOCATION_FAILED`; the context stays usable, and the map can
+  be retried on it, with or without the flag.
+
+The GPU handle keeps one host copy of a tied head in every case: a tied
+model's head is its embedding, which the handle already holds, so no second
+copy is taken (before 1.7.0 there were two).
+
 ### Thread safety
 
 Calls against **different** sequence handles are safe to make from
@@ -138,7 +210,10 @@ regardless of which model or context submitted it) — must be externally
 serialized by the caller relative to every other GPU-submitting call on
 the same context; the API does not build an internal queue lock. Two
 threads driving the *same* sequence handle concurrently is not a
-supported use.
+supported use. A token finish on a model mapped with
+`SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE` submits its logits dispatch on the
+context too, so it is serialized the same way, as is
+`sslm_gpu_context_set_host_parallel_for`.
 
 ### Status causes
 
@@ -179,6 +254,14 @@ Two cover the context's shader directory (see Lifecycle above):
 name a compiled shader set — fix the path; and `SSLM_GPU_SHADER_DIR_CONFLICT`,
 a directory that differs from the one this process already loads shaders
 from — supply the same directory, or `NULL`.
+
+Three cover the token finish (see [The token finish](#the-token-finish)):
+`SSLM_GPU_PARALLEL_FOR_INVALID`, a host parallel-for hook with an invalid
+field, refused by `sslm_gpu_context_set_host_parallel_for`;
+`SSLM_GPU_PARALLEL_FOR_INCOMPLETE`, a finish whose hook's `run` broke its
+exactly-once contract, retryable through a correct hook; and
+`SSLM_GPU_RESIDENCY_FLAGS_INVALID`, a model map with an undefined
+`GpuResidencyConfig::flags` bit.
 
 `SslmGpuSeqPrefillPromptForG5Bridge` and `SslmGpuSeqPrefillSchemaContentForG5Bridge`
 diverge on one refusal: when a device-side domain guard refuses one of the admitted
@@ -301,6 +384,15 @@ silently accepted.
   defect) returns `SSLM_NUMERIC_STEP_REFUSED` rather than rejecting the
   model — safe to retry once the caller adjusts the parameters that
   triggered it.
+- `sslm_workspace_set_parallel_for` (1.7.0) installs a host parallel-for hook
+  on a workspace, or clears it with `NULL`. `sslm_decode_step` and
+  `sslm_decode_step_v2` then split the token finish's logits rows across the
+  hook's `run` when that workspace is passed; with no hook, or no workspace,
+  the finish is serial on the calling thread as before. Tokens are identical
+  either way. A hook that breaks its exactly-once contract fails that call
+  with `SSLM_INVALID_ARGUMENT` and leaves the sequence ready to retry. See
+  [The token finish](#the-token-finish) above for the contract and the
+  reference `run`.
 - `sslm_tokenize` / `sslm_detokenize_stream` convert between text and token
   ids; the streaming detokenizer carries a small caller-owned state struct
   across calls so a partial UTF-8 sequence at a call boundary is handled

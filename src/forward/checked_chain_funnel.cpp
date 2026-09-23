@@ -99,6 +99,7 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 	// arm (sslm_abi.cpp) -- see OutputCapacityExceeded's own comment above for the cost of
 	// missing one.
 	if (s == SslmForwardStatus::GpuShaderBinaryStale) return "GpuShaderBinaryStale";
+	if (s == SslmForwardStatus::ParallelForIncomplete) return "ParallelForIncomplete";
 	return "?";
 }
 

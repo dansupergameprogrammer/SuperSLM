@@ -218,6 +218,9 @@ struct sslm_workspace_s {
 	void* buf = nullptr;
 	size_t buf_size = 0;
 	sslm_config config{};
+	// The caller's parallel-for hook (sslm_workspace_set_parallel_for), copied in; `run == NULL`
+	// means none. Read only by sslm_decode_stepImpl's logits step (LogitsSiteParallel).
+	sslm_parallel_for parallel_for{};
 };
 
 // C1/C3. A caller-owned KV region, sized for `block_count` SEQUENCES (design Sec7.2, RULED --
@@ -1023,6 +1026,21 @@ extern "C" sslm_status sslm_workspace_create(sslm_model model, const sslm_config
 	return SSLM_OK;
 }
 
+extern "C" sslm_status sslm_workspace_set_parallel_for(sslm_workspace ws,
+                                                        const sslm_parallel_for* pf) {
+	if (!ws) return SSLM_INVALID_ARGUMENT;
+	if (!pf) {
+		ws->parallel_for = sslm_parallel_for{};
+		return SSLM_OK;
+	}
+	if (pf->reserved != 0 || pf->max_tasks < 0 || pf->max_tasks > SSLM_PARALLEL_FOR_MAX_TASKS ||
+	    (pf->run == nullptr && pf->max_tasks > 1)) {
+		return SSLM_INVALID_ARGUMENT;
+	}
+	ws->parallel_for = *pf;
+	return SSLM_OK;
+}
+
 extern "C" sslm_status sslm_workspace_destroy(sslm_workspace ws) {
 	if (!ws) return SSLM_INVALID_ARGUMENT;
 	// Never frees ws->buf (caller-owned, design Sec7.1) -- only the handle's own bookkeeping.
@@ -1644,6 +1662,11 @@ sslm_status MapForwardStatus(superslm::SslmForwardStatus st) {
 	// the caller gets the only effective remedy: rebuild/redeploy the matching shader set.
 	if (st == superslm::SslmForwardStatus::GpuShaderBinaryStale) {
 		return SSLM_GPU_SHADER_BINARY_STALE;
+	}
+	// T-2851: the caller's parallel-for hook broke its exactly-once contract -- a caller-argument
+	// defect (the hook is an argument), never an artifact defect.
+	if (st == superslm::SslmForwardStatus::ParallelForIncomplete) {
+		return SSLM_INVALID_ARGUMENT;
 	}
 	return st == superslm::SslmForwardStatus::Ok ? SSLM_OK : SSLM_ARTIFACT_REJECTED;
 }
@@ -2431,9 +2454,22 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 		                           /*trace_hook_state=*/nullptr, rms_wide);
 		if (fst != superslm::SslmForwardStatus::Ok) return MapForwardStatus(fst);
 
-		fst = superslm::LogitsSite(final_codes, c.hidden_size, model->engine.head_weights,
-		                            static_cast<int32_t>(c.vocab_size), wide_logits,
-		                            logit_row);
+		// T-2851: the logits rows go through the workspace's parallel-for hook when one is
+		// installed; with none (or no workspace), LogitsSiteParallel runs LogitsSite itself.
+		fst = superslm::LogitsSiteParallel(final_codes, c.hidden_size, model->engine.head_weights,
+		                                    static_cast<int32_t>(c.vocab_size), wide_logits,
+		                                    logit_row, ws ? &ws->parallel_for : nullptr);
+		if (fst == superslm::SslmForwardStatus::ParallelForIncomplete) {
+			// The host's run omitted, repeated or invented a task index; no token was produced.
+			// Rest the sequence exactly as the dead end does -- final hidden state kept,
+			// layer_index 0, ready_for_logits re-armed, walk state and current_token untouched --
+			// so a retry through a correct hook recomputes this finish with nothing lost.
+			// Sequences earlier in this batch keep their advance, as for every other in-loop
+			// refusal in this function.
+			seq->state.layer_index = 0;
+			seq->ready_for_logits = true;
+			return MapForwardStatus(fst);
+		}
 		if (fst != superslm::SslmForwardStatus::Ok) return MapForwardStatus(fst);
 
 		// T-2199 Phase D2 (plan Sec8 D2, Sec6 "mask-first"): damped-greedy mode operates on the

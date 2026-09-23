@@ -349,6 +349,15 @@ enum class SslmForwardStatus {
 	                                          // fixed by any size, with the one true diagnostic
 	                                          // (the stale-binary message naming both files and
 	                                          // both timestamps) surviving only on stderr.
+	ParallelForIncomplete,                    // LogitsSiteParallel (forward_sites.h): the host's
+	                                          // `run` (parallel_for.h) omitted a task index,
+	                                          // invoked one twice, or invoked one outside
+	                                          // [0, task_count). Nothing is written to the output
+	                                          // row. A caller-supplied hook defect, not an artifact
+	                                          // or device fault: the CPU ABI maps it to
+	                                          // SSLM_INVALID_ARGUMENT, the GPU bridge finish to
+	                                          // SSLM_GPU_PARALLEL_FOR_INCOMPLETE, and both leave the
+	                                          // sequence ready to retry the finish.
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,

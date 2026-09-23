@@ -30,8 +30,57 @@ source file the library needs cannot be missing from them again.
 
 `build.bat` completes again. 1.6.0 added the C ABI verb `sslm_seq_schema_bound`, the 37th, but the
 script's ABI verb-count gate still expected 36, so the Windows quick build stopped at that gate in
-1.6.0; CMake builds were unaffected. The gate now expects 37. Correction to the 1.6.0 entry below:
-`SUPERSLM_API` is carried by all 37 C ABI verbs, including `sslm_seq_schema_bound`, not 36.
+1.6.0; CMake builds were unaffected. The gate now expects 38: 1.6.0's 37 plus
+`sslm_workspace_set_parallel_for`, below. Correction to the 1.6.0 entry below: `SUPERSLM_API` is
+carried by all 37 of 1.6.0's C ABI verbs, including `sslm_seq_schema_bound`, not 36.
+
+The token finish -- final norm, logits over the whole vocabulary, then argmax, schema mask,
+damped-greedy selection and dead-end rule -- can now move its logits off the calling thread, in
+two independent ways. Neither changes a token: every logit is an exact integer sum, and the
+narrowing, mask, argmax and dead-end rule run unchanged on the host, on the identical row.
+
+- **A host parallel-for hook, both backends.** New header `superslm/parallel_for.h` defines
+  `sslm_parallel_for`, a caller-supplied `run` that the finish hands its logits row blocks to.
+  Install it with the new C ABI verb `sslm_workspace_set_parallel_for` (CPU, read by
+  `sslm_decode_step` and `sslm_decode_step_v2`) or `sslm_gpu_context_set_host_parallel_for` (GPU,
+  read by `SslmGpuSeqFinishTokenForG5Bridge`). SuperSLM never creates a thread; with no hook
+  installed the finish is serial on the calling thread, as before. A `run` that omits, repeats or
+  invents a task index fails the call without producing a token -- `SSLM_INVALID_ARGUMENT` on the
+  CPU, `SSLM_GPU_PARALLEL_FOR_INCOMPLETE` on the GPU -- and leaves the sequence ready to retry.
+  `docs/parallel_for_reference.hpp` is a reference `run` over `std::thread` for hosts with no job
+  system. `LogitsSiteParallel` (`forward_sites.h`) is the row-partitioned logits step itself.
+- **A device-resident head, GPU backend, opt-in per model.** `GpuResidencyConfig`'s ignored
+  `int reserved` becomes `uint32_t flags`, with the same size, offset and alignment, so every
+  zero-initializing caller is unaffected. `SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE` uploads the model's
+  head table at map time; the finish then computes the exact int64 logits row on the device (new
+  shader `logits_site.hlsl`; the shipped shader set gains one `.cso`) and narrows it on the host.
+  New VRAM per mapped model is the head table (`vocab_size x hidden_size` bytes) plus two rows,
+  each rounded to the 64 KiB allocation granule; with the flag clear a model maps exactly as
+  before. Undefined flag bits are refused.
+
+Three statuses are appended to `SslmGpuStatus`, so no existing ordinal moves:
+`SSLM_GPU_PARALLEL_FOR_INVALID` (21), `SSLM_GPU_PARALLEL_FOR_INCOMPLETE` (22) and
+`SSLM_GPU_RESIDENCY_FLAGS_INVALID` (23). The CPU surface adds no status. `SUPERSLM_API` is carried
+by the new C ABI verb and by `LogitsSiteParallel`.
+
+The GPU model handle keeps one host copy of a tied head instead of two: a tied model's head is its
+embedding, which the handle already held, so the duplicate head copy (vocab x hidden bytes per
+mapped tied model) is no longer taken. An untied model still keeps its `lm_head` copy when mapped
+without the device head.
+
+A GPU allocation failure during a model map, an adapter map, a sequence create or a sequence
+restore no longer leaves the context's command list recording. Those uploads reset the list before
+allocating, so after one allocation failure every later upload on the same context failed too;
+they now allocate first, and the next call on the context succeeds. A failed command-list `Close`
+in those uploads is retried once. The statuses those calls return are unchanged.
+
+`build.bat` passes a Phase D adapter through: set `T2199_PHASED_ADAPTER` beside
+`T2199_PHASED_MODEL`. The Phase D suite fails on any skip, and without an adapter its
+adapter-composition cell skipped, which failed the build whenever the suite ran.
+
+CMake gains `SUPERSLM_GPU_TEST_SEAMS` (default `OFF`), which builds a test variant of the GPU
+library carrying the allocation-fault and device-logits test seams. It is not for a library that
+ships.
 
 ## [1.6.0] - 2026-09-22
 

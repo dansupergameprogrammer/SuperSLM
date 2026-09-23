@@ -23,6 +23,7 @@
 #include <cwchar>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -31,6 +32,36 @@ namespace superslm_gpu {
 namespace harness {
 
 using Microsoft::WRL::ComPtr;
+
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+// Test builds only (SUPERSLM_GPU_ALLOC_FAULT_INJECTION; T-2851 design Sec4.6 item 4). One
+// process-wide state for the occurrence-indexed allocation fault seam and its sibling seams. The
+// global-scope test entry points that read and arm it are defined in gpu_1p0.cpp and declared in
+// gpu_port.h. Nothing here is compiled into a product build.
+struct GpuTestSeamState {
+	std::mutex mutex;
+	// Every Device::TryMakeBuffer call since the last reset, counted from 1.
+	uint32_t alloc_count = 0;
+	// in_bundle[k - 1]: whether the k-th counted call ran inside CreateDeviceLogitsBuffers. Used
+	// only to choose a test's expected status, never to select what is faulted.
+	std::vector<bool> alloc_in_bundle;
+	// Nonzero: the number of TryMakeBuffer calls, counting this one, until the call that returns
+	// `alloc_fault_hr` without calling D3D12. Fires once, then disarms.
+	uint32_t alloc_fault_countdown = 0;
+	HRESULT alloc_fault_hr = S_OK;
+	uint32_t bundle_scope = 0;       // > 0 while CreateDeviceLogitsBuffers runs
+	uint32_t device_logits_scope = 0;  // > 0 while CreateDeviceLogitsBuffers or RunDeviceLogits runs
+	uint32_t close_failures = 0;     // phase-B Close failures still to inject, inside that scope
+	bool map_removed_query = false;  // the next map-time removed-device query reports removed
+	bool readback_override_armed = false;
+	int32_t readback_override_row = 0;
+	int64_t readback_override_value = 0;
+};
+inline GpuTestSeamState& TestSeamState() {
+	static GpuTestSeamState state;
+	return state;
+}
+#endif
 
 #define SSLM_GPU_HR(x)                                                                 \
 	do {                                                                                \
@@ -325,8 +356,36 @@ struct Device {
 		available = true;
 	}
 
+	// Throwing wrapper over TryMakeBuffer: the disposition every existing caller relies on (a bare
+	// std::runtime_error through SSLM_GPU_HR on any failing HRESULT) is unchanged.
 	ComPtr<ID3D12Resource> MakeBuffer(UINT64 bytes, D3D12_HEAP_TYPE heap, D3D12_RESOURCE_FLAGS flags,
 	                                   D3D12_RESOURCE_STATES state) {
+		ComPtr<ID3D12Resource> r;
+		SSLM_GPU_HR(TryMakeBuffer(bytes, heap, flags, state, &r));
+		return r;
+	}
+
+	// Creates one committed buffer and returns the HRESULT instead of throwing, so a caller can
+	// keep the failure's cause (T-2851: E_OUTOFMEMORY on a live device is a recoverable
+	// SSLM_GPU_ALLOCATION_FAILED, not a device loss). Every device allocation in the library passes
+	// through here: MakeBuffer wraps it and Upload calls MakeBuffer. In test builds it counts every
+	// call and can fail a chosen occurrence (GpuTestSeamState above).
+	HRESULT TryMakeBuffer(UINT64 bytes, D3D12_HEAP_TYPE heap, D3D12_RESOURCE_FLAGS flags,
+	                      D3D12_RESOURCE_STATES state, ComPtr<ID3D12Resource>* out) {
+		out->Reset();
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+		{
+			GpuTestSeamState& seam = TestSeamState();
+			std::lock_guard<std::mutex> lock(seam.mutex);
+			seam.alloc_count += 1;
+			if (seam.alloc_in_bundle.size() < (1u << 20)) {
+				seam.alloc_in_bundle.push_back(seam.bundle_scope > 0);
+			}
+			if (seam.alloc_fault_countdown != 0 && --seam.alloc_fault_countdown == 0) {
+				return seam.alloc_fault_hr;
+			}
+		}
+#endif
 		D3D12_HEAP_PROPERTIES hp{};
 		hp.Type = heap;
 		D3D12_RESOURCE_DESC rd{};
@@ -339,10 +398,37 @@ struct Device {
 		rd.SampleDesc.Count = 1;
 		rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 		rd.Flags = flags;
-		ComPtr<ID3D12Resource> r;
-		SSLM_GPU_HR(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, state, nullptr,
-		                                          IID_PPV_ARGS(&r)));
-		return r;
+		return dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, state, nullptr,
+		                                    IID_PPV_ARGS(out->ReleaseAndGetAddressOf()));
+	}
+
+	// Phase B's Close (T-2851 design Sec4.6 item 4): one immediate retry on failure, the chunk
+	// path's shape. Returns normally only when the list is Closed. Otherwise it throws
+	// std::runtime_error -- the caller's catch reports SSLM_DEVICE_LOST -- in one of two states: the
+	// retry succeeded, so the list is Closed and the context stays usable; or the retry failed
+	// too, so the list is left recording, which is the terminal case gpu_1p0.h already documents
+	// for SSLM_DEVICE_LOST (every later call on the context fails, because the allocator refuses
+	// Reset while its list is recording).
+	void CloseListWithRetry() {
+		if (SUCCEEDED(CloseListOnce())) return;
+		const HRESULT retry = CloseListOnce();
+		std::fprintf(stderr, "superslm_gpu: command list Close failed; retry %s\n",
+		             SUCCEEDED(retry) ? "succeeded (list Closed)" : "failed (list left recording)");
+		throw std::runtime_error("D3D12 command list Close failed");
+	}
+
+	HRESULT CloseListOnce() {
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+		{
+			GpuTestSeamState& seam = TestSeamState();
+			std::lock_guard<std::mutex> lock(seam.mutex);
+			if (seam.device_logits_scope > 0 && seam.close_failures > 0) {
+				seam.close_failures -= 1;
+				return E_FAIL;  // injected: the list is not closed
+			}
+		}
+#endif
+		return list->Close();
 	}
 
 	ComPtr<ID3D12Resource> Upload(const void* data, UINT64 bytes) {
