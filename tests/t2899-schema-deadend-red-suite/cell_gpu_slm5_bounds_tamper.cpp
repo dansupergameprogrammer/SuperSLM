@@ -54,18 +54,19 @@ GDec Decode(const GpuModelFixture& fx, SslmGpuSequenceHandle* s, int32_t tok) {
 }
 
 // A schema-bound sequence with real, non-zero schema-content progress -- the P2 construction
-// from `cell_gpu_slm5_saverestore.cpp::Build(pt=2)`, reused unchanged (proven construction, not
-// re-derived): prefill the prompt, bind schema 0, consume one legal schema-content token, then
+// from `cell_gpu_slm5_saverestore.cpp::Build(pt=2)`, reconciled to D-SLM7625:
+// bind schema 0, prefill the prompt, consume one legal schema-content token, then
 // two decode steps.
 SslmGpuSequenceHandle* BuildBoundProgressed(const GpuModelFixture& fx, const IndependentSchema& ds,
                                              const std::vector<int32_t>& P, int32_t other) {
 	SslmGpuSequenceHandle* s = nullptr;
-	sslm_gpu_seq_create(fx.ctx, fx.model, fx.model_cap, &s);
-	Prefill(fx, s, P);
-	SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, s, 0);
+	CHECK(sslm_gpu_seq_create(fx.ctx, fx.model, fx.model_cap, &s) == SSLM_OK && s);
+	if (!s) return nullptr;
+	CHECK(SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, s, 0) == SSLM_OK);
+	CHECK(Prefill(fx, s, P) == SSLM_OK);
 	const int32_t t0 = ds.FirstLegal(0);
 	int32_t consumed = -1;
-	SslmGpuSeqPrefillSchemaContentForG5Bridge(fx.ctx, s, &t0, 1, fx.one_layer_budget, &consumed);
+	CHECK(SslmGpuSeqPrefillSchemaContentForG5Bridge(fx.ctx, s, &t0, 1, fx.one_layer_budget, &consumed) == SSLM_OK && consumed == 1);
 	int32_t last = -1;
 	auto step = [&]() {
 		GDec d = Decode(fx, s, last >= 0 ? last : other);
@@ -115,6 +116,10 @@ int main(int argc, char** argv) {
 	// --- Build one genuine, bound, progressed original and save it -- the untampered blob every
 	// tamper cell below starts from. ---
 	SslmGpuSequenceHandle* original = BuildBoundProgressed(fx, ds, P, other);
+	if (!original || GFailures) {
+		std::printf("checks=%d failures=%d skips=0\n", GChecks, GFailures);
+		return 1;
+	}
 	std::vector<uint8_t> good_blob = Save(fx, original);
 	sslm_gpu_seq_release(ctx, original);
 

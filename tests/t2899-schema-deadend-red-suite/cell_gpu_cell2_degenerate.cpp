@@ -17,8 +17,8 @@
 // (`cell_cpu_deadend_retry_reset.cpp`'s `CpuCell2DegenerateRowTwin`) reads the identical
 // fixture and the identical ids.
 //
-// CONSTRUCTION. `ReachSe` prefills a prompt (three filler ids the schema's own DFA never
-// transitions on), binds schema index 0, then drives THREE real, admitted schema-content
+// CONSTRUCTION. `ReachSe` binds schema index 0, prefills a prompt (three filler ids the
+// schema's own DFA never transitions on), then drives THREE real, admitted schema-content
 // transitions in one `SslmGpuSeqPrefillSchemaContentForG5Bridge` call: `kTokOpen` (state 0 ->
 // the pre-value literal state, the literal prefix up to the key's own colon), `kTokOpenQuote`
 // (-> S_c, T-2910's own depth-0-only opening -- the literal object skeleton and the value's
@@ -41,13 +41,12 @@
 //
 // GUARD VITALITY (plan Sec3.10.3 row 11: "a single-point mutant that reverts the checked
 // return to the unconditional `next_state` write must turn both Cell 1 and Cell 2 red").
-// `build_red_suite_gpu.bat` links this SAME cell against BOTH `gpu_asbuilt` (ASBUILT: the
-// live tree, checked return in place -- must be GREEN) and the EXISTING `gpu_mut_cr` object
-// (`MUT_CHECKEDRETURN`, `D:\_t2900\refs\gpu_1p0_mut_checkedreturn.cpp`, already built for
-// Cell 1's own guard-vitality proof, reused rather than re-derived): under that mutant, a
+// `build_red_suite_gpu.bat` links this cell against `gpu_asbuilt` and the generated
+// `gpu_mut_cr` object. Under MUT_CHECKEDRETURN, a
 // degenerate row's own lowest-index tie-break (token 0, `kTokOpen`) is written to
 // `*out_token` unconditionally instead of `-2`, and `dfa_walk_state` advances off S_e
-// instead of staying pinned -- Cell 2(i)/(ii) must both turn red.
+// instead of staying pinned. MUT_LATE restores late binding after prompt prefill and must
+// turn the D-SLM7625 assertion red.
 //
 // Run: cell_gpu_cell2_degenerate.exe --stringschema=PATH
 #include "fixture_common.h"
@@ -82,8 +81,8 @@ SslmGpuSequenceHandle* ReachSe(const GpuModelFixture& fx) {
 	CHECK_MSG(seq != nullptr, "sslm_gpu_seq_create failed");
 	if (!seq) return nullptr;
 	const std::vector<int32_t> P = {kFillerBase, kFillerBase + 1, kFillerBase + 2};
-	CHECK_MSG(Prefill(fx, seq, P) == SSLM_OK, "prompt prefill");
 	CHECK_MSG(SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, seq, 0) == SSLM_OK, "bind schema 0");
+	CHECK_MSG(Prefill(fx, seq, P) == SSLM_OK, "prompt prefill after bind");
 	const std::vector<int32_t> content = {kTokOpen, kTokOpenQuote, kTokBackslash};
 	int32_t consumed = -1;
 	CHECK_MSG(SslmGpuSeqPrefillSchemaContentForG5Bridge(fx.ctx, seq, content.data(),
@@ -128,6 +127,29 @@ int main(int argc, char** argv) {
 	if (!fx.Open(model_path, ctx)) {
 		std::printf("FAIL cell_gpu_cell2_degenerate -- fixture open failed\n");
 		return 1;
+	}
+	// D-SLM7625: a prompt prefill is generation. A late bind must be rejected
+	// without changing the sequence; ReachSe uses the supported bind-first order.
+	{
+		SslmGpuSequenceHandle* seq = nullptr;
+		CHECK(sslm_gpu_seq_create(fx.ctx, fx.model, fx.model_cap, &seq) == SSLM_OK && seq);
+		if (seq) {
+			const std::vector<int32_t> prompt = {kFillerBase, kFillerBase + 1, kFillerBase + 2};
+			CHECK(Prefill(fx, seq, prompt) == SSLM_OK);
+			const uint32_t walk = SslmGpuSeqWalkStateForG5Bridge(seq);
+			const int64_t context = ContextLength(seq);
+			size_t bytes = 0;
+			(void)sslm_gpu_seq_save(fx.ctx, seq, nullptr, &bytes);
+			CHECK(bytes > 0);
+			std::vector<uint8_t> before(bytes);
+			CHECK(sslm_gpu_seq_save(fx.ctx, seq, before.data(), &bytes) == SSLM_OK);
+			CHECK(SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, seq, 0) == SSLM_SEQUENCE_REJECTED);
+			CHECK(SslmGpuSeqWalkStateForG5Bridge(seq) == walk && ContextLength(seq) == context);
+			std::vector<uint8_t> after(bytes);
+			CHECK(sslm_gpu_seq_save(fx.ctx, seq, after.data(), &bytes) == SSLM_OK);
+			CHECK(after == before);
+			sslm_gpu_seq_release(fx.ctx, seq);
+		}
 	}
 
 	// Cell 2(i)/(ii): the degenerate row at S_e.

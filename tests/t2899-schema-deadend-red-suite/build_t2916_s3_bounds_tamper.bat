@@ -14,18 +14,24 @@ rem build_red_suite_gpu.bat (which this cell does not need any of the
 rem FIXED/MUT_CHECKEDRETURN/refs machinery from -- the checks under test already exist in the
 rem live tree).
 rem
-rem Usage: build_t2916_s3_bounds_tamper.bat <path-to-C39.sslm>
+rem Usage: build_t2916_s3_bounds_tamper.bat <path-to-C39.sslm> [<shaders-dir>]
 setlocal enabledelayedexpansion
 set HEREDIR=%~dp0
 set ENG=%HEREDIR%..\..
 set TESTS=%ENG%\tests
 set MODELARG=--model=%~1
-set MUTDIR=D:\_t2916\mutants
+set MUTDIR=D:\_t2961-mutants\bounds
+set "SHADERDIR=%ENG%\out\shaders"
+if not "%~2"=="" set "SHADERDIR=%~2"
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 -no_logo
 cd /d "%HEREDIR%"
 if not exist obj_t2916_s3 mkdir obj_t2916_s3
 if not exist bin_t2916_s3 mkdir bin_t2916_s3
-if not exist bin_t2916_s3\shaders xcopy /E /I /Q /Y "%ENG%\build\gpu-shaders-staged" bin_t2916_s3\shaders >nul
+if not exist "%SHADERDIR%\*.cso" (echo SHADERS MISSING: "%SHADERDIR%" & exit /b 1)
+if exist bin_t2916_s3\shaders rmdir /s /q bin_t2916_s3\shaders
+mkdir bin_t2916_s3\shaders
+xcopy /I /Q /Y "%SHADERDIR%\*.cso" bin_t2916_s3\shaders\ >nul
+if errorlevel 1 (echo SHADER COPY FAILED: "%SHADERDIR%" & exit /b 1)
 if not exist %MUTDIR% mkdir %MUTDIR%
 
 set SRC_NOABI=%ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp ^

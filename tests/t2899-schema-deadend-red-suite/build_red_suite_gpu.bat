@@ -1,6 +1,6 @@
 @echo off
-rem T-2900 (Curie) -- builds and runs every GPU-side Sec3.10 cell in this suite, against FOUR
-rem source configurations: AS_BUILT (the tree as it stands, `curie/t2809-stage1-build` HEAD,
+rem T-2900 (Curie) -- builds and runs every GPU-side Sec3.10 cell in this suite, against
+rem the live source and targeted mutants: AS_BUILT (the tree as it stands,
 rem compiled fresh from %ENG%\src -- no dependency on any external scratch checkout), FIXED
 rem (T-2916, TE-370 M1: an alias for AS_BUILT -- the planner's own cumulative reference fix is
 rem already landed in the live tree, confirmed by execution against the scratch copies this
@@ -12,7 +12,7 @@ rem superseded). Mirrors this suite's own `build_red_suite.bat`/`run_mutants_cpu
 rem deadend.bat` conventions: skip-fails-the-run, a bare `checks=/failures=/skips=` summary line
 rem per binary, one build log per failed step.
 rem
-rem Usage: build_red_suite_gpu.bat <path-to-C39.sslm> [<path-to-1.5B-G5.sslm>]
+rem Usage: build_red_suite_gpu.bat <path-to-C39.sslm> [<path-to-1.5B-G5.sslm>] [<shaders-dir>]
 rem   arg 1 -- the C39 synthetic (t2199_s8_fixture.sslm) -- required for every cell but the
 rem           real-schema generalization.
 rem   arg 2 -- the real, production-scale G5 fixture (t2132_g5_fixture_1p5b.sslm) -- only
@@ -28,11 +28,17 @@ set MODELARG=
 set G5ARG=
 if not "%~1"=="" set MODELARG=--model=%~1
 if not "%~2"=="" set G5ARG=--g5fixture=%~2
+set "SHADERDIR=%ENG%\out\shaders"
+if not "%~3"=="" set "SHADERDIR=%~3"
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 -no_logo
 cd /d "%HEREDIR%"
 if not exist obj_gpu mkdir obj_gpu
 if not exist bin_gpu mkdir bin_gpu
-if not exist bin_gpu\shaders xcopy /E /I /Q /Y "%ENG%\build\gpu-shaders-staged" bin_gpu\shaders >nul
+if not exist "%SHADERDIR%\*.cso" (echo SHADERS MISSING: "%SHADERDIR%" & exit /b 1)
+if exist bin_gpu\shaders rmdir /s /q bin_gpu\shaders
+mkdir bin_gpu\shaders
+xcopy /I /Q /Y "%SHADERDIR%\*.cso" bin_gpu\shaders\ >nul
+if errorlevel 1 (echo SHADER COPY FAILED: "%SHADERDIR%" & exit /b 1)
 
 set SRC_NOABI=%ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp ^
     %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp ^
@@ -90,7 +96,7 @@ rem is no longer "unmodified"). Reusing it here would both fail to compile (the 
 rem parameters gpu_port.h now declares) and, if it somehow linked, would write 'SLM5' regardless
 rem of the source file's own intent -- defeating the one property this configuration exists for.
 rem The pristine base is `git show`'d fresh into a SCRATCH root outside this repo
-rem (`D:\_t2905\pristine_pre_slm5\`, a build-time OUTPUT cache, not a source dependency -- every
+rem (`D:\_t2961-mutants\pristine_pre_slm5\`, a build-time OUTPUT cache, not a source dependency -- every
 rem byte in it is regenerated from tracked git history on every run, never read back as an input
 rem to anything else), from commit `ccf87c1` on this same branch (the tip immediately before
 rem T-2905's GPU fold; confirmed zero 'SLM5'/kGpuSeqBlobMagicV5 occurrences) -- NOT checked into
@@ -105,15 +111,17 @@ rem gpu_1p0_fixed.cpp` (a hand-patched, out-of-repo, unversioned single file), i
 rem the SAME `ccf87c1` pristine base by `make_gpu_fixed_noslm5.py`, anchored on the unique
 rem unconditional-Transition block that commit still carries -- confirmed by execution to produce
 rem code byte-identical to the retired external file (comments only differ).
-if not exist D:\_t2905\pristine_pre_slm5\superslm mkdir D:\_t2905\pristine_pre_slm5\superslm
-git -C "%ENG%" show ccf87c1:src/gpu/superslm_gpu.cpp > D:\_t2905\pristine_pre_slm5\superslm_gpu_pristine.cpp
-git -C "%ENG%" show ccf87c1:include/superslm/gpu_port.h > D:\_t2905\pristine_pre_slm5\superslm\gpu_port.h
-git -C "%ENG%" show ccf87c1:src/gpu/gpu_1p0.cpp > D:\_t2905\pristine_pre_slm5\gpu_1p0_pristine.cpp
-"%SSLM_PYTHON%" make_gpu_fixed_noslm5.py D:\_t2905\pristine_pre_slm5\gpu_1p0_pristine.cpp D:\_t2905\pristine_pre_slm5\gpu_1p0_fixed.cpp ^
+set "PRISTINE=D:\_t2961-mutants\pristine_pre_slm5"
+if not exist "%PRISTINE%\superslm" mkdir "%PRISTINE%\superslm"
+git -C "%ENG%" show ccf87c1:src/gpu/superslm_gpu.cpp > "%PRISTINE%\superslm_gpu_pristine.cpp"
+git -C "%ENG%" show ccf87c1:src/gpu/d3d12_harness.h > "%PRISTINE%\d3d12_harness.h"
+git -C "%ENG%" show ccf87c1:include/superslm/gpu_port.h > "%PRISTINE%\superslm\gpu_port.h"
+git -C "%ENG%" show ccf87c1:src/gpu/gpu_1p0.cpp > "%PRISTINE%\gpu_1p0_pristine.cpp"
+"%SSLM_PYTHON%" make_gpu_fixed_noslm5.py "%PRISTINE%\gpu_1p0_pristine.cpp" "%PRISTINE%\gpu_1p0_fixed.cpp" ^
     > obj_gpu\make_gpu_fixed_noslm5.log 2>&1 || (echo GENERATE FAILED: gpu_fixed_noslm5 & type obj_gpu\make_gpu_fixed_noslm5.log & set OVERALL_OK=0)
 if not exist obj_gpu\gpu_fixed_noslm5 mkdir obj_gpu\gpu_fixed_noslm5
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /ID:\_t2905\pristine_pre_slm5 /I%ENG%\include /I%ENG%\src\gpu ^
-    /c D:\_t2905\pristine_pre_slm5\gpu_1p0_fixed.cpp D:\_t2905\pristine_pre_slm5\superslm_gpu_pristine.cpp /Fo"obj_gpu\gpu_fixed_noslm5\\" ^
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I"%PRISTINE%" /I%ENG%\include /I%ENG%\src\gpu ^
+    /c "%PRISTINE%\gpu_1p0_fixed.cpp" "%PRISTINE%\superslm_gpu_pristine.cpp" /Fo"obj_gpu\gpu_fixed_noslm5\\" ^
     > obj_gpu\gpu_fixed_noslm5.buildlog 2>&1 || (echo BUILD FAILED: gpu_fixed_noslm5 & type obj_gpu\gpu_fixed_noslm5.buildlog & set OVERALL_OK=0)
 
 rem MUT_CHECKEDRETURN / MUT_NOREARM (T-2916, TE-370 M1): single-line reverts, generated fresh
@@ -125,15 +133,23 @@ if not defined SSLM_PYTHON set SSLM_PYTHON=C:\Users\dansu\AppData\Local\Programs
 if not exist obj_gpu\gpu_mut_cr mkdir obj_gpu\gpu_mut_cr
 "%SSLM_PYTHON%" make_mut_gpu_checkedreturn_seam.py "%ENG%\src\gpu\gpu_1p0.cpp" "obj_gpu\gpu_mut_cr\gpu_1p0_mut_checkedreturn.cpp" ^
     > obj_gpu\make_mut_checkedreturn.log 2>&1 || (echo GENERATE FAILED: gpu_mut_cr & type obj_gpu\make_mut_checkedreturn.log & set OVERALL_OK=0)
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I%ENG%\include /I%ENG%\src\gpu ^
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION /I%ENG%\include /I%ENG%\src\gpu ^
     /c obj_gpu\gpu_mut_cr\gpu_1p0_mut_checkedreturn.cpp /Fo"obj_gpu\gpu_mut_cr\\" ^
     > obj_gpu\gpu_mut_cr.buildlog 2>&1 || (echo BUILD FAILED: gpu_mut_cr & type obj_gpu\gpu_mut_cr.buildlog & set OVERALL_OK=0)
 if not exist obj_gpu\gpu_mut_nr mkdir obj_gpu\gpu_mut_nr
 "%SSLM_PYTHON%" make_mut_gpu_norearm_seam.py "%ENG%\src\gpu\gpu_1p0.cpp" "obj_gpu\gpu_mut_nr\gpu_1p0_mut_norearm.cpp" ^
     > obj_gpu\make_mut_norearm.log 2>&1 || (echo GENERATE FAILED: gpu_mut_nr & type obj_gpu\make_mut_norearm.log & set OVERALL_OK=0)
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I%ENG%\include /I%ENG%\src\gpu ^
+cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION /I%ENG%\include /I%ENG%\src\gpu ^
     /c obj_gpu\gpu_mut_nr\gpu_1p0_mut_norearm.cpp /Fo"obj_gpu\gpu_mut_nr\\" ^
     > obj_gpu\gpu_mut_nr.buildlog 2>&1 || (echo BUILD FAILED: gpu_mut_nr & type obj_gpu\gpu_mut_nr.buildlog & set OVERALL_OK=0)
+for %%v in (LATE RESTORE) do (
+    if not exist "obj_gpu\gpu_mut_%%v" mkdir "obj_gpu\gpu_mut_%%v"
+    "%SSLM_PYTHON%" make_mut_gpu_oldbind.py %%v "%ENG%\src\gpu\gpu_1p0.cpp" "obj_gpu\gpu_mut_%%v\gpu_1p0_mut_%%v.cpp" > "obj_gpu\make_mut_%%v.log" 2>&1
+    if errorlevel 1 (echo GENERATE FAILED: gpu_mut_%%v & type "obj_gpu\make_mut_%%v.log" & set OVERALL_OK=0)
+    cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION /I%ENG%\include /I%ENG%\src\gpu ^
+        /c "obj_gpu\gpu_mut_%%v\gpu_1p0_mut_%%v.cpp" /Fo"obj_gpu\gpu_mut_%%v\\" > "obj_gpu\gpu_mut_%%v.buildlog" 2>&1
+    if errorlevel 1 (echo BUILD FAILED: gpu_mut_%%v & type "obj_gpu\gpu_mut_%%v.buildlog" & set OVERALL_OK=0)
+)
 
 rem CPU_COMMON: backend-agnostic sources shared by every configuration (unaffected by either fix).
 if not exist obj_gpu\cpu_common mkdir obj_gpu\cpu_common
@@ -264,30 +280,23 @@ rem plan Sec3.10.3 row 11's own requirement ("a single-point mutant that reverts
 rem return... must turn both Cell 1 and Cell 2 red"): ASBUILT (the live tree, checked return in
 rem place -- must be GREEN) and MUT_CHECKEDRETURN (RED). The EXISTING gpu_mut_cr object
 rem (D:\_t2900\refs\gpu_1p0_mut_checkedreturn.cpp) predates T-2905's own seam entirely --
-rem `ArmGpuFinishDegenerateLogitRowInjection` is undefined there, so Cell 2 cannot link against
-rem it. T-2909 generates its OWN checked-return mutant straight from the LIVE TIP's own
-rem gpu_1p0.cpp (which already carries the seam), via make_mut_gpu_checkedreturn_seam.py --
-rem the identical single-line revert D:\_t2900\refs\make_mut_checkedreturn.py applies, just
-rem regenerated from source that has not gone stale. Compiled with the tree's own STOCKINC
-rem headers throughout (no v5 override needed -- this mutant never touches the SLM5 struct
-rem layout), so both link configurations share the SAME cell object.
+rem `ArmGpuFinishDegenerateLogitRowInjection` is undefined there. The current generator
+rem creates the checked-return mutant from the live tip, compiled with the fault seam; Cell 2
+rem also runs MUT_LATE, which restores admission of a bind after prompt prefill (D-SLM7625).
 if not exist obj_gpu\cell2_stock mkdir obj_gpu\cell2_stock
-if not exist obj_gpu\cell2_mut_cr mkdir obj_gpu\cell2_mut_cr
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION /c cell_gpu_cell2_degenerate.cpp ^
     /Fo"obj_gpu\cell2_stock\\" > obj_gpu\cell2_stock.buildlog 2>&1 || (echo BUILD FAILED: cell2_stock & type obj_gpu\cell2_stock.buildlog & set OVERALL_OK=0)
-"%SSLM_PYTHON%" make_mut_gpu_checkedreturn_seam.py "%ENG%\src\gpu\gpu_1p0.cpp" "obj_gpu\cell2_mut_cr\gpu_1p0_mut_checkedreturn_seam.cpp" ^
-    > obj_gpu\make_mut_gpu_checkedreturn_seam.log 2>&1 || (echo BUILD FAILED: make_mut_gpu_checkedreturn_seam.py & type obj_gpu\make_mut_gpu_checkedreturn_seam.log & set OVERALL_OK=0)
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION /I%ENG%\include /I%ENG%\src\gpu ^
-    /c "obj_gpu\cell2_mut_cr\gpu_1p0_mut_checkedreturn_seam.cpp" /Fo"obj_gpu\cell2_mut_cr\\" ^
-    > obj_gpu\cell2_mut_cr.buildlog 2>&1 || (echo BUILD FAILED: cell2_mut_cr & type obj_gpu\cell2_mut_cr.buildlog & set OVERALL_OK=0)
 
-for %%v in (ASBUILT MUT_CHECKEDRETURN) do (
+for %%v in (ASBUILT MUT_CHECKEDRETURN MUT_LATE) do (
     set CELLOBJ=obj_gpu\cell2_stock\cell_gpu_cell2_degenerate.obj
     if "%%v"=="ASBUILT" (
         set GPUOBJS=obj_gpu\gpu_asbuilt\gpu_1p0.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
     )
     if "%%v"=="MUT_CHECKEDRETURN" (
-        set GPUOBJS=obj_gpu\cell2_mut_cr\gpu_1p0_mut_checkedreturn_seam.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
+        set GPUOBJS=obj_gpu\gpu_mut_cr\gpu_1p0_mut_checkedreturn.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
+    )
+    if "%%v"=="MUT_LATE" (
+        set GPUOBJS=obj_gpu\gpu_mut_LATE\gpu_1p0_mut_LATE.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
     )
     echo ===== cell_gpu_cell2_degenerate [%%v] =====
     link /nologo /OUT:"bin_gpu\cell2_%%v.exe" !CELLOBJ! !GPUOBJS! !CPU_COMMON_OBJS! %SYSLIBS% ^
@@ -394,7 +403,7 @@ cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /c cell_gpu_slm5_save
     > obj_gpu\slm5_stock.buildlog 2>&1 || (echo BUILD FAILED: slm5_stock.obj & type obj_gpu\slm5_stock.buildlog & set OVERALL_OK=0)
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /c cell_gpu_slm5_saverestore.cpp /Fo"obj_gpu\slm5_ovr.obj" ^
     > obj_gpu\slm5_ovr.buildlog 2>&1 || (echo BUILD FAILED: slm5_ovr.obj & type obj_gpu\slm5_ovr.buildlog & set OVERALL_OK=0)
-for %%v in (ASBUILT FIXED) do (
+for %%v in (ASBUILT FIXED MUT_RESTORE) do (
     if "%%v"=="ASBUILT" (
         set CELLOBJ=obj_gpu\slm5_stock.obj
         set GPUOBJS=obj_gpu\gpu_asbuilt\gpu_1p0.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
@@ -402,6 +411,10 @@ for %%v in (ASBUILT FIXED) do (
     if "%%v"=="FIXED" (
         set CELLOBJ=obj_gpu\slm5_ovr.obj
         set GPUOBJS=obj_gpu\gpu_asbuilt\gpu_1p0.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
+    )
+    if "%%v"=="MUT_RESTORE" (
+        set CELLOBJ=obj_gpu\slm5_stock.obj
+        set GPUOBJS=obj_gpu\gpu_mut_RESTORE\gpu_1p0_mut_RESTORE.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj
     )
     echo ===== cell_gpu_slm5_saverestore [%%v] =====
     link /nologo /OUT:"bin_gpu\slm5_%%v.exe" !CELLOBJ! !GPUOBJS! !CPU_COMMON_OBJS! %SYSLIBS% ^
@@ -423,7 +436,11 @@ for %%v in (ASBUILT FIXED) do (
             for /f "tokens=1,2,3 delims= " %%a in ("!SUMMARY_LINE!") do (set TOK_CHECKS=%%a& set TOK_FAILURES=%%b& set TOK_SKIPS=%%c)
             set "FAILN=!TOK_FAILURES:~9!"
             set "SKIPN=!TOK_SKIPS:~6!"
-            if not "!FAILN!"=="0" (echo    FAILURES=!FAILN! -- a red cell ^("obj_gpu\slm5_%%v.runlog"^)& set OVERALL_OK=0)
+            if "%%v"=="MUT_RESTORE" (
+                if "!FAILN!"=="0" (echo    SURVIVING MUTANT -- restored-bind regression was not detected & set OVERALL_OK=0)
+            ) else (
+                if not "!FAILN!"=="0" (echo    FAILURES=!FAILN! -- a red cell ^("obj_gpu\slm5_%%v.runlog"^)& set OVERALL_OK=0)
+            )
             if not "!SKIPN!"=="0" (echo    SKIPS=!SKIPN! -- a skipped cell fails the run ^("obj_gpu\slm5_%%v.runlog"^)& set OVERALL_OK=0)
         )
     )

@@ -22,13 +22,9 @@ import re
 import sys
 
 _PAT = re.compile(
-    r"(?P<i>[ \t]+)const bool has_transition = model->schemas\.Transition\(\n"
-    r"[ \t]+\*entry, seq->dfa_walk_state, static_cast<uint32_t>\(produced\), &next_state\);\n"
-    r"(?P=i)if \(!has_transition\) \{\n"
-    r"(?P=i)\t\*out_token = -2;\n"
-    r"(?P=i)\tseq->ready_for_logits = true;\n"
-    r"(?P=i)\treturn SSLM_OK;\n"
-    r"(?P=i)\}\n"
+    r"(?P<i>[ \t]+)if \(!has_transition\) \{\n"
+    r"(?P<body>(?:(?!\n(?P=i)\}).|\n)*?)"
+    r"\n(?P=i)\}"
 )
 
 
@@ -50,16 +46,10 @@ def main(argv):
         sys.exit("expected exactly 1 occurrence of the checked-return block, found %d -- source "
                   "may have moved, refusing to guess" % len(hits))
 
-    def repl(m):
-        i = m.group("i")
-        return (
-            "%smodel->schemas.Transition(*entry, seq->dfa_walk_state, "
-            "static_cast<uint32_t>(produced),\n"
-            "%s                           &next_state);  "
-            "// T-2909 MUT_CHECKEDRETURN: return value discarded.\n" % (i, i)
-        )
-
-    out = _PAT.sub(repl, text)
+    block = hits[0].group(0)
+    if "*out_token = -2;" not in block or "seq->ready_for_logits = true;" not in block:
+        sys.exit("checked-return block drifted, refusing mutation")
+    out = text[:hits[0].start()] + block.replace("if (!has_transition)", "if (false && !has_transition)", 1) + text[hits[0].end():]
     with open(dst, "w", encoding="utf-8", newline="") as f:
         f.write(out)
     print("wrote %s" % dst)

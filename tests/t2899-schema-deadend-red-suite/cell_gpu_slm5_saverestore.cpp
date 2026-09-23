@@ -63,15 +63,15 @@ SslmGpuSequenceHandle* Build(const GpuModelFixture& fx, int pt, const std::vecto
 	if (pt == 4) {
 		std::vector<int32_t> fill;
 		for (int64_t i = 0; i < fx.model_cap - 1; ++i) fill.push_back(P[static_cast<size_t>(i) % P.size()]);
-		Prefill(fx, s, fill);
 		SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, s, 0);
+		Prefill(fx, s, fill);
 		SslmGpuSeqPrefillSchemaContentForG5Bridge(fx.ctx, s, &t0, 1, fx.one_layer_budget, &consumed);
 		step();
 		step();
 		return s;
 	}
-	Prefill(fx, s, P);
 	SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, s, 0);
+	Prefill(fx, s, P);
 	if (pt == 0) return s;
 	if (pt == 1) {
 		step();
@@ -102,6 +102,15 @@ SslmGpuSequenceHandle* SaveRestore(const GpuModelFixture& fx, SslmGpuSequenceHan
 	SslmGpuSequenceHandle* r = nullptr;
 	*rs = sslm_gpu_seq_restore(fx.ctx, fx.model, blob.data(), n, &r);
 	return r;
+}
+
+std::vector<uint8_t> SaveBytes(const GpuModelFixture& fx, SslmGpuSequenceHandle* s) {
+	size_t need = 0;
+	(void)sslm_gpu_seq_save(fx.ctx, s, nullptr, &need);
+	CHECK(need > 0);
+	std::vector<uint8_t> blob(need);
+	CHECK(sslm_gpu_seq_save(fx.ctx, s, blob.data(), &need) == SSLM_OK);
+	return blob;
 }
 
 const char* kPointName[5] = {"P0 bound, prompt only (walk 0)", "P1 accepting, token pending (route D after #1)",
@@ -173,51 +182,29 @@ int main(int argc, char** argv) {
 		if (same) ++gpu_match;
 		sslm_gpu_seq_release(fx.ctx, r);
 
-		// Leg 3: the caller's only repair before T-2895 -- re-bind the schema on a second restored
-		// copy, saved from a FRESH original at the same save point.
-		//
-		// T-2903 fix. T-2900's original assertion (`rb == SSLM_OK`, unconditionally) assumed the
-		// AS_BUILT shape: a restored copy that dropped its schema binding entirely, so rebinding
-		// it is an ordinary bind-onto-unbound call. Under FIXED that assumption is exactly what
-		// T-2895 closes -- the restored copy already carries the ORIGINAL's own binding and walk
-		// state through the round trip -- so the SAME call is now a rebind ATTEMPT on an
-		// ALREADY-bound sequence, and the plan (Sec3.10.1) states the disposition explicitly: "a
-		// re-bind on an already-bound restored sequence now correctly refuses
-		// SSLM_SEQUENCE_REJECTED, mirroring the CPU ABI's own 'no mid-generation re-binding' rule."
-		// That CPU rule (Sec3.10.5) allows a rebind only when the sequence is unbound or its own
-		// walk sits at the schema's start; it refuses once real schema-content progress exists.
-		//
-		// The two variants differ in EXACTLY the fact under test (whether restore preserves the
-		// binding at all), so the expected disposition cannot be hardcoded by `pt` alone -- it
-		// would need to already know which variant is linked. Instead it is read directly off
-		// `r2`'s own observable walk state right after restore, before the rebind call: the
-		// "unused" sentinel means unbound (AS_BUILT, every point, by T-2895's own 0-of-5 finding);
-		// the schema's own start state (0) means bound but not yet progressed (FIXED, pt0 only,
-		// where Build() only prefills the prompt and binds -- no schema-content token consumed
-		// yet); anything else means bound with real progress (FIXED, pt1-4: an accepting token
-		// consumed or a dead end reached). This is a live read of the precondition the rule is
-		// stated over, not a per-point guess -- and it makes the same assertion correct under
-		// both AS_BUILT (unbound -> OK, all 5 points) and FIXED (start-state -> OK at pt0,
-		// progressed -> REJECTED at pt1-4) without knowing which is linked.
+		// D-SLM7625: restore clears bind_eligible at every save point. Rebind is
+		// rejected without changing the restored schema state or context.
 		int32_t last2 = -1;
 		SslmGpuSequenceHandle* o2 = Build(fx, pt, P, t0, other, &last2);
 		SslmGpuSequenceHandle* r2 = SaveRestore(fx, o2, &sv, &rs);
-		const uint32_t wr2_pre_rebind = SslmGpuSeqWalkStateForG5Bridge(r2);
-		const bool r2_unbound = (wr2_pre_rebind == 0xFFFFFFFFu);
-		const bool r2_bound_progressed = !r2_unbound && (wr2_pre_rebind != 0u);
-		const SslmGpuStatus rb = SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, r2, 0);
-		if (r2_bound_progressed) {
-			CHECK_MSG(rb == SSLM_SEQUENCE_REJECTED,
-			          "[pt%d] rebind on an already-bound, schema-content-progressed restored copy "
-			          "(walk=%u) should be REFUSED (no mid-generation re-binding, mirroring the CPU "
-			          "ABI's own rule) -- got %s",
-			          pt, wr2_pre_rebind, StatusName(rb));
-		} else {
-			CHECK_MSG(rb == SSLM_OK,
-			          "[pt%d] rebind on a restored copy that is unbound or at its own schema start "
-			          "(walk=%u, not mid-generation) should succeed -- got %s",
-			          pt, wr2_pre_rebind, StatusName(rb));
+		CHECK_MSG(sv == SSLM_OK && rs == SSLM_OK && r2, "[pt%d] second restore failed", pt);
+		if (!r2) {
+			sslm_gpu_seq_release(fx.ctx, o2);
+			sslm_gpu_seq_release(fx.ctx, o);
+			continue;
 		}
+		const uint32_t wr2_pre_rebind = SslmGpuSeqWalkStateForG5Bridge(r2);
+		const int64_t ctx2_pre_rebind = ContextLength(r2);
+		const std::vector<uint8_t> before_rebind = SaveBytes(fx, r2);
+		const SslmGpuStatus rb = SslmGpuSeqSetSchemaForG5Bridge(fx.ctx, r2, 0);
+		CHECK_MSG(rb == SSLM_SEQUENCE_REJECTED,
+		          "[pt%d] restored rebind returned %s, want SSLM_SEQUENCE_REJECTED",
+		          pt, StatusName(rb));
+		CHECK_MSG(SslmGpuSeqWalkStateForG5Bridge(r2) == wr2_pre_rebind &&
+		              ContextLength(r2) == ctx2_pre_rebind,
+		          "[pt%d] rejected rebind changed restored state", pt);
+		CHECK_MSG(SaveBytes(fx, r2) == before_rebind,
+		          "[pt%d] rejected rebind changed the saved sequence state", pt);
 		bool same2 = true;
 		int32_t lo2 = last2, lr2 = last2;
 		for (int k = 1; k <= 2; ++k) {
@@ -227,13 +214,13 @@ int main(int argc, char** argv) {
 			if (c.st == SSLM_OK && c.out >= 0) lr2 = c.out;
 			if (a.st != c.st || a.out != c.out || a.walk != c.walk || a.ctx != c.ctx) same2 = false;
 		}
-		CHECK_MSG(same2, "[pt%d] rebound copy diverges from a fresh original over the next two decode calls", pt);
+		CHECK_MSG(same2, "[pt%d] rebind-rejected copy diverges from a fresh original over the next two decode calls", pt);
 		if (same2) ++gpu_rebind_match;
 		sslm_gpu_seq_release(fx.ctx, r2);
 		sslm_gpu_seq_release(fx.ctx, o2);
 		sslm_gpu_seq_release(fx.ctx, o);
 	}
-	std::printf("SUMMARY: restored copy == un-saved original at %d of 5 save points; re-bound restored copy == "
+	std::printf("SUMMARY: restored copy == un-saved original at %d of 5 save points; rebind-rejected restored copy == "
 	            "original at %d of 5 save points\n",
 	            gpu_match, gpu_rebind_match);
 

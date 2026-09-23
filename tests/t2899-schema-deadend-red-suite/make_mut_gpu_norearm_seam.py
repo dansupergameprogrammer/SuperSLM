@@ -18,6 +18,7 @@ import sys
 
 _ORIGINAL = (
     "\t\tif (!has_transition) {\n"
+    "\t\t\t// dead-end preserves dfa_walk_state\n"
     "\t\t\t*out_token = -2;\n"
     "\t\t\tseq->ready_for_logits = true;\n"
     "\t\t\treturn SSLM_OK;\n"
