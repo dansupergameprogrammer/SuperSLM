@@ -28982,6 +28982,21 @@ static void TestT2948_ShaderDirInvalidBeforeDeviceInit() {
 
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
+	if (argc > 1 && std::strcmp(argv[1], "--te399-adapter-index-only") == 0) {
+		// TE-399 (2026-09-23): a targeted runner for T-2116's adapter-index section
+		// (tests/test_main.cpp:27167-27271), so this section's red/green reading against
+		// D-SLM7753 can be confirmed without a full-suite run. Same shape as
+		// --t2948-shader-dir-invalid-only / --t2959-gpu-output-null-only immediately below.
+		TestAdapterIndexUnsetLeavesDefaultBehaviorAndPrintsNothing();
+		TestAdapterIndexValidOverridePrintsLabel();
+		TestAdapterIndexNonexistentFailsLoudlyNamingTheIndex();
+		TestAdapterIndexMalformedNonIntegerRefusesSilentFallbackToZero();
+		TestAdapterIndexNegativeRefusesSilentFallback();
+		TestAdapterIndexTooLongRefusesRatherThanParsingTruncatedValue();
+		TestAdapterIndexSoftwareAdapterRefusedNotSilentlySelected();
+		std::printf("te399 adapter-index section: %d checks, %d failures\n", GChecks, GFailures);
+		return GFailures == 0 ? 0 : 1;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--t2959-gpu-output-null-only") == 0) {
 #if defined(_WIN32) && defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
 		TestT2959_GpuOutputHandlesNullOnRefusal();
