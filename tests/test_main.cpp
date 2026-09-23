@@ -27167,6 +27167,9 @@ bool FindSoftwareAdapterIndex(int* out_index) {
 static void TestAdapterIndexUnsetLeavesDefaultBehaviorAndPrintsNothing() {
 	// The unset path (every consumer of the public 1.0 API except run_crossvendor.ps1
 	// itself) must be byte-identical to before T-2116: no "# adapter:" line at all.
+	// TE-399 (2026-09-23): reviewed against D-SLM7753 (the engine library writes nothing to
+	// stdout) -- unaffected. This cell already required zero bytes on the unset path; the fix
+	// does not change it, so it is not a red cell for TE-399 and carries no edit.
 	ScopedEnvVar unset("SSLM_GPU_ADAPTER_INDEX", nullptr);
 	ScopedStdoutCapture cap;
 	superslm_gpu::harness::Device d;
@@ -27177,11 +27180,21 @@ static void TestAdapterIndexUnsetLeavesDefaultBehaviorAndPrintsNothing() {
 }
 
 static void TestAdapterIndexValidOverridePrintsLabel() {
-	// S2's positive path: WHEN the override is requested, the label still prints
-	// (this is the only channel a certification run has to confirm which GPU ran).
-	// Skipped, named, if this machine has no usable D3D12 hardware adapter at all --
-	// every other cell in this section is hardware-independent by construction, but
-	// this one needs a real index 0 to exist and be usable to observe the print.
+	// TE-399/D-SLM7753 (2026-09-23): this cell's own contract as T-2116 wrote it -- "the label
+	// still prints [to stdout]; this is the only channel a certification run has to confirm
+	// which GPU ran" -- is the exact contract TE-393 (Claude/Loki/te393-u3-strike-2026-09-23.md,
+	// D-SLM7752) fractured: a host that writes data to stdout is corrupted by this line. The
+	// principal ruled the fix into the engine as v1.7.1 (D-SLM7753): the engine library writes
+	// nothing to stdout. The plan does not state where the diagnostic's information moves
+	// (stderr, or behind SSLM_GPU_ENABLE_DEBUG_LAYER -- Brunel/TE-400's choice, stated in their
+	// own record), so this cell pins stdout-empty only, per TE-399's brief; it does not assert on
+	// stderr or the debug-layer channel. tools/t2116_crossvendor/run_crossvendor.ps1's own label
+	// read is a SEPARATE open question (`2>&1` already merges stderr into what it captures, so a
+	// stderr destination needs no script change there; an opt-in-flag destination would need
+	// one) -- named in Claude/Curie/te399-slm171-stdout-red-2026-09-23.md, not resolved here.
+	// Skipped, named, if this machine has no usable D3D12 hardware adapter at all -- every other
+	// cell in this section is hardware-independent by construction, but this one needs a real
+	// index 0 to exist and be usable to observe the (absence of the) print.
 	if (!superslm_gpu::harness::GetDevice().available) {
 		std::printf(
 		    "TestAdapterIndexValidOverridePrintsLabel: SKIPPED, named -- no usable D3D12 "
@@ -27194,9 +27207,11 @@ static void TestAdapterIndexValidOverridePrintsLabel() {
 	d.Init();
 	const std::string out = cap.ReadCaptured();
 	CHECK(d.available);
-	CHECK_MSG(out.find("# adapter:") != std::string::npos,
-	          "SSLM_GPU_ADAPTER_INDEX=0 on a usable adapter must print the label; captured: %s",
-	          out.c_str());
+	// RED at v1.7.0: d3d12_harness.h:330-336 still writes "# adapter: <name>\n" to stdout here.
+	CHECK_MSG(out.empty(),
+	          "SSLM_GPU_ADAPTER_INDEX=0 on a usable adapter must write ZERO bytes to stdout (the "
+	          "engine library writes nothing to stdout, D-SLM7753) -- captured %zu bytes: %s",
+	          out.size(), out.c_str());
 }
 
 static void TestAdapterIndexNonexistentFailsLoudlyNamingTheIndex() {
