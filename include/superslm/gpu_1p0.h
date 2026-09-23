@@ -74,11 +74,13 @@ typedef struct GpuContextConfig {
  * or lm_head when untied) to the device at map time, so the token finish
  * (SslmGpuSeqFinishTokenForG5Bridge) computes the exact int64 logits row on the device and reads
  * it back; the host then runs the same narrowing, mask, argmax and dead-end rule as without the
- * flag, so tokens are identical. Opt-in per model. New VRAM per mapped model: the head table
- * (vocab_size x hidden_size bytes: 136,134,656 B at Qwen2.5-0.5B, 233,373,696 B at 1.5B) plus a
- * hidden_size x 4 B input row and a vocab_size x 8 B output row, each rounded up to the 64 KiB
- * allocation granule; nothing per sequence. With the flag set no separate host copy of the head
- * is taken: an untied model's lm_head is not copied to the host, and a tied model's head is its
+ * flag, so tokens are identical. Opt-in per model. New VRAM per mapped model: three device
+ * buffers are requested, the head table (vocab_size x hidden_size bytes: 136,134,656 B at
+ * Qwen2.5-0.5B, 233,373,696 B at 1.5B), a hidden_size x 4 B input row and a vocab_size x 8 B
+ * output row (137,353,728 B and 234,595,328 B in total). That sum is a lower bound: the driver
+ * adds alignment and allocation overhead that differs by GPU and driver (measured +137,433,088 B
+ * and +234,627,072 B on an RTX 2080 SUPER; +137,629,696 B and +234,889,216 B on an RX 7900
+ * XTX). Nothing per sequence. With the flag set no separate host copy of the head is taken: an untied model's lm_head is not copied to the host, and a tied model's head is its
  * embedding table, which the handle keeps on the host in every case for token embedding. The
  * host parallel-for hook (sslm_gpu_context_set_host_parallel_for) is not used for that model's
  * finish. */

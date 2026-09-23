@@ -183,11 +183,14 @@ narrows it on the host. With the flag set no separate host copy of the
 head is taken: an untied model's `lm_head` is not copied to the host, and a
 tied model's head is its embedding table, which the handle keeps on the host
 in every case for token embedding. The context's host hook is not used for
-that model. New VRAM per mapped model is
+that model. The flag requests three new device buffers per mapped model:
 the head table (`vocab_size × hidden_size` bytes: 136,134,656 B for
-Qwen2.5-0.5B and 233,373,696 B for 1.5B) plus a `hidden_size × 4` B input
-row and a `vocab_size × 8` B output row, each rounded up to the 64 KiB
-allocation granule; nothing is allocated per sequence or per token. With the
+Qwen2.5-0.5B and 233,373,696 B for 1.5B), a `hidden_size × 4` B input row
+and a `vocab_size × 8` B output row, 137,353,728 B and 234,595,328 B in
+total. That sum is a lower bound on the new VRAM: the driver adds alignment
+and allocation overhead that differs by GPU and driver (measured
++137,433,088 B and +234,627,072 B on an RTX 2080 SUPER; +137,629,696 B and
+RX 7900 XTX). Nothing is allocated per sequence or per token. With the
 flag clear a model maps exactly as before and uses no new VRAM.
 
 - The map loads `logits_site.cso` from the process's shader directory: a

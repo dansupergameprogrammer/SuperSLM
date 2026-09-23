@@ -54,9 +54,9 @@ narrowing, mask, argmax and dead-end rule run unchanged on the host, on the iden
   zero-initializing caller is unaffected. `SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE` uploads the model's
   head table at map time; the finish then computes the exact int64 logits row on the device (new
   shader `logits_site.hlsl`; the shipped shader set gains one `.cso`) and narrows it on the host.
-  New VRAM per mapped model is the head table (`vocab_size x hidden_size` bytes) plus two rows,
-  each rounded to the 64 KiB allocation granule; with the flag clear a model maps exactly as
-  before. Undefined flag bits are refused.
+  New VRAM per mapped model is at least the head table (`vocab_size x hidden_size` bytes) plus two
+  rows; the driver adds a small, GPU-dependent allocation overhead on top (see `gpu_1p0.h`). With
+  the flag clear a model maps exactly as before. Undefined flag bits are refused.
 
 Three statuses are appended to `SslmGpuStatus`, so no existing ordinal moves:
 `SSLM_GPU_PARALLEL_FOR_INVALID` (21), `SSLM_GPU_PARALLEL_FOR_INCOMPLETE` (22) and
