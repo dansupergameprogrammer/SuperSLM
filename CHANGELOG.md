@@ -4,6 +4,21 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-09-23
+
+The engine library writes nothing to stdout. 1.7.0 wrote `# adapter: <name>` to stdout, twice per
+GPU context (once from `harness::GetDevice()`'s process-wide singleton, once from each
+`SslmGpuContext::device`), whenever `SSLM_GPU_ADAPTER_INDEX` was set -- the one call site was
+`Device::Init()` (`src/gpu/d3d12_harness.h`), reached from both. A host that writes its own data to
+stdout -- `semb query --device gpu`, for one -- had that line spliced into it (TE-393). The swept
+count across `src/` and `include/` for the shipped `superslm` and `superslm_gpu` libraries found
+exactly this one call site; everything else already used `stderr` or wrote nothing. The line now
+goes to `stderr`, matching every other diagnostic this same file already writes there (the
+`SSLM_GPU_ENABLE_DEBUG_LAYER` messages, the validation callback, the HRESULT failure macro): the
+information a certification run needs to confirm which adapter ran is unchanged, on the channel
+every other harness diagnostic already uses. No arithmetic, ABI surface, or token changes; the
+write is diagnostic-only and never on the compute path.
+
 ## [1.7.0] - 2026-09-23
 
 `GpuContextConfig` gains `shader_dir`, the directory the compiled `.cso` shader set is loaded

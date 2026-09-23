@@ -14,16 +14,22 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.7.0**. The token finish can take its logits off the calling thread, through
-a caller-supplied host parallel-for hook on both backends or an opt-in device-resident head on the
-GPU, with tokens identical to 1.6.0. On an RTX 2080 SUPER the device head took Qwen2.5-0.5B from
-42.67 to 73.21 tok/s and Qwen2.5-1.5B from 27.85 to 55.49 tok/s, for 137,433,088 B and
-234,627,072 B of VRAM per mapped model. A host can also choose the directory GPU shaders load
-from, and a GPU context stays usable after an out-of-memory failure during an upload. With no hook
-and no device head, tokens are identical to 1.6.0 and the path is measurably slower in some cells
-(−1.98% tok/s on the CPU at 0.5B). `GpuContextConfig` grew, so code compiled against an earlier
-`gpu_1p0.h` must be recompiled. See the [1.7.0 release note](docs/releases/1.7.0.md) for every
-figure with its hardware and settings, and [CHANGELOG.md](CHANGELOG.md).
+Current release: **1.7.1**. The engine library writes nothing to stdout: the `# adapter:
+<name>` line `SSLM_GPU_ADAPTER_INDEX` prints now goes to stderr, like every other harness
+diagnostic, so a host that pipes model output through stdout is no longer corrupted by it. No
+token, ABI surface, or measured figure changes from 1.7.0. See the
+[1.7.1 release note](docs/releases/1.7.1.md).
+
+1.7.0: the token finish can take its logits off the calling thread, through a caller-supplied host
+parallel-for hook on both backends or an opt-in device-resident head on the GPU, with tokens
+identical to 1.6.0. On an RTX 2080 SUPER the device head took Qwen2.5-0.5B from 42.67 to
+73.21 tok/s and Qwen2.5-1.5B from 27.85 to 55.49 tok/s, for 137,433,088 B and 234,627,072 B of
+VRAM per mapped model. A host can also choose the directory GPU shaders load from, and a GPU
+context stays usable after an out-of-memory failure during an upload. With no hook and no device
+head, tokens are identical to 1.6.0 and the path is measurably slower in some cells (−1.98% tok/s
+on the CPU at 0.5B). `GpuContextConfig` grew, so code compiled against an earlier `gpu_1p0.h` must
+be recompiled. See the [1.7.0 release note](docs/releases/1.7.0.md) for every figure with its
+hardware and settings, and [CHANGELOG.md](CHANGELOG.md).
 
 ## Capabilities
 
