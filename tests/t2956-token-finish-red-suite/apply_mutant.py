@@ -48,6 +48,68 @@ def apply(p: Patch, ident: str):
     elif ident == "c":
         p.replace(f, "if (logits[i] > best_value) {",
                   "if (logits[i] >= best_value) { // MUTANT c: last-wins tie merge")
+    elif ident == "c_exact":
+        # Move the winner into each parallel task, merge local winners with >=
+        # (later partition wins ties), and consume that merged result at the
+        # existing serial caller. The TLS channel preserves the public ABI in
+        # this disposable scratch build; it is keyed to the exact row pointer.
+        p.replace(f, "namespace {\n\n// Call-local state one LogitsSiteParallel",
+                  "namespace {\n\nthread_local const int32_t* g_task_argmax_row = nullptr; // MUTANT c_exact\n"
+                  "thread_local int32_t g_task_argmax = 0;\n\n"
+                  "// Call-local state one LogitsSiteParallel")
+        p.replace(f, "\tstd::atomic<bool>* violation;\n};\n\nvoid LogitsTask",
+                  "\tstd::atomic<bool>* violation;\n"
+                  "\tint64_t* local_values;\n\tint32_t* local_indices;\n};\n\nvoid LogitsTask")
+        p.replace(f, "\t                      end - begin, c.wide_logits + begin);\n\t// Release:",
+                  "\t                      end - begin, c.wide_logits + begin);\n"
+                  "\tint64_t local_best = c.wide_logits[begin];\n"
+                  "\tint32_t local_index = static_cast<int32_t>(begin);\n"
+                  "\tfor (size_t row = begin + 1; row < end; ++row) {\n"
+                  "\t\tif (c.wide_logits[row] > local_best) {\n"
+                  "\t\t\tlocal_best = c.wide_logits[row];\n"
+                  "\t\t\tlocal_index = static_cast<int32_t>(row);\n"
+                  "\t\t}\n\t}\n"
+                  "\tc.local_values[task_index] = local_best;\n"
+                  "\tc.local_indices[task_index] = local_index;\n"
+                  "\t// Release:")
+        p.replace(f, "\tif (pf == nullptr || pf->run == nullptr || pf->max_tasks <= 1 || vocab_size == 0) {",
+                  "\tg_task_argmax_row = nullptr;\n"
+                  "\tif (pf == nullptr || pf->run == nullptr || pf->max_tasks <= 1 || vocab_size == 0) {")
+        p.replace(f, "\tstd::atomic<bool> violation{false};\n\tLogitsTaskCtx ctx{",
+                  "\tstd::atomic<bool> violation{false};\n"
+                  "\tint64_t local_values[SSLM_PARALLEL_FOR_MAX_TASKS]{};\n"
+                  "\tint32_t local_indices[SSLM_PARALLEL_FOR_MAX_TASKS]{};\n"
+                  "\tLogitsTaskCtx ctx{")
+        p.replace(f, "static_cast<int32_t>(task_count), state, &violation};",
+                  "static_cast<int32_t>(task_count), state, &violation, local_values, local_indices};")
+        p.replace(f, "\tif (!complete) return SslmForwardStatus::ParallelForIncomplete;\n"
+                  "\treturn NarrowRowChecked(wide_logits, vocab_size, out_logits);",
+                  "\tif (!complete) return SslmForwardStatus::ParallelForIncomplete;\n"
+                  "\tconst auto narrow = NarrowRowChecked(wide_logits, vocab_size, out_logits);\n"
+                  "\tif (narrow != SslmForwardStatus::Ok) return narrow;\n"
+                  "\tint64_t best = INT64_MIN;\n"
+                  "\tfor (size_t task = 0; task < task_count; ++task) {\n"
+                  "\t\tif (local_values[task] >= best) { // MUTANT c_exact: last partition wins ties\n"
+                  "\t\t\tbest = local_values[task];\n"
+                  "\t\t\tg_task_argmax = local_indices[task];\n"
+                  "\t\t}\n\t}\n"
+                  "\tg_task_argmax_row = out_logits;\n"
+                  "\treturn SslmForwardStatus::Ok;")
+        p.replace(f, "int32_t ArgmaxLowestIndexTieBreak(const int32_t* logits, size_t n) {\n"
+                  "\tint32_t best_index = 0;",
+                  "int32_t ArgmaxLowestIndexTieBreak(const int32_t* logits, size_t n) {\n"
+                  "\tif (logits == g_task_argmax_row) {\n"
+                  "\t\tg_task_argmax_row = nullptr;\n"
+                  "\t\treturn g_task_argmax; // MUTANT c_exact: task-local winner consumed\n"
+                  "\t}\n"
+                  "\tint32_t best_index = 0;")
+    elif ident == "q_cpu":
+        p.replace("src/sslm_abi.cpp",
+                  "\t\t\tMaybeInjectCpuFinishDegenerateLogitRow(logit_row, static_cast<int32_t>(c.vocab_size));",
+                  "\t\t\t// MUTANT q_cpu: armed seam never reaches the real finish row.")
+    elif ident == "q_gpu":
+        p.replace(g, "\tMaybeInjectGpuFinishDegenerateLogitRow(logit_row.data(), model->vocab_size);",
+                  "\t// MUTANT q_gpu: armed seam never reaches the real finish row.")
     elif ident == "b":
         p.replace(f, "if (!complete) return SslmForwardStatus::ParallelForIncomplete;",
                   "(void)complete; // MUTANT b: omit exactly-once refusal")

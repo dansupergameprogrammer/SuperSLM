@@ -17,10 +17,28 @@ $bin = Join-Path 'D:\_t2956-mutants\bin' $Id
 
 & $python (Join-Path $suite 'apply_mutant.py') $Id *> (Join-Path $log 'mutation.txt')
 if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $log 'mutation.txt'); exit 2 }
+if ($Id -in @('q_cpu','q_gpu')) {
+    $out = Join-Path 'D:\_t2956-mutants\build' "allmasked_$Id"
+    & cmd /c (Join-Path $suite 'build_all_masked.bat') $tree $out candidate *> (Join-Path $log 'build.txt')
+    if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $log 'build.txt') -Tail 30; exit 3 }
+    $env:T2956_ALL_MASKED = '1'
+    $env:T2956_SHADER_DIR = Join-Path $out 'shaders'
+    $backend = if ($Id -eq 'q_cpu') { 'cpu' } else { 'gpu' }
+    & (Join-Path $out 'cell_real_decode.exe') $backend $aex 'potion_shop_order' '1' '0' '0' *> (Join-Path $log 'cell.txt')
+    $cellExit = $LASTEXITCODE
+    Remove-Item Env:T2956_ALL_MASKED
+    Remove-Item Env:T2956_SHADER_DIR
+    Get-Content (Join-Path $log 'mutation.txt')
+    Write-Output "MUTANT $Id build=0 link=0 cell_exit=$cellExit"
+    Get-Content (Join-Path $log 'cell.txt')
+    if ($cellExit -eq 0 -or (Get-Content -Raw (Join-Path $log 'cell.txt')) -notmatch "FAIL all-masked $backend") { exit 1 }
+    exit 0
+}
 & cmd /c (Join-Path $suite 'build_mutant.bat') $tree *> (Join-Path $log 'build.txt')
 if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $log 'build.txt') -Tail 30; exit 3 }
 
 if ($Id -in @('a','c')) { $cell = 'cell_rows'; $cellArgs = @($aex) }
+elseif ($Id -eq 'c_exact') { $cell = 'cell_real_decode'; $cellArgs = @() }
 elseif ($Id -in @('b','b2')) {
     $cell = 'cell_real_decode'
     $kind = if ($Id -eq 'b') { 'omit0' } else { 'dupinplace' }
@@ -47,7 +65,10 @@ else { throw "No cell mapping for mutant $Id" }
 & cmd /c (Join-Path $suite 'build_one.bat') $cell $cpu $gpu $bin $shaders *> (Join-Path $log 'link.txt')
 if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $log 'link.txt') -Tail 30; exit 4 }
 $exe = Join-Path $bin "$cell.exe"
-if ($Id -in @('h','h2')) {
+if ($Id -eq 'c_exact') {
+    & $python (Join-Path $suite 'run_integrated_tie.py') --base $base --candidate $exe *> (Join-Path $log 'cell.txt')
+}
+elseif ($Id -in @('h','h2')) {
     $compare = Join-Path $suite 'cell_ru_tokens.py'
     if ($Id -eq 'h') { & $python $compare --base $base --candidate $exe --device *> (Join-Path $log 'cell.txt') }
     else { & $python $compare --base $base --candidate $exe *> (Join-Path $log 'cell.txt') }
@@ -67,6 +88,7 @@ $expected = switch -Regex ($Id) {
     '^b$' { 'FAIL malformed CPU omit0'; break }
     '^b2$' { 'FAIL malformed CPU dupinplace'; break }
     '^c$' { 'FAIL tie '; break }
+    '^c_exact$' { 'FAIL integrated tie cpu/T3 got=\[64'; break }
     '^d$' { 'FAIL wide row '; break }
     '^e$' { 'FAIL VRAM '; break }
     '^f$' { 'FAIL unknown bit '; break }

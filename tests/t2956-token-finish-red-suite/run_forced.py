@@ -49,8 +49,11 @@ def main():
                 raise RuntimeError(f"{name}/{tier} row exit={rows.returncode}: "
                                    f"{rows.stdout}{rows.stderr}")
             try:
-                got, _ = execute(out / "cell_real_decode.exe", "cpu", artifact, "-", count,
+                got, log = execute(out / "cell_real_decode.exe", "cpu", artifact, "-", count,
                                  4, False, prompt)
+                for line in log.splitlines():
+                    if line.startswith(("THREAD_EXIT", "THREADS")):
+                        print(f"{name}/{tier} {line}", flush=True)
                 if got != expected:
                     raise AssertionError(f"tokens={got} baseline={expected}")
                 print(f"PASS {name} {tier} rows=103x9 tokens={len(got)}", flush=True)

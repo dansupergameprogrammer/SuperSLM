@@ -27,11 +27,19 @@
     },
     {
       "id": "c",
-      "landing": "forward_sites.cpp:2792-2802 (semantic proxy; exact task-local mutant unexecuted)",
+      "landing": "forward_sites.cpp:2792-2802 (semantic proxy only)",
       "source": "src/forward/forward_sites.cpp",
       "source_sha256": "3b00401884b54be9b9e20ee8d981838f6362e70277cb3e9b2bcef4d7bfdf7df8",
       "reading": "FAIL tie max_tasks=0 got=64 expected=0",
       "classification": "semantic proxy only"
+    },
+    {
+      "id": "c_exact",
+      "landing": "forward_sites.cpp:2792-2864 (task-local argmax, last-wins merge)",
+      "source": "src/forward/forward_sites.cpp",
+      "source_sha256": "9f105d5fdc47adacc227d3cc2128922b1d58f06fbd8b9aac119f2e38d97e3935",
+      "reading": "FAIL integrated tie cpu/T3 got=[64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64] baseline=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
+      "classification": "executed exact task-local mutant killed"
     },
     {
       "id": "d",
@@ -223,6 +231,22 @@
       "source": "src/gpu/d3d12_harness.h",
       "source_sha256": "6ca7499a8997f0ac88fcdbcfd463fc3c8dfa92a728c0fb4a38e7cadd3c17a96e",
       "reading": "FAIL Close creation: one failure made same context unusable",
+      "classification": "executed production mutant killed"
+    },
+    {
+      "id": "q_cpu",
+      "landing": "sslm_abi.cpp:2592 (all-masked injection disconnected)",
+      "source": "src/sslm_abi.cpp",
+      "source_sha256": "e6dcba9edeac18c604333c848043d79978692479abd45e8ac57f54970e3b2946",
+      "reading": "FAIL all-masked CPU status=0 token=4913 walk_same=0",
+      "classification": "executed production mutant killed"
+    },
+    {
+      "id": "q_gpu",
+      "landing": "gpu_1p0.cpp:2970 (all-masked injection disconnected)",
+      "source": "src/gpu/gpu_1p0.cpp",
+      "source_sha256": "062e7b6f6ca4a7315473d519b0535ffdca8d00e1c720278f21b52c20cde07c51",
+      "reading": "FAIL all-masked GPU status=0 token=4913 walk_same=1",
       "classification": "executed production mutant killed"
     }
   ]

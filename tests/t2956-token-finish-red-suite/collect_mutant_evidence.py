@@ -7,13 +7,14 @@ import re
 
 HERE = Path(__file__).resolve().parent
 LOGS = Path(r"D:\_t2956-mutants\logs")
-IDS = ("a b b2 c d e f g h h2 i j k l1 l2 l3 l4 l5 l6 m n "
-       "n2_upload n2_restore n3_upload n3_restore o o2 p").split()
+IDS = ("a b b2 c c_exact d e f g h h2 i j k l1 l2 l3 l4 l5 l6 m n "
+       "n2_upload n2_restore n3_upload n3_restore o o2 p q_cpu q_gpu").split()
 LANDING = {
     "a": "forward_sites.cpp:2838",
     "b": "forward_sites.cpp:2848-2851",
     "b2": "forward_sites.cpp:2848-2851",
-    "c": "forward_sites.cpp:2792-2802 (semantic proxy; exact task-local mutant unexecuted)",
+    "c": "forward_sites.cpp:2792-2802 (semantic proxy only)",
+    "c_exact": "forward_sites.cpp:2792-2864 (task-local argmax, last-wins merge)",
     "d": "logits_site.hlsl:75",
     "e": "gpu_1p0.cpp:985-988",
     "f": "gpu_1p0.cpp:985-988",
@@ -28,6 +29,8 @@ LANDING = {
     "o": "gpu_1p0.cpp:922",
     "o2": "gpu_1p0.cpp:4142",
     "p": "d3d12_harness.h:412-418",
+    "q_cpu": "sslm_abi.cpp:2592 (all-masked injection disconnected)",
+    "q_gpu": "gpu_1p0.cpp:2970 (all-masked injection disconnected)",
 }
 
 
@@ -49,6 +52,9 @@ def main() -> None:
         lines = read_log(folder / "cell.txt").splitlines()
         failed = [line.strip().split(" : ", 1)[-1] for line in lines
                   if re.search(r"(?:^|: )FAIL (?!HR )", line)]
+        if ident.startswith("q_"):
+            failed = [line.strip().split(" : ", 1)[-1] for line in lines
+                      if "FAIL all-masked " in line]
         if not failed:
             raise RuntimeError(f"{ident}: no failing cell assertion")
         landing = LANDING.get(ident)
@@ -63,6 +69,7 @@ def main() -> None:
         results.append({"id": ident, "landing": landing, "source": matches[0][0],
                         "source_sha256": matches[0][1], "reading": failed[0],
                         "classification": "semantic proxy only" if ident == "c" else
+                                          "executed exact task-local mutant killed" if ident == "c_exact" else
                                           "executed production mutant killed"})
     target = HERE / "mutant_evidence.json"
     target.write_text(json.dumps({"builder_commit":

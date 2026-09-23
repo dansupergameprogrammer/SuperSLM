@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <set>
 #include <string>
 #include <thread>
@@ -20,6 +21,10 @@
 #include "superslm/gpu_1p0_g5_bridge.h"
 #include "superslm/gpu_port.h"
 #include "superslm/model.h"
+#if defined(T2956_ALL_MASKED)
+extern "C" void ArmCpuFinishDegenerateLogitRowInjection();
+extern "C" void ArmGpuFinishDegenerateLogitRowInjection();
+#endif
 #if defined(T2956_CANDIDATE)
 #include "superslm/parallel_for.h"
 extern "C" sslm_status sslm_workspace_set_parallel_for(sslm_workspace, const sslm_parallel_for*);
@@ -45,14 +50,44 @@ std::vector<uint8_t> Read(const char* path) {
     return ok ? bytes : std::vector<uint8_t>{};
 }
 
-std::set<DWORD> Threads() {
-    std::set<DWORD> result;
+struct ThreadOrigin {
+    uintptr_t start = 0;
+    std::string module = "<unresolved>";
+};
+using ThreadSnapshot = std::map<DWORD, ThreadOrigin>;
+
+ThreadOrigin Origin(DWORD id) {
+    ThreadOrigin origin;
+    HANDLE thread = OpenThread(THREAD_QUERY_INFORMATION, FALSE, id);
+    if (!thread) return origin;
+    using QueryThread = LONG (NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+    const auto query = reinterpret_cast<QueryThread>(GetProcAddress(
+        GetModuleHandleA("ntdll.dll"), "NtQueryInformationThread"));
+    void* start = nullptr;
+    if (query && query(thread, 9 /* ThreadQuerySetWin32StartAddress */,
+                       &start, sizeof start, nullptr) >= 0) {
+        origin.start = reinterpret_cast<uintptr_t>(start);
+        HMODULE module = nullptr;
+        if (start && GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                    GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                    reinterpret_cast<LPCSTR>(start), &module)) {
+            char path[MAX_PATH]{};
+            if (GetModuleFileNameA(module, path, MAX_PATH)) origin.module = path;
+        }
+    }
+    CloseHandle(thread);
+    return origin;
+}
+
+ThreadSnapshot Threads() {
+    ThreadSnapshot result;
     HANDLE h = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
     if (h == INVALID_HANDLE_VALUE) return result;
     THREADENTRY32 e{};
     e.dwSize = sizeof e;
     if (Thread32First(h, &e)) do {
-        if (e.th32OwnerProcessID == GetCurrentProcessId()) result.insert(e.th32ThreadID);
+        if (e.th32OwnerProcessID == GetCurrentProcessId())
+            result.emplace(e.th32ThreadID, Origin(e.th32ThreadID));
     } while (Thread32Next(h, &e));
     CloseHandle(h);
     return result;
@@ -60,15 +95,56 @@ std::set<DWORD> Threads() {
 
 struct Hook {
     DWORD caller = 0;
-    std::set<DWORD> before;
+    ThreadSnapshot before;
+    ThreadSnapshot observed_new;
+    std::set<DWORD> new_threads;
+    std::set<DWORD> disappeared;
     int calls = 0;
     int tasks = 0;
     int wrong_thread = 0;
     int excess_tasks = 0;
     int changed_census = 0;
     int max_tasks = 0;
+    bool spawn_probe = false;
+    bool probe_fired = false;
     std::string malformed;
 };
+
+void CheckThreads(Hook& hook, const ThreadSnapshot& now, bool in_hook) {
+    bool new_at_snapshot = false;
+    for (const auto& [id, _] : now) {
+        if (!hook.before.contains(id)) {
+            hook.new_threads.insert(id);
+            hook.observed_new.emplace(id, now.at(id));
+            new_at_snapshot = true;
+        }
+    }
+    for (const auto& [id, _] : hook.before)
+        if (!now.contains(id)) hook.disappeared.insert(id);
+    if (in_hook && new_at_snapshot) ++hook.changed_census;
+}
+
+void ReportThreads(Hook& hook, const ThreadSnapshot& after) {
+    CheckThreads(hook, after, false);
+    for (DWORD id : hook.disappeared) {
+        const auto& origin = hook.before.at(id);
+        std::printf("THREAD_EXIT id=%lu start=%p module=%s\n", id,
+                    reinterpret_cast<void*>(origin.start), origin.module.c_str());
+    }
+    for (DWORD id : hook.new_threads) {
+        const auto& origin = hook.observed_new.at(id);
+        std::printf("THREAD_NEW id=%lu start=%p module=%s\n", id,
+                    reinterpret_cast<void*>(origin.start), origin.module.c_str());
+    }
+    const bool same_ids = hook.before.size() == after.size() &&
+        std::all_of(hook.before.begin(), hook.before.end(),
+                    [&](const auto& entry) { return after.contains(entry.first); });
+    std::printf("THREADS before=%zu after=%zu same=%d new=%zu disappeared=%zu "
+                "hook_calls=%d task_calls=%d wrong_caller=%d bad_count=%d changed_at_hook=%d\n",
+                hook.before.size(), after.size(), same_ids,
+                hook.new_threads.size(), hook.disappeared.size(), hook.calls, hook.tasks,
+                hook.wrong_thread, hook.excess_tasks, hook.changed_census);
+}
 
 #if defined(T2956_CANDIDATE)
 void RunInline(void* host, int32_t count, sslm_task_fn task, void* ctx) {
@@ -77,7 +153,19 @@ void RunInline(void* host, int32_t count, sslm_task_fn task, void* ctx) {
     h.tasks += count;
     if (GetCurrentThreadId() != h.caller) ++h.wrong_thread;
     if (count < 1 || count > h.max_tasks) ++h.excess_tasks;
-    if (Threads() != h.before) ++h.changed_census;
+    CheckThreads(h, Threads(), true);
+    if (h.spawn_probe && !h.probe_fired) {
+        h.probe_fired = true;
+        std::atomic<bool> ready{false}, done{false};
+        std::thread extra([&] {
+            ready.store(true, std::memory_order_release);
+            while (!done.load(std::memory_order_acquire)) std::this_thread::yield();
+        });
+        while (!ready.load(std::memory_order_acquire)) std::this_thread::yield();
+        CheckThreads(h, Threads(), true); // must-reject: the new thread is alive here
+        done.store(true, std::memory_order_release);
+        extra.join();
+    }
     if (h.malformed == "omit0") {
         for (int32_t i = 1; i < count; ++i) task(ctx, i);
     } else if (h.malformed == "omitlast") {
@@ -174,6 +262,7 @@ int Cpu(sslm_model model, const std::vector<int32_t>& prompt, const char* schema
     hook.before = Threads();
     hook.max_tasks = max_tasks;
     hook.malformed = malformed;
+    hook.spawn_probe = GetEnvironmentVariableA("T2956_THREAD_SPAWN_PROBE", nullptr, 0) != 0;
 #if defined(T2956_CANDIDATE)
     sslm_parallel_for pf = MakeHook(hook);
     if (sslm_workspace_set_parallel_for(ws, max_tasks ? &pf : nullptr) != SSLM_OK) return 26;
@@ -201,6 +290,26 @@ int Cpu(sslm_model model, const std::vector<int32_t>& prompt, const char* schema
         done += consumed;
     }
     if (hook.calls || hook.tasks) return 53; // prefill may not read the hook
+#if defined(T2956_ALL_MASKED)
+    if (GetEnvironmentVariableA("T2956_ALL_MASKED", nullptr, 0)) {
+        const auto before = CpuBlob(model, seq);
+        if (before.size() < 52) return 61;
+        ArmCpuFinishDegenerateLogitRowInjection();
+        int32_t out = -9;
+        const auto status = sslm_decode_step_v2(model, &seq, 1, &p, ws, &out);
+        const auto after = CpuBlob(model, seq);
+        const bool walk_same = after.size() >= 52 &&
+            std::memcmp(before.data() + 48, after.data() + 48, 4) == 0;
+        std::printf("ALL_MASKED backend=cpu status=%d token=%d walk_same=%d\n",
+                    static_cast<int>(status), out, walk_same);
+        if (status != SSLM_OK || out != -2 || !walk_same) {
+            std::printf("FAIL all-masked CPU status=%d token=%d walk_same=%d\n",
+                        static_cast<int>(status), out, walk_same);
+            return 62;
+        }
+        return 0;
+    }
+#endif
     if (malformed[0]) {
 #if defined(T2956_CANDIDATE)
         const auto before = CpuBlob(model, seq);
@@ -235,11 +344,8 @@ int Cpu(sslm_model model, const std::vector<int32_t>& prompt, const char* schema
         tokens.push_back(out);
     }
     const auto after = Threads();
-    std::printf("THREADS before=%zu after=%zu same=%d hook_calls=%d task_calls=%d wrong_caller=%d "
-                "bad_count=%d changed_at_hook=%d\n", hook.before.size(), after.size(),
-                hook.before == after, hook.calls, hook.tasks, hook.wrong_thread,
-                hook.excess_tasks, hook.changed_census);
-    if (hook.before != after || hook.wrong_thread || hook.excess_tasks || hook.changed_census ||
+    ReportThreads(hook, after);
+    if (!hook.new_threads.empty() || hook.wrong_thread || hook.excess_tasks ||
         (max_tasks > 1 && hook.calls == 0)) return 29;
     std::printf("TOKENS");
     for (int32_t t : tokens) std::printf(" %d", t);
@@ -280,6 +386,7 @@ int Gpu(const uint8_t* bytes, size_t size, const std::vector<int32_t>& prompt,
     hook.before = Threads();
     hook.max_tasks = max_tasks;
     hook.malformed = malformed;
+    hook.spawn_probe = GetEnvironmentVariableA("T2956_THREAD_SPAWN_PROBE", nullptr, 0) != 0;
 #if defined(T2956_CANDIDATE)
     sslm_parallel_for pf = MakeHook(hook);
     if (sslm_gpu_context_set_host_parallel_for(ctx, max_tasks ? &pf : nullptr) !=
@@ -300,6 +407,26 @@ int Gpu(const uint8_t* bytes, size_t size, const std::vector<int32_t>& prompt,
     if (SslmGpuSeqPrefillPromptForG5Bridge(ctx, seq, prompt.data(),
             static_cast<int32_t>(prompt.size()), budget) != SslmGpuStatus::SSLM_OK) return 38;
     if (hook.calls || hook.tasks) return 54; // GPU prefill may not read the hook
+#if defined(T2956_ALL_MASKED)
+    if (GetEnvironmentVariableA("T2956_ALL_MASKED", nullptr, 0)) {
+        const auto before = GpuBlob(ctx, seq);
+        if (before.size() < 52) return 63;
+        ArmGpuFinishDegenerateLogitRowInjection();
+        int32_t out = -9;
+        const auto status = SslmGpuSeqFinishTokenForG5Bridge(ctx, seq, &out);
+        const auto after = GpuBlob(ctx, seq);
+        const bool walk_same = after.size() >= 52 &&
+            std::memcmp(before.data() + 48, after.data() + 48, 4) == 0;
+        std::printf("ALL_MASKED backend=gpu status=%u token=%d walk_same=%d\n",
+                    static_cast<unsigned>(status), out, walk_same);
+        if (status != SslmGpuStatus::SSLM_OK || out != -2 || !walk_same) {
+            std::printf("FAIL all-masked GPU status=%u token=%d walk_same=%d\n",
+                        static_cast<unsigned>(status), out, walk_same);
+            return 64;
+        }
+        return 0;
+    }
+#endif
     char overflow_value[2]{};
     const bool overflow = GetEnvironmentVariableA("T2956_OVERFLOW", overflow_value,
                                                   sizeof overflow_value) != 0;
@@ -378,11 +505,8 @@ int Gpu(const uint8_t* bytes, size_t size, const std::vector<int32_t>& prompt,
         tokens.push_back(out);
     }
     const auto after = Threads();
-    std::printf("THREADS before=%zu after=%zu same=%d hook_calls=%d task_calls=%d wrong_caller=%d "
-                "bad_count=%d changed_at_hook=%d\n", hook.before.size(), after.size(),
-                hook.before == after, hook.calls, hook.tasks, hook.wrong_thread,
-                hook.excess_tasks, hook.changed_census);
-    if (hook.before != after || hook.wrong_thread || hook.excess_tasks || hook.changed_census ||
+    ReportThreads(hook, after);
+    if (!hook.new_threads.empty() || hook.wrong_thread || hook.excess_tasks ||
         (max_tasks > 1 && !device_head && hook.calls == 0)) return 44;
     std::printf("TOKENS");
     for (int32_t t : tokens) std::printf(" %d", t);

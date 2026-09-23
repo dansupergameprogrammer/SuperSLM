@@ -30,6 +30,8 @@ def execute(exe: Path, backend: str, model: Path, schema: str, count: int,
     if malformed:
         args.append(malformed)
     env = dict(os.environ)
+    env.pop("T2956_THREAD_SPAWN_PROBE", None)
+    env.pop("T2956_ALL_MASKED", None)
     env.pop("T2956_DAMPED", None)
     if damped:
         env["T2956_DAMPED"] = "1"
@@ -53,7 +55,7 @@ def execute(exe: Path, backend: str, model: Path, schema: str, count: int,
         raise RuntimeError(f"{exe.name} generated zero tokens")
     if not malformed and not overflow:
         census = [x for x in result.stdout.splitlines() if x.startswith("THREADS")]
-        if len(census) != 1 or "same=1" not in census[0] or "changed_at_hook=0" not in census[0]:
+        if len(census) != 1 or "new=0" not in census[0] or "changed_at_hook=0" not in census[0]:
             raise RuntimeError(f"thread census failed: {result.stdout}")
         if tasks > 1 and not device and "hook_calls=0 " in census[0]:
             raise RuntimeError(f"hook installed but not invoked: {result.stdout}")
