@@ -21,6 +21,8 @@ SslmGpuStatus SslmGpuDeviceLogitsRunForTest(
 void SslmGpuDeviceLogitsBundleResourcesForTest(
     const SslmGpuDeviceLogitsBundleForTest*, uint64_t out_gpu_vas[5]) noexcept;
 void SslmGpuDeviceLogitsBundleDestroyForTest(SslmGpuDeviceLogitsBundleForTest*) noexcept;
+void SslmGpuAllocCounterResetForTest() noexcept;
+uint32_t SslmGpuAllocCountForTest() noexcept;
 
 namespace {
 std::vector<uint8_t> Read(const char* path) {
@@ -58,8 +60,14 @@ bool Run(SslmGpuContext* ctx, const int8_t* head, uint32_t V, uint32_t H, int co
                 x[k] = static_cast<int8_t>(static_cast<int>((rng >> 16) % 255) - 127);
             }
         }
-        if (SslmGpuDeviceLogitsRunForTest(ctx, bundle, x.data(), gpu.data()) !=
-            SslmGpuStatus::SSLM_OK) return false;
+        SslmGpuAllocCounterResetForTest();
+        const auto status = SslmGpuDeviceLogitsRunForTest(ctx, bundle, x.data(), gpu.data());
+        const auto allocations = SslmGpuAllocCountForTest();
+        if (status != SslmGpuStatus::SSLM_OK || allocations != 0) {
+            std::fprintf(stderr, "FAIL device run V=%u H=%u trial=%d status=%u allocations=%u\n",
+                         V, H, trial, static_cast<unsigned>(status), allocations);
+            return false;
+        }
         if (superslm::LogitsSite(x.data(), H, head, V, cpu.data(), narrowed.data()) !=
             superslm::SslmForwardStatus::Ok || gpu != cpu) {
             std::fprintf(stderr, "FAIL wide row V=%u H=%u trial=%d\n", V, H, trial);
@@ -84,8 +92,14 @@ bool Overflow(SslmGpuContext* ctx) {
     SslmGpuDeviceLogitsBundleResourcesForTest(bundle, before);
     for (int phase = 0; phase < 3; ++phase) {
         std::fill(x.begin(), x.end(), static_cast<int8_t>(phase == 1 ? 0 : -127));
-        if (SslmGpuDeviceLogitsRunForTest(ctx, bundle, x.data(), wide.data()) !=
-            SslmGpuStatus::SSLM_OK) return false;
+        SslmGpuAllocCounterResetForTest();
+        const auto status = SslmGpuDeviceLogitsRunForTest(ctx, bundle, x.data(), wide.data());
+        const auto allocations = SslmGpuAllocCountForTest();
+        if (status != SslmGpuStatus::SSLM_OK || allocations != 0) {
+            std::fprintf(stderr, "FAIL RO phase=%d status=%u allocations=%u\n", phase,
+                         static_cast<unsigned>(status), allocations);
+            return false;
+        }
         for (int64_t value : wide) {
             const int64_t expected = phase == 1 ? 0 : 2147612672LL;
             if (value != expected) {

@@ -1,7 +1,9 @@
 // T-2851 row 5(xiii): count actual allocations for each claim-5 call, then
 // fault every occurrence and retry on the same GPU context.
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 #define WIN32_LEAN_AND_MEAN
@@ -102,10 +104,31 @@ const char* kNames[] = {"model_clear", "model_head", "adapter", "sequence_create
 }
 
 int main(int argc, char** argv) {
-    if (argc != 3) return 2;
+    if (argc != 3 && argc != 5) return 2;
+    const bool focused = argc == 5;
+    int focus_kind = -1;
+    uint32_t focus_slot = 0;
+    if (focused) {
+        for (int i = 0; i < 5; ++i)
+            if (std::strcmp(argv[3], kNames[i]) == 0) focus_kind = i;
+        focus_slot = static_cast<uint32_t>(std::atoi(argv[4]));
+        if (focus_kind < 0 || focus_slot == 0) return 2;
+    }
     Fixture fx;
     if (!fx.Setup(argv[1], argv[2])) return 3;
     for (int kind = 0; kind < 5; ++kind) {
+        if (focused && kind != focus_kind) continue;
+        // Warm the call before counting. In particular, the first restore initializes
+        // the process-wide device and allocates its timestamp buffer once. That
+        // allocation is outside restore and must never be the fault target.
+        void* warm = nullptr;
+        const auto warm_status = fx.Call(kind, &warm);
+        fx.Release(kind, warm);
+        if (warm_status != SslmGpuStatus::SSLM_OK || !warm) {
+            std::fprintf(stderr, "FAIL warm %s status=%u handle=%p\n", kNames[kind],
+                         static_cast<unsigned>(warm_status), warm);
+            return 10;
+        }
         SslmGpuAllocCounterResetForTest();
         void* clean = nullptr;
         const auto clean_status = fx.Call(kind, &clean);
@@ -119,7 +142,16 @@ int main(int argc, char** argv) {
             return 4;
         }
         std::printf("COUNT %s n=%u\n", kNames[kind], count);
+        uint32_t selected = focus_slot;
+        if (focused && kind == 1) {
+            selected = 0;
+            uint32_t seen = 0;
+            for (uint32_t k = 1; k <= count; ++k)
+                if (bundle[k] && ++seen == focus_slot) { selected = k; break; }
+        }
+        if (focused && (selected == 0 || selected > count)) return 11;
         for (uint32_t k = 1; k <= count; ++k) {
+            if (focused && k != selected) continue;
             SslmGpuAllocCounterResetForTest();
             ArmGpuAllocFaultAtOccurrence(k, E_OUTOFMEMORY);
             void* failed = nullptr;
@@ -144,7 +176,7 @@ int main(int argc, char** argv) {
             std::printf("FAULT %s k=%u status=%u retry=0\n", kNames[kind], k,
                         static_cast<unsigned>(got));
         }
-        if (kind == 1) {
+        if (kind == 1 && !focused) {
             uint32_t second_bundle = 0;
             for (uint32_t k = 1, seen = 0; k <= count; ++k) {
                 if (bundle[k] && ++seen == 2) { second_bundle = k; break; }
@@ -153,12 +185,22 @@ int main(int argc, char** argv) {
             SslmGpuAllocCounterResetForTest();
             ArmGpuAllocFaultAtOccurrence(second_bundle, DXGI_ERROR_DEVICE_REMOVED);
             void* failed = nullptr;
-            if (fx.Call(kind, &failed) != SslmGpuStatus::SSLM_DEVICE_LOST || failed) return 8;
+            const auto removed_status = fx.Call(kind, &failed);
+            if (removed_status != SslmGpuStatus::SSLM_DEVICE_LOST || failed) {
+                std::fprintf(stderr, "FAIL removed model_head k=%u got=%u expected=8 handle=%p\n",
+                             second_bundle, static_cast<unsigned>(removed_status), failed);
+                return 8;
+            }
             SslmGpuAllocCounterResetForTest();
             ArmGpuMapDeviceRemovedQueryInjection();
             ArmGpuAllocFaultAtOccurrence(second_bundle, E_OUTOFMEMORY);
             failed = nullptr;
-            if (fx.Call(kind, &failed) != SslmGpuStatus::SSLM_DEVICE_LOST || failed) return 9;
+            const auto query_status = fx.Call(kind, &failed);
+            if (query_status != SslmGpuStatus::SSLM_DEVICE_LOST || failed) {
+                std::fprintf(stderr, "FAIL removed-query model_head k=%u got=%u expected=8 handle=%p\n",
+                             second_bundle, static_cast<unsigned>(query_status), failed);
+                return 9;
+            }
             std::printf("FAULT model_head k=%u DXGI_ERROR_DEVICE_REMOVED=device_loss "
                         "OOM_with_removed_reason=device_loss\n", second_bundle);
         }

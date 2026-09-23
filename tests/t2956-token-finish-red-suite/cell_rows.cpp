@@ -1,9 +1,11 @@
 // T-2851 rows 4 and 6: the wide and narrowed row must equal serial LogitsSite.
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 #include "superslm/forward_sites.h"
 #include "superslm/model.h"
@@ -25,6 +27,44 @@ void Reverse(void* host, int32_t count, sslm_task_fn task, void* ctx) {
     ++state.calls;
     if (count < 1 || count > state.max_tasks) ++state.bad_count;
     for (int32_t i = count - 1; i >= 0; --i) task(ctx, i);
+}
+void SleepConcurrent(void* host, int32_t count, sslm_task_fn task, void* ctx) {
+    auto& state = *static_cast<Invocation*>(host);
+    ++state.calls;
+    if (count < 1 || count > state.max_tasks) ++state.bad_count;
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<size_t>(count));
+    for (int32_t i = 0; i < count; ++i) workers.emplace_back([=] {
+        std::this_thread::sleep_for(std::chrono::milliseconds((i * 7 + 1) % 3));
+        task(ctx, i);
+    });
+    for (auto& worker : workers) worker.join();
+}
+
+bool CompareSleep(const int8_t* head, size_t vocab, size_t hidden) {
+    std::vector<int8_t> x(hidden, 127);
+    std::vector<int64_t> reference_wide(vocab), concurrent_wide(vocab);
+    std::vector<int32_t> reference(vocab), concurrent(vocab);
+    if (superslm::LogitsSite(x.data(), hidden, head, vocab,
+            reference_wide.data(), reference.data()) != superslm::SslmForwardStatus::Ok)
+        return false;
+    for (int tasks : {3, 4, 7}) {
+        Invocation inv{};
+        inv.max_tasks = tasks;
+        sslm_parallel_for pf{};
+        pf.run = &SleepConcurrent;
+        pf.host_ctx = &inv;
+        pf.max_tasks = tasks;
+        const auto status = superslm::LogitsSiteParallel(x.data(), hidden, head, vocab,
+            concurrent_wide.data(), concurrent.data(), &pf);
+        if (status != superslm::SslmForwardStatus::Ok || inv.calls != 1 || inv.bad_count ||
+            concurrent_wide != reference_wide || concurrent != reference) {
+            std::fprintf(stderr, "FAIL sleeping concurrent run tasks=%d status=%d calls=%d\n",
+                         tasks, static_cast<int>(status), inv.calls);
+            return false;
+        }
+    }
+    return true;
 }
 
 std::vector<uint8_t> Read(const char* path) {
@@ -77,9 +117,14 @@ bool Compare(const int8_t* head, size_t vocab, size_t hidden, int vectors) {
                              vector, tasks, static_cast<int>(status), inv.calls);
                 return false;
             }
-            if (vocab == 70 && vector == 0 &&
-                superslm::ArgmaxLowestIndexTieBreak(candidate.data(), vocab) != 0)
-                return false;
+            if (vocab == 70 && vector == 0) {
+                const auto best = superslm::ArgmaxLowestIndexTieBreak(candidate.data(), vocab);
+                if (best != 0) {
+                    std::fprintf(stderr, "FAIL tie max_tasks=%d got=%d expected=0\n", tasks,
+                                 best);
+                    return false;
+                }
+            }
         }
     }
     return true;
@@ -100,11 +145,13 @@ int main(int argc, char** argv) {
         head->shape[1] != model.config.hidden_size) return 5;
     if (!Compare(reinterpret_cast<const int8_t*>(head->data), model.config.vocab_size,
                  model.config.hidden_size, 103)) return 6;
+    if (!CompareSleep(reinterpret_cast<const int8_t*>(head->data), model.config.vocab_size,
+                      model.config.hidden_size)) return 8;
     // A tie across the 64-row partition boundary exercises the serial tail.
     constexpr size_t V = 70, H = 8;
     std::vector<int8_t> synthetic(V * H, 0);
     for (size_t k = 0; k < H; ++k) synthetic[k] = synthetic[64 * H + k] = 1;
     if (!Compare(synthetic.data(), V, H, 3)) return 7;
-    std::printf("PASS row_identity vectors=103 settings=9 synthetic_tie=0,64\n");
+    std::printf("PASS row_identity vectors=103 settings=9 synthetic_tie=0,64 sleep_tasks=3,4,7\n");
     return 0;
 }

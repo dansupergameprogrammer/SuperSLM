@@ -41,6 +41,8 @@
 
 static_assert(sizeof(GpuContextConfig) == 16 && offsetof(GpuContextConfig, shader_dir) == 8,
               "T-2948 mirror config ABI must match the production header on x64");
+static_assert(sizeof(GpuResidencyConfig) == 4 && offsetof(GpuResidencyConfig, flags) == 0,
+              "T-2851 mirror residency config ABI must match the production header");
 
 static int GChecks = 0;
 static int GFailures = 0;

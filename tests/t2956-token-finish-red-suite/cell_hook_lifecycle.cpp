@@ -154,7 +154,11 @@ int main(int argc, char** argv) {
     int32_t content_consumed = 0;
     if (sslm_prefill(model, schema_target, &content_token, 1, 64,
                      SSLM_SPAN_SCHEMA_CONTENT, a.handle, &content_consumed) != SSLM_OK ||
-        content_consumed != 1 || state_a.calls.load() || state_b.calls.load()) return 29;
+        content_consumed != 1 || state_a.calls.load() || state_b.calls.load()) {
+        std::fprintf(stderr, "FAIL schema-content prefill hook calls a=%d b=%d consumed=%d\n",
+                     state_a.calls.load(), state_b.calls.load(), content_consumed);
+        return 29;
+    }
     sslm_seq_release(schema_target);
     int token_a = -1, token_b = -1;
     std::thread first([&] {

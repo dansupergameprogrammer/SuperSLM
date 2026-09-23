@@ -59,7 +59,12 @@ bool One(const char* path, bool tied) {
     const uint64_t clear_vram = Vram();
     const size_t want_copy = tied ? 0 :
         static_cast<size_t>(view.config.vocab_size) * view.config.hidden_size;
-    if (SslmGpuHeadWeightCopySizeForTest(model) != want_copy) return false;
+    const size_t clear_copy = SslmGpuHeadWeightCopySizeForTest(model);
+    if (clear_copy != want_copy) {
+        std::fprintf(stderr, "FAIL head copy %s clear=%zu expected=%zu\n",
+                     path, clear_copy, want_copy);
+        return false;
+    }
     sslm_gpu_model_unmap(ctx, model);
     const uint64_t after_clear = Vram();
     if (after_clear > initial + 65536u) return false;
@@ -72,7 +77,12 @@ bool One(const char* path, bool tied) {
     model = nullptr;
     if (sslm_gpu_model_map(ctx, &view, flagged, &model) != SslmGpuStatus::SSLM_OK) return false;
     const uint64_t flagged_vram = Vram();
-    if (SslmGpuHeadWeightCopySizeForTest(model) != 0) return false;
+    const size_t flagged_copy = SslmGpuHeadWeightCopySizeForTest(model);
+    if (flagged_copy != 0) {
+        std::fprintf(stderr, "FAIL head copy %s flagged=%zu expected=0\n", path,
+                     flagged_copy);
+        return false;
+    }
     const uint64_t head = static_cast<uint64_t>(view.config.vocab_size) * view.config.hidden_size;
     const uint64_t x = static_cast<uint64_t>(view.config.hidden_size) * 4;
     const uint64_t out = static_cast<uint64_t>(view.config.vocab_size) * 8;

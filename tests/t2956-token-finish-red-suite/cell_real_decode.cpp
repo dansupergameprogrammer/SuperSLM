@@ -311,8 +311,11 @@ int Gpu(const uint8_t* bytes, size_t size, const std::vector<int32_t>& prompt,
         ArmGpuDeviceLogitsReadbackOverride(17, 2147483648LL);
         int32_t refused_token = -99;
         const auto refused = SslmGpuSeqFinishTokenForG5Bridge(ctx, seq, &refused_token);
-        if (refused != SslmGpuStatus::SSLM_SEQUENCE_REJECTED || GpuBlob(ctx, seq) != before)
+        if (refused != SslmGpuStatus::SSLM_SEQUENCE_REJECTED || GpuBlob(ctx, seq) != before) {
+            std::fprintf(stderr, "FAIL overflow status=%u token=%d\n",
+                         static_cast<unsigned>(refused), refused_token);
             return 57;
+        }
         int32_t retry = -99;
         if (SslmGpuSeqFinishTokenForG5Bridge(ctx, seq, &retry) != SslmGpuStatus::SSLM_OK || retry < 0)
             return 58;
@@ -364,7 +367,11 @@ int Gpu(const uint8_t* bytes, size_t size, const std::vector<int32_t>& prompt,
 #endif
         if (SslmGpuSeqFinishTokenForG5Bridge(ctx, seq, &out) != SslmGpuStatus::SSLM_OK) return 42;
 #if defined(T2956_CANDIDATE)
-        if (device_head && SslmGpuAllocCountForTest() != 0) return 60;
+        if (device_head && SslmGpuAllocCountForTest() != 0) {
+            std::fprintf(stderr, "FAIL finish device allocations=%u\n",
+                         SslmGpuAllocCountForTest());
+            return 60;
+        }
 #endif
         if (out == -2) break;
         if (out < 0) return 43;

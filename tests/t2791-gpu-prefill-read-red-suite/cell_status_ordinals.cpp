@@ -1,5 +1,5 @@
 // T-2791 (Curie) -- plan Sec3.4 row 9 (persistence and version evolution): "The existing enum
-// ordinals are unchanged (a test pins the two new ordinals as the last two)."
+// ordinals are unchanged (the switch pins every current enumerator)."
 //
 // Oracle: the v1.5.0 header's own enumerator order (include/superslm/gpu_1p0.h @ 321be46), read
 // and transcribed here as literal ordinals, and plan Sec3.1's "Appended LAST to SslmGpuStatus;
@@ -11,7 +11,7 @@
 //
 // Mutation proof: inserting either new status anywhere but last moves at least one existing
 // ordinal below and breaks its static_assert; appending them in the other order breaks the pair
-// of asserts at the end; appending a third status after them breaks the "last" assert.
+// of asserts at the end; appending another status breaks the exhaustive switch.
 #include <cstdio>
 #include <type_traits>
 
@@ -49,13 +49,12 @@ PIN(SSLM_OUTPUT_BUFFER_TOO_SMALL, 17);
 PIN(SSLM_PREFILL_HIDDEN_UNAVAILABLE, 18);
 PIN(SSLM_GPU_SHADER_DIR_INVALID, 19);
 PIN(SSLM_GPU_SHADER_DIR_CONFLICT, 20);
+PIN(SSLM_GPU_PARALLEL_FOR_INVALID, 21);
+PIN(SSLM_GPU_PARALLEL_FOR_INCOMPLETE, 22);
+PIN(SSLM_GPU_RESIDENCY_FLAGS_INVALID, 23);
 
-// "Last": no enumerator follows them. An enum class has no count, so this is asserted through
-// the one property an appended enumerator would change -- the value after the last is not a
-// named status. The suite's own StatusName table (fixture_common.h) maps exactly 0..18; this
-// file re-checks the boundary against the header by requiring the next ordinal to be unnamed in
-// the only way C++ allows: a switch over every named enumerator with no default compiles
-// warning-free under /W4 /we4062 only if the list below is complete.
+// "Last": a switch over every named enumerator with no default compiles warning-free under
+// /W4 /we4062 only if the list below is complete. The appended T-2851 values are 21..23.
 #pragma warning(error : 4062)  // enumerator not handled in switch: fails the build here
 constexpr int AllNamed(SslmGpuStatus s) {
 	switch (s) {
@@ -80,13 +79,16 @@ constexpr int AllNamed(SslmGpuStatus s) {
 		case SSLM_PREFILL_HIDDEN_UNAVAILABLE:
 		case SSLM_GPU_SHADER_DIR_INVALID:
 		case SSLM_GPU_SHADER_DIR_CONFLICT:
+		case SSLM_GPU_PARALLEL_FOR_INVALID:
+		case SSLM_GPU_PARALLEL_FOR_INCOMPLETE:
+		case SSLM_GPU_RESIDENCY_FLAGS_INVALID:
 			return 1;
 	}
 	return 0;
 }
-static_assert(AllNamed(SSLM_GPU_SHADER_DIR_CONFLICT) == 1, "the switch above names every status");
+static_assert(AllNamed(SSLM_GPU_RESIDENCY_FLAGS_INVALID) == 1, "the switch above names every status");
 
 int main() {
-	std::printf("cell_status_ordinals: 21 ordinals pinned at compile time -> PASS\n");
+	std::printf("cell_status_ordinals: 24 ordinals pinned at compile time -> PASS\n");
 	return 0;
 }

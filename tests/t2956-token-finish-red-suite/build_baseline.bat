@@ -17,4 +17,11 @@ cl /nologo /std:c++20 /W4 /EHsc /MD /fp:precise /DT2956_BASELINE ^
   d3d12.lib dxgi.lib dxguid.lib >"%HERE%out\build_baseline.log" 2>&1
 set CODE=%errorlevel%
 type "%HERE%out\build_baseline.log"
+if not "%CODE%"=="0" exit /b %CODE%
+cl /nologo /std:c++20 /W4 /EHsc /MD /fp:precise /DT2956_BASELINE ^
+  /I"%REPO%\include" /Fe"%HERE%out\cell_private_bytes_base.exe" ^
+  "%HERE%cell_private_bytes.cpp" "%T2956_BASE_CPU_LIB%" "%T2956_BASE_GPU_LIB%" ^
+  d3d12.lib dxgi.lib dxguid.lib psapi.lib >"%HERE%out\build_private_baseline.log" 2>&1
+set CODE=%errorlevel%
+type "%HERE%out\build_private_baseline.log"
 exit /b %CODE%

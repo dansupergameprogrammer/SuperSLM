@@ -73,8 +73,9 @@ typedef struct GpuContextConfig {
 	const char* shader_dir;  /* NULL keeps the process default; UTF-8 absolute path otherwise */
 } GpuContextConfig;
 typedef struct GpuResidencyConfig {
-	int reserved;  /* design Sec5.1 assigns no fields yet; zero-initialize */
+	uint32_t flags;  /* SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE or zero */
 } GpuResidencyConfig;
+#define SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE (1u << 0)
 
 /* --- status enum ---
  * Substrate at D:\SuperSLM main@495fbb4, include/superslm/gpu_port.h:472:
@@ -125,7 +126,10 @@ typedef enum SslmGpuStatus {
     SSLM_OUTPUT_BUFFER_TOO_SMALL,
     SSLM_PREFILL_HIDDEN_UNAVAILABLE,
     SSLM_GPU_SHADER_DIR_INVALID,
-    SSLM_GPU_SHADER_DIR_CONFLICT
+    SSLM_GPU_SHADER_DIR_CONFLICT,
+    SSLM_GPU_PARALLEL_FOR_INVALID,
+    SSLM_GPU_PARALLEL_FOR_INCOMPLETE,
+    SSLM_GPU_RESIDENCY_FLAGS_INVALID
 } SslmGpuStatus;
 
 /* --- Sec4.1.1: context create/destroy --- */
