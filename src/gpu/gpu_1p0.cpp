@@ -1562,6 +1562,7 @@ SslmGpuStatus sslm_gpu_context_createImpl(GpuContextConfig cfg, SslmGpuContext**
 		// here rather than silently invoking undefined behavior.
 		return SSLM_DEVICE_LOST;
 	}
+	*out_ctx = nullptr;  // before any fallible work, so every refusal below leaves it null
 
 	std::wstring shader_dir;  // normalized override; empty when cfg.shader_dir is null
 	if (cfg.shader_dir != nullptr) {
@@ -3918,6 +3919,17 @@ SslmGpuStatus InvokeGpuApiBoundary(const char* name, Fn&& fn) noexcept {
 		return SSLM_DEVICE_LOST;
 	}
 }
+
+// Every public entry point with an output handle clears a non-null slot here, before the
+// boundary runs, so every refusal -- including SSLM_GPU_ALLOCATION_FAILED produced by the
+// boundary itself from a contained exception -- leaves the handle null. A null slot is left
+// undereferenced, and the implementation reports its existing status for it.
+template <typename Handle>
+void ClearOutputHandle(Handle** out) noexcept {
+	if (out) {
+		*out = nullptr;
+	}
+}
 }  // namespace
 
 #if defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
@@ -3934,6 +3946,7 @@ void ClearSslmGpuApiFailureInjection() {
 #endif
 
 SslmGpuStatus sslm_gpu_context_create(GpuContextConfig cfg, SslmGpuContext** out_ctx) noexcept {
+	ClearOutputHandle(out_ctx);
 	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_context_createImpl(cfg, out_ctx); });
 }
 SslmGpuStatus sslm_gpu_context_destroy(SslmGpuContext* ctx) noexcept {
@@ -3947,6 +3960,7 @@ SslmGpuStatus sslm_gpu_context_set_host_parallel_for(SslmGpuContext* ctx,
 SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
                                   GpuResidencyConfig cfg,
                                   SslmGpuModelHandle** out_model) noexcept {
+	ClearOutputHandle(out_model);
 	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_model_mapImpl(ctx, base, cfg, out_model); });
 }
 SslmGpuStatus sslm_gpu_model_unmap(SslmGpuContext* ctx, SslmGpuModelHandle* model) noexcept {
@@ -3955,6 +3969,7 @@ SslmGpuStatus sslm_gpu_model_unmap(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 SslmGpuStatus sslm_gpu_adapter_map(SslmGpuContext* ctx, SslmGpuModelHandle* model,
                                     const SslmModelView* artifact,
                                     SslmGpuAdapterHandle** out_adapter) noexcept {
+	ClearOutputHandle(out_adapter);
 	return InvokeGpuApiBoundary(__func__, [&] {
 		return sslm_gpu_adapter_mapImpl(ctx, model, artifact, out_adapter);
 	});
@@ -3965,6 +3980,7 @@ SslmGpuStatus sslm_gpu_adapter_unmap(SslmGpuContext* ctx,
 }
 SslmGpuStatus sslm_gpu_seq_create(SslmGpuContext* ctx, SslmGpuModelHandle* model,
                                    int64_t cap, SslmGpuSequenceHandle** out_seq) noexcept {
+	ClearOutputHandle(out_seq);
 	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_seq_createImpl(ctx, model, cap, out_seq); });
 }
 SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) noexcept {
@@ -3985,6 +4001,7 @@ SslmGpuStatus sslm_gpu_seq_save(SslmGpuContext* ctx, const SslmGpuSequenceHandle
 SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* model,
                                     const void* blob, size_t size,
                                     SslmGpuSequenceHandle** out_seq) noexcept {
+	ClearOutputHandle(out_seq);
 	return InvokeGpuApiBoundary(__func__, [&] {
 		return sslm_gpu_seq_restoreImpl(ctx, model, blob, size, out_seq);
 	});

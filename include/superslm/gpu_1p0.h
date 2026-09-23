@@ -196,7 +196,9 @@ enum class SslmGpuStatus : uint32_t {
      * same deployment cannot succeed; rebuild/redeploy the matching shader set first.
      * Appended LAST so every existing public GPU status keeps its ordinal. */
     SSLM_GPU_SHADER_BINARY_STALE,
-    /* An allocation failed before work was submitted. The device/context remain valid. */
+    /* An allocation failed before work was submitted. The device/context remain valid. An entry
+     * point with an output handle (sslm_gpu_context_create, sslm_gpu_model_map,
+     * sslm_gpu_adapter_map, sslm_gpu_seq_create, sslm_gpu_seq_restore) leaves it null. */
     SSLM_GPU_ALLOCATION_FAILED,
     /* sslm_gpu_seq_read_prefill_final_hidden: `out_capacity` is below the required element count.
      * Nothing is written except `*out_required`. Appended LAST; no existing ordinal moves. */
@@ -226,6 +228,12 @@ enum class SslmGpuStatus : uint32_t {
      * No handle is created. Appended LAST. */
     SSLM_GPU_RESIDENCY_FLAGS_INVALID
 };
+
+/* Output handles: sslm_gpu_context_create, sslm_gpu_model_map, sslm_gpu_adapter_map,
+ * sslm_gpu_seq_create and sslm_gpu_seq_restore each set a non-null output slot to nullptr on
+ * every status other than SSLM_OK, including SSLM_GPU_ALLOCATION_FAILED. A null output slot is
+ * never dereferenced and is itself a refusal: SSLM_SEQUENCE_KV_BUFFER_MISMATCH from
+ * sslm_gpu_seq_create and sslm_gpu_seq_restore, SSLM_DEVICE_LOST from the other three. */
 
 /* --- Sec4.1.1: context create/destroy. DEFINED as of B1 (src/gpu/gpu_1p0.cpp). ---
  * sslm_gpu_context_create checks, in order, before any device is created, and sets `*out_ctx`

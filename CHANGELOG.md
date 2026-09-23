@@ -74,6 +74,14 @@ allocating, so after one allocation failure every later upload on the same conte
 they now allocate first, and the next call on the context succeeds. A failed command-list `Close`
 in those uploads is retried once. The statuses those calls return are unchanged.
 
+`sslm_gpu_context_create`, `sslm_gpu_model_map`, `sslm_gpu_adapter_map`, `sslm_gpu_seq_create` and
+`sslm_gpu_seq_restore` now set their output handle to null on every refusal. Before, an allocation
+failure the API boundary converted to `SSLM_GPU_ALLOCATION_FAILED` could return with the caller's
+prior value still in the output slot; `sslm_gpu_context_create` did so on a real allocation failure
+during shader-directory validation or context construction, although its header promised null on
+every refusal. Each call now clears a non-null output slot before any work. A null output slot is
+still not dereferenced, and its status is unchanged.
+
 `build.bat` passes a Phase D adapter through: set `T2199_PHASED_ADAPTER` beside
 `T2199_PHASED_MODEL`. The Phase D suite fails on any skip, and without an adapter its
 adapter-composition cell skipped, which failed the build whenever the suite ran.

@@ -278,7 +278,7 @@ instead, with the same reset requirement (see each function's own header comment
 `include/superslm/sslm_abi.h` is the contract: a from-scratch, engine-
 agnostic C ABI for embedding SuperSLM's CPU inference path directly in
 another process — a game engine's own tooling, for instance — without the
-GPU handle types above. It declares and implements 36 functions across the
+GPU handle types above. It declares and implements 38 functions across the
 same lifecycle shape as the GPU API (workspace and KV-pool sizing and
 creation, model map/unmap, sequence and prefix lifecycle, decode,
 tokenize/detokenize, stats) plus concepts the GPU API does not need:
