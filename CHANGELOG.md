@@ -4,7 +4,7 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
-## [1.7.1] - 2026-09-23
+## [1.7.1] - 2026-09-24
 
 The engine library writes nothing to stdout. 1.7.0 wrote `# adapter: <name>` to stdout, once per
 GPU context, plus once per process the first time that process dispatches (prefill, decode, or
