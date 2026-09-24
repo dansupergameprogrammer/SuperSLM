@@ -27179,39 +27179,105 @@ static void TestAdapterIndexUnsetLeavesDefaultBehaviorAndPrintsNothing() {
 	          "unset SSLM_GPU_ADAPTER_INDEX must print nothing; captured: %s", out.c_str());
 }
 
-static void TestAdapterIndexValidOverridePrintsLabel() {
-	// TE-399/D-SLM7753 (2026-09-23): this cell's own contract as T-2116 wrote it -- "the label
-	// still prints [to stdout]; this is the only channel a certification run has to confirm
-	// which GPU ran" -- is the exact contract TE-393 (Claude/Loki/te393-u3-strike-2026-09-23.md,
-	// D-SLM7752) fractured: a host that writes data to stdout is corrupted by this line. The
-	// principal ruled the fix into the engine as v1.7.1 (D-SLM7753): the engine library writes
-	// nothing to stdout. The plan does not state where the diagnostic's information moves
-	// (stderr, or behind SSLM_GPU_ENABLE_DEBUG_LAYER -- Brunel/TE-400's choice, stated in their
-	// own record), so this cell pins stdout-empty only, per TE-399's brief; it does not assert on
-	// stderr or the debug-layer channel. tools/t2116_crossvendor/run_crossvendor.ps1's own label
-	// read is a SEPARATE open question (`2>&1` already merges stderr into what it captures, so a
-	// stderr destination needs no script change there; an opt-in-flag destination would need
-	// one) -- named in Claude/Curie/te399-slm171-stdout-red-2026-09-23.md, not resolved here.
+static void TestAdapterIndexValidOverrideStdoutStaysEmpty() {
+	// TE-399/D-SLM7753 (2026-09-23, split/renamed by TE-402 S2/M2): this cell used to be named
+	// ...PrintsLabel and assert the label was ON stdout -- T-2116's original contract, the exact
+	// one TE-393 (Claude/Loki/te393-u3-strike-2026-09-23.md, D-SLM7752) fractured (a host that
+	// writes data to stdout is corrupted by this line). SuperSLM v1.7.1 moved the print to
+	// stderr (`src/gpu/d3d12_harness.h:331-336`); this cell now asserts only the negative half of
+	// that fix (stdout carries nothing at all, regardless of the label's own content) and no
+	// longer claims to assert presence of a label anywhere -- see
+	// TestAdapterIndexValidOverridePrintsLabelOnStderr immediately below for the positive half,
+	// added in the same round because this cell alone could not distinguish "the fix landed" from
+	// "the diagnostic was deleted outright" (TE-402 S2; Claude/Poirot/fcbc6a7-slm171-stdout-fix.md).
 	// Skipped, named, if this machine has no usable D3D12 hardware adapter at all -- every other
 	// cell in this section is hardware-independent by construction, but this one needs a real
 	// index 0 to exist and be usable to observe the (absence of the) print.
 	if (!superslm_gpu::harness::GetDevice().available) {
 		std::printf(
-		    "TestAdapterIndexValidOverridePrintsLabel: SKIPPED, named -- no usable D3D12 "
+		    "TestAdapterIndexValidOverrideStdoutStaysEmpty: SKIPPED, named -- no usable D3D12 "
 		    "hardware adapter on this machine (GetDevice().available == false)\n");
 		return;
 	}
 	ScopedEnvVar set0("SSLM_GPU_ADAPTER_INDEX", "0");
-	ScopedStdoutCapture cap;
-	superslm_gpu::harness::Device d;
-	d.Init();
-	const std::string out = cap.ReadCaptured();
-	CHECK(d.available);
-	// RED at v1.7.0: d3d12_harness.h:330-336 still writes "# adapter: <name>\n" to stdout here.
+	bool available = false;
+	std::string out;
+	{
+		// TE-402 O1: close the capture scope (so ~ScopedStdoutCapture restores real stdout, and
+		// the temp file it deletes has already been read into `out`) BEFORE any CHECK/CHECK_MSG
+		// runs. In the prior shape, CHECK_MSG's own printf ran while capture was still active, so
+		// a FAIL line landed in the temp file and was deleted with it -- only the aggregate
+		// checks/failures counter ever showed. This block-scope closes that gap.
+		ScopedStdoutCapture cap;
+		superslm_gpu::harness::Device d;
+		d.Init();
+		available = d.available;
+		out = cap.ReadCaptured();
+	}
+	CHECK(available);
+	// RED with d3d12_harness.h:335 pointed back at stdout (T-2116's original shape): stays GREEN
+	// with the line deleted outright (TE-402 S2's own named mutation) -- that gap is exactly why
+	// the stderr-presence cell below exists as a separate, independent assertion.
 	CHECK_MSG(out.empty(),
 	          "SSLM_GPU_ADAPTER_INDEX=0 on a usable adapter must write ZERO bytes to stdout (the "
 	          "engine library writes nothing to stdout, D-SLM7753) -- captured %zu bytes: %s",
 	          out.size(), out.c_str());
+}
+
+static void TestAdapterIndexValidOverridePrintsLabelOnStderr() {
+	// TE-399/TE-402 S2 (2026-09-23): the positive half TestAdapterIndexValidOverrideStdoutStays-
+	// Empty cannot cover -- the label's only purpose is telling a certification run
+	// (tools/t2116_crossvendor/run_crossvendor.ps1) which GPU actually ran, and nothing pinned
+	// that it still arrives anywhere once v1.7.1 moved it off stdout. Feature oracle, not a
+	// consistency one (Curie disciplines): asserts the exact adapter Description string appears
+	// on stderr, the same content T-2116's original stdout assertion checked, on the new channel
+	// -- not merely that stderr is nonempty. RED with `src/gpu/d3d12_harness.h:335` (the
+	// `std::fwprintf(stderr, ...)` call) deleted outright: confirmed by execution against a
+	// mutant build, Claude/Curie/te399-slm171-stdout-red-2026-09-23.md Sec.8. GREEN at v1.7.1
+	// (`fcbc6a7`) as built.
+	if (!superslm_gpu::harness::GetDevice().available) {
+		std::printf(
+		    "TestAdapterIndexValidOverridePrintsLabelOnStderr: SKIPPED, named -- no usable D3D12 "
+		    "hardware adapter on this machine (GetDevice().available == false)\n");
+		return;
+	}
+	ScopedEnvVar set0("SSLM_GPU_ADAPTER_INDEX", "0");
+	bool available = false;
+	std::string err;
+	std::string expected_name;
+	{
+		// TE-402 O1 (see the sibling cell above for the full rationale): capture scope closes
+		// before any CHECK runs.
+		ScopedStderrCapture cap;
+		superslm_gpu::harness::Device d;
+		d.Init();
+		available = d.available;
+		err = cap.ReadCaptured();
+		if (d.available && d.adapter) {
+			DXGI_ADAPTER_DESC1 desc{};
+			d.adapter->GetDesc1(&desc);
+			// d.Description is UTF-16; narrow it the same way run_crossvendor.ps1's own
+			// certification read compares it -- by exact substring match against the printed
+			// line's own %s conversion, which on this MSVC wide-fwprintf is the platform's
+			// current codepage narrowing of the wide string, not a UTF-8 re-encode. A plain
+			// narrow-char comparison against the WCHAR buffer's low bytes is exactly what the
+			// engine's own print does internally, so this oracle is grounded in the same
+			// conversion the print performs, not a re-derivation of it.
+			int len = WideCharToMultiByte(CP_ACP, 0, desc.Description, -1, nullptr, 0, nullptr, nullptr);
+			if (len > 1) {
+				std::vector<char> buf(static_cast<size_t>(len));
+				WideCharToMultiByte(CP_ACP, 0, desc.Description, -1, buf.data(), len, nullptr, nullptr);
+				expected_name.assign(buf.data());
+			}
+		}
+	}
+	CHECK(available);
+	CHECK_MSG(!expected_name.empty(), "SETUP: could not narrow the selected adapter's own Description");
+	const std::string expected_line = "# adapter: " + expected_name;
+	CHECK_MSG(err.find(expected_line) != std::string::npos,
+	          "SSLM_GPU_ADAPTER_INDEX=0 on a usable adapter must write \"%s\" to stderr (D-SLM7753's "
+	          "diagnostic must still reach a certification run) -- captured %zu bytes: %s",
+	          expected_line.c_str(), err.size(), err.c_str());
 }
 
 static void TestAdapterIndexNonexistentFailsLoudlyNamingTheIndex() {
@@ -28983,12 +29049,15 @@ static void TestT2948_ShaderDirInvalidBeforeDeviceInit() {
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1 && std::strcmp(argv[1], "--te399-adapter-index-only") == 0) {
-		// TE-399 (2026-09-23): a targeted runner for T-2116's adapter-index section
-		// (tests/test_main.cpp:27167-27271), so this section's red/green reading against
-		// D-SLM7753 can be confirmed without a full-suite run. Same shape as
-		// --t2948-shader-dir-invalid-only / --t2959-gpu-output-null-only immediately below.
+		// TE-399 (2026-09-23, updated in the TE-402 fix round): a targeted runner for T-2116's
+		// adapter-index section (tests/test_main.cpp:27167-27340ish -- see TE-402 M2 on why this
+		// comment names no exact range: it is the kind of citation that drifts by one edit), so
+		// this section's red/green reading against D-SLM7753 can be confirmed without a
+		// full-suite run. Same shape as --t2948-shader-dir-invalid-only /
+		// --t2959-gpu-output-null-only immediately below.
 		TestAdapterIndexUnsetLeavesDefaultBehaviorAndPrintsNothing();
-		TestAdapterIndexValidOverridePrintsLabel();
+		TestAdapterIndexValidOverrideStdoutStaysEmpty();
+		TestAdapterIndexValidOverridePrintsLabelOnStderr();
 		TestAdapterIndexNonexistentFailsLoudlyNamingTheIndex();
 		TestAdapterIndexMalformedNonIntegerRefusesSilentFallbackToZero();
 		TestAdapterIndexNegativeRefusesSilentFallback();
@@ -29968,7 +30037,8 @@ int main(int argc, char** argv) {
 	// d3cf252-t2116-adapter-selection.md S2/S4/S6). See this file's own T-2116
 	// section above.
 	TestAdapterIndexUnsetLeavesDefaultBehaviorAndPrintsNothing();
-	TestAdapterIndexValidOverridePrintsLabel();
+	TestAdapterIndexValidOverrideStdoutStaysEmpty();
+	TestAdapterIndexValidOverridePrintsLabelOnStderr();
 	TestAdapterIndexNonexistentFailsLoudlyNamingTheIndex();
 	TestAdapterIndexMalformedNonIntegerRefusesSilentFallbackToZero();
 	TestAdapterIndexNegativeRefusesSilentFallback();

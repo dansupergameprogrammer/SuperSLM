@@ -10,7 +10,18 @@ param(
 	[int]$AdapterIndex = 0,
 	[string]$ExeDir = "D:\_te399\build"
 )
-$ErrorActionPreference = "Stop"
+# TE-402 S1 (Claude/Poirot/fcbc6a7-slm171-stdout-fix.md): "Stop" plus a bare `2>&1` on the exe made
+# this script abort under Windows PowerShell 5.1 the moment the fixed `set` leg wrote its label to
+# stderr -- 5.1 wraps each native stderr line from `2>&1` in a terminating NativeCommandError, so
+# the script threw before reaching the exit-code grading below and a genuinely green suite read as
+# a hard failure. `run_crossvendor.ps1:59-66` already carries this exact hazard and uses
+# "Continue"; matched here. `ForEach-Object { "$_" }` stringifies each captured record (native
+# stdout/stderr line or ErrorRecord alike) before `Out-String` renders it, the same shape Poirot's
+# own remedy probe (`Claude/Poirot/fcbc6a7-slm171-stdout-fix-probe/remedy_probe.ps1`) proved S3
+# clean under both 5.1 and pwsh 7 with -- kept here for parity even though this script only grades
+# by exit code, never by parsing $out, so a shell that mis-renders the label cannot mis-grade this
+# suite the way it could S3's own regex.
+$ErrorActionPreference = "Continue"
 $exe = Join-Path $ExeDir "te399_stdout_pipeline.exe"
 if (-not (Test-Path $exe)) { throw "not built: $exe (run build.bat first)" }
 
@@ -28,7 +39,8 @@ function Run-Leg([string]$mode) {
 	$env:SSLM_GPU_ADAPTER_INDEX = $null
 	Remove-Item Env:\SSLM_GPU_ADAPTER_INDEX -ErrorAction SilentlyContinue
 	if ($mode -eq "set") { $env:SSLM_GPU_ADAPTER_INDEX = "$AdapterIndex" }
-	$out = & $exe "--model=$Model" "--mode=$mode" "--adapter-index=$AdapterIndex" 2>&1 | Out-String
+	$out = & $exe "--model=$Model" "--mode=$mode" "--adapter-index=$AdapterIndex" 2>&1 |
+		ForEach-Object { "$_" } | Out-String
 	$ec = $LASTEXITCODE
 	Remove-Item Env:\SSLM_GPU_ADAPTER_INDEX -ErrorAction SilentlyContinue
 	[pscustomobject]@{ Mode = $mode; ExitCode = $ec; Output = $out }
