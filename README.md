@@ -14,10 +14,20 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.7.1**. The engine library writes nothing to stdout: the `# adapter:
-<name>` line `SSLM_GPU_ADAPTER_INDEX` prints now goes to stderr, like every other harness
-diagnostic, so a host that pipes model output through stdout is no longer corrupted by it. No
-token, ABI surface, or measured figure changes from 1.7.0. See the
+Current release: **1.8.0**. On the GPU, running out of memory is reported as running out of
+memory: an allocation failure on a device that is not removed -- host memory, or GPU memory on any
+heap -- returns `SSLM_GPU_ALLOCATION_FAILED`, leaves the process's command list closed, and leaves
+the context, the device and every other handle usable, so the call can simply be retried. 1.7.1
+reported many such failures as `SSLM_DEVICE_LOST`, could leave the next GPU call in the process to
+fail in its place, and kept a failed first-time device setup for the life of the process. A GPU
+failure that is not about memory is never reported as one. Several statuses change for the same
+fault, so a host that maps GPU statuses should read the
+[1.8.0 release note](docs/releases/1.8.0.md) before upgrading. No token, save format, or
+`SslmGpuStatus` ordinal changes.
+
+1.7.1: the engine library writes nothing to stdout: the `# adapter: <name>` line
+`SSLM_GPU_ADAPTER_INDEX` prints now goes to stderr, like every other harness diagnostic, so a host
+that pipes model output through stdout is no longer corrupted by it. See the
 [1.7.1 release note](docs/releases/1.7.1.md).
 
 1.7.0: the token finish can take its logits off the calling thread, through a caller-supplied host

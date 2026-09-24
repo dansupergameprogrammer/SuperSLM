@@ -4,6 +4,38 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-09-24
+
+On the GPU, an allocation failure on a device that is not removed -- host memory (`std::bad_alloc`,
+`std::length_error`), or a D3D12 call returning `E_OUTOFMEMORY` on any heap, or the first-time setup
+of the process's submission device running out of memory -- returns `SSLM_GPU_ALLOCATION_FAILED`
+from every GPU entry point, leaves the process's command list closed, and leaves the context, the
+device and every other handle usable. 1.7.1 reported many such failures as `SSLM_DEVICE_LOST`, left
+the process's command list recording after a host allocation failure inside a recording window (so
+the next GPU call in the process, on any handle, failed as device loss), and cached a first-time
+setup that ran out of memory for the life of the process (TE-419, TE-421, TE-423). `SSLM_DEVICE_LOST`
+now means a removed device, a GPU failure that is not about memory, a stranded submission (a
+command list that cannot be confirmed closed, or submitted work whose completion cannot be
+confirmed), a submission device that could not be set up for a reason other than memory, or, as
+before, a saturated context cap in a prefill; it never means memory ran out on a live device with
+the submission clean. The full contract is stated beside `SSLM_GPU_ALLOCATION_FAILED` in
+`gpu_1p0.h`.
+
+Statuses change for the same fault: `SSLM_GPU_ALLOCATION_FAILED` replaces `SSLM_DEVICE_LOST` for
+memory exhaustion on a live device; a batch no longer marks its other sequences
+`SSLM_DEVICE_LOST` when one runs out of memory; a failed first-time device setup returns one status
+per cause from every entry point (`SSLM_DEVICE_LOST`, final, or `SSLM_GPU_ALLOCATION_FAILED`,
+retried); `SslmGpuSeqDecodeStepForG5Bridge` returns its underlying decode calls' status instead of
+`SSLM_DEVICE_LOST`. No `SslmGpuStatus` value is added and no ordinal moves. `SslmForwardStatus`
+gains `GpuOperationFailed`, appended last, so a GPU failure that is not about memory -- a missing
+shader, a caller error such as finishing with no in-flight token -- is never reported as
+out-of-memory. `superslm_gpu::RestoreGpuSequenceState` (`gpu_port.h`) gains a defaulted
+out-parameter. For consumers of the internal harness header: `harness::GetDevice()` still never
+throws; `Device::available` is `std::atomic<bool>`; `Device::Init()` no longer throws;
+`CloseListWithRetry` is replaced by `CloseListConfirmed`/`CloseListOrThrow`; `SSLM_GPU_HR` throws
+`harness::GpuAllocationError` for `E_OUTOFMEMORY`. No shader, dispatch, readback or host arithmetic
+on data changed, and GPU saves are unchanged. See `docs/releases/1.8.0.md`.
+
 ## [1.7.1] - 2026-09-24
 
 The engine library writes nothing to stdout. 1.7.0 wrote `# adapter: <name>` to stdout, once per
