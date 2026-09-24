@@ -1,7 +1,10 @@
 // TE-399 (Curie) -- red cell for the property D-SLM7753 rules into the engine as v1.7.1: "the
 // engine library writes nothing to stdout." TE-393 (Claude/Loki/te393-u3-strike-2026-09-23.md,
-// D-SLM7752) found the one call site (src/gpu/d3d12_harness.h:335, std::wprintf, gated on
-// SSLM_GPU_ADAPTER_INDEX being set) and showed it corrupts a host that reads stdout as a data
+// D-SLM7752) found the one call site (`superslm_gpu::harness::Device::Init()`'s `# adapter:`
+// print, `src/gpu/d3d12_harness.h`, `std::wprintf`, gated on SSLM_GPU_ADAPTER_INDEX being set --
+// cited by symbol, not by line, per TE-407 M2: this exact citation drifted twice, at :335 and
+// again at :339, purely from unrelated edits above it) and showed it corrupts a host that reads
+// stdout as a data
 // channel. The property this cell pins is the library's stdout across a real session, not that
 // one call site: a cell that greps for wprintf proves nothing about a future printf, cout, puts
 // or fwrite(stdout) anywhere reachable from the shipped libraries.
@@ -25,7 +28,7 @@
 // reason.
 //
 // RED AT f43ab15 (SuperSLM v1.7.0): the --set run captures 2 * (10 + len(adapter name) + 1) UTF-16
-// bytes (two "# adapter: <name>\n" lines, d3d12_harness.h:330-336) where 0 is required. The --unset
+// bytes (two "# adapter: <name>\n" lines, Device::Init()'s own print) where 0 is required. The --unset
 // run captures 0 bytes already (override_requested gates the print), so it is not itself a
 // standalone red cell (Curie disciplines: red before green -- a cell that already passes before
 // the fix is not proof of anything); it is the control leg of the same property and is graded

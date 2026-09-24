@@ -27168,15 +27168,36 @@ static void TestAdapterIndexUnsetLeavesDefaultBehaviorAndPrintsNothing() {
 	// The unset path (every consumer of the public 1.0 API except run_crossvendor.ps1
 	// itself) must be byte-identical to before T-2116: no "# adapter:" line at all.
 	// TE-399 (2026-09-23): reviewed against D-SLM7753 (the engine library writes nothing to
-	// stdout) -- unaffected. This cell already required zero bytes on the unset path; the fix
-	// does not change it, so it is not a red cell for TE-399 and carries no edit.
+	// stdout) -- unaffected on the stdout half; the fix does not change it.
+	//
+	// TE-407 M4 (2026-09-24): `Device::Init()`'s own header comment promises the unset path
+	// "prints nothing on either stream" -- this cell pinned only the stdout half. A change that
+	// ungated the now-stderr print (moved there by TE-402's own S2 fix) would pass every cell in
+	// this section but this one, and this one never checked stderr at all. Added: a
+	// `ScopedStderrCapture` leg, asserting the same "no # adapter: line" property on the other
+	// stream. Both captures close (their block scope ends, so each ~Scoped*Capture destructor
+	// restores the real stream) before any CHECK/CHECK_MSG runs -- the O1 shape TE-402 already
+	// fixed in this cell's two siblings, recurred here because this cell predates that round's
+	// edit and was not touched by it.
 	ScopedEnvVar unset("SSLM_GPU_ADAPTER_INDEX", nullptr);
-	ScopedStdoutCapture cap;
-	superslm_gpu::harness::Device d;
-	d.Init();
-	const std::string out = cap.ReadCaptured();
+	std::string out;
+	std::string err;
+	{
+		ScopedStdoutCapture stdout_cap;
+		ScopedStderrCapture stderr_cap;
+		superslm_gpu::harness::Device d;
+		d.Init();
+		out = stdout_cap.ReadCaptured();
+		err = stderr_cap.ReadCaptured();
+	}
 	CHECK_MSG(out.find("# adapter:") == std::string::npos,
-	          "unset SSLM_GPU_ADAPTER_INDEX must print nothing; captured: %s", out.c_str());
+	          "unset SSLM_GPU_ADAPTER_INDEX must print nothing on stdout; captured: %s", out.c_str());
+	// RED if the print's gate (`override_requested`, `d3d12_harness.h`) is ever bypassed on the
+	// unset path -- confirmed by execution against a mutant that ungates the stderr print
+	// unconditionally, Claude/Curie/te399-slm171-stdout-red-2026-09-23.md Sec.10.
+	CHECK_MSG(err.find("# adapter:") == std::string::npos,
+	          "unset SSLM_GPU_ADAPTER_INDEX must print nothing on stderr either (Device::Init()'s "
+	          "own header comment: \"prints nothing on either stream\"); captured: %s", err.c_str());
 }
 
 static void TestAdapterIndexValidOverrideStdoutStaysEmpty() {
@@ -27184,7 +27205,10 @@ static void TestAdapterIndexValidOverrideStdoutStaysEmpty() {
 	// ...PrintsLabel and assert the label was ON stdout -- T-2116's original contract, the exact
 	// one TE-393 (Claude/Loki/te393-u3-strike-2026-09-23.md, D-SLM7752) fractured (a host that
 	// writes data to stdout is corrupted by this line). SuperSLM v1.7.1 moved the print to
-	// stderr (`src/gpu/d3d12_harness.h:331-336`); this cell now asserts only the negative half of
+	// stderr (`Device::Init()`'s `# adapter:` print, `src/gpu/d3d12_harness.h` -- cited by symbol
+	// per TE-407 M2, not by line: the prior round's own M2 fix re-cited a corrected line number and
+	// it drifted again by the next unrelated edit above the print, the second such recurrence);
+	// this cell now asserts only the negative half of
 	// that fix (stdout carries nothing at all, regardless of the label's own content) and no
 	// longer claims to assert presence of a label anywhere -- see
 	// TestAdapterIndexValidOverridePrintsLabelOnStderr immediately below for the positive half,
@@ -27215,7 +27239,7 @@ static void TestAdapterIndexValidOverrideStdoutStaysEmpty() {
 		out = cap.ReadCaptured();
 	}
 	CHECK(available);
-	// RED with d3d12_harness.h:335 pointed back at stdout (T-2116's original shape): stays GREEN
+	// RED with Device::Init()'s print pointed back at stdout (T-2116's original shape): stays GREEN
 	// with the line deleted outright (TE-402 S2's own named mutation) -- that gap is exactly why
 	// the stderr-presence cell below exists as a separate, independent assertion.
 	CHECK_MSG(out.empty(),
@@ -27231,8 +27255,9 @@ static void TestAdapterIndexValidOverridePrintsLabelOnStderr() {
 	// that it still arrives anywhere once v1.7.1 moved it off stdout. Feature oracle, not a
 	// consistency one (Curie disciplines): asserts the exact adapter Description string appears
 	// on stderr, the same content T-2116's original stdout assertion checked, on the new channel
-	// -- not merely that stderr is nonempty. RED with `src/gpu/d3d12_harness.h:335` (the
-	// `std::fwprintf(stderr, ...)` call) deleted outright: confirmed by execution against a
+	// -- not merely that stderr is nonempty. RED with `Device::Init()`'s `# adapter:` print (the
+	// `std::fwprintf(stderr, ...)` call, `src/gpu/d3d12_harness.h` -- cited by symbol per TE-407
+	// M2, not by line) deleted outright: confirmed by execution against a
 	// mutant build, Claude/Curie/te399-slm171-stdout-red-2026-09-23.md Sec.8. GREEN at v1.7.1
 	// (`fcbc6a7`) as built.
 	if (!superslm_gpu::harness::GetDevice().available) {
