@@ -100,6 +100,8 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 	// missing one.
 	if (s == SslmForwardStatus::GpuShaderBinaryStale) return "GpuShaderBinaryStale";
 	if (s == SslmForwardStatus::ParallelForIncomplete) return "ParallelForIncomplete";
+	// SuperSLM 1.8.0 (TE-426): the appended enumerator owes its arm here and in MapForwardStatus.
+	if (s == SslmForwardStatus::GpuOperationFailed) return "GpuOperationFailed";
 	return "?";
 }
 

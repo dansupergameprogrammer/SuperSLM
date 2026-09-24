@@ -609,12 +609,14 @@ namespace {
 // CopyResource + barrier), performed here as its own self-contained call because
 // sslm_gpu_model_map has no shared decode-step command list to append to -- it is not part
 // of any `sslm_decode_step_gpu` recording window (design Sec5.1: "upload happens once,
-// inside map, before the handle is returned to the caller"). Throws std::runtime_error via
-// SSLM_GPU_HR on any D3D12 failure, exactly like the substrate's own upload path; the
-// caller (sslm_gpu_model_map) catches this and translates it to SSLM_DEVICE_LOST, mirroring
-// sslm_gpu_context_create's own device-acquisition-failure disposition (design Sec5.1: "on
-// an upload/allocation failure, *out_model=nullptr and the call returns DeviceLost -- the
-// same status sslm_gpu_context_create uses for the analogous failure").
+// inside map, before the handle is returned to the caller"). Throws on any D3D12 failure,
+// exactly like the substrate's own upload path: through SSLM_GPU_HR (GpuAllocationError for
+// E_OUTOFMEMORY), or GpuSubmissionStrandedError for a list or submission it cannot confirm
+// recovered. The caller (sslm_gpu_model_map and its siblings) catches this and classifies it
+// (ClassifyHandleFault, 1.8.0): SSLM_GPU_ALLOCATION_FAILED for an allocation failure on a live
+// device with the submission clean, SSLM_DEVICE_LOST otherwise -- design Sec5.1's original
+// disposition ("on an upload/allocation failure, *out_model=nullptr and the call returns
+// DeviceLost") for everything but memory, which it now reports as memory.
 Microsoft::WRL::ComPtr<ID3D12Resource> UploadResidentBufferSyncTo(
     superslm_gpu::harness::Device& dev, const void* data, size_t bytes,
     D3D12_RESOURCE_FLAGS resource_flags, D3D12_RESOURCE_STATES final_state) {
@@ -622,11 +624,13 @@ Microsoft::WRL::ComPtr<ID3D12Resource> UploadResidentBufferSyncTo(
 	// is reset, so an allocation failure throws with the list still Closed -- the state every call
 	// on this context leaves it in -- and the next upload on the same context can reset it. (The
 	// previous order reset first; a failed allocation then left the list recording and every later
-	// upload on the context failed.) The throw, and the caller's SSLM_DEVICE_LOST, are unchanged.
+	// upload on the context failed.) Since 1.8.0 the caller classifies the throw
+	// (ClassifyHandleFault): an allocation failure on a live device is SSLM_GPU_ALLOCATION_FAILED.
 	Microsoft::WRL::ComPtr<ID3D12Resource> upload = dev.Upload(data, bytes);
 	Microsoft::WRL::ComPtr<ID3D12Resource> resident =
 	    dev.MakeBuffer(bytes, D3D12_HEAP_TYPE_DEFAULT, resource_flags, D3D12_RESOURCE_STATE_COPY_DEST);
-	// Phase B: reset, record, Close (with one retry), execute, wait.
+	// Phase B: reset, record, Close (confirmed, CloseListConfirmed), execute, Signal, wait. The
+	// Signal has no retry here, so a failed Signal or wait is a stranded submission (1.8.0).
 	SSLM_GPU_HR(dev.alloc->Reset());
 	SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
 	dev.list->CopyResource(resident.Get(), upload.Get());
@@ -637,14 +641,10 @@ Microsoft::WRL::ComPtr<ID3D12Resource> UploadResidentBufferSyncTo(
 	barrier.Transition.StateAfter = final_state;
 	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 	dev.list->ResourceBarrier(1, &barrier);
-	dev.CloseListWithRetry();
+	dev.CloseListOrThrow();
 	ID3D12CommandList* lists[] = {dev.list.Get()};
 	dev.queue->ExecuteCommandLists(1, lists);
-	SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
-	if (dev.fence->GetCompletedValue() < dev.fence_val) {
-		SSLM_GPU_HR(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event));
-		WaitForSingleObject(dev.fence_event, INFINITE);
-	}
+	dev.SignalAndWaitOrStrand();
 	return resident;
 }
 
@@ -655,12 +655,14 @@ Microsoft::WRL::ComPtr<ID3D12Resource> UploadResidentBufferSyncTo(
 // CopyResource + barrier), performed here as its own self-contained call because
 // sslm_gpu_model_map has no shared decode-step command list to append to -- it is not part
 // of any `sslm_decode_step_gpu` recording window (design Sec5.1: "upload happens once,
-// inside map, before the handle is returned to the caller"). Throws std::runtime_error via
-// SSLM_GPU_HR on any D3D12 failure, exactly like the substrate's own upload path; the
-// caller (sslm_gpu_model_map) catches this and translates it to SSLM_DEVICE_LOST, mirroring
-// sslm_gpu_context_create's own device-acquisition-failure disposition (design Sec5.1: "on
-// an upload/allocation failure, *out_model=nullptr and the call returns DeviceLost -- the
-// same status sslm_gpu_context_create uses for the analogous failure"). Read-only for its
+// inside map, before the handle is returned to the caller"). Throws on any D3D12 failure,
+// exactly like the substrate's own upload path: through SSLM_GPU_HR (GpuAllocationError for
+// E_OUTOFMEMORY), or GpuSubmissionStrandedError for a list or submission it cannot confirm
+// recovered. The caller (sslm_gpu_model_map and its siblings) catches this and classifies it
+// (ClassifyHandleFault, 1.8.0): SSLM_GPU_ALLOCATION_FAILED for an allocation failure on a live
+// device with the submission clean, SSLM_DEVICE_LOST otherwise -- design Sec5.1's original
+// disposition ("on an upload/allocation failure, *out_model=nullptr and the call returns
+// DeviceLost") for everything but memory, which it now reports as memory. Read-only for its
 // whole lifetime (SRV state), matching `weights_buf`/`rope_cos_buf`/`rope_sin_buf`'s own
 // contract (design Sec5.4).
 Microsoft::WRL::ComPtr<ID3D12Resource> UploadResidentBufferSync(superslm_gpu::harness::Device& dev,
@@ -716,46 +718,52 @@ private:
 	bool bundle_;
 };
 
-// Whether the context's device reports itself removed, asked when a map-time allocation fails
-// with E_OUTOFMEMORY: only a live device makes that a recoverable SSLM_GPU_ALLOCATION_FAILED.
-// Test builds can make the next query report removed (ArmGpuMapDeviceRemovedQueryInjection).
+// Whether the context's device reports itself removed: the fault classifier's rule-1 input
+// (harness::DeviceReportedRemoved, whose test-build seam, ArmGpuMapDeviceRemovedQueryInjection,
+// makes the next query report removed). A device that was never set up is never read as removed.
 bool MapDeviceReportedRemoved(superslm_gpu::harness::Device& dev) {
-#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
-	{
-		superslm_gpu::harness::GpuTestSeamState& seam = superslm_gpu::harness::TestSeamState();
-		std::lock_guard<std::mutex> lock(seam.mutex);
-		if (seam.map_removed_query) {
-			seam.map_removed_query = false;  // single-shot
-			return true;
-		}
-	}
-#endif
-	return !dev.dev || dev.dev->GetDeviceRemovedReason() != S_OK;
+	return superslm_gpu::harness::DeviceReportedRemoved(dev);
 }
 
-void WaitForFence(superslm_gpu::harness::Device& dev) {
-	if (dev.fence->GetCompletedValue() < dev.fence_val) {
-		SSLM_GPU_HR(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event));
-		WaitForSingleObject(dev.fence_event, INFINITE);
-	}
+// The public status for the exception currently being handled, at a site that creates or uploads
+// into a handle (model map, adapter map, sequence create and restore, the device logits bundle).
+// Call only from inside a catch handler. `dev` is the device the failed work ran on, or null for a
+// host-only step. Rules 0 and 1 are SSLM_DEVICE_LOST, rule 2 SSLM_GPU_ALLOCATION_FAILED, and rule 3
+// SSLM_DEVICE_LOST, these sites' non-allocation disposition.
+SslmGpuStatus ClassifyHandleFault(superslm_gpu::harness::Device* dev) {
+	using superslm_gpu::harness::GpuFaultKind;
+	using superslm_gpu::harness::GpuFaultRule;
+	const GpuFaultKind kind = superslm_gpu::harness::ClassifyInFlightException();
+	const bool stranded = kind == GpuFaultKind::Stranded;
+	const bool removed = !stranded && dev != nullptr && MapDeviceReportedRemoved(*dev);
+	const GpuFaultRule rule = superslm_gpu::harness::ClassifyGpuFault(
+	    stranded, removed, kind == GpuFaultKind::Allocation);
+	return rule == GpuFaultRule::Allocation ? SSLM_GPU_ALLOCATION_FAILED : SSLM_DEVICE_LOST;
 }
 
 // Phase B's submission tail for the device logits routines: execute, then Signal. A failed Signal
 // is retried once at a FRESH fence value, never the value the failed call attempted, as the chunk
 // path does (gpu_1p0.h, SSLM_DEVICE_LOST cause (b)); if the retry succeeds the work is waited out
-// before the throw, so no buffer is released while the GPU may still use it. Either failure
-// throws, and the caller reports SSLM_DEVICE_LOST.
+// before the throw, so no buffer is released while the GPU may still use it. A retry that was
+// waited out throws the first Signal's typed HRESULT failure (rule 2 for E_OUTOFMEMORY, rule 3
+// otherwise); a failed retry, or a wait that cannot be confirmed, throws
+// GpuSubmissionStrandedError (rule 0).
 void ExecuteSignalAndWait(superslm_gpu::harness::Device& dev) {
 	ID3D12CommandList* lists[] = {dev.list.Get()};
 	dev.queue->ExecuteCommandLists(1, lists);
-	if (FAILED(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val))) {
+	const HRESULT first = dev.queue->Signal(dev.fence.Get(), ++dev.fence_val);
+	if (FAILED(first)) {
 		const HRESULT retry = dev.queue->Signal(dev.fence.Get(), ++dev.fence_val);
-		if (SUCCEEDED(retry)) WaitForFence(dev);
-		std::fprintf(stderr, "superslm_gpu: fence Signal failed; fresh-value retry %s\n",
-		             SUCCEEDED(retry) ? "succeeded and was waited out" : "failed");
-		throw std::runtime_error("D3D12 fence Signal failed");
+		std::fprintf(stderr, "superslm_gpu: fence Signal failed 0x%08lx; fresh-value retry %s\n",
+		             static_cast<unsigned long>(first), SUCCEEDED(retry) ? "succeeded" : "failed");
+		if (FAILED(retry)) {
+			throw superslm_gpu::harness::GpuSubmissionStrandedError(
+			    "D3D12 fence Signal failed and its fresh-value retry failed");
+		}
+		dev.WaitForFenceOrStrand();
+		superslm_gpu::harness::ThrowGpuHrFailure(first, __FILE__, __LINE__);
 	}
-	WaitForFence(dev);
+	dev.WaitForFenceOrStrand();
 }
 
 void TransitionBuffer(ID3D12GraphicsCommandList* list, ID3D12Resource* r, D3D12_RESOURCE_STATES before,
@@ -807,11 +815,11 @@ constexpr uint32_t kLogitsSiteRowsPerGroup = 8;  // 256 threads / 32 lanes per r
 //   logits_site root signature and pipeline built and stored in the bundle.
 // - Phase B: reset, record the head copy (ii) <- (i) and its transition, Close with one retry,
 //   execute, Signal with a fresh-value retry, wait. (i) is released when this function returns.
-// Returns SSLM_GPU_ALLOCATION_FAILED for E_OUTOFMEMORY on a device that is not removed, and
-// SSLM_GPU_SHADER_BINARY_STALE for a stale logits_site.cso. Every other failure is
-// SSLM_DEVICE_LOST (a missing .cso among them, as for every other shader load). On any failure
+// Returns SSLM_GPU_ALLOCATION_FAILED for E_OUTOFMEMORY on a device that is not removed, from any
+// step (1.8.0), and SSLM_GPU_SHADER_BINARY_STALE for a stale logits_site.cso. Every other failure
+// is SSLM_DEVICE_LOST (a missing .cso among them, as for every other shader load). On any failure
 // `out` holds no usable bundle and the list is Closed, except in the documented terminal case
-// where both Close attempts fail.
+// where the list cannot be confirmed Closed (CloseListConfirmed), which is SSLM_DEVICE_LOST.
 SslmGpuStatus CreateDeviceLogitsBuffers(SslmGpuContext* ctx, const int8_t* head_rows, uint32_t V,
                                         uint32_t H, DeviceLogitsBuffers* out) {
 	DeviceLogitsSeamScope scope(/*bundle_creation=*/true);
@@ -892,13 +900,16 @@ SslmGpuStatus CreateDeviceLogitsBuffers(SslmGpuContext* ctx, const int8_t* head_
 		dev.list->CopyResource(out->head.Get(), staging.Get());
 		TransitionBuffer(dev.list.Get(), out->head.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
 		           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-		dev.CloseListWithRetry();
+		dev.CloseListOrThrow();
 		ExecuteSignalAndWait(dev);
 		return SSLM_OK;
 	} catch (const std::bad_alloc&) {
 		throw;
 	} catch (const std::exception&) {
-		return SSLM_DEVICE_LOST;
+		// 1.8.0 (TE-426): the fault classifier. Phase B's Close (CloseListOrThrow) and Signal
+		// (ExecuteSignalAndWait) carry the stranded input; E_OUTOFMEMORY from any D3D12 call on a
+		// live device is SSLM_GPU_ALLOCATION_FAILED, and every other failure SSLM_DEVICE_LOST.
+		return ClassifyHandleFault(&dev);
 	}
 }
 
@@ -918,7 +929,8 @@ void ApplyReadbackOverrideSeam(int64_t* wide_out, uint32_t V) {
 // `wide_out` (V elements). Allocates nothing and maps nothing: the codes are written through the
 // persistent (iii) mapping before the list is reset, and the row is copied out of the persistent
 // (vi) mapping after the fence wait. Its only fallible steps are Reset, Close and Signal, with
-// the phase-B dispositions; any failure returns SSLM_DEVICE_LOST.
+// the phase-B dispositions, classified (1.8.0): E_OUTOFMEMORY on a live device with the submission
+// clean returns SSLM_GPU_ALLOCATION_FAILED; every other failure SSLM_DEVICE_LOST.
 SslmGpuStatus RunDeviceLogits(SslmGpuContext* ctx, const DeviceLogitsBuffers& b,
                               const int8_t* x_codes, int64_t* wide_out) {
 	DeviceLogitsSeamScope scope(/*bundle_creation=*/false);
@@ -946,7 +958,7 @@ SslmGpuStatus RunDeviceLogits(SslmGpuContext* ctx, const DeviceLogitsBuffers& b,
 		           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 		TransitionBuffer(list, b.x.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
 		           D3D12_RESOURCE_STATE_COPY_DEST);
-		dev.CloseListWithRetry();
+		dev.CloseListOrThrow();
 		ExecuteSignalAndWait(dev);
 		std::memcpy(wide_out, b.readback_ptr, static_cast<size_t>(b.V) * 8);
 #if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
@@ -956,7 +968,8 @@ SslmGpuStatus RunDeviceLogits(SslmGpuContext* ctx, const DeviceLogitsBuffers& b,
 	} catch (const std::bad_alloc&) {
 		throw;
 	} catch (const std::exception&) {
-		return SSLM_DEVICE_LOST;
+		// 1.8.0 (TE-426): the fault classifier, as in CreateDeviceLogitsBuffers.
+		return ClassifyHandleFault(&dev);
 	}
 }
 
@@ -1056,7 +1069,9 @@ SslmGpuStatus sslm_gpu_model_mapImpl(SslmGpuContext* ctx, const SslmModelView* b
 		throw;
 	} catch (const std::exception& e) {
 		std::fprintf(stderr, "sslm_gpu_model_map: %s\n", e.what());
-		return SSLM_DEVICE_LOST;
+		// 1.8.0 (TE-426): a host step, no device. std::length_error is an allocation failure,
+		// SSLM_GPU_ALLOCATION_FAILED; the layer-weights contract error stays SSLM_DEVICE_LOST.
+		return ClassifyHandleFault(nullptr);
 	}
 
 	// T-2105's own RoPE cos/sin residency construction (Claude/Laplace/
@@ -1168,7 +1183,10 @@ SslmGpuStatus sslm_gpu_model_mapImpl(SslmGpuContext* ctx, const SslmModelView* b
 	} catch (const std::bad_alloc&) {
 		throw;
 	} catch (const std::exception&) {
-		return SSLM_DEVICE_LOST;
+		// 1.8.0 (TE-426): the fault classifier. An allocation failure (E_OUTOFMEMORY on any heap,
+		// or at any step) on a live device, with the list confirmed Closed, is
+		// SSLM_GPU_ALLOCATION_FAILED; every other failure SSLM_DEVICE_LOST.
+		return ClassifyHandleFault(&ctx->device);
 	}
 
 	// T-2851 (B, design Sec4.6): the device-resident head. `head_w` above is the one table the
@@ -1457,7 +1475,7 @@ SslmGpuStatus sslm_gpu_adapter_mapImpl(SslmGpuContext* ctx, SslmGpuModelHandle* 
 	} catch (const std::bad_alloc&) {
 		throw;
 	} catch (const std::exception&) {
-		return SSLM_DEVICE_LOST;
+		return ClassifyHandleFault(&ctx->device);  // 1.8.0 (TE-426): as sslm_gpu_model_map's uploads
 	}
 
 	h->ctx = ctx;
@@ -1543,10 +1561,10 @@ SslmGpuStatus sslm_gpu_adapter_unmapImpl(SslmGpuContext* ctx, SslmGpuAdapterHand
 
 // Design Sec4.1.1: "on device-acquisition failure, *out_ctx is set to nullptr and
 // the call returns DeviceLost (Sec9) -- the same status a later mid-decode
-// device-removal produces". harness::Device::Init() never throws past its own
-// try/catch inside harness::GetDevice()'s lambda for the singleton path; here, since
-// this context owns its Device value directly (no lambda-wrapped static), the
-// equivalent guard is applied at the call site instead.
+// device-removal produces". Since 1.8.0 a device acquisition that ran out of memory returns
+// SSLM_GPU_ALLOCATION_FAILED instead, and the caller may retry. harness::Device::Init() never
+// throws: it records why a setup failed (SetupFailure), which this call reads, exactly as
+// harness::GetDevice() does for the process's submission device.
 //
 // GpuContextConfig::shader_dir (include/superslm/gpu_1p0.h, sslm_gpu_context_create's comment):
 // a non-null value is validated and checked against the process's fixed shader directory
@@ -1577,18 +1595,16 @@ SslmGpuStatus sslm_gpu_context_createImpl(GpuContextConfig cfg, SslmGpuContext**
 	}
 
 	SslmGpuContext* ctx = new SslmGpuContext();
-	try {
-		ctx->device.Init();
-	} catch (const std::bad_alloc&) {
-		delete ctx;
-		throw;
-	} catch (const std::exception&) {
-		ctx->device.available = false;
-	}
+	// Device::Init() does not throw (1.8.0): a failed setup is recorded as a SetupFailure kind. A
+	// setup that ran out of memory -- a host allocation, or E_OUTOFMEMORY from any D3D12 step,
+	// device creation included -- is SSLM_GPU_ALLOCATION_FAILED; every other cause SSLM_DEVICE_LOST.
+	ctx->device.Init();
 	if (!ctx->device.available) {
+		const bool out_of_memory =
+		    ctx->device.setup_failure.load() == superslm_gpu::harness::SetupFailure::Allocation;
 		delete ctx;
 		*out_ctx = nullptr;
-		return SSLM_DEVICE_LOST;
+		return out_of_memory ? SSLM_GPU_ALLOCATION_FAILED : SSLM_DEVICE_LOST;
 	}
 
 	if (!shader_dir.empty()) {
@@ -1710,8 +1726,9 @@ SslmGpuStatus sslm_gpu_seq_createImpl(SslmGpuContext* ctx, SslmGpuModelHandle* m
 	} catch (const std::bad_alloc&) {
 		throw;
 	} catch (const std::exception&) {
-		return SSLM_DEVICE_LOST;  // mirrors sslm_gpu_model_map's own upload-failure
-		                          // disposition (design Sec5.1/Sec5.3 symmetry).
+		// Mirrors sslm_gpu_model_map's own upload-failure disposition (design Sec5.1/Sec5.3
+		// symmetry), the fault classifier since 1.8.0 (TE-426).
+		return ClassifyHandleFault(&ctx->device);
 	}
 	// Structural self-check (design Sec9: "context_cap inconsistent with the K/V buffer
 	// this call itself just sized -- an internal invariant that should be unreachable,
@@ -1950,12 +1967,20 @@ namespace {
 // it, undifferentiated, on purpose), but the two device-derived statuses must map to
 // SSLM_DEVICE_LOST. T-2578 adds the one deployment-derived exception:
 // GpuShaderBinaryStale maps to SSLM_GPU_SHADER_BINARY_STALE, never to either family.
+//
+// 1.8.0 (TE-426): the device-derived statuses split three ways. GpuAllocationFailed -- an
+// allocation failed on a device not removed, with the submission clean -- maps to
+// SSLM_GPU_ALLOCATION_FAILED; GpuDeviceRemoved and GpuOperationFailed (a non-allocation GPU
+// failure) map to SSLM_DEVICE_LOST.
 SslmGpuStatus MapSubmitRejectionToGpuStatus(superslm::SslmForwardStatus st) {
 	if (st == superslm::SslmForwardStatus::GpuShaderBinaryStale) {
 		return SSLM_GPU_SHADER_BINARY_STALE;
 	}
+	if (st == superslm::SslmForwardStatus::GpuAllocationFailed) {
+		return SSLM_GPU_ALLOCATION_FAILED;
+	}
 	if (st == superslm::SslmForwardStatus::GpuDeviceRemoved ||
-	    st == superslm::SslmForwardStatus::GpuAllocationFailed) {
+	    st == superslm::SslmForwardStatus::GpuOperationFailed) {
 		return SSLM_DEVICE_LOST;
 	}
 	return SSLM_SEQUENCE_REJECTED;
@@ -1966,23 +1991,30 @@ SslmGpuStatus MapSubmitRejectionToGpuStatus(superslm::SslmForwardStatus st) {
 //
 // T-2114 (S1): `RunLayerLoopGpuFinish`'s own catch block (superslm_gpu.cpp) is the ONE
 // path that can deliver a genuine device-level failure here -- it returns
-// `GpuDeviceRemoved` (device confirmed gone) or `GpuAllocationFailed` (a transient/
-// size-dependent failure at the readback, device still alive) when a real HR exception
+// `GpuDeviceRemoved` (device confirmed gone, or a wait it could not confirm),
+// `GpuAllocationFailed` (an allocation failure at the readback, device still alive) or, since
+// 1.8.0, `GpuOperationFailed` (any other readback failure) when a real exception
 // unwound the finish call. Every OTHER non-Ok value `DecodeStickyTag` can produce is a
 // CPU-domain-equivalent guard rejection the GPU dispatch chain itself found (mirroring
 // the CPU oracle's own sticky-tag family) -- a healthy-device, per-sequence fact, not a
-// device loss. Only the two device-derived statuses map to SSLM_DEVICE_LOST;
+// device loss. The device-derived statuses map as stated below;
 // GpuShaderBinaryStale maps to its deployment-specific public status; every other rejecting
 // value maps to SSLM_SEQUENCE_REJECTED, the same status
 // MapSubmitRejectionToGpuStatus uses for the identical class of fact discovered before
 // submission instead of after.
+//
+// 1.8.0 (TE-426): the same three-way split as MapSubmitRejectionToGpuStatus -- GpuAllocationFailed
+// to SSLM_GPU_ALLOCATION_FAILED; GpuDeviceRemoved and GpuOperationFailed to SSLM_DEVICE_LOST.
 SslmGpuStatus MapDecodedStatusToGpuStatus(superslm::SslmForwardStatus st) {
 	if (st == superslm::SslmForwardStatus::Ok) return SSLM_OK;
 	if (st == superslm::SslmForwardStatus::GpuShaderBinaryStale) {
 		return SSLM_GPU_SHADER_BINARY_STALE;
 	}
+	if (st == superslm::SslmForwardStatus::GpuAllocationFailed) {
+		return SSLM_GPU_ALLOCATION_FAILED;
+	}
 	if (st == superslm::SslmForwardStatus::GpuDeviceRemoved ||
-	    st == superslm::SslmForwardStatus::GpuAllocationFailed) {
+	    st == superslm::SslmForwardStatus::GpuOperationFailed) {
 		return SSLM_DEVICE_LOST;
 	}
 	return SSLM_SEQUENCE_REJECTED;
@@ -2359,9 +2391,10 @@ SslmGpuStatus sslm_gpu_readyImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq
 	// for exactly this, its own comment: "caller error: no live token") -- never a genuine
 	// device/allocation fault. Checked here, before Finish is ever called, so this call's own
 	// `decoded` value stays exactly what a real device-derived fault would produce (GpuDeviceRemoved/
-	// GpuAllocationFailed only ever arrive from inside Finish's try/catch, past this point) and
-	// O2's status surfaces the caller-error cause directly instead of being folded into
-	// GpuAllocationFailed and mapped to SSLM_DEVICE_LOST by MapDecodedStatusToGpuStatus below.
+	// GpuAllocationFailed/GpuOperationFailed only ever arrive from inside Finish's try/catch, past
+	// this point) and O2's status surfaces the caller-error cause directly instead of being folded
+	// into a device-derived status by MapDecodedStatusToGpuStatus below (before 1.8.0,
+	// GpuAllocationFailed; since 1.8.0 Finish returns GpuOperationFailed for it).
 	if (!seq->in_flight) {
 		if (out_status) *out_status = SSLM_SEQUENCE_REJECTED;
 		return SSLM_OK;
@@ -2593,21 +2626,35 @@ SslmGpuStatus sslm_gpu_seq_restoreImpl(SslmGpuContext* ctx, SslmGpuModelHandle* 
 	int32_t restored_schema_index = -1;
 	uint32_t restored_walk_state = 0xFFFFFFFFu;
 	bool restored_ready_for_logits = false;
+	superslm::SslmForwardStatus setup_status = superslm::SslmForwardStatus::Ok;
 	try {
 		ok = superslm_gpu::RestoreGpuSequenceState(
 		    blob, blob_size, &fresh->live_state, fresh->hidden_codes.size(),
 		    fresh->host_kv_mirror.data(), fresh->host_kv_mirror.size(),
 		    // T-2895: the G5-5 lifecycle triple, read back from the v5 blob (closing TE-362).
-		    &restored_schema_index, &restored_walk_state, &restored_ready_for_logits);
+		    &restored_schema_index, &restored_walk_state, &restored_ready_for_logits,
+		    // 1.8.0 (TE-426): a submission device that could not be set up, told apart from a
+		    // malformed blob.
+		    &setup_status);
 	} catch (const std::bad_alloc&) {
 		sslm_gpu_seq_release(ctx, fresh);
 		throw;
 	} catch (const std::exception&) {
+		// 1.8.0 (TE-426): the fault classifier over the round trip on the process's submission
+		// device, which is set up (the round trip runs only once it is), so this GetDevice() call
+		// makes no setup attempt.
+		const SslmGpuStatus fault = ClassifyHandleFault(&superslm_gpu::harness::GetDevice());
 		sslm_gpu_seq_release(ctx, fresh);
-		return SSLM_DEVICE_LOST;
+		return fault;
 	}
 	if (!ok) {
 		sslm_gpu_seq_release(ctx, fresh);
+		// The process's submission device could not be set up: one status per cause, the same
+		// from every entry point (gpu_1p0.h, SSLM_DEVICE_LOST and SSLM_GPU_ALLOCATION_FAILED).
+		if (setup_status == superslm::SslmForwardStatus::GpuAllocationFailed) {
+			return SSLM_GPU_ALLOCATION_FAILED;
+		}
+		if (setup_status != superslm::SslmForwardStatus::Ok) return SSLM_DEVICE_LOST;
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
 	// Upload the restored K/V bytes into this handle's own REAL resident buffer (design
@@ -2621,8 +2668,9 @@ SslmGpuStatus sslm_gpu_seq_restoreImpl(SslmGpuContext* ctx, SslmGpuModelHandle* 
 		sslm_gpu_seq_release(ctx, fresh);
 		throw;
 	} catch (const std::exception&) {
+		const SslmGpuStatus fault = ClassifyHandleFault(&ctx->device);  // 1.8.0 (TE-426)
 		sslm_gpu_seq_release(ctx, fresh);
-		return SSLM_DEVICE_LOST;
+		return fault;
 	}
 	fresh->kv_needs_resume_barrier = false;  // freshly (re)created in UNORDERED_ACCESS state
 	fresh->hidden_scale = fresh->live_state.hidden_scale;
@@ -3034,8 +3082,11 @@ namespace {
 // past this ticket's own first parity harness (session 2/3's own finding: the harness's `tools/
 // t2132_g5_gpu_parity_gpu.cpp` had its own private copy of this loop, and its own private, buggy
 // prompt-prefill composition around it).
-bool DriveGpuSeqToFullDepthForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
-                                        uint32_t dispatch_budget) {
+// 1.8.0 (TE-426): returns the status that stopped the drive, as it got it -- the submit's, the
+// ready call's, or the drained step's -- instead of a bool its callers turned into
+// SSLM_DEVICE_LOST, which discarded SSLM_GPU_ALLOCATION_FAILED. SSLM_OK once at full depth.
+SslmGpuStatus DriveGpuSeqToFullDepthForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                                uint32_t dispatch_budget) {
 	SslmGpuModelHandle* model = seq->model;
 	uint32_t guard = 0;
 	while (seq->layer_index < model->num_hidden_layers) {
@@ -3043,16 +3094,19 @@ bool DriveGpuSeqToFullDepthForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandl
 		// none) and threads it into the existing per-call `adapter_or_null` machinery, which is
 		// what populates `in_flight_adapter`/`submitted_sequences` for this call exactly as it
 		// does today for a direct caller of `sslm_decode_step_gpu`.
-		if (sslm_decode_step_gpu(ctx, seq, seq->bound_adapter, dispatch_budget) != SSLM_OK) {
-			return false;
-		}
+		const SslmGpuStatus submitted =
+		    sslm_decode_step_gpu(ctx, seq, seq->bound_adapter, dispatch_budget);
+		if (submitted != SSLM_OK) return submitted;
 		int32_t ready = 0;
 		SslmGpuStatus drained = SSLM_OK;
-		if (sslm_gpu_ready(ctx, seq, /*block=*/1, &ready, &drained) != SSLM_OK) return false;
-		if (drained != SSLM_OK) return false;
-		if (++guard > 10000) return false;  // runaway-loop guard, never expected in practice.
+		const SslmGpuStatus ready_status = sslm_gpu_ready(ctx, seq, /*block=*/1, &ready, &drained);
+		if (ready_status != SSLM_OK) return ready_status;
+		if (drained != SSLM_OK) return drained;
+		// Runaway-loop guard, never expected in practice; SSLM_DEVICE_LOST, the value this drive
+		// returned for it before 1.8.0.
+		if (++guard > 10000) return SSLM_DEVICE_LOST;
 	}
-	return true;
+	return SSLM_OK;
 }
 }  // namespace
 
@@ -3235,12 +3289,20 @@ ChunkPreScanResult RunChunkAdmissionPreScan(SslmGpuModelHandle* model, int64_t c
 // `GpuAllocationFailed`. It is classified by where the status came from, never by its value alone:
 // a submission failure (including the recording fault, whose status is an arithmetic-guard value)
 // and both catch clauses below leave it false.
+//
+// `*out_fault` (1.8.0, TE-426) is the forward status that cut the chunk short when the cause was
+// not a guard refusal: the failing submission's status, the final finish's `GpuDeviceRemoved`/
+// `GpuAllocationFailed`/`GpuOperationFailed`, or the classified fault the `runtime_error` clause
+// below caught. `Ok` otherwise. The twins read it on a short count, so an allocation failure on a
+// live device reaches the caller as SSLM_GPU_ALLOCATION_FAILED instead of being discarded.
 void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHandle* seq,
                                      const uint8_t* chunk_embedding_bytes, uint32_t admit_count,
                                      int64_t chunk_open_ctxlen, int64_t* out_derived_count,
-                                     bool* out_guard_rejected) {
+                                     bool* out_guard_rejected,
+                                     superslm::SslmForwardStatus* out_fault) {
 	*out_derived_count = 0;
 	*out_guard_rejected = false;
+	*out_fault = superslm::SslmForwardStatus::Ok;
 	if (admit_count == 0) return;
 	// Mirrors `sslm_gpu_seq_embed_token`'s own unconditional `layer_index = 0` reset for a VALID
 	// token, which the shipped per-token loop always performs for token 0 before any guard or
@@ -3408,6 +3470,9 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		        /*q_width=*/static_cast<size_t>(model->num_attention_heads) * model->head_dim,
 		        model_generation, model->has_qk_norm, &nonfinal_guard_rejected);
 		*out_guard_rejected = nonfinal_guard_rejected;
+		if (submit_status != superslm::SslmForwardStatus::Ok && !nonfinal_guard_rejected) {
+			*out_fault = submit_status;  // 1.8.0 (TE-426): kept, not discarded
+		}
 		if (submit_status == superslm::SslmForwardStatus::Ok && inflight) {
 			// `SubmitChunkToFullDepthForG5Bridge` returns the FINAL (sub-)chunk's own inflight token
 			// genuinely unfenced (its own header comment: "the caller's own async contract... only
@@ -3420,12 +3485,14 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 			const superslm::SslmForwardStatus final_finish_status = superslm_gpu::RunLayerLoopGpuFinish(
 			    inflight, seq->live_state, seq->host_kv_mirror.data(), /*block=*/1, &ready);
 			seq->in_flight = nullptr;
-			// The final sub-chunk's finish: `GpuDeviceRemoved`/`GpuAllocationFailed` come only from
-			// its catch; any other non-`Ok` value is a sticky-tag decode (gpu_port.h, the
-			// `out_readback_guard_rejected` comment).
-			if (final_finish_status != superslm::SslmForwardStatus::Ok &&
-			    final_finish_status != superslm::SslmForwardStatus::GpuDeviceRemoved &&
-			    final_finish_status != superslm::SslmForwardStatus::GpuAllocationFailed) {
+			// The final sub-chunk's finish: `GpuDeviceRemoved`/`GpuAllocationFailed`/
+			// `GpuOperationFailed` come only from its catch or a null token; any other non-`Ok`
+			// value is a sticky-tag decode (gpu_port.h, the `out_readback_guard_rejected` comment).
+			if (final_finish_status == superslm::SslmForwardStatus::GpuDeviceRemoved ||
+			    final_finish_status == superslm::SslmForwardStatus::GpuAllocationFailed ||
+			    final_finish_status == superslm::SslmForwardStatus::GpuOperationFailed) {
+				*out_fault = final_finish_status;
+			} else if (final_finish_status != superslm::SslmForwardStatus::Ok) {
 				*out_guard_rejected = true;
 			}
 		}
@@ -3445,6 +3512,14 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		             e.what());
 		seq->in_flight = nullptr;
 		*out_guard_rejected = false;
+		// 1.8.0 (TE-426): classified and recorded instead of dropped -- GpuAllocationError is an
+		// allocation failure, any other std::runtime_error a non-allocation one. Nothing that can
+		// hold the process's command list open reaches here (the recording windows and tails
+		// catch first), so rules 0 and 1 are the recording sites' own.
+		*out_fault = superslm_gpu::harness::ClassifyInFlightException() ==
+		                     superslm_gpu::harness::GpuFaultKind::Allocation
+		                 ? superslm::SslmForwardStatus::GpuAllocationFailed
+		                 : superslm::SslmForwardStatus::GpuOperationFailed;
 	}
 	// `submitted_window_guard`'s destructor closes the window here, unconditionally, on this
 	// normal-return path exactly as it would on an exception unwind -- `sslm_gpu_ready`'s own
@@ -3513,8 +3588,10 @@ bool PrefillGuardDeviceReportedRemoved() {
 		return true;
 	}
 #endif
-	superslm_gpu::harness::Device& dev = superslm_gpu::harness::GetDevice();
-	return !dev.dev || dev.dev->GetDeviceRemovedReason() != S_OK;
+	// 1.8.0 (TE-426): the classifier's removed query, which never reads a device that was not set
+	// up as removed (the `!dev.dev ||` term this used to carry). A guard refusal proves the device
+	// was set up, so this GetDevice() call makes no setup attempt.
+	return superslm_gpu::harness::DeviceReportedRemoved(superslm_gpu::harness::GetDevice());
 }
 
 }  // namespace
@@ -3575,7 +3652,8 @@ SslmGpuStatus SslmGpuSeqPrefillPromptPreBatchingBenchOnly(SslmGpuContext* ctx,
 		if (seq->state != superslm_gpu::SslmSequenceGpuState::Idle) return SSLM_BUSY;
 		const SslmGpuStatus st = sslm_gpu_seq_embed_token(ctx, seq, tokens[i]);
 		if (st != SSLM_OK) return st;
-		if (!DriveGpuSeqToFullDepthForG5Bridge(ctx, seq, dispatch_budget)) return SSLM_DEVICE_LOST;
+		const SslmGpuStatus driven = DriveGpuSeqToFullDepthForG5Bridge(ctx, seq, dispatch_budget);
+		if (driven != SSLM_OK) return driven;
 	}
 	if (count > 0) seq->ready_for_logits = true;
 	return SSLM_OK;
@@ -3625,8 +3703,9 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5BridgeImpl(SslmGpuContext* ctx, SslmGp
 
 	int64_t derived_count = 0;
 	bool guard_rejected = false;
+	superslm::SslmForwardStatus chunk_fault = superslm::SslmForwardStatus::Ok;
 	SubmitAdmittedChunkForG5Bridge(model, seq, scan.chunk_embedding_bytes.data(), scan.admit_count,
-	                                chunk_open_ctxlen, &derived_count, &guard_rejected);
+	                                chunk_open_ctxlen, &derived_count, &guard_rejected, &chunk_fault);
 
 	// D-SLM3622 (design Sec5 step 5): the device-computed fallback -- a rejection the pre-scan
 	// could not see, discovered only via the post-chunk readback -- overrides whatever the
@@ -3636,11 +3715,17 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5BridgeImpl(SslmGpuContext* ctx, SslmGp
 	//
 	// D-SLM7282 (plan te266 Sec3.6): a device-side domain guard refusal on a device not reported
 	// removed is a per-sequence refusal, SSLM_SEQUENCE_REJECTED, the class the decode path already
-	// reports for the identical sticky-tag fact (MapDecodedStatusToGpuStatus). Every other short
-	// count -- a submission or infrastructure fault, a removed device -- stays SSLM_DEVICE_LOST.
+	// reports for the identical sticky-tag fact (MapDecodedStatusToGpuStatus).
+	//
+	// 1.8.0 (TE-426): an allocation failure on a live device with the submission clean
+	// (`chunk_fault` GpuAllocationFailed) is SSLM_GPU_ALLOCATION_FAILED. Every other short count --
+	// a non-allocation fault, a stranded submission, a removed device -- stays SSLM_DEVICE_LOST.
 	if (derived_count < static_cast<int64_t>(scan.admit_count)) {
 		if (guard_rejected && !PrefillGuardDeviceReportedRemoved()) {
 			return SSLM_SEQUENCE_REJECTED;
+		}
+		if (chunk_fault == superslm::SslmForwardStatus::GpuAllocationFailed) {
+			return SSLM_GPU_ALLOCATION_FAILED;
 		}
 		return SSLM_DEVICE_LOST;
 	}
@@ -3700,7 +3785,8 @@ SslmGpuStatus SslmGpuSeqDecodeStepForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuSe
 		if (seq->state != superslm_gpu::SslmSequenceGpuState::Idle) return SSLM_BUSY;
 		const SslmGpuStatus st = sslm_gpu_seq_embed_token(ctx, seq, token_to_embed_if_needed);
 		if (st != SSLM_OK) return st;
-		if (!DriveGpuSeqToFullDepthForG5Bridge(ctx, seq, dispatch_budget)) return SSLM_DEVICE_LOST;
+		const SslmGpuStatus driven = DriveGpuSeqToFullDepthForG5Bridge(ctx, seq, dispatch_budget);
+		if (driven != SSLM_OK) return driven;  // 1.8.0 (TE-426): the drive's own status, kept
 	}
 	return SslmGpuSeqFinishTokenForG5Bridge(ctx, seq, out_token);
 }
@@ -3767,8 +3853,10 @@ SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5BridgeImpl(SslmGpuContext* ctx,
 	// refusal here stays SSLM_DEVICE_LOST below, because this twin's SSLM_SEQUENCE_REJECTED already
 	// means "tokens landed, carry on decoding" (kDfa). The flag is therefore not read.
 	bool guard_rejected_unused = false;
+	superslm::SslmForwardStatus chunk_fault = superslm::SslmForwardStatus::Ok;
 	SubmitAdmittedChunkForG5Bridge(model, seq, scan.chunk_embedding_bytes.data(), scan.admit_count,
-	                                chunk_open_ctxlen, &derived_count, &guard_rejected_unused);
+	                                chunk_open_ctxlen, &derived_count, &guard_rejected_unused,
+	                                &chunk_fault);
 
 	// D-SLM3622 (design Sec5 step 5): the device-computed fallback overrides whatever the
 	// host-computable cause predicted, regardless of cause -- ready_for_logits stays untouched,
@@ -3787,6 +3875,12 @@ SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5BridgeImpl(SslmGpuContext* ctx,
 	}
 
 	if (overridden) {
+		// 1.8.0 (TE-426): the prompt twin's rule -- an allocation failure on a live device with the
+		// submission clean is SSLM_GPU_ALLOCATION_FAILED; every other override SSLM_DEVICE_LOST.
+		// `*consumed` still counts only the committed tokens.
+		if (chunk_fault == superslm::SslmForwardStatus::GpuAllocationFailed) {
+			return SSLM_GPU_ALLOCATION_FAILED;
+		}
 		return SSLM_DEVICE_LOST;
 	}
 
@@ -3910,6 +4004,11 @@ SslmGpuStatus InvokeGpuApiBoundary(const char* name, Fn&& fn) noexcept {
 	} catch (const std::bad_alloc&) {
 		return SSLM_GPU_ALLOCATION_FAILED;
 	} catch (const std::length_error&) {
+		return SSLM_GPU_ALLOCATION_FAILED;
+	} catch (const superslm_gpu::harness::GpuAllocationError&) {
+		// 1.8.0 (TE-426): E_OUTOFMEMORY from a D3D12 call. The boundary sees neither a device nor a
+		// command list: every site that can hold a list open or work in flight catches first, so
+		// what reaches here had nothing open.
 		return SSLM_GPU_ALLOCATION_FAILED;
 	} catch (const std::exception& e) {
 		std::fprintf(stderr, "%s: contained exception: %s\n", name, e.what());

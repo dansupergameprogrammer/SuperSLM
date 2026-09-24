@@ -102,22 +102,24 @@ enum class SslmGpuStatus : uint32_t {
     SSLM_ADAPTER_MODEL_MISMATCH,         /* design Sec9 -- B6                   */
     SSLM_ADAPTER_BASE_HASH_MISMATCH,     /* design Sec9 -- B6                   */
     SSLM_SEQUENCE_KV_BUFFER_MISMATCH,    /* design Sec9 -- B3                   */
-    /* design Sec9 -- B1/B2. Three distinct causes resolve to this ONE status, indistinguishable
-     * at the ABI:
+    /* design Sec9 -- B1/B2. Four distinct causes resolve to this ONE status, indistinguishable
+     * at the ABI. Since 1.8.0 it never means that memory ran out on a live device with the
+     * submission clean: that is SSLM_GPU_ALLOCATION_FAILED (below).
      * (a) an ordinary, healthy rejection -- most visibly, the batched G5 prefill entry points
      *     (SslmGpuSeqPrefillPromptForG5Bridge/SslmGpuSeqPrefillSchemaContentForG5Bridge, below)
      *     returning it when a chunk's own derived admit count comes back short of what was
      *     requested at a saturated context cap; the shipped per-token decode loop's own
      *     cap-boundary behavior, mirrored. The device and the context stay fully usable; a
      *     caller may continue issuing calls against the same context and sequence.
-     * (b) a real device/allocation fault -- a lost/removed device, or an infrastructural
-     *     submit/finish failure (an exception caught and contained at this boundary from the
-     *     GPU command-submission tail). The command list is recovered at the point the fault is
-     *     caught (Closed, matching the invariant every other failure path in the same function
-     *     already restores) and the context stays usable for a caller that continues issuing
-     *     calls against it, PROVIDED neither exception below applies -- both are checked and
-     *     resolved to this same status before returning, so a caller cannot tell the difference
-     *     from the status alone and must not assume recovery from it:
+     * (b) a device fault, or a GPU operation that failed for a reason other than memory -- a
+     *     lost/removed device, a missing shader, a D3D12 call failing with an HRESULT other than
+     *     E_OUTOFMEMORY (an exception caught and contained at this boundary from the GPU
+     *     command-submission tail among them). The command list is recovered at the point the
+     *     fault is caught (confirmed Closed, matching the invariant every other failure path in
+     *     the same function already restores) and the context stays usable for a caller that
+     *     continues issuing calls against it, PROVIDED neither exception below applies -- both are
+     *     checked and resolved to this same status before returning, so a caller cannot tell the
+     *     difference from the status alone and must not assume recovery from it:
      *     - a confirmed device-removed condition (`GetDeviceRemovedReason()` non-S_OK) is
      *       genuinely terminal for the context regardless of the command-list state, and no call
      *       against it can be trusted afterward. At 1.6.0, a removed device stays this process's
@@ -125,29 +127,40 @@ enum class SslmGpuStatus : uint32_t {
      *       SSLM_DEVICE_LOST until the process restarts (T-2845, D-SLM7386); a 1.6.x point
      *       release gives every context its own device instead of sharing the process's one, so
      *       a fresh device is built once every context on the removed one has been destroyed.
-     *     - a fault raised before the command list reaches Closed (e.g. `Close()` itself
-     *       failing) is retried once; if that retry also fails, the list is left recording and
-     *       every later call against this context fails too (`ID3D12CommandAllocator::Reset()`
-     *       refuses an allocator whose list is still recording) -- also terminal, independent of
-     *       what `GetDeviceRemovedReason()` reports, since a stuck list makes the context
-     *       unusable regardless of whether the device itself is confirmed gone;
+     *     - a stranded submission. A failed `Close()` -- whatever its HRESULT, E_OUTOFMEMORY
+     *       included -- is retried once and then confirmed (`Reset()` then `Close()`: a list the
+     *       driver already closed accepts the `Reset()`, one still recording refuses it). A list
+     *       that cannot be confirmed Closed is left recording, and every later call against its
+     *       context fails too (`ID3D12CommandAllocator::Reset()` refuses an allocator whose list
+     *       is still recording). Every decode and prefill submits on one process-wide command
+     *       list, so for them this means every later submitting call in the process fails --
+     *       terminal, independent of what `GetDeviceRemovedReason()` reports, since a stuck list
+     *       is unusable whether or not the device itself is confirmed gone;
      *     - a fault raised AFTER submission (`ExecuteCommandLists` already queued the work; only
      *       the fence `Signal()` itself failed) is retried at a FRESH fence value minted for the
      *       retry, never the same value the failed call attempted -- a same-value retry cannot
      *       distinguish "the failed Signal() already advanced the fence" from "it did not," so it
-     *       is not issued. If the retry `Signal()` itself fails, no wait is attempted and this is
-     *       ALSO terminal: the buffers this call is about to release may still be in use by work
-     *       the GPU has not finished, indistinguishable from here from a genuinely removed device,
-     *       and `GetDeviceRemovedReason()` is what a caller must consult, exactly as the two cases
-     *       above. Only when the retry `Signal()` succeeds does the context genuinely recover on
-     *       this path -- waited out before this function returns.
+     *       is not issued. If the retry `Signal()` itself fails, or the fence wait cannot be
+     *       armed, this is ALSO a stranded submission and terminal: the buffers this call is about
+     *       to release may still be in use by work the GPU has not finished, indistinguishable
+     *       from here from a genuinely removed device, and `GetDeviceRemovedReason()` is what a
+     *       caller must consult, exactly as the two cases above. Only when the retry `Signal()`
+     *       succeeds and is waited out does the context genuinely recover on this path; a retry
+     *       that recovers after the first `Signal()` failed with E_OUTOFMEMORY returns
+     *       SSLM_GPU_ALLOCATION_FAILED instead.
      * (c) SslmGpuSeqPrefillSchemaContentForG5Bridge only: a device-side domain guard refused
      *     one of the admitted tokens, found by the post-chunk readback. The context and the
      *     device stay usable, but THE SEQUENCE DOES NOT, unlike cause (a): its live residual and
      *     layer index are not a resting state, and a decode call issued on it without a reset
      *     returns a token computed from that state. Call sslm_gpu_seq_reset before reusing the
      *     sequence. The prompt twin reports the same refusal as SSLM_SEQUENCE_REJECTED instead,
-     *     with the same reset requirement (see that function's comment). */
+     *     with the same reset requirement (see that function's comment).
+     * (d) 1.8.0: the process's submission device could not be set up, for a reason other than
+     *     memory -- no D3D12 hardware adapter, device creation refused, or a D3D12 setup step
+     *     failing with an HRESULT other than E_OUTOFMEMORY. Every call that submits GPU work
+     *     returns this status, from every entry point, on every call, for the life of the
+     *     process. A first-time setup that runs out of memory is not this cause: that call
+     *     returns SSLM_GPU_ALLOCATION_FAILED, and the next call sets up again. */
     SSLM_DEVICE_LOST,
     SSLM_BATCH_BUDGET_EXHAUSTED,         /* design Sec9 -- B7                   */
     SSLM_TOKEN_ID_OUT_OF_RANGE,          /* design Sec9 -- B3.5                 */
@@ -157,8 +170,9 @@ enum class SslmGpuStatus : uint32_t {
      * (RunLayerLoopGpuSubmit's own pre-submission checks, or DecodeStickyTag's own post-dispatch
      * decode) produced --
      * InvalidLayerBudget, ChainInputOutOfDomain, SoftmaxRowWidthOutOfDomain, and every other
-     * superslm::SslmForwardStatus value that is neither Ok nor a real device-level failure
-     * (GpuDeviceRemoved/GpuAllocationFailed, which map to SSLM_DEVICE_LOST below instead).
+     * superslm::SslmForwardStatus value that is neither Ok nor a device-level failure
+     * (GpuAllocationFailed, which maps to SSLM_GPU_ALLOCATION_FAILED, and GpuDeviceRemoved and
+     * GpuOperationFailed, which map to SSLM_DEVICE_LOST, instead -- 1.8.0).
      * Design Sec9 deliberately assigns no dedicated 1.0 status per individual guard reason
      * (this enum does not grow one enumerator per CPU-domain check); this ONE status is the
      * real distinction that matters to a caller -- THIS sequence's own decode step was
@@ -200,9 +214,32 @@ enum class SslmGpuStatus : uint32_t {
      * same deployment cannot succeed; rebuild/redeploy the matching shader set first.
      * Appended LAST so every existing public GPU status keeps its ordinal. */
     SSLM_GPU_SHADER_BINARY_STALE,
-    /* An allocation failed before work was submitted. The device/context remain valid. An entry
-     * point with an output handle (sslm_gpu_context_create, sslm_gpu_model_map,
-     * sslm_gpu_adapter_map, sslm_gpu_seq_create, sslm_gpu_seq_restore) leaves it null. */
+    /* An allocation failed on a device that is not removed. The contract a caller relies on
+     * (SuperSLM 1.8.0):
+     * - When: during any GPU call, one of these fails, on any heap, while the device is not
+     *   reported removed at the moment the call classifies the failure:
+     *   - a host allocation (std::bad_alloc, std::length_error);
+     *   - a D3D12 call returning E_OUTOFMEMORY -- resource creation, Map, Reset, pipeline
+     *     creation, and a Close or Signal the engine confirmed recovered;
+     *   - the first-time setup of the process's submission device, at the first call that
+     *     submits GPU work. The next call sets up again (see SSLM_DEVICE_LOST cause (d)).
+     * - What stays valid: the context and the device, with the submission command list closed;
+     *   every other sequence, model and adapter handle. An entry point with an output handle
+     *   (sslm_gpu_context_create, sslm_gpu_model_map, sslm_gpu_adapter_map, sslm_gpu_seq_create,
+     *   sslm_gpu_seq_restore) leaves it null. In sslm_decode_step_batch_gpu it is that
+     *   sequence's own out_statuses[i]; the other sequences are recorded and complete as usual.
+     * - What the caller may do next: retry the call; it succeeds once memory is available.
+     *   Retrying smaller is also valid: a smaller context_cap, or a model mapped without
+     *   SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE. A sequence the failed call was advancing must be reset
+     *   (sslm_gpu_seq_reset) or restored before its next generation call: a prompt or schema
+     *   prefill may have committed earlier sub-chunks; its prefill snapshot is empty, so
+     *   sslm_gpu_seq_read_prefill_final_hidden returns SSLM_PREFILL_HIDDEN_UNAVAILABLE; a decode
+     *   step's finish may have written K/V the host mirror does not hold.
+     * - Named residuals, both reported as SSLM_DEVICE_LOST, the conservative direction: an
+     *   allocation failure racing an unrelated device removal; and a stranded submission --
+     *   memory exhausted during command recording where the command list cannot be confirmed
+     *   Closed after Close, a retry and a confirm step, or a fence Signal or wait that cannot be
+     *   confirmed (SSLM_DEVICE_LOST cause (b)). */
     SSLM_GPU_ALLOCATION_FAILED,
     /* sslm_gpu_seq_read_prefill_final_hidden: `out_capacity` is below the required element count.
      * Nothing is written except `*out_required`. Appended LAST; no existing ordinal moves. */
@@ -255,7 +292,9 @@ enum class SslmGpuStatus : uint32_t {
  * 6. No `*.cso` file in the directory: SSLM_GPU_SHADER_DIR_INVALID.
  * 7. The process's shader directory is already fixed to a different directory (ordinal,
  *    case-insensitive comparison of the normalized paths): SSLM_GPU_SHADER_DIR_CONFLICT.
- * 8. Device acquisition: SSLM_DEVICE_LOST on failure. On success, a non-NULL shader_dir fixes
+ * 8. Device acquisition: SSLM_GPU_ALLOCATION_FAILED when it runs out of memory (a host
+ *    allocation, or E_OUTOFMEMORY from device creation or any setup step; the call may be
+ *    retried), SSLM_DEVICE_LOST on any other failure. On success, a non-NULL shader_dir fixes
  *    the process's shader directory if nothing fixed it yet. */
 SslmGpuStatus sslm_gpu_context_create(GpuContextConfig cfg, SslmGpuContext** out_ctx) noexcept;
 SslmGpuStatus sslm_gpu_context_destroy(SslmGpuContext* ctx) noexcept;
@@ -275,21 +314,26 @@ SslmGpuStatus sslm_gpu_context_set_host_parallel_for(SslmGpuContext* ctx,
 
 /* --- Sec5.1: model map/unmap. Declared for B2. ---
  * sslm_gpu_model_map: `cfg.flags` with an undefined bit returns SSLM_GPU_RESIDENCY_FLAGS_INVALID
- * and creates no handle. With SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE set (GpuResidencyConfig above),
- * an out-of-memory failure while allocating the head's device buffers, on a device that is not
- * removed, returns SSLM_GPU_ALLOCATION_FAILED with no handle; the context stays usable, and the
- * same map without the flag may be retried on it. The flag also loads `logits_site.cso` from the
+ * and creates no handle. An allocation failure anywhere in the map (1.8.0) -- host memory, or
+ * E_OUTOFMEMORY while uploading the weights, RoPE tables or schema masks or, with
+ * SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE set (GpuResidencyConfig above), while allocating the head's
+ * device buffers -- on a device that is not removed, returns SSLM_GPU_ALLOCATION_FAILED with no
+ * handle (SSLM_GPU_ALLOCATION_FAILED above); the context stays usable, and the map may be
+ * retried on it, with or without the flag. The flag also loads `logits_site.cso` from the
  * process's shader directory at map time: a stale binary returns SSLM_GPU_SHADER_BINARY_STALE,
  * and a missing one SSLM_DEVICE_LOST, the statuses every other shader load already has. Every
- * other allocation or device failure during the map returns SSLM_DEVICE_LOST, as before. */
+ * other device failure during the map, and an artifact that cannot be marshaled, returns
+ * SSLM_DEVICE_LOST, as before. */
 SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
                                   GpuResidencyConfig cfg, SslmGpuModelHandle** out_model) noexcept;
 SslmGpuStatus sslm_gpu_model_unmap(SslmGpuContext* ctx, SslmGpuModelHandle* model) noexcept;
 
 /* --- Sec5.2: adapter map/unmap. Declared for B6.
  * `sslm_gpu_adapter_map`: on a base-hash mismatch against `model`, returns AdapterBaseHashMismatch,
- * `*out_adapter=nullptr`; on an upload/allocation failure or a foreign `model` (mapped against a
- * DIFFERENT context than `ctx`), returns DeviceLost, `*out_adapter=nullptr`.
+ * `*out_adapter=nullptr`; on an allocation failure on a device that is not removed (1.8.0), returns
+ * SSLM_GPU_ALLOCATION_FAILED, `*out_adapter=nullptr`, and the map may be retried; on any other
+ * upload failure or a foreign `model` (mapped against a DIFFERENT context than `ctx`), returns
+ * DeviceLost, `*out_adapter=nullptr`.
  *
  * `sslm_gpu_adapter_unmap`: releases the adapter's own residency and returns Ok -- CARRIES A `Busy`
  * PRECONDITION (design Sec5.2/Sec9, mirrors sslm_gpu_model_unmap's own identical precondition):
@@ -360,6 +404,14 @@ SslmGpuStatus sslm_gpu_seq_embed_token(SslmGpuContext* ctx, SslmGpuSequenceHandl
  * restored bound_schema_index and dfa_walk_state are validated against the target model's own
  * schema count and that schema's own state_count before use, mirroring
  * `sslm_seq_restore`'s own CPU-side validation.
+ * `sslm_gpu_seq_restore`'s device statuses (1.8.0): the restore round-trips the blob's K/V bytes
+ * through the process's submission device. An allocation failure on a device that is not
+ * removed -- the fresh handle's buffers, the round trip, or that device's first-time setup
+ * running out of memory -- returns SSLM_GPU_ALLOCATION_FAILED, and the restore may be retried; a
+ * submission device that could not be set up for any other reason returns SSLM_DEVICE_LOST
+ * (SSLM_DEVICE_LOST cause (d)), never SSLM_SEQUENCE_KV_BUFFER_MISMATCH, which stays the status
+ * of a malformed blob; every other device failure returns SSLM_DEVICE_LOST. `*out_seq` is null
+ * on every refusal.
  * --- */
 SslmGpuStatus sslm_gpu_seq_save(SslmGpuContext* ctx, const SslmGpuSequenceHandle* seq,
                                  void* out_blob, size_t* out_blob_size) noexcept;
@@ -481,10 +533,15 @@ uint32_t SslmGpuSeqWalkStateForG5Bridge(SslmGpuSequenceHandle* seq);
  * context and the device remain usable. Tokens before the refused one are committed; the
  * refused token and every later one are not; the sequence's live residual and layer index are
  * unspecified and the prefill snapshot is empty. Call sslm_gpu_seq_reset before reusing the
- * sequence. Returns SSLM_DEVICE_LOST when the committed count falls short for any other reason:
- * a saturated context cap, or a device or infrastructure fault in submission, fence wait or
- * readback, including a removed device. This surface offers no query that tells a recovered
- * context from a removed device after SSLM_DEVICE_LOST. */
+ * sequence. Returns SSLM_GPU_ALLOCATION_FAILED (1.8.0) when memory ran out during the chunk, host
+ * or GPU, on a device that is not removed and with the submission clean, including at the process
+ * submission device's first-time setup -- the SSLM_GPU_ALLOCATION_FAILED contract above: earlier
+ * sub-chunks may have committed and the prefill snapshot is empty, so reset (or restore) the
+ * sequence before reusing it; retry once memory is available. Returns SSLM_DEVICE_LOST when the
+ * committed count falls short for any other reason: a saturated context cap, a non-allocation
+ * device or infrastructure fault in submission, fence wait or readback, a stranded submission,
+ * or a removed device. This surface offers no query that tells a recovered context from a
+ * removed device after SSLM_DEVICE_LOST. */
 SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                   const int32_t* tokens, int32_t count,
                                                   uint32_t dispatch_budget) noexcept;
@@ -525,8 +582,10 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSeq
  * THE LOGITS STEP (1.7.0). For a model mapped with SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE the exact
  * int64 logits row is computed on the device from the model's resident head table, read back,
  * and narrowed on the host with the same check the host path uses; a device submission failure
- * returns SSLM_DEVICE_LOST. Otherwise the host computes it, through the context's host
- * parallel-for hook when one is installed (sslm_gpu_context_set_host_parallel_for). A hook whose
+ * returns SSLM_DEVICE_LOST, except that an allocation failure on a live device with the submission
+ * clean returns SSLM_GPU_ALLOCATION_FAILED (1.8.0). Otherwise the host computes it, through the
+ * context's host parallel-for hook when one is installed
+ * (sslm_gpu_context_set_host_parallel_for). A hook whose
  * `run` breaks its exactly-once contract returns SSLM_GPU_PARALLEL_FOR_INCOMPLETE with
  * `ready_for_logits` re-armed and the walk state and layer index unchanged. The row, and so the
  * token, is identical on every path. */
@@ -548,7 +607,13 @@ SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx, SslmGpuSeque
  * D-SLM3476) unchanged: `*out_token == -2` at `SSLM_OK` on a schema dead end, with
  * `ready_for_logits` re-armed by the underlying Finish call, so a caller that always retries
  * through this same entry point after a `-2` reproduces the identical result deterministically
- * and never re-embeds or re-drives the layer loop. */
+ * and never re-embeds or re-drives the layer loop.
+ *
+ * Statuses (1.8.0): a failure while driving the token to full depth returns the status the
+ * underlying `sslm_decode_step_gpu`/`sslm_gpu_ready` call reported -- SSLM_GPU_ALLOCATION_FAILED
+ * for an allocation failure on a live device, SSLM_SEQUENCE_REJECTED for a guard refusal,
+ * SSLM_DISPATCH_BUDGET_TOO_SMALL for a budget below one layer, SSLM_DEVICE_LOST for a device
+ * failure -- where earlier releases reported every such failure as SSLM_DEVICE_LOST. */
 SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                int32_t token_to_embed_if_needed,
                                                uint32_t dispatch_budget, int32_t* out_token) noexcept;
@@ -577,14 +642,19 @@ SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx, SslmGpuSequen
  * contract (`sslm_decode_step_gpu`/`SslmGpuSeqDecodeStepForG5Bridge`'s layer-loop-to-depth
  * step), unchanged by this call.
  *
+ * Returns SSLM_GPU_ALLOCATION_FAILED (1.8.0) when memory ran out during the chunk, on a device
+ * that is not removed and with the submission clean -- the prompt twin's rule and the
+ * SSLM_GPU_ALLOCATION_FAILED contract above; `*consumed` counts only the committed tokens, and
+ * the sequence must be reset (or restored) before reuse.
+ *
  * Returns SSLM_DEVICE_LOST for three distinct causes (see the status enum's own comment,
  * above), which the status does not tell apart:
  *  - an ordinary, healthy rejection when the chunk's own derived admit count comes back short
  *    of what was requested at a saturated context cap -- the context and device stay usable,
  *    and a caller may continue;
- *  - a real, contained device/allocation fault from the GPU submit/finish tail, after which the
- *    command list is recovered and the context stays usable for a caller that continues, unless
- *    the device is confirmed removed, which is terminal for the context;
+ *  - a real, contained non-allocation device fault from the GPU submit/finish tail, after which
+ *    the command list is recovered and the context stays usable for a caller that continues,
+ *    unless the device is confirmed removed or the submission is stranded, which is terminal;
  *  - a device-side domain guard refused one of the admitted tokens, found by the post-chunk
  *    readback. Tokens before the refused one are committed and `*consumed` counts them; the
  *    sequence's live residual and layer index are not a resting state, and the "ready for

@@ -314,8 +314,9 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
     uint64_t model_generation = 0,
     bool model_has_qk_norm = false,
     // Set true exactly when this call returns because a NON-FINAL sub-chunk's
-    // `RunLayerLoopGpuFinish` returned a status other than `Ok`, `GpuDeviceRemoved` or
-    // `GpuAllocationFailed` -- by construction a device-side guard's sticky-tag decode. False on
+    // `RunLayerLoopGpuFinish` returned a status other than `Ok`, `GpuDeviceRemoved`,
+    // `GpuAllocationFailed` or `GpuOperationFailed` (1.8.0) -- by construction a device-side
+    // guard's sticky-tag decode. False on
     // every other return, including a submission failure in any sub-chunk. The final sub-chunk's
     // finish is the caller's, so its classification is the caller's too. Defaults to null so
     // every caller that does not classify is unaffected.
@@ -379,16 +380,19 @@ enum class GpuLayerLoopGuard : int {
 // Every return path that resolves the call BEFORE that decision runs reads false, by
 // construction (the function-entry reset, never overwritten on that path): the nine-guard
 // ladder, the two device-capability rejections, and every return inside the recording window's
-// own catch, twenty-nine paths in all -- T-2568 added one new catch clause to each of
+// own catch, thirty-one paths in all -- T-2568 added one new catch clause to each of
 // RunLayerLoopGpuSubmit and SubmitOneSubChunkToFullDepthForG5Bridge
 // (GpuLayerWeightsContractError's own, PackLayerWeightsBytes' required-pointer refusal), two more
 // than the twenty-five this paragraph named before; T-2577 (D-SLM6279, GpuShaderBinaryStaleError's
 // own, ShaderPath's stale-binary refusal) added a second new catch clause to each of the same two
-// functions, two more again. Every path that resolves the call AFTER the
+// functions, two more again, for twenty-nine; SuperSLM 1.8.0 (TE-426) gave each recording window
+// std::bad_alloc, std::length_error and catch-all clauses (three more returns per function) and
+// reduced each submission tail's two clauses to one classified return apiece (two fewer), one more
+// per function. Every path that resolves the call AFTER the
 // decision reads exactly what the decision decided (true on a cache hit, false on a miss),
 // whether the call's own final status is Ok or one of DecodeStickyTag's fifteen rejecting
-// statuses, including ResidualReconciliationScaleOutOfDomain -- the twenty-nine before them,
-// alike, thirty-five paths' own destination in total.
+// statuses, including ResidualReconciliationScaleOutOfDomain -- the thirty-one before them,
+// alike, thirty-seven paths' own destination in total.
 //
 // Both counts are derived structurally from source, not restated by hand, by
 // tests/ci/check_gpu_guard_status_parity.py (derive_lwuws_before_decision_count/
@@ -573,8 +577,11 @@ constexpr uint32_t kO11AllocInjectionSiteWorkScratchUav = 1;
 // A third site, inside
 // `RestoreGpuSequenceState`'s own device round-trip (superslm_gpu.cpp) -- pins that
 // `sslm_gpu_seq_restore`, defined in gpu_1p0.cpp, now catches an exception thrown from that
-// call and returns SSLM_DEVICE_LOST instead of letting it escape the status-returning API
-// boundary (the same boundary B5 already closed for `sslm_gpu_ready`/`RunLayerLoopGpuFinish`).
+// call and returns a status instead of letting it escape the status-returning API boundary (the
+// same boundary B5 already closed for `sslm_gpu_ready`/`RunLayerLoopGpuFinish`). Since 1.8.0 the
+// injected throw is the allocation failure it models (harness::GpuAllocationError), so every O11
+// site's call returns the allocation status -- SSLM_GPU_ALLOCATION_FAILED at the API -- where it
+// returned SSLM_DEVICE_LOST before.
 constexpr uint32_t kO11AllocInjectionSiteSeqRestore = 2;
 //
 // Note: the definitions built
@@ -856,10 +863,16 @@ bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, size_t hidden
                            const std::array<uint8_t, superslm::kIntegrityHashBytes>& model_content_hash,
                            int32_t bound_schema_index, uint32_t dfa_walk_state, bool ready_for_logits,
                            void* out_blob, size_t* out_blob_size);
+// `out_setup_status` (1.8.0, TE-426; optional): set to `Ok` on entry, and, when the process's
+// submission device could not be set up, to `GpuAllocationFailed` (the setup ran out of memory; the
+// next call sets up again) or `GpuOperationFailed` (any other cause, final) alongside the `false`
+// return -- so a caller tells a setup failure apart from a malformed or mismatched blob, which
+// returns `false` with it left `Ok`. A device failure during the round trip still throws.
 bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::SequenceLayerState* out_seq,
                               size_t hidden_codes_size, uint8_t* out_workspace, size_t workspace_size,
                               int32_t* out_bound_schema_index, uint32_t* out_dfa_walk_state,
-                              bool* out_ready_for_logits);
+                              bool* out_ready_for_logits,
+                              superslm::SslmForwardStatus* out_setup_status = nullptr);
 
 // (design Sec4.2/Sec21): reads only the blob's header (magic + `workspace_size`) -- never the body, never a device
 // call -- so `sslm_gpu_seq_restore` can derive the blob's own `context_cap` (Sec5.1's K/V sizing
@@ -974,8 +987,9 @@ void SslmGpuAllocCounterResetForTest() noexcept;
 uint32_t SslmGpuAllocCountForTest() noexcept;
 void ArmGpuAllocFaultAtOccurrence(uint32_t k, long hr) noexcept;
 bool SslmGpuAllocInBundleForTest(uint32_t k) noexcept;
-// The map-time twin of ArmPrefillGuardDeviceRemovedQueryInjection: the next removed-device query
-// made while classifying a map-time allocation failure reports removed. Single-shot.
+// The next removed-device query the fault classifier makes (harness::DeviceReportedRemoved,
+// 1.8.0), at any site -- a map, a create, a restore, a recording window, a tail, a finish --
+// reports removed, so a test can drive any site to the classifier's rule 1. Single-shot.
 void ArmGpuMapDeviceRemovedQueryInjection() noexcept;
 // The next device logits read-back row has element `row` replaced by `value` before it is
 // returned. Single-shot.

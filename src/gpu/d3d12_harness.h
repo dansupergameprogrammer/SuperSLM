@@ -16,6 +16,7 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
+#include <atomic>
 #include <climits>
 #include <cstdint>
 #include <cstdio>
@@ -24,6 +25,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -52,7 +54,7 @@ struct GpuTestSeamState {
 	uint32_t bundle_scope = 0;       // > 0 while CreateDeviceLogitsBuffers runs
 	uint32_t device_logits_scope = 0;  // > 0 while CreateDeviceLogitsBuffers or RunDeviceLogits runs
 	uint32_t close_failures = 0;     // phase-B Close failures still to inject, inside that scope
-	bool map_removed_query = false;  // the next map-time removed-device query reports removed
+	bool map_removed_query = false;  // the next DeviceReportedRemoved query reports removed
 	bool readback_override_armed = false;
 	int32_t readback_override_row = 0;
 	int64_t readback_override_value = 0;
@@ -63,15 +65,83 @@ inline GpuTestSeamState& TestSeamState() {
 }
 #endif
 
-#define SSLM_GPU_HR(x)                                                                 \
-	do {                                                                                \
-		HRESULT _hr = (x);                                                               \
-		if (FAILED(_hr)) {                                                               \
-			std::fprintf(stderr, "superslm_gpu: HR FAIL 0x%08lx at %s:%d\n",               \
-			             (unsigned long)_hr, __FILE__, __LINE__);                          \
-			throw std::runtime_error("D3D12 call failed");                                 \
-		}                                                                                 \
+// A D3D12 call that failed with E_OUTOFMEMORY. It derives from std::runtime_error, so a catch
+// clause written for SSLM_GPU_HR's other failures still catches it; a clause that must tell memory
+// apart names this type first, or asks ClassifyInFlightException (below).
+class GpuAllocationError : public std::runtime_error {
+public:
+	GpuAllocationError(const char* what, HRESULT hr) : std::runtime_error(what), hr_(hr) {}
+	HRESULT hr() const noexcept { return hr_; }
+
+private:
+	HRESULT hr_;
+};
+
+// A submission the engine cannot confirm recovered: a command list that could not be confirmed
+// Closed, or submitted work whose completion could not be confirmed (a failed fence Signal with no
+// successful retry, or a failed SetEventOnCompletion). Every catch site reads it as rule 0 of the
+// fault classification below, whatever else is true.
+class GpuSubmissionStrandedError : public std::runtime_error {
+public:
+	explicit GpuSubmissionStrandedError(const char* what) : std::runtime_error(what) {}
+};
+
+// SSLM_GPU_HR's failure branch: E_OUTOFMEMORY throws GpuAllocationError, every other failing
+// HRESULT a plain std::runtime_error.
+[[noreturn]] inline void ThrowGpuHrFailure(HRESULT hr, const char* file, int line) {
+	std::fprintf(stderr, "superslm_gpu: HR FAIL 0x%08lx at %s:%d\n", (unsigned long)hr, file, line);
+	if (hr == E_OUTOFMEMORY) throw GpuAllocationError("D3D12 call failed: E_OUTOFMEMORY", hr);
+	throw std::runtime_error("D3D12 call failed");
+}
+
+#define SSLM_GPU_HR(x)                                                   \
+	do {                                                                  \
+		HRESULT _hr = (x);                                                 \
+		if (FAILED(_hr)) ::superslm_gpu::harness::ThrowGpuHrFailure(_hr, __FILE__, __LINE__); \
 	} while (0)
+
+// The fault classifier every site that turns an exception into a status applies. Inputs: what
+// failed (the exception's kind), whether the device reports itself removed, and whether the
+// call's submission is stranded (GpuSubmissionStrandedError above, or a list the call opened and
+// could not confirm Closed). The rules, in order:
+//   0 stranded        -> device lost (the terminal case gpu_1p0.h documents)
+//   1 device removed  -> device lost
+//   2 allocation      -> allocation failed (the device and the context stay usable)
+//   3 anything else   -> the site's own non-allocation disposition
+enum class GpuFaultKind { Allocation, Stranded, Other };
+enum class GpuFaultRule { Stranded = 0, Removed = 1, Allocation = 2, Other = 3 };
+
+// The kind of the exception currently being handled. Call only from inside a catch handler: it
+// rethrows the in-flight exception into its own handlers, which neither copies nor allocates.
+// Allocation is std::bad_alloc, std::length_error (a container asked for more than it can hold)
+// and GpuAllocationError; every other type, standard or not, is Other.
+inline GpuFaultKind ClassifyInFlightException() noexcept {
+	try {
+		throw;
+	} catch (const GpuSubmissionStrandedError&) {
+		return GpuFaultKind::Stranded;
+	} catch (const GpuAllocationError&) {
+		return GpuFaultKind::Allocation;
+	} catch (const std::bad_alloc&) {
+		return GpuFaultKind::Allocation;
+	} catch (const std::length_error&) {
+		return GpuFaultKind::Allocation;
+	} catch (...) {
+		return GpuFaultKind::Other;
+	}
+}
+
+inline GpuFaultRule ClassifyGpuFault(bool stranded, bool device_removed, bool allocation) {
+	if (stranded) return GpuFaultRule::Stranded;
+	if (device_removed) return GpuFaultRule::Removed;
+	if (allocation) return GpuFaultRule::Allocation;
+	return GpuFaultRule::Other;
+}
+
+// Why a Device could not be set up: None while setup has not failed; Allocation when a step of
+// Init() failed with E_OUTOFMEMORY or a host allocation failure (retried by GetDevice() below);
+// Other for every other cause (final).
+enum class SetupFailure { None, Allocation, Other };
 
 struct Device {
 	ComPtr<IDXGIAdapter1> adapter;
@@ -82,7 +152,12 @@ struct Device {
 	ComPtr<ID3D12Fence> fence;
 	HANDLE fence_event = nullptr;
 	UINT64 fence_val = 0;
-	bool available = false;
+	// Set last by a successful Init() and never cleared. Every other field is written only while
+	// this is false (by Init(), and for the process's device by GetDevice() under its mutex), so a
+	// reader that sees true sees a Device that no longer changes; every reader checks it first.
+	std::atomic<bool> available{false};
+	// Why Init() failed; meaningful only while `available` is false (SetupFailure above).
+	std::atomic<SetupFailure> setup_failure{SetupFailure::None};
 	std::string init_error;
 
 	// T-2192 O2: `SSLM_GPU_ENABLE_DEBUG_LAYER=1` (below) turns the D3D12 debug layer on but never
@@ -201,7 +276,67 @@ struct Device {
 	// TE-402 fix round, to survive Windows PowerShell 5.1's ErrorRecord wrapping of native
 	// stderr), so certification output is unaffected; every other consumer of the 1.0 API
 	// (unset env var) prints nothing on either stream, exactly as before this ticket.
-	void Init() {
+	//
+	// Init() does not throw. A failed setup leaves `available` false, `init_error` naming the
+	// cause, and `setup_failure` recording its kind: Allocation when a step failed with
+	// E_OUTOFMEMORY (D3D12CreateDevice on either adapter path included) or a host allocation
+	// failure, Other for every other cause.
+	void Init() noexcept {
+		setup_failure.store(SetupFailure::None);
+		try {
+			InitSteps();
+		} catch (...) {
+			const bool allocation = ClassifyInFlightException() == GpuFaultKind::Allocation;
+			setup_failure.store(allocation ? SetupFailure::Allocation : SetupFailure::Other);
+			try {
+				try {
+					throw;
+				} catch (const std::exception& e) {
+					init_error = e.what();
+				} catch (...) {
+					init_error = "non-standard exception during device setup";
+				}
+			} catch (...) {
+				// Recording the message itself failed to allocate; the kind above is still recorded.
+			}
+			return;
+		}
+		if (!available.load()) {
+			setup_failure.store(create_device_out_of_memory_ ? SetupFailure::Allocation
+			                                                 : SetupFailure::Other);
+		}
+	}
+
+	// Releases everything a failed Init() left behind, so Init() can run again on this object
+	// (GetDevice() below, after an Allocation setup failure). Called only while `available` is
+	// false.
+	void ResetAfterFailedSetup() {
+		timestamp_readback.Reset();
+		timestamp_heap.Reset();
+		timestamp_frequency = 0;
+		if (fence_event) {
+			CloseHandle(fence_event);
+			fence_event = nullptr;
+		}
+		fence.Reset();
+		fence_val = 0;
+		list.Reset();
+		alloc.Reset();
+		queue.Reset();
+		debug_info_queue.Reset();
+		debug_layer_enabled = false;
+		dev.Reset();
+		adapter.Reset();
+		init_error.clear();
+		create_device_out_of_memory_ = false;
+		setup_failure.store(SetupFailure::None);
+	}
+
+private:
+	// True when a D3D12CreateDevice call in this Init() returned E_OUTOFMEMORY.
+	bool create_device_out_of_memory_ = false;
+
+	void InitSteps() {
 		// T-2169 (D-SLM3649's own owed evidence, Dan's review): SSLM_GPU_ENABLE_DEBUG_LAYER, when
 		// set, turns on the D3D12 debug layer (and GPU-based validation, when the installed SDK
 		// supports it) BEFORE any device is created -- the only order the API allows a debug
@@ -291,7 +426,10 @@ struct Device {
 				              " is a software adapter, not a hardware one";
 				return;
 			}
-			if (FAILED(D3D12CreateDevice(a.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&dev)))) {
+			const HRESULT create_hr =
+			    D3D12CreateDevice(a.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&dev));
+			if (FAILED(create_hr)) {
+				if (create_hr == E_OUTOFMEMORY) create_device_out_of_memory_ = true;
 				init_error = "SSLM_GPU_ADAPTER_INDEX=" + std::to_string(override_index) +
 				              ": D3D12CreateDevice failed";
 				return;
@@ -307,10 +445,13 @@ struct Device {
 				DXGI_ADAPTER_DESC1 d;
 				a->GetDesc1(&d);
 				if (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) continue;
-				if (SUCCEEDED(D3D12CreateDevice(a.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&dev)))) {
+				const HRESULT create_hr =
+				    D3D12CreateDevice(a.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&dev));
+				if (SUCCEEDED(create_hr)) {
 					adapter = a;
 					break;
 				}
+				if (create_hr == E_OUTOFMEMORY) create_device_out_of_memory_ = true;
 			}
 		}
 		if (!dev) {
@@ -357,11 +498,13 @@ struct Device {
 		                                 D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
 		if (FAILED(queue->GetTimestampFrequency(&timestamp_frequency))) timestamp_frequency = 0;
 
-		available = true;
+		available.store(true);
 	}
 
-	// Throwing wrapper over TryMakeBuffer: the disposition every existing caller relies on (a bare
-	// std::runtime_error through SSLM_GPU_HR on any failing HRESULT) is unchanged.
+public:
+
+	// Throwing wrapper over TryMakeBuffer, through SSLM_GPU_HR: GpuAllocationError for
+	// E_OUTOFMEMORY, a plain std::runtime_error for every other failing HRESULT.
 	ComPtr<ID3D12Resource> MakeBuffer(UINT64 bytes, D3D12_HEAP_TYPE heap, D3D12_RESOURCE_FLAGS flags,
 	                                   D3D12_RESOURCE_STATES state) {
 		ComPtr<ID3D12Resource> r;
@@ -371,7 +514,8 @@ struct Device {
 
 	// Creates one committed buffer and returns the HRESULT instead of throwing, so a caller can
 	// keep the failure's cause (T-2851: E_OUTOFMEMORY on a live device is a recoverable
-	// SSLM_GPU_ALLOCATION_FAILED, not a device loss). Every device allocation in the library passes
+	// SSLM_GPU_ALLOCATION_FAILED, not a device loss; since 1.8.0 SSLM_GPU_HR carries the same
+	// distinction for every D3D12 call it wraps). Every device allocation in the library passes
 	// through here: MakeBuffer wraps it and Upload calls MakeBuffer. In test builds it counts every
 	// call and can fail a chosen occurrence (GpuTestSeamState above).
 	HRESULT TryMakeBuffer(UINT64 bytes, D3D12_HEAP_TYPE heap, D3D12_RESOURCE_FLAGS flags,
@@ -406,19 +550,82 @@ struct Device {
 		                                    IID_PPV_ARGS(out->ReleaseAndGetAddressOf()));
 	}
 
-	// Phase B's Close (T-2851 design Sec4.6 item 4): one immediate retry on failure, the chunk
-	// path's shape. Returns normally only when the list is Closed. Otherwise it throws
-	// std::runtime_error -- the caller's catch reports SSLM_DEVICE_LOST -- in one of two states: the
-	// retry succeeded, so the list is Closed and the context stays usable; or the retry failed
-	// too, so the list is left recording, which is the terminal case gpu_1p0.h already documents
-	// for SSLM_DEVICE_LOST (every later call on the context fails, because the allocator refuses
-	// Reset while its list is recording).
-	void CloseListWithRetry() {
-		if (SUCCEEDED(CloseListOnce())) return;
-		const HRESULT retry = CloseListOnce();
-		std::fprintf(stderr, "superslm_gpu: command list Close failed; retry %s\n",
-		             SUCCEEDED(retry) ? "succeeded (list Closed)" : "failed (list left recording)");
-		throw std::runtime_error("D3D12 command list Close failed");
+	// What CloseListConfirmed found: the first Close's HRESULT, and whether the list ended Closed.
+	struct CloseOutcome {
+		HRESULT first_hr = S_OK;
+		bool closed = false;
+	};
+
+	// Closes the command list and reports whether it is Closed, without throwing:
+	//   1. Close;
+	//   2. on failure, Close again;
+	//   3. on failure again, confirm: Reset(alloc, nullptr), then Close. A list the driver already
+	//      closed accepts the Reset; a list still recording refuses it.
+	// What a driver leaves behind after Close returns E_OUTOFMEMORY is not established, and an
+	// already-closed list answers a second Close with E_FAIL, so a failed retry alone cannot tell
+	// "closed" from "still recording"; step 3 can. A list that is not Closed after step 3 is the
+	// terminal case gpu_1p0.h documents for SSLM_DEVICE_LOST: every later call on the list's
+	// context fails, because the allocator refuses Reset while its list is recording. The list's
+	// recorded commands are never executed after a failed Close, so step 3 discards nothing a
+	// caller still needs.
+	CloseOutcome CloseListConfirmed() {
+		CloseOutcome out;
+		out.first_hr = CloseListOnce();
+		if (SUCCEEDED(out.first_hr)) {
+			out.closed = true;
+			return out;
+		}
+		const char* how = "left recording";
+		if (SUCCEEDED(CloseListOnce())) {
+			out.closed = true;
+			how = "closed by the retry";
+		} else if (SUCCEEDED(list->Reset(alloc.Get(), nullptr)) && SUCCEEDED(list->Close())) {
+			out.closed = true;
+			how = "confirmed closed";
+		}
+		std::fprintf(stderr, "superslm_gpu: command list Close failed 0x%08lx; list %s\n",
+		             static_cast<unsigned long>(out.first_hr), how);
+		return out;
+	}
+
+	// CloseListConfirmed for a caller that reports failure by exception: returns when the first
+	// Close succeeded; otherwise throws the typed HRESULT failure (GpuAllocationError for
+	// E_OUTOFMEMORY, std::runtime_error otherwise) when the list ended Closed, and
+	// GpuSubmissionStrandedError when it did not.
+	void CloseListOrThrow() {
+		const CloseOutcome close = CloseListConfirmed();
+		if (SUCCEEDED(close.first_hr)) return;
+		if (!close.closed) {
+			throw GpuSubmissionStrandedError("D3D12 command list could not be confirmed Closed");
+		}
+		ThrowGpuHrFailure(close.first_hr, __FILE__, __LINE__);
+	}
+
+	// Waits for the fence to reach fence_val. A failed SetEventOnCompletion means the wait cannot
+	// be confirmed, so the submitted work's completion is unknown: GpuSubmissionStrandedError.
+	void WaitForFenceOrStrand() {
+		if (fence->GetCompletedValue() < fence_val) {
+			const HRESULT hr = fence->SetEventOnCompletion(fence_val, fence_event);
+			if (FAILED(hr)) {
+				std::fprintf(stderr, "superslm_gpu: SetEventOnCompletion failed 0x%08lx\n",
+				             static_cast<unsigned long>(hr));
+				throw GpuSubmissionStrandedError("D3D12 fence wait could not be confirmed");
+			}
+			WaitForSingleObject(fence_event, INFINITE);
+		}
+	}
+
+	// Signals the fence at a fresh value after ExecuteCommandLists, with no retry, and waits for
+	// it. A failed Signal leaves submitted work whose completion cannot be confirmed:
+	// GpuSubmissionStrandedError.
+	void SignalAndWaitOrStrand() {
+		const HRESULT hr = queue->Signal(fence.Get(), ++fence_val);
+		if (FAILED(hr)) {
+			std::fprintf(stderr, "superslm_gpu: fence Signal failed 0x%08lx\n",
+			             static_cast<unsigned long>(hr));
+			throw GpuSubmissionStrandedError("D3D12 fence Signal failed after ExecuteCommandLists");
+		}
+		WaitForFenceOrStrand();
 	}
 
 	HRESULT CloseListOnce() {
@@ -693,14 +900,10 @@ struct Device {
 		b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 		list->ResourceBarrier(1, &b);
 		list->CopyResource(readback.Get(), uav.Get());
-		SSLM_GPU_HR(list->Close());
+		CloseListOrThrow();
 		ID3D12CommandList* lists[] = {list.Get()};
 		queue->ExecuteCommandLists(1, lists);
-		SSLM_GPU_HR(queue->Signal(fence.Get(), ++fence_val));
-		if (fence->GetCompletedValue() < fence_val) {
-			SSLM_GPU_HR(fence->SetEventOnCompletion(fence_val, fence_event));
-			WaitForSingleObject(fence_event, INFINITE);
-		}
+		SignalAndWaitOrStrand();
 		std::vector<uint8_t> out(out_bytes);
 		void* p = nullptr;
 		D3D12_RANGE range{0, (SIZE_T)out_bytes};
@@ -712,18 +915,51 @@ struct Device {
 	}
 };
 
-inline Device& GetDevice() {
-	static Device dev = [] {
-		Device d;
-		try {
-			d.Init();
-		} catch (const std::exception& e) {
-			d.available = false;
-			d.init_error = e.what();
+// The process's submission device: one Device, set up on the first call. GetDevice() never throws
+// (the SuperSLM-Unreal plugin, and several engine sites, call it outside any try) and always
+// returns the same object. A setup that failed for lack of memory (SetupFailure::Allocation) is not
+// final: the next GetDevice() call clears the partial state and sets up again, under the holder's
+// mutex. A setup that failed for any other reason (SetupFailure::Other) is final, for the life of
+// the process. Once `available` is true nothing here writes the Device again, so the fast path
+// below takes no lock.
+struct DeviceHolder {
+	std::mutex mutex;
+	Device device;
+	bool setup_attempted = false;
+};
+
+inline Device& GetDevice() noexcept {
+	static DeviceHolder holder;
+	if (holder.device.available.load()) return holder.device;
+	std::lock_guard<std::mutex> lock(holder.mutex);
+	if (!holder.setup_attempted) {
+		holder.setup_attempted = true;
+		holder.device.Init();
+	} else if (!holder.device.available.load() &&
+	           holder.device.setup_failure.load() == SetupFailure::Allocation) {
+		holder.device.ResetAfterFailedSetup();
+		holder.device.Init();
+	}
+	return holder.device;
+}
+
+// Whether `dev` reports itself removed, the fault classifier's rule-1 input. A Device that was
+// never set up (`available` false) is never read as removed: its failure is a setup failure, which
+// each site reports through `setup_failure`. Test builds (SUPERSLM_GPU_ALLOC_FAULT_INJECTION) can
+// make the next query report removed (ArmGpuMapDeviceRemovedQueryInjection, gpu_1p0.cpp), so every
+// site that classifies a fault can be driven to rule 1.
+inline bool DeviceReportedRemoved(Device& dev) {
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+	{
+		GpuTestSeamState& seam = TestSeamState();
+		std::lock_guard<std::mutex> lock(seam.mutex);
+		if (seam.map_removed_query) {
+			seam.map_removed_query = false;  // single-shot
+			return true;
 		}
-		return d;
-	}();
-	return dev;
+	}
+#endif
+	return dev.available.load() && dev.dev && dev.dev->GetDeviceRemovedReason() != S_OK;
 }
 
 // The process's shader directory (GpuContextConfig::shader_dir, include/superslm/gpu_1p0.h).

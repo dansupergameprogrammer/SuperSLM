@@ -1668,6 +1668,12 @@ sslm_status MapForwardStatus(superslm::SslmForwardStatus st) {
 	if (st == superslm::SslmForwardStatus::ParallelForIncomplete) {
 		return SSLM_INVALID_ARGUMENT;
 	}
+	// SuperSLM 1.8.0 (TE-426): the GPU's non-allocation failure status. The CPU path never
+	// produces it; the arm is explicit because every new enumerator owes one here
+	// (checked_chain_funnel.cpp), and it maps where the collapse below already would.
+	if (st == superslm::SslmForwardStatus::GpuOperationFailed) {
+		return SSLM_ARTIFACT_REJECTED;
+	}
 	return st == superslm::SslmForwardStatus::Ok ? SSLM_OK : SSLM_ARTIFACT_REJECTED;
 }
 

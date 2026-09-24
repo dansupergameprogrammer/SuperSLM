@@ -229,35 +229,47 @@ enum class SslmForwardStatus {
 	// already carrying two other meanings on that leg (no device at all;
 	// sub-Tier-3 hardware), both permanent-hardware conditions a caller
 	// should stop retrying against. These two are host-observed AT THE
-	// CATCH SITE via ID3D12Device::GetDeviceRemovedReason(), never derived
-	// from SSLM_GPU_HR's own thrown std::runtime_error (which carries no
-	// HRESULT payload) and never encoded into the GPU-side sticky-tag space
+	// CATCH SITE (the device's state via ID3D12Device::GetDeviceRemovedReason();
+	// since 1.8.0 the failure's memory kind from the exception's type, below)
+	// and never encoded into the GPU-side sticky-tag space
 	// DecodeStickyTag decodes (superslm_gpu.cpp) -- appending here is
 	// ABI-safe by every constraint this tree enforces or has planned
 	// (§22.2: no fixed underlying values beyond Ok=0, never
 	// serialized, no shipped sslm_status C-ABI type exists yet to freeze). ---
-	GpuAllocationFailed,                      // a device allocation, or any
-	                                          // other command-recording-window D3D12 operation,
-	                                          // failed while the device is CONFIRMED STILL PRESENT
-	                                          // (GetDeviceRemovedReason() == S_OK). Transient and
-	                                          // size-dependent -- the correct host response is to
-	                                          // retry at a smaller configuration, never to fall
-	                                          // back off this GPU permanently (the same class of
-	                                          // host-facing confusion this enum's own
+	//
+	// SuperSLM 1.8.0 (TE-426): the GPU sites classify every fault by one rule set
+	// (d3d12_harness.h, ClassifyGpuFault) into three statuses -- GpuAllocationFailed and
+	// GpuDeviceRemoved here, and GpuOperationFailed (appended last, below) -- and SSLM_GPU_HR
+	// now carries the HRESULT's memory kind (GpuAllocationError for E_OUTOFMEMORY). At the GPU
+	// API, GpuAllocationFailed maps to SSLM_GPU_ALLOCATION_FAILED and the other two to
+	// SSLM_DEVICE_LOST.
+	GpuAllocationFailed,                      // an allocation failed -- host memory
+	                                          // (std::bad_alloc, std::length_error) or any D3D12
+	                                          // call returning E_OUTOFMEMORY, on any heap, or the
+	                                          // first-time setup of the process's submission device
+	                                          // running out of memory -- while the device is not
+	                                          // reported removed and the submission is clean (the
+	                                          // command list confirmed Closed, submitted work
+	                                          // confirmed complete). Transient and size-dependent --
+	                                          // the correct host response is to retry, or retry at a
+	                                          // smaller configuration, never to fall back off this
+	                                          // GPU permanently (the same class of host-facing
+	                                          // confusion this enum's own
 	                                          // HeadDimGeometryMismatch/WorkspaceTooSmall history
 	                                          // documents as a defect when the wrong status sends
 	                                          // the host down the wrong recovery path).
 	GpuDeviceRemoved,                         // the GPU device itself was
 	                                          // removed, reset, or hung
-	                                          // (GetDeviceRemovedReason() != S_OK) during a
-	                                          // recording-window operation. The device object is no
-	                                          // longer usable for any further call -- the host must
-	                                          // recreate it, not retry against the same handle.
+	                                          // (GetDeviceRemovedReason() != S_OK), or the call's
+	                                          // submission is stranded: a command list that could
+	                                          // not be confirmed Closed, or submitted work whose
+	                                          // completion could not be confirmed -- the terminal
+	                                          // case gpu_1p0.h documents for SSLM_DEVICE_LOST.
 	                                          // Distinct from GpuAllocationFailed (device alive,
 	                                          // this one call failed) and from
-	                                          // KvPrecisionUnsupported's "no device"/"tier too low"
-	                                          // meanings (this device WAS usable a moment ago and
-	                                          // may be again after recreation -- neither a
+	                                          // KvPrecisionUnsupported's "tier too low" meaning
+	                                          // (this device WAS usable a moment ago and may be
+	                                          // again after recreation -- neither a
 	                                          // permanent-hardware nor a size-dependent condition).
 	                                          // Named residual: GetDeviceRemovedReason()
 	                                          // answers "is the device gone right now," not "did
@@ -358,6 +370,21 @@ enum class SslmForwardStatus {
 	                                          // SSLM_INVALID_ARGUMENT, the GPU bridge finish to
 	                                          // SSLM_GPU_PARALLEL_FOR_INCOMPLETE, and both leave the
 	                                          // sequence ready to retry the finish.
+	GpuOperationFailed,                       // SuperSLM 1.8.0 (TE-426), appended last so no
+	                                          // existing ordinal moves: a GPU operation failed for
+	                                          // a reason other than memory, on a device not
+	                                          // reported removed, with the submission clean -- a
+	                                          // missing shader during recording, a Map or Reset
+	                                          // failing with an HRESULT other than E_OUTOFMEMORY, a
+	                                          // Close or Signal failure whose retry recovered, a
+	                                          // process submission device whose first-time setup
+	                                          // failed for a reason other than memory, or a caller
+	                                          // error such as finishing a call with no in-flight
+	                                          // token. Maps to SSLM_DEVICE_LOST at the GPU API.
+	                                          // Never GpuAllocationFailed, whose "retry smaller"
+	                                          // advice no size fixes for any of these. The CPU path
+	                                          // never produces it; MapForwardStatus (sslm_abi.cpp)
+	                                          // carries an explicit arm anyway.
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,

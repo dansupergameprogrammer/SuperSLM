@@ -860,8 +860,10 @@ inline void MaybeThrowInjectedO11AllocFault(uint32_t this_site) {
 		// same process fail too, which is not what "the next matching
 		// allocation" means.
 		g_o11_alloc_injection_armed = false;
-		throw std::runtime_error("T2080 O11: injected allocation failure at site " +
-		                          std::to_string(this_site));
+		// Models an allocation failure, so it throws the type a real E_OUTOFMEMORY does.
+		const std::string what =
+		    "T2080 O11: injected allocation failure at site " + std::to_string(this_site);
+		throw harness::GpuAllocationError(what.c_str(), E_OUTOFMEMORY);
 	}
 #endif  // SUPERSLM_O11_ALLOC_INJECTION
 }
@@ -1876,9 +1878,17 @@ struct GpuLayerLoopChunkOpenState {
 	Microsoft::WRL::ComPtr<ID3D12Resource> scratch_layout_buf;
 	Microsoft::WRL::ComPtr<ID3D12Resource> lw_upload_keep_alive;
 	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> upload_keep_alive;
+	// Set immediately after this call's command-list Reset succeeds, and never before: a throw
+	// that leaves it false reached no open list, so the recording window's cleanup
+	// (AbandonRecording) leaves the list alone.
+	bool list_opened = false;
 };
 
+// `dev` is the process's submission device, obtained once by the caller (harness::GetDevice()), so
+// one submission makes at most one attempt at a first-time device setup: a setup that ran out of
+// memory is retried by the next submission, never twice inside one.
 superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
+    harness::Device& dev,
     superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
     uint32_t num_hidden_layers, uint32_t layer_budget, size_t hidden_size, size_t head_dim,
     size_t num_key_value_heads, size_t intermediate_size, int64_t context_cap,
@@ -2020,8 +2030,15 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	              "RunLayerLoopGpu's own guard ladder above must implement exactly as many guards "
 	              "as gpu_layer_loop_guards.def enumerates -- update both together");
 
-	harness::Device& dev = harness::GetDevice();
-	if (!dev.available) return superslm::SslmForwardStatus::KvPrecisionUnsupported;
+	// The process's submission device could not be set up. One status per cause, the same from
+	// every entry point: a setup that ran out of memory is an allocation failure, and the next
+	// call sets up again (harness::GetDevice()); any other cause is a non-allocation failure,
+	// final for the process.
+	if (!dev.available) {
+		return dev.setup_failure.load() == harness::SetupFailure::Allocation
+		           ? superslm::SslmForwardStatus::GpuAllocationFailed
+		           : superslm::SslmForwardStatus::GpuOperationFailed;
+	}
 
 	// T-2045 (S2 partial, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md):
 	// §5.1's own Tier-3 hardware floor (D-SLM3000) is now enforced on the path
@@ -2515,6 +2532,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// reaches this line at all.)
 	SSLM_GPU_HR(dev.alloc->Reset());
 	SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
+	out_state->list_opened = true;
 
 	// EVERY variable below this point that the command list's own GPU virtual addresses
 	// reference is declared here, in the caller-visible out_state, or as a plain local that does
@@ -2857,6 +2875,92 @@ void InvalidateResidencyCachesOnThrow() {
 	g_last_rope_upload_was_skipped = false;
 	g_last_kv_upload_was_skipped = false;
 }
+
+// The one cleanup every recording-window catch clause runs, whatever it caught: invalidate the
+// residency caches, then close the process's command list if this call opened it
+// (`state.list_opened`), through CloseListConfirmed. Returns whether the list ended Closed. A
+// false return is a stranded submission (rule 0): the caller reports GpuDeviceRemoved before any
+// status of its own.
+bool AbandonRecording(harness::Device& dev, const GpuLayerLoopChunkOpenState& state) {
+	InvalidateResidencyCachesOnThrow();
+	if (!state.list_opened) return true;  // no list was opened, so none is left recording
+	return dev.CloseListConfirmed().closed;
+}
+
+// The forward status for each rule of the fault classifier (d3d12_harness.h): rules 0 and 1 are
+// GpuDeviceRemoved, rule 2 GpuAllocationFailed, rule 3 GpuOperationFailed.
+superslm::SslmForwardStatus ForwardStatusForFault(harness::GpuFaultRule rule) {
+	switch (rule) {
+		case harness::GpuFaultRule::Stranded:
+		case harness::GpuFaultRule::Removed:
+			return superslm::SslmForwardStatus::GpuDeviceRemoved;
+		case harness::GpuFaultRule::Allocation:
+			return superslm::SslmForwardStatus::GpuAllocationFailed;
+		case harness::GpuFaultRule::Other:
+		default:
+			return superslm::SslmForwardStatus::GpuOperationFailed;
+	}
+}
+
+// The classifier applied to the exception currently being handled, at a forward site. Call only
+// from inside a catch handler. `stranded` is the site's own knowledge (a list it could not confirm
+// Closed, or work whose completion it could not confirm); a GpuSubmissionStrandedError is stranded
+// too. The removed-device query is made only when rule 0 has not already decided.
+superslm::SslmForwardStatus ClassifyForwardFault(harness::Device& dev, bool stranded) {
+	const harness::GpuFaultKind kind = harness::ClassifyInFlightException();
+	const bool is_stranded = stranded || kind == harness::GpuFaultKind::Stranded;
+	const bool removed = !is_stranded && harness::DeviceReportedRemoved(dev);
+	return ForwardStatusForFault(harness::ClassifyGpuFault(
+	    is_stranded, removed, kind == harness::GpuFaultKind::Allocation));
+}
+
+// The status for a fault in a submission tail -- the Close, ExecuteCommandLists, the fence Signal
+// and the in-flight token's allocation that follow a recording window -- shared by both tails.
+// Call only from inside a catch handler. Where the fault struck decides the stranded input:
+//   - before the Close was attempted (the pre-Close pin seam): the list is still recording, so it
+//     is closed here through CloseListConfirmed;
+//   - at the Close (CloseListOrThrow): its exception already carries the list's confirmed state;
+//   - after ExecuteCommandLists, with the Signal done: the submission is waited out at its own
+//     fence value;
+//   - after ExecuteCommandLists, with the Signal failed: a FRESH fence value is signalled and
+//     waited out (T-2192 T2(b): a retry at the failed call's value may be a silent no-op).
+// Work whose completion cannot be confirmed is stranded (rule 0): the caller is about to release
+// resources that work reads. Otherwise the classifier decides by the exception's kind: a Signal
+// that failed with E_OUTOFMEMORY and recovered is rule 2, any other recovered failure rule 3.
+superslm::SslmForwardStatus SubmissionTailFaultStatus(harness::Device& dev, bool close_attempted,
+                                                      bool executed, bool signaled) {
+	bool stranded = false;
+	if (!executed) {
+		if (!close_attempted) stranded = !dev.CloseListConfirmed().closed;
+	} else {
+		UINT64 wait_value = dev.fence_val;
+		bool wait_possible = true;
+		if (!signaled) {
+			wait_value = ++dev.fence_val;
+			wait_possible = SUCCEEDED(dev.queue->Signal(dev.fence.Get(), wait_value));
+		}
+		if (!wait_possible) {
+			stranded = true;
+		} else if (dev.fence->GetCompletedValue() < wait_value) {
+			if (SUCCEEDED(dev.fence->SetEventOnCompletion(wait_value, dev.fence_event))) {
+				WaitForSingleObject(dev.fence_event, INFINITE);
+			} else {
+				stranded = true;
+			}
+		}
+	}
+	return ClassifyForwardFault(dev, stranded);
+}
+
+// A named-type clause's status (GpuGemmGroupArithmeticInvalid, GpuLayerWeightsContractViolation,
+// GpuShaderBinaryStale) once rules 0 and 1 have passed.
+superslm::SslmForwardStatus NamedFaultStatusAfterRules(harness::Device& dev, bool list_closed,
+                                                       superslm::SslmForwardStatus named) {
+	if (!list_closed || harness::DeviceReportedRemoved(dev)) {
+		return superslm::SslmForwardStatus::GpuDeviceRemoved;
+	}
+	return named;
+}
 }  // namespace
 
 // fence-wait and everything after it (moved to RunLayerLoopGpuFinish, below) PLUS the
@@ -2910,7 +3014,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	    io_external_kv_needs_resume_barrier != nullptr && *io_external_kv_needs_resume_barrier;
 	try {
 	const superslm::SslmForwardStatus prep_status = PrepareGpuLayerLoopChunkOpenState(
-	    seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim, num_key_value_heads,
+	    dev, seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim, num_key_value_heads,
 	    intermediate_size, context_cap, rope_tables, workspace, workspace_size, external_kv_resident,
 	    io_external_kv_needs_resume_barrier, external_weights_resident, external_rope_cos_resident,
 	    external_rope_sin_resident, external_rope_has, external_rope_cos_elems,
@@ -3089,9 +3193,9 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		// confirmation pass's own finding was that the original guard's exception, its one useful
 		// payload, was constructed, thrown, and dropped by an unnamed catch clause.
 		std::fprintf(stderr, "superslm_gpu: %s\n", e.what());
-		InvalidateResidencyCachesOnThrow();
-		dev.list->Close();
-		return superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid;
+		const bool list_closed = AbandonRecording(dev, state);
+		return NamedFaultStatusAfterRules(dev, list_closed,
+		                                  superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid);
 	} catch (const GpuLayerWeightsContractError& e) {
 		// T-2568 (S1, Claude/Poirot/66626ef-t2567-trackb-confirmation.md): the twin of the
 		// GpuGemmGroupArithmeticError clause immediately above, for PackLayerWeightsBytes' own
@@ -3104,9 +3208,9 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		// advice for a null pointer) and its message -- the field's name, the whole content of
 		// "refused by name" -- is preserved to stderr rather than discarded by an unnamed catch.
 		std::fprintf(stderr, "superslm_gpu: %s\n", e.what());
-		InvalidateResidencyCachesOnThrow();
-		dev.list->Close();
-		return superslm::SslmForwardStatus::GpuLayerWeightsContractViolation;
+		const bool list_closed = AbandonRecording(dev, state);
+		return NamedFaultStatusAfterRules(
+		    dev, list_closed, superslm::SslmForwardStatus::GpuLayerWeightsContractViolation);
 	} catch (const harness::GpuShaderBinaryStaleError& e) {
 		// T-2577 (S2, Claude/Poirot/5fafd98-t2573-trackb-external-fold-review.md, D-SLM6279):
 		// the twin of the GpuLayerWeightsContractError clause immediately above, for
@@ -3119,10 +3223,28 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		// timestamps, the whole content of "which file is stale and by how much" -- is preserved
 		// to stderr rather than discarded by an unnamed catch.
 		std::fprintf(stderr, "superslm_gpu: %s\n", e.what());
-		InvalidateResidencyCachesOnThrow();
-		dev.list->Close();
-		return superslm::SslmForwardStatus::GpuShaderBinaryStale;
+		const bool list_closed = AbandonRecording(dev, state);
+		return NamedFaultStatusAfterRules(dev, list_closed,
+		                                  superslm::SslmForwardStatus::GpuShaderBinaryStale);
+	} catch (const std::bad_alloc&) {
+		// 1.8.0 (TE-426): a host allocation failure inside the recording window. Before 1.8.0 it
+		// escaped this try with the process's command list still recording, so the call reported
+		// SSLM_GPU_ALLOCATION_FAILED and the NEXT submission in the process, on any context, failed
+		// at `dev.alloc->Reset()` and read as device loss.
+		const bool list_closed = AbandonRecording(dev, state);
+		return ClassifyForwardFault(dev, /*stranded=*/!list_closed);
+	} catch (const std::length_error&) {
+		// A container asked for more than it can hold: an allocation failure, contained as above.
+		const bool list_closed = AbandonRecording(dev, state);
+		return ClassifyForwardFault(dev, /*stranded=*/!list_closed);
 	} catch (const std::runtime_error&) {
+		// 1.8.0 (TE-426): the fault classifier (d3d12_harness.h) replaces the removed-or-allocation
+		// split below. GpuAllocationError (E_OUTOFMEMORY from any D3D12 call, or the O11 seam) is
+		// rule 2, GpuAllocationFailed; any other std::runtime_error -- a missing shader, a Map or
+		// Reset failing with another HRESULT -- is rule 3, GpuOperationFailed; a list this clause
+		// cannot confirm Closed is rule 0 and a removed device rule 1, both GpuDeviceRemoved. The
+		// history below records why the caches are invalidated here.
+		//
 		// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
 		// review.md, P3): defensively invalidate the weight-residency cache
 		// regardless of WHERE in the window the throw happened. A throw
@@ -3165,25 +3287,29 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		// resolves T-2055's own P4 (`KvPrecisionUnsupported` already carrying
 		// two unrelated permanent-hardware meanings on this leg) without
 		// needing either.
-		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
+		//
 		// T-2101 (S4, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
 		// f7026db): both residency caches reset to invalid, `LastWeightUploadWasSkipped` set false --
 		// issued via the shared file-scope `InvalidateResidencyCachesOnThrow()` (T-2184 remedy S3,
 		// Brunel fix round 1, D-SLM3662 -- its own full history, T-2055/T-2062 M-b/T-2080 S3/T-2101
 		// S3-prime, now lives on that function's own header comment), identical effect, written once
-		// so this clause and the `GpuGemmGroupArithmeticError` clause above cannot diverge.
-		InvalidateResidencyCachesOnThrow();
-		dev.list->Close();
-		// T-2057 (D-SLM3191): `GpuDeviceRemoved` iff the device is confirmed
-		// gone right now (device recreation owed, not a retry against this
-		// handle); `GpuAllocationFailed` otherwise (device alive, this one
-		// call failed -- transient/size-dependent, retry smaller). Named
-		// residual, not fixed here (the ruling's own §22.3): this answers "is
-		// the device gone right now," not "did removal cause THIS throw" -- an
-		// allocation failure racing an unrelated async device removal reads
-		// as `GpuDeviceRemoved`, the conservative direction.
-		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
-		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
+		// so this clause and the `GpuGemmGroupArithmeticError` clause above cannot diverge. Since
+		// 1.8.0 it runs inside AbandonRecording, which also closes the list through
+		// CloseListConfirmed and reports whether it ended Closed.
+		//
+		// T-2057 (D-SLM3191): the removed-device query answers "is the device gone right now," not
+		// "did removal cause THIS throw" -- an allocation failure racing an unrelated async device
+		// removal reads as `GpuDeviceRemoved`, the conservative direction. Named residual.
+		const bool list_closed = AbandonRecording(dev, state);
+		return ClassifyForwardFault(dev, /*stranded=*/!list_closed);
+	} catch (...) {
+		// 1.8.0 (TE-426): any other exception type -- a std::exception outside the clauses above, or
+		// a non-standard type. Close the list first; if it is confirmed Closed, rethrow, so the API
+		// boundary classifies it by type (an allocation type as SSLM_GPU_ALLOCATION_FAILED, anything
+		// else as SSLM_DEVICE_LOST) with the process's submission list clean. A list that cannot be
+		// confirmed Closed is rule 0.
+		if (!AbandonRecording(dev, state)) return superslm::SslmForwardStatus::GpuDeviceRemoved;
+		throw;
 	}
 	// T-2195 remedy S1, class sweep (D-SLM3702 arc; Claude/Poirot/
 	// 1381076-t2195-t2189-closing-confirmation.md, Observation O1): this tail -- `Close()`,
@@ -3199,7 +3325,13 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	// this round's own S1 correction (restore the captured entry value, not a constant) from the
 	// moment the containment exists, rather than in two separate rounds.
 	bool tail_list_closed = false;
+	// 1.8.0 (TE-426): set immediately before the tail's Close. A throw with it false came from
+	// before the Close (the pre-Close pin seam), so the list is still recording; a throw with it true
+	// came from CloseListOrThrow, which has already confirmed the list's state -- a typed HRESULT
+	// failure for a list it confirmed Closed, GpuSubmissionStrandedError for one it could not.
+	bool tail_close_attempted = false;
 	bool tail_executed = false;
+	bool tail_signaled = false;  // the Signal after ExecuteCommandLists succeeded
 	try {
 		// T-2195 pertoken pin (Curie): the SAME pre-Close pin seam
 		// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own tail already calls (this file, below) --
@@ -3209,7 +3341,8 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		// this round's own S1 containment, not only the chunk primitive's. Arming plumbing only --
 		// unarmed cost is the existing zero-overhead check the sibling call site already pays.
 		MaybeThrowInjectedT2169ChunkRecordingTailFault();
-		SSLM_GPU_HR(dev.list->Close());
+		tail_close_attempted = true;
+		dev.CloseListOrThrow();
 		tail_list_closed = true;
 		const auto t_record_end = std::chrono::steady_clock::now();
 		g_last_call_timing.record_ms =
@@ -3226,6 +3359,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		assert(tail_list_closed);
 		tail_executed = true;
 		SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
+		tail_signaled = true;
 		// T-2113 (B5, design Sec6.2): NO fence-wait here -- "records ... submits ... and
 		// returns without waiting for the fence." Everything below used to run
 		// synchronously at this point (the wait, the GPU-timing readback, the SeqState/KV
@@ -3266,72 +3400,39 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		if (out_inflight) *out_inflight = inflight.release();
 		return superslm::SslmForwardStatus::Ok;
 	} catch (const std::bad_alloc&) {
-		// Reached only after Close() and Signal() both succeeded -- mirrors
-		// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own identical `bad_alloc` clause exactly (this
-		// file, above): the list is already Closed and the GPU already has this submission queued
-		// against the fence value just signaled, so every resource this stack is about to release
+		// Reached after Close() and Signal() both succeeded (the in-flight token's allocation) --
+		// mirrors `SubmitOneSubChunkToFullDepthForG5Bridge`'s own identical `bad_alloc` clause
+		// exactly (this file, above): the GPU already has this submission queued against the fence
+		// value just signaled, so every resource this stack is about to release
 		// (`seq_readback`/`kv_readback`/every `state` buffer) must wait the fence out first, rather
 		// than let a GPU-referenced resource's last COM reference drop while the device may still be
-		// using it.
+		// using it. SubmissionTailFaultStatus does the wait, and reports a wait it cannot confirm
+		// as a stranded submission.
 		InvalidateResidencyCachesOnThrow();
-		if (dev.fence->GetCompletedValue() < dev.fence_val) {
-			if (SUCCEEDED(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event))) {
-				WaitForSingleObject(dev.fence_event, INFINITE);
-			}
-			// A failed SetEventOnCompletion means the fence itself is unusable -- the device is
-			// gone, which GetDeviceRemovedReason() below is what actually reports.
+		if (!tail_executed && external_kv_resident != nullptr &&
+		    io_external_kv_needs_resume_barrier != nullptr) {
+			*io_external_kv_needs_resume_barrier = kv_resume_barrier_entry_value;
 		}
-		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
-		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
-		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
+		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed, tail_signaled);
 	} catch (const std::runtime_error&) {
-		// A failed Close() or Signal() -- mirrors the sibling's own identical clause exactly,
-		// including this round's own S1 restore-the-entry-value correction from this containment's
-		// first landing (there is no prior round's constant-`false` version of this clause to have
-		// carried the T-2192 T1 defect, since this tail had no containment before this round).
+		// A failed Close() or Signal(), or the pre-Close pin seam -- mirrors the sibling's own
+		// identical clause exactly.
 		InvalidateResidencyCachesOnThrow();
 		if (!tail_executed) {
-			// `ExecuteCommandLists` never ran: either Close() itself failed, or (unreachable today,
-			// no injected seam exists on this path) some future instrumentation fires before it. The
-			// caller-owned resume-barrier latch this function set above (at the readback transitions,
-			// `:2318-2319`) claims a COPY_SOURCE transition that did not run -- restore it to
-			// `kv_resume_barrier_entry_value`, the value captured before this call's own recording
-			// began, for the identical reason the sibling's own S1 fix restores it there.
+			// `ExecuteCommandLists` never ran. The caller-owned resume-barrier latch this function
+			// set above (at the readback transitions) claims a COPY_SOURCE transition that did not
+			// run -- restore it to `kv_resume_barrier_entry_value`, the value captured before this
+			// call's own recording began, for the identical reason the sibling's own S1 fix restores
+			// it there.
 			if (external_kv_resident != nullptr && io_external_kv_needs_resume_barrier != nullptr) {
 				*io_external_kv_needs_resume_barrier = kv_resume_barrier_entry_value;
 			}
-			// Best-effort retry, matching the sibling's own T2(a) disposition: a list still recording
-			// after a second failed Close() refuses every later `dev.alloc->Reset()` on this context,
-			// so the honest terminal status is `GpuDeviceRemoved`, not `GpuAllocationFailed`'s implied
-			// "recovered, reusable list."
-			const bool retry_closed = SUCCEEDED(dev.list->Close());
-			const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
-			if (!retry_closed) {
-				return superslm::SslmForwardStatus::GpuDeviceRemoved;
-			}
-			return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
-			                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
 		}
-		// `ExecuteCommandLists` already ran -- the GPU has this submission queued, the identical
-		// situation the `bad_alloc` clause above documents. Mint a FRESH, unambiguously-unreached
-		// fence value and signal that one, matching the sibling's own T2(b) fix exactly, rather than
-		// retry at whatever `dev.fence_val` already holds (a near-guaranteed silent no-op).
-		const UINT64 recovery_fence_val = ++dev.fence_val;
-		if (SUCCEEDED(dev.queue->Signal(dev.fence.Get(), recovery_fence_val)) &&
-		    dev.fence->GetCompletedValue() < recovery_fence_val) {
-			if (SUCCEEDED(dev.fence->SetEventOnCompletion(recovery_fence_val, dev.fence_event))) {
-				WaitForSingleObject(dev.fence_event, INFINITE);
-			}
-			// A failed SetEventOnCompletion means the fence itself is unusable -- the device is
-			// gone, which GetDeviceRemovedReason() below is what actually reports.
-		}
-		// A failed retry leaves the about-to-be-released resources racing whatever the GPU is still
-		// doing with them -- indistinguishable, from here, from a genuinely removed device;
-		// GetDeviceRemovedReason() below is what actually reports that case, the same bounded-honesty
-		// disposition the `bad_alloc` clause above already accepts for the identical risk.
-		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
-		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
-		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
+		// 1.8.0 (TE-426): the list's confirmed state and the submission's confirmed completion decide
+		// rule 0, then the classifier decides by kind (SubmissionTailFaultStatus's own comment). A
+		// list still recording after Close, a retry and the confirm step refuses every later
+		// `dev.alloc->Reset()` in the process, so it is reported GpuDeviceRemoved (T-2192 T2(a)).
+		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed, tail_signaled);
 	}
 }
 
@@ -3414,7 +3515,7 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 	    io_external_kv_needs_resume_barrier != nullptr && *io_external_kv_needs_resume_barrier;
 	try {
 	const superslm::SslmForwardStatus prep_status = PrepareGpuLayerLoopChunkOpenState(
-	    seq, layers, num_hidden_layers, /*layer_budget=*/num_hidden_layers, hidden_size, head_dim,
+	    dev, seq, layers, num_hidden_layers, /*layer_budget=*/num_hidden_layers, hidden_size, head_dim,
 	    num_key_value_heads, intermediate_size, context_cap, rope_tables, workspace, workspace_size,
 	    external_kv_resident, io_external_kv_needs_resume_barrier, external_weights_resident,
 	    external_rope_cos_resident, external_rope_sin_resident, external_rope_has,
@@ -3579,18 +3680,18 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		// submission-granularity batching structurally trades per-token exception atomicity
 		// for round-trip reduction.
 		std::fprintf(stderr, "superslm_gpu: %s\n", e.what());
-		InvalidateResidencyCachesOnThrow();
-		dev.list->Close();
-		return superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid;
+		const bool list_closed = AbandonRecording(dev, state);
+		return NamedFaultStatusAfterRules(dev, list_closed,
+		                                  superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid);
 	} catch (const GpuLayerWeightsContractError& e) {
 		// T-2568 (S1): the identical chunk-scoped discard, for PackLayerWeightsBytes' own
 		// required-pointer refusal, RunLayerLoopGpuSubmit's own twin catch clause already handles
 		// (superslm_gpu.cpp, above) -- same status mapping, same cache-invalidation contract, same
 		// message-preserved-to-stderr discipline.
 		std::fprintf(stderr, "superslm_gpu: %s\n", e.what());
-		InvalidateResidencyCachesOnThrow();
-		dev.list->Close();
-		return superslm::SslmForwardStatus::GpuLayerWeightsContractViolation;
+		const bool list_closed = AbandonRecording(dev, state);
+		return NamedFaultStatusAfterRules(
+		    dev, list_closed, superslm::SslmForwardStatus::GpuLayerWeightsContractViolation);
 	} catch (const harness::GpuShaderBinaryStaleError& e) {
 		// T-2577 (S2, Claude/Poirot/5fafd98-t2573-trackb-external-fold-review.md, D-SLM6279):
 		// the twin of the GpuLayerWeightsContractError clause immediately above, for
@@ -3603,18 +3704,30 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		// timestamps, the whole content of "which file is stale and by how much" -- is preserved
 		// to stderr rather than discarded by an unnamed catch.
 		std::fprintf(stderr, "superslm_gpu: %s\n", e.what());
-		InvalidateResidencyCachesOnThrow();
-		dev.list->Close();
-		return superslm::SslmForwardStatus::GpuShaderBinaryStale;
+		const bool list_closed = AbandonRecording(dev, state);
+		return NamedFaultStatusAfterRules(dev, list_closed,
+		                                  superslm::SslmForwardStatus::GpuShaderBinaryStale);
+	} catch (const std::bad_alloc&) {
+		// 1.8.0 (TE-426): the identical chunk-scoped discard for a host allocation failure, which
+		// before 1.8.0 escaped this try with the process's command list still recording
+		// (RunLayerLoopGpuSubmit's own twin clause, above, states the consequence).
+		const bool list_closed = AbandonRecording(dev, state);
+		return ClassifyForwardFault(dev, /*stranded=*/!list_closed);
+	} catch (const std::length_error&) {
+		const bool list_closed = AbandonRecording(dev, state);
+		return ClassifyForwardFault(dev, /*stranded=*/!list_closed);
 	} catch (const std::runtime_error&) {
-		// D-SLM3634: the identical chunk-scoped discard, for the generic allocation/device-
-		// removed failure class RunLayerLoopGpuSubmit's own twin catch clause already handles
-		// (superslm_gpu.cpp, above) -- same status mapping, same cache-invalidation contract.
-		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
-		InvalidateResidencyCachesOnThrow();
-		dev.list->Close();
-		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
-		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
+		// D-SLM3634: the identical chunk-scoped discard, for the generic failure class
+		// RunLayerLoopGpuSubmit's own twin catch clause already handles (superslm_gpu.cpp, above)
+		// -- the same fault classifier, the same cache-invalidation contract.
+		const bool list_closed = AbandonRecording(dev, state);
+		return ClassifyForwardFault(dev, /*stranded=*/!list_closed);
+	} catch (...) {
+		// 1.8.0 (TE-426): RunLayerLoopGpuSubmit's own twin catch-all, above: close the list, then
+		// rethrow for the API boundary to classify by type, or report rule 0 for a list that cannot
+		// be confirmed Closed.
+		if (!AbandonRecording(dev, state)) return superslm::SslmForwardStatus::GpuDeviceRemoved;
+		throw;
 	}
 	// T-2186 remedy P1's own pin (D-SLM3682) named this region the uncovered tail
 	// (`dev.list->Close()`, `dev.queue->Signal()`, the `GpuLayerLoopInFlight` allocation below all
@@ -3637,11 +3750,15 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 	// by the `runtime_error` catch below to tell a `Close()` failure (nothing submitted) apart from
 	// a `Signal()` failure (submitted, only the fence signal failed).
 	bool tail_executed = false;
+	// 1.8.0 (TE-426): RunLayerLoopGpuSubmit's own twin flags (that tail, above, states their meaning).
+	bool tail_close_attempted = false;
+	bool tail_signaled = false;
 	try {
 		// The pin seam fires here, throwing exactly the type `SSLM_GPU_HR` would on a real
 		// failure, unarmed cost zero.
 		MaybeThrowInjectedT2169ChunkRecordingTailFault();
-		SSLM_GPU_HR(dev.list->Close());
+		tail_close_attempted = true;
+		dev.CloseListOrThrow();
 		tail_list_closed = true;
 		const auto t_record_end = std::chrono::steady_clock::now();
 		g_last_call_timing.record_ms =
@@ -3658,6 +3775,7 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		// after ExecuteCommandLists so `tail_executed` is genuinely true when it throws.
 		MaybeThrowInjectedT2169ChunkRecordingTailSignalFault();
 		SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
+		tail_signaled = true;
 		// From here on, only `std::bad_alloc` from the `new` below can throw -- Close() and
 		// Signal() have both already succeeded, so the GPU already has this submission queued and
 		// fenced at `dev.fence_val`.
@@ -3696,21 +3814,17 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		// reads from or writes to, so wait the fence out before releasing them -- the same
 		// SetEventOnCompletion/WaitForSingleObject idiom `RunLayerLoopGpuFinish`'s own blocking
 		// path uses (this file, below) -- rather than let a GPU-referenced resource's last COM
-		// reference drop while the device may still be using it.
+		// reference drop while the device may still be using it. SubmissionTailFaultStatus does
+		// the wait, and reports a wait it cannot confirm as a stranded submission.
 		InvalidateResidencyCachesOnThrow();
-		if (dev.fence->GetCompletedValue() < dev.fence_val) {
-			if (SUCCEEDED(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event))) {
-				WaitForSingleObject(dev.fence_event, INFINITE);
-			}
-			// A failed SetEventOnCompletion means the fence itself is unusable -- the device is
-			// gone, which GetDeviceRemovedReason() below is what actually reports.
+		if (!tail_executed && external_kv_resident != nullptr &&
+		    io_external_kv_needs_resume_barrier != nullptr) {
+			*io_external_kv_needs_resume_barrier = kv_resume_barrier_entry_value;
 		}
-		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
-		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
-		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
+		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed, tail_signaled);
 	} catch (const std::runtime_error&) {
 		// A failed Close() or Signal() (or the pre-Close injected pin, which fires before either
-		// runs) -- the two `SSLM_GPU_HR`-wrapped calls above.
+		// runs).
 		InvalidateResidencyCachesOnThrow();
 		if (!tail_executed) {
 			// `ExecuteCommandLists` never ran: either the pre-Close fault fired first, or Close()
@@ -3736,27 +3850,13 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 			if (external_kv_resident != nullptr && io_external_kv_needs_resume_barrier != nullptr) {
 				*io_external_kv_needs_resume_barrier = kv_resume_barrier_entry_value;
 			}
-			// Best-effort retry, matching the two catch clauses above this try -- but this time the
-			// RESULT decides whether the context is honestly reusable (T-2192 finding T2(a)): a
-			// list still recording after a second failed Close() refuses every later
-			// `dev.alloc->Reset()` on this context (T-2191 S6's own class), so returning
-			// `GpuAllocationFailed` here -- which the header (`gpu_1p0.h`) promises means "the list
-			// is recovered (Closed), the context stays usable" -- would be false.
-			const bool retry_closed = SUCCEEDED(dev.list->Close());
-			const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
-			if (!retry_closed) {
-				// Neither Close() attempt reached Closed. Honest terminal disposition (T-2192
-				// T2(a)): the header's own device-removed language, not the allocation-failed one
-				// that implies a recovered, reusable list -- regardless of what
-				// GetDeviceRemovedReason() itself reports, since a healthy device does not fail
-				// Close() twice on a list with only barrier/copy commands recorded, and this
-				// function has no further recovery to offer either way.
-				return superslm::SslmForwardStatus::GpuDeviceRemoved;
-			}
-			return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
-			                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
+			// The RESULT of closing the list decides whether the context is honestly reusable
+			// (T-2192 finding T2(a)): a list still recording after Close, a retry and the confirm
+			// step refuses every later `dev.alloc->Reset()` in the process (T-2191 S6's own class),
+			// so it is reported GpuDeviceRemoved, never a status that implies a recovered, reusable
+			// list (SubmissionTailFaultStatus).
 		}
-		// `ExecuteCommandLists` already ran -- the GPU has this submission queued, the identical
+		// If `ExecuteCommandLists` already ran -- the GPU has this submission queued, the identical
 		// situation the `bad_alloc` clause above documents. Whatever `dev.fence_val` holds right
 		// now may or may not already be the value the failed `Signal()` attempted (that increment
 		// is evaluated as part of constructing `Signal()`'s own argument, so a REAL `Signal()`
@@ -3773,25 +3873,14 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		// from or writes to, so the fence must be made to signal -- or the wait skipped only
 		// because the device is confirmed gone -- before this function returns, the same
 		// requirement the `bad_alloc` clause above honors for the identical post-Execute situation.
-		// Direct HRESULT check, not `SSLM_GPU_HR` -- a second throw here must not re-enter this
-		// same catch.
-		const UINT64 recovery_fence_val = ++dev.fence_val;
-		if (SUCCEEDED(dev.queue->Signal(dev.fence.Get(), recovery_fence_val)) &&
-		    dev.fence->GetCompletedValue() < recovery_fence_val) {
-			if (SUCCEEDED(dev.fence->SetEventOnCompletion(recovery_fence_val, dev.fence_event))) {
-				WaitForSingleObject(dev.fence_event, INFINITE);
-			}
-			// A failed SetEventOnCompletion means the fence itself is unusable -- the device is
-			// gone, which GetDeviceRemovedReason() below is what actually reports.
-		}
-		// A failed retry leaves the about-to-be-released resources racing whatever the GPU is
-		// still doing with them -- indistinguishable, from here, from a genuinely removed device
-		// (a healthy device does not fail two consecutive Signal() calls on the same queue);
-		// GetDeviceRemovedReason() below is what actually reports that case, the same bounded-
-		// honesty disposition the bad_alloc clause above already accepts for the identical risk.
-		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
-		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
-		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
+		// Direct HRESULT checks, not `SSLM_GPU_HR` -- a second throw here must not re-enter this
+		// same catch. 1.8.0 (TE-426): a recovery that fails, or a wait that cannot be confirmed,
+		// leaves the about-to-be-released resources racing whatever the GPU is still doing with
+		// them, so it is a stranded submission (rule 0), GpuDeviceRemoved whatever
+		// GetDeviceRemovedReason() reports; a recovery that was waited out is classified by what
+		// failed. All of it lives in SubmissionTailFaultStatus, shared with
+		// RunLayerLoopGpuSubmit's tail.
+		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed, tail_signaled);
 	}
 }
 
@@ -3907,14 +3996,16 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 		const superslm::SslmForwardStatus finish_status =
 		    RunLayerLoopGpuFinish(inflight, seq, workspace, /*block=*/1, &ready);
 		if (finish_status != superslm::SslmForwardStatus::Ok) {
-			// `RunLayerLoopGpuFinish` returns `GpuDeviceRemoved`/`GpuAllocationFailed` only from
-			// its catch (a fault in the fence wait or a readback `Map`, or a null token); every
-			// other non-`Ok` value is `DecodeStickyTag`'s decode of a device-side guard refusal,
-			// read on the normal path after both readbacks succeeded (gpu_port.h, the parameter's
-			// own comment). A submission failure returns above and never sets this.
+			// `RunLayerLoopGpuFinish` returns `GpuDeviceRemoved`/`GpuAllocationFailed`/
+			// `GpuOperationFailed` only from its catch (a fault in the fence wait or a readback
+			// `Map`) or for a null token; every other non-`Ok` value is `DecodeStickyTag`'s decode
+			// of a device-side guard refusal, read on the normal path after both readbacks
+			// succeeded (gpu_port.h, the parameter's own comment). A submission failure returns
+			// above and never sets this.
 			if (out_readback_guard_rejected &&
 			    finish_status != superslm::SslmForwardStatus::GpuDeviceRemoved &&
-			    finish_status != superslm::SslmForwardStatus::GpuAllocationFailed) {
+			    finish_status != superslm::SslmForwardStatus::GpuAllocationFailed &&
+			    finish_status != superslm::SslmForwardStatus::GpuOperationFailed) {
 				*out_readback_guard_rejected = true;
 			}
 			return finish_status;
@@ -3955,7 +4046,10 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
                                                     int32_t* out_ready, uint8_t* out_q_codes) {
 	if (out_ready) *out_ready = 0;
 	if (!inflight || !inflight->dev) {
-		return superslm::SslmForwardStatus::GpuAllocationFailed;  // caller error: no live token
+		// Caller error: no live token. A non-allocation failure (1.8.0, TE-424 P-1): before 1.8.0
+		// this returned GpuAllocationFailed, which now reaches callers as
+		// SSLM_GPU_ALLOCATION_FAILED, out-of-memory, for what is not a memory fault.
+		return superslm::SslmForwardStatus::GpuOperationFailed;
 	}
 	harness::Device& dev = *inflight->dev;
 	const bool signaled = dev.fence->GetCompletedValue() >= inflight->fence_val;
@@ -3993,7 +4087,13 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 	std::unique_ptr<GpuLayerLoopInFlight> owned(inflight);  // consumed, exactly once, from here on
 	try {
 	if (!signaled) {
-		SSLM_GPU_HR(dev.fence->SetEventOnCompletion(inflight->fence_val, dev.fence_event));
+		// A wait that cannot be confirmed leaves the submission's completion unknown: rule 0.
+		const HRESULT wait_hr = dev.fence->SetEventOnCompletion(inflight->fence_val, dev.fence_event);
+		if (FAILED(wait_hr)) {
+			std::fprintf(stderr, "superslm_gpu: SetEventOnCompletion failed 0x%08lx\n",
+			             static_cast<unsigned long>(wait_hr));
+			throw harness::GpuSubmissionStrandedError("D3D12 fence wait could not be confirmed");
+		}
 		WaitForSingleObject(dev.fence_event, INFINITE);
 	}
 	// From here down: BYTE-FOR-BYTE the old synchronous tail, reading from `inflight`'s
@@ -4112,17 +4212,15 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 	if (out_ready) *out_ready = 1;
 	return DecodeStickyTag(sticky_tag);
 	} catch (const std::exception&) {
-		// T-2101/T-2057's own disposition (superslm_gpu.cpp, Submit's own catch),
-		// applied here for the identical reason: `GpuDeviceRemoved` iff the device is
-		// confirmed gone right now, `GpuAllocationFailed` otherwise (a transient/size-
-		// dependent failure at the readback, device still alive). `owned` (declared
-		// BEFORE this try, above) frees `inflight` via its own destructor during stack
-		// unwinding, regardless of where inside the try the throw happened -- nothing
-		// here frees it a second time.
+		// The fault classifier (d3d12_harness.h), the disposition Submit's own catch applies:
+		// a wait that could not be confirmed is rule 0 and a removed device rule 1, both
+		// `GpuDeviceRemoved`; a host allocation failure, or a readback `Map` failing with
+		// E_OUTOFMEMORY, is rule 2, `GpuAllocationFailed`; a `Map` failing with any other
+		// HRESULT is rule 3, `GpuOperationFailed`. `owned` (declared BEFORE this try, above)
+		// frees `inflight` via its own destructor during stack unwinding, regardless of where
+		// inside the try the throw happened -- nothing here frees it a second time.
 		if (out_ready) *out_ready = 1;  // a terminal status, not a "still pending" one
-		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
-		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
-		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
+		return ClassifyForwardFault(dev, /*stranded=*/false);
 	}
 }
 
@@ -4517,7 +4615,9 @@ bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, size_t hidden
 bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::SequenceLayerState* out_seq,
                               size_t hidden_codes_size, uint8_t* out_workspace, size_t workspace_size,
                               int32_t* out_bound_schema_index, uint32_t* out_dfa_walk_state,
-                              bool* out_ready_for_logits) {
+                              bool* out_ready_for_logits,
+                              superslm::SslmForwardStatus* out_setup_status) {
+	if (out_setup_status) *out_setup_status = superslm::SslmForwardStatus::Ok;
 	if (!blob || !out_seq || blob_size < sizeof(GpuSeqBlobHeader)) return false;
 	GpuSeqBlobHeader hdr{};
 	std::memcpy(&hdr, blob, sizeof(hdr));
@@ -4576,7 +4676,16 @@ bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::Seque
 		// `out_workspace`, one real command-list submission, fence-waited
 		// before this call returns.
 		harness::Device& dev = harness::GetDevice();
-		if (!dev.available) return false;
+		if (!dev.available) {
+			// The process's submission device could not be set up: reported through
+			// `*out_setup_status` (gpu_port.h), one status per cause, never as a malformed blob.
+			if (out_setup_status) {
+				*out_setup_status = dev.setup_failure.load() == harness::SetupFailure::Allocation
+				                        ? superslm::SslmForwardStatus::GpuAllocationFailed
+				                        : superslm::SslmForwardStatus::GpuOperationFailed;
+			}
+			return false;
+		}
 		// T-2114 (S4): fault-injection hook, zero-overhead unarmed (MaybeThrowInjectedO11AllocFault's
 		// own header comment) -- lets a test arm kO11AllocInjectionSiteSeqRestore (gpu_port.h) and
 		// confirm the exception this throws is caught by sslm_gpu_seq_restore's own try (gpu_1p0.cpp)
@@ -4603,14 +4712,13 @@ bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::Seque
 		b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 		dev.list->ResourceBarrier(1, &b);
 		dev.list->CopyResource(readback_buf.Get(), device_buf.Get());
-		dev.CloseListWithRetry();
+		// 1.8.0 (TE-426): the Close is confirmed (CloseListConfirmed), and the Signal, which has
+		// no retry here, and the wait are rule 0 on any failure -- each throws the typed error the
+		// caller's classifier (sslm_gpu_seq_restore, gpu_1p0.cpp) reads.
+		dev.CloseListOrThrow();
 		ID3D12CommandList* lists[] = {dev.list.Get()};
 		dev.queue->ExecuteCommandLists(1, lists);
-		SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
-		if (dev.fence->GetCompletedValue() < dev.fence_val) {
-			SSLM_GPU_HR(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event));
-			WaitForSingleObject(dev.fence_event, INFINITE);
-		}
+		dev.SignalAndWaitOrStrand();
 		void* p = nullptr;
 		D3D12_RANGE range{0, static_cast<SIZE_T>(workspace_size)};
 		SSLM_GPU_HR(readback_buf->Map(0, &range, &p));
@@ -4758,14 +4866,10 @@ bool RunDescriptorTableBind(const int8_t* const* array_pointers, const size_t* a
 	b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 	dev.list->ResourceBarrier(1, &b);
 	dev.list->CopyResource(readback.Get(), out_uav.Get());
-	SSLM_GPU_HR(dev.list->Close());
+	dev.CloseListOrThrow();
 	ID3D12CommandList* lists[] = {dev.list.Get()};
 	dev.queue->ExecuteCommandLists(1, lists);
-	SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
-	if (dev.fence->GetCompletedValue() < dev.fence_val) {
-		SSLM_GPU_HR(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event));
-		WaitForSingleObject(dev.fence_event, INFINITE);
-	}
+	dev.SignalAndWaitOrStrand();
 
 	out_widened->resize(total_elements);
 	void* p = nullptr;
