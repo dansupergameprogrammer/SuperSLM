@@ -135,8 +135,13 @@ class Scoped:
         self.patch = patch
         self.key = "l" if re.fullmatch(r"l[1-6]", ident) else ident
 
-    def replace(self, name: str, old: str, new: str):
-        self.patch.replace(name, old, new, within=ANCHOR_FUNCTION.get((self.key, name)))
+    def replace(self, name: str, old: str, new: str, within: str | None = None):
+        self.patch.replace(name, old, new, within=within or ANCHOR_FUNCTION.get((self.key, name)))
+
+    def has_function(self, name: str, symbol: str) -> bool:
+        content = self.patch.files[name] if name in getattr(self.patch, "files", {}) else \
+            (self.patch.tree / name).read_text(encoding="utf-8")
+        return function_body(content, symbol) is not None
 
 
 ALL_MUTANTS = ["a", "c", "c_exact", "q_cpu", "q_gpu", "b", "b2", "d", "e", "f", "g", "h", "h2", "i", "j",
@@ -279,18 +284,17 @@ def apply(p: Patch, ident: str):
         p.replace(g, "\t\t// Phase B.\n\t\tSSLM_GPU_HR(dev.alloc->Reset());\n\t\tSSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));",
                   "\t\t// Phase B reset already occurred before allocations (MUTANT n).")
     elif ident in ("n2_upload", "n3_upload"):
-        old = ("\tMicrosoft::WRL::ComPtr<ID3D12Resource> upload = dev.Upload(data, bytes);\n"
-               "\tMicrosoft::WRL::ComPtr<ID3D12Resource> resident =\n"
-               "\t    dev.MakeBuffer(bytes, D3D12_HEAP_TYPE_DEFAULT, resource_flags, D3D12_RESOURCE_STATE_COPY_DEST);\n"
-               "\t// Phase B: reset, record, Close (with one retry), execute, wait.\n"
-               "\tSSLM_GPU_HR(dev.alloc->Reset());\n\tSSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));")
+        # TE-425: anchored on the code lines only, so a rewritten comment between phase A and phase B
+        # (1.8.0 rewrote it) does not move the mutant. Phase A's two allocations are removed where
+        # they stand, and re-inserted around the phase-B reset in the mutant's order.
         resident = ("\tMicrosoft::WRL::ComPtr<ID3D12Resource> resident =\n"
                     "\t    dev.MakeBuffer(bytes, D3D12_HEAP_TYPE_DEFAULT, resource_flags, D3D12_RESOURCE_STATE_COPY_DEST);\n")
         upload = "\tMicrosoft::WRL::ComPtr<ID3D12Resource> upload = dev.Upload(data, bytes);\n"
         reset = "\tSSLM_GPU_HR(dev.alloc->Reset());\n\tSSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));\n"
+        p.replace(g, upload + resident, "")
         new = (reset + upload + resident if ident == "n2_upload"
                else resident + reset + upload)
-        p.replace(g, old, new + f"\t// MUTANT {ident}")
+        p.replace(g, reset, new + f"\t// MUTANT {ident}\n")
     elif ident in ("n2_restore", "n3_restore"):
         old = ("\t\tauto upload_buf = dev.Upload(src, workspace_size);\n"
                "\t\tauto device_buf = dev.MakeBuffer(workspace_size, D3D12_HEAP_TYPE_DEFAULT,\n"
@@ -327,8 +331,16 @@ def apply(p: Patch, ident: str):
                   "\t\treturn RunDeviceLogits(ctx, fresh, x_codes, wide_out); // MUTANT o2\n"
                   "\t});")
     elif ident == "p":
-        p.replace(h, "\t\tconst HRESULT retry = CloseListOnce();\n\t\tstd::fprintf(stderr, \"superslm_gpu: command list Close failed; retry %s\\n\",\n\t\t             SUCCEEDED(retry) ? \"succeeded (list Closed)\" : \"failed (list left recording)\");",
-                  "\t\t// MUTANT p: no second Close attempt; list stays recording.")
+        # No second Close attempt, so a first Close that fails leaves the list recording. Through
+        # v1.7.1 the retry lives in CloseListWithRetry; from 1.8.0 in CloseListConfirmed (TE-425:
+        # re-anchored by symbol, the same intent at its new target).
+        if p.has_function(h, "CloseListWithRetry"):
+            p.replace(h, "\t\tconst HRESULT retry = CloseListOnce();\n\t\tstd::fprintf(stderr, \"superslm_gpu: command list Close failed; retry %s\\n\",\n\t\t             SUCCEEDED(retry) ? \"succeeded (list Closed)\" : \"failed (list left recording)\");",
+                      "\t\t// MUTANT p: no second Close attempt; list stays recording.")
+        else:
+            p.replace(h, "if (SUCCEEDED(CloseListOnce())) {",
+                      "if (false) {  // MUTANT p: no second Close attempt; list stays recording.",
+                      within="CloseListConfirmed")
     else:
         raise ValueError(f"unknown mutant {ident}")
 

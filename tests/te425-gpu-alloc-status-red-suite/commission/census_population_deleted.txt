@@ -1,0 +1,42 @@
+# TE-425 R11 (plan te421-slm172-host-oom.md Sec3.5 R11): the GPU status-site census, checked by
+# tests/ci/check_gpu_status_site_census.py. Every catch clause in src/gpu and every code statement naming a
+# GPU forward status, keyed by (kind, file, enclosing function, token), with the plan's block (T1-T17 of
+# Sec3.2 E-2, or E-3's status-site table) and the 1.8.0 disposition. Generated at v1.7.1 (2a32042) by
+# --emit and annotated from the plan; 39 catch clauses, as TE-424's independent grep census counts.
+# A site the fix adds, removes or rewrites is re-listed here with its disposition in the same change.
+# Tab-separated: kind file function count block disposition token
+catch	src/gpu/d3d12_harness.h	GetDevice	1	T17	E-7: holder; never throws; Allocation setup failure retried on the next call, Other final	std::exception
+catch	src/gpu/gpu_1p0.cpp	CreateDeviceLogitsBuffers	1	T1	classifier (rules 0-3); phase B Close via CloseListConfirmed, Signal via ExecuteSignalAndWait give the stranded input; phase-A TryMakeBuffer rule stays; logic_error is T1b (stale shader), unchanged	std::bad_alloc
+catch	src/gpu/gpu_1p0.cpp	CreateDeviceLogitsBuffers	1	T1	classifier (rules 0-3); phase B Close via CloseListConfirmed, Signal via ExecuteSignalAndWait give the stranded input; phase-A TryMakeBuffer rule stays; logic_error is T1b (stale shader), unchanged	std::exception
+catch	src/gpu/gpu_1p0.cpp	CreateDeviceLogitsBuffers	1	T1	classifier (rules 0-3); phase B Close via CloseListConfirmed, Signal via ExecuteSignalAndWait give the stranded input; phase-A TryMakeBuffer rule stays; logic_error is T1b (stale shader), unchanged	std::logic_error
+catch	src/gpu/gpu_1p0.cpp	SubmitAdmittedChunkForG5Bridge	1	T10	runtime_error clause records a classified fault in out_fault (TE-422 S-2 site 2); bad_alloc clause stays (the 60 non-window escapes)	std::bad_alloc
+catch	src/gpu/gpu_1p0.cpp	sslm_gpu_adapter_mapImpl	1	T5	classifier; UploadResidentBufferSyncTo Close via CloseListConfirmed, unretried Signal is rule 0	std::bad_alloc
+catch	src/gpu/gpu_1p0.cpp	sslm_gpu_adapter_mapImpl	1	T5	classifier; UploadResidentBufferSyncTo Close via CloseListConfirmed, unretried Signal is rule 0	std::exception
+catch	src/gpu/gpu_1p0.cpp	sslm_gpu_context_createImpl	1	T6	classifier plus Init SetupFailure kind: Allocation -> SSLM_GPU_ALLOCATION_FAILED, Other -> SSLM_DEVICE_LOST	std::bad_alloc
+catch	src/gpu/gpu_1p0.cpp	sslm_gpu_context_createImpl	1	T6	classifier plus Init SetupFailure kind: Allocation -> SSLM_GPU_ALLOCATION_FAILED, Other -> SSLM_DEVICE_LOST	std::exception
+catch	src/gpu/gpu_1p0.cpp	sslm_gpu_model_mapImpl	2	T3,T4	T3 PackLayerWeightsBytes: rule 2 for length_error, rule 3 for the layer-weights contract error; T4 uploads: classifier, Close via CloseListConfirmed, unretried Signal rule 0	std::bad_alloc
+catch	src/gpu/gpu_1p0.cpp	sslm_gpu_model_mapImpl	2	T3,T4	T3 PackLayerWeightsBytes: rule 2 for length_error, rule 3 for the layer-weights contract error; T4 uploads: classifier, Close via CloseListConfirmed, unretried Signal rule 0	std::exception
+catch	src/gpu/gpu_1p0.cpp	sslm_gpu_seq_createImpl	1	T7	classifier as T4	std::bad_alloc
+catch	src/gpu/gpu_1p0.cpp	sslm_gpu_seq_createImpl	1	T7	classifier as T4	std::exception
+catch	src/gpu/gpu_1p0.cpp	sslm_gpu_seq_restoreImpl	2	T8,T9	T8 process-device round-trip: classifier plus E-7 not-set-up branch, Close via CloseListConfirmed, unretried Signal rule 0; T9 upload as T4	std::bad_alloc
+catch	src/gpu/gpu_1p0.cpp	sslm_gpu_seq_restoreImpl	2	T8,T9	T8 process-device round-trip: classifier plus E-7 not-set-up branch, Close via CloseListConfirmed, unretried Signal rule 0; T9 upload as T4	std::exception
+catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuFinish	1	T16	classifier: failed SetEventOnCompletion rule 0; readback Map rule 2 or 3 by HRESULT; host allocation rule 2	std::exception
+catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuSubmit	1	T12,T13	E-4 AbandonRecording in every clause, new bad_alloc/length_error clauses and a final catch(...); named types keep their status after rules 0 and 1; tail Close via CloseListConfirmed, Signal rule per E-1	GpuGemmGroupArithmeticError
+catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuSubmit	1	T12,T13	E-4 AbandonRecording in every clause, new bad_alloc/length_error clauses and a final catch(...); named types keep their status after rules 0 and 1; tail Close via CloseListConfirmed, Signal rule per E-1	GpuLayerWeightsContractError
+catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuSubmit	1	T12,T13	E-4 AbandonRecording in every clause, new bad_alloc/length_error clauses and a final catch(...); named types keep their status after rules 0 and 1; tail Close via CloseListConfirmed, Signal rule per E-1	harness::GpuShaderBinaryStaleError
+catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuSubmit	1	T12,T13	E-4 AbandonRecording in every clause, new bad_alloc/length_error clauses and a final catch(...); named types keep their status after rules 0 and 1; tail Close via CloseListConfirmed, Signal rule per E-1	std::bad_alloc
+catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuSubmit	2	T12,T13	E-4 AbandonRecording in every clause, new bad_alloc/length_error clauses and a final catch(...); named types keep their status after rules 0 and 1; tail Close via CloseListConfirmed, Signal rule per E-1	std::runtime_error
+catch	src/gpu/superslm_gpu.cpp	SubmitOneSubChunkToFullDepthForG5Bridge	1	T14,T15	as T12/T13	GpuGemmGroupArithmeticError
+catch	src/gpu/superslm_gpu.cpp	SubmitOneSubChunkToFullDepthForG5Bridge	1	T14,T15	as T12/T13	GpuLayerWeightsContractError
+catch	src/gpu/superslm_gpu.cpp	SubmitOneSubChunkToFullDepthForG5Bridge	1	T14,T15	as T12/T13	harness::GpuShaderBinaryStaleError
+catch	src/gpu/superslm_gpu.cpp	SubmitOneSubChunkToFullDepthForG5Bridge	1	T14,T15	as T12/T13	std::bad_alloc
+catch	src/gpu/superslm_gpu.cpp	SubmitOneSubChunkToFullDepthForG5Bridge	2	T14,T15	as T12/T13	std::runtime_error
+status	src/forward/checked_chain_funnel.cpp	SslmForwardStatusName	1	E-3	gains a GpuOperationFailed arm (TE-422 W-1)	if (s == GpuAllocationFailed) return
+status	src/forward/checked_chain_funnel.cpp	SslmForwardStatusName	1	E-3	gains a GpuOperationFailed arm (TE-422 W-1)	if (s == GpuDeviceRemoved) return
+status	src/gpu/gpu_1p0.cpp	MapDecodedStatusToGpuStatus	1	E-3	GpuAllocationFailed -> SSLM_GPU_ALLOCATION_FAILED; GpuDeviceRemoved, GpuOperationFailed -> SSLM_DEVICE_LOST	if (st == GpuDeviceRemoved || st == GpuAllocationFailed)
+status	src/gpu/gpu_1p0.cpp	MapSubmitRejectionToGpuStatus	1	E-3	GpuAllocationFailed -> SSLM_GPU_ALLOCATION_FAILED; GpuDeviceRemoved, GpuOperationFailed -> SSLM_DEVICE_LOST	if (st == GpuDeviceRemoved || st == GpuAllocationFailed)
+status	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuFinish	1	E-3	finish catch return: the classifier (T16)	return device_removed_reason != S_OK ? GpuDeviceRemoved : GpuAllocationFailed
+status	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuSubmit	1	E-3	recording-window and tail returns: the classifier (E-2, E-4)	return GpuDeviceRemoved
+status	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuSubmit	4	E-3	recording-window and tail returns: the classifier (E-2, E-4)	return device_removed_reason != S_OK ? GpuDeviceRemoved : GpuAllocationFailed
+status	src/gpu/superslm_gpu.cpp	SubmitOneSubChunkToFullDepthForG5Bridge	1	E-3	recording-window and tail returns: the classifier (E-2, E-4)	return GpuDeviceRemoved
+status	src/gpu/superslm_gpu.cpp	SubmitOneSubChunkToFullDepthForG5Bridge	4	E-3	recording-window and tail returns: the classifier (E-2, E-4)	return device_removed_reason != S_OK ? GpuDeviceRemoved : GpuAllocationFailed

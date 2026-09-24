@@ -824,6 +824,13 @@ int CellPromptSweep(const char* cell, Src src, NewFault kind) {
 			if (kv.second.second != kv.second.first) sel.push_back(kv.second.second);
 		}
 		std::printf("%s window-edges: %zu windows, %zu sites\n", cell, w.size(), sel.size());
+		// --pick=i: only the i-th of those sites, so each runs in a fresh process (a foreign exception can
+		// leave the process's GPU path failing for every later call, which would contaminate the rest).
+		if (Has("pick")) {
+			const size_t i = static_cast<size_t>(OptInt("pick", 0));
+			if (i >= sel.size()) return SetupFail(cell, "--pick beyond the window-edge sites");
+			sel = {sel[i]};
+		}
 	} else if (Has("sites")) {
 		// An explicit site list, "a,b,c-d".
 		std::string s = Opt("sites");
@@ -1071,6 +1078,15 @@ int CellBatch(const char* cell) {
 	const int32_t ref_tok[3] = {toks[0], toks[1], toks[2]};
 	// Sites inside sequence 1's submission: the seam's per-sequence count, and the operator-new sites in
 	// the second recording window (each sequence is its own submission, drained before the next).
+	if (Has("trace")) {
+		for (int i = 0; i < 3; ++i) prep(i);
+		TraceStart();
+		batch();
+		const std::vector<TraceEv> t = TraceStop();
+		for (size_t i = 0; i < t.size(); ++i)
+			std::printf("TRACE %zu %s win=%u heap=%u width=%llu\n", i, MethodName(t[i].method), t[i].window, t[i].heap,
+			            static_cast<unsigned long long>(t[i].width));
+	}
 	for (int i = 0; i < 3; ++i) prep(i);
 	SslmGpuAllocCounterResetForTest();
 	batch();
@@ -1123,6 +1139,9 @@ int CellBatch(const char* cell) {
 		} else {
 			ok = ok && sts[2] == DEVICE_LOST;  // the must-reject: a lost device poisons the rest
 		}
+		// The armed batch's own outcome, kept before the usable-afterwards batch below overwrites it.
+		const SslmGpuStatus armed_sts[3] = {sts[0], sts[1], sts[2]};
+		const int32_t armed_toks[3] = {toks[0], toks[1], toks[2]};
 		// The faulted sequence's handle stays usable (rule 2 legs): a clean batch afterwards.
 		bool usable = true;
 		if (L.want_rest_ok) {
@@ -1134,7 +1153,8 @@ int CellBatch(const char* cell) {
 		const bool conforms = ok && usable && a2;
 		v.Leg(conforms);
 		std::printf("%s %s (%s) slots=%s,%s,%s tokens=%d,%d,%d want slot1=%s rest=%s usable-after=%d after2=%s -> %s\n",
-		            cell, L.name, L.rule, St(sts[0]), St(sts[1]), St(sts[2]), toks[0], toks[1], toks[2], St(L.want1),
+		            cell, L.name, L.rule, St(armed_sts[0]), St(armed_sts[1]), St(armed_sts[2]), armed_toks[0],
+		            armed_toks[1], armed_toks[2], St(L.want1),
 		            L.want_rest_ok ? "OK" : "DEVICE_LOST", usable ? 1 : 0, St(s2), conforms ? "PASS" : "FAIL");
 	}
 	sslm_gpu_seq_release(p.s1.ctx, seqs[1]);
@@ -1323,7 +1343,8 @@ const HookLeg kLegs[] = {
     {"X.close1.oom", RT_CTX, SEL(M_CLOSE, M_NONE, 0, 1, 0), OOM, HB_FAIL_NO_CALL, 1, EXP_ALLOC, RULE2, false, "R9 T6"},
     {"X.cfence1.oom", RT_CTX, SEL(M_CFENCE, M_NONE, 0, 1, 0), OOM, HB_FAIL_NO_CALL, 1, EXP_ALLOC, RULE2, false, "R9 T6"},
     {"X.cqheap1.oom", RT_CTX, SEL(M_CQHEAP, M_NONE, 0, 1, 0), OOM, HB_FAIL_NO_CALL, 1, EXP_ALLOC, RULE2, false, "R9 T6"},
-    {"X.ccr1.oom", RT_CTX, SEL(M_CCR, M_NONE, 0, 1, 0), OOM, HB_FAIL_NO_CALL, 1, EXP_ALLOC, RULE2, false, "R1 T6"},
+    // The context's setup allocates exactly the timestamp readback, so this one selector keeps it.
+    {"X.ccr1.oom", RT_CTX, Sel{M_CCR, M_NONE, 0, 1, 0, 0}, OOM, HB_FAIL_NO_CALL, 1, EXP_ALLOC, RULE2, false, "R1 T6"},
     // ---- the finish on a device-resident head: RunDeviceLogits (T2; TE-422 S-2 site 3) ----
     {"L.areset1.oom", RT_DEVLOGITS, SEL(M_ARESET, M_NONE, 0, 1, 0), OOM, HB_FAIL_NO_CALL, 1, EXP_ALLOC, RULE2, false, "R9 T2"},
     {"L.lreset1.oom", RT_DEVLOGITS, SEL(M_LRESET, M_NONE, 0, 1, 0), OOM, HB_FAIL_NO_CALL, 1, EXP_ALLOC, RULE2, false, "R9 T2"},
@@ -2266,7 +2287,7 @@ int CellCreateSweep(const char* cell) {
 	            g_new.aligned_seen.load(), St(own), retry_every);
 	if (own != OK) return SetupFail(cell, "counting pass not clean");
 	SweepTally t;
-	Sweep(cell, Src::New, NewFault::BadAlloc, 0, K, {}, static_cast<uint32_t>(OptInt("from", 1)),
+	Sweep(cell, Src::New, Opt("kind") == "length_error" ? NewFault::LengthError : NewFault::BadAlloc, 0, K, {}, static_cast<uint32_t>(OptInt("from", 1)),
 	      static_cast<uint32_t>(OptInt("to", 0x7FFFFFFF)), nullptr, h, v, t);
 	t.Print(cell);
 	return v.Finish();

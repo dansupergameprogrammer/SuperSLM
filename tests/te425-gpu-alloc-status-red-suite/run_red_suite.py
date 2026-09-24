@@ -55,8 +55,13 @@ def jobs(a) -> list[tuple[str, list[str], str]]:
     for lo in range(1, 701, 140):
         J.append((f"r3-len40-k{lo:03d}", ["r3", Q, "--len=40", f"--from={lo}", f"--to={lo + 139}"], cells))
     J.append(("r3len-len5-edges", ["r3len", Q, "--len=5", "--select=window-edges"], cells))
-    J.append(("r10-len40-edges", ["r10", Q, "--len=40", "--select=window-edges"], cells))
-    J.append(("r10-len5-edges", ["r10", Q, "--len=5", "--select=window-edges"], cells))
+    # One process per site: at v1.7.1 a foreign exception at some recording-window sites leaves the
+    # process's GPU path failing for every later call, so a shared process would score later legs on
+    # that damage rather than on their own site.
+    for i in range(20):
+        J.append((f"r10-len40-e{i:02d}", ["r10", Q, "--len=40", "--select=window-edges", f"--pick={i}"], cells))
+    for i in range(4):
+        J.append((f"r10-len5-e{i}", ["r10", Q, "--len=5", "--select=window-edges", f"--pick={i}"], cells))
     J.append(("r10dec-edges", ["r10dec", Q, "--path=step", "--select=window-edges"], cells))
     for n in (1, 5):
         J.append((f"r4seam-len{n}", ["r4seam", G, f"--len={n}"], cells))
@@ -90,6 +95,7 @@ def jobs(a) -> list[tuple[str, list[str], str]]:
     for c in ("context", "seq_create", "restore"):
         J.append((f"r1new-{c}", ["r1new", f"--call={c}", Q], cells))
     J.append(("r1new-map0", ["r1new", "--call=map0", Q, "--retry-every=25"], cells))
+    J.append(("r1new-map0-length_error", ["r1new", "--call=map0", Q, "--kind=length_error", "--retry-every=100"], cells))
     J.append(("r1new-map_head", ["r1new", "--call=map_head", R, "--retry-every=25"], cells))
     J.append(("r1new-adapter", ["r1new", "--call=adapter", R, A, "--retry-every=5"], cells))
     J.append(("cell_alloc_faults", [a.r15, a.adapter], "cell_alloc_faults.exe"))
