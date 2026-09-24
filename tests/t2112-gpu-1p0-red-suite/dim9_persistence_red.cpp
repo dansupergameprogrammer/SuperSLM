@@ -339,9 +339,12 @@ static void TestDim9_S4_RestoreDeviceThrowReturnsStatusNotUnwind(SslmGpuContext*
 	const SslmGpuStatus restore_st =
 	    sslm_gpu_seq_restore(ctx, model, blob.data(), blob_size, &restored);
 	superslm_gpu::ClearO11AllocationInjection();  // always clear, even on failure
-	CHECK_MSG(restore_st == SSLM_DEVICE_LOST,
-	          "S4: sslm_gpu_seq_restore under an injected device-round-trip throw must return "
-	          "SSLM_DEVICE_LOST (a status), not let the exception escape -- got %d",
+	// TE-425 (SuperSLM 1.8.0 plan `te421-slm172-host-oom.md` Sec3.2 E-1, E-2 T8): the O11 seam models
+	// an allocation failure and throws the allocation type, so the restore's classifier returns rule 2,
+	// SSLM_GPU_ALLOCATION_FAILED, on a live device (SSLM_DEVICE_LOST through v1.7.1).
+	CHECK_MSG(restore_st == SSLM_GPU_ALLOCATION_FAILED,
+	          "S4: sslm_gpu_seq_restore under an injected device-round-trip allocation throw must return "
+	          "SSLM_GPU_ALLOCATION_FAILED (a status), not let the exception escape -- got %d",
 	          (int)restore_st);
 	CHECK_MSG(restored == nullptr, "S4: a rejected restore must not deliver a live handle");
 

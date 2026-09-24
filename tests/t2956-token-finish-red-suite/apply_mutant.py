@@ -3,12 +3,19 @@
 Use from D:/_slm170 with --tree D:/_t2956-mutants/src. Every invocation
 restores the prior production mutation first; this script never touches the
 main checkout. The caller builds and executes the named test cell afterward.
+
+--check (TE-425): read-only, against ANY tree. Reports, per mutant (or `all`),
+whether each replacement's anchor lands exactly once -- inside the function
+ANCHOR_FUNCTION names for it, found by symbol -- and writes nothing. It is how
+a later engine (the SuperSLM 1.8.0 fix rewrites gpu_1p0.cpp, superslm_gpu.cpp
+and d3d12_harness.h) is checked for which mutants still have their target.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 from pathlib import Path
+import re
 import subprocess
 
 FILES = (
@@ -21,19 +28,120 @@ FILES = (
 )
 
 
+def _census_module():
+    """tests/ci/check_gpu_status_site_census.py's C++ scanner (comment/string stripping and
+    brace-matched function spans), reused to anchor a replacement inside one named function."""
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "ci" / "check_gpu_status_site_census.py"
+    spec = importlib.util.spec_from_file_location("census", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def function_body(content: str, symbol: str) -> tuple[int, int] | None:
+    """[start, end) of the body of the function whose (unqualified or qualified) name is `symbol`,
+    found by brace matching over the comment- and string-blanked text -- by symbol, not by line or by
+    surrounding text (TE-425: re-anchoring for the SuperSLM 1.8.0 fix, which rewrites these files)."""
+    census = _census_module()
+    clean = census.strip_code(content)
+    spans = [(a, b) for a, b, name in census.function_spans(clean)
+             if name == symbol or name.endswith("::" + symbol)]
+    return (spans[0][0], spans[0][1] + 1) if len(spans) == 1 else None
+
+
 class Patch:
     def __init__(self, tree: Path):
         self.tree = tree
         self.changed: set[str] = set()
 
-    def replace(self, name: str, old: str, new: str):
+    def replace(self, name: str, old: str, new: str, within: str | None = None):
         path = self.tree / name
         content = path.read_text(encoding="utf-8")
-        count = content.count(old)
+        lo, hi = 0, len(content)
+        if within is not None:
+            span = function_body(content, within)
+            if span is None:
+                raise RuntimeError(f"{name}: function {within} not found exactly once")
+            lo, hi = span
+        count = content[lo:hi].count(old)
         if count != 1:
-            raise RuntimeError(f"{name}: expected one landing, found {count}: {old[:80]!r}")
-        path.write_text(content.replace(old, new, 1), encoding="utf-8", newline="\n")
+            raise RuntimeError(f"{name}{' :: ' + within if within else ''}: expected one landing, found {count}: {old[:80]!r}")
+        at = content.index(old, lo, hi)
+        path.write_text(content[:at] + new + content[at + len(old):], encoding="utf-8", newline="\n")
         self.changed.add(name)
+
+
+class CheckPatch:
+    """--check: every replacement of one mutant, against an in-memory copy of the tree; writes nothing.
+    Records, per replacement, how many times its anchor lands (inside its function when anchored)."""
+
+    def __init__(self, tree: Path):
+        self.tree = tree
+        self.files: dict[str, str] = {}
+        self.results: list[tuple[str, str, int]] = []
+
+    def replace(self, name: str, old: str, new: str, within: str | None = None):
+        if name not in self.files:
+            self.files[name] = (self.tree / name).read_text(encoding="utf-8")
+        content = self.files[name]
+        lo, hi = 0, len(content)
+        where = name
+        if within is not None:
+            where = f"{name} :: {within}"
+            span = function_body(content, within)
+            if span is None:
+                self.results.append((where, old[:60], -1))
+                return
+            lo, hi = span
+        count = content[lo:hi].count(old)
+        self.results.append((where, old[:60], count))
+        if count == 1:
+            at = content.index(old, lo, hi)
+            self.files[name] = content[:at] + new + content[at + len(old):]
+
+
+# TE-425: the function each GPU-file mutant's anchor lives in, so the anchor is searched inside that
+# function's body only (by symbol). The SuperSLM 1.8.0 fix rewrites these files' catch sites, status
+# mappings and close helper; a landing outside the named function, or a function that is gone, is
+# reported instead of patched silently elsewhere. o2's anchors are the T-2851 test seams' own code, which
+# the fix does not touch, and stay file-scoped.
+GPU = "src/gpu/gpu_1p0.cpp"
+ANCHOR_FUNCTION = {
+    ("q_gpu", GPU): "SslmGpuSeqFinishTokenForG5BridgeImpl",
+    ("i", GPU): "SslmGpuSeqFinishTokenForG5BridgeImpl",
+    ("e", GPU): "sslm_gpu_model_mapImpl",
+    ("f", GPU): "sslm_gpu_model_mapImpl",
+    ("h", GPU): "sslm_gpu_model_mapImpl",
+    ("h2", GPU): "sslm_gpu_model_mapImpl",
+    ("m", GPU): "sslm_gpu_model_mapImpl",
+    ("j", GPU): "CreateDeviceLogitsBuffers",
+    ("k", GPU): "CreateDeviceLogitsBuffers",
+    ("l", GPU): "CreateDeviceLogitsBuffers",
+    ("n", GPU): "CreateDeviceLogitsBuffers",
+    ("n2_upload", GPU): "UploadResidentBufferSyncTo",
+    ("n3_upload", GPU): "UploadResidentBufferSyncTo",
+    ("n2_restore", "src/gpu/superslm_gpu.cpp"): "RestoreGpuSequenceState",
+    ("n3_restore", "src/gpu/superslm_gpu.cpp"): "RestoreGpuSequenceState",
+    ("o", GPU): "RunDeviceLogits",
+    ("p", "src/gpu/d3d12_harness.h"): "CloseListWithRetry",
+}
+
+
+class Scoped:
+    """Routes each replacement of mutant `ident` through ANCHOR_FUNCTION."""
+
+    def __init__(self, patch, ident: str):
+        self.patch = patch
+        self.key = "l" if re.fullmatch(r"l[1-6]", ident) else ident
+
+    def replace(self, name: str, old: str, new: str):
+        self.patch.replace(name, old, new, within=ANCHOR_FUNCTION.get((self.key, name)))
+
+
+ALL_MUTANTS = ["a", "c", "c_exact", "q_cpu", "q_gpu", "b", "b2", "d", "e", "f", "g", "h", "h2", "i", "j",
+               "k", "l1", "l2", "l3", "l4", "l5", "l6", "m", "n", "n2_upload", "n3_upload", "n2_restore",
+               "n3_restore", "o", "o2", "p"]
 
 
 def apply(p: Patch, ident: str):
@@ -225,11 +333,36 @@ def apply(p: Patch, ident: str):
         raise ValueError(f"unknown mutant {ident}")
 
 
+def check(tree: Path, idents: list[str]) -> int:
+    """Read-only: for each mutant, whether every replacement's anchor lands exactly once (inside its
+    function where ANCHOR_FUNCTION names one) in `tree`. Any tree; nothing is written."""
+    bad = 0
+    for ident in idents:
+        cp = CheckPatch(tree)
+        try:
+            apply(Scoped(cp, ident), ident)
+        except (OSError, ValueError) as e:
+            print(f"MUTANT {ident} ERROR {e}")
+            bad += 1
+            continue
+        ok = all(c == 1 for _, _, c in cp.results)
+        bad += 0 if ok else 1
+        for where, anchor, count in cp.results:
+            state = "lands" if count == 1 else ("function-not-found" if count < 0 else f"lands {count} times")
+            print(f"MUTANT {ident} {'OK  ' if count == 1 else 'MISS'} {where}: {state}: {anchor!r}")
+    print(f"CHECK {len(idents) - bad} of {len(idents)} mutants apply at {tree}")
+    return 1 if bad else 0
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("ident", help="mutant id, or reset")
+    parser.add_argument("ident", help="mutant id, or reset, or 'all' with --check")
     parser.add_argument("--tree", type=Path, default=Path(r"D:\_t2956-mutants\src"))
+    parser.add_argument("--check", action="store_true",
+                        help="read-only: report whether the mutant's anchors land in --tree (any tree)")
     args = parser.parse_args()
+    if args.check:
+        return check(args.tree.resolve(), ALL_MUTANTS if args.ident == "all" else [args.ident])
     tree = args.tree.resolve()
     if tree != Path(r"D:\_t2956-mutants\src").resolve():
         raise RuntimeError(f"refusing to edit a tree outside the dedicated scratch worktree: {tree}")
@@ -241,11 +374,11 @@ def main():
         print("RESET")
         return
     patch = Patch(tree)
-    apply(patch, args.ident)
+    apply(Scoped(patch, args.ident), args.ident)
     for name in sorted(patch.changed):
         digest = hashlib.sha256((tree / name).read_bytes()).hexdigest()
         print(f"MUTANT {args.ident} {name} sha256={digest}")
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

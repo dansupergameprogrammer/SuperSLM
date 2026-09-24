@@ -826,6 +826,10 @@ jobs:
         run: python -m pytest tests/ci/ -v
       - name: Fail on any unwrapped member of the derived population
         run: python tools/ci/check_bad_alloc_contract.py --list-unwrapped
+      # TE-425 (plan te421-slm172-host-oom.md Sec3.5 R11): every exception-to-status site and every
+      # GPU forward-status site in the source is in the committed census with a disposition.
+      - name: Fail on any GPU status site the census does not list
+        run: python tests/ci/check_gpu_status_site_census.py
 
   # SuperSLM_S3a_WalkingSkeleton_Plan.md Sec7.3 (T-200, Sec17.3 cell 5; ac34677
   # C1): the checked chain funnel's structural half -- no translation unit in

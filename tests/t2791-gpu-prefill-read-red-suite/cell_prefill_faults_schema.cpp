@@ -125,13 +125,17 @@ void PromptFaults(GpuModelFixture& fx) {
 	          static_cast<long long>(open_len), static_cast<long long>(after_len));
 	ExpectRefuse(tag, "F1b recording fault in a non-final sub-chunk", ReadVerb(fx, s));
 
-	struct Tail { const char* cell; void (*arm)(); void (*clr)(); } tails[] = {
+	// TE-425 (SuperSLM 1.8.0 plan `te421-slm172-host-oom.md` Sec3.3, E-5): F4's seam is a host
+	// allocation failure (std::bad_alloc) after Close and Signal succeeded and the work was waited out,
+	// on a live device -- rule 2, SSLM_GPU_ALLOCATION_FAILED. F2's and F3's seams throw a plain
+	// std::runtime_error, a non-allocation fault (rule 3), and stay SSLM_DEVICE_LOST.
+	struct Tail { const char* cell; void (*arm)(); void (*clr)(); SslmGpuStatus want; } tails[] = {
 	    {"F2 prompt recording-tail fault (pre-Close)", superslm_gpu::ArmT2169ChunkRecordingTailFaultInjection,
-	     superslm_gpu::ClearT2169ChunkRecordingTailFaultInjection},
+	     superslm_gpu::ClearT2169ChunkRecordingTailFaultInjection, SSLM_DEVICE_LOST},
 	    {"F3 prompt recording-tail Signal fault", superslm_gpu::ArmT2169ChunkRecordingTailSignalFaultInjection,
-	     superslm_gpu::ClearT2169ChunkRecordingTailSignalFaultInjection},
+	     superslm_gpu::ClearT2169ChunkRecordingTailSignalFaultInjection, SSLM_DEVICE_LOST},
 	    {"F4 prompt recording-tail bad_alloc", superslm_gpu::ArmT2169ChunkRecordingTailBadAllocFaultInjection,
-	     superslm_gpu::ClearT2169ChunkRecordingTailBadAllocFaultInjection},
+	     superslm_gpu::ClearT2169ChunkRecordingTailBadAllocFaultInjection, SSLM_GPU_ALLOCATION_FAILED},
 	};
 	for (const Tail& t : tails) {
 		CHECK_MSG(base(), "[%s] SETUP base", tag);
@@ -145,9 +149,9 @@ void PromptFaults(GpuModelFixture& fx) {
 			std::printf("    [%s] %s: the call threw\n", tag, t.cell);
 		}
 		t.clr();
-		// Plan Sec3.4 row 5 (T-2798): tightened from `!= SSLM_OK` to `== SSLM_DEVICE_LOST`.
-		CHECK_MSG(!threw && st == SSLM_DEVICE_LOST, "[%s] %s: the armed fault returned %s, want SSLM_DEVICE_LOST", tag,
-		          t.cell, threw ? "an exception" : StatusName(st));
+		// Plan Sec3.4 row 5 (T-2798): tightened from `!= SSLM_OK` to an exact status (TE-425: per tail).
+		CHECK_MSG(!threw && st == t.want, "[%s] %s: the armed fault returned %s, want %s", tag,
+		          t.cell, threw ? "an exception" : StatusName(st), StatusName(t.want));
 		std::printf("    [%s] %s: prefill status %s\n", tag, t.cell, StatusName(st));
 		ExpectRefuse(tag, t.cell, ReadVerb(fx, s));
 	}
