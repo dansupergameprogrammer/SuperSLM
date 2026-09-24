@@ -14,8 +14,9 @@ param(
 # this script abort under Windows PowerShell 5.1 the moment the fixed `set` leg wrote its label to
 # stderr -- 5.1 wraps each native stderr line from `2>&1` in a terminating NativeCommandError, so
 # the script threw before reaching the exit-code grading below and a genuinely green suite read as
-# a hard failure. `run_crossvendor.ps1:59-66` already carries this exact hazard and uses
-# "Continue"; matched here. `ForEach-Object { "$_" }` stringifies each captured record (native
+# a hard failure. `tools/t2116_crossvendor/run_crossvendor.ps1` already carries this exact hazard
+# and sets `$ErrorActionPreference = "Continue"` for it (see the comment above that assignment);
+# matched here. `ForEach-Object { "$_" }` stringifies each captured record (native
 # stdout/stderr line or ErrorRecord alike) before `Out-String` renders it, the same shape Poirot's
 # own remedy probe (`Claude/Poirot/fcbc6a7-slm171-stdout-fix-probe/remedy_probe.ps1`) proved S3
 # clean under both 5.1 and pwsh 7 with -- kept here for parity even though this script only grades
