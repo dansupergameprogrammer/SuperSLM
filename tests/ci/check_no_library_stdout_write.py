@@ -9,20 +9,25 @@ library writes nothing to stdout is a separate claim, verified for that release 
 of the tree, not by this scan.
 
 WHAT IS BANNED -- defined in exactly one place, `_BANNED_IDENTIFIERS`, `_BANNED_IDENTIFIER_FAMILY`
-and `_BANNED_OPERATORS` below, each matched as a whole word and case-sensitively:
+and `_BANNED_OPERATORS` below. Identifiers and the family are matched as whole words,
+case-sensitively; the operators are matched wherever they occur.
 
-- stream and handle names: `stdout`, `STD_OUTPUT_HANDLE`, `cout`, `wcout`, `__acrt_iob_func`
-  (the UCRT's own expansion of `stdout`), `GetStdHandle`;
-- the printf family: `printf`, `wprintf`, `vprintf`, `vwprintf`, each also with a `_s` suffix;
-  and the MSVC underscore-prefixed family -- any identifier starting with `_` that contains
-  `printf` followed by a `_l` or `_p` suffix, optionally after `_s` (`_printf_l`, `_printf_p`,
-  `_printf_p_l`, `_printf_s_l`, `_vwprintf_p`, ...; the stream and buffer variants in that family,
-  such as `_fprintf_p` and `_sprintf_l`, are banned with it);
-- character and string writers: `puts`, `_putws`, `putchar`, `putwchar`;
-- raw writes: `write`, `_write`, `WriteFile`, `WriteConsole`, `WriteConsoleA`, `WriteConsoleW`;
-- descriptor-to-stream openers: `fdopen`, `_fdopen`;
-- the token-paste operator `##` and its digraph `%:%:`, because pasting can assemble any banned
-  name from fragments no word-level ban can see.
+- `_BANNED_IDENTIFIERS`, 28 names:
+  - stream and handle names: `stdout`, `STD_OUTPUT_HANDLE`, `cout`, `wcout`, `__acrt_iob_func`
+    (the UCRT's own expansion of `stdout`), `GetStdHandle`;
+  - the printf family: `printf`, `wprintf`, `vprintf`, `vwprintf`, `printf_s`, `wprintf_s`,
+    `vprintf_s`, `vwprintf_s`;
+  - character and string writers: `puts`, `_putws`, `putchar`, `putwchar`, `_fputchar`,
+    `_fputwchar`;
+  - raw writes: `write`, `_write`, `WriteFile`, `WriteConsole`, `WriteConsoleA`, `WriteConsoleW`;
+  - descriptor-to-stream openers: `fdopen`, `_fdopen`.
+- `_BANNED_IDENTIFIER_FAMILY`, the MSVC underscore-prefixed printf family, regex
+  `_\\w*printf(?:_s)?_[lp]\\w*`: an identifier that starts with `_`, contains `printf`, then
+  optionally `_s`, then `_l` or `_p`, then any identifier characters. It covers `_printf_l`,
+  `_printf_p`, `_printf_p_l`, `_printf_s_l` (the `_s_l` extension), `_vwprintf_p`, `_wprintf_s_l`,
+  and the stream and buffer variants in the same family, such as `_fprintf_p` and `_sprintf_l`.
+- `_BANNED_OPERATORS`: the token-paste operator `##` and its digraph spelling `%:%:`, because
+  pasting can assemble any banned name from fragments no word-level ban can see.
 
 `stderr`, `fprintf` and `fwprintf` are not banned: `fprintf(stderr, ...)` is this library's
 diagnostic channel. A line that names them together with `stdout` is refused by the `stdout` ban.
@@ -35,7 +40,9 @@ HOW. A text scan, not a C++ parser. `_strip_comments_and_literals` blanks commen
 string/char literals with equal-length whitespace, keeping every newline, so reported line numbers
 are exact. It recognises C++14 digit separators (a `'` inside a number such as `1'000` is not a
 character-literal delimiter) and raw string literals (`R"delim(...)delim"`, with the prefixes
-`u8R`, `uR`, `UR` and `LR`). An ordinary string or character literal ends at an unescaped newline,
+`u8R`, `uR`, `UR` and `LR`). A `//` comment continues onto the next line when its line ends in a
+backslash immediately before the line ending (LF or CRLF), as many times as that repeats, as C++
+line splicing does. An ordinary string or character literal ends at an unescaped newline,
 which a well-formed literal cannot contain, so a quote the stripper misreads cannot blank the lines
 after it. The ban then runs on what survives. Scanned extensions: `.c`, `.cpp`, `.h`, `.hpp`, `.inc`,
 `.def`, `.inl`, `.ipp`, `.hlsl`, `.hlsli` (`include/superslm/sslm_abi_functions.inc` is part of the
@@ -43,8 +50,9 @@ public API, included by `include/superslm/sslm_abi.h`).
 
 Known limits, each a way code can pass the scan: preprocessor tricks other than token pasting
 (a macro whose expansion names a banned identifier defined outside `src/`/`include/`), function
-pointers or handles obtained without naming a listed identifier, and writes to a descriptor or
-handle that equals stdout's without being named as such.
+pointers or handles obtained without naming a listed identifier, writes to a descriptor or
+handle that equals stdout's without being named as such, and a banned identifier split across
+lines by a backslash-newline splice in code (the ban reads one line at a time).
 
 The interface is pinned by tests/ci/test_te399_stdout_write_scan_commission.py:
 `scan_for_stdout_writes(root_dirs)` and `main(argv)`. Exit code 0 iff no scanned file contains a
@@ -63,7 +71,7 @@ _BANNED_IDENTIFIERS = (
     "stdout", "STD_OUTPUT_HANDLE", "cout", "wcout", "__acrt_iob_func", "GetStdHandle",
     "printf", "wprintf", "vprintf", "vwprintf",
     "printf_s", "wprintf_s", "vprintf_s", "vwprintf_s",
-    "puts", "_putws", "putchar", "putwchar",
+    "puts", "_putws", "putchar", "putwchar", "_fputchar", "_fputwchar",
     "write", "_write", "WriteFile", "WriteConsole", "WriteConsoleA", "WriteConsoleW",
     "fdopen", "_fdopen",
 )
@@ -113,6 +121,25 @@ def _raw_string_end(source: str, quote: int) -> int:
     return n if end == -1 else end + len(terminator)
 
 
+def _line_comment_end(source: str, i: int) -> int:
+    """Index of the newline that ends the `//` comment starting at `source[i]`, or len(source).
+    A backslash immediately before the line ending (LF or CRLF) splices the next line into the
+    comment, as C++ translation phase 2 does, as many times as it repeats."""
+    n = len(source)
+    j = i
+    while True:
+        nl = source.find("\n", j)
+        if nl == -1:
+            return n
+        k = nl - 1
+        if k > i + 1 and source[k] == "\r":
+            k -= 1
+        if k > i + 1 and source[k] == "\\":
+            j = nl + 1
+            continue
+        return nl
+
+
 def _pp_number_end(source: str, i: int) -> int:
     """Index just past the preprocessing number starting at `source[i]` (a digit): digits,
     identifier characters, `.`, an exponent sign after e/E/p/P, and a `'` digit separator
@@ -146,9 +173,8 @@ def _strip_comments_and_literals(source: str) -> str:
         c = source[i]
         nxt = source[i + 1] if i + 1 < n else ""
         if c == "/" and nxt == "/":
-            end = source.find("\n", i)
-            end = n if end == -1 else end
-            out.append(" " * (end - i))
+            end = _line_comment_end(source, i)
+            out.append(_blank(source[i:end]))
             i = end
             continue
         if c == "/" and nxt == "*":
@@ -180,7 +206,7 @@ def _strip_comments_and_literals(source: str) -> str:
             while j < n:
                 ch = source[j]
                 if ch == "\\" and j + 1 < n:
-                    j += 2
+                    j += 3 if source.startswith("\r\n", j + 1) else 2
                     continue
                 if ch == c:
                     j += 1
