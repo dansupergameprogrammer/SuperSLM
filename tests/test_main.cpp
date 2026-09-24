@@ -29079,7 +29079,10 @@ int main(int argc, char** argv) {
 		// rather than by line range because a range drifts with any edit above it -- so this
 		// section's red/green reading against D-SLM7753 can be confirmed without a full-suite
 		// run. Same shape as --t2948-shader-dir-invalid-only /
-		// --t2959-gpu-output-null-only immediately below.
+		// --t2959-gpu-output-null-only immediately below, including its guard: the eight cells are
+		// defined only under _WIN32, so off Windows this runner returns 2 (not run) rather than
+		// naming functions that do not exist there.
+#if defined(_WIN32)
 		TestAdapterIndexUnsetLeavesDefaultBehaviorAndPrintsNothing();
 		TestAdapterIndexValidOverrideStdoutStaysEmpty();
 		TestAdapterIndexValidOverridePrintsLabelOnStderr();
@@ -29090,6 +29093,9 @@ int main(int argc, char** argv) {
 		TestAdapterIndexSoftwareAdapterRefusedNotSilentlySelected();
 		std::printf("te399 adapter-index section: %d checks, %d failures\n", GChecks, GFailures);
 		return GFailures == 0 ? 0 : 1;
+#else
+		return 2;
+#endif
 	}
 	if (argc > 1 && std::strcmp(argv[1], "--t2959-gpu-output-null-only") == 0) {
 #if defined(_WIN32) && defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
