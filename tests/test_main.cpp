@@ -29075,10 +29075,10 @@ int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1 && std::strcmp(argv[1], "--te399-adapter-index-only") == 0) {
 		// TE-399 (2026-09-23, updated in the TE-402 fix round): a targeted runner for T-2116's
-		// adapter-index section (tests/test_main.cpp:27167-27340ish -- see TE-402 M2 on why this
-		// comment names no exact range: it is the kind of citation that drifts by one edit), so
-		// this section's red/green reading against D-SLM7753 can be confirmed without a
-		// full-suite run. Same shape as --t2948-shader-dir-invalid-only /
+		// adapter-index section -- the eight TestAdapterIndex* cells called below, cited by name
+		// rather than by line range because a range drifts with any edit above it -- so this
+		// section's red/green reading against D-SLM7753 can be confirmed without a full-suite
+		// run. Same shape as --t2948-shader-dir-invalid-only /
 		// --t2959-gpu-output-null-only immediately below.
 		TestAdapterIndexUnsetLeavesDefaultBehaviorAndPrintsNothing();
 		TestAdapterIndexValidOverrideStdoutStaysEmpty();
