@@ -1441,7 +1441,7 @@ def test_wiring_vitality_check_lwuws_path_count_disable_stops_catching_a_corrupt
     with tempfile.TemporaryDirectory() as tmp:
         with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
             real_text = f.read()
-        corrupted = real_text.replace("catch, twenty-nine paths", "catch, seventeen paths", 1)
+        corrupted = real_text.replace("catch, thirty-one paths", "catch, seventeen paths", 1)
         assert corrupted != real_text, "sanity: the exact phrase must exist in the real file"
         gph_path = os.path.join(tmp, "corrupted_before_word_gpu_port.h")
         with open(gph_path, "w", encoding="utf-8") as f:
@@ -1466,7 +1466,7 @@ def test_wiring_vitality_gpu_port_h_path_disable_stops_catching_a_corrupted_word
     with tempfile.TemporaryDirectory() as tmp:
         with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
             real_text = f.read()
-        corrupted = real_text.replace("alike, thirty-five", "alike, twenty-three", 1)
+        corrupted = real_text.replace("alike, thirty-seven", "alike, twenty-three", 1)
         assert corrupted != real_text, "sanity: the exact phrase must exist in the real file"
         gph_path = os.path.join(tmp, "corrupted_total_word_gpu_port.h")
         with open(gph_path, "w", encoding="utf-8") as f:
@@ -1560,7 +1560,9 @@ def test_the_module_own_device_capability_citations_resolve():
     # while the real sites were `:777`, `:788`, `:1471` -- six rounds, through three rounds
     # commissioned to close citation staleness, because the module was in its own scan population
     # and the scan returned nothing for it. In the marked form there is no line number to go stale.
-    for name in ("dev.available", "MapModelGpuResidencyTierCheck", "device_removed_reason"):
+    # TE-425 (SuperSLM 1.8.0 plan Sec3.2 E-2): the forward sites classify through
+    # `ClassifyForwardFault`; `device_removed_reason`, the ternary's variable, is gone from the source.
+    for name in ("dev.available", "MapModelGpuResidencyTierCheck", "ClassifyForwardFault"):
         assert chk.check_marked_citation(name, "superslm_gpu.cpp") is None, name
 
 
@@ -1704,7 +1706,7 @@ def test_derive_before_count_raises_when_the_residency_statement_is_absent_with_
         assert "no boundary to cut on" in str(e)
 
 
-def test_the_real_tree_lwuws_before_count_is_twenty_nine():
+def test_the_real_tree_lwuws_before_count_is_thirty_one():
     # T-2101's own two real catch clauses on RunLayerLoopGpuSubmit (GpuGemmGroupArithmeticError's,
     # one literal return; the generic std::runtime_error's, one ternary return), PLUS (T-2184, S3,
     # D-SLM3662) SubmitOneSubChunkToFullDepthForG5Bridge's own original pair of catch clauses
@@ -1737,6 +1739,16 @@ def test_the_real_tree_lwuws_before_count_is_twenty_nine():
     # than a local lambda inside `PrepareGpuLayerLoopChunkOpenState` -- its own `return` sits in
     # its own brace-matched extent this module never scans as part of the ladder body, so the
     # thirteen ladder/device-capability returns below stay unchanged at 13.
+    #
+    # CORRECTED 2026-09-24 (TE-425; SuperSLM 1.8.0 plan te421-slm172-host-oom.md Sec3.2 E-4, E-7):
+    # each recording window gains a std::bad_alloc clause, a std::length_error clause and a final
+    # catch (...) -- nine catch clauses per function, one return each (every clause now returns the
+    # fault classifier's status) -- and each tail's std::runtime_error clause, which returned through
+    # three statements (an early return after a second failed Close, and two copies of the ternary),
+    # now returns once, through the classifier: 9 returns per function where there were 8. E-7's
+    # not-set-up branch stays one return statement, so the ladder stays at 13: 13 + 9 + 9 = 31.
+    # Counted at the 1.8.0 tip (dad862e) from the source by the TE-425 record's own brace-matched count
+    # (Claude/Curie/te425-slm180-red-2026-09-24.md), then pinned here.
     with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
         gpu_text = f.read()
     ladder_body = chk.strip_comments(chk.extract_function_body(gpu_text, chk.GPU_LADDER_FUNC_SIGNATURE, label="x"))
@@ -1745,12 +1757,12 @@ def test_the_real_tree_lwuws_before_count_is_twenty_nine():
     submit_catch_bodies = chk.extract_catch_block_bodies(submit_body)
     subchunk_body = chk.strip_comments(chk.extract_function_body(gpu_text, chk.SUBCHUNK_FUNC_SIGNATURE, label="x"))
     subchunk_catch_bodies = chk.extract_catch_block_bodies(subchunk_body)
-    assert len(submit_catch_bodies) == 6
-    assert len(subchunk_catch_bodies) == 6
+    assert len(submit_catch_bodies) == 9
+    assert len(subchunk_catch_bodies) == 9
     assert chk.count_any_return_statements(before) == 13
-    assert sum(chk.count_any_return_statements(b) for b in submit_catch_bodies) == 8
-    assert sum(chk.count_any_return_statements(b) for b in subchunk_catch_bodies) == 8
-    assert chk.derive_lwuws_before_decision_count(gpu_text) == 29
+    assert sum(chk.count_any_return_statements(b) for b in submit_catch_bodies) == 9
+    assert sum(chk.count_any_return_statements(b) for b in subchunk_catch_bodies) == 9
+    assert chk.derive_lwuws_before_decision_count(gpu_text) == 31
 
 
 def test_the_real_tree_lwuws_after_count_is_six():
@@ -1766,14 +1778,16 @@ def test_the_real_tree_lwuws_after_count_is_six():
     assert chk.derive_lwuws_after_decision_count(gpu_text) == 6
 
 
-def test_the_real_tree_lwuws_total_is_thirty_five():
+def test_the_real_tree_lwuws_total_is_thirty_seven():
     # CORRECTED 2026-09-03 (T-2577, D-SLM6279): 27 + 6 = 33 was gpu_port.h's own prose before
     # this ticket; two new catch clauses (GpuShaderBinaryStaleError's, one per function) move the
     # before-count from 27 to 29, unchanged after-count of 6: 29 + 6 = 35.
+    # CORRECTED 2026-09-24 (TE-425; SuperSLM 1.8.0 plan Sec3.2 E-4): the before-count moves from 29 to
+    # 31 (see the cell above); no after-decision return changes: 31 + 6 = 37.
     with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
         gpu_text = f.read()
     assert (chk.derive_lwuws_before_decision_count(gpu_text)
-            + chk.derive_lwuws_after_decision_count(gpu_text)) == 35
+            + chk.derive_lwuws_after_decision_count(gpu_text)) == 37
 
 
 # --- M2: O34's successor residual is a MEASURED property, not a claim about one ---

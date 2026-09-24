@@ -672,9 +672,12 @@ static void TestGuard_ContextReusableAfterBadAllocFault(SslmGpuContext* ctx,
 	    ctx, cand_seq, kFirstCallChunk.data(), static_cast<int32_t>(kFirstCallChunk.size()),
 	    kDispatchBudget);
 	superslm_gpu::ClearT2169ChunkRecordingTailBadAllocFaultInjection();
-	CHECK_MSG(first_call_status == SSLM_DEVICE_LOST,
+	// TE-425 (SuperSLM 1.8.0 plan `te421-slm172-host-oom.md` Sec3.3, E-5): a host allocation failure
+	// after Close and Signal succeeded and the work was waited out, on a live device, is rule 2 --
+	// SSLM_GPU_ALLOCATION_FAILED (SSLM_DEVICE_LOST through v1.7.1).
+	CHECK_MSG(first_call_status == SSLM_GPU_ALLOCATION_FAILED,
 	          "Guard(bad_alloc reusable pin): the faulted first call returned %s, want "
-	          "SSLM_DEVICE_LOST -- the injection seam itself did not fire as expected",
+	          "SSLM_GPU_ALLOCATION_FAILED -- a live-device allocation failure after the list closed",
 	          GpuStatusName(first_call_status));
 
 	const SslmGpuStatus second_call_status = SslmGpuSeqPrefillPromptForG5Bridge(
