@@ -1,61 +1,54 @@
-"""CI source check: the shipped `superslm`/`superslm_gpu` libraries write nothing to stdout
-(TE-400, D-SLM7753; TE-402 S3, remedy #4: "add a hosted-CI source scan that fails on any stdout
-write in src/ and include/"). A one-time grep at the time of the fix is not a standing
-guarantee -- a future `printf` added anywhere under `src/` or `include/` would ship silently,
-exactly the gap S3 found. This makes the sweep TE-400's own build log performed by hand into
-something CI runs on every push, refusing any stdout write it finds.
+"""CI source scan: a tripwire for stdout-writing spellings in the shipped `superslm`/`superslm_gpu`
+library sources (TE-400, D-SLM7753; TE-402 S3; promise narrowed by D-SLM7783).
 
-Commissioned, blind, by tests/ci/test_te399_stdout_write_scan_commission.py (Curie, TE-399 fix
-round) -- this module implements exactly that commission's own interface contract; do not change
-the two public names or their signatures without updating that test, which this module does not
-own.
+WHAT IT PROMISES. The scan refuses any `src/`/`include/` source file that names one of the banned
+stdout-writing identifiers below, or the token-paste operator, outside a comment or a string/char
+literal. It is a tripwire for those spellings, not a proof that the library writes nothing to
+stdout: code that reaches stdout without naming a listed identifier can pass. That the 1.7.1
+library writes nothing to stdout is a separate claim, verified for that release by a hand sweep
+of the tree, not by this scan.
 
-WHAT COUNTS AS A LIBRARY STDOUT WRITE (TE-407 S1 fix round). A TOKEN BAN, not a call-shape
-match: any comment/string-stripped line containing the bare identifier `stdout`,
-`STD_OUTPUT_HANDLE`, `cout`, `wcout`, the printf family (`printf`, `wprintf`, `vprintf`,
-`vwprintf`, and each with a trailing `_s`), `puts`, `_putws`, the putchar family (`putchar`,
-`putwchar`), the Win32 console-write family (`WriteConsoleA`/`WriteConsoleW`), or the POSIX
-raw-descriptor write `_write` -- as a whole word, never as a call-shape regex. TE-402's own
-call-shape matcher (an `fprintf(` regex plus "is the first argument `stdout`?") was proven, by
-execution (TE-407 S1, `scan_mutants.py`, 13 of 15 escaped), to miss anything that does not look
-exactly like the one site it was written from: `std::vprintf`, `printf_s`, `std::putchar`,
-`std::fputc(..., stdout)`, `using namespace std; cout <<`, `stdout` held in a `FILE*` variable,
-two calls on one line (only the first was inspected), a call whose `stdout` argument is on a
-following line (each regex ran per line), and a `std::printf` planted in a public `.inc` header
-(not in the old scanned-extension set) all escaped. A token ban has no call shape to miss: if the
-word `stdout` (or any of the above) appears anywhere outside a comment or a string/char literal
-in a shipped library source file, that is the finding, regardless of which function holds it,
-which line the call opened on, or how many calls share a line. `_write` is banned unconditionally
-(TE-407's own `posix_write_fd1.cpp` mutant, `_write(1, buf, n)`, names the stdout file descriptor
-only by the numeral 1, which no word-level ban can single out from other integer arguments) --
-verified absent from this tree already (zero pre-existing uses), so banning it outright costs
-nothing here. `stderr` and `fprintf`/`fwprintf` alone (without the word `stdout` anywhere on the
-line) are NOT banned: `fprintf(stderr, ...)` is this project's own established diagnostic channel
-(d3d12_harness.h's own convention, and TE-400's own fix), and it is legal precisely because the
-line naming it never also contains the word `stdout`.
+WHAT IS BANNED -- defined in exactly one place, `_BANNED_IDENTIFIERS`, `_BANNED_IDENTIFIER_FAMILY`
+and `_BANNED_OPERATORS` below, each matched as a whole word and case-sensitively:
 
-The English word "puts" inside a comment (e.g. "puts the row maximum", legitimately present
-several times in this tree) is not flagged -- comments are stripped before the ban runs, per
-METHOD below, the same protection TE-402's implementation already had and this round keeps.
+- stream and handle names: `stdout`, `STD_OUTPUT_HANDLE`, `cout`, `wcout`, `__acrt_iob_func`
+  (the UCRT's own expansion of `stdout`), `GetStdHandle`;
+- the printf family: `printf`, `wprintf`, `vprintf`, `vwprintf`, each also with a `_s` suffix;
+  and the MSVC underscore-prefixed family -- any identifier starting with `_` that contains
+  `printf` followed by a `_l` or `_p` suffix, optionally after `_s` (`_printf_l`, `_printf_p`,
+  `_printf_p_l`, `_printf_s_l`, `_vwprintf_p`, ...; the stream and buffer variants in that family,
+  such as `_fprintf_p` and `_sprintf_l`, are banned with it);
+- character and string writers: `puts`, `_putws`, `putchar`, `putwchar`;
+- raw writes: `write`, `_write`, `WriteFile`, `WriteConsole`, `WriteConsoleA`, `WriteConsoleW`;
+- descriptor-to-stream openers: `fdopen`, `_fdopen`;
+- the token-paste operator `##` and its digraph `%:%:`, because pasting can assemble any banned
+  name from fragments no word-level ban can see.
 
-METHOD. Modelled on this directory's own precedent, check_no_forward_leaf_calls.py: a
-comment-aware text scan, not full C++ parsing. Block comments, line comments, and string/char
-literals are stripped with a small state machine (preserving line numbers exactly, the same
-discipline check_no_forward_leaf_calls.py's own `_strip_comments_preserving_line_numbers` uses,
-extended here to also blank string/char literals so a format string's own text cannot trip the
-ban), unchanged from TE-402's implementation -- TE-407 S1 found the STRIPPING sound and the
-MATCHING too narrow; only the matching changed this round. The token-ban regex then runs on what
-survives.
+`stderr`, `fprintf` and `fwprintf` are not banned: `fprintf(stderr, ...)` is this library's
+diagnostic channel. A line that names them together with `stdout` is refused by the `stdout` ban.
+Some banned identifiers also write to targets other than stdout (`write`, `WriteFile`), and the
+family pattern catches some that never write to stdout (`_sprintf_l`). They are banned outright
+because the library uses none of them, and a future legitimate use is a reviewed change to this
+list rather than a silent pass.
 
-`.inc` and `.def` (TE-407 S1's own remedy: "add `.inc`, `.def`, `.inl` and `.ipp` to the scanned
-extensions" -- `.inl`/`.ipp` are not currently used anywhere in this tree but are added
-preemptively for the same reason `.inc` was missed: a public API surface is not guaranteed to
-stay confined to `.h`) are now scanned alongside `.c`/`.cpp`/`.h`/`.hpp`/`.hlsl`/`.hlsli` -- the
-S1 escape that mattered most: `include/superslm/sslm_abi_functions.inc` is pulled into the public
-API by `sslm_abi.h:324` and was not being scanned at all.
+HOW. A text scan, not a C++ parser. `_strip_comments_and_literals` blanks comments and
+string/char literals with equal-length whitespace, keeping every newline, so reported line numbers
+are exact. It recognises C++14 digit separators (a `'` inside a number such as `1'000` is not a
+character-literal delimiter) and raw string literals (`R"delim(...)delim"`, with the prefixes
+`u8R`, `uR`, `UR` and `LR`). An ordinary string or character literal ends at an unescaped newline,
+which a well-formed literal cannot contain, so a quote the stripper misreads cannot blank the lines
+after it. The ban then runs on what survives. Scanned extensions: `.c`, `.cpp`, `.h`, `.hpp`, `.inc`,
+`.def`, `.inl`, `.ipp`, `.hlsl`, `.hlsli` (`include/superslm/sslm_abi_functions.inc` is part of the
+public API, included by `include/superslm/sslm_abi.h`).
 
-Exit code 0 iff no scanned file contains a banned token outside a comment or literal; 1
-otherwise, naming every `path:line: reason` hit.
+Known limits, each a way code can pass the scan: preprocessor tricks other than token pasting
+(a macro whose expansion names a banned identifier defined outside `src/`/`include/`), function
+pointers or handles obtained without naming a listed identifier, and writes to a descriptor or
+handle that equals stdout's without being named as such.
+
+The interface is pinned by tests/ci/test_te399_stdout_write_scan_commission.py:
+`scan_for_stdout_writes(root_dirs)` and `main(argv)`. Exit code 0 iff no scanned file contains a
+banned token outside a comment or literal; 1 otherwise, naming every `path:line: reason` hit.
 """
 from __future__ import annotations
 
@@ -65,96 +58,138 @@ import sys
 
 _SCANNED_EXTENSIONS = (".c", ".cpp", ".h", ".hpp", ".inc", ".def", ".inl", ".ipp", ".hlsl", ".hlsli")
 
-# TE-407 S1: a token ban, not a call-shape match (see the module docstring for why). Matches the
-# reviewer's own tokenban.py probe pattern, plus `_write` (added to close the POSIX
-# raw-file-descriptor escape that names no identifier the probe's own token set covers).
-_BANNED_TOKENS = re.compile(
-    r"\b(stdout|STD_OUTPUT_HANDLE|cout|wcout|v?w?printf(_s)?|puts|_putws|putw?char|"
-    r"WriteConsole[AW]?|_write)\b"
+# The banned list. The module docstring describes it; this is where it is defined.
+_BANNED_IDENTIFIERS = (
+    "stdout", "STD_OUTPUT_HANDLE", "cout", "wcout", "__acrt_iob_func", "GetStdHandle",
+    "printf", "wprintf", "vprintf", "vwprintf",
+    "printf_s", "wprintf_s", "vprintf_s", "vwprintf_s",
+    "puts", "_putws", "putchar", "putwchar",
+    "write", "_write", "WriteFile", "WriteConsole", "WriteConsoleA", "WriteConsoleW",
+    "fdopen", "_fdopen",
 )
+# MSVC's underscore-prefixed printf family: `_printf_l`, `_printf_p`, `_printf_p_l`,
+# `_printf_s_l`, `_vwprintf_p`, `_fprintf_p`, `_sprintf_l`, ...
+_BANNED_IDENTIFIER_FAMILY = r"_\w*printf(?:_s)?_[lp]\w*"
+# The token-paste operator and its digraph spelling.
+_BANNED_OPERATORS = ("##", "%:%:")
+
+_BANNED_TOKENS = re.compile(
+    r"\b(?:"
+    + "|".join(re.escape(name) for name in _BANNED_IDENTIFIERS)
+    + "|"
+    + _BANNED_IDENTIFIER_FAMILY
+    + r")\b|"
+    + "|".join(re.escape(op) for op in _BANNED_OPERATORS)
+)
+
+_RAW_STRING_PREFIXES = frozenset({"R", "u8R", "uR", "UR", "LR"})
+_RAW_DELIMITER_MAX = 16
+_RAW_DELIMITER_FORBIDDEN = frozenset(" ()\\\t\v\f\n")
+
+
+def _is_identifier_char(c: str) -> bool:
+    return c.isalnum() or c == "_" or c == "$"
+
+
+def _blank(text: str) -> str:
+    """Equal-length whitespace for `text`, keeping its newlines."""
+    return "".join("\n" if ch == "\n" else " " for ch in text)
+
+
+def _raw_string_end(source: str, quote: int) -> int:
+    """If `source[quote]` opens a raw string's body (`"delim(`), return the index just past its
+    closing `)delim"`, or len(source) if it is never closed. Return -1 if the delimiter is not a
+    valid raw-string delimiter, in which case the quote is an ordinary string's."""
+    n = len(source)
+    k = quote + 1
+    while k < n and source[k] != "(":
+        if source[k] in _RAW_DELIMITER_FORBIDDEN or k - (quote + 1) >= _RAW_DELIMITER_MAX:
+            return -1
+        k += 1
+    if k >= n:
+        return -1
+    terminator = ")" + source[quote + 1:k] + '"'
+    end = source.find(terminator, k + 1)
+    return n if end == -1 else end + len(terminator)
+
+
+def _pp_number_end(source: str, i: int) -> int:
+    """Index just past the preprocessing number starting at `source[i]` (a digit): digits,
+    identifier characters, `.`, an exponent sign after e/E/p/P, and a `'` digit separator
+    followed by a digit or identifier character."""
+    n = len(source)
+    j = i + 1
+    while j < n:
+        ch = source[j]
+        if ch in "eEpP" and j + 1 < n and source[j + 1] in "+-":
+            j += 2
+        elif _is_identifier_char(ch) or ch == ".":
+            j += 1
+        elif ch == "'" and j + 1 < n and _is_identifier_char(source[j + 1]):
+            j += 2
+        else:
+            break
+    return j
 
 
 def _strip_comments_and_literals(source: str) -> str:
-    """Replace every block comment, line comment, and string/char literal in `source` with
-    equal-length whitespace (preserving line numbers and column offsets exactly, so reported line
-    numbers match the original file), leaving only code text for the forbidden-call regexes to
-    see. Same discipline as check_no_forward_leaf_calls.py's own
-    `_strip_comments_preserving_line_numbers`, extended to also blank string/char literals (a
-    format string's own text, e.g. containing the word "printf", must not itself trip the
-    regexes)."""
+    """Replace every block comment, line comment, and string/char literal (raw strings included)
+    in `source` with equal-length whitespace, keeping every newline so line numbers and column
+    offsets match the original. Identifiers and preprocessing numbers are consumed whole, so a
+    literal prefix (`L`, `u8`, `R`, ...) is recognised and a digit separator is never read as a
+    character-literal delimiter. An ordinary string or character literal ends at an unescaped
+    newline."""
     out: list[str] = []
     i = 0
     n = len(source)
-    in_line_comment = False
-    in_block_comment = False
-    in_string = False
-    in_char = False
     while i < n:
         c = source[i]
         nxt = source[i + 1] if i + 1 < n else ""
-        if in_line_comment:
-            if c == "\n":
-                in_line_comment = False
-                out.append(c)
-            else:
-                out.append(" ")
-            i += 1
-            continue
-        if in_block_comment:
-            if c == "*" and nxt == "/":
-                out.append("  ")
-                in_block_comment = False
-                i += 2
-                continue
-            out.append("\n" if c == "\n" else " ")
-            i += 1
-            continue
-        if in_string:
-            if c == "\\" and i + 1 < n:
-                out.append("  ")
-                i += 2
-                continue
-            if c == '"':
-                in_string = False
-                out.append(" ")
-                i += 1
-                continue
-            out.append("\n" if c == "\n" else " ")
-            i += 1
-            continue
-        if in_char:
-            if c == "\\" and i + 1 < n:
-                out.append("  ")
-                i += 2
-                continue
-            if c == "'":
-                in_char = False
-                out.append(" ")
-                i += 1
-                continue
-            out.append("\n" if c == "\n" else " ")
-            i += 1
-            continue
-        # Not currently inside any comment/literal.
         if c == "/" and nxt == "/":
-            in_line_comment = True
-            out.append("  ")
-            i += 2
+            end = source.find("\n", i)
+            end = n if end == -1 else end
+            out.append(" " * (end - i))
+            i = end
             continue
         if c == "/" and nxt == "*":
-            in_block_comment = True
-            out.append("  ")
-            i += 2
+            end = source.find("*/", i + 2)
+            end = n if end == -1 else end + 2
+            out.append(_blank(source[i:end]))
+            i = end
             continue
-        if c == '"':
-            in_string = True
-            out.append(" ")
-            i += 1
+        if c.isdigit():
+            end = _pp_number_end(source, i)
+            out.append(source[i:end])
+            i = end
             continue
-        if c == "'":
-            in_char = True
-            out.append(" ")
-            i += 1
+        if _is_identifier_char(c):
+            end = i + 1
+            while end < n and _is_identifier_char(source[end]):
+                end += 1
+            word = source[i:end]
+            out.append(word)
+            i = end
+            if word in _RAW_STRING_PREFIXES and i < n and source[i] == '"':
+                raw_end = _raw_string_end(source, i)
+                if raw_end != -1:
+                    out.append(_blank(source[i:raw_end]))
+                    i = raw_end
+            continue
+        if c == '"' or c == "'":
+            j = i + 1
+            while j < n:
+                ch = source[j]
+                if ch == "\\" and j + 1 < n:
+                    j += 2
+                    continue
+                if ch == c:
+                    j += 1
+                    break
+                if ch == "\n":
+                    break
+                j += 1
+            out.append(_blank(source[i:j]))
+            i = j
             continue
         out.append(c)
         i += 1
@@ -169,17 +204,14 @@ def _scan_file(path: str) -> list[str]:
     for lineno, line in enumerate(stripped.splitlines(), start=1):
         m = _BANNED_TOKENS.search(line)
         if m:
-            hits.append(f"{path}:{lineno}: stdout write (banned token '{m.group(1)}')")
+            hits.append(f"{path}:{lineno}: stdout write (banned token '{m.group(0)}')")
     return hits
 
 
 def scan_for_stdout_writes(root_dirs: list[str]) -> list[str]:
-    """Every source line under any of `root_dirs` (walked recursively; .c/.cpp/.h/.hpp/.inc/
-    .def/.inl/.ipp/.hlsl/.hlsli by extension, matching this repo's own shipped-library source
-    set) containing a banned stdout-writing token outside a comment or string/char literal --
-    stdout/STD_OUTPUT_HANDLE/cout/wcout/the printf family/puts/_putws/the putchar family/
-    WriteConsole*/_write (TE-407 S1: a token ban, not a call-shape match -- see the module
-    docstring). Returns "path:line: reason" strings, empty if clean."""
+    """Every source line under any of `root_dirs` (walked recursively; files with an extension in
+    `_SCANNED_EXTENSIONS`) that names a banned token outside a comment or string/char literal.
+    Returns "path:line: reason" strings, sorted; empty if none."""
     hits: list[str] = []
     for root_dir in root_dirs:
         if not os.path.isdir(root_dir):
@@ -193,12 +225,9 @@ def scan_for_stdout_writes(root_dirs: list[str]) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
-    """CLI entry point: argv names one or more root directories (this repo's own src/ and
-    include/ in normal CI use); prints every hit from scan_for_stdout_writes and returns 1 if any
-    exist, 0 if the scan is clean -- the same contract check_no_pow_operator.main() and
-    check_no_forward_leaf_calls.main() already use in this directory, so this scan wires into CI
-    (.github/workflows/tests.yml) and a local `pytest tests/ci/` run the same way every sibling
-    check here does."""
+    """CLI entry point: argv names one or more root directories (`src include` in CI); prints
+    every hit and returns 1 if any exist, 0 if none -- the same contract as the sibling checks in
+    this directory."""
     if not argv:
         print("check_no_library_stdout_write.py: no root directories given", file=sys.stderr)
         return 1
@@ -207,13 +236,13 @@ def main(argv: list[str]) -> int:
         for h in hits:
             print(h)
         print(
-            f"check_no_library_stdout_write.py: FAILED -- {len(hits)} stdout write(s) found "
-            f"under {argv!r}; the engine library must write nothing to stdout (TE-400, "
-            "D-SLM7753)",
+            f"check_no_library_stdout_write.py: FAILED -- {len(hits)} line(s) under {argv!r} "
+            "name a banned stdout-writing token outside a comment or literal (see this "
+            "script's module docstring for the list)",
             file=sys.stderr,
         )
         return 1
-    print(f"check_no_library_stdout_write.py: OK -- no stdout write found under {argv!r}")
+    print(f"check_no_library_stdout_write.py: OK -- no banned stdout-writing token under {argv!r}")
     return 0
 
 

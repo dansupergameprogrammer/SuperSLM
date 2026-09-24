@@ -1160,24 +1160,18 @@ jobs:
       - name: Fail the build if a public doc restates a present-tense CI-execution claim outside platform-support.md's CI execution status section
         run: python tests/ci/check_ci_claims.py
 
-  # TE-400/TE-402 (SuperSLM 1.7.1, D-SLM7753): the engine library writes nothing to
-  # stdout, made a standing, CI-checked property instead of the one-time grep TE-400's
-  # own build log performed by hand (TE-402 S3, remedy #4). Matches the project's own
-  # two-step shape (self-test, then the gate script) exactly, and needs no compiler --
-  # a plain source-text scan of src/ and include/ (comment/string-literal-aware, so
-  # neither a comment's prose nor a print's own format string can produce a false hit),
-  # never tools/ or tests/ themselves, which may print freely.
-  # tests/ci/test_te399_stdout_write_scan_commission.py (Curie, TE-399 fix round,
-  # authored blind to the scanner's own implementation) carries three constructions,
-  # each against a REAL git ref materialized fresh via `git archive`, never a fixture
-  # file: must-reject against the pre-fix v1.7.0 tree (f43ab15), naming the exact
-  # removed d3d12_harness.h print site; must-accept against the current, already-fixed
-  # tree; and must-reject a synthetic brand-new stdout write planted into a scratch
-  # copy of the fixed tree (proves the scan generalizes, not a pin on one known line).
-  # tests/ci/check_no_library_stdout_write.py implements that commission's own
-  # interface contract (scan_for_stdout_writes(root_dirs), main(argv)) -- root
-  # directories are passed explicitly (src, include below), so neither the test's nor
-  # CI's own invocation needs to check out a second copy of the repository.
+  # TE-400/TE-402/TE-409 (SuperSLM 1.7.1, D-SLM7753, D-SLM7783): a tripwire for
+  # stdout-writing spellings in the shipped library sources. The scan refuses any file
+  # under src/ or include/ that names a banned stdout-writing identifier, or the
+  # token-paste operator, outside a comment or a string/char literal. The banned list
+  # is defined in tests/ci/check_no_library_stdout_write.py (_BANNED_IDENTIFIERS,
+  # _BANNED_IDENTIFIER_FAMILY, _BANNED_OPERATORS) and described in its module
+  # docstring. It is not a proof that the library writes nothing to stdout: code that
+  # reaches stdout without naming a listed identifier can pass. tools/ and tests/ are
+  # not scanned and may print freely. Two steps, the project's usual shape: the scan's
+  # own commissioning tests (tests/ci/test_te399_stdout_write_scan_commission.py, which
+  # run it over trees materialized from git refs with `git archive`, with and without a
+  # planted form), then the scan itself over src and include. No compiler is needed.
   no-library-stdout-check:
     runs-on: ubuntu-latest
     steps:
@@ -1188,7 +1182,7 @@ jobs:
         with:
           python-version: '3.13'
       - run: pip install pytest
-      - name: No-library-stdout check's own red suite (must-reject on v1.7.0, must-accept on the current tree, must-reject a synthetic new site)
+      - name: No-library-stdout scan's commissioning tests
         run: python -m pytest tests/ci/test_te399_stdout_write_scan_commission.py -v
-      - name: Fail the build if the shipped superslm/superslm_gpu libraries write to stdout
+      - name: Fail the build if a src/ or include/ source names a banned stdout-writing token
         run: python tests/ci/check_no_library_stdout_write.py src include
