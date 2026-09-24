@@ -48,6 +48,8 @@ import subprocess
 import sys
 import tempfile
 
+import pytest
+
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
 
@@ -175,6 +177,129 @@ def test_must_accept_the_fixed_tree():
         )
         code = scanner.main([os.path.join(tmp, "src"), os.path.join(tmp, "include")])
         assert code == 0, f"scanner.main() returned {code} (failure) against the fixed tree {fixed_ref}"
+
+
+
+# ---------------------------------------------------------------------------------------------
+# TE-407 (Poirot, Claude/Poirot/7f7436d-slm171-stdout-reconfirm.md, S1) re-commission: the prior
+# round's population was the two forms the scanner is surest to catch (a plain `fprintf(stdout,
+# ...)` and `std::cout`), so "neither the pattern set nor the input set was validated." Poirot ran
+# an independent 15-form population (`Claude/Poirot/7f7436d-slm171-stdout-reconfirm-probe/
+# scan_mutants.py`, executed against the fixed tree, one planted form per run) and found 13 of 15
+# escape today's scanner. That exact population, reproduced verbatim here (not re-derived) per the
+# conductor's dispatch, 2026-09-24 ("use the reviewer's executed 15-form population as the
+# independent population"): each form plants ONE realistic stdout-write shape into a fresh
+# git-archive copy of the fixed tree (never the known site's own text, and never a copy of a live
+# worktree that could pick up an unrelated branch), and the scan must flag the planted file by
+# name. The must-accept leg above already proves the real tree has none of these; this section
+# proves the scan would catch each one if it appeared.
+# ---------------------------------------------------------------------------------------------
+
+# Verbatim from Claude/Poirot/7f7436d-slm171-stdout-reconfirm-probe/scan_mutants.py -- the
+# reviewer's own executed population, not re-derived by this seat. Each maps a planted file's
+# name to its content; every file is planted alone, one temp tree per case.
+_TE407_MUTANT_FORMS = {
+    "ctrl_fprintf_stdout.cpp": 'void f(){ std::fprintf(stdout, "x"); }\n',
+    "ctrl_cout.cpp": "void f(){ std::cout << 1; }\n",
+    "multiline_fprintf.cpp": 'void f(){ std::fprintf(\n    stdout, "x %d", 1); }\n',
+    "multiline_fwrite.cpp": (
+        "void f(const char* b, size_t n){ std::fwrite(b, 1, n,\n    stdout); }\n"
+    ),
+    "vprintf.cpp": (
+        "#include <cstdarg>\nvoid f(const char* fmt, va_list ap){ std::vprintf(fmt, ap); }\n"
+    ),
+    "vfprintf_stdout.cpp": (
+        "#include <cstdarg>\nvoid f(const char* fmt, va_list ap){ "
+        "std::vfprintf(stdout, fmt, ap); }\n"
+    ),
+    "printf_s.cpp": 'void f(){ printf_s("x"); }\n',
+    "putchar.cpp": "void f(){ std::putchar(120); }\n",
+    "fputws_stdout.cpp": 'void f(){ std::fputws(L"x", stdout); }\n',
+    "fputc_stdout.cpp": "void f(){ std::fputc(120, stdout); }\n",
+    "using_cout.cpp": "using namespace std;\nvoid f(){ cout << 1; }\n",
+    "posix_write_fd1.cpp": "void f(const char* b, unsigned n){ _write(1, b, n); }\n",
+    "stderr_then_stdout_same_line.cpp": (
+        'void f(){ std::fprintf(stderr, "a"); std::fprintf(stdout, "b"); }\n'
+    ),
+    "stdout_via_variable.cpp": 'void f(){ FILE* o = stdout; std::fprintf(o, "x"); }\n',
+}
+# The 15th form: a write appended to a shipped, public .inc header (sslm_abi.h:324 pulls it in),
+# not a scanned extension at 7f7436d and not a new .cpp translation unit -- the escape family
+# every other planted form in this population cannot exercise.
+_TE407_INC_MUTANT_PATH = "include/superslm/sslm_abi_functions.inc"
+_TE407_INC_MUTANT_BODY = '\ninline void TE407Noise(){ std::printf("x"); }\n'
+
+
+def _plant_and_scan(rel_path: str, body: str, prefix: str):
+    """Materializes the current fixed tree fresh, plants one file (or appends to one, for the
+    .inc case) at `rel_path` relative to the tree root, and returns the scan's hits restricted to
+    that path -- so a case's own assertion reads directly as "was the planted form caught",
+    independent of whether some unrelated file also happens to hit (it should not, per
+    test_must_accept_the_fixed_tree, but this keeps each case's failure message unambiguous about
+    which form it is about)."""
+    fixed_ref = _resolve_head()
+    tmp = tempfile.mkdtemp(prefix=prefix)
+    try:
+        _git_archive_tree(fixed_ref, tmp)
+        full_path = os.path.join(tmp, *rel_path.split("/"))
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        mode = "a" if os.path.exists(full_path) else "w"
+        with open(full_path, mode, encoding="utf-8") as f:
+            if mode == "w":
+                f.write("#include <cstdio>\n#include <iostream>\n" + body)
+            else:
+                f.write(body)
+        hits = scanner.scan_for_stdout_writes(
+            [os.path.join(tmp, "src"), os.path.join(tmp, "include")]
+        )
+        needle = os.path.basename(rel_path)
+        return [h for h in hits if needle in h]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@pytest.mark.parametrize("name,body", sorted(_TE407_MUTANT_FORMS.items()))
+def test_must_reject_each_te407_population_form(name, body):
+    """One case per form in Poirot's own executed 15-form population (minus the .inc form, its
+    own case immediately below). RED today (7f7436d): 13 of these 14 plus the .inc form (15 of 15
+    minus the 2 controls `ctrl_fprintf_stdout.cpp`/`ctrl_cout.cpp`) are reported ESCAPED by
+    `scan_mutants.py`'s own executed run -- this reproduces that population as real, executable
+    pytest cases rather than a report, so "N of 15 escaping" is a live count (`pytest ... -v`'s own
+    pass/fail tally), not a transcribed table. Checked against a scratch reproduction of the
+    reviewer's own probe (`Claude/Poirot/7f7436d-slm171-stdout-reconfirm-probe/tokenban.py`'s
+    exact token pattern, never committed here): 18 of these 19 cases (all 14 parametrized forms
+    but `posix_write_fd1.cpp`, plus the `.inc` case and the pre-existing generalization case) go
+    green under that token list. `posix_write_fd1.cpp` (`_write(1, b, n)`) does NOT -- the token
+    list (`stdout|STD_OUTPUT_HANDLE|cout|wcout|v?w?printf(_s)?|puts|_putws|putw?char`) names no
+    POSIX write call, so this one case is a genuine residual the token ban as probed does not
+    close; left in this population rather than removed, since surfacing that gap is this
+    commission's job, not smoothing it over. Named in
+    Claude/Curie/te399-slm171-stdout-red-2026-09-23.md Sec.11 for the conductor to route."""
+    if scanner is None:
+        pytest.skip(f"scanner module not yet implemented: {_IMPORT_ERROR!r}")
+    hits = _plant_and_scan(f"src/{name}", body, prefix=f"te407_form_{name}_")
+    assert hits, (
+        f"planting {name!r} (Poirot's own executed population, "
+        "Claude/Poirot/7f7436d-slm171-stdout-reconfirm-probe/scan_mutants.py) into the fixed tree "
+        f"was NOT caught -- content: {body!r}"
+    )
+
+
+def test_must_reject_a_stdout_write_in_a_shipped_public_inc_header():
+    """The 15th form, kept as its own named case rather than folded into the parametrize above:
+    unlike every other form, this one is not a new .cpp translation unit -- it appends to a real,
+    shipped, public header (`include/superslm/sslm_abi_functions.inc`, pulled in by
+    `sslm_abi.h:324`) whose extension (`.inc`) is not in `_SCANNED_EXTENSIONS` at 7f7436d at all,
+    so this case also stands as this population's own test of extension coverage, not only pattern
+    coverage. RED today; must go green once `.inc`/`.def`/`.inl`/`.ipp` are scanned (Poirot's
+    remedy #1)."""
+    if scanner is None:
+        pytest.skip(f"scanner module not yet implemented: {_IMPORT_ERROR!r}")
+    hits = _plant_and_scan(_TE407_INC_MUTANT_PATH, _TE407_INC_MUTANT_BODY, prefix="te407_inc_")
+    assert hits, (
+        "appending a std::printf to the shipped, public "
+        f"{_TE407_INC_MUTANT_PATH} was not caught -- content appended: {_TE407_INC_MUTANT_BODY!r}"
+    )
 
 
 def test_must_reject_a_synthetic_new_stdout_write_the_known_site_alone_would_miss():
