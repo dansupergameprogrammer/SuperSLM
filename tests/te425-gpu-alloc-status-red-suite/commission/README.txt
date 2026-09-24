@@ -10,13 +10,17 @@ instruments; every construction below is taken from another seat's census, never
                  adversary's TE-419 leg B construction, every D3D12 allocation of an encode (here the
                  two-sub-chunk, 5-token encode) returning SSLM_DEVICE_LOST at v1.7.1.
   census check (tests/ci/check_gpu_status_site_census.py):
-    must-accept  the committed site list against the v1.7.1 source.
+    must-accept  the committed site list against the 1.8.0 fix source (the builder's tip dad862e). First
+                 commissioned against the v1.7.1 source with the v1.7.1 list; re-commissioned when the test
+                 author re-listed the census at dad862e (the graded seat never edits its grader).
     must-reject  the list with TE-422 S-2's three sites, TE-423 F-5's two exclusion lists and TE-424 P-1's
-                 null-token return deleted.
+                 null-token return deleted (12 rows at dad862e, 10 at v1.7.1), selected by the census test's
+                 POPULATION predicates.
   entry census (te425_cells.cpp r15zero):
     must-accept  the planner's disposition-3 entry points (Sec3.5 R15 item 3) at v1.7.1.
     must-reject  the planner's disposition-2 entry points (Sec3.5 R15 item 2), which allocate host memory.
 A construction that crashes must never read as a rejection: each script exits 1 only when the instrument
 itself returned its RED verdict (exit 1), and 0 on any other exit.
 The paths below are this machine's: the v1.7.1 seam build of the suite (D:\_te425\bin171), the v1.7.1
-source (D:\_te425\slm171), the t2791-hash Qwen3 artifact.
+source (D:\_te425\slm171), the dad862e source for the census check (D:\_te425\tip862, git archive of src and
+include), the t2791-hash Qwen3 artifact.
