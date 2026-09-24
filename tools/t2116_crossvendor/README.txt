@@ -96,10 +96,14 @@ double-match the label's regex and falsely fail every cell on 5.1 alone (the sam
 of shell-specific false FAIL D-SLM2858 already burned this package on, for a different
 reason -- an em-dash, see run_crossvendor.ps1's own header). run_crossvendor.ps1's two
 capture points (adapter enumeration, per-cell battery run) both stringify the pipeline
-before parsing it for exactly this reason, and both are run-tested, under this exact
-fix, against rebuilt battery binaries, under BOTH `powershell.exe` (5.1) and `pwsh` (7)
--- see this release's build log for the executed evidence. If you see a "no '# adapter:'
-label printed" or "adapter label MISMATCH" failure that looks wrong, confirm your
+before parsing it for exactly this reason -- the identical fix at both sites, the same
+capture mechanism. What is run-tested, under both `powershell.exe` (5.1) and `pwsh` (7):
+the committed per-cell capture-point expression, directly against one rebuilt battery
+binary (t2113_b1_context_smoke.exe) -- see this release's build log for the transcript.
+This script itself, run_crossvendor.ps1, has not been separately run end to end under
+5.1 against a full rebuilt package; the enumeration capture point has not been exercised
+in isolation either, though it is the same fix. If you see a "no '# adapter:' label
+printed" or "adapter label MISMATCH" failure that looks wrong, confirm your
 run_crossvendor.ps1 copy has this fix (grep it for "ForEach-Object" near the capture
 lines) before suspecting the adapter or its driver.
 

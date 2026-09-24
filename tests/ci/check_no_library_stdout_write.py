@@ -10,24 +10,52 @@ round) -- this module implements exactly that commission's own interface contrac
 the two public names or their signatures without updating that test, which this module does not
 own.
 
-WHAT COUNTS AS A LIBRARY STDOUT WRITE. Any of `printf`, `wprintf`, `puts`, `std::cout`/
-`std::wcout`, `fputs(..., stdout)`, `fwrite(..., stdout)`, `fprintf`/`fwprintf(stdout, ...)`, or
-the Win32 `WriteConsoleA`/`WriteConsoleW`/`STD_OUTPUT_HANDLE` path, as an actual call expression --
-never as prose inside a comment (the English word "puts" appears legitimately in several comments
-in this tree, e.g. "puts the row maximum", and must not be flagged; TE-400's own build log found
-this the hard way and excluded it by hand). `fprintf(stderr, ...)` and `fwprintf(stderr, ...)` are
-explicitly NOT flagged: they are the channel this project's own diagnostics already use
-(d3d12_harness.h's own convention, and TE-400's own fix).
+WHAT COUNTS AS A LIBRARY STDOUT WRITE (TE-407 S1 fix round). A TOKEN BAN, not a call-shape
+match: any comment/string-stripped line containing the bare identifier `stdout`,
+`STD_OUTPUT_HANDLE`, `cout`, `wcout`, the printf family (`printf`, `wprintf`, `vprintf`,
+`vwprintf`, and each with a trailing `_s`), `puts`, `_putws`, the putchar family (`putchar`,
+`putwchar`), the Win32 console-write family (`WriteConsoleA`/`WriteConsoleW`), or the POSIX
+raw-descriptor write `_write` -- as a whole word, never as a call-shape regex. TE-402's own
+call-shape matcher (an `fprintf(` regex plus "is the first argument `stdout`?") was proven, by
+execution (TE-407 S1, `scan_mutants.py`, 13 of 15 escaped), to miss anything that does not look
+exactly like the one site it was written from: `std::vprintf`, `printf_s`, `std::putchar`,
+`std::fputc(..., stdout)`, `using namespace std; cout <<`, `stdout` held in a `FILE*` variable,
+two calls on one line (only the first was inspected), a call whose `stdout` argument is on a
+following line (each regex ran per line), and a `std::printf` planted in a public `.inc` header
+(not in the old scanned-extension set) all escaped. A token ban has no call shape to miss: if the
+word `stdout` (or any of the above) appears anywhere outside a comment or a string/char literal
+in a shipped library source file, that is the finding, regardless of which function holds it,
+which line the call opened on, or how many calls share a line. `_write` is banned unconditionally
+(TE-407's own `posix_write_fd1.cpp` mutant, `_write(1, buf, n)`, names the stdout file descriptor
+only by the numeral 1, which no word-level ban can single out from other integer arguments) --
+verified absent from this tree already (zero pre-existing uses), so banning it outright costs
+nothing here. `stderr` and `fprintf`/`fwprintf` alone (without the word `stdout` anywhere on the
+line) are NOT banned: `fprintf(stderr, ...)` is this project's own established diagnostic channel
+(d3d12_harness.h's own convention, and TE-400's own fix), and it is legal precisely because the
+line naming it never also contains the word `stdout`.
+
+The English word "puts" inside a comment (e.g. "puts the row maximum", legitimately present
+several times in this tree) is not flagged -- comments are stripped before the ban runs, per
+METHOD below, the same protection TE-402's implementation already had and this round keeps.
 
 METHOD. Modelled on this directory's own precedent, check_no_forward_leaf_calls.py: a
-comment-aware text scan, not a raw substring/regex pass and not full C++ parsing. Block comments,
-line comments, and string/char literals are stripped with a small state machine (preserving line
-numbers exactly, the same discipline check_no_forward_leaf_calls.py's own
-`_strip_comments_preserving_line_numbers` uses), so neither a comment's prose nor a format
-string's own text can trip the forbidden-call regexes, which run only on what survives.
+comment-aware text scan, not full C++ parsing. Block comments, line comments, and string/char
+literals are stripped with a small state machine (preserving line numbers exactly, the same
+discipline check_no_forward_leaf_calls.py's own `_strip_comments_preserving_line_numbers` uses,
+extended here to also blank string/char literals so a format string's own text cannot trip the
+ban), unchanged from TE-402's implementation -- TE-407 S1 found the STRIPPING sound and the
+MATCHING too narrow; only the matching changed this round. The token-ban regex then runs on what
+survives.
 
-Exit code 0 iff no scanned file contains a forbidden call; 1 otherwise, naming every
-`path:line: reason` hit.
+`.inc` and `.def` (TE-407 S1's own remedy: "add `.inc`, `.def`, `.inl` and `.ipp` to the scanned
+extensions" -- `.inl`/`.ipp` are not currently used anywhere in this tree but are added
+preemptively for the same reason `.inc` was missed: a public API surface is not guaranteed to
+stay confined to `.h`) are now scanned alongside `.c`/`.cpp`/`.h`/`.hpp`/`.hlsl`/`.hlsli` -- the
+S1 escape that mattered most: `include/superslm/sslm_abi_functions.inc` is pulled into the public
+API by `sslm_abi.h:324` and was not being scanned at all.
+
+Exit code 0 iff no scanned file contains a banned token outside a comment or literal; 1
+otherwise, naming every `path:line: reason` hit.
 """
 from __future__ import annotations
 
@@ -35,26 +63,15 @@ import os
 import re
 import sys
 
-_SCANNED_EXTENSIONS = (".c", ".cpp", ".h", ".hpp", ".hlsl", ".hlsli")
+_SCANNED_EXTENSIONS = (".c", ".cpp", ".h", ".hpp", ".inc", ".def", ".inl", ".ipp", ".hlsl", ".hlsli")
 
-# A forbidden call, matched only against comment/string-stripped text. `fprintf`/`fwprintf` are
-# matched generally and then filtered by `_is_stdout_fprintf` below, because a regex alternation
-# for "first argument is exactly `stdout`" is fragile against whitespace/parenthesization but a
-# small hand-check on the matched argument list is not.
-_FORBIDDEN_PATTERNS = [
-    re.compile(r"\b(?:std::)?w?printf\s*\("),
-    re.compile(r"\b(?:std::)?puts\s*\("),
-    re.compile(r"\bstd::(?:w)?cout\b"),
-    re.compile(r"\b(?:std::)?fputs\s*\([^;]*\bstdout\b"),
-    re.compile(r"\b(?:std::)?fwrite\s*\([^;]*\bstdout\b"),
-    re.compile(r"\bWriteConsole[AW]?\s*\("),
-    re.compile(r"\bSTD_OUTPUT_HANDLE\b"),
-    re.compile(r"\b_putws\s*\("),
-]
-
-# fprintf/fwprintf: only forbidden when the first argument is `stdout`, not `stderr` (this
-# project's own established diagnostic channel, TE-400).
-_FPRINTF_CALL = re.compile(r"\b(?:std::)?fw?printf\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\b")
+# TE-407 S1: a token ban, not a call-shape match (see the module docstring for why). Matches the
+# reviewer's own tokenban.py probe pattern, plus `_write` (added to close the POSIX
+# raw-file-descriptor escape that names no identifier the probe's own token set covers).
+_BANNED_TOKENS = re.compile(
+    r"\b(stdout|STD_OUTPUT_HANDLE|cout|wcout|v?w?printf(_s)?|puts|_putws|putw?char|"
+    r"WriteConsole[AW]?|_write)\b"
+)
 
 
 def _strip_comments_and_literals(source: str) -> str:
@@ -144,39 +161,25 @@ def _strip_comments_and_literals(source: str) -> str:
     return "".join(out)
 
 
-def _is_stdout_fprintf(line: str) -> bool:
-    m = _FPRINTF_CALL.search(line)
-    if not m:
-        return False
-    return m.group(1) == "stdout"
-
-
 def _scan_file(path: str) -> list[str]:
     with open(path, "r", encoding="utf-8", errors="surrogateescape") as f:
         original = f.read()
     stripped = _strip_comments_and_literals(original)
     hits: list[str] = []
     for lineno, line in enumerate(stripped.splitlines(), start=1):
-        reason = None
-        if _FPRINTF_CALL.search(line) and _is_stdout_fprintf(line):
-            reason = "fprintf/fwprintf(stdout, ...)"
-        else:
-            for pattern in _FORBIDDEN_PATTERNS:
-                if pattern.search(line):
-                    reason = pattern.pattern
-                    break
-        if reason is not None:
-            hits.append(f"{path}:{lineno}: stdout write ({reason})")
+        m = _BANNED_TOKENS.search(line)
+        if m:
+            hits.append(f"{path}:{lineno}: stdout write (banned token '{m.group(1)}')")
     return hits
 
 
 def scan_for_stdout_writes(root_dirs: list[str]) -> list[str]:
-    """Every source line under any of `root_dirs` (walked recursively; .c/.cpp/.h/.hpp/.hlsl/
-    .hlsli by extension, matching this repo's own shipped-library source set) that writes to
-    stdout -- printf/wprintf/puts/std::cout/fwrite(..., stdout)/fprintf(stdout, ...) and
-    equivalents, the same enumeration CHANGELOG.md's own 1.7.1 entry and docs/releases/1.7.1.md's
-    "Sweep" paragraph describe as already performed by hand for this release. Returns
-    "path:line: reason" strings, empty if clean."""
+    """Every source line under any of `root_dirs` (walked recursively; .c/.cpp/.h/.hpp/.inc/
+    .def/.inl/.ipp/.hlsl/.hlsli by extension, matching this repo's own shipped-library source
+    set) containing a banned stdout-writing token outside a comment or string/char literal --
+    stdout/STD_OUTPUT_HANDLE/cout/wcout/the printf family/puts/_putws/the putchar family/
+    WriteConsole*/_write (TE-407 S1: a token ban, not a call-shape match -- see the module
+    docstring). Returns "path:line: reason" strings, empty if clean."""
     hits: list[str] = []
     for root_dir in root_dirs:
         if not os.path.isdir(root_dir):

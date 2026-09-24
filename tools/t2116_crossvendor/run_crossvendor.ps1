@@ -287,14 +287,18 @@ foreach ($a in $selected) {
         # wraps every native stderr line in an ErrorRecord, and Out-String renders that
         # record's own CategoryInfo text -- which repeats the line's content -- alongside
         # the line itself. Once the engine's "# adapter: NAME" label moved to stderr
-        # (1.7.1, d3d12_harness.h:335), that duplication put a second, mangled
-        # "# adapter: NVID...RTX 2080 SUPER :String) [], RemoteException" match into the
-        # regex below, failing every cell's adapter-identity check on 5.1 even though the
-        # engine printed the correct, single label. `ForEach-Object { "$_" }` stringifies
-        # each pipeline object (ErrorRecord or plain string alike) to its bare text before
+        # (1.7.1, Device::Init()'s own "# adapter:" print -- cited by symbol, not line: a
+        # line-number citation here has already drifted twice as unrelated edits moved the
+        # call site, TE-407 M2), that duplication put a second, mangled "# adapter:
+        # NVID...RTX 2080 SUPER :String) [], RemoteException" match into the regex below,
+        # failing every cell's adapter-identity check on 5.1 even though the engine
+        # printed the correct, single label. `ForEach-Object { "$_" }` stringifies each
+        # pipeline object (ErrorRecord or plain string alike) to its bare text before
         # `Out-String` ever sees it, so both 5.1 and pwsh 7 see exactly the lines the
-        # process wrote -- verified under both shells against battery binaries rebuilt at
-        # this fix (see this release's build log, S3 certification section).
+        # process wrote. Verified: the expression above, run directly against one rebuilt
+        # battery binary (t2113_b1_context_smoke.exe), under both powershell.exe 5.1 and
+        # pwsh 7 (TE-402 build log; TE-407 M1 -- this script itself was not separately run
+        # end to end under 5.1 against a rebuilt package in this round).
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         $out = & $exePath @($cell.Args) 2>&1 | ForEach-Object { "$_" } | Out-String
         $sw.Stop()

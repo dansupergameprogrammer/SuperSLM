@@ -7,11 +7,13 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 ## [1.7.1] - 2026-09-23
 
 The engine library writes nothing to stdout. 1.7.0 wrote `# adapter: <name>` to stdout, once per
-GPU context PLUS once per process (`harness::GetDevice()` is a per-process magic static, so N
-contexts in one process printed N+1 lines: one from the shared singleton the first context
-touches it through, and one more from each of the N contexts' own `SslmGpuContext::device`),
-whenever `SSLM_GPU_ADAPTER_INDEX` was set -- the one call site was `Device::Init()`
-(`src/gpu/d3d12_harness.h`), reached from both. A host that writes its own data to stdout -- `semb
+GPU context, plus once per process the first time that process dispatches (prefill, decode, or
+sequence restore), whenever `SSLM_GPU_ADAPTER_INDEX` was set (TE-407 M3: context creation and
+model mapping alone never touch `harness::GetDevice()`'s process-wide singleton; the calls that
+do are `superslm_gpu.cpp`'s dispatch, submit, restore, and bind functions). The one call site was
+`Device::Init()` (`src/gpu/d3d12_harness.h`), reached from both `SslmGpuContext::device` and, on
+that first dispatch, `harness::GetDevice()`'s singleton. A host that writes its own data to
+stdout -- `semb
 query --device gpu`, for one -- had that line spliced into it (TE-393). The swept count across
 `src/` and `include/` for the shipped `superslm` and `superslm_gpu` libraries found exactly this
 one call site; everything else already used `stderr` or wrote nothing. The line now goes to
@@ -26,9 +28,14 @@ write is diagnostic-only and never on the compute path.
 5.1 wraps each native stderr line reaching a `2>&1` capture in an ErrorRecord, whose own rendered
 text repeats the line's content and double-matched the certification script's adapter-identity
 regex, falsely failing every cell on 5.1 (TE-402 C1). Both of the script's capture points now
-stringify the pipeline (`ForEach-Object { "$_" }`) before parsing it, verified by execution under
-both `powershell.exe` 5.1 and `pwsh` 7 against battery binaries rebuilt at this fix (see the build
-log). `tools/t2116_crossvendor/README.txt` documents the hazard and the fix under "SHELL
+stringify the pipeline (`ForEach-Object { "$_" }`) before parsing it. Verified by execution: the
+committed per-cell capture-point expression, run directly against one rebuilt battery binary
+(`t2113_b1_context_smoke.exe`), under both `powershell.exe` 5.1 and `pwsh` 7 -- pre-fix, 5.1 gave
+4 matches with one ErrorRecord-mangled, pwsh 7 gave 3 clean; post-fix, both shells gave 3 clean
+matches (see the build log). `run_crossvendor.ps1` itself was not separately run under 5.1 in
+this round, nor was the enumeration capture point exercised in isolation; the mechanism is
+identical at both call sites (see the script's own inline comment at the enumeration capture).
+`tools/t2116_crossvendor/README.txt` documents the hazard and the fix under "SHELL
 COMPATIBILITY".
 
 ## [1.7.0] - 2026-09-23
