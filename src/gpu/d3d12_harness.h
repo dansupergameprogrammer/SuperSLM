@@ -192,11 +192,15 @@ struct Device {
 	// The "# adapter: <name>" print (below, on a successful selection) is gated on the
 	// override actually being requested -- i.e. SSLM_GPU_ADAPTER_INDEX was set at all, valid
 	// or not -- per the same fix round's S2: this function is also reached from the public
-	// 1.0 C API (`sslm_gpu_context_create`, gpu_1p0.cpp), once per context, on every
-	// caller's own stdout, unconditionally, with no way to suppress it and no query to ask
-	// which adapter a context landed on. `run_crossvendor.ps1` sets the env var for every
-	// cell it runs, so certification output is unaffected; every other consumer of the 1.0
-	// API (unset env var) gets byte-identical stdout to before this ticket.
+	// 1.0 C API (`sslm_gpu_context_create`, gpu_1p0.cpp), once per context, unconditionally,
+	// with no way to suppress it and no query to ask which adapter a context landed on.
+	// SuperSLM 1.7.1 (TE-400, D-SLM7753) moved this print to stderr -- the engine library
+	// writes nothing to stdout -- because it was corrupting any host that writes its own
+	// data to stdout (TE-393). `run_crossvendor.ps1` sets the env var for every cell it
+	// runs and reads both streams together (`2>&1`, stringified per-line since 1.7.1's own
+	// TE-402 fix round, to survive Windows PowerShell 5.1's ErrorRecord wrapping of native
+	// stderr), so certification output is unaffected; every other consumer of the 1.0 API
+	// (unset env var) prints nothing on either stream, exactly as before this ticket.
 	void Init() {
 		// T-2169 (D-SLM3649's own owed evidence, Dan's review): SSLM_GPU_ENABLE_DEBUG_LAYER, when
 		// set, turns on the D3D12 debug layer (and GPU-based validation, when the installed SDK

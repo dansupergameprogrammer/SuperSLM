@@ -161,7 +161,10 @@ foreach ($line in (Get-Content $pinsFile)) {
 Write-Host "=== adapter enumeration ===" -ForegroundColor Cyan
 $usableHW = New-Object System.Collections.Generic.List[hashtable]
 $unusableHW = New-Object System.Collections.Generic.List[hashtable]
-$listOut = & (Join-Path $bin "t2116_list_adapters.exe") 2>&1 | Out-String
+# TE-402 C1: same 5.1 ErrorRecord-wrapping hazard as the per-cell capture below (see that
+# comment) -- applied here too for consistency, even though this line's own output is not
+# currently regex-matched, so a future reader of this capture is not caught by the same trap.
+$listOut = & (Join-Path $bin "t2116_list_adapters.exe") 2>&1 | ForEach-Object { "$_" } | Out-String
 foreach ($line in ($listOut -split "`n")) {
     $line = $line.Trim()
     if ($line.Length -eq 0) { continue }
@@ -280,8 +283,20 @@ foreach ($a in $selected) {
     foreach ($cell in $battery) {
         $exePath = Join-Path $bin $cell.Exe
         $logPath = Join-Path $adapterDir ($cell.Key + ".log")
+        # TE-402 C1 (SuperSLM 1.7.1): a bare `2>&1 | Out-String` on Windows PowerShell 5.1
+        # wraps every native stderr line in an ErrorRecord, and Out-String renders that
+        # record's own CategoryInfo text -- which repeats the line's content -- alongside
+        # the line itself. Once the engine's "# adapter: NAME" label moved to stderr
+        # (1.7.1, d3d12_harness.h:335), that duplication put a second, mangled
+        # "# adapter: NVID...RTX 2080 SUPER :String) [], RemoteException" match into the
+        # regex below, failing every cell's adapter-identity check on 5.1 even though the
+        # engine printed the correct, single label. `ForEach-Object { "$_" }` stringifies
+        # each pipeline object (ErrorRecord or plain string alike) to its bare text before
+        # `Out-String` ever sees it, so both 5.1 and pwsh 7 see exactly the lines the
+        # process wrote -- verified under both shells against battery binaries rebuilt at
+        # this fix (see this release's build log, S3 certification section).
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        $out = & $exePath @($cell.Args) 2>&1 | Out-String
+        $out = & $exePath @($cell.Args) 2>&1 | ForEach-Object { "$_" } | Out-String
         $sw.Stop()
         $ec = $LASTEXITCODE
         Set-Content -Path $logPath -Value $out -Encoding ASCII

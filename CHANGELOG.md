@@ -6,18 +6,30 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [1.7.1] - 2026-09-23
 
-The engine library writes nothing to stdout. 1.7.0 wrote `# adapter: <name>` to stdout, twice per
-GPU context (once from `harness::GetDevice()`'s process-wide singleton, once from each
-`SslmGpuContext::device`), whenever `SSLM_GPU_ADAPTER_INDEX` was set -- the one call site was
-`Device::Init()` (`src/gpu/d3d12_harness.h`), reached from both. A host that writes its own data to
-stdout -- `semb query --device gpu`, for one -- had that line spliced into it (TE-393). The swept
-count across `src/` and `include/` for the shipped `superslm` and `superslm_gpu` libraries found
-exactly this one call site; everything else already used `stderr` or wrote nothing. The line now
-goes to `stderr`, matching every other diagnostic this same file already writes there (the
+The engine library writes nothing to stdout. 1.7.0 wrote `# adapter: <name>` to stdout, once per
+GPU context PLUS once per process (`harness::GetDevice()` is a per-process magic static, so N
+contexts in one process printed N+1 lines: one from the shared singleton the first context
+touches it through, and one more from each of the N contexts' own `SslmGpuContext::device`),
+whenever `SSLM_GPU_ADAPTER_INDEX` was set -- the one call site was `Device::Init()`
+(`src/gpu/d3d12_harness.h`), reached from both. A host that writes its own data to stdout -- `semb
+query --device gpu`, for one -- had that line spliced into it (TE-393). The swept count across
+`src/` and `include/` for the shipped `superslm` and `superslm_gpu` libraries found exactly this
+one call site; everything else already used `stderr` or wrote nothing. The line now goes to
+`stderr`, matching every other diagnostic this same file already writes there (the
 `SSLM_GPU_ENABLE_DEBUG_LAYER` messages, the validation callback, the HRESULT failure macro): the
 information a certification run needs to confirm which adapter ran is unchanged, on the channel
 every other harness diagnostic already uses. No arithmetic, ABI surface, or token changes; the
 write is diagnostic-only and never on the compute path.
+
+**Required action for a host that read the label from stdout:** read it from stderr instead.
+`tools/t2116_crossvendor/run_crossvendor.ps1` needed a script fix, not none: Windows PowerShell
+5.1 wraps each native stderr line reaching a `2>&1` capture in an ErrorRecord, whose own rendered
+text repeats the line's content and double-matched the certification script's adapter-identity
+regex, falsely failing every cell on 5.1 (TE-402 C1). Both of the script's capture points now
+stringify the pipeline (`ForEach-Object { "$_" }`) before parsing it, verified by execution under
+both `powershell.exe` 5.1 and `pwsh` 7 against battery binaries rebuilt at this fix (see the build
+log). `tools/t2116_crossvendor/README.txt` documents the hazard and the fix under "SHELL
+COMPATIBILITY".
 
 ## [1.7.0] - 2026-09-23
 

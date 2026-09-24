@@ -1159,3 +1159,30 @@ jobs:
         run: python -m pytest tests/ci/test_check_ci_claims.py -v
       - name: Fail the build if a public doc restates a present-tense CI-execution claim outside platform-support.md's CI execution status section
         run: python tests/ci/check_ci_claims.py
+
+  # TE-400/TE-402 (SuperSLM 1.7.1, D-SLM7753): the engine library writes nothing to
+  # stdout, made a standing, CI-checked property instead of the one-time grep TE-400's
+  # own build log performed by hand (TE-402 S3). Matches the project's own two-step
+  # shape (self-test, then the gate script) exactly, and needs no compiler -- a plain
+  # source-text scan of src/ and include/ (comment/string-literal-aware, so neither a
+  # comment's prose nor a print's own format string can produce a false hit), never
+  # tools/ or tests/, which may print freely. tests/ci/test_check_no_library_stdout.py
+  # carries the must-reject construction (this scan run against the pre-fix v1.7.0 tree,
+  # f43ab15, which must fail naming d3d12_harness.h's removed print site) and the
+  # must-accept construction (this scan run against the current tree) -- both via
+  # tools/ci/check_no_library_stdout.py's own `--root` option, so neither construction
+  # needs to check out a second copy of the repository itself.
+  no-library-stdout-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      - run: pip install pytest
+      - name: No-library-stdout check's own red suite (must-reject on v1.7.0, must-accept on the current tree)
+        run: python -m pytest tests/ci/test_check_no_library_stdout.py -v
+      - name: Fail the build if the shipped superslm/superslm_gpu libraries write to stdout
+        run: python tools/ci/check_no_library_stdout.py

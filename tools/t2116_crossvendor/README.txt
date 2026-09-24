@@ -86,6 +86,23 @@ results\<timestamp>\adapter_<n>_<name>\<tool>.log for the full raw output of tha
 Tokens/second is NEVER part of the pass/fail verdict -- it is measured and reported,
 labeled by adapter, cell, and surface, purely for comparison across vendors.
 
+SHELL COMPATIBILITY
+---------------------
+Since SuperSLM 1.7.1, the engine's "# adapter: NAME" identity label (the one thing S3
+above reads) is printed on stderr, not stdout. Windows PowerShell 5.1 and pwsh 7 differ
+in how a native process's stderr lines reach a `2>&1` capture: 5.1 wraps each stderr
+line in an ErrorRecord, whose own rendered text repeats the line's content, which would
+double-match the label's regex and falsely fail every cell on 5.1 alone (the same class
+of shell-specific false FAIL D-SLM2858 already burned this package on, for a different
+reason -- an em-dash, see run_crossvendor.ps1's own header). run_crossvendor.ps1's two
+capture points (adapter enumeration, per-cell battery run) both stringify the pipeline
+before parsing it for exactly this reason, and both are run-tested, under this exact
+fix, against rebuilt battery binaries, under BOTH `powershell.exe` (5.1) and `pwsh` (7)
+-- see this release's build log for the executed evidence. If you see a "no '# adapter:'
+label printed" or "adapter label MISMATCH" failure that looks wrong, confirm your
+run_crossvendor.ps1 copy has this fix (grep it for "ForEach-Object" near the capture
+lines) before suspecting the adapter or its driver.
+
 PACKAGE CONTENTS
 -----------------
   README.txt              -- this file
