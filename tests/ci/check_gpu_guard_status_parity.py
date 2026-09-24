@@ -141,10 +141,10 @@ distinguish "this function's own real body has exactly these returns" from
 existing `SslmForwardStatus` across two logically distinct rejections, on
 either side, is legal C++ and produces no observable difference to this
 check. **Also on both sides**: a status returned through anything other than
-a literal `return SslmForwardStatus::X;` (a local variable, a ternary --
-`GpuAllocationFailed`/`GpuDeviceRemoved`, T-2059, are returned through
-exactly such a ternary, `device_removed_reason` (`superslm_gpu.cpp`),
-today) is invisible
+a literal `return SslmForwardStatus::X;` (a local variable, a ternary, a
+function call -- `GpuAllocationFailed`/`GpuDeviceRemoved` (T-2059) and
+`GpuOperationFailed` (SuperSLM 1.8.0) are returned through exactly such a
+call, `ClassifyForwardFault` (`superslm_gpu.cpp`), today) is invisible
 to `_STATUS_RETURN_RE` and therefore to this whole module, independent of
 which side it is on (recorded, not fixed -- every guard in the tree today
 uses the literal form, so the likelihood is low). What this check DOES
@@ -358,18 +358,23 @@ _LWUWS_PREP_RELAY_RETURN_STATEMENT = "return prep_status;"
 # side -- S3 is the symmetric twin of S2, one file over).
 GPU_GUARD_REGION_END_MARKER = "static_assert(static_cast<int>(superslm_gpu::GpuLayerLoopGuard::kCount)"
 # The distinct `SslmForwardStatus` values `RunLayerLoopGpu` legitimately
-# returns BELOW `GPU_GUARD_REGION_END_MARKER` -- both device-capability
-# rejections (`dev.available` (`superslm_gpu.cpp`); the sub-Tier-3
-# `MapModelGpuResidencyTierCheck` (`superslm_gpu.cpp`) check) return the SAME
-# status, so this is a one-member set today. Named at source, not derived
+# returns BELOW `GPU_GUARD_REGION_END_MARKER` as a literal -- the sub-Tier-3
+# `MapModelGpuResidencyTierCheck` (`superslm_gpu.cpp`) check returns
+# `KvPrecisionUnsupported`, so this is a one-member set today. The other
+# device-capability rejection, a submission device that could not be set up
+# (`dev.available` (`superslm_gpu.cpp`)), returned the same status before
+# SuperSLM 1.8.0; since then it returns `GpuAllocationFailed` or
+# `GpuOperationFailed` through a ternary, invisible here for the reason stated
+# below. Named at source, not derived
 # (T-2069, S3's own remedy, symmetric with `CPU_BELOW_GUARD_ARITHMETIC_
 # STATUSES` above): a name added below the ladder that is NOT
 # `KvPrecisionUnsupported` surfaces as a real set disagreement, exactly like
-# a guard would. `GpuAllocationFailed`/`GpuDeviceRemoved` (T-2059) are NOT on
-# this list and do not need to be: both are returned through a ternary
-# (`device_removed_reason` (`superslm_gpu.cpp`)), a shape `_STATUS_RETURN_RE`
+# a guard would. `GpuAllocationFailed`/`GpuDeviceRemoved` (T-2059) and
+# `GpuOperationFailed` (SuperSLM 1.8.0) are NOT on this list and do not need to
+# be: each is returned through a ternary or through the fault classifier's call
+# (`ClassifyForwardFault` (`superslm_gpu.cpp`)), shapes `_STATUS_RETURN_RE`
 # below does not
-# match at all (O19, the same casebook) -- neither appears in the raw
+# match at all (O19, the same casebook) -- none appears in the raw
 # extracted set in the first place, so there is nothing to subtract for
 # them. Recorded here rather than silently relied on: a future guard
 # returned through a ternary, a local variable, or any shape other than a
