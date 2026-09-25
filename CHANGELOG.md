@@ -4,7 +4,7 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
-## [1.8.0] - 2026-09-24
+## [1.8.0] - 2026-09-25
 
 On the GPU, an allocation failure on a device that is not removed -- host memory (`std::bad_alloc`,
 `std::length_error`), or a D3D12 call returning `E_OUTOFMEMORY` on any heap, or the first-time setup
