@@ -499,6 +499,12 @@ struct SequenceLayerState {
 	// know which site is clamping is never limited to this one aggregate. Never reset by
 	// RunLayerLoop/RunLayerLoopChunkBatched -- reset on sequence create / `sslm_seq_reset` is the
 	// caller's own responsibility, per LandingRescale's own header.
+	// The sum holds for every sequence the engine counts from zero: created, reset, prefilled,
+	// adopted from a prefix, decoded, or restored from an 'SSB5' blob of such a sequence. It does
+	// not hold after `sslm_seq_restore` of an 'SSB4', 'SSB3' or 'SSB2' blob, which record only this
+	// total: the restored per-site counts are 0, so they sum to less than this field until reset,
+	// including through any 'SSB5' blob later saved from that sequence (sslm_abi.cpp,
+	// kSeqBlobMagicV5).
 	uint64_t kv_saturation_count = 0;
 
 	// (T-2577, D-SLM6280): the four per-site breakdowns `kv_saturation_count` (above) sums --
