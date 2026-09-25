@@ -2964,7 +2964,7 @@ extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
 	off += 4;
 	WriteLE64(p + off, static_cast<uint64_t>(anti_lm_history_count));
 	off += 8;
-	// T-2260 (D-SLM4073, Option A): new field, 'SSB4' only -- restore reads this directly
+	// T-2260 (D-SLM4073, Option A): new field in 'SSB4', kept by 'SSB5' -- restore reads this directly
 	// instead of inferring ready_for_logits from layer_index/context_length, which is what
 	// D-SLM4065's defect exploited (that inference agreed with the state even when the residual
 	// backing it had been silently dropped).
@@ -3103,7 +3103,7 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	const int32_t saved_anti_lm_order =
 	    has_anti_lm_fields ? static_cast<int32_t>(ReadLE32(p + 108)) : 0;
 	const uint64_t saved_anti_lm_history_count_u64 = has_anti_lm_fields ? ReadLE64(p + 112) : 0;
-	// T-2260 (D-SLM4073, Option A): the new explicit field, 'SSB4' only -- read directly here so
+	// T-2260 (D-SLM4073, Option A): the explicit field 'SSB4' added and 'SSB5' keeps -- read directly here so
 	// the reconstruction below (per this function's own C5 block) uses it instead of inferring
 	// ready_for_logits from layer_index/context_length, which is what let D-SLM4065's defect
 	// through: that inference agreed with the resting state even when the residual backing it
@@ -3150,13 +3150,13 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	// (context_length at 60, layer_index at 68, current_token at 72 sit at the same offsets in
 	// both magics) and is an equally shipped, equally accepted legacy magic -- D-SLM4114 rules
 	// the extension strictly conservative: it converts an existing silent-garbage restore into a
-	// loud error, changes no format, and D-SLM4073 never priced 'SSB2' either way. 'SSB4' never
-	// produces this state at all (the residual is always present now).
+	// loud error, changes no format, and D-SLM4073 never priced 'SSB2' either way. 'SSB4' and 'SSB5'
+	// never produce this state at all (the residual is always present now).
 	if ((is_ssb3 || is_ssb2) && layer_index == 0 && context_length > 0 &&
 	    saved_current_token == kSeqBlobNoCurrentToken) {
 		return SSLM_RESTORE_RESIDUAL_LOST;
 	}
-	// T-2260 (D-SLM4073, Option A): 'SSB4' serializes the residual UNCONDITIONALLY whenever
+	// T-2260 (D-SLM4073, Option A): 'SSB4' and 'SSB5' serialize the residual UNCONDITIONALLY whenever
 	// hidden_size > 0 (mirroring the shipped GPU-blob precedent, T-2114/C1) -- the legacy
 	// 'SSB3'/'SSB2' mid-token-only predicate is preserved for those two magics exactly as
 	// before (the case above is the only 'SSB3'/'SSB2' state this fold changes the disposition
