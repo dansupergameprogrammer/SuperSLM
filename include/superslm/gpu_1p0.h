@@ -648,7 +648,7 @@ SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx, SslmGpuSequen
  * SSLM_GPU_ALLOCATION_FAILED contract above; `*consumed` counts only the committed tokens, and
  * the sequence must be reset (or restored) before reuse.
  *
- * Returns SSLM_DEVICE_LOST for three distinct causes (see the status enum's own comment,
+ * Returns SSLM_DEVICE_LOST for four distinct causes (see the status enum's own comment,
  * above), which the status does not tell apart:
  *  - an ordinary, healthy rejection when the chunk's own derived admit count comes back short
  *    of what was requested at a saturated context cap -- the context and device stay usable,
@@ -660,7 +660,10 @@ SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx, SslmGpuSequen
  *    readback. Tokens before the refused one are committed and `*consumed` counts them; the
  *    sequence's live residual and layer index are not a resting state, and the "ready for
  *    logits" flag may still be set from an earlier call, so a decode call issued without a reset
- *    returns a token computed from that state. The sequence must be reset before reuse.
+ *    returns a token computed from that state. The sequence must be reset before reuse;
+ *  - (1.8.0) the process's submission device could not be set up, for a reason other than
+ *    memory (the enum's cause (d)): nothing is submitted, `*consumed` is 0, and every later call
+ *    that submits GPU work returns this status for the life of the process.
  * The status alone cannot say which cause applied, so a caller that cannot rule out the third
  * resets the sequence before issuing anything further on it. (The prompt twin reports the guard
  * refusal as SSLM_SEQUENCE_REJECTED instead.) */
