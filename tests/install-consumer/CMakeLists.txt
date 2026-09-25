@@ -3,7 +3,7 @@ project(superslm_install_consumer LANGUAGES CXX)
 
 # Deliberately do not set CMAKE_CXX_STANDARD or a target CXX_STANDARD. The
 # installed product target must carry its own public C++20 requirement.
-find_package(superslm 1.8.1 REQUIRED CONFIG)
+find_package(superslm 1.9.0 REQUIRED CONFIG)
 
 get_target_property(_superslm_features superslm::superslm INTERFACE_COMPILE_FEATURES)
 if(NOT "cxx_std_20" IN_LIST _superslm_features)

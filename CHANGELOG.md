@@ -4,6 +4,18 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-09-25
+
+`sslm_seq_save` writes a new save format, `SSB5`: the `SSB4` layout with the four per-site
+saturation counts (`kv_landing`, `k_channel_landing`, `rope_q`, `rope_k`) appended to its fixed
+header, so `sslm_seq_restore` returns a sequence whose per-site counts are the ones it was saved
+with and still sum to its total. 1.8.1 saved only the total, so a restored sequence had its total and
+per-site counts of 0. `sslm_seq_restore` still accepts `SSB4`, `SSB3` and `SSB2` blobs; they record
+only the total, so a sequence restored from one has that total and per-site counts of 0 until it is
+reset. `sslm_seq_state_size` grows by 32 bytes and stays an upper bound on the saved size. The GPU
+path already carried the four counts through prefill, decode, save and restore; it is unchanged. No
+token, status or ABI surface changes.
+
 ## [1.8.1] - 2026-09-25
 
 On the CPU, the four per-site saturation counts (`kv_landing`, `k_channel_landing`, `rope_q`,

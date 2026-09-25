@@ -14,10 +14,15 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.8.1**. On the CPU, the four per-site saturation counts now travel with the
-saturation total they sum through prefix adoption and prefill; 1.8.0 left them stale or unfilled on
-those two paths. Diagnostic counters only: no token, status, ABI surface, or save format changes. See
-the [1.8.1 release note](docs/releases/1.8.1.md).
+Current release: **1.9.0**. `sslm_seq_save` writes a new save format, `SSB5`, which carries the
+four per-site saturation counts beside the saturation total they sum, so a restored sequence keeps
+them; 1.8.1 restored the total with per-site counts of 0. Blobs saved by earlier releases still
+restore, with their total and per-site counts of 0. No token, status or ABI surface changes. See the
+[1.9.0 release note](docs/releases/1.9.0.md).
+
+1.8.1: on the CPU, the four per-site saturation counts travel with the saturation total they sum
+through prefix adoption and prefill; 1.8.0 left them stale or unfilled on those two paths. See the
+[1.8.1 release note](docs/releases/1.8.1.md).
 
 1.8.0: on the GPU, running out of memory is reported as running out of
 memory: an allocation failure on a device that is not removed -- host memory, or GPU memory on any
