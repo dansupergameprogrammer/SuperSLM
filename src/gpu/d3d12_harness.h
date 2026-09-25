@@ -281,13 +281,19 @@ struct Device {
 	// cause, and `setup_failure` recording its kind: Allocation when a step failed with
 	// E_OUTOFMEMORY (D3D12CreateDevice on either adapter path included) or a host allocation
 	// failure, Other for every other cause.
+	//
+	// The kind is stored once, when this attempt has failed, and never cleared (1.8.0, TE-435).
+	// A reader that obtained this Device while it was unavailable and reads `setup_failure` while
+	// GetDevice() retries an Allocation failure sees Allocation, the prior attempt's kind, until
+	// the retry resolves -- never a transient None that its caller would report as the permanent
+	// cause. A successful attempt leaves it as it was: `available` is then true, and no reader
+	// consults `setup_failure` once it is.
 	void Init() noexcept {
-		setup_failure.store(SetupFailure::None);
 		try {
 			InitSteps();
 		} catch (...) {
 			const bool allocation = ClassifyInFlightException() == GpuFaultKind::Allocation;
-			setup_failure.store(allocation ? SetupFailure::Allocation : SetupFailure::Other);
+			const SetupFailure failure = allocation ? SetupFailure::Allocation : SetupFailure::Other;
 			try {
 				try {
 					throw;
@@ -297,8 +303,9 @@ struct Device {
 					init_error = "non-standard exception during device setup";
 				}
 			} catch (...) {
-				// Recording the message itself failed to allocate; the kind above is still recorded.
+				// Recording the message itself failed to allocate; the kind is still recorded below.
 			}
+			setup_failure.store(failure);
 			return;
 		}
 		if (!available.load()) {
@@ -309,7 +316,8 @@ struct Device {
 
 	// Releases everything a failed Init() left behind, so Init() can run again on this object
 	// (GetDevice() below, after an Allocation setup failure). Called only while `available` is
-	// false.
+	// false. `setup_failure` keeps the failed attempt's kind until the next Init() stores its own
+	// (see Init() above).
 	void ResetAfterFailedSetup() {
 		timestamp_readback.Reset();
 		timestamp_heap.Reset();
@@ -329,7 +337,6 @@ struct Device {
 		adapter.Reset();
 		init_error.clear();
 		create_device_out_of_memory_ = false;
-		setup_failure.store(SetupFailure::None);
 	}
 
 private:
