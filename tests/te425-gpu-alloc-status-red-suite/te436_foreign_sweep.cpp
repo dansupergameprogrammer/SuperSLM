@@ -40,7 +40,8 @@
 // never reaches reads INVALID (exit 4), never a verdict. Absolute numbers are not the identity: the
 // engine makes at least one allocation on some calls and not others, which shifts every later number
 // (observed at c3b5412: 99 and 100 sites on two identical prompt loops). --site=K names the K-th site
-// of the counting pass, which every process reaches with the same history.
+// of the counting pass, which every process reaches with the same history; --select names sites by what
+// they are, which is how the commissioning constructions name another seat's legs.
 //
 // TIMING, MADE DETERMINISTIC. A site is OUTSTANDING when the last ExecuteCommandLists has been signalled
 // and the engine has not yet observed that submission complete (neither GetCompletedValue at or past its
@@ -54,7 +55,7 @@
 // on GPU timing.
 //
 // Usage: te436_foreign_sweep.exe --route=prompt|schema|step|bridge|batch (--count | --site=K |
-//        --select=outstanding | --from=A --to=B) [--len=N] [--budget=N] [--expect-phase=NAME]
+//        --select=outstanding|phase:NAME [--pick=I] | --from=A --to=B) [--len=N] [--budget=N] [--expect-phase=NAME]
 //        --qwen3=PATH [--g5=PATH]
 // One site per process is the suite's shape (run_red_suite.py's fx-* jobs): a red leg can leave a handle
 // or the process's submission list unusable, which would score every later leg on that damage.
@@ -963,11 +964,12 @@ int CellSweep() {
 	else return SetupFail(cell, "--route must be prompt, schema, step, bridge or batch");
 	if (!r->Open()) return SetupFail(cell, "fixture (reference calls on both contexts)");
 
-	// Counting pass: every operator-new site of the armed call, labelled. It starts from exactly the state
-	// every armed pass starts from -- a clean call on the same context, then the route's pre-state -- so
-	// that the two passes number the same calls the same way.
+	// Counting pass: every operator-new site of the armed call, labelled. It starts from exactly the state and
+	// call history every armed pass starts from -- a clean call on the second context, one on this context,
+	// then the route's pre-state -- so that the two passes reach the same allocations.
 	SslmGpuStatus count_pre = OK;
-	if (!r->Clean(1, &count_pre) || !r->PreArmed()) return SetupFail(cell, "pre-state for the counting pass");
+	if (!r->Clean(2, &count_pre) || !r->Clean(1, &count_pre) || !r->PreArmed())
+		return SetupFail(cell, "pre-state for the counting pass");
 	Begin();
 	NewCountOnly(true);
 	ArmedPass(r.get());
@@ -989,11 +991,24 @@ int CellSweep() {
 	std::vector<uint32_t> sites;
 	if (Has("site")) {
 		sites.push_back(static_cast<uint32_t>(OptInt("site", 0)));
-	} else if (Opt("select") == "outstanding") {
-		// Every site at which a submission is outstanding: the gated legs.
+	} else if (Has("select")) {
+		// A structural selection, so a construction names a site by what it is rather than by a number
+		// the engine's history-dependent allocations can move: --select=outstanding (every site at which
+		// a submission is outstanding: the gated legs) or --select=phase:NAME (every site in that phase),
+		// narrowed by --pick=I to the I-th of them (negative: from the end), one site per process.
+		const std::string sel = Opt("select");
+		const int phase = sel.rfind("phase:", 0) == 0 ? PhaseByName(sel.substr(6)) : -1;
+		if (sel != "outstanding" && phase < 0) return SetupFail(cell, "--select must be outstanding or phase:NAME");
 		for (uint32_t k = 1; k <= K; ++k)
-			if (g_fl[k].outstanding) sites.push_back(k);
-		if (sites.empty()) return SetupFail(cell, "--select=outstanding: the route has no outstanding site");
+			if (sel == "outstanding" ? g_fl[k].outstanding != 0 : g_fl[k].key.phase == phase) sites.push_back(k);
+		if (sites.empty()) return SetupFail(cell, "--select matched no site");
+		if (Has("pick")) {
+			const long long n = static_cast<long long>(sites.size());
+			long long i = OptInt("pick", 0);
+			if (i < 0) i += n;
+			if (i < 0 || i >= n) return SetupFail(cell, "--pick beyond the selected sites");
+			sites = {sites[static_cast<size_t>(i)]};
+		}
 	} else {
 		const long long from = OptInt("from", 1), to = OptInt("to", K);
 		for (long long k = from; k <= to && k <= K; ++k) sites.push_back(static_cast<uint32_t>(k));
@@ -1016,37 +1031,54 @@ int CellSweep() {
 			continue;
 		}
 		g_stage_site.store(k);
-		// A clean call first: the leg starts from a sequence and a device proven clean.
+		const bool gated = want.outstanding != 0;
 		SslmGpuStatus pre_st = OK;
-		if (!r->Clean(1, &pre_st) || !r->PreArmed()) {
+		bool pre_ok = true, escaped = false, released = true;
+		int attempts = 0;
+		while (attempts < 4) {
+			++attempts;
+			// Clean calls first, on the second context and then on this one: the leg starts from a sequence and
+			// a device proven clean, and from the same call history the counting pass had (the fixture's
+			// reference calls end on the second context). Some engine allocations depend on that history --
+			// one in a batch's first recording window happens only after the other context submitted.
+			if (!r->Clean(2, &pre_st) || !r->Clean(1, &pre_st) || !r->PreArmed()) {
+				pre_ok = false;
+				break;
+			}
+			g_fire = FireState{};
+			g_reading = Reading{};
+			g_gate.watchdog_fired.store(false);
+			Begin();
+			if (gated) g_gate.arm_ecl.store(want.ecl);
+			g_fire_key = want.key;
+			g_fire_armed.store(true);
+			g_new.label.store(false);
+			g_new.count.store(0);
+			g_stage.store(1);
+			g_new.counting.store(true);
+			try {
+				ArmedPass(r.get());
+			} catch (const ForeignFault&) {
+				escaped = true;  // the exception crossed a public entry point into its caller
+				AfterPublic();
+			}
+			NewStop();
+			g_fire_armed.store(false);
+			g_stage.store(2);
+			released = Release();
+			if (g_fire.fired || escaped) break;
+			// The armed call never reached the site, so nothing was injected and it ran as a clean call. The
+			// engine makes some allocations on some calls and not others (a container crossing its
+			// capacity); the leg is repeated from a fresh pre-state until the site is reached, at most four
+			// times, and reads INVALID if it never is.
+			g_stage.store(0);
+		}
+		if (!pre_ok) {
 			std::printf("%s k=%u pre-state not clean: %s -> INVALID\n", cell, k, St(pre_st));
 			++legs;
 			++invalid;
 			continue;
 		}
-		const bool gated = want.outstanding != 0;
-		g_fire = FireState{};
-		g_reading = Reading{};
-		g_gate.watchdog_fired.store(false);
-		Begin();
-		if (gated) g_gate.arm_ecl.store(want.ecl);
-		g_fire_key = want.key;
-		g_fire_armed.store(true);
-		g_new.label.store(false);
-		g_new.count.store(0);
-		g_stage.store(1);
-		g_new.counting.store(true);
-		bool escaped = false;
-		try {
-			ArmedPass(r.get());
-		} catch (const ForeignFault&) {
-			escaped = true;  // the exception crossed a public entry point into its caller
-			AfterPublic();
-		}
-		NewStop();
-		g_fire_armed.store(false);
-		g_stage.store(2);
-		const bool released = Release();
 		const bool watchdog = g_gate.watchdog_fired.load();
 
 		// The label matched (that is what fires); the absolute number may differ by the engine's intermittent
@@ -1063,9 +1095,9 @@ int CellSweep() {
 		++legs;
 		if (!drove) {
 			++invalid;
-			std::printf("%s k=%u %s fired=%d fired-at=%u gated=%d gate-closed-at-fire=%d have-sub=%d watchdog=%d -> INVALID "
+			std::printf("%s k=%u %s fired=%d fired-at=%u attempts=%d gated=%d gate-closed-at-fire=%d have-sub=%d watchdog=%d -> INVALID "
 			            "(own=%s after2=%s after1=%s)\n",
-			            cell, k, KeyDesc(want).c_str(), g_fire.fired ? 1 : 0, g_fire.count, gated ? 1 : 0,
+			            cell, k, KeyDesc(want).c_str(), g_fire.fired ? 1 : 0, g_fire.count, attempts, gated ? 1 : 0,
 			            g_fire.gate_closed ? 1 : 0, g_fire.have_sub ? 1 : 0, watchdog ? 1 : 0, own.c_str(), St(s2), St(s1));
 			continue;
 		}
@@ -1078,8 +1110,8 @@ int CellSweep() {
 			       std::to_string(g_reading.value) + (complete ? "" : "(!)") + " gate-shut-at-return=" +
 			       std::to_string(g_reading.gate_shut ? 1 : 0) + " release-confirmed=" + std::to_string(released ? 1 : 0);
 		}
-		std::printf("%s k=%u %s fired-at=%u own=%s%s%s%s after2=%s%s after1=%s%s -> %s\n", cell, k, KeyDesc(want).c_str(),
-		            g_fire.count, own.c_str(),
+		std::printf("%s k=%u %s fired-at=%u attempts=%d own=%s%s%s%s after2=%s%s after1=%s%s -> %s\n", cell, k,
+		            KeyDesc(want).c_str(), g_fire.count, attempts, own.c_str(),
 		            own_ok ? "" : "(!)", escaped ? " ESCAPED-THE-API" : "", gate.c_str(), St(s2), a2 ? "" : "(!)", St(s1),
 		            a1 ? "" : "(!)", conforms ? "PASS" : "FAIL");
 		std::fflush(stdout);

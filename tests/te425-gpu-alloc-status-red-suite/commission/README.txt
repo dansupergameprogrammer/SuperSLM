@@ -33,12 +33,14 @@ source (D:\_te425\slm171), the 042bd66 source for the census check (D:\_te433\sr
 the tail pin's three builds (D:\_te433\final-tip, final-mutT13, final-mutT15: build_engine.bat then
 build_red_suite.bat over D:\_te433\src-042bd66, src-mutT13, src-mutT15), the t2791-hash Qwen3 artifact.
   foreign-exception sweep (te436_foreign_sweep.cpp, TE-436):
-    must-accept  at c3b5412: the code reviewer's TE-431 prompt-route legs (the final sub-chunk's two finish
-                 sites of a 5-token prompt, which this sweep numbers 97 and 98) and the builder's TE-432
-                 tails, which wait a submission out (every outstanding site of the decode step and of both
-                 prompt sub-chunks) -- fx_sweep_must_accept.bat <bin-c3b5412> <qwen3>.
-    must-reject  the code reviewer's TE-431 S-1 legs (decode step k=26 and k=27 at c3b5412, k=26 at
-                 v1.7.1: the finish lets a foreign exception escape and the handle's reset is refused), and
-                 the builder's TE-432 tail finding at v1.7.1 (decode step k=23, the in-flight token's
-                 allocation, gated) -- fx_sweep_must_reject.bat <bin-c3b5412> <bin-v1.7.1> <qwen3>. Both
-                 scripts take their build directories as arguments; the registry entry names them.
+    must-accept  at c3b5412: the code reviewer's TE-431 prompt-route legs (the final sub-chunk's two
+                 finish sites of a 5-token prompt, the last two sites of the prefill phase) and the
+                 builder's TE-432 tails, which wait a submission out (every outstanding site of the decode
+                 step and of both prompt sub-chunks) -- fx_sweep_must_accept.bat <bin-c3b5412> <qwen3>.
+    must-reject  the code reviewer's TE-431 S-1 legs (the decode step's two finish-phase sites at c3b5412,
+                 the first of them at v1.7.1: the finish lets a foreign exception escape and the handle's
+                 reset is refused), and the builder's TE-432 tail finding at v1.7.1 (the decode step's first
+                 outstanding site, the in-flight token's allocation, gated) --
+                 fx_sweep_must_reject.bat <bin-c3b5412> <bin-v1.7.1> <qwen3>. Sites are named by --select,
+                 not by number; both scripts take their build directories as arguments, and the registry
+                 entry names them.
