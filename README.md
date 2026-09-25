@@ -17,7 +17,9 @@ frame has left without changing what the model says.
 Current release: **1.9.0**. `sslm_seq_save` writes a new save format, `SSB5`, which carries the
 four per-site saturation counts beside the saturation total they sum, so a restored sequence keeps
 them; 1.8.1 restored the total with per-site counts of 0. Blobs saved by earlier releases still
-restore, with their total and per-site counts of 0. No token, status or ABI surface changes. See the
+restore, with their total and per-site counts of 0. `sslm_model_map` now refuses an artifact whose
+damped-greedy scale no decode can use, which 1.8.1 mapped and then refused at every damped-greedy
+decode; no converter output has that shape. No token, status or ABI surface changes. See the
 [1.9.0 release note](docs/releases/1.9.0.md).
 
 1.8.1: on the CPU, the four per-site saturation counts travel with the saturation total they sum

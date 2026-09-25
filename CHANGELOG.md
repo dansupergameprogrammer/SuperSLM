@@ -16,6 +16,14 @@ reset. `sslm_seq_state_size` grows by 32 bytes and stays an upper bound on the s
 path already carried the four counts through prefill, decode, save and restore; it is unchanged. No
 token, status or ABI surface changes.
 
+`sslm_model_map` refuses with `SSLM_ARTIFACT_REJECTED` an artifact whose DGC1 damped-greedy scale
+derives i-exp constants that `sslm_decode_step_v2` refuses. Such a scale, (m = 0, e = 0) for one,
+used to map with damped greedy offered, after which every damped-greedy decode returned
+`SSLM_INVALID_ARGUMENT`. Map time and decode now apply one check. No converter output is affected.
+
+New C-ABI tests in `superslm_tests` cover `schema_masks.h` and the three `damped_greedy_*.cpp`
+files.
+
 ## [1.8.1] - 2026-09-25
 
 On the CPU, the four per-site saturation counts (`kv_landing`, `k_channel_landing`, `rope_q`,
