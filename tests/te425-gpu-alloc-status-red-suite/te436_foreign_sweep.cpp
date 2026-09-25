@@ -964,16 +964,20 @@ int CellSweep() {
 	else return SetupFail(cell, "--route must be prompt, schema, step, bridge or batch");
 	if (!r->Open()) return SetupFail(cell, "fixture (reference calls on both contexts)");
 
-	// Counting pass: every operator-new site of the armed call, labelled. It starts from exactly the state and
-	// call history every armed pass starts from -- a clean call on the second context, one on this context,
-	// then the route's pre-state -- so that the two passes reach the same allocations.
-	SslmGpuStatus count_pre = OK;
-	if (!r->Clean(2, &count_pre) || !r->Clean(1, &count_pre) || !r->PreArmed())
-		return SetupFail(cell, "pre-state for the counting pass");
-	Begin();
-	NewCountOnly(true);
-	ArmedPass(r.get());
-	NewStop();
+	// Counting pass: every operator-new site of the armed call, labelled. It runs twice and the second table
+	// is kept: that pass follows exactly the calls every armed pass follows (the previous counted or armed
+	// call on this context, a clean call on the second context, one on this context, the route's
+	// pre-state), and the engine makes allocations that depend on that history.
+	for (int pass = 0; pass < 2; ++pass) {
+		SslmGpuStatus count_pre = OK;
+		if (!r->Clean(2, &count_pre) || !r->Clean(1, &count_pre) || !r->PreArmed())
+			return SetupFail(cell, "pre-state for the counting pass");
+		Begin();
+		NewCountOnly(true);
+		ArmedPass(r.get());
+		NewStop();
+		if (r->ArmedStatus() != OK) return SetupFail(cell, "counting pass not clean");
+	}
 	const uint32_t K = g_new.count.load();
 	if (K >= kMaxSites) return SetupFail(cell, "more sites than the label table holds");
 	uint32_t outstanding_sites = 0;
