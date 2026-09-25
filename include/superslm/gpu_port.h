@@ -270,7 +270,9 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 // `DecodeStickyTag(...)` work RunLayerLoopGpu's own synchronous tail always performed,
 // sets `*out_ready = 1`, deletes `inflight` (consumed, exactly once), and returns the
 // DECODED per-call result -- the channel design Sec4.2 names `sslm_gpu_ready`'s own
-// `out_status`.
+// `out_status`. It never throws (1.8.0, TE-435): a fault of any exception type once the token is
+// taken consumes it and returns the classified status with `*out_ready = 1`, so a caller's
+// "Submitted -> Idle" transition runs on every consumed token.
 // T-2441: `out_q_codes` mirrors `RunLayerLoopGpuSubmit`'s own new parameter -- if Submit
 // recorded a q_codes readback copy (non-null `out_q_codes` there), Finish copies the actual
 // bytes into THIS call's own `out_q_codes` buffer after the fence wait, up to the capacity
@@ -393,7 +395,8 @@ enum class GpuLayerLoopGuard : int {
 // decision reads exactly what the decision decided (true on a cache hit, false on a miss),
 // whether the call's own final status is Ok or one of DecodeStickyTag's fifteen rejecting
 // statuses, including ResidualReconciliationScaleOutOfDomain -- the thirty-three before them,
-// alike, thirty-nine paths' own destination in total.
+// alike, forty paths' own destination in total (TE-435 gave RunLayerLoopGpuFinish a catch-all
+// clause, one more return after the decision, where TE-432's count was thirty-nine).
 //
 // Both counts are derived structurally from source, not restated by hand, by
 // tests/ci/check_gpu_guard_status_parity.py (derive_lwuws_before_decision_count/

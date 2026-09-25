@@ -830,6 +830,11 @@ jobs:
       # GPU forward-status site in the source is in the committed census with a disposition.
       - name: Fail on any GPU status site the census does not list
         run: python tests/ci/check_gpu_status_site_census.py
+      # TE-435: the census sees the catch clauses that exist, never one that is missing. This gate
+      # refuses any outermost `try` under src/gpu whose handlers do not end in `catch (...)`, so no
+      # exception type can leave a site that holds a command list, submitted work or handle state.
+      - name: Fail on any GPU try block whose catch ladder is not total
+        run: python tools/ci/check_gpu_catch_totality.py
 
   # SuperSLM_S3a_WalkingSkeleton_Plan.md Sec7.3 (T-200, Sec17.3 cell 5; ac34677
   # C1): the checked chain funnel's structural half -- no translation unit in

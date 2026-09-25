@@ -4247,6 +4247,15 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 		// inside the try the throw happened -- nothing here frees it a second time.
 		if (out_ready) *out_ready = 1;  // a terminal status, not a "still pending" one
 		return ClassifyForwardFault(dev, /*stranded=*/false);
+	} catch (...) {
+		// 1.8.0 (TE-435): any other exception type -- a non-standard type from a host allocation
+		// after the fence wait. The same disposition as the clause above (a non-standard type is
+		// rule 3, GpuOperationFailed): the token is consumed and the status is terminal, so
+		// sslm_gpu_ready takes its normal branch and returns the handle to Idle. Without this
+		// clause the exception left the function with the token freed and the handle Submitted,
+		// pointing at it.
+		if (out_ready) *out_ready = 1;
+		return ClassifyForwardFault(dev, /*stranded=*/false);
 	}
 }
 
