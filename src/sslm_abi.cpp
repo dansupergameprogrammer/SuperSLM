@@ -1949,6 +1949,11 @@ extern "C" sslm_status sslm_seq_schema_bound(sslm_seq seq, int32_t* out_schema_b
 extern "C" superslm::SequenceLayerState* SslmSeqLiveStateForTest(sslm_seq seq) {
 	return seq ? &seq->state : nullptr;
 }
+// The prefix twin of the accessor above, so a test can seed a prefix's per-site census before
+// adoption.
+extern "C" superslm::SequenceLayerState* SslmPrefixLiveStateForTest(sslm_prefix prefix) {
+	return prefix ? &prefix->state : nullptr;
+}
 #endif
 
 // RULED, copy-on-adopt (design Sec7.2, design commit fab235c1c6): an eager, whole-block copy of
