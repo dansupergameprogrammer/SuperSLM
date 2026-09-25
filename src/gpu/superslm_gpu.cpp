@@ -3433,6 +3433,21 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		// list still recording after Close, a retry and the confirm step refuses every later
 		// `dev.alloc->Reset()` in the process, so it is reported GpuDeviceRemoved (T-2192 T2(a)).
 		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed, tail_signaled);
+	} catch (...) {
+		// 1.8.0 (TE-432): any other exception type -- a std::length_error, or a non-standard type --
+		// from anywhere in the tail, the in-flight token's allocation after ExecuteCommandLists and
+		// Signal included. Without this clause it left the function with the submission still
+		// executing, and the unwinding released `seq_readback`/`kv_readback`/every `state` buffer
+		// the queued work reads and writes, which removes the device. The same containment as the
+		// two clauses above: restore the latch when nothing executed, then close the list or wait the
+		// submission out; work whose completion cannot be confirmed is rule 0, and the classifier
+		// decides the rest by kind (a non-standard type is rule 3).
+		InvalidateResidencyCachesOnThrow();
+		if (!tail_executed && external_kv_resident != nullptr &&
+		    io_external_kv_needs_resume_barrier != nullptr) {
+			*io_external_kv_needs_resume_barrier = kv_resume_barrier_entry_value;
+		}
+		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed, tail_signaled);
 	}
 }
 
@@ -3881,6 +3896,17 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		// failed. All of it lives in SubmissionTailFaultStatus, shared with
 		// RunLayerLoopGpuSubmit's tail.
 		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed, tail_signaled);
+	} catch (...) {
+		// 1.8.0 (TE-432): RunLayerLoopGpuSubmit's own twin catch-all (this file, above): any other
+		// exception type from anywhere in the tail, the in-flight token's allocation after
+		// ExecuteCommandLists and Signal included, is contained like the two clauses above -- the
+		// submission is waited out before this stack releases the buffers it uses.
+		InvalidateResidencyCachesOnThrow();
+		if (!tail_executed && external_kv_resident != nullptr &&
+		    io_external_kv_needs_resume_barrier != nullptr) {
+			*io_external_kv_needs_resume_barrier = kv_resume_barrier_entry_value;
+		}
+		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed, tail_signaled);
 	}
 }
 
@@ -4220,6 +4246,15 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 		// frees `inflight` via its own destructor during stack unwinding, regardless of where
 		// inside the try the throw happened -- nothing here frees it a second time.
 		if (out_ready) *out_ready = 1;  // a terminal status, not a "still pending" one
+		return ClassifyForwardFault(dev, /*stranded=*/false);
+	} catch (...) {
+		// 1.8.0 (TE-435): any other exception type -- a non-standard type from a host allocation
+		// after the fence wait. The same disposition as the clause above (a non-standard type is
+		// rule 3, GpuOperationFailed): the token is consumed and the status is terminal, so
+		// sslm_gpu_ready takes its normal branch and returns the handle to Idle. Without this
+		// clause the exception left the function with the token freed and the handle Submitted,
+		// pointing at it.
+		if (out_ready) *out_ready = 1;
 		return ClassifyForwardFault(dev, /*stranded=*/false);
 	}
 }

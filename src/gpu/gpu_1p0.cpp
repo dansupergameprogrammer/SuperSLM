@@ -910,6 +910,8 @@ SslmGpuStatus CreateDeviceLogitsBuffers(SslmGpuContext* ctx, const int8_t* head_
 		// (ExecuteSignalAndWait) carry the stranded input; E_OUTOFMEMORY from any D3D12 call on a
 		// live device is SSLM_GPU_ALLOCATION_FAILED, and every other failure SSLM_DEVICE_LOST.
 		return ClassifyHandleFault(&dev);
+	} catch (...) {
+		return ClassifyHandleFault(&dev);  // 1.8.0 (TE-435): every other exception type, as above
 	}
 }
 
@@ -970,6 +972,8 @@ SslmGpuStatus RunDeviceLogits(SslmGpuContext* ctx, const DeviceLogitsBuffers& b,
 	} catch (const std::exception&) {
 		// 1.8.0 (TE-426): the fault classifier, as in CreateDeviceLogitsBuffers.
 		return ClassifyHandleFault(&dev);
+	} catch (...) {
+		return ClassifyHandleFault(&dev);  // 1.8.0 (TE-435): every other exception type, as above
 	}
 }
 
@@ -1072,6 +1076,8 @@ SslmGpuStatus sslm_gpu_model_mapImpl(SslmGpuContext* ctx, const SslmModelView* b
 		// 1.8.0 (TE-426): a host step, no device. std::length_error is an allocation failure,
 		// SSLM_GPU_ALLOCATION_FAILED; the layer-weights contract error stays SSLM_DEVICE_LOST.
 		return ClassifyHandleFault(nullptr);
+	} catch (...) {
+		return ClassifyHandleFault(nullptr);  // 1.8.0 (TE-435): every other exception type, as above
 	}
 
 	// T-2105's own RoPE cos/sin residency construction (Claude/Laplace/
@@ -1187,6 +1193,8 @@ SslmGpuStatus sslm_gpu_model_mapImpl(SslmGpuContext* ctx, const SslmModelView* b
 		// or at any step) on a live device, with the list confirmed Closed, is
 		// SSLM_GPU_ALLOCATION_FAILED; every other failure SSLM_DEVICE_LOST.
 		return ClassifyHandleFault(&ctx->device);
+	} catch (...) {
+		return ClassifyHandleFault(&ctx->device);  // 1.8.0 (TE-435): every other exception type, as above
 	}
 
 	// T-2851 (B, design Sec4.6): the device-resident head. `head_w` above is the one table the
@@ -1476,6 +1484,8 @@ SslmGpuStatus sslm_gpu_adapter_mapImpl(SslmGpuContext* ctx, SslmGpuModelHandle* 
 		throw;
 	} catch (const std::exception&) {
 		return ClassifyHandleFault(&ctx->device);  // 1.8.0 (TE-426): as sslm_gpu_model_map's uploads
+	} catch (...) {
+		return ClassifyHandleFault(&ctx->device);  // 1.8.0 (TE-435): every other exception type, as above
 	}
 
 	h->ctx = ctx;
@@ -1595,16 +1605,19 @@ SslmGpuStatus sslm_gpu_context_createImpl(GpuContextConfig cfg, SslmGpuContext**
 	}
 
 	SslmGpuContext* ctx = new SslmGpuContext();
-	// Device::Init() does not throw (1.8.0): a failed setup is recorded as a SetupFailure kind. A
-	// setup that ran out of memory -- a host allocation, or E_OUTOFMEMORY from any D3D12 step,
-	// device creation included -- is SSLM_GPU_ALLOCATION_FAILED; every other cause SSLM_DEVICE_LOST.
+	// Device::Init() does not throw (1.8.0): a failed setup is recorded as a SetupFailure kind. The
+	// fault classifier's rules in order: a device that reports itself removed is SSLM_DEVICE_LOST
+	// (rule 1); a setup that ran out of memory -- a host allocation, or E_OUTOFMEMORY from any D3D12
+	// step, device creation included -- is SSLM_GPU_ALLOCATION_FAILED (rule 2); every other cause
+	// SSLM_DEVICE_LOST.
 	ctx->device.Init();
 	if (!ctx->device.available) {
+		const bool removed = superslm_gpu::harness::FailedSetupDeviceReportedRemoved(ctx->device);
 		const bool out_of_memory =
 		    ctx->device.setup_failure.load() == superslm_gpu::harness::SetupFailure::Allocation;
 		delete ctx;
 		*out_ctx = nullptr;
-		return out_of_memory ? SSLM_GPU_ALLOCATION_FAILED : SSLM_DEVICE_LOST;
+		return !removed && out_of_memory ? SSLM_GPU_ALLOCATION_FAILED : SSLM_DEVICE_LOST;
 	}
 
 	if (!shader_dir.empty()) {
@@ -1729,6 +1742,8 @@ SslmGpuStatus sslm_gpu_seq_createImpl(SslmGpuContext* ctx, SslmGpuModelHandle* m
 		// Mirrors sslm_gpu_model_map's own upload-failure disposition (design Sec5.1/Sec5.3
 		// symmetry), the fault classifier since 1.8.0 (TE-426).
 		return ClassifyHandleFault(&ctx->device);
+	} catch (...) {
+		return ClassifyHandleFault(&ctx->device);  // 1.8.0 (TE-435): every other exception type, as above
 	}
 	// Structural self-check (design Sec9: "context_cap inconsistent with the K/V buffer
 	// this call itself just sized -- an internal invariant that should be unreachable,
@@ -2646,6 +2661,13 @@ SslmGpuStatus sslm_gpu_seq_restoreImpl(SslmGpuContext* ctx, SslmGpuModelHandle* 
 		const SslmGpuStatus fault = ClassifyHandleFault(&superslm_gpu::harness::GetDevice());
 		sslm_gpu_seq_release(ctx, fresh);
 		return fault;
+	} catch (...) {
+		// 1.8.0 (TE-435): any other exception type, as the clause above -- without this clause a
+		// non-standard type left `fresh` unreleased, its context and model counts held for the life
+		// of the process.
+		const SslmGpuStatus fault = ClassifyHandleFault(&superslm_gpu::harness::GetDevice());
+		sslm_gpu_seq_release(ctx, fresh);
+		return fault;
 	}
 	if (!ok) {
 		sslm_gpu_seq_release(ctx, fresh);
@@ -2669,6 +2691,10 @@ SslmGpuStatus sslm_gpu_seq_restoreImpl(SslmGpuContext* ctx, SslmGpuModelHandle* 
 		throw;
 	} catch (const std::exception&) {
 		const SslmGpuStatus fault = ClassifyHandleFault(&ctx->device);  // 1.8.0 (TE-426)
+		sslm_gpu_seq_release(ctx, fresh);
+		return fault;
+	} catch (...) {
+		const SslmGpuStatus fault = ClassifyHandleFault(&ctx->device);  // 1.8.0 (TE-435), as above
 		sslm_gpu_seq_release(ctx, fresh);
 		return fault;
 	}
@@ -3288,12 +3314,12 @@ ChunkPreScanResult RunChunkAdmissionPreScan(SslmGpuModelHandle* model, int64_t c
 // `RunLayerLoopGpuFinish` returned a status other than `Ok`, `GpuDeviceRemoved` or
 // `GpuAllocationFailed`. It is classified by where the status came from, never by its value alone:
 // a submission failure (including the recording fault, whose status is an arithmetic-guard value)
-// and both catch clauses below leave it false.
+// and every catch clause below leaves it false.
 //
 // `*out_fault` (1.8.0, TE-426) is the forward status that cut the chunk short when the cause was
 // not a guard refusal: the failing submission's status, the final finish's `GpuDeviceRemoved`/
 // `GpuAllocationFailed`/`GpuOperationFailed`, or the classified fault the `runtime_error` clause
-// below caught. `Ok` otherwise. The twins read it on a short count, so an allocation failure on a
+// or the catch-all (TE-435) below caught. `Ok` otherwise. The twins read it on a short count, so an allocation failure on a
 // live device reaches the caller as SSLM_GPU_ALLOCATION_FAILED instead of being discarded.
 void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHandle* seq,
                                      const uint8_t* chunk_embedding_bytes, uint32_t admit_count,
@@ -3408,6 +3434,21 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		}
 	} submitted_window_guard(seq, model);
 	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+	// The containment every non-rethrowing clause below applies, written once so the clauses
+	// cannot diverge. Call only from inside a catch handler (ClassifyInFlightException rethrows
+	// the exception being handled). 1.8.0 (TE-426): the fault is classified and recorded instead
+	// of dropped -- an allocation type (GpuAllocationError, std::length_error) is an allocation
+	// failure, every other type a non-allocation one. Nothing that can hold the process's command
+	// list open reaches here (the recording windows and tails catch first), so rules 0 and 1 are
+	// the recording sites' own.
+	auto record_contained_fault = [&]() {
+		seq->in_flight = nullptr;
+		*out_guard_rejected = false;
+		*out_fault = superslm_gpu::harness::ClassifyInFlightException() ==
+		                     superslm_gpu::harness::GpuFaultKind::Allocation
+		                 ? superslm::SslmForwardStatus::GpuAllocationFailed
+		                 : superslm::SslmForwardStatus::GpuOperationFailed;
+	};
 	// T-2189 finding 2 (D-SLM3689) added this try/catch because `SubmitChunkToFullDepthForG5Bridge`'s
 	// own tail (`SubmitOneSubChunkToFullDepthForG5Bridge`'s closing statements -- `dev.list->Close()`,
 	// `dev.queue->Signal()`, `new GpuLayerLoopInFlight()`, superslm_gpu.cpp) sat OUTSIDE that
@@ -3425,12 +3466,14 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 	// would otherwise propagate uncaught to this call's own caller), not as this failure class's
 	// own containment path any more. `RunLayerLoopGpuFinish` is included in the same try for
 	// symmetry with this call's own tail -- both are the same class of D3D12 call -- though
-	// `RunLayerLoopGpuFinish` cannot itself throw: it wraps its entire body in
-	// `catch (const std::exception&)` and converts
-	// to a status before returning (see its own definition, superslm_gpu.cpp).
+	// `RunLayerLoopGpuFinish` cannot itself throw: since 1.8.0 (TE-435) its ladder ends in
+	// `catch (...)` and converts every exception type to a status before returning (see its own
+	// definition, superslm_gpu.cpp). The exception that reaches this try is the sub-chunk
+	// recording window's catch-all rethrow, after it has closed the list.
 	//
 	// No status is returned from THIS function (it never has been -- see its own header comment);
-	// the catch clauses below deliberately do NOT return early or rethrow. `seq->live_state` is
+	// the std::runtime_error clause and the catch-all below deliberately do NOT return early or
+	// rethrow (the std::bad_alloc clause rethrows to the API boundary). `seq->live_state` is
 	// mutated BY REFERENCE, incrementally, by every (sub-)chunk that completed and finished
 	// synchronously BEFORE the one that threw (`SubmitChunkToFullDepthForG5Bridge`'s own multi-
 	// sub-chunk loop, superslm_gpu.cpp) -- so falling through to the unchanged copy-back below
@@ -3440,8 +3483,9 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 	// `derived_count < admit_count` BEFORE consulting `scan.cause` and return `SSLM_DEVICE_LOST` on
 	// that path -- since `admit_count > 0` is already established above (the `admit_count == 0`
 	// early return, this function's own top), a caught throw here that leaves `*out_derived_count`
-	// short of `admit_count` is guaranteed to resolve to `SSLM_DEVICE_LOST` through that EXISTING
-	// logic, with no new status-mapping code duplicated at either call site.
+	// short of `admit_count` is guaranteed to resolve to `SSLM_DEVICE_LOST` (or, since 1.8.0,
+	// `SSLM_GPU_ALLOCATION_FAILED` for a recorded allocation fault) through that EXISTING logic,
+	// with no new status-mapping code duplicated at either call site.
 	try {
 		// T-2432 (Track A step 2/3): q_width threaded explicitly -- this is the real GPU-side
 		// prefill submission path, the direct analog of sslm_abi.cpp's own
@@ -3510,16 +3554,19 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		             "batched-prefill submit/finish call, contained at the SslmGpuStatus boundary: "
 		             "%s\n",
 		             e.what());
-		seq->in_flight = nullptr;
-		*out_guard_rejected = false;
-		// 1.8.0 (TE-426): classified and recorded instead of dropped -- GpuAllocationError is an
-		// allocation failure, any other std::runtime_error a non-allocation one. Nothing that can
-		// hold the process's command list open reaches here (the recording windows and tails
-		// catch first), so rules 0 and 1 are the recording sites' own.
-		*out_fault = superslm_gpu::harness::ClassifyInFlightException() ==
-		                     superslm_gpu::harness::GpuFaultKind::Allocation
-		                 ? superslm::SslmForwardStatus::GpuAllocationFailed
-		                 : superslm::SslmForwardStatus::GpuOperationFailed;
+		record_contained_fault();
+	} catch (...) {
+		// 1.8.0 (TE-435): any other exception type -- a std::length_error, or a non-standard type,
+		// which the sub-chunk recording window's catch-all rethrows once it has closed the list.
+		// Contained as the std::runtime_error clause above: the fault is classified and recorded
+		// (length_error is an allocation failure, a non-standard type a non-allocation one), and the
+		// committed sub-chunks are copied back below. Before this clause it left the function with
+		// the fault unrecorded and the copy-back skipped.
+		std::fprintf(stderr,
+		             "gpu_1p0: SubmitAdmittedChunkForG5Bridge: an exception outside std::runtime_error "
+		             "escaped the batched-prefill submit/finish call, contained at the SslmGpuStatus "
+		             "boundary\n");
+		record_contained_fault();
 	}
 	// `submitted_window_guard`'s destructor closes the window here, unconditionally, on this
 	// normal-return path exactly as it would on an exception unwind -- `sslm_gpu_ready`'s own

@@ -10,7 +10,7 @@ but left the adopting sequence's per-site counts at their prior values, and `ssl
 `sslm_prefix_prefill` grew the total without filling the per-site counts. Diagnostic counters
 only: no token, status or saved-state byte changes.
 
-## [1.8.0] - 2026-09-24
+## [1.8.0] - 2026-09-25
 
 On the GPU, an allocation failure on a device that is not removed -- host memory (`std::bad_alloc`,
 `std::length_error`), or a D3D12 call returning `E_OUTOFMEMORY` on any heap, or the first-time setup
@@ -26,6 +26,12 @@ confirmed), a submission device that could not be set up for a reason other than
 before, a saturated context cap in a prefill; it never means memory ran out on a live device with
 the submission clean. The full contract is stated beside `SSLM_GPU_ALLOCATION_FAILED` in
 `gpu_1p0.h`.
+
+Every outermost `try` in the GPU backend now contains every exception type, and a CI gate
+(`tools/ci/check_gpu_catch_totality.py`) keeps it so. In 1.7.1 a non-standard exception type from a
+host allocation in a decode's finish left the sequence `Submitted` with its in-flight token freed:
+reset, release and model unmap refused it as busy, and the next `sslm_gpu_ready` on it read freed
+memory.
 
 Statuses change for the same fault: `SSLM_GPU_ALLOCATION_FAILED` replaces `SSLM_DEVICE_LOST` for
 memory exhaustion on a live device; a batch no longer marks its other sequences

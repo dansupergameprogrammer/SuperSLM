@@ -281,13 +281,19 @@ struct Device {
 	// cause, and `setup_failure` recording its kind: Allocation when a step failed with
 	// E_OUTOFMEMORY (D3D12CreateDevice on either adapter path included) or a host allocation
 	// failure, Other for every other cause.
+	//
+	// The kind is stored once, when this attempt has failed, and never cleared (1.8.0, TE-435).
+	// A reader that obtained this Device while it was unavailable and reads `setup_failure` while
+	// GetDevice() retries an Allocation failure sees Allocation, the prior attempt's kind, until
+	// the retry resolves -- never a transient None that its caller would report as the permanent
+	// cause. A successful attempt leaves it as it was: `available` is then true, and no reader
+	// consults `setup_failure` once it is.
 	void Init() noexcept {
-		setup_failure.store(SetupFailure::None);
 		try {
 			InitSteps();
 		} catch (...) {
 			const bool allocation = ClassifyInFlightException() == GpuFaultKind::Allocation;
-			setup_failure.store(allocation ? SetupFailure::Allocation : SetupFailure::Other);
+			const SetupFailure failure = allocation ? SetupFailure::Allocation : SetupFailure::Other;
 			try {
 				try {
 					throw;
@@ -297,8 +303,9 @@ struct Device {
 					init_error = "non-standard exception during device setup";
 				}
 			} catch (...) {
-				// Recording the message itself failed to allocate; the kind above is still recorded.
+				// Recording the message itself failed to allocate; the kind is still recorded below.
 			}
+			setup_failure.store(failure);
 			return;
 		}
 		if (!available.load()) {
@@ -309,7 +316,8 @@ struct Device {
 
 	// Releases everything a failed Init() left behind, so Init() can run again on this object
 	// (GetDevice() below, after an Allocation setup failure). Called only while `available` is
-	// false.
+	// false. `setup_failure` keeps the failed attempt's kind until the next Init() stores its own
+	// (see Init() above).
 	void ResetAfterFailedSetup() {
 		timestamp_readback.Reset();
 		timestamp_heap.Reset();
@@ -329,7 +337,6 @@ struct Device {
 		adapter.Reset();
 		init_error.clear();
 		create_device_out_of_memory_ = false;
-		setup_failure.store(SetupFailure::None);
 	}
 
 private:
@@ -948,18 +955,32 @@ inline Device& GetDevice() noexcept {
 // each site reports through `setup_failure`. Test builds (SUPERSLM_GPU_ALLOC_FAULT_INJECTION) can
 // make the next query report removed (ArmGpuMapDeviceRemovedQueryInjection, gpu_1p0.cpp), so every
 // site that classifies a fault can be driven to rule 1.
-inline bool DeviceReportedRemoved(Device& dev) {
+// Test builds only: consumes the single-shot removed-query seam, returning whether it was armed.
+inline bool ConsumeRemovedQuerySeam() {
 #if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
-	{
-		GpuTestSeamState& seam = TestSeamState();
-		std::lock_guard<std::mutex> lock(seam.mutex);
-		if (seam.map_removed_query) {
-			seam.map_removed_query = false;  // single-shot
-			return true;
-		}
+	GpuTestSeamState& seam = TestSeamState();
+	std::lock_guard<std::mutex> lock(seam.mutex);
+	if (seam.map_removed_query) {
+		seam.map_removed_query = false;  // single-shot
+		return true;
 	}
 #endif
+	return false;
+}
+
+inline bool DeviceReportedRemoved(Device& dev) {
+	if (ConsumeRemovedQuerySeam()) return true;
 	return dev.available.load() && dev.dev && dev.dev->GetDeviceRemovedReason() != S_OK;
+}
+
+// The rule-1 input for a Device whose own Init() has just failed, owned by the caller alone
+// (sslm_gpu_context_create's device, never the process's submission device): a setup step after
+// device creation can fail because the device was removed, and the ID3D12Device then exists while
+// `available` is false. Removed when the device object exists and reports a removal reason, or when
+// the test seam says so; a device that was never created is never read as removed.
+inline bool FailedSetupDeviceReportedRemoved(Device& dev) {
+	if (ConsumeRemovedQuerySeam()) return true;
+	return dev.dev && dev.dev->GetDeviceRemovedReason() != S_OK;
 }
 
 // The process's shader directory (GpuContextConfig::shader_dir, include/superslm/gpu_1p0.h).
