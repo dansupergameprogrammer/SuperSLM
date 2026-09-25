@@ -11,6 +11,8 @@ census (TE-424 P-1) -- not by this check's author:
   - TE-423 F-5: the two guard-refusal exclusion lists -- the final sub-chunk's in
     SubmitAdmittedChunkForG5Bridge, the non-final sub-chunks' in SubmitChunkToFullDepthForG5Bridge.
   - TE-424 P-1: RunLayerLoopGpuFinish's null-token return (a caller error returning a forward status).
+  - TE-431 S-1 (the code reviewer, at c3b5412): RunLayerLoopGpuFinish's ladder had no catch (...), so a
+    non-standard exception left the decode Submitted with its token freed; TE-435 added the clause (T16).
 Deleting any of them from the committed list must turn the check red, naming the site. Each member is
 selected by what it IS (its function, and its kind or statement shape), not by line or exact text, so
 the validation still finds it after the fix re-dispositions the site.
@@ -59,6 +61,8 @@ POPULATION = {
         lambda k, f, fn, t: k == "status" and fn.endswith("SubmitChunkToFullDepthForG5Bridge"),
     "TE-424 P-1 (RunLayerLoopGpuFinish's null-token return)":
         lambda k, f, fn, t: k == "status" and fn.endswith("RunLayerLoopGpuFinish") and re.fullmatch(r"return \w+", t),
+    "TE-431 S-1 (RunLayerLoopGpuFinish's catch (...), T16)":
+        lambda k, f, fn, t: k == "catch" and fn.endswith("RunLayerLoopGpuFinish") and t == "...",
 }
 
 

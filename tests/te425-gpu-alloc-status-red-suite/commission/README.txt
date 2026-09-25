@@ -11,12 +11,13 @@ authored here:
                  adversary's TE-419 leg B construction, every D3D12 allocation of an encode (here the
                  two-sub-chunk, 5-token encode) returning SSLM_DEVICE_LOST at v1.7.1.
   census check (tests/ci/check_gpu_status_site_census.py):
-    must-accept  the committed site list against the builder's current tip (042bd66, the TE-432 fix round).
-                 First commissioned against v1.7.1, then at dad862e, then at 042bd66; each time the test author
-                 re-listed the census (the graded seat never edits its grader).
-    must-reject  the list with TE-422 S-2's three sites, TE-423 F-5's two exclusion lists and TE-424 P-1's
-                 null-token return deleted (12 rows at dad862e and at 042bd66, 10 at v1.7.1), selected by the
-                 census test's POPULATION predicates.
+    must-accept  the committed site list against the builder's current tip (91779ad, the TE-435 fix round, git
+                 archive in D:\_artifacts\SuperSLM\TE425-SITE-CENSUS\src-91779ad). First commissioned against
+                 v1.7.1, then at dad862e, 042bd66 and 91779ad; each time the test author re-listed the census
+                 (the graded seat never edits its grader).
+    must-reject  the list with TE-422 S-2's three sites, TE-423 F-5's two exclusion lists, TE-424 P-1's
+                 null-token return and TE-431 S-1's finish catch-all deleted (14 rows at 91779ad; 12 at dad862e
+                 and 042bd66, 10 at v1.7.1), selected by the census test's POPULATION predicates.
   entry census (te425_cells.cpp r15zero):
     must-accept  the planner's disposition-3 entry points (Sec3.5 R15 item 3) at v1.7.1.
     must-reject  the planner's disposition-2 entry points (Sec3.5 R15 item 2), which allocate host memory.
@@ -44,3 +45,12 @@ build_red_suite.bat over D:\_te433\src-042bd66, src-mutT13, src-mutT15), the t27
                  fx_sweep_must_reject.bat <bin-c3b5412> <bin-v1.7.1> <qwen3>. Sites are named by --select,
                  not by number; both scripts take their build directories as arguments, and the registry
                  entry names them.
+  catch-totality gate (tools/ci/check_gpu_catch_totality.py, built by TE-435; constructions by TE-437):
+    must-accept  91779ad unmodified; 91779ad with its one nested catch (...) removed (exempt by the gate's own
+                 rule); 91779ad plus comments, literals, digit separators and a nested typed-only try.
+    must-reject  at 91779ad, each of the 18 catch (...) clauses closing an outermost try removed alone, each
+                 required to be named at exactly its own try; a typed-only try appended as a function, as a
+                 function-try-block and in a new file in a new subdirectory; a raw string literal and an empty
+                 src/gpu (exit 2); and c3b5412, the ten ladders TE-435 closed, named in exactly those functions.
+                 Driver: tests/ci/commission_gpu_catch_totality.py (expectations from the census lexer and a
+                 backward brace walk, not the gate's matcher); sources in D:\_artifacts\SuperSLM\TE437-CATCH-TOTALITY.
