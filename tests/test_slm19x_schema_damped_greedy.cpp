@@ -768,6 +768,13 @@ static void TestSlm19x_DampedGreedyAvailabilityFollowsTheArtifact() {
 	    {"DGC1 scale outside the i-exp domain",
 	     {RawSection(superslm::SslmSectionType::DampedGreedyConstants,
 	                 Dgc1Bytes(kConverterScaleM, -200))}},
+	    // (m=0, e=0) derives q = (0, 0, 0): IExpScaleConstants and the width check both accept it,
+	    // but no decode can use it (IExpConstruct refuses q_ln2 = 0). An out-of-domain DGC1 is a
+	    // defined rejection at read (damped_greedy_phaseD.cpp), which sslm_model_map reports as
+	    // SSLM_ARTIFACT_REJECTED -- never a model that advertises damped greedy and then refuses
+	    // every damped decode made with the params sslm_decode_params_init hands back.
+	    {"DGC1 scale whose derived constants no decode accepts (m=0, e=0)",
+	     {RawSection(superslm::SslmSectionType::DampedGreedyConstants, Dgc1Bytes(0, 0))}},
 	};
 	for (const Bad& b : bad) {
 		std::vector<uint8_t> bytes = BuildVariant(b.extra, superslm::kDampedGreedyArtifactConstantsFlag);
