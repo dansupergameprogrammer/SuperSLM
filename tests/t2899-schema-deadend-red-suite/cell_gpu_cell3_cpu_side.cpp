@@ -3,6 +3,7 @@
 // `using enum SslmGpuStatus` collision with sslm_abi.h's plain enum). ADOPTED VERBATIM from
 // `Claude/Vitruvius/t2897-probe/cell3_cpu_side.cpp` (T-2895/T-2897's own Cell 3 CPU half).
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -97,7 +98,9 @@ extern "C" void CpuPeekState(void* handle, int32_t* out_current_token, int64_t* 
 }
 
 // One sslm_decode_step call. Returns status, out token, resulting context_length, and a content
-// hash over the blob past its fixed header (offset 124 -- kv_sha8's own established technique).
+// hash over the blob past its fixed header (kv_sha8's own established technique). The fixed header
+// is the current save format's: 'SSB5' (1.9.0) ends at 156, after the four per-site saturation
+// counts at 124..155. A blob in any other format aborts, rather than hashing from a stale offset.
 extern "C" void CpuDecodeOnce(void* handle, int32_t* out_status, int32_t* out_token, int64_t* out_ctx,
                                 uint64_t* out_hash) {
 	sslm_seq s = static_cast<sslm_seq>(handle);
@@ -113,8 +116,14 @@ extern "C" void CpuDecodeOnce(void* handle, int32_t* out_status, int32_t* out_to
 	size_t nn = n;
 	sslm_seq_save(s, b.data(), &nn);
 	*out_ctx = static_cast<int64_t>(Le64(&b[60]));
+	constexpr size_t kFixedHeader = 156;
+	if (nn < kFixedHeader || std::memcmp(b.data(), "SSB5", 4) != 0) {
+		std::printf("FAIL cell_gpu_cell3_cpu_side: sslm_seq_save did not write an 'SSB5' blob\n");
+		std::fflush(stdout);
+		std::abort();
+	}
 	uint64_t h = 0;
-	for (size_t i = 124; i < nn; ++i) h = h * 1099511628211ull + b[i];
+	for (size_t i = kFixedHeader; i < nn; ++i) h = h * 1099511628211ull + b[i];
 	*out_hash = h;
 }
 

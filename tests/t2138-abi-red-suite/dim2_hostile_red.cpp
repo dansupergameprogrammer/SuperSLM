@@ -317,7 +317,8 @@ static void TestDim2_M8e_ConfigReservedNonzeroRejected(sslm_model model,
 // on the caller-supplied-params path (82 -- the last order carrying nonzero weight under the
 // shipped fixed-point recurrence). Before this fix it was bounded only by `> 0`; 83 is one past
 // the ceiling and must reject SSLM_INVALID_ARGUMENT rather than reach AntiLmCreate at all. A real
-// 'SSB4' blob (produced by this build's own sslm_seq_save) is mutated at exactly that one field --
+// current-format blob ('SSB5' since 1.9.0, produced by this build's own sslm_seq_save; the field
+// sits at 108 in 'SSB2' through 'SSB5' alike) is mutated at exactly that one field --
 // dim2's own established "otherwise-valid baseline, single hostile field" shape (M8a-M8e above),
 // applied to a restore blob instead of an sslm_config. ---
 static void TestDim2_M10_RestoreHostileAntiLmMaxOrderRejected(sslm_model model, sslm_kv_pool* pool) {
@@ -331,8 +332,9 @@ static void TestDim2_M10_RestoreHostileAntiLmMaxOrderRejected(sslm_model model, 
 
 	SeqBlobBuffer blob(model);
 	CHECK_MSG(sslm_seq_save(seq, blob.bytes.data(), &blob.size) == SSLM_OK,
-	          "M10: save a real 'SSB4' blob to mutate");
-	CHECK_MSG(blob.size >= 124, "M10: real blob at least covers the SSB4 fixed header");
+	          "M10: save a real current-format blob to mutate");
+	CHECK_MSG(blob.size >= 156 && std::memcmp(blob.bytes.data(), "SSB5", 4) == 0,
+	          "M10: the real blob is the current 'SSB5' format and covers its 156-byte fixed header");
 
 	// Baseline half: the real, unmutated blob restores clean (the otherwise-valid contrast this
 	// dim's own M8 cells establish -- proves the rejection below fires on the mutation, not on
