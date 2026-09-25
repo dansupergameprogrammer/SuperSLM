@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "superslm/artifact.h"
+#include "superslm/intmath.h"
 #include "superslm/layer_marshal.h"
 #include "superslm/sslm_abi.h"
 #include "sslm_fixtures.h"
@@ -786,6 +787,47 @@ static void TestSlm19x_DampedGreedyAvailabilityFollowsTheArtifact() {
 	}
 }
 
+// Caller-supplied scale constants that the softmax width check accepts but whose i-exp peak is
+// unusable are refused by decode itself with SSLM_INVALID_ARGUMENT, before any sequence is
+// touched: the out token is not written and the sequence then decodes exactly as a pristine twin.
+// (q_ln2 = 493, q_b = q_c = 0): M = 0 passes the width check, the i-exp construction succeeds, and
+// the peak evaluates to 0. (q_ln2 = q_b = q_c = 0): the construction refuses q_ln2 = 0. Each triple's
+// width acceptance is asserted first, so a pass cannot come from the earlier width refusal.
+static void TestSlm19x_DampedGreedyUnusableScaleConstantsAreRefusedAtDecode() {
+	Mapped m;
+	if (!m.Open(BuildFullVariant())) return;
+	sslm_seq twin = NewSeq(m);
+	sslm_seq seq = NewSeq(m);
+	if (!twin || !seq || !PromptPrefill(m, twin) || !PromptPrefill(m, seq)) return;
+	const sslm_decode_params good = DampedParams(65536, 2, 6);
+	const int64_t triples[2][3] = {{kConverterQLn2, 0, 0}, {0, 0, 0}};
+	for (const auto& q : triples) {
+		sslm_decode_params p = good;
+		p.q_ln2 = q[0];
+		p.q_b = q[1];
+		p.q_c = q[2];
+		CHECK_MSG(superslm::CheckSoftmaxRowWidthDomain(p.q_b, p.q_c, static_cast<size_t>(p.top_k)) ==
+		              superslm::SslmForwardStatus::Ok,
+		          "q = (%lld, %lld, %lld) is refused by the width check; the cell would not reach "
+		          "the peak check",
+		          static_cast<long long>(q[0]), static_cast<long long>(q[1]),
+		          static_cast<long long>(q[2]));
+		int32_t tok = -100;
+		const sslm_status st = sslm_decode_step_v2(m.model, &seq, 1, &p, nullptr, &tok);
+		CHECK_MSG(st == SSLM_INVALID_ARGUMENT, "q = (%lld, %lld, %lld): status %d",
+		          static_cast<long long>(q[0]), static_cast<long long>(q[1]),
+		          static_cast<long long>(q[2]), static_cast<int>(st));
+		CHECK_MSG(tok == -100, "q = (%lld, %lld, %lld): out token written (%d)",
+		          static_cast<long long>(q[0]), static_cast<long long>(q[1]),
+		          static_cast<long long>(q[2]), tok);
+	}
+	const std::vector<int32_t> a = DecodeN(m, seq, good, 3);
+	const std::vector<int32_t> b = DecodeN(m, twin, good, 3);
+	CHECK_MSG(a == b, "after peak refusals %s, pristine twin %s", Join(a).c_str(), Join(b).c_str());
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
+	CHECK(sslm_seq_release(twin) == SSLM_OK);
+}
+
 // Out-of-domain damped-greedy fields are refused with SSLM_INVALID_ARGUMENT and leave the sequence
 // exactly as it was: after every refusal it decodes the same token a pristine twin decodes. The
 // domain's inclusive edges are accepted. Greedy mode ignores the damped-only fields entirely.
@@ -1003,6 +1045,7 @@ void RunSlm19xSchemaDampedGreedyCells(int& checks, int& failures) {
 	TestSlm19x_MalformedSchemaSectionIsRefusedAtMap();
 	TestSlm19x_DampedGreedyAvailabilityFollowsTheArtifact();
 	TestSlm19x_DampedGreedyParamsOutsideTheirDomainAreRefusedHarmlessly();
+	TestSlm19x_DampedGreedyUnusableScaleConstantsAreRefusedAtDecode();
 	TestSlm19x_DampedGreedyAlphaZeroSelectsWhatGreedySelects();
 	TestSlm19x_DampedGreedyAntiLmStopsRepetition();
 	TestSlm19x_DampedGreedyTokensDoNotDependOnWorkspaceOrRun();

@@ -674,9 +674,10 @@ static void TestD2_TokenDigest_CoversDampedGreedyTokens() {
 	params.top_k = 6;
 	// FIXED 2026-08-20 (conductor's dispute-resolution commission, dispute 3): was
 	// `params.q_ln2 = 493;` alone, leaving q_b/q_c at their zero-init default. (q_b=0, q_c=0)
-	// derives M = q_b^2 + q_c = 0, which fails CheckSoftmaxRowWidthDomain's own M >= 1
-	// requirement, so every call below correctly REFUSED (SSLM_ARTIFACT_REJECTED, plan Sec7.5's
-	// own adopted policy) instead of running to completion -- a fixture defect, not a code
+	// derives M = q_b^2 + q_c = 0, which CheckSoftmaxRowWidthDomain ACCEPTS; the i-exp peak of
+	// (493, 0, 0) evaluates to 0, and decode's peak check (DampedGreedyPeakInDomain) refuses it
+	// with SSLM_INVALID_ARGUMENT (executed values in sslm_phaseD_fixture.h's header), so every
+	// call below was refused instead of running to completion -- a fixture defect, not a code
 	// defect (build log Sec4). Now derives the SAME real triple the sibling cell
 	// TestD2_DampedGreedyMode_ProducesPrimitiveExactOutputThroughDecodeStep already gets right,
 	// via the shared helper (sslm_phaseD_fixture.h).
