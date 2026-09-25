@@ -110,6 +110,7 @@ static void TestSlm18x_AdoptPrefixCarriesPerSiteSaturationCensus() {
 	if (!f.Open(/*block_count=*/2)) return;
 	sslm_prefix prefix = nullptr;
 	CHECK(sslm_prefix_begin(f.model, &f.pool, &prefix) == SSLM_OK);
+	if (!prefix) return;
 	const int32_t tokens[3] = {1, 2, 3};
 	int32_t consumed = 0;
 	CHECK(sslm_prefix_prefill(f.model, prefix, tokens, 3, 3, SSLM_SPAN_PROMPT, nullptr,
@@ -117,7 +118,10 @@ static void TestSlm18x_AdoptPrefixCarriesPerSiteSaturationCensus() {
 	CHECK(consumed == 3);
 	superslm::SequenceLayerState* ps = SslmPrefixLiveStateForTest(prefix);
 	CHECK(ps != nullptr);
-	if (!ps) return;
+	if (!ps) {
+		CHECK(sslm_prefix_release(prefix) == SSLM_OK);
+		return;
+	}
 	ps->kv_landing_saturation_count = 5;
 	ps->k_channel_landing_saturation_count = 7;
 	ps->rope_q_saturation_count = 11;
@@ -165,6 +169,7 @@ static void TestSlm18x_PrefillFillsPerSiteSaturationCensus() {
 
 	sslm_seq seq = nullptr;
 	CHECK(sslm_seq_create(f.model, &f.pool, &seq) == SSLM_OK);
+	if (!seq) return;
 	int32_t consumed = 0;
 	CHECK(sslm_prefill(f.model, seq, prompt.data(), n, n, SSLM_SPAN_PROMPT, nullptr, &consumed) ==
 	      SSLM_OK);

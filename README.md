@@ -14,7 +14,12 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.8.0**. On the GPU, running out of memory is reported as running out of
+Current release: **1.8.1**. On the CPU, the four per-site saturation counts now travel with the
+saturation total they sum through prefix adoption and prefill; 1.8.0 left them stale or unfilled on
+those two paths. Diagnostic counters only: no token, status, ABI surface, or save format changes. See
+the [1.8.1 release note](docs/releases/1.8.1.md).
+
+1.8.0: on the GPU, running out of memory is reported as running out of
 memory: an allocation failure on a device that is not removed -- host memory, or GPU memory on any
 heap -- returns `SSLM_GPU_ALLOCATION_FAILED`, leaves the process's command list closed, and leaves
 the context, the device and every other handle usable, so the call can simply be retried. 1.7.1

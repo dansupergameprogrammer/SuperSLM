@@ -4,6 +4,8 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-09-25
+
 On the CPU, the four per-site saturation counts (`kv_landing`, `k_channel_landing`, `rope_q`,
 `rope_k`) now travel with the saturation total they sum. `sslm_seq_adopt_prefix` copied the total
 but left the adopting sequence's per-site counts at their prior values, and `sslm_prefill` and
