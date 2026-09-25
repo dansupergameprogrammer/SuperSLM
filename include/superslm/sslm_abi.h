@@ -164,7 +164,7 @@ typedef struct sslm_detok_state {
      * (D-SLM4065) -- detected from fields the reader already parses (layer_index == 0 &&
      * context_length > 0 && saved_current_token == the blob's own "no pending embed"
      * sentinel), loud instead of silently restoring ready_for_logits=true over a zeroed
-     * residual. Never returned for the current 'SSB4' format, which serializes the
+     * residual. Never returned for 'SSB4' or the current 'SSB5' format, which serialize the
      * residual unconditionally and cannot lose it. Appended at the END of this list,
      * same additive-only discipline as SSLM_NUMERIC_STEP_REFUSED above. */ \
     X(SSLM_RESTORE_RESIDUAL_LOST) /* 27 */ \

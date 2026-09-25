@@ -81,10 +81,15 @@ SUPERSLM_API sslm_status sslm_seq_release(sslm_seq seq);
  * reserved for ABI stability but this verb no longer returns it. */
 SUPERSLM_API sslm_status sslm_seq_reset(sslm_seq seq);
 SUPERSLM_API sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix);
-/* Save emits the current SSB3 format. Restore accepts SSB3 and the shipped SSB2 predecessor;
- * SSB2's absent damped anti-LM state is restored as empty. `n` is buffer capacity and may exceed
- * the encoded blob size (including the normal sslm_seq_state_size allocation flow). Malformed
- * lengths, history longer than the blob's saved context, and unrecognized magic reject. */
+/* Save emits the current SSB5 format. Restore accepts SSB5 and the shipped SSB4, SSB3 and SSB2
+ * predecessors; SSB2's absent damped anti-LM state is restored as empty. SSB5 carries the
+ * sequence's saturation total and the four per-site saturation counts that sum to it
+ * (kv_landing, k_channel_landing, rope_q, rope_k). SSB4, SSB3 and SSB2 record only the total: a
+ * sequence restored from one has that total and per-site counts of 0, so its per-site counts do
+ * not sum to its total until it is reset. `n` is buffer capacity and may exceed the encoded blob
+ * size (including the normal sslm_seq_state_size allocation flow, which stays an upper bound on
+ * the SSB5 size). Malformed lengths, history longer than the blob's saved context, and
+ * unrecognized magic reject. */
 SUPERSLM_API sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n);
 SUPERSLM_API sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, const void* buf, size_t n,
                               sslm_seq* out);

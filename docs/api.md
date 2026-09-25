@@ -327,13 +327,18 @@ silently accepted.
   `sslm_seq_adopt_prefix` (attaches a frozen prefix, so its forward pass is
   never repeated per sequence), `sslm_seq_save` / `sslm_seq_restore`
   (serializes a sequence's full state — including its schema binding and
-  DFA walk state, see below — to a caller buffer and back). v1.2.1 writes
-  `SSB4` blobs: the residual is serialized unconditionally whenever
+  DFA walk state, see below — to a caller buffer and back). v1.9.0 writes
+  `SSB5` blobs: the `SSB4` layout plus the four per-site saturation counts
+  (K/V landing, K channel landing, RoPE Q, RoPE K) that the sequence's
+  saturation total sums, so a restored sequence keeps its per-site counts.
+  `SSB4` (v1.2.1 to v1.8.1) serializes the residual unconditionally whenever
   `hidden_size > 0` (a ready-for-logits sequence, `layer_index == 0`, carries
   a real residual and is no longer saved with it silently dropped — the fixed
-  1.2.0 defect), and an explicit `ready_for_logits` field is carried in the
-  header rather than inferred on restore. Restore continues to accept shipped
-  `SSB3` (v1.2.0) and `SSB2` blobs read-only; a legacy `SSB3` blob resting at
+  1.2.0 defect), and carries an explicit `ready_for_logits` field in the
+  header rather than inferring it on restore; `SSB5` keeps both. Restore
+  accepts shipped `SSB4`, `SSB3` (v1.2.0) and `SSB2` blobs read-only. Those
+  record only the saturation total, so a sequence restored from one has its
+  saved total and per-site counts of 0 until it is reset. A legacy `SSB3` blob resting at
   the one state the 1.2.0 defect could produce is rejected with
   `SSLM_RESTORE_RESIDUAL_LOST` rather than silently restored wrong. Restore
   accepts a buffer whose size is at
