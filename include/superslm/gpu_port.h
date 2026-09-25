@@ -380,7 +380,7 @@ enum class GpuLayerLoopGuard : int {
 // Every return path that resolves the call BEFORE that decision runs reads false, by
 // construction (the function-entry reset, never overwritten on that path): the nine-guard
 // ladder, the two device-capability rejections, and every return inside the recording window's
-// own catch, thirty-one paths in all -- T-2568 added one new catch clause to each of
+// own catch, thirty-three paths in all -- T-2568 added one new catch clause to each of
 // RunLayerLoopGpuSubmit and SubmitOneSubChunkToFullDepthForG5Bridge
 // (GpuLayerWeightsContractError's own, PackLayerWeightsBytes' required-pointer refusal), two more
 // than the twenty-five this paragraph named before; T-2577 (D-SLM6279, GpuShaderBinaryStaleError's
@@ -388,11 +388,12 @@ enum class GpuLayerLoopGuard : int {
 // functions, two more again, for twenty-nine; SuperSLM 1.8.0 (TE-426) gave each recording window
 // std::bad_alloc, std::length_error and catch-all clauses (three more returns per function) and
 // reduced each submission tail's two clauses to one classified return apiece (two fewer), one more
-// per function. Every path that resolves the call AFTER the
+// per function, for thirty-one; TE-432 gave each submission tail a catch-all clause, one more
+// return per function, for thirty-three. Every path that resolves the call AFTER the
 // decision reads exactly what the decision decided (true on a cache hit, false on a miss),
 // whether the call's own final status is Ok or one of DecodeStickyTag's fifteen rejecting
-// statuses, including ResidualReconciliationScaleOutOfDomain -- the thirty-one before them,
-// alike, thirty-seven paths' own destination in total.
+// statuses, including ResidualReconciliationScaleOutOfDomain -- the thirty-three before them,
+// alike, thirty-nine paths' own destination in total.
 //
 // Both counts are derived structurally from source, not restated by hand, by
 // tests/ci/check_gpu_guard_status_parity.py (derive_lwuws_before_decision_count/
