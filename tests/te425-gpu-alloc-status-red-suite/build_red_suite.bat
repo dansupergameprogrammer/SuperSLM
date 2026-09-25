@@ -32,6 +32,9 @@ rem R13 is red at v1.7.1 by EXIT STATUS, not by compile: it must build at both v
 rem TE-433: the submission-tail catch-all pin, its own binary so that it can replace operator new and
 rem hook ExecuteCommandLists without changing te425_cells.cpp.
 %CXX% /I"%TREE%\include" /Fo"%OUT%\te433_tail_pin.obj" /Fe"%OUT%\te433_tail_pin.exe" "%HERE%te433_tail_pin.cpp" %LIBS% >"%OUT%\te433_tail_pin.build.txt" 2>&1 || (type "%OUT%\te433_tail_pin.build.txt" & set BAD=1)
+rem TE-436: the foreign-exception sweep over every host-allocation site of every submitting route, its
+rem own binary for the same reason as TE-433's.
+%CXX% /I"%TREE%\include" /Fo"%OUT%\te436_foreign_sweep.obj" /Fe"%OUT%\te436_foreign_sweep.exe" "%HERE%te436_foreign_sweep.cpp" %LIBS% >"%OUT%\te436_foreign_sweep.build.txt" 2>&1 || (type "%OUT%\te436_foreign_sweep.build.txt" & set BAD=1)
 set T2956=%HERE%..\t2956-token-finish-red-suite
 %CXX% /DT2956_CANDIDATE /I"%TREE%\include" /Fo"%OUT%\cell_alloc_faults.obj" /Fe"%OUT%\cell_alloc_faults.exe" "%T2956%\cell_alloc_faults.cpp" %LIBS% >"%OUT%\cell_alloc_faults.build.txt" 2>&1 || (type "%OUT%\cell_alloc_faults.build.txt" & set BAD=1)
 if "%BAD%"=="0" echo BUILT %OUT%
