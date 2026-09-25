@@ -7,6 +7,9 @@
 # the fix added or rewrote is annotated from Sec3.2/Sec3.3 and that tip read as source.
 # Re-listed by the test author at the TE-432 fix round (042bd66): 54 catch clauses and 23 status sites; each
 # submission tail's new final catch (...) (T13, T15) joins its window's catch-all row, count 2.
+# Re-listed by the test author at the TE-435 fix round (91779ad): 64 catch clauses and 23 status sites; every
+# outermost try now ends in catch (...) (tools/ci/check_gpu_catch_totality.py), so each of the ten new clauses
+# joins its function's ... row: T1, T2, T3, T4, T5, T7, T8, T9, T10, T16.
 # A site the fix adds, removes or rewrites is re-listed here with its disposition in the same change.
 # Tab-separated: kind file function count block disposition token
 catch	src/gpu/d3d12_harness.h	ClassifyInFlightException	1	E-2	classifier input: kind Other, every other type standard or not; rule 3 unless rule 0 or 1	...
@@ -16,6 +19,7 @@ catch	src/gpu/d3d12_harness.h	ClassifyInFlightException	1	E-2	classifier input: 
 catch	src/gpu/d3d12_harness.h	ClassifyInFlightException	1	E-2	classifier input: kind Allocation, rule 2 unless rule 0 or 1	std::length_error
 catch	src/gpu/d3d12_harness.h	Device::Init	3	T6,T17	E-1/E-7: Init never throws; outer clause records SetupFailure Allocation (ClassifyInFlightException) or Other; the two nested clauses only record init_error and swallow a failure to allocate it	...
 catch	src/gpu/d3d12_harness.h	Device::Init	1	T6,T17	E-7: records init_error from what(); the SetupFailure kind is already recorded by the outer clause	std::exception
+catch	src/gpu/gpu_1p0.cpp	CreateDeviceLogitsBuffers	1	T1	TE-435 final clause: ClassifyHandleFault(&dev) as the std::exception clause; a non-std type is kind Other, rule 1 if the device reports removed, else rule 3, SSLM_DEVICE_LOST either way; ladder total (check_gpu_catch_totality)	...
 catch	src/gpu/gpu_1p0.cpp	CreateDeviceLogitsBuffers	1	T1	classifier (rules 0-3); phase B Close via CloseListConfirmed, Signal via ExecuteSignalAndWait give the stranded input; phase-A TryMakeBuffer rule stays; logic_error is T1b (stale shader), unchanged	std::bad_alloc
 catch	src/gpu/gpu_1p0.cpp	CreateDeviceLogitsBuffers	1	T1	classifier (rules 0-3); phase B Close via CloseListConfirmed, Signal via ExecuteSignalAndWait give the stranded input; phase-A TryMakeBuffer rule stays; logic_error is T1b (stale shader), unchanged	std::exception
 catch	src/gpu/gpu_1p0.cpp	CreateDeviceLogitsBuffers	1	T1	classifier (rules 0-3); phase B Close via CloseListConfirmed, Signal via ExecuteSignalAndWait give the stranded input; phase-A TryMakeBuffer rule stays; logic_error is T1b (stale shader), unchanged	std::logic_error
@@ -24,18 +28,25 @@ catch	src/gpu/gpu_1p0.cpp	InvokeGpuApiBoundary	1	T11	gains a GpuAllocationError 
 catch	src/gpu/gpu_1p0.cpp	InvokeGpuApiBoundary	1	T11	gains a GpuAllocationError clause ahead of std::exception -> SSLM_GPU_ALLOCATION_FAILED; bad_alloc/length_error -> SSLM_GPU_ALLOCATION_FAILED; std::exception and ... -> SSLM_DEVICE_LOST	std::exception
 catch	src/gpu/gpu_1p0.cpp	InvokeGpuApiBoundary	1	T11	gains a GpuAllocationError clause ahead of std::exception -> SSLM_GPU_ALLOCATION_FAILED; bad_alloc/length_error -> SSLM_GPU_ALLOCATION_FAILED; std::exception and ... -> SSLM_DEVICE_LOST	std::length_error
 catch	src/gpu/gpu_1p0.cpp	InvokeGpuApiBoundary	1	T11	new clause ahead of std::exception: E_OUTOFMEMORY -> SSLM_GPU_ALLOCATION_FAILED (TE-422 S-2 site 1)	superslm_gpu::harness::GpuAllocationError
+catch	src/gpu/gpu_1p0.cpp	RunDeviceLogits	1	T2	TE-435 final clause: ClassifyHandleFault(&dev) as T1's; a non-std type is SSLM_DEVICE_LOST	...
 catch	src/gpu/gpu_1p0.cpp	RunDeviceLogits	1	T2	classifier (TE-422 S-2 site 3); Reset and Close are E-1 sites; FinishToken returns its status as given	std::bad_alloc
 catch	src/gpu/gpu_1p0.cpp	RunDeviceLogits	1	T2	classifier (TE-422 S-2 site 3); Reset and Close are E-1 sites; FinishToken returns its status as given	std::exception
+catch	src/gpu/gpu_1p0.cpp	SubmitAdmittedChunkForG5Bridge	1	T10	TE-435 final clause: record_contained_fault as the runtime_error clause (in_flight cleared, out_fault classified: length_error rule 2 GpuAllocationFailed, a non-std type GpuOperationFailed), then falls through to the copy-back of committed sub-chunks; catches the sub-chunk window's catch-all rethrow	...
 catch	src/gpu/gpu_1p0.cpp	SubmitAdmittedChunkForG5Bridge	1	T10	runtime_error clause records a classified fault in out_fault (TE-422 S-2 site 2); bad_alloc clause stays (the 60 non-window escapes)	std::bad_alloc
 catch	src/gpu/gpu_1p0.cpp	SubmitAdmittedChunkForG5Bridge	1	T10	runtime_error clause records a classified fault in out_fault (TE-422 S-2 site 2); bad_alloc clause stays (the 60 non-window escapes)	std::runtime_error
+catch	src/gpu/gpu_1p0.cpp	sslm_gpu_adapter_mapImpl	1	T5	TE-435 final clause: ClassifyHandleFault(&ctx->device) as the std::exception clause; a non-std type is SSLM_DEVICE_LOST	...
 catch	src/gpu/gpu_1p0.cpp	sslm_gpu_adapter_mapImpl	1	T5	classifier; UploadResidentBufferSyncTo Close via CloseListConfirmed, unretried Signal is rule 0	std::bad_alloc
 catch	src/gpu/gpu_1p0.cpp	sslm_gpu_adapter_mapImpl	1	T5	classifier; UploadResidentBufferSyncTo Close via CloseListConfirmed, unretried Signal is rule 0	std::exception
+catch	src/gpu/gpu_1p0.cpp	sslm_gpu_model_mapImpl	2	T3,T4	TE-435 final clauses: T3 ClassifyHandleFault(nullptr), host step; T4 ClassifyHandleFault(&ctx->device); a non-std type is SSLM_DEVICE_LOST at both	...
 catch	src/gpu/gpu_1p0.cpp	sslm_gpu_model_mapImpl	2	T3,T4	T3 PackLayerWeightsBytes: rule 2 for length_error, rule 3 for the layer-weights contract error; T4 uploads: classifier, Close via CloseListConfirmed, unretried Signal rule 0	std::bad_alloc
 catch	src/gpu/gpu_1p0.cpp	sslm_gpu_model_mapImpl	2	T3,T4	T3 PackLayerWeightsBytes: rule 2 for length_error, rule 3 for the layer-weights contract error; T4 uploads: classifier, Close via CloseListConfirmed, unretried Signal rule 0	std::exception
+catch	src/gpu/gpu_1p0.cpp	sslm_gpu_seq_createImpl	1	T7	TE-435 final clause: ClassifyHandleFault(&ctx->device) as T4; a non-std type is SSLM_DEVICE_LOST	...
 catch	src/gpu/gpu_1p0.cpp	sslm_gpu_seq_createImpl	1	T7	classifier as T4	std::bad_alloc
 catch	src/gpu/gpu_1p0.cpp	sslm_gpu_seq_createImpl	1	T7	classifier as T4	std::exception
+catch	src/gpu/gpu_1p0.cpp	sslm_gpu_seq_restoreImpl	2	T8,T9	TE-435 final clauses: classify (T8 against GetDevice(), T9 against ctx->device), then sslm_gpu_seq_release(fresh) as the typed clauses, so the context and model live counts return; a non-std type is SSLM_DEVICE_LOST	...
 catch	src/gpu/gpu_1p0.cpp	sslm_gpu_seq_restoreImpl	2	T8,T9	T8 process-device round-trip: classifier plus E-7 not-set-up branch, Close via CloseListConfirmed, unretried Signal rule 0; T9 upload as T4	std::bad_alloc
 catch	src/gpu/gpu_1p0.cpp	sslm_gpu_seq_restoreImpl	2	T8,T9	T8 process-device round-trip: classifier plus E-7 not-set-up branch, Close via CloseListConfirmed, unretried Signal rule 0; T9 upload as T4	std::exception
+catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuFinish	1	T16	TE-435 final clause (review S-1): *out_ready = 1 then ClassifyForwardFault(dev, false) as the std::exception clause; a non-std type is rule 3 GpuOperationFailed (rule 1 if removed), the token consumed, so sslm_gpu_ready returns the handle to Idle	...
 catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuFinish	1	T16	classifier: failed SetEventOnCompletion rule 0; readback Map rule 2 or 3 by HRESULT; host allocation rule 2	std::exception
 catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuSubmit	2	T12,T13	T12 final window clause: AbandonRecording; unconfirmed Close returns GpuDeviceRemoved (rule 0), else rethrow to the boundary (allocation type -> ALLOCATION_FAILED, foreign -> DEVICE_LOST); T13 final tail clause (TE-432): SubmissionTailFaultStatus as the tail's other clauses -- the list is closed or the submission waited out before the stack releases its buffers (unconfirmed wait or Signal is rule 0), then the kind decides (length_error rule 2, a foreign type rule 3); pinned by te433_tail_pin	...
 catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuSubmit	1	T12,T13	E-4 AbandonRecording in every clause, new bad_alloc/length_error clauses and a final catch(...); named types keep their status after rules 0 and 1; tail Close via CloseListConfirmed, Signal rule per E-1	GpuGemmGroupArithmeticError

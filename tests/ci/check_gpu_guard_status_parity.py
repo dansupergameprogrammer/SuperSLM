@@ -1369,7 +1369,11 @@ _NUMBER_WORD_TENS = {
     80: "eighty", 90: "ninety",
 }
 _ONES_WORDS_BY_VALUE = {v: k for k, v in _NUMBER_WORDS.items() if 1 <= v <= 9}
+# TE-437: the round tens themselves ("thirty" .. "ninety") -- the loop below named only the
+# hyphenated compounds, so a count landing on a multiple of ten above twenty (TE-435's "forty")
+# raised as an unrecognized word. Pinned by test_every_number_word_zero_to_ninety_nine_parses.
 for _tens_value, _tens_word in _NUMBER_WORD_TENS.items():
+    _NUMBER_WORDS[_tens_word] = _tens_value
     for _ones_value, _ones_word in _ONES_WORDS_BY_VALUE.items():
         _NUMBER_WORDS[f"{_tens_word}-{_ones_word}"] = _tens_value + _ones_value
 del _tens_value, _tens_word, _ones_value, _ones_word, _ONES_WORDS_BY_VALUE
