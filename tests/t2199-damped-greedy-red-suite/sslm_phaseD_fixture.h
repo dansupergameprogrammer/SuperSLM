@@ -4,8 +4,11 @@
 // commission, dispute 3): three cells (TestD2_TokenDigest_CoversDampedGreedyTokens,
 // phaseD2_wiring_red.cpp; the sole cell in phaseD2a_cost_ratio_red.cpp; the sole cell in
 // phaseD3_teardown_red.cpp) each set params.q_ln2 = 493 alone and left q_b/q_c at their
-// zero-init default -- (q_b=0, q_c=0) derives M = q_b^2 + q_c = 0, which fails
-// CheckSoftmaxRowWidthDomain's own M >= 1 requirement, so every one of those cells' own
+// zero-init default -- (q_b=0, q_c=0) derives M = q_b^2 + q_c = 0. CheckSoftmaxRowWidthDomain
+// ACCEPTS M = 0 (executed: CheckSoftmaxRowWidthDomain(0, 0, width) == Ok at width 6 and 151936),
+// and IExpConstruct(0, 493, 0, 0) is kOk too; what refuses is the i-exp peak, which evaluates to
+// 0 and fails the peak >= 1 requirement (sslm_decode_stepImpl's peak check, and
+// TopKRenormalizeQ15's own peak_usable). So every one of those cells' own
 // sslm_decode_step_damped_greedy calls correctly REFUSED (matching plan Sec7.5's own adopted
 // policy) rather than running to completion -- a fixture defect, not a code defect, per the
 // builder's own build log (Claude/Brunel/t2199-phaseD-build-2026-08-20.md Sec4). The ONE
