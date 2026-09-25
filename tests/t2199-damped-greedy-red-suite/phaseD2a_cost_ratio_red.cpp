@@ -154,7 +154,8 @@ static void TestD2a_TopKRenormalizeQ15CostRatio_WithinFivePercentOfRealForwardCo
 	params.top_k = 6;
 	// FIXED 2026-08-20 (conductor's dispute-resolution commission, dispute 3): derives the real
 	// (q_ln2, q_b, q_c) triple instead of leaving q_b/q_c at their zero-init default, which made
-	// every call refuse (SSLM_ARTIFACT_REJECTED) before the timed/concurrent work ever ran.
+	// every call refuse (decode's i-exp peak check, SSLM_INVALID_ARGUMENT) before the
+	// timed/concurrent work ever ran.
 	CHECK(t2199phaseD::DeriveDefaultScaleConstants(&params.q_ln2, &params.q_b, &params.q_c));
 	sslm_seq batch[1] = {seq};
 	double total_forward_ns = 0.0;

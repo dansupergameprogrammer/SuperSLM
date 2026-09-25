@@ -135,9 +135,10 @@ static void TestD3_TeardownDuringFlight_ConcurrentReleaseDoesNotCorruptSurvivor(
 	// FIXED 2026-08-20 (conductor's dispute-resolution commission, dispute 3): derived ONCE,
 	// outside the trial loop -- the same real (q_ln2, q_b, q_c) triple every trial reuses.
 	// Previously `params.q_ln2 = 493;` alone (q_b/q_c left at zero-init) made every one of the
-	// 200 batched calls correctly REFUSE (SSLM_ARTIFACT_REJECTED) before the concurrency-safety
-	// machinery this cell exists to exercise ever ran to completion -- a fixture defect, not a
-	// code defect (build log Sec4); the concurrency-safety PRIMARY assertion (no crash across
+	// 200 batched calls correctly REFUSE (decode's i-exp peak check, SSLM_INVALID_ARGUMENT) before
+	// the concurrency-safety machinery this cell exists to exercise ever ran to completion -- a
+	// fixture defect, not a code defect (build log Sec4); the concurrency-safety PRIMARY
+	// assertion (no crash across
 	// 200 racing trials) held regardless, since it never depended on the calls succeeding.
 	int64_t shared_q_ln2 = 0, shared_q_b = 0, shared_q_c = 0;
 	CHECK(t2199phaseD::DeriveDefaultScaleConstants(&shared_q_ln2, &shared_q_b, &shared_q_c));
