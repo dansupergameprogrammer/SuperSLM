@@ -90,7 +90,8 @@ else()
 	target_compile_options(superslm_test_injection PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 
-add_executable(superslm_tests tests/test_main.cpp tests/test_slm18x_saturation_census.cpp)
+add_executable(superslm_tests tests/test_main.cpp tests/test_slm18x_saturation_census.cpp
+	tests/test_slm19x_schema_damped_greedy.cpp)
 target_link_libraries(superslm_tests PRIVATE superslm_test_injection)
 if(MSVC)
 	target_compile_options(superslm_tests PRIVATE /W4 /fp:precise)
@@ -341,7 +342,7 @@ foreach(_sslm_tier SSE2 AVX2 AVX512)
 	# to any target linking that library, which satisfies this without a second
 	# target_compile_definitions call.
 	add_executable(superslm_tests_${_sslm_tier_lower}_forced EXCLUDE_FROM_ALL tests/test_main.cpp
-		tests/test_slm18x_saturation_census.cpp)
+		tests/test_slm18x_saturation_census.cpp tests/test_slm19x_schema_damped_greedy.cpp)
 	target_link_libraries(superslm_tests_${_sslm_tier_lower}_forced PRIVATE superslm_${_sslm_tier_lower}_forced)
 	target_include_directories(superslm_tests_${_sslm_tier_lower}_forced PRIVATE tests)
 	if(MSVC)
