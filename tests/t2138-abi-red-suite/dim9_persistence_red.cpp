@@ -107,6 +107,14 @@ inline uint64_t T2260ReadLE64(const uint8_t* p) {
 	for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(p[i]) << (8 * i);
 	return v;
 }
+// The format sslm_seq_save writes, 'SSB5' (1.9.0): 'SSB4''s layout -- the [4, 120) prefix shared
+// with 'SSB3', ready_for_logits at 120 -- plus the four per-site saturation counts, LE64 at
+// 124/132/140/148, so the fixed header ends and the residual starts at 156. The legacy blobs
+// below are built from a real current blob, so every cell first confirms it holds one.
+constexpr size_t kCurrentSeqBlobFixedHeader = 156;
+inline bool IsCurrentSeqBlob(const uint8_t* p, size_t n) {
+	return n >= kCurrentSeqBlobFixedHeader && std::memcmp(p, "SSB5", 4) == 0;
+}
 }  // namespace
 
 // --- R1 (D-SLM4065's own defect, reproduced end to end): save a sequence resting at
@@ -178,9 +186,9 @@ static void TestT2260_R1_ReadyForLogitsSaveRestoreMatchesLiveContinuation(sslm_m
 // --- R2 (plan Sec6 safety net): a legacy-'SSB3'-shaped blob in the one unrecoverable state
 // (fresh-post-prefill/adopt, current_token == the "no pending embed" sentinel) must be rejected
 // loudly (SSLM_RESTORE_RESIDUAL_LOST) rather than silently restored. Constructed by hand from a
-// REAL 'SSB4' blob (produced by this build's own sslm_seq_save): the fixed-header bytes at
-// offset [4, 120) are BYTE-IDENTICAL between 'SSB4' and 'SSB3' by this fold's own design (only
-// the magic and the trailing ready_for_logits field differ) -- so the legacy blob is magic
+// REAL current-format ('SSB5') blob (produced by this build's own sslm_seq_save): the
+// fixed-header bytes at offset [4, 120) are BYTE-IDENTICAL between 'SSB5'/'SSB4' and 'SSB3' (only
+// the magic and the trailing ready_for_logits and per-site fields differ) -- so the legacy blob is magic
 // 'SSB3' + those 116 bytes verbatim + (no ready_for_logits field, no residual bytes -- the
 // pre-fix save path wrote zero residual bytes for exactly this state, which is the defect) +
 // the real anti-LM history / kv_block_count / kv_blocks tail, copied verbatim from the real
@@ -197,12 +205,13 @@ static void TestT2260_R2_LegacySsb3AffectedStateRejectedLoudly(sslm_model model,
 
 	SeqBlobBuffer real_blob(model);
 	CHECK_MSG(sslm_seq_save(seq, real_blob.bytes.data(), &real_blob.size) == SSLM_OK,
-	          "T2260-R2: save the real 'SSB4' blob to transform");
-	CHECK_MSG(real_blob.size >= 124, "T2260-R2: real blob at least covers the SSB4 fixed header");
+	          "T2260-R2: save the real current-format blob to transform");
+	CHECK_MSG(IsCurrentSeqBlob(real_blob.bytes.data(), real_blob.size),
+	          "T2260-R2: the real blob is the current 'SSB5' format and covers its fixed header");
 
 	const uint8_t* real = real_blob.bytes.data();
 	// Confirm this fixture actually reached the state R2 needs -- current_token's own sentinel
-	// (-1) at its shared offset (72, identical in SSB3/SSB4), and layer_index == 0 (offset 68).
+	// (-1) at its shared offset (72, identical in SSB3/SSB4/SSB5), and layer_index == 0 (offset 68).
 	const uint32_t layer_index = T2260ReadLE32(real + 68);
 	const int32_t current_token = static_cast<int32_t>(T2260ReadLE32(real + 72));
 	CHECK_MSG(layer_index == 0 && current_token == -1,
@@ -213,20 +222,20 @@ static void TestT2260_R2_LegacySsb3AffectedStateRejectedLoudly(sslm_model model,
 	const uint64_t anti_lm_history_count = T2260ReadLE64(real + 112);
 	const size_t anti_lm_history_bytes = static_cast<size_t>(anti_lm_history_count) * 4;
 	const size_t block_size = sslm_kv_block_size(model);
-	// real_blob layout: [124 fixed header][residual][anti_lm history][4 kv_block_count][kv_blocks]
-	CHECK_MSG(real_blob.size >= 124 + anti_lm_history_bytes + 4 + block_size,
+	// real_blob layout: [156 fixed header][residual][anti_lm history][4 kv_block_count][kv_blocks]
+	CHECK_MSG(real_blob.size >= kCurrentSeqBlobFixedHeader + anti_lm_history_bytes + 4 + block_size,
 	          "T2260-R2: real blob large enough to locate its own tail sections");
 	const size_t tail_offset = real_blob.size - anti_lm_history_bytes - 4 - block_size;
-	CHECK_MSG(tail_offset >= 124, "T2260-R2: derived residual region is non-negative");
+	CHECK_MSG(tail_offset >= kCurrentSeqBlobFixedHeader, "T2260-R2: derived residual region is non-negative");
 
 	std::vector<uint8_t> legacy;
 	legacy.push_back('S');
 	legacy.push_back('S');
 	legacy.push_back('B');
 	legacy.push_back('3');
-	// Fixed-header bytes [4, 120) -- byte-identical layout between 'SSB3' and 'SSB4'.
+	// Fixed-header bytes [4, 120) -- byte-identical layout between 'SSB3' and 'SSB5'/'SSB4'.
 	legacy.insert(legacy.end(), real + 4, real + 120);
-	// NO ready_for_logits field (that is the 'SSB4'-only addition), NO residual bytes (the
+	// NO ready_for_logits or per-site fields ('SSB4'/'SSB5' additions), NO residual bytes (the
 	// pre-fix 'SSB3' save path wrote zero for this exact state -- the defect this cell proves is
 	// now caught). Anti-LM history + kv_block_count + kv_blocks, copied verbatim.
 	legacy.insert(legacy.end(), real + tail_offset, real + real_blob.size);
@@ -244,9 +253,9 @@ static void TestT2260_R2_LegacySsb3AffectedStateRejectedLoudly(sslm_model model,
 
 // --- R4 (T-2243 review finding 4, D-SLM4114): the SAME affected state R2 proves for 'SSB3' is
 // rejected loudly for legacy 'SSB2' too -- the safety net's scope extension this fold rules.
-// Constructed the same way R2's 'SSB3' blob is (from a real 'SSB4' blob's own shared-layout
+// Constructed the same way R2's 'SSB3' blob is (from a real 'SSB5' blob's own shared-layout
 // header bytes), except 'SSB2' has NO anti_lm_order/anti_lm_history_count/ready_for_logits
-// fields at all (its own 108-byte fixed header, vs 'SSB3'/'SSB4''s 116/120): the legacy blob is
+// fields at all (its own 108-byte fixed header, vs 'SSB3''s 120): the legacy blob is
 // magic 'SSB2' + the shared 104-byte header prefix [4, 108) + (no residual bytes -- the pre-fix
 // predicate wrote zero for this exact state under 'SSB2' too, the identical defect R2 proves for
 // 'SSB3') + the real kv_block_count/kv_blocks tail, copied verbatim. ---
@@ -262,12 +271,13 @@ static void TestT2243F4_R4_LegacySsb2AffectedStateRejectedLoudly(sslm_model mode
 
 	SeqBlobBuffer real_blob(model);
 	CHECK_MSG(sslm_seq_save(seq, real_blob.bytes.data(), &real_blob.size) == SSLM_OK,
-	          "T2243F4-R4: save the real 'SSB4' blob to transform");
-	CHECK_MSG(real_blob.size >= 124, "T2243F4-R4: real blob at least covers the SSB4 fixed header");
+	          "T2243F4-R4: save the real current-format blob to transform");
+	CHECK_MSG(IsCurrentSeqBlob(real_blob.bytes.data(), real_blob.size),
+	          "T2243F4-R4: the real blob is the current 'SSB5' format and covers its fixed header");
 
 	const uint8_t* real = real_blob.bytes.data();
 	// Same setup precondition R2 checks: rest at ready-for-logits (layer_index == 0, current_token
-	// == the "no pending embed" sentinel) -- the offsets are shared between 'SSB2'/'SSB3'/'SSB4'.
+	// == the "no pending embed" sentinel) -- the offsets are shared between 'SSB2'/'SSB3'/'SSB4'/'SSB5'.
 	const uint32_t layer_index = T2260ReadLE32(real + 68);
 	const int32_t current_token = static_cast<int32_t>(T2260ReadLE32(real + 72));
 	CHECK_MSG(layer_index == 0 && current_token == -1,
@@ -280,10 +290,10 @@ static void TestT2243F4_R4_LegacySsb2AffectedStateRejectedLoudly(sslm_model mode
 	          "T2243F4-R4: this fixture uses no damped-greedy state -- the 'SSB2' construction "
 	          "below assumes zero anti-LM history to drop");
 	const size_t block_size = sslm_kv_block_size(model);
-	// real_blob layout: [124 fixed header][residual (zero bytes here, the defect)][4
+	// real_blob layout: [156 fixed header][residual][4
 	// kv_block_count][kv_blocks]. No anti-LM history bytes to skip (checked above), so the tail
 	// starts 4 + block_size before the end, same derivation R3's SSB2 construction uses.
-	CHECK_MSG(real_blob.size >= 124 + 4 + block_size,
+	CHECK_MSG(real_blob.size >= kCurrentSeqBlobFixedHeader + 4 + block_size,
 	          "T2243F4-R4: real blob large enough to locate its own tail sections");
 	const size_t tail_offset = real_blob.size - 4 - block_size;
 	CHECK_MSG(tail_offset >= 108, "T2243F4-R4: derived tail region is non-negative");
@@ -293,7 +303,7 @@ static void TestT2243F4_R4_LegacySsb2AffectedStateRejectedLoudly(sslm_model mode
 	legacy.push_back('S');
 	legacy.push_back('B');
 	legacy.push_back('2');
-	// 'SSB2' shared 104-byte header prefix [4, 108) -- identical layout to 'SSB3'/'SSB4' for
+	// 'SSB2' shared 104-byte header prefix [4, 108) -- identical layout to 'SSB3'/'SSB4'/'SSB5' for
 	// every field 'SSB2' also carries. NO anti_lm/ready_for_logits fields, NO residual bytes.
 	legacy.insert(legacy.end(), real + 4, real + 108);
 	legacy.insert(legacy.end(), real + tail_offset, real + real_blob.size);
@@ -309,9 +319,10 @@ static void TestT2243F4_R4_LegacySsb2AffectedStateRejectedLoudly(sslm_model mode
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
 
-// --- R3 (round-trip regression): 'SSB4' save/restore still works at a mid-token state and at a
-// genuinely fresh/empty state; a real legacy 'SSB2'-shaped blob (hand-constructed the same way
-// R2's 'SSB3' construction is, from a real 'SSB4' blob's own shared-layout header bytes) is
+// --- R3 (round-trip regression): current-format ('SSB5') save/restore still works at a
+// mid-token state and at a genuinely fresh/empty state; a real legacy 'SSB2'-shaped blob
+// (hand-constructed the same way R2's 'SSB3' construction is, from a real 'SSB5' blob's own
+// shared-layout header bytes) is
 // still accepted -- the shipped SSB2-compatibility promise, unaffected by this fold. ---
 static void TestT2260_R3_Ssb4RoundTripPlusLegacySsb2StillAccepted(sslm_model model,
                                                                    sslm_kv_pool* pool) {
@@ -336,7 +347,7 @@ static void TestT2260_R3_Ssb4RoundTripPlusLegacySsb2StillAccepted(sslm_model mod
 			if (restored) CHECK(sslm_seq_release(restored) == SSLM_OK);
 		}
 	}
-	// Mid-token: the existing C1 cell's own shape, re-run to confirm 'SSB4' still round-trips it.
+	// Mid-token: the existing C1 cell's own shape, re-run to confirm 'SSB5' still round-trips it.
 	{
 		SinglePool sp;
 		sslm_seq seq = nullptr;
@@ -359,10 +370,11 @@ static void TestT2260_R3_Ssb4RoundTripPlusLegacySsb2StillAccepted(sslm_model mod
 		}
 		if (sp.pool) CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
 	}
-	// Legacy 'SSB2': hand-constructed from a real 'SSB4' mid-token blob -- 'SSB2' omits the
-	// trailing anti_lm_order/anti_lm_history_count pair entirely (its own 108-byte fixed header,
-	// vs 'SSB3'/'SSB4''s 120), so the legacy blob is magic 'SSB2' + the first 104 bytes of the
-	// real header (offset [4, 108), identical layout to 'SSB3'/'SSB4' for every field SSB2 also
+	// Legacy 'SSB2': hand-constructed from a real 'SSB5' mid-token blob -- 'SSB2' omits the
+	// trailing anti_lm_order/anti_lm_history_count pair, ready_for_logits and the per-site counts
+	// entirely (its own 108-byte fixed header, vs 'SSB5''s 156), so the legacy blob is magic
+	// 'SSB2' + the first 104 bytes of the real header (offset [4, 108), identical layout to
+	// 'SSB3'/'SSB4'/'SSB5' for every field SSB2 also
 	// carries) + the residual (present, mid-token) + kv_block_count + kv_blocks -- no anti-LM
 	// history, matching SSB2's own documented absence of that state.
 	{
@@ -377,7 +389,9 @@ static void TestT2260_R3_Ssb4RoundTripPlusLegacySsb2StillAccepted(sslm_model mod
 			CHECK(EnterMidToken(model, seq));
 			SeqBlobBuffer real_blob(model);
 			CHECK_MSG(sslm_seq_save(seq, real_blob.bytes.data(), &real_blob.size) == SSLM_OK,
-			          "T2260-R3: save the real 'SSB4' mid-token blob to transform into 'SSB2'");
+			          "T2260-R3: save the real current-format mid-token blob to transform into 'SSB2'");
+			CHECK_MSG(IsCurrentSeqBlob(real_blob.bytes.data(), real_blob.size),
+			          "T2260-R3: the real blob is the current 'SSB5' format and covers its fixed header");
 			const uint8_t* real = real_blob.bytes.data();
 			const uint64_t anti_lm_history_count = T2260ReadLE64(real + 112);
 			CHECK_MSG(anti_lm_history_count == 0,
@@ -385,7 +399,8 @@ static void TestT2260_R3_Ssb4RoundTripPlusLegacySsb2StillAccepted(sslm_model mod
 			          "construction below assumes zero anti-LM history to drop");
 			const size_t block_size = sslm_kv_block_size(model);
 			const size_t tail_offset = real_blob.size - 4 - block_size;  // kv_block_count + kv_blocks
-			const size_t residual_offset = 124;  // fixed header(120) + ready_for_logits(4)
+			// 'SSB5' fixed header: shared prefix(120) + ready_for_logits(4) + per-site counts(32).
+			const size_t residual_offset = kCurrentSeqBlobFixedHeader;
 			CHECK_MSG(tail_offset >= residual_offset, "T2260-R3: derived residual region sane");
 
 			std::vector<uint8_t> legacy;
