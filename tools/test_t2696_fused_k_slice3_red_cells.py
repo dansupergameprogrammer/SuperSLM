@@ -104,7 +104,7 @@ def test_signed_one_sparse_census_32512_expected_oracle_rows(backend, green_slic
         _red(green_slice, f"the {backend} fused-K signed-census runner")
 
 
-_T2743_QWEN3_RELEASE_1P5 = Path("D:/_t2743conv/flow-final/qwen3-embedding-0.6b-1p5.sslm")
+_T2743_QWEN3_RELEASE_1P5 = Path("D:/_artifacts/superslm/_t2743conv/flow-final/qwen3-embedding-0.6b-1p5.sslm")
 _T2743_QWEN3_RELEASE_1P5_SHA256 = (
     "0be28bf42637264df85481eb925c46f674da7db97fd7601c6732881ad8f99fbf"
 )

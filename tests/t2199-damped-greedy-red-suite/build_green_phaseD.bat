@@ -9,7 +9,7 @@ rem of the Stage 1 acceptance run, plan Claude/Plans/te266-gpu-path.md Sec3.5 st
 rem the damped-greedy suite a required run, since CI does not run it. So it now also, first,
 rem accepts an ADAPTER path as its second argument and forwards it as --adapter=PATH, which is
 rem what TestD2_DampedGreedy_ComposesWithRuntimeAdapter, in phaseD2_wiring_red.cpp, needs to
-rem run instead of SKIP -- the shopkeeper LoRA artifacts under D:/SuperSLM-t2116-package/
+rem run instead of SKIP -- the shopkeeper LoRA artifacts under D:/_artifacts/superslm-kits/SuperSLM-t2116-package/
 rem artifacts/ are qwen2.5-1.5b-instruct.sslm, the model, paired with
 rem qwen2.5-1.5b-shopkeeper-lora-v2-t2102-runtime.sslm, the runtime-format adapter this base
 rem model was built against, Claude/Brunel/t2116-crossvendor-package-2026-08-15.md Sec4. And,

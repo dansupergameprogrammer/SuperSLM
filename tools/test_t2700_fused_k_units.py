@@ -187,7 +187,7 @@ def test_python_qwen3_direct_k_decodes_to_independent_float64_post_rope_quantity
     unclipped maximum is 0.501 quanta and the p99 is 0.495; 0.51 leaves a
     float-rounding margin without fitting a saturation error.
     """
-    cache = Path("D:/_t2698/qwen3-embedding-0.6b-provisional-cache")
+    cache = Path("D:/_artifacts/superslm/_t2698/qwen3-embedding-0.6b-provisional-cache")
     # Dev-box artifact: present on the release machine, absent on CI runners. Skip rather than fail
     # when it is missing; when present, the check runs unchanged.
     if not cache.is_dir():

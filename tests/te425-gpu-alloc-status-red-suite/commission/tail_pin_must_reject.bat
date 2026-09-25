@@ -6,7 +6,7 @@ rem   D:\_te433\final-mutT15 (SubmitOneSubChunkToFullDepthForG5Bridge's clause d
 rem Exit 1 only when every leg returns the cell's RED exit (1); any other exit (a setup failure 3, an undriven
 rem leg 4, a crash) exits 0, so a broken construction never reads as a rejection.
 setlocal
-set Q=--qwen3=D:\_t2743conv\flow-final\qwen3-embedding-0.6b-1p5.sslm
+set Q=--qwen3=D:\_artifacts\superslm\_t2743conv\flow-final\qwen3-embedding-0.6b-1p5.sslm
 set M13=D:\_te433\final-mutT13\te433_tail_pin.exe
 set M15=D:\_te433\final-mutT15\te433_tail_pin.exe
 for %%K in (foreign length_error) do (

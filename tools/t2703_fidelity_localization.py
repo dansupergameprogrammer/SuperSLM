@@ -8,10 +8,10 @@ Build the diagnostic tracer first:
 Example (Qwen3):
 
     python tools\t2703_fidelity_localization.py ^
-      --artifact D:\_t2703conv\flow-final\qwen3-embedding-0.6b-1p5.sslm ^
-      --artifact-cache D:\_t2703conv\flow-work\final-cache ^
+      --artifact D:\_artifacts\superslm\_t2703conv\flow-final\qwen3-embedding-0.6b-1p5.sslm ^
+      --artifact-cache D:\_artifacts\superslm\_t2703conv\flow-work\final-cache ^
       --hf-model D:\hf_cache\hub\models--Qwen--Qwen3-Embedding-0.6B\snapshots\97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3 ^
-      --layer-trace out\sslm_layer_trace.exe --output D:\_t2703fid\qwen3
+      --layer-trace out\sslm_layer_trace.exe --output D:\_artifacts\superslm\_t2703fid\qwen3
 
 The floor changes only the shipping representation: artifact int8 weights are
 dequantized with their artifact scales, and activations are landed to int8 at

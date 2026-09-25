@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 rem T-2919 (TE-372 S3): builds te368_schema_run.exe from this directory's own vendored
 rem te366_schema_run.cpp, against a named engine install, instead of the prior
-rem probe's hardcoded D:\_te259\engine-install-v150 (never committed, unbuildable from a
+rem probe's hardcoded D:\_artifacts\superslm\_te259\engine-install-v150 (never committed, unbuildable from a
 rem fresh clone). See ../PROVENANCE.md.
 rem
 rem T-2921 (TE-373 M1): an omitted <engine-install-dir> means THIS checkout's CURRENT source,

@@ -3,7 +3,7 @@
     {
       "name": "Qwen3",
       "artifact": {
-        "path": "D:/_t2743conv/flow-final/qwen3-embedding-0.6b-1p5.sslm",
+        "path": "D:/_artifacts/superslm/_t2743conv/flow-final/qwen3-embedding-0.6b-1p5.sslm",
         "sha256": "0be28bf42637264df85481eb925c46f674da7db97fd7601c6732881ad8f99fbf"
       }
     },
@@ -16,25 +16,25 @@
     }
   ],
   "identities": [
-    {"name": "Qwen3 artifact cache", "kind": "tree", "path": "D:/_t2743conv/flow-work/final-cache", "sha256": "8db43d7efe6da5d92c9596ae771347a1ba32c10d553cac32d042887ab721072e"},
+    {"name": "Qwen3 artifact cache", "kind": "tree", "path": "D:/_artifacts/superslm/_t2743conv/flow-work/final-cache", "sha256": "8db43d7efe6da5d92c9596ae771347a1ba32c10d553cac32d042887ab721072e"},
     {"name": "Qwen2.5 artifact cache", "kind": "tree", "path": "D:/hf_cache/superslm_artifacts/qwen2.5-0.5b-instruct-w8a8", "sha256": "f60eeb49145bd114f72011cc810fb04c54bbe021be0946c5a84bb6d16fa2a687"},
     {"name": "Qwen3 HF snapshot", "kind": "tree", "path": "D:/hf_cache/hub/models--Qwen--Qwen3-Embedding-0.6B/snapshots/97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3", "sha256": "9c0fc2f0360187c5180467c890b0ad0a869a6350a4ef8c12eb85777521690a44"},
     {"name": "Qwen2.5 HF snapshot", "kind": "tree", "path": "D:/hf_cache/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775", "sha256": "0bf1753aa715338cfec581b0db75baaabdbbe3a5dbb7b3cb8026568a948454c4"},
-    {"name": "baseline layer tracer", "path": "D:/_t2748diag/layer-tracer/sslm_layer_trace.exe", "sha256": "b2b0329206e32200e4e8b0f7e8b4e89bd715f32f691dd73194e112447a9f2723"},
+    {"name": "baseline layer tracer", "path": "D:/_artifacts/superslm/_t2748diag/layer-tracer/sslm_layer_trace.exe", "sha256": "b2b0329206e32200e4e8b0f7e8b4e89bd715f32f691dd73194e112447a9f2723"},
     {"name": "retrieval corpus", "path": "D:/SuperEmbedder/tests/fixtures/c12b/corpus-239.jsonl", "sha256": "275b0749a25cfd141e747111d4cbed66d7772ce58a50b5c13a394c5c0da222c0"},
     {"name": "retrieval query source", "path": "D:/SuperEmbedder/src/superembedder/encoder.cpp", "sha256": "0042a1e8d73f2648670be1e95c357c9388075fae278ea2b46605421da1af2ec4"},
-    {"name": "retrieval CPU probe", "path": "D:/_t2748diag/retrieval-probe/build/Release/t2701_cpu_forward_probe.exe", "sha256": "06231fe6ba270adf6eb253444c3aa84952d9006167d442b804aaa7b6ab1a498f"},
-    {"name": "retrieval provisional control", "path": "D:/_t2703/qwen3-embedding-0.6b-provisional-r5.sslm", "sha256": "0d53db25017d49664f0b234515d5b4ea351d8dfce7b9a9005314141498a3ae5a"},
+    {"name": "retrieval CPU probe", "path": "D:/_artifacts/superslm/_t2748diag/retrieval-probe/build/Release/t2701_cpu_forward_probe.exe", "sha256": "06231fe6ba270adf6eb253444c3aa84952d9006167d442b804aaa7b6ab1a498f"},
+    {"name": "retrieval provisional control", "path": "D:/_artifacts/superslm/_t2703/qwen3-embedding-0.6b-provisional-r5.sslm", "sha256": "0d53db25017d49664f0b234515d5b4ea351d8dfce7b9a9005314141498a3ae5a"},
     {"name": "fidelity diagnostic", "path": "tools/t2703_fidelity_localization.py", "sha256": "e4006220b0b6908fd83522769ab418b33743674a8402b3676a69c55af2e8eb73"},
     {"name": "retrieval diagnostic", "path": "tools/t2703_retrieval_measure.py", "sha256": "c587cb52dee6a6f88c5800be4f2804cca119d68dcdf17bfdf6352cc411f9139c"},
     {"name": "two-model replay diagnostic", "path": "tools/t2723_t2704_production_refusal_replay.py", "sha256": "dde6251e88cbbee53b7d9bd84d5fd059d8dade74705b1ed98f1baaf18a8f1d32"},
-    {"name": "Qwen3 residual trace population", "kind": "residual-trace-population", "path": "D:/_t2745traces/qwen3/engine", "sha256": "14e017497baadcb2048879af3ea7d86aa9f65817d67a8931fcf16f2ba0ad36d2"},
-    {"name": "Qwen2.5 residual trace population", "kind": "residual-trace-population", "path": "D:/_t2745traces/qwen2p5/engine", "sha256": "2c8be205823db9785e3d1dc2ec3397accc1a8d9bad2b6e252851133378291de6"}
+    {"name": "Qwen3 residual trace population", "kind": "residual-trace-population", "path": "D:/_artifacts/superslm/_t2745traces/qwen3/engine", "sha256": "14e017497baadcb2048879af3ea7d86aa9f65817d67a8931fcf16f2ba0ad36d2"},
+    {"name": "Qwen2.5 residual trace population", "kind": "residual-trace-population", "path": "D:/_artifacts/superslm/_t2745traces/qwen2p5/engine", "sha256": "2c8be205823db9785e3d1dc2ec3397accc1a8d9bad2b6e252851133378291de6"}
   ],
   "compiled_diagnostics": [
     {
       "name": "baseline layer tracer",
-      "path": "D:/_t2748diag/layer-tracer/sslm_layer_trace.exe",
+      "path": "D:/_artifacts/superslm/_t2748diag/layer-tracer/sslm_layer_trace.exe",
       "source_commit": "351faf2b62b81d9e839cffbd68e5db984c8bb79f",
       "build_command": ["cmd /c tools\\build_layer_trace.bat"],
       "source_inputs": ["tools/sslm_layer_trace.cpp", "tools/build_layer_trace.bat"],
@@ -42,9 +42,9 @@
     },
     {
       "name": "retrieval CPU probe",
-      "path": "D:/_t2748diag/retrieval-probe/build/Release/t2701_cpu_forward_probe.exe",
+      "path": "D:/_artifacts/superslm/_t2748diag/retrieval-probe/build/Release/t2701_cpu_forward_probe.exe",
       "source_commit": "351faf2b62b81d9e839cffbd68e5db984c8bb79f",
-      "build_command": ["C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe -S . -B D:/_t2748diag/retrieval-probe/build -DSUPERSLM_BUILD_GPU=ON -DBUILD_TESTING=OFF", "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe --build D:/_t2748diag/retrieval-probe/build --config Release --target t2701_cpu_forward_probe"],
+      "build_command": ["C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe -S . -B D:/_artifacts/superslm/_t2748diag/retrieval-probe/build -DSUPERSLM_BUILD_GPU=ON -DBUILD_TESTING=OFF", "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe --build D:/_artifacts/superslm/_t2748diag/retrieval-probe/build --config Release --target t2701_cpu_forward_probe"],
       "source_inputs": ["tools/t2701_cpu_forward_probe.cpp"],
       "sha256": "06231fe6ba270adf6eb253444c3aa84952d9006167d442b804aaa7b6ab1a498f"
     }
@@ -52,8 +52,8 @@
   "diagnostics": {
     "fidelity": {
       "runs": [
-        {"model": "Qwen3", "artifact_cache": "D:/_t2743conv/flow-work/final-cache", "hf_model": "D:/hf_cache/hub/models--Qwen--Qwen3-Embedding-0.6B/snapshots/97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3", "layer_trace": "D:/_t2748diag/layer-tracer/sslm_layer_trace.exe"},
-        {"model": "Qwen2.5", "artifact_cache": "D:/hf_cache/superslm_artifacts/qwen2.5-0.5b-instruct-w8a8", "hf_model": "D:/hf_cache/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775", "layer_trace": "D:/_t2748diag/layer-tracer/sslm_layer_trace.exe", "control": true}
+        {"model": "Qwen3", "artifact_cache": "D:/_artifacts/superslm/_t2743conv/flow-work/final-cache", "hf_model": "D:/hf_cache/hub/models--Qwen--Qwen3-Embedding-0.6B/snapshots/97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3", "layer_trace": "D:/_artifacts/superslm/_t2748diag/layer-tracer/sslm_layer_trace.exe"},
+        {"model": "Qwen2.5", "artifact_cache": "D:/hf_cache/superslm_artifacts/qwen2.5-0.5b-instruct-w8a8", "hf_model": "D:/hf_cache/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775", "layer_trace": "D:/_artifacts/superslm/_t2748diag/layer-tracer/sslm_layer_trace.exe", "control": true}
       ]
     },
     "retrieval": {
@@ -61,15 +61,15 @@
       "corpus": "D:/SuperEmbedder/tests/fixtures/c12b/corpus-239.jsonl",
       "query_source": "D:/SuperEmbedder/src/superembedder/encoder.cpp",
       "hf_model": "D:/hf_cache/hub/models--Qwen--Qwen3-Embedding-0.6B/snapshots/97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
-      "probe": "D:/_t2748diag/retrieval-probe/build/Release/t2701_cpu_forward_probe.exe",
-      "provisional": "D:/_t2703/qwen3-embedding-0.6b-provisional-r5.sslm",
+      "probe": "D:/_artifacts/superslm/_t2748diag/retrieval-probe/build/Release/t2701_cpu_forward_probe.exe",
+      "provisional": "D:/_artifacts/superslm/_t2703/qwen3-embedding-0.6b-provisional-r5.sslm",
       "provisional_sha256": "0d53db25017d49664f0b234515d5b4ea351d8dfce7b9a9005314141498a3ae5a",
       "phases": ["float", "candidate", "provisional", "equivalence", "analyze"]
     },
     "replay": {
-      "qwen3_traces": "D:/_t2745traces/qwen3/engine",
+      "qwen3_traces": "D:/_artifacts/superslm/_t2745traces/qwen3/engine",
       "qwen3_trace_population_sha256": "14e017497baadcb2048879af3ea7d86aa9f65817d67a8931fcf16f2ba0ad36d2",
-      "qwen2p5_traces": "D:/_t2745traces/qwen2p5/engine",
+      "qwen2p5_traces": "D:/_artifacts/superslm/_t2745traces/qwen2p5/engine",
       "qwen2p5_trace_population_sha256": "2c8be205823db9785e3d1dc2ec3397accc1a8d9bad2b6e252851133378291de6"
     }
   }

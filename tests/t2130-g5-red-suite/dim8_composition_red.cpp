@@ -247,7 +247,7 @@ int main(int argc, char** argv) {
 	//
 	// FINDING (T-2130/Curie, this session, filed to the build authority -- not weakened here):
 	// executed against the two real artifacts the design's own G5-6 gate text names --
-	// D:\SuperSLM-t2116-package\artifacts\t2132_g5_fixture_1p5b.sslm (the schema-compiled
+	// D:\_artifacts\superslm-kits\SuperSLM-t2116-package\artifacts\t2132_g5_fixture_1p5b.sslm (the schema-compiled
 	// reference fixture) and ...\qwen2.5-1.5b-shopkeeper-lora-v2-t2102-runtime.sslm (the shipped
 	// shopkeeper adapter) -- sslm_adapter_map(adapter_bytes, base=g_model_1p5b_path) returns
 	// SSLM_ADAPTER_MODEL_MISMATCH (status 5), not SSLM_OK. Root cause traced (src/sslm_abi.cpp,
@@ -259,7 +259,7 @@ int main(int argc, char** argv) {
 	// mapping the identical adapter against the plain, non-schema base
 	// (...\qwen2.5-1.5b-instruct.sslm), which succeeds (tools/t2139_c6_smoke.cpp, ad hoc run this
 	// session: "sslm_adapter_map: PASS (residency=26300552 bytes)"). No artifact on disk today
-	// (grepped D:\SuperSLM-t2116-package\artifacts\ and D:\SuperSLM-t2132-g5-amd-package\
+	// (grepped D:\_artifacts\superslm-kits\SuperSLM-t2116-package\artifacts\ and D:\_artifacts\superslm-kits\SuperSLM-t2132-g5-amd-package\
 	// artifacts\, the only two known fixture drops) is simultaneously schema-compiled AND
 	// base-hash-bound to the shopkeeper adapter's own declared base -- producing one needs either
 	// re-running the schema compiler against the adapter's exact base bytes, or re-converting the

@@ -687,21 +687,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--qwen3-traces",
         type=Path,
-        default=Path(r"D:\_t2703fid\resadd\qwen3\engine"),
+        default=Path(r"D:\_artifacts\superslm\_t2703fid\resadd\qwen3\engine"),
     )
     parser.add_argument("--qwen3-artifact-sha256", required=True)
     parser.add_argument("--qwen3-trace-population-sha256", required=True)
     parser.add_argument(
         "--qwen3-artifact",
         type=Path,
-        default=Path(r"D:\_t2703conv\flow-final\qwen3-embedding-0.6b-1p5.sslm"),
+        default=Path(r"D:\_artifacts\superslm\_t2703conv\flow-final\qwen3-embedding-0.6b-1p5.sslm"),
     )
     parser.add_argument("--qwen2p5-artifact-sha256", required=True)
     parser.add_argument("--qwen2p5-trace-population-sha256", required=True)
     parser.add_argument(
         "--qwen2p5-traces",
         type=Path,
-        default=Path(r"D:\_t2703fid\resadd\qwen2p5\engine"),
+        default=Path(r"D:\_artifacts\superslm\_t2703fid\resadd\qwen2p5\engine"),
     )
     parser.add_argument(
         "--qwen2p5-artifact",

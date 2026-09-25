@@ -337,7 +337,7 @@ inline bool LoadCpuOracleModel(const superslm::SslmModelView& view, CpuOracleMod
 
 // Builds the BaseModelGeometry superslm_adapter::LoadAdapterArtifact needs, from an already-
 // loaded model view and its CpuOracleModel -- the exact construction T-2833's own probe
-// (D:\_t2833\probe\t2833_probe.cpp, disposable, not in this tree) established for building a
+// (D:\_artifacts\superslm\_t2833\probe\t2833_probe.cpp, disposable, not in this tree) established for building a
 // CPU-side adapter handle alongside the GPU-mapped one. Centralized here so a cell needing the
 // CPU-side handle (not merely the GPU one sslm_gpu_adapter_map already builds) does not
 // re-derive this per file.

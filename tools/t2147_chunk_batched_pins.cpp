@@ -1,5 +1,5 @@
 // t2147_chunk_batched_pins.cpp -- T-2147 (Brunel), design §15.2's three ruled proof cells,
-// against the real 1.5B artifact (D:\SuperSLM-t2116-package\artifacts\, the G5 fixture), plus
+// against the real 1.5B artifact (D:\_artifacts\superslm-kits\SuperSLM-t2116-package\artifacts\, the G5 fixture), plus
 // the actual speedup measurement §15's own build owes:
 //
 //   (a) per-size:        the SAME prompt through sslm_prefill at chunk_budget in
