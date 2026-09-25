@@ -12,6 +12,11 @@ Usage:
 Each job is one process, bounded well under ten minutes, so a partial run can be resumed by name. A job
 that a previous run already completed is re-run only when named explicitly.
 
+TE-436's foreign-exception sweep (te436_foreign_sweep.exe) runs one site per process, for every site of
+every submitting route: fxcount-<route> counts the route's sites into --out, and fx-<route>-k<NNN> is one
+job per counted site. The site jobs exist once their route's count file does; naming any of them with
+--only runs the count job first. --summary lists every red site per route.
+
 Verdicts (te425_cells.exe's contract): GREEN every leg conforms to plan Sec3.3; RED at least one does not
 (the reading this suite exists to give at v1.7.1); INVALID the job could not decide (a hook that never
 fired, a selector that did not resolve, a setup failure); UNCONSTRUCTIBLE the dimension-10 ballast made
@@ -38,6 +43,19 @@ ISOLATED_HOOK_LEGS = [
 ]
 REMOVED_SITES = ["prompt_window", "decode_window", "prompt_close", "prompt_readback", "restore_reset",
                  "seq_create_map", "devlogits", "context_queue", "map"]
+# TE-436: the routes of the foreign-exception sweep, and the artifact option each reads.
+FX = "te436_foreign_sweep.exe"
+FX_ROUTES = [("prompt", "qwen3"), ("schema", "g5"), ("step", "qwen3"), ("bridge", "qwen3"), ("batch", "qwen3")]
+FX_SITES = re.compile(r"^SITES (\S+) K=(\d+)", re.M)
+
+
+def fx_site_count(out: Path, route: str) -> int | None:
+    """The route's site count from its fxcount job's output in --out, or None before that job has run."""
+    p = out / f"fxcount-{route}.txt"
+    if not p.is_file():
+        return None
+    m = [x for x in FX_SITES.findall(p.read_text(encoding="utf-8", errors="replace")) if x[0] == route]
+    return int(m[-1][1]) if m else None
 
 
 def jobs(a) -> list[tuple[str, list[str], str]]:
@@ -70,6 +88,14 @@ def jobs(a) -> list[tuple[str, list[str], str]]:
         for which in ("first", "last"):
             J.append((f"tail-t15-{which}-{kind}", ["--route=prompt", f"--kind={kind}", f"--tail={which}", "--len=5", Q], pin))
         J.append((f"tail-t13-{kind}", ["--route=step", f"--kind={kind}", "--len=5", Q], pin))
+    # TE-436: a foreign exception at every host-allocation site of every submitting route, one site per
+    # process (a red leg can leave a handle or the submission list unusable for the rest of the process).
+    arts = {"qwen3": Q, "g5": G}
+    for route, art in FX_ROUTES:
+        J.append((f"fxcount-{route}", [f"--route={route}", "--count", arts[art]], FX))
+        k_max = fx_site_count(Path(a.out), route)
+        for k in range(1, (k_max or 0) + 1):
+            J.append((f"fx-{route}-k{k:03d}", [f"--route={route}", f"--site={k}", arts[art]], FX))
     for n in (1, 5):
         J.append((f"r4seam-len{n}", ["r4seam", G, f"--len={n}"], cells))
         J.append((f"r4new-len{n}", ["r4new", G, f"--len={n}"], cells))
@@ -144,7 +170,43 @@ def summarize(out: Path, names: list[str]) -> int:
     for r in rows:
         counts[r[1]] = counts.get(r[1], 0) + 1
     print("TOTAL " + " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    summarize_fx(out, names)
     return 0
+
+
+FX_LEG = re.compile(r"^FX\.(\S+) k=(\d+) (.*?) -> (PASS|FAIL|INVALID)", re.M)
+FX_ABORT = re.compile(r"^FX\.(\S+) k=(\d+) (TERMINATE|CRASH): (.*)$", re.M)
+
+
+def summarize_fx(out: Path, names: list[str]) -> None:
+    """TE-436: per route, the verdict tally and every red site with its label -- the list that says where
+    the class still lives."""
+    for route, _ in FX_ROUTES:
+        mine = [n for n in names if n.startswith(f"fx-{route}-k")]
+        if not mine:
+            continue
+        tally: dict[str, int] = {}
+        red: list[str] = []
+        for name in mine:
+            p = out / f"{name}.txt"
+            if not p.is_file():
+                tally["NOT-RUN"] = tally.get("NOT-RUN", 0) + 1
+                continue
+            text = p.read_text(encoding="utf-8", errors="replace")
+            v = VERDICT.findall(text)
+            verdict = v[-1][1] if v else "NO-VERDICT"
+            tally[verdict] = tally.get(verdict, 0) + 1
+            if verdict != "GREEN":
+                legs = FX_LEG.findall(text) or [(route, name[-3:].lstrip("0"), a[2] + ": " + a[3], a[2])
+                                                for a in FX_ABORT.findall(text)]
+                for leg in legs:
+                    red.append(f"  {verdict:<8} k={leg[1]:>3} {leg[2]}")
+                if not legs:
+                    red.append(f"  {verdict:<8} {name}: no leg line")
+        k_max = fx_site_count(out, route)
+        print(f"FX {route}: sites={k_max} " + " ".join(f"{k}={v}" for k, v in sorted(tally.items())))
+        for line in red:
+            print(line)
 
 
 def main() -> int:
@@ -161,8 +223,15 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=560)
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
-    all_jobs = jobs(a)
     pats = [p.strip() for p in a.only.split(",") if p.strip()]
+    if not a.list and not a.summary:
+        # A route's site jobs exist only once its count is in --out: count first when any is named.
+        for route, _ in FX_ROUTES:
+            wanted = any(fnmatch.fnmatch(f"fx-{route}-k{k:03d}", p) for k in range(1, 1000) for p in pats)
+            if wanted and fx_site_count(a.out, route) is None:
+                count_job = [j for j in jobs(a) if j[0] == f"fxcount-{route}"][0]
+                run_job(a, *count_job)
+    all_jobs = jobs(a)
     chosen = [j for j in all_jobs if any(fnmatch.fnmatch(j[0], p) for p in pats)]
     if a.list:
         for name, argv, exe in chosen:
@@ -170,21 +239,25 @@ def main() -> int:
         return 0
     if a.summary:
         return summarize(a.out, [j[0] for j in chosen])
-    for name, argv, exe in chosen:
-        t0 = time.time()
-        cmd = [str(a.bin / exe)] + argv
-        try:
-            r = subprocess.run(cmd, cwd=a.bin, capture_output=True, text=True, timeout=a.timeout,
-                               encoding="utf-8", errors="replace")
-            text = r.stdout + ("\n--- stderr ---\n" + r.stderr if r.stderr else "") + f"\nEXIT {r.returncode}\n"
-        except subprocess.TimeoutExpired as e:
-            text = (e.stdout or "") + f"\nTIMEOUT after {a.timeout} s\nVERDICT {name} INVALID\n"
-            if isinstance(text, bytes):
-                text = text.decode("utf-8", "replace")
-        (a.out / f"{name}.txt").write_text(f"$ {' '.join(cmd)}\n{text}", encoding="utf-8")
-        v = VERDICT.findall(text)
-        print(f"{name}: {v[-1][1] if v else 'no verdict'} ({time.time() - t0:.0f} s)", flush=True)
+    for job in chosen:
+        run_job(a, *job)
     return 0
+
+
+def run_job(a, name: str, argv: list[str], exe: str) -> None:
+    t0 = time.time()
+    cmd = [str(a.bin / exe)] + argv
+    try:
+        r = subprocess.run(cmd, cwd=a.bin, capture_output=True, text=True, timeout=a.timeout,
+                           encoding="utf-8", errors="replace")
+        text = r.stdout + ("\n--- stderr ---\n" + r.stderr if r.stderr else "") + f"\nEXIT {r.returncode}\n"
+    except subprocess.TimeoutExpired as e:
+        text = (e.stdout or "") + f"\nTIMEOUT after {a.timeout} s\nVERDICT {name} INVALID\n"
+        if isinstance(text, bytes):
+            text = text.decode("utf-8", "replace")
+    (a.out / f"{name}.txt").write_text(f"$ {' '.join(cmd)}\n{text}", encoding="utf-8")
+    v = VERDICT.findall(text)
+    print(f"{name}: {v[-1][1] if v else 'no verdict'} ({time.time() - t0:.0f} s)", flush=True)
 
 
 if __name__ == "__main__":
