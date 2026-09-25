@@ -1584,7 +1584,11 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
 		    c.intermediate_size, c.context_cap, state.context_length, model->view.rope_tables,
 		    kv_block, block_size, /*option_g_fused_k_landing=*/false, &state.kv_saturation_count,
 		    /*site_prefix=*/{}, nullptr,
-		    /*q_width=*/static_cast<size_t>(c.num_attention_heads) * c.head_dim);
+		    /*q_width=*/static_cast<size_t>(c.num_attention_heads) * c.head_dim,
+		    // The per-site census the total sums, filled here as RunLayerLoop's decode path
+		    // already fills it, so a prefilled sequence's census still sums to its total.
+		    &state.kv_landing_saturation_count, &state.k_channel_landing_saturation_count,
+		    &state.rope_q_saturation_count, &state.rope_k_saturation_count);
 		if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
 
 		// forward_sites.h: "a sequence resting between whole tokens carries a marker at layer
@@ -2044,6 +2048,12 @@ extern "C" sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix) {
 	seq->state.hidden_scale = prefix->state.hidden_scale;
 	seq->state.layer_index = prefix->state.layer_index;
 	seq->state.kv_saturation_count = prefix->state.kv_saturation_count;
+	// The per-site census moves with its total: the adopted origin's counts, never the
+	// sequence's own prior ones.
+	seq->state.kv_landing_saturation_count = prefix->state.kv_landing_saturation_count;
+	seq->state.k_channel_landing_saturation_count = prefix->state.k_channel_landing_saturation_count;
+	seq->state.rope_q_saturation_count = prefix->state.rope_q_saturation_count;
+	seq->state.rope_k_saturation_count = prefix->state.rope_k_saturation_count;
 	seq->state.context_length = prefix->state.context_length;
 	seq->current_token = prefix->current_token;  // carries the prefix's own last-prefilled
 	                                              // token, so decode can resume immediately

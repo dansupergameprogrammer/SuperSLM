@@ -4,6 +4,12 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+On the CPU, the four per-site saturation counts (`kv_landing`, `k_channel_landing`, `rope_q`,
+`rope_k`) now travel with the saturation total they sum. `sslm_seq_adopt_prefix` copied the total
+but left the adopting sequence's per-site counts at their prior values, and `sslm_prefill` and
+`sslm_prefix_prefill` grew the total without filling the per-site counts. Diagnostic counters
+only: no token, status or saved-state byte changes.
+
 ## [1.8.0] - 2026-09-24
 
 On the GPU, an allocation failure on a device that is not removed -- host memory (`std::bad_alloc`,
