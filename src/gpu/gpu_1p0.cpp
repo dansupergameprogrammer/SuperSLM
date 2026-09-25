@@ -1595,16 +1595,19 @@ SslmGpuStatus sslm_gpu_context_createImpl(GpuContextConfig cfg, SslmGpuContext**
 	}
 
 	SslmGpuContext* ctx = new SslmGpuContext();
-	// Device::Init() does not throw (1.8.0): a failed setup is recorded as a SetupFailure kind. A
-	// setup that ran out of memory -- a host allocation, or E_OUTOFMEMORY from any D3D12 step,
-	// device creation included -- is SSLM_GPU_ALLOCATION_FAILED; every other cause SSLM_DEVICE_LOST.
+	// Device::Init() does not throw (1.8.0): a failed setup is recorded as a SetupFailure kind. The
+	// fault classifier's rules in order: a device that reports itself removed is SSLM_DEVICE_LOST
+	// (rule 1); a setup that ran out of memory -- a host allocation, or E_OUTOFMEMORY from any D3D12
+	// step, device creation included -- is SSLM_GPU_ALLOCATION_FAILED (rule 2); every other cause
+	// SSLM_DEVICE_LOST.
 	ctx->device.Init();
 	if (!ctx->device.available) {
+		const bool removed = superslm_gpu::harness::FailedSetupDeviceReportedRemoved(ctx->device);
 		const bool out_of_memory =
 		    ctx->device.setup_failure.load() == superslm_gpu::harness::SetupFailure::Allocation;
 		delete ctx;
 		*out_ctx = nullptr;
-		return out_of_memory ? SSLM_GPU_ALLOCATION_FAILED : SSLM_DEVICE_LOST;
+		return !removed && out_of_memory ? SSLM_GPU_ALLOCATION_FAILED : SSLM_DEVICE_LOST;
 	}
 
 	if (!shader_dir.empty()) {

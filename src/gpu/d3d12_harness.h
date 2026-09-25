@@ -948,18 +948,32 @@ inline Device& GetDevice() noexcept {
 // each site reports through `setup_failure`. Test builds (SUPERSLM_GPU_ALLOC_FAULT_INJECTION) can
 // make the next query report removed (ArmGpuMapDeviceRemovedQueryInjection, gpu_1p0.cpp), so every
 // site that classifies a fault can be driven to rule 1.
-inline bool DeviceReportedRemoved(Device& dev) {
+// Test builds only: consumes the single-shot removed-query seam, returning whether it was armed.
+inline bool ConsumeRemovedQuerySeam() {
 #if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
-	{
-		GpuTestSeamState& seam = TestSeamState();
-		std::lock_guard<std::mutex> lock(seam.mutex);
-		if (seam.map_removed_query) {
-			seam.map_removed_query = false;  // single-shot
-			return true;
-		}
+	GpuTestSeamState& seam = TestSeamState();
+	std::lock_guard<std::mutex> lock(seam.mutex);
+	if (seam.map_removed_query) {
+		seam.map_removed_query = false;  // single-shot
+		return true;
 	}
 #endif
+	return false;
+}
+
+inline bool DeviceReportedRemoved(Device& dev) {
+	if (ConsumeRemovedQuerySeam()) return true;
 	return dev.available.load() && dev.dev && dev.dev->GetDeviceRemovedReason() != S_OK;
+}
+
+// The rule-1 input for a Device whose own Init() has just failed, owned by the caller alone
+// (sslm_gpu_context_create's device, never the process's submission device): a setup step after
+// device creation can fail because the device was removed, and the ID3D12Device then exists while
+// `available` is false. Removed when the device object exists and reports a removal reason, or when
+// the test seam says so; a device that was never created is never read as removed.
+inline bool FailedSetupDeviceReportedRemoved(Device& dev) {
+	if (ConsumeRemovedQuerySeam()) return true;
+	return dev.dev && dev.dev->GetDeviceRemovedReason() != S_OK;
 }
 
 // The process's shader directory (GpuContextConfig::shader_dir, include/superslm/gpu_1p0.h).

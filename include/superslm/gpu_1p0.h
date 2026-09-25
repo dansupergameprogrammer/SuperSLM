@@ -293,8 +293,9 @@ enum class SslmGpuStatus : uint32_t {
  * 7. The process's shader directory is already fixed to a different directory (ordinal,
  *    case-insensitive comparison of the normalized paths): SSLM_GPU_SHADER_DIR_CONFLICT.
  * 8. Device acquisition: SSLM_GPU_ALLOCATION_FAILED when it runs out of memory (a host
- *    allocation, or E_OUTOFMEMORY from device creation or any setup step; the call may be
- *    retried), SSLM_DEVICE_LOST on any other failure. On success, a non-NULL shader_dir fixes
+ *    allocation, or E_OUTOFMEMORY from device creation or any setup step) on a device that does
+ *    not report itself removed; the call may be retried. SSLM_DEVICE_LOST on any other failure,
+ *    a device that reports itself removed included. On success, a non-NULL shader_dir fixes
  *    the process's shader directory if nothing fixed it yet. */
 SslmGpuStatus sslm_gpu_context_create(GpuContextConfig cfg, SslmGpuContext** out_ctx) noexcept;
 SslmGpuStatus sslm_gpu_context_destroy(SslmGpuContext* ctx) noexcept;
