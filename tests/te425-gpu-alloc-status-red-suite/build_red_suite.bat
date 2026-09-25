@@ -29,6 +29,9 @@ if "%BAD%"=="0" (
 )
 rem R13 is red at v1.7.1 by EXIT STATUS, not by compile: it must build at both versions.
 %CXX% /I"%TREE%\include" /Fo"%OUT%\te425_r13_ordinals.obj" /Fe"%OUT%\te425_r13_ordinals.exe" "%HERE%te425_r13_ordinals.cpp" "%BLD%\superslm.lib" >"%OUT%\te425_r13.build.txt" 2>&1 || (type "%OUT%\te425_r13.build.txt" & set BAD=1)
+rem TE-433: the submission-tail catch-all pin, its own binary so that it can replace operator new and
+rem hook ExecuteCommandLists without changing te425_cells.cpp.
+%CXX% /I"%TREE%\include" /Fo"%OUT%\te433_tail_pin.obj" /Fe"%OUT%\te433_tail_pin.exe" "%HERE%te433_tail_pin.cpp" %LIBS% >"%OUT%\te433_tail_pin.build.txt" 2>&1 || (type "%OUT%\te433_tail_pin.build.txt" & set BAD=1)
 set T2956=%HERE%..\t2956-token-finish-red-suite
 %CXX% /DT2956_CANDIDATE /I"%TREE%\include" /Fo"%OUT%\cell_alloc_faults.obj" /Fe"%OUT%\cell_alloc_faults.exe" "%T2956%\cell_alloc_faults.cpp" %LIBS% >"%OUT%\cell_alloc_faults.build.txt" 2>&1 || (type "%OUT%\cell_alloc_faults.build.txt" & set BAD=1)
 if "%BAD%"=="0" echo BUILT %OUT%

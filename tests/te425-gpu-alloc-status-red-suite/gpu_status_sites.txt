@@ -5,6 +5,8 @@
 # First generated at v1.7.1 (2a32042) by --emit, 39 catch clauses as TE-424's independent grep census counts.
 # Re-listed by the test author at the 1.8.0 fix (dad862e): 52 catch clauses and 23 status sites; every row
 # the fix added or rewrote is annotated from Sec3.2/Sec3.3 and that tip read as source.
+# Re-listed by the test author at the TE-432 fix round (042bd66): 54 catch clauses and 23 status sites; each
+# submission tail's new final catch (...) (T13, T15) joins its window's catch-all row, count 2.
 # A site the fix adds, removes or rewrites is re-listed here with its disposition in the same change.
 # Tab-separated: kind file function count block disposition token
 catch	src/gpu/d3d12_harness.h	ClassifyInFlightException	1	E-2	classifier input: kind Other, every other type standard or not; rule 3 unless rule 0 or 1	...
@@ -35,14 +37,14 @@ catch	src/gpu/gpu_1p0.cpp	sslm_gpu_seq_createImpl	1	T7	classifier as T4	std::exc
 catch	src/gpu/gpu_1p0.cpp	sslm_gpu_seq_restoreImpl	2	T8,T9	T8 process-device round-trip: classifier plus E-7 not-set-up branch, Close via CloseListConfirmed, unretried Signal rule 0; T9 upload as T4	std::bad_alloc
 catch	src/gpu/gpu_1p0.cpp	sslm_gpu_seq_restoreImpl	2	T8,T9	T8 process-device round-trip: classifier plus E-7 not-set-up branch, Close via CloseListConfirmed, unretried Signal rule 0; T9 upload as T4	std::exception
 catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuFinish	1	T16	classifier: failed SetEventOnCompletion rule 0; readback Map rule 2 or 3 by HRESULT; host allocation rule 2	std::exception
-catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuSubmit	1	T12	new final window clause: AbandonRecording; unconfirmed Close returns GpuDeviceRemoved (rule 0), else rethrow to the boundary (allocation type -> ALLOCATION_FAILED, foreign -> DEVICE_LOST)	...
+catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuSubmit	2	T12,T13	T12 final window clause: AbandonRecording; unconfirmed Close returns GpuDeviceRemoved (rule 0), else rethrow to the boundary (allocation type -> ALLOCATION_FAILED, foreign -> DEVICE_LOST); T13 final tail clause (TE-432): SubmissionTailFaultStatus as the tail's other clauses -- the list is closed or the submission waited out before the stack releases its buffers (unconfirmed wait or Signal is rule 0), then the kind decides (length_error rule 2, a foreign type rule 3); pinned by te433_tail_pin	...
 catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuSubmit	1	T12,T13	E-4 AbandonRecording in every clause, new bad_alloc/length_error clauses and a final catch(...); named types keep their status after rules 0 and 1; tail Close via CloseListConfirmed, Signal rule per E-1	GpuGemmGroupArithmeticError
 catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuSubmit	1	T12,T13	E-4 AbandonRecording in every clause, new bad_alloc/length_error clauses and a final catch(...); named types keep their status after rules 0 and 1; tail Close via CloseListConfirmed, Signal rule per E-1	GpuLayerWeightsContractError
 catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuSubmit	1	T12,T13	E-4 AbandonRecording in every clause, new bad_alloc/length_error clauses and a final catch(...); named types keep their status after rules 0 and 1; tail Close via CloseListConfirmed, Signal rule per E-1	harness::GpuShaderBinaryStaleError
 catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuSubmit	2	T12,T13	T12 new window clause: AbandonRecording then the classifier (stranded if not confirmed Closed); T13 tail clause: SubmissionTailFaultStatus (unconfirmed wait or Signal is rule 0)	std::bad_alloc
 catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuSubmit	1	T12	new window clause: AbandonRecording then the classifier, rule 2 when the list is confirmed Closed	std::length_error
 catch	src/gpu/superslm_gpu.cpp	RunLayerLoopGpuSubmit	2	T12,T13	E-4 AbandonRecording in every clause, new bad_alloc/length_error clauses and a final catch(...); named types keep their status after rules 0 and 1; tail Close via CloseListConfirmed, Signal rule per E-1	std::runtime_error
-catch	src/gpu/superslm_gpu.cpp	SubmitOneSubChunkToFullDepthForG5Bridge	1	T14	as T12's final clause	...
+catch	src/gpu/superslm_gpu.cpp	SubmitOneSubChunkToFullDepthForG5Bridge	2	T14,T15	as T12/T13's final clauses; pinned by te433_tail_pin	...
 catch	src/gpu/superslm_gpu.cpp	SubmitOneSubChunkToFullDepthForG5Bridge	1	T14,T15	as T12/T13	GpuGemmGroupArithmeticError
 catch	src/gpu/superslm_gpu.cpp	SubmitOneSubChunkToFullDepthForG5Bridge	1	T14,T15	as T12/T13	GpuLayerWeightsContractError
 catch	src/gpu/superslm_gpu.cpp	SubmitOneSubChunkToFullDepthForG5Bridge	1	T14,T15	as T12/T13	harness::GpuShaderBinaryStaleError

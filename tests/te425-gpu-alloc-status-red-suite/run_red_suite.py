@@ -4,7 +4,7 @@ Usage:
   run_red_suite.py --bin DIR --out DIR [--only PATTERN[,PATTERN...]] [--list] [--summary]
                    --qwen3 PATH --r15 PATH --adapter PATH --g5 PATH
   --bin      a build_red_suite.bat output directory (te425_cells.exe, te425_r13_ordinals.exe,
-             cell_alloc_faults.exe, shaders\\)
+             cell_alloc_faults.exe, te433_tail_pin.exe, shaders\\)
   --out      where each job's output is written, one <job>.txt per job
   --only     fnmatch patterns over job names; default every job
   --summary  do not run anything: aggregate the job outputs already in --out
@@ -63,6 +63,13 @@ def jobs(a) -> list[tuple[str, list[str], str]]:
     for i in range(4):
         J.append((f"r10-len5-e{i}", ["r10", Q, "--len=5", "--select=window-edges", f"--pick={i}"], cells))
     J.append(("r10dec-edges", ["r10dec", Q, "--path=step", "--select=window-edges"], cells))
+    # TE-433: the submission-tail catch-all pin, one process per leg. T15 is the prompt prefill's
+    # sub-chunk tail (both sub-chunks of a 5-token prompt), T13 the decode step's tail.
+    pin = "te433_tail_pin.exe"
+    for kind in ("foreign", "length_error"):
+        for which in ("first", "last"):
+            J.append((f"tail-t15-{which}-{kind}", ["--route=prompt", f"--kind={kind}", f"--tail={which}", "--len=5", Q], pin))
+        J.append((f"tail-t13-{kind}", ["--route=step", f"--kind={kind}", "--len=5", Q], pin))
     for n in (1, 5):
         J.append((f"r4seam-len{n}", ["r4seam", G, f"--len={n}"], cells))
         J.append((f"r4new-len{n}", ["r4new", G, f"--len={n}"], cells))
