@@ -16,6 +16,12 @@ if not exist %VSDEVCMD% (
 )
 call %VSDEVCMD% -arch=x64 -no_logo
 pushd %~dp0
+rem Optional machine-local settings. build.local.bat is gitignored and never committed; when it
+rem exists it is CALLed here, before anything reads the variables it may set -- for example
+rem T2199_PHASED_MODEL/T2199_PHASED_ADAPTER, the real damped-greedy model and its runtime adapter
+rem the Phase D gate below needs. It must only `set` variables (no setlocal, no exit /b), since it
+rem runs in this script's own scope. Absent, this build behaves exactly as it does without it.
+if exist "%~dp0build.local.bat" call "%~dp0build.local.bat"
 if not exist out mkdir out
 if not exist out\shaders mkdir out\shaders
 

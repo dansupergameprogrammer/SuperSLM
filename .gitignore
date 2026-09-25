@@ -17,3 +17,6 @@ tools/_out/
 # git worktrees checked out inside the repo (never committable -- an embedded
 # git repository, which git itself warns about on `add`)
 .worktrees/
+
+# machine-local build settings (paths to local artifacts), read by build.bat if present
+build.local.bat
