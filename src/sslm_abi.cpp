@@ -2196,16 +2196,9 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 		    superslm::SslmForwardStatus::Ok) {
 			return SSLM_INVALID_ARGUMENT;
 		}
-		superslm::IExpConstruction peak_construction;
-		const superslm::IExpDomain peak_domain = superslm::IExpConstruct(
-		    0, params->q_ln2, params->q_b, params->q_c, &peak_construction);
-		if (peak_domain == superslm::IExpDomain::kBadQ ||
-		    peak_domain == superslm::IExpDomain::kBadQLn2 ||
-		    peak_domain == superslm::IExpDomain::kBadQB) {
-			return SSLM_INVALID_ARGUMENT;
-		}
-		const int64_t peak = superslm::IExpEvaluate(peak_construction);
-		if (peak < 1 || peak > superslm::kSoftmaxRowMaxSafeExponent) {
+		// The same predicate the map-time DGC1 check applies (sslm_phaseD.h), so constants derived
+		// from an artifact that mapped always pass here.
+		if (!superslm::DampedGreedyPeakInDomain(params->q_ln2, params->q_b, params->q_c)) {
 			return SSLM_INVALID_ARGUMENT;
 		}
 	}

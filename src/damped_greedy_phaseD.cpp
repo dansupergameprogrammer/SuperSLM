@@ -53,10 +53,26 @@ bool ScaleConstantsInDomain(int64_t m, int32_t e) {
 	if (domain != superslm::IExpScaleDomain::kOk) return false;
 	const auto width_status = superslm::CheckSoftmaxRowWidthDomain(
 	    q_b, q_c, static_cast<size_t>(kRealVocabSizeForDomainCheck));
-	return width_status == superslm::SslmForwardStatus::Ok;
+	if (width_status != superslm::SslmForwardStatus::Ok) return false;
+	// The peak construction decode applies to these same constants (DampedGreedyPeakInDomain).
+	// Without it a scale such as (m=0, e=0) derives q = (0, 0, 0), passes the two checks above,
+	// maps with damped greedy available, and then every damped-greedy decode is refused.
+	return DampedGreedyPeakInDomain(q_ln2, q_b, q_c);
 }
 
 }  // namespace
+
+bool DampedGreedyPeakInDomain(int64_t q_ln2, int64_t q_b, int64_t q_c) noexcept {
+	superslm::IExpConstruction peak_construction;
+	const superslm::IExpDomain peak_domain =
+	    superslm::IExpConstruct(0, q_ln2, q_b, q_c, &peak_construction);
+	if (peak_domain == superslm::IExpDomain::kBadQ || peak_domain == superslm::IExpDomain::kBadQLn2 ||
+	    peak_domain == superslm::IExpDomain::kBadQB) {
+		return false;
+	}
+	const int64_t peak = superslm::IExpEvaluate(peak_construction);
+	return peak >= 1 && peak <= superslm::kSoftmaxRowMaxSafeExponent;
+}
 
 RawSection MakeDampedGreedyConstantsSection(const DampedGreedyScaleConstants& constants) {
 	RawSection s;

@@ -64,6 +64,14 @@ struct DampedGreedyScaleConstants {
 // checkpoints specifically, not an arbitrary artifact's declared width.
 inline constexpr int64_t kRealVocabSizeForDomainCheck = 151936;
 
+// The i-exp peak construction damped-greedy decode depends on: IExpConstruct(0, q_ln2, q_b, q_c)
+// forms a decomposition, and its evaluated peak lies in [1, kSoftmaxRowMaxSafeExponent].
+// sslm_decode_step_v2 applies this to a caller's damped-greedy params, and
+// ReadDampedGreedyScaleConstants applies it to the constants an artifact's DGC1 scale derives, so
+// an artifact whose scale maps (and so reports damped greedy available) can always decode with
+// the constants sslm_decode_params_init derives from it. One definition for both callers.
+[[nodiscard]] bool DampedGreedyPeakInDomain(int64_t q_ln2, int64_t q_b, int64_t q_c) noexcept;
+
 [[nodiscard]] bool ArtifactHasDampedGreedyConstants(const superslm::SslmArtifact& art) noexcept;
 [[nodiscard]] bool ReadDampedGreedyScaleConstants(const superslm::SslmArtifact& art,
                                                    DampedGreedyScaleConstants* out) noexcept;

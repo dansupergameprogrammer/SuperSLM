@@ -378,7 +378,11 @@ silently accepted.
   `SSLM_DECODE_MODE_DAMPED_GREEDY` (1) — any other value is rejected, never
   silently treated as greedy. Selecting damped mode directly through this entry
   point also requires a valid DGC1 section; manually supplied scale constants are
-  validated before forward work begins. Under damped-greedy mode, six more fields
+  validated before forward work begins. `sslm_model_map` refuses, with
+  `SSLM_ARTIFACT_REJECTED`, an artifact whose DGC1 scale derives constants that
+  damped-greedy decode would refuse (since v1.9.0 this includes the i-exp peak
+  check decode applies), so a mapped artifact that offers damped greedy can
+  always decode with the constants `sslm_decode_params_init` derives. Under damped-greedy mode, six more fields
   apply: `alpha_q15` (the Q15-scaled anti-repetition weight, an `int32_t`
   rejected outside `[0, 2^20)`), `anti_lm_max_order` (the anti-LM's own n,
   `>= 1`), `top_k` (candidates scored per step, `1 <= top_k <= vocab_size`),
