@@ -72,7 +72,7 @@ clipped direct-K landings exceed one per million observations. It alone owns
 `ChannelScaleDidNotConverge`, capture equivalence obligations (1)/(4), and the observation mutant.
 
 The exact common token-ID prefix is 453 tokens (not the 454-token standalone text rendering).
-Slice 2's `t2693_prefix_clone` uses the ABI's SSB4 state serialization: residual/sequence
+Slice 2's `t2693_prefix_clone` uses the ABI's sequence state serialization (`sslm_seq_save`/`sslm_seq_restore`): residual/sequence
 state and the complete KV block are copied into bytes, restored into a fresh pool block, and
 suffixes run through existing `sslm_prefill`/`RunLayerLoop`. It proves restored bytes equal the
 parent snapshot before continuation and re-saves the parent after every clone.

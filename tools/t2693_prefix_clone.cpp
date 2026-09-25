@@ -1,8 +1,8 @@
 // T-2693 slice-2 compiled-prefix probe.
 //
 // Usage: t2693_prefix_clone <artifact.sslm> <453-token-prefix.txt> <suffix.txt> [suffix.txt ...]
-// Token files are whitespace-separated int32 IDs.  The tool uses the shipped ABI's SSB4
-// serializer: it deep-copies the full CPU sequence state (residual/SequenceLayerState and
+// Token files are whitespace-separated int32 IDs.  The tool uses the shipped ABI's sequence
+// serializer (sslm_seq_save/sslm_seq_restore): it deep-copies the full CPU sequence state (residual/SequenceLayerState and
 // its KV block), never a handle or pointer, then drives the existing sslm_prefill path.
 
 #include <chrono>
