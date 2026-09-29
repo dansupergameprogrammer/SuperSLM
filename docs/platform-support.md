@@ -119,6 +119,37 @@ best of 3:** 0.31 s with the SHA extensions against 3.25 s for 1.9.0's
 portable hash. The portable path itself is also about 1.7x faster than in
 1.9.0 (1.95 s).
 
+### Attention prob·V on int16 multiply-add (unreleased)
+
+On the AVX2 and AVX-512 tiers, `GemmProbQ15Accumulate` (the attention
+probability row times the value rows, per head) multiplies pairs of keys
+with `vpmaddwd` into 32-bit lanes and widens each lane to 64 bits. The
+probability pairs are formed in registers. The fast path is taken only when
+the head dimension is a multiple of 16 and the row passes the int16
+condition: every p in [0, 32767], and sum at most 2^15. Under that condition
+no lane can exceed 128 x 2^15 = 2^22, so every output is the exact sum
+v1.9.0's loop computes. Every other row takes the v1.9.0 loop, as do the
+scalar and SSE2 tiers. On real prompts that fallback is the one-hot rows:
+every width-1 row, and rarely a wider one.
+
+| Build | Fast path | Status |
+|---|---|---|
+| GCC / Clang, AVX2 tier | on | Bit-identity: full suite forced AVX2, the prob·V golden pinned from 1.9.0, cross-tier digest, save-blob equality against 1.9.0 |
+| GCC / Clang, AVX-512 tier | on | Same evidence, forced AVX-512 and auto dispatch |
+| MSVC / clang-cl, AVX2 tier | on | Built by the forced Windows legs; not yet executed on Windows |
+| MSVC / clang-cl, AVX-512 tier | **off** (`SUPERSLM_SITES_AVX512_MSVC=0`) | Held on the 1.9.0 loop until an MSVC AVX-512 build has executed the fast path; the forced AVX-512 Windows legs build with it on |
+
+**Measured, engine level, same host as above (best of 50, 9 interleaved
+rounds):** at head dimension 64 one call is 17-21x faster than 1.9.0's
+loop at 128 to 1,024 keys on AVX-512, and 16-19x on AVX2. For example, at
+601 keys it takes 24.8 µs on 1.9.0, 1.18 µs on AVX-512 and 1.32 µs on AVX2.
+Scaled to Qwen2.5-0.5B depth (24 layers x 14 heads), the step saves about
+0.82 / 3.4 / 6.7 ms per prompt token at 128 / 512 / 1,024 tokens, and
+3.9 / 7.9 ms per decode token at context 300 / 600. A one-layer forward
+agrees at 512 tokens and in decode. These are engine figures on synthetic
+weights, not a consumer's end-to-end speed
+(`docs/attention-rowsites/s2/bench.md`).
+
 ### Damped-greedy decoding
 
 The 1.2 candidate's opt-in decoder was confirmed on Windows x64 through the

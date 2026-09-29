@@ -7,6 +7,12 @@
 //       Each per-row site at the Qwen2.5-0.5B geometry, through its public entry point with realistic
 //       constants: RmsNormSite at 896, MlpActSite at 4,864, ResidualReconcileSite at 896. Prints the
 //       best-of-R microseconds per call (each rep times a batch of calls over 16 distinct rows).
+//   sslm_sites_bench pv [--repeat=R]
+//       Slice S2: GemmProbQ15Accumulate at head_dim 64 (the 0.5B's) on realistic probability rows (every p
+//       formed as the softmax forms it, Sum p <= 2^15) over one KV head's value rows. Prints best-of-R
+//       microseconds per call at single widths, then the per-token cost at the 0.5B's full depth (24
+//       layers x 14 query heads, one call per head per token): prefill of T tokens sums the calls at
+//       widths 1..T and divides by T; decode at context C is one call at width C + 1 per head.
 //   sslm_sites_bench prefill <artifact.sslm> <T> [--layers=L] [--repeat=R]
 //       One sslm_prefill of T token ids at chunk_budget = T; best-of-R ms per prompt token.
 //   sslm_sites_bench decode <artifact.sslm> <context> <D> [--layers=L] [--repeat=R]
@@ -29,6 +35,7 @@
 
 #include "superslm/checked_chain_funnel.h"
 #include "superslm/forward_sites.h"
+#include "superslm/matmul.h"
 #include "superslm/silu_lut_canonical.h"
 #include "superslm/sslm_abi.h"
 
@@ -107,6 +114,53 @@ int KernelMode(int repeat) {
 	return bad == 0 ? 0 : 1;
 }
 
+// Slice S2's bench (see the header): the prob·V call at the 0.5B's head_dim over realistic rows.
+int PvMode(int repeat) {
+	constexpr size_t kHeadDim = 64, kMaxWidth = 1025, kLayers = 24, kHeads = 14;
+	Rng rng(0x5332505642454E43ULL);
+	std::vector<int8_t> values(kMaxWidth * kHeadDim);
+	for (auto& v : values) v = static_cast<int8_t>(rng.InRange(-128, 127));
+	// probs[w] is a realistic row of width w: weights 2^(0..12) with jitter, p = floor(e * 2^15 / Sum e).
+	std::vector<std::vector<int64_t>> probs(kMaxWidth + 1);
+	for (size_t w = 1; w <= kMaxWidth; ++w) {
+		std::vector<int64_t> e(w);
+		int64_t total = 0;
+		for (auto& x : e) {
+			const int sh = static_cast<int>(rng.InRange(0, 12));
+			x = (INT64_C(1) << sh) + rng.InRange(0, (INT64_C(1) << sh) - 1);
+			total += x;
+		}
+		probs[w].resize(w);
+		for (size_t k = 0; k < w; ++k) probs[w][k] = (e[k] << 15) / total;
+	}
+	std::vector<int64_t> out(kHeadDim);
+	const auto call = [&](size_t w) {
+		superslm::GemmProbQ15Accumulate(probs[w].data(), values.data(), w, kHeadDim, out.data());
+		g_sink = g_sink + out[0];
+	};
+	// Single widths.
+	std::printf("pv best-of-%d us/call at head_dim 64:", repeat);
+	for (size_t w : {size_t{1}, size_t{128}, size_t{301}, size_t{512}, size_t{601}, size_t{1024}}) {
+		const int calls = w < 64 ? 4096 : 256;
+		std::printf("  w=%zu %.4f", w, BestMicrosPerCall(repeat, calls, [&](int) { call(w); }));
+	}
+	std::printf("\n");
+	// Prefill: every width 1..T once (one head of one layer), best of R, scaled to 24 layers x 14 heads / T.
+	for (size_t T : {size_t{128}, size_t{512}, size_t{1024}}) {
+		const double us = BestMicrosPerCall(repeat, 1, [&](int) {
+			for (size_t w = 1; w <= T; ++w) call(w);
+		});
+		std::printf("pv prefill T=%zu: %.4f ms/token at 24 layers x 14 heads\n", T,
+		            us * kLayers * kHeads / static_cast<double>(T) / 1000.0);
+	}
+	// Decode at context C: one call at width C + 1 per head per layer.
+	for (size_t C : {size_t{300}, size_t{600}}) {
+		const double us = BestMicrosPerCall(repeat, 256, [&](int) { call(C + 1); });
+		std::printf("pv decode ctx=%zu: %.4f ms/token at 24 layers x 14 heads\n", C, us * kLayers * kHeads / 1000.0);
+	}
+	return 0;
+}
+
 bool ReadFile(const char* path, std::vector<uint8_t>& out) {
 	std::ifstream f(path, std::ios::binary);
 	if (!f) return false;
@@ -176,7 +230,7 @@ void RunOnce(const std::vector<uint8_t>& bytes, int32_t layers, int32_t T, int32
 int main(int argc, char** argv) {
 	if (argc < 2) {
 		std::fprintf(stderr,
-		             "usage: %s kernel [--repeat=R] | prefill <artifact> <T> [--layers=L] [--repeat=R] | "
+		             "usage: %s kernel [--repeat=R] | pv [--repeat=R] | prefill <artifact> <T> [--layers=L] [--repeat=R] | "
 		             "decode <artifact> <context> <D> [--layers=L] [--repeat=R]\n",
 		             argv[0]);
 		return 2;
@@ -189,6 +243,7 @@ int main(int argc, char** argv) {
 	}
 	const std::string mode = argv[1];
 	if (mode == "kernel") return KernelMode(repeat);
+	if (mode == "pv") return PvMode(repeat);
 	if ((mode == "prefill" && argc >= 4) || (mode == "decode" && argc >= 5)) {
 		std::vector<uint8_t> bytes;
 		if (!ReadFile(argv[2], bytes)) Fail("reading the artifact", 0);

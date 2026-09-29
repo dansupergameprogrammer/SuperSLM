@@ -789,6 +789,20 @@ void TestS2Grid() {
 	superslm_attention_cases::ForEachProbVCase([&](const superslm_attention_cases::PvCase& c) {
 		(RunPv(c.label, c.probs, c.values, c.width, c.head_dim) ? fast : fallback) += 1;
 	});
+	// The kernels' own blocking (not in the golden set, so the pin stays the plan's grid): AVX2 runs
+	// 16-dimension units four at a time, AVX-512 runs 32-dimension units four at a time plus one
+	// 16-dimension tail when head_dim % 32 == 16. These head_dims reach every block count and the tail
+	// behind a full block, each at even and odd widths.
+	{
+		superslm_attention_cases::Rng rng(0x5332424C4F434B53ULL);  // "S2BLOCKS"
+		for (size_t hd : {size_t{32}, size_t{48}, size_t{80}, size_t{96}, size_t{144}, size_t{160}, size_t{208},
+		                  size_t{224}, size_t{240}})
+			for (size_t w : {size_t{1}, size_t{2}, size_t{3}, size_t{64}, size_t{65}}) {
+				const std::vector<int64_t> p = superslm_attention_cases::RealisticRow(w, 10, rng);
+				const std::vector<int8_t> v = superslm_attention_cases::RandomValues(w * hd, rng);
+				(RunPv("4.S2 kernel blocking", p, v, w, hd) ? fast : fallback) += 1;
+			}
+	}
 	// The grid reaches both sides of every conjunct: fast and fallback both occur.
 	CHECK_MSG(fast > 0 && fallback > 0, "4.S2: the set takes the fast path %zu times and falls back %zu times", fast,
 	          fallback);

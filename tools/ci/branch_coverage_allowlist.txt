@@ -31,3 +31,13 @@
 #   on one CPU (the CPUID/XGETBV bits it reads are a fixed property of the
 #   running hardware) -- a genuine, permanent gap no union of same-machine
 #   binaries closes (design §10 dimension 7 item (h)).
+# Attention and per-row sites plan, slice S2 (prob-V on int16 multiply-add; plan §3.4, cell 11.6):
+# src/matmul.cpp:821-901 -- ProbVBlockAvx512, ProbVTail16Avx512 and
+#   ProbVAccumulateIntoAvx512 (all branches) cannot execute on a runner
+#   without AVX-512, for the same reason as DotRowAvx512 above.
+# src/matmul.cpp:923-924 -- ProbQ15AccumulateInto's AVX-512 arm: the same
+#   runner restriction (DispatchSitesKernel returns kAvx512 only on the
+#   AVX-512 tier).
+# src/matmul.cpp:913,1059 -- the implicit default of the switches in
+#   ProbQ15AccumulateInto (over SitesKernel) and SelectSitesKernel (over
+#   GemmTier): every enumerator has a case, so no input reaches it.

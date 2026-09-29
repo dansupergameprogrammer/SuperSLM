@@ -29,6 +29,16 @@ set in `check_fp_free_scan.py`. Each is 32-bit integer arithmetic on xmm lanes (
 modular adds, rotates, shifts and boolean ops; no rounding, no MXCSR, no floating-point operand).
 The SHA-1 instructions stay rejected.
 
+On the AVX2 and AVX-512 tiers, attention's probability-times-value step (`GemmProbQ15Accumulate`)
+now runs on 16-bit multiply-add when the head dimension is a multiple of 16 and the probability
+row fits 16 bits (every p in [0, 32767], sum at most 2^15). Other rows take the 1.9.0 loop. This
+covers every softmax row except a one-hot row. Outputs are bit-identical to 1.9.0: the same
+tokens, save blobs and digest. Engine level, on one cloud host, at head dimension 64 the step is
+about 16-21x faster. At Qwen2.5-0.5B depth (24 layers, 14 heads) that saves about 0.8 / 3.4 /
+6.7 ms per prompt token at 128 / 512 / 1,024 tokens, and about 4 ms per decode token at context
+300. MSVC and clang-cl builds keep the AVX-512 tier on the 1.9.0 loop until it has executed
+there; `SUPERSLM_SITES_AVX512_MSVC=1` turns it on. There is no ABI, format or status change.
+
 ## [1.9.0] - 2026-09-25
 
 `sslm_seq_save` writes a new save format, `SSB5`: the `SSB4` layout with the four per-site

@@ -1,0 +1,190 @@
+# sslm_sites_bench pv --repeat=50, 9 interleaved triples: bench_base (the S1 head's library, auto = AVX-512 here, v1.9.0 prob-V loop), bench_cand (S2, auto = AVX-512 body), bench_cand_avx2 (S2 library built with SUPERSLM_FORCE_AVX2_MATMUL, AVX2 body). GCC 13.3 -O3 -ffp-contract=off.
+== pair 1 base
+pv best-of-50 us/call at head_dim 64:  w=1 0.0556  w=128 5.2409  w=301 12.5153  w=512 21.0625  w=601 24.8863  w=1024 40.9210
+pv prefill T=128: 0.8774 ms/token at 24 layers x 14 heads
+pv prefill T=512: 3.5606 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 7.2079 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 4.1799 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 8.4376 ms/token at 24 layers x 14 heads
+== pair 1 cand
+pv best-of-50 us/call at head_dim 64:  w=1 0.0558  w=128 0.2673  w=301 0.6013  w=512 1.0105  w=601 1.2822  w=1024 2.9256
+pv prefill T=128: 0.0759 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.2881 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4798 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.2114 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.4225 ms/token at 24 layers x 14 heads
+== pair 1 cand_avx2
+pv best-of-50 us/call at head_dim 64:  w=1 0.0632  w=128 0.4110  w=301 0.9919  w=512 1.7756  w=601 1.3229  w=1024 2.3906
+pv prefill T=128: 0.0540 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.1954 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4353 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.2264 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.4443 ms/token at 24 layers x 14 heads
+== pair 2 base
+pv best-of-50 us/call at head_dim 64:  w=1 0.0553  w=128 5.2871  w=301 14.0768  w=512 21.1137  w=601 24.7519  w=1024 42.2993
+pv prefill T=128: 0.8771 ms/token at 24 layers x 14 heads
+pv prefill T=512: 3.5549 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 7.2171 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 4.1436 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 8.3299 ms/token at 24 layers x 14 heads
+== pair 2 cand
+pv best-of-50 us/call at head_dim 64:  w=1 0.0558  w=128 0.2655  w=301 0.5993  w=512 1.0079  w=601 1.1836  w=1024 2.3166
+pv prefill T=128: 0.0523 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.1763 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4354 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.2015 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.3977 ms/token at 24 layers x 14 heads
+== pair 2 cand_avx2
+pv best-of-50 us/call at head_dim 64:  w=1 0.0569  w=128 0.2996  w=301 0.6731  w=512 1.1284  w=601 1.3222  w=1024 2.4264
+pv prefill T=128: 0.0540 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.1966 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4461 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.2264 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.4444 ms/token at 24 layers x 14 heads
+== pair 3 base
+pv best-of-50 us/call at head_dim 64:  w=1 0.0556  w=128 5.2430  w=301 12.3318  w=512 21.3991  w=601 24.7269  w=1024 42.2382
+pv prefill T=128: 0.8775 ms/token at 24 layers x 14 heads
+pv prefill T=512: 3.3532 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 6.9828 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 4.1480 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 8.3541 ms/token at 24 layers x 14 heads
+== pair 3 cand
+pv best-of-50 us/call at head_dim 64:  w=1 0.0563  w=128 0.2660  w=301 0.5999  w=512 1.0079  w=601 1.1802  w=1024 2.3240
+pv prefill T=128: 0.0530 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.1753 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4158 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.1953 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.3970 ms/token at 24 layers x 14 heads
+== pair 3 cand_avx2
+pv best-of-50 us/call at head_dim 64:  w=1 0.0571  w=128 0.2994  w=301 0.6734  w=512 1.1285  w=601 1.3220  w=1024 2.4266
+pv prefill T=128: 0.0654 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.1958 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4443 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.2263 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.4441 ms/token at 24 layers x 14 heads
+== pair 4 base
+pv best-of-50 us/call at head_dim 64:  w=1 0.0545  w=128 5.2467  w=301 12.4527  w=512 21.0875  w=601 24.7565  w=1024 42.5533
+pv prefill T=128: 0.8773 ms/token at 24 layers x 14 heads
+pv prefill T=512: 3.5712 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 7.1697 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 4.1434 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 8.4036 ms/token at 24 layers x 14 heads
+== pair 4 cand
+pv best-of-50 us/call at head_dim 64:  w=1 0.0557  w=128 0.2666  w=301 0.5992  w=512 1.0078  w=601 1.1785  w=1024 2.2558
+pv prefill T=128: 0.0523 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.1750 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4274 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.2016 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.3968 ms/token at 24 layers x 14 heads
+== pair 4 cand_avx2
+pv best-of-50 us/call at head_dim 64:  w=1 0.0569  w=128 0.2995  w=301 0.6736  w=512 1.1285  w=601 1.4497  w=1024 2.4200
+pv prefill T=128: 0.0540 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.1952 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4218 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.2263 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.4330 ms/token at 24 layers x 14 heads
+== pair 5 base
+pv best-of-50 us/call at head_dim 64:  w=1 0.0556  w=128 5.2435  w=301 12.4070  w=512 20.9945  w=601 24.7924  w=1024 42.2008
+pv prefill T=128: 0.8775 ms/token at 24 layers x 14 heads
+pv prefill T=512: 3.5579 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 7.1960 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 4.1463 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 8.3144 ms/token at 24 layers x 14 heads
+== pair 5 cand
+pv best-of-50 us/call at head_dim 64:  w=1 0.0558  w=128 0.2665  w=301 0.6022  w=512 1.0084  w=601 1.1794  w=1024 2.2419
+pv prefill T=128: 0.0525 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.1749 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4189 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.2018 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.3962 ms/token at 24 layers x 14 heads
+== pair 5 cand_avx2
+pv best-of-50 us/call at head_dim 64:  w=1 0.0552  w=128 0.2995  w=301 0.6734  w=512 1.1279  w=601 1.3218  w=1024 2.3916
+pv prefill T=128: 0.0539 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.1944 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4457 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.2266 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.4444 ms/token at 24 layers x 14 heads
+== pair 6 base
+pv best-of-50 us/call at head_dim 64:  w=1 0.0556  w=128 5.2316  w=301 12.4048  w=512 21.1082  w=601 24.7878  w=1024 42.2654
+pv prefill T=128: 0.8785 ms/token at 24 layers x 14 heads
+pv prefill T=512: 3.5903 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 7.1748 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 4.2242 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 8.3959 ms/token at 24 layers x 14 heads
+== pair 6 cand
+pv best-of-50 us/call at head_dim 64:  w=1 0.0559  w=128 0.2663  w=301 0.6006  w=512 1.0115  w=601 1.2007  w=1024 2.2641
+pv prefill T=128: 0.0526 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.1749 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4335 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.2021 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.3963 ms/token at 24 layers x 14 heads
+== pair 6 cand_avx2
+pv best-of-50 us/call at head_dim 64:  w=1 0.0569  w=128 0.2995  w=301 0.6735  w=512 1.1283  w=601 1.3226  w=1024 2.4533
+pv prefill T=128: 0.0540 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.1964 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4341 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.2266 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.4448 ms/token at 24 layers x 14 heads
+== pair 7 base
+pv best-of-50 us/call at head_dim 64:  w=1 0.0556  w=128 5.2390  w=301 12.3333  w=512 21.1725  w=601 24.8000  w=1024 42.9264
+pv prefill T=128: 0.8780 ms/token at 24 layers x 14 heads
+pv prefill T=512: 3.5487 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 7.2190 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 4.1666 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 8.3817 ms/token at 24 layers x 14 heads
+== pair 7 cand
+pv best-of-50 us/call at head_dim 64:  w=1 0.0574  w=128 0.3358  w=301 0.6905  w=512 1.0126  w=601 1.1819  w=1024 2.2926
+pv prefill T=128: 0.0478 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.1748 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4410 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.2014 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.3960 ms/token at 24 layers x 14 heads
+== pair 7 cand_avx2
+pv best-of-50 us/call at head_dim 64:  w=1 0.0569  w=128 0.2995  w=301 0.6735  w=512 1.1279  w=601 1.3220  w=1024 2.3907
+pv prefill T=128: 0.0539 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.1953 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4514 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.2263 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.4440 ms/token at 24 layers x 14 heads
+== pair 8 base
+pv best-of-50 us/call at head_dim 64:  w=1 0.0558  w=128 5.2312  w=301 12.3709  w=512 21.1039  w=601 24.7549  w=1024 42.4241
+pv prefill T=128: 0.8775 ms/token at 24 layers x 14 heads
+pv prefill T=512: 3.5581 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 7.0197 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 4.1821 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 8.3210 ms/token at 24 layers x 14 heads
+== pair 8 cand
+pv best-of-50 us/call at head_dim 64:  w=1 0.0563  w=128 0.2661  w=301 0.6001  w=512 1.0082  w=601 1.1803  w=1024 2.2572
+pv prefill T=128: 0.0525 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.1766 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4422 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.2247 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.4790 ms/token at 24 layers x 14 heads
+== pair 8 cand_avx2
+pv best-of-50 us/call at head_dim 64:  w=1 0.0569  w=128 0.2990  w=301 0.6736  w=512 1.1568  w=601 1.7637  w=1024 2.3931
+pv prefill T=128: 0.0539 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.1962 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4444 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.2263 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.4442 ms/token at 24 layers x 14 heads
+== pair 9 base
+pv best-of-50 us/call at head_dim 64:  w=1 0.0556  w=128 5.2318  w=301 11.9839  w=512 19.9958  w=601 24.8073  w=1024 40.8769
+pv prefill T=128: 0.8776 ms/token at 24 layers x 14 heads
+pv prefill T=512: 3.5785 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 7.1829 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 4.1559 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 8.3686 ms/token at 24 layers x 14 heads
+== pair 9 cand
+pv best-of-50 us/call at head_dim 64:  w=1 0.0558  w=128 0.2659  w=301 0.5994  w=512 1.0111  w=601 1.1838  w=1024 2.3212
+pv prefill T=128: 0.0490 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.1779 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4215 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.2014 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.3961 ms/token at 24 layers x 14 heads
+== pair 9 cand_avx2
+pv best-of-50 us/call at head_dim 64:  w=1 0.0544  w=128 0.3422  w=301 0.7722  w=512 1.1315  w=601 1.3229  w=1024 2.3911
+pv prefill T=128: 0.0540 ms/token at 24 layers x 14 heads
+pv prefill T=512: 0.1955 ms/token at 24 layers x 14 heads
+pv prefill T=1024: 0.4830 ms/token at 24 layers x 14 heads
+pv decode ctx=300: 0.2735 ms/token at 24 layers x 14 heads
+pv decode ctx=600: 0.6173 ms/token at 24 layers x 14 heads
