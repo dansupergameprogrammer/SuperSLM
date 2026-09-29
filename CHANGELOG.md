@@ -23,6 +23,11 @@ fallback and the only path on other targets. Digests are unchanged. Hashing the 
 Zen 2 desktop (MSVC) takes 0.31 s against 3.25 s before (about 1.5 GB/s against 150 MB/s). Defining
 `SUPERSLM_FORCE_PORTABLE_SHA256` when compiling `src/sha256.cpp` pins the portable path; the new
 `sha256_portable_forced_tests` target builds that way.
+The FP-free scan's check (A) accepts `sha256rnds2`, `sha256msg1` and `sha256msg2`, the three
+instructions the hardware path compiles to, through a new three-entry `_X86_INTEGER_HASH_ALLOW`
+set in `check_fp_free_scan.py`. Each is 32-bit integer arithmetic on xmm lanes (Intel SDM:
+modular adds, rotates, shifts and boolean ops; no rounding, no MXCSR, no floating-point operand).
+The SHA-1 instructions stay rejected.
 
 ## [1.9.0] - 2026-09-25
 

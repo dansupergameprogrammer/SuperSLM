@@ -22,6 +22,13 @@
 # leaking again; removed: capstone renamed or retired a mnemonic) --
 # with tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py's own
 # _census_check_a_p_vp_structural_reliance(), sorted, one mnemonic per line.
+# Regenerated 2026-09-29 (Dan's decision, ID-PENDING): sha256rnds2,
+# sha256msg1 and sha256msg2 added, 457 members. They are named by
+# _X86_INTEGER_HASH_ALLOW, not by _X86_VEC_MOVE_ALLOW, so the census's own
+# definition of "named" (VEC_MOVE only) files them here, as it already
+# files the sixteen _X86_BITWISE_FP_FAMILY members. Each was reviewed: a
+# 32-bit integer hash round/schedule op, no floating-point semantics.
+#
 #
 andnpd
 andnps
@@ -159,6 +166,9 @@ pushaw
 pushf
 pushfd
 pushfq
+sha256msg1
+sha256msg2
+sha256rnds2
 vandnpd
 vandnps
 vandpd

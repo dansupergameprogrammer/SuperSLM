@@ -4030,6 +4030,14 @@ def test_check_a_p_vp_structural_accept_census_and_violation():
     test_check_a_p_vp_structural_only_nonempty_violates_fail_closed_claim,
     is retired (R7, same commit as R3) rather than left describing a
     decision that has since been made.
+
+    Rebaselined again 2026-09-29 (Dan's decision, ID-PENDING): the
+    three-mnemonic `_X86_INTEGER_HASH_ALLOW` (sha256rnds2/sha256msg1/
+    sha256msg2) moves accept_a 571 -> 574. This census's own "named" is
+    `_X86_VEC_MOVE_ALLOW` alone, so named_accept stays 117 and the three
+    land in structural_only, 454 -> 457 -- the same filing the sixteen
+    `_X86_BITWISE_FP_FAMILY` members already get. Recomputed by running
+    this census, not derived by hand.
     """
     if not _SCAN_AVAILABLE:
         _fail_absent("(D-SLM4999 p/vp vitality pin, census)", "")
@@ -4039,10 +4047,11 @@ def test_check_a_p_vp_structural_accept_census_and_violation():
         "reproduced 1523 -- this suite's own capstone version may have "
         "changed; got {}".format(len(vocabulary))
     )
-    assert len(accept_a) == 571, (
+    assert len(accept_a) == 574, (
         "check (A)'s own ACCEPT count on a vector operand changed from the "
-        "reproduced 571 (555 pre-D-SLM5037 + 16 vextract/vinsert "
-        "lane-movement mnemonics D-SLM5037 widened); got {}".format(len(accept_a))
+        "reproduced 574 (555 pre-D-SLM5037 + 16 vextract/vinsert "
+        "lane-movement mnemonics D-SLM5037 widened + 3 _X86_INTEGER_HASH_ALLOW "
+        "SHA-256 mnemonics, 2026-09-29); got {}".format(len(accept_a))
     )
     assert len(named_accept) == 117, (
         "check (A)'s own explicitly-allow-listed ACCEPT count changed from "
@@ -4051,12 +4060,13 @@ def test_check_a_p_vp_structural_accept_census_and_violation():
         "addition, unlike D-SLM4987's structural-rule accept, so this count "
         "moves with it); got {}".format(len(named_accept))
     )
-    assert len(structural_only) == 454, (
-        "check (A)'s own structural-only (no-allow-list) ACCEPT count "
-        "changed from the reproduced 454 -- D-SLM5037's sixteen-mnemonic "
-        "widening is an explicit allow-list addition (named_accept, above), "
-        "not a structural-rule accept, so this count should be unaffected "
-        "by it; got {}".format(len(structural_only))
+    assert len(structural_only) == 457, (
+        "check (A)'s own structural-only (not on _X86_VEC_MOVE_ALLOW) ACCEPT "
+        "count changed from the reproduced 457 (454 + the three "
+        "_X86_INTEGER_HASH_ALLOW mnemonics, which this census's own "
+        "definition of named does not cover) -- D-SLM5037's sixteen-mnemonic "
+        "widening is an explicit _X86_VEC_MOVE_ALLOW addition (named_accept, "
+        "above), so it never moved this count; got {}".format(len(structural_only))
     )
 
 
@@ -4725,8 +4735,9 @@ def test_check_a_reason_attribution_census_every_accept_has_a_reason():
     """Population fifty-two's must-accept (D-SLM5157): once _x86_check_a
     adopts the Optional[str] contract (R4), `unattributed` (every
     acceptance with no reported reason) must be [] -- every member of
-    accept_a is attributed to exactly one of the three named reasons
-    (_X86_VEC_MOVE_ALLOW, _X86_BITWISE_FP_FAMILY, _X86_P_VP_STRUCTURAL_ALLOW).
+    accept_a is attributed to exactly one of the four named reasons
+    (_X86_VEC_MOVE_ALLOW, _X86_BITWISE_FP_FAMILY, _X86_P_VP_STRUCTURAL_ALLOW,
+    _X86_INTEGER_HASH_ALLOW).
 
     TODAY _x86_check_a still returns bool: every accepted mnemonic's own
     'reason' is the literal True, not a string, so unattributed ==
@@ -4836,4 +4847,54 @@ def test_x86_gpr_allow_population_is_pinned_by_count_not_by_comment():
     assert "bswap" in scan._X86_GPR_ALLOW, (
         "bswap (T-2531 C-1's own addition, closing the linux-x64 job's real GCC reject "
         "on Sha256::Final) is missing from _X86_GPR_ALLOW"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dan, 2026-09-29 (decision ID pending: ID-PENDING): `_X86_INTEGER_HASH_ALLOW`
+# admits exactly sha256rnds2/sha256msg1/sha256msg2 under check (A), on the
+# `bswap` precedent (T-2529, D-SLM4374's vetting law). The cells below pin
+# that the addition is exactly scoped: the three ACCEPT with their own reason,
+# the set holds nothing else, and the neighbouring SHA-1 mnemonics (equally
+# integer-only, but never reviewed onto any list) still REJECT as unknown.
+# ---------------------------------------------------------------------------
+
+_SHA256_HASH_MNEMONICS = ("sha256rnds2", "sha256msg1", "sha256msg2")
+
+
+@pytest.mark.parametrize("mnemonic", _SHA256_HASH_MNEMONICS)
+def test_check_a_accepts_sha256_integer_hash_mnemonic(mnemonic):
+    if not _SCAN_AVAILABLE:
+        _fail_absent("(integer hash allow, must-accept)", "")
+    for ops in ("xmm1, xmm2", "xmm1, xmmword ptr [rax]", "xmm1, xmm2, xmm0"):
+        assert scan._x86_check_a(mnemonic, ops) == "integer_hash_allow", (
+            "{} {} must ACCEPT under check (A) via _X86_INTEGER_HASH_ALLOW; "
+            "got {!r}".format(mnemonic, ops, scan._x86_check_a(mnemonic, ops))
+        )
+
+
+def test_x86_integer_hash_allow_is_exactly_the_three_sha256_mnemonics():
+    if not _SCAN_AVAILABLE:
+        _fail_absent("(integer hash allow, exact membership)", "")
+    assert set(scan._X86_INTEGER_HASH_ALLOW) == set(_SHA256_HASH_MNEMONICS), (
+        "_X86_INTEGER_HASH_ALLOW must hold exactly the three reviewed SHA-256 "
+        "mnemonics; any other member needs its own reviewed addition. Got "
+        "{}".format(sorted(scan._X86_INTEGER_HASH_ALLOW))
+    )
+    for other in ("_X86_VEC_MOVE_ALLOW", "_X86_P_VP_STRUCTURAL_ALLOW",
+                  "_X86_BITWISE_FP_FAMILY", "_X86_GPR_ALLOW"):
+        overlap = set(getattr(scan, other)) & set(_SHA256_HASH_MNEMONICS)
+        assert overlap == set(), "{} also names {}".format(other, sorted(overlap))
+
+
+@pytest.mark.parametrize("mnemonic", ("sha1rnds4", "sha1msg1", "sha1msg2", "sha1nexte"))
+def test_check_a_still_rejects_neighbouring_sha1_mnemonic(mnemonic):
+    if not _SCAN_AVAILABLE:
+        _fail_absent("(integer hash allow, must-reject neighbour)", "")
+    assert scan._x86_check_a(mnemonic, "xmm1, xmm2") is None, (
+        "{} was never reviewed onto any check (A) list and must still REJECT "
+        "as unknown -- the SHA-256 addition must not widen to it".format(mnemonic)
+    )
+    assert not scan._x86_check_b(mnemonic), (
+        "{} must not be on check (B)'s GPR allow-list either".format(mnemonic)
     )
