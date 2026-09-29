@@ -27,6 +27,8 @@ States: **done**, **CI-only**, **box-only**, **not done** (with why).
 | Red-first: cells (2.S4, 4.S4 grid, inside corners, correction rows, aliased rows, width 0, 6.1, 6.3, 11.1(d) softmax rows), the test-side guard copy and estimate replica, per-tier softmax counters (declared, not incremented), the S4 rows appended to `c32_attention`, the S4 golden hash | done (commit 1) | `docs/attention-rowsites/s4/red-suites.txt`: auto and forced AVX2/AVX-512 fail 3,125 assertions each, every one a path assertion; forced SSE2 0. Every value assertion passes on the base. Digests: every section but `c32_attention` byte-identical to S3's on all five legs; `c32_attention` `6bb5971d…` on all five |
 | Golden pin (6.3) from the v1.9.0 tag | done | `golden.txt`: S4 `2e47ea3c…` over 268,078 values; S1's, S2's and S3's unchanged |
 | 11.1(d) data term re-derived on the base | done | `softmax-data-terms.txt`: 0 rows outside the guard in both windows (1,792 prefill, 448 decode rows), as the plan measured |
+| Implementation: the row guard, the AVX2 and AVX-512BW bodies (integer estimates, exact corrections), the dispatcher and its fallback counter | done (commit 2) | GCC 13.3 and Clang 18.1: auto (AVX-512 here) and forced SSE2/AVX2/AVX-512 suites 0 failures (116,129 / 116,071 / 116,087 / 116,087 checks); S4 golden `2e47ea3c…` on every binary; digests equal the red run's on all five legs of both compilers |
+| 11.3 linkage checker: the S4 bodies join the population; vitality plant | done | `linkage-plant.txt`: a planted external `SoftmaxExpAvx2Planted` turns it red; restored, OK |
 
 ## Deviations from the plan as written
 

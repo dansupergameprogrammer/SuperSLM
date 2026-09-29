@@ -468,7 +468,8 @@ jobs:
   # (never global, weak, unique or COMDAT), in the auto and both forced builds; the build-configuration
   # record is the single external exception. The check's own vitality plants are recorded in
   # docs/tiled-matmul-slice1-progress.md. The attention and per-row sites plan's slice S3 adds the
-  # intmath.cpp objects, whose requant row bodies are that file's first target-attributed functions.
+  # intmath.cpp objects, whose requant row bodies are that file's first target-attributed functions;
+  # slice S4 adds the softmax fast path's bodies to the same objects.
   tiled-matmul-linkage:
     runs-on: ubuntu-latest
     steps:

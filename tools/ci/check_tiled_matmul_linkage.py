@@ -13,7 +13,12 @@ bodies, their guard and the accumulate-into core, cell 11.3 of that plan), plus 
 build-configuration record `superslm_build_config_record`. Slice S3 of the same plan gives src/intmath.cpp
 its first target-attributed functions, the requant row bodies `RequantRowAvx2` and `RequantRowAvx512`
 (`RequantRowAvx` in the population; the exported leaf `RequantRowWide` that dispatches to them carries no
-target attribute and is outside it), so the intmath.cpp objects are passed too. The engine's public API in the same object
+target attribute and is outside it), so the intmath.cpp objects are passed too. Slice S4 adds the softmax
+fast path's bodies there: `SoftmaxRowAvx2` / `SoftmaxRowAvx512` and the per-step helpers they inline,
+`SoftmaxExpAvx2` / `SoftmaxExpAvx512` and `SoftmaxProbAvx2` / `SoftmaxProbAvx512` (`SoftmaxRowAvx`,
+`SoftmaxExpAvx` and `SoftmaxProbAvx` in the population), and their shared, unattributed guard and row
+set-up (`SoftmaxFastGuard`, `MakeSoftmaxFastRow`, `SoftmaxProbReciprocal`; `SoftmaxFast` and
+`SoftmaxProbReciprocal`); the exported `SoftmaxRowQ15` that dispatches to them is outside it. The engine's public API in the same object
 is outside it (including the `superslm::detail::` entries the header declares, which carry no target
 attribute), and so are the test seam's own `superslm_test::` variables, which exist only in seam
 builds and are shared with the test translation unit on purpose.
@@ -41,7 +46,9 @@ import subprocess
 import sys
 
 RECORD = "superslm_build_config_record"
-POPULATION = re.compile(r"Tiled|ProbV|ProbQ15AccumulateInto|RequantRowAvx|" + RECORD)
+POPULATION = re.compile(
+    r"Tiled|ProbV|ProbQ15AccumulateInto|RequantRowAvx|SoftmaxRowAvx|SoftmaxExpAvx|SoftmaxProbAvx|SoftmaxFast|"
+    r"SoftmaxProbReciprocal|" + RECORD)
 SEAM = "superslm_test::"
 DETAIL_API = "superslm::detail::"  # declared in include/superslm/matmul.h; never target-attributed
 
@@ -65,6 +72,16 @@ EXPECTED = {
     # Attention and per-row sites plan, slice S3 (cell 11.3): src/intmath.cpp's requant row bodies.
     "RequantRowAvx2": ("RequantRowWide", r"vpmuludq\s.*%ymm"),
     "RequantRowAvx512": ("RequantRowWide", r"vpmuludq\s.*%zmm"),
+    # Attention and per-row sites plan, slice S4 (cell 11.3): src/intmath.cpp's softmax fast path.
+    "SoftmaxRowAvx2": ("SoftmaxRowQ15", r"(call|jmp).*SoftmaxRowAvx2"),
+    "SoftmaxRowAvx512": ("SoftmaxRowQ15", r"(call|jmp).*SoftmaxRowAvx512"),
+    "SoftmaxExpAvx2": ("SoftmaxRowAvx2", r"vpsrlvq\s.*%ymm"),
+    "SoftmaxExpAvx512": ("SoftmaxRowAvx512", r"vpsrlvq\s.*%zmm"),
+    "SoftmaxProbAvx2": ("SoftmaxRowAvx2", r"vpsllq\s+\$0xf,.*%ymm"),
+    "SoftmaxProbAvx512": ("SoftmaxRowAvx512", r"vpsllq\s+\$0xf,.*%zmm"),
+    "SoftmaxFastGuard": ("SoftmaxRowQ15", r"(0x2000000000000000|0xe000000000000000|0x4000000000000000)"),  # +-2^61
+    "MakeSoftmaxFastRow": ("SoftmaxRowQ15", r"(lzcnt|bsr)"),
+    "SoftmaxProbReciprocal": ("SoftmaxRowAvx", r"\bdiv"),
 }
 
 

@@ -12,7 +12,11 @@ prob·V bodies `ProbVBlockAvx2`, `ProbVBlockAvx512`, `ProbVTail16Avx512`, `ProbV
 `ProbVAccumulateIntoAvx512` (all in the anonymous namespace; their guard `ProbVFastPathAdmits` and
 the dispatching core `ProbQ15AccumulateInto` carry no target attribute), plus (that plan's slice S3)
 src/intmath.cpp's requant row bodies `RequantRowAvx2` and `RequantRowAvx512` (anonymous namespace; the
-exported leaf `RequantRowWide` that dispatches to them carries no target attribute). intmath.cpp is
+exported leaf `RequantRowWide` that dispatches to them carries no target attribute), plus (slice S4) the
+softmax fast path's bodies `SoftmaxRowAvx2` and `SoftmaxRowAvx512` and the step helpers they inline,
+`SoftmaxExpAvx2`, `SoftmaxExpAvx512`, `SoftmaxProbAvx2` and `SoftmaxProbAvx512` (anonymous namespace; the
+guard `SoftmaxFastGuard`, the row set-up `MakeSoftmaxFastRow` and `SoftmaxProbReciprocal`, and the exported
+`SoftmaxRowQ15` that dispatches carry no target attribute). intmath.cpp is
 compiled by the same CMake targets as matmul.cpp, and since slice S3 it calls `detail::ActiveGemmTier()`,
 so every direct compiler recipe that compiles it must name matmul.cpp too (the four recipes that did not
 gained it in that slice) and is therefore inside this checker's `matmul.cpp`-gated direct-invocation
