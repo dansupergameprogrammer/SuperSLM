@@ -120,6 +120,20 @@ GemmPath DispatchGemmPath(GemmTier tier, size_t num_tokens);
 // The tier this process's GEMM dispatches on (see GemmTier).
 GemmTier ActiveGemmTier();
 
+// Attention and per-row sites plan (rev 3.1, §3.2, cell 11.2): which body the attention kernels of
+// slices S2-S6 run. kShipped is the v1.9.0 code; kAvx2 and kAvx512 are the new SIMD bodies.
+enum class SitesKernel : int { kShipped = 0, kAvx2 = 1, kAvx512 = 2 };
+
+// The pure selector, compiled into every build and testable with any arguments on any runner: the
+// new kernels run only on the AVX2 and AVX-512 tiers, and on the AVX-512 tier of an MSVC or clang-cl
+// build (`is_msvc_build`) only when `msvc_avx512_switch` is nonzero (§3.2: SUPERSLM_SITES_AVX512_MSVC,
+// default 0, independent of the tiled GEMM's switch).
+SitesKernel SelectSitesKernel(GemmTier tier, int msvc_avx512_switch, bool is_msvc_build);
+
+// The call-site wiring: SelectSitesKernel with this build's own switch value and compiler identity.
+// Every S2-S6 dispatch decides through this function and nothing else.
+SitesKernel DispatchSitesKernel(GemmTier tier);
+
 }  // namespace detail
 
 // C17 -- narrow one accumulator row to int32 AFTER a conversion-time proof (design §4,

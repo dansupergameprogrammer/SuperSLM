@@ -816,6 +816,12 @@ GemmPath DispatchGemmPath(GemmTier tier, size_t num_tokens) {
 	return SelectGemmPath(tier, num_tokens, kTiledAvx512MsvcSwitch, kIsMsvcBuild);
 }
 
+// Attention and per-row sites plan, cell 11.2. Red-first: until slice S2 lands, every tier runs the
+// v1.9.0 attention code, so the selector says so.
+SitesKernel SelectSitesKernel(GemmTier, int, bool) { return SitesKernel::kShipped; }
+
+SitesKernel DispatchSitesKernel(GemmTier tier) { return SelectSitesKernel(tier, 0, kIsMsvcBuild); }
+
 GemmTier ActiveGemmTier() {
 #if defined(SUPERSLM_FORCE_SCALAR_MATMUL)
 	return GemmTier::kScalar;

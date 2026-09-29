@@ -34,12 +34,14 @@
 #include "superslm/forward_sites.h"
 #include "superslm/intmath.h"
 #include "superslm/layer_marshal.h"
+#include "superslm/matmul.h"
 #include "superslm/model.h"
 #include "superslm/sha256.h"
 #include "superslm/silu_lut.h"
 #include "superslm/silu_lut_canonical.h"
 #include "superslm/trace_hook.h"
 #include "attn_rowsite_golden_pin.h"
+#include "support/attention_cases.h"
 #include "support/matmul_dispatch_instrument.h"
 #include "support/rowsite_cases.h"
 
@@ -588,6 +590,270 @@ void TestS1GoldenPin() {
 			          kRowSiteNames[s], d.taken[s], d.skipped[s]);
 }
 
+// ==== Slice S2: prob·V on int16 multiply-add, per head (§4.2, §5.2) ==============================
+//
+// Every S2 cell calls GemmProbQ15Accumulate directly and asserts two things per call (§8 path rule):
+// the output equals a test-side copy of the v1.9.0 loop, and the prob·V path counters moved by
+// exactly the delta a test-side copy of the guard names, on the active kernel's own tier only. Which
+// kernel runs at all comes first, through a test-side copy of 11.2's selector.
+
+using superslm::detail::GemmTier;
+using superslm::detail::SitesKernel;
+
+// The tier the build under test dispatches on: known from the force macro in a forced binary, read
+// from the build in the auto binary (the CPU decides there).
+GemmTier ExpectedGemmTier() {
+#if defined(SUPERSLM_FORCE_SCALAR_MATMUL)
+	return GemmTier::kScalar;
+#elif defined(SUPERSLM_FORCE_SSE2_MATMUL)
+	return GemmTier::kSse2;
+#elif defined(SUPERSLM_FORCE_AVX2_MATMUL)
+	return GemmTier::kAvx2;
+#elif defined(SUPERSLM_FORCE_AVX512_MATMUL)
+	return GemmTier::kAvx512;
+#else
+	return superslm::detail::ActiveGemmTier();
+#endif
+}
+
+// The test-side switch and compiler identity (§3.2), read from the macros the test itself sees.
+#if defined(SUPERSLM_SITES_AVX512_MSVC)
+constexpr int kTestSitesAvx512MsvcSwitch = SUPERSLM_SITES_AVX512_MSVC;
+#else
+constexpr int kTestSitesAvx512MsvcSwitch = 0;
+#endif
+#if defined(_MSC_VER)
+constexpr bool kTestIsMsvcBuild = true;
+#else
+constexpr bool kTestIsMsvcBuild = false;
+#endif
+
+// The test-side copy of 11.2's selector, written from §3.2.
+SitesKernel TestSelectSitesKernel(GemmTier tier, int sw, bool msvc) {
+	if (tier == GemmTier::kAvx2) return SitesKernel::kAvx2;
+	if (tier == GemmTier::kAvx512) return (msvc && sw == 0) ? SitesKernel::kShipped : SitesKernel::kAvx512;
+	return SitesKernel::kShipped;
+}
+
+SitesKernel ExpectedSitesKernel() {
+	return TestSelectSitesKernel(ExpectedGemmTier(), kTestSitesAvx512MsvcSwitch, kTestIsMsvcBuild);
+}
+
+const char* SitesKernelName(SitesKernel k) {
+	switch (k) {
+		case SitesKernel::kShipped: return "v1.9.0 code";
+		case SitesKernel::kAvx2: return "AVX2";
+		case SitesKernel::kAvx512: return "AVX-512";
+	}
+	return "?";
+}
+
+// The test-side copy of the S2 guard (§4.2): head_dim % 16 == 0 and the int16 condition (every p in
+// [0, 32767] and Sum p <= 2^15). The three conjuncts are reported separately so a 2.S2 row can be
+// shown to fail exactly one.
+struct PvGuard {
+	bool hd16 = true, p_nonneg = true, p_le_max = true, sum_le = true;
+	bool Fast() const { return hd16 && p_nonneg && p_le_max && sum_le; }
+	int Failing() const { return !hd16 + !p_nonneg + !p_le_max + !sum_le; }
+};
+
+PvGuard TestPvGuard(const int64_t* probs, size_t width, size_t head_dim) {
+	PvGuard g;
+	g.hd16 = head_dim % 16 == 0;
+	int64_t sum = 0;  // every row of the set is bounded (|p| <= 32,769, width <= 4,097), so int64 is exact
+	for (size_t k = 0; k < width; ++k) {
+		if (probs[k] < 0) g.p_nonneg = false;
+		if (probs[k] > 32767) g.p_le_max = false;
+		sum += probs[k];
+	}
+	g.sum_le = sum <= 32768;
+	return g;
+}
+
+// The prob·V counters (§3.6), inside the x64 block of the seam.
+struct PvCounters {
+	long long fast2 = 0, fb2 = 0, fast5 = 0, fb5 = 0;
+};
+#if defined(SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT) && SUPERSLM_MATMUL_HAVE_SIMD_X64
+constexpr bool kHavePvCounters = true;
+PvCounters ReadPvCounters() {
+	PvCounters c;
+	c.fast2 = superslm_test::g_pv_fast_avx2.load();
+	c.fb2 = superslm_test::g_pv_fallback_avx2.load();
+	c.fast5 = superslm_test::g_pv_fast_avx512.load();
+	c.fb5 = superslm_test::g_pv_fallback_avx512.load();
+	return c;
+}
+#else
+constexpr bool kHavePvCounters = false;
+PvCounters ReadPvCounters() { return PvCounters{}; }
+#endif
+
+PvCounters PvDelta(const PvCounters& a, const PvCounters& b) {
+	return PvCounters{b.fast2 - a.fast2, b.fb2 - a.fb2, b.fast5 - a.fast5, b.fb5 - a.fb5};
+}
+
+// The expected delta of `calls` calls of which `fast` take the fast path, on this build (11.1(b)).
+PvCounters ExpectedPvDelta(long long fast, long long fallback) {
+	PvCounters w;
+	switch (ExpectedSitesKernel()) {
+		case SitesKernel::kAvx2: w.fast2 = fast; w.fb2 = fallback; break;
+		case SitesKernel::kAvx512: w.fast5 = fast; w.fb5 = fallback; break;
+		case SitesKernel::kShipped: break;
+	}
+	return w;
+}
+
+void CheckPvDelta(const char* label, const PvCounters& d, const PvCounters& want) {
+	if (!kHavePvCounters) return;
+	CHECK_MSG(d.fast2 == want.fast2 && d.fb2 == want.fb2 && d.fast5 == want.fast5 && d.fb5 == want.fb5,
+	          "%s: pv_fast_avx2 +%lld pv_fallback_avx2 +%lld pv_fast_avx512 +%lld pv_fallback_avx512 +%lld; want "
+	          "+%lld/+%lld/+%lld/+%lld (kernel: %s)",
+	          label, d.fast2, d.fb2, d.fast5, d.fb5, want.fast2, want.fb2, want.fast5, want.fb5,
+	          SitesKernelName(ExpectedSitesKernel()));
+}
+
+// The v1.9.0 loop, restated: zero, then key outer, dimension inner, exact int64.
+std::vector<int64_t> RefProbV(const int64_t* probs, const int8_t* values, size_t width, size_t head_dim) {
+	std::vector<int64_t> out(head_dim, 0);
+	for (size_t k = 0; k < width; ++k)
+		for (size_t d = 0; d < head_dim; ++d)
+			out[d] += probs[k] * static_cast<int64_t>(values[k * head_dim + d]);
+	return out;
+}
+
+// One call against the reference, with its path assertion. Every buffer is an exact-size heap
+// vector, so the hosted ASan leg sees any read or write past one (4.S2's head_dim 60 and 100 rows).
+// Returns whether the guard copy expected the fast path.
+bool RunPv(const char* label, const std::vector<int64_t>& probs, const std::vector<int8_t>& values, size_t width,
+           size_t head_dim) {
+	const std::vector<int64_t> want = RefProbV(probs.data(), values.data(), width, head_dim);
+	std::vector<int64_t> out(head_dim, superslm_attention_cases::kPvPoison);
+	const PvGuard g = TestPvGuard(probs.data(), width, head_dim);
+	const PvCounters c0 = ReadPvCounters();
+	superslm::GemmProbQ15Accumulate(probs.data(), values.data(), width, head_dim, out.data());
+	const PvCounters c1 = ReadPvCounters();
+	size_t bad = 0, first = head_dim;
+	for (size_t d = 0; d < head_dim; ++d)
+		if (out[d] != want[d]) {
+			if (first == head_dim) first = d;
+			++bad;
+		}
+	CHECK_MSG(bad == 0, "%s (head_dim %zu, width %zu): %zu of %zu outputs differ from the v1.9.0 loop, first at %zu "
+	          "(%lld vs %lld)", label, head_dim, width, bad, head_dim, first,
+	          first < head_dim ? static_cast<long long>(out[first]) : 0LL,
+	          first < head_dim ? static_cast<long long>(want[first]) : 0LL);
+	char full[192];
+	std::snprintf(full, sizeof full, "%s (head_dim %zu, width %zu, guard copy: %s)", label, head_dim, width,
+	              g.Fast() ? "fast" : "fallback");
+	CheckPvDelta(full, PvDelta(c0, c1), ExpectedPvDelta(g.Fast() ? 1 : 0, g.Fast() ? 0 : 1));
+	return g.Fast();
+}
+
+// ---- 11.2: the MSVC switch, a pure selector with its full truth table, and its wiring ---------------
+
+void TestS2SitesSelector() {
+	using superslm::detail::SelectSitesKernel;
+	const GemmTier tiers[] = {GemmTier::kScalar, GemmTier::kSse2, GemmTier::kAvx2, GemmTier::kAvx512};
+	size_t bad = 0;
+	for (GemmTier t : tiers)
+		for (bool msvc : {false, true})
+			for (int sw : {0, 1}) {
+				const SitesKernel got = SelectSitesKernel(t, sw, msvc);
+				const SitesKernel want = TestSelectSitesKernel(t, sw, msvc);
+				if (got != want) {
+					++bad;
+					std::printf("  cell 11.2: SelectSitesKernel(tier %d, switch %d, msvc %d) = %s, want %s\n",
+					            static_cast<int>(t), sw, msvc ? 1 : 0, SitesKernelName(got), SitesKernelName(want));
+				}
+			}
+	CHECK_MSG(bad == 0, "cell 11.2: %zu of 16 selector rows wrong", bad);
+	// The wiring: this build's own switch and compiler identity, on every tier (a hosted runner of any
+	// CPU can observe it; the MSVC legs are where the switch's value decides the AVX-512 row).
+	for (GemmTier t : tiers)
+		CHECK_MSG(superslm::detail::DispatchSitesKernel(t) ==
+		              TestSelectSitesKernel(t, kTestSitesAvx512MsvcSwitch, kTestIsMsvcBuild),
+		          "cell 11.2 wiring: DispatchSitesKernel(tier %d) = %s, want %s (switch %d, msvc %d)",
+		          static_cast<int>(t), SitesKernelName(superslm::detail::DispatchSitesKernel(t)),
+		          SitesKernelName(TestSelectSitesKernel(t, kTestSitesAvx512MsvcSwitch, kTestIsMsvcBuild)),
+		          kTestSitesAvx512MsvcSwitch, kTestIsMsvcBuild ? 1 : 0);
+	std::printf("attn-rowsites S2: tier %d, kernel %s (switch %d, msvc %d), prob-V counters %s\n",
+	            static_cast<int>(ExpectedGemmTier()), SitesKernelName(ExpectedSitesKernel()),
+	            kTestSitesAvx512MsvcSwitch, kTestIsMsvcBuild ? 1 : 0, kHavePvCounters ? "read" : "not compiled");
+}
+
+// ---- 4.S2, 7.S2, 6.1: the shape grid and the int16 condition's corners -----------------------------
+
+void TestS2Grid() {
+	size_t fast = 0, fallback = 0;
+	superslm_attention_cases::ForEachProbVCase([&](const superslm_attention_cases::PvCase& c) {
+		(RunPv(c.label, c.probs, c.values, c.width, c.head_dim) ? fast : fallback) += 1;
+	});
+	// The grid reaches both sides of every conjunct: fast and fallback both occur.
+	CHECK_MSG(fast > 0 && fallback > 0, "4.S2: the set takes the fast path %zu times and falls back %zu times", fast,
+	          fallback);
+	// The named corners, asserted against the guard copy's own verdict, so a guard copy that drifted
+	// from §4.2 cannot quietly move a corner to the other side.
+	const struct {
+		std::vector<int64_t> p;
+		size_t hd;
+		bool fast;
+		const char* what;
+	} corners[] = {
+	    {{32767, 1}, 64, true, "p = 32,767 with Sum p = 2^15 is inside"},
+	    {{32767, 2}, 64, false, "Sum p = 2^15 + 1 is outside"},
+	    {{32768}, 64, false, "the width-1 one-hot row is outside"},
+	    {{32767, 1}, 16, true, "head_dim 16 is inside"},
+	    {{100, 200}, 60, false, "head_dim 60 is outside"},
+	    {{100, 200}, 100, false, "head_dim 100 is outside"},
+	};
+	for (const auto& k : corners)
+		CHECK_MSG(TestPvGuard(k.p.data(), k.p.size(), k.hd).Fast() == k.fast, "7.S2 guard copy: %s", k.what);
+}
+
+// ---- 2.S2: hostile rows, each failing exactly one conjunct ------------------------------------------
+
+void TestS2HostileRows() {
+	size_t rows = 0;
+	superslm_attention_cases::ForEachProbVCase([&](const superslm_attention_cases::PvCase& c) {
+		if (std::strncmp(c.label, "2.S2", 4) != 0) return;
+		++rows;
+		const PvGuard g = TestPvGuard(c.probs.data(), c.width, c.head_dim);
+		CHECK_MSG(g.Failing() == 1, "%s: fails %d conjuncts of the guard copy, want exactly 1", c.label, g.Failing());
+		// RunPv (in TestS2Grid) already asserted output and fallback +1; the int32-lane premise of the
+		// two rows that would wrap is asserted here, so the rows keep deciding what they were built for.
+	});
+	CHECK_MSG(rows == 4, "2.S2: %zu hostile rows in the set, want 4", rows);
+	// The premise of the alternating and the p = 32,767 rows: each lane's true sum, 1,024 x 32,767 x 127,
+	// passes INT32_MAX, so a kernel that dropped the conjunct they fail would wrap.
+	const int64_t lane = 1024LL * 32767 * 127;
+	CHECK_MSG(lane > INT32_MAX, "2.S2 premise: the lane sum %lld exceeds INT32_MAX", static_cast<long long>(lane));
+}
+
+// ---- 6.3: the S2 golden pin (the v1.9.0 tag's hash over the prob·V input set) -----------------------
+
+void TestS2GoldenPin() {
+	superslm::Sha256 h;
+	uint64_t values = 0;
+	auto emit = [&](int64_t v) {
+		uint8_t b[8];
+		for (int i = 0; i < 8; ++i) b[i] = static_cast<uint8_t>((static_cast<uint64_t>(v) >> (8 * i)) & 0xffU);
+		h.Update(b, 8);
+		++values;
+	};
+	superslm_attention_cases::RunProbVCases(emit);
+	uint8_t digest[32];
+	h.Final(digest);
+	const std::string hex = superslm::ToHex(digest);
+	std::printf("attn-rowsites S2 golden hash: %s (%llu values)\n", hex.c_str(),
+	            static_cast<unsigned long long>(values));
+	CHECK_MSG(hex == std::string(superslm_test::kAttnRowsiteS2GoldenHash) &&
+	              values == superslm_test::kAttnRowsiteS2GoldenValues,
+	          "6.3 S2 golden: %s over %llu values, pin %s over %llu (v1.9.0 tag)", hex.c_str(),
+	          static_cast<unsigned long long>(values), superslm_test::kAttnRowsiteS2GoldenHash,
+	          static_cast<unsigned long long>(superslm_test::kAttnRowsiteS2GoldenValues));
+}
+
 // ---- 11.1(d): the 0.5B-width 1-layer artifact through the two layer loops -----------------------
 
 struct TraceCount {
@@ -657,6 +923,7 @@ void TestS1LayerLoopWindows() {
 
 	// The prefill window.
 	const RowCounters p0 = ReadRowCounters();
+	const PvCounters v0 = ReadPvCounters();
 	const TraceCount tp0 = trace;
 	std::vector<int8_t> chunk(T * hidden);
 	std::vector<CarriedScale> scales(T);
@@ -675,6 +942,7 @@ void TestS1LayerLoopWindows() {
 	CHECK_MSG(st == SslmForwardStatus::Ok, "11.1(d): chunk loop status %s", SslmForwardStatusName(st));
 	seq.context_length = static_cast<int64_t>(T);
 	const RowCounters p1 = ReadRowCounters();
+	const PvCounters v1 = ReadPvCounters();
 	const TraceCount tp1 = trace;
 
 	// The decode window.
@@ -693,18 +961,24 @@ void TestS1LayerLoopWindows() {
 	CHECK_MSG(seq.context_length == static_cast<int64_t>(T + D), "11.1(d): context_length %lld, want %zu",
 	          static_cast<long long>(seq.context_length), T + D);
 	const RowCounters p2 = ReadRowCounters();
+	const PvCounters v2 = ReadPvCounters();
 	const TraceCount tp2 = trace;
 	SslmSetTraceHook(model.trace_hook, nullptr, nullptr);
 
 	static const char* const kSites[] = {"embed",          "q_proj.requant",   "attn_ctx",        "o_proj.requant",
 	                                     "attn_norm",      "attn_residual",    "mlp_norm",        "gate_proj.requant",
 	                                     "up_proj.requant", "mlp_act",         "down_proj.requant", "mlp_residual"};
+	// The prob·V data terms (§8 11.1(d)): rows failing the int16 condition on this artifact and these
+	// pinned tokens, measured on the base (docs/attention-rowsites/s2/pv-data-terms.txt): 15 in the prefill
+	// window (position 0's 14 width-1 rows and position 2, head 13's {0, 32,768, 0}), 0 in decode.
 	const struct {
 		const char* name;
 		RowCounters a, b;
+		PvCounters va, vb;
 		TraceCount ta, tb;
 		size_t N;
-	} windows[] = {{"prefill", p0, p1, tp0, tp1, T}, {"decode", p1, p2, tp1, tp2, D}};
+		long long pv_fallback;
+	} windows[] = {{"prefill", p0, p1, v0, v1, tp0, tp1, T, 15}, {"decode", p1, p2, v1, v2, tp1, tp2, D, 0}};
 	for (const auto& w : windows) {
 		// Structural terms (G26): the closed forms, every width here being >= 512.
 		const RowCounters d = Delta(w.a, w.b);
@@ -720,6 +994,12 @@ void TestS1LayerLoopWindows() {
 			CHECK_MSG(got == static_cast<uint64_t>(N), "11.1(d) %s: %llu records named %s, want %lld", w.name,
 			          static_cast<unsigned long long>(got), site, N);
 		}
+		// S2: one GemmProbQ15Accumulate call per (layer, head, token pass), L·H·N in all (structural),
+		// of which the data term falls back; on the active kernel's tier only (11.1(b)).
+		const long long calls = Ll * static_cast<long long>(H) * N;
+		char pv_label[64];
+		std::snprintf(pv_label, sizeof pv_label, "11.1(d) %s prob-V", w.name);
+		CheckPvDelta(pv_label, PvDelta(w.va, w.vb), ExpectedPvDelta(calls - w.pv_fallback, w.pv_fallback));
 		if (!kHaveRowCounters) continue;
 		const long long want_taken[3] = {2 * Ll * N, Ll * N, 2 * Ll * N};
 		for (int s = 0; s < 3; ++s) {
@@ -744,8 +1024,12 @@ void RunAttnRowsiteCells(int& checks, int& failures) {
 	TestS1ConcurrentCalls();
 	TestS1LandingFlag();
 	TestS1GoldenPin();
-	TestS1LayerLoopWindows();
-	std::printf("attn-rowsites cells (plan slice S1): %d checks, %d failures\n", GChecks, GFailures);
+	TestS2SitesSelector();
+	TestS2Grid();
+	TestS2HostileRows();
+	TestS2GoldenPin();
+	TestS1LayerLoopWindows();  // 11.1(d): S1's and S2's rows over one drive
+	std::printf("attn-rowsites cells (plan slices S1, S2): %d checks, %d failures\n", GChecks, GFailures);
 	checks += GChecks;
 	failures += GFailures;
 }

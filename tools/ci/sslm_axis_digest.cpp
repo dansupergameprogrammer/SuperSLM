@@ -43,6 +43,7 @@
 #include "superslm/silu_lut.h"
 // Attention and per-row sites plan, section 10's fixed input set (header-only, shared with the golden
 // generator and the suite; included by path so this tool keeps its one-line build recipe).
+#include "../../tests/support/attention_cases.h"
 #include "../../tests/support/rowsite_cases.h"
 
 #include <cstdint>
@@ -694,6 +695,20 @@ void SectionRowsites() {
 	superslm_rowsite_cases::RunRowTableCases(emit);
 }
 
+// --- 11. The attention kernels ------------------------------------------------------
+//
+// Attention and per-row sites plan (rev 3.1), §3.3 evidence 2, cell 6.2. GemmProbQ15Accumulate over
+// tests/support/attention_cases.h's fixed set (slice S2's entries: plan §8 4.S2's head_dim x width grid,
+// the int16 condition's corners, width 0 and 2.S2's hostile rows; slices S4-S6 append theirs). Every
+// call's width, head_dim and whole output row are digested. The forced-scalar and forced-SSE2 legs run
+// the v1.9.0 loop, so they are the reference axes; the suite pins the same stream to a hash from the
+// v1.9.0 tag. A new section, so sections 1-10 keep their previous values exactly.
+void SectionAttention() {
+	Section& sec = NewSection("c32_attention");
+	auto emit = [&](int64_t v) { sec.sink.I64(v); };
+	superslm_attention_cases::RunProbVCases(emit);
+}
+
 // --- driver ---------------------------------------------------------------------
 
 void PrintBuildIdentity() {
@@ -756,6 +771,7 @@ int main() {
 	SectionMatmul();
 	SectionMatmulTiled();
 	SectionRowsites();
+	SectionAttention();
 
 	Sha256 global;
 	int failures = 0;

@@ -85,6 +85,16 @@ inline long long TiledEntryInvocationsTotal() {
 	return g_tiled_entry_invocations_avx2.load() + g_tiled_entry_invocations_avx512.load();
 }
 
+// Attention and per-row sites plan, slice S2 (§3.6): the prob·V path counters, per tier. src/matmul.cpp's
+// GemmProbQ15Accumulate increments exactly one of them per call on the AVX2 and AVX-512 tiers, after its
+// guard has decided: `fast` when head_dim % 16 == 0 and the row passes the int16 condition (every p in
+// [0, 32767], Sum p <= 2^15), `fallback` otherwise. On the scalar and SSE2 tiers, and on an MSVC build's
+// AVX-512 tier with SUPERSLM_SITES_AVX512_MSVC off (v1.9.0 code), none moves.
+inline std::atomic<long long> g_pv_fast_avx2{0};
+inline std::atomic<long long> g_pv_fallback_avx2{0};
+inline std::atomic<long long> g_pv_fast_avx512{0};
+inline std::atomic<long long> g_pv_fallback_avx512{0};
+
 }  // namespace superslm_test
 
 #endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
