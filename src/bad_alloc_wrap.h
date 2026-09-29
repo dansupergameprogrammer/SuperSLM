@@ -86,6 +86,13 @@ inline void MaybeThrowInjectedBadAllocFault() {
 // still calls the plain MaybeThrowInjectedBadAllocFault() above, unchanged) -- arming this slot
 // and calling either verb reaches THIS consultation point specifically, closing the isolation gap
 // the N3 pin's own header comment (tools/t2139_n3_bad_alloc_pin.cpp) named as unclosed.
+// Tiled-matmul plan slice 1, cell 5.1 (tests/support/bad_alloc_injection.h).
+inline void MaybeThrowInjectedTiledGemmAllocFault() {
+#ifdef SUPERSLM_ENABLE_BAD_ALLOC_INJECTION
+	superslm_test::MaybeThrowInjectedTiledGemmAllocFault();
+#endif
+}
+
 inline void MaybeThrowInjectedBadAllocFaultPostLoadRegion() {
 #ifdef SUPERSLM_ENABLE_BAD_ALLOC_INJECTION
 	superslm_test::MaybeThrowInjectedFaultPostLoadRegion();

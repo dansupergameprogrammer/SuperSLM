@@ -5806,6 +5806,43 @@ static int RunCrashProbe(const std::string& name) {
 		std::fflush(stdout);
 		return 0;
 	}
+	// Tiled-matmul plan slice 1, cell 3.5: the same fresh-process race, through the TILED path. Each of
+	// 8 threads makes the process's first GEMM call with 8 tokens (the tiled threshold), so every
+	// thread races the tier probe's first touch and then the tiled kernel's per-call scratch. Every
+	// token row is {1, 2, 3, 4} against the weight row {5, 6, 7, 8}: every output is 70.
+	if (name == "matmul_first_tiled_call_race") {
+		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
+		std::fflush(stdout);
+		constexpr int kThreads = 8;
+		constexpr size_t kTokens = 8;
+		constexpr size_t kInChannels = 4;
+		static const int8_t kActs[kTokens * kInChannels] = {1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4,
+		                                                    1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4};
+		static const int8_t kWgts[kInChannels] = {5, 6, 7, 8};
+		std::vector<std::vector<int64_t>> results(static_cast<size_t>(kThreads),
+		                                          std::vector<int64_t>(kTokens, INT64_MIN));
+		std::vector<std::thread> threads;
+		threads.reserve(static_cast<size_t>(kThreads));
+		for (int i = 0; i < kThreads; ++i) {
+			threads.emplace_back([i, &results]() {
+				GemmInt8Accumulate(kActs, kWgts, kTokens, kInChannels, /*out_channels=*/1,
+				                   results[static_cast<size_t>(i)].data());
+			});
+		}
+		for (auto& t : threads) t.join();
+		for (int i = 0; i < kThreads; ++i) {
+			int64_t worst = 70;
+			for (int64_t v : results[static_cast<size_t>(i)]) {
+				if (v != 70) worst = v;
+			}
+			std::printf("THREAD_RESULT:%d:%lld\n", i, static_cast<long long>(worst));
+		}
+		std::printf("PROBE_INVOCATIONS:%lld\n",
+		            static_cast<long long>(superslm_test::g_dot_row_tier_probe_invocations.load()));
+		std::printf("TILED_ENTRIES:%lld\n", superslm_test::TiledEntryInvocationsTotal());
+		std::fflush(stdout);
+		return 0;
+	}
 #endif  // SUPERSLM_T2149_AVX_TIERS_BUILT
 	// S3 (Poirot review ac34677, 2026-07-28): RowBoundsWide (src/intmath.cpp:
 	// 279-280) reads x[0] before testing n at all -- with a null data pointer
@@ -6960,6 +6997,44 @@ static void TestMatmulFirstCallDispatchRaceUnderConcurrency() {
 		          "racing thread reaches it simultaneously (design §10 dimensions 1 and 3)",
 		          inv);
 	}
+}
+
+// Tiled-matmul plan slice 1, cell 3.5: the first-call race of the cell above, through the tiled path
+// (the probe "matmul_first_tiled_call_race"). Each thread's 8 outputs must equal the hand-computed 70,
+// the tier probe must run exactly once, and on a tier that tiles at 8 tokens every one of the 8 calls
+// must have entered the tiled kernel -- so the race is on the path this cell is about.
+static void TestMatmulFirstTiledCallRaceUnderConcurrency() {
+	using namespace superslm_test;
+	std::string tail;
+	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes("matmul_first_tiled_call_race", &tail);
+	CHECK_MSG(outcome == CrashProbeOutcome::kRanNoCrash,
+	          "matmul_first_tiled_call_race probe outcome == %s, want ran-no-crash -- child output: %s",
+	          CrashProbeOutcomeName(outcome), tail.c_str());
+	if (outcome != CrashProbeOutcome::kRanNoCrash) return;
+	constexpr int kThreads = 8;
+	for (int i = 0; i < kThreads; ++i) {
+		char marker[64];
+		std::snprintf(marker, sizeof(marker), "THREAD_RESULT:%d:", i);
+		const size_t pos = tail.find(marker);
+		CHECK_MSG(pos != std::string::npos, "first tiled call race: THREAD_RESULT:%d: missing -- %s", i,
+		          tail.c_str());
+		if (pos == std::string::npos) continue;
+		const long long got = std::strtoll(tail.c_str() + pos + std::strlen(marker), nullptr, 10);
+		CHECK_MSG(got == 70, "first tiled call race: thread %d produced %lld, want 70 in all 8 outputs", i,
+		          got);
+	}
+	const size_t inv_pos = tail.find("PROBE_INVOCATIONS:");
+	const size_t te_pos = tail.find("TILED_ENTRIES:");
+	CHECK(inv_pos != std::string::npos && te_pos != std::string::npos);
+	if (inv_pos == std::string::npos || te_pos == std::string::npos) return;
+	const long long inv = std::strtoll(tail.c_str() + inv_pos + std::strlen("PROBE_INVOCATIONS:"), nullptr, 10);
+	const long long te = std::strtoll(tail.c_str() + te_pos + std::strlen("TILED_ENTRIES:"), nullptr, 10);
+	CHECK_MSG(inv == 1, "first tiled call race: tier probe ran %lld times, want exactly 1", inv);
+	const bool tiles = superslm::detail::DispatchGemmPath(superslm::detail::ActiveGemmTier(), 8) ==
+	                   superslm::detail::GemmPath::kTiled;
+	CHECK_MSG(te == (tiles ? kThreads : 0),
+	          "first tiled call race: %lld tiled entries, want %d (the active tier %s at 8 tokens)", te,
+	          tiles ? kThreads : 0, tiles ? "tiles" : "does not tile");
 }
 
 #endif  // SUPERSLM_T2149_AVX_TIERS_BUILT
@@ -29589,6 +29664,7 @@ int main(int argc, char** argv) {
 #if !defined(SUPERSLM_FORCE_SCALAR_MATMUL) && !defined(SUPERSLM_FORCE_SSE2_MATMUL) && \
     !defined(SUPERSLM_FORCE_AVX2_MATMUL) && !defined(SUPERSLM_FORCE_AVX512_MATMUL)
 	TestMatmulFirstCallDispatchRaceUnderConcurrency();
+	TestMatmulFirstTiledCallRaceUnderConcurrency();
 #endif
 #endif
 #if SUPERSLM_MATMUL_HAVE_SIMD_X64

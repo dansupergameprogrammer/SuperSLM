@@ -32,10 +32,11 @@ int main(int argc, char** argv) {
     std::vector<float> v(g.hidden_size);
     size_t req = 0;
     SembWaPoolStatus dq{};
-    superslm_test::g_tiled_entry_invocations.store(0);
+    superslm_test::g_tiled_entry_invocations_avx2.store(0);
+    superslm_test::g_tiled_entry_invocations_avx512.store(0);
     const SembInterimStatus s = semb_interim_encode_ps_n(enc, ids.data(), n_content, /*chunk_budget=*/0, v.data(),
                                                          v.size() * sizeof(float), &req, &dq, &st);
-    const long long te = superslm_test::g_tiled_entry_invocations.load();
+    const long long te = superslm_test::TiledEntryInvocationsTotal();  // both tiers' counters (cell 11.1)
     std::printf("encode: tokens_reaching_gemm=%zu status=%d tiled_entries=%lld\n", n_content + 1, int(s), te);
     if (s != kSembInterimOk && s != kSembInterimDequantizeRefused) rc = 4;
   }

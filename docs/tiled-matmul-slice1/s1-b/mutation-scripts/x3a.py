@@ -1,0 +1,2 @@
+p='src/matmul.cpp'; s=open(p).read(); old='\t\t\t\tstd::memcpy(&pair, a16 + static_cast<size_t>(m) * lda + 2 * q, sizeof(pair));'; new='\t\t\t\tstd::memcpy(&pair, a16 + static_cast<size_t>(m) * lda + 2 * q, sizeof(pair)); pair = static_cast<int32_t>((static_cast<uint32_t>(pair) << 16) | (static_cast<uint32_t>(pair) >> 16));  // MUTANT X3a'
+assert s.count(old)==2, (p, s.count(old)); s=s.replace(old,new); open(p,'w').write(s)

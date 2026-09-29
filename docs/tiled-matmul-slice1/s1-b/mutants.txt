@@ -1,0 +1,116 @@
+# Slice 1 S1-B mutation evidence (GCC 13.3, Release, this host: AVX-512BW). Each mutant is applied to a synced copy
+# of the branch, the named targets rebuilt, and each run; 'none' is the unmutated control. Mutation scripts: see the progress file.
+== none on superslm_tests: exit 0; tiled GEMM cells (plan slice 1): 211 checks, 0 failures | superslm tests: 25531 checks, 0 failures
+== none on superslm_tests_avx2_forced: exit 0; tiled GEMM cells (plan slice 1): 211 checks, 0 failures | superslm tests: 25489 checks, 0 failures
+== dinf on superslm_tests: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 23 failures | superslm tests: 25531 checks, 23 failures
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=8: tiled entries AVX2 +0, AVX-51
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=9: tiled entries AVX2 +0, AVX-51
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=15: tiled entries AVX2 +0, AVX-5
+== dinf on superslm_tests_avx2_forced: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 23 failures | superslm tests: 25489 checks, 23 failures
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=8: tiled entries AVX2 +0, AVX-51
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=9: tiled entries AVX2 +0, AVX-51
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=15: tiled entries AVX2 +0, AVX-5
+== x1 on superslm_tests: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 1 failures | superslm tests: 25531 checks, 1 failures
+FAIL tests/test_tiled_gemm.cpp:399: hex == std::string(superslm_test::kMatmulTiledGoldenHash) -- tiled golden
+== x1 on superslm_tests_avx2_forced: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 1 failures | superslm tests: 25489 checks, 1 failures
+FAIL tests/test_tiled_gemm.cpp:399: hex == std::string(superslm_test::kMatmulTiledGoldenHash) -- tiled golden
+== x2 on superslm_tests: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 1 failures | superslm tests: 25531 checks, 1 failures
+FAIL tests/test_tiled_gemm.cpp:399: hex == std::string(superslm_test::kMatmulTiledGoldenHash) -- tiled golden
+== x2 on superslm_tests_avx2_forced: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 1 failures | superslm tests: 25489 checks, 1 failures
+FAIL tests/test_tiled_gemm.cpp:399: hex == std::string(superslm_test::kMatmulTiledGoldenHash) -- tiled golden
+== x3a on superslm_tests: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 134 failures | superslm tests: 25531 checks, 142 failures
+FAIL tests/test_main.cpp:7023: got == 70 — first tiled call race: thread 0 produced 68, want 70 in all 8 ou
+FAIL tests/test_main.cpp:7023: got == 70 — first tiled call race: thread 1 produced 68, want 70 in all 8 ou
+FAIL tests/test_main.cpp:7023: got == 70 — first tiled call race: thread 2 produced 68, want 70 in all 8 ou
+== x3a on superslm_tests_avx2_forced: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 134 failures | superslm tests: 25489 checks, 134 failures
+FAIL tests/test_tiled_gemm.cpp:218: CountScalarMismatches(a, w, M, K, N, out) == 0 -- cell 4.1 M=8: output di
+FAIL tests/test_tiled_gemm.cpp:218: CountScalarMismatches(a, w, M, K, N, out) == 0 -- cell 4.1 M=9: output di
+FAIL tests/test_tiled_gemm.cpp:218: CountScalarMismatches(a, w, M, K, N, out) == 0 -- cell 4.1 M=15: output d
+== x3b on superslm_tests: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 134 failures | superslm tests: 25531 checks, 134 failures
+FAIL tests/test_tiled_gemm.cpp:218: CountScalarMismatches(a, w, M, K, N, out) == 0 -- cell 4.1 M=8: output di
+FAIL tests/test_tiled_gemm.cpp:218: CountScalarMismatches(a, w, M, K, N, out) == 0 -- cell 4.1 M=9: output di
+FAIL tests/test_tiled_gemm.cpp:218: CountScalarMismatches(a, w, M, K, N, out) == 0 -- cell 4.1 M=15: output d
+== x3b on superslm_tests_avx2_forced: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 134 failures | superslm tests: 25489 checks, 134 failures
+FAIL tests/test_tiled_gemm.cpp:218: CountScalarMismatches(a, w, M, K, N, out) == 0 -- cell 4.1 M=8: output di
+FAIL tests/test_tiled_gemm.cpp:218: CountScalarMismatches(a, w, M, K, N, out) == 0 -- cell 4.1 M=9: output di
+FAIL tests/test_tiled_gemm.cpp:218: CountScalarMismatches(a, w, M, K, N, out) == 0 -- cell 4.1 M=15: output d
+== x3c on superslm_tests: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 134 failures | superslm tests: 25531 checks, 142 failures
+FAIL tests/test_main.cpp:7023: got == 70 — first tiled call race: thread 0 produced 0, want 70 in all 8 out
+FAIL tests/test_main.cpp:7023: got == 70 — first tiled call race: thread 1 produced 0, want 70 in all 8 out
+FAIL tests/test_main.cpp:7023: got == 70 — first tiled call race: thread 2 produced 0, want 70 in all 8 out
+== x3c on superslm_tests_avx2_forced: exit 0; tiled GEMM cells (plan slice 1): 211 checks, 0 failures | superslm tests: 25489 checks, 0 failures
+./mutant2.sh: line 9: 13665 Aborted                 ( cd $S/mut/tree && timeout 600 $S/mut/build/$t ) > $S/mutlogs/$name.$t.log 2>&1
+== x4c on superslm_tests: exit 134;  | 
+./mutant2.sh: line 9: 13720 Aborted                 ( cd $S/mut/tree && timeout 600 $S/mut/build/$t ) > $S/mutlogs/$name.$t.log 2>&1
+== x4c on superslm_tests_avx2_forced: exit 134;  | 
+== x4e on superslm_tests: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 51 failures | superslm tests: 25531 checks, 51 failures
+FAIL tests/test_tiled_gemm.cpp:218: CountScalarMismatches(a, w, M, K, N, out) == 0 -- cell 4.1 M=8: output di
+FAIL tests/test_tiled_gemm.cpp:218: CountScalarMismatches(a, w, M, K, N, out) == 0 -- cell 4.1 M=9: output di
+FAIL tests/test_tiled_gemm.cpp:218: CountScalarMismatches(a, w, M, K, N, out) == 0 -- cell 4.1 M=15: output d
+== x4e on superslm_tests_avx2_forced: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 51 failures | superslm tests: 25489 checks, 51 failures
+FAIL tests/test_tiled_gemm.cpp:218: CountScalarMismatches(a, w, M, K, N, out) == 0 -- cell 4.1 M=8: output di
+FAIL tests/test_tiled_gemm.cpp:218: CountScalarMismatches(a, w, M, K, N, out) == 0 -- cell 4.1 M=9: output di
+FAIL tests/test_tiled_gemm.cpp:218: CountScalarMismatches(a, w, M, K, N, out) == 0 -- cell 4.1 M=15: output d
+== x9 on superslm_tests: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 1 failures | superslm tests: 25531 checks, 1 failures
+FAIL tests/test_tiled_gemm.cpp:399: hex == std::string(superslm_test::kMatmulTiledGoldenHash) -- tiled golden
+== x9 on superslm_tests_avx2_forced: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 1 failures | superslm tests: 25489 checks, 1 failures
+FAIL tests/test_tiled_gemm.cpp:399: hex == std::string(superslm_test::kMatmulTiledGoldenHash) -- tiled golden
+== xca on superslm_tests: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 24 failures | superslm tests: 25531 checks, 24 failures
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (int8 entry) M=8 range
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (pre-widened entry) M=
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (int8 entry) M=8 range
+== xca on superslm_tests_avx2_forced: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 24 failures | superslm tests: 25489 checks, 24 failures
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (int8 entry) M=8 range
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (pre-widened entry) M=
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (int8 entry) M=8 range
+== xcb on superslm_tests: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 36 failures | superslm tests: 25531 checks, 36 failures
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (int8 entry) M=8 range
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (pre-widened entry) M=
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (int8 entry) M=8 range
+== xcb on superslm_tests_avx2_forced: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 36 failures | superslm tests: 25489 checks, 36 failures
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (int8 entry) M=8 range
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (pre-widened entry) M=
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (int8 entry) M=8 range
+== xcc on superslm_tests: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 34 failures | superslm tests: 25531 checks, 34 failures
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (pre-widened entry) M=
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (pre-widened entry) M=
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (pre-widened entry) M=
+== xcc on superslm_tests_avx2_forced: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 34 failures | superslm tests: 25489 checks, 34 failures
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (pre-widened entry) M=
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (pre-widened entry) M=
+FAIL tests/test_tiled_gemm.cpp:577: bad_inside == 0 && bad_outside == 0 -- Cols canary (pre-widened entry) M=
+== xs on superslm_tests: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 1 failures | superslm tests: 25531 checks, 1 failures
+FAIL tests/test_tiled_gemm.cpp:430: bad == 0 -- cell 4.7(a): 1 of 32 selector rows wrong
+== xs on superslm_tests_avx2_forced: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 1 failures | superslm tests: 25489 checks, 1 failures
+FAIL tests/test_tiled_gemm.cpp:430: bad == 0 -- cell 4.7(a): 1 of 32 selector rows wrong
+== xs2 on superslm_tests: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 1 failures | superslm tests: 25531 checks, 1 failures
+FAIL tests/test_tiled_gemm.cpp:430: bad == 0 -- cell 4.7(a): 1 of 32 selector rows wrong
+== xs2 on superslm_tests_avx2_forced: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 1 failures | superslm tests: 25489 checks, 1 failures
+FAIL tests/test_tiled_gemm.cpp:430: bad == 0 -- cell 4.7(a): 1 of 32 selector rows wrong
+== x47a on superslm_tests: exit 0; tiled GEMM cells (plan slice 1): 211 checks, 0 failures | superslm tests: 25531 checks, 0 failures
+== x47a on superslm_tests_avx2_forced: exit 0; tiled GEMM cells (plan slice 1): 211 checks, 0 failures | superslm tests: 25489 checks, 0 failures
+== x47b on superslm_tests: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 1 failures | superslm tests: 25531 checks, 1 failures
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=7: tiled entries AVX2 +0, AVX-51
+== x47b on superslm_tests_avx2_forced: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 1 failures | superslm tests: 25489 checks, 1 failures
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=7: tiled entries AVX2 +1, AVX-51
+== x111a on superslm_tests: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 11 failures | superslm tests: 25531 checks, 11 failures
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=8: tiled entries AVX2 +0, AVX-51
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=9: tiled entries AVX2 +0, AVX-51
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=15: tiled entries AVX2 +0, AVX-5
+== x111a on superslm_tests_avx2_forced: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 11 failures | superslm tests: 25489 checks, 11 failures
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=8: tiled entries AVX2 +3, AVX-51
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=9: tiled entries AVX2 +3, AVX-51
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=15: tiled entries AVX2 +3, AVX-5
+== x111b on superslm_tests: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 11 failures | superslm tests: 25531 checks, 11 failures
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=8: tiled entries AVX2 +1, AVX-51
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=9: tiled entries AVX2 +1, AVX-51
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=15: tiled entries AVX2 +1, AVX-5
+== x111b on superslm_tests_avx2_forced: exit 1; tiled GEMM cells (plan slice 1): 211 checks, 11 failures | superslm tests: 25489 checks, 11 failures
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=8: tiled entries AVX2 +0, AVX-51
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=9: tiled entries AVX2 +0, AVX-51
+FAIL tests/test_tiled_gemm.cpp:174: d2 == want2 && d5 == want5 -- cell 4.1 M=15: tiled entries AVX2 +0, AVX-5
+
+== x3b-digest (sslm_axis_digest under X3b):
+c17_matmul               1b4adbb897b1040c7887073cf28be24f80437c28e86291ee7a6d8f97191e2506  values=6865  LOCAL-FAIL: stacking equivalence broken
+c17_matmul_tiled         3c191afc3b5fd6d1741f84529ad97ca16c4de5da53f0a1bfaaadc9a8421a08db  values=9600  LOCAL-FAIL: scalar reference != batched gemm at M >= 8
+GLOBAL 43746527aa40e40b7da17b714b316fd62efb6a8e0bb6d25e5fad5e25bdc351c2

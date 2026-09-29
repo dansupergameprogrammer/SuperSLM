@@ -357,6 +357,78 @@ jobs:
           name: axis-digest-windows-clangcl
           path: artifact_out
 
+  # Tiled-matmul plan slice 1 (§4.5, cells 4.6 and 6.2): the forced AVX2 and forced AVX-512 tiers
+  # built by MSVC, the full suite and the digest each. Before these legs no MSVC build ever executed
+  # an AVX2 or AVX-512 kernel in CI (the auto legs dispatch on whatever the runner has). The AVX-512
+  # leg builds with SUPERSLM_TILED_AVX512_MSVC=1, so it runs the tiled AVX-512 kernel that the
+  # default MSVC build still holds off; it probes the CPU first (IsProcessorFeaturePresent 41 =
+  # AVX-512F, which the hosted image's CPUs pair with BW) and reports SKIPPED without it.
+  windows-msvc-avx2-forced:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - run: cmake -B build
+      - run: cmake --build build --config Release --target superslm_tests_avx2_forced sslm_axis_digest_avx2_forced
+      - name: Run the forced suite, then extract the GLOBAL digest
+        shell: pwsh
+        run: |
+          & build/Release/superslm_tests_avx2_forced.exe
+          if ($LASTEXITCODE -ne 0) { throw "superslm_tests_avx2_forced exited $LASTEXITCODE" }
+          $out = & build/Release/sslm_axis_digest_avx2_forced.exe
+          $out | Out-File -Encoding ascii axis_output.txt
+          if (-not ($out -match '^local_invariant_failures 0$')) { throw "local invariant failure" }
+          New-Item -ItemType Directory -Force -Path artifact_out | Out-Null
+          ($out | Where-Object { $_ -match '^GLOBAL ' }) | Out-File -Encoding ascii artifact_out/global_digest.txt
+          "RAN" | Out-File -Encoding ascii artifact_out/status.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: axis-digest-windows-msvc-avx2-forced
+          path: artifact_out
+
+  windows-msvc-avx512-forced:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - run: cmake -B build -DCMAKE_CXX_FLAGS="/DWIN32 /D_WINDOWS /EHsc /DSUPERSLM_TILED_AVX512_MSVC=1"
+      - run: cmake --build build --config Release --target superslm_tests_avx512_forced sslm_axis_digest_avx512_forced
+      - name: Probe for AVX-512, run the forced suite and extract the GLOBAL digest if present
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifact_out | Out-Null
+          Add-Type -Namespace Probe -Name Cpu -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(uint f);'
+          if (-not [Probe.Cpu]::IsProcessorFeaturePresent(41)) {
+            Write-Host "AVX512-SKIPPED: runner lacks AVX-512F"
+            "SKIPPED: runner lacks AVX-512F" | Out-File -Encoding ascii artifact_out/status.txt
+            exit 0
+          }
+          & build/Release/superslm_tests_avx512_forced.exe
+          if ($LASTEXITCODE -ne 0) { throw "superslm_tests_avx512_forced exited $LASTEXITCODE" }
+          $out = & build/Release/sslm_axis_digest_avx512_forced.exe
+          $out | Out-File -Encoding ascii axis_output.txt
+          if (-not ($out -match '^local_invariant_failures 0$')) { throw "local invariant failure" }
+          ($out | Where-Object { $_ -match '^GLOBAL ' }) | Out-File -Encoding ascii artifact_out/global_digest.txt
+          "RAN" | Out-File -Encoding ascii artifact_out/status.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: axis-digest-windows-msvc-avx512-forced
+          path: artifact_out
+
+  # Tiled-matmul plan slice 1, cell 11.3: every tiled and packer symbol in the matmul object is local
+  # (never global, weak, unique or COMDAT), in the auto and both forced builds; the build-configuration
+  # record is the single external exception. The check's own vitality plants are recorded in
+  # docs/tiled-matmul-slice1-progress.md.
+  tiled-matmul-linkage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc-13 -DCMAKE_CXX_COMPILER=g++-13
+      - run: cmake --build build --target superslm superslm_avx2_forced superslm_avx512_forced
+      - run: |
+          python3 tools/ci/check_tiled_matmul_linkage.py \
+            build/CMakeFiles/superslm.dir/src/matmul.cpp.o \
+            build/CMakeFiles/superslm_avx2_forced.dir/src/matmul.cpp.o \
+            build/CMakeFiles/superslm_avx512_forced.dir/src/matmul.cpp.o
+
   # Ratified into this slot's scope (Sec7.1, D-SLM170): the first executed
   # x64-vs-ARM comparison this plan's own text (SuperSLM_Plan.md:1436, T-182)
   # claims exists. GitHub-hosted `macos-latest` runners are Apple Silicon, so
@@ -505,6 +577,8 @@ jobs:
       - linux-x64-clang-digest
       - windows-msvc-digest
       - windows-clangcl-digest
+      - windows-msvc-avx2-forced
+      - windows-msvc-avx512-forced
       - macos-arm64-digest
       - linux-x64-clang-scalar-forced-digest
       - linux-x64-clang-sse2-forced-digest
@@ -645,6 +719,7 @@ jobs:
           LLVM_PROFILE_FILE=build/avx512.profraw ./build/superslm_tests_avx512_forced
           ec_avx512_forced=$?
           set -e
+          echo "$ec_avx512_forced" > build/ec_avx512_forced.txt  # read by the tiled named-branch check
 
           fail=0
           for entry in "superslm_tests:$ec_nonforced" \
@@ -718,6 +793,13 @@ jobs:
             build/coverage.json
       - name: Check per-file branch-coverage floors
         run: python3 tools/ci/check_branch_coverage_floors.py build/coverage.json
+      # Tiled-matmul plan slice 1, cell 11.4: nonzero counts on the tiled kernel's named spans (flush
+      # per instantiation, token tail, panel tail, packer K tail and K pad). The AVX-512 half reads
+      # its own binary's exit code and raw profile, and reports SKIPPED, never PASS, without them.
+      - name: Check the tiled kernel's named spans ran
+        run: |
+          python3 tools/ci/check_tiled_matmul_coverage.py build/coverage.json --source src/matmul.cpp \
+            --avx512-exit-code "$(cat build/ec_avx512_forced.txt)" --avx512-profraw build/avx512.profraw
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         if: always()
         with:

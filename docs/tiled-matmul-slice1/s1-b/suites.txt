@@ -1,0 +1,24 @@
+superslm_tests: S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+superslm_tests: S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+superslm_tests: tiled GEMM: this binary dispatches on the AVX-512 tier; tiled path expected at M >= 8; tiled-entry counter read
+superslm_tests: tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+superslm_tests: tiled GEMM cells (plan slice 1): 211 checks, 0 failures
+superslm_tests: superslm tests: 25531 checks, 0 failures
+superslm_tests_avx2_forced: S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+superslm_tests_avx2_forced: S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+superslm_tests_avx2_forced: tiled GEMM: this binary dispatches on the AVX2 tier; tiled path expected at M >= 8; tiled-entry counter read
+superslm_tests_avx2_forced: tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+superslm_tests_avx2_forced: tiled GEMM cells (plan slice 1): 211 checks, 0 failures
+superslm_tests_avx2_forced: superslm tests: 25489 checks, 0 failures
+superslm_tests_avx512_forced: S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+superslm_tests_avx512_forced: S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+superslm_tests_avx512_forced: tiled GEMM: this binary dispatches on the AVX-512 tier; tiled path expected at M >= 8; tiled-entry counter read
+superslm_tests_avx512_forced: tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+superslm_tests_avx512_forced: tiled GEMM cells (plan slice 1): 211 checks, 0 failures
+superslm_tests_avx512_forced: superslm tests: 25489 checks, 0 failures
+superslm_tests_sse2_forced: S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+superslm_tests_sse2_forced: S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+superslm_tests_sse2_forced: tiled GEMM: this binary dispatches on the SSE2 tier; tiled path not taken on this tier (SKIPPED reach); tiled-entry counter read
+superslm_tests_sse2_forced: tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+superslm_tests_sse2_forced: tiled GEMM cells (plan slice 1): 195 checks, 0 failures
+superslm_tests_sse2_forced: superslm tests: 25473 checks, 0 failures

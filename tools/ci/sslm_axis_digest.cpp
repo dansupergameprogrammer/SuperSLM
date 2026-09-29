@@ -627,6 +627,54 @@ void SectionMatmul() {
 	}
 }
 
+// --- 9. C17 matmul, tiled shapes: stacking cases at M >= 8 --------------------------
+//
+// Tiled-matmul plan slice 1, cell 6.2. On the AVX2 and AVX-512 tiers a GEMM call of 8 or more tokens
+// runs the register-tiled kernel, which section 8 reaches only by chance (its random batches stop at 9
+// tokens). These cases pin it on every digest leg: M in {8, 32} x N in {32, 48}, at K values that cross
+// the packer's 16-wide transpose, its scalar tail and the odd-K pad. Each batched call is checked
+// against the single-row form (the stacking property) and the scalar reference, and digested. A new
+// section, so sections 1-8 keep their previous values exactly.
+void SectionMatmulTiled() {
+	Section& sec = NewSection("c17_matmul_tiled");
+
+	Rng rng(0x7A1ED7A1ED7A1EDULL);
+	static const size_t kTokens[] = {8, 32};
+	static const size_t kOut[] = {32, 48};
+	static const size_t kIn[] = {17, 64, 1023};
+	for (size_t toks : kTokens) {
+		for (size_t out_c : kOut) {
+			for (size_t in_c : kIn) {
+				std::vector<int8_t> act(toks * in_c), wgt(out_c * in_c);
+				for (size_t i = 0; i < act.size(); ++i) act[i] = static_cast<int8_t>(rng.InRange(-127, 127));
+				for (size_t i = 0; i < wgt.size(); ++i) wgt[i] = static_cast<int8_t>(rng.InRange(-128, 127));
+
+				std::vector<int64_t> batched(toks * out_c, 0);
+				superslm::GemmInt8Accumulate(act.data(), wgt.data(), toks, in_c, out_c, batched.data());
+
+				std::vector<int64_t> single(out_c, 0);
+				for (size_t t = 0; t < toks; ++t) {
+					superslm::GemmInt8AccumulateRow(act.data() + t * in_c, wgt.data(), in_c, out_c,
+					                                single.data());
+					for (size_t j = 0; j < out_c; ++j) {
+						if (single[j] != batched[t * out_c + j]) {
+							sec.ok = false;
+							sec.note = "stacking equivalence broken at M >= 8";
+						}
+						const int64_t ref = superslm::DotRowScalarRef(act.data() + t * in_c,
+						                                              wgt.data() + j * in_c, in_c);
+						if (ref != batched[t * out_c + j]) {
+							sec.ok = false;
+							sec.note = "scalar reference != batched gemm at M >= 8";
+						}
+						sec.sink.I64(batched[t * out_c + j]);
+					}
+				}
+			}
+		}
+	}
+}
+
 // --- driver ---------------------------------------------------------------------
 
 void PrintBuildIdentity() {
@@ -680,6 +728,7 @@ int main() {
 	SectionRope();
 	SectionSiluLut();
 	SectionMatmul();
+	SectionMatmulTiled();
 
 	Sha256 global;
 	int failures = 0;
