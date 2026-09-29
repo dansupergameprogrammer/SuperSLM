@@ -122,6 +122,21 @@ endif()
 
 enable_testing()
 add_test(NAME superslm_tests COMMAND superslm_tests)
+
+# The portable arm of src/sha256.cpp's run-time dispatch, pinned by
+# SUPERSLM_FORCE_PORTABLE_SHA256 (the SHA-256 analogue of SUPERSLM_FORCE_SCALAR_MATMUL):
+# superslm_tests covers whichever path the CPU selects, this binary covers the portable
+# path through the same public API. It compiles src/sha256.cpp itself rather than a whole
+# forced copy of the core library, since that file is the only one the macro touches.
+add_executable(sha256_portable_forced_tests tests/sha256_portable_forced_tests.cpp src/sha256.cpp)
+target_include_directories(sha256_portable_forced_tests PRIVATE include src)
+target_compile_definitions(sha256_portable_forced_tests PRIVATE SUPERSLM_FORCE_PORTABLE_SHA256)
+if(MSVC)
+	target_compile_options(sha256_portable_forced_tests PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(sha256_portable_forced_tests PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+add_test(NAME sha256_portable_forced_tests COMMAND sha256_portable_forced_tests)
 endif()
 
 # The §13 item 7 independent converter verifier (S-HARDEN-3, F13): loads a

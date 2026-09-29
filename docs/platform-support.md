@@ -81,7 +81,7 @@ tiers, and for decode, nothing changes.
 |---|---|---|
 | GCC / Clang, AVX2 tier | on at M >= 8 | Bit-identity: full suite forced AVX2, tiled golden, cross-tier digest, save-blob equality against 1.9.0 on the in-tree fixture and on synthetic real-width artifacts |
 | GCC / Clang, AVX-512 tier | on at M >= 8 | Same evidence, forced AVX-512 and auto dispatch |
-| MSVC / clang-cl, AVX2 tier | on at M >= 8 | Built by the forced Windows legs; not yet executed on Windows |
+| MSVC / clang-cl, AVX2 tier | on at M >= 8 | Full suite, auto and forced AVX2, green on the Windows CI legs and on a Zen 2 desktop (MSVC 19.33, clang-cl 15); digests equal to the GCC/Clang builds |
 | MSVC / clang-cl, AVX-512 tier | **off** (`SUPERSLM_TILED_AVX512_MSVC=0`) | Held on the shipped per-row kernel until an MSVC AVX-512 build has executed the tiled kernel |
 
 **Measured, engine level, one GEMM, on a 4-vCPU cloud Xeon (AVX2 and
@@ -105,6 +105,19 @@ reading of 1.96x (forced AVX2, 0.5B width, 1 layer) did not reproduce: its
 are per-layer engine figures on synthetic weights. They are not a
 statement about any consumer's end-to-end speed, and they are not a
 measurement on this project's reference hardware.
+
+### Model load integrity hash (unreleased)
+
+Loading a model hashes the whole file with SHA-256. On x86-64 CPUs with the
+SHA extensions (CPUID leaf 7 EBX bit 29, with SSSE3 and SSE4.1; most AMD CPUs
+since Zen, Intel since Ice Lake and Goldmont) the hash uses those
+instructions; everywhere else it uses the portable implementation. The digest
+is the same either way.
+
+**Measured, Zen 2 desktop (Ryzen 9 3950X), MSVC, 510 MB Qwen2.5-0.5B model,
+best of 3:** 0.31 s with the SHA extensions against 3.25 s for 1.9.0's
+portable hash. The portable path itself is also about 1.7x faster than in
+1.9.0 (1.95 s).
 
 ### Damped-greedy decoding
 

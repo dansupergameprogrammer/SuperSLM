@@ -985,6 +985,35 @@ _X86_BITWISE_FP_FAMILY = {
     "vorps", "vorpd", "vandps", "vandpd", "vandnps", "vandnpd", "vxorps", "vxorpd",
 }
 
+# Integer hash-round family: an explicit, reviewed addition under design
+# Sec4.1's own vetting law (fold round 8, D-SLM4374: "a mnemonic newly
+# observed in a future corpus and not on this list is rejected as unknown
+# until an explicit, reviewed addition lands it"), on the same footing as
+# `bswap`'s addition to `_X86_GPR_ALLOW` (T-2529). Decided by Dan,
+# 2026-09-29 (decision ID pending: ID-PENDING). The measured reject:
+# `superslm::(anonymous namespace)::CompressShaNi` in `sha256.cpp.o` /
+# `sha256.obj`, the CPUID-dispatched SHA-extension compression function,
+# rejected by check (A) for these three mnemonics and nothing else.
+#
+# Intel SDM Vol. 2B, `SHA256RNDS2`, `SHA256MSG1`, `SHA256MSG2`: each treats
+# its xmm operands as four packed 32-bit unsigned integers and computes
+# FIPS 180-4's round and message-schedule functions from 32-bit modular
+# integer adds, rotates, shifts and boolean operations (Ch, Maj, the Sigma
+# and sigma functions). No rounding, no MXCSR read or write, no SIMD
+# floating-point exception, and no operand read as a floating-point value.
+# The xmm register file is only where the 32-bit lanes live.
+#
+# Exactly these three. Kept as its own named set, not folded into
+# `_X86_VEC_MOVE_ALLOW` (these are arithmetic, not data movement) or
+# `_X86_P_VP_STRUCTURAL_ALLOW` (frozen by D-SLM5155/D-SLM5156/D-SLM5229,
+# and these are not p/vp-prefixed). The SHA-1 siblings (`sha1rnds4`,
+# `sha1nexte`, `sha1msg1`, `sha1msg2`) are equally integer-only but no
+# build emits them, so they are not added and still REJECT as unknown;
+# a future corpus that emits one brings its own reviewed addition.
+_X86_INTEGER_HASH_ALLOW = frozenset({
+    "sha256rnds2", "sha256msg1", "sha256msg2",
+})
+
 
 def _x86_touches_vector_register(op_str: str) -> bool:
     return bool(_X86_VEC_REG_RE.search(op_str or ""))
@@ -1022,6 +1051,10 @@ def _x86_check_a(mnemonic: str, op_str: str) -> Optional[str]:
         # for a differing-operand vxorps is reconciled to must-accept by the
         # same fold (D-SLM5002).
         return "bitwise_fp_family"
+    if m in _X86_INTEGER_HASH_ALLOW:
+        # Dan, 2026-09-29 (ID-PENDING): sha256rnds2/sha256msg1/sha256msg2,
+        # 32-bit integer hash rounds on xmm lanes; see the set's own comment.
+        return "integer_hash_allow"
     return None
 
 

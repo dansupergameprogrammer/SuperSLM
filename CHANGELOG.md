@@ -17,6 +17,18 @@ there; `SUPERSLM_TILED_AVX512_MSVC=1` turns it on. A GEMM call on the tiled path
 per-call packing buffer; an allocation failure there surfaces through the existing
 `SSLM_ALLOCATION_FAILED` status, with no state committed. No ABI, format or status change.
 
+The load-time integrity hash uses the x86 SHA extensions when the CPU has them (CPUID leaf 7
+EBX bit 29, with SSSE3 and SSE4.1), selected once per process; the portable SHA-256 stays as the
+fallback and the only path on other targets. Digests are unchanged. Hashing the 510 MB Qwen2.5-0.5B model on a
+Zen 2 desktop (MSVC) takes 0.31 s against 3.25 s before (about 1.5 GB/s against 150 MB/s). Defining
+`SUPERSLM_FORCE_PORTABLE_SHA256` when compiling `src/sha256.cpp` pins the portable path; the new
+`sha256_portable_forced_tests` target builds that way.
+The FP-free scan's check (A) accepts `sha256rnds2`, `sha256msg1` and `sha256msg2`, the three
+instructions the hardware path compiles to, through a new three-entry `_X86_INTEGER_HASH_ALLOW`
+set in `check_fp_free_scan.py`. Each is 32-bit integer arithmetic on xmm lanes (Intel SDM:
+modular adds, rotates, shifts and boolean ops; no rounding, no MXCSR, no floating-point operand).
+The SHA-1 instructions stay rejected.
+
 ## [1.9.0] - 2026-09-25
 
 `sslm_seq_save` writes a new save format, `SSB5`: the `SSB4` layout with the four per-site

@@ -145,6 +145,189 @@ static void TestSha256KnownVectors() {
 	      "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
 }
 
+// --- Hardware SHA-256 (x86 SHA extensions) against the portable reference ---
+//
+// src/sha256.cpp selects its block compression at run time: the SHA-extension path
+// (sha256rnds2/sha256msg1/sha256msg2) when CPUID reports it, the portable FIPS 180-4
+// code otherwise. The digest is a fixed function of the bytes, so every cell below
+// demands byte equality between the dispatched path, the portable reference
+// (Sha256HashPortableRef) and, on a CPU that has the extensions, the hardware path
+// called directly (Sha256HashShaNiRef). On a CPU without them the hardware cells are
+// skipped and say so; the portable-forced build (tests/sha256_portable_forced_tests.cpp)
+// runs the streaming cells with the portable path as the dispatched one.
+
+static std::vector<uint8_t> Sha256TestBytes(size_t n, uint32_t seed) {
+	std::vector<uint8_t> v(n);
+	uint32_t x = seed;
+	for (auto& b : v) {
+		x = x * 1664525u + 1013904223u;
+		b = static_cast<uint8_t>(x >> 24);
+	}
+	return v;
+}
+
+static bool Sha256HostHasShaExtensions() {
+	return DetectSha256ImplForCpu() == kSha256ImplShaNi;
+}
+
+// Hashes `data` with every implementation this host can run and checks they agree
+// with each other and, when `want_hex` is non-null, with the expected digest.
+static void CheckSha256AllImplsAgree(const uint8_t* data, size_t len, const char* want_hex,
+                                     const char* what) {
+	uint8_t dispatched[32], portable[32];
+	Sha256Hash(data, len, dispatched);
+	Sha256HashPortableRef(data, len, portable);
+	CHECK_MSG(std::memcmp(dispatched, portable, 32) == 0,
+	          "%s (len %zu): dispatched %s != portable %s", what, len, ToHex(dispatched).c_str(),
+	          ToHex(portable).c_str());
+	if (want_hex != nullptr) {
+		CHECK_MSG(ToHex(portable) == want_hex, "%s (len %zu): portable %s, want %s", what, len,
+		          ToHex(portable).c_str(), want_hex);
+	}
+#if SUPERSLM_SHA256_HAVE_SHANI_X64
+	if (Sha256HostHasShaExtensions()) {
+		uint8_t hw[32];
+		Sha256HashShaNiRef(data, len, hw);
+		CHECK_MSG(std::memcmp(hw, portable, 32) == 0, "%s (len %zu): hardware %s != portable %s",
+		          what, len, ToHex(hw).c_str(), ToHex(portable).c_str());
+	}
+#endif
+}
+
+static void TestSha256ImplResolverFromFields() {
+	// Pure resolver over fabricated CPUID fields: leaf 0 EAX (max basic leaf), leaf 1
+	// ECX (SSSE3 bit 9, SSE4.1 bit 19), leaf 7/0 EBX (SHA bit 29).
+	const int kSsse3 = 1 << 9, kSse41 = 1 << 19, kSha = 1 << 29;
+	const int all1 = kSsse3 | kSse41;
+	CHECK(ResolveSha256Impl(7, all1, kSha) == kSha256ImplShaNi);
+	CHECK(ResolveSha256Impl(0x10, all1, kSha | (1 << 5)) == kSha256ImplShaNi);
+	// Leaf 7 is architecturally undefined below max basic leaf 7: its bits must be ignored.
+	CHECK(ResolveSha256Impl(6, all1, kSha) == kSha256ImplPortable);
+	CHECK(ResolveSha256Impl(7, all1, 0) == kSha256ImplPortable);
+	CHECK(ResolveSha256Impl(7, all1, ~kSha) == kSha256ImplPortable);
+	CHECK(ResolveSha256Impl(7, kSse41, kSha) == kSha256ImplPortable);   // no SSSE3
+	CHECK(ResolveSha256Impl(7, kSsse3, kSha) == kSha256ImplPortable);   // no SSE4.1
+	CHECK(ResolveSha256Impl(0, 0, 0) == kSha256ImplPortable);
+}
+
+static void TestSha256ActiveImplIsTheDetectedOne() {
+	// This binary is built without SUPERSLM_FORCE_PORTABLE_SHA256, so the dispatched
+	// path must be exactly what the CPU probe selects (portable-only on a non-x64 build).
+	const int detected = DetectSha256ImplForCpu();
+	CHECK(detected == kSha256ImplPortable || detected == kSha256ImplShaNi);
+	CHECK(ActiveSha256Impl() == detected);
+#if !SUPERSLM_SHA256_HAVE_SHANI_X64
+	CHECK(detected == kSha256ImplPortable);
+#endif
+	std::printf("sha256: dispatched implementation = %s\n",
+	            ActiveSha256Impl() == kSha256ImplShaNi ? "x86 SHA extensions" : "portable");
+}
+
+static void TestSha256FipsVectorsAllImpls() {
+	// FIPS 180-4 / NIST known answers, including both multi-block padding cases and the
+	// one-million-'a' long message.
+	struct Vec {
+		std::string msg;
+		const char* hex;
+	};
+	const Vec vecs[] = {
+	    {"", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+	    {"abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+	    {"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+	     "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"},
+	    {"abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqr"
+	     "lmnopqrsmnopqrstnopqrstu",
+	     "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1"},
+	    {std::string(1000000, 'a'),
+	     "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"},
+	};
+	for (const Vec& v : vecs) {
+		CheckSha256AllImplsAgree(reinterpret_cast<const uint8_t*>(v.msg.data()), v.msg.size(),
+		                         v.hex, "FIPS vector");
+	}
+#if SUPERSLM_SHA256_HAVE_SHANI_X64
+	if (!Sha256HostHasShaExtensions()) {
+		std::printf("sha256: host has no SHA extensions -- hardware-path cells not executed\n");
+	}
+#endif
+}
+
+static void TestSha256EveryLength0To1024AllImpls() {
+	// Every length 0..1024 covers every padding residue (0..63 bytes past a block, both
+	// the one-block and two-block padding cases) over 17 block counts. Run at an aligned
+	// and at an odd offset so the hardware path's unaligned loads are exercised too.
+	const std::vector<uint8_t> bytes = Sha256TestBytes(1024 + 3, 0xC0FFEEu);
+	for (size_t off : {size_t(0), size_t(3)}) {
+		for (size_t len = 0; len <= 1024; ++len) {
+			CheckSha256AllImplsAgree(bytes.data() + off, len, nullptr, "every length");
+		}
+	}
+}
+
+static void TestSha256MultiMegabyteAllImpls() {
+	// Digests pinned from the portable implementation as it stood before the hardware path
+	// existed, and cross-checked against an independent SHA-256.
+	const std::vector<uint8_t> a = Sha256TestBytes((size_t(3) << 20) + 17, 0x5A17u);
+	CheckSha256AllImplsAgree(a.data(), a.size(),
+	                         "29fe1f49486287b54b24dd1461d5de93cf5cc5b8e0842fd8e2dcf64b0eb609dd",
+	                         "3 MiB + 17");
+	const std::vector<uint8_t> b = Sha256TestBytes(size_t(8) << 20, 0x5A17u);
+	CheckSha256AllImplsAgree(b.data(), b.size(),
+	                         "35ac12ceae8a53ba17582aa94f381a24882eedf6c3c391b4b715cf9433539d87",
+	                         "8 MiB");
+	CheckSha256AllImplsAgree(b.data() + 1, b.size() - 1, nullptr, "8 MiB - 1 at offset 1");
+}
+
+static void TestSha256StreamingEverySplitMatchesPortable() {
+	// The streaming object (dispatched path) fed in pieces must equal the portable
+	// one-shot digest, whatever the split: every two-way split for lengths 0..256, every
+	// three-way split for lengths 0..96, and byte-at-a-time for lengths 0..1024.
+	const std::vector<uint8_t> bytes = Sha256TestBytes(1024, 0x51u);
+	auto portable = [&](size_t len) {
+		uint8_t d[32];
+		Sha256HashPortableRef(bytes.data(), len, d);
+		return ToHex(d);
+	};
+	int mismatches = 0;
+	for (size_t len = 0; len <= 256; ++len) {
+		const std::string want = portable(len);
+		for (size_t k = 0; k <= len; ++k) {
+			Sha256 h;
+			h.Update(bytes.data(), k);
+			h.Update(bytes.data() + k, len - k);
+			uint8_t d[32];
+			h.Final(d);
+			if (ToHex(d) != want) ++mismatches;
+		}
+	}
+	CHECK_MSG(mismatches == 0, "two-way splits: %d mismatches", mismatches);
+	mismatches = 0;
+	for (size_t len = 0; len <= 96; ++len) {
+		const std::string want = portable(len);
+		for (size_t i = 0; i <= len; ++i) {
+			for (size_t j = i; j <= len; ++j) {
+				Sha256 h;
+				h.Update(bytes.data(), i);
+				h.Update(bytes.data() + i, j - i);
+				h.Update(bytes.data() + j, len - j);
+				uint8_t d[32];
+				h.Final(d);
+				if (ToHex(d) != want) ++mismatches;
+			}
+		}
+	}
+	CHECK_MSG(mismatches == 0, "three-way splits: %d mismatches", mismatches);
+	mismatches = 0;
+	for (size_t len = 0; len <= 1024; ++len) {
+		Sha256 h;
+		for (size_t i = 0; i < len; ++i) h.Update(bytes.data() + i, 1);
+		uint8_t d[32];
+		h.Final(d);
+		if (ToHex(d) != portable(len)) ++mismatches;
+	}
+	CHECK_MSG(mismatches == 0, "byte-at-a-time: %d mismatches", mismatches);
+}
+
 static void TestDtypeSizes() {
 	CHECK(DtypeSize(static_cast<uint32_t>(SslmDtype::Raw)) == 1);
 	CHECK(DtypeSize(static_cast<uint32_t>(SslmDtype::Int8)) == 1);
@@ -29247,6 +29430,12 @@ int main(int argc, char** argv) {
 #endif  // _WIN32
 
 	TestSha256KnownVectors();
+	TestSha256ImplResolverFromFields();
+	TestSha256ActiveImplIsTheDetectedOne();
+	TestSha256FipsVectorsAllImpls();
+	TestSha256EveryLength0To1024AllImpls();
+	TestSha256MultiMegabyteAllImpls();
+	TestSha256StreamingEverySplitMatchesPortable();
 	TestDtypeSizes();
 	TestKnownSectionTypes();
 
