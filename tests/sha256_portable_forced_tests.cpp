@@ -99,7 +99,7 @@ int main() {
 	}
 	CHECK(mismatches == 0);
 	std::printf("sha256 portable-forced: hardware cross-check %s\n",
-	            hw ? "executed" : "not executed (no SHA extensions on this CPU)");
+	            hw ? "executed" : "not executed (SHA extensions unavailable here)");
 	std::printf("sha256 portable-forced tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
 }
