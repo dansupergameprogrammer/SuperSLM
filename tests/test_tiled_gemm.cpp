@@ -545,8 +545,9 @@ static void TestTiledGemmAllocationFailure() {
 // columns inside equal the reference, through both entries (int8 and pre-widened). The ranges cover
 // panel-aligned starts {0, 32, 64}, unaligned starts {5, 17, 40} (XCb: a start rounded down to its
 // panel writes columns before j_begin), interior ends {j_begin + 32, j_begin + 17} (XCa: a store guard
-// on n < N instead of n < j_end writes columns past j_end) and the partial last panel (j_end = N = 100).
-// M = 3 runs the one-cell loop; M = 8 and 9 reach the tiled kernel on the AVX2 and AVX-512 tiers.
+// on n < N instead of n < j_end writes columns past j_end), the partial last panel (j_end = N = 100)
+// and the empty range (j_end = j_begin: both entries return before writing anything). M = 3 runs the
+// one-cell loop; M = 8 and 9 reach the tiled kernel on the AVX2 and AVX-512 tiers.
 static void TestTiledGemmColsCanaryWritesExactlyItsRange() {
 	constexpr size_t N = 100, K = 37;  // odd K: the K pad is live
 	for (size_t M : {size_t{3}, size_t{8}, size_t{9}}) {
@@ -558,8 +559,10 @@ static void TestTiledGemmColsCanaryWritesExactlyItsRange() {
 		for (size_t t = 0; t < M; ++t)
 			for (size_t j = 0; j < N; ++j) ref[t * N + j] = DotRowScalarRef(&a[t * K], &w[j * K], K);
 		for (size_t jb : {size_t{0}, size_t{32}, size_t{64}, size_t{5}, size_t{17}, size_t{40}}) {
-			for (size_t je_kind = 0; je_kind < 3; ++je_kind) {
-				const size_t je = je_kind == 0 ? N : std::min(N, jb + (je_kind == 1 ? 32 : 17));
+			for (size_t je_kind = 0; je_kind < 4; ++je_kind) {
+				const size_t je = je_kind == 0   ? N
+				                  : je_kind == 3 ? jb
+				                                 : std::min(N, jb + (je_kind == 1 ? 32 : 17));
 				for (int entry = 0; entry < 2; ++entry) {
 					std::vector<int64_t> out(M * N, kCanary);
 					if (entry == 0)

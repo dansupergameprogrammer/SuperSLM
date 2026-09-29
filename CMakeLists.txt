@@ -877,6 +877,15 @@ if(WIN32 AND (SUPERSLM_BUILD_GPU OR BUILD_TESTING))
 	if(BUILD_TESTING)
 		add_dependencies(superslm_tests superslm_gpu_shaders)
 	endif()
+	# The forced-tier full suites compile the same GPU sources on WIN32 and run the same GPU
+	# cells, so they need the same shaders. A build of only a forced target (the Windows forced
+	# CI legs) otherwise leaves <config>/shaders empty, and the GPU cells meet a missing .cso.
+	foreach(_sslm_forced_suite superslm_tests_sse2_forced superslm_tests_avx2_forced
+	                           superslm_tests_avx512_forced)
+		if(TARGET ${_sslm_forced_suite})
+			add_dependencies(${_sslm_forced_suite} superslm_gpu_shaders)
+		endif()
+	endforeach()
 
 	if(SUPERSLM_BUILD_GPU)
 		add_library(superslm_gpu STATIC

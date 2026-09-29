@@ -28385,8 +28385,10 @@ static void TestT2577_S1b_ModelGenerationReachesTheG5BridgeChunkEntryPoint() {
 		return block;
 	};
 
+	// One fixture for both chunks: the rope cache is keyed on the host table pointers, so a fixture
+	// rebuilt per chunk hits only when the heap happens to reuse the freed block.
+	RopeSaturationFixture fixture;
 	auto run_one_chunk = [&](uint64_t generation) -> bool {
-		RopeSaturationFixture fixture;
 		int8_t hidden_codes[2] = {5, -5};
 		SequenceLayerState seq;
 		seq.hidden_codes = hidden_codes;

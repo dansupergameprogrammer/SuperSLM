@@ -664,6 +664,8 @@ SUPERSLM_AVX512_TARGET inline void TiledGemmAvx512(const int16_t* a16, size_t kp
 				for (size_t i = 0; i < kNw; ++i) {
 					const size_t n = n0 + i;
 					if (n < j_end) out_acc[(t0 + r) * out_channels + n] = acc64[r * kNw + i];  // the store guard
+					else break;  // n only grows. The early exit keeps GCC from if-converting the guard into
+					             // AVX-512 mask-register code (vpcmpuq, kmovw), which the fp-free scan rejects.
 				}
 			}
 		}
