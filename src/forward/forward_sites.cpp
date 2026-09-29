@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -34,6 +35,12 @@
 #if SUPERSLM_MATMUL_HAVE_SIMD_X64
 #include <emmintrin.h>
 #include <immintrin.h>
+#endif
+
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+// The test-only dispatch-instrument seam (src/matmul.cpp's convention): the per-row sites' row-table
+// path counters (attention and per-row sites plan, §3.6). Never defined for the production library.
+#include "support/matmul_dispatch_instrument.h"
 #endif
 
 #if defined(__clang__) || (defined(__GNUC__) && !defined(_MSC_VER))
@@ -419,6 +426,56 @@ inline int64_t ComposedExponent(int64_t e_a, int64_t e_t, int64_t target_normali
 	return k;
 }
 
+// Attention and per-row sites plan (rev 3.1), slice S1 (§4.1, §5.1): the per-row tables.
+// RmsNormSite's divide, MlpActSite's sigmoid and ResidualReconcileSite's landing rescale are each a
+// pure function of one int8 code plus constants fixed for the whole row, so a row of n elements
+// evaluates it at most 256 distinct ways. At n >= kRowTableMinWidth the site evaluates it once per
+// code into a stack table, with exactly the arguments its per-element loop passes, and the loop reads
+// the table: table[code] IS the value the loop would compute, so the output is bit-identical at every
+// width. SiLU and landing tables cover [-127, 127] only, the funnel's output range (intmath.cpp's
+// clamp): a -128 code, which a direct caller can pass, is evaluated directly, so no table entry is
+// ever computed at an argument the v1.9.0 loop would not have evaluated for a valid input. The norm
+// table covers every int8, since the shipped loop divides every element.
+//
+// The threshold is a speed constant only (tables lose below about 256 elements on this plan's
+// measurement; 512 is the plan's pinned value). Forced scalar keeps the v1.9.0 per-element loops,
+// so that build's digest leg is the normative reference axis (§3.3); every other build, MSVC and
+// arm64 included, takes the tables.
+#if defined(SUPERSLM_FORCE_SCALAR_MATMUL)
+constexpr bool kRowTablesOn = false;
+#else
+constexpr bool kRowTablesOn = true;
+#endif
+constexpr size_t kRowTableMinWidth = 512;
+
+inline bool RowTableTaken(size_t n) { return kRowTablesOn && n >= kRowTableMinWidth; }
+
+enum class RowTableSite { kNorm, kSilu, kLanding };
+
+// The §3.6 row-table counters: one increment per site call, after the table decision, on the side it
+// took. Compiles to nothing outside the instrument seam.
+inline void CountRowTableDecision(RowTableSite site, bool taken) {
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+	switch (site) {
+	case RowTableSite::kNorm:
+		(taken ? superslm_test::g_rowtable_norm_taken : superslm_test::g_rowtable_norm_skipped)
+		    .fetch_add(1, std::memory_order_relaxed);
+		break;
+	case RowTableSite::kSilu:
+		(taken ? superslm_test::g_rowtable_silu_taken : superslm_test::g_rowtable_silu_skipped)
+		    .fetch_add(1, std::memory_order_relaxed);
+		break;
+	case RowTableSite::kLanding:
+		(taken ? superslm_test::g_rowtable_landing_taken : superslm_test::g_rowtable_landing_skipped)
+		    .fetch_add(1, std::memory_order_relaxed);
+		break;
+	}
+#else
+	(void)site;
+	(void)taken;
+#endif
+}
+
 }  // namespace
 
 int64_t FloorDivI64(int64_t a, int64_t b) {
@@ -585,9 +642,20 @@ SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_s
 		wide_fallback.assign(hidden_size, 0);
 		wide = wide_fallback.data();
 	}
-	for (size_t i = 0; i < hidden_size; ++i) {
-		const int64_t hi = static_cast<int64_t>(h[i]);
-		wide[i] = FloorDivI64(hi << (2 * kNormFracBits), root) * static_cast<int64_t>(g[i]);
+	const bool use_table = RowTableTaken(hidden_size);
+	CountRowTableDecision(RowTableSite::kNorm, use_table);
+	if (use_table) {
+		// Plan S1: FloorDivI64(c << 2*NORM_FRAC_BITS, root) for every int8 c, then one lookup per element.
+		int64_t divided[256];
+		for (int c = -128; c <= 127; ++c)
+			divided[c + 128] = FloorDivI64(static_cast<int64_t>(c) << (2 * kNormFracBits), root);
+		for (size_t i = 0; i < hidden_size; ++i)
+			wide[i] = divided[static_cast<int>(h[i]) + 128] * static_cast<int64_t>(g[i]);
+	} else {
+		for (size_t i = 0; i < hidden_size; ++i) {
+			const int64_t hi = static_cast<int64_t>(h[i]);
+			wide[i] = FloorDivI64(hi << (2 * kNormFracBits), root) * static_cast<int64_t>(g[i]);
+		}
 	}
 
 	// §11 S3.1a (D-SLM362): `site`/`token_index`/`trace_hook_state` are
@@ -996,7 +1064,21 @@ SslmForwardStatus MlpActSite(const int8_t* gate_code, CarriedScale gate_scale,
 	const int gate_e = static_cast<int>(gate_scale.e);
 
 	std::vector<int64_t> wide(n);
-	for (size_t i = 0; i < n; ++i) {
+	const bool use_table = RowTableTaken(n);
+	CountRowTableDecision(RowTableSite::kSilu, use_table);
+	if (use_table) {
+		// Plan S1: step 2's value at every code the funnel emits, with step 2's own arguments; a -128
+		// code (reachable only from a direct caller) is evaluated directly, never from the table.
+		int32_t sigmoid[255];
+		for (int c = -127; c <= 127; ++c)
+			sigmoid[c + 127] = SiluSigmoidQ15(sigmoid_lut_table, static_cast<int8_t>(c), gate_scale.m, gate_e);
+		for (size_t i = 0; i < n; ++i) {
+			const int8_t code = gate_code[i];
+			const int32_t sig = code == INT8_MIN ? SiluSigmoidQ15(sigmoid_lut_table, code, gate_scale.m, gate_e)
+			                                     : sigmoid[static_cast<int>(code) + 127];
+			wide[i] = static_cast<int64_t>(code) * static_cast<int64_t>(sig) * static_cast<int64_t>(up_code[i]);
+		}
+	} else for (size_t i = 0; i < n; ++i) {  // the v1.9.0 per-element loop, unchanged
 		// Step 2: C10's fixed-point LUT construction (silu_lut.h), never the
 		// i-exp-sigmoid construction F-S3-1 found the reference computing
 		// before S3.0's reconciliation. Substituting i-exp-sigmoid here
@@ -1073,6 +1155,10 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
 		branch_selected = d >= 0 ? (branch_magnitude << d) < stream_magnitude
 		                         : branch_magnitude < (stream_magnitude << -d);
 	}
+	// Plan S1: the table decision is per call (counted once), the table itself per candidate, since
+	// each candidate lands a different row at different constants.
+	const bool use_table = RowTableTaken(hidden_size);
+	CountRowTableDecision(RowTableSite::kLanding, use_table);
 	struct Candidate {
 		SslmForwardStatus status = SslmForwardStatus::Ok;
 		CarriedScale scale{};
@@ -1086,11 +1172,31 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
 		const int8_t* other_code = select_branch ? stream_code : branch_code;
 		const auto reciprocal = CarriedScaleNormalizedReciprocal(magnitude(candidate.scale.m));
 		candidate.wide.resize(hidden_size);
+		// Plan S1: (value, flag) per code in [-127, 127], with the loop's own arguments and null
+		// counters. The loop below keeps its per-element order, its first-flag return and its sign
+		// and overflow checks; the flag is read for each element present, never OR-ed over the table
+		// (a code absent from the row must not refuse it). -128 is landed directly.
+		int64_t landed_table[255];
+		bool exceeded_table[255];
+		if (use_table) {
+			for (int c = -127; c <= 127; ++c) {
+				bool exceeded = false;
+				landed_table[c + 127] = LandingRescale(c, other_scale.m, reciprocal.r, other_scale.e,
+				                                       candidate.scale.e, nullptr, &exceeded, nullptr, reciprocal.s);
+				exceeded_table[c + 127] = exceeded;
+			}
+		}
 		for (size_t i = 0; i < hidden_size; ++i) {
 			bool magnitude_exceeded = false;
-			int64_t landed = LandingRescale(static_cast<int64_t>(other_code[i]), other_scale.m,
-			                                reciprocal.r, other_scale.e, candidate.scale.e, nullptr,
-			                                &magnitude_exceeded, nullptr, reciprocal.s);
+			int64_t landed;
+			if (use_table && other_code[i] != INT8_MIN) {
+				landed = landed_table[static_cast<int>(other_code[i]) + 127];
+				magnitude_exceeded = exceeded_table[static_cast<int>(other_code[i]) + 127];
+			} else {
+				landed = LandingRescale(static_cast<int64_t>(other_code[i]), other_scale.m,
+				                        reciprocal.r, other_scale.e, candidate.scale.e, nullptr,
+				                        &magnitude_exceeded, nullptr, reciprocal.s);
+			}
 			if (magnitude_exceeded || (candidate.scale.m < 0 && landed == INT64_MIN)) {
 				candidate.status = SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain;
 				return candidate;
