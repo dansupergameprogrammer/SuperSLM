@@ -27,6 +27,15 @@
 //
 // Usage: t2147_chunk_batched_pins.exe <path-to-1.5b-artifact.sslm> "<prompt>"
 //        [--schema=NAME --schema-artifact=PATH] [--speedup] [--boundary-sweep=K]
+//        [--layers=L] [--repeat=R] [--dump-blob=PATH]
+//
+// Token-id mode (tiled-matmul plan, slice 1 step S1-0): a synthetic artifact built by the reference
+// pipeline carries no tokenizer, so a prompt of the form "ids:N" or "ids:N:V" skips tokenization and
+// prefills N token ids 1 + (i mod (V - 1)), V defaulting to 201 (ids 1..200) -- inside the vocabulary of
+// every synthetic artifact the plan builds (256; the in-tree fixture's 128 needs "ids:N:128"). --layers=L
+// sets max_layer_budget to the artifact's own layer count (a reduced-layer artifact has fewer than 28).
+// --repeat=R times each arm of --speedup R times and reports the best (the host is shared; best of R is
+// the noise-robust figure).
 
 #include <algorithm>
 #include <chrono>
@@ -72,7 +81,8 @@ void Check(bool cond, const char* what) {
 	std::exit(1);
 }
 
-constexpr int32_t kNumHiddenLayers = 28;  // Qwen2.5-1.5B-Instruct's own published depth.
+// Qwen2.5-1.5B-Instruct's own published depth; --layers=L overrides it for a reduced-layer artifact.
+int32_t g_num_hidden_layers = 28;
 
 // One fresh model-map + pool + workspace + seq, prefills `tokens[0:count)` via ONE OR MORE
 // sslm_prefill calls (per `splits`, a list of consecutive sub-span lengths summing to `count` --
@@ -109,7 +119,7 @@ std::vector<uint8_t> PrefillAndSave(const std::vector<uint8_t>& bytes, const int
 	sslm_config config{};
 	config.max_batch = 1;
 	config.max_chunk_budget = count > 0 ? count : 1;  // big enough for every call this run makes
-	config.max_layer_budget = kNumHiddenLayers;
+	config.max_layer_budget = g_num_hidden_layers;
 	config.reserved = 0;
 	const size_t ws_bytes = sslm_workspace_size(model, &config);
 	if (ws_bytes == 0) Fail("sslm_workspace_size", 0);
@@ -175,7 +185,7 @@ int main(int argc, char** argv) {
 	if (argc < 3) {
 		std::fprintf(stderr,
 		              "usage: %s <path-to-1.5b-artifact.sslm> \"<prompt>\" "
-		              "[--speedup] [--boundary-sweep=K]\n",
+		              "[--speedup] [--boundary-sweep=K] [--layers=L] [--repeat=R] [--dump-blob=PATH]\n",
 		              argv[0]);
 		return 1;
 	}
@@ -184,11 +194,14 @@ int main(int argc, char** argv) {
 	bool do_speedup = false;
 	int32_t boundary_sweep = -1;  // -1 = every split point
 	std::string dump_blob_path;
+	int32_t repeat = 1;
 	for (int i = 3; i < argc; ++i) {
 		const std::string a = argv[i];
 		if (a == "--speedup") do_speedup = true;
-		else if (a.rfind("--boundary-sweep=", 0) == 0) boundary_sweep = std::atoi(a.c_str() + 18);
+		else if (a.rfind("--boundary-sweep=", 0) == 0) boundary_sweep = std::atoi(a.c_str() + 17);
 		else if (a.rfind("--dump-blob=", 0) == 0) dump_blob_path = a.substr(12);
+		else if (a.rfind("--layers=", 0) == 0) g_num_hidden_layers = std::atoi(a.c_str() + 9);
+		else if (a.rfind("--repeat=", 0) == 0) repeat = std::max(1, std::atoi(a.c_str() + 9));
 	}
 
 	std::vector<uint8_t> bytes;
@@ -197,19 +210,33 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 
-	// Tokenize once via a throwaway map (tokenizer is artifact-resident and stateless).
-	sslm_model probe_model = nullptr;
-	sslm_status st = sslm_model_map(bytes.data(), bytes.size(), &probe_model);
-	if (st != SSLM_OK || !probe_model) Fail("sslm_model_map (tokenize probe)", static_cast<int>(st));
-	int32_t token_count = 0;
-	st = sslm_tokenize(probe_model, prompt, nullptr, &token_count);
-	if (st != SSLM_BUFFER_TOO_SMALL || token_count <= 0) Fail("sslm_tokenize (size)", static_cast<int>(st));
-	std::vector<int32_t> tokens(static_cast<size_t>(token_count));
-	int32_t n = token_count;
-	st = sslm_tokenize(probe_model, prompt, tokens.data(), &n);
-	if (st != SSLM_OK) Fail("sslm_tokenize", static_cast<int>(st));
-	sslm_model_unmap(probe_model);
-	const int32_t N = token_count;
+	std::vector<int32_t> tokens;
+	if (std::strncmp(prompt, "ids:", 4) == 0) {
+		// Token-id mode (see the header): no tokenizer is consulted.
+		const int32_t count = std::atoi(prompt + 4);
+		const char* vocab_field = std::strchr(prompt + 4, ':');
+		const int32_t vocab = vocab_field ? std::atoi(vocab_field + 1) : 201;
+		if (count <= 0 || vocab < 2) {
+			std::fprintf(stderr, "bad token-id prompt \"%s\" (want ids:N or ids:N:V, N >= 1, V >= 2)\n", prompt);
+			return 1;
+		}
+		tokens.resize(static_cast<size_t>(count));
+		for (int32_t i = 0; i < count; ++i) tokens[static_cast<size_t>(i)] = 1 + (i % (vocab - 1));
+	} else {
+		// Tokenize once via a throwaway map (tokenizer is artifact-resident and stateless).
+		sslm_model probe_model = nullptr;
+		sslm_status st = sslm_model_map(bytes.data(), bytes.size(), &probe_model);
+		if (st != SSLM_OK || !probe_model) Fail("sslm_model_map (tokenize probe)", static_cast<int>(st));
+		int32_t token_count = 0;
+		st = sslm_tokenize(probe_model, prompt, nullptr, &token_count);
+		if (st != SSLM_BUFFER_TOO_SMALL || token_count <= 0) Fail("sslm_tokenize (size)", static_cast<int>(st));
+		tokens.resize(static_cast<size_t>(token_count));
+		int32_t n = token_count;
+		st = sslm_tokenize(probe_model, prompt, tokens.data(), &n);
+		if (st != SSLM_OK) Fail("sslm_tokenize", static_cast<int>(st));
+		sslm_model_unmap(probe_model);
+	}
+	const int32_t N = static_cast<int32_t>(tokens.size());
 	std::printf("prompt \"%s\" -> %d real tokens\n", prompt, N);
 
 	// T-2147 Cell (c) support: dump the chunk_budget=N single-call blob to a file and exit --
@@ -266,10 +293,16 @@ int main(int argc, char** argv) {
 	if (do_speedup) {
 		std::printf("\n=== Speedup: chunk_budget=1 (per-token) vs chunk_budget=N (batched) ===\n");
 		double ms_per_token = 0, ms_batched = 0;
-		PrefillAndSave(bytes, tokens.data(), N, one_call, /*chunk_budget=*/1, SSLM_SPAN_PROMPT,
-		               nullptr, &ms_per_token);
-		PrefillAndSave(bytes, tokens.data(), N, one_call, /*chunk_budget=*/N, SSLM_SPAN_PROMPT,
-		               nullptr, &ms_batched);
+		for (int32_t r = 0; r < repeat; ++r) {  // interleaved, best of `repeat` per arm
+			double a = 0, b = 0;
+			PrefillAndSave(bytes, tokens.data(), N, one_call, /*chunk_budget=*/1, SSLM_SPAN_PROMPT,
+			               nullptr, &a);
+			PrefillAndSave(bytes, tokens.data(), N, one_call, /*chunk_budget=*/N, SSLM_SPAN_PROMPT,
+			               nullptr, &b);
+			if (r == 0 || a < ms_per_token) ms_per_token = a;
+			if (r == 0 || b < ms_batched) ms_batched = b;
+		}
+		if (repeat > 1) std::printf("best of %d interleaved runs per arm\n", repeat);
 		std::printf("prompt_len=%d artifact=%s\n", N, artifact_path);
 		std::printf("per-token (chunk_budget=1):  %.3f ms  (%.2f tok/s)\n", ms_per_token,
 		            ms_per_token > 0 ? 1000.0 * N / ms_per_token : 0.0);

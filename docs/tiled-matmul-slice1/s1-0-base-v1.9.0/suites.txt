@@ -1,0 +1,3 @@
+superslm_tests exit 0 1s
+superslm_tests_avx2_forced exit 0 0s
+superslm_tests_avx512_forced exit 0 1s

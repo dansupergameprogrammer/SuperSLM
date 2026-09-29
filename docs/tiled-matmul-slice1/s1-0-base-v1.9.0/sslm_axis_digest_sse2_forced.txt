@@ -1,0 +1,15 @@
+# compiler: gcc 13.3.0
+# cplusplus: 202002
+# ndebug: 1
+# arch: x86_64 (matmul SSE2-forced)
+# int64_digits: 64
+sha256                   105c497cff5677e065332e1b6c81aca753bd248f17848686906c4be44dbe9608  values=6496
+c1c2c3_requant           971380367417462803dd256379c766443d7e3e74cdf0e3c63545f72e01737e66  values=54193
+c19c22_dynamic_scale     5ea870a875d9dfb5766d03b983742a5e69a125e976ae2202860b934cd7038242  values=115117
+c4c6_isqrt               e78a2cfb60bc393c8ea64866d5c03e50b6baea196e9fd8a92c96677c6c34d814  values=32594
+c7c9_iexp                66cf1fa41fea0b98da8bc05a5d91988391c214aefa8cac87610534d189a08699  values=44588
+c11c13_rope              c874e071c1dca2b435efd3d3a25d130607e8077c9664afd9cb4f73c70e036e07  values=60000
+c10_silu_lut             7e7951dab1a2a26a4c52d41968ee78895d1b3a79cd30ddc98c50ddf6aa0c6c43  values=122510
+c17_matmul               ee456f50d00f6811f5bb0ecd72355258a0ece1a19575505fcd4e97458c7a2ba3  values=6865
+GLOBAL cc2676939e5a6c079f0682c208252c330cbeba0611208d37e5a1f529702693fb
+local_invariant_failures 0

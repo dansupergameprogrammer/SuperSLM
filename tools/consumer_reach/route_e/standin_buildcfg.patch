@@ -1,0 +1,108 @@
+# STAND-IN for slice 1's build-configuration record (plan rev 8, S1-B; cell 10.0 E3; Q1 B5). Planner probe.
+# Applied on top of standin_counter.patch (base ac2a6d5), in a scratch clone only, committed there and tagged
+# v1.8.0 locally. It appends one constant to src/matmul.cpp: a fixed marker "SSLM-BUILDCFG/2{" plus the SUPERSLM_*
+# macros that decide the tier, the force macros, the tiled threshold, and the compiler's optimisation and assertion
+# state (__OPTIMIZE__, __OPTIMIZE_SIZE__, NDEBUG, _DEBUG), each as the compiler saw it at the end of the translation
+# unit, encoded "D:<value>" when defined and "U" when not. It is kept by `used, retain` (GCC 11+, Clang 13+) and
+# by a linker /INCLUDE on MSVC, so a consumer link with --gc-sections (or /OPT:REF) keeps it.
+# Rev 7's form is standin_buildcfg_rev7.patch.
+diff --git a/src/matmul.cpp b/src/matmul.cpp
+index 0b88f6c..4838928 100644
+--- a/src/matmul.cpp
++++ b/src/matmul.cpp
+@@ -557,3 +557,95 @@ void GemmProbQ15Accumulate(const int64_t* probs, const int8_t* values, size_t wi
+ }
+ 
+ }  // namespace superslm
++
++// ---- Build-configuration record (STAND-IN for slice 1, S1-B; plan rev 8, cell 10.0 E3 and Q1 B5) ----
++// One constant, in this object, so that every binary linking the engine's GEMM carries the configuration the
++// compiler actually compiled: the tier-deciding macros, the force macros, the tiled threshold and (rev 8) the
++// compiler's optimisation and assertion state, each as seen here, at the end of the translation unit. A reader
++// finds it by its fixed marker. Encoding (rev 8): "D:<value after expansion>" when defined, "U" when not, so
++// no value a macro can take collides with "undefined" (coverage-mutants-rev7 CH1). Nothing reads it at run time.
++#define SUPERSLM_BUILDCFG_STR2(x) #x
++#define SUPERSLM_BUILDCFG_STR(x) SUPERSLM_BUILDCFG_STR2(x)
++#ifdef SUPERSLM_FORCE_SCALAR_MATMUL
++#define SUPERSLM_BUILDCFG_F0 "FORCE_SCALAR=D:" SUPERSLM_BUILDCFG_STR(SUPERSLM_FORCE_SCALAR_MATMUL) ";"
++#else
++#define SUPERSLM_BUILDCFG_F0 "FORCE_SCALAR=U;"
++#endif
++#ifdef SUPERSLM_FORCE_SSE2_MATMUL
++#define SUPERSLM_BUILDCFG_F1 "FORCE_SSE2=D:" SUPERSLM_BUILDCFG_STR(SUPERSLM_FORCE_SSE2_MATMUL) ";"
++#else
++#define SUPERSLM_BUILDCFG_F1 "FORCE_SSE2=U;"
++#endif
++#ifdef SUPERSLM_FORCE_AVX2_MATMUL
++#define SUPERSLM_BUILDCFG_F2 "FORCE_AVX2=D:" SUPERSLM_BUILDCFG_STR(SUPERSLM_FORCE_AVX2_MATMUL) ";"
++#else
++#define SUPERSLM_BUILDCFG_F2 "FORCE_AVX2=U;"
++#endif
++#ifdef SUPERSLM_FORCE_AVX512_MATMUL
++#define SUPERSLM_BUILDCFG_F3 "FORCE_AVX512=D:" SUPERSLM_BUILDCFG_STR(SUPERSLM_FORCE_AVX512_MATMUL) ";"
++#else
++#define SUPERSLM_BUILDCFG_F3 "FORCE_AVX512=U;"
++#endif
++#ifdef SUPERSLM_TEST_TILED_MIN_TOKENS
++#define SUPERSLM_BUILDCFG_F4 "TILED_MIN_TOKENS=D:" SUPERSLM_BUILDCFG_STR(SUPERSLM_TEST_TILED_MIN_TOKENS) ";"
++#else
++#define SUPERSLM_BUILDCFG_F4 "TILED_MIN_TOKENS=U;"
++#endif
++#ifdef SUPERSLM_TILED_AVX512_MSVC
++#define SUPERSLM_BUILDCFG_F5 "TILED_AVX512_MSVC=D:" SUPERSLM_BUILDCFG_STR(SUPERSLM_TILED_AVX512_MSVC) ";"
++#else
++#define SUPERSLM_BUILDCFG_F5 "TILED_AVX512_MSVC=U;"
++#endif
++#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
++#define SUPERSLM_BUILDCFG_F6 "DISPATCH_INSTRUMENT=D:" SUPERSLM_BUILDCFG_STR(SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT) ";"
++#else
++#define SUPERSLM_BUILDCFG_F6 "DISPATCH_INSTRUMENT=U;"
++#endif
++#ifdef SUPERSLM_MATMUL_HAVE_SIMD_X64
++#define SUPERSLM_BUILDCFG_F7 "HAVE_SIMD_X64=D:" SUPERSLM_BUILDCFG_STR(SUPERSLM_MATMUL_HAVE_SIMD_X64) ";"
++#else
++#define SUPERSLM_BUILDCFG_F7 "HAVE_SIMD_X64=U;"
++#endif
++#ifdef __OPTIMIZE__
++#define SUPERSLM_BUILDCFG_F8 "OPTIMIZE=D:" SUPERSLM_BUILDCFG_STR(__OPTIMIZE__) ";"
++#else
++#define SUPERSLM_BUILDCFG_F8 "OPTIMIZE=U;"
++#endif
++#ifdef __OPTIMIZE_SIZE__
++#define SUPERSLM_BUILDCFG_F9 "OPTIMIZE_SIZE=D:" SUPERSLM_BUILDCFG_STR(__OPTIMIZE_SIZE__) ";"
++#else
++#define SUPERSLM_BUILDCFG_F9 "OPTIMIZE_SIZE=U;"
++#endif
++#ifdef NDEBUG
++#define SUPERSLM_BUILDCFG_F10 "NDEBUG=D:" SUPERSLM_BUILDCFG_STR(NDEBUG) ";"
++#else
++#define SUPERSLM_BUILDCFG_F10 "NDEBUG=U;"
++#endif
++#ifdef _DEBUG
++#define SUPERSLM_BUILDCFG_F11 "DEBUG=D:" SUPERSLM_BUILDCFG_STR(_DEBUG) ";"
++#else
++#define SUPERSLM_BUILDCFG_F11 "DEBUG=U;"
++#endif
++// Kept through the consumer's link, including --gc-sections (rev 8; coverage-mutants-rev7 row 2h): `retain`
++// where the compiler has it (GCC 11+, Clang 13+), and a linker /INCLUDE on MSVC (so /OPT:REF keeps it).
++#if defined(__has_attribute)
++#if __has_attribute(retain)
++#define SUPERSLM_BUILDCFG_USED __attribute__((used, retain))
++#endif
++#endif
++#if !defined(SUPERSLM_BUILDCFG_USED) && defined(__GNUC__)
++#define SUPERSLM_BUILDCFG_USED __attribute__((used))
++#endif
++#if defined(_MSC_VER)
++#if defined(_M_IX86)
++#pragma comment(linker, "/INCLUDE:_superslm_build_config_record")
++#else
++#pragma comment(linker, "/INCLUDE:superslm_build_config_record")
++#endif
++#endif
++#ifndef SUPERSLM_BUILDCFG_USED
++#define SUPERSLM_BUILDCFG_USED
++#endif
++extern "C" SUPERSLM_BUILDCFG_USED const char superslm_build_config_record[] =
++    "SSLM-BUILDCFG/2{" SUPERSLM_BUILDCFG_F0 SUPERSLM_BUILDCFG_F1 SUPERSLM_BUILDCFG_F2 SUPERSLM_BUILDCFG_F3 SUPERSLM_BUILDCFG_F4 SUPERSLM_BUILDCFG_F5
++    SUPERSLM_BUILDCFG_F6 SUPERSLM_BUILDCFG_F7 SUPERSLM_BUILDCFG_F8 SUPERSLM_BUILDCFG_F9 SUPERSLM_BUILDCFG_F10 SUPERSLM_BUILDCFG_F11 "}";

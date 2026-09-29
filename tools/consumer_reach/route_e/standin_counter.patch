@@ -1,0 +1,39 @@
+# STAND-IN for the slice-1 tiled-entry counter (plan cell 11.1). Planner probe, plan rev 5.
+# NOT the tiled kernel: GemmInt8Accumulate still runs the shipped DotRow loop. It adds, under the
+# existing test-only dispatch seam, a counter incremented once per GEMM call with num_tokens >=
+# kTiledMinTokens (8, or SUPERSLM_TEST_TILED_MIN_TOKENS; D-infinity is =SIZE_MAX). Base: ac2a6d5.
+# Applied only in a scratch clone (git apply), committed there, and tagged v1.8.0 locally.
+diff --git a/src/matmul.cpp b/src/matmul.cpp
+index 936553f..0b88f6c 100644
+--- a/src/matmul.cpp
++++ b/src/matmul.cpp
+@@ -477,6 +477,15 @@ void GemmInt8Accumulate(const int8_t* activations, const int8_t* weights,
+                          size_t num_tokens, size_t in_channels, size_t out_channels,
+                          int64_t* out_acc) {
+ 	assert(num_tokens > 0 && "GemmInt8Accumulate: num_tokens must be >= 1");
++#if defined(SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT) && SUPERSLM_MATMUL_HAVE_SIMD_X64
++	// STAND-IN (planner probe, plan rev 5; NOT slice 1): the shipped DotRow loop below is
++	// unchanged. This only counts calls that slice 1 would route to the tiled kernel.
++#ifndef SUPERSLM_TEST_TILED_MIN_TOKENS
++#define SUPERSLM_TEST_TILED_MIN_TOKENS 8
++#endif
++	if (num_tokens >= static_cast<size_t>(SUPERSLM_TEST_TILED_MIN_TOKENS))
++		superslm_test::g_tiled_entry_invocations.fetch_add(1, std::memory_order_relaxed);
++#endif
+ 	// T-2147/D-SLM3488 (Vitruvius fold 2026-08-17, correcting D-SLM3481): this primitive has TWO
+ 	// independently-true properties, and they are not the same claim.
+ 	//
+diff --git a/tests/support/matmul_dispatch_instrument.h b/tests/support/matmul_dispatch_instrument.h
+index cf7a57a..268480e 100644
+--- a/tests/support/matmul_dispatch_instrument.h
++++ b/tests/support/matmul_dispatch_instrument.h
+@@ -55,6 +55,9 @@ namespace superslm_test {
+ // attributable to DetectBestDotRowTier()'s own construction, not to this instrument.
+ inline std::atomic<long long> g_dot_row_tier_probe_invocations{0};
+ 
++// STAND-IN (planner probe, plan rev 5; NOT slice 1): models cell 11.1's tiled-entry counter.
++inline std::atomic<long long> g_tiled_entry_invocations{0};
++
+ }  // namespace superslm_test
+ 
+ #endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
