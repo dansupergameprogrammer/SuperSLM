@@ -26,6 +26,9 @@ rem (T-2297, 2026-08-26: the original source list omitted it; the conductor repr
 rem passing once linked, and added it below.) Kept deliberately minimal rather than matching
 rem tests/t2138-abi-red-suite's own full CPU-core source list: the two headers plus the one
 rem .cpp their templates call out to is everything these cells need.
+rem Since the attention and per-row sites plan's slice S3, intmath.cpp dispatches its requant row
+rem leaf on detail::ActiveGemmTier(), which src/matmul.cpp defines, so matmul.cpp is on the compile
+rem line beside it: without it all five cells fail to LINK (LNK2019), the same false-red class.
 rem
 rem dim7_contract_red.cpp is compiled WITH /DNDEBUG (this file's own header comment: the
 rem probe-exhaustion std::abort() is documented release-safe/NDEBUG-independent, and building
@@ -65,7 +68,7 @@ for %%f in (dim4_shape_red.cpp dim6_determinism_red.cpp dim7_contract_red.cpp di
     set EXTRASOURCES=
     if "%%f"=="dim7_capacity_red.cpp" set EXTRASOURCES="%ENG%\src\damped_greedy_antilm.cpp"
     cl /nologo /std:c++20 /O2 /W4 /EHsc !EXTRAFLAGS! /I%ENG%\src /I%ENG%\include -I. ^
-        "%%f" "%ENG%\src\intmath.cpp" !EXTRASOURCES! /Fo:"obj\\" /Fe:"obj\%%~nf.exe" ^
+        "%%f" "%ENG%\src\intmath.cpp" "%ENG%\src\matmul.cpp" !EXTRASOURCES! /Fo:"obj\\" /Fe:"obj\%%~nf.exe" ^
         /link > "obj\%%~nf.log" 2>&1
     findstr /C:"error C" "obj\%%~nf.log" >nul
     if not errorlevel 1 (

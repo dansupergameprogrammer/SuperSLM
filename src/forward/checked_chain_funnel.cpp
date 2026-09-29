@@ -4,7 +4,7 @@
 // second limb). This file is the funnel's own translation unit: the only place in
 // the whole S3a forward composition permitted to call MaxAbsReduceWide/
 // RowBoundsWide/NormalizeScale/DynamicScaleReciprocal/RequantTokenCodeWide/
-// NarrowAccumulatorToI32 directly (§7.3's CI source check enforces this
+// RequantRowWide/NarrowAccumulatorToI32 directly (§7.3's CI source check enforces this
 // structurally on every other forward TU).
 //
 // C28's derived-operand pair predicate (CheckRoundingDivideByPotExponentDomain) is
@@ -411,11 +411,12 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
 	if (preflight_result.status != SslmForwardStatus::Ok) return preflight_result;
 
 	// Step 6: RequantTokenCodeWide per element, directly on the int64 row — never
-	// narrowed to int32 first (T-1254's fold).
-	for (size_t i = 0; i < n; ++i) {
-		out_codes[i] = RequantTokenCodeWide(wide_row[i], preflight.reciprocal,
-		                                    preflight.normalized.s);
-	}
+	// narrowed to int32 first (T-1254's fold). Attention and per-row sites plan,
+	// slice S3: the element loop is the row leaf RequantRowWide (intmath.h), which
+	// writes exactly RequantTokenCodeWide's code for every element, in 64-bit lanes
+	// on the AVX2 and AVX-512 tiers. Its contract is this funnel's: the preflight
+	// above has bounded every |x_i| <= d' <= 2^31 and derived r and s from that d'.
+	RequantRowWide(wide_row, n, preflight.reciprocal, preflight.normalized.s, out_codes);
 	*out_scale = preflight.output_scale;
 
 	// §11 S3.1a's instrumentation seam (trace_hook.h), attached to this

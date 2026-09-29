@@ -467,7 +467,8 @@ jobs:
   # Tiled-matmul plan slice 1, cell 11.3: every tiled and packer symbol in the matmul object is local
   # (never global, weak, unique or COMDAT), in the auto and both forced builds; the build-configuration
   # record is the single external exception. The check's own vitality plants are recorded in
-  # docs/tiled-matmul-slice1-progress.md.
+  # docs/tiled-matmul-slice1-progress.md. The attention and per-row sites plan's slice S3 adds the
+  # intmath.cpp objects, whose requant row bodies are that file's first target-attributed functions.
   tiled-matmul-linkage:
     runs-on: ubuntu-latest
     steps:
@@ -478,7 +479,10 @@ jobs:
           python3 tools/ci/check_tiled_matmul_linkage.py \
             build/CMakeFiles/superslm.dir/src/matmul.cpp.o \
             build/CMakeFiles/superslm_avx2_forced.dir/src/matmul.cpp.o \
-            build/CMakeFiles/superslm_avx512_forced.dir/src/matmul.cpp.o
+            build/CMakeFiles/superslm_avx512_forced.dir/src/matmul.cpp.o \
+            build/CMakeFiles/superslm.dir/src/intmath.cpp.o \
+            build/CMakeFiles/superslm_avx2_forced.dir/src/intmath.cpp.o \
+            build/CMakeFiles/superslm_avx512_forced.dir/src/intmath.cpp.o
 
   # Ratified into this slot's scope (Sec7.1, D-SLM170): the first executed
   # x64-vs-ARM comparison this plan's own text (SuperSLM_Plan.md:1436, T-182)
@@ -976,7 +980,8 @@ jobs:
   # C1): the checked chain funnel's structural half -- no translation unit in
   # the forward composition may name a funnel leaf (MaxAbsReduce,
   # MaxAbsReduceWide, RowBoundsWide, NormalizeScale, DynamicScaleReciprocal,
-  # RequantTokenCode, RequantTokenCodeWide, NarrowAccumulatorToI32) directly,
+  # RequantTokenCode, RequantTokenCodeWide, NarrowAccumulatorToI32, and since the
+  # attention and per-row sites plan's slice S3 the row leaf RequantRowWide) directly,
   # outside the funnel's own file and the leaf certification TUs. Mirrors the
   # two precedents already CI-wired (tests/check_no_pow_operator.py above,
   # tools/ci/check_bad_alloc_contract.py's own job): a test step, then the

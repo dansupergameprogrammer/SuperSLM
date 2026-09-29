@@ -10,14 +10,18 @@ The population is every symbol of the given matmul.cpp objects whose demangled n
 (functions and data alike: the kernels, the packer, the activation prep, the constants) or `ProbV` /
 `ProbQ15AccumulateInto` (the attention and per-row sites plan's slice S2: the AVX2 and AVX-512BW prob·V
 bodies, their guard and the accumulate-into core, cell 11.3 of that plan), plus the
-build-configuration record `superslm_build_config_record`. The engine's public API in the same object
+build-configuration record `superslm_build_config_record`. Slice S3 of the same plan gives src/intmath.cpp
+its first target-attributed functions, the requant row bodies `RequantRowAvx2` and `RequantRowAvx512`
+(`RequantRowAvx` in the population; the exported leaf `RequantRowWide` that dispatches to them carries no
+target attribute and is outside it), so the intmath.cpp objects are passed too. The engine's public API in the same object
 is outside it (including the `superslm::detail::` entries the header declares, which carry no target
 attribute), and so are the test seam's own `superslm_test::` variables, which exist only in seam
 builds and are shared with the test translation unit on purpose.
 
 Rules:
   1. every population symbol except the record is local: never global, weak, unique or COMDAT;
-  2. the record is present exactly once per object and is external (the single allowed exception);
+  2. the record is present exactly once per matmul.cpp object and is external (the single allowed
+     exception); any other object (intmath.cpp's) holds no record;
   3. the name list below is not stale: each listed function resolves to a symbol in at least one of the
      given objects, or is proven inlined by its signature instruction in its caller's disassembly (at -O3
      the packer, the micro-kernels and the activation prep are all inlined).
@@ -26,6 +30,7 @@ Vitality (run by hand; the plan's plants): a tiled function given external linka
 packer table, must each turn rule 1 red.
 
 Usage: check_tiled_matmul_linkage.py OBJECT [OBJECT...]   (Linux/ELF: nm, readelf, objdump)
+       (the matmul.cpp objects are recognized by "matmul" in the object's file name)
 Windows (dumpbin /symbols) is not implemented here; see the plan's §11.3 Windows leg.
 """
 
@@ -36,7 +41,7 @@ import subprocess
 import sys
 
 RECORD = "superslm_build_config_record"
-POPULATION = re.compile(r"Tiled|ProbV|ProbQ15AccumulateInto|" + RECORD)
+POPULATION = re.compile(r"Tiled|ProbV|ProbQ15AccumulateInto|RequantRowAvx|" + RECORD)
 SEAM = "superslm_test::"
 DETAIL_API = "superslm::detail::"  # declared in include/superslm/matmul.h; never target-attributed
 
@@ -57,6 +62,9 @@ EXPECTED = {
     "ProbVBlockAvx512": ("ProbVAccumulateIntoAvx512", r"vpmaddwd\s.*%zmm"),
     "ProbVTail16Avx512": ("ProbVAccumulateIntoAvx512", r"vinserti128"),
     "ProbQ15AccumulateInto": ("GemmProbQ15Accumulate", r"(call|jmp).*ProbVAccumulateIntoAvx"),
+    # Attention and per-row sites plan, slice S3 (cell 11.3): src/intmath.cpp's requant row bodies.
+    "RequantRowAvx2": ("RequantRowWide", r"vpmuludq\s.*%ymm"),
+    "RequantRowAvx512": ("RequantRowWide", r"vpmuludq\s.*%zmm"),
 }
 
 
@@ -124,8 +132,9 @@ def main(argv: list[str]) -> int:
             for exp in EXPECTED:
                 if re.search(r"(^|::)" + exp + r"\b", name) and resolved[exp] is None:
                     resolved[exp] = f"symbol in {obj}"
-        if records != 1:
-            failures.append(f"{obj}: the record appears {records} times, want exactly 1")
+        want_records = 1 if "matmul" in obj.rsplit("/", 1)[-1] else 0
+        if records != want_records:
+            failures.append(f"{obj}: the record appears {records} times, want exactly {want_records}")
         dis = disassembly_by_function(obj)
         for exp, (caller, sig) in EXPECTED.items():
             if resolved[exp] is not None:

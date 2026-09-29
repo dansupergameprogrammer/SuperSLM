@@ -20,10 +20,37 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 #include <vector>
 
 #include "superslm/checked_chain_funnel.h"  // kSoftmaxRowMaxSafeExponent (D-SLM409, plan Sec14.1)
+#include "superslm/matmul.h"  // detail::ActiveGemmTier / DispatchSitesKernel (RequantRowWide's tier dispatch)
+
+// Attention and per-row sites plan (rev 3.1), slice S3: this file's first target-attributed functions,
+// RequantRowAvx2 and RequantRowAvx512 below. Per function, never translation-unit-wide (§3.2; the
+// isolation checker's prose and the linkage checker's population name them), exactly as src/matmul.cpp
+// does: GCC and Clang need the target enabled per function for an AVX2/AVX-512 intrinsic to compile, and
+// a TU-wide flag would let the auto-vectorizer use those instructions anywhere in this file. MSVC gates
+// no intrinsic by /arch; clang-cl does, and needs the attribute. The AVX-512 target is F and BW only (C9).
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+#include <emmintrin.h>
+#include <immintrin.h>
+#endif
+
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+// The test-only dispatch-instrument seam (src/matmul.cpp's convention): the requant row's per-tier path
+// counters (attention and per-row sites plan, §3.6). Never defined for the production library.
+#include "support/matmul_dispatch_instrument.h"
+#endif
+
+#if defined(__clang__) || (defined(__GNUC__) && !defined(_MSC_VER))
+#define SUPERSLM_INTMATH_AVX2_TARGET __attribute__((target("avx2")))
+#define SUPERSLM_INTMATH_AVX512_TARGET __attribute__((target("avx512f,avx512bw")))
+#else
+#define SUPERSLM_INTMATH_AVX2_TARGET
+#define SUPERSLM_INTMATH_AVX512_TARGET
+#endif
 
 namespace superslm {
 namespace {
@@ -520,9 +547,128 @@ int8_t RequantTokenCodeWide(int64_t x_i, int64_t r, int s) {
 	return static_cast<int8_t>(x_i < 0 ? -q : q);
 }
 
-// Attention and per-row sites plan, slice S3: the row leaf. Red phase: the element loop only.
+// ---- Attention and per-row sites plan, slice S3: the requant row leaf (§4.3, §5.3) ---------------------
+//
+// The identity (§5.3). With 0 <= |x| <= 2^31, 1 <= r <= 2^32, e = 62 - s in [32, 63] and
+// P = |x|·r = H·2^32 + L (H = P >> 32, L = P mod 2^32):
+//   floor((254·P + 2^e) / 2^(e+1)) = floor((127·P + 2^(e-1)) / 2^e)
+//                                  = (127·H + ((127·L + 2^(e-1)) >> 32)) >> (e - 32),
+// because 127·P + 2^(e-1) = 127·H·2^32 + X with X = 127·L + 2^(e-1), and nested floor division by
+// positive integers (2^32, then 2^(e-32)) equals the single floor. The clamp at 127 and the sign restore
+// are RequantTokenCodeWide's. Every intermediate fits an unsigned 64-bit lane: P <= 2^63 (exactly 2^63 at
+// the contract's corner |x| = d' = 2^31, r = 2^32, which is why the lane is unsigned and H is taken with
+// a logical shift), 127·H <= 127·2^31 < 2^38, 127·L + 2^(e-1) < 2^39 + 2^62. P is formed from the 32-bit
+// halves of r (r itself can be 2^32): |x|·r_lo + ((|x|·r_hi) << 32), each a 32x32 -> 64 product.
+// Operand dispositions: |x| <= d' <= 2^31 is guarded by the funnel's preflight (C29), r and s are
+// canonical from that d' (NormalizeScale, DynamicScaleReciprocal); the funnel is the only caller (the
+// forward-leaf check), so the leaf needs no runtime guard and has no fallback.
+
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+namespace {
+
+// AVX2 body: four elements per step, as many whole steps as the row holds; returns how many elements it
+// wrote (the caller runs the rest through RequantTokenCodeWide). Counts its own entry (§3.6), so a
+// dispatch that reached the wrong tier's body moves the wrong counter.
+//
+// |x|, the clamp and the sign restore are done in 32-bit lanes (vpabsd, vpminud, vpsignd) rather than as
+// 64-bit selects: Clang lowers a 64-bit select (vpblendvb on a vpcmpgtq mask, or its and/andnot/xor
+// spellings) to vblendvpd and vxorpd, FP-domain instructions the fp-free scan rejects. Each is exact here:
+// |x| <= 2^31, so the low dword of vpabsd is |x| read as unsigned (x = -2^31 gives 0x80000000), and
+// vpmuludq reads only low dwords; the magnitude's low dword is the whole magnitude unless its high dword
+// is nonzero, which is folded into bit 7 before the unsigned 32-bit minimum; and x's high dword is 0 for
+// x >= 0 and all-ones for x < 0, so OR-ing 1 into it gives the +-1 that vpsignd applies.
+SUPERSLM_INTMATH_AVX2_TARGET size_t RequantRowAvx2(const int64_t* x, size_t n, int64_t r, int s, int8_t* out) {
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+	superslm_test::g_requant_row_avx2.fetch_add(1, std::memory_order_relaxed);
+#endif
+	const int e = 62 - s;  // in [32, 63]
+	const __m256i r_lo = _mm256_set1_epi64x(static_cast<int64_t>(static_cast<uint64_t>(r) & 0xFFFFFFFFu));
+	const __m256i r_hi = _mm256_set1_epi64x(static_cast<int64_t>(static_cast<uint64_t>(r) >> 32));
+	const __m256i round = _mm256_set1_epi64x(static_cast<int64_t>(uint64_t{1} << (e - 1)));
+	const __m256i low32 = _mm256_set1_epi64x(INT64_C(0xFFFFFFFF));
+	const __m256i c127 = _mm256_set1_epi64x(127);  // low dword 127, high dword 0
+	const __m256i c128 = _mm256_set1_epi32(128);
+	const __m256i one = _mm256_set1_epi32(1);
+	const __m256i zero = _mm256_setzero_si256();
+	const __m128i shift = _mm_cvtsi32_si128(e - 32);
+	// Byte 0 and byte 8 of each 128-bit half (each 64-bit lane's low byte) to bytes 0 and 1 of that half. Bytes
+	// 2-15 are never read (the unpack below takes word 0 of each half); the upper half fills them with 1, not
+	// -1, only so the two halves differ: identical halves let Clang load the constant with vbroadcasti128,
+	// which the fp-free scan does not admit.
+	const __m256i pick = _mm256_setr_epi8(0, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+	                                      0, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
+	size_t i = 0;
+	for (; i + 4 <= n; i += 4) {
+		const __m256i xv = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(x + i));
+		const __m256i ax = _mm256_abs_epi32(xv);  // low dword: |x| <= 2^31, unsigned
+		const __m256i p = _mm256_add_epi64(_mm256_mul_epu32(ax, r_lo), _mm256_slli_epi64(_mm256_mul_epu32(ax, r_hi), 32));
+		const __m256i h = _mm256_srli_epi64(p, 32);  // logical: P can be 2^63
+		const __m256i l = _mm256_and_si256(p, low32);
+		const __m256i carry = _mm256_srli_epi64(_mm256_add_epi64(_mm256_mul_epu32(l, c127), round), 32);
+		const __m256i mag = _mm256_srl_epi64(_mm256_add_epi64(_mm256_mul_epu32(h, c127), carry), shift);  // < 2^39
+		// The clamp at 127: a magnitude with a nonzero high dword is >= 2^32, so it sets bit 7 of the low dword;
+		// then the unsigned 32-bit minimum with 127 (the high dword becomes min(high, 0) = 0).
+		const __m256i big = _mm256_andnot_si256(_mm256_cmpeq_epi32(_mm256_shuffle_epi32(mag, 0xF5), zero), c128);
+		const __m256i clamped = _mm256_min_epu32(_mm256_or_si256(mag, big), c127);
+		// The sign: +1 or -1 from x's high dword.
+		const __m256i q = _mm256_sign_epi32(clamped, _mm256_or_si256(_mm256_shuffle_epi32(xv, 0xF5), one));
+		const __m256i b = _mm256_shuffle_epi8(q, pick);
+		const __m128i four = _mm_unpacklo_epi16(_mm256_castsi256_si128(b), _mm256_extracti128_si256(b, 1));
+		const int32_t packed = _mm_cvtsi128_si32(four);
+		std::memcpy(out + i, &packed, 4);
+	}
+	return i;
+}
+
+// AVX-512BW body, the same construction in eight lanes, F and BW instructions only (C9): |x| by vpabsq,
+// the sign by vpsraq, the clamp by vpminuq, the narrowing by vpmovqb, and no mask register anywhere.
+SUPERSLM_INTMATH_AVX512_TARGET size_t RequantRowAvx512(const int64_t* x, size_t n, int64_t r, int s, int8_t* out) {
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+	superslm_test::g_requant_row_avx512.fetch_add(1, std::memory_order_relaxed);
+#endif
+	const int e = 62 - s;  // in [32, 63]
+	const __m512i r_lo = _mm512_set1_epi64(static_cast<int64_t>(static_cast<uint64_t>(r) & 0xFFFFFFFFu));
+	const __m512i r_hi = _mm512_set1_epi64(static_cast<int64_t>(static_cast<uint64_t>(r) >> 32));
+	const __m512i round = _mm512_set1_epi64(static_cast<int64_t>(uint64_t{1} << (e - 1)));
+	const __m512i low32 = _mm512_set1_epi64(INT64_C(0xFFFFFFFF));
+	const __m512i c127 = _mm512_set1_epi64(127);
+	const __m128i shift = _mm_cvtsi32_si128(e - 32);
+	size_t i = 0;
+	for (; i + 8 <= n; i += 8) {
+		const __m512i xv = _mm512_loadu_si512(x + i);
+		const __m512i neg = _mm512_srai_epi64(xv, 63);  // all-ones where x < 0
+		const __m512i ax = _mm512_abs_epi64(xv);        // |x| <= 2^31
+		const __m512i p = _mm512_add_epi64(_mm512_mul_epu32(ax, r_lo), _mm512_slli_epi64(_mm512_mul_epu32(ax, r_hi), 32));
+		const __m512i h = _mm512_srli_epi64(p, 32);  // logical: P can be 2^63
+		const __m512i l = _mm512_and_si512(p, low32);
+		const __m512i carry = _mm512_srli_epi64(_mm512_add_epi64(_mm512_mul_epu32(l, c127), round), 32);
+		const __m512i mag = _mm512_min_epu64(_mm512_srl_epi64(_mm512_add_epi64(_mm512_mul_epu32(h, c127), carry), shift), c127);
+		const __m512i q = _mm512_sub_epi64(_mm512_xor_si512(mag, neg), neg);
+		_mm_storel_epi64(reinterpret_cast<__m128i*>(out + i), _mm512_cvtepi64_epi8(q));
+	}
+	return i;
+}
+
+}  // namespace
+#endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
+
 void RequantRowWide(const int64_t* x, size_t n, int64_t r, int s, int8_t* out) {
-	for (size_t i = 0; i < n; ++i) out[i] = RequantTokenCodeWide(x[i], r, s);
+	size_t i = 0;
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+	// The selector (§3.2, cell 11.2): the lanes on AVX2 and AVX-512; v1.9.0's element loop on the scalar and
+	// SSE2 tiers and on an MSVC build's AVX-512 tier with SUPERSLM_SITES_AVX512_MSVC off.
+	switch (detail::DispatchSitesKernel(detail::ActiveGemmTier())) {
+		case detail::SitesKernel::kAvx2:
+			i = RequantRowAvx2(x, n, r, s, out);
+			break;
+		case detail::SitesKernel::kAvx512:
+			i = RequantRowAvx512(x, n, r, s, out);
+			break;
+		case detail::SitesKernel::kShipped:
+			break;
+	}
+#endif
+	for (; i < n; ++i) out[i] = RequantTokenCodeWide(x[i], r, s);  // the tail, or the whole row
 }
 
 // --- §6.3 nonlinear scalar primitives (i-sqrt C4/C5/C6, i-exp C7/C8/C9) --------

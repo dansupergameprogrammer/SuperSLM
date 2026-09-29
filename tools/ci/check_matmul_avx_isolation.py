@@ -10,7 +10,13 @@ enabled. Since the tiled-matmul plan's slice 1 they are `DotRowAvx2` and `DotRow
 `TiledGemmAvx2` and `TiledGemmAvx512`, plus (the attention and per-row sites plan's slice S2) the
 prob·V bodies `ProbVBlockAvx2`, `ProbVBlockAvx512`, `ProbVTail16Avx512`, `ProbVAccumulateIntoAvx2` and
 `ProbVAccumulateIntoAvx512` (all in the anonymous namespace; their guard `ProbVFastPathAdmits` and
-the dispatching core `ProbQ15AccumulateInto` carry no target attribute). The packer
+the dispatching core `ProbQ15AccumulateInto` carry no target attribute), plus (that plan's slice S3)
+src/intmath.cpp's requant row bodies `RequantRowAvx2` and `RequantRowAvx512` (anonymous namespace; the
+exported leaf `RequantRowWide` that dispatches to them carries no target attribute). intmath.cpp is
+compiled by the same CMake targets as matmul.cpp, and since slice S3 it calls `detail::ActiveGemmTier()`,
+so every direct compiler recipe that compiles it must name matmul.cpp too (the four recipes that did not
+gained it in that slice) and is therefore inside this checker's `matmul.cpp`-gated direct-invocation
+channel. The packer
 (`TiledPackPanel16`, `TiledTranspose8x8Epi16`) and the activation prep
 (`TiledWidenActivations`) are baseline SSE2 and carry no target attribute. All of them use
 GCC/Clang's per-function `__attribute__((target("avx2")))` /

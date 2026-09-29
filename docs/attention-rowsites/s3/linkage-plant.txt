@@ -1,0 +1,31 @@
+== 11.3 plant: RequantRowAvx2 moved out of the anonymous namespace (external linkage), auto library
+build/CMakeFiles/superslm.dir/src/matmul.cpp.o: 7 population symbols, record x1
+build/CMakeFiles/superslm.dir/src/intmath.cpp.o: 2 population symbols, record x0
+check_tiled_matmul_linkage: FAIL
+  build/CMakeFiles/superslm.dir/src/intmath.cpp.o: 'superslm::RequantRowAvx2(long const*, unsigned long, long, int, signed char*)' is not local (nm type 'T')
+exit 1
+== unplanted, the six objects of the CI job
+build/CMakeFiles/superslm.dir/src/matmul.cpp.o: 7 population symbols, record x1
+build/CMakeFiles/superslm_avx2_forced.dir/src/matmul.cpp.o: 3 population symbols, record x1
+build/CMakeFiles/superslm_avx512_forced.dir/src/matmul.cpp.o: 5 population symbols, record x1
+build/CMakeFiles/superslm.dir/src/intmath.cpp.o: 2 population symbols, record x0
+build/CMakeFiles/superslm_avx2_forced.dir/src/intmath.cpp.o: 2 population symbols, record x0
+build/CMakeFiles/superslm_avx512_forced.dir/src/intmath.cpp.o: 2 population symbols, record x0
+  TiledGemmAvx2: symbol in build/CMakeFiles/superslm.dir/src/matmul.cpp.o
+  TiledGemmAvx512: symbol in build/CMakeFiles/superslm.dir/src/matmul.cpp.o
+  TiledMicroAvx2: inlined into superslm::TiledGemmAvx2 in build/CMakeFiles/superslm.dir/src/matmul.cpp.o
+  TiledMicroAvx512: inlined into superslm::TiledGemmAvx512 in build/CMakeFiles/superslm.dir/src/matmul.cpp.o
+  TiledPackPanel16: inlined into superslm::TiledGemmAvx2 in build/CMakeFiles/superslm.dir/src/matmul.cpp.o
+  TiledTranspose8x8Epi16: inlined into superslm::TiledGemmAvx2 in build/CMakeFiles/superslm.dir/src/matmul.cpp.o
+  TiledWidenActivations: inlined into superslm::detail::GemmInt8AccumulateCols in build/CMakeFiles/superslm.dir/src/matmul.cpp.o
+  RunTiledGemm: inlined into superslm::detail::GemmInt8AccumulateCols in build/CMakeFiles/superslm.dir/src/matmul.cpp.o
+  ProbVAccumulateIntoAvx2: symbol in build/CMakeFiles/superslm.dir/src/matmul.cpp.o
+  ProbVAccumulateIntoAvx512: symbol in build/CMakeFiles/superslm.dir/src/matmul.cpp.o
+  ProbVBlockAvx2: inlined into superslm::ProbVAccumulateIntoAvx2 in build/CMakeFiles/superslm.dir/src/matmul.cpp.o
+  ProbVBlockAvx512: symbol in build/CMakeFiles/superslm.dir/src/matmul.cpp.o
+  ProbVTail16Avx512: inlined into superslm::ProbVAccumulateIntoAvx512 in build/CMakeFiles/superslm.dir/src/matmul.cpp.o
+  ProbQ15AccumulateInto: inlined into superslm::GemmProbQ15Accumulate in build/CMakeFiles/superslm.dir/src/matmul.cpp.o
+  RequantRowAvx2: symbol in build/CMakeFiles/superslm.dir/src/intmath.cpp.o
+  RequantRowAvx512: symbol in build/CMakeFiles/superslm.dir/src/intmath.cpp.o
+check_tiled_matmul_linkage: OK
+exit 0
