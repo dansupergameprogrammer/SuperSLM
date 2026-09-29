@@ -469,7 +469,8 @@ jobs:
   # record is the single external exception. The check's own vitality plants are recorded in
   # docs/tiled-matmul-slice1-progress.md. The attention and per-row sites plan's slice S3 adds the
   # intmath.cpp objects, whose requant row bodies are that file's first target-attributed functions;
-  # slice S4 adds the softmax fast path's bodies to the same objects.
+  # slice S4 adds the softmax fast path's bodies to the same objects; slice S5 adds the forward_sites.cpp
+  # objects, for the Q31 score row's bodies.
   tiled-matmul-linkage:
     runs-on: ubuntu-latest
     steps:
@@ -483,7 +484,10 @@ jobs:
             build/CMakeFiles/superslm_avx512_forced.dir/src/matmul.cpp.o \
             build/CMakeFiles/superslm.dir/src/intmath.cpp.o \
             build/CMakeFiles/superslm_avx2_forced.dir/src/intmath.cpp.o \
-            build/CMakeFiles/superslm_avx512_forced.dir/src/intmath.cpp.o
+            build/CMakeFiles/superslm_avx512_forced.dir/src/intmath.cpp.o \
+            build/CMakeFiles/superslm.dir/src/forward/forward_sites.cpp.o \
+            build/CMakeFiles/superslm_avx2_forced.dir/src/forward/forward_sites.cpp.o \
+            build/CMakeFiles/superslm_avx512_forced.dir/src/forward/forward_sites.cpp.o
 
   # Ratified into this slot's scope (Sec7.1, D-SLM170): the first executed
   # x64-vs-ARM comparison this plan's own text (SuperSLM_Plan.md:1436, T-182)

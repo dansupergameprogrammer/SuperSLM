@@ -18,7 +18,13 @@ fast path's bodies there: `SoftmaxRowAvx2` / `SoftmaxRowAvx512` and the per-step
 `SoftmaxExpAvx2` / `SoftmaxExpAvx512` and `SoftmaxProbAvx2` / `SoftmaxProbAvx512` (`SoftmaxRowAvx`,
 `SoftmaxExpAvx` and `SoftmaxProbAvx` in the population), and their shared, unattributed guard and row
 set-up (`SoftmaxFastGuard`, `MakeSoftmaxFastRow`, `SoftmaxProbReciprocal`; `SoftmaxFast` and
-`SoftmaxProbReciprocal`); the exported `SoftmaxRowQ15` that dispatches to them is outside it. The engine's public API in the same object
+`SoftmaxProbReciprocal`); the exported `SoftmaxRowQ15` that dispatches to them is outside it. Slice S5 adds
+src/forward/forward_sites.cpp's Q31 score row: the bodies `QkQ31RowAvx2` / `QkQ31RowAvx512` (`QkQ31RowAvx` in
+the population), the rounding steps they inline (`Q31RoundAvx2` / `Q31RoundAvx512`; `Q31RoundAvx`), the key
+packers (`Q31PackKeyBlock`, `Q31PackQuads4x16`; `Q31Pack`) and the unattributed guard and limb set-up
+(`Q31RowFastPathAdmits`, `MakeQ31RowLimbs`, the `Q31RowLimbs` struct), so the forward_sites.cpp objects are
+passed too; the exported `QkQ31ScoreRow` that dispatches to them is outside it, and so is that file's older
+per-key `QkQ31Score` family. The engine's public API in the same object
 is outside it (including the `superslm::detail::` entries the header declares, which carry no target
 attribute), and so are the test seam's own `superslm_test::` variables, which exist only in seam
 builds and are shared with the test translation unit on purpose.
@@ -48,7 +54,8 @@ import sys
 RECORD = "superslm_build_config_record"
 POPULATION = re.compile(
     r"Tiled|ProbV|ProbQ15AccumulateInto|RequantRowAvx|SoftmaxRowAvx|SoftmaxExpAvx|SoftmaxProbAvx|SoftmaxFast|"
-    r"SoftmaxProbReciprocal|" + RECORD)
+    r"SoftmaxProbReciprocal|QkQ31RowAvx|Q31RoundAvx|Q31Pack|Q31RowFastPathAdmits|MakeQ31RowLimbs|Q31RowLimbs|"
+    + RECORD)
 SEAM = "superslm_test::"
 DETAIL_API = "superslm::detail::"  # declared in include/superslm/matmul.h; never target-attributed
 
@@ -82,6 +89,15 @@ EXPECTED = {
     "SoftmaxFastGuard": ("SoftmaxRowQ15", r"(0x2000000000000000|0xe000000000000000|0x4000000000000000)"),  # +-2^61
     "MakeSoftmaxFastRow": ("SoftmaxRowQ15", r"(lzcnt|bsr)"),
     "SoftmaxProbReciprocal": ("SoftmaxRowAvx", r"\bdiv"),
+    # Attention and per-row sites plan, slice S5 (cell 11.3): src/forward/forward_sites.cpp's Q31 score row.
+    "QkQ31RowAvx2": ("QkQ31ScoreRow", r"(call|jmp).*QkQ31RowAvx2"),
+    "QkQ31RowAvx512": ("QkQ31ScoreRow", r"(call|jmp).*QkQ31RowAvx512"),
+    "Q31RoundAvx2": ("QkQ31RowAvx2", r"vpsrlq\s+\$0x3f,.*%ymm"),
+    "Q31RoundAvx512": ("QkQ31RowAvx512", r"vpsrlq\s+\$0x3f,.*%zmm"),
+    "Q31PackKeyBlock": ("QkQ31RowAvx", r"vpsraw\s+\$0x8,"),
+    "Q31PackQuads4x16": ("QkQ31RowAvx", r"vpsraw\s+\$0x8,"),
+    "Q31RowFastPathAdmits": ("QkQ31ScoreRow", r"\$0x200,"),  # head_dim <= 512
+    "MakeQ31RowLimbs": ("QkQ31ScoreRow", r"\$0x1e,"),  # w >> 30
 }
 
 

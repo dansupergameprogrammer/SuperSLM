@@ -16,7 +16,13 @@ exported leaf `RequantRowWide` that dispatches to them carries no target attribu
 softmax fast path's bodies `SoftmaxRowAvx2` and `SoftmaxRowAvx512` and the step helpers they inline,
 `SoftmaxExpAvx2`, `SoftmaxExpAvx512`, `SoftmaxProbAvx2` and `SoftmaxProbAvx512` (anonymous namespace; the
 guard `SoftmaxFastGuard`, the row set-up `MakeSoftmaxFastRow` and `SoftmaxProbReciprocal`, and the exported
-`SoftmaxRowQ15` that dispatches carry no target attribute). intmath.cpp is
+`SoftmaxRowQ15` that dispatches carry no target attribute), plus (slice S5) src/forward/forward_sites.cpp's
+Q31 score row bodies `QkQ31RowAvx2` and `QkQ31RowAvx512` and the rounding steps they inline, `Q31RoundAvx2`
+and `Q31RoundAvx512` (anonymous namespace; the key packers `Q31PackKeyBlock` and `Q31PackQuads4x16` are
+baseline SSE2, and the guard `Q31RowFastPathAdmits`, the limb set-up `MakeQ31RowLimbs` and the exported
+`QkQ31ScoreRow` that dispatches carry no target attribute; that file's per-key `QkQ31ScoreAvx2` and
+`QkQ31ScoreAvx512` predate these plans). Since slice S5 forward_sites.cpp calls `detail::ActiveGemmTier()`
+too; every direct recipe that compiles it already names matmul.cpp. intmath.cpp is
 compiled by the same CMake targets as matmul.cpp, and since slice S3 it calls `detail::ActiveGemmTier()`,
 so every direct compiler recipe that compiles it must name matmul.cpp too (the four recipes that did not
 gained it in that slice) and is therefore inside this checker's `matmul.cpp`-gated direct-invocation

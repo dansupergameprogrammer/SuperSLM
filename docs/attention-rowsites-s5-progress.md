@@ -28,6 +28,9 @@ States: **done**, **CI-only**, **box-only**, **not done** (with why).
 | Red-first: cells (4.S5 grid, 7.S5b margin corners, 7.S5c ties, 7.S5d inside corners, width 0, 2.S5 hostile rows, 6.1, 6.3, 11.1(c) on the widened QK-norm fixture, 11.1(d)'s q31_row rows), the test-side guard copy, per-tier q31_row counters (declared, not incremented), `QkQ31ScoreRow` declared with a stub that runs the per-key loop, the S5 rows appended to `c32_attention`, the S5 golden hash and the fixture hash | done (commit 1) | `docs/attention-rowsites/s5/red-suites.txt`: auto and forced AVX2/AVX-512 fail 358 assertions each, every one a q31_row path assertion; forced SSE2 0. Every value assertion passes on the base. Digests: every section but `c32_attention` byte-identical to S4's on all five legs; `c32_attention` `ddbdb76e…` on all five |
 | The widened QK-norm fixture (11.1(c)): its premise on the base | done (commit 1) | `fixture-premise.txt`: every step Ok in all three runs, which hash alike; 96 softmax rows, all inside §5.4's guard; 4 prob-V rows fail the int16 condition (position 0's width-1 rows) |
 | Golden pin (6.3) from the v1.9.0 tag | done (commit 1) | `golden.txt`: S5 Q31-row `daea9a39…` over 33,618 values; fixture `336b8d41…` over 14,384; S1–S4 unchanged |
+| `QkQ31ScoreRow` on the AVX2 and AVX-512BW tiers, both layer loops calling it | done (commit 2) | GCC 13.3 and Clang 18.1, auto (AVX-512 here) and forced SSE2/AVX2/AVX-512: 0 failures on all eight binaries; S5 and fixture hashes equal the pins; digests equal the red run's on all five legs, both compilers (GLOBAL `f740f833…`) |
+| 11.3 linkage checker: the S5 bodies and the forward_sites.cpp objects join; vitality plant | done (commit 2) | `linkage-plant.txt`: a planted external `Q31RoundAvx2Planted` turns it red on all three forward_sites objects; restored, OK. The CI job passes the three forward_sites.cpp objects |
+| Isolation checker prose names the S5 bodies | done (commit 2) | `check_matmul_avx_isolation.py` exits 0; its population test passes (31) |
 
 ## Deviations from the plan as written
 
@@ -40,6 +43,10 @@ States: **done**, **CI-only**, **box-only**, **not done** (with why).
    sweep. The RoPE table is built from Pythagorean triples, so no platform's libm enters the fixture.
 3. **4.S5's widths add 15, 16 and 17** to the plan's {1, 7, 8, 9, 1,024}: the AVX-512 body packs keys in blocks of 16,
    and those three are its full block and both partials.
+
+4. **The linkage checker reports a stale name on a Clang build, before and after this slice.** On Clang 18 objects
+   `TiledWidenActivations` resolves to no symbol and no inlined signature (the S4 tree gives the same FAIL); the CI
+   job builds with GCC 13, where the check is OK. Every S5 name resolves on both compilers. Not changed here.
 
 ## What the plan got wrong
 
