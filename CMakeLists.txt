@@ -445,6 +445,20 @@ endforeach()
 # any x64 target (MSVC does not gate _mm512_* intrinsics behind /arch) and SIGILLs at runtime
 # (STATUS_ILLEGAL_INSTRUCTION) on hardware lacking AVX-512F/BW -- the same documented, expected
 # outcome as this project's forced-suite/digest AVX-512 pair (F:\t2149-avx512-run\README.txt).
+# Decode-threading plan rev 1.2 §7 (B0, B1): the decode-threading bench, on the production library,
+# and a seam build of it for B1's minimum-work sweep (superslm_test_injection carries the seam).
+add_executable(sslm_decode_threading_bench tools/decode_threading_bench.cpp)
+target_link_libraries(sslm_decode_threading_bench PRIVATE superslm)
+add_executable(sslm_decode_threading_bench_seams EXCLUDE_FROM_ALL tools/decode_threading_bench.cpp)
+target_link_libraries(sslm_decode_threading_bench_seams PRIVATE superslm_test_injection)
+foreach(_sslm_dt_bench sslm_decode_threading_bench sslm_decode_threading_bench_seams)
+	if(MSVC)
+		target_compile_options(${_sslm_dt_bench} PRIVATE /W4 /fp:precise)
+	else()
+		target_compile_options(${_sslm_dt_bench} PRIVATE -Wall -Wextra -ffp-contract=off)
+	endif()
+endforeach()
+
 add_executable(sslm_bench_prefill tools/t2147_chunk_batched_pins.cpp)
 target_link_libraries(sslm_bench_prefill PRIVATE superslm)
 if(MSVC)

@@ -1401,6 +1401,11 @@ SslmForwardStatus LogitsSite(const int8_t* final_codes, size_t hidden_size,
 // - Narrowing: NarrowRowChecked over the whole row, once, serially, after `run` returns -- the
 //   same call on the same row as LogitsSite.
 // No heap allocation; the check's state is a fixed array on the stack.
+// The partition and the exactly-once check are the shared ones of src/forward/parallel_split.h
+// (SplitColumns at alignment 64 with no minimum work, and RunExactlyOnce), which the one-row
+// projection groups of the layer loops use too (decode-threading plan rev 1.2, §3.2). This step
+// keeps its own rule for calling `run`: whenever the hook has max_tasks >= 2, a one-task call
+// included; the projection groups call it only for two or more tasks.
 // No SUPERSLM_API export slot: that slot is for the C ABI and for the C++ declarations sibling
 // Unreal modules call (api.h), and no such module calls this function; the engine's own decode
 // paths do.

@@ -369,7 +369,12 @@ enum class SslmForwardStatus {
 	                                          // or device fault: the CPU ABI maps it to
 	                                          // SSLM_INVALID_ARGUMENT, the GPU bridge finish to
 	                                          // SSLM_GPU_PARALLEL_FOR_INCOMPLETE, and both leave the
-	                                          // sequence ready to retry the finish.
+	                                          // sequence ready to retry the finish. The layer
+	                                          // loops' one-row projection groups return it too
+	                                          // (MatvecGroupParallel, SSLM_PARALLEL_FOR_MATVEC):
+	                                          // RunLayerLoop then rests the sequence at the
+	                                          // failing layer's start with that layer's saturation
+	                                          // counts put back.
 	GpuOperationFailed,                       // SuperSLM 1.8.0 (TE-426), appended last so no
 	                                          // existing ordinal moves: a GPU operation failed for
 	                                          // a reason other than memory, on a device not
