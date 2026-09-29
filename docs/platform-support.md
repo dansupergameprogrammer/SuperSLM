@@ -90,12 +90,18 @@ AVX-512BW, shared host, best of N):** at the 1.5B `gate`/`up` shape
 AVX2 kernel (median of 15 interleaved pairs, quartiles 1.99-2.06), and the
 tiled AVX-512 kernel 2.14x the shipped AVX-512 kernel. Across the 0.5B,
 0.6B and 1.5B projection shapes at 8 to 512 tokens the range is about
-1.7x-3.0x on AVX2 and 1.6x-4.3x on AVX-512.
+1.7x-3.0x on AVX2 and 1.6x-4.3x on AVX-512. The top of each range is the
+1.5B `down` shape at 512 tokens, where the shipped kernel itself slows down;
+the tiled kernel is not faster there than elsewhere.
 
-**Measured, whole batched prefill, one layer of a synthetic artifact at
-Qwen2.5-0.5B width (hidden 896, MLP 4864), same host:** 128 tokens in
-68.3 ms against 117.8 ms on 1.9.0 with auto dispatch (1.72x), and 82.3 ms
-against 161.3 ms forced AVX2 (1.96x); 1.47x and 1.63x at 32 tokens. These
+**Measured, whole batched prefill, one or two layers of a synthetic artifact
+at Qwen2.5-0.5B width (hidden 896, MLP 4864) and Qwen3-0.6B width (hidden
+1024, MLP 3072), same host:** at 128 tokens the prefill is about 1.5x-1.6x
+faster than 1.9.0, with auto dispatch (AVX-512) and forced AVX2 alike
+(1.54x-1.64x, best of 7 runs; 1.48x-1.67x by median). At 32 tokens it is
+about 1.35x-1.6x faster, and at 8 tokens about 1.2x-1.4x. An earlier
+reading of 1.96x (forced AVX2, 0.5B width, 1 layer) did not reproduce: its
+1.9.0 time was 161 ms against 129 ms on a rerun. These
 are per-layer engine figures on synthetic weights. They are not a
 statement about any consumer's end-to-end speed, and they are not a
 measurement on this project's reference hardware.

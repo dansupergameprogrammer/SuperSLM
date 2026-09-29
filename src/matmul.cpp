@@ -461,7 +461,11 @@ inline int64_t DotRow(const int8_t* activations, const int8_t* weights, size_t i
 // Test builds only (the plan's D-infinity build sets it to SIZE_MAX; cell 10.0's t100 leg to 100).
 constexpr size_t kTiledMinTokens = static_cast<size_t>(SUPERSLM_TEST_TILED_MIN_TOKENS);
 #else
-constexpr size_t kTiledMinTokens = 8;  // plan §3.1: pack-per-call pays for itself from M = 8
+// One threshold for both tiers, chosen for AVX-512 (plan §3.1). Measured on one host: AVX-512's tile is
+// 8 tokens tall, so below 8 it runs the one-row tail kernel and loses on some shapes; from M = 8 it wins
+// on every shape. AVX2's 4-token tile already wins on every shape from M = 4, so 8 leaves AVX2 GEMMs of
+// 4-7 tokens on the shipped loop.
+constexpr size_t kTiledMinTokens = 8;
 #endif
 
 // Plan §4.5, closure (c): in MSVC and clang-cl builds the AVX-512 tier keeps the DotRow loop until
