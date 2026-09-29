@@ -28007,6 +28007,8 @@ void RunSlm18xSaturationCensusCells(int& checks, int& failures);
 // 1.9.x schema-constrained and damped-greedy decoding cells
 // (tests/test_slm19x_schema_damped_greedy.cpp), a separate unit for the same reason.
 void RunSlm19xSchemaDampedGreedyCells(int& checks, int& failures);
+// Tiled-matmul plan slice 1: the tiled GEMM cells (tests/test_tiled_gemm.cpp).
+void RunTiledGemmCells(int& checks, int& failures);
 
 #ifdef _WIN32  // resumes the Windows/D3D12 block closed above T-2572
 
@@ -29869,6 +29871,7 @@ int main(int argc, char** argv) {
 	TestT2572_M2_MarshalLayerAcceptsArmCsNonQkNormOutput();
 	RunSlm18xSaturationCensusCells(GChecks, GFailures);
 	RunSlm19xSchemaDampedGreedyCells(GChecks, GFailures);
+	RunTiledGemmCells(GChecks, GFailures);
 	TestKvStoreEarlyWriteSurvivesLateReadAcrossEightFurtherPositions();
 	TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast();
 	TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition();

@@ -33,7 +33,7 @@ host; stated why), **blocked**, **pending**.
 
 | Item | State | Commit | Evidence |
 |---|---|---|---|
-| `Cols` entry over the shipped loop (review W8), both entries | done | (Cols commit) | cell 3.3 green; mutant XC (range ignored) red, 102 of 108 checks |
+| `Cols` entry over the shipped loop (review W8), both entries | done | (Cols commit; see git log) | cell 3.3 green; mutant XC (range ignored) red, 102 of 108 checks |
 | Tiled kernel, activation prep, packer | pending | | |
 | MSVC AVX-512 switch and pure selector | pending | | |
 | Tiled-entry counter (11.1) | pending | | |

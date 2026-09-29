@@ -26,6 +26,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <vector>
 
 #ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
 // T-2158 red suite test-only seam (design §10 dimensions 1/3) -- mirrors
@@ -508,7 +509,22 @@ void GemmInt8Accumulate(const int8_t* activations, const int8_t* weights,
 	// cell's own accumulation order changes (DotRow's k-ascending reduction is untouched), only
 	// which cells are visited in which order, so this is a pure traversal restructuring with
 	// zero new arithmetic (D-SLM3488's own "no new arithmetic" ruling).
-	for (size_t j = 0; j < out_channels; ++j) {
+	//
+	// Tiled-matmul plan slice 1 (§4.3): the loop lives in the column-range entry below, which this
+	// function calls over the whole range.
+	detail::GemmInt8AccumulateCols(activations, weights, num_tokens, in_channels, out_channels, 0,
+	                               out_channels, out_acc);
+}
+
+namespace detail {
+
+void GemmInt8AccumulateCols(const int8_t* activations, const int8_t* weights, size_t num_tokens,
+                            size_t in_channels, size_t out_channels, size_t j_begin, size_t j_end,
+                            int64_t* out_acc) {
+	assert(num_tokens > 0 && "GemmInt8AccumulateCols: num_tokens must be >= 1");
+	assert(j_begin <= j_end && j_end <= out_channels &&
+	       "GemmInt8AccumulateCols: column range outside [0, out_channels]");
+	for (size_t j = j_begin; j < j_end; ++j) {
 		const int8_t* const weight_row = weights + j * in_channels;  // read ONCE per chunk here,
 		                                                              // held cache-resident across
 		                                                              // every token below
@@ -517,6 +533,25 @@ void GemmInt8Accumulate(const int8_t* activations, const int8_t* weights,
 		}
 	}
 }
+
+void GemmInt8AccumulateColsWidened(const int16_t* activations16, size_t widened_stride,
+                                   const int8_t* weights, size_t num_tokens, size_t in_channels,
+                                   size_t out_channels, size_t j_begin, size_t j_end,
+                                   int64_t* out_acc) {
+	assert(widened_stride >= in_channels && "GemmInt8AccumulateColsWidened: stride below in_channels");
+	// The one-cell-at-a-time loop reads int8 rows, so the widened rows are narrowed back first.
+	// Exact: every value came from an int8 (the header's contract).
+	std::vector<int8_t> narrowed(num_tokens * in_channels);
+	for (size_t t = 0; t < num_tokens; ++t) {
+		for (size_t k = 0; k < in_channels; ++k) {
+			narrowed[t * in_channels + k] = static_cast<int8_t>(activations16[t * widened_stride + k]);
+		}
+	}
+	GemmInt8AccumulateCols(narrowed.data(), weights, num_tokens, in_channels, out_channels, j_begin,
+	                       j_end, out_acc);
+}
+
+}  // namespace detail
 
 void NarrowAccumulatorToI32(const int64_t* wide_row, size_t n, int32_t* out_i32) {
 	// The ONLY narrowing point (design §3/§4). Caller-ensures convention: UB if the
