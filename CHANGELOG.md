@@ -39,6 +39,16 @@ about 16-21x faster. At Qwen2.5-0.5B depth (24 layers, 14 heads) that saves abou
 300. MSVC and clang-cl builds keep the AVX-512 tier on the 1.9.0 loop until it has executed
 there; `SUPERSLM_SITES_AVX512_MSVC=1` turns it on. There is no ABI, format or status change.
 
+On the AVX2 and AVX-512 tiers, the requantization step every checked projection, norm, activation
+and residual ends in (the funnel's per-element conversion to int8 codes) now runs 4 or 8 elements
+at a time in 64-bit integer lanes, through the new row function `RequantRowWide`. Every code is
+bit-identical to 1.9.0's per-element `RequantTokenCodeWide`: the same tokens, save blobs and
+digest. Engine level, on one cloud host, a funnel call at Qwen2.5-0.5B's widths (896 and 4,864)
+is about 4.5x faster on AVX2 and 5.5x on AVX-512, which saves about 2.5 ms per token at 24
+layers, prefill and decode alike. The scalar and SSE2 tiers keep the 1.9.0 loop. MSVC and
+clang-cl builds keep the AVX-512 tier on it too, under the same `SUPERSLM_SITES_AVX512_MSVC`
+switch. There is no ABI, format or status change.
+
 ## [1.9.0] - 2026-09-25
 
 `sslm_seq_save` writes a new save format, `SSB5`: the `SSB4` layout with the four per-site

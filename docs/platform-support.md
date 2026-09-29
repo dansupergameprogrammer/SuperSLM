@@ -150,6 +150,35 @@ agrees at 512 tokens and in decode. These are engine figures on synthetic
 weights, not a consumer's end-to-end speed
 (`docs/attention-rowsites/s2/bench.md`).
 
+### Requantization in 64-bit lanes (unreleased)
+
+Every checked-chain funnel call (`RequantChainChecked`: the projections,
+norms, activation and residuals) ends by converting a row of 64-bit
+accumulators to int8 codes. On the AVX2 and AVX-512 tiers that conversion
+now runs in 4 or 8 unsigned 64-bit lanes (`RequantRowWide`). It computes
+the element code's exact identity: the product |x| x r splits into 32-bit
+halves, is rounded and shifted, then clamped at 127 and given back its sign.
+Every intermediate stays exact up to the funnel's largest input, so every
+code equals v1.9.0's per-element `RequantTokenCodeWide`. There is no
+runtime guard; the funnel's own preflight is the contract. The last
+n mod 4 (or 8) elements, and every element on the scalar and SSE2 tiers,
+run the v1.9.0 code.
+
+| Build | Lanes | Status |
+|---|---|---|
+| GCC / Clang, AVX2 tier | on | Bit-identity: full suite forced AVX2, the requant golden pinned from 1.9.0, cross-tier digest, save-blob equality against 1.9.0 |
+| GCC / Clang, AVX-512 tier | on | Same evidence, forced AVX-512 and auto dispatch |
+| MSVC / clang-cl, AVX2 tier | on | Built by the forced Windows legs; not yet executed on Windows |
+| MSVC / clang-cl, AVX-512 tier | **off** (`SUPERSLM_SITES_AVX512_MSVC=0`) | The same switch as prob·V above |
+
+**Measured, engine level, same host as above (best of 50, 9 interleaved
+rounds):** one funnel call at width 4,864 takes 31.5 µs on 1.9.0, 5.6 µs
+on AVX-512 and 6.7 µs on AVX2; at 896, 5.2, 1.0 and 1.2 µs. At
+Qwen2.5-0.5B depth (24 layers x 11 funnel calls, plus the embed) that saves
+about 2.7 ms per token on AVX-512 and 2.5 on AVX2, prefill and decode alike.
+These are engine figures on synthetic weights, not a consumer's end-to-end
+speed (`docs/attention-rowsites/s3/bench.md`).
+
 ### Damped-greedy decoding
 
 The 1.2 candidate's opt-in decoder was confirmed on Windows x64 through the

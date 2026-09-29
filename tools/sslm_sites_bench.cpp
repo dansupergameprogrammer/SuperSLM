@@ -13,6 +13,12 @@
 //       microseconds per call at single widths, then the per-token cost at the 0.5B's full depth (24
 //       layers x 14 query heads, one call per head per token): prefill of T tokens sums the calls at
 //       widths 1..T and divides by T; decode at context C is one call at width C + 1 per head.
+//   sslm_sites_bench requant [--repeat=R]
+//       Slice S3: RequantChainChecked (the whole funnel call: max-abs, preflight, the element loop that S3
+//       replaces, the scale fold) at the 0.5B's two funnel widths, 896 and 4,864, over 16 rows whose
+//       max-abs spans 2^16 to 2^31. Prints best-of-R microseconds per call, then the per-token cost at
+//       full depth: 24 layers x (8 calls at 896 + 3 at 4,864), plus the embed's one call at 896 (plan §4.3,
+//       G26). Prefill and decode make the same calls per token.
 //   sslm_sites_bench prefill <artifact.sslm> <T> [--layers=L] [--repeat=R]
 //       One sslm_prefill of T token ids at chunk_budget = T; best-of-R ms per prompt token.
 //   sslm_sites_bench decode <artifact.sslm> <context> <D> [--layers=L] [--repeat=R]
@@ -30,6 +36,7 @@
 #include <cstring>
 #include <fstream>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -161,6 +168,40 @@ int PvMode(int repeat) {
 	return 0;
 }
 
+// Slice S3's bench (see the header): the funnel call at the 0.5B's two widths.
+int RequantMode(int repeat) {
+	using superslm::CarriedScale;
+	constexpr int kRows = 16;
+	constexpr size_t kLayers = 24;
+	Rng rng(0x5333524551424E43ULL);
+	const CarriedScale unit{INT64_C(1073741824), 0};
+	int bad = 0;
+	double us[2] = {0, 0};
+	const size_t widths[2] = {896, 4864};
+	for (int wi = 0; wi < 2; ++wi) {
+		const size_t n = widths[wi];
+		std::vector<std::vector<int64_t>> rows(kRows, std::vector<int64_t>(n));
+		for (int r = 0; r < kRows; ++r) {
+			const int64_t amp = INT64_C(1) << (16 + r % 16);  // max-abs 2^16 .. 2^31
+			for (auto& v : rows[r]) v = rng.InRange(-amp, amp);
+			rows[r][static_cast<size_t>(r) % n] = amp;
+		}
+		std::vector<int8_t> out(n);
+		CarriedScale scale{};
+		us[wi] = BestMicrosPerCall(repeat, 256, [&](int c) {
+			bad += superslm::RequantChainChecked(rows[static_cast<size_t>(c) % kRows].data(), n,
+			                                     std::span<const CarriedScale>{}, unit, out.data(), &scale)
+			           .status != superslm::SslmForwardStatus::Ok;
+			g_sink = g_sink + out[0];
+		});
+	}
+	std::printf("requant best-of-%d us/call: funnel_896 %.4f  funnel_4864 %.4f  (refused %d)\n", repeat, us[0], us[1],
+	            bad);
+	std::printf("requant per token: %.4f ms at 24 layers x (8 x 896 + 3 x 4864) + embed\n",
+	            (static_cast<double>(kLayers) * (8 * us[0] + 3 * us[1]) + us[0]) / 1000.0);
+	return bad == 0 ? 0 : 1;
+}
+
 bool ReadFile(const char* path, std::vector<uint8_t>& out) {
 	std::ifstream f(path, std::ios::binary);
 	if (!f) return false;
@@ -230,7 +271,7 @@ void RunOnce(const std::vector<uint8_t>& bytes, int32_t layers, int32_t T, int32
 int main(int argc, char** argv) {
 	if (argc < 2) {
 		std::fprintf(stderr,
-		             "usage: %s kernel [--repeat=R] | pv [--repeat=R] | prefill <artifact> <T> [--layers=L] [--repeat=R] | "
+		             "usage: %s kernel [--repeat=R] | pv [--repeat=R] | requant [--repeat=R] | prefill <artifact> <T> [--layers=L] [--repeat=R] | "
 		             "decode <artifact> <context> <D> [--layers=L] [--repeat=R]\n",
 		             argv[0]);
 		return 2;
@@ -244,6 +285,7 @@ int main(int argc, char** argv) {
 	const std::string mode = argv[1];
 	if (mode == "kernel") return KernelMode(repeat);
 	if (mode == "pv") return PvMode(repeat);
+	if (mode == "requant") return RequantMode(repeat);
 	if ((mode == "prefill" && argc >= 4) || (mode == "decode" && argc >= 5)) {
 		std::vector<uint8_t> bytes;
 		if (!ReadFile(argv[2], bytes)) Fail("reading the artifact", 0);

@@ -41,3 +41,11 @@
 # src/matmul.cpp:913,1059 -- the implicit default of the switches in
 #   ProbQ15AccumulateInto (over SitesKernel) and SelectSitesKernel (over
 #   GemmTier): every enumerator has a case, so no input reaches it.
+# Attention and per-row sites plan, slice S3 (the requant row leaf; plan §3.4, cell 11.6):
+# src/intmath.cpp:625-650 -- RequantRowAvx512 (its one branch, the lane
+#   loop at 637) cannot execute on a runner without AVX-512, for the same
+#   reason as DotRowAvx512 above.
+# src/intmath.cpp:660,664-665 -- RequantRowWide's AVX-512 arm: the same
+#   runner restriction (DispatchSitesKernel returns kAvx512 only on the
+#   AVX-512 tier). The switch has no default and every SitesKernel
+#   enumerator has a case, as in ProbQ15AccumulateInto.

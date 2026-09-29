@@ -1,0 +1,199 @@
+# S3 mutation evidence (plan §9; GCC 13.3 Release; this host has AVX-512BW, so the auto binary dispatches AVX-512), run at the final
+# implementation commit. Each mutant is applied to a synced copy of that commit by its script (mutation-scripts/<name>.py, run from
+# the repository root). superslm_tests (auto), superslm_tests_avx2_forced and superslm_tests_avx512_forced are then rebuilt and run
+# from the repository root with SUPERSLM_ATTN_ROWSITES_ARTIFACT set (p05_l1, sha256 f0fd4886...6ed3). 'none' is the unmutated
+# control. The raw log follows the summary; it shows at most four distinct failing lines per run (paths shortened).
+#
+# Arithmetic and loop mutants are applied to each tier's body separately (§9 preamble). Each AVX2-body mutant must die on the forced
+# AVX2 binary (and on auto on a runner without AVX-512, where auto dispatches AVX2); it survives on the AVX-512 binaries here, which
+# never run that body. Each AVX-512-body mutant must die on forced AVX-512 and on auto, and it survives on forced AVX2. The
+# dispatcher's tail and the funnel's call site are shared by every tier, so those mutants die on all three binaries.
+# 'all_avx512_runs_avx2_body' can die only where the AVX-512 kernel is selected (auto here, and forced AVX-512); it is output-exact
+# (both bodies are exact), so only the path assertion sees it.
+#
+# Summary (K = killed with that many failures, s = survives by construction, see above):
+#   mutant                              auto(AVX-512)  forced AVX2  forced AVX-512  killing cells
+#   s3_round_2e_avx2          (§9)      s              K 58         s               output: the attn-rowsites cells (46-104 failures each) and the  
+#   s3_round_2e_avx512        (§9)      K 53           s            K 53              pre-existing funnel witnesses in test_main (T-1254 extremes,
+#   s3_shift_e31_avx2         (§9)      s              K 123        s                 the §4.1 LUT/i-exp code pins), which run the funnel and so
+#   s3_shift_e31_avx512       (§9)      K 91           s            K 91              now run the row leaf
+#   s3_carry_dropped_avx2     (§9)      s              K 55         s
+#   s3_carry_dropped_avx512   (§9)      K 53           s            K 53
+#   s3_loop_bound_avx2        (§9)      s              K abort      s               sentinel (4.S3): "n 1, d' 1: 3 of the 32 sentinel bytes around the
+#   s3_loop_bound_avx512      (§9)      K abort        s            K abort           row changed" (7 for AVX-512). In the suite's own order an earlier
+#                                                                                     test_main cell (TestApplyWeightScaleFoldC24...AgainstTheRealFunnel,
+#                                                                                     a stack row) is reached first and glibc aborts on "stack smashing
+#                                                                                     detected"; the sentinel kill was shown with the attn-rowsites cells
+#                                                                                     run first (a scratch-only reorder of main), see the end of this file
+#   s3_never_entered          (§9)      K 6            K 6          K 6             counter: 11.1(d) prefill +0 (want 1,536) and decode +0 (want 384),
+#                                                                                   the funnel call-site cell, and the 4.S3 path totals
+#   all_avx512_runs_avx2_body           K 10           s            K 10            counter (path): requant_row_avx2 moves where avx512 is expected
+#   extras (not in §9):
+#   s3_rhi_dropped_avx2                 s              K 111        s               output: r = 2^32 rows (4.S3 corner premises, 7.S3, grid) and the
+#   s3_rhi_dropped_avx512               K 79           s            K 79              test_main oracle V landing (code 0 for 127)
+#   s3_tail_dropped                     K 52           K 69         K 52            output: n = 5, 9 rows (4.S3 grid), 6.3 S1/S2/S3 golden
+#   s3_counter_deleted_avx2             s              K 10         s               counter (path)
+#   s3_counter_deleted_avx512           K 10           s            K 10            counter (path)
+#   withdrawn in rev 3 (§9 preamble), run only to confirm they are equivalent; each survives everywhere, as the plan predicts:
+#   wd_clamp_dropped_avx2               s              s            s               (the AVX2 clamp is now the unsigned 32-bit minimum; dropping it
+#   wd_clamp_dropped_avx512             s              s            s                keeps the low byte of a magnitude that never exceeds 127 in contract)
+#   wd_h_arith_shift_avx512             s              s            s               (AVX2 has no 64-bit arithmetic shift, so there is no AVX2 twin)
+#
+# Result: every §9 S3 mutant is killed on every binary that runs the tier it mutates, with each tier's body mutated separately.
+#
+# Raw log:
+== none on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109744 checks, 0 failures|
+== none on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== none on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== all_avx512_runs_avx2_body on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 10 failures|superslm tests: 109744 checks, 10 failures|
+FAIL tests/test_attn_rowsites.cpp:1094: path_bad == 0 -- 4.S3 sentinel pass: 16359 of 16359 row-leaf calls moved the requant_row counters wrongly (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- 4.S3 sentinel pass: requant_row_avx2 +16359 requant_row_avx512 +0; want +0/+16359 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- 4.S3 exact-size pass: requant_row_avx2 +16359 requant_row_avx512 +0; want +0/+16359 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- S3 funnel call n=0: requant_row_avx2 +1 requant_row_avx512 +0; want +0/+1 (kernel: AVX-512)
+== all_avx512_runs_avx2_body on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== all_avx512_runs_avx2_body on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 10 failures|superslm tests: 109702 checks, 10 failures|
+FAIL tests/test_attn_rowsites.cpp:1094: path_bad == 0 -- 4.S3 sentinel pass: 16359 of 16359 row-leaf calls moved the requant_row counters wrongly (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- 4.S3 sentinel pass: requant_row_avx2 +16359 requant_row_avx512 +0; want +0/+16359 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- 4.S3 exact-size pass: requant_row_avx2 +16359 requant_row_avx512 +0; want +0/+16359 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- S3 funnel call n=0: requant_row_avx2 +1 requant_row_avx512 +0; want +0/+1 (kernel: AVX-512)
+== s3_carry_dropped_avx2 on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109744 checks, 0 failures|
+== s3_carry_dropped_avx2 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 6797 checks, 46 failures|superslm tests: 32286 checks, 55 failures|
+FAIL tests/test_main.cpp:8517: out_codes[j] == c.expected_codes[j] — positive_extreme: RequantChainChecked out_codes[1] == 63, want 64 (T-1254 witness, matches _requant_row_int64/intmath.requant_token_code)
+FAIL tests/test_main.cpp:13093: codes_iexp[60] == INT8_C(-65) — the i-exp-sigmoid witness's own requantized code at index 60 == -64, want -65 -- this pins the executed divergence `mlp_act_iexp_mutation_proof.py` found (LUT: -64, i-exp-sig
+FAIL tests/test_main.cpp:13125: codes_lut[60] != codes_iexp[60] — codes_lut[60] (-64) must differ from codes_iexp[60] (-64) -- this is the executed divergence that makes F-S3-1 unable to recur silently: an implementation computing i-exp-s
+FAIL tests/test_main.cpp:15350: m[1] == b[1] - 2576 && m[3] == b[3] - 2576 — cell 3a: heads 0,1's own dim-1 element (KV head 0's mutated row) did not move by the measured exact delta -2576 -- baseline (-1886465,-1886465), want (-1889041,-
+== s3_carry_dropped_avx2 on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== s3_carry_dropped_avx512 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 22988 checks, 46 failures|superslm tests: 48519 checks, 53 failures|
+FAIL tests/test_main.cpp:13093: codes_iexp[60] == INT8_C(-65) — the i-exp-sigmoid witness's own requantized code at index 60 == -64, want -65 -- this pins the executed divergence `mlp_act_iexp_mutation_proof.py` found (LUT: -64, i-exp-sig
+FAIL tests/test_main.cpp:13125: codes_lut[60] != codes_iexp[60] — codes_lut[60] (-64) must differ from codes_iexp[60] (-64) -- this is the executed divergence that makes F-S3-1 unable to recur silently: an implementation computing i-exp-s
+FAIL tests/test_main.cpp:15350: m[1] == b[1] - 2576 && m[3] == b[3] - 2576 — cell 3a: heads 0,1's own dim-1 element (KV head 0's mutated row) did not move by the measured exact delta -2576 -- baseline (-1886465,-1886465), want (-1889041,-
+FAIL tests/test_main.cpp:15445: m[1] == b[1] - 756240 && m[3] == b[3] - 756240 — cell 3b: heads 0,1's own dim-1 element (KV head 0's mutated row) did not move by the measured exact delta -756240 -- baseline (-1886465,-1886465), want (-264
+== s3_carry_dropped_avx512 on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== s3_carry_dropped_avx512 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 22988 checks, 46 failures|superslm tests: 48477 checks, 53 failures|
+FAIL tests/test_main.cpp:13093: codes_iexp[60] == INT8_C(-65) — the i-exp-sigmoid witness's own requantized code at index 60 == -64, want -65 -- this pins the executed divergence `mlp_act_iexp_mutation_proof.py` found (LUT: -64, i-exp-sig
+FAIL tests/test_main.cpp:13125: codes_lut[60] != codes_iexp[60] — codes_lut[60] (-64) must differ from codes_iexp[60] (-64) -- this is the executed divergence that makes F-S3-1 unable to recur silently: an implementation computing i-exp-s
+FAIL tests/test_main.cpp:15350: m[1] == b[1] - 2576 && m[3] == b[3] - 2576 — cell 3a: heads 0,1's own dim-1 element (KV head 0's mutated row) did not move by the measured exact delta -2576 -- baseline (-1886465,-1886465), want (-1889041,-
+FAIL tests/test_main.cpp:15445: m[1] == b[1] - 756240 && m[3] == b[3] - 756240 — cell 3b: heads 0,1's own dim-1 element (KV head 0's mutated row) did not move by the measured exact delta -756240 -- baseline (-1886465,-1886465), want (-264
+== s3_counter_deleted_avx2 on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109744 checks, 0 failures|
+== s3_counter_deleted_avx2 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 10 failures|superslm tests: 109702 checks, 10 failures|
+FAIL tests/test_attn_rowsites.cpp:1094: path_bad == 0 -- 4.S3 sentinel pass: 16359 of 16359 row-leaf calls moved the requant_row counters wrongly (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- 4.S3 sentinel pass: requant_row_avx2 +0 requant_row_avx512 +0; want +16359/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- 4.S3 exact-size pass: requant_row_avx2 +0 requant_row_avx512 +0; want +16359/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- S3 funnel call n=0: requant_row_avx2 +0 requant_row_avx512 +0; want +1/+0 (kernel: AVX2)
+== s3_counter_deleted_avx2 on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== s3_counter_deleted_avx512 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 10 failures|superslm tests: 109744 checks, 10 failures|
+FAIL tests/test_attn_rowsites.cpp:1094: path_bad == 0 -- 4.S3 sentinel pass: 16359 of 16359 row-leaf calls moved the requant_row counters wrongly (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- 4.S3 sentinel pass: requant_row_avx2 +0 requant_row_avx512 +0; want +0/+16359 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- 4.S3 exact-size pass: requant_row_avx2 +0 requant_row_avx512 +0; want +0/+16359 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- S3 funnel call n=0: requant_row_avx2 +0 requant_row_avx512 +0; want +0/+1 (kernel: AVX-512)
+== s3_counter_deleted_avx512 on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== s3_counter_deleted_avx512 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 10 failures|superslm tests: 109702 checks, 10 failures|
+FAIL tests/test_attn_rowsites.cpp:1094: path_bad == 0 -- 4.S3 sentinel pass: 16359 of 16359 row-leaf calls moved the requant_row counters wrongly (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- 4.S3 sentinel pass: requant_row_avx2 +0 requant_row_avx512 +0; want +0/+16359 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- 4.S3 exact-size pass: requant_row_avx2 +0 requant_row_avx512 +0; want +0/+16359 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- S3 funnel call n=0: requant_row_avx2 +0 requant_row_avx512 +0; want +0/+1 (kernel: AVX-512)
+== s3_loop_bound_avx2 on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109744 checks, 0 failures|
+== s3_loop_bound_avx2 on superslm_tests_avx2_forced: exit 134; 
+== s3_loop_bound_avx2 on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== s3_loop_bound_avx512 on superslm_tests: exit 134; 
+== s3_loop_bound_avx512 on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== s3_loop_bound_avx512 on superslm_tests_avx512_forced: exit 134; 
+== s3_never_entered on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 6 failures|superslm tests: 109744 checks, 6 failures|
+FAIL tests/test_attn_rowsites.cpp:913: ok -- S3 funnel call n=0: requant_row_avx2 +0 requant_row_avx512 +0; want +0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- 11.1(d) prefill requant_row: requant_row_avx2 +0 requant_row_avx512 +0; want +0/+1536 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- 11.1(d) decode requant_row: requant_row_avx2 +0 requant_row_avx512 +0; want +0/+384 (kernel: AVX-512)
+== s3_never_entered on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 6 failures|superslm tests: 109702 checks, 6 failures|
+FAIL tests/test_attn_rowsites.cpp:913: ok -- S3 funnel call n=0: requant_row_avx2 +0 requant_row_avx512 +0; want +1/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- 11.1(d) prefill requant_row: requant_row_avx2 +0 requant_row_avx512 +0; want +1536/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- 11.1(d) decode requant_row: requant_row_avx2 +0 requant_row_avx512 +0; want +384/+0 (kernel: AVX2)
+== s3_never_entered on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 6 failures|superslm tests: 109702 checks, 6 failures|
+FAIL tests/test_attn_rowsites.cpp:913: ok -- S3 funnel call n=0: requant_row_avx2 +0 requant_row_avx512 +0; want +0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- 11.1(d) prefill requant_row: requant_row_avx2 +0 requant_row_avx512 +0; want +0/+1536 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:913: ok -- 11.1(d) decode requant_row: requant_row_avx2 +0 requant_row_avx512 +0; want +0/+384 (kernel: AVX-512)
+== s3_rhi_dropped_avx2 on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109744 checks, 0 failures|
+== s3_rhi_dropped_avx2 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 6828 checks, 100 failures|superslm tests: 32296 checks, 111 failures|
+FAIL tests/test_main.cpp:8517: out_codes[j] == c.expected_codes[j] — positive_extreme: RequantChainChecked out_codes[0] == 0, want 127 (T-1254 witness, matches _requant_row_int64/intmath.requant_token_code)
+FAIL tests/test_main.cpp:16369: oracle_v_landed[2] == INT8_C(127) && oracle_v_landed[3] == INT8_C(-127) — oracle: this fixture's own real landed V code for head 1's two dims == {0,0}, want {127,-127} (ClampRopeCode's saturating clamp on t
+FAIL tests/test_main.cpp:16383: oracle_ctx_h1[0] == INT64_C(4161536) && oracle_ctx_h1[1] == INT64_C(-4161536) — oracle: GemmProbQ15Accumulate(probs={2^15}, values={127,-127}) == {0,0}, want {4161536,-4161536} (32768*127 per dim, the real 
+FAIL tests/test_main.cpp:16395: expected_fold_h1_dim0 == INT64_C(2080768) && expected_fold_h1_dim1 == INT64_C(-2080768) — oracle: ApplyWeightScaleFold({4161536,-4161536}, non-identity ratio=0.5) == {0,0}, want {2080768,-2080768} (the inde
+== s3_rhi_dropped_avx2 on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== s3_rhi_dropped_avx512 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 22908 checks, 76 failures|superslm tests: 48430 checks, 79 failures|
+FAIL tests/test_slm19x_schema_damped_greedy.cpp:397: st == SSLM_OK -- decode step 9 status 4
+FAIL tests/test_attn_rowsites.cpp:585: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: fcf3f641b5b8d1c832f4423fbda38c72884c1922bd2738c66243a9cdff33bbd1 ove
+FAIL tests/test_attn_rowsites.cpp:966: bad == 0 -- 4.S3 sentinel pass (n 8, d' 1, r 4294967296, s 30): 5 of 8 codes differ from RequantTokenCodeWide, first at 0 (x 1: 0 vs 127)
+FAIL tests/test_attn_rowsites.cpp:966: bad == 0 -- 4.S3 exact-size pass (n 8, d' 1, r 4294967296, s 30): 3 of 8 codes differ from RequantTokenCodeWide, first at 0 (x 1: 0 vs 127)
+== s3_rhi_dropped_avx512 on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== s3_rhi_dropped_avx512 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 22908 checks, 76 failures|superslm tests: 48388 checks, 79 failures|
+FAIL tests/test_slm19x_schema_damped_greedy.cpp:397: st == SSLM_OK -- decode step 9 status 4
+FAIL tests/test_attn_rowsites.cpp:585: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: fcf3f641b5b8d1c832f4423fbda38c72884c1922bd2738c66243a9cdff33bbd1 ove
+FAIL tests/test_attn_rowsites.cpp:966: bad == 0 -- 4.S3 sentinel pass (n 8, d' 1, r 4294967296, s 30): 5 of 8 codes differ from RequantTokenCodeWide, first at 0 (x 1: 0 vs 127)
+FAIL tests/test_attn_rowsites.cpp:966: bad == 0 -- 4.S3 exact-size pass (n 8, d' 1, r 4294967296, s 30): 3 of 8 codes differ from RequantTokenCodeWide, first at 0 (x 1: 0 vs 127)
+== s3_round_2e_avx2 on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109744 checks, 0 failures|
+== s3_round_2e_avx2 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 6789 checks, 47 failures|superslm tests: 32278 checks, 58 failures|
+FAIL tests/test_main.cpp:8517: out_codes[j] == c.expected_codes[j] — positive_extreme: RequantChainChecked out_codes[2] == -1, want 0 (T-1254 witness, matches _requant_row_int64/intmath.requant_token_code)
+FAIL tests/test_main.cpp:13121: codes_lut[60] == INT8_C(-64) — the LUT-based row's own requantized code at index 60 == -65, want -64 (§4.1's own citation of the excluded construction, executed against this fixture)
+FAIL tests/test_main.cpp:13125: codes_lut[60] != codes_iexp[60] — codes_lut[60] (-65) must differ from codes_iexp[60] (-65) -- this is the executed divergence that makes F-S3-1 unable to recur silently: an implementation computing i-exp-s
+FAIL tests/test_main.cpp:15350: m[1] == b[1] - 2576 && m[3] == b[3] - 2576 — cell 3a: heads 0,1's own dim-1 element (KV head 0's mutated row) did not move by the measured exact delta -2576 -- baseline (-1919322,-1919322), want (-1921898,-
+== s3_round_2e_avx2 on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== s3_round_2e_avx512 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 22916 checks, 46 failures|superslm tests: 48447 checks, 53 failures|
+FAIL tests/test_main.cpp:13121: codes_lut[60] == INT8_C(-64) — the LUT-based row's own requantized code at index 60 == -65, want -64 (§4.1's own citation of the excluded construction, executed against this fixture)
+FAIL tests/test_main.cpp:13125: codes_lut[60] != codes_iexp[60] — codes_lut[60] (-65) must differ from codes_iexp[60] (-65) -- this is the executed divergence that makes F-S3-1 unable to recur silently: an implementation computing i-exp-s
+FAIL tests/test_main.cpp:15350: m[1] == b[1] - 2576 && m[3] == b[3] - 2576 — cell 3a: heads 0,1's own dim-1 element (KV head 0's mutated row) did not move by the measured exact delta -2576 -- baseline (-1919322,-1919322), want (-1921898,-
+FAIL tests/test_main.cpp:15445: m[1] == b[1] - 756240 && m[3] == b[3] - 756240 — cell 3b: heads 0,1's own dim-1 element (KV head 0's mutated row) did not move by the measured exact delta -756240 -- baseline (-1919322,-1919322), want (-267
+== s3_round_2e_avx512 on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== s3_round_2e_avx512 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 22916 checks, 46 failures|superslm tests: 48405 checks, 53 failures|
+FAIL tests/test_main.cpp:13121: codes_lut[60] == INT8_C(-64) — the LUT-based row's own requantized code at index 60 == -65, want -64 (§4.1's own citation of the excluded construction, executed against this fixture)
+FAIL tests/test_main.cpp:13125: codes_lut[60] != codes_iexp[60] — codes_lut[60] (-65) must differ from codes_iexp[60] (-65) -- this is the executed divergence that makes F-S3-1 unable to recur silently: an implementation computing i-exp-s
+FAIL tests/test_main.cpp:15350: m[1] == b[1] - 2576 && m[3] == b[3] - 2576 — cell 3a: heads 0,1's own dim-1 element (KV head 0's mutated row) did not move by the measured exact delta -2576 -- baseline (-1919322,-1919322), want (-1921898,-
+FAIL tests/test_main.cpp:15445: m[1] == b[1] - 756240 && m[3] == b[3] - 756240 — cell 3b: heads 0,1's own dim-1 element (KV head 0's mutated row) did not move by the measured exact delta -756240 -- baseline (-1919322,-1919322), want (-267
+== s3_shift_e31_avx2 on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109744 checks, 0 failures|
+== s3_shift_e31_avx2 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 6748 checks, 104 failures|superslm tests: 32237 checks, 123 failures|
+FAIL tests/test_main.cpp:8517: out_codes[j] == c.expected_codes[j] — positive_extreme: RequantChainChecked out_codes[0] == 63, want 127 (T-1254 witness, matches _requant_row_int64/intmath.requant_token_code)
+FAIL tests/test_main.cpp:13093: codes_iexp[60] == INT8_C(-65) — the i-exp-sigmoid witness's own requantized code at index 60 == -32, want -65 -- this pins the executed divergence `mlp_act_iexp_mutation_proof.py` found (LUT: -64, i-exp-sig
+FAIL tests/test_main.cpp:13121: codes_lut[60] == INT8_C(-64) — the LUT-based row's own requantized code at index 60 == -32, want -64 (§4.1's own citation of the excluded construction, executed against this fixture)
+FAIL tests/test_main.cpp:13125: codes_lut[60] != codes_iexp[60] — codes_lut[60] (-32) must differ from codes_iexp[60] (-32) -- this is the executed divergence that makes F-S3-1 unable to recur silently: an implementation computing i-exp-s
+== s3_shift_e31_avx2 on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== s3_shift_e31_avx512 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 22908 checks, 79 failures|superslm tests: 48439 checks, 91 failures|
+FAIL tests/test_main.cpp:13093: codes_iexp[60] == INT8_C(-65) — the i-exp-sigmoid witness's own requantized code at index 60 == -32, want -65 -- this pins the executed divergence `mlp_act_iexp_mutation_proof.py` found (LUT: -64, i-exp-sig
+FAIL tests/test_main.cpp:13121: codes_lut[60] == INT8_C(-64) — the LUT-based row's own requantized code at index 60 == -32, want -64 (§4.1's own citation of the excluded construction, executed against this fixture)
+FAIL tests/test_main.cpp:13125: codes_lut[60] != codes_iexp[60] — codes_lut[60] (-32) must differ from codes_iexp[60] (-32) -- this is the executed divergence that makes F-S3-1 unable to recur silently: an implementation computing i-exp-s
+FAIL tests/test_main.cpp:15346: m[0] == b[0] && m[2] == b[2] — cell 3a: heads 0,1's own dim-0 element (KV head 0's OTHER row, unmutated) moved -- want byte-identical to baseline (2736027,2736027), got (2735936,2735936)
+== s3_shift_e31_avx512 on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== s3_shift_e31_avx512 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 22908 checks, 79 failures|superslm tests: 48397 checks, 91 failures|
+FAIL tests/test_main.cpp:13093: codes_iexp[60] == INT8_C(-65) — the i-exp-sigmoid witness's own requantized code at index 60 == -32, want -65 -- this pins the executed divergence `mlp_act_iexp_mutation_proof.py` found (LUT: -64, i-exp-sig
+FAIL tests/test_main.cpp:13121: codes_lut[60] == INT8_C(-64) — the LUT-based row's own requantized code at index 60 == -32, want -64 (§4.1's own citation of the excluded construction, executed against this fixture)
+FAIL tests/test_main.cpp:13125: codes_lut[60] != codes_iexp[60] — codes_lut[60] (-32) must differ from codes_iexp[60] (-32) -- this is the executed divergence that makes F-S3-1 unable to recur silently: an implementation computing i-exp-s
+FAIL tests/test_main.cpp:15346: m[0] == b[0] && m[2] == b[2] — cell 3a: heads 0,1's own dim-0 element (KV head 0's OTHER row, unmutated) moved -- want byte-identical to baseline (2736027,2736027), got (2735936,2735936)
+== s3_tail_dropped on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 30988 checks, 52 failures|superslm tests: 56519 checks, 52 failures|
+FAIL tests/test_attn_rowsites.cpp:585: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: c891cb46692e31ae4745dc83dde29c87f067973ae093795402bbc91b49aadcd8 ove
+FAIL tests/test_attn_rowsites.cpp:966: bad == 0 -- 4.S3 sentinel pass (n 9, d' 1, r 4294967296, s 30): 1 of 9 codes differ from RequantTokenCodeWide, first at 8 (x -1: 90 vs -127)
+FAIL tests/test_attn_rowsites.cpp:966: bad == 0 -- 4.S3 exact-size pass (n 9, d' 1, r 4294967296, s 30): 1 of 9 codes differ from RequantTokenCodeWide, first at 8 (x 1: 90 vs 127)
+== s3_tail_dropped on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 10788 checks, 69 failures|superslm tests: 36277 checks, 69 failures|
+FAIL tests/test_attn_rowsites.cpp:585: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: e956af91b49bab963a3b3cae7b0df0d0f7c6e6deafaf39956ab0eb8301fd1bfe ove
+FAIL tests/test_attn_rowsites.cpp:966: bad == 0 -- 4.S3 sentinel pass (n 5, d' 1, r 4294967296, s 30): 1 of 5 codes differ from RequantTokenCodeWide, first at 4 (x 1: 90 vs 127)
+FAIL tests/test_attn_rowsites.cpp:966: bad == 0 -- 4.S3 exact-size pass (n 5, d' 1, r 4294967296, s 30): 1 of 5 codes differ from RequantTokenCodeWide, first at 4 (x -1: 90 vs -127)
+FAIL tests/test_attn_rowsites.cpp:1123: st == SslmForwardStatus::Ok && out == want -- S3 funnel n=5: status Ok, codes differ from the element loop's
+== s3_tail_dropped on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3): 30988 checks, 52 failures|superslm tests: 56477 checks, 52 failures|
+FAIL tests/test_attn_rowsites.cpp:585: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: c891cb46692e31ae4745dc83dde29c87f067973ae093795402bbc91b49aadcd8 ove
+FAIL tests/test_attn_rowsites.cpp:966: bad == 0 -- 4.S3 sentinel pass (n 9, d' 1, r 4294967296, s 30): 1 of 9 codes differ from RequantTokenCodeWide, first at 8 (x -1: 90 vs -127)
+FAIL tests/test_attn_rowsites.cpp:966: bad == 0 -- 4.S3 exact-size pass (n 9, d' 1, r 4294967296, s 30): 1 of 9 codes differ from RequantTokenCodeWide, first at 8 (x 1: 90 vs 127)
+== wd_clamp_dropped_avx2 on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109744 checks, 0 failures|
+== wd_clamp_dropped_avx2 on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== wd_clamp_dropped_avx2 on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== wd_clamp_dropped_avx512 on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109744 checks, 0 failures|
+== wd_clamp_dropped_avx512 on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== wd_clamp_dropped_avx512 on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== wd_h_arith_shift_avx512 on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109744 checks, 0 failures|
+== wd_h_arith_shift_avx512 on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+== wd_h_arith_shift_avx512 on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures|
+ALL-DONE
+
+# The loop-bound mutants with the attn-rowsites cells run first (scratch-only edit to main, not committed):
+== s3_loop_bound_avx2, attn-rowsites cells run first, on superslm_tests_avx2_forced: exit 134
+FAIL tests/test_attn_rowsites.cpp:976: clobbered == 0 -- 4.S3 sentinel pass (n 1, d' 1): 3 of the 32 sentinel bytes around the row changed
+ATTN-FIRST 35310 checks 41 failures
+*** stack smashing detected ***: terminated
+== s3_loop_bound_avx512, attn-rowsites cells run first, on superslm_tests_avx512_forced: exit 134
+FAIL tests/test_attn_rowsites.cpp:976: clobbered == 0 -- 4.S3 sentinel pass (n 1, d' 1): 7 of the 32 sentinel bytes around the row changed
+ATTN-FIRST 35310 checks 45 failures
+*** stack smashing detected ***: terminated

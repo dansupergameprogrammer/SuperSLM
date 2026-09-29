@@ -1,0 +1,33 @@
+# S3 branch coverage (plan §3.4, cell 11.6). INDICATIVE ONLY, as S2's: a floor is pinned only from the hosted branch-coverage leg's own
+# recorded measurement, and this series is delivered as patches, not pushed, so that leg has not run on it. These are local replicas
+# of the leg's commands (clang-18, llvm-cov/llvm-profdata 18, RelWithDebInfo, -fprofile-instr-generate -fcoverage-mapping; the five
+# binaries, merged, exported over src/*.cpp include/superslm/*.h), on this host (AVX-512BW), SUPERSLM_ATTN_ROWSITES_ARTIFACT = p05_l1.
+# All five binaries exit 0 on both trees.
+#
+# Base = the S2 head; candidate = S3's implementation commit plus the evidence commit's rows. Branches covered / total.
+#
+# (1) All five profiles (the leg's union), this host (the auto and forced AVX-512 binaries run AVX-512):
+#   base       src/intmath.cpp 153/174 87.93103448275862   src/matmul.cpp 286/312 91.66666666666666
+#   candidate  src/intmath.cpp 167/188 88.82978723404256   src/matmul.cpp 286/312 91.66666666666666
+#   check_branch_coverage_floors.py: OK on both (19 files at or above their pinned floor). S3 adds 14 branches to intmath.cpp and
+#   covers all 14; its uncovered lines are exactly the base's 14, moved by S3's insertions (+27 above the new code, +151 below it).
+#
+# (2) Approximating the hosted runner, which has no AVX-512: only the sse2-forced, avx2-forced and scalar-forced-digest profiles merged
+#     (there, the auto binary dispatches AVX2 and the forced AVX-512 binary faults at its first AVX-512 instruction):
+#   base       src/intmath.cpp 153/174 87.93103448275862   src/matmul.cpp 203/286 70.97902097902097
+#   candidate  src/intmath.cpp 163/188 86.70212765957447   src/matmul.cpp 203/286 70.97902097902097
+#   check_branch_coverage_floors.py on the candidate's projection: FAILED, src/intmath.cpp 86.70% < floor 87.93% and src/matmul.cpp
+#   70.98% < floor 72.22% (the latter is S2's, unchanged by S3, and recorded in S2's coverage.txt).
+#   So on a runner without AVX-512, S3 takes intmath.cpp about 1.2 points below its floor. The four branches it loses there are the
+#   AVX-512 body's lane loop (line 637, both sides) and the dispatcher's AVX-512 arm (lines 660/664); every one needs AVX-512 to run.
+#
+# Uncovered S3 branches (lines of src/intmath.cpp at the implementation commit):
+#   With all five profiles: none.
+#   Without AVX-512 profiles: 637 (RequantRowAvx512's loop) and 660/664 (RequantRowWide's kAvx512 arm).
+#   No reachable S3 branch is uncovered, so no cell is added (plan §3.4 step 1).
+#
+# Plan §3.4 steps 2 and 3: allowlist lines for the above are added in tools/ci/branch_coverage_allowlist.txt, in the file's existing
+# reviewer-note form (its checker's pytest: 6 passed). The floors in tools/ci/branch_coverage_floors.json are NOT re-pinned: step 3
+# copies the leg's recorded value, which does not exist until the series runs in CI. The allowlist does not exclude lines from the
+# measured percentage, so if the hosted runner lacks AVX-512 the leg will fail on intmath.cpp (as it already would on matmul.cpp
+# from S2) until the floor is lowered; that is the owner's one-line call at code review (G27), as for S2.
