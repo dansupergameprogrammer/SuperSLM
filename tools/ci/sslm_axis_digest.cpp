@@ -713,6 +713,13 @@ void PrintBuildIdentity() {
 	std::printf("# arch: other (matmul scalar fallback active)\n");
 #endif
 	std::printf("# int64_digits: %d\n", static_cast<int>(sizeof(long long) * 8));
+	// Tiled-matmul plan slice 1 (§11, the dispatched-tier line): which GEMM tier this binary dispatches
+	// on this runner, and whether a call of 8 tokens takes the tiled kernel. Printed, never digested:
+	// it is the evidence of which kernel an auto leg's digest actually exercised.
+	static const char* const kTierNames[] = {"scalar", "SSE2", "AVX2", "AVX-512"};
+	const superslm::detail::GemmTier tier = superslm::detail::ActiveGemmTier();
+	std::printf("# gemm tier: %s; tiled at M >= 8: %s\n", kTierNames[static_cast<int>(tier)],
+	            superslm::detail::DispatchGemmPath(tier, 8) == superslm::detail::GemmPath::kTiled ? "yes" : "no");
 }
 
 }  // namespace

@@ -358,7 +358,7 @@ jobs:
           path: artifact_out
 
   # Tiled-matmul plan slice 1 (§4.5, cells 4.6 and 6.2): the forced AVX2 and forced AVX-512 tiers
-  # built by MSVC, the full suite and the digest each. Before these legs no MSVC build ever executed
+  # built by MSVC and by clang-cl, the full suite and the digest each. Before these legs no MSVC build ever executed
   # an AVX2 or AVX-512 kernel in CI (the auto legs dispatch on whatever the runner has). The AVX-512
   # leg builds with SUPERSLM_TILED_AVX512_MSVC=1, so it runs the tiled AVX-512 kernel that the
   # default MSVC build still holds off; it probes the CPU first (IsProcessorFeaturePresent 41 =
@@ -411,6 +411,56 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: axis-digest-windows-msvc-avx512-forced
+          path: artifact_out
+
+  windows-clangcl-avx2-forced:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - run: cmake -B build -T ClangCL
+      - run: cmake --build build --config Release --target superslm_tests_avx2_forced sslm_axis_digest_avx2_forced
+      - name: Run the forced suite, then extract the GLOBAL digest
+        shell: pwsh
+        run: |
+          & build/Release/superslm_tests_avx2_forced.exe
+          if ($LASTEXITCODE -ne 0) { throw "superslm_tests_avx2_forced exited $LASTEXITCODE" }
+          $out = & build/Release/sslm_axis_digest_avx2_forced.exe
+          $out | Out-File -Encoding ascii axis_output.txt
+          if (-not ($out -match '^local_invariant_failures 0$')) { throw "local invariant failure" }
+          New-Item -ItemType Directory -Force -Path artifact_out | Out-Null
+          ($out | Where-Object { $_ -match '^GLOBAL ' }) | Out-File -Encoding ascii artifact_out/global_digest.txt
+          "RAN" | Out-File -Encoding ascii artifact_out/status.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: axis-digest-windows-clangcl-avx2-forced
+          path: artifact_out
+
+  windows-clangcl-avx512-forced:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - run: cmake -B build -T ClangCL -DCMAKE_CXX_FLAGS="/DWIN32 /D_WINDOWS /EHsc /DSUPERSLM_TILED_AVX512_MSVC=1"
+      - run: cmake --build build --config Release --target superslm_tests_avx512_forced sslm_axis_digest_avx512_forced
+      - name: Probe for AVX-512, run the forced suite and extract the GLOBAL digest if present
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifact_out | Out-Null
+          Add-Type -Namespace Probe -Name Cpu -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(uint f);'
+          if (-not [Probe.Cpu]::IsProcessorFeaturePresent(41)) {
+            Write-Host "AVX512-SKIPPED: runner lacks AVX-512F"
+            "SKIPPED: runner lacks AVX-512F" | Out-File -Encoding ascii artifact_out/status.txt
+            exit 0
+          }
+          & build/Release/superslm_tests_avx512_forced.exe
+          if ($LASTEXITCODE -ne 0) { throw "superslm_tests_avx512_forced exited $LASTEXITCODE" }
+          $out = & build/Release/sslm_axis_digest_avx512_forced.exe
+          $out | Out-File -Encoding ascii axis_output.txt
+          if (-not ($out -match '^local_invariant_failures 0$')) { throw "local invariant failure" }
+          ($out | Where-Object { $_ -match '^GLOBAL ' }) | Out-File -Encoding ascii artifact_out/global_digest.txt
+          "RAN" | Out-File -Encoding ascii artifact_out/status.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: axis-digest-windows-clangcl-avx512-forced
           path: artifact_out
 
   # Tiled-matmul plan slice 1, cell 11.3: every tiled and packer symbol in the matmul object is local
@@ -579,6 +629,8 @@ jobs:
       - windows-clangcl-digest
       - windows-msvc-avx2-forced
       - windows-msvc-avx512-forced
+      - windows-clangcl-avx2-forced
+      - windows-clangcl-avx512-forced
       - macos-arm64-digest
       - linux-x64-clang-scalar-forced-digest
       - linux-x64-clang-sse2-forced-digest

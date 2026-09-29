@@ -409,6 +409,40 @@ foreach(_sslm_bench_tier AVX2 AVX512)
 	endif()
 endforeach()
 
+# Tiled-matmul plan slice 1, cell 10.1: the per-shape GEMM bench (tools/sslm_gemm_bench.cpp), no artifact.
+# One source, several builds: sslm_gemm_bench links the production library (auto dispatch);
+# sslm_gemm_bench_${tier}_forced links the tier-forced library; and sslm_gemm_bench_${tier}_forced_dinf
+# links a matmul-only library compiled with that tier forced AND SUPERSLM_TEST_TILED_MIN_TOKENS=SIZE_MAX
+# ("D-infinity": the shipped one-cell-at-a-time loop at every M), so a ratio between a forced bench and
+# its D-infinity twin is the tiled kernel's own speedup on that tier. The bench calls only matmul.cpp's
+# entry points, so the D-infinity library needs no other engine source. All EXCLUDE_FROM_ALL except the
+# production bench, for the same non-x64 reason as the forced targets above.
+add_executable(sslm_gemm_bench tools/sslm_gemm_bench.cpp)
+target_link_libraries(sslm_gemm_bench PRIVATE superslm)
+if(MSVC)
+	target_compile_options(sslm_gemm_bench PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(sslm_gemm_bench PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+foreach(_sslm_gemm_tier AVX2 AVX512)
+	string(TOLOWER "${_sslm_gemm_tier}" _sslm_gemm_tier_lower)
+	add_library(superslm_matmul_${_sslm_gemm_tier_lower}_forced_dinf STATIC EXCLUDE_FROM_ALL src/matmul.cpp)
+	target_include_directories(superslm_matmul_${_sslm_gemm_tier_lower}_forced_dinf PUBLIC include)
+	target_compile_definitions(superslm_matmul_${_sslm_gemm_tier_lower}_forced_dinf PUBLIC
+		SUPERSLM_FORCE_${_sslm_gemm_tier}_MATMUL SUPERSLM_TEST_TILED_MIN_TOKENS=SIZE_MAX)
+	add_executable(sslm_gemm_bench_${_sslm_gemm_tier_lower}_forced EXCLUDE_FROM_ALL tools/sslm_gemm_bench.cpp)
+	target_link_libraries(sslm_gemm_bench_${_sslm_gemm_tier_lower}_forced PRIVATE superslm_${_sslm_gemm_tier_lower}_forced)
+	add_executable(sslm_gemm_bench_${_sslm_gemm_tier_lower}_forced_dinf EXCLUDE_FROM_ALL tools/sslm_gemm_bench.cpp)
+	target_link_libraries(sslm_gemm_bench_${_sslm_gemm_tier_lower}_forced_dinf PRIVATE superslm_matmul_${_sslm_gemm_tier_lower}_forced_dinf)
+	foreach(_sslm_gemm_target superslm_matmul_${_sslm_gemm_tier_lower}_forced_dinf sslm_gemm_bench_${_sslm_gemm_tier_lower}_forced sslm_gemm_bench_${_sslm_gemm_tier_lower}_forced_dinf)
+		if(MSVC)
+			target_compile_options(${_sslm_gemm_target} PRIVATE /W4 /fp:precise)
+		else()
+			target_compile_options(${_sslm_gemm_target} PRIVATE -Wall -Wextra -ffp-contract=off)
+		endif()
+	endforeach()
+endforeach()
+
 # T-2158 dimension 7 item (d) (design §10, D-SLM3510): a persisted CI guard for the
 # AVX-isolation claim (design §6.4) -- no construct in this file, in
 # .github/workflows/tests.yml's cmake/environment invocations, or in any file under

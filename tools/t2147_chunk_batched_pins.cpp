@@ -48,6 +48,11 @@
 #include <vector>
 
 #include "superslm/sslm_abi.h"
+#if defined(SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT)
+// Tiled-matmul plan slice 1, cell 9.1: a build against the seam library (tests/ on the include path)
+// also reports how many GEMM calls took the tiled path during the --dump-blob prefill.
+#include "support/matmul_dispatch_instrument.h"
+#endif
 
 namespace {
 
@@ -251,6 +256,11 @@ int main(int argc, char** argv) {
 		if (!out) Fail("open dump-blob output", 0);
 		out.write(reinterpret_cast<const char*>(blob.data()), static_cast<std::streamsize>(blob.size()));
 		std::printf("wrote %zu-byte blob to %s\n", blob.size(), dump_blob_path.c_str());
+#if defined(SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT)
+		std::printf("tiled_entries=%lld (AVX2 %lld, AVX-512 %lld)\n", superslm_test::TiledEntryInvocationsTotal(),
+		            superslm_test::g_tiled_entry_invocations_avx2.load(),
+		            superslm_test::g_tiled_entry_invocations_avx512.load());
+#endif
 		return 0;
 	}
 
