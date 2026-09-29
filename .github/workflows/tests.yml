@@ -361,7 +361,8 @@ jobs:
   # built by MSVC and by clang-cl, the full suite and the digest each. Before these legs no MSVC build ever executed
   # an AVX2 or AVX-512 kernel in CI (the auto legs dispatch on whatever the runner has). The AVX-512
   # leg builds with SUPERSLM_TILED_AVX512_MSVC=1, so it runs the tiled AVX-512 kernel that the
-  # default MSVC build still holds off; it probes the CPU first (IsProcessorFeaturePresent 41 =
+  # default MSVC build still holds off, and (attention and per-row sites plan §3.2) with
+  # SUPERSLM_SITES_AVX512_MSVC=1, so it runs the attention kernels' AVX-512 bodies too; it probes the CPU first (IsProcessorFeaturePresent 41 =
   # AVX-512F, which the hosted image's CPUs pair with BW) and reports SKIPPED without it.
   windows-msvc-avx2-forced:
     runs-on: windows-latest
@@ -389,7 +390,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
-      - run: cmake -B build -DCMAKE_CXX_FLAGS="/DWIN32 /D_WINDOWS /EHsc /DSUPERSLM_TILED_AVX512_MSVC=1"
+      - run: cmake -B build -DCMAKE_CXX_FLAGS="/DWIN32 /D_WINDOWS /EHsc /DSUPERSLM_TILED_AVX512_MSVC=1 /DSUPERSLM_SITES_AVX512_MSVC=1"
       - run: cmake --build build --config Release --target superslm_tests_avx512_forced sslm_axis_digest_avx512_forced
       - name: Probe for AVX-512, run the forced suite and extract the GLOBAL digest if present
         shell: pwsh
@@ -439,7 +440,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
-      - run: cmake -B build -T ClangCL -DCMAKE_CXX_FLAGS="/DWIN32 /D_WINDOWS /EHsc /DSUPERSLM_TILED_AVX512_MSVC=1"
+      - run: cmake -B build -T ClangCL -DCMAKE_CXX_FLAGS="/DWIN32 /D_WINDOWS /EHsc /DSUPERSLM_TILED_AVX512_MSVC=1 /DSUPERSLM_SITES_AVX512_MSVC=1"
       - run: cmake --build build --config Release --target superslm_tests_avx512_forced sslm_axis_digest_avx512_forced
       - name: Probe for AVX-512, run the forced suite and extract the GLOBAL digest if present
         shell: pwsh

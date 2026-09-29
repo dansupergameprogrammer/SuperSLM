@@ -697,6 +697,247 @@ inline void RunTiledGemm(detail::GemmTier tier, const int16_t* a16, size_t kp, c
 
 #endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
 
+// ---- Attention and per-row sites plan, slice S2: prob·V on int16 multiply-add (§4.2, §5.2) ----------
+//
+// Plan §3.2: in MSVC and clang-cl builds the AVX-512 tier keeps the v1.9.0 attention code until an MSVC
+// AVX-512 build has executed the new kernels. The forced AVX-512 Windows legs build with
+// SUPERSLM_SITES_AVX512_MSVC=1; the default flips in a follow-up release once one such run exists. A
+// separate switch from the tiled GEMM's, so one closure's executed run cannot enable the other's code.
+#if defined(SUPERSLM_SITES_AVX512_MSVC)
+constexpr int kSitesAvx512MsvcSwitch = SUPERSLM_SITES_AVX512_MSVC;
+#else
+constexpr int kSitesAvx512MsvcSwitch = 0;
+#endif
+
+// The shipped construction (v1.9.0's loop body), as an accumulate-into: out_ctx[d] += Sum_k p_k * v_k[d],
+// exact int64. GemmProbQ15Accumulate zeroes out_ctx and then runs this or a SIMD body; the paged-KV
+// plan's accumulate-into entry (no zeroing) shares the same core (§10).
+inline void ProbQ15AccumulateIntoScalar(const int64_t* probs, const int8_t* values, size_t width, size_t head_dim,
+                                        int64_t* out_ctx) {
+	for (size_t k = 0; k < width; ++k) {
+		const int64_t p = probs[k];
+		const int8_t* row = values + k * head_dim;
+		for (size_t d = 0; d < head_dim; ++d) {
+			out_ctx[d] += p * static_cast<int64_t>(row[d]);
+		}
+	}
+}
+
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+
+// The int16 condition (§4.2, §5.2), checked in one pass: every p in [0, 32767] and Sum p <= 2^15. Inside
+// it every p fits an int16 lane and every int32 lane's running sum is bounded by 128 * Sum p <= 2^22, so
+// the vpmaddwd bodies below equal the int64 loop exactly. The first out-of-range p returns at once, so
+// the running sum of in-range values cannot overflow for any width.
+constexpr int64_t kProbVMaxP = 32767;
+constexpr int64_t kProbVMaxSum = INT64_C(1) << 15;
+
+inline bool ProbVInt16Condition(const int64_t* probs, size_t width) {
+	int64_t sum = 0;
+	for (size_t k = 0; k < width; ++k) {
+		const int64_t p = probs[k];
+		if (p < 0 || p > kProbVMaxP) return false;
+		sum += p;
+	}
+	return sum <= kProbVMaxSum;
+}
+
+// The guard (§4.2): head_dim a multiple of 16 (one 16-dimension unit per 16-byte value load) and the
+// int16 condition.
+inline bool ProbVFastPathAdmits(const int64_t* probs, size_t width, size_t head_dim) {
+	return head_dim % 16 == 0 && ProbVInt16Condition(probs, width);
+}
+
+// One probability pair as the 32-bit value vpmaddwd multiplies each (v_k[d], v_{k+1}[d]) pair by: p_k in
+// the low 16 bits, p_{k+1} in the high 16 bits. Both are in [0, 32767] here (the guard).
+inline int32_t ProbVPair(int64_t p_lo, int64_t p_hi) {
+	return static_cast<int32_t>(static_cast<uint32_t>(p_lo) | (static_cast<uint32_t>(p_hi) << 16));
+}
+
+// AVX2 body over NB 16-dimension units starting at d0: per key pair, the two value rows' 16 bytes are
+// interleaved (v_k[d], v_{k+1}[d]), widened to int16 and multiplied by the broadcast pair with vpmaddwd,
+// one int32 lane per output dimension; an odd last key is paired with a zero row and p = 0. The lanes
+// are then added, widened, into out_ctx.
+template <int NB>
+SUPERSLM_AVX2_TARGET inline void ProbVBlockAvx2(const int64_t* probs, const int8_t* values, size_t width,
+                                                size_t head_dim, size_t d0, int64_t* out_ctx) {
+	__m256i acc[NB][2];
+	for (int u = 0; u < NB; ++u) acc[u][0] = acc[u][1] = _mm256_setzero_si256();
+	size_t k = 0;
+	for (; k + 2 <= width; k += 2) {
+		const __m256i pair = _mm256_set1_epi32(ProbVPair(probs[k], probs[k + 1]));
+		const int8_t* r0 = values + k * head_dim + d0;
+		const int8_t* r1 = r0 + head_dim;
+		for (int u = 0; u < NB; ++u) {
+			const __m128i a = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r0 + 16 * u));
+			const __m128i b = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r1 + 16 * u));
+			acc[u][0] = _mm256_add_epi32(acc[u][0], _mm256_madd_epi16(_mm256_cvtepi8_epi16(_mm_unpacklo_epi8(a, b)), pair));
+			acc[u][1] = _mm256_add_epi32(acc[u][1], _mm256_madd_epi16(_mm256_cvtepi8_epi16(_mm_unpackhi_epi8(a, b)), pair));
+		}
+	}
+	if (k < width) {  // the unpaired last key
+		const __m256i pair = _mm256_set1_epi32(ProbVPair(probs[k], 0));
+		const int8_t* r0 = values + k * head_dim + d0;
+		const __m128i zero = _mm_setzero_si128();
+		for (int u = 0; u < NB; ++u) {
+			const __m128i a = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r0 + 16 * u));
+			acc[u][0] = _mm256_add_epi32(acc[u][0], _mm256_madd_epi16(_mm256_cvtepi8_epi16(_mm_unpacklo_epi8(a, zero)), pair));
+			acc[u][1] = _mm256_add_epi32(acc[u][1], _mm256_madd_epi16(_mm256_cvtepi8_epi16(_mm_unpackhi_epi8(a, zero)), pair));
+		}
+	}
+	for (int u = 0; u < NB; ++u)
+		for (int h = 0; h < 2; ++h) {
+			int64_t* o = out_ctx + d0 + 16 * u + 8 * h;
+			const __m256i lo = _mm256_cvtepi32_epi64(_mm256_castsi256_si128(acc[u][h]));
+			const __m256i hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(acc[u][h], 1));
+			_mm256_storeu_si256(reinterpret_cast<__m256i*>(o),
+			                    _mm256_add_epi64(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(o)), lo));
+			_mm256_storeu_si256(reinterpret_cast<__m256i*>(o + 4),
+			                    _mm256_add_epi64(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(o + 4)), hi));
+		}
+}
+
+// The AVX2 accumulate-into, over every 16-dimension unit, four units (64 dimensions) per pass. Counts
+// its own fast-path entry (§3.6), so a dispatch that reached the wrong tier's body moves the wrong counter.
+SUPERSLM_AVX2_TARGET inline void ProbVAccumulateIntoAvx2(const int64_t* probs, const int8_t* values, size_t width,
+                                                         size_t head_dim, int64_t* out_ctx) {
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+	superslm_test::g_pv_fast_avx2.fetch_add(1, std::memory_order_relaxed);
+#endif
+	size_t d0 = 0;
+	for (; d0 + 64 <= head_dim; d0 += 64) ProbVBlockAvx2<4>(probs, values, width, head_dim, d0, out_ctx);
+	switch ((head_dim - d0) / 16) {
+		case 3: ProbVBlockAvx2<3>(probs, values, width, head_dim, d0, out_ctx); break;
+		case 2: ProbVBlockAvx2<2>(probs, values, width, head_dim, d0, out_ctx); break;
+		case 1: ProbVBlockAvx2<1>(probs, values, width, head_dim, d0, out_ctx); break;
+		default: break;
+	}
+}
+
+// AVX-512BW body, same construction in 512-bit registers, F and BW instructions only (C9). A 32-dimension
+// unit: the two value rows' 32 bytes are interleaved in-lane (vpunpck[lh]bw on ymm), so the low result
+// holds dimensions 0-7 and 16-23 and the high one 8-15 and 24-31; each is widened by vpmovsxbw to 32
+// int16 and multiplied by the broadcast pair with vpmaddwd into 16 int32 lanes. The stores put each
+// 8-lane half back at its own dimensions, so no cross-lane permute is needed. NB units per pass.
+template <int NB>
+SUPERSLM_AVX512_TARGET inline void ProbVBlockAvx512(const int64_t* probs, const int8_t* values, size_t width,
+                                                    size_t head_dim, size_t d0, int64_t* out_ctx) {
+	__m512i acc[NB][2];
+	for (int u = 0; u < NB; ++u) acc[u][0] = acc[u][1] = _mm512_setzero_si512();
+	size_t k = 0;
+	for (; k + 2 <= width; k += 2) {
+		const __m512i pair = _mm512_set1_epi32(ProbVPair(probs[k], probs[k + 1]));
+		const int8_t* r0 = values + k * head_dim + d0;
+		const int8_t* r1 = r0 + head_dim;
+		for (int u = 0; u < NB; ++u) {
+			const __m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(r0 + 32 * u));
+			const __m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(r1 + 32 * u));
+			acc[u][0] = _mm512_add_epi32(acc[u][0], _mm512_madd_epi16(_mm512_cvtepi8_epi16(_mm256_unpacklo_epi8(a, b)), pair));
+			acc[u][1] = _mm512_add_epi32(acc[u][1], _mm512_madd_epi16(_mm512_cvtepi8_epi16(_mm256_unpackhi_epi8(a, b)), pair));
+		}
+	}
+	if (k < width) {  // the unpaired last key
+		const __m512i pair = _mm512_set1_epi32(ProbVPair(probs[k], 0));
+		const int8_t* r0 = values + k * head_dim + d0;
+		const __m256i zero = _mm256_setzero_si256();
+		for (int u = 0; u < NB; ++u) {
+			const __m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(r0 + 32 * u));
+			acc[u][0] = _mm512_add_epi32(acc[u][0], _mm512_madd_epi16(_mm512_cvtepi8_epi16(_mm256_unpacklo_epi8(a, zero)), pair));
+			acc[u][1] = _mm512_add_epi32(acc[u][1], _mm512_madd_epi16(_mm512_cvtepi8_epi16(_mm256_unpackhi_epi8(a, zero)), pair));
+		}
+	}
+	for (int u = 0; u < NB; ++u)
+		for (int h = 0; h < 2; ++h) {
+			// Lanes 0-7 hold dimensions 8h .. 8h + 7 of the unit, lanes 8-15 hold 16 + 8h .. 16 + 8h + 7.
+			int64_t* o = out_ctx + d0 + 32 * u + 8 * h;
+			const __m512i lo = _mm512_cvtepi32_epi64(_mm512_castsi512_si256(acc[u][h]));
+			const __m512i hi = _mm512_cvtepi32_epi64(_mm512_extracti64x4_epi64(acc[u][h], 1));
+			_mm512_storeu_si512(o, _mm512_add_epi64(_mm512_loadu_si512(o), lo));
+			_mm512_storeu_si512(o + 16, _mm512_add_epi64(_mm512_loadu_si512(o + 16), hi));
+		}
+}
+
+// The AVX-512 16-dimension tail unit (head_dim % 32 == 16): the 16-byte rows interleaved and joined into
+// one ymm, widened to 32 int16, one vpmaddwd into 16 int32 lanes in dimension order.
+SUPERSLM_AVX512_TARGET inline void ProbVTail16Avx512(const int64_t* probs, const int8_t* values, size_t width,
+                                                     size_t head_dim, size_t d0, int64_t* out_ctx) {
+	__m512i acc = _mm512_setzero_si512();
+	size_t k = 0;
+	for (; k + 2 <= width; k += 2) {
+		const __m512i pair = _mm512_set1_epi32(ProbVPair(probs[k], probs[k + 1]));
+		const int8_t* r0 = values + k * head_dim + d0;
+		const __m128i a = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r0));
+		const __m128i b = _mm_loadu_si128(reinterpret_cast<const __m128i*>(r0 + head_dim));
+		const __m256i ab = _mm256_inserti128_si256(_mm256_castsi128_si256(_mm_unpacklo_epi8(a, b)),
+		                                           _mm_unpackhi_epi8(a, b), 1);
+		acc = _mm512_add_epi32(acc, _mm512_madd_epi16(_mm512_cvtepi8_epi16(ab), pair));
+	}
+	if (k < width) {  // the unpaired last key
+		const __m512i pair = _mm512_set1_epi32(ProbVPair(probs[k], 0));
+		const __m128i a = _mm_loadu_si128(reinterpret_cast<const __m128i*>(values + k * head_dim + d0));
+		const __m128i zero = _mm_setzero_si128();
+		const __m256i ab = _mm256_inserti128_si256(_mm256_castsi128_si256(_mm_unpacklo_epi8(a, zero)),
+		                                           _mm_unpackhi_epi8(a, zero), 1);
+		acc = _mm512_add_epi32(acc, _mm512_madd_epi16(_mm512_cvtepi8_epi16(ab), pair));
+	}
+	int64_t* o = out_ctx + d0;
+	const __m512i lo = _mm512_cvtepi32_epi64(_mm512_castsi512_si256(acc));
+	const __m512i hi = _mm512_cvtepi32_epi64(_mm512_extracti64x4_epi64(acc, 1));
+	_mm512_storeu_si512(o, _mm512_add_epi64(_mm512_loadu_si512(o), lo));
+	_mm512_storeu_si512(o + 8, _mm512_add_epi64(_mm512_loadu_si512(o + 8), hi));
+}
+
+SUPERSLM_AVX512_TARGET inline void ProbVAccumulateIntoAvx512(const int64_t* probs, const int8_t* values,
+                                                             size_t width, size_t head_dim, int64_t* out_ctx) {
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+	superslm_test::g_pv_fast_avx512.fetch_add(1, std::memory_order_relaxed);
+#endif
+	size_t d0 = 0;
+	for (; d0 + 128 <= head_dim; d0 += 128) ProbVBlockAvx512<4>(probs, values, width, head_dim, d0, out_ctx);
+	switch ((head_dim - d0) / 32) {
+		case 3: ProbVBlockAvx512<3>(probs, values, width, head_dim, d0, out_ctx); d0 += 96; break;
+		case 2: ProbVBlockAvx512<2>(probs, values, width, head_dim, d0, out_ctx); d0 += 64; break;
+		case 1: ProbVBlockAvx512<1>(probs, values, width, head_dim, d0, out_ctx); d0 += 32; break;
+		default: break;
+	}
+	if (d0 < head_dim) ProbVTail16Avx512(probs, values, width, head_dim, d0, out_ctx);  // head_dim % 32 == 16
+}
+
+#endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
+
+// The tiered accumulate-into core (§4.2, §10): the SIMD body when the selected kernel is AVX2 or AVX-512
+// and the guard admits the row, else the shipped loop. Each path counter moves once per call, after the
+// guard has decided, on the branch it names (§3.6); on the scalar and SSE2 tiers, and on an MSVC build's
+// AVX-512 tier with its switch off, none moves.
+inline void ProbQ15AccumulateInto(const int64_t* probs, const int8_t* values, size_t width, size_t head_dim,
+                                  int64_t* out_ctx) {
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+	switch (detail::DispatchSitesKernel(detail::ActiveGemmTier())) {
+		case detail::SitesKernel::kAvx2:
+			if (ProbVFastPathAdmits(probs, width, head_dim)) {
+				ProbVAccumulateIntoAvx2(probs, values, width, head_dim, out_ctx);
+				return;
+			}
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+			superslm_test::g_pv_fallback_avx2.fetch_add(1, std::memory_order_relaxed);
+#endif
+			break;
+		case detail::SitesKernel::kAvx512:
+			if (ProbVFastPathAdmits(probs, width, head_dim)) {
+				ProbVAccumulateIntoAvx512(probs, values, width, head_dim, out_ctx);
+				return;
+			}
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+			superslm_test::g_pv_fallback_avx512.fetch_add(1, std::memory_order_relaxed);
+#endif
+			break;
+		case detail::SitesKernel::kShipped:
+			break;
+	}
+#endif
+	ProbQ15AccumulateIntoScalar(probs, values, width, head_dim, out_ctx);
+}
+
 }  // namespace
 
 int64_t DotRowScalarRef(const int8_t* activations, const int8_t* weights, size_t in_channels) {
@@ -816,11 +1057,23 @@ GemmPath DispatchGemmPath(GemmTier tier, size_t num_tokens) {
 	return SelectGemmPath(tier, num_tokens, kTiledAvx512MsvcSwitch, kIsMsvcBuild);
 }
 
-// Attention and per-row sites plan, cell 11.2. Red-first: until slice S2 lands, every tier runs the
-// v1.9.0 attention code, so the selector says so.
-SitesKernel SelectSitesKernel(GemmTier, int, bool) { return SitesKernel::kShipped; }
+SitesKernel SelectSitesKernel(GemmTier tier, int msvc_avx512_switch, bool is_msvc_build) {
+	switch (tier) {
+		case GemmTier::kAvx2:
+			return SitesKernel::kAvx2;
+		case GemmTier::kAvx512:
+			// Plan §3.2: off in MSVC and clang-cl builds until executed there.
+			return (is_msvc_build && msvc_avx512_switch == 0) ? SitesKernel::kShipped : SitesKernel::kAvx512;
+		case GemmTier::kScalar:
+		case GemmTier::kSse2:
+			break;
+	}
+	return SitesKernel::kShipped;
+}
 
-SitesKernel DispatchSitesKernel(GemmTier tier) { return SelectSitesKernel(tier, 0, kIsMsvcBuild); }
+SitesKernel DispatchSitesKernel(GemmTier tier) {
+	return SelectSitesKernel(tier, kSitesAvx512MsvcSwitch, kIsMsvcBuild);
+}
 
 GemmTier ActiveGemmTier() {
 #if defined(SUPERSLM_FORCE_SCALAR_MATMUL)
@@ -926,17 +1179,12 @@ void GemmProbQ15Accumulate(const int64_t* probs, const int8_t* values, size_t wi
 	// out_ctx[d] = Sum_k probs[k] * values[k*head_dim + d]. Exact int64
 	// accumulation, no saturation, no rounding (F-S3-6's derived bound:
 	// |Sum_k p_k*v_k| <= 2^15*127 < 2^22, independent of context length --
-	// far inside int64, so no intermediate can overflow).
+	// far inside int64, so no intermediate can overflow). Attention and per-row
+	// sites plan, slice S2: zero, then the tiered accumulate-into core.
 	for (size_t d = 0; d < head_dim; ++d) {
 		out_ctx[d] = 0;
 	}
-	for (size_t k = 0; k < width; ++k) {
-		const int64_t p = probs[k];
-		const int8_t* row = values + k * head_dim;
-		for (size_t d = 0; d < head_dim; ++d) {
-			out_ctx[d] += p * static_cast<int64_t>(row[d]);
-		}
-	}
+	ProbQ15AccumulateInto(probs, values, width, head_dim, out_ctx);
 }
 
 }  // namespace superslm

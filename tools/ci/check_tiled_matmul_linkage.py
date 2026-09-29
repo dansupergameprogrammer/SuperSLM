@@ -7,7 +7,9 @@ a copy compiled without that attribute, or with a different one, in another obje
 class the forced-tier design exists to prevent. So every tiled and packer symbol must be LOCAL.
 
 The population is every symbol of the given matmul.cpp objects whose demangled name contains `Tiled`
-(functions and data alike: the kernels, the packer, the activation prep, the constants), plus the
+(functions and data alike: the kernels, the packer, the activation prep, the constants) or `ProbV` /
+`ProbQ15AccumulateInto` (the attention and per-row sites plan's slice S2: the AVX2 and AVX-512BW prob·V
+bodies, their guard and the accumulate-into core, cell 11.3 of that plan), plus the
 build-configuration record `superslm_build_config_record`. The engine's public API in the same object
 is outside it (including the `superslm::detail::` entries the header declares, which carry no target
 attribute), and so are the test seam's own `superslm_test::` variables, which exist only in seam
@@ -34,7 +36,7 @@ import subprocess
 import sys
 
 RECORD = "superslm_build_config_record"
-POPULATION = re.compile(r"Tiled|" + RECORD)
+POPULATION = re.compile(r"Tiled|ProbV|ProbQ15AccumulateInto|" + RECORD)
 SEAM = "superslm_test::"
 DETAIL_API = "superslm::detail::"  # declared in include/superslm/matmul.h; never target-attributed
 
@@ -48,6 +50,13 @@ EXPECTED = {
     "TiledTranspose8x8Epi16": ("TiledGemmAvx", r"punpck[lh]wd"),
     "TiledWidenActivations": ("GemmInt8AccumulateCols", r"(movsbw|pmovsxbw)"),
     "RunTiledGemm": ("GemmInt8AccumulateCols", r"call.*TiledGemmAvx"),
+    # Attention and per-row sites plan, slice S2 (cell 11.3).
+    "ProbVAccumulateIntoAvx2": ("GemmProbQ15Accumulate", r"(call|jmp).*ProbVAccumulateIntoAvx2"),
+    "ProbVAccumulateIntoAvx512": ("GemmProbQ15Accumulate", r"(call|jmp).*ProbVAccumulateIntoAvx512"),
+    "ProbVBlockAvx2": ("ProbVAccumulateIntoAvx2", r"vpmaddwd\s.*%ymm"),
+    "ProbVBlockAvx512": ("ProbVAccumulateIntoAvx512", r"vpmaddwd\s.*%zmm"),
+    "ProbVTail16Avx512": ("ProbVAccumulateIntoAvx512", r"vinserti128"),
+    "ProbQ15AccumulateInto": ("GemmProbQ15Accumulate", r"(call|jmp).*ProbVAccumulateIntoAvx"),
 }
 
 

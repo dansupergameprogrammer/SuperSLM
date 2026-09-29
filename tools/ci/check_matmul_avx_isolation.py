@@ -7,7 +7,10 @@ The design's own claim: the per-function-attributed AVX2/AVX-512 functions of sr
 are the ONLY functions in the whole project that may compile with AVX2/AVX-512 instructions
 enabled. Since the tiled-matmul plan's slice 1 they are `DotRowAvx2` and `DotRowAvx512`
 (the shipped per-row tiers) plus the tiled kernel's `TiledMicroAvx2`, `TiledMicroAvx512`,
-`TiledGemmAvx2` and `TiledGemmAvx512` (all in the anonymous namespace). The packer
+`TiledGemmAvx2` and `TiledGemmAvx512`, plus (the attention and per-row sites plan's slice S2) the
+prob·V bodies `ProbVBlockAvx2`, `ProbVBlockAvx512`, `ProbVTail16Avx512`, `ProbVAccumulateIntoAvx2` and
+`ProbVAccumulateIntoAvx512` (all in the anonymous namespace; their guard `ProbVFastPathAdmits` and
+the dispatching core `ProbQ15AccumulateInto` carry no target attribute). The packer
 (`TiledPackPanel16`, `TiledTranspose8x8Epi16`) and the activation prep
 (`TiledWidenActivations`) are baseline SSE2 and carry no target attribute. All of them use
 GCC/Clang's per-function `__attribute__((target("avx2")))` /

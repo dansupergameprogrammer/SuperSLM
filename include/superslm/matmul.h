@@ -204,6 +204,13 @@ int DetectBestDotRowTierForCpu();
 // exact int64 products are exactly associative and commutative, so any
 // traversal order must produce the bit-identical `out_ctx`.
 //
+// Attention and per-row sites plan, slice S2 (§4.2, §5.2): on the AVX2 and AVX-512BW tiers a call
+// whose head_dim is a multiple of 16 and whose row passes the int16 condition (every p in
+// [0, 32767] and Sum p <= 2^15, checked by the function itself in one pass) accumulates p_k*v_k[d] +
+// p_{k+1}*v_{k+1}[d] with vpmaddwd into one int32 lane per output dimension, then widens to int64.
+// Every lane's running sum is bounded by 128 * Sum p <= 2^22, so each output equals the int64 sum
+// exactly; any other row takes the shipped loop. No allocation, no new status, same contract.
+//
 // Caller ensures (contract, not runtime-checked -- the same convention as
 // GemmInt8AccumulateRow above): `probs` has `width` elements; `values` has
 // `width * head_dim` elements, row-major (`values[k*head_dim + d]` is key
