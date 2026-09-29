@@ -11,3 +11,7 @@ wide_l8 ids:128 forced AVX2: 993fb29d652ecaf4 EQUAL-to-before tiled_entries=56 (
 p05_l1 ids:8: 32d872f020c0d634 after=EQUAL avx2=EQUAL
 p05_l1 ids:32: 9578ee3794d777d2 after=EQUAL avx2=EQUAL
 p05_l1 ids:128: 3e1c79d437372e8c after=EQUAL avx2=EQUAL
+p05_l2 ids:8 blob EQUAL
+p05_l2 ids:128 blob EQUAL
+p06_l1 ids:8 blob EQUAL
+p06_l1 ids:128 blob EQUAL

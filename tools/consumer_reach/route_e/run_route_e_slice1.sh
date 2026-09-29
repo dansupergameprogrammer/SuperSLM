@@ -8,7 +8,9 @@
 # witness and the same grader (route_e_check.py) -- reduced to the four legs that decide the slice-1 question:
 #   i   production + the seam            must PASS (E6: the embedder's encode reaches the tiled kernel)
 #   ii  D-infinity + the seam            must FAIL on E6 alone (the XR must-reject: no tiled entry)
-#   c   forced scalar + the seam         must FAIL on E3 alone (the engine linked is not the reference engine)
+#   c   forced scalar + the seam         must FAIL on E3 and E6: the engine linked is not the reference engine, and
+#                                        the scalar tier never tiles (the stand-in, whose counter ignored the tier,
+#                                        failed E3 alone)
 #   a   no seam                          must FAIL on E3, E4 and E6 (no counter can be read)
 # The full kill-leg census of run_route_e_legs.sh (flag channels, fixtures, Q1 pairs) is the planner's rev-10
 # evidence on the stand-in and is not re-run here.
@@ -81,7 +83,7 @@ echo; echo "== grading (route_e_check.py; E3 is code identity against the refere
 g i production PASS
 g ii d_inf FAIL:E6
 g ii production FAIL:E3,E6
-g c production FAIL:E3
+g c production FAIL:E3,E6
 g a production FAIL:E3,E4,E6
 echo
 [ $FAILS -eq 0 ] && echo "CELL 10.0 route E (slice 1): GREEN -- every leg graded on its exact failing set, as expected" \

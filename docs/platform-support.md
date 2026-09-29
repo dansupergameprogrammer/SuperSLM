@@ -67,6 +67,39 @@ rather than a wider datapath. Every rep also re-proved chunk-boundary
 split bit-identity on the AVX-512 tier — the first such execution on
 AVX-512 silicon.
 
+### Tiled prefill GEMM (unreleased)
+
+On the AVX2 and AVX-512 tiers, a prefill GEMM of 8 or more tokens runs a
+register-tiled kernel over weights packed per call (4 tokens x 16 outputs on
+AVX2, 8 x 32 on AVX-512BW) instead of one dot product per (token, output)
+cell. Every output is bit-identical to the scalar reference: the kernel adds
+the same exact products and flushes its 32-bit lanes to 64 bits within the
+bound the shipped tiers already use. Below 8 tokens, on the scalar and SSE2
+tiers, and for decode, nothing changes.
+
+| Build | Tiled path | Status |
+|---|---|---|
+| GCC / Clang, AVX2 tier | on at M >= 8 | Bit-identity: full suite forced AVX2, tiled golden, cross-tier digest, save-blob equality against 1.9.0 on the in-tree fixture and on synthetic real-width artifacts |
+| GCC / Clang, AVX-512 tier | on at M >= 8 | Same evidence, forced AVX-512 and auto dispatch |
+| MSVC / clang-cl, AVX2 tier | on at M >= 8 | Built by the forced Windows legs; not yet executed on Windows |
+| MSVC / clang-cl, AVX-512 tier | **off** (`SUPERSLM_TILED_AVX512_MSVC=0`) | Held on the shipped per-row kernel until an MSVC AVX-512 build has executed the tiled kernel |
+
+**Measured, engine level, one GEMM, on a 4-vCPU cloud Xeon (AVX2 and
+AVX-512BW, shared host, best of N):** at the 1.5B `gate`/`up` shape
+(K 1536, N 8960) and 32 tokens, the tiled AVX2 kernel is 2.05x the shipped
+AVX2 kernel (median of 15 interleaved pairs, quartiles 1.99-2.06), and the
+tiled AVX-512 kernel 2.14x the shipped AVX-512 kernel. Across the 0.5B,
+0.6B and 1.5B projection shapes at 8 to 512 tokens the range is about
+1.7x-3.0x on AVX2 and 1.6x-4.3x on AVX-512.
+
+**Measured, whole batched prefill, one layer of a synthetic artifact at
+Qwen2.5-0.5B width (hidden 896, MLP 4864), same host:** 128 tokens in
+68.3 ms against 117.8 ms on 1.9.0 with auto dispatch (1.72x), and 82.3 ms
+against 161.3 ms forced AVX2 (1.96x); 1.47x and 1.63x at 32 tokens. These
+are per-layer engine figures on synthetic weights. They are not a
+statement about any consumer's end-to-end speed, and they are not a
+measurement on this project's reference hardware.
+
 ### Damped-greedy decoding
 
 The 1.2 candidate's opt-in decoder was confirmed on Windows x64 through the
@@ -239,6 +272,11 @@ measured through — a number without that context is not included here.
   is Zen 4, whose double-pumped 512-bit execution bounds the gain; silicon
   with full-width datapaths (Zen 5, server Intel) would measure
   differently and has not been measured.
+
+- **The tiled prefill GEMM has not yet executed on Windows**, and its
+  MSVC/clang-cl AVX-512 path is held off until it has (above).
+- **The tiled prefill GEMM is measured on one cloud host only**, on
+  synthetic weights; no reference-hardware whole-prefill figure exists yet.
 
 ## What's next
 
