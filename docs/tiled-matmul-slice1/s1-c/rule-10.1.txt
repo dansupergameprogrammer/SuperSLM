@@ -1,0 +1,56 @@
+== 10.1 candidate: forced AVX2 production vs forced AVX2 D-infinity (1.5B gate/up, M=32, n=15, best of 5 per point)
+pair  1: base    22.122 ms  cand    10.803 ms  r = 2.048
+pair  2: base    22.625 ms  cand    11.009 ms  r = 2.055
+pair  3: base    21.910 ms  cand    10.962 ms  r = 1.999
+pair  4: base    22.605 ms  cand    10.970 ms  r = 2.061
+pair  5: base    21.922 ms  cand    11.287 ms  r = 1.942
+pair  6: base    22.502 ms  cand    10.974 ms  r = 2.051
+pair  7: base    21.533 ms  cand    11.049 ms  r = 1.949
+pair  8: base    21.854 ms  cand    10.589 ms  r = 2.064
+pair  9: base    22.039 ms  cand    10.748 ms  r = 2.050
+pair 10: base    21.654 ms  cand    10.903 ms  r = 1.986
+pair 11: base    21.614 ms  cand    10.767 ms  r = 2.007
+pair 12: base    22.209 ms  cand    11.114 ms  r = 1.998
+pair 13: base    22.457 ms  cand    10.921 ms  r = 2.056
+pair 14: base    22.322 ms  cand    11.695 ms  r = 1.909
+pair 15: base    22.952 ms  cand    11.101 ms  r = 2.068
+1.5B.gate_up M=32: n=15 median 2.048  Q1 1.986  Q3 2.056  (Q3-Q1)/median 0.034  floor 1.4  -> PASS
+exit 0
+
+== 10.1 must-reject: D-infinity as the candidate against D-infinity
+pair  1: base    22.136 ms  cand    21.870 ms  r = 1.012
+pair  2: base    22.279 ms  cand    22.254 ms  r = 1.001
+pair  3: base    22.297 ms  cand    22.085 ms  r = 1.010
+pair  4: base    22.904 ms  cand    22.416 ms  r = 1.022
+pair  5: base    22.081 ms  cand    22.711 ms  r = 0.972
+pair  6: base    23.511 ms  cand    22.590 ms  r = 1.041
+pair  7: base    23.198 ms  cand    22.933 ms  r = 1.012
+pair  8: base    22.002 ms  cand    22.565 ms  r = 0.975
+pair  9: base    25.709 ms  cand    22.582 ms  r = 1.138
+pair 10: base    26.198 ms  cand    23.549 ms  r = 1.113
+pair 11: base    22.349 ms  cand    23.037 ms  r = 0.970
+pair 12: base    23.081 ms  cand    22.067 ms  r = 1.046
+pair 13: base    22.382 ms  cand    21.554 ms  r = 1.038
+pair 14: base    34.461 ms  cand    31.052 ms  r = 1.110
+pair 15: base    22.163 ms  cand    21.940 ms  r = 1.010
+1.5B.gate_up M=32: n=15 median 1.012  Q1 1.001  Q3 1.046  (Q3-Q1)/median 0.044  floor 1.4  -> FAIL
+exit 1
+
+== (report only) forced AVX-512 production vs forced AVX-512 D-infinity, same rule
+pair  1: base    16.383 ms  cand     7.989 ms  r = 2.051
+pair  2: base    17.184 ms  cand     7.708 ms  r = 2.229
+pair  3: base    16.606 ms  cand     8.230 ms  r = 2.018
+pair  4: base    17.434 ms  cand     8.348 ms  r = 2.089
+pair  5: base    17.268 ms  cand     7.824 ms  r = 2.207
+pair  6: base    17.439 ms  cand     8.133 ms  r = 2.144
+pair  7: base    17.611 ms  cand     8.063 ms  r = 2.184
+pair  8: base    17.434 ms  cand     7.657 ms  r = 2.277
+pair  9: base    17.254 ms  cand     8.219 ms  r = 2.099
+pair 10: base    16.984 ms  cand     7.525 ms  r = 2.257
+pair 11: base    16.588 ms  cand     7.901 ms  r = 2.100
+pair 12: base    16.384 ms  cand     8.627 ms  r = 1.899
+pair 13: base    18.836 ms  cand     8.741 ms  r = 2.155
+pair 14: base    16.869 ms  cand     7.396 ms  r = 2.281
+pair 15: base    16.654 ms  cand     7.836 ms  r = 2.125
+1.5B.gate_up M=32: n=15 median 2.144  Q1 2.089  Q3 2.229  (Q3-Q1)/median 0.066  floor 1.4  -> PASS
+exit 0

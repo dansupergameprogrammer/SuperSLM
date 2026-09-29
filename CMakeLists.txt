@@ -91,7 +91,7 @@ else()
 endif()
 
 add_executable(superslm_tests tests/test_main.cpp tests/test_slm18x_saturation_census.cpp
-	tests/test_slm19x_schema_damped_greedy.cpp)
+	tests/test_slm19x_schema_damped_greedy.cpp tests/test_tiled_gemm.cpp)
 target_link_libraries(superslm_tests PRIVATE superslm_test_injection)
 if(MSVC)
 	target_compile_options(superslm_tests PRIVATE /W4 /fp:precise)
@@ -342,7 +342,8 @@ foreach(_sslm_tier SSE2 AVX2 AVX512)
 	# to any target linking that library, which satisfies this without a second
 	# target_compile_definitions call.
 	add_executable(superslm_tests_${_sslm_tier_lower}_forced EXCLUDE_FROM_ALL tests/test_main.cpp
-		tests/test_slm18x_saturation_census.cpp tests/test_slm19x_schema_damped_greedy.cpp)
+		tests/test_slm18x_saturation_census.cpp tests/test_slm19x_schema_damped_greedy.cpp
+		tests/test_tiled_gemm.cpp)
 	target_link_libraries(superslm_tests_${_sslm_tier_lower}_forced PRIVATE superslm_${_sslm_tier_lower}_forced)
 	target_include_directories(superslm_tests_${_sslm_tier_lower}_forced PRIVATE tests)
 	if(MSVC)
@@ -406,6 +407,40 @@ foreach(_sslm_bench_tier AVX2 AVX512)
 	else()
 		target_compile_options(sslm_bench_prefill_${_sslm_bench_tier_lower}_forced PRIVATE -Wall -Wextra -ffp-contract=off)
 	endif()
+endforeach()
+
+# Tiled-matmul plan slice 1, cell 10.1: the per-shape GEMM bench (tools/sslm_gemm_bench.cpp), no artifact.
+# One source, several builds: sslm_gemm_bench links the production library (auto dispatch);
+# sslm_gemm_bench_${tier}_forced links the tier-forced library; and sslm_gemm_bench_${tier}_forced_dinf
+# links a matmul-only library compiled with that tier forced AND SUPERSLM_TEST_TILED_MIN_TOKENS=SIZE_MAX
+# ("D-infinity": the shipped one-cell-at-a-time loop at every M), so a ratio between a forced bench and
+# its D-infinity twin is the tiled kernel's own speedup on that tier. The bench calls only matmul.cpp's
+# entry points, so the D-infinity library needs no other engine source. All EXCLUDE_FROM_ALL except the
+# production bench, for the same non-x64 reason as the forced targets above.
+add_executable(sslm_gemm_bench tools/sslm_gemm_bench.cpp)
+target_link_libraries(sslm_gemm_bench PRIVATE superslm)
+if(MSVC)
+	target_compile_options(sslm_gemm_bench PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(sslm_gemm_bench PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+foreach(_sslm_gemm_tier AVX2 AVX512)
+	string(TOLOWER "${_sslm_gemm_tier}" _sslm_gemm_tier_lower)
+	add_library(superslm_matmul_${_sslm_gemm_tier_lower}_forced_dinf STATIC EXCLUDE_FROM_ALL src/matmul.cpp)
+	target_include_directories(superslm_matmul_${_sslm_gemm_tier_lower}_forced_dinf PUBLIC include)
+	target_compile_definitions(superslm_matmul_${_sslm_gemm_tier_lower}_forced_dinf PUBLIC
+		SUPERSLM_FORCE_${_sslm_gemm_tier}_MATMUL SUPERSLM_TEST_TILED_MIN_TOKENS=SIZE_MAX)
+	add_executable(sslm_gemm_bench_${_sslm_gemm_tier_lower}_forced EXCLUDE_FROM_ALL tools/sslm_gemm_bench.cpp)
+	target_link_libraries(sslm_gemm_bench_${_sslm_gemm_tier_lower}_forced PRIVATE superslm_${_sslm_gemm_tier_lower}_forced)
+	add_executable(sslm_gemm_bench_${_sslm_gemm_tier_lower}_forced_dinf EXCLUDE_FROM_ALL tools/sslm_gemm_bench.cpp)
+	target_link_libraries(sslm_gemm_bench_${_sslm_gemm_tier_lower}_forced_dinf PRIVATE superslm_matmul_${_sslm_gemm_tier_lower}_forced_dinf)
+	foreach(_sslm_gemm_target superslm_matmul_${_sslm_gemm_tier_lower}_forced_dinf sslm_gemm_bench_${_sslm_gemm_tier_lower}_forced sslm_gemm_bench_${_sslm_gemm_tier_lower}_forced_dinf)
+		if(MSVC)
+			target_compile_options(${_sslm_gemm_target} PRIVATE /W4 /fp:precise)
+		else()
+			target_compile_options(${_sslm_gemm_target} PRIVATE -Wall -Wextra -ffp-contract=off)
+		endif()
+	endforeach()
 endforeach()
 
 # T-2158 dimension 7 item (d) (design §10, D-SLM3510): a persisted CI guard for the
@@ -842,6 +877,15 @@ if(WIN32 AND (SUPERSLM_BUILD_GPU OR BUILD_TESTING))
 	if(BUILD_TESTING)
 		add_dependencies(superslm_tests superslm_gpu_shaders)
 	endif()
+	# The forced-tier full suites compile the same GPU sources on WIN32 and run the same GPU
+	# cells, so they need the same shaders. A build of only a forced target (the Windows forced
+	# CI legs) otherwise leaves <config>/shaders empty, and the GPU cells meet a missing .cso.
+	foreach(_sslm_forced_suite superslm_tests_sse2_forced superslm_tests_avx2_forced
+	                           superslm_tests_avx512_forced)
+		if(TARGET ${_sslm_forced_suite})
+			add_dependencies(${_sslm_forced_suite} superslm_gpu_shaders)
+		endif()
+	endforeach()
 
 	if(SUPERSLM_BUILD_GPU)
 		add_library(superslm_gpu STATIC

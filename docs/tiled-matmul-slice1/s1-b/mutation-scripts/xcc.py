@@ -1,0 +1,2 @@
+p='src/matmul.cpp'; s=open(p).read(); old='\t\tRunTiledGemm(tier, activations16, widened_stride, weights, num_tokens, in_channels, out_channels,\n\t\t             j_begin, j_end, out_acc);'; new='\t\tRunTiledGemm(tier, activations16, widened_stride, weights, num_tokens, in_channels, out_channels,\n\t\t             0, out_channels, out_acc);  // MUTANT XCc'
+assert s.count(old)==1, (p, s.count(old)); s=s.replace(old,new); open(p,'w').write(s)

@@ -55,6 +55,17 @@ namespace superslm_test {
 // attributable to DetectBestDotRowTier()'s own construction, not to this instrument.
 inline std::atomic<long long> g_dot_row_tier_probe_invocations{0};
 
+// Tiled-matmul plan slice 1, cell 11.1: the per-tier tiled-entry counters. src/matmul.cpp's
+// RunTiledGemm increments the counter of the tier it runs, exactly once per GEMM call that takes the
+// tiled path (never per panel or per token block), under the same macro as the probe counter above.
+// In a forced binary only the forced tier's counter can move.
+inline std::atomic<long long> g_tiled_entry_invocations_avx2{0};
+inline std::atomic<long long> g_tiled_entry_invocations_avx512{0};
+
+inline long long TiledEntryInvocationsTotal() {
+	return g_tiled_entry_invocations_avx2.load() + g_tiled_entry_invocations_avx512.load();
+}
+
 }  // namespace superslm_test
 
 #endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64

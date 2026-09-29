@@ -25,6 +25,7 @@
 #ifndef SUPERSLM_TESTS_SUPPORT_BAD_ALLOC_INJECTION_H
 #define SUPERSLM_TESTS_SUPPORT_BAD_ALLOC_INJECTION_H
 
+#include <new>
 #include <stdexcept>
 
 namespace superslm_test {
@@ -149,6 +150,19 @@ inline void ArmInjectedFaultPostLoadRegion(InjectThrowKind kind) {
 
 inline void DisarmInjectedFaultPostLoadRegion() {
 	g_inject_throw_post_load_region = InjectThrowKind::kNone;
+}
+
+// Tiled-matmul plan slice 1, cell 5.1: a single-shot slot consulted by src/matmul.cpp's tiled GEMM
+// entry, on the calling thread, before it allocates its packed-panel scratch (after the widened
+// activations). Armed, the next tiled GEMM call on this thread throws std::bad_alloc exactly as a
+// failed allocation there would, and the slot disarms itself.
+inline thread_local bool g_inject_tiled_gemm_alloc_failure = false;
+
+inline void MaybeThrowInjectedTiledGemmAllocFault() {
+	if (g_inject_tiled_gemm_alloc_failure) {
+		g_inject_tiled_gemm_alloc_failure = false;
+		throw std::bad_alloc();
+	}
 }
 
 }  // namespace superslm_test

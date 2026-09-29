@@ -26,6 +26,10 @@
 #include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <cstring>
+#include <vector>
+
+#include "bad_alloc_wrap.h"  // the tiled path's allocation-failure test seam (cell 5.1)
 
 #ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
 // T-2158 red suite test-only seam (design §10 dimensions 1/3) -- mirrors
@@ -384,6 +388,13 @@ inline DotRowTier DetectBestDotRowTier() {
 	return ResolveDotRowTierFromFields(max_basic_leaf, regs1[2], regs7[1], xcr0);
 }
 
+// The process's one cached tier (design §6.2's magic static), shared by DotRow below and by the
+// tiled GEMM's dispatch (tiled-matmul plan slice 1), so the probe still runs exactly once per process.
+inline DotRowTier CachedDotRowTier() {
+	static const DotRowTier tier = DetectBestDotRowTier();
+	return tier;
+}
+
 #endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
 
 // --- DotRow's resolution (design §6.1, fold round 3: the three x86-only force arms
@@ -405,7 +416,7 @@ inline int64_t DotRow(const int8_t* activations, const int8_t* weights, size_t i
 	return DotRowAvx512(activations, weights, in_channels);
 #endif
 #elif SUPERSLM_MATMUL_HAVE_SIMD_X64
-	static const DotRowTier tier = DetectBestDotRowTier();
+	const DotRowTier tier = CachedDotRowTier();
 	switch (tier) {
 		case DotRowTier::kAvx512:
 			return DotRowAvx512(activations, weights, in_channels);
@@ -419,6 +430,272 @@ inline int64_t DotRow(const int8_t* activations, const int8_t* weights, size_t i
 	return DotRowScalar(activations, weights, in_channels);
 #endif
 }
+
+// =================================================================================================
+// The tiled prefill GEMM (tiled-matmul plan, slice 1, §4.1-§4.5)
+// =================================================================================================
+//
+// On the AVX2 and AVX-512BW tiers, a GEMM call of kTiledMinTokens or more tokens runs a register-
+// tiled vpmaddwd kernel over weights packed per call, instead of one DotRow per (token, output) cell.
+//
+// Why the arithmetic law is unchanged (plan §4.4): every lane still adds one vpmaddwd pair product
+// (|a0*w0 + a1*w1| <= 2 * 16384 = 32768) per step and is flushed to int64 every kTiledFlushPairs =
+// 16,384 steps, which holds the int32 lane at 2^29, 4x below INT32_MAX -- the shipped tiers' own
+// kFlushBlocks bound, per lane and independent of lane count. Tiling changes only which (token,
+// output) cell a lane holds. Everything above int32 is exact int64 addition, which design §4 rules
+// order-free. So every output is bit-identical to the scalar reference.
+//
+// The pieces, all on the calling thread and all in this anonymous namespace (so no target-attributed
+// instantiation can be folded with a non-attributed copy; cell 11.3 checks the symbols are local):
+//   - activation prep: the M x K int8 activations are widened once into M x Kp int16, Kp = K rounded
+//     up to even, ZERO past K. The zero pad is part of the specification: it makes the weights' own
+//     K pad harmless (and vice versa).
+//   - the packer: 16 output rows at a time into a [Kp/2][16][2] int8 panel (one 32-byte row per
+//     k-pair), with two SSE2 8x8 16-bit transposes per 16 rows x 16 k and a scalar K tail. Output rows
+//     past the call's column range are packed as zero, and the store guard discards them.
+//   - the micro-kernels: per k-pair, one broadcast of an activation pair per token, one vpmovsxbw of
+//     the weight pair row, one vpmaddwd and one vpaddd per accumulator. Tiles: AVX2 4 tokens x 16
+//     outputs, AVX-512BW 8 tokens x 32 outputs. A token tail runs the one-row kernel.
+
+#if defined(SUPERSLM_TEST_TILED_MIN_TOKENS)
+// Test builds only (the plan's D-infinity build sets it to SIZE_MAX; cell 10.0's t100 leg to 100).
+constexpr size_t kTiledMinTokens = static_cast<size_t>(SUPERSLM_TEST_TILED_MIN_TOKENS);
+#else
+// One threshold for both tiers, chosen for AVX-512 (plan §3.1). Measured on one host: AVX-512's tile is
+// 8 tokens tall, so below 8 it runs the one-row tail kernel and loses on some shapes; from M = 8 it wins
+// on every shape. AVX2's 4-token tile already wins on every shape from M = 4, so 8 leaves AVX2 GEMMs of
+// 4-7 tokens on the shipped loop.
+constexpr size_t kTiledMinTokens = 8;
+#endif
+
+// Plan §4.5, closure (c): in MSVC and clang-cl builds the AVX-512 tier keeps the DotRow loop until
+// an MSVC AVX-512 build has executed the tiled kernel. The forced AVX-512 Windows legs build with
+// SUPERSLM_TILED_AVX512_MSVC=1; the default flips in a follow-up release once one such run exists.
+#if defined(SUPERSLM_TILED_AVX512_MSVC)
+constexpr int kTiledAvx512MsvcSwitch = SUPERSLM_TILED_AVX512_MSVC;
+#else
+constexpr int kTiledAvx512MsvcSwitch = 0;
+#endif
+#if defined(_MSC_VER)
+constexpr bool kIsMsvcBuild = true;  // MSVC and clang-cl
+#else
+constexpr bool kIsMsvcBuild = false;
+#endif
+
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+
+// The shipped tiers' flush bound, restated for the tiled kernels (see the block comment above).
+constexpr size_t kTiledFlushPairs = 16384;
+
+inline size_t TiledMin(size_t a, size_t b) { return a < b ? a : b; }
+
+// Activation prep. `a16` must hold M * kp zeroed int16 values on entry; the K pad stays zero.
+inline void TiledWidenActivations(const int8_t* activations, size_t num_tokens, size_t in_channels,
+                                  int16_t* a16, size_t kp) {
+	for (size_t t = 0; t < num_tokens; ++t) {
+		const int8_t* src = activations + t * in_channels;
+		int16_t* dst = a16 + t * kp;
+		for (size_t k = 0; k < in_channels; ++k) dst[k] = static_cast<int16_t>(src[k]);
+	}
+}
+
+// SSE2 transpose of an 8 x 8 block of 16-bit elements, each element one k-pair of one output row:
+// on entry r[i] holds pairs 0..7 of row i; on return r[q] holds pair q of rows 0..7.
+inline void TiledTranspose8x8Epi16(__m128i r[8]) {
+	const __m128i a0 = _mm_unpacklo_epi16(r[0], r[1]), a1 = _mm_unpackhi_epi16(r[0], r[1]);
+	const __m128i a2 = _mm_unpacklo_epi16(r[2], r[3]), a3 = _mm_unpackhi_epi16(r[2], r[3]);
+	const __m128i a4 = _mm_unpacklo_epi16(r[4], r[5]), a5 = _mm_unpackhi_epi16(r[4], r[5]);
+	const __m128i a6 = _mm_unpacklo_epi16(r[6], r[7]), a7 = _mm_unpackhi_epi16(r[6], r[7]);
+	const __m128i b0 = _mm_unpacklo_epi32(a0, a2), b1 = _mm_unpackhi_epi32(a0, a2);
+	const __m128i b2 = _mm_unpacklo_epi32(a1, a3), b3 = _mm_unpackhi_epi32(a1, a3);
+	const __m128i b4 = _mm_unpacklo_epi32(a4, a6), b5 = _mm_unpackhi_epi32(a4, a6);
+	const __m128i b6 = _mm_unpacklo_epi32(a5, a7), b7 = _mm_unpackhi_epi32(a5, a7);
+	r[0] = _mm_unpacklo_epi64(b0, b4);
+	r[1] = _mm_unpackhi_epi64(b0, b4);
+	r[2] = _mm_unpacklo_epi64(b1, b5);
+	r[3] = _mm_unpackhi_epi64(b1, b5);
+	r[4] = _mm_unpacklo_epi64(b2, b6);
+	r[5] = _mm_unpackhi_epi64(b2, b6);
+	r[6] = _mm_unpacklo_epi64(b3, b7);
+	r[7] = _mm_unpackhi_epi64(b3, b7);
+}
+
+// The packer: output rows [n0, n0 + 16) of the row-major [N][K] weights into dst[kp / 2][16][2].
+// Rows at or past n_end are packed as zero; so is every k at or past K (the K pad).
+inline void TiledPackPanel16(const int8_t* weights, size_t in_channels, size_t n0, size_t n_end,
+                             int8_t* dst, size_t kp) {
+	const int8_t* rows[16];
+	for (size_t i = 0; i < 16; ++i) rows[i] = (n0 + i < n_end) ? weights + (n0 + i) * in_channels : nullptr;
+	size_t k = 0;
+	if (n0 + 16 <= n_end) {  // a full panel: 16 k at a time through two 8 x 8 transposes
+		for (; k + 16 <= in_channels; k += 16) {
+			for (size_t h = 0; h < 2; ++h) {
+				__m128i r[8];
+				for (size_t i = 0; i < 8; ++i)
+					r[i] = _mm_loadu_si128(reinterpret_cast<const __m128i*>(rows[h * 8 + i] + k));
+				TiledTranspose8x8Epi16(r);
+				for (size_t q = 0; q < 8; ++q)
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(dst + (k / 2 + q) * 32 + h * 16), r[q]);
+			}
+		}
+	}
+	for (; k < kp; k += 2) {  // the K tail, a partial panel, and the K pad
+		for (size_t i = 0; i < 16; ++i) {
+			for (size_t e = 0; e < 2; ++e) {
+				const size_t kk = k + e;
+				dst[(k / 2) * 32 + i * 2 + e] = (rows[i] != nullptr && kk < in_channels) ? rows[i][kk] : 0;
+			}
+		}
+	}
+}
+
+// AVX2 micro-kernel: MR tokens x 16 outputs (one panel, two 8-lane halves). Adds each cell's exact
+// sum into acc64[m * 16 + output], which the caller zeroes.
+template <int MR>
+SUPERSLM_AVX2_TARGET inline void TiledMicroAvx2(const int16_t* a16, size_t lda, const int8_t* panel,
+                                                size_t kp, int64_t* acc64) {
+	__m256i acc[MR][2];
+	for (int m = 0; m < MR; ++m) acc[m][0] = acc[m][1] = _mm256_setzero_si256();
+	const size_t pairs = kp / 2;
+	for (size_t q0 = 0; q0 < pairs; q0 += kTiledFlushPairs) {
+		const size_t q_end = TiledMin(pairs, q0 + kTiledFlushPairs);
+		for (size_t q = q0; q < q_end; ++q) {
+			const __m256i w0 = _mm256_cvtepi8_epi16(_mm_loadu_si128(reinterpret_cast<const __m128i*>(panel + q * 32)));
+			const __m256i w1 = _mm256_cvtepi8_epi16(_mm_loadu_si128(reinterpret_cast<const __m128i*>(panel + q * 32 + 16)));
+			for (int m = 0; m < MR; ++m) {
+				int32_t pair;
+				std::memcpy(&pair, a16 + static_cast<size_t>(m) * lda + 2 * q, sizeof(pair));
+				const __m256i a = _mm256_set1_epi32(pair);
+				acc[m][0] = _mm256_add_epi32(acc[m][0], _mm256_madd_epi16(a, w0));  // widening, non-saturating
+				acc[m][1] = _mm256_add_epi32(acc[m][1], _mm256_madd_epi16(a, w1));
+			}
+		}
+		for (int m = 0; m < MR; ++m) {  // flush the window's int32 lanes into int64
+			for (int h = 0; h < 2; ++h) {
+				alignas(32) int32_t lanes[8];
+				_mm256_store_si256(reinterpret_cast<__m256i*>(lanes), acc[m][h]);
+				for (int i = 0; i < 8; ++i) acc64[m * 16 + h * 8 + i] += static_cast<int64_t>(lanes[i]);
+				acc[m][h] = _mm256_setzero_si256();
+			}
+		}
+	}
+}
+
+// AVX-512BW micro-kernel: MR tokens x 32 outputs (two consecutive panels, 16 lanes each).
+template <int MR>
+SUPERSLM_AVX512_TARGET inline void TiledMicroAvx512(const int16_t* a16, size_t lda, const int8_t* panels,
+                                                    size_t kp, int64_t* acc64) {
+	__m512i acc[MR][2];
+	for (int m = 0; m < MR; ++m) acc[m][0] = acc[m][1] = _mm512_setzero_si512();
+	const size_t pairs = kp / 2;
+	const int8_t* panel1 = panels + 16 * kp;
+	for (size_t q0 = 0; q0 < pairs; q0 += kTiledFlushPairs) {
+		const size_t q_end = TiledMin(pairs, q0 + kTiledFlushPairs);
+		for (size_t q = q0; q < q_end; ++q) {
+			const __m512i w0 = _mm512_cvtepi8_epi16(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(panels + q * 32)));
+			const __m512i w1 = _mm512_cvtepi8_epi16(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(panel1 + q * 32)));
+			for (int m = 0; m < MR; ++m) {
+				int32_t pair;
+				std::memcpy(&pair, a16 + static_cast<size_t>(m) * lda + 2 * q, sizeof(pair));
+				const __m512i a = _mm512_set1_epi32(pair);
+				acc[m][0] = _mm512_add_epi32(acc[m][0], _mm512_madd_epi16(a, w0));  // widening, non-saturating
+				acc[m][1] = _mm512_add_epi32(acc[m][1], _mm512_madd_epi16(a, w1));
+			}
+		}
+		for (int m = 0; m < MR; ++m) {  // flush the window's int32 lanes into int64
+			for (int p = 0; p < 2; ++p) {
+				alignas(64) int32_t lanes[16];
+				_mm512_store_si512(reinterpret_cast<void*>(lanes), acc[m][p]);
+				for (int i = 0; i < 16; ++i) acc64[m * 32 + p * 16 + i] += static_cast<int64_t>(lanes[i]);
+				acc[m][p] = _mm512_setzero_si512();
+			}
+		}
+	}
+}
+
+// AVX2 driver: panels of 16 outputs across [j_begin, j_end), each packed once and run against every
+// token block, so the weights stream once per call. `scratch` holds 16 * kp bytes.
+SUPERSLM_AVX2_TARGET inline void TiledGemmAvx2(const int16_t* a16, size_t kp, const int8_t* weights,
+                                               size_t num_tokens, size_t in_channels, size_t out_channels,
+                                               size_t j_begin, size_t j_end, int64_t* out_acc,
+                                               int8_t* scratch) {
+	constexpr size_t kMr = 4, kNw = 16;
+	alignas(64) int64_t acc64[kMr * kNw];
+	for (size_t n0 = j_begin; n0 < j_end; n0 += kNw) {
+		TiledPackPanel16(weights, in_channels, n0, j_end, scratch, kp);
+		for (size_t t0 = 0; t0 < num_tokens; t0 += kMr) {
+			const size_t mr = TiledMin(kMr, num_tokens - t0);
+			std::memset(acc64, 0, sizeof(acc64));
+			if (mr == kMr) {
+				TiledMicroAvx2<4>(a16 + t0 * kp, kp, scratch, kp, acc64);
+			} else {
+				for (size_t r = 0; r < mr; ++r) TiledMicroAvx2<1>(a16 + (t0 + r) * kp, kp, scratch, kp, acc64 + r * kNw);
+			}
+			for (size_t r = 0; r < mr; ++r) {
+				for (size_t i = 0; i < kNw; ++i) {
+					const size_t n = n0 + i;
+					if (n < j_end) out_acc[(t0 + r) * out_channels + n] = acc64[r * kNw + i];  // the store guard
+				}
+			}
+		}
+	}
+}
+
+// AVX-512BW driver: as the AVX2 driver, with 32-output panel pairs and 8-token blocks. `scratch`
+// holds 32 * kp bytes.
+SUPERSLM_AVX512_TARGET inline void TiledGemmAvx512(const int16_t* a16, size_t kp, const int8_t* weights,
+                                                   size_t num_tokens, size_t in_channels,
+                                                   size_t out_channels, size_t j_begin, size_t j_end,
+                                                   int64_t* out_acc, int8_t* scratch) {
+	constexpr size_t kMr = 8, kNw = 32;
+	alignas(64) int64_t acc64[kMr * kNw];
+	for (size_t n0 = j_begin; n0 < j_end; n0 += kNw) {
+		TiledPackPanel16(weights, in_channels, n0, j_end, scratch, kp);
+		TiledPackPanel16(weights, in_channels, n0 + 16, j_end, scratch + 16 * kp, kp);
+		for (size_t t0 = 0; t0 < num_tokens; t0 += kMr) {
+			const size_t mr = TiledMin(kMr, num_tokens - t0);
+			std::memset(acc64, 0, sizeof(acc64));
+			if (mr == kMr) {
+				TiledMicroAvx512<8>(a16 + t0 * kp, kp, scratch, kp, acc64);
+			} else {
+				for (size_t r = 0; r < mr; ++r) TiledMicroAvx512<1>(a16 + (t0 + r) * kp, kp, scratch, kp, acc64 + r * kNw);
+			}
+			for (size_t r = 0; r < mr; ++r) {
+				for (size_t i = 0; i < kNw; ++i) {
+					const size_t n = n0 + i;
+					if (n < j_end) out_acc[(t0 + r) * out_channels + n] = acc64[r * kNw + i];  // the store guard
+					else break;  // n only grows. The early exit keeps GCC from if-converting the guard into
+					             // AVX-512 mask-register code (vpcmpuq, kmovw), which the fp-free scan rejects.
+				}
+			}
+		}
+	}
+}
+
+// Runs the tiled kernel of `tier` (kAvx2 or kAvx512) over pre-widened activations. The packed-panel
+// scratch is allocated here, on the calling thread; an allocation failure throws std::bad_alloc to
+// the caller before any output is written.
+inline void RunTiledGemm(detail::GemmTier tier, const int16_t* a16, size_t kp, const int8_t* weights,
+                         size_t num_tokens, size_t in_channels, size_t out_channels, size_t j_begin,
+                         size_t j_end, int64_t* out_acc) {
+	internal::MaybeThrowInjectedTiledGemmAllocFault();  // test seam (cell 5.1); empty in production
+	const bool avx512 = tier == detail::GemmTier::kAvx512;
+	std::vector<int8_t> scratch((avx512 ? 32 : 16) * kp);
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+	// Cell 11.1: one count per GEMM call that runs the tiled kernel, on that tier's own counter.
+	(avx512 ? superslm_test::g_tiled_entry_invocations_avx512 : superslm_test::g_tiled_entry_invocations_avx2)
+	    .fetch_add(1, std::memory_order_relaxed);
+#endif
+	if (avx512) {
+		TiledGemmAvx512(a16, kp, weights, num_tokens, in_channels, out_channels, j_begin, j_end, out_acc,
+		                scratch.data());
+	} else {
+		TiledGemmAvx2(a16, kp, weights, num_tokens, in_channels, out_channels, j_begin, j_end, out_acc,
+		              scratch.data());
+	}
+}
+
+#endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
 
 }  // namespace
 
@@ -508,7 +785,79 @@ void GemmInt8Accumulate(const int8_t* activations, const int8_t* weights,
 	// cell's own accumulation order changes (DotRow's k-ascending reduction is untouched), only
 	// which cells are visited in which order, so this is a pure traversal restructuring with
 	// zero new arithmetic (D-SLM3488's own "no new arithmetic" ruling).
-	for (size_t j = 0; j < out_channels; ++j) {
+	//
+	// Tiled-matmul plan slice 1 (§4.3): the loop lives in the column-range entry below, which this
+	// function calls over the whole range.
+	detail::GemmInt8AccumulateCols(activations, weights, num_tokens, in_channels, out_channels, 0,
+	                               out_channels, out_acc);
+}
+
+namespace detail {
+
+size_t TiledMinTokens() { return kTiledMinTokens; }
+
+GemmPath SelectGemmPath(GemmTier tier, size_t num_tokens, int msvc_avx512_switch,
+                        bool is_msvc_build) {
+	if (num_tokens < kTiledMinTokens) return GemmPath::kDotRowLoop;
+	switch (tier) {
+		case GemmTier::kAvx2:
+			return GemmPath::kTiled;
+		case GemmTier::kAvx512:
+			// Plan §4.5: off in MSVC and clang-cl builds until executed there.
+			return (is_msvc_build && msvc_avx512_switch == 0) ? GemmPath::kDotRowLoop : GemmPath::kTiled;
+		case GemmTier::kScalar:
+		case GemmTier::kSse2:
+			break;
+	}
+	return GemmPath::kDotRowLoop;
+}
+
+GemmPath DispatchGemmPath(GemmTier tier, size_t num_tokens) {
+	return SelectGemmPath(tier, num_tokens, kTiledAvx512MsvcSwitch, kIsMsvcBuild);
+}
+
+GemmTier ActiveGemmTier() {
+#if defined(SUPERSLM_FORCE_SCALAR_MATMUL)
+	return GemmTier::kScalar;
+#elif defined(SUPERSLM_FORCE_SSE2_MATMUL)
+	return GemmTier::kSse2;
+#elif defined(SUPERSLM_FORCE_AVX2_MATMUL)
+	return GemmTier::kAvx2;
+#elif defined(SUPERSLM_FORCE_AVX512_MATMUL)
+	return GemmTier::kAvx512;
+#elif SUPERSLM_MATMUL_HAVE_SIMD_X64
+	switch (CachedDotRowTier()) {
+		case DotRowTier::kAvx512: return GemmTier::kAvx512;
+		case DotRowTier::kAvx2: return GemmTier::kAvx2;
+		case DotRowTier::kSse2: break;
+	}
+	return GemmTier::kSse2;
+#else
+	return GemmTier::kScalar;
+#endif
+}
+
+void GemmInt8AccumulateCols(const int8_t* activations, const int8_t* weights, size_t num_tokens,
+                            size_t in_channels, size_t out_channels, size_t j_begin, size_t j_end,
+                            int64_t* out_acc) {
+	assert(num_tokens > 0 && "GemmInt8AccumulateCols: num_tokens must be >= 1");
+	assert(j_begin <= j_end && j_end <= out_channels &&
+	       "GemmInt8AccumulateCols: column range outside [0, out_channels]");
+	if (j_begin == j_end) return;
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+	const GemmTier tier = ActiveGemmTier();
+	if (DispatchGemmPath(tier, num_tokens) == GemmPath::kTiled) {
+		const size_t kp = (in_channels + 1) / 2 * 2;
+		std::vector<int16_t> a16(num_tokens * kp);  // value-initialised: the K pad is zero
+		TiledWidenActivations(activations, num_tokens, in_channels, a16.data(), kp);
+		RunTiledGemm(tier, a16.data(), kp, weights, num_tokens, in_channels, out_channels, j_begin, j_end,
+		             out_acc);
+		return;
+	}
+#endif
+	// The one-cell-at-a-time loop: below kTiledMinTokens, on the scalar and SSE2 tiers, and on the
+	// MSVC AVX-512 tier while its switch is off.
+	for (size_t j = j_begin; j < j_end; ++j) {
 		const int8_t* const weight_row = weights + j * in_channels;  // read ONCE per chunk here,
 		                                                              // held cache-resident across
 		                                                              // every token below
@@ -517,6 +866,43 @@ void GemmInt8Accumulate(const int8_t* activations, const int8_t* weights,
 		}
 	}
 }
+
+void GemmInt8AccumulateColsWidened(const int16_t* activations16, size_t widened_stride,
+                                   const int8_t* weights, size_t num_tokens, size_t in_channels,
+                                   size_t out_channels, size_t j_begin, size_t j_end,
+                                   int64_t* out_acc) {
+	assert(num_tokens > 0 && "GemmInt8AccumulateColsWidened: num_tokens must be >= 1");
+	assert(widened_stride >= in_channels && widened_stride % 2 == 0 &&
+	       "GemmInt8AccumulateColsWidened: stride must be in_channels rounded up to even");
+	assert(j_begin <= j_end && j_end <= out_channels &&
+	       "GemmInt8AccumulateColsWidened: column range outside [0, out_channels]");
+	if (j_begin == j_end) return;
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+	const GemmTier tier = ActiveGemmTier();
+	if (DispatchGemmPath(tier, num_tokens) == GemmPath::kTiled) {
+		RunTiledGemm(tier, activations16, widened_stride, weights, num_tokens, in_channels, out_channels,
+		             j_begin, j_end, out_acc);
+		return;
+	}
+#endif
+	// The one-cell-at-a-time loop reads int8 rows, so the widened rows are narrowed back first.
+	// Exact: every value came from an int8 (the header's contract).
+	std::vector<int8_t> narrowed(num_tokens * in_channels);
+	for (size_t t = 0; t < num_tokens; ++t) {
+		for (size_t k = 0; k < in_channels; ++k) {
+			narrowed[t * in_channels + k] = static_cast<int8_t>(activations16[t * widened_stride + k]);
+		}
+	}
+	for (size_t j = j_begin; j < j_end; ++j) {
+		const int8_t* const weight_row = weights + j * in_channels;
+		for (size_t t = 0; t < num_tokens; ++t) {
+			out_acc[t * out_channels + j] =
+			    DotRow(narrowed.data() + t * in_channels, weight_row, in_channels);
+		}
+	}
+}
+
+}  // namespace detail
 
 void NarrowAccumulatorToI32(const int64_t* wide_row, size_t n, int32_t* out_i32) {
 	// The ONLY narrowing point (design §3/§4). Caller-ensures convention: UB if the
@@ -548,3 +934,97 @@ void GemmProbQ15Accumulate(const int64_t* probs, const int8_t* values, size_t wi
 }
 
 }  // namespace superslm
+
+// ---- Build-configuration record (tiled-matmul plan slice 1; cell 10.0 E3 and the Q1 B5 record) ----
+// One constant, in this object, so that every binary linking the engine's GEMM carries the configuration the
+// compiler actually compiled: the tier-deciding macros, the force macros, the tiled threshold and the
+// compiler's optimisation and assertion state, each as seen here, at the end of the translation unit. A reader
+// (tools/consumer_reach/route_e/buildcfg_record.py) finds it by its fixed marker. Encoding: "D:<value after
+// expansion>" when defined, "U" when not, so no value a macro can take collides with "undefined". Nothing
+// reads it at run time, and it is a diagnosis, not a gate: the gate is the code identity of the linked engine.
+// It is the one external symbol this object adds (cell 11.3's single exception).
+#define SUPERSLM_BUILDCFG_STR2(x) #x
+#define SUPERSLM_BUILDCFG_STR(x) SUPERSLM_BUILDCFG_STR2(x)
+#ifdef SUPERSLM_FORCE_SCALAR_MATMUL
+#define SUPERSLM_BUILDCFG_F0 "FORCE_SCALAR=D:" SUPERSLM_BUILDCFG_STR(SUPERSLM_FORCE_SCALAR_MATMUL) ";"
+#else
+#define SUPERSLM_BUILDCFG_F0 "FORCE_SCALAR=U;"
+#endif
+#ifdef SUPERSLM_FORCE_SSE2_MATMUL
+#define SUPERSLM_BUILDCFG_F1 "FORCE_SSE2=D:" SUPERSLM_BUILDCFG_STR(SUPERSLM_FORCE_SSE2_MATMUL) ";"
+#else
+#define SUPERSLM_BUILDCFG_F1 "FORCE_SSE2=U;"
+#endif
+#ifdef SUPERSLM_FORCE_AVX2_MATMUL
+#define SUPERSLM_BUILDCFG_F2 "FORCE_AVX2=D:" SUPERSLM_BUILDCFG_STR(SUPERSLM_FORCE_AVX2_MATMUL) ";"
+#else
+#define SUPERSLM_BUILDCFG_F2 "FORCE_AVX2=U;"
+#endif
+#ifdef SUPERSLM_FORCE_AVX512_MATMUL
+#define SUPERSLM_BUILDCFG_F3 "FORCE_AVX512=D:" SUPERSLM_BUILDCFG_STR(SUPERSLM_FORCE_AVX512_MATMUL) ";"
+#else
+#define SUPERSLM_BUILDCFG_F3 "FORCE_AVX512=U;"
+#endif
+#ifdef SUPERSLM_TEST_TILED_MIN_TOKENS
+#define SUPERSLM_BUILDCFG_F4 "TILED_MIN_TOKENS=D:" SUPERSLM_BUILDCFG_STR(SUPERSLM_TEST_TILED_MIN_TOKENS) ";"
+#else
+#define SUPERSLM_BUILDCFG_F4 "TILED_MIN_TOKENS=U;"
+#endif
+#ifdef SUPERSLM_TILED_AVX512_MSVC
+#define SUPERSLM_BUILDCFG_F5 "TILED_AVX512_MSVC=D:" SUPERSLM_BUILDCFG_STR(SUPERSLM_TILED_AVX512_MSVC) ";"
+#else
+#define SUPERSLM_BUILDCFG_F5 "TILED_AVX512_MSVC=U;"
+#endif
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+#define SUPERSLM_BUILDCFG_F6 "DISPATCH_INSTRUMENT=D:" SUPERSLM_BUILDCFG_STR(SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT) ";"
+#else
+#define SUPERSLM_BUILDCFG_F6 "DISPATCH_INSTRUMENT=U;"
+#endif
+#ifdef SUPERSLM_MATMUL_HAVE_SIMD_X64
+#define SUPERSLM_BUILDCFG_F7 "HAVE_SIMD_X64=D:" SUPERSLM_BUILDCFG_STR(SUPERSLM_MATMUL_HAVE_SIMD_X64) ";"
+#else
+#define SUPERSLM_BUILDCFG_F7 "HAVE_SIMD_X64=U;"
+#endif
+#ifdef __OPTIMIZE__
+#define SUPERSLM_BUILDCFG_F8 "OPTIMIZE=D:" SUPERSLM_BUILDCFG_STR(__OPTIMIZE__) ";"
+#else
+#define SUPERSLM_BUILDCFG_F8 "OPTIMIZE=U;"
+#endif
+#ifdef __OPTIMIZE_SIZE__
+#define SUPERSLM_BUILDCFG_F9 "OPTIMIZE_SIZE=D:" SUPERSLM_BUILDCFG_STR(__OPTIMIZE_SIZE__) ";"
+#else
+#define SUPERSLM_BUILDCFG_F9 "OPTIMIZE_SIZE=U;"
+#endif
+#ifdef NDEBUG
+#define SUPERSLM_BUILDCFG_F10 "NDEBUG=D:" SUPERSLM_BUILDCFG_STR(NDEBUG) ";"
+#else
+#define SUPERSLM_BUILDCFG_F10 "NDEBUG=U;"
+#endif
+#ifdef _DEBUG
+#define SUPERSLM_BUILDCFG_F11 "DEBUG=D:" SUPERSLM_BUILDCFG_STR(_DEBUG) ";"
+#else
+#define SUPERSLM_BUILDCFG_F11 "DEBUG=U;"
+#endif
+// Kept through the consumer's link, including --gc-sections: `retain`
+// where the compiler has it (GCC 11+, Clang 13+), and a linker /INCLUDE on MSVC (so /OPT:REF keeps it).
+#if defined(__has_attribute)
+#if __has_attribute(retain)
+#define SUPERSLM_BUILDCFG_USED __attribute__((used, retain))
+#endif
+#endif
+#if !defined(SUPERSLM_BUILDCFG_USED) && defined(__GNUC__)
+#define SUPERSLM_BUILDCFG_USED __attribute__((used))
+#endif
+#if defined(_MSC_VER)
+#if defined(_M_IX86)
+#pragma comment(linker, "/INCLUDE:_superslm_build_config_record")
+#else
+#pragma comment(linker, "/INCLUDE:superslm_build_config_record")
+#endif
+#endif
+#ifndef SUPERSLM_BUILDCFG_USED
+#define SUPERSLM_BUILDCFG_USED
+#endif
+extern "C" SUPERSLM_BUILDCFG_USED const char superslm_build_config_record[] =
+    "SSLM-BUILDCFG/2{" SUPERSLM_BUILDCFG_F0 SUPERSLM_BUILDCFG_F1 SUPERSLM_BUILDCFG_F2 SUPERSLM_BUILDCFG_F3 SUPERSLM_BUILDCFG_F4 SUPERSLM_BUILDCFG_F5
+    SUPERSLM_BUILDCFG_F6 SUPERSLM_BUILDCFG_F7 SUPERSLM_BUILDCFG_F8 SUPERSLM_BUILDCFG_F9 SUPERSLM_BUILDCFG_F10 SUPERSLM_BUILDCFG_F11 "}";

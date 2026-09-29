@@ -1,0 +1,12 @@
+# Plan §11.R steps 1-5 run once against the v1.9.0 base (the plan's R11, re-taken on the 1.9.0 base).
+# Engine: a clone of this repository at tag v1.9.0 (d870d27). Consumer: SuperEmbedder 1ee74bf via git archive,
+# superslm.lock replaced by "tag=v1.9.0". Pin tool: the consumer's own tools/pin-superslm/pin_superslm.py
+# --source <engine clone> --keep-workdir. Configure: cmake -G Ninja -DCMAKE_BUILD_TYPE=Release
+# -DCMAKE_PREFIX_PATH=<prefix>, every guard active. Build: ninja superembedder semb. Host: the 4-vCPU cloud
+# host, shared with another agent's experiments (times are wall clock, noisy).
+pin tool: exit 0, 21.5 s; lock written: tag=v1.9.0, commit=d870d27863c73afb0d558b376f5e8ad84f83951c,
+          tree=2e7247e8b1c279f33d92faee9cea38d93c1b279b8376cb3c6841fb3c9b1eb7d9
+configure: exit 0
+  -- SuperSLM engine pin verified: 1.9.0 @ d870d27863c73afb0d558b376f5e8ad84f83951c (engine_tree_sha=2e7247e8b1c279f33d92faee9cea38d93c1b279b8376cb3c6841fb3c9b1eb7d9)
+  -- Toolchain pin verified: GNU 13.3.0 (frontend=GNU)
+build (superembedder, semb): exit 0; configure + build 14.6 s

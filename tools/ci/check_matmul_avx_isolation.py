@@ -3,9 +3,14 @@
 t2149-avx-kernel-design-2026-08-18.md §6.4, §10 dimension 7 item (d), D-SLM3510;
 red-suite realization: Claude/Curie/t2158-t2149-avx-red-suite-2026-08-18.md).
 
-The design's own claim: `DotRowAvx2`/`DotRowAvx512` (src/matmul.cpp) are the ONLY two
-functions in the whole project that may compile with AVX2/AVX-512 instructions enabled,
-via GCC/Clang's per-function `__attribute__((target("avx2")))` /
+The design's own claim: the per-function-attributed AVX2/AVX-512 functions of src/matmul.cpp
+are the ONLY functions in the whole project that may compile with AVX2/AVX-512 instructions
+enabled. Since the tiled-matmul plan's slice 1 they are `DotRowAvx2` and `DotRowAvx512`
+(the shipped per-row tiers) plus the tiled kernel's `TiledMicroAvx2`, `TiledMicroAvx512`,
+`TiledGemmAvx2` and `TiledGemmAvx512` (all in the anonymous namespace). The packer
+(`TiledPackPanel16`, `TiledTranspose8x8Epi16`) and the activation prep
+(`TiledWidenActivations`) are baseline SSE2 and carry no target attribute. All of them use
+GCC/Clang's per-function `__attribute__((target("avx2")))` /
 `__attribute__((target("avx512f,avx512bw")))` mechanism -- never via a translation-unit-
 wide compiler flag (`-mavx2`, `-mavx512*` on GCC/Clang; `/arch:AVX2`, `/arch:AVX512*` on
 MSVC/ClangCL). A TU-wide flag on the matmul target (or any target compiling
@@ -689,8 +694,10 @@ def main(argv: list[str]) -> int:
     if hits:
         sys.stderr.write(
             "check_matmul_avx_isolation: FAIL -- {} translation-unit-wide AVX-family "
-            "compile flag(s) found. design §6.4's isolation claim is that ONLY "
-            "DotRowAvx2/DotRowAvx512 (src/matmul.cpp) may use AVX2/AVX-512 instructions, "
+            "compile flag(s) found. design §6.4's isolation claim is that ONLY the "
+            "per-function-attributed functions of src/matmul.cpp (DotRowAvx2, DotRowAvx512, "
+            "TiledMicroAvx2, TiledMicroAvx512, TiledGemmAvx2, TiledGemmAvx512) may use "
+            "AVX2/AVX-512 instructions, "
             "via a per-function __attribute__((target(\"...\"))) -- never a TU-wide "
             "flag (any spelling, any channel), which would let the compiler use those "
             "instructions anywhere else in the same translation unit and reopen the "

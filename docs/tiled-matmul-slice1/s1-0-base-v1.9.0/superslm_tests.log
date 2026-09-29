@@ -1,0 +1,9 @@
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 acceptance gate (hidden_size_1536_qwen2_5_1_5b): max |error| = 815.953125, mean |error| = 491.384033, output_scale = 1635.196899 (D'=207670), per-case bound (0.5x) = 817.598450 -- asserted (F2, S-HARDEN-4)
+S2.5 acceptance gate (hidden_size_960_smollm2_360m): max |error| = 1095.582764, mean |error| = 509.720306, output_scale = 2301.417236 (D'=292280), per-case bound (0.5x) = 1150.708618 -- asserted (F2, S-HARDEN-4)
+S2.5 acceptance gate (intermediate_size_8960_qwen2_5_1_5b): max |error| = 2111.343750, mean |error| = 968.023438, output_scale = 5106.708496 (D'=648552), per-case bound (0.5x) = 2553.354248 -- asserted (F2, S-HARDEN-4)
+S2.5 acceptance gate (intermediate_size_2560_smollm2_360m): max |error| = 1221.062500, mean |error| = 623.984375, output_scale = 3324.377930 (D'=422196), per-case bound (0.5x) = 1662.188965 -- asserted (F2, S-HARDEN-4)
+S2.5 acceptance gate (synthetic_unaligned_length_777): max |error| = 429.306641, mean |error| = 252.479818, output_scale = 1306.149658 (D'=165881), per-case bound (0.5x) = 653.074829 -- asserted (F2, S-HARDEN-4)
+S2.5 acceptance gate (synthetic_unaligned_length_4095): max |error| = 1810.968750, mean |error| = 911.093750, output_scale = 4263.740234 (D'=541495), per-case bound (0.5x) = 2131.870117 -- asserted (F2, S-HARDEN-4)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+superslm tests: 25299 checks, 0 failures

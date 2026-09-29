@@ -1,0 +1,87 @@
+# Cell 10.0 route E on the slice-1 candidate (98c3379 tagged v1.9.0 in a scratch clone), SuperEmbedder 1ee74bf,
+# artifact: synthetic Qwen2.5-0.5B width, 1 layer. Runner: tools/consumer_reach/route_e/run_route_e_slice1.sh.
+# Leg c's expectation in the runner as first run was 'FAIL:E3' (the stand-in's); the real kernel never tiles on
+# the forced scalar tier, so E6 also fails. The expectation is corrected to FAIL:E3,E6 and leg c regraded below.
+
+reference: commit 98c33797cb5a9c90172ef3869ceb24aa72bf359f, version 1.9.0; code_sha256 production 75fc9a84a02c5d63, d_inf 07650c87c72cfbd1
+host: Intel(R) Xeon(R) Processor @ 2.10GHz; g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+== leg i: tag=v1.9.0 CXXFLAGS='-DSUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT -I<S>/leg-i/work/src/tests'
+   rc: pin=0 configure=0 build=0 tool=0 | wall 46 s
+   engine pin verified: 1.9.0 @ 98c33797cb5a9c90172ef3869ceb24aa72bf359f (engine_tr
+   tool: encode: tokens_reaching_gemm=28 status=0 tiled_entries=7
+   tool: encode: tokens_reaching_gemm=276 status=0 tiled_entries=7
+== leg ii: tag=v1.9.0 CXXFLAGS='-DSUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT -I<S>/leg-ii/work/src/tests -DSUPERSLM_TEST_TILED_MIN_TOKENS=SIZE_MAX'
+   rc: pin=0 configure=0 build=0 tool=0 | wall 41 s
+   engine pin verified: 1.9.0 @ 98c33797cb5a9c90172ef3869ceb24aa72bf359f (engine_tr
+   tool: encode: tokens_reaching_gemm=28 status=0 tiled_entries=0
+   tool: encode: tokens_reaching_gemm=276 status=0 tiled_entries=0
+== leg c: tag=v1.9.0 CXXFLAGS='-DSUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT -I<S>/leg-c/work/src/tests -DSUPERSLM_FORCE_SCALAR_MATMUL'
+   rc: pin=0 configure=0 build=0 tool=0 | wall 48 s
+   engine pin verified: 1.9.0 @ 98c33797cb5a9c90172ef3869ceb24aa72bf359f (engine_tr
+   tool: encode: tokens_reaching_gemm=28 status=0 tiled_entries=0
+   tool: encode: tokens_reaching_gemm=276 status=0 tiled_entries=0
+== leg a: tag=v1.9.0 CXXFLAGS=''
+   rc: pin=0 configure=0 build=0 tool=0 | wall 41 s
+   engine pin verified: 1.9.0 @ 98c33797cb5a9c90172ef3869ceb24aa72bf359f (engine_tr
+   tool: encode: tokens_reaching_gemm=28 status=0 tiled_entries=0
+   tool: encode: tokens_reaching_gemm=276 status=0 tiled_entries=0
+
+== grading (route_e_check.py; E3 is code identity against the reference engine)
+-- leg i graded as production (expected PASS; got PASS): as-expected
+  E1 pin line  pass  SuperSLM engine pin verified: 1.9.0 @ 98c33797cb5a9c90172ef3869ceb24aa72bf359f
+  E2 lock      pass  commit=98c33797cb5a9c90172ef3869ceb24aa72bf359f
+  E3 code      pass  the engine linked by semb, route_e_reach is the reference engine (code_sha256 75fc9a84a02c5d63)
+  E3-record    (diagnosis, not graded)  embedded record equals the reference in semb, route_e_reach
+  E4 seam      pass  seam header in provenance
+  E5 opens     pass  open: ok hidden=896 layers=1 vocab=256 context_cap=2048
+  E6 reach     pass  M=28: 7, M=276: 7
+  => graded as 'production': PASS
+-- leg ii graded as d_inf (expected FAIL:E6; got FAIL:E6): as-expected
+  E1 pin line  pass  SuperSLM engine pin verified: 1.9.0 @ 98c33797cb5a9c90172ef3869ceb24aa72bf359f
+  E2 lock      pass  commit=98c33797cb5a9c90172ef3869ceb24aa72bf359f
+  E3 code      pass  the engine linked by semb, route_e_reach is the reference engine (code_sha256 07650c87c72cfbd1)
+  E3-record    (diagnosis, not graded)  embedded record equals the reference in semb, route_e_reach
+  E4 seam      pass  seam header in provenance
+  E5 opens     pass  open: ok hidden=896 layers=1 vocab=256 context_cap=2048
+  E6 reach     FAIL  M=28: 0, M=276: 0
+  => graded as 'd_inf': FAIL
+-- leg ii graded as production (expected FAIL:E3,E6; got FAIL:E3,E6): as-expected
+  E1 pin line  pass  SuperSLM engine pin verified: 1.9.0 @ 98c33797cb5a9c90172ef3869ceb24aa72bf359f
+  E2 lock      pass  commit=98c33797cb5a9c90172ef3869ceb24aa72bf359f
+  E3 code      FAIL  semb links leg-ii/eng/lib/libsuperslm.a, 1 of 17 objects differ: matmul.cpp.o; route_e_reach links leg-ii/eng/lib/libsuperslm.a, 1 of 17 objects differ: matmul.cpp.o
+  E3-record    (diagnosis, not graded)  record differs from the reference: TILED_MIN_TOKENS=D:(18446744073709551615UL) (reference U)
+  E4 seam      pass  seam header in provenance
+  E5 opens     pass  open: ok hidden=896 layers=1 vocab=256 context_cap=2048
+  E6 reach     FAIL  M=28: 0, M=276: 0
+  => graded as 'production': FAIL
+-- leg c graded as production (expected FAIL:E3; got FAIL:E3,E6): UNEXPECTED
+  E1 pin line  pass  SuperSLM engine pin verified: 1.9.0 @ 98c33797cb5a9c90172ef3869ceb24aa72bf359f
+  E2 lock      pass  commit=98c33797cb5a9c90172ef3869ceb24aa72bf359f
+  E3 code      FAIL  semb links leg-c/eng/lib/libsuperslm.a, 2 of 17 objects differ: forward_sites.cpp.o, matmul.cpp.o; route_e_reach links leg-c/eng/lib/libsuperslm.a, 2 of 17 objects differ: forward_sites.cpp.o, matmul.cpp.o
+  E3-record    (diagnosis, not graded)  record differs from the reference: FORCE_SCALAR=D:1 (reference U)
+  E4 seam      pass  seam header in provenance
+  E5 opens     pass  open: ok hidden=896 layers=1 vocab=256 context_cap=2048
+  E6 reach     FAIL  M=28: 0, M=276: 0
+  => graded as 'production': FAIL
+-- leg a graded as production (expected FAIL:E3,E4,E6; got FAIL:E3,E4,E6): as-expected
+  E1 pin line  pass  SuperSLM engine pin verified: 1.9.0 @ 98c33797cb5a9c90172ef3869ceb24aa72bf359f
+  E2 lock      pass  commit=98c33797cb5a9c90172ef3869ceb24aa72bf359f
+  E3 code      FAIL  semb links leg-a/eng/lib/libsuperslm.a, 1 of 17 objects differ: matmul.cpp.o; route_e_reach links leg-a/eng/lib/libsuperslm.a, 1 of 17 objects differ: matmul.cpp.o
+  E3-record    (diagnosis, not graded)  record differs from the reference: DISPATCH_INSTRUMENT=U (reference D:1)
+  E4 seam      FAIL  seam header absent
+  E5 opens     pass  open: ok hidden=896 layers=1 vocab=256 context_cap=2048
+  E6 reach     FAIL  M=28: 0, M=276: 0
+  => graded as 'production': FAIL
+
+CELL 10.0 route E (slice 1): RED -- 1 grading(s) not as expected
+
+== regrade of leg c against the corrected expectation (FAIL:E3,E6): as-expected
+  E1 pin line  pass  SuperSLM engine pin verified: 1.9.0 @ 98c33797cb5a9c90172ef3869ceb24aa72bf359f
+  E2 lock      pass  commit=98c33797cb5a9c90172ef3869ceb24aa72bf359f
+  E3 code      FAIL  semb links leg-c/eng/lib/libsuperslm.a, 2 of 17 objects differ: forward_sites.cpp.o, matmul.cpp.o; route_e_reach links leg-c/eng/lib/libsuperslm.a, 2 of 17 objects differ: forward_sites.cpp.o, matmul.cpp.o
+  E3-record    (diagnosis, not graded)  record differs from the reference: FORCE_SCALAR=D:1 (reference U)
+  E4 seam      pass  seam header in provenance
+  E5 opens     pass  open: ok hidden=896 layers=1 vocab=256 context_cap=2048
+  E6 reach     FAIL  M=28: 0, M=276: 0
+  => graded as 'production': FAIL
+CELL 10.0 route E (slice 1): GREEN after the corrected expectation

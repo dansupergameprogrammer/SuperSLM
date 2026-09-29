@@ -1,0 +1,17 @@
+intree_plain ids:8:128 layers=8: before c6e7385a03bfc3f0 after c6e7385a03bfc3f0 after(seam) c6e7385a03bfc3f0 EQUAL tiled_entries=56 (AVX2 0, AVX-512 56) bytes=16576
+intree_plain ids:20:128 layers=8: before 807fe3daabdd00b0 after 807fe3daabdd00b0 after(seam) 807fe3daabdd00b0 EQUAL tiled_entries=56 (AVX2 0, AVX-512 56) bytes=16576
+intree_plain ids:48:128 layers=8: before add04c1dbce3ccb1 after add04c1dbce3ccb1 after(seam) add04c1dbce3ccb1 EQUAL tiled_entries=56 (AVX2 0, AVX-512 56) bytes=16576
+intree ids:20:128 layers=8: before 30580f3f4857d8cf after 30580f3f4857d8cf after(seam) 30580f3f4857d8cf EQUAL tiled_entries=56 (AVX2 0, AVX-512 56) bytes=16576
+wide_l8 ids:8 layers=8: before 6e90beb857d68d4b after 6e90beb857d68d4b after(seam) 6e90beb857d68d4b EQUAL tiled_entries=56 (AVX2 0, AVX-512 56) bytes=4194720
+wide_l8 ids:32 layers=8: before b09a276c569e8787 after b09a276c569e8787 after(seam) b09a276c569e8787 EQUAL tiled_entries=56 (AVX2 0, AVX-512 56) bytes=4194720
+wide_l8 ids:128 layers=8: before 993fb29d652ecaf4 after 993fb29d652ecaf4 after(seam) 993fb29d652ecaf4 EQUAL tiled_entries=56 (AVX2 0, AVX-512 56) bytes=4194720
+intree_plain ids:20:128 forced AVX2: 807fe3daabdd00b0 EQUAL-to-before tiled_entries=56 (AVX2 56, AVX-512 0)
+wide_l8 ids:32 forced AVX2: b09a276c569e8787 EQUAL-to-before tiled_entries=56 (AVX2 56, AVX-512 0)
+wide_l8 ids:128 forced AVX2: 993fb29d652ecaf4 EQUAL-to-before tiled_entries=56 (AVX2 56, AVX-512 0)
+p05_l1 ids:8: 32d872f020c0d634 after=EQUAL avx2=EQUAL
+p05_l1 ids:32: 9578ee3794d777d2 after=EQUAL avx2=EQUAL
+p05_l1 ids:128: 3e1c79d437372e8c after=EQUAL avx2=EQUAL
+p05_l2 ids:8 blob EQUAL
+p05_l2 ids:128 blob EQUAL
+p06_l1 ids:8 blob EQUAL
+p06_l1 ids:128 blob EQUAL

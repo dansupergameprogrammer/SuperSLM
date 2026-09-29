@@ -4,6 +4,19 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+On the AVX2 and AVX-512 tiers, a prefill GEMM of 8 or more tokens now runs a register-tiled
+kernel over weights packed per call, instead of one dot product per output cell. Outputs are
+bit-identical to the scalar reference and to 1.9.0: same tokens, same save blobs, same digest.
+Engine level, on one cloud host: one layer of batched prefill at Qwen2.5-0.5B and Qwen3-0.6B
+width runs about 1.5x-1.6x faster at 128 tokens, on both AVX2 and AVX-512. A single GEMM is
+1.7x-3.0x faster on AVX2 and 1.6x-4.3x on AVX-512, about 2x at 32 tokens; the top of each range
+comes from 512-token GEMMs where the shipped kernel itself slows down (docs/platform-support.md).
+These are engine figures, not a consumer's end-to-end figure. Decode, prefills under 8 tokens, and the scalar and SSE2 tiers are unchanged. MSVC and
+clang-cl builds keep the AVX-512 tier on the shipped kernel until the tiled one has executed
+there; `SUPERSLM_TILED_AVX512_MSVC=1` turns it on. A GEMM call on the tiled path allocates a
+per-call packing buffer; an allocation failure there surfaces through the existing
+`SSLM_ALLOCATION_FAILED` status, with no state committed. No ABI, format or status change.
+
 ## [1.9.0] - 2026-09-25
 
 `sslm_seq_save` writes a new save format, `SSB5`: the `SSB4` layout with the four per-site

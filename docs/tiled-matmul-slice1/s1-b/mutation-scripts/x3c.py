@@ -1,0 +1,2 @@
+p='src/matmul.cpp'; s=open(p).read(); old='\t\tTiledPackPanel16(weights, in_channels, n0, j_end, scratch, kp);\n\t\tTiledPackPanel16(weights, in_channels, n0 + 16, j_end, scratch + 16 * kp, kp);'; new='\t\tTiledPackPanel16(weights, in_channels, n0 + 16, j_end, scratch, kp);  // MUTANT X3c\n\t\tTiledPackPanel16(weights, in_channels, n0, j_end, scratch + 16 * kp, kp);'
+assert s.count(old)==1, (p, s.count(old)); s=s.replace(old,new); open(p,'w').write(s)
