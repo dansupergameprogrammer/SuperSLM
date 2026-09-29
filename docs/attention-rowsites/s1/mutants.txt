@@ -1,0 +1,136 @@
+# S1 mutation evidence (GCC 13.3 Release, this host: AVX-512BW; auto binary dispatches AVX-512). Each mutant is applied to a synced copy
+# of the implementation commit, superslm_tests and superslm_tests_avx2_forced rebuilt, and each run from the repository root with
+# SUPERSLM_ATTN_ROWSITES_ARTIFACT set (p05_l1, sha256 f0fd4886...6ed3). 'none' is the unmutated control. Scripts: mutation-scripts/.
+# Up to six distinct failing lines per run are shown.
+== none on superslm_tests: exit 0; attn-rowsites cells (plan slice S1): 1756 checks, 0 failures|superslm tests: 27287 checks, 0 failures|
+== none on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slice S1): 1756 checks, 0 failures|superslm tests: 27245 checks, 0 failures|
+== s1_idx_norm on superslm_tests: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 41 failures|superslm tests: 27287 checks, 46 failures|
+FAIL tests/test_main.cpp:9545: wide[idx] == e.floor_wide — RmsNormSite's own internal wide_row[0], read from the emitted trace record's x_int, == -10829700, want -9024800 (the independently-derived 
+FAIL tests/test_main.cpp:9634: out_codes[idx] == expected_codes[idx] — RmsNormSite out_codes[0] == -40, want -33 (the floor-division oracle's own code, via the already-shipped funnel)
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 4.S1 norm shape 0 n=512: scale (2142937600, 24), reference (2126196480, 24)
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 norm shape 0 n=512: 254 output bytes differ from the reference, first at 0 (-11 vs 11)
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: 940478d4a8b6fc4f0667f0fde591
+== s1_idx_norm on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 41 failures|superslm tests: 27245 checks, 46 failures|
+FAIL tests/test_main.cpp:9545: wide[idx] == e.floor_wide — RmsNormSite's own internal wide_row[0], read from the emitted trace record's x_int, == -10829700, want -9024800 (the independently-derived 
+FAIL tests/test_main.cpp:9634: out_codes[idx] == expected_codes[idx] — RmsNormSite out_codes[0] == -40, want -33 (the floor-division oracle's own code, via the already-shipped funnel)
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 4.S1 norm shape 0 n=512: scale (2142937600, 24), reference (2126196480, 24)
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 norm shape 0 n=512: 254 output bytes differ from the reference, first at 0 (-11 vs 11)
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: 940478d4a8b6fc4f0667f0fde591
+== s1_idx_silu on superslm_tests: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 77 failures|superslm tests: 27287 checks, 77 failures|
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 4.S1 silu shape 0 gate e=-35 n=512: scale (1262868421, 36), reference (1263655205, 36)
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 silu shape 0 gate e=-35 n=512: 35 output bytes differ from the reference, first at 10 (85 vs 2)
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: d8a4553ad14eb8a3cd5117742c52
+== s1_idx_silu on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 77 failures|superslm tests: 27245 checks, 77 failures|
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 4.S1 silu shape 0 gate e=-35 n=512: scale (1262868421, 36), reference (1263655205, 36)
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 silu shape 0 gate e=-35 n=512: 35 output bytes differ from the reference, first at 10 (85 vs 2)
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: d8a4553ad14eb8a3cd5117742c52
+== s1_idx_land on superslm_tests: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 73 failures|superslm tests: 27287 checks, 73 failures|
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 residual shape 0 n=512: 495 output bytes differ from the reference, first at 1 (-119 vs -118)
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 4.S1 residual shape 1 n=512: scale (1235004944, 0), reference (1236339428, 0)
+FAIL tests/test_attn_rowsites.cpp:2preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/down_proj; worst case 4864 rows in a single ten
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: 48ecc3c5eb793445a72444efcbaf
+== s1_idx_land on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 73 failures|superslm tests: 27245 checks, 73 failures|
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 residual shape 0 n=512: 495 output bytes differ from the reference, first at 1 (-119 vs -118)
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 4.S1 residual shape 1 n=512: scale (1235004944, 0), reference (1236339428, 0)
+FAIL tests/test_attn_rowsites.cpp:277:preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/down_proj; worst case 4864 rows in a single 
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: 48ecc3c5eb793445a72444efcbaf
+== s1_m128_silu on superslm_tests: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 11 failures|superslm tests: 27287 checks, 11 failures|
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 silu shape 0 gate e=-35 n=512: 4 output bytes differ from the reference, first at 0 (0 vs -1)
+FAIL (line interleaved with the marshaller's own stdout) preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/do
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: eed62f54893779598da60f1539a2
+== s1_m128_silu on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 11 failures|superslm tests: 27245 checks, 11 failures|
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 silu shape 0 gate e=-35 n=512: 4 output bytes differ from the reference, first at 0 (0 vs -1)
+FAIL (line interleaved with the marshaller's own stdout) preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: eed62f54893779598da60f1539a2
+== s1_m128_land on superslm_tests: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 32 failures|superslm tests: 27287 checks, 32 failures|
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 4.S1 residual shape 0 n=512: scale (1237916547, 0), reference (1250048226, 0)
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 residual shape 0 n=512: 280 output bytes differ from the reference, first at 0 (-2 vs -127)
+FAIL (line interleaved with the marshaller's own stdout) preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/down_proj; worst case 4864 ro
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: b55ee5fc6789d7708f67eabbd285
+== s1_m128_land on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 32 failures|superslm tests: 27245 checks, 32 failures|
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 4.S1 residual shape 0 n=512: scale (1237916547, 0), reference (1250048226, 0)
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 residual shape 0 n=512: 280 output bytes differ from the reference, first at 0 (-2 vs -127)
+FAIL (line interleaved with the marshaller's own stdout) preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/down_proj; worst case 4864
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: b55ee5fc6789d7708f67eabbd285
+== s1_m128_norm on superslm_tests: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 18 failures|superslm tests: 27287 checks, 18 failures|
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 norm shape 0 n=512: 7 output bytes differ from the reference, first at 0 (0 vs 11)
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 4.S1 norm shape 0 n=4864: scale (1074009024, 25), reference (1082477088, 25)
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: 574a5b33bdc82022d2877c2da735
+== s1_m128_norm on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 18 failures|superslm tests: 27245 checks, 18 failures|
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 norm shape 0 n=512: 7 output bytes differ from the reference, first at 0 (0 vs 11)
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 4.S1 norm shape 0 n=4864: scale (1074009024, 25), reference (1082477088, 25)
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: 574a5b33bdc82022d2877c2da735
+== s1_or_flag on superslm_tests: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 7 failures|superslm tests: 27287 checks, 7 failures|
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 7.S1c flag read per element present n=512: scale (1300000000, 60), reference (1300000000, 7)
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 7.S1c flag read per element present n=512: 508 output bytes differ from the reference, first at 0 (0 vs -127)
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: 3afc79cb2160ffc5c2532192999f
+== s1_or_flag on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 7 failures|superslm tests: 27245 checks, 7 failures|
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 7.S1c flag read per element present n=512: scale (1300000000, 60), reference (1300000000, 7)
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 7.S1c flag read per element present n=512: 508 output bytes differ from the reference, first at 0 (0 vs -127)
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: 3afc79cb2160ffc5c2532192999f
+== s1_static_norm on superslm_tests: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 30 failures|superslm tests: 27287 checks, 30 failures|
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 4.S1 norm shape 0 n=512: scale (1329520660, 29), reference (2126196480, 24)
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 norm shape 2 n=512: 1 output bytes differ from the reference, first at 494 (-64 vs -63)
+FAIL tests/test_attn_ropreflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/down_proj; worst case 4864 rows in a single tensor (LayerWe
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: 9c0606f9b6c090bac94192596155
+== s1_static_norm on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 30 failures|superslm tests: 27245 checks, 30 failures|
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 4.S1 norm shape 0 n=512: scale (1329520660, 29), reference (2126196480, 24)
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 norm shape 2 n=512: 1 output bytes differ from the reference, first at 494 (-64 vs -63)
+FAIL tests/test_attn_rowsipreflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/down_proj; worst case 4864 rows in a single tensor (Laye
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: 9c0606f9b6c090bac94192596155
+== s1_static_silu on superslm_tests: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 57 failures|superslm tests: 27287 checks, 57 failures|
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 4.S1 silu shape 0 gate e=-34 n=512: scale (1193109974, 37), reference (1217342350, 37)
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 silu shape 0 gate e=-34 n=512: 408 output bytes differ from the reference, first at 1 (4 vs 1)
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1Golpreflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/
+== s1_static_silu on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 57 failures|superslm tests: 27245 checks, 57 failures|
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 4.S1 silu shape 0 gate e=-34 n=512: scale (1193109974, 37), reference (1217342350, 37)
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 silu shape 0 gate e=-34 n=512: 408 output bytes differ from the reference, first at 1 (4 vs 1)
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1Goldenpreflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v
+== s1_static_land on superslm_tests: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 41 failures|superslm tests: 27287 checks, 41 failures|
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 4.S1 residual shape 0 n=512: scale (1366137696, 2), reference (1615625000, -2)
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 residual shape 0 n=512: 511 output bytes differ from the reference, first at 0 (7 vs 88)
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: 526df9315044ffe7f74109ed3398
+== s1_static_land on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 41 failures|superslm tests: 27245 checks, 41 failures|
+FAIL tests/test_attn_rowsites.cpp:267: scale.m == want.scale.m && scale.e == want.scale.e -- 4.S1 residual shape 0 n=512: scale (1366137696, 2), reference (1615625000, -2)
+FAIL tests/test_attn_rowsites.cpp:277: count == 0 -- 4.S1 residual shape 0 n=512: 511 output bytes differ from the reference, first at 0 (7 vs 88)
+FAIL tests/test_attn_rowsites.cpp:513: hex == std::string(superslm_test::kAttnRowsiteS1GoldenHash) && values == superslm_test::kAttnRowsiteS1GoldenValues -- 6.3 S1 golden: 526df9315044ffe7f74109ed3398
+== s1_thr0 on superslm_tests: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 123 failures|superslm tests: 27287 checks, 123 failures|
+FAIL tests/test_attn_rowsites.cpp:125: d.taken[s] == want_taken && d.skipped[s] == want_skipped -- 4.S1 norm shape 0 n=1: rowtable_norm taken +1 skipped +0, want +0/+1
+FAIL (line interleaved with the marshaller's own stdout) preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up
+FAIL tests/test_attn_rowsites.cpp:521: d.taken[s] > 0 && d.skipped[s] > 0 -- 6.3: the golden set takes and skips the norm table (+160/+0)
+== s1_thr0 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 123 failures|superslm tests: 27245 checks, 123 failures|
+FAIL tests/test_attn_rowsites.cpp:125: d.taken[s] == want_taken && d.skipped[s] == want_skipped -- 4.S1 norm shape 0 n=1: rowtable_norm taken +1 skipped +0, want +0/+1
+FAIL (line interleaved with the marshaller's own stdout) preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate
+FAIL tests/test_attn_rowsites.cpp:521: d.taken[s] > 0 && d.skipped[s] > 0 -- 6.3: the golden set takes and skips the norm table (+160/+0)
+== s1_thr513 on superslm_tests: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 36 failures|superslm tests: 27287 checks, 36 failures|
+FAIL tests/test_attn_rowsites.cpp:125: d.taken[s] == want_taken && d.skipped[s] == want_skipped -- 4.S1 norm shape 0 n=512: rowtable_norm taken +0 skipped +1, want +1/+0
+FAIL (line interleaved with the marshaller's own stdout) preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/down_proj; worst case 4864
+== s1_thr513 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 36 failures|superslm tests: 27245 checks, 36 failures|
+FAIL tests/test_attn_rowsites.cpp:125: d.taken[s] == want_taken && d.skipped[s] == want_skipped -- 4.S1 norm shape 0 n=512: rowtable_norm taken +0 skipped +1, want +1/+0
+FAIL (line interleaved with the marshaller's own stdout) preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/down_proj; worst case 4
+== s1_thrmax on superslm_tests: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 138 failures|superslm tests: 27287 checks, 138 failures|
+FAIL tests/test_attn_rowsites.cpp:125: d.taken[s] == want_taken && d.skipped[s] == want_skipped -- 4.S1 norm shape 0 n=512: rowtable_norm taken +0 skipped +1, want +1/+0
+FAIL (line interleaved with the marshaller's own stdout) preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/down_proj; worst case 4864 rows in a single tensor (Layer
+FAIL tests/test_attn_rowsites.cpp:521: d.taken[s] > 0 && d.skipped[s] > 0 -- 6.3: the golden set takes and skips the norm table (+0/+160)
+FAIL tests/test_attn_rowsites.cpp:660: d.taken[s] == want_taken[s] && d.skipped[s] == 0 -- 11.1(d) prefill: rowtable_norm taken +0 skipped +256, want +256/+0
+== s1_thrmax on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 138 failures|superslm tests: 27245 checks, 138 failures|
+FAIL tests/test_attn_rowsites.cpp:125: d.taken[s] == want_taken && d.skipped[s] == want_skipped -- 4.S1 norm shape 0 n=512: rowtable_norm taken +0 skipped +1, want +1/+0
+FAIL (line interleaved with the marshaller's own stdout) preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/down_proj; worst case 4864 rows in a single tensor (La
+FAIL tests/test_attn_rowsites.cpp:521: d.taken[s] > 0 && d.skipped[s] > 0 -- 6.3: the golden set takes and skips the norm table (+0/+160)
+FAIL tests/test_attn_rowsites.cpp:660: d.taken[s] == want_taken[s] && d.skipped[s] == 0 -- 11.1(d) prefill: rowtable_norm taken +0 skipped +256, want +256/+0
+== all_skip_deleted on superslm_tests: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 123 failures|superslm tests: 27287 checks, 123 failures|
+FAIL tests/test_attn_rowsites.cpp:125: d.taken[s] == want_taken && d.skipped[s] == want_skipped -- 4.S1 norm shape 0 n=1: rowtable_norm taken +0 skipped +0, want +0/+1
+FAIL (line interleaved with the marshaller's own stdout) preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up
+FAIL tests/test_attn_rowsites.cpp:521: d.taken[s] > 0 && d.skipped[s] > 0 -- 6.3: the golden set takes and skips the norm table (+80/+0)
+== all_skip_deleted on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 123 failures|superslm tests: 27245 checks, 123 failures|
+FAIL tests/test_attn_rowsites.cpp:125: d.taken[s] == want_taken && d.skipped[s] == want_skipped -- 4.S1 norm shape 0 n=1: rowtable_norm taken +0 skipped +0, want +0/+1
+FAIL (line interleaved with the marshaller's own stdout) preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate
+FAIL tests/test_attn_rowsites.cpp:521: d.taken[s] > 0 && d.skipped[s] > 0 -- 6.3: the golden set takes and skips the norm table (+80/+0)
+== all_taken_before_guard on superslm_tests: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 123 failures|superslm tests: 27287 checks, 123 failures|
+FAIL tests/test_attn_rowsites.cpp:125: d.taken[s] == want_taken && d.skipped[s] == want_skipped -- 4.S1 norm shape 0 n=1: rowtable_norm taken +1 skipped +0, want +0/+1
+FAIL (line interleaved with the marshaller's own stdout) preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up
+FAIL tests/test_attn_rowsites.cpp:521: d.taken[s] > 0 && d.skipped[s] > 0 -- 6.3: the golden set takes and skips the norm table (+160/+0)
+== all_taken_before_guard on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slice S1): 1756 checks, 123 failures|superslm tests: 27245 checks, 123 failures|
+FAIL tests/test_attn_rowsites.cpp:125: d.taken[s] == want_taken && d.skipped[s] == want_skipped -- 4.S1 norm shape 0 n=1: rowtable_norm taken +1 skipped +0, want +0/+1
+FAIL (line interleaved with the marshaller's own stdout) preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate
+FAIL tests/test_attn_rowsites.cpp:521: d.taken[s] > 0 && d.skipped[s] > 0 -- 6.3: the golden set takes and skips the norm table (+160/+0)

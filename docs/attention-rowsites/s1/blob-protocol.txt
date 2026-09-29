@@ -1,0 +1,45 @@
+# Attention and per-row sites S1, end-to-end blobs (plan §3.3, cell 6.4). tools/t2147_chunk_batched_pins.cpp built against the base
+# library (fb56397) and the candidate library (the S1 implementation commit), GCC 13.3 -O3, auto dispatch (AVX-512 here). Token-id
+# prompts ids:N (ids:N:128 on the in-tree fixture), --chunk-budget=B then --decode=32 greedy steps, then sslm_seq_save.
+# Artifacts: in-tree fixture (8 layers), wide fixture wide_l8, the 0.5B-width 1- and 2-layer synthetics (p05_l1 sha256 f0fd4886...6ed3).
+# At N = 8 the "whole" budget is 8, so those rows repeat. The in-tree fixture refuses 128 + 32 positions (its context cap), on base
+# and candidate alike; its rows are run at N = 24 instead.
+intree ids:8 chunk_budget=1 +32 decode: blob base 02718152a6f8941d cand 02718152a6f8941d; decoded tokens base 9ab82cad cand 9ab82cad; EQUAL (16576 bytes)
+wide_l8 ids:8 chunk_budget=1 +32 decode: blob base 5f8a4bafc1a4789a cand 5f8a4bafc1a4789a; decoded tokens base 391ba224 cand 391ba224; EQUAL (4194720 bytes)
+p05_l1 ids:8 chunk_budget=1 +32 decode: blob base 69d606622b873076 cand 69d606622b873076; decoded tokens base 1dec854e cand 1dec854e; EQUAL (525344 bytes)
+p05_l2 ids:8 chunk_budget=1 +32 decode: blob base cdcbfbe1fdcc65b1 cand cdcbfbe1fdcc65b1; decoded tokens base 6894a696 cand 6894a696; EQUAL (1049632 bytes)
+intree ids:8 chunk_budget=8 +32 decode: blob base 02718152a6f8941d cand 02718152a6f8941d; decoded tokens base 9ab82cad cand 9ab82cad; EQUAL (16576 bytes)
+wide_l8 ids:8 chunk_budget=8 +32 decode: blob base 5f8a4bafc1a4789a cand 5f8a4bafc1a4789a; decoded tokens base 391ba224 cand 391ba224; EQUAL (4194720 bytes)
+p05_l1 ids:8 chunk_budget=8 +32 decode: blob base 69d606622b873076 cand 69d606622b873076; decoded tokens base 1dec854e cand 1dec854e; EQUAL (525344 bytes)
+p05_l2 ids:8 chunk_budget=8 +32 decode: blob base cdcbfbe1fdcc65b1 cand cdcbfbe1fdcc65b1; decoded tokens base 6894a696 cand 6894a696; EQUAL (1049632 bytes)
+intree ids:8 chunk_budget=8 +32 decode: blob base 02718152a6f8941d cand 02718152a6f8941d; decoded tokens base 9ab82cad cand 9ab82cad; EQUAL (16576 bytes)
+wide_l8 ids:8 chunk_budget=8 +32 decode: blob base 5f8a4bafc1a4789a cand 5f8a4bafc1a4789a; decoded tokens base 391ba224 cand 391ba224; EQUAL (4194720 bytes)
+p05_l1 ids:8 chunk_budget=8 +32 decode: blob base 69d606622b873076 cand 69d606622b873076; decoded tokens base 1dec854e cand 1dec854e; EQUAL (525344 bytes)
+p05_l2 ids:8 chunk_budget=8 +32 decode: blob base cdcbfbe1fdcc65b1 cand cdcbfbe1fdcc65b1; decoded tokens base 6894a696 cand 6894a696; EQUAL (1049632 bytes)
+intree ids:128 cb=1: refused on the base (context cap), not compared
+wide_l8 ids:128 chunk_budget=1 +32 decode: blob base 4722fb9a0f133c70 cand 4722fb9a0f133c70; decoded tokens base 681400be cand 681400be; EQUAL (4194720 bytes)
+p05_l1 ids:128 chunk_budget=1 +32 decode: blob base 48efd7f2de021c02 cand 48efd7f2de021c02; decoded tokens base 1f43a9c7 cand 1f43a9c7; EQUAL (525344 bytes)
+p05_l2 ids:128 chunk_budget=1 +32 decode: blob base 7dcb7a5fb76a6276 cand 7dcb7a5fb76a6276; decoded tokens base a0edc532 cand a0edc532; EQUAL (1049632 bytes)
+intree ids:128 cb=8: refused on the base (context cap), not compared
+wide_l8 ids:128 chunk_budget=8 +32 decode: blob base 4722fb9a0f133c70 cand 4722fb9a0f133c70; decoded tokens base 681400be cand 681400be; EQUAL (4194720 bytes)
+p05_l1 ids:128 chunk_budget=8 +32 decode: blob base 48efd7f2de021c02 cand 48efd7f2de021c02; decoded tokens base 1f43a9c7 cand 1f43a9c7; EQUAL (525344 bytes)
+p05_l2 ids:128 chunk_budget=8 +32 decode: blob base 7dcb7a5fb76a6276 cand 7dcb7a5fb76a6276; decoded tokens base a0edc532 cand a0edc532; EQUAL (1049632 bytes)
+intree ids:128 cb=128: refused on the base (context cap), not compared
+wide_l8 ids:128 chunk_budget=128 +32 decode: blob base 4722fb9a0f133c70 cand 4722fb9a0f133c70; decoded tokens base 681400be cand 681400be; EQUAL (4194720 bytes)
+p05_l1 ids:128 chunk_budget=128 +32 decode: blob base 48efd7f2de021c02 cand 48efd7f2de021c02; decoded tokens base 1f43a9c7 cand 1f43a9c7; EQUAL (525344 bytes)
+p05_l2 ids:128 chunk_budget=128 +32 decode: blob base 7dcb7a5fb76a6276 cand 7dcb7a5fb76a6276; decoded tokens base a0edc532 cand a0edc532; EQUAL (1049632 bytes)
+intree ids:512 cb=1: refused on the base (context cap), not compared
+wide_l8 ids:512 chunk_budget=1 +32 decode: blob base 904ffb07ded91feb cand 904ffb07ded91feb; decoded tokens base e7799ea5 cand e7799ea5; EQUAL (4194720 bytes)
+p05_l1 ids:512 chunk_budget=1 +32 decode: blob base 9a18bb27908136eb cand 9a18bb27908136eb; decoded tokens base 8435904c cand 8435904c; EQUAL (525344 bytes)
+p05_l2 ids:512 chunk_budget=1 +32 decode: blob base 77d1a3589a0c813f cand 77d1a3589a0c813f; decoded tokens base 75387074 cand 75387074; EQUAL (1049632 bytes)
+intree ids:512 cb=8: refused on the base (context cap), not compared
+wide_l8 ids:512 chunk_budget=8 +32 decode: blob base 904ffb07ded91feb cand 904ffb07ded91feb; decoded tokens base e7799ea5 cand e7799ea5; EQUAL (4194720 bytes)
+p05_l1 ids:512 chunk_budget=8 +32 decode: blob base 9a18bb27908136eb cand 9a18bb27908136eb; decoded tokens base 8435904c cand 8435904c; EQUAL (525344 bytes)
+p05_l2 ids:512 chunk_budget=8 +32 decode: blob base 77d1a3589a0c813f cand 77d1a3589a0c813f; decoded tokens base 75387074 cand 75387074; EQUAL (1049632 bytes)
+intree ids:512 cb=512: refused on the base (context cap), not compared
+wide_l8 ids:512 chunk_budget=512 +32 decode: blob base 904ffb07ded91feb cand 904ffb07ded91feb; decoded tokens base e7799ea5 cand e7799ea5; EQUAL (4194720 bytes)
+p05_l1 ids:512 chunk_budget=512 +32 decode: blob base 9a18bb27908136eb cand 9a18bb27908136eb; decoded tokens base 8435904c cand 8435904c; EQUAL (525344 bytes)
+p05_l2 ids:512 chunk_budget=512 +32 decode: blob base 77d1a3589a0c813f cand 77d1a3589a0c813f; decoded tokens base 75387074 cand 75387074; EQUAL (1049632 bytes)
+intree ids:24 chunk_budget=1 +32 decode (the fixture's context cap refuses 128+32): blob base 4dd83f12817436f7 cand 4dd83f12817436f7; tokens base 5707bd0c cand 5707bd0c
+intree ids:24 chunk_budget=8 +32 decode (the fixture's context cap refuses 128+32): blob base 4dd83f12817436f7 cand 4dd83f12817436f7; tokens base 5707bd0c cand 5707bd0c
+intree ids:24 chunk_budget=24 +32 decode (the fixture's context cap refuses 128+32): blob base 4dd83f12817436f7 cand 4dd83f12817436f7; tokens base 5707bd0c cand 5707bd0c

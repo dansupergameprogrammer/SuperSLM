@@ -18,6 +18,7 @@
 // A build without the instrument seam (build.bat's MSVC recipe) runs the value checks alone and
 // says so. Cell numbers are the plan's §8 numbering.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -26,6 +27,7 @@
 #include <map>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "superslm/checked_chain_funnel.h"
@@ -441,6 +443,70 @@ void TestS1ConsecutiveRowsDifferentConstants() {
 	}
 }
 
+// ---- 3.S1: concurrent calls share no table ------------------------------------------------------
+
+// The plan's 3.S1 names "the existing concurrent-read stress cell ... on the 0.5B-width artifact"; no
+// such artifact-driven cell exists in the suite, so this is its own: 8 threads call all three sites at
+// table-taking widths on their own rows, each result compared with the single-threaded reference.
+// The tables are stack arrays, so nothing is shared; the hosted TSan leg runs this cell.
+void TestS1ConcurrentCalls() {
+	constexpr int kThreads = 8, kCalls = 24;
+	const CarriedScale unit{INT64_C(1073741824), 0};
+	struct Job {
+		std::vector<int8_t> h, gate, up, branch, stream;
+		std::vector<int32_t> g;
+		SiteResult want_norm, want_silu, want_res;
+		int mismatches = 0;
+	};
+	std::vector<Job> jobs(kThreads);
+	for (int t = 0; t < kThreads; ++t) {
+		Rng rng(0x3353314354485200ULL + static_cast<uint64_t>(t));
+		Job& j = jobs[t];
+		j.h.resize(896); j.g.resize(896); j.branch.resize(896); j.stream.resize(896); j.gate.resize(4864); j.up.resize(4864);
+		FillRow(j.h, RowShape::kRandomWithMinus128, rng);
+		for (auto& v : j.g) v = static_cast<int32_t>(rng.InRange(-300, 300));
+		FillRow(j.gate, RowShape::kRandomWithMinus128, rng);
+		FillRow(j.up, RowShape::kRandomNo128, rng);
+		FillRow(j.branch, RowShape::kRandomWithMinus128, rng);
+		FillRow(j.stream, RowShape::kRandomWithMinus128, rng);
+		j.want_norm = RefNorm(j.h.data(), j.g.data(), 896, unit);
+		j.want_silu = RefSilu(j.gate.data(), {INT64_C(1073741824), -34 + t % 3}, j.up.data(), {INT64_C(1340958474), -18},
+		                      4864, unit);
+		j.want_res = RefResidual(j.branch.data(), {INT64_C(1234567890), -37 - t % 4}, j.stream.data(),
+		                         {INT64_C(1987654321), -44}, 896, unit);
+	}
+	std::vector<std::thread> threads;
+	for (int t = 0; t < kThreads; ++t)
+		threads.emplace_back([&jobs, t, unit] {
+			Job& j = jobs[t];
+			for (int c = 0; c < kCalls; ++c) {
+				std::vector<int8_t> out(4864, kPoison);
+				CarriedScale sc{-1, -1};
+				SslmForwardStatus st = superslm::RmsNormSite(j.h.data(), j.g.data(), 896, CarriedScale{}, unit, out.data(), &sc);
+				if (st != j.want_norm.status || sc.m != j.want_norm.scale.m || sc.e != j.want_norm.scale.e ||
+				    !std::equal(j.want_norm.out.begin(), j.want_norm.out.end(), out.begin()))
+					++j.mismatches;
+				st = superslm::MlpActSite(j.gate.data(), {INT64_C(1073741824), -34 + t % 3}, j.up.data(),
+				                          {INT64_C(1340958474), -18}, 4864, superslm::kSiluLutCanonicalTable, unit,
+				                          out.data(), &sc);
+				if (st != j.want_silu.status || sc.m != j.want_silu.scale.m || sc.e != j.want_silu.scale.e ||
+				    !std::equal(j.want_silu.out.begin(), j.want_silu.out.end(), out.begin()))
+					++j.mismatches;
+				std::fill(out.begin(), out.end(), kPoison);
+				st = superslm::ResidualReconcileSite(j.branch.data(), {INT64_C(1234567890), -37 - t % 4}, j.stream.data(),
+				                                     {INT64_C(1987654321), -44}, 896, unit, out.data(), &sc);
+				if (st != j.want_res.status || sc.m != j.want_res.scale.m || sc.e != j.want_res.scale.e ||
+				    !std::equal(j.want_res.out.begin(), j.want_res.out.end(), out.begin()))
+					++j.mismatches;
+			}
+		});
+	for (auto& th : threads) th.join();
+	int total = 0;
+	for (const Job& j : jobs) total += j.mismatches;
+	CHECK_MSG(total == 0, "3.S1: %d of %d concurrent site calls (8 threads) differ from the single-threaded reference",
+	          total, kThreads * kCalls * 3);
+}
+
 // ---- 5.S1 and 7.S1c: the landing flag, read per element present ---------------------------------
 
 // Branch e = 30, stream e = −30: the gap exceeds 31, so the stream candidate is built first and lands
@@ -675,6 +741,7 @@ void RunAttnRowsiteCells(int& checks, int& failures) {
 	TestS1SmallGateScalePremise();
 	TestS1Grid();
 	TestS1ConsecutiveRowsDifferentConstants();
+	TestS1ConcurrentCalls();
 	TestS1LandingFlag();
 	TestS1GoldenPin();
 	TestS1LayerLoopWindows();

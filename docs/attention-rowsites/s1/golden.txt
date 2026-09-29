@@ -1,0 +1,6 @@
+# S1 golden pin provenance (plan §3.3 evidence 3, cell 6.3)
+# tools/gen_attn_rowsite_golden.cpp compiled with GCC 13.3 -O2 against the v1.9.0 tag (d870d27) include/ and its Release libsuperslm.a:
+S1 row-table golden: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 over 634120 values
+# The same source built against this series (CMake target gen_attn_rowsite_golden, GCC and the auto library):
+S1 row-table golden: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 over 634120 values
+# Re-running the v1.9.0 build with the header path as argument reproduced tests/attn_rowsite_golden_pin.h byte for byte.
