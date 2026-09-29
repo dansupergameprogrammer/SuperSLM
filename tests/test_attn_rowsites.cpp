@@ -56,6 +56,16 @@
 #include "support/matmul_dispatch_instrument.h"
 #include "support/qk_attention_fixture.h"
 #include "support/rowsite_cases.h"
+#include "sslm_model_hostile_fixtures.h"
+
+#include <filesystem>
+#include <sstream>
+#ifdef _WIN32
+#include <io.h>       // _dup, _dup2, _close, _fileno -- the stderr capture in the preflight cell
+#include <process.h>  // _getpid
+#else
+#include <unistd.h>  // dup, dup2, close, fileno, getpid -- the stderr capture in the preflight cell
+#endif
 
 static int GChecks = 0;
 static int GFailures = 0;
@@ -1837,6 +1847,110 @@ void TestS5QkNormFixture() {
 	            rows.sm_fast, rows.sm_fallback, rows.pv_fast, rows.pv_fallback);
 }
 
+// ---- PreflightScanWscFolds with no artifact -----------------------------------------------------
+//
+// 11.1(d) is the only other caller of PreflightScanWscFolds in this binary, and it runs only when
+// SUPERSLM_ATTN_ROWSITES_ARTIFACT names an uncommitted artifact. Without this cell the function is
+// linked into superslm_tests and never run, which leaves every one of its branches uncovered. The
+// view here is built from a committed WSC1 manifest, so the scan runs on every build.
+
+// Redirects stderr to a temp file for the life of the object and restores it on scope exit.
+struct StderrCapture {
+	int saved_fd = -1;
+	std::string path;
+	bool active = false;
+	StderrCapture() {
+		std::error_code ec;
+		const std::filesystem::path dir = std::filesystem::temp_directory_path(ec);
+		if (ec) return;
+#ifdef _WIN32
+		const long pid = static_cast<long>(_getpid());
+#else
+		const long pid = static_cast<long>(getpid());
+#endif
+		path = (dir / ("sslm_preflight_capture_" + std::to_string(pid) + ".txt")).string();
+		std::fflush(stderr);
+#ifdef _WIN32
+		saved_fd = _dup(_fileno(stderr));
+#else
+		saved_fd = dup(fileno(stderr));
+#endif
+		if (saved_fd == -1) return;
+		if (!std::freopen(path.c_str(), "w", stderr)) {
+			Restore();
+			return;
+		}
+		active = true;
+	}
+	void Restore() {
+		if (saved_fd == -1) return;
+		std::fflush(stderr);
+#ifdef _WIN32
+		_dup2(saved_fd, _fileno(stderr));
+		_close(saved_fd);
+#else
+		dup2(saved_fd, fileno(stderr));
+		close(saved_fd);
+#endif
+		saved_fd = -1;
+	}
+	std::string Read() {
+		std::fflush(stderr);
+		std::ifstream f(path, std::ios::binary);
+		std::stringstream ss;
+		ss << f.rdbuf();
+		return ss.str();
+	}
+	~StderrCapture() {
+		Restore();
+		if (!path.empty()) std::remove(path.c_str());
+	}
+};
+
+std::string RunPreflight(const superslm::SslmModelView& view) {
+	StderrCapture cap;
+	superslm_marshal::PreflightScanWscFolds(view);
+	return cap.active ? cap.Read() : std::string();
+}
+
+void TestPreflightScanWscFolds() {
+	using namespace superslm;
+	using superslm_test::BuildManifest;
+	using superslm_test::MakeManifestSectionView;
+	// Three layers. layer0 carries one degenerate (one-row) fold tensor and no other projection;
+	// layer1 carries two per-channel tensors, the larger first, so the running maximum is both
+	// raised and not raised; layer2 carries none. Expected: 1 of 3 layers affected, worst case 4.
+	const auto manifest = BuildManifest(kWeightScalesMagic, /*element_size=*/4,
+	                                    {{"layer0.q_proj", {1, 3}}, {"layer1.k_proj", {4, 3}}, {"layer1.v_proj", {2, 3}}});
+	const SslmSectionView section = MakeManifestSectionView(SslmSectionType::WeightScales, SslmDtype::Int32, manifest.bytes);
+	SslmModelView view;
+	std::string err;
+	const SslmModelStatus st = SslmTensorManifest::Parse(section, view.weight_scales, &err);
+	CHECK_MSG(st == SslmModelStatus::Ok, "preflight: WSC1 fixture did not parse: %s", err.c_str());
+	if (st != SslmModelStatus::Ok) return;
+	view.has_weight_scales = true;
+
+	view.config.num_hidden_layers = 3;
+	std::string out = RunPreflight(view);
+	CHECK_MSG(out.find("preflight: 1/3 layers carry a non-degenerate") != std::string::npos &&
+	              out.find("worst case 4 rows") != std::string::npos,
+	          "preflight over three layers: got \"%s\"", out.c_str());
+
+	// Only layer0 in range: its one-row tensor raises the maximum to 1 but does not mark the layer.
+	view.config.num_hidden_layers = 1;
+	out = RunPreflight(view);
+	CHECK_MSG(out.find("preflight: 0/1 layers carry a non-degenerate") != std::string::npos &&
+	              out.find("worst case 1 rows") != std::string::npos,
+	          "preflight over layer0 only: got \"%s\"", out.c_str());
+
+	// No layers: the loop never runs.
+	view.config.num_hidden_layers = 0;
+	out = RunPreflight(view);
+	CHECK_MSG(out.find("preflight: 0/0 layers carry a non-degenerate") != std::string::npos &&
+	              out.find("worst case 0 rows") != std::string::npos,
+	          "preflight over no layers: got \"%s\"", out.c_str());
+}
+
 // ---- 11.1(d): the 0.5B-width 1-layer artifact through the two layer loops -----------------------
 
 struct TraceCount {
@@ -2051,6 +2165,7 @@ void RunAttnRowsiteCells(int& checks, int& failures) {
 	TestS5HostileRows();
 	TestS5GoldenPin();
 	TestS5QkNormFixture();     // 11.1(c): the Q31 call sites of both loops
+	TestPreflightScanWscFolds();
 	TestS1LayerLoopWindows();  // 11.1(d): S1's, S2's, S3's, S4's and S5's rows over one drive
 	std::printf("attn-rowsites cells (plan slices S1, S2, S3, S4, S5): %d checks, %d failures\n", GChecks, GFailures);
 	checks += GChecks;

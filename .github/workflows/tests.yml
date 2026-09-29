@@ -853,6 +853,12 @@ jobs:
           python3 tools/ci/check_branch_coverage_floors.py \
             --record-floors-to build/measured_branch_coverage_floors.json \
             build/coverage.json
+      # Re-pinning a floor copies this leg's recorded value into tools/ci/branch_coverage_floors.json,
+      # and the artifact store that holds the record is not reachable from every session that does
+      # the re-pin. Printing the record puts the exact values in the job log as well.
+      - name: Print the recorded branch-coverage floors
+        if: always()
+        run: cat build/measured_branch_coverage_floors.json
       - name: Check per-file branch-coverage floors
         run: python3 tools/ci/check_branch_coverage_floors.py build/coverage.json
       # Tiled-matmul plan slice 1, cell 11.4: nonzero counts on the tiled kernel's named spans (flush
