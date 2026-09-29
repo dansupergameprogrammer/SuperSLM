@@ -22,6 +22,11 @@ inline constexpr const char* kAttnRowsiteS2GoldenHash =
     "b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed";
 inline constexpr uint64_t kAttnRowsiteS2GoldenValues = 30100ULL;
 
+// Slice S3: RequantChainChecked's element loop over RunRequantRowCases.
+inline constexpr const char* kAttnRowsiteS3GoldenHash =
+    "3e3abed7c746191e8745c89ad38019076eff290aa7f4ffb57fb51c4527fdb3b9";
+inline constexpr uint64_t kAttnRowsiteS3GoldenValues = 3567018ULL;
+
 }  // namespace superslm_test
 
 #endif  // SUPERSLM_TESTS_ATTN_ROWSITE_GOLDEN_PIN_H

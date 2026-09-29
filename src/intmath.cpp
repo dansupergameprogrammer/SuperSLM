@@ -520,6 +520,11 @@ int8_t RequantTokenCodeWide(int64_t x_i, int64_t r, int s) {
 	return static_cast<int8_t>(x_i < 0 ? -q : q);
 }
 
+// Attention and per-row sites plan, slice S3: the row leaf. Red phase: the element loop only.
+void RequantRowWide(const int64_t* x, size_t n, int64_t r, int s, int8_t* out) {
+	for (size_t i = 0; i < n; ++i) out[i] = RequantTokenCodeWide(x[i], r, s);
+}
+
 // --- §6.3 nonlinear scalar primitives (i-sqrt C4/C5/C6, i-exp C7/C8/C9) --------
 
 namespace {

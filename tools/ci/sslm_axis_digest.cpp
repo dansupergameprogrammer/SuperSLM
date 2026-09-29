@@ -684,8 +684,10 @@ void SectionMatmulTiled() {
 // Attention and per-row sites plan (rev 3.1), §3.3 evidence 2, cell 6.2. RmsNormSite, MlpActSite and
 // ResidualReconcileSite over tests/support/rowsite_cases.h's fixed set, which sits on both sides of the
 // per-row table threshold (widths 1 to 4,864 around 512), carries -128 codes, uniform rows, a small
-// gate scale and landing-flag rows (slice S1's entries; slice S3 appends the requant row's). Every
-// call's status, output scale and whole output row are digested. The forced-scalar leg runs the v1.9.0
+// gate scale and landing-flag rows (slice S1's entries), then slice S3's requant rows through
+// RequantChainChecked (every width around the 4- and 8-lane SIMD bodies, +-d' in every lane position,
+// every s the funnel's preflight can produce, the P = 2^63 corner). Every call's status, output scale
+// and whole output row are digested. The forced-scalar leg runs the v1.9.0
 // per-element loops (tables off), so it is the reference axis this section is compared against; the
 // suite pins the same stream to a hash from the v1.9.0 tag. A new section, so sections 1-9 keep their
 // previous values exactly.
@@ -693,6 +695,7 @@ void SectionRowsites() {
 	Section& sec = NewSection("c_rowsites");
 	auto emit = [&](int64_t v) { sec.sink.I64(v); };
 	superslm_rowsite_cases::RunRowTableCases(emit);
+	superslm_rowsite_cases::RunRequantRowCases(emit);
 }
 
 // --- 11. The attention kernels ------------------------------------------------------

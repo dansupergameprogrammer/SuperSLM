@@ -95,6 +95,13 @@ inline std::atomic<long long> g_pv_fallback_avx2{0};
 inline std::atomic<long long> g_pv_fast_avx512{0};
 inline std::atomic<long long> g_pv_fallback_avx512{0};
 
+// Attention and per-row sites plan, slice S3 (§3.6): the requant row counters, per tier. src/intmath.cpp's
+// RequantRowWide increments exactly one of them per call on the AVX2 and AVX-512 tiers, inside the tier's
+// own body (S3 has no runtime guard, §5.3, so there is no fallback counter). On the scalar and SSE2 tiers,
+// and on an MSVC build's AVX-512 tier with SUPERSLM_SITES_AVX512_MSVC off (the element loop), none moves.
+inline std::atomic<long long> g_requant_row_avx2{0};
+inline std::atomic<long long> g_requant_row_avx512{0};
+
 }  // namespace superslm_test
 
 #endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64

@@ -15,6 +15,10 @@
 // library (tools/gen_attn_rowsite_golden.cpp). The expected path is a test-side copy of the guard,
 // written from §4.1: tables are taken exactly when n >= 512, in every build that has a test binary.
 //
+// Slice S2 (§4.2): prob·V on int16 multiply-add; slice S3 (§4.3): the requant element loop in 64-bit
+// lanes (RequantRowWide), checked against the unchanged per-element RequantTokenCodeWide with sentinel
+// fences and exact-size buffers, and counted per tier (requant_row).
+//
 // A build without the instrument seam (build.bat's MSVC recipe) runs the value checks alone and
 // says so. Cell numbers are the plan's §8 numbering.
 
@@ -868,6 +872,297 @@ void TestS2GoldenPin() {
 	          static_cast<unsigned long long>(superslm_test::kAttnRowsiteS2GoldenValues));
 }
 
+// ==== Slice S3: the requant element loop in 64-bit lanes (§4.3, §5.3) ==============================
+//
+// Every S3 cell calls the row leaf RequantRowWide directly (or the funnel that calls it) and asserts
+// per call (§8 path rule): the codes equal RequantTokenCodeWide element by element (the v1.9.0 leaf,
+// unchanged and never the build's row code), nothing outside the row was written, and the requant_row
+// counter moved +1 on the selected kernel's own tier and nowhere else. S3 has no runtime guard (§5.3),
+// so the expected path is the selector's alone: AVX2 and AVX-512 run the lanes, every other kernel the
+// element loop.
+
+struct RqCounters {
+	long long avx2 = 0, avx512 = 0;
+};
+#if defined(SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT) && SUPERSLM_MATMUL_HAVE_SIMD_X64
+constexpr bool kHaveRqCounters = true;
+RqCounters ReadRqCounters() {
+	return RqCounters{superslm_test::g_requant_row_avx2.load(), superslm_test::g_requant_row_avx512.load()};
+}
+#else
+constexpr bool kHaveRqCounters = false;
+RqCounters ReadRqCounters() { return RqCounters{}; }
+#endif
+
+RqCounters RqDelta(const RqCounters& a, const RqCounters& b) { return RqCounters{b.avx2 - a.avx2, b.avx512 - a.avx512}; }
+
+// `calls` row-leaf calls on this build (11.1(b)): the selected kernel's own tier moves, the other does not.
+RqCounters ExpectedRqDelta(long long calls) {
+	RqCounters w;
+	switch (ExpectedSitesKernel()) {
+		case SitesKernel::kAvx2: w.avx2 = calls; break;
+		case SitesKernel::kAvx512: w.avx512 = calls; break;
+		case SitesKernel::kShipped: break;
+	}
+	return w;
+}
+
+bool CheckRqDelta(const char* label, const RqCounters& d, const RqCounters& want) {
+	if (!kHaveRqCounters) return true;
+	const bool ok = d.avx2 == want.avx2 && d.avx512 == want.avx512;
+	CHECK_MSG(ok, "%s: requant_row_avx2 +%lld requant_row_avx512 +%lld; want +%lld/+%lld (kernel: %s)", label, d.avx2,
+	          d.avx512, want.avx2, want.avx512, SitesKernelName(ExpectedSitesKernel()));
+	return ok;
+}
+
+// r and s exactly as the funnel's preflight derives them from d' (checked_chain_funnel.cpp step 4).
+struct RqConstants {
+	int64_t r;
+	int s;
+};
+RqConstants RqConstantsFor(int64_t d_prime) {
+	const superslm::NormalizedScale ns = superslm::NormalizeScale(d_prime);
+	return RqConstants{superslm::DynamicScaleReciprocal(ns.dn), ns.s};
+}
+
+constexpr size_t kRqFence = 16;
+constexpr uint8_t kRqSentinel = 0xA5;
+
+// One row-leaf call against the element loop, with its path assertion. `fenced`: the output row sits
+// between 16 sentinel bytes before out[0] and after out[n - 1], checked unchanged after the call (every
+// binary). Otherwise the input and the output are exact-size heap buffers, so the hosted ASan leg sees
+// any read or write past either (4.S3's second pass). The value assertions are one check each; the
+// path assertion is tallied in `path_mismatches` (with the first few printed) and asserted once per
+// pass by the caller, so a build whose counter never moves reports one failure per pass, not one per
+// row. Returns the number of failed value assertions.
+int RunRequantRow(const char* label, const std::vector<int64_t>& row, int64_t d_prime, bool fenced,
+                  size_t* path_mismatches) {
+	const int f0 = GFailures;
+	const size_t n = row.size();
+	const RqConstants k = RqConstantsFor(d_prime);
+	std::vector<int8_t> want(n);
+	for (size_t i = 0; i < n; ++i) want[i] = superslm::RequantTokenCodeWide(row[i], k.r, k.s);
+	std::vector<int64_t> x(row);  // exact size
+	std::vector<uint8_t> fencedbuf;
+	std::vector<int8_t> exact;
+	int8_t* out;
+	if (fenced) {
+		fencedbuf.assign(n + 2 * kRqFence, kRqSentinel);
+		out = reinterpret_cast<int8_t*>(fencedbuf.data() + kRqFence);
+		std::memset(out, static_cast<uint8_t>(kPoison), n);
+	} else {
+		exact.assign(n, kPoison);
+		out = exact.data();
+	}
+	const RqCounters c0 = ReadRqCounters();
+	superslm::RequantRowWide(x.data(), n, k.r, k.s, out);
+	const RqCounters c1 = ReadRqCounters();
+	size_t bad = 0, first = n;
+	for (size_t i = 0; i < n; ++i)
+		if (out[i] != want[i]) {
+			if (first == n) first = i;
+			++bad;
+		}
+	CHECK_MSG(bad == 0, "%s (n %zu, d' %lld, r %lld, s %d): %zu of %zu codes differ from RequantTokenCodeWide, first at "
+	          "%zu (x %lld: %d vs %d)", label, n, static_cast<long long>(d_prime), static_cast<long long>(k.r), k.s, bad,
+	          n, first, first < n ? static_cast<long long>(row[first]) : 0LL, first < n ? out[first] : 0,
+	          first < n ? want[first] : 0);
+	if (fenced) {
+		size_t clobbered = 0;
+		for (size_t i = 0; i < kRqFence; ++i) {
+			clobbered += fencedbuf[i] != kRqSentinel;
+			clobbered += fencedbuf[kRqFence + n + i] != kRqSentinel;
+		}
+		CHECK_MSG(clobbered == 0, "%s (n %zu, d' %lld): %zu of the 32 sentinel bytes around the row changed", label, n,
+		          static_cast<long long>(d_prime), clobbered);
+	}
+	CHECK_MSG(x == row, "%s (n %zu): the input row changed", label, n);
+	const int value_failures = GFailures - f0;
+	const RqCounters d = RqDelta(c0, c1), want_d = ExpectedRqDelta(1);
+	if (kHaveRqCounters && (d.avx2 != want_d.avx2 || d.avx512 != want_d.avx512)) {
+		if (++*path_mismatches <= 3)
+			std::printf("  %s (n %zu, d' %lld): requant_row_avx2 +%lld requant_row_avx512 +%lld, want +%lld/+%lld\n", label,
+			            n, static_cast<long long>(d_prime), d.avx2, d.avx512, want_d.avx2, want_d.avx512);
+	}
+	return value_failures;
+}
+
+// ---- 7.S3: the P = 2^63 corner's premises (§5.3) --------------------------------------------------
+
+void TestS3CornerPremise() {
+	const superslm::NormalizedScale ns = superslm::NormalizeScale(INT64_C(1) << 31);
+	CHECK_MSG(ns.dn == (INT64_C(1) << 30) && ns.s == -1, "7.S3 premise: NormalizeScale(2^31) = (%lld, %d), want (2^30, -1)",
+	          static_cast<long long>(ns.dn), ns.s);
+	const int64_t r = superslm::DynamicScaleReciprocal(ns.dn);
+	CHECK_MSG(r == (INT64_C(1) << 32), "7.S3 premise: DynamicScaleReciprocal(2^30) = %lld, want 2^32", static_cast<long long>(r));
+	// |x| = 2^31 times r = 2^32 is P = 2^63 exactly: one past INT64_MAX, so a signed lane cannot hold it.
+	const uint64_t p = (uint64_t{1} << 31) * static_cast<uint64_t>(r);
+	CHECK_MSG(p == (uint64_t{1} << 63), "7.S3 premise: P at the corner is 2^63");
+	// Both corner codes are the true +-127 (§5.3: the clamp never fires inside the contract, and the corner
+	// itself lands exactly on 127).
+	CHECK_MSG(superslm::RequantTokenCodeWide(INT64_C(1) << 31, r, -1) == 127 &&
+	              superslm::RequantTokenCodeWide(-(INT64_C(1) << 31), r, -1) == -127,
+	          "7.S3 premise: the corner's codes are +-127");
+	// Every s the preflight can produce, in [-1, 30], is reached by RequantDPrimes' d' list.
+	superslm_rowsite_cases::Rng rng(1);
+	bool seen[32] = {};
+	for (int64_t dp : superslm_rowsite_cases::RequantDPrimes(rng)) {
+		const int s = superslm::NormalizeScale(dp).s;
+		if (s >= -1 && s <= 30) seen[s + 1] = true;
+	}
+	int missing = 0;
+	for (bool b : seen) missing += !b;
+	CHECK_MSG(missing == 0, "4.S3 premise: %d of the 32 shifts s in [-1, 30] are not reached by the d' list", missing);
+}
+
+// ---- 4.S3, 7.S3, 6.1: the shape grid, both fences --------------------------------------------------
+
+// The grid: n {1, 3, 4, 5, 7, 8, 9, 896, 4,864} x d' (1, 2, 2^30, 2^31, their neighbours, and three in
+// every octave, so every s in [-1, 30]) x +-d' at every lane position (every position of rows up to 9
+// elements, positions 0-8, 15, 16 and the last of the wide rows), the rest drawn from [-d', d']. Then
+// random rows: n in [1, 40], d' log-uniform over [1, 2^31], with values biased to +-d' and to rounding
+// ties. `fenced` selects the sentinel pass or the exact-size heap pass.
+void RunS3Grid(bool fenced) {
+	const char* const pass = fenced ? "4.S3 sentinel pass" : "4.S3 exact-size pass";
+	superslm_rowsite_cases::Rng rng(fenced ? 0x3453334752494431ULL : 0x3453334752494432ULL);  // "4S3GRID1/2"
+	const std::vector<int64_t> dprimes = superslm_rowsite_cases::RequantDPrimes(rng);
+	size_t calls = 0, path_bad = 0;
+	int failed_calls = 0;
+	const RqCounters c0 = ReadRqCounters();
+	// A broken body would otherwise print thousands of rows: each loop stops after 20 failing calls.
+	for (size_t n : superslm_rowsite_cases::kRequantWidths)
+		for (int64_t dp : dprimes) {
+			std::vector<size_t> positions;
+			if (n <= 9) {
+				for (size_t p = 0; p < n; ++p) positions.push_back(p);
+			} else {
+				positions = {0, 1, 2, 3, 4, 5, 6, 7, 8, 15, 16, n - 1};
+			}
+			for (size_t p : positions)
+				for (int sign : {1, -1}) {
+					if (failed_calls > 20) continue;
+					std::vector<int64_t> x(n);
+					for (auto& v : x) v = rng.InRange(-dp, dp);
+					x[p] = sign * dp;
+					++calls;
+					failed_calls += RunRequantRow(pass, x, dp, fenced, &path_bad) != 0;
+				}
+		}
+	// Every element at +-d' (the corner in every lane at once, at d' = 2^31).
+	for (size_t n : superslm_rowsite_cases::kRequantWidths)
+		for (int64_t dp : {INT64_C(1), INT64_C(2), INT64_C(1) << 30, INT64_C(1) << 31}) {
+			std::vector<int64_t> x(n);
+			for (size_t i = 0; i < n; ++i) x[i] = (i % 3 == 1) ? -dp : dp;
+			++calls;
+			failed_calls += RunRequantRow(pass, x, dp, fenced, &path_bad) != 0;
+		}
+	// Random rows, and the empty row (reads and writes nothing, still one call).
+	for (int t = 0; t < 4000 && failed_calls <= 20; ++t) {
+		const size_t n = static_cast<size_t>(rng.InRange(1, 40));
+		const int octave = static_cast<int>(rng.InRange(0, 31));
+		const int64_t dp = octave == 31 ? (INT64_C(1) << 31) : rng.InRange(INT64_C(1) << octave, (INT64_C(2) << octave) - 1);
+		const RqConstants k = RqConstantsFor(dp);
+		std::vector<int64_t> x(n);
+		for (auto& v : x) {
+			switch (rng.InRange(0, 3)) {
+				case 0: v = rng.Next() & 1 ? dp : -dp; break;
+				case 1: {
+					// A value whose |x|·127·r sits next to a rounding tie (e = 62 - s): x = floor(j · 2^(e-1) /
+					// (127·r)) + {-1, 0, 1} for a random odd j < 256, clamped into [-d', d']. The quotient is
+					// formed exactly in 64 bits: 2^(e-1) = Q·127r + R with R < 127r < 2^39.
+					const int e = 62 - k.s;
+					const uint64_t j = static_cast<uint64_t>(2 * rng.InRange(0, 127) + 1);
+					const uint64_t div = 127u * static_cast<uint64_t>(k.r);
+					const uint64_t half = uint64_t{1} << (e - 1);
+					int64_t m = static_cast<int64_t>(j * (half / div) + (j * (half % div)) / div);
+					m += rng.InRange(-1, 1);
+					m = std::clamp<int64_t>(m, 0, dp);
+					v = rng.Next() & 1 ? m : -m;
+					break;
+				}
+				default: v = rng.InRange(-dp, dp); break;
+			}
+		}
+		x[static_cast<size_t>(rng.InRange(0, static_cast<int64_t>(n) - 1))] = rng.Next() & 1 ? dp : -dp;
+		++calls;
+		failed_calls += RunRequantRow(pass, x, dp, fenced, &path_bad) != 0;
+	}
+	++calls;
+	failed_calls += RunRequantRow(pass, std::vector<int64_t>{}, 1, fenced, &path_bad) != 0;
+	// The path rule per call (tallied above), then the whole pass as one delta, so a counter that moved on a
+	// call the loop above did not see is caught too.
+	CHECK_MSG(path_bad == 0, "%s: %zu of %zu row-leaf calls moved the requant_row counters wrongly (kernel: %s)", pass,
+	          path_bad, calls, SitesKernelName(ExpectedSitesKernel()));
+	CheckRqDelta(pass, RqDelta(c0, ReadRqCounters()), ExpectedRqDelta(static_cast<long long>(calls)));
+	std::printf("attn-rowsites S3 %s: %zu row-leaf calls, %d with a wrong code or fence, %zu with a wrong path\n", pass,
+	            calls, failed_calls, path_bad);
+}
+
+void TestS3Grid() {
+	RunS3Grid(/*fenced=*/true);
+	RunS3Grid(/*fenced=*/false);
+}
+
+// ---- the funnel's call site: one row-leaf call per funnel call that passes its preflight ------------
+
+void TestS3FunnelCallSite() {
+	const CarriedScale unit{INT64_C(1073741824), 0};
+	superslm_rowsite_cases::Rng rng(0x5333464E4E4C0000ULL);
+	for (size_t n : {size_t{0}, size_t{5}, size_t{896}, size_t{4864}}) {
+		std::vector<int64_t> x(n);
+		for (auto& v : x) v = rng.InRange(-(INT64_C(1) << 31), INT64_C(1) << 31);
+		std::vector<int8_t> out(n, kPoison), want(n, kPoison);
+		CarriedScale scale{-1, -1};
+		const int64_t dp = superslm::MaxAbsReduceWide(x.data(), n);
+		const RqConstants k = RqConstantsFor(dp);
+		for (size_t i = 0; i < n; ++i) want[i] = superslm::RequantTokenCodeWide(x[i], k.r, k.s);
+		const RqCounters c0 = ReadRqCounters();
+		const SslmForwardStatus st =
+		    superslm::RequantChainChecked(x.data(), n, std::span<const CarriedScale>{}, unit, out.data(), &scale).status;
+		const RqCounters c1 = ReadRqCounters();
+		CHECK_MSG(st == SslmForwardStatus::Ok && out == want, "S3 funnel n=%zu: status %s, codes %s the element loop's", n,
+		          SslmForwardStatusName(st), out == want ? "equal" : "differ from");
+		char label[64];
+		std::snprintf(label, sizeof label, "S3 funnel call n=%zu", n);
+		CheckRqDelta(label, RqDelta(c0, c1), ExpectedRqDelta(1));
+	}
+	// A refused preflight (d' = 2^31 + 1) writes nothing and never reaches the row leaf.
+	std::vector<int64_t> x(896, 3);
+	x[100] = (INT64_C(1) << 31) + 1;
+	std::vector<int8_t> out(896, kPoison);
+	CarriedScale scale{-1, -1};
+	const RqCounters c0 = ReadRqCounters();
+	const SslmForwardStatus st =
+	    superslm::RequantChainChecked(x.data(), x.size(), std::span<const CarriedScale>{}, unit, out.data(), &scale).status;
+	CHECK_MSG(st == SslmForwardStatus::ChainInputOutOfDomain &&
+	              std::all_of(out.begin(), out.end(), [](int8_t c) { return c == kPoison; }),
+	          "S3 funnel refused: status %s, codes untouched", SslmForwardStatusName(st));
+	CheckRqDelta("S3 funnel refused by the preflight", RqDelta(c0, ReadRqCounters()), ExpectedRqDelta(0));
+}
+
+// ---- 6.3: the S3 golden pin (the v1.9.0 tag's hash over the requant row set) -------------------------
+
+void TestS3GoldenPin() {
+	superslm::Sha256 h;
+	uint64_t values = 0;
+	auto emit = [&](int64_t v) {
+		uint8_t b[8];
+		for (int i = 0; i < 8; ++i) b[i] = static_cast<uint8_t>((static_cast<uint64_t>(v) >> (8 * i)) & 0xffU);
+		h.Update(b, 8);
+		++values;
+	};
+	superslm_rowsite_cases::RunRequantRowCases(emit);
+	uint8_t digest[32];
+	h.Final(digest);
+	const std::string hex = superslm::ToHex(digest);
+	std::printf("attn-rowsites S3 golden hash: %s (%llu values)\n", hex.c_str(), static_cast<unsigned long long>(values));
+	CHECK_MSG(hex == std::string(superslm_test::kAttnRowsiteS3GoldenHash) &&
+	              values == superslm_test::kAttnRowsiteS3GoldenValues,
+	          "6.3 S3 golden: %s over %llu values, pin %s over %llu (v1.9.0 tag)", hex.c_str(),
+	          static_cast<unsigned long long>(values), superslm_test::kAttnRowsiteS3GoldenHash,
+	          static_cast<unsigned long long>(superslm_test::kAttnRowsiteS3GoldenValues));
+}
+
 // ---- 11.1(d): the 0.5B-width 1-layer artifact through the two layer loops -----------------------
 
 struct TraceCount {
@@ -938,6 +1233,7 @@ void TestS1LayerLoopWindows() {
 	// The prefill window.
 	const RowCounters p0 = ReadRowCounters();
 	const PvCounters v0 = ReadPvCounters();
+	const RqCounters q0 = ReadRqCounters();
 	const TraceCount tp0 = trace;
 	std::vector<int8_t> chunk(T * hidden);
 	std::vector<CarriedScale> scales(T);
@@ -957,6 +1253,7 @@ void TestS1LayerLoopWindows() {
 	seq.context_length = static_cast<int64_t>(T);
 	const RowCounters p1 = ReadRowCounters();
 	const PvCounters v1 = ReadPvCounters();
+	const RqCounters q1 = ReadRqCounters();
 	const TraceCount tp1 = trace;
 
 	// The decode window.
@@ -976,6 +1273,7 @@ void TestS1LayerLoopWindows() {
 	          static_cast<long long>(seq.context_length), T + D);
 	const RowCounters p2 = ReadRowCounters();
 	const PvCounters v2 = ReadPvCounters();
+	const RqCounters q2 = ReadRqCounters();
 	const TraceCount tp2 = trace;
 	SslmSetTraceHook(model.trace_hook, nullptr, nullptr);
 
@@ -989,10 +1287,11 @@ void TestS1LayerLoopWindows() {
 		const char* name;
 		RowCounters a, b;
 		PvCounters va, vb;
+		RqCounters qa, qb;
 		TraceCount ta, tb;
 		size_t N;
 		long long pv_fallback;
-	} windows[] = {{"prefill", p0, p1, v0, v1, tp0, tp1, T, 15}, {"decode", p1, p2, v1, v2, tp1, tp2, D, 0}};
+	} windows[] = {{"prefill", p0, p1, v0, v1, q0, q1, tp0, tp1, T, 15}, {"decode", p1, p2, v1, v2, q1, q2, tp1, tp2, D, 0}};
 	for (const auto& w : windows) {
 		// Structural terms (G26): the closed forms, every width here being >= 512.
 		const RowCounters d = Delta(w.a, w.b);
@@ -1014,6 +1313,11 @@ void TestS1LayerLoopWindows() {
 		char pv_label[64];
 		std::snprintf(pv_label, sizeof pv_label, "11.1(d) %s prob-V", w.name);
 		CheckPvDelta(pv_label, PvDelta(w.va, w.vb), ExpectedPvDelta(calls - w.pv_fallback, w.pv_fallback));
+		// S3: one row-leaf call per funnel call that passes its preflight, (11·L + 1)·N (structural: the
+		// same count as the chain trace records above), on the active kernel's tier only (11.1(b)); 0 on
+		// forced SSE2 and on an MSVC build's AVX-512 tier with its switch off, where the records still count.
+		std::snprintf(pv_label, sizeof pv_label, "11.1(d) %s requant_row", w.name);
+		CheckRqDelta(pv_label, RqDelta(w.qa, w.qb), ExpectedRqDelta((11 * Ll + 1) * N));
 		if (!kHaveRowCounters) continue;
 		const long long want_taken[3] = {2 * Ll * N, Ll * N, 2 * Ll * N};
 		for (int s = 0; s < 3; ++s) {
@@ -1042,8 +1346,12 @@ void RunAttnRowsiteCells(int& checks, int& failures) {
 	TestS2Grid();
 	TestS2HostileRows();
 	TestS2GoldenPin();
-	TestS1LayerLoopWindows();  // 11.1(d): S1's and S2's rows over one drive
-	std::printf("attn-rowsites cells (plan slices S1, S2): %d checks, %d failures\n", GChecks, GFailures);
+	TestS3CornerPremise();
+	TestS3Grid();
+	TestS3FunnelCallSite();
+	TestS3GoldenPin();
+	TestS1LayerLoopWindows();  // 11.1(d): S1's, S2's and S3's rows over one drive
+	std::printf("attn-rowsites cells (plan slices S1, S2, S3): %d checks, %d failures\n", GChecks, GFailures);
 	checks += GChecks;
 	failures += GFailures;
 }

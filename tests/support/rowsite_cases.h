@@ -1,10 +1,11 @@
-// Attention and per-row sites plan, slice S1 (the per-row tables): the fixed input set that the
-// digest section `c_rowsites`, the golden-pin generator (tools/gen_attn_rowsite_golden.cpp) and the
-// suite's golden cell all run through the three per-row sites. Header-only, so it needs no build
+// Attention and per-row sites plan, slices S1 (the per-row tables) and S3 (the requant element loop):
+// the fixed input sets that the digest section `c_rowsites`, the golden-pin generator
+// (tools/gen_attn_rowsite_golden.cpp) and the suite's golden cells run through the three per-row sites
+// (S1, RunRowTableCases) and through the checked chain funnel (S3, RunRequantRowCases). Header-only, so it needs no build
 // entry: the digest and the generator include it by relative path, the suite through `tests/`.
 //
 // Everything here calls only entry points whose signatures are unchanged since v1.9.0
-// (RmsNormSite, MlpActSite, ResidualReconcileSite), so the generator can be built against the
+// (RmsNormSite, MlpActSite, ResidualReconcileSite, RequantChainChecked), so the generator can be built against the
 // v1.9.0 tag's library and the pin takes no input from the code it grades (plan §3.3 evidence 3).
 //
 // The set covers both sides of the table threshold (widths 1 to 4,864 around 512), the -128 code
@@ -18,6 +19,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include "superslm/checked_chain_funnel.h"
@@ -190,6 +192,77 @@ void RunResidualCases(Emit& emit) {
 			                                                out.data(), &scale);
 			EmitResult(emit, st, scale, out);
 		}
+	}
+}
+
+// ---- Slice S3: the requant element loop (plan §4.3, §5.3, §8 4.S3) ------------------------------------
+//
+// The funnel's element loop runs through RequantChainChecked, whose signature is v1.9.0's, so the
+// generator can drive the same rows through the v1.9.0 tag's library. Every row carries +d' or -d'
+// at a chosen element (so the row's own max-abs is d', and NormalizeScale/DynamicScaleReciprocal of
+// that d' are the r and s the element loop receives), the other elements drawn from [-d', d'].
+
+// The widths of 4.S3: lanes of 4 (AVX2) and 8 (AVX-512) with every tail length around them, plus the
+// 0.5B's hidden and intermediate widths.
+inline constexpr size_t kRequantWidths[] = {1, 3, 4, 5, 7, 8, 9, 896, 4864};
+
+// d' values: 1, 2, 2^30 and 2^31 (the P = 2^63 corner at r = 2^32, s = -1) and their neighbours, then
+// for every s in [0, 30] the octave [2^(30-s), 2^(31-s)) that NormalizeScale maps to that s: its low
+// end, its high end and one draw inside.
+inline std::vector<int64_t> RequantDPrimes(Rng& rng) {
+	std::vector<int64_t> d = {1, 2, 3, (INT64_C(1) << 30) - 1, INT64_C(1) << 30, (INT64_C(1) << 30) + 1,
+	                          (INT64_C(1) << 31) - 1, INT64_C(1) << 31};
+	for (int s = 0; s <= 30; ++s) {
+		const int64_t lo = INT64_C(1) << (30 - s), hi = (INT64_C(1) << (31 - s)) - 1;
+		d.push_back(lo);
+		d.push_back(hi);
+		d.push_back(rng.InRange(lo, hi));
+	}
+	return d;
+}
+
+// One funnel call on `x` with the unit site constant; status, output scale and codes are emitted.
+template <class Emit>
+void EmitRequantRow(Emit& emit, const std::vector<int64_t>& x) {
+	using superslm::CarriedScale;
+	const CarriedScale site_constant{INT64_C(1073741824), 0};
+	std::vector<int8_t> out(x.size(), kPoison);
+	CarriedScale scale{-1, -1};
+	const auto st = superslm::RequantChainChecked(x.data(), x.size(), std::span<const CarriedScale>{},
+	                                              site_constant, out.data(), &scale)
+	                    .status;
+	EmitResult(emit, st, scale, out);
+}
+
+// Every width x every d': in rows of up to 9 elements, +d' and -d' at every position in turn (every lane
+// position of both SIMD widths and every tail slot); in the wide rows, at the first element, the last,
+// and one drawn position. Then the empty row and two rows the preflight refuses (d' = 2^31 + 1), whose
+// untouched output is digested too.
+template <class Emit>
+void RunRequantRowCases(Emit& emit) {
+	Rng rng(0x5333524551524F57ULL);  // "S3REQROW"
+	const std::vector<int64_t> dprimes = RequantDPrimes(rng);
+	for (size_t n : kRequantWidths)
+		for (int64_t dp : dprimes) {
+			std::vector<size_t> positions;
+			if (n <= 9) {
+				for (size_t p = 0; p < n; ++p) positions.push_back(p);
+			} else {
+				positions = {0, n - 1, static_cast<size_t>(rng.InRange(1, static_cast<int64_t>(n) - 2))};
+			}
+			for (size_t p : positions)
+				for (int sign : {1, -1}) {
+					std::vector<int64_t> x(n);
+					for (auto& v : x) v = rng.InRange(-dp, dp);
+					x[p] = sign * dp;
+					EmitRequantRow(emit, x);
+				}
+		}
+	EmitRequantRow(emit, std::vector<int64_t>{});
+	for (size_t n : {size_t{5}, size_t{896}}) {
+		std::vector<int64_t> x(n, 7);
+		x[n / 2] = (INT64_C(1) << 31) + 1;
+		EmitRequantRow(emit, x);
 	}
 }
 

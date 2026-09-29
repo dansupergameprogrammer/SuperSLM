@@ -7,12 +7,15 @@
 //   - S1: tests/support/rowsite_cases.h through the three per-row sites (every call's status, output
 //     scale and output row; the digest's `c_rowsites` section);
 //   - S2: tests/support/attention_cases.h through GemmProbQ15Accumulate (every call's width, head_dim
-//     and output row; the digest's `c32_attention` section).
-// Every tier of every build must reproduce both hashes (tests/test_attn_rowsites.cpp, cell 6.3), so
+//     and output row; the digest's `c32_attention` section);
+//   - S3: tests/support/rowsite_cases.h's requant rows through RequantChainChecked (every call's
+//     status, output scale and codes; appended to the digest's `c_rowsites` section).
+// Every tier of every build must reproduce every hash (tests/test_attn_rowsites.cpp, cell 6.3), so
 // the reference takes no input from the code it grades. One hash per slice, so no later slice
 // regenerates an earlier one's.
 //
-// Recipe (the one used for the committed pin; see docs/attention-rowsites/s1/golden.txt and s2/golden.txt):
+// Recipe (the one used for the committed pin; see docs/attention-rowsites/s1/golden.txt, s2/golden.txt and
+// s3/golden.txt):
 //   git worktree add /tmp/v190 v1.9.0
 //   cmake -S /tmp/v190 -B /tmp/v190/build -DCMAKE_BUILD_TYPE=Release && cmake --build /tmp/v190/build --target superslm
 //   c++ -std=c++20 -O2 -I/tmp/v190/include tools/gen_attn_rowsite_golden.cpp /tmp/v190/build/libsuperslm.a
@@ -60,6 +63,8 @@ int main(int argc, char** argv) {
 	std::printf("S1 row-table golden: %s over %llu values\n", s1.hex.c_str(), s1.values);
 	const Hashed s2 = HashStream([](auto& emit) { superslm_attention_cases::RunProbVCases(emit); });
 	std::printf("S2 prob-V golden: %s over %llu values\n", s2.hex.c_str(), s2.values);
+	const Hashed s3 = HashStream([](auto& emit) { superslm_rowsite_cases::RunRequantRowCases(emit); });
+	std::printf("S3 requant-row golden: %s over %llu values\n", s3.hex.c_str(), s3.values);
 	if (argc < 2) return 0;
 	FILE* f = std::fopen(argv[1], "wb");
 	if (!f) return std::fprintf(stderr, "cannot write %s\n", argv[1]), 1;
@@ -88,10 +93,15 @@ int main(int argc, char** argv) {
 	             "    \"%s\";\n"
 	             "inline constexpr uint64_t kAttnRowsiteS2GoldenValues = %lluULL;\n"
 	             "\n"
+	             "// Slice S3: RequantChainChecked's element loop over RunRequantRowCases.\n"
+	             "inline constexpr const char* kAttnRowsiteS3GoldenHash =\n"
+	             "    \"%s\";\n"
+	             "inline constexpr uint64_t kAttnRowsiteS3GoldenValues = %lluULL;\n"
+	             "\n"
 	             "}  // namespace superslm_test\n"
 	             "\n"
 	             "#endif  // SUPERSLM_TESTS_ATTN_ROWSITE_GOLDEN_PIN_H\n",
-	             s1.hex.c_str(), s1.values, s2.hex.c_str(), s2.values);
+	             s1.hex.c_str(), s1.values, s2.hex.c_str(), s2.values, s3.hex.c_str(), s3.values);
 	std::fclose(f);
 	return 0;
 }

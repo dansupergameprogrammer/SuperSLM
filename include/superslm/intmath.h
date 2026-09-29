@@ -253,6 +253,24 @@ void RowBoundsWide(const int64_t* x, size_t n, int64_t* out_max, int64_t* out_mi
 // DynamicScaleReciprocal/NormalizeScale, whose own contracts bound them.
 int8_t RequantTokenCodeWide(int64_t x_i, int64_t r, int s);
 
+// Attention and per-row sites plan (rev 3.1), slice S3 (§4.3, §5.3) — the requant element loop
+// as one row leaf: out[i] = RequantTokenCodeWide(x[i], r, s) for every i in [0, n), byte for byte.
+// A funnel leaf like RequantTokenCodeWide: only the checked chain funnel may call it (the
+// forward-leaf check lists it).
+//
+// **Contract: the funnel's.** Every |x[i]| <= d' <= 2^31, with r = DynamicScaleReciprocal(Dn) and
+// s from NormalizeScale(d') of that same d' (so 1 <= r <= 2^32 and s in [-1, 30]); `x` holds n
+// int64 values and `out` has room for exactly n codes. n == 0 reads and writes nothing. Nothing
+// outside [out, out + n) is written.
+//
+// On the AVX2 and AVX-512BW tiers the row runs in 4 or 8 unsigned 64-bit lanes by the identity
+// floor((254·P + 2^e) / 2^(e+1)) = (127·H + ((127·L + 2^(e-1)) >> 32)) >> (e - 32), where
+// P = |x|·r = H·2^32 + L and e = 62 - s, followed by the same clamp and sign restore; the last
+// n mod 4 (or 8) elements run RequantTokenCodeWide. P reaches exactly 2^63 at the contract's corner
+// (|x| = d' = 2^31, r = 2^32), which the unsigned lane holds exactly. The scalar and SSE2 tiers
+// (and an MSVC build's AVX-512 tier with SUPERSLM_SITES_AVX512_MSVC off) run the element loop.
+void RequantRowWide(const int64_t* x, size_t n, int64_t r, int s, int8_t* out);
+
 // --- §6.3 nonlinear scalar primitives (i-sqrt C4/C5/C6, i-exp C7/C8/C9) -------
 //
 // The reproducible-path integer cores only. The float-taking offline derivations
