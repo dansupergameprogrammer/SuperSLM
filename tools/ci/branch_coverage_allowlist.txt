@@ -49,3 +49,12 @@
 #   runner restriction (DispatchSitesKernel returns kAvx512 only on the
 #   AVX-512 tier). The switch has no default and every SitesKernel
 #   enumerator has a case, as in ProbQ15AccumulateInto.
+# Attention and per-row sites plan, slice S4 (the guarded softmax; plan §3.4, cell 11.6):
+# src/intmath.cpp:1189-1238 -- SoftmaxRowAvx512 (its branches: the lane
+#   loops at 1204 and 1231, the lane sum at 1212, the tail tests at 1214
+#   and 1232 and the tail copies at 1218 and 1236) cannot execute on a
+#   runner without AVX-512, for the same reason as RequantRowAvx512 above.
+# src/intmath.cpp:1268,1275 -- SoftmaxRowQ15's kAvx2-or-kAvx512 choices
+#   (the body call and the fallback counter): the kAvx512 side needs the
+#   AVX-512 tier, as RequantRowWide's arm above. The z estimate's downward
+#   correction in both bodies is branch-free and adds no branch here.

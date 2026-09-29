@@ -179,6 +179,36 @@ about 2.7 ms per token on AVX-512 and 2.5 on AVX2, prefill and decode alike.
 These are engine figures on synthetic weights, not a consumer's end-to-end
 speed (`docs/attention-rowsites/s3/bench.md`).
 
+### Guarded softmax rows (unreleased)
+
+Attention's softmax row (`SoftmaxRowQ15`) turns a row of scores into Q15
+probabilities. On the AVX2 and AVX-512 tiers it first checks a row guard:
+width at most 2^14, q_ln2 >= 1, q_c >= 0, M = q_b^2 + q_c in [1, 2^47]
+(formed in 128 bits, as the 1.9.0 body forms it), q_ln2 <= 2 q_b + 1, and
+every score within 2^61. Inside the guard it computes the row 4 or 8
+elements at a time. Each element's quotient by q_ln2 and each
+probability's divide by the row total is an integer reciprocal estimate,
+corrected exactly by one integer comparison each way, so every probability
+and the returned bool equal v1.9.0's. Outside the guard the 1.9.0 body
+runs unchanged. The estimates are integer arithmetic, so the library
+stays floating-point-free.
+
+| Build | Fast path | Status |
+|---|---|---|
+| GCC / Clang, AVX2 tier | on | Bit-identity: full suite forced AVX2, the softmax golden pinned from 1.9.0, cross-tier digest, save-blob equality against 1.9.0 |
+| GCC / Clang, AVX-512 tier | on | Same evidence, forced AVX-512 and auto dispatch |
+| MSVC / clang-cl, AVX2 tier | on | Built by the forced Windows legs; not yet executed on Windows |
+| MSVC / clang-cl, AVX-512 tier | **off** (`SUPERSLM_SITES_AVX512_MSVC=0`) | The same switch as prob·V above |
+
+**Measured, engine level, same host as above (best of 30, 9 interleaved
+rounds):** a row of 512 keys takes 3.8 µs on 1.9.0, 1.06 µs on AVX2 and
+0.90 µs on AVX-512. At Qwen2.5-0.5B depth (24 layers x 14 heads) that saves
+about 0.10 / 0.46 / 0.91 ms per prompt token at 128 / 512 / 1,024 tokens
+on AVX2, and 0.53 ms per decode token at context 300. A one-key row is
+about 0.03 µs slower (the guard and two reciprocal divides per row).
+These are engine figures on synthetic weights, not a consumer's end-to-end
+speed (`docs/attention-rowsites/s4/bench.md`).
+
 ### Damped-greedy decoding
 
 The 1.2 candidate's opt-in decoder was confirmed on Windows x64 through the

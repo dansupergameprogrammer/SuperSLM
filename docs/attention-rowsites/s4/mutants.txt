@@ -1,0 +1,383 @@
+# S4 mutation evidence (plan §9; GCC 13.3 Release; this host has AVX-512BW, so the auto binary dispatches AVX-512), run at the
+# implementation commit. Each mutant is applied to a synced copy of that commit by its script (mutation-scripts/<name>.py, run from
+# the repository root). superslm_tests (auto), superslm_tests_avx2_forced and superslm_tests_avx512_forced are then rebuilt and run
+# from the repository root with SUPERSLM_ATTN_ROWSITES_ARTIFACT set (p05_l1, sha256 f0fd4886...6ed3), the three at once, each with
+# its own TMPDIR. 'none' is the unmutated control. The raw log follows; it shows at most four distinct failing lines per run.
+#
+# The correction mutants are applied to each tier's body separately (§9 preamble): each AVX2-body mutant must die on forced AVX2
+# (and on auto on a runner without AVX-512) and survives here on the two AVX-512 binaries, which never run that body; each
+# AVX-512-body mutant must die on forced AVX-512 and on auto and survives on forced AVX2. Guard, dispatcher and counter mutants sit in
+# code both tiers share and die on all three. The z downward correction owes no mutant (§5.4 step 3; with the integer estimate it
+# still cannot fire, see the progress file's deviation 1).
+#
+# Summary (K n = killed, n failures in the attn-rowsites cells; K trap = killed by SIGFPE, located below; s = survives by
+# construction, as above):
+#   mutant                           auto(AVX-512)  forced AVX2  forced AVX-512   §9 row / killing cell
+#   none                             s              s            s             
+#   all_avx512_runs_avx2_body        K 2813         s            K 2813        
+#   all_fallback_increment_deleted   K 312          K 312        K 312         
+#   all_fast_increment_before_guard  K 312          K 312        K 312         
+#   s4_always_fallback               K 2813         K 2813       K 2813        
+#   s4_m_ge1_dropped                 K trap         K trap       K trap        
+#   s4_m_ge2                         K 3            K 3          K 3           
+#   s4_m_le_dropped                  K 243          K 243        K 243         
+#   s4_m_lt                          K 2            K 2          K 2           
+#   s4_pdown_skipped_avx2            s              K 94         s             
+#   s4_pdown_skipped_avx512          K 94           s            K 94          
+#   s4_pup_skipped_avx2              s              K 393        s             
+#   s4_pup_skipped_avx512            K 393          s            K 393         
+#   s4_qc_ge0_dropped                K trap         K trap       K trap        
+#   s4_qc_ge1                        K 29           K 29         K 29          
+#   s4_qln2_ge1_dropped              K trap         K trap       K trap        
+#   s4_qln2_ge2                      K 186          K 186        K 186         
+#   s4_ratio_dropped                 K 3            K 3          K 3           
+#   s4_ratio_le2qb                   K 33           K 33         K 33          
+#   s4_score_dropped                 K 2            K 2          K 2           
+#   s4_score_lt                      K 1            K 1          K 1           
+#   s4_true_outside_guard            K 313          K 313        K 313         
+#   s4_width_2p15                    K 1            K 1          K 1           
+#   s4_width_lt                      K 4            K 4          K 4           
+#   s4_zup_skipped_avx2              s              K 307        s             
+#   s4_zup_skipped_avx512            K 307          s            K 307         
+#   x_clip_dropped_avx2              s              K 10         s             
+#   x_clip_dropped_avx512            K 10           s            K 10          
+#   x_clip_high_dword_avx2           s              K 2          s             
+#   x_tail_total_dropped_avx2        s              K trap       s             
+#   x_tail_total_dropped_avx512      K trap         s            K trap        
+#
+# Which cell kills each, against §9's column (from the raw log):
+#   q_ln2 >= 1 dropped: SIGFPE (q_ln2 = 0 reaches MakeSoftmaxFastRow's 2^kz / q_ln2), in TestS4Grid, the 4.S4 grid's outside-guard
+#     constants. §9 allows "a trap". q_c >= 0 dropped and M >= 1 dropped: SIGFPE in the body's reciprocal (a row total of 0), also in
+#     the 4.S4 grid, which runs before the 2.S4 rows §9 names. Both are stronger than §9's "bool and counter"; the 2.S4 rows are
+#     not reached in the suite's order.
+#   q_ln2 >= 2 (186), q_c >= 1 (29), M >= 2 (3: 4.S4 "inside: M = 1", "total = 1"), M < 2^47 (2: "M = 2^47, width 2^14"),
+#     ratio <= 2 q_b (33), width < 2^14 (4: "grid, width 2^14"), score < 2^61 (1: "scores of exactly +-2^61"): counter, fast expected.
+#   M <= 2^47 dropped (243), ratio dropped (3: 2.S4 "q_ln2 = 2 q_b + 2", bool 1 against v1.9.0's 0, probabilities differ, and the
+#     golden): bool, output and counter. The ratio mutant also turns test_main's pre-existing well-formedness cell red.
+#   width <= 2^15 (1: 2.S4 "width 2^14 + 1") and score conjunct dropped (1: 2.S4 "one score 2^61 + 1"): output-equivalent, as §9
+#     says; counter, fallback expected.
+#   z up, p up, p down skipped, per body: output (4.S4's correction rows, the grid and the golden). Counted by label on the forced
+#     AVX2 binary (a rerun of the three AVX2-body mutants): z up fails all 24 z-up rows, 280 grid rows, 2 inside corners and the
+#     golden; p up all 24 p-up rows, 367 grid rows and the golden; p down all 48 steered rows (24 per constant shape), 44 grid
+#     rows, 1 inside corner and the golden. So the p downward correction also fires on ordinary grid rows under the integer
+#     estimate; under the plan's double it fired on about 2^-38 of reachable rows (§5.4 step 4).
+#   return true outside the guard (313): bool (2.S4, every bool row, the off-ratio witness) plus four pre-existing test_main cells.
+#   always fall back (2,813), fallback increment deleted (312), fast increment before the guard (312), AVX-512 runs the AVX2 body
+#     (2,813, on the two binaries that select AVX-512): counter. For always-fall-back, §9's named cell was confirmed by a rerun
+#     on forced AVX2: "11.1(d) prefill softmax: softmax_fast_avx2 +0 softmax_fallback_avx2 +1792 ... want +1792/+0" and
+#     "11.1(d) decode softmax: ... +0 ... +448 ...; want +448/+0".
+#   Extras (not in §9): the clip dropped (10 per body), the AVX2 clip's high-dword fold dropped (2), the tail's e left out of
+#     the total (SIGFPE on a width-1..3 or 1..7 row whose tail is the whole row, in test_main's shipped-primitives oracle).
+#
+# Harness note. In the parallel run, s4_pup_skipped_avx2 showed 2 failures on the auto and forced AVX-512 binaries, both in
+# test_main's adapter end-to-end cell (tests/test_main.cpp:24099), which writes a fixed cwd-relative file
+# (t2102_sslm_generate_e2e_fixture.sslm.tmp): three binaries sharing one working directory collided on it. Neither binary runs the
+# AVX2 body. Rerun alone, both are green (mutants-traps below). The summary above counts only the attn-rowsites cells.
+#
+# Trap locations (gdb batch backtraces on the forced binary) and the serial rerun:
+# == s4_m_ge1_dropped on superslm_tests_avx2_forced (gdb):
+# #0  0x000055555569b7c3 in superslm::(anonymous namespace)::SoftmaxRowAvx2(long const*, unsigned long, superslm::(anonymous namespace)::SoftmaxFastRow const&, long*) ()
+# #1  0x000055555569d541 in superslm::SoftmaxRowQ15(long const*, unsigned long, long, long, long, long*) ()
+# #2  0x000055555566cdea in (anonymous namespace)::TestS4Grid()::{lambda(superslm_attention_cases::SmCase const&)#1}::operator()(superslm_attention_cases::SmCase const&) const ()
+# #3  0x000055555566f17c in (anonymous namespace)::TestS4Grid() ()
+# #4  0x00005555556755ff in RunAttnRowsiteCells(int&, int&) ()
+# #5  0x000055555557bf17 in main ()
+# == s4_qc_ge0_dropped on superslm_tests_avx2_forced (gdb):
+# #0  0x000055555569b7c3 in superslm::(anonymous namespace)::SoftmaxRowAvx2(long const*, unsigned long, superslm::(anonymous namespace)::SoftmaxFastRow const&, long*) ()
+# #1  0x000055555569d54d in superslm::SoftmaxRowQ15(long const*, unsigned long, long, long, long, long*) ()
+# #2  0x000055555566cdea in (anonymous namespace)::TestS4Grid()::{lambda(superslm_attention_cases::SmCase const&)#1}::operator()(superslm_attention_cases::SmCase const&) const ()
+# #3  0x000055555566f0f2 in (anonymous namespace)::TestS4Grid() ()
+# #4  0x00005555556755ff in RunAttnRowsiteCells(int&, int&) ()
+# #5  0x000055555557bf17 in main ()
+# == s4_qln2_ge1_dropped on superslm_tests_avx2_forced (gdb):
+# #0  0x000055555569d508 in superslm::SoftmaxRowQ15(long const*, unsigned long, long, long, long, long*) ()
+# #1  0x000055555566cdea in (anonymous namespace)::TestS4Grid()::{lambda(superslm_attention_cases::SmCase const&)#1}::operator()(superslm_attention_cases::SmCase const&) const ()
+# #2  0x000055555566df59 in (anonymous namespace)::TestS4Grid() ()
+# #3  0x00005555556755ff in RunAttnRowsiteCells(int&, int&) ()
+# #4  0x000055555557bf17 in main ()
+# == x_tail_total_dropped_avx2 on superslm_tests_avx2_forced (gdb):
+# #0  0x000055555569ba83 in superslm::(anonymous namespace)::SoftmaxRowAvx2(long const*, unsigned long, superslm::(anonymous namespace)::SoftmaxFastRow const&, long*) ()
+# #1  0x000055555569d5b5 in superslm::SoftmaxRowQ15(long const*, unsigned long, long, long, long, long*) ()
+# #2  0x0000555555585e62 in TestSoftmaxRowQ15AgainstComposedShippedPrimitivesOracle() ()
+# #3  0x000055555557bb27 in main ()
+# == x_tail_total_dropped_avx512 on superslm_tests_avx512_forced (gdb):
+# #0  0x000055555569b106 in superslm::(anonymous namespace)::SoftmaxRowAvx512(long const*, unsigned long, superslm::(anonymous namespace)::SoftmaxFastRow const&, long*) ()
+# #1  0x000055555569d47b in superslm::SoftmaxRowQ15(long const*, unsigned long, long, long, long, long*) ()
+# #2  0x0000555555585e62 in TestSoftmaxRowQ15AgainstComposedShippedPrimitivesOracle() ()
+# #3  0x000055555557bb27 in main ()
+# == s4_pup_skipped_avx2 on superslm_tests, run alone: exit 0 attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116129 checks, 0 failures|
+# == s4_pup_skipped_avx2 on superslm_tests_avx512_forced, run alone: exit 0 attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116087 checks, 0 failures|
+
+######## raw
+== none on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116129 checks, 0 failures|
+== none on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116087 checks, 0 failures|
+== none on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116087 checks, 0 failures|
+== all_avx512_runs_avx2_body on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 2813 failures|superslm tests: 116129 checks, 2813 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid (width 1, guard copy: fast): softmax_fast_avx2 +1 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, aliased (width 1, guard copy: fast): softmax_fast_avx2 +1 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, width 1,024 (width 1024, guard copy: fast): softmax_fast_avx2 +1 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 total = 1, p = 2^15 (width 3, guard copy: fast): softmax_fast_avx2 +1 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+0/+1/+0 (kernel: AVX-512)
+== all_avx512_runs_avx2_body on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116087 checks, 0 failures|
+== all_avx512_runs_avx2_body on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 2813 failures|superslm tests: 116087 checks, 2813 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid (width 1, guard copy: fast): softmax_fast_avx2 +1 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, aliased (width 1, guard copy: fast): softmax_fast_avx2 +1 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, width 1,024 (width 1024, guard copy: fast): softmax_fast_avx2 +1 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 total = 1, p = 2^15 (width 3, guard copy: fast): softmax_fast_avx2 +1 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+0/+1/+0 (kernel: AVX-512)
+== all_fallback_increment_deleted on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 312 failures|superslm tests: 116129 checks, 312 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid (width 1, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, aliased (width 1, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, width 1,024 (width 1024, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 q_ln2 = 0 (width 3, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+== all_fallback_increment_deleted on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 312 failures|superslm tests: 116087 checks, 312 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid (width 1, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+1/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, aliased (width 1, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+1/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, width 1,024 (width 1024, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+1/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 q_ln2 = 0 (width 3, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+1/+0/+0 (kernel: AVX2)
+== all_fallback_increment_deleted on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 312 failures|superslm tests: 116087 checks, 312 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid (width 1, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, aliased (width 1, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, width 1,024 (width 1024, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 q_ln2 = 0 (width 3, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+== all_fast_increment_before_guard on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 312 failures|superslm tests: 116129 checks, 312 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid (width 1, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +1; want +0/+0/+0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, aliased (width 1, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +1; want +0/+0/+0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, width 1,024 (width 1024, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +1; want +0/+0/+0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 q_ln2 = 0 (width 3, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +1; want +0/+0/+0/+1 (kernel: AVX-512)
+== all_fast_increment_before_guard on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 312 failures|superslm tests: 116087 checks, 312 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid (width 1, guard copy: fallback): softmax_fast_avx2 +1 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+1/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, aliased (width 1, guard copy: fallback): softmax_fast_avx2 +1 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+1/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, width 1,024 (width 1024, guard copy: fallback): softmax_fast_avx2 +1 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+1/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 q_ln2 = 0 (width 3, guard copy: fallback): softmax_fast_avx2 +1 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+1/+0/+0 (kernel: AVX2)
+== all_fast_increment_before_guard on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 312 failures|superslm tests: 116087 checks, 312 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid (width 1, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +1; want +0/+0/+0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, aliased (width 1, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +1; want +0/+0/+0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, width 1,024 (width 1024, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +1; want +0/+0/+0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 q_ln2 = 0 (width 3, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +1; want +0/+0/+0/+1 (kernel: AVX-512)
+== s4_always_fallback on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 2813 failures|superslm tests: 116129 checks, 2813 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid (width 1, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, aliased (width 1, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, width 1,024 (width 1024, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 total = 1, p = 2^15 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+== s4_always_fallback on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 2813 failures|superslm tests: 116087 checks, 2813 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid (width 1, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, aliased (width 1, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, width 1,024 (width 1024, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 total = 1, p = 2^15 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2)
+== s4_always_fallback on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 2813 failures|superslm tests: 116087 checks, 2813 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid (width 1, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, aliased (width 1, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, width 1,024 (width 1024, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 total = 1, p = 2^15 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+== s4_m_ge1_dropped on superslm_tests: exit 136; 
+== s4_m_ge1_dropped on superslm_tests_avx2_forced: exit 136; 
+== s4_m_ge1_dropped on superslm_tests_avx512_forced: exit 136; 
+== s4_m_ge2 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 3 failures|superslm tests: 116129 checks, 3 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 total = 1, p = 2^15 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 1 (width 4, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+== s4_m_ge2 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 3 failures|superslm tests: 116087 checks, 3 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 total = 1, p = 2^15 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 1 (width 4, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2)
+== s4_m_ge2 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 3 failures|superslm tests: 116087 checks, 3 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 total = 1, p = 2^15 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 1 (width 4, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+== s4_m_le_dropped on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 243 failures|superslm tests: 116129 checks, 243 failures|
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 4.S4 grid (width 1, q_ln2 12509543, q_b 24418208, q_c 312536884071128): bool 1 (v1.9.0 0); 1 of 1 probabilities differ, first at 0 (32769 vs 0)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid (width 1, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, aliased (width 2, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 M = 2^47 + 1 (width 2, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+== s4_m_le_dropped on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 243 failures|superslm tests: 116087 checks, 243 failures|
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 4.S4 grid (width 1, q_ln2 12509543, q_b 24418208, q_c 312536884071128): bool 1 (v1.9.0 0); 1 of 1 probabilities differ, first at 0 (32769 vs 0)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid (width 1, guard copy: fallback): softmax_fast_avx2 +1 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+1/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, aliased (width 2, guard copy: fallback): softmax_fast_avx2 +1 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+1/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 M = 2^47 + 1 (width 2, guard copy: fallback): softmax_fast_avx2 +1 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+1/+0/+0 (kernel: AVX2)
+== s4_m_le_dropped on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 243 failures|superslm tests: 116087 checks, 243 failures|
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 4.S4 grid (width 1, q_ln2 12509543, q_b 24418208, q_c 312536884071128): bool 1 (v1.9.0 0); 1 of 1 probabilities differ, first at 0 (32769 vs 0)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid (width 1, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, aliased (width 2, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 M = 2^47 + 1 (width 2, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+== s4_m_lt on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 2 failures|superslm tests: 116129 checks, 2 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 2^47, width 2^14, equal scores (denom = 2^61) (width 16384, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; w
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: q_ln2 = 1 (width 6, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+== s4_m_lt on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 2 failures|superslm tests: 116087 checks, 2 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 2^47, width 2^14, equal scores (denom = 2^61) (width 16384, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; w
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: q_ln2 = 1 (width 6, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2)
+== s4_m_lt on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 2 failures|superslm tests: 116087 checks, 2 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 2^47, width 2^14, equal scores (denom = 2^61) (width 16384, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; w
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: q_ln2 = 1 (width 6, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+== s4_pdown_skipped_avx2 on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116129 checks, 0 failures|
+== s4_pdown_skipped_avx2 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 94 failures|superslm tests: 116087 checks, 94 failures|
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 4.S4 grid (width 2, q_ln2 3552184, q_b 6933744, q_c 25200511793588): bool 1 (v1.9.0 1); 1 of 2 probabilities differ, first at 1 (32768 vs 32767)
+FAIL tests/test_attn_rowsites.cpp:1278:preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/down_proj; worst case 4864 rows in a single tensor (LayerWeights now carries one fo
+FAIL tests/test_attn_rowsites.cpp:1434: hex == std::string(superslm_test::kAttnRowsiteS4GoldenHash) && values == superslm_test::kAttnRowsiteS4GoldenValues -- 6.3 S4 golden: 3c92a388916d2316f2b62733a4c4a309ed20657739e88045b615b66fce4f6af5 ov
+== s4_pdown_skipped_avx2 on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116087 checks, 0 failures|
+== s4_pdown_skipped_avx512 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 94 failures|superslm tests: 116129 checks, 94 failures|
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 4.S4 grid (width 2, q_ln2 3552184, q_b 6933744, q_c 25200511793588): bool 1 (v1.9.0 1); 1 of 2 probabilities differ, first at 1 (32768 vs 32767)
+FAIL tests/test_attn_rowsites.cpppreflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/down_proj; worst case 4864 rows in a single tensor (LayerWeights now carries one fold tri
+FAIL tests/test_attn_rowsites.cpp:1434: hex == std::string(superslm_test::kAttnRowsiteS4GoldenHash) && values == superslm_test::kAttnRowsiteS4GoldenValues -- 6.3 S4 golden: 3c92a388916d2316f2b62733a4c4a309ed20657739e88045b615b66fce4f6af5 ov
+== s4_pdown_skipped_avx512 on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116087 checks, 0 failures|
+== s4_pdown_skipped_avx512 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 94 failures|superslm tests: 116087 checks, 94 failures|
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 4.S4 grid (width 2, q_ln2 3552184, q_b 6933744, q_c 25200511793588): bool 1 (v1.9.0 1); 1 of 2 probabilities differ, first at 1 (32768 vs 32767)
+FAIL tests/test_attn_rowsites.cpppreflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/down_proj; worst case 4864 rows in a single tensor (LayerWeights now carries one fold tri
+FAIL tests/test_attn_rowsites.cpp:1434: hex == std::string(superslm_test::kAttnRowsiteS4GoldenHash) && values == superslm_test::kAttnRowsiteS4GoldenValues -- 6.3 S4 golden: 3c92a388916d2316f2b62733a4c4a309ed20657739e88045b615b66fce4f6af5 ov
+== s4_pup_skipped_avx2 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116129 checks, 2 failures|
+FAIL tests/test_main.cpp:24099: adapter_status == AdapterLoadStatus::Ok — the --adapter code path's own LoadAdapterArtifact call must succeed: got FileReadFailed (could not read adapter file: t2102_sslm_generate_e2e_fixture.sslm.tmp)
+FAIL tests/test_main.cpp:24125: seq.hidden_codes[0] != base_only.hidden_codes[0] || seq.hidden_codes[1] != base_only.hidden_codes[1] — the --adapter flag's own end-to-end sequence must produce output that differs from base-only -- got ide
+== s4_pup_skipped_avx2 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 393 failures|superslm tests: 116087 checks, 393 failures|
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 4.S4 grid (width 1, q_ln2 2033099, q_b 3968542, q_c 8255355406617): bool 1 (v1.9.0 1); 1 of 1 probabilities differ, first at 0 (32767 vs 32768)
+FAIL tests/test_attn_rowsites.cpp:1434: hex == std::string(superslm_test::kAttnRowsiteS4GoldenHash) && values == superslm_test::kAttnRowsiteS4GoldenValues -- 6.3 S4 golden: 28396c888f805d78ba0e8289f43512c9d7f1bf99211cc79d66e776f80e8aa78a ov
+FAIL tests/test_attn_rowsites.cpp:717: d.fast2 == want.fast2 && d.fb2 == want.fb2 && d.fast5 == want.fast5 && d.fb5 == want.fb5 -- 11.1(d) prefill prob-V: pv_fast_avx2 +1785 pv_fallback_avx2 +7 pv_fast_avx512 +0 pv_fallback_avx512 +0; want 
+== s4_pup_skipped_avx2 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116087 checks, 2 failures|
+FAIL tests/test_main.cpp:24099: adapter_status == AdapterLoadStatus::Ok — the --adapter code path's own LoadAdapterArtifact call must succeed: got ArtifactRejected (adapter model rejected: ArtifactRejected -- artifact rejected (NullData):
+FAIL tests/test_main.cpp:24125: seq.hidden_codes[0] != base_only.hidden_codes[0] || seq.hidden_codes[1] != base_only.hidden_codes[1] — the --adapter flag's own end-to-end sequence must produce output that differs from base-only -- got ide
+== s4_pup_skipped_avx512 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 393 failures|superslm tests: 116129 checks, 393 failures|
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 4.S4 grid (width 1, q_ln2 2033099, q_b 3968542, q_c 8255355406617): bool 1 (v1.9.0 1); 1 of 1 probabilities differ, first at 0 (32767 vs 32768)
+FAIL tests/test_attn_rowsites.cpp:1434: hex == std::string(superslm_test::kAttnRowsiteS4GoldenHash) && values == superslm_test::kAttnRowsiteS4GoldenValues -- 6.3 S4 golden: 28396c888f805d78ba0e8289f43512c9d7f1bf99211cc79d66e776f80e8aa78a ov
+FAIL tests/test_attn_rowsites.cpp:717: d.fast2 == want.fast2 && d.fb2 == want.fb2 && d.fast5 == want.fast5 && d.fb5 == want.fb5 -- 11.1(d) prefill prob-V: pv_fast_avx2 +0 pv_fallback_avx2 +0 pv_fast_avx512 +1785 pv_fallback_avx512 +7; want 
+== s4_pup_skipped_avx512 on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116087 checks, 0 failures|
+== s4_pup_skipped_avx512 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 393 failures|superslm tests: 116087 checks, 393 failures|
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 4.S4 grid (width 1, q_ln2 2033099, q_b 3968542, q_c 8255355406617): bool 1 (v1.9.0 1); 1 of 1 probabilities differ, first at 0 (32767 vs 32768)
+FAIL tests/test_attn_rowsites.cpp:1434: hex == std::string(superslm_test::kAttnRowsiteS4GoldenHash) && values == superslm_test::kAttnRowsiteS4GoldenValues -- 6.3 S4 golden: 28396c888f805d78ba0e8289f43512c9d7f1bf99211cc79d66e776f80e8aa78a ov
+FAIL tests/test_attn_rowsites.cpp:717: d.fast2 == want.fast2 && d.fb2 == want.fb2 && d.fast5 == want.fast5 && d.fb5 == want.fb5 -- 11.1(d) prefill prob-V: pv_fast_avx2 +0 pv_fallback_avx2 +0 pv_fast_avx512 +1785 pv_fallback_avx512 +7; want 
+== s4_qc_ge0_dropped on superslm_tests: exit 136; 
+== s4_qc_ge0_dropped on superslm_tests_avx2_forced: exit 136; 
+== s4_qc_ge0_dropped on superslm_tests_avx512_forced: exit 136; 
+== s4_qc_ge1 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 29 failures|superslm tests: 116129 checks, 29 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 total = 1, p = 2^15 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: scores of exactly +-2^61 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 1 (width 4, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: q_c = 0 (width 4, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+== s4_qc_ge1 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 29 failures|superslm tests: 116087 checks, 29 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 total = 1, p = 2^15 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: scores of exactly +-2^61 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 1 (width 4, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: q_c = 0 (width 4, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2)
+== s4_qc_ge1 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 29 failures|superslm tests: 116087 checks, 29 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 total = 1, p = 2^15 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: scores of exactly +-2^61 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 1 (width 4, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: q_c = 0 (width 4, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+== s4_qln2_ge1_dropped on superslm_tests: exit 136; 
+== s4_qln2_ge1_dropped on superslm_tests_avx2_forced: exit 136; 
+== s4_qln2_ge1_dropped on superslm_tests_avx512_forced: exit 136; 
+== s4_qln2_ge2 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 186 failures|superslm tests: 116129 checks, 186 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid (width 1, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, aliased (width 1, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, width 1,024 (width 1024, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 2^47, width 2^14, equal scores (denom = 2^6preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/down_proj; worst
+== s4_qln2_ge2 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 186 failures|superslm tests: 116087 checks, 186 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid (width 1, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, aliased (width 1, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, width 1,024 (width 1024, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 2^47, width 2^14, equal scores (denom = 2^61) (width 16384, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; w
+== s4_qln2_ge2 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 186 failures|superslm tests: 116087 checks, 186 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid (width 1, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, aliased (width 1, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, width 1,024 (width 1024, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 2^47, width 2^14, equal scores (denom = 2^6preflight: 1/1 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/down_proj; worst
+== s4_ratio_dropped on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 3 failures|superslm tests: 116129 checks, 4 failures|
+FAIL tests/test_main.cpp:11892: !well_formed — SoftmaxRowQ15(q_b=10, q_c=0, q_ln2=3000000001) reported well_formed=true for a row whose real evaluated element at k=1 (8999999940000000100) exceeds M (100) -- the kernel's own per-element ce
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 2.S4 q_ln2 = 2 q_b + 2 (q_b 4, q_ln2 10) (width 2, q_ln2 10, q_b 4, q_c 0): bool 1 (v1.9.0 0); 2 of 2 probabilities differ, first at 0 (12787 vs 32768)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 q_ln2 = 2 q_b + 2 (q_b 4, q_ln2 10) (width 2, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kerne
+FAIL tests/test_attn_rowsites.cpp:1434: hex == std::string(superslm_test::kAttnRowsiteS4GoldenHash) && values == superslm_test::kAttnRowsiteS4GoldenValues -- 6.3 S4 golden: 8d3b69830515db6df4be13cfb9805bc326d5f9e0b7f8bba159eed0bd399490ee ov
+== s4_ratio_dropped on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 3 failures|superslm tests: 116087 checks, 4 failures|
+FAIL tests/test_main.cpp:11892: !well_formed — SoftmaxRowQ15(q_b=10, q_c=0, q_ln2=3000000001) reported well_formed=true for a row whose real evaluated element at k=1 (8999999940000000100) exceeds M (100) -- the kernel's own per-element ce
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 2.S4 q_ln2 = 2 q_b + 2 (q_b 4, q_ln2 10) (width 2, q_ln2 10, q_b 4, q_c 0): bool 1 (v1.9.0 0); 2 of 2 probabilities differ, first at 0 (12787 vs 32768)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 q_ln2 = 2 q_b + 2 (q_b 4, q_ln2 10) (width 2, guard copy: fallback): softmax_fast_avx2 +1 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+1/+0/+0 (kerne
+FAIL tests/test_attn_rowsites.cpp:1434: hex == std::string(superslm_test::kAttnRowsiteS4GoldenHash) && values == superslm_test::kAttnRowsiteS4GoldenValues -- 6.3 S4 golden: 8d3b69830515db6df4be13cfb9805bc326d5f9e0b7f8bba159eed0bd399490ee ov
+== s4_ratio_dropped on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 3 failures|superslm tests: 116087 checks, 4 failures|
+FAIL tests/test_main.cpp:11892: !well_formed — SoftmaxRowQ15(q_b=10, q_c=0, q_ln2=3000000001) reported well_formed=true for a row whose real evaluated element at k=1 (8999999940000000100) exceeds M (100) -- the kernel's own per-element ce
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 2.S4 q_ln2 = 2 q_b + 2 (q_b 4, q_ln2 10) (width 2, q_ln2 10, q_b 4, q_c 0): bool 1 (v1.9.0 0); 2 of 2 probabilities differ, first at 0 (12787 vs 32768)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 q_ln2 = 2 q_b + 2 (q_b 4, q_ln2 10) (width 2, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kerne
+FAIL tests/test_attn_rowsites.cpp:1434: hex == std::string(superslm_test::kAttnRowsiteS4GoldenHash) && values == superslm_test::kAttnRowsiteS4GoldenValues -- 6.3 S4 golden: 8d3b69830515db6df4be13cfb9805bc326d5f9e0b7f8bba159eed0bd399490ee ov
+== s4_ratio_le2qb on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 33 failures|superslm tests: 116129 checks, 33 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 total = 1, p = 2^15 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 2^47, width 2^14, equal scores (denom = 2^61) (width 16384, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; w
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: q_ln2 = 2 q_b + 1, realistic spread (width 301, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: scores of exactly +-2^61 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-
+== s4_ratio_le2qb on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 33 failures|superslm tests: 116087 checks, 33 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 total = 1, p = 2^15 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 2^47, width 2^14, equal scores (denom = 2^61) (width 16384, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; w
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: q_ln2 = 2 q_b + 1, realistic spread (width 301, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: scores of exactly +-2^61 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2
+== s4_ratio_le2qb on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 33 failures|superslm tests: 116087 checks, 33 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 total = 1, p = 2^15 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 2^47, width 2^14, equal scores (denom = 2^61) (width 16384, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; w
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: q_ln2 = 2 q_b + 1, realistic spread (width 301, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: scores of exactly +-2^61 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-
+== s4_score_dropped on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 2 failures|superslm tests: 116129 checks, 2 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 one score 2^61 + 1 (width 64, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+== s4_score_dropped on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 2 failures|superslm tests: 116087 checks, 2 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 one score 2^61 + 1 (width 64, guard copy: fallback): softmax_fast_avx2 +1 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+1/+0/+0 (kernel: AVX2)
+== s4_score_dropped on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 2 failures|superslm tests: 116087 checks, 2 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 one score 2^61 + 1 (width 64, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+== s4_score_lt on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 1 failures|superslm tests: 116129 checks, 1 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: scores of exactly +-2^61 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-
+== s4_score_lt on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 1 failures|superslm tests: 116087 checks, 1 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: scores of exactly +-2^61 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2
+== s4_score_lt on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 1 failures|superslm tests: 116087 checks, 1 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: scores of exactly +-2^61 (width 3, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-
+== s4_true_outside_guard on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 313 failures|superslm tests: 116129 checks, 317 failures|
+FAIL tests/test_main.cpp:11552: !well_formed — SoftmaxRowQ15(width=3, q_ln2=0, q_b=0, q_c=0) returned true (well-formed), want false -- every element's IExpConstruct(q=0, q_ln2=0, ...) == kBadQLn2 (q_ln2 == 0 has no valid decomposition), 
+FAIL tests/test_main.cpp:11892: !well_formed — SoftmaxRowQ15(q_b=10, q_c=0, q_ln2=3000000001) reported well_formed=true for a row whose real evaluated element at k=1 (8999999940000000100) exceeds M (100) -- the kernel's own per-element ce
+FAIL tests/test_main.cpp:12016: well_formed == false — SoftmaxRowQ15(q_b=0, q_c=1152921504606846976, q_ln2=3000000001, width=1) reported well_formed=true for a row whose only element's real value (1152921504606846976) equals M (1152921504
+FAIL tests/test_main.cpp:15716: result == SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted — RunLayerLoop(derived q_ln2 collapsed to 0, gate accepts) status == Ok, want SoftmaxKernelRefusedAfterGateAccepted
+== s4_true_outside_guard on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 313 failures|superslm tests: 116087 checks, 317 failures|
+FAIL tests/test_main.cpp:11552: !well_formed — SoftmaxRowQ15(width=3, q_ln2=0, q_b=0, q_c=0) returned true (well-formed), want false -- every element's IExpConstruct(q=0, q_ln2=0, ...) == kBadQLn2 (q_ln2 == 0 has no valid decomposition), 
+FAIL tests/test_main.cpp:11892: !well_formed — SoftmaxRowQ15(q_b=10, q_c=0, q_ln2=3000000001) reported well_formed=true for a row whose real evaluated element at k=1 (8999999940000000100) exceeds M (100) -- the kernel's own per-element ce
+FAIL tests/test_main.cpp:12016: well_formed == false — SoftmaxRowQ15(q_b=0, q_c=1152921504606846976, q_ln2=3000000001, width=1) reported well_formed=true for a row whose only element's real value (1152921504606846976) equals M (1152921504
+FAIL tests/test_main.cpp:15716: result == SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted — RunLayerLoop(derived q_ln2 collapsed to 0, gate accepts) status == Ok, want SoftmaxKernelRefusedAfterGateAccepted
+== s4_true_outside_guard on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 313 failures|superslm tests: 116087 checks, 317 failures|
+FAIL tests/test_main.cpp:11552: !well_formed — SoftmaxRowQ15(width=3, q_ln2=0, q_b=0, q_c=0) returned true (well-formed), want false -- every element's IExpConstruct(q=0, q_ln2=0, ...) == kBadQLn2 (q_ln2 == 0 has no valid decomposition), 
+FAIL tests/test_main.cpp:11892: !well_formed — SoftmaxRowQ15(q_b=10, q_c=0, q_ln2=3000000001) reported well_formed=true for a row whose real evaluated element at k=1 (8999999940000000100) exceeds M (100) -- the kernel's own per-element ce
+FAIL tests/test_main.cpp:12016: well_formed == false — SoftmaxRowQ15(q_b=0, q_c=1152921504606846976, q_ln2=3000000001, width=1) reported well_formed=true for a row whose only element's real value (1152921504606846976) equals M (1152921504
+FAIL tests/test_main.cpp:15716: result == SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted — RunLayerLoop(derived q_ln2 collapsed to 0, gate accepts) status == Ok, want SoftmaxKernelRefusedAfterGateAccepted
+== s4_width_2p15 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 1 failures|superslm tests: 116129 checks, 1 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 width 2^14 + 1 (width 16385, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+== s4_width_2p15 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 1 failures|superslm tests: 116087 checks, 1 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 width 2^14 + 1 (width 16385, guard copy: fallback): softmax_fast_avx2 +1 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +0/+1/+0/+0 (kernel: AVX2)
+== s4_width_2p15 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 1 failures|superslm tests: 116087 checks, 1 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 2.S4 width 2^14 + 1 (width 16385, guard copy: fallback): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +1 softmax_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+== s4_width_lt on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 4 failures|superslm tests: 116129 checks, 4 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, width 2^14 (width 16384, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 2^47, width 2^14, equal scores (denom = 2^61) (width 16384, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; w
+== s4_width_lt on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 4 failures|superslm tests: 116087 checks, 4 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, width 2^14 (width 16384, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; want +1/+0/+0/+0 (kernel: AVX2)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 2^47, width 2^14, equal scores (denom = 2^61) (width 16384, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +1 softmax_fast_avx512 +0 softmax_fallback_avx512 +0; w
+== s4_width_lt on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 4 failures|superslm tests: 116087 checks, 4 failures|
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 grid, width 2^14 (width 16384, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; want +0/+0/+1/+0 (kernel: AVX-512)
+FAIL tests/test_attn_rowsites.cpp:1215: ok -- 4.S4 inside: M = 2^47, width 2^14, equal scores (denom = 2^61) (width 16384, guard copy: fast): softmax_fast_avx2 +0 softmax_fallback_avx2 +0 softmax_fast_avx512 +0 softmax_fallback_avx512 +1; w
+== s4_zup_skipped_avx2 on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116129 checks, 0 failures|
+== s4_zup_skipped_avx2 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 307 failures|superslm tests: 116087 checks, 307 failures|
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 4.S4 grid (width 2, q_ln2 1916242, q_b 3740440, q_c 7333633156155): bool 1 (v1.9.0 1); 2 of 2 probabilities differ, first at 0 (32514 vs 32513)
+FAIL tests/test_attn_rowsites.cpp:1434: hex == std::string(superslm_test::kAttnRowsiteS4GoldenHash) && values == superslm_test::kAttnRowsiteS4GoldenValues -- 6.3 S4 golden: 68f50980d4203d0cb87c42b0e1c760e18ff09656cdff1c7a91db60635c989f3d ov
+== s4_zup_skipped_avx2 on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116087 checks, 0 failures|
+== s4_zup_skipped_avx512 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 307 failures|superslm tests: 116129 checks, 307 failures|
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 4.S4 grid (width 2, q_ln2 1916242, q_b 3740440, q_c 7333633156155): bool 1 (v1.9.0 1); 2 of 2 probabilities differ, first at 0 (32514 vs 32513)
+FAIL tests/test_attn_rowsites.cpp:1434: hex == std::string(superslm_test::kAttnRowsiteS4GoldenHash) && values == superslm_test::kAttnRowsiteS4GoldenValues -- 6.3 S4 golden: 68f50980d4203d0cb87c42b0e1c760e18ff09656cdff1c7a91db60635c989f3d ov
+== s4_zup_skipped_avx512 on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116087 checks, 0 failures|
+== s4_zup_skipped_avx512 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 307 failures|superslm tests: 116087 checks, 307 failures|
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 4.S4 grid (width 2, q_ln2 1916242, q_b 3740440, q_c 7333633156155): bool 1 (v1.9.0 1); 2 of 2 probabilities differ, first at 0 (32514 vs 32513)
+FAIL tests/test_attn_rowsites.cpp:1434: hex == std::string(superslm_test::kAttnRowsiteS4GoldenHash) && values == superslm_test::kAttnRowsiteS4GoldenValues -- 6.3 S4 golden: 68f50980d4203d0cb87c42b0e1c760e18ff09656cdff1c7a91db60635c989f3d ov
+== x_clip_dropped_avx2 on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116129 checks, 0 failures|
+== x_clip_dropped_avx2 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 10 failures|superslm tests: 116087 checks, 10 failures|
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 4.S4 grid, aliased (width 2, q_ln2 117415, q_b 229191, q_c 27533976130): bool 1 (v1.9.0 1); 1 of 2 probabilities differ, first at 0 (32768 vs 32767)
+FAIL tests/test_attn_rowsites.cpp:1434: hex == std::string(superslm_test::kAttnRowsiteS4GoldenHash) && values == superslm_test::kAttnRowsiteS4GoldenValues -- 6.3 S4 golden: 2fe70b1f375b217cf33f67475a90450409b557bd02e9a834fa9aa0a0e7952e56 ov
+== x_clip_dropped_avx2 on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116087 checks, 0 failures|
+== x_clip_dropped_avx512 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 10 failures|superslm tests: 116129 checks, 10 failures|
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 4.S4 grid, aliased (width 2, q_ln2 117415, q_b 229191, q_c 27533976130): bool 1 (v1.9.0 1); 1 of 2 probabilities differ, first at 0 (32768 vs 32767)
+FAIL tests/test_attn_rowsites.cpp:1434: hex == std::string(superslm_test::kAttnRowsiteS4GoldenHash) && values == superslm_test::kAttnRowsiteS4GoldenValues -- 6.3 S4 golden: 2fe70b1f375b217cf33f67475a90450409b557bd02e9a834fa9aa0a0e7952e56 ov
+== x_clip_dropped_avx512 on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116087 checks, 0 failures|
+== x_clip_dropped_avx512 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 10 failures|superslm tests: 116087 checks, 10 failures|
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 4.S4 grid, aliased (width 2, q_ln2 117415, q_b 229191, q_c 27533976130): bool 1 (v1.9.0 1); 1 of 2 probabilities differ, first at 0 (32768 vs 32767)
+FAIL tests/test_attn_rowsites.cpp:1434: hex == std::string(superslm_test::kAttnRowsiteS4GoldenHash) && values == superslm_test::kAttnRowsiteS4GoldenValues -- 6.3 S4 golden: 2fe70b1f375b217cf33f67475a90450409b557bd02e9a834fa9aa0a0e7952e56 ov
+== x_clip_high_dword_avx2 on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116129 checks, 0 failures|
+== x_clip_high_dword_avx2 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 2 failures|superslm tests: 116087 checks, 2 failures|
+FAIL tests/test_attn_rowsites.cpp:1278: ok == want_ok && bad == 0 -- 4.S4 inside: scores of exactly +-2^61 (width 3, q_ln2 9, q_b 4, q_c 0): bool 1 (v1.9.0 1); 3 of 3 probabilities differ, first at 0 (10922 vs 32768)
+FAIL tests/test_attn_rowsites.cpp:1434: hex == std::string(superslm_test::kAttnRowsiteS4GoldenHash) && values == superslm_test::kAttnRowsiteS4GoldenValues -- 6.3 S4 golden: 5271e2068a9ffe99e9a96672bee7d4bd0a51a464ebc3e2211bc9ab18f6ee1354 ov
+== x_clip_high_dword_avx2 on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116087 checks, 0 failures|
+== x_tail_total_dropped_avx2 on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116129 checks, 0 failures|
+== x_tail_total_dropped_avx2 on superslm_tests_avx2_forced: exit 136; 
+== x_tail_total_dropped_avx2 on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116087 checks, 0 failures|
+== x_tail_total_dropped_avx512 on superslm_tests: exit 136; 
+== x_tail_total_dropped_avx512 on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116087 checks, 0 failures|
+== x_tail_total_dropped_avx512 on superslm_tests_avx512_forced: exit 136; 

@@ -1,0 +1,35 @@
+# S4 branch coverage (plan §3.4, cell 11.6). INDICATIVE ONLY, as S2's and S3's: a floor is pinned only from the hosted
+# branch-coverage leg's own recorded measurement, and this series is delivered as patches, not pushed, so that leg has not run on
+# it. These are local replicas of the leg's commands (clang-18, llvm-cov/llvm-profdata 18, RelWithDebInfo, -fprofile-instr-generate
+# -fcoverage-mapping; the five binaries, merged, exported over src/*.cpp include/superslm/*.h), on this host (AVX-512BW),
+# SUPERSLM_ATTN_ROWSITES_ARTIFACT = p05_l1. All five binaries exit 0.
+#
+# Base = the S3 head (its numbers are S3's candidate numbers, docs/attention-rowsites/s3/coverage.txt); candidate = S4's
+# implementation commit. Branches covered / total.
+#
+# (1) All five profiles (the leg's union), this host (the auto and forced AVX-512 binaries run AVX-512):
+#   base       src/intmath.cpp 167/188 88.83%   src/matmul.cpp 286/312 91.67%
+#   candidate  src/intmath.cpp 221/242 91.32%   src/matmul.cpp 286/312 91.67%
+#   check_branch_coverage_floors.py: OK (19 files at or above their pinned floor). S4 adds 54 branches to intmath.cpp and covers
+#   all 54; the 21 uncovered branch sides are the base's, moved by S4's insertions.
+#
+# (2) Approximating the hosted runner, which has no AVX-512: only the sse2-forced, avx2-forced and scalar-forced-digest profiles
+#     merged (there, the auto binary dispatches AVX2 and the forced AVX-512 binary faults at its first AVX-512 instruction):
+#   base       src/intmath.cpp 163/188 86.70%   src/matmul.cpp 203/286 70.98%
+#   candidate  src/intmath.cpp 202/242 83.47%   src/matmul.cpp 203/286 70.98%
+#   check_branch_coverage_floors.py on the candidate's projection: FAILED, src/intmath.cpp 83.47% < floor 87.93% (S3 already
+#   projected 86.70%) and src/matmul.cpp 70.98% < floor 72.22% (S2's, unchanged).
+#   So on a runner without AVX-512, S4 takes intmath.cpp a further 3.2 points below its floor. The 15 branch sides it loses there
+#   are all AVX-512-only: SoftmaxRowAvx512's loops, tail tests and tail copies (lines 1204, 1212, 1214, 1218, 1231, 1232, 1236)
+#   and the dispatcher's kAvx2-or-kAvx512 choices (1268, 1275).
+#
+# Uncovered S4 branches (lines of src/intmath.cpp at the implementation commit):
+#   With all five profiles: none.
+#   Without AVX-512 profiles: the nine lines above.
+#   No reachable S4 branch is uncovered, so no cell is added (plan §3.4 step 1). The z estimate's downward correction is
+#   branch-free in both bodies, so it adds no branch.
+#
+# Plan §3.4 steps 2 and 3: allowlist notes for the above are added in tools/ci/branch_coverage_allowlist.txt, in the file's existing
+# reviewer-note form (its checker's pytest: 6 passed). The floors in tools/ci/branch_coverage_floors.json are NOT re-pinned. If the
+# hosted runner lacks AVX-512, the leg fails on intmath.cpp (as it already would from S3, and on matmul.cpp from S2) until the
+# floor is lowered; that is the owner's one-line call at code review (G27).

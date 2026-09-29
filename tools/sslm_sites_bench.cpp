@@ -19,6 +19,11 @@
 //       max-abs spans 2^16 to 2^31. Prints best-of-R microseconds per call, then the per-token cost at
 //       full depth: 24 layers x (8 calls at 896 + 3 at 4,864), plus the embed's one call at 896 (plan §4.3,
 //       G26). Prefill and decode make the same calls per token.
+//   sslm_sites_bench softmax [--repeat=R]
+//       Slice S4: SoftmaxRowQ15 on rows with the forward's own constants (IExpScaleConstants with the format-30
+//       coefficients the forward passes, kept when q_ln2 falls in [347, 944], the range cell 11.1(d)'s data term
+//       measured on the 0.5B-width synthetic; docs/attention-rowsites/s4/softmax-data-terms.txt) and scores spread
+//       over about 16 q_ln2, as int8 dot products at head_dim 64 give there. Same per-token accounting as `pv`.
 //   sslm_sites_bench prefill <artifact.sslm> <T> [--layers=L] [--repeat=R]
 //       One sslm_prefill of T token ids at chunk_budget = T; best-of-R ms per prompt token.
 //   sslm_sites_bench decode <artifact.sslm> <context> <D> [--layers=L] [--repeat=R]
@@ -29,6 +34,7 @@
 // sites' per-token counts at full depth, checked against prefill and decode on reduced-layer artifacts.
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -42,6 +48,7 @@
 
 #include "superslm/checked_chain_funnel.h"
 #include "superslm/forward_sites.h"
+#include "superslm/intmath.h"
 #include "superslm/matmul.h"
 #include "superslm/silu_lut_canonical.h"
 #include "superslm/sslm_abi.h"
@@ -202,6 +209,64 @@ int RequantMode(int repeat) {
 	return bad == 0 ? 0 : 1;
 }
 
+// Slice S4's bench (see the header): the softmax row at the forward's widths and constants.
+int SoftmaxMode(int repeat) {
+	constexpr size_t kMaxWidth = 1025, kLayers = 24, kHeads = 14;
+	Rng rng(0x5334534F46544D58ULL);
+	std::vector<std::array<int64_t, 3>> triples;
+	while (triples.size() < 16) {
+		const int64_t m = (INT64_C(1) << 30) + rng.InRange(0, (INT64_C(1) << 30) - 1);
+		const int64_t e = rng.InRange(-44, -34);
+		int64_t a = 0, b = 0, c = 0;
+		if (superslm::IExpScaleConstants(m, e, superslm::kIExpLn2Q, 30, superslm::kIExpBQ, 30, superslm::kIExpCaQ, 30, &a,
+		                                 &b, &c) == superslm::IExpScaleDomain::kOk &&
+		    a >= 347 && a <= 944)
+			triples.push_back({a, b, c});
+	}
+	struct Row {
+		std::vector<int64_t> scores;
+		std::array<int64_t, 3> t;
+	};
+	std::vector<Row> rows(kMaxWidth + 1);
+	for (size_t w = 1; w <= kMaxWidth; ++w) {
+		rows[w].t = triples[w % triples.size()];
+		rows[w].scores.resize(w);
+		const int64_t half = 8 * rows[w].t[0];
+		for (auto& x : rows[w].scores) x = rng.InRange(-half, half);
+	}
+	std::vector<int64_t> out(kMaxWidth);
+	int bad = 0;
+	const auto call = [&](size_t w) {
+		const Row& r = rows[w];
+		bad += !superslm::SoftmaxRowQ15(r.scores.data(), w, r.t[0], r.t[1], r.t[2], out.data());
+		g_sink = g_sink + out[0];
+	};
+	int64_t lo = triples[0][0], hi = lo;
+	for (const auto& t : triples) lo = std::min(lo, t[0]), hi = std::max(hi, t[0]);
+	std::printf("softmax constants: %zu triples, q_ln2 %lld..%lld\n", triples.size(), static_cast<long long>(lo),
+	            static_cast<long long>(hi));
+	std::printf("softmax best-of-%d us/call:", repeat);
+	for (size_t w : {size_t{1}, size_t{128}, size_t{301}, size_t{512}, size_t{601}, size_t{1024}}) {
+		const int calls = w < 64 ? 4096 : 256;
+		std::printf("  w=%zu %.4f", w, BestMicrosPerCall(repeat, calls, [&](int) { call(w); }));
+	}
+	std::printf("\n");
+	for (size_t T : {size_t{128}, size_t{512}, size_t{1024}}) {
+		const double us = BestMicrosPerCall(repeat, 1, [&](int) {
+			for (size_t w = 1; w <= T; ++w) call(w);
+		});
+		std::printf("softmax prefill T=%zu: %.4f ms/token at 24 layers x 14 heads\n", T,
+		            us * kLayers * kHeads / static_cast<double>(T) / 1000.0);
+	}
+	for (size_t C : {size_t{300}, size_t{600}}) {
+		const double us = BestMicrosPerCall(repeat, 256, [&](int) { call(C + 1); });
+		std::printf("softmax decode ctx=%zu: %.4f ms/token at 24 layers x 14 heads\n", C,
+		            us * kLayers * kHeads / 1000.0);
+	}
+	std::printf("softmax refused rows: %d\n", bad);
+	return bad == 0 ? 0 : 1;
+}
+
 bool ReadFile(const char* path, std::vector<uint8_t>& out) {
 	std::ifstream f(path, std::ios::binary);
 	if (!f) return false;
@@ -271,7 +336,7 @@ void RunOnce(const std::vector<uint8_t>& bytes, int32_t layers, int32_t T, int32
 int main(int argc, char** argv) {
 	if (argc < 2) {
 		std::fprintf(stderr,
-		             "usage: %s kernel [--repeat=R] | pv [--repeat=R] | requant [--repeat=R] | prefill <artifact> <T> [--layers=L] [--repeat=R] | "
+		             "usage: %s kernel [--repeat=R] | pv [--repeat=R] | requant [--repeat=R] | softmax [--repeat=R] | prefill <artifact> <T> [--layers=L] [--repeat=R] | "
 		             "decode <artifact> <context> <D> [--layers=L] [--repeat=R]\n",
 		             argv[0]);
 		return 2;
@@ -286,6 +351,7 @@ int main(int argc, char** argv) {
 	if (mode == "kernel") return KernelMode(repeat);
 	if (mode == "pv") return PvMode(repeat);
 	if (mode == "requant") return RequantMode(repeat);
+	if (mode == "softmax") return SoftmaxMode(repeat);
 	if ((mode == "prefill" && argc >= 4) || (mode == "decode" && argc >= 5)) {
 		std::vector<uint8_t> bytes;
 		if (!ReadFile(argv[2], bytes)) Fail("reading the artifact", 0);

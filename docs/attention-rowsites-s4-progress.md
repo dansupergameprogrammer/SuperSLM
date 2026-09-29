@@ -29,6 +29,15 @@ States: **done**, **CI-only**, **box-only**, **not done** (with why).
 | 11.1(d) data term re-derived on the base | done | `softmax-data-terms.txt`: 0 rows outside the guard in both windows (1,792 prefill, 448 decode rows), as the plan measured |
 | Implementation: the row guard, the AVX2 and AVX-512BW bodies (integer estimates, exact corrections), the dispatcher and its fallback counter | done (commit 2) | GCC 13.3 and Clang 18.1: auto (AVX-512 here) and forced SSE2/AVX2/AVX-512 suites 0 failures (116,129 / 116,071 / 116,087 / 116,087 checks); S4 golden `2e47ea3c…` on every binary; digests equal the red run's on all five legs of both compilers |
 | 11.3 linkage checker: the S4 bodies join the population; vitality plant | done | `linkage-plant.txt`: a planted external `SoftmaxExpAvx2Planted` turns it red; restored, OK |
+| 6.2 digests: every section equal to the red run's on all five legs, both compilers | done | `suites.txt`, `suites-clang.txt`, `sslm_axis_digest*.txt`: GLOBAL `bc7b1cbe…` on all ten; `c32_attention` `6bb5971d…`; every other section equal to S3's record |
+| 11.1(d) exact counter counts: `softmax` fast L·H·N (1,792 prefill, 448 decode on the artifact), fallback 0, on the running tier's counters only | done | asserted in the suite on every binary; the always-fallback mutant reads fast +0 against both windows |
+| fp-free scan (`scan_build_output.py --target superslm --isa x86-64`), allow-lists unchanged | done (Clang); GCC with 90e48de applied | `fp-scan.txt`. Clang: PASS (490 ACCEPT). GCC: only the base's `TiledGemmAvx512` rejects, as in S3; with 90e48de applied temporarily, PASS (561 ACCEPT). `intmath.cpp.o` is clean on both |
+| §9 mutants, each tier's body separately, on auto, forced AVX2 and forced AVX-512 | done, all killed | `mutants.txt`, `mutation-scripts/` (30): the 22 §9 S4 mutants (14 guard, 6 correction, 2 dispatcher), the 3 all-slice rows and 5 extras die on every binary that runs the code they mutate. Three guard-dropped mutants die by SIGFPE in the 4.S4 grid, before the 2.S4 rows run |
+| Sanitizers: ASan+UBSan (auto, forced AVX2, forced AVX-512), TSan (auto) | done, 0 reports | `sanitizers.txt` |
+| Save-blob protocol (6.4) against the S1 head's build | done, 46 of 46 EQUAL | `blob-protocol.txt`: auto and forced-AVX2 candidates; every hash equals S3's record |
+| 11.6 branch coverage (clang-18 replica) | done locally; floors not re-pinned | `coverage.txt`: full union OK (intmath.cpp 91.32%, all 54 new branches covered). Projected for a runner without AVX-512: intmath.cpp 83.47%, **below its 87.93% floor** (S3 already 86.70%); allowlist notes added |
+| CHANGELOG and `docs/platform-support.md` entries | done (commit 3) | the Unreleased entry and a section beside S3's |
+| 10.1 bench against §0's 0.15 / 0.54 / 1.15 prefill and 0.53 decode ms/token | done | `bench.md`: AVX2 **0.10 / 0.46 / 0.91 prefill, 0.53 decode** (AVX-512 0.10 / 0.48 / 0.91, 0.54); 3.4–3.6× on rows of 128–1,024 keys; a one-key row 0.03 µs slower |
 
 ## Deviations from the plan as written
 
@@ -50,6 +59,34 @@ States: **done**, **CI-only**, **box-only**, **not done** (with why).
 3. **The off-ratio witness fails three conjuncts, not two.** §8 2.S4 says `kSoftmaxRowOffRatioWitness` fails q_c ≥ 0 and
    M ≥ 1. Its q_ln2 is 3,000,000,001 against q_b = 10, so it fails q_ln2 ≤ 2·q_b + 1 too. It stays in the set as a
    realistic hostile row; the cell asserts "more than one".
+
+4. **The fp scan on GCC was passed with main's 90e48de applied temporarily.** It is not part of this series. S4 adds nothing
+   the GCC scan rejects.
+5. **Floors are not re-pinned (11.6).** Step 3 needs the hosted leg's measurement.
+6. **The 11.3 vitality plant is an added external function, not a moved body.** S3's plant (a body given external linkage)
+   does not work for S4: every S4 body takes `SoftmaxFastRow`, an anonymous-namespace type, so the moved function stays
+   local and the checker rightly stays green. A planted external target-attributed function turns it red
+   (`linkage-plant.txt`).
+
+## What the plan got wrong
+
+- **Its estimates are floating point, which the library forbids** (deviation 1). §4.4 and §5.4 estimate both divides in IEEE
+  double; `scan_build_output.py` gates `libsuperslm.a` on no floating-point arithmetic, with an allow-list not to be widened. The
+  argument carries over to integer estimates unchanged, because it only ever needed an estimate within one.
+- **The p-downward steering constants are tied to the double** (deviation 1). At q_b = 11,863,283 the integer estimate never
+  overshoots, so the plan's generator finds no row. With M near ¾ and 7⁄10 of 2⁴⁷ it finds them at once. The integer estimate
+  also fires the p-downward correction on ordinary grid rows (44 of the grid's rows die under its skip mutant), where the plan
+  measured about 2⁻³⁸ per row for the double.
+- **The off-ratio witness fails three conjuncts, not two** (deviation 3).
+- **§0's prefill figures assume a larger per-element saving than its decode figure.** Prefill 0.15 / 0.54 / 1.15 implies 6.9 /
+  6.3 / 6.7 ns saved per element, decode 0.53 implies 5.2. Measured, the AVX2 body saves about 5.2 ns per element on long rows,
+  so decode lands on the estimate and prefill at 65% / 86% / 79% of it. A fixed per-row cost (the guard pass and two
+  divides) makes short rows cost more, which takes a further share at T = 128 (`bench.md`).
+- **11.6 cannot pass on a runner without AVX-512**, now by 4.5 points on `intmath.cpp` (S3 1.2). The owner's floor call (G27)
+  covers it.
+- **§9's killing cell for three guard-dropped mutants is reached late.** q_ln2 ≥ 1, q_c ≥ 0 and M ≥ 1 dropped each trap
+  (integer divide by zero) in the 4.S4 grid, whose realistic triples include constants outside the guard, before the 2.S4 rows
+  §9 names run. The mutants are killed; the named signal (bool and counter) is not the one observed.
 
 ## ID-PENDING list
 

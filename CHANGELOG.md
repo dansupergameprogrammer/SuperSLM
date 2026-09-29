@@ -49,6 +49,18 @@ layers, prefill and decode alike. The scalar and SSE2 tiers keep the 1.9.0 loop.
 clang-cl builds keep the AVX-512 tier on it too, under the same `SUPERSLM_SITES_AVX512_MSVC`
 switch. There is no ABI, format or status change.
 
+On the AVX2 and AVX-512 tiers, attention's softmax row (`SoftmaxRowQ15`) now runs 4 or 8 elements
+at a time when the row is inside a guard: width at most 2^14, q_ln2 >= 1, q_c >= 0,
+q_b^2 + q_c in [1, 2^47], q_ln2 <= 2 q_b + 1 and every score within 2^61. The two divides per
+element are integer estimates that one exact integer correction each way makes exact. Rows outside
+the guard run the 1.9.0 body unchanged. Every probability and the returned bool are bit-identical
+to 1.9.0: the same tokens, save blobs and digest. Engine level, on one cloud host, a row of 512
+keys is about 3.6x faster on AVX2. At Qwen2.5-0.5B depth (24 layers, 14 heads) that saves about
+0.1 / 0.46 / 0.91 ms per prompt token at 128 / 512 / 1,024 tokens, and about 0.53 ms per decode
+token at context 300. A one-key row is slightly slower. The scalar and SSE2 tiers keep
+the 1.9.0 body. MSVC and clang-cl builds keep the AVX-512 tier on it too, under the same
+`SUPERSLM_SITES_AVX512_MSVC` switch. There is no ABI, format or status change.
+
 ## [1.9.0] - 2026-09-25
 
 `sslm_seq_save` writes a new save format, `SSB5`: the `SSB4` layout with the four per-site
