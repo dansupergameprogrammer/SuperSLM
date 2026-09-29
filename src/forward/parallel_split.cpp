@@ -84,11 +84,9 @@ size_t MinRowBytesPerTask() noexcept { return kMinRowBytesPerTask; }
 #endif
 
 ColumnSplit MatvecGroupSplit(const sslm_parallel_for* pf, size_t k, size_t total_rows) noexcept {
-	// RED: the one-row split is not implemented yet; every group runs serially.
-	(void)pf;
-	(void)k;
-	(void)total_rows;
-	return ColumnSplit{};
+	if (pf == nullptr || pf->run == nullptr || pf->max_tasks < 2) return ColumnSplit{};
+	return SplitColumns(total_rows, k * total_rows, static_cast<size_t>(pf->max_tasks),
+	                    /*align=*/64, MinRowBytesPerTask());
 }
 
 namespace {

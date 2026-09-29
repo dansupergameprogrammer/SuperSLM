@@ -1655,8 +1655,9 @@ sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState
 		                               chunk_budget, consumed, out_last_token, adapter, ws, kind,
 		                               bound_schema, walk_state, forced_token_count);
 	});
-	(void)context_length_before;  // RED: the prefill guard is not implemented yet
-	(void)counters_before;
+	if (st != SSLM_OK && state.context_length == context_length_before) {
+		counters_before.RestoreTo(state);
+	}
 	return st;
 }
 

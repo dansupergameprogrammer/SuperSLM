@@ -146,7 +146,7 @@ struct SaturationCounters {
 // The `reserved` bits this build implements. A setter rejects any other bit, so a host that asks
 // for a feature this library lacks is told so rather than silently ignored. D1 adds bit 1; the
 // batched-prefill bit (bit 0) is added by the step that implements it, not before.
-inline constexpr uint32_t kImplementedParallelForBits = 0u;  // RED: bit 1 not yet implemented
+inline constexpr uint32_t kImplementedParallelForBits = SSLM_PARALLEL_FOR_MATVEC;
 
 // The one field-domain check both hook setters apply (sslm_workspace_set_parallel_for and
 // sslm_gpu_context_set_host_parallel_for). `pf` is non-null.

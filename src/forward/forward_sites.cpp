@@ -2329,7 +2329,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		// call keep theirs.
 		const SaturationCounters layer_start_counters = SaturationCounters::Snapshot(seq);
 		const auto fail_layer = [&](SslmForwardStatus failed) {
-			(void)layer_start_counters;  // RED: the decode guard is not implemented yet
+			if (failed == SslmForwardStatus::ParallelForIncomplete) layer_start_counters.RestoreTo(seq);
 			return failed;
 		};
 
