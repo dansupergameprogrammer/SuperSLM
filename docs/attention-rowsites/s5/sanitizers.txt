@@ -1,0 +1,14 @@
+# S5 sanitizer runs (GCC 13.3, RelWithDebInfo; ASan+UBSan with -fno-sanitize-recover=all, and TSan, as the CI legs configure them),
+# SUPERSLM_ATTN_ROWSITES_ARTIFACT = p05_l1, separate TMPDIRs. 'reports' counts AddressSanitizer errors, UBSan runtime errors and
+# ThreadSanitizer warnings in the run's output. The S5 cells include widths 1-17 and 1,024 (partial key blocks packed with zero
+# rows into the stack buffer), head_dim 512 at the int32 margin, and, in the evidence commit's suite, head_dims 1-3 and other
+# non-multiples of 4 and 16 (the pack's scalar tail). ASan+UBSan was run on both suites; TSan on the implementation commit's.
+## the implementation commit's suite
+== build-asan/superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4, S5): 91767 checks, 0 failures|superslm tests: 117298 checks, 0 failures| reports: 0
+== build-asan/superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4, S5): 91767 checks, 0 failures|superslm tests: 117256 checks, 0 failures| reports: 0
+== build-asan/superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4, S5): 91767 checks, 0 failures|superslm tests: 117256 checks, 0 failures| reports: 0
+== build-tsan/superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4, S5): 91767 checks, 0 failures|superslm tests: 117298 checks, 0 failures| reports: 0
+## the evidence commit's suite (with the 4.S5 channel-tail rows)
+== build-asan/superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4, S5): 91948 checks, 0 failures reports: 0
+== build-asan/superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4, S5): 91948 checks, 0 failures reports: 0
+== build-asan/superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4, S5): 91948 checks, 0 failures reports: 0

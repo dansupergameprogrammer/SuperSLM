@@ -209,6 +209,45 @@ about 0.03 µs slower (the guard and two reciprocal divides per row).
 These are engine figures on synthetic weights, not a consumer's end-to-end
 speed (`docs/attention-rowsites/s4/bench.md`).
 
+### Q31 attention score rows (unreleased)
+
+QK-norm models (the Qwen3 path) score each key with a Q31 product,
+`RoundingDivideByPOT(sum_d q_d * k_d * ratio_d, 31)`. `QkQ31ScoreRow`
+computes every key's score for one query head in one call, and both layer
+loops (prefill and decode) call it. On the AVX2 and AVX-512 tiers it first
+checks a guard: head_dim at most 512 and every ratio in [0, 2^32). Inside the
+guard, each channel's w = q * ratio is split exactly into three pieces,
+w = a2 * 2^30 + a1 * 2^15 + a0, with a0 and a1 in [0, 32767] and a2 inside
+int16. Each piece's sum over the channels is a 16-bit multiply-add into
+int32 lanes. At head_dim 512 that sum stays inside int32 by 65,535, so the
+guard is load-bearing. The three sums recombine exactly in int64, and the
+rounding is vectorised with ties away from zero. Every score equals v1.9.0's
+per-key `QkQ31Score`. Outside the guard, the per-key loop runs unchanged. It
+is integer arithmetic only.
+
+| Build | Fast path | Status |
+|---|---|---|
+| GCC / Clang, AVX2 tier | on | Bit-identity: full suite forced AVX2, the Q31 golden and the QK-norm fixture pinned from 1.9.0, cross-tier digest, save-blob equality against 1.9.0 |
+| GCC / Clang, AVX-512 tier | on | Same evidence, forced AVX-512 and auto dispatch |
+| MSVC / clang-cl, AVX2 tier | on | Built by the forced Windows legs; not yet executed on Windows |
+| MSVC / clang-cl, AVX-512 tier | **off** (`SUPERSLM_SITES_AVX512_MSVC=0`) | The same switch as prob·V above |
+
+No real Qwen3 artifact has run the new kernel yet: a QK-norm artifact is
+still refused at map time on this host. The evidence is a QK-norm fixture
+that drives both layer loops, pinned to v1.9.0, plus a one-layer forward
+at Qwen3-0.6B width whose outputs match the base.
+
+**Measured, engine level, same host as above (best of 30, 9 interleaved
+rounds, head_dim 128):** one score costs about 410 ns per head and key on
+1.9.0's AVX2 path and 13.5 ns on the AVX2 row (330 and 12.8 ns on AVX-512).
+At Qwen3-0.6B depth (28 layers x 16 heads) that saves about 11 / 46 / 94 ms
+per prompt token at 128 / 512 / 1,024 tokens on AVX2, and 55 ms per decode
+token at context 300. A one-layer forward at the same width saves 0.42 /
+1.66 / 3.66 ms per layer and token. A one-key row on AVX-512 is about
+0.06 µs slower (it packs a whole 16-key block). These are engine figures
+on synthetic weights, not a consumer's end-to-end speed
+(`docs/attention-rowsites/s5/bench.md`).
+
 ### Damped-greedy decoding
 
 The 1.2 candidate's opt-in decoder was confirmed on Windows x64 through the

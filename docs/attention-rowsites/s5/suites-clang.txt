@@ -1,0 +1,85 @@
+# S5 suites at the evidence commit, Clang 18.1 Release, as suites.txt.
+== superslm_tests (clang2): exit 0
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites S2: tier 3, kernel AVX-512 (switch 0, msvc 0), prob-V counters read
+attn-rowsites S2 golden hash: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed (30100 values)
+attn-rowsites S3 4.S3 sentinel pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 4.S3 exact-size pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 golden hash: 3e3abed7c746191e8745c89ad38019076eff290aa7f4ffb57fb51c4527fdb3b9 (3567018 values)
+attn-rowsites S4 golden hash: 2e47ea3c27774db43d9c952972325a5c19d901ba6871f0bd124c8c874f6a55d9 (268078 values)
+attn-rowsites S5 golden hash: daea9a39c4df72b9431140446ee511cb9f60101646d83fbc2ae22d4b3d4faaa5 (33618 values)
+attn-rowsites 11.1(c) fixture hash: 336b8d417d078cdf91c0cd714e557df752e952eeb29b79ac594348e3be085779 (14384 values); 96 rows, softmax 96/0, prob-V 92/4 (fast/fallback by the guard copies)
+attn-rowsites 11.1(d): prefill and decode windows driven on <artifacts>/p05_l1.sslm
+attn-rowsites cells (plan slices S1, S2, S3, S4, S5): 91948 checks, 0 failures
+superslm tests: 117479 checks, 0 failures
+   FAIL lines: 0
+== superslm_tests_sse2_forced (clang2): exit 0
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites S2: tier 1, kernel v1.9.0 code (switch 0, msvc 0), prob-V counters read
+attn-rowsites S2 golden hash: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed (30100 values)
+attn-rowsites S3 4.S3 sentinel pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 4.S3 exact-size pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 golden hash: 3e3abed7c746191e8745c89ad38019076eff290aa7f4ffb57fb51c4527fdb3b9 (3567018 values)
+attn-rowsites S4 golden hash: 2e47ea3c27774db43d9c952972325a5c19d901ba6871f0bd124c8c874f6a55d9 (268078 values)
+attn-rowsites S5 golden hash: daea9a39c4df72b9431140446ee511cb9f60101646d83fbc2ae22d4b3d4faaa5 (33618 values)
+attn-rowsites 11.1(c) fixture hash: 336b8d417d078cdf91c0cd714e557df752e952eeb29b79ac594348e3be085779 (14384 values); 96 rows, softmax 96/0, prob-V 92/4 (fast/fallback by the guard copies)
+attn-rowsites 11.1(d): prefill and decode windows driven on <artifacts>/p05_l1.sslm
+attn-rowsites cells (plan slices S1, S2, S3, S4, S5): 91948 checks, 0 failures
+superslm tests: 117421 checks, 0 failures
+   FAIL lines: 0
+== superslm_tests_avx2_forced (clang2): exit 0
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites S2: tier 2, kernel AVX2 (switch 0, msvc 0), prob-V counters read
+attn-rowsites S2 golden hash: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed (30100 values)
+attn-rowsites S3 4.S3 sentinel pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 4.S3 exact-size pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 golden hash: 3e3abed7c746191e8745c89ad38019076eff290aa7f4ffb57fb51c4527fdb3b9 (3567018 values)
+attn-rowsites S4 golden hash: 2e47ea3c27774db43d9c952972325a5c19d901ba6871f0bd124c8c874f6a55d9 (268078 values)
+attn-rowsites S5 golden hash: daea9a39c4df72b9431140446ee511cb9f60101646d83fbc2ae22d4b3d4faaa5 (33618 values)
+attn-rowsites 11.1(c) fixture hash: 336b8d417d078cdf91c0cd714e557df752e952eeb29b79ac594348e3be085779 (14384 values); 96 rows, softmax 96/0, prob-V 92/4 (fast/fallback by the guard copies)
+attn-rowsites 11.1(d): prefill and decode windows driven on <artifacts>/p05_l1.sslm
+attn-rowsites cells (plan slices S1, S2, S3, S4, S5): 91948 checks, 0 failures
+superslm tests: 117437 checks, 0 failures
+   FAIL lines: 0
+== superslm_tests_avx512_forced (clang2): exit 0
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites S2: tier 3, kernel AVX-512 (switch 0, msvc 0), prob-V counters read
+attn-rowsites S2 golden hash: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed (30100 values)
+attn-rowsites S3 4.S3 sentinel pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 4.S3 exact-size pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 golden hash: 3e3abed7c746191e8745c89ad38019076eff290aa7f4ffb57fb51c4527fdb3b9 (3567018 values)
+attn-rowsites S4 golden hash: 2e47ea3c27774db43d9c952972325a5c19d901ba6871f0bd124c8c874f6a55d9 (268078 values)
+attn-rowsites S5 golden hash: daea9a39c4df72b9431140446ee511cb9f60101646d83fbc2ae22d4b3d4faaa5 (33618 values)
+attn-rowsites 11.1(c) fixture hash: 336b8d417d078cdf91c0cd714e557df752e952eeb29b79ac594348e3be085779 (14384 values); 96 rows, softmax 96/0, prob-V 92/4 (fast/fallback by the guard copies)
+attn-rowsites 11.1(d): prefill and decode windows driven on <artifacts>/p05_l1.sslm
+attn-rowsites cells (plan slices S1, S2, S3, S4, S5): 91948 checks, 0 failures
+superslm tests: 117437 checks, 0 failures
+   FAIL lines: 0
+== sslm_axis_digest: exit 0 GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+c_rowsites               d02721801c8296897bb30f4aaaed4f53d5f06600daee528c090701f8e2bd8e27  values=4201138
+c32_attention            ddbdb76eea70a0e0fc1cfb90461331741a389afaa82880c7a88602158c0ac96d  values=331796
+== sslm_axis_digest_scalar_forced: exit 0 GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+c_rowsites               d02721801c8296897bb30f4aaaed4f53d5f06600daee528c090701f8e2bd8e27  values=4201138
+c32_attention            ddbdb76eea70a0e0fc1cfb90461331741a389afaa82880c7a88602158c0ac96d  values=331796
+== sslm_axis_digest_sse2_forced: exit 0 GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+c_rowsites               d02721801c8296897bb30f4aaaed4f53d5f06600daee528c090701f8e2bd8e27  values=4201138
+c32_attention            ddbdb76eea70a0e0fc1cfb90461331741a389afaa82880c7a88602158c0ac96d  values=331796
+== sslm_axis_digest_avx2_forced: exit 0 GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+c_rowsites               d02721801c8296897bb30f4aaaed4f53d5f06600daee528c090701f8e2bd8e27  values=4201138
+c32_attention            ddbdb76eea70a0e0fc1cfb90461331741a389afaa82880c7a88602158c0ac96d  values=331796
+== sslm_axis_digest_avx512_forced: exit 0 GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+c_rowsites               d02721801c8296897bb30f4aaaed4f53d5f06600daee528c090701f8e2bd8e27  values=4201138
+c32_attention            ddbdb76eea70a0e0fc1cfb90461331741a389afaa82880c7a88602158c0ac96d  values=331796
+DONE-clang2

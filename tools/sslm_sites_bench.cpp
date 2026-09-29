@@ -24,6 +24,12 @@
 //       coefficients the forward passes, kept when q_ln2 falls in [347, 944], the range cell 11.1(d)'s data term
 //       measured on the 0.5B-width synthetic; docs/attention-rowsites/s4/softmax-data-terms.txt) and scores spread
 //       over about 16 q_ln2, as int8 dot products at head_dim 64 give there. Same per-token accounting as `pv`.
+//   sslm_sites_bench q31 [--repeat=R]
+//       Slice S5: one query head's Q31 scores (the Qwen3 QK-norm path) at head_dim 128 (Qwen3-0.6B's), over one KV
+//       head's key rows, ratios in [2^29, 2^31] (inside the loader's [1, 2^31]). Times the layer loops' v1.9.0
+//       per-key QkQ31Score loop and QkQ31ScoreRow in the same process, alternating, so their difference is S5's
+//       own effect on whichever tier the library runs. Same per-token accounting as `pv`, at Qwen3-0.6B's depth
+//       (28 layers x 16 query heads).
 //   sslm_sites_bench prefill <artifact.sslm> <T> [--layers=L] [--repeat=R]
 //       One sslm_prefill of T token ids at chunk_budget = T; best-of-R ms per prompt token.
 //   sslm_sites_bench decode <artifact.sslm> <context> <D> [--layers=L] [--repeat=R]
@@ -267,6 +273,56 @@ int SoftmaxMode(int repeat) {
 	return bad == 0 ? 0 : 1;
 }
 
+// Slice S5's bench (see the header): the Q31 score row against the per-key loop it replaces.
+int Q31Mode(int repeat) {
+	constexpr size_t kMaxWidth = 1025, kHeadDim = 128, kLayers = 28, kHeads = 16;
+	Rng rng(0x5335513331524F57ULL);
+	std::vector<int8_t> q(kHeadDim), keys(kMaxWidth * kHeadDim);
+	std::vector<int64_t> ratio(kHeadDim), out(kMaxWidth);
+	for (auto& x : q) x = static_cast<int8_t>(rng.InRange(-127, 127));
+	for (auto& x : keys) x = static_cast<int8_t>(rng.InRange(-127, 127));
+	for (auto& r : ratio) r = rng.InRange(INT64_C(1) << 29, INT64_C(1) << 31);
+	const auto per_key = [&](size_t w) {
+		for (size_t j = 0; j < w; ++j)
+			out[j] = superslm::QkQ31Score(q.data(), keys.data() + j * kHeadDim, ratio.data(), kHeadDim);
+		g_sink = g_sink + out[w - 1];
+	};
+	const auto row = [&](size_t w) {
+		superslm::QkQ31ScoreRow(q.data(), keys.data(), ratio.data(), kHeadDim, w, out.data());
+		g_sink = g_sink + out[w - 1];
+	};
+	// Equality first: the row must match the per-key loop on every key.
+	std::vector<int64_t> ref(kMaxWidth);
+	for (size_t j = 0; j < kMaxWidth; ++j)
+		ref[j] = superslm::QkQ31Score(q.data(), keys.data() + j * kHeadDim, ratio.data(), kHeadDim);
+	row(kMaxWidth);
+	int bad = 0;
+	for (size_t j = 0; j < kMaxWidth; ++j) bad += out[j] != ref[j];
+	std::printf("q31 head_dim %zu, ratios in [2^29, 2^31]; row vs per-key mismatches: %d\n", kHeadDim, bad);
+	std::printf("q31 best-of-%d ns per (head x key), per-key / row:", repeat);
+	for (size_t w : {size_t{1}, size_t{8}, size_t{64}, size_t{128}, size_t{512}, size_t{1024}}) {
+		const int calls = w < 64 ? 2048 : w < 512 ? 128 : 32;
+		const double a = BestMicrosPerCall(repeat, calls, [&](int) { per_key(w); });
+		const double b = BestMicrosPerCall(repeat, calls, [&](int) { row(w); });
+		std::printf("  w=%zu %.2f / %.2f", w, 1000.0 * a / static_cast<double>(w),
+		            1000.0 * b / static_cast<double>(w));
+	}
+	std::printf("\n");
+	for (size_t T : {size_t{128}, size_t{512}, size_t{1024}}) {
+		const double a = BestMicrosPerCall(repeat, 1, [&](int) { for (size_t w = 1; w <= T; ++w) per_key(w); });
+		const double b = BestMicrosPerCall(repeat, 1, [&](int) { for (size_t w = 1; w <= T; ++w) row(w); });
+		const double f = static_cast<double>(kLayers * kHeads) / static_cast<double>(T) / 1000.0;
+		std::printf("q31 prefill T=%zu: per-key %.4f, row %.4f ms/token at 28 layers x 16 heads\n", T, a * f, b * f);
+	}
+	for (size_t C : {size_t{300}, size_t{600}}) {
+		const double a = BestMicrosPerCall(repeat, 64, [&](int) { per_key(C + 1); });
+		const double b = BestMicrosPerCall(repeat, 64, [&](int) { row(C + 1); });
+		const double f = static_cast<double>(kLayers * kHeads) / 1000.0;
+		std::printf("q31 decode ctx=%zu: per-key %.4f, row %.4f ms/token at 28 layers x 16 heads\n", C, a * f, b * f);
+	}
+	return bad == 0 ? 0 : 1;
+}
+
 bool ReadFile(const char* path, std::vector<uint8_t>& out) {
 	std::ifstream f(path, std::ios::binary);
 	if (!f) return false;
@@ -336,7 +392,7 @@ void RunOnce(const std::vector<uint8_t>& bytes, int32_t layers, int32_t T, int32
 int main(int argc, char** argv) {
 	if (argc < 2) {
 		std::fprintf(stderr,
-		             "usage: %s kernel [--repeat=R] | pv [--repeat=R] | requant [--repeat=R] | softmax [--repeat=R] | prefill <artifact> <T> [--layers=L] [--repeat=R] | "
+		             "usage: %s kernel [--repeat=R] | pv [--repeat=R] | requant [--repeat=R] | softmax [--repeat=R] | q31 [--repeat=R] | prefill <artifact> <T> [--layers=L] [--repeat=R] | "
 		             "decode <artifact> <context> <D> [--layers=L] [--repeat=R]\n",
 		             argv[0]);
 		return 2;
@@ -352,6 +408,7 @@ int main(int argc, char** argv) {
 	if (mode == "pv") return PvMode(repeat);
 	if (mode == "requant") return RequantMode(repeat);
 	if (mode == "softmax") return SoftmaxMode(repeat);
+	if (mode == "q31") return Q31Mode(repeat);
 	if ((mode == "prefill" && argc >= 4) || (mode == "decode" && argc >= 5)) {
 		std::vector<uint8_t> bytes;
 		if (!ReadFile(argv[2], bytes)) Fail("reading the artifact", 0);

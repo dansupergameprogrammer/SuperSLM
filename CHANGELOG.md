@@ -61,6 +61,20 @@ token at context 300. A one-key row is slightly slower. The scalar and SSE2 tier
 the 1.9.0 body. MSVC and clang-cl builds keep the AVX-512 tier on it too, under the same
 `SUPERSLM_SITES_AVX512_MSVC` switch. There is no ABI, format or status change.
 
+On the AVX2 and AVX-512 tiers, the Q31 attention score used by QK-norm models (the Qwen3 path) is
+now computed for all of a query head's keys in one call (`QkQ31ScoreRow`), instead of one
+`QkQ31Score` call per key. Inside a guard (head_dim at most 512, every K-channel ratio in
+[0, 2^32)) each channel's q x ratio product is split exactly into three 16-bit pieces, and each
+piece's sum over the channels is a 16-bit multiply-add. The rounding is `RoundingDivideByPOT`'s, ties away from zero. Rows outside the
+guard run the 1.9.0 per-key loop. Every score is bit-identical to 1.9.0: the same tokens, save
+blobs and digest. Engine level, on one cloud host, a score costs about 14 ns per head and key
+instead of about 410 on AVX2 (about 330 on AVX-512). At Qwen3-0.6B depth (28 layers, 16 heads)
+that saves about 11 / 46 / 94 ms per prompt token at 128 / 512 / 1,024 tokens on AVX2, and about
+55 ms per decode token at context 300. Qwen2.5 models do not take this path. A one-key row on
+AVX-512 is slightly slower. The scalar and SSE2 tiers keep the 1.9.0 loop. MSVC and clang-cl
+builds keep the AVX-512 tier on it too, under the same `SUPERSLM_SITES_AVX512_MSVC` switch. There
+is no ABI, format or status change.
+
 ## [1.9.0] - 2026-09-25
 
 `sslm_seq_save` writes a new save format, `SSB5`: the `SSB4` layout with the four per-site

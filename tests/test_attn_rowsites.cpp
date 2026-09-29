@@ -1617,6 +1617,19 @@ void TestS5GuardInsideRows() {
 				CHECK_MSG(f, "7.S5d: ratio %lld at head_dim %zu should be inside the guard copy", static_cast<long long>(r),
 				          hd);
 			}
+	// Channel tails inside the guard: head_dim not a multiple of 4 (the last quad is padded in both the limbs and
+	// the key pack) and not a multiple of 16 (the pack's scalar tail). 4.S5's in-guard head_dims are all multiples
+	// of 4, so the pad sides ran on no row (found by the coverage replica, plan §3.4 step 1). Not in the golden set.
+	size_t tails = 0;
+	for (size_t hd : {size_t{1}, size_t{2}, size_t{3}, size_t{5}, size_t{63}, size_t{66}, size_t{127}, size_t{130},
+	                  size_t{509}, size_t{511}})
+		for (size_t w : {size_t{1}, size_t{9}, size_t{17}})
+			for (int kind = 0; kind < 3; ++kind) {
+				Q31Case c = superslm_attention_cases::MakeQ31GridCase(hd, w, kind, rng);
+				c.label = "4.S5 channel tail";
+				tails += RunQ31(c, Q31Ref::kScalarRef) ? 1 : 0;
+			}
+	CHECK_MSG(tails == 90, "4.S5 channel tail: %zu of 90 rows inside the guard copy, want all", tails);
 	// Width 0: nothing is written; the call still counts once on its tier (§3.6: once per call).
 	Q31Case z = superslm_attention_cases::MakeQ31GridCase(64, 1, 0, rng);
 	z.label = "4.S5 width 0";

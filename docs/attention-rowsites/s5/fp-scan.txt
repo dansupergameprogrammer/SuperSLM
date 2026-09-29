@@ -1,0 +1,216 @@
+# S5 fp-free scan (plan §3.4; tests/ci/scan_build_output.py --build-dir <build> --target <t> --isa x86-64), allow-lists
+# unchanged, at the implementation commit, on the auto library and both forced AVX libraries.
+#
+# Clang 18.1: PASS on all three (493 / 498 / 499 ACCEPT, 0 REJECT). forward_sites.cpp.o is clean.
+# GCC 13.3: superslm and superslm_avx512_forced FAIL on one symbol each, TiledGemmAvx512 in matmul.cpp.o, inherited from
+#   the base (as in S3 and S4; main fixes it in 90e48de); superslm_avx2_forced PASS. forward_sites.cpp.o is clean in all
+#   three. With 90e48de's src/matmul.cpp change applied temporarily (not part of this series): PASS on all three
+#   (564 / 574 / 576 ACCEPT, 0 REJECT).
+#
+# No reject was met on the way: the bodies were written to S3/S4's rules from the start. No 64-bit compare or select
+# anywhere (the rounding's "remainder > threshold" is the sign bit of threshold - remainder, floor is a biased logical
+# shift on AVX2 and vpsraq on AVX-512), no mask register, no per-lane conditional loop, and the S5 code holds no
+# float, double or FP intrinsic. The GCC bodies appear in the non-gating check-(C) listing (an external call edge: the
+# memcpy of the block's results), like S3's and S4's bodies.
+#
+# Summaries follow; the per-object lines are verbatim, the check-(C) listings are elided.
+
+######## scan-build-clang-superslm
+Scanning 17 object member(s) of archive build-clang/libsuperslm.a for target 'superslm' (isa=x86-64)
+  clean    artifact.cpp.o  (30 symbol(s), format=elf)
+  clean    sha256.cpp.o  (8 symbol(s), format=elf)
+  clean    tokenizer.cpp.o  (52 symbol(s), format=elf)
+  clean    model.cpp.o  (77 symbol(s), format=elf)
+  clean    intmath.cpp.o  (29 symbol(s), format=elf)
+  clean    silu_lut.cpp.o  (1 symbol(s), format=elf)
+  clean    matmul.cpp.o  (23 symbol(s), format=elf)
+  clean    proof_manifest.cpp.o  (21 symbol(s), format=elf)
+  clean    trace_hook.cpp.o  (4 symbol(s), format=elf)
+  clean    checked_chain_funnel.cpp.o  (15 symbol(s), format=elf)
+  clean    forward_sites.cpp.o  (52 symbol(s), format=elf)
+  clean    decode_digest.cpp.o  (3 symbol(s), format=elf)
+  clean    sslm_abi.cpp.o  (125 symbol(s), format=elf)
+  clean    damped_greedy_antilm.cpp.o  (26 symbol(s), format=elf)
+  clean    damped_greedy_topk.cpp.o  (13 symbol(s), format=elf)
+  clean    damped_greedy_phaseD.cpp.o  (8 symbol(s), format=elf)
+  clean    damped_greedy_phaseD_loop.cpp.o  (6 symbol(s), format=elf)
+Totals: 17 object(s); 493 symbol(s) ACCEPT, 0 REJECT, 0 object(s) REFUSE (checks (A)/(B), gating); 284 symbol(s) reject under check (C) alone (non-gating diagnostic)
+PASS: no floating-point arithmetic found in any object of this target (checks (A)/(B); check (C) is a non-gating diagnostic).
+
+######## scan-build-clang-superslm_avx2_forced
+Scanning 17 object member(s) of archive build-clang/libsuperslm_avx2_forced.a for target 'superslm_avx2_forced' (isa=x86-64)
+  clean    artifact.cpp.o  (31 symbol(s), format=elf)
+  clean    sha256.cpp.o  (9 symbol(s), format=elf)
+  clean    tokenizer.cpp.o  (53 symbol(s), format=elf)
+  clean    model.cpp.o  (78 symbol(s), format=elf)
+  clean    intmath.cpp.o  (29 symbol(s), format=elf)
+  clean    silu_lut.cpp.o  (1 symbol(s), format=elf)
+  clean    matmul.cpp.o  (20 symbol(s), format=elf)
+  clean    proof_manifest.cpp.o  (22 symbol(s), format=elf)
+  clean    trace_hook.cpp.o  (4 symbol(s), format=elf)
+  clean    checked_chain_funnel.cpp.o  (15 symbol(s), format=elf)
+  clean    forward_sites.cpp.o  (52 symbol(s), format=elf)
+  clean    decode_digest.cpp.o  (3 symbol(s), format=elf)
+  clean    sslm_abi.cpp.o  (128 symbol(s), format=elf)
+  clean    damped_greedy_antilm.cpp.o  (26 symbol(s), format=elf)
+  clean    damped_greedy_topk.cpp.o  (13 symbol(s), format=elf)
+  clean    damped_greedy_phaseD.cpp.o  (8 symbol(s), format=elf)
+  clean    damped_greedy_phaseD_loop.cpp.o  (6 symbol(s), format=elf)
+Totals: 17 object(s); 498 symbol(s) ACCEPT, 0 REJECT, 0 object(s) REFUSE (checks (A)/(B), gating); 290 symbol(s) reject under check (C) alone (non-gating diagnostic)
+PASS: no floating-point arithmetic found in any object of this target (checks (A)/(B); check (C) is a non-gating diagnostic).
+
+######## scan-build-clang-superslm_avx512_forced
+Scanning 17 object member(s) of archive build-clang/libsuperslm_avx512_forced.a for target 'superslm_avx512_forced' (isa=x86-64)
+  clean    artifact.cpp.o  (31 symbol(s), format=elf)
+  clean    sha256.cpp.o  (9 symbol(s), format=elf)
+  clean    tokenizer.cpp.o  (53 symbol(s), format=elf)
+  clean    model.cpp.o  (78 symbol(s), format=elf)
+  clean    intmath.cpp.o  (29 symbol(s), format=elf)
+  clean    silu_lut.cpp.o  (1 symbol(s), format=elf)
+  clean    matmul.cpp.o  (21 symbol(s), format=elf)
+  clean    proof_manifest.cpp.o  (22 symbol(s), format=elf)
+  clean    trace_hook.cpp.o  (4 symbol(s), format=elf)
+  clean    checked_chain_funnel.cpp.o  (15 symbol(s), format=elf)
+  clean    forward_sites.cpp.o  (52 symbol(s), format=elf)
+  clean    decode_digest.cpp.o  (3 symbol(s), format=elf)
+  clean    sslm_abi.cpp.o  (128 symbol(s), format=elf)
+  clean    damped_greedy_antilm.cpp.o  (26 symbol(s), format=elf)
+  clean    damped_greedy_topk.cpp.o  (13 symbol(s), format=elf)
+  clean    damped_greedy_phaseD.cpp.o  (8 symbol(s), format=elf)
+  clean    damped_greedy_phaseD_loop.cpp.o  (6 symbol(s), format=elf)
+Totals: 17 object(s); 499 symbol(s) ACCEPT, 0 REJECT, 0 object(s) REFUSE (checks (A)/(B), gating); 290 symbol(s) reject under check (C) alone (non-gating diagnostic)
+PASS: no floating-point arithmetic found in any object of this target (checks (A)/(B); check (C) is a non-gating diagnostic).
+
+######## scan-build-superslm
+Scanning 17 object member(s) of archive build/libsuperslm.a for target 'superslm' (isa=x86-64)
+  clean    artifact.cpp.o  (33 symbol(s), format=elf)
+  clean    sha256.cpp.o  (8 symbol(s), format=elf)
+  clean    tokenizer.cpp.o  (49 symbol(s), format=elf)
+  clean    model.cpp.o  (112 symbol(s), format=elf)
+  clean    intmath.cpp.o  (30 symbol(s), format=elf)
+  clean    silu_lut.cpp.o  (1 symbol(s), format=elf)
+  REJECT   matmul.cpp.o  (1 symbol(s), format=elf)
+             _ZN8superslm12_GLOBAL__N_115TiledGemmAvx512EPKsmPKammmmmPlPa
+  clean    proof_manifest.cpp.o  (47 symbol(s), format=elf)
+  clean    trace_hook.cpp.o  (4 symbol(s), format=elf)
+  clean    checked_chain_funnel.cpp.o  (14 symbol(s), format=elf)
+  clean    forward_sites.cpp.o  (61 symbol(s), format=elf)
+  clean    decode_digest.cpp.o  (7 symbol(s), format=elf)
+  clean    sslm_abi.cpp.o  (131 symbol(s), format=elf)
+  clean    damped_greedy_antilm.cpp.o  (20 symbol(s), format=elf)
+  clean    damped_greedy_topk.cpp.o  (13 symbol(s), format=elf)
+  clean    damped_greedy_phaseD.cpp.o  (8 symbol(s), format=elf)
+  clean    damped_greedy_phaseD_loop.cpp.o  (2 symbol(s), format=elf)
+Totals: 17 object(s); 563 symbol(s) ACCEPT, 1 REJECT, 0 object(s) REFUSE (checks (A)/(B), gating); 378 symbol(s) reject under check (C) alone (non-gating diagnostic)
+FAIL: the scan did not come back clean.
+
+######## scan-build-superslm_avx2_forced
+Scanning 17 object member(s) of archive build/libsuperslm_avx2_forced.a for target 'superslm_avx2_forced' (isa=x86-64)
+  clean    artifact.cpp.o  (35 symbol(s), format=elf)
+  clean    sha256.cpp.o  (14 symbol(s), format=elf)
+  clean    tokenizer.cpp.o  (50 symbol(s), format=elf)
+  clean    model.cpp.o  (113 symbol(s), format=elf)
+  clean    intmath.cpp.o  (30 symbol(s), format=elf)
+  clean    silu_lut.cpp.o  (1 symbol(s), format=elf)
+  clean    matmul.cpp.o  (21 symbol(s), format=elf)
+  clean    proof_manifest.cpp.o  (47 symbol(s), format=elf)
+  clean    trace_hook.cpp.o  (4 symbol(s), format=elf)
+  clean    checked_chain_funnel.cpp.o  (14 symbol(s), format=elf)
+  clean    forward_sites.cpp.o  (61 symbol(s), format=elf)
+  clean    decode_digest.cpp.o  (7 symbol(s), format=elf)
+  clean    sslm_abi.cpp.o  (134 symbol(s), format=elf)
+  clean    damped_greedy_antilm.cpp.o  (20 symbol(s), format=elf)
+  clean    damped_greedy_topk.cpp.o  (13 symbol(s), format=elf)
+  clean    damped_greedy_phaseD.cpp.o  (8 symbol(s), format=elf)
+  clean    damped_greedy_phaseD_loop.cpp.o  (2 symbol(s), format=elf)
+Totals: 17 object(s); 574 symbol(s) ACCEPT, 0 REJECT, 0 object(s) REFUSE (checks (A)/(B), gating); 378 symbol(s) reject under check (C) alone (non-gating diagnostic)
+PASS: no floating-point arithmetic found in any object of this target (checks (A)/(B); check (C) is a non-gating diagnostic).
+
+######## scan-build-superslm_avx512_forced
+Scanning 17 object member(s) of archive build/libsuperslm_avx512_forced.a for target 'superslm_avx512_forced' (isa=x86-64)
+  clean    artifact.cpp.o  (35 symbol(s), format=elf)
+  clean    sha256.cpp.o  (14 symbol(s), format=elf)
+  clean    tokenizer.cpp.o  (50 symbol(s), format=elf)
+  clean    model.cpp.o  (113 symbol(s), format=elf)
+  clean    intmath.cpp.o  (30 symbol(s), format=elf)
+  clean    silu_lut.cpp.o  (1 symbol(s), format=elf)
+  REJECT   matmul.cpp.o  (1 symbol(s), format=elf)
+             _ZN8superslm12_GLOBAL__N_115TiledGemmAvx512EPKsmPKammmmmPlPa
+  clean    proof_manifest.cpp.o  (47 symbol(s), format=elf)
+  clean    trace_hook.cpp.o  (4 symbol(s), format=elf)
+  clean    checked_chain_funnel.cpp.o  (14 symbol(s), format=elf)
+  clean    forward_sites.cpp.o  (61 symbol(s), format=elf)
+  clean    decode_digest.cpp.o  (7 symbol(s), format=elf)
+  clean    sslm_abi.cpp.o  (134 symbol(s), format=elf)
+  clean    damped_greedy_antilm.cpp.o  (20 symbol(s), format=elf)
+  clean    damped_greedy_topk.cpp.o  (13 symbol(s), format=elf)
+  clean    damped_greedy_phaseD.cpp.o  (8 symbol(s), format=elf)
+  clean    damped_greedy_phaseD_loop.cpp.o  (2 symbol(s), format=elf)
+Totals: 17 object(s); 575 symbol(s) ACCEPT, 1 REJECT, 0 object(s) REFUSE (checks (A)/(B), gating); 379 symbol(s) reject under check (C) alone (non-gating diagnostic)
+FAIL: the scan did not come back clean.
+
+######## scan-build90-superslm
+Scanning 17 object member(s) of archive build/libsuperslm.a for target 'superslm' (isa=x86-64)
+  clean    artifact.cpp.o  (33 symbol(s), format=elf)
+  clean    sha256.cpp.o  (8 symbol(s), format=elf)
+  clean    tokenizer.cpp.o  (49 symbol(s), format=elf)
+  clean    model.cpp.o  (112 symbol(s), format=elf)
+  clean    intmath.cpp.o  (30 symbol(s), format=elf)
+  clean    silu_lut.cpp.o  (1 symbol(s), format=elf)
+  clean    matmul.cpp.o  (24 symbol(s), format=elf)
+  clean    proof_manifest.cpp.o  (47 symbol(s), format=elf)
+  clean    trace_hook.cpp.o  (4 symbol(s), format=elf)
+  clean    checked_chain_funnel.cpp.o  (14 symbol(s), format=elf)
+  clean    forward_sites.cpp.o  (61 symbol(s), format=elf)
+  clean    decode_digest.cpp.o  (7 symbol(s), format=elf)
+  clean    sslm_abi.cpp.o  (131 symbol(s), format=elf)
+  clean    damped_greedy_antilm.cpp.o  (20 symbol(s), format=elf)
+  clean    damped_greedy_topk.cpp.o  (13 symbol(s), format=elf)
+  clean    damped_greedy_phaseD.cpp.o  (8 symbol(s), format=elf)
+  clean    damped_greedy_phaseD_loop.cpp.o  (2 symbol(s), format=elf)
+Totals: 17 object(s); 564 symbol(s) ACCEPT, 0 REJECT, 0 object(s) REFUSE (checks (A)/(B), gating); 379 symbol(s) reject under check (C) alone (non-gating diagnostic)
+PASS: no floating-point arithmetic found in any object of this target (checks (A)/(B); check (C) is a non-gating diagnostic).
+
+######## scan-build90-superslm_avx2_forced
+Scanning 17 object member(s) of archive build/libsuperslm_avx2_forced.a for target 'superslm_avx2_forced' (isa=x86-64)
+  clean    artifact.cpp.o  (35 symbol(s), format=elf)
+  clean    sha256.cpp.o  (14 symbol(s), format=elf)
+  clean    tokenizer.cpp.o  (50 symbol(s), format=elf)
+  clean    model.cpp.o  (113 symbol(s), format=elf)
+  clean    intmath.cpp.o  (30 symbol(s), format=elf)
+  clean    silu_lut.cpp.o  (1 symbol(s), format=elf)
+  clean    matmul.cpp.o  (21 symbol(s), format=elf)
+  clean    proof_manifest.cpp.o  (47 symbol(s), format=elf)
+  clean    trace_hook.cpp.o  (4 symbol(s), format=elf)
+  clean    checked_chain_funnel.cpp.o  (14 symbol(s), format=elf)
+  clean    forward_sites.cpp.o  (61 symbol(s), format=elf)
+  clean    decode_digest.cpp.o  (7 symbol(s), format=elf)
+  clean    sslm_abi.cpp.o  (134 symbol(s), format=elf)
+  clean    damped_greedy_antilm.cpp.o  (20 symbol(s), format=elf)
+  clean    damped_greedy_topk.cpp.o  (13 symbol(s), format=elf)
+  clean    damped_greedy_phaseD.cpp.o  (8 symbol(s), format=elf)
+  clean    damped_greedy_phaseD_loop.cpp.o  (2 symbol(s), format=elf)
+Totals: 17 object(s); 574 symbol(s) ACCEPT, 0 REJECT, 0 object(s) REFUSE (checks (A)/(B), gating); 378 symbol(s) reject under check (C) alone (non-gating diagnostic)
+PASS: no floating-point arithmetic found in any object of this target (checks (A)/(B); check (C) is a non-gating diagnostic).
+
+######## scan-build90-superslm_avx512_forced
+Scanning 17 object member(s) of archive build/libsuperslm_avx512_forced.a for target 'superslm_avx512_forced' (isa=x86-64)
+  clean    artifact.cpp.o  (35 symbol(s), format=elf)
+  clean    sha256.cpp.o  (14 symbol(s), format=elf)
+  clean    tokenizer.cpp.o  (50 symbol(s), format=elf)
+  clean    model.cpp.o  (113 symbol(s), format=elf)
+  clean    intmath.cpp.o  (30 symbol(s), format=elf)
+  clean    silu_lut.cpp.o  (1 symbol(s), format=elf)
+  clean    matmul.cpp.o  (23 symbol(s), format=elf)
+  clean    proof_manifest.cpp.o  (47 symbol(s), format=elf)
+  clean    trace_hook.cpp.o  (4 symbol(s), format=elf)
+  clean    checked_chain_funnel.cpp.o  (14 symbol(s), format=elf)
+  clean    forward_sites.cpp.o  (61 symbol(s), format=elf)
+  clean    decode_digest.cpp.o  (7 symbol(s), format=elf)
+  clean    sslm_abi.cpp.o  (134 symbol(s), format=elf)
+  clean    damped_greedy_antilm.cpp.o  (20 symbol(s), format=elf)
+  clean    damped_greedy_topk.cpp.o  (13 symbol(s), format=elf)
+  clean    damped_greedy_phaseD.cpp.o  (8 symbol(s), format=elf)
+  clean    damped_greedy_phaseD_loop.cpp.o  (2 symbol(s), format=elf)
+Totals: 17 object(s); 576 symbol(s) ACCEPT, 0 REJECT, 0 object(s) REFUSE (checks (A)/(B), gating); 380 symbol(s) reject under check (C) alone (non-gating diagnostic)
+PASS: no floating-point arithmetic found in any object of this target (checks (A)/(B); check (C) is a non-gating diagnostic).
