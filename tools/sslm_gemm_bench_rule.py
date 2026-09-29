@@ -13,6 +13,9 @@ and 12th order statistics) and the verdict of the plan's rule:
 
 The must-reject is the same run with the D-infinity build as BOTH base and candidate; it must FAIL.
 
+Before timing, each build runs once, untimed, with `--verify` (its outputs checked against the scalar
+reference); a verify failure is FAIL. Without it a kernel that was fast, deterministic and wrong would pass.
+
 Usage: sslm_gemm_bench_rule.py BASE_BIN CAND_BIN [--shape=1.5B.gate_up] [--m=32] [--n=15] [--reps=5]
                                [--floor=1.4]
 Exit code: 0 PASS, 1 FAIL, 2 INCONCLUSIVE.
@@ -32,6 +35,14 @@ def one(binary: str, shape: str, m: int, reps: int) -> float:
     return float(re.search(r"time_ms=([0-9.]+)", out).group(1))
 
 
+def verify(binary: str, shape: str, m: int) -> bool:
+    r = subprocess.run([binary, f"--shape={shape}", f"--m={m}", "--reps=1", "--one", "--verify"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"verify failed for {binary}: exit {r.returncode}: {r.stderr.strip()}")
+    return r.returncode == 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("base")
@@ -42,6 +53,10 @@ def main() -> int:
     ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--floor", type=float, default=1.4)
     a = ap.parse_args()
+
+    if not (verify(a.base, a.shape, a.m) and verify(a.cand, a.shape, a.m)):
+        print(f"{a.shape} M={a.m}: -> FAIL (verify)")
+        return 1
 
     ratios = []
     for k in range(a.n):
