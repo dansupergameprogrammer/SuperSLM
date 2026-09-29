@@ -127,10 +127,12 @@ def fp_at_k_archives(real_coff_archive, fp_carrier_obj, tmp_path_factory):
     rather than shared, so this fixture stands alone). Built once per
     session -- eighteen real lib.exe invocations."""
     n_objects = len(af.raw_object_payloads(real_coff_archive))
-    assert n_objects == 17, "expected 17 real objects, found {}".format(n_objects)
+    # Decode threading D0 added src/forward/parallel_split.cpp: 18 real objects from D0 on (was 17),
+    # so the carrier sweep is 1..19 and each fp_at_k.lib holds 22 members / 19 objects.
+    assert n_objects == 18, "expected 18 real objects, found {}".format(n_objects)
     out_dir = tmp_path_factory.mktemp("t2380_fp_at_k")
     archives = {}
-    for k in range(1, n_objects + 2):  # 1..18
+    for k in range(1, n_objects + 2):  # 1..19
         out_path = str(out_dir / ("fp_at_%02d.lib" % k))
         af.build_archive_with_extra_member_at(
             real_coff_archive, fp_carrier_obj, k, out_path, str(out_dir / ("work_%02d" % k)))
@@ -148,8 +150,8 @@ def fp_at_k_archives(real_coff_archive, fp_carrier_obj, tmp_path_factory):
 def test_fp_at_k_fixtures_place_carrier_at_the_claimed_position(fp_at_k_archives):
     for k, path in fp_at_k_archives.items():
         total, counts = af.raw_member_counts(path)
-        assert total == 21 and counts.get("OBJECT") == 18, (
-            "fp_at_{:02d}.lib: expected 21 members / 18 objects, got {} / {} "
+        assert total == 22 and counts.get("OBJECT") == 19, (
+            "fp_at_{:02d}.lib: expected 22 members / 19 objects, got {} / {} "
             "({})".format(k, total, counts.get("OBJECT"), counts)
         )
         objs = af.raw_object_payloads(path)
@@ -170,7 +172,7 @@ def test_poisoned_archive_fixture_matches_forty_seventh_population(poisoned_arch
     population's own claimed construction, measured (D-SLM5069's own
     correction): 21 members / 18 objects, the carrier last."""
     total, counts = af.raw_member_counts(poisoned_archive)
-    assert total == 21 and counts.get("OBJECT") == 18, (total, counts)
+    assert total == 22 and counts.get("OBJECT") == 19, (total, counts)  # 21 / 18 before decode threading D0
     objs = af.raw_object_payloads(poisoned_archive)
     assert objs[-1][0] == "fp_carrier.obj", objs[-1][0]
 
@@ -241,7 +243,7 @@ def test_pop47_must_reject_poisoned_archive_composition(poisoned_archive, tmp_pa
 # missing.
 # ===========================================================================
 
-@pytest.mark.parametrize("k", list(range(1, 19)))
+@pytest.mark.parametrize("k", list(range(1, 20)))  # 1..18 before decode threading D0
 def test_pop48_membership_resolves_carrier_at_every_position(k, fp_at_k_archives, tmp_path):
     """Must-reject, position k of 18: fp_at_k.lib must make the job exit
     nonzero, whichever position k places the carrier at. A driver that
@@ -272,8 +274,8 @@ def test_pop48_resolving_power_is_stated_and_matches_the_sweep():
     assert len(parametrize_markers) == 1, markers
     argname, argvalues = parametrize_markers[0].args
     assert argname == "k"
-    assert list(argvalues) == list(range(1, 19)), (
+    assert list(argvalues) == list(range(1, 20)), (
         "the forty-eighth population's own sweep no longer covers all "
-        "eighteen positions 1..18 -- resolving power narrowed from Δn = 1 "
+        "nineteen positions 1..19 -- resolving power narrowed from Δn = 1 "
         "swept across every position to something coarser"
     )
