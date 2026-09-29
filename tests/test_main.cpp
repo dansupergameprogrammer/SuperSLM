@@ -28267,6 +28267,8 @@ void RunSlm18xSaturationCensusCells(int& checks, int& failures);
 void RunSlm19xSchemaDampedGreedyCells(int& checks, int& failures);
 // Tiled-matmul plan slice 1: the tiled GEMM cells (tests/test_tiled_gemm.cpp).
 void RunTiledGemmCells(int& checks, int& failures);
+// Attention and per-row sites plan: its slices' cells (tests/test_attn_rowsites.cpp).
+void RunAttnRowsiteCells(int& checks, int& failures);
 
 #ifdef _WIN32  // resumes the Windows/D3D12 block closed above T-2572
 
@@ -30139,6 +30141,7 @@ int main(int argc, char** argv) {
 	RunSlm18xSaturationCensusCells(GChecks, GFailures);
 	RunSlm19xSchemaDampedGreedyCells(GChecks, GFailures);
 	RunTiledGemmCells(GChecks, GFailures);
+	RunAttnRowsiteCells(GChecks, GFailures);
 	TestKvStoreEarlyWriteSurvivesLateReadAcrossEightFurtherPositions();
 	TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast();
 	TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition();

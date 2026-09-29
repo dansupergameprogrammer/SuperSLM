@@ -37,9 +37,28 @@
 
 #include "superslm/matmul.h"
 
-#if SUPERSLM_MATMUL_HAVE_SIMD_X64
-
 #include <atomic>
+
+namespace superslm_test {
+
+// Attention and per-row sites plan, slice S1 (§3.6): the row-table path counters. Each of the three
+// per-row sites (src/forward/forward_sites.cpp) increments exactly one of its pair once per call,
+// after its table decision: `taken` when it builds the 256-entry table (n >= kRowTableMinWidth, 512),
+// `skipped` when it runs the per-element loop. RmsNormSite counts every call; MlpActSite counts after
+// its gate-scale domain check accepts; ResidualReconcileSite counts once per call (not per candidate)
+// after its scale checks accept. They are not tier-split and sit OUTSIDE the x64 block below, because
+// the tables are on in every build except forced scalar, arm64 included; forced scalar builds no
+// test binary and no instrument.
+inline std::atomic<long long> g_rowtable_norm_taken{0};
+inline std::atomic<long long> g_rowtable_norm_skipped{0};
+inline std::atomic<long long> g_rowtable_silu_taken{0};
+inline std::atomic<long long> g_rowtable_silu_skipped{0};
+inline std::atomic<long long> g_rowtable_landing_taken{0};
+inline std::atomic<long long> g_rowtable_landing_skipped{0};
+
+}  // namespace superslm_test
+
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
 
 namespace superslm_test {
 

@@ -41,6 +41,9 @@
 #include "superslm/matmul.h"
 #include "superslm/sha256.h"
 #include "superslm/silu_lut.h"
+// Attention and per-row sites plan, section 10's fixed input set (header-only, shared with the golden
+// generator and the suite; included by path so this tool keeps its one-line build recipe).
+#include "../../tests/support/rowsite_cases.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -675,6 +678,22 @@ void SectionMatmulTiled() {
 	}
 }
 
+// --- 10. The per-row sites: tables and element loops ------------------------------
+//
+// Attention and per-row sites plan (rev 3.1), §3.3 evidence 2, cell 6.2. RmsNormSite, MlpActSite and
+// ResidualReconcileSite over tests/support/rowsite_cases.h's fixed set, which sits on both sides of the
+// per-row table threshold (widths 1 to 4,864 around 512), carries -128 codes, uniform rows, a small
+// gate scale and landing-flag rows (slice S1's entries; slice S3 appends the requant row's). Every
+// call's status, output scale and whole output row are digested. The forced-scalar leg runs the v1.9.0
+// per-element loops (tables off), so it is the reference axis this section is compared against; the
+// suite pins the same stream to a hash from the v1.9.0 tag. A new section, so sections 1-9 keep their
+// previous values exactly.
+void SectionRowsites() {
+	Section& sec = NewSection("c_rowsites");
+	auto emit = [&](int64_t v) { sec.sink.I64(v); };
+	superslm_rowsite_cases::RunRowTableCases(emit);
+}
+
 // --- driver ---------------------------------------------------------------------
 
 void PrintBuildIdentity() {
@@ -736,6 +755,7 @@ int main() {
 	SectionSiluLut();
 	SectionMatmul();
 	SectionMatmulTiled();
+	SectionRowsites();
 
 	Sha256 global;
 	int failures = 0;
