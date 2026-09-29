@@ -20,7 +20,10 @@
 // fences and exact-size buffers, and counted per tier (requant_row); slice S4 (§4.4): the guarded softmax,
 // checked against a test-side restatement of the v1.9.0 SoftmaxRowQ15 body (the unchanged public
 // IExpConstruct / IExpEvaluate leaves), bool and output, with the path chosen by a test-side copy of the
-// §5.4 guard and the correction rows chosen by a test-side replica of the estimates.
+// §5.4 guard and the correction rows chosen by a test-side replica of the estimates; slice S5 (§4.5): the Q31
+// score row (QkQ31ScoreRow) in three 16-bit pieces, checked against the in-tree scalar reference (the same
+// binary's per-key QkQ31Score outside the loader's ratio range), with the path chosen by a test-side copy of
+// its guard, and driven through both layer loops on the widened QK-norm fixture (cell 11.1(c)).
 //
 // A build without the instrument seam (build.bat's MSVC recipe) runs the value checks alone and
 // says so. Cell numbers are the plan's §8 numbering.
@@ -51,6 +54,7 @@
 #include "sslm_c32_softmax_row_width_gate_fixtures.h"
 #include "support/attention_cases.h"
 #include "support/matmul_dispatch_instrument.h"
+#include "support/qk_attention_fixture.h"
 #include "support/rowsite_cases.h"
 
 static int GChecks = 0;
@@ -1438,6 +1442,388 @@ void TestS4GoldenPin() {
 	          static_cast<unsigned long long>(superslm_test::kAttnRowsiteS4GoldenValues));
 }
 
+// ==== Slice S5: the Q31 score in three 16-bit pieces, per head (§4.5, §5.5) ===========================
+//
+// Every S5 kernel cell calls QkQ31ScoreRow directly and asserts per call (§8 path rule): every score equals
+// the reference, and the q31_row path counters moved by exactly the delta a test-side copy of the guard names
+// (head_dim <= 512 and every ratio in [0, 2^32), written from §4.5), on the selected kernel's own tier only.
+// The reference is the in-tree scalar reference QkQ31ScoreScalarRef for in-contract ratios, and the SAME
+// binary's per-key QkQ31Score for the out-of-contract rows of 2.S5 (§3.3: outside [0, 2^32) the v1.9.0 SIMD
+// tiers already differ from the scalar reference, and the fallback is that per-key loop). Cell 11.1(c) drives
+// the Q31 call sites of both layer loops on the widened QK-norm fixture.
+
+using superslm_attention_cases::Q31Case;
+
+// The test-side copy of the S5 guard (§4.5), one flag per conjunct so a 2.S5 row can be shown to fail
+// exactly one.
+struct Q31Guard {
+	bool hd_ok = true, ratio_ge0 = true, ratio_lt = true;
+	bool Fast() const { return hd_ok && ratio_ge0 && ratio_lt; }
+	int Failing() const { return !hd_ok + !ratio_ge0 + !ratio_lt; }
+};
+
+Q31Guard TestQ31Guard(const int64_t* ratio, size_t head_dim) {
+	Q31Guard g;
+	g.hd_ok = head_dim <= 512;
+	for (size_t d = 0; d < head_dim; ++d) {
+		if (ratio[d] < 0) g.ratio_ge0 = false;
+		if (ratio[d] > INT64_C(0xFFFFFFFF)) g.ratio_lt = false;
+	}
+	return g;
+}
+
+struct Q3Counters {
+	long long fast2 = 0, fb2 = 0, fast5 = 0, fb5 = 0;
+};
+#if defined(SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT) && SUPERSLM_MATMUL_HAVE_SIMD_X64
+constexpr bool kHaveQ3Counters = true;
+Q3Counters ReadQ3Counters() {
+	return Q3Counters{superslm_test::g_q31_row_fast_avx2.load(), superslm_test::g_q31_row_fallback_avx2.load(),
+	                  superslm_test::g_q31_row_fast_avx512.load(), superslm_test::g_q31_row_fallback_avx512.load()};
+}
+#else
+constexpr bool kHaveQ3Counters = false;
+Q3Counters ReadQ3Counters() { return Q3Counters{}; }
+#endif
+
+Q3Counters Q3Delta(const Q3Counters& a, const Q3Counters& b) {
+	return Q3Counters{b.fast2 - a.fast2, b.fb2 - a.fb2, b.fast5 - a.fast5, b.fb5 - a.fb5};
+}
+
+// `fast` fast and `fallback` fallback calls on this build (11.1(b)).
+Q3Counters ExpectedQ3Delta(long long fast, long long fallback) {
+	Q3Counters w;
+	switch (ExpectedSitesKernel()) {
+		case SitesKernel::kAvx2: w.fast2 = fast; w.fb2 = fallback; break;
+		case SitesKernel::kAvx512: w.fast5 = fast; w.fb5 = fallback; break;
+		case SitesKernel::kShipped: break;
+	}
+	return w;
+}
+
+bool CheckQ3Delta(const char* label, const Q3Counters& d, const Q3Counters& want) {
+	if (!kHaveQ3Counters) return true;
+	const bool ok = d.fast2 == want.fast2 && d.fb2 == want.fb2 && d.fast5 == want.fast5 && d.fb5 == want.fb5;
+	CHECK_MSG(ok, "%s: q31_row_fast_avx2 +%lld q31_row_fallback_avx2 +%lld q31_row_fast_avx512 +%lld "
+	          "q31_row_fallback_avx512 +%lld; want +%lld/+%lld/+%lld/+%lld (kernel: %s)",
+	          label, d.fast2, d.fb2, d.fast5, d.fb5, want.fast2, want.fb2, want.fast5, want.fb5,
+	          SitesKernelName(ExpectedSitesKernel()));
+	return ok;
+}
+
+enum class Q31Ref { kScalarRef, kSameBinaryPerKey };
+
+// One call against its reference, with its path assertion. The output is an exact-size heap vector,
+// poisoned, so the hosted ASan leg sees any write past the row. Returns whether the guard copy expected
+// the fast path.
+bool RunQ31(const Q31Case& c, Q31Ref ref) {
+	std::vector<int64_t> want(c.width);
+	for (size_t j = 0; j < c.width; ++j) {
+		const int8_t* k = c.keys.data() + j * c.head_dim;
+		want[j] = ref == Q31Ref::kScalarRef
+		              ? superslm::QkQ31ScoreScalarRef(c.q.data(), k, c.ratio.data(), c.head_dim)
+		              : superslm::QkQ31Score(c.q.data(), k, c.ratio.data(), c.head_dim);
+	}
+	std::vector<int64_t> out(c.width, superslm_attention_cases::kQ31Poison);
+	const Q31Guard g = TestQ31Guard(c.ratio.data(), c.head_dim);
+	const Q3Counters c0 = ReadQ3Counters();
+	superslm::QkQ31ScoreRow(c.q.data(), c.keys.data(), c.ratio.data(), c.head_dim, c.width, out.data());
+	const Q3Counters c1 = ReadQ3Counters();
+	size_t bad = 0, first = c.width;
+	for (size_t j = 0; j < c.width; ++j)
+		if (out[j] != want[j]) {
+			if (first == c.width) first = j;
+			++bad;
+		}
+	CHECK_MSG(bad == 0, "%s (head_dim %zu, width %zu): %zu of %zu scores differ from %s, first at key %zu (%lld vs %lld)",
+	          c.label, c.head_dim, c.width, bad, c.width,
+	          ref == Q31Ref::kScalarRef ? "QkQ31ScoreScalarRef" : "this binary's per-key QkQ31Score", first,
+	          first < c.width ? static_cast<long long>(out[first]) : 0LL,
+	          first < c.width ? static_cast<long long>(want[first]) : 0LL);
+	char full[200];
+	std::snprintf(full, sizeof full, "%s (head_dim %zu, width %zu, guard copy: %s)", c.label, c.head_dim, c.width,
+	              g.Fast() ? "fast" : "fallback");
+	CheckQ3Delta(full, Q3Delta(c0, c1), ExpectedQ3Delta(g.Fast() ? 1 : 0, g.Fast() ? 0 : 1));
+	return g.Fast();
+}
+
+// §5.5's limbs, restated: w = a2 * 2^30 + a1 * 2^15 + a0, a0 = w & 0x7FFF, a1 = (w >> 15) & 0x7FFF,
+// a2 = w >> 30 (arithmetic). Returns a key's three limb sums in int64 (no wrap), for the premise cells.
+void LimbSums(const Q31Case& c, size_t key, int64_t sums[3]) {
+	sums[0] = sums[1] = sums[2] = 0;
+	for (size_t d = 0; d < c.head_dim; ++d) {
+		const int64_t w = static_cast<int64_t>(c.q[d]) * c.ratio[d];
+		const int64_t k = c.keys[key * c.head_dim + d];
+		sums[0] += k * (w & 0x7FFF);
+		sums[1] += k * ((w >> 15) & 0x7FFF);
+		sums[2] += k * (w >> 30);
+	}
+}
+
+// ---- 4.S5, 6.1, 7.S5a, 7.S5b, 7.S5c: the shape grid, the margin corners and the ties --------------------
+
+void TestS5Grid() {
+	size_t rows = 0, fast = 0, margin = 0, ties = 0;
+	superslm_attention_cases::ForEachQ31Case([&](const Q31Case& c) {
+		++rows;
+		const bool f = RunQ31(c, Q31Ref::kScalarRef);
+		fast += f ? 1 : 0;
+		CHECK_MSG(f == (c.head_dim <= 512), "%s (head_dim %zu): guard copy says %s, want fast exactly when head_dim "
+		          "<= 512 (every ratio of the set is in [1, 2^31])", c.label, c.head_dim, f ? "fast" : "fallback");
+		if (std::strncmp(c.label, "7.S5b", 5) == 0) {
+			// The premise: every limb sum of every key is the margin row §5.5 names.
+			++margin;
+			int64_t s[3];
+			LimbSums(c, 0, s);
+			const int64_t per = static_cast<int64_t>(c.keys[0]) * 32767 * static_cast<int64_t>(c.head_dim);
+			CHECK_MSG(s[0] == per && s[1] == per, "%s head_dim %zu: limb sums %lld, %lld, want %lld", c.label,
+			          c.head_dim, static_cast<long long>(s[0]), static_cast<long long>(s[1]),
+			          static_cast<long long>(per));
+			if (c.head_dim == 512 && c.keys[0] == -128)
+				CHECK_MSG(per == INT64_C(-2147418112) && per - INT32_MIN == 65536,
+				          "7.S5b: the corner's limb sum %lld is not 65,536 above int32's minimum", static_cast<long long>(per));
+			if (c.head_dim == 516 && c.keys[0] == -128)
+				CHECK_MSG(per < INT32_MIN, "7.S5b: at head_dim 516 the limb sum %lld should pass int32's minimum",
+				          static_cast<long long>(per));
+		}
+		if (std::strncmp(c.label, "7.S5c", 5) == 0) {
+			for (size_t j = 0; j < c.width; ++j) {
+				int64_t total = 0;
+				for (size_t d = 0; d < c.head_dim; ++d)
+					total += static_cast<int64_t>(c.q[d]) * c.keys[j * c.head_dim + d] * c.ratio[d];
+				const int64_t r = total & ((INT64_C(1) << 31) - 1);
+				if (r == (INT64_C(1) << 30)) ++ties;
+			}
+		}
+	});
+	CHECK_MSG(rows == 10 * 8 * 3 + 16 + 2, "4.S5: %zu rows in the set, want %d", rows, 10 * 8 * 3 + 16 + 2);
+	CHECK_MSG(fast == 8 * 8 * 3 + 8 + 2, "4.S5: %zu rows on the fast side of the guard copy, want %d", fast,
+	          8 * 8 * 3 + 8 + 2);
+	CHECK_MSG(margin == 16, "7.S5b: %zu margin rows, want 16", margin);
+	CHECK_MSG(ties == 16, "7.S5c: %zu keys whose total is a rounding tie (+-2^30 mod 2^31), want 16", ties);
+}
+
+// ---- 7.S5d and the guard's inside corners: ratios 0, 2^31 and 2^32 - 1 run fast --------------------------
+
+void TestS5GuardInsideRows() {
+	superslm_attention_cases::Rng rng(0x5335494E53494445ULL);  // "S5INSIDE"
+	for (size_t hd : {size_t{64}, size_t{128}, size_t{512}})
+		for (size_t w : {size_t{9}, size_t{17}})
+			for (int64_t r : {INT64_C(0), INT64_C(1) << 31, INT64_C(0xFFFFFFFF)}) {
+				Q31Case c = superslm_attention_cases::MakeQ31GridCase(hd, w, 1, rng);
+				c.label = "7.S5d inside corner";
+				for (size_t d = 0; d < hd; d += 2) c.ratio[d] = r;  // every other channel at the corner
+				const bool f = RunQ31(c, Q31Ref::kScalarRef);
+				CHECK_MSG(f, "7.S5d: ratio %lld at head_dim %zu should be inside the guard copy", static_cast<long long>(r),
+				          hd);
+			}
+	// Width 0: nothing is written; the call still counts once on its tier (§3.6: once per call).
+	Q31Case z = superslm_attention_cases::MakeQ31GridCase(64, 1, 0, rng);
+	z.label = "4.S5 width 0";
+	z.width = 0;
+	z.keys.clear();
+	RunQ31(z, Q31Ref::kScalarRef);
+}
+
+// ---- 2.S5: hostile rows, each failing exactly one conjunct -----------------------------------------------
+
+void TestS5HostileRows() {
+	superslm_attention_cases::Rng rng(0x3253354853544C45ULL);  // "2S5HSTLE"
+	size_t rows = 0;
+	// Ratio -1 and 2^32 break a kernel that forms w from 32-bit pieces; 2^33 and 2^38 are outside the guard but
+	// inside a 64-bit formation's int16 range (§5.5); 2^48 breaks every formation while 128 * 128 * 2^48 = 2^62
+	// keeps the scalar reference's int64 sum defined. INT64_MAX is not a row (§5.5). Each at the first, a middle
+	// and the last channel (the last is the SIMD tiers' scalar tail at head_dim 63).
+	const int64_t hostile[] = {INT64_C(-1), INT64_C(1) << 32, INT64_C(1) << 33, INT64_C(1) << 38, INT64_C(1) << 48};
+	for (size_t hd : {size_t{63}, size_t{64}})
+		for (int64_t r : hostile)
+			for (size_t at : {size_t{0}, hd / 2, hd - 1}) {
+				Q31Case c = superslm_attention_cases::MakeQ31GridCase(hd, 17, 0, rng);
+				c.label = "2.S5 ratio outside [0, 2^32)";
+				c.ratio[at] = r;
+				const Q31Guard g = TestQ31Guard(c.ratio.data(), c.head_dim);
+				CHECK_MSG(g.Failing() == 1 && (r < 0 ? !g.ratio_ge0 : !g.ratio_lt),
+				          "2.S5 ratio %lld: fails %d conjuncts of the guard copy, want exactly the ratio one",
+				          static_cast<long long>(r), g.Failing());
+				RunQ31(c, Q31Ref::kSameBinaryPerKey);
+				++rows;
+			}
+	for (size_t w : {size_t{1}, size_t{17}}) {
+		Q31Case c = superslm_attention_cases::MakeQ31GridCase(513, w, 0, rng);
+		c.label = "2.S5 head_dim 513";
+		const Q31Guard g = TestQ31Guard(c.ratio.data(), c.head_dim);
+		CHECK_MSG(g.Failing() == 1 && !g.hd_ok, "2.S5 head_dim 513: fails %d conjuncts, want exactly head_dim",
+		          g.Failing());
+		RunQ31(c, Q31Ref::kSameBinaryPerKey);
+		++rows;
+	}
+	CHECK_MSG(rows == 2 * 5 * 3 + 2, "2.S5: %zu hostile rows, want %d", rows, 2 * 5 * 3 + 2);
+}
+
+// ---- 6.3: the S5 golden pin (the v1.9.0 tag's hashes over the Q31 set and the QK-norm fixture) ----------
+
+template <class Run>
+std::string HashRun(Run run, uint64_t* values) {
+	superslm::Sha256 h;
+	*values = 0;
+	auto emit = [&](int64_t v) {
+		uint8_t b[8];
+		for (int i = 0; i < 8; ++i) b[i] = static_cast<uint8_t>((static_cast<uint64_t>(v) >> (8 * i)) & 0xffU);
+		h.Update(b, 8);
+		++*values;
+	};
+	run(emit);
+	uint8_t digest[32];
+	h.Final(digest);
+	return superslm::ToHex(digest);
+}
+
+void TestS5GoldenPin() {
+	uint64_t values = 0;
+	const std::string hex = HashRun(
+	    [](auto& emit) { superslm_attention_cases::RunQ31Cases(emit, superslm::QkQ31ScoreRow); }, &values);
+	std::printf("attn-rowsites S5 golden hash: %s (%llu values)\n", hex.c_str(), static_cast<unsigned long long>(values));
+	CHECK_MSG(hex == std::string(superslm_test::kAttnRowsiteS5GoldenHash) &&
+	              values == superslm_test::kAttnRowsiteS5GoldenValues,
+	          "6.3 S5 golden: %s over %llu values, pin %s over %llu (v1.9.0 tag)", hex.c_str(),
+	          static_cast<unsigned long long>(values), superslm_test::kAttnRowsiteS5GoldenHash,
+	          static_cast<unsigned long long>(superslm_test::kAttnRowsiteS5GoldenValues));
+}
+
+// ---- 11.1(c): the QK-norm attention fixture, the Q31 call sites of both loops ----------------------------
+
+// Run (iii)'s sink: every row the decode loop hands it, classified by the test-side guard copies (§5.4's
+// softmax guard, §5.2's int16 condition), so the softmax and prob·V counters are exact too.
+struct FixtureRows {
+	long long observes = 0, sm_fast = 0, sm_fallback = 0, pv_fast = 0, pv_fallback = 0;
+};
+
+void ClassifyRow(void* ctx, uint32_t, int64_t, size_t, const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b,
+                 int64_t q_c, const int64_t* probs, const int64_t*, const int64_t*, size_t head_dim) {
+	auto* r = static_cast<FixtureRows*>(ctx);
+	++r->observes;
+	(TestSoftmaxGuard(scores, width, q_ln2, q_b, q_c).Fast() ? r->sm_fast : r->sm_fallback) += 1;
+	(TestPvGuard(probs, width, head_dim).Fast() ? r->pv_fast : r->pv_fallback) += 1;
+}
+
+struct AllCounters {
+	RowCounters row;
+	Q3Counters q3;
+	SmCounters sm;
+	PvCounters pv;
+	RqCounters rq;
+};
+
+AllCounters ReadAll() {
+	return AllCounters{ReadRowCounters(), ReadQ3Counters(), ReadSmCounters(), ReadPvCounters(), ReadRqCounters()};
+}
+
+// The per-position structural deltas of §8 11.1(c)'s table, "S5 landed, S6 not" column, over `n`
+// positions: q31_row fast L·H = 4 per position and fallback 0; rowtable_norm_skipped 2L + L·H = 6 (two
+// hidden norms at 256, four q_norm at 64); silu 1 and landing 2 skipped; every taken 0.
+void CheckFixtureStructural(const char* label, const AllCounters& a, const AllCounters& b, long long n) {
+	CheckQ3Delta(label, Q3Delta(a.q3, b.q3), ExpectedQ3Delta(4 * n, 0));
+	if (!kHaveRowCounters) return;
+	const RowCounters d = Delta(a.row, b.row);
+	const long long want_skipped[3] = {6 * n, n, 2 * n};
+	for (int s = 0; s < 3; ++s)
+		CHECK_MSG(d.taken[s] == 0 && d.skipped[s] == want_skipped[s],
+		          "%s: rowtable_%s taken +%lld skipped +%lld, want +0/+%lld", label, kRowSiteNames[s], d.taken[s],
+		          d.skipped[s], want_skipped[s]);
+}
+
+void TestS5QkNormFixture() {
+	using superslm::SslmForwardStatus;
+	namespace fx = superslm_qk_fixture;
+	fx::QkAttentionFixture f;
+	CHECK_MSG(f.loaded, "11.1(c): the fixture's own minimal artifact failed to load: %s", f.load_error.c_str());
+	if (!f.loaded) return;
+	const long long P = static_cast<long long>(fx::kPositions);
+
+	// Run (iii) first: the decode loop with the classifying sink. Its rows give the data terms.
+	FixtureRows rows;
+	superslm::AttentionCaptureSink sink{&rows, &ClassifyRow};
+	AllCounters at = ReadAll();
+	const AllCounters start3 = at;
+	uint64_t n3 = 0;
+	SslmForwardStatus st3 = SslmForwardStatus::Ok;
+	const std::string h3 = HashRun(
+	    [&](auto& emit) {
+		    st3 = fx::RunFixtureDecode(f, emit, &sink, [&](size_t p) {
+			    const AllCounters now = ReadAll();
+			    char label[64];
+			    std::snprintf(label, sizeof label, "11.1(c) run (iii) position %zu", p);
+			    CheckFixtureStructural(label, at, now, 1);
+			    at = now;
+		    });
+	    },
+	    &n3);
+	const AllCounters end3 = ReadAll();
+	CHECK_MSG(st3 == SslmForwardStatus::Ok, "11.1(c) run (iii): status %s", SslmForwardStatusName(st3));
+	// The premise (checked on the base before any kernel landed): one observe per (position, head), every
+	// softmax row inside §5.4's guard; the only rows failing the int16 condition are position 0's width-1 rows.
+	CHECK_MSG(rows.observes == 4 * P && rows.sm_fallback == 0 && rows.pv_fallback == 4,
+	          "11.1(c) premise: %lld rows observed (want %lld), %lld outside the softmax guard (want 0), %lld failing "
+	          "the int16 condition (want 4)", rows.observes, 4 * P, rows.sm_fallback, rows.pv_fallback);
+
+	// Run (i): the decode loop, no sink.
+	at = ReadAll();
+	const AllCounters start1 = at;
+	uint64_t n1 = 0;
+	SslmForwardStatus st1 = SslmForwardStatus::Ok;
+	const std::string h1 = HashRun(
+	    [&](auto& emit) {
+		    st1 = fx::RunFixtureDecode(f, emit, nullptr, [&](size_t p) {
+			    const AllCounters now = ReadAll();
+			    char label[64];
+			    std::snprintf(label, sizeof label, "11.1(c) run (i) position %zu", p);
+			    CheckFixtureStructural(label, at, now, 1);
+			    at = now;
+		    });
+	    },
+	    &n1);
+	const AllCounters end1 = ReadAll();
+	CHECK_MSG(st1 == SslmForwardStatus::Ok, "11.1(c) run (i): status %s", SslmForwardStatusName(st1));
+
+	// Run (ii): the chunk loop over all 24 positions, with a counting sink installed on the layer (t2701's
+	// chunk-mode configuration): the chunk loop never observes.
+	FixtureRows chunk_rows;
+	superslm::AttentionCaptureSink chunk_sink{&chunk_rows, &ClassifyRow};
+	const AllCounters start2 = ReadAll();
+	uint64_t n2 = 0;
+	SslmForwardStatus st2 = SslmForwardStatus::Ok;
+	const std::string h2 = HashRun([&](auto& emit) { st2 = fx::RunFixtureChunk(f, emit, &chunk_sink); }, &n2);
+	const AllCounters end2 = ReadAll();
+	CHECK_MSG(st2 == SslmForwardStatus::Ok, "11.1(c) run (ii): status %s", SslmForwardStatusName(st2));
+	CHECK_MSG(chunk_rows.observes == 0, "11.1(c) run (ii): the chunk loop made %lld observe calls, want 0",
+	          chunk_rows.observes);
+	CheckFixtureStructural("11.1(c) run (ii), 24 positions", start2, end2, P);
+
+	// Every run hashes to the golden pin's fixture hash (6.3, from the v1.9.0 tag).
+	const struct {
+		const char* name;
+		const std::string& hex;
+		uint64_t n;
+		const AllCounters &a, &b;
+	} runs[] = {{"(i)", h1, n1, start1, end1}, {"(ii)", h2, n2, start2, end2}, {"(iii)", h3, n3, start3, end3}};
+	for (const auto& r : runs) {
+		CHECK_MSG(r.hex == std::string(superslm_test::kAttnRowsiteS5FixtureGoldenHash) &&
+		              r.n == superslm_test::kAttnRowsiteS5FixtureGoldenValues,
+		          "11.1(c)/6.3 run %s: fixture hash %s over %llu values, pin %s over %llu (v1.9.0 tag)", r.name,
+		          r.hex.c_str(), static_cast<unsigned long long>(r.n), superslm_test::kAttnRowsiteS5FixtureGoldenHash,
+		          static_cast<unsigned long long>(superslm_test::kAttnRowsiteS5FixtureGoldenValues));
+		// Softmax and prob·V: exact, from run (iii)'s classified rows, on every run.
+		char label[64];
+		std::snprintf(label, sizeof label, "11.1(c) run %s softmax", r.name);
+		CheckSmDelta(label, SmDelta(r.a.sm, r.b.sm), ExpectedSmDelta(rows.sm_fast, rows.sm_fallback));
+		std::snprintf(label, sizeof label, "11.1(c) run %s prob-V", r.name);
+		CheckPvDelta(label, PvDelta(r.a.pv, r.b.pv), ExpectedPvDelta(rows.pv_fast, rows.pv_fallback));
+	}
+	std::printf("attn-rowsites 11.1(c) fixture hash: %s (%llu values); %lld rows, softmax %lld/%lld, prob-V %lld/%lld "
+	            "(fast/fallback by the guard copies)\n", h1.c_str(), static_cast<unsigned long long>(n1), rows.observes,
+	            rows.sm_fast, rows.sm_fallback, rows.pv_fast, rows.pv_fallback);
+}
+
 // ---- 11.1(d): the 0.5B-width 1-layer artifact through the two layer loops -----------------------
 
 struct TraceCount {
@@ -1510,6 +1896,7 @@ void TestS1LayerLoopWindows() {
 	const PvCounters v0 = ReadPvCounters();
 	const RqCounters q0 = ReadRqCounters();
 	const SmCounters m0 = ReadSmCounters();
+	const Q3Counters x0 = ReadQ3Counters();
 	const TraceCount tp0 = trace;
 	std::vector<int8_t> chunk(T * hidden);
 	std::vector<CarriedScale> scales(T);
@@ -1531,6 +1918,7 @@ void TestS1LayerLoopWindows() {
 	const PvCounters v1 = ReadPvCounters();
 	const RqCounters q1 = ReadRqCounters();
 	const SmCounters m1 = ReadSmCounters();
+	const Q3Counters x1 = ReadQ3Counters();
 	const TraceCount tp1 = trace;
 
 	// The decode window.
@@ -1552,6 +1940,7 @@ void TestS1LayerLoopWindows() {
 	const PvCounters v2 = ReadPvCounters();
 	const RqCounters q2 = ReadRqCounters();
 	const SmCounters m2 = ReadSmCounters();
+	const Q3Counters x2 = ReadQ3Counters();
 	const TraceCount tp2 = trace;
 	SslmSetTraceHook(model.trace_hook, nullptr, nullptr);
 
@@ -1569,11 +1958,12 @@ void TestS1LayerLoopWindows() {
 		PvCounters va, vb;
 		RqCounters qa, qb;
 		SmCounters ma, mb;
+		Q3Counters xa, xb;
 		TraceCount ta, tb;
 		size_t N;
 		long long pv_fallback, softmax_fallback;
-	} windows[] = {{"prefill", p0, p1, v0, v1, q0, q1, m0, m1, tp0, tp1, T, 15, 0},
-	               {"decode", p1, p2, v1, v2, q1, q2, m1, m2, tp1, tp2, D, 0, 0}};
+	} windows[] = {{"prefill", p0, p1, v0, v1, q0, q1, m0, m1, x0, x1, tp0, tp1, T, 15, 0},
+	               {"decode", p1, p2, v1, v2, q1, q2, m1, m2, x1, x2, tp1, tp2, D, 0, 0}};
 	for (const auto& w : windows) {
 		// Structural terms (G26): the closed forms, every width here being >= 512.
 		const RowCounters d = Delta(w.a, w.b);
@@ -1604,6 +1994,9 @@ void TestS1LayerLoopWindows() {
 		// falls back; on the active kernel's tier only (11.1(b)).
 		std::snprintf(pv_label, sizeof pv_label, "11.1(d) %s softmax", w.name);
 		CheckSmDelta(pv_label, SmDelta(w.ma, w.mb), ExpectedSmDelta(calls - w.softmax_fallback, w.softmax_fallback));
+		// S5: this artifact carries no QK-norm, so the plain score path runs and QkQ31ScoreRow is never called.
+		std::snprintf(pv_label, sizeof pv_label, "11.1(d) %s q31_row", w.name);
+		CheckQ3Delta(pv_label, Q3Delta(w.xa, w.xb), Q3Counters{});
 		if (!kHaveRowCounters) continue;
 		const long long want_taken[3] = {2 * Ll * N, Ll * N, 2 * Ll * N};
 		for (int s = 0; s < 3; ++s) {
@@ -1640,8 +2033,13 @@ void RunAttnRowsiteCells(int& checks, int& failures) {
 	TestS4Grid();
 	TestS4HostileRows();
 	TestS4GoldenPin();
-	TestS1LayerLoopWindows();  // 11.1(d): S1's, S2's, S3's and S4's rows over one drive
-	std::printf("attn-rowsites cells (plan slices S1, S2, S3, S4): %d checks, %d failures\n", GChecks, GFailures);
+	TestS5Grid();
+	TestS5GuardInsideRows();
+	TestS5HostileRows();
+	TestS5GoldenPin();
+	TestS5QkNormFixture();     // 11.1(c): the Q31 call sites of both loops
+	TestS1LayerLoopWindows();  // 11.1(d): S1's, S2's, S3's, S4's and S5's rows over one drive
+	std::printf("attn-rowsites cells (plan slices S1, S2, S3, S4, S5): %d checks, %d failures\n", GChecks, GFailures);
 	checks += GChecks;
 	failures += GFailures;
 }

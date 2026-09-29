@@ -32,6 +32,16 @@ inline constexpr const char* kAttnRowsiteS4GoldenHash =
     "2e47ea3c27774db43d9c952972325a5c19d901ba6871f0bd124c8c874f6a55d9";
 inline constexpr uint64_t kAttnRowsiteS4GoldenValues = 268078ULL;
 
+// Slice S5: QkQ31Score per key over RunQ31Cases.
+inline constexpr const char* kAttnRowsiteS5GoldenHash =
+    "daea9a39c4df72b9431140446ee511cb9f60101646d83fbc2ae22d4b3d4faaa5";
+inline constexpr uint64_t kAttnRowsiteS5GoldenValues = 33618ULL;
+
+// Slice S5, cell 11.1(c): the QK-norm fixture's forward through the decode loop.
+inline constexpr const char* kAttnRowsiteS5FixtureGoldenHash =
+    "336b8d417d078cdf91c0cd714e557df752e952eeb29b79ac594348e3be085779";
+inline constexpr uint64_t kAttnRowsiteS5FixtureGoldenValues = 14384ULL;
+
 }  // namespace superslm_test
 
 #endif  // SUPERSLM_TESTS_ATTN_ROWSITE_GOLDEN_PIN_H

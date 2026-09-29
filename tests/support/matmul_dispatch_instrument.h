@@ -112,6 +112,17 @@ inline std::atomic<long long> g_softmax_fallback_avx2{0};
 inline std::atomic<long long> g_softmax_fast_avx512{0};
 inline std::atomic<long long> g_softmax_fallback_avx512{0};
 
+// Attention and per-row sites plan, slice S5 (§3.6): the Q31 score-row path counters, per tier.
+// src/forward/forward_sites.cpp's QkQ31ScoreRow increments exactly one of them per call on the AVX2 and
+// AVX-512 tiers, after its guard has decided: `fast` inside the tier's own body (head_dim <= 512 and every
+// ratio in [0, 2^32)), `fallback` in the entry when the guard fails (the per-key QkQ31Score loop then runs).
+// On the scalar and SSE2 tiers, and on an MSVC build's AVX-512 tier with SUPERSLM_SITES_AVX512_MSVC off
+// (v1.9.0 code), none moves.
+inline std::atomic<long long> g_q31_row_fast_avx2{0};
+inline std::atomic<long long> g_q31_row_fallback_avx2{0};
+inline std::atomic<long long> g_q31_row_fast_avx512{0};
+inline std::atomic<long long> g_q31_row_fallback_avx512{0};
+
 }  // namespace superslm_test
 
 #endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64

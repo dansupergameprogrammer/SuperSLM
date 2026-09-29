@@ -537,6 +537,119 @@ void RunSoftmaxCases(Emit& emit) {
 	});
 }
 
+// ==== Slice S5: the Q31 score in three 16-bit pieces, per head (plan §4.5, §5.5, §8 4.S5 and 7.S5) =====
+//
+// The S5 set scores one query head against `width` keys through a caller-supplied row function: the
+// digest and the suite pass the build's QkQ31ScoreRow; the golden-pin generator, built against the v1.9.0
+// tag (which has no row entry), passes a loop over the v1.9.0 per-key QkQ31Score. The set is §8 4.S5's grid,
+// head_dim {4, 8, 60, 64, 128, 132, 256, 512, 513, 516} x width {1, 7, 8, 9, 1,024} plus widths 15, 16
+// and 17 (the AVX-512 body's 16-key block, full and partial), in three operand kinds; 7.S5b's margin
+// corners at head_dim 512 (and the same rows at 516, past the guard); and 7.S5c's rounding ties.
+//
+// Every ratio here is in [1, 2^31], the loader's range (G6), inside S5's fast-path range [0, 2^32): §3.3
+// keeps pin and digest inputs in contract, because outside [0, 2^32) the v1.9.0 SIMD tiers of QkQ31Score
+// already differ from its scalar reference, so no single pin could hold there. The out-of-contract rows
+// (2.S5) are suite-only cells compared with the same binary's per-key QkQ31Score.
+
+inline constexpr size_t kQ31HeadDims[] = {4, 8, 60, 64, 128, 132, 256, 512, 513, 516};
+inline constexpr size_t kQ31Widths[] = {1, 7, 8, 9, 15, 16, 17, 1024};
+inline constexpr int64_t kQ31Poison = INT64_C(0x2B2B2B2B2B2B2B2B);
+inline constexpr int64_t kQ31RatioMax = INT64_C(1) << 31;  // the loader's maximum
+
+// One score-row call: one query head's q, `width` key rows of head_dim (the K store's layout for one KV
+// head, positions 0 .. width - 1), and the KV head's per-channel ratios.
+struct Q31Case {
+	const char* label;
+	size_t head_dim;
+	size_t width;
+	std::vector<int8_t> q;       // head_dim
+	std::vector<int8_t> keys;    // width * head_dim
+	std::vector<int64_t> ratio;  // head_dim
+};
+
+// kind 0: uniform q and k in [-128, 127], ratio in [1, 2^31]; kind 1: q and k at the int8 extremes
+// {-128, 127}, ratio in {1, 2^31 - 1, 2^31}; kind 2: uniform q and k, ratio 2^31 on every channel (the
+// real value, as the QK-norm fixture carries).
+inline Q31Case MakeQ31GridCase(size_t head_dim, size_t width, int kind, Rng& rng) {
+	static const char* const kLabels[] = {"4.S5 grid, uniform", "4.S5 grid, int8 extremes", "4.S5 grid, ratio 2^31"};
+	Q31Case c{kLabels[kind], head_dim, width, std::vector<int8_t>(head_dim), std::vector<int8_t>(width * head_dim),
+	          std::vector<int64_t>(head_dim)};
+	auto code = [&]() -> int8_t {
+		if (kind == 1) return rng.Next() & 1 ? int8_t{127} : int8_t{-128};
+		return static_cast<int8_t>(rng.InRange(-128, 127));
+	};
+	for (auto& x : c.q) x = code();
+	for (auto& x : c.keys) x = code();
+	for (auto& r : c.ratio) {
+		if (kind == 0) r = rng.InRange(1, kQ31RatioMax);
+		else if (kind == 1) r = (rng.Next() % 3 == 0) ? 1 : (rng.Next() & 1 ? kQ31RatioMax : kQ31RatioMax - 1);
+		else r = kQ31RatioMax;
+	}
+	return c;
+}
+
+// 7.S5b: every limb sum at §5.5's int32 margin. Channel products w = q * ratio with a0 = a1 = 32,767 (w
+// is -1, or 2^30 - 1) against keys of -128 (or 127) on every channel: at head_dim 512 each limb's per-key
+// sum is -128 * 32,767 * 512 = -2,147,418,112 (margin 65,535 to int32's minimum) or 127 * 32,767 * 512 =
+// 2,130,690,048. At 516 the same rows are past the guard (and would wrap an int32 lane).
+inline Q31Case MakeQ31MarginCase(size_t head_dim, size_t width, bool negative_w, int8_t key) {
+	Q31Case c{negative_w ? "7.S5b margin corner, w = -1, key fill" : "7.S5b margin corner, w = 2^30 - 1, key fill",
+	          head_dim, width, std::vector<int8_t>(head_dim, negative_w ? int8_t{-1} : int8_t{1}),
+	          std::vector<int8_t>(width * head_dim, key),
+	          std::vector<int64_t>(head_dim, negative_w ? INT64_C(1) : (INT64_C(1) << 30) - 1)};
+	return c;
+}
+
+// 7.S5c: totals on and beside the rounding ties x = +-2^30 (mod 2^31). Two channels carry the products:
+// ratio 2^30 - 5 and 5 (every limb nonzero), q = +-1 on both, key t on both, so the key's total is exactly
+// q * t * 2^30; odd t is a tie, which RoundingDivideByPOT rounds away from zero. The remaining channels
+// add +-1 (ratio 1) on some keys to land one beside the tie.
+inline Q31Case MakeQ31TieCase(int8_t q_sign) {
+	const size_t hd = 64, width = 24;
+	Q31Case c{q_sign > 0 ? "7.S5c ties, q = +1" : "7.S5c ties, q = -1", hd, width, std::vector<int8_t>(hd, 0),
+	          std::vector<int8_t>(width * hd, 0), std::vector<int64_t>(hd, 1)};
+	c.q[0] = q_sign;
+	c.q[1] = q_sign;
+	c.q[2] = 1;
+	c.ratio[0] = (INT64_C(1) << 30) - 5;
+	c.ratio[1] = 5;
+	static constexpr int8_t kT[] = {1, -1, 3, -3, 5, -5, 127, -127, -128, 2, -2, 0};
+	for (size_t j = 0; j < width; ++j) {
+		const int8_t t = kT[j % 12];
+		c.keys[j * hd + 0] = t;
+		c.keys[j * hd + 1] = t;
+		c.keys[j * hd + 2] = j < 12 ? int8_t{0} : (j % 2 ? int8_t{1} : int8_t{-1});  // beside the tie
+	}
+	return c;
+}
+
+template <class Fn>
+void ForEachQ31Case(Fn&& fn) {
+	Rng rng(0x5E5E'0031'7153'0005ULL);
+	for (size_t hd : kQ31HeadDims)
+		for (size_t w : kQ31Widths)
+			for (int kind = 0; kind < 3; ++kind) fn(MakeQ31GridCase(hd, w, kind, rng));
+	for (size_t hd : {size_t{512}, size_t{516}})
+		for (size_t w : {size_t{1}, size_t{17}})
+			for (bool neg : {true, false})
+				for (int8_t key : {int8_t{-128}, int8_t{127}}) fn(MakeQ31MarginCase(hd, w, neg, key));
+	fn(MakeQ31TieCase(1));
+	fn(MakeQ31TieCase(-1));
+}
+
+// The whole S5 set through `row(q, keys, ratio, head_dim, width, out)`: per call, width, head_dim and every
+// score (the output row is poisoned before the call).
+template <class Emit, class Row>
+void RunQ31Cases(Emit& emit, Row&& row) {
+	ForEachQ31Case([&](const Q31Case& c) {
+		std::vector<int64_t> out(c.width, kQ31Poison);
+		row(c.q.data(), c.keys.data(), c.ratio.data(), c.head_dim, c.width, out.data());
+		emit(static_cast<int64_t>(c.width));
+		emit(static_cast<int64_t>(c.head_dim));
+		for (int64_t x : out) emit(x);
+	});
+}
+
 }  // namespace superslm_attention_cases
 
 #endif  // SUPERSLM_TESTS_SUPPORT_ATTENTION_CASES_H

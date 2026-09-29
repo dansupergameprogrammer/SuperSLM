@@ -608,6 +608,12 @@ int64_t QkQ31Score(const int8_t* q, const int8_t* k, const int64_t* ratio, size_
 #endif
 }
 
+void QkQ31ScoreRow(const int8_t* q, const int8_t* keys, const int64_t* ratio, size_t head_dim, size_t width,
+                   int64_t* out) {
+	// Slice S5, red-first stub: the per-key loop the layer loops run today.
+	for (size_t j = 0; j < width; ++j) out[j] = QkQ31Score(q, keys + j * head_dim, ratio, head_dim);
+}
+
 SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_size,
                                CarriedScale /*incoming_scale*/, CarriedScale site_constant,
                                int8_t* out_codes, CarriedScale* out_scale,
