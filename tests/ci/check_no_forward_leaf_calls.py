@@ -137,6 +137,10 @@ _DEFAULT_FORWARD_GLOBS = (
 _EXPECTED_REAL_FORWARD_FILES = (
     "src/forward/checked_chain_funnel.cpp",
     "src/forward/forward_sites.cpp",
+    # Decode-threading plan rev 1.2, step D0: the shared split and exactly-once runner the
+    # logits step and the one-row projection groups use. It calls no banned leaf.
+    "src/forward/parallel_split.cpp",
+    "src/forward/parallel_split.h",
 )
 
 # Relative-to-repo-root paths permitted to name a banned leaf directly. Only a

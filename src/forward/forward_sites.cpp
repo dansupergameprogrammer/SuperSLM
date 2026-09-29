@@ -2339,15 +2339,15 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		                 LayerSite(site_prefix, l, "attn_norm"), token_index, trace_hook_state);
 		if (st != SslmForwardStatus::Ok) return st;
 
+		st = MaybeLayerSiteFault(MatvecFaultSite::kQ, l);
+		if (st != SslmForwardStatus::Ok) return st;
 		// SSLM-GEOMETRY-SITE: GS-12
 		// T-2432 (Track A step 3): q_proj's INPUT width stays hidden_size (the normed
 		// residual stream is unchanged by this ask); its OUTPUT width is effective_q_width.
-		st = MaybeLayerSiteFault(MatvecFaultSite::kQ, l);
-		if (st != SslmForwardStatus::Ok) return st;
-		st = ProjectAndFunnelRow(row_pf, normed.data(), normed_scale, lw.q_weight, hidden_size,
-		                         effective_q_width, lw.q_fold_identity, lw.q_fold_mult,
-		                         lw.q_fold_shift, lw.q_site_constant, lw.q_bias, q_codes.data(),
-		                         &q_scale, LayerSite(site_prefix, l, "q_proj.requant"),
+		st = ProjectAndFunnelRow(row_pf, normed.data(), normed_scale, lw.q_weight, hidden_size, effective_q_width,
+		                         lw.q_fold_identity, lw.q_fold_mult, lw.q_fold_shift, lw.q_site_constant,
+		                         lw.q_bias, q_codes.data(), &q_scale,
+		                         LayerSite(site_prefix, l, "q_proj.requant"),
 		                         token_index, trace_hook_state,
 		                         lw.adapter != nullptr ? &lw.adapter->q : nullptr,
 		                         lw.adapter != nullptr ? lw.adapter->rank : 0);
@@ -2605,12 +2605,12 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			if (ctx_result.status != SslmForwardStatus::Ok) return ctx_result.status;
 		}
 
+		st = MaybeLayerSiteFault(MatvecFaultSite::kO, l);
+		if (st != SslmForwardStatus::Ok) return st;
 		// SSLM-GEOMETRY-SITE: GS-12
 		// T-2432 (Track A step 3): o_proj's INPUT width is effective_q_width (the just-folded
 		// attention context); its OUTPUT width stays hidden_size -- attention always returns to
 		// the model's residual-stream width, unchanged by this ask (GS-09, D-SLM5249).
-		st = MaybeLayerSiteFault(MatvecFaultSite::kO, l);
-		if (st != SslmForwardStatus::Ok) return st;
 		st = ProjectAndFunnelRow(row_pf, ctx_codes.data(), ctx_scale, lw.o_weight, effective_q_width,
 		                         hidden_size, lw.o_fold_identity, lw.o_fold_mult, lw.o_fold_shift,
 		                         lw.o_site_constant, /*bias=*/nullptr, o_codes.data(), &o_scale,
@@ -2978,11 +2978,11 @@ static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk
 			if (st != SslmForwardStatus::Ok) return st;
 		}
 
+		st = MaybeLayerSiteFault(MatvecFaultSite::kQ, l);
+		if (st != SslmForwardStatus::Ok) return st;
 		// SSLM-GEOMETRY-SITE: GS-12
 		// T-2432 (Track A step 3): q_proj's INPUT width stays hidden_size; OUTPUT width is
 		// effective_q_width.
-		st = MaybeLayerSiteFault(MatvecFaultSite::kQ, l);
-		if (st != SslmForwardStatus::Ok) return st;
 		st = ProjectAndFunnelBatched(normed.data(), normed_scale.data(), chunk_tokens, lw.q_weight,
 		                             hidden_size, effective_q_width, lw.q_fold_identity, lw.q_fold_mult,
 		                             lw.q_fold_shift, lw.q_site_constant, lw.q_bias, q_codes.data(),
@@ -3151,11 +3151,11 @@ static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk
 		}
 
 		// --- o_proj: batched GEMM across every token's ctx_codes -----------------------------
+		st = MaybeLayerSiteFault(MatvecFaultSite::kO, l);
+		if (st != SslmForwardStatus::Ok) return st;
 		// SSLM-GEOMETRY-SITE: GS-12
 		// T-2432 (Track A step 3): o_proj's INPUT width is effective_q_width; OUTPUT stays
 		// hidden_size (GS-09, D-SLM5249).
-		st = MaybeLayerSiteFault(MatvecFaultSite::kO, l);
-		if (st != SslmForwardStatus::Ok) return st;
 		st = ProjectAndFunnelBatched(ctx_codes.data(), ctx_scale.data(), chunk_tokens, lw.o_weight,
 		                             effective_q_width, hidden_size, lw.o_fold_identity, lw.o_fold_mult,
 		                             lw.o_fold_shift, lw.o_site_constant, /*bias=*/nullptr,
