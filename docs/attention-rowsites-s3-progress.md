@@ -40,7 +40,7 @@ States: **done**, **CI-only**, **box-only**, **not done** (with why).
 | 11.6 branch coverage (clang-18 replica) | done locally; floors not re-pinned | `coverage.txt`: full union OK (intmath.cpp 88.83%). Projected for a runner without AVX-512: intmath.cpp 86.70%, **below its 87.93% floor**; allowlist lines added |
 | CHANGELOG and `docs/platform-support.md` entries | done (commit 3) | the Unreleased entry and a section beside S2's |
 | 10.1 bench against §0's 1.22 ms/token | done | `bench.md`: **2.53 ms/token saved on AVX2, 2.66 on AVX-512** (4.5× and 5.5× on the funnel call) |
-| 11.4 forward-leaf check lists `RequantRowWide`; planted call from `forward_sites.cpp` turns it red | done (commit 2) | `tests/ci/check_no_forward_leaf_calls.py` (+ its 83-cell pytest, green); plant in `leaf-plant.txt` |
+| 11.4 forward-leaf check lists `RequantRowWide`; planted call from `forward_sites.cpp` turns it red | done (commit 2) | `check_no_forward_leaf_calls.py` (+ its 83-cell pytest, green); plant in `leaf-plant.txt` |
 | 11.3 linkage checker gains the intmath.cpp objects (population `RequantRowAvx`, the record only in matmul objects); CI job passes all six objects; isolation checker's prose names the two bodies | done (commit 2) | OK on all six objects; plant (RequantRowAvx2 given external linkage) red, `linkage-plant.txt` |
 | 11.5 the four recipes of G21 gain `src\matmul.cpp`; GCC link check | done (commit 2) | `recipe-link.txt`: without matmul.cpp all eight link units fail on `detail::ActiveGemmTier` / `DispatchSitesKernel`; with it all link. The five t2296 cells include `<windows.h>`, so their engine source sets are linked as closed sets (`-shared -Wl,--no-undefined`) |
 
