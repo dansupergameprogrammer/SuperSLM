@@ -1106,6 +1106,64 @@ SUPERSLM_API SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chu
                                             uint64_t* out_rope_q_saturation_count = nullptr,
                                             uint64_t* out_rope_k_saturation_count = nullptr);
 
+// Decode-threading plan rev 1.2 (§3.4): which parallel-for hook, if any, a layer loop's one-row
+// (M = 1) projections may split their output rows across. `row` is the hook when the host set
+// SSLM_PARALLEL_FOR_MATVEC on it, else null; `batched` is reserved for the batched-prefill split
+// (SSLM_PARALLEL_FOR_PREFILL, tiled-matmul plan slice 2) and is null in this build. The ABI layer
+// builds this from the workspace's hook and its `reserved` bits; forward-pass code never reads
+// `reserved`. All-null (the default) is the serial path.
+struct GemmThreading {
+	const sslm_parallel_for* row = nullptr;
+	const sslm_parallel_for* batched = nullptr;
+};
+
+// The threaded overloads of the two layer loops (§3.4): the same parameters as the overloads
+// above, all of them explicit, plus a trailing `threading` with no default. New overloads rather
+// than defaulted parameters, so the existing exported symbols keep their mangled names and forward
+// here with no threading. With `threading.row` set, a hook with max_tasks >= 2, and a group whose
+// weight bytes reach the minimum work per task, each one-row projection group (q, k + v, o,
+// gate + up and down in RunLayerLoop; q, k, v, o, gate, up and down, each alone, in a
+// RunLayerLoopChunkBatched call whose chunk is exactly one token) splits its output rows across
+// the hook's `run`; every row is still one DotRow on one thread, so every output byte equals the
+// serial path's. A `run` that breaks exactly-once fails the call with ParallelForIncomplete; in
+// RunLayerLoop the failing layer's five saturation counters are then restored to their values at
+// that layer's start, and the sequence rests at its last committed layer.
+SUPERSLM_API SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
+                                 uint32_t num_hidden_layers, uint32_t layer_budget,
+                                 size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
+                                 size_t intermediate_size, int64_t context_cap,
+                                 const SslmTensorManifest& rope_tables, uint8_t* workspace,
+                                 size_t workspace_size, std::string_view site_prefix,
+                                 size_t token_index, SslmTraceHookState* trace_hook_state,
+                                 size_t q_width, const GemmThreading& threading);
+SUPERSLM_API SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
+                                 uint32_t num_hidden_layers, uint32_t layer_budget,
+                                 size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
+                                 size_t intermediate_size, int64_t context_cap,
+                                 const SslmTensorManifest& rope_tables, uint8_t* workspace,
+                                 size_t workspace_size, OptionGKLandingMode option_g_k_landing_mode,
+                                 std::string_view site_prefix, size_t token_index,
+                                 SslmTraceHookState* trace_hook_state, size_t q_width,
+                                 const GemmThreading& threading);
+SUPERSLM_API SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
+                                            size_t chunk_tokens, const LayerWeights* layers,
+                                            uint32_t num_hidden_layers, size_t hidden_size,
+                                            size_t head_dim, size_t num_key_value_heads,
+                                            size_t intermediate_size, int64_t context_cap,
+                                            int64_t context_length_start,
+                                            const SslmTensorManifest& rope_tables,
+                                            uint8_t* workspace, size_t workspace_size,
+                                            bool option_g_fused_k_landing,
+                                            uint64_t* kv_saturation_count,
+                                            std::string_view site_prefix,
+                                            SslmTraceHookState* trace_hook_state,
+                                            size_t q_width,
+                                            uint64_t* out_kv_landing_saturation_count,
+                                            uint64_t* out_k_channel_landing_saturation_count,
+                                            uint64_t* out_rope_q_saturation_count,
+                                            uint64_t* out_rope_k_saturation_count,
+                                            const GemmThreading& threading);
+
 // (design Sec31.2's own "int64-input, __int128-intermediate sibling of
 // the RoPE pair primitive, Q2.30 tables unchanged" -- Sec12 "Wide-RoPE
 // overflow domain"). The rotated wide pair -- matches `RopePair`'s own shape

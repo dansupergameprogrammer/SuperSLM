@@ -53,17 +53,23 @@ SUPERSLM_API sslm_status sslm_workspace_create(sslm_model model, const sslm_conf
  *
  * - Copies *pf into the workspace. With no hook installed, or with ws NULL at the decode call,
  *   the token finish runs serially on the calling thread, as in every earlier release.
- * - Read only by the logits step of the token finish in sslm_decode_step and
- *   sslm_decode_step_v2 when this workspace is passed. Prefill, prefix prefill and every other
- *   call ignore it. Tokens are identical with any hook, any max_tasks, and no hook.
- * - Returns SSLM_INVALID_ARGUMENT, and changes nothing, for: a NULL ws; pf->reserved != 0;
- *   pf->max_tasks < 0 or > SSLM_PARALLEL_FOR_MAX_TASKS; pf->run NULL with pf->max_tasks > 1.
+ * - Read by the logits step of the token finish in sslm_decode_step and sslm_decode_step_v2
+ *   when this workspace is passed. With SSLM_PARALLEL_FOR_MATVEC set in pf->reserved, also read
+ *   by every decode layer's one-row projections and by a prefill or prefix-prefill call that
+ *   admits exactly one token (parallel_for.h states the rule). Every other call ignores it.
+ *   Tokens are identical with any hook, any max_tasks, any accepted bits, and no hook.
+ * - Returns SSLM_INVALID_ARGUMENT, and changes nothing, for: a NULL ws; a pf->reserved bit other
+ *   than SSLM_PARALLEL_FOR_MATVEC; pf->max_tasks < 0 or > SSLM_PARALLEL_FOR_MAX_TASKS; pf->run
+ *   NULL with pf->max_tasks > 1.
  * - Must not run concurrently with a call using the same workspace (the workspace's existing
  *   rule). pf->host_ctx must outlive every call made with this workspace while the hook is
  *   installed.
  * - A hook whose run omits, repeats or invents a task index fails that decode call with
- *   SSLM_INVALID_ARGUMENT. The sequence is left resting with its final hidden state ready for
- *   logits and its schema walk and current token unchanged, so a retry recomputes the finish. */
+ *   SSLM_INVALID_ARGUMENT. At the finish, the sequence is left resting with its final hidden
+ *   state ready for logits and its schema walk and current token unchanged, so a retry recomputes
+ *   the finish. In a layer (SSLM_PARALLEL_FOR_MATVEC), it rests at the start of that layer with
+ *   the layer's saturation counts put back, and the next call resumes there. A failed prefill
+ *   call that admitted nothing leaves the sequence's saturation counts as they were before it. */
 SUPERSLM_API sslm_status sslm_workspace_set_parallel_for(sslm_workspace ws,
                                                           const sslm_parallel_for* pf);
 

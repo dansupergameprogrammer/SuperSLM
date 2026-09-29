@@ -109,10 +109,18 @@
 // ("parallel_split.h") added at the top of forward_sites.cpp, above this function's own guard
 // ladder, shifted every citation below by +1 line, uniformly. Each citation was re-read at its new
 // line and holds its rejecting `return`; check_gpu_guard_status_parity.py passes.
-SSLM_GPU_LAYER_LOOP_GUARD(LayerBudgetZero, InvalidLayerBudget, "forward_sites.cpp:2018")
-SSLM_GPU_LAYER_LOOP_GUARD(ContextCapNonPositive, InvalidContextCap, "forward_sites.cpp:2028")
-SSLM_GPU_LAYER_LOOP_GUARD(HeadDimGeometryMismatch, HeadDimGeometryMismatch, "forward_sites.cpp:2053")
-SSLM_GPU_LAYER_LOOP_GUARD(KvHeadGeometryMismatch, KvHeadGeometryMismatch, "forward_sites.cpp:2064")
+//
+// CORRECTED 2026-09-29 (decode-threading plan rev 1.2, step D1): ProjectAndFunnelRow (the one-row
+// split's sibling of ProjectAndFunnel) and ProjectAndFunnelBatched's `threading` parameter and
+// GemmDispatch call, all defined above this function, and its own new `row_pf` parameter (same
+// line) shifted every citation below by +34 lines, uniformly; nothing was inserted between the
+// guards themselves.
+// Each citation was re-read at its new line and holds its rejecting `return`;
+// check_gpu_guard_status_parity.py passes.
+SSLM_GPU_LAYER_LOOP_GUARD(LayerBudgetZero, InvalidLayerBudget, "forward_sites.cpp:2052")
+SSLM_GPU_LAYER_LOOP_GUARD(ContextCapNonPositive, InvalidContextCap, "forward_sites.cpp:2062")
+SSLM_GPU_LAYER_LOOP_GUARD(HeadDimGeometryMismatch, HeadDimGeometryMismatch, "forward_sites.cpp:2087")
+SSLM_GPU_LAYER_LOOP_GUARD(KvHeadGeometryMismatch, KvHeadGeometryMismatch, "forward_sites.cpp:2098")
 // Guard 5 is one CPU check with two distinct rejecting outcomes: an
 // overflow anywhere in the factor-by-factor KV-size product returns
 // InvalidContextCap; a null or undersized workspace (checked only once the
@@ -120,10 +128,10 @@ SSLM_GPU_LAYER_LOOP_GUARD(KvHeadGeometryMismatch, KvHeadGeometryMismatch, "forwa
 // Table entries stay one row per source guard, matching the reconfirmation
 // review's own 9-row enumeration exactly, so `kCount` counts what a CPU
 // reader counts, not what a naive per-`return`-statement scan would.
-SSLM_GPU_LAYER_LOOP_GUARD(WorkspaceSizeOrOverflow, WorkspaceTooSmall, "forward_sites.cpp:2090-2095 (InvalidContextCap on overflow, WorkspaceTooSmall on null/undersized)")
-SSLM_GPU_LAYER_LOOP_GUARD(HiddenCodesNull, InvalidHiddenCodes, "forward_sites.cpp:2187")
-SSLM_GPU_LAYER_LOOP_GUARD(SequenceAlreadyComplete, SequenceAlreadyComplete, "forward_sites.cpp:2205")
-SSLM_GPU_LAYER_LOOP_GUARD(PositionOverCap, PositionOverCap, "forward_sites.cpp:2240")
-SSLM_GPU_LAYER_LOOP_GUARD(KvCapacityExhausted, KvCapacityExhausted, "forward_sites.cpp:2242")
+SSLM_GPU_LAYER_LOOP_GUARD(WorkspaceSizeOrOverflow, WorkspaceTooSmall, "forward_sites.cpp:2124-2129 (InvalidContextCap on overflow, WorkspaceTooSmall on null/undersized)")
+SSLM_GPU_LAYER_LOOP_GUARD(HiddenCodesNull, InvalidHiddenCodes, "forward_sites.cpp:2221")
+SSLM_GPU_LAYER_LOOP_GUARD(SequenceAlreadyComplete, SequenceAlreadyComplete, "forward_sites.cpp:2239")
+SSLM_GPU_LAYER_LOOP_GUARD(PositionOverCap, PositionOverCap, "forward_sites.cpp:2274")
+SSLM_GPU_LAYER_LOOP_GUARD(KvCapacityExhausted, KvCapacityExhausted, "forward_sites.cpp:2276")
 
 #undef SSLM_GPU_LAYER_LOOP_GUARD

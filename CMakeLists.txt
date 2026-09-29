@@ -85,6 +85,10 @@ add_library(superslm_test_injection STATIC ${SUPERSLM_CORE_SOURCES})
 target_include_directories(superslm_test_injection PUBLIC include)
 target_include_directories(superslm_test_injection PRIVATE tests)
 target_compile_definitions(superslm_test_injection PRIVATE SUPERSLM_ENABLE_BAD_ALLOC_INJECTION)
+# Decode-threading plan §3.9: the minimum-work and layer-site fault seams (src/forward/
+# parallel_split.h). Test libraries only; the production library reads the constant. PUBLIC so
+# the suite's own compile of tests/test_decode_threading_d1.cpp sees the seam declarations.
+target_compile_definitions(superslm_test_injection PUBLIC SUPERSLM_ENABLE_MATVEC_TEST_SEAMS)
 if(MSVC)
 	target_compile_options(superslm_test_injection PRIVATE /W4 /fp:precise)
 else()
@@ -93,7 +97,7 @@ endif()
 
 add_executable(superslm_tests tests/test_main.cpp tests/test_slm18x_saturation_census.cpp
 	tests/test_slm19x_schema_damped_greedy.cpp tests/test_tiled_gemm.cpp tests/test_attn_rowsites.cpp
-	tests/test_decode_threading.cpp)
+	tests/test_decode_threading.cpp tests/test_decode_threading_d1.cpp)
 target_link_libraries(superslm_tests PRIVATE superslm_test_injection)
 if(MSVC)
 	target_compile_options(superslm_tests PRIVATE /W4 /fp:precise)
@@ -277,6 +281,36 @@ else()
 	target_compile_options(sslm_axis_digest_scalar_forced PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 
+# Decode-threading plan §8 4.5 (F9): the scalar tier has no full-suite binary (the scalar library
+# above feeds the digest only), so the decode-threading cells get their own: a seam-enabled scalar
+# library and a standalone main that runs tests/test_decode_threading{,_d1}.cpp alone. Excluded
+# from `all`, like the other forced targets; the SSE2-forced CI leg builds and runs it.
+add_library(superslm_scalar_forced_seams STATIC EXCLUDE_FROM_ALL ${SUPERSLM_CORE_SOURCES})
+target_include_directories(superslm_scalar_forced_seams PUBLIC include)
+target_include_directories(superslm_scalar_forced_seams PRIVATE tests)
+target_compile_definitions(superslm_scalar_forced_seams PUBLIC SUPERSLM_FORCE_SCALAR_MATMUL
+	SUPERSLM_ENABLE_MATVEC_TEST_SEAMS)
+target_compile_definitions(superslm_scalar_forced_seams PRIVATE SUPERSLM_ENABLE_BAD_ALLOC_INJECTION)
+add_executable(superslm_decode_threading_scalar_forced EXCLUDE_FROM_ALL
+	tests/decode_threading_standalone_main.cpp tests/test_decode_threading.cpp
+	tests/test_decode_threading_d1.cpp)
+target_link_libraries(superslm_decode_threading_scalar_forced PRIVATE superslm_scalar_forced_seams)
+target_include_directories(superslm_decode_threading_scalar_forced PRIVATE tests)
+# Decode-threading plan §8 7.4 (F12): no new heap allocation per decode token. Its own executable,
+# because it replaces the global operator new (the dim7_contract_red.cpp pattern).
+add_executable(superslm_decode_threading_alloc tests/decode_threading_alloc_main.cpp)
+target_link_libraries(superslm_decode_threading_alloc PRIVATE superslm_test_injection)
+add_test(NAME superslm_decode_threading_alloc COMMAND superslm_decode_threading_alloc)
+if(MSVC)
+	target_compile_options(superslm_scalar_forced_seams PRIVATE /W4 /fp:precise)
+	target_compile_options(superslm_decode_threading_scalar_forced PRIVATE /W4 /fp:precise)
+	target_compile_options(superslm_decode_threading_alloc PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(superslm_scalar_forced_seams PRIVATE -Wall -Wextra -ffp-contract=off)
+	target_compile_options(superslm_decode_threading_scalar_forced PRIVATE -Wall -Wextra -ffp-contract=off)
+	target_compile_options(superslm_decode_threading_alloc PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+
 # T-2149 (Claude/Vitruvius/t2149-avx-kernel-design-2026-08-18.md) / T-2158 red suite
 # (Claude/Curie/t2158-t2149-avx-red-suite-2026-08-18.md): the AVX2/AVX-512 matmul tiers,
 # the cached CPUID dispatch (DetectBestDotRowTier), and the four-macro force selection
@@ -325,6 +359,9 @@ foreach(_sslm_tier SSE2 AVX2 AVX512)
 	# actual execution of these three binaries to completion, T-2159 §11 step 10). Every
 	# forced-tier full-suite binary needs the identical seam superslm_test_injection has.
 	target_compile_definitions(superslm_${_sslm_tier_lower}_forced PRIVATE SUPERSLM_ENABLE_BAD_ALLOC_INJECTION)
+	# Decode-threading plan §3.9 / §8 4.5: the forced full suites run the D1 cells too, so each
+	# forced library carries the same seams superslm_test_injection has (above).
+	target_compile_definitions(superslm_${_sslm_tier_lower}_forced PUBLIC SUPERSLM_ENABLE_MATVEC_TEST_SEAMS)
 	# Both the bad-alloc-injection seam above (src/bad_alloc_wrap.h) and the dispatch-
 	# instrument seam below (src/matmul.cpp) #include "support/*.h" headers that resolve
 	# against a "tests" search directory -- the same PRIVATE include superslm_test_injection
@@ -360,7 +397,8 @@ foreach(_sslm_tier SSE2 AVX2 AVX512)
 	# target_compile_definitions call.
 	add_executable(superslm_tests_${_sslm_tier_lower}_forced EXCLUDE_FROM_ALL tests/test_main.cpp
 		tests/test_slm18x_saturation_census.cpp tests/test_slm19x_schema_damped_greedy.cpp
-		tests/test_tiled_gemm.cpp tests/test_attn_rowsites.cpp tests/test_decode_threading.cpp)
+		tests/test_tiled_gemm.cpp tests/test_attn_rowsites.cpp tests/test_decode_threading.cpp
+		tests/test_decode_threading_d1.cpp)
 	target_link_libraries(superslm_tests_${_sslm_tier_lower}_forced PRIVATE superslm_${_sslm_tier_lower}_forced)
 	target_include_directories(superslm_tests_${_sslm_tier_lower}_forced PRIVATE tests)
 	if(MSVC)

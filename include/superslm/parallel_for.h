@@ -6,8 +6,17 @@
  * the calling thread, as in releases before 1.7.0, and its tokens are identical to 1.6.0.
  *
  * Installed with sslm_workspace_set_parallel_for (CPU backend, sslm_abi.h) or
- * sslm_gpu_context_set_host_parallel_for (GPU backend, gpu_1p0.h). Only the token finish's
- * logits step reads it; prefill and every other call ignore it.
+ * sslm_gpu_context_set_host_parallel_for (GPU backend, gpu_1p0.h). Which steps read it:
+ * - The token finish's logits step, always.
+ * - With SSLM_PARALLEL_FOR_MATVEC set in `reserved` (CPU backend), every one-row (M = 1)
+ *   projection too: each decode layer's, and a prefill call's that admits exactly one token. A
+ *   projection group (k and v together, gate and up together in decode; every other projection
+ *   alone) calls `run` only when it splits into two or more tasks of at least a fixed minimum of
+ *   weight bytes each; a smaller one runs on the calling thread.
+ * - Every other step, and every step of a prefill call that admits more than one token, ignores it.
+ * A setter rejects any `reserved` bit this library does not implement, so a host that asks for a
+ * step this build lacks is told so rather than silently ignored. The GPU backend accepts the
+ * implemented bits and reads its hook only for the token finish.
  *
  * THE CONTRACT `run` MUST MEET:
  * - Invoke `task(task_ctx, i)` exactly once for every `i` in [0, task_count), on any threads,
@@ -26,9 +35,10 @@
  *   whose job system can wait on work from inside a job may call SuperSLM from a job.
  * - Running every task on the calling thread is a valid `run` and produces identical output.
  *
- * The logits rows are split into contiguous blocks whose size is a function of the vocabulary
- * size and `max_tasks` only. Every row's value is an exact integer sum, so the tokens produced
- * are identical with any hook, any `max_tasks`, and no hook.
+ * Rows are split into contiguous blocks whose size is a function of the matrix shape,
+ * `max_tasks` and the library's named minimum-work constant only. Every row's value is an exact
+ * integer sum computed on one thread, so the tokens produced are identical with any hook, any
+ * `max_tasks`, any `reserved` bits, and no hook.
  *
  * docs/api.md carries a reference `run` over std::thread for hosts with no job system. */
 
@@ -47,8 +57,15 @@ typedef struct sslm_parallel_for {
 	void* host_ctx;        /* passed back to run unchanged; must outlive the installation */
 	int32_t max_tasks;     /* most tasks one run may carry; <= 1: serial;
 	                          at most SSLM_PARALLEL_FOR_MAX_TASKS */
-	uint32_t reserved;     /* must be 0 */
+	uint32_t reserved;     /* opt-in bits: 0 or SSLM_PARALLEL_FOR_MATVEC; any other bit is
+	                          rejected by the setters */
 } sslm_parallel_for;
+
+/* Bit 1 of `reserved`: also split every CPU one-row (M = 1) projection across `run` (above).
+ * Opt-in, so a host that installs a hook for the logits step alone keeps exactly that. Bit 0 is
+ * reserved for a later batched-prefill split and is rejected by this build. The macro's presence
+ * is the compile-time test for the feature; a library without it rejects the bit at the setter. */
+#define SSLM_PARALLEL_FOR_MATVEC 0x2u
 
 /* The most tasks one `run` may carry. The exactly-once check keeps one byte of call-local state
  * per task, so a bounded count keeps the decode path free of heap allocation. */

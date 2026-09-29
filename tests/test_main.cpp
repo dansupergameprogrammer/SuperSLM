@@ -28271,6 +28271,7 @@ void RunTiledGemmCells(int& checks, int& failures);
 void RunAttnRowsiteCells(int& checks, int& failures);
 // Decode-threading plan: its steps' cells (tests/test_decode_threading.cpp).
 void RunDecodeThreadingCells(int& checks, int& failures);
+void RunDecodeThreadingD1Cells(int& checks, int& failures);
 
 #ifdef _WIN32  // resumes the Windows/D3D12 block closed above T-2572
 
@@ -30145,6 +30146,7 @@ int main(int argc, char** argv) {
 	RunTiledGemmCells(GChecks, GFailures);
 	RunAttnRowsiteCells(GChecks, GFailures);
 	RunDecodeThreadingCells(GChecks, GFailures);
+	RunDecodeThreadingD1Cells(GChecks, GFailures);
 	TestKvStoreEarlyWriteSurvivesLateReadAcrossEightFurtherPositions();
 	TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast();
 	TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition();

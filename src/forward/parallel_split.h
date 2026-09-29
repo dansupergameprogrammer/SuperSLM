@@ -51,6 +51,70 @@ using ExactlyOnceBody = void (*)(void* ctx, size_t task_index) noexcept;
 SslmForwardStatus RunExactlyOnce(const sslm_parallel_for& pf, size_t task_count,
                                  ExactlyOnceBody body, void* ctx);
 
+// ---- one-row (M = 1) matvec groups (§3.1, §3.3) --------------------------------------------------
+
+// The least weight bytes (K·N) one task of a one-row matvec group must stream (§3.1). Set on the box
+// (plan §7 B1); 256 KiB until then. The production library reads this constant and nothing else;
+// a test build moves it only through superslm::test::SetMinRowBytesPerTask (below).
+inline constexpr size_t kMinRowBytesPerTask = size_t{256} * 1024;
+size_t MinRowBytesPerTask() noexcept;
+
+// One matrix of a group: `rows` output rows of `weight` (row-major, K int8 per row), accumulated
+// into `out`. A group is one or two matrices that read the same input row (decode's k + v and
+// gate + up); its output index space is its parts laid end to end.
+struct MatvecPart {
+	const int8_t* weight;
+	size_t rows;
+	int64_t* out;
+};
+
+// The §3.1 rule for one group of `total_rows` rows over input width `k`: the split it runs with,
+// or a task_count below 2 when it runs serially (no hook, max_tasks < 2, or too little work for
+// two tasks at alignment 64 and MinRowBytesPerTask()). Reads nothing but the hook's `run` and
+// `max_tasks`; the caller has already decided the hook applies (GemmThreading::row).
+ColumnSplit MatvecGroupSplit(const sslm_parallel_for* pf, size_t k, size_t total_rows) noexcept;
+
+// Runs a group whose split has task_count >= 2 through RunExactlyOnce: task i computes rows
+// [i * rows_per_task, min(N, (i + 1) * rows_per_task)) of the concatenated parts, each row one
+// GemmInt8AccumulateRow on its own weight row, so every row's value is the serial path's. A block
+// that straddles a part boundary writes the tail of one part and the head of the next. Returns Ok
+// or ParallelForIncomplete. Allocates nothing.
+SslmForwardStatus MatvecGroupParallel(const sslm_parallel_for& pf, const ColumnSplit& split,
+                                      const int8_t* x, size_t k, const MatvecPart* parts,
+                                      size_t part_count);
+
+// The one GEMM dispatch point of the chunk-batched layer loop (§3.4, §12): M = 1 with
+// `threading.row` set and a split of two or more tasks takes the row split above; everything else
+// (M >= 8 with `threading.batched` is tiled slice 2's, not in this build) is the serial
+// GemmInt8Accumulate call made before this plan. Returns Ok or ParallelForIncomplete.
+SslmForwardStatus GemmDispatch(const GemmThreading& threading, const int8_t* activations,
+                               const int8_t* weights, size_t m, size_t k, size_t n, int64_t* out);
+
+// ---- test seams (§3.9), compiled only into the test-injection libraries -------------------------
+
+enum class MatvecFaultSite : uint8_t { kQ, kO, kGateUp, kDown };
+enum class MatvecFaultKind : uint8_t { kNonPfiStatus, kBadAlloc };
+
+#if defined(SUPERSLM_ENABLE_MATVEC_TEST_SEAMS)
+namespace test {
+// Moves the minimum work per task the matvec rule reads (default kMinRowBytesPerTask).
+void SetMinRowBytesPerTask(size_t bytes) noexcept;
+void ResetMinRowBytesPerTask() noexcept;
+// Single-shot: the next time either layer loop reaches `site` of layer `layer`, it fails there,
+// before that site's GEMM (so after K/V landing for kO, kGateUp and kDown), with a real domain
+// rejection (kNonPfiStatus: CarriedScaleMantissaOutOfDomain) or a thrown std::bad_alloc, and the
+// seam disarms. kGateUp names the gate projection in the chunk-batched loop.
+void ArmLayerSiteFault(MatvecFaultSite site, uint32_t layer, MatvecFaultKind kind) noexcept;
+void DisarmLayerSiteFault() noexcept;
+}  // namespace test
+// The layer loops' call into the fault seam: Ok unless armed for this site and layer.
+SslmForwardStatus MaybeLayerSiteFault(MatvecFaultSite site, uint32_t layer);
+#else
+inline SslmForwardStatus MaybeLayerSiteFault(MatvecFaultSite, uint32_t) noexcept {
+	return SslmForwardStatus::Ok;
+}
+#endif
+
 // ---- the saturation-counter snapshot (§3.6) ------------------------------------------------------
 
 // The five per-sequence saturation counters a layer's K/V landing, QK-norm and RoPE steps move
@@ -80,8 +144,9 @@ struct SaturationCounters {
 // ---- the setters' shared validation (§3.7) -------------------------------------------------------
 
 // The `reserved` bits this build implements. A setter rejects any other bit, so a host that asks
-// for a feature this library lacks is told so rather than silently ignored.
-inline constexpr uint32_t kImplementedParallelForBits = 0u;
+// for a feature this library lacks is told so rather than silently ignored. D1 adds bit 1; the
+// batched-prefill bit (bit 0) is added by the step that implements it, not before.
+inline constexpr uint32_t kImplementedParallelForBits = 0u;  // RED: bit 1 not yet implemented
 
 // The one field-domain check both hook setters apply (sslm_workspace_set_parallel_for and
 // sslm_gpu_context_set_host_parallel_for). `pf` is non-null.
