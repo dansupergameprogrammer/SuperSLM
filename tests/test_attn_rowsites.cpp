@@ -17,7 +17,10 @@
 //
 // Slice S2 (§4.2): prob·V on int16 multiply-add; slice S3 (§4.3): the requant element loop in 64-bit
 // lanes (RequantRowWide), checked against the unchanged per-element RequantTokenCodeWide with sentinel
-// fences and exact-size buffers, and counted per tier (requant_row).
+// fences and exact-size buffers, and counted per tier (requant_row); slice S4 (§4.4): the guarded softmax,
+// checked against a test-side restatement of the v1.9.0 SoftmaxRowQ15 body (the unchanged public
+// IExpConstruct / IExpEvaluate leaves), bool and output, with the path chosen by a test-side copy of the
+// §5.4 guard and the correction rows chosen by a test-side replica of the estimates.
 //
 // A build without the instrument seam (build.bat's MSVC recipe) runs the value checks alone and
 // says so. Cell numbers are the plan's §8 numbering.
@@ -45,6 +48,7 @@
 #include "superslm/silu_lut_canonical.h"
 #include "superslm/trace_hook.h"
 #include "attn_rowsite_golden_pin.h"
+#include "sslm_c32_softmax_row_width_gate_fixtures.h"
 #include "support/attention_cases.h"
 #include "support/matmul_dispatch_instrument.h"
 #include "support/rowsite_cases.h"
@@ -1163,6 +1167,277 @@ void TestS3GoldenPin() {
 	          static_cast<unsigned long long>(superslm_test::kAttnRowsiteS3GoldenValues));
 }
 
+// ==== Slice S4: the guarded softmax (§4.4, §5.4) =====================================================
+//
+// Every S4 cell calls SoftmaxRowQ15 directly and asserts per call (§8 path rule): the bool and every
+// probability equal a test-side restatement of the v1.9.0 body, and the softmax path counters moved by
+// exactly the delta that the test-side guard copy (tests/support/attention_cases.h, TestSoftmaxGuard) names,
+// on the selected kernel's own tier only. Width 0 counts nowhere (§3.6: "call with width >= 1").
+
+using superslm_attention_cases::SmCase;
+using superslm_attention_cases::SoftmaxCorrections;
+using superslm_attention_cases::SoftmaxGuard;
+using superslm_attention_cases::SoftmaxEstimateReplica;
+using superslm_attention_cases::TestSoftmaxGuard;
+
+struct SmCounters {
+	long long fast2 = 0, fb2 = 0, fast5 = 0, fb5 = 0;
+};
+#if defined(SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT) && SUPERSLM_MATMUL_HAVE_SIMD_X64
+constexpr bool kHaveSmCounters = true;
+SmCounters ReadSmCounters() {
+	return SmCounters{superslm_test::g_softmax_fast_avx2.load(), superslm_test::g_softmax_fallback_avx2.load(),
+	                  superslm_test::g_softmax_fast_avx512.load(), superslm_test::g_softmax_fallback_avx512.load()};
+}
+#else
+constexpr bool kHaveSmCounters = false;
+SmCounters ReadSmCounters() { return SmCounters{}; }
+#endif
+
+SmCounters SmDelta(const SmCounters& a, const SmCounters& b) {
+	return SmCounters{b.fast2 - a.fast2, b.fb2 - a.fb2, b.fast5 - a.fast5, b.fb5 - a.fb5};
+}
+
+// `fast` fast and `fallback` fallback calls on this build (11.1(b)).
+SmCounters ExpectedSmDelta(long long fast, long long fallback) {
+	SmCounters w;
+	switch (ExpectedSitesKernel()) {
+		case SitesKernel::kAvx2: w.fast2 = fast; w.fb2 = fallback; break;
+		case SitesKernel::kAvx512: w.fast5 = fast; w.fb5 = fallback; break;
+		case SitesKernel::kShipped: break;
+	}
+	return w;
+}
+
+bool CheckSmDelta(const char* label, const SmCounters& d, const SmCounters& want) {
+	if (!kHaveSmCounters) return true;
+	const bool ok = d.fast2 == want.fast2 && d.fb2 == want.fb2 && d.fast5 == want.fast5 && d.fb5 == want.fb5;
+	CHECK_MSG(ok, "%s: softmax_fast_avx2 +%lld softmax_fallback_avx2 +%lld softmax_fast_avx512 +%lld "
+	          "softmax_fallback_avx512 +%lld; want +%lld/+%lld/+%lld/+%lld (kernel: %s)",
+	          label, d.fast2, d.fb2, d.fast5, d.fb5, want.fast2, want.fb2, want.fast5, want.fb5,
+	          SitesKernelName(ExpectedSitesKernel()));
+	return ok;
+}
+
+// The v1.9.0 SoftmaxRowQ15 body, restated from the unchanged public leaves: M usable exactly when
+// M = q_b^2 + q_c is in [1, 2^47] (read from the guard copy's two M flags, which judge the same 128-bit
+// value); max shift; per element IExpConstruct, a kBad* outcome or a value outside [0, M] refuses the element
+// (0) and the row (false); denom = max(total, 1); p = (e << 15) / denom.
+bool RefSoftmax(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b, int64_t q_c, int64_t* out) {
+	if (width == 0) return true;
+	const SoftmaxGuard g = TestSoftmaxGuard(scores, 1, q_ln2, q_b, q_c);
+	const bool m_usable = g.m_ge1 && g.m_le;
+	// M fits int64 when usable; formed with unsigned wrap so no intermediate overflows.
+	const int64_t m = m_usable ? static_cast<int64_t>(static_cast<uint64_t>(q_b) * static_cast<uint64_t>(q_b) +
+	                                                   static_cast<uint64_t>(q_c))
+	                           : 0;
+	int64_t peak = scores[0];
+	for (size_t k = 1; k < width; ++k)
+		if (scores[k] > peak) peak = scores[k];
+	std::vector<int64_t> e(width, 0);
+	int64_t total = 0;
+	bool ok = true;
+	for (size_t k = 0; k < width; ++k) {
+		superslm::IExpConstruction c;
+		const superslm::IExpDomain d = superslm::IExpConstruct(scores[k] - peak, q_ln2, q_b, q_c, &c);
+		if (d == superslm::IExpDomain::kBadQ || d == superslm::IExpDomain::kBadQLn2 || d == superslm::IExpDomain::kBadQB) {
+			ok = false;
+			continue;
+		}
+		const int64_t v = superslm::IExpEvaluate(c);
+		if (!m_usable || v < 0 || v > m) {
+			ok = false;
+			continue;
+		}
+		e[k] = v;
+		total += v;
+	}
+	const int64_t denom = total > 1 ? total : 1;
+	for (size_t k = 0; k < width; ++k) out[k] = (e[k] << superslm::kProbFracBits) / denom;
+	return ok;
+}
+
+// One call against the reference, with its path assertion. Exact-size heap buffers (the hosted ASan leg).
+// Returns whether the guard copy expected the fast path.
+bool RunSm(const SmCase& c) {
+	const size_t w = c.scores.size();
+	std::vector<int64_t> want(w, 0);
+	const bool want_ok = RefSoftmax(c.scores.data(), w, c.q_ln2, c.q_b, c.q_c, want.data());
+	const SoftmaxGuard g = TestSoftmaxGuard(c.scores.data(), w, c.q_ln2, c.q_b, c.q_c);
+	std::vector<int64_t> out = c.aliased ? c.scores : std::vector<int64_t>(w, superslm_attention_cases::kSmPoison);
+	const int64_t* in = c.aliased ? out.data() : c.scores.data();
+	const SmCounters c0 = ReadSmCounters();
+	const bool ok = superslm::SoftmaxRowQ15(in, w, c.q_ln2, c.q_b, c.q_c, out.data());
+	const SmCounters c1 = ReadSmCounters();
+	size_t bad = 0, first = w;
+	for (size_t k = 0; k < w; ++k)
+		if (out[k] != want[k]) {
+			if (first == w) first = k;
+			++bad;
+		}
+	CHECK_MSG(ok == want_ok && bad == 0,
+	          "%s (width %zu, q_ln2 %lld, q_b %lld, q_c %lld): bool %d (v1.9.0 %d); %zu of %zu probabilities differ, "
+	          "first at %zu (%lld vs %lld)", c.label, w, static_cast<long long>(c.q_ln2), static_cast<long long>(c.q_b),
+	          static_cast<long long>(c.q_c), ok ? 1 : 0, want_ok ? 1 : 0, bad, w, first,
+	          first < w ? static_cast<long long>(out[first]) : 0LL, first < w ? static_cast<long long>(want[first]) : 0LL);
+	char full[224];
+	std::snprintf(full, sizeof full, "%s (width %zu, guard copy: %s)", c.label, w, g.Fast() ? "fast" : "fallback");
+	CheckSmDelta(full, SmDelta(c0, c1), ExpectedSmDelta(g.Fast() ? 1 : 0, g.Fast() ? 0 : 1));
+	return g.Fast();
+}
+
+// ---- 4.S4, 7.S4, 6.1: the grid, the inside corners, the correction rows, the aliased rows ----------
+
+void TestS4Grid() {
+	size_t fast = 0, fallback = 0, aliased = 0;
+	std::map<std::string, int> corrections;  // label -> rows on which the named correction decides the output
+	superslm_attention_cases::ForEachSoftmaxCase([&](const SmCase& c) {
+		(RunSm(c) ? fast : fallback) += 1;
+		aliased += c.aliased ? 1 : 0;
+		const std::string label(c.label);
+		if (label.find("correction row") == std::string::npos) return;
+		// The row's premise (7.S4b): the replica says the named correction fires on it, and the same
+		// arithmetic without that correction gives a different row, so the §9 "skipped" mutant dies here.
+		const size_t w = c.scores.size();
+		const int skip = label.find("z up") != std::string::npos ? 1 : label.find("p up") != std::string::npos ? 2 : 3;
+		std::vector<int64_t> good(w), without(w), want(w);
+		SoftmaxCorrections k, unused;
+		const bool in = SoftmaxEstimateReplica(c.scores.data(), w, c.q_ln2, c.q_b, c.q_c, good.data(), &k);
+		SoftmaxEstimateReplica(c.scores.data(), w, c.q_ln2, c.q_b, c.q_c, without.data(), &unused, skip);
+		const bool ref_ok = RefSoftmax(c.scores.data(), w, c.q_ln2, c.q_b, c.q_c, want.data());
+		const long long fired = skip == 1 ? k.z_up : skip == 2 ? k.p_up : k.p_down;
+		CHECK_MSG(in && ref_ok && fired > 0 && good == want && without != want && k.z_down == 0,
+		          "7.S4b premise, %s (width %zu): inside %d, fires %lld times, replica == v1.9.0 %d, skipped differs %d, "
+		          "z down %lld", c.label, w, in ? 1 : 0, fired, good == want ? 1 : 0, without != want ? 1 : 0, k.z_down);
+		++corrections[label.substr(0, label.find(" (steered"))];
+	});
+	CHECK_MSG(fast > 0 && fallback > 0 && aliased > 0, "4.S4: %zu fast, %zu fallback, %zu aliased calls", fast, fallback,
+	          aliased);
+	for (const char* want : {"4.S4 correction row: z up", "4.S4 correction row: p up", "4.S4 correction row: p down"})
+		CHECK_MSG(corrections[want] >= 16, "4.S4: %d rows for \"%s\", want at least 16", corrections[want], want);
+	// Width 0: true, nothing written, no counter (§3.6 counts calls with width >= 1).
+	{
+		int64_t sentinel = superslm_attention_cases::kSmPoison;
+		const SmCounters c0 = ReadSmCounters();
+		const bool ok = superslm::SoftmaxRowQ15(&sentinel, 0, 636211, 1272422, 848665286933, &sentinel);
+		const SmCounters c1 = ReadSmCounters();
+		CHECK_MSG(ok && sentinel == superslm_attention_cases::kSmPoison, "4.S4 width 0: bool %d, sentinel %s", ok ? 1 : 0,
+		          sentinel == superslm_attention_cases::kSmPoison ? "kept" : "written");
+		CheckSmDelta("4.S4 width 0", SmDelta(c0, c1), SmCounters{});
+	}
+	// The named inside corners, asserted against the guard copy's own verdict (a guard copy that drifted
+	// from §5.4 cannot quietly move a corner to the other side).
+	const int64_t zero = 0;
+	const struct {
+		int64_t q_ln2, q_b, q_c;
+		size_t width;
+		int64_t score;
+		bool fast;
+		const char* what;
+	} corners[] = {
+	    {1, 0, INT64_C(1) << 47, size_t{1} << 14, 5, true, "q_ln2 = 1 with M = 2^47 at width 2^14 is inside"},
+	    {1, 0, (INT64_C(1) << 47) + 1, 1, 0, false, "M = 2^47 + 1 is outside"},
+	    {3, 1, 0, 1, 0, true, "M = 1 is inside"},
+	    {1, 0, 0, 1, 0, false, "M = 0 is outside"},
+	    {9, 4, 0, 1, 0, true, "q_c = 0 is inside"},
+	    {9, 4, -1, 1, 0, false, "q_c = -1 is outside"},
+	    {9, 4, 0, 1, INT64_C(1) << 61, true, "a score of 2^61 is inside"},
+	    {9, 4, 0, 1, -(INT64_C(1) << 61), true, "a score of -2^61 is inside"},
+	    {9, 4, 0, 1, (INT64_C(1) << 61) + 1, false, "a score of 2^61 + 1 is outside"},
+	    {10, 4, 0, 1, 0, false, "q_ln2 = 2 q_b + 2 is outside"},
+	    {9, 4, 0, (size_t{1} << 14) + 1, 0, false, "width 2^14 + 1 is outside"},
+	};
+	for (const auto& k : corners) {
+		std::vector<int64_t> row(k.width, 0);
+		row[0] = k.score;
+		CHECK_MSG(TestSoftmaxGuard(row.data(), row.size(), k.q_ln2, k.q_b, k.q_c).Fast() == k.fast, "7.S4a guard copy: %s",
+		          k.what);
+	}
+	(void)zero;
+}
+
+// ---- 2.S4 and 7.S4c: hostile rows, each failing exactly one conjunct ----------------------------------
+
+void TestS4HostileRows() {
+	size_t rows = 0;
+	superslm_attention_cases::ForEachSoftmaxCase([&](const SmCase& c) {
+		if (std::strncmp(c.label, "2.S4", 4) != 0) return;
+		++rows;
+		const size_t w = c.scores.size();
+		const SoftmaxGuard g = TestSoftmaxGuard(c.scores.data(), w, c.q_ln2, c.q_b, c.q_c);
+		const bool witness = std::strstr(c.label, "witness") != nullptr;
+		// RunSm (in TestS4Grid) already asserted bool, output and fallback +1.
+		if (witness)
+			CHECK_MSG(g.Failing() >= 2, "%s: fails %d conjuncts, want more than one", c.label, g.Failing());
+		else
+			CHECK_MSG(g.Failing() == 1, "%s: fails %d conjuncts of the guard copy, want exactly 1", c.label, g.Failing());
+		// Which rows the v1.9.0 body refuses (the bool is the signal there) and which it accepts (the
+		// counter is then the only signal): the constant rows refuse; the width and score rows are
+		// output-equivalent (§8 2.S4).
+		std::vector<int64_t> want(w);
+		const bool ref_ok = RefSoftmax(c.scores.data(), w, c.q_ln2, c.q_b, c.q_c, want.data());
+		const bool output_equivalent = !g.width_ok || !g.scores_ok;
+		CHECK_MSG(ref_ok == output_equivalent, "%s: v1.9.0 bool %d, want %d", c.label, ref_ok ? 1 : 0,
+		          output_equivalent ? 1 : 0);
+	});
+	CHECK_MSG(rows == 10, "2.S4: %zu hostile rows in the set, want 10", rows);
+	// The witness restated in the set is the fixture's own.
+	const auto& w = superslm_test::kSoftmaxRowOffRatioWitness;
+	bool same = false;
+	superslm_attention_cases::ForEachSoftmaxCase([&](const SmCase& c) {
+		if (std::strstr(c.label, "witness") == nullptr) return;
+		same = c.q_ln2 == w.q_ln2 && c.q_b == w.q_b && c.q_c == w.q_c && c.scores.size() == w.width &&
+		       c.scores[0] == w.scores[0] && c.scores[1] == w.scores[1] && c.scores[2] == w.scores[2];
+	});
+	CHECK_MSG(same, "2.S4: the set's off-ratio witness equals kSoftmaxRowOffRatioWitness");
+}
+
+// ---- the replica's own premise: equal to the v1.9.0 body on realistic rows inside the guard ------------
+
+void TestS4ReplicaPremise() {
+	superslm_attention_cases::Rng rng(0x5334524550524D53ULL);  // "S4REPRMS"
+	const auto triples = superslm_attention_cases::SmRealisticConstants(rng, 4);
+	size_t rows = 0, bad = 0, z_down = 0;
+	for (int it = 0; it < 4000; ++it) {
+		const auto& t = triples[static_cast<size_t>(rng.Next() % triples.size())];
+		const size_t w = static_cast<size_t>(rng.InRange(1, 200));
+		const std::vector<int64_t> s = superslm_attention_cases::SmScoreRow(w, it % 4, t[0], rng);
+		std::vector<int64_t> a(w), b(w);
+		SoftmaxCorrections k;
+		if (!SoftmaxEstimateReplica(s.data(), w, t[0], t[1], t[2], a.data(), &k)) continue;
+		++rows;
+		z_down += static_cast<size_t>(k.z_down);
+		if (!RefSoftmax(s.data(), w, t[0], t[1], t[2], b.data()) || a != b) ++bad;
+	}
+	CHECK_MSG(rows > 1000 && bad == 0 && z_down == 0,
+	          "4.S4 replica premise: %zu rows inside the guard, %zu differ from v1.9.0, z down fired %zu times", rows,
+	          bad, z_down);
+}
+
+// ---- 6.3: the S4 golden pin (the v1.9.0 tag's hash over the softmax input set) ------------------------
+
+void TestS4GoldenPin() {
+	superslm::Sha256 h;
+	uint64_t values = 0;
+	auto emit = [&](int64_t v) {
+		uint8_t b[8];
+		for (int i = 0; i < 8; ++i) b[i] = static_cast<uint8_t>((static_cast<uint64_t>(v) >> (8 * i)) & 0xffU);
+		h.Update(b, 8);
+		++values;
+	};
+	superslm_attention_cases::RunSoftmaxCases(emit);
+	uint8_t digest[32];
+	h.Final(digest);
+	const std::string hex = superslm::ToHex(digest);
+	std::printf("attn-rowsites S4 golden hash: %s (%llu values)\n", hex.c_str(),
+	            static_cast<unsigned long long>(values));
+	CHECK_MSG(hex == std::string(superslm_test::kAttnRowsiteS4GoldenHash) &&
+	              values == superslm_test::kAttnRowsiteS4GoldenValues,
+	          "6.3 S4 golden: %s over %llu values, pin %s over %llu (v1.9.0 tag)", hex.c_str(),
+	          static_cast<unsigned long long>(values), superslm_test::kAttnRowsiteS4GoldenHash,
+	          static_cast<unsigned long long>(superslm_test::kAttnRowsiteS4GoldenValues));
+}
+
 // ---- 11.1(d): the 0.5B-width 1-layer artifact through the two layer loops -----------------------
 
 struct TraceCount {
@@ -1234,6 +1509,7 @@ void TestS1LayerLoopWindows() {
 	const RowCounters p0 = ReadRowCounters();
 	const PvCounters v0 = ReadPvCounters();
 	const RqCounters q0 = ReadRqCounters();
+	const SmCounters m0 = ReadSmCounters();
 	const TraceCount tp0 = trace;
 	std::vector<int8_t> chunk(T * hidden);
 	std::vector<CarriedScale> scales(T);
@@ -1254,6 +1530,7 @@ void TestS1LayerLoopWindows() {
 	const RowCounters p1 = ReadRowCounters();
 	const PvCounters v1 = ReadPvCounters();
 	const RqCounters q1 = ReadRqCounters();
+	const SmCounters m1 = ReadSmCounters();
 	const TraceCount tp1 = trace;
 
 	// The decode window.
@@ -1274,6 +1551,7 @@ void TestS1LayerLoopWindows() {
 	const RowCounters p2 = ReadRowCounters();
 	const PvCounters v2 = ReadPvCounters();
 	const RqCounters q2 = ReadRqCounters();
+	const SmCounters m2 = ReadSmCounters();
 	const TraceCount tp2 = trace;
 	SslmSetTraceHook(model.trace_hook, nullptr, nullptr);
 
@@ -1283,15 +1561,19 @@ void TestS1LayerLoopWindows() {
 	// The prob·V data terms (§8 11.1(d)): rows failing the int16 condition on this artifact and these
 	// pinned tokens, measured on the base (docs/attention-rowsites/s2/pv-data-terms.txt): 15 in the prefill
 	// window (position 0's 14 width-1 rows and position 2, head 13's {0, 32,768, 0}), 0 in decode.
+	// The softmax data term: rows outside §5.4's guard, measured on the base (the S3 head) the same way
+	// (docs/attention-rowsites/s4/softmax-data-terms.txt): 0 in both windows.
 	const struct {
 		const char* name;
 		RowCounters a, b;
 		PvCounters va, vb;
 		RqCounters qa, qb;
+		SmCounters ma, mb;
 		TraceCount ta, tb;
 		size_t N;
-		long long pv_fallback;
-	} windows[] = {{"prefill", p0, p1, v0, v1, q0, q1, tp0, tp1, T, 15}, {"decode", p1, p2, v1, v2, q1, q2, tp1, tp2, D, 0}};
+		long long pv_fallback, softmax_fallback;
+	} windows[] = {{"prefill", p0, p1, v0, v1, q0, q1, m0, m1, tp0, tp1, T, 15, 0},
+	               {"decode", p1, p2, v1, v2, q1, q2, m1, m2, tp1, tp2, D, 0, 0}};
 	for (const auto& w : windows) {
 		// Structural terms (G26): the closed forms, every width here being >= 512.
 		const RowCounters d = Delta(w.a, w.b);
@@ -1318,6 +1600,10 @@ void TestS1LayerLoopWindows() {
 		// forced SSE2 and on an MSVC build's AVX-512 tier with its switch off, where the records still count.
 		std::snprintf(pv_label, sizeof pv_label, "11.1(d) %s requant_row", w.name);
 		CheckRqDelta(pv_label, RqDelta(w.qa, w.qb), ExpectedRqDelta((11 * Ll + 1) * N));
+		// S4: one SoftmaxRowQ15 call per (layer, head, token pass), L·H·N (structural), of which the data term
+		// falls back; on the active kernel's tier only (11.1(b)).
+		std::snprintf(pv_label, sizeof pv_label, "11.1(d) %s softmax", w.name);
+		CheckSmDelta(pv_label, SmDelta(w.ma, w.mb), ExpectedSmDelta(calls - w.softmax_fallback, w.softmax_fallback));
 		if (!kHaveRowCounters) continue;
 		const long long want_taken[3] = {2 * Ll * N, Ll * N, 2 * Ll * N};
 		for (int s = 0; s < 3; ++s) {
@@ -1350,8 +1636,12 @@ void RunAttnRowsiteCells(int& checks, int& failures) {
 	TestS3Grid();
 	TestS3FunnelCallSite();
 	TestS3GoldenPin();
-	TestS1LayerLoopWindows();  // 11.1(d): S1's, S2's and S3's rows over one drive
-	std::printf("attn-rowsites cells (plan slices S1, S2, S3): %d checks, %d failures\n", GChecks, GFailures);
+	TestS4ReplicaPremise();
+	TestS4Grid();
+	TestS4HostileRows();
+	TestS4GoldenPin();
+	TestS1LayerLoopWindows();  // 11.1(d): S1's, S2's, S3's and S4's rows over one drive
+	std::printf("attn-rowsites cells (plan slices S1, S2, S3, S4): %d checks, %d failures\n", GChecks, GFailures);
 	checks += GChecks;
 	failures += GFailures;
 }

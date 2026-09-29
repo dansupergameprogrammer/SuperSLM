@@ -706,10 +706,15 @@ void SectionRowsites() {
 // call's width, head_dim and whole output row are digested. The forced-scalar and forced-SSE2 legs run
 // the v1.9.0 loop, so they are the reference axes; the suite pins the same stream to a hash from the
 // v1.9.0 tag. A new section, so sections 1-10 keep their previous values exactly.
+//
+// Slice S4 appends SoftmaxRowQ15 over the same header's S4 set (§8 4.S4's grid, inside corners and
+// correction rows, 2.S4's hostile rows; per call its width, bool and output row), as §3.3 evidence 2 has
+// c32_attention carry the S2, S4, S5 and S6 entries. The suite pins the S4 stream to its own hash.
 void SectionAttention() {
 	Section& sec = NewSection("c32_attention");
 	auto emit = [&](int64_t v) { sec.sink.I64(v); };
 	superslm_attention_cases::RunProbVCases(emit);
+	superslm_attention_cases::RunSoftmaxCases(emit);
 }
 
 // --- driver ---------------------------------------------------------------------

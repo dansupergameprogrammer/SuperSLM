@@ -27,6 +27,11 @@ inline constexpr const char* kAttnRowsiteS3GoldenHash =
     "3e3abed7c746191e8745c89ad38019076eff290aa7f4ffb57fb51c4527fdb3b9";
 inline constexpr uint64_t kAttnRowsiteS3GoldenValues = 3567018ULL;
 
+// Slice S4: SoftmaxRowQ15 over RunSoftmaxCases.
+inline constexpr const char* kAttnRowsiteS4GoldenHash =
+    "2e47ea3c27774db43d9c952972325a5c19d901ba6871f0bd124c8c874f6a55d9";
+inline constexpr uint64_t kAttnRowsiteS4GoldenValues = 268078ULL;
+
 }  // namespace superslm_test
 
 #endif  // SUPERSLM_TESTS_ATTN_ROWSITE_GOLDEN_PIN_H

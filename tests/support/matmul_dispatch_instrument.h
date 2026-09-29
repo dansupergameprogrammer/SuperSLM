@@ -102,6 +102,16 @@ inline std::atomic<long long> g_pv_fallback_avx512{0};
 inline std::atomic<long long> g_requant_row_avx2{0};
 inline std::atomic<long long> g_requant_row_avx512{0};
 
+// Attention and per-row sites plan, slice S4 (§3.6): the softmax path counters, per tier. src/intmath.cpp's
+// SoftmaxRowQ15 increments exactly one of them per call with width >= 1 on the AVX2 and AVX-512 tiers,
+// after the row guard (§5.4) has decided: `fast` inside the tier's own body, `fallback` in the dispatcher
+// when the guard fails (the shipped body then runs). On the scalar and SSE2 tiers, and on an MSVC build's
+// AVX-512 tier with SUPERSLM_SITES_AVX512_MSVC off (v1.9.0 code), none moves.
+inline std::atomic<long long> g_softmax_fast_avx2{0};
+inline std::atomic<long long> g_softmax_fallback_avx2{0};
+inline std::atomic<long long> g_softmax_fast_avx512{0};
+inline std::atomic<long long> g_softmax_fallback_avx512{0};
+
 }  // namespace superslm_test
 
 #endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
