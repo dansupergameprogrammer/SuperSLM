@@ -1,0 +1,63 @@
+Decode threading D1 -- the §3.9 fixtures and the F1 preamble's premise
+
+Generator: tools/gen_decode_threading_fixture.py (the reference pipeline's fixture_model, geometry and one
+calibration knob changed). Output here (sha256):
+  f4adf7116fd8ae8b522231ea62024cf9d65fe8eebff7f0e017bfc5a53b6f8e48  fdef.sslm
+  52064d5c514b8a9fc43d1a5d56dc7b9f2a189efd506ce286520034891529afa8  fnoclamp.sslm
+  27e82bcb5d383ccdf708dcd6bdc56e36a8f3564dd87b983382d2724b06347385  fqk.sslm
+  (regeneration check: see the end of this file)
+
+Measured with a probe on the D1 library (no hook): per-layer deltas of the five saturation counters, 16 one-token
+prefills of the cells' default prompt ((i*37+11) mod 256), then 60 decode steps at layer_budget 1 (each line is one
+token: layer 0 then layer 1). The F1 preamble (§8 5.x) needs a step whose layer 1 moves kv, kv_landing, rope_q and
+rope_k, with rope_q != rope_k (so a guard that restores one from the other is caught), after layer 0 moved kv.
+
+== The K calibration peak factor, F-DEF geometry (QK-norm stripped). Q's factor has no effect (0.3/0.5 rows).
+   'decode' lists the first steps satisfying F1 and their count in 60; 'prefill' the one-token prefill positions.
+  q0.3_k0.3.sslm decode [32, 46, 52] 3 prefill [13]
+  q0.3_k0.5.sslm decode [] 0 prefill []
+  q0.5_k0.3.sslm decode [32, 46, 52] 3 prefill [13]
+  q0.5_k0.5.sslm decode [] 0 prefill []
+  q1.0_k0.1.sslm decode [11, 12, 14, 16, 19, 22] 13 prefill [7, 13]
+  q1.0_k0.15.sslm decode [2, 10, 11, 12, 15, 17] 11 prefill []
+  q1.0_k0.2.sslm decode [2, 4, 29, 30, 31, 32] 12 prefill [7, 9]
+  q1.0_k0.25.sslm decode [5, 21, 28, 31, 46] 5 prefill [9]
+  q1.0_k0.3.sslm decode [32, 46, 52] 3 prefill [13]
+  q1.0_k0.5.sslm decode [] 0 prefill []
+  chosen: fdef.sslm decode [2, 4, 29, 30, 31, 32] 12 prefill [7, 9]
+
+  At 1.0 (the pipeline's own calibration, measured first; its artifact is not kept in the set above) and at 0.5 no step
+  satisfies F1: rope_q and rope_k clamp about once a layer.
+  0.2 is chosen: F1 at decode step 2 (the cells' reference step) and at prefill positions 7 and 9.
+
+== F-DEF, the first decode steps
+  D 0 L0 kv 10 l  9 kc  0 rq  0 rk  1 | L1 kv 11 l 10 kc  0 rq  0 rk  1 tok 46
+  D 1 L0 kv  9 l  9 kc  0 rq  0 rk  0 | L1 kv  6 l  5 kc  0 rq  0 rk  1 tok 156
+  D 2 L0 kv 11 l  7 kc  0 rq  1 rk  3 | L1 kv 15 l 10 kc  0 rq  1 rk  4 tok 235
+  D 3 L0 kv 11 l  9 kc  0 rq  0 rk  2 | L1 kv 12 l 11 kc  0 rq  1 rk  0 tok 27
+  D 4 L0 kv 14 l 11 kc  0 rq  0 rk  3 | L1 kv 15 l 10 kc  0 rq  1 rk  4 tok 160
+  D 5 L0 kv 14 l 13 kc  0 rq  0 rk  1 | L1 kv 17 l 13 kc  0 rq  0 rk  4 tok 161
+
+== F-QK (head_dim 128, QK-norm kept): k_channel_landing moves on every layer; F1 (with rope_q) first at step 3
+  D 0 L0 kv  1 l  0 kc  1 rq  0 rk  0 | L1 kv 13 l  0 kc 13 rq  0 rk  0 tok 91
+  D 1 L0 kv  3 l  0 kc  3 rq  0 rk  0 | L1 kv 15 l  0 kc 15 rq  0 rk  0 tok 110
+  D 2 L0 kv  2 l  0 kc  2 rq  0 rk  0 | L1 kv 16 l  0 kc 16 rq  0 rk  0 tok 81
+  D 3 L0 kv 14 l  0 kc 14 rq  0 rk  0 | L1 kv 27 l  0 kc 26 rq  1 rk  0 tok 134
+  D 4 L0 kv  4 l  0 kc  4 rq  0 rk  0 | L1 kv 16 l  0 kc 15 rq  1 rk  0 tok 171
+  D 5 L0 kv  8 l  0 kc  8 rq  0 rk  0 | L1 kv 25 l  0 kc 25 rq  0 rk  0 tok 81
+
+== fnoclamp (K and V peaks x 8): the vitality variant of 11.1
+  totals over 16 prefills and 60 two-layer decode steps: kv 18, kv_landing 0, k_channel 0, rope_q 18, rope_k 0
+  fnoclamp.sslm decode [] 0 prefill []
+  kv_landing and rope_k never move, so no step satisfies F1 and cell 11.1's second leg sees the preamble fail.
+
+== Regeneration check: a second, fresh run of the generator into an empty directory
+  real	11m41.128s
+  wrote fdef.sslm: 975868 bytes, fingerprint=d5b04f82227068104fb03b8fbabcdb3a7263f9fd356e81958d0e086955c7bd21, 301.8 s
+  wrote fqk.sslm: 1479504 bytes, fingerprint=721219b17f64b5fda62e662601ed3937d5e87d3a5cf88697bb1975cc70d1b69d, 399.1 s
+  wrote fnoclamp.sslm: 975508 bytes, fingerprint=524e44f5f660c49af67b232cfbae25e4845b071b75aceac5a70c346db8406f15, 0.1 s
+  f4adf7116fd8ae8b522231ea62024cf9d65fe8eebff7f0e017bfc5a53b6f8e48  fdef.sslm
+  52064d5c514b8a9fc43d1a5d56dc7b9f2a189efd506ce286520034891529afa8  fnoclamp.sslm
+  27e82bcb5d383ccdf708dcd6bdc56e36a8f3564dd87b983382d2724b06347385  fqk.sslm
+  All three byte-identical to the fixtures above: the generator is deterministic. (About 12 minutes on this
+  shared host with a build running beside it; the calibration pass is the slow step, shared by F-DEF and fnoclamp.)

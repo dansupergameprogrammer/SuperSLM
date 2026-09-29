@@ -1,0 +1,21 @@
+Decode threading D1 -- the fp-free scan (tests/ci/scan_build_output.py --target superslm --isa x86-64)
+On the final GCC 13 and Clang 18 Release builds of the series head's library source. Allow-lists unchanged: the series touches
+no file under tools/ci and, under tests/ci, only check_no_forward_leaf_calls.py (its expected-file list)
+and test_geometry_site_census.py (a fixture's text).
+
+== gcc
+Scanning 18 object member(s) of archive build-gcc/libsuperslm.a for target 'superslm' (isa=x86-64)
+  clean    forward_sites.cpp.o  (69 symbol(s), format=elf)
+  clean    parallel_split.cpp.o  (8 symbol(s), format=elf)
+  clean    sslm_abi.cpp.o  (131 symbol(s), format=elf)
+Totals: 18 object(s); 590 symbol(s) ACCEPT, 0 REJECT, 0 object(s) REFUSE (checks (A)/(B), gating); 397 symbol(s) reject under check (C) alone (non-gating diagnostic)
+PASS: no floating-point arithmetic found in any object of this target (checks (A)/(B); check (C) is a non-gating diagnostic).
+
+== clang
+Scanning 18 object member(s) of archive build-clang/libsuperslm.a for target 'superslm' (isa=x86-64)
+  clean    forward_sites.cpp.o  (58 symbol(s), format=elf)
+  clean    parallel_split.cpp.o  (9 symbol(s), format=elf)
+  clean    sslm_abi.cpp.o  (125 symbol(s), format=elf)
+               [check-C-only] _GLOBAL__sub_I_sslm_abi.cpp
+Totals: 18 object(s); 518 symbol(s) ACCEPT, 0 REJECT, 0 object(s) REFUSE (checks (A)/(B), gating); 298 symbol(s) reject under check (C) alone (non-gating diagnostic)
+PASS: no floating-point arithmetic found in any object of this target (checks (A)/(B); check (C) is a non-gating diagnostic).

@@ -1,0 +1,28 @@
+Decode threading D1 -- the Python suites, against the base c28f171 in the same environment
+
+== tests/ci (python3 -m pytest tests/ci -q -p no:cacheprovider)
+base c28f171: 915 passed, 1 skipped
+D1 at commit 4: 2 failed (the forward-leaf exact file list; the GS-12 census site), then 1 failed (the census fixture) --
+  fixed in commit 5
+D1 at commit 5: 915 passed, 1 skipped
+
+== tests/t2296-fp-free-open-red-suite
+base c28f171: 4 failed, 154 passed, 74 skipped (environmental: no MSVC/VsDevCmd, no aarch64 clang target here)
+D1 at commit 5: 6 failed, 152 passed, 74 skipped -- the two new failures pin 17 SUPERSLM_CORE_SOURCES; D0 made it 18
+D1 at commit 6:
+  FAILED tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py::test_population_07_fpblind_classifier[sse_baseline-extra_flags0]
+  FAILED tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py::test_population_07_fpblind_classifier[avx2-extra_flags1]
+  FAILED tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py::test_detected_msvc_edition_does_not_misfire_on_a_directory_literally_named_communityuser
+  FAILED tests/t2296-fp-free-open-red-suite/test_check_fp_free_scan.py::test_bf16_aarch64_must_reject
+  4 failed, 154 passed, 75 skipped (the one extra skip is the carrier sweep's new position 19, a COFF cell) in 4.95s
+With SUPERSLM_FP_SCAN_ELF_LIB=<the GCC build's libsuperslm.a>: base 5 failed, 155 passed; D1 at commit 6 5 failed, 155 passed.
+The fifth, on both, is test_dslm5032_real_elf_gcc_archive_all_four_corrections_end_to_end, which pins a historical
+archive's symbol totals (17 objects, 523 ACCEPT) that no current build reproduces.
+The COFF-archive cells (test_archive_gate.py, test_archive_composition.py) need the Windows leg; not executed here.
+
+== The named checkers, at the series head
+check_gpu_guard_status_parity: check_gpu_guard_status_parity.py: OK -- CPU guard range, GPU ladder, and gpu_layer_loop_guards.def all name the identical status set, and every .def citation resolves to a rejecting return at its cite
+check_ci_claims: check_ci_claims.py: OK -- 13 public doc(s) scanned, no present-tense CI-execution claim outside docs/platform-support.md's 'CI execution status' section
+check_present_tense_defect_comments: check_present_tense_defect_comments.py: OK -- 329 test file(s) scanned, every severity-label citation carries a resolution marker; 13 file(s) scanned for stale not-yet-built claims, none found
+geometry_site_census (tools/geometry_site_census.py): geometry_site_census: PASS -- 32 site(s) fixed-and-marked or confirmed-correct-and-marked, 0 unmarked R1/QOW pattern hits (1 site(s) exempt, Track B's own not-yet-built scope)
+check_no_forward_leaf_calls: check_no_forward_leaf_calls.py: OK -- 4 forward-composition file(s) scanned, zero banned-leaf calls outside the allowlist, and the door count holds at 3

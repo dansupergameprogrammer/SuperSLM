@@ -1169,7 +1169,7 @@ const StepRef& GetStepRef(const Fixture& f, bool qk) {
 }
 
 // Decode-call indices at 8 KiB, max_tasks 4: five groups per layer, then the finish.
-enum DecodeSite { kSiteQ = 0, kSiteKV = 1, kSiteGateUp = 3, kSiteDown = 4 };
+enum DecodeSite { kSiteQ = 0, kSiteKV = 1, kSiteO = 2, kSiteGateUp = 3, kSiteDown = 4 };
 int DecodeCallIndex(int layer, DecodeSite site) { return layer * 5 + site; }
 constexpr int kFinishCall = 10;
 
@@ -1197,6 +1197,8 @@ void CheckRetry(const char* what, Rig& rig, sslm_seq s, TestHook& hook, const St
 }
 
 // 2.1: a hostile `run` on the Nth call, landing on q, k + v, gate + up, down (layer 1) and the finish.
+// Also on o: the coverage replica found o's failure arm (its `fail_layer`) taken by no cell, and §8 2.1
+// names every other threaded site. Added after green, outside the plan's list (a deviation, recorded).
 void TestHostileRunCell21() {
 	SeamScope scope(kSeam8K);
 	const Fixture& f = GetFixture("fdef.sslm");
@@ -1209,6 +1211,7 @@ void TestHostileRunCell21() {
 	};
 	const Site sites[] = {{"q", DecodeCallIndex(1, kSiteQ)},
 	                      {"k+v", DecodeCallIndex(1, kSiteKV)},
+	                      {"o", DecodeCallIndex(1, kSiteO)},
 	                      {"gate+up", DecodeCallIndex(1, kSiteGateUp)},
 	                      {"down", DecodeCallIndex(1, kSiteDown)},
 	                      {"finish", kFinishCall}};

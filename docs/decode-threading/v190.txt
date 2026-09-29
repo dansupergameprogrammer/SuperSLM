@@ -1,0 +1,33 @@
+Decode threading D1 -- cells 6.3 and 9.1 against the v1.9.0 library (local evidence, not a suite cell)
+
+The suite's 6.3 compares bit-1-on against chunk-1 no-hook in the same library; the plan's "v1.9.0's pin" is
+the same generator's artifact run on v1.9.0. 9.1 needs a v1.9.0 build. Both are run here with v190_blob_probe.cpp,
+built twice with GCC 13 -std=c++20:
+  - against the v1.9.0 tag's libsuperslm.a (d870d27, Release): no hook (v1.9.0 has no bit 1);
+  - against D1's superslm_test_injection library: bit 1 on, max_tasks 4, the reference-order-reversed inline
+    hook, minimum-work seam 8 KiB so every M = 1 site threads.
+save: 64 one-token prefills of a 64-token prompt, then sslm_seq_save. cont: sslm_seq_restore, save again (the
+round trip), 8 greedy decode tokens, save.
+
+Fixtures (sha256): fdef.sslm f4adf7116fd8ae8b..., fqk.sslm 27e82bcb5d383ccd...
+
+== F-DEF
+d1-threaded save: 64 one-token prefills, 896 run calls
+v1.9.0-nohook save: 64 one-token prefills, 0 run calls
+6.3 fdef vs v1.9.0: EQUAL (61792 bytes)
+v1.9.0-nohook cont: tokens 98 145 196 171 26 235 141 175; 0 run calls
+d1-threaded cont: tokens 98 145 196 171 26 235 141 175; 78 run calls
+9.1 fdef: round-trips and continuations EQUAL
+
+== F-QK
+d1-threaded save: 64 one-token prefills, 896 run calls
+v1.9.0-nohook save: 64 one-token prefills, 0 run calls
+6.3 fqk vs v1.9.0: EQUAL (164192 bytes)
+v1.9.0-nohook cont: tokens 139 41 41 139 41 139 41 139; 0 run calls
+d1-threaded cont: tokens 139 41 41 139 41 139 41 139; 78 run calls
+9.1 fqk: round-trips and continuations EQUAL
+
+6.3: the threaded one-token-prefill blob equals v1.9.0's no-hook blob byte for byte, on both fixtures.
+9.1: each library restores the other's blob and re-saves it byte-equal; after 8 more tokens each way the
+     tokens and the blobs are equal. 896 = 64 x 14 run calls (§3.9's one-token-prefill count at 8 KiB);
+     78 = 1 (the first step is the finish only, ready for logits) + 7 x 11.
