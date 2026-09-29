@@ -87,6 +87,7 @@
 #include "superslm/schema_masks.h"
 #include "superslm/sslm_damped_greedy.h"  // T-2199 Phase A/C: AntiLmState, DampedGreedyScoreAndArgmax
 #include "superslm/sslm_phaseD.h"         // T-2199 Phase D: ValidateDampedGreedyParams
+#include "forward/parallel_split.h"       // ParallelForHookValid, SaturationCounters (decode threading)
 
 #include "bad_alloc_wrap.h"  // N3 pin (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3):
                               // superslm::internal::MaybeThrowInjectedBadAllocFault(), the same
@@ -1034,10 +1035,9 @@ extern "C" sslm_status sslm_workspace_set_parallel_for(sslm_workspace ws,
 		ws->parallel_for = sslm_parallel_for{};
 		return SSLM_OK;
 	}
-	if (pf->reserved != 0 || pf->max_tasks < 0 || pf->max_tasks > SSLM_PARALLEL_FOR_MAX_TASKS ||
-	    (pf->run == nullptr && pf->max_tasks > 1)) {
-		return SSLM_INVALID_ARGUMENT;
-	}
+	// The field domain both hook setters share (src/forward/parallel_split.h), including the
+	// build's implemented `reserved` bits.
+	if (!superslm::ParallelForHookValid(*pf)) return SSLM_INVALID_ARGUMENT;
 	ws->parallel_for = *pf;
 	return SSLM_OK;
 }

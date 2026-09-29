@@ -39,6 +39,7 @@ set(SUPERSLM_CORE_SOURCES
 	src/trace_hook.cpp
 	src/forward/checked_chain_funnel.cpp
 	src/forward/forward_sites.cpp
+	src/forward/parallel_split.cpp
 	src/decode_digest.cpp
 	src/sslm_abi.cpp
 	src/damped_greedy_antilm.cpp
@@ -91,7 +92,8 @@ else()
 endif()
 
 add_executable(superslm_tests tests/test_main.cpp tests/test_slm18x_saturation_census.cpp
-	tests/test_slm19x_schema_damped_greedy.cpp tests/test_tiled_gemm.cpp tests/test_attn_rowsites.cpp)
+	tests/test_slm19x_schema_damped_greedy.cpp tests/test_tiled_gemm.cpp tests/test_attn_rowsites.cpp
+	tests/test_decode_threading.cpp)
 target_link_libraries(superslm_tests PRIVATE superslm_test_injection)
 if(MSVC)
 	target_compile_options(superslm_tests PRIVATE /W4 /fp:precise)
@@ -358,7 +360,7 @@ foreach(_sslm_tier SSE2 AVX2 AVX512)
 	# target_compile_definitions call.
 	add_executable(superslm_tests_${_sslm_tier_lower}_forced EXCLUDE_FROM_ALL tests/test_main.cpp
 		tests/test_slm18x_saturation_census.cpp tests/test_slm19x_schema_damped_greedy.cpp
-		tests/test_tiled_gemm.cpp tests/test_attn_rowsites.cpp)
+		tests/test_tiled_gemm.cpp tests/test_attn_rowsites.cpp tests/test_decode_threading.cpp)
 	target_link_libraries(superslm_tests_${_sslm_tier_lower}_forced PRIVATE superslm_${_sslm_tier_lower}_forced)
 	target_include_directories(superslm_tests_${_sslm_tier_lower}_forced PRIVATE tests)
 	if(MSVC)

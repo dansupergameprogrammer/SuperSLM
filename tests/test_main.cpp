@@ -28269,6 +28269,8 @@ void RunSlm19xSchemaDampedGreedyCells(int& checks, int& failures);
 void RunTiledGemmCells(int& checks, int& failures);
 // Attention and per-row sites plan: its slices' cells (tests/test_attn_rowsites.cpp).
 void RunAttnRowsiteCells(int& checks, int& failures);
+// Decode-threading plan: its steps' cells (tests/test_decode_threading.cpp).
+void RunDecodeThreadingCells(int& checks, int& failures);
 
 #ifdef _WIN32  // resumes the Windows/D3D12 block closed above T-2572
 
@@ -30142,6 +30144,7 @@ int main(int argc, char** argv) {
 	RunSlm19xSchemaDampedGreedyCells(GChecks, GFailures);
 	RunTiledGemmCells(GChecks, GFailures);
 	RunAttnRowsiteCells(GChecks, GFailures);
+	RunDecodeThreadingCells(GChecks, GFailures);
 	TestKvStoreEarlyWriteSurvivesLateReadAcrossEightFurtherPositions();
 	TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast();
 	TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition();
