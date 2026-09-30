@@ -172,19 +172,28 @@ against 1.6.0 is in the
   does: prefill, prefix prefill and every other call ignore it.
 - **One-row projections, opt-in (CPU backend).** Setting
   `SSLM_PARALLEL_FOR_MATVEC` (bit 1) in `reserved` also splits every
-  one-row (M = 1) projection across `run`: each decode layer's q, k and v
-  (one group), o, gate and up (one group) and down, and the seven
-  projections of a prefill or prefix-prefill call that admits exactly one
-  token (whatever `count` was sent). A group calls `run` only when it splits
-  into at least two tasks of at least 256 KiB of weight bytes each, at
-  alignment 64; a smaller group runs on the calling thread. On Qwen2.5-0.5B
-  at `max_tasks` 4 that is 97 `run` calls per decode token (4 per layer plus
-  the finish). A call admitting two or more tokens is unchanged. The GPU
+  one-row (M = 1) projection across `run`. Each decode layer has five
+  groups: q alone, k and v together, o alone, gate and up together, and
+  down alone. A prefill or prefix-prefill call that admits exactly one token
+  (whatever `count` was sent) splits each of its seven projections alone.
+  For a group of N output rows over input width K (N·K weight bytes), the
+  task count is the smallest of `max_tasks`, ceil(N / 64) and
+  floor(N·K / 256 KiB), and at least 1. Each task then takes
+  ceil(N / count) rows rounded up to a multiple of 64, and the last task
+  takes what is left. So 256 KiB caps the task count by the group's total
+  weight bytes. It is not a floor on each task: the last task can be
+  smaller. At N = K = 896 (Qwen2.5-0.5B's q and o) and `max_tasks` 4 the
+  split is 320, 320 and 256 rows, and the last task streams 229,376 bytes.
+  A group calls `run` only when this gives at least two tasks; otherwise it
+  runs on the calling thread. On Qwen2.5-0.5B at `max_tasks` 4, k + v
+  (256 rows, 229,376 bytes) runs on the calling thread and the other four
+  groups split, so there are 97 `run` calls per decode token (4 per layer
+  plus the finish). A call admitting two or more tokens is unchanged. The GPU
   setter accepts the bit and ignores it: the GPU backend reads its hook only
   for the finish. The macro's presence in `parallel_for.h` is the
   compile-time test, and a library without the feature refuses the bit.
 - Rows are split into contiguous blocks whose size is a function of the
-  matrix shape, `max_tasks` and that minimum only, and every row is one
+  matrix shape, `max_tasks` and the 256 KiB constant only, and every row is one
   exact integer sum on one thread: tokens, save blobs and digests are
   identical with any hook, any `max_tasks` and either bit setting.
 - A `run` that breaks exactly-once inside a decode layer fails the call with
