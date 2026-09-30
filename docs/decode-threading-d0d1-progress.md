@@ -17,7 +17,7 @@ States: **done**, **CI-only**, **box-only**, **not done** (with why).
 ## Resume here
 
 1. Clone SuperSLM and check out `claude/project-thread-c8iecr`.
-2. Generate the fixtures: `python tools/gen_decode_threading_fixture.py <dir>` (numpy; 5 to 12 minutes on this host, deterministic), then set
+2. Generate the fixtures: `python tools/gen_decode_threading_fixture.py <dir>` (numpy; 1 to 12 minutes on this host, deterministic per host: F-QK's bytes follow the host's numpy, deviation 19), then set
    `SUPERSLM_DECODE_THREADING_FIXTURE_DIR=<dir>`. A missing fixture fails the D1 cells; it never skips them.
 3. Run the suites from the repository root. `SUPERSLM_ATTN_ROWSITES_ARTIFACT` (the S1–S5 0.5B-width 1-layer artifact) adds
    the attn-rowsites 11.1(d) checks; every count below is with it set.
@@ -55,7 +55,7 @@ States: **done**, **CI-only**, **box-only**, **not done** (with why).
 | The Python suites, against the base | done | `pytest.txt`: the checker suite 915 passed, 1 skipped (= base); t2296 the base's 4 environmental failures, 154 passed |
 | Named checkers | done | `pytest.txt`: guard parity, CI claims, present-tense defects, geometry census, forward-leaf: all OK |
 | `gpu_layer_loop_guards.def` re-cited by hand | done (1, 2) | The parity check passes at the head |
-| 6.3 and 9.1 against v1.9.0 | done, local only (deviation 9) | `v190.txt`: byte-equal both fixtures, both directions |
+| 6.3 and 9.1 against v1.9.0 | done, local only (deviation 9); re-run at the review-fix head | `v190.txt`: byte-equal on F-DEF and two F-QK variants, both directions |
 | 9.3 old symbols still exported | done | `symbols.txt`: 3 of 3 base overloads present on GCC and Clang |
 | Coverage replica, with and without AVX-512 | done, indicative | `coverage.txt` |
 | Bench tool | done; figures indicative | `bench.md` |
@@ -156,6 +156,14 @@ token (4L + 1, §3.1's 97 at L = 24). Decode tok/s off against on, n = 15 pairs:
     later sites' checks are unchanged, plus the new F1-at-failure check. 2.1 goes from 2,108 to 2,152 D1 checks (24
     "hostile call ran" checks and 20 at-failure counter checks). The mutants that die on 2.1 were re-run
     (`mutants.txt`, the PD-1 section).
+
+19. **F-QK is host-dependent (review P4).** The generator is deterministic per host, not across hosts. F-QK's QKC1 table
+    is exact in the float64 calibration peaks, whose low bits follow numpy's CPU-dispatched float64 exp (numpy's AVX-512
+    exp on this host, the C library's elsewhere). F-DEF and fnoclamp carry no QKC1 table and match everywhere. The
+    review's Windows F-QK (31dd0c5b…) differs from this host's (27e82bcb…), which this head still reproduces; nothing
+    in 1.10.0 changed the generator, and no engine code runs in it. With numpy's AVX-512 dispatch disabled this host
+    writes a third F-QK (623d3efe…). The D1 cells pass on all three, and 6.3/9.1 against v1.9.0 hold on both variants
+    run here (`fixture-premise.txt`, `v190.txt`). No cell pins a fixture hash.
 
 ## What the plan got wrong
 

@@ -3,8 +3,12 @@
 Builds runnable `.sslm` artifacts through the reference pipeline on `main`, by the path
 `_t2199_s8_synthetic_full_model_fixture.py` already takes (`pipeline.fixture_model`'s pinned
 weights and calibration, `convert_model.build_sections`, `sslm_format.build_artifact`). Only the
-geometry and one calibration knob differ. Deterministic and hermetic; generated fresh by every CI
-leg that runs a suite binary and never committed (S-HARDEN-5). `superslm_tests` reads them from
+geometry and one calibration knob differ. Deterministic and hermetic on a given host; generated
+fresh by every CI leg that runs a suite binary and never committed (S-HARDEN-5). fqk.sslm is not
+identical across hosts: its QKC1 table is exact in the float64 calibration peaks, and those peaks'
+low bits follow numpy's CPU-dispatched float64 exp (AVX-512 or the C library's). fdef.sslm and
+fnoclamp.sslm carry no QKC1 table and match across hosts. No cell pins a fixture's hash
+(docs/decode-threading/fixture-premise.txt, "Host dependence of F-QK"). `superslm_tests` reads them from
 the directory named by SUPERSLM_DECODE_THREADING_FIXTURE_DIR, and a missing file fails the cell.
 
 Variants (two layers, vocabulary 256, context cap 160 each):

@@ -5,7 +5,8 @@ calibration knob changed). Output here (sha256):
   f4adf7116fd8ae8b522231ea62024cf9d65fe8eebff7f0e017bfc5a53b6f8e48  fdef.sslm
   52064d5c514b8a9fc43d1a5d56dc7b9f2a189efd506ce286520034891529afa8  fnoclamp.sslm
   27e82bcb5d383ccdf708dcd6bdc56e36a8f3564dd87b983382d2724b06347385  fqk.sslm
-  (regeneration check: see the end of this file)
+  (regeneration check and host dependence: see the end of this file. F-QK's bytes depend on the host's numpy;
+   F-DEF's and fnoclamp's do not.)
 
 Measured with a probe on the D1 library (no hook): per-layer deltas of the five saturation counters, 16 one-token
 prefills of the cells' default prompt ((i*37+11) mod 256), then 60 decode steps at layer_budget 1 (each line is one
@@ -61,3 +62,39 @@ rope_k, with rope_q != rope_k (so a guard that restores one from the other is ca
   27e82bcb5d383ccdf708dcd6bdc56e36a8f3564dd87b983382d2724b06347385  fqk.sslm
   All three byte-identical to the fixtures above: the generator is deterministic. (About 12 minutes on this
   shared host with a build running beside it; the calibration pass is the slow step, shared by F-DEF and fnoclamp.)
+
+== Host dependence of F-QK (code review P4, 2026-09-30)
+The review regenerated the set on Windows (Ryzen 9 3950X, AVX2, no AVX-512): fdef.sslm and fnoclamp.sslm matched the
+hashes above, and fqk.sslm came out 31dd0c5b03336e88c7e22b2b77fd31b8d50c45bddcec64e418a8dc9c48baa27 (fingerprint
+866caed6...fc92), the same in two runs. Root cause, measured here:
+
+  1. Not 1.10.0. tools/ differs between c28f171 and main fdeee2f only in branch_coverage_floors.json and
+     test_t2704_release_gate.py; the generator, the reference pipeline and the writers are unchanged. The generator run at
+     this head on this host gives the record above again:
+       f4adf7116fd8ae8b522231ea62024cf9d65fe8eebff7f0e017bfc5a53b6f8e48  fdef.sslm
+       52064d5c514b8a9fc43d1a5d56dc7b9f2a189efd506ce286520034891529afa8  fnoclamp.sslm
+       27e82bcb5d383ccdf708dcd6bdc56e36a8f3564dd87b983382d2724b06347385  fqk.sslm
+  2. Not the engine. Generation is pure Python (numpy 2.4.6 here); no engine code runs. The two F-QK artifacts differ
+     in one section only: the QKC1 table (QK_CHANNEL_TABLE, 181 of 16,656 bytes). CONFIG, WEIGHTS, BIASES, ROPE_TABLES,
+     WEIGHT_SCALES, COMPOSITION_CONSTANTS, KV_LANDING_SCALES, KV_LANDING_RECIPROCALS and SIGMOID_LUT are byte-equal.
+  3. The cause is numpy's float64 np.exp, which numpy dispatches on the CPU. On an AVX-512 host numpy uses its own
+     AVX-512F exp; elsewhere it falls back to the C library's exp (glibc here, the MSVC CRT on Windows). The results
+     differ in the last bits. The calibration's float reference calls np.exp in the softmax and in SiLU, so the
+     per-channel post-RoPE K peaks it records differ in their low bits. pipeline._qk_channel_table_from_peaks turns each
+     binary64 peak exactly (Fraction) into a 31-bit canonical mantissa, its reciprocal and a Q31 ratio to the head max.
+     Low-bit changes in a peak therefore reach the table. F-DEF and fnoclamp strip QK-norm and carry no QKC1 section;
+     their other integer constants are coarse enough that the same float differences do not move them.
+     Evidence on this host, F-QK alone:
+       numpy default dispatch (AVX-512)                          27e82bcb... (fingerprint 721219b1...)
+       NPY_DISABLE_CPU_FEATURES="X86_V4 AVX512_ICL AVX512_SPR"   623d3efe9bb92909a0391a0bbb0612fb22cd1f0bf6a48250b2937d10dca01a82
+                                                                 (fingerprint 4681f7f1...)
+       OPENBLAS_CORETYPE Haswell, Zen or SkylakeX                27e82bcb... (BLAS kernels do not matter)
+       np.exp replaced by math.exp in the pipeline, both dispatch settings above: 623d3efe... both times
+     With AVX-512 dispatch disabled the whole set is fdef f4adf711..., fnoclamp 52064d5c..., fqk 623d3efe...: only F-QK
+     moves, as on the review's Windows host. The 31dd0c5b... bytes are the MSVC CRT's exp and are not reproducible here.
+  4. So "deterministic" holds per host, not across hosts: each host's generator reproduces its own F-QK bit for bit. The
+     cells do not pin fixture hashes, CI generates the fixtures fresh on each leg, and the D1 cells pass on every F-QK
+     variant run so far: 27e82bcb... and 623d3efe... here, 31dd0c5b... on the review's Windows host.
+  5. Output identity is unaffected. The engine is bit-identical to v1.9.0 on each artifact; which artifact the generator
+     writes is an input difference. v190.txt re-runs 6.3 and 9.1 against v1.9.0 on the head's fixtures, including both
+     F-QK variants this host can produce.
