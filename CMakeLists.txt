@@ -296,19 +296,26 @@ add_executable(superslm_decode_threading_scalar_forced EXCLUDE_FROM_ALL
 	tests/test_decode_threading_d1.cpp)
 target_link_libraries(superslm_decode_threading_scalar_forced PRIVATE superslm_scalar_forced_seams)
 target_include_directories(superslm_decode_threading_scalar_forced PRIVATE tests)
-# Decode-threading plan §8 7.4 (F12): no new heap allocation per decode token. Its own executable,
-# because it replaces the global operator new (the dim7_contract_red.cpp pattern).
-add_executable(superslm_decode_threading_alloc tests/decode_threading_alloc_main.cpp)
-target_link_libraries(superslm_decode_threading_alloc PRIVATE superslm_test_injection)
-add_test(NAME superslm_decode_threading_alloc COMMAND superslm_decode_threading_alloc)
 if(MSVC)
 	target_compile_options(superslm_scalar_forced_seams PRIVATE /W4 /fp:precise)
 	target_compile_options(superslm_decode_threading_scalar_forced PRIVATE /W4 /fp:precise)
-	target_compile_options(superslm_decode_threading_alloc PRIVATE /W4 /fp:precise)
 else()
 	target_compile_options(superslm_scalar_forced_seams PRIVATE -Wall -Wextra -ffp-contract=off)
 	target_compile_options(superslm_decode_threading_scalar_forced PRIVATE -Wall -Wextra -ffp-contract=off)
-	target_compile_options(superslm_decode_threading_alloc PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+# Decode-threading plan §8 7.4 (F12): no new heap allocation per decode token. Its own executable,
+# because it replaces the global operator new (the dim7_contract_red.cpp pattern). It links
+# superslm_test_injection, which exists only with BUILD_TESTING, so it is built only then: the
+# advertised CPU-only BUILD_TESTING=OFF configuration (tests/cmake-cpu-only) builds no test target.
+if(BUILD_TESTING)
+	add_executable(superslm_decode_threading_alloc tests/decode_threading_alloc_main.cpp)
+	target_link_libraries(superslm_decode_threading_alloc PRIVATE superslm_test_injection)
+	add_test(NAME superslm_decode_threading_alloc COMMAND superslm_decode_threading_alloc)
+	if(MSVC)
+		target_compile_options(superslm_decode_threading_alloc PRIVATE /W4 /fp:precise)
+	else()
+		target_compile_options(superslm_decode_threading_alloc PRIVATE -Wall -Wextra -ffp-contract=off)
+	endif()
 endif()
 
 # T-2149 (Claude/Vitruvius/t2149-avx-kernel-design-2026-08-18.md) / T-2158 red suite
@@ -449,9 +456,14 @@ endforeach()
 # and a seam build of it for B1's minimum-work sweep (superslm_test_injection carries the seam).
 add_executable(sslm_decode_threading_bench tools/decode_threading_bench.cpp)
 target_link_libraries(sslm_decode_threading_bench PRIVATE superslm)
-add_executable(sslm_decode_threading_bench_seams EXCLUDE_FROM_ALL tools/decode_threading_bench.cpp)
-target_link_libraries(sslm_decode_threading_bench_seams PRIVATE superslm_test_injection)
-foreach(_sslm_dt_bench sslm_decode_threading_bench sslm_decode_threading_bench_seams)
+set(_sslm_dt_benches sslm_decode_threading_bench)
+# The seam build links superslm_test_injection, which exists only with BUILD_TESTING.
+if(BUILD_TESTING)
+	add_executable(sslm_decode_threading_bench_seams EXCLUDE_FROM_ALL tools/decode_threading_bench.cpp)
+	target_link_libraries(sslm_decode_threading_bench_seams PRIVATE superslm_test_injection)
+	list(APPEND _sslm_dt_benches sslm_decode_threading_bench_seams)
+endif()
+foreach(_sslm_dt_bench ${_sslm_dt_benches})
 	if(MSVC)
 		target_compile_options(${_sslm_dt_bench} PRIVATE /W4 /fp:precise)
 	else()
