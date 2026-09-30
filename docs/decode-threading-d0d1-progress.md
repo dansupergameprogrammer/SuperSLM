@@ -5,8 +5,9 @@ steps D0 and D1 (§6): the one-row (M = 1) matvec of decode and one-token prefil
 `sslm_parallel_for` hook, opt-in through the new bit `SSLM_PARALLEL_FOR_MATVEC` (bit 1), with output bit-identical to
 the serial path. D2–D5 (the box, the release and the plugin) are not in this series.
 
-**Base.** Branch `claude/project-thread-c8iecr` at `c28f171` (the attention and per-row sites series, S1–S5, on tiled-matmul
-slice 1). Delivered as a patch series (`git am` onto `c28f171`), not pushed.
+**Base.** Built on `c28f171` (the attention and per-row sites series, S1–S5, on tiled-matmul slice 1), then applied onto
+main at the 1.10.0 release (`fdeee2f`) on branch `claude/project-thread-c8iecr`. What the move changed and the re-run
+evidence are in `docs/decode-threading/rebase-1.10.0.txt`; the other evidence files record the `c28f171` runs.
 
 **Host.** A 4-vCPU cloud Xeon (AVX2, AVX-512F/BW/DQ, AVX-512 VNNI; GCC 13.3.0, Clang 18.1.3), shared with other agents, so
 every timing is indicative and noisy.
@@ -15,7 +16,7 @@ States: **done**, **CI-only**, **box-only**, **not done** (with why).
 
 ## Resume here
 
-1. Clone SuperSLM, `git checkout -b decode-threading c28f171`, `git am` this series.
+1. Clone SuperSLM and check out `claude/project-thread-c8iecr`.
 2. Generate the fixtures: `python tools/gen_decode_threading_fixture.py <dir>` (numpy; 5 to 12 minutes on this host, deterministic), then set
    `SUPERSLM_DECODE_THREADING_FIXTURE_DIR=<dir>`. A missing fixture fails the D1 cells; it never skips them.
 3. Run the suites from the repository root. `SUPERSLM_ATTN_ROWSITES_ARTIFACT` (the S1–S5 0.5B-width 1-layer artifact) adds
@@ -72,7 +73,9 @@ D1 edits neither file; the ranges are two runs of the D1 tree (one branch of run
 both files clear their floors. The no-AVX-512 projection (the hosted runner's view) is below both floors on the base
 already, as S2–S5 recorded; D1 does not move it. `src/forward/` is outside the leg's glob: exported separately,
 forward_sites.cpp goes from 731/910 to 779/948 and parallel_split.cpp is 45–46/48. The replica found o's guard arm
-untaken, which became the 2.1 o case (deviation 11). Floors not re-pinned.
+untaken, which became the 2.1 o case (deviation 11). Floors not re-pinned. The floors above are the ones at `c28f171`; main
+has since re-pinned matmul.cpp to 69.23 and intmath.cpp to 83.47, which the no-AVX-512 projection meets
+(`rebase-1.10.0.txt`).
 
 ## Bench (indicative; `bench.md`)
 
