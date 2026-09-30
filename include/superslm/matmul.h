@@ -131,7 +131,8 @@ enum class SitesKernel : int { kShipped = 0, kAvx2 = 1, kAvx512 = 2 };
 SitesKernel SelectSitesKernel(GemmTier tier, int msvc_avx512_switch, bool is_msvc_build);
 
 // The call-site wiring: SelectSitesKernel with this build's own switch value and compiler identity.
-// Every S2-S6 dispatch decides through this function and nothing else.
+// Every S2-S6 dispatch decides through this function and nothing else. SitesKernel and both selectors
+// are internal C++ declarations like the GemmPath ones above: not exported, not part of the C API.
 SitesKernel DispatchSitesKernel(GemmTier tier);
 
 }  // namespace detail

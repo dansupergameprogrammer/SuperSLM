@@ -268,7 +268,7 @@ int8_t RequantTokenCodeWide(int64_t x_i, int64_t r, int s);
 // P = |x|·r = H·2^32 + L and e = 62 - s, followed by the same clamp and sign restore; the last
 // n mod 4 (or 8) elements run RequantTokenCodeWide. P reaches exactly 2^63 at the contract's corner
 // (|x| = d' = 2^31, r = 2^32), which the unsigned lane holds exactly. The scalar and SSE2 tiers
-// (and an MSVC build's AVX-512 tier with SUPERSLM_SITES_AVX512_MSVC off) run the element loop.
+// (and an MSVC build's AVX-512 tier with SUPERSLM_SITES_AVX512_MSVC off) run the element loop. Internal; not in the C API.
 void RequantRowWide(const int64_t* x, size_t n, int64_t r, int s, int8_t* out);
 
 // --- §6.3 nonlinear scalar primitives (i-sqrt C4/C5/C6, i-exp C7/C8/C9) -------
