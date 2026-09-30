@@ -49,3 +49,15 @@ logged results still apply. Mutants: only the 11 whose red set includes 2.1 were
 - The WIN32 setter gate (cell_setters.cpp CPU+GPU) and the Windows suites at the new head. The 2.1 change is
   platform-neutral, but the suite binaries changed.
 - Optional: the v1.9 probe on the Windows-generated F-QK (31dd0c5b...), which this host cannot produce.
+
+== Confirmed on Windows (the owner's machine, MSVC, 2026-09-30, at 036dac5)
+The review's confirmation re-check: SHIP (review record section 8).
+- tools\build_adapter_dump.bat and tests\t2018-slora-serial\build.bat build (exit 0). The other 25 patched lists
+  were not executed; no CI step compiles them.
+- superslm_tests 133,931 checks, 0 failures; forced SSE2 133,759 / 0; forced AVX2 133,775 / 0; decode-threading D1
+  cells 2,152 / 0 on every tier; scalar decode-threading 2,159 / 0; allocation 84 / 0. WIN32 CPU+GPU setter cell: PASS.
+- v1.9 probe built with MSVC against a v1.9.0 library (d870d27) and this head's seam library, on the Windows-generated
+  F-QK (31dd0c5b...) and F-DEF: 6.3 threaded blob equals v1.9.0's no-hook blob for both; 9.1 each library re-saves the
+  other's blob byte-equal and 8 tokens each way match, with 896 and 78 run calls as on Linux.
+- D2 B0 on the real Qwen2.5-0.5B (24 layers, 64 greedy tokens from a 300-token prompt): tokens and the final SSB5 blob
+  byte-equal to no-hook at max_tasks 1, 2, 3, 4 and 8; 97 run calls per decode token at 2 and above, 0 at 1.
