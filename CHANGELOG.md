@@ -28,9 +28,11 @@ any `max_tasks`. The split adds no heap allocation.
   rejection) now leaves the sequence's five saturation counts as they were before the call. In
   1.10.0 it kept counts that no K/V entry backs. A call that admits a prefix and then stops keeps
   that prefix's counts, as before.
-- C++ exports gain threaded overloads of `RunLayerLoop` (both) and `RunLayerLoopChunkBatched`,
-  taking a trailing `GemmThreading`; the existing symbols stay and run serially. No struct
-  layout, status, C function or save-format change.
+- The C++ headers gain threaded overloads of `RunLayerLoop` (both) and `RunLayerLoopChunkBatched`,
+  taking a trailing `GemmThreading`, for the engine's own ABI layer. They are not in the
+  `SUPERSLM_API` export slot, so a shared engine library exports the same symbols as 1.10.0; the
+  existing symbols stay and run serially. No struct layout, status, C function or save-format
+  change.
 - Tests read generated fixtures (`tools/gen_decode_threading_fixture.py`) from the directory
   named by `SUPERSLM_DECODE_THREADING_FIXTURE_DIR`; a missing fixture fails those cells.
 

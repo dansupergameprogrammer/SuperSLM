@@ -1128,7 +1128,9 @@ struct GemmThreading {
 // serial path's. A `run` that breaks exactly-once fails the call with ParallelForIncomplete; in
 // RunLayerLoop the failing layer's five saturation counters are then restored to their values at
 // that layer's start, and the sequence rests at its last committed layer.
-SUPERSLM_API SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
+// Not in the SUPERSLM_API export slot: only the engine's own ABI layer calls them, and the slot
+// carries only the symbols a module in another shared library calls (tests/t2807-api-slot X2).
+SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
                                  uint32_t num_hidden_layers, uint32_t layer_budget,
                                  size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
                                  size_t intermediate_size, int64_t context_cap,
@@ -1136,7 +1138,7 @@ SUPERSLM_API SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const Layer
                                  size_t workspace_size, std::string_view site_prefix,
                                  size_t token_index, SslmTraceHookState* trace_hook_state,
                                  size_t q_width, const GemmThreading& threading);
-SUPERSLM_API SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
+SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
                                  uint32_t num_hidden_layers, uint32_t layer_budget,
                                  size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
                                  size_t intermediate_size, int64_t context_cap,
@@ -1145,7 +1147,7 @@ SUPERSLM_API SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const Layer
                                  std::string_view site_prefix, size_t token_index,
                                  SslmTraceHookState* trace_hook_state, size_t q_width,
                                  const GemmThreading& threading);
-SUPERSLM_API SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
+SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
                                             size_t chunk_tokens, const LayerWeights* layers,
                                             uint32_t num_hidden_layers, size_t hidden_size,
                                             size_t head_dim, size_t num_key_value_heads,
