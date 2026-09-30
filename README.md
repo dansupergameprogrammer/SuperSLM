@@ -14,7 +14,14 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.9.0**. `sslm_seq_save` writes a new save format, `SSB5`, which carries the
+Current release: **1.10.0**, a CPU speed release. On the AVX2 and AVX-512 tiers, prompt reading
+runs a register-tiled matrix multiply, attention's per-row steps (probability-times-value, softmax,
+requantization and, on Qwen3 models, the Q31 score) run a row at a time, and the model's load-time
+integrity hash uses the CPU's SHA instructions where it has them. Every output is bit-identical to
+1.9.0: the same tokens, save blobs and digest. No ABI, format or status change. See the
+[1.10.0 release note](docs/releases/1.10.0.md).
+
+1.9.0: `sslm_seq_save` writes a new save format, `SSB5`, which carries the
 four per-site saturation counts beside the saturation total they sum, so a restored sequence keeps
 them; 1.8.1 restored the total with per-site counts of 0. These are internal diagnostic counters:
 neither they nor the total is readable through the C ABI (`sslm_stats_out` has no saturation field),

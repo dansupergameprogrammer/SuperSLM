@@ -4,6 +4,8 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-09-30
+
 On the AVX2 and AVX-512 tiers, a prefill GEMM of 8 or more tokens now runs a register-tiled
 kernel over weights packed per call, instead of one dot product per output cell. Outputs are
 bit-identical to the scalar reference and to 1.9.0: same tokens, same save blobs, same digest.
