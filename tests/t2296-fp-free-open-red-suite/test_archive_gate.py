@@ -182,11 +182,12 @@ def test_dslm5055_real_elf_archive_member_counts(real_elf_archive):
     (1 SYMTAB + 1 LONGNAMES + 17 OBJECT), not the Windows archive's 20.
     Fixture verification only."""
     total, counts = af.raw_member_counts(real_elf_archive)
-    # Decode threading D0 added src/forward/parallel_split.cpp: 18 objects, 20 members from D0 on.
-    assert total == 20, "expected 20 total members, found {} ({})".format(total, counts)
+    # A fixed, pre-built archive (see real_elf_archive), not this tree's build: it stays at 17
+    # objects after decode threading D0, and D-SLM5032's cell below pins the same archive.
+    assert total == 19, "expected 19 total members, found {} ({})".format(total, counts)
     assert counts.get("SYMTAB") == 1, counts
     assert counts.get("LONGNAMES") == 1, counts
-    assert counts.get("OBJECT") == 18, counts
+    assert counts.get("OBJECT") == 17, counts
 
 
 def test_dslm5054_real_archive_has_odd_sized_member(real_coff_archive):
