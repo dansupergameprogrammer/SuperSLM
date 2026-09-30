@@ -29,6 +29,52 @@ set in `check_fp_free_scan.py`. Each is 32-bit integer arithmetic on xmm lanes (
 modular adds, rotates, shifts and boolean ops; no rounding, no MXCSR, no floating-point operand).
 The SHA-1 instructions stay rejected.
 
+On the AVX2 and AVX-512 tiers, attention's probability-times-value step (`GemmProbQ15Accumulate`)
+now runs on 16-bit multiply-add when the head dimension is a multiple of 16 and the probability
+row fits 16 bits (every p in [0, 32767], sum at most 2^15). Other rows take the 1.9.0 loop. This
+covers every softmax row except a one-hot row. Outputs are bit-identical to 1.9.0: the same
+tokens, save blobs and digest. Engine level, on one cloud host, at head dimension 64 the step is
+about 16-21x faster. At Qwen2.5-0.5B depth (24 layers, 14 heads) that saves about 0.8 / 3.4 /
+6.7 ms per prompt token at 128 / 512 / 1,024 tokens, and about 4 ms per decode token at context
+300. MSVC and clang-cl builds keep the AVX-512 tier on the 1.9.0 loop until it has executed
+there; `SUPERSLM_SITES_AVX512_MSVC=1` turns it on. There is no ABI, format or status change.
+
+On the AVX2 and AVX-512 tiers, the requantization step every checked projection, norm, activation
+and residual ends in (the funnel's per-element conversion to int8 codes) now runs 4 or 8 elements
+at a time in 64-bit integer lanes, through the new row function `RequantRowWide`. Every code is
+bit-identical to 1.9.0's per-element `RequantTokenCodeWide`: the same tokens, save blobs and
+digest. Engine level, on one cloud host, a funnel call at Qwen2.5-0.5B's widths (896 and 4,864)
+is about 4.5x faster on AVX2 and 5.5x on AVX-512, which saves about 2.5 ms per token at 24
+layers, prefill and decode alike. The scalar and SSE2 tiers keep the 1.9.0 loop. MSVC and
+clang-cl builds keep the AVX-512 tier on it too, under the same `SUPERSLM_SITES_AVX512_MSVC`
+switch. There is no ABI, format or status change.
+
+On the AVX2 and AVX-512 tiers, attention's softmax row (`SoftmaxRowQ15`) now runs 4 or 8 elements
+at a time when the row is inside a guard: width at most 2^14, q_ln2 >= 1, q_c >= 0,
+q_b^2 + q_c in [1, 2^47], q_ln2 <= 2 q_b + 1 and every score within 2^61. The two divides per
+element are integer estimates that one exact integer correction each way makes exact. Rows outside
+the guard run the 1.9.0 body unchanged. Every probability and the returned bool are bit-identical
+to 1.9.0: the same tokens, save blobs and digest. Engine level, on one cloud host, a row of 512
+keys is about 3.6x faster on AVX2. At Qwen2.5-0.5B depth (24 layers, 14 heads) that saves about
+0.1 / 0.46 / 0.91 ms per prompt token at 128 / 512 / 1,024 tokens, and about 0.53 ms per decode
+token at context 300. A one-key row is slightly slower. The scalar and SSE2 tiers keep
+the 1.9.0 body. MSVC and clang-cl builds keep the AVX-512 tier on it too, under the same
+`SUPERSLM_SITES_AVX512_MSVC` switch. There is no ABI, format or status change.
+
+On the AVX2 and AVX-512 tiers, the Q31 attention score used by QK-norm models (the Qwen3 path) is
+now computed for all of a query head's keys in one call (`QkQ31ScoreRow`), instead of one
+`QkQ31Score` call per key. Inside a guard (head_dim at most 512, every K-channel ratio in
+[0, 2^32)) each channel's q x ratio product is split exactly into three 16-bit pieces, and each
+piece's sum over the channels is a 16-bit multiply-add. The rounding is `RoundingDivideByPOT`'s, ties away from zero. Rows outside the
+guard run the 1.9.0 per-key loop. Every score is bit-identical to 1.9.0: the same tokens, save
+blobs and digest. Engine level, on one cloud host, a score costs about 14 ns per head and key
+instead of about 410 on AVX2 (about 330 on AVX-512). At Qwen3-0.6B depth (28 layers, 16 heads)
+that saves about 11 / 46 / 94 ms per prompt token at 128 / 512 / 1,024 tokens on AVX2, and about
+55 ms per decode token at context 300. Qwen2.5 models do not take this path. A one-key row on
+AVX-512 is slightly slower. The scalar and SSE2 tiers keep the 1.9.0 loop. MSVC and clang-cl
+builds keep the AVX-512 tier on it too, under the same `SUPERSLM_SITES_AVX512_MSVC` switch. There
+is no ABI, format or status change.
+
 ## [1.9.0] - 2026-09-25
 
 `sslm_seq_save` writes a new save format, `SSB5`: the `SSB4` layout with the four per-site

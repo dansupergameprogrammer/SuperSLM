@@ -1,0 +1,7 @@
+== 11.4 plant: a call to RequantRowWide appended to src/forward/forward_sites.cpp
+check_no_forward_leaf_calls.py: FAILED
+  - src/forward/forward_sites.cpp:3206: names banned leaf 'RequantRowWide' outside the funnel's own file
+exit 1
+== unplanted
+check_no_forward_leaf_calls.py: OK -- 2 forward-composition file(s) scanned, zero banned-leaf calls outside the allowlist, and the door count holds at 3
+exit 0

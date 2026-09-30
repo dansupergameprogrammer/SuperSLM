@@ -1,0 +1,6 @@
+# S2 sanitizer runs at the final code (GCC 13.3; ASan+UBSan and TSan builds as the CI legs configure them), SUPERSLM_ATTN_ROWSITES_ARTIFACT = p05_l1.
+# 'reports' counts AddressSanitizer errors, UBSan runtime errors and ThreadSanitizer warnings in the run's output.
+== build-asan/superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2): 2396 checks, 0 failures|superslm tests: 27927 checks, 0 failures| reports: 0
+== build-asan/superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2): 2396 checks, 0 failures|superslm tests: 27885 checks, 0 failures| reports: 0
+== build-asan/superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2): 2396 checks, 0 failures|superslm tests: 27885 checks, 0 failures| reports: 0
+== build-tsan/superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2): 2396 checks, 0 failures|superslm tests: 27927 checks, 0 failures| reports: 0

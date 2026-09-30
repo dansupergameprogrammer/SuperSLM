@@ -1,0 +1,90 @@
+# S4 fp-free scan (plan §3.4; tests/ci/scan_build_output.py --build-dir <build> --target superslm --isa x86-64), allow-lists unchanged.
+#
+# Clang 18.1 build at the implementation commit: PASS (490 symbols ACCEPT, 0 REJECT). intmath.cpp.o is clean
+#   (SoftmaxRowAvx2 and SoftmaxRowAvx512 are local 't' symbols in it; the helpers inline).
+# GCC 13.3 build at the implementation commit: FAIL, one symbol, TiledGemmAvx512 in matmul.cpp.o, inherited from the base
+#   (as in S3; main fixes it in 90e48de). intmath.cpp.o is clean. With 90e48de's src/matmul.cpp change applied temporarily
+#   (not part of this series): PASS (561 ACCEPT, 0 REJECT).
+#
+# The rejects met on the way to a clean intmath.cpp.o, without widening the allow-list:
+#   1. GCC, SoftmaxRowAvx512: the tail pads were first written as per-lane `i < rest ? src[i] : pad` loops; GCC vectorised
+#      them with an AVX-512 mask-register compare (vpcmpnleuq into k1), which the scan rejects. Fix: the pad buffer is
+#      initialised with the pad value and the live elements are memcpy'd over it.
+#   2. Clang, by construction (S3's lesson): no 64-bit select anywhere. The AVX2 masks from vpcmpgtq are folded by
+#      add/sub/and; the clip is vpminud on the low dword with the high dword folded into bit 31. No vblendvpd, no vxorpd.
+#
+# Summaries follow (Clang, GCC, GCC with 90e48de applied); the per-object lines are verbatim, the non-gating check-(C)
+# listings are elided.
+
+######## scan-clang
+Scanning 17 object member(s) of archive build-clang/libsuperslm.a for target 'superslm' (isa=x86-64)
+
+  clean    artifact.cpp.o  (30 symbol(s), format=elf)
+  clean    sha256.cpp.o  (8 symbol(s), format=elf)
+  clean    tokenizer.cpp.o  (52 symbol(s), format=elf)
+  clean    model.cpp.o  (77 symbol(s), format=elf)
+  clean    intmath.cpp.o  (29 symbol(s), format=elf)
+  clean    silu_lut.cpp.o  (1 symbol(s), format=elf)
+  clean    matmul.cpp.o  (23 symbol(s), format=elf)
+  clean    proof_manifest.cpp.o  (21 symbol(s), format=elf)
+  clean    trace_hook.cpp.o  (4 symbol(s), format=elf)
+  clean    checked_chain_funnel.cpp.o  (15 symbol(s), format=elf)
+  clean    forward_sites.cpp.o  (49 symbol(s), format=elf)
+  clean    decode_digest.cpp.o  (3 symbol(s), format=elf)
+  clean    sslm_abi.cpp.o  (125 symbol(s), format=elf)
+  clean    damped_greedy_antilm.cpp.o  (26 symbol(s), format=elf)
+  clean    damped_greedy_topk.cpp.o  (13 symbol(s), format=elf)
+  clean    damped_greedy_phaseD.cpp.o  (8 symbol(s), format=elf)
+  clean    damped_greedy_phaseD_loop.cpp.o  (6 symbol(s), format=elf)
+
+Totals: 17 object(s); 490 symbol(s) ACCEPT, 0 REJECT, 0 object(s) REFUSE (checks (A)/(B), gating); 284 symbol(s) reject under check (C) alone (non-gating diagnostic)
+PASS: no floating-point arithmetic found in any object of this target (checks (A)/(B); check (C) is a non-gating diagnostic).
+
+######## scan-gcc
+Scanning 17 object member(s) of archive build/libsuperslm.a for target 'superslm' (isa=x86-64)
+
+  clean    artifact.cpp.o  (33 symbol(s), format=elf)
+  clean    sha256.cpp.o  (8 symbol(s), format=elf)
+  clean    tokenizer.cpp.o  (49 symbol(s), format=elf)
+  clean    model.cpp.o  (112 symbol(s), format=elf)
+  clean    intmath.cpp.o  (30 symbol(s), format=elf)
+  clean    silu_lut.cpp.o  (1 symbol(s), format=elf)
+  REJECT   matmul.cpp.o  (1 symbol(s), format=elf)
+             _ZN8superslm12_GLOBAL__N_115TiledGemmAvx512EPKsmPKammmmmPlPa
+  clean    proof_manifest.cpp.o  (47 symbol(s), format=elf)
+  clean    trace_hook.cpp.o  (4 symbol(s), format=elf)
+  clean    checked_chain_funnel.cpp.o  (14 symbol(s), format=elf)
+  clean    forward_sites.cpp.o  (58 symbol(s), format=elf)
+  clean    decode_digest.cpp.o  (7 symbol(s), format=elf)
+  clean    sslm_abi.cpp.o  (131 symbol(s), format=elf)
+  clean    damped_greedy_antilm.cpp.o  (20 symbol(s), format=elf)
+  clean    damped_greedy_topk.cpp.o  (13 symbol(s), format=elf)
+  clean    damped_greedy_phaseD.cpp.o  (8 symbol(s), format=elf)
+  clean    damped_greedy_phaseD_loop.cpp.o  (2 symbol(s), format=elf)
+
+Totals: 17 object(s); 560 symbol(s) ACCEPT, 1 REJECT, 0 object(s) REFUSE (checks (A)/(B), gating); 375 symbol(s) reject under check (C) alone (non-gating diagnostic)
+FAIL: the scan did not come back clean.
+
+######## scan-gcc-90e48de
+Scanning 17 object member(s) of archive build/libsuperslm.a for target 'superslm' (isa=x86-64)
+
+  clean    artifact.cpp.o  (33 symbol(s), format=elf)
+  clean    sha256.cpp.o  (8 symbol(s), format=elf)
+  clean    tokenizer.cpp.o  (49 symbol(s), format=elf)
+  clean    model.cpp.o  (112 symbol(s), format=elf)
+  clean    intmath.cpp.o  (30 symbol(s), format=elf)
+  clean    silu_lut.cpp.o  (1 symbol(s), format=elf)
+  clean    matmul.cpp.o  (24 symbol(s), format=elf)
+  clean    proof_manifest.cpp.o  (47 symbol(s), format=elf)
+  clean    trace_hook.cpp.o  (4 symbol(s), format=elf)
+  clean    checked_chain_funnel.cpp.o  (14 symbol(s), format=elf)
+  clean    forward_sites.cpp.o  (58 symbol(s), format=elf)
+  clean    decode_digest.cpp.o  (7 symbol(s), format=elf)
+  clean    sslm_abi.cpp.o  (131 symbol(s), format=elf)
+  clean    damped_greedy_antilm.cpp.o  (20 symbol(s), format=elf)
+  clean    damped_greedy_topk.cpp.o  (13 symbol(s), format=elf)
+  clean    damped_greedy_phaseD.cpp.o  (8 symbol(s), format=elf)
+  clean    damped_greedy_phaseD_loop.cpp.o  (2 symbol(s), format=elf)
+
+Totals: 17 object(s); 561 symbol(s) ACCEPT, 0 REJECT, 0 object(s) REFUSE (checks (A)/(B), gating); 376 symbol(s) reject under check (C) alone (non-gating diagnostic)
+PASS: no floating-point arithmetic found in any object of this target (checks (A)/(B); check (C) is a non-gating diagnostic).

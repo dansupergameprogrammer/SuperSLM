@@ -11,7 +11,7 @@ call %VSDEVCMD% -arch=x64 -no_logo
 pushd %~dp0
 if not exist out mkdir out
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
-	src\intmath.cpp tests\cert_intmath.cpp /Fo:out\ /Fe:out\cert_intmath.exe
+	src\intmath.cpp src\matmul.cpp tests\cert_intmath.cpp /Fo:out\ /Fe:out\cert_intmath.exe
 if errorlevel 1 (popd & exit /b 1)
 popd
 exit /b 0

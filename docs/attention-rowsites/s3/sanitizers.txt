@@ -1,0 +1,8 @@
+# S3 sanitizer runs at the implementation commit (GCC 13.3, RelWithDebInfo; ASan+UBSan with -fno-sanitize-recover=undefined, and TSan, as the CI legs
+# configure them), SUPERSLM_ATTN_ROWSITES_ARTIFACT = p05_l1. 'reports' counts AddressSanitizer errors, UBSan runtime errors and
+# ThreadSanitizer warnings in the run's output. The 4.S3 exact-size pass (rows allocated to exactly n bytes, no sentinel) is the
+# cell these legs exist for (plan F10, G22): an over-long vector store lands outside the allocation.
+== build-asan/superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109744 checks, 0 failures| reports: 0
+== build-asan/superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures| reports: 0
+== build-asan/superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109702 checks, 0 failures| reports: 0
+== build-tsan/superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3): 84213 checks, 0 failures|superslm tests: 109744 checks, 0 failures| reports: 0

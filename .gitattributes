@@ -31,3 +31,8 @@ tests/golden/**  -text
 # T-2814: the recorded dumpbin read that tests/t2807-api-slot/consumed_symbols.txt is generated from, and
 # whose SHA-256 its header states. Byte-exact on every platform.
 tests/t2807-api-slot/recorded/*.tsv  -text
+
+# Generated golden-pin headers claim byte-for-byte regeneration by their
+# generators, which emit LF; pin them to LF so a Windows checkout matches.
+tests/attn_rowsite_golden_pin.h   text eol=lf
+tests/matmul_tiled_golden_pin.h   text eol=lf

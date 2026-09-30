@@ -1,0 +1,8 @@
+# S4 sanitizer runs at the implementation commit (GCC 13.3, RelWithDebInfo; ASan+UBSan with -fno-sanitize-recover=all, and TSan, as the CI
+# legs configure them), SUPERSLM_ATTN_ROWSITES_ARTIFACT = p05_l1, separate TMPDIRs. 'reports' counts AddressSanitizer errors, UBSan runtime errors
+# and ThreadSanitizer warnings in the run's output. The S4 cells include rows of widths 1-17 and 2^14 whose padded tails are copied
+# into stack buffers (never loaded past the row), and aliased rows (scores == out_probs).
+== build-asan/superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116129 checks, 0 failures| reports: 0
+== build-asan/superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116087 checks, 0 failures| reports: 0
+== build-asan/superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116087 checks, 0 failures| reports: 0
+== build-tsan/superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures|superslm tests: 116129 checks, 0 failures| reports: 0

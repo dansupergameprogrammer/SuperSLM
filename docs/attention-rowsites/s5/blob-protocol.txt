@@ -1,0 +1,96 @@
+# S5 save-blob protocol (plan 6.4, as S1-S4 ran it): the sslm_bench_prefill tool (tools/t2147_chunk_batched_pins.cpp) as built by
+# CMake (GCC 13.3, Release). Base = the S1 head's build (v1.9.0 attention), unchanged since S2's run. Candidates = S5's
+# implementation commit: auto (sslm_bench_prefill, AVX-512 here) and avx2 (sslm_bench_prefill_avx2_forced). Each row prefills the
+# prompt at the chunk budget, decodes 32 greedy tokens and dumps the SSB5 blob; EQUAL = blobs byte-equal and decoded tokens equal.
+# Artifacts: the S1 synthetic set (wide_l8, p05_l1 sha256 f0fd4886...6ed3, p05_l2) and the in-tree 8-layer fixture.
+#
+# Result: 66 of 66 rows EQUAL (33 auto, 33 forced AVX2); every distinct row's blob hash and token hash equals S4's record row for
+# row. The in-tree fixture's 128- and 512-token prompts exceed its context cap: the base refuses them (sslm_status 16), as in S1-S4,
+# so those 12 rows are not compared and the fixture runs at 8 and 24 tokens instead.
+#
+# These artifacts are plain-path (no QK-norm): S5's kernel does not run in them, and the rows show that nothing else moved.
+# The Q31 path's own equality evidence, since no QK-norm artifact loads on this host (plan R4):
+#   - cell 11.1(c), the QK-norm fixture: both layer loops (decode, chunk, decode with a sink) emit the v1.9.0 tag's stream,
+#     hash 336b8d41... over 14,384 values, on all eight suite binaries (GCC and Clang; auto, forced SSE2, AVX2, AVX-512);
+#     the fast counter moves on every position in both loops (4 per decode position, 96 in the chunk run).
+#   - the Qwen3-width forward probe (bench.md, reading 2): one layer at hidden 1,024, 16/8 heads, head_dim 128, over 128, 512 and
+#     1,024 positions; the S4 head and S5, each auto and forced AVX2, emit the same output codes and scales at every T
+#     (hashes a3871fe255284c51, d2449513d1c2d5f3, 463c25ff1999c67e; bench-forward.txt).
+intree ids:8 chunk_budget=1 +32 decode, candidate auto: blob base 02718152a6f8941d auto 02718152a6f8941d; decoded tokens base 9ab82cad auto 9ab82cad; EQUAL (16576 bytes)
+wide_l8 ids:8 chunk_budget=1 +32 decode, candidate auto: blob base 5f8a4bafc1a4789a auto 5f8a4bafc1a4789a; decoded tokens base 391ba224 auto 391ba224; EQUAL (4194720 bytes)
+p05_l1 ids:8 chunk_budget=1 +32 decode, candidate auto: blob base 69d606622b873076 auto 69d606622b873076; decoded tokens base 1dec854e auto 1dec854e; EQUAL (525344 bytes)
+p05_l2 ids:8 chunk_budget=1 +32 decode, candidate auto: blob base cdcbfbe1fdcc65b1 auto cdcbfbe1fdcc65b1; decoded tokens base 6894a696 auto 6894a696; EQUAL (1049632 bytes)
+intree ids:8 chunk_budget=8 +32 decode, candidate auto: blob base 02718152a6f8941d auto 02718152a6f8941d; decoded tokens base 9ab82cad auto 9ab82cad; EQUAL (16576 bytes)
+wide_l8 ids:8 chunk_budget=8 +32 decode, candidate auto: blob base 5f8a4bafc1a4789a auto 5f8a4bafc1a4789a; decoded tokens base 391ba224 auto 391ba224; EQUAL (4194720 bytes)
+p05_l1 ids:8 chunk_budget=8 +32 decode, candidate auto: blob base 69d606622b873076 auto 69d606622b873076; decoded tokens base 1dec854e auto 1dec854e; EQUAL (525344 bytes)
+p05_l2 ids:8 chunk_budget=8 +32 decode, candidate auto: blob base cdcbfbe1fdcc65b1 auto cdcbfbe1fdcc65b1; decoded tokens base 6894a696 auto 6894a696; EQUAL (1049632 bytes)
+intree ids:8 chunk_budget=8 +32 decode, candidate auto: blob base 02718152a6f8941d auto 02718152a6f8941d; decoded tokens base 9ab82cad auto 9ab82cad; EQUAL (16576 bytes)
+wide_l8 ids:8 chunk_budget=8 +32 decode, candidate auto: blob base 5f8a4bafc1a4789a auto 5f8a4bafc1a4789a; decoded tokens base 391ba224 auto 391ba224; EQUAL (4194720 bytes)
+p05_l1 ids:8 chunk_budget=8 +32 decode, candidate auto: blob base 69d606622b873076 auto 69d606622b873076; decoded tokens base 1dec854e auto 1dec854e; EQUAL (525344 bytes)
+p05_l2 ids:8 chunk_budget=8 +32 decode, candidate auto: blob base cdcbfbe1fdcc65b1 auto cdcbfbe1fdcc65b1; decoded tokens base 6894a696 auto 6894a696; EQUAL (1049632 bytes)
+wide_l8 ids:128 chunk_budget=1 +32 decode, candidate auto: blob base 4722fb9a0f133c70 auto 4722fb9a0f133c70; decoded tokens base 681400be auto 681400be; EQUAL (4194720 bytes)
+p05_l1 ids:128 chunk_budget=1 +32 decode, candidate auto: blob base 48efd7f2de021c02 auto 48efd7f2de021c02; decoded tokens base 1f43a9c7 auto 1f43a9c7; EQUAL (525344 bytes)
+p05_l2 ids:128 chunk_budget=1 +32 decode, candidate auto: blob base 7dcb7a5fb76a6276 auto 7dcb7a5fb76a6276; decoded tokens base a0edc532 auto a0edc532; EQUAL (1049632 bytes)
+wide_l8 ids:128 chunk_budget=8 +32 decode, candidate auto: blob base 4722fb9a0f133c70 auto 4722fb9a0f133c70; decoded tokens base 681400be auto 681400be; EQUAL (4194720 bytes)
+p05_l1 ids:128 chunk_budget=8 +32 decode, candidate auto: blob base 48efd7f2de021c02 auto 48efd7f2de021c02; decoded tokens base 1f43a9c7 auto 1f43a9c7; EQUAL (525344 bytes)
+p05_l2 ids:128 chunk_budget=8 +32 decode, candidate auto: blob base 7dcb7a5fb76a6276 auto 7dcb7a5fb76a6276; decoded tokens base a0edc532 auto a0edc532; EQUAL (1049632 bytes)
+wide_l8 ids:128 chunk_budget=128 +32 decode, candidate auto: blob base 4722fb9a0f133c70 auto 4722fb9a0f133c70; decoded tokens base 681400be auto 681400be; EQUAL (4194720 bytes)
+p05_l1 ids:128 chunk_budget=128 +32 decode, candidate auto: blob base 48efd7f2de021c02 auto 48efd7f2de021c02; decoded tokens base 1f43a9c7 auto 1f43a9c7; EQUAL (525344 bytes)
+p05_l2 ids:128 chunk_budget=128 +32 decode, candidate auto: blob base 7dcb7a5fb76a6276 auto 7dcb7a5fb76a6276; decoded tokens base a0edc532 auto a0edc532; EQUAL (1049632 bytes)
+wide_l8 ids:512 chunk_budget=1 +32 decode, candidate auto: blob base 904ffb07ded91feb auto 904ffb07ded91feb; decoded tokens base e7799ea5 auto e7799ea5; EQUAL (4194720 bytes)
+p05_l1 ids:512 chunk_budget=1 +32 decode, candidate auto: blob base 9a18bb27908136eb auto 9a18bb27908136eb; decoded tokens base 8435904c auto 8435904c; EQUAL (525344 bytes)
+p05_l2 ids:512 chunk_budget=1 +32 decode, candidate auto: blob base 77d1a3589a0c813f auto 77d1a3589a0c813f; decoded tokens base 75387074 auto 75387074; EQUAL (1049632 bytes)
+wide_l8 ids:512 chunk_budget=8 +32 decode, candidate auto: blob base 904ffb07ded91feb auto 904ffb07ded91feb; decoded tokens base e7799ea5 auto e7799ea5; EQUAL (4194720 bytes)
+p05_l1 ids:512 chunk_budget=8 +32 decode, candidate auto: blob base 9a18bb27908136eb auto 9a18bb27908136eb; decoded tokens base 8435904c auto 8435904c; EQUAL (525344 bytes)
+p05_l2 ids:512 chunk_budget=8 +32 decode, candidate auto: blob base 77d1a3589a0c813f auto 77d1a3589a0c813f; decoded tokens base 75387074 auto 75387074; EQUAL (1049632 bytes)
+wide_l8 ids:512 chunk_budget=512 +32 decode, candidate auto: blob base 904ffb07ded91feb auto 904ffb07ded91feb; decoded tokens base e7799ea5 auto e7799ea5; EQUAL (4194720 bytes)
+p05_l1 ids:512 chunk_budget=512 +32 decode, candidate auto: blob base 9a18bb27908136eb auto 9a18bb27908136eb; decoded tokens base 8435904c auto 8435904c; EQUAL (525344 bytes)
+p05_l2 ids:512 chunk_budget=512 +32 decode, candidate auto: blob base 77d1a3589a0c813f auto 77d1a3589a0c813f; decoded tokens base 75387074 auto 75387074; EQUAL (1049632 bytes)
+intree ids:8 chunk_budget=1 +32 decode, candidate avx2: blob base 02718152a6f8941d avx2 02718152a6f8941d; decoded tokens base 9ab82cad avx2 9ab82cad; EQUAL (16576 bytes)
+wide_l8 ids:8 chunk_budget=1 +32 decode, candidate avx2: blob base 5f8a4bafc1a4789a avx2 5f8a4bafc1a4789a; decoded tokens base 391ba224 avx2 391ba224; EQUAL (4194720 bytes)
+p05_l1 ids:8 chunk_budget=1 +32 decode, candidate avx2: blob base 69d606622b873076 avx2 69d606622b873076; decoded tokens base 1dec854e avx2 1dec854e; EQUAL (525344 bytes)
+p05_l2 ids:8 chunk_budget=1 +32 decode, candidate avx2: blob base cdcbfbe1fdcc65b1 avx2 cdcbfbe1fdcc65b1; decoded tokens base 6894a696 avx2 6894a696; EQUAL (1049632 bytes)
+intree ids:8 chunk_budget=8 +32 decode, candidate avx2: blob base 02718152a6f8941d avx2 02718152a6f8941d; decoded tokens base 9ab82cad avx2 9ab82cad; EQUAL (16576 bytes)
+wide_l8 ids:8 chunk_budget=8 +32 decode, candidate avx2: blob base 5f8a4bafc1a4789a avx2 5f8a4bafc1a4789a; decoded tokens base 391ba224 avx2 391ba224; EQUAL (4194720 bytes)
+p05_l1 ids:8 chunk_budget=8 +32 decode, candidate avx2: blob base 69d606622b873076 avx2 69d606622b873076; decoded tokens base 1dec854e avx2 1dec854e; EQUAL (525344 bytes)
+p05_l2 ids:8 chunk_budget=8 +32 decode, candidate avx2: blob base cdcbfbe1fdcc65b1 avx2 cdcbfbe1fdcc65b1; decoded tokens base 6894a696 avx2 6894a696; EQUAL (1049632 bytes)
+intree ids:8 chunk_budget=8 +32 decode, candidate avx2: blob base 02718152a6f8941d avx2 02718152a6f8941d; decoded tokens base 9ab82cad avx2 9ab82cad; EQUAL (16576 bytes)
+wide_l8 ids:8 chunk_budget=8 +32 decode, candidate avx2: blob base 5f8a4bafc1a4789a avx2 5f8a4bafc1a4789a; decoded tokens base 391ba224 avx2 391ba224; EQUAL (4194720 bytes)
+p05_l1 ids:8 chunk_budget=8 +32 decode, candidate avx2: blob base 69d606622b873076 avx2 69d606622b873076; decoded tokens base 1dec854e avx2 1dec854e; EQUAL (525344 bytes)
+p05_l2 ids:8 chunk_budget=8 +32 decode, candidate avx2: blob base cdcbfbe1fdcc65b1 avx2 cdcbfbe1fdcc65b1; decoded tokens base 6894a696 avx2 6894a696; EQUAL (1049632 bytes)
+wide_l8 ids:128 chunk_budget=1 +32 decode, candidate avx2: blob base 4722fb9a0f133c70 avx2 4722fb9a0f133c70; decoded tokens base 681400be avx2 681400be; EQUAL (4194720 bytes)
+p05_l1 ids:128 chunk_budget=1 +32 decode, candidate avx2: blob base 48efd7f2de021c02 avx2 48efd7f2de021c02; decoded tokens base 1f43a9c7 avx2 1f43a9c7; EQUAL (525344 bytes)
+p05_l2 ids:128 chunk_budget=1 +32 decode, candidate avx2: blob base 7dcb7a5fb76a6276 avx2 7dcb7a5fb76a6276; decoded tokens base a0edc532 avx2 a0edc532; EQUAL (1049632 bytes)
+wide_l8 ids:128 chunk_budget=8 +32 decode, candidate avx2: blob base 4722fb9a0f133c70 avx2 4722fb9a0f133c70; decoded tokens base 681400be avx2 681400be; EQUAL (4194720 bytes)
+p05_l1 ids:128 chunk_budget=8 +32 decode, candidate avx2: blob base 48efd7f2de021c02 avx2 48efd7f2de021c02; decoded tokens base 1f43a9c7 avx2 1f43a9c7; EQUAL (525344 bytes)
+p05_l2 ids:128 chunk_budget=8 +32 decode, candidate avx2: blob base 7dcb7a5fb76a6276 avx2 7dcb7a5fb76a6276; decoded tokens base a0edc532 avx2 a0edc532; EQUAL (1049632 bytes)
+wide_l8 ids:128 chunk_budget=128 +32 decode, candidate avx2: blob base 4722fb9a0f133c70 avx2 4722fb9a0f133c70; decoded tokens base 681400be avx2 681400be; EQUAL (4194720 bytes)
+p05_l1 ids:128 chunk_budget=128 +32 decode, candidate avx2: blob base 48efd7f2de021c02 avx2 48efd7f2de021c02; decoded tokens base 1f43a9c7 avx2 1f43a9c7; EQUAL (525344 bytes)
+p05_l2 ids:128 chunk_budget=128 +32 decode, candidate avx2: blob base 7dcb7a5fb76a6276 avx2 7dcb7a5fb76a6276; decoded tokens base a0edc532 avx2 a0edc532; EQUAL (1049632 bytes)
+wide_l8 ids:512 chunk_budget=1 +32 decode, candidate avx2: blob base 904ffb07ded91feb avx2 904ffb07ded91feb; decoded tokens base e7799ea5 avx2 e7799ea5; EQUAL (4194720 bytes)
+p05_l1 ids:512 chunk_budget=1 +32 decode, candidate avx2: blob base 9a18bb27908136eb avx2 9a18bb27908136eb; decoded tokens base 8435904c avx2 8435904c; EQUAL (525344 bytes)
+p05_l2 ids:512 chunk_budget=1 +32 decode, candidate avx2: blob base 77d1a3589a0c813f avx2 77d1a3589a0c813f; decoded tokens base 75387074 avx2 75387074; EQUAL (1049632 bytes)
+wide_l8 ids:512 chunk_budget=8 +32 decode, candidate avx2: blob base 904ffb07ded91feb avx2 904ffb07ded91feb; decoded tokens base e7799ea5 avx2 e7799ea5; EQUAL (4194720 bytes)
+p05_l1 ids:512 chunk_budget=8 +32 decode, candidate avx2: blob base 9a18bb27908136eb avx2 9a18bb27908136eb; decoded tokens base 8435904c avx2 8435904c; EQUAL (525344 bytes)
+p05_l2 ids:512 chunk_budget=8 +32 decode, candidate avx2: blob base 77d1a3589a0c813f avx2 77d1a3589a0c813f; decoded tokens base 75387074 avx2 75387074; EQUAL (1049632 bytes)
+wide_l8 ids:512 chunk_budget=512 +32 decode, candidate avx2: blob base 904ffb07ded91feb avx2 904ffb07ded91feb; decoded tokens base e7799ea5 avx2 e7799ea5; EQUAL (4194720 bytes)
+p05_l1 ids:512 chunk_budget=512 +32 decode, candidate avx2: blob base 9a18bb27908136eb avx2 9a18bb27908136eb; decoded tokens base 8435904c avx2 8435904c; EQUAL (525344 bytes)
+p05_l2 ids:512 chunk_budget=512 +32 decode, candidate avx2: blob base 77d1a3589a0c813f avx2 77d1a3589a0c813f; decoded tokens base 75387074 avx2 75387074; EQUAL (1049632 bytes)
+intree ids:24 chunk_budget=1 +32 decode, candidate auto: blob base 4dd83f12817436f7 auto 4dd83f12817436f7; decoded tokens base 5707bd0c auto 5707bd0c; EQUAL (16576 bytes)
+intree ids:24 chunk_budget=8 +32 decode, candidate auto: blob base 4dd83f12817436f7 auto 4dd83f12817436f7; decoded tokens base 5707bd0c auto 5707bd0c; EQUAL (16576 bytes)
+intree ids:24 chunk_budget=24 +32 decode, candidate auto: blob base 4dd83f12817436f7 auto 4dd83f12817436f7; decoded tokens base 5707bd0c auto 5707bd0c; EQUAL (16576 bytes)
+intree ids:24 chunk_budget=1 +32 decode, candidate avx2: blob base 4dd83f12817436f7 avx2 4dd83f12817436f7; decoded tokens base 5707bd0c avx2 5707bd0c; EQUAL (16576 bytes)
+intree ids:24 chunk_budget=8 +32 decode, candidate avx2: blob base 4dd83f12817436f7 avx2 4dd83f12817436f7; decoded tokens base 5707bd0c avx2 5707bd0c; EQUAL (16576 bytes)
+intree ids:24 chunk_budget=24 +32 decode, candidate avx2: blob base 4dd83f12817436f7 avx2 4dd83f12817436f7; decoded tokens base 5707bd0c avx2 5707bd0c; EQUAL (16576 bytes)
+intree ids:128 cb=1 base FAILED: prompt "ids:128:128" -> 128 real tokens  (base refuses: context cap)
+intree ids:128 cb=8 base FAILED: prompt "ids:128:128" -> 128 real tokens  (base refuses: context cap)
+intree ids:128 cb=128 base FAILED: prompt "ids:128:128" -> 128 real tokens  (base refuses: context cap)
+intree ids:512 cb=1 base FAILED: prompt "ids:512:128" -> 512 real tokens  (base refuses: context cap)
+intree ids:512 cb=8 base FAILED: prompt "ids:512:128" -> 512 real tokens  (base refuses: context cap)
+intree ids:512 cb=512 base FAILED: prompt "ids:512:128" -> 512 real tokens  (base refuses: context cap)
+intree ids:128 cb=1 base FAILED: prompt "ids:128:128" -> 128 real tokens  (base refuses: context cap)
+intree ids:128 cb=8 base FAILED: prompt "ids:128:128" -> 128 real tokens  (base refuses: context cap)
+intree ids:128 cb=128 base FAILED: prompt "ids:128:128" -> 128 real tokens  (base refuses: context cap)
+intree ids:512 cb=1 base FAILED: prompt "ids:512:128" -> 512 real tokens  (base refuses: context cap)
+intree ids:512 cb=8 base FAILED: prompt "ids:512:128" -> 512 real tokens  (base refuses: context cap)
+intree ids:512 cb=512 base FAILED: prompt "ids:512:128" -> 512 real tokens  (base refuses: context cap)

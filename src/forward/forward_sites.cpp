@@ -22,7 +22,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -34,6 +36,12 @@
 #if SUPERSLM_MATMUL_HAVE_SIMD_X64
 #include <emmintrin.h>
 #include <immintrin.h>
+#endif
+
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+// The test-only dispatch-instrument seam (src/matmul.cpp's convention): the per-row sites' row-table
+// path counters (attention and per-row sites plan, §3.6). Never defined for the production library.
+#include "support/matmul_dispatch_instrument.h"
 #endif
 
 #if defined(__clang__) || (defined(__GNUC__) && !defined(_MSC_VER))
@@ -419,6 +427,56 @@ inline int64_t ComposedExponent(int64_t e_a, int64_t e_t, int64_t target_normali
 	return k;
 }
 
+// Attention and per-row sites plan (rev 3.1), slice S1 (§4.1, §5.1): the per-row tables.
+// RmsNormSite's divide, MlpActSite's sigmoid and ResidualReconcileSite's landing rescale are each a
+// pure function of one int8 code plus constants fixed for the whole row, so a row of n elements
+// evaluates it at most 256 distinct ways. At n >= kRowTableMinWidth the site evaluates it once per
+// code into a stack table, with exactly the arguments its per-element loop passes, and the loop reads
+// the table: table[code] IS the value the loop would compute, so the output is bit-identical at every
+// width. SiLU and landing tables cover [-127, 127] only, the funnel's output range (intmath.cpp's
+// clamp): a -128 code, which a direct caller can pass, is evaluated directly, so no table entry is
+// ever computed at an argument the v1.9.0 loop would not have evaluated for a valid input. The norm
+// table covers every int8, since the shipped loop divides every element.
+//
+// The threshold is a speed constant only (tables lose below about 256 elements on this plan's
+// measurement; 512 is the plan's pinned value). Forced scalar keeps the v1.9.0 per-element loops,
+// so that build's digest leg is the normative reference axis (§3.3); every other build, MSVC and
+// arm64 included, takes the tables.
+#if defined(SUPERSLM_FORCE_SCALAR_MATMUL)
+constexpr bool kRowTablesOn = false;
+#else
+constexpr bool kRowTablesOn = true;
+#endif
+constexpr size_t kRowTableMinWidth = 512;
+
+inline bool RowTableTaken(size_t n) { return kRowTablesOn && n >= kRowTableMinWidth; }
+
+enum class RowTableSite { kNorm, kSilu, kLanding };
+
+// The §3.6 row-table counters: one increment per site call, after the table decision, on the side it
+// took. Compiles to nothing outside the instrument seam.
+inline void CountRowTableDecision(RowTableSite site, bool taken) {
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+	switch (site) {
+	case RowTableSite::kNorm:
+		(taken ? superslm_test::g_rowtable_norm_taken : superslm_test::g_rowtable_norm_skipped)
+		    .fetch_add(1, std::memory_order_relaxed);
+		break;
+	case RowTableSite::kSilu:
+		(taken ? superslm_test::g_rowtable_silu_taken : superslm_test::g_rowtable_silu_skipped)
+		    .fetch_add(1, std::memory_order_relaxed);
+		break;
+	case RowTableSite::kLanding:
+		(taken ? superslm_test::g_rowtable_landing_taken : superslm_test::g_rowtable_landing_skipped)
+		    .fetch_add(1, std::memory_order_relaxed);
+		break;
+	}
+#else
+	(void)site;
+	(void)taken;
+#endif
+}
+
 }  // namespace
 
 int64_t FloorDivI64(int64_t a, int64_t b) {
@@ -551,6 +609,230 @@ int64_t QkQ31Score(const int8_t* q, const int8_t* k, const int64_t* ratio, size_
 #endif
 }
 
+namespace {
+
+// ---- Attention and per-row sites plan (rev 3.1), slice S5 (§4.5, §5.5): the Q31 score row --------------------
+//
+// score_j = RoundingDivideByPOT(Sum_d q_d * k_jd * ratio_d, 31). Per channel, w_d = q_d * ratio_d (an exact int64
+// product, |w| < 2^39 for ratio in [0, 2^32)) is split into three 16-bit pieces,
+//   w = a2 * 2^30 + a1 * 2^15 + a0,   a0 = w & 0x7FFF, a1 = (w >> 15) & 0x7FFF, a2 = w >> 30 (arithmetic),
+// exact for every int64 w; a0, a1 are in [0, 32767] and a2 in [-512, 511]. So Sum_d k_d * w_d =
+// 2^30 Sum k a2 + 2^15 Sum k a1 + Sum k a0, and each limb sum is an int16 x int16 multiply-add (vpmaddwd) into
+// int32 lanes. Per key and limb the lane sum is at most head_dim * 128 * 32,767, which at head_dim 512 is
+// 2,147,418,112: inside int32 by 65,535, so the head_dim <= 512 guard is load-bearing (cell 7.S5b sits on it).
+// The three limb sums recombine exactly in int64 (below 2^56), and the rounding is RoundingDivideByPOT's own
+// (ties away from zero), vectorised. Outside the guard (head_dim > 512, or a ratio outside [0, 2^32)) the row
+// is the per-key QkQ31Score loop the layer loops ran, the same binary's v1.9.0 code (§3.3, §5.5).
+//
+// Keys are packed per block into a stack buffer (§3.5): widened to int16 and transposed so each vector holds
+// one 4-channel quad of 4 (AVX2) or 8 (AVX-512) keys, 8 or 16 keys per block, at most 16 x 512 x 2 bytes. Every
+// lane is then one key's pair sum, and no horizontal reduction runs per key.
+
+constexpr size_t kQ31RowMaxHeadDim = 512;
+
+// The guard (§4.5): head_dim <= 512 (the int32 margin and the stack pack) and every ratio in [0, 2^32) (the
+// range in which w keeps a2 inside int16 however it is formed, §5.5).
+inline bool Q31RowFastPathAdmits(const int64_t* ratio, size_t head_dim) {
+	if (head_dim > kQ31RowMaxHeadDim) return false;
+	for (size_t d = 0; d < head_dim; ++d)
+		if (ratio[d] < 0 || ratio[d] > INT64_C(0xFFFFFFFF)) return false;
+	return true;
+}
+
+// The query head's three limbs, four channels (one quad) per int64, channels past head_dim zero.
+struct Q31RowLimbs {
+	int64_t quad[3][kQ31RowMaxHeadDim / 4];
+	size_t nq;
+};
+
+inline void MakeQ31RowLimbs(const int8_t* q, const int64_t* ratio, size_t head_dim, Q31RowLimbs* limbs) {
+	limbs->nq = (head_dim + 3) / 4;
+	for (size_t i = 0; i < limbs->nq; ++i) {
+		uint64_t packed[3] = {0, 0, 0};
+		for (size_t t = 0; t < 4; ++t) {
+			const size_t d = 4 * i + t;
+			const int64_t w = d < head_dim ? static_cast<int64_t>(q[d]) * ratio[d] : 0;
+			const int64_t a[3] = {w & 0x7FFF, (w >> 15) & 0x7FFF, w >> 30};
+			for (int l = 0; l < 3; ++l) packed[l] |= (static_cast<uint64_t>(a[l]) & 0xFFFFu) << (16 * t);
+		}
+		for (int l = 0; l < 3; ++l) limbs->quad[l][i] = static_cast<int64_t>(packed[l]);
+	}
+}
+
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+// Sixteen channels of four key rows, widened to int16 (baseline SSE2, shared by both tiers): quad qq of the
+// four keys is written as [k0 k1] at dst + qq * stride and [k2 k3] at dst + qq * stride + 8.
+inline void Q31PackQuads4x16(const int8_t* const rows[4], size_t c, int16_t* dst, size_t stride) {
+	__m128i lo[4], hi[4];
+	for (int t = 0; t < 4; ++t) {
+		const __m128i x = _mm_loadu_si128(reinterpret_cast<const __m128i*>(rows[t] + c));
+		lo[t] = _mm_srai_epi16(_mm_unpacklo_epi8(x, x), 8);
+		hi[t] = _mm_srai_epi16(_mm_unpackhi_epi8(x, x), 8);
+	}
+	const __m128i* half[2] = {lo, hi};
+	for (int h = 0; h < 2; ++h) {
+		const __m128i* r = half[h];
+		int16_t* d0 = dst + (2 * h) * stride;
+		int16_t* d1 = dst + (2 * h + 1) * stride;
+		_mm_storeu_si128(reinterpret_cast<__m128i*>(d0), _mm_unpacklo_epi64(r[0], r[1]));
+		_mm_storeu_si128(reinterpret_cast<__m128i*>(d0 + 8), _mm_unpacklo_epi64(r[2], r[3]));
+		_mm_storeu_si128(reinterpret_cast<__m128i*>(d1), _mm_unpackhi_epi64(r[0], r[1]));
+		_mm_storeu_si128(reinterpret_cast<__m128i*>(d1 + 8), _mm_unpackhi_epi64(r[2], r[3]));
+	}
+}
+
+// One block of keys into the pack: `n` live rows of head_dim from `keys`, rows n .. keys_per_block - 1 zero.
+// Layout: keys_per_vector (kpv) keys share a vector; the vector of block row b's quad i starts at
+// pw + ((b / kpv) * nq + i) * kpv * 4, with key b % kpv's four channels at offset (b % kpv) * 4.
+inline void Q31PackKeyBlock(const int8_t* keys, size_t n, size_t head_dim, size_t nq, size_t kpv,
+                            size_t keys_per_block, int16_t* pw) {
+	static const int8_t kZeroRow[kQ31RowMaxHeadDim] = {};
+	const size_t stride = kpv * 4;
+	const size_t full16 = head_dim / 16 * 16;
+	for (size_t g = 0; g < keys_per_block; g += 4) {
+		const int8_t* rows[4];
+		for (size_t t = 0; t < 4; ++t) rows[t] = g + t < n ? keys + (g + t) * head_dim : kZeroRow;
+		int16_t* base = pw + (g / kpv) * nq * stride + (g % kpv) * 4;
+		for (size_t c = 0; c < full16; c += 16) Q31PackQuads4x16(rows, c, base + (c / 4) * stride, stride);
+		for (size_t d = full16; d < nq * 4; ++d)
+			for (size_t t = 0; t < 4; ++t)
+				base[(d / 4) * stride + t * 4 + d % 4] = d < head_dim ? rows[t][d] : int16_t{0};
+	}
+}
+
+// RoundingDivideByPOT(x, 31) per 64-bit lane, |x| < 2^56, without a 64-bit compare or select (which Clang lowers
+// to FP-domain blends the fp-free scan rejects): floor(x / 2^31) by biasing into the unsigned range and a
+// logical shift; the remainder and the tie threshold (2^30 - 1, plus 1 for negative x) as in the scalar rule;
+// "remainder > threshold" as the sign bit of threshold - remainder.
+SUPERSLM_QK_AVX2_TARGET
+inline __m256i Q31RoundAvx2(__m256i x) {
+	const __m256i floor = _mm256_sub_epi64(_mm256_srli_epi64(_mm256_add_epi64(x, _mm256_set1_epi64x(INT64_C(1) << 62)), 31),
+	                                       _mm256_set1_epi64x(INT64_C(1) << 31));
+	const __m256i rem = _mm256_and_si256(x, _mm256_set1_epi64x(INT64_C(0x7FFFFFFF)));
+	const __m256i thr = _mm256_add_epi64(_mm256_set1_epi64x(INT64_C(0x3FFFFFFF)), _mm256_srli_epi64(x, 63));
+	return _mm256_add_epi64(floor, _mm256_srli_epi64(_mm256_sub_epi64(thr, rem), 63));
+}
+
+// The AVX2 body: blocks of 8 keys, two vectors of 4 keys; per quad, three broadcast limb quads.
+SUPERSLM_QK_AVX2_TARGET
+void QkQ31RowAvx2(const int8_t* keys, size_t head_dim, size_t width, const Q31RowLimbs& limbs, int64_t* out) {
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+	superslm_test::g_q31_row_fast_avx2.fetch_add(1, std::memory_order_relaxed);
+#endif
+	alignas(32) int16_t pw[2 * (kQ31RowMaxHeadDim / 4) * 16];  // 8 KiB
+	const size_t nq = limbs.nq;
+	for (size_t j = 0; j < width; j += 8) {
+		const size_t n = width - j < 8 ? width - j : 8;
+		Q31PackKeyBlock(keys + j * head_dim, n, head_dim, nq, 4, 8, pw);
+		__m256i acc[3][2];
+		for (int l = 0; l < 3; ++l) acc[l][0] = acc[l][1] = _mm256_setzero_si256();
+		const __m256i* p0 = reinterpret_cast<const __m256i*>(pw);
+		const __m256i* p1 = p0 + nq;
+		for (size_t i = 0; i < nq; ++i) {
+			const __m256i k0 = _mm256_load_si256(p0 + i), k1 = _mm256_load_si256(p1 + i);
+			for (int l = 0; l < 3; ++l) {
+				const __m256i b = _mm256_set1_epi64x(limbs.quad[l][i]);
+				acc[l][0] = _mm256_add_epi32(acc[l][0], _mm256_madd_epi16(k0, b));
+				acc[l][1] = _mm256_add_epi32(acc[l][1], _mm256_madd_epi16(k1, b));
+			}
+		}
+		// Lanes [k0 k0 k1 k1 | k2 k2 k3 k3] and the same for k4..k7: add the pairs, then put the keys in order.
+		__m256i s[3];
+		for (int l = 0; l < 3; ++l)
+			s[l] = _mm256_permute4x64_epi64(_mm256_hadd_epi32(acc[l][0], acc[l][1]), 0xD8);
+		alignas(32) int64_t tmp[8];
+		for (int h = 0; h < 2; ++h) {
+			__m256i w[3];
+			for (int l = 0; l < 3; ++l)
+				w[l] = _mm256_cvtepi32_epi64(h ? _mm256_extracti128_si256(s[l], 1) : _mm256_castsi256_si128(s[l]));
+			const __m256i x =
+			    _mm256_add_epi64(_mm256_add_epi64(_mm256_slli_epi64(w[2], 30), _mm256_slli_epi64(w[1], 15)), w[0]);
+			_mm256_store_si256(reinterpret_cast<__m256i*>(tmp + 4 * h), Q31RoundAvx2(x));
+		}
+		std::memcpy(out + j, tmp, n * sizeof(int64_t));
+	}
+}
+
+SUPERSLM_QK_AVX512_TARGET
+inline __m512i Q31RoundAvx512(__m512i x) {
+	const __m512i floor = _mm512_srai_epi64(x, 31);
+	const __m512i rem = _mm512_and_si512(x, _mm512_set1_epi64(INT64_C(0x7FFFFFFF)));
+	const __m512i thr = _mm512_add_epi64(_mm512_set1_epi64(INT64_C(0x3FFFFFFF)), _mm512_srli_epi64(x, 63));
+	return _mm512_add_epi64(floor, _mm512_srli_epi64(_mm512_sub_epi64(thr, rem), 63));
+}
+
+// The AVX-512BW body (F and BW instructions only, no mask register): blocks of 16 keys, two vectors of 8 keys.
+// Each 64-bit lane is one key's two pair sums; adding the high dword into the low one and sign-extending it
+// gives that key's int32 limb sum as an int64, in key order, with no shuffle.
+SUPERSLM_QK_AVX512_TARGET
+void QkQ31RowAvx512(const int8_t* keys, size_t head_dim, size_t width, const Q31RowLimbs& limbs, int64_t* out) {
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+	superslm_test::g_q31_row_fast_avx512.fetch_add(1, std::memory_order_relaxed);
+#endif
+	alignas(64) int16_t pw[2 * (kQ31RowMaxHeadDim / 4) * 32];  // 16 KiB
+	const size_t nq = limbs.nq;
+	for (size_t j = 0; j < width; j += 16) {
+		const size_t n = width - j < 16 ? width - j : 16;
+		Q31PackKeyBlock(keys + j * head_dim, n, head_dim, nq, 8, 16, pw);
+		__m512i acc[3][2];
+		for (int l = 0; l < 3; ++l) acc[l][0] = acc[l][1] = _mm512_setzero_si512();
+		const int16_t* p0 = pw;
+		const int16_t* p1 = pw + nq * 32;
+		for (size_t i = 0; i < nq; ++i) {
+			const __m512i k0 = _mm512_load_si512(p0 + i * 32), k1 = _mm512_load_si512(p1 + i * 32);
+			for (int l = 0; l < 3; ++l) {
+				const __m512i b = _mm512_set1_epi64(limbs.quad[l][i]);
+				acc[l][0] = _mm512_add_epi32(acc[l][0], _mm512_madd_epi16(k0, b));
+				acc[l][1] = _mm512_add_epi32(acc[l][1], _mm512_madd_epi16(k1, b));
+			}
+		}
+		alignas(64) int64_t tmp[16];
+		for (int h = 0; h < 2; ++h) {
+			__m512i w[3];
+			for (int l = 0; l < 3; ++l) {
+				const __m512i pair = _mm512_add_epi32(acc[l][h], _mm512_srli_epi64(acc[l][h], 32));
+				w[l] = _mm512_srai_epi64(_mm512_slli_epi64(pair, 32), 32);
+			}
+			const __m512i x =
+			    _mm512_add_epi64(_mm512_add_epi64(_mm512_slli_epi64(w[2], 30), _mm512_slli_epi64(w[1], 15)), w[0]);
+			_mm512_store_si512(reinterpret_cast<void*>(tmp + 8 * h), Q31RoundAvx512(x));
+		}
+		std::memcpy(out + j, tmp, n * sizeof(int64_t));
+	}
+}
+#endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
+
+}  // namespace
+
+void QkQ31ScoreRow(const int8_t* q, const int8_t* keys, const int64_t* ratio, size_t head_dim, size_t width,
+                   int64_t* out) {
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+	// The selector (§3.2, cell 11.2) picks the new kernels on AVX2 and AVX-512 only (v1.9.0 code on the scalar and
+	// SSE2 tiers and on an MSVC build's AVX-512 tier with SUPERSLM_SITES_AVX512_MSVC off). Inside the guard the
+	// tier's body writes the row (its fast counter moves there); outside it the per-key loop below runs and the
+	// tier's fallback counter moves (§3.6).
+	const detail::SitesKernel kernel = detail::DispatchSitesKernel(detail::ActiveGemmTier());
+	if (kernel != detail::SitesKernel::kShipped) {
+		if (Q31RowFastPathAdmits(ratio, head_dim)) {
+			Q31RowLimbs limbs;
+			MakeQ31RowLimbs(q, ratio, head_dim, &limbs);
+			if (kernel == detail::SitesKernel::kAvx2)
+				QkQ31RowAvx2(keys, head_dim, width, limbs, out);
+			else
+				QkQ31RowAvx512(keys, head_dim, width, limbs, out);
+			return;
+		}
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+		(kernel == detail::SitesKernel::kAvx2 ? superslm_test::g_q31_row_fallback_avx2
+		                                      : superslm_test::g_q31_row_fallback_avx512)
+		    .fetch_add(1, std::memory_order_relaxed);
+#endif
+	}
+#endif
+	// The per-key loop both layer loops ran (v1.9.0).
+	for (size_t j = 0; j < width; ++j) out[j] = QkQ31Score(q, keys + j * head_dim, ratio, head_dim);
+}
+
 SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_size,
                                CarriedScale /*incoming_scale*/, CarriedScale site_constant,
                                int8_t* out_codes, CarriedScale* out_scale,
@@ -585,9 +867,20 @@ SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_s
 		wide_fallback.assign(hidden_size, 0);
 		wide = wide_fallback.data();
 	}
-	for (size_t i = 0; i < hidden_size; ++i) {
-		const int64_t hi = static_cast<int64_t>(h[i]);
-		wide[i] = FloorDivI64(hi << (2 * kNormFracBits), root) * static_cast<int64_t>(g[i]);
+	const bool use_table = RowTableTaken(hidden_size);
+	CountRowTableDecision(RowTableSite::kNorm, use_table);
+	if (use_table) {
+		// Plan S1: FloorDivI64(c << 2*NORM_FRAC_BITS, root) for every int8 c, then one lookup per element.
+		int64_t divided[256];
+		for (int c = -128; c <= 127; ++c)
+			divided[c + 128] = FloorDivI64(static_cast<int64_t>(c) << (2 * kNormFracBits), root);
+		for (size_t i = 0; i < hidden_size; ++i)
+			wide[i] = divided[static_cast<int>(h[i]) + 128] * static_cast<int64_t>(g[i]);
+	} else {
+		for (size_t i = 0; i < hidden_size; ++i) {
+			const int64_t hi = static_cast<int64_t>(h[i]);
+			wide[i] = FloorDivI64(hi << (2 * kNormFracBits), root) * static_cast<int64_t>(g[i]);
+		}
 	}
 
 	// §11 S3.1a (D-SLM362): `site`/`token_index`/`trace_hook_state` are
@@ -996,7 +1289,21 @@ SslmForwardStatus MlpActSite(const int8_t* gate_code, CarriedScale gate_scale,
 	const int gate_e = static_cast<int>(gate_scale.e);
 
 	std::vector<int64_t> wide(n);
-	for (size_t i = 0; i < n; ++i) {
+	const bool use_table = RowTableTaken(n);
+	CountRowTableDecision(RowTableSite::kSilu, use_table);
+	if (use_table) {
+		// Plan S1: step 2's value at every code the funnel emits, with step 2's own arguments; a -128
+		// code (reachable only from a direct caller) is evaluated directly, never from the table.
+		int32_t sigmoid[255];
+		for (int c = -127; c <= 127; ++c)
+			sigmoid[c + 127] = SiluSigmoidQ15(sigmoid_lut_table, static_cast<int8_t>(c), gate_scale.m, gate_e);
+		for (size_t i = 0; i < n; ++i) {
+			const int8_t code = gate_code[i];
+			const int32_t sig = code == INT8_MIN ? SiluSigmoidQ15(sigmoid_lut_table, code, gate_scale.m, gate_e)
+			                                     : sigmoid[static_cast<int>(code) + 127];
+			wide[i] = static_cast<int64_t>(code) * static_cast<int64_t>(sig) * static_cast<int64_t>(up_code[i]);
+		}
+	} else for (size_t i = 0; i < n; ++i) {  // the v1.9.0 per-element loop, unchanged
 		// Step 2: C10's fixed-point LUT construction (silu_lut.h), never the
 		// i-exp-sigmoid construction F-S3-1 found the reference computing
 		// before S3.0's reconciliation. Substituting i-exp-sigmoid here
@@ -1073,6 +1380,10 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
 		branch_selected = d >= 0 ? (branch_magnitude << d) < stream_magnitude
 		                         : branch_magnitude < (stream_magnitude << -d);
 	}
+	// Plan S1: the table decision is per call (counted once), the table itself per candidate, since
+	// each candidate lands a different row at different constants.
+	const bool use_table = RowTableTaken(hidden_size);
+	CountRowTableDecision(RowTableSite::kLanding, use_table);
 	struct Candidate {
 		SslmForwardStatus status = SslmForwardStatus::Ok;
 		CarriedScale scale{};
@@ -1086,11 +1397,31 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
 		const int8_t* other_code = select_branch ? stream_code : branch_code;
 		const auto reciprocal = CarriedScaleNormalizedReciprocal(magnitude(candidate.scale.m));
 		candidate.wide.resize(hidden_size);
+		// Plan S1: (value, flag) per code in [-127, 127], with the loop's own arguments and null
+		// counters. The loop below keeps its per-element order, its first-flag return and its sign
+		// and overflow checks; the flag is read for each element present, never OR-ed over the table
+		// (a code absent from the row must not refuse it). -128 is landed directly.
+		int64_t landed_table[255];
+		bool exceeded_table[255];
+		if (use_table) {
+			for (int c = -127; c <= 127; ++c) {
+				bool exceeded = false;
+				landed_table[c + 127] = LandingRescale(c, other_scale.m, reciprocal.r, other_scale.e,
+				                                       candidate.scale.e, nullptr, &exceeded, nullptr, reciprocal.s);
+				exceeded_table[c + 127] = exceeded;
+			}
+		}
 		for (size_t i = 0; i < hidden_size; ++i) {
 			bool magnitude_exceeded = false;
-			int64_t landed = LandingRescale(static_cast<int64_t>(other_code[i]), other_scale.m,
-			                                reciprocal.r, other_scale.e, candidate.scale.e, nullptr,
-			                                &magnitude_exceeded, nullptr, reciprocal.s);
+			int64_t landed;
+			if (use_table && other_code[i] != INT8_MIN) {
+				landed = landed_table[static_cast<int>(other_code[i]) + 127];
+				magnitude_exceeded = exceeded_table[static_cast<int>(other_code[i]) + 127];
+			} else {
+				landed = LandingRescale(static_cast<int64_t>(other_code[i]), other_scale.m,
+				                        reciprocal.r, other_scale.e, candidate.scale.e, nullptr,
+				                        &magnitude_exceeded, nullptr, reciprocal.s);
+			}
 			if (magnitude_exceeded || (candidate.scale.m < 0 && landed == INT64_MIN)) {
 				candidate.status = SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain;
 				return candidate;
@@ -2165,10 +2496,9 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 				const int8_t* const k_rows_base =
 				    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
 				if (direct_qk) {
+					// Slice S5 (§4.5): one score-row call per query head, in place of the per-key loop.
 					const int64_t* ratio = lw.k_channel_ratio + kv_head * head_dim;
-					for (size_t row = 0; row < width; ++row)
-						scores[row] = QkQ31Score(q_rot.data() + h * head_dim,
-						                         k_rows_base + row * head_dim, ratio, head_dim);
+					QkQ31ScoreRow(q_rot.data() + h * head_dim, k_rows_base, ratio, head_dim, width, scores.data());
 				} else {
 					GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_rows_base, head_dim, width,
 					                      scores.data());
@@ -2647,10 +2977,10 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 					const int8_t* const k_rows_base =
 					    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
 					if (direct_qk) {
+						// Slice S5 (§4.5): one score-row call per query head, in place of the per-key loop.
 						const int64_t* ratio = lw.k_channel_ratio + kv_head * head_dim;
-						for (size_t row = 0; row < width; ++row)
-							scores[row] = QkQ31Score(q_rot.data() + h * head_dim,
-							                         k_rows_base + row * head_dim, ratio, head_dim);
+						QkQ31ScoreRow(q_rot.data() + h * head_dim, k_rows_base, ratio, head_dim, width,
+						              scores.data());
 					} else {
 						GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_rows_base, head_dim, width,
 						                      scores.data());

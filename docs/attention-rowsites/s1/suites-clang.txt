@@ -1,0 +1,42 @@
+== superslm_tests, Clang 18.1.3 Release, series head, with the p05_l1 artifact
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slice S1): 1757 checks, 0 failures
+superslm tests: 27288 checks, 0 failures
+
+== superslm_tests_sse2_forced, Clang 18.1.3 Release, series head, with the p05_l1 artifact
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slice S1): 1757 checks, 0 failures
+superslm tests: 27230 checks, 0 failures
+
+== superslm_tests_avx2_forced, Clang 18.1.3 Release, series head, with the p05_l1 artifact
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slice S1): 1757 checks, 0 failures
+superslm tests: 27246 checks, 0 failures
+
+== superslm_tests_avx512_forced, Clang 18.1.3 Release, series head, with the p05_l1 artifact
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slice S1): 1757 checks, 0 failures
+superslm tests: 27246 checks, 0 failures
+
+== digests, Clang 18.1.3 (auto, scalar/SSE2/AVX2/AVX-512 forced)
+sslm_axis_digest.txt: c_rowsites 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 GLOBAL 3a82909147af69b598fe2a41617a8b2a1d67cc612a206e9011d5062e22e7fc57
+sslm_axis_digest_avx2_forced.txt: c_rowsites 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 GLOBAL 3a82909147af69b598fe2a41617a8b2a1d67cc612a206e9011d5062e22e7fc57
+sslm_axis_digest_avx512_forced.txt: c_rowsites 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 GLOBAL 3a82909147af69b598fe2a41617a8b2a1d67cc612a206e9011d5062e22e7fc57
+sslm_axis_digest_scalar_forced.txt: c_rowsites 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 GLOBAL 3a82909147af69b598fe2a41617a8b2a1d67cc612a206e9011d5062e22e7fc57
+sslm_axis_digest_sse2_forced.txt: c_rowsites 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 GLOBAL 3a82909147af69b598fe2a41617a8b2a1d67cc612a206e9011d5062e22e7fc57

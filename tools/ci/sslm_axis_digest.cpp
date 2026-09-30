@@ -37,10 +37,15 @@
 // Build (see run_axes.sh / run_axes.ps1):
 //   <cxx> -std=c++20 -I<repo>/include <repo>/src/*.cpp sslm_axis_digest.cpp -o sslm_axis_digest
 
+#include "superslm/forward_sites.h"  // QkQ31ScoreRow (section 11, slice S5)
 #include "superslm/intmath.h"
 #include "superslm/matmul.h"
 #include "superslm/sha256.h"
 #include "superslm/silu_lut.h"
+// Attention and per-row sites plan, section 10's fixed input set (header-only, shared with the golden
+// generator and the suite; included by path so this tool keeps its one-line build recipe).
+#include "../../tests/support/attention_cases.h"
+#include "../../tests/support/rowsite_cases.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -675,6 +680,49 @@ void SectionMatmulTiled() {
 	}
 }
 
+// --- 10. The per-row sites: tables and element loops ------------------------------
+//
+// Attention and per-row sites plan (rev 3.1), §3.3 evidence 2, cell 6.2. RmsNormSite, MlpActSite and
+// ResidualReconcileSite over tests/support/rowsite_cases.h's fixed set, which sits on both sides of the
+// per-row table threshold (widths 1 to 4,864 around 512), carries -128 codes, uniform rows, a small
+// gate scale and landing-flag rows (slice S1's entries), then slice S3's requant rows through
+// RequantChainChecked (every width around the 4- and 8-lane SIMD bodies, +-d' in every lane position,
+// every s the funnel's preflight can produce, the P = 2^63 corner). Every call's status, output scale
+// and whole output row are digested. The forced-scalar leg runs the v1.9.0
+// per-element loops (tables off), so it is the reference axis this section is compared against; the
+// suite pins the same stream to a hash from the v1.9.0 tag. A new section, so sections 1-9 keep their
+// previous values exactly.
+void SectionRowsites() {
+	Section& sec = NewSection("c_rowsites");
+	auto emit = [&](int64_t v) { sec.sink.I64(v); };
+	superslm_rowsite_cases::RunRowTableCases(emit);
+	superslm_rowsite_cases::RunRequantRowCases(emit);
+}
+
+// --- 11. The attention kernels ------------------------------------------------------
+//
+// Attention and per-row sites plan (rev 3.1), §3.3 evidence 2, cell 6.2. GemmProbQ15Accumulate over
+// tests/support/attention_cases.h's fixed set (slice S2's entries: plan §8 4.S2's head_dim x width grid,
+// the int16 condition's corners, width 0 and 2.S2's hostile rows; slices S4-S6 append theirs). Every
+// call's width, head_dim and whole output row are digested. The forced-scalar and forced-SSE2 legs run
+// the v1.9.0 loop, so they are the reference axes; the suite pins the same stream to a hash from the
+// v1.9.0 tag. A new section, so sections 1-10 keep their previous values exactly.
+//
+// Slice S4 appends SoftmaxRowQ15 over the same header's S4 set (§8 4.S4's grid, inside corners and
+// correction rows, 2.S4's hostile rows; per call its width, bool and output row), as §3.3 evidence 2 has
+// c32_attention carry the S2, S4, S5 and S6 entries. The suite pins the S4 stream to its own hash.
+//
+// Slice S5 appends QkQ31ScoreRow over the same header's S5 set (§8 4.S5's head_dim x width grid in three
+// operand kinds, 7.S5b's margin corners, 7.S5c's rounding ties; per call its width, head_dim and scores). Every
+// ratio is in [1, 2^31] (§3.3). The suite pins the S5 stream to its own hash, from the v1.9.0 per-key loop.
+void SectionAttention() {
+	Section& sec = NewSection("c32_attention");
+	auto emit = [&](int64_t v) { sec.sink.I64(v); };
+	superslm_attention_cases::RunProbVCases(emit);
+	superslm_attention_cases::RunSoftmaxCases(emit);
+	superslm_attention_cases::RunQ31Cases(emit, superslm::QkQ31ScoreRow);
+}
+
 // --- driver ---------------------------------------------------------------------
 
 void PrintBuildIdentity() {
@@ -736,6 +784,8 @@ int main() {
 	SectionSiluLut();
 	SectionMatmul();
 	SectionMatmulTiled();
+	SectionRowsites();
+	SectionAttention();
 
 	Sha256 global;
 	int failures = 0;

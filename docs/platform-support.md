@@ -119,6 +119,135 @@ best of 3:** 0.31 s with the SHA extensions against 3.25 s for 1.9.0's
 portable hash. The portable path itself is also about 1.7x faster than in
 1.9.0 (1.95 s).
 
+### Attention prob·V on int16 multiply-add (unreleased)
+
+On the AVX2 and AVX-512 tiers, `GemmProbQ15Accumulate` (the attention
+probability row times the value rows, per head) multiplies pairs of keys
+with `vpmaddwd` into 32-bit lanes and widens each lane to 64 bits. The
+probability pairs are formed in registers. The fast path is taken only when
+the head dimension is a multiple of 16 and the row passes the int16
+condition: every p in [0, 32767], and sum at most 2^15. Under that condition
+no lane can exceed 128 x 2^15 = 2^22, so every output is the exact sum
+v1.9.0's loop computes. Every other row takes the v1.9.0 loop, as do the
+scalar and SSE2 tiers. On real prompts that fallback is the one-hot rows:
+every width-1 row, and rarely a wider one.
+
+| Build | Fast path | Status |
+|---|---|---|
+| GCC / Clang, AVX2 tier | on | Bit-identity: full suite forced AVX2, the prob·V golden pinned from 1.9.0, cross-tier digest, save-blob equality against 1.9.0 |
+| GCC / Clang, AVX-512 tier | on | Same evidence, forced AVX-512 and auto dispatch |
+| MSVC / clang-cl, AVX2 tier | on | Built by the forced Windows legs; not yet executed on Windows |
+| MSVC / clang-cl, AVX-512 tier | **off** (`SUPERSLM_SITES_AVX512_MSVC=0`) | Held on the 1.9.0 loop until an MSVC AVX-512 build has executed the fast path; the forced AVX-512 Windows legs build with it on |
+
+**Measured, engine level, same host as above (best of 50, 9 interleaved
+rounds):** at head dimension 64 one call is 17-21x faster than 1.9.0's
+loop at 128 to 1,024 keys on AVX-512, and 16-19x on AVX2. For example, at
+601 keys it takes 24.8 µs on 1.9.0, 1.18 µs on AVX-512 and 1.32 µs on AVX2.
+Scaled to Qwen2.5-0.5B depth (24 layers x 14 heads), the step saves about
+0.82 / 3.4 / 6.7 ms per prompt token at 128 / 512 / 1,024 tokens, and
+3.9 / 7.9 ms per decode token at context 300 / 600. A one-layer forward
+agrees at 512 tokens and in decode. These are engine figures on synthetic
+weights, not a consumer's end-to-end speed
+(`docs/attention-rowsites/s2/bench.md`).
+
+### Requantization in 64-bit lanes (unreleased)
+
+Every checked-chain funnel call (`RequantChainChecked`: the projections,
+norms, activation and residuals) ends by converting a row of 64-bit
+accumulators to int8 codes. On the AVX2 and AVX-512 tiers that conversion
+now runs in 4 or 8 unsigned 64-bit lanes (`RequantRowWide`). It computes
+the element code's exact identity: the product |x| x r splits into 32-bit
+halves, is rounded and shifted, then clamped at 127 and given back its sign.
+Every intermediate stays exact up to the funnel's largest input, so every
+code equals v1.9.0's per-element `RequantTokenCodeWide`. There is no
+runtime guard; the funnel's own preflight is the contract. The last
+n mod 4 (or 8) elements, and every element on the scalar and SSE2 tiers,
+run the v1.9.0 code.
+
+| Build | Lanes | Status |
+|---|---|---|
+| GCC / Clang, AVX2 tier | on | Bit-identity: full suite forced AVX2, the requant golden pinned from 1.9.0, cross-tier digest, save-blob equality against 1.9.0 |
+| GCC / Clang, AVX-512 tier | on | Same evidence, forced AVX-512 and auto dispatch |
+| MSVC / clang-cl, AVX2 tier | on | Built by the forced Windows legs; not yet executed on Windows |
+| MSVC / clang-cl, AVX-512 tier | **off** (`SUPERSLM_SITES_AVX512_MSVC=0`) | The same switch as prob·V above |
+
+**Measured, engine level, same host as above (best of 50, 9 interleaved
+rounds):** one funnel call at width 4,864 takes 31.5 µs on 1.9.0, 5.6 µs
+on AVX-512 and 6.7 µs on AVX2; at 896, 5.2, 1.0 and 1.2 µs. At
+Qwen2.5-0.5B depth (24 layers x 11 funnel calls, plus the embed) that saves
+about 2.7 ms per token on AVX-512 and 2.5 on AVX2, prefill and decode alike.
+These are engine figures on synthetic weights, not a consumer's end-to-end
+speed (`docs/attention-rowsites/s3/bench.md`).
+
+### Guarded softmax rows (unreleased)
+
+Attention's softmax row (`SoftmaxRowQ15`) turns a row of scores into Q15
+probabilities. On the AVX2 and AVX-512 tiers it first checks a row guard:
+width at most 2^14, q_ln2 >= 1, q_c >= 0, M = q_b^2 + q_c in [1, 2^47]
+(formed in 128 bits, as the 1.9.0 body forms it), q_ln2 <= 2 q_b + 1, and
+every score within 2^61. Inside the guard it computes the row 4 or 8
+elements at a time. Each element's quotient by q_ln2 and each
+probability's divide by the row total is an integer reciprocal estimate,
+corrected exactly by one integer comparison each way, so every probability
+and the returned bool equal v1.9.0's. Outside the guard the 1.9.0 body
+runs unchanged. The estimates are integer arithmetic, so the library
+stays floating-point-free.
+
+| Build | Fast path | Status |
+|---|---|---|
+| GCC / Clang, AVX2 tier | on | Bit-identity: full suite forced AVX2, the softmax golden pinned from 1.9.0, cross-tier digest, save-blob equality against 1.9.0 |
+| GCC / Clang, AVX-512 tier | on | Same evidence, forced AVX-512 and auto dispatch |
+| MSVC / clang-cl, AVX2 tier | on | Built by the forced Windows legs; not yet executed on Windows |
+| MSVC / clang-cl, AVX-512 tier | **off** (`SUPERSLM_SITES_AVX512_MSVC=0`) | The same switch as prob·V above |
+
+**Measured, engine level, same host as above (best of 30, 9 interleaved
+rounds):** a row of 512 keys takes 3.8 µs on 1.9.0, 1.06 µs on AVX2 and
+0.90 µs on AVX-512. At Qwen2.5-0.5B depth (24 layers x 14 heads) that saves
+about 0.10 / 0.46 / 0.91 ms per prompt token at 128 / 512 / 1,024 tokens
+on AVX2, and 0.53 ms per decode token at context 300. A one-key row is
+about 0.03 µs slower (the guard and two reciprocal divides per row).
+These are engine figures on synthetic weights, not a consumer's end-to-end
+speed (`docs/attention-rowsites/s4/bench.md`).
+
+### Q31 attention score rows (unreleased)
+
+QK-norm models (the Qwen3 path) score each key with a Q31 product,
+`RoundingDivideByPOT(sum_d q_d * k_d * ratio_d, 31)`. `QkQ31ScoreRow`
+computes every key's score for one query head in one call, and both layer
+loops (prefill and decode) call it. On the AVX2 and AVX-512 tiers it first
+checks a guard: head_dim at most 512 and every ratio in [0, 2^32). Inside the
+guard, each channel's w = q * ratio is split exactly into three pieces,
+w = a2 * 2^30 + a1 * 2^15 + a0, with a0 and a1 in [0, 32767] and a2 inside
+int16. Each piece's sum over the channels is a 16-bit multiply-add into
+int32 lanes. At head_dim 512 that sum stays inside int32 by 65,535, so the
+guard is load-bearing. The three sums recombine exactly in int64, and the
+rounding is vectorised with ties away from zero. Every score equals v1.9.0's
+per-key `QkQ31Score`. Outside the guard, the per-key loop runs unchanged. It
+is integer arithmetic only.
+
+| Build | Fast path | Status |
+|---|---|---|
+| GCC / Clang, AVX2 tier | on | Bit-identity: full suite forced AVX2, the Q31 golden and the QK-norm fixture pinned from 1.9.0, cross-tier digest, save-blob equality against 1.9.0 |
+| GCC / Clang, AVX-512 tier | on | Same evidence, forced AVX-512 and auto dispatch |
+| MSVC / clang-cl, AVX2 tier | on | Built by the forced Windows legs; not yet executed on Windows |
+| MSVC / clang-cl, AVX-512 tier | **off** (`SUPERSLM_SITES_AVX512_MSVC=0`) | The same switch as prob·V above |
+
+No real Qwen3 artifact has run the new kernel yet: a QK-norm artifact is
+still refused at map time on this host. The evidence is a QK-norm fixture
+that drives both layer loops, pinned to v1.9.0, plus a one-layer forward
+at Qwen3-0.6B width whose outputs match the base.
+
+**Measured, engine level, same host as above (best of 30, 9 interleaved
+rounds, head_dim 128):** one score costs about 410 ns per head and key on
+1.9.0's AVX2 path and 13.5 ns on the AVX2 row (330 and 12.8 ns on AVX-512).
+At Qwen3-0.6B depth (28 layers x 16 heads) that saves about 11 / 46 / 94 ms
+per prompt token at 128 / 512 / 1,024 tokens on AVX2, and 55 ms per decode
+token at context 300. A one-layer forward at the same width saves 0.42 /
+1.66 / 3.66 ms per layer and token. A one-key row on AVX-512 is about
+0.06 µs slower (it packs a whole 16-key block). These are engine figures
+on synthetic weights, not a consumer's end-to-end speed
+(`docs/attention-rowsites/s5/bench.md`).
+
 ### Damped-greedy decoding
 
 The 1.2 candidate's opt-in decoder was confirmed on Windows x64 through the

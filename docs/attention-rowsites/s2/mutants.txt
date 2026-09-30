@@ -1,0 +1,126 @@
+# S2 mutation evidence (plan §9; GCC 13.3 Release; this host has AVX-512BW, so the auto binary dispatches AVX-512), run at the final
+# implementation commit (the 32-dimension AVX-512 unit). Each mutant is applied to a synced copy of that commit by its script
+# (mutation-scripts/<name>.py, run from the repository root). superslm_tests (auto), superslm_tests_avx2_forced and
+# superslm_tests_avx512_forced are then rebuilt and run from the repository root with SUPERSLM_ATTN_ROWSITES_ARTIFACT set (p05_l1,
+# sha256 f0fd4886...6ed3). 'none' is the unmutated control. At most one failing line per run is shown (paths shortened). The run
+# predates the 4.S2 kernel-blocking rows (90 checks) added in the evidence commit, which is why it counts 2,306 attn-rowsites
+# checks rather than 2,396; those rows only add kills.
+#
+# Arithmetic mutants are applied to each tier's body separately (§9 preamble). Each AVX2-body mutant must die on the forced AVX2
+# binary, and it survives on the AVX-512 binaries, which never run that body. Each AVX-512-body mutant (the 32-dimension unit,
+# and separately the 16-dimension tail unit) must die on the forced AVX-512 binary and on auto, and it survives on forced AVX2.
+# Guard, dispatch and counter mutants sit in code both tiers share, so they die on all three binaries.
+# 'all_avx512_runs_avx2_body' can die only where the AVX-512 kernel is selected (auto here, and forced AVX-512).
+#
+# Summary (K = killed, s = survives by construction, see above; the number is the failure count):
+#   mutant                              auto(AVX-512)  forced AVX2  forced AVX-512  killing cell (plan §9)
+#   s2_hd16_dropped                     K abort        K 259        K abort         output (head_dim 4/8/12/60/100/132 rows; test_main head_dim 2 cells). AVX-512 writes past
+#                                                                                   a head_dim-12 buffer; glibc aborts ("malloc(): unaligned tcache chunk detected")
+#   s2_hd16_to_32                       K 22           K 22         K 22            counter: fast expected at head_dim 16 (4.S2)
+#   s2_pnonneg_dropped                  K 5            K 5          K 5             output and counter (2.S2 p = -32,769; alternating row)
+#   s2_pmax_32768                       K 32           K 32         K 32            output and counter (2.S2 / 4.S2 width-1 one-hot)
+#   s2_pmax_32766                       K 5            K 5          K 5             counter: fast expected (p = 32,767 rows, 4.S2)
+#   s2_sum_dropped                      K 5            K 5          K 5             output and counter (2.S2 W = 1,024, p = 32,767, v = 127)
+#   s2_sum_lt                           K 6            K 6          K 6             counter: fast expected (Sum p = 2^15 exactly, 4.S2)
+#   s2_sum_2p16 (output-equivalent)     K 2            K 2          K 2             counter: fallback expected (Sum p = 2^15 + 1, 4.S2)
+#   s2_pair_swapped_avx2                s              K 102        s               output (grid, 6.1) and 6.3
+#   s2_pair_swapped_avx512              K 81           s            K 81            output (grid, 6.1) and 6.3
+#   s2_pair_swapped_avx512_tail (extra) K 22           s            K 22            output (head_dim 16 rows, the only 16-dimension tail in that run)
+#   s2_odd_dropped_avx2                 s              K 47         s               output (odd widths, 4.S2)
+#   s2_odd_dropped_avx512               K 37           s            K 37            output (odd widths, 4.S2)
+#   s2_odd_dropped_avx512_tail (extra)  K 11           s            K 11            output (odd widths at head_dim 16, the tail unit)
+#   s2_half_misplaced_avx512 (extra)    K 82           s            K 82            output (every head_dim >= 32: the in-lane halves' store order)
+#   s2_always_fallback                  K 109          K 109        K 109           counter (4.S2 and 11.1(d): prefill +1,792 fallback, decode +448)
+#   all_fallback_increment_deleted      K 158          K 158        K 158           counter (11.1(a): every fallback row)
+#   all_fast_before_guard               K 158          K 158        K 158           counter (11.1(a): every fallback row)
+#   all_avx512_runs_avx2_body           K 109          s            K 109           counter (11.1(b): the AVX2 counter moves on an AVX-512 binary)
+#   s2_msvc_switch_ignored (extra)      K 1            K 1          K 1             11.2 truth table (the MSVC, switch 0, AVX-512 row)
+# 20 mutants: every one killed on every binary where it can execute; 0 survivors.
+#
+# Cell 11.3 vitality (linkage checker), the plan's plant: an AVX2-attributed ProbV function given external linkage in
+# src/matmul.cpp, auto library object. The checker goes red:
+  ProbQ15AccumulateInto: inlined into superslm::GemmProbQ15Accumulate in build/CMakeFiles/superslm.dir/src/matmul.cpp.o
+check_tiled_matmul_linkage: FAIL
+  build/CMakeFiles/superslm.dir/src/matmul.cpp.o: 'superslm::ProbVAccumulateIntoAvx2Planted(long const*, signed char const*, unsigned long, unsigned long, long*)' is not local (nm type 'T')
+
+# Raw per-run lines follow.
+
+== none on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2): 2306 checks, 0 failures|superslm tests: 27837 checks, 0 failures|
+== none on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2): 2306 checks, 0 failures|superslm tests: 27795 checks, 0 failures|
+== none on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2): 2306 checks, 0 failures|superslm tests: 27795 checks, 0 failures|
+== all_avx512_runs_avx2_body on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 109 failures|superslm tests: 27837 checks, 109 failures|
+FAIL tests/test_attn_rowsites.cpp:709: d.fast2 == want.fast2 && d.fb2 == want.fb2 && d.fast5 == want.fast5 && d.fb5 == want.fb5 -- 4.S2 grid, realistic row (head_dim 16, width 2, guard copy: fast): pv_fast_avx2 +1 pv_fal
+== all_avx512_runs_avx2_body on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2): 2306 checks, 0 failures|superslm tests: 27795 checks, 0 failures|
+== all_avx512_runs_avx2_body on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 109 failures|superslm tests: 27795 checks, 109 failures|
+== all_fallback_increment_deleted on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 158 failures|superslm tests: 27837 checks, 158 failures|
+FAIL tests/test_attn_rowsites.cpp:709: d.fast2 == want.fast2 && d.fb2 == want.fb2 && d.fast5 == want.fast5 && d.fb5 == want.fb5 -- 4.S2 grid, realistic row (head_dim 4, width 1, guard copy: fallback): pv_fast_avx2 +0 pv_
+== all_fallback_increment_deleted on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 158 failures|superslm tests: 27795 checks, 158 failures|
+== all_fallback_increment_deleted on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 158 failures|superslm tests: 27795 checks, 158 failures|
+== all_fast_before_guard on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 158 failures|superslm tests: 27837 checks, 158 failures|
+== all_fast_before_guard on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 158 failures|superslm tests: 27795 checks, 158 failures|
+FAIL tests/test_attn_rowsites.cpp:709: d.fast2 == want.fast2 && d.fb2 == want.fb2 && d.fast5 == want.fast5 && d.fb5 == want.fb5 -- 4.S2 grid, realistic row (head_dim 4, width 1, guard copy: fallback): pv_fast_avx2 +1 pv_
+== all_fast_before_guard on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 158 failures|superslm tests: 27795 checks, 158 failures|
+== s2_always_fallback on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 109 failures|superslm tests: 27837 checks, 109 failures|
+FAIL tests/test_attn_rowsites.cpp:709: d.fast2 == want.fast2 && d.fb2 == want.fb2 && d.fast5 == want.fast5 && d.fb5 == want.fb5 -- 4.S2 grid, realistic row (head_dim 16, width 2, guard copy: fast): pv_fast_avx2 +0 pv_fal
+== s2_always_fallback on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 109 failures|superslm tests: 27795 checks, 109 failures|
+== s2_always_fallback on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 109 failures|superslm tests: 27795 checks, 109 failures|
+== s2_half_misplaced_avx512 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 82 failures|superslm tests: 27837 checks, 82 failures|
+FAIL tests/test_attn_rowsites.cpp:742: bad == 0 -- 4.S2 grid, realistic row (head_dim 64, width 2): 64 of 64 outputs differ from the v1.9.0 loop, first at 0 (-2695168 vs 401408)
+== s2_half_misplaced_avx512 on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2): 2306 checks, 0 failures|superslm tests: 27795 checks, 0 failures|
+== s2_half_misplaced_avx512 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 82 failures|superslm tests: 27795 checks, 82 failures|
+== s2_hd16_dropped on superslm_tests: exit 134; 
+== s2_hd16_dropped on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 244 failures|superslm tests: 27795 checks, 259 failures|
+FAIL tests/test_main.cpp:11110: out_ctx[0] == 1700 — out_ctx[0] == 0, want 1700 (100*3 + 200*7)
+== s2_hd16_dropped on superslm_tests_avx512_forced: exit 134; 
+== s2_hd16_to_32 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 22 failures|superslm tests: 27837 checks, 22 failures|
+== s2_hd16_to_32 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 22 failures|superslm tests: 27795 checks, 22 failures|
+== s2_hd16_to_32 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 22 failures|superslm tests: 27795 checks, 22 failures|
+== s2_msvc_switch_ignored on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 1 failures|superslm tests: 27837 checks, 1 failures|
+FAIL tests/test_attn_rowsites.cpp:770: bad == 0 -- cell 11.2: 1 of 16 selector rows wrong
+== s2_msvc_switch_ignored on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 1 failures|superslm tests: 27795 checks, 1 failures|
+== s2_msvc_switch_ignored on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 1 failures|superslm tests: 27795 checks, 1 failures|
+== s2_odd_dropped_avx2 on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2): 2306 checks, 0 failures|superslm tests: 27837 checks, 0 failures|
+== s2_odd_dropped_avx2 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 47 failures|superslm tests: 27795 checks, 47 failures|
+FAIL tests/test_attn_rowsites.cpp:742: bad == 0 -- 4.S2 grid, realistic row (head_dim 16, width 3): 16 of 16 outputs differ from the v1.9.0 loop, first at 0 (-3367744 vs -2921746)
+== s2_odd_dropped_avx2 on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2): 2306 checks, 0 failures|superslm tests: 27795 checks, 0 failures|
+== s2_odd_dropped_avx512 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 37 failures|superslm tests: 27837 checks, 37 failures|
+FAIL tests/test_attn_rowsites.cpp:742: bad == 0 -- 4.S2 grid, realistic row (head_dim 64, width 3): 64 of 64 outputs differ from the v1.9.0 loop, first at 0 (317624 vs 2998616)
+== s2_odd_dropped_avx512 on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2): 2306 checks, 0 failures|superslm tests: 27795 checks, 0 failures|
+== s2_odd_dropped_avx512 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 37 failures|superslm tests: 27795 checks, 37 failures|
+== s2_odd_dropped_avx512_tail on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 11 failures|superslm tests: 27837 checks, 11 failures|
+== s2_odd_dropped_avx512_tail on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2): 2306 checks, 0 failures|superslm tests: 27795 checks, 0 failures|
+== s2_odd_dropped_avx512_tail on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 11 failures|superslm tests: 27795 checks, 11 failures|
+== s2_pair_swapped_avx2 on superslm_tests: exit 0; attn-rowsites cells (plan slices S1, S2): 2306 checks, 0 failures|superslm tests: 27837 checks, 0 failures|
+== s2_pair_swapped_avx2 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 102 failures|superslm tests: 27795 checks, 102 failures|
+FAIL tests/test_attn_rowsites.cpp:742: bad == 0 -- 4.S2 grid, realistic row (head_dim 16, width 2): 16 of 16 outputs differ from the v1.9.0 loop, first at 0 (-1443862 vs 428085)
+== s2_pair_swapped_avx2 on superslm_tests_avx512_forced: exit 0; attn-rowsites cells (plan slices S1, S2): 2306 checks, 0 failures|superslm tests: 27795 checks, 0 failures|
+== s2_pair_swapped_avx512 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 81 failures|superslm tests: 27837 checks, 81 failures|
+FAIL tests/test_attn_rowsites.cpp:742: bad == 0 -- 4.S2 grid, realistic row (head_dim 64, width 2): 63 of 64 outputs differ from the v1.9.0 loop, first at 0 (-237568 vs 401408)
+== s2_pair_swapped_avx512 on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2): 2306 checks, 0 failures|superslm tests: 27795 checks, 0 failures|
+== s2_pair_swapped_avx512 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 81 failures|superslm tests: 27795 checks, 81 failures|
+== s2_pair_swapped_avx512_tail on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 22 failures|superslm tests: 27837 checks, 22 failures|
+== s2_pair_swapped_avx512_tail on superslm_tests_avx2_forced: exit 0; attn-rowsites cells (plan slices S1, S2): 2306 checks, 0 failures|superslm tests: 27795 checks, 0 failures|
+== s2_pair_swapped_avx512_tail on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 22 failures|superslm tests: 27795 checks, 22 failures|
+== s2_pmax_32766 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 5 failures|superslm tests: 27837 checks, 5 failures|
+FAIL tests/test_attn_rowsites.cpp:709: d.fast2 == want.fast2 && d.fb2 == want.fb2 && d.fast5 == want.fast5 && d.fb5 == want.fb5 -- 4.S2 grid, peaked row (head_dim 256, width 3, guard copy: fast): pv_fast_avx2 +0 pv_fallb
+== s2_pmax_32766 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 5 failures|superslm tests: 27795 checks, 5 failures|
+== s2_pmax_32766 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 5 failures|superslm tests: 27795 checks, 5 failures|
+== s2_pmax_32768 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 32 failures|superslm tests: 27837 checks, 32 failures|
+FAIL tests/test_attn_rowsites.cpp:742: bad == 0 -- 4.S2 grid, realistic row (head_dim 16, width 1): 16 of 16 outputs differ from the v1.9.0 loop, first at 0 (-1867776 vs 1867776)
+== s2_pmax_32768 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 32 failures|superslm tests: 27795 checks, 32 failures|
+== s2_pmax_32768 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 32 failures|superslm tests: 27795 checks, 32 failures|
+== s2_pnonneg_dropped on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 5 failures|superslm tests: 27837 checks, 5 failures|
+FAIL tests/test_attn_rowsites.cpp:742: bad == 0 -- 2.S2 p = -32,769 at one key (head_dim 64, width 64): 64 of 64 outputs differ from the v1.9.0 loop, first at 0 (3683222 vs -3656810)
+== s2_pnonneg_dropped on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 5 failures|superslm tests: 27795 checks, 5 failures|
+== s2_pnonneg_dropped on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 5 failures|superslm tests: 27795 checks, 5 failures|
+== s2_sum_2p16 on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 2 failures|superslm tests: 27837 checks, 2 failures|
+FAIL tests/test_attn_rowsites.cpp:709: d.fast2 == want.fast2 && d.fb2 == want.fb2 && d.fast5 == want.fast5 && d.fb5 == want.fb5 -- 4.S2 corner p = 32,767 and 2 (Sum p = 2^15 + 1) (head_dim 16, width 2, guard copy: fallba
+== s2_sum_2p16 on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 2 failures|superslm tests: 27795 checks, 2 failures|
+== s2_sum_2p16 on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 2 failures|superslm tests: 27795 checks, 2 failures|
+== s2_sum_dropped on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 5 failures|superslm tests: 27837 checks, 5 failures|
+== s2_sum_dropped on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 5 failures|superslm tests: 27795 checks, 5 failures|
+== s2_sum_dropped on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 5 failures|superslm tests: 27795 checks, 5 failures|
+== s2_sum_lt on superslm_tests: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 6 failures|superslm tests: 27837 checks, 6 failures|
+FAIL tests/test_attn_rowsites.cpp:709: d.fast2 == want.fast2 && d.fb2 == want.fb2 && d.fast5 == want.fast5 && d.fb5 == want.fb5 -- 4.S2 grid, realistic row (head_dim 64, width 2, guard copy: fast): pv_fast_avx2 +0 pv_fal
+== s2_sum_lt on superslm_tests_avx2_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 6 failures|superslm tests: 27795 checks, 6 failures|
+== s2_sum_lt on superslm_tests_avx512_forced: exit 1; attn-rowsites cells (plan slices S1, S2): 2306 checks, 6 failures|superslm tests: 27795 checks, 6 failures|

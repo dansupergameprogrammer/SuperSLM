@@ -7,7 +7,26 @@ The design's own claim: the per-function-attributed AVX2/AVX-512 functions of sr
 are the ONLY functions in the whole project that may compile with AVX2/AVX-512 instructions
 enabled. Since the tiled-matmul plan's slice 1 they are `DotRowAvx2` and `DotRowAvx512`
 (the shipped per-row tiers) plus the tiled kernel's `TiledMicroAvx2`, `TiledMicroAvx512`,
-`TiledGemmAvx2` and `TiledGemmAvx512` (all in the anonymous namespace). The packer
+`TiledGemmAvx2` and `TiledGemmAvx512`, plus (the attention and per-row sites plan's slice S2) the
+prob·V bodies `ProbVBlockAvx2`, `ProbVBlockAvx512`, `ProbVTail16Avx512`, `ProbVAccumulateIntoAvx2` and
+`ProbVAccumulateIntoAvx512` (all in the anonymous namespace; their guard `ProbVFastPathAdmits` and
+the dispatching core `ProbQ15AccumulateInto` carry no target attribute), plus (that plan's slice S3)
+src/intmath.cpp's requant row bodies `RequantRowAvx2` and `RequantRowAvx512` (anonymous namespace; the
+exported leaf `RequantRowWide` that dispatches to them carries no target attribute), plus (slice S4) the
+softmax fast path's bodies `SoftmaxRowAvx2` and `SoftmaxRowAvx512` and the step helpers they inline,
+`SoftmaxExpAvx2`, `SoftmaxExpAvx512`, `SoftmaxProbAvx2` and `SoftmaxProbAvx512` (anonymous namespace; the
+guard `SoftmaxFastGuard`, the row set-up `MakeSoftmaxFastRow` and `SoftmaxProbReciprocal`, and the exported
+`SoftmaxRowQ15` that dispatches carry no target attribute), plus (slice S5) src/forward/forward_sites.cpp's
+Q31 score row bodies `QkQ31RowAvx2` and `QkQ31RowAvx512` and the rounding steps they inline, `Q31RoundAvx2`
+and `Q31RoundAvx512` (anonymous namespace; the key packers `Q31PackKeyBlock` and `Q31PackQuads4x16` are
+baseline SSE2, and the guard `Q31RowFastPathAdmits`, the limb set-up `MakeQ31RowLimbs` and the exported
+`QkQ31ScoreRow` that dispatches carry no target attribute; that file's per-key `QkQ31ScoreAvx2` and
+`QkQ31ScoreAvx512` predate these plans). Since slice S5 forward_sites.cpp calls `detail::ActiveGemmTier()`
+too; every direct recipe that compiles it already names matmul.cpp. intmath.cpp is
+compiled by the same CMake targets as matmul.cpp, and since slice S3 it calls `detail::ActiveGemmTier()`,
+so every direct compiler recipe that compiles it must name matmul.cpp too (the four recipes that did not
+gained it in that slice) and is therefore inside this checker's `matmul.cpp`-gated direct-invocation
+channel. The packer
 (`TiledPackPanel16`, `TiledTranspose8x8Epi16`) and the activation prep
 (`TiledWidenActivations`) are baseline SSE2 and carry no target attribute. All of them use
 GCC/Clang's per-function `__attribute__((target("avx2")))` /

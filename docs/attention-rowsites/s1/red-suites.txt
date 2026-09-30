@@ -1,0 +1,44 @@
+== superslm_tests (auto), GCC 13.3 Release, red commit, SUPERSLM_ATTN_ROWSITES_ARTIFACT=p05_l1 (sha256 f0fd4886...6ed3)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slice S1): 1756 checks, 258 failures
+superslm tests: 27287 checks, 258 failures
+failures by kind:
+    249 test_attn_rowsites.cpp:125
+      3 test_attn_rowsites.cpp:521
+      6 test_attn_rowsites.cpp:660
+failures outside test_attn_rowsites.cpp: 0
+
+== superslm_tests (sse2), GCC 13.3 Release, red commit, SUPERSLM_ATTN_ROWSITES_ARTIFACT=p05_l1 (sha256 f0fd4886...6ed3)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slice S1): 1756 checks, 258 failures
+superslm tests: 27229 checks, 258 failures
+failures by kind:
+    249 test_attn_rowsites.cpp:125
+      3 test_attn_rowsites.cpp:521
+      6 test_attn_rowsites.cpp:660
+failures outside test_attn_rowsites.cpp: 0
+
+== superslm_tests (avx2), GCC 13.3 Release, red commit, SUPERSLM_ATTN_ROWSITES_ARTIFACT=p05_l1 (sha256 f0fd4886...6ed3)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slice S1): 1756 checks, 258 failures
+superslm tests: 27245 checks, 258 failures
+failures by kind:
+    249 test_attn_rowsites.cpp:125
+      3 test_attn_rowsites.cpp:521
+      6 test_attn_rowsites.cpp:660
+failures outside test_attn_rowsites.cpp: 0
+
+== superslm_tests (avx512), GCC 13.3 Release, red commit, SUPERSLM_ATTN_ROWSITES_ARTIFACT=p05_l1 (sha256 f0fd4886...6ed3)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slice S1): 1756 checks, 258 failures
+superslm tests: 27245 checks, 258 failures
+failures by kind:
+    249 test_attn_rowsites.cpp:125
+      3 test_attn_rowsites.cpp:521
+      6 test_attn_rowsites.cpp:660
+failures outside test_attn_rowsites.cpp: 0
+

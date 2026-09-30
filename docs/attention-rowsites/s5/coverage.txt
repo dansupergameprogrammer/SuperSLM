@@ -1,0 +1,36 @@
+# S5 branch coverage (plan §3.4, cell 11.6). INDICATIVE ONLY, as S2-S4's: a floor is pinned only from the hosted branch-coverage
+# leg's own recorded measurement, and this series is delivered as patches, not pushed, so that leg has not run on it. These are
+# local replicas of the leg's commands (clang-18, llvm-cov/llvm-profdata 18, RelWithDebInfo, -fprofile-instr-generate
+# -fcoverage-mapping; the five binaries, merged, exported over src/*.cpp include/superslm/*.h), on this host (AVX-512BW),
+# SUPERSLM_ATTN_ROWSITES_ARTIFACT = p05_l1. All five binaries exit 0. Branches covered / total.
+#
+# S5 edits neither src/intmath.cpp nor src/matmul.cpp, and src/forward/forward_sites.cpp is outside the leg's export glob
+# (src/*.cpp does not reach src/forward/) and carries no floor (G27). So §3.4's per-slice step does not apply to S5 as the plan
+# words it (it names intmath.cpp and matmul.cpp), and the leg's numbers cannot move. Measured to confirm, and forward_sites.cpp
+# exported separately for the S5 lines:
+#
+# (1) All five profiles (the leg's union), this host:
+#   src/intmath.cpp 221/242 91.32%   src/matmul.cpp 286/312 91.67%   (S4's candidate numbers exactly)
+#   check_branch_coverage_floors.py: OK (19 files at or above their pinned floor).
+#   src/forward/forward_sites.cpp (separate export): 734/910 80.66%. S5's lines (614-840) and both call sites: no uncovered side.
+#
+# (2) Approximating the hosted runner, which has no AVX-512 (sse2-forced, avx2-forced and scalar-forced-digest profiles only):
+#   src/intmath.cpp 202/242 83.47%   src/matmul.cpp 203/286 70.98%   (S4's projection exactly: below the floors 87.93 / 72.22
+#   already before S5, from S2-S4, as recorded there)
+#   src/forward/forward_sites.cpp: 716/906 79.03%. The S5 sides lost are all AVX-512-only: QkQ31RowAvx512's block, quad, limb and
+#   half loops and its tail count (lines 774, 775, 778, 781, 783, 790, 792) and the dispatcher's kAvx2-or-kAvx512 choices (819,
+#   826).
+#   (check_branch_coverage_floors.py on this projection also reports "floor unrecorded for src/forward/forward_sites.cpp": that is
+#   this replica's separate export including the file, not the leg, whose glob never includes it.)
+#
+# Uncovered S5 branches, and the cell they produced (plan §3.4 step 1):
+#   The first replica (the implementation commit's suite) left two S5 sides untaken with all five profiles: line 654
+#   (MakeQ31RowLimbs, `d < head_dim ? q * ratio : 0`) and line 699 (Q31PackKeyBlock's scalar tail, `d < head_dim ? key : 0`).
+#   Both are the channel pads of a head_dim that is not a multiple of 4, and 4.S5's in-guard head_dims {4, 8, 60, 64, 128, 132,
+#   256, 512} are all multiples of 4. The evidence commit adds the "4.S5 channel tail" rows (head_dim 1, 2, 3, 5, 63, 66, 127,
+#   130, 509, 511 x widths 1, 9, 17 x the three grid kinds, all inside the guard, not in the golden set); with them, (1) above.
+#   The mutant x_pads_nonzero (mutants.txt) dies on those 90 rows and on no other cell.
+#   Without AVX-512 profiles: the nine AVX-512-only lines above; no reachable S5 branch is uncovered.
+#
+# No allowlist note is added: tools/ci/branch_coverage_allowlist.txt documents branches of the measured files, and S5 adds none
+# to them. The floors in tools/ci/branch_coverage_floors.json are NOT re-pinned.

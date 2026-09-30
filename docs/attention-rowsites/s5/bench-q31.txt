@@ -1,0 +1,146 @@
+# S5 q31 bench raw output: sslm_sites_bench q31 --repeat=30, one object linked against S5's libsuperslm.a (auto: AVX-512 here) and
+# libsuperslm_avx2_forced.a (AVX2), 9 alternating rounds. Each reading times v1.9.0's per-key loop and QkQ31ScoreRow in the same process.
+## round 1 bench_auto
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 326.26 / 396.84  w=8 329.38 / 47.16  w=64 326.32 / 14.82  w=128 328.45 / 13.57  w=512 329.94 / 12.91  w=1024 332.01 / 11.18
+q31 prefill T=128: per-key 8.0694, row 0.4737 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 38.0277, row 1.6011 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 75.2667, row 2.7625 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 44.7423, row 1.7957 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 84.2643, row 3.6024 ms/token at 28 layers x 16 heads
+## round 1 bench_avx2
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 392.68 / 229.72  w=8 315.99 / 45.30  w=64 372.82 / 18.88  w=128 344.19 / 15.22  w=512 397.03 / 21.06  w=1024 396.55 / 13.41
+q31 prefill T=128: per-key 11.0291, row 0.4767 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 44.4661, row 1.6565 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 80.5315, row 2.8755 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 46.0421, row 1.8647 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 98.5998, row 3.4431 ms/token at 28 layers x 16 heads
+## round 2 bench_auto
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 303.90 / 338.05  w=8 279.85 / 46.29  w=64 325.80 / 14.80  w=128 330.47 / 13.56  w=512 329.80 / 12.99  w=1024 334.45 / 12.98
+q31 prefill T=128: per-key 9.7077, row 0.4706 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 38.7635, row 1.6103 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 76.5913, row 3.1426 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 44.4528, row 1.7760 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 89.7932, row 3.7153 ms/token at 28 layers x 16 heads
+## round 2 bench_avx2
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 415.17 / 276.67  w=8 419.39 / 32.15  w=64 419.55 / 15.68  w=128 423.97 / 14.52  w=512 428.94 / 13.63  w=1024 431.62 / 13.69
+q31 prefill T=128: per-key 12.0750, row 0.4761 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 46.2645, row 1.6556 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 99.3200, row 3.0693 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 57.1269, row 1.8269 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 109.7217, row 3.7300 ms/token at 28 layers x 16 heads
+## round 3 bench_auto
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 326.46 / 390.27  w=8 332.02 / 46.46  w=64 330.68 / 22.10  w=128 335.58 / 13.51  w=512 320.73 / 12.42  w=1024 302.61 / 13.02
+q31 prefill T=128: per-key 9.5853, row 0.4735 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 38.0623, row 1.5492 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 72.4387, row 2.9982 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 42.8600, row 1.7319 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 88.4927, row 3.5091 ms/token at 28 layers x 16 heads
+## round 3 bench_avx2
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 391.15 / 264.60  w=8 407.35 / 32.43  w=64 418.48 / 15.51  w=128 420.42 / 14.36  w=512 430.20 / 24.00  w=1024 386.18 / 13.13
+q31 prefill T=128: per-key 11.4776, row 0.4582 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 47.4031, row 1.6637 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 96.7927, row 3.2401 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 56.9778, row 1.8735 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 103.5179, row 3.7128 ms/token at 28 layers x 16 heads
+## round 4 bench_auto
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 326.41 / 387.35  w=8 327.99 / 46.81  w=64 326.18 / 14.94  w=128 327.33 / 13.55  w=512 330.38 / 12.85  w=1024 295.59 / 12.82
+q31 prefill T=128: per-key 9.4723, row 0.4704 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 32.7738, row 1.5971 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 76.1368, row 2.6660 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 39.9142, row 1.7230 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 86.3541, row 3.5216 ms/token at 28 layers x 16 heads
+## round 4 bench_avx2
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 376.86 / 278.71  w=8 380.77 / 32.19  w=64 382.61 / 15.52  w=128 380.61 / 14.37  w=512 388.71 / 13.72  w=1024 397.05 / 13.45
+q31 prefill T=128: per-key 10.9857, row 0.4699 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 42.1664, row 1.6513 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 90.1787, row 3.0516 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 51.8100, row 1.8872 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 104.7925, row 3.7202 ms/token at 28 layers x 16 heads
+## round 5 bench_auto
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 323.25 / 383.75  w=8 329.84 / 46.82  w=64 331.96 / 14.78  w=128 332.84 / 13.85  w=512 334.48 / 15.75  w=1024 332.03 / 12.74
+q31 prefill T=128: per-key 9.4615, row 0.4697 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 37.4959, row 1.6251 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 76.6467, row 3.1189 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 44.5528, row 1.7789 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 87.2510, row 3.5389 ms/token at 28 layers x 16 heads
+## round 5 bench_avx2
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 420.61 / 279.40  w=8 422.42 / 32.19  w=64 419.39 / 15.51  w=128 495.77 / 21.36  w=512 426.34 / 13.59  w=1024 408.17 / 12.80
+q31 prefill T=128: per-key 11.3966, row 0.4727 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 48.3093, row 1.7128 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 98.9763, row 3.0506 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 57.0493, row 3.1978 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 116.0369, row 3.7201 ms/token at 28 layers x 16 heads
+## round 6 bench_auto
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 326.30 / 388.01  w=8 329.44 / 45.99  w=64 326.88 / 14.79  w=128 328.49 / 13.56  w=512 330.04 / 12.96  w=1024 292.73 / 12.41
+q31 prefill T=128: per-key 9.1493, row 0.4730 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 37.3557, row 1.5412 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 76.6483, row 3.1058 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 44.8730, row 1.7990 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 90.0001, row 3.5618 ms/token at 28 layers x 16 heads
+## round 6 bench_avx2
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 420.15 / 278.72  w=8 422.25 / 32.70  w=64 418.60 / 15.57  w=128 426.54 / 14.88  w=512 429.71 / 13.72  w=1024 429.79 / 13.58
+q31 prefill T=128: per-key 12.1585, row 0.4717 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 48.9211, row 1.6832 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 97.5835, row 3.3029 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 57.3826, row 1.8748 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 115.5109, row 3.7224 ms/token at 28 layers x 16 heads
+## round 7 bench_auto
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 326.08 / 386.64  w=8 323.82 / 46.68  w=64 330.66 / 14.81  w=128 332.03 / 17.45  w=512 323.78 / 12.98  w=1024 333.63 / 12.80
+q31 prefill T=128: per-key 9.4527, row 0.4720 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 38.5266, row 1.6566 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 73.8011, row 3.6634 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 44.5790, row 1.7698 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 89.4716, row 3.5272 ms/token at 28 layers x 16 heads
+## round 7 bench_avx2
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 415.03 / 276.49  w=8 421.14 / 32.02  w=64 419.70 / 15.60  w=128 421.82 / 14.28  w=512 431.13 / 13.74  w=1024 428.84 / 13.49
+q31 prefill T=128: per-key 12.1026, row 0.4717 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 49.2593, row 1.6684 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 102.7592, row 3.3261 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 57.5080, row 1.9001 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 117.5635, row 3.7869 ms/token at 28 layers x 16 heads
+## round 8 bench_auto
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 331.99 / 395.98  w=8 331.18 / 47.48  w=64 331.27 / 20.85  w=128 339.54 / 13.39  w=512 335.28 / 12.99  w=1024 334.08 / 12.79
+q31 prefill T=128: per-key 9.4923, row 0.4710 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 38.2692, row 1.6132 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 77.0920, row 3.0939 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 44.7173, row 1.7562 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 89.0059, row 3.5249 ms/token at 28 layers x 16 heads
+## round 8 bench_avx2
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 376.55 / 277.78  w=8 381.04 / 32.02  w=64 382.28 / 15.52  w=128 368.97 / 13.86  w=512 373.71 / 13.24  w=1024 365.65 / 13.48
+q31 prefill T=128: per-key 10.9391, row 0.4719 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 42.9701, row 1.6496 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 84.0872, row 3.2446 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 51.7042, row 1.8762 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 104.6316, row 4.7602 ms/token at 28 layers x 16 heads
+## round 9 bench_auto
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 374.03 / 416.75  w=8 337.20 / 47.90  w=64 332.03 / 14.75  w=128 332.14 / 13.49  w=512 333.41 / 12.98  w=1024 340.81 / 13.10
+q31 prefill T=128: per-key 9.6696, row 0.4730 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 38.8312, row 1.6042 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 75.5400, row 3.1299 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 45.4145, row 1.7779 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 90.6434, row 4.0415 ms/token at 28 layers x 16 heads
+## round 9 bench_avx2
+q31 head_dim 128, ratios in [2^29, 2^31]; row vs per-key mismatches: 0
+q31 best-of-30 ns per (head x key), per-key / row:  w=1 462.00 / 345.93  w=8 472.28 / 42.38  w=64 467.56 / 18.43  w=128 420.03 / 14.44  w=512 430.60 / 13.59  w=1024 429.48 / 13.45
+q31 prefill T=128: per-key 12.1006, row 0.4730 ms/token at 28 layers x 16 heads
+q31 prefill T=512: per-key 49.3608, row 1.6729 ms/token at 28 layers x 16 heads
+q31 prefill T=1024: per-key 98.5593, row 3.2299 ms/token at 28 layers x 16 heads
+q31 decode ctx=300: per-key 57.1847, row 1.8075 ms/token at 28 layers x 16 heads
+q31 decode ctx=600: per-key 111.9797, row 3.7682 ms/token at 28 layers x 16 heads

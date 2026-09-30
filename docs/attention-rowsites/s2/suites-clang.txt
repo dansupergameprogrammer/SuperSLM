@@ -1,0 +1,59 @@
+# S2 final implementation commit plus the evidence commit's 4.S2 kernel-blocking rows, Clang 18.1.3 Release, the four suite binaries and five digest legs, SUPERSLM_ATTN_ROWSITES_ARTIFACT = p05_l1.
+== superslm_tests (clang): exit 0
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM: this binary dispatches on the AVX-512 tier; tiled path expected at M >= 8; tiled-entry counter read
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+tiled GEMM cells (plan slice 1): 211 checks, 0 failures
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites S2: tier 3, kernel AVX-512 (switch 0, msvc 0), prob-V counters read
+attn-rowsites S2 golden hash: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed (30100 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slices S1, S2): 2396 checks, 0 failures
+superslm tests: 27927 checks, 0 failures
+== superslm_tests_sse2_forced (clang): exit 0
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM: this binary dispatches on the SSE2 tier; tiled path not taken on this tier (SKIPPED reach); tiled-entry counter read
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+tiled GEMM cells (plan slice 1): 195 checks, 0 failures
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites S2: tier 1, kernel v1.9.0 code (switch 0, msvc 0), prob-V counters read
+attn-rowsites S2 golden hash: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed (30100 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slices S1, S2): 2396 checks, 0 failures
+superslm tests: 27869 checks, 0 failures
+== superslm_tests_avx2_forced (clang): exit 0
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM: this binary dispatches on the AVX2 tier; tiled path expected at M >= 8; tiled-entry counter read
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+tiled GEMM cells (plan slice 1): 211 checks, 0 failures
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites S2: tier 2, kernel AVX2 (switch 0, msvc 0), prob-V counters read
+attn-rowsites S2 golden hash: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed (30100 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slices S1, S2): 2396 checks, 0 failures
+superslm tests: 27885 checks, 0 failures
+== superslm_tests_avx512_forced (clang): exit 0
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM: this binary dispatches on the AVX-512 tier; tiled path expected at M >= 8; tiled-entry counter read
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+tiled GEMM cells (plan slice 1): 211 checks, 0 failures
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites S2: tier 3, kernel AVX-512 (switch 0, msvc 0), prob-V counters read
+attn-rowsites S2 golden hash: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed (30100 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slices S1, S2): 2396 checks, 0 failures
+superslm tests: 27885 checks, 0 failures
+== sslm_axis_digest: exit 0 GLOBAL ec7016a0162c8f6061dd94deee7d839056069efe8be30ff9250a82bfa296c371
+c32_attention            b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed  values=30100
+== sslm_axis_digest_scalar_forced: exit 0 GLOBAL ec7016a0162c8f6061dd94deee7d839056069efe8be30ff9250a82bfa296c371
+c32_attention            b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed  values=30100
+== sslm_axis_digest_sse2_forced: exit 0 GLOBAL ec7016a0162c8f6061dd94deee7d839056069efe8be30ff9250a82bfa296c371
+c32_attention            b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed  values=30100
+== sslm_axis_digest_avx2_forced: exit 0 GLOBAL ec7016a0162c8f6061dd94deee7d839056069efe8be30ff9250a82bfa296c371
+c32_attention            b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed  values=30100
+== sslm_axis_digest_avx512_forced: exit 0 GLOBAL ec7016a0162c8f6061dd94deee7d839056069efe8be30ff9250a82bfa296c371
+c32_attention            b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed  values=30100

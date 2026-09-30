@@ -1,0 +1,36 @@
+# Plan §3.4 / cell 11.5, GCC 13.3 on the cloud host: the four hand-written MSVC recipes of G21 after S3 (s3/link_recipes.sh in
+# the progress file). Box step B0 runs the same recipes once with MSVC.
+== without src/matmul.cpp
+build_cert.bat:
+  FAILED  cert_intmath: undefined reference to `superslm::detail::ActiveGemmTier();undefined reference to `superslm::detail::DispatchSitesKernel(superslm::detail::GemmTier);
+tools/build_inspect.bat line 1:
+  FAILED  sslm_inspect: undefined reference to `superslm::detail::ActiveGemmTier();undefined reference to `superslm::detail::DispatchSitesKernel(superslm::detail::GemmTier);
+tools/build_inspect.bat line 2:
+  FAILED  tok_verify: undefined reference to `superslm::detail::ActiveGemmTier();undefined reference to `superslm::detail::DispatchSitesKernel(superslm::detail::GemmTier);
+tests/t2296-fp-free-open-red-suite/build_link_red.bat (five cells; each cell includes <windows.h>, so the cell
+  files themselves do not compile on Linux. What S3 changes is the engine half of the cl line, so each cell's
+  engine source set is linked as a closed set: g++ -shared -fPIC -Wl,--no-undefined, which fails on any
+  symbol the set references and does not define. The cells' own references into it (Clz64, AntiLm*) are
+  unchanged by S3 and were satisfied by intmath.cpp (+ damped_greedy_antilm.cpp) before it):
+  FAILED  dim4_shape_red.engine.so: undefined reference to `superslm::detail::ActiveGemmTier();undefined reference to `superslm::detail::DispatchSitesKernel(superslm::detail::GemmTier);
+  FAILED  dim6_determinism_red.engine.so: undefined reference to `superslm::detail::ActiveGemmTier();undefined reference to `superslm::detail::DispatchSitesKernel(superslm::detail::GemmTier);
+  FAILED  dim7_contract_red.engine.so: undefined reference to `superslm::detail::ActiveGemmTier();undefined reference to `superslm::detail::DispatchSitesKernel(superslm::detail::GemmTier);
+  FAILED  dim11_guard_red.engine.so: undefined reference to `superslm::detail::ActiveGemmTier();undefined reference to `superslm::detail::DispatchSitesKernel(superslm::detail::GemmTier);
+  FAILED  dim7_capacity_red.engine.so: undefined reference to `superslm::detail::ActiveGemmTier();undefined reference to `superslm::detail::DispatchSitesKernel(superslm::detail::GemmTier);
+== with src/matmul.cpp
+build_cert.bat:
+  LINKED  cert_intmath
+tools/build_inspect.bat line 1:
+  LINKED  sslm_inspect
+tools/build_inspect.bat line 2:
+  LINKED  tok_verify
+tests/t2296-fp-free-open-red-suite/build_link_red.bat (five cells; each cell includes <windows.h>, so the cell
+  files themselves do not compile on Linux. What S3 changes is the engine half of the cl line, so each cell's
+  engine source set is linked as a closed set: g++ -shared -fPIC -Wl,--no-undefined, which fails on any
+  symbol the set references and does not define. The cells' own references into it (Clz64, AntiLm*) are
+  unchanged by S3 and were satisfied by intmath.cpp (+ damped_greedy_antilm.cpp) before it):
+  LINKED  dim4_shape_red.engine.so
+  LINKED  dim6_determinism_red.engine.so
+  LINKED  dim7_contract_red.engine.so
+  LINKED  dim11_guard_red.engine.so
+  LINKED  dim7_capacity_red.engine.so

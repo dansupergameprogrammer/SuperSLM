@@ -20,10 +20,37 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 #include <vector>
 
 #include "superslm/checked_chain_funnel.h"  // kSoftmaxRowMaxSafeExponent (D-SLM409, plan Sec14.1)
+#include "superslm/matmul.h"  // detail::ActiveGemmTier / DispatchSitesKernel (RequantRowWide's tier dispatch)
+
+// Attention and per-row sites plan (rev 3.1), slice S3: this file's first target-attributed functions,
+// RequantRowAvx2 and RequantRowAvx512 below. Per function, never translation-unit-wide (§3.2; the
+// isolation checker's prose and the linkage checker's population name them), exactly as src/matmul.cpp
+// does: GCC and Clang need the target enabled per function for an AVX2/AVX-512 intrinsic to compile, and
+// a TU-wide flag would let the auto-vectorizer use those instructions anywhere in this file. MSVC gates
+// no intrinsic by /arch; clang-cl does, and needs the attribute. The AVX-512 target is F and BW only (C9).
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+#include <emmintrin.h>
+#include <immintrin.h>
+#endif
+
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+// The test-only dispatch-instrument seam (src/matmul.cpp's convention): the requant row's per-tier path
+// counters (attention and per-row sites plan, §3.6). Never defined for the production library.
+#include "support/matmul_dispatch_instrument.h"
+#endif
+
+#if defined(__clang__) || (defined(__GNUC__) && !defined(_MSC_VER))
+#define SUPERSLM_INTMATH_AVX2_TARGET __attribute__((target("avx2")))
+#define SUPERSLM_INTMATH_AVX512_TARGET __attribute__((target("avx512f,avx512bw")))
+#else
+#define SUPERSLM_INTMATH_AVX2_TARGET
+#define SUPERSLM_INTMATH_AVX512_TARGET
+#endif
 
 namespace superslm {
 namespace {
@@ -520,6 +547,130 @@ int8_t RequantTokenCodeWide(int64_t x_i, int64_t r, int s) {
 	return static_cast<int8_t>(x_i < 0 ? -q : q);
 }
 
+// ---- Attention and per-row sites plan, slice S3: the requant row leaf (§4.3, §5.3) ---------------------
+//
+// The identity (§5.3). With 0 <= |x| <= 2^31, 1 <= r <= 2^32, e = 62 - s in [32, 63] and
+// P = |x|·r = H·2^32 + L (H = P >> 32, L = P mod 2^32):
+//   floor((254·P + 2^e) / 2^(e+1)) = floor((127·P + 2^(e-1)) / 2^e)
+//                                  = (127·H + ((127·L + 2^(e-1)) >> 32)) >> (e - 32),
+// because 127·P + 2^(e-1) = 127·H·2^32 + X with X = 127·L + 2^(e-1), and nested floor division by
+// positive integers (2^32, then 2^(e-32)) equals the single floor. The clamp at 127 and the sign restore
+// are RequantTokenCodeWide's. Every intermediate fits an unsigned 64-bit lane: P <= 2^63 (exactly 2^63 at
+// the contract's corner |x| = d' = 2^31, r = 2^32, which is why the lane is unsigned and H is taken with
+// a logical shift), 127·H <= 127·2^31 < 2^38, 127·L + 2^(e-1) < 2^39 + 2^62. P is formed from the 32-bit
+// halves of r (r itself can be 2^32): |x|·r_lo + ((|x|·r_hi) << 32), each a 32x32 -> 64 product.
+// Operand dispositions: |x| <= d' <= 2^31 is guarded by the funnel's preflight (C29), r and s are
+// canonical from that d' (NormalizeScale, DynamicScaleReciprocal); the funnel is the only caller (the
+// forward-leaf check), so the leaf needs no runtime guard and has no fallback.
+
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+namespace {
+
+// AVX2 body: four elements per step, as many whole steps as the row holds; returns how many elements it
+// wrote (the caller runs the rest through RequantTokenCodeWide). Counts its own entry (§3.6), so a
+// dispatch that reached the wrong tier's body moves the wrong counter.
+//
+// |x|, the clamp and the sign restore are done in 32-bit lanes (vpabsd, vpminud, vpsignd) rather than as
+// 64-bit selects: Clang lowers a 64-bit select (vpblendvb on a vpcmpgtq mask, or its and/andnot/xor
+// spellings) to vblendvpd and vxorpd, FP-domain instructions the fp-free scan rejects. Each is exact here:
+// |x| <= 2^31, so the low dword of vpabsd is |x| read as unsigned (x = -2^31 gives 0x80000000), and
+// vpmuludq reads only low dwords; the magnitude's low dword is the whole magnitude unless its high dword
+// is nonzero, which is folded into bit 7 before the unsigned 32-bit minimum; and x's high dword is 0 for
+// x >= 0 and all-ones for x < 0, so OR-ing 1 into it gives the +-1 that vpsignd applies.
+SUPERSLM_INTMATH_AVX2_TARGET size_t RequantRowAvx2(const int64_t* x, size_t n, int64_t r, int s, int8_t* out) {
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+	superslm_test::g_requant_row_avx2.fetch_add(1, std::memory_order_relaxed);
+#endif
+	const int e = 62 - s;  // in [32, 63]
+	const __m256i r_lo = _mm256_set1_epi64x(static_cast<int64_t>(static_cast<uint64_t>(r) & 0xFFFFFFFFu));
+	const __m256i r_hi = _mm256_set1_epi64x(static_cast<int64_t>(static_cast<uint64_t>(r) >> 32));
+	const __m256i round = _mm256_set1_epi64x(static_cast<int64_t>(uint64_t{1} << (e - 1)));
+	const __m256i low32 = _mm256_set1_epi64x(INT64_C(0xFFFFFFFF));
+	const __m256i c127 = _mm256_set1_epi64x(127);  // low dword 127, high dword 0
+	const __m256i c128 = _mm256_set1_epi32(128);
+	const __m256i one = _mm256_set1_epi32(1);
+	const __m256i zero = _mm256_setzero_si256();
+	const __m128i shift = _mm_cvtsi32_si128(e - 32);
+	// Byte 0 and byte 8 of each 128-bit half (each 64-bit lane's low byte) to bytes 0 and 1 of that half. Bytes
+	// 2-15 are never read (the unpack below takes word 0 of each half); the upper half fills them with 1, not
+	// -1, only so the two halves differ: identical halves let Clang load the constant with vbroadcasti128,
+	// which the fp-free scan does not admit.
+	const __m256i pick = _mm256_setr_epi8(0, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+	                                      0, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
+	size_t i = 0;
+	for (; i + 4 <= n; i += 4) {
+		const __m256i xv = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(x + i));
+		const __m256i ax = _mm256_abs_epi32(xv);  // low dword: |x| <= 2^31, unsigned
+		const __m256i p = _mm256_add_epi64(_mm256_mul_epu32(ax, r_lo), _mm256_slli_epi64(_mm256_mul_epu32(ax, r_hi), 32));
+		const __m256i h = _mm256_srli_epi64(p, 32);  // logical: P can be 2^63
+		const __m256i l = _mm256_and_si256(p, low32);
+		const __m256i carry = _mm256_srli_epi64(_mm256_add_epi64(_mm256_mul_epu32(l, c127), round), 32);
+		const __m256i mag = _mm256_srl_epi64(_mm256_add_epi64(_mm256_mul_epu32(h, c127), carry), shift);  // < 2^39
+		// The clamp at 127: a magnitude with a nonzero high dword is >= 2^32, so it sets bit 7 of the low dword;
+		// then the unsigned 32-bit minimum with 127 (the high dword becomes min(high, 0) = 0).
+		const __m256i big = _mm256_andnot_si256(_mm256_cmpeq_epi32(_mm256_shuffle_epi32(mag, 0xF5), zero), c128);
+		const __m256i clamped = _mm256_min_epu32(_mm256_or_si256(mag, big), c127);
+		// The sign: +1 or -1 from x's high dword.
+		const __m256i q = _mm256_sign_epi32(clamped, _mm256_or_si256(_mm256_shuffle_epi32(xv, 0xF5), one));
+		const __m256i b = _mm256_shuffle_epi8(q, pick);
+		const __m128i four = _mm_unpacklo_epi16(_mm256_castsi256_si128(b), _mm256_extracti128_si256(b, 1));
+		const int32_t packed = _mm_cvtsi128_si32(four);
+		std::memcpy(out + i, &packed, 4);
+	}
+	return i;
+}
+
+// AVX-512BW body, the same construction in eight lanes, F and BW instructions only (C9): |x| by vpabsq,
+// the sign by vpsraq, the clamp by vpminuq, the narrowing by vpmovqb, and no mask register anywhere.
+SUPERSLM_INTMATH_AVX512_TARGET size_t RequantRowAvx512(const int64_t* x, size_t n, int64_t r, int s, int8_t* out) {
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+	superslm_test::g_requant_row_avx512.fetch_add(1, std::memory_order_relaxed);
+#endif
+	const int e = 62 - s;  // in [32, 63]
+	const __m512i r_lo = _mm512_set1_epi64(static_cast<int64_t>(static_cast<uint64_t>(r) & 0xFFFFFFFFu));
+	const __m512i r_hi = _mm512_set1_epi64(static_cast<int64_t>(static_cast<uint64_t>(r) >> 32));
+	const __m512i round = _mm512_set1_epi64(static_cast<int64_t>(uint64_t{1} << (e - 1)));
+	const __m512i low32 = _mm512_set1_epi64(INT64_C(0xFFFFFFFF));
+	const __m512i c127 = _mm512_set1_epi64(127);
+	const __m128i shift = _mm_cvtsi32_si128(e - 32);
+	size_t i = 0;
+	for (; i + 8 <= n; i += 8) {
+		const __m512i xv = _mm512_loadu_si512(x + i);
+		const __m512i neg = _mm512_srai_epi64(xv, 63);  // all-ones where x < 0
+		const __m512i ax = _mm512_abs_epi64(xv);        // |x| <= 2^31
+		const __m512i p = _mm512_add_epi64(_mm512_mul_epu32(ax, r_lo), _mm512_slli_epi64(_mm512_mul_epu32(ax, r_hi), 32));
+		const __m512i h = _mm512_srli_epi64(p, 32);  // logical: P can be 2^63
+		const __m512i l = _mm512_and_si512(p, low32);
+		const __m512i carry = _mm512_srli_epi64(_mm512_add_epi64(_mm512_mul_epu32(l, c127), round), 32);
+		const __m512i mag = _mm512_min_epu64(_mm512_srl_epi64(_mm512_add_epi64(_mm512_mul_epu32(h, c127), carry), shift), c127);
+		const __m512i q = _mm512_sub_epi64(_mm512_xor_si512(mag, neg), neg);
+		_mm_storel_epi64(reinterpret_cast<__m128i*>(out + i), _mm512_cvtepi64_epi8(q));
+	}
+	return i;
+}
+
+}  // namespace
+#endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
+
+void RequantRowWide(const int64_t* x, size_t n, int64_t r, int s, int8_t* out) {
+	size_t i = 0;
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+	// The selector (§3.2, cell 11.2): the lanes on AVX2 and AVX-512; v1.9.0's element loop on the scalar and
+	// SSE2 tiers and on an MSVC build's AVX-512 tier with SUPERSLM_SITES_AVX512_MSVC off.
+	switch (detail::DispatchSitesKernel(detail::ActiveGemmTier())) {
+		case detail::SitesKernel::kAvx2:
+			i = RequantRowAvx2(x, n, r, s, out);
+			break;
+		case detail::SitesKernel::kAvx512:
+			i = RequantRowAvx512(x, n, r, s, out);
+			break;
+		case detail::SitesKernel::kShipped:
+			break;
+	}
+#endif
+	for (; i < n; ++i) out[i] = RequantTokenCodeWide(x[i], r, s);  // the tail, or the whole row
+}
+
 // --- §6.3 nonlinear scalar primitives (i-sqrt C4/C5/C6, i-exp C7/C8/C9) --------
 
 namespace {
@@ -824,6 +975,271 @@ RopePair RopeApplyPair(int32_t x, int32_t y, int32_t cos_q30, int32_t sin_q30) {
 
 // --- §6.2/§5.2 C32 softmax row (arm A) ----------------------------------------
 
+// Attention and per-row sites plan (rev 3.1), slice S4 (§4.4, §5.4): the guarded fast path. Inside the row guard
+// the fast path returns the shipped body's `true` and writes the same probabilities, integer for integer; outside
+// it the shipped body below runs unchanged.
+//
+// The guard, checked once per row in dependency order (each step makes the next one's arithmetic defined):
+//   1. width in [1, 2^14] (width >= 1 is the caller's early return);
+//   2. q_ln2 >= 1;
+//   3. q_c >= 0;
+//   4. M = q_b^2 + q_c, formed in 128 bits exactly as the shipped body forms it, in [1, 2^47]
+//      (kSoftmaxRowMaxSafeExponent);
+//   5. q_ln2 <= 2 q_b + 1 (safe to form: step 4 bounds |q_b| < 2^23.5);
+//   6. every score within +-2^61.
+// Implied (§5.4): q_b in [0, 2^23.5], q_c in [0, 2^47], q_ln2 in [1, 2^24.5 + 1]. So after the max shift every
+// element's IExpConstruct is kOk with |base| <= q_b, its value is in [0, M], and the row is `true`.
+//
+// The arithmetic is §5.4's estimate-then-correct, with INTEGER estimates: the library is floating-point-free (the
+// fp-free scan gates it), and §5.4's own argument needs only an estimate within one of the floor, because the
+// exact integer corrections decide. Per element, a = min(max - s, 30 q_ln2) (the clip), in [0, 30 q_ln2]:
+//   z: estimate (a * inv_z) >> kz, inv_z = floor(2^kz / q_ln2) <= 2^31, kz = 30 + bit_width(q_ln2); a * inv_z <
+//      2^61. A floored reciprocal never overestimates, and the error is below a / 2^kz < 1, so the estimate is the
+//      floor or one below it: the upward correction (r >= q_ln2) is live, the downward one (r < 0) cannot fire and
+//      is kept as defensive code (§5.4 step 3). r = a - z q_ln2 is then q_p's negation; base = q_b - r;
+//      e = (base^2 + q_c) >> z, base^2 < 2^47 from a signed 32x32 multiply.
+//   p: estimate (e * R) >> 47, R = round(2^62 / denom), denom = Sum e in [M, 2^14 M] (the max element's e is M).
+//      e * R <= 2^62 + 2^46 < 2^63, and |error| <= e / 2^48 <= 1/2, so the estimate is the floor or one either
+//      side: both corrections are live (§5.4 step 4). Every product is below 2^63: p * denom <= e 2^15 + denom <=
+//      2^62 + 2^61 (the width guard is what bounds denom).
+// Each pass reads element k before writing element k, so scores == out_probs stays correct (cell 4.S4, aliased).
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+namespace {
+
+constexpr size_t kSoftmaxFastMaxWidth = size_t{1} << 14;
+constexpr int64_t kSoftmaxFastScoreLimit = int64_t{1} << 61;
+
+// The row guard (steps 1-6 above) for a row of width >= 1; on success, the row's maximum.
+bool SoftmaxFastGuard(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b, int64_t q_c, int64_t* row_max) {
+	if (width > kSoftmaxFastMaxWidth) return false;
+	if (q_ln2 < 1) return false;
+	if (q_c < 0) return false;
+	const S128 m128 = SAdd(SMul(q_b, q_b), SFromI64(q_c));
+	if (!SGe(m128, SFromI64(1)) || !SGe(SFromI64(kSoftmaxRowMaxSafeExponent), m128)) return false;
+	if (q_ln2 > 2 * q_b + 1) return false;
+	int64_t peak = scores[0];
+	for (size_t k = 0; k < width; ++k) {
+		const int64_t v = scores[k];
+		if (v > kSoftmaxFastScoreLimit || v < -kSoftmaxFastScoreLimit) return false;
+		if (v > peak) peak = v;
+	}
+	*row_max = peak;
+	return true;
+}
+
+// The row constants both bodies broadcast.
+struct SoftmaxFastRow {
+	int64_t peak, q_ln2, q_b, q_c;
+	uint64_t inv_z;  // floor(2^kz / q_ln2), <= 2^31
+	int kz;          // 30 + bit_width(q_ln2)
+};
+
+SoftmaxFastRow MakeSoftmaxFastRow(int64_t peak, int64_t q_ln2, int64_t q_b, int64_t q_c) {
+	const int kz = 30 + static_cast<int>(std::bit_width(static_cast<uint64_t>(q_ln2)));
+	return SoftmaxFastRow{peak, q_ln2, q_b, q_c, (uint64_t{1} << kz) / static_cast<uint64_t>(q_ln2), kz};
+}
+
+// R = round(2^62 / denom), denom >= 1.
+uint64_t SoftmaxProbReciprocal(int64_t denom) {
+	const uint64_t d = static_cast<uint64_t>(denom);
+	return ((uint64_t{1} << 62) + (d >> 1)) / d;
+}
+
+// AVX2: four elements per step. Masks are 64-bit compares (vpcmpgtq) folded in by add, sub and and, never by a
+// select; the clip is an unsigned 32-bit minimum with the high dword folded into bit 31 (Clang lowers 64-bit
+// selects to vblendvpd, which the fp-free scan rejects; see RequantRowAvx2).
+struct SoftmaxAvx2Consts {
+	__m256i peak, clip, inv_z, q_ln2, q_ln2_m1, q_b, q_c, bit31;
+	__m128i kz;
+};
+
+SUPERSLM_INTMATH_AVX2_TARGET inline __m256i SoftmaxExpAvx2(__m256i s, const SoftmaxAvx2Consts& c) {
+	const __m256i zero = _mm256_setzero_si256();
+	const __m256i a_raw = _mm256_sub_epi64(c.peak, s);  // in [0, 2^62]
+	const __m256i big = _mm256_andnot_si256(_mm256_cmpeq_epi32(_mm256_shuffle_epi32(a_raw, 0xF5), zero), c.bit31);
+	const __m256i a = _mm256_min_epu32(_mm256_or_si256(a_raw, big), c.clip);  // min(a, 30 q_ln2); high dword 0
+	__m256i z = _mm256_srl_epi64(_mm256_mul_epu32(a, c.inv_z), c.kz);          // floor or floor - 1
+	__m256i r = _mm256_sub_epi64(a, _mm256_mul_epu32(z, c.q_ln2));             // in [0, 2 q_ln2)
+	const __m256i up = _mm256_cmpgt_epi64(r, c.q_ln2_m1);                       // r >= q_ln2: z was one low
+	z = _mm256_sub_epi64(z, up);
+	r = _mm256_sub_epi64(r, _mm256_and_si256(up, c.q_ln2));
+	const __m256i down = _mm256_cmpgt_epi64(zero, r);  // defensive: cannot fire (floored reciprocal)
+	z = _mm256_add_epi64(z, down);
+	r = _mm256_add_epi64(r, _mm256_and_si256(down, c.q_ln2));
+	const __m256i base = _mm256_sub_epi64(c.q_b, r);  // |base| <= q_b < 2^24
+	const __m256i v = _mm256_add_epi64(_mm256_mul_epi32(base, base), c.q_c);
+	return _mm256_srlv_epi64(v, z);
+}
+
+struct SoftmaxProbAvx2Consts {
+	__m256i r_lo, r_hi, d_lo, d_hi, d, one;
+};
+
+SUPERSLM_INTMATH_AVX2_TARGET inline __m256i SoftmaxProbAvx2(__m256i e, const SoftmaxProbAvx2Consts& c) {
+	const __m256i num = _mm256_slli_epi64(e, 15);
+	const __m256i cross = _mm256_add_epi64(_mm256_mul_epu32(e, c.r_hi), _mm256_mul_epu32(_mm256_srli_epi64(e, 32), c.r_lo));
+	const __m256i er = _mm256_add_epi64(_mm256_mul_epu32(e, c.r_lo), _mm256_slli_epi64(cross, 32));  // e R < 2^63
+	__m256i p = _mm256_srli_epi64(er, 47);
+	__m256i prod = _mm256_add_epi64(_mm256_mul_epu32(p, c.d_lo), _mm256_slli_epi64(_mm256_mul_epu32(p, c.d_hi), 32));
+	const __m256i down = _mm256_cmpgt_epi64(prod, num);  // estimate one high
+	p = _mm256_add_epi64(p, down);
+	prod = _mm256_sub_epi64(prod, _mm256_and_si256(down, c.d));
+	const __m256i no_up = _mm256_cmpgt_epi64(_mm256_add_epi64(prod, c.d), num);  // -1 unless the estimate was one low
+	return _mm256_add_epi64(p, _mm256_add_epi64(no_up, c.one));
+}
+
+SUPERSLM_INTMATH_AVX2_TARGET void SoftmaxRowAvx2(const int64_t* scores, size_t width, const SoftmaxFastRow& row,
+                                                  int64_t* out) {
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+	superslm_test::g_softmax_fast_avx2.fetch_add(1, std::memory_order_relaxed);
+#endif
+	const SoftmaxAvx2Consts c{_mm256_set1_epi64x(row.peak),
+	                          _mm256_set1_epi64x(30 * row.q_ln2),
+	                          _mm256_set1_epi64x(static_cast<int64_t>(row.inv_z)),
+	                          _mm256_set1_epi64x(row.q_ln2),
+	                          _mm256_set1_epi64x(row.q_ln2 - 1),
+	                          _mm256_set1_epi64x(row.q_b),
+	                          _mm256_set1_epi64x(row.q_c),
+	                          _mm256_set1_epi32(INT32_MIN),
+	                          _mm_cvtsi32_si128(row.kz)};
+	// Pass 2: e per element, written over out_probs, and the total.
+	__m256i acc = _mm256_setzero_si256();
+	size_t k = 0;
+	for (; k + 4 <= width; k += 4) {
+		const __m256i e = SoftmaxExpAvx2(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(scores + k)), c);
+		_mm256_storeu_si256(reinterpret_cast<__m256i*>(out + k), e);
+		acc = _mm256_add_epi64(acc, e);
+	}
+	alignas(32) int64_t lanes[4];
+	_mm256_store_si256(reinterpret_cast<__m256i*>(lanes), acc);
+	int64_t total = lanes[0] + lanes[1] + lanes[2] + lanes[3];
+	const size_t rest = width - k;
+	if (rest > 0) {  // the last 1-3 elements through the same lanes, padded with the maximum (read, never kept)
+		alignas(32) int64_t buf[4] = {row.peak, row.peak, row.peak, row.peak};
+		std::memcpy(buf, scores + k, rest * sizeof(int64_t));
+		_mm256_store_si256(reinterpret_cast<__m256i*>(buf),
+		                   SoftmaxExpAvx2(_mm256_load_si256(reinterpret_cast<const __m256i*>(buf)), c));
+		for (size_t i = 0; i < rest; ++i) {
+			out[k + i] = buf[i];
+			total += buf[i];
+		}
+	}
+	// Pass 3: p = floor(e 2^15 / total) in place. total >= M >= 1.
+	const uint64_t r = SoftmaxProbReciprocal(total);
+	const uint64_t d = static_cast<uint64_t>(total);
+	const SoftmaxProbAvx2Consts pc{_mm256_set1_epi64x(static_cast<int64_t>(r & 0xFFFFFFFFu)),
+	                               _mm256_set1_epi64x(static_cast<int64_t>(r >> 32)),
+	                               _mm256_set1_epi64x(static_cast<int64_t>(d & 0xFFFFFFFFu)),
+	                               _mm256_set1_epi64x(static_cast<int64_t>(d >> 32)),
+	                               _mm256_set1_epi64x(total),
+	                               _mm256_set1_epi64x(1)};
+	for (k = 0; k + 4 <= width; k += 4) {
+		const __m256i e = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(out + k));
+		_mm256_storeu_si256(reinterpret_cast<__m256i*>(out + k), SoftmaxProbAvx2(e, pc));
+	}
+	if (rest > 0) {  // padded with e = 0 (read, never kept)
+		alignas(32) int64_t buf[4] = {0, 0, 0, 0};
+		std::memcpy(buf, out + k, rest * sizeof(int64_t));
+		_mm256_store_si256(reinterpret_cast<__m256i*>(buf),
+		                   SoftmaxProbAvx2(_mm256_load_si256(reinterpret_cast<const __m256i*>(buf)), pc));
+		for (size_t i = 0; i < rest; ++i) out[k + i] = buf[i];
+	}
+}
+
+// AVX-512BW: eight elements per step, F and BW instructions only (C9), no mask register: the clip is vpminuq,
+// and every decision is a sign mask from vpsraq by 63 of an exact difference.
+struct SoftmaxAvx512Consts {
+	__m512i peak, clip, inv_z, q_ln2, q_ln2_m1, q_b, q_c;
+	__m128i kz;
+};
+
+SUPERSLM_INTMATH_AVX512_TARGET inline __m512i SoftmaxExpAvx512(__m512i s, const SoftmaxAvx512Consts& c) {
+	const __m512i a = _mm512_min_epu64(_mm512_sub_epi64(c.peak, s), c.clip);  // min(a, 30 q_ln2)
+	__m512i z = _mm512_srl_epi64(_mm512_mul_epu32(a, c.inv_z), c.kz);          // floor or floor - 1
+	__m512i r = _mm512_sub_epi64(a, _mm512_mul_epu32(z, c.q_ln2));             // in [0, 2 q_ln2)
+	const __m512i up = _mm512_srai_epi64(_mm512_sub_epi64(c.q_ln2_m1, r), 63);  // r >= q_ln2: z was one low
+	z = _mm512_sub_epi64(z, up);
+	r = _mm512_sub_epi64(r, _mm512_and_si512(up, c.q_ln2));
+	const __m512i down = _mm512_srai_epi64(r, 63);  // defensive: cannot fire (floored reciprocal)
+	z = _mm512_add_epi64(z, down);
+	r = _mm512_add_epi64(r, _mm512_and_si512(down, c.q_ln2));
+	const __m512i base = _mm512_sub_epi64(c.q_b, r);  // |base| <= q_b < 2^24
+	const __m512i v = _mm512_add_epi64(_mm512_mul_epi32(base, base), c.q_c);
+	return _mm512_srlv_epi64(v, z);
+}
+
+struct SoftmaxProbAvx512Consts {
+	__m512i r_lo, r_hi, d_lo, d_hi, d, one;
+};
+
+SUPERSLM_INTMATH_AVX512_TARGET inline __m512i SoftmaxProbAvx512(__m512i e, const SoftmaxProbAvx512Consts& c) {
+	const __m512i num = _mm512_slli_epi64(e, 15);
+	const __m512i cross =
+	    _mm512_add_epi64(_mm512_mul_epu32(e, c.r_hi), _mm512_mul_epu32(_mm512_srli_epi64(e, 32), c.r_lo));
+	const __m512i er = _mm512_add_epi64(_mm512_mul_epu32(e, c.r_lo), _mm512_slli_epi64(cross, 32));  // e R < 2^63
+	__m512i p = _mm512_srli_epi64(er, 47);
+	__m512i prod = _mm512_add_epi64(_mm512_mul_epu32(p, c.d_lo), _mm512_slli_epi64(_mm512_mul_epu32(p, c.d_hi), 32));
+	const __m512i down = _mm512_srai_epi64(_mm512_sub_epi64(num, prod), 63);  // estimate one high
+	p = _mm512_add_epi64(p, down);
+	prod = _mm512_sub_epi64(prod, _mm512_and_si512(down, c.d));
+	const __m512i no_up = _mm512_srai_epi64(_mm512_sub_epi64(num, _mm512_add_epi64(prod, c.d)), 63);
+	return _mm512_add_epi64(p, _mm512_add_epi64(no_up, c.one));
+}
+
+SUPERSLM_INTMATH_AVX512_TARGET void SoftmaxRowAvx512(const int64_t* scores, size_t width, const SoftmaxFastRow& row,
+                                                      int64_t* out) {
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+	superslm_test::g_softmax_fast_avx512.fetch_add(1, std::memory_order_relaxed);
+#endif
+	const SoftmaxAvx512Consts c{_mm512_set1_epi64(row.peak),
+	                            _mm512_set1_epi64(30 * row.q_ln2),
+	                            _mm512_set1_epi64(static_cast<int64_t>(row.inv_z)),
+	                            _mm512_set1_epi64(row.q_ln2),
+	                            _mm512_set1_epi64(row.q_ln2 - 1),
+	                            _mm512_set1_epi64(row.q_b),
+	                            _mm512_set1_epi64(row.q_c),
+	                            _mm_cvtsi32_si128(row.kz)};
+	__m512i acc = _mm512_setzero_si512();
+	size_t k = 0;
+	for (; k + 8 <= width; k += 8) {
+		const __m512i e = SoftmaxExpAvx512(_mm512_loadu_si512(scores + k), c);
+		_mm512_storeu_si512(out + k, e);
+		acc = _mm512_add_epi64(acc, e);
+	}
+	alignas(64) int64_t lanes[8];
+	_mm512_store_si512(lanes, acc);
+	int64_t total = 0;
+	for (int i = 0; i < 8; ++i) total += lanes[i];
+	const size_t rest = width - k;
+	if (rest > 0) {  // the last 1-7 elements through the same lanes, padded with the maximum (read, never kept)
+		alignas(64) int64_t buf[8] = {row.peak, row.peak, row.peak, row.peak, row.peak, row.peak, row.peak, row.peak};
+		std::memcpy(buf, scores + k, rest * sizeof(int64_t));
+		_mm512_store_si512(buf, SoftmaxExpAvx512(_mm512_load_si512(buf), c));
+		for (size_t i = 0; i < rest; ++i) {
+			out[k + i] = buf[i];
+			total += buf[i];
+		}
+	}
+	const uint64_t r = SoftmaxProbReciprocal(total);
+	const uint64_t d = static_cast<uint64_t>(total);
+	const SoftmaxProbAvx512Consts pc{_mm512_set1_epi64(static_cast<int64_t>(r & 0xFFFFFFFFu)),
+	                                 _mm512_set1_epi64(static_cast<int64_t>(r >> 32)),
+	                                 _mm512_set1_epi64(static_cast<int64_t>(d & 0xFFFFFFFFu)),
+	                                 _mm512_set1_epi64(static_cast<int64_t>(d >> 32)),
+	                                 _mm512_set1_epi64(total),
+	                                 _mm512_set1_epi64(1)};
+	for (k = 0; k + 8 <= width; k += 8) _mm512_storeu_si512(out + k, SoftmaxProbAvx512(_mm512_loadu_si512(out + k), pc));
+	if (rest > 0) {  // padded with e = 0 (read, never kept)
+		alignas(64) int64_t buf[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+		std::memcpy(buf, out + k, rest * sizeof(int64_t));
+		_mm512_store_si512(buf, SoftmaxProbAvx512(_mm512_load_si512(buf), pc));
+		for (size_t i = 0; i < rest; ++i) out[k + i] = buf[i];
+	}
+}
+
+}  // namespace
+#endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
+
 bool SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b, int64_t q_c,
                     int64_t* out_probs) {
 	// D-SLM497: `width == 0` is guarded here, before `scores` or `out_probs`
@@ -838,6 +1254,31 @@ bool SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q
 	if (width == 0) {
 		return true;
 	}
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+	// Slice S4 (above): the selector (§3.2, cell 11.2) picks the new kernels on AVX2 and AVX-512 only (v1.9.0 code
+	// on the scalar and SSE2 tiers and on an MSVC build's AVX-512 tier with SUPERSLM_SITES_AVX512_MSVC off). Inside
+	// the row guard the tier's body writes the row and the row is true; outside it the shipped body below runs,
+	// and the tier's fallback counter moves (§3.6). The fast counter moves inside each body.
+	{
+		const detail::SitesKernel kernel = detail::DispatchSitesKernel(detail::ActiveGemmTier());
+		if (kernel != detail::SitesKernel::kShipped) {
+			int64_t peak = 0;
+			if (SoftmaxFastGuard(scores, width, q_ln2, q_b, q_c, &peak)) {
+				const SoftmaxFastRow row = MakeSoftmaxFastRow(peak, q_ln2, q_b, q_c);
+				if (kernel == detail::SitesKernel::kAvx2)
+					SoftmaxRowAvx2(scores, width, row, out_probs);
+				else
+					SoftmaxRowAvx512(scores, width, row, out_probs);
+				return true;
+			}
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+			(kernel == detail::SitesKernel::kAvx2 ? superslm_test::g_softmax_fallback_avx2
+			                                      : superslm_test::g_softmax_fallback_avx512)
+			    .fetch_add(1, std::memory_order_relaxed);
+#endif
+		}
+	}
+#endif
 	// C32 (§5.2, §11 S3.3 §6.2 step 5): ShiftByMax -> per-element
 	// IExpConstruct/IExpEvaluate -> sum -> Q15 divide. The caller gates this
 	// kernel with CheckSoftmaxRowWidthDomain(q_b, q_c, width) before calling

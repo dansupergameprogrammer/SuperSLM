@@ -1,0 +1,23 @@
+# S4 cell 11.3 vitality: the linkage checker over all six objects (auto and both forced builds' matmul.cpp.o and intmath.cpp.o).
+# A first plant (SoftmaxRowAvx2 moved out of the anonymous namespace) stays local: its parameter type SoftmaxFastRow is
+# in the anonymous namespace, so the function has internal linkage anyway, and the checker correctly reports OK. The plant
+# below is an external target-attributed function in the population (SoftmaxExpAvx2Planted).
+## plant
+build/CMakeFiles/superslm.dir/src/matmul.cpp.o: 7 population symbols, record x1
+build/CMakeFiles/superslm_avx2_forced.dir/src/matmul.cpp.o: 3 population symbols, record x1
+build/CMakeFiles/superslm_avx512_forced.dir/src/matmul.cpp.o: 5 population symbols, record x1
+build/CMakeFiles/superslm.dir/src/intmath.cpp.o: 5 population symbols, record x0
+build/CMakeFiles/superslm_avx2_forced.dir/src/intmath.cpp.o: 4 population symbols, record x0
+build/CMakeFiles/superslm_avx512_forced.dir/src/intmath.cpp.o: 4 population symbols, record x0
+check_tiled_matmul_linkage: FAIL
+  build/CMakeFiles/superslm.dir/src/intmath.cpp.o: 'superslm::SoftmaxExpAvx2Planted(long long __vector(4))' is not local (nm type 'T')
+exit 1
+## restored (the implementation commit)
+build/CMakeFiles/superslm.dir/src/matmul.cpp.o: 7 population symbols, record x1
+build/CMakeFiles/superslm_avx2_forced.dir/src/matmul.cpp.o: 3 population symbols, record x1
+build/CMakeFiles/superslm_avx512_forced.dir/src/matmul.cpp.o: 5 population symbols, record x1
+build/CMakeFiles/superslm.dir/src/intmath.cpp.o: 4 population symbols, record x0
+build/CMakeFiles/superslm_avx2_forced.dir/src/intmath.cpp.o: 4 population symbols, record x0
+build/CMakeFiles/superslm_avx512_forced.dir/src/intmath.cpp.o: 4 population symbols, record x0
+check_tiled_matmul_linkage: OK
+exit 0

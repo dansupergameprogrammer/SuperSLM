@@ -1,0 +1,17 @@
+# S5 golden pin provenance (plan §3.3 evidence 3, cell 6.3)
+# tools/gen_attn_rowsite_golden.cpp (one hash per slice) compiled with GCC 13.3 -O2 against the v1.9.0 tag (d870d27) include/
+# and its Release libsuperslm.a (the recipe in the generator's header):
+S1 row-table golden: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 over 634120 values
+S2 prob-V golden: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed over 30100 values
+S3 requant-row golden: 3e3abed7c746191e8745c89ad38019076eff290aa7f4ffb57fb51c4527fdb3b9 over 3567018 values
+S4 softmax golden: 2e47ea3c27774db43d9c952972325a5c19d901ba6871f0bd124c8c874f6a55d9 over 268078 values
+S5 Q31-row golden: daea9a39c4df72b9431140446ee511cb9f60101646d83fbc2ae22d4b3d4faaa5 over 33618 values
+S5 QK-norm fixture golden: 336b8d417d078cdf91c0cd714e557df752e952eeb29b79ac594348e3be085779 over 14384 values (status 0)
+# Re-running the v1.9.0 build with the header path as argument wrote tests/attn_rowsite_golden_pin.h; S1's to S4's hashes and
+# value counts are unchanged, and S5's two are added beside them:
+#  - the Q31-row hash: tests/support/attention_cases.h's RunQ31Cases (258 calls; per call its width, head_dim and scores),
+#    driven through the v1.9.0 per-key QkQ31Score, since v1.9.0 has no row entry; the suite and the digest drive the same
+#    set through QkQ31ScoreRow. Every ratio in the set is in [1, 2^31] (§3.3).
+#  - the fixture hash: tests/support/qk_attention_fixture.h (cell 11.1(c)) through the v1.9.0 decode loop, 24 positions;
+#    per position the layer's 256 output codes and its scale (m, e), then the 8,192 K/V workspace bytes.
+# The CMake target of the same name, built against this tree, prints the same six hashes (consistency, not provenance).

@@ -1266,6 +1266,16 @@ int64_t QkQ31ScoreForTier(const int8_t* q, const int8_t* k, const int64_t* ratio
                            size_t head_dim, QkQ31ScoreTier tier);
 int64_t QkQ31Score(const int8_t* q, const int8_t* k, const int64_t* ratio_q31, size_t head_dim);
 
+// Attention and per-row sites plan (rev 3.1), slice S5 (§4.5, §5.5): every key's Q31 score for one query
+// head, the internal entry both layer loops call in place of their per-key QkQ31Score loops. `keys` holds
+// `width` rows of `head_dim` int8 codes, row j at keys + j * head_dim (one KV head's K store, or any run of
+// it); out[j] receives QkQ31Score(q, keys + j * head_dim, ratio_q31, head_dim) for every j in [0, width).
+// On the AVX2 and AVX-512 tiers, with head_dim <= 512 and every ratio in [0, 2^32), the row runs the §5.5
+// limb kernel (w = q * ratio split into three 16-bit pieces, int16 multiply-add over blocked, packed keys);
+// otherwise it loops over QkQ31Score exactly as the loops did. Not exported (C5).
+void QkQ31ScoreRow(const int8_t* q, const int8_t* keys, const int64_t* ratio_q31, size_t head_dim, size_t width,
+                   int64_t* out);
+
 // --- S3.6: the head and the greedy decode loop (SuperSLM_S3a_WalkingSkeleton_
 // Plan.md §11 S3.6; §9.1; master plan §6.4; C16). This is
 // the "host-facing entry point" LayerWeights' own header comment above names

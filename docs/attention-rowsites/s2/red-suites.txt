@@ -1,0 +1,58 @@
+# S2 red cells (commit 1 of the S2 series), GCC 13.3.0 Release on this host (AVX-512BW; the auto binary dispatches AVX-512),
+# SUPERSLM_ATTN_ROWSITES_ARTIFACT = p05_l1 (sha256 f0fd4886...6ed3). Every failure is a path-counter assertion (the prob-V counters are
+# declared and never incremented) or the 11.2 selector (the red stub selects v1.9.0 code on every tier). Every value assertion
+# passes on the base: the S2 grid, corners and hostile rows equal the v1.9.0 loop, and the S2 golden equals the v1.9.0 tag's pin.
+== superslm_tests
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites S2: tier 3, kernel AVX-512 (switch 0, msvc 0), prob-V counters read
+attn-rowsites S2 golden hash: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed (30100 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slices S1, S2): 2306 checks, 269 failures
+superslm tests: 27837 checks, 269 failures
+    266 test_attn_rowsites.cpp:709
+      1 test_attn_rowsites.cpp:770
+      2 test_attn_rowsites.cpp:774
+cell 11.2: 7 of 16 selector rows wrong
+cell 11.2 wiring: DispatchSitesKernel(tier 2) = v1.9.0 code, want AVX2 (switch 0, msvc 0)
+cell 11.2 wiring: DispatchSitesKernel(tier 3) = v1.9.0 code, want AVX-512 (switch 0, msvc 0)
+4.S2 grid, realistic row (head_dim 4, width 1, guard copy: fallback): pv_fast_avx2 +0 pv_fallback_avx2 +0 pv_fast_avx512 +0 pv_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)
+== superslm_tests_sse2_forced
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites S2: tier 1, kernel v1.9.0 code (switch 0, msvc 0), prob-V counters read
+attn-rowsites S2 golden hash: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed (30100 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slices S1, S2): 2306 checks, 3 failures
+superslm tests: 27779 checks, 3 failures
+      1 test_attn_rowsites.cpp:770
+      2 test_attn_rowsites.cpp:774
+cell 11.2: 7 of 16 selector rows wrong
+cell 11.2 wiring: DispatchSitesKernel(tier 2) = v1.9.0 code, want AVX2 (switch 0, msvc 0)
+cell 11.2 wiring: DispatchSitesKernel(tier 3) = v1.9.0 code, want AVX-512 (switch 0, msvc 0)
+== superslm_tests_avx2_forced
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites S2: tier 2, kernel AVX2 (switch 0, msvc 0), prob-V counters read
+attn-rowsites S2 golden hash: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed (30100 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slices S1, S2): 2306 checks, 269 failures
+superslm tests: 27795 checks, 269 failures
+    265 test_attn_rowsites.cpp:709
+      1 test_attn_rowsites.cpp:770
+      2 test_attn_rowsites.cpp:774
+cell 11.2: 7 of 16 selector rows wrong
+cell 11.2 wiring: DispatchSitesKernel(tier 2) = v1.9.0 code, want AVX2 (switch 0, msvc 0)
+cell 11.2 wiring: DispatchSitesKernel(tier 3) = v1.9.0 code, want AVX-512 (switch 0, msvc 0)
+4.S2 grid, realistic row (head_dim 4, width 1, guard copy: fallback): pv_fast_avx2 +0 pv_fallback_avx2 +0 pv_fast_avx512 +0 pv_fallback_avx512 +0; want +0/+1/+0/+0 (kernel: AVX2)
+== superslm_tests_avx512_forced
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites S2: tier 3, kernel AVX-512 (switch 0, msvc 0), prob-V counters read
+attn-rowsites S2 golden hash: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed (30100 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slices S1, S2): 2306 checks, 269 failures
+superslm tests: 27795 checks, 269 failures
+    266 test_attn_rowsites.cpp:709
+      1 test_attn_rowsites.cpp:770
+      2 test_attn_rowsites.cpp:774
+cell 11.2: 7 of 16 selector rows wrong
+cell 11.2 wiring: DispatchSitesKernel(tier 2) = v1.9.0 code, want AVX2 (switch 0, msvc 0)
+cell 11.2 wiring: DispatchSitesKernel(tier 3) = v1.9.0 code, want AVX-512 (switch 0, msvc 0)
+4.S2 grid, realistic row (head_dim 4, width 1, guard copy: fallback): pv_fast_avx2 +0 pv_fallback_avx2 +0 pv_fast_avx512 +0 pv_fallback_avx512 +0; want +0/+0/+0/+1 (kernel: AVX-512)

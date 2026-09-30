@@ -1,0 +1,12 @@
+# S4 golden pin provenance (plan §3.3 evidence 3, cell 6.3)
+# tools/gen_attn_rowsite_golden.cpp (one hash per slice) compiled with GCC 13.3 -O2 against the v1.9.0 tag (d870d27) include/
+# and its Release libsuperslm.a (the recipe in the generator's header):
+S1 row-table golden: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 over 634120 values
+S2 prob-V golden: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed over 30100 values
+S3 requant-row golden: 3e3abed7c746191e8745c89ad38019076eff290aa7f4ffb57fb51c4527fdb3b9 over 3567018 values
+S4 softmax golden: 2e47ea3c27774db43d9c952972325a5c19d901ba6871f0bd124c8c874f6a55d9 over 268078 values
+# Re-running the v1.9.0 build with the header path as argument wrote tests/attn_rowsite_golden_pin.h; S1's, S2's and S3's
+# hashes and value counts are unchanged, and S4's constants are added beside them. The S4 set drives SoftmaxRowQ15 (a v1.9.0
+# signature) over tests/support/attention_cases.h's RunSoftmaxCases: 3,123 calls (per call its width, bool and output row).
+# The set's rows are chosen by the header's own test-side guard copy and estimate replica (integer-only), so building the
+# set needs nothing from the library under test; the generator's build against v1.9.0 is the proof.

@@ -36,6 +36,11 @@
 // sets max_layer_budget to the artifact's own layer count (a reduced-layer artifact has fewer than 28).
 // --repeat=R times each arm of --speedup R times and reports the best (the host is shared; best of R is
 // the noise-robust figure).
+//
+// Blob-protocol options (attention and per-row sites plan, §3.3's end-to-end blobs): with --dump-blob,
+// --chunk-budget=B prefills in calls of at most B tokens (default: the whole prompt in one call), and
+// --decode=D then runs D greedy sslm_decode_step calls before the blob is saved; the decoded token ids
+// are printed. Both arms of a base-vs-candidate comparison run this same source.
 
 #include <algorithm>
 #include <chrono>
@@ -98,7 +103,8 @@ int32_t g_num_hidden_layers = 28;
 std::vector<uint8_t> PrefillAndSave(const std::vector<uint8_t>& bytes, const int32_t* tokens,
                                      int32_t count, const std::vector<int32_t>& splits,
                                      int32_t chunk_budget_per_call, sslm_span_kind kind,
-                                     const char* schema_name, double* out_elapsed_ms) {
+                                     const char* schema_name, double* out_elapsed_ms,
+                                     int32_t decode_steps = 0, std::vector<int32_t>* out_decoded = nullptr) {
 	sslm_model model = nullptr;
 	sslm_status st = sslm_model_map(bytes.data(), bytes.size(), &model);
 	if (st != SSLM_OK || !model) Fail("sslm_model_map", static_cast<int>(st));
@@ -163,6 +169,17 @@ std::vector<uint8_t> PrefillAndSave(const std::vector<uint8_t>& bytes, const int
 		}
 		offset += span_len;
 	}
+	if (decode_steps > 0) {
+		sslm_decode_params params{};
+		st = sslm_decode_params_init(model, SSLM_DECODE_MODE_GREEDY, g_num_hidden_layers, &params);
+		if (st != SSLM_OK) Fail("sslm_decode_params_init", static_cast<int>(st));
+		for (int32_t d = 0; d < decode_steps; ++d) {
+			int32_t next = -1;
+			st = sslm_decode_step(model, &seq, 1, &params, ws, &next);
+			if (st != SSLM_OK || next < 0) Fail("sslm_decode_step", static_cast<int>(st));
+			if (out_decoded) out_decoded->push_back(next);
+		}
+	}
 	const auto t1 = std::chrono::steady_clock::now();
 	if (out_elapsed_ms) {
 		*out_elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -200,6 +217,8 @@ int main(int argc, char** argv) {
 	int32_t boundary_sweep = -1;  // -1 = every split point
 	std::string dump_blob_path;
 	int32_t repeat = 1;
+	int32_t dump_chunk_budget = 0;  // 0: the whole prompt in one call
+	int32_t dump_decode_steps = 0;
 	for (int i = 3; i < argc; ++i) {
 		const std::string a = argv[i];
 		if (a == "--speedup") do_speedup = true;
@@ -207,6 +226,8 @@ int main(int argc, char** argv) {
 		else if (a.rfind("--dump-blob=", 0) == 0) dump_blob_path = a.substr(12);
 		else if (a.rfind("--layers=", 0) == 0) g_num_hidden_layers = std::atoi(a.c_str() + 9);
 		else if (a.rfind("--repeat=", 0) == 0) repeat = std::max(1, std::atoi(a.c_str() + 9));
+		else if (a.rfind("--chunk-budget=", 0) == 0) dump_chunk_budget = std::max(1, std::atoi(a.c_str() + 15));
+		else if (a.rfind("--decode=", 0) == 0) dump_decode_steps = std::max(0, std::atoi(a.c_str() + 9));
 	}
 
 	std::vector<uint8_t> bytes;
@@ -250,8 +271,15 @@ int main(int argc, char** argv) {
 	// "reproduces the existing per-token path bit-for-bit" oracle (T-2133 §9 C4's own shape).
 	if (!dump_blob_path.empty()) {
 		const std::vector<int32_t> one_call_dump = {N};
-		const auto blob = PrefillAndSave(bytes, tokens.data(), N, one_call_dump, /*chunk_budget=*/N,
-		                                  SSLM_SPAN_PROMPT, nullptr, nullptr);
+		std::vector<int32_t> decoded;
+		const auto blob = PrefillAndSave(bytes, tokens.data(), N, one_call_dump,
+		                                  dump_chunk_budget > 0 ? dump_chunk_budget : N, SSLM_SPAN_PROMPT, nullptr,
+		                                  nullptr, dump_decode_steps, &decoded);
+		if (dump_decode_steps > 0) {
+			std::printf("decoded %d tokens:", dump_decode_steps);
+			for (int32_t t : decoded) std::printf(" %d", t);
+			std::printf("\n");
+		}
 		std::ofstream out(dump_blob_path, std::ios::binary);
 		if (!out) Fail("open dump-blob output", 0);
 		out.write(reinterpret_cast<const char*>(blob.data()), static_cast<std::streamsize>(blob.size()));

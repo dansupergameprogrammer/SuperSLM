@@ -1,0 +1,11 @@
+# S2 cell 11.1(d) data terms, re-derived on the S1 series head (the base for S2) with the plan's probe:
+# probes/rev3/probe_hooks.diff applied to a scratch copy (hooks at function entries only), probes/rev3/probe_111d.cpp,
+# GCC 13.3 -O2, artifact p05_l1 (sha256 f0fd4886...6ed3), mode 'direct' (the 11.1(d) drive: 128-token chunk, then 32 decode steps).
+# pv_int16_fail is the S2 fallback data term; pv_hd16_fail is 0 (head_dim 64). Same figures as the plan's c3e0004 probe.
+L=1 H=14 KV=2 head_dim=64 hidden=896 inter=4864 cap=2048
+pv fail: width=3 sum=32768 max=32768 at=1 nonzero=1 (call 42)
+context_length after decode = 160
+[direct prefill] softmax=1792 guard_fail=0 pv=1792 pv_int16_fail=15 pv_hd16_fail=0 requant=1536 chain_records=1536 kv_records=0 norm_taken=256 norm_skip=0 silu_taken=128 silu_skip=0 land_taken=256 land_skip=0
+[direct prefill] records by site: attn_ctx=128 attn_norm=128 attn_residual=128 down_proj.requant=128 embed=128 gate_proj.requant=128 mlp_act=128 mlp_norm=128 mlp_residual=128 o_proj.requant=128 q_proj.requant=128 up_proj.requant=128
+[direct decode] softmax=448 guard_fail=0 pv=448 pv_int16_fail=0 pv_hd16_fail=0 requant=384 chain_records=384 kv_records=0 norm_taken=64 norm_skip=0 silu_taken=32 silu_skip=0 land_taken=64 land_skip=0
+[direct decode] records by site: attn_ctx=32 attn_norm=32 attn_residual=32 down_proj.requant=32 embed=32 gate_proj.requant=32 mlp_act=32 mlp_norm=32 mlp_residual=32 o_proj.requant=32 q_proj.requant=32 up_proj.requant=32

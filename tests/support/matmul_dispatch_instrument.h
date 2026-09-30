@@ -37,9 +37,28 @@
 
 #include "superslm/matmul.h"
 
-#if SUPERSLM_MATMUL_HAVE_SIMD_X64
-
 #include <atomic>
+
+namespace superslm_test {
+
+// Attention and per-row sites plan, slice S1 (§3.6): the row-table path counters. Each of the three
+// per-row sites (src/forward/forward_sites.cpp) increments exactly one of its pair once per call,
+// after its table decision: `taken` when it builds the 256-entry table (n >= kRowTableMinWidth, 512),
+// `skipped` when it runs the per-element loop. RmsNormSite counts every call; MlpActSite counts after
+// its gate-scale domain check accepts; ResidualReconcileSite counts once per call (not per candidate)
+// after its scale checks accept. They are not tier-split and sit OUTSIDE the x64 block below, because
+// the tables are on in every build except forced scalar, arm64 included; forced scalar builds no
+// test binary and no instrument.
+inline std::atomic<long long> g_rowtable_norm_taken{0};
+inline std::atomic<long long> g_rowtable_norm_skipped{0};
+inline std::atomic<long long> g_rowtable_silu_taken{0};
+inline std::atomic<long long> g_rowtable_silu_skipped{0};
+inline std::atomic<long long> g_rowtable_landing_taken{0};
+inline std::atomic<long long> g_rowtable_landing_skipped{0};
+
+}  // namespace superslm_test
+
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
 
 namespace superslm_test {
 
@@ -65,6 +84,44 @@ inline std::atomic<long long> g_tiled_entry_invocations_avx512{0};
 inline long long TiledEntryInvocationsTotal() {
 	return g_tiled_entry_invocations_avx2.load() + g_tiled_entry_invocations_avx512.load();
 }
+
+// Attention and per-row sites plan, slice S2 (§3.6): the prob·V path counters, per tier. src/matmul.cpp's
+// GemmProbQ15Accumulate increments exactly one of them per call on the AVX2 and AVX-512 tiers, after its
+// guard has decided: `fast` when head_dim % 16 == 0 and the row passes the int16 condition (every p in
+// [0, 32767], Sum p <= 2^15), `fallback` otherwise. On the scalar and SSE2 tiers, and on an MSVC build's
+// AVX-512 tier with SUPERSLM_SITES_AVX512_MSVC off (v1.9.0 code), none moves.
+inline std::atomic<long long> g_pv_fast_avx2{0};
+inline std::atomic<long long> g_pv_fallback_avx2{0};
+inline std::atomic<long long> g_pv_fast_avx512{0};
+inline std::atomic<long long> g_pv_fallback_avx512{0};
+
+// Attention and per-row sites plan, slice S3 (§3.6): the requant row counters, per tier. src/intmath.cpp's
+// RequantRowWide increments exactly one of them per call on the AVX2 and AVX-512 tiers, inside the tier's
+// own body (S3 has no runtime guard, §5.3, so there is no fallback counter). On the scalar and SSE2 tiers,
+// and on an MSVC build's AVX-512 tier with SUPERSLM_SITES_AVX512_MSVC off (the element loop), none moves.
+inline std::atomic<long long> g_requant_row_avx2{0};
+inline std::atomic<long long> g_requant_row_avx512{0};
+
+// Attention and per-row sites plan, slice S4 (§3.6): the softmax path counters, per tier. src/intmath.cpp's
+// SoftmaxRowQ15 increments exactly one of them per call with width >= 1 on the AVX2 and AVX-512 tiers,
+// after the row guard (§5.4) has decided: `fast` inside the tier's own body, `fallback` in the dispatcher
+// when the guard fails (the shipped body then runs). On the scalar and SSE2 tiers, and on an MSVC build's
+// AVX-512 tier with SUPERSLM_SITES_AVX512_MSVC off (v1.9.0 code), none moves.
+inline std::atomic<long long> g_softmax_fast_avx2{0};
+inline std::atomic<long long> g_softmax_fallback_avx2{0};
+inline std::atomic<long long> g_softmax_fast_avx512{0};
+inline std::atomic<long long> g_softmax_fallback_avx512{0};
+
+// Attention and per-row sites plan, slice S5 (§3.6): the Q31 score-row path counters, per tier.
+// src/forward/forward_sites.cpp's QkQ31ScoreRow increments exactly one of them per call on the AVX2 and
+// AVX-512 tiers, after its guard has decided: `fast` inside the tier's own body (head_dim <= 512 and every
+// ratio in [0, 2^32)), `fallback` in the entry when the guard fails (the per-key QkQ31Score loop then runs).
+// On the scalar and SSE2 tiers, and on an MSVC build's AVX-512 tier with SUPERSLM_SITES_AVX512_MSVC off
+// (v1.9.0 code), none moves.
+inline std::atomic<long long> g_q31_row_fast_avx2{0};
+inline std::atomic<long long> g_q31_row_fallback_avx2{0};
+inline std::atomic<long long> g_q31_row_fast_avx512{0};
+inline std::atomic<long long> g_q31_row_fallback_avx512{0};
 
 }  // namespace superslm_test
 

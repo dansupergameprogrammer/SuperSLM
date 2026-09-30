@@ -1,0 +1,183 @@
+# S5 forward probe raw output (scratch program, not committed; see bench.md): tests/support/qk_attention_fixture.h re-parameterised to
+# Qwen3-0.6B's layer geometry, one RunLayerLoopChunkBatched over T positions, best-of-5 (best-of-3 at T = 1,024) ms per token.
+# p_base / p_base_avx2: linked against the S4 head (v1.9.0's per-key loop); p_s5 / p_s5_avx2: S5. 5 alternating rounds.
+## round 1 p_base
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 99.254 ms total, 0.7754 ms/token
+## round 1 p_s5
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 56.797 ms total, 0.4437 ms/token
+## round 1 p_base_avx2
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 122.209 ms total, 0.9548 ms/token
+## round 1 p_s5_avx2
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 68.271 ms total, 0.5334 ms/token
+## round 1 p_base
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 1015.312 ms total, 1.9830 ms/token
+## round 1 p_s5
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 260.403 ms total, 0.5086 ms/token
+## round 1 p_base_avx2
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 1147.046 ms total, 2.2403 ms/token
+## round 1 p_s5_avx2
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 308.940 ms total, 0.6034 ms/token
+## round 1 p_base
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 3580.264 ms total, 3.4964 ms/token
+## round 1 p_s5
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 602.967 ms total, 0.5888 ms/token
+## round 1 p_base_avx2
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 3997.556 ms total, 3.9039 ms/token
+## round 1 p_s5_avx2
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 896.149 ms total, 0.8751 ms/token
+## round 2 p_base
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 98.017 ms total, 0.7658 ms/token
+## round 2 p_s5
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 55.942 ms total, 0.4370 ms/token
+## round 2 p_base_avx2
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 117.720 ms total, 0.9197 ms/token
+## round 2 p_s5_avx2
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 67.672 ms total, 0.5287 ms/token
+## round 2 p_base
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 976.078 ms total, 1.9064 ms/token
+## round 2 p_s5
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 274.719 ms total, 0.5366 ms/token
+## round 2 p_base_avx2
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 1215.215 ms total, 2.3735 ms/token
+## round 2 p_s5_avx2
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 366.443 ms total, 0.7157 ms/token
+## round 2 p_base
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 3736.478 ms total, 3.6489 ms/token
+## round 2 p_s5
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 644.981 ms total, 0.6299 ms/token
+## round 2 p_base_avx2
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 4939.236 ms total, 4.8235 ms/token
+## round 2 p_s5_avx2
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 909.379 ms total, 0.8881 ms/token
+## round 3 p_base
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 105.252 ms total, 0.8223 ms/token
+## round 3 p_s5
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 58.858 ms total, 0.4598 ms/token
+## round 3 p_base_avx2
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 128.980 ms total, 1.0077 ms/token
+## round 3 p_s5_avx2
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 68.388 ms total, 0.5343 ms/token
+## round 3 p_base
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 1049.986 ms total, 2.0508 ms/token
+## round 3 p_s5
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 274.696 ms total, 0.5365 ms/token
+## round 3 p_base_avx2
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 1256.159 ms total, 2.4534 ms/token
+## round 3 p_s5_avx2
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 351.507 ms total, 0.6865 ms/token
+## round 3 p_base
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 3810.413 ms total, 3.7211 ms/token
+## round 3 p_s5
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 637.161 ms total, 0.6222 ms/token
+## round 3 p_base_avx2
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 4719.428 ms total, 4.6088 ms/token
+## round 3 p_s5_avx2
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 853.664 ms total, 0.8337 ms/token
+## round 4 p_base
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 100.319 ms total, 0.7837 ms/token
+## round 4 p_s5
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 54.642 ms total, 0.4269 ms/token
+## round 4 p_base_avx2
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 125.641 ms total, 0.9816 ms/token
+## round 4 p_s5_avx2
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 69.959 ms total, 0.5466 ms/token
+## round 4 p_base
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 968.884 ms total, 1.8924 ms/token
+## round 4 p_s5
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 263.456 ms total, 0.5146 ms/token
+## round 4 p_base_avx2
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 1283.474 ms total, 2.5068 ms/token
+## round 4 p_s5_avx2
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 325.704 ms total, 0.6361 ms/token
+## round 4 p_base
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 3679.239 ms total, 3.5930 ms/token
+## round 4 p_s5
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 681.154 ms total, 0.6652 ms/token
+## round 4 p_base_avx2
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 4638.634 ms total, 4.5299 ms/token
+## round 4 p_s5_avx2
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 906.523 ms total, 0.8853 ms/token
+## round 5 p_base
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 100.069 ms total, 0.7818 ms/token
+## round 5 p_s5
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 54.906 ms total, 0.4290 ms/token
+## round 5 p_base_avx2
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 118.042 ms total, 0.9222 ms/token
+## round 5 p_s5_avx2
+T=128 status 0 sat 1104 out-clamped 132/131072 hash a3871fe255284c51
+T=128 best-of-5 67.169 ms total, 0.5248 ms/token
+## round 5 p_base
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 946.019 ms total, 1.8477 ms/token
+## round 5 p_s5
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 253.192 ms total, 0.4945 ms/token
+## round 5 p_base_avx2
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 1157.399 ms total, 2.2605 ms/token
+## round 5 p_s5_avx2
+T=512 status 0 sat 4397 out-clamped 541/524288 hash d2449513d1c2d5f3
+T=512 best-of-5 305.983 ms total, 0.5976 ms/token
+## round 5 p_base
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 3989.500 ms total, 3.8960 ms/token
+## round 5 p_s5
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 646.770 ms total, 0.6316 ms/token
+## round 5 p_base_avx2
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 4493.212 ms total, 4.3879 ms/token
+## round 5 p_s5_avx2
+T=1024 status 0 sat 8761 out-clamped 1076/1048576 hash 463c25ff1999c67e
+T=1024 best-of-3 748.720 ms total, 0.7312 ms/token

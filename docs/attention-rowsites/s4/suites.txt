@@ -1,0 +1,77 @@
+# S4 suites and digests at the implementation commit, GCC 13.3 Release, this host (AVX-512BW, so auto dispatches AVX-512). The four suite binaries run from the repository root with SUPERSLM_ATTN_ROWSITES_ARTIFACT = p05_l1 and separate TMPDIRs; then the five digest legs. Every digest's GLOBAL and every section equal the red run's (commit 1). Paths shortened.
+== superslm_tests (gcc): exit 0
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites S2: tier 3, kernel AVX-512 (switch 0, msvc 0), prob-V counters read
+attn-rowsites S2 golden hash: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed (30100 values)
+attn-rowsites S3 4.S3 sentinel pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 4.S3 exact-size pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 golden hash: 3e3abed7c746191e8745c89ad38019076eff290aa7f4ffb57fb51c4527fdb3b9 (3567018 values)
+attn-rowsites S4 golden hash: 2e47ea3c27774db43d9c952972325a5c19d901ba6871f0bd124c8c874f6a55d9 (268078 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on <scratch>/p05_l1.sslm
+attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures
+superslm tests: 116129 checks, 0 failures
+   FAIL lines: 0
+== superslm_tests_sse2_forced (gcc): exit 0
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites S2: tier 1, kernel v1.9.0 code (switch 0, msvc 0), prob-V counters read
+attn-rowsites S2 golden hash: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed (30100 values)
+attn-rowsites S3 4.S3 sentinel pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 4.S3 exact-size pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 golden hash: 3e3abed7c746191e8745c89ad38019076eff290aa7f4ffb57fb51c4527fdb3b9 (3567018 values)
+attn-rowsites S4 golden hash: 2e47ea3c27774db43d9c952972325a5c19d901ba6871f0bd124c8c874f6a55d9 (268078 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on <scratch>/p05_l1.sslm
+attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures
+superslm tests: 116071 checks, 0 failures
+   FAIL lines: 0
+== superslm_tests_avx2_forced (gcc): exit 0
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites S2: tier 2, kernel AVX2 (switch 0, msvc 0), prob-V counters read
+attn-rowsites S2 golden hash: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed (30100 values)
+attn-rowsites S3 4.S3 sentinel pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 4.S3 exact-size pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 golden hash: 3e3abed7c746191e8745c89ad38019076eff290aa7f4ffb57fb51c4527fdb3b9 (3567018 values)
+attn-rowsites S4 golden hash: 2e47ea3c27774db43d9c952972325a5c19d901ba6871f0bd124c8c874f6a55d9 (268078 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on <scratch>/p05_l1.sslm
+attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures
+superslm tests: 116087 checks, 0 failures
+   FAIL lines: 0
+== superslm_tests_avx512_forced (gcc): exit 0
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites S2: tier 3, kernel AVX-512 (switch 0, msvc 0), prob-V counters read
+attn-rowsites S2 golden hash: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed (30100 values)
+attn-rowsites S3 4.S3 sentinel pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 4.S3 exact-size pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 golden hash: 3e3abed7c746191e8745c89ad38019076eff290aa7f4ffb57fb51c4527fdb3b9 (3567018 values)
+attn-rowsites S4 golden hash: 2e47ea3c27774db43d9c952972325a5c19d901ba6871f0bd124c8c874f6a55d9 (268078 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on <scratch>/p05_l1.sslm
+attn-rowsites cells (plan slices S1, S2, S3, S4): 90598 checks, 0 failures
+superslm tests: 116087 checks, 0 failures
+   FAIL lines: 0
+== sslm_axis_digest: exit 0 GLOBAL bc7b1cbecd995216c2aaf069f43900d3df01922bd8ec97779fe2eb16fabdcca7
+c_rowsites               d02721801c8296897bb30f4aaaed4f53d5f06600daee528c090701f8e2bd8e27  values=4201138
+c32_attention            6bb5971d0b8f4cd48b6f1d1fb1759207f45b6c4b193ab85e0db9533b3482e9fd  values=298178
+== sslm_axis_digest_scalar_forced: exit 0 GLOBAL bc7b1cbecd995216c2aaf069f43900d3df01922bd8ec97779fe2eb16fabdcca7
+c_rowsites               d02721801c8296897bb30f4aaaed4f53d5f06600daee528c090701f8e2bd8e27  values=4201138
+c32_attention            6bb5971d0b8f4cd48b6f1d1fb1759207f45b6c4b193ab85e0db9533b3482e9fd  values=298178
+== sslm_axis_digest_sse2_forced: exit 0 GLOBAL bc7b1cbecd995216c2aaf069f43900d3df01922bd8ec97779fe2eb16fabdcca7
+c_rowsites               d02721801c8296897bb30f4aaaed4f53d5f06600daee528c090701f8e2bd8e27  values=4201138
+c32_attention            6bb5971d0b8f4cd48b6f1d1fb1759207f45b6c4b193ab85e0db9533b3482e9fd  values=298178
+== sslm_axis_digest_avx2_forced: exit 0 GLOBAL bc7b1cbecd995216c2aaf069f43900d3df01922bd8ec97779fe2eb16fabdcca7
+c_rowsites               d02721801c8296897bb30f4aaaed4f53d5f06600daee528c090701f8e2bd8e27  values=4201138
+c32_attention            6bb5971d0b8f4cd48b6f1d1fb1759207f45b6c4b193ab85e0db9533b3482e9fd  values=298178
+== sslm_axis_digest_avx512_forced: exit 0 GLOBAL bc7b1cbecd995216c2aaf069f43900d3df01922bd8ec97779fe2eb16fabdcca7
+c_rowsites               d02721801c8296897bb30f4aaaed4f53d5f06600daee528c090701f8e2bd8e27  values=4201138
+c32_attention            6bb5971d0b8f4cd48b6f1d1fb1759207f45b6c4b193ab85e0db9533b3482e9fd  values=298178
+DONE-gcc

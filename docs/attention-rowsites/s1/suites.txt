@@ -1,0 +1,47 @@
+== superslm_tests, GCC 13.3.0 Release, series head (implementation + 3.S1 cell), SUPERSLM_ATTN_ROWSITES_ARTIFACT=p05_l1 (sha256 f0fd4886...6ed3)
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM: this binary dispatches on the AVX-512 tier; tiled path expected at M >= 8; tiled-entry counter read
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slice S1): 1757 checks, 0 failures
+superslm tests: 27288 checks, 0 failures
+
+== superslm_tests_sse2_forced, GCC 13.3.0 Release, series head (implementation + 3.S1 cell), SUPERSLM_ATTN_ROWSITES_ARTIFACT=p05_l1 (sha256 f0fd4886...6ed3)
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM: this binary dispatches on the SSE2 tier; tiled path not taken on this tier (SKIPPED reach); tiled-entry counter read
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slice S1): 1757 checks, 0 failures
+superslm tests: 27230 checks, 0 failures
+
+== superslm_tests_avx2_forced, GCC 13.3.0 Release, series head (implementation + 3.S1 cell), SUPERSLM_ATTN_ROWSITES_ARTIFACT=p05_l1 (sha256 f0fd4886...6ed3)
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM: this binary dispatches on the AVX2 tier; tiled path expected at M >= 8; tiled-entry counter read
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slice S1): 1757 checks, 0 failures
+superslm tests: 27246 checks, 0 failures
+
+== superslm_tests_avx512_forced, GCC 13.3.0 Release, series head (implementation + 3.S1 cell), SUPERSLM_ATTN_ROWSITES_ARTIFACT=p05_l1 (sha256 f0fd4886...6ed3)
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM: this binary dispatches on the AVX-512 tier; tiled path expected at M >= 8; tiled-entry counter read
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites 11.1(d): prefill and decode windows driven on ../slice1/art/p05_l1.sslm
+attn-rowsites cells (plan slice S1): 1757 checks, 0 failures
+superslm tests: 27246 checks, 0 failures
+
+== superslm_tests, GCC 13.3.0 RelWithDebInfo -fsanitize=thread, series head, with the p05_l1 artifact: exit 0, 0 ThreadSanitizer reports
+attn-rowsites cells (plan slice S1): 1757 checks, 0 failures
+superslm tests: 27288 checks, 0 failures
+
+== superslm_tests, GCC 13.3.0 RelWithDebInfo -fsanitize=address,undefined -fno-sanitize-recover=undefined, series head, with the p05_l1 artifact: exit 0, 0 sanitizer reports
+attn-rowsites cells (plan slice S1): 1757 checks, 0 failures
+superslm tests: 27288 checks, 0 failures

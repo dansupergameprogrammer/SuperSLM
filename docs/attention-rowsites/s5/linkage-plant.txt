@@ -1,0 +1,30 @@
+# S5 cell 11.3 vitality: the linkage checker over all nine objects (auto and both forced builds' matmul.cpp.o, intmath.cpp.o and
+# forward_sites.cpp.o). As in S4 a moved body would stay local (its parameter type Q31RowLimbs is in the anonymous namespace),
+# so the plant is an external target-attributed function in the population (Q31RoundAvx2Planted).
+## plant
+build/CMakeFiles/superslm.dir/src/matmul.cpp.o: 7 population symbols, record x1
+build/CMakeFiles/superslm_avx2_forced.dir/src/matmul.cpp.o: 3 population symbols, record x1
+build/CMakeFiles/superslm_avx512_forced.dir/src/matmul.cpp.o: 5 population symbols, record x1
+build/CMakeFiles/superslm.dir/src/intmath.cpp.o: 4 population symbols, record x0
+build/CMakeFiles/superslm_avx2_forced.dir/src/intmath.cpp.o: 4 population symbols, record x0
+build/CMakeFiles/superslm_avx512_forced.dir/src/intmath.cpp.o: 4 population symbols, record x0
+build/CMakeFiles/superslm.dir/src/forward/forward_sites.cpp.o: 4 population symbols, record x0
+build/CMakeFiles/superslm_avx2_forced.dir/src/forward/forward_sites.cpp.o: 4 population symbols, record x0
+build/CMakeFiles/superslm_avx512_forced.dir/src/forward/forward_sites.cpp.o: 4 population symbols, record x0
+check_tiled_matmul_linkage: FAIL
+  build/CMakeFiles/superslm.dir/src/forward/forward_sites.cpp.o: 'superslm::Q31RoundAvx2Planted(long long __vector(4))' is not local (nm type 'T')
+  build/CMakeFiles/superslm_avx2_forced.dir/src/forward/forward_sites.cpp.o: 'superslm::Q31RoundAvx2Planted(long long __vector(4))' is not local (nm type 'T')
+  build/CMakeFiles/superslm_avx512_forced.dir/src/forward/forward_sites.cpp.o: 'superslm::Q31RoundAvx2Planted(long long __vector(4))' is not local (nm type 'T')
+exit 1
+## restored (the implementation commit)
+build/CMakeFiles/superslm.dir/src/matmul.cpp.o: 7 population symbols, record x1
+build/CMakeFiles/superslm_avx2_forced.dir/src/matmul.cpp.o: 3 population symbols, record x1
+build/CMakeFiles/superslm_avx512_forced.dir/src/matmul.cpp.o: 5 population symbols, record x1
+build/CMakeFiles/superslm.dir/src/intmath.cpp.o: 4 population symbols, record x0
+build/CMakeFiles/superslm_avx2_forced.dir/src/intmath.cpp.o: 4 population symbols, record x0
+build/CMakeFiles/superslm_avx512_forced.dir/src/intmath.cpp.o: 4 population symbols, record x0
+build/CMakeFiles/superslm.dir/src/forward/forward_sites.cpp.o: 3 population symbols, record x0
+build/CMakeFiles/superslm_avx2_forced.dir/src/forward/forward_sites.cpp.o: 3 population symbols, record x0
+build/CMakeFiles/superslm_avx512_forced.dir/src/forward/forward_sites.cpp.o: 3 population symbols, record x0
+check_tiled_matmul_linkage: OK
+exit 0

@@ -1,0 +1,19 @@
+# S4 cell 11.1(d) data term (rows outside §5.4's guard), re-derived on the S3 series head (the base for S4).
+# Probe: probes/rev3/probe_111d.cpp's direct drive (128-token chunk, then 32 decode steps; pinned tokens; trace hook
+# installed; no final norm), linked against the S3 head's unmodified Release libsuperslm.a with -Wl,--wrap on
+# SoftmaxRowQ15 and GemmProbQ15Accumulate, so every row forward_sites.o hands either kernel is classified by the
+# plan's own guard copies (probe_111d.cpp's sslm_probe_softmax / sslm_probe_pv) before the real kernel runs. The
+# RmsNorm/SiLU/landing/requant hooks of probe_hooks.diff are not installed here (the base is not edited), so their
+# columns read 0; the chain trace records and the prob-V column reproduce S2's pv-data-terms.txt exactly.
+# GCC 13.3 -O2, artifact p05_l1 (sha256 f0fd4886...6ed3). Source: probe_111d_s4.cpp beside this file.
+#
+# Result: softmax guard_fail = 0 in both windows (the plan's measured value). The constant range printed last is the
+# realistic range the S4 bench uses (tools/sslm_sites_bench.cpp, softmax mode).
+L=1 H=14 KV=2 head_dim=64 hidden=896 inter=4864 cap=2048
+pv fail: width=3 sum=32768 max=32768 at=1 nonzero=1 (call 42)
+context_length after decode = 160
+[direct prefill] softmax=1792 guard_fail=0 pv=1792 pv_int16_fail=15 pv_hd16_fail=0 requant=0 chain_records=1536 kv_records=0 norm_taken=0 norm_skip=0 silu_taken=0 silu_skip=0 land_taken=0 land_skip=0
+[direct prefill] records by site: attn_ctx=128 attn_norm=128 attn_residual=128 down_proj.requant=128 embed=128 gate_proj.requant=128 mlp_act=128 mlp_norm=128 mlp_residual=128 o_proj.requant=128 q_proj.requant=128 up_proj.requant=128
+[direct decode] softmax=448 guard_fail=0 pv=448 pv_int16_fail=0 pv_hd16_fail=0 requant=0 chain_records=384 kv_records=0 norm_taken=0 norm_skip=0 silu_taken=0 silu_skip=0 land_taken=0 land_skip=0
+[direct decode] records by site: attn_ctx=32 attn_norm=32 attn_residual=32 down_proj.requant=32 embed=32 gate_proj.requant=32 mlp_act=32 mlp_norm=32 mlp_residual=32 o_proj.requant=32 q_proj.requant=32 up_proj.requant=32
+softmax constants over all rows: q_ln2 [347, 944] q_b [677, 1843] q_c [240769, 1781891] M [699098, 5178540] max score spread 37018; elements 180320, clipped (z = 30) 1535

@@ -1,0 +1,66 @@
+# Cell 11.1(c)'s premise on the base (plan §8: "Before any kernel lands, the test author confirms on the base that every
+# step returns Ok and that the fixture's softmax rows sit inside §5.4's guard").
+# Base: the S4 head's Release libsuperslm.a (GCC 13.3; no S5 code). Probe: a scratch program that builds
+# tests/support/qk_attention_fixture.h, runs (i) the decode loop, (ii) the chunk loop with a sink installed, (iii) the decode
+# loop with a classifying sink, and prints each run's status and stream hash; the sink classifies every softmax row with
+# attention_cases.h's TestSoftmaxGuard and every prob-V row with the int16 condition (maxp = the row's largest p).
+# The same hash comes from the v1.9.0 tag (golden.txt).
+#
+# How the constants were chosen (sweeps on the same base, one exponent at a time; LandingRescale lands at
+# x * m_a * r_t >> (62 - e_a + e_t), so a larger e_t is a coarser code):
+#  - norm gains: hidden 8192, q_norm/k_norm gains uniform in [4096, 8192]. At 16384 / [12000, 20000] the post-norm wide
+#    row passes the funnel's 2^31 preflight (ChainInputOutOfDomain).
+#  - gate site constant e = -52: at the canonical -30 the gate scale's exponent is +18, outside MlpActSite's runtime
+#    domain [-80, 8] (SiluCompositionScaleOutOfDomain); -52 lands it near -5.
+#  - K/V landing e = +12: at -30 every V code clamps to +-127 (128 of 128 per position), at +10 about 10 clamp, at +12
+#    none (V spans about +-55), and the first K landing no longer clamps before k_norm renormalises it.
+#  - K channel landing e = -36 (source scale 2^0 x 2^-60): K codes span about +-88, none clamped.
+#  - softmax K-head constant e = -72: q_ln2 about 2,200-2,900, rows from diffuse (max p near 4,096) to peaked; -70
+#    makes 8 of 96 rows one-hot; -74 drives a later funnel out of domain; -60 and above refuse in the kernel
+#    (SoftmaxKernelRefusedAfterGateAccepted), -90 fails the width gate.
+== the fixture at its committed constants
+loaded 1 
+run 0: Ok, 336b8d417d078cdf91c0cd714e557df752e952eeb29b79ac594348e3be085779 over 14384
+run 1: Ok, 336b8d417d078cdf91c0cd714e557df752e952eeb29b79ac594348e3be085779 over 14384
+  pos 23 head 0: q_ln2 2939 q_b 5736 q_c 17251337, maxp 13133, s[0..3] 3919 6457 6121 8083
+  pos 23 head 1: q_ln2 2891 q_b 5644 q_c 16701103, maxp 23227, s[0..3] -15501 -2760 7929 -8226
+  pos 23 head 2: q_ln2 2200 q_b 4295 q_c 9672348, maxp 9805, s[0..3] 6478 18229 2289 -8260
+  pos 23 head 3: q_ln2 2586 q_b 5048 q_c 13360213, maxp 5697, s[0..3] 2838 10005 6297 882
+run 2: Ok, 336b8d417d078cdf91c0cd714e557df752e952eeb29b79ac594348e3be085779 over 14384
+rows 96 in-guard 96 onehot 4 pvfail 4 score range [-30628, 31140]
+  maxp bucket 4096: 4
+  maxp bucket 8192: 16
+  maxp bucket 12288: 23
+  maxp bucket 16384: 11
+  maxp bucket 20480: 18
+  maxp bucket 24576: 10
+  maxp bucket 28672: 10
+  maxp bucket 32768: 4
+== positions 0-2 of the decode loop, funnel scales and K/V codes
+  layer0.q_norm          tok 0 d' 1012648384 m_out 2025296768 e_out -1 codes [-127,84]
+  layer0.q_norm          tok 0 d' 1257072509 m_out 1257072510 e_out 0 codes [-127,74]
+  layer0.q_norm          tok 0 d' 1008091272 m_out 2016182544 e_out -1 codes [-127,101]
+  layer0.q_norm          tok 0 d' 1031005680 m_out 2062011360 e_out -1 codes [-85,127]
+  layer0.attn_ctx        tok 0 d' 1671168 m_out 1711276032 e_out -10 codes [-127,105]
+  layer0.gate_proj.requant tok 0 d' 204124 m_out 1259859707 e_out -4 codes [-87,127]
+pos 0: Ok
+  K codes at pos 0: [-73,88], 0 at +-127
+  V codes at pos 0: [-51,42], 0 at +-127
+  layer0.q_norm          tok 1 d' 988414560 m_out 1976829120 e_out -1 codes [-127,117]
+  layer0.q_norm          tok 1 d' 980397864 m_out 1960795728 e_out -1 codes [-108,127]
+  layer0.q_norm          tok 1 d' 896431188 m_out 1792862376 e_out -1 codes [-127,90]
+  layer0.q_norm          tok 1 d' 1154604775 m_out 1154604776 e_out 0 codes [-127,124]
+  layer0.attn_ctx        tok 1 d' 1539160 m_out 1576099840 e_out -10 codes [-127,96]
+  layer0.gate_proj.requant tok 1 d' 101303 m_out 1456053345 e_out -5 codes [-127,127]
+pos 1: Ok
+  K codes at pos 1: [-82,53], 0 at +-127
+  V codes at pos 1: [-55,36], 0 at +-127
+  layer0.q_norm          tok 2 d' 1320604920 m_out 1320604920 e_out 0 codes [-91,127]
+  layer0.q_norm          tok 2 d' 1019596994 m_out 2039193988 e_out -1 codes [-127,117]
+  layer0.q_norm          tok 2 d' 1103300968 m_out 1103300968 e_out 0 codes [-127,109]
+  layer0.q_norm          tok 2 d' 1376739594 m_out 1376739594 e_out 0 codes [-65,127]
+  layer0.attn_ctx        tok 2 d' 1785246 m_out 1828091904 e_out -10 codes [-127,95]
+  layer0.gate_proj.requant tok 2 d' 142864 m_out 1746824916 e_out -5 codes [-107,127]
+pos 2: Ok
+  K codes at pos 2: [-59,86], 0 at +-127
+  V codes at pos 2: [-43,50], 0 at +-127

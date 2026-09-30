@@ -10,7 +10,7 @@ tempfile.mkdtemp(), never written into the working tree, and removed in a
 `finally`).
 
 WHY SCRATCH FIXTURES, NOT THE REAL FORWARD DIRECTORY. The mechanism cells below
-(the eight banned-leaf rule-coverage cells, the input-coverage cell, and the
+(the nine banned-leaf rule-coverage cells, the input-coverage cell, and the
 allowlist-control cell) drive the check against constructed scratch
 directories standing in for "a forward TU," never against the real
 src/forward/ tree -- exactly as check_no_pow_operator.py's own self-test
@@ -78,7 +78,7 @@ def _write(tmpdir: str, rel_path: str, content: str) -> str:
     return abs_path
 
 
-# --- Rule coverage: every one of the eight banned leaves is individually detected. ---
+# --- Rule coverage: every one of the nine banned leaves is individually detected. ---
 
 
 def test_each_banned_leaf_is_individually_detected():
