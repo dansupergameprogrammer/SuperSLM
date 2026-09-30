@@ -4,14 +4,16 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-09-30
+
 A host parallel-for hook can now also split the CPU backend's one-row projections, opt-in. Bit 1
 of `sslm_parallel_for.reserved`, the new `SSLM_PARALLEL_FOR_MATVEC`, asks for it: each decode
 layer's q, k + v, o, gate + up and down projections, and the seven projections of a prefill call
 that admits exactly one token, split their output rows across the hook's `run` when the split gives a
 group two or more tasks: `max_tasks` at least 2, more than 64 rows, and at least twice 256 KiB of
 weight bytes. The 256 KiB constant caps the task count by the group's total weight bytes; it is
-not a floor on each task, and the last task can be smaller (the box measurement sets its final
-value). The logits step reads the hook exactly as before. Without the bit nothing changes: a 1.10.0
+not a floor on each task, and the last task can be smaller. A sweep of 64 KiB, 256 KiB and 1 MiB
+on a Zen 2 desktop kept 256 KiB. The logits step reads the hook exactly as before. Without the bit nothing changes: a 1.10.0
 host's hook is still read by the logits step alone. Every row is still one exact integer sum on
 one thread, so tokens, save blobs and the digest are bit-identical with and without the bit, at
 any `max_tasks`. The split adds no heap allocation.

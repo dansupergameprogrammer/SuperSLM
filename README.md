@@ -14,7 +14,14 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.10.0**, a CPU speed release. On the AVX2 and AVX-512 tiers, prompt reading
+Current release: **1.11.0**. A host's parallel-for hook can now split decode, and one-token
+prefill, across threads: set bit 1 (`SSLM_PARALLEL_FOR_MATVEC`) of `sslm_parallel_for.reserved`. It is
+off unless the host asks for it. Every output stays bit-identical with and without it. On a Zen 2
+desktop with the Qwen2.5-0.5B model and 4 tasks, decode runs about 1.5x faster and a one-token
+prompt about 1.6x faster. No ABI struct, status or save-format change. See the
+[1.11.0 release note](docs/releases/1.11.0.md).
+
+1.10.0, a CPU speed release: on the AVX2 and AVX-512 tiers, prompt reading
 runs a register-tiled matrix multiply, attention's per-row steps (probability-times-value, softmax,
 requantization and, on Qwen3 models, the Q31 score) run a row at a time, and the model's load-time
 integrity hash uses the CPU's SHA instructions where it has them. Every output is bit-identical to
