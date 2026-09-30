@@ -1,0 +1,51 @@
+Decode threading D0-D1 -- the code review's four findings, fixed and re-verified (2026-09-30)
+Review record: Wizard Claude/Poirot/decode-threading-review-2026-09-30.md (HOLD at 5043ce4). Findings:
+  P1  tools/build_adapter_dump.bat named src\forward\parallel_split.cpp without %ENG% (MSVC C1083). Fixed, and the grep
+      for the same defect found 26 more MSVC build lists (red-suite build and mutant scripts under tests/, the three t2922
+      PowerShell runners, and the two t2132 diagnostics under tools/) that compile forward_sites.cpp without
+      parallel_split.cpp at all. Those links failed with unresolved externals, and each now names the file. A GCC
+      replica of build_adapter_dump.bat's list links, and the same list without parallel_split.cpp leaves 11 undefined
+      references. No CI step or checker compiles these scripts: check_tools_have_build_recipe.py and
+      check_tests_have_build_recipe.py only check that a recipe names each tool or suite, and CI runs neither of them.
+      check_build_bat_exit_paths.py covers build.bat's exit paths only.
+  P2  PD-1 encoded in cell 2.1 (progress deviations 3 and 18; mutants.txt, PD-1 section: 11 of 11 re-run and killed).
+  P3  docs/api.md, parallel_for.h and CHANGELOG now say q alone, k + v grouped, and that 256 KiB caps the task count
+      rather than being a per-task floor (896/896 at max_tasks 4: 320/320/256 rows, last task 229,376 bytes).
+  P4  F-QK is host-dependent through numpy's CPU-dispatched float64 exp (fixture-premise.txt; progress deviation 19).
+      v190.txt re-runs 6.3 and 9.1 on the fresh fixtures and both local F-QK variants.
+
+Environment: this AVX-512 Linux host, GCC 13.3.0 and Clang 18.1.3, Release. Fixtures generated fresh at this head
+(fdef f4adf711..., fqk 27e82bcb..., fnoclamp 52064d5c...); SUPERSLM_ATTN_ROWSITES_ARTIFACT set.
+
+== Suites (both compilers, identical counts, 0 failures in every binary)
+superslm_tests                             123,814   (was 123,770; +44 from 2.1: D1 cells 2,152, was 2,108)
+superslm_tests_sse2_forced                 123,756
+superslm_tests_avx2_forced                 123,772
+superslm_tests_avx512_forced               123,772   ("tier 3, kernel AVX-512": executed on AVX-512)
+superslm_decode_threading_scalar_forced    2,159
+superslm_decode_threading_alloc            84
+Also superslm_tests (GCC) with the fqk.sslm generated with numpy's AVX-512 dispatch disabled (623d3efe...): 123,814,
+0 failures.
+
+== Digests: all ten legs (auto, scalar, SSE2, AVX2, AVX-512 forced; GCC and Clang)
+GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc on all ten.
+
+== fp-free scan (tests/ci/scan_build_output.py --target superslm --isa x86-64)
+GCC: 18 objects, 590 ACCEPT, 0 REJECT, 0 REFUSE, PASS. Clang: 18 objects, 518 ACCEPT, 0 REJECT, 0 REFUSE, PASS.
+
+== Python and the checkers
+python3 -m pytest tests/ci: 915 passed, 1 skipped.
+check_gpu_guard_status_parity, check_ci_claims, check_present_tense_defect_comments, check_no_forward_leaf_calls,
+geometry_site_census, check_build_bat_exit_paths, check_tools_have_build_recipe, check_tests_have_build_recipe,
+check_abi_header_inventory, check_no_library_stdout_write (src include): OK or PASS.
+
+== Not re-run, and why
+Sanitizers, coverage and the bench: no library source changed (the P3 edit to parallel_for.h is a comment), so their
+logged results still apply. Mutants: only the 11 whose red set includes 2.1 were re-run; the other 12 do not touch it.
+
+== Owed on Windows (the owner's machine)
+- Run tools\build_adapter_dump.bat and at least one of the 26 other patched lists (for example
+  tests\t2018-slora-serial\build.bat), so each one builds with MSVC.
+- The WIN32 setter gate (cell_setters.cpp CPU+GPU) and the Windows suites at the new head. The 2.1 change is
+  platform-neutral, but the suite binaries changed.
+- Optional: the v1.9 probe on the Windows-generated F-QK (31dd0c5b...), which this host cannot produce.

@@ -120,3 +120,44 @@ M7-o: KILLED -- o's failure returns around the decode guard (`return st;` for `r
     §9 names: none (not a §9 row; it pins the 2.1 o case added from the coverage replica)
     red: 2.1 at o x8 (four hostile kinds, each the rest-at-layer-1 check and the retry check), and nothing else
     superslm tests: 123524 checks, 8 failures (fixture run without the attn-rowsites artifact)
+
+PD-1 re-run (code review P2, 2026-09-30): the mutants whose red set included 2.1, against the PD-1 cell 2.1
+(GCC 13, auto tier, this head's fixtures: fdef f4adf711..., fqk 27e82bcb..., fnoclamp 52064d5c...; no attn-rowsites
+artifact, so totals omit its 238 checks). The rest of the table above does not touch 2.1 and is not re-run.
+M1: KILLED -- task range end off by one (drops each block's last row)
+    red: 1.1 x1, 1.2 x1, 1.3 x1, 2.1 x72, 2.3 x3, 3.1 x2, 4.3 x5, 5.1 x5, 5.1 fdef.sslm x3, 5.1 fqk.sslm x2, 5.2 x1, 5.3 x2, 5.4 x1, 5.5 x4, 6.1 x1, 6.2 x6, 6.2 fdef.sslm x3, 6.2 fqk.sslm x3, 6.3 x1, 8.1 x5
+    superslm tests: 123541 checks, 111 failures
+M5: KILLED -- group maps the straddling block onto the wrong part (stops at the first part it touches)
+    red: 1.1 x1, 1.2 x1, 1.3 x1, 2.1 x72, 2.3 x3, 3.1 x2, 4.3 x5, 5.1 x3, 5.1 fdef.sslm x3, 5.2 x1, 5.5 x4, 6.1 x1, 6.2 x3, 6.2 fdef.sslm x3, 8.1 x5
+    superslm tests: 123545 checks, 102 failures
+M6: KILLED -- decode guard restores the total only
+    red: 2.1 x24, 5.1 x4, 5.1 fdef.sslm x2, 5.1 fqk.sslm x2, 5.5 x2
+    superslm tests: 123561 checks, 30 failures
+M6-kv: KILLED -- decode guard omits kv
+    red: 2.1 x24, 5.1 x4, 5.1 fdef.sslm x2, 5.1 fqk.sslm x2, 5.5 x2
+    superslm tests: 123561 checks, 30 failures
+M6-kv_landing: KILLED -- decode guard omits kv_landing
+    red: 2.1 x24, 5.1 x2, 5.1 fdef.sslm x2, 5.5 x2
+    superslm tests: 123562 checks, 28 failures
+M6-rope_q: KILLED -- decode guard omits rope_q
+    red: 2.1 x24, 5.1 x4, 5.1 fdef.sslm x2, 5.1 fqk.sslm x2, 5.5 x2
+    superslm tests: 123561 checks, 30 failures
+M6-rope_k: KILLED -- decode guard omits rope_k
+    red: 2.1 x24, 5.1 x2, 5.1 fdef.sslm x2, 5.5 x2
+    superslm tests: 123562 checks, 28 failures
+M7: KILLED -- decode guard removed
+    red: 2.1 x24, 5.1 x4, 5.1 fdef.sslm x2, 5.1 fqk.sslm x2, 5.5 x2
+    superslm tests: 123561 checks, 30 failures
+M7b-start: KILLED -- decode guard snapshot taken at call start
+    red: 2.1 x40, 5.1 x4, 5.1 fdef.sslm x2, 5.1 fqk.sslm x2, 5.5 x2
+    superslm tests: 123553 checks, 46 failures
+M7b-landing: KILLED -- decode guard snapshot taken after K/V landing
+    red: 2.1 x24, 5.1 x2, 5.1 fdef.sslm x2, 5.5 x2
+    superslm tests: 123562 checks, 28 failures
+M7-o: KILLED -- o's failure returns around the decode guard
+    red: 2.1 x8
+    superslm tests: 123572 checks, 8 failures
+Killed: 11 of 11. By site, M7 (guard removed) turns 2.1 red at o, gate+up and down only (4 hostile kinds each)
+and never at q or k+v: at those sites nothing had moved, so there is nothing for a missing guard to leave behind, which
+is what PD-1 records. M7b-start turns all five layer sites red, the early ones too, because restoring to the call's
+start drops layer 0's counts, a drift the no-drift check catches. M7-o is red at o alone, as before.

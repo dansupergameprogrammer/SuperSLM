@@ -36,6 +36,13 @@ States: **done**, **CI-only**, **box-only**, **not done** (with why).
 | 6 | D0 follow-up | The t2296 fp-free suite's 17-object pins read 18 (deviation 13) |
 | 7 | evidence | Cell 2.1 gains the o site (coverage-found, deviation 11); this file and `docs/decode-threading/` |
 
+## Code review fixes (2026-09-30)
+
+The review (HOLD at `5043ce4`) raised four findings. P1: the MSVC build lists. P2: PD-1, deviation 18. P3: the api text.
+P4: F-QK host dependence, deviation 19. All four are fixed; `docs/decode-threading/review-fixes.txt` records the fixes
+and the re-verification. The Windows runs (the .bat builds, the setter gate) are owed on the owner's machine. The
+counts below predate the review; the current ones are in `review-fixes.txt` (superslm_tests 123,814, D1 cells 2,152).
+
 ## D0 and D1 items
 
 | Item | State | Evidence |
@@ -137,7 +144,7 @@ token (4L + 1, §3.1's 97 at L = 24). Decode tok/s off against on, n = 15 pairs:
     against the base, fixed in commits 5 and 6. The COFF cells run only on the Windows leg.
 14. **The WIN32 halves are CI-only.** 2.2's GPU setter block (`tests/t2956-token-finish-red-suite/cell_setters.cpp`,
     returning 14/15, guarded by `SSLM_PARALLEL_FOR_MATVEC`), 7.3 and 4.6 are compiled and run only by the Windows legs;
-    none executed here. The older Windows test recipes (`tools/build_*.bat`) gained the new source only.
+    none executed here. The older Windows test recipes (`tools/build_*.bat`) gained the new source only, and one of them (`build_adapter_dump.bat`) without its `%ENG%` prefix; 26 other MSVC lists under `tests/` and `tools/` lacked it entirely. Review P1 fixed all of them (`review-fixes.txt`); none is executed here.
 15. **8.2's two-bit parts are N/A at D1.** Only "bit 0 is rejected on a D1-only engine" applies; the rest returns at S2-A.
 16. **The bench adds a `groups` mode, and no real 0.5B artifact was available here.** `groups` times one decode layer's
     five groups at Qwen2.5-0.5B shapes on synthetic weights through the reference pool, with no artifact. `verify`,
