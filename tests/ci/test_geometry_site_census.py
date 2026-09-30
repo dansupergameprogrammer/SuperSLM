@@ -1563,7 +1563,7 @@ _GS12_OCC1 = (
     _marker_line("\t\t", "GS-12") +
     "\t\t// T-2432 (Track A step 3): q_proj's INPUT width stays hidden_size (the normed\n"
     "\t\t// residual stream is unchanged by this ask); its OUTPUT width is effective_q_width.\n"
-    "\t\tst = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, hidden_size, "
+    "\t\tst = ProjectAndFunnelRow(row_pf, normed.data(), normed_scale, lw.q_weight, hidden_size, "
     "effective_q_width,\n"
 )
 
@@ -1574,9 +1574,11 @@ def test_part3_reorder_gs12_two_differently_offset_occurrences_plus_revert_is_ca
     def _t(text):
         return _swap_and_optionally_revert(
             text, _GS12_OCC0, _GS12_OCC1,
-            revert_from=("st = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, "
+            # Decode threading D1: the decode q call became ProjectAndFunnelRow(row_pf, ...)
+            # (the one-row split); the fixture text follows it, the mutation is unchanged.
+            revert_from=("st = ProjectAndFunnelRow(row_pf, normed.data(), normed_scale, lw.q_weight, "
                           "hidden_size, effective_q_width,"),
-            revert_to=("st = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, "
+            revert_to=("st = ProjectAndFunnelRow(row_pf, normed.data(), normed_scale, lw.q_weight, "
                         "hidden_size, hidden_size,"),
         )
     with _mutated(_FORWARD_SITES_CPP_T2481, _t):

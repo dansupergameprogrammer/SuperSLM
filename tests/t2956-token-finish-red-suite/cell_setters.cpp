@@ -88,6 +88,27 @@ int main(int argc, char** argv) {
     if (sslm_workspace_set_parallel_for(ws, &no_run) != SSLM_INVALID_ARGUMENT ||
         sslm_gpu_context_set_host_parallel_for(gpu, &no_run) !=
             kInvalidHook) return 12;
+    // Decode-threading plan rev 1.2 §3.7 / §8 2.2 (S1, F3): both setters accept the bit this
+    // library implements (SSLM_PARALLEL_FOR_MATVEC, bit 1; the GPU setter ignores it) and reject
+    // any other. The reserved = 1 block above stays unchanged: bit 0 is not implemented here.
+    // Placed after the null-run block so the two blocks above keep their lines.
+#if defined(SSLM_PARALLEL_FOR_MATVEC)
+    sslm_parallel_for matvec{};
+    matvec.run = &Inline;
+    matvec.max_tasks = 2;
+    matvec.reserved = SSLM_PARALLEL_FOR_MATVEC;
+    if (sslm_workspace_set_parallel_for(ws, &matvec) != SSLM_OK ||
+        sslm_gpu_context_set_host_parallel_for(gpu, &matvec) != SslmGpuStatus::SSLM_OK) return 14;
+    for (uint32_t bits : std::array<uint32_t, 4>{4u, 3u, 0x80000000u, 0xFFFFFFFFu}) {
+        sslm_parallel_for other = matvec;
+        other.reserved = bits;
+        if (sslm_workspace_set_parallel_for(ws, &other) != SSLM_INVALID_ARGUMENT ||
+            sslm_gpu_context_set_host_parallel_for(gpu, &other) != kInvalidHook) {
+            std::fprintf(stderr, "FAIL reserved=%#x accepted\n", bits);
+            return 15;
+        }
+    }
+#endif
     if (sslm_workspace_set_parallel_for(ws, nullptr) != SSLM_OK ||
         sslm_gpu_context_set_host_parallel_for(gpu, nullptr) != SslmGpuStatus::SSLM_OK)
         return 13;

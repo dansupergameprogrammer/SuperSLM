@@ -39,6 +39,7 @@ set(SUPERSLM_CORE_SOURCES
 	src/trace_hook.cpp
 	src/forward/checked_chain_funnel.cpp
 	src/forward/forward_sites.cpp
+	src/forward/parallel_split.cpp
 	src/decode_digest.cpp
 	src/sslm_abi.cpp
 	src/damped_greedy_antilm.cpp
@@ -84,6 +85,10 @@ add_library(superslm_test_injection STATIC ${SUPERSLM_CORE_SOURCES})
 target_include_directories(superslm_test_injection PUBLIC include)
 target_include_directories(superslm_test_injection PRIVATE tests)
 target_compile_definitions(superslm_test_injection PRIVATE SUPERSLM_ENABLE_BAD_ALLOC_INJECTION)
+# Decode-threading plan §3.9: the minimum-work and layer-site fault seams (src/forward/
+# parallel_split.h). Test libraries only; the production library reads the constant. PUBLIC so
+# the suite's own compile of tests/test_decode_threading_d1.cpp sees the seam declarations.
+target_compile_definitions(superslm_test_injection PUBLIC SUPERSLM_ENABLE_MATVEC_TEST_SEAMS)
 if(MSVC)
 	target_compile_options(superslm_test_injection PRIVATE /W4 /fp:precise)
 else()
@@ -91,7 +96,8 @@ else()
 endif()
 
 add_executable(superslm_tests tests/test_main.cpp tests/test_slm18x_saturation_census.cpp
-	tests/test_slm19x_schema_damped_greedy.cpp tests/test_tiled_gemm.cpp tests/test_attn_rowsites.cpp)
+	tests/test_slm19x_schema_damped_greedy.cpp tests/test_tiled_gemm.cpp tests/test_attn_rowsites.cpp
+	tests/test_decode_threading.cpp tests/test_decode_threading_d1.cpp)
 target_link_libraries(superslm_tests PRIVATE superslm_test_injection)
 if(MSVC)
 	target_compile_options(superslm_tests PRIVATE /W4 /fp:precise)
@@ -275,6 +281,36 @@ else()
 	target_compile_options(sslm_axis_digest_scalar_forced PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 
+# Decode-threading plan §8 4.5 (F9): the scalar tier has no full-suite binary (the scalar library
+# above feeds the digest only), so the decode-threading cells get their own: a seam-enabled scalar
+# library and a standalone main that runs tests/test_decode_threading{,_d1}.cpp alone. Excluded
+# from `all`, like the other forced targets; the SSE2-forced CI leg builds and runs it.
+add_library(superslm_scalar_forced_seams STATIC EXCLUDE_FROM_ALL ${SUPERSLM_CORE_SOURCES})
+target_include_directories(superslm_scalar_forced_seams PUBLIC include)
+target_include_directories(superslm_scalar_forced_seams PRIVATE tests)
+target_compile_definitions(superslm_scalar_forced_seams PUBLIC SUPERSLM_FORCE_SCALAR_MATMUL
+	SUPERSLM_ENABLE_MATVEC_TEST_SEAMS)
+target_compile_definitions(superslm_scalar_forced_seams PRIVATE SUPERSLM_ENABLE_BAD_ALLOC_INJECTION)
+add_executable(superslm_decode_threading_scalar_forced EXCLUDE_FROM_ALL
+	tests/decode_threading_standalone_main.cpp tests/test_decode_threading.cpp
+	tests/test_decode_threading_d1.cpp)
+target_link_libraries(superslm_decode_threading_scalar_forced PRIVATE superslm_scalar_forced_seams)
+target_include_directories(superslm_decode_threading_scalar_forced PRIVATE tests)
+# Decode-threading plan §8 7.4 (F12): no new heap allocation per decode token. Its own executable,
+# because it replaces the global operator new (the dim7_contract_red.cpp pattern).
+add_executable(superslm_decode_threading_alloc tests/decode_threading_alloc_main.cpp)
+target_link_libraries(superslm_decode_threading_alloc PRIVATE superslm_test_injection)
+add_test(NAME superslm_decode_threading_alloc COMMAND superslm_decode_threading_alloc)
+if(MSVC)
+	target_compile_options(superslm_scalar_forced_seams PRIVATE /W4 /fp:precise)
+	target_compile_options(superslm_decode_threading_scalar_forced PRIVATE /W4 /fp:precise)
+	target_compile_options(superslm_decode_threading_alloc PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(superslm_scalar_forced_seams PRIVATE -Wall -Wextra -ffp-contract=off)
+	target_compile_options(superslm_decode_threading_scalar_forced PRIVATE -Wall -Wextra -ffp-contract=off)
+	target_compile_options(superslm_decode_threading_alloc PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+
 # T-2149 (Claude/Vitruvius/t2149-avx-kernel-design-2026-08-18.md) / T-2158 red suite
 # (Claude/Curie/t2158-t2149-avx-red-suite-2026-08-18.md): the AVX2/AVX-512 matmul tiers,
 # the cached CPUID dispatch (DetectBestDotRowTier), and the four-macro force selection
@@ -323,6 +359,9 @@ foreach(_sslm_tier SSE2 AVX2 AVX512)
 	# actual execution of these three binaries to completion, T-2159 §11 step 10). Every
 	# forced-tier full-suite binary needs the identical seam superslm_test_injection has.
 	target_compile_definitions(superslm_${_sslm_tier_lower}_forced PRIVATE SUPERSLM_ENABLE_BAD_ALLOC_INJECTION)
+	# Decode-threading plan §3.9 / §8 4.5: the forced full suites run the D1 cells too, so each
+	# forced library carries the same seams superslm_test_injection has (above).
+	target_compile_definitions(superslm_${_sslm_tier_lower}_forced PUBLIC SUPERSLM_ENABLE_MATVEC_TEST_SEAMS)
 	# Both the bad-alloc-injection seam above (src/bad_alloc_wrap.h) and the dispatch-
 	# instrument seam below (src/matmul.cpp) #include "support/*.h" headers that resolve
 	# against a "tests" search directory -- the same PRIVATE include superslm_test_injection
@@ -358,7 +397,8 @@ foreach(_sslm_tier SSE2 AVX2 AVX512)
 	# target_compile_definitions call.
 	add_executable(superslm_tests_${_sslm_tier_lower}_forced EXCLUDE_FROM_ALL tests/test_main.cpp
 		tests/test_slm18x_saturation_census.cpp tests/test_slm19x_schema_damped_greedy.cpp
-		tests/test_tiled_gemm.cpp tests/test_attn_rowsites.cpp)
+		tests/test_tiled_gemm.cpp tests/test_attn_rowsites.cpp tests/test_decode_threading.cpp
+		tests/test_decode_threading_d1.cpp)
 	target_link_libraries(superslm_tests_${_sslm_tier_lower}_forced PRIVATE superslm_${_sslm_tier_lower}_forced)
 	target_include_directories(superslm_tests_${_sslm_tier_lower}_forced PRIVATE tests)
 	if(MSVC)
@@ -405,6 +445,20 @@ endforeach()
 # any x64 target (MSVC does not gate _mm512_* intrinsics behind /arch) and SIGILLs at runtime
 # (STATUS_ILLEGAL_INSTRUCTION) on hardware lacking AVX-512F/BW -- the same documented, expected
 # outcome as this project's forced-suite/digest AVX-512 pair (F:\t2149-avx512-run\README.txt).
+# Decode-threading plan rev 1.2 §7 (B0, B1): the decode-threading bench, on the production library,
+# and a seam build of it for B1's minimum-work sweep (superslm_test_injection carries the seam).
+add_executable(sslm_decode_threading_bench tools/decode_threading_bench.cpp)
+target_link_libraries(sslm_decode_threading_bench PRIVATE superslm)
+add_executable(sslm_decode_threading_bench_seams EXCLUDE_FROM_ALL tools/decode_threading_bench.cpp)
+target_link_libraries(sslm_decode_threading_bench_seams PRIVATE superslm_test_injection)
+foreach(_sslm_dt_bench sslm_decode_threading_bench sslm_decode_threading_bench_seams)
+	if(MSVC)
+		target_compile_options(${_sslm_dt_bench} PRIVATE /W4 /fp:precise)
+	else()
+		target_compile_options(${_sslm_dt_bench} PRIVATE -Wall -Wextra -ffp-contract=off)
+	endif()
+endforeach()
+
 add_executable(sslm_bench_prefill tools/t2147_chunk_batched_pins.cpp)
 target_link_libraries(sslm_bench_prefill PRIVATE superslm)
 if(MSVC)

@@ -27,6 +27,7 @@
 // src/gpu/superslm_gpu.cpp's own established convention for the pre-1.0 surface.
 
 #include "superslm/gpu_1p0.h"
+#include "../forward/parallel_split.h"  // ParallelForHookValid (the hook setters' shared validation)
 #include "superslm/gpu_1p0_bench_bridge.h"
 
 // Keep the implementation readable while the installed API exposes scoped status members.
@@ -1670,10 +1671,10 @@ SslmGpuStatus sslm_gpu_context_set_host_parallel_forImpl(SslmGpuContext* ctx,
 		ctx->host_parallel_for = sslm_parallel_for{};
 		return SSLM_OK;
 	}
-	if (pf->reserved != 0 || pf->max_tasks < 0 || pf->max_tasks > SSLM_PARALLEL_FOR_MAX_TASKS ||
-	    (pf->run == nullptr && pf->max_tasks > 1)) {
-		return SSLM_GPU_PARALLEL_FOR_INVALID;
-	}
+	// The CPU setter's own validation (src/forward/parallel_split.h): the same field domain and the
+	// same implemented `reserved` bits. The GPU backend reads its hook only for the finish, so a bit
+	// it accepts here changes nothing it does.
+	if (!superslm::ParallelForHookValid(*pf)) return SSLM_GPU_PARALLEL_FOR_INVALID;
 	ctx->host_parallel_for = *pf;
 	return SSLM_OK;
 }

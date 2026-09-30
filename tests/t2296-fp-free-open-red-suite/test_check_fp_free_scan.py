@@ -919,9 +919,10 @@ def test_population_08_source_manifest_resolves_seventeen_real_files():
     end = text.index(")", start)
     block = text[start:end]
     sources = [line.strip() for line in block.splitlines()[1:] if line.strip()]
-    assert len(sources) == 17, (
-        "design Sec4.1's own text states 17 SUPERSLM_CORE_SOURCES translation "
-        "units; CMakeLists.txt currently names {}: {}".format(len(sources), sources)
+    # Decode threading D0 added src/forward/parallel_split.cpp: 18 from D0 on (design Sec4.1 said 17).
+    assert len(sources) == 18, (
+        "SUPERSLM_CORE_SOURCES names 18 translation units from decode threading D0 on (design "
+        "Sec4.1's own text states 17); CMakeLists.txt currently names {}: {}".format(len(sources), sources)
     )
     missing = [s for s in sources if not os.path.exists(os.path.join(engine_root, s))]
     assert not missing, "SUPERSLM_CORE_SOURCES names files that do not exist: {}".format(missing)
@@ -2875,7 +2876,8 @@ def test_derive_core_sources_control_ordinary_manifest_unaffected():
     engine_root = os.path.dirname(_TESTS_ROOT)
     real_cmake = os.path.join(engine_root, "CMakeLists.txt")
     real_result = scan.derive_core_sources(real_cmake)
-    assert len(real_result) == 17, (
+    # Decode threading D0 added src/forward/parallel_split.cpp: 18 from D0 on.
+    assert len(real_result) == 18, (
         "the completeness self-check must not regress the real, currently-"
         "committed CMakeLists.txt -- got {} sources: {}".format(
             len(real_result), real_result)
@@ -4454,9 +4456,10 @@ def test_scan_build_output_real_build_finds_exactly_seventeen_objects(real_build
     if not _GATE_AVAILABLE:
         _fail_absent("(thirty-sixth population, must-accept)", "")
     objects = scan_build_output.find_target_objects(real_build_dir, "superslm")
-    assert len(objects) == 17, (
-        "design Sec4.1's own text states the real build emits exactly 17 "
-        "objects for the superslm target; found {}: {}".format(
+    # Decode threading D0 added src/forward/parallel_split.cpp: 18 from D0 on.
+    assert len(objects) == 18, (
+        "the real build emits exactly 18 objects for the superslm target from decode "
+        "threading D0 on (design Sec4.1 said 17); found {}: {}".format(
             len(objects), objects)
     )
 

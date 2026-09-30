@@ -305,8 +305,11 @@ SslmGpuStatus sslm_gpu_context_destroy(SslmGpuContext* ctx) noexcept;
  * - Used only by SslmGpuSeqFinishTokenForG5Bridge's host logits step, for a model mapped without
  *   SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE. With no hook the finish is serial on the calling thread,
  *   as in every earlier release. Tokens are identical with any hook and no hook.
+ * - Accepts the `reserved` bits this library implements (SSLM_PARALLEL_FOR_MATVEC) and ignores
+ *   them: a host may install one hook value on every backend. The GPU backend has no one-row
+ *   CPU projections to split.
  * - Returns SSLM_SEQUENCE_KV_BUFFER_MISMATCH for a null ctx, and SSLM_GPU_PARALLEL_FOR_INVALID,
- *   changing nothing, for pf->reserved != 0, pf->max_tasks < 0 or
+ *   changing nothing, for a `reserved` bit this library does not implement, pf->max_tasks < 0 or
  *   > SSLM_PARALLEL_FOR_MAX_TASKS, or pf->run NULL with pf->max_tasks > 1.
  * - Must be externally serialized with every other call on the context, as submission already
  *   is. pf->host_ctx must outlive every finish made on the context while the hook is installed. */

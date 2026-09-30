@@ -87,6 +87,7 @@
 #include "superslm/schema_masks.h"
 #include "superslm/sslm_damped_greedy.h"  // T-2199 Phase A/C: AntiLmState, DampedGreedyScoreAndArgmax
 #include "superslm/sslm_phaseD.h"         // T-2199 Phase D: ValidateDampedGreedyParams
+#include "forward/parallel_split.h"       // ParallelForHookValid, SaturationCounters (decode threading)
 
 #include "bad_alloc_wrap.h"  // N3 pin (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3):
                               // superslm::internal::MaybeThrowInjectedBadAllocFault(), the same
@@ -219,9 +220,24 @@ struct sslm_workspace_s {
 	size_t buf_size = 0;
 	sslm_config config{};
 	// The caller's parallel-for hook (sslm_workspace_set_parallel_for), copied in; `run == NULL`
-	// means none. Read only by sslm_decode_stepImpl's logits step (LogitsSiteParallel).
+	// means none. Read by sslm_decode_stepImpl's logits step (LogitsSiteParallel) and, when
+	// `reserved` carries SSLM_PARALLEL_FOR_MATVEC, by the layer loops' one-row projections
+	// (MatvecThreading, below).
 	sslm_parallel_for parallel_for{};
 };
+
+namespace {
+// Decode-threading plan §3.4: the one place the `reserved` bits are read. The forward pass sees
+// only the GemmThreading this builds: `row` is the workspace's hook iff the host set
+// SSLM_PARALLEL_FOR_MATVEC, and `batched` stays null (the batched-prefill bit is not in this build).
+superslm::GemmThreading MatvecThreading(const sslm_workspace_s* ws) {
+	superslm::GemmThreading t;
+	if (ws != nullptr && (ws->parallel_for.reserved & SSLM_PARALLEL_FOR_MATVEC) != 0u) {
+		t.row = &ws->parallel_for;
+	}
+	return t;
+}
+}  // namespace
 
 // C1/C3. A caller-owned KV region, sized for `block_count` SEQUENCES (design Sec7.2, RULED --
 // a block is one whole sequence's entire KV footprint, never a sub-sequence page). `free_list`
@@ -1034,10 +1050,9 @@ extern "C" sslm_status sslm_workspace_set_parallel_for(sslm_workspace ws,
 		ws->parallel_for = sslm_parallel_for{};
 		return SSLM_OK;
 	}
-	if (pf->reserved != 0 || pf->max_tasks < 0 || pf->max_tasks > SSLM_PARALLEL_FOR_MAX_TASKS ||
-	    (pf->run == nullptr && pf->max_tasks > 1)) {
-		return SSLM_INVALID_ARGUMENT;
-	}
+	// The field domain both hook setters share (src/forward/parallel_split.h), including the
+	// build's implemented `reserved` bits.
+	if (!superslm::ParallelForHookValid(*pf)) return SSLM_INVALID_ARGUMENT;
 	ws->parallel_for = *pf;
 	return SSLM_OK;
 }
@@ -1589,7 +1604,10 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
 		    // The per-site census the total sums, filled here as RunLayerLoop's decode path
 		    // already fills it, so a prefilled sequence's census still sums to its total.
 		    &state.kv_landing_saturation_count, &state.k_channel_landing_saturation_count,
-		    &state.rope_q_saturation_count, &state.rope_k_saturation_count);
+		    &state.rope_q_saturation_count, &state.rope_k_saturation_count,
+		    // Decode-threading plan §3.4: `admit_count` is the chunk's M, so a call that admits
+		    // exactly one token takes the one-row split whatever `count` the caller sent.
+		    MatvecThreading(ws));
 		if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
 
 		// forward_sites.h: "a sequence resting between whole tokens carries a marker at layer
@@ -1624,11 +1642,23 @@ sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState
                                 int32_t* out_last_token, sslm_adapter_s* adapter,
                                 sslm_workspace_s* ws, sslm_span_kind kind, sslm_schema bound_schema,
                                 uint32_t* walk_state, int64_t* forced_token_count) {
-	return CatchAllocationFailure([&]() -> sslm_status {
+	// Decode-threading plan §3.6, the prefill guard: a call that fails before committing a token
+	// -- a hook that broke exactly-once, an allocation failure (the exception arm, through
+	// CatchAllocationFailure), or any rejection -- has moved saturation counters that no K/V
+	// backs. They are put back iff `context_length` did not move. A committed partial admission
+	// keeps its counts, as it always has. For a host with no bits set this is a deliberate change:
+	// an uncommitted failed prefill used to keep them (CHANGELOG).
+	const int64_t context_length_before = state.context_length;
+	const superslm::SaturationCounters counters_before = superslm::SaturationCounters::Snapshot(state);
+	const sslm_status st = CatchAllocationFailure([&]() -> sslm_status {
 		return PrefillWholeTokensImpl(model, state, kv_block, block_size, tokens, count,
 		                               chunk_budget, consumed, out_last_token, adapter, ws, kind,
 		                               bound_schema, walk_state, forced_token_count);
 	});
+	if (st != SSLM_OK && state.context_length == context_length_before) {
+		counters_before.RestoreTo(state);
+	}
+	return st;
 }
 
 }  // namespace
@@ -2441,7 +2471,8 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 			    static_cast<uint32_t>(params->layer_budget), c.hidden_size, c.head_dim,
 			    c.num_key_value_heads, c.intermediate_size, c.context_cap, model->view.rope_tables,
 			    seq->kv_block, seq->block_size, /*site_prefix=*/{}, /*token_index=*/0, nullptr,
-			    /*q_width=*/static_cast<size_t>(c.num_attention_heads) * c.head_dim);
+			    /*q_width=*/static_cast<size_t>(c.num_attention_heads) * c.head_dim,
+			    MatvecThreading(ws));
 			if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
 
 			if (seq->state.layer_index < c.num_hidden_layers) {

@@ -19,12 +19,18 @@ permissions:
 jobs:
   windows-x64:
     runs-on: windows-latest
+    env:
+      SUPERSLM_DECODE_THREADING_FIXTURE_DIR: ${{ github.workspace }}/dt-fixtures
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: '3.13'
       - run: pip install -r requirements.txt
+      # Decode-threading plan rev 1.2 §3.9: the D1 cells read generated fixtures (never committed);
+      # a missing fixture fails the cell. The generator needs numpy only.
+      - name: Generate the decode-threading fixtures
+        run: python tools/gen_decode_threading_fixture.py dt-fixtures
       - run: cmake -B build
       - run: cmake --build build --config Release
       - shell: pwsh
@@ -135,29 +141,58 @@ jobs:
 
   linux-x64:
     runs-on: ubuntu-latest
+    env:
+      SUPERSLM_DECODE_THREADING_FIXTURE_DIR: ${{ github.workspace }}/dt-fixtures
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: '3.13'
-      - run: pip install capstone
+      - run: pip install capstone numpy
+      # Decode-threading plan rev 1.2 §3.9: the D1 cells read generated fixtures (never committed);
+      # a missing fixture fails the cell. The generator needs numpy only.
+      - name: Generate the decode-threading fixtures
+        run: python tools/gen_decode_threading_fixture.py dt-fixtures
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build
       - run: python tests/ci/scan_build_output.py --build-dir build --target superslm --isa x86-64
       - run: ./build/superslm_tests
+      # Decode-threading plan rev 1.2 §8 7.4: no new heap allocation per token (its own binary,
+      # because it replaces the global operator new).
+      - run: ./build/superslm_decode_threading_alloc
 
   linux-x64-asan:
     runs-on: ubuntu-latest
+    env:
+      SUPERSLM_DECODE_THREADING_FIXTURE_DIR: ${{ github.workspace }}/dt-fixtures
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      - run: pip install numpy
+      # Decode-threading plan rev 1.2 §3.9: the D1 cells read generated fixtures (never committed);
+      # a missing fixture fails the cell. The generator needs numpy only.
+      - name: Generate the decode-threading fixtures
+        run: python tools/gen_decode_threading_fixture.py dt-fixtures
       - run: cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all"
       - run: cmake --build build
       - run: ./build/superslm_tests
 
   macos-arm64:
     runs-on: macos-latest
+    env:
+      SUPERSLM_DECODE_THREADING_FIXTURE_DIR: ${{ github.workspace }}/dt-fixtures
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      - run: pip install numpy
+      # Decode-threading plan rev 1.2 §3.9: the D1 cells read generated fixtures (never committed);
+      # a missing fixture fails the cell. The generator needs numpy only.
+      - name: Generate the decode-threading fixtures
+        run: python tools/gen_decode_threading_fixture.py dt-fixtures
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build
       - run: ./build/superslm_tests
@@ -173,8 +208,18 @@ jobs:
   # against it in CI.
   linux-x64-debug:
     runs-on: ubuntu-latest
+    env:
+      SUPERSLM_DECODE_THREADING_FIXTURE_DIR: ${{ github.workspace }}/dt-fixtures
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      - run: pip install numpy
+      # Decode-threading plan rev 1.2 §3.9: the D1 cells read generated fixtures (never committed);
+      # a missing fixture fails the cell. The generator needs numpy only.
+      - name: Generate the decode-threading fixtures
+        run: python tools/gen_decode_threading_fixture.py dt-fixtures
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
       - run: cmake --build build
       - run: ./build/superslm_tests
@@ -194,10 +239,19 @@ jobs:
   linux-x64-tsan:
     runs-on: ubuntu-latest
     env:
+      SUPERSLM_DECODE_THREADING_FIXTURE_DIR: ${{ github.workspace }}/dt-fixtures
       CC: clang-18
       CXX: clang++-18
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      - run: pip install numpy
+      # Decode-threading plan rev 1.2 §3.9: the D1 cells read generated fixtures (never committed);
+      # a missing fixture fails the cell. The generator needs numpy only.
+      - name: Generate the decode-threading fixtures
+        run: python tools/gen_decode_threading_fixture.py dt-fixtures
       - run: cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS="-fsanitize=thread"
       - run: cmake --build build --target superslm_tests
       - run: ./build/superslm_tests
@@ -211,11 +265,24 @@ jobs:
   # the existing scalar-forced digest job's own stated reasoning, reused unchanged).
   linux-x64-clang-sse2-forced:
     runs-on: ubuntu-latest
+    env:
+      SUPERSLM_DECODE_THREADING_FIXTURE_DIR: ${{ github.workspace }}/dt-fixtures
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      - run: pip install numpy
+      # Decode-threading plan rev 1.2 §3.9: the D1 cells read generated fixtures (never committed);
+      # a missing fixture fails the cell. The generator needs numpy only.
+      - name: Generate the decode-threading fixtures
+        run: python tools/gen_decode_threading_fixture.py dt-fixtures
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18
-      - run: cmake --build build --target superslm_tests_sse2_forced
+      - run: cmake --build build --target superslm_tests_sse2_forced superslm_decode_threading_scalar_forced
       - run: ./build/superslm_tests_sse2_forced
+      # Decode-threading plan rev 1.2 §8 4.5 (F9): the scalar tier has no full-suite binary, so its
+      # run of the decode-threading cells is this standalone one.
+      - run: ./build/superslm_decode_threading_scalar_forced
 
   # AVX2 is assumed present on any GH-hosted x86-64 runner (design §1) but the job still
   # defensively probes before running, so an unexpected absence reports SKIPPED rather than
@@ -224,8 +291,18 @@ jobs:
   # it is safe before AVX2 presence is confirmed.
   linux-x64-clang-avx2-forced:
     runs-on: ubuntu-latest
+    env:
+      SUPERSLM_DECODE_THREADING_FIXTURE_DIR: ${{ github.workspace }}/dt-fixtures
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      - run: pip install numpy
+      # Decode-threading plan rev 1.2 §3.9: the D1 cells read generated fixtures (never committed);
+      # a missing fixture fails the cell. The generator needs numpy only.
+      - name: Generate the decode-threading fixtures
+        run: python tools/gen_decode_threading_fixture.py dt-fixtures
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18
       - run: cmake --build build --target superslm_tests_avx2_forced
       - name: Probe for AVX2 and run the forced suite if present
@@ -245,8 +322,18 @@ jobs:
   # for real only by the manual hardware run named at design §11 step 9 (D-SLM3511).
   linux-x64-clang-avx512-forced:
     runs-on: ubuntu-latest
+    env:
+      SUPERSLM_DECODE_THREADING_FIXTURE_DIR: ${{ github.workspace }}/dt-fixtures
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      - run: pip install numpy
+      # Decode-threading plan rev 1.2 §3.9: the D1 cells read generated fixtures (never committed);
+      # a missing fixture fails the cell. The generator needs numpy only.
+      - name: Generate the decode-threading fixtures
+        run: python tools/gen_decode_threading_fixture.py dt-fixtures
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18
       - run: cmake --build build --target superslm_tests_avx512_forced
       - name: Probe for AVX-512F+BW and run the forced suite if present
@@ -366,8 +453,18 @@ jobs:
   # AVX-512F, which the hosted image's CPUs pair with BW) and reports SKIPPED without it.
   windows-msvc-avx2-forced:
     runs-on: windows-latest
+    env:
+      SUPERSLM_DECODE_THREADING_FIXTURE_DIR: ${{ github.workspace }}/dt-fixtures
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      - run: pip install numpy
+      # Decode-threading plan rev 1.2 §3.9: the D1 cells read generated fixtures (never committed);
+      # a missing fixture fails the cell. The generator needs numpy only.
+      - name: Generate the decode-threading fixtures
+        run: python tools/gen_decode_threading_fixture.py dt-fixtures
       - run: cmake -B build
       - run: cmake --build build --config Release --target superslm_tests_avx2_forced sslm_axis_digest_avx2_forced
       - name: Run the forced suite, then extract the GLOBAL digest
@@ -388,8 +485,18 @@ jobs:
 
   windows-msvc-avx512-forced:
     runs-on: windows-latest
+    env:
+      SUPERSLM_DECODE_THREADING_FIXTURE_DIR: ${{ github.workspace }}/dt-fixtures
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      - run: pip install numpy
+      # Decode-threading plan rev 1.2 §3.9: the D1 cells read generated fixtures (never committed);
+      # a missing fixture fails the cell. The generator needs numpy only.
+      - name: Generate the decode-threading fixtures
+        run: python tools/gen_decode_threading_fixture.py dt-fixtures
       - run: cmake -B build -DCMAKE_CXX_FLAGS="/DWIN32 /D_WINDOWS /EHsc /DSUPERSLM_TILED_AVX512_MSVC=1 /DSUPERSLM_SITES_AVX512_MSVC=1"
       - run: cmake --build build --config Release --target superslm_tests_avx512_forced sslm_axis_digest_avx512_forced
       - name: Probe for AVX-512, run the forced suite and extract the GLOBAL digest if present
@@ -416,8 +523,18 @@ jobs:
 
   windows-clangcl-avx2-forced:
     runs-on: windows-latest
+    env:
+      SUPERSLM_DECODE_THREADING_FIXTURE_DIR: ${{ github.workspace }}/dt-fixtures
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      - run: pip install numpy
+      # Decode-threading plan rev 1.2 §3.9: the D1 cells read generated fixtures (never committed);
+      # a missing fixture fails the cell. The generator needs numpy only.
+      - name: Generate the decode-threading fixtures
+        run: python tools/gen_decode_threading_fixture.py dt-fixtures
       - run: cmake -B build -T ClangCL
       - run: cmake --build build --config Release --target superslm_tests_avx2_forced sslm_axis_digest_avx2_forced
       - name: Run the forced suite, then extract the GLOBAL digest
@@ -438,8 +555,18 @@ jobs:
 
   windows-clangcl-avx512-forced:
     runs-on: windows-latest
+    env:
+      SUPERSLM_DECODE_THREADING_FIXTURE_DIR: ${{ github.workspace }}/dt-fixtures
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      - run: pip install numpy
+      # Decode-threading plan rev 1.2 §3.9: the D1 cells read generated fixtures (never committed);
+      # a missing fixture fails the cell. The generator needs numpy only.
+      - name: Generate the decode-threading fixtures
+        run: python tools/gen_decode_threading_fixture.py dt-fixtures
       - run: cmake -B build -T ClangCL -DCMAKE_CXX_FLAGS="/DWIN32 /D_WINDOWS /EHsc /DSUPERSLM_TILED_AVX512_MSVC=1 /DSUPERSLM_SITES_AVX512_MSVC=1"
       - run: cmake --build build --config Release --target superslm_tests_avx512_forced sslm_axis_digest_avx512_forced
       - name: Probe for AVX-512, run the forced suite and extract the GLOBAL digest if present
@@ -747,8 +874,18 @@ jobs:
   # binary's expected failure is handled.)
   branch-coverage:
     runs-on: ubuntu-latest
+    env:
+      SUPERSLM_DECODE_THREADING_FIXTURE_DIR: ${{ github.workspace }}/dt-fixtures
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      - run: pip install numpy
+      # Decode-threading plan rev 1.2 §3.9: the D1 cells read generated fixtures (never committed);
+      # a missing fixture fails the cell. The generator needs numpy only.
+      - name: Generate the decode-threading fixtures
+        run: python tools/gen_decode_threading_fixture.py dt-fixtures
       - name: Build with source-coverage instrumentation
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo \

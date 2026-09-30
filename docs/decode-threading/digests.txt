@@ -1,0 +1,31 @@
+Decode threading D1 -- the digest legs (output must stay bit-identical)
+sslm_axis_digest on the auto tier and the four forced tiers. Base c28f171 (GCC 13) against the final tree (GCC 13, Clang 18).
+The digest runs without a hook; bit-identity with bit 1 on is the cells' job (1.1, 6.1-6.3, 8.1) and v190.txt's.
+
+base digest-base: GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+base digest-base_avx2_forced: GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+base digest-base_avx512_forced: GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+base digest-base_scalar_forced: GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+base digest-base_sse2_forced: GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+gcc sslm_axis_digest exit 0 GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+gcc sslm_axis_digest_scalar_forced exit 0 GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+gcc sslm_axis_digest_sse2_forced exit 0 GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+gcc sslm_axis_digest_avx2_forced exit 0 GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+gcc sslm_axis_digest_avx512_forced exit 0 GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+clang sslm_axis_digest exit 0 GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+clang sslm_axis_digest_scalar_forced exit 0 GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+clang sslm_axis_digest_sse2_forced exit 0 GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+clang sslm_axis_digest_avx2_forced exit 0 GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+clang sslm_axis_digest_avx512_forced exit 0 GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc
+
+All fifteen GLOBAL lines are equal. Whole-output diff, base against D1, every tier:
+  tier 'auto' gcc: identical
+  tier 'auto' clang: identical but for the '# compiler:' header line
+  tier '_scalar_forced' gcc: identical
+  tier '_scalar_forced' clang: identical but for the '# compiler:' header line
+  tier '_sse2_forced' gcc: identical
+  tier '_sse2_forced' clang: identical but for the '# compiler:' header line
+  tier '_avx2_forced' gcc: identical
+  tier '_avx2_forced' clang: identical but for the '# compiler:' header line
+  tier '_avx512_forced' gcc: identical
+  tier '_avx512_forced' clang: identical but for the '# compiler:' header line

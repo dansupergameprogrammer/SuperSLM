@@ -1,0 +1,40 @@
+# Decode threading D1 branch coverage (plan §8, 11.x; the branch-coverage leg's floors). INDICATIVE ONLY: a floor is pinned only
+# from the hosted leg's own measurement, and this series is delivered as patches, so that leg has not run on it. Local replica
+# of the leg's commands: clang-18, llvm-profdata/llvm-cov 18, RelWithDebInfo, -fprofile-instr-generate -fcoverage-mapping;
+# superslm_tests, the SSE2/AVX2/AVX-512-forced suites and the scalar-forced digest, merged, exported over src/*.cpp
+# include/superslm/*.h. SUPERSLM_ATTN_ROWSITES_ARTIFACT and SUPERSLM_DECODE_THREADING_FIXTURE_DIR set. All five binaries
+# exit 0. Branches covered / total. Floors (tools/ci/branch_coverage_floors.json): intmath.cpp 87.93, matmul.cpp 72.22.
+#
+# (1) All five profiles (the leg's union; this host is AVX-512, so superslm_tests itself runs the AVX-512 tier):
+#                          base c28f171          D1 (green tree)       D1 (with the 2.1 o case)
+#   src/intmath.cpp        222/242 91.74%        222/242 91.74%        221/242 91.32%
+#   src/matmul.cpp         288/312 92.31%        289/312 92.63%        288/312 92.31%
+#   check_branch_coverage_floors.py: OK (19 files at or above their floor) on all three.
+#   D1 edits neither file. The one-branch differences between runs of the same tree are run-to-run jitter (the D1 tree
+#   measured twice gives 222/289 and 221/288), not a D1 effect.
+#
+# (2) Without AVX-512 (the hosted runner's view: the SSE2-forced, AVX2-forced and scalar-forced-digest profiles only, the
+#     AVX-512 auto run and the AVX-512-forced run left out):
+#                          base c28f171          D1 (green tree)       D1 (with the 2.1 o case)
+#   src/intmath.cpp        203/242 83.88%        203/242 83.88%        202/242 83.47%
+#   src/matmul.cpp         205/296 69.26%        206/296 69.59%        205/296 69.26%
+#   check_branch_coverage_floors.py: FAILED on both files -- on the base as on D1. The projection was below the floors
+#   before this series (S2-S5 recorded the same); D1 does not move it.
+#
+# (3) src/forward/ is outside the leg's export glob (src/*.cpp); exported separately here, all five profiles:
+#   src/forward/forward_sites.cpp   base 731/910 80.33%   D1 779/948 82.17%   (without AVX-512: 713/906 -> 761/944)
+#   src/forward/parallel_split.cpp  D1 45-46/48. Uncovered: SplitColumns' `align == 0` defensive arm (no caller passes 0),
+#     and the fault seam's lost-race arm of compare_exchange (single-threaded arming). MatvecGroupSplit's `run == nullptr`
+#     arm was taken in the first D1 run and not in the second (the 46 against 45); llvm-cov warns of 22-23 functions with
+#     mismatched data across the five binaries in every run, base included, which is the likely source of that and of
+#     the one-branch jitter above.
+#
+# Uncovered D1 sides in forward_sites.cpp and sslm_abi.cpp (lines the series changed, all five profiles), and what came of them:
+#   - o's `return fail_layer(st)` in the decode loop: taken by no cell with the plan's 2.1 sites. Cell 2.1 now also lands
+#     its four hostile cases on o (deviation 11); the arm is taken, and the mutant M7-o (o bypasses the guard) dies on them.
+#   - The seams' `return st` after MaybeLayerSiteFault at q and o (both loops): §8 arms the seam at down and gate + up only.
+#   - Error-return arms of the rewired funnel calls (gate/up funnels, the chunk-batched sites): pre-existing failure paths
+#     whose inputs the fixture never drives out of domain; unchanged in kind from the base.
+#   No split-rule or guard decision branch is uncovered.
+#
+# The floors are NOT re-pinned, and no allowlist note is added.

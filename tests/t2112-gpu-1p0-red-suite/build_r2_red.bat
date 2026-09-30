@@ -21,7 +21,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /DSUPERSLM_ENABLE_BAD_ALLOC_INJE
     "%ENG%\src\artifact.cpp" "%ENG%\src\sha256.cpp" "%ENG%\src\tokenizer.cpp" "%ENG%\src\model.cpp" ^
     "%ENG%\src\intmath.cpp" "%ENG%\src\silu_lut.cpp" "%ENG%\src\matmul.cpp" "%ENG%\src\proof_manifest.cpp" ^
     "%ENG%\src\trace_hook.cpp" "%ENG%\src\forward\checked_chain_funnel.cpp" ^
-    "%ENG%\src\forward\forward_sites.cpp" "%ENG%\src\decode_digest.cpp" ^
+    "%ENG%\src\forward\forward_sites.cpp" "%ENG%\src\forward\parallel_split.cpp" "%ENG%\src\decode_digest.cpp" ^
     "%ENG%\src\gpu\superslm_gpu.cpp" "%ENG%\src\gpu\gpu_1p0.cpp" "%CELL%" ^
     /Fo:"obj\r2\\" /Fe:"obj\r2\%EXE%" /link d3d12.lib dxgi.lib dxguid.lib >"obj\r2\%MODE%.build.log" 2>&1
 if errorlevel 1 (type "obj\r2\%MODE%.build.log" & exit /b 2)

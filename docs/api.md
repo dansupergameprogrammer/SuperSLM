@@ -164,12 +164,46 @@ against 1.6.0 is in the
   that returns while an invocation is still running has undefined behaviour;
   that part of the contract cannot be checked.
 - `max_tasks` is at most `SSLM_PARALLEL_FOR_MAX_TASKS` (256). A setter
-  refuses a `reserved` field that is not 0, a `max_tasks` outside
-  `[0, 256]`, or a null `run` with `max_tasks` above 1
+  refuses a `reserved` bit the library does not implement, a `max_tasks`
+  outside `[0, 256]`, or a null `run` with `max_tasks` above 1
   (`SSLM_INVALID_ARGUMENT` on the CPU, `SSLM_GPU_PARALLEL_FOR_INVALID` on
   the GPU). Passing `NULL` clears the hook.
-- Only the finish's logits step reads the hook. Prefill, prefix prefill and
-  every other call ignore it.
+- The finish's logits step reads the hook. With `reserved` = 0 nothing else
+  does: prefill, prefix prefill and every other call ignore it.
+- **One-row projections, opt-in (CPU backend).** Setting
+  `SSLM_PARALLEL_FOR_MATVEC` (bit 1) in `reserved` also splits every
+  one-row (M = 1) projection across `run`. Each decode layer has five
+  groups: q alone, k and v together, o alone, gate and up together, and
+  down alone. A prefill or prefix-prefill call that admits exactly one token
+  (whatever `count` was sent) splits each of its seven projections alone.
+  For a group of N output rows over input width K (N·K weight bytes), the
+  task count is the smallest of `max_tasks`, ceil(N / 64) and
+  floor(N·K / 256 KiB), and at least 1. Each task then takes
+  ceil(N / count) rows rounded up to a multiple of 64, and the last task
+  takes what is left. So 256 KiB caps the task count by the group's total
+  weight bytes. It is not a floor on each task: the last task can be
+  smaller. At N = K = 896 (Qwen2.5-0.5B's q and o) and `max_tasks` 4 the
+  split is 320, 320 and 256 rows, and the last task streams 229,376 bytes.
+  A group calls `run` only when this gives at least two tasks; otherwise it
+  runs on the calling thread. On Qwen2.5-0.5B at `max_tasks` 4, k + v
+  (256 rows, 229,376 bytes) runs on the calling thread and the other four
+  groups split, so there are 97 `run` calls per decode token (4 per layer
+  plus the finish). A call admitting two or more tokens is unchanged. The GPU
+  setter accepts the bit and ignores it: the GPU backend reads its hook only
+  for the finish. The macro's presence in `parallel_for.h` is the
+  compile-time test, and a library without the feature refuses the bit.
+- Rows are split into contiguous blocks whose size is a function of the
+  matrix shape, `max_tasks` and the 256 KiB constant only, and every row is one
+  exact integer sum on one thread: tokens, save blobs and digests are
+  identical with any hook, any `max_tasks` and either bit setting.
+- A `run` that breaks exactly-once inside a decode layer fails the call with
+  `SSLM_INVALID_ARGUMENT`. The sequence rests at the start of that layer,
+  with the layer's five saturation counts put back (the layers before it
+  keep theirs), and the next call resumes there. A prefill or prefix-prefill
+  call that fails before admitting a token, for any reason and with or
+  without the bit, leaves the saturation counts as they were before the
+  call; a call that admits a prefix and then stops keeps that prefix's
+  counts.
 - A host with no job system can use the reference `run` in
   [`docs/parallel_for_reference.hpp`](parallel_for_reference.hpp): a small
   `std::thread` pool that meets the contract. It is documentation, not a
@@ -407,8 +441,10 @@ silently accepted.
   on a workspace, or clears it with `NULL`. `sslm_decode_step` and
   `sslm_decode_step_v2` then split the token finish's logits rows across the
   hook's `run` when that workspace is passed; with no hook, or no workspace,
-  the finish is serial on the calling thread as before. Tokens are identical
-  either way. A hook that breaks its exactly-once contract fails that call
+  the finish is serial on the calling thread as before. With
+  `SSLM_PARALLEL_FOR_MATVEC` set, each decode layer's one-row projections,
+  and a prefill call that admits exactly one token, split across it too.
+  Tokens are identical either way. A hook that breaks its exactly-once contract fails that call
   with `SSLM_INVALID_ARGUMENT` and leaves the sequence ready to retry. See
   [The token finish](#the-token-finish) above for the contract and the
   reference `run`.

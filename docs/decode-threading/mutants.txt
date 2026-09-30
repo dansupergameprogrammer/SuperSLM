@@ -1,0 +1,163 @@
+Decode threading D1 -- the §9 mutation cells, executed
+Each mutant is a source edit applied to the D1 green tree (commits 3 and 4 of the series), superslm_tests rebuilt
+(GCC 13, auto tier) and run with the generated fixtures, then the edit reverted. 'Cells red' counts the
+FAIL lines per cell tag (a line tagged "6.2 fdef.sslm" counts under that key and under "6.2"). A mutant is KILLED when at least one of the cells §9 names turns red.
+(The later fix-up commit 5 moves four fault-seam lines above their GS-12 markers; no mutant touches them.)
+
+M1: KILLED -- task range end off by one (drops each block's last row)
+    §9 names: 6.1, 6.2
+    red: 1.3 x1, 6.1 x1, 4.3 x5, 6.2 fdef.sslm x3, 6.2 x6, 6.2 fqk.sslm x3, 6.3 x1, 1.1 x1, 1.2 x1, 2.3 x3, 3.1 x2, 2.1 x60, 5.1 fdef.sslm x3, 5.1 x5, 5.1 fqk.sslm x2, 5.2 x1, 5.3 x2, 5.4 x1, 5.5 x4, 8.1 x5
+    superslm tests: 123433 checks, 99 failures
+M2: KILLED -- rule ignores the bit (threads with reserved = 0)
+    §9 names: 7.2
+    red: 4.2 x1, 7.2 fdef.sslm x2, 7.2 x4, 7.2 fqk.sslm x2
+    superslm tests: 123464 checks, 5 failures
+M3: KILLED -- minimum-work term deleted
+    §9 names: 4.2
+    red: 4.2 x18, 1.3 x1
+    superslm tests: 123464 checks, 19 failures
+M3b: KILLED -- minimum-work comparison >= turned into >
+    §9 names: 4.2
+    red: 4.2 x6
+    superslm tests: 123464 checks, 6 failures
+M4: KILLED -- M = 1 test widened to M <= 7
+    §9 names: 4.4
+    red: 4.4 x2
+    superslm tests: 123464 checks, 2 failures
+M4b: KILLED -- ABI keys one-token threading on count == 1
+    §9 names: 4.4
+    red: 4.4 x2, 5.4 x1
+    superslm tests: 123464 checks, 3 failures
+M5: KILLED -- group maps the straddling block onto the wrong part (stops at the first part it touches)
+    §9 names: 4.3
+    red: 1.3 x1, 6.1 x1, 4.3 x5, 6.2 fdef.sslm x3, 6.2 x3, 1.1 x1, 1.2 x1, 2.3 x3, 3.1 x2, 2.1 x60, 5.1 fdef.sslm x3, 5.1 x3, 5.2 x1, 5.5 x4, 8.1 x5
+    superslm tests: 123437 checks, 90 failures
+M6: KILLED -- decode guard restores the total only
+    §9 names: 5.1
+    red: 2.1 x16, 5.1 fdef.sslm x2, 5.1 x4, 5.1 fqk.sslm x2, 5.5 x2
+    superslm tests: 123453 checks, 22 failures
+M6-kv: KILLED -- decode guard omits kv
+    §9 names: 5.1
+    red: 2.1 x16, 5.1 fdef.sslm x2, 5.1 x4, 5.1 fqk.sslm x2, 5.5 x2
+    superslm tests: 123453 checks, 22 failures
+M6-kv_landing: KILLED -- decode guard omits kv_landing
+    §9 names: 5.1
+    red: 2.1 x16, 5.1 fdef.sslm x2, 5.1 x2, 5.5 x2
+    superslm tests: 123454 checks, 20 failures
+M6-k_channel_landing: KILLED -- decode guard omits k_channel_landing
+    §9 names: 5.1, 5.1 fqk.sslm
+    red: 5.1 fqk.sslm x2, 5.1 x2
+    superslm tests: 123463 checks, 2 failures
+M6-rope_q: KILLED -- decode guard omits rope_q
+    §9 names: 5.1
+    red: 2.1 x16, 5.1 fdef.sslm x2, 5.1 x4, 5.1 fqk.sslm x2, 5.5 x2
+    superslm tests: 123453 checks, 22 failures
+M6-rope_k: KILLED -- decode guard omits rope_k
+    §9 names: 5.1
+    red: 2.1 x16, 5.1 fdef.sslm x2, 5.1 x2, 5.5 x2
+    superslm tests: 123454 checks, 20 failures
+M7: KILLED -- decode guard removed
+    §9 names: 5.1, 2.1
+    red: 2.1 x16, 5.1 fdef.sslm x2, 5.1 x4, 5.1 fqk.sslm x2, 5.5 x2
+    superslm tests: 123453 checks, 22 failures
+M7b-start: KILLED -- decode guard snapshot taken at call start
+    §9 names: 5.1, 2.1
+    red: 2.1 x32, 5.1 fdef.sslm x2, 5.1 x4, 5.1 fqk.sslm x2, 5.5 x2
+    superslm tests: 123445 checks, 38 failures
+M7b-landing: KILLED -- decode guard snapshot taken after K/V landing
+    §9 names: 5.1, 2.1
+    red: 2.1 x16, 5.1 fdef.sslm x2, 5.1 x2, 5.5 x2
+    superslm tests: 123454 checks, 20 failures
+M8: KILLED -- decode guard restores on every rejection, not only ParallelForIncomplete
+    §9 names: 5.2
+    red: 5.2 x1
+    superslm tests: 123464 checks, 1 failures
+M8b: KILLED -- prefill guard restores on every non-OK
+    §9 names: 5.4
+    red: 5.4 x4
+    superslm tests: 123460 checks, 4 failures
+M8c: KILLED -- prefill guard skips the exception arm
+    §9 names: 5.3
+    red: 5.3 x4
+    superslm tests: 123462 checks, 4 failures
+M9b: KILLED -- shared validation accepts bit 0 on a D1-only engine
+    §9 names: 2.2, 8.2
+    red: 2.2 x4, 8.2 x1
+    superslm tests: 123464 checks, 5 failures
+M10: KILLED -- logits moved onto SplitColumns with align 32
+    §9 names: 7.1
+    red: 7.1 x2
+    superslm tests: 123464 checks, 2 failures
+M10b: KILLED -- logits stops calling run for one task
+    §9 names: 7.1
+    red: 7.1 x2
+    superslm tests: 123464 checks, 2 failures
+M11: KILLED -- up's funnel run before gate's
+    §9 names: 6.2
+    red: 6.2 fdef.sslm x1, 6.2 x2, 6.2 fqk.sslm x1, 8.1 x2
+    superslm tests: 123464 checks, 4 failures
+
+Killed: 23 of 23 executed.
+
+Not executable here:
+  M9  GPU setter keeps its own reserved != 0 test -- cells 2.2 (WIN32 GPU setter) and 7.3 run on the Windows leg only;
+      the GPU setter calls the shared ParallelForHookValid (D0), so the mutant is a WIN32-only edit.
+  M9c rule reads reserved != 0 instead of bit 1 -- needs an engine with bit 0 implemented (8.2 at S2-A).
+      On a D1-only engine the setter refuses every value but 0 and 2, so the two readings cannot differ.
+  M12 plugin GPU install passes the CPU bits -- plugin step D4.
+
+Notes:
+  - M2 is also cell 11.1's vitality leg: the counting hook reads nonzero where 7.2 requires zero.
+  - M6 is run as the total-only mutant plus one mutant per omitted per-site counter (kv, kv_landing,
+    k_channel_landing, rope_q, rope_k). k_channel_landing moves only on F-QK (the Option-G K landing), so
+    only 5.1's F-QK half kills it, as §9 says.
+  - M7b is run twice: the snapshot at call start, and after K/V landing.
+  - M4 is killed by 4.4 alone. §9 also lists 4.2, but 4.2's counts are all M = 1, which M4 does not change.
+  - M3, M3b and M4 were run against rev 1.2's corrected 4.2 oracle, as §9's rev 1.2 note requires.
+
+Coverage-found extra (after green, see coverage.txt):
+M7-o: KILLED -- o's failure returns around the decode guard (`return st;` for `return fail_layer(st);`)
+    §9 names: none (not a §9 row; it pins the 2.1 o case added from the coverage replica)
+    red: 2.1 at o x8 (four hostile kinds, each the rest-at-layer-1 check and the retry check), and nothing else
+    superslm tests: 123524 checks, 8 failures (fixture run without the attn-rowsites artifact)
+
+PD-1 re-run (code review P2, 2026-09-30): the mutants whose red set included 2.1, against the PD-1 cell 2.1
+(GCC 13, auto tier, this head's fixtures: fdef f4adf711..., fqk 27e82bcb..., fnoclamp 52064d5c...; no attn-rowsites
+artifact, so totals omit its 238 checks). The rest of the table above does not touch 2.1 and is not re-run.
+M1: KILLED -- task range end off by one (drops each block's last row)
+    red: 1.1 x1, 1.2 x1, 1.3 x1, 2.1 x72, 2.3 x3, 3.1 x2, 4.3 x5, 5.1 x5, 5.1 fdef.sslm x3, 5.1 fqk.sslm x2, 5.2 x1, 5.3 x2, 5.4 x1, 5.5 x4, 6.1 x1, 6.2 x6, 6.2 fdef.sslm x3, 6.2 fqk.sslm x3, 6.3 x1, 8.1 x5
+    superslm tests: 123541 checks, 111 failures
+M5: KILLED -- group maps the straddling block onto the wrong part (stops at the first part it touches)
+    red: 1.1 x1, 1.2 x1, 1.3 x1, 2.1 x72, 2.3 x3, 3.1 x2, 4.3 x5, 5.1 x3, 5.1 fdef.sslm x3, 5.2 x1, 5.5 x4, 6.1 x1, 6.2 x3, 6.2 fdef.sslm x3, 8.1 x5
+    superslm tests: 123545 checks, 102 failures
+M6: KILLED -- decode guard restores the total only
+    red: 2.1 x24, 5.1 x4, 5.1 fdef.sslm x2, 5.1 fqk.sslm x2, 5.5 x2
+    superslm tests: 123561 checks, 30 failures
+M6-kv: KILLED -- decode guard omits kv
+    red: 2.1 x24, 5.1 x4, 5.1 fdef.sslm x2, 5.1 fqk.sslm x2, 5.5 x2
+    superslm tests: 123561 checks, 30 failures
+M6-kv_landing: KILLED -- decode guard omits kv_landing
+    red: 2.1 x24, 5.1 x2, 5.1 fdef.sslm x2, 5.5 x2
+    superslm tests: 123562 checks, 28 failures
+M6-rope_q: KILLED -- decode guard omits rope_q
+    red: 2.1 x24, 5.1 x4, 5.1 fdef.sslm x2, 5.1 fqk.sslm x2, 5.5 x2
+    superslm tests: 123561 checks, 30 failures
+M6-rope_k: KILLED -- decode guard omits rope_k
+    red: 2.1 x24, 5.1 x2, 5.1 fdef.sslm x2, 5.5 x2
+    superslm tests: 123562 checks, 28 failures
+M7: KILLED -- decode guard removed
+    red: 2.1 x24, 5.1 x4, 5.1 fdef.sslm x2, 5.1 fqk.sslm x2, 5.5 x2
+    superslm tests: 123561 checks, 30 failures
+M7b-start: KILLED -- decode guard snapshot taken at call start
+    red: 2.1 x40, 5.1 x4, 5.1 fdef.sslm x2, 5.1 fqk.sslm x2, 5.5 x2
+    superslm tests: 123553 checks, 46 failures
+M7b-landing: KILLED -- decode guard snapshot taken after K/V landing
+    red: 2.1 x24, 5.1 x2, 5.1 fdef.sslm x2, 5.5 x2
+    superslm tests: 123562 checks, 28 failures
+M7-o: KILLED -- o's failure returns around the decode guard
+    red: 2.1 x8
+    superslm tests: 123572 checks, 8 failures
+Killed: 11 of 11. By site, M7 (guard removed) turns 2.1 red at o, gate+up and down only (4 hostile kinds each)
+and never at q or k+v: at those sites nothing had moved, so there is nothing for a missing guard to leave behind, which
+is what PD-1 records. M7b-start turns all five layer sites red, the early ones too, because restoring to the call's
+start drops layer 0's counts, a drift the no-drift check catches. M7-o is red at o alone, as before.

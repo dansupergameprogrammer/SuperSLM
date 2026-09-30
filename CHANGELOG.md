@@ -4,6 +4,34 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+A host parallel-for hook can now also split the CPU backend's one-row projections, opt-in. Bit 1
+of `sslm_parallel_for.reserved`, the new `SSLM_PARALLEL_FOR_MATVEC`, asks for it: each decode
+layer's q, k + v, o, gate + up and down projections, and the seven projections of a prefill call
+that admits exactly one token, split their output rows across the hook's `run` when the split gives a
+group two or more tasks: `max_tasks` at least 2, more than 64 rows, and at least twice 256 KiB of
+weight bytes. The 256 KiB constant caps the task count by the group's total weight bytes; it is
+not a floor on each task, and the last task can be smaller (the box measurement sets its final
+value). The logits step reads the hook exactly as before. Without the bit nothing changes: a 1.10.0
+host's hook is still read by the logits step alone. Every row is still one exact integer sum on
+one thread, so tokens, save blobs and the digest are bit-identical with and without the bit, at
+any `max_tasks`. The split adds no heap allocation.
+- Both setters accept bit 1 and still refuse every other bit (bit 0 included), so a host that
+  sets bit 1 on 1.10.0 is refused rather than silently ignored. The macro's presence is the
+  compile-time test. The GPU setter accepts the bit and ignores it.
+- A `run` that breaks exactly-once inside a decode layer fails the call with
+  `SSLM_INVALID_ARGUMENT`; the sequence rests at the start of that layer with that layer's five
+  saturation counts put back, and the next call resumes there.
+- **Behaviour change for every host, with or without the bit:** a prefill or prefix-prefill call
+  that fails before admitting a token (a hook failure, an allocation failure, or any other
+  rejection) now leaves the sequence's five saturation counts as they were before the call. In
+  1.10.0 it kept counts that no K/V entry backs. A call that admits a prefix and then stops keeps
+  that prefix's counts, as before.
+- C++ exports gain threaded overloads of `RunLayerLoop` (both) and `RunLayerLoopChunkBatched`,
+  taking a trailing `GemmThreading`; the existing symbols stay and run serially. No struct
+  layout, status, C function or save-format change.
+- Tests read generated fixtures (`tools/gen_decode_threading_fixture.py`) from the directory
+  named by `SUPERSLM_DECODE_THREADING_FIXTURE_DIR`; a missing fixture fails those cells.
+
 ## [1.10.0] - 2026-09-30
 
 On the AVX2 and AVX-512 tiers, a prefill GEMM of 8 or more tokens now runs a register-tiled

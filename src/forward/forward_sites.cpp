@@ -32,6 +32,7 @@
 #include "superslm/silu_lut.h"  // SiluSigmoidQ15 (C34's LUT construction, MlpActSite step 2)
 #include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable (RunLayerLoop's MlpActSite call)
 #include "superslm/matmul.h"  // GemmInt8AccumulateRow / GemmProbQ15Accumulate (RunLayerLoop)
+#include "parallel_split.h"  // SplitColumns / RunExactlyOnce (LogitsSiteParallel, the matvec groups)
 
 #if SUPERSLM_MATMUL_HAVE_SIMD_X64
 #include <emmintrin.h>
@@ -1635,6 +1636,35 @@ SslmForwardStatus ProjectAndFunnel(const int8_t* in_codes, CarriedScale in_scale
 	                           token_index, trace_hook_state, adapter, adapter_rank);
 }
 
+// Decode-threading plan §3.1/§3.3: ProjectAndFunnel for a one-row group of one (q, o, down) whose
+// rows may split across the matvec hook `pf` (null: no hook). Serial by the §3.1 rule, it is the
+// ProjectAndFunnel call itself; threaded, the same `acc` is filled by the split and the same
+// FunnelProjectedRow runs after `run` returns, on the calling thread.
+static SslmForwardStatus ProjectAndFunnelRow(const sslm_parallel_for* pf, const int8_t* in_codes,
+                                      CarriedScale in_scale, const int8_t* weight,
+                                      size_t in_channels, size_t out_channels,
+                                      const int32_t* identity, const int32_t* mult,
+                                      const int32_t* shift, CarriedScale site_constant,
+                                      const int64_t* bias, int8_t* out_codes,
+                                      CarriedScale* out_scale, std::string_view site,
+                                      size_t token_index, SslmTraceHookState* trace_hook_state,
+                                      const LayerAdapterProjection* adapter,
+                                      uint32_t adapter_rank) {
+	const ColumnSplit split = MatvecGroupSplit(pf, in_channels, out_channels);
+	if (split.task_count < 2) {
+		return ProjectAndFunnel(in_codes, in_scale, weight, in_channels, out_channels, identity,
+		                        mult, shift, site_constant, bias, out_codes, out_scale, site,
+		                        token_index, trace_hook_state, adapter, adapter_rank);
+	}
+	std::vector<int64_t> acc(out_channels);
+	const MatvecPart part{weight, out_channels, acc.data()};
+	const SslmForwardStatus st = MatvecGroupParallel(*pf, split, in_codes, in_channels, &part, 1);
+	if (st != SslmForwardStatus::Ok) return st;
+	return FunnelProjectedRow(acc.data(), in_codes, in_scale, in_channels, out_channels, identity,
+	                           mult, shift, site_constant, bias, out_codes, out_scale, site,
+	                           token_index, trace_hook_state, adapter, adapter_rank);
+}
+
 // T-2147 (design §15.1, D-SLM3481): the chunk-batched sibling of ProjectAndFunnel. Streams
 // `weight` ONCE via GemmInt8Accumulate across `chunk_tokens` stacked rows of `in_codes_chunk`
 // (row-major, `in_channels` per row) instead of once per row via GemmInt8AccumulateRow, then
@@ -1653,10 +1683,15 @@ SslmForwardStatus ProjectAndFunnelBatched(const int8_t* in_codes_chunk, const Ca
                                            const int64_t* bias, int8_t* out_codes_chunk,
                                            CarriedScale* out_scales, std::string_view site,
                                            SslmTraceHookState* trace_hook_state,
+                                           const GemmThreading& threading,
                                            const LayerAdapterProjection* adapter = nullptr,
                                            uint32_t adapter_rank = 0) {
 	std::vector<int64_t> acc(chunk_tokens * out_channels);
-	GemmInt8Accumulate(in_codes_chunk, weight, chunk_tokens, in_channels, out_channels, acc.data());
+	// Decode-threading plan §3.4: the one dispatch point -- a one-token chunk with a matvec hook
+	// splits the rows across it; everything else is the GemmInt8Accumulate call made before.
+	const SslmForwardStatus gst = GemmDispatch(threading, in_codes_chunk, weight, chunk_tokens,
+	                                           in_channels, out_channels, acc.data());
+	if (gst != SslmForwardStatus::Ok) return gst;
 	for (size_t t = 0; t < chunk_tokens; ++t) {
 		const SslmForwardStatus st = FunnelProjectedRow(
 		    acc.data() + t * out_channels, in_codes_chunk + t * in_channels, in_scales[t],
@@ -2009,7 +2044,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
                                  size_t workspace_size, bool option_g_fused_k_landing,
                                  std::string_view site_prefix,
                                  size_t token_index, SslmTraceHookState* trace_hook_state,
-                                 size_t q_width) {
+                                 size_t q_width, const sslm_parallel_for* row_pf) {
 	// §9.3's first decided contract, checked BEFORE anything is read or
 	// written: a budget of 0 consumes a call, advances nothing, and would
 	// return "pending" -- a host-visible livelock. `seq` is left bit-identical,
@@ -2285,23 +2320,38 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		CarriedScale stream_scale{}, attn_stream_scale{};
 		SslmForwardStatus st;
 
+		// Decode-threading plan §3.6, the decode retry guard: a `run` that breaks exactly-once can now
+		// fail this layer after its K/V landing, QK-norm and RoPE steps have already moved the five
+		// saturation counters. On ParallelForIncomplete, and on no other rejection (v1.9.0 keeps the
+		// counts of every other one), they are put back to this layer attempt's start, so a retry of
+		// the layer -- which rewrites the same K/V slot with the same bytes, since `position` moves
+		// only at the token's last commit -- counts its clamps once. Layers committed earlier in the
+		// call keep theirs.
+		const SaturationCounters layer_start_counters = SaturationCounters::Snapshot(seq);
+		const auto fail_layer = [&](SslmForwardStatus failed) {
+			if (failed == SslmForwardStatus::ParallelForIncomplete) layer_start_counters.RestoreTo(seq);
+			return failed;
+		};
+
 		// --- attention half (§6.2) --------------------------------------------
 		st = RmsNormSite(seq.hidden_codes, lw.attn_norm_gain, hidden_size, seq.hidden_scale,
 		                 lw.attn_norm_site_constant, normed.data(), &normed_scale,
 		                 LayerSite(site_prefix, l, "attn_norm"), token_index, trace_hook_state);
 		if (st != SslmForwardStatus::Ok) return st;
 
+		st = MaybeLayerSiteFault(MatvecFaultSite::kQ, l);
+		if (st != SslmForwardStatus::Ok) return st;
 		// SSLM-GEOMETRY-SITE: GS-12
 		// T-2432 (Track A step 3): q_proj's INPUT width stays hidden_size (the normed
 		// residual stream is unchanged by this ask); its OUTPUT width is effective_q_width.
-		st = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, hidden_size, effective_q_width,
-		                      lw.q_fold_identity, lw.q_fold_mult, lw.q_fold_shift, lw.q_site_constant,
-		                      lw.q_bias, q_codes.data(), &q_scale,
-		                      LayerSite(site_prefix, l, "q_proj.requant"),
-		                      token_index, trace_hook_state,
-		                      lw.adapter != nullptr ? &lw.adapter->q : nullptr,
-		                      lw.adapter != nullptr ? lw.adapter->rank : 0);
-		if (st != SslmForwardStatus::Ok) return st;
+		st = ProjectAndFunnelRow(row_pf, normed.data(), normed_scale, lw.q_weight, hidden_size, effective_q_width,
+		                         lw.q_fold_identity, lw.q_fold_mult, lw.q_fold_shift, lw.q_site_constant,
+		                         lw.q_bias, q_codes.data(), &q_scale,
+		                         LayerSite(site_prefix, l, "q_proj.requant"),
+		                         token_index, trace_hook_state,
+		                         lw.adapter != nullptr ? &lw.adapter->q : nullptr,
+		                         lw.adapter != nullptr ? lw.adapter->rank : 0);
+		if (st != SslmForwardStatus::Ok) return fail_layer(st);
 
 		// k_proj / v_proj do NOT funnel: they land at the static per-head scale
 		// through LandingRescale (§8.1), writing straight into the K/V store,
@@ -2321,10 +2371,23 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			// GemmInt8Accumulate call per layer across the whole chunk instead. Everything
 			// after the GEMM -- WSC1 fold, LoRA delta-add, bias, per-head landing, Option-G's
 			// fused rotate-then-land -- is LandTokenKVRow, shared verbatim by both paths.
-			GemmInt8AccumulateRow(normed.data(), lw.k_weight, hidden_size, kv_hidden_size,
-			                      kacc.data());
-			GemmInt8AccumulateRow(normed.data(), lw.v_weight, hidden_size, kv_hidden_size,
-			                      vacc.data());
+			//
+			// Decode-threading plan §3.3: k and v read the same input row, so they are one matvec
+			// group of 2 * kv_hidden_size rows when the hook splits it, and the two serial calls above
+			// otherwise.
+			const ColumnSplit kv_split = MatvecGroupSplit(row_pf, hidden_size, 2 * kv_hidden_size);
+			if (kv_split.task_count >= 2) {
+				const MatvecPart kv_parts[2] = {{lw.k_weight, kv_hidden_size, kacc.data()},
+				                                {lw.v_weight, kv_hidden_size, vacc.data()}};
+				const SslmForwardStatus kv_status =
+				    MatvecGroupParallel(*row_pf, kv_split, normed.data(), hidden_size, kv_parts, 2);
+				if (kv_status != SslmForwardStatus::Ok) return fail_layer(kv_status);
+			} else {
+				GemmInt8AccumulateRow(normed.data(), lw.k_weight, hidden_size, kv_hidden_size,
+				                      kacc.data());
+				GemmInt8AccumulateRow(normed.data(), lw.v_weight, hidden_size, kv_hidden_size,
+				                      vacc.data());
+			}
 			const SslmForwardStatus land_status = LandTokenKVRow(
 			    kacc.data(), vacc.data(), normed.data(), normed_scale, lw, hidden_size,
 			    kv_hidden_size, num_key_value_heads, head_dim, l, position, context_cap,
@@ -2542,18 +2605,20 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			if (ctx_result.status != SslmForwardStatus::Ok) return ctx_result.status;
 		}
 
+		st = MaybeLayerSiteFault(MatvecFaultSite::kO, l);
+		if (st != SslmForwardStatus::Ok) return st;
 		// SSLM-GEOMETRY-SITE: GS-12
 		// T-2432 (Track A step 3): o_proj's INPUT width is effective_q_width (the just-folded
 		// attention context); its OUTPUT width stays hidden_size -- attention always returns to
 		// the model's residual-stream width, unchanged by this ask (GS-09, D-SLM5249).
-		st = ProjectAndFunnel(ctx_codes.data(), ctx_scale, lw.o_weight, effective_q_width, hidden_size,
-		                      lw.o_fold_identity, lw.o_fold_mult, lw.o_fold_shift, lw.o_site_constant,
-		                      /*bias=*/nullptr, o_codes.data(), &o_scale,
-		                      LayerSite(site_prefix, l, "o_proj.requant"),
-		                      token_index, trace_hook_state,
-		                      lw.adapter != nullptr ? &lw.adapter->o : nullptr,
-		                      lw.adapter != nullptr ? lw.adapter->rank : 0);
-		if (st != SslmForwardStatus::Ok) return st;
+		st = ProjectAndFunnelRow(row_pf, ctx_codes.data(), ctx_scale, lw.o_weight, effective_q_width,
+		                         hidden_size, lw.o_fold_identity, lw.o_fold_mult, lw.o_fold_shift,
+		                         lw.o_site_constant, /*bias=*/nullptr, o_codes.data(), &o_scale,
+		                         LayerSite(site_prefix, l, "o_proj.requant"),
+		                         token_index, trace_hook_state,
+		                         lw.adapter != nullptr ? &lw.adapter->o : nullptr,
+		                         lw.adapter != nullptr ? lw.adapter->rank : 0);
+		if (st != SslmForwardStatus::Ok) return fail_layer(st);
 
 		// §9.3/Critical 4: staged into `attn_stream`, NOT committed into
 		// `seq.hidden_codes` here. Committing mid-layer would leave `seq`
@@ -2577,24 +2642,57 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		                 LayerSite(site_prefix, l, "mlp_norm"), token_index, trace_hook_state);
 		if (st != SslmForwardStatus::Ok) return st;
 
-		st = ProjectAndFunnel(normed.data(), mlp_normed_scale, lw.gate_weight, hidden_size,
-		                      intermediate_size, lw.gate_fold_identity, lw.gate_fold_mult,
-		                      lw.gate_fold_shift, lw.gate_site_constant, /*bias=*/nullptr,
-		                      gate_codes.data(), &gate_scale,
-		                      LayerSite(site_prefix, l, "gate_proj.requant"), token_index,
-		                      trace_hook_state,
-		                      lw.adapter != nullptr ? &lw.adapter->gate : nullptr,
-		                      lw.adapter != nullptr ? lw.adapter->rank : 0);
+		// Decode-threading plan §3.3: gate and up read the same input row, so they are one matvec
+		// group of 2 * intermediate_size rows when the hook splits it. The funnels stay serial and
+		// run after `run` returns, gate's then up's, so the trace order is unchanged. Serial, the
+		// two ProjectAndFunnel calls run exactly as before.
+		st = MaybeLayerSiteFault(MatvecFaultSite::kGateUp, l);
 		if (st != SslmForwardStatus::Ok) return st;
-		st = ProjectAndFunnel(normed.data(), mlp_normed_scale, lw.up_weight, hidden_size,
-		                      intermediate_size, lw.up_fold_identity, lw.up_fold_mult,
-		                      lw.up_fold_shift, lw.up_site_constant, /*bias=*/nullptr,
-		                      up_codes.data(), &up_scale,
-		                      LayerSite(site_prefix, l, "up_proj.requant"), token_index,
-		                      trace_hook_state,
-		                      lw.adapter != nullptr ? &lw.adapter->up : nullptr,
-		                      lw.adapter != nullptr ? lw.adapter->rank : 0);
-		if (st != SslmForwardStatus::Ok) return st;
+		const ColumnSplit mlp_split = MatvecGroupSplit(row_pf, hidden_size, 2 * intermediate_size);
+		if (mlp_split.task_count >= 2) {
+			std::vector<int64_t> gate_acc(intermediate_size), up_acc(intermediate_size);
+			const MatvecPart mlp_parts[2] = {{lw.gate_weight, intermediate_size, gate_acc.data()},
+			                                 {lw.up_weight, intermediate_size, up_acc.data()}};
+			st = MatvecGroupParallel(*row_pf, mlp_split, normed.data(), hidden_size, mlp_parts, 2);
+			if (st != SslmForwardStatus::Ok) return fail_layer(st);
+			st = FunnelProjectedRow(gate_acc.data(), normed.data(), mlp_normed_scale, hidden_size,
+			                        intermediate_size, lw.gate_fold_identity, lw.gate_fold_mult,
+			                        lw.gate_fold_shift, lw.gate_site_constant, /*bias=*/nullptr,
+			                        gate_codes.data(), &gate_scale,
+			                        LayerSite(site_prefix, l, "gate_proj.requant"), token_index,
+			                        trace_hook_state,
+			                        lw.adapter != nullptr ? &lw.adapter->gate : nullptr,
+			                        lw.adapter != nullptr ? lw.adapter->rank : 0);
+			if (st != SslmForwardStatus::Ok) return st;
+			st = FunnelProjectedRow(up_acc.data(), normed.data(), mlp_normed_scale, hidden_size,
+			                        intermediate_size, lw.up_fold_identity, lw.up_fold_mult,
+			                        lw.up_fold_shift, lw.up_site_constant, /*bias=*/nullptr,
+			                        up_codes.data(), &up_scale,
+			                        LayerSite(site_prefix, l, "up_proj.requant"), token_index,
+			                        trace_hook_state,
+			                        lw.adapter != nullptr ? &lw.adapter->up : nullptr,
+			                        lw.adapter != nullptr ? lw.adapter->rank : 0);
+			if (st != SslmForwardStatus::Ok) return st;
+		} else {
+			st = ProjectAndFunnel(normed.data(), mlp_normed_scale, lw.gate_weight, hidden_size,
+			                      intermediate_size, lw.gate_fold_identity, lw.gate_fold_mult,
+			                      lw.gate_fold_shift, lw.gate_site_constant, /*bias=*/nullptr,
+			                      gate_codes.data(), &gate_scale,
+			                      LayerSite(site_prefix, l, "gate_proj.requant"), token_index,
+			                      trace_hook_state,
+			                      lw.adapter != nullptr ? &lw.adapter->gate : nullptr,
+			                      lw.adapter != nullptr ? lw.adapter->rank : 0);
+			if (st != SslmForwardStatus::Ok) return st;
+			st = ProjectAndFunnel(normed.data(), mlp_normed_scale, lw.up_weight, hidden_size,
+			                      intermediate_size, lw.up_fold_identity, lw.up_fold_mult,
+			                      lw.up_fold_shift, lw.up_site_constant, /*bias=*/nullptr,
+			                      up_codes.data(), &up_scale,
+			                      LayerSite(site_prefix, l, "up_proj.requant"), token_index,
+			                      trace_hook_state,
+			                      lw.adapter != nullptr ? &lw.adapter->up : nullptr,
+			                      lw.adapter != nullptr ? lw.adapter->rank : 0);
+			if (st != SslmForwardStatus::Ok) return st;
+		}
 
 		// Minor G (Poirot e4b398c review): ROP1 (`rope_tables`, above) comes
 		// from the loaded artifact; SIL1 here comes from a compiled constant
@@ -2608,15 +2706,17 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		                trace_hook_state);
 		if (st != SslmForwardStatus::Ok) return st;
 
-		st = ProjectAndFunnel(act_codes.data(), act_scale, lw.down_weight, intermediate_size,
-		                      hidden_size, lw.down_fold_identity, lw.down_fold_mult,
-		                      lw.down_fold_shift, lw.down_site_constant, /*bias=*/nullptr,
-		                      down_codes.data(), &down_scale,
-		                      LayerSite(site_prefix, l, "down_proj.requant"), token_index,
-		                      trace_hook_state,
-		                      lw.adapter != nullptr ? &lw.adapter->down : nullptr,
-		                      lw.adapter != nullptr ? lw.adapter->rank : 0);
+		st = MaybeLayerSiteFault(MatvecFaultSite::kDown, l);
 		if (st != SslmForwardStatus::Ok) return st;
+		st = ProjectAndFunnelRow(row_pf, act_codes.data(), act_scale, lw.down_weight,
+		                         intermediate_size, hidden_size, lw.down_fold_identity,
+		                         lw.down_fold_mult, lw.down_fold_shift, lw.down_site_constant,
+		                         /*bias=*/nullptr, down_codes.data(), &down_scale,
+		                         LayerSite(site_prefix, l, "down_proj.requant"), token_index,
+		                         trace_hook_state,
+		                         lw.adapter != nullptr ? &lw.adapter->down : nullptr,
+		                         lw.adapter != nullptr ? lw.adapter->rank : 0);
+		if (st != SslmForwardStatus::Ok) return fail_layer(st);
 
 		// Reconciles against the STAGED attention-residual output (the
 		// current stream this layer is still composing), not `seq` --
@@ -2672,7 +2772,23 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	return RunLayerLoopImpl(seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim,
 	                        num_key_value_heads, intermediate_size, context_cap, rope_tables,
 	                        workspace, workspace_size, /*option_g_fused_k_landing=*/false,
-	                        site_prefix, token_index, trace_hook_state, q_width);
+	                        site_prefix, token_index, trace_hook_state, q_width,
+	                        /*row_pf=*/nullptr);
+}
+
+// Decode-threading plan §3.4: the threaded sibling of the overload above (forward_sites.h).
+SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
+                                 uint32_t num_hidden_layers, uint32_t layer_budget,
+                                 size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
+                                 size_t intermediate_size, int64_t context_cap,
+                                 const SslmTensorManifest& rope_tables, uint8_t* workspace,
+                                 size_t workspace_size, std::string_view site_prefix,
+                                 size_t token_index, SslmTraceHookState* trace_hook_state,
+                                 size_t q_width, const GemmThreading& threading) {
+	return RunLayerLoopImpl(seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim,
+	                        num_key_value_heads, intermediate_size, context_cap, rope_tables,
+	                        workspace, workspace_size, /*option_g_fused_k_landing=*/false,
+	                        site_prefix, token_index, trace_hook_state, q_width, threading.row);
 }
 
 // T-1894 (design Sec31.2, T-1899's own contract extension, forward_sites.h):
@@ -2698,7 +2814,24 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	return RunLayerLoopImpl(seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim,
 	                        num_key_value_heads, intermediate_size, context_cap, rope_tables,
 	                        workspace, workspace_size, fused, site_prefix,
-	                        token_index, trace_hook_state, q_width);
+	                        token_index, trace_hook_state, q_width, /*row_pf=*/nullptr);
+}
+
+// Decode-threading plan §3.4: the threaded sibling of the Option-G overload above.
+SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
+                                 uint32_t num_hidden_layers, uint32_t layer_budget,
+                                 size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
+                                 size_t intermediate_size, int64_t context_cap,
+                                 const SslmTensorManifest& rope_tables, uint8_t* workspace,
+                                 size_t workspace_size, OptionGKLandingMode option_g_k_landing_mode,
+                                 std::string_view site_prefix, size_t token_index,
+                                 SslmTraceHookState* trace_hook_state, size_t q_width,
+                                 const GemmThreading& threading) {
+	const bool fused = (option_g_k_landing_mode == OptionGKLandingMode::kFused);
+	return RunLayerLoopImpl(seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim,
+	                        num_key_value_heads, intermediate_size, context_cap, rope_tables,
+	                        workspace, workspace_size, fused, site_prefix,
+	                        token_index, trace_hook_state, q_width, threading.row);
 }
 
 // T-2147 (design §15.1/§15.2/§15.3, D-SLM3479/D-SLM3481/D-SLM3482/D-SLM3483): the chunk-batched
@@ -2738,7 +2871,11 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 // whole-call) -- this function matches that same granularity, extended across tokens: a
 // rejection while processing token j at layer L leaves every token fully committed through
 // layer L-1, and token j (only) left at whatever partial state its own failing step reached.
-SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
+//
+// Decode-threading plan §3.4: the body is RunLayerLoopChunkBatchedImpl, which also takes the
+// GemmThreading every projection's GEMM passes to the one dispatch point (GemmDispatch). The
+// exported pre-existing signature forwards with none; the threaded overload below forwards its own.
+static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
                                             size_t chunk_tokens, const LayerWeights* layers,
                                             uint32_t num_hidden_layers, size_t hidden_size,
                                             size_t head_dim, size_t num_key_value_heads,
@@ -2754,7 +2891,8 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
                                             uint64_t* out_kv_landing_saturation_count,
                                             uint64_t* out_k_channel_landing_saturation_count,
                                             uint64_t* out_rope_q_saturation_count,
-                                            uint64_t* out_rope_k_saturation_count) {
+                                            uint64_t* out_rope_k_saturation_count,
+                                            const GemmThreading& threading) {
 	// The same domain guards RunLayerLoopImpl's own top-of-function block performs (§9.3),
 	// restated here because this path has no single `SequenceLayerState` to validate against --
 	// `chunk_tokens` tokens share one `context_cap`/geometry, not `chunk_tokens` independent
@@ -2840,6 +2978,8 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 			if (st != SslmForwardStatus::Ok) return st;
 		}
 
+		st = MaybeLayerSiteFault(MatvecFaultSite::kQ, l);
+		if (st != SslmForwardStatus::Ok) return st;
 		// SSLM-GEOMETRY-SITE: GS-12
 		// T-2432 (Track A step 3): q_proj's INPUT width stays hidden_size; OUTPUT width is
 		// effective_q_width.
@@ -2847,7 +2987,7 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 		                             hidden_size, effective_q_width, lw.q_fold_identity, lw.q_fold_mult,
 		                             lw.q_fold_shift, lw.q_site_constant, lw.q_bias, q_codes.data(),
 		                             q_scale.data(), LayerSite(site_prefix, l, "q_proj.requant"),
-		                             trace_hook_state,
+		                             trace_hook_state, threading,
 		                             lw.adapter != nullptr ? &lw.adapter->q : nullptr,
 		                             lw.adapter != nullptr ? lw.adapter->rank : 0);
 		if (st != SslmForwardStatus::Ok) return st;
@@ -2857,10 +2997,14 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 		// across the whole chunk, instead of `chunk_tokens` separate row calls.
 		std::vector<int64_t> kacc_all(chunk_tokens * kv_hidden_size);
 		std::vector<int64_t> vacc_all(chunk_tokens * kv_hidden_size);
-		GemmInt8Accumulate(normed.data(), lw.k_weight, chunk_tokens, hidden_size, kv_hidden_size,
-		                   kacc_all.data());
-		GemmInt8Accumulate(normed.data(), lw.v_weight, chunk_tokens, hidden_size, kv_hidden_size,
-		                   vacc_all.data());
+		// Decode-threading plan §3.3/§3.4: through the dispatch point, k and v each alone (the
+		// one-token prefill path is not grouped).
+		st = GemmDispatch(threading, normed.data(), lw.k_weight, chunk_tokens, hidden_size,
+		                  kv_hidden_size, kacc_all.data());
+		if (st != SslmForwardStatus::Ok) return st;
+		st = GemmDispatch(threading, normed.data(), lw.v_weight, chunk_tokens, hidden_size,
+		                  kv_hidden_size, vacc_all.data());
+		if (st != SslmForwardStatus::Ok) return st;
 
 		// --- per-token, in position order: land K/V, RoPE, attention -------------------------
 		for (size_t t = 0; t < chunk_tokens; ++t) {
@@ -3007,6 +3151,8 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 		}
 
 		// --- o_proj: batched GEMM across every token's ctx_codes -----------------------------
+		st = MaybeLayerSiteFault(MatvecFaultSite::kO, l);
+		if (st != SslmForwardStatus::Ok) return st;
 		// SSLM-GEOMETRY-SITE: GS-12
 		// T-2432 (Track A step 3): o_proj's INPUT width is effective_q_width; OUTPUT stays
 		// hidden_size (GS-09, D-SLM5249).
@@ -3015,7 +3161,7 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 		                             lw.o_fold_shift, lw.o_site_constant, /*bias=*/nullptr,
 		                             o_codes.data(), o_scale.data(),
 		                             LayerSite(site_prefix, l, "o_proj.requant"), trace_hook_state,
-		                             lw.adapter != nullptr ? &lw.adapter->o : nullptr,
+		                             threading, lw.adapter != nullptr ? &lw.adapter->o : nullptr,
 		                             lw.adapter != nullptr ? lw.adapter->rank : 0);
 		if (st != SslmForwardStatus::Ok) return st;
 
@@ -3037,12 +3183,14 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 			if (st != SslmForwardStatus::Ok) return st;
 		}
 
+		st = MaybeLayerSiteFault(MatvecFaultSite::kGateUp, l);
+		if (st != SslmForwardStatus::Ok) return st;
 		st = ProjectAndFunnelBatched(mlp_normed.data(), mlp_normed_scale.data(), chunk_tokens,
 		                             lw.gate_weight, hidden_size, intermediate_size,
 		                             lw.gate_fold_identity, lw.gate_fold_mult, lw.gate_fold_shift,
 		                             lw.gate_site_constant, /*bias=*/nullptr, gate_codes.data(),
 		                             gate_scale.data(), LayerSite(site_prefix, l, "gate_proj.requant"),
-		                             trace_hook_state,
+		                             trace_hook_state, threading,
 		                             lw.adapter != nullptr ? &lw.adapter->gate : nullptr,
 		                             lw.adapter != nullptr ? lw.adapter->rank : 0);
 		if (st != SslmForwardStatus::Ok) return st;
@@ -3051,7 +3199,7 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 		                             lw.up_fold_identity, lw.up_fold_mult, lw.up_fold_shift,
 		                             lw.up_site_constant, /*bias=*/nullptr, up_codes.data(),
 		                             up_scale.data(), LayerSite(site_prefix, l, "up_proj.requant"),
-		                             trace_hook_state,
+		                             trace_hook_state, threading,
 		                             lw.adapter != nullptr ? &lw.adapter->up : nullptr,
 		                             lw.adapter != nullptr ? lw.adapter->rank : 0);
 		if (st != SslmForwardStatus::Ok) return st;
@@ -3065,12 +3213,14 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 			if (st != SslmForwardStatus::Ok) return st;
 		}
 
+		st = MaybeLayerSiteFault(MatvecFaultSite::kDown, l);
+		if (st != SslmForwardStatus::Ok) return st;
 		st = ProjectAndFunnelBatched(act_codes.data(), act_scale.data(), chunk_tokens,
 		                             lw.down_weight, intermediate_size, hidden_size,
 		                             lw.down_fold_identity, lw.down_fold_mult, lw.down_fold_shift,
 		                             lw.down_site_constant, /*bias=*/nullptr, down_codes.data(),
 		                             down_scale.data(), LayerSite(site_prefix, l, "down_proj.requant"),
-		                             trace_hook_state,
+		                             trace_hook_state, threading,
 		                             lw.adapter != nullptr ? &lw.adapter->down : nullptr,
 		                             lw.adapter != nullptr ? lw.adapter->rank : 0);
 		if (st != SslmForwardStatus::Ok) return st;
@@ -3097,6 +3247,60 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 	return SslmForwardStatus::Ok;
 }
 
+SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
+                                            size_t chunk_tokens, const LayerWeights* layers,
+                                            uint32_t num_hidden_layers, size_t hidden_size,
+                                            size_t head_dim, size_t num_key_value_heads,
+                                            size_t intermediate_size, int64_t context_cap,
+                                            int64_t context_length_start,
+                                            const SslmTensorManifest& rope_tables,
+                                            uint8_t* workspace, size_t workspace_size,
+                                            bool option_g_fused_k_landing,
+                                            uint64_t* kv_saturation_count,
+                                            std::string_view site_prefix,
+                                            SslmTraceHookState* trace_hook_state,
+                                            size_t q_width,
+                                            uint64_t* out_kv_landing_saturation_count,
+                                            uint64_t* out_k_channel_landing_saturation_count,
+                                            uint64_t* out_rope_q_saturation_count,
+                                            uint64_t* out_rope_k_saturation_count) {
+	return RunLayerLoopChunkBatchedImpl(
+	    hidden_codes_chunk, hidden_scales, chunk_tokens, layers, num_hidden_layers, hidden_size,
+	    head_dim, num_key_value_heads, intermediate_size, context_cap, context_length_start,
+	    rope_tables, workspace, workspace_size, option_g_fused_k_landing, kv_saturation_count,
+	    site_prefix, trace_hook_state, q_width, out_kv_landing_saturation_count,
+	    out_k_channel_landing_saturation_count, out_rope_q_saturation_count,
+	    out_rope_k_saturation_count, GemmThreading{});
+}
+
+// Decode-threading plan §3.4: the threaded sibling of the overload above (forward_sites.h).
+SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
+                                            size_t chunk_tokens, const LayerWeights* layers,
+                                            uint32_t num_hidden_layers, size_t hidden_size,
+                                            size_t head_dim, size_t num_key_value_heads,
+                                            size_t intermediate_size, int64_t context_cap,
+                                            int64_t context_length_start,
+                                            const SslmTensorManifest& rope_tables,
+                                            uint8_t* workspace, size_t workspace_size,
+                                            bool option_g_fused_k_landing,
+                                            uint64_t* kv_saturation_count,
+                                            std::string_view site_prefix,
+                                            SslmTraceHookState* trace_hook_state,
+                                            size_t q_width,
+                                            uint64_t* out_kv_landing_saturation_count,
+                                            uint64_t* out_k_channel_landing_saturation_count,
+                                            uint64_t* out_rope_q_saturation_count,
+                                            uint64_t* out_rope_k_saturation_count,
+                                            const GemmThreading& threading) {
+	return RunLayerLoopChunkBatchedImpl(
+	    hidden_codes_chunk, hidden_scales, chunk_tokens, layers, num_hidden_layers, hidden_size,
+	    head_dim, num_key_value_heads, intermediate_size, context_cap, context_length_start,
+	    rope_tables, workspace, workspace_size, option_g_fused_k_landing, kv_saturation_count,
+	    site_prefix, trace_hook_state, q_width, out_kv_landing_saturation_count,
+	    out_k_channel_landing_saturation_count, out_rope_q_saturation_count,
+	    out_rope_k_saturation_count, threading);
+}
+
 // Master plan §6.4 steps 14-15's real two-step composition (T-1389; built
 // against Claude/Curie/superslm-s3.6-head-and-greedy-decode-test-design-
 // 2026-07-31.md's red suite, replacing the WorkspaceTooSmall stub the
@@ -3115,8 +3319,8 @@ SslmForwardStatus LogitsSite(const int8_t* final_codes, size_t hidden_size,
 
 namespace {
 
-// Call-local state one LogitsSiteParallel call hands to the host's `run` as `task_ctx`. It lives
-// on that call's stack and ends when the call returns (parallel_for.h's precondition).
+// Call-local state one LogitsSiteParallel call hands RunExactlyOnce as the body's context. It
+// lives on that call's stack and ends when the call returns (parallel_for.h's precondition).
 struct LogitsTaskCtx {
 	const int8_t* final_codes;
 	size_t hidden_size;
@@ -3124,31 +3328,14 @@ struct LogitsTaskCtx {
 	size_t vocab_size;
 	int64_t* wide_logits;
 	size_t rows_per_task;
-	int32_t task_count;
-	std::atomic<uint8_t>* state;  // [task_count]: 0 = not started, 1 = admitted, 2 = done
-	std::atomic<bool>* violation;
 };
 
-void LogitsTask(void* task_ctx, int32_t task_index) {
-	LogitsTaskCtx& c = *static_cast<LogitsTaskCtx*>(task_ctx);
-	if (task_index < 0 || task_index >= c.task_count) {
-		c.violation->store(true, std::memory_order_release);
-		return;
-	}
-	// Admission: exactly one invocation of an index can take 0 -> 1, so exactly one can reach the
-	// row write. A later or concurrent second invocation fails the exchange and writes nothing.
-	uint8_t expected = 0;
-	if (!c.state[task_index].compare_exchange_strong(expected, uint8_t{1},
-	                                                 std::memory_order_acq_rel)) {
-		c.violation->store(true, std::memory_order_release);
-		return;
-	}
-	const size_t begin = static_cast<size_t>(task_index) * c.rows_per_task;
+void LogitsTask(void* ctx, size_t task_index) noexcept {
+	const LogitsTaskCtx& c = *static_cast<const LogitsTaskCtx*>(ctx);
+	const size_t begin = task_index * c.rows_per_task;
 	const size_t end = std::min(c.vocab_size, begin + c.rows_per_task);
 	GemmInt8AccumulateRow(c.final_codes, c.head_weights + begin * c.hidden_size, c.hidden_size,
 	                      end - begin, c.wide_logits + begin);
-	// Release: publishes this block's row writes to the acquire scan after `run` returns.
-	c.state[task_index].store(uint8_t{2}, std::memory_order_release);
 }
 
 }  // namespace
@@ -3161,25 +3348,17 @@ SslmForwardStatus LogitsSiteParallel(const int8_t* final_codes, size_t hidden_si
 		return LogitsSite(final_codes, hidden_size, head_weights, vocab_size, wide_logits,
 		                  out_logits);
 	}
-	const size_t max_tasks =
-	    std::min<size_t>(static_cast<size_t>(pf->max_tasks), SSLM_PARALLEL_FOR_MAX_TASKS);
-	const size_t per_task = (vocab_size + max_tasks - 1) / max_tasks;
-	const size_t rows_per_task = ((per_task + 63) / 64) * 64;
-	const size_t task_count = (vocab_size + rows_per_task - 1) / rows_per_task;
-
-	// Value-initialized (C++20): every entry starts at 0 = not started.
-	std::atomic<uint8_t> state[SSLM_PARALLEL_FOR_MAX_TASKS];
-	std::atomic<bool> violation{false};
-	LogitsTaskCtx ctx{final_codes,   hidden_size, head_weights,
-	                  vocab_size,    wide_logits, rows_per_task,
-	                  static_cast<int32_t>(task_count), state, &violation};
-	pf->run(pf->host_ctx, static_cast<int32_t>(task_count), &LogitsTask, &ctx);
-
-	bool complete = !violation.load(std::memory_order_acquire);
-	for (size_t i = 0; complete && i < task_count; ++i) {
-		complete = state[i].load(std::memory_order_acquire) == 2;
-	}
-	if (!complete) return SslmForwardStatus::ParallelForIncomplete;
+	// The shared split at alignment 64 with no minimum work: the v1.9.0 partition,
+	// rows = roundup(ceil(V / max_tasks), 64), for every V and max_tasks (decode-threading plan
+	// §3.2). The logits step keeps v1.9.0's rule for calling `run`: always, once the hook has
+	// max_tasks >= 2, including the one-task call a vocabulary of 64 or fewer rows gives.
+	const ColumnSplit split = SplitColumns(vocab_size, /*work=*/0,
+	                                       static_cast<size_t>(pf->max_tasks), /*align=*/64,
+	                                       /*min_work=*/0);
+	LogitsTaskCtx ctx{final_codes, hidden_size, head_weights, vocab_size, wide_logits,
+	                  split.rows_per_task};
+	const SslmForwardStatus st = RunExactlyOnce(*pf, split.task_count, &LogitsTask, &ctx);
+	if (st != SslmForwardStatus::Ok) return st;
 	return NarrowRowChecked(wide_logits, vocab_size, out_logits);
 }
 

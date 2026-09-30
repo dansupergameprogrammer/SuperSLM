@@ -169,10 +169,11 @@ def test_dslm5055_real_coff_archive_member_counts(real_coff_archive):
     has the shape the thirty-seventh/-eighth populations' own must-accept
     claims, independent of whether the production reader exists yet."""
     total, counts = af.raw_member_counts(real_coff_archive)
-    assert total == 20, "expected 20 total members, found {} ({})".format(total, counts)
+    # Decode threading D0 added src/forward/parallel_split.cpp: 18 objects, 21 members from D0 on.
+    assert total == 21, "expected 21 total members, found {} ({})".format(total, counts)
     assert counts.get("SYMTAB") == 2, counts
     assert counts.get("LONGNAMES") == 1, counts
-    assert counts.get("OBJECT") == 17, counts
+    assert counts.get("OBJECT") == 18, counts
 
 
 def test_dslm5055_real_elf_archive_member_counts(real_elf_archive):
@@ -181,10 +182,11 @@ def test_dslm5055_real_elf_archive_member_counts(real_elf_archive):
     (1 SYMTAB + 1 LONGNAMES + 17 OBJECT), not the Windows archive's 20.
     Fixture verification only."""
     total, counts = af.raw_member_counts(real_elf_archive)
-    assert total == 19, "expected 19 total members, found {} ({})".format(total, counts)
+    # Decode threading D0 added src/forward/parallel_split.cpp: 18 objects, 20 members from D0 on.
+    assert total == 20, "expected 20 total members, found {} ({})".format(total, counts)
     assert counts.get("SYMTAB") == 1, counts
     assert counts.get("LONGNAMES") == 1, counts
-    assert counts.get("OBJECT") == 17, counts
+    assert counts.get("OBJECT") == 18, counts
 
 
 def test_dslm5054_real_archive_has_odd_sized_member(real_coff_archive):
@@ -279,7 +281,8 @@ def test_pop37_must_accept_real_archive_enumerates_seventeen_objects(real_coff_a
     """Must-accept: the real, unmodified archive -- enumerate_archive_objects
     yields exactly 17 OBJECT members, magic and all 20 headers well-formed."""
     objs = scan.enumerate_archive_objects(real_coff_archive)
-    assert len(objs) == 17, "expected 17 real object members, got {}".format(len(objs))
+    # Decode threading D0 added src/forward/parallel_split.cpp: 18 from D0 on.
+    assert len(objs) == 18, "expected 18 real object members, got {}".format(len(objs))
 
 
 def test_pop37_must_reject_bad_magic(malformed_archives):
@@ -375,7 +378,7 @@ def test_pop38_must_accept_no_fourth_branch(real_coff_archive):
     (enumerate_archive_objects) must yield exactly 17, matching the
     fixture-verified total member breakdown (test_dslm5055_... above, 2+1+17)."""
     objs = scan.enumerate_archive_objects(real_coff_archive)
-    assert len(objs) == 17
+    assert len(objs) == 18  # 17 until decode threading D0 added src/forward/parallel_split.cpp
 
 
 def test_pop38_must_reject_bad_member_name(malformed_archives):
@@ -396,7 +399,7 @@ def test_pop38_must_reject_bad_member_name(malformed_archives):
 
 def test_pop39_must_accept_seventeen_objects_found(real_coff_archive):
     """Must-accept: the real archive, seventeen object members found."""
-    assert len(scan.enumerate_archive_objects(real_coff_archive)) == 17
+    assert len(scan.enumerate_archive_objects(real_coff_archive)) == 18  # 17 before decode threading D0
 
 
 def test_pop39_must_reject_zero_object_archive_at_reader_level(malformed_archives):

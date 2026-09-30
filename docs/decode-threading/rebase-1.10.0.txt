@@ -1,0 +1,46 @@
+Decode threading D0-D1 -- the series re-applied onto main at the 1.10.0 release (fdeee2f)
+The seven commits were first built on c28f171 (the attention and per-row sites series, S5 head). After that, main added
+provisional and then CI-pinned coverage floors for src/matmul.cpp and src/intmath.cpp, the TestPreflightScanWscFolds cell,
+the workflow step that prints the recorded floors, the .gitattributes LF pin on the two generated golden-pin headers,
+header comments in matmul.h and intmath.h, and the 1.10.0 release files. The series was applied with git am -3.
+
+== Conflicts
+No textual conflict. The three-way apply put the CHANGELOG entry at the end of the 1.10.0 section, because the
+[Unreleased] heading it was written under now sits above 1.10.0. The entry was moved back to [Unreleased], and its three
+references to the previous release now name 1.10.0. Everything from the 1.10.0 heading down is byte-identical to main.
+None of main's other additions touches a file the series changes, and no line citation moved: check_gpu_guard_status_parity
+resolves every gpu_layer_loop_guards.def citation unchanged. Source and test content is identical to the c28f171 series,
+so the mutants were not re-run (mutants.txt: 23 of 23 killed).
+
+== Suites (GCC 13.3.0 and Clang 18.1.3, Release, this AVX-512 host; freshly generated fixtures; attn-rowsites artifact set)
+                                           main fdeee2f   series head    difference
+superslm_tests                             121,655        123,770        +2,115 (D0 7, D1 2,108)
+superslm_tests_sse2_forced                 121,597        123,712        +2,115
+superslm_tests_avx2_forced                 121,613        123,728        +2,115
+superslm_tests_avx512_forced               121,613        123,728        +2,115
+superslm_decode_threading_scalar_forced    --             2,115
+superslm_decode_threading_alloc            --             84
+The same on both compilers, 0 failures in every binary. Main's counts are c28f171's plus 4 (TestPreflightScanWscFolds).
+The AVX-512-forced binaries report "tier 3, kernel AVX-512", so they executed on AVX-512.
+7.4: per decode token 81 allocations off, 81 on; per one-token prefill 96 off, 96 on (both compilers).
+
+== Digests: the ten legs (sslm_axis_digest auto, scalar, SSE2, AVX2 and AVX-512 forced; GCC and Clang)
+All ten GLOBAL f740f8338668182724b900ddd078be3cf714b28f4004b504496de4f4b4ae5acc, main's hash on all ten of its own legs.
+Whole-output diff, main against the series head, per compiler and tier: identical on all ten.
+
+== fp-free scan (tests/ci/scan_build_output.py --target superslm --isa x86-64)
+GCC: 18 objects, 590 ACCEPT, 0 REJECT, 0 REFUSE, PASS. Clang: 18 objects, 518 ACCEPT, 0 REJECT, 0 REFUSE, PASS.
+parallel_split.cpp.o is clean on both.
+
+== Python and the checkers
+python3 -m pytest tests/ci: main 915 passed, 1 skipped; series head 915 passed, 1 skipped.
+check_ci_claims, check_present_tense_defect_comments, check_gpu_guard_status_parity, check_no_forward_leaf_calls,
+geometry_site_census, check_no_library_stdout_write (src include): OK or PASS.
+check_tiled_matmul_linkage over the nine GCC objects the linkage leg names: OK on main and on the series head.
+check_matmul_avx_isolation and its population vitality (ctest): 2 of 2 passed.
+
+== Coverage floors
+Main re-pinned src/matmul.cpp to 69.23076923076923 and src/intmath.cpp to 83.47107438016529 from a no-AVX-512 hosted run.
+coverage.txt's no-AVX-512 projection of the series (205-206/296 and 202-203/242) is at or above both: 69.26-69.59 against
+69.23, and 83.47-83.88 against 83.47, where 202/242 is the floor exactly. One branch of the run-to-run jitter that file
+records would put intmath.cpp below its floor. The hosted branch-coverage leg decides; nothing here is re-pinned.
