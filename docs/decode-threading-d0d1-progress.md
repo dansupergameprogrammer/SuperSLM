@@ -95,9 +95,13 @@ token (4L + 1, §3.1's 97 at L = 24). Decode tok/s off against on, n = 15 pairs:
    satisfies the F1 preamble: rope_q and rope_k clamp about once a layer. The K calibration peak is multiplied by 0.2
    for F-DEF (`fixture-premise.txt` has the sweep). A third artifact, `fnoclamp.sslm` (K and V peaks x 8), is 11.1's
    vitality variant.
-3. **The F1 preamble is vacuous for 2.1's q and k + v cases.** A failure at q or k + v of layer 1 comes before layer 1
-   lands anything, so "layer 1's counters restored" holds whatever the guard does there. The o, gate + up and down cases
-   and 5.1 carry the guard's weight; M7 and M7b die on them.
+3. **The F1 preamble cannot hold at 2.1's q and k + v sites, so those cases do not claim a restore (PD-1, deviation
+   18).** A failure at q or k + v of layer 1 comes before layer 1 lands anything, so "layer 1's counters restored" would
+   hold whatever the guard does there. Those cases now assert what they can: the hook reads the live counters at the
+   failure and finds layer 0's (nothing had moved), the sequence rests at layer 1 with no drift, and the retry equals
+   the never-failed run. The o, gate + up and down cases assert F1 on the counters read at the moment of the failure
+   (the checked counters rose in layer 1), then the restore and the retry. They and 5.1 carry the guard's weight; M7 and
+   M7b die on them.
 4. **rope_q ≠ rope_k is required only where both move.** On F-QK rope_k never moves (QK-norm path), so its preamble asks
    for kv, k_channel_landing and rope_q, and rope_q ≠ rope_k then holds trivially.
 5. **The seams are on the forced-tier libraries too, not on `superslm_test_injection` alone** (§3.9). 4.5 runs 4.2 and
@@ -142,6 +146,17 @@ token (4L + 1, §3.1's 97 at L = 24). Decode tok/s off against on, n = 15 pairs:
     `SUPERSLM_ATTN_ROWSITES_ARTIFACT` set (238 checks). Every count here is with it set; the commit messages' counts
     (123,464 at green) are without it.
 
+18. **PD-1: what a guard cell proves depends on where its failure lands (the owner's ruling, review P2).** The promise
+    that every guard cell first proves the checked counters rose in the failed layer cannot hold at q and k + v: those
+    sites fail before the layer can move any counter (deviation 3). The owner's seat ruled the review's recommendation
+    (review record: Wizard `Claude/Poirot/decode-threading-review-2026-09-30.md`, §3). A site that fails before any
+    counter can move (q, k + v) proves retry identity and no drift, and is not claimed as a restore case. Only the later
+    sites (o, gate + up, down) prove the counters rose and were restored. Cell 2.1 now encodes this: its test hook reads
+    the sequence's live counters at the moment it fails the call, and each site asserts only what it can prove. The
+    later sites' checks are unchanged, plus the new F1-at-failure check. 2.1 goes from 2,108 to 2,152 D1 checks (24
+    "hostile call ran" checks and 20 at-failure counter checks). The mutants that die on 2.1 were re-run
+    (`mutants.txt`, the PD-1 section).
+
 ## What the plan got wrong
 
 1. **§3.9's "F-QK: the same geometry with QK-norm kept" cannot load** (deviation 1): QK-norm requires head_dim 128.
@@ -154,6 +169,9 @@ token (4L + 1, §3.1's 97 at L = 24). Decode tok/s off against on, n = 15 pairs:
 5. **§8 2.1 omits the o site**, leaving o's guard arm untested (deviation 11).
 6. **§3.9's CI leg list is short by eight legs** (deviation 7): every leg that runs a suite binary needs the fixture.
 7. **D0 is not "no change" for the CI checks.** A new core source moves the exact-count pins of three checks (deviation 13).
+8. **The guard cells' universal vitality promise cannot hold at early sites.** "Every guard cell first proves the checked
+   counters rose in the failed layer" is impossible at q and k + v, which fail before any counter moves. PD-1 narrows it
+   (deviation 18).
 
 ## ID-PENDING list
 

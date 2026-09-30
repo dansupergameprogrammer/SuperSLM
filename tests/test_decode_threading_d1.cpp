@@ -11,7 +11,11 @@
 //
 // "Reference" below is the same workload run with no hook (the serial path), or DotRowScalarRef; never
 // the build under test's split. Every threaded cell first asserts that `run` was called with two or
-// more tasks (the §8 preamble), and every guard cell asserts the F1 preamble before its restore check.
+// more tasks (the §8 preamble). A guard cell's failure site decides what it can prove (PD-1, the owner's
+// ruling on review P2): at a site after the failed layer's counters move (o, gate + up, down, and the
+// prefill's down) the cell first proves the checked counters rose in that layer, then that they were
+// restored; at a site before any counter can move (decode q and k + v) it proves no drift and retry
+// identity, and does not claim to prove a restore.
 
 #include <algorithm>
 #include <atomic>
@@ -229,6 +233,12 @@ struct TestHook {
 	int hostile_call = -1;
 	int32_t max_tasks = 4;
 	std::vector<int32_t> counts;
+	// When set, the hostile call first snapshots this sequence's live saturation counters: what the
+	// failed layer had moved at the moment of the failure (2.1's PD-1 split, below). The forward pass is
+	// blocked in `run` then, so the read races nothing.
+	const superslm::SequenceLayerState* watch = nullptr;
+	SaturationCounters at_hostile{};
+	bool observed = false;
 
 	sslm_parallel_for Pf(uint32_t bits) { return sslm_parallel_for{&Run, this, max_tasks, bits}; }
 	void Clear() { counts.clear(); }
@@ -243,6 +253,10 @@ struct TestHook {
 		const int call = static_cast<int>(h.counts.size());
 		h.counts.push_back(task_count);
 		if (h.hostile != Hostile::kNone && call == h.hostile_call) {
+			if (h.watch != nullptr) {
+				h.at_hostile = SaturationCounters::Snapshot(*h.watch);
+				h.observed = true;
+			}
 			switch (h.hostile) {
 			case Hostile::kDuplicate:
 				for (int32_t i = 0; i < task_count; ++i) task(task_ctx, i);
@@ -1085,7 +1099,9 @@ void TestAdmittedCountCell44() {
 // ---- the F1 preamble and the guard cells (2.1, 5.1-5.5) --------------------------------------------------
 
 // Which counters a fixture's guard cells check (F1): each must rise in the failed layer before the
-// failure point, and rope_q and rope_k must rise by different amounts.
+// failure point, and rope_q and rope_k must rise by different amounts. Every counter moves in the
+// q/k/v RoPE and K/V landing, after the k + v projection and before o, so F1 can hold at the moment of
+// a failure only at o, gate + up, down or later (PD-1). At q and k + v nothing has moved yet.
 bool F1Holds(const SaturationCounters& d, bool qk) {
 	const bool each = qk ? (d.kv > 0 && d.k_channel_landing > 0 && d.rope_q > 0)
 	                     : (d.kv > 0 && d.kv_landing > 0 && d.rope_q > 0 && d.rope_k > 0);
@@ -1180,7 +1196,8 @@ void CheckRestsAtLayer1(const char* what, const Fixture& f, sslm_seq s, const St
 	              st.hidden_scale.e == ref.scale_l0.e && st.context_length == ref.context_before,
 	          "%s: sequence does not rest at layer 1 of the step (layer_index %u, context %lld want %lld)", what,
 	          st.layer_index, (long long)st.context_length, (long long)ref.context_before);
-	CHECK_MSG(Ctr(s) == ref.after_l0, "%s: counters %s, want layer 0's kept and layer 1's restored %s", what,
+	// Whether layer 1 had moved anything is the caller's to prove (PD-1): this checks only the end state.
+	CHECK_MSG(Ctr(s) == ref.after_l0, "%s: counters %s, want layer 0's kept and none of layer 1's left %s", what,
 	          Str(Ctr(s)).c_str(), Str(ref.after_l0).c_str());
 }
 
@@ -1199,22 +1216,33 @@ void CheckRetry(const char* what, Rig& rig, sslm_seq s, TestHook& hook, const St
 // 2.1: a hostile `run` on the Nth call, landing on q, k + v, gate + up, down (layer 1) and the finish.
 // Also on o: the coverage replica found o's failure arm (its `fail_layer`) taken by no cell, and §8 2.1
 // names every other threaded site. Added after green, outside the plan's list (a deviation, recorded).
+//
+// What each site proves (PD-1). The hook reads the live counters at the moment it fails the call.
+//  - q and k + v fail before layer 1 can move any counter. The cell asserts that nothing had moved
+//    (the site really is early), that nothing drifted after the failure, and that the retry equals
+//    the never-failed run. It does not claim a restore: there was nothing to restore.
+//  - o, gate + up and down fail after every counter has moved. The cell asserts that the checked
+//    counters rose in layer 1 before the failure (F1 on the live delta), that they were put back to
+//    layer 0's values, and that the retry equals the never-failed run.
+//  - The finish fails after both layers; every layer keeps its counts.
 void TestHostileRunCell21() {
 	SeamScope scope(kSeam8K);
 	const Fixture& f = GetFixture("fdef.sslm");
 	if (!f.ok) return;
 	const StepRef& ref = GetStepRef(f, false);
 	if (!ref.ok) return;
+	enum class Proves { kNoDrift, kRestore, kKeep };
 	struct Site {
 		const char* name;
 		int call;
+		Proves proves;
 	};
-	const Site sites[] = {{"q", DecodeCallIndex(1, kSiteQ)},
-	                      {"k+v", DecodeCallIndex(1, kSiteKV)},
-	                      {"o", DecodeCallIndex(1, kSiteO)},
-	                      {"gate+up", DecodeCallIndex(1, kSiteGateUp)},
-	                      {"down", DecodeCallIndex(1, kSiteDown)},
-	                      {"finish", kFinishCall}};
+	const Site sites[] = {{"q", DecodeCallIndex(1, kSiteQ), Proves::kNoDrift},
+	                      {"k+v", DecodeCallIndex(1, kSiteKV), Proves::kNoDrift},
+	                      {"o", DecodeCallIndex(1, kSiteO), Proves::kRestore},
+	                      {"gate+up", DecodeCallIndex(1, kSiteGateUp), Proves::kRestore},
+	                      {"down", DecodeCallIndex(1, kSiteDown), Proves::kRestore},
+	                      {"finish", kFinishCall, Proves::kKeep}};
 	int cases = 0;
 	for (const Site& site : sites) {
 		for (Hostile h : {Hostile::kDuplicate, Hostile::kOmit, Hostile::kMinusOne, Hostile::kTaskCount}) {
@@ -1228,6 +1256,7 @@ void TestHostileRunCell21() {
 			TestHook hook;
 			hook.hostile = h;
 			hook.hostile_call = site.call;
+			hook.watch = &Live(s);
 			rig.Install(&hook, SSLM_PARALLEL_FOR_MATVEC);
 			int32_t tok = -2;
 			const sslm_status st = rig.Decode(&s, 1, static_cast<int32_t>(f.Layers()), &tok);
@@ -1235,12 +1264,28 @@ void TestHostileRunCell21() {
 			          "%s: status %d after %zu calls, want SSLM_INVALID_ARGUMENT on call %d", what,
 			          static_cast<int>(st), hook.counts.size(), site.call);
 			CHECK_MSG(hook.AllThreaded(), "%s preamble: a run call below 2 tasks", what);
-			if (site.call == kFinishCall) {
+			CHECK_MSG(hook.observed, "%s: the hostile call never ran", what);
+			switch (site.proves) {
+			case Proves::kNoDrift:
+				// An early site: the failed layer had moved nothing when it failed, so there is no restore
+				// to prove. It must still rest at layer 1 with layer 0's counts, unchanged.
+				CHECK_MSG(hook.at_hostile == ref.after_l0,
+				          "%s: counters %s at the failure, want layer 0's %s (an early site moves nothing)", what,
+				          Str(hook.at_hostile).c_str(), Str(ref.after_l0).c_str());
+				CheckRestsAtLayer1(what, f, s, ref);
+				break;
+			case Proves::kRestore:
+				// A late site: the checked counters rose in layer 1 before the failure, then went back.
+				CHECK_MSG(F1Holds(Minus(hook.at_hostile, ref.after_l0), false),
+				          "%s F1 at the failure: layer 1 had moved %s, want every checked counter risen", what,
+				          Str(Minus(hook.at_hostile, ref.after_l0)).c_str());
+				CheckRestsAtLayer1(what, f, s, ref);
+				break;
+			case Proves::kKeep:
 				CHECK_MSG(Live(s).layer_index == 0 && Ctr(s) == ref.after &&
 				              Live(s).context_length == ref.context_before + 1,
 				          "%s: the finish's failure must keep every layer's counts", what);
-			} else {
-				CheckRestsAtLayer1(what, f, s, ref);
+				break;
 			}
 			CheckRetry(what, rig, s, hook, ref);
 			++cases;
