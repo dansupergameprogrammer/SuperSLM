@@ -9,7 +9,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /I%ENG%\include ^
     %ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp ^
     %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp ^
     %ENG%\src\trace_hook.cpp %ENG%\src\forward\checked_chain_funnel.cpp ^
-    %ENG%\src\forward\forward_sites.cpp %ENG%\src\decode_digest.cpp %ENG%\src\gpu\superslm_gpu.cpp ^
+    %ENG%\src\forward\forward_sites.cpp %ENG%\src\forward\parallel_split.cpp %ENG%\src\decode_digest.cpp %ENG%\src\gpu\superslm_gpu.cpp ^
     dispatch_geometry_policy_red.cpp /Fo:"obj\\" /Fe:"obj\dispatch_geometry_policy_red.exe" ^
     /link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (
@@ -27,7 +27,7 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /I%ENG%\include ^
     %ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp ^
     %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp ^
     %ENG%\src\trace_hook.cpp %ENG%\src\forward\checked_chain_funnel.cpp ^
-    %ENG%\src\forward\forward_sites.cpp %ENG%\src\decode_digest.cpp %ENG%\src\gpu\superslm_gpu.cpp ^
+    %ENG%\src\forward\forward_sites.cpp %ENG%\src\forward\parallel_split.cpp %ENG%\src\decode_digest.cpp %ENG%\src\gpu\superslm_gpu.cpp ^
     adapter_u_region_red.cpp /Fo:"obj\\" /Fe:"obj\adapter_u_region_red.exe" ^
     /link d3d12.lib dxgi.lib dxguid.lib
 if errorlevel 1 (

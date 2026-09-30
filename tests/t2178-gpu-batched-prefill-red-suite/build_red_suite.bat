@@ -48,7 +48,7 @@ for %%f in (cell_bitidentity.cpp cell_ceiling_boundary.cpp cell_trust_and_guard.
         %ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp ^
         %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp ^
         %ENG%\src\trace_hook.cpp %ENG%\src\forward\checked_chain_funnel.cpp ^
-        %ENG%\src\forward\forward_sites.cpp %ENG%\src\decode_digest.cpp %ENG%\src\gpu\superslm_gpu.cpp ^
+        %ENG%\src\forward\forward_sites.cpp %ENG%\src\forward\parallel_split.cpp %ENG%\src\decode_digest.cpp %ENG%\src\gpu\superslm_gpu.cpp ^
         %ENG%\src\gpu\gpu_1p0.cpp ^
         "%%f" /Fo:"obj\\" /Fe:"obj\%%~nf.exe" ^
         /link d3d12.lib dxgi.lib dxguid.lib > "obj\%%~nf.log" 2>&1

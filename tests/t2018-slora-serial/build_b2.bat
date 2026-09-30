@@ -13,7 +13,7 @@ cd /d "%HEREDIR%"
 if not exist obj mkdir obj
 set ENG=%HEREDIR%..\..
 cl /nologo /std:c++20 /O2 /fp:precise /EHsc /I%ENG%\include ^
-  "%HEREDIR%t2029_b2_red.cpp" %ENG%\src\intmath.cpp %ENG%\src\forward\forward_sites.cpp ^
+  "%HEREDIR%t2029_b2_red.cpp" %ENG%\src\intmath.cpp %ENG%\src\forward\forward_sites.cpp %ENG%\src\forward\parallel_split.cpp ^
   %ENG%\src\forward\checked_chain_funnel.cpp %ENG%\src\matmul.cpp %ENG%\src\silu_lut.cpp ^
   %ENG%\src\trace_hook.cpp %ENG%\src\model.cpp %ENG%\src\artifact.cpp %ENG%\src\sha256.cpp ^
   %ENG%\src\tokenizer.cpp %ENG%\src\proof_manifest.cpp %ENG%\src\decode_digest.cpp ^

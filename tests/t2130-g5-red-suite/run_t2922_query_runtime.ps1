@@ -16,7 +16,7 @@ Get-ChildItem $Obj -File -ErrorAction SilentlyContinue | Remove-Item -Force
 Enter-SuperSlmVsDevShell
 $Common = @('artifact.cpp','sha256.cpp','tokenizer.cpp','model.cpp','intmath.cpp','silu_lut.cpp',
  'matmul.cpp','proof_manifest.cpp','trace_hook.cpp','forward\checked_chain_funnel.cpp',
- 'forward\forward_sites.cpp','decode_digest.cpp','damped_greedy_antilm.cpp',
+ 'forward\forward_sites.cpp','forward\parallel_split.cpp','decode_digest.cpp','damped_greedy_antilm.cpp',
  'damped_greedy_topk.cpp','damped_greedy_phaseD.cpp','damped_greedy_phaseD_loop.cpp') |
  ForEach-Object { Join-Path "$Engine\src" $_ }
 $Sources = @($Common) + @($GpuSource, "$Engine\src\gpu\superslm_gpu.cpp",
