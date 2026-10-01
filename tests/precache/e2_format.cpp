@@ -24,6 +24,7 @@ void Independent712() {
     sslm_schema schema=nullptr;
     Status(sslm_schema_lookup(fx.model,"schema_two",&schema),SSLM_OK,
            "7.12 bound schema lookup");
+    if(!schema) return;
     sslm_prefix prefix=nullptr;
     Status(sslm_prefix_begin_budgeted(fx.model,&pool.pool,L,&prefix),SSLM_OK,
            "7.12 prefix begin");
@@ -45,6 +46,7 @@ void Independent712() {
     const auto table=PrefixTable(prefix);
     PKV_CHECK_EQ(table.size(),size_t((L+fx.B()-1)/fx.B()));
     if(table.size()!=size_t((L+fx.B()-1)/fx.B())) return;
+    constexpr size_t hidden=896; // synthetic0p5 fixture's embedded hidden size.
     std::vector<uint8_t> rows(size_t(L)*fx.BytesPerToken());
     const size_t H=fx.geo.kv_heads,D=fx.geo.head_dim;
     std::map<uint32_t,std::vector<uint8_t>> pages;
@@ -81,7 +83,7 @@ void Independent712() {
             << "\" --cmake \"" << PC_CMAKE_PATH << "\" --model-sha " << fx.sha
             << " --length " << L << " --origin 0 --layers " << fx.geo.layers
             << " --heads " << fx.geo.kv_heads << " --dim " << fx.geo.head_dim
-            << " --hidden " << HiddenSize(fx)
+            << " --hidden " << hidden
             << " --current-token " << input.back()
             << " --schema-name schema_two --walk 1";
     PKV_CHECK_MSG(std::system(command.str().c_str())==0,
