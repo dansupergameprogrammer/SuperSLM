@@ -108,7 +108,9 @@ def main() -> int:
                             "header": header, "real_stream_screens": stream_screens})
     if real_streams and 10 * real_late_periodic < 9 * real_streams:
         bad.append("fewer than 90% of real streams have periodic onset >= 32")
-    summary = {"status": "QUARANTINED", "reference_files": len(results),
+    summary = {"status": "QUARANTINED",
+               "discrimination_instrument_sha256": sha(args.source_root / "tools/t3035_discrimination.py"),
+               "reference_files": len(results),
                "pairs": len(results) // 2, "audit_errors": bad,
                "real_streams": real_streams,
                "real_late_periodic": real_late_periodic,
