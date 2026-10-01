@@ -1,0 +1,195 @@
+--- /dev/null
++++ b/src/debunk_mutant.h
+@@ -0,0 +1,47 @@
++// DEBUNK MUTANT -- never part of a shipped tree. Applied only to a scratch copy by
++// tests/paged-kv/commissioning/build_scratch.{sh,ps1} (mutants/debunk_mutants.patch).
++//
++// Every mutation is gated on PKV_DEBUNK_MUTANT (read once per process), so one mutant library
++// serves every construction, and with the variable unset it behaves as the unmutated tree.
++//   leak1          the first release in each page pool leaks one reserve page (one-page deficit)
++//   dfree1         the first release in each page pool frees one reserve page twice (one-page excess)
++//   budget_edge    sslm_seq_create_budgeted refuses budget >= cap - B with SSLM_INVALID_ARGUMENT
++//   kv_flip        one V byte (layer 1, KV head 1, position 17, d 0) lands XOR 1
++//   tok_flip       a decode step that leaves context_length == 102 returns (token + 1) % 256
++//   blob_hdr       a successful save flips bit 0 of byte 100 (forced_token_count) of the blob
++//   decode_slow    sslm_decode_step on a paged holder (B < cap) spins f x its own elapsed time,
++//                  f = PKV_DEBUNK_DECODE_SLOW (a decode rate 1 / (1 + f) of the unmutated one)
++//   reset_capscale sslm_seq_reset also writes context_cap * 64 bytes of scratch (cost ~ cap)
++
++#ifndef SUPERSLM_SRC_DEBUNK_MUTANT_H
++#define SUPERSLM_SRC_DEBUNK_MUTANT_H
++
++#include <cstdlib>
++#include <cstring>
++#include <string>
++
++namespace superslm {
++namespace debunk {
++
++inline const std::string& MutantName() {
++	static const std::string name = [] {
++		const char* v = std::getenv("PKV_DEBUNK_MUTANT");
++		return std::string(v ? v : "");
++	}();
++	return name;
++}
++
++inline bool Mutant(const char* name) { return MutantName() == name; }
++
++inline double DecodeSlowFactor() {
++	static const double f = [] {
++		const char* v = std::getenv("PKV_DEBUNK_DECODE_SLOW");
++		return v ? std::atof(v) : 0.0;
++	}();
++	return f;
++}
++
++}  // namespace debunk
++}  // namespace superslm
++
++#endif  // SUPERSLM_SRC_DEBUNK_MUTANT_H
+--- a/src/forward/forward_sites.cpp
++++ b/src/forward/forward_sites.cpp
+@@ -29,6 +29,7 @@
+ #include <vector>
+ 
+ #include "superslm/intmath.h"
++#include "../debunk_mutant.h"
+ #include "superslm/silu_lut.h"  // SiluSigmoidQ15 (C34's LUT construction, MlpActSite step 2)
+ #include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable (RunLayerLoop's MlpActSite call)
+ #include "superslm/matmul.h"  // GemmInt8AccumulateRow / GemmProbQ15Accumulate (RunLayerLoop)
+@@ -1974,6 +1975,9 @@
+ 			    kv_landing_saturation_count)));
+ 		}
+ 	}
++	// DEBUNK MUTANT kv_flip: one V byte lands wrong.
++	if (position == 17 && layer == 1 && num_key_value_heads > 1 && debunk::Mutant("kv_flip"))
++		MutableValueRow(view, layer, num_key_value_heads, head_dim, 1, position)[0] ^= 1;
+ 	return SslmForwardStatus::Ok;
+ }
+ 
+--- a/src/kv_pages.cpp
++++ b/src/kv_pages.cpp
+@@ -1,6 +1,7 @@
+ // Paged-KV plan (rev 16.1) §3.3, step C3: the page allocator. See kv_pages.h for the state and laws.
+ 
+ #include "kv_pages.h"
++#include "debunk_mutant.h"
+ 
+ #include <atomic>
+ #include <cstdlib>
+@@ -336,12 +337,16 @@
+ 			++i;
+ 		}
+ 	}
++	// DEBUNK MUTANT: the first release in this pool leaks (leak1) or double-frees (dfree1) one page.
++	const bool debunk_first = pool->debunk_releases++ == 0;
++	if (debunk_first && reserve_free > 0 && debunk::Mutant("leak1")) --reserve_free;
+ 	PoisonIfDirty(pool, table, to_free);
+ 	PoisonIfDirty(pool, reserve.data(), reserve_free);
+ 	{
+ 		std::lock_guard<CountingMutex> lock(pool->mutex);
+ 		PushFreeLocked(pool, table, to_free);
+ 		PushFreeLocked(pool, reserve.data(), reserve_free);
++		if (debunk_first && reserve_free > 0 && debunk::Mutant("dfree1")) pool->free_list.push_back(reserve[0]);
+ 	}
+ 	delete holder;
+ 	return status;
+--- a/src/kv_pages.h
++++ b/src/kv_pages.h
+@@ -87,6 +87,7 @@
+ 	// the pool mutex, changed only where a shared entry enters or leaves a table.
+ 	std::vector<uint32_t> shared_maps;
+ 	uint32_t shared_distinct = 0;
++	uint32_t debunk_releases = 0;  // DEBUNK MUTANT: releases seen by this pool
+ };
+ 
+ struct PageHolder {
+--- a/src/sslm_abi.cpp
++++ b/src/sslm_abi.cpp
+@@ -88,6 +88,8 @@
+ #include "superslm/sslm_damped_greedy.h"  // T-2199 Phase A/C: AntiLmState, DampedGreedyScoreAndArgmax
+ #include "superslm/sslm_phaseD.h"         // T-2199 Phase D: ValidateDampedGreedyParams
+ #include "forward/parallel_split.h"       // ParallelForHookValid, SaturationCounters (decode threading)
++#include "debunk_mutant.h"
++#include <chrono>
+ #include "kv_pages.h"                     // Paged-KV plan §3.3: the page module (C3), legacy holders (C4)
+ 
+ #include "bad_alloc_wrap.h"  // N3 pin (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3):
+@@ -2376,6 +2378,10 @@
+ 	sslm_kv_pool_s* p = *pool;
+ 	if (p->model != model) return SSLM_INVALID_ARGUMENT;
+ 	if (!BudgetInDomain(model, budget)) return SSLM_INVALID_ARGUMENT;
++	// DEBUNK MUTANT budget_edge: a domain check off by one page at the top of the range.
++	if (superslm::debunk::Mutant("budget_edge") &&
++	    static_cast<int64_t>(budget) >= static_cast<int64_t>(model->view.config.context_cap) - ComputePageGeometry(model).page_positions)
++		return SSLM_INVALID_ARGUMENT;
+ 	superslm::kv_pages::PageHolder* kv = nullptr;
+ 	const sslm_status draw_st = CreateHolder(p, ReservationPages(model, budget), &kv);
+ 	if (draw_st != SSLM_OK) return draw_st;
+@@ -2450,6 +2456,14 @@
+ 	// rows stay only in pages that return to this holder's own reserve, which no ABI read reaches
+ 	// (reads stop at the live width, G4) and which are poisoned before any other holder gets them.
+ 	const sslm_status unmap_st = MapPageStatus(superslm::kv_pages::HolderUnmapAll(seq->kv));
++	// DEBUNK MUTANT reset_capscale: a cap-proportional write on every reset.
++	if (superslm::debunk::Mutant("reset_capscale")) {
++		static std::vector<uint8_t> debunk_scratch;
++		const size_t debunk_n = static_cast<size_t>(seq->model->view.config.context_cap) * 64u;
++		if (debunk_scratch.size() < debunk_n) debunk_scratch.resize(debunk_n);
++		std::memset(debunk_scratch.data(), static_cast<int>(seq->state.context_length & 0xFF), debunk_n);
++		std::atomic_signal_fence(std::memory_order_seq_cst);
++	}
+ 	seq->kv_origin = 0;
+ 	seq->state.context_length = 0;
+ 	seq->state.kv_saturation_count = 0;
+@@ -3282,7 +3296,7 @@
+ 	return SSLM_OK;
+ }
+ 
+-extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_t n,
++static sslm_status DebunkDecodeStepInner(sslm_model model, sslm_seq* seqs, int32_t n,
+                                          const sslm_decode_params* params, sslm_workspace ws,
+                                          int32_t* out_tokens) {
+ 	// v1.1 ABI compatibility: the released struct was exactly one int32_t. Never inspect a later
+@@ -3507,7 +3521,7 @@
+ 
+ }  // namespace
+ 
+-extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
++static sslm_status DebunkSeqSaveInner(sslm_seq seq, void* buf, size_t* n) {
+ 	if (!n) return SSLM_INVALID_ARGUMENT;
+ 	if (!seq) return SSLM_INVALID_ARGUMENT;
+ 	std::lock_guard<std::mutex> lifecycle_lock(seq->lifecycle_mutex);
+@@ -4614,3 +4628,32 @@
+ 	std::lock_guard<std::mutex> lock(seq->lifecycle_mutex);
+ 	return MapPageStatus(superslm::kv_pages::HolderReturnReserve(seq->kv, nullptr));
+ }
++
++// ---- DEBUNK MUTANT wrappers (tests/paged-kv/commissioning/mutants) -----------------------------
++
++extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_t n,
++                                         const sslm_decode_params* params, sslm_workspace ws,
++                                         int32_t* out_tokens) {
++	const bool slow = superslm::debunk::Mutant("decode_slow") && model &&
++	                  ComputePageGeometry(model).page_positions < static_cast<int64_t>(model->view.config.context_cap);
++	const auto t0 = std::chrono::steady_clock::now();
++	const sslm_status st = DebunkDecodeStepInner(model, seqs, n, params, ws, out_tokens);
++	if (slow) {
++		const auto t1 = std::chrono::steady_clock::now();
++		const auto until = t1 + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
++		                            (t1 - t0) * superslm::debunk::DecodeSlowFactor());
++		while (std::chrono::steady_clock::now() < until) {
++		}
++	}
++	if (st == SSLM_OK && superslm::debunk::Mutant("tok_flip") && n >= 1 && seqs && seqs[0] && out_tokens &&
++	    out_tokens[0] >= 0 && seqs[0]->state.context_length == 102)
++		out_tokens[0] = (out_tokens[0] + 1) % 256;
++	return st;
++}
++
++extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
++	const sslm_status st = DebunkSeqSaveInner(seq, buf, n);
++	if (st == SSLM_OK && buf && n && *n > 100 && superslm::debunk::Mutant("blob_hdr"))
++		static_cast<uint8_t*>(buf)[100] ^= 1;
++	return st;
++}
