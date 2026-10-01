@@ -1,0 +1,966 @@
+{
+  "adopter_mode": "legacy",
+  "classes": {
+    "M-row0-changed": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 2,
+      "survivors": [
+        {
+          "mutant": "M-row0-changed",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row0-changed",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row0-changed",
+          "reference_sha256": "6ab69b59a850a99c4d7c19e24923a323006a5cd257455f7a09144f8c6a587cc0"
+        },
+        {
+          "mutant": "M-row0-changed",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row0-changed",
+          "reference_sha256": "428344d22338ae9231efa738f78076d4243c37cf5546210b144e41bd884e396b"
+        },
+        {
+          "mutant": "M-row0-changed",
+          "reference_sha256": "4200fab3f64145e3b0b74939c3e861b9ea4575c5ee37b99394856f9bf7b20bba"
+        },
+        {
+          "mutant": "M-row0-changed",
+          "reference_sha256": "6970daf23b1704edfeb53b84c97bb91d7c91790f29c59b5b597609516a49d77c"
+        },
+        {
+          "mutant": "M-row0-changed",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        }
+      ],
+      "tested": 10
+    },
+    "M-swap(110,111)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(110,111)",
+          "reference_sha256": "6970daf23b1704edfeb53b84c97bb91d7c91790f29c59b5b597609516a49d77c"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(123,124)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(123,124)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(14,15)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(14,15)",
+          "reference_sha256": "3e459340a007a39510634896a07616ca0dd3482f0bab4fac421e0abaf7a9f61d"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(21,22)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(21,22)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(29,30)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(29,30)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(44,45)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(44,45)",
+          "reference_sha256": "6ab69b59a850a99c4d7c19e24923a323006a5cd257455f7a09144f8c6a587cc0"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(60,61)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(60,61)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(7,8)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(7,8)",
+          "reference_sha256": "91dfbe91af5ef6bbf6f7e43189024a449e3a394899204ad7a374264f99d19df1"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(73,74)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(73,74)",
+          "reference_sha256": "428344d22338ae9231efa738f78076d4243c37cf5546210b144e41bd884e396b"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(92,93)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(92,93)",
+          "reference_sha256": "4200fab3f64145e3b0b74939c3e861b9ea4575c5ee37b99394856f9bf7b20bba"
+        }
+      ],
+      "tested": 1
+    },
+    "page:all": {
+      "changed": 30,
+      "identities": 0,
+      "killed": 21,
+      "survivors": [
+        {
+          "mutant": "M-page(0)",
+          "reference_sha256": "3e459340a007a39510634896a07616ca0dd3482f0bab4fac421e0abaf7a9f61d"
+        },
+        {
+          "mutant": "M-page(0)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-page(11)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-page(22)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-page(15)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-page(30)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-page(0)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-page(61)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-page(0)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        }
+      ],
+      "tested": 30
+    },
+    "page:first": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 6,
+      "survivors": [
+        {
+          "mutant": "M-page(0)",
+          "reference_sha256": "3e459340a007a39510634896a07616ca0dd3482f0bab4fac421e0abaf7a9f61d"
+        },
+        {
+          "mutant": "M-page(0)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-page(0)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-page(0)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        }
+      ],
+      "tested": 10
+    },
+    "page:last": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 7,
+      "survivors": [
+        {
+          "mutant": "M-page(22)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-page(30)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-page(61)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        }
+      ],
+      "tested": 10
+    },
+    "page:middle": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 8,
+      "survivors": [
+        {
+          "mutant": "M-page(11)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-page(15)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        }
+      ],
+      "tested": 10
+    },
+    "partial_tail": {
+      "changed": 9,
+      "identities": 0,
+      "killed": 8,
+      "survivors": [
+        {
+          "mutant": "M-tail",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        }
+      ],
+      "tested": 9
+    },
+    "residual": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 10,
+      "survivors": [],
+      "tested": 10
+    },
+    "row:0": {
+      "changed": 0,
+      "identities": 10,
+      "killed": 0,
+      "survivors": [],
+      "tested": 10
+    },
+    "row:1..B-1": {
+      "changed": 130,
+      "identities": 20,
+      "killed": 93,
+      "survivors": [
+        {
+          "mutant": "M-row(10)",
+          "reference_sha256": "3e459340a007a39510634896a07616ca0dd3482f0bab4fac421e0abaf7a9f61d"
+        },
+        {
+          "mutant": "M-row(3)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(4)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(6)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(7)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(10)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(12)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(14)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(5)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(6)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(7)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(8)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(9)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(11)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(13)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(14)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(5)",
+          "reference_sha256": "6ab69b59a850a99c4d7c19e24923a323006a5cd257455f7a09144f8c6a587cc0"
+        },
+        {
+          "mutant": "M-row(3)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(6)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(7)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(8)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(9)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(10)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(12)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(14)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(15)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(6)",
+          "reference_sha256": "428344d22338ae9231efa738f78076d4243c37cf5546210b144e41bd884e396b"
+        },
+        {
+          "mutant": "M-row(13)",
+          "reference_sha256": "428344d22338ae9231efa738f78076d4243c37cf5546210b144e41bd884e396b"
+        },
+        {
+          "mutant": "M-row(3)",
+          "reference_sha256": "4200fab3f64145e3b0b74939c3e861b9ea4575c5ee37b99394856f9bf7b20bba"
+        },
+        {
+          "mutant": "M-row(13)",
+          "reference_sha256": "4200fab3f64145e3b0b74939c3e861b9ea4575c5ee37b99394856f9bf7b20bba"
+        },
+        {
+          "mutant": "M-row(5)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(7)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(8)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(11)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(12)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(13)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(14)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        }
+      ],
+      "tested": 150
+    },
+    "row:B": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 8,
+      "survivors": [
+        {
+          "mutant": "M-row(16)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(16)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        }
+      ],
+      "tested": 10
+    },
+    "row:B-1": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 9,
+      "survivors": [
+        {
+          "mutant": "M-row(15)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        }
+      ],
+      "tested": 10
+    },
+    "row:L-1": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 6,
+      "survivors": [
+        {
+          "mutant": "M-row(379)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(999)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(1505)",
+          "reference_sha256": "4200fab3f64145e3b0b74939c3e861b9ea4575c5ee37b99394856f9bf7b20bba"
+        },
+        {
+          "mutant": "M-row(1999)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        }
+      ],
+      "tested": 10
+    },
+    "row:L-B-1": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 8,
+      "survivors": [
+        {
+          "mutant": "M-row(484)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(983)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        }
+      ],
+      "tested": 10
+    },
+    "row:all": {
+      "changed": 170,
+      "identities": 30,
+      "killed": 121,
+      "survivors": [
+        {
+          "mutant": "M-row(10)",
+          "reference_sha256": "3e459340a007a39510634896a07616ca0dd3482f0bab4fac421e0abaf7a9f61d"
+        },
+        {
+          "mutant": "M-row(3)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(4)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(6)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(7)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(10)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(12)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(14)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(190)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(379)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(5)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(6)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(7)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(8)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(9)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(11)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(13)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(14)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(16)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(250)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(484)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(5)",
+          "reference_sha256": "6ab69b59a850a99c4d7c19e24923a323006a5cd257455f7a09144f8c6a587cc0"
+        },
+        {
+          "mutant": "M-row(3)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(6)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(7)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(8)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(9)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(10)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(12)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(14)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(15)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(16)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(500)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(983)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(999)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(6)",
+          "reference_sha256": "428344d22338ae9231efa738f78076d4243c37cf5546210b144e41bd884e396b"
+        },
+        {
+          "mutant": "M-row(13)",
+          "reference_sha256": "428344d22338ae9231efa738f78076d4243c37cf5546210b144e41bd884e396b"
+        },
+        {
+          "mutant": "M-row(3)",
+          "reference_sha256": "4200fab3f64145e3b0b74939c3e861b9ea4575c5ee37b99394856f9bf7b20bba"
+        },
+        {
+          "mutant": "M-row(13)",
+          "reference_sha256": "4200fab3f64145e3b0b74939c3e861b9ea4575c5ee37b99394856f9bf7b20bba"
+        },
+        {
+          "mutant": "M-row(1505)",
+          "reference_sha256": "4200fab3f64145e3b0b74939c3e861b9ea4575c5ee37b99394856f9bf7b20bba"
+        },
+        {
+          "mutant": "M-row(5)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(7)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(8)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(11)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(12)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(13)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(14)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(1000)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(1999)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        }
+      ],
+      "tested": 200
+    },
+    "row:floor(L/2)": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 6,
+      "survivors": [
+        {
+          "mutant": "M-row(190)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(250)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(500)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(1000)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        }
+      ],
+      "tested": 10
+    },
+    "row:noninitial": {
+      "changed": 170,
+      "identities": 20,
+      "killed": 121,
+      "survivors": [
+        {
+          "mutant": "M-row(10)",
+          "reference_sha256": "3e459340a007a39510634896a07616ca0dd3482f0bab4fac421e0abaf7a9f61d"
+        },
+        {
+          "mutant": "M-row(3)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(4)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(6)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(7)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(10)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(12)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(14)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(190)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(379)",
+          "reference_sha256": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae"
+        },
+        {
+          "mutant": "M-row(5)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(6)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(7)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(8)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(9)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(11)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(13)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(14)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(16)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(250)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(484)",
+          "reference_sha256": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49"
+        },
+        {
+          "mutant": "M-row(5)",
+          "reference_sha256": "6ab69b59a850a99c4d7c19e24923a323006a5cd257455f7a09144f8c6a587cc0"
+        },
+        {
+          "mutant": "M-row(3)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(6)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(7)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(8)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(9)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(10)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(12)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(14)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(15)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(16)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(500)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(983)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(999)",
+          "reference_sha256": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb"
+        },
+        {
+          "mutant": "M-row(6)",
+          "reference_sha256": "428344d22338ae9231efa738f78076d4243c37cf5546210b144e41bd884e396b"
+        },
+        {
+          "mutant": "M-row(13)",
+          "reference_sha256": "428344d22338ae9231efa738f78076d4243c37cf5546210b144e41bd884e396b"
+        },
+        {
+          "mutant": "M-row(3)",
+          "reference_sha256": "4200fab3f64145e3b0b74939c3e861b9ea4575c5ee37b99394856f9bf7b20bba"
+        },
+        {
+          "mutant": "M-row(13)",
+          "reference_sha256": "4200fab3f64145e3b0b74939c3e861b9ea4575c5ee37b99394856f9bf7b20bba"
+        },
+        {
+          "mutant": "M-row(1505)",
+          "reference_sha256": "4200fab3f64145e3b0b74939c3e861b9ea4575c5ee37b99394856f9bf7b20bba"
+        },
+        {
+          "mutant": "M-row(5)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(7)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(8)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(11)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(12)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(13)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(14)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(1000)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        },
+        {
+          "mutant": "M-row(1999)",
+          "reference_sha256": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537"
+        }
+      ],
+      "tested": 190
+    }
+  },
+  "decode_mode": "greedy",
+  "instrument": "T-3035-precache-stream-v2",
+  "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+  "note": "Positive stream witnesses only; exact-state cells and independent commissioning remain separate",
+  "prefixes": 10,
+  "status": "QUARANTINED",
+  "unique_mutants": 269,
+  "vitality_observation": {
+    "page:first": true,
+    "page:last": true,
+    "page:middle": true,
+    "partial_tail": true,
+    "residual": true,
+    "row:noninitial": true
+  }
+}
