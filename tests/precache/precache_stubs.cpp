@@ -10,4 +10,11 @@ extern "C" sslm_status sslm_prefix_restore(sslm_model, sslm_kv_pool*, const void
     size_t, sslm_prefix, sslm_prefix*, uint32_t*) {
     return static_cast<sslm_status>(0x7fff);
 }
+extern "C" void sslm_pc_test_only_restore_fault_arm(int, int) {}
+extern "C" void sslm_pc_test_only_restore_fault_disarm() {}
+extern "C" int sslm_pc_test_only_restore_fault_read(uint32_t*, uint32_t*, uint32_t*, uint32_t*) { return 0; }
+extern "C" sslm_status sslm_pc_test_only_set_prefix_layer(sslm_prefix, uint32_t) {
+    return static_cast<sslm_status>(0x7fff);
+}
+extern "C" uint64_t sslm_pc_test_only_prefix_prefill_calls() { return UINT64_MAX; }
 #endif

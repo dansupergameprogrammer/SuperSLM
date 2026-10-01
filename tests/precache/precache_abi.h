@@ -16,4 +16,12 @@ SUPERSLM_API sslm_status sslm_prefix_save(sslm_prefix prefix, void* buf, size_t*
 SUPERSLM_API sslm_status sslm_prefix_restore(sslm_model model, sslm_kv_pool* pool,
     const void* buf, size_t n, sslm_prefix parent_or_null, sslm_prefix* out,
     uint32_t* out_shared_pages);
+
+// Test-injection-library seams from plan §8. They are absent from the public ABI.
+void sslm_pc_test_only_restore_fault_arm(int position, int page_status);
+void sslm_pc_test_only_restore_fault_disarm();
+int sslm_pc_test_only_restore_fault_read(uint32_t* free_pages, uint32_t* shared,
+    uint32_t* mapped, uint32_t* reserve);
+sslm_status sslm_pc_test_only_set_prefix_layer(sslm_prefix prefix, uint32_t layer);
+uint64_t sslm_pc_test_only_prefix_prefill_calls();
 }

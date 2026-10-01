@@ -38,7 +38,7 @@ inline std::vector<uint8_t> Save(sslm_prefix p) {
 
 inline void Digest(std::vector<uint8_t>& b) {
     if (b.size() < kHeader) return;
-    std::fill(b.begin() + 28, b.begin() + 60, 0);
+    std::fill(b.begin() + 28, b.begin() + 60, uint8_t{0});
     uint8_t hash[32];
     superslm::Sha256Hash(b.data(), b.size(), hash);
     std::copy(hash, hash + 32, b.begin() + 28);
