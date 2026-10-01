@@ -12,6 +12,8 @@ if(Python3_Interpreter_FOUND)
     set(PC_PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
     add_test(NAME superslm_precache_version_header
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/ci/check_version_header.py)
+    add_test(NAME superslm_precache_version_header_commission
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/ci/test_check_version_header.py)
     add_test(NAME superslm_precache_converter_hash_guards
         COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/check_scm1_serializer.py)
     add_test(NAME superslm_precache_spx1_oracle
