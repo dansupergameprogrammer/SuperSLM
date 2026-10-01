@@ -105,6 +105,9 @@ else()
 	target_compile_options(superslm_tests PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 
+# Paged-KV plan (rev 16.1) step C1: the red suite's per-step executables, all EXCLUDE_FROM_ALL.
+include(tests/paged-kv/paged_kv.cmake)
+
 # T-2152 (outside strike item 1): tests/test_main.cpp's own T-2019/T-2024 GPU-serial-port
 # section calls `superslm_gpu::*` directly (#ifdef _WIN32-guarded in that file so the same
 # test_main.cpp still compiles on the Linux/macOS CI legs, which take neither branch below) --
