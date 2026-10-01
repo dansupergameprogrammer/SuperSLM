@@ -1,0 +1,43 @@
+{
+  "M_walk": {
+    "donor_schema": "schema_zero",
+    "donor_schema_hash": "04a1ef84a324295d",
+    "first_divergent_token": 0,
+    "killed": true,
+    "mutant_walk": 0,
+    "probe_sha256": "3babb86663d7382a50c94d30c37c347b384b14706cf816378cfde43216a7e0c6",
+    "restore_status": 0
+  },
+  "cross_binding_dispositions": [
+    {
+      "bound_schema": "schema_zero",
+      "bound_schema_hash": "04a1ef84a324295d",
+      "prefix_id": "schema2",
+      "status": "21"
+    },
+    {
+      "bound_schema": "schema_one",
+      "bound_schema_hash": "aff7c54f819bfff9",
+      "prefix_id": "schema2",
+      "status": "21"
+    },
+    {
+      "bound_schema": "none",
+      "bound_schema_hash": "0000000000000000",
+      "prefix_id": "schema2",
+      "status": "21"
+    }
+  ],
+  "forced_content_id": 0,
+  "forced_content_ids_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+  "instrument": "T-3035-precache-discrimination",
+  "kind": "schema",
+  "model_sha256": "56f1432393105ad4fb10547b4bcf50e60b8e5181c8d4132749ee97c4a6a09670",
+  "population_adequate": false,
+  "prefix_id": "schema2",
+  "probe_sha256": "5e0dde22270d5d86d7e2ae4c717f8c96b05ae0c3deb69389ce80aef26d865dea",
+  "prompt_ids_sha256": "f453156c6b9460b6f4ae6a254684c1280a3a9f2181c57e658bad593d638aee27",
+  "reason": "Progressed walk, cross-bind dispositions, and M-walk measured; instrument uncommissioned",
+  "status": "QUARANTINED",
+  "walk_state": 1
+}
