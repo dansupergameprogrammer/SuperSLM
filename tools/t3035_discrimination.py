@@ -14,7 +14,7 @@ EOS = {151643, 151645}
 
 
 def onset(tokens: list[int]) -> int:
-    for start in range(len(tokens) + 1):
+    for start in range(max(0, len(tokens) - 31)):
         for period in range(1, 5):
             if all(tokens[i] == tokens[i - period] for i in range(start + period, len(tokens))):
                 return start
