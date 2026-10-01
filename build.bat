@@ -54,7 +54,7 @@ for %%f in (src\gpu\shaders\*.hlsl) do (
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_ENABLE_MATVEC_TEST_SEAMS /DSUPERSLM_O11_ALLOC_INJECTION /DSUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp src\damped_greedy_phaseD_loop.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp src\damped_greedy_phaseD_loop.cpp ^
 	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^
 	tests\test_main.cpp tests\test_slm18x_saturation_census.cpp tests\test_slm19x_schema_damped_greedy.cpp tests\test_tiled_gemm.cpp tests\test_attn_rowsites.cpp tests\test_decode_threading.cpp tests\test_decode_threading_d1.cpp /Fo:out\ /Fe:out\superslm_tests.exe ^
 	/link d3d12.lib dxgi.lib dxguid.lib
@@ -649,7 +649,7 @@ rem exists on every machine); built so it is ready. Usage: out\t2139_c2_smoke.ex
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c2_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_c2_smoke.exe
 if errorlevel 1 (
@@ -668,7 +668,7 @@ if defined T2139_MODEL (
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c2_smoke_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_c2_smoke_negative.exe
 if errorlevel 1 (
@@ -688,7 +688,7 @@ rem out\t2139_c3_smoke.exe ^<model.sslm^>.
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c3_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_c3_smoke.exe
 if errorlevel 1 (
@@ -703,7 +703,7 @@ if defined T2139_MODEL (
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c3_smoke_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_c3_smoke_negative.exe
 if errorlevel 1 (
@@ -725,7 +725,7 @@ rem out\t2139_c4_oracle.exe ^<model.sslm^> [max_new_tokens].
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests\t2138-abi-red-suite ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c4_oracle.cpp /Fo:out\t2139\ /Fe:out\t2139_c4_oracle.exe
 if errorlevel 1 (
@@ -740,7 +740,7 @@ if defined T2139_MODEL (
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c4_smoke_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_c4_smoke_negative.exe
 if errorlevel 1 (
@@ -760,7 +760,7 @@ rem here (same precedent as C2/C3's smokes above). Usage: out\t2139_c5_smoke.exe
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c5_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_c5_smoke.exe
 if errorlevel 1 (
@@ -775,7 +775,7 @@ if defined T2139_MODEL (
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c5_smoke_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_c5_smoke_negative.exe
 if errorlevel 1 (
@@ -797,7 +797,7 @@ rem [foreign-base.sslm].
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c6_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_c6_smoke.exe
 if errorlevel 1 (
@@ -819,7 +819,7 @@ if defined c6_ready (
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c6_smoke_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_c6_smoke_negative.exe
 if errorlevel 1 (
@@ -843,7 +843,7 @@ rem out\t2139_c7_smoke.exe ^<model.sslm^>.
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c7_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_c7_smoke.exe
 if errorlevel 1 (
@@ -869,7 +869,7 @@ rem out\t2139_c7_unmapped_pin.exe ^<model.sslm^>.
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_c7_unmapped_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_c7_unmapped_pin.exe
 if errorlevel 1 (
@@ -922,7 +922,7 @@ if not errorlevel 1 (
 		cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 			src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 			src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-			src\sslm_abi.cpp ^
+			src\kv_pages.cpp src\sslm_abi.cpp ^
 			src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp src\damped_greedy_phaseD_loop.cpp ^
 			tools\sslm_verify.cpp /Fo:out\t2199\ /Fe:out\sslm_verify.exe
 		if errorlevel 1 (
@@ -955,7 +955,7 @@ rem real-artifact tools). Usage: out\t2139_dim9_current_token_pin.exe ^<model.ss
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_dim9_current_token_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_dim9_current_token_pin.exe
 if errorlevel 1 (
@@ -983,7 +983,7 @@ rem Usage: out\t2139_n2_odd_budget_smoke.exe ^<model.sslm^>.
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_n2_odd_budget_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_n2_odd_budget_smoke.exe
 if errorlevel 1 (
@@ -1005,7 +1005,7 @@ rem out\t2139_n3_bad_alloc_pin.exe ^<model.sslm^>.
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_n3_bad_alloc_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_n3_bad_alloc_pin.exe
 if errorlevel 1 (
@@ -1027,7 +1027,7 @@ rem out\t2139_d3464_foreignfault_pin.exe ^<model.sslm^> [adapter.sslm].
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_d3464_foreignfault_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_d3464_foreignfault_pin.exe
 if errorlevel 1 (
@@ -1051,7 +1051,7 @@ rem N3/D-SLM3464 pins' own convention (SUPERSLM_ENABLE_BAD_ALLOC_INJECTION + /It
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_f2_length_error_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_f2_length_error_pin.exe
 if errorlevel 1 (
@@ -1088,7 +1088,7 @@ rem header comment named. Same seam/build convention as the N3/D-SLM3464 pins ab
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_d3466_postload_region_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_d3466_postload_region_pin.exe
 if errorlevel 1 (
@@ -1110,7 +1110,7 @@ rem out\t2139_sfreeze_example.exe ^<model.sslm^> "prompt".
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2139_sfreeze_example.cpp /Fo:out\t2139\ /Fe:out\t2139_sfreeze_example.exe
 if errorlevel 1 (
@@ -1135,7 +1135,7 @@ rem out\t2132_g5_smoke.exe ^<g5-fixture.sslm^> "prompt" [schema_name].
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2132_g5_smoke.cpp /Fo:out\t2139\ /Fe:out\t2132_g5_smoke.exe
 if errorlevel 1 (
@@ -1161,7 +1161,7 @@ if not exist out\t2147 mkdir out\t2147
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2147_chunk_batched_pins.cpp /Fo:out\t2147\ /Fe:out\t2147_chunk_batched_pins.exe
 if errorlevel 1 (
@@ -1191,7 +1191,7 @@ if not exist out\t2132g5gpu mkdir out\t2132g5gpu
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itools ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^
 	tools\t2132_g5_gpu_parity.cpp tools\t2132_g5_gpu_parity_cpu.cpp tools\t2132_g5_gpu_parity_gpu.cpp ^
@@ -1222,7 +1222,7 @@ rem fixture. Usage: out\t2132_c1_restore_walk_state_pin.exe ^<g5-fixture.sslm^> 
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2132_c1_restore_walk_state_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_c1_restore_walk_state_pin.exe
 if errorlevel 1 (
@@ -1243,7 +1243,7 @@ rem ^<g5-fixture-1.5b.sslm^> ^<plain-0.5b.sslm^> [schema_name].
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2132_c2_cross_model_schema_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_c2_cross_model_schema_pin.exe
 if errorlevel 1 (
@@ -1267,7 +1267,7 @@ rem Usage: out\t2132_s7_set_schema_freshness_pin.exe ^<g5-fixture.sslm^> [schema
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2132_s7_set_schema_freshness_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_s7_set_schema_freshness_pin.exe
 if errorlevel 1 (
@@ -1287,7 +1287,7 @@ rem Usage: out\t2132_s2_dead_end_sentinel_pin.exe ^<g5-fixture.sslm^> [schema_na
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2132_s2_dead_end_sentinel_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_s2_dead_end_sentinel_pin.exe
 if errorlevel 1 (
@@ -1300,15 +1300,15 @@ if defined T2132_G5_FIXTURE (
 	echo t2132_s2_dead_end_sentinel_pin: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
 )
 
-rem S4 pin (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): restores a discriminating mechanism
-rem for the dimension-1 leak guard T-2132's own DrawBlock zero-fill made unobservable -- a
-rem test-only pool-peek hook (src\sslm_abi.cpp, sslm_g5_test_only_peek_kv_block_bytes) bypasses
-rem DrawBlock's zero-fill to observe ReturnBlock's own poison-fill directly.
+rem S4 pin (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): a discriminating mechanism for the
+rem dimension-1 leak guard -- the test-only page peek (src\sslm_abi.cpp,
+rem sslm_pkv_test_only_peek_page_bytes) reads the page the released sequence wrote and observes
+rem the page free path's poison fill directly (paged-KV plan, step C4).
 rem Usage: out\t2132_s4_leak_guard_mutation_pin.exe ^<g5-fixture.sslm^>.
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2132_s4_leak_guard_mutation_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_s4_leak_guard_mutation_pin.exe
 if errorlevel 1 (
@@ -1329,7 +1329,7 @@ rem Usage: out\t2132_m4_forced_token_count_pin.exe ^<g5-fixture.sslm^> [schema_n
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
-	src\sslm_abi.cpp ^
+	src\kv_pages.cpp src\sslm_abi.cpp ^
 	src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp ^
 	tools\t2132_m4_forced_token_count_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_m4_forced_token_count_pin.exe
 if errorlevel 1 (
@@ -1585,7 +1585,7 @@ if exist out\t2899 rmdir /s /q out\t2899
 mkdir out\t2899\cpu_fi out\t2899\cpu_common out\t2899\cpu_abi out\t2899\gpu out\t2899\cells
 set T2899_DIR=tests\t2899-schema-deadend-red-suite
 set T2899_INC=/Iinclude /Isrc /Itests /Itests\t2791-gpu-prefill-read-red-suite /I%T2899_DIR%
-set T2899_SRC_NOABI=src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp src\damped_greedy_phaseD_loop.cpp
+set T2899_SRC_NOABI=src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp src\kv_pages.cpp src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp src\damped_greedy_phaseD_loop.cpp
 rem The two CPU cells: build_red_suite.bat's own line, /DSUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION
 rem included (cell_cpu_deadend_retry_reset reserves the seam it defines).
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /DSUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION /c %T2899_INC% /Itests\t2199-damped-greedy-red-suite %T2899_SRC_NOABI% src\sslm_abi.cpp /Fo:out\t2899\cpu_fi\ > out\t2899\cpu_fi.log 2>&1
@@ -1700,7 +1700,7 @@ rem (CMake's SUPERSLM_GPU_TEST_SEAMS). Both are built here from the same sources
 rem uses (/MD, matching the cells), then passed in through its T2956_* variables.
 if exist out\t2956 rmdir /s /q out\t2956
 mkdir out\t2956\cpu out\t2956\gpu
-cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /MD /Iinclude /c src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp src\sslm_abi.cpp src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp src\damped_greedy_phaseD_loop.cpp /Fo:out\t2956\cpu\ > out\t2956\cpu.log 2>&1
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /MD /Iinclude /c src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp src\kv_pages.cpp src\sslm_abi.cpp src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp src\damped_greedy_phaseD_loop.cpp /Fo:out\t2956\cpu\ > out\t2956\cpu.log 2>&1
 if errorlevel 1 (
 	type out\t2956\cpu.log
 	echo T-2956 CPU library build FAILED
