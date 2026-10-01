@@ -68,9 +68,13 @@ def run(variant, binary, cells, env=None, fixtures='default'):
     return {'variant': variant, 'binary': binary, 'cells': cells, 'env': env or {}, 'fixtures': fixtures}
 
 
-def C(cid, instrument, role, runs, what, reasons=(), platform_='any', timing=False, expect_note=''):
+def C(cid, instrument, role, runs, what, reasons=(), platform_='any', timing=False, expect_note='', verdicts=()):
+    # verdicts: (kind, allowed) pairs over the timing cells' verdict lines ("7.9 <target> <kind>:
+    # verdict V (...)", "7.4 <mode> <verb>: verdict V (...)"): every line whose target ends in `kind`
+    # ('' = every line) must carry a verdict in `allowed`, and at least one such line must exist.
     return {'id': cid, 'instrument': instrument, 'role': role, 'runs': runs, 'what': what,
-            'reasons': list(reasons), 'platform': platform_, 'timing': timing, 'note': expect_note}
+            'reasons': list(reasons), 'platform': platform_, 'timing': timing, 'note': expect_note,
+            'verdicts': list(verdicts)}
 
 
 ORACLE_ALL = ['CM.oracle:pkv_def', 'CM.oracle:pkv_qk', 'CM.oracle:pkv_odd', 'CM.oracle:pkv_32k']
@@ -181,12 +185,14 @@ CONSTRUCTIONS = [
       'cloud twin, paged decode slowed by a factor 1.25 (rate x 0.8: +20 points of slowdown)',
       reasons=['paged decode is'], platform_='cloud', timing=True),
     C('timing79.cloud.N1', 'timing79', 'noresult',
-      [run('mutant', 'c6', [T79F], MUT('decode_slow', PKV_DEBUNK_DECODE_SLOW='0.01', **COMMISSIONED))],
-      'cloud twin, paged decode slowed by 1% (below the run\'s resolving power)', platform_='cloud', timing=True),
+      [run('mutant', 'c6', [T79F], MUT('decode_slow', PKV_DEBUNK_DECODE_SLOW='@SUBRES', **COMMISSIONED))],
+      'cloud twin, paged decode slowed by --subres-factor (~1%). Not a valid construction here: the cloud '
+      'twin compares two fixtures, so the effect also carries their real difference; readings only',
+      platform_='cloud', timing=True),
     C('timing74.cloud.A1', 'timing74', 'accept',
       [run('pristine', 'c6', [T74F], {'SUPERSLM_PAGED_KV_74_MAX_RATIO': '2.0'})],
-      'cloud twin, unmutated: reset and adopt at cap 32768 against cap 4096, bound 2.0', platform_='cloud',
-      timing=True),
+      'cloud twin, unmutated: reset and adopt at cap 32768 against cap 4096, bound 2.0: every ratio PASS',
+      platform_='cloud', timing=True, verdicts=[('', {'PASS'})]),
     C('timing74.cloud.R1', 'timing74', 'reject',
       [run('mutant', 'c6', [T74F], MUT('reset_capscale', SUPERSLM_PAGED_KV_74_MAX_RATIO='2.0'))],
       'cloud twin, reset made cap-proportional (writes cap x 64 bytes), bound 2.0',
@@ -196,8 +202,10 @@ CONSTRUCTIONS = [
     C('timing79.box.A1', 'timing79', 'accept',
       [run('pristine', 'c6', [T79], {'SUPERSLM_PAGED_KV_79_OUT': '@BASE'}),
        run('pristine', 'c6', [T79], dict({'SUPERSLM_PAGED_KV_79_BASELINE': '@BASE'}, **COMMISSIONED))],
-      'unmutated pair: the paged build graded against a run of itself (A/A); must not be called a slowdown',
-      platform_='box', timing=True),
+      'unmutated pair: the paged build graded against a run of itself (A/A): every target must read bar PASS '
+      '(meets the 5% bar, which needs a resolving power under 5%) and effect NO RESULT (no change between '
+      'identical builds is resolved)',
+      platform_='box', timing=True, verdicts=[('bar', {'PASS'}), ('effect', {'NO RESULT'})]),
     C('timing79.box.R1', 'timing79', 'reject',
       [run('pristine', 'c6', [T79], {'SUPERSLM_PAGED_KV_79_OUT': '@BASE'}),
        run('mutant', 'c6', [T79], MUT('decode_slow', PKV_DEBUNK_DECODE_SLOW='0.25',
@@ -209,11 +217,12 @@ CONSTRUCTIONS = [
        run('mutant', 'c6', [T79], MUT('decode_slow', PKV_DEBUNK_DECODE_SLOW='@SUBRES',
                                       SUPERSLM_PAGED_KV_79_BASELINE='@BASE', **COMMISSIONED))],
       'paged decode slowed by --subres-factor (default 0.01, ~1%), below the run\'s resolving power: must be '
-      'reported as no result, neither a pass nor a fail', platform_='box', timing=True),
+      'reported as no result: the EFFECT verdict of every graded target must be NO RESULT', platform_='box',
+      timing=True),
     C('timing74.box.A1', 'timing74', 'accept',
       [run('pristine', 'c6', [T74], {'SUPERSLM_PAGED_KV_74_MAX_RATIO': '@RATIO'})],
-      'unmutated: reset and adopt on the 0.5B (cap 4096) against the 1.5B (cap 32768), bound --max74-ratio',
-      platform_='box', timing=True),
+      'unmutated: reset and adopt on the 0.5B (cap 4096) against the 1.5B (cap 32768), bound --max74-ratio: '
+      'every ratio PASS', platform_='box', timing=True, verdicts=[('', {'PASS'})]),
     C('timing74.box.R1', 'timing74', 'reject',
       [run('mutant', 'c6', [T74], MUT('reset_capscale', SUPERSLM_PAGED_KV_74_MAX_RATIO='@RATIO'))],
       'reset made cap-proportional (writes cap x 64 bytes on every reset), bound --max74-ratio',
@@ -505,7 +514,27 @@ CELL_LINE = re.compile(r'^\[[^\]]+\] (\S+) (RED|green) \((\d+) checks, (\d+) fai
 FAIL_LINE = re.compile(r'^FAIL \[([^\]]+)\] (.*)$', re.M)
 SUMMARY = re.compile(r'^(\d+) cells, (\d+) red; (\d+) checks, (\d+) failures$', re.M)
 GRADE_79 = re.compile(r'^7\.9 (.*?): paged ([\d.]+) tok/s, one-page ([\d.]+) tok/s, slowdown (-?[\d.]+)%, resolving power ([\d.]+)%', re.M)
-NO_RESULT = re.compile(r'no result', re.I)
+VERDICT_LINE = re.compile(r'^(7\.[49]) (.+?): verdict (PASS|FAIL|NO RESULT|RESOLVED) \(', re.M)
+
+
+def verdict_lines(out, kind):
+    # (cell, target, verdict) for every timing verdict line whose target ends in `kind` ('' = all).
+    return [(m.group(1), m.group(2), m.group(3)) for m in VERDICT_LINE.finditer(out)
+            if not kind or m.group(2) == kind or m.group(2).endswith(' ' + kind)]
+
+
+def check_verdicts(c, out):
+    ok, detail = True, []
+    for kind, allowed in c['verdicts']:
+        lines = verdict_lines(out, kind)
+        if not lines:
+            ok = False
+            detail.append('no %s verdict line in the output' % (kind or 'timing'))
+        for cell, target, v in lines:
+            good = v in allowed
+            ok = ok and good
+            detail.append('%s %s: verdict %s%s' % (cell, target, v, '' if good else ' (required %s)' % '/'.join(sorted(allowed))))
+    return ok, detail
 
 
 def substitute(value, args, base):
@@ -559,6 +588,10 @@ def grade(c, code, out, args):
         if missing:
             detail.append('cells that never reported: %s (exit %d)' % (missing, code))
         ok = code == 0 and not red and not missing and ran
+        if c['verdicts']:
+            vok, vdetail = check_verdicts(c, out)
+            detail += vdetail
+            ok = ok and vok
         return ('ACCEPTED' if ok else 'REJECTED'), detail
     if c['role'] == 'reject':
         verdicts = []
@@ -592,17 +625,27 @@ def grade(c, code, out, args):
             detail.append('INCONCLUSIVE: a resolving power at or below the injected %.2f%%; rerun with a smaller '
                           '--subres-factor' % injected)
             return 'INCONCLUSIVE', detail
-        if NO_RESULT.search(out):
+        # Graded on the EFFECT verdict lines only: a bar NO RESULT says nothing about whether the
+        # injected effect was resolved (a resolved 24.8% effect beside a 22.3% resolving power reads
+        # bar NO RESULT too).
+        effects = verdict_lines(out, 'effect')
+        for cell, target, v in effects:
+            detail.append('%s %s: verdict %s' % (cell, target, v))
+        for cell, target, v in verdict_lines(out, 'bar'):
+            detail.append('%s %s: verdict %s (not graded here)' % (cell, target, v))
+        if effects and all(v == 'NO RESULT' for _, _, v in effects):
             return 'NO-RESULT', detail
-        red = [cid for cid in wanted if cells.get(cid) == 'RED']
-        return ('REPORTED-FAIL' if red or code else 'REPORTED-PASS'), detail
+        if not effects:
+            detail.append('no effect verdict line in the output')
+            return 'NO-EFFECT-LINE', detail
+        return 'EFFECT-RESOLVED', detail
     # observe
     for target, paged, one, slow, res in GRADE_79.findall(out):
         detail.append('%s: paged %s, one-page %s tok/s, slowdown %s%%, resolving power %s%%' % (target, paged, one, slow, res))
     for line in out.splitlines():
         if line.startswith('7.4 ') or line.startswith('7.9 '):
             if not GRADE_79.match(line):
-                detail.append(line)
+                detail.append(line[:220])
     red = [cid for cid in wanted if cells.get(cid) == 'RED']
     return ('OBSERVED (cell RED: %s)' % '; '.join(sum((fails.get(cid, []) for cid in red), [])[:2]) if red else 'OBSERVED (cell green)'), detail
 
