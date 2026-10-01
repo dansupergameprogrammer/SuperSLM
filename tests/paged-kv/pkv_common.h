@@ -262,11 +262,14 @@ inline const RefFile& Reference(const char* tag, const Fixture& fx) {
 	}
 	r->ok = !r->records.empty();
 	PKV_CHECK_MSG(r->ok, "reference %s.ref is empty", key.c_str());
-	// pkv_qk's calibration follows numpy's float64 exp (gen_paged_kv_fixture.py), so its reference
-	// holds only for the fixture it was recorded against; a mismatch is reported, never ignored.
+	// A reference holds only for the fixture it was recorded against. Every fixture is meant to be
+	// byte-identical on every host (pkv_qk's float-library inputs are pinned, reference/pins/
+	// pkv_qk_host_pin.json), and gen_paged_kv_fixture.py checks these same hashes after writing. A
+	// mismatch is a host that builds different bytes: reported, never ignored, and never fixed by
+	// re-recording the reference on that host, which would let the candidate write its own oracle.
 	PKV_CHECK_MSG(!fx.ok || r->fixture_sha == fx.sha,
-	              "reference %s.ref was recorded against fixture %s, this host generated %s; rerun "
-	              "tools/build_paged_kv_reference.sh on this host",
+	              "reference %s.ref was recorded against fixture %s, this host generated %s; the "
+	              "fixture is not host-independent here (see tools/gen_paged_kv_fixture.py)",
 	              key.c_str(), r->fixture_sha.c_str(), fx.sha.c_str());
 	const RefFile& out = *r;
 	cache[key] = std::move(r);

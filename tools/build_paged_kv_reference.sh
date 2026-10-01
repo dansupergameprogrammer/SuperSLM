@@ -5,18 +5,20 @@
 # v1.8.1, the last SSB4 writer -- builds tests/paged-kv/reference/pkv_reference.cpp against each,
 # generates the pkv fixtures with tools/gen_paged_kv_fixture.py, and writes:
 #   tests/paged-kv/reference/<tag>_<fixture>.ref    every fixture, both tags
-#   tests/paged-kv/reference/pins/<tag>_pkv_def_*.zrl  the pinned blobs (pkv_def only: its
-#                                                    fixture is hermetic; pkv_qk's is not)
+#   tests/paged-kv/reference/pins/<tag>_pkv_def_*.zrl  the pinned blobs (pkv_def only)
+# The generator checks each fixture against the existing references' hashes. After an intended
+# change to the fixtures, run this with PKV_RECORD_QK_PIN=1 (the generator then re-records its pin
+# and skips that check) and commit the new pins/pkv_qk_host_pin.json with the references.
 # The tree under work is never built here: the flat path through the new code is never the
 # reference. Run twice; the outputs must be bit-identical (R0's gate).
 #
-# Usage: tools/build_paged_kv_reference.sh WORK_DIR
+# Usage: [PKV_RECORD_QK_PIN=1] tools/build_paged_kv_reference.sh WORK_DIR
 set -euo pipefail
 work="${1:?usage: build_paged_kv_reference.sh WORK_DIR}"
 repo="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
 ref="$repo/tests/paged-kv/reference"
 mkdir -p "$work/fixtures" "$work/pins" "$ref/pins"
-python3 "$repo/tools/gen_paged_kv_fixture.py" "$work/fixtures"
+python3 "$repo/tools/gen_paged_kv_fixture.py" ${PKV_RECORD_QK_PIN:+--record-qk-pin} "$work/fixtures"
 for tag in v1.8.1 v1.11.0; do
 	src="$work/src-$tag"
 	[ -d "$src" ] || git -C "$repo" worktree add --detach "$src" "$tag"
