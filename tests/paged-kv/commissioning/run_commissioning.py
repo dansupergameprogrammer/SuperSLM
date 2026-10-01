@@ -616,6 +616,13 @@ def grade(c, code, out, args):
                     detail.append('%s: RED for another reason: %s' % (cid, ' | '.join(msgs[:3])))
         if all(v == 'FIRED' for v in verdicts):
             return 'FIRED', detail
+        # A timing cell is green both on PASS and on NO RESULT (nothing asserted). Name which: a NO RESULT
+        # is the instrument declining to resolve on a run too noisy for the injected effect, not an accept.
+        timing_lines = verdict_lines(out, 'bar') + [t for t in verdict_lines(out, '') if t[0] == '7.4']
+        for cell, target, v in timing_lines:
+            detail.append('%s %s: verdict %s' % (cell, target, v))
+        if 'ACCEPTED' in verdicts and any(v == 'NO RESULT' for _, _, v in timing_lines):
+            return 'NOT-FIRED (instrument NO RESULT)', detail
         for v in ('ACCEPTED', 'WRONG-REASON', 'NOT-REPORTED'):
             if v in verdicts:
                 return v, detail

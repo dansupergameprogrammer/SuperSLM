@@ -58,7 +58,7 @@ real release path:
 
 Claim: "these tokens and K/V bytes equal v1.11.0's".
 
-| Id | Construction | Required | Cloud (2026-10-01) |
+| Id | Construction | Required | Cloud (2026-10-01, at 751e441) |
 |---|---|---|---|
 | oracle.A1 | Unmutated build. All 8 scenarios on all 4 fixtures (2,063 checks), plus both pins (persist, saturating) restored, re-saved and continued | ACCEPT | ACCEPTED |
 | oracle.A2 | Same, on the mutant library with the mutant off | ACCEPT | ACCEPTED |
@@ -69,10 +69,12 @@ Claim: "these tokens and K/V bytes equal v1.11.0's".
 | oracle.R5 | Reference tamper: one hex digit of `rows=` in `lifecycle prefill100+decode4` | REJECT, "K/V rows differ" | FIRED |
 | oracle.R6 | Reference tamper: one extra record `persist ghost` in `v1.11.0_pkv_qk.ref` | REJECT, "records, reference has" | FIRED ("4 records, reference has 5") |
 | oracle.R7 | Pin tamper: `v1.11.0_pkv_def_persist_saved` with one K byte (layer 0, head 0, position 5) flipped, restored on the unmutated build | REJECT, rows/blob/tokens differ | FIRED ("K/V rows differ") |
+| oracle.R8 | The same flipped pin, graded by `Pin()` itself | REJECT, "does not match its reference" | FIRED ("pinned blob … does not match its reference: sha256 …") |
 
-Note on R7: `Pin()` itself decodes a flipped pin without complaint. It never checks a pin against
-the `blob=` digest of its own `.ref` record. A corrupted pin is caught only where a cell compares
-the restored state against the reference, as R7 does.
+Note on the pins: since 751e441 `Pin()` checks each pin's SHA-256 against the `blob=` digest of its
+own `.ref` record when it loads (R8). Before that it decoded a flipped pin silently, and a corrupted
+pin was caught only where a cell went on to compare the restored state with the reference (R7, which
+still fires as well).
 
 To run it: `--set oracle-accept`, then `--set oracle-reject`.
 
@@ -101,15 +103,14 @@ k = 2.
 | probe2.R2 | Claim k − 1 on k free (excess) | REJECT, "were all admitted" | FIRED (11/11) |
 | probe2.R3 | `leak1` (deficit) | REJECT | FIRED (12/12) |
 | probe2.R4 | `dfree1` (excess, double free) | REJECT | FIRED (12/12) |
-| **probe2.R5** | `budget_edge`: the budgeted create also refuses budget ≥ cap − B with `SSLM_INVALID_ARGUMENT` (a domain check one page short). Claim k − 1 on k free, k = 256 and 258 | REJECT | **ACCEPTED: the instrument is DEAD on this construction** |
+| probe2.R5 | `budget_edge`: the budgeted create also refuses budget ≥ cap − B with `SSLM_INVALID_ARGUMENT` (a domain check one page short). Claim k − 1 on k free, k = 256 and 258 | REJECT, "were all admitted" | FIRED ("… were all admitted or refused for a reason other than capacity (a 256-page create was refused with SSLM_INVALID_ARGUMENT (1)) …") |
 
-Why R5 is accepted: the refusal leg counts any refusal as "at most k free". It never checks that
-the refusal was `SSLM_KV_POOL_EXHAUSTED`. With k = 258 free, the claim 257 splits as [255, 2] and
-is admitted. The refusal leg's [256, 2] includes a ceil(cap/B)-page create (budget 4080), which this
-build refuses as an invalid argument, whatever the pool holds. The probe therefore reports
-"exactly 257 free" while 258 are free. k = 256 (claim 255: [255] admitted, [256] refused) behaves
-the same way. The defect needs only one wrong refusal anywhere in the refusal leg, at any create
-size the split uses.
+History of R5: at 7132d14 the instrument ACCEPTED it, and was DEAD on this construction. Its
+refusal leg counted any refusal as "at most k free". With 258 free, the claim 257 splits as
+[255, 2] and is admitted. The refusal leg's [256, 2] contains a 256-page create (budget 4080),
+which this build refuses as an invalid argument whatever the pool holds, so the probe reported
+"exactly 257 free". Since 751e441 a refusal proves "at most" only when it is
+`SSLM_KV_POOL_EXHAUSTED`, and R5 fires.
 
 ## 3b. One-state fill probe (`ProbeExactlyFreeOneState`)
 
@@ -127,6 +128,28 @@ k ∈ {3, 4, 16, 17, 256, 257, 258, 513, 600}.
 Claim: "the lifecycle verb's cost and the decode rate changed by at least the reported amount",
 each result with its resolving power. An effect below the resolving power is no result.
 
+Since 751e441 both cells grade three ways, with a resolving power R per result:
+
+- **7.9**, for each target, with slowdown s = 1 − paged / reference, prints two verdict lines:
+  - `7.9 <target> effect: verdict NO RESULT|RESOLVED (…)`: NO RESULT when |s| < R. Never asserted.
+  - `7.9 <target> bar: verdict PASS|FAIL|NO RESULT (…)`: PASS when s + R ≤ 5 %, FAIL when
+    s − R > 5 %, NO RESULT otherwise. Only the bar is asserted, and only a PASS or a FAIL; a NO
+    RESULT leaves the cell green with nothing asserted.
+
+  R is the larger relative spread, (max − min) / median, of the two sides' 5 runs.
+- **7.4**, for each (holder mode, verb), prints `7.4 <mode> <verb>: verdict PASS|FAIL|NO RESULT (…)`
+  for the ratio cap 32768 / cap 4096 against the bound. The test is d = ratio / bound − 1: PASS when
+  d ≤ −R, FAIL when d > R, NO RESULT in between. R is now taken from 5 interleaved batches of 41
+  calls each.
+
+How the runner grades them:
+
+| Role | Graded on |
+|---|---|
+| reject | The asserted FAIL message (cell RED). A green cell whose bar or 7.4 line reads NO RESULT is reported as `NOT-FIRED (instrument NO RESULT)`, not as an accept. Either way it has not fired. |
+| noresult | The **effect** lines only: every graded target's effect must read NO RESULT. A bar NO RESULT can come with a resolved effect (s = 24.8 %, R = 22.3 % does), so it is never taken as one. |
+| accept | Cell green, plus the verdict lines a construction names (`verdicts=`). See below. |
+
 Slowdowns are injected by the `decode_slow` mutant. On a paged holder (B < cap) only,
 `sslm_decode_step` spins f × its own elapsed time, so the paged decode rate is 1/(1 + f) of the
 unmutated rate. f = 0.25 makes paged decode 20 % slower, 4× the 5 % bar. `reset_capscale` makes
@@ -143,42 +166,43 @@ A construction that finds the box busy reads NOT-IDLE and counts as not drawing 
 
 | Id | Construction | Required |
 |---|---|---|
-| timing79.box.A1 | Unmutated pair, A/A. Run 1 writes `SUPERSLM_PAGED_KV_79_OUT`. Run 2, also unmutated, is graded against it with `..._TIMING_COMMISSIONED=1` | ACCEPT: not called a slowdown. Also needs the box's resolving power < 5 %, or the harness fails it as "cannot resolve" |
-| timing79.box.R1 | Unmutated baseline, then `decode_slow` f = 0.25 graded against it | REJECT, "paged decode is … slower" |
-| timing79.box.N1 | Unmutated baseline, then `decode_slow` f = `-SubresFactor` (default 0.01, about 1 %). The effect is below the run's resolving power. The runner reads INCONCLUSIVE when the harness reports a resolving power ≤ the injected effect; rerun with a smaller factor | **NO RESULT**: neither a pass nor a fail |
-| timing74.box.A1 | Unmutated: reset and adopt on the 0.5B (cap 4096) against the 1.5B (cap 32768), bound `-Max74Ratio` (default 2.0; calibration's number, §8) | ACCEPT |
-| timing74.box.R1 | `reset_capscale`, same bound | REJECT, "reset: ratio" |
+| timing79.box.A1 | Unmutated pair, A/A. Run 1 writes `SUPERSLM_PAGED_KV_79_OUT`. Run 2, also unmutated, is graded against it with `..._TIMING_COMMISSIONED=1` | ACCEPT, and **every target's bar reads PASS and its effect reads NO RESULT**. See below |
+| timing79.box.R1 | Unmutated baseline, then `decode_slow` f = 0.25 graded against it | REJECT: bar FAIL, "paged decode is … slower …" |
+| timing79.box.N1 | Unmutated baseline, then `decode_slow` f = `-SubresFactor` (default 0.01, about 1 %). The runner reads INCONCLUSIVE when the reported R is at or below the injected effect; rerun with a smaller factor | **effect NO RESULT** on every target |
+| timing74.box.A1 | Unmutated: reset and adopt on the 0.5B (cap 4096) against the 1.5B (cap 32768), bound `-Max74Ratio` (default 2.0; calibration's number, §8) | ACCEPT, every ratio PASS |
+| timing74.box.R1 | `reset_capscale`, same bound | REJECT: FAIL, "reset: ratio … above the commissioned …" |
 
-**Cloud twins.** These use fixtures and run here, with `--allow-busy`. The cloud is noisy, so the
-readings are recorded but grade nothing:
+**Why timing79.box.A1 requires bar PASS.** A green cell is not enough, because a bar NO RESULT
+also leaves the cell green, and it asserts nothing. The point of the bar is that an unchanged
+build can meet it, so the must-accept must show that happen: bar PASS, which needs R < 5 % on the
+box. It also requires effect NO RESULT, because an A/A pair whose identical builds read a RESOLVED
+effect has a resolving power that understates the run-to-run noise. If the box cannot get R under
+5 %, this construction reads REJECTED (REJECTS_HEALTHY through the registry). That is the
+truthful outcome: the harness cannot then show the bar met on that box. Only the box can run it;
+the cloud twin compares two fixtures, not a build with itself, and its R is 24–40 %.
 
-| Id | Construction | Observed (7.9: O1 and R1 4 runs, N1 3 runs; 7.4: 2 runs) |
+**Cloud twins.** These use fixtures and run here, with `--allow-busy`. The cloud is noisy, and its
+7.9 compares pkv_def with pkv_odd, which also carries their real difference, so its 7.9 rows are
+readings and grade nothing. 7.4's cloud twin is a valid construction (two caps of one model).
+Three runs each:
+
+| Id | Construction | Observed |
 |---|---|---|
-| timing79.cloud.O1 | Unmutated, pkv_def (B = 16) against pkv_odd (one page) | slowdown 14.0 / 20.2 / 6.8 / 5.9 %, resolving power 13.6 / 49.6 / 16.8 / 44.3 %. The cell fails **both** "cannot resolve the 5 % bar" and "paged decode is X % slower", even when X is far below the resolving power |
-| timing79.cloud.R1 | `decode_slow` f = 0.25 | FIRED: "paged decode is 30.6 / 34.9 / 21.6 / 33.0 % slower" |
-| timing79.cloud.N1 | `decode_slow` f = 0.01 | NOT AS REQUIRED: slowdown −10.2 / −9.1 / −16.4 %, resolving power 16–35 %, reported as a FAIL ("cannot resolve"), never as no result |
-| timing74.cloud.A1 | Unmutated, bound 2.0 | ACCEPTED: ratios 0.60–1.07 |
-| timing74.cloud.R1 | `reset_capscale`, bound 2.0 | FIRED: reset ratio 15.6 / 17.4 (budget), 17.8 / 20.9 (whole_reserve) |
+| timing79.cloud.O1 | Unmutated, pkv_def (B = 16) against pkv_odd (one page) | s = −5.1 / −7.5 / 7.5 %, R = 40.0 / 37.8 / 24.2 %. Effect NO RESULT and bar NO RESULT in every run; cell green, nothing asserted |
+| timing79.cloud.R1 | `decode_slow` f = 0.25 | 1 of 3 FIRED ("paged decode is 32.68 % slower … beyond the 5 % bar by more than the resolving power 27.06 %"). The other 2 read bar NO RESULT, so they did not fire: R was too large for a 20-point effect. Box only |
+| timing79.cloud.N1 | `decode_slow` f ≈ 0.01 | effect NO RESULT in all 3 (s = 10.8 / 22.1 / 13.5 %, R = 32.7 / 42.5 / 31.0 %). Readings only: the twin's s is not the injected 1 % |
+| timing74.cloud.A1 | Unmutated, bound 2.0 | ACCEPTED, 3/3: all four ratios PASS |
+| timing74.cloud.R1 | `reset_capscale`, bound 2.0 | FIRED, 3/3: budget reset ratio 16.1 / 16.9 / 16.8, R 6.7 / 9.7 / 13.3 % |
 
-**What the harness cannot do, by its code:**
+**What remains, by the code:**
 
-- **7.9 has no "no result" verdict.** `Grade()` has two outcomes:
-  - **Pass** when `resolving < 5 %` and the point estimate `slowdown ≤ 5 %`. That includes a
-    sub-resolution effect (slowdown 1 %, resolving 3 %), and an estimate of 4 % with a 4 %
-    resolving power, whose upper bound of 8 % is above the bar.
-  - **Fail.** When the resolving power is ≥ 5 %, the run is failed as "cannot resolve", and the
-    point estimate is graded and headlined as a slowdown anyway.
-
-  timing79.box.N1 can therefore never draw NO RESULT, and the registration below, which includes
-  it, will read **DEAD** on the box. That reading is the finding, not an infrastructure fault.
-- **7.4 reports no resolving power at all.** It compares a ratio of medians (201 calls) with a
-  caller-supplied bound. The "each result with its resolving power" half of the claim has no
-  instrument behind it for lifecycle verbs, so no no-result construction can be stated for 7.4.
-- **The A/B timing is decode only.** §8 says the harness times
-  create/reset/adopt/save/restore/release on the v1.9.0 (v1.11.0) binary and on the paged binary.
-  Only decode tok/s (7.9) runs on both. 7.4 compares two caps inside the paged binary, so "the
-  lifecycle verb's cost changed by at least the reported amount", against the reference binary,
-  is measured by no cell.
+- **Only decode runs A/B.** §8 says the harness times create/reset/adopt/save/restore/release on
+  the v1.9.0 (v1.11.0) binary and on the paged binary. 7.9 is the only cell that runs on both. 7.4
+  compares two caps inside the paged binary. (A `c6_lifecycle_timing.cpp` cell now exists at
+  751e441; it is not constructed against here.)
+- **7.4 grades only against a bound.** By its own comment, it has no "effect below the resolving
+  power" verdict. Its claim is the ratio's place against the bound. So no no-result construction
+  is stated for 7.4.
 
 ## Commands
 
@@ -187,7 +211,7 @@ readings are recorded but grade nothing:
 The cloud results above were all produced with this command:
 
 ```sh
-python3 tests/paged-kv/commissioning/run_commissioning.py --scratch /tmp/claude-0/b/debunk-cm \
+python3 tests/paged-kv/commissioning/run_commissioning.py --scratch /tmp/claude-0/b/debunk2-cm \
     --fixtures /tmp/claude-0/b/pkv1 --set oracle-accept   # and each set of --list
 python3 tests/paged-kv/commissioning/run_commissioning.py ... --allow-busy --set timing79-observe-cloud \
     --set timing79-reject-cloud --set timing79-noresult-cloud --set timing74-accept-cloud --set timing74-reject-cloud
@@ -213,10 +237,12 @@ Expected exits: accept sets 0. For the reject sets:
 
 | Set | Expected exit |
 |---|---|
-| oracle, count, probe1 | 1 (fired) |
-| probe2-reject | **0**: probe2.R5 accepted, DEAD |
-| timing79 reject + noresult | **0**: timing79.box.N1 cannot draw "no result", DEAD |
+| oracle, count, probe2, probe1 | 1 (fired; probe2.R5 fires since 751e441) |
+| timing79-reject-box,timing79-noresult-box | 1 on a box whose R is under about 15 % (bar FAIL for a 20 % slowdown needs s − R > 5 %) and above the injected 1 % |
 | timing74-reject-box | 1 |
+
+timing79-accept-box exits 0 only when every target reads bar PASS and effect NO RESULT. That needs
+R < 5 % on the box's A/A pair.
 
 ### Registration
 
@@ -283,6 +309,6 @@ Expected `-Commission` outcomes, given the cloud results:
 | Entry | Expected |
 |---|---|
 | PKV-ORACLE-R0, PKV-LEGACY-COUNT-C4, PKV-FILL-PROBE-ONESTATE-C5 | COMMISSIONED |
-| PKV-FILL-PROBE-C5 | **DEAD** (probe2.R5) |
-| PKV-TIMING-79-C6 | **DEAD** (timing79.box.N1), and REJECTS_HEALTHY instead if the box's own resolving power is ≥ 5 % on the A/A pair |
-| PKV-TIMING-74-C6 | COMMISSIONED only for "a cap-proportional reset is flagged". It carries no resolving power, so the claim's resolving-power half stays unsupported |
+| PKV-FILL-PROBE-C5 | COMMISSIONED (probe2.R5 now fires: a refusal proves "at most" only when it is SSLM_KV_POOL_EXHAUSTED) |
+| PKV-TIMING-79-C6 | COMMISSIONED on a quiet box whose A/A resolving power is under 5 % (timing79.box.A1 needs bar PASS). REJECTS_HEALTHY if the box's R is 5 % or more. DEAD if R1 or N1 do not draw their verdicts on that box |
+| PKV-TIMING-74-C6 | COMMISSIONED. It now reports a resolving power and grades three-way, so A1 needs every ratio PASS and R1 must FAIL on the budget reset ratio |
