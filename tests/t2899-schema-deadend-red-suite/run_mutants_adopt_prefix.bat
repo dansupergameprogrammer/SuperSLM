@@ -36,7 +36,7 @@ call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDe
 cd /d "%HEREDIR%"
 if not exist obj_mutants mkdir obj_mutants
 
-set SRC_NOABI=%ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp ^
+set SRC_NOABI=%ENG%\src\kv_pages.cpp %ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp ^
     %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp ^
     %ENG%\src\trace_hook.cpp %ENG%\src\forward\checked_chain_funnel.cpp ^
     %ENG%\src\forward\forward_sites.cpp %ENG%\src\forward\parallel_split.cpp %ENG%\src\decode_digest.cpp ^
