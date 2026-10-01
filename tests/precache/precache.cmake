@@ -3,6 +3,11 @@ file(GLOB PC_SOURCES CONFIGURE_DEPENDS ${PC_DIR}/e*.cpp)
 add_executable(superslm_precache_e1 EXCLUDE_FROM_ALL
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/paged-kv/pkv_main.cpp
     ${PC_DIR}/precache_stubs.cpp ${PC_SOURCES})
+# Invoked separately at E2. It deliberately fails to compile against the E1
+# header and must compile only when the public macro and ordinal are published.
+add_executable(superslm_precache_macro_vitality EXCLUDE_FROM_ALL
+    ${PC_DIR}/prefix_macro_vitality.cpp)
+target_include_directories(superslm_precache_macro_vitality PRIVATE include)
 target_link_libraries(superslm_precache_e1 PRIVATE superslm_test_injection)
 target_include_directories(superslm_precache_e1 PRIVATE include src tests tests/paged-kv ${PC_DIR})
 target_compile_definitions(superslm_precache_e1 PRIVATE
