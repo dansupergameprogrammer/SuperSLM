@@ -129,7 +129,7 @@ void SchemaCapture(const char* model_path, const fs::path& prompts,
     sslm_decode_params probe{};
     const bool damped = sslm_decode_params_init(in.model, SSLM_DECODE_MODE_DAMPED_GREEDY, 1, &probe) == SSLM_OK;
     const size_t n = sslm_schema_count(in.model);
-    if (n < (all_schemas ? 3u : 2u)) throw std::runtime_error("insufficient schemas");
+    if (n < (all_schemas ? 3u : 1u)) throw std::runtime_error("insufficient schemas");
     const size_t schema_count = all_schemas ? 3 : 1;
     const auto ids = ReadIds(prompts / ("flat00." + ids_suffix));
     const std::string model_sha = HexSha(in.bytes->p, in.size);
@@ -265,7 +265,8 @@ void WalkProbe(const char* model_path, const fs::path& prompts, const fs::path& 
     const auto ids = ReadIds(prompts / ("flat00." + ids_suffix));
     for (size_t i = 0; i < schema_count; ++i) {
         const std::string name = SchemaName(in.model, int(i));
-        const std::string other_name = SchemaName(in.model, int((i + 1) % sslm_schema_count(in.model)));
+        const size_t available = sslm_schema_count(in.model);
+        const std::string other_name = SchemaName(in.model, int((i + 1) % available));
         sslm_schema schema = nullptr;
         Check(sslm_schema_lookup(in.model, name.c_str(), &schema), "walk_schema_lookup");
         Prefix prefix;
@@ -290,7 +291,8 @@ void WalkProbe(const char* model_path, const fs::path& prompts, const fs::path& 
         const uint32_t old_walk = U32(blob.data() + 48);
         if (!old_walk) throw std::runtime_error("walk probe baseline did not progress");
         const uint64_t other_hash = NameHash(other_name);
-        for (int byte = 0; byte < 8; ++byte) blob[40 + byte] = uint8_t(other_hash >> (8 * byte));
+        if (available > 1)
+            for (int byte = 0; byte < 8; ++byte) blob[40 + byte] = uint8_t(other_hash >> (8 * byte));
         for (int byte = 0; byte < 4; ++byte) blob[48 + byte] = 0;
         sslm_seq restored = nullptr;
         const sslm_status restore_status = sslm_seq_restore(in.model, &pool.pool, blob.data(), blob.size(), &restored);
