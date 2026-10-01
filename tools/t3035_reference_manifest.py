@@ -15,6 +15,15 @@ def fields(line: str) -> dict[str, str]:
     return dict(part.split("=", 1) for part in line.split() if "=" in part)
 
 
+def periodic_onset(tokens: list[int]) -> int:
+    for start in range(max(0, len(tokens) - 31)):
+        for period in range(1, 5):
+            if all(tokens[index] == tokens[index - period]
+                   for index in range(start + period, len(tokens))):
+                return start
+    return len(tokens)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("artifact_root", type=Path)
@@ -28,6 +37,8 @@ def main() -> int:
                      if path.is_file() and path.suffix in {".txt", ".ids"}}
     results = []
     bad = []
+    real_streams = 0
+    real_late_periodic = 0
     for run1 in sorted(args.artifact_root.rglob("*-run1.ref")):
         run2 = run1.with_name(run1.name.replace("-run1.ref", "-run2.ref"))
         if not run2.is_file():
@@ -65,6 +76,7 @@ def main() -> int:
                 if header.get("forced_content_ids_sha256") != forced_hash:
                     bad.append(f"forced content SHA mismatch: {path}")
             streams = [fields(line) for line in lines[1:] if not line.startswith("disposition ")]
+            stream_screens = []
             for row in streams:
                 if len(row.get("tokens", "").split(",")) != 64:
                     bad.append(f"stream not 64 tokens: {path}")
@@ -78,14 +90,28 @@ def main() -> int:
                 if ("L" in row and "L_mod_B" in row and "B" in header and
                         int(row["L"]) % int(header["B"]) != int(row["L_mod_B"])):
                     bad.append(f"L mod B mismatch: {path}")
+                if header.get("tokenizer", "").startswith("TokenizerView::Encode"):
+                    tokens = [int(token) for token in row["tokens"].split(",")]
+                    unique_tail = len(set(tokens[-16:]))
+                    onset = periodic_onset(tokens)
+                    real_streams += 1
+                    real_late_periodic += int(onset >= 32)
+                    stream_screens.append({"last16_distinct": unique_tail,
+                                           "periodic_onset": onset})
+                    if unique_tail <= 2:
+                        bad.append(f"degenerate real stream tail: {path}")
             results.append({"path": str(path), "size": path.stat().st_size,
                             "sha256": sha(path),
                             "mtime_utc": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(),
                             "pair_byte_equal": pair_equal, "stream_rows": len(streams),
                             "dispositions": sum(line.startswith("disposition ") for line in lines[1:]),
-                            "header": header})
+                            "header": header, "real_stream_screens": stream_screens})
+    if real_streams and 10 * real_late_periodic < 9 * real_streams:
+        bad.append("fewer than 90% of real streams have periodic onset >= 32")
     summary = {"status": "QUARANTINED", "reference_files": len(results),
                "pairs": len(results) // 2, "audit_errors": bad,
+               "real_streams": real_streams,
+               "real_late_periodic": real_late_periodic,
                "files": results}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes((json.dumps(summary, indent=2, sort_keys=True) + "\n").encode("utf-8"))
