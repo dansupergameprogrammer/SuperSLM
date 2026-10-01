@@ -23,6 +23,7 @@
 
 #include "superslm/sslm_abi.h"
 
+#include <cmath>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -105,6 +106,20 @@ inline void Fail(const char* file, int line, const char* fmt, ...) {
 		const long long pkv_a_ = static_cast<long long>(a), pkv_b_ = static_cast<long long>(b);         \
 		if (pkv_a_ != pkv_b_) ::pkv::Fail(__FILE__, __LINE__, "%s == %s (%lld vs %lld)", #a, #b, pkv_a_, pkv_b_); \
 	} while (0)
+
+// The name of a C ABI status, for failure messages ("SSLM_KV_POOL_EXHAUSTED"); the X-macro list of
+// sslm_abi.h, so a status added there is named here with nothing to maintain.
+inline const char* AbiStatusName(sslm_status st) {
+	switch (st) {
+#define PKV_STATUS_NAME_CASE_(name) \
+	case name:                      \
+		return #name;
+		SSLM_STATUS_ENUM_LIST(PKV_STATUS_NAME_CASE_)
+#undef PKV_STATUS_NAME_CASE_
+		default:
+			return "an unknown status";
+	}
+}
 
 // ---- memory ---------------------------------------------------------------------------------
 
@@ -283,12 +298,23 @@ inline const RefRecord* RefLookup(const RefFile& ref, const std::string& scenari
 	return it == ref.records.end() ? nullptr : &it->second;
 }
 
-// A pinned blob: reference/pins/<tag>_pkv_def_<scenario>_<stage>.zrl, decoded.
+// A pinned blob: reference/pins/<tag>_pkv_def_<scenario>_<stage>.zrl, decoded, and checked at load
+// against the blob= digest of its own record ("<scenario> <stage>" in <tag>_pkv_def.ref): a pin that
+// does not match its reference is a failed check here, before any cell restores it. The decoded bytes
+// are returned either way, so the cell's own comparison still reports what the corrupt pin does.
 inline std::vector<uint8_t> Pin(const char* tag, const char* scenario, const char* stage) {
 	std::vector<uint8_t> enc, out;
 	const std::string path = std::string(PKV_REFERENCE_DIR) + "/pins/" + tag + "_pkv_def_" + scenario + "_" + stage + ".zrl";
 	const bool ok = ReadAll(path, &enc) && ZrlDecode(enc, &out);
 	PKV_CHECK_MSG(ok, "pinned blob %s missing or malformed", path.c_str());
+	if (!ok) return out;
+	const Fixture& fx = GetFixture("pkv_def");
+	const RefRecord* rec = RefLookup(Reference(tag, fx), scenario, stage);
+	if (!rec) return out;
+	const std::string got = Sha(out.data(), out.size());
+	// kills: a corrupt or substituted pin read as the reference (caught only by a later replay)
+	PKV_CHECK_MSG(got == rec->blob_sha, "pinned blob %s does not match its reference: sha256 %s, the %s_pkv_def.ref record "
+	              "'%s %s' has blob=%s", path.c_str(), got.c_str(), tag, scenario, stage, rec->blob_sha.c_str());
 	return out;
 }
 
@@ -517,6 +543,10 @@ struct Handles {
 // The legacy-create admission count (§8, rev 5): legacy creates admitted until the first refusal,
 // all released again before returning. It resolves ceil(cap/B) pages; a cell grading an exact page
 // count runs it at two pool sizes (P and P - 1).
+//
+// The count ends at a refusal, and only SSLM_KV_POOL_EXHAUSTED says the pool ran out of pages: a
+// refusal with any other status says nothing about the free pages, so it is a failed check naming the
+// status (the count is still returned, for the caller's own message).
 inline int CountLegacyCreates(sslm_model model, sslm_kv_pool* pool, sslm_status* refusal = nullptr) {
 	std::vector<sslm_seq> made;
 	sslm_status st = SSLM_OK;
@@ -527,6 +557,11 @@ inline int CountLegacyCreates(sslm_model model, sslm_kv_pool* pool, sslm_status*
 		made.push_back(s);
 	}
 	if (refusal) *refusal = st;
+	// kills: a refusal for another reason (an argument or state check) counted as the pool's capacity
+	PKV_CHECK_MSG(st == SSLM_KV_POOL_EXHAUSTED,
+	              "legacy-create count: create %zu was refused with %s (%d), not SSLM_KV_POOL_EXHAUSTED; the count "
+	              "of %zu does not measure the free pages",
+	              made.size() + 1, AbiStatusName(st), static_cast<int>(st), made.size());
 	for (auto it = made.rbegin(); it != made.rend(); ++it) sslm_seq_release(*it);
 	return static_cast<int>(made.size());
 }
@@ -550,17 +585,44 @@ inline std::vector<int64_t> ProbeSplit(const Fixture& fx, int64_t k) {
 	return parts;
 }
 
+// The first refusal an AdmitPages call met: the refused create's page count and its status.
+struct Refusal {
+	int64_t pages = 0;
+	sslm_status status = SSLM_OK;  // SSLM_OK: nothing was refused
+	bool Any() const { return status != SSLM_OK; }
+	bool Capacity() const { return status == SSLM_KV_POOL_EXHAUSTED; }
+};
+
 // Budgeted creates totalling `k` pages (C5). Returns true when every create is admitted; the
-// admitted sequences are appended to `out` (the caller releases them).
-inline bool AdmitPages(const Fixture& fx, sslm_kv_pool* pool, int64_t k, std::vector<sslm_seq>* out) {
+// admitted sequences are appended to `out` (the caller releases them). `refusal`, when given,
+// receives the first refusal that is not SSLM_KV_POOL_EXHAUSTED if there is one, else the first
+// refusal: a reading of "not all admitted" as "not enough free" holds only when every refusal was
+// for capacity, so the caller sees a wrong-reason refusal even when a capacity refusal came first.
+inline bool AdmitPages(const Fixture& fx, sslm_kv_pool* pool, int64_t k, std::vector<sslm_seq>* out,
+                       Refusal* refusal = nullptr) {
 	bool all = true;
+	Refusal first;
 	for (int64_t r : ProbeSplit(fx, k)) {
 		sslm_seq s = nullptr;
 		const sslm_status st = sslm_seq_create_budgeted(fx.model, pool, static_cast<int32_t>((r - 1) * fx.B()), &s);
-		if (st == SSLM_OK) out->push_back(s);
-		else all = false;
+		if (st == SSLM_OK) {
+			out->push_back(s);
+			continue;
+		}
+		all = false;
+		if (!first.Any() || (first.Capacity() && st != SSLM_KV_POOL_EXHAUSTED)) first = Refusal{r, st};
 	}
+	if (refusal) *refusal = first;
 	return all;
+}
+
+// " (a 256-page create was refused with SSLM_INVALID_ARGUMENT (1))", or "" when nothing was refused.
+inline std::string RefusalNote(const Refusal& r) {
+	if (!r.Any()) return "";
+	char b[160];
+	std::snprintf(b, sizeof b, " (a %lld-page create was refused with %s (%d))", static_cast<long long>(r.pages),
+	              AbiStatusName(r.status), static_cast<int>(r.status));
+	return b;
 }
 
 // A state the two-sided probe can rebuild: the builder makes a fresh pool and state, and returns an
@@ -573,44 +635,69 @@ struct ProbeState {
 // The two-sided fill probe (§8, rev 5): exactly `k` pages are free in the state `build` makes iff
 // creates totalling k are all admitted on one build and creates totalling k + 1 are not all
 // admitted on a fresh rebuild. k >= 2. Graded by admission only.
+//
+// The refusal leg proves "at most k free" only by a refusal for capacity: every refusal in it must
+// be SSLM_KV_POOL_EXHAUSTED. A refusal with any other status (a build that refuses a large budget as
+// an invalid argument, say) says nothing about the free pages, so it fails the probe, naming the
+// status; read as capacity it would accept a one-page excess. Any refusal in the admission leg fails
+// it, and the message names that refusal's status too.
 inline bool ProbeExactlyFree(const Fixture& fx, const std::function<std::unique_ptr<ProbeState>()>& build, int64_t k) {
 	bool admits_k = false, refuses_k1 = false;
+	Refusal admit_refusal, leg_refusal;
 	{
 		std::unique_ptr<ProbeState> s = build();
 		std::vector<sslm_seq> made;
-		admits_k = s && AdmitPages(fx, s->Pool(), k, &made);
+		admits_k = s && AdmitPages(fx, s->Pool(), k, &made, &admit_refusal);
 		for (auto it = made.rbegin(); it != made.rend(); ++it) sslm_seq_release(*it);
 	}
+	bool all_admitted = false;
 	{
 		std::unique_ptr<ProbeState> s = build();
 		std::vector<sslm_seq> made;
-		refuses_k1 = s && !AdmitPages(fx, s->Pool(), k + 1, &made);
+		all_admitted = s && AdmitPages(fx, s->Pool(), k + 1, &made, &leg_refusal);
+		// kills: a refusal for another reason read as "at most k free" (a one-page excess accepted)
+		refuses_k1 = s && !all_admitted && leg_refusal.Capacity();
 		for (auto it = made.rbegin(); it != made.rend(); ++it) sslm_seq_release(*it);
 	}
-	PKV_CHECK_MSG(admits_k, "fill probe: creates totalling %lld pages were not all admitted", static_cast<long long>(k));
-	PKV_CHECK_MSG(refuses_k1, "fill probe: creates totalling %lld pages were all admitted", static_cast<long long>(k + 1));
+	PKV_CHECK_MSG(admits_k, "fill probe: creates totalling %lld pages were not all admitted%s", static_cast<long long>(k),
+	              RefusalNote(admit_refusal).c_str());
+	if (all_admitted)
+		PKV_CHECK_MSG(refuses_k1, "fill probe: creates totalling %lld pages were all admitted", static_cast<long long>(k + 1));
+	else
+		PKV_CHECK_MSG(refuses_k1,
+		              "fill probe: creates totalling %lld pages were all admitted or refused for a reason other than "
+		              "capacity%s, not SSLM_KV_POOL_EXHAUSTED: at most %lld free is not shown",
+		              static_cast<long long>(k + 1), RefusalNote(leg_refusal).c_str(), static_cast<long long>(k));
 	return admits_k && refuses_k1;
 }
 
 // The one-state form (§8, rev 6), for a state that cannot be rebuilt (a race): on the one live
 // pool, for k >= 3: creates totalling k - 1 are admitted; a 2-page create is refused; one admitted
 // create of r pages is released and creates totalling r + 1 are admitted. Leaves the pool as found.
+// As in the two-sided form, step 2's refusal proves "at most k" only when it is
+// SSLM_KV_POOL_EXHAUSTED, and every failed step names the status it was refused with.
 inline bool ProbeExactlyFreeOneState(const Fixture& fx, sslm_kv_pool* pool, int64_t k) {
 	std::vector<sslm_seq> made;
-	const bool step1 = AdmitPages(fx, pool, k - 1, &made);
+	Refusal r1, r3;
+	const bool step1 = AdmitPages(fx, pool, k - 1, &made, &r1);
 	sslm_seq extra = nullptr;
-	const bool step2 = sslm_seq_create_budgeted(fx.model, pool, static_cast<int32_t>(fx.B()), &extra) != SSLM_OK;
+	const sslm_status st2 = sslm_seq_create_budgeted(fx.model, pool, static_cast<int32_t>(fx.B()), &extra);
+	// kills: a refusal for another reason read as "at most k free"
+	const bool step2 = st2 == SSLM_KV_POOL_EXHAUSTED;
 	if (extra) made.push_back(extra);
 	bool step3 = false;
 	if (step1 && !made.empty()) {
 		const int64_t r = ProbeSplit(fx, k - 1).back();
 		sslm_seq_release(made.back());
 		made.pop_back();
-		step3 = AdmitPages(fx, pool, r + 1, &made);
+		step3 = AdmitPages(fx, pool, r + 1, &made, &r3);
 	}
 	for (auto it = made.rbegin(); it != made.rend(); ++it) sslm_seq_release(*it);
-	PKV_CHECK_MSG(step1 && step2 && step3, "one-state fill probe at k=%lld: admit k-1 %d, refuse +2 %d, re-admit r+1 %d",
-	              static_cast<long long>(k), step1, step2, step3);
+	PKV_CHECK_MSG(step1 && step2 && step3,
+	              "one-state fill probe at k=%lld: admit k-1 %d%s, refuse +2 %d (the 2-page create returned %s (%d); only "
+	              "SSLM_KV_POOL_EXHAUSTED counts), re-admit r+1 %d%s",
+	              static_cast<long long>(k), step1, RefusalNote(r1).c_str(), step2, AbiStatusName(st2), static_cast<int>(st2),
+	              step3, RefusalNote(r3).c_str());
 	return step1 && step2 && step3;
 }
 

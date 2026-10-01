@@ -337,11 +337,16 @@ struct Rig : ProbeState {
 	}
 };
 
-// A 2-page create (the smallest the probe makes): admitted or not, released again.
+// A 2-page create (the smallest the probe makes): admitted or not, released again. Its refusal is read
+// as "fewer than 2 pages free", so, as in the fill probe (pkv_common.h), a refusal with any status
+// other than SSLM_KV_POOL_EXHAUSTED is a failed check naming the status.
 inline bool TwoPageCreateAdmitted(const Fixture& fx, sslm_kv_pool* pool) {
 	sslm_seq s = nullptr;
 	const sslm_status st = sslm_seq_create_budgeted(fx.model, pool, static_cast<int32_t>(fx.B()), &s);
 	if (s) sslm_seq_release(s);
+	PKV_CHECK_MSG(st == SSLM_OK || st == SSLM_KV_POOL_EXHAUSTED,
+	              "a 2-page create was refused with %s (%d), not SSLM_KV_POOL_EXHAUSTED: the refusal says nothing about "
+	              "the free pages", AbiStatusName(st), static_cast<int>(st));
 	return st == SSLM_OK;
 }
 
