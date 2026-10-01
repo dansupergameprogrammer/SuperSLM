@@ -39,8 +39,8 @@ memory*) is the contract and `docs/releases/1.12.0.md` the release note.
 - **Memory (by admission, 0.5B, cap 4096, example cohort of a 1,000-token world, 10 personas and 50
   budget-512 sequences):** a pool of 1,842 pages (173 MiB) admits the cohort and 1,841 refuses
   exactly one create, against 60 blocks (1,440 MiB) in 1.11.0. Reproduced in the cloud on a
-  synthetic fixture with the 0.5B page arithmetic; pending confirmation on the real artifact
-  (TODO-BOX: cell 10.4).
+  synthetic fixture with the 0.5B page arithmetic; the 1,842 and 1,841 page admissions are
+  confirmed on the real artifact on the release machine (cell 10.4).
 - **Speed:** no figure is promised. Decode against 1.11.0: TODO-BOX (cell 7.9). Lifecycle verbs:
   TODO-BOX (the lifecycle timing cell on both binaries).
 - **Behaviour changes for every host:** `sslm_seq_state_size` is 20 bytes larger (fixed part 180,

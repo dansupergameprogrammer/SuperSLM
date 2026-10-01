@@ -234,7 +234,7 @@ what it will actually generate rather than by the model's whole context length.
 
 As an example, at Qwen2.5-0.5B with a 4,096-token context, a cast of 50 characters sharing one
 1,000-token world and 10 200-token personas, each with up to 512 tokens of its own, fits in a pool of
-173 MiB, where whole-context sequences need 1,440 MiB (TODO-BOX: confirm with cell 10.4 on the real
+173 MiB, where whole-context sequences need 1,440 MiB (the pool figure is confirmed on the real
 0.5B artifact). The cast and its numbers are an illustration, not a measured game workload.
 
 Existing code needs no changes: `sslm_seq_create`, `sslm_prefix_begin` and the other 1.11.0 calls
