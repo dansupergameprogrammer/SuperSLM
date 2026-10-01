@@ -175,10 +175,16 @@ void NestedCapacity51() {
     PagePool& pool=sc.AddPool(fx.model,75); // parent 63; 12 free, 13 needed.
     sslm_prefix parent=Root(fx,&pool.pool,sc.h,1000,61);
     if(!parent) return;
+    ProbeExactlyFreeOneState(fx,&pool.pool,12);
     sslm_prefix out=nullptr;
     Status(Restore(fx,&pool.pool,b,parent,&out),SSLM_KV_POOL_EXHAUSTED,
            "5.1 nested one page short");
     PKV_CHECK(out==nullptr);
+    ProbeExactlyFreeOneState(fx,&pool.pool,12);
+    Status(ReleasePrefix(sc.h,parent),SSLM_OK,"5.1 release parent after refusal");
+    ProbeExactlyFreeOneState(fx,&pool.pool,75);
+    PKV_CHECK_EQ(sslm_kv_pool_destroy(pool.pool),SSLM_OK);
+    pool.pool=nullptr;
 }
 PKV_CELL("5.1/E3", "E1", NestedCapacity51);
 
@@ -192,6 +198,7 @@ void NestedAllocation52() {
     if(!child) return;
     const auto b=Save(child);
     if(!RequireBlob(b,"5.2 nested")) return;
+    ProbeExactlyFreeOneState(fx,&pool.pool,124);
     sslm_pc_test_only_restore_fault_arm(3,0);
     sslm_prefix out=nullptr;
     Status(Restore(fx,&pool.pool,b,parent,&out),SSLM_ALLOCATION_FAILED,
@@ -203,7 +210,14 @@ void NestedAllocation52() {
     PKV_CHECK_EQ(shared,62u);
     PKV_CHECK_EQ(mapped,75u);
     PKV_CHECK_EQ(reserve,0u);
+    PKV_CHECK_MSG(free<124,"5.2 nested fault fired before drawing private pages");
     sslm_pc_test_only_restore_fault_disarm();
+    ProbeExactlyFreeOneState(fx,&pool.pool,124);
+    Status(ReleasePrefix(sc.h,child),SSLM_OK,"5.2 release built child");
+    Status(ReleasePrefix(sc.h,parent),SSLM_OK,"5.2 release parent");
+    ProbeExactlyFreeOneState(fx,&pool.pool,200);
+    PKV_CHECK_EQ(sslm_kv_pool_destroy(pool.pool),SSLM_OK);
+    pool.pool=nullptr;
 }
 PKV_CELL("5.2/E3", "E1", NestedAllocation52);
 
@@ -217,6 +231,7 @@ void NestedRefusals511() {
     if(!child) return;
     const auto b=Save(child);
     if(!RequireBlob(b,"5.11 nested")) return;
+    ProbeExactlyFreeOneState(fx,&source_pool.pool,124);
     for(int status : {1,2}) { // test slot: 1=kInvalidArgument; 2=kRefcountUnderflow.
         sslm_pc_test_only_restore_fault_arm(1,status);
         sslm_prefix out=nullptr;
@@ -227,14 +242,31 @@ void NestedRefusals511() {
         uint32_t free=0,shared=0,mapped=0,reserve=0;
         PKV_CHECK_MSG(sslm_pc_test_only_restore_fault_read(&free,&shared,&mapped,&reserve)==1,
                       "5.11 share slot not reached");
+        PKV_CHECK_EQ(free,111u); // 13 private pages drawn before share.
+        PKV_CHECK_EQ(shared,0u); // slot refuses before taking a refcount.
+        PKV_CHECK_EQ(mapped,0u);
+        PKV_CHECK_EQ(reserve,13u);
         sslm_pc_test_only_restore_fault_disarm();
+        ProbeExactlyFreeOneState(fx,&source_pool.pool,124);
     }
     sslm_pc_test_only_restore_fault_arm(2,0);
     sslm_prefix out=nullptr;
     Status(Restore(fx,&source_pool.pool,b,parent,&out),SSLM_KV_POOL_EXHAUSTED,
            "5.11 nested map refusal");
     PKV_CHECK(out==nullptr);
+    uint32_t free=0,shared=0,mapped=0,reserve=0;
+    PKV_CHECK_EQ(sslm_pc_test_only_restore_fault_read(&free,&shared,&mapped,&reserve),1);
+    PKV_CHECK_EQ(free,124u);
+    PKV_CHECK_EQ(shared,62u);
+    PKV_CHECK_EQ(mapped,62u);
+    PKV_CHECK_EQ(reserve,0u);
     sslm_pc_test_only_restore_fault_disarm();
+    ProbeExactlyFreeOneState(fx,&source_pool.pool,124);
+    Status(ReleasePrefix(source.h,child),SSLM_OK,"5.11 release built child");
+    Status(ReleasePrefix(source.h,parent),SSLM_OK,"5.11 release parent");
+    ProbeExactlyFreeOneState(fx,&source_pool.pool,200);
+    PKV_CHECK_EQ(sslm_kv_pool_destroy(source_pool.pool),SSLM_OK);
+    source_pool.pool=nullptr;
 }
 PKV_CELL("5.11/E3", "E1", NestedRefusals511);
 
@@ -343,6 +375,8 @@ void ReleaseOrders12() {
                               "1.2 adopters differ from prefill twins after release order");
             }
         }
+        h.ReleaseAll();
+        ProbeExactlyFreeOneState(fx,&pool.pool,200);
         PKV_CHECK_EQ(sslm_kv_pool_destroy(pool.pool),SSLM_OK);
         pool.pool=nullptr;
     } while(std::next_permutation(order.begin(),order.end()));
