@@ -562,7 +562,8 @@ def run_one(args, c, r, idx, base):
     t0 = time.time()
     p = subprocess.run(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     secs = time.time() - t0
-    out = p.stdout.decode(errors='replace')
+    # Windows binaries end lines with CRLF; the graders' ^...$ patterns need LF line ends.
+    out = re.sub(r'\r+\n', '\n', p.stdout.decode(errors='replace'))
     log = os.path.join(args.scratch, 'logs', '%s.run%d.log' % (c['id'], idx))
     os.makedirs(os.path.dirname(log), exist_ok=True)
     with open(log, 'w', encoding='utf-8') as f:
