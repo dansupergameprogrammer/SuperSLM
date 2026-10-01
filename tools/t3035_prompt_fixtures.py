@@ -57,6 +57,12 @@ def main() -> None:
         text = system + "<|im_start|>user\n" + user + "<|im_end|>\n<|im_start|>assistant\n"
         write(args.directory / f"flat{j:02d}.txt", text)
 
+    donor_facts = "".join(fact(900, i) for i in range(72))
+    donor = ("<|im_start|>system\nBegin the answer with COUNTERFACTUAL and use the archive below.\n"
+             "<|im_end|>\n<|im_start|>user\n" + donor_facts + query(indices(72)) +
+             "<|im_end|>\n<|im_start|>assistant\n")
+    write(args.directory / "donor.txt", donor)
+
     world_count = 34
     world = SYSTEM + "<|im_start|>user\nHere is the shared dispatch ledger.\n"
     world += "".join(fact(100, i) for i in range(world_count))
