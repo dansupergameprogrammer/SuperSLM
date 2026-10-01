@@ -399,12 +399,14 @@ def make_tampered_fixtures(fixtures, dest):
     shutil.copytree(fixtures, dest)
     p = os.path.join(dest, 'pkv_def.sslm')
     data = bytearray(open(p, 'rb').read())
-    # A byte in the middle of the file (weight payload on every pkv fixture), low bit flipped, and
-    # the artifact's own integrity SHA-256 (bytes 32..63, computed with those bytes as zero;
-    # include/superslm/artifact.h) restamped: a validly built file that maps, as a host producing
-    # different fixture bytes would write it. Only its bytes, and so its file SHA-256, differ from
-    # what the reference names.
-    off = len(data) // 2
+    # One byte an eighth of the way into the file (weight payload), low bit flipped, and the
+    # artifact's own integrity SHA-256 (bytes 32..63, computed with those bytes as zero;
+    # include/superslm/artifact.h) restamped: a validly built file that still maps, as a host
+    # producing different fixture bytes would write it. Only its bytes, and so its file SHA-256,
+    # differ from what the reference names. (Executed: on pkv_def this offset maps; some offsets in
+    # the second half land in sections sslm_model_map validates and are refused, which would fail
+    # the cell for a different reason.)
+    off = len(data) * 5 // 40
     data[off] ^= 0x01
     h = hashlib.sha256()
     h.update(bytes(data[:32]))
