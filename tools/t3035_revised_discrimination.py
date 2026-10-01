@@ -46,7 +46,7 @@ def exact_address(name: str, h: dict[str, str]) -> dict:
     hidden_offset = 156 if fmt == "SSB5" else 172
     if name == "M-res":
         return {"kind": "field", "byte_offset": hidden_offset,
-                "byte_count": int(h["rows_offset"]) - hidden_offset - (4 if fmt == "SSB5" else 8)}
+                "byte_count": int(h["hidden"])}
     if name == "M-scale":
         return {"kind": "field", "byte_offset": 76, "byte_count": 1}
     if name == "M-cur":
@@ -96,6 +96,8 @@ def reduce(raw: Path, reference: Path, target: Path, donor: Path,
     if int(ref_header["B"]) != int(header["B"]):
         raise ValueError("page geometry differs from reference")
     common = {"status": "QUARANTINED", "raw_sha256": digest(raw),
+              "probe_source_sha256": digest(Path(__file__).resolve().parents[1] / "tests/t3035_mutant_probe.cpp"),
+              "reducer_source_sha256": digest(Path(__file__).resolve()),
               "reference_sha256": digest(reference), "reference_path": str(reference),
               "model_sha256": ref_header["model_sha256"],
               "target_ids_sha256": target_hash, "donor_ids_sha256": digest(donor),

@@ -227,7 +227,7 @@ int main(int argc, char** argv) {
         if (DifferentBytes(Resave(in, pool, target), target) != 0)
             throw std::runtime_error("unedited state round trip mismatched prefill twin");
         output << "# format=" << (budget ? "SSB6" : "SSB5") << " L=" << t.length << " B=" << geometry.page_positions
-               << " runs=" << geometry.runs << " row_bytes=" << geometry.row_bytes
+               << " hidden=" << geometry.hidden << " runs=" << geometry.runs << " row_bytes=" << geometry.row_bytes
                << " stride=" << t.stride << " rows_offset=" << t.rows_offset << " mode=" << mode
                << " selection=" << selection
                << " unedited_state_diff_bytes=0 baseline_tokens=" << baseline.size() << " tokens=";
