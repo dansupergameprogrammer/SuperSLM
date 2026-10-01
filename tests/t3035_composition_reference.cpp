@@ -123,7 +123,8 @@ uint32_t SavedWalk(Input& in, Pool& pool, sslm_prefix prefix, sslm_schema schema
 void SchemaCapture(const char* model_path, const fs::path& prompts,
                    const fs::path& out_dir, const fs::path& discrimination,
                    const std::string& run, const std::string& ids_suffix,
-                   const std::string& tokenizer, bool all_schemas) {
+                   const std::string& tokenizer, bool all_schemas,
+                   const std::string& prompt_id) {
     Input in(model_path);
     Pool pool(in.model, in.cap);
     sslm_decode_params probe{};
@@ -131,7 +132,7 @@ void SchemaCapture(const char* model_path, const fs::path& prompts,
     const size_t n = sslm_schema_count(in.model);
     if (n < (all_schemas ? 3u : 1u)) throw std::runtime_error("insufficient schemas");
     const size_t schema_count = all_schemas ? 3 : 1;
-    const auto ids = ReadIds(prompts / ("flat00." + ids_suffix));
+    const auto ids = ReadIds(prompts / (prompt_id + "." + ids_suffix));
     const std::string model_sha = HexSha(in.bytes->p, in.size);
     for (size_t i = 0; i < schema_count; ++i) {
         const std::string name = SchemaName(in.model, int(i));
@@ -155,8 +156,9 @@ void SchemaCapture(const char* model_path, const fs::path& prompts,
             << " model_sha256=" << model_sha
             << " B=" << sslm_kv_page_positions(in.model) << " cap=" << in.cap
             << " decode_modes_available=" << int(damped)
-            << " prompt_source_sha256=" << FileSha(prompts / "flat00.txt")
-            << " prompt_ids_sha256=" << FileSha(prompts / ("flat00." + ids_suffix))
+            << " prompt_id=" << prompt_id
+            << " prompt_source_sha256=" << FileSha(prompts / (prompt_id + ".txt"))
+            << " prompt_ids_sha256=" << FileSha(prompts / (prompt_id + "." + ids_suffix))
             << " forced_content_id=" << forced
             << " forced_content_ids_sha256=" << HashText(std::to_string(forced) + "\n")
             << " tokenizer=" << tokenizer << " discrimination_record_sha256=" << FileSha(record) << '\n';
@@ -258,11 +260,12 @@ void AdapterCapture(const char* model_path, const fs::path& adapter_path,
 }
 
 void WalkProbe(const char* model_path, const fs::path& prompts, const fs::path& out_dir,
-               const std::string& ids_suffix, bool all_schemas) {
+               const std::string& ids_suffix, bool all_schemas,
+               const std::string& prompt_id) {
     Input in(model_path);
     Pool pool(in.model, in.cap);
     const size_t schema_count = all_schemas ? 3 : 1;
-    const auto ids = ReadIds(prompts / ("flat00." + ids_suffix));
+    const auto ids = ReadIds(prompts / (prompt_id + "." + ids_suffix));
     for (size_t i = 0; i < schema_count; ++i) {
         const std::string name = SchemaName(in.model, int(i));
         const size_t available = sslm_schema_count(in.model);
@@ -327,7 +330,7 @@ void WalkProbe(const char* model_path, const fs::path& prompts, const fs::path& 
         const fs::path output = out_dir / ("schema" + std::to_string(i) + ".walkprobe.txt");
         std::ofstream out(output, std::ios::binary | std::ios::trunc);
         if (!out) throw std::runtime_error("walk probe output open failed");
-        out << "schema=" << name << " schema_hash=" << HashName(name)
+        out << "prompt_id=" << prompt_id << " schema=" << name << " schema_hash=" << HashName(name)
             << " donor_schema=" << other_name << " donor_schema_hash=" << HashName(other_name)
             << " original_walk=" << old_walk << " mutant_walk=0"
             << " forced_content_id=" << forced << " length=" << ids.size() + 1
@@ -346,22 +349,23 @@ void WalkProbe(const char* model_path, const fs::path& prompts, const fs::path& 
 
 int main(int argc, char** argv) {
     try {
-        if (argc == 6 && std::string(argv[1]) == "walk") {
+        if ((argc == 6 || argc == 7) && std::string(argv[1]) == "walk") {
             fs::create_directories(argv[4]);
-            WalkProbe(argv[2], argv[3], argv[4], argv[5], false);
+            WalkProbe(argv[2], argv[3], argv[4], argv[5], false, argc == 7 ? argv[6] : "flat00");
             return 0;
         }
         if (argc == 6 && std::string(argv[1]) == "walk3") {
             fs::create_directories(argv[4]);
-            WalkProbe(argv[2], argv[3], argv[4], argv[5], true);
+            WalkProbe(argv[2], argv[3], argv[4], argv[5], true, "flat00");
             return 0;
         }
-        if (argc != 10 && argc != 11) throw std::runtime_error("usage: t3035_composition schema|schema3|adapter MODEL ADAPTER_OR_- PROMPTS OUT DISCRIM run1|run2 ID_SUFFIX TOKENIZER [SECOND_INDEX]");
+        if (argc != 10 && argc != 11) throw std::runtime_error("usage: t3035_composition schema|schema3|adapter MODEL ADAPTER_OR_- PROMPTS OUT DISCRIM run1|run2 ID_SUFFIX TOKENIZER [PROMPT_ID|SECOND_INDEX]");
         const std::string kind(argv[1]), run(argv[7]);
         if (run != "run1" && run != "run2") throw std::runtime_error("invalid run");
         fs::create_directories(argv[5]);
         if (kind == "schema" || kind == "schema3")
-            SchemaCapture(argv[2], argv[4], argv[5], argv[6], run, argv[8], argv[9], kind == "schema3");
+            SchemaCapture(argv[2], argv[4], argv[5], argv[6], run, argv[8], argv[9], kind == "schema3",
+                          kind == "schema" && argc == 11 ? argv[10] : "flat00");
         else if (kind == "adapter") {
             const int second_index = argc == 11 ? std::stoi(argv[10]) : 9;
             if (second_index < 1 || second_index > 9) throw std::runtime_error("invalid second adapter prefix index");
