@@ -1187,6 +1187,13 @@ void GemmProbQ15Accumulate(const int64_t* probs, const int8_t* values, size_t wi
 	ProbQ15AccumulateInto(probs, values, width, head_dim, out_ctx);
 }
 
+// Paged-KV plan §3.2 item 3 (matmul.h): the accumulate-into entry, no zeroing -- the core
+// GemmProbQ15Accumulate runs after its zeroing, called directly.
+void GemmProbQ15AccumulateInto(const int64_t* probs, const int8_t* values, size_t width,
+                               size_t head_dim, int64_t* out_ctx) {
+	ProbQ15AccumulateInto(probs, values, width, head_dim, out_ctx);
+}
+
 }  // namespace superslm
 
 // ---- Build-configuration record (tiled-matmul plan slice 1; cell 10.0 E3 and the Q1 B5 record) ----

@@ -24,7 +24,10 @@ the population), the rounding steps they inline (`Q31RoundAvx2` / `Q31RoundAvx51
 packers (`Q31PackKeyBlock`, `Q31PackQuads4x16`; `Q31Pack`) and the unattributed guard and limb set-up
 (`Q31RowFastPathAdmits`, `MakeQ31RowLimbs`, the `Q31RowLimbs` struct), so the forward_sites.cpp objects are
 passed too; the exported `QkQ31ScoreRow` that dispatches to them is outside it, and so is that file's older
-per-key `QkQ31Score` family. The engine's public API in the same object
+per-key `QkQ31Score` family. The paged-KV plan's exported accumulate-into entry,
+`GemmProbQ15AccumulateInto` (matmul.h, no target attribute; it calls the local core), is public API
+and outside it: the population pattern matches `ProbQ15AccumulateInto` only where it is not preceded by
+`Gemm`. The engine's public API in the same object
 is outside it (including the `superslm::detail::` entries the header declares, which carry no target
 attribute), and so are the test seam's own `superslm_test::` variables, which exist only in seam
 builds and are shared with the test translation unit on purpose.
@@ -53,7 +56,7 @@ import sys
 
 RECORD = "superslm_build_config_record"
 POPULATION = re.compile(
-    r"Tiled|ProbV|ProbQ15AccumulateInto|RequantRowAvx|SoftmaxRowAvx|SoftmaxExpAvx|SoftmaxProbAvx|SoftmaxFast|"
+    r"Tiled|ProbV|(?<!Gemm)ProbQ15AccumulateInto|RequantRowAvx|SoftmaxRowAvx|SoftmaxExpAvx|SoftmaxProbAvx|SoftmaxFast|"
     r"SoftmaxProbReciprocal|QkQ31RowAvx|Q31RoundAvx|Q31Pack|Q31RowFastPathAdmits|MakeQ31RowLimbs|Q31RowLimbs|"
     + RECORD)
 SEAM = "superslm_test::"

@@ -117,10 +117,21 @@
 // guards themselves.
 // Each citation was re-read at its new line and holds its rejecting `return`;
 // check_gpu_guard_status_parity.py passes.
-SSLM_GPU_LAYER_LOOP_GUARD(LayerBudgetZero, InvalidLayerBudget, "forward_sites.cpp:2052")
-SSLM_GPU_LAYER_LOOP_GUARD(ContextCapNonPositive, InvalidContextCap, "forward_sites.cpp:2062")
-SSLM_GPU_LAYER_LOOP_GUARD(HeadDimGeometryMismatch, HeadDimGeometryMismatch, "forward_sites.cpp:2087")
-SSLM_GPU_LAYER_LOOP_GUARD(KvHeadGeometryMismatch, KvHeadGeometryMismatch, "forward_sites.cpp:2098")
+//
+// CORRECTED 2026-10-01 (paged-KV plan rev 16.1, step C2): the page-view accessors, the one-page
+// view builder and ApplyQkNormSite's flat wrapper were added above RunLayerLoopImpl, and guard 5
+// took its view meaning inside the ladder (a `page_positions < 1` check ahead of the per-page
+// product, which now multiplies `page_positions` where it multiplied `context_cap`, and a null
+// check that also covers the page table) -- so this is not a uniform shift: the four guards
+// before guard 5 moved by +61, guard 5's range grew (now from its first `InvalidContextCap`
+// return to its `page_bytes` check), and the guards after it moved by +69 (guard 5's new comment
+// lines and its new check). The coverage guard's own body was rewritten in place. Every citation
+// was re-derived by reading RunLayerLoopImpl's returns in the current file, not by applying an
+// offset; each holds its rejecting `return`, and check_gpu_guard_status_parity.py passes.
+SSLM_GPU_LAYER_LOOP_GUARD(LayerBudgetZero, InvalidLayerBudget, "forward_sites.cpp:2113")
+SSLM_GPU_LAYER_LOOP_GUARD(ContextCapNonPositive, InvalidContextCap, "forward_sites.cpp:2123")
+SSLM_GPU_LAYER_LOOP_GUARD(HeadDimGeometryMismatch, HeadDimGeometryMismatch, "forward_sites.cpp:2148")
+SSLM_GPU_LAYER_LOOP_GUARD(KvHeadGeometryMismatch, KvHeadGeometryMismatch, "forward_sites.cpp:2159")
 // Guard 5 is one CPU check with two distinct rejecting outcomes: an
 // overflow anywhere in the factor-by-factor KV-size product returns
 // InvalidContextCap; a null or undersized workspace (checked only once the
@@ -128,14 +139,14 @@ SSLM_GPU_LAYER_LOOP_GUARD(KvHeadGeometryMismatch, KvHeadGeometryMismatch, "forwa
 // Table entries stay one row per source guard, matching the reconfirmation
 // review's own 9-row enumeration exactly, so `kCount` counts what a CPU
 // reader counts, not what a naive per-`return`-statement scan would.
-SSLM_GPU_LAYER_LOOP_GUARD(WorkspaceSizeOrOverflow, WorkspaceTooSmall, "forward_sites.cpp:2124-2129 (InvalidContextCap on overflow, WorkspaceTooSmall on null/undersized)")
-SSLM_GPU_LAYER_LOOP_GUARD(HiddenCodesNull, InvalidHiddenCodes, "forward_sites.cpp:2221")
-SSLM_GPU_LAYER_LOOP_GUARD(SequenceAlreadyComplete, SequenceAlreadyComplete, "forward_sites.cpp:2239")
-SSLM_GPU_LAYER_LOOP_GUARD(PositionOverCap, PositionOverCap, "forward_sites.cpp:2274")
-SSLM_GPU_LAYER_LOOP_GUARD(KvCapacityExhausted, KvCapacityExhausted, "forward_sites.cpp:2276")
+SSLM_GPU_LAYER_LOOP_GUARD(WorkspaceSizeOrOverflow, WorkspaceTooSmall, "forward_sites.cpp:2187-2198 (InvalidContextCap on a page size below 1 or an overflow of the per-page product, WorkspaceTooSmall on a null pool or table or an undersized page)")
+SSLM_GPU_LAYER_LOOP_GUARD(HiddenCodesNull, InvalidHiddenCodes, "forward_sites.cpp:2290")
+SSLM_GPU_LAYER_LOOP_GUARD(SequenceAlreadyComplete, SequenceAlreadyComplete, "forward_sites.cpp:2308")
+SSLM_GPU_LAYER_LOOP_GUARD(PositionOverCap, PositionOverCap, "forward_sites.cpp:2343")
+SSLM_GPU_LAYER_LOOP_GUARD(KvCapacityExhausted, KvCapacityExhausted, "forward_sites.cpp:2345")
 // Paged-KV plan §3.2 items 4-5 (step M1): the coverage guard, the tenth row, appended after
 // KvCapacityExhausted in CPU's own source order. Its GPU twin evaluates the sequence's constant
 // one-page view until the GPU slice binds it to a page table.
-SSLM_GPU_LAYER_LOOP_GUARD(KvPageUnmapped, KvPageUnmapped, "forward_sites.cpp:2287")
+SSLM_GPU_LAYER_LOOP_GUARD(KvPageUnmapped, KvPageUnmapped, "forward_sites.cpp:2356")
 
 #undef SSLM_GPU_LAYER_LOOP_GUARD

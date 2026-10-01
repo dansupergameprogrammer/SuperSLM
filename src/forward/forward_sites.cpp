@@ -1769,6 +1769,54 @@ int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
 	    ValueRow(workspace, layer, context_cap, num_kv_heads, head_dim, kv_head, position));
 }
 
+namespace {
+// Paged-KV plan (rev 16.1) §3.1: the address of (layer, half, kv_head, position) through a page view,
+//   page_table[pos / B] * page_bytes + ((layer * 2 + half) * H_kv + kv_head) * B * D + (pos % B) * D.
+// For the one-page view (table {0}, B = context_cap) the first term is 0 and the rest is
+// KvHalfOffset + (half ? cap * H_kv * D : 0) + KvRowOffsetWithinHalf, term for term (§3.1's identity).
+inline size_t KvPageRowOffset(const KvPageView& view, uint32_t layer, size_t half, size_t num_kv_heads,
+                              size_t head_dim, size_t kv_head, int64_t position) {
+	const size_t page_positions = static_cast<size_t>(view.page_positions);
+	const size_t pos = static_cast<size_t>(position);
+	return static_cast<size_t>(view.page_table[pos / page_positions]) * view.page_bytes +
+	       ((static_cast<size_t>(layer) * 2u + half) * num_kv_heads + kv_head) * page_positions * head_dim +
+	       (pos % page_positions) * head_dim;
+}
+
+// Paged-KV plan §3.2 item 2: the flat workspace as the one-page view -- pool_base = workspace,
+// table {0}, one mapped page, B = context_cap, page_bytes = workspace_size. Every flat entry point
+// builds this and runs the view code path; nothing is allocated.
+constexpr uint32_t kOnePageTable[1] = {0};
+inline KvPageView OnePageView(uint8_t* workspace, size_t workspace_size, int64_t context_cap) {
+	return KvPageView{workspace, kOnePageTable, 1u, context_cap, workspace_size};
+}
+}  // namespace
+
+// Paged-KV plan §3.2 item 1 (forward_sites.h): the page-view accessors.
+const int8_t* KeyRow(const KvPageView& view, uint32_t layer, size_t num_kv_heads, size_t head_dim,
+                     size_t kv_head, int64_t position) noexcept {
+	return reinterpret_cast<const int8_t*>(view.pool_base) +
+	       KvPageRowOffset(view, layer, 0u, num_kv_heads, head_dim, kv_head, position);
+}
+
+const int8_t* ValueRow(const KvPageView& view, uint32_t layer, size_t num_kv_heads, size_t head_dim,
+                       size_t kv_head, int64_t position) noexcept {
+	return reinterpret_cast<const int8_t*>(view.pool_base) +
+	       KvPageRowOffset(view, layer, 1u, num_kv_heads, head_dim, kv_head, position);
+}
+
+int8_t* MutableKeyRow(const KvPageView& view, uint32_t layer, size_t num_kv_heads, size_t head_dim,
+                      size_t kv_head, int64_t position) noexcept {
+	return reinterpret_cast<int8_t*>(view.pool_base) +
+	       KvPageRowOffset(view, layer, 0u, num_kv_heads, head_dim, kv_head, position);
+}
+
+int8_t* MutableValueRow(const KvPageView& view, uint32_t layer, size_t num_kv_heads, size_t head_dim,
+                        size_t kv_head, int64_t position) noexcept {
+	return reinterpret_cast<int8_t*>(view.pool_base) +
+	       KvPageRowOffset(view, layer, 1u, num_kv_heads, head_dim, kv_head, position);
+}
+
 // T-2147 (design §15.1/§15.2, D-SLM3481/D-SLM3482): extracted from what was RunLayerLoopImpl's
 // own K/V landing block -- everything AFTER the k_weight/v_weight GEMM (WSC1 fold, T-2021/
 // T-2029's LoRA delta-add, C28's optional bias reconciliation, the per-(head, projection)
@@ -1784,7 +1832,7 @@ SslmForwardStatus LandTokenKVRow(int64_t* kacc, int64_t* vacc, const int8_t* nor
                                   size_t hidden_size, size_t kv_hidden_size,
                                   size_t num_key_value_heads, size_t head_dim, uint32_t layer,
                                   int64_t position, int64_t context_cap,
-                                  const SslmTensorManifest& rope_tables, uint8_t* workspace,
+                                  const SslmTensorManifest& rope_tables, const KvPageView& view,
                                   bool option_g_fused_k_landing, uint64_t* kv_saturation_count,
                                   // (T-2577, D-SLM6280): the "kv_landing" per-site counter --
                                   // every LandingRescale call this function makes (K's plain
@@ -1851,10 +1899,9 @@ SslmForwardStatus LandTokenKVRow(int64_t* kacc, int64_t* vacc, const int8_t* nor
 	}
 
 	for (size_t h = 0; h < num_key_value_heads; ++h) {
-		int8_t* const k_row = MutableKeyRow(workspace, layer, context_cap,
-		                                    num_key_value_heads, head_dim, h, position);
-		int8_t* const v_row = MutableValueRow(workspace, layer, context_cap,
-		                                      num_key_value_heads, head_dim, h, position);
+		// Paged-KV plan §3.2 item 6: the landing addresses its rows through the page view.
+		int8_t* const k_row = MutableKeyRow(view, layer, num_key_value_heads, head_dim, h, position);
+		int8_t* const v_row = MutableValueRow(view, layer, num_key_value_heads, head_dim, h, position);
 		if (option_g_fused_k_landing) {
 			// T-1894 (design Sec31.2's own construction, carried from
 			// T-1891 Sec2, confirmed sound by T-1892): rotate the WIDE
@@ -1937,6 +1984,9 @@ SslmForwardStatus LandTokenKVRow(int64_t* kacc, int64_t* vacc, const int8_t* nor
 // sits inside above: that block gives internal linkage, which would make this definition a
 // second, distinct symbol from the one forward_sites.h declares, leaving the declared external
 // symbol undefined at link time.
+// Paged-KV plan §3.2 item 6: the flat signature, kept for its test callers, as a one-page-view
+// wrapper. `page_bytes` is never read for addressing through a one-entry table (§3.2 item 2), and
+// this site has no workspace size to give it, so it carries 0.
 SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8_t* workspace,
                                    const SslmTensorManifest& rope_tables,
                                    uint32_t layer, int64_t context_cap, int64_t position,
@@ -1945,6 +1995,19 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
                                    size_t token_index, SslmTraceHookState* trace_hook_state,
                                    uint64_t* out_saturation_count,
                                    uint64_t* out_k_channel_landing_saturation_count) {
+	return ApplyQkNormSite(q_codes, q_scales, OnePageView(workspace, 0, context_cap), rope_tables, layer,
+	                       context_cap, position, num_heads, num_key_value_heads, head_dim, lw, site_prefix,
+	                       token_index, trace_hook_state, out_saturation_count,
+	                       out_k_channel_landing_saturation_count);
+}
+
+SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, const KvPageView& view,
+                                  const SslmTensorManifest& rope_tables, uint32_t layer, int64_t context_cap,
+                                  int64_t position, size_t num_heads, size_t num_key_value_heads,
+                                  size_t head_dim, const LayerWeights& lw, std::string_view site_prefix,
+                                  size_t token_index, SslmTraceHookState* trace_hook_state,
+                                  uint64_t* out_saturation_count,
+                                  uint64_t* out_k_channel_landing_saturation_count) {
 	if (lw.q_norm_gain != nullptr) {
 		for (size_t h = 0; h < num_heads; ++h) {
 			int8_t* const q_head_row = q_codes + h * head_dim;
@@ -1966,8 +2029,7 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
 			    position, context_cap, head_dim, rope_tables, &table);
 			if (resolve != SslmForwardStatus::Ok) return resolve;
 			for (size_t kv_head = 0; kv_head < num_key_value_heads; ++kv_head) {
-				int8_t* const k_row = MutableKeyRow(workspace, layer, context_cap,
-				                                            num_key_value_heads, head_dim, kv_head, position);
+				int8_t* const k_row = MutableKeyRow(view, layer, num_key_value_heads, head_dim, kv_head, position);
 				int64_t sumsq = 0;
 				for (size_t d = 0; d < head_dim; ++d) {
 					const int64_t code = k_row[d];
@@ -2040,9 +2102,8 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
                                  uint32_t num_hidden_layers, uint32_t layer_budget,
                                  size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
                                  size_t intermediate_size, int64_t context_cap,
-                                 const SslmTensorManifest& rope_tables, uint8_t* workspace,
-                                 size_t workspace_size, bool option_g_fused_k_landing,
-                                 std::string_view site_prefix,
+                                 const SslmTensorManifest& rope_tables, const KvPageView& view,
+                                 bool option_g_fused_k_landing, std::string_view site_prefix,
                                  size_t token_index, SslmTraceHookState* trace_hook_state,
                                  size_t q_width, const sslm_parallel_for* row_pf) {
 	// §9.3's first decided contract, checked BEFORE anything is read or
@@ -2116,8 +2177,16 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 	// addressing). At `num_key_value_heads == num_heads` (every existing
 	// fixture), the two factors are the same number, so this substitution
 	// changes nothing the pre-existing suite already computes.
+	//
+	// Paged-KV plan §3.2 item 2, guard 5's view meaning: the product is the PER-PAGE K/V size,
+	// `num_hidden_layers * page_positions * num_key_value_heads * head_dim * 2`, and what it is
+	// checked against is the view's `page_bytes` (the stride between pages). For the flat
+	// workspace's one-page view `page_positions` is `context_cap` and `page_bytes` the caller's
+	// `workspace_size`, so the product, the checks and their order are exactly the flat ones. A
+	// page size below one position has no layout (the view's `context_cap`, per page).
+	if (view.page_positions < 1) return SslmForwardStatus::InvalidContextCap;
 	size_t kv_bytes_needed = static_cast<size_t>(num_hidden_layers);
-	const size_t kv_factors[] = {static_cast<size_t>(context_cap), num_key_value_heads,
+	const size_t kv_factors[] = {static_cast<size_t>(view.page_positions), num_key_value_heads,
 	                             head_dim, 2u};
 	for (size_t factor : kv_factors) {
 		if (factor != 0 && kv_bytes_needed > SIZE_MAX / factor) {
@@ -2125,8 +2194,8 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		}
 		kv_bytes_needed *= factor;
 	}
-	if (workspace == nullptr) return SslmForwardStatus::WorkspaceTooSmall;
-	if (workspace_size < kv_bytes_needed) return SslmForwardStatus::WorkspaceTooSmall;
+	if (view.pool_base == nullptr || view.page_table == nullptr) return SslmForwardStatus::WorkspaceTooSmall;
+	if (view.page_bytes < kv_bytes_needed) return SslmForwardStatus::WorkspaceTooSmall;
 
 	// T-1590 (Poirot cd2e75a review, Critical 1): every caller-settable field
 	// of `seq` is enumerated and validated here, before any of them is read
@@ -2277,15 +2346,14 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 	}
 	// Paged-KV plan §3.2 item 4, the coverage guard: the view must map the row this call writes,
 	// `context_length + 1 <= mapped_pages * page_positions`, checked after KvCapacityExhausted and
-	// the workspace guard and before the first write. The flat workspace is a one-page view
-	// (`mapped_pages = 1`, `page_positions = context_cap`), where the check above already implies
-	// this one; a paged view is the only input that reaches it.
-	{
-		const int64_t mapped_pages = 1;
-		const int64_t page_positions = context_cap;
-		if (seq.context_length + 1 > mapped_pages * page_positions) {
-			return SslmForwardStatus::KvPageUnmapped;
-		}
+	// the workspace guard and before the first write. Evaluated as "the written row's logical page
+	// is mapped", `context_length / page_positions < mapped_pages` (the same predicate for
+	// `context_length >= 0` and `page_positions >= 1`, both established above), which forms no
+	// product that could overflow. The flat workspace is a one-page view (`mapped_pages = 1`,
+	// `page_positions = context_cap`), where the check above already implies this one.
+	if (static_cast<uint64_t>(seq.context_length) / static_cast<uint64_t>(view.page_positions) >=
+	    view.mapped_pages) {
+		return SslmForwardStatus::KvPageUnmapped;
 	}
 
 	// S3.7 (§11 S3.7 "The mechanism"): the current token attends to every
@@ -2299,6 +2367,8 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 	// cell).
 	const int64_t position = seq.context_length;
 	const size_t width = static_cast<size_t>(seq.context_length) + 1;
+	// Paged-KV plan §3.2 item 3: the page size attention's runs step by (>= 1, guard 5).
+	const size_t page_positions = static_cast<size_t>(view.page_positions);
 
 	// SSLM-GEOMETRY-SITE: GS-12
 	// T-2432 (Track A step 3, design §2.1 item 5/§6 Track A step 3): q_codes/q_rot/ctx_codes
@@ -2403,7 +2473,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			const SslmForwardStatus land_status = LandTokenKVRow(
 			    kacc.data(), vacc.data(), normed.data(), normed_scale, lw, hidden_size,
 			    kv_hidden_size, num_key_value_heads, head_dim, l, position, context_cap,
-			    rope_tables, workspace, option_g_fused_k_landing, &seq.kv_saturation_count,
+			    rope_tables, view, option_g_fused_k_landing, &seq.kv_saturation_count,
 			    &seq.kv_landing_saturation_count);
 			if (land_status != SslmForwardStatus::Ok) return land_status;
 		}
@@ -2421,7 +2491,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		// per-head table to the attention block below.
 		std::vector<CarriedScale> q_scales(num_heads, q_scale);
 		if (!option_g_fused_k_landing) {
-			st = ApplyQkNormSite(q_codes.data(), q_scales.data(), workspace, rope_tables, l, context_cap, position,
+			st = ApplyQkNormSite(q_codes.data(), q_scales.data(), view, rope_tables, l, context_cap, position,
 			                     num_heads, num_key_value_heads, head_dim, lw, site_prefix,
 			                     token_index, trace_hook_state, &seq.kv_saturation_count,
 			                     &seq.k_channel_landing_saturation_count);
@@ -2454,7 +2524,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			// own size argument change.
 			const size_t kv_head = h / group;
 			const int8_t* const k_row_before_rotate =
-			    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, position);
+			    KeyRow(view, l, num_key_value_heads, head_dim, kv_head, position);
 			// CORRECTED 2026-09-03 (T-2577, D-SLM6281, external review `Claude/Poirot/
 			// 5fafd98-t2573-trackb-external-fold-review.md` Observation 1): every query head
 			// sharing this `kv_head` redundantly re-rotates the SAME row (the write-back loop's
@@ -2489,8 +2559,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 				// but sound, design record §6.2: every read above happens before
 				// any write here, so no partially-rotated store is ever observed).
 				const size_t kv_head = h / group;
-				int8_t* const k_row = MutableKeyRow(workspace, l, context_cap, num_key_value_heads,
-				                                    head_dim, kv_head, position);
+				int8_t* const k_row = MutableKeyRow(view, l, num_key_value_heads, head_dim, kv_head, position);
 				for (size_t d = 0; d < head_dim; ++d) k_row[d] = k_rot[h * head_dim + d];
 			}
 		}
@@ -2561,22 +2630,31 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 				st = CheckSoftmaxRowWidthDomain(derived_q_b, derived_q_c, width);
 				if (st != SslmForwardStatus::Ok) return st;
 
-				// S3.7: the score row reads `width` contiguous rows of this
-				// KV head's own K store, starting at position 0 (the store's
-				// position-minor layout makes positions 0..width-1 for one
-				// head contiguous) -- q·K, never q·V (D-SLM516/D-SLM503's A3
-				// mutant, which this closes the K side of by construction:
+				// S3.7: the score row reads `width` rows of this KV head's own K
+				// store, positions 0..width-1 -- q·K, never q·V (D-SLM516/D-SLM503's
+				// A3 mutant, which this closes the K side of by construction:
 				// reading the wrong store here is exactly what a k_weight
 				// mutation cell (§3 Cell 1) would fail to distinguish).
-				const int8_t* const k_rows_base =
-				    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
-				if (direct_qk) {
-					// Slice S5 (§4.5): one score-row call per query head, in place of the per-key loop.
-					const int64_t* ratio = lw.k_channel_ratio + kv_head * head_dim;
-					QkQ31ScoreRow(q_rot.data() + h * head_dim, k_rows_base, ratio, head_dim, width, scores.data());
-				} else {
-					GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_rows_base, head_dim, width,
-					                      scores.data());
+				// Paged-KV plan §3.2 item 3: the rows are contiguous within a page
+				// (the page layout is position-minor per head), so the row is read
+				// one page run at a time, `rows = min(B, width - p0)` rows from
+				// position p0. Every score is one row's own dot product, so the
+				// runs write exactly the scores one call over the whole row writes;
+				// for the one-page view the loop runs once with `rows = width`.
+				for (size_t p0 = 0; p0 < width; p0 += page_positions) {
+					const size_t rows = std::min(page_positions, width - p0);
+					const int8_t* const k_rows_base = KeyRow(view, l, num_key_value_heads, head_dim, kv_head,
+					                                         static_cast<int64_t>(p0));
+					if (direct_qk) {
+						// Slice S5 (§4.5): one score-row call per query head (per page run), in place of
+						// the per-key loop.
+						const int64_t* ratio = lw.k_channel_ratio + kv_head * head_dim;
+						QkQ31ScoreRow(q_rot.data() + h * head_dim, k_rows_base, ratio, head_dim, rows,
+						              scores.data() + p0);
+					} else {
+						GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_rows_base, head_dim, rows,
+						                      scores.data() + p0);
+					}
 				}
 				if (!SoftmaxRowQ15(scores.data(), width, derived_q_ln2, derived_q_b,
 				                   derived_q_c, probs.data())) {
@@ -2588,10 +2666,16 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 					// already in domain).
 					return SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted;
 				}
-				const int8_t* const v_rows_base =
-				    ValueRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
-				GemmProbQ15Accumulate(probs.data(), v_rows_base, width, head_dim,
-				                      ctx_acc.data());
+				// Paged-KV plan §3.2 item 3: the context accumulate, one page run at a
+				// time into `ctx_acc`, zeroed once (it is value-initialized, above, per
+				// query head) and never between runs. The same int64 terms in the same
+				// ascending order as one GemmProbQ15Accumulate over the row (cell 6.2).
+				for (size_t p0 = 0; p0 < width; p0 += page_positions) {
+					const size_t rows = std::min(page_positions, width - p0);
+					const int8_t* const v_rows_base = ValueRow(view, l, num_key_value_heads, head_dim, kv_head,
+					                                           static_cast<int64_t>(p0));
+					GemmProbQ15AccumulateInto(probs.data() + p0, v_rows_base, rows, head_dim, ctx_acc.data());
+				}
 				for (size_t d = 0; d < head_dim; ++d) {
 					// D-SLM57's per-head dispatch (§6.2 step 6): WSC1's
 					// `layer{L}.ctx_fold` row for THIS head, not one triple
@@ -2783,7 +2867,8 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
                                  size_t q_width) {
 	return RunLayerLoopImpl(seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim,
 	                        num_key_value_heads, intermediate_size, context_cap, rope_tables,
-	                        workspace, workspace_size, /*option_g_fused_k_landing=*/false,
+	                        OnePageView(workspace, workspace_size, context_cap),
+	                        /*option_g_fused_k_landing=*/false,
 	                        site_prefix, token_index, trace_hook_state, q_width,
 	                        /*row_pf=*/nullptr);
 }
@@ -2799,7 +2884,8 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
                                  size_t q_width, const GemmThreading& threading) {
 	return RunLayerLoopImpl(seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim,
 	                        num_key_value_heads, intermediate_size, context_cap, rope_tables,
-	                        workspace, workspace_size, /*option_g_fused_k_landing=*/false,
+	                        OnePageView(workspace, workspace_size, context_cap),
+	                        /*option_g_fused_k_landing=*/false,
 	                        site_prefix, token_index, trace_hook_state, q_width, threading.row);
 }
 
@@ -2825,7 +2911,7 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	const bool fused = (option_g_k_landing_mode == OptionGKLandingMode::kFused);
 	return RunLayerLoopImpl(seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim,
 	                        num_key_value_heads, intermediate_size, context_cap, rope_tables,
-	                        workspace, workspace_size, fused, site_prefix,
+	                        OnePageView(workspace, workspace_size, context_cap), fused, site_prefix,
 	                        token_index, trace_hook_state, q_width, /*row_pf=*/nullptr);
 }
 
@@ -2842,8 +2928,23 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	const bool fused = (option_g_k_landing_mode == OptionGKLandingMode::kFused);
 	return RunLayerLoopImpl(seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim,
 	                        num_key_value_heads, intermediate_size, context_cap, rope_tables,
-	                        workspace, workspace_size, fused, site_prefix,
+	                        OnePageView(workspace, workspace_size, context_cap), fused, site_prefix,
 	                        token_index, trace_hook_state, q_width, threading.row);
+}
+
+// Paged-KV plan (rev 16.1) §3.2 item 2: the page-view overload (forward_sites.h). Every flat
+// overload above is this function's body over the one-page view.
+SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers, uint32_t num_hidden_layers,
+                               uint32_t layer_budget, size_t hidden_size, size_t head_dim,
+                               size_t num_key_value_heads, size_t intermediate_size, int64_t context_cap,
+                               const SslmTensorManifest& rope_tables, const KvPageView& view,
+                               OptionGKLandingMode option_g_k_landing_mode, std::string_view site_prefix,
+                               size_t token_index, SslmTraceHookState* trace_hook_state, size_t q_width,
+                               const GemmThreading& threading) {
+	const bool fused = (option_g_k_landing_mode == OptionGKLandingMode::kFused);
+	return RunLayerLoopImpl(seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim,
+	                        num_key_value_heads, intermediate_size, context_cap, rope_tables, view, fused,
+	                        site_prefix, token_index, trace_hook_state, q_width, threading.row);
 }
 
 // T-2147 (design §15.1/§15.2/§15.3, D-SLM3479/D-SLM3481/D-SLM3482/D-SLM3483): the chunk-batched
@@ -2894,7 +2995,7 @@ static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk
                                             size_t intermediate_size, int64_t context_cap,
                                             int64_t context_length_start,
                                             const SslmTensorManifest& rope_tables,
-                                            uint8_t* workspace, size_t workspace_size,
+                                            const KvPageView& view,
                                             bool option_g_fused_k_landing,
                                             uint64_t* kv_saturation_count,
                                             std::string_view site_prefix,
@@ -2939,29 +3040,32 @@ static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk
 	const size_t kv_hidden_size = num_key_value_heads * head_dim;
 	// RunLayerLoopImpl's own `kv_bytes_needed` derivation (S3.7/§9.4), restated here for the
 	// identical reason the guards above are: this path validates the shared K/V workspace once,
-	// up front, rather than `chunk_tokens` times.
-	if (workspace == nullptr) return SslmForwardStatus::WorkspaceTooSmall;
+	// up front, rather than `chunk_tokens` times. Paged-KV plan §3.2 item 2: guard 5's view
+	// meaning, in this path's own order (null first) -- the per-page product against the view's
+	// `page_bytes`; for the one-page view exactly the flat product against `workspace_size`.
+	if (view.pool_base == nullptr || view.page_table == nullptr) return SslmForwardStatus::WorkspaceTooSmall;
+	if (view.page_positions < 1) return SslmForwardStatus::InvalidContextCap;
 	size_t kv_bytes_needed = static_cast<size_t>(num_hidden_layers);
-	const size_t kv_factors[] = {static_cast<size_t>(context_cap), num_key_value_heads, head_dim, 2u};
+	const size_t kv_factors[] = {static_cast<size_t>(view.page_positions), num_key_value_heads, head_dim, 2u};
 	for (size_t factor : kv_factors) {
 		if (factor != 0 && kv_bytes_needed > SIZE_MAX / factor) {
 			return SslmForwardStatus::InvalidContextCap;
 		}
 		kv_bytes_needed *= factor;
 	}
-	if (workspace_size < kv_bytes_needed) return SslmForwardStatus::WorkspaceTooSmall;
+	if (view.page_bytes < kv_bytes_needed) return SslmForwardStatus::WorkspaceTooSmall;
 	// Paged-KV plan §3.2 item 4, the coverage guard: the view must map every row this chunk
 	// writes, `context_length_start + chunk_tokens <= mapped_pages * page_positions`, checked as
-	// the last guard before the first write. The flat workspace is a one-page view, where the
-	// KvCapacityExhausted check above already implies this one.
-	{
-		const int64_t mapped_pages = 1;
-		const int64_t page_positions = context_cap;
-		if (context_length_start + static_cast<int64_t>(chunk_tokens) >
-		    mapped_pages * page_positions) {
-			return SslmForwardStatus::KvPageUnmapped;
-		}
+	// the last guard before the first write -- evaluated as "the last written row's logical page
+	// is mapped" (no product to overflow; the last position is below `context_cap`, above). The
+	// flat workspace is a one-page view, where the KvCapacityExhausted check above already implies
+	// this one.
+	if (static_cast<uint64_t>(context_length_start + static_cast<int64_t>(chunk_tokens) - 1) /
+	        static_cast<uint64_t>(view.page_positions) >=
+	    view.mapped_pages) {
+		return SslmForwardStatus::KvPageUnmapped;
 	}
+	const size_t page_positions = static_cast<size_t>(view.page_positions);
 
 	std::vector<int8_t> normed(chunk_tokens * hidden_size);
 	std::vector<CarriedScale> normed_scale(chunk_tokens);
@@ -3041,7 +3145,7 @@ static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk
 			st = LandTokenKVRow(kacc_all.data() + t * kv_hidden_size, vacc_all.data() + t * kv_hidden_size,
 			                    normed.data() + t * hidden_size, normed_scale[t], lw, hidden_size,
 			                    kv_hidden_size, num_key_value_heads, head_dim, l, position,
-			                    context_cap, rope_tables, workspace, option_g_fused_k_landing,
+			                    context_cap, rope_tables, view, option_g_fused_k_landing,
 			                    kv_saturation_count, out_kv_landing_saturation_count);
 			if (st != SslmForwardStatus::Ok) return st;
 
@@ -3056,7 +3160,7 @@ static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk
 			std::vector<CarriedScale> q_scales_h(num_heads, q_scale[t]);
 			if (!option_g_fused_k_landing) {
 				st = ApplyQkNormSite(q_codes.data() + t * effective_q_width, q_scales_h.data(),
-				                     workspace, rope_tables, l, context_cap, position, num_heads,
+				                     view, rope_tables, l, context_cap, position, num_heads,
 				                     num_key_value_heads, head_dim, lw, site_prefix, t,
 				                     trace_hook_state, kv_saturation_count,
 				                     out_k_channel_landing_saturation_count);
@@ -3077,8 +3181,8 @@ static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk
 				if (st != SslmForwardStatus::Ok) return st;
 				if (option_g_fused_k_landing || direct_qk) continue;
 				const size_t kv_head = h / group;
-				const int8_t* const k_row_before_rotate = KeyRow(
-				    workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, position);
+				const int8_t* const k_row_before_rotate =
+				    KeyRow(view, l, num_key_value_heads, head_dim, kv_head, position);
 				// (T-2577, D-SLM6281): the batched sibling of RunLayerLoopImpl's own identical
 				// fix -- see that call site's comment for the full rationale. Count only on the
 				// first query head of this KV head's own group.
@@ -3092,9 +3196,8 @@ static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk
 			if (!option_g_fused_k_landing && !direct_qk) {
 				for (size_t h = 0; h < num_heads; ++h) {
 					const size_t kv_head = h / group;
-					int8_t* const k_row = MutableKeyRow(workspace, l, context_cap,
-					                                    num_key_value_heads, head_dim, kv_head,
-					                                    position);
+					int8_t* const k_row =
+					    MutableKeyRow(view, l, num_key_value_heads, head_dim, kv_head, position);
 					for (size_t d = 0; d < head_dim; ++d) k_row[d] = k_rot[h * head_dim + d];
 				}
 			}
@@ -3142,24 +3245,35 @@ static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk
 					st = CheckSoftmaxRowWidthDomain(derived_q_b, derived_q_c, width);
 					if (st != SslmForwardStatus::Ok) return st;
 
-					const int8_t* const k_rows_base =
-					    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
-					if (direct_qk) {
-						// Slice S5 (§4.5): one score-row call per query head, in place of the per-key loop.
-						const int64_t* ratio = lw.k_channel_ratio + kv_head * head_dim;
-						QkQ31ScoreRow(q_rot.data() + h * head_dim, k_rows_base, ratio, head_dim, width,
-						              scores.data());
-					} else {
-						GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_rows_base, head_dim, width,
-						                      scores.data());
+					// Paged-KV plan §3.2 item 3: the score row one page run at a time --
+					// RunLayerLoopImpl's own identical loop (see its comment).
+					for (size_t p0 = 0; p0 < width; p0 += page_positions) {
+						const size_t rows = std::min(page_positions, width - p0);
+						const int8_t* const k_rows_base = KeyRow(view, l, num_key_value_heads, head_dim, kv_head,
+						                                         static_cast<int64_t>(p0));
+						if (direct_qk) {
+							// Slice S5 (§4.5): one score-row call per query head (per page run), in place of
+							// the per-key loop.
+							const int64_t* ratio = lw.k_channel_ratio + kv_head * head_dim;
+							QkQ31ScoreRow(q_rot.data() + h * head_dim, k_rows_base, ratio, head_dim, rows,
+							              scores.data() + p0);
+						} else {
+							GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_rows_base, head_dim, rows,
+							                      scores.data() + p0);
+						}
 					}
 					if (!SoftmaxRowQ15(scores.data(), width, derived_q_ln2, derived_q_b,
 					                   derived_q_c, probs.data())) {
 						return SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted;
 					}
-					const int8_t* const v_rows_base =
-					    ValueRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
-					GemmProbQ15Accumulate(probs.data(), v_rows_base, width, head_dim, ctx_acc.data());
+					// Paged-KV plan §3.2 item 3: the context accumulate per page run into
+					// `ctx_acc` (value-initialized above, never re-zeroed between runs).
+					for (size_t p0 = 0; p0 < width; p0 += page_positions) {
+						const size_t rows = std::min(page_positions, width - p0);
+						const int8_t* const v_rows_base = ValueRow(view, l, num_key_value_heads, head_dim,
+						                                           kv_head, static_cast<int64_t>(p0));
+						GemmProbQ15AccumulateInto(probs.data() + p0, v_rows_base, rows, head_dim, ctx_acc.data());
+					}
 					for (size_t d = 0; d < head_dim; ++d) {
 						ctx_wide[h * head_dim + d] = ApplyWeightScaleFold(
 						    ctx_acc[d], lw.ctx_fold_identity[h], lw.ctx_fold_mult[h],
@@ -3291,7 +3405,8 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 	return RunLayerLoopChunkBatchedImpl(
 	    hidden_codes_chunk, hidden_scales, chunk_tokens, layers, num_hidden_layers, hidden_size,
 	    head_dim, num_key_value_heads, intermediate_size, context_cap, context_length_start,
-	    rope_tables, workspace, workspace_size, option_g_fused_k_landing, kv_saturation_count,
+	    rope_tables, OnePageView(workspace, workspace_size, context_cap), option_g_fused_k_landing,
+	    kv_saturation_count,
 	    site_prefix, trace_hook_state, q_width, out_kv_landing_saturation_count,
 	    out_k_channel_landing_saturation_count, out_rope_q_saturation_count,
 	    out_rope_k_saturation_count, GemmThreading{});
@@ -3319,10 +3434,33 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 	return RunLayerLoopChunkBatchedImpl(
 	    hidden_codes_chunk, hidden_scales, chunk_tokens, layers, num_hidden_layers, hidden_size,
 	    head_dim, num_key_value_heads, intermediate_size, context_cap, context_length_start,
-	    rope_tables, workspace, workspace_size, option_g_fused_k_landing, kv_saturation_count,
+	    rope_tables, OnePageView(workspace, workspace_size, context_cap), option_g_fused_k_landing,
+	    kv_saturation_count,
 	    site_prefix, trace_hook_state, q_width, out_kv_landing_saturation_count,
 	    out_k_channel_landing_saturation_count, out_rope_q_saturation_count,
 	    out_rope_k_saturation_count, threading);
+}
+
+// Paged-KV plan (rev 16.1) §3.2 item 2: the page-view overload (forward_sites.h). Both flat
+// overloads above are this function's body over the one-page view.
+SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
+                                           size_t chunk_tokens, const LayerWeights* layers,
+                                           uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim,
+                                           size_t num_key_value_heads, size_t intermediate_size,
+                                           int64_t context_cap, int64_t context_length_start,
+                                           const SslmTensorManifest& rope_tables, const KvPageView& view,
+                                           bool option_g_fused_k_landing, uint64_t* kv_saturation_count,
+                                           std::string_view site_prefix, SslmTraceHookState* trace_hook_state,
+                                           size_t q_width, uint64_t* out_kv_landing_saturation_count,
+                                           uint64_t* out_k_channel_landing_saturation_count,
+                                           uint64_t* out_rope_q_saturation_count,
+                                           uint64_t* out_rope_k_saturation_count, const GemmThreading& threading) {
+	return RunLayerLoopChunkBatchedImpl(
+	    hidden_codes_chunk, hidden_scales, chunk_tokens, layers, num_hidden_layers, hidden_size,
+	    head_dim, num_key_value_heads, intermediate_size, context_cap, context_length_start,
+	    rope_tables, view, option_g_fused_k_landing, kv_saturation_count, site_prefix, trace_hook_state,
+	    q_width, out_kv_landing_saturation_count, out_k_channel_landing_saturation_count,
+	    out_rope_q_saturation_count, out_rope_k_saturation_count, threading);
 }
 
 // Master plan §6.4 steps 14-15's real two-step composition (T-1389; built

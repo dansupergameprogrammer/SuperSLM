@@ -219,6 +219,17 @@ int DetectBestDotRowTierForCpu();
 void GemmProbQ15Accumulate(const int64_t* probs, const int8_t* values, size_t width,
                             size_t head_dim, int64_t* out_ctx);
 
+// Paged-KV plan §3.2 item 3: GemmProbQ15Accumulate without the zeroing -- `out_ctx[d] += Sum_k
+// probs[k] * values[k*head_dim + d]`, through the same tiered accumulate-into core (the same SIMD
+// guard and bodies, the same scalar loop), so every tier's result is bit-identical to the one-call
+// form's. Per-page attention zeroes `out_ctx` once and then calls this once per page run (the
+// values of one page run are contiguous; consecutive runs are not). Exactness of the chain: the
+// same int64 terms are summed, integer addition is associative, and the bound above is
+// width-independent, so no intermediate overflows (cell 6.2). Same caller-ensures contract as
+// GemmProbQ15Accumulate.
+void GemmProbQ15AccumulateInto(const int64_t* probs, const int8_t* values, size_t width,
+                               size_t head_dim, int64_t* out_ctx);
+
 }  // namespace superslm
 
 #endif  // SUPERSLM_MATMUL_H

@@ -1117,6 +1117,28 @@ struct GemmThreading {
 	const sslm_parallel_for* batched = nullptr;
 };
 
+// Paged-KV plan (rev 16.1) §3.1/§3.2 item 1: a K/V page view. The K/V store is `mapped_pages`
+// logical pages of `page_positions` (B) positions each; logical page `i` is the physical page
+// `page_table[i]` of the pool at `pool_base`, `page_bytes` apart. Page layout
+// `[layer][K|V][kv_head][pos_in_page][d]` (int8 K/V), so the row of (layer, half, kv_head, pos) is at
+//   pool_base + page_table[pos / B] * page_bytes
+//             + ((layer * 2 + half) * num_kv_heads + kv_head) * B * head_dim + (pos % B) * head_dim.
+// The flat workspace is the one-page view: `pool_base = workspace`, `page_table = {0}`,
+// `mapped_pages = 1`, `page_positions = context_cap`, `page_bytes = workspace_size` -- the formula
+// then reduces to the flat accessors' own (§3.1's one-page identity), and the flat overloads of the
+// layer loops are thin wrappers that build exactly that view. `page_bytes` is used only as the
+// stride between pages, so a one-entry table never reads it for addressing; the layer loops check it
+// against the per-page product `L * 2 * H_kv * B * D` (guard 5's view meaning). Every pointer is the
+// caller's; the view owns nothing.
+#define SUPERSLM_HAS_KV_PAGE_VIEW 1
+struct KvPageView {
+	uint8_t* pool_base;
+	const uint32_t* page_table;
+	uint32_t mapped_pages;
+	int64_t page_positions;
+	size_t page_bytes;
+};
+
 // The threaded overloads of the two layer loops (§3.4): the same parameters as the overloads
 // above, all of them explicit, plus a trailing `threading` with no default. New overloads rather
 // than defaulted parameters, so the existing exported symbols keep their mangled names and forward
@@ -1165,6 +1187,38 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
                                             uint64_t* out_rope_q_saturation_count,
                                             uint64_t* out_rope_k_saturation_count,
                                             const GemmThreading& threading);
+
+// Paged-KV plan (rev 16.1) §3.2 item 2: the page-view overloads of the two layer loops -- the
+// threaded overloads above with `(workspace, workspace_size)` replaced by `const KvPageView&`, every
+// parameter explicit. Every flat overload above is a thin wrapper over these that builds the
+// one-page view (KvPageView, above), so a flat call's statuses, their order and its bytes are
+// unchanged. Guard 5 takes the view meaning: an overflow of the per-page product
+// `num_hidden_layers * 2 * num_key_value_heads * page_positions * head_dim` (or `page_positions <
+// 1`) is `InvalidContextCap`; a null `pool_base` or `page_table`, or a `page_bytes` below the per-page
+// product, is `WorkspaceTooSmall`. The coverage guard (§3.2 item 4), the last guard before the first
+// write, requires the view to map every row the call writes -- `context_length + 1 <= mapped_pages *
+// page_positions`, and for the chunk `context_length_start + chunk_tokens <= mapped_pages *
+// page_positions` -- else `KvPageUnmapped`. Attention reads the K/V rows one page run at a time
+// (§3.2 item 3); for the one-page view that is one run of the whole width, the call made before.
+SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers, uint32_t num_hidden_layers,
+                               uint32_t layer_budget, size_t hidden_size, size_t head_dim,
+                               size_t num_key_value_heads, size_t intermediate_size, int64_t context_cap,
+                               const SslmTensorManifest& rope_tables, const KvPageView& view,
+                               OptionGKLandingMode option_g_k_landing_mode, std::string_view site_prefix,
+                               size_t token_index, SslmTraceHookState* trace_hook_state, size_t q_width,
+                               const GemmThreading& threading);
+SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
+                                           size_t chunk_tokens, const LayerWeights* layers,
+                                           uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim,
+                                           size_t num_key_value_heads, size_t intermediate_size,
+                                           int64_t context_cap, int64_t context_length_start,
+                                           const SslmTensorManifest& rope_tables, const KvPageView& view,
+                                           bool option_g_fused_k_landing, uint64_t* kv_saturation_count,
+                                           std::string_view site_prefix, SslmTraceHookState* trace_hook_state,
+                                           size_t q_width, uint64_t* out_kv_landing_saturation_count,
+                                           uint64_t* out_k_channel_landing_saturation_count,
+                                           uint64_t* out_rope_q_saturation_count,
+                                           uint64_t* out_rope_k_saturation_count, const GemmThreading& threading);
 
 // (design Sec31.2's own "int64-input, __int128-intermediate sibling of
 // the RoPE pair primitive, Q2.30 tables unchanged" -- Sec12 "Wide-RoPE
@@ -1233,6 +1287,20 @@ int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
                          size_t num_kv_heads, size_t head_dim, size_t kv_head,
                          int64_t position) noexcept;
 
+// Paged-KV plan (rev 16.1) §3.2 item 1: the page-view accessors -- the same four rows, addressed
+// through a KvPageView by §3.1's formula (KvPageView's comment, above). For the one-page view each
+// returns exactly the flat accessor's address. No bounds checking, as for the flat accessors:
+// `position < mapped_pages * page_positions` and `kv_head < num_kv_heads` are the caller's, as the
+// layer loops' guards establish before any accessor call they make.
+const int8_t* KeyRow(const KvPageView& view, uint32_t layer, size_t num_kv_heads, size_t head_dim,
+                     size_t kv_head, int64_t position) noexcept;
+const int8_t* ValueRow(const KvPageView& view, uint32_t layer, size_t num_kv_heads, size_t head_dim,
+                       size_t kv_head, int64_t position) noexcept;
+int8_t* MutableKeyRow(const KvPageView& view, uint32_t layer, size_t num_kv_heads, size_t head_dim,
+                      size_t kv_head, int64_t position) noexcept;
+int8_t* MutableValueRow(const KvPageView& view, uint32_t layer, size_t num_kv_heads, size_t head_dim,
+                        size_t kv_head, int64_t position) noexcept;
+
 // (design §2.2/§3/§4/§6 Track B steps 1/2): the per-head QK-norm forward call site, shared by
 // both `RunLayerLoopImpl` (the single-token path) and `RunLayerLoopChunkBatched` (the
 // chunk-batched path) -- one function, called once per (layer, token), so the composition is
@@ -1297,6 +1365,18 @@ SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, uint8
                                    size_t token_index, SslmTraceHookState* trace_hook_state,
                                    uint64_t* out_saturation_count = nullptr,
                                    uint64_t* out_k_channel_landing_saturation_count = nullptr);
+
+// Paged-KV plan (rev 16.1) §3.2 item 6: the page-view overload. The K branch reads and writes the
+// just-landed row at `position` through the view accessors; everything else is the flat overload's
+// contract, above, which is now a thin wrapper building the one-page view over `workspace`
+// (`page_table = {0}`, `page_positions = context_cap`), so its test callers are unchanged.
+SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales, const KvPageView& view,
+                                  const SslmTensorManifest& rope_tables, uint32_t layer, int64_t context_cap,
+                                  int64_t position, size_t num_heads, size_t num_key_value_heads,
+                                  size_t head_dim, const LayerWeights& lw, std::string_view site_prefix,
+                                  size_t token_index, SslmTraceHookState* trace_hook_state,
+                                  uint64_t* out_saturation_count = nullptr,
+                                  uint64_t* out_k_channel_landing_saturation_count = nullptr);
 
 // Source compatibility for pre-QKC1 unit callers.
 inline SslmForwardStatus ApplyQkNormSite(int8_t* q_codes, CarriedScale* q_scales,
