@@ -1,4 +1,4 @@
-#include "precache_common.h"
+#include "precache_reference.h"
 #include <chrono>
 #include <filesystem>
 #include <sstream>
@@ -6,12 +6,6 @@
 namespace {
 using namespace pc;
 namespace fs=std::filesystem;
-
-std::string Env(const char* name) {
-    const char* p=std::getenv(name);
-    PKV_CHECK_MSG(p && *p,"%s is unset",name);
-    return p ? p : "";
-}
 
 std::vector<int32_t> Ids(const fs::path& path) {
     std::ifstream f(path);
@@ -22,64 +16,6 @@ std::vector<int32_t> Ids(const fs::path& path) {
     PKV_CHECK_MSG(ids.size()>=128,"real prompt %s has %zu IDs, needs >=128",
                   path.string().c_str(),ids.size());
     return ids;
-}
-
-std::string ShaFile(const fs::path& path) {
-    std::vector<uint8_t> b;
-    if(!ReadAll(path.string(),&b)) return {};
-    return Sha(b.data(),b.size());
-}
-
-std::string Field(const std::string& s,const std::string& key) {
-    const std::string pattern=key+"=";
-    const size_t begin=s.find(pattern);
-    if(begin==std::string::npos) return {};
-    const size_t value=begin+pattern.size();
-    return s.substr(value,s.find_first_of(" \t\r\n",value)-value);
-}
-
-// The sole reference-reading path for E2-E4 cells. T-3035 supplies the population;
-// a commissioning receipt and the ctest-time merge-base fixture license it.
-std::vector<int32_t> Reference(const std::string& group,const std::string& stem,
-                               const fs::path& ids,int adopter,const char* mode) {
-    const auto dir=Env("SUPERSLM_PRECACHE_REFERENCE_DIR");
-    const auto merge_file=Env("SUPERSLM_PRECACHE_MERGE_BASE_FILE");
-    const auto license_file=Env("SUPERSLM_PRECACHE_DISCRIMINATION_RECEIPT");
-    if(dir.empty() || merge_file.empty() || license_file.empty()) return {};
-    std::ifstream merge(merge_file),license(license_file);
-    std::string anchor,receipt;
-    std::getline(merge,anchor);
-    std::getline(license,receipt);
-    PKV_CHECK_MSG(anchor.size()==40,"reference merge-base fixture missing a full SHA");
-    PKV_CHECK_MSG(receipt.find("COMMISSIONED")!=std::string::npos,
-                  "reference population has no commissioned discrimination receipt");
-    if(anchor.size()!=40 || receipt.find("COMMISSIONED")==std::string::npos) return {};
-    const fs::path base=fs::path(dir)/group/(stem+"-run1.ref");
-    const fs::path twin=fs::path(dir)/group/(stem+"-run2.ref");
-    PKV_CHECK_MSG(ShaFile(base)==ShaFile(twin) && !ShaFile(base).empty(),
-                  "reference runs do not reproduce byte-for-byte: %s",stem.c_str());
-    std::ifstream ref(base);
-    std::string header,line;
-    std::getline(ref,header);
-    PKV_CHECK_MSG(Field(header,"anchor")==anchor,"stale reference %s anchor %s; current %s",
-                  stem.c_str(),Field(header,"anchor").c_str(),anchor.c_str());
-    PKV_CHECK_MSG(Field(header,"prompt_ids_sha256")==ShaFile(ids),
-                  "reference %s IDs SHA differs from the prompt",stem.c_str());
-    PKV_CHECK_MSG(Field(header,"discrimination_record_sha256").size()==64,
-                  "reference %s lacks a discrimination record identity",stem.c_str());
-    if(Field(header,"anchor")!=anchor || Field(header,"prompt_ids_sha256")!=ShaFile(ids)) return {};
-    while(std::getline(ref,line)) {
-        if(Field(line,"adopter")!=std::to_string(adopter) || Field(line,"decode_mode")!=mode) continue;
-        const auto encoded=Field(line,"tokens");
-        std::istringstream in(encoded);
-        std::vector<int32_t> tokens;
-        std::string one;
-        while(std::getline(in,one,',')) tokens.push_back(std::stoi(one));
-        PKV_CHECK_EQ(tokens.size(),64u);
-        return tokens;
-    }
-    PKV_CHECK_MSG(false,"reference %s lacks adopter %d %s",stem.c_str(),adopter,mode);
-    return {};
 }
 
 std::vector<int32_t> DecodeReal(const Fixture& fx,sslm_kv_pool* pool,
@@ -115,6 +51,7 @@ void Real101() {
     ModelFile model(model_path);
     Status(model.status,SSLM_OK,"10.1 real model map");
     if(model.status!=SSLM_OK) return;
+    const auto model_sha=Sha(model.bytes.p,model.size);
     Fixture fx;
     fx.model=model.model; model.model=nullptr;
     fx.geo={24,2,64,32768}; fx.vocab=151936;
@@ -145,11 +82,11 @@ void Real101() {
                           "10.1 missing captured blob %s",name);
             if(b.empty()) return;
             if(!Restored(fx,&pool.pool,b,nullptr,h,&p)) return;
-            for(int a=0;a<4;++a) {
+            for(int a=0;a<5;++a) {
                 const bool budget=(a%2)==0;
-                const char* mode=(a/2)==0 ? "greedy" : "damped";
+                const char* mode=(a<2 || a==4) ? "greedy" : "damped";
                 const auto got=DecodeReal(fx,&pool.pool,p,budget,mode);
-                const auto want=Reference("P1-real0p5-flat",name,input,a,mode);
+                const auto want=Reference("P1-real0p5-flat",name,input,model_sha,a,mode);
                 PKV_CHECK_MSG(got==want && got.size()==64,"10.1 %s adopter %d differs from pinned prefill",name,a);
             }
         }
@@ -235,6 +172,7 @@ void Real102() {
     ModelFile model(model_path);
     Status(model.status,SSLM_OK,"10.2 real model map");
     if(model.status!=SSLM_OK) return;
+    const auto model_sha=Sha(model.bytes.p,model.size);
     Fixture fx;
     fx.model=model.model; model.model=nullptr;
     fx.geo={24,2,64,32768}; fx.vocab=151936;
@@ -288,11 +226,11 @@ void Real102() {
             if(!Restored(fx,&pool.pool,b,world,h,&child,&shared)) return;
             PKV_CHECK_EQ(shared,uint32_t(world_ids.size()/16));
             const auto input=fs::path(prompts)/(std::string(name)+".ids");
-            for(int a=0;a<4;++a) {
+            for(int a=0;a<5;++a) {
                 const bool budget=(a%2)==0;
-                const char* mode=(a/2)==0 ? "greedy" : "damped";
+                const char* mode=(a<2 || a==4) ? "greedy" : "damped";
                 const auto got=DecodeReal(fx,&pool.pool,child,budget,mode);
-                const auto want=Reference("P2-real0p5-nested",name,input,a,mode);
+                const auto want=Reference("P2-real0p5-nested",name,input,model_sha,a,mode);
                 PKV_CHECK_MSG(got==want && got.size()==64,
                               "10.2 %s adopter %d differs from pinned prefill",name,a);
             }
