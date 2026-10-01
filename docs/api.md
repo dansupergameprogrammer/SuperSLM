@@ -774,7 +774,7 @@ reproducible, on the same certified platform, as an unconstrained one.
 
 ### Status causes
 
-`sslm_status` carries one success value (`SSLM_OK`) plus 27 distinct
+`sslm_status` carries one success value (`SSLM_OK`) plus 29 distinct
 rejection causes (an internal sentinel past the last real value is never
 returned or accepted as an argument), in five groups: argument/precondition
 rejections (a bad argument, a buffer too small, a misaligned buffer);

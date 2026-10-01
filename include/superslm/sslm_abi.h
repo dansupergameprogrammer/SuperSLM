@@ -63,7 +63,7 @@ typedef struct sslm_detok_state {
 } sslm_detok_state;
 
 /* status enum -- FULL-REGISTRY MIRROR, design Sec6's own single-authority complete ordinal
- * registry, 29 entries (0-28) plus one auto-valued sentinel (design Sec6 GOVERNANCE RULING,
+ * registry, 30 entries (0-29) plus one auto-valued sentinel (design Sec6 GOVERNANCE RULING,
  * design commit 4f4eb23896; symmetric-mirroring FOLD RULING on the third confirmation pass's F1,
  * design commit dated 2026-08-17).
  *
@@ -80,7 +80,7 @@ typedef struct sslm_detok_state {
  * only which header's enum body carries which NAMES changed.
  *
  * SSLM_STATUS_NEXT_FREE -- the enum's final member, auto-valued (no explicit numeric value:
- * the compiler assigns one past the current final real status, i.e. 29). This is the fold's OTHER
+ * the compiler assigns one past the current final real status, i.e. 30). This is the fold's OTHER
  * ruling: a plain #define "top" macro (SSLM_STATUS_BASE_MAX, retired this fold -- no design
  * record, no consumer beyond one test tool, F1 collateral) cannot move itself
  * when a header appends a new enumerator, so F1's four compiled mutations proved it silently
