@@ -9,7 +9,7 @@ from pathlib import Path
 
 PATTERNS = (
     "screen*.txt", "screen*.json", "core*.txt", "mutant0p5*.txt",
-    "invisible*.txt", "swap*.txt", "walk*/*.walkprobe.txt",
+    "invisible*.txt", "swap*.txt", "row0-*.txt", "walk*/*.walkprobe.txt",
     "schema-smoke/out*/*.ref", "adapter-smoke/out/*.ref",
     "adapter-candidate01/out/*.ref",
 )
