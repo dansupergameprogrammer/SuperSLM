@@ -190,6 +190,7 @@ void Composition(std::ofstream& out, Input& in, Pool& pool, bool damped, const c
     }
 }
 }
+#ifndef T3022_NO_MAIN
 int main(int argc,char** argv) {
     try {
         if(argc<3 || argc>4) throw std::runtime_error("usage: t3022_precache_reference MODEL OUT [ADAPTER]");
@@ -207,3 +208,4 @@ int main(int argc,char** argv) {
         return 0;
     } catch(const std::exception& e) { std::cerr<<"T-3022 reference error: "<<e.what()<<'\n'; return 1; }
 }
+#endif
