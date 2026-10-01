@@ -152,6 +152,7 @@ void CapturePrefix(Input& in, Pool& pool, sslm_prefix prefix, const fs::path& pr
 }
 }
 
+#ifndef T3035_NO_MAIN
 int main(int argc, char** argv) {
     try {
         if (argc != 9 && argc != 10) throw std::runtime_error("usage: t3035_reference MODEL PROMPT_DIR OUT_DIR flat|nested run1|run2 TOKENIZER ID_SUFFIX DISCRIM_DIR [COUNT]");
@@ -206,3 +207,4 @@ int main(int argc, char** argv) {
         return 1;
     }
 }
+#endif
