@@ -3523,6 +3523,74 @@
       "stream_rows": 5
     },
     {
+      "dispositions": 1,
+      "header": {
+        "B": "16",
+        "anchor": "5d5ca58e4b7ac57b40c198ebd1a44ac0a8ba1851",
+        "cap": "4096",
+        "decode_modes_available": "0",
+        "discrimination_record_sha256": "65ab60b31249c989d2d557ecbbf30b6867ed6732c28d10b4aed2d0d52a22003c",
+        "forced_content_id": "4913",
+        "forced_content_ids_sha256": "68c05d7f049e48bfcdb9fa68fb7c6dab6f83c65c05896daa217859f9d4878747",
+        "harness": "201d5613f0ef0e9bd93265ce30b5b2ad4d9d470c",
+        "model_sha256": "6a41f87d3a48c91751b41fe716c4f8289b7ce97761850c3f1f2c53d01201205c",
+        "prompt_id": "flat04",
+        "prompt_ids_sha256": "33f04e17a279c86d1f82d49da17f7b8875202488070f55c716be0f2fa467a9ee",
+        "prompt_source_sha256": "58cb2215e4cde5aa0bb346797361a1c45b226eb2c1e6d8446f900bb094eea5aa",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)"
+      },
+      "mtime_utc": "2026-10-01T22:34:32.774663+00:00",
+      "pair_byte_equal": true,
+      "path": "D:\\_artifacts\\SuperSLM\\t3035-precache-refs\\P4-real0p5-schema-greedy\\schema0-run1.ref",
+      "real_stream_screens": [
+        {
+          "last16_distinct": 6,
+          "periodic_onset": 64
+        },
+        {
+          "last16_distinct": 6,
+          "periodic_onset": 64
+        }
+      ],
+      "sha256": "0201a72267499321791f615ea83a064f2f9c22927f97fcfbe001fb6fc130abcf",
+      "size": 1634,
+      "stream_rows": 2
+    },
+    {
+      "dispositions": 1,
+      "header": {
+        "B": "16",
+        "anchor": "5d5ca58e4b7ac57b40c198ebd1a44ac0a8ba1851",
+        "cap": "4096",
+        "decode_modes_available": "0",
+        "discrimination_record_sha256": "65ab60b31249c989d2d557ecbbf30b6867ed6732c28d10b4aed2d0d52a22003c",
+        "forced_content_id": "4913",
+        "forced_content_ids_sha256": "68c05d7f049e48bfcdb9fa68fb7c6dab6f83c65c05896daa217859f9d4878747",
+        "harness": "201d5613f0ef0e9bd93265ce30b5b2ad4d9d470c",
+        "model_sha256": "6a41f87d3a48c91751b41fe716c4f8289b7ce97761850c3f1f2c53d01201205c",
+        "prompt_id": "flat04",
+        "prompt_ids_sha256": "33f04e17a279c86d1f82d49da17f7b8875202488070f55c716be0f2fa467a9ee",
+        "prompt_source_sha256": "58cb2215e4cde5aa0bb346797361a1c45b226eb2c1e6d8446f900bb094eea5aa",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)"
+      },
+      "mtime_utc": "2026-10-01T22:34:56.163140+00:00",
+      "pair_byte_equal": true,
+      "path": "D:\\_artifacts\\SuperSLM\\t3035-precache-refs\\P4-real0p5-schema-greedy\\schema0-run2.ref",
+      "real_stream_screens": [
+        {
+          "last16_distinct": 6,
+          "periodic_onset": 64
+        },
+        {
+          "last16_distinct": 6,
+          "periodic_onset": 64
+        }
+      ],
+      "sha256": "0201a72267499321791f615ea83a064f2f9c22927f97fcfbe001fb6fc130abcf",
+      "size": 1634,
+      "stream_rows": 2
+    },
+    {
       "dispositions": 2,
       "header": {
         "B": "16",
@@ -9813,9 +9881,9 @@
       "stream_rows": 4
     }
   ],
-  "pairs": 169,
-  "real_late_periodic": 424,
-  "real_streams": 424,
-  "reference_files": 338,
+  "pairs": 170,
+  "real_late_periodic": 428,
+  "real_streams": 428,
+  "reference_files": 340,
   "status": "QUARANTINED"
 }
