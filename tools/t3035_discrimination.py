@@ -117,6 +117,52 @@ def mutation(input_path: Path, output_path: Path, target: Path,
     return 0
 
 
+def summarize(directory: Path) -> int:
+    paths = sorted(directory.glob("*.discrimination.json"))
+    if len(paths) != 10:
+        raise ValueError("a ten-prefix population is required")
+    records = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
+    strata = ("0", "1..B-1", "B-1", "B", "floor(L/2)", "L-B-1", "L-1")
+    counts = {stratum: 0 for stratum in strata}
+    summary = {"prefixes": 10, "M_res_killed": 0,
+               "all_pages_killed": 0, "tail_killed_where_defined": 0,
+               "tail_defined": 0, "row_killed": counts,
+               "M_swap_killed": 0, "M_swap_measured": 0,
+               "thresholds_met": False,
+               "source_limits": ["M-swap is a K/V pair permutation",
+                                 "system-first chat makes M-row(0) donor-identical",
+                                 "commissioning constructions are unauthored"]}
+    for record in records:
+        rows = {row["mutant"]: row for row in record["mutants"]}
+        length, page = record["length"], record["page_positions"]
+        if rows.get("M-res", {}).get("killed"):
+            summary["M_res_killed"] += 1
+        for name, position in zip(strata,
+                                  (0, 1, page-1, page, length//2,
+                                   length-page-1, length-1)):
+            if rows.get(f"M-row({position})", {}).get("killed"):
+                counts[name] += 1
+        pages = [row for row in record["mutants"] if row["mutant"].startswith("M-page")]
+        if len(pages) == 3 and all(row["killed"] for row in pages):
+            summary["all_pages_killed"] += 1
+        if length % page:
+            summary["tail_defined"] += 1
+            if rows.get("M-tail", {}).get("killed"):
+                summary["tail_killed_where_defined"] += 1
+        swaps = [row for row in record["mutants"] if row["mutant"].startswith("M-swap")]
+        if swaps:
+            summary["M_swap_measured"] += 1
+            summary["M_swap_killed"] += int(swaps[0]["killed"])
+    summary["required"] = {"M_res": "10/10 in at least one decode mode",
+                           "each_row_stratum": "8/10, and B-1, B, L-1 each 10/10",
+                           "pages": "10/10", "tail": "all defined",
+                           "swap": "10/10"}
+    for path, record in zip(paths, records):
+        record["population_summary"] = summary
+        path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -129,11 +175,15 @@ def main() -> int:
     command.add_argument("target", type=Path)
     command.add_argument("donor", type=Path)
     command.add_argument("--screen", type=Path)
+    command = sub.add_parser("summarize")
+    command.add_argument("directory", type=Path)
     args = parser.parse_args()
     if args.command == "screen":
         return screen(args.input, args.output)
     if args.command == "mutation":
         return mutation(args.input, args.output, args.target, args.donor, args.screen)
+    if args.command == "summarize":
+        return summarize(args.directory)
     raise AssertionError(args.command)
 
 

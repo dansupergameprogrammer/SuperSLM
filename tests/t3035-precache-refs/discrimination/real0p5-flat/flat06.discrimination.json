@@ -1,0 +1,213 @@
+{
+  "decode_mode": "greedy",
+  "donor_ids_sha256": "a3f5c298909e6710a267002ae6357c286c57f135f12cadf603fa4c72dd5a1671",
+  "donor_prompt_id": "donor",
+  "instrument": "T-3035-precache-discrimination",
+  "length": 1208,
+  "mutants": [
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 0,
+      "killed": true,
+      "mutant": "M-res",
+      "observed_tokens": 1
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": -1,
+      "killed": false,
+      "mutant": "M-row(0)",
+      "observed_tokens": 64
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": -1,
+      "killed": false,
+      "mutant": "M-row(1)",
+      "observed_tokens": 64
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 38,
+      "killed": true,
+      "mutant": "M-row(15)",
+      "observed_tokens": 39
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 27,
+      "killed": true,
+      "mutant": "M-row(16)",
+      "observed_tokens": 28
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 37,
+      "killed": true,
+      "mutant": "M-row(604)",
+      "observed_tokens": 38
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 37,
+      "killed": true,
+      "mutant": "M-row(1191)",
+      "observed_tokens": 38
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 45,
+      "killed": true,
+      "mutant": "M-row(1207)",
+      "observed_tokens": 46
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 38,
+      "killed": true,
+      "mutant": "M-page(0)",
+      "observed_tokens": 39
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 37,
+      "killed": true,
+      "mutant": "M-page(37)",
+      "observed_tokens": 38
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 37,
+      "killed": true,
+      "mutant": "M-page(74)",
+      "observed_tokens": 38
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 45,
+      "killed": true,
+      "mutant": "M-tail",
+      "observed_tokens": 46
+    }
+  ],
+  "page_positions": 16,
+  "population_adequate": false,
+  "population_summary": {
+    "M_res_killed": 10,
+    "M_swap_killed": 0,
+    "M_swap_measured": 1,
+    "all_pages_killed": 5,
+    "prefixes": 10,
+    "required": {
+      "M_res": "10/10 in at least one decode mode",
+      "each_row_stratum": "8/10, and B-1, B, L-1 each 10/10",
+      "pages": "10/10",
+      "swap": "10/10",
+      "tail": "all defined"
+    },
+    "row_killed": {
+      "0": 0,
+      "1..B-1": 0,
+      "B": 8,
+      "B-1": 9,
+      "L-1": 6,
+      "L-B-1": 8,
+      "floor(L/2)": 6
+    },
+    "source_limits": [
+      "M-swap is a K/V pair permutation",
+      "system-first chat makes M-row(0) donor-identical",
+      "commissioning constructions are unauthored"
+    ],
+    "tail_defined": 9,
+    "tail_killed_where_defined": 8,
+    "thresholds_met": false
+  },
+  "probe_sha256": "d93a297de12a784b66317979287f884968a25b0e3ff90e8aa3360160fd435601",
+  "reason": "M-swap and system-first M-row(0) source contradictions; commissioning unauthored",
+  "screen": {
+    "eos_index": -1,
+    "last16_distinct": 15,
+    "length": 1208,
+    "mode": "greedy",
+    "pass": true,
+    "periodic_onset": 64,
+    "prompt": "D:\\SuperSLM\\.worktrees\\T-3035\\tests\\t3035-precache-refs\\prompts\\flat06.ids",
+    "tokens": 64
+  },
+  "status": "QUARANTINED",
+  "target_ids_sha256": "2491afa8e2fb55fd6a0344fafb7fbad0fb6df2212ee16e6cd4322032b52fcfee",
+  "target_prompt_id": "flat06",
+  "threshold_observation": {
+    "M_res_killed": true,
+    "M_swap_killed": null,
+    "every_page_killed": true,
+    "tail_killed": true
+  },
+  "unedited_roundtrip_tokens": [
+    6471,
+    220,
+    15,
+    15,
+    15,
+    25,
+    1973,
+    730,
+    12,
+    21,
+    16,
+    19,
+    17,
+    24,
+    5780,
+    553,
+    74517,
+    2521,
+    258,
+    24242,
+    276,
+    26,
+    1181,
+    1509,
+    374,
+    14961,
+    4516,
+    624,
+    6471,
+    220,
+    15,
+    15,
+    16,
+    25,
+    1973,
+    730,
+    12,
+    17,
+    18,
+    17,
+    18,
+    19,
+    5780,
+    553,
+    74517,
+    431,
+    2210,
+    619,
+    60865,
+    26,
+    1181,
+    1509,
+    374,
+    6303,
+    73165,
+    624,
+    6471,
+    220,
+    15,
+    15,
+    17,
+    25,
+    1973,
+    730
+  ]
+}
