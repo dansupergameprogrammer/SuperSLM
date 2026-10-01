@@ -58,6 +58,13 @@ void Schema67() {
         Status(sslm_prefix_freeze(p),SSLM_OK,"6.7 freeze");
         const auto b=Save(p);
         if(!RequireBlob(b,"6.7")) return;
+        auto hostile_walk=b;
+        PutLe32(hostile_walk,104,UINT32_MAX);
+        Digest(hostile_walk);
+        sslm_prefix refused=nullptr;
+        Status(Restore(fx,&pool.pool,hostile_walk,nullptr,&refused),
+               SSLM_RESTORE_SCHEMA_MISMATCH,"2.3 bound walk outside DFA");
+        PKV_CHECK(refused==nullptr);
         sslm_prefix copy=nullptr;
         if(Restored(fx,&pool.pool,b,nullptr,h,&copy)) {
             PKV_CHECK_MSG(Save(copy)==b,"6.7 schema binding or walk changed on restore");

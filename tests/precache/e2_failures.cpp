@@ -81,15 +81,44 @@ void EmptyPool56() {
     sslm_seq extra=nullptr;
     Status(sslm_seq_create_budgeted(fx.model,&pool.pool,16,&extra),
            SSLM_KV_POOL_EXHAUSTED,"5.6 confirms zero free");
-    auto corrupted=good;
-    corrupted.back()^=1;
+    struct Fault {const char* name; size_t offset; uint64_t value; bool wide;
+                  bool rehash; sslm_status want;};
+    const std::vector<Fault> faults={
+        {"magic",0,'Z',false,false,SSLM_INVALID_ARGUMENT},
+        {"digest",28,1,false,false,SSLM_INVALID_ARGUMENT},
+        {"backend",4,1,false,true,SSLM_INVALID_ARGUMENT},
+        {"producer",8,0xffffffffu,false,true,PC_RESTORE_PRODUCER_MISMATCH},
+        {"model hash",60,uint64_t(good[60]^1),false,true,SSLM_RESTORE_MODEL_MISMATCH},
+        {"precision",92,0xffffffffu,false,true,SSLM_RESTORE_KV_MISMATCH},
+        {"schema",96,1,true,true,SSLM_RESTORE_SCHEMA_MISMATCH},
+        {"L",112,4097,true,true,SSLM_INVALID_ARGUMENT},
+        {"origin",120,2,true,true,SSLM_INVALID_ARGUMENT},
+        {"current token",108,0xffffffffu,false,true,SSLM_INVALID_ARGUMENT},
+        {"mantissa",128,uint64_t(INT32_MAX)+1,true,true,SSLM_INVALID_ARGUMENT},
+    };
+    for(const auto& fault:faults) {
+        auto corrupted=good;
+        if(fault.offset==0) corrupted[0]=uint8_t(fault.value);
+        else if(fault.offset==28) corrupted[28]^=1;
+        else if(fault.wide) PutLe64(corrupted,fault.offset,fault.value);
+        else PutLe32(corrupted,fault.offset,uint32_t(fault.value));
+        if(fault.rehash) Digest(corrupted);
+        sslm_pc_test_only_restore_fault_arm(3,0);
+        sslm_prefix out=nullptr;
+        Status(Restore(fx,&pool.pool,corrupted,nullptr,&out),fault.want,
+               "5.6 validation precedes draw");
+        PKV_CHECK_MSG(out==nullptr,"5.6 %s produced a handle",fault.name);
+        PKV_CHECK_MSG(sslm_pc_test_only_restore_fault_read(nullptr,nullptr,nullptr,nullptr)==0,
+                      "5.6 %s reached allocation slot before validation",fault.name);
+        sslm_pc_test_only_restore_fault_disarm();
+    }
     sslm_pc_test_only_restore_fault_arm(3,0);
-    sslm_prefix out=nullptr;
-    Status(Restore(fx,&pool.pool,corrupted,nullptr,&out),SSLM_INVALID_ARGUMENT,
-           "5.6 validation precedes draw");
-    PKV_CHECK(out==nullptr);
+    sslm_prefix short_out=nullptr;
+    Status(sslm_prefix_restore(fx.model,&pool.pool,good.data(),183,nullptr,&short_out,nullptr),
+           SSLM_INVALID_ARGUMENT,"5.6 short header before draw");
+    PKV_CHECK(short_out==nullptr);
     PKV_CHECK_MSG(sslm_pc_test_only_restore_fault_read(nullptr,nullptr,nullptr,nullptr)==0,
-                  "5.6 allocation slot fired before validation");
+                  "5.6 short header reached allocation slot");
     sslm_pc_test_only_restore_fault_disarm();
     for(auto s:held) sslm_seq_release(s);
 }
@@ -200,6 +229,23 @@ void FrozenDisposition811() {
         Status(sslm_prefix_prefill(fx.model,p,&token,1,1,SSLM_SPAN_PROMPT,nullptr,&consumed),
                SSLM_PREFIX_FROZEN_REJECTED,"8.11 frozen prefill");
     }
+    sslm_prefix empty=Root(fx,&pool.pool,sc.h,0);
+    if(!empty) return;
+    const auto empty_blob=Save(empty);
+    if(!RequireBlob(empty_blob,"8.11 empty")) return;
+    sslm_prefix empty_copy=nullptr;
+    if(!Restored(fx,&pool.pool,empty_blob,nullptr,sc.h,&empty_copy)) return;
+    sslm_schema schema=nullptr;
+    Status(sslm_schema_lookup(fx.model,"g5_minimal_one_field",&schema),SSLM_OK,
+           "8.11 schema lookup");
+    if(schema)
+        for(auto p : {empty,empty_copy})
+            Status(sslm_prefix_set_schema(p,schema),SSLM_OK,
+                   "8.11 set schema on empty frozen prefix");
+    for(auto p : {original,restored,empty,empty_copy})
+        Status(ReleasePrefix(sc.h,p),SSLM_OK,"8.11 release frozen prefix");
+    Status(sslm_kv_pool_destroy(pool.pool),SSLM_OK,"8.11 destroy drained pool");
+    pool.pool=nullptr;
 }
 PKV_CELL("8.11/E2", "E1", FrozenDisposition811);
 }

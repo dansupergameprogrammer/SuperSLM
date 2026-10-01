@@ -8,6 +8,10 @@ target_include_directories(superslm_precache_e1 PRIVATE include src tests tests/
 target_compile_definitions(superslm_precache_e1 PRIVATE
     PKV_REFERENCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/paged-kv/reference")
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+target_compile_definitions(superslm_precache_e1 PRIVATE
+    PC_PYTHON_PATH="${Python3_EXECUTABLE}"
+    PC_CMAKE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt"
+    PC_FORMAT_SCRIPT_PATH="${PC_DIR}/check_spx1.py")
 add_test(NAME superslm_precache_version_header
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/ci/check_version_header.py)
 if(MSVC)

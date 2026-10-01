@@ -69,6 +69,52 @@ void InDomain23b() {
         if(Restored(fx,&pool.pool,b,nullptr,h,&edited))
             TwinTokens(fx,&pool.pool,unedited,edited,16); // T-3024 F6.
      }
+    auto bounded=[&](std::vector<uint8_t> b,const char* field) {
+        Digest(b);
+        sslm_prefix edited=nullptr;
+        const auto st=Restore(fx,&pool.pool,b,nullptr,&edited);
+        PKV_CHECK_MSG(int(st)>=0 && int(st)<int(SSLM_STATUS_NEXT_FREE),
+                      "2.3b %s returned an unnamed status %d",field,int(st));
+        if(st!=SSLM_OK) {
+            PKV_CHECK_MSG(edited==nullptr,"2.3b %s refusal left a handle",field);
+            return;
+        }
+        PKV_CHECK_MSG(edited && edited!=OutSentinel<sslm_prefix>(),
+                      "2.3b %s accepted without a handle",field);
+        if(!edited || edited==OutSentinel<sslm_prefix>()) return;
+        sslm_seq seq=nullptr;
+        Status(sslm_seq_create_budgeted(fx.model,&pool.pool,32,&seq),SSLM_OK,
+               "2.3b adopter create");
+        if(seq) {
+            Status(sslm_seq_adopt_prefix(seq,edited),SSLM_OK,"2.3b adopter adopt");
+            std::vector<int32_t> tokens;
+            const auto forward=DecodeN(fx.model,seq,16,&tokens);
+            PKV_CHECK_MSG(int(forward)>=0 && int(forward)<int(SSLM_STATUS_NEXT_FREE),
+                          "2.3b %s forward status is unnamed",field);
+            PKV_CHECK_MSG(forward!=SSLM_OK || tokens.size()==16,
+                          "2.3b %s forward stopped without a status",field);
+            sslm_seq_release(seq);
+        }
+        sslm_prefix_release(edited);
+    };
+    for(size_t i=0;i<5;++i)
+        for(uint64_t count : {uint64_t(0),UINT64_MAX}) {
+            auto b=good;
+            PutLe64(b,144+i*8,count);
+            bounded(std::move(b),"saturation count");
+        }
+    for(size_t offset : {kHeader,kHeader+HiddenSize(fx)-1,
+                         kHeader+HiddenSize(fx),good.size()-1})
+        for(uint8_t value : {uint8_t(0x80),uint8_t(0x7f)}) {
+            auto b=good;
+            b[offset]=value;
+            bounded(std::move(b),"residual or K/V byte");
+        }
+    for(uint32_t token : {uint32_t(0),uint32_t(fx.vocab-1)}) {
+        auto b=good;
+        PutLe32(b,108,token);
+        bounded(std::move(b),"current_token");
+    }
 }
 PKV_CELL("2.3b/E2", "E1", InDomain23b);
 
@@ -130,6 +176,8 @@ void Concurrent31() {
     if(!immutable) return;
     const auto expected=Save(immutable);
     if(!RequireBlob(expected,"3.1")) return;
+    const auto other=RootBlob(fx,17);
+    if(!RequireBlob(other,"3.1 other blob")) return;
     std::atomic<int> bad{0};
     std::vector<std::thread> workers;
     for(int i=0;i<8;++i) workers.emplace_back([&]{
@@ -138,14 +186,24 @@ void Concurrent31() {
             if(sslm_prefix_save(immutable,nullptr,&n)!=SSLM_BUFFER_TOO_SMALL || n!=expected.size()) {++bad;continue;}
             std::vector<uint8_t> b(n);
             if(sslm_prefix_save(immutable,b.data(),&n)!=SSLM_OK || b!=expected) ++bad;
+            sslm_seq seq=nullptr;
+            if(sslm_seq_create_budgeted(fx.model,&pool.pool,16,&seq)!=SSLM_OK) {++bad;continue;}
+            if(sslm_seq_adopt_prefix(seq,immutable)!=SSLM_OK) ++bad;
+            sslm_seq_release(seq);
+        }
+    });
+    for(int i=0;i<8;++i) workers.emplace_back([&]{
+        for(int j=0;j<8;++j) {
             sslm_prefix p=nullptr;
-            if(sslm_prefix_restore(fx.model,&pool.pool,expected.data(),expected.size(),nullptr,&p,nullptr)!=SSLM_OK)
+            if(sslm_prefix_restore(fx.model,&pool.pool,other.data(),other.size(),nullptr,&p,nullptr)!=SSLM_OK)
                 {++bad;continue;}
             sslm_prefix_release(p);
         }
     });
     for(auto& t:workers) t.join();
     PKV_CHECK_MSG(bad==0,"3.1 concurrent save/restore had %d failures",int(bad));
+    Status(ReleasePrefix(sc.h,immutable),SSLM_OK,"3.1 release shared source");
+    ProbeExactlyFreeOneState(fx,&pool.pool,300);
 }
 PKV_CELL("3.1/E2", "E1", Concurrent31);
 }

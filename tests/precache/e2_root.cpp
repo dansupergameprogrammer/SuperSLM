@@ -95,7 +95,36 @@ void Tokens62() {
     const auto b = Save(p);
     if (!RequireBlob(b, "6.2")) return;
     sslm_prefix copy = nullptr;
-    if (Restored(fx, &pool.pool, b, nullptr, sc.h, &copy)) TwinTokens(fx, &pool.pool, p, copy);
+    if (!Restored(fx, &pool.pool, b, nullptr, sc.h, &copy)) return;
+    TwinTokens(fx, &pool.pool, p, copy);
+    auto mode_run=[&](sslm_prefix prefix,bool budget,int32_t mode) {
+        sslm_seq seq=nullptr;
+        Status(budget ? sslm_seq_create_budgeted(fx.model,&pool.pool,80,&seq)
+                      : sslm_seq_create(fx.model,&pool.pool,&seq),
+               SSLM_OK,"6.2 mode adopter create");
+        if(!seq) return std::vector<int32_t>{};
+        Status(sslm_seq_adopt_prefix(seq,prefix),SSLM_OK,"6.2 mode adopt");
+        sslm_decode_params params{};
+        Status(sslm_decode_params_init(fx.model,mode,int32_t(fx.geo.layers),&params),
+               SSLM_OK,"6.2 mode init");
+        sslm_seq batch[1]={seq};
+        std::vector<int32_t> tokens;
+        for(int i=0;i<64;++i) {
+            int32_t token=-1;
+            const auto st=sslm_decode_step_v2(fx.model,batch,1,&params,nullptr,&token);
+            Status(st,SSLM_OK,"6.2 mode decode");
+            if(st!=SSLM_OK || token<0) break;
+            tokens.push_back(token);
+        }
+        sslm_seq_release(seq);
+        return tokens;
+    };
+    for(bool budget : {false,true})
+        for(auto mode : {SSLM_DECODE_MODE_GREEDY,SSLM_DECODE_MODE_DAMPED_GREEDY}) {
+            const auto a=mode_run(p,budget,mode);
+            const auto c=mode_run(copy,budget,mode);
+            PKV_CHECK_MSG(a.size()==64 && a==c,"6.2 mode adopter differs from prefill twin");
+        }
 }
 PKV_CELL("6.2/E2", "E1", Tokens62);
 PKV_CELL("7.1/E2", "E1", Tokens62);
@@ -144,6 +173,14 @@ void Restore25() {
         Status(st, SSLM_INVALID_ARGUMENT, "2.5 null input");
         PKV_CHECK(out == nullptr);
     }
+    const Fixture& foreign=GetFixture("pkv_qk");
+    if(foreign.ok) {
+        PagePool foreign_pool(foreign.model,32);
+        out=OutSentinel<sslm_prefix>();
+        Status(Restore(fx,&foreign_pool.pool,b,nullptr,&out),SSLM_INVALID_ARGUMENT,
+               "2.5 pool belongs to another model");
+        PKV_CHECK(out==nullptr);
+    }
 }
 PKV_CELL("2.5/E2", "E1", Restore25);
 
@@ -162,6 +199,23 @@ void ByteCorruption22() {
             "2.2 flipped byte %zu: expected integrity refusal, got %d", i, int(st));
         if (st == SSLM_OK && out && out != OutSentinel<sslm_prefix>()) sslm_prefix_release(out);
     }
+    for(const char* magic : {"SSB6","SSB5","SLM6"}) {
+        auto b=good;
+        std::memcpy(b.data(),magic,4);
+        sslm_prefix out=nullptr;
+        Status(Restore(fx,&pool.pool,b,nullptr,&out),SSLM_INVALID_ARGUMENT,
+               "2.2 foreign magic rejected by prefix restore");
+        PKV_CHECK(out==nullptr);
+    }
+    sslm_seq seq=nullptr;
+    Status(sslm_seq_restore(fx.model,&pool.pool,good.data(),good.size(),&seq),
+           SSLM_INVALID_ARGUMENT,"2.2 SPX1 rejected by sequence restore");
+    PKV_CHECK(seq==nullptr);
+    uint32_t shared=UINT32_MAX;
+    Status(sslm_seq_restore_shared(fx.model,&pool.pool,good.data(),good.size(),
+                                   nullptr,&seq,&shared),SSLM_INVALID_ARGUMENT,
+           "2.2 SPX1 rejected by shared sequence restore");
+    PKV_CHECK(seq==nullptr);
 }
 PKV_CELL("2.2/E2", "E1", ByteCorruption22);
 PKV_CELL("7.3/E2", "E1", ByteCorruption22);
@@ -185,6 +239,24 @@ void Truncation21() {
     sslm_prefix out = nullptr;
     Status(Restore(fx, &pool.pool, extra, nullptr, &out), SSLM_INVALID_ARGUMENT, "2.1 extra byte");
     PKV_CHECK(out == nullptr);
+    const auto long_blob=RootBlob(fx,1000);
+    if(!RequireBlob(long_blob,"2.1 L=1000")) return;
+    auto check_length=[&](size_t n) {
+        sslm_prefix candidate=nullptr;
+        const auto st=sslm_prefix_restore(fx.model,&pool.pool,long_blob.data(),n,
+                                          nullptr,&candidate,nullptr);
+        PKV_CHECK_MSG(st==SSLM_INVALID_ARGUMENT && candidate==nullptr,
+                      "2.1 L=1000 truncation at %zu: got %d",n,int(st));
+        if(st==SSLM_OK && candidate) sslm_prefix_release(candidate);
+    };
+    for(size_t n=0;n<kHeader;++n) check_length(n);
+    for(size_t n=kHeader;n<long_blob.size();n+=4096) check_length(n);
+    extra=long_blob;
+    extra.push_back(0);
+    out=nullptr;
+    Status(Restore(fx,&pool.pool,extra,nullptr,&out),SSLM_INVALID_ARGUMENT,
+           "2.1 L=1000 extra byte");
+    PKV_CHECK(out==nullptr);
 }
 PKV_CELL("2.1/E2", "E1", Truncation21);
 
@@ -204,10 +276,15 @@ void Domains23() {
         {"adapter device",24,1,false,PC_RESTORE_PRODUCER_MISMATCH},
         {"model hash",60,uint64_t(good[60]^1),false,SSLM_RESTORE_MODEL_MISMATCH},
         {"precision",92,0xffffffffu,false,SSLM_RESTORE_KV_MISMATCH},
+        {"unknown schema hash",96,1,true,SSLM_RESTORE_SCHEMA_MISMATCH},
+        {"unbound non-sentinel walk",104,1,false,SSLM_RESTORE_SCHEMA_MISMATCH},
         {"origin > L",120,2,true,SSLM_INVALID_ARGUMENT},
         {"origin negative",120,uint64_t(-1),true,SSLM_INVALID_ARGUMENT},
         {"L negative",112,uint64_t(-1),true,SSLM_INVALID_ARGUMENT},
         {"L above cap",112,4097,true,SSLM_INVALID_ARGUMENT},
+        {"L enormous before size arithmetic",112,INT64_MAX,true,SSLM_INVALID_ARGUMENT},
+        {"size not formula",112,2,true,SSLM_INVALID_ARGUMENT},
+        {"token minus one with positive L",108,0xffffffffu,false,SSLM_INVALID_ARGUMENT},
         {"token negative",108,0xfffffffeu,false,SSLM_INVALID_ARGUMENT},
         {"token INT32_MIN",108,0x80000000u,false,SSLM_INVALID_ARGUMENT},
         {"token above vocab",108,uint64_t(fx.vocab),false,SSLM_INVALID_ARGUMENT},
