@@ -56,6 +56,14 @@ def main() -> int:
             for field in ("prompt_source_sha256", "prompt_ids_sha256"):
                 if header.get(field) not in prompt_hashes:
                     bad.append(f"{field} not in committed source set: {path}")
+            for field in ("world_source_sha256", "world_ids_sha256",
+                          "persona_source_sha256", "persona_ids_sha256"):
+                if field in header and header[field] not in prompt_hashes:
+                    bad.append(f"{field} not in committed source set: {path}")
+            if "forced_content_id" in header:
+                forced_hash = hashlib.sha256((header["forced_content_id"] + "\n").encode()).hexdigest()
+                if header.get("forced_content_ids_sha256") != forced_hash:
+                    bad.append(f"forced content SHA mismatch: {path}")
             streams = [fields(line) for line in lines[1:] if not line.startswith("disposition ")]
             for row in streams:
                 if len(row.get("tokens", "").split(",")) != 64:
@@ -65,6 +73,11 @@ def main() -> int:
                               "schema_hash", "adapter", "terminal_status", "eos_index"):
                     if field not in row:
                         bad.append(f"missing row {field}: {path}")
+                if row.get("terminal_status") != "0" or row.get("eos_index") != "-1":
+                    bad.append(f"terminal or EOS within stream: {path}")
+                if ("L" in row and "L_mod_B" in row and "B" in header and
+                        int(row["L"]) % int(header["B"]) != int(row["L_mod_B"])):
+                    bad.append(f"L mod B mismatch: {path}")
             results.append({"path": str(path), "size": path.stat().st_size,
                             "sha256": sha(path),
                             "mtime_utc": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(),
