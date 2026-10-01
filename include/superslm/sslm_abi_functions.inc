@@ -122,8 +122,8 @@ SUPERSLM_API size_t sslm_kv_page_pool_overhead_size(sslm_model model, uint32_t p
 /* A pool of `page_count` pages over `buf` (buf_size >= page_count * sslm_kv_page_size +
  * sslm_kv_page_pool_overhead_size, SSLM_ABI_ALIGNMENT_BYTES-aligned), with sslm_kv_pool_create's
  * refusals in its order (arguments, a zero count, overflow, SSLM_BUFFER_TOO_SMALL, then
- * SSLM_MISALIGNED_BUFFER); a page_count of UINT32_MAX is never admitted, and heap failure is
- * SSLM_ALLOCATION_FAILED. Every holder verb takes it, budget or not; sslm_kv_pool_destroy destroys
+ * SSLM_MISALIGNED_BUFFER); every page_count up to UINT32_MAX is admissible by count, and heap
+ * failure is SSLM_ALLOCATION_FAILED. Every holder verb takes it, budget or not; sslm_kv_pool_destroy destroys
  * it and refuses with SSLM_POOL_HAS_LIVE_HANDLES while any handle drawn from it lives. */
 SUPERSLM_API sslm_status sslm_kv_page_pool_create(sslm_model model, void* buf, size_t buf_size, uint32_t page_count,
                                      sslm_kv_pool* out);

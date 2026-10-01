@@ -8,8 +8,9 @@
 //           SSB5 of another model -> SSLM_RESTORE_MODEL_MISMATCH
 //   2.9     legacy sslm_kv_pool_create at cap 32768 and block_count 2,097,152 -> refused before
 //           the buffer-size check
-//   2.9b    review M1: the exact boundary on pkv_odd (one page per block): block_count UINT32_MAX
-//           (the kNoPage sentinel) refused before the size check, UINT32_MAX - 1 reaches it
+//   2.9b    the exact boundary on pkv_odd (one page per block): block_count UINT32_MAX is admissible
+//           by page count (decision 24 refuses only > UINT32_MAX) and reaches the size check, as
+//           UINT32_MAX - 1 does
 //
 // 11.6's mutation-proving of each consistency guard is a separate cell; these cells grade the
 // statuses and "nothing drawn" only.
@@ -290,16 +291,17 @@ void Cell29() {
 	if (pool2 && pool2 != OutSentinel<sslm_kv_pool>()) sslm_kv_pool_destroy(pool2);
 }
 
-// ---- 2.9b [C4, review M1] -----------------------------------------------------------------------
+// ---- 2.9b [C4, review M1; review S1] -------------------------------------------------------------
 
-// 2.9b [C4, review M1]. The exact u32 boundary that 2.9 cannot reach: there cap_pages = 2048, so no
-// block_count makes the page count exactly UINT32_MAX. On pkv_odd (cap 4100, B = cap, one page per
-// block) the page count IS block_count, so the boundary is exact. UINT32_MAX is the page module's
-// kNoPage sentinel and PoolCreate refuses it as a page count; the ABI must refuse it too, with the
-// u32 refusal, before the buffer-size check: block_count = UINT32_MAX -> SSLM_INVALID_ARGUMENT and
-// the overhead verb saturates; block_count = UINT32_MAX - 1 passes the page-count check and reaches
-// the size check (SSLM_BUFFER_TOO_SMALL against a deliberately tiny buffer), and the overhead verb
-// does not saturate there.
+// 2.9b [C4]. The exact u32 boundary that 2.9 cannot reach: there cap_pages = 2048, so no block_count
+// makes the page count exactly UINT32_MAX. On pkv_odd (cap 4100, B = cap, one page per block) the
+// page count IS block_count, so the boundary is exact. §3.6 and decision 24 refuse only a page count
+// that EXCEEDS UINT32_MAX: a pool of exactly UINT32_MAX pages has indices 0 .. UINT32_MAX - 1, so the
+// page module's kNoPage sentinel (UINT32_MAX) never names a real page, and the count is admissible.
+// block_count = UINT32_MAX therefore passes the u32 refusal and reaches the buffer-size check
+// (SSLM_BUFFER_TOO_SMALL against a deliberately tiny buffer, nothing drawn, the buffer untouched), and
+// the overhead verb sizes it without saturating. UINT32_MAX - 1 behaves the same. (Review S1: an
+// earlier fix refused the exact maximum too; its module twin is "2.9b/C3" in superslm_pkv_c3.)
 void Cell29b() {
 	const Fixture& fx = GetFixture("pkv_odd");
 	if (!fx.ok) return;
@@ -309,29 +311,27 @@ void Cell29b() {
 	PKV_CHECK_MSG(block > 0 && size_t{UINT32_MAX} <= SIZE_MAX / block,
 	              "block_count * block_size does not overflow at UINT32_MAX");
 
-	// kills: the overhead verb's saturation at > UINT32_MAX (the sentinel count sized as a real pool)
-	PKV_CHECK(sslm_kv_pool_overhead_size(fx.model, UINT32_MAX) == SIZE_MAX);
-	// kills: an off-by-one that also saturates the last real count
-	PKV_CHECK(sslm_kv_pool_overhead_size(fx.model, UINT32_MAX - 1u) != SIZE_MAX);
+	const size_t ov_max = sslm_kv_pool_overhead_size(fx.model, UINT32_MAX);
+	const size_t ov_below = sslm_kv_pool_overhead_size(fx.model, UINT32_MAX - 1u);
+	// kills: the overhead verb saturating at >= UINT32_MAX (the exact maximum sized as unsatisfiable)
+	PKV_CHECK_MSG(ov_max != SIZE_MAX, "overhead at block_count UINT32_MAX saturates; decision 24 refuses only > UINT32_MAX");
+	PKV_CHECK(ov_below != SIZE_MAX);
+	PKV_CHECK_MSG(ov_max > ov_below, "overhead grows from UINT32_MAX - 1 to UINT32_MAX blocks");
 
-	AlignedBuf buf(4096, 0x77);
-	sslm_kv_pool pool = OutSentinel<sslm_kv_pool>();  // non-null; the verb must null it on the refusal
-	const sslm_status st = sslm_kv_pool_create(fx.model, buf.p, buf.n, UINT32_MAX, &pool);
-	// kills: the refusal at > UINT32_MAX, which lets the sentinel count reach the size check and report
-	// SSLM_BUFFER_TOO_SMALL; a refusal placed after the size check
-	PKV_CHECK_MSG(st == SSLM_INVALID_ARGUMENT, "block_count UINT32_MAX -> %d, want SSLM_INVALID_ARGUMENT",
-	              static_cast<int>(st));
-	PKV_CHECK(pool == nullptr);
-	if (pool && pool != OutSentinel<sslm_kv_pool>()) sslm_kv_pool_destroy(pool);
-	bool untouched = true;
-	for (size_t i = 0; i < buf.n; ++i) untouched = untouched && buf.p[i] == 0x77;
-	PKV_CHECK_MSG(untouched, "the refused create wrote nothing into the caller's buffer");
-
-	sslm_kv_pool pool2 = OutSentinel<sslm_kv_pool>();  // non-null; the verb must null it on the refusal
-	// kills: an off-by-one that refuses the last real count too
-	PKV_CHECK_EQ(sslm_kv_pool_create(fx.model, buf.p, buf.n, UINT32_MAX - 1u, &pool2), SSLM_BUFFER_TOO_SMALL);
-	PKV_CHECK(pool2 == nullptr);
-	if (pool2 && pool2 != OutSentinel<sslm_kv_pool>()) sslm_kv_pool_destroy(pool2);
+	for (const uint32_t n : {UINT32_MAX, UINT32_MAX - 1u}) {
+		AlignedBuf buf(4096, 0x77);
+		sslm_kv_pool pool = OutSentinel<sslm_kv_pool>();  // non-null; the verb must null it on the refusal
+		const sslm_status st = sslm_kv_pool_create(fx.model, buf.p, buf.n, n, &pool);
+		// kills: the u32 refusal at >= UINT32_MAX, which refuses the exact maximum with
+		// SSLM_INVALID_ARGUMENT before the size check; an off-by-one that refuses the last count below
+		PKV_CHECK_MSG(st == SSLM_BUFFER_TOO_SMALL, "block_count %u -> %d, want SSLM_BUFFER_TOO_SMALL (admissible by page count)",
+		              n, static_cast<int>(st));
+		PKV_CHECK(pool == nullptr);  // kills: a refusal that returns before writing *out
+		if (pool && pool != OutSentinel<sslm_kv_pool>()) sslm_kv_pool_destroy(pool);
+		bool untouched = true;
+		for (size_t i = 0; i < buf.n; ++i) untouched = untouched && buf.p[i] == 0x77;
+		PKV_CHECK_MSG(untouched, "the refused create (block_count %u) wrote nothing into the caller's buffer", n);
+	}
 }
 
 PKV_CELL("2.3/C4", "C4", Cell23Legacy);

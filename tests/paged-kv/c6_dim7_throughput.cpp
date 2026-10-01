@@ -168,7 +168,7 @@ void Cell79Box() {
 		std::ifstream in(path);
 		PKV_CHECK_MSG(static_cast<bool>(in), "7.9: baseline file %s unreadable", path);
 		std::string line;
-		while (std::getline(in, line)) {
+		while (GetTextLine(in, line)) {  // LF or CRLF (a baseline written on the box, read anywhere)
 			std::istringstream ls(line);
 			std::string name;
 			Rate r;

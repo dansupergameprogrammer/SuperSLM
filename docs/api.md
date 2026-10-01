@@ -506,7 +506,7 @@ holder verb, old or new, takes either.
 
 - `sslm_kv_pool_create(model, buf, size, block_count, &pool)` builds
   `block_count · ceil(cap / B)` pages in the same buffer size as before (one
-  block is exactly `ceil(cap / B)` pages). A count whose page total reaches
+  block is exactly `ceil(cap / B)` pages). A count whose page total exceeds
   `UINT32_MAX` is refused with `SSLM_INVALID_ARGUMENT`, before the buffer-size
   check (at cap 32,768 and `B = 16`, any `block_count` of 2,097,152 or more).
 - `sslm_kv_page_pool_create(model, buf, size, page_count, &pool)` builds a
@@ -514,8 +514,8 @@ holder verb, old or new, takes either.
   `page_count · sslm_kv_page_size + sslm_kv_page_pool_overhead_size`, and the
   buffer `SSLM_ABI_ALIGNMENT_BYTES`-aligned. Its refusals come in
   `sslm_kv_pool_create`'s order: arguments, a zero count, overflow,
-  `SSLM_BUFFER_TOO_SMALL`, then `SSLM_MISALIGNED_BUFFER`. A `page_count` of
-  `UINT32_MAX` is never admitted.
+  `SSLM_BUFFER_TOO_SMALL`, then `SSLM_MISALIGNED_BUFFER`. Every `page_count`
+  up to `UINT32_MAX` is admissible by count.
 - Both overhead verbs keep the block verb's convention (0 on a null model,
   `SIZE_MAX` where no buffer suffices). The pool's per-page bookkeeping (a
   free-list entry, a reference count, a written flag and a shared count, 13
@@ -699,7 +699,7 @@ pool's lock; prefill and decode take no pool lock.
 These apply to every host, including one that calls no new verb:
 
 - `sslm_seq_state_size` is 20 bytes larger (above).
-- `sslm_kv_pool_create` refuses a `block_count` whose page total reaches
+- `sslm_kv_pool_create` refuses a `block_count` whose page total exceeds
   `UINT32_MAX`, with `SSLM_INVALID_ARGUMENT`.
 - The first `sslm_prefix_freeze` returns the prefix's unused pages to the
   pool, so a pool can admit more handles than before, never fewer.

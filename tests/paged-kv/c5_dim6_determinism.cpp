@@ -282,7 +282,7 @@ void Cell64b() {
 }
 
 PKV_CELL("6.1/C5", "C5", Cell61Budget);
-PKV_CELL("6.3", "C5", Cell63Tiers);
+PKV_CELL("6.3/C5", "C5", Cell63Tiers);
 PKV_CELL("6.4a/C5", "C5", Cell64aSsb6);
 PKV_CELL("6.4b", "C5", Cell64b);
 

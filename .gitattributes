@@ -8,6 +8,14 @@
 tests/golden/**  -text
 *.sslm  binary
 
+# The paged-KV references (tests/paged-kv/reference/*.ref) carry the sha256 of the fixture they
+# were recorded against, and the cells compare it and every record's digests byte for byte; a
+# CRLF checkout made the sha read with a trailing '\r' and every reference cell false-fail under
+# POSIX. LF on every checkout (the reader strips a '\r' as well; R0.self.ref_crlf). The pinned
+# blobs beside them (reference/pins/*.zrl) are bytes, never text.
+*.ref  text eol=lf
+*.zrl  binary
+
 # Source: normalized to LF in the repo, tool-native on checkout.
 *.h    text
 *.cpp  text

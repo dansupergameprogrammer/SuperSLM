@@ -44,7 +44,7 @@ memory*) is the contract and `docs/releases/1.12.0.md` the release note.
 - **Speed:** no figure is promised. Decode against 1.11.0: TODO-BOX (cell 7.9). Lifecycle verbs:
   TODO-BOX (the lifecycle timing cell on both binaries).
 - **Behaviour changes for every host:** `sslm_seq_state_size` is 20 bytes larger (fixed part 180,
-  was 160). `sslm_kv_pool_create` refuses a `block_count` whose page total reaches `UINT32_MAX`.
+  was 160). `sslm_kv_pool_create` refuses a `block_count` whose page total exceeds `UINT32_MAX`.
   The first `sslm_prefix_freeze` returns the prefix's unused pages to the pool, so a pool can
   admit more handles than before, never fewer. `sslm_seq_reset` no longer zero-fills K/V memory
   (nothing reads it, and saves are unchanged). Restore refuses a blob of any format that is

@@ -46,11 +46,13 @@ foreach(step c2 c3 c4 c5 c6)
 	endif()
 endforeach()
 
-# Cells 4.7 and 6.3 (C5): the DotRow tiers. superslm_pkv_c5's sources linked against each forced-tier
+# Cells 4.7/C5 and 6.3/C5: the DotRow tiers. superslm_pkv_c5's sources linked against each forced-tier
 # library of CMakeLists.txt in place of superslm_test_injection (x86-64 only, like those libraries;
 # EXCLUDE_FROM_ALL both). Each forced library carries the bad-alloc and matvec seams, so the whole C5
 # suite links; a tier leg runs the two tier cells by id, e.g.
 #   superslm_pkv_c5_avx2_forced 4.7/C5 6.3/C5
+# which runs exactly those two cells; an argument that matches no registered id fails the run
+# (pkv_main.cpp), so a renamed cell cannot drop out of a tier leg unnoticed.
 # The table-sentinel trap (7.13) is compiled only into superslm_test_injection, so 7.13 belongs to the
 # default binary, not to these.
 if(PKV_C5_SOURCES AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|x64|X64)$")

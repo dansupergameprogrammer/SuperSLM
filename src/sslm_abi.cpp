@@ -1027,12 +1027,12 @@ extern "C" size_t sslm_kv_pool_overhead_size(sslm_model model, uint32_t block_co
 	// status channel, so saturation to SIZE_MAX is its only way to signal "this cannot be
 	// satisfied by any real buffer" without under-reporting.
 	// Paged-KV plan §3.6 (C4): the pool is block_count * ceil(cap/B) pages, indexed by u32, so it
-	// saturates for exactly the counts sslm_kv_pool_create refuses for that reason. UINT32_MAX itself
-	// is the page module's kNoPage sentinel, which PoolCreate refuses as a page count, so a page count
-	// of exactly UINT32_MAX saturates too.
+	// saturates for exactly the counts sslm_kv_pool_create refuses for that reason: page totals above
+	// UINT32_MAX. A total of exactly UINT32_MAX is a real pool (indices 0 .. UINT32_MAX - 1 never meet
+	// the page module's kNoPage sentinel) and is sized like any other (decision 24).
 	const PageGeometry geo = ComputePageGeometry(model);
 	if (!geo.ok ||
-	    static_cast<uint64_t>(block_count) * geo.cap_pages >= static_cast<uint64_t>(UINT32_MAX)) {
+	    static_cast<uint64_t>(block_count) * geo.cap_pages > static_cast<uint64_t>(UINT32_MAX)) {
 		return kSizeMax;
 	}
 	SaturatingAccumulator acc;
@@ -1165,13 +1165,14 @@ extern "C" sslm_status sslm_kv_pool_create(sslm_model model, void* buf, size_t b
 	const size_t block_size = sslm_kv_block_size(model);
 	if (block_size == 0) return SSLM_INVALID_ARGUMENT;
 	// Paged-KV plan §3.6 (C4): the pool is block_count * ceil(cap/B) pages, and page indices are
-	// u32, so a count of UINT32_MAX or more is refused here, with the overflow refusals, before the
+	// u32, so a count above UINT32_MAX is refused here, with the overflow refusals, before the
 	// buffer-size check (sslm_kv_pool_overhead_size saturates for the same counts, just below).
-	// UINT32_MAX itself is the page module's kNoPage sentinel, which PoolCreate refuses.
+	// Exactly UINT32_MAX is admissible: its indices stop at UINT32_MAX - 1, below the page module's
+	// kNoPage sentinel, and PoolCreate admits it (decision 24).
 	const PageGeometry geo = ComputePageGeometry(model);
 	if (!geo.ok) return SSLM_INVALID_ARGUMENT;
 	const uint64_t page_count64 = static_cast<uint64_t>(block_count) * geo.cap_pages;
-	if (page_count64 >= static_cast<uint64_t>(UINT32_MAX)) return SSLM_INVALID_ARGUMENT;
+	if (page_count64 > static_cast<uint64_t>(UINT32_MAX)) return SSLM_INVALID_ARGUMENT;
 	const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
 	if (overhead == kSizeMax) return SSLM_INVALID_ARGUMENT;  // saturated: no real buffer suffices
 	size_t blocks_bytes = 0;

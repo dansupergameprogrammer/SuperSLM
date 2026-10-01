@@ -6,19 +6,37 @@
 // the given prefixes ("6.1", "1.13/C4"). An argument that starts with '=' names one cell exactly
 // ("=10.1/C6" runs the box cell and not its cloud twin "10.1/C6:pkv_def"; the box runner,
 // tools/run_paged_kv_c6_box.ps1, selects cells this way). Exit status 0 only when every check of
-// every cell passed and at least one cell ran.
+// every cell passed, at least one cell ran, and every argument selected at least one cell: an
+// argument that matches no registered id (a mistyped or renamed cell, "6.3/C5" against a cell
+// registered as "6.3") is named on stderr and fails the run, so a selection never silently
+// shrinks to the cells that happen to match.
 
 #include "pkv_common.h"
 
 #include <cstdio>
 #include <cstring>
 
+namespace {
+bool Matches(const char* id, const char* arg) {
+	return arg[0] == '=' ? std::strcmp(id, arg + 1) == 0 : std::strncmp(id, arg, std::strlen(arg)) == 0;
+}
+}  // namespace
+
 int main(int argc, char** argv) {
 	int ran = 0, failed_cells = 0;
+	// Every argument must name at least one registered cell, checked before any cell runs.
+	int unmatched = 0;
+	for (int i = 1; i < argc; ++i) {
+		bool any = false;
+		for (const pkv::CellEntry& c : pkv::Registry()) any = any || Matches(c.id, argv[i]);
+		if (!any) {
+			std::fprintf(stderr, "argument '%s' matches no registered cell\n", argv[i]);
+			++unmatched;
+		}
+	}
 	for (const pkv::CellEntry& c : pkv::Registry()) {
 		bool selected = argc < 2;
-		for (int i = 1; i < argc && !selected; ++i)
-			selected = argv[i][0] == '=' ? std::strcmp(c.id, argv[i] + 1) == 0 : std::strncmp(c.id, argv[i], std::strlen(argv[i])) == 0;
+		for (int i = 1; i < argc && !selected; ++i) selected = Matches(c.id, argv[i]);
 		if (!selected) continue;
 		pkv::RunState& s = pkv::State();
 		s.cell = c.id;
@@ -34,5 +52,6 @@ int main(int argc, char** argv) {
 	}
 	std::printf("%d cells, %d red; %d checks, %d failures\n", ran, failed_cells, pkv::State().checks,
 	            pkv::State().failures);
-	return ran > 0 && pkv::State().failures == 0 ? 0 : 1;
+	if (unmatched) std::printf("%d argument(s) matched no registered cell (named on stderr)\n", unmatched);
+	return ran > 0 && unmatched == 0 && pkv::State().failures == 0 ? 0 : 1;
 }

@@ -65,7 +65,7 @@ SUPERSLM_API size_t sslm_seq_state_size(sslm_model model);
  * this pool can back -- for N such handles concurrently resident, block_count = N (the
  * single-sequence case, N = 1, is what the S-FREEZE example uses, design Sec9). Since 1.12.0 the
  * buffer holds block_count * ceil(cap/B) pages of the same total size, and a count whose page
- * total reaches UINT32_MAX is SSLM_INVALID_ARGUMENT (before the buffer-size check). In a pool
+ * total exceeds UINT32_MAX is SSLM_INVALID_ARGUMENT (before the buffer-size check). In a pool
  * whose every handle was made by a no-budget verb, block_count = N still admits N handles; a
  * frozen prefix now returns its unused pages, so such a pool can admit more than 1.11.0 did,
  * never fewer. Once a budget-mode handle is in the pool, budget accounting governs admission

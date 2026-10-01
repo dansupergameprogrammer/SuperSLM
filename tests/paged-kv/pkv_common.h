@@ -238,16 +238,21 @@ struct RefFile {
 	std::map<std::string, RefRecord> records;
 };
 
-inline const RefFile& Reference(const char* tag, const Fixture& fx) {
-	static std::map<std::string, std::unique_ptr<RefFile>> cache;
-	const std::string key = std::string(tag) + "_" + fx.stem;
-	auto it = cache.find(key);
-	if (it != cache.end()) return *it->second;
-	auto r = std::make_unique<RefFile>();
-	std::ifstream in(std::string(PKV_REFERENCE_DIR) + "/" + key + ".ref");
-	PKV_CHECK_MSG(static_cast<bool>(in), "reference %s.ref missing", key.c_str());
+// One line of a text file the repository carries (a .ref, a baseline), without its line ending.
+// std::getline stops at '\n' only, so a CRLF file (a Windows checkout with core.autocrlf=true, or a
+// file written in text mode on Windows and read on POSIX) leaves a '\r' on every line; it is
+// stripped here, so every reader sees the same fields whatever the checkout's line endings.
+inline bool GetTextLine(std::istream& in, std::string& line) {
+	if (!std::getline(in, line)) return false;
+	if (!line.empty() && line.back() == '\r') line.pop_back();
+	return true;
+}
+
+// Parses .ref text into `r` (fixture_sha and records; `ok` iff any record parsed). Line endings
+// are LF or CRLF alike (GetTextLine); R0.self.ref_crlf holds the two to the same records.
+inline void ParseRef(std::istream& in, RefFile* r) {
 	std::string line;
-	while (in && std::getline(in, line)) {
+	while (GetTextLine(in, line)) {
 		if (line.rfind("# ", 0) == 0) {
 			const size_t at = line.find("sha256=");
 			if (at != std::string::npos) r->fixture_sha = line.substr(at + 7);
@@ -276,6 +281,17 @@ inline const RefFile& Reference(const char* tag, const Fixture& fx) {
 		r->records[std::string(sc) + " " + st] = rec;
 	}
 	r->ok = !r->records.empty();
+}
+
+inline const RefFile& Reference(const char* tag, const Fixture& fx) {
+	static std::map<std::string, std::unique_ptr<RefFile>> cache;
+	const std::string key = std::string(tag) + "_" + fx.stem;
+	auto it = cache.find(key);
+	if (it != cache.end()) return *it->second;
+	auto r = std::make_unique<RefFile>();
+	std::ifstream in(std::string(PKV_REFERENCE_DIR) + "/" + key + ".ref");
+	PKV_CHECK_MSG(static_cast<bool>(in), "reference %s.ref missing", key.c_str());
+	ParseRef(in, r.get());
 	PKV_CHECK_MSG(r->ok, "reference %s.ref is empty", key.c_str());
 	// A reference holds only for the fixture it was recorded against. Every fixture is meant to be
 	// byte-identical on every host (pkv_qk's float-library inputs are pinned, reference/pins/

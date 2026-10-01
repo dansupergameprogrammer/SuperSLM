@@ -45,8 +45,9 @@ enum class PageStatus : int {
 	kAllocationFailed = 4,
 };
 
-// The value no page index takes (PoolCreate refuses a page_count that would reach it); the
-// sentinel seam writes it into table entries at or above `mapped`.
+// The value no page index takes: a page_count is a u32, at most UINT32_MAX, so indices stop at
+// UINT32_MAX - 1 and PoolCreate admits every nonzero count. The sentinel seam writes it into table
+// entries at or above `mapped`.
 constexpr uint32_t kNoPage = 0xFFFFFFFFu;
 
 // The pool mutex, counting its acquisitions (§3.6's hot-path rule, cell 7.10: the ABI's test seam

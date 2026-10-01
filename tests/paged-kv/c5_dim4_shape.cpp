@@ -210,7 +210,9 @@ void Cell44Budget() {
 //  - the maximum, page_count = UINT32_MAX: the sizing verbs return the exact page_count * page_bytes +
 //    overhead without saturating, and a create one byte short of it is refused before any use of the
 //    buffer. A real pool of UINT32_MAX pages is 26 TB at pkv_def's 6,144-byte page, so no leg allocates
-//    one; the cell pins the arithmetic and the refusal edge at the maximum instead.
+//    one; the cell pins the arithmetic and the refusal edge at the maximum instead. The count itself is
+//    admissible (decision 24 refuses only counts above UINT32_MAX, and indices stop at UINT32_MAX - 1,
+//    below kNoPage): the page module's acceptance of it is 2.9b/C3, the legacy verb's 2.9b [C4].
 void Cell45() {
 	const Fixture& fx = GetFixture("pkv_def");
 	const Fixture& odd = GetFixture("pkv_odd");

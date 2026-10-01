@@ -105,8 +105,11 @@ PageStatus PoolCreate(uint8_t* base, uint32_t page_count, size_t page_bytes, int
                       PagePool** out) {
 	if (!out) return PageStatus::kInvalidArgument;
 	*out = nullptr;
-	// page_count < kNoPage keeps every page index distinct from the sentinel.
-	if (!base || page_count == 0 || page_count == kNoPage || page_bytes == 0 || page_positions <= 0)
+	// Every u32 count is admissible, UINT32_MAX included: page indices run 0 .. page_count - 1, so the
+	// largest is UINT32_MAX - 1 and none equals the kNoPage sentinel. Nothing here needs a smaller
+	// bound: the free list, refcount, dirty and shared arrays hold page_count entries, every loop over
+	// them is `i < n` or `i-- > 0` on u32, and their sizes fit u32 (plan §3.6, decision 24).
+	if (!base || page_count == 0 || page_bytes == 0 || page_positions <= 0)
 		return PageStatus::kInvalidArgument;
 	if (page_bytes > std::numeric_limits<size_t>::max() / page_count) return PageStatus::kInvalidArgument;
 	try {

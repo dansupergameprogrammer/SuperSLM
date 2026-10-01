@@ -329,7 +329,7 @@ void RunTargets(const std::vector<Target>& targets, bool box) {
 		std::ifstream in(in_path);
 		PKV_CHECK_MSG(static_cast<bool>(in), "lifecycle: baseline file %s unreadable", in_path);
 		std::string line;
-		while (std::getline(in, line)) {
+		while (GetTextLine(in, line)) {  // LF or CRLF (a baseline written on the box, read anywhere)
 			std::istringstream ls(line);
 			std::string key;
 			Reading r;
