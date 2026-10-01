@@ -126,6 +126,9 @@ CONSTRUCTIONS = [
     C('oracle.R7', 'oracle', 'reject', [run('pristine', 'commission_reftamper', ['CM.oracle.pin:persist'])],
       'the pinned blob v1.11.0_pkv_def_persist_saved with one K byte (layer 0, K, head 0, position 5, d 0) flipped',
       reasons=['K/V rows differ', 'blob differs', 'tokens differ']),
+    C('oracle.R8', 'oracle', 'reject', [run('pristine', 'commission_reftamper', ['CM.oracle.pin:persist'])],
+      'the same flipped pin, graded by Pin() itself: the pin must be refused at load against its .ref digest',
+      reasons=['does not match its reference']),
 
     # 2. legacy-create admission count ---------------------------------------------------------
     C('count.A1', 'count', 'accept', [run('pristine', 'commission', COUNT_ALL)],
