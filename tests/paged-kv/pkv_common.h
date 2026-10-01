@@ -704,7 +704,8 @@ inline bool ProbeExactlyFreeOneState(const Fixture& fx, sslm_kv_pool* pool, int6
 // ---- timing verdicts (§8's timing harness: 7.4, 7.9 and the lifecycle timings) -----------------
 //
 // One vocabulary for every timing cell. Each graded reading prints the reading (with its resolving
-// power) and then one verdict line,
+// power) and then its verdict line or lines (7.9 prints two per target: "<target> effect" and
+// "<target> bar"; only the bar is asserted),
 //     "<cell> <target>: verdict <PASS | FAIL | NO RESULT | RESOLVED> (<why>)[ [<what was asserted>]]"
 // where NO RESULT means the effect is below the resolving power, or the bar lies within the effect's
 // resolving power, so neither a pass nor a fail can be stated (§8: "an effect below it is no result");

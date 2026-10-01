@@ -11,9 +11,10 @@
 //      "<target> <median tok/s> <relative spread>";
 //   2. built as superslm_pkv_c6, with SUPERSLM_PAGED_KV_79_BASELINE=<that file>: measures the same
 //      targets and grades slowdown = 1 - paged / one-page against the bar.
-// The verdict is three-way -- PASS, FAIL or NO RESULT (pkv_common.h's timing verdicts; Grade() below) --
-// and is asserted only with SUPERSLM_PAGED_KV_TIMING_COMMISSIONED=1 (the harness is commissioned at C6,
-// §8; before that its readings are quarantined and printed only). A NO RESULT is never asserted.
+// Each target gets two verdicts (Grade() below): the effect (NO RESULT or RESOLVED, never asserted) and
+// the 5% bar (PASS, FAIL or NO RESULT). Only the bar is asserted, and only with
+// SUPERSLM_PAGED_KV_TIMING_COMMISSIONED=1 (the harness is commissioned at C6, §8; before that its
+// readings are quarantined and printed only). A NO RESULT is never asserted.
 //
 // In the cloud ("7.9/C6:fixtures") the one-page view is in the same binary: pkv_odd is pkv_def's weights
 // at cap 4100, which 16 does not divide, so B = cap and the holder is one page (§3.1). pkv_def at the
@@ -96,13 +97,15 @@ Rate Measure(const Fixture& fx, int64_t width, int64_t n) {
 	return r;
 }
 
-// Grades paged against one-page, three ways (pkv_common.h's timing verdicts), on slowdown
-// s = 1 - paged / one-page and the resolving power R:
-//   NO RESULT  |s| < R (the effect is below the resolving power), or the 5% bar lies within s +- R
-//              (the resolving power cannot resolve the bar): neither a pass nor a fail, nothing asserted;
-//   PASS       s + R <= 5%: no more than 5% slower, resolved;
-//   FAIL       s - R > 5%: more than 5% slower, resolved.
-// The verdict is asserted only with SUPERSLM_PAGED_KV_TIMING_COMMISSIONED=1 (§8's quarantine).
+// Grades paged against one-page on slowdown s = 1 - paged / one-page and the resolving power R, as two
+// separate verdicts per target (pkv_common.h's timing vocabulary):
+//   effect  whether a change was measured (§8: "an effect below the resolving power is no result"):
+//           NO RESULT when |s| < R, otherwise RESOLVED, with its sign. Never asserted.
+//   bar     the bound claim "no more than 5% slower" (§10 R9), which an unchanged build must be able
+//           to meet: PASS when s + R <= 5%, FAIL when s - R > 5%, NO RESULT when the bar lies inside
+//           [s - R, s + R] (the resolving power cannot resolve it).
+// Only the bar verdict is asserted, and only with SUPERSLM_PAGED_KV_TIMING_COMMISSIONED=1 (§8's
+// quarantine). With R under 5%, an unchanged build reads effect NO RESULT and bar PASS.
 void Grade(const char* target, const Rate& paged, const Rate& one_page) {
 	if (!paged.ok || !one_page.ok) return;
 	const double slowdown = 1.0 - paged.median / one_page.median;
@@ -110,23 +113,29 @@ void Grade(const char* target, const Rate& paged, const Rate& one_page) {
 	// The reading line: run_commissioning.py parses its "slowdown X%, resolving power Y%".
 	std::printf("7.9 %s: paged %.1f tok/s, one-page %.1f tok/s, slowdown %.2f%%, resolving power %.2f%%\n", target, paged.median,
 	            one_page.median, slowdown * 100, resolving * 100);
-	const TimingVerdict v =
-	    std::fabs(slowdown) < resolving ? TimingVerdict::kNoResult : GradeAgainstBound(slowdown, kBar, resolving);
+	const bool asserting = TimingCommissioned();
+	// (a) the effect
+	const bool effect_resolved = std::fabs(slowdown) >= resolving;
+	PrintTimingVerdict("7.9", std::string(target) + " effect", effect_resolved ? TimingVerdict::kResolved : TimingVerdict::kNoResult,
+	                   effect_resolved ? Fmt("paged decode %s by %.2f%%, beyond the resolving power %.2f%%", slowdown > 0 ? "slower" : "faster",
+	                                         std::fabs(slowdown) * 100, resolving * 100)
+	                                   : Fmt("|slowdown| %.2f%% is below the resolving power %.2f%%", std::fabs(slowdown) * 100,
+	                                         resolving * 100),
+	                   asserting);
+	// (b) the bar
+	const TimingVerdict bar = GradeAgainstBound(slowdown, kBar, resolving);
 	std::string why;
-	if (std::fabs(slowdown) < resolving)
-		why = Fmt("|slowdown| %.2f%% is below the resolving power %.2f%%", std::fabs(slowdown) * 100, resolving * 100);
-	else if (v == TimingVerdict::kNoResult)
-		why = Fmt("the 5%% bar lies within slowdown %.2f%% +- resolving power %.2f%%, so the bar is not resolved", slowdown * 100,
-		          resolving * 100);
-	else if (v == TimingVerdict::kPass)
+	if (bar == TimingVerdict::kNoResult)
+		why = Fmt("the 5%% bar lies inside [%.2f%%, %.2f%%] (slowdown %.2f%% +- resolving power %.2f%%), so the bar is not resolved",
+		          (slowdown - resolving) * 100, (slowdown + resolving) * 100, slowdown * 100, resolving * 100);
+	else if (bar == TimingVerdict::kPass)
 		why = Fmt("slowdown %.2f%% + resolving power %.2f%% is within the 5%% bar", slowdown * 100, resolving * 100);
 	else
 		why = Fmt("slowdown %.2f%% - resolving power %.2f%% is beyond the 5%% bar", slowdown * 100, resolving * 100);
-	const bool asserting = TimingCommissioned();
-	PrintTimingVerdict("7.9", target, v, why, asserting);
-	if (!asserting || v == TimingVerdict::kNoResult) return;
+	PrintTimingVerdict("7.9", std::string(target) + " bar", bar, why, asserting);
+	if (!asserting || bar == TimingVerdict::kNoResult) return;
 	// kills: a per-page attention loop (or address path) that costs more than the bar
-	PKV_CHECK_MSG(v == TimingVerdict::kPass, "7.9 %s: paged decode is %.2f%% slower than the one-page view, beyond the 5%% bar by "
+	PKV_CHECK_MSG(bar == TimingVerdict::kPass, "7.9 %s: paged decode is %.2f%% slower than the one-page view, beyond the 5%% bar by "
 	              "more than the resolving power %.2f%%", target, slowdown * 100, resolving * 100);
 }
 
