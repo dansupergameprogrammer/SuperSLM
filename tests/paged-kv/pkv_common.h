@@ -368,7 +368,7 @@ struct BlobView {
 	uint32_t kv_mode = 0;   // SSB6 only
 	int32_t budget = 0;     // SSB6 only
 	int64_t origin = 0;     // SSB6 only
-	uint64_t kv_positions = 0;  // SSB6: the stored L'; SSB5: context_cap (the whole block)
+	uint64_t kv_positions = 0;  // SSB6: the stored L'; 0 for SSB5 (its block spans the whole cap)
 	size_t kv_offset = 0;   // where the rows (SSB6) or the block (SSB5) start
 };
 
@@ -419,6 +419,7 @@ inline bool BlobRows(const std::vector<uint8_t>& b, const Fixture& fx, size_t hi
 }
 
 // The residual's length: every pkv fixture has hidden_size 192 (gen_decode_threading_fixture.config).
+// Real artifacts differ; box cells that parse past the fixed header must use the artifact's own.
 inline size_t HiddenSize(const Fixture&) { return 192; }
 
 inline bool SaveBlob(sslm_seq s, std::vector<uint8_t>* out) {
