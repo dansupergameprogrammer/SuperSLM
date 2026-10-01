@@ -55,6 +55,31 @@ std::vector<uint8_t> SaveAdopted(Input& in, Pool& pool, const std::vector<int32_
     return blob;
 }
 
+std::vector<uint8_t> SaveNested(Input& in, Pool& pool, const std::vector<int32_t>& world_ids,
+                                const std::vector<int32_t>& persona_ids) {
+    Prefix world;
+    Check(sslm_prefix_begin_budgeted(in.model, &pool.pool, int32_t(world_ids.size()), &world.p), "world_begin");
+    Prefill(in.model, world.p, world_ids, SSLM_SPAN_PROMPT);
+    Check(sslm_prefix_freeze(world.p), "world_freeze");
+    Prefix child;
+    Check(sslm_prefix_begin_from(world.p, int32_t(persona_ids.size()), &child.p), "child_begin");
+    Prefill(in.model, child.p, persona_ids, SSLM_SPAN_PROMPT);
+    Check(sslm_prefix_freeze(child.p), "child_freeze");
+    sslm_seq sequence = nullptr;
+    Check(sslm_seq_create_budgeted(in.model, &pool.pool, 128, &sequence), "seq_create");
+    Check(sslm_seq_adopt_prefix(sequence, child.p), "seq_adopt_prefix");
+    size_t size = 0;
+    if (sslm_seq_save(sequence, nullptr, &size) != SSLM_BUFFER_TOO_SMALL || !size)
+        throw std::runtime_error("nested save size query failed");
+    std::vector<uint8_t> blob(size);
+    Check(sslm_seq_save(sequence, blob.data(), &size), "seq_save");
+    blob.resize(size);
+    Check(sslm_seq_release(sequence), "seq_release");
+    if (blob.size() < 172 || std::memcmp(blob.data(), "SSB6", 4))
+        throw std::runtime_error("nested budget adopter did not save SSB6");
+    return blob;
+}
+
 struct Layout {
     size_t length = 0, rows_offset = 0;
     Layout(const std::vector<uint8_t>& blob, const Geometry& g) {
@@ -127,19 +152,30 @@ void Report(std::ofstream& out, const char* name, Input& in, Pool& pool,
 
 int main(int argc, char** argv) {
     try {
-        if (argc != 6 && argc != 7) throw std::runtime_error("usage: t3035_mutant_probe MODEL TARGET_IDS DONOR_IDS OUT greedy|damped [swap|core]");
+        if (argc != 6 && argc != 7 && argc != 9)
+            throw std::runtime_error("usage: t3035_mutant_probe MODEL TARGET_IDS DONOR_IDS OUT greedy|damped [swap|core [WORLD_IDS PERSONA_IDS]]");
         const std::string mode = argv[5];
         if (mode != "greedy" && mode != "damped") throw std::runtime_error("invalid decode mode");
         const bool damped = mode == "damped";
-        const std::string selection = argc == 7 ? argv[6] : "all";
+        const std::string selection = argc >= 7 ? argv[6] : "all";
         if (selection != "all" && selection != "swap" && selection != "core")
             throw std::runtime_error("unknown probe selector");
         const bool swap_only = selection == "swap";
         const bool core_only = selection == "core";
+        if (argc == 9 && !core_only) throw std::runtime_error("nested probe requires core selector");
         Input in(argv[1]);
         Pool pool(in.model, in.cap);
         const Geometry geometry(in);
-        const auto target = SaveAdopted(in, pool, ReadIds(argv[2]));
+        const auto target_ids = ReadIds(argv[2]);
+        std::vector<uint8_t> target;
+        if (argc == 9) {
+            const auto world_ids = ReadIds(argv[7]);
+            const auto persona_ids = ReadIds(argv[8]);
+            auto combined = world_ids;
+            combined.insert(combined.end(), persona_ids.begin(), persona_ids.end());
+            if (combined != target_ids) throw std::runtime_error("nested split differs from complete prompt IDs");
+            target = SaveNested(in, pool, world_ids, persona_ids);
+        } else target = SaveAdopted(in, pool, target_ids);
         const auto donor = SaveAdopted(in, pool, ReadIds(argv[3]));
         const Layout t(target, geometry), d(donor, geometry);
         if (d.length < t.length) throw std::runtime_error("donor must cover target positions");

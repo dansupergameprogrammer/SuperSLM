@@ -6,6 +6,7 @@ Commissioning constructions are authored by an independent seat.
 """
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -46,15 +47,93 @@ def screen(input_path: Path, output_path: Path) -> int:
     return 0 if passed else 1
 
 
+def mutation(input_path: Path, output_path: Path, target: Path,
+             donor: Path, screen_path: Path | None) -> int:
+    """Transcribe one shipped-verb probe without licensing its population."""
+    lines = input_path.read_text(encoding="utf-8").splitlines()
+    if not lines or not lines[0].startswith("# "):
+        raise ValueError("missing probe header")
+    fields = dict(part.split("=", 1) for part in lines[0][2:].split()
+                  if "=" in part)
+    if int(fields["baseline_tokens"]) != 64:
+        raise ValueError("unedited round trip did not reach 64 tokens")
+    baseline = [int(value) for value in fields["tokens"].split(",")]
+    if len(baseline) != 64:
+        raise ValueError("baseline token count mismatch")
+    results = []
+    for line in lines[1:]:
+        parts = line.split()
+        if len(parts) != 4:
+            raise ValueError(f"malformed mutant row: {line}")
+        name = parts[0]
+        attrs = dict(part.split("=", 1) for part in parts[1:])
+        killed = bool(int(attrs["killed"]))
+        first = int(attrs["first_diff"])
+        observed = int(attrs["tokens"])
+        if (first < 0) == killed or (not killed and observed != 64):
+            raise ValueError(f"inconsistent mutant result: {line}")
+        results.append({"mutant": name, "killed": killed,
+                        "first_divergent_token": first,
+                        "observed_tokens": observed,
+                        "donor_prompt_id": donor.stem})
+    if len({row["mutant"] for row in results}) != len(results):
+        raise ValueError("duplicate mutant row")
+    screen_rows = []
+    if screen_path:
+        screen_data = json.loads(screen_path.read_text(encoding="utf-8"))
+        screen_rows = [row for row in screen_data["rows"]
+                       if Path(row["prompt"]).stem == target.stem
+                       and row["mode"] == fields["mode"]]
+        if len(screen_rows) != 1:
+            raise ValueError("matching screen row missing or duplicated")
+    result = {
+        "instrument": "T-3035-precache-discrimination",
+        "status": "QUARANTINED",
+        "population_adequate": False,
+        "reason": "M-swap and system-first M-row(0) source contradictions; commissioning unauthored",
+        "probe_sha256": hashlib.sha256(input_path.read_bytes()).hexdigest(),
+        "target_prompt_id": target.stem,
+        "target_ids_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+        "donor_prompt_id": donor.stem,
+        "donor_ids_sha256": hashlib.sha256(donor.read_bytes()).hexdigest(),
+        "length": int(fields["L"]), "page_positions": int(fields["B"]),
+        "decode_mode": fields["mode"],
+        "unedited_roundtrip_tokens": baseline,
+        "screen": screen_rows[0] if screen_rows else None,
+        "mutants": results,
+        "threshold_observation": {
+            "M_res_killed": next((row["killed"] for row in results
+                                  if row["mutant"] == "M-res"), None),
+            "every_page_killed": all(row["killed"] for row in results
+                                     if row["mutant"].startswith("M-page")),
+            "tail_killed": next((row["killed"] for row in results
+                                 if row["mutant"] == "M-tail"), None),
+            "M_swap_killed": next((row["killed"] for row in results
+                                   if row["mutant"].startswith("M-swap")), None),
+        },
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
     command = sub.add_parser("screen")
     command.add_argument("input", type=Path)
     command.add_argument("output", type=Path)
+    command = sub.add_parser("mutation")
+    command.add_argument("input", type=Path)
+    command.add_argument("output", type=Path)
+    command.add_argument("target", type=Path)
+    command.add_argument("donor", type=Path)
+    command.add_argument("--screen", type=Path)
     args = parser.parse_args()
     if args.command == "screen":
         return screen(args.input, args.output)
+    if args.command == "mutation":
+        return mutation(args.input, args.output, args.target, args.donor, args.screen)
     raise AssertionError(args.command)
 
 
