@@ -2026,7 +2026,18 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	if (seq.context_length >= context_cap) {
 		return superslm::SslmForwardStatus::KvCapacityExhausted;  // KvCapacityExhausted
 	}
-	static_assert(static_cast<int>(superslm_gpu::GpuLayerLoopGuard::kCount) == 9,
+	// KvPageUnmapped (the coverage guard in `RunLayerLoopImpl` (`forward_sites.cpp`), paged-KV
+	// plan §3.2 item 5): the twin over this sequence's constant one-page view (`mapped_pages = 1`,
+	// `page_positions` = the sequence's own cap). KvCapacityExhausted above implies it, so it cannot
+	// fire until the GPU slice binds it to the sequence's page table (plan steps G2/G3).
+	{
+		const int64_t mapped_pages = 1;
+		const int64_t page_positions = context_cap;
+		if (seq.context_length + 1 > mapped_pages * page_positions) {
+			return superslm::SslmForwardStatus::KvPageUnmapped;  // KvPageUnmapped
+		}
+	}
+	static_assert(static_cast<int>(superslm_gpu::GpuLayerLoopGuard::kCount) == 10,
 	              "RunLayerLoopGpu's own guard ladder above must implement exactly as many guards "
 	              "as gpu_layer_loop_guards.def enumerates -- update both together");
 

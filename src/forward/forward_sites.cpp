@@ -2275,6 +2275,18 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 	if (seq.context_length >= context_cap) {
 		return SslmForwardStatus::KvCapacityExhausted;
 	}
+	// Paged-KV plan §3.2 item 4, the coverage guard: the view must map the row this call writes,
+	// `context_length + 1 <= mapped_pages * page_positions`, checked after KvCapacityExhausted and
+	// the workspace guard and before the first write. The flat workspace is a one-page view
+	// (`mapped_pages = 1`, `page_positions = context_cap`), where the check above already implies
+	// this one; a paged view is the only input that reaches it.
+	{
+		const int64_t mapped_pages = 1;
+		const int64_t page_positions = context_cap;
+		if (seq.context_length + 1 > mapped_pages * page_positions) {
+			return SslmForwardStatus::KvPageUnmapped;
+		}
+	}
 
 	// S3.7 (§11 S3.7 "The mechanism"): the current token attends to every
 	// already-committed position (`seq.context_length` of them) plus its own
@@ -2938,6 +2950,18 @@ static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk
 		kv_bytes_needed *= factor;
 	}
 	if (workspace_size < kv_bytes_needed) return SslmForwardStatus::WorkspaceTooSmall;
+	// Paged-KV plan §3.2 item 4, the coverage guard: the view must map every row this chunk
+	// writes, `context_length_start + chunk_tokens <= mapped_pages * page_positions`, checked as
+	// the last guard before the first write. The flat workspace is a one-page view, where the
+	// KvCapacityExhausted check above already implies this one.
+	{
+		const int64_t mapped_pages = 1;
+		const int64_t page_positions = context_cap;
+		if (context_length_start + static_cast<int64_t>(chunk_tokens) >
+		    mapped_pages * page_positions) {
+			return SslmForwardStatus::KvPageUnmapped;
+		}
+	}
 
 	std::vector<int8_t> normed(chunk_tokens * hidden_size);
 	std::vector<CarriedScale> normed_scale(chunk_tokens);

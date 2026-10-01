@@ -1709,6 +1709,11 @@ sslm_status MapForwardStatus(superslm::SslmForwardStatus st) {
 	if (st == superslm::SslmForwardStatus::GpuOperationFailed) {
 		return SSLM_ARTIFACT_REJECTED;
 	}
+	// Paged-KV plan §3.2 item 4: the page view is a caller argument, so a view that maps too few
+	// positions is a caller error, never an artifact defect. No ABI path builds such a view.
+	if (st == superslm::SslmForwardStatus::KvPageUnmapped) {
+		return SSLM_INVALID_ARGUMENT;
+	}
 	return st == superslm::SslmForwardStatus::Ok ? SSLM_OK : SSLM_ARTIFACT_REJECTED;
 }
 

@@ -26116,7 +26116,7 @@ static void TestT2053_M1_TableWalkAgainstGuardsDef() {
 	// the BUILD, per the commission's own "verify kCount's static_assert
 	// wiring is itself alive" ask -- proven by construction: this line does
 	// not compile if `kCount` and the literal `9` disagree.
-	static_assert(static_cast<int>(superslm_gpu::GpuLayerLoopGuard::kCount) == 9,
+	static_assert(static_cast<int>(superslm_gpu::GpuLayerLoopGuard::kCount) == 10,
 	              "gpu_layer_loop_guards.def's own row count changed -- update this table "
 	              "walk's own row count (T2053_GuardRows below) to match, in CPU's own "
 	              "source order (forward_sites.cpp:1137-1354)");
@@ -26207,6 +26207,14 @@ static void TestT2053_M1_TableWalkAgainstGuardsDef() {
 	int8_t codes9[2] = {5, -5};
 	s = SequenceLayerState{}; s.hidden_codes = codes9; s.hidden_scale = CarriedScale{INT64_C(1073741824), 0}; s.layer_index = 0; s.context_length = 1;
 	run_both("KvCapacityExhausted", s, s, fixture.layers, 8, 8, 2, 2, 1, 2, /*context_cap=*/1, 32, 0);
+
+	// Paged-KV plan §3.2 item 5 (step M1), the tenth row. RunLayerLoop's flat workspace is a one-page
+	// view, so KvPageUnmapped's fixture (the first row past the view) is the cap itself, where
+	// KvCapacityExhausted fires first on both sides; the row pins agreement on that ordering until a
+	// paged view reaches the guard (C2 on CPU, G2/G3 on GPU).
+	int8_t codes10[2] = {5, -5};
+	s = SequenceLayerState{}; s.hidden_codes = codes10; s.hidden_scale = CarriedScale{INT64_C(1073741824), 0}; s.layer_index = 0; s.context_length = 2;
+	run_both("KvPageUnmapped", s, s, fixture.layers, 8, 8, 2, 2, 1, 2, /*context_cap=*/2, 64, 0);
 
 	CHECK_MSG(rows_tested == static_cast<int>(superslm_gpu::GpuLayerLoopGuard::kCount),
 	          "T2053 table-walk: %d rows tested, want %d (gpu_layer_loop_guards.def's own "

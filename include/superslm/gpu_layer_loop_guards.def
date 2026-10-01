@@ -133,5 +133,9 @@ SSLM_GPU_LAYER_LOOP_GUARD(HiddenCodesNull, InvalidHiddenCodes, "forward_sites.cp
 SSLM_GPU_LAYER_LOOP_GUARD(SequenceAlreadyComplete, SequenceAlreadyComplete, "forward_sites.cpp:2239")
 SSLM_GPU_LAYER_LOOP_GUARD(PositionOverCap, PositionOverCap, "forward_sites.cpp:2274")
 SSLM_GPU_LAYER_LOOP_GUARD(KvCapacityExhausted, KvCapacityExhausted, "forward_sites.cpp:2276")
+// Paged-KV plan §3.2 items 4-5 (step M1): the coverage guard, the tenth row, appended after
+// KvCapacityExhausted in CPU's own source order. Its GPU twin evaluates the sequence's constant
+// one-page view until the GPU slice binds it to a page table.
+SSLM_GPU_LAYER_LOOP_GUARD(KvPageUnmapped, KvPageUnmapped, "forward_sites.cpp:2287")
 
 #undef SSLM_GPU_LAYER_LOOP_GUARD

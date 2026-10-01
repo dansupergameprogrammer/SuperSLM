@@ -102,6 +102,8 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 	if (s == SslmForwardStatus::ParallelForIncomplete) return "ParallelForIncomplete";
 	// SuperSLM 1.8.0 (TE-426): the appended enumerator owes its arm here and in MapForwardStatus.
 	if (s == SslmForwardStatus::GpuOperationFailed) return "GpuOperationFailed";
+	// Paged-KV plan §3.2 item 4: the coverage guard's status owes its arm here and in MapForwardStatus.
+	if (s == SslmForwardStatus::KvPageUnmapped) return "KvPageUnmapped";
 	return "?";
 }
 

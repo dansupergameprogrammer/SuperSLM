@@ -646,6 +646,7 @@ def test_real_tree_gpu_full_body_raw_set_before_subtraction_matches_the_review_o
         "InvalidLayerBudget", "InvalidContextCap", "HeadDimGeometryMismatch",
         "KvHeadGeometryMismatch", "WorkspaceTooSmall", "InvalidHiddenCodes",
         "SequenceAlreadyComplete", "PositionOverCap", "KvCapacityExhausted",
+        "KvPageUnmapped",
     }
     assert raw & chk.GPU_BELOW_LADDER_STATUSES == chk.GPU_BELOW_LADDER_STATUSES, (
         "the one named below-ladder status must actually appear at source -- an unused name in the "
@@ -841,7 +842,7 @@ def test_main_end_to_end_against_the_real_tree_is_green_today():
     assert failures == [], f"real tree should be clean today: {failures}"
 
 
-def test_real_tree_status_set_is_the_named_nine():
+def test_real_tree_status_set_is_the_named_ten():
     with open(chk.FORWARD_SITES_CPP, "r", encoding="utf-8") as f:
         cpu_text = f.read()
     cpu_set = chk.cpu_guard_status_set(cpu_text)
@@ -849,6 +850,7 @@ def test_real_tree_status_set_is_the_named_nine():
         "InvalidLayerBudget", "InvalidContextCap", "HeadDimGeometryMismatch",
         "KvHeadGeometryMismatch", "WorkspaceTooSmall", "InvalidHiddenCodes",
         "SequenceAlreadyComplete", "PositionOverCap", "KvCapacityExhausted",
+        "KvPageUnmapped",
     }
 
 
@@ -874,11 +876,28 @@ def test_real_tree_cpu_full_body_raw_set_before_subtraction_matches_the_review_o
         "InvalidLayerBudget", "InvalidContextCap", "HeadDimGeometryMismatch",
         "KvHeadGeometryMismatch", "WorkspaceTooSmall", "InvalidHiddenCodes",
         "SequenceAlreadyComplete", "PositionOverCap", "KvCapacityExhausted",
+        "KvPageUnmapped",
     }
     assert raw & chk.CPU_BELOW_GUARD_ARITHMETIC_STATUSES == chk.CPU_BELOW_GUARD_ARITHMETIC_STATUSES, (
         "every one of the four named below-guard statuses must actually appear at source -- "
         "an unused name in the subtraction list would silently widen the residual for nothing"
     )
+
+
+def test_real_tree_with_the_kv_page_unmapped_def_row_removed_is_red(tmp_path):
+    # Paged-KV plan cell 11.8 (step M1): the unmutated tree is green (the end-to-end cell above),
+    # and the same tree with the tenth `.def` row, KvPageUnmapped, removed is red -- the CPU and
+    # GPU ladders still return it, so the three sets no longer agree.
+    with open(chk.GUARDS_DEF, "r", encoding="utf-8") as f:
+        def_text = f.read()
+    row = [ln for ln in def_text.splitlines(keepends=True)
+           if ln.startswith("SSLM_GPU_LAYER_LOOP_GUARD(KvPageUnmapped,")]
+    assert len(row) == 1, "the real .def must carry exactly one KvPageUnmapped row"
+    mutated = tmp_path / "gpu_layer_loop_guards.def"
+    mutated.write_text(def_text.replace(row[0], ""), encoding="utf-8")
+    failures = chk.run_all_checks(guards_def_path=str(mutated))
+    assert failures, "a tree whose .def lacks the KvPageUnmapped row must fail the parity check"
+    assert any("KvPageUnmapped" in f for f in failures), failures
 
 
 def test_main_returns_0_against_the_real_tree(capsys):
@@ -1468,7 +1487,7 @@ def test_wiring_vitality_check_lwuws_path_count_disable_stops_catching_a_corrupt
     with tempfile.TemporaryDirectory() as tmp:
         with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
             real_text = f.read()
-        corrupted = real_text.replace("catch, thirty-three paths", "catch, seventeen paths", 1)
+        corrupted = real_text.replace("catch, thirty-four paths", "catch, seventeen paths", 1)
         assert corrupted != real_text, "sanity: the exact phrase must exist in the real file"
         gph_path = os.path.join(tmp, "corrupted_before_word_gpu_port.h")
         with open(gph_path, "w", encoding="utf-8") as f:
@@ -1493,7 +1512,7 @@ def test_wiring_vitality_gpu_port_h_path_disable_stops_catching_a_corrupted_word
     with tempfile.TemporaryDirectory() as tmp:
         with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
             real_text = f.read()
-        corrupted = real_text.replace("alike, forty", "alike, twenty-three", 1)
+        corrupted = real_text.replace("alike, forty-one", "alike, twenty-three", 1)
         assert corrupted != real_text, "sanity: the exact phrase must exist in the real file"
         gph_path = os.path.join(tmp, "corrupted_total_word_gpu_port.h")
         with open(gph_path, "w", encoding="utf-8") as f:
@@ -1733,7 +1752,7 @@ def test_derive_before_count_raises_when_the_residency_statement_is_absent_with_
         assert "no boundary to cut on" in str(e)
 
 
-def test_the_real_tree_lwuws_before_count_is_thirty_three():
+def test_the_real_tree_lwuws_before_count_is_thirty_four():
     # T-2101's own two real catch clauses on RunLayerLoopGpuSubmit (GpuGemmGroupArithmeticError's,
     # one literal return; the generic std::runtime_error's, one ternary return), PLUS (T-2184, S3,
     # D-SLM3662) SubmitOneSubChunkToFullDepthForG5Bridge's own original pair of catch clauses
@@ -1792,10 +1811,12 @@ def test_the_real_tree_lwuws_before_count_is_thirty_three():
     subchunk_catch_bodies = chk.extract_catch_block_bodies(subchunk_body)
     assert len(submit_catch_bodies) == 10
     assert len(subchunk_catch_bodies) == 10
-    assert chk.count_any_return_statements(before) == 13
+    assert chk.count_any_return_statements(before) == 14  # paged-KV step M1: 13 + the coverage guard
     assert sum(chk.count_any_return_statements(b) for b in submit_catch_bodies) == 10
     assert sum(chk.count_any_return_statements(b) for b in subchunk_catch_bodies) == 10
-    assert chk.derive_lwuws_before_decision_count(gpu_text) == 33
+    # Paged-KV plan step M1: the coverage guard adds one return to the ladder (13 -> 14): 14 + 10 + 10
+    # = 34.
+    assert chk.derive_lwuws_before_decision_count(gpu_text) == 34
 
 
 def test_the_real_tree_lwuws_after_count_is_seven():
@@ -1815,7 +1836,7 @@ def test_the_real_tree_lwuws_after_count_is_seven():
     assert chk.derive_lwuws_after_decision_count(gpu_text) == 7
 
 
-def test_the_real_tree_lwuws_total_is_forty():
+def test_the_real_tree_lwuws_total_is_forty_one():
     # CORRECTED 2026-09-03 (T-2577, D-SLM6279): 27 + 6 = 33 was gpu_port.h's own prose before
     # this ticket; two new catch clauses (GpuShaderBinaryStaleError's, one per function) move the
     # before-count from 27 to 29, unchanged after-count of 6: 29 + 6 = 35.
@@ -1828,10 +1849,12 @@ def test_the_real_tree_lwuws_total_is_forty():
     # from 6 to 7 (the cell above): 33 + 7 = 40, gpu_port.h's "forty".
     with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
         gpu_text = f.read()
+    # Paged-KV plan step M1: the coverage guard's return sits before the decision: 34 + 7 = 41,
+    # gpu_port.h's "forty-one".
     assert (chk.derive_lwuws_before_decision_count(gpu_text)
-            + chk.derive_lwuws_after_decision_count(gpu_text)) == 40
+            + chk.derive_lwuws_after_decision_count(gpu_text)) == 41
     with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
-        assert chk.parse_lwuws_path_counts(f.read()) == (33, 40)
+        assert chk.parse_lwuws_path_counts(f.read()) == (34, 41)
 
 
 # --- M2: O34's successor residual is a MEASURED property, not a claim about one ---

@@ -380,9 +380,9 @@ enum class GpuLayerLoopGuard : int {
 // decision; read back by the caller after RunLayerLoopGpu returns.
 //
 // Every return path that resolves the call BEFORE that decision runs reads false, by
-// construction (the function-entry reset, never overwritten on that path): the nine-guard
+// construction (the function-entry reset, never overwritten on that path): the ten-guard
 // ladder, the two device-capability rejections, and every return inside the recording window's
-// own catch, thirty-three paths in all -- T-2568 added one new catch clause to each of
+// own catch, thirty-four paths in all -- T-2568 added one new catch clause to each of
 // RunLayerLoopGpuSubmit and SubmitOneSubChunkToFullDepthForG5Bridge
 // (GpuLayerWeightsContractError's own, PackLayerWeightsBytes' required-pointer refusal), two more
 // than the twenty-five this paragraph named before; T-2577 (D-SLM6279, GpuShaderBinaryStaleError's
@@ -391,12 +391,14 @@ enum class GpuLayerLoopGuard : int {
 // std::bad_alloc, std::length_error and catch-all clauses (three more returns per function) and
 // reduced each submission tail's two clauses to one classified return apiece (two fewer), one more
 // per function, for thirty-one; TE-432 gave each submission tail a catch-all clause, one more
-// return per function, for thirty-three. Every path that resolves the call AFTER the
+// return per function, for thirty-three; the paged-KV plan's coverage guard (step M1, a tenth
+// ladder guard, one more return) makes thirty-four. Every path that resolves the call AFTER the
 // decision reads exactly what the decision decided (true on a cache hit, false on a miss),
 // whether the call's own final status is Ok or one of DecodeStickyTag's fifteen rejecting
-// statuses, including ResidualReconciliationScaleOutOfDomain -- the thirty-three before them,
-// alike, forty paths' own destination in total (TE-435 gave RunLayerLoopGpuFinish a catch-all
-// clause, one more return after the decision, where TE-432's count was thirty-nine).
+// statuses, including ResidualReconciliationScaleOutOfDomain -- the thirty-four before them,
+// alike, forty-one paths' own destination in total (TE-435 gave RunLayerLoopGpuFinish a catch-all
+// clause, one more return after the decision, where TE-432's count was thirty-nine; the coverage
+// guard's return, before the decision, took forty to forty-one).
 //
 // Both counts are derived structurally from source, not restated by hand, by
 // tests/ci/check_gpu_guard_status_parity.py (derive_lwuws_before_decision_count/

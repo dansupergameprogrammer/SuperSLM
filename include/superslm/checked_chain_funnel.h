@@ -390,6 +390,18 @@ enum class SslmForwardStatus {
 	                                          // advice no size fixes for any of these. The CPU path
 	                                          // never produces it; MapForwardStatus (sslm_abi.cpp)
 	                                          // carries an explicit arm anyway.
+	KvPageUnmapped,                           // Paged-KV plan §3.2 item 4, appended last so no
+	                                          // existing ordinal moves: the K/V page view maps
+	                                          // fewer positions than this call writes
+	                                          // (`context_length + 1 > mapped_pages * B`, or the
+	                                          // chunk's `context_length_start + chunk_tokens`).
+	                                          // Checked after KvCapacityExhausted and the workspace
+	                                          // guard, before the first write. A flat workspace is
+	                                          // a one-page view (`B = context_cap`), where
+	                                          // KvCapacityExhausted fires first, so only a paged
+	                                          // view reaches it. The view is a caller argument:
+	                                          // MapForwardStatus maps it to SSLM_INVALID_ARGUMENT,
+	                                          // and no C ABI path builds a view this guard refuses.
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,
