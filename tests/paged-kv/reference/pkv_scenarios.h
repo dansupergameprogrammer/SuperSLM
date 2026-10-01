@@ -352,6 +352,56 @@ inline void Saturating(Driver& d, std::vector<Pinned>* pins) {
 	sslm_seq_release(s);
 }
 
+// 4.1 / 6.1 (C2 engine, C4 legacy ABI): one fresh sequence per width W in {1, 15, 16, 17, 32,
+// 1,064 (a 1,000-token prefix + 64), cap - 1, cap}: prefill W, record the rows; decode the ready
+// token (it writes no row); below the cap decode one more, which writes row W and attends over
+// W + 1 positions, and record the rows again. The 32k fixture stops at 1,064 (its cap-sized widths
+// cost minutes and no cell asks for them).
+inline void Widths(Driver& d, std::vector<Pinned>*) {
+	Driver::Pool pool;
+	if (!d.MakePool(1, &pool)) return;
+	std::vector<int64_t> widths = {1, 15, 16, 17, 32, 1064};
+	if (d.geo.context_cap <= 4100) {
+		widths.push_back(d.geo.context_cap - 1);
+		widths.push_back(d.geo.context_cap);
+	}
+	for (int64_t w : widths) {
+		sslm_seq s = nullptr;
+		if (!d.Ok(sslm_seq_create(d.model, &pool.pool, &s), "seq_create")) return;
+		const std::string tag = "w" + std::to_string(w);
+		bool ok = d.Prefill(s, Stream(41, static_cast<int32_t>(w), d.vocab), 64) && d.Mark((tag + "_prefill").c_str(), s) &&
+		          d.Decode(s, 1) && d.Mark((tag + "_ready").c_str(), nullptr);
+		if (ok && w < d.geo.context_cap) ok = d.Decode(s, 1) && d.Mark((tag + "_decode1").c_str(), s);
+		sslm_seq_release(s);
+		if (!ok) return;
+	}
+}
+
+// 4.2 / 6.1 (the adopt half): a prefix of length P in {0, 1, 15, 16, 17, 1,000 (mid-page),
+// 1,008 (aligned)} frozen and adopted by a fresh sequence, which decodes 8 tokens, then prefills 20
+// more and decodes 4. P = 0 freezes an empty prefix; its adopter has no ready token (decode on it is
+// refused, as on a fresh sequence), so it skips the first decode.
+inline void PrefixLengths(Driver& d, std::vector<Pinned>*) {
+	Driver::Pool pool;
+	if (!d.MakePool(2, &pool)) return;
+	for (int32_t len : {0, 1, 15, 16, 17, 1000, 1008}) {
+		sslm_prefix px = nullptr;
+		sslm_seq s = nullptr;
+		if (!d.Ok(sslm_prefix_begin(d.model, &pool.pool, &px), "prefix_begin")) return;
+		const std::string tag = "p" + std::to_string(len);
+		bool ok = (len == 0 || d.PrefixPrefill(px, Stream(51, len, d.vocab), 64)) &&
+		          d.Ok(sslm_prefix_freeze(px), "prefix_freeze") &&
+		          d.Ok(sslm_seq_create(d.model, &pool.pool, &s), "seq_create") &&
+		          d.Ok(sslm_seq_adopt_prefix(s, px), "adopt") && d.Mark((tag + "_adopted").c_str(), s) &&
+		          (len == 0 || (d.Decode(s, 8) && d.Mark((tag + "_decode8").c_str(), s))) &&
+		          d.Prefill(s, Stream(52, 20, d.vocab), 64) && d.Decode(s, 4) &&
+		          d.Mark((tag + "_prefill20+decode4").c_str(), s);
+		if (s) sslm_seq_release(s);
+		sslm_prefix_release(px);
+		if (!ok) return;
+	}
+}
+
 struct Scenario {
 	const char* name;
 	void (*run)(Driver&, std::vector<Pinned>*);
@@ -360,7 +410,8 @@ struct Scenario {
 inline const Scenario* Scenarios(size_t* n) {
 	static const Scenario k[] = {
 	    {"lifecycle", Lifecycle}, {"long_prefill", LongPrefill}, {"shared_preamble", SharedPreamble},
-	    {"persist", Persist},     {"saturating", Saturating},
+	    {"persist", Persist},     {"saturating", Saturating},         {"widths", Widths},
+	    {"prefix_lengths", PrefixLengths},
 	};
 	*n = sizeof k / sizeof k[0];
 	return k;
