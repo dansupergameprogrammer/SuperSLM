@@ -127,12 +127,15 @@ void Report(std::ofstream& out, const char* name, Input& in, Pool& pool,
 
 int main(int argc, char** argv) {
     try {
-        if (argc != 6 && argc != 7) throw std::runtime_error("usage: t3035_mutant_probe MODEL TARGET_IDS DONOR_IDS OUT greedy|damped [swap]");
+        if (argc != 6 && argc != 7) throw std::runtime_error("usage: t3035_mutant_probe MODEL TARGET_IDS DONOR_IDS OUT greedy|damped [swap|core]");
         const std::string mode = argv[5];
         if (mode != "greedy" && mode != "damped") throw std::runtime_error("invalid decode mode");
         const bool damped = mode == "damped";
-        const bool swap_only = argc == 7 && std::string(argv[6]) == "swap";
-        if (argc == 7 && !swap_only) throw std::runtime_error("unknown probe selector");
+        const std::string selection = argc == 7 ? argv[6] : "all";
+        if (selection != "all" && selection != "swap" && selection != "core")
+            throw std::runtime_error("unknown probe selector");
+        const bool swap_only = selection == "swap";
+        const bool core_only = selection == "core";
         Input in(argv[1]);
         Pool pool(in.model, in.cap);
         const Geometry geometry(in);
@@ -179,7 +182,7 @@ int main(int argc, char** argv) {
             Report(output, "M-tail", in, pool, b, baseline, damped);
         }
         }
-        if (full_pages >= 2) {
+        if (!core_only && full_pages >= 2) {
             auto b = target;
             const size_t first = (full_pages - 2) * B;
             const size_t other = (full_pages - 1) * B;
