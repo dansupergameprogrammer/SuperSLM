@@ -153,16 +153,17 @@ void Report(std::ofstream& out, const char* name, Input& in, Pool& pool,
 int main(int argc, char** argv) {
     try {
         if (argc != 6 && argc != 7 && argc != 9)
-            throw std::runtime_error("usage: t3035_mutant_probe MODEL TARGET_IDS DONOR_IDS OUT greedy|damped [swap|core|invisible [WORLD_IDS PERSONA_IDS]]");
+            throw std::runtime_error("usage: t3035_mutant_probe MODEL TARGET_IDS DONOR_IDS OUT greedy|damped [swap|core|invisible|row0 [WORLD_IDS PERSONA_IDS]]");
         const std::string mode = argv[5];
         if (mode != "greedy" && mode != "damped") throw std::runtime_error("invalid decode mode");
         const bool damped = mode == "damped";
         const std::string selection = argc >= 7 ? argv[6] : "all";
-        if (selection != "all" && selection != "swap" && selection != "core" && selection != "invisible")
+        if (selection != "all" && selection != "swap" && selection != "core" && selection != "invisible" && selection != "row0")
             throw std::runtime_error("unknown probe selector");
         const bool swap_only = selection == "swap";
         const bool core_only = selection == "core";
         const bool invisible_only = selection == "invisible";
+        const bool row0_only = selection == "row0";
         if (argc == 9 && !core_only) throw std::runtime_error("nested probe requires core selector");
         Input in(argv[1]);
         Pool pool(in.model, in.cap);
@@ -193,6 +194,18 @@ int main(int argc, char** argv) {
         output << '\n';
         const size_t B = geometry.page_positions, L = t.length;
         const size_t full_pages = L / B;
+        if (row0_only) {
+            size_t changed = 0;
+            for (size_t run = 0; run < geometry.runs; ++run)
+                for (size_t byte = 0; byte < geometry.row_bytes; ++byte)
+                    changed += target[t.Row(run, 0, geometry) + byte] !=
+                               donor[d.Row(run, 0, geometry) + byte];
+            output << "row0_differing_bytes=" << changed << "\n";
+            auto b = target;
+            CopyRows(b, donor, t, d, geometry, 0, 1);
+            Report(output, "M-row(0)", in, pool, b, baseline, damped);
+            return 0;
+        }
         if (invisible_only) {
             auto scale = target;
             // SSB6 hidden_scale.m/e occupy offsets 76..91; change both carried fields.
