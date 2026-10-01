@@ -16,6 +16,103 @@ sslm_prefix Child(const Fixture& fx, sslm_prefix parent, Handles& h,
     return child;
 }
 
+std::vector<uint8_t> LastSharedVByteChanged(const Fixture& fx,
+                                             std::vector<uint8_t> parent_blob) {
+    const int64_t origin=1000;
+    const size_t pos=size_t((origin/fx.B())*fx.B()-1); // last row in shared page 61.
+    const size_t H=fx.geo.kv_heads,D=fx.geo.head_dim;
+    const size_t offset=kHeader+HiddenSize(fx)+
+        ((size_t(fx.geo.layers-1)*2+1)*H+(H-1))*size_t(origin)*D+pos*D+(D-1);
+    PKV_CHECK_MSG(offset<parent_blob.size() && pos==991,
+                  "2.6 last-byte last-layer V operand is out of range");
+    if(offset<parent_blob.size()) {
+        parent_blob[offset]^=1;
+        Digest(parent_blob);
+    }
+    return parent_blob;
+}
+
+void PreciseHints26(const Fixture& fx,sslm_prefix built,sslm_kv_pool* built_pool,
+                    const std::vector<uint8_t>& child_blob) {
+    for(const char* origin : {"budget","legacy","restored"}) {
+        Scene sc;
+        PagePool& pool=sc.AddPool(fx.model,600);
+        sslm_prefix parent=Root(fx,&pool.pool,sc.h,1000,61,
+                                std::strcmp(origin,"legacy")==0);
+        if(!parent) return;
+        if(std::strcmp(origin,"restored")==0) {
+            const auto b=Save(parent);
+            if(!RequireBlob(b,"2.6 restored-parent origin")) return;
+            sslm_prefix copy=nullptr;
+            if(!Restored(fx,&pool.pool,b,nullptr,sc.h,&copy)) return;
+            parent=copy;
+        }
+        auto run=[&](const char* label,sslm_prefix hint,sslm_kv_pool* foreign_pool=nullptr,
+                     const Fixture* foreign_fx=nullptr,int64_t foreign_free=0,
+                     uint32_t expected_shared=0) {
+            if(foreign_pool && foreign_fx)
+                ProbeExactlyFreeOneState(*foreign_fx,foreign_pool,foreign_free);
+            sslm_prefix out=nullptr;
+            uint32_t shared=UINT32_MAX;
+            const auto st=Restore(fx,&pool.pool,child_blob,hint,&out,&shared);
+            PKV_CHECK_MSG(st==SSLM_OK && out && out!=OutSentinel<sslm_prefix>(),
+                          "2.6 %s/%s private or sharing restore failed: %d",
+                          origin,label,int(st));
+            if(st==SSLM_OK && out && out!=OutSentinel<sslm_prefix>()) {
+                PKV_CHECK_MSG(shared==expected_shared,
+                              "2.6 %s/%s shared %u, expected %u",
+                              origin,label,shared,expected_shared);
+                const auto before=Decode(fx,built_pool,built,true,16);
+                const auto after=Decode(fx,&pool.pool,out,true,16);
+                PKV_CHECK_MSG(before.size()==16 && before==after,
+                              "2.6 %s/%s tokens differ from prefill child",origin,label);
+                if(hint && expected_shared==62) {
+                    const auto a=PrefixTable(hint),c=PrefixTable(out);
+                    PKV_CHECK_MSG(a.size()>=62 && c.size()>=62 &&
+                                  std::equal(a.begin(),a.begin()+62,c.begin()),
+                                  "2.6 %s matching hint did not physically share 62 page indices",
+                                  origin);
+                }
+                sslm_prefix_release(out);
+            }
+            if(foreign_pool && foreign_fx)
+                ProbeExactlyFreeOneState(*foreign_fx,foreign_pool,foreign_free);
+        };
+        run("matching",parent,nullptr,nullptr,0,62);
+        sslm_prefix unfrozen=nullptr;
+        Status(sslm_prefix_begin_budgeted(fx.model,&pool.pool,1000,&unfrozen),
+               SSLM_OK,"2.6 unfrozen hint begin");
+        if(unfrozen) {
+            sc.h.prefixes.push_back(unfrozen);
+            Status(PrefixPrefillAll(fx.model,unfrozen,Stream(61,1000,fx.vocab),64),
+                   SSLM_OK,"2.6 unfrozen hint prefill");
+            run("(b) unfrozen",unfrozen);
+        }
+        sslm_prefix wrong_length=Root(fx,&pool.pool,sc.h,1001,61);
+        if(wrong_length) run("(e) context length",wrong_length);
+        const auto changed=LastSharedVByteChanged(fx,Save(parent));
+        if(!RequireBlob(changed,"2.6 last-layer V hint")) return;
+        sslm_prefix wrong_rows=nullptr;
+        if(Restored(fx,&pool.pool,changed,nullptr,sc.h,&wrong_rows)) {
+            const auto saved=Save(wrong_rows);
+            PKV_CHECK_MSG(saved==changed,
+                          "2.6 last shared page differs in more than the isolated edited byte");
+            run("(f) last byte of last shared page last-layer V",wrong_rows);
+        }
+        PagePool another_pool(fx.model,80);
+        Handles foreign_handles;
+        sslm_prefix another=Root(fx,&another_pool.pool,foreign_handles,1000,61);
+        if(another) run("(d) other pool",another,&another_pool.pool,&fx,17);
+        const Fixture& other_model=GetFixture("pkv_qk");
+        if(other_model.ok) {
+            PagePool model_pool(other_model.model,80);
+            Handles model_handles;
+            sslm_prefix other=Root(other_model,&model_pool.pool,model_handles,1000,61);
+            if(other) run("(c) other model",other,&model_pool.pool,&other_model,17);
+        }
+    }
+}
+
 void Nested63() {
     const Fixture& fx = GetFixture("pkv_def");
     if (!fx.ok) return;
@@ -92,6 +189,7 @@ void HintFailures26() {
             TwinTokens(fx,&pool.pool,child,out,16);
         }
     }
+    PreciseHints26(fx,child,&pool.pool,b);
 }
 PKV_CELL("2.6/E3", "E1", HintFailures26);
 
@@ -113,6 +211,88 @@ void Admission510() {
                hint ? "5.10 matching hint" : "5.10 private admission");
         if (!hint) PKV_CHECK(out == nullptr);
         if (st == SSLM_OK && out && out != OutSentinel<sslm_prefix>()) sc.h.prefixes.push_back(out);
+    }
+    const Fixture& other_model=GetFixture("pkv_qk");
+    const auto source_parent=Save(world);
+    if(!RequireBlob(source_parent,"5.10 source parent")) return;
+    for(const char* condition : {"null","(b) unfrozen","(c) other model",
+                                 "(d) other pool","(e) length","(f) last-layer V",
+                                 "matching"}) {
+        const bool unfrozen=std::strcmp(condition,"(b) unfrozen")==0;
+        PagePool target(fx.model,unfrozen ? 78 : 77);
+        Handles target_h;
+        std::unique_ptr<PagePool> foreign_pool;
+        Handles foreign_h;
+        const Fixture* foreign_fx=nullptr;
+        sslm_prefix hint=nullptr;
+        if(unfrozen) {
+            Status(sslm_prefix_begin_budgeted(fx.model,&target.pool,1000,&hint),
+                   SSLM_OK,"5.10 unfrozen hint begin");
+            if(hint) {
+                target_h.prefixes.push_back(hint);
+                Status(PrefixPrefillAll(fx.model,hint,Stream(61,1000,fx.vocab),64),
+                       SSLM_OK,"5.10 unfrozen hint prefill");
+            }
+        } else if(std::strcmp(condition,"(e) length")==0) {
+            hint=Root(fx,&target.pool,target_h,1001,61);
+        } else if(std::strcmp(condition,"(f) last-layer V")==0) {
+            const auto changed=LastSharedVByteChanged(fx,source_parent);
+            if(!Restored(fx,&target.pool,changed,nullptr,target_h,&hint)) return;
+        } else {
+            sslm_prefix resident=Root(fx,&target.pool,target_h,1000,61);
+            if(!resident) return;
+            if(std::strcmp(condition,"matching")==0) hint=resident;
+        }
+        if(std::strcmp(condition,"(c) other model")==0 && other_model.ok) {
+            foreign_fx=&other_model;
+            foreign_pool=std::make_unique<PagePool>(other_model.model,80);
+            hint=Root(other_model,&foreign_pool->pool,foreign_h,1000,61);
+        } else if(std::strcmp(condition,"(d) other pool")==0) {
+            foreign_fx=&fx;
+            foreign_pool=std::make_unique<PagePool>(fx.model,80);
+            hint=Root(fx,&foreign_pool->pool,foreign_h,1000,61);
+        }
+        if(std::strcmp(condition,"(c) other model")==0 && !other_model.ok) continue;
+        if(!hint && std::strcmp(condition,"null")!=0) return;
+        ProbeExactlyFreeOneState(fx,&target.pool,14);
+        if(foreign_pool) ProbeExactlyFreeOneState(*foreign_fx,&foreign_pool->pool,17);
+        if(std::strcmp(condition,"matching")==0) {
+            sslm_prefix control=Child(fx,hint,target_h,200,62);
+            PKV_CHECK_MSG(control!=nullptr,
+                          "5.10 begin_from control did not admit at 63+14 pages");
+            if(control) Status(ReleasePrefix(target_h,control),SSLM_OK,
+                               "5.10 release admitted begin_from control");
+            ProbeExactlyFreeOneState(fx,&target.pool,14);
+        }
+        uint32_t shared=UINT32_MAX;
+        sslm_prefix out=nullptr;
+        const auto st=Restore(fx,&target.pool,b,hint,&out,&shared);
+        const bool matching=std::strcmp(condition,"matching")==0;
+        PKV_CHECK_MSG(st==(matching ? SSLM_OK : SSLM_KV_POOL_EXHAUSTED),
+                      "5.10 %s: expected %s, got %d",condition,
+                      matching ? "admission" : "private capacity refusal",int(st));
+        if(matching && st==SSLM_OK && out && out!=OutSentinel<sslm_prefix>()) {
+            const auto parent_table=PrefixTable(hint),child_table=PrefixTable(out);
+            PKV_CHECK_MSG(shared==62 && parent_table.size()>=62 &&
+                          child_table.size()>=62 &&
+                          std::equal(parent_table.begin(),parent_table.begin()+62,
+                                     child_table.begin()),
+                          "5.10 matching hint did not share 62 physical parent pages");
+            sslm_seq two=nullptr;
+            Status(sslm_seq_create_budgeted(fx.model,&target.pool,16,&two),
+                   SSLM_KV_POOL_EXHAUSTED,"5.10 matching restore drew 13 of 14 free pages");
+            if(two) sslm_seq_release(two);
+            sslm_prefix_release(out);
+        } else {
+            PKV_CHECK_MSG(out==nullptr,"5.10 %s refusal produced a handle",condition);
+        }
+        ProbeExactlyFreeOneState(fx,&target.pool,14);
+        if(foreign_pool) ProbeExactlyFreeOneState(*foreign_fx,&foreign_pool->pool,17);
+        foreign_h.ReleaseAll();
+        target_h.ReleaseAll();
+        ProbeExactlyFreeOneState(fx,&target.pool,unfrozen ? 78 : 77);
+        PKV_CHECK_EQ(sslm_kv_pool_destroy(target.pool),SSLM_OK);
+        target.pool=nullptr;
     }
 }
 PKV_CELL("5.10/E3", "E1", Admission510);
