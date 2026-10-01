@@ -62,26 +62,74 @@ PKV_CELL("4.1/E2:synthetic-shapes", "E1", SyntheticShapes41);
 void RoundTrip64() {
     const Fixture& fx = GetFixture("pkv_def");
     if (!fx.ok) return;
+    auto round_trip=[](const Fixture& f,sslm_kv_pool* pool,Handles& handles,
+                       sslm_prefix prefix,sslm_prefix parent,int32_t token,
+                       const char* shape) {
+        const auto first=Save(prefix);
+        if(!RequireBlob(first,shape)) return;
+        PKV_CHECK_MSG(int32_t(Le32(first,108))==token,
+                      "6.4 %s last-prefill token field is wrong",shape);
+        sslm_prefix copy=nullptr;
+        if(!Restored(f,pool,first,parent,handles,&copy)) return;
+        const char* mutant=std::getenv("SUPERSLM_PRECACHE_CURRENT_TOKEN_MUTANT");
+        if(mutant && *mutant && token>=0) {
+            const int32_t replacement=(token+1)%f.vocab;
+            Status(sslm_pc_test_only_set_current_token(copy,replacement),SSLM_OK,
+                   "6.4 isolated current-token mutant");
+        }
+        const auto second=Save(copy);
+        PKV_CHECK_MSG(first==second,"6.4 %s SPX1 round-trip blob differs",shape);
+        if(second.size()>=112)
+            PKV_CHECK_MSG(int32_t(Le32(second,108))==token,
+                          "6.4 %s restored token field differs from fixture input",shape);
+    };
     for (int L : {0, 17, 65, 1000}) {
         Scene sc;
         PagePool& pool = sc.AddPool(fx.model, 300);
         sslm_prefix p = Root(fx, &pool.pool, sc.h, L);
         if (!p) continue;
-        const auto first = Save(p);
-        if (!RequireBlob(first, "6.4")) return;
-        sslm_prefix copy = nullptr;
-        if (!Restored(fx, &pool.pool, first, nullptr, sc.h, &copy)) continue;
-        const char* mutant=std::getenv("SUPERSLM_PRECACHE_CURRENT_TOKEN_MUTANT");
-        if(mutant && *mutant && L>0) {
-            const int32_t original=int32_t(Le32(first,108));
-            const int32_t replacement=(original+1)%fx.vocab;
-            Status(sslm_pc_test_only_set_current_token(copy,replacement),SSLM_OK,
-                   "6.4 isolated current-token mutant");
-        }
-        const auto second = Save(copy);
-        PKV_CHECK_MSG(first == second, "6.4 SPX1 round-trip blob differs");
-        if (L) PKV_CHECK_EQ(Le32(first, 108), Le32(second, 108));
+        round_trip(fx,&pool.pool,sc.h,p,nullptr,
+                   L ? Stream(41,L,fx.vocab).back() : -1,L ? "root" : "empty");
     }
+    {
+        Scene sc;
+        PagePool& pool=sc.AddPool(fx.model,128);
+        sslm_prefix parent=Root(fx,&pool.pool,sc.h,32);
+        sslm_prefix child=nullptr;
+        if(!parent) return;
+        Status(sslm_prefix_begin_from(parent,17,&child),SSLM_OK,"6.4 nested begin_from");
+        if(!child) return;
+        sc.h.prefixes.push_back(child);
+        const auto extension=Stream(62,17,fx.vocab);
+        Status(PrefixPrefillAll(fx.model,child,extension,17),SSLM_OK,
+               "6.4 nested extension prefill");
+        Status(sslm_prefix_freeze(child),SSLM_OK,"6.4 nested freeze");
+        round_trip(fx,&pool.pool,sc.h,child,parent,extension.back(),"nested");
+    }
+    const char* dir=std::getenv("SUPERSLM_PRECACHE_SYNTHETIC_DIR");
+    PKV_CHECK_MSG(dir && *dir,"6.4 bound fixture directory is unset");
+    if(!dir || !*dir) return;
+    ModelFile model(std::string(dir)+"/synthetic0p5-three-schema.sslm");
+    Status(model.status,SSLM_OK,"6.4 bound model map");
+    if(model.status!=SSLM_OK) return;
+    Fixture bound;
+    bound.model=model.model; model.model=nullptr;
+    bound.geo={24,2,64,4096}; bound.vocab=256;
+    Scene sc;
+    PagePool& pool=sc.AddPool(bound.model,64);
+    sslm_schema schema=nullptr;
+    Status(sslm_schema_lookup(bound.model,"schema_two",&schema),SSLM_OK,
+           "6.4 bound schema lookup");
+    sslm_prefix prefix=nullptr;
+    Status(sslm_prefix_begin_budgeted(bound.model,&pool.pool,17,&prefix),SSLM_OK,
+           "6.4 bound begin");
+    if(!prefix) return;
+    sc.h.prefixes.push_back(prefix);
+    Status(sslm_prefix_set_schema(prefix,schema),SSLM_OK,"6.4 bind schema");
+    std::vector<int32_t> ids(17,0);
+    Status(PrefixPrefillAll(bound.model,prefix,ids,17),SSLM_OK,"6.4 bound prefill");
+    Status(sslm_prefix_freeze(prefix),SSLM_OK,"6.4 bound freeze");
+    round_trip(bound,&pool.pool,sc.h,prefix,nullptr,0,"schema-bound");
 }
 PKV_CELL("6.4/E2", "E1", RoundTrip64);
 
