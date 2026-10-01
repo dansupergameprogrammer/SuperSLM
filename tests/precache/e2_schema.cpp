@@ -1,4 +1,6 @@
 #include "precache_common.h"
+#include "superslm/artifact.h"
+#include "superslm/schema_masks.h"
 
 namespace {
 using namespace pc;
@@ -12,11 +14,34 @@ std::string ArtifactDir() {
 void Parser213() {
     const auto dir=ArtifactDir();
     if(dir.empty()) return;
-    for(const char* file : {"must-reject-two-name.sslm","must-reject-zero-hash.sslm"}) {
+    for(const auto& case_file : {std::pair{"must-reject-two-name.sslm","DuplicateSchemaNameHash"},
+                                 std::pair{"must-reject-zero-hash.sslm","ZeroSchemaNameHash"}}) {
+        const char* file=case_file.first;
         ModelFile model(dir+"/"+file);
         PKV_CHECK_MSG(model.status==SSLM_ARTIFACT_REJECTED && model.model==nullptr,
             "2.13 PC-12 parser accepted %s or returned %d instead of SSLM_ARTIFACT_REJECTED",
             file,int(model.status));
+        if(!model.size) continue;
+        superslm::SslmArtifact artifact;
+        superslm::SslmError artifact_error;
+        const auto artifact_status=superslm::SslmArtifact::OpenFromMemory(
+            model.bytes.p,model.size,artifact,&artifact_error);
+        PKV_CHECK_MSG(artifact_status==superslm::SslmStatus::Ok,
+                      "2.13 independent artifact parse failed for %s",file);
+        if(artifact_status!=superslm::SslmStatus::Ok) continue;
+        const auto* section=artifact.Section(superslm::SslmSectionType::SchemaMasks);
+        PKV_CHECK_MSG(section!=nullptr,"2.13 %s lacks its SCM1 section",file);
+        if(!section || section->byte_size<24) continue;
+        const uint8_t* data=section->data;
+        const uint32_t vocab=uint32_t(data[12]) | (uint32_t(data[13])<<8) |
+                             (uint32_t(data[14])<<16) | (uint32_t(data[15])<<24);
+        superslm::SchemaMasksTable table;
+        std::string reason;
+        const bool parsed=superslm::SchemaMasksTable::Parse(
+            data,section->byte_size,vocab,table,&reason);
+        PKV_CHECK_MSG(!parsed && reason==case_file.second,
+                      "2.13 %s: expected parser reason %s, got %s (accepted=%d)",
+                      file,case_file.second,reason.c_str(),int(parsed));
     }
     ModelFile healthy(dir+"/must-accept-renamed-pair.sslm");
     Status(healthy.status,SSLM_OK,"2.13 renamed pair must map");
