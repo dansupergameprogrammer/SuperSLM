@@ -163,13 +163,11 @@ void CountLegacy() {
 	for (int64_t free_pages : {at_p, at_p - 1}) {
 		std::unique_ptr<PoolState> s = BuildState(fx, free_pages);
 		if (!s->ok) return;
-		sslm_status refusal = SSLM_OK;
-		const int count = CountLegacyCreates(fx.model, s->Pool(), &refusal);
+		// The count alone, as §8 states the procedure (its refusal out-parameter is not consulted).
+		const int count = CountLegacyCreates(fx.model, s->Pool());
 		const int want = free_pages == at_p ? N : N - 1;
 		PKV_CHECK_MSG(count == want, "legacy-create count at %s (%lld free pages expected): %d, expected %d",
 		              free_pages == at_p ? "P" : "P - 1", static_cast<long long>(free_pages), count, want);
-		PKV_CHECK_MSG(refusal == SSLM_KV_POOL_EXHAUSTED, "legacy-create count: the refusal was %d, not SSLM_KV_POOL_EXHAUSTED",
-		              static_cast<int>(refusal));
 	}
 }
 
