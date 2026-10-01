@@ -1,0 +1,10 @@
+{
+  "instrument": "T-3035-precache-discrimination",
+  "model_sha256": "d45cabb1da261194a01d6b30b21374f025448e8b4c2e8c0289bc76fb9c045fbc",
+  "mutants": "not measured on this header-only sibling",
+  "pkv_def_discrimination_record_sha256": "30eaa292c95de99ce254d72cfbe49db5c5fcb4ebce084507a864565fac760386",
+  "population_adequate": false,
+  "prefix_id": "nested06",
+  "purpose": "P6 header-only sibling; no independent mutant run",
+  "status": "QUARANTINED"
+}

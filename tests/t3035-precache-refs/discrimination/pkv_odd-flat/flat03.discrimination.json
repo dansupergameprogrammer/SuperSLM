@@ -1,0 +1,10 @@
+{
+  "instrument": "T-3035-precache-discrimination",
+  "model_sha256": "2a43398dd253c97e5b3da244e80faeae0a7ab305ff09116a6bbc02808ed76d2d",
+  "mutants": "not measured on this header-only sibling",
+  "pkv_def_discrimination_record_sha256": "b9b4a6d2da8ee77b32cd5310cd1fbb63b4e1a8de0b85864b207abf8dcce9aba0",
+  "population_adequate": false,
+  "prefix_id": "flat03",
+  "purpose": "P6 header-only sibling; no independent mutant run",
+  "status": "QUARANTINED"
+}
