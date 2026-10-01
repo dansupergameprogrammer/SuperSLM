@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -129,13 +130,13 @@ struct Driver {
 		void* mem = nullptr;
 		~Pool() {
 			if (pool) sslm_kv_pool_destroy(pool);
-			std::free(mem);
+			if (mem) ::operator delete(mem, std::align_val_t(64));
 		}
 	};
 	bool MakePool(uint32_t blocks, Pool* out) {
 		const size_t size = sslm_kv_block_size(model) * blocks + sslm_kv_pool_overhead_size(model, blocks);
 		const size_t rounded = (size + 63) / 64 * 64;
-		out->mem = std::aligned_alloc(64, rounded);
+		out->mem = ::operator new(rounded, std::align_val_t(64));  // std::aligned_alloc is absent on MSVC
 		return Ok(sslm_kv_pool_create(model, out->mem, rounded, blocks, &out->pool), "pool_create");
 	}
 

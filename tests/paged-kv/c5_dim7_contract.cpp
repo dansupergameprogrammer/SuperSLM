@@ -17,6 +17,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <new>
+#if defined(_MSC_VER)
+#include <malloc.h>
+#endif
 
 namespace {
 std::atomic<long long> g_new_calls{0};
@@ -37,18 +40,30 @@ void* operator new(std::size_t size, std::align_val_t al) {
 	g_new_calls.fetch_add(1, std::memory_order_relaxed);
 	const size_t a = static_cast<size_t>(al);
 	const size_t n = (size + a - 1) / a * a;
+#if defined(_MSC_VER)
+	if (void* p = _aligned_malloc(n ? n : a, a)) return p;  // MSVC has no std::aligned_alloc
+#else
 	if (void* p = std::aligned_alloc(a, n ? n : a)) return p;
+#endif
 	throw std::bad_alloc{};
 }
 void* operator new[](std::size_t size, std::align_val_t al) { return ::operator new(size, al); }
+// Aligned blocks come from _aligned_malloc on MSVC, which only _aligned_free may release.
+static void AlignedFree(void* p) noexcept {
+#if defined(_MSC_VER)
+	_aligned_free(p);
+#else
+	std::free(p);
+#endif
+}
 void operator delete(void* p) noexcept { std::free(p); }
 void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 void operator delete[](void* p) noexcept { std::free(p); }
 void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
-void operator delete(void* p, std::align_val_t) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t, std::align_val_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::align_val_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t, std::align_val_t) noexcept { std::free(p); }
+void operator delete(void* p, std::align_val_t) noexcept { AlignedFree(p); }
+void operator delete(void* p, std::size_t, std::align_val_t) noexcept { AlignedFree(p); }
+void operator delete[](void* p, std::align_val_t) noexcept { AlignedFree(p); }
+void operator delete[](void* p, std::size_t, std::align_val_t) noexcept { AlignedFree(p); }
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
