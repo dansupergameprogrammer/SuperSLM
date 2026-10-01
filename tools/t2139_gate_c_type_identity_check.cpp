@@ -96,6 +96,8 @@ typedef enum sslm_status {
 	SSLM_RESTORE_RESIDUAL_LOST = 27,
 	// T-2578 confirmation remedy: the public C registry's append-only stale-shader status.
 	SSLM_GPU_SHADER_BINARY_STALE = 28,
+	// Paged-KV plan Sec3.6: the budget-holder limit status, appended at 29.
+	SSLM_KV_BUDGET_EXCEEDED = 29,
 	// SSLM_STATUS_NEXT_FREE -- CONFIRMED (M1, Claude/Poirot/3bcbe43-t2139-fourth-confirmation-
 	// review.md), not re-derived: the real tests/t2130-g5-red-suite/sslm_g5.h now carries this
 	// same sentinel, landed by curie/t2130-g5-red-suite@beb2355 (this line's own prior comment

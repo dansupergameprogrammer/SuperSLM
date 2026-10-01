@@ -235,6 +235,9 @@ typedef enum sslm_status {
     /* T-2578 confirmation remedy: mirrored in the SAME commit per this header's standing
      * full-registry rule; see include/superslm/sslm_abi.h for the public contract. */
     SSLM_GPU_SHADER_BINARY_STALE = 28,
+    /* Paged-KV plan Sec3.6: mirrored in the SAME commit per this header's standing full-registry
+     * rule; see include/superslm/sslm_abi.h for the budget-holder limit contract. */
+    SSLM_KV_BUDGET_EXCEEDED = 29,
 
     /* Sentinel, FOLD RULING 2026-08-17 (design Sec6, on F1) -- the enum's own final member, no
      * explicit value, so it auto-values to one past whichever entry above it is this header's own

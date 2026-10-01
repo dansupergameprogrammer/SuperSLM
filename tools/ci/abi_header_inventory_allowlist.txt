@@ -63,3 +63,8 @@ SSLM_DAMPED_GREEDY_DEFAULT_ANTI_LM_ORDER  # pairs with SSLM_DAMPED_GREEDY_DEFAUL
 SSLM_DAMPED_GREEDY_DEFAULT_TOP_K  # pairs with the two entries above; same commit, same design
 # document, same flagged-pre-existing disposition -- the sslm_decode_params_init default for
 # top_k.
+SSLM_HAS_PAGED_KV_ABI  # Paged-KV plan (rev 16.1) Sec3.6, step C5: defined beside the two page-stats
+# structs and SSLM_KV_BUDGET_EXCEEDED so a consumer (and tests/paged-kv/pkv_abi.h) can test for the
+# whole paged-KV surface at once. Ruled by the paged-KV plan of record, a different design document
+# this checker's own inventory source, t2133 Sec8, does not and structurally cannot cover; same
+# shape as SSLM_DECODE_MODE_GREEDY above.

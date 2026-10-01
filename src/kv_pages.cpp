@@ -53,6 +53,28 @@ void PushFreeLocked(PagePool* pool, const uint32_t* pages, size_t n) {
 
 PageStatus Worse(PageStatus a, PageStatus b) { return a != PageStatus::kOk ? a : b; }
 
+// A shared entry entering (+1) or leaving (-1) one table, caller holding the pool mutex: the
+// per-page count and the distinct-page count sslm_kv_pool_stats reports (§3.6, provenance).
+void SharedMapEnterLocked(PagePool* pool, uint32_t page) {
+	if (pool->shared_maps[page]++ == 0) ++pool->shared_distinct;
+}
+void SharedMapLeaveLocked(PagePool* pool, uint32_t page) {
+	uint32_t& n = pool->shared_maps[page];
+	if (n == 0) return;  // never entered: nothing to count down (the underflow check is the refcount's)
+	if (--n == 0) --pool->shared_distinct;
+}
+
+// The refusal half of a share, checked before any change: a mapped page at 0 is a count already
+// lost (the underflow class); one at the maximum cannot take another reference.
+PageStatus CheckShareableLocked(const PagePool* pool, const PageHolder* src, uint32_t pages) {
+	for (uint32_t i = 0; i < pages; ++i) {
+		const uint32_t rc = pool->refcount[src->table[i]];
+		if (rc == 0) return PageStatus::kRefcountUnderflow;
+		if (rc == std::numeric_limits<uint32_t>::max()) return PageStatus::kInvalidArgument;
+	}
+	return PageStatus::kOk;
+}
+
 }  // namespace
 
 PageStatus PoolCreate(uint8_t* base, uint32_t page_count, size_t page_bytes, int64_t page_positions,
@@ -71,6 +93,7 @@ PageStatus PoolCreate(uint8_t* base, uint32_t page_count, size_t page_bytes, int
 		pool->page_positions = page_positions;
 		pool->refcount.assign(page_count, 0);
 		pool->dirty.assign(page_count, 0);
+		pool->shared_maps.assign(page_count, 0);
 		// Built once, as a stack that hands out page 0 first. No fill of the pool's memory.
 		pool->free_list.reserve(page_count);
 		for (uint32_t i = page_count; i-- > 0;) pool->free_list.push_back(i);
@@ -151,21 +174,88 @@ PageStatus HolderShareLeading(PageHolder* dst, const PageHolder* src, uint32_t p
 		return PageStatus::kInvalidArgument;
 	PagePool* pool = dst->pool;
 	std::lock_guard<CountingMutex> lock(pool->mutex);
-	// Checked before any change, so a refusal leaves every count as it was. A mapped page at 0 is a
-	// count already lost (the underflow class); one at the maximum cannot take another reference.
-	for (uint32_t i = 0; i < pages; ++i) {
-		const uint32_t rc = pool->refcount[src->table[i]];
-		if (rc == 0) return PageStatus::kRefcountUnderflow;
-		if (rc == std::numeric_limits<uint32_t>::max()) return PageStatus::kInvalidArgument;
-	}
+	// Checked before any change, so a refusal leaves every count as it was.
+	const PageStatus check = CheckShareableLocked(pool, src, pages);
+	if (check != PageStatus::kOk) return check;
 	for (uint32_t i = 0; i < pages; ++i) {
 		const uint32_t p = src->table[i];
 		pool->refcount[p] += 1;
+		SharedMapEnterLocked(pool, p);
 		dst->table[i] = p;
 	}
 	dst->mapped = pages;
 	dst->shared = pages;
 	dst->materialized = 0;
+	return PageStatus::kOk;
+}
+
+// A budget adopt's unmap and share, every refcount change in one pool-mutex section (§3.3, rev 2).
+// The leading shared/materialized entries take the pool path (decremented, freed at 0), the rest go
+// back to the holder's own reserve; then `src`'s leading `pages` entries become `dst`'s shared ones.
+// The increments come first, so a page `dst` already shares from `src` goes +1 then -1 and never
+// reaches 0 in between. The freed pages are compacted into `dst`'s vacated leading entries, poisoned
+// outside the section (nothing names them any more) and pushed; only then are the shared entries
+// written into the table, which is `dst`'s own (its lifecycle lock), not the pool's.
+PageStatus HolderAdoptShare(PageHolder* dst, const PageHolder* src, uint32_t pages) {
+	if (!dst || !src || dst == src || dst->pool != src->pool) return PageStatus::kInvalidArgument;
+	if (pages > src->mapped || pages > dst->table_entries) return PageStatus::kInvalidArgument;
+	PagePool* pool = dst->pool;
+	uint32_t* table = dst->table.get();
+	const uint32_t mapped = dst->mapped;
+	uint32_t pool_path = dst->shared + dst->materialized;
+	if (pool_path > mapped) pool_path = mapped;
+	PageStatus status = PageStatus::kOk;
+	uint32_t to_free = 0;
+	{
+		std::lock_guard<CountingMutex> lock(pool->mutex);
+		const PageStatus check = CheckShareableLocked(pool, src, pages);
+		if (check != PageStatus::kOk) return check;  // nothing changed
+		for (uint32_t i = 0; i < pages; ++i) {
+			const uint32_t p = src->table[i];
+			pool->refcount[p] += 1;
+			SharedMapEnterLocked(pool, p);
+		}
+		for (uint32_t i = 0; i < pool_path; ++i) {
+			const uint32_t p = table[i];
+			if (i < dst->shared) SharedMapLeaveLocked(pool, p);
+			bool zero = false;
+			status = Worse(status, DecrementLocked(pool, p, &zero));
+			if (zero) table[to_free++] = p;
+		}
+	}
+	if (to_free > 0) {
+		PoisonIfDirty(pool, table, to_free);
+		std::lock_guard<CountingMutex> lock(pool->mutex);
+		PushFreeLocked(pool, table, to_free);
+	}
+	// Private entries back to the reserve (they all came from it, so no allocation).
+	for (uint32_t i = mapped; i-- > pool_path;) dst->reserve.push_back(table[i]);
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+	if (TableSentinelOn())
+		for (uint32_t i = 0; i < mapped; ++i) table[i] = kNoPage;
+#endif
+	for (uint32_t i = 0; i < pages; ++i) table[i] = src->table[i];
+	dst->mapped = pages;
+	dst->shared = pages;
+	dst->materialized = 0;
+	return status;
+}
+
+// A private restore's materialized pages (§3.7): reserve -> the first table entries, recorded as
+// materialized so their unmap takes the pool path. Refcount unchanged (1), no pool mutex.
+PageStatus HolderMapMaterialized(PageHolder* holder, uint32_t count) {
+	if (!holder || holder->mapped != 0) return PageStatus::kInvalidArgument;
+	if (count > holder->table_entries) return PageStatus::kInvalidArgument;
+	if (count > holder->reserve.size()) return PageStatus::kExhausted;
+	for (uint32_t i = 0; i < count; ++i) {
+		const uint32_t p = holder->reserve.back();
+		holder->reserve.pop_back();
+		holder->pool->dirty[p] = 1;
+		holder->table[i] = p;
+	}
+	holder->mapped = count;
+	holder->shared = 0;
+	holder->materialized = count;
 	return PageStatus::kOk;
 }
 
@@ -187,6 +277,7 @@ PageStatus HolderUnmapAll(PageHolder* holder) {
 		std::lock_guard<CountingMutex> lock(pool->mutex);
 		for (uint32_t i = 0; i < pool_path; ++i) {
 			const uint32_t p = table[i];
+			if (i < holder->shared) SharedMapLeaveLocked(pool, p);
 			bool zero = false;
 			status = Worse(status, DecrementLocked(pool, p, &zero));
 			if (zero) table[to_free++] = p;
@@ -226,6 +317,7 @@ PageStatus HolderRelease(PageHolder* holder) {
 		std::lock_guard<CountingMutex> lock(pool->mutex);
 		for (uint32_t i = 0; i < holder->mapped; ++i) {
 			const uint32_t p = table[i];
+			if (i < holder->shared) SharedMapLeaveLocked(pool, p);
 			bool zero = false;
 			status = Worse(status, DecrementLocked(pool, p, &zero));
 			if (zero) table[to_free++] = p;
@@ -289,6 +381,17 @@ PageStatus HolderReturnReserve(PageHolder* holder, uint32_t* out_returned) {
 	reserve.clear();
 	if (out_returned) *out_returned = static_cast<uint32_t>(n);
 	return status;
+}
+
+void PoolCounts(PagePool* pool, uint32_t* out_free, uint32_t* out_shared) {
+	if (!pool) {
+		if (out_free) *out_free = 0;
+		if (out_shared) *out_shared = 0;
+		return;
+	}
+	std::lock_guard<CountingMutex> lock(pool->mutex);
+	if (out_free) *out_free = static_cast<uint32_t>(pool->free_list.size());
+	if (out_shared) *out_shared = pool->shared_distinct;
 }
 
 uint64_t PoolMutexAcquisitions(const PagePool* pool) { return pool ? pool->mutex.acquisitions() : 0; }

@@ -77,3 +77,58 @@ SUPERSLM_API sslm_status sslm_workspace_set_parallel_for(sslm_workspace ws,
  * g5-comparable subset (see above). */
 SUPERSLM_API sslm_status sslm_detokenize_stream(sslm_model model, sslm_detok_state* state, const int32_t* tokens,
                                     int32_t n, char* utf8, int32_t* out_n);
+
+/* ---- Paged KV (paged-KV plan Sec3.4-Sec3.7): page pools, budget holders, shared prefixes ----------
+ * Outside the g5-comparable subset, like the workspace verbs.
+ *
+ * A pool is pages of B positions (sslm_kv_page_positions). A holder made by a no-budget verb
+ * (sslm_seq_create, sslm_prefix_begin, or a restore of a no-budget blob) reserves ceil(cap/B)
+ * pages, one old block, and behaves as before. A budget holder declares 1 <= budget <= cap
+ * positions it may write itself and reserves R(budget) = min(ceil(budget/B) + 1, ceil(cap/B))
+ * pages (sslm_kv_pages_for_budget); its writes stop at limit = min(origin + budget, cap) with
+ * SSLM_KV_BUDGET_EXCEEDED below the cap. origin is 0 after create or reset, the prefix's length
+ * after sslm_seq_adopt_prefix, and the parent's length for sslm_prefix_begin_from. A budget
+ * holder's adopt shares the frozen prefix's full pages (it never draws from the pool, and a prefix
+ * of another pool is SSLM_INVALID_ARGUMENT); a no-budget holder's adopt copies, as before. A
+ * prefix's pages are freed when the prefix and every holder that shares them have released or
+ * reset. Releasing a prefix while an adopt, a begin_from or a sharing restore reads it is caller
+ * UB, as for adopt today. A budget holder saves the 'SSB6' blob; a no-budget holder keeps saving
+ * 'SSB5'. */
+
+/* B, the positions per page (0 on a null model). */
+SUPERSLM_API int64_t sslm_kv_page_positions(sslm_model model);
+/* Bytes per page (0 on a null model or overflow). */
+SUPERSLM_API size_t sslm_kv_page_size(sslm_model model);
+/* R(budget), the pages a budget holder reserves; 0 for a budget outside [1, cap] or a null model. */
+SUPERSLM_API size_t sslm_kv_pages_for_budget(sslm_model model, int32_t budget);
+/* The page-pool bookkeeping a buffer must hold beyond its pages; sslm_kv_pool_overhead_size's
+ * convention (0 on a null model, SIZE_MAX where no buffer suffices). */
+SUPERSLM_API size_t sslm_kv_page_pool_overhead_size(sslm_model model, uint32_t page_count);
+/* A pool of `page_count` pages over `buf` (buf_size >= page_count * sslm_kv_page_size +
+ * sslm_kv_page_pool_overhead_size, SSLM_ABI_ALIGNMENT_BYTES-aligned), with sslm_kv_pool_create's
+ * refusals in its order. Every holder verb takes it; sslm_kv_pool_destroy destroys it. */
+SUPERSLM_API sslm_status sslm_kv_page_pool_create(sslm_model model, void* buf, size_t buf_size, uint32_t page_count,
+                                     sslm_kv_pool* out);
+/* A budget-mode sequence: R(budget) pages drawn, SSLM_KV_POOL_EXHAUSTED with nothing drawn when the
+ * pool has fewer; SSLM_INVALID_ARGUMENT for a budget outside [1, cap]. */
+SUPERSLM_API sslm_status sslm_seq_create_budgeted(sslm_model model, sslm_kv_pool* pool, int32_t budget, sslm_seq* out);
+/* A budget-mode prefix (origin 0), as sslm_seq_create_budgeted. Freeze returns its unmapped pages. */
+SUPERSLM_API sslm_status sslm_prefix_begin_budgeted(sslm_model model, sslm_kv_pool* pool, int32_t budget, sslm_prefix* out);
+/* A budget-mode prefix continuing a frozen `parent` (SSLM_INVALID_ARGUMENT if not frozen): R(budget)
+ * drawn from the parent's pool, the parent's full pages shared, its state copied; origin = the
+ * parent's length. */
+SUPERSLM_API sslm_status sslm_prefix_begin_from(sslm_prefix parent, int32_t budget, sslm_prefix* out);
+/* Page counts of a pool (either create verb). */
+SUPERSLM_API sslm_status sslm_kv_pool_stats(sslm_kv_pool pool, sslm_kv_pool_stats_out* out);
+/* A sequence's mode, origin, budget, limit and pages. Takes the sequence's lifecycle lock; must not
+ * race a prefill of the same sequence (one caller per sequence at a time). */
+SUPERSLM_API sslm_status sslm_seq_kv_stats(sslm_seq seq, sslm_seq_kv_stats_out* out);
+/* sslm_seq_restore with a sharing hint. A budget-mode 'SSB6' restores with its saved budget, origin
+ * and mode. With `prefix_or_null` frozen, of this model and pool, at length == the blob's origin,
+ * and its rows over the shared span byte-equal to the blob's, its full pages are shared and
+ * *out_shared_pages receives their count; otherwise the restore is private (it also draws the
+ * prefix span's pages, returned at the first reset, adopt or release), *out_shared_pages = 0 and
+ * SSLM_OK. A no-budget blob ignores the handle. out_shared_pages may be NULL. sslm_seq_restore is
+ * this verb with a NULL prefix. */
+SUPERSLM_API sslm_status sslm_seq_restore_shared(sslm_model model, sslm_kv_pool* pool, const void* blob, size_t size,
+                                    sslm_prefix prefix_or_null, sslm_seq* out, uint32_t* out_shared_pages);

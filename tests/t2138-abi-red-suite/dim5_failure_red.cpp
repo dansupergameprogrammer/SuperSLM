@@ -3,7 +3,7 @@
 // enumerators as of the padded-vocabulary fold, SSLM_OK(1) + argument/precondition(3) +
 // artifact/content(4) + lifecycle/precondition-on-state(7) + numeric/domain(3) = 18) -- the
 // registry has since grown under Sec6's GOVERNANCE RULING (design commit 4f4eb23896): G5's own
-// 7 schema statuses (18-24), SSLM_ALLOCATION_FAILED (25), later append-only statuses (26-28),
+// 7 schema statuses (18-24), SSLM_ALLOCATION_FAILED (25), later append-only statuses (26-29),
 // and the SSLM_STATUS_NEXT_FREE sentinel are covered by Gate C's construction. This dimension's
 // cells stay scoped to the base family this suite's own sslm_abi.h declares functionally. Cells
 // NOT already exercised elsewhere are authored here; the rest are

@@ -82,6 +82,11 @@ struct PagePool {
 	// Written without the pool mutex by the holder that owns the page (reserve -> table), read and
 	// cleared on the freeing path once the page has left every table. Ordered by the pool mutex.
 	std::vector<uint8_t> dirty;
+	// Step C5, for sslm_kv_pool_stats: per page, how many live tables map it as a *shared* entry
+	// (§3.3's provenance, never the refcount), and how many pages have a count above 0. Both under
+	// the pool mutex, changed only where a shared entry enters or leaves a table.
+	std::vector<uint32_t> shared_maps;
+	uint32_t shared_distinct = 0;
 };
 
 struct PageHolder {
@@ -105,12 +110,26 @@ uint32_t PoolRefcount(PagePool* pool, uint32_t page);
 PageStatus HolderCreate(PagePool* pool, uint32_t table_entries, uint32_t reserve_pages, PageHolder** out);
 PageStatus HolderMapNext(PageHolder* holder);
 PageStatus HolderShareLeading(PageHolder* dst, const PageHolder* src, uint32_t pages);
+// Step C5, a budget adopt (§3.3, rev 2): `dst`'s unmap (as HolderUnmapAll) and the share of `src`'s
+// leading `pages` entries (as HolderShareLeading; `pages` may be 0) with every refcount change in
+// ONE pool-mutex critical section. The shares are counted first, so re-adopting the prefix the
+// holder already shares never takes a page through 0. Pages the unmap frees are poisoned (iff
+// dirty) outside that section and pushed after it, as every freeing path does. A refusal (a src
+// page at 0 or at the maximum count) changes nothing. Allocates nothing.
+PageStatus HolderAdoptShare(PageHolder* dst, const PageHolder* src, uint32_t pages);
+// Step C5, a private restore (§3.7): `count` pages from the holder's own reserve into its first
+// table entries as *materialized* (unmapped to the pool, not the reserve, §3.3). The holder must
+// map nothing yet. No pool mutex, no allocation; sets `dirty`.
+PageStatus HolderMapMaterialized(PageHolder* holder, uint32_t count);
 PageStatus HolderUnmapAll(PageHolder* holder);
 PageStatus HolderRelease(PageHolder* holder);
 // Every page of the holder's private reserve back to the pool (refcount := 0, poisoned iff dirty),
 // its table untouched: a legacy prefix's first freeze (§3.4), and the ABI's reserve-drain seam
 // (cell 11.2). *out_returned (optional) receives the count. Allocates nothing.
 PageStatus HolderReturnReserve(PageHolder* holder, uint32_t* out_returned);
+
+// Step C5's pool stats: free pages and distinct shared pages, read in one pool-mutex section.
+void PoolCounts(PagePool* pool, uint32_t* out_free, uint32_t* out_shared);
 
 uint32_t HolderMapped(const PageHolder* holder);
 uint32_t HolderShared(const PageHolder* holder);
