@@ -1,0 +1,31 @@
+{
+  "M_walk": {
+    "donor_schema": "prompt_result",
+    "donor_schema_hash": "d28c8ddd391caa95",
+    "first_divergent_token": 0,
+    "killed": true,
+    "mutant_walk": 0,
+    "probe_sha256": "9e9499fd1816179be1879eaba83084a2c20bb2e0a7d3351cfe75de7bf15f0ba4",
+    "restore_status": 0
+  },
+  "cross_binding_dispositions": [
+    {
+      "bound_schema": "none",
+      "bound_schema_hash": "0000000000000000",
+      "prefix_id": "schema0",
+      "status": "21"
+    }
+  ],
+  "forced_content_id": 4913,
+  "forced_content_ids_sha256": "68c05d7f049e48bfcdb9fa68fb7c6dab6f83c65c05896daa217859f9d4878747",
+  "instrument": "T-3035-precache-discrimination",
+  "kind": "schema",
+  "model_sha256": "6a41f87d3a48c91751b41fe716c4f8289b7ce97761850c3f1f2c53d01201205c",
+  "population_adequate": false,
+  "prefix_id": "schema0",
+  "probe_sha256": "c9730e95439b719de3a9391d7309db602454fecee511354dce54c25242dbc91d",
+  "prompt_ids_sha256": "33f04e17a279c86d1f82d49da17f7b8875202488070f55c716be0f2fa467a9ee",
+  "reason": "Progressed walk, cross-bind dispositions, and M-walk measured; instrument uncommissioned",
+  "status": "QUARANTINED",
+  "walk_state": 2
+}
