@@ -41,6 +41,7 @@ set(SUPERSLM_CORE_SOURCES
 	src/forward/forward_sites.cpp
 	src/forward/parallel_split.cpp
 	src/decode_digest.cpp
+	src/kv_pages.cpp
 	src/sslm_abi.cpp
 	src/damped_greedy_antilm.cpp
 	src/damped_greedy_topk.cpp
@@ -89,6 +90,10 @@ target_compile_definitions(superslm_test_injection PRIVATE SUPERSLM_ENABLE_BAD_A
 # parallel_split.h). Test libraries only; the production library reads the constant. PUBLIC so
 # the suite's own compile of tests/test_decode_threading_d1.cpp sees the seam declarations.
 target_compile_definitions(superslm_test_injection PUBLIC SUPERSLM_ENABLE_MATVEC_TEST_SEAMS)
+# Paged-KV plan §3.3 / §7 cells 7.13 and 11.3: the page module's table-sentinel and double-unmap
+# seams (src/kv_pages.h). Test library only; the production address read is a plain load. PUBLIC so
+# a cell that includes src/kv_pages.h sees the seam declarations.
+target_compile_definitions(superslm_test_injection PUBLIC SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS)
 if(MSVC)
 	target_compile_options(superslm_test_injection PRIVATE /W4 /fp:precise)
 else()
