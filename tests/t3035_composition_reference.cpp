@@ -200,7 +200,8 @@ void SchemaCapture(const char* model_path, const fs::path& prompts,
 void AdapterCapture(const char* model_path, const fs::path& adapter_path,
                     const fs::path& prompts, const fs::path& out_dir,
                     const fs::path& discrimination, const std::string& run,
-                    const std::string& ids_suffix, const std::string& tokenizer) {
+                    const std::string& ids_suffix, const std::string& tokenizer,
+                    int second_index) {
     Input in(model_path);
     Pool pool(in.model, in.cap);
     const auto adapter_size = fs::file_size(adapter_path);
@@ -213,8 +214,8 @@ void AdapterCapture(const char* model_path, const fs::path& adapter_path,
     try {
         sslm_decode_params probe{};
         const bool damped = sslm_decode_params_init(in.model, SSLM_DECODE_MODE_DAMPED_GREEDY, 1, &probe) == SSLM_OK;
-        for (int index : {0, 9}) {
-            const std::string prompt_id = "flat" + std::string(index == 0 ? "00" : "09");
+        for (int index : {0, second_index}) {
+            const std::string prompt_id = "flat" + (index < 10 ? std::string("0") : std::string()) + std::to_string(index);
             const std::string id = "adapter" + std::to_string(index == 0 ? 0 : 1);
             const auto ids = ReadIds(prompts / (prompt_id + "." + ids_suffix));
             Prefix prefix;
@@ -353,14 +354,17 @@ int main(int argc, char** argv) {
             WalkProbe(argv[2], argv[3], argv[4], argv[5], true);
             return 0;
         }
-        if (argc != 10) throw std::runtime_error("usage: t3035_composition schema|schema3|adapter MODEL ADAPTER_OR_- PROMPTS OUT DISCRIM run1|run2 ID_SUFFIX TOKENIZER");
+        if (argc != 10 && argc != 11) throw std::runtime_error("usage: t3035_composition schema|schema3|adapter MODEL ADAPTER_OR_- PROMPTS OUT DISCRIM run1|run2 ID_SUFFIX TOKENIZER [SECOND_INDEX]");
         const std::string kind(argv[1]), run(argv[7]);
         if (run != "run1" && run != "run2") throw std::runtime_error("invalid run");
         fs::create_directories(argv[5]);
         if (kind == "schema" || kind == "schema3")
             SchemaCapture(argv[2], argv[4], argv[5], argv[6], run, argv[8], argv[9], kind == "schema3");
-        else if (kind == "adapter")
-            AdapterCapture(argv[2], argv[3], argv[4], argv[5], argv[6], run, argv[8], argv[9]);
+        else if (kind == "adapter") {
+            const int second_index = argc == 11 ? std::stoi(argv[10]) : 9;
+            if (second_index < 1 || second_index > 9) throw std::runtime_error("invalid second adapter prefix index");
+            AdapterCapture(argv[2], argv[3], argv[4], argv[5], argv[6], run, argv[8], argv[9], second_index);
+        }
         else throw std::runtime_error("unknown kind");
         return 0;
     } catch (const std::exception& e) {
