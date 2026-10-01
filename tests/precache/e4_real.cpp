@@ -278,9 +278,12 @@ void Real102() {
 }
 PKV_CELL("10.2/E4", "E1", Real102);
 
-void Hook(void*,int32_t n,sslm_task_fn task,void* ctx) {
-    std::thread worker([&]{for(int32_t i=1;i<n;i+=2) task(ctx,i);});
-    for(int32_t i=0;i<n;i+=2) task(ctx,i);
+struct HookCounts { std::atomic<int> calls{0},tasks{0}; };
+void Hook(void* user,int32_t n,sslm_task_fn task,void* ctx) {
+    auto& counts=*static_cast<HookCounts*>(user);
+    ++counts.calls;
+    std::thread worker([&]{for(int32_t i=1;i<n;i+=2) {++counts.tasks;task(ctx,i);}});
+    for(int32_t i=0;i<n;i+=2) {++counts.tasks;task(ctx,i);}
     worker.join();
 }
 
@@ -306,7 +309,8 @@ void Parallel66() {
     Status(sslm_workspace_create(fx.model,&cfg,memory.p,memory.n,&ws),
            SSLM_OK,"6.6 workspace create");
     if(!ws) return;
-    const sslm_parallel_for hook{Hook,nullptr,4,SSLM_PARALLEL_FOR_MATVEC};
+    HookCounts counts;
+    const sslm_parallel_for hook{Hook,&counts,4,SSLM_PARALLEL_FOR_MATVEC};
     Status(sslm_workspace_set_parallel_for(ws,&hook),SSLM_OK,"6.6 hook install");
     sslm_decode_params p{};
     p.layer_budget=int32_t(fx.geo.layers);
@@ -317,6 +321,9 @@ void Parallel66() {
         Status(sslm_decode_step(fx.model,c,1,&p,ws,&tc),SSLM_OK,"6.6 parallel decode");
         PKV_CHECK_MSG(ta>=0 && ta==tc,"6.6 restored parallel token differs at %d",i);
     }
+    PKV_CHECK_MSG(counts.calls>0 && counts.tasks>0,
+                  "6.6 installed parallel hook never ran (calls=%d, tasks=%d)",
+                  int(counts.calls),int(counts.tasks));
     Status(sslm_workspace_destroy(ws),SSLM_OK,"6.6 workspace destroy");
 }
 PKV_CELL("6.6/E4", "E1", Parallel66);
