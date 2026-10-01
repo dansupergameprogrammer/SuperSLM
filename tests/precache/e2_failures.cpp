@@ -1,4 +1,4 @@
-#include "precache_common.h"
+#include "precache_hostile.h"
 
 namespace {
 using namespace pc;
@@ -121,6 +121,92 @@ void EmptyPool56() {
                   "5.6 short header reached allocation slot");
     sslm_pc_test_only_restore_fault_disarm();
     for(auto s:held) sslm_seq_release(s);
+
+    // Re-run the exact generated 2.1/2.2/2.3 population, rather than a
+    // hand-picked corruption sample, at exactly zero free pages.
+    const Fixture& synthetic=SyntheticFixture();
+    if(!synthetic.ok) return;
+    const auto one=RootBlob(synthetic,1);
+    const auto thousand=RootBlob(synthetic,1000);
+    if(!RequireBlob(one,"5.6 synthetic L=1") ||
+       !RequireBlob(thousand,"5.6 synthetic L=1000")) return;
+    PagePool zero(synthetic.model,8);
+    std::vector<sslm_seq> zero_held;
+    PKV_CHECK_MSG(AdmitPages(synthetic,&zero.pool,8,&zero_held),
+                  "5.6 synthetic pool did not admit all eight pages");
+    sslm_seq overflow=nullptr;
+    Status(sslm_seq_create_budgeted(synthetic.model,&zero.pool,16,&overflow),
+           SSLM_KV_POOL_EXHAUSTED,"5.6 synthetic zero-free confirmation");
+    if(overflow) sslm_seq_release(overflow);
+    size_t discriminating=0,nondiscriminating=0;
+    auto check=[&](const Fixture& f,sslm_kv_pool* target,const HostileBlob& c) {
+        if(c.draw_discriminating) ++discriminating; else ++nondiscriminating;
+        sslm_pc_test_only_restore_fault_arm(3,0);
+        sslm_prefix out=OutSentinel<sslm_prefix>();
+        const auto st=Restore(f,target,c.bytes,nullptr,&out);
+        PKV_CHECK_MSG(st==c.want && out==nullptr,
+                      "5.6 %s: validation status %d became %d at zero free",
+                      c.name.c_str(),int(c.want),int(st));
+        PKV_CHECK_MSG(sslm_pc_test_only_restore_fault_read(nullptr,nullptr,nullptr,nullptr)==0,
+                      "5.6 %s reached allocation slot before validation",c.name.c_str());
+        sslm_pc_test_only_restore_fault_disarm();
+        if(st==SSLM_OK && out && out!=OutSentinel<sslm_prefix>()) sslm_prefix_release(out);
+    };
+    TruncationPopulation(one,thousand,[&](const HostileBlob& c){check(synthetic,&zero.pool,c);});
+    FlipPopulation(one,[&](const HostileBlob& c){check(synthetic,&zero.pool,c);});
+    DomainPopulation(synthetic,one,[&](const HostileBlob& c){check(synthetic,&zero.pool,c);});
+    const Fixture& bound_fx=SyntheticFixture(true);
+    const auto bound=BoundWalkCase();
+    if(RequireBlob(bound.bytes,"5.6 bound walk")) {
+        PagePool bound_zero(bound_fx.model,8);
+        std::vector<sslm_seq> bound_held;
+        PKV_CHECK_MSG(AdmitPages(bound_fx,&bound_zero.pool,8,&bound_held),
+                      "5.6 bound-model pool did not reach zero free");
+        check(bound_fx,&bound_zero.pool,bound);
+        for(auto seq:bound_held) sslm_seq_release(seq);
+    }
+    // The non-null-pool 2.5 cases run against an armed allocation slot too.
+    sslm_pc_test_only_restore_fault_arm(3,0);
+    sslm_prefix null_model=OutSentinel<sslm_prefix>();
+    const auto null_model_st=sslm_prefix_restore(nullptr,&zero.pool,one.data(),one.size(),
+                                                  nullptr,&null_model,nullptr);
+    Status(null_model_st,SSLM_INVALID_ARGUMENT,"5.6 null model before draw");
+    PKV_CHECK(null_model==nullptr);
+    PKV_CHECK_EQ(sslm_pc_test_only_restore_fault_read(nullptr,nullptr,nullptr,nullptr),0);
+    sslm_pc_test_only_restore_fault_disarm();
+    sslm_pc_test_only_restore_fault_arm(3,0);
+    Status(sslm_prefix_restore(synthetic.model,&zero.pool,one.data(),one.size(),
+                               nullptr,nullptr,nullptr),SSLM_INVALID_ARGUMENT,
+           "5.6 null out before draw");
+    PKV_CHECK_EQ(sslm_pc_test_only_restore_fault_read(nullptr,nullptr,nullptr,nullptr),0);
+    sslm_pc_test_only_restore_fault_disarm();
+    sslm_pc_test_only_restore_fault_arm(3,0);
+    sslm_prefix null_buffer=OutSentinel<sslm_prefix>();
+    const auto null_buffer_st=sslm_prefix_restore(synthetic.model,&zero.pool,nullptr,one.size(),
+                                                   nullptr,&null_buffer,nullptr);
+    Status(null_buffer_st,SSLM_INVALID_ARGUMENT,"5.6 null buffer before draw");
+    PKV_CHECK(null_buffer==nullptr);
+    PKV_CHECK_EQ(sslm_pc_test_only_restore_fault_read(nullptr,nullptr,nullptr,nullptr),0);
+    sslm_pc_test_only_restore_fault_disarm();
+    // null buf, negative L, and truncations before byte 120 have no readable
+    // positive L: their status is asserted but they do not discriminate draw-first.
+    const Fixture& foreign=GetFixture("pkv_qk");
+    if(foreign.ok) {
+        PagePool foreign_zero(foreign.model,8);
+        std::vector<sslm_seq> foreign_held;
+        PKV_CHECK_MSG(AdmitPages(foreign,&foreign_zero.pool,8,&foreign_held),
+                      "5.6 foreign-model pool did not reach zero free");
+        sslm_seq foreign_extra=nullptr;
+        Status(sslm_seq_create_budgeted(foreign.model,&foreign_zero.pool,16,&foreign_extra),
+               SSLM_KV_POOL_EXHAUSTED,"5.6 foreign-model zero-free confirmation");
+        if(foreign_extra) sslm_seq_release(foreign_extra);
+        check(synthetic,&foreign_zero.pool,
+              HostileBlob{"foreign-model pool",one,SSLM_INVALID_ARGUMENT,true});
+        for(auto seq:foreign_held) sslm_seq_release(seq);
+    }
+    for(auto seq:zero_held) sslm_seq_release(seq);
+    PKV_CHECK_MSG(discriminating>one.size() && nondiscriminating>=120,
+                  "5.6 generated population or explicit nondiscriminating exceptions shrank");
 }
 PKV_CELL("5.6/E2", "E1", EmptyPool56);
 PKV_CELL("7.2/E2", "E1", EmptyPool56);
@@ -146,6 +232,69 @@ void Precedence57() {
         PKV_CHECK(out==nullptr);
         if (st==SSLM_OK && out && out!=OutSentinel<sslm_prefix>()) sslm_prefix_release(out);
     }
+    auto producer=good;
+    PutLe32(producer,8,UINT32_MAX);
+    Digest(producer);
+    sslm_prefix null_model=OutSentinel<sslm_prefix>();
+    const auto null_st=sslm_prefix_restore(nullptr,&pool.pool,producer.data(),producer.size(),
+                                           nullptr,&null_model,nullptr);
+    PKV_CHECK_MSG(null_st==SSLM_INVALID_ARGUMENT && null_model==nullptr,
+                  "5.7 step1 null model did not precede producer mismatch");
+    auto short_blob=producer;
+    short_blob.resize(kHeader-1);
+    sslm_prefix short_out=nullptr;
+    const auto short_st=Restore(fx,&pool.pool,short_blob,nullptr,&short_out);
+    PKV_CHECK_MSG(short_st==SSLM_INVALID_ARGUMENT && short_out==nullptr,
+                  "5.7 step2 size did not precede producer mismatch");
+    auto magic=producer;
+    magic[0]='Z';
+    Digest(magic);
+    sslm_prefix magic_out=nullptr;
+    const auto magic_st=Restore(fx,&pool.pool,magic,nullptr,&magic_out);
+    PKV_CHECK_MSG(magic_st==SSLM_INVALID_ARGUMENT && magic_out==nullptr,
+                  "5.7 step2 magic did not precede producer mismatch");
+    auto corrupted=producer;
+    corrupted[28]^=1;
+    sslm_prefix digest_out=nullptr;
+    const auto digest_st=Restore(fx,&pool.pool,corrupted,nullptr,&digest_out);
+    PKV_CHECK_MSG(digest_st==SSLM_INVALID_ARGUMENT && digest_out==nullptr,
+                  "5.7 step3 digest did not precede producer mismatch");
+    const char* gpu_path=std::getenv("SUPERSLM_PRECACHE_GPU_BLOB");
+    PKV_CHECK_MSG(gpu_path && *gpu_path,"5.7 real GPU SPX1 capture path is unset");
+    if(gpu_path && *gpu_path) {
+        std::vector<uint8_t> gpu;
+        PKV_CHECK_MSG(ReadAll(gpu_path,&gpu) && gpu.size()>=kHeader,
+                      "5.7 real GPU SPX1 capture is missing");
+        if(gpu.size()>=kHeader) {
+            PKV_CHECK_MSG(IsMagic(gpu,"SPX1") && Le32(gpu,4)==1 &&
+                          Le32(gpu,20)!=0 && Le32(gpu,24)!=0 &&
+                          int64_t(Le64(gpu,112))>=1,
+                          "5.7 GPU producer operand lacks backend/vendor/device/L");
+            PutLe32(gpu,8,UINT32_MAX);
+            Digest(gpu);
+            sslm_prefix gpu_out=nullptr;
+            const auto gpu_st=Restore(fx,&pool.pool,gpu,nullptr,&gpu_out);
+            PKV_CHECK_MSG(gpu_st==SSLM_INVALID_ARGUMENT && gpu_out==nullptr,
+                          "5.7 step4 GPU backend did not precede producer mismatch");
+            if(gpu_st==SSLM_OK && gpu_out && gpu_out!=OutSentinel<sslm_prefix>())
+                sslm_prefix_release(gpu_out);
+        }
+    }
+    PagePool zero(fx.model,8);
+    std::vector<sslm_seq> held;
+    PKV_CHECK_MSG(AdmitPages(fx,&zero.pool,8,&held),"5.7 zero-free pair setup failed");
+    sslm_seq extra=nullptr;
+    Status(sslm_seq_create_budgeted(fx.model,&zero.pool,16,&extra),
+           SSLM_KV_POOL_EXHAUSTED,"5.7 zero-free pair confirmation");
+    if(extra) sslm_seq_release(extra);
+    auto domain=good;
+    PutLe64(domain,120,uint64_t(-1));
+    Digest(domain);
+    sslm_prefix domain_out=nullptr;
+    const auto domain_st=Restore(fx,&zero.pool,domain,nullptr,&domain_out);
+    PKV_CHECK_MSG(domain_st==SSLM_INVALID_ARGUMENT && domain_out==nullptr,
+                  "5.7 step8 domain did not precede zero-free capacity refusal");
+    for(auto seq:held) sslm_seq_release(seq);
 }
 PKV_CELL("5.7/E2", "E1", Precedence57);
 
