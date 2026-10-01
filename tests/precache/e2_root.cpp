@@ -20,6 +20,45 @@ void Shape41() {
 }
 PKV_CELL("4.1/E2", "E1", Shape41);
 
+void SyntheticShapes41() {
+    const char* dir=std::getenv("SUPERSLM_PRECACHE_SYNTHETIC_DIR");
+    PKV_CHECK_MSG(dir && *dir,"4.1 synthetic fixture directory is unset");
+    if(!dir || !*dir) return;
+    for(const auto& shape : {std::pair<const char*,int>{"synthetic0p5.sslm",4096},
+                             {"synthetic1p5.sslm",32768}}) {
+        ModelFile model(std::string(dir)+"/"+shape.first);
+        Status(model.status,SSLM_OK,"4.1 synthetic model map");
+        if(model.status!=SSLM_OK) continue;
+        Fixture fx;
+        fx.model=model.model; model.model=nullptr;
+        fx.geo={1,1,1,uint32_t(shape.second)}; // Only cap and B are used here.
+        fx.vocab=256;
+        PagePool source(fx.model,uint32_t(fx.CapPages()+64));
+        PagePool target(fx.model,uint32_t(fx.CapPages()+64));
+        Status(source.status,SSLM_OK,"4.1 source pool");
+        Status(target.status,SSLM_OK,"4.1 target pool");
+        if(source.status!=SSLM_OK || target.status!=SSLM_OK) return;
+        for(int L : {0,1,15,16,17,1000,shape.second-1,shape.second}) {
+            Handles built,restored;
+            sslm_prefix twin=Root(fx,&source.pool,built,L);
+            if(!twin) return;
+            const auto b=Save(twin);
+            if(!RequireBlob(b,"4.1 synthetic geometries")) return;
+            sslm_prefix copy=nullptr;
+            if(Restored(fx,&target.pool,b,nullptr,restored,&copy)) {
+                PKV_CHECK_MSG(Save(copy)==b,"4.1 synthetic shape SPX1 bytes changed");
+                for(bool budget : {false,true}) {
+                    const auto a=Decode(fx,&source.pool,twin,budget,16);
+                    const auto c=Decode(fx,&target.pool,copy,budget,16);
+                    PKV_CHECK_MSG(a.size()==16 && a==c,
+                                  "4.1 synthetic shape adopter differs from prefill twin");
+                }
+            }
+        }
+    }
+}
+PKV_CELL("4.1/E2:synthetic-shapes", "E1", SyntheticShapes41);
+
 void RoundTrip64() {
     const Fixture& fx = GetFixture("pkv_def");
     if (!fx.ok) return;
