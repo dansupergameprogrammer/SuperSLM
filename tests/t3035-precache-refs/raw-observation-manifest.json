@@ -1,5 +1,5 @@
 {
-  "count": 145,
+  "count": 147,
   "files": [
     {
       "mtime_utc": "2026-10-01T21:29:18.755468+00:00",
@@ -738,6 +738,18 @@
       "path": "D:\\_scratch\\T-3035\\mutant0p5-flat00.txt",
       "sha256": "a67174adc3379dcc22431fda98657ee610f89ff81a788f3c3d805140edacc471",
       "size": 820
+    },
+    {
+      "mtime_utc": "2026-10-01T21:48:27.414975+00:00",
+      "path": "D:\\_scratch\\T-3035\\row0-identical-0p5.txt",
+      "sha256": "a4ba27a2064115809488c45f303074a09cb8a00afd98bd4042bb0ea3eab2df29",
+      "size": 368
+    },
+    {
+      "mtime_utc": "2026-10-01T21:49:49.740015+00:00",
+      "path": "D:\\_scratch\\T-3035\\row0-identical-1p5.txt",
+      "sha256": "e2cd39f2cf3720eeee1c175d9cb45d3b37ff6d8b228571a28fadc8a25f7576d1",
+      "size": 411
     },
     {
       "mtime_utc": "2026-10-01T21:21:04.110404+00:00",
