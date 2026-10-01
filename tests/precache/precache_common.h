@@ -133,4 +133,21 @@ inline bool RequireBlob(const std::vector<uint8_t>& b, const char* cell) {
     PKV_CHECK_MSG(!b.empty(), "%s: no SPX1 blob; prefix-save stub is unimplemented", cell);
     return !b.empty();
 }
+
+struct ModelFile {
+    AlignedBuf bytes;
+    size_t size = 0;
+    sslm_model model = nullptr;
+    sslm_status status = SSLM_INVALID_ARGUMENT;
+    explicit ModelFile(const std::string& path) {
+        std::vector<uint8_t> raw;
+        PKV_CHECK_MSG(ReadAll(path,&raw),"model fixture missing: %s",path.c_str());
+        if(raw.empty()) return;
+        size=raw.size();
+        bytes.Reset(size);
+        std::memcpy(bytes.p,raw.data(),size);
+        status=sslm_model_map(bytes.p,size,&model);
+    }
+    ~ModelFile() { if(model) sslm_model_unmap(model); }
+};
 }
