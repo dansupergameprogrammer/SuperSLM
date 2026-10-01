@@ -5,6 +5,7 @@ this file is load-bearing before the two registered instruments are commissioned
 """
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -78,7 +79,7 @@ def exact_address(name: str, h: dict[str, str]) -> dict:
             "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes"}
 
 
-def reduce(raw: Path, reference: Path, target: Path, donor: Path,
+def reduce(raw: Path, reference: Path, model: Path, target: Path, donor: Path,
            stream_out: Path, byte_out: Path) -> None:
     lines = raw.read_text(encoding="utf-8").splitlines()
     if not lines or not lines[0].startswith("# "):
@@ -91,11 +92,15 @@ def reduce(raw: Path, reference: Path, target: Path, donor: Path,
     baseline = [int(x) for x in header["tokens"].split(",") if x]
     target_hash = digest(target)
     ref_header, expected = reference_row(reference, header["format"], header["mode"], target_hash)
+    if digest(model) != ref_header["model_sha256"].lower():
+        raise ValueError("probe model hash differs from reference")
     if baseline != expected or len(baseline) != 64:
         raise ValueError("unedited restore stream differs from prefill reference")
     if int(ref_header["B"]) != int(header["B"]):
         raise ValueError("page geometry differs from reference")
     common = {"status": "QUARANTINED", "raw_sha256": digest(raw),
+              "raw_path": str(raw.resolve()), "raw_bytes": raw.stat().st_size,
+              "raw_mtime_utc": datetime.fromtimestamp(raw.stat().st_mtime, timezone.utc).isoformat(),
               "probe_source_sha256": digest(Path(__file__).resolve().parents[1] / "tests/t3035_mutant_probe.cpp"),
               "reducer_source_sha256": digest(Path(__file__).resolve()),
               "reference_sha256": digest(reference), "reference_path": str(reference),
@@ -151,28 +156,45 @@ def reduce(raw: Path, reference: Path, target: Path, donor: Path,
 
 def summarize(directory: Path, output: Path) -> None:
     paths = sorted(directory.glob("*.stream.json"))
-    groups: dict[str, list[dict]] = {}
-    for path in paths:
-        record = json.loads(path.read_text(encoding="utf-8"))
-        key = f'{record["model_sha256"]}:{record["adopter_mode"]}:{record["decode_mode"]}'
-        groups.setdefault(key, []).append(record)
-    result = {"instrument": STREAM_ID, "status": "QUARANTINED", "populations": {}}
-    for key, records in groups.items():
-        classes: dict[str, dict] = {}
-        for record in records:
-            for row in record["mutants"]:
-                name = row["mutant"]
-                if name == "M-res":
-                    cls = "residual"
-                elif name.startswith("M-row(") and name != "M-row(0)":
-                    cls = "noninitial_row"
-                elif name.startswith("M-page("):
-                    cls = "full_page"
-                elif name == "M-tail":
-                    cls = "partial_tail"
-                else:
-                    cls = name
-                group = classes.setdefault(cls, {"changed": 0, "killed": 0, "identities": 0, "survivors": []})
+    if not paths:
+        raise ValueError("no stream records")
+    records = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
+    identities = {(r["model_sha256"], r["adopter_mode"], r["decode_mode"]) for r in records}
+    if len(identities) != 1:
+        raise ValueError("population directory mixes model/adopter/decode modes")
+    classes: dict[str, dict] = {}
+    for record in records:
+        length, page = record["length"], record["page_positions"]
+        full = length // page
+        for row in record["mutants"]:
+            name = row["mutant"]
+            tags = []
+            if name == "M-res":
+                tags = ["residual"]
+            elif name.startswith("M-row("):
+                position = int(name[6:-1])
+                tags = ["row:all", "row:0" if position == 0 else "row:noninitial"]
+                if 1 <= position < page:
+                    tags.append("row:1..B-1")
+                for label, value in (("B-1", page - 1), ("B", page),
+                                     ("floor(L/2)", length // 2),
+                                     ("L-B-1", length - page - 1), ("L-1", length - 1)):
+                    if position == value:
+                        tags.append(f"row:{label}")
+            elif name.startswith("M-page("):
+                index = int(name[7:-1])
+                tags = ["page:all"]
+                for label, value in (("first", 0), ("middle", full // 2), ("last", full - 1)):
+                    if index == value:
+                        tags.append(f"page:{label}")
+            elif name == "M-tail":
+                tags = ["partial_tail"]
+            else:
+                tags = [name]
+            for tag in set(tags):
+                group = classes.setdefault(tag, {"tested": 0, "changed": 0, "killed": 0,
+                                                 "identities": 0, "survivors": []})
+                group["tested"] += 1
                 if row["edit"] == "IDENTITY":
                     group["identities"] += 1
                 else:
@@ -181,7 +203,15 @@ def summarize(directory: Path, output: Path) -> None:
                     if not row["stream_killed"]:
                         group["survivors"].append({"reference_sha256": record["reference_sha256"],
                                                    "mutant": name})
-        result["populations"][key] = {"prefixes": len(records), "classes": classes}
+    required = ("residual", "row:noninitial", "page:first", "page:middle", "page:last", "partial_tail")
+    result = {"instrument": STREAM_ID, "status": "QUARANTINED",
+              "model_sha256": records[0]["model_sha256"],
+              "adopter_mode": records[0]["adopter_mode"],
+              "decode_mode": records[0]["decode_mode"],
+              "prefixes": len(records), "unique_mutants": sum(len(r["mutants"]) for r in records),
+              "classes": classes,
+              "vitality_observation": {key: classes.get(key, {}).get("killed", 0) > 0 for key in required},
+              "note": "Positive stream witnesses only; exact-state cells and independent commissioning remain separate"}
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes((json.dumps(result, indent=2, sort_keys=True) + "\n").encode("utf-8"))
 
@@ -190,14 +220,14 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
     m = sub.add_parser("mutation")
-    for arg in ("raw", "reference", "target", "donor", "stream_out", "byte_out"):
+    for arg in ("raw", "reference", "model", "target", "donor", "stream_out", "byte_out"):
         m.add_argument(arg, type=Path)
     s = sub.add_parser("summarize")
     s.add_argument("directory", type=Path)
     s.add_argument("output", type=Path)
     a = parser.parse_args()
     if a.command == "mutation":
-        reduce(a.raw, a.reference, a.target, a.donor, a.stream_out, a.byte_out)
+        reduce(a.raw, a.reference, a.model, a.target, a.donor, a.stream_out, a.byte_out)
     else:
         summarize(a.directory, a.output)
 
