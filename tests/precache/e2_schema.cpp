@@ -69,6 +69,7 @@ PKV_CELL("6.7/E2", "E1", Schema67);
 PKV_CELL("8.4/E2", "E1", Schema67);
 
 void ExistingSsb5_214() {
+    Parser213(); // The hostile model must fail before an SSB5 can be saved against it.
     const auto dir=SyntheticDir();
     if(dir.empty()) return;
     ModelFile model(dir+"/synthetic0p5-three-schema.sslm");
@@ -77,7 +78,7 @@ void ExistingSsb5_214() {
     Fixture fx;
     fx.model=model.model; model.model=nullptr;
     fx.geo={24,2,64,4096}; fx.vocab=256;
-    PagePool pool(fx.model,300);
+    PagePool pool(fx.model,600); // Two legacy whole-cap reservations coexist.
     sslm_schema schema=nullptr;
     Status(sslm_schema_lookup(fx.model,"schema_two",&schema),SSLM_OK,"2.14 index-2 lookup");
     sslm_seq original=nullptr;
