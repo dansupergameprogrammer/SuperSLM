@@ -1,4 +1,4 @@
-#include "precache_common.h"
+#include "precache_hostile.h"
 
 namespace {
 using namespace pc;
@@ -185,6 +185,15 @@ void Save24() {
     PagePool& pool = sc.AddPool(fx.model, 64);
     sslm_prefix p = Root(fx, &pool.pool, sc.h, 17);
     if (!p) return;
+    sslm_prefix unfrozen=nullptr;
+    Status(sslm_prefix_begin_budgeted(fx.model,&pool.pool,17,&unfrozen),SSLM_OK,
+           "2.4 unfrozen fixture begin");
+    if(unfrozen) {
+        sc.h.prefixes.push_back(unfrozen);
+        size_t unfrozen_n=0;
+        Status(sslm_prefix_save(unfrozen,nullptr,&unfrozen_n),SSLM_INVALID_ARGUMENT,
+               "2.4 unfrozen prefix save refusal");
+    }
     size_t n = 0;
     Status(sslm_prefix_save(nullptr, nullptr, &n), SSLM_INVALID_ARGUMENT, "2.4 null prefix");
     Status(sslm_prefix_save(p, nullptr, nullptr), SSLM_INVALID_ARGUMENT, "2.4 null size");
@@ -209,52 +218,61 @@ void Restore25() {
     const auto b = RootBlob(fx, 17);
     if (!RequireBlob(b, "2.5")) return;
     PagePool pool(fx.model, 32);
+    ProbeExactlyFreeOneState(fx,&pool.pool,32);
     sslm_prefix out = OutSentinel<sslm_prefix>();
+    sslm_pc_test_only_restore_fault_arm(3,0);
     Status(sslm_prefix_restore(fx.model, &pool.pool, b.data(), b.size(), nullptr, nullptr, nullptr),
            SSLM_INVALID_ARGUMENT, "2.5 null out");
+    PKV_CHECK_EQ(sslm_pc_test_only_restore_fault_read(nullptr,nullptr,nullptr,nullptr),0);
+    sslm_pc_test_only_restore_fault_disarm();
     for (int which = 0; which < 4; ++which) {
         out = OutSentinel<sslm_prefix>();
         sslm_kv_pool null_pool = nullptr;
+        sslm_pc_test_only_restore_fault_arm(3,0);
         const sslm_status st = sslm_prefix_restore(which == 0 ? nullptr : fx.model,
             which == 1 ? nullptr : which == 2 ? &null_pool : &pool.pool,
             which == 3 ? nullptr : b.data(), b.size(), nullptr, &out, nullptr);
         Status(st, SSLM_INVALID_ARGUMENT, "2.5 null input");
         PKV_CHECK(out == nullptr);
+        PKV_CHECK_EQ(sslm_pc_test_only_restore_fault_read(nullptr,nullptr,nullptr,nullptr),0);
+        sslm_pc_test_only_restore_fault_disarm();
     }
+    ProbeExactlyFreeOneState(fx,&pool.pool,32);
     const Fixture& foreign=GetFixture("pkv_qk");
     if(foreign.ok) {
         PagePool foreign_pool(foreign.model,32);
+        ProbeExactlyFreeOneState(foreign,&foreign_pool.pool,32);
         out=OutSentinel<sslm_prefix>();
+        sslm_pc_test_only_restore_fault_arm(3,0);
         Status(Restore(fx,&foreign_pool.pool,b,nullptr,&out),SSLM_INVALID_ARGUMENT,
                "2.5 pool belongs to another model");
         PKV_CHECK(out==nullptr);
+        PKV_CHECK_EQ(sslm_pc_test_only_restore_fault_read(nullptr,nullptr,nullptr,nullptr),0);
+        sslm_pc_test_only_restore_fault_disarm();
+        ProbeExactlyFreeOneState(foreign,&foreign_pool.pool,32);
     }
 }
 PKV_CELL("2.5/E2", "E1", Restore25);
 
 void ByteCorruption22() {
-    const Fixture& fx = GetFixture("pkv_def");
+    const Fixture& fx = SyntheticFixture();
     if (!fx.ok) return;
     const auto good = RootBlob(fx, 1);
     if (!RequireBlob(good, "2.2")) return;
     PagePool pool(fx.model, 32);
-    for (size_t i = 0; i < good.size(); ++i) {
-        auto b = good;
-        b[i] ^= 1;
-        sslm_prefix out = nullptr;
-        const sslm_status st = Restore(fx, &pool.pool, b, nullptr, &out);
-        PKV_CHECK_MSG(st == SSLM_INVALID_ARGUMENT && out == nullptr,
-            "2.2 flipped byte %zu: expected integrity refusal, got %d", i, int(st));
-        if (st == SSLM_OK && out && out != OutSentinel<sslm_prefix>()) sslm_prefix_release(out);
-    }
-    for(const char* magic : {"SSB6","SSB5","SLM6"}) {
-        auto b=good;
-        std::memcpy(b.data(),magic,4);
+    ProbeExactlyFreeOneState(fx,&pool.pool,32);
+    FlipPopulation(good,[&](const HostileBlob& c) {
         sslm_prefix out=nullptr;
-        Status(Restore(fx,&pool.pool,b,nullptr,&out),SSLM_INVALID_ARGUMENT,
-               "2.2 foreign magic rejected by prefix restore");
-        PKV_CHECK(out==nullptr);
-    }
+        sslm_pc_test_only_restore_fault_arm(3,0);
+        const auto st=Restore(fx,&pool.pool,c.bytes,nullptr,&out);
+        PKV_CHECK_MSG(st==c.want && out==nullptr,
+                      "2.2 %s: expected integrity refusal, got %d",c.name.c_str(),int(st));
+        PKV_CHECK_MSG(sslm_pc_test_only_restore_fault_read(nullptr,nullptr,nullptr,nullptr)==0,
+                      "2.2 %s reached allocation before validation",c.name.c_str());
+        sslm_pc_test_only_restore_fault_disarm();
+        if(st==SSLM_OK && out && out!=OutSentinel<sslm_prefix>()) sslm_prefix_release(out);
+    });
+    ProbeExactlyFreeOneState(fx,&pool.pool,32);
     sslm_seq seq=nullptr;
     Status(sslm_seq_restore(fx.model,&pool.pool,good.data(),good.size(),&seq),
            SSLM_INVALID_ARGUMENT,"2.2 SPX1 rejected by sequence restore");
@@ -269,86 +287,65 @@ PKV_CELL("2.2/E2", "E1", ByteCorruption22);
 PKV_CELL("7.3/E2", "E1", ByteCorruption22);
 
 void Truncation21() {
-    const Fixture& fx = GetFixture("pkv_def");
+    const Fixture& fx = SyntheticFixture();
     if (!fx.ok) return;
     const auto good = RootBlob(fx, 1);
     if (!RequireBlob(good, "2.1")) return;
     PagePool pool(fx.model, 32);
-    for (size_t n = 0; n < good.size(); ++n) {
-        sslm_prefix out = OutSentinel<sslm_prefix>();
-        const sslm_status st = sslm_prefix_restore(fx.model, &pool.pool, good.data(), n,
-                                                   nullptr, &out, nullptr);
-        PKV_CHECK_MSG(st == SSLM_INVALID_ARGUMENT && out == nullptr,
-            "2.1 truncation at %zu: got %d", n, int(st));
-        if (st == SSLM_OK && out && out != OutSentinel<sslm_prefix>()) sslm_prefix_release(out);
-    }
-    std::vector<uint8_t> extra = good;
-    extra.push_back(0);
-    sslm_prefix out = nullptr;
-    Status(Restore(fx, &pool.pool, extra, nullptr, &out), SSLM_INVALID_ARGUMENT, "2.1 extra byte");
-    PKV_CHECK(out == nullptr);
     const auto long_blob=RootBlob(fx,1000);
     if(!RequireBlob(long_blob,"2.1 L=1000")) return;
-    auto check_length=[&](size_t n) {
-        sslm_prefix candidate=nullptr;
-        const auto st=sslm_prefix_restore(fx.model,&pool.pool,long_blob.data(),n,
-                                          nullptr,&candidate,nullptr);
-        PKV_CHECK_MSG(st==SSLM_INVALID_ARGUMENT && candidate==nullptr,
-                      "2.1 L=1000 truncation at %zu: got %d",n,int(st));
-        if(st==SSLM_OK && candidate) sslm_prefix_release(candidate);
-    };
-    for(size_t n=0;n<kHeader;++n) check_length(n);
-    for(size_t n=kHeader;n<long_blob.size();n+=4096) check_length(n);
-    extra=long_blob;
-    extra.push_back(0);
-    out=nullptr;
-    Status(Restore(fx,&pool.pool,extra,nullptr,&out),SSLM_INVALID_ARGUMENT,
-           "2.1 L=1000 extra byte");
-    PKV_CHECK(out==nullptr);
+    PKV_CHECK_MSG(good.size()==kHeader+896+6144,
+                  "2.1 synthetic L=1 operand is not 184+896+6144 bytes");
+    ProbeExactlyFreeOneState(fx,&pool.pool,32);
+    TruncationPopulation(good,long_blob,[&](const HostileBlob& c) {
+        sslm_prefix out=nullptr;
+        sslm_pc_test_only_restore_fault_arm(3,0);
+        const auto st=Restore(fx,&pool.pool,c.bytes,nullptr,&out);
+        PKV_CHECK_MSG(st==c.want && out==nullptr,
+                      "2.1 %s: expected size refusal, got %d",c.name.c_str(),int(st));
+        PKV_CHECK_MSG(sslm_pc_test_only_restore_fault_read(nullptr,nullptr,nullptr,nullptr)==0,
+                      "2.1 %s reached allocation before validation",c.name.c_str());
+        sslm_pc_test_only_restore_fault_disarm();
+        if(st==SSLM_OK && out && out!=OutSentinel<sslm_prefix>()) sslm_prefix_release(out);
+    });
+    ProbeExactlyFreeOneState(fx,&pool.pool,32);
 }
 PKV_CELL("2.1/E2", "E1", Truncation21);
 
 void Domains23() {
-    const Fixture& fx = GetFixture("pkv_def");
+    const Fixture& fx = SyntheticFixture();
     if (!fx.ok) return;
     const auto good = RootBlob(fx, 1);
     if (!RequireBlob(good, "2.3")) return;
     PagePool pool(fx.model, 64);
-    struct Edit { const char* name; size_t offset; uint64_t value; bool wide; sslm_status want; };
-    const std::vector<Edit> edits = {
-        {"backend",4,1,false,SSLM_INVALID_ARGUMENT},
-        {"producer major",8,0xffffffffu,false,PC_RESTORE_PRODUCER_MISMATCH},
-        {"producer minor",12,0xffffffffu,false,PC_RESTORE_PRODUCER_MISMATCH},
-        {"producer patch",16,0xffffffffu,false,PC_RESTORE_PRODUCER_MISMATCH},
-        {"adapter vendor",20,1,false,PC_RESTORE_PRODUCER_MISMATCH},
-        {"adapter device",24,1,false,PC_RESTORE_PRODUCER_MISMATCH},
-        {"model hash",60,uint64_t(good[60]^1),false,SSLM_RESTORE_MODEL_MISMATCH},
-        {"precision",92,0xffffffffu,false,SSLM_RESTORE_KV_MISMATCH},
-        {"unknown schema hash",96,1,true,SSLM_RESTORE_SCHEMA_MISMATCH},
-        {"unbound non-sentinel walk",104,1,false,SSLM_RESTORE_SCHEMA_MISMATCH},
-        {"origin > L",120,2,true,SSLM_INVALID_ARGUMENT},
-        {"origin negative",120,uint64_t(-1),true,SSLM_INVALID_ARGUMENT},
-        {"L negative",112,uint64_t(-1),true,SSLM_INVALID_ARGUMENT},
-        {"L above cap",112,4097,true,SSLM_INVALID_ARGUMENT},
-        {"L enormous before size arithmetic",112,INT64_MAX,true,SSLM_INVALID_ARGUMENT},
-        {"size not formula",112,2,true,SSLM_INVALID_ARGUMENT},
-        {"token minus one with positive L",108,0xffffffffu,false,SSLM_INVALID_ARGUMENT},
-        {"token negative",108,0xfffffffeu,false,SSLM_INVALID_ARGUMENT},
-        {"token INT32_MIN",108,0x80000000u,false,SSLM_INVALID_ARGUMENT},
-        {"token above vocab",108,uint64_t(fx.vocab),false,SSLM_INVALID_ARGUMENT},
-        {"mantissa above int32",128,uint64_t(INT32_MAX)+1,true,SSLM_INVALID_ARGUMENT},
-        {"mantissa below int32",128,uint64_t(int64_t(INT32_MIN)-1),true,SSLM_INVALID_ARGUMENT},
-    };
-    for (const auto& e : edits) {
-        auto b = good;
-        if (e.wide) PutLe64(b,e.offset,e.value); else PutLe32(b,e.offset,uint32_t(e.value));
-        Digest(b);
-        sslm_prefix out = nullptr;
-        const sslm_status st = Restore(fx,&pool.pool,b,nullptr,&out);
-        PKV_CHECK_MSG(st == e.want && out == nullptr,
-            "2.3 %s: expected %d, got %d; out=%p",e.name,int(e.want),int(st),out);
-        if (st == SSLM_OK && out && out != OutSentinel<sslm_prefix>()) sslm_prefix_release(out);
-    }
+    ProbeExactlyFreeOneState(fx,&pool.pool,64);
+    DomainPopulation(fx,good,[&](const HostileBlob& c) {
+        sslm_prefix out=nullptr;
+        sslm_pc_test_only_restore_fault_arm(3,0);
+        const auto st=Restore(fx,&pool.pool,c.bytes,nullptr,&out);
+        PKV_CHECK_MSG(st==c.want && out==nullptr,
+                      "2.3 %s: expected %d, got %d",c.name.c_str(),int(c.want),int(st));
+        PKV_CHECK_MSG(sslm_pc_test_only_restore_fault_read(nullptr,nullptr,nullptr,nullptr)==0,
+                      "2.3 %s reached allocation before validation",c.name.c_str());
+        sslm_pc_test_only_restore_fault_disarm();
+        if(st==SSLM_OK && out && out!=OutSentinel<sslm_prefix>()) sslm_prefix_release(out);
+    });
+    ProbeExactlyFreeOneState(fx,&pool.pool,64);
+    const Fixture& bound_fx=SyntheticFixture(true);
+    const auto bound=BoundWalkCase();
+    if(!RequireBlob(bound.bytes,"2.3 bound walk at state_count")) return;
+    PagePool bound_pool(bound_fx.model,32);
+    ProbeExactlyFreeOneState(bound_fx,&bound_pool.pool,32);
+    sslm_prefix bound_out=nullptr;
+    sslm_pc_test_only_restore_fault_arm(3,0);
+    const auto bound_status=Restore(bound_fx,&bound_pool.pool,bound.bytes,nullptr,&bound_out);
+    Status(bound_status,SSLM_RESTORE_SCHEMA_MISMATCH,"2.3 bound walk at state_count");
+    PKV_CHECK(bound_out==nullptr);
+    PKV_CHECK_EQ(sslm_pc_test_only_restore_fault_read(nullptr,nullptr,nullptr,nullptr),0);
+    sslm_pc_test_only_restore_fault_disarm();
+    if(bound_status==SSLM_OK && bound_out && bound_out!=OutSentinel<sslm_prefix>())
+        sslm_prefix_release(bound_out);
+    ProbeExactlyFreeOneState(bound_fx,&bound_pool.pool,32);
 }
 PKV_CELL("2.3/E2", "E1", Domains23);
 PKV_CELL("7.6/E2", "E1", Domains23);

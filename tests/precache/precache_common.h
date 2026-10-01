@@ -150,4 +150,36 @@ struct ModelFile {
     }
     ~ModelFile() { if(model) sslm_model_unmap(model); }
 };
+
+// The hostile-input population uses the plan's synthetic L=1 operand:
+// 184-byte SPX1 header + 896 residual bytes + 6,144 canonical K/V bytes.
+inline const Fixture& SyntheticFixture(bool three_schemas = false) {
+    static std::map<bool, std::unique_ptr<Fixture>> cache;
+    auto found = cache.find(three_schemas);
+    if (found != cache.end()) return *found->second;
+    auto fx = std::make_unique<Fixture>();
+    const char* dir = std::getenv("SUPERSLM_PRECACHE_SYNTHETIC_DIR");
+    PKV_CHECK_MSG(dir && *dir, "synthetic precache fixture directory is unset");
+    if (dir && *dir) {
+        const std::string file = three_schemas ? "synthetic0p5-three-schema.sslm"
+                                               : "synthetic0p5.sslm";
+        std::vector<uint8_t> raw;
+        PKV_CHECK_MSG(ReadAll(std::string(dir) + "/" + file, &raw) && !raw.empty(),
+                      "synthetic precache fixture %s is missing", file.c_str());
+        if (!raw.empty()) {
+            fx->size = raw.size();
+            fx->bytes.Reset(raw.size());
+            std::memcpy(fx->bytes.p, raw.data(), raw.size());
+            fx->sha = Sha(raw.data(), raw.size());
+            fx->geo = {24, 2, 64, 4096};
+            fx->vocab = 256;
+            const auto st = sslm_model_map(fx->bytes.p, fx->size, &fx->model);
+            PKV_CHECK_MSG(st == SSLM_OK, "synthetic precache model map returned %d", int(st));
+            fx->ok = st == SSLM_OK;
+        }
+    }
+    const Fixture& result = *fx;
+    cache.emplace(three_schemas, std::move(fx));
+    return result;
+}
 }
