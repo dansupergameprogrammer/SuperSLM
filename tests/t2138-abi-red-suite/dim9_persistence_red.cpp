@@ -398,26 +398,34 @@ static void TestT2260_R3_Ssb4RoundTripPlusLegacySsb2StillAccepted(sslm_model mod
 			          "T2260-R3: this fixture uses no damped-greedy state -- the 'SSB2' "
 			          "construction below assumes zero anti-LM history to drop");
 			const size_t block_size = sslm_kv_block_size(model);
-			const size_t tail_offset = real_blob.size - 4 - block_size;  // kv_block_count + kv_blocks
-			// 'SSB5' fixed header: shared prefix(120) + ready_for_logits(4) + per-site counts(32).
-			const size_t residual_offset = kCurrentSeqBlobFixedHeader;
-			CHECK_MSG(tail_offset >= residual_offset, "T2260-R3: derived residual region sane");
+			// Paged-KV plan step M2 (§9.2): the size is checked before the subtraction, so a blob
+			// smaller than one block fails here instead of wrapping `tail_offset` past every check
+			// below (R3's `size_t` underflow, plan G32).
+			const bool size_ok = real_blob.size >= kCurrentSeqBlobFixedHeader + 4 + block_size;
+			CHECK_MSG(size_ok,
+			          "T2260-R3: real blob large enough to locate its residual and tail sections");
+			if (size_ok) {
+				const size_t tail_offset = real_blob.size - 4 - block_size;  // kv_block_count + kv_blocks
+				// 'SSB5' fixed header: shared prefix(120) + ready_for_logits(4) + per-site counts(32).
+				const size_t residual_offset = kCurrentSeqBlobFixedHeader;
+				CHECK_MSG(tail_offset >= residual_offset, "T2260-R3: derived residual region sane");
 
-			std::vector<uint8_t> legacy;
-			legacy.push_back('S');
-			legacy.push_back('S');
-			legacy.push_back('B');
-			legacy.push_back('2');
-			legacy.insert(legacy.end(), real + 4, real + 108);  // shared 104-byte header prefix
-			legacy.insert(legacy.end(), real + residual_offset, real + tail_offset);  // residual
-			legacy.insert(legacy.end(), real + tail_offset, real + real_blob.size);  // kv tail
+				std::vector<uint8_t> legacy;
+				legacy.push_back('S');
+				legacy.push_back('S');
+				legacy.push_back('B');
+				legacy.push_back('2');
+				legacy.insert(legacy.end(), real + 4, real + 108);  // shared 104-byte header prefix
+				legacy.insert(legacy.end(), real + residual_offset, real + tail_offset);  // residual
+				legacy.insert(legacy.end(), real + tail_offset, real + real_blob.size);  // kv tail
 
-			sslm_seq restored = nullptr;
-			CHECK_MSG(sslm_seq_restore(model, &sp.pool, legacy.data(), legacy.size(), &restored) ==
-			              SSLM_OK,
-			          "T2260-R3: a real legacy 'SSB2'-shaped blob must still restore -- the "
-			          "shipped SSB2-compatibility promise, unaffected by this fold");
-			if (restored) CHECK(sslm_seq_release(restored) == SSLM_OK);
+				sslm_seq restored = nullptr;
+				CHECK_MSG(sslm_seq_restore(model, &sp.pool, legacy.data(), legacy.size(), &restored) ==
+				              SSLM_OK,
+				          "T2260-R3: a real legacy 'SSB2'-shaped blob must still restore -- the "
+				          "shipped SSB2-compatibility promise, unaffected by this fold");
+				if (restored) CHECK(sslm_seq_release(restored) == SSLM_OK);
+			}
 			CHECK(sslm_seq_release(seq) == SSLM_OK);
 		}
 		if (sp.pool) CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
