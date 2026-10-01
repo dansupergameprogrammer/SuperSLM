@@ -163,7 +163,8 @@ def summarize(directory: Path) -> int:
     return 0
 
 
-def composition(input_path: Path, output_path: Path, kind: str) -> int:
+def composition(input_path: Path, output_path: Path, kind: str,
+                walk_path: Path | None) -> int:
     lines = input_path.read_text(encoding="utf-8").splitlines()
     if not lines or not lines[0].startswith("# "):
         raise ValueError("missing composition header")
@@ -203,12 +204,25 @@ def composition(input_path: Path, output_path: Path, kind: str) -> int:
     elif kind == "schema":
         if any(int(row["walk"]) == 0 for row in stream_rows):
             raise ValueError("schema walk was not progressed")
+        walk_result = None
+        if walk_path:
+            probe = dict(part.split("=", 1) for part in walk_path.read_text(encoding="utf-8").split())
+            if (probe["schema"] != stream_rows[0]["schema_name"] or
+                    int(probe["original_walk"]) != int(stream_rows[0]["walk"])):
+                raise ValueError("walk probe does not match schema reference")
+            walk_result = {"probe_sha256": hashlib.sha256(walk_path.read_bytes()).hexdigest(),
+                           "donor_schema": probe["donor_schema"],
+                           "donor_schema_hash": probe["donor_schema_hash"],
+                           "mutant_walk": int(probe["mutant_walk"]),
+                           "restore_status": int(probe["restore_status"]),
+                           "killed": bool(int(probe["killed"])),
+                           "first_divergent_token": int(probe["first_diff"])}
         result.update({"walk_state": int(stream_rows[0]["walk"]),
                        "forced_content_id": int(header["forced_content_id"]),
                        "forced_content_ids_sha256": header["forced_content_ids_sha256"],
                        "cross_binding_dispositions": dispositions,
-                       "M_walk": "not_measured",
-                       "reason": "Progressed walk and cross-bind dispositions measured; M-walk mutation pending; instrument uncommissioned"})
+                       "M_walk": walk_result,
+                       "reason": "Progressed walk, cross-bind dispositions, and M-walk measured; instrument uncommissioned"})
     else:
         raise ValueError("unknown composition kind")
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -234,6 +248,7 @@ def main() -> int:
     command.add_argument("kind", choices=("adapter", "schema"))
     command.add_argument("input", type=Path)
     command.add_argument("output", type=Path)
+    command.add_argument("--walk", type=Path)
     args = parser.parse_args()
     if args.command == "screen":
         return screen(args.input, args.output)
@@ -242,7 +257,7 @@ def main() -> int:
     if args.command == "summarize":
         return summarize(args.directory)
     if args.command == "composition":
-        return composition(args.input, args.output, args.kind)
+        return composition(args.input, args.output, args.kind, args.walk)
     raise AssertionError(args.command)
 
 
