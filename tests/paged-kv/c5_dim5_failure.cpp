@@ -119,7 +119,7 @@ void Cell52() {
 			PKV_CHECK_MSG(false, "5.2 %s: setup", c.name);
 			continue;
 		}
-		const int64_t rest = c.prefix ? c.prefix : c.prefill, limit = rest + c.budget;
+		const int64_t rest = c.prefix ? c.prefix : c.prefill, limit = c.prefix + c.budget;  // origin + budget (§3.4)
 		sslm_status refusal = SSLM_OK;
 		// kills: the budget check on the ready path (one token fewer) or after the embed (a row past the
 		// limit and one token more).

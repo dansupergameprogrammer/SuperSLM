@@ -541,9 +541,22 @@ void Cell110() {
 				sslm_seq target = nullptr;
 				std::vector<uint32_t> before;
 				const sslm_status st = Row110(fx, c, pk, sk, restored != 0, sc, &prefix, &target, &before);
-				PKV_CHECK_MSG(st == SSLM_OK, "%s: adopt -> %d", what, static_cast<int>(st));
 				++rows;
-				if (st != SSLM_OK || !target) continue;
+				if (st != SSLM_OK) {
+					// The census grades the adopt's status against a fresh holder's, not against SSLM_OK:
+					// an unbound holder adopting real schema progress is refused by the shipped G5 rule
+					// (SSLM_PREFIX_SCHEMA_MISMATCH), and so is the fresh one.
+					sslm_seq ref = prefix ? BudgetSeq(fx, &sc.pools.front()->pool, k110Budget, sc.h) : nullptr;
+					if (ref && sk >= B_FRESH) PKV_CHECK_EQ(sslm_seq_set_schema(ref, c.schema), SSLM_OK);
+					const sslm_status rst = ref ? sslm_seq_adopt_prefix(ref, prefix) : SSLM_INVALID_ARGUMENT;
+					// kills: an adopt onto a used holder refused where a fresh one is admitted (or the reverse).
+					PKV_CHECK_MSG(st == rst, "%s: adopt -> %d, a fresh adopter's -> %d", what, static_cast<int>(st),
+					              static_cast<int>(rst));
+					PKV_CHECK_MSG(pk == P_PROGRESS && sk < B_FRESH && st == SSLM_PREFIX_SCHEMA_MISMATCH,
+					              "%s: adopt -> %d", what, static_cast<int>(st));
+					continue;
+				}
+				if (!target) continue;
 				ExpectLikeFreshAdopter(fx, &sc.pools.front()->pool, sc, target, prefix, k110Budget,
 				                       sk >= B_FRESH ? c.schema : nullptr, c.L, before, what);
 				// kills: adopt drawing from the pool, a used holder's private pages sent to the pool
