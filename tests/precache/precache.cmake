@@ -14,6 +14,8 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/ci/check_version_header.py)
     add_test(NAME superslm_precache_converter_hash_guards
         COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/check_scm1_serializer.py)
+    add_test(NAME superslm_precache_spx1_oracle
+        COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/test_check_spx1_oracle.py)
 else()
     set(PC_PYTHON_EXECUTABLE python3)
 endif()

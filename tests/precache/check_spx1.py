@@ -12,6 +12,13 @@ def at(data: bytes, fmt: str, offset: int):
     return struct.unpack_from("<" + fmt, data, offset)[0]
 
 
+def fnv1a64(name: str) -> int:
+    value = 0xCBF29CE484222325
+    for byte in name.encode("utf-8"):
+        value = ((value ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return value
+
+
 def check(args) -> None:
     blob = args.blob.read_bytes()
     ssb = args.ssb.read_bytes()
@@ -31,7 +38,6 @@ def check(args) -> None:
     fields = (("I", 92, 36, "precision"),
               ("Q", 96, 40, "schema hash"),
               ("I", 104, 48, "walk"),
-              ("I", 108, 72, "current token"),
               ("q", 112, 60, "context length"),
               ("q", 128, 76, "m"),
               ("q", 136, 84, "e"),
@@ -42,9 +48,19 @@ def check(args) -> None:
               ("Q", 176, 148, "rope k"))
     for fmt, pos, twin_pos, name in fields:
         assert at(blob, fmt, pos) == at(ssb, fmt, twin_pos), name
+    # An adopted, ready-for-logits SSB6 intentionally writes the no-pending-token
+    # sentinel.  The SPX1 token is instead checked against the fixture input.
+    assert at(blob, "i", 108) == args.current_token, "known last prefill token"
     assert at(blob, "q", 112) == args.length, "known prefix length"
     assert at(blob, "q", 120) == args.origin, "known origin"
-    assert at(blob, "Q", 96) == 0, "known unbound schema hash"
+    assert args.walk > 0, "fixture must advance the bound DFA"
+    assert at(blob, "Q", 96) == fnv1a64(args.schema_name), "independent bound schema hash"
+    assert at(blob, "I", 104) == args.walk, "known advanced DFA walk"
+    if args.counts:
+        counts = [int(value) for value in args.counts.split(",")]
+        assert len(counts) == 5 and all(value > 0 for value in counts)
+        assert len(set(counts)) == 5, "count fixture must have five distinct nonzero values"
+        assert [at(blob, "Q", 144 + 8 * i) for i in range(5)] == counts, "known saturation counts"
     assert blob[184:184 + args.hidden] == ssb[172:172 + args.hidden], "residual"
     assert blob[184 + args.hidden:] == rows, "canonical K/V rows from page-index peek"
 
@@ -54,6 +70,10 @@ def main() -> int:
     for name in ("blob", "ssb", "rows", "cmake"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--model-sha", required=True)
+    parser.add_argument("--current-token", type=int, required=True)
+    parser.add_argument("--schema-name", required=True)
+    parser.add_argument("--walk", type=int, required=True)
+    parser.add_argument("--counts", help="five independent, nonzero distinct saturation counts")
     for name in ("length", "origin", "layers", "heads", "dim", "hidden"):
         parser.add_argument("--" + name, type=int, required=True)
     args = parser.parse_args()

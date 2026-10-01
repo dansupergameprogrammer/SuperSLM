@@ -7,13 +7,32 @@ using namespace pc;
 namespace fs=std::filesystem;
 
 void Independent712() {
-    const Fixture& fx=GetFixture("pkv_def");
-    if(!fx.ok) return;
+    const char* fixture_dir=std::getenv("SUPERSLM_PRECACHE_SYNTHETIC_DIR");
+    PKV_CHECK_MSG(fixture_dir && *fixture_dir,"7.12 synthetic fixture directory is unset");
+    if(!fixture_dir || !*fixture_dir) return;
+    ModelFile model(std::string(fixture_dir)+"/synthetic0p5-three-schema.sslm");
+    Status(model.status,SSLM_OK,"7.12 three-schema fixture map");
+    if(model.status!=SSLM_OK) return;
+    Fixture fx;
+    fx.model=model.model; model.model=nullptr;
+    fx.geo={24,2,64,4096};
+    fx.vocab=256;
+    fx.sha=Sha(model.bytes.p,model.size);
     Scene sc;
     PagePool& pool=sc.AddPool(fx.model,128);
     constexpr int L=65;
-    sslm_prefix prefix=Root(fx,&pool.pool,sc.h,L);
+    sslm_schema schema=nullptr;
+    Status(sslm_schema_lookup(fx.model,"schema_two",&schema),SSLM_OK,
+           "7.12 bound schema lookup");
+    sslm_prefix prefix=nullptr;
+    Status(sslm_prefix_begin_budgeted(fx.model,&pool.pool,L,&prefix),SSLM_OK,
+           "7.12 prefix begin");
     if(!prefix) return;
+    sc.h.prefixes.push_back(prefix);
+    Status(sslm_prefix_set_schema(prefix,schema),SSLM_OK,"7.12 bind schema_two");
+    const std::vector<int32_t> input(L,0); // the test-owned DFA reaches state 1 on token 0.
+    Status(PrefixPrefillAll(fx.model,prefix,input,64),SSLM_OK,"7.12 prefill");
+    Status(sslm_prefix_freeze(prefix),SSLM_OK,"7.12 freeze");
     const auto blob=Save(prefix);
     if(!RequireBlob(blob,"7.12 independent parser")) return;
     sslm_seq adopter=BudgetSeq(fx,&pool.pool,80,sc.h);
@@ -62,7 +81,9 @@ void Independent712() {
             << "\" --cmake \"" << PC_CMAKE_PATH << "\" --model-sha " << fx.sha
             << " --length " << L << " --origin 0 --layers " << fx.geo.layers
             << " --heads " << fx.geo.kv_heads << " --dim " << fx.geo.head_dim
-            << " --hidden " << HiddenSize(fx);
+            << " --hidden " << HiddenSize(fx)
+            << " --current-token " << input.back()
+            << " --schema-name schema_two --walk 1";
     PKV_CHECK_MSG(std::system(command.str().c_str())==0,
                   "7.12 independent struct/hashlib SPX1 parser rejected a field or row");
 }
