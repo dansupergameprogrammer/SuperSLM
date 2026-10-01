@@ -1674,7 +1674,6 @@ size_t KvRuns(const superslm::SslmModelConfig& c) {
 
 void GatherFlatBlock(const sslm_kv_pool_s* pool, const sslm_seq_s* seq, const superslm::SslmModelConfig& c,
                      uint8_t* dst, size_t block_size) {
-	std::memset(dst, 0, block_size);
 	const size_t D = c.head_dim;
 	const size_t cap = c.context_cap;
 	const int64_t B = pool->page_positions;
@@ -1682,18 +1681,32 @@ void GatherFlatBlock(const sslm_kv_pool_s* pool, const sslm_seq_s* seq, const su
 	const uint32_t layer_index = seq->state.layer_index;
 	const size_t per_layer = 2u * static_cast<size_t>(c.num_key_value_heads);
 	const size_t runs = KvRuns(c);
-	for (size_t r = 0; r < runs; ++r) {
-		uint8_t* run_dst = dst + r * cap * D;
-		for (int64_t p0 = 0; p0 < L; p0 += B) {
-			const int64_t n = std::min<int64_t>(B, L - p0);
-			std::memcpy(run_dst + static_cast<size_t>(p0) * D, HolderRow(pool, seq->kv, r, p0, D),
-			            static_cast<size_t>(n) * D);
-		}
-		// The mid-token row: layers below layer_index were written this token; the rest are zero.
-		if (layer_index > 0 && r / per_layer < layer_index) {
-			std::memcpy(run_dst + static_cast<size_t>(L) * D, HolderRow(pool, seq->kv, r, L, D), D);
-		}
+	const size_t run_bytes = cap * D;
+	const size_t slab = static_cast<size_t>(B) * D;  // one run's rows within one page
+	// Rows [0, L), page by page: each page is read once, front to back, one memcpy per run (a page
+	// holds every run's B rows, run-major, so a page's slabs for consecutive runs are adjacent in the
+	// source and cap * D apart in the block). The table is read once per page, through the address path.
+	for (int64_t p0 = 0; p0 < L; p0 += B) {
+		const size_t n = static_cast<size_t>(std::min<int64_t>(B, L - p0)) * D;
+		const uint8_t* src = HolderRow(pool, seq->kv, 0, p0, D);
+		uint8_t* out = dst + static_cast<size_t>(p0) * D;
+		for (size_t r = 0; r < runs; ++r) std::memcpy(out + r * run_bytes, src + r * slab, n);
 	}
+	// Every byte past row L of every run is zero, except the mid-token row's layers below
+	// layer_index, which were written this token. No byte is written twice, so the block is filled
+	// exactly once.
+	const size_t live = static_cast<size_t>(L) * D;
+	for (size_t r = 0; r < runs; ++r) {
+		uint8_t* run_dst = dst + r * run_bytes;
+		size_t from = live;
+		if (layer_index > 0 && r / per_layer < layer_index && live < run_bytes) {
+			std::memcpy(run_dst + live, HolderRow(pool, seq->kv, r, L, D), D);
+			from += D;
+		}
+		if (from < run_bytes) std::memset(run_dst + from, 0, run_bytes - from);
+	}
+	// block_size is runs * cap * D for a one-byte element; any bytes past the runs are zero too.
+	if (runs * run_bytes < block_size) std::memset(dst + runs * run_bytes, 0, block_size - runs * run_bytes);
 }
 
 // The K/V section of 'SSB6' (§3.7, C5): rows [0, L') of every run in canonical layout

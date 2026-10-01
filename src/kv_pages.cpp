@@ -34,14 +34,38 @@ PageStatus DecrementLocked(PagePool* pool, uint32_t page, bool* reached_zero) {
 }
 
 // The fill half of freeing, outside the lock: the pages have left every table and nothing names
-// them, so this holder alone touches their bytes and `dirty` flags.
+// them, so this holder alone touches their bytes and `dirty` flags. Each dirty page is filled whole
+// and each clean page is left as it is; a run of consecutive list entries that are dirty and
+// physically adjacent (ascending or descending, as a holder's table maps a fresh reserve) is filled
+// by one memset over the run, the same bytes as one memset per page, so a full-length release
+// writes the holder's pages as one stream rather than page_count short ones.
 void PoisonIfDirty(PagePool* pool, const uint32_t* pages, size_t n) {
-	for (size_t i = 0; i < n; ++i) {
+	size_t i = 0;
+	while (i < n) {
 		const uint32_t p = pages[i];
-		if (pool->dirty[p]) {
-			std::memset(pool->base + size_t{p} * pool->page_bytes, kPoison, pool->page_bytes);
-			pool->dirty[p] = 0;
+		if (!pool->dirty[p]) {
+			++i;
+			continue;
 		}
+		uint32_t lo = p, hi = p;
+		int dir = 0;  // +1 ascending, -1 descending, 0 not yet known
+		size_t j = i + 1;
+		for (; j < n; ++j) {
+			const uint32_t q = pages[j];
+			if (!pool->dirty[q]) break;
+			if (dir >= 0 && q == hi + 1) {
+				hi = q;
+				dir = 1;
+			} else if (dir <= 0 && lo > 0 && q == lo - 1) {
+				lo = q;
+				dir = -1;
+			} else {
+				break;
+			}
+		}
+		std::memset(pool->base + size_t{lo} * pool->page_bytes, kPoison, size_t{hi - lo + 1} * pool->page_bytes);
+		for (size_t k = i; k < j; ++k) pool->dirty[pages[k]] = 0;
+		i = j;
 	}
 }
 
