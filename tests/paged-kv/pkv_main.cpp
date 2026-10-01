@@ -3,8 +3,10 @@
 //
 // Usage: superslm_pkv_<step> [CELL_ID_PREFIX ...]
 // With no arguments every registered cell runs; otherwise only cells whose id starts with one of
-// the given prefixes ("6.1", "1.13/C4"). Exit status 0 only when every check of every cell passed
-// and at least one cell ran.
+// the given prefixes ("6.1", "1.13/C4"). An argument that starts with '=' names one cell exactly
+// ("=10.1/C6" runs the box cell and not its cloud twin "10.1/C6:pkv_def"; the box runner,
+// tools/run_paged_kv_c6_box.ps1, selects cells this way). Exit status 0 only when every check of
+// every cell passed and at least one cell ran.
 
 #include "pkv_common.h"
 
@@ -15,7 +17,8 @@ int main(int argc, char** argv) {
 	int ran = 0, failed_cells = 0;
 	for (const pkv::CellEntry& c : pkv::Registry()) {
 		bool selected = argc < 2;
-		for (int i = 1; i < argc && !selected; ++i) selected = std::strncmp(c.id, argv[i], std::strlen(argv[i])) == 0;
+		for (int i = 1; i < argc && !selected; ++i)
+			selected = argv[i][0] == '=' ? std::strcmp(c.id, argv[i] + 1) == 0 : std::strncmp(c.id, argv[i], std::strlen(argv[i])) == 0;
 		if (!selected) continue;
 		pkv::RunState& s = pkv::State();
 		s.cell = c.id;
