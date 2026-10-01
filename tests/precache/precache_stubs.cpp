@@ -17,4 +17,7 @@ extern "C" sslm_status sslm_pc_test_only_set_prefix_layer(sslm_prefix, uint32_t)
     return static_cast<sslm_status>(0x7fff);
 }
 extern "C" uint64_t sslm_pc_test_only_prefix_prefill_calls() { return UINT64_MAX; }
+extern "C" sslm_status sslm_pc_test_only_set_current_token(sslm_prefix, int32_t) {
+    return static_cast<sslm_status>(0x7fff);
+}
 #endif

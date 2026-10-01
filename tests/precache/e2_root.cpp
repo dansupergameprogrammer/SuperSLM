@@ -32,6 +32,13 @@ void RoundTrip64() {
         if (!RequireBlob(first, "6.4")) return;
         sslm_prefix copy = nullptr;
         if (!Restored(fx, &pool.pool, first, nullptr, sc.h, &copy)) continue;
+        const char* mutant=std::getenv("SUPERSLM_PRECACHE_CURRENT_TOKEN_MUTANT");
+        if(mutant && *mutant && L>0) {
+            const int32_t original=int32_t(Le32(first,108));
+            const int32_t replacement=(original+1)%fx.vocab;
+            Status(sslm_pc_test_only_set_current_token(copy,replacement),SSLM_OK,
+                   "6.4 isolated current-token mutant");
+        }
         const auto second = Save(copy);
         PKV_CHECK_MSG(first == second, "6.4 SPX1 round-trip blob differs");
         if (L) PKV_CHECK_EQ(Le32(first, 108), Le32(second, 108));

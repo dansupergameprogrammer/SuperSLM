@@ -24,4 +24,5 @@ int sslm_pc_test_only_restore_fault_read(uint32_t* free_pages, uint32_t* shared,
     uint32_t* mapped, uint32_t* reserve);
 sslm_status sslm_pc_test_only_set_prefix_layer(sslm_prefix prefix, uint32_t layer);
 uint64_t sslm_pc_test_only_prefix_prefill_calls();
+sslm_status sslm_pc_test_only_set_current_token(sslm_prefix prefix, int32_t token);
 }
