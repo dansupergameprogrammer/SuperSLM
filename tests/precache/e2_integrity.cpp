@@ -1,4 +1,4 @@
-#include "precache_common.h"
+#include "precache_hostile.h"
 #include <set>
 
 namespace {
@@ -119,6 +119,8 @@ void InDomain23b() {
                       "2.3b %s returned an unnamed status %d",field,int(st));
         if(st!=SSLM_OK) {
             PKV_CHECK_MSG(edited==nullptr,"2.3b %s refusal left a handle",field);
+            std::printf("2.3b boundary=%s outcome=refused status=%s (%d)\n",
+                        field,AbiStatusName(st),int(st));
             return;
         }
         PKV_CHECK_MSG(edited && edited!=OutSentinel<sslm_prefix>(),
@@ -135,6 +137,9 @@ void InDomain23b() {
                           "2.3b %s forward status is unnamed",field);
             PKV_CHECK_MSG(forward!=SSLM_OK || tokens.size()==16,
                           "2.3b %s forward stopped without a status",field);
+            std::printf("2.3b boundary=%s outcome=%s tokens=%zu forward=%s (%d)\n",
+                        field,forward==SSLM_OK ? "decoded16" : "named-forward-status",
+                        tokens.size(),AbiStatusName(forward),int(forward));
             sslm_seq_release(seq);
         }
         sslm_prefix_release(edited);
@@ -145,17 +150,57 @@ void InDomain23b() {
             PutLe64(b,144+i*8,count);
             bounded(std::move(b),"saturation count");
         }
-    for(size_t offset : {kHeader,kHeader+HiddenSize(fx)-1,
-                         kHeader+HiddenSize(fx),good.size()-1})
+    const size_t rows=kHeader+HiddenSize(fx);
+    const size_t half_rows=size_t(65)*fx.geo.kv_heads*fx.geo.head_dim;
+    const std::array<std::pair<const char*,size_t>,7> byte_edges{{
+        {"residual first",kHeader},{"residual last",rows-1},
+        {"K first",rows},{"K last",rows+half_rows-1},
+        {"V first",rows+half_rows},{"last-layer V first",rows+3*half_rows},
+        {"last-layer V last",good.size()-1}}};
+    for(const auto& edge:byte_edges)
         for(uint8_t value : {uint8_t(0x80),uint8_t(0x7f)}) {
             auto b=good;
-            b[offset]=value;
-            bounded(std::move(b),"residual or K/V byte");
+            b[edge.second]=value;
+            bounded(std::move(b),edge.first);
         }
     for(uint32_t token : {uint32_t(0),uint32_t(fx.vocab-1)}) {
         auto b=good;
         PutLe32(b,108,token);
         bounded(std::move(b),"current_token");
+    }
+    const Fixture& bound_fx=SyntheticFixture(true);
+    auto last_walk=BoundWalkCase();
+    if(RequireBlob(last_walk.bytes,"2.3b walk=state_count-1")) {
+        PutLe32(last_walk.bytes,104,1); // two-state DFA: last valid state.
+        Digest(last_walk.bytes);
+        PagePool bound_pool(bound_fx.model,32);
+        sslm_prefix candidate=nullptr;
+        const auto st=Restore(bound_fx,&bound_pool.pool,last_walk.bytes,nullptr,&candidate);
+        PKV_CHECK_MSG(int(st)>=0 && int(st)<int(SSLM_STATUS_NEXT_FREE),
+                      "2.3b last-valid walk returned unnamed status %d",int(st));
+        if(st==SSLM_OK && candidate) {
+            sslm_seq adopter=nullptr;
+            Status(sslm_seq_create_budgeted(bound_fx.model,&bound_pool.pool,32,&adopter),
+                   SSLM_OK,"2.3b last-valid-walk adopter");
+            if(adopter) {
+                Status(sslm_seq_adopt_prefix(adopter,candidate),SSLM_OK,
+                       "2.3b last-valid-walk adopt");
+                std::vector<int32_t> tokens;
+                const auto forward=DecodeN(bound_fx.model,adopter,16,&tokens);
+                PKV_CHECK_MSG(int(forward)>=0 && int(forward)<int(SSLM_STATUS_NEXT_FREE) &&
+                              (forward!=SSLM_OK || tokens.size()==16),
+                              "2.3b last-valid walk has unnamed/short forward outcome");
+                std::printf("2.3b boundary=walk-last outcome=%s tokens=%zu forward=%s (%d)\n",
+                            forward==SSLM_OK ? "decoded16" : "named-forward-status",
+                            tokens.size(),AbiStatusName(forward),int(forward));
+                sslm_seq_release(adopter);
+            }
+            sslm_prefix_release(candidate);
+        } else {
+            PKV_CHECK(candidate==nullptr);
+            std::printf("2.3b boundary=walk-last outcome=refused status=%s (%d)\n",
+                        AbiStatusName(st),int(st));
+        }
     }
 }
 PKV_CELL("2.3b/E2", "E1", InDomain23b);
