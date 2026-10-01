@@ -19,12 +19,11 @@ TOOLS = HERE.parents[1] / "tools"
 sys.path.insert(0, str(POPPER))
 sys.path.insert(0, str(TOOLS))
 
-import common  # noqa: E402
-import scm1_writer  # noqa: E402
-from t2132_build_g5_fixture import _serialize_scm1  # noqa: E402
-
-
 def check(ckpt: str, vocab_size: int) -> bool:
+    import common
+    import scm1_writer
+    from t2132_build_g5_fixture import _serialize_scm1
+
     vocab, specials = common.real_vocab(ckpt, vocab_size)
     pages = common.compile_all([common.SCHEMA_A, common.SCHEMA_B], vocab, specials)
     # Reverse lexical order makes a name-only sort change the emitted bytes.
@@ -70,13 +69,13 @@ def check(ckpt: str, vocab_size: int) -> bool:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", required=True)
-    ap.add_argument("--vocab-size", type=int, default=151936)
-    args = ap.parse_args()
     try:
+        ap = argparse.ArgumentParser()
+        ap.add_argument("--ckpt", required=True)
+        ap.add_argument("--vocab-size", type=int, default=151936)
+        args = ap.parse_args()
         return 1 if check(args.ckpt, args.vocab_size) else 0
-    except Exception as exc:
+    except BaseException as exc:
         print(f"INVALID_CONSTRUCTION: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 0
 
