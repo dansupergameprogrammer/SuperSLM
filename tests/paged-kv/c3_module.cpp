@@ -1,5 +1,5 @@
-// Paged-KV plan (rev 16.1) §7, step C3: the page module's cells -- 7.13's module part, 11.3 and U1
-// (§3.3, the kv_pages module, through pkv_module_api.h).
+// Paged-KV plan (rev 16.1) §7, step C3: the page module's cells -- 7.13's module part, 11.3, U1 and the
+// module twins of 1.3 and 1.6 (§9's C3 row) (§3.3, the kv_pages module, through pkv_module_api.h).
 //
 // The module is driven directly: no ABI handle, no model. A pool is a few pages over the test's own
 // memory. Page counts are graded by admission (a holder of k reserve pages is admitted and one of
@@ -15,7 +15,10 @@
 #include "pkv_engine_child.h"
 #include "pkv_module_api.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cstddef>
+#include <cstring>
 #include <thread>
 #include <vector>
 
@@ -244,8 +247,137 @@ void CellU1() {
 	ExactlyFree(p.pool, 4);
 }
 
+// 1.3 [C3], the module twin of 1.3: after 1,000 mixed holder create / map / share / unmap / release
+// cycles, the pool's free pages return exactly to the initial count -- no page leaked, none freed
+// twice. Graded by the module's own admission (ExactlyFree), never by PoolFreePages.
+void Cell13Module() {
+	constexpr uint32_t kPages = 16;
+	constexpr uint32_t kEntries = 4;
+	constexpr int kCycles = 1000;
+	Pool p(kPages);
+	PKV_CHECK_EQ(static_cast<int>(p.status), static_cast<int>(PageStatus::kOk));
+	if (p.status != PageStatus::kOk) return;
+	ExactlyFree(p.pool, kPages);
+	std::vector<PageHolder*> live;
+	// A holder that has been shared from plays a prefix: §3.3 shares only a prefix's pages (budget adopt,
+	// begin_from), and a prefix is never reset, so a source is released but never unmapped. (Unmapping
+	// it would send a page its sharers still map back to its own reserve.)
+	std::vector<PageHolder*> sources;
+	auto is_source = [&](PageHolder* h) { return std::find(sources.begin(), sources.end(), h) != sources.end(); };
+	uint32_t x = 0xC0FFEEu;
+	auto rnd = [&](uint32_t n) {
+		x = x * 1664525u + 1013904223u;
+		return (x >> 8) % n;
+	};
+	int bad = 0, creates = 0, refused = 0, shares = 0, unmaps = 0, releases = 0;
+	for (int c = 0; c < kCycles; ++c) {
+		const uint32_t op = live.empty() ? 0 : rnd(5);
+		if (op == 0) {  // create, reserving 1..3 pages; refused with nothing drawn when the pool is short
+			PageHolder* h = nullptr;
+			const PageStatus st = HolderCreate(p.pool, kEntries, 1 + rnd(3), &h);
+			if (st == PageStatus::kOk) {
+				live.push_back(h);
+				++creates;
+			} else if (st == PageStatus::kExhausted && h == nullptr) {
+				++refused;
+			} else {
+				++bad;
+			}
+		} else if (op == 1) {  // map the next entry from the holder's own reserve
+			PageHolder* h = live[rnd(static_cast<uint32_t>(live.size()))];
+			if (HolderReserve(h) > 0 && HolderMapped(h) < kEntries && HolderMapNext(h) != PageStatus::kOk) ++bad;
+		} else if (op == 2) {  // share a holder's leading pages into an empty holder
+			PageHolder* src = live[rnd(static_cast<uint32_t>(live.size()))];
+			PageHolder* dst = live[rnd(static_cast<uint32_t>(live.size()))];
+			if (src != dst && HolderMapped(src) > 0 && HolderMapped(dst) == 0) {
+				if (HolderShareLeading(dst, src, 1 + rnd(HolderMapped(src))) != PageStatus::kOk) {
+					++bad;
+				} else {
+					++shares;
+					if (!is_source(src)) sources.push_back(src);
+				}
+			}
+		} else if (op == 3) {  // reset's unmap, on a holder that is not a source
+			PageHolder* h = live[rnd(static_cast<uint32_t>(live.size()))];
+			if (!is_source(h)) {
+				if (HolderUnmapAll(h) != PageStatus::kOk) ++bad;
+				++unmaps;
+			}
+		} else {  // release (a source's release frees none of the pages its sharers still map)
+			const size_t i = rnd(static_cast<uint32_t>(live.size()));
+			if (is_source(live[i])) sources.erase(std::find(sources.begin(), sources.end(), live[i]));
+			if (HolderRelease(live[i]) != PageStatus::kOk) ++bad;
+			live.erase(live.begin() + static_cast<std::ptrdiff_t>(i));
+			++releases;
+		}
+	}
+	PKV_CHECK_EQ(bad, 0);
+	// The construction exercised what the cell names: sharing, unmapping and releasing with sharers
+	// live, and creates refused at a short pool.
+	PKV_CHECK_MSG(shares > 20 && unmaps > 20 && releases > 20 && refused > 0,
+	              "1.3 mix: %d creates, %d refused, %d shares, %d unmaps, %d releases", creates, refused, shares, unmaps,
+	              releases);
+	for (auto it = live.rbegin(); it != live.rend(); ++it)
+		if (HolderRelease(*it) != PageStatus::kOk) ++bad;
+	PKV_CHECK_EQ(bad, 0);
+	// kills: a shared page that reaches 0 on an unmap and is never pushed, or a release that leaks its
+	// reserve (k is not admitted); and a shared page freed by every sharer instead of the last (pushed
+	// twice: k + 1 is admitted).
+	ExactlyFree(p.pool, kPages);
+}
+
+// 1.6 [C3], the module twin of 1.6's dirty accounting. Pool memory pre-filled 0x5A. A holder draws a
+// reserve of 6 pages, maps 3 and the test writes them (through the page index the table holds, in
+// the test's own memory), then the holder is reset (unmapped: the pages go back to its reserve) and
+// released. Every page it wrote reads 0xCD; its 3 clean reserve pages, and the pool's undrawn pages,
+// still read 0x5A.
+void Cell16Module() {
+	constexpr uint32_t kPages = 8;
+	Pool p(kPages);
+	PKV_CHECK_EQ(static_cast<int>(p.status), static_cast<int>(PageStatus::kOk));
+	if (p.status != PageStatus::kOk) return;
+	PageHolder* h = nullptr;
+	PKV_CHECK_EQ(static_cast<int>(HolderCreate(p.pool, 6, 6, &h)), static_cast<int>(PageStatus::kOk));
+	if (!h) return;
+	std::vector<uint32_t> written;
+	for (int i = 0; i < 3; ++i) {
+		PKV_CHECK_EQ(static_cast<int>(HolderMapNext(h)), static_cast<int>(PageStatus::kOk));
+		const uint32_t page = HolderTableEntryForAddress(h, static_cast<uint32_t>(i));
+		PKV_CHECK(page < kPages);
+		if (page >= kPages) return;
+		std::memset(p.mem.p + size_t{page} * kPageBytes, 0x11 + i, kPageBytes);  // the K/V rows a write lands
+		written.push_back(page);
+	}
+	PKV_CHECK_EQ(static_cast<int>(HolderUnmapAll(h)), static_cast<int>(PageStatus::kOk));
+	PKV_CHECK_EQ(static_cast<int>(HolderRelease(h)), static_cast<int>(PageStatus::kOk));
+	auto all = [&](uint32_t page, uint8_t v) {
+		const uint8_t* b = p.mem.p + size_t{page} * kPageBytes;
+		for (size_t i = 0; i < kPageBytes; ++i)
+			if (b[i] != v) return false;
+		return true;
+	};
+	int poisoned = 0;
+	for (uint32_t page = 0; page < kPages; ++page) {
+		const bool was_written = std::find(written.begin(), written.end(), page) != written.end();
+		if (was_written) {
+			// kills: the poison fill removed, or skipped for a page that went back through the reserve
+			// before the release (the reset must not clear `dirty`).
+			PKV_CHECK_MSG(all(page, 0xCD), "1.6: written page %u does not read 0xCD after the release", page);
+			++poisoned;
+		} else {
+			// kills: the mutant that ignores the dirty flag and poisons every freed page (a clean reserve
+			// page turns 0x5A -> 0xCD), and a fill that strays past its own page.
+			PKV_CHECK_MSG(all(page, 0x5A), "1.6: clean page %u does not read 0x5A after the release", page);
+		}
+	}
+	PKV_CHECK_EQ(poisoned, 3);
+	ExactlyFree(p.pool, kPages);
+}
+
 PKV_CELL("7.13/C3", "C3", Cell713Module);
 PKV_CELL("11.3", "C3", Cell113);
 PKV_CELL("U1", "C3", CellU1);
+PKV_CELL("1.3/C3", "C3", Cell13Module);
+PKV_CELL("1.6/C3", "C3", Cell16Module);
 
 }  // namespace
