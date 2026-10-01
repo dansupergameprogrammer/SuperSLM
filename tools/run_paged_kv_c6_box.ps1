@@ -4,6 +4,11 @@
 #   correctness  10.1/C6 10.2/C6 10.4/C6 10.6/C6 10.8/C6   superslm_pkv_c6 on the real artifacts,
 #                against tests/paged-kv/reference/v1.11.0_<stem>.ref (tools/build_paged_kv_reference.ps1)
 #   timing       7.4/C6                                     superslm_pkv_c6, caps 4096 and 32768
+#                lifecycle-v1.11.0                          c6_lifecycle_timing.cpp built against the frozen
+#                                                           v1.11.0 library, SUPERSLM_PAGED_KV_LIFE_OUT=<file>
+#                lifecycle/C6                               superslm_pkv_c6, SUPERSLM_PAGED_KV_LIFE_BASELINE=<file>
+#                                                           (create/reset/adopt/save/restore/release; no bar in
+#                                                           the plan, so figures only, never a pass/fail)
 #                7.9-v1.11.0                                c6_dim7_throughput.cpp built against the frozen
 #                                                           v1.11.0 library, SUPERSLM_PAGED_KV_79_OUT=<file>
 #                7.9/C6                                     superslm_pkv_c6, SUPERSLM_PAGED_KV_79_BASELINE=<file>
@@ -19,12 +24,12 @@
 #
 # Quarantine (§8): until an instrument is commissioned, its readings are recorded, never acted on or
 # headlined. The cells assert the timing verdicts only when SUPERSLM_PAGED_KV_TIMING_COMMISSIONED=1
-# (7.9) and SUPERSLM_PAGED_KV_74_MAX_RATIO (7.4) are set; this script sets them only with
+# (7.9; lifecycle only drops its quarantine label, having no bar) and SUPERSLM_PAGED_KV_74_MAX_RATIO (7.4) are set; this script sets them only with
 # -Commissioned timing (and -Max74Ratio for 7.4). Pass -Commissioned only after the debunker has
 # commissioned the instrument through the records tree's instrument-commission.ps1 (-Status reads
 # COMMISSIONED). The summary marks each leg's verdict quarantined or standing by the instruments it
 # rests on: oracle (the byte-equality oracle: 10.1, 10.2, 10.6), admission (10.4, 10.6, 10.8),
-# timing (7.4, 7.9).
+# timing (7.4, lifecycle, 7.9).
 #
 # Idle checks for timing legs (§8: the same checks as the lifecycle-cost measurement): before and
 # after each timing leg, no D:\_ssu_build_lock and none of UnrealEditor, UnrealEditor-Cmd, cl, link,
@@ -32,7 +37,7 @@
 #
 # Usage:
 #   tools\run_paged_kv_c6_box.ps1 -BuildDir D:\_scratch\pkv-c6\build [-ArtifactDir DIR]
-#       [-ScratchDir D:\_scratch\pkv-c6] [-CorrectnessOnly | -TimingOnly] [-Only 10.1/C6,7.4/C6]
+#       [-ScratchDir D:\_scratch\pkv-c6] [-CorrectnessOnly | -TimingOnly] [-Only lifecycle-v1.11.0,lifecycle/C6]
 #       [-Commissioned oracle,admission,timing] [-Max74Ratio 1.5] [-Also79PlainLibrary] [-Fresh] [-NoBuild]
 # -BuildDir is a CMake build directory of THIS checkout (configured here with Ninja, Release, when it
 # has no CMakeCache.txt); superslm_pkv_c6 is (re)built in it unless -NoBuild. Exit 0 only when every
@@ -66,6 +71,7 @@ $Done = Join-Path $C6 'done'
 New-Item -ItemType Directory -Force -Path $ScratchDir, $C6, $Logs, $Done | Out-Null
 $ScratchDir = (Resolve-Path -LiteralPath $ScratchDir).Path
 $Baseline79 = Join-Path $C6 '79_v1.11.0.txt'
+$BaselineLife = Join-Path $C6 'lifecycle_v1.11.0.txt'
 
 # ---- the legs ---------------------------------------------------------------------------------
 $legs = @(
@@ -75,6 +81,8 @@ $legs = @(
     [pscustomobject]@{ Name = '10.6/C6'; Kind = 'correctness'; Bin = 'pkv_c6'; Cell = '10.6/C6'; Rests = @('admission', 'oracle') },
     [pscustomobject]@{ Name = '10.8/C6'; Kind = 'correctness'; Bin = 'pkv_c6'; Cell = '10.8/C6'; Rests = @('admission') },
     [pscustomobject]@{ Name = '7.4/C6'; Kind = 'timing'; Bin = 'pkv_c6'; Cell = '7.4/C6'; Rests = @('timing') },
+    [pscustomobject]@{ Name = 'lifecycle-v1.11.0'; Kind = 'timing'; Bin = 'hlife_v1110'; Cell = 'lifecycle/C6'; Rests = @('timing') },
+    [pscustomobject]@{ Name = 'lifecycle/C6'; Kind = 'timing'; Bin = 'pkv_c6'; Cell = 'lifecycle/C6'; Rests = @('timing') },
     [pscustomobject]@{ Name = '7.9-v1.11.0'; Kind = 'timing'; Bin = 'h79_v1110'; Cell = '7.9/C6'; Rests = @('timing') },
     [pscustomobject]@{ Name = '7.9/C6'; Kind = 'timing'; Bin = 'pkv_c6'; Cell = '7.9/C6'; Rests = @('timing') }
 )
@@ -93,6 +101,7 @@ function Get-LogPath($leg) { return Join-Path $Logs (($leg.Name -replace '[/\\:]
 if ($Fresh) {
     foreach ($leg in $legs) { Remove-Item -LiteralPath (Get-MarkerPath $leg) -ErrorAction SilentlyContinue }
     if ($legs | Where-Object { $_.Name -eq '7.9-v1.11.0' }) { Remove-Item -LiteralPath $Baseline79 -ErrorAction SilentlyContinue }
+    if ($legs | Where-Object { $_.Name -eq 'lifecycle-v1.11.0' }) { Remove-Item -LiteralPath $BaselineLife -ErrorAction SilentlyContinue }
 }
 $pending = @($legs | Where-Object { -not (Test-Path -LiteralPath (Get-MarkerPath $_)) })
 
@@ -147,14 +156,22 @@ if ($needs['pkv_c6'] -or $needs['h79_plain']) {
         Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     if ($needs['pkv_c6'] -and -not $exe['pkv_c6']) { throw "superslm_pkv_c6.exe not found under $BuildDir" }
 }
-if ($needs['h79_v1110'] -or $needs['h79_plain']) {
-    # c6_dim7_throughput.cpp calls legacy verbs only, so the same file builds against both libraries
-    # (§8: one harness, both binaries, same machine). Headers come from the library's own tree.
+if ($needs['h79_v1110'] -or $needs['h79_plain'] -or $needs['hlife_v1110']) {
+    # c6_dim7_throughput.cpp and c6_lifecycle_timing.cpp call legacy verbs only, so each file builds
+    # against both libraries (§8: one harness, both binaries, same machine). Headers come from the
+    # library's own tree.
     $refHeader = Join-Path $C6 'pkv_refdir.h'
     Set-Content -LiteralPath $refHeader -Encoding ascii -Value ('#define PKV_REFERENCE_DIR "' + ($RefDir -replace '\\', '/') + '"')
     $harness = @((Join-Path $Repo 'tests\paged-kv\pkv_main.cpp'), (Join-Path $Repo 'tests\paged-kv\c6_dim7_throughput.cpp'))
-    if ($needs['h79_v1110']) {
+    if ($needs['h79_v1110'] -or $needs['hlife_v1110']) {
         $lib = Initialize-PkvFrozenLibrary -Tag 'v1.11.0' -WorkDir (Join-Path $ScratchDir 'ref')
+    }
+    if ($needs['hlife_v1110']) {
+        $exe['hlife_v1110'] = Join-Path $C6 'pkvlife_v1.11.0.exe'
+        Build-PkvExe -Out $exe['hlife_v1110'] -Sources @((Join-Path $Repo 'tests\paged-kv\pkv_main.cpp'), (Join-Path $Repo 'tests\paged-kv\c6_lifecycle_timing.cpp')) `
+            -Lib $lib.Lib -ForceInclude $refHeader -Includes @((Join-Path $lib.Src 'include'), (Join-Path $Repo 'tests\paged-kv'))
+    }
+    if ($needs['h79_v1110']) {
         $exe['h79_v1110'] = Join-Path $C6 'pkv79_v1.11.0.exe'
         Build-PkvExe -Out $exe['h79_v1110'] -Sources $harness -Lib $lib.Lib -ForceInclude $refHeader `
             -Includes @((Join-Path $lib.Src 'include'), (Join-Path $Repo 'tests\paged-kv'))
@@ -186,6 +203,7 @@ function Get-IdleReport {
 $commissionedTiming = $Commissioned -contains 'timing'
 if ($commissionedTiming -and -not $Max74Ratio) { Write-Output 'NOTE: timing commissioned but no -Max74Ratio: 7.4 stays quarantined (the cell asserts only with a ratio)' }
 $envNames = @('SUPERSLM_PAGED_KV_REAL_ARTIFACT_DIR', 'SUPERSLM_PAGED_KV_79_OUT', 'SUPERSLM_PAGED_KV_79_BASELINE',
+    'SUPERSLM_PAGED_KV_LIFE_OUT', 'SUPERSLM_PAGED_KV_LIFE_BASELINE',
     'SUPERSLM_PAGED_KV_TIMING_COMMISSIONED', 'SUPERSLM_PAGED_KV_74_MAX_RATIO', 'SUPERSLM_PAGED_KV_FIXTURE_DIR')
 $results = @{}
 $stopTiming = $false
@@ -199,10 +217,15 @@ foreach ($leg in $legs) {
     if ($leg.Name -eq '7.9/C6' -or $leg.Name -eq '7.9-plainlib') {
         if (-not (Test-Path -LiteralPath $Baseline79)) { $results[$leg.Name] = 'NOT-RUN (no 7.9-v1.11.0 baseline)'; continue }
     }
+    if ($leg.Name -eq 'lifecycle/C6') {
+        if (-not (Test-Path -LiteralPath $BaselineLife)) { $results[$leg.Name] = 'NOT-RUN (no lifecycle-v1.11.0 baseline)'; continue }
+    }
     foreach ($n in $envNames) { Remove-Item -Path "Env:\$n" -ErrorAction SilentlyContinue }
     $env:SUPERSLM_PAGED_KV_REAL_ARTIFACT_DIR = $ArtDir
     if ($leg.Name -eq '7.9-v1.11.0') { $env:SUPERSLM_PAGED_KV_79_OUT = "$Baseline79.partial" }
     if ($leg.Name -eq '7.9/C6' -or $leg.Name -eq '7.9-plainlib') { $env:SUPERSLM_PAGED_KV_79_BASELINE = $Baseline79 }
+    if ($leg.Name -eq 'lifecycle-v1.11.0') { $env:SUPERSLM_PAGED_KV_LIFE_OUT = "$BaselineLife.partial" }
+    if ($leg.Name -eq 'lifecycle/C6') { $env:SUPERSLM_PAGED_KV_LIFE_BASELINE = $BaselineLife }
     if ($commissionedTiming) {
         $env:SUPERSLM_PAGED_KV_TIMING_COMMISSIONED = '1'
         if ($Max74Ratio) { $env:SUPERSLM_PAGED_KV_74_MAX_RATIO = $Max74Ratio }
@@ -240,6 +263,7 @@ foreach ($leg in $legs) {
         continue
     }
     if ($leg.Name -eq '7.9-v1.11.0' -and $code -eq 0) { Move-Item -LiteralPath "$Baseline79.partial" -Destination $Baseline79 -Force }
+    if ($leg.Name -eq 'lifecycle-v1.11.0' -and $code -eq 0) { Move-Item -LiteralPath "$BaselineLife.partial" -Destination $BaselineLife -Force }
     $line = '{0} exit={1} {2} ({3} s) {4} {5}' -f $verdict, $code, $last, $secs, (Get-Date -Format s), $idleNote
     Set-Content -LiteralPath $marker -Encoding utf8 -Value $line
     Write-Output "DONE $($leg.Name): $line"
@@ -266,10 +290,11 @@ $summary += 'Readings (timing figures and diagnostics, from the logs):'
 foreach ($leg in $legs) {
     $log = Get-LogPath $leg
     if (Test-Path -LiteralPath $log) {
-        Get-Content -LiteralPath $log | Where-Object { $_ -match '^(7\.4|7\.9|10\.6) |^FAIL |^IDLE CHECK' } | Select-Object -First 40 |
+        Get-Content -LiteralPath $log | Where-Object { $_ -match '^(7\.4|7\.9|10\.6|lifecycle) |^FAIL |^IDLE CHECK' } | Select-Object -First 60 |
             ForEach-Object { $summary += "  [$($leg.Name)] $_" }
     }
 }
+if (Test-Path -LiteralPath $BaselineLife) { $summary += "lifecycle baseline ($BaselineLife):"; Get-Content -LiteralPath $BaselineLife | ForEach-Object { $summary += "  $_" } }
 if (Test-Path -LiteralPath $Baseline79) { $summary += "7.9 baseline ($Baseline79):"; Get-Content -LiteralPath $Baseline79 | ForEach-Object { $summary += "  $_" } }
 $summary | Set-Content -LiteralPath (Join-Path $C6 'summary.txt') -Encoding utf8
 $summary | Write-Output
