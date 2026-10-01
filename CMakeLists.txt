@@ -112,6 +112,7 @@ endif()
 
 # Paged-KV plan (rev 16.1) step C1: the red suite's per-step executables, all EXCLUDE_FROM_ALL.
 include(tests/paged-kv/paged_kv.cmake)
+include(tests/precache/precache.cmake)
 
 # T-2152 (outside strike item 1): tests/test_main.cpp's own T-2019/T-2024 GPU-serial-port
 # section calls `superslm_gpu::*` directly (#ifdef _WIN32-guarded in that file so the same
