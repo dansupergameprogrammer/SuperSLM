@@ -402,6 +402,28 @@ inline void PrefixLengths(Driver& d, std::vector<Pinned>*) {
 	}
 }
 
+// 10.1 / 10.4 / 10.6 (the cohort's no-sharing reference): ten prompts of a 1,000-token world plus a
+// 200-token persona, each prefilled whole into its own block with no sharing, decoded to 1,456 (257
+// tokens) and to 1,712 (256 more), the positions a budget-512 sequence adopting the persona reaches
+// mid-budget and at its limit.
+inline void Cohort(Driver& d, std::vector<Pinned>*) {
+	Driver::Pool pool;
+	if (!d.MakePool(1, &pool)) return;
+	const std::vector<int32_t> world = Stream(61, 1000, d.vocab);
+	for (int i = 0; i < 10; ++i) {
+		std::vector<int32_t> prompt = world;
+		const std::vector<int32_t> persona = Stream(71 + static_cast<uint32_t>(i), 200, d.vocab);
+		prompt.insert(prompt.end(), persona.begin(), persona.end());
+		sslm_seq s = nullptr;
+		if (!d.Ok(sslm_seq_create(d.model, &pool.pool, &s), "seq_create")) return;
+		const std::string tag = "persona" + std::to_string(i);
+		const bool ok = d.Prefill(s, prompt, 64) && d.Decode(s, 257) && d.Mark((tag + "_1456").c_str(), s) &&
+		                d.Decode(s, 256) && d.Mark((tag + "_1712").c_str(), s);
+		sslm_seq_release(s);
+		if (!ok) return;
+	}
+}
+
 struct Scenario {
 	const char* name;
 	void (*run)(Driver&, std::vector<Pinned>*);
@@ -411,7 +433,7 @@ inline const Scenario* Scenarios(size_t* n) {
 	static const Scenario k[] = {
 	    {"lifecycle", Lifecycle}, {"long_prefill", LongPrefill}, {"shared_preamble", SharedPreamble},
 	    {"persist", Persist},     {"saturating", Saturating},         {"widths", Widths},
-	    {"prefix_lengths", PrefixLengths},
+	    {"prefix_lengths", PrefixLengths}, {"cohort", Cohort},
 	};
 	*n = sizeof k / sizeof k[0];
 	return k;
