@@ -1,0 +1,346 @@
+#include "precache_common.h"
+#include <chrono>
+#include <filesystem>
+#include <sstream>
+
+namespace {
+using namespace pc;
+namespace fs=std::filesystem;
+
+std::string Env(const char* name) {
+    const char* p=std::getenv(name);
+    PKV_CHECK_MSG(p && *p,"%s is unset",name);
+    return p ? p : "";
+}
+
+std::vector<int32_t> Ids(const fs::path& path) {
+    std::ifstream f(path);
+    PKV_CHECK_MSG(bool(f),"real prompt IDs missing: %s",path.string().c_str());
+    std::vector<int32_t> ids;
+    int32_t id=0;
+    while(f>>id) ids.push_back(id);
+    PKV_CHECK_MSG(ids.size()>=128,"real prompt %s has %zu IDs, needs >=128",
+                  path.string().c_str(),ids.size());
+    return ids;
+}
+
+std::string ShaFile(const fs::path& path) {
+    std::vector<uint8_t> b;
+    if(!ReadAll(path.string(),&b)) return {};
+    return Sha(b.data(),b.size());
+}
+
+std::string Field(const std::string& s,const std::string& key) {
+    const std::string pattern=key+"=";
+    const size_t begin=s.find(pattern);
+    if(begin==std::string::npos) return {};
+    const size_t value=begin+pattern.size();
+    return s.substr(value,s.find_first_of(" \t\r\n",value)-value);
+}
+
+// The sole reference-reading path for E2-E4 cells. T-3035 supplies the population;
+// a commissioning receipt and the ctest-time merge-base fixture license it.
+std::vector<int32_t> Reference(const std::string& group,const std::string& stem,
+                               const fs::path& ids,int adopter,const char* mode) {
+    const auto dir=Env("SUPERSLM_PRECACHE_REFERENCE_DIR");
+    const auto merge_file=Env("SUPERSLM_PRECACHE_MERGE_BASE_FILE");
+    const auto license_file=Env("SUPERSLM_PRECACHE_DISCRIMINATION_RECEIPT");
+    if(dir.empty() || merge_file.empty() || license_file.empty()) return {};
+    std::ifstream merge(merge_file),license(license_file);
+    std::string anchor,receipt;
+    std::getline(merge,anchor);
+    std::getline(license,receipt);
+    PKV_CHECK_MSG(anchor.size()==40,"reference merge-base fixture missing a full SHA");
+    PKV_CHECK_MSG(receipt.find("COMMISSIONED")!=std::string::npos,
+                  "reference population has no commissioned discrimination receipt");
+    if(anchor.size()!=40 || receipt.find("COMMISSIONED")==std::string::npos) return {};
+    const fs::path base=fs::path(dir)/group/(stem+"-run1.ref");
+    const fs::path twin=fs::path(dir)/group/(stem+"-run2.ref");
+    PKV_CHECK_MSG(ShaFile(base)==ShaFile(twin) && !ShaFile(base).empty(),
+                  "reference runs do not reproduce byte-for-byte: %s",stem.c_str());
+    std::ifstream ref(base);
+    std::string header,line;
+    std::getline(ref,header);
+    PKV_CHECK_MSG(Field(header,"anchor")==anchor,"stale reference %s anchor %s; current %s",
+                  stem.c_str(),Field(header,"anchor").c_str(),anchor.c_str());
+    PKV_CHECK_MSG(Field(header,"prompt_ids_sha256")==ShaFile(ids),
+                  "reference %s IDs SHA differs from the prompt",stem.c_str());
+    PKV_CHECK_MSG(Field(header,"discrimination_record_sha256").size()==64,
+                  "reference %s lacks a discrimination record identity",stem.c_str());
+    if(Field(header,"anchor")!=anchor || Field(header,"prompt_ids_sha256")!=ShaFile(ids)) return {};
+    while(std::getline(ref,line)) {
+        if(Field(line,"adopter")!=std::to_string(adopter) || Field(line,"decode_mode")!=mode) continue;
+        const auto encoded=Field(line,"tokens");
+        std::istringstream in(encoded);
+        std::vector<int32_t> tokens;
+        std::string one;
+        while(std::getline(in,one,',')) tokens.push_back(std::stoi(one));
+        PKV_CHECK_EQ(tokens.size(),64u);
+        return tokens;
+    }
+    PKV_CHECK_MSG(false,"reference %s lacks adopter %d %s",stem.c_str(),adopter,mode);
+    return {};
+}
+
+std::vector<int32_t> DecodeReal(const Fixture& fx,sslm_kv_pool* pool,
+    sslm_prefix prefix,bool budget,const char* mode) {
+    sslm_seq seq=nullptr;
+    const sslm_status create=budget ? sslm_seq_create_budgeted(fx.model,pool,80,&seq)
+                                    : sslm_seq_create(fx.model,pool,&seq);
+    Status(create,SSLM_OK,"10.1 real adopter create");
+    if(!seq) return {};
+    Status(sslm_seq_adopt_prefix(seq,prefix),SSLM_OK,"10.1 real adopter adopt");
+    sslm_decode_params params{};
+    Status(sslm_decode_params_init(fx.model,
+        std::strcmp(mode,"damped")==0 ? SSLM_DECODE_MODE_DAMPED_GREEDY : SSLM_DECODE_MODE_GREEDY,
+        int32_t(fx.geo.layers),&params),SSLM_OK,"10.1 decode mode init");
+    sslm_seq batch[1]={seq};
+    std::vector<int32_t> out;
+    for(int i=0;i<64;++i) {
+        int32_t token=-1;
+        const sslm_status st=sslm_decode_step_v2(fx.model,batch,1,&params,nullptr,&token);
+        Status(st,SSLM_OK,"10.1 real decode");
+        if(st!=SSLM_OK || token<0) break;
+        out.push_back(token);
+    }
+    sslm_seq_release(seq);
+    return out;
+}
+
+void Real101() {
+    const auto model_path=Env("SUPERSLM_PRECACHE_REAL_MODEL");
+    const auto prompts=Env("SUPERSLM_PRECACHE_PROMPT_DIR");
+    const auto blob_dir=Env("SUPERSLM_PRECACHE_BLOB_DIR");
+    if(model_path.empty() || prompts.empty() || blob_dir.empty()) return;
+    ModelFile model(model_path);
+    Status(model.status,SSLM_OK,"10.1 real model map");
+    if(model.status!=SSLM_OK) return;
+    Fixture fx;
+    fx.model=model.model; model.model=nullptr;
+    fx.geo={24,2,64,32768}; fx.vocab=151936;
+    PagePool pool(fx.model,512);
+    Handles h;
+    const std::string phase=Env("SUPERSLM_PRECACHE_PHASE");
+    for(int i=0;i<10;++i) {
+        char name[16]; std::snprintf(name,sizeof(name),"flat%02d",i);
+        const fs::path input=fs::path(prompts)/(std::string(name)+".ids");
+        const auto ids=Ids(input);
+        if(ids.empty()) return;
+        sslm_prefix p=nullptr;
+        if(phase=="capture") {
+            Status(sslm_prefix_begin_budgeted(fx.model,&pool.pool,int32_t(ids.size()),&p),
+                   SSLM_OK,"10.1 real prefix begin");
+            if(!p) return;
+            h.prefixes.push_back(p);
+            Status(PrefixPrefillAll(fx.model,p,ids,64),SSLM_OK,"10.1 real prefill");
+            Status(sslm_prefix_freeze(p),SSLM_OK,"10.1 real freeze");
+            auto b=Save(p);
+            if(!RequireBlob(b,"10.1")) return;
+            fs::create_directories(blob_dir);
+            std::ofstream out(fs::path(blob_dir)/(std::string(name)+".spx1"),std::ios::binary);
+            out.write(reinterpret_cast<const char*>(b.data()),std::streamsize(b.size()));
+        } else {
+            std::vector<uint8_t> b;
+            PKV_CHECK_MSG(ReadAll((fs::path(blob_dir)/(std::string(name)+".spx1")).string(),&b),
+                          "10.1 missing captured blob %s",name);
+            if(b.empty()) return;
+            if(!Restored(fx,&pool.pool,b,nullptr,h,&p)) return;
+            for(int a=0;a<4;++a) {
+                const bool budget=(a%2)==0;
+                const char* mode=(a/2)==0 ? "greedy" : "damped";
+                const auto got=DecodeReal(fx,&pool.pool,p,budget,mode);
+                const auto want=Reference("P1-real0p5-flat",name,input,a,mode);
+                PKV_CHECK_MSG(got==want && got.size()==64,"10.1 %s adopter %d differs from pinned prefill",name,a);
+            }
+        }
+    }
+    if(phase!="capture") PKV_CHECK_EQ(sslm_pc_test_only_prefix_prefill_calls(),0u);
+}
+PKV_CELL("10.1/E4", "E1", Real101);
+
+void CrossCompiler43() {
+    const Fixture& fx=GetFixture("pkv_def");
+    if(!fx.ok) return;
+    const auto b=RootBlob(fx,1000);
+    if(!RequireBlob(b,"4.3")) return;
+    const auto path=Env("SUPERSLM_PRECACHE_CROSS_COMPILER_SHA");
+    std::ifstream in(path);
+    std::string msvc,gcc,clang;
+    in>>msvc>>gcc>>clang;
+    const auto actual=Sha(b.data(),b.size());
+    PKV_CHECK_MSG(actual==msvc && actual==gcc && actual==clang,
+                  "4.3 MSVC, gcc and clang SPX1 SHA-256 differ");
+}
+PKV_CELL("4.3/E4", "E1", CrossCompiler43);
+
+void Timing103() {
+    const auto model_path=Env("SUPERSLM_PRECACHE_REAL_MODEL");
+    const auto prompts=Env("SUPERSLM_PRECACHE_PROMPT_DIR");
+    if(model_path.empty() || prompts.empty()) return;
+    ModelFile model(model_path);
+    Status(model.status,SSLM_OK,"10.3 real model map");
+    if(model.status!=SSLM_OK) return;
+    Fixture fx;
+    fx.model=model.model; model.model=nullptr;
+    fx.geo={24,2,64,32768}; fx.vocab=151936;
+    PagePool pool(fx.model,300);
+    std::vector<double> ratios;
+    for(int i=0;i<10;++i) {
+        char name[16]; std::snprintf(name,sizeof(name),"flat%02d",i);
+        const auto ids=Ids(fs::path(prompts)/(std::string(name)+".ids"));
+        if(ids.empty()) return;
+        sslm_prefix built=nullptr;
+        const auto start=std::chrono::steady_clock::now();
+        Status(sslm_prefix_begin_budgeted(fx.model,&pool.pool,int32_t(ids.size()),&built),
+               SSLM_OK,"10.3 prefill begin");
+        if(!built) return;
+        Status(PrefixPrefillAll(fx.model,built,ids,64),SSLM_OK,"10.3 real prefill");
+        Status(sslm_prefix_freeze(built),SSLM_OK,"10.3 prefill freeze");
+        const auto prefill_end=std::chrono::steady_clock::now();
+        const auto b=Save(built);
+        if(!RequireBlob(b,"10.3")) { sslm_prefix_release(built); return; }
+        sslm_prefix_release(built);
+        double restore_ms=0;
+        for(int j=0;j<3;++j) {
+            sslm_prefix restored=nullptr;
+            const auto r0=std::chrono::steady_clock::now();
+            const sslm_status st=Restore(fx,&pool.pool,b,nullptr,&restored);
+            const auto r1=std::chrono::steady_clock::now();
+            Status(st,SSLM_OK,"10.3 timed restore");
+            if(st!=SSLM_OK) return;
+            restore_ms+=std::chrono::duration<double,std::milli>(r1-r0).count();
+            sslm_prefix_release(restored);
+        }
+        const double prefill_ms=std::chrono::duration<double,std::milli>(prefill_end-start).count();
+        const double ratio=prefill_ms/(restore_ms/3.0);
+        ratios.push_back(ratio);
+        std::printf("10.3 %s prefill_ms=%.3f restore_ms=%.3f ratio=%.1f\n",
+                    name,prefill_ms,restore_ms/3.0,ratio);
+    }
+    const auto receipt=Env("SUPERSLM_PRECACHE_TIMING_RECEIPT");
+    std::ifstream in(receipt);
+    std::string line;
+    std::getline(in,line);
+    PKV_CHECK_MSG(line.find("COMMISSIONED")!=std::string::npos,
+                  "10.3 timing instrument has no independent commission");
+    for(double ratio:ratios) PKV_CHECK_MSG(ratio>=1000,"10.3 real restore ratio %.1f below 1000",ratio);
+}
+PKV_CELL("10.3/E4", "E1", Timing103);
+
+void Real102() {
+    const auto model_path=Env("SUPERSLM_PRECACHE_REAL_MODEL");
+    const auto prompts=Env("SUPERSLM_PRECACHE_PROMPT_DIR");
+    const auto blob_dir=Env("SUPERSLM_PRECACHE_BLOB_DIR");
+    if(model_path.empty() || prompts.empty() || blob_dir.empty()) return;
+    ModelFile model(model_path);
+    Status(model.status,SSLM_OK,"10.2 real model map");
+    if(model.status!=SSLM_OK) return;
+    Fixture fx;
+    fx.model=model.model; model.model=nullptr;
+    fx.geo={24,2,64,32768}; fx.vocab=151936;
+    PagePool pool(fx.model,512);
+    Handles h;
+    const auto world_ids=Ids(fs::path(prompts)/"world.ids");
+    const auto phase=Env("SUPERSLM_PRECACHE_PHASE");
+    sslm_prefix world=nullptr;
+    if(phase=="capture") {
+        Status(sslm_prefix_begin_budgeted(fx.model,&pool.pool,int32_t(world_ids.size()),&world),
+               SSLM_OK,"10.2 world begin");
+        if(!world) return;
+        h.prefixes.push_back(world);
+        Status(PrefixPrefillAll(fx.model,world,world_ids,64),SSLM_OK,"10.2 world prefill");
+        Status(sslm_prefix_freeze(world),SSLM_OK,"10.2 world freeze");
+        auto b=Save(world);
+        if(!RequireBlob(b,"10.2")) return;
+        fs::create_directories(blob_dir);
+        std::ofstream file(fs::path(blob_dir)/"world.spx1",std::ios::binary);
+        file.write(reinterpret_cast<const char*>(b.data()),std::streamsize(b.size()));
+    } else {
+        std::vector<uint8_t> b;
+        PKV_CHECK_MSG(ReadAll((fs::path(blob_dir)/"world.spx1").string(),&b),
+                      "10.2 world SPX1 missing after process restart");
+        if(b.empty() || !Restored(fx,&pool.pool,b,nullptr,h,&world)) return;
+    }
+    for(int i=0;i<10;++i) {
+        char name[16],persona[16];
+        std::snprintf(name,sizeof(name),"nested%02d",i);
+        std::snprintf(persona,sizeof(persona),"persona%02d",i);
+        const auto suffix=Ids(fs::path(prompts)/(std::string(persona)+".ids"));
+        if(suffix.empty()) return;
+        sslm_prefix child=nullptr;
+        if(phase=="capture") {
+            Status(sslm_prefix_begin_from(world,int32_t(suffix.size()),&child),
+                   SSLM_OK,"10.2 persona begin_from");
+            if(!child) return;
+            h.prefixes.push_back(child);
+            Status(PrefixPrefillAll(fx.model,child,suffix,64),SSLM_OK,"10.2 persona prefill");
+            Status(sslm_prefix_freeze(child),SSLM_OK,"10.2 persona freeze");
+            const auto b=Save(child);
+            if(!RequireBlob(b,"10.2 nested")) return;
+            std::ofstream out(fs::path(blob_dir)/(std::string(name)+".spx1"),std::ios::binary);
+            out.write(reinterpret_cast<const char*>(b.data()),std::streamsize(b.size()));
+        } else {
+            std::vector<uint8_t> b;
+            PKV_CHECK_MSG(ReadAll((fs::path(blob_dir)/(std::string(name)+".spx1")).string(),&b),
+                          "10.2 persona blob %s missing",name);
+            if(b.empty()) return;
+            uint32_t shared=0;
+            if(!Restored(fx,&pool.pool,b,world,h,&child,&shared)) return;
+            PKV_CHECK_EQ(shared,uint32_t(world_ids.size()/16));
+            const auto input=fs::path(prompts)/(std::string(name)+".ids");
+            for(int a=0;a<4;++a) {
+                const bool budget=(a%2)==0;
+                const char* mode=(a/2)==0 ? "greedy" : "damped";
+                const auto got=DecodeReal(fx,&pool.pool,child,budget,mode);
+                const auto want=Reference("P2-real0p5-nested",name,input,a,mode);
+                PKV_CHECK_MSG(got==want && got.size()==64,
+                              "10.2 %s adopter %d differs from pinned prefill",name,a);
+            }
+        }
+    }
+}
+PKV_CELL("10.2/E4", "E1", Real102);
+
+void Hook(void*,int32_t n,sslm_task_fn task,void* ctx) {
+    std::thread worker([&]{for(int32_t i=1;i<n;i+=2) task(ctx,i);});
+    for(int32_t i=0;i<n;i+=2) task(ctx,i);
+    worker.join();
+}
+
+void Parallel66() {
+    const Fixture& fx=GetFixture("pkv_def");
+    if(!fx.ok) return;
+    Scene sc;
+    PagePool& pool=sc.AddPool(fx.model,128);
+    sslm_prefix original=Root(fx,&pool.pool,sc.h,65);
+    if(!original) return;
+    const auto b=Save(original);
+    if(!RequireBlob(b,"6.6")) return;
+    sslm_prefix restored=nullptr;
+    if(!Restored(fx,&pool.pool,b,nullptr,sc.h,&restored)) return;
+    sslm_seq serial=BudgetSeq(fx,&pool.pool,80,sc.h);
+    sslm_seq parallel=BudgetSeq(fx,&pool.pool,80,sc.h);
+    if(!serial || !parallel) return;
+    Status(sslm_seq_adopt_prefix(serial,restored),SSLM_OK,"6.6 serial adopt");
+    Status(sslm_seq_adopt_prefix(parallel,restored),SSLM_OK,"6.6 parallel adopt");
+    const sslm_config cfg{1,64,int32_t(fx.geo.layers),0};
+    AlignedBuf memory(sslm_workspace_size(fx.model,&cfg));
+    sslm_workspace ws=nullptr;
+    Status(sslm_workspace_create(fx.model,&cfg,memory.p,memory.n,&ws),
+           SSLM_OK,"6.6 workspace create");
+    if(!ws) return;
+    const sslm_parallel_for hook{Hook,nullptr,4,SSLM_PARALLEL_FOR_MATVEC};
+    Status(sslm_workspace_set_parallel_for(ws,&hook),SSLM_OK,"6.6 hook install");
+    sslm_decode_params p{};
+    p.layer_budget=int32_t(fx.geo.layers);
+    for(int i=0;i<32;++i) {
+        sslm_seq a[1]={serial},c[1]={parallel};
+        int32_t ta=-1,tc=-1;
+        Status(sslm_decode_step(fx.model,a,1,&p,nullptr,&ta),SSLM_OK,"6.6 serial decode");
+        Status(sslm_decode_step(fx.model,c,1,&p,ws,&tc),SSLM_OK,"6.6 parallel decode");
+        PKV_CHECK_MSG(ta>=0 && ta==tc,"6.6 restored parallel token differs at %d",i);
+    }
+    Status(sslm_workspace_destroy(ws),SSLM_OK,"6.6 workspace destroy");
+}
+PKV_CELL("6.6/E4", "E1", Parallel66);
+}

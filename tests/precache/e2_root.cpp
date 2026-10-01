@@ -166,7 +166,7 @@ void Domains23() {
         {"token INT32_MIN",108,0x80000000u,false,SSLM_INVALID_ARGUMENT},
         {"token above vocab",108,uint64_t(fx.vocab),false,SSLM_INVALID_ARGUMENT},
         {"mantissa above int32",128,uint64_t(INT32_MAX)+1,true,SSLM_INVALID_ARGUMENT},
-        {"mantissa below int32",128,uint64_t(INT64_MAX),true,SSLM_INVALID_ARGUMENT},
+        {"mantissa below int32",128,uint64_t(int64_t(INT32_MIN)-1),true,SSLM_INVALID_ARGUMENT},
     };
     for (const auto& e : edits) {
         auto b = good;

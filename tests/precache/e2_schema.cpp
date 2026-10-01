@@ -53,7 +53,7 @@ void Schema67() {
         if(!p) continue;
         h.prefixes.push_back(p);
         Status(sslm_prefix_set_schema(p,schema),SSLM_OK,"6.7 schema bind");
-        const auto input=Stream(41,65,fx.vocab);
+        std::vector<int32_t> input(65,0); // first token advances the fixture DFA.
         Status(PrefixPrefillAll(fx.model,p,input,64),SSLM_OK,"6.7 schema prefill");
         Status(sslm_prefix_freeze(p),SSLM_OK,"6.7 freeze");
         const auto b=Save(p);
@@ -84,6 +84,8 @@ void ExistingSsb5_214() {
     Status(sslm_seq_create(fx.model,&pool.pool,&original),SSLM_OK,"2.14 legacy sequence create");
     if(!original) return;
     Status(sslm_seq_set_schema(original,schema),SSLM_OK,"2.14 bind schema_two");
+    std::vector<int32_t> input(17,0);
+    Status(PrefillAll(fx.model,original,input,16),SSLM_OK,"2.14 advance index-2 walk");
     std::vector<uint8_t> blob;
     PKV_CHECK_MSG(SaveBlob(original,&blob) && IsMagic(blob,"SSB5"),"2.14 legacy save not SSB5");
     sslm_seq restored=nullptr;
