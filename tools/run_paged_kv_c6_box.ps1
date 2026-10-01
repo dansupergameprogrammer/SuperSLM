@@ -17,19 +17,28 @@
 #                                                           test seams), graded against the same baseline
 # Every leg selects its cell by exact id ("=10.1/C6"), so no cloud twin runs here.
 #
-# Resume: a leg that finished (any verdict) writes <Scratch>\c6\done\<leg>.done and is skipped on
-# the next run; a crash or a reboot leaves no marker, so the rerun starts at the first unfinished
-# leg. -Fresh deletes the selected legs' markers first. A timing leg whose idle check fails before it
-# starts is not run; one whose idle check fails after it ends writes no marker (rerun it).
+# Resume: a leg that finished (any verdict) writes <Scratch>\c6\done\<leg>.done, its provenance
+# record (tools/paged_kv_c6_provenance.ps1): the git HEAD, the sha256 of the test binary, the sha256 of
+# every file it read (artifacts, references, baseline), the commissioned instrument ids in force, the
+# assertion variables actually set, and -Max74Ratio, plus its outcome. On the next run a leg is
+# skipped only when its stored record equals the record this run would write; any difference (a new
+# commit or binary, a changed artifact or baseline, a different -Commissioned or -Max74Ratio) reruns
+# it. A crash or a reboot leaves no marker, so the rerun starts at the first unfinished leg. -Fresh
+# deletes the selected legs' markers first. A timing leg whose idle check fails before it starts is
+# not run; one whose idle check fails after it ends writes no marker (rerun it).
 #
 # Quarantine (§8): until an instrument is commissioned, its readings are recorded, never acted on or
-# headlined. The cells assert the timing verdicts only when SUPERSLM_PAGED_KV_TIMING_COMMISSIONED=1
-# (7.9; lifecycle only drops its quarantine label, having no bar) and SUPERSLM_PAGED_KV_74_MAX_RATIO (7.4) are set; this script sets them only with
-# -Commissioned timing (and -Max74Ratio for 7.4). Pass -Commissioned only after the debunker has
-# commissioned the instrument through the records tree's instrument-commission.ps1 (-Status reads
-# COMMISSIONED). The summary marks each leg's verdict quarantined or standing by the instruments it
-# rests on: oracle (the byte-equality oracle: 10.1, 10.2, 10.6), admission (10.4, 10.6, 10.8),
-# timing (7.4, lifecycle, 7.9).
+# headlined. -Commissioned names instruments by the registry entry each stands for:
+#   oracle     PKV-ORACLE-R0 (the byte-equality oracle: 10.1, 10.2, 10.6)
+#   admission  PKV-LEGACY-COUNT-C4, PKV-FILL-PROBE-C5, PKV-FILL-PROBE-ONESTATE-C5 (10.4, 10.6, 10.8)
+#   timing74   PKV-TIMING-74-C6 (7.4): sets SUPERSLM_PAGED_KV_74_MAX_RATIO=-Max74Ratio for 7.4 only;
+#              without -Max74Ratio the cell asserts nothing and 7.4 stays quarantined
+#   timing79   PKV-TIMING-79-C6 (7.9): sets SUPERSLM_PAGED_KV_TIMING_COMMISSIONED=1 for the 7.9 legs only
+# Any other id is an error. The lifecycle timings (lifecycle-v1.11.0, lifecycle/C6) have no registry
+# entry and no commissioning: they record figures only, get no assertion variable, and always read
+# quarantined; -Commissioned lifecycle is an error. Pass an id only after the debunker has
+# commissioned that entry through the records tree's instrument-commission.ps1 (-Status reads
+# COMMISSIONED). The summary marks each leg quarantined or standing from its stored record alone.
 #
 # Idle checks for timing legs (§8: the same checks as the lifecycle-cost measurement): before and
 # after each timing leg, no D:\_ssu_build_lock and none of UnrealEditor, UnrealEditor-Cmd, cl, link,
@@ -38,7 +47,7 @@
 # Usage:
 #   tools\run_paged_kv_c6_box.ps1 -BuildDir D:\_scratch\pkv-c6\build [-ArtifactDir DIR]
 #       [-ScratchDir D:\_scratch\pkv-c6] [-CorrectnessOnly | -TimingOnly] [-Only lifecycle-v1.11.0,lifecycle/C6]
-#       [-Commissioned oracle,admission,timing] [-Max74Ratio 1.5] [-Also79PlainLibrary] [-Fresh] [-NoBuild]
+#       [-Commissioned oracle,admission,timing74,timing79] [-Max74Ratio 1.5] [-Also79PlainLibrary] [-Fresh] [-NoBuild]
 # -BuildDir is a CMake build directory of THIS checkout (configured here with Ninja, Release, when it
 # has no CMakeCache.txt); superslm_pkv_c6 is (re)built in it unless -NoBuild. Exit 0 only when every
 # selected leg is GREEN.
@@ -59,10 +68,10 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'paged_kv_box_common.ps1')
+. (Join-Path $PSScriptRoot 'paged_kv_c6_provenance.ps1')
 if ($TimingOnly -and $CorrectnessOnly) { throw '-TimingOnly and -CorrectnessOnly exclude each other' }
 # Lists may arrive as one comma-joined string (powershell -File): split them here.
-$Commissioned = @($Commissioned | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
-foreach ($c in $Commissioned) { if (@('oracle', 'admission', 'timing') -notcontains $c) { throw "-Commissioned takes oracle, admission, timing; not '$c'" } }
+$Commissioned = Get-PkvCommissionedIds $Commissioned
 $Repo = Get-PkvRepo
 $RefDir = Join-Path $Repo 'tests\paged-kv\reference'
 $C6 = Join-Path $ScratchDir 'c6'
@@ -80,14 +89,14 @@ $legs = @(
     [pscustomobject]@{ Name = '10.4/C6'; Kind = 'correctness'; Bin = 'pkv_c6'; Cell = '10.4/C6'; Rests = @('admission') },
     [pscustomobject]@{ Name = '10.6/C6'; Kind = 'correctness'; Bin = 'pkv_c6'; Cell = '10.6/C6'; Rests = @('admission', 'oracle') },
     [pscustomobject]@{ Name = '10.8/C6'; Kind = 'correctness'; Bin = 'pkv_c6'; Cell = '10.8/C6'; Rests = @('admission') },
-    [pscustomobject]@{ Name = '7.4/C6'; Kind = 'timing'; Bin = 'pkv_c6'; Cell = '7.4/C6'; Rests = @('timing') },
-    [pscustomobject]@{ Name = 'lifecycle-v1.11.0'; Kind = 'timing'; Bin = 'hlife_v1110'; Cell = 'lifecycle/C6'; Rests = @('timing') },
-    [pscustomobject]@{ Name = 'lifecycle/C6'; Kind = 'timing'; Bin = 'pkv_c6'; Cell = 'lifecycle/C6'; Rests = @('timing') },
-    [pscustomobject]@{ Name = '7.9-v1.11.0'; Kind = 'timing'; Bin = 'h79_v1110'; Cell = '7.9/C6'; Rests = @('timing') },
-    [pscustomobject]@{ Name = '7.9/C6'; Kind = 'timing'; Bin = 'pkv_c6'; Cell = '7.9/C6'; Rests = @('timing') }
+    [pscustomobject]@{ Name = '7.4/C6'; Kind = 'timing'; Bin = 'pkv_c6'; Cell = '7.4/C6'; Rests = @('timing74') },
+    [pscustomobject]@{ Name = 'lifecycle-v1.11.0'; Kind = 'timing'; Bin = 'hlife_v1110'; Cell = 'lifecycle/C6'; Rests = @('lifecycle') },
+    [pscustomobject]@{ Name = 'lifecycle/C6'; Kind = 'timing'; Bin = 'pkv_c6'; Cell = 'lifecycle/C6'; Rests = @('lifecycle') },
+    [pscustomobject]@{ Name = '7.9-v1.11.0'; Kind = 'timing'; Bin = 'h79_v1110'; Cell = '7.9/C6'; Rests = @('timing79') },
+    [pscustomobject]@{ Name = '7.9/C6'; Kind = 'timing'; Bin = 'pkv_c6'; Cell = '7.9/C6'; Rests = @('timing79') }
 )
 if ($Also79PlainLibrary) {
-    $legs += [pscustomobject]@{ Name = '7.9-plainlib'; Kind = 'timing'; Bin = 'h79_plain'; Cell = '7.9/C6'; Rests = @('timing') }
+    $legs += [pscustomobject]@{ Name = '7.9-plainlib'; Kind = 'timing'; Bin = 'h79_plain'; Cell = '7.9/C6'; Rests = @('timing79') }
 }
 if ($TimingOnly) { $legs = @($legs | Where-Object { $_.Kind -eq 'timing' }) }
 if ($CorrectnessOnly) { $legs = @($legs | Where-Object { $_.Kind -eq 'correctness' }) }
@@ -103,7 +112,6 @@ if ($Fresh) {
     if ($legs | Where-Object { $_.Name -eq '7.9-v1.11.0' }) { Remove-Item -LiteralPath $Baseline79 -ErrorAction SilentlyContinue }
     if ($legs | Where-Object { $_.Name -eq 'lifecycle-v1.11.0' }) { Remove-Item -LiteralPath $BaselineLife -ErrorAction SilentlyContinue }
 }
-$pending = @($legs | Where-Object { -not (Test-Path -LiteralPath (Get-MarkerPath $_)) })
 
 # ---- artifacts: one directory holding both, under the names the cells read ----------------------
 if ($ArtifactDir) {
@@ -126,17 +134,51 @@ foreach ($f in @($PkvArtifact05B, $PkvArtifact15B)) {
     if (-not (Test-Path -LiteralPath (Join-Path $ArtDir $f) -PathType Leaf)) { throw "artifact not found: $(Join-Path $ArtDir $f)" }
 }
 # The correctness cells read the box's R0 references; without them they fail on a missing file.
-if ($pending | Where-Object { $_.Kind -eq 'correctness' }) {
+function Get-RefPath($f) { return Join-Path $RefDir ('v1.11.0_' + [IO.Path]::GetFileNameWithoutExtension($f) + '.ref') }
+if ($legs | Where-Object { $_.Kind -eq 'correctness' }) {
     foreach ($f in @($PkvArtifact05B, $PkvArtifact15B)) {
-        $ref = Join-Path $RefDir ('v1.11.0_' + [IO.Path]::GetFileNameWithoutExtension($f) + '.ref')
+        $ref = Get-RefPath $f
         if (-not (Test-Path -LiteralPath $ref)) { throw "missing ${ref}: run tools\build_paged_kv_reference.ps1 -ArtifactDir $ArtDir first" }
     }
 }
 
+# ---- provenance: what each leg's record holds (tools/paged_kv_c6_provenance.ps1) ----------------
+$Head = & git -C $Repo rev-parse HEAD
+if ($LASTEXITCODE -ne 0 -or -not $Head) { throw "git rev-parse HEAD failed in $Repo" }
+$Head = "$Head".Trim()
+$shaCache = @{}  # artifacts and references only: a baseline can be rewritten by an earlier leg of this run
+function Get-CachedSha($path) {
+    if (-not $shaCache.ContainsKey($path)) { $shaCache[$path] = Get-PkvSha256 $path }
+    return $shaCache[$path]
+}
+function Get-ShaOrMissing($path) { if (Test-Path -LiteralPath $path -PathType Leaf) { return Get-PkvSha256 $path } else { return 'missing' } }
+function Get-LegInputs($leg) {
+    $in = [ordered]@{}
+    foreach ($f in @($PkvArtifact05B, $PkvArtifact15B)) { $in["artifact:$f"] = Get-CachedSha (Join-Path $ArtDir $f) }
+    if ($leg.Kind -eq 'correctness') {
+        foreach ($f in @($PkvArtifact05B, $PkvArtifact15B)) { $r = Get-RefPath $f; $in["reference:$(Split-Path -Leaf $r)"] = Get-CachedSha $r }
+    }
+    if ($leg.Name -eq '7.9/C6' -or $leg.Name -eq '7.9-plainlib') { $in["baseline:$(Split-Path -Leaf $Baseline79)"] = Get-ShaOrMissing $Baseline79 }
+    if ($leg.Name -eq 'lifecycle/C6') { $in["baseline:$(Split-Path -Leaf $BaselineLife)"] = Get-ShaOrMissing $BaselineLife }
+    return $in
+}
+# The record this invocation would write for $leg, with the binary as it stands now.
+function Get-LegRecord($leg) {
+    $bin = $exe[$leg.Bin]
+    $sha = if ($bin -and (Test-Path -LiteralPath $bin -PathType Leaf)) { Get-PkvSha256 $bin } else { 'missing' }
+    return New-PkvLegRecord -Leg $leg.Name -Rests $leg.Rests -Head $Head -Binary "$bin" -BinarySha256 $sha `
+        -Inputs (Get-LegInputs $leg) -Commissioned $Commissioned -Max74Ratio $Max74Ratio
+}
+function Test-LegCurrent($leg) { return Test-PkvLegRecordCurrent (Read-PkvLegRecord (Get-MarkerPath $leg)) (Get-LegRecord $leg) }
+
 # ---- builds (all before any leg, so no compiler runs during a timing leg) ----------------------
+# Every selected leg's binary is needed, current or not: its sha256 is part of the record a resume
+# compares. superslm_pkv_c6 is built incrementally (an unchanged tree relinks nothing, so its sha256
+# holds); a harness .exe is rebuilt only when a leg that uses it is not current, since every cl run
+# writes a new binary.
 $exe = @{}
 $needs = @{}
-foreach ($leg in $pending) { $needs[$leg.Bin] = $true }
+foreach ($leg in $legs) { $needs[$leg.Bin] = $true }
 if ($needs.Count -gt 0) { Enter-PkvDevShell }
 if ($needs['pkv_c6'] -or $needs['h79_plain']) {
     if (-not (Test-Path -LiteralPath (Join-Path $BuildDir 'CMakeCache.txt'))) {
@@ -160,26 +202,30 @@ if ($needs['h79_v1110'] -or $needs['h79_plain'] -or $needs['hlife_v1110']) {
     # c6_dim7_throughput.cpp and c6_lifecycle_timing.cpp call legacy verbs only, so each file builds
     # against both libraries (§8: one harness, both binaries, same machine). Headers come from the
     # library's own tree.
+    if ($needs['hlife_v1110']) { $exe['hlife_v1110'] = Join-Path $C6 'pkvlife_v1.11.0.exe' }
+    if ($needs['h79_v1110']) { $exe['h79_v1110'] = Join-Path $C6 'pkv79_v1.11.0.exe' }
+    if ($needs['h79_plain']) { $exe['h79_plain'] = Join-Path $C6 'pkv79_plainlib.exe' }
+    $rebuild = @{}
+    foreach ($b in @('hlife_v1110', 'h79_v1110', 'h79_plain')) {
+        if ($needs[$b] -and @($legs | Where-Object { $_.Bin -eq $b -and -not (Test-LegCurrent $_) }).Count -gt 0) { $rebuild[$b] = $true }
+    }
     $refHeader = Join-Path $C6 'pkv_refdir.h'
     Set-Content -LiteralPath $refHeader -Encoding ascii -Value ('#define PKV_REFERENCE_DIR "' + ($RefDir -replace '\\', '/') + '"')
     $harness = @((Join-Path $Repo 'tests\paged-kv\pkv_main.cpp'), (Join-Path $Repo 'tests\paged-kv\c6_dim7_throughput.cpp'))
-    if ($needs['h79_v1110'] -or $needs['hlife_v1110']) {
+    if ($rebuild['h79_v1110'] -or $rebuild['hlife_v1110']) {
         $lib = Initialize-PkvFrozenLibrary -Tag 'v1.11.0' -WorkDir (Join-Path $ScratchDir 'ref')
     }
-    if ($needs['hlife_v1110']) {
-        $exe['hlife_v1110'] = Join-Path $C6 'pkvlife_v1.11.0.exe'
+    if ($rebuild['hlife_v1110']) {
         Build-PkvExe -Out $exe['hlife_v1110'] -Sources @((Join-Path $Repo 'tests\paged-kv\pkv_main.cpp'), (Join-Path $Repo 'tests\paged-kv\c6_lifecycle_timing.cpp')) `
             -Lib $lib.Lib -ForceInclude $refHeader -Includes @((Join-Path $lib.Src 'include'), (Join-Path $Repo 'tests\paged-kv'))
     }
-    if ($needs['h79_v1110']) {
-        $exe['h79_v1110'] = Join-Path $C6 'pkv79_v1.11.0.exe'
+    if ($rebuild['h79_v1110']) {
         Build-PkvExe -Out $exe['h79_v1110'] -Sources $harness -Lib $lib.Lib -ForceInclude $refHeader `
             -Includes @((Join-Path $lib.Src 'include'), (Join-Path $Repo 'tests\paged-kv'))
     }
-    if ($needs['h79_plain']) {
+    if ($rebuild['h79_plain']) {
         $plainLib = Join-Path $BuildDir 'superslm.lib'
         if (-not (Test-Path -LiteralPath $plainLib)) { throw "missing $plainLib" }
-        $exe['h79_plain'] = Join-Path $C6 'pkv79_plainlib.exe'
         Build-PkvExe -Out $exe['h79_plain'] -Sources $harness -Lib $plainLib -ForceInclude $refHeader `
             -Includes @((Join-Path $Repo 'include'), (Join-Path $Repo 'tests\paged-kv'))
     }
@@ -200,8 +246,7 @@ function Get-IdleReport {
 }
 
 # ---- run --------------------------------------------------------------------------------------
-$commissionedTiming = $Commissioned -contains 'timing'
-if ($commissionedTiming -and -not $Max74Ratio) { Write-Output 'NOTE: timing commissioned but no -Max74Ratio: 7.4 stays quarantined (the cell asserts only with a ratio)' }
+if (($Commissioned -contains 'timing74') -and -not $Max74Ratio) { Write-Output 'NOTE: timing74 commissioned but no -Max74Ratio: 7.4 stays quarantined (the cell asserts only with a ratio)' }
 $envNames = @('SUPERSLM_PAGED_KV_REAL_ARTIFACT_DIR', 'SUPERSLM_PAGED_KV_79_OUT', 'SUPERSLM_PAGED_KV_79_BASELINE',
     'SUPERSLM_PAGED_KV_LIFE_OUT', 'SUPERSLM_PAGED_KV_LIFE_BASELINE',
     'SUPERSLM_PAGED_KV_TIMING_COMMISSIONED', 'SUPERSLM_PAGED_KV_74_MAX_RATIO', 'SUPERSLM_PAGED_KV_FIXTURE_DIR')
@@ -209,9 +254,15 @@ $results = @{}
 $stopTiming = $false
 foreach ($leg in $legs) {
     $marker = Get-MarkerPath $leg
-    if (Test-Path -LiteralPath $marker) {
-        Write-Output "SKIP $($leg.Name): done earlier ($marker)"
+    $record = Get-LegRecord $leg
+    $stored = Read-PkvLegRecord $marker
+    if (Test-PkvLegRecordCurrent $stored $record) {
+        Write-Output "SKIP $($leg.Name): done earlier with this run's provenance ($marker)"
         continue
+    }
+    if (Test-Path -LiteralPath $marker) {
+        $why = if ($stored) { 'differs in ' + ((Get-PkvLegRecordDiff $stored $record) -join ', ') } else { 'holds no provenance record' }
+        Write-Output "STALE $($leg.Name): its marker $why; rerunning"
     }
     if ($leg.Kind -eq 'timing' -and $stopTiming) { $results[$leg.Name] = 'NOT-RUN (earlier timing leg not idle)'; continue }
     if ($leg.Name -eq '7.9/C6' -or $leg.Name -eq '7.9-plainlib') {
@@ -226,9 +277,11 @@ foreach ($leg in $legs) {
     if ($leg.Name -eq '7.9/C6' -or $leg.Name -eq '7.9-plainlib') { $env:SUPERSLM_PAGED_KV_79_BASELINE = $Baseline79 }
     if ($leg.Name -eq 'lifecycle-v1.11.0') { $env:SUPERSLM_PAGED_KV_LIFE_OUT = "$BaselineLife.partial" }
     if ($leg.Name -eq 'lifecycle/C6') { $env:SUPERSLM_PAGED_KV_LIFE_BASELINE = $BaselineLife }
-    if ($commissionedTiming) {
-        $env:SUPERSLM_PAGED_KV_TIMING_COMMISSIONED = '1'
-        if ($Max74Ratio) { $env:SUPERSLM_PAGED_KV_74_MAX_RATIO = $Max74Ratio }
+    # The assertion variables come from the record itself, so the record says exactly what was set.
+    $assertEnv = Get-PkvRecordEnv $record
+    foreach ($k in $assertEnv.Keys) {
+        if ($envNames -notcontains $k) { throw "assertion variable $k is not cleared between legs" }
+        Set-Item -Path "Env:\$k" -Value $assertEnv[$k]
     }
     $log = Get-LogPath $leg
     $before = $null
@@ -265,7 +318,8 @@ foreach ($leg in $legs) {
     if ($leg.Name -eq '7.9-v1.11.0' -and $code -eq 0) { Move-Item -LiteralPath "$Baseline79.partial" -Destination $Baseline79 -Force }
     if ($leg.Name -eq 'lifecycle-v1.11.0' -and $code -eq 0) { Move-Item -LiteralPath "$BaselineLife.partial" -Destination $BaselineLife -Force }
     $line = '{0} exit={1} {2} ({3} s) {4} {5}' -f $verdict, $code, $last, $secs, (Get-Date -Format s), $idleNote
-    Set-Content -LiteralPath $marker -Encoding utf8 -Value $line
+    $record.Outcome = $line
+    Write-PkvLegRecord $marker $record
     Write-Output "DONE $($leg.Name): $line"
 }
 foreach ($n in $envNames) { Remove-Item -Path "Env:\$n" -ErrorAction SilentlyContinue }
@@ -274,13 +328,17 @@ foreach ($n in $envNames) { Remove-Item -Path "Env:\$n" -ErrorAction SilentlyCon
 $rows = @()
 $allGreen = $true
 foreach ($leg in $legs) {
-    $marker = Get-MarkerPath $leg
-    $state = if (Test-Path -LiteralPath $marker) { (Get-Content -LiteralPath $marker -TotalCount 1) } elseif ($results.ContainsKey($leg.Name)) { $results[$leg.Name] } else { 'NOT-RUN' }
+    # A leg this run tried and did not finish reports that, not an older marker; a finished leg reports
+    # its stored record. Standing comes from that record alone, never from this run's arguments.
+    $record = $null
+    if ($results.ContainsKey($leg.Name)) { $state = $results[$leg.Name] }
+    else {
+        $record = Read-PkvLegRecord (Get-MarkerPath $leg)
+        $state = if ($record) { "$($record.Outcome)" } else { 'NOT-RUN' }
+    }
     $verdict = ($state -split ' ')[0]
     if ($verdict -ne 'GREEN') { $allGreen = $false }
-    $missing = @($leg.Rests | Where-Object { $Commissioned -notcontains $_ })
-    if ($leg.Name -eq '7.4/C6' -and -not $Max74Ratio) { $missing += 'ratio' }
-    $standing = if ($missing.Count -eq 0) { 'standing' } else { 'quarantined (' + ($missing -join ', ') + ')' }
+    $standing = Get-PkvLegStanding -Rests $leg.Rests -Record $record
     $rows += [pscustomobject]@{ Leg = $leg.Name; Kind = $leg.Kind; Verdict = $verdict; Standing = $standing; Detail = $state }
 }
 $summary = @('C6 box run summary ' + (Get-Date -Format s) + " (repo $Repo, build $BuildDir, artifacts $ArtDir)")

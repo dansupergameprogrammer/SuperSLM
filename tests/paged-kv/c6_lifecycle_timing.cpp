@@ -11,8 +11,10 @@
 // change and the resolving power, and a verdict line in the timing cells' shared vocabulary (pkv_common.h):
 // NO RESULT when the change is below the resolving power (§8, R9), RESOLVED otherwise (there is no bar,
 // so never PASS or FAIL).
-// Until the timing harness is commissioned (SUPERSLM_PAGED_KV_TIMING_COMMISSIONED=1) the readings are
-// also marked quarantined (§8: recorded, never acted on or headlined).
+// The readings are always marked quarantined (§8: recorded, never acted on or headlined): this cell
+// has no instrument registry entry and no commissioning (the registered timing instruments are
+// PKV-TIMING-74-C6 and PKV-TIMING-79-C6), so no variable lifts its quarantine, including
+// SUPERSLM_PAGED_KV_TIMING_COMMISSIONED, which is 7.9's alone.
 //
 // This file calls legacy verbs only, so it builds against the v1.11.0 library and against the paged
 // build (a legacy holder in a page pool), like c6_dim7_throughput.cpp. The box run is two runs of it:
@@ -301,8 +303,8 @@ std::string Us(double ns) {
 // for a lifecycle verb, so there is no PASS or FAIL and nothing is asserted.
 void Report(const std::string& key, const Reading& paged, const Reading* base) {
 	if (!base) {
-		std::printf("lifecycle %s: %s, spread %.2f%% (no baseline given)%s\n", key.c_str(), Us(paged.median).c_str(), paged.spread * 100,
-		            TimingCommissioned() ? "" : " [quarantined: timing harness not commissioned]");
+		std::printf("lifecycle %s: %s, spread %.2f%% (no baseline given) [quarantined: lifecycle instrument not commissioned]\n",
+		            key.c_str(), Us(paged.median).c_str(), paged.spread * 100);
 		return;
 	}
 	const double change = paged.median / base->median - 1.0;  // positive: the paged build is slower
@@ -313,7 +315,7 @@ void Report(const std::string& key, const Reading& paged, const Reading* base) {
 	PrintTimingVerdict("lifecycle", key, resolved ? TimingVerdict::kResolved : TimingVerdict::kNoResult,
 	                   resolved ? Fmt("change %+.2f%% at resolving power %.2f%%; no bar for a lifecycle verb", change * 100, resolving * 100)
 	                            : Fmt("|change| %.2f%% is below the resolving power %.2f%%", std::fabs(change) * 100, resolving * 100),
-	                   TimingCommissioned());
+	                   /*asserting=*/false);  // never commissioned: always the quarantine label
 }
 
 struct Target {

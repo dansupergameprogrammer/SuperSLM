@@ -199,7 +199,9 @@ Three runs each:
 - **Only decode runs A/B.** §8 says the harness times create/reset/adopt/save/restore/release on
   the v1.9.0 (v1.11.0) binary and on the paged binary. 7.9 is the only cell that runs on both. 7.4
   compares two caps inside the paged binary. (A `c6_lifecycle_timing.cpp` cell now exists at
-  751e441; it is not constructed against here.)
+  751e441; it is not constructed against here, has no registry entry below, and is never
+  commissioned. It records figures only, and its readings are always quarantined: no variable lifts
+  that, and the box runner rejects `-Commissioned lifecycle`.)
 - **7.4 grades only against a bound.** By its own comment, it has no "effect below the resolving
   power" verdict. Its claim is the ratio's place against the bound. So no no-result construction
   is stated for 7.4.
@@ -312,3 +314,22 @@ Expected `-Commission` outcomes, given the cloud results:
 | PKV-FILL-PROBE-C5 | COMMISSIONED (probe2.R5 now fires: a refusal proves "at most" only when it is SSLM_KV_POOL_EXHAUSTED) |
 | PKV-TIMING-79-C6 | COMMISSIONED on a quiet box whose A/A resolving power is under 5 % (timing79.box.A1 needs bar PASS). REJECTS_HEALTHY if the box's R is 5 % or more. DEAD if R1 or N1 do not draw their verdicts on that box |
 | PKV-TIMING-74-C6 | COMMISSIONED. It now reports a resolving power and grades three-way, so A1 needs every ratio PASS and R1 must FAIL on the budget reset ratio |
+
+### The box run after commissioning
+
+`tools\run_paged_kv_c6_box.ps1 -Commissioned` takes one id per registry entry, never one id for all
+timing. Pass an id only once `-Status` reads COMMISSIONED for its entries:
+
+| `-Commissioned` id | Registry entries | What the runner sets, and for which legs |
+|---|---|---|
+| `oracle` | PKV-ORACLE-R0 | nothing (the cells assert it unconditionally); 10.1, 10.2, 10.6 can stand |
+| `admission` | PKV-LEGACY-COUNT-C4, PKV-FILL-PROBE-C5, PKV-FILL-PROBE-ONESTATE-C5 | nothing; 10.4, 10.6, 10.8 can stand |
+| `timing74` | PKV-TIMING-74-C6 | `SUPERSLM_PAGED_KV_74_MAX_RATIO` = `-Max74Ratio`, for 7.4 only. Without `-Max74Ratio`, 7.4 stays quarantined |
+| `timing79` | PKV-TIMING-79-C6 | `SUPERSLM_PAGED_KV_TIMING_COMMISSIONED=1`, for the 7.9 legs only |
+
+Any other id is an error, `lifecycle` included: the lifecycle legs always read quarantined. Each
+leg's done-marker records the HEAD, the test binary's sha256, the sha256 of the artifacts,
+references and baseline it read, the ids in force, the assertion variables set and `-Max74Ratio`.
+A resume reruns any leg whose record differs from the current invocation's, and the summary takes
+each leg's standing from its own record, so a quarantined run never becomes standing by rerunning
+the script with `-Commissioned`.
