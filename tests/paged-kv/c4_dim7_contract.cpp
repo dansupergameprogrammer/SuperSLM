@@ -189,9 +189,11 @@ void Cell78LegacyHeaderSentences() {
 		for (uint32_t n : {1u, 3u}) {
 			const size_t exact = sslm_kv_block_size(fx.model) * n + sslm_kv_pool_overhead_size(fx.model, n);
 			AlignedBuf mem(exact);
-			sslm_kv_pool p = nullptr;
+			sslm_kv_pool p = OutSentinel<sslm_kv_pool>();  // non-null; the verb must null it on the refusal
 			PKV_CHECK_EQ(sslm_kv_pool_create(fx.model, mem.p, exact - 1, n, &p), SSLM_BUFFER_TOO_SMALL);
-			PKV_CHECK(p == nullptr);
+			PKV_CHECK(p == nullptr);  // kills: a refusal that returns before writing *out
+			if (p && p != OutSentinel<sslm_kv_pool>()) sslm_kv_pool_destroy(p);
+			p = nullptr;
 			// kills: a page pool needing more bytes than sslm_kv_block_size and the overhead verb name
 			PKV_CHECK_EQ(sslm_kv_pool_create(fx.model, mem.p, exact, n, &p), SSLM_OK);
 			if (p) {
@@ -432,11 +434,11 @@ void Cell712WholeReserveClamp() {
 			PKV_CHECK_MSG(Restore(fx, &pool.pool, blob, &r) == SSLM_OK, "7.12: restore %u of %u refused", i + 1, n);
 			if (r) live.push_back(r);
 		}
-		sslm_seq extra = nullptr;
+		sslm_seq extra = OutSentinel<sslm_seq>();  // non-null; the verb must null it on the refusal
 		// kills: a whole_reserve restore that reserves fewer than ceil(cap/B) pages
 		PKV_CHECK_EQ(Restore(fx, &pool.pool, blob, &extra), SSLM_KV_POOL_EXHAUSTED);
-		PKV_CHECK(extra == nullptr);
-		if (extra) sslm_seq_release(extra);
+		PKV_CHECK(extra == nullptr);  // kills: a refusal that returns before writing *out
+		if (extra && extra != OutSentinel<sslm_seq>()) sslm_seq_release(extra);
 		for (sslm_seq r : live) PKV_CHECK_MSG(d8 && NextTokens(fx.model, r, 8) == d8->tokens, "7.12: N-block continuation");
 		for (sslm_seq r : live) sslm_seq_release(r);
 	}

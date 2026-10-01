@@ -9,6 +9,8 @@
 
 #include "support/bad_alloc_injection.h"
 
+#include <type_traits>
+
 namespace {
 
 using namespace pkv;
@@ -257,22 +259,39 @@ std::unique_ptr<ProbeState> Build54(int32_t prefix_len, const std::vector<uint8_
 		for (sslm_seq s : fill) sslm_seq_release(s);
 		return sc;
 	}
-	auto expect = [&](const char* name, sslm_status st, const void* handle) {
-		if (out && (st != SSLM_KV_POOL_EXHAUSTED || handle != nullptr))
+	// Each out-handle is preset to a non-null sentinel and read only after its verb returns (through the
+	// pointer, so argument order cannot read it first), and a refusal must null it.
+	// kills: a refusal that returns before writing *out (the preset left standing)
+	auto expect = [&](const char* name, sslm_status st, auto* handle) {
+		using H = std::remove_pointer_t<decltype(handle)>;
+		if (out && (st != SSLM_KV_POOL_EXHAUSTED || *handle != nullptr))
 			out->wrong.push_back(std::string(name) + " -> " + std::to_string(st));
+		if (*handle && *handle != OutSentinel<H>()) {
+			if constexpr (std::is_same_v<H, sslm_seq>) sslm_seq_release(*handle);
+			else sslm_prefix_release(*handle);
+		}
 	};
-	sslm_seq s = nullptr;
-	sslm_prefix q = nullptr;
+	const sslm_seq kSeqPreset = OutSentinel<sslm_seq>();
+	const sslm_prefix kPrefixPreset = OutSentinel<sslm_prefix>();
+	sslm_seq s = kSeqPreset;
+	sslm_prefix q = kPrefixPreset;
 	uint32_t shared = 0;
-	expect("seq_create_budgeted", sslm_seq_create_budgeted(fx.model, &pool.pool, 1, &s), s);
-	expect("seq_create", sslm_seq_create(fx.model, &pool.pool, &s), s);
-	expect("prefix_begin_budgeted", sslm_prefix_begin_budgeted(fx.model, &pool.pool, 1, &q), q);
-	expect("prefix_begin", sslm_prefix_begin(fx.model, &pool.pool, &q), q);
-	expect("prefix_begin_from", sslm_prefix_begin_from(p, 1, &q), q);
-	expect("seq_restore (SSB6)", sslm_seq_restore(fx.model, &pool.pool, ssb6.data(), ssb6.size(), &s), s);
-	expect("restore_shared (SSB6, null)", sslm_seq_restore_shared(fx.model, &pool.pool, ssb6.data(), ssb6.size(), nullptr, &s, &shared), s);
-	expect("restore_shared (SSB6, the prefix)", sslm_seq_restore_shared(fx.model, &pool.pool, ssb6.data(), ssb6.size(), p, &s, &shared), s);
-	expect("seq_restore (1.9.0 SSB5)", sslm_seq_restore(fx.model, &pool.pool, ssb5.data(), ssb5.size(), &s), s);
+	expect("seq_create_budgeted", sslm_seq_create_budgeted(fx.model, &pool.pool, 1, &s), &s);
+	s = kSeqPreset;
+	expect("seq_create", sslm_seq_create(fx.model, &pool.pool, &s), &s);
+	expect("prefix_begin_budgeted", sslm_prefix_begin_budgeted(fx.model, &pool.pool, 1, &q), &q);
+	q = kPrefixPreset;
+	expect("prefix_begin", sslm_prefix_begin(fx.model, &pool.pool, &q), &q);
+	q = kPrefixPreset;
+	expect("prefix_begin_from", sslm_prefix_begin_from(p, 1, &q), &q);
+	s = kSeqPreset;
+	expect("seq_restore (SSB6)", sslm_seq_restore(fx.model, &pool.pool, ssb6.data(), ssb6.size(), &s), &s);
+	s = kSeqPreset;
+	expect("restore_shared (SSB6, null)", sslm_seq_restore_shared(fx.model, &pool.pool, ssb6.data(), ssb6.size(), nullptr, &s, &shared), &s);
+	s = kSeqPreset;
+	expect("restore_shared (SSB6, the prefix)", sslm_seq_restore_shared(fx.model, &pool.pool, ssb6.data(), ssb6.size(), p, &s, &shared), &s);
+	s = kSeqPreset;
+	expect("seq_restore (1.9.0 SSB5)", sslm_seq_restore(fx.model, &pool.pool, ssb5.data(), ssb5.size(), &s), &s);
 	const sslm_status adopt = sslm_seq_adopt_prefix(h, p);
 	sslm_status refusal = SSLM_OK;
 	const int64_t n = adopt == SSLM_OK ? TokensUntilRefusal(fx.model, h, &refusal) : -1;

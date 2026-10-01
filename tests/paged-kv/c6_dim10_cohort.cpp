@@ -234,6 +234,74 @@ void Cell102On(const Fixture& fx) {
 	w.Release();
 }
 
+// 10.4's construction peak. The plan's executed peak of 203 is the world's 63 frozen pages plus ten
+// open personas at R(200) = 14 each: every begin_from runs before any persona is frozen (BuildWorld
+// freezes each persona before the next begin_from, which peaks at 63 + 9 * 13 + 14 = 194). The
+// personas are then filled and frozen and the world released, leaving the chain's 192 pages.
+// Returns the index of the first refused begin_from (-1 if none) and its status.
+int BuildWorldAllOpen(const Fixture& fx, sslm_kv_pool* pool, World* w, sslm_status* refusal) {
+	*refusal = SSLM_OK;
+	sslm_status st = sslm_prefix_begin_budgeted(fx.model, pool, 1000, &w->world);
+	if (st == SSLM_OK) st = PrefixPrefillAll(fx.model, w->world, WorldTokens(), kChunk);
+	if (st == SSLM_OK) st = sslm_prefix_freeze(w->world);
+	PKV_CHECK_MSG(st == SSLM_OK, "10.4 peak: the world: status %d", static_cast<int>(st));
+	if (st != SSLM_OK) return -2;
+	for (int i = 0; i < kPersonas; ++i) {
+		sslm_prefix p = nullptr;
+		st = sslm_prefix_begin_from(w->world, 200, &p);
+		if (st != SSLM_OK) {
+			*refusal = st;
+			return i;
+		}
+		w->personas.push_back(p);
+	}
+	for (int i = 0; i < kPersonas && st == SSLM_OK; ++i) {
+		st = PrefixPrefillAll(fx.model, w->personas[static_cast<size_t>(i)], PersonaTokens(i), kChunk);
+		if (st == SSLM_OK) st = sslm_prefix_freeze(w->personas[static_cast<size_t>(i)]);
+		PKV_CHECK_MSG(st == SSLM_OK, "10.4 peak: persona %d: status %d", i, static_cast<int>(st));
+	}
+	if (st == SSLM_OK) {
+		st = sslm_prefix_release(w->world);
+		w->world = nullptr;
+	}
+	w->ok = st == SSLM_OK;
+	return -1;
+}
+
+void Peak104(const Fixture& fx) {
+	const int64_t peak = PrefixPages(fx, 1000) + kPersonas * fx.R(200);
+	PKV_CHECK_EQ(peak, 203);  // the plan's executed construction peak, from §3.4 written here
+	{
+		PagePool pool(fx.model, static_cast<uint32_t>(peak));
+		PKV_CHECK_EQ(pool.status, SSLM_OK);
+		if (pool.status != SSLM_OK) return;
+		World w;
+		sslm_status refusal = SSLM_OK;
+		const int refused = BuildWorldAllOpen(fx, &pool.pool, &w, &refusal);
+		// kills: a begin_from that draws more than R(200) or copies the world's pages (refused at 203)
+		PKV_CHECK_MSG(refused == -1 && w.ok, "10.4 peak %s: a pool of %lld refused begin_from %d (status %d)",
+		              fx.stem.c_str(), static_cast<long long>(peak), refused, static_cast<int>(refusal));
+		// The end of construction, graded by one-state admission: the chain holds 62 + 10 * 13 = 192.
+		// kills: freeze not returning a persona's spare reserve page; the world's release keeping its
+		// unshared tail page, or freeing a page the personas share (more free)
+		if (w.ok) ProbeExactlyFreeOneState(fx, &pool.pool, peak - ChainPages(fx, kPersonas));
+		w.Release();
+	}
+	{
+		PagePool pool(fx.model, static_cast<uint32_t>(peak - 1));
+		PKV_CHECK_EQ(pool.status, SSLM_OK);
+		if (pool.status != SSLM_OK) return;
+		World w;
+		sslm_status refusal = SSLM_OK;
+		const int refused = BuildWorldAllOpen(fx, &pool.pool, &w, &refusal);
+		// kills: a begin_from that draws less than R(200) (the tenth admitted at 202)
+		PKV_CHECK_MSG(refused == kPersonas - 1 && refusal == SSLM_KV_POOL_EXHAUSTED,
+		              "10.4 peak %s: a pool of %lld refused begin_from %d (status %d), want the last, exhausted",
+		              fx.stem.c_str(), static_cast<long long>(peak - 1), refused, static_cast<int>(refusal));
+		w.Release();
+	}
+}
+
 // ================================================================================================
 // 10.4: graded by host-visible end state. 1,842 pages: every create, begin_from and adopt succeeds; 1,841:
 // exactly one create is refused, the 50th, with SSLM_KV_POOL_EXHAUSTED. Contrast: a block pool in the
@@ -278,6 +346,7 @@ void Cell104On(const Fixture& fx) {
 		sslm_kv_pool_destroy(lp);
 	}
 	// Box leg: the same block-pool count on the v1.11.0 binary (the timing harness's two-binary run).
+	Peak104(fx);
 }
 
 // ================================================================================================

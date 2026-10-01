@@ -48,6 +48,14 @@
 namespace pkv {
 namespace budget_b {
 
+// The value an out-handle is preset to before a verb whose refusal a cell checks by a null out:
+// non-null, so a verb that never writes *out leaves it standing and the check fails. Never released
+// or dereferenced -- release a handle only when it is neither null nor this.
+template <class H>
+inline H OutSentinel() {
+	return reinterpret_cast<H>(uintptr_t{0x1});
+}
+
 // ---- blobs and records --------------------------------------------------------------------------
 
 // L' of §3.7: context_length + (layer_index > 0 ? 1 : 0), read from the blob's fixed header (the
@@ -260,6 +268,8 @@ inline sslm_seq MakeLegacySeq(const Fixture& fx, sslm_kv_pool* pool) {
 // persona draws R(200) = 14, shares the world's 62 full pages, copies its tail into one reserve page,
 // maps 13 private pages for [992, 1200) and returns 1 at freeze. The chain's persona table is 75 pages.
 constexpr int32_t kWorldLen = 1000;
+// §3.4: a frozen prefix of `len` tokens keeps ceil(len/B) pages (the 9.10 cell's PrefixPages).
+inline int64_t PrefixPages(const Fixture& fx, int64_t len) { return (len + fx.B() - 1) / fx.B(); }
 constexpr int32_t kPersonaLen = 200;
 constexpr int32_t kPersonaOrigin = kWorldLen + kPersonaLen;  // 1,200
 inline std::vector<int32_t> WorldTokens(int32_t vocab) { return Stream(61, kWorldLen, vocab); }

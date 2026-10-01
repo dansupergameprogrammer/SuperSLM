@@ -144,13 +144,14 @@ void Cell23Legacy() {
 	}
 
 	for (const Ssb6Case& c : WholeReserveCases(base, fx)) {
-		sslm_seq r = nullptr;
+		sslm_seq r = OutSentinel<sslm_seq>();  // non-null; the verb must null it on the refusal
 		const sslm_status st = sslm_seq_restore(fx.model, &pool.pool, c.blob.data(), c.blob.size(), &r);
 		// kills: the reader missing this validation (a restore admitted, or another status)
 		PKV_CHECK_MSG(st == SSLM_INVALID_ARGUMENT, "%s: restore -> %d, want SSLM_INVALID_ARGUMENT", c.name.c_str(),
 		              static_cast<int>(st));
+		// kills: a refusal that returns before writing *out
 		PKV_CHECK_MSG(r == nullptr, "%s: a refused restore hands back no handle", c.name.c_str());
-		if (r) sslm_seq_release(r);
+		if (r && r != OutSentinel<sslm_seq>()) sslm_seq_release(r);
 		// kills: validation after the draw (the refused restore leaves pages drawn)
 		const int admitted = CountLegacyCreates(fx.model, &pool.pool);
 		PKV_CHECK_MSG(admitted == 1, "%s: after the refusal the pool admits %d legacy creates, want 1", c.name.c_str(),
@@ -235,11 +236,11 @@ void Cell24() {
 	LegacyPool pool(qk.model, 1);
 	PKV_CHECK_EQ(pool.status, SSLM_OK);
 	if (!pool.pool) return;
-	sslm_seq r = nullptr;
+	sslm_seq r = OutSentinel<sslm_seq>();  // non-null; the verb must null it on the refusal
 	// kills: a reader that skips the model-hash check on the SSB5 path
 	PKV_CHECK_EQ(sslm_seq_restore(qk.model, &pool.pool, ssb5.data(), ssb5.size(), &r), SSLM_RESTORE_MODEL_MISMATCH);
-	PKV_CHECK(r == nullptr);
-	if (r) sslm_seq_release(r);
+	PKV_CHECK(r == nullptr);  // kills: a refusal that returns before writing *out
+	if (r && r != OutSentinel<sslm_seq>()) sslm_seq_release(r);
 	PKV_CHECK_EQ(CountLegacyCreates(qk.model, &pool.pool), 1);  // nothing drawn
 }
 
@@ -265,26 +266,26 @@ void Cell29() {
 	PKV_CHECK_MSG(block > 0 && size_t{over} <= SIZE_MAX / block, "block_count * block_size does not overflow");
 
 	AlignedBuf buf(4096, 0x77);
-	sslm_kv_pool pool = nullptr;
+	sslm_kv_pool pool = OutSentinel<sslm_kv_pool>();  // non-null; the verb must null it on the refusal
 	const sslm_status st = sslm_kv_pool_create(fx.model, buf.p, buf.n, over, &pool);
 	// kills: the page count truncated to u32 (2^32 -> 0 pages) or never checked, which reaches the
 	// buffer-size check and reports SSLM_BUFFER_TOO_SMALL; a check placed after the size check
 	PKV_CHECK_MSG(st == SSLM_INVALID_ARGUMENT, "block_count %u -> %d, want SSLM_INVALID_ARGUMENT", over,
 	              static_cast<int>(st));
-	PKV_CHECK(pool == nullptr);
-	if (pool) sslm_kv_pool_destroy(pool);
+	PKV_CHECK(pool == nullptr);  // kills: a refusal that returns before writing *out
+	if (pool && pool != OutSentinel<sslm_kv_pool>()) sslm_kv_pool_destroy(pool);
 	bool untouched = true;
 	for (size_t i = 0; i < buf.n; ++i) untouched = untouched && buf.p[i] == 0x77;
 	PKV_CHECK_MSG(untouched, "the refused create wrote nothing into the caller's buffer");
 
 	// The threshold, from below: one block fewer is admissible by page count and is refused by the
 	// size check, so the u32 refusal sits exactly at UINT32_MAX pages.
-	sslm_kv_pool pool2 = nullptr;
+	sslm_kv_pool pool2 = OutSentinel<sslm_kv_pool>();  // non-null; the verb must null it on the refusal
 	// kills: an off-by-one threshold (>= 2^32 - 2048 pages refused, or a 2^31 cap)
 	PKV_CHECK_EQ(sslm_kv_pool_create(fx.model, buf.p, buf.n, static_cast<uint32_t>(threshold), &pool2),
 	             SSLM_BUFFER_TOO_SMALL);
 	PKV_CHECK(pool2 == nullptr);
-	if (pool2) sslm_kv_pool_destroy(pool2);
+	if (pool2 && pool2 != OutSentinel<sslm_kv_pool>()) sslm_kv_pool_destroy(pool2);
 }
 
 PKV_CELL("2.3/C4", "C4", Cell23Legacy);

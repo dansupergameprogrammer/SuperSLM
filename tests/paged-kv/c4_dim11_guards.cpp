@@ -199,13 +199,14 @@ void Cell116WholeReserveGuards() {
 		LegacyPool pool(fx.model, 1);
 		for (const Case& c : cases) {
 			const std::vector<uint8_t> blob = c.make();
-			sslm_seq r = reinterpret_cast<sslm_seq>(&pool);  // any non-null value; the verb must null it
+			sslm_seq r = OutSentinel<sslm_seq>();  // non-null; the verb must null it on the refusal
 			const sslm_status st = Restore(fx, &pool.pool, blob, &r);
 			// kills: the guard that alone refuses this case, removed
 			PKV_CHECK_MSG(st == SSLM_INVALID_ARGUMENT, "11.6 %s, %s: status %d, want SSLM_INVALID_ARGUMENT", base_name, c.name,
 			              static_cast<int>(st));
+			// kills: a refusal that returns before writing *out (the caller's value left standing)
 			PKV_CHECK_MSG(r == nullptr, "11.6 %s, %s: the out-handle is not null", base_name, c.name);
-			if (st == SSLM_OK && r) sslm_seq_release(r);
+			if (r && r != OutSentinel<sslm_seq>()) sslm_seq_release(r);
 			// nothing drawn: the one block's pages are all still free
 			PKV_CHECK_MSG(CountLegacyCreates(fx.model, &pool.pool) == 1, "11.6 %s, %s: the refusal drew pages", base_name,
 			              c.name);

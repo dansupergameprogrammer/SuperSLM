@@ -445,9 +445,11 @@ void Cell78Budget() {
 	{
 		PagePool pool(fx.model, static_cast<uint32_t>(fx.CapPages()));
 		for (int32_t b : {0, -1, cap + 1, INT32_MAX}) {
-			sslm_seq s = nullptr;
+			sslm_seq s = OutSentinel<sslm_seq>();  // non-null; the verb must null it on the refusal
+			// kills: a refusal that returns before writing *out
 			PKV_CHECK_MSG(sslm_seq_create_budgeted(fx.model, &pool.pool, b, &s) == SSLM_INVALID_ARGUMENT && !s,
 			              "create_budgeted(%d) not refused", b);
+			if (s && s != OutSentinel<sslm_seq>()) sslm_seq_release(s);
 		}
 		sslm_seq s = MakeBudgetSeq(fx, &pool.pool, cap);  // kills: a refusal that drew before validating
 		if (s) sslm_seq_release(s);
@@ -475,9 +477,11 @@ void Cell78Budget() {
 		PKV_CHECK_EQ(sslm_prefix_begin_budgeted(fx.model, &pool.pool, 64, &open), SSLM_OK);
 		if (open) {
 			PKV_CHECK_EQ(PrefixPrefillAll(fx.model, open, Stream(5, 20, fx.vocab), 8), SSLM_OK);
-			sslm_prefix child = nullptr;
+			sslm_prefix child = OutSentinel<sslm_prefix>();  // non-null; the verb must null it on the refusal
+			// kills: a refusal that returns before writing *out
 			PKV_CHECK_MSG(sslm_prefix_begin_from(open, 32, &child) == SSLM_INVALID_ARGUMENT && !child,
 			              "begin_from an unfrozen parent was not refused");
+			if (child && child != OutSentinel<sslm_prefix>()) sslm_prefix_release(child);
 			sslm_prefix_release(open);
 		}
 		auto build = [&]() {
@@ -666,10 +670,11 @@ void Cell712Budget() {
 	}
 	{
 		PagePool pool(fx.model, need - 1);
-		sslm_seq r = nullptr;
+		sslm_seq r = OutSentinel<sslm_seq>();  // non-null; the verb must null it on the refusal
 		// kills: an E below 55 (a restore that does not hold the prefix span privately)
 		PKV_CHECK_EQ(sslm_seq_restore(fx.model, &pool.pool, blob.data(), blob.size(), &r), SSLM_KV_POOL_EXHAUSTED);
-		PKV_CHECK(r == nullptr);
+		PKV_CHECK(r == nullptr);  // kills: a refusal that returns before writing *out
+		if (r && r != OutSentinel<sslm_seq>()) sslm_seq_release(r);
 	}
 	auto build = [&]() {
 		auto st = std::make_unique<PageState>(fx.model, need);
@@ -742,7 +747,7 @@ void ShorterHandle910(const Fixture& fx) {
 		DecodeN(fx, s, 12, &cont);
 	}
 	const int64_t E = std::min<int64_t>(kPersonaOrigin / fx.B(), fx.CapPages() - fx.R(512));
-	PagePool dst(fx.model, static_cast<uint32_t>(63 + fx.R(512) + E));
+	PagePool dst(fx.model, static_cast<uint32_t>(PrefixPages(fx, kWorldLen) + fx.R(512) + E));  // the world keeps 63
 	sslm_prefix world = MakePrefix(fx, &dst.pool, WorldTokens(fx.vocab), kWorldLen);
 	if (!world) return;
 	sslm_seq r = nullptr;

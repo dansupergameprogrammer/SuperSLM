@@ -21,6 +21,14 @@
 namespace pkv {
 namespace legacy_b {
 
+// The value an out-handle is preset to before a verb whose refusal a cell checks by a null out:
+// non-null, so a verb that never writes *out leaves it standing and the check fails. Never released
+// or dereferenced -- release a handle only when it is neither null nor this.
+template <class H>
+inline H OutSentinel() {
+	return reinterpret_cast<H>(uintptr_t{0x1});
+}
+
 // The decode params every cell here uses unless it says otherwise: greedy, one layer per call, so
 // a single call can leave a sequence mid-token (layer_index > 0).
 inline sslm_decode_params OneLayerGreedy() {
@@ -75,8 +83,9 @@ inline std::vector<int32_t> NextTokens(sslm_model model, sslm_seq s, int n) {
 
 inline std::string BlobSha(const std::vector<uint8_t>& b) { return Sha(b.data(), b.size()); }
 
+// Leaves *out as the caller set it: a refusal cell presets it to OutSentinel() and checks that the
+// verb nulled it, which a helper that nulled it first would make vacuous.
 inline sslm_status Restore(const Fixture& fx, sslm_kv_pool* pool, const std::vector<uint8_t>& blob, sslm_seq* out) {
-	*out = nullptr;
 	return sslm_seq_restore(fx.model, pool, blob.data(), blob.size(), out);
 }
 

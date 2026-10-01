@@ -186,13 +186,14 @@ void Cell116Budget() {
 		sslm_prefix px = rig.Prefix(BudgetPrefix(fx, rig.Pool(), PrefixTokens(kOrigin)));
 		if (!px) return;
 		for (int with = 0; with < 2; ++with) {
-			sslm_seq r = nullptr;
+			sslm_seq r = OutSentinel<sslm_seq>();  // non-null; the verb must null it on the refusal
 			const sslm_status st = with ? sslm_seq_restore_shared(fx.model, rig.Pool(), h.blob.data(), h.blob.size(), px, &r, nullptr)
 			                            : sslm_seq_restore(fx.model, rig.Pool(), h.blob.data(), h.blob.size(), &r);
-			// kills: the guard named by the case removed (the restore admits the hostile blob)
+			// kills: the guard named by the case removed (the restore admits the hostile blob); a refusal
+			// that returns before writing *out (the preset left standing)
 			PKV_CHECK_MSG(st == SSLM_INVALID_ARGUMENT && r == nullptr, "11.6 %s (%s): status %d%s", h.guard, with ? "handle" : "no handle",
 			              static_cast<int>(st), h.isolates ? "" : " (a second guard refuses this one too)");
-			if (r) sslm_seq_release(r);
+			if (r && r != OutSentinel<sslm_seq>()) sslm_seq_release(r);
 			// nothing drawn: the valid blob's private restore still fits exactly
 			sslm_seq ok = nullptr;
 			// kills: a guard placed after the first draw, without the rollback

@@ -623,8 +623,12 @@ void Cell111() {
 		}
 		ExpectLikeFreshAdopter(fx, &sc.pools.front()->pool, sc, h, adopted, k111Budget, nullptr, 2, before, what);
 		// (a): P's 63 pages + the holder's R(64); (b): Q's 19 pages + R(64), P's 63 all free again.
-		// kills: (a) a -1/+1 that frees a page at 0 in between and draws it back from the pool; (b) P's
-		// pages kept in the holder's reserve or never freed.
+		// kills: (a) a re-adopt that leaks or double-draws a page across its -1/+1 (more or fewer free);
+		// (b) P's pages kept in the holder's reserve or never freed.
+		// Not separated here: the -1/+1 split over two critical sections. P is live in (a), so every page
+		// the holder shares is at refcount >= 2 and the -1 never reaches 0; a count of 1 needs P released,
+		// and re-adopting a released prefix is a use of a released handle (caller UB, §3.3 G11). The
+		// path where a shared page does reach 0 through adopt is (b)'s.
 		const int64_t k = k111Pool - (case_b ? PrefixPages(fx, 300) : PrefixPages(fx, 1000)) - fx.R(k111Budget);
 		ProbeExactlyFree(
 		    fx,

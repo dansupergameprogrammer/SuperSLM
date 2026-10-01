@@ -36,6 +36,14 @@
 namespace pkv {
 namespace budget_a {
 
+// The value an out-handle is preset to before a verb whose refusal a cell checks by a null out:
+// non-null, so a verb that never writes *out leaves it standing and the check fails. Never released
+// or dereferenced -- release a handle only when it is neither null nor this.
+template <class H>
+inline H OutSentinel() {
+	return reinterpret_cast<H>(uintptr_t{0x1});
+}
+
 // ---- small arithmetic, written in the test (§3.1, §3.4, §3.7) ---------------------------------
 
 inline int64_t CeilDiv(int64_t a, int64_t b) { return (a + b - 1) / b; }

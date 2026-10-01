@@ -20,6 +20,14 @@
 namespace pkv {
 namespace bc {
 
+// The value an out-handle is preset to before a verb whose refusal a cell checks by a null out:
+// non-null, so a verb that never writes *out leaves it standing and the check fails. Never released
+// or dereferenced -- release a handle only when it is neither null nor this.
+template <class H>
+inline H OutSentinel() {
+	return reinterpret_cast<H>(uintptr_t{0x1});
+}
+
 constexpr int32_t kChunk = 64;
 constexpr int32_t kVocab = 256;  // every token stream stays inside the fixtures' vocabulary (and any real one)
 
