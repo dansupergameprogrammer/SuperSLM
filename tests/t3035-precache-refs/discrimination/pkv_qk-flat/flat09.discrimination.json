@@ -1,0 +1,197 @@
+{
+  "decode_mode": "greedy",
+  "donor_ids_sha256": "f465b352301ddef760a090b5219a0c3e837a366c60b7408552068ba0754e1e40",
+  "donor_prompt_id": "donor",
+  "instrument": "T-3035-precache-discrimination",
+  "length": 2000,
+  "mutants": [
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 0,
+      "killed": true,
+      "mutant": "M-res",
+      "observed_tokens": 1
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 13,
+      "killed": true,
+      "mutant": "M-row(0)",
+      "observed_tokens": 14
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 53,
+      "killed": true,
+      "mutant": "M-row(1)",
+      "observed_tokens": 54
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 13,
+      "killed": true,
+      "mutant": "M-row(15)",
+      "observed_tokens": 14
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 53,
+      "killed": true,
+      "mutant": "M-row(16)",
+      "observed_tokens": 54
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 13,
+      "killed": true,
+      "mutant": "M-row(1000)",
+      "observed_tokens": 14
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 13,
+      "killed": true,
+      "mutant": "M-row(1983)",
+      "observed_tokens": 14
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 13,
+      "killed": true,
+      "mutant": "M-row(1999)",
+      "observed_tokens": 14
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 11,
+      "killed": true,
+      "mutant": "M-page(0)",
+      "observed_tokens": 12
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 5,
+      "killed": true,
+      "mutant": "M-page(62)",
+      "observed_tokens": 6
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 13,
+      "killed": true,
+      "mutant": "M-page(124)",
+      "observed_tokens": 14
+    }
+  ],
+  "page_positions": 16,
+  "population_adequate": false,
+  "population_summary": {
+    "M_res_killed": 10,
+    "M_swap_killed": 0,
+    "M_swap_measured": 0,
+    "all_pages_killed": 9,
+    "prefixes": 10,
+    "required": {
+      "M_res": "10/10 in at least one decode mode",
+      "each_row_stratum": "8/10, and B-1, B, L-1 each 10/10",
+      "pages": "10/10",
+      "swap": "10/10",
+      "tail": "all defined"
+    },
+    "row_killed": {
+      "0": 9,
+      "1..B-1": 9,
+      "B": 9,
+      "B-1": 8,
+      "L-1": 9,
+      "L-B-1": 9,
+      "floor(L/2)": 9
+    },
+    "source_limits": [
+      "M-swap is a K/V pair permutation",
+      "system-first chat makes M-row(0) donor-identical",
+      "commissioning constructions are unauthored"
+    ],
+    "tail_defined": 9,
+    "tail_killed_where_defined": 8,
+    "thresholds_met": false
+  },
+  "probe_sha256": "25ed518778fa4d0aa1c72427cd011fdf83c56bfe6815c0ad1553fa758b490bff",
+  "reason": "M-swap and system-first M-row(0) source contradictions; commissioning unauthored",
+  "screen": null,
+  "status": "QUARANTINED",
+  "target_ids_sha256": "212c82da30486757a3bfd6246249d7fd2f0214d4d085eb4c80b03dc090bf6a3a",
+  "target_prompt_id": "flat09",
+  "threshold_observation": {
+    "M_res_killed": true,
+    "M_swap_killed": null,
+    "every_page_killed": true,
+    "tail_killed": null
+  },
+  "unedited_roundtrip_tokens": [
+    156,
+    62,
+    151,
+    156,
+    62,
+    151,
+    156,
+    62,
+    151,
+    156,
+    62,
+    151,
+    156,
+    80,
+    41,
+    118,
+    129,
+    35,
+    129,
+    35,
+    129,
+    35,
+    129,
+    35,
+    129,
+    35,
+    129,
+    35,
+    129,
+    35,
+    129,
+    35,
+    129,
+    35,
+    129,
+    35,
+    129,
+    35,
+    129,
+    35,
+    129,
+    35,
+    129,
+    35,
+    129,
+    35,
+    129,
+    35,
+    129,
+    35,
+    129,
+    35,
+    129,
+    35,
+    129,
+    41,
+    118,
+    132,
+    41,
+    118,
+    132,
+    41,
+    118,
+    132
+  ]
+}

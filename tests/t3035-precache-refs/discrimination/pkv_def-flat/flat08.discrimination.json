@@ -1,0 +1,204 @@
+{
+  "decode_mode": "greedy",
+  "donor_ids_sha256": "f465b352301ddef760a090b5219a0c3e837a366c60b7408552068ba0754e1e40",
+  "donor_prompt_id": "donor",
+  "instrument": "T-3035-precache-discrimination",
+  "length": 1801,
+  "mutants": [
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 0,
+      "killed": true,
+      "mutant": "M-res",
+      "observed_tokens": 1
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 38,
+      "killed": true,
+      "mutant": "M-row(0)",
+      "observed_tokens": 39
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 2,
+      "killed": true,
+      "mutant": "M-row(1)",
+      "observed_tokens": 3
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 2,
+      "killed": true,
+      "mutant": "M-row(15)",
+      "observed_tokens": 3
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 6,
+      "killed": true,
+      "mutant": "M-row(16)",
+      "observed_tokens": 7
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 6,
+      "killed": true,
+      "mutant": "M-row(900)",
+      "observed_tokens": 7
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 38,
+      "killed": true,
+      "mutant": "M-row(1784)",
+      "observed_tokens": 39
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 2,
+      "killed": true,
+      "mutant": "M-row(1800)",
+      "observed_tokens": 3
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 2,
+      "killed": true,
+      "mutant": "M-page(0)",
+      "observed_tokens": 3
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 2,
+      "killed": true,
+      "mutant": "M-page(56)",
+      "observed_tokens": 3
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 2,
+      "killed": true,
+      "mutant": "M-page(111)",
+      "observed_tokens": 3
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 2,
+      "killed": true,
+      "mutant": "M-tail",
+      "observed_tokens": 3
+    }
+  ],
+  "page_positions": 16,
+  "population_adequate": false,
+  "population_summary": {
+    "M_res_killed": 10,
+    "M_swap_killed": 0,
+    "M_swap_measured": 0,
+    "all_pages_killed": 10,
+    "prefixes": 10,
+    "required": {
+      "M_res": "10/10 in at least one decode mode",
+      "each_row_stratum": "8/10, and B-1, B, L-1 each 10/10",
+      "pages": "10/10",
+      "swap": "10/10",
+      "tail": "all defined"
+    },
+    "row_killed": {
+      "0": 10,
+      "1..B-1": 10,
+      "B": 10,
+      "B-1": 10,
+      "L-1": 10,
+      "L-B-1": 9,
+      "floor(L/2)": 10
+    },
+    "source_limits": [
+      "M-swap is a K/V pair permutation",
+      "system-first chat makes M-row(0) donor-identical",
+      "commissioning constructions are unauthored"
+    ],
+    "tail_defined": 9,
+    "tail_killed_where_defined": 9,
+    "thresholds_met": false
+  },
+  "probe_sha256": "fede5577519468cd4fe72198663d83c6c931f58722b59835f9e82b5f7bcabcd1",
+  "reason": "M-swap and system-first M-row(0) source contradictions; commissioning unauthored",
+  "screen": null,
+  "status": "QUARANTINED",
+  "target_ids_sha256": "e2d192cd73421bbb1809da4f22bee23b56aacaa06a39fea523611f9e24e0627d",
+  "target_prompt_id": "flat08",
+  "threshold_observation": {
+    "M_res_killed": true,
+    "M_swap_killed": null,
+    "every_page_killed": true,
+    "tail_killed": true
+  },
+  "unedited_roundtrip_tokens": [
+    110,
+    78,
+    234,
+    164,
+    220,
+    27,
+    250,
+    18,
+    100,
+    196,
+    115,
+    216,
+    19,
+    74,
+    198,
+    95,
+    100,
+    7,
+    177,
+    141,
+    141,
+    134,
+    37,
+    157,
+    157,
+    152,
+    141,
+    64,
+    57,
+    57,
+    194,
+    141,
+    73,
+    171,
+    54,
+    141,
+    212,
+    6,
+    40,
+    157,
+    1,
+    177,
+    98,
+    141,
+    164,
+    220,
+    151,
+    224,
+    177,
+    1,
+    177,
+    27,
+    139,
+    198,
+    46,
+    141,
+    116,
+    68,
+    222,
+    141,
+    247,
+    78,
+    54,
+    252
+  ]
+}

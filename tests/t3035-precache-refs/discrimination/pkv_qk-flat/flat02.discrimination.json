@@ -1,0 +1,204 @@
+{
+  "decode_mode": "greedy",
+  "donor_ids_sha256": "f465b352301ddef760a090b5219a0c3e837a366c60b7408552068ba0754e1e40",
+  "donor_prompt_id": "donor",
+  "instrument": "T-3035-precache-discrimination",
+  "length": 380,
+  "mutants": [
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 0,
+      "killed": true,
+      "mutant": "M-res",
+      "observed_tokens": 1
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 8,
+      "killed": true,
+      "mutant": "M-row(0)",
+      "observed_tokens": 9
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 8,
+      "killed": true,
+      "mutant": "M-row(1)",
+      "observed_tokens": 9
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 3,
+      "killed": true,
+      "mutant": "M-row(15)",
+      "observed_tokens": 4
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 4,
+      "killed": true,
+      "mutant": "M-row(16)",
+      "observed_tokens": 5
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 8,
+      "killed": true,
+      "mutant": "M-row(190)",
+      "observed_tokens": 9
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 6,
+      "killed": true,
+      "mutant": "M-row(363)",
+      "observed_tokens": 7
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 3,
+      "killed": true,
+      "mutant": "M-row(379)",
+      "observed_tokens": 4
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 3,
+      "killed": true,
+      "mutant": "M-page(0)",
+      "observed_tokens": 4
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 1,
+      "killed": true,
+      "mutant": "M-page(11)",
+      "observed_tokens": 2
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 4,
+      "killed": true,
+      "mutant": "M-page(22)",
+      "observed_tokens": 5
+    },
+    {
+      "donor_prompt_id": "donor",
+      "first_divergent_token": 3,
+      "killed": true,
+      "mutant": "M-tail",
+      "observed_tokens": 4
+    }
+  ],
+  "page_positions": 16,
+  "population_adequate": false,
+  "population_summary": {
+    "M_res_killed": 10,
+    "M_swap_killed": 0,
+    "M_swap_measured": 0,
+    "all_pages_killed": 9,
+    "prefixes": 10,
+    "required": {
+      "M_res": "10/10 in at least one decode mode",
+      "each_row_stratum": "8/10, and B-1, B, L-1 each 10/10",
+      "pages": "10/10",
+      "swap": "10/10",
+      "tail": "all defined"
+    },
+    "row_killed": {
+      "0": 9,
+      "1..B-1": 9,
+      "B": 9,
+      "B-1": 8,
+      "L-1": 9,
+      "L-B-1": 9,
+      "floor(L/2)": 9
+    },
+    "source_limits": [
+      "M-swap is a K/V pair permutation",
+      "system-first chat makes M-row(0) donor-identical",
+      "commissioning constructions are unauthored"
+    ],
+    "tail_defined": 9,
+    "tail_killed_where_defined": 8,
+    "thresholds_met": false
+  },
+  "probe_sha256": "d8f693a5299109b64f559a08ec995ef4fc557bb8c2084fad5eac473003d4d9f4",
+  "reason": "M-swap and system-first M-row(0) source contradictions; commissioning unauthored",
+  "screen": null,
+  "status": "QUARANTINED",
+  "target_ids_sha256": "cd08f2e47f2858198490e29c24a5c5c00cbbcd94753edc85e7a4d9041199a53d",
+  "target_prompt_id": "flat02",
+  "threshold_observation": {
+    "M_res_killed": true,
+    "M_swap_killed": null,
+    "every_page_killed": true,
+    "tail_killed": true
+  },
+  "unedited_roundtrip_tokens": [
+    180,
+    142,
+    225,
+    153,
+    81,
+    251,
+    108,
+    225,
+    153,
+    81,
+    251,
+    108,
+    27,
+    142,
+    225,
+    251,
+    108,
+    141,
+    129,
+    84,
+    11,
+    91,
+    129,
+    61,
+    143,
+    255,
+    91,
+    129,
+    84,
+    135,
+    143,
+    255,
+    91,
+    129,
+    189,
+    208,
+    129,
+    61,
+    143,
+    255,
+    91,
+    132,
+    251,
+    2,
+    27,
+    180,
+    115,
+    24,
+    225,
+    251,
+    2,
+    218,
+    225,
+    251,
+    2,
+    27,
+    180,
+    229,
+    55,
+    115,
+    170,
+    255,
+    91,
+    177
+  ]
+}
