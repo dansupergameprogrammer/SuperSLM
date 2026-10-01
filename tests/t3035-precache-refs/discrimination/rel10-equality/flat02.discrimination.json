@@ -1,0 +1,9 @@
+{
+  "instrument": "T-3035-precache-discrimination",
+  "mutants": "not measured on rel10",
+  "population_adequate": false,
+  "purpose": "rel10 greedy-only equality with te442",
+  "status": "QUARANTINED",
+  "target_prompt_id": "flat02",
+  "te442_discrimination_record_sha256": "9ca33f96f59966d6f9d0889c95ee453a778f8a10fee0880c55228cbe69adef6b"
+}
