@@ -88,6 +88,7 @@
 #include "superslm/sslm_damped_greedy.h"  // T-2199 Phase A/C: AntiLmState, DampedGreedyScoreAndArgmax
 #include "superslm/sslm_phaseD.h"         // T-2199 Phase D: ValidateDampedGreedyParams
 #include "forward/parallel_split.h"       // ParallelForHookValid, SaturationCounters (decode threading)
+#include "kv_pages.h"                     // Paged-KV plan §3.3: the page module (C3), legacy holders (C4)
 
 #include "bad_alloc_wrap.h"  // N3 pin (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3):
                               // superslm::internal::MaybeThrowInjectedBadAllocFault(), the same
@@ -239,12 +240,13 @@ superslm::GemmThreading MatvecThreading(const sslm_workspace_s* ws) {
 }
 }  // namespace
 
-// C1/C3. A caller-owned KV region, sized for `block_count` SEQUENCES (design Sec7.2, RULED --
-// a block is one whole sequence's entire KV footprint, never a sub-sequence page). `free_list`
-// holds the indices of currently-unclaimed blocks; `mutex` protects it against the concurrent
-// sslm_seq_create/_release race design Sec10 dim3/dim8 names explicitly. `live_refs` is the
-// SSLM_POOL_HAS_LIVE_HANDLES guard's own bookkeeping (design Sec6), incremented/decremented by
-// C3's own draw/return.
+// C1/C3. A caller-owned KV region. Paged-KV plan (rev 16.1) §3.6, step C4: the region is a page
+// pool (src/kv_pages.h) of `block_count * cap_pages` pages of `page_bytes` bytes, B positions each
+// (§3.1), in the same buffer the block pool used: B divides the cap, so `block_count` blocks are
+// exactly that many pages. The page module owns the free list, the refcounts and the pool mutex.
+// `block_count` and `block_size` keep their old meaning for sslm_kv_block_size's callers and the
+// block-index peek seam. `live_refs` is the SSLM_POOL_HAS_LIVE_HANDLES guard's own bookkeeping
+// (design Sec6): one per live holder (sequence or prefix) drawn from this pool.
 struct sslm_kv_pool_s {
 	// C2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): the owning model, bound at
 	// sslm_kv_pool_create time. Design Sec7.2 states "a pool is bound to exactly one model for
@@ -259,10 +261,18 @@ struct sslm_kv_pool_s {
 	size_t buf_size = 0;
 	uint32_t block_count = 0;
 	size_t block_size = 0;
-	std::mutex mutex;
-	std::vector<uint32_t> free_list;
+	superslm::kv_pages::PagePool* pages = nullptr;
+	int64_t page_positions = 0;  // B (§3.1)
+	size_t page_bytes = 0;
+	uint32_t cap_pages = 0;      // ceil(cap / B): a whole_reserve holder's reservation and table size
 	std::atomic<uint32_t> live_refs{0};
+	~sslm_kv_pool_s() { superslm::kv_pages::PoolDestroy(pages); }
 };
+
+// Paged-KV plan §3.4/§3.7: a holder's mode. Every holder step C4 builds is whole_reserve (the
+// no-budget verbs, and restores of whole_reserve SSB6, 1.9.0's SSB5 and SSB4/3/2 blobs); budget
+// mode is step C5's.
+enum class KvHolderMode : uint32_t { kWholeReserve = 0, kBudget = 1 };
 
 // C3. One prefix-under-construction / frozen prefix (design Sec7.2/Sec8). Owns its own
 // hidden_codes scratch (SequenceLayerState's own residual buffer, ABI-internal bookkeeping
@@ -272,8 +282,10 @@ struct sslm_kv_pool_s {
 struct sslm_prefix_s {
 	sslm_model_s* model = nullptr;  // owning model -- SSLM_MODEL_HAS_LIVE_SEQUENCES guard (Sec6)
 	sslm_kv_pool_s* pool = nullptr;
-	uint32_t block_index = 0;
-	uint8_t* kv_block = nullptr;
+	// Paged-KV plan §3.3/§3.4 (C4): the prefix's page holder -- a table of cap_pages entries and,
+	// for a legacy (whole_reserve) prefix, a reserve of cap_pages pages until its first freeze
+	// returns what it did not map.
+	superslm::kv_pages::PageHolder* kv = nullptr;
 	size_t block_size = 0;
 	std::vector<int8_t> hidden_codes_storage;
 	superslm::SequenceLayerState state;
@@ -312,8 +324,14 @@ struct sslm_prefix_s {
 struct sslm_seq_s {
 	sslm_model_s* model = nullptr;  // owning model -- SSLM_MODEL_HAS_LIVE_SEQUENCES guard (Sec6)
 	sslm_kv_pool_s* pool = nullptr;
-	uint32_t block_index = 0;
-	uint8_t* kv_block = nullptr;
+	// Paged-KV plan §3.3/§3.4 (C4): the sequence's page holder. Its table, reserve, `kv_origin`
+	// and limit are guarded by `lifecycle_mutex` (§3.8), except under prefill, which runs under
+	// the single-caller-per-sequence contract as before. `kv_mode`/`kv_budget`/`kv_origin` are
+	// §3.4's: every C4 holder is whole_reserve with budget = cap, so its limit is the cap.
+	superslm::kv_pages::PageHolder* kv = nullptr;
+	KvHolderMode kv_mode = KvHolderMode::kWholeReserve;
+	int32_t kv_budget = 0;
+	int64_t kv_origin = 0;
 	size_t block_size = 0;
 	std::vector<int8_t> hidden_codes_storage;
 	superslm::SequenceLayerState state;
@@ -641,6 +659,40 @@ size_t KvElementBytes(superslm::SslmKvPrecision p) {
 	return p == superslm::SslmKvPrecision::Int16 ? 2 : 1;
 }
 
+// Paged-KV plan (rev 16.1) §3.1: the page geometry, a pure function of the model. B is CFG1's
+// kv_block_size when it is at most the cap and divides it, else the cap (one page per sequence,
+// today's block). page_bytes = L * 2 * H_kv * B * D * elem; cap_pages = cap / B, exact by the
+// choice of B, so cap_pages * page_bytes == sslm_kv_block_size. `ok` is false on a null model or
+// an overflowing product.
+struct PageGeometry {
+	bool ok = false;
+	int64_t page_positions = 0;
+	size_t page_bytes = 0;
+	uint32_t cap_pages = 0;
+};
+
+PageGeometry ComputePageGeometry(const sslm_model_s* model) {
+	PageGeometry g;
+	if (!model) return g;
+	const superslm::SslmModelConfig& c = model->view.config;
+	if (c.context_cap == 0) return g;
+	const uint32_t kvbs = c.kv_block_size;
+	const uint32_t B = (kvbs >= 1 && kvbs <= c.context_cap && c.context_cap % kvbs == 0) ? kvbs : c.context_cap;
+	size_t v = static_cast<size_t>(c.num_hidden_layers);
+	for (size_t f : {size_t{2}, static_cast<size_t>(c.num_key_value_heads), static_cast<size_t>(B),
+	                 static_cast<size_t>(c.head_dim), KvElementBytes(c.kv_precision)}) {
+		size_t out = 0;
+		if (!CheckedMulSizeT(v, f, &out)) return g;
+		v = out;
+	}
+	if (v == 0) return g;
+	g.ok = true;
+	g.page_positions = B;
+	g.page_bytes = v;
+	g.cap_pages = c.context_cap / B;
+	return g;
+}
+
 // C4's own artifact-resolution obligation (design Sec9 C3/Sec3's grounding), discharged by
 // reusing include/superslm/layer_marshal.h -- MarshalLayer per layer, then the embed/final_norm/
 // head resolution tools/sslm_generate.cpp's own "embed/final_norm/head marshaling" block already
@@ -947,6 +999,13 @@ extern "C" size_t sslm_kv_pool_overhead_size(sslm_model model, uint32_t block_co
 	// block_count, per design Sec10 dim2's own overflow-safety cell -- this function has no
 	// status channel, so saturation to SIZE_MAX is its only way to signal "this cannot be
 	// satisfied by any real buffer" without under-reporting.
+	// Paged-KV plan §3.6 (C4): the pool is block_count * ceil(cap/B) pages, indexed by u32, so it
+	// saturates for exactly the counts sslm_kv_pool_create refuses for that reason.
+	const PageGeometry geo = ComputePageGeometry(model);
+	if (!geo.ok ||
+	    static_cast<uint64_t>(block_count) * geo.cap_pages > static_cast<uint64_t>(UINT32_MAX)) {
+		return kSizeMax;
+	}
 	SaturatingAccumulator acc;
 	acc.AddProduct(static_cast<size_t>(block_count), sizeof(uint32_t) * 2);
 	size_t total = 0;
@@ -1072,6 +1131,13 @@ extern "C" sslm_status sslm_kv_pool_create(sslm_model model, void* buf, size_t b
 	if (block_count == 0) return SSLM_INVALID_ARGUMENT;
 	const size_t block_size = sslm_kv_block_size(model);
 	if (block_size == 0) return SSLM_INVALID_ARGUMENT;
+	// Paged-KV plan §3.6 (C4): the pool is block_count * ceil(cap/B) pages, and page indices are
+	// u32, so a count past UINT32_MAX is refused here, with the overflow refusals, before the
+	// buffer-size check (sslm_kv_pool_overhead_size saturates for the same counts, just below).
+	const PageGeometry geo = ComputePageGeometry(model);
+	if (!geo.ok) return SSLM_INVALID_ARGUMENT;
+	const uint64_t page_count64 = static_cast<uint64_t>(block_count) * geo.cap_pages;
+	if (page_count64 > static_cast<uint64_t>(UINT32_MAX)) return SSLM_INVALID_ARGUMENT;
 	const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
 	if (overhead == kSizeMax) return SSLM_INVALID_ARGUMENT;  // saturated: no real buffer suffices
 	size_t blocks_bytes = 0;
@@ -1099,14 +1165,20 @@ extern "C" sslm_status sslm_kv_pool_create(sslm_model model, void* buf, size_t b
 	h->buf_size = buf_size;
 	h->block_count = block_count;
 	h->block_size = block_size;
+	h->page_positions = geo.page_positions;
+	h->page_bytes = geo.page_bytes;
+	h->cap_pages = geo.cap_pages;
 	// P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, third confirmation pass): the
-	// sweep above found `free_list.reserve`/`push_back` can throw `std::bad_alloc` past the
-	// `new (std::nothrow)` check above -- caught here (see CatchAllocationFailure's own comment),
-	// with `h` deleted first so a mid-construction throw never leaks the handle.
+	// page module's free list, refcount and dirty arrays are heap vectors; PoolCreate catches its
+	// own std::bad_alloc and reports it, and CatchAllocationFailure is the boundary for anything
+	// else, with `h` deleted first so a mid-construction failure never leaks the handle.
 	const sslm_status fill_st = CatchAllocationFailure([&]() -> sslm_status {
-		h->free_list.reserve(block_count);
-		for (uint32_t i = 0; i < block_count; ++i) h->free_list.push_back(i);
-		return SSLM_OK;
+		const superslm::kv_pages::PageStatus ps =
+		    superslm::kv_pages::PoolCreate(static_cast<uint8_t*>(buf), static_cast<uint32_t>(page_count64),
+		                                   geo.page_bytes, geo.page_positions, &h->pages);
+		if (ps == superslm::kv_pages::PageStatus::kOk) return SSLM_OK;
+		return ps == superslm::kv_pages::PageStatus::kAllocationFailed ? SSLM_ALLOCATION_FAILED
+		                                                                : SSLM_INVALID_ARGUMENT;
 	});
 	if (fill_st != SSLM_OK) {
 		delete h;
@@ -1356,61 +1428,142 @@ extern "C" sslm_status sslm_model_unmap(sslm_model model) {
 
 namespace {
 
-// Draws one free block from `pool`. SSLM_KV_POOL_EXHAUSTED if none remain -- design Sec7.2's
-// ruled exhaustion timing: fires at draw time (sslm_seq_create/sslm_prefix_begin), never
-// mid-prefill (a block, once drawn, is never re-drawn mid-construction).
-//
-// Zero-fills the drawn block before handing it back (T-2132 M2 fix, Claude/Curie/
-// t2130-g5-red-suite-composition-joins-2026-08-17.md): a block's own not-yet-written region
-// (padding within a per-token K/V span, or any capacity a given write path never touches) was
-// previously left holding whatever the block last contained -- either ReturnBlock's own 0xCD
-// poison (a block that was drawn, used, and released before) or the pool's own untouched
-// creation-time content (0x00 for a block never drawn before this call, in every configuration
-// this build observed; not itself a documented guarantee of the caller-owned buf, which is why
-// this call defines the state explicitly rather than relying on it). `sslm_seq_save` (below)
-// memcpy's the ENTIRE block, so an unwritten byte is as observable to a caller as a written
-// one -- content-identical sequences must therefore start from a content-identical block,
-// regardless of the pool's own draw/return history. Zeroing here (at the single point every
-// draw site funnels through) rather than the whole pool at `sslm_kv_pool_create` time means the
-// cost is paid once per live block, not once per pool byte, and a block a caller immediately
-// overwrites in full (the common case) pays nothing extra beyond the memset itself. This does
-// not weaken ReturnBlock's own poison-fill leak-check (Sec17 dim1): that obligation is "no
-// content from the PRIOR sequence survives release," which a defined post-draw zero state
-// still proves -- if prior content leaked through, the drawn block would read non-zero at a
-// position no write touched, exactly as detectable as it was against the poison pattern.
-sslm_status DrawBlock(sslm_kv_pool_s* pool, uint32_t* out_block_index) {
-	uint32_t block_index;
-	{
-		std::lock_guard<std::mutex> lock(pool->mutex);
-		if (pool->free_list.empty()) return SSLM_KV_POOL_EXHAUSTED;
-		block_index = pool->free_list.back();
-		pool->free_list.pop_back();
-		pool->live_refs.fetch_add(1, std::memory_order_acq_rel);
+// Paged-KV plan (rev 16.1) §3.3-§3.4, step C4: the legacy holders' page helpers. They replace the
+// block pool's DrawBlock/ReturnBlock: a holder (sequence or prefix) draws its whole reservation
+// at create (pool -> reserve, under the pool mutex), maps pages from that reserve as writes reach
+// them (no pool mutex, no allocation), and gives them back at release (poisoned with 0xCD iff the
+// page was mapped since its draw, §3.3). There is no zero fill anywhere: rows at or past the live
+// width are never read (G4), and the save gathers only valid rows, substituting zeros for the
+// rest (§3.7), which is what DrawBlock's fill and sslm_seq_reset's memset used to guarantee.
+
+sslm_status MapPageStatus(superslm::kv_pages::PageStatus ps) {
+	switch (ps) {
+		case superslm::kv_pages::PageStatus::kOk:
+			return SSLM_OK;
+		case superslm::kv_pages::PageStatus::kExhausted:
+			return SSLM_KV_POOL_EXHAUSTED;
+		case superslm::kv_pages::PageStatus::kAllocationFailed:
+			return SSLM_ALLOCATION_FAILED;
+		case superslm::kv_pages::PageStatus::kInvalidArgument:
+			return SSLM_INVALID_ARGUMENT;
+		case superslm::kv_pages::PageStatus::kRefcountUnderflow:
+		default:
+			// §3.3: the release-build underflow check is unreachable by construction; when it
+			// fires, the verb reports an internal failure in the family for causes with no
+			// status of their own (CatchAllocationFailure's comment).
+			return SSLM_ARTIFACT_REJECTED;
 	}
-	// S3 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): the memset moved OUTSIDE the lock,
-	// mirroring ReturnBlock's own sibling shape (fill outside, publish under lock) below.
-	// Reasoning: once `block_index` is popped off `free_list` inside the critical section
-	// above, no OTHER thread can draw that same index again -- `free_list` is the pool's only
-	// publication mechanism for "this block is available," and this block is no longer on it.
-	// The memset therefore touches memory no concurrent DrawBlock/ReturnBlock call can reach,
-	// so it needs no lock at all; the draw is still atomic (the free-list pop/live_refs bump
-	// happen together, under the lock, before any caller sees `*out_block_index`), only the
-	// ~448 MB fill (the 1.5B fixture's own block_size) no longer serializes every concurrent
-	// sslm_seq_create/sslm_prefix_begin/sslm_seq_restore behind one pool-wide mutex.
-	std::memset(static_cast<uint8_t*>(pool->buf) + static_cast<size_t>(block_index) * pool->block_size,
-	            0, pool->block_size);
-	*out_block_index = block_index;
+}
+
+// A whole_reserve holder: a table of cap_pages entries and cap_pages pages drawn pool -> reserve
+// (§3.4: "legacy create / legacy prefix begin ... reserves ceil(cap/B)"). SSLM_KV_POOL_EXHAUSTED
+// with nothing drawn when the pool has fewer free pages. Counts the holder in live_refs.
+sslm_status CreateWholeReserveHolder(sslm_kv_pool_s* pool, superslm::kv_pages::PageHolder** out) {
+	*out = nullptr;
+	const superslm::kv_pages::PageStatus ps =
+	    superslm::kv_pages::HolderCreate(pool->pages, pool->cap_pages, pool->cap_pages, out);
+	if (ps != superslm::kv_pages::PageStatus::kOk) return MapPageStatus(ps);
+	pool->live_refs.fetch_add(1, std::memory_order_acq_rel);
 	return SSLM_OK;
 }
 
-// Poison-fills and returns `block_index` to `pool`'s free list -- design Sec7.2's own
-// "poison-filled" leak-check obligation (Sec17 dim 1: no leaked content crosses a
-// release/create boundary).
-void ReturnBlock(sslm_kv_pool_s* pool, uint32_t block_index, uint8_t* kv_block, size_t block_size) {
-	std::memset(kv_block, 0xCD, block_size);
-	std::lock_guard<std::mutex> lock(pool->mutex);
-	pool->free_list.push_back(block_index);
+// Releases a holder made by CreateWholeReserveHolder: every mapped page and the reserve back to
+// the pool by §3.3's release rows (poisoned iff dirty), and live_refs dropped.
+sslm_status ReleaseHolder(sslm_kv_pool_s* pool, superslm::kv_pages::PageHolder* holder) {
+	if (!holder) return SSLM_OK;
+	const superslm::kv_pages::PageStatus ps = superslm::kv_pages::HolderRelease(holder);
 	pool->live_refs.fetch_sub(1, std::memory_order_acq_rel);
+	return MapPageStatus(ps);
+}
+
+// The holder's K/V as the engine's page view (§3.1): its own pool's base, its table, `mapped`
+// pages of B positions, page_bytes apart.
+superslm::KvPageView ViewOf(const sslm_kv_pool_s* pool, const superslm::kv_pages::PageHolder* holder) {
+	return superslm::KvPageView{pool->pages->base, holder->table.get(), holder->mapped, pool->page_positions,
+	                            pool->page_bytes};
+}
+
+// The hot-path map (§3.6): maps pages from the holder's own reserve until the table covers
+// `positions` positions. No pool mutex, no allocation. The reserve is checked for every page the
+// call needs before the first is mapped, so a refusal maps nothing: SSLM_KV_POOL_EXHAUSTED for an
+// empty reserve below the limit (unreachable by §3.4, a real check all the same, cell 11.2), and
+// SSLM_INVALID_ARGUMENT for positions past the table (the cap checks run first, so unreachable).
+sslm_status MapPagesFor(const sslm_kv_pool_s* pool, superslm::kv_pages::PageHolder* holder, int64_t positions) {
+	const int64_t B = pool->page_positions;
+	if (positions <= 0) return SSLM_OK;
+	const uint64_t needed = static_cast<uint64_t>((positions + B - 1) / B);
+	if (needed <= holder->mapped) return SSLM_OK;
+	if (needed > holder->table_entries) return SSLM_INVALID_ARGUMENT;
+	if (needed - holder->mapped > holder->reserve.size()) return SSLM_KV_POOL_EXHAUSTED;
+	while (holder->mapped < needed) {
+		const superslm::kv_pages::PageStatus ps = superslm::kv_pages::HolderMapNext(holder);
+		if (ps != superslm::kv_pages::PageStatus::kOk) return MapPageStatus(ps);
+	}
+	return SSLM_OK;
+}
+
+// The address of (layer, half, kv_head, position)'s row in a holder's pages, by §3.1's formula,
+// reading the table through the module's address path (which traps under the test library's
+// table sentinel when the entry is at or above `mapped`, cell 7.13). Every ABI read or write of a
+// holder's rows outside the engine goes through here.
+uint8_t* HolderRow(const sslm_kv_pool_s* pool, const superslm::kv_pages::PageHolder* holder, size_t run,
+                   int64_t position, size_t head_dim) {
+	const int64_t B = pool->page_positions;
+	const uint32_t page = superslm::kv_pages::HolderTableEntryForAddress(holder, static_cast<uint32_t>(position / B));
+	return superslm::kv_pages::PageBase(pool->pages, page) + run * static_cast<size_t>(B) * head_dim +
+	       static_cast<size_t>(position % B) * head_dim;
+}
+
+// The K/V section of 1.9.0's SSB5 (§3.7 Writers, rev 16): the whole block in the flat layout
+// [layer][K|V][kv_head][pos < cap][d], gathered from the holder's pages -- rows [0, L') from the
+// pages, zeros for every position past L' and for the mid-token row's layers >= layer_index,
+// whatever the pages hold. Byte-equal to the block 1.9.0 writes for the same state. `dst` has
+// block_size bytes.
+size_t KvRuns(const superslm::SslmModelConfig& c) {
+	// One run = one (layer, half, kv_head) triple, in the flat and canonical order.
+	return static_cast<size_t>(c.num_hidden_layers) * 2u * c.num_key_value_heads;
+}
+
+void GatherFlatBlock(const sslm_kv_pool_s* pool, const sslm_seq_s* seq, const superslm::SslmModelConfig& c,
+                     uint8_t* dst, size_t block_size) {
+	std::memset(dst, 0, block_size);
+	const size_t D = c.head_dim;
+	const size_t cap = c.context_cap;
+	const int64_t B = pool->page_positions;
+	const int64_t L = seq->state.context_length;
+	const uint32_t layer_index = seq->state.layer_index;
+	const size_t per_layer = 2u * static_cast<size_t>(c.num_key_value_heads);
+	const size_t runs = KvRuns(c);
+	for (size_t r = 0; r < runs; ++r) {
+		uint8_t* run_dst = dst + r * cap * D;
+		for (int64_t p0 = 0; p0 < L; p0 += B) {
+			const int64_t n = std::min<int64_t>(B, L - p0);
+			std::memcpy(run_dst + static_cast<size_t>(p0) * D, HolderRow(pool, seq->kv, r, p0, D),
+			            static_cast<size_t>(n) * D);
+		}
+		// The mid-token row: layers below layer_index were written this token; the rest are zero.
+		if (layer_index > 0 && r / per_layer < layer_index) {
+			std::memcpy(run_dst + static_cast<size_t>(L) * D, HolderRow(pool, seq->kv, r, L, D), D);
+		}
+	}
+}
+
+// Rows [0, rows) of every run, copied from `src` laid out as [run][pos < src_stride][d] into the
+// holder's pages (which must already map them): a restore's scatter, from a whole block
+// (src_stride = cap) or an SSB6 canonical section (src_stride = L').
+void ScatterRows(const sslm_kv_pool_s* pool, superslm::kv_pages::PageHolder* holder,
+                 const superslm::SslmModelConfig& c, const uint8_t* src, int64_t src_stride, int64_t rows) {
+	const size_t D = c.head_dim;
+	const int64_t B = pool->page_positions;
+	const size_t runs = KvRuns(c);
+	for (size_t r = 0; r < runs; ++r) {
+		const uint8_t* run_src = src + r * static_cast<size_t>(src_stride) * D;
+		for (int64_t p0 = 0; p0 < rows; p0 += B) {
+			const int64_t n = std::min<int64_t>(B, rows - p0);
+			std::memcpy(HolderRow(pool, holder, r, p0, D), run_src + static_cast<size_t>(p0) * D,
+			            static_cast<size_t>(n) * D);
+		}
+	}
 }
 
 // EmbedEntry+RunLayerLoop's own real, distinguishable domain rejections (checked_chain_funnel.h/
@@ -1473,7 +1626,7 @@ const superslm::LayerWeights* ResolveLayers(sslm_model_s* model, sslm_adapter_s*
 // (nullptr for prefix construction, design Sec12's own "no dedicated stats call for a prefix")
 // is incremented once per token admitted under SCHEMA_CONTENT (design Sec6 G5-3/Sec7 dim7).
 sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerState& state,
-                                    uint8_t* kv_block, size_t block_size, const int32_t* tokens,
+                                    sslm_kv_pool_s* kv_pool, superslm::kv_pages::PageHolder* kv, const int32_t* tokens,
                                     int32_t count, int32_t chunk_budget, int32_t* consumed,
                                     int32_t* out_last_token, sslm_adapter_s* adapter,
                                     sslm_workspace_s* ws, sslm_span_kind kind,
@@ -1579,6 +1732,11 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
 	// admitted tokens -- zero forward-pass compute for anything past the admitted prefix,
 	// matching §15.3's own extension of the partial-consumption contract to compute cost.
 	if (admit_count > 0) {
+		// Paged-KV plan §3.6 (C4): the hot-path map -- the pages the admitted rows land in, from
+		// the holder's own reserve, before any state moves. No pool mutex, no allocation; a
+		// refusal (an empty reserve below the limit, unreachable by §3.4) writes no row.
+		const sslm_status map_st = MapPagesFor(kv_pool, kv, state.context_length + admit_count);
+		if (map_st != SSLM_OK) return map_st;
 		std::vector<superslm::CarriedScale> hidden_scales(static_cast<size_t>(admit_count));
 		for (int32_t i = 0; i < admit_count; ++i) {
 			superslm::CarriedScale embed_scale{};
@@ -1598,7 +1756,7 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
 		    embed_codes, hidden_scales.data(), static_cast<size_t>(admit_count), layers,
 		    c.num_hidden_layers, c.hidden_size, c.head_dim, c.num_key_value_heads,
 		    c.intermediate_size, c.context_cap, state.context_length, model->view.rope_tables,
-		    kv_block, block_size, /*option_g_fused_k_landing=*/false, &state.kv_saturation_count,
+		    ViewOf(kv_pool, kv), /*option_g_fused_k_landing=*/false, &state.kv_saturation_count,
 		    /*site_prefix=*/{}, nullptr,
 		    /*q_width=*/static_cast<size_t>(c.num_attention_heads) * c.head_dim,
 		    // The per-site census the total sums, filled here as RunLayerLoop's decode path
@@ -1637,7 +1795,7 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
 }
 
 sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState& state,
-                                uint8_t* kv_block, size_t block_size, const int32_t* tokens,
+                                sslm_kv_pool_s* kv_pool, superslm::kv_pages::PageHolder* kv, const int32_t* tokens,
                                 int32_t count, int32_t chunk_budget, int32_t* consumed,
                                 int32_t* out_last_token, sslm_adapter_s* adapter,
                                 sslm_workspace_s* ws, sslm_span_kind kind, sslm_schema bound_schema,
@@ -1651,7 +1809,7 @@ sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState
 	const int64_t context_length_before = state.context_length;
 	const superslm::SaturationCounters counters_before = superslm::SaturationCounters::Snapshot(state);
 	const sslm_status st = CatchAllocationFailure([&]() -> sslm_status {
-		return PrefillWholeTokensImpl(model, state, kv_block, block_size, tokens, count,
+		return PrefillWholeTokensImpl(model, state, kv_pool, kv, tokens, count,
 		                               chunk_budget, consumed, out_last_token, adapter, ws, kind,
 		                               bound_schema, walk_state, forced_token_count);
 	});
@@ -1725,36 +1883,35 @@ extern "C" sslm_status sslm_prefix_begin(sslm_model model, sslm_kv_pool* pool, s
 	// C2: reject a pool bound to a different model before drawing from it (design Sec7.2's
 	// "structurally impossible" claim, enforced rather than assumed).
 	if (p->model != model) return SSLM_INVALID_ARGUMENT;
-	uint32_t block_index = 0;
-	const sslm_status draw_st = DrawBlock(p, &block_index);
+	// Paged-KV plan §3.4 (C4): a legacy prefix is a whole_reserve holder -- ceil(cap/B) pages
+	// pool -> reserve, refused SSLM_KV_POOL_EXHAUSTED with nothing drawn when the pool has fewer.
+	superslm::kv_pages::PageHolder* kv = nullptr;
+	const sslm_status draw_st = CreateWholeReserveHolder(p, &kv);
 	if (draw_st != SSLM_OK) return draw_st;
 
-	// M4 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): return the block before reporting
-	// allocation failure, or the pool permanently loses it (and sslm_kv_pool_destroy would then
-	// reject forever with SSLM_POOL_HAS_LIVE_HANDLES for a block nobody can ever release). N3
+	// M4 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): return the pages before reporting
+	// allocation failure, or the pool permanently loses them (and sslm_kv_pool_destroy would then
+	// reject forever with SSLM_POOL_HAS_LIVE_HANDLES for a holder nobody can ever release). N3
 	// (same casebook, Sec6.3): return SSLM_ALLOCATION_FAILED rather than throw across this
 	// extern "C" boundary -- see sslm_workspace_create's own identical comment.
 	auto* h = new (std::nothrow) sslm_prefix_s();
 	if (!h) {
-		ReturnBlock(p, block_index,
-		            static_cast<uint8_t*>(p->buf) + static_cast<size_t>(block_index) * p->block_size,
-		            p->block_size);
+		ReleaseHolder(p, kv);
 		return SSLM_ALLOCATION_FAILED;
 	}
 	h->model = model;
 	h->pool = p;
-	h->block_index = block_index;
-	h->kv_block = static_cast<uint8_t*>(p->buf) + static_cast<size_t>(block_index) * p->block_size;
+	h->kv = kv;
 	h->block_size = p->block_size;
 	// P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3): `.assign` can throw past the
-	// `new (std::nothrow)` check above -- caught, with both the handle AND its own drawn block
+	// `new (std::nothrow)` check above -- caught, with both the handle AND its own drawn pages
 	// released on failure (matching M4's own leak discipline).
 	const sslm_status assign_st = CatchAllocationFailure([&]() -> sslm_status {
 		h->hidden_codes_storage.assign(model->view.config.hidden_size, 0);
 		return SSLM_OK;
 	});
 	if (assign_st != SSLM_OK) {
-		ReturnBlock(p, block_index, h->kv_block, p->block_size);
+		ReleaseHolder(p, kv);
 		delete h;
 		return assign_st;
 	}
@@ -1809,23 +1966,31 @@ extern "C" sslm_status sslm_prefix_prefill(sslm_model model, sslm_prefix prefix,
 		return SSLM_SCHEMA_SPAN_UNBOUND;
 	}
 
-	return PrefillWholeTokens(model, prefix->state, prefix->kv_block, prefix->block_size, tokens,
+	return PrefillWholeTokens(model, prefix->state, prefix->pool, prefix->kv, tokens,
 	                           count, chunk_budget, consumed, &prefix->current_token, nullptr, ws,
 	                           kind, prefix->bound_schema, &prefix->dfa_walk_state, nullptr);
 }
 
+// Paged-KV plan §3.4 (C4, rev 4): the first freeze returns the prefix's unmapped reserve pages
+// to the pool, so the frozen prefix keeps exactly the ceil(len/B) pages it mapped; its mapped
+// pages are untouched. Freeze stays idempotent (G33): a later call returns SSLM_OK with no pool
+// effect. It only ever increases free pages, so it can admit a handle the block pool would
+// refuse, never refuse one it admits (§3.5).
 extern "C" sslm_status sslm_prefix_freeze(sslm_prefix prefix) {
 	if (!prefix) return SSLM_INVALID_ARGUMENT;
+	if (prefix->frozen) return SSLM_OK;
 	prefix->frozen = true;
-	return SSLM_OK;
+	return MapPageStatus(superslm::kv_pages::HolderReturnReserve(prefix->kv, nullptr));
 }
 
 extern "C" sslm_status sslm_prefix_release(sslm_prefix prefix) {
 	if (!prefix) return SSLM_INVALID_ARGUMENT;
-	ReturnBlock(prefix->pool, prefix->block_index, prefix->kv_block, prefix->block_size);
+	// §3.3's release rows: every mapped page and any reserve left go back to the pool, poisoned
+	// iff dirty. No C4 verb shares a page, so a legacy prefix is never a share source.
+	const sslm_status st = ReleaseHolder(prefix->pool, prefix->kv);
 	prefix->model->live_refs.fetch_sub(1, std::memory_order_acq_rel);
 	delete prefix;
-	return SSLM_OK;
+	return st;
 }
 
 extern "C" sslm_status sslm_seq_create(sslm_model model, sslm_kv_pool* pool, sslm_seq* out) {
@@ -1835,23 +2000,25 @@ extern "C" sslm_status sslm_seq_create(sslm_model model, sslm_kv_pool* pool, ssl
 	sslm_kv_pool_s* p = *pool;
 	// C2: see sslm_prefix_begin's own identical check.
 	if (p->model != model) return SSLM_INVALID_ARGUMENT;
-	uint32_t block_index = 0;
-	const sslm_status draw_st = DrawBlock(p, &block_index);
+	// Paged-KV plan §3.4 (C4): a legacy create is a whole_reserve holder, budget = cap --
+	// ceil(cap/B) pages pool -> reserve, so N blocks of the old verb admit exactly N creates.
+	superslm::kv_pages::PageHolder* kv = nullptr;
+	const sslm_status draw_st = CreateWholeReserveHolder(p, &kv);
 	if (draw_st != SSLM_OK) return draw_st;
 
 	// M4/N3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): see sslm_prefix_begin's own
 	// identical return-before-throw (M4) and no-throw-across-the-boundary (N3) fixes.
 	auto* h = new (std::nothrow) sslm_seq_s();
 	if (!h) {
-		ReturnBlock(p, block_index,
-		            static_cast<uint8_t*>(p->buf) + static_cast<size_t>(block_index) * p->block_size,
-		            p->block_size);
+		ReleaseHolder(p, kv);
 		return SSLM_ALLOCATION_FAILED;
 	}
 	h->model = model;
 	h->pool = p;
-	h->block_index = block_index;
-	h->kv_block = static_cast<uint8_t*>(p->buf) + static_cast<size_t>(block_index) * p->block_size;
+	h->kv = kv;
+	h->kv_mode = KvHolderMode::kWholeReserve;
+	h->kv_budget = static_cast<int32_t>(model->view.config.context_cap);
+	h->kv_origin = 0;
 	h->block_size = p->block_size;
 	// P1 -- see sslm_prefix_begin's own identical fix.
 	const sslm_status assign_st = CatchAllocationFailure([&]() -> sslm_status {
@@ -1859,7 +2026,7 @@ extern "C" sslm_status sslm_seq_create(sslm_model model, sslm_kv_pool* pool, ssl
 		return SSLM_OK;
 	});
 	if (assign_st != SSLM_OK) {
-		ReturnBlock(p, block_index, h->kv_block, p->block_size);
+		ReleaseHolder(p, kv);
 		delete h;
 		return assign_st;
 	}
@@ -1909,14 +2076,16 @@ extern "C" sslm_status sslm_seq_release(sslm_seq seq) {
 		std::lock_guard<std::mutex> lock(seq->lifecycle_mutex);
 	}
 	// T-2199 Phase D3 (plan Sec9 dim3, teardown-during-flight): this sequence's own anti-LM
-	// state, if it was ever created, is destroyed here -- before ReturnBlock/delete, matching
-	// this function's own established teardown order (release owned resources, then the pool
-	// block, then the handle itself).
+	// state, if it was ever created, is destroyed here -- before ReleaseHolder/delete, matching
+	// this function's own established teardown order (release owned resources, then the page
+	// holder, then the handle itself).
 	ClearDampedGreedyState(seq);
-	ReturnBlock(seq->pool, seq->block_index, seq->kv_block, seq->block_size);
+	// Paged-KV plan §3.3's release rows (C4): every mapped page and the reserve back to the pool,
+	// each poisoned with 0xCD iff it was mapped since its draw (dim 1's leak check).
+	const sslm_status st = ReleaseHolder(seq->pool, seq->kv);
 	seq->model->live_refs.fetch_sub(1, std::memory_order_acq_rel);
 	delete seq;
-	return SSLM_OK;
+	return st;
 }
 
 // D-SLM7625: binding is a lifecycle permission, not a progress inference. Create/reset grant it;
@@ -1936,16 +2105,16 @@ extern "C" sslm_status sslm_seq_set_schema(sslm_seq seq, sslm_schema schema) {
 extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
 	if (!seq) return SSLM_INVALID_ARGUMENT;
 	std::lock_guard<std::mutex> lifecycle_lock(seq->lifecycle_mutex);
-	// T-2132 M2 fix (same class as DrawBlock's own zero-fill, above): reset re-exposes this
-	// block's not-yet-written region to the NEXT generation exactly the way a fresh draw does --
-	// left at 0xCD (the poison this call used before this fix), a reset-and-reused sequence's
-	// save-blob would disagree with a content-identical freshly-drawn sequence's, at whatever
-	// bytes neither generation's own writes touch, breaking the same determinism law DrawBlock's
-	// comment states. Zero (DrawBlock's own defined post-draw state) is the correct target here,
-	// not the pre-fix poison value: the leak this memset guards against -- the PRIOR generation's
-	// real K/V content surviving into the next one -- is caught exactly as well by a defined zero
-	// as by 0xCD (either one is trivially distinct from real, non-degenerate model output).
-	std::memset(seq->kv_block, 0, seq->block_size);
+	// Paged-KV plan §3.3/§3.4 (C4, rev 15.2): reset unmaps -- private pages back to the holder's
+	// own reserve (the reservation is kept, so reset-and-reuse is never refused), shared ones
+	// decremented -- and no longer memsets. The T-2132 M2 memset existed because sslm_seq_save
+	// copied the whole block, so a reused sequence's blob differed from a fresh one's at bytes
+	// neither generation wrote. The save now gathers rows [0, L') from the pages and writes zeros
+	// for everything else (§3.7), so those bytes are no longer observable; the prior generation's
+	// rows stay only in pages that return to this holder's own reserve, which no ABI read reaches
+	// (reads stop at the live width, G4) and which are poisoned before any other holder gets them.
+	const sslm_status unmap_st = MapPageStatus(superslm::kv_pages::HolderUnmapAll(seq->kv));
+	seq->kv_origin = 0;
 	seq->state.context_length = 0;
 	seq->state.kv_saturation_count = 0;
 	seq->state.kv_landing_saturation_count = 0;
@@ -1974,7 +2143,7 @@ extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
 	// Damped-greedy history belongs to the generation being reset, just like K/V and the
 	// pending token above. Keeping it would make reset-and-restart depend on the prior run.
 	ClearDampedGreedyState(seq);
-	return SSLM_OK;
+	return unmap_st;
 }
 
 extern "C" sslm_status sslm_seq_schema_bound(sslm_seq seq, int32_t* out_schema_bound) {
@@ -2040,6 +2209,22 @@ extern "C" sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix) {
 	if (prefix_has_real_progress && seq->bound_schema != prefix->bound_schema) {
 		return SSLM_PREFIX_SCHEMA_MISMATCH;
 	}
+	// Paged-KV plan §3.5 (C4): a whole_reserve adopter copy-adopts -- the prefix's ceil(len/B)
+	// occupied pages into pages of its own reserve, after unmapping its own (as reset does). It
+	// never maps a prefix page, so it works across pools as before, and never draws from the
+	// pool. Its own private pages return to its reserve first, so the reserve covers the copy
+	// whenever the reservation is whole (§3.4); checked here, before any state moves.
+	const int64_t adopt_B = seq->pool->page_positions;
+	const int64_t adopt_len = prefix->state.context_length;
+	const uint32_t adopt_pages = static_cast<uint32_t>((adopt_len + adopt_B - 1) / adopt_B);
+	{
+		const superslm::kv_pages::PageHolder* kv = seq->kv;
+		const uint64_t after_unmap = kv->reserve.size() + (kv->mapped - kv->shared - kv->materialized);
+		if (adopt_pages > kv->table_entries || adopt_pages > superslm::kv_pages::HolderMapped(prefix->kv)) {
+			return SSLM_INVALID_ARGUMENT;
+		}
+		if (adopt_pages > after_unmap) return SSLM_KV_POOL_EXHAUSTED;
+	}
 	if (prefix_has_real_progress) {
 		seq->dfa_walk_state = prefix->dfa_walk_state;
 	} else {
@@ -2063,7 +2248,24 @@ extern "C" sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix) {
 		seq->dfa_walk_state = seq->bound_schema ? 0u : kDfaWalkStateUnused;
 	}
 
-	std::memcpy(seq->kv_block, prefix->kv_block, seq->block_size);
+	{
+		// The copy: unmap (private pages back to the reserve), map the prefix's page count from
+		// the reserve, then copy each occupied page whole -- O(prefix length), not O(cap). Both
+		// tables are read through the module's address path (the 7.13 sentinel's trap).
+		superslm::kv_pages::PageHolder* kv = seq->kv;
+		const sslm_status unmap_st = MapPageStatus(superslm::kv_pages::HolderUnmapAll(kv));
+		if (unmap_st != SSLM_OK) return unmap_st;
+		const sslm_status map_st = MapPagesFor(seq->pool, kv, adopt_len);
+		if (map_st != SSLM_OK) return map_st;
+		const size_t page_bytes = seq->pool->page_bytes;
+		for (uint32_t i = 0; i < adopt_pages; ++i) {
+			const uint32_t src = superslm::kv_pages::HolderTableEntryForAddress(prefix->kv, i);
+			const uint32_t dst = superslm::kv_pages::HolderTableEntryForAddress(kv, i);
+			std::memcpy(superslm::kv_pages::PageBase(seq->pool->pages, dst),
+			            superslm::kv_pages::PageBase(prefix->pool->pages, src), page_bytes);
+		}
+		seq->kv_origin = adopt_len;
+	}
 	// A frozen prefix contains prompt/forced forward state, never this sequence's prior generated
 	// token history. Adoption replaces the sequence origin, so any warm anti-LM must be discarded.
 	ClearDampedGreedyState(seq);
@@ -2136,7 +2338,7 @@ extern "C" sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_
 		return SSLM_SCHEMA_SPAN_UNBOUND;
 	}
 
-	const sslm_status st = PrefillWholeTokens(model, seq->state, seq->kv_block, seq->block_size,
+	const sslm_status st = PrefillWholeTokens(model, seq->state, seq->pool, seq->kv,
 	                                           tokens, count, chunk_budget, consumed,
 	                                           &seq->current_token, seq->adapter_handle, ws, kind,
 	                                           seq->bound_schema, &seq->dfa_walk_state,
@@ -2453,6 +2655,21 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 					out_tokens[i] = -1;
 					return SSLM_CONTEXT_CAP_EXCEEDED;
 				}
+			}
+			// Paged-KV plan §3.6 (C4): the hot-path map -- at most one page, for the row this
+			// token writes at context_length, from the sequence's own reserve, under the
+			// lifecycle lock this call already holds. No pool mutex, no allocation. Checked after
+			// the cap check (a legacy holder at the cap keeps today's status) and before the
+			// embed, so a refusal (an empty reserve below the limit, unreachable by §3.4; cell
+			// 11.2) writes no row and leaves the sequence as it was.
+			{
+				const sslm_status map_st = MapPagesFor(seq->pool, seq->kv, seq->state.context_length + 1);
+				if (map_st != SSLM_OK) {
+					out_tokens[i] = -1;
+					return map_st;
+				}
+			}
+			if (seq->state.layer_index == 0) {
 				superslm::CarriedScale embed_scale{};
 				const superslm::SslmForwardStatus est = superslm::EmbedEntry(
 				    seq->current_token, static_cast<int32_t>(c.vocab_size),
@@ -2475,7 +2692,8 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 			    seq->state, layers, c.num_hidden_layers,
 			    static_cast<uint32_t>(params->layer_budget), c.hidden_size, c.head_dim,
 			    c.num_key_value_heads, c.intermediate_size, c.context_cap, model->view.rope_tables,
-			    seq->kv_block, seq->block_size, /*site_prefix=*/{}, /*token_index=*/0, nullptr,
+			    ViewOf(seq->pool, seq->kv), superslm::OptionGKLandingMode::kLegacy,
+			    /*site_prefix=*/{}, /*token_index=*/0, nullptr,
 			    /*q_width=*/static_cast<size_t>(c.num_attention_heads) * c.head_dim,
 			    MatvecThreading(ws));
 			if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
@@ -2867,6 +3085,14 @@ namespace {
 // would discard a recorded value. Restore does not require the four to sum to the total: a
 // sequence restored from a legacy blob and saved again as 'SSB5' legitimately carries a sum below
 // its total.
+// Paged-KV plan (rev 16.1) §3.7: 'SSB6', the paged build's format -- 1.9.0's 'SSB5' fixed header
+// unchanged, then kv_mode (LE32 at 156: 0 whole_reserve, 1 budget), budget (LE32 at 160) and
+// origin (LE64 at 164), 172 bytes; the residual and the anti-LM history as 'SSB5'; then
+// kv_positions (LE64) = L' = context_length + (layer_index > 0 ? 1 : 0) and the rows [0, L') in
+// canonical layout ([layer][K|V][kv_head][pos < L'][d], the flat layout with the cap replaced by
+// L'). Step C4 reads it (whole_reserve blobs; budget mode is step C5's); no C4 writer emits it --
+// legacy holders write 1.9.0's 'SSB5', gathered from their pages.
+constexpr uint8_t kSeqBlobMagicV6[4] = {'S', 'S', 'B', '6'};
 constexpr uint8_t kSeqBlobMagicV5[4] = {'S', 'S', 'B', '5'};
 constexpr uint8_t kSeqBlobMagicV4[4] = {'S', 'S', 'B', '4'};
 constexpr uint8_t kSeqBlobMagicV3[4] = {'S', 'S', 'B', '3'};
@@ -2910,6 +3136,8 @@ constexpr size_t kSeqBlobV4FixedHeaderBytes = 124;
 // 'SSB5': the 'SSB4' fixed header plus the four per-site saturation counts (4 x LE64) at
 // offsets 124, 132, 140 and 148. Nothing at or before offset 124 moves.
 constexpr size_t kSeqBlobV5FixedHeaderBytes = 156;
+// 'SSB6': the 'SSB5' fixed header plus kv_mode, budget and origin at 156, 160 and 164.
+constexpr size_t kSeqBlobV6FixedHeaderBytes = 172;
 
 }  // namespace
 
@@ -3026,7 +3254,11 @@ extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
 	}
 	WriteLE32(p + off, 1);  // kv_block_count -- always 1 (Sec7.2's ruled unit)
 	off += 4;
-	std::memcpy(p + off, seq->kv_block, seq->block_size);
+	// Paged-KV plan §3.7 (C4, rev 16): a whole_reserve holder writes 1.9.0's 'SSB5' unchanged in
+	// layout, its block gathered from the pages -- rows [0, L') from the pages, zeros past L' and
+	// for the mid-token row's layers >= layer_index -- so the blob is byte-equal to the one 1.9.0
+	// writes for the same state, and 1.9.0 reads it. (Budget holders write 'SSB6', step C5.)
+	GatherFlatBlock(seq->pool, seq, c, p + off, seq->block_size);
 	off += seq->block_size;
 
 	*n = off;
@@ -3056,17 +3288,27 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	// "reject SSB1 outright, never default the field" precedent, extended to a third magic.
 	// 1.9.0: 'SSB5' is the current format; 'SSB4' joins 'SSB3'/'SSB2' as an accepted legacy
 	// format. Every 'SSB4' rule below applies to 'SSB5' unchanged (`has_ready_field`).
+	// Paged-KV plan §3.7 (C4): 'SSB6' is read too -- 1.9.0's 'SSB5' header unchanged, then kv_mode,
+	// budget and origin, the residual and history, kv_positions (= L') and the rows [0, L') in
+	// canonical layout. Every 'SSB5' rule below applies to it (`has_ready_field`, the per-site
+	// counts); its own fields are validated before anything is drawn.
+	const bool is_ssb6 = std::memcmp(p, kSeqBlobMagicV6, 4) == 0;
 	const bool is_ssb5 = std::memcmp(p, kSeqBlobMagicV5, 4) == 0;
 	const bool is_ssb4 = std::memcmp(p, kSeqBlobMagicV4, 4) == 0;
 	const bool is_ssb3 = std::memcmp(p, kSeqBlobMagicV3, 4) == 0;
 	const bool is_ssb2 = std::memcmp(p, kSeqBlobMagicV2, 4) == 0;
-	if (!is_ssb5 && !is_ssb4 && !is_ssb3 && !is_ssb2) return SSLM_INVALID_ARGUMENT;
-	const bool has_ready_field = is_ssb5 || is_ssb4;
+	if (!is_ssb6 && !is_ssb5 && !is_ssb4 && !is_ssb3 && !is_ssb2) return SSLM_INVALID_ARGUMENT;
+	const bool has_ready_field = is_ssb6 || is_ssb5 || is_ssb4;
+	const bool has_site_counts = is_ssb6 || is_ssb5;
 	const size_t fixed_header_bytes =
-	    is_ssb5 ? kSeqBlobV5FixedHeaderBytes
-	            : (is_ssb4 ? kSeqBlobV4FixedHeaderBytes
-	                       : (is_ssb3 ? kSeqBlobV3FixedHeaderBytes : kSeqBlobV2FixedHeaderBytes));
-	if (n < fixed_header_bytes + 4) return SSLM_INVALID_ARGUMENT;
+	    is_ssb6 ? kSeqBlobV6FixedHeaderBytes
+	            : is_ssb5 ? kSeqBlobV5FixedHeaderBytes
+	                      : (is_ssb4 ? kSeqBlobV4FixedHeaderBytes
+	                                 : (is_ssb3 ? kSeqBlobV3FixedHeaderBytes : kSeqBlobV2FixedHeaderBytes));
+	// The K/V section's own count field: kv_block_count (u32) through 'SSB5', kv_positions (u64)
+	// in 'SSB6'.
+	const size_t kv_count_bytes = is_ssb6 ? 8 : 4;
+	if (n < fixed_header_bytes + kv_count_bytes) return SSLM_INVALID_ARGUMENT;
 
 	std::array<uint8_t, 32> saved_hash{};
 	std::memcpy(saved_hash.data(), p + 4, 32);
@@ -3080,7 +3322,7 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 
 	// G5 (design Sec5/Sec13.4, T-2132): resolve the save-blob's own schema binding AFTER the
 	// model/kv-precision validation above and BEFORE any device work -- specifically, before
-	// DrawBlock draws a block from the pool, below, so a rejection here never claims (and never
+	// the holder draws its pages from the pool, below, so a rejection here never claims (and never
 	// needs to return) pool resources. schema_name_hash == 0 means SSLM_SCHEMA_NONE was bound
 	// (this file's own save-side sentinel, above) -- restores as unbound, no name-blob scan. A
 	// nonzero hash that does not resolve against this model's OWN schema set -- including a
@@ -3147,10 +3389,14 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	const bool saved_ready_for_logits_v4 = has_ready_field && (ReadLE32(p + 120) != 0);
 	// 'SSB5' only: the four per-site saturation counts. A legacy blob never recorded them, so
 	// they restore as 0 beside the blob's saved total (see kSeqBlobMagicV5's comment).
-	const uint64_t saved_kv_landing_saturation_count = is_ssb5 ? ReadLE64(p + 124) : 0;
-	const uint64_t saved_k_channel_landing_saturation_count = is_ssb5 ? ReadLE64(p + 132) : 0;
-	const uint64_t saved_rope_q_saturation_count = is_ssb5 ? ReadLE64(p + 140) : 0;
-	const uint64_t saved_rope_k_saturation_count = is_ssb5 ? ReadLE64(p + 148) : 0;
+	const uint64_t saved_kv_landing_saturation_count = has_site_counts ? ReadLE64(p + 124) : 0;
+	const uint64_t saved_k_channel_landing_saturation_count = has_site_counts ? ReadLE64(p + 132) : 0;
+	const uint64_t saved_rope_q_saturation_count = has_site_counts ? ReadLE64(p + 140) : 0;
+	const uint64_t saved_rope_k_saturation_count = has_site_counts ? ReadLE64(p + 148) : 0;
+	// 'SSB6' only (§3.7): kv_mode (0 whole_reserve, 1 budget), the declared budget, the origin.
+	const uint32_t saved_kv_mode = is_ssb6 ? ReadLE32(p + 156) : 0u;
+	const int32_t saved_budget = is_ssb6 ? static_cast<int32_t>(ReadLE32(p + 160)) : 0;
+	const int64_t saved_origin = is_ssb6 ? static_cast<int64_t>(ReadLE64(p + 164)) : 0;
 	// T-2243 review finding 3 (D-SLM4113): the SAME ceiling ValidateDampedGreedyParams enforces
 	// on the caller-supplied-params path (damped_greedy_phaseD.cpp, "the ceiling is DERIVED BY
 	// EXECUTION" -- order 82 is the last one carrying nonzero weight under the shipped
@@ -3174,6 +3420,32 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	    saved_anti_lm_history_count > static_cast<size_t>(context_length) ||
 	    saved_anti_lm_history_count > static_cast<size_t>(c.context_cap)) {
 		return SSLM_INVALID_ARGUMENT;
+	}
+	// Paged-KV plan §3.7 (C4): L' -- the positions whose rows the blob carries and the restored
+	// holder maps. A mid-token row at the cap has no page (no legal producer makes one).
+	const int64_t saved_lprime = context_length + (layer_index > 0 ? 1 : 0);
+	if (saved_lprime > static_cast<int64_t>(c.context_cap)) return SSLM_INVALID_ARGUMENT;
+	// §3.7's restore validation of 'SSB6', every field before anything is drawn: kv_mode in
+	// {0, 1}; 1 <= budget <= cap, and budget == cap for whole_reserve; 0 <= origin <=
+	// context_length <= min(origin + budget, cap). (kv_positions and the exact size are checked
+	// with the tail, below.) A budget-mode blob is refused at C4: budget holders, their reservation
+	// R(budget) + E and their SSB6 writer are step C5's.
+	if (is_ssb6) {
+		if (saved_kv_mode > 1) return SSLM_INVALID_ARGUMENT;
+		if (saved_budget < 1 || static_cast<int64_t>(saved_budget) > static_cast<int64_t>(c.context_cap)) {
+			return SSLM_INVALID_ARGUMENT;
+		}
+		if (saved_kv_mode == static_cast<uint32_t>(KvHolderMode::kWholeReserve) &&
+		    static_cast<int64_t>(saved_budget) != static_cast<int64_t>(c.context_cap)) {
+			return SSLM_INVALID_ARGUMENT;
+		}
+		if (saved_origin < 0 || saved_origin > context_length) return SSLM_INVALID_ARGUMENT;
+		const int64_t saved_limit =
+		    std::min<int64_t>(saved_origin + saved_budget, static_cast<int64_t>(c.context_cap));
+		if (context_length > saved_limit) return SSLM_INVALID_ARGUMENT;
+		if (saved_kv_mode == static_cast<uint32_t>(KvHolderMode::kBudget)) {
+			return SSLM_INVALID_ARGUMENT;  // step C5 restores budget-mode SSB6
+		}
 	}
 	// T-2260 (D-SLM4073, Sec6 safety net), extended to 'SSB2' by T-2243 review finding 4
 	// (D-SLM4114): a legacy 'SSB3'/'SSB2' blob in the one unrecoverable state
@@ -3205,29 +3477,46 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	if (!CheckedMulSizeT(saved_anti_lm_history_count, sizeof(int32_t), &anti_lm_history_bytes) ||
 	    !CheckedAddSizeT(tail_offset, residual_len, &tail_offset) ||
 	    !CheckedAddSizeT(tail_offset, anti_lm_history_bytes, &tail_offset) ||
-	    !CheckedAddSizeT(tail_offset, 4, &tail_offset) || n < tail_offset) {
+	    !CheckedAddSizeT(tail_offset, kv_count_bytes, &tail_offset) || n < tail_offset) {
 		return SSLM_INVALID_ARGUMENT;
 	}
 	const uint8_t* residual_ptr = p + fixed_header_bytes;
 	const uint8_t* anti_lm_history_ptr = residual_ptr + residual_len;
 	const uint8_t* kv_block_count_ptr = anti_lm_history_ptr + anti_lm_history_bytes;
-	const uint32_t kv_block_count = ReadLE32(kv_block_count_ptr);
-	if (kv_block_count != 1) {
-		// design Sec7.2's ruled unit: a saved sequence always carries exactly one block. A
-		// value other than 1 is a structurally malformed (or pre-ruling-format) blob.
-		return SSLM_INVALID_ARGUMENT;
-	}
 	const size_t block_size = sslm_kv_block_size(model);
 	if (block_size == 0) return SSLM_ARTIFACT_REJECTED;
-	size_t exact_blob_size = tail_offset;
-	if (!CheckedAddSizeT(exact_blob_size, block_size, &exact_blob_size) || n < exact_blob_size) {
-		return SSLM_INVALID_ARGUMENT;
+	// The K/V rows to scatter: rows [0, L') of every (layer, half, kv_head) run, `kv_stride`
+	// positions apart in the blob -- the cap for the whole block of 'SSB5'..'SSB2', L' for the
+	// canonical section of 'SSB6'.
+	int64_t kv_stride = static_cast<int64_t>(c.context_cap);
+	if (is_ssb6) {
+		// §3.7: kv_positions consistent with context_length and layer_index, and the exact size.
+		if (ReadLE64(kv_block_count_ptr) != static_cast<uint64_t>(saved_lprime)) return SSLM_INVALID_ARGUMENT;
+		size_t rows_bytes = 0;
+		size_t exact_blob_size = tail_offset;
+		if (!CheckedMulSizeT(static_cast<size_t>(saved_lprime), KvRuns(c) * static_cast<size_t>(c.head_dim),
+		                     &rows_bytes) ||
+		    !CheckedAddSizeT(exact_blob_size, rows_bytes, &exact_blob_size) || n != exact_blob_size) {
+			return SSLM_INVALID_ARGUMENT;
+		}
+		kv_stride = saved_lprime;
+	} else {
+		const uint32_t kv_block_count = ReadLE32(kv_block_count_ptr);
+		if (kv_block_count != 1) {
+			// design Sec7.2's ruled unit: a saved sequence always carries exactly one block. A
+			// value other than 1 is a structurally malformed (or pre-ruling-format) blob.
+			return SSLM_INVALID_ARGUMENT;
+		}
+		size_t exact_blob_size = tail_offset;
+		if (!CheckedAddSizeT(exact_blob_size, block_size, &exact_blob_size) || n < exact_blob_size) {
+			return SSLM_INVALID_ARGUMENT;
+		}
 	}
-	const uint8_t* kv_blocks_ptr = kv_block_count_ptr + 4;
+	const uint8_t* kv_blocks_ptr = kv_block_count_ptr + kv_count_bytes;
 
 	sslm_kv_pool_s* pool_ptr = *pool;
 	// C2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): THE actual overflow site -- checked
-	// BEFORE DrawBlock, so a mismatched pool is rejected before any block is even drawn (never
+	// BEFORE the holder draws, so a mismatched pool is rejected before any page is even drawn (never
 	// mind copied into). Without this, `block_size` above (from sslm_kv_block_size(model), the
 	// MODEL's own footprint) and `pool_ptr->block_size` (the POOL's own per-block stride) can
 	// differ -- a well-formed blob/model pair against a pool built for a smaller-footprint model
@@ -3238,37 +3527,45 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	// deterministic functions of the model) but states the real invariant directly instead of by
 	// coincidence.
 	if (pool_ptr->model != model) return SSLM_INVALID_ARGUMENT;
-	uint32_t block_index = 0;
-	const sslm_status draw_st = DrawBlock(pool_ptr, &block_index);
+	// §3.4/§3.7 (C4): every restore here is a whole_reserve holder -- ceil(cap/B) pages drawn pool ->
+	// reserve under the pool mutex, after every field above is validated, so a refusal draws nothing.
+	superslm::kv_pages::PageHolder* kv = nullptr;
+	const sslm_status draw_st = CreateWholeReserveHolder(pool_ptr, &kv);
 	if (draw_st != SSLM_OK) return draw_st;
 
 	// M4/N3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): the handle is allocated BEFORE the
-	// block is copied into and BEFORE any further work, so an early return path never needs to
-	// unwind a drawn block -- the allocation-failure path (immediately below) is the only way out
-	// before the block is committed to `h`, and it now returns the block first (M4) and reports
-	// SSLM_ALLOCATION_FAILED rather than throwing across this extern "C" boundary (N3).
+	// rows are copied and BEFORE any further work, so the allocation-failure path (immediately
+	// below) releases the holder and reports SSLM_ALLOCATION_FAILED rather than throwing across
+	// this extern "C" boundary (N3).
 	auto* h = new (std::nothrow) sslm_seq_s();
 	if (!h) {
-		ReturnBlock(pool_ptr, block_index,
-		            static_cast<uint8_t*>(pool_ptr->buf) +
-		                static_cast<size_t>(block_index) * pool_ptr->block_size,
-		            pool_ptr->block_size);
+		ReleaseHolder(pool_ptr, kv);
 		return SSLM_ALLOCATION_FAILED;
 	}
 	h->model = model;
 	h->pool = pool_ptr;
-	h->block_index = block_index;
-	h->kv_block =
-	    static_cast<uint8_t*>(pool_ptr->buf) + static_cast<size_t>(block_index) * pool_ptr->block_size;
+	h->kv = kv;
+	h->kv_mode = KvHolderMode::kWholeReserve;
+	h->kv_budget = static_cast<int32_t>(c.context_cap);
+	// E = 0 for a whole_reserve holder (§3.4); 'SSB6' carries its origin, older formats have none.
+	h->kv_origin = is_ssb6 ? saved_origin : 0;
 	h->block_size = pool_ptr->block_size;
-	std::memcpy(h->kv_block, kv_blocks_ptr, block_size);
+	// Map L' pages' worth of positions from the reserve (it holds cap/B, so this cannot be refused)
+	// and scatter rows [0, L') into them. Rows past L' stay whatever the pages hold: never read.
+	const sslm_status map_st = MapPagesFor(pool_ptr, kv, saved_lprime);
+	if (map_st != SSLM_OK) {
+		ReleaseHolder(pool_ptr, kv);
+		delete h;
+		return map_st;
+	}
+	ScatterRows(pool_ptr, kv, c, kv_blocks_ptr, kv_stride, saved_lprime);
 	// P1 -- see sslm_prefix_begin's own identical fix.
 	const sslm_status assign_st = CatchAllocationFailure([&]() -> sslm_status {
 		h->hidden_codes_storage.assign(c.hidden_size, 0);
 		return SSLM_OK;
 	});
 	if (assign_st != SSLM_OK) {
-		ReturnBlock(pool_ptr, block_index, h->kv_block, pool_ptr->block_size);
+		ReleaseHolder(pool_ptr, kv);
 		delete h;
 		return assign_st;
 	}
@@ -3307,7 +3604,7 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 		});
 		if (anti_lm_st != SSLM_OK) {
 			ClearDampedGreedyState(h);
-			ReturnBlock(pool_ptr, block_index, h->kv_block, pool_ptr->block_size);
+			ReleaseHolder(pool_ptr, kv);
 			delete h;
 			return anti_lm_st;
 		}
@@ -3730,29 +4027,18 @@ extern "C" sslm_status sslm_g5_test_only_apply_mask_and_argmax(const int32_t* lo
 // itself (this file's own compiled .obj is the only definition; nothing routes a real host to
 // it).
 //
-// WHY THIS EXISTS: T-2132's own zero-fill fix (DrawBlock, above) made ReturnBlock's poison-fill
-// unobservable through the PRODUCTION read path -- every live sequence's own KV block is reached
-// via DrawBlock, which now zero-fills unconditionally, so ANY dimension-1 leak-check cell that
-// reads a block through a live sequence handle passes whether or not ReturnBlock ever poisoned
-// anything at all (Poirot's own finding: "the guard is now one that cannot fail"). The leak
-// obligation itself (Sec7 dim1: "no content from the PRIOR sequence survives release") did not
-// get weaker -- it got STRONGER, structurally guaranteed by the zero-fill rather than merely
-// detectable against a poison pattern -- but a guard that structurally cannot fail is also a
-// guard nothing can exercise, and Poirot's own remedy (S4) asks for a discriminating mechanism to
-// be restored or the claim to be honestly retired.
+// WHY THIS EXISTS: T-2132's leak guard (Sec7 dim1: "no content from the PRIOR sequence survives
+// release") needs a read path that does not run through a live holder, so a test can observe the
+// release-time poison fill directly rather than trust the source. It reads `n` raw bytes of the
+// pool's backing buffer at `block_index * block_size`.
 //
-// THE MECHANISM: reads `n` raw bytes directly from `pool`'s own backing buffer at `block_index`,
-// BYPASSING DrawBlock entirely -- the one read path in this whole file that does NOT run through
-// the zero-fill. A test can therefore: draw a block, write real content into it (a real decode),
-// release it (ReturnBlock's own poison-fill runs), then peek the SAME block_index through THIS
-// hook BEFORE drawing it again -- proving the poison-fill actually ran (0xCD observed) rather
-// than merely trusting the source. This restores exactly the discrimination S4 asks for: DELETE
-// ReturnBlock's own `std::memset(kv_block, 0xCD, block_size)` line and this peek would read
-// whatever ReturnBlock's caller left behind instead of 0xCD -- a real, demonstrated failure mode
-// for the pin built against this hook (tools/t2132_s4_leak_guard_mutation_pin.cpp), not an
-// assertion that cannot be tripped. Bounds-checked against `pool->buf_size`/`block_count` --
-// hostile-input-safe like every other verb in this file, even though only a test author is
-// expected to call it.
+// Paged-KV plan (rev 16.1) §3.6, step C4: the buffer is now a page pool -- block `i` is pages
+// [i*cap_pages, (i+1)*cap_pages) -- and a page is poisoned with 0xCD on release iff it was mapped
+// since its draw (§3.3); a clean reserve page is returned unpoisoned, and there is no zero fill
+// at draw. The byte range this seam reads is unchanged; what it observes is per page. Its only
+// caller, tools/t2132_s4_leak_guard_mutation_pin.cpp, is ported to the page peek
+// (sslm_pkv_test_only_peek_page_bytes) and the table-entry seam, which name the pages the
+// released sequence actually wrote. Bounds-checked against `block_count`/`block_size`.
 extern "C" sslm_status sslm_g5_test_only_peek_kv_block_bytes(sslm_kv_pool pool,
                                                                uint32_t block_index, uint8_t* out_buf,
                                                                size_t n) {
@@ -3763,4 +4049,71 @@ extern "C" sslm_status sslm_g5_test_only_peek_kv_block_bytes(sslm_kv_pool pool,
 	    static_cast<const uint8_t*>(pool->buf) + static_cast<size_t>(block_index) * pool->block_size;
 	std::memcpy(out_buf, src, n);
 	return SSLM_OK;
+}
+
+// -----------------------------------------------------------------------------------------
+// Paged-KV plan (rev 16.1) §7, step C4: the page seams (tests/paged-kv/pkv_abi.h declares them;
+// the two must stay identical). Test-only like the peek above -- not in include/superslm/, no
+// export entry. Every one is bounds-checked against hostile arguments.
+
+// `n` raw bytes of pool page `page_index` (cells 1.6, 2.4, 4.x, 9.x): the release poison, and
+// what a holder's table maps, observed without going through a holder.
+extern "C" sslm_status sslm_pkv_test_only_peek_page_bytes(sslm_kv_pool pool, uint32_t page_index,
+                                                          uint8_t* out_buf, size_t n) {
+	if (!pool || !out_buf || !pool->pages) return SSLM_INVALID_ARGUMENT;
+	if (page_index >= pool->pages->page_count) return SSLM_INVALID_ARGUMENT;
+	if (n > pool->page_bytes) return SSLM_INVALID_ARGUMENT;
+	std::memcpy(out_buf, superslm::kv_pages::PageBase(pool->pages, page_index), n);
+	return SSLM_OK;
+}
+
+namespace {
+sslm_status HolderTableEntrySeam(const superslm::kv_pages::PageHolder* holder, uint32_t i, uint32_t* out_page,
+                                 uint32_t* out_mapped) {
+	if (!holder) return SSLM_INVALID_ARGUMENT;
+	if (out_mapped) *out_mapped = holder->mapped;
+	if (i >= holder->mapped) return SSLM_INVALID_ARGUMENT;
+	if (out_page) *out_page = holder->table[i];
+	return SSLM_OK;
+}
+}  // namespace
+
+// Table entry `i` of a sequence's holder, and its `mapped` count (written whenever out_mapped is
+// non-null, even when `i` is refused). Under the lifecycle lock (§3.8 guards the table).
+extern "C" sslm_status sslm_pkv_test_only_seq_table_entry(sslm_seq seq, uint32_t i, uint32_t* out_page,
+                                                         uint32_t* out_mapped) {
+	if (!seq) return SSLM_INVALID_ARGUMENT;
+	std::lock_guard<std::mutex> lock(seq->lifecycle_mutex);
+	return HolderTableEntrySeam(seq->kv, i, out_page, out_mapped);
+}
+
+extern "C" sslm_status sslm_pkv_test_only_prefix_table_entry(sslm_prefix prefix, uint32_t i, uint32_t* out_page,
+                                                            uint32_t* out_mapped) {
+	if (!prefix) return SSLM_INVALID_ARGUMENT;
+	return HolderTableEntrySeam(prefix->kv, i, out_page, out_mapped);
+}
+
+// Acquisitions of the pool mutex since the pool was created (cell 7.10: prefill and decode take
+// none).
+extern "C" uint64_t sslm_pkv_test_only_pool_mutex_acquisitions(sslm_kv_pool pool) {
+	if (!pool || !pool->pages) return 0;
+	return superslm::kv_pages::PoolMutexAcquisitions(pool->pages);
+}
+
+// Cell 7.13: process-wide, the page module writes kNoPage into unmapped table entries and traps an
+// address read through one. The trap exists only in the test library; elsewhere this is a no-op.
+extern "C" void sslm_pkv_test_only_set_table_sentinel(int enabled) {
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+	superslm::kv_pages::SetTableSentinelForTest(enabled != 0);
+#else
+	(void)enabled;
+#endif
+}
+
+// Cell 11.2: every page of the sequence's reserve back to the pool, its table kept -- the state
+// §3.4 makes unreachable, so the hot path's empty-reserve refusal can be exercised.
+extern "C" sslm_status sslm_pkv_test_only_drain_reserve(sslm_seq seq) {
+	if (!seq || !seq->kv) return SSLM_INVALID_ARGUMENT;
+	std::lock_guard<std::mutex> lock(seq->lifecycle_mutex);
+	return MapPageStatus(superslm::kv_pages::HolderReturnReserve(seq->kv, nullptr));
 }

@@ -27,6 +27,7 @@
 #ifndef SUPERSLM_SRC_KV_PAGES_H
 #define SUPERSLM_SRC_KV_PAGES_H
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -48,12 +49,34 @@ enum class PageStatus : int {
 // sentinel seam writes it into table entries at or above `mapped`.
 constexpr uint32_t kNoPage = 0xFFFFFFFFu;
 
+// The pool mutex, counting its acquisitions (§3.6's hot-path rule, cell 7.10: the ABI's test seam
+// reads the count to show that prefill and decode never take it). One relaxed atomic increment per
+// acquisition, and only lifecycle verbs acquire it.
+class CountingMutex {
+public:
+	void lock() {
+		m_.lock();
+		acquisitions_.fetch_add(1, std::memory_order_relaxed);
+	}
+	bool try_lock() {
+		if (!m_.try_lock()) return false;
+		acquisitions_.fetch_add(1, std::memory_order_relaxed);
+		return true;
+	}
+	void unlock() { m_.unlock(); }
+	uint64_t acquisitions() const { return acquisitions_.load(std::memory_order_relaxed); }
+
+private:
+	std::mutex m_;
+	std::atomic<uint64_t> acquisitions_{0};
+};
+
 struct PagePool {
 	uint8_t* base = nullptr;
 	uint32_t page_count = 0;
 	size_t page_bytes = 0;
 	int64_t page_positions = 0;  // B
-	std::mutex mutex;            // the pool mutex: guards free_list and refcount
+	CountingMutex mutex;         // the pool mutex: guards free_list and refcount
 	std::vector<uint32_t> free_list;  // stack; capacity page_count from create, so a push never allocates
 	std::vector<uint32_t> refcount;
 	// Written without the pool mutex by the holder that owns the page (reserve -> table), read and
@@ -84,12 +107,22 @@ PageStatus HolderMapNext(PageHolder* holder);
 PageStatus HolderShareLeading(PageHolder* dst, const PageHolder* src, uint32_t pages);
 PageStatus HolderUnmapAll(PageHolder* holder);
 PageStatus HolderRelease(PageHolder* holder);
+// Every page of the holder's private reserve back to the pool (refcount := 0, poisoned iff dirty),
+// its table untouched: a legacy prefix's first freeze (§3.4), and the ABI's reserve-drain seam
+// (cell 11.2). *out_returned (optional) receives the count. Allocates nothing.
+PageStatus HolderReturnReserve(PageHolder* holder, uint32_t* out_returned);
 
 uint32_t HolderMapped(const PageHolder* holder);
 uint32_t HolderShared(const PageHolder* holder);
 uint32_t HolderReserve(const PageHolder* holder);
 
 uint32_t HolderTableEntryForAddress(const PageHolder* holder, uint32_t i);
+
+// The first byte of pool page `page` (no bounds check: callers pass a page a table maps).
+inline uint8_t* PageBase(const PagePool* pool, uint32_t page) { return pool->base + size_t{page} * pool->page_bytes; }
+
+// Acquisitions of `pool`'s mutex since PoolCreate (the ABI's cell-7.10 seam reads it).
+uint64_t PoolMutexAcquisitions(const PagePool* pool);
 
 #ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
 void SetTableSentinelForTest(bool enabled);

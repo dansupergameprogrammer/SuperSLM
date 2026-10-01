@@ -85,13 +85,13 @@ void PoolDestroy(PagePool* pool) { delete pool; }
 
 uint32_t PoolFreePages(PagePool* pool) {
 	if (!pool) return 0;
-	std::lock_guard<std::mutex> lock(pool->mutex);
+	std::lock_guard<CountingMutex> lock(pool->mutex);
 	return static_cast<uint32_t>(pool->free_list.size());
 }
 
 uint32_t PoolRefcount(PagePool* pool, uint32_t page) {
 	if (!pool || page >= pool->page_count) return 0;
-	std::lock_guard<std::mutex> lock(pool->mutex);
+	std::lock_guard<CountingMutex> lock(pool->mutex);
 	return pool->refcount[page];
 }
 
@@ -116,7 +116,7 @@ PageStatus HolderCreate(PagePool* pool, uint32_t table_entries, uint32_t reserve
 		for (uint32_t i = 0; i < table_entries; ++i) h->table[i] = kNoPage;
 #endif
 	{
-		std::lock_guard<std::mutex> lock(pool->mutex);
+		std::lock_guard<CountingMutex> lock(pool->mutex);
 		if (pool->free_list.size() < reserve_pages) return PageStatus::kExhausted;  // nothing drawn
 		// pool -> reserve: refcount := 1.
 		for (uint32_t i = 0; i < reserve_pages; ++i) {
@@ -150,7 +150,7 @@ PageStatus HolderShareLeading(PageHolder* dst, const PageHolder* src, uint32_t p
 	if (dst->mapped != 0 || pages == 0 || pages > src->mapped || pages > dst->table_entries)
 		return PageStatus::kInvalidArgument;
 	PagePool* pool = dst->pool;
-	std::lock_guard<std::mutex> lock(pool->mutex);
+	std::lock_guard<CountingMutex> lock(pool->mutex);
 	// Checked before any change, so a refusal leaves every count as it was. A mapped page at 0 is a
 	// count already lost (the underflow class); one at the maximum cannot take another reference.
 	for (uint32_t i = 0; i < pages; ++i) {
@@ -184,7 +184,7 @@ PageStatus HolderUnmapAll(PageHolder* holder) {
 	// vacating: the freeing path needs no storage of its own.
 	uint32_t to_free = 0;
 	if (pool_path > 0) {
-		std::lock_guard<std::mutex> lock(pool->mutex);
+		std::lock_guard<CountingMutex> lock(pool->mutex);
 		for (uint32_t i = 0; i < pool_path; ++i) {
 			const uint32_t p = table[i];
 			bool zero = false;
@@ -194,7 +194,7 @@ PageStatus HolderUnmapAll(PageHolder* holder) {
 	}
 	if (to_free > 0) {
 		PoisonIfDirty(pool, table, to_free);
-		std::lock_guard<std::mutex> lock(pool->mutex);
+		std::lock_guard<CountingMutex> lock(pool->mutex);
 		PushFreeLocked(pool, table, to_free);
 	}
 	// Private entries back to the reserve, last mapped pushed first so a remap pops them in order.
@@ -223,7 +223,7 @@ PageStatus HolderRelease(PageHolder* holder) {
 	uint32_t to_free = 0;  // mapped pages that reached 0, compacted into the table's leading entries
 	size_t reserve_free = reserve.size();
 	{
-		std::lock_guard<std::mutex> lock(pool->mutex);
+		std::lock_guard<CountingMutex> lock(pool->mutex);
 		for (uint32_t i = 0; i < holder->mapped; ++i) {
 			const uint32_t p = table[i];
 			bool zero = false;
@@ -247,13 +247,51 @@ PageStatus HolderRelease(PageHolder* holder) {
 	PoisonIfDirty(pool, table, to_free);
 	PoisonIfDirty(pool, reserve.data(), reserve_free);
 	{
-		std::lock_guard<std::mutex> lock(pool->mutex);
+		std::lock_guard<CountingMutex> lock(pool->mutex);
 		PushFreeLocked(pool, table, to_free);
 		PushFreeLocked(pool, reserve.data(), reserve_free);
 	}
 	delete holder;
 	return status;
 }
+
+// A legacy prefix's first freeze, and the drain seam: the reserve's pages go back to the pool by
+// release's reserve rows (refcount := 0, poisoned iff dirty), the table untouched.
+PageStatus HolderReturnReserve(PageHolder* holder, uint32_t* out_returned) {
+	if (out_returned) *out_returned = 0;
+	if (!holder) return PageStatus::kInvalidArgument;
+	PagePool* pool = holder->pool;
+	std::vector<uint32_t>& reserve = holder->reserve;
+	size_t n = reserve.size();
+	if (n == 0) return PageStatus::kOk;
+	PageStatus status = PageStatus::kOk;
+	{
+		std::lock_guard<CountingMutex> lock(pool->mutex);
+		// A reserve page holds exactly this holder's reference; one already at 0 was freed by
+		// another path and is reported, never pushed twice.
+		for (size_t i = 0; i < n;) {
+			uint32_t& rc = pool->refcount[reserve[i]];
+			if (rc == 0) {
+				status = Worse(status, PageStatus::kRefcountUnderflow);
+				std::swap(reserve[i], reserve[--n]);
+				continue;
+			}
+			rc = 0;
+			++i;
+		}
+	}
+	PoisonIfDirty(pool, reserve.data(), n);
+	{
+		std::lock_guard<CountingMutex> lock(pool->mutex);
+		PushFreeLocked(pool, reserve.data(), n);
+	}
+	// clear() keeps the capacity, so a later unmap's push back to this reserve never allocates.
+	reserve.clear();
+	if (out_returned) *out_returned = static_cast<uint32_t>(n);
+	return status;
+}
+
+uint64_t PoolMutexAcquisitions(const PagePool* pool) { return pool ? pool->mutex.acquisitions() : 0; }
 
 uint32_t HolderMapped(const PageHolder* holder) { return holder ? holder->mapped : 0; }
 uint32_t HolderShared(const PageHolder* holder) { return holder ? holder->shared : 0; }
@@ -283,12 +321,12 @@ PageStatus DoubleUnmapForTest(PageHolder* holder, uint32_t i) {
 	bool zero = false;
 	PageStatus st;
 	{
-		std::lock_guard<std::mutex> lock(pool->mutex);
+		std::lock_guard<CountingMutex> lock(pool->mutex);
 		st = DecrementLocked(pool, p, &zero);
 	}
 	if (zero) {
 		PoisonIfDirty(pool, &p, 1);
-		std::lock_guard<std::mutex> lock(pool->mutex);
+		std::lock_guard<CountingMutex> lock(pool->mutex);
 		PushFreeLocked(pool, &p, 1);
 	}
 	return st;
