@@ -255,10 +255,104 @@ void AdapterCapture(const char* model_path, const fs::path& adapter_path,
         throw;
     }
 }
+
+void WalkProbe(const char* model_path, const fs::path& prompts, const fs::path& out_dir,
+               const std::string& ids_suffix, bool all_schemas) {
+    Input in(model_path);
+    Pool pool(in.model, in.cap);
+    const size_t schema_count = all_schemas ? 3 : 1;
+    const auto ids = ReadIds(prompts / ("flat00." + ids_suffix));
+    for (size_t i = 0; i < schema_count; ++i) {
+        const std::string name = SchemaName(in.model, int(i));
+        const std::string other_name = SchemaName(in.model, int((i + 1) % sslm_schema_count(in.model)));
+        sslm_schema schema = nullptr;
+        Check(sslm_schema_lookup(in.model, name.c_str(), &schema), "walk_schema_lookup");
+        Prefix prefix;
+        Check(sslm_prefix_begin_budgeted(in.model, &pool.pool, int32_t(ids.size() + 1), &prefix.p), "walk_prefix_begin");
+        Check(sslm_prefix_set_schema(prefix.p, schema), "walk_prefix_schema");
+        Prefill(in.model, prefix.p, ids, SSLM_SPAN_PROMPT);
+        const int32_t forced = DeriveFirstSchemaToken(in, pool, schema);
+        Prefill(in.model, prefix.p, std::vector<int32_t>{forced}, SSLM_SPAN_SCHEMA_CONTENT);
+        Check(sslm_prefix_freeze(prefix.p), "walk_prefix_freeze");
+        const auto baseline = Configured(in, pool, prefix.p, true, false, schema, nullptr);
+        sslm_seq seq = nullptr;
+        Check(sslm_seq_create_budgeted(in.model, &pool.pool, 128, &seq), "walk_seq_create");
+        Check(sslm_seq_set_schema(seq, schema), "walk_seq_schema");
+        Check(sslm_seq_adopt_prefix(seq, prefix.p), "walk_seq_adopt");
+        size_t size = 0;
+        if (sslm_seq_save(seq, nullptr, &size) != SSLM_BUFFER_TOO_SMALL || size < 52)
+            throw std::runtime_error("walk save size query failed");
+        std::vector<uint8_t> blob(size);
+        Check(sslm_seq_save(seq, blob.data(), &size), "walk_seq_save");
+        Check(sslm_seq_release(seq), "walk_seq_release");
+        if (std::memcmp(blob.data(), "SSB6", 4)) throw std::runtime_error("walk probe needs SSB6");
+        const uint32_t old_walk = U32(blob.data() + 48);
+        if (!old_walk) throw std::runtime_error("walk probe baseline did not progress");
+        const uint64_t other_hash = NameHash(other_name);
+        for (int byte = 0; byte < 8; ++byte) blob[40 + byte] = uint8_t(other_hash >> (8 * byte));
+        for (int byte = 0; byte < 4; ++byte) blob[48 + byte] = 0;
+        sslm_seq restored = nullptr;
+        const sslm_status restore_status = sslm_seq_restore(in.model, &pool.pool, blob.data(), blob.size(), &restored);
+        std::vector<int32_t> mutant;
+        int terminal_status = int(restore_status);
+        if (restore_status == SSLM_OK) {
+            sslm_decode_params params{};
+            params.layer_budget = 1;
+            sslm_seq batch[1] = {restored};
+            for (int token_index = 0; token_index < 64; ++token_index) {
+                int32_t token = -1;
+                sslm_status status = SSLM_OK;
+                for (int guard = 0; token == -1 && guard < 4096; ++guard) {
+                    status = sslm_decode_step(in.model, batch, 1, &params, nullptr, &token);
+                    if (status != SSLM_OK) break;
+                }
+                if (status != SSLM_OK || token < 0) {
+                    terminal_status = int(status);
+                    break;
+                }
+                mutant.push_back(token);
+                if (in.vocab > 100000 && (token == 151643 || token == 151645)) break;
+                if (size_t(token_index) >= baseline.tokens.size() || token != baseline.tokens[size_t(token_index)]) break;
+            }
+            Check(sslm_seq_release(restored), "walk_restored_release");
+        }
+        int first_diff = -1;
+        const size_t common = std::min(mutant.size(), baseline.tokens.size());
+        for (size_t t = 0; t < common; ++t)
+            if (mutant[t] != baseline.tokens[t]) { first_diff = int(t); break; }
+        if (first_diff < 0 && mutant.size() != baseline.tokens.size()) first_diff = int(common);
+        const fs::path output = out_dir / ("schema" + std::to_string(i) + ".walkprobe.txt");
+        std::ofstream out(output, std::ios::binary | std::ios::trunc);
+        if (!out) throw std::runtime_error("walk probe output open failed");
+        out << "schema=" << name << " schema_hash=" << HashName(name)
+            << " donor_schema=" << other_name << " donor_schema_hash=" << HashName(other_name)
+            << " original_walk=" << old_walk << " mutant_walk=0"
+            << " forced_content_id=" << forced << " length=" << ids.size() + 1
+            << " baseline_tokens=" << baseline.tokens.size()
+            << " restore_status=" << int(restore_status)
+            << " terminal_status=" << terminal_status
+            << " mutant_tokens=" << mutant.size()
+            << " killed=" << int(first_diff >= 0)
+            << " first_diff=" << first_diff << '\n';
+        out.flush();
+        if (!out) throw std::runtime_error("walk probe write failed");
+        std::cerr << "schema" << i << " walk probe complete\n";
+    }
+}
 }
 
 int main(int argc, char** argv) {
     try {
+        if (argc == 6 && std::string(argv[1]) == "walk") {
+            fs::create_directories(argv[4]);
+            WalkProbe(argv[2], argv[3], argv[4], argv[5], false);
+            return 0;
+        }
+        if (argc == 6 && std::string(argv[1]) == "walk3") {
+            fs::create_directories(argv[4]);
+            WalkProbe(argv[2], argv[3], argv[4], argv[5], true);
+            return 0;
+        }
         if (argc != 10) throw std::runtime_error("usage: t3035_composition schema|schema3|adapter MODEL ADAPTER_OR_- PROMPTS OUT DISCRIM run1|run2 ID_SUFFIX TOKENIZER");
         const std::string kind(argv[1]), run(argv[7]);
         if (run != "run1" && run != "run2") throw std::runtime_error("invalid run");

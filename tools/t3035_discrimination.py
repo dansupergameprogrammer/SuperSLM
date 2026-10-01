@@ -163,6 +163,59 @@ def summarize(directory: Path) -> int:
     return 0
 
 
+def composition(input_path: Path, output_path: Path, kind: str) -> int:
+    lines = input_path.read_text(encoding="utf-8").splitlines()
+    if not lines or not lines[0].startswith("# "):
+        raise ValueError("missing composition header")
+    header = dict(part.split("=", 1) for part in lines[0][2:].split() if "=" in part)
+    stream_rows = []
+    dispositions = []
+    for line in lines[1:]:
+        fields = dict(part.split("=", 1) for part in line.split() if "=" in part)
+        if line.startswith("disposition "):
+            dispositions.append(fields)
+        else:
+            fields["tokens"] = [int(value) for value in fields["tokens"].split(",")]
+            stream_rows.append(fields)
+    if not stream_rows or any(len(row["tokens"]) != 64 for row in stream_rows):
+        raise ValueError("composition did not produce 64-token streams")
+    result = {"instrument": "T-3035-precache-discrimination",
+              "status": "QUARANTINED", "population_adequate": False,
+              "probe_sha256": hashlib.sha256(input_path.read_bytes()).hexdigest(),
+              "model_sha256": header["model_sha256"],
+              "prompt_ids_sha256": header["prompt_ids_sha256"],
+              "prefix_id": stream_rows[0]["prefix_id"],
+              "kind": kind}
+    if kind == "adapter":
+        by_mode = {(row["adopter_mode"], row["adapter"]): row for row in stream_rows}
+        controls = []
+        for mode in ("budget", "legacy"):
+            on = by_mode[(mode, "bound")]["tokens"]
+            off = by_mode[(mode, "off")]["tokens"]
+            different = [i for i, pair in enumerate(zip(on, off)) if pair[0] != pair[1]]
+            controls.append({"adopter_mode": mode, "adapter_on_off_different_tokens": len(different),
+                             "first_divergent_token": different[0] if different else -1,
+                             "required_different_tokens": 16,
+                             "killed": len(different) >= 16})
+        result.update({"adapter_sha256": header["adapter_sha256"],
+                       "controls": controls,
+                       "reason": "Adapter controls measured; discrimination instrument uncommissioned and other §5.4 source limits remain"})
+    elif kind == "schema":
+        if any(int(row["walk"]) == 0 for row in stream_rows):
+            raise ValueError("schema walk was not progressed")
+        result.update({"walk_state": int(stream_rows[0]["walk"]),
+                       "forced_content_id": int(header["forced_content_id"]),
+                       "forced_content_ids_sha256": header["forced_content_ids_sha256"],
+                       "cross_binding_dispositions": dispositions,
+                       "M_walk": "not_measured",
+                       "reason": "Progressed walk and cross-bind dispositions measured; M-walk mutation pending; instrument uncommissioned"})
+    else:
+        raise ValueError("unknown composition kind")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes((json.dumps(result, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -177,6 +230,10 @@ def main() -> int:
     command.add_argument("--screen", type=Path)
     command = sub.add_parser("summarize")
     command.add_argument("directory", type=Path)
+    command = sub.add_parser("composition")
+    command.add_argument("kind", choices=("adapter", "schema"))
+    command.add_argument("input", type=Path)
+    command.add_argument("output", type=Path)
     args = parser.parse_args()
     if args.command == "screen":
         return screen(args.input, args.output)
@@ -184,6 +241,8 @@ def main() -> int:
         return mutation(args.input, args.output, args.target, args.donor, args.screen)
     if args.command == "summarize":
         return summarize(args.directory)
+    if args.command == "composition":
+        return composition(args.input, args.output, args.kind)
     raise AssertionError(args.command)
 
 
