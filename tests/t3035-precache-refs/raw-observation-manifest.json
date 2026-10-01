@@ -1,0 +1,877 @@
+{
+  "count": 145,
+  "files": [
+    {
+      "mtime_utc": "2026-10-01T21:29:18.755468+00:00",
+      "path": "D:\\_scratch\\T-3035\\adapter-candidate01\\out\\adapter0-run1.ref",
+      "sha256": "44cf421b96aa37626b6576b9fbe51cc24e401b5657a7da3f3b8e4860c96a4696",
+      "size": 2552
+    },
+    {
+      "mtime_utc": "2026-10-01T21:30:32.485265+00:00",
+      "path": "D:\\_scratch\\T-3035\\adapter-candidate01\\out\\adapter1-run1.ref",
+      "sha256": "e67cb30a6efde3dbcd4e3e4a7a549b97b7cf8ddb854e3c45aaaa282f67cef867",
+      "size": 2516
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:28.915216+00:00",
+      "path": "D:\\_scratch\\T-3035\\adapter-smoke\\out\\adapter0-run1.ref",
+      "sha256": "de21051f2a0600269d94653235dfc5d6b951dd4e29de762887d9e7eee8f532de",
+      "size": 2552
+    },
+    {
+      "mtime_utc": "2026-10-01T21:25:08.816306+00:00",
+      "path": "D:\\_scratch\\T-3035\\adapter-smoke\\out\\adapter1-run1.ref",
+      "sha256": "b0b46119511bb07bbc4cb66d7524fd6ad33112d144641d43f703446016b6bf5d",
+      "size": 2496
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:32.880417+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-flat00-greedy.txt",
+      "sha256": "f3de7fe104c0bbf2866fda9a8caac56e986a3fe91543cc3b78f538f84dce1834",
+      "size": 800
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:33.616344+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-flat01-greedy.txt",
+      "sha256": "3a4b9082b32c89c63c4ba3d3839ae59e89b7650129da0ac5a4f0b30c7f25b677",
+      "size": 790
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:34.288204+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-flat02-greedy.txt",
+      "sha256": "cd287c0e6708a048c9ba5806ccccbce5937b2055720dcc42e8e1ef7edc9d0ef8",
+      "size": 794
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:34.982690+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-flat03-greedy.txt",
+      "sha256": "6bc68530e88d7862aa99303e00fcceebc06d1441f355f9206953e90f75682136",
+      "size": 788
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:35.715554+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-flat04-greedy.txt",
+      "sha256": "6d9952ea11d5d1813a3b5af76ae9a2fd3f0af454bf2a43f6d04ebe84161357e9",
+      "size": 796
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:36.529640+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-flat05-greedy.txt",
+      "sha256": "d54523177bde642bddc8fc3a3f65e483670289e663fa6d0a96ca81190bf8493d",
+      "size": 800
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:37.392699+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-flat06-greedy.txt",
+      "sha256": "e60fe465b8cc062ba74806a708bfbe47114060f5ed2431d876d46fb78a882de9",
+      "size": 804
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:38.431463+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-flat07-greedy.txt",
+      "sha256": "2f51c32f7d68211ffbb751667045f278f3f81a4652748e455551d5fadbd79d8b",
+      "size": 801
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:39.577516+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-flat08-greedy.txt",
+      "sha256": "fede5577519468cd4fe72198663d83c6c931f58722b59835f9e82b5f7bcabcd1",
+      "size": 796
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:40.664812+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-flat09-greedy.txt",
+      "sha256": "a97fe807498141d45dc5c77350e432d403999788c85eebf63eaae4e7546d932c",
+      "size": 763
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:33.298681+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-nested00-greedy.txt",
+      "sha256": "1a7bab994afecc541302232b7f0566afcb310adbcba8540cb336fcf45fa27d00",
+      "size": 793
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:34.243255+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-nested01-greedy.txt",
+      "sha256": "2eecbda6954f09f8966c44c043e8d622e5d70f847deccba6e5d974f1b0d47556",
+      "size": 801
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:35.125510+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-nested02-greedy.txt",
+      "sha256": "370230defb717fddc62ad8a3af2366cfac1ec266051e9e5aac33ef06987be5af",
+      "size": 797
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:35.990535+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-nested03-greedy.txt",
+      "sha256": "f1a20db56b852caefe2bf2151262adc2f89410f3e8cbca2e53687b19fad4ff1f",
+      "size": 795
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:36.868012+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-nested04-greedy.txt",
+      "sha256": "965ec990bd88bec2827bd2e71af89b27bdccd3961c38e75b5bc5ccedf2c7dfc7",
+      "size": 807
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:37.757079+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-nested05-greedy.txt",
+      "sha256": "f20639d23b2eefe5d402e7a17cb5557fbc8bde756ce447f23facb929c3bc1fab",
+      "size": 799
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:38.622299+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-nested06-greedy.txt",
+      "sha256": "d84fdfb3ce8775d787fbdb90c6529f92fe7f24cecbebaa80793394f3c170176a",
+      "size": 804
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:39.558417+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-nested07-greedy.txt",
+      "sha256": "1e65fae25837dba12023abe5ddd29f7d3e20f47a1289b2a24a4b5a77c6a8285c",
+      "size": 806
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:40.445035+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-nested08-greedy.txt",
+      "sha256": "f551192bb549e44f57dc7c7fba66a003b11b63908d97a22b4bfa56c48f56da0f",
+      "size": 804
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:41.346441+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_def-nested09-greedy.txt",
+      "sha256": "f6752faa5e430438e04fd5c5d5ebff2e26d6aa5ec8a5171058454800a73fe3d3",
+      "size": 798
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:42.056984+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-flat00-greedy.txt",
+      "sha256": "97f39bcd1ac5d808fa406664e8c9509452c648804f3ee42279d7e5c8702c0d8d",
+      "size": 780
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:43.454444+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-flat01-greedy.txt",
+      "sha256": "d48fad02f824e162327769bbb21220f693331165a007c6b38707a9e564a12da6",
+      "size": 780
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:44.871241+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-flat02-greedy.txt",
+      "sha256": "d8f693a5299109b64f559a08ec995ef4fc557bb8c2084fad5eac473003d4d9f4",
+      "size": 793
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:46.373638+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-flat03-greedy.txt",
+      "sha256": "43145122a350a80e1a4a776f6217f9a0d0e6eab6bd52bcf707b2eb9e372790b1",
+      "size": 794
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:47.986263+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-flat04-greedy.txt",
+      "sha256": "ed47f27ca700c82ba0b9e2f0ee354c7bf767d85959aef7ebe037b9b7f8358ecb",
+      "size": 813
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:49.772445+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-flat05-greedy.txt",
+      "sha256": "a0607d55750ab1353cc75bf8d1d520dcf81ce98fa55d18379ed151ac8435e2a2",
+      "size": 798
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:51.916011+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-flat06-greedy.txt",
+      "sha256": "dfea7d092e3c9d23c31b17df074d9d37a94ccfd215d320aca739fe5323ef3f7d",
+      "size": 836
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:54.081716+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-flat07-greedy.txt",
+      "sha256": "2437107a799218c8400c8bdacc1e5571c9e029794ea954b29dcc29273c178f8e",
+      "size": 828
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:57.060010+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-flat08-greedy.txt",
+      "sha256": "3d22ef766d52306657f5599c22ddcece0cd31816c0f7d198fcfdbbc308c01f61",
+      "size": 811
+    },
+    {
+      "mtime_utc": "2026-10-01T21:20:59.733920+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-flat09-greedy.txt",
+      "sha256": "25ed518778fa4d0aa1c72427cd011fdf83c56bfe6815c0ad1553fa758b490bff",
+      "size": 773
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:43.279716+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-nested00-greedy.txt",
+      "sha256": "39a55e97e288138d853f9e6d7dbf4efa8826e916b0320fcace3e423488b588d4",
+      "size": 786
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:45.239649+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-nested01-greedy.txt",
+      "sha256": "950c4c4f0b246225fdaadfbdb6d8110ad18d6b534200101067af2964fa5dbb9c",
+      "size": 806
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:47.217947+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-nested02-greedy.txt",
+      "sha256": "a83abb63952d12aaf5e043d1a1e90e3def97a32b3bb955dc8e6478ebb12b69c7",
+      "size": 802
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:49.296813+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-nested03-greedy.txt",
+      "sha256": "0d64815a22cad226754f9bed7c47f762c3064ffdaba2867cea74373114269a2d",
+      "size": 794
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:51.297041+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-nested04-greedy.txt",
+      "sha256": "a26e8c0991115f9cfdd99a66a32173697a31cc2d2fbdf2428e60819535114804",
+      "size": 789
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:53.499177+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-nested05-greedy.txt",
+      "sha256": "af0c95021ce561dca3dc3f07b64714bd40a3a20b4482c8b9685a1e5b719f10c3",
+      "size": 803
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:55.546838+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-nested06-greedy.txt",
+      "sha256": "ca9a6520a04a44833e849ccc08d6d87f2bf19a3c1306933618ba19f2cb43d52a",
+      "size": 788
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:57.744305+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-nested07-greedy.txt",
+      "sha256": "d2cd3a0c738b11530000f7a3c34c8ac31b50a5af997c511bdd69e6db1e3bdac8",
+      "size": 820
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:59.749377+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-nested08-greedy.txt",
+      "sha256": "a50d2924bb02692c5fdeb32a88ab2731e9d4a489276581dbaaa3eca249d6b61b",
+      "size": 800
+    },
+    {
+      "mtime_utc": "2026-10-01T21:23:01.741516+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-pkv_qk-nested09-greedy.txt",
+      "sha256": "423961b1136eef9b7d3aa4106ab61aada892676864fb7d8cdba87b24f91111e2",
+      "size": 787
+    },
+    {
+      "mtime_utc": "2026-10-01T21:21:07.976634+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-flat00-greedy.txt",
+      "sha256": "185228d0fcd126950b5487e0cbb3568ac4afa6f52089a36ccbfdbdd7d18ccb43",
+      "size": 793
+    },
+    {
+      "mtime_utc": "2026-10-01T21:21:16.204842+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-flat01-greedy.txt",
+      "sha256": "7243f06f8647888c231dd0968cec32422ce4ed419845aad7a8edf162adb3f103",
+      "size": 785
+    },
+    {
+      "mtime_utc": "2026-10-01T21:21:24.546677+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-flat02-greedy.txt",
+      "sha256": "b416b1984c7437d73954ae996f9dedcd75e00a9de0186cfc600b9ce8c4e19f65",
+      "size": 787
+    },
+    {
+      "mtime_utc": "2026-10-01T21:21:33.538042+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-flat03-greedy.txt",
+      "sha256": "d765941fedb3864e4ed37f71dad0d84f20a32b7a14ec454b8a47a49181b1a324",
+      "size": 795
+    },
+    {
+      "mtime_utc": "2026-10-01T21:21:43.314193+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-flat04-greedy.txt",
+      "sha256": "6b4649ab1a1f1a1f37c2af20775c2c7199dcbe4dc754a15d2405c3f000b5424f",
+      "size": 788
+    },
+    {
+      "mtime_utc": "2026-10-01T21:21:54.057471+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-flat05-greedy.txt",
+      "sha256": "b44f6b2cf090431487863e66932f0182afc2e9915839771aab9864f948611e28",
+      "size": 790
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:05.657201+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-flat06-greedy.txt",
+      "sha256": "1579fb8cff58b99f859b4786b7dcf6be6044c61add9cad042aef13c9373c1572",
+      "size": 795
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:18.924292+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-flat07-greedy.txt",
+      "sha256": "6e86c8a506786b1ded736c1c47c86c1796a0ed9c2ef257ab02d22ee254b7da5e",
+      "size": 795
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:33.542980+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-flat08-greedy.txt",
+      "sha256": "efa99f940cc3179b9be1e58c15df6b2ca2713735e9b8bb8d9203c7adc2af9379",
+      "size": 791
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:49.248211+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-flat09-greedy.txt",
+      "sha256": "a7fc44ba091ee79fbc2cc8e053d9fda7bce46e23d048f2dc689c422170e8beb1",
+      "size": 765
+    },
+    {
+      "mtime_utc": "2026-10-01T21:23:14.049048+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-nested00-greedy.txt",
+      "sha256": "fa3d42f93d80ff0b25eda1d32b08ed8542392562a1fd0ee082d33c69cc64d925",
+      "size": 790
+    },
+    {
+      "mtime_utc": "2026-10-01T21:23:26.313353+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-nested01-greedy.txt",
+      "sha256": "40711d1e2b2903a62ca85d5e9e65e684e1e31f2cd89acc2d9fb2f7de36050318",
+      "size": 787
+    },
+    {
+      "mtime_utc": "2026-10-01T21:23:38.085630+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-nested02-greedy.txt",
+      "sha256": "168f930576f7ba42d5a5931f0f87dd08a9f44edb38b09078fe1596b75c228583",
+      "size": 797
+    },
+    {
+      "mtime_utc": "2026-10-01T21:23:49.797035+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-nested03-greedy.txt",
+      "sha256": "fe40b70c4078b3943851d54228298c1e7870942d9e51534553356eb4934014d3",
+      "size": 798
+    },
+    {
+      "mtime_utc": "2026-10-01T21:24:01.805180+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-nested04-greedy.txt",
+      "sha256": "b371ac825c83d4163158fd5bb5898762b2bd0fdc15f19ee2116e5a26ea40b8ea",
+      "size": 791
+    },
+    {
+      "mtime_utc": "2026-10-01T21:24:13.963612+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-nested05-greedy.txt",
+      "sha256": "053b5682159f173213f87aa00171737806868183e4003f8e27bef0c8e3ee6e63",
+      "size": 788
+    },
+    {
+      "mtime_utc": "2026-10-01T21:24:25.556466+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-nested06-greedy.txt",
+      "sha256": "9a184c2f679cad5fe0eff4b3ce38b6001b96b3ae1d4f6ee1acc35c6c15355f40",
+      "size": 788
+    },
+    {
+      "mtime_utc": "2026-10-01T21:24:37.239670+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-nested07-greedy.txt",
+      "sha256": "f440020414ba9d2844b04baf3014b15c442ea1bd96e92ec2de0f84332589d381",
+      "size": 796
+    },
+    {
+      "mtime_utc": "2026-10-01T21:24:49.162670+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-nested08-greedy.txt",
+      "sha256": "458270d09a02f36ca2942a48c73b9b2b9a6ddbb7640446734d1d354375f4e160",
+      "size": 792
+    },
+    {
+      "mtime_utc": "2026-10-01T21:25:00.589100+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic0p5-nested09-greedy.txt",
+      "sha256": "57989af259eaaf67438f0b16e2386389114de41155c7f60ee961f003fce3b3eb",
+      "size": 788
+    },
+    {
+      "mtime_utc": "2026-10-01T21:23:05.634411+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-flat00-greedy.txt",
+      "sha256": "b12939362d423a16c6834c2569c8cd3b0a059103d334a345156ee558564e976c",
+      "size": 784
+    },
+    {
+      "mtime_utc": "2026-10-01T21:23:22.740493+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-flat01-greedy.txt",
+      "sha256": "c8d3d937beb9e9e5b77cc0be16f9b67b23cc978d214188b53e21163b298cf87c",
+      "size": 790
+    },
+    {
+      "mtime_utc": "2026-10-01T21:23:40.407369+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-flat02-greedy.txt",
+      "sha256": "fa0db939911b5f03d519f8352a57476af8a6d3bcacf1a18304bac4a7d49c3abb",
+      "size": 786
+    },
+    {
+      "mtime_utc": "2026-10-01T21:23:57.759557+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-flat03-greedy.txt",
+      "sha256": "61d257e6064a9cd101981ed3fb1a9f9610b61d0ab33b570b607c118be2d7ecf5",
+      "size": 788
+    },
+    {
+      "mtime_utc": "2026-10-01T21:24:17.568521+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-flat04-greedy.txt",
+      "sha256": "c92f3d413f456d433c76cdb6c69d9bbcf532cd9a1d70c65b2a760868b908cf73",
+      "size": 789
+    },
+    {
+      "mtime_utc": "2026-10-01T21:24:37.577618+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-flat05-greedy.txt",
+      "sha256": "a7606ed0bba6cd4bd5dd6e27b708583a1f010303215e201e09e8329f90caa1e6",
+      "size": 796
+    },
+    {
+      "mtime_utc": "2026-10-01T21:24:59.237653+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-flat06-greedy.txt",
+      "sha256": "3b17a5808e48cdd6afa345af9f9744a62a57a1a54adbac64f48499882d33e7d2",
+      "size": 789
+    },
+    {
+      "mtime_utc": "2026-10-01T21:25:23.365215+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-flat07-greedy.txt",
+      "sha256": "56fc1da295160ffb038a848de9729fdb193045e3db53b0024a1509c8dd3070b1",
+      "size": 793
+    },
+    {
+      "mtime_utc": "2026-10-01T21:25:50.837668+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-flat08-greedy.txt",
+      "sha256": "f7a4b4b4e58d6d1293d22420f5ceddf9274491066ba84b2cda28765c7fc060df",
+      "size": 794
+    },
+    {
+      "mtime_utc": "2026-10-01T21:26:20.330013+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-flat09-greedy.txt",
+      "sha256": "55b2b7ad460006c0a2d2897383e25f92136ce1aaa67fcc9746247babc0aa6daa",
+      "size": 754
+    },
+    {
+      "mtime_utc": "2026-10-01T21:25:21.082705+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-nested00-greedy.txt",
+      "sha256": "10a24a2bac9e30bbd18a70d33a952935ce4a8546c82c70ee20aab8245fb2b302",
+      "size": 796
+    },
+    {
+      "mtime_utc": "2026-10-01T21:25:41.515182+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-nested01-greedy.txt",
+      "sha256": "e5e08cbb0a36ac5f2972bce9efcccde5507617fb890d62ef335eb59cc062a867",
+      "size": 799
+    },
+    {
+      "mtime_utc": "2026-10-01T21:26:02.565556+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-nested02-greedy.txt",
+      "sha256": "51c93a85293980f7cc867162287611273606d3d3a2f18ba55e448a173e0a39f3",
+      "size": 790
+    },
+    {
+      "mtime_utc": "2026-10-01T21:26:24.620119+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-nested03-greedy.txt",
+      "sha256": "477e1cd3fd999942073c602744824a0c65bf76a31a25a8b60a3a5cbb39dada9f",
+      "size": 786
+    },
+    {
+      "mtime_utc": "2026-10-01T21:26:45.677307+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-nested04-greedy.txt",
+      "sha256": "c58112c3e8039f12d2cedd7cc43636eff2d2c403a55fb8d30988ef2c3fea3cf2",
+      "size": 791
+    },
+    {
+      "mtime_utc": "2026-10-01T21:27:08.623700+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-nested05-greedy.txt",
+      "sha256": "28735f7dae17da3e9d70c46d1a9f5ab7acffbad6801e3d5b049d400e4a156b14",
+      "size": 795
+    },
+    {
+      "mtime_utc": "2026-10-01T21:27:30.275195+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-nested06-greedy.txt",
+      "sha256": "cce8214eb12ffc79c466275033c18c59f7e0e4ae5b2f073fc36669de003ddba6",
+      "size": 789
+    },
+    {
+      "mtime_utc": "2026-10-01T21:27:51.076183+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-nested07-greedy.txt",
+      "sha256": "38e8822156c2d0a78f1d6454c77dc15f467e759462274f94722a653861f140ae",
+      "size": 786
+    },
+    {
+      "mtime_utc": "2026-10-01T21:28:12.055255+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-nested08-greedy.txt",
+      "sha256": "acb09be058a00f31e234ddffa710dc0ce9abc498bcc1f0cc4bbaf7f781c081be",
+      "size": 792
+    },
+    {
+      "mtime_utc": "2026-10-01T21:28:33.810606+00:00",
+      "path": "D:\\_scratch\\T-3035\\core-synthetic1p5-nested09-greedy.txt",
+      "sha256": "a50b40c0bd9f7f422813976ea71e5430cffe74d356e7491c088c0cfd4c3b90cd",
+      "size": 788
+    },
+    {
+      "mtime_utc": "2026-10-01T20:57:23.077063+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-flat01-greedy.txt",
+      "sha256": "6805b6332ff3627e046e123ed1176525c09fceaa3d4c03046743a3f6f86a72c6",
+      "size": 836
+    },
+    {
+      "mtime_utc": "2026-10-01T20:58:59.549017+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-flat02-greedy.txt",
+      "sha256": "851a027af13949e58b26e88a753fd98314d2a90d2bc2abc0ad72f49a9f9ac85a",
+      "size": 835
+    },
+    {
+      "mtime_utc": "2026-10-01T21:00:24.819902+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-flat03-greedy.txt",
+      "sha256": "8d63a5e06b830a491bdbadececc5305a551baf467475d5c98c784921af03b31e",
+      "size": 833
+    },
+    {
+      "mtime_utc": "2026-10-01T21:01:53.841582+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-flat04-greedy.txt",
+      "sha256": "a1da271721d4cc04199c0a7d1e400095f2fdbde62f2081984b6f376c9626b6a7",
+      "size": 833
+    },
+    {
+      "mtime_utc": "2026-10-01T21:03:35.224196+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-flat05-greedy.txt",
+      "sha256": "997020ccd24cbc4fa48b523a22c406c12974f5026c7367410df9aba29ede2dfb",
+      "size": 839
+    },
+    {
+      "mtime_utc": "2026-10-01T21:05:24.464608+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-flat06-greedy.txt",
+      "sha256": "d93a297de12a784b66317979287f884968a25b0e3ff90e8aa3360160fd435601",
+      "size": 843
+    },
+    {
+      "mtime_utc": "2026-10-01T21:07:24.597894+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-flat07-greedy.txt",
+      "sha256": "44dbfe3cada4b8ba79c99ce728d053682d9f1d714a7ca021db1bbebf90e996bc",
+      "size": 840
+    },
+    {
+      "mtime_utc": "2026-10-01T21:09:30.734663+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-flat08-greedy.txt",
+      "sha256": "8ad164c38e9b81fb6a639f639434631c5ea79a189d1759ebab26d4df1a7aa5ea",
+      "size": 829
+    },
+    {
+      "mtime_utc": "2026-10-01T21:11:46.961342+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-flat09-greedy.txt",
+      "sha256": "bff485b5579e74e8e29acc84ba3789237feaeb1ecbe1bd6c0dd3188078052994",
+      "size": 796
+    },
+    {
+      "mtime_utc": "2026-10-01T21:24:58.286883+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-nested00-greedy.txt",
+      "sha256": "3adb544d7339727f8d406ae084af534cb8b9a017fb347f43ac6c426a05399bdb",
+      "size": 839
+    },
+    {
+      "mtime_utc": "2026-10-01T21:27:17.825747+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-nested01-greedy.txt",
+      "sha256": "af01446d013b0ba630fb27ddcc0f0dae756a6f054edb823840a61288f742f227",
+      "size": 839
+    },
+    {
+      "mtime_utc": "2026-10-01T21:29:21.640492+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-nested02-greedy.txt",
+      "sha256": "627043a1b8b67df329027207c17b7578f7f4652d2fc67ecd0bb9671288959bfb",
+      "size": 841
+    },
+    {
+      "mtime_utc": "2026-10-01T21:31:03.686590+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-nested03-greedy.txt",
+      "sha256": "689c41ff1fea556115a5ed99bc8f9dbbc01af445cd339d9b825bc2bf178946b7",
+      "size": 839
+    },
+    {
+      "mtime_utc": "2026-10-01T21:33:11.339694+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-nested04-greedy.txt",
+      "sha256": "215d9641f2048cb28f3209e3a5a8466e3230b63e4b62eea5de7bc847acb2fdf1",
+      "size": 839
+    },
+    {
+      "mtime_utc": "2026-10-01T21:34:53.362654+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-nested05-greedy.txt",
+      "sha256": "f8b15a14328fc540554127a50f9759716cbcef8f164ca4e0e075b30601bd44ad",
+      "size": 827
+    },
+    {
+      "mtime_utc": "2026-10-01T21:37:13.538625+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-nested06-greedy.txt",
+      "sha256": "66e924012f2bb15ef1f047187eb2b821cde157c73b4bdbb7682bf3545718762a",
+      "size": 841
+    },
+    {
+      "mtime_utc": "2026-10-01T21:39:17.188969+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-nested07-greedy.txt",
+      "sha256": "e774085130f9d75214d231416b5ee868f98383b7d40b37de1329692e9bee0805",
+      "size": 840
+    },
+    {
+      "mtime_utc": "2026-10-01T21:41:01.843915+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-nested08-greedy.txt",
+      "sha256": "d8f893ee506d98bdce7b9f1f4bba1ee8792a01699415fa7581ae8e25c8589304",
+      "size": 837
+    },
+    {
+      "mtime_utc": "2026-10-01T21:42:25.252260+00:00",
+      "path": "D:\\_scratch\\T-3035\\core0p5-nested09-greedy.txt",
+      "sha256": "ad8c3e1ea3bf26ed366216a7142211014160eb5213b9c37af6ae337d4644eb9b",
+      "size": 837
+    },
+    {
+      "mtime_utc": "2026-10-01T21:38:41.123488+00:00",
+      "path": "D:\\_scratch\\T-3035\\core1p5-flat00-damped.txt",
+      "sha256": "c217977da17d6b6841824761c134225db49204e00caf4b14c1157e7cdffe1b01",
+      "size": 844
+    },
+    {
+      "mtime_utc": "2026-10-01T20:59:37.711259+00:00",
+      "path": "D:\\_scratch\\T-3035\\core1p5-flat00-greedy.txt",
+      "sha256": "13165800dfec0a6f2c86ba74c5a5120c16428c3a3efd4e9a40a03ee96551715d",
+      "size": 855
+    },
+    {
+      "mtime_utc": "2026-10-01T21:02:29.140612+00:00",
+      "path": "D:\\_scratch\\T-3035\\core1p5-flat01-greedy.txt",
+      "sha256": "c61910fc9d9871497d167f9fa8890604c38a3bd04a2d2d79a384f6407aa97666",
+      "size": 838
+    },
+    {
+      "mtime_utc": "2026-10-01T21:05:35.609645+00:00",
+      "path": "D:\\_scratch\\T-3035\\core1p5-flat02-greedy.txt",
+      "sha256": "5a9b57a78f7c251ab3174265bcff8b8034ccac31f33d91ed499a391ffa913e4e",
+      "size": 840
+    },
+    {
+      "mtime_utc": "2026-10-01T21:09:28.101868+00:00",
+      "path": "D:\\_scratch\\T-3035\\core1p5-flat03-greedy.txt",
+      "sha256": "d51652a6fa11c99a765157ee556f3ac765703e28668f08d7cb3ce98b4ae33f2e",
+      "size": 837
+    },
+    {
+      "mtime_utc": "2026-10-01T21:12:52.736758+00:00",
+      "path": "D:\\_scratch\\T-3035\\core1p5-flat04-greedy.txt",
+      "sha256": "eca05bdac1868ca4efe5cb715ac8759ee57b97c553319aff7d0991c4a31f7013",
+      "size": 821
+    },
+    {
+      "mtime_utc": "2026-10-01T21:18:29.290818+00:00",
+      "path": "D:\\_scratch\\T-3035\\core1p5-flat05-greedy.txt",
+      "sha256": "211dd9a0e5ad189be7470aa2687330397e300b02b1281cbe3efec633981b7d1e",
+      "size": 843
+    },
+    {
+      "mtime_utc": "2026-10-01T21:22:13.255871+00:00",
+      "path": "D:\\_scratch\\T-3035\\core1p5-flat06-greedy.txt",
+      "sha256": "cbe137b97c0eb430d75c1bc00402a0c0b63592202bb08b3d9421cf6c79a428fc",
+      "size": 839
+    },
+    {
+      "mtime_utc": "2026-10-01T21:27:08.690703+00:00",
+      "path": "D:\\_scratch\\T-3035\\core1p5-flat07-greedy.txt",
+      "sha256": "0caf873959f93ece727c9b4cfcf17acaf216a1bae953b1d7ebc70194d353a0f9",
+      "size": 831
+    },
+    {
+      "mtime_utc": "2026-10-01T21:32:35.363335+00:00",
+      "path": "D:\\_scratch\\T-3035\\core1p5-flat08-greedy.txt",
+      "sha256": "2d84ac53f1f60a6154a06e70fa4d63d1828a1188af434c6671aa1668a69586b1",
+      "size": 835
+    },
+    {
+      "mtime_utc": "2026-10-01T21:38:29.299649+00:00",
+      "path": "D:\\_scratch\\T-3035\\core1p5-flat09-greedy.txt",
+      "sha256": "d6eb5ea848082b1417e6f68e7e0f93411c871fdb83dec1f41d400522032a553f",
+      "size": 796
+    },
+    {
+      "mtime_utc": "2026-10-01T21:38:06.023114+00:00",
+      "path": "D:\\_scratch\\T-3035\\invisible0p5-flat00.txt",
+      "sha256": "0a2df4f7295566823a669cc4ce9d8fdac15f9e580462f1381ddaa98ec4ce7780",
+      "size": 383
+    },
+    {
+      "mtime_utc": "2026-10-01T21:39:31.150718+00:00",
+      "path": "D:\\_scratch\\T-3035\\invisible1p5-flat00.txt",
+      "sha256": "a5d442df45fc40fe228fc0927c9cf94e689c0fb408347e511f3bcf9f11cab9e4",
+      "size": 426
+    },
+    {
+      "mtime_utc": "2026-10-01T20:48:14.981370+00:00",
+      "path": "D:\\_scratch\\T-3035\\mutant0p5-flat00-damped.txt",
+      "sha256": "f38c96986a445d38cf4d00239c06d04bc9eae2b994646fb1f064769f2a7d08c8",
+      "size": 864
+    },
+    {
+      "mtime_utc": "2026-10-01T20:54:45.816658+00:00",
+      "path": "D:\\_scratch\\T-3035\\mutant0p5-flat00-final-damped.txt",
+      "sha256": "8e0775e1760c18dbf32451ae187e2e399c11d65290c2500708566d7e81d1b4c4",
+      "size": 869
+    },
+    {
+      "mtime_utc": "2026-10-01T20:54:42.898011+00:00",
+      "path": "D:\\_scratch\\T-3035\\mutant0p5-flat00-final-greedy.txt",
+      "sha256": "13660e676d2b90f7172e1bf67335c830c7288deaaa956665616dabeb9e719c35",
+      "size": 837
+    },
+    {
+      "mtime_utc": "2026-10-01T20:50:27.278051+00:00",
+      "path": "D:\\_scratch\\T-3035\\mutant0p5-flat00-swap-damped.txt",
+      "sha256": "6f9863f7abfe0a8e1c72b6621b524e8d2079b4e24520578874facbcd8f70e247",
+      "size": 376
+    },
+    {
+      "mtime_utc": "2026-10-01T20:50:27.174844+00:00",
+      "path": "D:\\_scratch\\T-3035\\mutant0p5-flat00-swap-greedy.txt",
+      "sha256": "12b5a99a192217876f900153a23372c9d7ecc4501e6316977c0fdf6f8fe87a73",
+      "size": 348
+    },
+    {
+      "mtime_utc": "2026-10-01T20:51:41.947759+00:00",
+      "path": "D:\\_scratch\\T-3035\\mutant0p5-flat00-swap-last.txt",
+      "sha256": "c27a7fa49bda467cb63fbdfeb552d95f42f1e79b6944a1af56ce993c08402158",
+      "size": 348
+    },
+    {
+      "mtime_utc": "2026-10-01T20:46:06.533194+00:00",
+      "path": "D:\\_scratch\\T-3035\\mutant0p5-flat00.txt",
+      "sha256": "a67174adc3379dcc22431fda98657ee610f89ff81a788f3c3d805140edacc471",
+      "size": 820
+    },
+    {
+      "mtime_utc": "2026-10-01T21:21:04.110404+00:00",
+      "path": "D:\\_scratch\\T-3035\\schema-smoke\\out\\schema0-run1.ref",
+      "sha256": "d4cbcc8e3ee3eb838f732a491827878313ef69a2287dc522303bcee1dc49d182",
+      "size": 2721
+    },
+    {
+      "mtime_utc": "2026-10-01T21:21:05.257297+00:00",
+      "path": "D:\\_scratch\\T-3035\\schema-smoke\\out\\schema1-run1.ref",
+      "sha256": "e26ae8e97bd0dcd2176079a2cbd966b76964bb4a96fc1fa8ed499b7b3a84ece0",
+      "size": 2718
+    },
+    {
+      "mtime_utc": "2026-10-01T21:21:06.302342+00:00",
+      "path": "D:\\_scratch\\T-3035\\schema-smoke\\out\\schema2-run1.ref",
+      "sha256": "6dd070d32cc6ed941858979870f3199cb322a5b0c1df9f3c16cdee1307442a41",
+      "size": 2718
+    },
+    {
+      "mtime_utc": "2026-10-01T21:27:51.772802+00:00",
+      "path": "D:\\_scratch\\T-3035\\schema-smoke\\out-real1p5\\schema0-run1.ref",
+      "sha256": "424bfa0d1929d7a125478b790eb56cd9c9650f9db3339ee0946b1291b9725c4b",
+      "size": 2808
+    },
+    {
+      "mtime_utc": "2026-10-01T21:26:20.954535+00:00",
+      "path": "D:\\_scratch\\T-3035\\schema-smoke\\out1p5\\schema0-run1.ref",
+      "sha256": "4f2ff753cdb7949bd205d50bd9d2514720f05dc9420bdd0108476474ebb2759b",
+      "size": 2730
+    },
+    {
+      "mtime_utc": "2026-10-01T21:26:24.403610+00:00",
+      "path": "D:\\_scratch\\T-3035\\schema-smoke\\out1p5\\schema1-run1.ref",
+      "sha256": "2762be65cbd67a16113417d6e357603c828d23de8f364697f245fde4dd6d5648",
+      "size": 2727
+    },
+    {
+      "mtime_utc": "2026-10-01T21:26:27.472769+00:00",
+      "path": "D:\\_scratch\\T-3035\\schema-smoke\\out1p5\\schema2-run1.ref",
+      "sha256": "5e0dde22270d5d86d7e2ae4c717f8c96b05ae0c3deb69389ce80aef26d865dea",
+      "size": 2727
+    },
+    {
+      "mtime_utc": "2026-10-01T20:39:02.422708+00:00",
+      "path": "D:\\_scratch\\T-3035\\screen0p5-flat.json",
+      "sha256": "cce579fb8852014da2fdfaa4fddf941d599f03e0bd266d752a3411f3f118f5f7",
+      "size": 6041
+    },
+    {
+      "mtime_utc": "2026-10-01T20:38:21.021352+00:00",
+      "path": "D:\\_scratch\\T-3035\\screen0p5-flat.txt",
+      "sha256": "4a238945efa7d1d8eb0e5d8ff8e5ae8231129275dc639668b77d35869a22a4ce",
+      "size": 7131
+    },
+    {
+      "mtime_utc": "2026-10-01T20:44:49.671258+00:00",
+      "path": "D:\\_scratch\\T-3035\\screen0p5-nested.json",
+      "sha256": "978fba992b91d09a185a2028a5c9e5dd0d0a1ab9d620cb6a7472eb038a0ee4bc",
+      "size": 6093
+    },
+    {
+      "mtime_utc": "2026-10-01T20:44:16.071064+00:00",
+      "path": "D:\\_scratch\\T-3035\\screen0p5-nested.txt",
+      "sha256": "69cb3eb4d98f768876db58b581d1d42b84eae257704c02ade87903e3745485f1",
+      "size": 7272
+    },
+    {
+      "mtime_utc": "2026-10-01T20:33:35.494961+00:00",
+      "path": "D:\\_scratch\\T-3035\\screen0p5-sample.txt",
+      "sha256": "14a05a6cf8f61f710cdb6ece896b9c3ad7380547034706b62e5b6a0454d004f3",
+      "size": 1285
+    },
+    {
+      "mtime_utc": "2026-10-01T20:44:49.407598+00:00",
+      "path": "D:\\_scratch\\T-3035\\screen1p5-flat.json",
+      "sha256": "cc063d8917a28f71929e3f9bdae129079c8a601d98f6e261bdbd8aa2716d663d",
+      "size": 6121
+    },
+    {
+      "mtime_utc": "2026-10-01T20:44:37.316721+00:00",
+      "path": "D:\\_scratch\\T-3035\\screen1p5-flat.txt",
+      "sha256": "cd8a1eb2164d19162d204ae03c99d1983a698b5f6b07be5fe11c350769319d86",
+      "size": 7317
+    },
+    {
+      "mtime_utc": "2026-10-01T21:40:26.163331+00:00",
+      "path": "D:\\_scratch\\T-3035\\swap-pkv-def-flat00.txt",
+      "sha256": "207888d42459fee253f341704c9363a4dc2bd5ebe8a2be4c576fe3ba57c0c868",
+      "size": 352
+    },
+    {
+      "mtime_utc": "2026-10-01T21:25:53.377046+00:00",
+      "path": "D:\\_scratch\\T-3035\\walk-real1p5\\schema0.walkprobe.txt",
+      "sha256": "177360d9c39d8b2db89f3c2960aa312dfdc36583fe5b2fe27dfac7142f4ef3d6",
+      "size": 290
+    },
+    {
+      "mtime_utc": "2026-10-01T21:25:30.211377+00:00",
+      "path": "D:\\_scratch\\T-3035\\walk0p5\\schema0.walkprobe.txt",
+      "sha256": "929f728d012475f36790e3c70d5b97c0f3012ebae0ef062f989717434b42d6ca",
+      "size": 260
+    },
+    {
+      "mtime_utc": "2026-10-01T21:25:30.777748+00:00",
+      "path": "D:\\_scratch\\T-3035\\walk0p5\\schema1.walkprobe.txt",
+      "sha256": "b47345bf1e01d058a0bf605d88c41b054fef75f859075f808775260109d89955",
+      "size": 259
+    },
+    {
+      "mtime_utc": "2026-10-01T21:25:31.379981+00:00",
+      "path": "D:\\_scratch\\T-3035\\walk0p5\\schema2.walkprobe.txt",
+      "sha256": "3babb86663d7382a50c94d30c37c347b384b14706cf816378cfde43216a7e0c6",
+      "size": 260
+    },
+    {
+      "mtime_utc": "2026-10-01T21:26:18.212434+00:00",
+      "path": "D:\\_scratch\\T-3035\\walk1p5\\schema0.walkprobe.txt",
+      "sha256": "929f728d012475f36790e3c70d5b97c0f3012ebae0ef062f989717434b42d6ca",
+      "size": 260
+    },
+    {
+      "mtime_utc": "2026-10-01T21:26:19.787116+00:00",
+      "path": "D:\\_scratch\\T-3035\\walk1p5\\schema1.walkprobe.txt",
+      "sha256": "b47345bf1e01d058a0bf605d88c41b054fef75f859075f808775260109d89955",
+      "size": 259
+    },
+    {
+      "mtime_utc": "2026-10-01T21:26:21.270227+00:00",
+      "path": "D:\\_scratch\\T-3035\\walk1p5\\schema2.walkprobe.txt",
+      "sha256": "3babb86663d7382a50c94d30c37c347b384b14706cf816378cfde43216a7e0c6",
+      "size": 260
+    }
+  ],
+  "purpose": "Raw screens, shipped-verb mutations, and provisional composition controls",
+  "status": "QUARANTINED"
+}
