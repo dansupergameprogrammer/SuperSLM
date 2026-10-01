@@ -43,8 +43,50 @@ void Fields61() {
         sslm_prefix restored=nullptr;
         if(!Restored(fx,&pool.pool,b,nullptr,sc.h,&restored)) continue;
         PageRows(fx,pool.pool,restored,b,L);
+        auto adopter_state=[&](sslm_prefix prefix) {
+            std::vector<uint8_t> ssb;
+            sslm_seq seq=BudgetSeq(fx,&pool.pool,32,sc.h);
+            if(!seq) return ssb;
+            Status(sslm_seq_adopt_prefix(seq,prefix),SSLM_OK,"6.1 SSB6 adopter");
+            PKV_CHECK_MSG(SaveBlob(seq,&ssb) && IsMagic(ssb,"SSB6"),
+                          "6.1 adopted state did not save as SSB6");
+            return ssb;
+        };
+        const auto original_state=adopter_state(p);
+        const auto restored_state=adopter_state(restored);
+        if(original_state.size()>=156 && restored_state.size()>=156) {
+            for(size_t off : {size_t(40),size_t(76),size_t(84),size_t(92),
+                              size_t(124),size_t(132),size_t(140),size_t(148)})
+                PKV_CHECK_MSG(Le64(original_state,off)==Le64(restored_state,off),
+                              "6.1 independent SSB6 state differs at offset %zu",off);
+            PKV_CHECK_MSG(Le32(original_state,48)==Le32(restored_state,48),
+                          "6.1 independent SSB6 schema walk differs");
+        }
         const auto after=Save(restored);
         PKV_CHECK_MSG(after==b,"6.1: residual, scale, counts, token or schema changed");
+        if(L==65) {
+            auto distinct=b;
+            PutLe64(distinct,128,17);
+            PutLe64(distinct,136,uint64_t(-3));
+            const std::array<uint64_t,5> counts{11,13,17,19,23};
+            PKV_CHECK_MSG(std::all_of(counts.begin(),counts.end(),
+                          [](uint64_t n){return n!=0;} ) &&
+                          std::set<uint64_t>(counts.begin(),counts.end()).size()==5,
+                          "6.1 count operand must be nonzero and pairwise distinct");
+            for(size_t i=0;i<counts.size();++i) PutLe64(distinct,144+i*8,counts[i]);
+            Digest(distinct);
+            sslm_prefix edited=nullptr;
+            if(Restored(fx,&pool.pool,distinct,nullptr,sc.h,&edited)) {
+                const auto state=adopter_state(edited);
+                if(state.size()>=156) {
+                    PKV_CHECK_EQ(int64_t(Le64(state,76)),17);
+                    PKV_CHECK_EQ(int64_t(Le64(state,84)),-3);
+                    for(size_t i=0;i<counts.size();++i)
+                        PKV_CHECK_MSG(Le64(state,i==0 ? 92 : 116+i*8)==counts[i],
+                                      "6.1 saturation count %zu lost or swapped in SSB6",i);
+                }
+            }
+        }
     }
 }
 PKV_CELL("6.1/E2", "E1", Fields61);
