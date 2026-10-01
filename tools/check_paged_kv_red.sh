@@ -19,7 +19,7 @@ targets=("$@")
 owed='^(sslm_kv_page_positions|sslm_kv_page_size|sslm_kv_pages_for_budget|sslm_kv_page_pool_overhead_size|sslm_kv_page_pool_create|sslm_seq_create_budgeted|sslm_prefix_begin_budgeted|sslm_prefix_begin_from|sslm_kv_pool_stats|sslm_seq_kv_stats|sslm_seq_restore_shared|sslm_pkv_test_only_[a-z_]+|superslm::kv_pages::[A-Za-z]+\(.*|superslm::(KeyRow|ValueRow|MutableKeyRow|MutableValueRow)\(superslm::KvPageView const&.*|superslm::RunLayerLoop(ChunkBatched)?\(.*superslm::KvPageView const&.*|superslm::GemmProbQ15AccumulateInto\(.*)$'
 broken=0
 for t in "${targets[@]}"; do
-	if ! cmake --build "$build" --target help 2>/dev/null | grep -q "\.\.\. $t\$"; then
+	if ! cmake --build "$build" --target help 2>/dev/null | grep "\.\.\. $t$" >/dev/null; then
 		echo "$t: no such target (no cells for this step yet)"
 		continue
 	fi
