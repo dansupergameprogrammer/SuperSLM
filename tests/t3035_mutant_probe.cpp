@@ -72,19 +72,21 @@ struct Layout {
     }
 };
 
-std::vector<int32_t> Decode(Input& in, Pool& pool, const std::vector<uint8_t>& blob,
+std::vector<int32_t> Decode(Input& in, Pool& pool, const std::vector<uint8_t>& blob, bool damped,
                             const std::vector<int32_t>* expected = nullptr) {
     sslm_seq sequence = nullptr;
     Check(sslm_seq_restore(in.model, &pool.pool, blob.data(), blob.size(), &sequence), "seq_restore");
     sslm_decode_params params{};
-    params.layer_budget = 1;
+    if (damped) Check(sslm_decode_params_init(in.model, SSLM_DECODE_MODE_DAMPED_GREEDY, 1, &params), "params_init");
+    else params.layer_budget = 1;
     sslm_seq batch[1] = {sequence};
     std::vector<int32_t> tokens;
     for (int i = 0; i < 64; ++i) {
         int32_t token = -1;
         sslm_status status = SSLM_OK;
         for (int guard = 0; token == -1 && guard < 4096; ++guard) {
-            status = sslm_decode_step(in.model, batch, 1, &params, nullptr, &token);
+            status = damped ? sslm_decode_step_v2(in.model, batch, 1, &params, nullptr, &token)
+                            : sslm_decode_step(in.model, batch, 1, &params, nullptr, &token);
             if (status != SSLM_OK) break;
         }
         if (status != SSLM_OK || token < 0) break;
@@ -112,8 +114,8 @@ void CopyRows(std::vector<uint8_t>& target, const std::vector<uint8_t>& donor,
 }
 
 void Report(std::ofstream& out, const char* name, Input& in, Pool& pool,
-            const std::vector<uint8_t>& blob, const std::vector<int32_t>& baseline) {
-    const auto tokens = Decode(in, pool, blob, &baseline);
+            const std::vector<uint8_t>& blob, const std::vector<int32_t>& baseline, bool damped) {
+    const auto tokens = Decode(in, pool, blob, damped, &baseline);
     out << name << " killed=" << int(tokens != baseline)
         << " first_diff=" << FirstDiff(baseline, tokens)
         << " tokens=" << tokens.size() << '\n';
@@ -125,7 +127,12 @@ void Report(std::ofstream& out, const char* name, Input& in, Pool& pool,
 
 int main(int argc, char** argv) {
     try {
-        if (argc != 5) throw std::runtime_error("usage: t3035_mutant_probe MODEL TARGET_IDS DONOR_IDS OUT");
+        if (argc != 6 && argc != 7) throw std::runtime_error("usage: t3035_mutant_probe MODEL TARGET_IDS DONOR_IDS OUT greedy|damped [swap]");
+        const std::string mode = argv[5];
+        if (mode != "greedy" && mode != "damped") throw std::runtime_error("invalid decode mode");
+        const bool damped = mode == "damped";
+        const bool swap_only = argc == 7 && std::string(argv[6]) == "swap";
+        if (argc == 7 && !swap_only) throw std::runtime_error("unknown probe selector");
         Input in(argv[1]);
         Pool pool(in.model, in.cap);
         const Geometry geometry(in);
@@ -135,50 +142,55 @@ int main(int argc, char** argv) {
         if (d.length < t.length) throw std::runtime_error("donor must cover target positions");
         std::ofstream output(argv[4], std::ios::binary | std::ios::trunc);
         if (!output) throw std::runtime_error("output open failed");
-        const auto baseline = Decode(in, pool, target);
+        const auto baseline = Decode(in, pool, target, damped);
         output << "# L=" << t.length << " B=" << geometry.page_positions
                << " runs=" << geometry.runs << " row_bytes=" << geometry.row_bytes
-               << " baseline_tokens=" << baseline.size() << " tokens=";
+               << " mode=" << mode << " baseline_tokens=" << baseline.size() << " tokens=";
         for (size_t i = 0; i < baseline.size(); ++i) {
             if (i) output << ',';
             output << baseline[i];
         }
         output << '\n';
+        const size_t B = geometry.page_positions, L = t.length;
+        const size_t full_pages = L / B;
+        if (!swap_only) {
         Report(output, "M-res", in, pool, [&] {
             auto b = target;
             std::memcpy(b.data() + 172, donor.data() + 172, geometry.hidden);
             return b;
-        }(), baseline);
-        const size_t B = geometry.page_positions, L = t.length;
+        }(), baseline, damped);
         const std::array<size_t, 7> positions{0, 1, B - 1, B, L / 2, L - B - 1, L - 1};
         for (size_t position : positions) {
             auto b = target;
             CopyRows(b, donor, t, d, geometry, position, 1);
             const std::string name = "M-row(" + std::to_string(position) + ")";
-            Report(output, name.c_str(), in, pool, b, baseline);
+            Report(output, name.c_str(), in, pool, b, baseline, damped);
         }
-        const size_t full_pages = L / B;
         const std::array<size_t, 3> pages{0, full_pages / 2, full_pages - 1};
         for (size_t page : pages) {
             auto b = target;
             CopyRows(b, donor, t, d, geometry, page * B, B);
             const std::string name = "M-page(" + std::to_string(page) + ")";
-            Report(output, name.c_str(), in, pool, b, baseline);
+            Report(output, name.c_str(), in, pool, b, baseline, damped);
         }
         if (L % B) {
             auto b = target;
             CopyRows(b, donor, t, d, geometry, full_pages * B, L % B);
-            Report(output, "M-tail", in, pool, b, baseline);
+            Report(output, "M-tail", in, pool, b, baseline, damped);
+        }
         }
         if (full_pages >= 2) {
             auto b = target;
-            const size_t other = (full_pages / 2) * B;
+            const size_t first = (full_pages - 2) * B;
+            const size_t other = (full_pages - 1) * B;
             for (size_t run = 0; run < geometry.runs; ++run)
                 for (size_t position = 0; position < B; ++position)
                     for (size_t byte = 0; byte < geometry.row_bytes; ++byte)
-                        std::swap(b[t.Row(run, position, geometry) + byte],
+                        std::swap(b[t.Row(run, first + position, geometry) + byte],
                                   b[t.Row(run, other + position, geometry) + byte]);
-            Report(output, "M-swap", in, pool, b, baseline);
+            const std::string name = "M-swap(" + std::to_string(first / B) + "," +
+                                     std::to_string(other / B) + ")";
+            Report(output, name.c_str(), in, pool, b, baseline, damped);
         }
         output.flush();
         return 0;
