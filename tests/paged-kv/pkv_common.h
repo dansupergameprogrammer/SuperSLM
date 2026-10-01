@@ -532,6 +532,11 @@ inline int CountLegacyCreates(sslm_model model, sslm_kv_pool* pool, sslm_status*
 inline std::vector<int64_t> ProbeSplit(const Fixture& fx, int64_t k) {
 	std::vector<int64_t> parts;
 	const int64_t M = fx.CapPages();
+	// The probe needs creates of at least 2 pages, so a one-page-per-cap geometry (B = cap) and
+	// k < 2 cannot be probed: a failed check, never a loop.
+	PKV_CHECK_MSG(M >= 2 && k >= 2, "fill probe: k = %lld on a %lld-page cap cannot be probed",
+	              static_cast<long long>(k), static_cast<long long>(M));
+	if (M < 2 || k < 2) return parts;
 	while (k > 0) {
 		int64_t r = k < M ? k : M;
 		if (k - r == 1) r -= 1;  // never leave a 1-page remainder
