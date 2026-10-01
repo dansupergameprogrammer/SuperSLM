@@ -161,6 +161,45 @@ void Timing103() {
     PKV_CHECK_MSG(line.find("COMMISSIONED")!=std::string::npos,
                   "10.3 timing instrument has no independent commission");
     for(double ratio:ratios) PKV_CHECK_MSG(ratio>=1000,"10.3 real restore ratio %.1f below 1000",ratio);
+    const auto worst_path=Env("SUPERSLM_PRECACHE_REAL_1P5_MODEL");
+    if(worst_path.empty()) return;
+    ModelFile worst(worst_path);
+    Status(worst.status,SSLM_OK,"10.3 1.5B worst-setting map");
+    if(worst.status!=SSLM_OK) return;
+    Fixture wf;
+    wf.model=worst.model; worst.model=nullptr;
+    wf.geo={28,2,128,32768}; wf.vocab=151936;
+    PagePool worst_pool(wf.model,uint32_t(wf.CapPages()+4));
+    Status(worst_pool.status,SSLM_OK,"10.3 cap-length pool");
+    if(worst_pool.status!=SSLM_OK) return;
+    sslm_prefix cap_prefix=nullptr;
+    const auto cap_start=std::chrono::steady_clock::now();
+    Status(sslm_prefix_begin_budgeted(wf.model,&worst_pool.pool,32768,&cap_prefix),
+           SSLM_OK,"10.3 cap-length begin");
+    if(!cap_prefix) return;
+    Status(PrefixPrefillAll(wf.model,cap_prefix,Stream(41,32768,wf.vocab),64),
+           SSLM_OK,"10.3 cap-length prefill");
+    Status(sslm_prefix_freeze(cap_prefix),SSLM_OK,"10.3 cap-length freeze");
+    const auto cap_prefill_end=std::chrono::steady_clock::now();
+    const auto cap_blob=Save(cap_prefix);
+    if(!RequireBlob(cap_blob,"10.3 cap-length")) {sslm_prefix_release(cap_prefix);return;}
+    sslm_prefix_release(cap_prefix);
+    double cap_restore_ms=0;
+    for(int i=0;i<3;++i) {
+        sslm_prefix restored=nullptr;
+        const auto begin=std::chrono::steady_clock::now();
+        const auto st=Restore(wf,&worst_pool.pool,cap_blob,nullptr,&restored);
+        const auto end=std::chrono::steady_clock::now();
+        Status(st,SSLM_OK,"10.3 cap-length restore");
+        if(st!=SSLM_OK) return;
+        cap_restore_ms+=std::chrono::duration<double,std::milli>(end-begin).count();
+        sslm_prefix_release(restored);
+    }
+    cap_restore_ms/=3.0;
+    const double cap_prefill_ms=std::chrono::duration<double,std::milli>(cap_prefill_end-cap_start).count();
+    const double mib=double(cap_blob.size())/(1024.0*1024.0);
+    std::printf("10.3 worst cap=32768 geometry=1.5B prefill_ms=%.3f restore_ms=%.3f MiB=%.3f MiB/s=%.1f\n",
+                cap_prefill_ms,cap_restore_ms,mib,1000.0*mib/cap_restore_ms);
 }
 PKV_CELL("10.3/E4", "E1", Timing103);
 
