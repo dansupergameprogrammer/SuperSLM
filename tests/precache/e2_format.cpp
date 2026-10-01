@@ -32,7 +32,7 @@ void Independent712() {
     sc.h.prefixes.push_back(prefix);
     Status(sslm_prefix_set_schema(prefix,schema),SSLM_OK,"7.12 bind schema_two");
     const std::vector<int32_t> input(L,0); // the test-owned DFA reaches state 1 on token 0.
-    Status(PrefixPrefillAll(fx.model,prefix,input,64),SSLM_OK,"7.12 prefill");
+    Status(SchemaContentAll(fx.model,prefix,input,64),SSLM_OK,"7.12 schema-content prefill");
     Status(sslm_prefix_freeze(prefix),SSLM_OK,"7.12 freeze");
     const auto blob=Save(prefix);
     if(!RequireBlob(blob,"7.12 independent parser")) return;

@@ -127,7 +127,7 @@ void RoundTrip64() {
     sc.h.prefixes.push_back(prefix);
     Status(sslm_prefix_set_schema(prefix,schema),SSLM_OK,"6.4 bind schema");
     std::vector<int32_t> ids(17,0);
-    Status(PrefixPrefillAll(bound.model,prefix,ids,17),SSLM_OK,"6.4 bound prefill");
+    Status(SchemaContentAll(bound.model,prefix,ids,17),SSLM_OK,"6.4 bound prefill");
     Status(sslm_prefix_freeze(prefix),SSLM_OK,"6.4 bound freeze");
     round_trip(bound,&pool.pool,sc.h,prefix,nullptr,0,"schema-bound");
 }

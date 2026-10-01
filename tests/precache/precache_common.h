@@ -182,4 +182,30 @@ inline const Fixture& SyntheticFixture(bool three_schemas = false) {
     cache.emplace(three_schemas, std::move(fx));
     return result;
 }
+
+inline sslm_status SchemaContentAll(sslm_model model,sslm_prefix prefix,
+                                     const std::vector<int32_t>& ids,int32_t chunk) {
+    size_t at=0;
+    while(at<ids.size()) {
+        int32_t consumed=0;
+        const auto st=sslm_prefix_prefill(model,prefix,ids.data()+at,
+            int32_t(ids.size()-at),chunk,SSLM_SPAN_SCHEMA_CONTENT,nullptr,&consumed);
+        if(st!=SSLM_OK || consumed<=0) return st==SSLM_OK ? SSLM_INVALID_ARGUMENT : st;
+        at+=size_t(consumed);
+    }
+    return SSLM_OK;
+}
+
+inline sslm_status SeqSchemaContentAll(sslm_model model,sslm_seq seq,
+                                       const std::vector<int32_t>& ids,int32_t chunk) {
+    size_t at=0;
+    while(at<ids.size()) {
+        int32_t consumed=0;
+        const auto st=sslm_prefill(model,seq,ids.data()+at,
+            int32_t(ids.size()-at),chunk,SSLM_SPAN_SCHEMA_CONTENT,nullptr,&consumed);
+        if(st!=SSLM_OK || consumed<=0) return st==SSLM_OK ? SSLM_INVALID_ARGUMENT : st;
+        at+=size_t(consumed);
+    }
+    return SSLM_OK;
+}
 }

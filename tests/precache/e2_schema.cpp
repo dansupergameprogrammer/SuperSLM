@@ -5,6 +5,13 @@
 namespace {
 using namespace pc;
 
+uint64_t ExpectedNameHash(const char* name) {
+    uint64_t h=14695981039346656037ull;
+    for(const unsigned char* p=reinterpret_cast<const unsigned char*>(name);*p;++p)
+        h=(h^*p)*1099511628211ull;
+    return h;
+}
+
 std::string ArtifactDir() {
     const char* p=std::getenv("SUPERSLM_PRECACHE_E0_ARTIFACT_DIR");
     PKV_CHECK_MSG(p && *p,"SUPERSLM_PRECACHE_E0_ARTIFACT_DIR is unset");
@@ -67,7 +74,7 @@ void Schema67() {
     model.model=nullptr; // Fixture owns the mapped handle from here.
     fx.geo={24,2,64,4096};
     fx.vocab=256;
-    PagePool pool(fx.model,128);
+    PagePool pool(fx.model,800); // two simultaneous legacy whole-cap adopters.
     Handles h;
     for(const char* name : {"schema_zero","schema_one","schema_two"}) {
         sslm_schema schema=nullptr;
@@ -79,7 +86,7 @@ void Schema67() {
         h.prefixes.push_back(p);
         Status(sslm_prefix_set_schema(p,schema),SSLM_OK,"6.7 schema bind");
         std::vector<int32_t> input(65,0); // first token advances the fixture DFA.
-        Status(PrefixPrefillAll(fx.model,p,input,64),SSLM_OK,"6.7 schema prefill");
+        Status(SchemaContentAll(fx.model,p,input,64),SSLM_OK,"6.7 schema prefill");
         Status(sslm_prefix_freeze(p),SSLM_OK,"6.7 freeze");
         const auto b=Save(p);
         if(!RequireBlob(b,"6.7")) return;
@@ -93,7 +100,62 @@ void Schema67() {
         sslm_prefix copy=nullptr;
         if(Restored(fx,&pool.pool,b,nullptr,h,&copy)) {
             PKV_CHECK_MSG(Save(copy)==b,"6.7 schema binding or walk changed on restore");
-            TwinTokens(fx,&pool.pool,p,copy,16);
+            PKV_CHECK_MSG(Le64(b,96)==ExpectedNameHash(name) && Le32(b,104)==1,
+                          "6.7 source prefix lacks its named hash and advanced walk");
+            const char* adopter_names[]={"schema_zero","schema_one","schema_two",nullptr};
+            for(const char* adopter_name : adopter_names) {
+                for(bool budget : {false,true}) {
+                    sslm_seq original=nullptr,adopted=nullptr;
+                    const auto create=[&](sslm_seq* out) {
+                        return budget ? sslm_seq_create_budgeted(fx.model,&pool.pool,80,out)
+                                      : sslm_seq_create(fx.model,&pool.pool,out);
+                    };
+                    Status(create(&original),SSLM_OK,"6.7 prefill-twin adopter create");
+                    Status(create(&adopted),SSLM_OK,"6.7 restored adopter create");
+                    if(!original || !adopted) {
+                        if(original) sslm_seq_release(original);
+                        if(adopted) sslm_seq_release(adopted);
+                        continue;
+                    }
+                    if(adopter_name) {
+                        sslm_schema chosen=nullptr;
+                        Status(sslm_schema_lookup(fx.model,adopter_name,&chosen),SSLM_OK,
+                               "6.7 adopter schema lookup");
+                        Status(sslm_seq_set_schema(original,chosen),SSLM_OK,
+                               "6.7 prefill-twin adopter bind");
+                        Status(sslm_seq_set_schema(adopted,chosen),SSLM_OK,
+                               "6.7 restored adopter bind");
+                    }
+                    const auto want=adopter_name && std::strcmp(adopter_name,name)==0
+                                  ? SSLM_OK : SSLM_PREFIX_SCHEMA_MISMATCH;
+                    const auto a=sslm_seq_adopt_prefix(original,p);
+                    const auto c=sslm_seq_adopt_prefix(adopted,copy);
+                    PKV_CHECK_MSG(a==want && c==want,
+                                  "6.7 prefix=%s adopter=%s mode=%s: expected disposition %d, got %d/%d",
+                                  name,adopter_name ? adopter_name : "unbound",
+                                  budget ? "budget" : "legacy",int(want),int(a),int(c));
+                    if(a==SSLM_OK && c==SSLM_OK) {
+                        if(budget) {
+                            std::vector<uint8_t> ssb;
+                            PKV_CHECK_MSG(SaveBlob(adopted,&ssb) && IsMagic(ssb,"SSB6"),
+                                          "6.7 restored adopter did not save SSB6");
+                            if(ssb.size()>=52) {
+                                PKV_CHECK_EQ(Le64(ssb,40),ExpectedNameHash(name));
+                                PKV_CHECK_EQ(Le32(ssb,48),1u);
+                            }
+                        }
+                        std::vector<int32_t> x,y;
+                        const auto sx=DecodeN(fx.model,original,64,&x);
+                        const auto sy=DecodeN(fx.model,adopted,64,&y);
+                        PKV_CHECK_MSG(sx==SSLM_OK && sy==SSLM_OK && x.size()==64 && x==y,
+                                      "6.7 prefix=%s adopter=%s mode=%s 64-token continuation differs",
+                                      name,adopter_name ? adopter_name : "unbound",
+                                      budget ? "budget" : "legacy");
+                    }
+                    sslm_seq_release(adopted);
+                    sslm_seq_release(original);
+                }
+            }
         }
     }
 }
@@ -118,13 +180,21 @@ void ExistingSsb5_214() {
     if(!original) return;
     Status(sslm_seq_set_schema(original,schema),SSLM_OK,"2.14 bind schema_two");
     std::vector<int32_t> input(17,0);
-    Status(PrefillAll(fx.model,original,input,16),SSLM_OK,"2.14 advance index-2 walk");
+    Status(SeqSchemaContentAll(fx.model,original,input,16),SSLM_OK,
+           "2.14 advance index-2 walk");
     std::vector<uint8_t> blob;
     PKV_CHECK_MSG(SaveBlob(original,&blob) && IsMagic(blob,"SSB5"),"2.14 legacy save not SSB5");
     sslm_seq restored=nullptr;
     Status(sslm_seq_restore(fx.model,&pool.pool,blob.data(),blob.size(),&restored),
            SSLM_OK,"2.14 SSB5 restore");
     if(restored) {
+        std::vector<uint8_t> restored_blob;
+        PKV_CHECK_MSG(SaveBlob(restored,&restored_blob) && IsMagic(restored_blob,"SSB5"),
+                      "2.14 restored index-2 sequence did not save SSB5");
+        if(restored_blob.size()>=52) {
+            PKV_CHECK_EQ(Le64(restored_blob,40),ExpectedNameHash("schema_two"));
+            PKV_CHECK_EQ(Le32(restored_blob,48),1u);
+        }
         std::vector<int32_t> a,c;
         PKV_CHECK_EQ(DecodeN(fx.model,original,16,&a),SSLM_OK);
         PKV_CHECK_EQ(DecodeN(fx.model,restored,16,&c),SSLM_OK);

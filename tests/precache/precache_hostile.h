@@ -104,7 +104,7 @@ inline HostileBlob BoundWalkCase() {
     sc.h.prefixes.push_back(prefix);
     Status(sslm_prefix_set_schema(prefix,schema),SSLM_OK,"2.3 bound-walk bind");
     std::vector<int32_t> zero{0};
-    Status(PrefixPrefillAll(fx.model,prefix,zero,1),SSLM_OK,"2.3 bound-walk prefill");
+    Status(SchemaContentAll(fx.model,prefix,zero,1),SSLM_OK,"2.3 bound-walk prefill");
     Status(sslm_prefix_freeze(prefix),SSLM_OK,"2.3 bound-walk freeze");
     auto bytes=Save(prefix);
     if(bytes.size()>=108) {
