@@ -18,9 +18,10 @@ int main(int argc, char** argv) {
         }
         for (int i=0; i<3; ++i) {
             Prefix p;
-            Check(sslm_prefix_begin_budgeted(in.model,&pool.pool,128,&p.p),"prefix_begin");
+            Check(sslm_prefix_begin_budgeted(in.model,&pool.pool,129,&p.p),"prefix_begin");
             Check(sslm_prefix_set_schema(p.p,schemas[i]),"prefix_set_schema");
             Prefill(in.model,p.p,Stream(84+uint32_t(i),128),SSLM_SPAN_PROMPT);
+            Prefill(in.model,p.p,std::vector<int32_t>{0},SSLM_SPAN_SCHEMA_CONTENT);
             Check(sslm_prefix_freeze(p.p),"prefix_freeze");
             for (int a=0;a<4;++a)
                 Row(out,"three_schema_"+SchemaName(in.model,i),i,a,in.model,pool,p.p,true,schemas[i],nullptr);
