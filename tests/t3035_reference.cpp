@@ -143,11 +143,9 @@ void CapturePrefix(Input& in, Pool& pool, sslm_prefix prefix, const fs::path& pr
             << " persona_ids_sha256=" << FileSha(prompt_dir / ("persona" + id.substr(6) + "." + id_suffix));
     }
     out << '\n';
-    const int adopter_count = damped_available ? 5 : 3;
-    for (int a = 0; a < adopter_count; ++a) {
-        const int adopter = damped_available ? a : (a == 2 ? 4 : a);
-        WriteRow(out, in, pool, prefix, id, length, page_positions, origin, adopter, damped_available);
-    }
+    for (int adopter = 0; adopter < 5; ++adopter)
+        WriteRow(out, in, pool, prefix, id, length, page_positions, origin, adopter,
+                 damped_available);
     out.flush();
     if (!out) throw std::runtime_error("reference output write failed: " + output.string());
     std::cerr << id << " captured\n";
