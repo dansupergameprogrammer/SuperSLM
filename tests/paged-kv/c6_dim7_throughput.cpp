@@ -11,8 +11,9 @@
 //      "<target> <median tok/s> <relative spread>";
 //   2. built as superslm_pkv_c6, with SUPERSLM_PAGED_KV_79_BASELINE=<that file>: measures the same
 //      targets and grades slowdown = 1 - paged / one-page against the bar.
-// The verdict is asserted only with SUPERSLM_PAGED_KV_TIMING_COMMISSIONED=1 (the harness is commissioned
-// at C6, §8; before that its readings are quarantined and printed only).
+// The verdict is three-way -- PASS, FAIL or NO RESULT (pkv_common.h's timing verdicts; Grade() below) --
+// and is asserted only with SUPERSLM_PAGED_KV_TIMING_COMMISSIONED=1 (the harness is commissioned at C6,
+// §8; before that its readings are quarantined and printed only). A NO RESULT is never asserted.
 //
 // In the cloud ("7.9/C6:fixtures") the one-page view is in the same binary: pkv_odd is pkv_def's weights
 // at cap 4100, which 16 does not divide, so B = cap and the holder is one page (§3.1). pkv_def at the
@@ -23,6 +24,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -94,23 +96,38 @@ Rate Measure(const Fixture& fx, int64_t width, int64_t n) {
 	return r;
 }
 
-bool Commissioned() {
-	const char* c = std::getenv("SUPERSLM_PAGED_KV_TIMING_COMMISSIONED");
-	return c && std::string(c) == "1";
-}
-
-// Grades paged against one-page: slowdown <= 5%, with a resolving power fine enough to see 5%.
+// Grades paged against one-page, three ways (pkv_common.h's timing verdicts), on slowdown
+// s = 1 - paged / one-page and the resolving power R:
+//   NO RESULT  |s| < R (the effect is below the resolving power), or the 5% bar lies within s +- R
+//              (the resolving power cannot resolve the bar): neither a pass nor a fail, nothing asserted;
+//   PASS       s + R <= 5%: no more than 5% slower, resolved;
+//   FAIL       s - R > 5%: more than 5% slower, resolved.
+// The verdict is asserted only with SUPERSLM_PAGED_KV_TIMING_COMMISSIONED=1 (§8's quarantine).
 void Grade(const char* target, const Rate& paged, const Rate& one_page) {
 	if (!paged.ok || !one_page.ok) return;
 	const double slowdown = 1.0 - paged.median / one_page.median;
 	const double resolving = std::max(paged.spread, one_page.spread);
-	std::printf("7.9 %s: paged %.1f tok/s, one-page %.1f tok/s, slowdown %.2f%%, resolving power %.2f%%%s\n", target, paged.median,
-	            one_page.median, slowdown * 100, resolving * 100, Commissioned() ? "" : " (quarantined: harness not commissioned)");
-	if (!Commissioned()) return;
-	// kills: no result reported as a pass (a spread too wide to resolve the bar)
-	PKV_CHECK_MSG(resolving < kBar, "7.9 %s: resolving power %.2f%% cannot resolve the 5%% bar", target, resolving * 100);
+	// The reading line: run_commissioning.py parses its "slowdown X%, resolving power Y%".
+	std::printf("7.9 %s: paged %.1f tok/s, one-page %.1f tok/s, slowdown %.2f%%, resolving power %.2f%%\n", target, paged.median,
+	            one_page.median, slowdown * 100, resolving * 100);
+	const TimingVerdict v =
+	    std::fabs(slowdown) < resolving ? TimingVerdict::kNoResult : GradeAgainstBound(slowdown, kBar, resolving);
+	std::string why;
+	if (std::fabs(slowdown) < resolving)
+		why = Fmt("|slowdown| %.2f%% is below the resolving power %.2f%%", std::fabs(slowdown) * 100, resolving * 100);
+	else if (v == TimingVerdict::kNoResult)
+		why = Fmt("the 5%% bar lies within slowdown %.2f%% +- resolving power %.2f%%, so the bar is not resolved", slowdown * 100,
+		          resolving * 100);
+	else if (v == TimingVerdict::kPass)
+		why = Fmt("slowdown %.2f%% + resolving power %.2f%% is within the 5%% bar", slowdown * 100, resolving * 100);
+	else
+		why = Fmt("slowdown %.2f%% - resolving power %.2f%% is beyond the 5%% bar", slowdown * 100, resolving * 100);
+	const bool asserting = TimingCommissioned();
+	PrintTimingVerdict("7.9", target, v, why, asserting);
+	if (!asserting || v == TimingVerdict::kNoResult) return;
 	// kills: a per-page attention loop (or address path) that costs more than the bar
-	PKV_CHECK_MSG(slowdown <= kBar, "7.9 %s: paged decode is %.2f%% slower than the one-page view", target, slowdown * 100);
+	PKV_CHECK_MSG(v == TimingVerdict::kPass, "7.9 %s: paged decode is %.2f%% slower than the one-page view, beyond the 5%% bar by "
+	              "more than the resolving power %.2f%%", target, slowdown * 100, resolving * 100);
 }
 
 void Cell79Fixtures() {

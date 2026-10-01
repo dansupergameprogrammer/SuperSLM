@@ -8,7 +8,9 @@
 // the worst reachable setting"; §8's claim for the instrument is "the lifecycle verb's cost ... changed
 // by at least the reported amount"; §10 R9 states a bar for decode throughput (7.9) only. So this cell
 // records figures and asserts no verdict on them: per verb it prints the baseline, the paged figure, the
-// change and the resolving power, and "no result" when the change is below the resolving power (§8, R9).
+// change and the resolving power, and a verdict line in the timing cells' shared vocabulary (pkv_common.h):
+// NO RESULT when the change is below the resolving power (§8, R9), RESOLVED otherwise (there is no bar,
+// so never PASS or FAIL).
 // Until the timing harness is commissioned (SUPERSLM_PAGED_KV_TIMING_COMMISSIONED=1) the readings are
 // also marked quarantined (§8: recorded, never acted on or headlined).
 //
@@ -79,11 +81,6 @@ double MedianOf(std::vector<double> v) {
 }
 
 double Ns(clock_type::time_point a, clock_type::time_point b) { return std::chrono::duration<double, std::nano>(b - a).count(); }
-
-bool Commissioned() {
-	const char* c = std::getenv("SUPERSLM_PAGED_KV_TIMING_COMMISSIONED");
-	return c && std::string(c) == "1";
-}
 
 // One target's readings, in print order. Each sample appends to the current batch of its reading.
 class Lifecycle {
@@ -299,18 +296,24 @@ std::string Us(double ns) {
 	return b;
 }
 
-// Prints one reading against its baseline. No bar exists for a lifecycle verb, so nothing is asserted.
+// Prints one reading against its baseline, then its verdict in the timing cells' shared vocabulary
+// (pkv_common.h): NO RESULT when |change| is below the resolving power, RESOLVED otherwise. No bar exists
+// for a lifecycle verb, so there is no PASS or FAIL and nothing is asserted.
 void Report(const std::string& key, const Reading& paged, const Reading* base) {
-	const char* q = Commissioned() ? "" : " (quarantined: harness not commissioned)";
 	if (!base) {
-		std::printf("lifecycle %s: %s, spread %.2f%% (no baseline given)%s\n", key.c_str(), Us(paged.median).c_str(), paged.spread * 100, q);
+		std::printf("lifecycle %s: %s, spread %.2f%% (no baseline given)%s\n", key.c_str(), Us(paged.median).c_str(), paged.spread * 100,
+		            TimingCommissioned() ? "" : " [quarantined: timing harness not commissioned]");
 		return;
 	}
 	const double change = paged.median / base->median - 1.0;  // positive: the paged build is slower
 	const double resolving = std::max(paged.spread, base->spread);
 	const bool resolved = std::fabs(change) >= resolving;
-	std::printf("lifecycle %s: baseline %s, paged %s, change %+.2f%%, resolving power %.2f%%%s%s\n", key.c_str(), Us(base->median).c_str(),
-	            Us(paged.median).c_str(), change * 100, resolving * 100, resolved ? "" : " -> no result (change below resolving power)", q);
+	std::printf("lifecycle %s: baseline %s, paged %s, change %+.2f%%, resolving power %.2f%%\n", key.c_str(), Us(base->median).c_str(),
+	            Us(paged.median).c_str(), change * 100, resolving * 100);
+	PrintTimingVerdict("lifecycle", key, resolved ? TimingVerdict::kResolved : TimingVerdict::kNoResult,
+	                   resolved ? Fmt("change %+.2f%% at resolving power %.2f%%; no bar for a lifecycle verb", change * 100, resolving * 100)
+	                            : Fmt("|change| %.2f%% is below the resolving power %.2f%%", std::fabs(change) * 100, resolving * 100),
+	                   TimingCommissioned());
 }
 
 struct Target {

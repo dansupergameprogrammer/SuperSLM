@@ -701,6 +701,68 @@ inline bool ProbeExactlyFreeOneState(const Fixture& fx, sslm_kv_pool* pool, int6
 	return step1 && step2 && step3;
 }
 
+// ---- timing verdicts (§8's timing harness: 7.4, 7.9 and the lifecycle timings) -----------------
+//
+// One vocabulary for every timing cell. Each graded reading prints the reading (with its resolving
+// power) and then one verdict line,
+//     "<cell> <target>: verdict <PASS | FAIL | NO RESULT | RESOLVED> (<why>)[ [<what was asserted>]]"
+// where NO RESULT means the effect is below the resolving power, or the bar lies within the effect's
+// resolving power, so neither a pass nor a fail can be stated (§8: "an effect below it is no result");
+// RESOLVED is a resolved change where no bar exists (a lifecycle verb). Only PASS and FAIL are ever
+// asserted, and only when the harness is commissioned; a NO RESULT asserts nothing. The words
+// "no result" appear on a verdict line only (run_commissioning.py reads them).
+
+enum class TimingVerdict { kPass, kFail, kNoResult, kResolved };
+
+inline const char* TimingVerdictName(TimingVerdict v) {
+	switch (v) {
+		case TimingVerdict::kPass:
+			return "PASS";
+		case TimingVerdict::kFail:
+			return "FAIL";
+		case TimingVerdict::kNoResult:
+			return "NO RESULT";
+		case TimingVerdict::kResolved:
+			return "RESOLVED";
+	}
+	return "?";
+}
+
+// SUPERSLM_PAGED_KV_TIMING_COMMISSIONED=1: the timing harness is commissioned (§8), so 7.9's verdict
+// is asserted; otherwise its readings are quarantined (recorded, never acted on).
+inline bool TimingCommissioned() {
+	const char* c = std::getenv("SUPERSLM_PAGED_KV_TIMING_COMMISSIONED");
+	return c && std::string(c) == "1";
+}
+
+// Grades `value` against `bound` with a resolving power, all three in one unit: a verdict is drawn only
+// when the bound lies outside value +- resolving. PASS: value + resolving <= bound. FAIL: value -
+// resolving > bound. Otherwise NO RESULT. (7.9 also calls an effect below the resolving power no
+// result before it asks this, §8.)
+inline TimingVerdict GradeAgainstBound(double value, double bound, double resolving) {
+	if (value - resolving > bound) return TimingVerdict::kFail;
+	if (value + resolving <= bound) return TimingVerdict::kPass;
+	return TimingVerdict::kNoResult;
+}
+
+// Prints the verdict line. `asserting`: the caller asserts a PASS or FAIL (the harness is
+// commissioned); a NO RESULT or RESOLVED is never asserted.
+inline void PrintTimingVerdict(const char* cell, const std::string& target, TimingVerdict v, const std::string& why,
+                               bool asserting) {
+	const bool asserted = asserting && (v == TimingVerdict::kPass || v == TimingVerdict::kFail);
+	std::printf("%s %s: verdict %s (%s)%s\n", cell, target.c_str(), TimingVerdictName(v), why.c_str(),
+	            asserted ? "" : (asserting ? " [nothing asserted]" : " [quarantined: timing harness not commissioned; nothing asserted]"));
+}
+
+inline std::string Fmt(const char* fmt, ...) {
+	char b[512];
+	va_list ap;
+	va_start(ap, fmt);
+	std::vsnprintf(b, sizeof b, fmt, ap);
+	va_end(ap);
+	return b;
+}
+
 // ---- decode helpers --------------------------------------------------------------------------
 
 // The next greedy token, one layer per call; -1 when the step reports a status (returned in *st).
