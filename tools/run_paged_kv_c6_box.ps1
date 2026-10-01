@@ -19,11 +19,12 @@
 #
 # Resume: a leg that finished (any verdict) writes <Scratch>\c6\done\<leg>.done, its provenance
 # record (tools/paged_kv_c6_provenance.ps1): the git HEAD, the sha256 of the test binary, the sha256 of
-# every file it read (artifacts, references, baseline), the commissioned instrument ids in force, the
-# assertion variables actually set, and -Max74Ratio, plus its outcome. On the next run a leg is
-# skipped only when its stored record equals the record this run would write; any difference (a new
-# commit or binary, a changed artifact or baseline, a different -Commissioned or -Max74Ratio) reruns
-# it. A crash or a reboot leaves no marker, so the rerun starts at the first unfinished leg. -Fresh
+# every file it read (artifacts, references, baseline), the commissioned ids it rests on, the
+# assertion variables actually set, and (7.4 only) -Max74Ratio, plus its outcome. On the next run a
+# leg is skipped only when its stored record equals the record this run would write; any difference
+# (a new commit or binary, a changed artifact or baseline, a change in the ids it rests on or, for
+# 7.4, in -Max74Ratio) reruns it, and nothing else does: commissioning timing79 reruns only the 7.9
+# legs. A crash or a reboot leaves no marker, so the rerun starts at the first unfinished leg. -Fresh
 # deletes the selected legs' markers first. A timing leg whose idle check fails before it starts is
 # not run; one whose idle check fails after it ends writes no marker (rerun it).
 #

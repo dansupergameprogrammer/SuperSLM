@@ -329,7 +329,8 @@ timing. Pass an id only once `-Status` reads COMMISSIONED for its entries:
 
 Any other id is an error, `lifecycle` included: the lifecycle legs always read quarantined. Each
 leg's done-marker records the HEAD, the test binary's sha256, the sha256 of the artifacts,
-references and baseline it read, the ids in force, the assertion variables set and `-Max74Ratio`.
-A resume reruns any leg whose record differs from the current invocation's, and the summary takes
+references and baseline it read, the ids in force that the leg rests on, the assertion variables
+set and, for 7.4 only, `-Max74Ratio`. A resume reruns any leg whose record differs from the current
+invocation's (so commissioning `timing79` reruns only the 7.9 legs), and the summary takes
 each leg's standing from its own record, so a quarantined run never becomes standing by rerunning
 the script with `-Commissioned`.

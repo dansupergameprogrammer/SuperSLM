@@ -54,9 +54,39 @@ try {
     }
     $c = @{} + $common; $c.Inputs = [ordered]@{ 'artifact:a.sslm' = ('a' * 64); 'baseline:79_v1.11.0.txt' = ('f' * 64) }
     Check (-not (Test-PkvLegRecordCurrent $stored (New-PkvLegRecord -Leg '7.9/C6' -Rests @('timing79') -Commissioned @('timing79') @c))) 'a changed baseline reruns'
-    # The whole commissioned set is recorded, so commissioning another instrument reruns the leg as well.
-    Check (-not (Test-PkvLegRecordCurrent $stored (New-PkvLegRecord -Leg '7.9/C6' -Rests @('timing79') -Commissioned @('oracle', 'timing79') @common))) 'a changed commissioned set reruns'
-    Check (-not (Test-PkvLegRecordCurrent $stored (New-PkvLegRecord -Leg '7.9/C6' -Rests @('timing79') -Commissioned @('timing79') -Max74Ratio '2.0' @common))) 'a changed -Max74Ratio reruns'
+    # Only the ids a leg rests on are recorded, and -Max74Ratio only for 7.4: other instruments'
+    # commissioning, or a ratio, does not rerun a 7.9 leg.
+    Check (Test-PkvLegRecordCurrent $stored (New-PkvLegRecord -Leg '7.9/C6' -Rests @('timing79') -Commissioned @('oracle', 'admission', 'timing74', 'timing79') -Max74Ratio '2.0' @common)) 'commissioning other instruments and a ratio does not rerun 7.9'
+
+    # ---- commissioning timing79 reruns only the legs resting on it --------------------------------
+    $before = @{ Commissioned = @('oracle', 'admission', 'timing74'); Max74Ratio = '2.0' }
+    $after = @{ Commissioned = @('oracle', 'admission', 'timing74', 'timing79'); Max74Ratio = '2.0' }
+    $legsUnderTest = @(
+        @{ Leg = '10.1/C6'; Rests = @('oracle'); Rerun = $false },
+        @{ Leg = '10.6/C6'; Rests = @('admission', 'oracle'); Rerun = $false },
+        @{ Leg = '7.4/C6'; Rests = @('timing74'); Rerun = $false },
+        @{ Leg = 'lifecycle/C6'; Rests = @('lifecycle'); Rerun = $false },
+        @{ Leg = '7.9-v1.11.0'; Rests = @('timing79'); Rerun = $true },
+        @{ Leg = '7.9/C6'; Rests = @('timing79'); Rerun = $true }
+    )
+    foreach ($t in $legsUnderTest) {
+        $m = Join-Path $tmp (($t.Leg -replace '[/\\:]', '_') + '.done')
+        $old = New-PkvLegRecord -Leg $t.Leg -Rests $t.Rests @before @common
+        $old.Outcome = 'GREEN exit=0'
+        Write-PkvLegRecord $m $old
+        $cur = Test-PkvLegRecordCurrent (Read-PkvLegRecord $m) (New-PkvLegRecord -Leg $t.Leg -Rests $t.Rests @after @common)
+        Check ($cur -eq (-not $t.Rerun)) "adding timing79: $($t.Leg) $(if ($t.Rerun) { 'reruns' } else { 'is skipped' })"
+    }
+    # The ratio is 7.4's alone: changing it reruns 7.4 and nothing else.
+    $r74a = New-PkvLegRecord -Leg '7.4/C6' -Rests @('timing74') -Commissioned @('timing74') -Max74Ratio '2.0' @common
+    $r74b = New-PkvLegRecord -Leg '7.4/C6' -Rests @('timing74') -Commissioned @('timing74') -Max74Ratio '1.5' @common
+    Check (-not (Test-PkvLegRecordCurrent $r74a $r74b)) 'a changed -Max74Ratio reruns 7.4'
+    $r101a = New-PkvLegRecord -Leg '10.1/C6' -Rests @('oracle') -Commissioned @('oracle', 'timing74') -Max74Ratio '2.0' @common
+    $r101b = New-PkvLegRecord -Leg '10.1/C6' -Rests @('oracle') -Commissioned @('oracle', 'timing74') -Max74Ratio '1.5' @common
+    Check (Test-PkvLegRecordCurrent $r101a $r101b) 'a changed -Max74Ratio does not rerun a correctness leg'
+    Check ($r101a.Commissioned -eq 'oracle' -and $r101a.Max74Ratio -eq '') 'a correctness leg records only its own ids and no ratio'
+    # Dropping an instrument a leg rests on reruns it.
+    Check (-not (Test-PkvLegRecordCurrent $r101a (New-PkvLegRecord -Leg '10.1/C6' -Rests @('oracle') -Commissioned @('timing74') @common))) 'dropping oracle reruns 10.1'
 
     # A pre-provenance marker ("GREEN exit=0 ...") is no record: rerun, and quarantined.
     Set-Content -LiteralPath $marker -Encoding utf8 -Value 'GREEN exit=0 1 cells, 0 red; 9 checks, 0 failures (12 s) 2026-07-01T00:00:00'

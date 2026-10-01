@@ -5,7 +5,9 @@
 #
 # A leg's done-marker is its provenance record: the git HEAD, the sha256 of the test binary, the
 # sha256 of every file the leg read (artifacts, references, baselines), the commissioned instrument
-# ids in force, the assertion environment variables actually set, and -Max74Ratio, plus the outcome.
+# ids in force that the leg rests on, the assertion environment variables actually set, and
+# -Max74Ratio for the 7.4 leg (the one that rests on timing74), plus the outcome. Recording only what
+# bears on the leg means commissioning one instrument reruns only the legs that rest on it.
 # A leg is skipped on resume only when its stored record equals the record this invocation would
 # produce; its standing is derived from its stored record alone, never from the current arguments.
 
@@ -62,7 +64,9 @@ function ConvertTo-PkvPairs {
 }
 
 # The record this invocation would write for a leg. $Inputs maps a label (role:file name) to the
-# file's sha256. Every value is a plain string, so the record survives a JSON round trip unchanged.
+# file's sha256. Commissioned keeps only the ids the leg rests on, and Max74Ratio is kept only for a
+# leg resting on timing74. Every value is a plain string, so the record survives a JSON round trip
+# unchanged.
 function New-PkvLegRecord {
     param(
         [Parameter(Mandatory = $true)][string]$Leg,
@@ -75,6 +79,8 @@ function New-PkvLegRecord {
         [string]$Max74Ratio = ''
     )
     $envs = Get-PkvLegAssertionEnv -Rests $Rests -Commissioned $Commissioned -Max74Ratio $Max74Ratio
+    $relevant = @($Commissioned | Where-Object { $Rests -contains $_ } | Sort-Object -Unique)
+    $ratio = if ($Rests -contains 'timing74') { $Max74Ratio } else { '' }
     return [ordered]@{
         Schema       = $PkvC6RecordSchema
         Leg          = $Leg
@@ -82,9 +88,9 @@ function New-PkvLegRecord {
         Binary       = $Binary
         BinarySha256 = $BinarySha256
         Inputs       = (ConvertTo-PkvPairs $Inputs)
-        Commissioned = (@($Commissioned | Sort-Object -Unique) -join ',')
+        Commissioned = ($relevant -join ',')
         AssertEnv    = (ConvertTo-PkvPairs $envs)
-        Max74Ratio   = $Max74Ratio
+        Max74Ratio   = $ratio
         Outcome      = ''
     }
 }
@@ -158,5 +164,7 @@ function Read-PkvLegRecord {
 
 function Write-PkvLegRecord {
     param([string]$Path, $Record)
-    Set-Content -LiteralPath $Path -Encoding utf8 -Value ([pscustomobject]$Record | ConvertTo-Json)
+    # -InputObject: a dictionary serializes as one object on Windows PowerShell 5.1 and on pwsh; every
+    # value is a string, so the default depth is never reached.
+    Set-Content -LiteralPath $Path -Encoding utf8 -Value (ConvertTo-Json -InputObject $Record -Depth 3)
 }
