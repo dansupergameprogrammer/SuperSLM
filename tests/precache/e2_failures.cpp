@@ -16,13 +16,39 @@ void NoCapacity51() {
     ProbeExactlyFree(fx,make,4);
     Scene sc;
     PagePool& pool = sc.AddPool(fx.model,4);
+    ProbeExactlyFreeOneState(fx,&pool.pool,4);
     sslm_prefix out = nullptr;
     Status(Restore(fx,&pool.pool,b,nullptr,&out),SSLM_KV_POOL_EXHAUSTED,"5.1 root one short");
     PKV_CHECK(out == nullptr);
+    ProbeExactlyFreeOneState(fx,&pool.pool,4);
     ProbeExactlyFree(fx,make,4);
+    PKV_CHECK_EQ(sslm_kv_pool_destroy(pool.pool),SSLM_OK);
+    pool.pool=nullptr;
 }
 PKV_CELL("5.1/E2", "E1", NoCapacity51);
-PKV_CELL("7.4/E2:capacity", "E1", NoCapacity51);
+
+void RootExact74() {
+    const Fixture& fx=GetFixture("pkv_def");
+    if(!fx.ok) return;
+    const auto b=RootBlob(fx,65); // ceil(65/16)=5.
+    if(!RequireBlob(b,"7.4 exact root capacity")) return;
+    PagePool pool(fx.model,5);
+    ProbeExactlyFreeOneState(fx,&pool.pool,5);
+    sslm_prefix out=nullptr;
+    Status(Restore(fx,&pool.pool,b,nullptr,&out),SSLM_OK,
+           "7.4 restore admitted with exactly five free pages");
+    if(out && out!=OutSentinel<sslm_prefix>()) {
+        sslm_seq two=nullptr;
+        Status(sslm_seq_create_budgeted(fx.model,&pool.pool,16,&two),
+               SSLM_KV_POOL_EXHAUSTED,"7.4 two-page create refused after exact draw");
+        if(two) sslm_seq_release(two);
+        Status(sslm_prefix_release(out),SSLM_OK,"7.4 release exact-capacity restore");
+    }
+    ProbeExactlyFreeOneState(fx,&pool.pool,5);
+    PKV_CHECK_EQ(sslm_kv_pool_destroy(pool.pool),SSLM_OK);
+    pool.pool=nullptr;
+}
+PKV_CELL("7.4/E2:capacity", "E1", RootExact74);
 
 void Allocation52() {
     const Fixture& fx = GetFixture("pkv_def");
@@ -30,6 +56,7 @@ void Allocation52() {
     const auto b = RootBlob(fx,65);
     if (!RequireBlob(b,"5.2")) return;
     PagePool pool(fx.model,32);
+    ProbeExactlyFreeOneState(fx,&pool.pool,32);
     sslm_pc_test_only_restore_fault_arm(3,0); // §8: allocation after draw/share/map.
     sslm_prefix out = nullptr;
     const sslm_status st = Restore(fx,&pool.pool,b,nullptr,&out);
@@ -45,6 +72,7 @@ void Allocation52() {
         PKV_CHECK_EQ(reserve,0u);
     }
     sslm_pc_test_only_restore_fault_disarm();
+    ProbeExactlyFreeOneState(fx,&pool.pool,32);
     PKV_CHECK_EQ(sslm_kv_pool_destroy(pool.pool),SSLM_OK);
     pool.pool=nullptr;
 }
@@ -56,15 +84,24 @@ void Map511() {
     const auto b = RootBlob(fx,65);
     if (!RequireBlob(b,"5.11")) return;
     PagePool pool(fx.model,32);
+    ProbeExactlyFreeOneState(fx,&pool.pool,32);
     sslm_pc_test_only_restore_fault_arm(2,0); // §8: drain reserve immediately before MapPagesFor.
     sslm_prefix out = nullptr;
     Status(Restore(fx,&pool.pool,b,nullptr,&out),SSLM_KV_POOL_EXHAUSTED,
            "5.11 map short-reserve refusal");
     PKV_CHECK(out == nullptr);
     uint32_t free=0,shared=0,mapped=0,reserve=0;
-    PKV_CHECK_MSG(sslm_pc_test_only_restore_fault_read(&free,&shared,&mapped,&reserve)==1,
+    const int fired=sslm_pc_test_only_restore_fault_read(&free,&shared,&mapped,&reserve);
+    PKV_CHECK_MSG(fired==1,
                   "5.11 map fault was not reached");
+    if(fired) {
+        PKV_CHECK_EQ(shared,0u);
+        PKV_CHECK_EQ(mapped,0u);
+        PKV_CHECK_EQ(reserve,0u);
+        PKV_CHECK_EQ(free,32u); // reserve drained by the slot before mapping.
+    }
     sslm_pc_test_only_restore_fault_disarm();
+    ProbeExactlyFreeOneState(fx,&pool.pool,32);
     PKV_CHECK_EQ(sslm_kv_pool_destroy(pool.pool),SSLM_OK); // holder live_refs must fall.
     pool.pool=nullptr;
 }

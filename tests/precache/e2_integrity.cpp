@@ -249,6 +249,7 @@ void Lifetime11() {
         }
         Status(sslm_prefix_release(p),SSLM_OK,"1.1 release cycle");
     }
+    ProbeExactlyFreeOneState(fx,&pool.pool,32);
     PKV_CHECK_EQ(sslm_kv_pool_destroy(pool.pool),SSLM_OK);
     pool.pool=nullptr;
 }
