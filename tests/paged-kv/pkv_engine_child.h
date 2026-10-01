@@ -9,7 +9,9 @@
 // The box's MSVC leg: there is no fork. The parent re-runs its own executable on the same cell id
 // with PKV_CHILD_CASE=<case> in the environment; the cell, seeing that variable name the case, runs
 // only it and exits. std::abort ends an MSVC process with exit code 3, which ChildEnd reports as
-// `aborted`. (Not exercised in the cloud; the box leg records its first run.)
+// `aborted` (the child first turns off the CRT's fail-fast abort report, which would otherwise end it
+// with 0xC0000409). The box leg's first run confirmed this. In a re-run child the cases ahead of
+// its own report "the child did not start"; only the child's exit code is graded.
 
 #ifndef SUPERSLM_TESTS_PKV_ENGINE_CHILD_H
 #define SUPERSLM_TESTS_PKV_ENGINE_CHILD_H
@@ -58,6 +60,10 @@ inline ChildEnd RunInChild(const char* case_name, const std::function<bool()>& b
 	const char* want = std::getenv("PKV_CHILD_CASE");
 	if (want && *want) {  // the re-run child (MSVC leg): run only the named case, spawn nothing
 		if (std::strcmp(want, case_name) != 0) return end;
+#ifdef _MSC_VER
+		// A Release CRT's std::abort otherwise ends with 0xC0000409 (fail-fast), not exit code 3.
+		_set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
 		std::fflush(stdout);
 		std::exit(body() ? 0 : 1);
 	}

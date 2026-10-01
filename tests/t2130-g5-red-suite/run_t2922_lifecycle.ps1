@@ -21,7 +21,7 @@ Enter-SuperSlmVsDevShell
 $Common = @('artifact.cpp','sha256.cpp','tokenizer.cpp','model.cpp','intmath.cpp','silu_lut.cpp',
  'matmul.cpp','proof_manifest.cpp','trace_hook.cpp','forward\checked_chain_funnel.cpp',
  'forward\forward_sites.cpp','forward\parallel_split.cpp','decode_digest.cpp','damped_greedy_antilm.cpp',
- 'damped_greedy_topk.cpp','damped_greedy_phaseD.cpp','damped_greedy_phaseD_loop.cpp') |
+ 'damped_greedy_topk.cpp','damped_greedy_phaseD.cpp','damped_greedy_phaseD_loop.cpp','kv_pages.cpp') |
  ForEach-Object { Join-Path "$Engine\src" $_ }
 & cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I"$Engine\include" /I"$Engine\src" `
   /I"$Engine\src\gpu" /I"$Engine\tests" /I"$Engine\tests\t2791-gpu-prefill-read-red-suite" `

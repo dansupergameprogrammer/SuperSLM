@@ -24,23 +24,29 @@
 
 namespace {
 std::atomic<long long> g_new_calls{0};
-// Called through volatile pointers, so the compiler does not pair a malloc it can see with the
-// replaced operator delete's free and warn (-Wmismatched-new-delete); the behaviour is the
-// precedent's exactly.
-void* (*volatile g_malloc)(std::size_t) = std::malloc;
-void (*volatile g_free)(void*) = std::free;
 }  // namespace
 
+// GCC's -Wmismatched-new-delete cannot see that these replacements pair malloc with free. (No
+// function-pointer indirection: under MSVC's /MD, std::malloc's address is a DLL import, so such a
+// pointer is initialized at run time, after another file's static registration has already called
+// this operator new.)
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmismatched-new-delete"
+#endif
 void* operator new(std::size_t size) {
 	g_new_calls.fetch_add(1, std::memory_order_relaxed);
-	if (void* p = g_malloc(size ? size : 1)) return p;
+	if (void* p = std::malloc(size ? size : 1)) return p;
 	throw std::bad_alloc{};
 }
 void* operator new[](std::size_t size) { return operator new(size); }
-void operator delete(void* p) noexcept { g_free(p); }
-void operator delete(void* p, std::size_t) noexcept { g_free(p); }
-void operator delete[](void* p) noexcept { g_free(p); }
-void operator delete[](void* p, std::size_t) noexcept { g_free(p); }
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 namespace {
 
