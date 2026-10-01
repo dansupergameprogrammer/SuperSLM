@@ -50,18 +50,26 @@
 SUPERSLM_API sslm_status sslm_model_map(const void* data, size_t size, sslm_model* out);
 SUPERSLM_API sslm_status sslm_model_unmap(sslm_model model);
 
-/* sslm_kv_block_size (design Sec7.2, RULED design commit fab235c1c6): one WHOLE sequence's
- * entire KV footprint across every layer, never a sub-sequence PagedAttention page (that
- * indirection is committed post-1.0 work) -- num_hidden_layers * context_cap *
- * num_key_value_heads * head_dim * 2 (K+V) * kv_precision_width. */
+/* sslm_kv_block_size (design Sec7.2, RULED design commit fab235c1c6): one sequence's KV footprint
+ * at the full context cap, across every layer -- num_hidden_layers * context_cap *
+ * num_key_value_heads * head_dim * 2 (K+V) * kv_precision_width. Its value is unchanged in 1.12.0.
+ * Since 1.12.0 the pool stores K/V in pages of sslm_kv_page_positions positions, and one block is
+ * exactly ceil(cap/B) pages (B divides the cap, sslm_abi_functions.inc); a holder made by a
+ * no-budget verb reserves that many pages, one block's worth. */
 SUPERSLM_API size_t sslm_kv_block_size(sslm_model model);
 SUPERSLM_API size_t sslm_kv_pool_overhead_size(sslm_model model, uint32_t block_count);
 SUPERSLM_API size_t sslm_seq_state_size(sslm_model model);
 
-/* sslm_kv_pool_create's block_count (design Sec7.2, RULED): how many concurrent SEQUENCES this
- * pool can back, one whole block each -- for N sequences concurrently resident, block_count = N
- * (the single-sequence case, N = 1, is what the S-FREEZE example uses, design Sec9). No token-
- * count arithmetic: a block is no longer sub-divided. */
+/* sslm_kv_pool_create's block_count (design Sec7.2, RULED): how many concurrent handles made by
+ * the no-budget verbs (sslm_seq_create, sslm_prefix_begin, sslm_seq_restore of a no-budget blob)
+ * this pool can back -- for N such handles concurrently resident, block_count = N (the
+ * single-sequence case, N = 1, is what the S-FREEZE example uses, design Sec9). Since 1.12.0 the
+ * buffer holds block_count * ceil(cap/B) pages of the same total size, and a count whose page
+ * total reaches UINT32_MAX is SSLM_INVALID_ARGUMENT (before the buffer-size check). In a pool
+ * whose every handle was made by a no-budget verb, block_count = N still admits N handles; a
+ * frozen prefix now returns its unused pages, so such a pool can admit more than 1.11.0 did,
+ * never fewer. Once a budget-mode handle is in the pool, budget accounting governs admission
+ * (sslm_abi_functions.inc). */
 SUPERSLM_API sslm_status sslm_kv_pool_create(sslm_model model, void* buf, size_t buf_size,
                                  uint32_t block_count, sslm_kv_pool* out);
 SUPERSLM_API sslm_status sslm_kv_pool_destroy(sslm_kv_pool pool);
@@ -81,15 +89,22 @@ SUPERSLM_API sslm_status sslm_seq_release(sslm_seq seq);
  * reserved for ABI stability but this verb no longer returns it. */
 SUPERSLM_API sslm_status sslm_seq_reset(sslm_seq seq);
 SUPERSLM_API sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix);
-/* Save emits the current SSB5 format. Restore accepts SSB5 and the shipped SSB4, SSB3 and SSB2
- * predecessors; SSB2's absent damped anti-LM state is restored as empty. SSB5 carries the
- * sequence's saturation total and the four per-site saturation counts that sum to it
- * (kv_landing, k_channel_landing, rope_q, rope_k). SSB4, SSB3 and SSB2 record only the total: a
- * sequence restored from one has that total and per-site counts of 0, so its per-site counts do
- * not sum to its total until it is reset. `n` is buffer capacity and may exceed the encoded blob
- * size (including the normal sslm_seq_state_size allocation flow, which stays an upper bound on
- * the SSB5 size). Malformed lengths, history longer than the blob's saved context, and
- * unrecognized magic reject. */
+/* Save: a sequence made by a no-budget verb (sslm_seq_create, or a restore of a no-budget blob)
+ * emits SSB5, byte-equal to the blob 1.11.0 writes for the same state, so 1.9.0 to 1.11.0 read
+ * it. A budget-mode sequence (sslm_seq_create_budgeted, or a restore of a budget-mode SSB6)
+ * emits SSB6 (1.12.0): SSB5's header plus kv_mode, budget and origin, and only the K/V rows the
+ * sequence has written, so its size follows its live length; releases before 1.12.0 refuse it.
+ * Restore accepts SSB6, SSB5 and the shipped SSB4, SSB3 and SSB2 predecessors; SSB2's absent
+ * damped anti-LM state is restored as empty. SSB5 and SSB6 carry the sequence's saturation total
+ * and the four per-site saturation counts that sum to it (kv_landing, k_channel_landing, rope_q,
+ * rope_k). SSB4, SSB3 and SSB2 record only the total: a sequence restored from one has that total
+ * and per-site counts of 0, so its per-site counts do not sum to its total until it is reset.
+ * For SSB5 and older, `n` is buffer capacity and may exceed the encoded blob size (including the
+ * normal sslm_seq_state_size allocation flow, which stays an upper bound on every blob size). An
+ * SSB6 blob must be passed with exactly its encoded size, the `*n` its save returned. Malformed
+ * lengths, history longer than the blob's saved context, a mid-token blob at the context cap
+ * (1.12.0; no save produces one), and unrecognized magic reject with SSLM_INVALID_ARGUMENT, with
+ * nothing drawn from the pool. sslm_seq_restore is sslm_seq_restore_shared with no prefix. */
 SUPERSLM_API sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n);
 SUPERSLM_API sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, const void* buf, size_t n,
                               sslm_seq* out);

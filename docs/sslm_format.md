@@ -327,6 +327,9 @@ allowed set; a nonzero `reserved`. This is the reject-over-degrade rule (above) 
 defaulted field produces "a model that loads, runs, generates fluent text, and is not the source
 model," so it is rejected, never repaired.
 
+`kv_block_size` is the positions per K/V page of the CPU C ABI from 1.12.0 (`sslm_kv_page_positions`)
+when it divides `context_cap`; otherwise the page is the whole cap. Converted artifacts write 16.
+
 ### Weight-scale fold blob — `WSC1` (reuses the tensor manifest)
 
 `WeightScales` (type 6, dtype **`Int32`**) does not need a new sub-format: each projection's

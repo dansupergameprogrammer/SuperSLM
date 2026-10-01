@@ -14,7 +14,15 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.11.0**. A host's parallel-for hook can now split decode, and one-token
+Current release: **1.12.0**. On the CPU, K/V memory is stored in pages. A sequence can declare a
+token budget and reserve only what that budget needs, and sequences that start from the same prompt
+prefix can share the prefix's memory instead of each holding a copy. Every output stays
+bit-identical, and code written for 1.11.0 needs no changes (the release note lists the few
+behaviour changes). See
+[Shared prompt prefixes and budgeted sequences](#shared-prompt-prefixes-and-budgeted-sequences)
+and the [1.12.0 release note](docs/releases/1.12.0.md).
+
+1.11.0: a host's parallel-for hook can split decode, and one-token
 prefill, across threads: set bit 1 (`SSLM_PARALLEL_FOR_MATVEC`) of `sslm_parallel_for.reserved`. It is
 off unless the host asks for it. Every output stays bit-identical with and without it. On a Zen 2
 desktop with the Qwen2.5-0.5B model and 4 tasks, decode runs about 1.5x faster and a one-token
@@ -200,6 +208,41 @@ format it relies on, and the full CPU consumer ABI it ships through are
 documented in [docs/api.md](docs/api.md) and
 [docs/sslm_format.md](docs/sslm_format.md).
 
+### Shared prompt prefixes and budgeted sequences
+
+*New in 1.12.0, CPU backend.* Many characters in a game often start from the same text: the world
+description, then a persona, then their own conversation. SuperSLM already lets you run a shared
+prefix once and have every sequence adopt it instead of re-reading it. From 1.12.0 the CPU backend
+can also keep that prefix in memory once, however many sequences use it, and size each sequence by
+what it will actually generate rather than by the model's whole context length.
+
+- **Budgeted sequences.** Create a sequence with `sslm_seq_create_budgeted` and a budget: the number
+  of tokens it may add itself. It reserves memory for that budget up front, so it never runs out of
+  memory partway through a reply, and when it reaches its budget it stops with
+  `SSLM_KV_BUDGET_EXCEEDED` instead of writing anything. Reset it and reuse it without going back to
+  the pool.
+- **Shared prefixes.** Build a prefix once, freeze it, and adopt it into budgeted sequences: they
+  read the prefix's memory instead of copying it. `sslm_prefix_begin_from` stacks prefixes, so a
+  persona prefix can sit on a world prefix and a conversation on the persona.
+- **Smaller saves.** A budgeted sequence's save holds only the tokens it has, and
+  `sslm_seq_restore_shared` reconnects a restored sequence to its live prefix, so a reloaded cast
+  shares memory again. Pass the prefix handle when you restore; without it, each restored sequence
+  holds a private copy of its prefix until it is reset.
+- **Size your pool from what it holds.** `sslm_kv_page_pool_create` sizes a pool in pages, and
+  `sslm_kv_pool_stats` reports how many are free. A prefix's memory is released when the prefix and
+  every sequence sharing it have let go of it, so check the free count rather than counting handles.
+
+As an example, at Qwen2.5-0.5B with a 4,096-token context, a cast of 50 characters sharing one
+1,000-token world and 10 200-token personas, each with up to 512 tokens of its own, fits in a pool of
+173 MiB, where whole-context sequences need 1,440 MiB (TODO-BOX: confirm with cell 10.4 on the real
+0.5B artifact). The cast and its numbers are an illustration, not a measured game workload.
+
+Existing code needs no changes: `sslm_seq_create`, `sslm_prefix_begin` and the other 1.11.0 calls
+behave as before and save in the same format, which older releases can read. The savings apply only
+to budgeted sequences, the context cap is still the cap, and GPU sequences are not paged yet. This
+release makes no speed claim; see the release note for measured figures. The full contract is in
+[docs/api.md](docs/api.md#paged-kv-memory-1120).
+
 ## Status
 
 Every capability above is built and measured on the platforms named.
@@ -346,10 +389,11 @@ and closed forks remain permitted.
 
 Named follow-on work after 1.5:
 
-- **True shared-prefix KV memory.** 1.0 ships a straightforward per-sequence
-  KV layout; a block-table indirection layer is the next step, giving a
-  cohort of sequences that share a prompt prefix N-fold memory savings
-  instead of each holding its own copy.
+- **Shared-prefix KV memory on the GPU.** 1.12.0 pages the CPU backend's K/V
+  memory, so budgeted sequences that share a prompt prefix share its memory
+  instead of each holding a copy (see
+  [Shared prompt prefixes and budgeted sequences](#shared-prompt-prefixes-and-budgeted-sequences)).
+  The same paging for GPU sequences is the next step.
 - **Async-wrapper overhead reduction.** The API's convenience wrapper
   around the dispatch path measurably costs throughput versus the raw
   dispatch path — see the Direct dispatch vs. Async wrapper API rows in

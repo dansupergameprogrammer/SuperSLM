@@ -394,7 +394,8 @@ SslmGpuStatus sslm_gpu_seq_embed_token(SslmGpuContext* ctx, SslmGpuSequenceHandl
 /* --- Sec4.2: save/restore/reset. Declared for B3/B5.
  * `sslm_gpu_seq_save` writes a v5 blob ('SLM5', v1.6.0, T-2895/D-SLM7572), carrying `model`'s
  * own content hash (design Sec22), the four per-site K/V saturation counters whose sum is
- * kv_saturation_count, and a twelve-byte tail (bound_schema_index int32, dfa_walk_state
+ * kv_saturation_count unless the sequence's history since its last reset includes an 'SLM4'
+ * restore, and a twelve-byte tail (bound_schema_index int32, dfa_walk_state
  * uint32, ready_for_logits uint32-as-bool) written immediately after the unchanged v4-sized
  * header and before the residual stream -- the schema binding and walk state a §3.9/§3.10
  * caller needs to resume a schema-bound sequence across a save/restore round trip.

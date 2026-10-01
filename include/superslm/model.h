@@ -836,7 +836,9 @@ struct SslmDecodeStepStatus {
 	// F-S3-8) before it can reach an output slot.
 	int32_t produced_token = -1;
 	// The per-sequence saturation count (§8.2, `SequenceLayerState::kv_saturation_count`) at the
-	// moment this step returned -- the SUM of four sites, not only K/V landing.
+	// moment this step returned -- the SUM of four sites, not only K/V landing. The four per-site
+	// counts sum to it unless the sequence's history since its last reset includes an 'SSB4',
+	// 'SSB3' or 'SSB2' restore, which records only the total.
 	//
 	// CORRECTED 2026-09-03 (T-2577, D-SLM6280, external review `Claude/Poirot/
 	// 5fafd98-t2573-trackb-external-fold-review.md` Significant 3): this field's own name and the

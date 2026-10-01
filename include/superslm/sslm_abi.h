@@ -267,6 +267,7 @@ typedef struct sslm_stats_out {
      * forced_token_count, so the count transplanted is exactly what a fresh sequence would read,
      * never the prefix's -- stated here rather than left implicit, T-2917 folding TE-370 M2. */
     int64_t forced_token_count;
+    /* Always 1. Since 1.12.0 a sequence's K/V pages are reported by sslm_seq_kv_stats. */
     int32_t kv_blocks_resident;
     /* (design Sec14.1): 1 iff a schema is bound AND the sequence's current dfa_walk_state is a
      * member of that schema's accept set (accepting_le/accepting_count, design Sec13.2); 0 when it

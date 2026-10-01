@@ -322,7 +322,7 @@ instead, with the same reset requirement (see each function's own header comment
 `include/superslm/sslm_abi.h` is the contract: a from-scratch, engine-
 agnostic C ABI for embedding SuperSLM's CPU inference path directly in
 another process — a game engine's own tooling, for instance — without the
-GPU handle types above. It declares and implements 38 functions across the
+GPU handle types above. It declares and implements 49 functions (38 before 1.12.0) across the
 same lifecycle shape as the GPU API (workspace and KV-pool sizing and
 creation, model map/unmap, sequence and prefix lifecycle, decode,
 tokenize/detokenize, stats) plus concepts the GPU API does not need:
@@ -347,7 +347,9 @@ silently accepted.
 - **Model**: `sslm_model_map` / `sslm_model_unmap`.
 - **Workspace and KV pool sizing**: `sslm_workspace_size`, `sslm_kv_block_size`,
   `sslm_kv_pool_overhead_size`, and `sslm_seq_state_size` compute caller-buffer
-  capacities (`sslm_seq_state_size` is an upper bound across live sequence states);
+  capacities (`sslm_seq_state_size` is an upper bound across live sequence states and
+  every save format; in 1.12.0 it is 20 bytes larger than in 1.11.0, see
+  [Paged KV memory](#paged-kv-memory-1120));
   `sslm_workspace_create`/`_destroy`
   and `sslm_kv_pool_create`/`_destroy` take those buffers and hand back a
   handle. A workspace is reusable across a sequence of calls but is not
@@ -356,12 +358,22 @@ silently accepted.
   active call.
 - **Prefix** (shared prompt prefix): `sslm_prefix_begin` / `sslm_prefix_release`,
   `sslm_prefix_prefill` (runs the shared prefix's own forward pass once),
-  `sslm_prefix_freeze` (locks it for adoption by sequences).
+  `sslm_prefix_freeze` (locks it for adoption by sequences; since 1.12.0 the first freeze
+  also returns the prefix's unused pages to its pool). `sslm_prefix_begin_budgeted` and
+  `sslm_prefix_begin_from` (1.12.0) make budget-mode prefixes; see
+  [Paged KV memory](#paged-kv-memory-1120).
 - **Sequence**: `sslm_seq_create` / `sslm_seq_release`, `sslm_seq_reset`,
   `sslm_seq_adopt_prefix` (attaches a frozen prefix, so its forward pass is
   never repeated per sequence), `sslm_seq_save` / `sslm_seq_restore`
   (serializes a sequence's full state — including its schema binding and
-  DFA walk state, see below — to a caller buffer and back). v1.9.0 writes
+  DFA walk state, see below — to a caller buffer and back). In 1.12.0 a
+  sequence made by `sslm_seq_create` (or restored from a no-budget blob)
+  still writes `SSB5`, byte-equal to 1.11.0's blob for the same state, and a
+  budget-mode sequence writes `SSB6` (see
+  [Paged KV memory](#paged-kv-memory-1120)); restore accepts both.
+  `sslm_seq_create_budgeted` and `sslm_seq_restore_shared` (1.12.0) are the
+  budget-mode create and the restore that can re-share a prefix's pages.
+  Since v1.9.0 the no-budget save writes
   `SSB5` blobs: the `SSB4` layout plus the four per-site saturation counts
   (K/V landing, K channel landing, RoPE Q, RoPE K) that the sequence's
   saturation total sums, so a restored sequence keeps its per-site counts.
@@ -374,10 +386,11 @@ silently accepted.
   record only the saturation total, so a sequence restored from one has its
   saved total and per-site counts of 0 until it is reset. A legacy `SSB3` blob resting at
   the one state the 1.2.0 defect could produce is rejected with
-  `SSLM_RESTORE_RESIDUAL_LOST` rather than silently restored wrong. Restore
-  accepts a buffer whose size is at
+  `SSLM_RESTORE_RESIDUAL_LOST` rather than silently restored wrong. For
+  `SSB5` and older, restore accepts a buffer whose size is at
   least the encoded blob size, including a buffer sized by
-  `sslm_seq_state_size`, and ignores trailing capacity. It also rejects anti-LM
+  `sslm_seq_state_size`, and ignores trailing capacity; an `SSB6` blob must
+  be passed with exactly its encoded size. It also rejects anti-LM
   history longer than the blob's own saved context length;
   `sslm_seq_set_adapter` (attaches or detaches a LoRA adapter on a live
   sequence).
@@ -455,9 +468,273 @@ silently accepted.
 - `sslm_stats` reports per-sequence counters: the decode-step ceiling and
   actual layers run, `forced_token_count` (how many tokens this sequence
   has had forced onto it by schema jump-forward rather than chosen by
-  argmax), the resident KV block count, and `schema_accepting` (1 iff a
+  argmax), `kv_blocks_resident` (always 1, in every release; page accounting
+  is `sslm_kv_pool_stats` and `sslm_seq_kv_stats`), and `schema_accepting` (1 iff a
   schema is bound and the sequence's current parse state is one where
   stopping is valid; 0 if not, and 0 when no schema is bound).
+
+### Paged KV memory (1.12.0)
+
+Since 1.12.0 a KV pool stores K/V in fixed-size **pages** rather than one
+whole-context block per sequence. Each sequence and prefix addresses its K/V
+through a page table, and a sequence that adopts a prefix can **share** the
+prefix's full pages instead of copying them. Output is unchanged: tokens, K/V
+values and the axis digest are bit-identical to 1.11.0 on every path, whichever
+verbs a host uses. The 1.11.0 verbs keep their signatures and their behaviour
+(the changes are listed under [Changed in 1.12.0](#changed-in-1120) below);
+the memory savings come only from the new budget-mode verbs.
+
+The paged surface is declared in `include/superslm/sslm_abi_functions.inc`, and
+`SSLM_HAS_PAGED_KV_ABI` is defined whenever it is present.
+
+**Page geometry.** `B`, the positions per page, is a pure function of the
+model: the artifact's `kv_block_size` when it divides the context cap, else the
+cap itself (one page per sequence). Every converted artifact on record has
+`kv_block_size` 16, so `B = 16`.
+
+- `sslm_kv_page_positions(model)` returns `B` (0 on a null model).
+- `sslm_kv_page_size(model)` returns the bytes per page,
+  `layers · 2 · kv_heads · B · head_dim · element_bytes` (0 on a null model
+  or overflow). At Qwen2.5-0.5B that is 96 KiB, and at Qwen2.5-1.5B 224 KiB.
+- `sslm_kv_pages_for_budget(model, budget)` returns `R(budget)`, the pages a
+  budget holder reserves: `min(ceil(budget / B) + 1, ceil(cap / B))`. It
+  returns 0 for a budget outside `[1, cap]`. The extra page covers a prefix
+  whose length is not a multiple of `B`.
+
+**Pools.** Two verbs build the same kind of pool over caller memory, and every
+holder verb, old or new, takes either.
+
+- `sslm_kv_pool_create(model, buf, size, block_count, &pool)` builds
+  `block_count · ceil(cap / B)` pages in the same buffer size as before (one
+  block is exactly `ceil(cap / B)` pages). A count whose page total reaches
+  `UINT32_MAX` is refused with `SSLM_INVALID_ARGUMENT`, before the buffer-size
+  check (at cap 32,768 and `B = 16`, any `block_count` of 2,097,152 or more).
+- `sslm_kv_page_pool_create(model, buf, size, page_count, &pool)` builds a
+  pool of `page_count` pages. `buf_size` must be at least
+  `page_count · sslm_kv_page_size + sslm_kv_page_pool_overhead_size`, and the
+  buffer `SSLM_ABI_ALIGNMENT_BYTES`-aligned. Its refusals come in
+  `sslm_kv_pool_create`'s order: arguments, a zero count, overflow,
+  `SSLM_BUFFER_TOO_SMALL`, then `SSLM_MISALIGNED_BUFFER`. A `page_count` of
+  `UINT32_MAX` is never admitted.
+- Both overhead verbs keep the block verb's convention (0 on a null model,
+  `SIZE_MAX` where no buffer suffices). The pool's per-page bookkeeping (a
+  free-list entry, a reference count, a written flag and a shared count, 13
+  bytes per page) is allocated on the library heap at pool create, as the
+  1.11.0 free list was, not in the overhead part of the caller's buffer. A heap
+  failure there returns `SSLM_ALLOCATION_FAILED`.
+- `sslm_kv_pool_destroy` destroys either kind and refuses with
+  `SSLM_POOL_HAS_LIVE_HANDLES` while any handle made from the pool lives.
+
+**Two kinds of holder.** Every sequence and prefix is one of these, fixed when
+it is made:
+
+- **No-budget** (`whole_reserve`): made by `sslm_seq_create`,
+  `sslm_prefix_begin`, or a restore of a no-budget blob (`SSB5` and older). It
+  reserves `ceil(cap / B)` pages, one old block, and behaves as in 1.11.0. Its
+  limit is the cap.
+- **Budget**: made by `sslm_seq_create_budgeted(model, &pool, budget, &seq)`,
+  `sslm_prefix_begin_budgeted(model, &pool, budget, &prefix)`,
+  `sslm_prefix_begin_from(parent, budget, &prefix)`, or a restore of a
+  budget-mode `SSB6`. It declares `1 ≤ budget ≤ cap`, the positions it may
+  write itself, and reserves `R(budget)` pages from the pool when it is made.
+  A budget outside `[1, cap]`, or a pool of another model, is
+  `SSLM_INVALID_ARGUMENT`. A pool with fewer free pages than the reservation
+  is `SSLM_KV_POOL_EXHAUSTED`, with nothing drawn.
+
+A holder's **origin** is the position its own writes start at: 0 after create
+or reset, the prefix's length after `sslm_seq_adopt_prefix`, and the parent's
+length for `sslm_prefix_begin_from`. A budget holder's **limit** is
+`min(origin + budget, cap)`.
+
+- Prefill and decode map pages only from the holder's own reservation. They
+  never take a page from the pool, never take the pool's lock and never
+  allocate, so no write below the limit is refused for lack of pages.
+- A write at or past the limit, when the limit is below the cap, returns the
+  new **`SSLM_KV_BUDGET_EXCEEDED`** (ordinal 29). Prefill admits the tokens
+  below the limit and stops, with the same partial-consumption contract as the
+  cap. Decode refuses at the token boundary with no row written, with the same
+  batch semantics as the cap check. A sequence resting ready for logits at the
+  limit still emits its one ready token, so a sequence resting ready at length
+  `c` emits exactly `1 + (limit − c)` tokens before the refusal. When the
+  limit is the cap, `SSLM_CONTEXT_CAP_EXCEEDED` fires instead, as before, so a
+  no-budget holder never sees the new status.
+- `sslm_seq_reset` keeps the reservation and sets the origin to 0. It never
+  draws from the pool, so reset and reuse are never refused.
+- The first `sslm_prefix_freeze` of any prefix, of either kind, returns its
+  unused pages to the pool, so a frozen prefix holds `ceil(length / B)` pages.
+  Later freezes return `SSLM_OK` and change nothing.
+- `sslm_prefix_begin_from` makes a budget-mode child of a frozen parent of
+  either kind (an unfrozen parent is `SSLM_INVALID_ARGUMENT`). It draws
+  `R(budget)` from the parent's pool, shares the parent's full pages, copies
+  its partial last page, and copies the parent's state, including its schema
+  binding and walk state. A child of a non-empty parent cannot bind a schema
+  of its own (`sslm_prefix_set_schema` refuses once a prefix has content), so
+  only a schema bound at the root prefix carries schema content.
+
+**Adopt.** The adopting sequence's kind decides, never the prefix's:
+
+- A budget sequence **shares**: it maps the frozen prefix's full pages
+  read-only and copies at most one partial page into its own reservation. It
+  never draws from the pool. A prefix of another pool is
+  `SSLM_INVALID_ARGUMENT`, checked with the model check before anything
+  changes.
+- A no-budget sequence **copies** the prefix's written rows into its own
+  pages (proportional to the prefix's length, not to the cap), and may adopt
+  from another pool of the same model, as before.
+- The other refusals are 1.11.0's: an unfrozen prefix or another model is
+  `SSLM_INVALID_ARGUMENT`, and a prefix whose schema progress the sequence's
+  schema does not match is `SSLM_PREFIX_SCHEMA_MISMATCH`, which, as before,
+  also leaves the sequence unable to bind a schema until it is reset.
+- Prefixes stay base-only, so a shared page is valid under any adapter the
+  adopting sequence binds.
+
+**Page lifetime and admission.** A shared page is freed when the prefix and
+every holder that maps it have released, reset or re-adopted. Releasing a
+prefix therefore frees only the pages no other holder still maps, and a pool
+can stay full after its prefixes are released. Read `free_pages` from
+`sslm_kv_pool_stats` to size admissions, not the handle count.
+
+- In a pool where every handle was made by a no-budget verb, `block_count = N`
+  still admits N handles, as in 1.11.0. A frozen prefix now returns its unused
+  pages, so such a pool can admit more handles than 1.11.0 did, never fewer.
+- Once a budget-mode handle is in a pool, budget accounting governs admission:
+  a budget holder that shares a released prefix's pages keeps them counted
+  against the pool until it resets, adopts or releases.
+
+**Save and restore.**
+
+- A no-budget sequence's `sslm_seq_save` writes `SSB5`, byte-equal to the blob
+  1.11.0 writes for the same state, so 1.9.0 to 1.11.0 read it. Its size is
+  1.11.0's: the whole block.
+- A budget sequence writes **`SSB6`**, which carries only the rows the
+  sequence has written. Releases before 1.12.0 refuse it on its magic.
+- Restore reads `SSB6`, `SSB5`, `SSB4`, `SSB3` and `SSB2`.
+
+The `SSB6` layout (little-endian):
+
+| Offset | Field |
+|---|---|
+| 0–155 | the `SSB5` fixed header, unchanged (magic `SSB6`) |
+| 156 | `kv_mode`, u32: 0 no-budget, 1 budget |
+| 160 | `budget`, i32: the declared budget (the cap for a no-budget holder) |
+| 164 | `origin`, i64 |
+| 172 | the residual (`hidden_size` bytes when `hidden_size > 0`), then the anti-LM history, as in `SSB5` |
+| then | `kv_positions`, u64: `L' = context_length + (1 if mid-token else 0)` |
+| then | rows `[0, L')` in the flat layout with the cap replaced by `L'`: `[layer][K|V][kv_head][position][head_dim]` |
+
+So an `SSB6` blob is `172 + residual + 4 · history + 8 + L' · bytes_per_token`
+bytes, where `bytes_per_token = layers · 2 · kv_heads · head_dim ·
+element_bytes`. A sequence with no tokens saves no K/V bytes (its header,
+residual and history are saved as before). At a mid-token save, the layers
+the sequence has not yet reached at position `context_length` are written as
+zero bytes, so a blob depends only on the sequence's valid state, never on
+page identities or reuse history.
+
+Restore keeps the holder's contract:
+
+- A budget-mode `SSB6` restores as the holder it was saved from: the same
+  budget, origin and mode, so the same limit, the same remaining token count
+  and, after its first reset or adopt, the same reservation.
+- `SSB5` and older restore as no-budget holders with origin 0. A no-budget
+  sequence's origin is therefore 0 after a save and restore, as in 1.11.0;
+  only `sslm_seq_kv_stats` reads it, and its limit, token count and
+  reservation do not depend on it.
+- Every field is validated before any page is drawn. `SSB6` adds `kv_mode` in
+  {0, 1}, `1 ≤ budget ≤ cap` (equal to the cap for a no-budget blob),
+  `0 ≤ origin ≤ context_length ≤ min(origin + budget, cap)`, `kv_positions`
+  equal to `L'`, and an **exact** blob size. An `SSB6` blob must therefore be
+  passed with exactly the `*n` its save returned, not the
+  `sslm_seq_state_size` capacity; older formats still accept trailing
+  capacity. A refusal is `SSLM_INVALID_ARGUMENT` with nothing drawn.
+- The per-site saturation counts restore verbatim from `SSB6` and `SSB5`; no
+  relation between them and the total is checked.
+
+`sslm_seq_restore_shared(model, &pool, blob, size, prefix_or_null, &seq,
+&out_shared_pages)` is `sslm_seq_restore` with a sharing hint, and
+`sslm_seq_restore` is this verb with no prefix. A budget-mode `SSB6` re-shares
+the prefix's full pages, and `*out_shared_pages` receives their count, only when
+all of these hold: the prefix is frozen, of this model and this pool, its length
+equals the blob's origin, and its rows over the shared span compare byte-equal to
+the blob's own rows (an exact compare, not a hash). Otherwise the restore is
+private, returns `SSLM_OK` with `*out_shared_pages = 0`, and also draws pages
+to hold the prefix span, which go back to the pool at the sequence's first
+reset, adopt or release. A no-budget blob ignores the handle.
+`out_shared_pages` may be `NULL`. A host that restores many sequences of one
+cohort should pass each one its live prefix handle: without the handle each
+restored sequence holds the prefix span privately until it resets or
+re-adopts.
+
+**Sizing.** `sslm_seq_state_size` stays an upper bound for every blob of
+either format. Its fixed part is 180 bytes, against 160 in 1.11.0 (the `SSB6`
+header's 16 more bytes, and the 8-byte `kv_positions` where `SSB5` has a
+4-byte `kv_block_count`), so it is 20 bytes larger at every model.
+
+**Diagnostics.** Both stats verbs take a caller struct whose `struct_size` the
+caller sets to its `sizeof`; any other value is `SSLM_INVALID_ARGUMENT`.
+
+- `sslm_kv_pool_stats(pool, &out)`: `page_count`, `free_pages`,
+  `shared_pages` (the distinct pages at least one live holder maps as shared)
+  and `page_positions` (`B`), read under the pool's lock.
+- `sslm_seq_kv_stats(seq, &out)`: `mode`, `origin`, `budget`, `limit`,
+  `context_length`, `mapped_private_pages` (including the pages a private
+  restore drew for the prefix span), `shared_pages`, `reserve_pages` and
+  `materialized_pages`. The holder's reservation is `reserve_pages +
+  mapped_private_pages`. It takes the sequence's lifecycle lock.
+- `sslm_stats`' `kv_blocks_resident` stays the constant 1.
+
+**Threads.** Pages are reference-counted only by lifecycle verbs, under the
+pool's lock; prefill and decode take no pool lock.
+
+- A frozen prefix's pages are never written again, so any number of threads
+  may adopt from it, `begin_from` it, and decode sequences that share it.
+- Releasing a prefix while its sharers decode, reset or release is safe.
+- Releasing a prefix while an adopt, a `begin_from` or a sharing restore is
+  reading it is the caller's undefined behaviour, as for adopt in 1.11.0.
+- `sslm_seq_kv_stats` must not race a prefill of the same sequence (the
+  one-caller-per-sequence contract).
+- Prefix construction is single-threaded, as before.
+
+#### Changed in 1.12.0
+
+These apply to every host, including one that calls no new verb:
+
+- `sslm_seq_state_size` is 20 bytes larger (above).
+- `sslm_kv_pool_create` refuses a `block_count` whose page total reaches
+  `UINT32_MAX`, with `SSLM_INVALID_ARGUMENT`.
+- The first `sslm_prefix_freeze` returns the prefix's unused pages to the
+  pool, so a pool can admit more handles than before, never fewer.
+- `sslm_seq_reset` no longer zero-fills the sequence's K/V memory. No read
+  reaches the old rows: reads stop at the live length, and a no-budget save
+  writes zeros past it, so the saved blob is unchanged.
+- Restore refuses a blob, of any format, that is mid-token at the context cap
+  (no save produces one), with `SSLM_INVALID_ARGUMENT`.
+- `sslm_seq_restore` reads `SSB6`.
+
+#### Not promised in 1.12.0
+
+- **Memory savings for no-budget verbs.** A host that calls only the 1.11.0
+  verbs holds one block's pages per handle, as before. Sharing and sizing by
+  live length apply to budget-mode holders only.
+- **No-budget save size.** A no-budget sequence's `SSB5` is still the whole
+  block, so that 1.11.0 can read it.
+- **A higher context cap.** The cap is not removed: RoPE tables and the
+  attention score scratch are still sized by it, and a write at the cap still
+  fails. Paging only makes a high cap cheaper to reserve.
+- **Speed.** No speed figure is promised. Attention reads K/V one page run at
+  a time, and decode throughput against 1.11.0 is measured, not guaranteed
+  (see the [1.12.0 release note](releases/1.12.0.md)).
+- **GPU paging.** The GPU API (`SslmGpu*`, `sslm_gpu_*`) is unchanged: GPU
+  sequences keep one whole-cap buffer each and have no prefix or adopt verbs.
+  GPU paging is planned for a later release.
+- **Automatic prefix matching.** Prefixes are explicit handles; the library
+  does not find shared prefixes by itself.
+- **Adapter-shaped prefixes.** Prefixes are computed without an adapter. An
+  adapter shapes only the tokens after the prefix.
+- **Shared reads.** Sequences that share pages each still read them in their
+  own attention step; there is no batched shared-prefix attention.
+- **Tokenization at a prefix seam.** The verbs take token ids. Splitting text
+  so that the prefix's tokens and the continuation's tokens equal the whole
+  text's tokens is the host's job.
 
 ### Schema-constrained generation
 
@@ -497,7 +774,7 @@ reproducible, on the same certified platform, as an unconstrained one.
 
 ### Status causes
 
-`sslm_status` carries one success value (`SSLM_OK`) plus 26 distinct
+`sslm_status` carries one success value (`SSLM_OK`) plus 27 distinct
 rejection causes (an internal sentinel past the last real value is never
 returned or accepted as an argument), in five groups: argument/precondition
 rejections (a bad argument, a buffer too small, a misaligned buffer);
@@ -506,7 +783,9 @@ match its base model, a restore whose content or KV shape doesn't match);
 lifecycle rejections (a model, pool, or adapter with live handles still
 attached to it; an adapter swap mid-token; a frozen
 prefix reused; a KV pool with no room left); numeric/domain rejections (a
-token id out of range, a context length exceeded, a legal decode-output
+token id out of range, a context length exceeded, a budget-mode holder's
+declared budget exceeded below the cap (`SSLM_KV_BUDGET_EXCEEDED`, ordinal 29,
+1.12.0), a legal decode-output
 token id with no tokenizer entry for the padded-vocabulary case, or —
 distinct from all of those — a per-step numeric gate declining on an
 otherwise valid model and valid params, `SSLM_NUMERIC_STEP_REFUSED`,

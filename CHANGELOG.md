@@ -4,6 +4,55 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+## [1.12.0] - Unreleased
+
+Not yet tagged; the date is filled at the tag (TODO-BOX). The CPU backend stores K/V in pages of
+`B` positions (`sslm_kv_page_positions`; 16 for every converted artifact on record), reached
+through a per-holder page table. Tokens, K/V values and the axis digest are bit-identical to
+1.11.0 on every path. A host that calls only the 1.11.0 verbs keeps their behaviour, admission
+counts and save blobs, apart from the changes listed below; the memory savings come only from the
+new budget-mode verbs. Eleven C verbs and one status are added (49 C verbs in all); no signature,
+struct layout or existing ordinal changes. The GPU API is unchanged. `docs/api.md` (*Paged KV
+memory*) is the contract and `docs/releases/1.12.0.md` the release note.
+- **Budget mode.** `sslm_seq_create_budgeted` and `sslm_prefix_begin_budgeted` take a budget,
+  `1 <= budget <= cap`, and reserve `R(budget) = min(ceil(budget/B) + 1, ceil(cap/B))` pages
+  (`sslm_kv_pages_for_budget`) at create, refused with `SSLM_KV_POOL_EXHAUSTED` and nothing drawn
+  when the pool has fewer. Prefill and decode take pages only from that reservation. A write at or
+  past `min(origin + budget, cap)` below the cap returns the new `SSLM_KV_BUDGET_EXCEEDED`
+  (ordinal 29) with no row written; at the cap `SSLM_CONTEXT_CAP_EXCEEDED` fires as before.
+- **Shared prefixes.** A budget sequence's `sslm_seq_adopt_prefix` maps the frozen prefix's full
+  pages and copies at most one page; it never draws from the pool, and a prefix of another pool is
+  `SSLM_INVALID_ARGUMENT`. `sslm_prefix_begin_from` builds a budget-mode prefix on a frozen parent
+  the same way. A sequence made by `sslm_seq_create` still copies, now only the prefix's written
+  pages. A shared page is freed when the prefix and every holder that maps it have released, reset
+  or re-adopted.
+- **Pools and diagnostics.** `sslm_kv_page_pool_create`, `sslm_kv_page_size` and
+  `sslm_kv_page_pool_overhead_size` size a pool in pages; `sslm_kv_pool_create` builds
+  `block_count * ceil(cap/B)` pages in the same buffer. `sslm_kv_pool_stats` and
+  `sslm_seq_kv_stats` report pages, mode, origin, budget and limit. `kv_blocks_resident` stays 1.
+- **Save format `SSB6`** for budget holders only: the `SSB5` header plus `kv_mode`, `budget` and
+  `origin` (172 bytes), the residual and history, then `kv_positions` and only the written rows, so
+  its size follows the live length. No-budget holders keep writing `SSB5`, byte-equal to 1.11.0's.
+  Restore reads `SSB6` through `SSB2`, keeps a budget holder's budget, origin and limit, and requires
+  an `SSB6` blob's exact size. `sslm_seq_restore_shared` re-shares a live prefix handle's pages when
+  its bytes match the blob's exactly, and otherwise restores privately with `SSLM_OK`.
+- **Memory (by admission, 0.5B, cap 4096, example cohort of a 1,000-token world, 10 personas and 50
+  budget-512 sequences):** a pool of 1,842 pages (173 MiB) admits the cohort and 1,841 refuses
+  exactly one create, against 60 blocks (1,440 MiB) in 1.11.0. Reproduced in the cloud on a
+  synthetic fixture with the 0.5B page arithmetic; pending confirmation on the real artifact
+  (TODO-BOX: cell 10.4).
+- **Speed:** no figure is promised. Decode against 1.11.0: TODO-BOX (cell 7.9). Lifecycle verbs:
+  TODO-BOX (the lifecycle timing cell on both binaries).
+- **Behaviour changes for every host:** `sslm_seq_state_size` is 20 bytes larger (fixed part 180,
+  was 160). `sslm_kv_pool_create` refuses a `block_count` whose page total reaches `UINT32_MAX`.
+  The first `sslm_prefix_freeze` returns the prefix's unused pages to the pool, so a pool can
+  admit more handles than before, never fewer. `sslm_seq_reset` no longer zero-fills K/V memory
+  (nothing reads it, and saves are unchanged). Restore refuses a blob of any format that is
+  mid-token at the context cap, which no save produces.
+- **Not in this release:** GPU paging (planned for 1.13.0), memory savings for the 1.11.0 verbs,
+  removal of the context cap, automatic prefix matching, adapter-shaped prefixes and batched
+  shared-prefix attention.
+
 ## [1.11.0] - 2026-09-30
 
 A host parallel-for hook can now also split the CPU backend's one-row projections, opt-in. Bit 1

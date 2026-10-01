@@ -988,9 +988,10 @@ extern "C" size_t sslm_workspace_size(sslm_model model, const sslm_config* confi
 }
 
 // CORRECTED to the ruled unit (design Sec7.2, Brunel T-2139 Sec4, design commit fab235c1c6): a
-// "block" is one WHOLE sequence's entire KV footprint across every layer -- exactly the byte
-// count RunLayerLoop's own workspace/workspace_size parameter needs for one sequence -- never a
-// sub-sequence PagedAttention page. CFG1's own `kv_block_size` field (SslmModelConfig, a
+// "block" is one sequence's KV footprint at the full cap across every layer -- exactly the byte
+// count RunLayerLoop's own flat workspace/workspace_size parameter needs for one sequence. Since
+// 1.12.0 (paged-KV plan Sec3.1) the pool stores K/V in pages of B positions and a block is
+// exactly ceil(cap/B) of them: the unit a no-budget holder reserves, not a unit of storage. CFG1's own `kv_block_size` field (SslmModelConfig, a
 // tokens-per-page count) plays NO role in this formula under the ruling; this function's own
 // name is now a slight misnomer relative to that unrelated CFG1 field, which the ruling itself
 // notes is model metadata this ABI's block unit does not consume.
@@ -1028,7 +1029,7 @@ extern "C" size_t sslm_kv_pool_overhead_size(sslm_model model, uint32_t block_co
 	// Paged-KV plan §3.6 (C4): the pool is block_count * ceil(cap/B) pages, indexed by u32, so it
 	// saturates for exactly the counts sslm_kv_pool_create refuses for that reason. UINT32_MAX itself
 	// is the page module's kNoPage sentinel, which PoolCreate refuses as a page count, so a page count
-	// of exactly UINT32_MAX saturates too (review M1).
+	// of exactly UINT32_MAX saturates too.
 	const PageGeometry geo = ComputePageGeometry(model);
 	if (!geo.ok ||
 	    static_cast<uint64_t>(block_count) * geo.cap_pages >= static_cast<uint64_t>(UINT32_MAX)) {
@@ -1052,8 +1053,8 @@ extern "C" size_t sslm_seq_state_size(sslm_model model) {
 	// the CURRENT 'SSB5' format sslm_seq_save now writes), then the whole KV store a single
 	// sequence carries -- CORRECTED to the ruled block unit (Sec4 above): a
 	// sequence draws exactly ONE block (its own whole-sequence KV footprint), so
-	// kv_block_count is always 1 for a real saved sequence, not a ceil(context_cap/page) count
-	// under the now-retired PagedAttention reading. Fixed fields: magic(4) + model_hash(32) +
+	// kv_block_count is always 1 in an 'SSB5' blob (a no-budget holder's save); an 'SSB6' blob
+	// (a budget holder's) carries kv_positions and only the live rows instead, sized below. Fixed fields: magic(4) + model_hash(32) +
 	// kv_precision(4) + schema_name_hash(8) + dfa_walk_state(4) + adapter_binding_id(8) +
 	// context_length(8) + layer_index(4) + current_token(4, design commit 9e2995f4e7's own
 	// amendment -- see the C5 block's own top comment) + hidden_scale(16, CarriedScale as two
@@ -1166,7 +1167,7 @@ extern "C" sslm_status sslm_kv_pool_create(sslm_model model, void* buf, size_t b
 	// Paged-KV plan §3.6 (C4): the pool is block_count * ceil(cap/B) pages, and page indices are
 	// u32, so a count of UINT32_MAX or more is refused here, with the overflow refusals, before the
 	// buffer-size check (sslm_kv_pool_overhead_size saturates for the same counts, just below).
-	// UINT32_MAX itself is the page module's kNoPage sentinel, which PoolCreate refuses (review M1).
+	// UINT32_MAX itself is the page module's kNoPage sentinel, which PoolCreate refuses.
 	const PageGeometry geo = ComputePageGeometry(model);
 	if (!geo.ok) return SSLM_INVALID_ARGUMENT;
 	const uint64_t page_count64 = static_cast<uint64_t>(block_count) * geo.cap_pages;
@@ -1665,7 +1666,7 @@ uint8_t* HolderRow(const sslm_kv_pool_s* pool, const superslm::kv_pages::PageHol
 // The K/V section of 1.9.0's SSB5 (§3.7 Writers, rev 16): the whole block in the flat layout
 // [layer][K|V][kv_head][pos < cap][d], gathered from the holder's pages -- rows [0, L') from the
 // pages, zeros for every position past L' and for the mid-token row's layers >= layer_index,
-// whatever the pages hold. Byte-equal to the block 1.9.0 writes for the same state. `dst` has
+// whatever the pages hold. Byte-equal to the block 1.11.0 writes for the same state. `dst` has
 // block_size bytes.
 size_t KvRuns(const superslm::SslmModelConfig& c) {
 	// One run = one (layer, half, kv_head) triple, in the flat and canonical order.
@@ -1961,7 +1962,8 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
 		    /*site_prefix=*/{}, nullptr,
 		    /*q_width=*/static_cast<size_t>(c.num_attention_heads) * c.head_dim,
 		    // The per-site census the total sums, filled here as RunLayerLoop's decode path
-		    // already fills it, so a prefilled sequence's census still sums to its total.
+		    // already fills it, so a prefilled sequence's census still sums to its total unless
+		    // its history since its last reset includes an 'SSB4', 'SSB3' or 'SSB2' restore.
 		    &state.kv_landing_saturation_count, &state.k_channel_landing_saturation_count,
 		    &state.rope_q_saturation_count, &state.rope_k_saturation_count,
 		    // Decode-threading plan §3.4: `admit_count` is the chunk's M, so a call that admits
@@ -2514,16 +2516,14 @@ extern "C" superslm::SequenceLayerState* SslmPrefixLiveStateForTest(sslm_prefix 
 }
 #endif
 
-// RULED, copy-on-adopt (design Sec7.2, design commit fab235c1c6): an eager, whole-block copy of
-// the frozen prefix's own occupied bytes into the adopting sequence's own already-drawn block,
-// never physical sharing (the real block-table indirection true sharing needs is committed
-// post-1.0 engine work, D-SLM3457). Copies the WHOLE block (not merely the first
-// context_length-worth of bytes): KeyRow/ValueRow's own per-(layer,head)-major layout means
-// occupied positions are interleaved across the whole block, one span per layer, not a single
-// contiguous prefix of the buffer -- copying the entire block is the simplest construction that
-// is unconditionally correct (every layer's own occupied span lands intact; the few bytes past
-// context_length within each layer's own span are copied too, but nothing ever reads them,
-// since context_length gates what RunLayerLoop treats as valid history).
+// Adopt (design Sec7.2 as amended by the paged-KV plan Sec3.5, 1.12.0): 1.2.0 to 1.11.0 made an
+// eager whole-block copy of the frozen prefix into the adopting sequence's block, never physical
+// sharing. Since 1.12.0 the adopter's mode decides. A whole_reserve adopter (a no-budget verb's
+// holder) still copies, but only the prefix's ceil(len/B) occupied pages, into pages of its own
+// reserve. A budget adopter physically shares the prefix's floor(len/B) full pages (reference
+// counted under the pool mutex) and copies at most its one partial tail page. Neither draws from
+// the pool. Both are bit-identical in what the sequence then reads: context_length gates what
+// RunLayerLoop treats as valid history, and every write lands at or after the prefix's length.
 extern "C" sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix) {
 	if (!seq) return SSLM_INVALID_ARGUMENT;
 	if (!prefix) return SSLM_INVALID_ARGUMENT;
@@ -3382,7 +3382,7 @@ extern "C" sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out
 	// from the schema binding alone. A sequence with no schema bound (or one bound but never
 	// driven through a forced/fixed span) correctly reports 0.
 	out->forced_token_count = seq->forced_token_count;
-	out->kv_blocks_resident = 1;  // this sequence's own single, whole-sequence block (Sec7.2)
+	out->kv_blocks_resident = 1;  // the constant 1 (Sec7.2); since 1.12.0 pages are reported by sslm_seq_kv_stats
 	// D-SLM3476 (design Sec14.1): 0 when no schema is bound; otherwise 1 iff dfa_walk_state is
 	// currently a member of the bound schema's own accept set.
 	out->schema_accepting = 0;
@@ -3397,10 +3397,11 @@ extern "C" sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out
 
 // -----------------------------------------------------------------------------------------
 // C5 -- save/restore (design Sec7.3): the blob format at that section's own field order.
-// Writers emit only the current magic. Readers recognize the shipped predecessor when its
+// Writers emit one of two current magics (1.12.0): a no-budget holder 'SSB5', a budget holder
+// 'SSB6' (paged-KV plan Sec3.7, below). Readers recognize the shipped predecessors when their
 // missing fields have an unambiguous compatibility default, and hard-reject every other magic.
-// kv_block_count is always 1 (Sec7.2's ruled one-block-per-sequence unit) -- no per-blob
-// variability there, unlike the pre-ruling page-count reading.
+// In 'SSB5' and older, kv_block_count is always 1 (Sec7.2's ruled one-block-per-sequence unit);
+// 'SSB6' replaces it with kv_positions and carries only the live rows.
 //
 // `current_token` -- AMENDED IN (design commit 9e2995f4e7, the blob-amendment ruling). This
 // build's own S-FREEZE run measured, by execution, that a sequence resting BETWEEN
@@ -3663,8 +3664,9 @@ extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
 	off += 4;
 	// Paged-KV plan §3.7 (C4, rev 16): a whole_reserve holder writes 1.9.0's 'SSB5' unchanged in
 	// layout, its block gathered from the pages -- rows [0, L') from the pages, zeros past L' and
-	// for the mid-token row's layers >= layer_index -- so the blob is byte-equal to the one 1.9.0
-	// writes for the same state, and 1.9.0 reads it. (Budget holders write 'SSB6', step C5.)
+	// for the mid-token row's layers >= layer_index -- so the blob is byte-equal to the one 1.11.0
+	// writes for the same state, and 1.9.0 to 1.11.0 read it. (Budget holders write 'SSB6', step
+	// C5.)
 	GatherFlatBlock(seq->pool, seq, c, p + off, seq->block_size);
 	off += seq->block_size;
 
