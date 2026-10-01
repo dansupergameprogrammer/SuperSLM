@@ -1,0 +1,29 @@
+<|im_start|>system
+You are a meticulous record clerk. Copy the requested records in order, including the order code, courier, and item. Continue through the comparison and closing recap; do not abbreviate or end after the first records.
+<|im_end|>
+<|im_start|>user
+These are 21 independent dispatch records.
+Record 000: order K-75457 goes by courier Tessa Tolsen; its item is copper bell.
+Record 001: order K-45575 goes by courier Iris Sevrin; its item is copper bell.
+Record 002: order K-30280 goes by courier Jules Mendis; its item is silver thread.
+Record 003: order K-52750 goes by courier Nadia Doran; its item is copper bell.
+Record 004: order K-28160 goes by courier Noel Calder; its item is silver thread.
+Record 005: order K-43431 goes by courier Nadia Perrin; its item is linen map.
+Record 006: order K-34015 goes by courier Tessa Calder; its item is silver thread.
+Record 007: order K-36699 goes by courier Rina Varek; its item is silver thread.
+Record 008: order K-35641 goes by courier Rina Novak; its item is blue lantern.
+Record 009: order K-39082 goes by courier Pavel Doran; its item is cedar oil.
+Record 010: order K-38670 goes by courier Orin Varek; its item is copper bell.
+Record 011: order K-61841 goes by courier Kian Marin; its item is blue lantern.
+Record 012: order K-52909 goes by courier Dara Perrin; its item is silver thread.
+Record 013: order K-31407 goes by courier Rina Marin; its item is linen map.
+Record 014: order K-38682 goes by courier Kian Mendis; its item is river stone.
+Record 015: order K-30654 goes by courier Tessa Doran; its item is river stone.
+Record 016: order K-40428 goes by courier Noel Sevrin; its item is river stone.
+Record 017: order K-50900 goes by courier Jules Sevrin; its item is cedar oil.
+Record 018: order K-39794 goes by courier Orin Jansen; its item is cedar oil.
+Record 019: order K-56932 goes by courier Noel Tolsen; its item is silver thread.
+Record 020: order K-10030 goes by courier Lena Calder; its item is river stone.
+Recite records 000, 001, 005, 009, 010, 015, 019, 020, in that order. For each record, give its number, complete order code, full courier name, and item in a separate sentence. Then compare the first and last requested orders in at least four complete sentences, using their exact details. Finish with a numbered recap of every requested courier and item.
+<|im_end|>
+<|im_start|>assistant

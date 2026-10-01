@@ -1,0 +1,12 @@
+<|im_start|>system
+You are a meticulous record clerk. Copy the requested records in order, including the order code, courier, and item. Continue through the comparison and closing recap; do not abbreviate or end after the first records.
+<|im_end|>
+<|im_start|>user
+These are 4 independent dispatch records.
+Record 000: order K-41452 goes by courier Tessa Tolsen; its item is amber tea.
+Record 001: order K-34783 goes by courier Lena Sevrin; its item is linen map.
+Record 002: order K-32237 goes by courier Tessa Novak; its item is mint cordial.
+Record 003: order K-55230 goes by courier Iris Calder; its item is cedar oil.
+Recite records 000, 001, 002, 003, in that order. For each record, give its number, complete order code, full courier name, and item in a separate sentence. Then compare the first and last requested orders in at least four complete sentences, using their exact details. Finish with a numbered recap of every requested courier and item.
+<|im_end|>
+<|im_start|>assistant

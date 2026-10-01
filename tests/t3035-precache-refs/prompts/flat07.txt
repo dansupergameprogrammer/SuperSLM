@@ -1,0 +1,56 @@
+<|im_start|>system
+You are a meticulous record clerk. Copy the requested records in order, including the order code, courier, and item. Continue through the comparison and closing recap; do not abbreviate or end after the first records.
+<|im_end|>
+<|im_start|>user
+These are 48 independent dispatch records.
+Record 000: order K-73086 goes by courier Rina Varek; its item is river stone.
+Record 001: order K-42163 goes by courier Dara Doran; its item is cedar oil.
+Record 002: order K-19931 goes by courier Dara Marin; its item is blue lantern.
+Record 003: order K-26794 goes by courier Kian Varek; its item is copper bell.
+Record 004: order K-40326 goes by courier Pavel Novak; its item is linen map.
+Record 005: order K-35943 goes by courier Dara Perrin; its item is amber tea.
+Record 006: order K-67231 goes by courier Mira Mendis; its item is copper bell.
+Record 007: order K-29241 goes by courier Rina Perrin; its item is mint cordial.
+Record 008: order K-57219 goes by courier Orin Perrin; its item is silver thread.
+Record 009: order K-27855 goes by courier Jules Perrin; its item is silver thread.
+Record 010: order K-38630 goes by courier Kian Sevrin; its item is river stone.
+Record 011: order K-14556 goes by courier Jules Perrin; its item is amber tea.
+Record 012: order K-70639 goes by courier Nadia Marin; its item is copper bell.
+Record 013: order K-58257 goes by courier Lena Varek; its item is mint cordial.
+Record 014: order K-22456 goes by courier Nadia Perrin; its item is river stone.
+Record 015: order K-64017 goes by courier Iris Perrin; its item is cedar oil.
+Record 016: order K-16956 goes by courier Nadia Novak; its item is river stone.
+Record 017: order K-33800 goes by courier Rina Perrin; its item is silver thread.
+Record 018: order K-58443 goes by courier Dara Calder; its item is silver thread.
+Record 019: order K-48484 goes by courier Orin Varek; its item is mint cordial.
+Record 020: order K-30297 goes by courier Lena Varek; its item is copper bell.
+Record 021: order K-27971 goes by courier Dara Doran; its item is cedar oil.
+Record 022: order K-55291 goes by courier Tessa Mendis; its item is linen map.
+Record 023: order K-18881 goes by courier Iris Marin; its item is mint cordial.
+Record 024: order K-20204 goes by courier Pavel Marin; its item is linen map.
+Record 025: order K-68945 goes by courier Lena Marin; its item is river stone.
+Record 026: order K-28784 goes by courier Orin Doran; its item is river stone.
+Record 027: order K-11722 goes by courier Noel Perrin; its item is linen map.
+Record 028: order K-58765 goes by courier Kian Doran; its item is copper bell.
+Record 029: order K-15222 goes by courier Rina Marin; its item is copper bell.
+Record 030: order K-66426 goes by courier Mira Varek; its item is river stone.
+Record 031: order K-25488 goes by courier Mira Calder; its item is silver thread.
+Record 032: order K-75392 goes by courier Noel Doran; its item is silver thread.
+Record 033: order K-13339 goes by courier Iris Mendis; its item is river stone.
+Record 034: order K-13135 goes by courier Kian Mendis; its item is mint cordial.
+Record 035: order K-66108 goes by courier Jules Varek; its item is linen map.
+Record 036: order K-58281 goes by courier Nadia Marin; its item is mint cordial.
+Record 037: order K-38649 goes by courier Mira Varek; its item is mint cordial.
+Record 038: order K-71914 goes by courier Kian Jansen; its item is amber tea.
+Record 039: order K-28362 goes by courier Nadia Jansen; its item is silver thread.
+Record 040: order K-70859 goes by courier Tessa Mendis; its item is mint cordial.
+Record 041: order K-19230 goes by courier Noel Sevrin; its item is silver thread.
+Record 042: order K-29940 goes by courier Jules Calder; its item is linen map.
+Record 043: order K-27251 goes by courier Lena Marin; its item is blue lantern.
+Record 044: order K-13775 goes by courier Jules Mendis; its item is silver thread.
+Record 045: order K-23836 goes by courier Orin Perrin; its item is linen map.
+Record 046: order K-37527 goes by courier Orin Sevrin; its item is amber tea.
+Record 047: order K-51418 goes by courier Mira Marin; its item is copper bell.
+Recite records 000, 001, 012, 023, 024, 036, 046, 047, in that order. For each record, give its number, complete order code, full courier name, and item in a separate sentence. Then compare the first and last requested orders in at least four complete sentences, using their exact details. Finish with a numbered recap of every requested courier and item.
+<|im_end|>
+<|im_start|>assistant

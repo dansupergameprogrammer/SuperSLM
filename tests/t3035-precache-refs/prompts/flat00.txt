@@ -1,0 +1,10 @@
+<|im_start|>system
+Copy each requested record precisely. Give a long answer.
+<|im_end|>
+<|im_start|>user
+These are 2 independent dispatch records.
+Record 000: order K-68592 goes by courier Iris Jansen; its item is copper bell.
+Record 001: order K-16819 goes by courier Dara Novak; its item is amber tea.
+Recite records 000, 001, in that order. For each record, give its number, complete order code, full courier name, and item in a separate sentence. Then compare the first and last requested orders in at least four complete sentences, using their exact details. Finish with a numbered recap of every requested courier and item.
+<|im_end|>
+<|im_start|>assistant
