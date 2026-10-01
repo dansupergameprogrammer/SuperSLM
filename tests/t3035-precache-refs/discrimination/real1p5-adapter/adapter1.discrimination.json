@@ -1,0 +1,28 @@
+{
+  "adapter_sha256": "d0f4fbc05f613fa064e806c52ac5cf303b4f5eb573d4b7e0d7a671936eb946c9",
+  "controls": [
+    {
+      "adapter_on_off_different_tokens": 31,
+      "adopter_mode": "budget",
+      "first_divergent_token": 32,
+      "killed": true,
+      "required_different_tokens": 16
+    },
+    {
+      "adapter_on_off_different_tokens": 31,
+      "adopter_mode": "legacy",
+      "first_divergent_token": 32,
+      "killed": true,
+      "required_different_tokens": 16
+    }
+  ],
+  "instrument": "T-3035-precache-discrimination",
+  "kind": "adapter",
+  "model_sha256": "93c8149d8a40a9700f5f783b497c5b35b55c0eb3c9b4f26ba7198220479b6790",
+  "population_adequate": false,
+  "prefix_id": "adapter1",
+  "probe_sha256": "e67cb30a6efde3dbcd4e3e4a7a549b97b7cf8ddb854e3c45aaaa282f67cef867",
+  "prompt_ids_sha256": "9278830bfa301291c7be49704711b69931a498874a0722512ecdd5364e785699",
+  "reason": "Adapter controls measured; discrimination instrument uncommissioned and other \u00a75.4 source limits remain",
+  "status": "QUARANTINED"
+}
