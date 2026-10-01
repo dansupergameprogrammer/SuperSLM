@@ -43,7 +43,7 @@ def screen(input_path: Path, output_path: Path) -> int:
               "input": str(input_path), "rows": rows,
               "summary": {"streams": len(rows), "late_periodic": late_count,
                           "required_late_periodic": 0.9, "pass": passed}}
-    output_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output_path.write_bytes((json.dumps(result, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     return 0 if passed else 1
 
 
@@ -113,7 +113,7 @@ def mutation(input_path: Path, output_path: Path, target: Path,
         },
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output_path.write_bytes((json.dumps(result, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     return 0
 
 
@@ -159,7 +159,7 @@ def summarize(directory: Path) -> int:
                            "swap": "10/10"}
     for path, record in zip(paths, records):
         record["population_summary"] = summary
-        path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        path.write_bytes((json.dumps(record, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     return 0
 
 
