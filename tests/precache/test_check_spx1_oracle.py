@@ -4,6 +4,8 @@ from argparse import Namespace
 from hashlib import sha256
 from pathlib import Path
 from struct import pack_into
+import subprocess
+import sys
 from tempfile import TemporaryDirectory
 
 from check_spx1 import check, fnv1a64
@@ -102,7 +104,20 @@ def main() -> None:
         put(altered_seq, "Q", 124, 17)
         put(altered_seq, "Q", 132, 13)
         rejects(altered, altered_seq, "known saturation counts")
-    print("SPX1 oracle: accepted distinct-count fixture; rejected token, schema, walk, symmetric count swap")
+        command = [sys.executable, str(Path(__file__).with_name("check_spx1.py")),
+                   "--blob", str(args.blob), "--ssb", str(args.ssb),
+                   "--rows", str(args.rows), "--cmake", str(args.cmake),
+                   "--model-artifact", str(args.model_artifact),
+                   "--current-token", str(args.current_token),
+                   "--schema-name", args.schema_name, "--walk", str(args.walk),
+                   "--counts", args.counts, "--length", str(args.length),
+                   "--origin", str(args.origin), "--layers", str(args.layers),
+                   "--heads", str(args.heads), "--dim", str(args.dim),
+                   "--hidden", str(args.hidden),
+                   "--expect-error", "known saturation counts"]
+        selected = subprocess.run(command, text=True, capture_output=True)
+        assert selected.returncode == 0 and "must-reject: known saturation counts" in selected.stdout, selected
+    print("SPX1 oracle: accepted stored-integrity fixture; rejected whole-file SHA, corrupted artifact, token, schema, walk and symmetric count swap for its named reason")
 
 
 if __name__ == "__main__":
