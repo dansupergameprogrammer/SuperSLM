@@ -1,0 +1,733 @@
+{
+  "adopter_mode": "legacy",
+  "decode_mode": "greedy",
+  "donor_ids_sha256": "a3f5c298909e6710a267002ae6357c286c57f135f12cadf603fa4c72dd5a1671",
+  "format": "SSB5",
+  "instrument": "T-3035-precache-stream-v2",
+  "length": 159,
+  "model_sha256": "93c8149d8a40a9700f5f783b497c5b35b55c0eb3c9b4f26ba7198220479b6790",
+  "mutants": [
+    {
+      "address": {
+        "byte_count": 1536,
+        "byte_offset": 156,
+        "kind": "field"
+      },
+      "changed_bytes": 1316,
+      "edit": "CHANGED",
+      "first_divergent_token": -1,
+      "mutant": "M-res",
+      "observed_tokens": 64,
+      "restore_status": 0,
+      "stream_killed": false
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          0
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 0,
+      "edit": "IDENTITY",
+      "first_divergent_token": null,
+      "mutant": "M-row(0)",
+      "observed_tokens": 64,
+      "restore_status": 0,
+      "stream_killed": null
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          1
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 0,
+      "edit": "IDENTITY",
+      "first_divergent_token": null,
+      "mutant": "M-row(1)",
+      "observed_tokens": 64,
+      "restore_status": 0,
+      "stream_killed": null
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          2
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 0,
+      "edit": "IDENTITY",
+      "first_divergent_token": null,
+      "mutant": "M-row(2)",
+      "observed_tokens": 64,
+      "restore_status": 0,
+      "stream_killed": null
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          3
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 13325,
+      "edit": "CHANGED",
+      "first_divergent_token": 14,
+      "mutant": "M-row(3)",
+      "observed_tokens": 15,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          4
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 13415,
+      "edit": "CHANGED",
+      "first_divergent_token": 21,
+      "mutant": "M-row(4)",
+      "observed_tokens": 22,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          5
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 13516,
+      "edit": "CHANGED",
+      "first_divergent_token": 14,
+      "mutant": "M-row(5)",
+      "observed_tokens": 15,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          6
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 13636,
+      "edit": "CHANGED",
+      "first_divergent_token": 21,
+      "mutant": "M-row(6)",
+      "observed_tokens": 22,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          7
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 13561,
+      "edit": "CHANGED",
+      "first_divergent_token": 14,
+      "mutant": "M-row(7)",
+      "observed_tokens": 15,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          8
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 13628,
+      "edit": "CHANGED",
+      "first_divergent_token": 21,
+      "mutant": "M-row(8)",
+      "observed_tokens": 22,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          9
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 13625,
+      "edit": "CHANGED",
+      "first_divergent_token": 21,
+      "mutant": "M-row(9)",
+      "observed_tokens": 22,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          10
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 13653,
+      "edit": "CHANGED",
+      "first_divergent_token": 21,
+      "mutant": "M-row(10)",
+      "observed_tokens": 22,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          11
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 13649,
+      "edit": "CHANGED",
+      "first_divergent_token": 14,
+      "mutant": "M-row(11)",
+      "observed_tokens": 15,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          12
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 13567,
+      "edit": "CHANGED",
+      "first_divergent_token": 21,
+      "mutant": "M-row(12)",
+      "observed_tokens": 22,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          13
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 13523,
+      "edit": "CHANGED",
+      "first_divergent_token": 21,
+      "mutant": "M-row(13)",
+      "observed_tokens": 22,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          14
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 13596,
+      "edit": "CHANGED",
+      "first_divergent_token": 21,
+      "mutant": "M-row(14)",
+      "observed_tokens": 22,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          15
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 13578,
+      "edit": "CHANGED",
+      "first_divergent_token": 21,
+      "mutant": "M-row(15)",
+      "observed_tokens": 22,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          16
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 13613,
+      "edit": "CHANGED",
+      "first_divergent_token": 14,
+      "mutant": "M-row(16)",
+      "observed_tokens": 15,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          79
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 13657,
+      "edit": "CHANGED",
+      "first_divergent_token": 21,
+      "mutant": "M-row(79)",
+      "observed_tokens": 22,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          142
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 13678,
+      "edit": "CHANGED",
+      "first_divergent_token": 14,
+      "mutant": "M-row(142)",
+      "observed_tokens": 15,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          158
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 13618,
+      "edit": "CHANGED",
+      "first_divergent_token": 21,
+      "mutant": "M-row(158)",
+      "observed_tokens": 22,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_count": 1,
+        "byte_offset": 1696,
+        "kind": "field"
+      },
+      "changed_bytes": 1,
+      "edit": "CHANGED",
+      "first_divergent_token": 21,
+      "mutant": "M-row0-changed",
+      "observed_tokens": 22,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 176272,
+      "edit": "CHANGED",
+      "first_divergent_token": 14,
+      "mutant": "M-page(0)",
+      "observed_tokens": 15,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          64,
+          65,
+          66,
+          67,
+          68,
+          69,
+          70,
+          71,
+          72,
+          73,
+          74,
+          75,
+          76,
+          77,
+          78,
+          79
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 217344,
+      "edit": "CHANGED",
+      "first_divergent_token": 21,
+      "mutant": "M-page(4)",
+      "observed_tokens": 22,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          128,
+          129,
+          130,
+          131,
+          132,
+          133,
+          134,
+          135,
+          136,
+          137,
+          138,
+          139,
+          140,
+          141,
+          142,
+          143
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 218147,
+      "edit": "CHANGED",
+      "first_divergent_token": 21,
+      "mutant": "M-page(8)",
+      "observed_tokens": 22,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          144,
+          145,
+          146,
+          147,
+          148,
+          149,
+          150,
+          151,
+          152,
+          153,
+          154,
+          155,
+          156,
+          157,
+          158
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 204174,
+      "edit": "CHANGED",
+      "first_divergent_token": 14,
+      "mutant": "M-tail",
+      "observed_tokens": 15,
+      "restore_status": 0,
+      "stream_killed": true
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          112,
+          113,
+          114,
+          115,
+          116,
+          117,
+          118,
+          119,
+          120,
+          121,
+          122,
+          123,
+          124,
+          125,
+          126,
+          127,
+          128,
+          129,
+          130,
+          131,
+          132,
+          133,
+          134,
+          135,
+          136,
+          137,
+          138,
+          139,
+          140,
+          141,
+          142,
+          143
+        ],
+        "row_bytes": 128,
+        "rows_offset": 1696,
+        "run_count": 112,
+        "run_first": 0,
+        "stride_positions": 32768
+      },
+      "changed_bytes": 436876,
+      "edit": "CHANGED",
+      "first_divergent_token": -1,
+      "mutant": "M-swap(7,8)",
+      "observed_tokens": 64,
+      "restore_status": 0,
+      "stream_killed": false
+    }
+  ],
+  "note": "Observation only; independent commissioning and cell assertions pending",
+  "page_positions": 16,
+  "probe_source_sha256": "c86f403815e51d2a5afe7c3954e956fcc70993b1c3e16d8926919ffde62897f5",
+  "raw_bytes": 3673,
+  "raw_mtime_utc": "2026-10-01T23:30:49.561204+00:00",
+  "raw_path": "D:\\_scratch\\T-3035\\legacy-v2-P3-real1p5-flat-flat00-greedy.txt",
+  "raw_sha256": "259e830193ef4f8d42f873b96a76be2f2b3a7cc5eb1a139a9cfeca52ca52acf7",
+  "reducer_source_sha256": "457f0e9bd8aa80d3e4d5b36b498cbe002282aa5aea0b4c45e0d77d25e0f9954a",
+  "reference_path": "D:\\_artifacts\\SuperSLM\\t3035-precache-refs\\P3-real1p5-flat\\flat00-run1.ref",
+  "reference_sha256": "41da605ea214c5804f90b0252e8bdbee3557ae0eb8247f5951f868a0e6962bbe",
+  "status": "QUARANTINED",
+  "target_ids_sha256": "ef7fae58fd1935ff15bf5ab5ece91b262c4eecd608dbe99d71b9593846393abe",
+  "unedited_roundtrip_tokens": [
+    6471,
+    220,
+    15,
+    15,
+    15,
+    25,
+    7217,
+    730,
+    12,
+    21,
+    23,
+    20,
+    24,
+    17,
+    374,
+    49151,
+    553,
+    74517,
+    65721,
+    619,
+    60865,
+    448,
+    279,
+    23285,
+    28419,
+    1509,
+    624,
+    6471,
+    220,
+    15,
+    15,
+    16,
+    25,
+    7217,
+    730,
+    12,
+    16,
+    21,
+    23,
+    16,
+    24,
+    374,
+    49151,
+    553,
+    74517,
+    422,
+    5059,
+    4620,
+    585,
+    448,
+    279,
+    67605,
+    15243,
+    1509,
+    382,
+    7039,
+    11,
+    26297,
+    279,
+    1156,
+    323,
+    1537,
+    11223,
+    10163
+  ],
+  "unedited_state_diff_bytes": 0
+}
