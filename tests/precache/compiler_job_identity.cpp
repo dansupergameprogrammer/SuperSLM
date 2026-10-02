@@ -48,7 +48,10 @@ int main() {
     forged_job["compiler"]="GNU";
     forged_job["runner_sha256"]=forged["runner_sha256"];
     pc::WriteReceipt(dir/"GNU.job",forged_job);
-    fs::copy_file(dir/"MSVC.spx1",dir/"GNU.spx1");
+    for(const char* suffix:{"runner","compiler","cmake","build.log",
+                            "capture.log","spx1"})
+        fs::copy_file(dir/(std::string("MSVC.")+suffix),
+                      dir/(std::string("GNU.")+suffix));
     const bool copied_rejected=!pc::ValidCompilerJob(dir,forged,local,"GNU");
     put("runner","tampered runner binary");
     const bool tamper_rejected=!pc::ValidCompilerJob(dir,local,local,"MSVC");

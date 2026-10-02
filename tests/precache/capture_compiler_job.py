@@ -51,6 +51,8 @@ def main() -> None:
     revision = run(["git", "-C", str(source), "rev-parse", "HEAD"]).strip()
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("source revision is not a Git commit")
+    if run(["git", "-C", str(source), "status", "--porcelain"]).strip():
+        raise ValueError("compiler job requires a clean source revision")
     configure = run([args.cmake, "-S", str(source), "-B", str(build),
                      "-G", args.generator])
     records = list(build.glob("CMakeFiles/*/CMakeCXXCompiler.cmake"))

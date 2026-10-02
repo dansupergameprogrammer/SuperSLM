@@ -172,7 +172,7 @@ void CrossView712() {
                 if(it->second.size()<from+D) return View{};
                 std::memcpy(v.rows.data()+to,it->second.data()+from,D);
             }
-        // The semantic witnesses exist before either final B-view save.
+        // This view's semantic witnesses exist before its final save.
         v.blob=Save(prefix);
         return v;
     };
