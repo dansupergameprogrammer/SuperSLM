@@ -71,6 +71,7 @@ inline std::vector<int32_t> Reference(const std::string& group,const std::string
     std::ifstream merge(merge_file);
     std::string anchor;
     std::getline(merge,anchor);
+    if(!anchor.empty() && anchor.back()=='\r') anchor.pop_back();
     const auto license=LicenseFields(license_file);
     const auto field=[&](const char* name) {
         const auto found=license.find(name);

@@ -16,10 +16,10 @@ def main() -> int:
         if len(anchor) != 40 or any(c not in "0123456789abcdef" for c in anchor):
             raise ValueError(f"invalid merge-base output: {anchor!r}")
     except (OSError, subprocess.CalledProcessError, ValueError) as error:
-        target.write_text(f"FAIL {error}\n", encoding="ascii", errors="backslashreplace")
+        target.write_bytes(f"FAIL {error}\n".encode("ascii", errors="backslashreplace"))
         print(f"reference merge-base fixture refused: {error}", file=sys.stderr)
         return 1
-    target.write_text(anchor + "\n", encoding="ascii")
+    target.write_bytes((anchor + "\n").encode("ascii"))
     print(f"reference merge-base fixture: {line} -> {anchor}")
     return 0
 
