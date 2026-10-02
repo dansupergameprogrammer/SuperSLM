@@ -1,0 +1,261 @@
+{
+  "adopter_mode": "legacy",
+  "classes": {
+    "M-row0-changed": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 8,
+      "survivors": [
+        {
+          "mutant": "M-row0-changed",
+          "reference_sha256": "95a00ee1f8ef8a8875be08a6703250db124ed9c3a5a9a00aec062ad568a538b6"
+        },
+        {
+          "mutant": "M-row0-changed",
+          "reference_sha256": "319220ed49bd33a8ce0351dfb613de2d69ae9d4c355eb040a520c0ef57753792"
+        }
+      ],
+      "tested": 10
+    },
+    "M-swap(110,111)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(110,111)",
+          "reference_sha256": "c86866980373b310168d5a63d286ec191efc1f3c2e263c183f55b0cf4b566def"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(123,124)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(123,124)",
+          "reference_sha256": "157460ba1f8e216b671647aac769e1b9252df54ee335f51ccd3f868b24213909"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(14,15)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(14,15)",
+          "reference_sha256": "b68abea6b87ed754fea5f72edeb7a8e26f10475473979a316469aa593c97876e"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(21,22)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(21,22)",
+          "reference_sha256": "95a00ee1f8ef8a8875be08a6703250db124ed9c3a5a9a00aec062ad568a538b6"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(29,30)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(29,30)",
+          "reference_sha256": "98f0c91c4ba49da63eb336a50f8363965b57d860c9b48ca30f2eaf1ab23bfb30"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(44,45)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(44,45)",
+          "reference_sha256": "c44489a53d45df19581c6a6e5c3ed51fc34fe40f7471a78aa6b7cf4ad848c807"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(60,61)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(60,61)",
+          "reference_sha256": "f913d6d018bac8f5577bff697f2e474ba1ec2d9dc34588b653b29c437ea5c800"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(7,8)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(7,8)",
+          "reference_sha256": "9ee113fb0b398d913f1ee3befe8fe537a75a5ffff32b5f12a03cecfa9b75a316"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(73,74)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(73,74)",
+          "reference_sha256": "171e389397bf8e8ab066df47fa28504d33a3265d42004850ec8c7b03aa8a1c84"
+        }
+      ],
+      "tested": 1
+    },
+    "M-swap(92,93)": {
+      "changed": 1,
+      "identities": 0,
+      "killed": 0,
+      "survivors": [
+        {
+          "mutant": "M-swap(92,93)",
+          "reference_sha256": "319220ed49bd33a8ce0351dfb613de2d69ae9d4c355eb040a520c0ef57753792"
+        }
+      ],
+      "tested": 1
+    },
+    "page:all": {
+      "changed": 30,
+      "identities": 0,
+      "killed": 30,
+      "survivors": [],
+      "tested": 30
+    },
+    "page:first": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 10,
+      "survivors": [],
+      "tested": 10
+    },
+    "page:last": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 10,
+      "survivors": [],
+      "tested": 10
+    },
+    "page:middle": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 10,
+      "survivors": [],
+      "tested": 10
+    },
+    "partial_tail": {
+      "changed": 9,
+      "identities": 0,
+      "killed": 9,
+      "survivors": [],
+      "tested": 9
+    },
+    "residual": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 10,
+      "survivors": [],
+      "tested": 10
+    },
+    "row:0": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 10,
+      "survivors": [],
+      "tested": 10
+    },
+    "row:1..B-1": {
+      "changed": 150,
+      "identities": 0,
+      "killed": 150,
+      "survivors": [],
+      "tested": 150
+    },
+    "row:B": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 10,
+      "survivors": [],
+      "tested": 10
+    },
+    "row:B-1": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 10,
+      "survivors": [],
+      "tested": 10
+    },
+    "row:L-1": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 10,
+      "survivors": [],
+      "tested": 10
+    },
+    "row:L-B-1": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 10,
+      "survivors": [],
+      "tested": 10
+    },
+    "row:all": {
+      "changed": 200,
+      "identities": 0,
+      "killed": 200,
+      "survivors": [],
+      "tested": 200
+    },
+    "row:floor(L/2)": {
+      "changed": 10,
+      "identities": 0,
+      "killed": 10,
+      "survivors": [],
+      "tested": 10
+    },
+    "row:noninitial": {
+      "changed": 190,
+      "identities": 0,
+      "killed": 190,
+      "survivors": [],
+      "tested": 190
+    }
+  },
+  "decode_mode": "greedy",
+  "instrument": "T-3035-precache-stream-v2",
+  "model_sha256": "d19e7a3676793dd18f14e73a738ae34d89a81a5331b3af0f8c62c266746f6951",
+  "note": "Positive stream witnesses only; exact-state cells and independent commissioning remain separate",
+  "prefixes": 10,
+  "status": "QUARANTINED",
+  "unique_mutants": 269,
+  "vitality_observation": {
+    "page:first": true,
+    "page:last": true,
+    "page:middle": true,
+    "partial_tail": true,
+    "residual": true,
+    "row:noninitial": true
+  }
+}
