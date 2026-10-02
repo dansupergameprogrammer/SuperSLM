@@ -21,7 +21,7 @@ void PageRows(const Fixture& fx,sslm_kv_pool pool,sslm_prefix prefix,
             if(it==pages.end()) it=pages.emplace(physical,PeekPage(fx,pool,physical)).first;
             const size_t page_off=((size_t(l)*2+half)*H+h)*size_t(fx.B())*D+
                                   size_t(pos%fx.B())*D;
-            const size_t blob_off=kHeader+HiddenSize(fx)+
+            const size_t blob_off=kHeader+ArtifactHiddenSize(fx)+
                 ((size_t(l)*2+half)*H+h)*size_t(L)*D+size_t(pos)*D;
             if(it->second.size()<page_off+D || blob.size()<blob_off+D ||
                std::memcmp(it->second.data()+page_off,blob.data()+blob_off,D)!=0) ++differing;
@@ -153,7 +153,7 @@ void InDomain23b() {
             PutLe64(b,144+i*8,count);
             bounded(std::move(b),"saturation count");
         }
-    const size_t rows=kHeader+HiddenSize(fx);
+    const size_t rows=kHeader+ArtifactHiddenSize(fx);
     const size_t half_rows=size_t(65)*fx.geo.kv_heads*fx.geo.head_dim;
     const std::array<std::pair<const char*,size_t>,7> byte_edges{{
         {"residual first",kHeader},{"residual last",rows-1},

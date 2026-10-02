@@ -82,7 +82,8 @@ void Independent712() {
     const auto table=PrefixTable(prefix);
     PKV_CHECK_EQ(table.size(),size_t((L+fx.B()-1)/fx.B()));
     if(table.size()!=size_t((L+fx.B()-1)/fx.B())) return;
-    constexpr size_t hidden=896; // synthetic0p5 fixture's embedded hidden size.
+    const size_t hidden=ArtifactHiddenSize(model.bytes.p,model.size);
+    if(!hidden) return;
     std::vector<uint8_t> rows(size_t(L)*fx.BytesPerToken());
     const size_t H=fx.geo.kv_heads,D=fx.geo.head_dim;
     std::map<uint32_t,std::vector<uint8_t>> pages;
@@ -227,16 +228,16 @@ void CrossView712() {
     auto inspect=[&](const View& v,const Fixture& fx,
                      const std::array<uint8_t,32>& expected_integrity) {
         PKV_CHECK_MSG(Header(v.blob,L,fx),"7.12 B-view size, shape or digest failed");
-        if(v.blob.size()<kHeader+HiddenSize(fx)+v.rows.size()) return;
+        if(v.blob.size()<kHeader+ArtifactHiddenSize(fx)+v.rows.size()) return;
         const bool model_hash=std::equal(expected_integrity.begin(),
                                          expected_integrity.end(),v.blob.begin()+60);
         PKV_CHECK_MSG(model_hash,"7.12 B-view SPX1 model hash differs from artifact");
         for(size_t i=0;i<counts.size();++i)
             PKV_CHECK_MSG(Le64(v.blob,144+8*i)==counts[i],
                           "7.12 B-view count %zu differs from fixed fixture",i);
-        PKV_CHECK_MSG(v.blob.size()>=kHeader+HiddenSize(fx) &&
+        PKV_CHECK_MSG(v.blob.size()>=kHeader+ArtifactHiddenSize(fx) &&
                       std::equal(v.rows.begin(),v.rows.end(),
-                                 v.blob.begin()+kHeader+HiddenSize(fx)),
+                                 v.blob.begin()+kHeader+ArtifactHiddenSize(fx)),
                       "7.12 B-view writer rows differ from independent peeks");
     };
     inspect(a,sixteen,sixteen_integrity);

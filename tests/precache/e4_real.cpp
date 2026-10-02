@@ -283,7 +283,7 @@ void Timing103() {
     const auto cap_prefill_end=std::chrono::steady_clock::now();
     const auto cap_blob=Save(cap_prefix);
     if(!RequireBlob(cap_blob,"10.3 cap-length")) {sslm_prefix_release(cap_prefix);return;}
-    PKV_CHECK_MSG(cap_blob.size()==kHeader+HiddenSize(wf)+
+    PKV_CHECK_MSG(cap_blob.size()==kHeader+ArtifactHiddenSize(wf)+
                   size_t(32768)*wf.BytesPerToken(),
                   "10.3 cap-length 1.5B byte count omits header, digest or canonical rows");
     sslm_prefix_release(cap_prefix);

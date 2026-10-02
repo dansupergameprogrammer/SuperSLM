@@ -324,7 +324,7 @@ void Precedence57() {
                std::equal(b.begin()+28,b.begin()+60,recomputed.begin()+28);
     };
     const bool later_fields=
-        good.size()==kHeader+HiddenSize(fx)+size_t(17)*fx.BytesPerToken() &&
+        good.size()==kHeader+ArtifactHiddenSize(fx)+size_t(17)*fx.BytesPerToken() &&
         IsMagic(good,"SPX1") && Le32(good,4)==0 &&
         Le32(good,20)==0 && Le32(good,24)==0 &&
         backend_only.size()==good.size() && gpu.size()==good.size() &&
@@ -410,7 +410,7 @@ void RealGpuPrecedence57() {
     auto digest_copy=gpu;
     Digest(digest_copy);
     const bool later_fields=
-        gpu.size()==kHeader+HiddenSize(fx)+size_t(17)*fx.BytesPerToken() &&
+        gpu.size()==kHeader+ArtifactHiddenSize(fx)+size_t(17)*fx.BytesPerToken() &&
         IsMagic(gpu,"SPX1") && Le32(gpu,4)==1 &&
         Le32(gpu,20)!=0 && Le32(gpu,24)!=0 &&
         field("vendor")==std::to_string(Le32(gpu,20)) &&

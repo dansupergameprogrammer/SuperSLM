@@ -1,6 +1,7 @@
 #pragma once
 #include "precache_abi.h"
 #include "paged-kv/pkv_budget_a_helpers.h"
+#include "superslm/artifact.h"
 #include "superslm/sha256.h"
 #include <algorithm>
 #include <array>
@@ -13,6 +14,51 @@ using namespace pkv;
 using namespace pkv::budget_a;
 constexpr size_t kHeader = 184;
 constexpr int kUnbuilt = 0x7fff;
+
+// Read the residual width from this fixture's CFG1, independently of the
+// mapped model and SPX1 writer. The paged-KV harness's HiddenSize() is
+// intentionally fixed to its 192-byte fixture family.
+inline size_t ArtifactHiddenSize(const uint8_t* bytes, size_t size) {
+    auto u32=[](const uint8_t* p) -> uint32_t {
+        return uint32_t(p[0]) | (uint32_t(p[1])<<8) |
+               (uint32_t(p[2])<<16) | (uint32_t(p[3])<<24);
+    };
+    auto u64=[&](const uint8_t* p) -> uint64_t {
+        return uint64_t(u32(p)) | (uint64_t(u32(p+4))<<32);
+    };
+    const bool header=bytes && size>=superslm::kHeaderBytes &&
+                      std::memcmp(bytes,superslm::kMagic,4)==0;
+    PKV_CHECK_MSG(header,"precache artifact lacks an SSLM section header");
+    if(!header) return 0;
+    const uint32_t count=u32(bytes+12);
+    const bool table=count<=superslm::kMaxSections &&
+        uint64_t(count)*superslm::kSectionDescBytes<=
+            size-superslm::kHeaderBytes;
+    PKV_CHECK_MSG(table,"precache artifact section table is out of bounds");
+    if(!table) return 0;
+    size_t hidden=0;
+    int config_count=0;
+    for(uint32_t i=0;i<count;++i) {
+        const uint8_t* row=bytes+superslm::kHeaderBytes+
+                           size_t(i)*superslm::kSectionDescBytes;
+        if(u32(row)!=uint32_t(superslm::SslmSectionType::Config)) continue;
+        ++config_count;
+        const uint64_t offset=u64(row+8), length=u64(row+16);
+        const bool cfg=length>=12 && offset<=size &&
+                       length<=size-offset &&
+                       std::memcmp(bytes+offset,"CFG1",4)==0;
+        PKV_CHECK_MSG(cfg,"precache CFG1 section is invalid");
+        if(!cfg) return 0;
+        hidden=u32(bytes+offset+8);
+    }
+    PKV_CHECK_MSG(config_count==1 && hidden>0,
+                  "precache artifact must have one nonzero CFG1 hidden_size");
+    return config_count==1 ? hidden : 0;
+}
+
+inline size_t ArtifactHiddenSize(const Fixture& fx) {
+    return ArtifactHiddenSize(fx.bytes.p,fx.size);
+}
 
 inline void Status(sslm_status got, sslm_status want, const char* operation) {
     PKV_CHECK_MSG(got == want, "%s: expected %s (%d), got %s (%d)%s", operation,
@@ -107,7 +153,7 @@ inline bool TwinTokens(const Fixture& fx, sslm_kv_pool* pool, sslm_prefix origin
 }
 
 inline bool Header(const std::vector<uint8_t>& b, int64_t L, const Fixture& fx) {
-    const size_t expected = kHeader + HiddenSize(fx) + size_t(L) * fx.BytesPerToken();
+    const size_t expected = kHeader + ArtifactHiddenSize(fx) + size_t(L) * fx.BytesPerToken();
     PKV_CHECK_MSG(b.size() == expected, "SPX1 size %zu, expected %zu", b.size(), expected);
     PKV_CHECK_MSG(IsMagic(b, "SPX1"), "prefix writer did not write SPX1");
     if (b.size() < kHeader) return false;
@@ -151,8 +197,8 @@ struct ModelFile {
     ~ModelFile() { if(model) sslm_model_unmap(model); }
 };
 
-// The hostile-input population uses the plan's synthetic L=1 operand:
-// 184-byte SPX1 header + 896 residual bytes + 6,144 canonical K/V bytes.
+// The hostile-input population uses a synthetic L=1 operand whose CFG1
+// residual width and canonical K/V width are checked at each call site.
 inline const Fixture& SyntheticFixture(bool three_schemas = false) {
     static std::map<bool, std::unique_ptr<Fixture>> cache;
     auto found = cache.find(three_schemas);
