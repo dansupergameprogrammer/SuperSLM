@@ -131,7 +131,16 @@ void Independent712() {
             << " --current-token " << input.back()
             << " --schema-name schema_two --walk 1"
             << " --counts 11,13,17,19,23";
-    const bool accepted=std::system(command.str().c_str())==0;
+    const auto run_parser=[](const std::string& args) {
+#ifdef _WIN32
+        // The Windows CRT passes this to cmd /c; an executable path quoted
+        // alongside quoted arguments needs one outer quote pair as well.
+        return std::system(("\""+args+"\"").c_str());
+#else
+        return std::system(args.c_str());
+#endif
+    };
+    const bool accepted=run_parser(command.str())==0;
     PKV_CHECK_MSG(accepted,
                   "7.12 independent struct/hashlib SPX1 parser rejected a field or row");
     if(!accepted) return;
@@ -152,7 +161,7 @@ void Independent712() {
     const bool swapped_paths=replace_once(blob_path.string(),swap_blob_path.string()) &&
                              replace_once(ssb_path.string(),swap_ssb_path.string());
     swap_command += " --expect-error \"known saturation counts\"";
-    PKV_CHECK_MSG(swapped_paths && std::system(swap_command.c_str())==0,
+    PKV_CHECK_MSG(swapped_paths && run_parser(swap_command)==0,
                   "7.12 symmetric SPX1/SSB6 count swap did not fail for known saturation counts");
 }
 PKV_CELL("7.12/E2:independent-parser", "E1", Independent712);
