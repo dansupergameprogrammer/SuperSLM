@@ -19,7 +19,13 @@ void Shape41() {
         if (!RequireBlob(b, "4.1")) return;
         Header(b, L, fx);
         sslm_prefix copy = nullptr;
-        if (Restored(fx, &pool.pool, b, nullptr, sc.h, &copy)) TwinTokens(fx, &pool.pool, twin, copy, 16);
+        if (Restored(fx, &pool.pool, b, nullptr, sc.h, &copy)) {
+            // An empty prefix has no last token to adopt, and cap-length
+            // prefixes have no continuation budget. Their SPX1 checks stand.
+            const int continuation=std::min(16,int(fx.geo.context_cap)-L);
+            if(L>0 && continuation>0)
+                TwinTokens(fx, &pool.pool, twin, copy, continuation);
+        }
     }
 }
 PKV_CELL("4.1/E2", "E1", Shape41);
@@ -57,12 +63,14 @@ void SyntheticShapes41() {
             sslm_prefix copy=nullptr;
             if(Restored(fx,&target.pool,b,nullptr,restored,&copy)) {
                 PKV_CHECK_MSG(Save(copy)==b,"4.1 synthetic shape SPX1 bytes changed");
-                for(bool budget : {false,true}) {
-                    const auto a=Decode(fx,&source.pool,twin,budget,16);
-                    const auto c=Decode(fx,&target.pool,copy,budget,16);
-                    PKV_CHECK_MSG(a.size()==16 && a==c,
-                                  "4.1 synthetic shape adopter differs from prefill twin");
-                }
+                const int continuation=std::min(16,int(fx.geo.context_cap)-L);
+                if(L>0 && continuation>0)
+                    for(bool budget : {false,true}) {
+                        const auto a=Decode(fx,&source.pool,twin,budget,continuation);
+                        const auto c=Decode(fx,&target.pool,copy,budget,continuation);
+                        PKV_CHECK_MSG(a.size()==size_t(continuation) && a==c,
+                                      "4.1 synthetic shape adopter differs from prefill twin");
+                    }
             }
         }
         }

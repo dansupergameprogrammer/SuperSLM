@@ -180,7 +180,9 @@ void Origins42() {
         uint32_t shared = UINT32_MAX;
         if (Restored(fx,&pool.pool,b,parent,sc.h,&restored,&shared)) {
             PKV_CHECK_EQ(shared,uint32_t(origin/B));
-            TwinTokens(fx,&pool.pool,child,restored,16);
+            const int continuation=std::min(16,int(fx.geo.context_cap)-origin-extension);
+            if(continuation>0)
+                TwinTokens(fx,&pool.pool,child,restored,continuation);
         }
     }
     }
