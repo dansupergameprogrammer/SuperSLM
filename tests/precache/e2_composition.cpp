@@ -1,4 +1,5 @@
 #include "precache_hostile.h"
+#include "precache_provenance.h"
 #include "paged-kv/pkv_budget_b_helpers.h"
 
 namespace {
@@ -72,9 +73,9 @@ PKV_CELL("8.6/E2", "E1", LegacyPool86);
 void CrossBuild91() {
     const Fixture& fx=GetFixture("pkv_def");
     if(!fx.ok) return;
-    const auto local=RootBlob(fx,65);
+    const auto local=RootBlob(fx,1000);
     if(!RequireBlob(local,"9.1")) return;
-    PagePool pool(fx.model,100);
+    PagePool pool(fx.model,200);
     Handles h;
     sslm_prefix same=nullptr;
     if(Restored(fx,&pool.pool,local,nullptr,h,&same))
@@ -85,6 +86,22 @@ void CrossBuild91() {
     std::vector<uint8_t> cloud;
     PKV_CHECK_MSG(ReadAll(path,&cloud) && !cloud.empty(),"9.1 cloud blob is missing");
     if(cloud.empty()) return;
+    const std::string cloud_compiler=Env("SUPERSLM_PRECACHE_CLOUD_COMPILER");
+    const std::string receipt_dir=Env("SUPERSLM_PRECACHE_CROSS_COMPILER_DIR");
+    const auto receipt=ReadReceipt(std::filesystem::path(receipt_dir)/
+                                   (cloud_compiler+".receipt"));
+    const bool provenance=receipt.size()==9 &&
+        (cloud_compiler=="GNU" || cloud_compiler=="Clang") &&
+        receipt.at("format")=="PC-COMPILER-1" &&
+        receipt.at("compiler")==cloud_compiler &&
+        receipt.at("project_version")==PC_PROJECT_VERSION &&
+        receipt.at("fixture_revision")==kFixtureRevision &&
+        receipt.at("model_sha256")==fx.sha &&
+        receipt.at("input_ids_sha256")==IdsSha(Stream(41,1000,fx.vocab)) &&
+        receipt.at("blob_sha256")==Sha(cloud.data(),cloud.size()) &&
+        receipt.at("runner_sha256").size()==64;
+    PKV_CHECK_MSG(provenance,"9.1 cloud blob lacks its compiler/model/prompt/fixture receipt");
+    if(!provenance) return;
     sslm_prefix remote=nullptr;
     if(Restored(fx,&pool.pool,cloud,nullptr,h,&remote))
         PKV_CHECK_MSG(Save(remote)==local,"9.1 cloud and box SPX1 bytes differ");

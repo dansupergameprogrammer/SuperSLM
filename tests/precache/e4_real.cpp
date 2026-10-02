@@ -1,4 +1,4 @@
-#include "precache_reference.h"
+#include "precache_provenance.h"
 #include <chrono>
 #include <filesystem>
 #include <sstream>
@@ -100,13 +100,44 @@ void CrossCompiler43() {
     if(!fx.ok) return;
     const auto b=RootBlob(fx,1000);
     if(!RequireBlob(b,"4.3")) return;
-    const auto path=Env("SUPERSLM_PRECACHE_CROSS_COMPILER_SHA");
-    std::ifstream in(path);
-    std::string msvc,gcc,clang;
-    in>>msvc>>gcc>>clang;
-    const auto actual=Sha(b.data(),b.size());
-    PKV_CHECK_MSG(actual==msvc && actual==gcc && actual==clang,
-                  "4.3 MSVC, gcc and clang SPX1 SHA-256 differ");
+    const auto directory=Env("SUPERSLM_PRECACHE_CROSS_COMPILER_DIR");
+    if(directory.empty()) return;
+    const auto local=LocalCompilerReceipt(fx,Stream(41,1000,fx.vocab),b);
+    if(local.at("runner_sha256").empty()) return;
+    const fs::path dir(directory);
+    const std::string phase=Env("SUPERSLM_PRECACHE_COMPILER_PHASE");
+    if(phase=="capture") {
+        fs::create_directories(dir);
+        const std::string compiler=local.at("compiler");
+        PKV_CHECK_MSG(compiler=="MSVC" || compiler=="GNU" || compiler=="Clang",
+                      "4.3 capture compiler identity is unsupported: %s",compiler.c_str());
+        PKV_CHECK_MSG(WriteReceipt(dir/(compiler+".receipt"),local),
+                      "4.3 compiler receipt write failed");
+        std::ofstream output(dir/(compiler+".spx1"),std::ios::binary);
+        output.write(reinterpret_cast<const char*>(b.data()),std::streamsize(b.size()));
+        PKV_CHECK_MSG(bool(output),"4.3 compiler blob write failed");
+        return;
+    }
+    PKV_CHECK_MSG(phase=="compare","4.3 compiler phase must be capture or compare");
+    if(phase!="compare") return;
+    std::set<std::string> runners;
+    for(const char* compiler:{"MSVC","GNU","Clang"}) {
+        const auto r=ReadReceipt(dir/(std::string(compiler)+".receipt"));
+        PKV_CHECK_MSG(ValidCompilerReceipt(r,local,compiler),
+                      "4.3 %s receipt has wrong compiler, model, IDs, version or fixture revision",
+                      compiler);
+        if(!ValidCompilerReceipt(r,local,compiler)) continue;
+        runners.insert(r.at("runner_sha256"));
+        std::vector<uint8_t> cloud;
+        PKV_CHECK_MSG(ReadAll((dir/(std::string(compiler)+".spx1")).string(),&cloud) &&
+                      cloud==b && Sha(cloud.data(),cloud.size())==r.at("blob_sha256"),
+                      "4.3 %s blob bytes or digest differ",compiler);
+        if(r.at("compiler")==local.at("compiler"))
+            PKV_CHECK_MSG(r==local,
+                          "4.3 local build receipt differs from its compiler job");
+    }
+    PKV_CHECK_MSG(runners.size()==3,
+                  "4.3 renamed or copied compiler receipt lacks three distinct built runners");
 }
 PKV_CELL("4.3/E4", "E1", CrossCompiler43);
 

@@ -31,7 +31,10 @@ endif()
 target_compile_definitions(superslm_precache_e1 PRIVATE
     PC_PYTHON_PATH="${PC_PYTHON_EXECUTABLE}"
     PC_CMAKE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt"
-    PC_FORMAT_SCRIPT_PATH="${PC_DIR}/check_spx1.py")
+    PC_FORMAT_SCRIPT_PATH="${PC_DIR}/check_spx1.py"
+    PC_COMPILER_ID="${CMAKE_CXX_COMPILER_ID}"
+    PC_COMPILER_VERSION="${CMAKE_CXX_COMPILER_VERSION}"
+    PC_PROJECT_VERSION="${PROJECT_VERSION}")
 if(MSVC)
     target_compile_options(superslm_precache_e1 PRIVATE /W4 /fp:precise)
 else()
