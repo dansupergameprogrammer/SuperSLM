@@ -3550,6 +3550,7 @@ void FirePrefixRestoreFault(int position, sslm_kv_pool_s* pool,
 	g_prefix_restore_fault.mapped = holder->mapped;
 	g_prefix_restore_fault.reserve = static_cast<uint32_t>(holder->reserve.size());
 }
+#endif
 
 void GatherPrefixRows(const sslm_prefix_s* prefix, const superslm::SslmModelConfig& c, uint8_t* dst) {
 	const int64_t length = prefix->state.context_length;
@@ -3564,7 +3565,6 @@ void GatherPrefixRows(const sslm_prefix_s* prefix, const superslm::SslmModelConf
 		}
 	}
 }
-#endif
 
 }  // namespace
 
