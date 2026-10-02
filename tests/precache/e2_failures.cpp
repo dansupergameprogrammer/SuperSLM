@@ -255,6 +255,17 @@ void Precedence57() {
     const auto good=RootBlob(fx,17);
     if (!RequireBlob(good,"5.7")) return;
     PagePool pool(fx.model,32);
+    sslm_prefix unedited=nullptr;
+    const auto accepted=Restore(fx,&pool.pool,good,nullptr,&unedited);
+    PKV_CHECK_MSG(accepted==SSLM_OK && unedited &&
+                  unedited!=OutSentinel<sslm_prefix>(),
+                  "5.7 unedited CPU source must restore on the refusal pool");
+    if(accepted!=SSLM_OK || !unedited || unedited==OutSentinel<sslm_prefix>()) {
+        if(unedited && unedited!=OutSentinel<sslm_prefix>()) sslm_prefix_release(unedited);
+        return;
+    }
+    Status(sslm_prefix_release(unedited),SSLM_OK,
+           "5.7 release unedited CPU source on the refusal pool");
     struct Pair { size_t early; size_t late; sslm_status want; };
     for (Pair p : {Pair{4,8,SSLM_INVALID_ARGUMENT},
                    Pair{8,60,PC_RESTORE_PRODUCER_MISMATCH},
@@ -366,6 +377,18 @@ void RealGpuPrecedence57() {
     if(!fx.ok) return;
     const auto cpu=RootBlob(fx,17);
     if(!RequireBlob(cpu,"5.7 F2 real GPU comparison")) return;
+    PagePool pool(fx.model,32);
+    sslm_prefix unedited=nullptr;
+    const auto accepted=Restore(fx,&pool.pool,cpu,nullptr,&unedited);
+    PKV_CHECK_MSG(accepted==SSLM_OK && unedited &&
+                  unedited!=OutSentinel<sslm_prefix>(),
+                  "5.7 F2 unedited CPU source must restore on the refusal pool");
+    if(accepted!=SSLM_OK || !unedited || unedited==OutSentinel<sslm_prefix>()) {
+        if(unedited && unedited!=OutSentinel<sslm_prefix>()) sslm_prefix_release(unedited);
+        return;
+    }
+    Status(sslm_prefix_release(unedited),SSLM_OK,
+           "5.7 F2 release unedited CPU source on the refusal pool");
     const auto blob_path=Env("SUPERSLM_PRECACHE_GPU_BLOB");
     const auto receipt_path=Env("SUPERSLM_PRECACHE_GPU_CAPTURE_RECEIPT");
     const auto runner_path=Env("SUPERSLM_PRECACHE_GPU_RUNNER_EXE");
@@ -400,7 +423,6 @@ void RealGpuPrecedence57() {
     PKV_CHECK_MSG(later_fields,
                   "5.7 F2 GPU capture lacks valid backend, adapter, digest or later-field domain");
     if(!later_fields) return;
-    PagePool pool(fx.model,32);
     auto reject=[&](const std::vector<uint8_t>& b,const char* what) {
         sslm_prefix out=nullptr;
         const auto st=Restore(fx,&pool.pool,b,nullptr,&out);
