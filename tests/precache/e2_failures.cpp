@@ -366,6 +366,11 @@ void Composition83() {
     sslm_seq adopter=BudgetSeq(fx,&pool.pool,64,sc.h);
     if(!adopter) return;
     Status(sslm_seq_adopt_prefix(adopter,restored),SSLM_OK,"8.3 adopt");
+    const auto prefix_pages=PrefixTable(restored), adopter_pages=SeqTable(adopter);
+    PKV_CHECK_MSG(prefix_pages.size()>=4 && adopter_pages.size()>=4 &&
+                  std::equal(prefix_pages.begin(),prefix_pages.begin()+4,
+                             adopter_pages.begin()),
+                  "8.3 first adopter does not share four prefix page indices");
     std::vector<uint8_t> ssb;
     PKV_CHECK_MSG(SaveBlob(adopter,&ssb) && IsMagic(ssb,"SSB6"),"8.3 adopter did not save SSB6");
     sslm_seq reloaded=nullptr;
@@ -375,6 +380,12 @@ void Composition83() {
     if(reloaded) {
         sc.h.seqs.push_back(reloaded);
         PKV_CHECK_EQ(shared,4u);
+        const auto reload_pages=SeqTable(reloaded);
+        PKV_CHECK_MSG(prefix_pages.size()>=4 && reload_pages.size()>=4 &&
+                      std::equal(prefix_pages.begin(),prefix_pages.begin()+4,
+                                 reload_pages.begin()),
+                      "8.3 SSB6 restored adopter does not share prefix page indices");
+        Status(ReleasePrefix(sc.h,restored),SSLM_OK,"8.3 release prefix with adopters live");
         std::vector<int32_t> a,c;
         PKV_CHECK_EQ(DecodeN(fx.model,adopter,16,&a),SSLM_OK);
         PKV_CHECK_EQ(DecodeN(fx.model,reloaded,16,&c),SSLM_OK);

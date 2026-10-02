@@ -144,6 +144,27 @@ void Tokens62() {
     if (!RequireBlob(b, "6.2")) return;
     sslm_prefix copy = nullptr;
     if (!Restored(fx, &pool.pool, b, nullptr, sc.h, &copy)) return;
+    const auto root_pages=PrefixTable(p), restored_pages=PrefixTable(copy);
+    PKV_CHECK_MSG(root_pages.size()>=4 && restored_pages.size()>=4,
+                  "8.1 fixture lacks four full prefix pages");
+    sslm_seq shared_adopter=BudgetSeq(fx,&pool.pool,80,sc.h);
+    if(shared_adopter) {
+        Status(sslm_seq_adopt_prefix(shared_adopter,copy),SSLM_OK,"8.1 budget adoption");
+        const auto adopter_pages=SeqTable(shared_adopter);
+        PKV_CHECK_MSG(adopter_pages.size()>=4 && restored_pages.size()>=4 &&
+                      std::equal(restored_pages.begin(),restored_pages.begin()+4,
+                                 adopter_pages.begin()),
+                      "8.1 budget adopter does not physically share floor(L/B) pages");
+        Status(ReleasePrefix(sc.h,copy),SSLM_OK,"8.1 release restored prefix");
+        copy=nullptr;
+        std::vector<int32_t> keep;
+        Status(DecodeN(fx.model,shared_adopter,16,&keep),SSLM_OK,
+               "8.1 adopter retains shared pages after prefix release");
+        PKV_CHECK_EQ(keep.size(),size_t(16));
+    }
+    if(!copy) {
+        if(!Restored(fx,&pool.pool,b,nullptr,sc.h,&copy)) return;
+    }
     TwinTokens(fx, &pool.pool, p, copy);
     auto mode_run=[&](sslm_prefix prefix,bool budget,int32_t mode) {
         sslm_seq seq=nullptr;

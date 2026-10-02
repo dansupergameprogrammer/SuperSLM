@@ -40,20 +40,31 @@ void LegacyPool86() {
     if(!fx.ok) return;
     const auto blob=RootBlob(fx,65);
     if(!RequireBlob(blob,"8.6")) return;
-    LegacyPool baseline(fx.model,2), restored_pool(fx.model,2);
+    LegacyPool baseline(fx.model,4), restored_pool(fx.model,4);
     Status(baseline.status,SSLM_OK,"8.6 baseline legacy pool");
     Status(restored_pool.status,SSLM_OK,"8.6 restored legacy pool");
     if(baseline.status!=SSLM_OK || restored_pool.status!=SSLM_OK) return;
     Handles base_handles, restored_handles;
-    sslm_prefix twin=Root(fx,&baseline.pool,base_handles,65);
+    sslm_prefix twin=Root(fx,&baseline.pool,base_handles,65,41,true);
     sslm_prefix copy=nullptr;
     if(!twin || !Restored(fx,&restored_pool.pool,blob,nullptr,restored_handles,&copy)) return;
-    PKV_CHECK_EQ(CountLegacyCreates(fx.model,&baseline.pool),
-                 CountLegacyCreates(fx.model,&restored_pool.pool));
-    for(bool budget : {false,true}) {
-        const auto a=Decode(fx,&baseline.pool,twin,budget,16);
-        const auto b=Decode(fx,&restored_pool.pool,copy,budget,16);
-        PKV_CHECK_MSG(a.size()==16 && a==b,"8.6 mixed legacy pool adopter differs");
+    const auto a=Decode(fx,&baseline.pool,twin,false,16);
+    const auto b=Decode(fx,&restored_pool.pool,copy,false,16);
+    PKV_CHECK_MSG(a.size()==16 && a==b,"8.6 legacy adopter differs from prefill twin");
+    for(int step=0;step<4;++step) {
+        const int base_count=CountLegacyCreates(fx.model,&baseline.pool);
+        const int restored_count=CountLegacyCreates(fx.model,&restored_pool.pool);
+        PKV_CHECK_MSG(base_count==restored_count,
+                      "8.6 legacy admission differs at step %d: %d vs %d",
+                      step,base_count,restored_count);
+        sslm_seq x=nullptr,y=nullptr;
+        const auto sx=sslm_seq_create(fx.model,&baseline.pool,&x);
+        const auto sy=sslm_seq_create(fx.model,&restored_pool.pool,&y);
+        PKV_CHECK_MSG(sx==sy && sx==(base_count ? SSLM_OK : SSLM_KV_POOL_EXHAUSTED),
+                      "8.6 next legacy create/refusal differs at step %d",step);
+        if(x) base_handles.seqs.push_back(x);
+        if(y) restored_handles.seqs.push_back(y);
+        if(!base_count) break;
     }
 }
 PKV_CELL("8.6/E2", "E1", LegacyPool86);

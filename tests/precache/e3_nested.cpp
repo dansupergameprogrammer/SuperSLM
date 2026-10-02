@@ -130,6 +130,11 @@ void Nested63() {
     const bool c = Restored(fx,&pool.pool,b,nullptr,sc.h,&priv);
     if (a && c) {
         PKV_CHECK_EQ(shared_count,62u);
+        const auto parent_pages=PrefixTable(world), shared_pages=PrefixTable(shared);
+        PKV_CHECK_MSG(parent_pages.size()>=62 && shared_pages.size()>=62 &&
+                      std::equal(parent_pages.begin(),parent_pages.begin()+62,
+                                 shared_pages.begin()),
+                      "6.3 nested restore did not physically share 62 parent pages");
         TwinTokens(fx,&pool.pool,built,shared,16);
         TwinTokens(fx,&pool.pool,built,priv,16);
         PKV_CHECK_MSG(Save(shared)==Save(priv),"6.3 shared and private SPX1 bytes differ");
@@ -336,8 +341,23 @@ void Composition82() {
     sslm_prefix grandchild = Child(fx,child_copy,sc.h,32);
     const auto gb = grandchild ? Save(grandchild) : std::vector<uint8_t>{};
     sslm_prefix grandcopy = nullptr;
-    if (Restored(fx,&pool.pool,gb,child_copy,sc.h,&grandcopy))
+    uint32_t grand_shared=UINT32_MAX;
+    if (Restored(fx,&pool.pool,gb,child_copy,sc.h,&grandcopy,&grand_shared)) {
+        const auto child_pages=PrefixTable(restored), descendant_pages=PrefixTable(child);
+        const auto copy_pages=PrefixTable(child_copy), grand_pages=PrefixTable(grandcopy);
+        PKV_CHECK_MSG(child_pages.size()>=2 && descendant_pages.size()>=2 &&
+                      std::equal(child_pages.begin(),child_pages.begin()+2,
+                                 descendant_pages.begin()),
+                      "8.2 child does not share root's full pages");
+        PKV_CHECK_MSG(copy_pages.size()>=4 && grand_pages.size()>=4 &&
+                      grand_shared==4 &&
+                      std::equal(copy_pages.begin(),copy_pages.begin()+4,
+                                 grand_pages.begin()),
+                      "8.2 grandchild restore does not share child's full pages");
+        Status(ReleasePrefix(sc.h,child_copy),SSLM_OK,"8.2 release middle parent");
+        Status(ReleasePrefix(sc.h,restored),SSLM_OK,"8.2 release root parent");
         TwinTokens(fx,&pool.pool,grandchild,grandcopy,16);
+    }
 }
 PKV_CELL("8.2/E3", "E1", Composition82);
 
