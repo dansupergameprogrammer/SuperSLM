@@ -324,14 +324,15 @@ void Real102() {
                   "10.2 real 0.5B artifact geometry differs from receipt");
     const auto world_ids=Ids(fs::path(prompts)/"world.ids");
     if(world_ids.empty()) return;
-    // World and all ten persona children remain live through the loop. The
-    // legacy adopter needs cap/B pages in addition to their R(L) reserves.
+    // World and all ten persona children remain live through the loop. A
+    // hinted restore can fall back to a private full joined prefix before
+    // the sharing oracle rejects it, and the legacy adopter reserves cap/B.
     int64_t retained_prefixes=fx.R(int64_t(world_ids.size()));
     for(int i=0;i<10;++i) {
         char persona[16]; std::snprintf(persona,sizeof(persona),"persona%02d",i);
         const auto suffix=Ids(fs::path(prompts)/(std::string(persona)+".ids"));
         if(suffix.empty()) return;
-        retained_prefixes+=fx.R(int64_t(suffix.size()));
+        retained_prefixes+=fx.R(int64_t(world_ids.size()+suffix.size()));
     }
     PagePool pool(fx.model,uint32_t(fx.CapPages()+retained_prefixes+fx.R(80)));
     Handles h;
