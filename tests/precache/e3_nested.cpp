@@ -118,10 +118,10 @@ void Nested63() {
     const Fixture& fx = GetFixture("pkv_def");
     if (!fx.ok) return;
     Scene sc;
-    // World R(1000), built and shared-child R(200) each, and the private
-    // R(1200) restore remain live before TwinTokens reserves cap/B pages.
+    // A restore with a rejected or ignored hint may retain all R(1200)
+    // pages. Both restores remain live before the whole-cap adopter.
     PagePool& pool = sc.AddPool(fx.model,uint32_t(
-        fx.CapPages()+fx.R(1000)+2*fx.R(200)+fx.R(1200)+fx.R(20)));
+        fx.CapPages()+fx.R(1000)+fx.R(200)+2*fx.R(1200)+fx.R(20)));
     sslm_prefix world = Root(fx,&pool.pool,sc.h,1000,61);
     sslm_prefix built = world ? Child(fx,world,sc.h) : nullptr;
     if (!built) return;
@@ -341,7 +341,10 @@ void ParentRelease33() {
     const Fixture& fx = GetFixture("pkv_def");
     if (!fx.ok) return;
     Scene sc;
-    PagePool& pool = sc.AddPool(fx.model,200);
+    // The hinted restore can occupy a private R(1200) fallback before the
+    // sharing oracle runs; the legacy adopter still reserves cap/B pages.
+    PagePool& pool = sc.AddPool(fx.model,uint32_t(
+        fx.CapPages()+fx.R(1000)+fx.R(200)+fx.R(1200)+fx.R(20)));
     sslm_prefix world = Root(fx,&pool.pool,sc.h,1000,61);
     sslm_prefix child = world ? Child(fx,world,sc.h) : nullptr;
     if (!child) return;
@@ -427,10 +430,9 @@ void NestedAllocation52() {
     const Fixture& fx=GetFixture("pkv_def");
     if(!fx.ok) return;
     Scene sc;
-    // Parent and child, plus their shared restore, remain live after the
-    // parent release; TwinTokens still draws a cap/B-page legacy adopter.
-    PagePool& pool=sc.AddPool(fx.model,uint32_t(
-        fx.CapPages()+fx.R(1000)+2*fx.R(200)+fx.R(20)));
+    // Parent R(1000) plus child R(200) leave exactly 124 free pages for the
+    // post-map allocation fault and rollback oracle below.
+    PagePool& pool=sc.AddPool(fx.model,200);
     sslm_prefix parent=Root(fx,&pool.pool,sc.h,1000,61);
     sslm_prefix child=parent ? Child(fx,parent,sc.h) : nullptr;
     if(!child) return;
