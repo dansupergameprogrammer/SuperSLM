@@ -23,6 +23,8 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/check_scm1_serializer.py)
     add_test(NAME superslm_precache_spx1_oracle
         COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/test_check_spx1_oracle.py)
+    add_test(NAME superslm_precache_status_mirrors
+        COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/check_prefix_status_mirrors.py)
 else()
     set(PC_PYTHON_EXECUTABLE python3)
 endif()
