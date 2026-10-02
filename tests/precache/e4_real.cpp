@@ -134,14 +134,16 @@ void CrossCompiler43() {
     }
     PKV_CHECK_MSG(phase=="compare","4.3 compiler phase must be capture or compare");
     if(phase!="compare") return;
-    std::set<std::string> runners;
+      std::set<std::string> runners;
+      std::set<std::string> source_revisions;
     for(const char* compiler:{"MSVC","GNU","Clang"}) {
         const auto r=ReadReceipt(dir/(std::string(compiler)+".receipt"));
-        PKV_CHECK_MSG(ValidCompilerReceipt(r,local,compiler),
-                      "4.3 %s receipt has wrong compiler, model, IDs, version or fixture revision",
-                      compiler);
-        if(!ValidCompilerReceipt(r,local,compiler)) continue;
-        runners.insert(r.at("runner_sha256"));
+          PKV_CHECK_MSG(ValidCompilerJob(dir,r,local,compiler),
+                        "4.3 %s receipt lacks its hashed producer binary, compiler job, or generated blob",
+                        compiler);
+          if(!ValidCompilerJob(dir,r,local,compiler)) continue;
+          runners.insert(r.at("runner_sha256"));
+          source_revisions.insert(ReadCompilerJob(dir/(std::string(compiler)+".job")).at("source_revision"));
         std::vector<uint8_t> cloud;
         PKV_CHECK_MSG(ReadAll((dir/(std::string(compiler)+".spx1")).string(),&cloud) &&
                       cloud==b && Sha(cloud.data(),cloud.size())==r.at("blob_sha256"),
@@ -150,8 +152,10 @@ void CrossCompiler43() {
             PKV_CHECK_MSG(r==local,
                           "4.3 local build receipt differs from its compiler job");
     }
-    PKV_CHECK_MSG(runners.size()==3,
-                  "4.3 renamed or copied compiler receipt lacks three distinct built runners");
+      PKV_CHECK_MSG(runners.size()==3,
+                    "4.3 renamed or copied compiler receipt lacks three distinct built runners");
+      PKV_CHECK_MSG(source_revisions.size()==1,
+                    "4.3 compiler jobs were not built from one source revision");
 }
 PKV_CELL("4.3/E4", "E1", CrossCompiler43);
 

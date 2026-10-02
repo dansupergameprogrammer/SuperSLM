@@ -87,20 +87,19 @@ void CrossBuild91() {
     PKV_CHECK_MSG(ReadAll(path,&cloud) && !cloud.empty(),"9.1 cloud blob is missing");
     if(cloud.empty()) return;
     const std::string cloud_compiler=Env("SUPERSLM_PRECACHE_CLOUD_COMPILER");
-    const std::string receipt_dir=Env("SUPERSLM_PRECACHE_CROSS_COMPILER_DIR");
-    const auto receipt=ReadReceipt(std::filesystem::path(receipt_dir)/
-                                   (cloud_compiler+".receipt"));
-    const bool provenance=receipt.size()==9 &&
-        (cloud_compiler=="GNU" || cloud_compiler=="Clang") &&
-        receipt.at("format")=="PC-COMPILER-1" &&
-        receipt.at("compiler")==cloud_compiler &&
-        receipt.at("project_version")==PC_PROJECT_VERSION &&
-        receipt.at("fixture_revision")==kFixtureRevision &&
-        receipt.at("model_sha256")==fx.sha &&
-        receipt.at("input_ids_sha256")==IdsSha(Stream(41,1000,fx.vocab)) &&
-        receipt.at("blob_sha256")==Sha(cloud.data(),cloud.size()) &&
-        receipt.at("runner_sha256").size()==64;
-    PKV_CHECK_MSG(provenance,"9.1 cloud blob lacks its compiler/model/prompt/fixture receipt");
+      const std::string receipt_dir=Env("SUPERSLM_PRECACHE_CROSS_COMPILER_DIR");
+      const auto directory=std::filesystem::path(receipt_dir);
+      const auto receipt=ReadReceipt(directory/
+                                     (cloud_compiler+".receipt"));
+      const auto expected_cloud=directory/(cloud_compiler+".spx1");
+      const auto local_receipt=LocalCompilerReceipt(fx,Stream(41,1000,fx.vocab),local);
+      const bool provenance=
+          (cloud_compiler=="GNU" || cloud_compiler=="Clang") &&
+          std::filesystem::weakly_canonical(path)==std::filesystem::weakly_canonical(expected_cloud) &&
+          ValidCompilerJob(directory,receipt,local_receipt,cloud_compiler.c_str()) &&
+          receipt.at("blob_sha256")==Sha(cloud.data(),cloud.size());
+      PKV_CHECK_MSG(provenance,
+                    "9.1 cloud blob lacks its verified producer binary, compiler job, or exact captured path");
     if(!provenance) return;
     sslm_prefix remote=nullptr;
     if(Restored(fx,&pool.pool,cloud,nullptr,h,&remote))

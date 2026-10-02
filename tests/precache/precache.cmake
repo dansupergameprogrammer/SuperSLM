@@ -9,9 +9,18 @@ add_executable(superslm_precache_macro_vitality EXCLUDE_FROM_ALL
     ${PC_DIR}/prefix_macro_vitality.cpp)
 add_executable(superslm_precache_reference_header EXCLUDE_FROM_ALL
     ${PC_DIR}/reference_header_identity.cpp)
+add_executable(superslm_precache_compiler_job_identity EXCLUDE_FROM_ALL
+    ${PC_DIR}/compiler_job_identity.cpp)
 target_include_directories(superslm_precache_reference_header PRIVATE include src tests tests/paged-kv ${PC_DIR})
+target_include_directories(superslm_precache_compiler_job_identity PRIVATE include src tests tests/paged-kv ${PC_DIR})
+target_link_libraries(superslm_precache_compiler_job_identity PRIVATE superslm_test_injection)
 target_compile_definitions(superslm_precache_reference_header PRIVATE
     PKV_REFERENCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/paged-kv/reference")
+target_compile_definitions(superslm_precache_compiler_job_identity PRIVATE
+    PKV_REFERENCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/paged-kv/reference"
+    PC_COMPILER_ID="${CMAKE_CXX_COMPILER_ID}"
+    PC_COMPILER_VERSION="${CMAKE_CXX_COMPILER_VERSION}"
+    PC_PROJECT_VERSION="${PROJECT_VERSION}")
 target_include_directories(superslm_precache_macro_vitality PRIVATE include)
 target_link_libraries(superslm_precache_e1 PRIVATE superslm_test_injection)
 target_include_directories(superslm_precache_e1 PRIVATE include src tests tests/paged-kv ${PC_DIR})
@@ -35,6 +44,8 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/check_prefix_status_mirrors.py)
     add_test(NAME superslm_precache_reference_header_identity
         COMMAND $<TARGET_FILE:superslm_precache_reference_header>)
+    add_test(NAME superslm_precache_compiler_job_identity
+        COMMAND $<TARGET_FILE:superslm_precache_compiler_job_identity>)
     set_tests_properties(superslm_precache_reference_header_identity PROPERTIES
         FIXTURES_SETUP precache_header_identity)
     add_test(NAME superslm_precache_reference_anchor
