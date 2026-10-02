@@ -158,7 +158,9 @@ struct Fixture {
 	Geometry geo{};
 	std::string sha;  // the file's SHA-256, matched against each .ref header
 	int32_t vocab = 256;
-	int64_t B() const { return geo.context_cap % 16 == 0 ? 16 : geo.context_cap; }  // §3.1, written here
+	int64_t block_size_override = 0;  // test-only patched CFG1 view; 0 preserves legacy fixtures
+	int64_t B() const { return block_size_override ? block_size_override :
+		(geo.context_cap % 16 == 0 ? 16 : geo.context_cap); }  // §3.1, written here
 	int64_t CapPages() const { return (geo.context_cap + B() - 1) / B(); }
 	// §3.4's R(budget), written here: min(ceil(budget / B) + 1, ceil(cap / B)).
 	int64_t R(int64_t budget) const {

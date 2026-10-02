@@ -121,6 +121,7 @@ inline bool PatchedBlockSizeTwin(const Fixture& fx, uint32_t kv_block_size, Fixt
 	std::memcpy(b.data() + superslm::kIntegrityHashOffset, digest, 32);
 	out->stem = fx.stem + "_kvbs" + std::to_string(kv_block_size);
 	out->geo = fx.geo;
+	out->block_size_override = kv_block_size;
 	out->size = b.size();
 	out->bytes.Reset(b.size());
 	std::memcpy(out->bytes.p, b.data(), b.size());
