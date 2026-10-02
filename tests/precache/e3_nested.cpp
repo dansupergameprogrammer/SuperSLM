@@ -157,7 +157,7 @@ void Origins42() {
     for(const auto& geometry : {std::pair<const Fixture*,int>{base.get(),16},{&four,4}}) {
     const Fixture& fx=*geometry.first;
     const int B=geometry.second;
-    PKV_CHECK_MSG(sslm_kv_block_size(fx.model)==size_t(B)*fx.BytesPerToken(),
+    PKV_CHECK_MSG(sslm_kv_page_size(fx.model)==size_t(B)*fx.BytesPerToken(),
                   "4.2 selected model is not B=%d",B);
     for (int origin : {0,1,B-1,B,B+1,31,32,65,int(fx.geo.context_cap)-1,
                        int(fx.geo.context_cap)}) {
