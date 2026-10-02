@@ -1,4 +1,5 @@
 #include "precache_common.h"
+#include "paged-kv/pkv_legacy_a_helpers.h"
 
 namespace {
 using namespace pc;
@@ -145,13 +146,26 @@ PKV_CELL("9.3/E3", "E1", Nested63);
 PKV_CELL("7.5/E3", "E1", Nested63);
 
 void Origins42() {
-    const Fixture& fx = GetFixture("pkv_def");
-    if (!fx.ok) return;
-    for (int origin : {0,1,15,16,31,32,65}) {
+    for(const auto& shape : {std::pair<const char*,Geometry>{"synthetic0p5.sslm",{24,2,64,4096}},
+                             {"synthetic1p5.sslm",{28,2,128,32768}}}) {
+    auto base=LoadSyntheticShape(shape.first,shape.second);
+    if(!base->ok) return;
+    Fixture four;
+    PKV_CHECK_MSG(pkv::legacy_a::PatchedBlockSizeTwin(*base,4,&four),
+                  "4.2 failed to construct B=4 synthetic twin");
+    if(!four.ok) return;
+    for(const auto& geometry : {std::pair<const Fixture*,int>{base.get(),16},{&four,4}}) {
+    const Fixture& fx=*geometry.first;
+    const int B=geometry.second;
+    PKV_CHECK_MSG(sslm_kv_block_size(fx.model)==size_t(B)*fx.BytesPerToken(),
+                  "4.2 selected model is not B=%d",B);
+    for (int origin : {0,1,B-1,B,B+1,31,32,65,int(fx.geo.context_cap)-1,
+                       int(fx.geo.context_cap)}) {
         Scene sc;
-        PagePool& pool = sc.AddPool(fx.model,128);
+        PagePool& pool = sc.AddPool(fx.model,uint32_t((fx.geo.context_cap+B-1)/B+128));
         sslm_prefix parent = Root(fx,&pool.pool,sc.h,origin,41);
-        sslm_prefix child = parent ? Child(fx,parent,sc.h,origin==65 ? 0 : 16) : nullptr;
+        const int extension=origin+16>int(fx.geo.context_cap) ? 0 : 16;
+        sslm_prefix child = parent ? Child(fx,parent,sc.h,extension) : nullptr;
         if (!child) continue;
         const auto b = Save(child);
         if (!RequireBlob(b,"4.2")) return;
@@ -159,9 +173,11 @@ void Origins42() {
         sslm_prefix restored = nullptr;
         uint32_t shared = UINT32_MAX;
         if (Restored(fx,&pool.pool,b,parent,sc.h,&restored,&shared)) {
-            PKV_CHECK_EQ(shared,uint32_t(origin/fx.B()));
+            PKV_CHECK_EQ(shared,uint32_t(origin/B));
             TwinTokens(fx,&pool.pool,child,restored,16);
         }
+    }
+    }
     }
 }
 PKV_CELL("4.2/E3", "E1", Origins42);

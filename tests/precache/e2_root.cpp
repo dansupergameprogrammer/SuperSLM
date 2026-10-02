@@ -1,4 +1,5 @@
 #include "precache_hostile.h"
+#include "paged-kv/pkv_legacy_a_helpers.h"
 
 namespace {
 using namespace pc;
@@ -21,29 +22,32 @@ void Shape41() {
 PKV_CELL("4.1/E2", "E1", Shape41);
 
 void SyntheticShapes41() {
-    const char* dir=std::getenv("SUPERSLM_PRECACHE_SYNTHETIC_DIR");
-    PKV_CHECK_MSG(dir && *dir,"4.1 synthetic fixture directory is unset");
-    if(!dir || !*dir) return;
-    for(const auto& shape : {std::pair<const char*,int>{"synthetic0p5.sslm",4096},
-                             {"synthetic1p5.sslm",32768}}) {
-        ModelFile model(std::string(dir)+"/"+shape.first);
-        Status(model.status,SSLM_OK,"4.1 synthetic model map");
-        if(model.status!=SSLM_OK) continue;
-        Fixture fx;
-        fx.model=model.model; model.model=nullptr;
-        fx.geo={1,1,1,uint32_t(shape.second)}; // Only cap and B are used here.
-        fx.vocab=256;
-        PagePool source(fx.model,uint32_t(fx.CapPages()+64));
-        PagePool target(fx.model,uint32_t(fx.CapPages()+64));
+    for(const auto& shape : {std::pair<const char*,Geometry>{"synthetic0p5.sslm",{24,2,64,4096}},
+                             {"synthetic1p5.sslm",{28,2,128,32768}}}) {
+        auto base=LoadSyntheticShape(shape.first,shape.second);
+        if(!base->ok) return;
+        Fixture four;
+        PKV_CHECK_MSG(pkv::legacy_a::PatchedBlockSizeTwin(*base,4,&four),
+                      "4.1 failed to construct B=4 synthetic twin");
+        if(!four.ok) return;
+        for(const auto& geometry : {std::pair<const Fixture*,int>{base.get(),16},{&four,4}}) {
+        const Fixture& fx=*geometry.first;
+        const int B=geometry.second;
+        PKV_CHECK_MSG(sslm_kv_block_size(fx.model)==size_t(B)*fx.BytesPerToken(),
+                      "4.1 selected model is not B=%d",B);
+        PagePool source(fx.model,uint32_t((fx.geo.context_cap+B-1)/B+64));
+        PagePool target(fx.model,uint32_t((fx.geo.context_cap+B-1)/B+64));
         Status(source.status,SSLM_OK,"4.1 source pool");
         Status(target.status,SSLM_OK,"4.1 target pool");
         if(source.status!=SSLM_OK || target.status!=SSLM_OK) return;
-        for(int L : {0,1,15,16,17,1000,shape.second-1,shape.second}) {
+        for(int L : {0,1,B-1,B,B+1,1000,int(fx.geo.context_cap)-1,int(fx.geo.context_cap)}) {
             Handles built,restored;
             sslm_prefix twin=Root(fx,&source.pool,built,L);
             if(!twin) return;
             const auto b=Save(twin);
             if(!RequireBlob(b,"4.1 synthetic geometries")) return;
+            PKV_CHECK_MSG(b.size()==kHeader+HiddenSize(fx)+size_t(L)*fx.BytesPerToken(),
+                          "4.1 B=%d L=%d SPX1 length mismatch",B,L);
             sslm_prefix copy=nullptr;
             if(Restored(fx,&target.pool,b,nullptr,restored,&copy)) {
                 PKV_CHECK_MSG(Save(copy)==b,"4.1 synthetic shape SPX1 bytes changed");
@@ -54,6 +58,7 @@ void SyntheticShapes41() {
                                   "4.1 synthetic shape adopter differs from prefill twin");
                 }
             }
+        }
         }
     }
 }

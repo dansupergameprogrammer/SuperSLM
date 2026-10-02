@@ -183,6 +183,28 @@ inline const Fixture& SyntheticFixture(bool three_schemas = false) {
     return result;
 }
 
+inline std::unique_ptr<Fixture> LoadSyntheticShape(const char* filename,
+                                                   Geometry geometry) {
+    auto fx=std::make_unique<Fixture>();
+    const char* dir=std::getenv("SUPERSLM_PRECACHE_SYNTHETIC_DIR");
+    PKV_CHECK_MSG(dir && *dir,"synthetic precache fixture directory is unset");
+    std::vector<uint8_t> raw;
+    if(!dir || !*dir || !ReadAll(std::string(dir)+"/"+filename,&raw) || raw.empty()) {
+        PKV_CHECK_MSG(false,"synthetic shape %s is missing",filename);
+        return fx;
+    }
+    fx->stem=filename;
+    fx->size=raw.size();
+    fx->bytes.Reset(raw.size());
+    std::memcpy(fx->bytes.p,raw.data(),raw.size());
+    fx->sha=Sha(raw.data(),raw.size());
+    fx->geo=geometry;
+    fx->vocab=256;
+    fx->ok=sslm_model_map(fx->bytes.p,fx->size,&fx->model)==SSLM_OK;
+    PKV_CHECK_MSG(fx->ok,"synthetic shape %s did not map",filename);
+    return fx;
+}
+
 inline sslm_status SchemaContentAll(sslm_model model,sslm_prefix prefix,
                                      const std::vector<int32_t>& ids,int32_t chunk) {
     size_t at=0;
