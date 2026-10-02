@@ -1,4 +1,5 @@
 #include "precache_hostile.h"
+#include "precache_reference.h"
 
 namespace {
 using namespace pc;
@@ -296,27 +297,52 @@ void Precedence57() {
     const auto digest_st=Restore(fx,&pool.pool,corrupted,nullptr,&digest_out);
     PKV_CHECK_MSG(digest_st==SSLM_INVALID_ARGUMENT && digest_out==nullptr,
                   "5.7 step3 digest did not precede producer mismatch");
-    const char* gpu_path=std::getenv("SUPERSLM_PRECACHE_GPU_BLOB");
-    PKV_CHECK_MSG(gpu_path && *gpu_path,"5.7 real GPU SPX1 capture path is unset");
-    if(gpu_path && *gpu_path) {
-        std::vector<uint8_t> gpu;
-        PKV_CHECK_MSG(ReadAll(gpu_path,&gpu) && gpu.size()>=kHeader,
-                      "5.7 real GPU SPX1 capture is missing");
-        if(gpu.size()>=kHeader) {
-            PKV_CHECK_MSG(IsMagic(gpu,"SPX1") && Le32(gpu,4)==1 &&
-                          Le32(gpu,20)!=0 && Le32(gpu,24)!=0 &&
-                          int64_t(Le64(gpu,112))>=1,
-                          "5.7 GPU producer operand lacks backend/vendor/device/L");
-            PutLe32(gpu,8,UINT32_MAX);
-            Digest(gpu);
-            sslm_prefix gpu_out=nullptr;
-            const auto gpu_st=Restore(fx,&pool.pool,gpu,nullptr,&gpu_out);
-            PKV_CHECK_MSG(gpu_st==SSLM_INVALID_ARGUMENT && gpu_out==nullptr,
-                          "5.7 step4 GPU backend did not precede producer mismatch");
-            if(gpu_st==SSLM_OK && gpu_out && gpu_out!=OutSentinel<sslm_prefix>())
-                sslm_prefix_release(gpu_out);
-        }
-    }
+    PKV_CHECK_MSG(Header(good,17,fx),"5.7 good CPU save is malformed");
+    auto backend_only=good;
+    PutLe32(backend_only,4,1);
+    Digest(backend_only);
+    auto gpu=backend_only;
+    constexpr uint32_t vendor=0x1234,device=0x5678;
+    PutLe32(gpu,20,vendor);
+    PutLe32(gpu,24,device);
+    Digest(gpu);
+    const auto valid_digest=[](const std::vector<uint8_t>& b) {
+        auto recomputed=b;
+        Digest(recomputed);
+        return b.size()>=kHeader &&
+               std::equal(b.begin()+28,b.begin()+60,recomputed.begin()+28);
+    };
+    const bool later_fields=
+        good.size()==kHeader+HiddenSize(fx)+size_t(17)*fx.BytesPerToken() &&
+        IsMagic(good,"SPX1") && Le32(good,4)==0 &&
+        Le32(good,20)==0 && Le32(good,24)==0 &&
+        backend_only.size()==good.size() && gpu.size()==good.size() &&
+        Le32(backend_only,4)==1 && Le32(backend_only,20)==0 && Le32(backend_only,24)==0 &&
+        Le32(gpu,4)==1 && Le32(gpu,20)==vendor && Le32(gpu,24)==device &&
+        valid_digest(backend_only) && valid_digest(gpu) &&
+        std::equal(good.begin()+60,good.end(),backend_only.begin()+60) &&
+        std::equal(good.begin()+60,good.end(),gpu.begin()+60) &&
+        Le32(gpu,92)==Le32(good,92) && Le64(gpu,96)==Le64(good,96) &&
+        Le32(gpu,104)==Le32(good,104) && Le32(gpu,108)==Le32(good,108) &&
+        Le64(gpu,112)==17 && Le64(gpu,120)==Le64(good,120);
+    PKV_CHECK_MSG(later_fields,
+                  "5.7 constructed GPU operands lost model, precision, schema, domain, size or payload");
+    if(!later_fields) return;
+    auto refuse_gpu=[&](const std::vector<uint8_t>& b,const char* name) {
+        sslm_prefix out=nullptr;
+        const auto st=Restore(fx,&pool.pool,b,nullptr,&out);
+        PKV_CHECK_MSG(st==SSLM_INVALID_ARGUMENT && out==nullptr,
+                      "5.7 %s backend was not first invalid status",name);
+        if(st==SSLM_OK && out && out!=OutSentinel<sslm_prefix>()) sslm_prefix_release(out);
+    };
+    refuse_gpu(backend_only,"backend-only control");
+    refuse_gpu(gpu,"GPU-shaped current-version control");
+    PutLe32(gpu,8,UINT32_MAX);
+    Digest(gpu);
+    PKV_CHECK_MSG(valid_digest(gpu) &&
+                  std::equal(backend_only.begin()+60,backend_only.end(),gpu.begin()+60),
+                  "5.7 GPU producer edit changed later fields or invalidated digest");
+    refuse_gpu(gpu,"GPU backend plus producer-version pair");
     PagePool zero(fx.model,8);
     std::vector<sslm_seq> held;
     PKV_CHECK_MSG(AdmitPages(fx,&zero.pool,8,&held),"5.7 zero-free pair setup failed");
@@ -334,6 +360,60 @@ void Precedence57() {
     for(auto seq:held) sslm_seq_release(seq);
 }
 PKV_CELL("5.7/E2", "E1", Precedence57);
+
+void RealGpuPrecedence57() {
+    const Fixture& fx=GetFixture("pkv_def");
+    if(!fx.ok) return;
+    const auto cpu=RootBlob(fx,17);
+    if(!RequireBlob(cpu,"5.7 F2 real GPU comparison")) return;
+    const auto blob_path=Env("SUPERSLM_PRECACHE_GPU_BLOB");
+    const auto receipt_path=Env("SUPERSLM_PRECACHE_GPU_CAPTURE_RECEIPT");
+    const auto runner_path=Env("SUPERSLM_PRECACHE_GPU_RUNNER_EXE");
+    if(blob_path.empty() || receipt_path.empty() || runner_path.empty()) return;
+    std::vector<uint8_t> gpu;
+    const auto receipt=LicenseFields(receipt_path);
+    const auto field=[&](const char* key) {
+        const auto it=receipt.find(key);
+        return it==receipt.end() ? std::string{} : it->second;
+    };
+    const bool captured=ReadAll(blob_path,&gpu) && receipt.size()==8 &&
+        field("format")=="PC-GPU-CAPTURE-1" && field("status")=="CAPTURED" &&
+        field("backend")=="1" && field("model_sha256")==fx.sha &&
+        field("blob_sha256")==ShaFile(blob_path) &&
+        field("runner_sha256")==ShaFile(runner_path) &&
+        !field("vendor").empty() && !field("device").empty();
+    PKV_CHECK_MSG(captured,"5.7 F2 GPU blob lacks its captured runner/model/blob receipt");
+    if(!captured || gpu.size()<kHeader || cpu.size()<kHeader) return;
+    auto digest_copy=gpu;
+    Digest(digest_copy);
+    const bool later_fields=
+        gpu.size()==kHeader+HiddenSize(fx)+size_t(17)*fx.BytesPerToken() &&
+        IsMagic(gpu,"SPX1") && Le32(gpu,4)==1 &&
+        Le32(gpu,20)!=0 && Le32(gpu,24)!=0 &&
+        field("vendor")==std::to_string(Le32(gpu,20)) &&
+        field("device")==std::to_string(Le32(gpu,24)) &&
+        std::equal(gpu.begin()+28,gpu.begin()+60,digest_copy.begin()+28) &&
+        std::equal(gpu.begin()+60,gpu.begin()+92,cpu.begin()+60) &&
+        Le32(gpu,92)==Le32(cpu,92) && Le64(gpu,96)==Le64(cpu,96) &&
+        Le32(gpu,104)==Le32(cpu,104) && Le32(gpu,108)==Le32(cpu,108) &&
+        Le64(gpu,112)==17 && Le64(gpu,120)==Le64(cpu,120);
+    PKV_CHECK_MSG(later_fields,
+                  "5.7 F2 GPU capture lacks valid backend, adapter, digest or later-field domain");
+    if(!later_fields) return;
+    PagePool pool(fx.model,32);
+    auto reject=[&](const std::vector<uint8_t>& b,const char* what) {
+        sslm_prefix out=nullptr;
+        const auto st=Restore(fx,&pool.pool,b,nullptr,&out);
+        PKV_CHECK_MSG(st==SSLM_INVALID_ARGUMENT && out==nullptr,
+                      "5.7 F2 %s did not reject backend before producer",what);
+        if(st==SSLM_OK && out && out!=OutSentinel<sslm_prefix>()) sslm_prefix_release(out);
+    };
+    reject(gpu,"real GPU current-version control");
+    PutLe32(gpu,8,UINT32_MAX);
+    Digest(gpu);
+    reject(gpu,"real GPU backend/producer pair");
+}
+PKV_CELL("5.7/F2:real-gpu", "E1", RealGpuPrecedence57);
 
 void Guard112() {
     const Fixture& fx=GetFixture("pkv_def");
