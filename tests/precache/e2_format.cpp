@@ -1,4 +1,5 @@
 #include "precache_common.h"
+#include "paged-kv/pkv_legacy_a_helpers.h"
 #include <filesystem>
 #include <sstream>
 
@@ -7,6 +8,11 @@ using namespace pc;
 namespace fs=std::filesystem;
 
 void Independent712() {
+    const std::array<uint64_t,5> fixture_counts{11,13,17,19,23};
+    PKV_CHECK_MSG(std::all_of(fixture_counts.begin(),fixture_counts.end(),
+                  [](uint64_t n){return n>0;}) &&
+                  std::set<uint64_t>(fixture_counts.begin(),fixture_counts.end()).size()==5,
+                  "7.12 independent count fixture is not pairwise distinct and nonzero");
     const char* fixture_dir=std::getenv("SUPERSLM_PRECACHE_SYNTHETIC_DIR");
     PKV_CHECK_MSG(fixture_dir && *fixture_dir,"7.12 synthetic fixture directory is unset");
     if(!fixture_dir || !*fixture_dir) return;
@@ -34,6 +40,14 @@ void Independent712() {
     const std::vector<int32_t> input(L,0); // the test-owned DFA reaches state 1 on token 0.
     Status(SchemaContentAll(fx.model,prefix,input,64),SSLM_OK,"7.12 schema-content prefill");
     Status(sslm_prefix_freeze(prefix),SSLM_OK,"7.12 freeze");
+    auto seeded=Save(prefix);
+    if(!RequireBlob(seeded,"7.12 count seed")) return;
+    for(size_t i=0;i<fixture_counts.size();++i)
+        PutLe64(seeded,144+8*i,fixture_counts[i]);
+    Digest(seeded);
+    sslm_prefix counted=nullptr;
+    if(!Restored(fx,&pool.pool,seeded,nullptr,sc.h,&counted)) return;
+    prefix=counted;
     const auto blob=Save(prefix);
     if(!RequireBlob(blob,"7.12 independent parser")) return;
     sslm_seq adopter=BudgetSeq(fx,&pool.pool,80,sc.h);
@@ -85,9 +99,116 @@ void Independent712() {
             << " --heads " << fx.geo.kv_heads << " --dim " << fx.geo.head_dim
             << " --hidden " << hidden
             << " --current-token " << input.back()
-            << " --schema-name schema_two --walk 1";
+            << " --schema-name schema_two --walk 1"
+            << " --counts 11,13,17,19,23";
     PKV_CHECK_MSG(std::system(command.str().c_str())==0,
                   "7.12 independent struct/hashlib SPX1 parser rejected a field or row");
+    auto swapped_blob=blob,swapped_ssb=ssb;
+    PutLe64(swapped_blob,144,fixture_counts[1]);
+    PutLe64(swapped_blob,152,fixture_counts[0]);
+    Digest(swapped_blob);
+    PutLe64(swapped_ssb,92,fixture_counts[1]);
+    PutLe64(swapped_ssb,124,fixture_counts[0]);
+    const auto swap_blob_path=write("swapped.spx1",swapped_blob);
+    const auto swap_ssb_path=write("swapped.ssb6",swapped_ssb);
+    std::string swap_command=command.str();
+    const auto replace_once=[&](const std::string& from,const std::string& to) {
+        const size_t at=swap_command.find(from);
+        if(at!=std::string::npos) swap_command.replace(at,from.size(),to);
+        return at!=std::string::npos;
+    };
+    PKV_CHECK_MSG(replace_once(blob_path.string(),swap_blob_path.string()) &&
+                  replace_once(ssb_path.string(),swap_ssb_path.string()) &&
+                  std::system(swap_command.c_str())!=0,
+                  "7.12 symmetric SPX1/SSB6 count swap escaped fixed fixture values");
 }
 PKV_CELL("7.12/E2:independent-parser", "E1", Independent712);
+
+void CrossView712() {
+    const std::array<uint64_t,5> counts{11,13,17,19,23};
+    const Fixture& sixteen=SyntheticFixture();
+    if(!sixteen.ok) return;
+    Fixture four;
+    PKV_CHECK_MSG(pkv::legacy_a::PatchedBlockSizeTwin(sixteen,4,&four),
+                  "7.12 B=4 model view could not be constructed");
+    if(!four.ok) return;
+    PKV_CHECK_MSG(sixteen.sha!=four.sha && sixteen.B()==16 && four.B()==4,
+                  "7.12 model views need distinct hashes and B=16/B=4");
+    constexpr int L=65;
+    struct View {std::vector<uint8_t> ssb,rows,blob;};
+    auto build=[&](const Fixture& fx) {
+        View v;
+        Scene sc;
+        PagePool& pool=sc.AddPool(fx.model,128);
+        sslm_prefix original=Root(fx,&pool.pool,sc.h,L,41);
+        if(!original) return v;
+        auto seed=Save(original);
+        if(!RequireBlob(seed,"7.12 B-view count seed")) return v;
+        for(size_t i=0;i<counts.size();++i) PutLe64(seed,144+8*i,counts[i]);
+        Digest(seed);
+        sslm_prefix prefix=nullptr;
+        if(!Restored(fx,&pool.pool,seed,nullptr,sc.h,&prefix)) return v;
+        sslm_seq adopter=BudgetSeq(fx,&pool.pool,80,sc.h);
+        if(!adopter) return v;
+        Status(sslm_seq_adopt_prefix(adopter,prefix),SSLM_OK,
+               "7.12 B-view semantic witness adopt");
+        PKV_CHECK_MSG(SaveBlob(adopter,&v.ssb) && IsMagic(v.ssb,"SSB6"),
+                      "7.12 B-view semantic witness is missing");
+        const auto table=PrefixTable(prefix);
+        if(table.size()!=size_t((L+fx.B()-1)/fx.B())) return v;
+        v.rows.resize(size_t(L)*fx.BytesPerToken());
+        std::map<uint32_t,std::vector<uint8_t>> pages;
+        const size_t H=fx.geo.kv_heads,D=fx.geo.head_dim;
+        for(uint32_t l=0;l<fx.geo.layers;++l)
+          for(uint32_t half=0;half<2;++half)
+           for(uint32_t h=0;h<fx.geo.kv_heads;++h)
+            for(int pos=0;pos<L;++pos) {
+                const uint32_t page=table[size_t(pos/fx.B())];
+                auto it=pages.find(page);
+                if(it==pages.end()) it=pages.emplace(page,PeekPage(fx,pool.pool,page)).first;
+                const size_t from=((size_t(l)*2+half)*H+h)*size_t(fx.B())*D+
+                                  size_t(pos%fx.B())*D;
+                const size_t to=((size_t(l)*2+half)*H+h)*size_t(L)*D+size_t(pos)*D;
+                if(it->second.size()<from+D) return View{};
+                std::memcpy(v.rows.data()+to,it->second.data()+from,D);
+            }
+        // The semantic witnesses exist before either final B-view save.
+        v.blob=Save(prefix);
+        return v;
+    };
+    const View a=build(sixteen),b=build(four);
+    if(!RequireBlob(a.blob,"7.12 B=16") || !RequireBlob(b.blob,"7.12 B=4")) return;
+    PKV_CHECK_MSG(a.ssb.size()>=156 && b.ssb.size()>=156 &&
+                  a.rows.size()==size_t(L)*sixteen.BytesPerToken() && a.rows==b.rows,
+                  "7.12 B=4/B=16 pre-save peeked canonical K/V rows differ");
+    for(size_t offset:{size_t(36),size_t(40),size_t(48),size_t(60),
+                       size_t(76),size_t(84),size_t(92),size_t(124),
+                       size_t(132),size_t(140),size_t(148)})
+        PKV_CHECK_MSG(a.ssb.size()>=offset+8 && b.ssb.size()>=offset+8 &&
+                      std::equal(a.ssb.begin()+offset,a.ssb.begin()+offset+8,b.ssb.begin()+offset),
+                      "7.12 B views differ in pre-save semantic SSB6 field %zu",offset);
+    auto inspect=[&](const View& v,const Fixture& fx) {
+        PKV_CHECK_MSG(Header(v.blob,L,fx),"7.12 B-view size, shape or digest failed");
+        if(v.blob.size()<kHeader+HiddenSize(fx)+v.rows.size()) return;
+        bool model_hash=v.blob.size()>=92 && fx.sha.size()==64;
+        if(model_hash) for(size_t i=0;i<32;++i)
+            model_hash &= v.blob[60+i]==uint8_t(std::stoul(fx.sha.substr(2*i,2),nullptr,16));
+        PKV_CHECK_MSG(model_hash,"7.12 B-view SPX1 model hash differs from artifact");
+        for(size_t i=0;i<counts.size();++i)
+            PKV_CHECK_MSG(Le64(v.blob,144+8*i)==counts[i],
+                          "7.12 B-view count %zu differs from fixed fixture",i);
+        PKV_CHECK_MSG(v.blob.size()>=kHeader+HiddenSize(fx) &&
+                      std::equal(v.rows.begin(),v.rows.end(),
+                                 v.blob.begin()+kHeader+HiddenSize(fx)),
+                      "7.12 B-view writer rows differ from independent peeks");
+    };
+    inspect(a,sixteen);
+    inspect(b,four);
+    PKV_CHECK_MSG(a.blob.size()>=kHeader && a.blob.size()==b.blob.size() &&
+                  !std::equal(a.blob.begin()+60,a.blob.begin()+92,b.blob.begin()+60) &&
+                  std::equal(a.blob.begin(),a.blob.begin()+28,b.blob.begin()) &&
+                  std::equal(a.blob.begin()+92,a.blob.end(),b.blob.begin()+92),
+                  "7.12 B=4/B=16 canonical SPX1 bytes differ outside digest/model identity");
+}
+PKV_CELL("7.12/E2:cross-view", "E1", CrossView712);
 }
