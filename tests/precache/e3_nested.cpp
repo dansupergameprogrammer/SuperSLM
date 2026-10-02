@@ -294,11 +294,17 @@ void Admission510() {
                       matching ? "admission" : "private capacity refusal",int(st));
         if(matching && st==SSLM_OK && out && out!=OutSentinel<sslm_prefix>()) {
             const auto parent_table=PrefixTable(hint),child_table=PrefixTable(out);
-            PKV_CHECK_MSG(shared==62 && parent_table.size()>=62 &&
-                          child_table.size()>=62 &&
+            const std::set<uint32_t> private_pages(
+                child_table.size()>=75 ? child_table.begin()+62 : child_table.end(),
+                child_table.end());
+            PKV_CHECK_MSG(shared==62 && parent_table.size()==63 &&
+                          child_table.size()==75 && private_pages.size()==13 &&
+                          std::none_of(private_pages.begin(),private_pages.end(),
+                                       [&](uint32_t page){return std::find(parent_table.begin(),
+                                                parent_table.end(),page)!=parent_table.end();}) &&
                           std::equal(parent_table.begin(),parent_table.begin()+62,
                                      child_table.begin()),
-                          "5.10 matching hint did not share 62 physical parent pages");
+                          "5.10 matching hint did not share 62 and draw 13 distinct private pages");
             sslm_seq two=nullptr;
             Status(sslm_seq_create_budgeted(fx.model,&target.pool,16,&two),
                    SSLM_KV_POOL_EXHAUSTED,"5.10 matching restore drew 13 of 14 free pages");
