@@ -38,6 +38,13 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(superslm_precache_real_two_process PROPERTIES
         FIXTURES_REQUIRED precache_reference
         ENVIRONMENT "SUPERSLM_PRECACHE_MERGE_BASE_FILE=${PC_MERGE_BASE_FILE}")
+    add_test(NAME superslm_precache_e2_reference
+        COMMAND $<TARGET_FILE:superslm_precache_e1> "=6.2/E2:reference")
+    add_test(NAME superslm_precache_e3_reference
+        COMMAND $<TARGET_FILE:superslm_precache_e1> "=6.3/E3:reference")
+    set_tests_properties(superslm_precache_e2_reference superslm_precache_e3_reference PROPERTIES
+        FIXTURES_REQUIRED precache_reference
+        ENVIRONMENT "SUPERSLM_PRECACHE_MERGE_BASE_FILE=${PC_MERGE_BASE_FILE}")
 else()
     set(PC_PYTHON_EXECUTABLE python3)
 endif()

@@ -33,6 +33,7 @@ void FlatReferenceE2() {
     if(!RequireBlob(blob,"6.2 pinned synthetic flat")) return;
     sslm_prefix copy=nullptr;
     if(!Restored(fx,&pool.pool,blob,nullptr,sc.h,&copy)) return;
+    int graded=0;
     for(int a=0;a<2;++a) {
         const bool budget=a==0;
         const auto got=Decode(fx,&pool.pool,copy,budget,64);
@@ -40,7 +41,9 @@ void FlatReferenceE2() {
         const auto want=Reference("P6-pkv_def-flat","flat00",input,fx.sha,a,"greedy");
         PKV_CHECK_MSG(got.size()==64 && got==twin_tokens && got==want,
                       "6.2 pinned synthetic flat adopter %d differs",a);
+        if(got.size()==64 && got==twin_tokens && got==want) ++graded;
     }
+    PKV_CHECK_EQ(graded,2);
 }
 PKV_CELL("6.2/E2:reference", "E1", FlatReferenceE2);
 
@@ -69,6 +72,7 @@ void NestedReferenceE3() {
     uint32_t shared=0;
     if(!Restored(fx,&pool.pool,blob,world,sc.h,&copy,&shared)) return;
     PKV_CHECK_EQ(shared,uint32_t(world_ids.size()/fx.B()));
+    int graded=0;
     for(int a=0;a<2;++a) {
         const bool budget=a==0;
         const auto got=Decode(fx,&pool.pool,copy,budget,64);
@@ -76,7 +80,9 @@ void NestedReferenceE3() {
         const auto want=Reference("P6-pkv_def-nested","nested00",input,fx.sha,a,"greedy");
         PKV_CHECK_MSG(got.size()==64 && got==twin_tokens && got==want,
                       "6.3 pinned synthetic nested adopter %d differs",a);
+        if(got.size()==64 && got==twin_tokens && got==want) ++graded;
     }
+    PKV_CHECK_EQ(graded,2);
 }
 PKV_CELL("6.3/E3:reference", "E1", NestedReferenceE3);
 }
