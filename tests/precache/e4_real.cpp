@@ -56,7 +56,7 @@ void Real101() {
     const auto model_sha=Sha(model.bytes.p,model.size);
     Fixture fx;
     fx.model=model.model; model.model=nullptr;
-    fx.geo={24,2,64,4096}; fx.vocab=151936;
+    fx.geo={24,2,64,32768}; fx.vocab=151936;
     PKV_CHECK_MSG(sslm_kv_block_size(fx.model)==size_t(fx.geo.context_cap)*fx.BytesPerToken() &&
                   sslm_kv_page_size(fx.model)==size_t(16)*fx.BytesPerToken(),
                   "10.1 real 0.5B artifact geometry differs from receipt");
@@ -164,7 +164,7 @@ void Timing103() {
     if(model.status!=SSLM_OK) return;
     Fixture fx;
     fx.model=model.model; model.model=nullptr;
-    fx.geo={24,2,64,4096}; fx.vocab=151936;
+    fx.geo={24,2,64,32768}; fx.vocab=151936;
     PKV_CHECK_MSG(sslm_kv_block_size(fx.model)==size_t(fx.geo.context_cap)*fx.BytesPerToken() &&
                   sslm_kv_page_size(fx.model)==size_t(16)*fx.BytesPerToken(),
                   "10.3 real 0.5B artifact geometry differs from receipt");
@@ -185,7 +185,7 @@ void Timing103() {
         field("must_reject")=="PASS" && field("threshold")=="1000" &&
         field("box_id")==box && field("threads")==threads &&
         field("threads")=="1" &&
-        field("geometry")=="0p5:24x2x64x4096;1p5:28x2x128x32768;B=16" &&
+        field("geometry")=="0p5:24x2x64x32768;1p5:28x2x128x32768;B=16" &&
         field("model_sha256")==Sha(model.bytes.p,model.size) &&
         field("prompt_manifest_sha256")==ShaFile(prompt_manifest) &&
         field("instrument_sha256")==ShaFile(instrument_path) &&
@@ -305,7 +305,7 @@ void Real102() {
     const auto model_sha=Sha(model.bytes.p,model.size);
     Fixture fx;
     fx.model=model.model; model.model=nullptr;
-    fx.geo={24,2,64,4096}; fx.vocab=151936;
+    fx.geo={24,2,64,32768}; fx.vocab=151936;
     PKV_CHECK_MSG(sslm_kv_block_size(fx.model)==size_t(fx.geo.context_cap)*fx.BytesPerToken() &&
                   sslm_kv_page_size(fx.model)==size_t(16)*fx.BytesPerToken(),
                   "10.2 real 0.5B artifact geometry differs from receipt");
