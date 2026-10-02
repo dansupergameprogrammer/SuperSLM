@@ -72,8 +72,14 @@ void Independent712() {
     prefix=counted;
     const auto blob=Save(prefix);
     if(!RequireBlob(blob,"7.12 independent parser")) return;
+    sslm_seq unbound=BudgetSeq(fx,&pool.pool,80,sc.h);
+    if(!unbound) return;
+    Status(sslm_seq_adopt_prefix(unbound,prefix),SSLM_PREFIX_SCHEMA_MISMATCH,
+           "7.12 unbound adopter rejects schema progress");
     sslm_seq adopter=BudgetSeq(fx,&pool.pool,80,sc.h);
     if(!adopter) return;
+    Status(sslm_seq_set_schema(adopter,schema),SSLM_OK,
+           "7.12 bind SSB6 adopter to prefix schema");
     Status(sslm_seq_adopt_prefix(adopter,prefix),SSLM_OK,"7.12 SSB6 twin adopt");
     std::vector<uint8_t> ssb;
     PKV_CHECK_MSG(SaveBlob(adopter,&ssb) && IsMagic(ssb,"SSB6"),

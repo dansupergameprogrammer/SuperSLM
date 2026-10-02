@@ -537,10 +537,18 @@ void FrozenDisposition811() {
     sslm_schema schema=nullptr;
     Status(sslm_schema_lookup(fx.model,"g5_minimal_one_field",&schema),SSLM_OK,
            "8.11 schema lookup");
-    if(schema)
-        for(auto p : {empty,empty_copy})
-            Status(sslm_prefix_set_schema(p,schema),SSLM_OK,
-                   "8.11 set schema on empty frozen prefix");
+    if(schema) {
+        const auto built_status=sslm_prefix_set_schema(empty,schema);
+        const auto restored_status=sslm_prefix_set_schema(empty_copy,schema);
+        Status(built_status,SSLM_INVALID_ARGUMENT,
+               "8.11 prefill-built empty frozen schema refusal");
+        Status(restored_status,SSLM_INVALID_ARGUMENT,
+               "8.11 restored empty frozen schema refusal");
+        PKV_CHECK_MSG(built_status==restored_status,
+                      "8.11 empty frozen schema dispositions differ");
+        PKV_CHECK_MSG(Save(empty)==empty_blob && Save(empty_copy)==empty_blob,
+                      "8.11 refused frozen schema mutation changed SPX1 state");
+    }
     for(auto p : {original,restored,empty,empty_copy})
         Status(ReleasePrefix(sc.h,p),SSLM_OK,"8.11 release frozen prefix");
     Status(sslm_kv_pool_destroy(pool.pool),SSLM_OK,"8.11 destroy drained pool");
