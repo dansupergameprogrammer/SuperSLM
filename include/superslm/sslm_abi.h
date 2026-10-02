@@ -182,7 +182,8 @@ typedef struct sslm_detok_state {
      * SSLM_CONTEXT_CAP_EXCEEDED is returned instead, so a holder made by a no-budget verb never
      * sees this status. Reset or adopt to continue. Appended at the END: every published ordinal
      * stays stable. */ \
-    X(SSLM_KV_BUDGET_EXCEEDED) /* 29 */
+    X(SSLM_KV_BUDGET_EXCEEDED) /* 29 */ \
+    X(SSLM_RESTORE_PRODUCER_MISMATCH) /* 30 */
 
 typedef enum sslm_status {
 #define SSLM_STATUS_ENUM_VALUE_(name) name,
@@ -280,6 +281,7 @@ typedef struct sslm_stats_out {
  * declared by this header. Defined together with the two stats structs below and
  * SSLM_KV_BUDGET_EXCEEDED, so a consumer can test for the whole surface at once. */
 #define SSLM_HAS_PAGED_KV_ABI 1
+#define SSLM_HAS_PREFIX_SAVE_ABI 1
 
 /* sslm_kv_pool_stats' output. The caller sets struct_size = sizeof(sslm_kv_pool_stats_out); any
  * other value is SSLM_INVALID_ARGUMENT. shared_pages is the number of distinct pages that at least

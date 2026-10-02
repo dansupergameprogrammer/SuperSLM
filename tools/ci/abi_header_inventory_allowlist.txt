@@ -68,3 +68,4 @@ SSLM_HAS_PAGED_KV_ABI  # Paged-KV plan (rev 16.1) Sec3.6, step C5: defined besid
 # whole paged-KV surface at once. Ruled by the paged-KV plan of record, a different design document
 # this checker's own inventory source, t2133 Sec8, does not and structurally cannot cover; same
 # shape as SSLM_DECODE_MODE_GREEDY above.
+SSLM_HAS_PREFIX_SAVE_ABI  # Precached prefixes E2: frozen-prefix save/restore ABI.

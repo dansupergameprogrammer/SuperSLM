@@ -238,6 +238,7 @@ typedef enum sslm_status {
     /* Paged-KV plan Sec3.6: mirrored in the SAME commit per this header's standing full-registry
      * rule; see include/superslm/sslm_abi.h for the budget-holder limit contract. */
     SSLM_KV_BUDGET_EXCEEDED = 29,
+    SSLM_RESTORE_PRODUCER_MISMATCH = 30,
 
     /* Sentinel, FOLD RULING 2026-08-17 (design Sec6, on F1) -- the enum's own final member, no
      * explicit value, so it auto-values to one past whichever entry above it is this header's own

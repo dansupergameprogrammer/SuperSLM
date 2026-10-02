@@ -64,6 +64,8 @@
 // a zero requirement) -- correctly, permanently out of this ABI layer's own scope per the design's
 // own text quoted above.
 #include "superslm/sslm_abi.h"
+#include "superslm/sslm_version.h"
+#include "superslm/sha256.h"
 
 #include <algorithm>
 #include <array>
@@ -109,6 +111,9 @@ sslm_status MapForwardStatus(superslm::SslmForwardStatus st);
 // well below this value, so it is never a legitimate state id (design Sec13.4).
 namespace {
 constexpr uint32_t kDfaWalkStateUnused = 0xFFFFFFFFu;
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+extern std::atomic<uint64_t> g_prefix_prefill_calls;
+#endif
 }  // namespace
 
 // -----------------------------------------------------------------------------------------
@@ -2275,6 +2280,9 @@ extern "C" sslm_status sslm_prefix_prefill(sslm_model model, sslm_prefix prefix,
                                             const int32_t* tokens, int32_t count,
                                             int32_t chunk_budget, sslm_span_kind kind,
                                             sslm_workspace ws, int32_t* consumed) {
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+	g_prefix_prefill_calls.fetch_add(1, std::memory_order_relaxed);
+#endif
 	// S7 fix round 2: ws is now genuinely read (see PrefillWholeTokens' own comment) -- no longer
 	// merely accepted for call-shape parity.
 	if (!consumed) return SSLM_INVALID_ARGUMENT;
@@ -3519,6 +3527,44 @@ constexpr size_t kSeqBlobV4FixedHeaderBytes = 124;
 constexpr size_t kSeqBlobV5FixedHeaderBytes = 156;
 // 'SSB6': the 'SSB5' fixed header plus kv_mode, budget and origin at 156, 160 and 164.
 constexpr size_t kSeqBlobV6FixedHeaderBytes = 172;
+constexpr uint8_t kPrefixBlobMagic[4] = {'S', 'P', 'X', '1'};
+constexpr size_t kPrefixBlobHeaderBytes = 184;
+
+// The restore fault belongs to the test-injection library and to its calling thread.
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+struct PrefixRestoreFault {
+	int position = 0;
+	int page_status = 0;
+	bool fired = false;
+	uint32_t free_pages = 0, shared = 0, mapped = 0, reserve = 0;
+};
+thread_local PrefixRestoreFault g_prefix_restore_fault;
+std::atomic<uint64_t> g_prefix_prefill_calls{0};
+void FirePrefixRestoreFault(int position, sslm_kv_pool_s* pool,
+                            superslm::kv_pages::PageHolder* holder) {
+	if (g_prefix_restore_fault.position != position) return;
+	g_prefix_restore_fault.position = 0;
+	g_prefix_restore_fault.fired = true;
+	g_prefix_restore_fault.free_pages = superslm::kv_pages::PoolFreePages(pool->pages);
+	g_prefix_restore_fault.shared = holder->shared;
+	g_prefix_restore_fault.mapped = holder->mapped;
+	g_prefix_restore_fault.reserve = static_cast<uint32_t>(holder->reserve.size());
+}
+
+void GatherPrefixRows(const sslm_prefix_s* prefix, const superslm::SslmModelConfig& c, uint8_t* dst) {
+	const int64_t length = prefix->state.context_length;
+	const int64_t B = prefix->pool->page_positions;
+	const size_t D = c.head_dim;
+	for (size_t run = 0; run < KvRuns(c); ++run) {
+		uint8_t* out = dst + run * static_cast<size_t>(length) * D;
+		for (int64_t position = 0; position < length; position += B) {
+			const size_t bytes = static_cast<size_t>(std::min<int64_t>(B, length - position)) * D;
+			std::memcpy(out + static_cast<size_t>(position) * D,
+			            HolderRow(prefix->pool, prefix->kv, run, position, D), bytes);
+		}
+	}
+}
+#endif
 
 }  // namespace
 
@@ -3675,6 +3721,53 @@ extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
 	return SSLM_OK;
 }
 
+extern "C" sslm_status sslm_prefix_save(sslm_prefix prefix, void* buf, size_t* n) {
+	if (!n || !prefix || !prefix->frozen || prefix->state.layer_index != 0) return SSLM_INVALID_ARGUMENT;
+	const auto& c = prefix->model->view.config;
+	const int64_t length = prefix->state.context_length;
+	if (length < 0 || length > static_cast<int64_t>(c.context_cap)) return SSLM_INVALID_ARGUMENT;
+	size_t row_bytes = 0, required = kPrefixBlobHeaderBytes;
+	if (!CheckedMulSizeT(KvRuns(c), static_cast<size_t>(c.head_dim), &row_bytes) ||
+	    !CheckedMulSizeT(row_bytes, static_cast<size_t>(length), &row_bytes) ||
+	    !CheckedAddSizeT(required, static_cast<size_t>(c.hidden_size), &required) ||
+	    !CheckedAddSizeT(required, row_bytes, &required)) return SSLM_INVALID_ARGUMENT;
+	if (!buf || *n < required) {
+		*n = required;
+		return SSLM_BUFFER_TOO_SMALL;
+	}
+	auto* p = static_cast<uint8_t*>(buf);
+	std::memcpy(p, kPrefixBlobMagic, 4);
+	WriteLE32(p + 4, 0);  // CPU backend
+	WriteLE32(p + 8, SUPERSLM_VERSION_MAJOR);
+	WriteLE32(p + 12, SUPERSLM_VERSION_MINOR);
+	WriteLE32(p + 16, SUPERSLM_VERSION_PATCH);
+	WriteLE32(p + 20, 0);
+	WriteLE32(p + 24, 0);
+	std::memset(p + 28, 0, 32);
+	const auto model_hash = prefix->model->view.RawIntegrityHash();
+	std::memcpy(p + 60, model_hash.data(), 32);
+	WriteLE32(p + 92, static_cast<uint32_t>(c.kv_precision));
+	WriteLE64(p + 96, prefix->bound_schema ?
+	          prefix->model->schemas.ByIndex(prefix->bound_schema->index)->name_hash : 0);
+	WriteLE32(p + 104, prefix->dfa_walk_state);
+	WriteLE32(p + 108, static_cast<uint32_t>(prefix->current_token));
+	WriteLE64(p + 112, static_cast<uint64_t>(length));
+	WriteLE64(p + 120, static_cast<uint64_t>(prefix->kv_origin));
+	WriteLE64(p + 128, static_cast<uint64_t>(prefix->state.hidden_scale.m));
+	WriteLE64(p + 136, static_cast<uint64_t>(prefix->state.hidden_scale.e));
+	WriteLE64(p + 144, prefix->state.kv_saturation_count);
+	WriteLE64(p + 152, prefix->state.kv_landing_saturation_count);
+	WriteLE64(p + 160, prefix->state.k_channel_landing_saturation_count);
+	WriteLE64(p + 168, prefix->state.rope_q_saturation_count);
+	WriteLE64(p + 176, prefix->state.rope_k_saturation_count);
+	const size_t residual = static_cast<size_t>(c.hidden_size);
+	if (residual) std::memcpy(p + kPrefixBlobHeaderBytes, prefix->hidden_codes_storage.data(), residual);
+	GatherPrefixRows(prefix, c, p + kPrefixBlobHeaderBytes + residual);
+	superslm::Sha256Hash(p, required, p + 28);
+	*n = required;
+	return SSLM_OK;
+}
+
 namespace {
 
 // §3.7's re-sharing conditions (b)-(f) for a budget blob ((a) is the caller's): the handle is
@@ -3707,6 +3800,110 @@ bool SharingHandleMatches(const sslm_prefix_s* handle, const sslm_model_s* model
 }
 
 }  // namespace
+
+extern "C" sslm_status sslm_prefix_restore(sslm_model model, sslm_kv_pool* pool, const void* buf, size_t n,
+                                            sslm_prefix parent_or_null, sslm_prefix* out,
+                                            uint32_t* out_shared_pages) {
+	(void)parent_or_null;  // E3 evaluates the optional sharing hint.
+	if (!out) return SSLM_INVALID_ARGUMENT;
+	*out = nullptr;
+	if (out_shared_pages) *out_shared_pages = 0;
+	if (!model || !pool || !*pool || !buf || (*pool)->model != model) return SSLM_INVALID_ARGUMENT;
+	if (n < kPrefixBlobHeaderBytes) return SSLM_INVALID_ARGUMENT;
+	const auto* p = static_cast<const uint8_t*>(buf);
+	if (std::memcmp(p, kPrefixBlobMagic, 4) != 0) return SSLM_INVALID_ARGUMENT;
+	uint8_t digest[32];
+	static constexpr uint8_t zeros[32] = {};
+	superslm::Sha256 hasher;
+	hasher.Update(p, 28);
+	hasher.Update(zeros, 32);
+	hasher.Update(p + 60, n - 60);
+	hasher.Final(digest);
+	if (std::memcmp(digest, p + 28, 32) != 0) return SSLM_INVALID_ARGUMENT;
+	if (ReadLE32(p + 4) != 0) return SSLM_INVALID_ARGUMENT;
+	if (ReadLE32(p + 8) != SUPERSLM_VERSION_MAJOR ||
+	    ReadLE32(p + 12) != SUPERSLM_VERSION_MINOR ||
+	    ReadLE32(p + 16) != SUPERSLM_VERSION_PATCH ||
+	    ReadLE32(p + 20) != 0 || ReadLE32(p + 24) != 0) return SSLM_RESTORE_PRODUCER_MISMATCH;
+	const auto model_hash = model->view.RawIntegrityHash();
+	if (std::memcmp(p + 60, model_hash.data(), 32) != 0) return SSLM_RESTORE_MODEL_MISMATCH;
+	const auto& c = model->view.config;
+	if (ReadLE32(p + 92) != static_cast<uint32_t>(c.kv_precision)) return SSLM_RESTORE_KV_MISMATCH;
+	const uint64_t schema_hash = ReadLE64(p + 96);
+	const uint32_t walk = ReadLE32(p + 104);
+	sslm_schema schema = nullptr;
+	if (schema_hash) {
+		size_t idx = 0;
+		if (!model->schemas.ByNameHash(schema_hash, &idx)) return SSLM_RESTORE_SCHEMA_MISMATCH;
+		const auto* entry = model->schemas.ByIndex(idx);
+		if (!entry || walk >= entry->state_count) return SSLM_RESTORE_SCHEMA_MISMATCH;
+		schema = &model->schema_handles[idx];
+	} else if (walk != kDfaWalkStateUnused) {
+		return SSLM_RESTORE_SCHEMA_MISMATCH;
+	}
+	const int64_t length = static_cast<int64_t>(ReadLE64(p + 112));
+	if (length < 0 || length > static_cast<int64_t>(c.context_cap)) return SSLM_INVALID_ARGUMENT;
+	size_t row_bytes = 0, required = kPrefixBlobHeaderBytes;
+	if (!CheckedMulSizeT(KvRuns(c), static_cast<size_t>(c.head_dim), &row_bytes) ||
+	    !CheckedMulSizeT(row_bytes, static_cast<size_t>(length), &row_bytes) ||
+	    !CheckedAddSizeT(required, static_cast<size_t>(c.hidden_size), &required) ||
+	    !CheckedAddSizeT(required, row_bytes, &required) || n != required) return SSLM_INVALID_ARGUMENT;
+	const int64_t origin = static_cast<int64_t>(ReadLE64(p + 120));
+	if (origin < 0 || origin > length) return SSLM_INVALID_ARGUMENT;
+	const int32_t token = static_cast<int32_t>(ReadLE32(p + 108));
+	if ((length == 0 && token != -1) ||
+	    (length > 0 && (token < 0 || static_cast<uint32_t>(token) >= c.vocab_size)))
+		return SSLM_INVALID_ARGUMENT;
+	const int64_t m = static_cast<int64_t>(ReadLE64(p + 128));
+	if (m < INT32_MIN || m > INT32_MAX) return SSLM_INVALID_ARGUMENT;
+	const int64_t e = static_cast<int64_t>(ReadLE64(p + 136));
+	auto* pool_ptr = *pool;
+	const uint32_t pages = static_cast<uint32_t>((length + pool_ptr->page_positions - 1) /
+	                                              pool_ptr->page_positions);
+	superslm::kv_pages::PageHolder* holder = nullptr;
+	const sslm_status draw = CreateHolder(pool_ptr, pages, &holder);
+	if (draw != SSLM_OK) return draw;
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+	if (g_prefix_restore_fault.position == 2) {
+		superslm::kv_pages::HolderReturnReserve(holder, nullptr);
+		FirePrefixRestoreFault(2, pool_ptr, holder);
+	}
+#endif
+	const sslm_status mapped = MapPagesFor(pool_ptr, holder, length);
+	if (mapped != SSLM_OK) {
+		ReleaseHolder(pool_ptr, holder);
+		return mapped;
+	}
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+	if (g_prefix_restore_fault.position == 3) {
+		FirePrefixRestoreFault(3, pool_ptr, holder);
+		ReleaseHolder(pool_ptr, holder);
+		return SSLM_ALLOCATION_FAILED;
+	}
+#endif
+	sslm_prefix_s* prefix = nullptr;
+	const sslm_status allocated = FinishPrefix(model, pool_ptr, holder, KvHolderMode::kBudget,
+	                                            static_cast<int32_t>(c.context_cap), origin, false, &prefix);
+	if (allocated != SSLM_OK) return allocated;  // FinishPrefix releases the holder on refusal.
+	const size_t residual = static_cast<size_t>(c.hidden_size);
+	if (residual) std::memcpy(prefix->hidden_codes_storage.data(), p + kPrefixBlobHeaderBytes, residual);
+	prefix->state.hidden_codes = prefix->hidden_codes_storage.data();
+	prefix->state.hidden_scale = superslm::CarriedScale{m, e};
+	prefix->state.layer_index = 0;
+	prefix->state.context_length = length;
+	prefix->state.kv_saturation_count = ReadLE64(p + 144);
+	prefix->state.kv_landing_saturation_count = ReadLE64(p + 152);
+	prefix->state.k_channel_landing_saturation_count = ReadLE64(p + 160);
+	prefix->state.rope_q_saturation_count = ReadLE64(p + 168);
+	prefix->state.rope_k_saturation_count = ReadLE64(p + 176);
+	prefix->current_token = token;
+	prefix->bound_schema = schema;
+	prefix->dfa_walk_state = walk;
+	prefix->frozen = true;
+	ScatterRows(pool_ptr, holder, c, p + kPrefixBlobHeaderBytes + residual, length, 0, length);
+	*out = prefix;
+	return SSLM_OK;
+}
 
 // Paged-KV plan §3.6/§3.7 (C5): sslm_seq_restore is this verb with a null prefix. `handle` is a
 // sharing hint, never a requirement: a null or non-matching handle gives a private restore,
@@ -4630,3 +4827,33 @@ extern "C" sslm_status sslm_pkv_test_only_drain_reserve(sslm_seq seq) {
 	std::lock_guard<std::mutex> lock(seq->lifecycle_mutex);
 	return MapPageStatus(superslm::kv_pages::HolderReturnReserve(seq->kv, nullptr));
 }
+
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+extern "C" void sslm_pc_test_only_restore_fault_arm(int position, int page_status) {
+	g_prefix_restore_fault = {};
+	g_prefix_restore_fault.position = position;
+	g_prefix_restore_fault.page_status = page_status;
+}
+extern "C" void sslm_pc_test_only_restore_fault_disarm() { g_prefix_restore_fault = {}; }
+extern "C" int sslm_pc_test_only_restore_fault_read(uint32_t* free_pages, uint32_t* shared,
+                                                     uint32_t* mapped, uint32_t* reserve) {
+	if (free_pages) *free_pages = g_prefix_restore_fault.free_pages;
+	if (shared) *shared = g_prefix_restore_fault.shared;
+	if (mapped) *mapped = g_prefix_restore_fault.mapped;
+	if (reserve) *reserve = g_prefix_restore_fault.reserve;
+	return g_prefix_restore_fault.fired ? 1 : 0;
+}
+extern "C" sslm_status sslm_pc_test_only_set_prefix_layer(sslm_prefix prefix, uint32_t layer) {
+	if (!prefix) return SSLM_INVALID_ARGUMENT;
+	prefix->state.layer_index = layer;
+	return SSLM_OK;
+}
+extern "C" uint64_t sslm_pc_test_only_prefix_prefill_calls() {
+	return g_prefix_prefill_calls.load(std::memory_order_relaxed);
+}
+extern "C" sslm_status sslm_pc_test_only_set_current_token(sslm_prefix prefix, int32_t token) {
+	if (!prefix) return SSLM_INVALID_ARGUMENT;
+	prefix->current_token = token;
+	return SSLM_OK;
+}
+#endif

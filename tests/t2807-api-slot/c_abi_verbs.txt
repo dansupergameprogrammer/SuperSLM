@@ -28,6 +28,8 @@ sslm_prefill
 sslm_prefix_begin
 sslm_prefix_begin_budgeted
 sslm_prefix_begin_from
+sslm_prefix_save
+sslm_prefix_restore
 sslm_prefix_freeze
 sslm_prefix_prefill
 sslm_prefix_release
