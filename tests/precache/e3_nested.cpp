@@ -165,10 +165,11 @@ void Origins42() {
     for (int origin : {0,1,B-1,B,B+1,31,32,65,int(fx.geo.context_cap)-1,
                        int(fx.geo.context_cap)}) {
         Scene sc;
-        // At cap length the parent alone retains cap/B pages; the legacy
-        // TwinTokens adopter needs another cap/B reservation before adoption.
+        // At cap length the parent, a private fallback restore, and the
+        // legacy TwinTokens adopter can each retain cap/B pages. The
+        // sharing assertion below still rejects a non-sharing restore.
         PagePool& pool = sc.AddPool(fx.model,
-            uint32_t(2*fx.CapPages()+128));
+            uint32_t(3*fx.CapPages()+128));
         sslm_prefix parent = Root(fx,&pool.pool,sc.h,origin,41);
         const int extension=origin+16>int(fx.geo.context_cap) ? 0 : 16;
         sslm_prefix child = parent ? Child(fx,parent,sc.h,extension) : nullptr;
