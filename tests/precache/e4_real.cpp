@@ -1,5 +1,7 @@
 #include "precache_provenance.h"
 #include <chrono>
+#include <cmath>
+#include <numeric>
 #include <filesystem>
 #include <sstream>
 
@@ -58,6 +60,10 @@ void Real101() {
     PagePool pool(fx.model,512);
     Handles h;
     const std::string phase=Env("SUPERSLM_PRECACHE_PHASE");
+    PKV_CHECK_MSG(phase=="capture" || phase=="restore",
+                  "10.1 phase must name capture or restore");
+    if(phase!="capture" && phase!="restore") return;
+    int graded=0;
     for(int i=0;i<10;++i) {
         char name[16]; std::snprintf(name,sizeof(name),"flat%02d",i);
         const fs::path input=fs::path(prompts)/(std::string(name)+".ids");
@@ -88,10 +94,15 @@ void Real101() {
                 const auto got=DecodeReal(fx,&pool.pool,p,budget,mode);
                 const auto want=Reference("P1-real0p5-flat",name,input,model_sha,a,mode);
                 PKV_CHECK_MSG(got==want && got.size()==64,"10.1 %s adopter %d differs from pinned prefill",name,a);
+                if(got==want && got.size()==64) ++graded;
             }
         }
+        Status(ReleasePrefix(h,p),SSLM_OK,"10.1 release prefix before next cohort member");
     }
-    if(phase!="capture") PKV_CHECK_EQ(sslm_pc_test_only_prefix_prefill_calls(),0u);
+    if(phase=="restore") {
+        PKV_CHECK_EQ(graded,50);
+        PKV_CHECK_EQ(sslm_pc_test_only_prefix_prefill_calls(),0u);
+    }
 }
 PKV_CELL("10.1/E4", "E1", Real101);
 
@@ -152,46 +163,82 @@ void Timing103() {
     fx.model=model.model; model.model=nullptr;
     fx.geo={24,2,64,32768}; fx.vocab=151936;
     PagePool pool(fx.model,300);
-    std::vector<double> ratios;
+    const auto receipt_path=Env("SUPERSLM_PRECACHE_TIMING_RECEIPT");
+    const auto instrument_path=Env("SUPERSLM_PRECACHE_TIMING_INSTRUMENT");
+    const auto prompt_manifest=Env("SUPERSLM_PRECACHE_TIMING_PROMPT_MANIFEST");
+    const auto box=Env("SUPERSLM_PRECACHE_BOX_ID");
+    const auto threads=Env("SUPERSLM_PRECACHE_THREADS");
+    const auto receipt=LicenseFields(receipt_path);
+    const auto field=[&](const char* name) {
+        const auto it=receipt.find(name);
+        return it==receipt.end() ? std::string{} : it->second;
+    };
+    const bool commissioned=receipt.size()==13 &&
+        field("format")=="PC-TIMING-1" && field("status")=="COMMISSIONED" &&
+        field("commissioning_verdict")=="PASS" && field("must_accept")=="PASS" &&
+        field("must_reject")=="PASS" && field("threshold")=="1000" &&
+        field("box_id")==box && field("threads")==threads &&
+        field("threads")=="1" &&
+        field("geometry")=="0p5:24x2x64x32768;1p5:28x2x128x32768;B=16" &&
+        field("model_sha256")==Sha(model.bytes.p,model.size) &&
+        field("prompt_manifest_sha256")==ShaFile(prompt_manifest) &&
+        field("instrument_sha256")==ShaFile(instrument_path) &&
+        field("anchor")==Env("SUPERSLM_PRECACHE_TIMING_ANCHOR");
+    PKV_CHECK_MSG(commissioned,"10.3 timing receipt identity or independent commission is invalid");
+    if(!commissioned) return;
+    const auto receipt_sha=ShaFile(receipt_path);
+    constexpr int kPairs=8;
+    constexpr double kStudent95=2.365; // two-sided t_0.975,7.
+    const double tick_ms=1000.0*double(std::chrono::steady_clock::period::num)/
+                         double(std::chrono::steady_clock::period::den);
     for(int i=0;i<10;++i) {
         char name[16]; std::snprintf(name,sizeof(name),"flat%02d",i);
         const auto ids=Ids(fs::path(prompts)/(std::string(name)+".ids"));
         if(ids.empty()) return;
-        sslm_prefix built=nullptr;
-        const auto start=std::chrono::steady_clock::now();
-        Status(sslm_prefix_begin_budgeted(fx.model,&pool.pool,int32_t(ids.size()),&built),
-               SSLM_OK,"10.3 prefill begin");
-        if(!built) return;
-        Status(PrefixPrefillAll(fx.model,built,ids,64),SSLM_OK,"10.3 real prefill");
-        Status(sslm_prefix_freeze(built),SSLM_OK,"10.3 prefill freeze");
-        const auto prefill_end=std::chrono::steady_clock::now();
-        const auto b=Save(built);
-        if(!RequireBlob(b,"10.3")) { sslm_prefix_release(built); return; }
-        sslm_prefix_release(built);
-        double restore_ms=0;
-        for(int j=0;j<3;++j) {
+        std::vector<double> logs;
+        double prefill_sum=0,restore_sum=0;
+        size_t bytes=0;
+        for(int j=0;j<kPairs;++j) {
+            sslm_prefix built=nullptr;
+            const auto start=std::chrono::steady_clock::now();
+            Status(sslm_prefix_begin_budgeted(fx.model,&pool.pool,int32_t(ids.size()),&built),
+                   SSLM_OK,"10.3 paired prefill begin");
+            if(!built) return;
+            Status(PrefixPrefillAll(fx.model,built,ids,64),SSLM_OK,"10.3 paired prefill");
+            Status(sslm_prefix_freeze(built),SSLM_OK,"10.3 paired freeze");
+            const auto prefill_end=std::chrono::steady_clock::now();
+            const auto b=Save(built);
+            if(!RequireBlob(b,"10.3 paired")) {sslm_prefix_release(built);return;}
+            bytes=b.size();
+            sslm_prefix_release(built);
             sslm_prefix restored=nullptr;
             const auto r0=std::chrono::steady_clock::now();
             const sslm_status st=Restore(fx,&pool.pool,b,nullptr,&restored);
             const auto r1=std::chrono::steady_clock::now();
-            Status(st,SSLM_OK,"10.3 timed restore");
+            Status(st,SSLM_OK,"10.3 paired restore including digest");
             if(st!=SSLM_OK) return;
-            restore_ms+=std::chrono::duration<double,std::milli>(r1-r0).count();
             sslm_prefix_release(restored);
+            const double prefill_ms=std::chrono::duration<double,std::milli>(prefill_end-start).count();
+            const double restore_ms=std::chrono::duration<double,std::milli>(r1-r0).count();
+            PKV_CHECK_MSG(prefill_ms>100*tick_ms && restore_ms>100*tick_ms,
+                          "10.3 %s pair %d falls below timer resolving floor",name,j);
+            if(prefill_ms<=0 || restore_ms<=0) return;
+            prefill_sum+=prefill_ms;
+            restore_sum+=restore_ms;
+            logs.push_back(std::log(prefill_ms/restore_ms));
         }
-        const double prefill_ms=std::chrono::duration<double,std::milli>(prefill_end-start).count();
-        const double ratio=prefill_ms/(restore_ms/3.0);
-        ratios.push_back(ratio);
-        std::printf("10.3 %s prefill_ms=%.3f restore_ms=%.3f ratio=%.1f\n",
-                    name,prefill_ms,restore_ms/3.0,ratio);
+        const double mean=std::accumulate(logs.begin(),logs.end(),0.0)/kPairs;
+        double squared=0;
+        for(double value:logs) squared+=(value-mean)*(value-mean);
+        const double half=kStudent95*std::sqrt(squared/(kPairs-1)/kPairs);
+        const double lower=std::exp(mean-half),upper=std::exp(mean+half);
+        std::printf("10.3 receipt=%s box=%s threads=%s geometry=0p5 B=16 %s pairs=%d bytes_including_digest=%zu prefill_ms=%.3f restore_ms=%.3f ratio95=[%.1f,%.1f]\n",
+                    receipt_sha.c_str(),box.c_str(),threads.c_str(),name,kPairs,bytes,
+                    prefill_sum/kPairs,restore_sum/kPairs,lower,upper);
+        PKV_CHECK_MSG(lower>=1000,
+                      "10.3 %s threshold unresolved or missed: 95%% ratio interval [%.1f,%.1f]",
+                      name,lower,upper);
     }
-    const auto receipt=Env("SUPERSLM_PRECACHE_TIMING_RECEIPT");
-    std::ifstream in(receipt);
-    std::string line;
-    std::getline(in,line);
-    PKV_CHECK_MSG(line.find("COMMISSIONED")!=std::string::npos,
-                  "10.3 timing instrument has no independent commission");
-    for(double ratio:ratios) PKV_CHECK_MSG(ratio>=1000,"10.3 real restore ratio %.1f below 1000",ratio);
     const auto worst_path=Env("SUPERSLM_PRECACHE_REAL_1P5_MODEL");
     if(worst_path.empty()) return;
     ModelFile worst(worst_path);
@@ -214,6 +261,9 @@ void Timing103() {
     const auto cap_prefill_end=std::chrono::steady_clock::now();
     const auto cap_blob=Save(cap_prefix);
     if(!RequireBlob(cap_blob,"10.3 cap-length")) {sslm_prefix_release(cap_prefix);return;}
+    PKV_CHECK_MSG(cap_blob.size()==kHeader+HiddenSize(wf)+
+                  size_t(32768)*wf.BytesPerToken(),
+                  "10.3 cap-length 1.5B byte count omits header, digest or canonical rows");
     sslm_prefix_release(cap_prefix);
     double cap_restore_ms=0;
     for(int i=0;i<3;++i) {
@@ -229,7 +279,8 @@ void Timing103() {
     cap_restore_ms/=3.0;
     const double cap_prefill_ms=std::chrono::duration<double,std::milli>(cap_prefill_end-cap_start).count();
     const double mib=double(cap_blob.size())/(1024.0*1024.0);
-    std::printf("10.3 worst cap=32768 geometry=1.5B prefill_ms=%.3f restore_ms=%.3f MiB=%.3f MiB/s=%.1f\n",
+    std::printf("10.3 receipt=%s box=%s threads=%s worst cap=32768 geometry=1p5 28x2x128 B=16 bytes_including_digest=%zu prefill_ms=%.3f restore_ms=%.3f MiB=%.3f MiB/s=%.1f\n",
+                receipt_sha.c_str(),box.c_str(),threads.c_str(),cap_blob.size(),
                 cap_prefill_ms,cap_restore_ms,mib,1000.0*mib/cap_restore_ms);
 }
 PKV_CELL("10.3/E4", "E1", Timing103);
@@ -250,6 +301,10 @@ void Real102() {
     Handles h;
     const auto world_ids=Ids(fs::path(prompts)/"world.ids");
     const auto phase=Env("SUPERSLM_PRECACHE_PHASE");
+    PKV_CHECK_MSG(phase=="capture" || phase=="restore",
+                  "10.2 phase must name capture or restore");
+    if(phase!="capture" && phase!="restore") return;
+    int graded=0;
     sslm_prefix world=nullptr;
     if(phase=="capture") {
         Status(sslm_prefix_begin_budgeted(fx.model,&pool.pool,int32_t(world_ids.size()),&world),
@@ -303,9 +358,11 @@ void Real102() {
                 const auto want=Reference("P2-real0p5-nested",name,input,model_sha,a,mode);
                 PKV_CHECK_MSG(got==want && got.size()==64,
                               "10.2 %s adopter %d differs from pinned prefill",name,a);
+                if(got==want && got.size()==64) ++graded;
             }
         }
     }
+    if(phase=="restore") PKV_CHECK_EQ(graded,50);
 }
 PKV_CELL("10.2/E4", "E1", Real102);
 

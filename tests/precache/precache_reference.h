@@ -37,6 +37,26 @@ inline std::string Field(const std::string& s,const std::string& key) {
     return s.substr(value,s.find_first_of(" \t\r\n",value)-value);
 }
 
+inline std::map<std::string,std::string> LicenseFields(const fs::path& path) {
+    std::ifstream in(path);
+    std::map<std::string,std::string> fields;
+    std::string line;
+    while(std::getline(in,line)) {
+        if(!line.empty() && line.back()=='\r') line.pop_back();
+        const size_t at=line.find('=');
+        if(at==std::string::npos || at==0 ||
+           !fields.emplace(line.substr(0,at),line.substr(at+1)).second) return {};
+    }
+    return in.eof() ? fields : std::map<std::string,std::string>{};
+}
+
+inline bool HasLicensedRecord(const std::string& csv,const std::string& hash) {
+    std::istringstream in(csv);
+    std::string field;
+    while(std::getline(in,field,',')) if(field==hash) return true;
+    return false;
+}
+
 // One licensed reference path for E2-E4. T-3035 supplies the population.
 inline std::vector<int32_t> Reference(const std::string& group,const std::string& stem,
                                       const fs::path& ids,const std::string& model_sha,
@@ -44,15 +64,28 @@ inline std::vector<int32_t> Reference(const std::string& group,const std::string
     const auto dir=Env("SUPERSLM_PRECACHE_REFERENCE_DIR");
     const auto merge_file=Env("SUPERSLM_PRECACHE_MERGE_BASE_FILE");
     const auto license_file=Env("SUPERSLM_PRECACHE_DISCRIMINATION_RECEIPT");
-    if(dir.empty() || merge_file.empty() || license_file.empty()) return {};
-    std::ifstream merge(merge_file),license(license_file);
-    std::string anchor,receipt;
+    const auto manifest=Env("SUPERSLM_PRECACHE_REFERENCE_MANIFEST");
+    const auto instrument=Env("SUPERSLM_PRECACHE_DISCRIMINATION_INSTRUMENT");
+    if(dir.empty() || merge_file.empty() || license_file.empty() ||
+       manifest.empty() || instrument.empty()) return {};
+    std::ifstream merge(merge_file);
+    std::string anchor;
     std::getline(merge,anchor);
-    std::getline(license,receipt);
-    PKV_CHECK_MSG(anchor.size()==40,"reference merge-base fixture missing a full SHA");
-    PKV_CHECK_MSG(receipt.find("COMMISSIONED")!=std::string::npos,
-                  "reference population has no commissioned discrimination receipt");
-    if(anchor.size()!=40 || receipt.find("COMMISSIONED")==std::string::npos) return {};
+    const auto license=LicenseFields(license_file);
+    const auto field=[&](const char* name) {
+        const auto found=license.find(name);
+        return found==license.end() ? std::string{} : found->second;
+    };
+    const bool licensed=anchor.size()==40 && license.size()==9 &&
+        field("format")=="PC-DISCRIMINATION-1" && field("status")=="COMMISSIONED" &&
+        field("commissioning_verdict")=="PASS" && field("must_accept")=="PASS" &&
+        field("must_reject")=="PASS" && field("anchor")==anchor &&
+        field("population_manifest_sha256")==ShaFile(manifest) &&
+        field("instrument_source_sha256")==ShaFile(instrument) &&
+        !field("record_hashes").empty();
+    PKV_CHECK_MSG(licensed,
+                  "reference license is missing, stale, uncommissioned or differs from the exact population/instrument");
+    if(!licensed) return {};
     const fs::path base=fs::path(dir)/group/(stem+"-run1.ref");
     const fs::path twin=fs::path(dir)/group/(stem+"-run2.ref");
     const auto first_sha=ShaFile(base),second_sha=ShaFile(twin);
@@ -68,11 +101,13 @@ inline std::vector<int32_t> Reference(const std::string& group,const std::string
     PKV_CHECK_MSG(Field(header,"model_sha256")==model_sha,
                   "reference %s model SHA differs from the mapped artifact",stem.c_str());
     const auto discrimination=Field(header,"discrimination_record_sha256");
-    PKV_CHECK_MSG(discrimination.size()==64 && receipt.find(discrimination)!=std::string::npos,
+    PKV_CHECK_MSG(discrimination.size()==64 &&
+                  HasLicensedRecord(field("record_hashes"),discrimination),
                   "reference %s lacks its commissioned discrimination record identity",stem.c_str());
     if(Field(header,"anchor")!=anchor || Field(header,"prompt_ids_sha256")!=ShaFile(ids) ||
        Field(header,"model_sha256")!=model_sha ||
-       discrimination.size()!=64 || receipt.find(discrimination)==std::string::npos) return {};
+       discrimination.size()!=64 ||
+       !HasLicensedRecord(field("record_hashes"),discrimination)) return {};
     while(std::getline(ref,line)) {
         if(Field(line,"adopter")!=std::to_string(adopter) || Field(line,"decode_mode")!=mode) continue;
         const auto expected_mode=(adopter%2)==0 ? "budget" : "legacy";

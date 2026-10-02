@@ -13,6 +13,9 @@ target_include_directories(superslm_precache_e1 PRIVATE include src tests tests/
 target_compile_definitions(superslm_precache_e1 PRIVATE
     PKV_REFERENCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/paged-kv/reference")
 find_package(Python3 COMPONENTS Interpreter)
+set(PRECACHE_REFERENCE_LINE "origin/claude/shared-prefix-kv-build-wj8q9c" CACHE STRING
+    "Line whose merge-base anchors licensed precache references")
+set(PC_MERGE_BASE_FILE "${CMAKE_CURRENT_BINARY_DIR}/precache-reference-merge-base.txt")
 if(Python3_Interpreter_FOUND)
     set(PC_PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
     add_test(NAME superslm_precache_version_header
@@ -25,6 +28,16 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/test_check_spx1_oracle.py)
     add_test(NAME superslm_precache_status_mirrors
         COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/check_prefix_status_mirrors.py)
+    add_test(NAME superslm_precache_reference_anchor
+        COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/write_merge_base.py
+            ${CMAKE_CURRENT_SOURCE_DIR} ${PRECACHE_REFERENCE_LINE} ${PC_MERGE_BASE_FILE})
+    set_tests_properties(superslm_precache_reference_anchor PROPERTIES FIXTURES_SETUP precache_reference)
+    add_test(NAME superslm_precache_real_two_process
+        COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/run_real_two_process.py
+            $<TARGET_FILE:superslm_precache_e1>)
+    set_tests_properties(superslm_precache_real_two_process PROPERTIES
+        FIXTURES_REQUIRED precache_reference
+        ENVIRONMENT "SUPERSLM_PRECACHE_MERGE_BASE_FILE=${PC_MERGE_BASE_FILE}")
 else()
     set(PC_PYTHON_EXECUTABLE python3)
 endif()
