@@ -26,7 +26,10 @@ void FlatReferenceE2() {
     const auto ids=ReadIds(input);
     if(ids.empty()) return;
     Scene sc;
-    PagePool& pool=sc.AddPool(fx.model,128);
+    // Twin and restored copies are both live when the legacy adopter draws
+    // cap/B pages; the budget adopter asks for 64+4 decode tokens.
+    PagePool& pool=sc.AddPool(fx.model,
+        uint32_t(fx.CapPages()+2*fx.R(int64_t(ids.size()))+fx.R(68)));
     sslm_prefix twin=BuildIds(fx,&pool.pool,sc.h,ids);
     if(!twin) return;
     const auto blob=Save(twin);

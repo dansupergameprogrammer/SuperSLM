@@ -60,7 +60,16 @@ void Real101() {
     PKV_CHECK_MSG(sslm_kv_block_size(fx.model)==size_t(fx.geo.context_cap)*fx.BytesPerToken() &&
                   sslm_kv_page_size(fx.model)==size_t(16)*fx.BytesPerToken(),
                   "10.1 real 0.5B artifact geometry differs from receipt");
-    PagePool pool(fx.model,512);
+    // One flat prefix is live at a time. The legacy adopter reserves all
+    // cap/B pages before adoption; add the largest prompt's R(L) and R(80).
+    int64_t largest_prefix=0;
+    for(int i=0;i<10;++i) {
+        char name[16]; std::snprintf(name,sizeof(name),"flat%02d",i);
+        const auto ids=Ids(fs::path(prompts)/(std::string(name)+".ids"));
+        if(ids.empty()) return;
+        largest_prefix=std::max(largest_prefix,fx.R(int64_t(ids.size())));
+    }
+    PagePool pool(fx.model,uint32_t(fx.CapPages()+largest_prefix+fx.R(80)));
     Handles h;
     const std::string phase=Env("SUPERSLM_PRECACHE_PHASE");
     PKV_CHECK_MSG(phase=="capture" || phase=="restore",
@@ -313,9 +322,19 @@ void Real102() {
     PKV_CHECK_MSG(sslm_kv_block_size(fx.model)==size_t(fx.geo.context_cap)*fx.BytesPerToken() &&
                   sslm_kv_page_size(fx.model)==size_t(16)*fx.BytesPerToken(),
                   "10.2 real 0.5B artifact geometry differs from receipt");
-    PagePool pool(fx.model,512);
-    Handles h;
     const auto world_ids=Ids(fs::path(prompts)/"world.ids");
+    if(world_ids.empty()) return;
+    // World and all ten persona children remain live through the loop. The
+    // legacy adopter needs cap/B pages in addition to their R(L) reserves.
+    int64_t retained_prefixes=fx.R(int64_t(world_ids.size()));
+    for(int i=0;i<10;++i) {
+        char persona[16]; std::snprintf(persona,sizeof(persona),"persona%02d",i);
+        const auto suffix=Ids(fs::path(prompts)/(std::string(persona)+".ids"));
+        if(suffix.empty()) return;
+        retained_prefixes+=fx.R(int64_t(suffix.size()));
+    }
+    PagePool pool(fx.model,uint32_t(fx.CapPages()+retained_prefixes+fx.R(80)));
+    Handles h;
     const auto phase=Env("SUPERSLM_PRECACHE_PHASE");
     PKV_CHECK_MSG(phase=="capture" || phase=="restore",
                   "10.2 phase must name capture or restore");

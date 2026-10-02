@@ -9,7 +9,10 @@ void Shape41() {
     if (!fx.ok) return;
     for (int L : {0, 1, 15, 16, 17, 1000, 4095, 4096}) {
         Scene sc;
-        PagePool& pool = sc.AddPool(fx.model, 600);
+        // At L=cap, original and restored prefixes each retain cap/B pages;
+        // TwinTokens creates a third whole-cap legacy reservation.
+        PagePool& pool = sc.AddPool(fx.model,
+            uint32_t(3*fx.CapPages()+fx.R(20)));
         sslm_prefix twin = Root(fx, &pool.pool, sc.h, L);
         if (!twin) continue;
         auto b = Save(twin);
@@ -35,8 +38,11 @@ void SyntheticShapes41() {
         const int B=geometry.second;
         PKV_CHECK_MSG(sslm_kv_page_size(fx.model)==size_t(B)*fx.BytesPerToken(),
                       "4.1 selected model is not B=%d",B);
-        PagePool source(fx.model,uint32_t((fx.geo.context_cap+B-1)/B+64));
-        PagePool target(fx.model,uint32_t((fx.geo.context_cap+B-1)/B+64));
+        // Each pool has one cap-length prefix and then a full-cap legacy
+        // adopter, including B=4 where cap/B is four times the B=16 count.
+        const uint32_t pool_pages=uint32_t(2*fx.CapPages()+fx.R(20));
+        PagePool source(fx.model,pool_pages);
+        PagePool target(fx.model,pool_pages);
         Status(source.status,SSLM_OK,"4.1 source pool");
         Status(target.status,SSLM_OK,"4.1 target pool");
         if(source.status!=SSLM_OK || target.status!=SSLM_OK) return;
@@ -381,7 +387,10 @@ void RootHint92() {
     const Fixture& fx = GetFixture("pkv_def");
     if (!fx.ok) return;
     Scene sc;
-    PagePool& pool = sc.AddPool(fx.model, 128);
+    // Three live prefix holders (65, 32, restored 65) precede TwinTokens'
+    // cap/B-page legacy adopter.
+    PagePool& pool = sc.AddPool(fx.model,
+        uint32_t(fx.CapPages()+2*fx.R(65)+fx.R(32)+fx.R(20)));
     sslm_prefix original = Root(fx,&pool.pool,sc.h,65);
     sslm_prefix hint = Root(fx,&pool.pool,sc.h,32,82);
     if (!original || !hint) return;

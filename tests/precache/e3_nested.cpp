@@ -118,7 +118,10 @@ void Nested63() {
     const Fixture& fx = GetFixture("pkv_def");
     if (!fx.ok) return;
     Scene sc;
-    PagePool& pool = sc.AddPool(fx.model, 400);
+    // World R(1000), built and shared-child R(200) each, and the private
+    // R(1200) restore remain live before TwinTokens reserves cap/B pages.
+    PagePool& pool = sc.AddPool(fx.model,uint32_t(
+        fx.CapPages()+fx.R(1000)+2*fx.R(200)+fx.R(1200)+fx.R(20)));
     sslm_prefix world = Root(fx,&pool.pool,sc.h,1000,61);
     sslm_prefix built = world ? Child(fx,world,sc.h) : nullptr;
     if (!built) return;
@@ -162,7 +165,10 @@ void Origins42() {
     for (int origin : {0,1,B-1,B,B+1,31,32,65,int(fx.geo.context_cap)-1,
                        int(fx.geo.context_cap)}) {
         Scene sc;
-        PagePool& pool = sc.AddPool(fx.model,uint32_t((fx.geo.context_cap+B-1)/B+128));
+        // At cap length the parent alone retains cap/B pages; the legacy
+        // TwinTokens adopter needs another cap/B reservation before adoption.
+        PagePool& pool = sc.AddPool(fx.model,
+            uint32_t(2*fx.CapPages()+128));
         sslm_prefix parent = Root(fx,&pool.pool,sc.h,origin,41);
         const int extension=origin+16>int(fx.geo.context_cap) ? 0 : 16;
         sslm_prefix child = parent ? Child(fx,parent,sc.h,extension) : nullptr;
@@ -186,7 +192,11 @@ void HintFailures26() {
     const Fixture& fx = GetFixture("pkv_def");
     if (!fx.ok) return;
     Scene sc;
-    PagePool& pool = sc.AddPool(fx.model,400);
+    // Parent, child, two wrong roots, unfrozen root, and four retained
+    // private restores precede a whole-cap legacy adopter in TwinTokens.
+    PagePool& pool = sc.AddPool(fx.model,uint32_t(
+        fx.CapPages()+3*fx.R(1000)+fx.R(992)+fx.R(200)+
+        4*fx.R(1200)+fx.R(20)));
     sslm_prefix world = Root(fx,&pool.pool,sc.h,1000,61);
     sslm_prefix child = world ? Child(fx,world,sc.h) : nullptr;
     if (!child) return;
@@ -414,7 +424,10 @@ void NestedAllocation52() {
     const Fixture& fx=GetFixture("pkv_def");
     if(!fx.ok) return;
     Scene sc;
-    PagePool& pool=sc.AddPool(fx.model,200);
+    // Parent and child, plus their shared restore, remain live after the
+    // parent release; TwinTokens still draws a cap/B-page legacy adopter.
+    PagePool& pool=sc.AddPool(fx.model,uint32_t(
+        fx.CapPages()+fx.R(1000)+2*fx.R(200)+fx.R(20)));
     sslm_prefix parent=Root(fx,&pool.pool,sc.h,1000,61);
     sslm_prefix child=parent ? Child(fx,parent,sc.h) : nullptr;
     if(!child) return;
