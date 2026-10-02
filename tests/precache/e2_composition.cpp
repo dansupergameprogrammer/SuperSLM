@@ -1,4 +1,4 @@
-#include "precache_common.h"
+#include "precache_hostile.h"
 #include "paged-kv/pkv_budget_b_helpers.h"
 
 namespace {
@@ -103,21 +103,53 @@ void Ordinals716() {
 PKV_CELL("7.16/E2", "E1", Ordinals716);
 
 void ValidationVitality111() {
-    const Fixture& fx=GetFixture("pkv_def");
+    const Fixture& fx=SyntheticFixture();
     if(!fx.ok) return;
     const auto good=RootBlob(fx,1);
     if(!RequireBlob(good,"11.1")) return;
     PagePool pool(fx.model,40);
-    for(size_t offset : {size_t(0),size_t(4),size_t(8),size_t(28),size_t(60),size_t(92),size_t(108),size_t(112)}) {
-        auto bad=good;
-        bad[offset]^=1;
-        if(offset!=28 && offset!=0) Digest(bad);
+    ProbeExactlyFreeOneState(fx,&pool.pool,40);
+    size_t sites=0;
+    auto refuse=[&](const HostileBlob& c) {
+        ++sites;
         sslm_prefix out=nullptr;
-        const auto st=Restore(fx,&pool.pool,bad,nullptr,&out);
-        PKV_CHECK_MSG(st!=SSLM_OK && out==nullptr,
-                      "11.1 validation at blob offset %zu did not fire",offset);
+        sslm_pc_test_only_restore_fault_arm(3,0);
+        const auto st=Restore(fx,&pool.pool,c.bytes,nullptr,&out);
+        PKV_CHECK_MSG(st==c.want && out==nullptr,
+                      "11.1 Release validation site %s: expected %s, got %s",
+                      c.name.c_str(),AbiStatusName(c.want),AbiStatusName(st));
+        PKV_CHECK_MSG(sslm_pc_test_only_restore_fault_read(nullptr,nullptr,nullptr,nullptr)==0,
+                      "11.1 validation site %s drew before refusing",c.name.c_str());
+        sslm_pc_test_only_restore_fault_disarm();
         if(st==SSLM_OK && out) sslm_prefix_release(out);
+    };
+    auto short_blob=good; short_blob.resize(183);
+    refuse({"step 2: short size",short_blob,SSLM_INVALID_ARGUMENT,true});
+    auto magic=good; magic[0]^=1;
+    refuse({"step 2: magic",magic,SSLM_INVALID_ARGUMENT,true});
+    auto digest=good; digest.back()^=1;
+    refuse({"step 3: digest",digest,SSLM_INVALID_ARGUMENT,true});
+    DomainPopulation(fx,good,refuse); // Steps 4-8, one field changed and digest correct.
+    const auto empty=RootBlob(fx,0);
+    if(RequireBlob(empty,"11.1 empty token domain")) {
+        auto token=empty;
+        PutLe32(token,108,0);
+        Digest(token);
+        refuse({"step 8: L=0 token not sentinel",token,SSLM_INVALID_ARGUMENT,true});
     }
+    const Fixture& bound_fx=SyntheticFixture(true);
+    const auto bound=BoundWalkCase();
+    if(RequireBlob(bound.bytes,"11.1 bound walk")) {
+        PagePool bound_pool(bound_fx.model,40);
+        sslm_prefix out=nullptr;
+        const auto st=Restore(bound_fx,&bound_pool.pool,bound.bytes,nullptr,&out);
+        PKV_CHECK_MSG(st==SSLM_RESTORE_SCHEMA_MISMATCH && out==nullptr,
+                      "11.1 step 7 bound walk at state_count was not rejected");
+        if(out && out!=OutSentinel<sslm_prefix>()) sslm_prefix_release(out);
+        ++sites;
+    }
+    PKV_CHECK_MSG(sites>=27,"11.1 validation-site census is incomplete: %zu",sites);
+    ProbeExactlyFreeOneState(fx,&pool.pool,40);
 }
 PKV_CELL("11.1/E2", "E1", ValidationVitality111);
 }
