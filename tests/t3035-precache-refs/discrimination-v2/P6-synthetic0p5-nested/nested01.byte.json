@@ -1,0 +1,723 @@
+{
+  "adopter_mode": "legacy",
+  "decode_mode": "greedy",
+  "donor_ids_sha256": "f465b352301ddef760a090b5219a0c3e837a366c60b7408552068ba0754e1e40",
+  "format": "SSB5",
+  "instrument": "T-3035-precache-byte-v1",
+  "length": 1221,
+  "model_sha256": "d19e7a3676793dd18f14e73a738ae34d89a81a5331b3af0f8c62c266746f6951",
+  "mutants": [
+    {
+      "address": {
+        "byte_count": 256,
+        "byte_offset": 156,
+        "kind": "field"
+      },
+      "changed_bytes": 256,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-res",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 256,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          0
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5401,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(0)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5401,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          1
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5518,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(1)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5518,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          2
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5466,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(2)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5466,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          3
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5584,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(3)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5584,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          4
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5533,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(4)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5533,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          5
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5559,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(5)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5559,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          6
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5574,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(6)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5574,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          7
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5562,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(7)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5562,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          8
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5582,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(8)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5582,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          9
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5593,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(9)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5593,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          10
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5593,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(10)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5593,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          11
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5588,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(11)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5588,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          12
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5624,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(12)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5624,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          13
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5637,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(13)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5637,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          14
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5544,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(14)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5544,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          15
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5613,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(15)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5613,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          16
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5601,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(16)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5601,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          610
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5662,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(610)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5662,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          1204
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5593,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(1204)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5593,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          1220
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 5622,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row(1220)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 5622,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_count": 1,
+        "byte_offset": 416,
+        "kind": "field"
+      },
+      "changed_bytes": 1,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-row0-changed",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 1,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 88971,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-page(0)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 88971,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          608,
+          609,
+          610,
+          611,
+          612,
+          613,
+          614,
+          615,
+          616,
+          617,
+          618,
+          619,
+          620,
+          621,
+          622,
+          623
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 89700,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-page(38)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 89700,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          1200,
+          1201,
+          1202,
+          1203,
+          1204,
+          1205,
+          1206,
+          1207,
+          1208,
+          1209,
+          1210,
+          1211,
+          1212,
+          1213,
+          1214,
+          1215
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 89716,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-page(75)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 89716,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          1216,
+          1217,
+          1218,
+          1219,
+          1220
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 28007,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-tail",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 28007,
+      "scope": "restored-sequence-operand"
+    },
+    {
+      "address": {
+        "byte_offset_formula": "rows_offset + (run * stride_positions + position) * row_bytes",
+        "kind": "KV",
+        "positions": [
+          1184,
+          1185,
+          1186,
+          1187,
+          1188,
+          1189,
+          1190,
+          1191,
+          1192,
+          1193,
+          1194,
+          1195,
+          1196,
+          1197,
+          1198,
+          1199,
+          1200,
+          1201,
+          1202,
+          1203,
+          1204,
+          1205,
+          1206,
+          1207,
+          1208,
+          1209,
+          1210,
+          1211,
+          1212,
+          1213,
+          1214,
+          1215
+        ],
+        "row_bytes": 64,
+        "rows_offset": 416,
+        "run_count": 96,
+        "run_first": 0,
+        "stride_positions": 4096
+      },
+      "changed_bytes": 179694,
+      "edit": "CHANGED",
+      "exact_state_rejected": true,
+      "mutant": "M-swap(74,75)",
+      "restore_status": 0,
+      "restored_operand_mismatched_bytes": 179694,
+      "scope": "restored-sequence-operand"
+    }
+  ],
+  "note": "Observation only; independent commissioning and cell assertions pending",
+  "page_positions": 16,
+  "probe_source_sha256": "c86f403815e51d2a5afe7c3954e956fcc70993b1c3e16d8926919ffde62897f5",
+  "raw_bytes": 3516,
+  "raw_mtime_utc": "2026-10-02T00:19:17.624506+00:00",
+  "raw_path": "D:\\_scratch\\T-3035\\legacy-v2-P6-synthetic0p5-nested-nested01-greedy.txt",
+  "raw_sha256": "a328ce8ff5287d2631e5a53438a7a20189360efdd07dfe2c10aead7e51032387",
+  "reducer_source_sha256": "457f0e9bd8aa80d3e4d5b36b498cbe002282aa5aea0b4c45e0d77d25e0f9954a",
+  "reference_path": "D:\\_artifacts\\SuperSLM\\t3035-precache-refs\\P6-synthetic0p5-nested\\nested01-run1.ref",
+  "reference_sha256": "3bae7e9de6dafc996cde516d57cdc79b3ea53288b758b3500d5640890cc8b426",
+  "status": "QUARANTINED",
+  "target_ids_sha256": "ee85c343be844d8edfe1850a5e517cdd0895184a54753f6a4077cc52339f5b34",
+  "unedited_roundtrip_tokens": [
+    85,
+    88,
+    153,
+    13,
+    84,
+    60,
+    194,
+    174,
+    13,
+    83,
+    84,
+    227,
+    76,
+    77,
+    89,
+    178,
+    36,
+    113,
+    192,
+    41,
+    153,
+    14,
+    208,
+    251,
+    249,
+    21,
+    240,
+    9,
+    132,
+    106,
+    33,
+    254,
+    116,
+    149,
+    237,
+    250,
+    241,
+    13,
+    32,
+    239,
+    124,
+    133,
+    24,
+    40,
+    120,
+    241,
+    147,
+    0,
+    233,
+    40,
+    91,
+    47,
+    8,
+    119,
+    138,
+    77,
+    192,
+    160,
+    249,
+    16,
+    197,
+    115,
+    79,
+    30
+  ],
+  "unedited_state_diff_bytes": 0
+}
