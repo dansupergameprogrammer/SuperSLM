@@ -521,6 +521,10 @@ void Concurrent32() {
     if(!child) return;
     const auto b=Save(child);
     if(!RequireBlob(b,"3.2")) return;
+    const auto parent_pages=PrefixTable(parent);
+    const auto child_tokens=Decode(fx,&pool.pool,child,true,16);
+    PKV_CHECK_MSG(parent_pages.size()>=62 && child_tokens.size()==16,
+                  "3.2 prefill twin or parent page table is unavailable");
     std::atomic<int> bad{0};
     std::vector<std::thread> threads;
     for(int i=0;i<8;++i) threads.emplace_back([&]{
@@ -529,6 +533,17 @@ void Concurrent32() {
         if(sslm_prefix_restore(fx.model,&pool.pool,b.data(),b.size(),parent,&copy,&shared)!=SSLM_OK)
             {++bad;return;}
         if(shared!=62) ++bad;
+        const auto copy_pages=PrefixTable(copy);
+        if(copy_pages.size()<62 || parent_pages.size()<62 ||
+           !std::equal(parent_pages.begin(),parent_pages.begin()+62,copy_pages.begin())) ++bad;
+        sslm_seq seq=nullptr;
+        if(sslm_seq_create_budgeted(fx.model,&pool.pool,32,&seq)!=SSLM_OK) ++bad;
+        else {
+            std::vector<int32_t> got;
+            if(sslm_seq_adopt_prefix(seq,copy)!=SSLM_OK ||
+               DecodeN(fx.model,seq,16,&got)!=SSLM_OK || got!=child_tokens) ++bad;
+            sslm_seq_release(seq);
+        }
         sslm_prefix_release(copy);
     });
     for(int i=0;i<8;++i) threads.emplace_back([&]{
@@ -542,6 +557,8 @@ void Concurrent32() {
     });
     for(auto& thread:threads) thread.join();
     PKV_CHECK_MSG(bad==0,"3.2 concurrent re-share failures: %d",int(bad));
+    sc.h.ReleaseAll();
+    ProbeExactlyFreeOneState(fx,&pool.pool,500);
 }
 PKV_CELL("3.2/E3", "E1", Concurrent32);
 

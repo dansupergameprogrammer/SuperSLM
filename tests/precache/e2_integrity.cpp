@@ -264,8 +264,14 @@ void Concurrent31() {
     if(!immutable) return;
     const auto expected=Save(immutable);
     if(!RequireBlob(expected,"3.1")) return;
-    const auto other=RootBlob(fx,17);
+    sslm_prefix other_prefix=Root(fx,&pool.pool,sc.h,17);
+    if(!other_prefix) return;
+    const auto other=Save(other_prefix);
     if(!RequireBlob(other,"3.1 other blob")) return;
+    const auto source_tokens=Decode(fx,&pool.pool,immutable,true,16);
+    const auto other_tokens=Decode(fx,&pool.pool,other_prefix,true,16);
+    PKV_CHECK_MSG(source_tokens.size()==16 && other_tokens.size()==16,
+                  "3.1 prefill twin continuations are unavailable");
     std::atomic<int> bad{0};
     std::vector<std::thread> workers;
     for(int i=0;i<8;++i) workers.emplace_back([&]{
@@ -277,6 +283,10 @@ void Concurrent31() {
             sslm_seq seq=nullptr;
             if(sslm_seq_create_budgeted(fx.model,&pool.pool,16,&seq)!=SSLM_OK) {++bad;continue;}
             if(sslm_seq_adopt_prefix(seq,immutable)!=SSLM_OK) ++bad;
+            else {
+                std::vector<int32_t> got;
+                if(DecodeN(fx.model,seq,16,&got)!=SSLM_OK || got!=source_tokens) ++bad;
+            }
             sslm_seq_release(seq);
         }
     });
@@ -285,12 +295,21 @@ void Concurrent31() {
             sslm_prefix p=nullptr;
             if(sslm_prefix_restore(fx.model,&pool.pool,other.data(),other.size(),nullptr,&p,nullptr)!=SSLM_OK)
                 {++bad;continue;}
+            sslm_seq seq=nullptr;
+            if(sslm_seq_create_budgeted(fx.model,&pool.pool,32,&seq)!=SSLM_OK) ++bad;
+            else {
+                std::vector<int32_t> got;
+                if(sslm_seq_adopt_prefix(seq,p)!=SSLM_OK ||
+                   DecodeN(fx.model,seq,16,&got)!=SSLM_OK || got!=other_tokens) ++bad;
+                sslm_seq_release(seq);
+            }
             sslm_prefix_release(p);
         }
     });
     for(auto& t:workers) t.join();
     PKV_CHECK_MSG(bad==0,"3.1 concurrent save/restore had %d failures",int(bad));
     Status(ReleasePrefix(sc.h,immutable),SSLM_OK,"3.1 release shared source");
+    Status(ReleasePrefix(sc.h,other_prefix),SSLM_OK,"3.1 release other prefill twin");
     ProbeExactlyFreeOneState(fx,&pool.pool,300);
 }
 PKV_CELL("3.1/E2", "E1", Concurrent31);
