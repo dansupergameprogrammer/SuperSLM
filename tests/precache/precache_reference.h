@@ -1,6 +1,7 @@
 #pragma once
 #include "precache_common.h"
 #include <filesystem>
+#include <set>
 #include <sstream>
 
 namespace pc {
@@ -35,6 +36,35 @@ inline std::string Field(const std::string& s,const std::string& key) {
     if(begin==std::string::npos) return {};
     const size_t value=begin+pattern.size();
     return s.substr(value,s.find_first_of(" \t\r\n",value)-value);
+}
+
+using ReferenceHeader=std::map<std::string,std::string>;
+
+inline bool ParseReferenceHeader(const std::string& line,ReferenceHeader* fields) {
+    fields->clear();
+    if(line.rfind("# ",0)!=0) return false;
+    static const std::set<std::string> allowed={
+        "B","adapter_sha256","anchor","cap","decode_modes_available",
+        "discrimination_record_sha256","forced_content_id","forced_content_ids_sha256",
+        "harness","model_sha256","persona_ids_sha256","persona_source_sha256",
+        "prompt_id","prompt_ids_sha256","prompt_source_sha256","tokenizer",
+        "world_ids_sha256","world_source_sha256"};
+    std::istringstream in(line.substr(2));
+    std::string token;
+    while(in>>token) {
+        const size_t at=token.find('=');
+        if(at==std::string::npos || at==0 || at+1==token.size() ||
+           token.find('=',at+1)!=std::string::npos ||
+           !allowed.count(token.substr(0,at)) ||
+           !fields->emplace(token.substr(0,at),token.substr(at+1)).second) {
+            fields->clear();
+            return false;
+        }
+    }
+    for(const char* required:{"anchor","model_sha256","prompt_ids_sha256",
+                              "discrimination_record_sha256"})
+        if(!fields->count(required)) {fields->clear();return false;}
+    return true;
 }
 
 inline std::map<std::string,std::string> LicenseFields(const fs::path& path) {
@@ -95,18 +125,25 @@ inline std::vector<int32_t> Reference(const std::string& group,const std::string
     std::ifstream ref(base);
     std::string header,line;
     std::getline(ref,header);
-    PKV_CHECK_MSG(Field(header,"anchor")==anchor,"stale reference %s anchor %s; current %s",
-                  stem.c_str(),Field(header,"anchor").c_str(),anchor.c_str());
-    PKV_CHECK_MSG(Field(header,"prompt_ids_sha256")==ShaFile(ids),
+    ReferenceHeader header_fields;
+    const bool parsed=ParseReferenceHeader(header,&header_fields);
+    PKV_CHECK_MSG(parsed,
+                  "reference %s header has a missing, duplicate, misnamed or unknown identity field",
+                  stem.c_str());
+    if(!parsed) return {};
+    PKV_CHECK_MSG(header_fields.at("anchor")==anchor,"stale reference %s anchor %s; current %s",
+                  stem.c_str(),header_fields.at("anchor").c_str(),anchor.c_str());
+    PKV_CHECK_MSG(header_fields.at("prompt_ids_sha256")==ShaFile(ids),
                   "reference %s IDs SHA differs from the prompt",stem.c_str());
-    PKV_CHECK_MSG(Field(header,"model_sha256")==model_sha,
+    PKV_CHECK_MSG(header_fields.at("model_sha256")==model_sha,
                   "reference %s model SHA differs from the mapped artifact",stem.c_str());
-    const auto discrimination=Field(header,"discrimination_record_sha256");
+    const auto discrimination=header_fields.at("discrimination_record_sha256");
     PKV_CHECK_MSG(discrimination.size()==64 &&
                   HasLicensedRecord(field("record_hashes"),discrimination),
                   "reference %s lacks its commissioned discrimination record identity",stem.c_str());
-    if(Field(header,"anchor")!=anchor || Field(header,"prompt_ids_sha256")!=ShaFile(ids) ||
-       Field(header,"model_sha256")!=model_sha ||
+    if(header_fields.at("anchor")!=anchor ||
+       header_fields.at("prompt_ids_sha256")!=ShaFile(ids) ||
+       header_fields.at("model_sha256")!=model_sha ||
        discrimination.size()!=64 ||
        !HasLicensedRecord(field("record_hashes"),discrimination)) return {};
     while(std::getline(ref,line)) {

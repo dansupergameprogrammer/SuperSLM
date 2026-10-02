@@ -7,6 +7,11 @@ add_executable(superslm_precache_e1 EXCLUDE_FROM_ALL
 # header and must compile only when the public macro and ordinal are published.
 add_executable(superslm_precache_macro_vitality EXCLUDE_FROM_ALL
     ${PC_DIR}/prefix_macro_vitality.cpp)
+add_executable(superslm_precache_reference_header EXCLUDE_FROM_ALL
+    ${PC_DIR}/reference_header_identity.cpp)
+target_include_directories(superslm_precache_reference_header PRIVATE include src tests tests/paged-kv ${PC_DIR})
+target_compile_definitions(superslm_precache_reference_header PRIVATE
+    PKV_REFERENCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/paged-kv/reference")
 target_include_directories(superslm_precache_macro_vitality PRIVATE include)
 target_link_libraries(superslm_precache_e1 PRIVATE superslm_test_injection)
 target_include_directories(superslm_precache_e1 PRIVATE include src tests tests/paged-kv ${PC_DIR})
@@ -28,6 +33,10 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/test_check_spx1_oracle.py)
     add_test(NAME superslm_precache_status_mirrors
         COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/check_prefix_status_mirrors.py)
+    add_test(NAME superslm_precache_reference_header_identity
+        COMMAND $<TARGET_FILE:superslm_precache_reference_header>)
+    set_tests_properties(superslm_precache_reference_header_identity PROPERTIES
+        FIXTURES_SETUP precache_header_identity)
     add_test(NAME superslm_precache_reference_anchor
         COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/write_merge_base.py
             ${CMAKE_CURRENT_SOURCE_DIR} ${PRECACHE_REFERENCE_LINE} ${PC_MERGE_BASE_FILE})
@@ -36,14 +45,14 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/run_real_two_process.py
             $<TARGET_FILE:superslm_precache_e1>)
     set_tests_properties(superslm_precache_real_two_process PROPERTIES
-        FIXTURES_REQUIRED precache_reference
+        FIXTURES_REQUIRED "precache_reference;precache_header_identity"
         ENVIRONMENT "SUPERSLM_PRECACHE_MERGE_BASE_FILE=${PC_MERGE_BASE_FILE}")
     add_test(NAME superslm_precache_e2_reference
         COMMAND $<TARGET_FILE:superslm_precache_e1> "=6.2/E2:reference")
     add_test(NAME superslm_precache_e3_reference
         COMMAND $<TARGET_FILE:superslm_precache_e1> "=6.3/E3:reference")
     set_tests_properties(superslm_precache_e2_reference superslm_precache_e3_reference PROPERTIES
-        FIXTURES_REQUIRED precache_reference
+        FIXTURES_REQUIRED "precache_reference;precache_header_identity"
         ENVIRONMENT "SUPERSLM_PRECACHE_MERGE_BASE_FILE=${PC_MERGE_BASE_FILE}")
 else()
     set(PC_PYTHON_EXECUTABLE python3)
