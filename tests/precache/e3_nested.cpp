@@ -118,7 +118,10 @@ void Nested63() {
     const Fixture& fx = GetFixture("pkv_def");
     if (!fx.ok) return;
     Scene sc;
-    PagePool& pool = sc.AddPool(fx.model, 400);
+    // A restore with a rejected or ignored hint may retain all R(1200)
+    // pages. Both restores remain live before the whole-cap adopter.
+    PagePool& pool = sc.AddPool(fx.model,uint32_t(
+        fx.CapPages()+fx.R(1000)+fx.R(200)+2*fx.R(1200)+fx.R(20)));
     sslm_prefix world = Root(fx,&pool.pool,sc.h,1000,61);
     sslm_prefix built = world ? Child(fx,world,sc.h) : nullptr;
     if (!built) return;
@@ -162,7 +165,11 @@ void Origins42() {
     for (int origin : {0,1,B-1,B,B+1,31,32,65,int(fx.geo.context_cap)-1,
                        int(fx.geo.context_cap)}) {
         Scene sc;
-        PagePool& pool = sc.AddPool(fx.model,uint32_t((fx.geo.context_cap+B-1)/B+128));
+        // At cap length the parent, a private fallback restore, and the
+        // legacy TwinTokens adopter can each retain cap/B pages. The
+        // sharing assertion below still rejects a non-sharing restore.
+        PagePool& pool = sc.AddPool(fx.model,
+            uint32_t(3*fx.CapPages()+128));
         sslm_prefix parent = Root(fx,&pool.pool,sc.h,origin,41);
         const int extension=origin+16>int(fx.geo.context_cap) ? 0 : 16;
         sslm_prefix child = parent ? Child(fx,parent,sc.h,extension) : nullptr;
@@ -174,7 +181,9 @@ void Origins42() {
         uint32_t shared = UINT32_MAX;
         if (Restored(fx,&pool.pool,b,parent,sc.h,&restored,&shared)) {
             PKV_CHECK_EQ(shared,uint32_t(origin/B));
-            TwinTokens(fx,&pool.pool,child,restored,16);
+            const int continuation=std::min(16,int(fx.geo.context_cap)-origin-extension);
+            if(continuation>0)
+                TwinTokens(fx,&pool.pool,child,restored,continuation);
         }
     }
     }
@@ -186,7 +195,11 @@ void HintFailures26() {
     const Fixture& fx = GetFixture("pkv_def");
     if (!fx.ok) return;
     Scene sc;
-    PagePool& pool = sc.AddPool(fx.model,400);
+    // Parent, child, two wrong roots, unfrozen root, and four retained
+    // private restores precede a whole-cap legacy adopter in TwinTokens.
+    PagePool& pool = sc.AddPool(fx.model,uint32_t(
+        fx.CapPages()+3*fx.R(1000)+fx.R(992)+fx.R(200)+
+        4*fx.R(1200)+fx.R(20)));
     sslm_prefix world = Root(fx,&pool.pool,sc.h,1000,61);
     sslm_prefix child = world ? Child(fx,world,sc.h) : nullptr;
     if (!child) return;
@@ -328,7 +341,10 @@ void ParentRelease33() {
     const Fixture& fx = GetFixture("pkv_def");
     if (!fx.ok) return;
     Scene sc;
-    PagePool& pool = sc.AddPool(fx.model,200);
+    // The hinted restore can occupy a private R(1200) fallback before the
+    // sharing oracle runs; the legacy adopter still reserves cap/B pages.
+    PagePool& pool = sc.AddPool(fx.model,uint32_t(
+        fx.CapPages()+fx.R(1000)+fx.R(200)+fx.R(1200)+fx.R(20)));
     sslm_prefix world = Root(fx,&pool.pool,sc.h,1000,61);
     sslm_prefix child = world ? Child(fx,world,sc.h) : nullptr;
     if (!child) return;
@@ -414,6 +430,8 @@ void NestedAllocation52() {
     const Fixture& fx=GetFixture("pkv_def");
     if(!fx.ok) return;
     Scene sc;
+    // Parent R(1000) plus child R(200) leave exactly 124 free pages for the
+    // post-map allocation fault and rollback oracle below.
     PagePool& pool=sc.AddPool(fx.model,200);
     sslm_prefix parent=Root(fx,&pool.pool,sc.h,1000,61);
     sslm_prefix child=parent ? Child(fx,parent,sc.h) : nullptr;

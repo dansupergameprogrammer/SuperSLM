@@ -97,7 +97,10 @@ void InDomain23b() {
     if(!fx.ok) return;
     const auto good=RootBlob(fx,65);
     if(!RequireBlob(good,"2.3b")) return;
-    PagePool pool(fx.model,200);
+    // The unedited prefix plus nine edited m/e prefixes stay live; each may
+    // retain R(65) pages. TwinTokens also creates a whole-cap legacy adopter.
+    const uint32_t pool_pages=uint32_t(fx.CapPages()+10*fx.R(65)+fx.R(20));
+    PagePool pool(fx.model,pool_pages);
     Handles h;
     sslm_prefix unedited=nullptr;
     if(!Restored(fx,&pool.pool,good,nullptr,h,&unedited)) return;
@@ -237,7 +240,10 @@ void Lifetime11() {
     std::vector<std::vector<uint8_t>> blobs;
     for(int L:{1,16,17,65}) blobs.push_back(RootBlob(fx,L));
     if(!RequireBlob(blobs.front(),"1.1")) return;
-    PagePool pool(fx.model,32);
+    // pkv_def: cap/B=4096/16=256 legacy pages; largest live restore is
+    // R(65)=ceil(65/16)+1=6; Decode(2) asks for budget 2+4, R(6)=2.
+    const uint32_t pool_pages=uint32_t(fx.CapPages()+fx.R(65)+fx.R(6));
+    PagePool pool(fx.model,pool_pages);
     for(int i=0;i<1000;++i) {
         sslm_prefix p=nullptr;
         const auto& b=blobs[size_t(i)%blobs.size()];
@@ -249,7 +255,7 @@ void Lifetime11() {
         }
         Status(sslm_prefix_release(p),SSLM_OK,"1.1 release cycle");
     }
-    ProbeExactlyFreeOneState(fx,&pool.pool,32);
+    ProbeExactlyFreeOneState(fx,&pool.pool,pool_pages);
     PKV_CHECK_EQ(sslm_kv_pool_destroy(pool.pool),SSLM_OK);
     pool.pool=nullptr;
 }
