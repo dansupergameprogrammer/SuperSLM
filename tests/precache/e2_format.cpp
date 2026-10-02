@@ -7,6 +7,24 @@ namespace {
 using namespace pc;
 namespace fs=std::filesystem;
 
+// Engine 5d5ca58: artifact.h kIntegrityHashOffset=32, artifact.cpp hashes
+// the file with [32,64) zeroed, and RawIntegrityHash() returns those bytes.
+bool VerifiedArtifactIntegrity(const uint8_t* data,size_t size,
+                               std::array<uint8_t,32>* stored) {
+    if(!data || size<64) return false;
+    std::copy(data+32,data+64,stored->begin());
+    std::vector<uint8_t> zeroed(data,data+size);
+    std::fill(zeroed.begin()+32,zeroed.begin()+64,uint8_t{0});
+    static constexpr char hex[]="0123456789abcdef";
+    std::string expected;
+    expected.reserve(64);
+    for(uint8_t byte:*stored) {
+        expected.push_back(hex[byte>>4]);
+        expected.push_back(hex[byte&15]);
+    }
+    return expected==Sha(zeroed.data(),zeroed.size());
+}
+
 void Independent712() {
     const std::array<uint64_t,5> fixture_counts{11,13,17,19,23};
     PKV_CHECK_MSG(std::all_of(fixture_counts.begin(),fixture_counts.end(),
@@ -19,6 +37,10 @@ void Independent712() {
     ModelFile model(std::string(fixture_dir)+"/synthetic0p5-three-schema.sslm");
     Status(model.status,SSLM_OK,"7.12 three-schema fixture map");
     if(model.status!=SSLM_OK) return;
+    std::array<uint8_t,32> model_integrity{};
+    const bool integrity=VerifiedArtifactIntegrity(model.bytes.p,model.size,&model_integrity);
+    PKV_CHECK_MSG(integrity,"7.12 model stored integrity hash fails zeroed-field digest");
+    if(!integrity) return;
     Fixture fx;
     fx.model=model.model; model.model=nullptr;
     fx.geo={24,2,64,4096};
@@ -94,15 +116,18 @@ void Independent712() {
     command << '"' << PC_PYTHON_PATH << '"' << " \"" << PC_FORMAT_SCRIPT_PATH
             << "\" --blob \"" << blob_path.string() << "\" --ssb \""
             << ssb_path.string() << "\" --rows \"" << rows_path.string()
-            << "\" --cmake \"" << PC_CMAKE_PATH << "\" --model-sha " << fx.sha
+            << "\" --cmake \"" << PC_CMAKE_PATH << "\" --model-artifact \""
+            << (fs::path(fixture_dir)/"synthetic0p5-three-schema.sslm").string() << '"'
             << " --length " << L << " --origin 0 --layers " << fx.geo.layers
             << " --heads " << fx.geo.kv_heads << " --dim " << fx.geo.head_dim
             << " --hidden " << hidden
             << " --current-token " << input.back()
             << " --schema-name schema_two --walk 1"
             << " --counts 11,13,17,19,23";
-    PKV_CHECK_MSG(std::system(command.str().c_str())==0,
+    const bool accepted=std::system(command.str().c_str())==0;
+    PKV_CHECK_MSG(accepted,
                   "7.12 independent struct/hashlib SPX1 parser rejected a field or row");
+    if(!accepted) return;
     auto swapped_blob=blob,swapped_ssb=ssb;
     PutLe64(swapped_blob,144,fixture_counts[1]);
     PutLe64(swapped_blob,152,fixture_counts[0]);
@@ -117,10 +142,11 @@ void Independent712() {
         if(at!=std::string::npos) swap_command.replace(at,from.size(),to);
         return at!=std::string::npos;
     };
-    PKV_CHECK_MSG(replace_once(blob_path.string(),swap_blob_path.string()) &&
-                  replace_once(ssb_path.string(),swap_ssb_path.string()) &&
-                  std::system(swap_command.c_str())!=0,
-                  "7.12 symmetric SPX1/SSB6 count swap escaped fixed fixture values");
+    const bool swapped_paths=replace_once(blob_path.string(),swap_blob_path.string()) &&
+                             replace_once(ssb_path.string(),swap_ssb_path.string());
+    swap_command += " --expect-error \"known saturation counts\"";
+    PKV_CHECK_MSG(swapped_paths && std::system(swap_command.c_str())==0,
+                  "7.12 symmetric SPX1/SSB6 count swap did not fail for known saturation counts");
 }
 PKV_CELL("7.12/E2:independent-parser", "E1", Independent712);
 
@@ -132,7 +158,14 @@ void CrossView712() {
     PKV_CHECK_MSG(pkv::legacy_a::PatchedBlockSizeTwin(sixteen,4,&four),
                   "7.12 B=4 model view could not be constructed");
     if(!four.ok) return;
-    PKV_CHECK_MSG(sixteen.sha!=four.sha && sixteen.B()==16 && four.B()==4,
+    std::array<uint8_t,32> sixteen_integrity{},four_integrity{};
+    const bool verified_sixteen=VerifiedArtifactIntegrity(sixteen.bytes.p,sixteen.size,
+                                                          &sixteen_integrity);
+    const bool verified_four=VerifiedArtifactIntegrity(four.bytes.p,four.size,&four_integrity);
+    PKV_CHECK_MSG(verified_sixteen && verified_four,
+                  "7.12 B-view artifact stored integrity fails zeroed-field digest");
+    if(!verified_sixteen || !verified_four) return;
+    PKV_CHECK_MSG(sixteen_integrity!=four_integrity && sixteen.B()==16 && four.B()==4,
                   "7.12 model views need distinct hashes and B=16/B=4");
     constexpr int L=65;
     struct View {std::vector<uint8_t> ssb,rows,blob;};
@@ -181,18 +214,22 @@ void CrossView712() {
     PKV_CHECK_MSG(a.ssb.size()>=156 && b.ssb.size()>=156 &&
                   a.rows.size()==size_t(L)*sixteen.BytesPerToken() && a.rows==b.rows,
                   "7.12 B=4/B=16 pre-save peeked canonical K/V rows differ");
+    PKV_CHECK_MSG(a.ssb.size()>=36 && b.ssb.size()>=36 &&
+                  std::equal(sixteen_integrity.begin(),sixteen_integrity.end(),a.ssb.begin()+4) &&
+                  std::equal(four_integrity.begin(),four_integrity.end(),b.ssb.begin()+4),
+                  "7.12 B-view SSB6 hashes differ from verified artifact integrity fields");
     for(size_t offset:{size_t(36),size_t(40),size_t(48),size_t(60),
                        size_t(76),size_t(84),size_t(92),size_t(124),
                        size_t(132),size_t(140),size_t(148)})
         PKV_CHECK_MSG(a.ssb.size()>=offset+8 && b.ssb.size()>=offset+8 &&
                       std::equal(a.ssb.begin()+offset,a.ssb.begin()+offset+8,b.ssb.begin()+offset),
                       "7.12 B views differ in pre-save semantic SSB6 field %zu",offset);
-    auto inspect=[&](const View& v,const Fixture& fx) {
+    auto inspect=[&](const View& v,const Fixture& fx,
+                     const std::array<uint8_t,32>& expected_integrity) {
         PKV_CHECK_MSG(Header(v.blob,L,fx),"7.12 B-view size, shape or digest failed");
         if(v.blob.size()<kHeader+HiddenSize(fx)+v.rows.size()) return;
-        bool model_hash=v.blob.size()>=92 && fx.sha.size()==64;
-        if(model_hash) for(size_t i=0;i<32;++i)
-            model_hash &= v.blob[60+i]==uint8_t(std::stoul(fx.sha.substr(2*i,2),nullptr,16));
+        const bool model_hash=std::equal(expected_integrity.begin(),
+                                         expected_integrity.end(),v.blob.begin()+60);
         PKV_CHECK_MSG(model_hash,"7.12 B-view SPX1 model hash differs from artifact");
         for(size_t i=0;i<counts.size();++i)
             PKV_CHECK_MSG(Le64(v.blob,144+8*i)==counts[i],
@@ -202,8 +239,8 @@ void CrossView712() {
                                  v.blob.begin()+kHeader+HiddenSize(fx)),
                       "7.12 B-view writer rows differ from independent peeks");
     };
-    inspect(a,sixteen);
-    inspect(b,four);
+    inspect(a,sixteen,sixteen_integrity);
+    inspect(b,four,four_integrity);
     PKV_CHECK_MSG(a.blob.size()>=kHeader && a.blob.size()==b.blob.size() &&
                   !std::equal(a.blob.begin()+60,a.blob.begin()+92,b.blob.begin()+60) &&
                   std::equal(a.blob.begin(),a.blob.begin()+28,b.blob.begin()) &&

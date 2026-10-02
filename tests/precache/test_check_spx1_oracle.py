@@ -23,16 +23,20 @@ def main() -> None:
         root = Path(directory)
         args = Namespace(blob=root / "prefix.spx1", ssb=root / "adopter.ssb6",
                          rows=root / "rows.bin", cmake=root / "CMakeLists.txt",
-                         model_sha="55" * 32, current_token=23,
+                         model_artifact=root / "model.sslm", current_token=23,
                          schema_name="schema_two", walk=1,
                          counts="11,13,17,19,23", length=1, origin=0,
                          layers=1, heads=1, dim=1, hidden=192)
         args.cmake.write_text("project(superslm VERSION 1.2.3)\n", encoding="utf-8")
+        artifact = bytearray(range(96))
+        artifact[32:64] = bytes(32)
+        artifact[32:64] = sha256(artifact).digest()
+        args.model_artifact.write_bytes(artifact)
         args.rows.write_bytes(b"\x33\x44")
         blob = bytearray(184 + 192 + 2)
         ssb = bytearray(172 + 192)
         blob[:4], ssb[:4] = b"SPX1", b"SSB6"
-        blob[60:92] = ssb[4:36] = bytes.fromhex(args.model_sha)
+        blob[60:92] = ssb[4:36] = artifact[32:64]
         for offset, value in ((8, 1), (12, 2), (16, 3), (92, 1)):
             put(blob, "I", offset, value)
         put(ssb, "I", 36, 1)
@@ -69,6 +73,15 @@ def main() -> None:
                 raise AssertionError(f"oracle accepted {reason} mutation")
 
         accepts(blob.copy(), ssb.copy())
+        wrong_hash = blob.copy()
+        wrong_hash_seq = ssb.copy()
+        wrong_hash[60:92] = wrong_hash_seq[4:36] = sha256(artifact).digest()
+        rejects(wrong_hash, wrong_hash_seq, "artifact stored integrity hash")
+        corrupted_artifact = artifact.copy()
+        corrupted_artifact[64] ^= 1
+        args.model_artifact.write_bytes(corrupted_artifact)
+        rejects(blob.copy(), ssb.copy(), "model artifact integrity")
+        args.model_artifact.write_bytes(artifact)
         altered = blob.copy()
         put(altered, "i", 108, 24)
         rejects(altered, ssb.copy(), "known last prefill token")
