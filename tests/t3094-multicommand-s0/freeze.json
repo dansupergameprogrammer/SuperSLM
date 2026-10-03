@@ -1,5 +1,5 @@
 {
-  "version": "T-3094-S0-v1",
+  "version": "T-3094-S0-v2",
   "date": "2026-10-02",
   "decisions": ["D-SLM8047", "D-SLM8048"],
   "schema": "command.schema.json",
@@ -10,6 +10,7 @@
     "query_only_on": "Executable",
     "rejection": "zero exposed items and zero action attempts for every incomplete, invalid, over-cap, no-action or cancelled batch"
   },
+  "consumer_cap_for_corpus": 4,
   "population": {
     "general_held_out": 1000,
     "unique_compositional": {"correction": 40, "shared_argument": 40, "pronoun": 40, "nested_condition": 40, "parallel": 40, "at_cap": 40, "cap_plus_one": 40},

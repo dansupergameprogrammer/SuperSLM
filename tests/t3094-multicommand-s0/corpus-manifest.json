@@ -1,4 +1,5 @@
 {
+  "baseline_prompt_sha256": "21cd1c32973e8b75d82d711a6c8b11520bb42be0fb9adfa8145ee1f519e543e3",
   "counts": {
     "above_cap": 100,
     "ambiguous_executable": 40,
@@ -17,11 +18,11 @@
     "zero_action": 200
   },
   "development": 200,
-  "freeze_sha256": "cacd4fec67f782dd148f7fe5677bd959dd6e7c0809a355b852f3cf0abbdad5d5",
+  "freeze_sha256": "7eccf801870ba371b91eda1153ca7b2635e3c577a1966aa8495655d6ae8cccc4",
   "guide_sha256": "e0a0ad63a59d112e59195278fa5949a418a9a17f20f86aa35f90fc9753922ebd",
   "held_out": 1760,
   "resource_counts_sha256": "9e2250d8d54f5f5dd050231fa571ca7745bef61ba2af2ea5dc33e374a7718caa",
   "rows": 1960,
   "schema_sha256": "bcd9f7758991a1b5c1702343dd8128afb0f146e3fccbdb0f0ae00a38edf1080a",
-  "sha256": "49cbe8fa08140f2bbf8fdbbba51c5abaf2f2d57c2cbab8e38b910bb0d0167888"
+  "sha256": "0fb48638c9784c1244be736951effcdee702d956c6deb6a1640f36dfb012232a"
 }

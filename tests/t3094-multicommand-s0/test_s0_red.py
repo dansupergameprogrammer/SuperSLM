@@ -67,7 +67,9 @@ def test_frozen_population_and_hashes():
     manifest = json.loads((HERE / "corpus-manifest.json").read_text())
     rows = [json.loads(line) for line in (HERE / "corpus.jsonl").read_text(encoding="utf-8").splitlines()]
     assert hashlib.sha256((HERE / "corpus.jsonl").read_bytes()).hexdigest() == manifest["sha256"]
-    for key, file in (("guide_sha256", "annotation-guide.md"), ("schema_sha256", "command.schema.json"),
+    for key, file in (("guide_sha256", "annotation-guide.md"),
+                      ("baseline_prompt_sha256", "baseline-prompt.txt"),
+                      ("schema_sha256", "command.schema.json"),
                       ("freeze_sha256", "freeze.json"),
                       ("resource_counts_sha256", "resource-model-counts.json")):
         assert hashlib.sha256((HERE / file).read_bytes()).hexdigest() == manifest[key]
@@ -91,6 +93,48 @@ def test_resource_model_counts_frozen(guard):
     frozen = json.loads((HERE / "resource-model-counts.json").read_text())
     assert frozen[guard] == {"under": below, "over": above}
     assert below[guard] < above[guard]
+
+
+def test_unique_subcases_discriminate_their_named_action_semantics():
+    rows = [json.loads(line) for line in (HERE / "corpus.jsonl").read_text(encoding="utf-8").splitlines()]
+    unique = {name: [r for r in rows if r["id"].startswith(f"U-{name}-")]
+              for name in ("correction", "shared_argument", "pronoun", "nested_condition",
+                           "parallel", "at_cap", "cap_plus_one")}
+    assert all(len(part) == 40 for part in unique.values())
+    assert all(r["game_action_trace"]["retracted_target"] !=
+               r["game_action_trace"]["effective_target"] for r in unique["correction"])
+    assert all(r["game_action_trace"]["retracted_target"] !=
+               r["game_action_trace"]["effective_target"]
+               for r in rows if r["id"].startswith("G-correction-"))
+    assert all(r["game_action_trace"]["ordered_actions"] == ["scan", "hold"]
+               for r in unique["shared_argument"])
+    assert all(r["game_action_trace"]["they_refers_to"] and
+               r["game_action_trace"]["it_refers_to"] for r in unique["pronoun"])
+    nested = unique["nested_condition"]
+    assert {r["game_action_trace"]["target_clear"] for r in nested} == {False, True}
+    assert {r["game_action_trace"]["scout_confirmed"] for r in nested} == {False, True}
+    assert all(len(set(r["game_action_trace"]["parallel_actors"])) == 2
+               for r in unique["parallel"])
+    assert all(r["game_action_trace"]["expected_action_items"] == 4 and
+               not r["game_action_trace"]["wait_scheduled"] for r in unique["at_cap"])
+    assert all(r["game_action_trace"]["expected_action_items"] == 5 and
+               r["game_action_trace"]["wait_scheduled"] and
+               r["game_action_trace"]["wait_has_completion"] for r in unique["cap_plus_one"])
+    for condition in ("simple_trigger", "dependency", "ordering"):
+        pairs = {}
+        for r in rows:
+            if r["pair"] and r["game_action_trace"]["condition"] == condition:
+                pairs.setdefault(r["pair"], []).append(r)
+        assert len(pairs) == 40
+        for members in pairs.values():
+            assert len(members) == 2
+            a, b = members
+            assert (a["game_action_trace"]["actor"], a["game_action_trace"]["target"]) == (
+                b["game_action_trace"]["actor"], b["game_action_trace"]["target"])
+            assert {a["game_action_trace"]["wait_scheduled"],
+                    b["game_action_trace"]["wait_scheduled"]} == {False, True}
+            assert {a["game_action_trace"]["expected_action_items"],
+                    b["game_action_trace"]["expected_action_items"]} == {1, 2}
 
 
 @pytest.mark.parametrize("raw,shape_ok,canonical_ok", [
