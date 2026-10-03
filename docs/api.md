@@ -736,6 +736,46 @@ These apply to every host, including one that calls no new verb:
   so that the prefix's tokens and the continuation's tokens equal the whole
   text's tokens is the host's job.
 
+### Frozen-prefix save and restore (1.14.0 CPU ABI)
+
+`SSLM_HAS_PREFIX_SAVE_ABI` marks the availability of `sslm_prefix_save` and
+`sslm_prefix_restore`. Save accepts a frozen prefix and writes canonical `SPX1`
+bytes. Use the two-call buffer convention: a null or short buffer returns
+`SSLM_BUFFER_TOO_SMALL` and sets the exact byte count in `*n`. An unfrozen
+prefix is refused with `SSLM_INVALID_ARGUMENT`. A frozen prefix may be saved
+concurrently by multiple callers; releasing it during a save is caller
+undefined behavior.
+
+`SPX1` carries the CPU backend, producer version, model hash, KV precision,
+schema binding and walk state, current token, length and origin, hidden scale,
+five saturation counts, residual, and canonical K/V rows. Its exact size is
+`184 + hidden_size + length * bytes_per_token`. It omits page identities,
+page size, budget, and allocation history. The SHA-256 digest detects accidental
+changes to the bytes; it does not authenticate them. With a recomputed digest,
+an edited blob can choose any model-resolvable schema and valid walk state,
+length within the context cap, origin within length, valid current token,
+int32 mantissa, any int64 exponent, any saturation counts, and arbitrary
+residual and K/V bytes. Magic, backend, producer, model identity, and KV
+precision must match exactly.
+
+Restore accepts only a blob from this backend and producer. A producer version
+mismatch returns `SSLM_RESTORE_PRODUCER_MISMATCH`; model, precision, and schema
+mismatches have their distinct restore statuses. Every refusal clears `*out`.
+`parent_or_null` is a sharing hint: a matching frozen parent can provide full
+leading pages, while a null or nonmatching hint restores the same prefix
+privately when the pool has `ceil(length / B)` free pages. A private nested
+restore may return `SSLM_KV_POOL_EXHAUSTED` even where building the nested
+prefix against its parent was admitted. Releasing a hint while restore reads
+it is caller undefined behavior.
+
+Every blob written by this library and restored by the same release version
+(or the same development build) yields, on success, a prefix whose adopters
+emit the same tokens as adopters of the prefill-built prefix. Accidental byte
+changes are refused unless they collide under SHA-256. Development builds on
+one version line may accept one another's blobs, outside that fidelity promise.
+Model mapping refuses two schema names with the same nonzero FNV-1a 64-bit
+hash, or a name hashing to zero, so a saved schema hash resolves uniquely.
+
 ### Schema-constrained generation
 
 A schema is compiled offline (see [sslm_format.md](sslm_format.md)'s
@@ -774,7 +814,7 @@ reproducible, on the same certified platform, as an unconstrained one.
 
 ### Status causes
 
-`sslm_status` carries one success value (`SSLM_OK`) plus 29 distinct
+`sslm_status` carries one success value (`SSLM_OK`) plus 30 distinct
 rejection causes (an internal sentinel past the last real value is never
 returned or accepted as an argument), in five groups: argument/precondition
 rejections (a bad argument, a buffer too small, a misaligned buffer);
@@ -794,7 +834,8 @@ otherwise valid model and valid params, `SSLM_NUMERIC_STEP_REFUSED`,
 schema-content span on an unbound sequence; a prefix or restore whose
 schema doesn't match; a fixed span the schema's own DFA cannot reach; a
 schema the offline compiler could not prove satisfiable), the shared
-`SSLM_GPU_SHADER_BINARY_STALE` deployment-mismatch cause, plus one
+`SSLM_GPU_SHADER_BINARY_STALE` deployment-mismatch cause, the
+`SSLM_RESTORE_PRODUCER_MISMATCH` producer-version refusal (ordinal 30), plus one
 process-level resource-exhaustion cause distinct from a caller-supplied
 buffer running out.
 
