@@ -1,0 +1,27 @@
+{
+  "counts": {
+    "above_cap": 100,
+    "ambiguous_executable": 40,
+    "at_cap": 40,
+    "cancellation": 200,
+    "cap_plus_one": 40,
+    "conjunction": 100,
+    "correction": 140,
+    "nested_condition": 140,
+    "parallel": 140,
+    "pc2_tracked_wait": 120,
+    "pc2_trigger": 120,
+    "pronoun": 140,
+    "punctuation_free": 100,
+    "shared_argument": 140,
+    "zero_action": 200
+  },
+  "development": 200,
+  "freeze_sha256": "cacd4fec67f782dd148f7fe5677bd959dd6e7c0809a355b852f3cf0abbdad5d5",
+  "guide_sha256": "e0a0ad63a59d112e59195278fa5949a418a9a17f20f86aa35f90fc9753922ebd",
+  "held_out": 1760,
+  "resource_counts_sha256": "9e2250d8d54f5f5dd050231fa571ca7745bef61ba2af2ea5dc33e374a7718caa",
+  "rows": 1960,
+  "schema_sha256": "bcd9f7758991a1b5c1702343dd8128afb0f146e3fccbdb0f0ae00a38edf1080a",
+  "sha256": "49cbe8fa08140f2bbf8fdbbba51c5abaf2f2d57c2cbab8e38b910bb0d0167888"
+}

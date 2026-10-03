@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "commands": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": {"type": "string", "enum": ["fire", "move", "hold", "wait", "scan"]},
+          "subject": {"type": "string"},
+          "target": {"type": "string"},
+          "trigger": {"type": "string"},
+          "depends_on_previous": {"type": "boolean"}
+        },
+        "required": ["action", "subject", "target", "trigger", "depends_on_previous"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["commands"],
+  "additionalProperties": false
+}

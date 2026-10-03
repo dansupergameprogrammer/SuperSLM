@@ -1,0 +1,47 @@
+{
+  "version": "T-3094-S0-v1",
+  "date": "2026-10-02",
+  "decisions": ["D-SLM8047", "D-SLM8048"],
+  "schema": "command.schema.json",
+  "segmentation": "one item per independently executable action; a trigger is metadata; wait is an item only when separately scheduled and tracked with its own completion or cancellation",
+  "route": {
+    "input": "raw user utterance",
+    "outcomes": ["Executable(prompt)", "NoAction(reason)", "Cancelled(reason)"],
+    "query_only_on": "Executable",
+    "rejection": "zero exposed items and zero action attempts for every incomplete, invalid, over-cap, no-action or cancelled batch"
+  },
+  "population": {
+    "general_held_out": 1000,
+    "unique_compositional": {"correction": 40, "shared_argument": 40, "pronoun": 40, "nested_condition": 40, "parallel": 40, "at_cap": 40, "cap_plus_one": 40},
+    "pc2_pairs_per_condition": 40,
+    "pc2_conditions": ["simple_trigger", "dependency", "ordering"],
+    "cancellation": 100,
+    "zero_action": 100,
+    "ambiguous_executable": 40
+  },
+  "bars": {
+    "exact_count": 0.95,
+    "exact_ordered_action": 0.95,
+    "each_field": 0.95,
+    "whole_document": 0.85,
+    "each_stratum_whole_document": 0.80,
+    "pc2_whole_pairs_each_condition": "38/40",
+    "pc2_each_arm_each_condition": "38/40",
+    "cancellation_status_and_zero_query_action": "100/100",
+    "zero_action_status_and_zero_query_action": "100/100",
+    "ambiguous_executable_route": "40/40",
+    "structural_invalidity_or_partial_execution": 0,
+    "completed_over_cap_rejected": "all",
+    "budget_or_nonaccepting_executes_zero": "all"
+  },
+  "provisional_limits": {
+    "minItems": 8,
+    "recursion_depth": 8,
+    "nfa_states": 4096,
+    "dfa_states": 4096,
+    "token_transitions": 65536,
+    "serialized_mask_bytes": 1048576,
+    "tracked_temporary_bytes": 16777216
+  },
+  "limit_note": "Provisional admission values for S0. S1 measures and finalizes them before a green claim; each injected lower test limit uses the production guard. RSS is reported separately."
+}

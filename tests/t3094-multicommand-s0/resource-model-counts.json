@@ -1,0 +1,142 @@
+{
+  "dfa_states": {
+    "over": {
+      "dfa_states": 275,
+      "minItems": 1,
+      "nfa_states": 428,
+      "recursion_depth": 4,
+      "serialized_mask_bytes": 12316,
+      "token_transitions": 290,
+      "tracked_temporary_bytes": 72860
+    },
+    "under": {
+      "dfa_states": 261,
+      "minItems": 1,
+      "nfa_states": 406,
+      "recursion_depth": 4,
+      "serialized_mask_bytes": 11684,
+      "token_transitions": 274,
+      "tracked_temporary_bytes": 69508
+    }
+  },
+  "minItems": {
+    "over": {
+      "dfa_states": 393,
+      "minItems": 2,
+      "nfa_states": 592,
+      "recursion_depth": 4,
+      "serialized_mask_bytes": 17516,
+      "token_transitions": 409,
+      "tracked_temporary_bytes": 98764
+    },
+    "under": {
+      "dfa_states": 267,
+      "minItems": 1,
+      "nfa_states": 404,
+      "recursion_depth": 4,
+      "serialized_mask_bytes": 11932,
+      "token_transitions": 278,
+      "tracked_temporary_bytes": 69916
+    }
+  },
+  "nfa_states": {
+    "over": {
+      "dfa_states": 299,
+      "minItems": 1,
+      "nfa_states": 442,
+      "recursion_depth": 4,
+      "serialized_mask_bytes": 13356,
+      "token_transitions": 312,
+      "tracked_temporary_bytes": 76492
+    },
+    "under": {
+      "dfa_states": 263,
+      "minItems": 1,
+      "nfa_states": 400,
+      "recursion_depth": 4,
+      "serialized_mask_bytes": 11756,
+      "token_transitions": 274,
+      "tracked_temporary_bytes": 69164
+    }
+  },
+  "recursion_depth": {
+    "over": {
+      "dfa_states": 305,
+      "minItems": 1,
+      "nfa_states": 474,
+      "recursion_depth": 6,
+      "serialized_mask_bytes": 13604,
+      "token_transitions": 316,
+      "tracked_temporary_bytes": 79620
+    },
+    "under": {
+      "dfa_states": 285,
+      "minItems": 1,
+      "nfa_states": 438,
+      "recursion_depth": 5,
+      "serialized_mask_bytes": 12724,
+      "token_transitions": 296,
+      "tracked_temporary_bytes": 74580
+    }
+  },
+  "serialized_mask_bytes": {
+    "over": {
+      "dfa_states": 291,
+      "minItems": 1,
+      "nfa_states": 440,
+      "recursion_depth": 4,
+      "serialized_mask_bytes": 13020,
+      "token_transitions": 306,
+      "tracked_temporary_bytes": 75548
+    },
+    "under": {
+      "dfa_states": 263,
+      "minItems": 1,
+      "nfa_states": 400,
+      "recursion_depth": 4,
+      "serialized_mask_bytes": 11756,
+      "token_transitions": 274,
+      "tracked_temporary_bytes": 69164
+    }
+  },
+  "token_transitions": {
+    "over": {
+      "dfa_states": 303,
+      "minItems": 1,
+      "nfa_states": 458,
+      "recursion_depth": 4,
+      "serialized_mask_bytes": 13564,
+      "token_transitions": 320,
+      "tracked_temporary_bytes": 78364
+    },
+    "under": {
+      "dfa_states": 263,
+      "minItems": 1,
+      "nfa_states": 400,
+      "recursion_depth": 4,
+      "serialized_mask_bytes": 11756,
+      "token_transitions": 274,
+      "tracked_temporary_bytes": 69164
+    }
+  },
+  "tracked_temporary_bytes": {
+    "over": {
+      "dfa_states": 313,
+      "minItems": 1,
+      "nfa_states": 474,
+      "recursion_depth": 4,
+      "serialized_mask_bytes": 14020,
+      "token_transitions": 332,
+      "tracked_temporary_bytes": 80804
+    },
+    "under": {
+      "dfa_states": 263,
+      "minItems": 1,
+      "nfa_states": 400,
+      "recursion_depth": 4,
+      "serialized_mask_bytes": 11756,
+      "token_transitions": 274,
+      "tracked_temporary_bytes": 69164
+    }
+  }
+}
