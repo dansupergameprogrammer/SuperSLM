@@ -85,7 +85,8 @@ void DomainPopulation(const Fixture& fx,const std::vector<uint8_t>& one,Visit vi
     Digest(model);
     visit(HostileBlob{"model hash",std::move(model),SSLM_RESTORE_MODEL_MISMATCH,true});
     PKV_CHECK_MSG((uint64_t{1}<<53)+1 <= uint64_t(INT64_MAX) &&
-                  uint64_t(kHeader+896)+(((uint64_t{1}<<53)+1)*uint64_t(fx.BytesPerToken()))==one.size(),
+                  uint64_t(kHeader+ArtifactHiddenSize(fx))+
+                  (((uint64_t{1}<<53)+1)*uint64_t(fx.BytesPerToken()))==one.size(),
                   "2.3 L-wrap operand does not wrap the size formula onto n");
 }
 

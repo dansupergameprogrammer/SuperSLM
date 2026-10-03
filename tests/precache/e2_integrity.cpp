@@ -21,7 +21,7 @@ void PageRows(const Fixture& fx,sslm_kv_pool pool,sslm_prefix prefix,
             if(it==pages.end()) it=pages.emplace(physical,PeekPage(fx,pool,physical)).first;
             const size_t page_off=((size_t(l)*2+half)*H+h)*size_t(fx.B())*D+
                                   size_t(pos%fx.B())*D;
-            const size_t blob_off=kHeader+HiddenSize(fx)+
+            const size_t blob_off=kHeader+ArtifactHiddenSize(fx)+
                 ((size_t(l)*2+half)*H+h)*size_t(L)*D+size_t(pos)*D;
             if(it->second.size()<page_off+D || blob.size()<blob_off+D ||
                std::memcmp(it->second.data()+page_off,blob.data()+blob_off,D)!=0) ++differing;
@@ -153,7 +153,7 @@ void InDomain23b() {
             PutLe64(b,144+i*8,count);
             bounded(std::move(b),"saturation count");
         }
-    const size_t rows=kHeader+HiddenSize(fx);
+    const size_t rows=kHeader+ArtifactHiddenSize(fx);
     const size_t half_rows=size_t(65)*fx.geo.kv_heads*fx.geo.head_dim;
     const std::array<std::pair<const char*,size_t>,7> byte_edges{{
         {"residual first",kHeader},{"residual last",rows-1},
@@ -182,20 +182,37 @@ void InDomain23b() {
         PKV_CHECK_MSG(int(st)>=0 && int(st)<int(SSLM_STATUS_NEXT_FREE),
                       "2.3b last-valid walk returned unnamed status %d",int(st));
         if(st==SSLM_OK && candidate) {
+            sslm_schema schema=nullptr;
+            Status(sslm_schema_lookup(bound_fx.model,"schema_two",&schema),
+                   SSLM_OK,"2.3b last-valid-walk schema lookup");
+            sslm_seq unbound=nullptr;
+            Status(sslm_seq_create_budgeted(bound_fx.model,&bound_pool.pool,32,&unbound),
+                   SSLM_OK,"2.3b last-valid-walk unbound adopter");
+            if(unbound) {
+                Status(sslm_seq_adopt_prefix(unbound,candidate),
+                       SSLM_PREFIX_SCHEMA_MISMATCH,
+                       "2.3b unbound adopter rejects schema progress");
+                sslm_seq_release(unbound);
+            }
             sslm_seq adopter=nullptr;
             Status(sslm_seq_create_budgeted(bound_fx.model,&bound_pool.pool,32,&adopter),
-                   SSLM_OK,"2.3b last-valid-walk adopter");
+                   SSLM_OK,"2.3b last-valid-walk bound adopter");
             if(adopter) {
-                Status(sslm_seq_adopt_prefix(adopter,candidate),SSLM_OK,
-                       "2.3b last-valid-walk adopt");
+                if(schema)
+                    Status(sslm_seq_set_schema(adopter,schema),SSLM_OK,
+                           "2.3b bind last-valid-walk adopter");
+                const auto adopt=sslm_seq_adopt_prefix(adopter,candidate);
+                Status(adopt,SSLM_OK,"2.3b last-valid-walk adopt");
                 std::vector<int32_t> tokens;
-                const auto forward=DecodeN(bound_fx.model,adopter,16,&tokens);
-                PKV_CHECK_MSG(int(forward)>=0 && int(forward)<int(SSLM_STATUS_NEXT_FREE) &&
-                              (forward!=SSLM_OK || tokens.size()==16),
-                              "2.3b last-valid walk has unnamed/short forward outcome");
-                std::printf("2.3b boundary=walk-last outcome=%s tokens=%zu forward=%s (%d)\n",
-                            forward==SSLM_OK ? "decoded16" : "named-forward-status",
-                            tokens.size(),AbiStatusName(forward),int(forward));
+                if(adopt==SSLM_OK) {
+                    const auto forward=DecodeN(bound_fx.model,adopter,16,&tokens);
+                    PKV_CHECK_MSG(int(forward)>=0 && int(forward)<int(SSLM_STATUS_NEXT_FREE) &&
+                                  (forward!=SSLM_OK || tokens.size()==16),
+                                  "2.3b last-valid walk has unnamed/short forward outcome");
+                    std::printf("2.3b boundary=walk-last outcome=%s tokens=%zu forward=%s (%d)\n",
+                                forward==SSLM_OK ? "decoded16" : "named-forward-status",
+                                tokens.size(),AbiStatusName(forward),int(forward));
+                }
                 sslm_seq_release(adopter);
             }
             sslm_prefix_release(candidate);

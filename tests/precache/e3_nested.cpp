@@ -22,7 +22,7 @@ std::vector<uint8_t> LastSharedVByteChanged(const Fixture& fx,
     const int64_t origin=1000;
     const size_t pos=size_t((origin/fx.B())*fx.B()-1); // last row in shared page 61.
     const size_t H=fx.geo.kv_heads,D=fx.geo.head_dim;
-    const size_t offset=kHeader+HiddenSize(fx)+
+    const size_t offset=kHeader+ArtifactHiddenSize(fx)+
         ((size_t(fx.geo.layers-1)*2+1)*H+(H-1))*size_t(origin)*D+pos*D+(D-1);
     PKV_CHECK_MSG(offset<parent_blob.size() && pos==991,
                   "2.6 last-byte last-layer V operand is out of range");

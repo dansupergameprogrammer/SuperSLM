@@ -58,7 +58,7 @@ void SyntheticShapes41() {
             if(!twin) return;
             const auto b=Save(twin);
             if(!RequireBlob(b,"4.1 synthetic geometries")) return;
-            PKV_CHECK_MSG(b.size()==kHeader+HiddenSize(fx)+size_t(L)*fx.BytesPerToken(),
+            PKV_CHECK_MSG(b.size()==kHeader+ArtifactHiddenSize(fx)+size_t(L)*fx.BytesPerToken(),
                           "4.1 B=%d L=%d SPX1 length mismatch",B,L);
             sslm_prefix copy=nullptr;
             if(Restored(fx,&target.pool,b,nullptr,restored,&copy)) {
@@ -334,8 +334,8 @@ void Truncation21() {
     PagePool pool(fx.model, 32);
     const auto long_blob=RootBlob(fx,1000);
     if(!RequireBlob(long_blob,"2.1 L=1000")) return;
-    PKV_CHECK_MSG(good.size()==kHeader+896+6144,
-                  "2.1 synthetic L=1 operand is not 184+896+6144 bytes");
+    PKV_CHECK_MSG(good.size()==kHeader+ArtifactHiddenSize(fx)+fx.BytesPerToken(),
+                  "2.1 synthetic L=1 operand does not match CFG1 residual and K/V geometry");
     ProbeExactlyFreeOneState(fx,&pool.pool,32);
     TruncationPopulation(good,long_blob,[&](const HostileBlob& c) {
         sslm_prefix out=nullptr;
