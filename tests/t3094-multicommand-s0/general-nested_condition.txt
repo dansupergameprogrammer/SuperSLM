@@ -1,0 +1,100 @@
+If north ridge is clear and the scout confirms it, move Alpha wing there.
+Bravo wing goes north ridge only once it is clear and scout radio says so.
+When the scout reports north ridge clear, send Charlie team in.
+Delta scout to north ridge if clearance holds and recon agrees.
+Move Echo battery north ridge provided both clearance and scout report arrive.
+Foxtrot patrol, north ridge only after clear status plus scout confirmation.
+If recon verifies clear ground at north ridge, advance Golf squad.
+Hotel drone may fly north ridge when it is clear and scout signs off.
+India unit: wait for clear north ridge and a scout yes before moving.
+Juliet group to north ridge, but only if both checks are green.
+Alpha wing, east bridge if it is open and the scout confirms.
+Only send Bravo wing east bridge after clear status and recon confirmation.
+Charlie team moves east bridge when scout verifies the bridge is clear.
+If east bridge clearance and scout report agree, Delta scout moves there.
+Echo battery to east bridge, contingent on clear span and scout signoff.
+Foxtrot patrol, go east bridge if clear and if the scout says yes.
+Golf squad holds off east bridge until two things: clear and recon approved.
+Hotel drone may reach east bridge once clearance and scout call arrive.
+India unit to east bridge on clear status, provided recon confirms it.
+Juliet group, take east bridge after a clear report from the scout.
+South gate clear, scout agrees: move Alpha wing there.
+Bravo wing to south gate only if clear and verified by scout.
+If the scout confirms south gate is clear, send Charlie team.
+Delta scout, move south gate when clearance and recon line up.
+Echo battery goes south gate provided clear ground plus scout approval.
+Foxtrot patrol, south gate after the clear check and the scout check.
+Golf squad to south gate if both clearance and scout call are positive.
+Hotel drone, fly south gate only on clear status confirmed by scout.
+India unit moves south gate when recon has verified clearance.
+Juliet group, south gate is conditional on clear ground and scout signoff.
+If west tower is clear and recon verifies it, move Alpha wing.
+Bravo wing, go west tower once clear status and scout approval both land.
+Charlie team to west tower if the scout confirms it is clear.
+Delta scout, west tower only when clearance is backed by recon.
+Echo battery may move west tower provided clear tower and scout yes.
+Foxtrot patrol, take west tower when two reports agree: clear and scout.
+Golf squad, if west tower clears and scout concurs, advance.
+Hotel drone heads west tower after clearance verified by the scout.
+India unit, move west tower on scout-confirmed clear status.
+Juliet group to west tower, conditional on a clear recon report.
+Alpha wing to upper deck if it is clear and the scout verifies that.
+Only after a clear upper deck and recon yes, move Bravo wing.
+Charlie team goes upper deck when scout confirms clearance.
+Delta scout, move upper deck provided clear status plus scout signoff.
+Echo battery to upper deck if both the area and recon check pass.
+Foxtrot patrol, upper deck once clear and verified by scout.
+If scout radio confirms upper deck is clear, advance Golf squad.
+Hotel drone may fly upper deck on a scout-confirmed clear report.
+India unit, upper deck move waits on clearance and scout approval.
+Juliet group to upper deck, assuming both clear status and recon yes.
+Lower tunnel clear and scout approved? Move Alpha wing there.
+Bravo wing enters lower tunnel only after both clearance and recon.
+Charlie team, take lower tunnel if scout says it is clear.
+Delta scout to lower tunnel provided clear route and scout confirmation.
+Echo battery, lower tunnel after clearance is verified by recon.
+Foxtrot patrol, enter lower tunnel when clear and scout signs off.
+If recon confirms the lower tunnel is clear, move Golf squad in.
+Hotel drone may enter lower tunnel once two reports agree on clear.
+India unit, lower tunnel conditional on clear status and scout call.
+Juliet group to lower tunnel, but only with clear-and-confirmed report.
+Alpha wing to river crossing after it clears and scout checks it.
+Bravo wing, move river crossing if both clearance and recon are positive.
+Charlie team crosses to river crossing when scout confirms clear banks.
+Delta scout, river crossing only on clear status verified by scout.
+Echo battery may advance river crossing provided recon confirms clear.
+Foxtrot patrol, get river crossing once scout verifies it is clear.
+Golf squad, river crossing move requires clearance plus scout yes.
+Hotel drone flies river crossing after clear ground and recon signoff.
+India unit to river crossing when both the local and scout checks clear.
+Juliet group, take river crossing if clear and scout has confirmed.
+Supply depot clear and scout agreed means Alpha wing moves in.
+Bravo wing to supply depot on clear status verified by recon.
+Charlie team, enter supply depot if scout confirms clearance.
+Delta scout may move supply depot provided it is clear and checked.
+Echo battery to supply depot only after clear status and scout report.
+Foxtrot patrol, supply depot if clear ground and recon say yes.
+Golf squad, move supply depot when the scout certifies it clear.
+Hotel drone flies supply depot once clearance gets scout confirmation.
+India unit, supply depot move depends on both clear and recon good.
+Juliet group to supply depot, but only on scout-confirmed clear.
+Alpha wing, if radar mast is clear and scout agrees, move there.
+Bravo wing goes radar mast after clear report and scout verification.
+Charlie team to radar mast when both clearance and recon approve.
+Delta scout, radar mast only if the scout confirms it clear.
+Echo battery may approach radar mast with scout-verified clearance.
+Foxtrot patrol, take radar mast after two checks: clear and scout.
+Golf squad, advance radar mast if clear and confirmed by recon.
+Hotel drone flies radar mast once the clear report gets scout signoff.
+India unit, radar mast move conditional on scout-confirmed clear status.
+Juliet group to radar mast when clearance and scout approval coincide.
+If landing zone is clear and scout confirms, move Alpha wing.
+Bravo wing, landing zone only after clearance plus recon signoff.
+Charlie team enters landing zone if scout confirms it is clear.
+Delta scout to landing zone when clear status has scout backing.
+Echo battery, take landing zone provided clear and scout-approved.
+Foxtrot patrol, move landing zone on clear ground and recon yes.
+Golf squad, landing zone if the scout verifies clearance.
+Hotel drone flies landing zone after both reports say clear.
+India unit, landing zone move on scout-confirmed clear status.
+Juliet group to landing zone, but only after clear and recon confirmation.

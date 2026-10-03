@@ -1,0 +1,100 @@
+Alpha wing to south gate—scratch that, north ridge.
+Bravo, I said south gate; destination is north ridge.
+Charlie team, redirect from south gate to north ridge.
+Delta scout, north ridge, not the south gate I mentioned.
+Echo battery: cancel that south gate destination; use north ridge.
+Foxtrot patrol, south gate was wrong. Move north ridge.
+Golf squad to, uh, not south gate. North ridge.
+Hotel drone, change the pending south gate move to north ridge.
+India unit, revise destination: south gate becomes north ridge.
+Juliet group, disregard south gate; head north ridge.
+Alpha wing, south gate—no, east bridge.
+Bravo wing, replace south gate with east bridge on that move.
+Charlie, wrong site: east bridge rather than south gate.
+Delta scout, I take back south gate; go east bridge.
+Echo battery, south gate isn't it. East bridge, please.
+Foxtrot patrol, correction to your destination, east bridge.
+Golf squad, turn that south gate order into east bridge.
+Hotel drone, not south gate, east bridge is the move.
+India unit, amend the south gate move: east bridge.
+Juliet group, wait, east bridge instead of south gate.
+Alpha wing, west tower was wrong; south gate.
+Bravo wing to west tower, sorry—make it south gate.
+Charlie team, revise west tower destination to south gate.
+Delta scout, don't go west tower; south gate instead.
+Echo battery, correction, south gate after all, not west tower.
+Foxtrot patrol, swap west tower for south gate.
+Golf squad, west tower? No. Move south gate.
+Hotel drone, undo the west tower target; go south gate.
+India unit, I meant south gate rather than west tower.
+Juliet group, reroute that west tower move to south gate.
+Alpha wing, south gate—hold on, west tower.
+Bravo, scratch south gate and move to west tower.
+Charlie team, destination correction from south gate to west tower.
+Delta scout, I got the site wrong; west tower, not south gate.
+Echo battery, west tower replaces the south gate move.
+Foxtrot patrol, cancel south gate routing, take west tower.
+Golf squad, west tower is where I meant, not south gate.
+Hotel drone, no south gate; fly to west tower.
+India unit, amend south gate to west tower.
+Juliet group, correction for that move: west tower.
+Alpha wing, south gate—actually upper deck.
+Bravo wing, old destination south gate; new one upper deck.
+Charlie team, move upper deck in place of south gate.
+Delta scout, scrap the south gate location. Upper deck.
+Echo battery, I misspoke: upper deck, not south gate.
+Foxtrot patrol, change the south gate order to upper deck.
+Golf squad, head upper deck instead of the south gate.
+Hotel drone, redirect from south gate to upper deck.
+India unit, south gate was a slip; move upper deck.
+Juliet group, use upper deck for that move, not south gate.
+Alpha wing, the south gate instruction should say lower tunnel.
+Bravo, no south gate; lower tunnel, move there.
+Charlie team, replace south gate with lower tunnel.
+Delta scout, correct the destination to lower tunnel.
+Echo battery, lower tunnel rather than the south gate.
+Foxtrot patrol, south gate crossed out; lower tunnel entered.
+Golf squad, I want lower tunnel, not south gate.
+Hotel drone, revise your south gate route to lower tunnel.
+India unit, wrong call, lower tunnel is your destination.
+Juliet group, south gate? Sorry. Lower tunnel.
+Alpha wing, south gate was the draft; river crossing is final.
+Bravo wing, divert the south gate move to river crossing.
+Charlie team, edit that destination to river crossing.
+Delta scout, no, river crossing in place of south gate.
+Echo battery, disregard south gate and take river crossing.
+Foxtrot patrol, my correction is river crossing, not south gate.
+Golf squad, I said south gate by mistake; river crossing.
+Hotel drone, replace the south gate route with river crossing.
+India unit, steer toward river crossing instead of south gate.
+Juliet group, amended order: river crossing, not south gate.
+Alpha wing, south gate is wrong, supply depot.
+Bravo wing, change south gate to supply depot.
+Charlie team, move supply depot rather than south gate.
+Delta scout, ignore my south gate call; supply depot.
+Echo battery, new destination supply depot; old was south gate.
+Foxtrot patrol, cancel that south gate waypoint, use supply depot.
+Golf squad, supply depot is the corrected move.
+Hotel drone, not the south gate, the supply depot.
+India unit, revise the move from south gate to supply depot.
+Juliet group, I meant supply depot where I said south gate.
+Alpha wing, south gate—correction, radar mast.
+Bravo wing, shift the destination to radar mast.
+Charlie team, no south gate, go radar mast.
+Delta scout, the south gate order should target radar mast.
+Echo battery, scratch that site and move radar mast.
+Foxtrot patrol, replace south gate with radar mast.
+Golf squad, radar mast, not south gate. Move.
+Hotel drone, update destination: radar mast, cancel south gate.
+India unit, I garbled it; radar mast instead.
+Juliet group, wrong move target, radar mast is right.
+Alpha wing, south gate—nope, landing zone.
+Bravo wing, strike south gate; move landing zone.
+Charlie team, the destination is landing zone, not south gate.
+Delta scout, correct the south gate move to landing zone.
+Echo battery, change course to landing zone.
+Foxtrot patrol, disregard south gate and take landing zone.
+Golf squad, I retract south gate; landing zone is final.
+Hotel drone, sorry, fly landing zone instead.
+India unit, south gate was a mistake. Go landing zone.
+Juliet group, amend the destination from south gate to landing zone.

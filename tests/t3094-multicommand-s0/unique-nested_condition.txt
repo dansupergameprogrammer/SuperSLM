@@ -1,0 +1,40 @@
+Alpha wing, move north ridge only if scout verifies the clearance report.
+If north ridge looks open, still require scout confirmation before moving Bravo wing.
+Charlie team waits for both: north ridge clear and scout agreed, then moves.
+Delta scout, take north ridge when clear status is corroborated by recon.
+Echo battery moves north ridge provided the scout also confirms it is clear.
+Foxtrot patrol, no north ridge move unless clearance and scout word coincide.
+Golf squad to north ridge if the clear report survives the scout check.
+Hotel drone, fly north ridge after the scout verifies that it is clear.
+India unit, move north ridge only on scout-backed clearance.
+Juliet group to north ridge when clear ground is confirmed by recon.
+Alpha wing to east bridge if clear, but only after scout agrees.
+Bravo wing, east bridge move requires scout verification of the clear signal.
+Charlie team goes east bridge once the scout confirms clear passage.
+Delta scout, take east bridge if the clear report is backed by recon.
+Echo battery to east bridge after clearance plus independent scout yes.
+Foxtrot patrol, no east bridge movement until clear and confirmed.
+Golf squad advances east bridge provided scout verifies the opening.
+Hotel drone, fly east bridge when clearance has a scout check.
+India unit, east bridge only if recon confirms clear status.
+Juliet group moves east bridge after both clear and scout green.
+Alpha wing, south gate if clear status gets scout confirmation.
+Bravo wing to south gate provided the scout verifies clearance.
+Charlie team, no south gate advance until recon confirms it is clear.
+Delta scout takes south gate when the clear report is checked.
+Echo battery moves south gate if clearance and scout approval both land.
+Foxtrot patrol, south gate only after a scout-backed clear call.
+Golf squad to south gate once recon validates clear ground.
+Hotel drone may fly south gate when the scout confirms clearance.
+India unit, move south gate if the clear flag is confirmed by scout.
+Juliet group takes south gate only with a verified clear report.
+Alpha wing, west tower if recon agrees it is clear.
+Bravo wing to west tower after a scout check of clearance.
+Charlie team, west tower movement requires both clear and scout yes.
+Delta scout moves west tower provided clearance is confirmed.
+Echo battery, take west tower only if the scout backs the clear call.
+Foxtrot patrol, west tower after scout verification of open ground.
+Golf squad advances west tower if recon signs off on clear status.
+Hotel drone, fly west tower when both clearance and scout agree.
+India unit to west tower only on verified clearance.
+Juliet group, west tower move if the scout confirms the clear report.

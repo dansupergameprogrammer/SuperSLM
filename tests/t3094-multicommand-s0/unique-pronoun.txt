@@ -1,0 +1,40 @@
+Alpha wing to north ridge, and have them scan it when there.
+Bravo wing, move north ridge; once they arrive, check it.
+Charlie team, send them north ridge and let them sweep it.
+Delta scout goes north ridge; they inspect it afterward.
+Echo battery, position it north ridge, then have it scan there.
+Foxtrot patrol, get them north ridge and ask them to search it.
+Golf squad moves north ridge; they should look it over.
+Hotel drone, fly it north ridge, it can survey that ridge.
+India unit to north ridge; have them run sensors there.
+Juliet group, take them north ridge, then they check it.
+Alpha wing to east bridge; they scan it after the move.
+Bravo wing, send them east bridge, and let them sweep it.
+Charlie team goes east bridge; have them inspect that span.
+Delta scout, move them east bridge; they check it there.
+Echo battery, shift it east bridge, let it search nearby.
+Foxtrot patrol reaches east bridge; they should survey it.
+Golf squad, take them east bridge and ask them to scan it.
+Hotel drone flies east bridge; it looks it over.
+India unit, get them east bridge, then they run sensors there.
+Juliet group moves east bridge; have them check that bridge.
+Alpha wing to south gate; once there, have them scan it.
+Bravo wing, move them south gate, they can inspect it.
+Charlie team, send them south gate and have them sweep there.
+Delta scout reaches south gate; they check that gate afterward.
+Echo battery, shift it south gate and let it search there.
+Foxtrot patrol, get them south gate; they should look it over.
+Golf squad to south gate; have them run sensors at it.
+Hotel drone flies south gate; it surveys that spot.
+India unit, take them south gate, let them scan it.
+Juliet group, south gate first; they inspect it second.
+Alpha wing moves west tower; have them scan it on arrival.
+Bravo wing, send them west tower, they can sweep it.
+Charlie team, move them west tower and let them inspect there.
+Delta scout goes west tower; they search it afterward.
+Echo battery, position it west tower, let it scan from there.
+Foxtrot patrol reaches west tower; have them check it.
+Golf squad, get them west tower, then they survey it.
+Hotel drone flies west tower; it looks over that tower.
+India unit, take them west tower; they run sensors there.
+Juliet group to west tower, and have them inspect it after.

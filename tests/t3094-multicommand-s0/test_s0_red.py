@@ -22,6 +22,9 @@ from sslm_convert_schema import SchemaCompileError, compile_schema_to_mask_pages
 from reference import (canonical_walk, consumer_contract, grade_pc2, parse_scm1,
                        parse_shape, scm1_account, write_scm1, grade_semantics, semantic_pass)  # noqa: E402
 from resource_pairs import DIAGNOSTICS, pair  # noqa: E402
+from keyword_catalogue import ALLOWED, ANNOTATIONS, KEYWORDS, VALUES, node  # noqa: E402
+from diversity import BANNED_TRACE_FIELDS, census, gate, rows as corpus_rows, trace_keys  # noqa: E402
+from assemble_corpus import build as authored_population  # noqa: E402
 
 SCHEMA = json.loads((HERE / "command.schema.json").read_text(encoding="utf-8"))
 BYTE_VOCAB = tuple(bytes([i]) for i in range(256))
@@ -71,20 +74,49 @@ def test_frozen_population_and_hashes():
                       ("baseline_prompt_sha256", "baseline-prompt.txt"),
                       ("schema_sha256", "command.schema.json"),
                       ("freeze_sha256", "freeze.json"),
-                      ("resource_counts_sha256", "resource-model-counts.json")):
+                      ("resource_counts_sha256", "resource-model-counts.json"),
+                      ("annotation_input_sha256", "annotation-input.jsonl"),
+                      ("diversity_report_sha256", "diversity-report.json"),
+                      ("assembler_sha256", "assemble_corpus.py"),
+                      ("diversity_script_sha256", "diversity.py"),
+                      ("keyword_catalogue_sha256", "keyword_catalogue.py")):
         assert hashlib.sha256((HERE / file).read_bytes()).hexdigest() == manifest[key]
+    assert all(hashlib.sha256((HERE / file).read_bytes()).hexdigest() == digest
+               for file, digest in manifest["authored_source_sha256"].items())
+    assert json.loads((HERE / "freeze.json").read_text())["version"] == "T-3094-S0-v3"
     assert len(rows) == manifest["rows"] == 1960
     assert len({r["id"] for r in rows}) == len(rows)
     assert len({r["utterance"] for r in rows}) == len(rows)
     assert sum(r["split"] == "held_out" for r in rows) == 1760
     assert sum(r["split"] == "development" for r in rows) == 200
-    assert all(r["source_session"].startswith(r["split"] + "-") for r in rows)
+    assert all(r["provenance"] == "individually_authored_synthetic" for r in rows)
+    assert not ({r["source_session"] for r in rows if r["split"] == "held_out"} &
+                {r["source_session"] for r in rows if r["split"] == "development"})
+    assert not ({r["speaker_id"] for r in rows if r["split"] == "held_out"} &
+                {r["speaker_id"] for r in rows if r["split"] == "development"})
+    annotation = [json.loads(line) for line in (HERE / "annotation-input.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(annotation) == 1760
+    assert {a["case_id"] for a in annotation} == {r["annotation_case_id"] for r in rows if r["split"] == "held_out"}
+    assert all(set(a) == {"case_id", "utterance", "game_action_trace"} for a in annotation)
+    assert not any(key in BANNED_TRACE_FIELDS for r in rows for key in trace_keys(r["game_action_trace"]))
     counts = manifest["counts"]
     assert all(counts[name] == 40 for name in ("at_cap", "cap_plus_one", "ambiguous_executable"))
-    assert counts["pc2_trigger"] == counts["pc2_tracked_wait"] == 120
+    assert counts["pc2"] == 240
     assert counts["cancellation"] == counts["zero_action"] == 200  # 100 general + 100 dedicated
     pairs = [r["pair"] for r in rows if r["pair"]]
     assert len(pairs) == 240 and all(n == 2 for n in __import__("collections").Counter(pairs).values())
+
+
+def test_v3_diversity_freeze_and_report():
+    frozen = json.loads((HERE / "freeze.json").read_text())["diversity_gates"]
+    report = census(corpus_rows())
+    assert report == {k: v for k, v in json.loads((HERE / "diversity-report.json").read_text()).items()
+                      if k != "gate_failures"}
+    assert gate(report, frozen) == []
+
+
+def test_authored_population_repackages_exactly():
+    assert authored_population() == corpus_rows()
 
 
 @pytest.mark.parametrize("guard", tuple(DIAGNOSTICS))
@@ -101,29 +133,31 @@ def test_unique_subcases_discriminate_their_named_action_semantics():
               for name in ("correction", "shared_argument", "pronoun", "nested_condition",
                            "parallel", "at_cap", "cap_plus_one")}
     assert all(len(part) == 40 for part in unique.values())
-    assert all(r["game_action_trace"]["retracted_target"] !=
-               r["game_action_trace"]["effective_target"] for r in unique["correction"])
-    assert all(r["game_action_trace"]["retracted_target"] !=
-               r["game_action_trace"]["effective_target"]
-               for r in rows if r["id"].startswith("G-correction-"))
-    assert all(r["game_action_trace"]["ordered_actions"] == ["scan", "hold"]
+    def events(row, name):
+        return [e for e in row["game_action_trace"]["events"] if e["event"] == name]
+    assert all(events(r, "utterance_revision") and
+               events(r, "utterance_revision")[0]["discarded_place"] != r["game_action_trace"]["target"]
+               for r in unique["correction"])
+    assert all([e["task"] for e in events(r, "task_queued")] == ["scan", "hold"]
                for r in unique["shared_argument"])
-    assert all(r["game_action_trace"]["they_refers_to"] and
-               r["game_action_trace"]["it_refers_to"] for r in unique["pronoun"])
+    assert all([e["task"] for e in events(r, "task_queued")] == ["move", "scan"]
+               for r in unique["pronoun"])
     nested = unique["nested_condition"]
-    assert {r["game_action_trace"]["target_clear"] for r in nested} == {False, True}
-    assert {r["game_action_trace"]["scout_confirmed"] for r in nested} == {False, True}
-    assert all(len(set(r["game_action_trace"]["parallel_actors"])) == 2
+    assert all({e["name"] for e in events(r, "condition_source_registered")} ==
+               {"area_clear", "scout_confirmation"} for r in nested)
+    assert all(len({r["game_action_trace"]["actor"],
+                    events(r, "task_queued")[1]["actor"]}) == 2
                for r in unique["parallel"])
-    assert all(r["game_action_trace"]["expected_action_items"] == 4 and
-               not r["game_action_trace"]["wait_scheduled"] for r in unique["at_cap"])
-    assert all(r["game_action_trace"]["expected_action_items"] == 5 and
-               r["game_action_trace"]["wait_scheduled"] and
-               r["game_action_trace"]["wait_has_completion"] for r in unique["cap_plus_one"])
+    assert all([e["task"] for e in events(r, "task_queued")] ==
+               ["move", "scan", "hold", "fire"] and events(r, "signal_listener_registered")
+               for r in unique["at_cap"])
+    assert all([e["task"] for e in events(r, "task_queued")] ==
+               ["move", "scan", "hold", "signal_watch", "fire"] and
+               events(r, "completion_callback_registered") for r in unique["cap_plus_one"])
     for condition in ("simple_trigger", "dependency", "ordering"):
         pairs = {}
         for r in rows:
-            if r["pair"] and r["game_action_trace"]["condition"] == condition:
+            if r["pair"] and r["pair"].startswith("P-" + condition + "-"):
                 pairs.setdefault(r["pair"], []).append(r)
         assert len(pairs) == 40
         for members in pairs.values():
@@ -131,10 +165,9 @@ def test_unique_subcases_discriminate_their_named_action_semantics():
             a, b = members
             assert (a["game_action_trace"]["actor"], a["game_action_trace"]["target"]) == (
                 b["game_action_trace"]["actor"], b["game_action_trace"]["target"])
-            assert {a["game_action_trace"]["wait_scheduled"],
-                    b["game_action_trace"]["wait_scheduled"]} == {False, True}
-            assert {a["game_action_trace"]["expected_action_items"],
-                    b["game_action_trace"]["expected_action_items"]} == {1, 2}
+            assert {r["id"][-1] for r in members} == {"T", "W"}
+            assert sum(bool(events(r, "completion_callback_registered")) for r in members) == 1
+            assert sum(bool(events(r, "signal_listener_registered")) for r in members) == 1
 
 
 @pytest.mark.parametrize("raw,shape_ok,canonical_ok", [
@@ -170,6 +203,14 @@ def test_compound_token_directions_reference():
     assert canonical_walk(raw, good) == parse_shape(raw)
 
 
+def test_independent_keyword_catalogue_is_closed():
+    assert KEYWORDS == set(VALUES)
+    assert set(ALLOWED) == {"root", "array", "item", "enum", "subject", "target", "trigger", "boolean"}
+    assert all(allowed <= KEYWORDS for allowed in ALLOWED.values())
+    assert all(ANNOTATIONS <= allowed for allowed in ALLOWED.values())
+    assert sum(len(KEYWORDS - allowed) for allowed in ALLOWED.values()) >= 400
+
+
 def test_scm1_reference_corruption():
     # One state, one token self-loop; actual wire format and independent offsets.
     data = (struct.pack("<4sIIIII", b"SCM1", 1, 1, 2, 1, 0)
@@ -196,12 +237,27 @@ def test_consumer_reference_atomicity():
 
 
 def test_pc2_reference_discrimination():
-    fire = (command(),)
-    wait_fire = (command("wait"), command(dependency=True))
-    gold = [(fire, wait_fire)] * 40
-    assert grade_pc2(gold, gold)["passes"]
-    assert not grade_pc2(gold, [(wait_fire, wait_fire)] * 40)["passes"]
-    assert not grade_pc2(gold, [(fire, fire)] * 40)["passes"]
+    rows = corpus_rows()
+    for condition in ("simple_trigger", "dependency", "ordering"):
+        members = {}
+        for row in rows:
+            if row["pair"] and row["pair"].startswith("P-" + condition + "-"):
+                members.setdefault(row["pair"], {})[row["id"][-1]] = row
+        assert len(members) == 40
+        gold = []
+        for arms in members.values():
+            def event_commands(row):
+                trace = row["game_action_trace"]
+                tasks = [event["task"] for event in trace["events"] if event["event"] == "task_queued"]
+                return tuple(command("wait" if task == "signal_watch" else task,
+                                     subject=trace["actor"], target=trace["target"],
+                                     dependency=task == "fire" and "signal_watch" in tasks)
+                             for task in tasks)
+            gold.append((event_commands(arms["T"]), event_commands(arms["W"])))
+        assert len(set(str(pair) for pair in gold)) == 40  # actor/target matched but varied across pairs
+        assert grade_pc2(gold, gold)["passes"]
+        assert not grade_pc2(gold, [(right, right) for _, right in gold])["passes"]
+        assert not grade_pc2(gold, [(left, left) for left, _ in gold])["passes"]
 
 
 def test_semantic_reference_valid_json_error_and_no_action_hallucination():
@@ -290,66 +346,43 @@ def test_compound_opening_masked_and_closing_enabled_on_actual_rows():
     assert closing_target == ordinary_target, "compound close destination"
 
 
-@pytest.mark.parametrize("keyword", ["maxItems", "prefixItems", "contains", "uniqueItems", "$ref"])
-def test_recursive_array_keyword_refusal(keyword):
-    schema = json.loads(json.dumps(SCHEMA))
-    schema["properties"]["commands"][keyword] = 2 if keyword == "maxItems" else True
-    try:
-        compile_schema_to_mask_pages(SCHEMA, BYTE_VOCAB, special_ids=frozenset())
-    except SchemaCompileError as error:
-        pytest.fail(f"red-unimplemented array baseline before {keyword} refusal: {error}")
-    with pytest.raises(SchemaCompileError, match=re_escape(keyword)):
-        compile_schema_to_mask_pages(schema, BYTE_VOCAB, special_ids=frozenset())
-
-
-@pytest.mark.parametrize("location", ("root", "array", "item", "leaf"))
-@pytest.mark.parametrize("keyword,value", (
-    ("maxItems", 2), ("prefixItems", []), ("contains", {"type": "string"}),
-    ("uniqueItems", True), ("$ref", "#/$defs/x"), ("unevaluatedItems", False),
-    ("minLength", 2), ("maxLength", 8), ("pattern", ".+"),
-    ("format", "uri"), ("const", "x"), ("anyOf", []),
-    ("allOf", []), ("oneOf", []), ("not", {}), ("if", {}),
-    ("then", {}), ("else", {}), ("dependentSchemas", {}),
-    ("$defs", {}), ("$anchor", "anchor"), ("$dynamicRef", "#x"),
-    ("$dynamicAnchor", "x"), ("$vocabulary", {}),
-    ("minimum", 1), ("maximum", 5), ("exclusiveMinimum", 1),
-    ("exclusiveMaximum", 5), ("multipleOf", 2),
-    ("minContains", 1), ("maxContains", 3), ("maxProperties", 5),
-    ("minProperties", 1), ("dependentRequired", {}),
-    ("patternProperties", {}), ("propertyNames", {}),
-    ("unevaluatedProperties", False), ("contentEncoding", "base64"),
-    ("contentMediaType", "text/plain"), ("contentSchema", {}),
-    ("vendorUnknownConstraint", 7),
-))
-def test_keyword_is_refused_at_each_recursive_node(location, keyword, value):
+@pytest.mark.parametrize("location,keyword", tuple(
+    (location, keyword) for location, allowed in ALLOWED.items()
+    for keyword in sorted(KEYWORDS - allowed)))
+def test_keyword_is_refused_at_each_recursive_node(location, keyword):
     if location != "root":
         try:
             compile_schema_to_mask_pages(SCHEMA, BYTE_VOCAB, special_ids=frozenset())
         except SchemaCompileError as error:
             pytest.fail(f"red-unimplemented array baseline before {location}/{keyword} refusal: {error}")
     schema = json.loads(json.dumps(SCHEMA))
-    node = {"root": schema,
-            "array": schema["properties"]["commands"],
-            "item": schema["properties"]["commands"]["items"],
-            "leaf": schema["properties"]["commands"]["items"]["properties"]["subject"]}[location]
-    node[keyword] = value
+    node(schema, location)[keyword] = VALUES[keyword]
     with pytest.raises(SchemaCompileError, match=re_escape(keyword)):
         compile_schema_to_mask_pages(schema, BYTE_VOCAB, special_ids=frozenset())
 
 
-@pytest.mark.parametrize("annotation", ("title", "description", "default", "examples",
-                                        "deprecated", "readOnly", "writeOnly", "$comment"))
-def test_annotations_accepted_on_recursive_array_item_and_leaf(annotation):
+@pytest.mark.parametrize("location", tuple(ALLOWED))
+@pytest.mark.parametrize("annotation", tuple(sorted(ANNOTATIONS)))
+def test_annotations_accepted_at_every_supported_node(location, annotation):
     schema = json.loads(json.dumps(SCHEMA))
     annotation_value = {"examples": ["sample"], "deprecated": False,
                         "readOnly": False, "writeOnly": False}.get(annotation, "metadata")
-    for node in (schema["properties"]["commands"], schema["properties"]["commands"]["items"],
-                 schema["properties"]["commands"]["items"]["properties"]["subject"]):
-        node[annotation] = annotation_value
+    node(schema, location)[annotation] = annotation_value
     try:
         mp = compile_schema_to_mask_pages(schema, BYTE_VOCAB, special_ids=frozenset())
     except SchemaCompileError as error:
-        pytest.fail(f"red-unimplemented annotation/array path: {error}")
+        pytest.fail(f"red-unimplemented annotation at {location}: {error}")
+    walk(mp, byte_pieces(serialized([command()])))
+
+
+@pytest.mark.parametrize("keyword", ("$schema", "$id"))
+def test_root_metadata_is_permitted(keyword):
+    schema = json.loads(json.dumps(SCHEMA))
+    schema[keyword] = VALUES[keyword]
+    try:
+        mp = compile_schema_to_mask_pages(schema, BYTE_VOCAB, special_ids=frozenset())
+    except SchemaCompileError as error:
+        pytest.fail(f"red-unimplemented root {keyword} acceptance: {error}")
     walk(mp, byte_pieces(serialized([command()])))
 
 

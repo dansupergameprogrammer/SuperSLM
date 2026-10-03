@@ -1,0 +1,40 @@
+Alpha wing, sweep north ridge before you hold it.
+Bravo wing, north ridge: scan there, then keep the ground.
+Charlie team, both orders use north ridge—check, then hold.
+Delta scout, look over north ridge, remain at that spot.
+Echo battery, sensor pass on north ridge, hold the same location.
+Foxtrot patrol, north ridge scan followed by staying there.
+Golf squad, inspect north ridge first, secure that place second.
+Hotel drone, scan over north ridge, keep station above it.
+India unit, check north ridge, then hold that ridge.
+Juliet group, sweep north ridge and stay right there.
+Alpha wing, east bridge gets a scan and then a hold.
+Bravo wing, check east bridge, keep the bridge after.
+Charlie team, scan east bridge, hold that same span.
+Delta scout, inspect east bridge before maintaining position there.
+Echo battery, east bridge search, east bridge hold, sequentially.
+Foxtrot patrol, look over east bridge, then stay on it.
+Golf squad, sweep the east bridge; hold where you scanned.
+Hotel drone, survey east bridge, remain overhead afterward.
+India unit, two orders at east bridge: scan, hold.
+Juliet group, check east bridge and keep the post.
+Alpha wing, south gate scan now; hold it once done.
+Bravo wing, inspect south gate, then remain at the gate.
+Charlie team, sweep south gate and secure the same site.
+Delta scout, run sensors on south gate, keep station there.
+Echo battery, south gate for both operations, check then hold.
+Foxtrot patrol, search south gate before staying put.
+Golf squad, look at south gate, then maintain that position.
+Hotel drone, scan south gate and hover above the gate afterward.
+India unit, check south gate; hold that target next.
+Juliet group, south gate sweep followed by holding right there.
+Alpha wing, west tower first gets your scan, then your hold.
+Bravo wing, inspect west tower; retain that tower position.
+Charlie team, look over west tower, keep it afterward.
+Delta scout, check west tower and stay at the same tower.
+Echo battery, sweep west tower; hold where the sweep took place.
+Foxtrot patrol, scan west tower, maintain your tower post.
+Golf squad, two tasks on west tower: sensors then holding.
+Hotel drone, survey west tower and hover there after.
+India unit, search west tower, then secure that location.
+Juliet group, inspect west tower before remaining on it.

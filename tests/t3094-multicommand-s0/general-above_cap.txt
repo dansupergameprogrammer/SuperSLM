@@ -1,0 +1,100 @@
+Alpha wing, move north ridge, then east bridge, south gate, west tower, upper deck.
+Bravo wing: north ridge to east bridge to south gate to west tower to upper deck; move at each leg.
+Charlie team, five stops: north ridge, east bridge, south gate, west tower, upper deck.
+Delta scout, move first north ridge, next east bridge, then south gate, west tower, upper deck.
+Echo battery to north ridge; relocate east bridge; go south gate; shift west tower; finish upper deck.
+Foxtrot patrol, north ridge then east bridge then south gate then west tower then upper deck, each a move.
+Golf squad, take north ridge, move east bridge, move south gate, move west tower, move upper deck.
+Hotel drone, fly north ridge, east bridge, south gate, west tower and upper deck in order, stopping at each.
+India unit: move north ridge; after that east bridge; afterward south gate; then west tower; finally upper deck.
+Juliet group, run the route north ridge to east bridge to south gate to west tower to upper deck.
+Alpha wing, east bridge first, south gate second, west tower third, upper deck fourth, lower tunnel fifth.
+Bravo wing, move east bridge, continue south gate, move west tower, then upper deck, then lower tunnel.
+Charlie team: east bridge; south gate; west tower; upper deck; lower tunnel, separate moves.
+Delta scout, reach east bridge, relocate south gate, go west tower, shift upper deck, descend lower tunnel.
+Echo battery, east bridge to south gate to west tower to upper deck to lower tunnel, one order each.
+Foxtrot patrol, move into east bridge, then south gate, west tower, upper deck, lower tunnel.
+Golf squad, the path is east bridge, south gate, west tower, upper deck, lower tunnel; take each stop.
+Hotel drone, fly east bridge, land south gate, fly west tower, land upper deck, fly lower tunnel.
+India unit, first east bridge; after it south gate; west tower follows; upper deck next; lower tunnel last.
+Juliet group, move east bridge, south gate, west tower, upper deck, lower tunnel, in that order.
+Alpha wing: south gate, west tower, upper deck, lower tunnel, river crossing. Move through all.
+Bravo wing, take south gate, go west tower, then upper deck, lower tunnel, river crossing.
+Charlie team, relocate south gate; then west tower; upper deck; lower tunnel; river crossing.
+Delta scout, move south gate to west tower to upper deck to lower tunnel to river crossing.
+Echo battery, south gate first; move west tower next; shift upper deck; enter lower tunnel; cross river crossing.
+Foxtrot patrol, five moves, south gate then west tower then upper deck then lower tunnel then river crossing.
+Golf squad, advance south gate, change to west tower, climb upper deck, enter lower tunnel, reach river crossing.
+Hotel drone, fly south gate, fly west tower, fly upper deck, fly lower tunnel, fly river crossing.
+India unit, move through south gate, west tower, upper deck, lower tunnel and river crossing with stops.
+Juliet group, south gate; west tower; upper deck; lower tunnel; river crossing, each leg separately.
+Alpha wing, west tower then upper deck then lower tunnel then river crossing then supply depot.
+Bravo wing, move west tower, move upper deck, move lower tunnel, move river crossing, move supply depot.
+Charlie team, take west tower; proceed upper deck; descend lower tunnel; cross river crossing; reach supply depot.
+Delta scout, five legs: west tower, upper deck, lower tunnel, river crossing, supply depot.
+Echo battery, shift west tower to upper deck, then lower tunnel, river crossing and supply depot, stopping each time.
+Foxtrot patrol, west tower first, upper deck next, lower tunnel third, river crossing fourth, supply depot last.
+Golf squad, get west tower, relocate upper deck, go lower tunnel, move river crossing, finish supply depot.
+Hotel drone, fly west tower, then upper deck, lower tunnel, river crossing, supply depot as separate waypoints.
+India unit, start west tower; after that upper deck; then lower tunnel; river crossing; supply depot.
+Juliet group, west tower to upper deck to lower tunnel to river crossing to supply depot, move between each.
+Alpha wing, upper deck, lower tunnel, river crossing, supply depot, radar mast; move to each.
+Bravo wing, climb upper deck, descend lower tunnel, cross river crossing, reach supply depot, head radar mast.
+Charlie team, separate relocations: upper deck; lower tunnel; river crossing; supply depot; radar mast.
+Delta scout, move upper deck then lower tunnel then river crossing then supply depot then radar mast.
+Echo battery, upper deck first, lower tunnel second, river crossing third, supply depot fourth, radar mast fifth.
+Foxtrot patrol, from upper deck move lower tunnel, then river crossing, then supply depot, then radar mast.
+Golf squad, get upper deck, proceed lower tunnel, go river crossing, shift supply depot, finish radar mast.
+Hotel drone, fly upper deck, fly lower tunnel, fly river crossing, fly supply depot, fly radar mast.
+India unit, upper deck to lower tunnel to river crossing to supply depot to radar mast, with a stop at every site.
+Juliet group, move upper deck; later lower tunnel; next river crossing; then supply depot; end radar mast.
+Alpha wing, lower tunnel to river crossing to supply depot to radar mast to landing zone; five movements.
+Bravo wing, enter lower tunnel, cross river crossing, reach supply depot, proceed radar mast, finish landing zone.
+Charlie team, move lower tunnel; then river crossing; then supply depot; then radar mast; then landing zone.
+Delta scout, lower tunnel first, river crossing next, supply depot, radar mast, landing zone last.
+Echo battery, take lower tunnel, move river crossing, shift supply depot, go radar mast, take landing zone.
+Foxtrot patrol, go lower tunnel then river crossing then supply depot then radar mast then landing zone.
+Golf squad, five separate legs: lower tunnel, river crossing, supply depot, radar mast, landing zone.
+Hotel drone, fly lower tunnel, river crossing, supply depot, radar mast, landing zone with landings between.
+India unit, lower tunnel; river crossing; supply depot; radar mast; landing zone, one move per stop.
+Juliet group, relocate to lower tunnel, then river crossing, supply depot, radar mast and landing zone in turn.
+Alpha wing, river crossing, supply depot, radar mast, landing zone, north ridge; move through all five.
+Bravo wing, cross river crossing, reach supply depot, go radar mast, shift landing zone, end north ridge.
+Charlie team, move river crossing then supply depot then radar mast then landing zone then north ridge.
+Delta scout, from river crossing proceed supply depot, radar mast, landing zone and north ridge, each a leg.
+Echo battery, five moves: river crossing; supply depot; radar mast; landing zone; north ridge.
+Foxtrot patrol, river crossing first, supply depot second, radar mast third, landing zone fourth, north ridge fifth.
+Golf squad, take river crossing, then supply depot, radar mast, landing zone, north ridge, stopping at each.
+Hotel drone, fly river crossing, fly supply depot, fly radar mast, fly landing zone, fly north ridge.
+India unit, get river crossing, relocate supply depot, move radar mast, move landing zone, finish north ridge.
+Juliet group, river crossing to supply depot to radar mast to landing zone to north ridge, five orders.
+Alpha wing, supply depot, radar mast, landing zone, north ridge, east bridge, separate relocations.
+Bravo wing, go supply depot then radar mast then landing zone then north ridge then east bridge.
+Charlie team, move supply depot; move radar mast; move landing zone; move north ridge; move east bridge.
+Delta scout, reach supply depot, proceed radar mast, shift landing zone, take north ridge, finish east bridge.
+Echo battery, supply depot to radar mast to landing zone to north ridge to east bridge, stop each time.
+Foxtrot patrol, route through supply depot, radar mast, landing zone, north ridge, east bridge; five moves.
+Golf squad, supply depot first, radar mast next, landing zone after, north ridge then, east bridge last.
+Hotel drone, fly supply depot; land radar mast; fly landing zone; land north ridge; fly east bridge.
+India unit, move in order to supply depot, radar mast, landing zone, north ridge, east bridge.
+Juliet group, supply depot, radar mast, landing zone, north ridge, east bridge; advance at every leg.
+Alpha wing, radar mast, landing zone, north ridge, east bridge, south gate; move one at a time.
+Bravo wing, head radar mast, then landing zone, north ridge, east bridge, south gate.
+Charlie team, relocate radar mast; go landing zone; take north ridge; cross east bridge; reach south gate.
+Delta scout, radar mast to landing zone to north ridge to east bridge to south gate, five stops.
+Echo battery, five move orders: radar mast, landing zone, north ridge, east bridge, south gate.
+Foxtrot patrol, radar mast first, landing zone second, north ridge third, east bridge fourth, south gate fifth.
+Golf squad, take radar mast, move landing zone, move north ridge, move east bridge, move south gate.
+Hotel drone, fly radar mast, fly landing zone, fly north ridge, fly east bridge, fly south gate.
+India unit, go radar mast; then landing zone; then north ridge; then east bridge; then south gate.
+Juliet group, radar mast, landing zone, north ridge, east bridge, south gate; five consecutive movements.
+Alpha wing, landing zone then north ridge then east bridge then south gate then west tower, move each time.
+Bravo wing, leave landing zone for north ridge, then east bridge, south gate and west tower.
+Charlie team, five destinations: landing zone; north ridge; east bridge; south gate; west tower.
+Delta scout, move landing zone, move north ridge, move east bridge, move south gate, move west tower.
+Echo battery, take landing zone, shift north ridge, cross east bridge, reach south gate, end west tower.
+Foxtrot patrol, landing zone to north ridge to east bridge to south gate to west tower with separate stops.
+Golf squad, landing zone first, north ridge after, east bridge then, south gate next, west tower last.
+Hotel drone, fly landing zone; fly north ridge; fly east bridge; fly south gate; fly west tower.
+India unit, advance through landing zone, north ridge, east bridge, south gate and west tower, stop each.
+Juliet group, relocate landing zone, north ridge, east bridge, south gate, west tower, in order.

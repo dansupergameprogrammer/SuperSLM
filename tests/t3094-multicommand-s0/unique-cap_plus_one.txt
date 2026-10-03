@@ -1,0 +1,40 @@
+Alpha wing, north ridge, scan, hold, keep the green watch, then fire.
+Bravo wing to north ridge; sweep, stay, take horn watch, shoot afterward.
+Charlie team, get north ridge, check it, hold, ride call watch, fire.
+Delta scout, north ridge, sensors, hold, flare watch, then shoot.
+Echo battery, take north ridge, scan, remain, signal watch, fire when released.
+Foxtrot patrol, go north ridge, search, hold, amber watch, fire after.
+Golf squad, move north ridge, inspect, hold, beep watch, then fire.
+Hotel drone, fly north ridge, survey, hover, light-change watch, then fire.
+India unit, north ridge move, scan, hold, my-word watch, fire afterward.
+Juliet group, reach north ridge, check, stay, ping watch, then fire.
+Alpha wing, east bridge, sweep, hold, green watch, then fire.
+Bravo wing, advance east bridge, scan, remain, chime watch, shoot after.
+Charlie team, east bridge, check, hold, call watch, then fire.
+Delta scout, take east bridge, sensors, hold, flash watch, fire afterward.
+Echo battery, east bridge move, survey, stay, tone watch, then fire.
+Foxtrot patrol, get east bridge, inspect, hold, code watch, fire later.
+Golf squad, move east bridge, scan, hold, red-smoke watch, then fire.
+Hotel drone, fly east bridge, search, hover, my-tap watch, fire after.
+India unit, reach east bridge, sweep, remain, blue watch, then shoot.
+Juliet group, east bridge, sensors, hold, beacon watch, fire once done.
+Alpha wing, south gate, scan, hold, green watch, then fire.
+Bravo wing, go south gate, look it over, remain, horn watch, shoot after.
+Charlie team, take south gate, inspect, hold, signal watch, then fire.
+Delta scout, move south gate, sweep, hold, my-word watch, fire afterward.
+Echo battery, south gate move, sensors, remain, amber watch, fire after.
+Foxtrot patrol, get south gate, scan, hold, click watch, then fire.
+Golf squad, reach south gate, search, hold, call watch, fire later.
+Hotel drone, fly south gate, survey, hover, flare watch, then fire.
+India unit, south gate, check, hold, beep watch, fire after completion.
+Juliet group, move south gate, inspect, remain, green-light watch, then fire.
+Alpha wing, west tower, scan, hold, horn watch, fire afterward.
+Bravo wing, west tower, inspect, stay, flash watch, then shoot.
+Charlie team, get west tower, sweep, hold, my-mark watch, fire after.
+Delta scout, move west tower, sensors, remain, chime watch, then fire.
+Echo battery, take west tower, search, hold, tone watch, fire later.
+Foxtrot patrol, west tower move, scan, stay, beacon-blink watch, then fire.
+Golf squad, reach west tower, check, hold, code-red watch, fire after.
+Hotel drone, fly west tower, survey, hover, my-call watch, then fire.
+India unit, west tower, inspect, remain, ping watch, fire afterward.
+Juliet group, advance west tower, sweep, hold, green watch, then fire.

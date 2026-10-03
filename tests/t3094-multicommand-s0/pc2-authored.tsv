@@ -1,0 +1,120 @@
+simple_trigger	alpha wing	north ridge	Alpha, stay on the clock for green; fire into north ridge when it comes.	Alpha, stay on the clock for green, then fire into north ridge.
+simple_trigger	bravo wing	east bridge	Bravo, take the go watch; once it clears, hit east bridge.	Bravo, take the go watch; hit east bridge on its cue.
+simple_trigger	charlie team	south gate	Charlie, ride out the flare watch and fire at south gate on the flare.	Charlie, ride out the flare watch, then fire at south gate.
+simple_trigger	delta scout	west tower	Delta, hold a flare watch at west tower and shoot after it clears.	Delta, hold a flare watch at west tower; shoot when it clears.
+simple_trigger	echo battery	upper deck	Echo battery, keep a mark watch first; fire on upper deck on the mark.	Echo battery, keep a mark watch first; upper deck gets fire at the release.
+simple_trigger	foxtrot patrol	lower tunnel	Foxtrot, sit through the bell watch, then fire into lower tunnel.	Foxtrot, sit through the bell watch; fire into lower tunnel when it rings.
+simple_trigger	golf squad	river crossing	Golf, take a beacon watch, fire at river crossing on the blink.	Golf, take a beacon watch and fire at river crossing at its end.
+simple_trigger	hotel drone	supply depot	Hotel, hold on the signal clock, then fire on supply depot.	Hotel, hold on the signal clock; fire on supply depot at the signal.
+simple_trigger	india unit	radar mast	India unit, stay in the call watch, fire on radar mast when called.	India unit: stay in the call watch, then fire on radar mast.
+simple_trigger	juliet group	landing zone	Juliet, remain on call watch, then fire at the landing zone.	Juliet, remain on call watch; fire at the landing zone on my call.
+simple_trigger	alpha wing	east bridge	Alpha, keep the green-light watch; open fire at east bridge on green.	Alpha, take the green-light watch; after it clears, open fire at east bridge.
+simple_trigger	bravo wing	south gate	Bravo, wait out a red-smoke watch, then fire into south gate.	Bravo, wait out a red-smoke watch; fire into south gate on smoke.
+simple_trigger	charlie team	west tower	Charlie, stay in a horn watch, fire on west tower when it sounds.	Charlie, stay in a horn watch before firing on west tower.
+simple_trigger	delta scout	upper deck	Delta, take a radio-ping watch; upper deck follows.	Delta, take a radio-ping watch; fire upper deck on the ping.
+simple_trigger	echo battery	lower tunnel	Echo, hold a two-flash watch, fire into lower tunnel at two flashes.	Echo, hold a two-flash watch and then fire into lower tunnel.
+simple_trigger	foxtrot patrol	river crossing	Foxtrot, keep the gate-lamp watch, then fire on river crossing.	Foxtrot, keep the gate-lamp watch; fire on river crossing if it flips.
+simple_trigger	golf squad	supply depot	Golf, sit on a whistle watch, hit supply depot at the whistle.	Golf, sit on a whistle watch before you hit supply depot.
+simple_trigger	hotel drone	radar mast	Hotel, start a chirp watch; when that's done shoot radar mast.	Hotel, start a chirp watch; shoot radar mast on the chirp.
+simple_trigger	india unit	landing zone	India, keep a blue-flash watch, fire at landing zone on blue.	India, keep a blue-flash watch first and fire at landing zone after.
+simple_trigger	juliet group	north ridge	Juliet, ride the green-signal watch and then fire on north ridge.	Juliet, ride the green-signal watch; fire on north ridge at green.
+simple_trigger	alpha wing	south gate	Alpha to south gate, hold the green watch; shoot when green arrives.	Alpha to south gate, hold the green watch, then shoot.
+simple_trigger	bravo wing	west tower	Bravo, take a lamp watch before firing on west tower.	Bravo, take a lamp watch and fire on west tower at the lamp.
+simple_trigger	charlie team	upper deck	Charlie, keep a siren watch, fire on upper deck when it sounds.	Charlie, keep a siren watch; once complete, fire on upper deck.
+simple_trigger	delta scout	lower tunnel	Delta, remain on a courier watch, then fire into lower tunnel.	Delta, remain on a courier watch; fire into lower tunnel on the clear call.
+simple_trigger	echo battery	river crossing	Echo, keep a code-word watch, fire at river crossing on the word.	Echo, keep a code-word watch; at its release fire at river crossing.
+simple_trigger	foxtrot patrol	supply depot	Foxtrot, sit through a code-yellow watch, then fire at supply depot.	Foxtrot, sit through a code-yellow watch, fire at supply depot on yellow.
+simple_trigger	golf squad	radar mast	Golf, take a marker-drop watch; fire on radar mast at the drop.	Golf, take a marker-drop watch before firing on radar mast.
+simple_trigger	hotel drone	landing zone	Hotel, hold a second-tone watch and then fire at landing zone.	Hotel, hold a second-tone watch, fire at landing zone on tone two.
+simple_trigger	india unit	north ridge	India, stay on a click watch; fire north ridge on the click.	India, stay on a click watch; north ridge gets fire afterward.
+simple_trigger	juliet group	east bridge	Juliet, keep a flag-rise watch before you fire east bridge.	Juliet, keep a flag-rise watch, fire east bridge as it rises.
+simple_trigger	alpha wing	west tower	Alpha, carry a sunrise watch; fire on west tower at sunrise.	Alpha, carry a sunrise watch and follow it with fire on west tower.
+simple_trigger	bravo wing	upper deck	Bravo, take a scanner-beep watch, then shoot upper deck.	Bravo, take a scanner-beep watch; shoot upper deck on its beep.
+simple_trigger	charlie team	lower tunnel	Charlie, stay on my-tap watch; fire into lower tunnel on my tap.	Charlie, stay on my-tap watch, then fire into lower tunnel.
+simple_trigger	delta scout	river crossing	Delta, hold a signal-rocket watch before striking river crossing.	Delta, hold a signal-rocket watch; strike river crossing as it rises.
+simple_trigger	echo battery	supply depot	Echo battery, keep amber watch; fire at supply depot on amber.	Echo battery, keep amber watch, then fire at supply depot.
+simple_trigger	foxtrot patrol	radar mast	Foxtrot, hold a ready-transmission watch before firing radar mast.	Foxtrot, hold a ready-transmission watch; fire radar mast when I transmit.
+simple_trigger	golf squad	landing zone	Golf, run a line-live watch, fire on landing zone when the line goes live.	Golf, run a line-live watch, then fire on landing zone.
+simple_trigger	hotel drone	north ridge	Hotel, take the signal-burst watch before firing north ridge.	Hotel, take the signal-burst watch; fire north ridge at the burst.
+simple_trigger	india unit	east bridge	India, keep a beacon-sweep watch; fire east bridge on the sweep.	India, keep a beacon-sweep watch and follow with fire east bridge.
+simple_trigger	juliet group	south gate	Juliet, hold a call watch first, then fire south gate.	Juliet, hold a call watch, fire south gate when I call.
+dependency	alpha wing	north ridge	Alpha, after the scout scan, take the clear-report watch; fire north ridge on clear.	Alpha, after the scout scan, take the clear-report watch, then fire north ridge.
+dependency	bravo wing	east bridge	Bravo, after that sweep returns, ride the green watch and fire east bridge.	Bravo, after that sweep returns, ride the green watch; fire east bridge on green.
+dependency	charlie team	south gate	Charlie, queued scan first, horn watch second; fire south gate on the horn.	Charlie, queued scan first, horn watch second, then fire south gate.
+dependency	delta scout	west tower	Delta, after the earlier scan, keep my-word watch, then fire west tower.	Delta, after the earlier scan, keep my-word watch; fire west tower on my word.
+dependency	echo battery	upper deck	Echo, once that scan finishes, stay on beacon watch; fire upper deck if lit.	Echo, once that scan finishes, stay on beacon watch before firing upper deck.
+dependency	foxtrot patrol	lower tunnel	Foxtrot, let the scan end, then take mark watch and fire lower tunnel.	Foxtrot, let the scan end, then take mark watch; fire lower tunnel at my mark.
+dependency	golf squad	river crossing	Golf, recon sweep first; flag watch after; fire river crossing when flag rises.	Golf, recon sweep first; flag watch after; fire river crossing last.
+dependency	hotel drone	supply depot	Hotel, when the scan clears, hold a green-lamp watch, then fire supply depot.	Hotel, when the scan clears, hold a green-lamp watch; fire supply depot on green.
+dependency	india unit	radar mast	India, wait out the old scan, keep a beep watch; hit radar mast at the beep.	India, wait out the old scan, keep a beep watch, and hit radar mast.
+dependency	juliet group	landing zone	Juliet, after that scan, take code-blue watch before firing landing zone.	Juliet, after that scan, take code-blue watch; fire landing zone on blue.
+dependency	alpha wing	east bridge	Alpha, drone scan first, ready-call watch next; fire east bridge when ready.	Alpha, drone scan first, ready-call watch next, east bridge fire afterward.
+dependency	bravo wing	south gate	Bravo, after the active scan, keep flare watch; south gate gets fire at release.	Bravo, after the active scan, keep flare watch; fire south gate as it rises.
+dependency	charlie team	west tower	Charlie, scout scan completes, siren watch runs; fire west tower on the siren.	Charlie, scout scan completes, siren watch runs, then west tower fire.
+dependency	delta scout	upper deck	Delta, let the queued scan clear; take click watch; fire upper deck.	Delta, let the queued scan clear, take click watch; fire upper deck at the click.
+dependency	echo battery	lower tunnel	Echo, other team scans lower tunnel; take tone-drop watch and fire when it drops.	Echo, other team scans lower tunnel, then you take tone-drop watch and fire.
+dependency	foxtrot patrol	river crossing	Foxtrot, after the preordered survey, ride green watch, then fire river crossing.	Foxtrot, after the preordered survey, ride green watch; fire river crossing on green.
+dependency	golf squad	supply depot	Golf, finish the board sweep, hold radio-clear watch; fire supply depot on clear.	Golf, finish the board sweep, hold radio-clear watch, fire supply depot.
+dependency	hotel drone	radar mast	Hotel, earlier scan clears, beacon-flick watch follows, then radar mast fire.	Hotel, earlier scan clears, beacon-flick watch follows; fire radar mast at the flick.
+dependency	india unit	landing zone	India, current scan first, whistle watch next; fire landing zone at the whistle.	India, current scan first, whistle watch next, fire landing zone at release.
+dependency	juliet group	north ridge	Juliet, when the running scan completes, take my-tap watch, then fire north ridge.	Juliet, when the running scan completes, take my-tap watch; fire north ridge on tap.
+dependency	alpha wing	south gate	Alpha, assigned radar sweep, then amber watch; fire south gate when amber shows.	Alpha, assigned radar sweep, then amber watch, then fire south gate.
+dependency	bravo wing	west tower	Bravo, queued search ends, go watch begins, west tower fire follows.	Bravo, queued search ends, go watch begins; fire west tower when I say go.
+dependency	charlie team	upper deck	Charlie, after the live scan closes, keep burst watch; fire upper deck at the burst.	Charlie, after the live scan closes, keep burst watch before firing upper deck.
+dependency	delta scout	lower tunnel	Delta, previous scan, double-chirp watch, then lower tunnel fire.	Delta, previous scan, double-chirp watch; fire lower tunnel on chirp two.
+dependency	echo battery	river crossing	Echo, outstanding scan first, flag watch second; fire river crossing when flag rises.	Echo, outstanding scan first, flag watch second, fire river crossing third.
+dependency	foxtrot patrol	supply depot	Foxtrot, require the scan, hold green-lamp watch, then fire supply depot.	Foxtrot, require the scan, hold green-lamp watch; fire supply depot as it lights.
+dependency	golf squad	radar mast	Golf, let the existing scan finish, keep tone watch; fire radar mast on tone.	Golf, let the existing scan finish; keep tone watch; fire radar mast.
+dependency	hotel drone	landing zone	Hotel, after the running survey, take code-silver watch, then fire landing zone.	Hotel, after the running survey, take code-silver watch; fire landing zone on silver.
+dependency	india unit	north ridge	India, pending scout sweep, green watch; fire north ridge on green.	India, pending scout sweep, green watch, north ridge fire in that order.
+dependency	juliet group	east bridge	Juliet, scan already queued; after it, keep horn watch; fire east bridge.	Juliet, scan already queued; after it, keep horn watch; fire east bridge on horn.
+dependency	alpha wing	west tower	Alpha, standing scan reports, code watch runs; shoot west tower when code arrives.	Alpha, standing scan reports, code watch runs, shoot west tower afterward.
+dependency	bravo wing	upper deck	Bravo, old scan ends; take signal watch; fire upper deck when it completes.	Bravo, old scan ends, signal watch begins; fire upper deck on signal.
+dependency	charlie team	lower tunnel	Charlie, scouting clears, blue watch follows; fire lower tunnel on blue.	Charlie, scouting clears, blue watch follows, then fire lower tunnel.
+dependency	delta scout	river crossing	Delta, active search resolves; whistle watch; river crossing fire.	Delta, active search resolves, whistle watch; fire river crossing on whistle.
+dependency	echo battery	supply depot	Echo, existing recon order first, ping watch second; fire supply depot on ping.	Echo, existing recon order first, ping watch second, supply depot fire last.
+dependency	foxtrot patrol	radar mast	Foxtrot, queued scan resolves, blink watch runs, fire radar mast.	Foxtrot, queued scan resolves, blink watch runs; fire radar mast at the blink.
+dependency	golf squad	landing zone	Golf, ordered scan then flag-rise watch; fire landing zone as flag rises.	Golf, ordered scan then flag-rise watch, then fire landing zone.
+dependency	hotel drone	north ridge	Hotel, scout sweep first, chime watch after, fire north ridge last.	Hotel, scout sweep first, chime watch after; fire north ridge on chime.
+dependency	india unit	east bridge	India, current scan, green watch; fire east bridge when green comes in.	India, current scan, green watch, east bridge fire, in sequence.
+dependency	juliet group	south gate	Juliet, pending scan clears, code watch finishes, then fire south gate.	Juliet, pending scan clears, code watch finishes; fire south gate on code.
+ordering	alpha wing	north ridge	Alpha, let the move finish, keep green watch; fire north ridge on green.	Alpha, let the move finish, keep green watch, then fire north ridge.
+ordering	bravo wing	east bridge	Bravo, reach east bridge, ride a horn watch, then fire there.	Bravo, reach east bridge, ride a horn watch; fire there when it sounds.
+ordering	charlie team	south gate	Charlie, active move to south gate, mark watch afterward; fire at my mark.	Charlie, active move to south gate, mark watch afterward, then fire.
+ordering	delta scout	west tower	Delta, finish the current move, hold beacon watch, fire west tower.	Delta, finish the current move, hold beacon watch; fire west tower on beacon.
+ordering	echo battery	upper deck	Echo, queued relocation first, signal watch second; fire upper deck at signal.	Echo, queued relocation first, signal watch second, upper deck fire last.
+ordering	foxtrot patrol	lower tunnel	Foxtrot, move into lower tunnel, keep clear-call watch, then fire.	Foxtrot, move into lower tunnel, keep clear-call watch; fire when called clear.
+ordering	golf squad	river crossing	Golf, advance to river crossing, take blue watch; fire on blue.	Golf, advance to river crossing, take blue watch, then fire.
+ordering	hotel drone	supply depot	Hotel, finish the old move to supply depot, hold ping watch, then fire.	Hotel, finish the old move to supply depot, hold ping watch; fire on ping.
+ordering	india unit	radar mast	India, assigned relocation to radar mast, whistle watch; fire when it blows.	India, assigned relocation to radar mast, whistle watch, then fire.
+ordering	juliet group	landing zone	Juliet, active move to landing zone, second-tone watch, fire afterward.	Juliet, active move to landing zone, second-tone watch; fire on tone two.
+ordering	alpha wing	east bridge	Alpha, queued bridge move, green watch; fire east bridge when green lights.	Alpha, queued bridge move, green watch, then fire east bridge.
+ordering	bravo wing	south gate	Bravo, old arrival at south gate, flare watch, then fire.	Bravo, old arrival at south gate, flare watch; fire as flare rises.
+ordering	charlie team	west tower	Charlie, current move lands, siren watch runs; fire west tower on siren.	Charlie, current move lands, siren watch runs, west tower fire follows.
+ordering	delta scout	upper deck	Delta, finish the scheduled upper-deck move, keep amber watch, then fire.	Delta, finish the scheduled upper-deck move, keep amber watch; fire on amber.
+ordering	echo battery	lower tunnel	Echo, prior tunnel move finishes, radio-ready watch ends; fire lower tunnel on ready.	Echo, prior tunnel move finishes, radio-ready watch ends, then fire.
+ordering	foxtrot patrol	river crossing	Foxtrot, crossing move, chime watch, then fire river crossing.	Foxtrot, crossing move, chime watch; fire river crossing at the chime.
+ordering	golf squad	supply depot	Golf, finish supply-depot transfer, take lamp watch; fire when lit.	Golf, finish supply-depot transfer, take lamp watch, and fire.
+ordering	hotel drone	radar mast	Hotel, queued move to radar mast, code-yellow watch, then fire.	Hotel, queued move to radar mast, code-yellow watch; fire on yellow.
+ordering	india unit	landing zone	India, reposition into landing zone, two-tap watch; fire at tap two.	India, reposition into landing zone, two-tap watch, then fire.
+ordering	juliet group	north ridge	Juliet, existing move to north ridge, flash watch, fire afterward.	Juliet, existing move to north ridge, flash watch; fire on flash.
+ordering	alpha wing	south gate	Alpha, running move to south gate, burst watch; fire at the burst.	Alpha, running move to south gate, burst watch, then fire.
+ordering	bravo wing	west tower	Bravo, queued west-tower move, call watch, then shoot.	Bravo, queued west-tower move, call watch; shoot when I call.
+ordering	charlie team	upper deck	Charlie, active upper-deck approach, click watch; fire at click.	Charlie, active upper-deck approach, click watch, then fire.
+ordering	delta scout	lower tunnel	Delta, lower-tunnel move ends, blue-smoke watch runs, fire follows.	Delta, lower-tunnel move ends, blue-smoke watch runs; fire on smoke.
+ordering	echo battery	river crossing	Echo, prior river-crossing move, signal watch; fire on the signal.	Echo, prior river-crossing move, signal watch, then fire.
+ordering	foxtrot patrol	supply depot	Foxtrot, outstanding supply-depot move, green watch, fire at release.	Foxtrot, outstanding supply-depot move, green watch; fire on green.
+ordering	golf squad	radar mast	Golf, radar-mast transfer, tone watch; fire at tone.	Golf, radar-mast transfer, tone watch, then fire.
+ordering	hotel drone	landing zone	Hotel, earlier landing-zone move first, whistle watch next, fire last.	Hotel, earlier landing-zone move first, whistle watch next; fire on whistle.
+ordering	india unit	north ridge	India, live move to north ridge, marker-drop watch; shoot at the drop.	India, live move to north ridge, marker-drop watch, then shoot.
+ordering	juliet group	east bridge	Juliet, standing move to east bridge, amber watch, then fire.	Juliet, standing move to east bridge, amber watch; fire on amber.
+ordering	alpha wing	west tower	Alpha, previous west-tower move, red-flare watch; fire on flare.	Alpha, previous west-tower move, red-flare watch, fire afterward.
+ordering	bravo wing	upper deck	Bravo, current upper-deck move, my-beep watch, then fire.	Bravo, current upper-deck move, my-beep watch; fire at my beep.
+ordering	charlie team	lower tunnel	Charlie, earlier lower-tunnel move, lamp watch; fire when lamp lights.	Charlie, earlier lower-tunnel move, lamp watch, fire in that order.
+ordering	delta scout	river crossing	Delta, assigned crossing move, green-flag watch, then fire river crossing.	Delta, assigned crossing move, green-flag watch; fire river crossing as flag rises.
+ordering	echo battery	supply depot	Echo, underway move to supply depot, ping watch; fire at the ping.	Echo, underway move to supply depot, ping watch, then fire.
+ordering	foxtrot patrol	radar mast	Foxtrot, radar-mast advance, code-white watch, then fire.	Foxtrot, radar-mast advance, code-white watch; fire when white arrives.
+ordering	golf squad	landing zone	Golf, active landing-zone move, beacon watch; fire there on beacon.	Golf, active landing-zone move, beacon watch, fire there afterward.
+ordering	hotel drone	north ridge	Hotel, standing north-ridge move, chirp watch, then fire.	Hotel, standing north-ridge move, chirp watch; fire at the chirp.
+ordering	india unit	east bridge	India, live bridge relocation, burst watch; fire east bridge at burst.	India, live bridge relocation, burst watch, then fire east bridge.
+ordering	juliet group	south gate	Juliet, pending south-gate move, my-call watch, fire afterward.	Juliet, pending south-gate move, my-call watch; fire when I call.

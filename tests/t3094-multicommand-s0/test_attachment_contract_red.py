@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 from resource_pairs import DIAGNOSTICS, pair
+from keyword_catalogue import VALUES, node
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -85,3 +86,24 @@ def test_isolated_resource_refusal_leaves_no_partial_artifact(tmp_path, guard):
     bad = _run(base, matching, over_schema, refused, "--limits-json", str(limit_file))
     assert bad.returncode != 0 and DIAGNOSTICS[guard].lower() in bad.stderr.lower()
     assert not refused.exists(), f"{guard} refusal left a partial artifact"
+
+
+@pytest.mark.parametrize("location,keyword", (
+    ("root", "items"), ("array", "properties"), ("item", "minItems"),
+    ("enum", "items"), ("subject", "enum"), ("target", "$id"),
+    ("trigger", "$schema"), ("boolean", "enum"),
+    ("root", "vendorUnknownConstraint"), ("array", "vendorUnknownConstraint"),
+    ("item", "vendorUnknownConstraint"), ("enum", "vendorUnknownConstraint"),
+    ("subject", "vendorUnknownConstraint"), ("target", "vendorUnknownConstraint"),
+    ("trigger", "vendorUnknownConstraint"), ("boolean", "vendorUnknownConstraint"),
+))
+def test_keyword_refusal_names_node_and_leaves_no_partial_artifact(tmp_path, location, keyword):
+    base, matching, _wrong = _inputs()
+    schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+    node(schema, location)[keyword] = VALUES[keyword]
+    bad_schema = tmp_path / "keyword.json"
+    bad_schema.write_text(json.dumps(schema), encoding="utf-8")
+    output = tmp_path / "refused.sslm"
+    result = _run(base, matching, bad_schema, output)
+    assert result.returncode != 0 and keyword.lower() in result.stderr.lower()
+    assert not output.exists(), f"{location}/{keyword} refusal left a partial artifact"

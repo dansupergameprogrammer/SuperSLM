@@ -1,5 +1,5 @@
 {
-  "version": "T-3094-S0-v2",
+  "version": "T-3094-S0-v3",
   "date": "2026-10-02",
   "decisions": ["D-SLM8047", "D-SLM8048"],
   "schema": "command.schema.json",
@@ -11,6 +11,16 @@
     "rejection": "zero exposed items and zero action attempts for every incomplete, invalid, over-cap, no-action or cancelled batch"
   },
   "consumer_cap_for_corpus": 4,
+  "corpus_provenance": "1960 complete utterances written individually in tracked general-*, unique-*, dedicated-*, development.txt and pc2-authored.tsv sources; synthetic transcript sessions are identified as synthetic, partitioned by session and speaker; assemble_corpus.py only packages them",
+  "prior_annotation_round": "T-3096/T-3097 labels for v2 are void and prohibited as v3 gold",
+  "diversity_gates": {
+    "minimum_distinct_shape_fraction_per_stratum": 0.65,
+    "maximum_single_shape_share": 0.075,
+    "maximum_cross_split_4gram_jaccard": 0.12,
+    "minimum_distinct_pc2_pair_shapes_per_condition": 32,
+    "minimum_pc2_pair_token_jaccard": 0.55,
+    "maximum_pc2_lexical_baseline_accuracy": 0.65
+  },
   "population": {
     "general_held_out": 1000,
     "unique_compositional": {"correction": 40, "shared_argument": 40, "pronoun": 40, "nested_condition": 40, "parallel": 40, "at_cap": 40, "cap_plus_one": 40},
