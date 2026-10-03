@@ -196,6 +196,7 @@ def main():
                 "resource_counts_sha256": sha(HERE / "resource-model-counts.json"),
                 "assembler_sha256": sha(HERE / "assemble_corpus.py"),
                 "diversity_script_sha256": sha(HERE / "diversity.py"),
+                "attributes_sha256": sha(HERE / ".gitattributes"),
                 "keyword_catalogue_sha256": sha(HERE / "keyword_catalogue.py")}
     (HERE / "corpus-manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n",
                                                 encoding="utf-8", newline="\n")

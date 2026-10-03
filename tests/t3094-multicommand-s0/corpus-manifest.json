@@ -1,6 +1,7 @@
 {
   "annotation_input_sha256": "a21b92feceb2abe971c0424658f5357cffcf29f059ac5cba162112aaeb9b12da",
-  "assembler_sha256": "e7b5db9843a55daf509b8d430411458f1ec896e3c39a0f5871cfda091110402d",
+  "assembler_sha256": "048aa779e071418ea3f6392283cdfeb9a77e3f6a9bbab6af782b617b2d650db4",
+  "attributes_sha256": "39e3f10efe7abd886b0584170e90f7af47625d3d3cd9000885497ac3cba4f5d3",
   "authored_source_sha256": {
     "dedicated-ambiguous_executable.txt": "e43ca8d077d45ee53ab3ae128d9c7da8b86c0deb9261dcafecd73cea91ff881a",
     "dedicated-cancellation.txt": "671d34e69d8164233a2eccc8f607bf53fa85088df2bce7d4b268cc886036230e",

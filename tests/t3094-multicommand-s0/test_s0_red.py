@@ -79,6 +79,7 @@ def test_frozen_population_and_hashes():
                       ("diversity_report_sha256", "diversity-report.json"),
                       ("assembler_sha256", "assemble_corpus.py"),
                       ("diversity_script_sha256", "diversity.py"),
+                      ("attributes_sha256", ".gitattributes"),
                       ("keyword_catalogue_sha256", "keyword_catalogue.py")):
         assert hashlib.sha256((HERE / file).read_bytes()).hexdigest() == manifest[key]
     assert all(hashlib.sha256((HERE / file).read_bytes()).hexdigest() == digest
