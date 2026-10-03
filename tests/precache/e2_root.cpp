@@ -1,4 +1,5 @@
 #include "precache_hostile.h"
+#include "precache_checkpoint.h"
 #include "paged-kv/pkv_legacy_a_helpers.h"
 
 namespace {
@@ -52,12 +53,17 @@ void SyntheticShapes41() {
         Status(source.status,SSLM_OK,"4.1 source pool");
         Status(target.status,SSLM_OK,"4.1 target pool");
         if(source.status!=SSLM_OK || target.status!=SSLM_OK) return;
+        // Each length is one checkpointed case; both pools carry across the
+        // lengths of this geometry, so they form the case scope.
+        CaseScope scope{{source.pool,target.pool}};
         for(int L : {0,1,B-1,B,B+1,1000,int(fx.geo.context_cap)-1,int(fx.geo.context_cap)}) {
+            const CaseEnd end=RunCase(std::string(shape.first)+"/B="+std::to_string(B)+
+                                      "/L="+std::to_string(L),{&fx},&scope,[&]() {
             Handles built,restored;
             sslm_prefix twin=Root(fx,&source.pool,built,L);
-            if(!twin) return;
+            if(!twin) return CaseEnd::StopCell;
             const auto b=Save(twin);
-            if(!RequireBlob(b,"4.1 synthetic geometries")) return;
+            if(!RequireBlob(b,"4.1 synthetic geometries")) return CaseEnd::StopCell;
             PKV_CHECK_MSG(b.size()==kHeader+ArtifactHiddenSize(fx)+size_t(L)*fx.BytesPerToken(),
                           "4.1 B=%d L=%d SPX1 length mismatch",B,L);
             sslm_prefix copy=nullptr;
@@ -72,6 +78,9 @@ void SyntheticShapes41() {
                                       "4.1 synthetic shape adopter differs from prefill twin");
                     }
             }
+            return CaseEnd::Next;
+            });
+            if(end==CaseEnd::StopCell) return;
         }
         }
     }

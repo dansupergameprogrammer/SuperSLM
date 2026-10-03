@@ -1,4 +1,5 @@
 #include "precache_common.h"
+#include "precache_checkpoint.h"
 #include "paged-kv/pkv_legacy_a_helpers.h"
 
 namespace {
@@ -164,6 +165,9 @@ void Origins42() {
                   "4.2 selected model is not B=%d",B);
     for (int origin : {0,1,B-1,B,B+1,31,32,65,int(fx.geo.context_cap)-1,
                        int(fx.geo.context_cap)}) {
+        // Each origin is one checkpointed case with its own scene and pool.
+        const CaseEnd end=RunCase(std::string(shape.first)+"/B="+std::to_string(B)+
+                                  "/origin="+std::to_string(origin),{&fx},nullptr,[&]() {
         Scene sc;
         // At cap length the parent, a private fallback restore, and the
         // legacy TwinTokens adopter can each retain cap/B pages. The
@@ -173,9 +177,9 @@ void Origins42() {
         sslm_prefix parent = Root(fx,&pool.pool,sc.h,origin,41);
         const int extension=origin+16>int(fx.geo.context_cap) ? 0 : 16;
         sslm_prefix child = parent ? Child(fx,parent,sc.h,extension) : nullptr;
-        if (!child) continue;
+        if (!child) return CaseEnd::Next;
         const auto b = Save(child);
-        if (!RequireBlob(b,"4.2")) return;
+        if (!RequireBlob(b,"4.2")) return CaseEnd::StopCell;
         PKV_CHECK_EQ(static_cast<int64_t>(Le64(b,120)),origin);
         sslm_prefix restored = nullptr;
         uint32_t shared = UINT32_MAX;
@@ -185,6 +189,9 @@ void Origins42() {
             if(continuation>0)
                 TwinTokens(fx,&pool.pool,child,restored,continuation);
         }
+        return CaseEnd::Next;
+        });
+        if(end==CaseEnd::StopCell) return;
     }
     }
     }
