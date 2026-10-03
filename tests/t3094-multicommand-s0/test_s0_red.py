@@ -26,6 +26,10 @@ from keyword_catalogue import ALLOWED, ANNOTATIONS, KEYWORDS, VALUES, node  # no
 from diversity import BANNED_TRACE_FIELDS, census, gate, rows as corpus_rows, trace_keys  # noqa: E402
 from assemble_corpus import build as authored_population  # noqa: E402
 from raw_identifiability import audit as raw_audit, reading as raw_reading  # noqa: E402
+from shortcut_audit import (audit as shortcut_audit, SEEDS, TRAIN_GROUP_FRACTION,
+                            MAX_PURITY, MIN_SUPPORT,
+                            MAX_CLASSIFIER_ACCURACY, MIN_MEAN_CLASSIFIER_ACCURACY,
+                            MAX_MEAN_CLASSIFIER_ACCURACY)  # noqa: E402
 
 SCHEMA = json.loads((HERE / "command.schema.json").read_text(encoding="utf-8"))
 BYTE_VOCAB = tuple(bytes([i]) for i in range(256))
@@ -80,16 +84,19 @@ def test_frozen_population_and_hashes():
                       ("blind_annotation_input_sha256", "blind-annotation-input.jsonl"),
                       ("model_input_sha256", "model-input.jsonl"),
                       ("identifiability_report_sha256", "identifiability-report.json"),
+                      ("shortcut_report_sha256", "shortcut-report.json"),
+                      ("shortcut_v4_negative_report_sha256", "shortcut-v4-negative-report.json"),
                       ("diversity_report_sha256", "diversity-report.json"),
                       ("assembler_sha256", "assemble_corpus.py"),
                       ("diversity_script_sha256", "diversity.py"),
                       ("identifiability_script_sha256", "raw_identifiability.py"),
+                      ("shortcut_script_sha256", "shortcut_audit.py"),
                       ("attributes_sha256", ".gitattributes"),
                       ("keyword_catalogue_sha256", "keyword_catalogue.py")):
         assert hashlib.sha256((HERE / file).read_bytes()).hexdigest() == manifest[key]
     assert all(hashlib.sha256((HERE / file).read_bytes()).hexdigest() == digest
                for file, digest in manifest["authored_source_sha256"].items())
-    assert json.loads((HERE / "freeze.json").read_text())["version"] == "T-3094-S0-v4"
+    assert json.loads((HERE / "freeze.json").read_text())["version"] == "T-3094-S0-v5"
     assert len(rows) == manifest["rows"] == 1960
     assert len({r["id"] for r in rows}) == len(rows)
     assert len({r["utterance"] for r in rows}) == len(rows)
@@ -120,7 +127,7 @@ def test_frozen_population_and_hashes():
     assert len(pairs) == 240 and all(n == 2 for n in __import__("collections").Counter(pairs).values())
 
 
-def test_v4_diversity_freeze_and_report():
+def test_v5_diversity_freeze_and_report():
     frozen = json.loads((HERE / "freeze.json").read_text())["diversity_gates"]
     report = census(corpus_rows())
     assert report == {k: v for k, v in json.loads((HERE / "diversity-report.json").read_text()).items()
@@ -133,13 +140,37 @@ def test_raw_only_wait_identifiability_and_v3_negative_controls():
     report = raw_audit(rows)
     assert report == json.loads((HERE / "identifiability-report.json").read_text())
     assert report["rows"] == 320 and report["passed"] and report["failure_count"] == 0
-    assert raw_audit([{k: v for k, v in row.items() if k != "game_action_trace"} for row in rows]) == report
+    assert raw_audit([{k: v for k, v in row.items() if k not in ("id", "pair", "annotation_case_id")}
+                      for row in rows]) == report
     for old_raw in (
         "Alpha, stay on the clock for green; fire into north ridge when it comes.",
         "Alpha, stay on the clock for green, then fire into north ridge.",
         "Alpha wing, north ridge, scan, hold, keep the green watch, then fire.",
     ):
         assert raw_reading(old_raw) == "ambiguous"
+
+
+def test_shortcut_challenge_freeze_and_report():
+    limits = json.loads((HERE / "freeze.json").read_text())["shortcut_gates"]
+    assert limits["ngram_lengths"] == [1, 2, 3, 4]
+    assert limits["maximum_ngram_label_purity"] == MAX_PURITY
+    assert limits["minimum_ngram_support"] == MIN_SUPPORT
+    assert limits["classifier_seeds"] == list(SEEDS)
+    assert limits["classifier_train_group_fraction"] == TRAIN_GROUP_FRACTION
+    import sklearn
+    assert limits["classifier_library"] == "scikit-learn " + sklearn.__version__
+    assert limits["maximum_classifier_accuracy_any_split"] == MAX_CLASSIFIER_ACCURACY
+    assert limits["minimum_mean_classifier_accuracy"] == MIN_MEAN_CLASSIFIER_ACCURACY
+    assert limits["maximum_mean_classifier_accuracy"] == MAX_MEAN_CLASSIFIER_ACCURACY
+    report = shortcut_audit(corpus_rows())
+    assert report == json.loads((HERE / "shortcut-report.json").read_text())
+    assert report["passed"]
+    assert all(report[family]["purity"]["offender_count"] == 0
+               for family in ("all", "pc2", "cap_boundary"))
+    negative = json.loads((HERE / "shortcut-v4-negative-report.json").read_text())
+    assert negative["corpus_sha256"] == "e15d45b5b56599dc8142f7f97d62001fbcffb1654d29ac3bb28c1f81d12ce2e1"
+    assert not negative["passed"] and negative["all"]["purity"]["offender_count"] > 0
+    assert negative["all"]["classifier"]["minimum_accuracy"] == 1.0
 
 
 def test_authored_population_repackages_exactly():

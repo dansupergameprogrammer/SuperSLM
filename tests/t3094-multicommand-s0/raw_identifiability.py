@@ -19,10 +19,15 @@ ACTION = re.compile(
     r"(?:signal\s+)?(?:watch|wait|hold)\s+(?:task|order|job|entry)\b",
     re.I,
 )
-WAIT_COMPLETION = re.compile(r"\b(?:task|order|job|entry)\s+(?:complet(?:e|es|ion)|finish(?:es)?|close(?:s)?)\b", re.I)
+WAIT_COMPLETION = re.compile(
+    r"\b(?:task|order|job|entry)\s+"
+    r"(?:complet(?:e|es|ion)|finish(?:es)?|close(?:s)?|ends?|expires?|clears?|"
+    r"resolves?|settles?|times\s+out|is\s+done)\b", re.I)
 NEGATION = re.compile(r"\b(?:do\s+not|don['’]t|never)\s+$", re.I)
 NO_TASK = re.compile(
-    r"\b(?:no|without)\s+(?:a\s+|an\s+|the\s+)?"
+    r"\b(?:no|without|skip|omit|drop|leave\s+out|pass\s+on|forgo|avoid|decline|exclude|bypass|"
+    r"forego|leave\s+off|pass\s+up|waive|refuse)\s+"
+    r"(?:a\s+|an\s+|the\s+)?"
     r"(?:separate|independent|standalone|own)\s+(?:signal\s+)?"
     r"(?:watch|wait|hold)\s+(?:task|order|job|entry)\b", re.I,
 )
@@ -52,8 +57,16 @@ def audit(rows: list[dict]) -> dict:
     for row in tested:
         got = reading(row["utterance"])
         counts[got] += 1
-        expected = "action" if (row["source_class"] == "cap_plus_one" or
-                                row["source_class"] == "pc2" and row["id"].endswith("-W")) else "condition"
+        events = row["game_action_trace"]["events"]
+        queued = any(e.get("event") == "task_queued" and e.get("task") == "signal_watch" for e in events)
+        callback = any(e.get("event") == "completion_callback_registered" for e in events)
+        listener = any(e.get("event") == "signal_listener_registered" for e in events)
+        if queued and callback and not listener:
+            expected = "action"
+        elif listener and not queued and not callback:
+            expected = "condition"
+        else:
+            raise ValueError("boundary trace has no single wait interpretation")
         if got != expected:
             failures.append({"id": row["id"], "expected": expected, "raw_reading": got})
     return {"rows": len(tested), "readings": counts, "failures": failures,

@@ -1,5 +1,5 @@
 {
-  "cross_split_4gram_jaccard": 0.000217,
+  "cross_split_4gram_jaccard": 0.000295,
   "gate_failures": [],
   "literal_label_text_count": 0,
   "literal_label_text_examples": [],
@@ -7,26 +7,26 @@
     "dependency": {
       "complete_pairs": 40,
       "distinct_pair_shapes": 40,
-      "mean_pair_token_jaccard": 0.899295,
-      "minimum_pair_token_jaccard": 0.8,
+      "mean_pair_token_jaccard": 0.916922,
+      "minimum_pair_token_jaccard": 0.806452,
       "pairs": 40
     },
     "ordering": {
       "complete_pairs": 40,
       "distinct_pair_shapes": 40,
-      "mean_pair_token_jaccard": 0.89342,
-      "minimum_pair_token_jaccard": 0.814815,
+      "mean_pair_token_jaccard": 0.919356,
+      "minimum_pair_token_jaccard": 0.818182,
       "pairs": 40
     },
     "simple_trigger": {
       "complete_pairs": 40,
       "distinct_pair_shapes": 40,
-      "mean_pair_token_jaccard": 0.856496,
-      "minimum_pair_token_jaccard": 0.777778,
+      "mean_pair_token_jaccard": 0.899139,
+      "minimum_pair_token_jaccard": 0.769231,
       "pairs": 40
     }
   },
-  "pc2_lexical_leave_pair_out_accuracy": 0.575,
+  "pc2_lexical_leave_pair_out_accuracy": 0.608333,
   "per_stratum": {
     "G/above_cap": {
       "distinct_shapes": 84,

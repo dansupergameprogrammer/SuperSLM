@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 from diversity import census, gate
 from raw_identifiability import audit as raw_audit
+from shortcut_audit import audit as shortcut_audit
 
 HERE = Path(__file__).resolve().parent
 ACTORS = ("alpha wing", "bravo wing", "charlie team", "delta scout", "echo battery",
@@ -100,7 +101,7 @@ def event_trace(cls, actor, target, *, old_target=None, condition=None, arm=None
 
 
 def row(identifier, utterance, source_class, trace, split, session, pair=None):
-    case_id = "C-" + hashlib.sha256(("T3094-v4/" + identifier).encode()).hexdigest()[:16]
+    case_id = "C-" + hashlib.sha256(("T3094-v5/" + identifier).encode()).hexdigest()[:16]
     return {"id": identifier, "annotation_case_id": case_id,
             "utterance": utterance, "source_class": source_class,
             "game_action_trace": trace, "split": split, "source_session": session,
@@ -190,14 +191,20 @@ def main():
     identifiability_file.write_text(json.dumps(identifiability, indent=2, sort_keys=True) + "\n",
                                 encoding="utf-8", newline="\n")
     if not identifiability["passed"]:
-        raise ValueError(f"v4 raw-only identifiability freeze failed: {identifiability['failure_count']} rows")
+        raise ValueError(f"v5 raw-only identifiability freeze failed: {identifiability['failure_count']} rows")
+    shortcut = shortcut_audit(result)
+    shortcut_file = HERE / "shortcut-report.json"
+    shortcut_file.write_text(json.dumps(shortcut, indent=2, sort_keys=True) + "\n",
+                             encoding="utf-8", newline="\n")
+    if not shortcut["passed"]:
+        raise ValueError("v5 n-gram shortcut freeze failed")
     diversity = census(result)
     diversity["gate_failures"] = gate(diversity, json.loads((HERE / "freeze.json").read_text())["diversity_gates"])
     diversity_file = HERE / "diversity-report.json"
     diversity_file.write_text(json.dumps(diversity, indent=2, sort_keys=True) + "\n",
                               encoding="utf-8", newline="\n")
     if diversity["gate_failures"]:
-        raise ValueError("v4 diversity freeze failed: " + "; ".join(diversity["gate_failures"]))
+        raise ValueError("v5 diversity freeze failed: " + "; ".join(diversity["gate_failures"]))
     counts = Counter(r["source_class"] for r in result if r["split"] == "held_out")
     source_files = sorted([*HERE.glob("general-*.txt"), *HERE.glob("unique-*.txt"),
                            *HERE.glob("dedicated-*.txt"), HERE / "development.txt", HERE / "pc2-authored.tsv"])
@@ -207,6 +214,8 @@ def main():
                 "blind_annotation_input_sha256": sha(blind_input),
                 "model_input_sha256": sha(model_input),
                 "identifiability_report_sha256": sha(identifiability_file),
+                "shortcut_report_sha256": sha(shortcut_file),
+                "shortcut_v4_negative_report_sha256": sha(HERE / "shortcut-v4-negative-report.json"),
                 "diversity_report_sha256": sha(diversity_file),
                 "authored_source_sha256": {p.name: sha(p) for p in source_files},
                 "guide_sha256": sha(HERE / "annotation-guide.md"),
@@ -217,6 +226,7 @@ def main():
                 "assembler_sha256": sha(HERE / "assemble_corpus.py"),
                 "diversity_script_sha256": sha(HERE / "diversity.py"),
                 "identifiability_script_sha256": sha(HERE / "raw_identifiability.py"),
+                "shortcut_script_sha256": sha(HERE / "shortcut_audit.py"),
                 "attributes_sha256": sha(HERE / ".gitattributes"),
                 "keyword_catalogue_sha256": sha(HERE / "keyword_catalogue.py")}
     (HERE / "corpus-manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n",

@@ -1,0 +1,348 @@
+{
+  "all": {
+    "classifier": {
+      "allowed_maximum_accuracy": 0.6,
+      "allowed_mean_accuracy": [
+        0.35,
+        0.65
+      ],
+      "maximum_accuracy": 0.53125,
+      "mean_accuracy": 0.41276,
+      "minimum_accuracy": 0.260417,
+      "seeds": [
+        3094,
+        3095,
+        3096,
+        3097,
+        3098,
+        3099,
+        3100,
+        3101
+      ],
+      "sklearn_version": "1.9.0",
+      "splits": [
+        {
+          "accuracy": 0.260417,
+          "correct": 25,
+          "features": 3489,
+          "seed": 3094,
+          "test_groups": 12,
+          "test_rows": 96,
+          "train_groups": 28,
+          "train_rows": 224
+        },
+        {
+          "accuracy": 0.416667,
+          "correct": 40,
+          "features": 3474,
+          "seed": 3095,
+          "test_groups": 12,
+          "test_rows": 96,
+          "train_groups": 28,
+          "train_rows": 224
+        },
+        {
+          "accuracy": 0.333333,
+          "correct": 32,
+          "features": 3406,
+          "seed": 3096,
+          "test_groups": 12,
+          "test_rows": 96,
+          "train_groups": 28,
+          "train_rows": 224
+        },
+        {
+          "accuracy": 0.427083,
+          "correct": 41,
+          "features": 3431,
+          "seed": 3097,
+          "test_groups": 12,
+          "test_rows": 96,
+          "train_groups": 28,
+          "train_rows": 224
+        },
+        {
+          "accuracy": 0.447917,
+          "correct": 43,
+          "features": 3507,
+          "seed": 3098,
+          "test_groups": 12,
+          "test_rows": 96,
+          "train_groups": 28,
+          "train_rows": 224
+        },
+        {
+          "accuracy": 0.427083,
+          "correct": 41,
+          "features": 3423,
+          "seed": 3099,
+          "test_groups": 12,
+          "test_rows": 96,
+          "train_groups": 28,
+          "train_rows": 224
+        },
+        {
+          "accuracy": 0.458333,
+          "correct": 44,
+          "features": 3431,
+          "seed": 3100,
+          "test_groups": 12,
+          "test_rows": 96,
+          "train_groups": 28,
+          "train_rows": 224
+        },
+        {
+          "accuracy": 0.53125,
+          "correct": 51,
+          "features": 3482,
+          "seed": 3101,
+          "test_groups": 12,
+          "test_rows": 96,
+          "train_groups": 28,
+          "train_rows": 224
+        }
+      ]
+    },
+    "passed": true,
+    "purity": {
+      "eligible_ngrams": 1484,
+      "maximum_allowed_purity": 0.8,
+      "maximum_observed_purity": 0.75,
+      "minimum_support": 8,
+      "offender_count": 0,
+      "top_offenders": []
+    },
+    "rows": 320
+  },
+  "cap_boundary": {
+    "classifier": {
+      "allowed_maximum_accuracy": 0.6,
+      "allowed_mean_accuracy": [
+        0.35,
+        0.65
+      ],
+      "maximum_accuracy": 0.541667,
+      "mean_accuracy": 0.432292,
+      "minimum_accuracy": 0.333333,
+      "seeds": [
+        3094,
+        3095,
+        3096,
+        3097,
+        3098,
+        3099,
+        3100,
+        3101
+      ],
+      "sklearn_version": "1.9.0",
+      "splits": [
+        {
+          "accuracy": 0.333333,
+          "correct": 8,
+          "features": 2461,
+          "seed": 3094,
+          "test_groups": 12,
+          "test_rows": 24,
+          "train_groups": 28,
+          "train_rows": 56
+        },
+        {
+          "accuracy": 0.458333,
+          "correct": 11,
+          "features": 2419,
+          "seed": 3095,
+          "test_groups": 12,
+          "test_rows": 24,
+          "train_groups": 28,
+          "train_rows": 56
+        },
+        {
+          "accuracy": 0.333333,
+          "correct": 8,
+          "features": 2382,
+          "seed": 3096,
+          "test_groups": 12,
+          "test_rows": 24,
+          "train_groups": 28,
+          "train_rows": 56
+        },
+        {
+          "accuracy": 0.458333,
+          "correct": 11,
+          "features": 2422,
+          "seed": 3097,
+          "test_groups": 12,
+          "test_rows": 24,
+          "train_groups": 28,
+          "train_rows": 56
+        },
+        {
+          "accuracy": 0.5,
+          "correct": 12,
+          "features": 2466,
+          "seed": 3098,
+          "test_groups": 12,
+          "test_rows": 24,
+          "train_groups": 28,
+          "train_rows": 56
+        },
+        {
+          "accuracy": 0.416667,
+          "correct": 10,
+          "features": 2392,
+          "seed": 3099,
+          "test_groups": 12,
+          "test_rows": 24,
+          "train_groups": 28,
+          "train_rows": 56
+        },
+        {
+          "accuracy": 0.541667,
+          "correct": 13,
+          "features": 2419,
+          "seed": 3100,
+          "test_groups": 12,
+          "test_rows": 24,
+          "train_groups": 28,
+          "train_rows": 56
+        },
+        {
+          "accuracy": 0.416667,
+          "correct": 10,
+          "features": 2457,
+          "seed": 3101,
+          "test_groups": 12,
+          "test_rows": 24,
+          "train_groups": 28,
+          "train_rows": 56
+        }
+      ]
+    },
+    "passed": true,
+    "purity": {
+      "eligible_ngrams": 573,
+      "maximum_allowed_purity": 0.8,
+      "maximum_observed_purity": 0.75,
+      "minimum_support": 4,
+      "offender_count": 0,
+      "top_offenders": []
+    },
+    "rows": 80
+  },
+  "passed": true,
+  "pc2": {
+    "classifier": {
+      "allowed_maximum_accuracy": 0.6,
+      "allowed_mean_accuracy": [
+        0.35,
+        0.65
+      ],
+      "maximum_accuracy": 0.5,
+      "mean_accuracy": 0.425347,
+      "minimum_accuracy": 0.263889,
+      "seeds": [
+        3094,
+        3095,
+        3096,
+        3097,
+        3098,
+        3099,
+        3100,
+        3101
+      ],
+      "sklearn_version": "1.9.0",
+      "splits": [
+        {
+          "accuracy": 0.263889,
+          "correct": 19,
+          "features": 2619,
+          "seed": 3094,
+          "test_groups": 12,
+          "test_rows": 72,
+          "train_groups": 28,
+          "train_rows": 168
+        },
+        {
+          "accuracy": 0.430556,
+          "correct": 31,
+          "features": 2595,
+          "seed": 3095,
+          "test_groups": 12,
+          "test_rows": 72,
+          "train_groups": 28,
+          "train_rows": 168
+        },
+        {
+          "accuracy": 0.333333,
+          "correct": 24,
+          "features": 2606,
+          "seed": 3096,
+          "test_groups": 12,
+          "test_rows": 72,
+          "train_groups": 28,
+          "train_rows": 168
+        },
+        {
+          "accuracy": 0.472222,
+          "correct": 34,
+          "features": 2574,
+          "seed": 3097,
+          "test_groups": 12,
+          "test_rows": 72,
+          "train_groups": 28,
+          "train_rows": 168
+        },
+        {
+          "accuracy": 0.472222,
+          "correct": 34,
+          "features": 2626,
+          "seed": 3098,
+          "test_groups": 12,
+          "test_rows": 72,
+          "train_groups": 28,
+          "train_rows": 168
+        },
+        {
+          "accuracy": 0.472222,
+          "correct": 34,
+          "features": 2587,
+          "seed": 3099,
+          "test_groups": 12,
+          "test_rows": 72,
+          "train_groups": 28,
+          "train_rows": 168
+        },
+        {
+          "accuracy": 0.458333,
+          "correct": 33,
+          "features": 2572,
+          "seed": 3100,
+          "test_groups": 12,
+          "test_rows": 72,
+          "train_groups": 28,
+          "train_rows": 168
+        },
+        {
+          "accuracy": 0.5,
+          "correct": 36,
+          "features": 2615,
+          "seed": 3101,
+          "test_groups": 12,
+          "test_rows": 72,
+          "train_groups": 28,
+          "train_rows": 168
+        }
+      ]
+    },
+    "passed": true,
+    "purity": {
+      "eligible_ngrams": 580,
+      "maximum_allowed_purity": 0.8,
+      "maximum_observed_purity": 0.75,
+      "minimum_support": 8,
+      "offender_count": 0,
+      "top_offenders": []
+    },
+    "rows": 240
+  }
+}
