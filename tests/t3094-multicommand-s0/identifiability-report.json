@@ -1,0 +1,11 @@
+{
+  "failure_count": 0,
+  "failures": [],
+  "passed": true,
+  "readings": {
+    "action": 160,
+    "ambiguous": 0,
+    "condition": 160
+  },
+  "rows": 320
+}

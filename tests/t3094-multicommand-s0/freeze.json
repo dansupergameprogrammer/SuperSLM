@@ -1,7 +1,7 @@
 {
-  "version": "T-3094-S0-v3",
-  "date": "2026-10-02",
-  "decisions": ["D-SLM8047", "D-SLM8048"],
+  "version": "T-3094-S0-v4",
+  "date": "2026-10-03",
+  "decisions": ["D-SLM8047", "D-SLM8048", "D-SLM8060"],
   "schema": "command.schema.json",
   "segmentation": "one item per independently executable action; a trigger is metadata; wait is an item only when separately scheduled and tracked with its own completion or cancellation",
   "route": {
@@ -11,8 +11,10 @@
     "rejection": "zero exposed items and zero action attempts for every incomplete, invalid, over-cap, no-action or cancelled batch"
   },
   "consumer_cap_for_corpus": 4,
-  "corpus_provenance": "1960 complete utterances written individually in tracked general-*, unique-*, dedicated-*, development.txt and pc2-authored.tsv sources; synthetic transcript sessions are identified as synthetic, partitioned by session and speaker; assemble_corpus.py only packages them",
-  "prior_annotation_round": "T-3096/T-3097 labels for v2 are void and prohibited as v3 gold",
+  "corpus_provenance": "1960 complete utterances are literal source lines in tracked general-*, unique-*, dedicated-*, development.txt and pc2-authored.tsv files; synthetic transcript sessions are identified as synthetic, partitioned by session and speaker; assemble_corpus.py only packages them",
+  "prior_annotation_round": "T-3096/T-3097 labels for v2 are void; v3 was held before annotation; neither is v4 gold",
+  "model_visible_input": "only the raw utterance string from model-input.jsonl; the JSONL wrapper, source identifiers, condition, pair arm and game_action_trace are evaluator or annotator data and never enter the candidate prompt",
+  "raw_only_identifiability_gate": "Every PC-2 arm and at-cap/cap-plus-one boundary row must state whether a separate wait/watch order is explicitly opened or explicitly refused; a requested wait must have its own completion condition. raw_identifiability.py classifies utterance text before comparing it with private trace-derived expectations.",
   "diversity_gates": {
     "minimum_distinct_shape_fraction_per_stratum": 0.65,
     "maximum_single_shape_share": 0.075,

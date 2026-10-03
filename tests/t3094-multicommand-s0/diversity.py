@@ -1,4 +1,4 @@
-"""Read-only diversity census and predeclared v3 freeze gates.
+"""Read-only diversity census and predeclared v4 freeze gates.
 
 This module never creates utterances or labels. All counts come from the
 committed corpus, with entity substitutions removed before shape counting.

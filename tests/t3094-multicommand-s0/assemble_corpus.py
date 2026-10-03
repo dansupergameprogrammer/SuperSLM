@@ -11,6 +11,7 @@ import hashlib
 import json
 from pathlib import Path
 from diversity import census, gate
+from raw_identifiability import audit as raw_audit
 
 HERE = Path(__file__).resolve().parent
 ACTORS = ("alpha wing", "bravo wing", "charlie team", "delta scout", "echo battery",
@@ -99,7 +100,7 @@ def event_trace(cls, actor, target, *, old_target=None, condition=None, arm=None
 
 
 def row(identifier, utterance, source_class, trace, split, session, pair=None):
-    case_id = "C-" + hashlib.sha256(("T3094-v3/" + identifier).encode()).hexdigest()[:16]
+    case_id = "C-" + hashlib.sha256(("T3094-v4/" + identifier).encode()).hexdigest()[:16]
     return {"id": identifier, "annotation_case_id": case_id,
             "utterance": utterance, "source_class": source_class,
             "game_action_trace": trace, "split": split, "source_session": session,
@@ -174,19 +175,38 @@ def main():
         "case_id": r["annotation_case_id"], "utterance": r["utterance"],
         "game_action_trace": r["game_action_trace"]}, ensure_ascii=False, sort_keys=True) + "\n"
         for r in result if r["split"] == "held_out"), encoding="utf-8", newline="\n")
+    blind_input = HERE / "blind-annotation-input.jsonl"
+    blind_input.write_text("".join(json.dumps({
+        "case_id": r["annotation_case_id"], "utterance": r["utterance"]},
+        ensure_ascii=False, sort_keys=True) + "\n"
+        for r in result if r["split"] == "held_out"), encoding="utf-8", newline="\n")
+    # This is the only candidate-facing payload. Line order maps to the
+    # evaluator's private corpus order; no ID, class, arm, trace or label ships.
+    model_input = HERE / "model-input.jsonl"
+    model_input.write_text("".join(json.dumps({"utterance": r["utterance"]}, ensure_ascii=False, sort_keys=True) + "\n"
+        for r in result if r["split"] == "held_out"), encoding="utf-8", newline="\n")
+    identifiability = raw_audit(result)
+    identifiability_file = HERE / "identifiability-report.json"
+    identifiability_file.write_text(json.dumps(identifiability, indent=2, sort_keys=True) + "\n",
+                                encoding="utf-8", newline="\n")
+    if not identifiability["passed"]:
+        raise ValueError(f"v4 raw-only identifiability freeze failed: {identifiability['failure_count']} rows")
     diversity = census(result)
     diversity["gate_failures"] = gate(diversity, json.loads((HERE / "freeze.json").read_text())["diversity_gates"])
     diversity_file = HERE / "diversity-report.json"
     diversity_file.write_text(json.dumps(diversity, indent=2, sort_keys=True) + "\n",
                               encoding="utf-8", newline="\n")
     if diversity["gate_failures"]:
-        raise ValueError("v3 diversity freeze failed: " + "; ".join(diversity["gate_failures"]))
+        raise ValueError("v4 diversity freeze failed: " + "; ".join(diversity["gate_failures"]))
     counts = Counter(r["source_class"] for r in result if r["split"] == "held_out")
     source_files = sorted([*HERE.glob("general-*.txt"), *HERE.glob("unique-*.txt"),
                            *HERE.glob("dedicated-*.txt"), HERE / "development.txt", HERE / "pc2-authored.tsv"])
     manifest = {"rows": len(result), "held_out": 1760, "development": 200,
                 "counts": dict(sorted(counts.items())), "sha256": sha(corpus),
                 "annotation_input_sha256": sha(annotation_input),
+                "blind_annotation_input_sha256": sha(blind_input),
+                "model_input_sha256": sha(model_input),
+                "identifiability_report_sha256": sha(identifiability_file),
                 "diversity_report_sha256": sha(diversity_file),
                 "authored_source_sha256": {p.name: sha(p) for p in source_files},
                 "guide_sha256": sha(HERE / "annotation-guide.md"),
@@ -196,6 +216,7 @@ def main():
                 "resource_counts_sha256": sha(HERE / "resource-model-counts.json"),
                 "assembler_sha256": sha(HERE / "assemble_corpus.py"),
                 "diversity_script_sha256": sha(HERE / "diversity.py"),
+                "identifiability_script_sha256": sha(HERE / "raw_identifiability.py"),
                 "attributes_sha256": sha(HERE / ".gitattributes"),
                 "keyword_catalogue_sha256": sha(HERE / "keyword_catalogue.py")}
     (HERE / "corpus-manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n",

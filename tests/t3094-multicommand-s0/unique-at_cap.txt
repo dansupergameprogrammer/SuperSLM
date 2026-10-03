@@ -1,40 +1,40 @@
-Alpha wing, move north ridge, scan it, hold there, fire on green.
-Bravo wing to north ridge; sweep, keep position, shoot at the horn.
-Charlie team, get north ridge, check it, stay there, fire when called.
-Delta scout, north ridge first; sensors, hold, then shoot on the flare.
-Echo battery, take north ridge, scan, remain, fire at my signal.
-Foxtrot patrol, go north ridge, search, hold the ridge, fire on amber.
-Golf squad, move north ridge and inspect; keep it; fire at the beep.
-Hotel drone, fly north ridge, survey, hover, fire when the light changes.
-India unit, north ridge move, scan, hold position, fire on my word.
-Juliet group, reach north ridge, check the area, stay, fire at the ping.
-Alpha wing to east bridge, sweep it, hold the span, fire on green.
-Bravo wing, advance east bridge; scan, remain, shoot at the chime.
-Charlie team, east bridge, check it, stay there, fire when I call.
-Delta scout, take east bridge, sensor pass, hold, then fire at the flash.
-Echo battery, east bridge move, survey, keep station, fire on the tone.
-Foxtrot patrol, get east bridge, inspect, remain, fire at the code.
-Golf squad, move east bridge and scan, hold it, fire on red smoke.
-Hotel drone, fly east bridge, search, hover there, fire at my tap.
-India unit, reach east bridge, sweep, maintain position, shoot on blue.
-Juliet group, east bridge first, sensors, hold, fire at the beacon.
-Alpha wing, south gate, then scan; hold the gate; fire on green.
-Bravo wing to south gate, look it over, remain, shoot at the horn.
-Charlie team, take south gate, inspect, stay, fire at the signal.
-Delta scout, move south gate, sweep, hold there, fire at my word.
-Echo battery, south gate move, sensor pass, remain, fire on amber.
-Foxtrot patrol, go south gate, scan, keep it, fire on the click.
-Golf squad, reach south gate, search, hold position, fire when called.
-Hotel drone, fly south gate, survey, hover, fire at the flare.
-India unit, south gate first, check it, hold, fire at the beep.
-Juliet group, move south gate, inspect, stay, fire on green light.
-Alpha wing, west tower, scan, hold there, fire on the horn.
-Bravo wing to west tower; inspect it; stay; fire at the flash.
-Charlie team, get west tower, sweep, hold, shoot on my mark.
-Delta scout, move west tower, run sensors, remain, fire on the chime.
-Echo battery, take west tower, search it, hold position, fire at the tone.
-Foxtrot patrol, west tower move, scan, stay, fire when the beacon blinks.
-Golf squad, reach west tower, check it, hold, fire at code red.
-Hotel drone, fly west tower, survey, hover there, fire on my call.
-India unit, west tower first, inspect, maintain station, fire at the ping.
-Juliet group, advance west tower, sweep, hold that post, fire on green.
+Alpha wing, move north ridge, scan it, hold there, fire on green. Do not queue a separate watch task; there is no separate task completion; no fire until that signal.
+Bravo wing to north ridge; sweep, keep position, shoot at the horn. Do not open a separate watch task; there is no separate task completion; no fire before that cue.
+Charlie team, get north ridge, check it, stay there, fire when called. Don't start a separate watch task; there is no separate task completion; no fire until that cue.
+Delta scout, north ridge first; sensors, hold, then shoot on the flare. No fire until that signal; do not log a separate watch task; there is no separate task completion.
+Echo battery, take north ridge, scan, remain, fire at my signal. No fire before that cue; do not assign a separate watch task; there is no separate task completion.
+Foxtrot patrol, go north ridge, search, hold the ridge, fire on amber. No fire until that cue; don't register a separate watch task; there is no separate task completion.
+Golf squad, move north ridge and inspect; keep it; fire at the beep. There is no separate task completion; no fire until that signal; do not schedule a separate watch task.
+Hotel drone, fly north ridge, survey, hover, fire when the light changes. There is no separate task completion; no fire before that cue; do not create a separate watch task.
+India unit, north ridge move, scan, hold position, fire on my word. There is no separate task completion; no fire until that cue; don't add a separate watch task.
+Juliet group, reach north ridge, check the area, stay, fire at the ping. Do not activate a separate watch task; there is no separate task completion; no fire until that signal.
+Alpha wing to east bridge, sweep it, hold the span, fire on green. Do not queue an independent wait order; there is no separate task completion; no fire before that cue.
+Bravo wing, advance east bridge; scan, remain, shoot at the chime. Don't open an independent wait order; there is no separate task completion; no fire until that cue.
+Charlie team, east bridge, check it, stay there, fire when I call. No fire until that signal; do not start an independent wait order; there is no separate task completion.
+Delta scout, take east bridge, sensor pass, hold, then fire at the flash. No fire before that cue; do not log an independent wait order; there is no separate task completion.
+Echo battery, east bridge move, survey, keep station, fire on the tone. No fire until that cue; don't assign an independent wait order; there is no separate task completion.
+Foxtrot patrol, get east bridge, inspect, remain, fire at the code. There is no separate task completion; no fire until that signal; do not register an independent wait order.
+Golf squad, move east bridge and scan, hold it, fire on red smoke. There is no separate task completion; no fire before that cue; do not schedule an independent wait order.
+Hotel drone, fly east bridge, search, hover there, fire at my tap. There is no separate task completion; no fire until that cue; don't create an independent wait order.
+India unit, reach east bridge, sweep, maintain position, shoot on blue. Do not add an independent wait order; there is no separate task completion; no fire until that signal.
+Juliet group, east bridge first, sensors, hold, fire at the beacon. Do not activate an independent wait order; there is no separate task completion; no fire before that cue.
+Alpha wing, south gate, then scan; hold the gate; fire on green. Don't queue a standalone signal watch job; there is no separate task completion; no fire until that cue.
+Bravo wing to south gate, look it over, remain, shoot at the horn. No fire until that signal; do not open a standalone signal watch job; there is no separate task completion.
+Charlie team, take south gate, inspect, stay, fire at the signal. No fire before that cue; do not start a standalone signal watch job; there is no separate task completion.
+Delta scout, move south gate, sweep, hold there, fire at my word. No fire until that cue; don't log a standalone signal watch job; there is no separate task completion.
+Echo battery, south gate move, sensor pass, remain, fire on amber. There is no separate task completion; no fire until that signal; do not assign a standalone signal watch job.
+Foxtrot patrol, go south gate, scan, keep it, fire on the click. There is no separate task completion; no fire before that cue; do not register a standalone signal watch job.
+Golf squad, reach south gate, search, hold position, fire when called. There is no separate task completion; no fire until that cue; don't schedule a standalone signal watch job.
+Hotel drone, fly south gate, survey, hover, fire at the flare. Do not create a standalone signal watch job; there is no separate task completion; no fire until that signal.
+India unit, south gate first, check it, hold, fire at the beep. Do not add a standalone signal watch job; there is no separate task completion; no fire before that cue.
+Juliet group, move south gate, inspect, stay, fire on green light. Don't activate a standalone signal watch job; there is no separate task completion; no fire until that cue.
+Alpha wing, west tower, scan, hold there, fire on the horn. No fire until that signal; do not queue a separate signal wait entry; there is no separate task completion.
+Bravo wing to west tower; inspect it; stay; fire at the flash. No fire before that cue; do not open a separate signal wait entry; there is no separate task completion.
+Charlie team, get west tower, sweep, hold, shoot on my mark. No fire until that cue; don't start a separate signal wait entry; there is no separate task completion.
+Delta scout, move west tower, run sensors, remain, fire on the chime. There is no separate task completion; no fire until that signal; do not log a separate signal wait entry.
+Echo battery, take west tower, search it, hold position, fire at the tone. There is no separate task completion; no fire before that cue; do not assign a separate signal wait entry.
+Foxtrot patrol, west tower move, scan, stay, fire when the beacon blinks. There is no separate task completion; no fire until that cue; don't register a separate signal wait entry.
+Golf squad, reach west tower, check it, hold, fire at code red. Do not schedule a separate signal wait entry; there is no separate task completion; no fire until that signal.
+Hotel drone, fly west tower, survey, hover there, fire on my call. Do not create a separate signal wait entry; there is no separate task completion; no fire before that cue.
+India unit, west tower first, inspect, maintain station, fire at the ping. Don't add a separate signal wait entry; there is no separate task completion; no fire until that cue.
+Juliet group, advance west tower, sweep, hold that post, fire on green. No fire until that signal; do not activate a separate signal wait entry; there is no separate task completion.

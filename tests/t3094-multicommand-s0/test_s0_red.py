@@ -25,6 +25,7 @@ from resource_pairs import DIAGNOSTICS, pair  # noqa: E402
 from keyword_catalogue import ALLOWED, ANNOTATIONS, KEYWORDS, VALUES, node  # noqa: E402
 from diversity import BANNED_TRACE_FIELDS, census, gate, rows as corpus_rows, trace_keys  # noqa: E402
 from assemble_corpus import build as authored_population  # noqa: E402
+from raw_identifiability import audit as raw_audit, reading as raw_reading  # noqa: E402
 
 SCHEMA = json.loads((HERE / "command.schema.json").read_text(encoding="utf-8"))
 BYTE_VOCAB = tuple(bytes([i]) for i in range(256))
@@ -76,15 +77,19 @@ def test_frozen_population_and_hashes():
                       ("freeze_sha256", "freeze.json"),
                       ("resource_counts_sha256", "resource-model-counts.json"),
                       ("annotation_input_sha256", "annotation-input.jsonl"),
+                      ("blind_annotation_input_sha256", "blind-annotation-input.jsonl"),
+                      ("model_input_sha256", "model-input.jsonl"),
+                      ("identifiability_report_sha256", "identifiability-report.json"),
                       ("diversity_report_sha256", "diversity-report.json"),
                       ("assembler_sha256", "assemble_corpus.py"),
                       ("diversity_script_sha256", "diversity.py"),
+                      ("identifiability_script_sha256", "raw_identifiability.py"),
                       ("attributes_sha256", ".gitattributes"),
                       ("keyword_catalogue_sha256", "keyword_catalogue.py")):
         assert hashlib.sha256((HERE / file).read_bytes()).hexdigest() == manifest[key]
     assert all(hashlib.sha256((HERE / file).read_bytes()).hexdigest() == digest
                for file, digest in manifest["authored_source_sha256"].items())
-    assert json.loads((HERE / "freeze.json").read_text())["version"] == "T-3094-S0-v3"
+    assert json.loads((HERE / "freeze.json").read_text())["version"] == "T-3094-S0-v4"
     assert len(rows) == manifest["rows"] == 1960
     assert len({r["id"] for r in rows}) == len(rows)
     assert len({r["utterance"] for r in rows}) == len(rows)
@@ -99,6 +104,13 @@ def test_frozen_population_and_hashes():
     assert len(annotation) == 1760
     assert {a["case_id"] for a in annotation} == {r["annotation_case_id"] for r in rows if r["split"] == "held_out"}
     assert all(set(a) == {"case_id", "utterance", "game_action_trace"} for a in annotation)
+    blind = [json.loads(line) for line in (HERE / "blind-annotation-input.jsonl").read_text(encoding="utf-8").splitlines()]
+    model = [json.loads(line) for line in (HERE / "model-input.jsonl").read_text(encoding="utf-8").splitlines()]
+    held = [r for r in rows if r["split"] == "held_out"]
+    assert all(set(b) == {"case_id", "utterance"} for b in blind)
+    assert all(set(m) == {"utterance"} for m in model)
+    assert [b["case_id"] for b in blind] == [r["annotation_case_id"] for r in held]
+    assert [m["utterance"] for m in model] == [r["utterance"] for r in held]
     assert not any(key in BANNED_TRACE_FIELDS for r in rows for key in trace_keys(r["game_action_trace"]))
     counts = manifest["counts"]
     assert all(counts[name] == 40 for name in ("at_cap", "cap_plus_one", "ambiguous_executable"))
@@ -108,12 +120,26 @@ def test_frozen_population_and_hashes():
     assert len(pairs) == 240 and all(n == 2 for n in __import__("collections").Counter(pairs).values())
 
 
-def test_v3_diversity_freeze_and_report():
+def test_v4_diversity_freeze_and_report():
     frozen = json.loads((HERE / "freeze.json").read_text())["diversity_gates"]
     report = census(corpus_rows())
     assert report == {k: v for k, v in json.loads((HERE / "diversity-report.json").read_text()).items()
                       if k != "gate_failures"}
     assert gate(report, frozen) == []
+
+
+def test_raw_only_wait_identifiability_and_v3_negative_controls():
+    rows = corpus_rows()
+    report = raw_audit(rows)
+    assert report == json.loads((HERE / "identifiability-report.json").read_text())
+    assert report["rows"] == 320 and report["passed"] and report["failure_count"] == 0
+    assert raw_audit([{k: v for k, v in row.items() if k != "game_action_trace"} for row in rows]) == report
+    for old_raw in (
+        "Alpha, stay on the clock for green; fire into north ridge when it comes.",
+        "Alpha, stay on the clock for green, then fire into north ridge.",
+        "Alpha wing, north ridge, scan, hold, keep the green watch, then fire.",
+    ):
+        assert raw_reading(old_raw) == "ambiguous"
 
 
 def test_authored_population_repackages_exactly():

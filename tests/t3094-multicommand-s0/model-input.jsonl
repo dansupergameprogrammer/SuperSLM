@@ -1,0 +1,1760 @@
+{"utterance": "Alpha wing, get to north ridge and scan it."}
+{"utterance": "Bravo wing to north ridge; sweep that position on arrival."}
+{"utterance": "Move Charlie team north ridge, then have them scan."}
+{"utterance": "Delta scout, north ridge first, sensor pass after."}
+{"utterance": "Echo battery should reach north ridge before scanning there."}
+{"utterance": "Foxtrot patrol: go north ridge, check the ground."}
+{"utterance": "Golf squad, head for north ridge and scan once set."}
+{"utterance": "Hotel drone, take north ridge, then look it over."}
+{"utterance": "India unit to north ridge; run a scan after you land."}
+{"utterance": "Juliet group, relocate north ridge and sweep the place."}
+{"utterance": "At east bridge, Alpha wing needs a scan after moving in."}
+{"utterance": "Bravo wing, advance to east bridge; scan the span."}
+{"utterance": "Send Charlie team over to east bridge and check it."}
+{"utterance": "Delta scout first to east bridge, then a sensor sweep."}
+{"utterance": "Echo battery: east bridge relocation, east bridge scan."}
+{"utterance": "Foxtrot patrol, make east bridge, then search around."}
+{"utterance": "Golf squad should move east bridge before scanning it."}
+{"utterance": "Hotel drone, get across to east bridge, look about."}
+{"utterance": "India unit, take up position at east bridge and scan."}
+{"utterance": "Juliet group to east bridge; once there, sweep it."}
+{"utterance": "Alpha wing goes south gate; follow with a scan."}
+{"utterance": "Bravo wing, south gate, then check the approaches."}
+{"utterance": "Charlie team, move down to south gate and search."}
+{"utterance": "Delta scout should reach south gate, scan it afterward."}
+{"utterance": "Echo battery, reposition south gate, look over that sector."}
+{"utterance": "Foxtrot patrol, head south gate before the sensor pass."}
+{"utterance": "Golf squad, take south gate and scan the gate area."}
+{"utterance": "Hotel drone: fly to south gate; sweep on arrival."}
+{"utterance": "India unit, south gate movement first, scan second."}
+{"utterance": "Juliet group, get south gate and check its perimeter."}
+{"utterance": "Move Alpha wing west tower, scan from there."}
+{"utterance": "Bravo wing to west tower and then a full sweep."}
+{"utterance": "Charlie team, secure west tower position; scan afterward."}
+{"utterance": "Delta scout, travel to west tower; run sensors there."}
+{"utterance": "Echo battery should move to west tower, inspect it."}
+{"utterance": "Foxtrot patrol, west tower first, scan when ready."}
+{"utterance": "Golf squad, get over to west tower, sweep nearby."}
+{"utterance": "Hotel drone goes west tower; check it from above."}
+{"utterance": "India unit, take west tower and look it over."}
+{"utterance": "Juliet group: west tower approach, followed by a scan."}
+{"utterance": "Alpha wing, upper deck is your move; scan after."}
+{"utterance": "Bravo wing, climb to upper deck and sweep it."}
+{"utterance": "Charlie team should reach upper deck before checking it."}
+{"utterance": "Delta scout, upper deck, then run a sensor pass."}
+{"utterance": "Echo battery to upper deck; look for contacts there."}
+{"utterance": "Foxtrot patrol, get topside at upper deck and scan."}
+{"utterance": "Golf squad, move onto upper deck and inspect it."}
+{"utterance": "Hotel drone, fly upper deck, scan from that position."}
+{"utterance": "India unit: upper deck movement, then upper deck search."}
+{"utterance": "Juliet group, take upper deck; follow up with sensors."}
+{"utterance": "Alpha wing into lower tunnel, then scan inside."}
+{"utterance": "Bravo wing, reach lower tunnel and sweep the route."}
+{"utterance": "Charlie team, lower tunnel first; check it once there."}
+{"utterance": "Delta scout, enter lower tunnel; look down the passage."}
+{"utterance": "Echo battery should move lower tunnel before scanning."}
+{"utterance": "Foxtrot patrol: lower tunnel approach, sensor pass next."}
+{"utterance": "Golf squad, get down to lower tunnel and search."}
+{"utterance": "Hotel drone, lower tunnel, scan the floor on arrival."}
+{"utterance": "India unit to lower tunnel and then an area sweep."}
+{"utterance": "Juliet group, travel lower tunnel; inspect that space."}
+{"utterance": "Alpha wing, cross to river crossing, scan the bank."}
+{"utterance": "Bravo wing to river crossing; sweep after you arrive."}
+{"utterance": "Charlie team should move river crossing and check it."}
+{"utterance": "Delta scout, reach river crossing, run a sensor pass."}
+{"utterance": "Echo battery: river crossing relocation, local scan afterward."}
+{"utterance": "Foxtrot patrol, go river crossing and search the banks."}
+{"utterance": "Golf squad, take river crossing; look around there."}
+{"utterance": "Hotel drone, fly river crossing; scan the waterline."}
+{"utterance": "India unit, river crossing first, sensor sweep second."}
+{"utterance": "Juliet group, get to river crossing and inspect it."}
+{"utterance": "Alpha wing, supply depot is your destination; scan it too."}
+{"utterance": "Bravo wing, advance supply depot, search on arrival."}
+{"utterance": "Charlie team to supply depot; run sensors once there."}
+{"utterance": "Delta scout, take supply depot and sweep the yard."}
+{"utterance": "Echo battery should reach supply depot before scanning."}
+{"utterance": "Foxtrot patrol, get to supply depot, check the stores."}
+{"utterance": "Golf squad, supply depot move, then an area scan."}
+{"utterance": "Hotel drone, fly supply depot, look around the compound."}
+{"utterance": "India unit, reach supply depot; inspect the approaches."}
+{"utterance": "Juliet group to supply depot, then sweep it."}
+{"utterance": "Alpha wing, move up to radar mast; scan nearby."}
+{"utterance": "Bravo wing, radar mast first, sweep the base after."}
+{"utterance": "Charlie team should reach radar mast and run sensors."}
+{"utterance": "Delta scout, travel radar mast; check the mast area."}
+{"utterance": "Echo battery to radar mast; scan from that position."}
+{"utterance": "Foxtrot patrol, get radar mast, look over the site."}
+{"utterance": "Golf squad, radar mast approach, local sweep next."}
+{"utterance": "Hotel drone, fly radar mast, inspect it from above."}
+{"utterance": "India unit, head radar mast and scan the surroundings."}
+{"utterance": "Juliet group, take radar mast; sensor pass afterward."}
+{"utterance": "Alpha wing to landing zone, scan when there."}
+{"utterance": "Bravo wing, get into landing zone; sweep the ground."}
+{"utterance": "Charlie team should move landing zone before searching."}
+{"utterance": "Delta scout, reach landing zone, look over the pad."}
+{"utterance": "Echo battery, landing zone relocation; scan on arrival."}
+{"utterance": "Foxtrot patrol to landing zone, then check the area."}
+{"utterance": "Golf squad, take landing zone and run sensors."}
+{"utterance": "Hotel drone, fly landing zone; scan the perimeter."}
+{"utterance": "India unit, landing zone move, follow with a sweep."}
+{"utterance": "Juliet group, arrive landing zone and inspect it."}
+{"utterance": "alpha wing north ridge then hold"}
+{"utterance": "bravo wing move north ridge stay put there"}
+{"utterance": "charlie team to north ridge hold on arrival"}
+{"utterance": "delta scout go north ridge maintain position"}
+{"utterance": "echo battery north ridge move then hold"}
+{"utterance": "foxtrot patrol head north ridge sit tight"}
+{"utterance": "golf squad north ridge hold once you get there"}
+{"utterance": "hotel drone shift north ridge remain there"}
+{"utterance": "india unit north ridge then keep station"}
+{"utterance": "juliet group get north ridge and hold"}
+{"utterance": "east bridge alpha wing move then hold it"}
+{"utterance": "bravo wing to east bridge hold the bridge"}
+{"utterance": "charlie team east bridge stay after moving"}
+{"utterance": "delta scout make east bridge then sit"}
+{"utterance": "echo battery move east bridge hold position"}
+{"utterance": "foxtrot patrol east bridge then remain"}
+{"utterance": "golf squad proceed east bridge hold there"}
+{"utterance": "hotel drone east bridge go and keep position"}
+{"utterance": "india unit get east bridge hold when there"}
+{"utterance": "juliet group move east bridge stay on site"}
+{"utterance": "alpha wing take south gate hold"}
+{"utterance": "bravo wing south gate move then stay"}
+{"utterance": "charlie team go south gate keep it"}
+{"utterance": "delta scout south gate then remain on station"}
+{"utterance": "echo battery shift south gate hold there"}
+{"utterance": "foxtrot patrol make south gate sit tight"}
+{"utterance": "golf squad move to south gate hold that spot"}
+{"utterance": "hotel drone south gate stay once arrived"}
+{"utterance": "india unit south gate move and hold"}
+{"utterance": "juliet group get to south gate remain"}
+{"utterance": "west tower alpha wing go hold once there"}
+{"utterance": "bravo wing move west tower stay"}
+{"utterance": "charlie team west tower then hold"}
+{"utterance": "delta scout shift west tower keep position"}
+{"utterance": "echo battery take west tower and remain"}
+{"utterance": "foxtrot patrol west tower go sit tight"}
+{"utterance": "golf squad get west tower then hold it"}
+{"utterance": "hotel drone west tower and stay put"}
+{"utterance": "india unit move west tower hold on site"}
+{"utterance": "juliet group head west tower maintain station"}
+{"utterance": "alpha wing upper deck hold after moving"}
+{"utterance": "bravo wing to upper deck then stay"}
+{"utterance": "charlie team climb upper deck hold"}
+{"utterance": "delta scout upper deck go keep that position"}
+{"utterance": "echo battery move up upper deck remain"}
+{"utterance": "foxtrot patrol upper deck sit tight afterward"}
+{"utterance": "golf squad get upper deck then hold"}
+{"utterance": "hotel drone fly upper deck stay there"}
+{"utterance": "india unit take upper deck hold it"}
+{"utterance": "juliet group upper deck move then remain"}
+{"utterance": "alpha wing lower tunnel go then hold"}
+{"utterance": "bravo wing enter lower tunnel stay put"}
+{"utterance": "charlie team lower tunnel then keep station"}
+{"utterance": "delta scout move lower tunnel hold there"}
+{"utterance": "echo battery get lower tunnel remain"}
+{"utterance": "foxtrot patrol down lower tunnel sit tight"}
+{"utterance": "golf squad lower tunnel go hold on arrival"}
+{"utterance": "hotel drone shift lower tunnel stay"}
+{"utterance": "india unit lower tunnel then maintain position"}
+{"utterance": "juliet group take lower tunnel hold"}
+{"utterance": "alpha wing river crossing move stay"}
+{"utterance": "bravo wing get river crossing hold"}
+{"utterance": "charlie team to river crossing then remain"}
+{"utterance": "delta scout river crossing go sit tight"}
+{"utterance": "echo battery shift river crossing hold there"}
+{"utterance": "foxtrot patrol river crossing keep station after moving"}
+{"utterance": "golf squad go river crossing stay put"}
+{"utterance": "hotel drone fly river crossing hold position"}
+{"utterance": "india unit reach river crossing then hold"}
+{"utterance": "juliet group move river crossing remain there"}
+{"utterance": "alpha wing supply depot go hold"}
+{"utterance": "bravo wing to supply depot stay afterward"}
+{"utterance": "charlie team get supply depot then remain"}
+{"utterance": "delta scout supply depot move keep position"}
+{"utterance": "echo battery shift supply depot sit tight"}
+{"utterance": "foxtrot patrol take supply depot hold there"}
+{"utterance": "golf squad supply depot go remain"}
+{"utterance": "hotel drone fly supply depot stay on station"}
+{"utterance": "india unit move supply depot hold on arrival"}
+{"utterance": "juliet group reach supply depot then stay"}
+{"utterance": "alpha wing radar mast move hold"}
+{"utterance": "bravo wing get radar mast remain there"}
+{"utterance": "charlie team radar mast then sit tight"}
+{"utterance": "delta scout go radar mast hold position"}
+{"utterance": "echo battery radar mast shift and stay"}
+{"utterance": "foxtrot patrol take radar mast keep station"}
+{"utterance": "golf squad move radar mast remain"}
+{"utterance": "hotel drone fly radar mast hold once there"}
+{"utterance": "india unit radar mast go stay put"}
+{"utterance": "juliet group get radar mast then hold"}
+{"utterance": "alpha wing landing zone then hold"}
+{"utterance": "bravo wing go landing zone stay there"}
+{"utterance": "charlie team take landing zone maintain position"}
+{"utterance": "delta scout landing zone move hold"}
+{"utterance": "echo battery get landing zone then remain"}
+{"utterance": "foxtrot patrol landing zone sit tight after moving"}
+{"utterance": "golf squad shift landing zone hold"}
+{"utterance": "hotel drone fly landing zone stay put"}
+{"utterance": "india unit move landing zone keep station"}
+{"utterance": "juliet group reach landing zone then hold"}
+{"utterance": "Alpha wing to south gate—scratch that, north ridge."}
+{"utterance": "Bravo, I said south gate; destination is north ridge."}
+{"utterance": "Charlie team, redirect from south gate to north ridge."}
+{"utterance": "Delta scout, north ridge, not the south gate I mentioned."}
+{"utterance": "Echo battery: cancel that south gate destination; use north ridge."}
+{"utterance": "Foxtrot patrol, south gate was wrong. Move north ridge."}
+{"utterance": "Golf squad to, uh, not south gate. North ridge."}
+{"utterance": "Hotel drone, change the pending south gate move to north ridge."}
+{"utterance": "India unit, revise destination: south gate becomes north ridge."}
+{"utterance": "Juliet group, disregard south gate; head north ridge."}
+{"utterance": "Alpha wing, south gate—no, east bridge."}
+{"utterance": "Bravo wing, replace south gate with east bridge on that move."}
+{"utterance": "Charlie, wrong site: east bridge rather than south gate."}
+{"utterance": "Delta scout, I take back south gate; go east bridge."}
+{"utterance": "Echo battery, south gate isn't it. East bridge, please."}
+{"utterance": "Foxtrot patrol, correction to your destination, east bridge."}
+{"utterance": "Golf squad, turn that south gate order into east bridge."}
+{"utterance": "Hotel drone, not south gate, east bridge is the move."}
+{"utterance": "India unit, amend the south gate move: east bridge."}
+{"utterance": "Juliet group, wait, east bridge instead of south gate."}
+{"utterance": "Alpha wing, west tower was wrong; south gate."}
+{"utterance": "Bravo wing to west tower, sorry—make it south gate."}
+{"utterance": "Charlie team, revise west tower destination to south gate."}
+{"utterance": "Delta scout, don't go west tower; south gate instead."}
+{"utterance": "Echo battery, correction, south gate after all, not west tower."}
+{"utterance": "Foxtrot patrol, swap west tower for south gate."}
+{"utterance": "Golf squad, west tower? No. Move south gate."}
+{"utterance": "Hotel drone, undo the west tower target; go south gate."}
+{"utterance": "India unit, I meant south gate rather than west tower."}
+{"utterance": "Juliet group, reroute that west tower move to south gate."}
+{"utterance": "Alpha wing, south gate—hold on, west tower."}
+{"utterance": "Bravo, scratch south gate and move to west tower."}
+{"utterance": "Charlie team, destination correction from south gate to west tower."}
+{"utterance": "Delta scout, I got the site wrong; west tower, not south gate."}
+{"utterance": "Echo battery, west tower replaces the south gate move."}
+{"utterance": "Foxtrot patrol, cancel south gate routing, take west tower."}
+{"utterance": "Golf squad, west tower is where I meant, not south gate."}
+{"utterance": "Hotel drone, no south gate; fly to west tower."}
+{"utterance": "India unit, amend south gate to west tower."}
+{"utterance": "Juliet group, correction for that move: west tower."}
+{"utterance": "Alpha wing, south gate—actually upper deck."}
+{"utterance": "Bravo wing, old destination south gate; new one upper deck."}
+{"utterance": "Charlie team, move upper deck in place of south gate."}
+{"utterance": "Delta scout, scrap the south gate location. Upper deck."}
+{"utterance": "Echo battery, I misspoke: upper deck, not south gate."}
+{"utterance": "Foxtrot patrol, change the south gate order to upper deck."}
+{"utterance": "Golf squad, head upper deck instead of the south gate."}
+{"utterance": "Hotel drone, redirect from south gate to upper deck."}
+{"utterance": "India unit, south gate was a slip; move upper deck."}
+{"utterance": "Juliet group, use upper deck for that move, not south gate."}
+{"utterance": "Alpha wing, the south gate instruction should say lower tunnel."}
+{"utterance": "Bravo, no south gate; lower tunnel, move there."}
+{"utterance": "Charlie team, replace south gate with lower tunnel."}
+{"utterance": "Delta scout, correct the destination to lower tunnel."}
+{"utterance": "Echo battery, lower tunnel rather than the south gate."}
+{"utterance": "Foxtrot patrol, south gate crossed out; lower tunnel entered."}
+{"utterance": "Golf squad, I want lower tunnel, not south gate."}
+{"utterance": "Hotel drone, revise your south gate route to lower tunnel."}
+{"utterance": "India unit, wrong call, lower tunnel is your destination."}
+{"utterance": "Juliet group, south gate? Sorry. Lower tunnel."}
+{"utterance": "Alpha wing, south gate was the draft; river crossing is final."}
+{"utterance": "Bravo wing, divert the south gate move to river crossing."}
+{"utterance": "Charlie team, edit that destination to river crossing."}
+{"utterance": "Delta scout, no, river crossing in place of south gate."}
+{"utterance": "Echo battery, disregard south gate and take river crossing."}
+{"utterance": "Foxtrot patrol, my correction is river crossing, not south gate."}
+{"utterance": "Golf squad, I said south gate by mistake; river crossing."}
+{"utterance": "Hotel drone, replace the south gate route with river crossing."}
+{"utterance": "India unit, steer toward river crossing instead of south gate."}
+{"utterance": "Juliet group, amended order: river crossing, not south gate."}
+{"utterance": "Alpha wing, south gate is wrong, supply depot."}
+{"utterance": "Bravo wing, change south gate to supply depot."}
+{"utterance": "Charlie team, move supply depot rather than south gate."}
+{"utterance": "Delta scout, ignore my south gate call; supply depot."}
+{"utterance": "Echo battery, new destination supply depot; old was south gate."}
+{"utterance": "Foxtrot patrol, cancel that south gate waypoint, use supply depot."}
+{"utterance": "Golf squad, supply depot is the corrected move."}
+{"utterance": "Hotel drone, not the south gate, the supply depot."}
+{"utterance": "India unit, revise the move from south gate to supply depot."}
+{"utterance": "Juliet group, I meant supply depot where I said south gate."}
+{"utterance": "Alpha wing, south gate—correction, radar mast."}
+{"utterance": "Bravo wing, shift the destination to radar mast."}
+{"utterance": "Charlie team, no south gate, go radar mast."}
+{"utterance": "Delta scout, the south gate order should target radar mast."}
+{"utterance": "Echo battery, scratch that site and move radar mast."}
+{"utterance": "Foxtrot patrol, replace south gate with radar mast."}
+{"utterance": "Golf squad, radar mast, not south gate. Move."}
+{"utterance": "Hotel drone, update destination: radar mast, cancel south gate."}
+{"utterance": "India unit, I garbled it; radar mast instead."}
+{"utterance": "Juliet group, wrong move target, radar mast is right."}
+{"utterance": "Alpha wing, south gate—nope, landing zone."}
+{"utterance": "Bravo wing, strike south gate; move landing zone."}
+{"utterance": "Charlie team, the destination is landing zone, not south gate."}
+{"utterance": "Delta scout, correct the south gate move to landing zone."}
+{"utterance": "Echo battery, change course to landing zone."}
+{"utterance": "Foxtrot patrol, disregard south gate and take landing zone."}
+{"utterance": "Golf squad, I retract south gate; landing zone is final."}
+{"utterance": "Hotel drone, sorry, fly landing zone instead."}
+{"utterance": "India unit, south gate was a mistake. Go landing zone."}
+{"utterance": "Juliet group, amend the destination from south gate to landing zone."}
+{"utterance": "Alpha wing, scan and then hold north ridge."}
+{"utterance": "Bravo wing at north ridge: sweep it, keep it."}
+{"utterance": "Charlie team, check north ridge before holding that ground."}
+{"utterance": "Delta scout, first scan north ridge, then stay on it."}
+{"utterance": "Echo battery should sweep and hold north ridge."}
+{"utterance": "Foxtrot patrol, sensor pass on north ridge; maintain position there."}
+{"utterance": "Golf squad, cover north ridge with a scan and a hold."}
+{"utterance": "Hotel drone, scan north ridge, remain over the same spot."}
+{"utterance": "India unit, north ridge is both your sweep and hold point."}
+{"utterance": "Juliet group, look over north ridge and keep station there."}
+{"utterance": "At east bridge, Alpha wing scans first and holds after."}
+{"utterance": "Bravo wing, sweep east bridge; hold that same bridge."}
+{"utterance": "Charlie team, check east bridge and then keep it."}
+{"utterance": "Delta scout, east bridge scan, east bridge hold, in order."}
+{"utterance": "Echo battery, run sensors at east bridge and remain there."}
+{"utterance": "Foxtrot patrol, inspect east bridge, then hold the span."}
+{"utterance": "Golf squad should scan and hold east bridge."}
+{"utterance": "Hotel drone, sweep east bridge before maintaining station above it."}
+{"utterance": "India unit, east bridge gets a scan followed by a hold."}
+{"utterance": "Juliet group, scan the east bridge; afterward stay on site."}
+{"utterance": "Alpha wing, south gate is for both actions: scan, hold."}
+{"utterance": "Bravo wing, look over south gate then secure it in place."}
+{"utterance": "Charlie team, scan south gate and hold that gate."}
+{"utterance": "Delta scout, south gate sensor pass; maintain that spot afterward."}
+{"utterance": "Echo battery, sweep at south gate and stay there."}
+{"utterance": "Foxtrot patrol, scan south gate before holding position at it."}
+{"utterance": "Golf squad, inspect south gate, then remain on that ground."}
+{"utterance": "Hotel drone, search south gate and keep station over it."}
+{"utterance": "India unit, run a south gate scan, hold the gate after."}
+{"utterance": "Juliet group, south gate: check it and stay put there."}
+{"utterance": "Alpha wing, west tower scan first, hold same tower second."}
+{"utterance": "Bravo wing, sweep west tower and retain the position."}
+{"utterance": "Charlie team, look around west tower; hold it afterward."}
+{"utterance": "Delta scout, scan west tower; remain at the tower."}
+{"utterance": "Echo battery, cover west tower with sensors and then hold it."}
+{"utterance": "Foxtrot patrol, search west tower and keep that station."}
+{"utterance": "Golf squad, scan the west tower before settling in there."}
+{"utterance": "Hotel drone, west tower check, followed by holding overhead."}
+{"utterance": "India unit should inspect and hold west tower."}
+{"utterance": "Juliet group, sweep west tower, don't leave that post."}
+{"utterance": "Alpha wing, upper deck scan, then hold upper deck."}
+{"utterance": "Bravo wing, inspect upper deck and stay on it."}
+{"utterance": "Charlie team, run sensors on upper deck; maintain that position."}
+{"utterance": "Delta scout, sweep the upper deck before holding it."}
+{"utterance": "Echo battery, upper deck for both: search first, hold second."}
+{"utterance": "Foxtrot patrol, check upper deck, keep it after."}
+{"utterance": "Golf squad should scan and remain on upper deck."}
+{"utterance": "Hotel drone, look over upper deck then hover there."}
+{"utterance": "India unit, upper deck gets the sensor pass and the hold."}
+{"utterance": "Juliet group, survey upper deck, then hold the same location."}
+{"utterance": "Alpha wing, scan lower tunnel and hold inside it."}
+{"utterance": "Bravo wing, sweep lower tunnel, maintain that tunnel post."}
+{"utterance": "Charlie team, check lower tunnel before staying there."}
+{"utterance": "Delta scout, sensor pass in lower tunnel; hold afterward."}
+{"utterance": "Echo battery should scan and secure lower tunnel."}
+{"utterance": "Foxtrot patrol, look along lower tunnel, then remain there."}
+{"utterance": "Golf squad, search lower tunnel and keep station inside."}
+{"utterance": "Hotel drone, scan lower tunnel, hold at that same place."}
+{"utterance": "India unit, lower tunnel is your scan site and hold point."}
+{"utterance": "Juliet group, inspect lower tunnel, then stay put."}
+{"utterance": "At river crossing, Alpha wing scans and holds."}
+{"utterance": "Bravo wing, river crossing sweep, followed by a hold there."}
+{"utterance": "Charlie team, check river crossing and keep that crossing."}
+{"utterance": "Delta scout, scan the river crossing before remaining on it."}
+{"utterance": "Echo battery, sensors at river crossing, then hold that bank."}
+{"utterance": "Foxtrot patrol should search and hold river crossing."}
+{"utterance": "Golf squad, look over river crossing; stay at the same spot."}
+{"utterance": "Hotel drone, river crossing scan, remain overhead afterward."}
+{"utterance": "India unit, inspect river crossing and maintain position there."}
+{"utterance": "Juliet group, sweep river crossing, then hold that location."}
+{"utterance": "Alpha wing, supply depot: scan it, hold it."}
+{"utterance": "Bravo wing, check supply depot and stay in that compound."}
+{"utterance": "Charlie team, sweep supply depot before holding it."}
+{"utterance": "Delta scout, sensor pass at supply depot; keep that post."}
+{"utterance": "Echo battery, scan supply depot, remain there after."}
+{"utterance": "Foxtrot patrol, search supply depot and hold the site."}
+{"utterance": "Golf squad, inspect supply depot then stay on station."}
+{"utterance": "Hotel drone, scan supply depot and maintain overhead position."}
+{"utterance": "India unit, supply depot is both the scan and hold target."}
+{"utterance": "Juliet group, sweep supply depot, keep it afterward."}
+{"utterance": "Alpha wing, at radar mast run sensors, then hold the mast."}
+{"utterance": "Bravo wing, scan radar mast and remain there."}
+{"utterance": "Charlie team, check radar mast; retain that position."}
+{"utterance": "Delta scout, radar mast sweep followed by a hold."}
+{"utterance": "Echo battery should inspect and hold radar mast."}
+{"utterance": "Foxtrot patrol, look around radar mast, then stay at it."}
+{"utterance": "Golf squad, search radar mast and maintain station."}
+{"utterance": "Hotel drone, scan radar mast, hover there after."}
+{"utterance": "India unit, radar mast for the scan and subsequent hold."}
+{"utterance": "Juliet group, sweep radar mast, keep the same post."}
+{"utterance": "Alpha wing, landing zone scan, hold there afterward."}
+{"utterance": "Bravo wing, look over landing zone and keep it."}
+{"utterance": "Charlie team, sweep landing zone; remain on the pad."}
+{"utterance": "Delta scout, check landing zone before holding it."}
+{"utterance": "Echo battery, sensor pass on landing zone, then hold."}
+{"utterance": "Foxtrot patrol should scan and stay at landing zone."}
+{"utterance": "Golf squad, inspect landing zone, keep station there."}
+{"utterance": "Hotel drone, scan landing zone, hover over it afterward."}
+{"utterance": "India unit, landing zone is your sweep site and hold point."}
+{"utterance": "Juliet group, search landing zone then maintain position."}
+{"utterance": "Send Alpha wing to north ridge; have them scan it."}
+{"utterance": "Bravo wing, get north ridge. They should check it there."}
+{"utterance": "Charlie team moves to north ridge; let them sweep it."}
+{"utterance": "Delta scout to north ridge, and they scan that spot."}
+{"utterance": "Echo battery, move north ridge; have it search there."}
+{"utterance": "Foxtrot patrol, take north ridge, then get them to scan it."}
+{"utterance": "Golf squad should reach north ridge and inspect it."}
+{"utterance": "Hotel drone, fly north ridge; it can scan once there."}
+{"utterance": "India unit heads to north ridge; tell them to survey it."}
+{"utterance": "Juliet group to north ridge; they check it on arrival."}
+{"utterance": "Alpha wing to east bridge; when there, they scan it."}
+{"utterance": "Move Bravo wing east bridge; have them sweep that span."}
+{"utterance": "Charlie team, east bridge first, then they check it."}
+{"utterance": "Delta scout takes east bridge; ask them to scan it."}
+{"utterance": "Echo battery should reach east bridge; it searches there."}
+{"utterance": "Foxtrot patrol, get to east bridge and have them inspect it."}
+{"utterance": "Golf squad moves east bridge; then they survey it."}
+{"utterance": "Hotel drone, east bridge; once it arrives, scan it."}
+{"utterance": "India unit, east bridge, then they run sensors there."}
+{"utterance": "Juliet group approaches east bridge; let them sweep it."}
+{"utterance": "Alpha wing, move south gate; have them scan it."}
+{"utterance": "Bravo wing heads south gate; they inspect it afterward."}
+{"utterance": "Charlie team, get south gate and tell them to check it."}
+{"utterance": "Delta scout to south gate; then they search that gate."}
+{"utterance": "Echo battery should move south gate; let it scan there."}
+{"utterance": "Foxtrot patrol, south gate first; have them sweep it."}
+{"utterance": "Golf squad takes south gate; they examine it on arrival."}
+{"utterance": "Hotel drone, fly south gate, it scans there."}
+{"utterance": "India unit, move south gate; they should survey it."}
+{"utterance": "Juliet group to south gate; ask them to check that spot."}
+{"utterance": "Alpha wing reaches west tower; have them scan it."}
+{"utterance": "Bravo wing, west tower, and they sweep that tower."}
+{"utterance": "Charlie team, move west tower; then let them inspect it."}
+{"utterance": "Delta scout to west tower, they check it afterward."}
+{"utterance": "Echo battery heads west tower; it scans once set."}
+{"utterance": "Foxtrot patrol, take west tower; have them search it."}
+{"utterance": "Golf squad, get west tower, then they survey there."}
+{"utterance": "Hotel drone flies west tower; it looks it over."}
+{"utterance": "India unit to west tower; they run sensors at it."}
+{"utterance": "Juliet group moves west tower; tell them to sweep it."}
+{"utterance": "Alpha wing, upper deck, they scan it after moving."}
+{"utterance": "Bravo wing should reach upper deck; have them search it."}
+{"utterance": "Charlie team to upper deck; they look around there."}
+{"utterance": "Delta scout takes upper deck; let them sweep it."}
+{"utterance": "Echo battery, move upper deck; it can scan there."}
+{"utterance": "Foxtrot patrol, get upper deck and have them inspect it."}
+{"utterance": "Golf squad heads upper deck; they check that level."}
+{"utterance": "Hotel drone, fly upper deck; it surveys from there."}
+{"utterance": "India unit moves upper deck, then they scan it."}
+{"utterance": "Juliet group, upper deck first, they search it second."}
+{"utterance": "Alpha wing into lower tunnel; have them scan it."}
+{"utterance": "Bravo wing, lower tunnel; they should sweep there."}
+{"utterance": "Charlie team moves lower tunnel; tell them to inspect it."}
+{"utterance": "Delta scout enters lower tunnel; they check its route."}
+{"utterance": "Echo battery, go lower tunnel; it scans inside."}
+{"utterance": "Foxtrot patrol takes lower tunnel; get them to search it."}
+{"utterance": "Golf squad to lower tunnel; they survey that passage."}
+{"utterance": "Hotel drone, lower tunnel, then it scans it."}
+{"utterance": "India unit should reach lower tunnel; they look through it."}
+{"utterance": "Juliet group enters lower tunnel; have them sweep it."}
+{"utterance": "Alpha wing goes river crossing; they scan it there."}
+{"utterance": "Bravo wing to river crossing; have them check it."}
+{"utterance": "Charlie team takes river crossing; they sweep the bank."}
+{"utterance": "Delta scout, river crossing; let them survey it."}
+{"utterance": "Echo battery moves river crossing; it inspects the site."}
+{"utterance": "Foxtrot patrol, get river crossing; they search it afterward."}
+{"utterance": "Golf squad reaches river crossing; tell them to scan it."}
+{"utterance": "Hotel drone flies river crossing; it sweeps overhead."}
+{"utterance": "India unit to river crossing; they check that ground."}
+{"utterance": "Juliet group, river crossing, then they survey it."}
+{"utterance": "Alpha wing, get supply depot; they scan it on arrival."}
+{"utterance": "Bravo wing to supply depot; have them inspect it."}
+{"utterance": "Charlie team, move supply depot; they check its grounds."}
+{"utterance": "Delta scout takes supply depot; let them sweep it."}
+{"utterance": "Echo battery heads supply depot; it can survey there."}
+{"utterance": "Foxtrot patrol, reach supply depot and tell them to scan it."}
+{"utterance": "Golf squad moves supply depot; they search that yard."}
+{"utterance": "Hotel drone, fly supply depot; it inspects it."}
+{"utterance": "India unit to supply depot; they look around there."}
+{"utterance": "Juliet group reaches supply depot; ask them to sweep it."}
+{"utterance": "Alpha wing to radar mast; have them scan it."}
+{"utterance": "Bravo wing moves radar mast; they check around it."}
+{"utterance": "Charlie team, radar mast, then they search it."}
+{"utterance": "Delta scout should reach radar mast; let them inspect it."}
+{"utterance": "Echo battery takes radar mast; it scans from there."}
+{"utterance": "Foxtrot patrol, get radar mast; have them sweep it."}
+{"utterance": "Golf squad goes radar mast; they survey the site."}
+{"utterance": "Hotel drone flies radar mast; it checks it from above."}
+{"utterance": "India unit, move radar mast; they run sensors there."}
+{"utterance": "Juliet group to radar mast; they look around it."}
+{"utterance": "Alpha wing, landing zone, then they scan it."}
+{"utterance": "Bravo wing moves landing zone; have them inspect there."}
+{"utterance": "Charlie team to landing zone; they check it afterward."}
+{"utterance": "Delta scout gets landing zone; let them sweep it."}
+{"utterance": "Echo battery, move landing zone; it surveys that site."}
+{"utterance": "Foxtrot patrol takes landing zone; have them search it."}
+{"utterance": "Golf squad heads landing zone; they scan on arrival."}
+{"utterance": "Hotel drone, fly landing zone; it checks the pad."}
+{"utterance": "India unit to landing zone; they inspect it there."}
+{"utterance": "Juliet group, reach landing zone; tell them to sweep it."}
+{"utterance": "If north ridge is clear and the scout confirms it, move Alpha wing there."}
+{"utterance": "Bravo wing goes north ridge only once it is clear and scout radio says so."}
+{"utterance": "When the scout reports north ridge clear, send Charlie team in."}
+{"utterance": "Delta scout to north ridge if clearance holds and recon agrees."}
+{"utterance": "Move Echo battery north ridge provided both clearance and scout report arrive."}
+{"utterance": "Foxtrot patrol, north ridge only after clear status plus scout confirmation."}
+{"utterance": "If recon verifies clear ground at north ridge, advance Golf squad."}
+{"utterance": "Hotel drone may fly north ridge when it is clear and scout signs off."}
+{"utterance": "India unit: wait for clear north ridge and a scout yes before moving."}
+{"utterance": "Juliet group to north ridge, but only if both checks are green."}
+{"utterance": "Alpha wing, east bridge if it is open and the scout confirms."}
+{"utterance": "Only send Bravo wing east bridge after clear status and recon confirmation."}
+{"utterance": "Charlie team moves east bridge when scout verifies the bridge is clear."}
+{"utterance": "If east bridge clearance and scout report agree, Delta scout moves there."}
+{"utterance": "Echo battery to east bridge, contingent on clear span and scout signoff."}
+{"utterance": "Foxtrot patrol, go east bridge if clear and if the scout says yes."}
+{"utterance": "Golf squad holds off east bridge until two things: clear and recon approved."}
+{"utterance": "Hotel drone may reach east bridge once clearance and scout call arrive."}
+{"utterance": "India unit to east bridge on clear status, provided recon confirms it."}
+{"utterance": "Juliet group, take east bridge after a clear report from the scout."}
+{"utterance": "South gate clear, scout agrees: move Alpha wing there."}
+{"utterance": "Bravo wing to south gate only if clear and verified by scout."}
+{"utterance": "If the scout confirms south gate is clear, send Charlie team."}
+{"utterance": "Delta scout, move south gate when clearance and recon line up."}
+{"utterance": "Echo battery goes south gate provided clear ground plus scout approval."}
+{"utterance": "Foxtrot patrol, south gate after the clear check and the scout check."}
+{"utterance": "Golf squad to south gate if both clearance and scout call are positive."}
+{"utterance": "Hotel drone, fly south gate only on clear status confirmed by scout."}
+{"utterance": "India unit moves south gate when recon has verified clearance."}
+{"utterance": "Juliet group, south gate is conditional on clear ground and scout signoff."}
+{"utterance": "If west tower is clear and recon verifies it, move Alpha wing."}
+{"utterance": "Bravo wing, go west tower once clear status and scout approval both land."}
+{"utterance": "Charlie team to west tower if the scout confirms it is clear."}
+{"utterance": "Delta scout, west tower only when clearance is backed by recon."}
+{"utterance": "Echo battery may move west tower provided clear tower and scout yes."}
+{"utterance": "Foxtrot patrol, take west tower when two reports agree: clear and scout."}
+{"utterance": "Golf squad, if west tower clears and scout concurs, advance."}
+{"utterance": "Hotel drone heads west tower after clearance verified by the scout."}
+{"utterance": "India unit, move west tower on scout-confirmed clear status."}
+{"utterance": "Juliet group to west tower, conditional on a clear recon report."}
+{"utterance": "Alpha wing to upper deck if it is clear and the scout verifies that."}
+{"utterance": "Only after a clear upper deck and recon yes, move Bravo wing."}
+{"utterance": "Charlie team goes upper deck when scout confirms clearance."}
+{"utterance": "Delta scout, move upper deck provided clear status plus scout signoff."}
+{"utterance": "Echo battery to upper deck if both the area and recon check pass."}
+{"utterance": "Foxtrot patrol, upper deck once clear and verified by scout."}
+{"utterance": "If scout radio confirms upper deck is clear, advance Golf squad."}
+{"utterance": "Hotel drone may fly upper deck on a scout-confirmed clear report."}
+{"utterance": "India unit, upper deck move waits on clearance and scout approval."}
+{"utterance": "Juliet group to upper deck, assuming both clear status and recon yes."}
+{"utterance": "Lower tunnel clear and scout approved? Move Alpha wing there."}
+{"utterance": "Bravo wing enters lower tunnel only after both clearance and recon."}
+{"utterance": "Charlie team, take lower tunnel if scout says it is clear."}
+{"utterance": "Delta scout to lower tunnel provided clear route and scout confirmation."}
+{"utterance": "Echo battery, lower tunnel after clearance is verified by recon."}
+{"utterance": "Foxtrot patrol, enter lower tunnel when clear and scout signs off."}
+{"utterance": "If recon confirms the lower tunnel is clear, move Golf squad in."}
+{"utterance": "Hotel drone may enter lower tunnel once two reports agree on clear."}
+{"utterance": "India unit, lower tunnel conditional on clear status and scout call."}
+{"utterance": "Juliet group to lower tunnel, but only with clear-and-confirmed report."}
+{"utterance": "Alpha wing to river crossing after it clears and scout checks it."}
+{"utterance": "Bravo wing, move river crossing if both clearance and recon are positive."}
+{"utterance": "Charlie team crosses to river crossing when scout confirms clear banks."}
+{"utterance": "Delta scout, river crossing only on clear status verified by scout."}
+{"utterance": "Echo battery may advance river crossing provided recon confirms clear."}
+{"utterance": "Foxtrot patrol, get river crossing once scout verifies it is clear."}
+{"utterance": "Golf squad, river crossing move requires clearance plus scout yes."}
+{"utterance": "Hotel drone flies river crossing after clear ground and recon signoff."}
+{"utterance": "India unit to river crossing when both the local and scout checks clear."}
+{"utterance": "Juliet group, take river crossing if clear and scout has confirmed."}
+{"utterance": "Supply depot clear and scout agreed means Alpha wing moves in."}
+{"utterance": "Bravo wing to supply depot on clear status verified by recon."}
+{"utterance": "Charlie team, enter supply depot if scout confirms clearance."}
+{"utterance": "Delta scout may move supply depot provided it is clear and checked."}
+{"utterance": "Echo battery to supply depot only after clear status and scout report."}
+{"utterance": "Foxtrot patrol, supply depot if clear ground and recon say yes."}
+{"utterance": "Golf squad, move supply depot when the scout certifies it clear."}
+{"utterance": "Hotel drone flies supply depot once clearance gets scout confirmation."}
+{"utterance": "India unit, supply depot move depends on both clear and recon good."}
+{"utterance": "Juliet group to supply depot, but only on scout-confirmed clear."}
+{"utterance": "Alpha wing, if radar mast is clear and scout agrees, move there."}
+{"utterance": "Bravo wing goes radar mast after clear report and scout verification."}
+{"utterance": "Charlie team to radar mast when both clearance and recon approve."}
+{"utterance": "Delta scout, radar mast only if the scout confirms it clear."}
+{"utterance": "Echo battery may approach radar mast with scout-verified clearance."}
+{"utterance": "Foxtrot patrol, take radar mast after two checks: clear and scout."}
+{"utterance": "Golf squad, advance radar mast if clear and confirmed by recon."}
+{"utterance": "Hotel drone flies radar mast once the clear report gets scout signoff."}
+{"utterance": "India unit, radar mast move conditional on scout-confirmed clear status."}
+{"utterance": "Juliet group to radar mast when clearance and scout approval coincide."}
+{"utterance": "If landing zone is clear and scout confirms, move Alpha wing."}
+{"utterance": "Bravo wing, landing zone only after clearance plus recon signoff."}
+{"utterance": "Charlie team enters landing zone if scout confirms it is clear."}
+{"utterance": "Delta scout to landing zone when clear status has scout backing."}
+{"utterance": "Echo battery, take landing zone provided clear and scout-approved."}
+{"utterance": "Foxtrot patrol, move landing zone on clear ground and recon yes."}
+{"utterance": "Golf squad, landing zone if the scout verifies clearance."}
+{"utterance": "Hotel drone flies landing zone after both reports say clear."}
+{"utterance": "India unit, landing zone move on scout-confirmed clear status."}
+{"utterance": "Juliet group to landing zone, but only after clear and recon confirmation."}
+{"utterance": "While Alpha wing scans north ridge, reserve wing holds west tower."}
+{"utterance": "Bravo wing, sweep north ridge; meanwhile reserve wing stays west tower."}
+{"utterance": "Charlie team scans north ridge as reserve wing holds the tower."}
+{"utterance": "Delta scout, check north ridge alongside reserve wing holding west tower."}
+{"utterance": "Echo battery surveys north ridge; reserve wing secures west tower at once."}
+{"utterance": "Foxtrot patrol, scan north ridge while reserve wing keeps west tower."}
+{"utterance": "Golf squad searches north ridge; concurrently reserve wing holds west tower."}
+{"utterance": "Hotel drone scans north ridge, reserve wing holds west tower in parallel."}
+{"utterance": "India unit on north ridge scan, reserve wing on west tower hold."}
+{"utterance": "Juliet group, sweep north ridge; at the same time reserve wing holds west tower."}
+{"utterance": "Alpha wing scans east bridge while reserve wing maintains west tower."}
+{"utterance": "Bravo wing, east bridge sweep in parallel with reserve wing tower hold."}
+{"utterance": "Charlie team checks east bridge as reserve wing holds west tower."}
+{"utterance": "Delta scout surveys east bridge; reserve wing secures west tower simultaneously."}
+{"utterance": "Echo battery scans east bridge, and reserve wing holds west tower now."}
+{"utterance": "Foxtrot patrol, search east bridge while reserve wing remains west tower."}
+{"utterance": "Golf squad, east bridge scan; reserve wing, west tower hold, both now."}
+{"utterance": "Hotel drone sweeps east bridge during reserve wing's west tower hold."}
+{"utterance": "India unit scans east bridge alongside reserve wing at west tower holding."}
+{"utterance": "Juliet group, inspect east bridge; reserve wing holds west tower concurrently."}
+{"utterance": "Alpha wing, scan south gate while reserve wing holds west tower."}
+{"utterance": "Bravo wing sweeps south gate; reserve wing stays at west tower simultaneously."}
+{"utterance": "Charlie team checks south gate as reserve wing secures west tower."}
+{"utterance": "Delta scout, south gate scan and reserve wing tower hold at once."}
+{"utterance": "Echo battery surveys south gate while reserve wing maintains west tower."}
+{"utterance": "Foxtrot patrol, search south gate; reserve wing holds west tower in parallel."}
+{"utterance": "Golf squad scans south gate, reserve wing keeps the tower meanwhile."}
+{"utterance": "Hotel drone sweeps south gate during reserve wing's west tower hold."}
+{"utterance": "India unit inspects south gate as reserve wing stays west tower."}
+{"utterance": "Juliet group, south gate scan; reserve wing, west tower hold, together."}
+{"utterance": "Alpha wing scans west tower while reserve wing holds its position there."}
+{"utterance": "Bravo wing, sweep west tower as reserve wing holds the same tower."}
+{"utterance": "Charlie team checks west tower; concurrently reserve wing maintains it."}
+{"utterance": "Delta scout surveys west tower while reserve wing stays on it."}
+{"utterance": "Echo battery scans west tower and reserve wing holds it simultaneously."}
+{"utterance": "Foxtrot patrol searches west tower as reserve wing keeps that post."}
+{"utterance": "Golf squad, scan west tower; reserve wing holds it at the same time."}
+{"utterance": "Hotel drone inspects west tower during reserve wing's hold there."}
+{"utterance": "India unit sweeps west tower while reserve wing secures the tower."}
+{"utterance": "Juliet group, west tower scan paired with reserve wing hold there, now."}
+{"utterance": "Alpha wing scans upper deck; reserve wing holds west tower meanwhile."}
+{"utterance": "Bravo wing, upper deck sweep with reserve wing holding west tower concurrently."}
+{"utterance": "Charlie team checks upper deck as reserve wing stays west tower."}
+{"utterance": "Delta scout surveys upper deck while reserve wing maintains the tower."}
+{"utterance": "Echo battery scans upper deck; reserve wing secures west tower at once."}
+{"utterance": "Foxtrot patrol, search upper deck while reserve wing holds west tower."}
+{"utterance": "Golf squad inspects upper deck, reserve wing keeps west tower simultaneously."}
+{"utterance": "Hotel drone sweeps upper deck during reserve wing's hold at west tower."}
+{"utterance": "India unit on upper deck scan, reserve wing on west tower hold, both."}
+{"utterance": "Juliet group, scan upper deck as reserve wing holds west tower."}
+{"utterance": "Alpha wing scans lower tunnel; reserve wing holds west tower in parallel."}
+{"utterance": "Bravo wing, lower tunnel sweep while reserve wing remains west tower."}
+{"utterance": "Charlie team checks lower tunnel as reserve wing secures west tower."}
+{"utterance": "Delta scout surveys lower tunnel; reserve wing maintains tower position now."}
+{"utterance": "Echo battery scans lower tunnel, reserve wing holds west tower simultaneously."}
+{"utterance": "Foxtrot patrol searches lower tunnel while reserve wing keeps the tower."}
+{"utterance": "Golf squad, lower tunnel scan; west tower hold for reserve wing at once."}
+{"utterance": "Hotel drone inspects lower tunnel during reserve wing's tower hold."}
+{"utterance": "India unit sweeps lower tunnel as reserve wing stays west tower."}
+{"utterance": "Juliet group, scan lower tunnel and have reserve wing hold west tower concurrently."}
+{"utterance": "Alpha wing scans river crossing while reserve wing holds west tower."}
+{"utterance": "Bravo wing, river crossing sweep as reserve wing maintains the tower."}
+{"utterance": "Charlie team checks river crossing; reserve wing secures west tower alongside."}
+{"utterance": "Delta scout surveys river crossing during reserve wing's hold at west tower."}
+{"utterance": "Echo battery scans river crossing; reserve wing stays west tower simultaneously."}
+{"utterance": "Foxtrot patrol searches river crossing while reserve wing keeps the tower."}
+{"utterance": "Golf squad, river crossing scan and reserve wing west tower hold together."}
+{"utterance": "Hotel drone inspects river crossing as reserve wing holds west tower."}
+{"utterance": "India unit sweeps river crossing; concurrently reserve wing secures west tower."}
+{"utterance": "Juliet group, scan river crossing while reserve wing remains west tower."}
+{"utterance": "Alpha wing scans supply depot as reserve wing holds west tower."}
+{"utterance": "Bravo wing, supply depot sweep alongside reserve wing's west tower hold."}
+{"utterance": "Charlie team checks supply depot; reserve wing stays west tower at once."}
+{"utterance": "Delta scout surveys supply depot while reserve wing secures the tower."}
+{"utterance": "Echo battery scans supply depot; reserve wing maintains west tower simultaneously."}
+{"utterance": "Foxtrot patrol searches supply depot as reserve wing keeps west tower."}
+{"utterance": "Golf squad, supply depot scan while reserve wing holds the tower."}
+{"utterance": "Hotel drone inspects supply depot during reserve wing's west tower hold."}
+{"utterance": "India unit sweeps supply depot; reserve wing stays west tower in parallel."}
+{"utterance": "Juliet group, scan supply depot as reserve wing secures west tower."}
+{"utterance": "Alpha wing scans radar mast while reserve wing holds west tower."}
+{"utterance": "Bravo wing, radar mast sweep and reserve wing tower hold at once."}
+{"utterance": "Charlie team checks radar mast; reserve wing maintains west tower meanwhile."}
+{"utterance": "Delta scout surveys radar mast as reserve wing secures the tower."}
+{"utterance": "Echo battery scans radar mast, reserve wing holds west tower simultaneously."}
+{"utterance": "Foxtrot patrol searches radar mast while reserve wing stays west tower."}
+{"utterance": "Golf squad, radar mast scan; reserve wing, west tower hold, concurrently."}
+{"utterance": "Hotel drone inspects radar mast during reserve wing's hold at west tower."}
+{"utterance": "India unit sweeps radar mast as reserve wing keeps the tower."}
+{"utterance": "Juliet group, scan radar mast while reserve wing holds west tower."}
+{"utterance": "Alpha wing scans landing zone; reserve wing holds west tower at once."}
+{"utterance": "Bravo wing, landing zone sweep concurrent with reserve wing tower hold."}
+{"utterance": "Charlie team checks landing zone as reserve wing stays west tower."}
+{"utterance": "Delta scout surveys landing zone; reserve wing secures west tower in parallel."}
+{"utterance": "Echo battery scans landing zone while reserve wing maintains the tower."}
+{"utterance": "Foxtrot patrol searches landing zone, reserve wing holds west tower simultaneously."}
+{"utterance": "Golf squad, landing zone scan; reserve wing tower hold at the same time."}
+{"utterance": "Hotel drone inspects landing zone during reserve wing's west tower hold."}
+{"utterance": "India unit sweeps landing zone as reserve wing keeps west tower."}
+{"utterance": "Juliet group, scan landing zone and hold west tower with reserve wing concurrently."}
+{"utterance": "Alpha wing to north ridge—cancel that."}
+{"utterance": "Never mind Bravo wing's north ridge move."}
+{"utterance": "Charlie team, scratch the north ridge order."}
+{"utterance": "Delta scout was going north ridge; stand them down."}
+{"utterance": "Echo battery, withdraw your north ridge instruction."}
+{"utterance": "Foxtrot patrol, abort that move to north ridge."}
+{"utterance": "Golf squad, the north ridge order is off."}
+{"utterance": "Hotel drone, disregard my north ridge command."}
+{"utterance": "India unit, revoke the north ridge move."}
+{"utterance": "Juliet group, stop; north ridge assignment cancelled."}
+{"utterance": "Alpha wing, east bridge—forget that order."}
+{"utterance": "Bravo wing, drop the east bridge instruction."}
+{"utterance": "Charlie team, cancel the planned east bridge move."}
+{"utterance": "Delta scout, disregard east bridge. Stop there."}
+{"utterance": "Echo battery, I withdraw the east bridge order."}
+{"utterance": "Foxtrot patrol, hold on, cancel east bridge."}
+{"utterance": "Golf squad, the east bridge move is rescinded."}
+{"utterance": "Hotel drone, east bridge assignment is cancelled."}
+{"utterance": "India unit, scratch that east bridge directive."}
+{"utterance": "Juliet group, don't execute the east bridge move."}
+{"utterance": "Alpha wing, cancel your south gate instruction."}
+{"utterance": "Bravo wing, south gate is off; stand down."}
+{"utterance": "Charlie team, revoke the south gate move."}
+{"utterance": "Delta scout, forget the order for south gate."}
+{"utterance": "Echo battery, no, abort that south gate assignment."}
+{"utterance": "Foxtrot patrol, rescind south gate; stop."}
+{"utterance": "Golf squad, the south gate command is withdrawn."}
+{"utterance": "Hotel drone, scratch the south gate trip."}
+{"utterance": "India unit, drop that south gate move."}
+{"utterance": "Juliet group, south gate order cancelled."}
+{"utterance": "Alpha wing, west tower—no, cancel."}
+{"utterance": "Bravo wing, retract the west tower move."}
+{"utterance": "Charlie team, stand down on west tower."}
+{"utterance": "Delta scout, disregard that west tower instruction."}
+{"utterance": "Echo battery, cancel the west tower relocation."}
+{"utterance": "Foxtrot patrol, west tower is off the board."}
+{"utterance": "Golf squad, abort the west tower assignment."}
+{"utterance": "Hotel drone, don't run my west tower order."}
+{"utterance": "India unit, scratch west tower; stand by."}
+{"utterance": "Juliet group, withdraw the west tower command."}
+{"utterance": "Alpha wing, upper deck order rescinded."}
+{"utterance": "Bravo wing, abort the upper deck move."}
+{"utterance": "Charlie team, cancel upper deck, please."}
+{"utterance": "Delta scout, forget the upper deck instruction."}
+{"utterance": "Echo battery, stand down from upper deck."}
+{"utterance": "Foxtrot patrol, drop the upper deck relocation."}
+{"utterance": "Golf squad, no, don't execute upper deck."}
+{"utterance": "Hotel drone, upper deck is no longer assigned."}
+{"utterance": "India unit, retract that upper deck move."}
+{"utterance": "Juliet group, scratch upper deck; stop."}
+{"utterance": "Alpha wing, lower tunnel is cancelled."}
+{"utterance": "Bravo wing, withdraw the lower tunnel order."}
+{"utterance": "Charlie team, disregard lower tunnel."}
+{"utterance": "Delta scout, abort the trip into lower tunnel."}
+{"utterance": "Echo battery, cancel your lower tunnel assignment."}
+{"utterance": "Foxtrot patrol, lower tunnel move is off."}
+{"utterance": "Golf squad, stand down on lower tunnel."}
+{"utterance": "Hotel drone, scratch that lower tunnel directive."}
+{"utterance": "India unit, forget the lower tunnel movement."}
+{"utterance": "Juliet group, I retract the lower tunnel command."}
+{"utterance": "Alpha wing, river crossing—cancel the move."}
+{"utterance": "Bravo wing, stop; disregard river crossing."}
+{"utterance": "Charlie team, revoke the river crossing instruction."}
+{"utterance": "Delta scout, drop the river crossing assignment."}
+{"utterance": "Echo battery, river crossing order is withdrawn."}
+{"utterance": "Foxtrot patrol, abort my river crossing command."}
+{"utterance": "Golf squad, no river crossing move now."}
+{"utterance": "Hotel drone, scratch the river crossing trip."}
+{"utterance": "India unit, stand down from river crossing."}
+{"utterance": "Juliet group, river crossing is cancelled."}
+{"utterance": "Alpha wing, cancel the supply depot move."}
+{"utterance": "Bravo wing, supply depot instruction rescinded."}
+{"utterance": "Charlie team, disregard the supply depot assignment."}
+{"utterance": "Delta scout, abort supply depot, please."}
+{"utterance": "Echo battery, stop the supply depot order."}
+{"utterance": "Foxtrot patrol, forget that supply depot move."}
+{"utterance": "Golf squad, supply depot is off the board."}
+{"utterance": "Hotel drone, withdraw the supply depot direction."}
+{"utterance": "India unit, scratch supply depot; no go."}
+{"utterance": "Juliet group, retract the supply depot command."}
+{"utterance": "Alpha wing, radar mast assignment cancelled."}
+{"utterance": "Bravo wing, revoke the radar mast move."}
+{"utterance": "Charlie team, stand down on radar mast."}
+{"utterance": "Delta scout, don't run the radar mast order."}
+{"utterance": "Echo battery, disregard radar mast."}
+{"utterance": "Foxtrot patrol, abort the radar mast relocation."}
+{"utterance": "Golf squad, scratch the radar mast instruction."}
+{"utterance": "Hotel drone, radar mast trip is off."}
+{"utterance": "India unit, cancel your radar mast move."}
+{"utterance": "Juliet group, I withdraw the radar mast directive."}
+{"utterance": "Alpha wing, landing zone—never mind."}
+{"utterance": "Bravo wing, cancel the landing zone order."}
+{"utterance": "Charlie team, forget that landing zone assignment."}
+{"utterance": "Delta scout, stand down from landing zone."}
+{"utterance": "Echo battery, revoke the landing zone relocation."}
+{"utterance": "Foxtrot patrol, drop my landing zone command."}
+{"utterance": "Golf squad, abort landing zone."}
+{"utterance": "Hotel drone, scratch the landing zone trip."}
+{"utterance": "India unit, landing zone is no longer ordered."}
+{"utterance": "Juliet group, retract the landing zone move."}
+{"utterance": "Has Alpha wing reached north ridge yet?"}
+{"utterance": "Any update from Bravo wing near north ridge?"}
+{"utterance": "What did Charlie team find at north ridge?"}
+{"utterance": "Was Delta scout's north ridge report clear?"}
+{"utterance": "Do we know Echo battery's position at north ridge?"}
+{"utterance": "How long has Foxtrot patrol been by north ridge?"}
+{"utterance": "Did Golf squad ever check in from north ridge?"}
+{"utterance": "Is Hotel drone still over north ridge?"}
+{"utterance": "What's India unit seeing at north ridge?"}
+{"utterance": "Where exactly is Juliet group relative to north ridge?"}
+{"utterance": "Did Alpha wing report anything from east bridge?"}
+{"utterance": "What is Bravo wing's status at east bridge?"}
+{"utterance": "Has Charlie team crossed east bridge already?"}
+{"utterance": "How did Delta scout describe east bridge?"}
+{"utterance": "Any contact from Echo battery near east bridge?"}
+{"utterance": "When was Foxtrot patrol last at east bridge?"}
+{"utterance": "Is Golf squad still assigned east bridge?"}
+{"utterance": "What's Hotel drone's last sighting over east bridge?"}
+{"utterance": "Can you tell me if India unit reached east bridge?"}
+{"utterance": "Did Juliet group see traffic on east bridge?"}
+{"utterance": "What's Alpha wing's most recent south gate report?"}
+{"utterance": "Has Bravo wing seen the south gate open?"}
+{"utterance": "How close is Charlie team to south gate?"}
+{"utterance": "Did Delta scout radio from south gate?"}
+{"utterance": "Is Echo battery watching south gate right now?"}
+{"utterance": "What did Foxtrot patrol say about south gate?"}
+{"utterance": "Any sign Golf squad passed south gate?"}
+{"utterance": "Where did Hotel drone last see south gate activity?"}
+{"utterance": "Does India unit have a south gate visual?"}
+{"utterance": "Was Juliet group near south gate at dusk?"}
+{"utterance": "How many reports came from Alpha wing at west tower?"}
+{"utterance": "Is Bravo wing already at west tower?"}
+{"utterance": "What did Charlie team observe around west tower?"}
+{"utterance": "Did Delta scout mention damage to west tower?"}
+{"utterance": "Where is Echo battery in relation to west tower?"}
+{"utterance": "Has Foxtrot patrol checked in from west tower?"}
+{"utterance": "Did Golf squad find anyone at west tower?"}
+{"utterance": "Is Hotel drone above west tower now?"}
+{"utterance": "What time did India unit reach west tower?"}
+{"utterance": "Any word from Juliet group on west tower?"}
+{"utterance": "Is Alpha wing on upper deck yet?"}
+{"utterance": "What's Bravo wing's last upper deck position?"}
+{"utterance": "Did Charlie team report from upper deck?"}
+{"utterance": "How clear was Delta scout's upper deck feed?"}
+{"utterance": "Could Echo battery see upper deck from there?"}
+{"utterance": "What did Foxtrot patrol find on upper deck?"}
+{"utterance": "Has Golf squad reached upper deck already?"}
+{"utterance": "Is Hotel drone still monitoring upper deck?"}
+{"utterance": "Any status from India unit at upper deck?"}
+{"utterance": "Did Juliet group mention upper deck hazards?"}
+{"utterance": "What's Alpha wing's position in lower tunnel?"}
+{"utterance": "Has Bravo wing entered lower tunnel?"}
+{"utterance": "Did Charlie team hear anything in lower tunnel?"}
+{"utterance": "How far is Delta scout into lower tunnel?"}
+{"utterance": "Is Echo battery's lower tunnel route open?"}
+{"utterance": "What was Foxtrot patrol's last lower tunnel call?"}
+{"utterance": "Any signal from Golf squad inside lower tunnel?"}
+{"utterance": "Did Hotel drone map lower tunnel already?"}
+{"utterance": "Has India unit left lower tunnel?"}
+{"utterance": "Is Juliet group near the lower tunnel exit?"}
+{"utterance": "Did Alpha wing cross river crossing safely?"}
+{"utterance": "Where is Bravo wing at river crossing?"}
+{"utterance": "What did Charlie team see by river crossing?"}
+{"utterance": "Any current from Delta scout at river crossing?"}
+{"utterance": "Is Echo battery still covering river crossing?"}
+{"utterance": "Has Foxtrot patrol reached river crossing?"}
+{"utterance": "When did Golf squad last radio river crossing?"}
+{"utterance": "Could Hotel drone see river crossing from above?"}
+{"utterance": "What is India unit's river crossing status?"}
+{"utterance": "Did Juliet group encounter anyone at river crossing?"}
+{"utterance": "Has Alpha wing reported from supply depot?"}
+{"utterance": "Where was Bravo wing last seen near supply depot?"}
+{"utterance": "Did Charlie team find supplies at supply depot?"}
+{"utterance": "Any update from Delta scout at supply depot?"}
+{"utterance": "Is Echo battery close to supply depot now?"}
+{"utterance": "How did Foxtrot patrol describe supply depot?"}
+{"utterance": "Was Golf squad at supply depot this morning?"}
+{"utterance": "Can Hotel drone see inside supply depot?"}
+{"utterance": "What is India unit's supply depot report?"}
+{"utterance": "Did Juliet group call from supply depot?"}
+{"utterance": "Is Alpha wing near radar mast?"}
+{"utterance": "Has Bravo wing inspected radar mast before?"}
+{"utterance": "What did Charlie team say about radar mast?"}
+{"utterance": "Did Delta scout receive radar mast telemetry?"}
+{"utterance": "Where is Echo battery relative to radar mast?"}
+{"utterance": "Any word from Foxtrot patrol near radar mast?"}
+{"utterance": "Can Golf squad see radar mast lights?"}
+{"utterance": "Is Hotel drone above radar mast?"}
+{"utterance": "When did India unit last pass radar mast?"}
+{"utterance": "Was Juliet group reporting from radar mast?"}
+{"utterance": "Did Alpha wing land at landing zone?"}
+{"utterance": "What is Bravo wing's landing zone status?"}
+{"utterance": "Any message from Charlie team near landing zone?"}
+{"utterance": "How clear is Delta scout's landing zone view?"}
+{"utterance": "Did Echo battery report landing zone traffic?"}
+{"utterance": "Is Foxtrot patrol still at landing zone?"}
+{"utterance": "Where was Golf squad last seen by landing zone?"}
+{"utterance": "Can Hotel drone identify landing zone markers?"}
+{"utterance": "Has India unit reached landing zone?"}
+{"utterance": "What did Juliet group hear at landing zone?"}
+{"utterance": "Alpha wing, move north ridge, then east bridge, south gate, west tower, upper deck."}
+{"utterance": "Bravo wing: north ridge to east bridge to south gate to west tower to upper deck; move at each leg."}
+{"utterance": "Charlie team, five stops: north ridge, east bridge, south gate, west tower, upper deck."}
+{"utterance": "Delta scout, move first north ridge, next east bridge, then south gate, west tower, upper deck."}
+{"utterance": "Echo battery to north ridge; relocate east bridge; go south gate; shift west tower; finish upper deck."}
+{"utterance": "Foxtrot patrol, north ridge then east bridge then south gate then west tower then upper deck, each a move."}
+{"utterance": "Golf squad, take north ridge, move east bridge, move south gate, move west tower, move upper deck."}
+{"utterance": "Hotel drone, fly north ridge, east bridge, south gate, west tower and upper deck in order, stopping at each."}
+{"utterance": "India unit: move north ridge; after that east bridge; afterward south gate; then west tower; finally upper deck."}
+{"utterance": "Juliet group, run the route north ridge to east bridge to south gate to west tower to upper deck."}
+{"utterance": "Alpha wing, east bridge first, south gate second, west tower third, upper deck fourth, lower tunnel fifth."}
+{"utterance": "Bravo wing, move east bridge, continue south gate, move west tower, then upper deck, then lower tunnel."}
+{"utterance": "Charlie team: east bridge; south gate; west tower; upper deck; lower tunnel, separate moves."}
+{"utterance": "Delta scout, reach east bridge, relocate south gate, go west tower, shift upper deck, descend lower tunnel."}
+{"utterance": "Echo battery, east bridge to south gate to west tower to upper deck to lower tunnel, one order each."}
+{"utterance": "Foxtrot patrol, move into east bridge, then south gate, west tower, upper deck, lower tunnel."}
+{"utterance": "Golf squad, the path is east bridge, south gate, west tower, upper deck, lower tunnel; take each stop."}
+{"utterance": "Hotel drone, fly east bridge, land south gate, fly west tower, land upper deck, fly lower tunnel."}
+{"utterance": "India unit, first east bridge; after it south gate; west tower follows; upper deck next; lower tunnel last."}
+{"utterance": "Juliet group, move east bridge, south gate, west tower, upper deck, lower tunnel, in that order."}
+{"utterance": "Alpha wing: south gate, west tower, upper deck, lower tunnel, river crossing. Move through all."}
+{"utterance": "Bravo wing, take south gate, go west tower, then upper deck, lower tunnel, river crossing."}
+{"utterance": "Charlie team, relocate south gate; then west tower; upper deck; lower tunnel; river crossing."}
+{"utterance": "Delta scout, move south gate to west tower to upper deck to lower tunnel to river crossing."}
+{"utterance": "Echo battery, south gate first; move west tower next; shift upper deck; enter lower tunnel; cross river crossing."}
+{"utterance": "Foxtrot patrol, five moves, south gate then west tower then upper deck then lower tunnel then river crossing."}
+{"utterance": "Golf squad, advance south gate, change to west tower, climb upper deck, enter lower tunnel, reach river crossing."}
+{"utterance": "Hotel drone, fly south gate, fly west tower, fly upper deck, fly lower tunnel, fly river crossing."}
+{"utterance": "India unit, move through south gate, west tower, upper deck, lower tunnel and river crossing with stops."}
+{"utterance": "Juliet group, south gate; west tower; upper deck; lower tunnel; river crossing, each leg separately."}
+{"utterance": "Alpha wing, west tower then upper deck then lower tunnel then river crossing then supply depot."}
+{"utterance": "Bravo wing, move west tower, move upper deck, move lower tunnel, move river crossing, move supply depot."}
+{"utterance": "Charlie team, take west tower; proceed upper deck; descend lower tunnel; cross river crossing; reach supply depot."}
+{"utterance": "Delta scout, five legs: west tower, upper deck, lower tunnel, river crossing, supply depot."}
+{"utterance": "Echo battery, shift west tower to upper deck, then lower tunnel, river crossing and supply depot, stopping each time."}
+{"utterance": "Foxtrot patrol, west tower first, upper deck next, lower tunnel third, river crossing fourth, supply depot last."}
+{"utterance": "Golf squad, get west tower, relocate upper deck, go lower tunnel, move river crossing, finish supply depot."}
+{"utterance": "Hotel drone, fly west tower, then upper deck, lower tunnel, river crossing, supply depot as separate waypoints."}
+{"utterance": "India unit, start west tower; after that upper deck; then lower tunnel; river crossing; supply depot."}
+{"utterance": "Juliet group, west tower to upper deck to lower tunnel to river crossing to supply depot, move between each."}
+{"utterance": "Alpha wing, upper deck, lower tunnel, river crossing, supply depot, radar mast; move to each."}
+{"utterance": "Bravo wing, climb upper deck, descend lower tunnel, cross river crossing, reach supply depot, head radar mast."}
+{"utterance": "Charlie team, separate relocations: upper deck; lower tunnel; river crossing; supply depot; radar mast."}
+{"utterance": "Delta scout, move upper deck then lower tunnel then river crossing then supply depot then radar mast."}
+{"utterance": "Echo battery, upper deck first, lower tunnel second, river crossing third, supply depot fourth, radar mast fifth."}
+{"utterance": "Foxtrot patrol, from upper deck move lower tunnel, then river crossing, then supply depot, then radar mast."}
+{"utterance": "Golf squad, get upper deck, proceed lower tunnel, go river crossing, shift supply depot, finish radar mast."}
+{"utterance": "Hotel drone, fly upper deck, fly lower tunnel, fly river crossing, fly supply depot, fly radar mast."}
+{"utterance": "India unit, upper deck to lower tunnel to river crossing to supply depot to radar mast, with a stop at every site."}
+{"utterance": "Juliet group, move upper deck; later lower tunnel; next river crossing; then supply depot; end radar mast."}
+{"utterance": "Alpha wing, lower tunnel to river crossing to supply depot to radar mast to landing zone; five movements."}
+{"utterance": "Bravo wing, enter lower tunnel, cross river crossing, reach supply depot, proceed radar mast, finish landing zone."}
+{"utterance": "Charlie team, move lower tunnel; then river crossing; then supply depot; then radar mast; then landing zone."}
+{"utterance": "Delta scout, lower tunnel first, river crossing next, supply depot, radar mast, landing zone last."}
+{"utterance": "Echo battery, take lower tunnel, move river crossing, shift supply depot, go radar mast, take landing zone."}
+{"utterance": "Foxtrot patrol, go lower tunnel then river crossing then supply depot then radar mast then landing zone."}
+{"utterance": "Golf squad, five separate legs: lower tunnel, river crossing, supply depot, radar mast, landing zone."}
+{"utterance": "Hotel drone, fly lower tunnel, river crossing, supply depot, radar mast, landing zone with landings between."}
+{"utterance": "India unit, lower tunnel; river crossing; supply depot; radar mast; landing zone, one move per stop."}
+{"utterance": "Juliet group, relocate to lower tunnel, then river crossing, supply depot, radar mast and landing zone in turn."}
+{"utterance": "Alpha wing, river crossing, supply depot, radar mast, landing zone, north ridge; move through all five."}
+{"utterance": "Bravo wing, cross river crossing, reach supply depot, go radar mast, shift landing zone, end north ridge."}
+{"utterance": "Charlie team, move river crossing then supply depot then radar mast then landing zone then north ridge."}
+{"utterance": "Delta scout, from river crossing proceed supply depot, radar mast, landing zone and north ridge, each a leg."}
+{"utterance": "Echo battery, five moves: river crossing; supply depot; radar mast; landing zone; north ridge."}
+{"utterance": "Foxtrot patrol, river crossing first, supply depot second, radar mast third, landing zone fourth, north ridge fifth."}
+{"utterance": "Golf squad, take river crossing, then supply depot, radar mast, landing zone, north ridge, stopping at each."}
+{"utterance": "Hotel drone, fly river crossing, fly supply depot, fly radar mast, fly landing zone, fly north ridge."}
+{"utterance": "India unit, get river crossing, relocate supply depot, move radar mast, move landing zone, finish north ridge."}
+{"utterance": "Juliet group, river crossing to supply depot to radar mast to landing zone to north ridge, five orders."}
+{"utterance": "Alpha wing, supply depot, radar mast, landing zone, north ridge, east bridge, separate relocations."}
+{"utterance": "Bravo wing, go supply depot then radar mast then landing zone then north ridge then east bridge."}
+{"utterance": "Charlie team, move supply depot; move radar mast; move landing zone; move north ridge; move east bridge."}
+{"utterance": "Delta scout, reach supply depot, proceed radar mast, shift landing zone, take north ridge, finish east bridge."}
+{"utterance": "Echo battery, supply depot to radar mast to landing zone to north ridge to east bridge, stop each time."}
+{"utterance": "Foxtrot patrol, route through supply depot, radar mast, landing zone, north ridge, east bridge; five moves."}
+{"utterance": "Golf squad, supply depot first, radar mast next, landing zone after, north ridge then, east bridge last."}
+{"utterance": "Hotel drone, fly supply depot; land radar mast; fly landing zone; land north ridge; fly east bridge."}
+{"utterance": "India unit, move in order to supply depot, radar mast, landing zone, north ridge, east bridge."}
+{"utterance": "Juliet group, supply depot, radar mast, landing zone, north ridge, east bridge; advance at every leg."}
+{"utterance": "Alpha wing, radar mast, landing zone, north ridge, east bridge, south gate; move one at a time."}
+{"utterance": "Bravo wing, head radar mast, then landing zone, north ridge, east bridge, south gate."}
+{"utterance": "Charlie team, relocate radar mast; go landing zone; take north ridge; cross east bridge; reach south gate."}
+{"utterance": "Delta scout, radar mast to landing zone to north ridge to east bridge to south gate, five stops."}
+{"utterance": "Echo battery, five move orders: radar mast, landing zone, north ridge, east bridge, south gate."}
+{"utterance": "Foxtrot patrol, radar mast first, landing zone second, north ridge third, east bridge fourth, south gate fifth."}
+{"utterance": "Golf squad, take radar mast, move landing zone, move north ridge, move east bridge, move south gate."}
+{"utterance": "Hotel drone, fly radar mast, fly landing zone, fly north ridge, fly east bridge, fly south gate."}
+{"utterance": "India unit, go radar mast; then landing zone; then north ridge; then east bridge; then south gate."}
+{"utterance": "Juliet group, radar mast, landing zone, north ridge, east bridge, south gate; five consecutive movements."}
+{"utterance": "Alpha wing, landing zone then north ridge then east bridge then south gate then west tower, move each time."}
+{"utterance": "Bravo wing, leave landing zone for north ridge, then east bridge, south gate and west tower."}
+{"utterance": "Charlie team, five destinations: landing zone; north ridge; east bridge; south gate; west tower."}
+{"utterance": "Delta scout, move landing zone, move north ridge, move east bridge, move south gate, move west tower."}
+{"utterance": "Echo battery, take landing zone, shift north ridge, cross east bridge, reach south gate, end west tower."}
+{"utterance": "Foxtrot patrol, landing zone to north ridge to east bridge to south gate to west tower with separate stops."}
+{"utterance": "Golf squad, landing zone first, north ridge after, east bridge then, south gate next, west tower last."}
+{"utterance": "Hotel drone, fly landing zone; fly north ridge; fly east bridge; fly south gate; fly west tower."}
+{"utterance": "India unit, advance through landing zone, north ridge, east bridge, south gate and west tower, stop each."}
+{"utterance": "Juliet group, relocate landing zone, north ridge, east bridge, south gate, west tower, in order."}
+{"utterance": "Alpha wing, old checkpoint was the draft. Go north ridge and scan it."}
+{"utterance": "Bravo, old checkpoint—no, north ridge. Check that ridge too."}
+{"utterance": "Charlie team, reroute from old checkpoint to north ridge, then sweep."}
+{"utterance": "Delta scout, forget old checkpoint; move north ridge, inspect it."}
+{"utterance": "Echo battery, change destination from old checkpoint to north ridge; scan."}
+{"utterance": "Foxtrot patrol, my old checkpoint call was wrong. North ridge and sensors."}
+{"utterance": "Golf squad, replace old checkpoint with north ridge, then look around."}
+{"utterance": "Hotel drone, not old checkpoint. Fly north ridge, run a scan."}
+{"utterance": "India unit, retract old checkpoint. Take north ridge, check it."}
+{"utterance": "Juliet group, amend that move to north ridge; search there afterward."}
+{"utterance": "Alpha wing, scratch old checkpoint; east bridge and a scan."}
+{"utterance": "Bravo wing, I meant east bridge instead of old checkpoint; sweep it."}
+{"utterance": "Charlie team, reroute east bridge, cancel old checkpoint, inspect the span."}
+{"utterance": "Delta scout, old checkpoint was a slip. East bridge, then sensors."}
+{"utterance": "Echo battery to east bridge now, not old checkpoint; scan there."}
+{"utterance": "Foxtrot patrol, substitute east bridge for old checkpoint, then search."}
+{"utterance": "Golf squad, change course to east bridge and check it on arrival."}
+{"utterance": "Hotel drone, old checkpoint no longer; fly east bridge, sweep it."}
+{"utterance": "India unit, revise target east bridge, then inspect that location."}
+{"utterance": "Juliet group, cancel old checkpoint destination, move east bridge and scan."}
+{"utterance": "Alpha wing, old checkpoint—nope, south gate; check it there."}
+{"utterance": "Bravo wing, correction: south gate not old checkpoint, scan after."}
+{"utterance": "Charlie team, move south gate in place of old checkpoint; sweep."}
+{"utterance": "Delta scout, scrap old checkpoint. South gate is final; inspect it."}
+{"utterance": "Echo battery, south gate replaces old checkpoint, followed by sensors."}
+{"utterance": "Foxtrot patrol, my destination is south gate; check it, not old checkpoint."}
+{"utterance": "Golf squad, reroute to south gate and scan when you get there."}
+{"utterance": "Hotel drone, fly south gate rather than old checkpoint, then sweep."}
+{"utterance": "India unit, amended move south gate, then search that area."}
+{"utterance": "Juliet group, drop old checkpoint, take south gate, inspect it."}
+{"utterance": "Alpha wing, west tower is right, not old checkpoint; scan there."}
+{"utterance": "Bravo wing, revise old checkpoint to west tower and sweep."}
+{"utterance": "Charlie team, old checkpoint cancelled; west tower, then a check."}
+{"utterance": "Delta scout, turn toward west tower instead, inspect it on arrival."}
+{"utterance": "Echo battery, old checkpoint was wrong; move west tower, run sensors."}
+{"utterance": "Foxtrot patrol, west tower for the move, scratch old checkpoint, then scan."}
+{"utterance": "Golf squad, change destination to west tower, search it afterward."}
+{"utterance": "Hotel drone, fly west tower instead of old checkpoint and sweep it."}
+{"utterance": "India unit, update that old checkpoint order to west tower; check it."}
+{"utterance": "Juliet group, correction to west tower; scan once there."}
+{"utterance": "Alpha wing, sweep north ridge before you hold it."}
+{"utterance": "Bravo wing, north ridge: scan there, then keep the ground."}
+{"utterance": "Charlie team, both orders use north ridge—check, then hold."}
+{"utterance": "Delta scout, look over north ridge, remain at that spot."}
+{"utterance": "Echo battery, sensor pass on north ridge, hold the same location."}
+{"utterance": "Foxtrot patrol, north ridge scan followed by staying there."}
+{"utterance": "Golf squad, inspect north ridge first, secure that place second."}
+{"utterance": "Hotel drone, scan over north ridge, keep station above it."}
+{"utterance": "India unit, check north ridge, then hold that ridge."}
+{"utterance": "Juliet group, sweep north ridge and stay right there."}
+{"utterance": "Alpha wing, east bridge gets a scan and then a hold."}
+{"utterance": "Bravo wing, check east bridge, keep the bridge after."}
+{"utterance": "Charlie team, scan east bridge, hold that same span."}
+{"utterance": "Delta scout, inspect east bridge before maintaining position there."}
+{"utterance": "Echo battery, east bridge search, east bridge hold, sequentially."}
+{"utterance": "Foxtrot patrol, look over east bridge, then stay on it."}
+{"utterance": "Golf squad, sweep the east bridge; hold where you scanned."}
+{"utterance": "Hotel drone, survey east bridge, remain overhead afterward."}
+{"utterance": "India unit, two orders at east bridge: scan, hold."}
+{"utterance": "Juliet group, check east bridge and keep the post."}
+{"utterance": "Alpha wing, south gate scan now; hold it once done."}
+{"utterance": "Bravo wing, inspect south gate, then remain at the gate."}
+{"utterance": "Charlie team, sweep south gate and secure the same site."}
+{"utterance": "Delta scout, run sensors on south gate, keep station there."}
+{"utterance": "Echo battery, south gate for both operations, check then hold."}
+{"utterance": "Foxtrot patrol, search south gate before staying put."}
+{"utterance": "Golf squad, look at south gate, then maintain that position."}
+{"utterance": "Hotel drone, scan south gate and hover above the gate afterward."}
+{"utterance": "India unit, check south gate; hold that target next."}
+{"utterance": "Juliet group, south gate sweep followed by holding right there."}
+{"utterance": "Alpha wing, west tower first gets your scan, then your hold."}
+{"utterance": "Bravo wing, inspect west tower; retain that tower position."}
+{"utterance": "Charlie team, look over west tower, keep it afterward."}
+{"utterance": "Delta scout, check west tower and stay at the same tower."}
+{"utterance": "Echo battery, sweep west tower; hold where the sweep took place."}
+{"utterance": "Foxtrot patrol, scan west tower, maintain your tower post."}
+{"utterance": "Golf squad, two tasks on west tower: sensors then holding."}
+{"utterance": "Hotel drone, survey west tower and hover there after."}
+{"utterance": "India unit, search west tower, then secure that location."}
+{"utterance": "Juliet group, inspect west tower before remaining on it."}
+{"utterance": "Alpha wing to north ridge, and have them scan it when there."}
+{"utterance": "Bravo wing, move north ridge; once they arrive, check it."}
+{"utterance": "Charlie team, send them north ridge and let them sweep it."}
+{"utterance": "Delta scout goes north ridge; they inspect it afterward."}
+{"utterance": "Echo battery, position it north ridge, then have it scan there."}
+{"utterance": "Foxtrot patrol, get them north ridge and ask them to search it."}
+{"utterance": "Golf squad moves north ridge; they should look it over."}
+{"utterance": "Hotel drone, fly it north ridge, it can survey that ridge."}
+{"utterance": "India unit to north ridge; have them run sensors there."}
+{"utterance": "Juliet group, take them north ridge, then they check it."}
+{"utterance": "Alpha wing to east bridge; they scan it after the move."}
+{"utterance": "Bravo wing, send them east bridge, and let them sweep it."}
+{"utterance": "Charlie team goes east bridge; have them inspect that span."}
+{"utterance": "Delta scout, move them east bridge; they check it there."}
+{"utterance": "Echo battery, shift it east bridge, let it search nearby."}
+{"utterance": "Foxtrot patrol reaches east bridge; they should survey it."}
+{"utterance": "Golf squad, take them east bridge and ask them to scan it."}
+{"utterance": "Hotel drone flies east bridge; it looks it over."}
+{"utterance": "India unit, get them east bridge, then they run sensors there."}
+{"utterance": "Juliet group moves east bridge; have them check that bridge."}
+{"utterance": "Alpha wing to south gate; once there, have them scan it."}
+{"utterance": "Bravo wing, move them south gate, they can inspect it."}
+{"utterance": "Charlie team, send them south gate and have them sweep there."}
+{"utterance": "Delta scout reaches south gate; they check that gate afterward."}
+{"utterance": "Echo battery, shift it south gate and let it search there."}
+{"utterance": "Foxtrot patrol, get them south gate; they should look it over."}
+{"utterance": "Golf squad to south gate; have them run sensors at it."}
+{"utterance": "Hotel drone flies south gate; it surveys that spot."}
+{"utterance": "India unit, take them south gate, let them scan it."}
+{"utterance": "Juliet group, south gate first; they inspect it second."}
+{"utterance": "Alpha wing moves west tower; have them scan it on arrival."}
+{"utterance": "Bravo wing, send them west tower, they can sweep it."}
+{"utterance": "Charlie team, move them west tower and let them inspect there."}
+{"utterance": "Delta scout goes west tower; they search it afterward."}
+{"utterance": "Echo battery, position it west tower, let it scan from there."}
+{"utterance": "Foxtrot patrol reaches west tower; have them check it."}
+{"utterance": "Golf squad, get them west tower, then they survey it."}
+{"utterance": "Hotel drone flies west tower; it looks over that tower."}
+{"utterance": "India unit, take them west tower; they run sensors there."}
+{"utterance": "Juliet group to west tower, and have them inspect it after."}
+{"utterance": "Alpha wing, move north ridge only if scout verifies the clearance report."}
+{"utterance": "If north ridge looks open, still require scout confirmation before moving Bravo wing."}
+{"utterance": "Charlie team waits for both: north ridge clear and scout agreed, then moves."}
+{"utterance": "Delta scout, take north ridge when clear status is corroborated by recon."}
+{"utterance": "Echo battery moves north ridge provided the scout also confirms it is clear."}
+{"utterance": "Foxtrot patrol, no north ridge move unless clearance and scout word coincide."}
+{"utterance": "Golf squad to north ridge if the clear report survives the scout check."}
+{"utterance": "Hotel drone, fly north ridge after the scout verifies that it is clear."}
+{"utterance": "India unit, move north ridge only on scout-backed clearance."}
+{"utterance": "Juliet group to north ridge when clear ground is confirmed by recon."}
+{"utterance": "Alpha wing to east bridge if clear, but only after scout agrees."}
+{"utterance": "Bravo wing, east bridge move requires scout verification of the clear signal."}
+{"utterance": "Charlie team goes east bridge once the scout confirms clear passage."}
+{"utterance": "Delta scout, take east bridge if the clear report is backed by recon."}
+{"utterance": "Echo battery to east bridge after clearance plus independent scout yes."}
+{"utterance": "Foxtrot patrol, no east bridge movement until clear and confirmed."}
+{"utterance": "Golf squad advances east bridge provided scout verifies the opening."}
+{"utterance": "Hotel drone, fly east bridge when clearance has a scout check."}
+{"utterance": "India unit, east bridge only if recon confirms clear status."}
+{"utterance": "Juliet group moves east bridge after both clear and scout green."}
+{"utterance": "Alpha wing, south gate if clear status gets scout confirmation."}
+{"utterance": "Bravo wing to south gate provided the scout verifies clearance."}
+{"utterance": "Charlie team, no south gate advance until recon confirms it is clear."}
+{"utterance": "Delta scout takes south gate when the clear report is checked."}
+{"utterance": "Echo battery moves south gate if clearance and scout approval both land."}
+{"utterance": "Foxtrot patrol, south gate only after a scout-backed clear call."}
+{"utterance": "Golf squad to south gate once recon validates clear ground."}
+{"utterance": "Hotel drone may fly south gate when the scout confirms clearance."}
+{"utterance": "India unit, move south gate if the clear flag is confirmed by scout."}
+{"utterance": "Juliet group takes south gate only with a verified clear report."}
+{"utterance": "Alpha wing, west tower if recon agrees it is clear."}
+{"utterance": "Bravo wing to west tower after a scout check of clearance."}
+{"utterance": "Charlie team, west tower movement requires both clear and scout yes."}
+{"utterance": "Delta scout moves west tower provided clearance is confirmed."}
+{"utterance": "Echo battery, take west tower only if the scout backs the clear call."}
+{"utterance": "Foxtrot patrol, west tower after scout verification of open ground."}
+{"utterance": "Golf squad advances west tower if recon signs off on clear status."}
+{"utterance": "Hotel drone, fly west tower when both clearance and scout agree."}
+{"utterance": "India unit to west tower only on verified clearance."}
+{"utterance": "Juliet group, west tower move if the scout confirms the clear report."}
+{"utterance": "Alpha wing scans north ridge at the same time reserve wing holds west tower."}
+{"utterance": "Bravo wing, sweep north ridge; have reserve wing keep west tower concurrently."}
+{"utterance": "Charlie team checks north ridge while reserve wing maintains west tower."}
+{"utterance": "Delta scout surveys north ridge, reserve wing holds west tower alongside."}
+{"utterance": "Echo battery, north ridge scan now; reserve wing west tower hold now."}
+{"utterance": "Foxtrot patrol searches north ridge as reserve wing stays at west tower."}
+{"utterance": "Golf squad, inspect north ridge during reserve wing's west tower hold."}
+{"utterance": "Hotel drone scans north ridge; meanwhile reserve wing secures west tower."}
+{"utterance": "India unit, sweep north ridge in parallel with reserve wing holding west tower."}
+{"utterance": "Juliet group, north ridge scan and reserve wing tower hold together."}
+{"utterance": "Alpha wing scans east bridge during reserve wing's west tower hold."}
+{"utterance": "Bravo wing, inspect east bridge as reserve wing holds west tower."}
+{"utterance": "Charlie team surveys east bridge; reserve wing stays west tower concurrently."}
+{"utterance": "Delta scout, east bridge search while reserve wing secures the tower."}
+{"utterance": "Echo battery scans east bridge, reserve wing holds west tower at once."}
+{"utterance": "Foxtrot patrol checks east bridge as reserve wing keeps west tower."}
+{"utterance": "Golf squad, sweep east bridge alongside reserve wing's tower hold."}
+{"utterance": "Hotel drone inspects east bridge; reserve wing remains at west tower."}
+{"utterance": "India unit, east bridge scan concurrent with reserve wing holding the tower."}
+{"utterance": "Juliet group surveys east bridge, reserve wing holds west tower meanwhile."}
+{"utterance": "Alpha wing scans south gate, reserve wing holds west tower simultaneously."}
+{"utterance": "Bravo wing, search south gate while reserve wing secures west tower."}
+{"utterance": "Charlie team inspects south gate during reserve wing's tower hold."}
+{"utterance": "Delta scout surveys south gate as reserve wing remains west tower."}
+{"utterance": "Echo battery, south gate scan; reserve wing west tower hold in parallel."}
+{"utterance": "Foxtrot patrol checks south gate alongside reserve wing holding west tower."}
+{"utterance": "Golf squad scans south gate; reserve wing keeps the tower meanwhile."}
+{"utterance": "Hotel drone, sweep south gate while reserve wing stays west tower."}
+{"utterance": "India unit inspects south gate as reserve wing secures west tower."}
+{"utterance": "Juliet group, south gate search simultaneous with reserve wing tower hold."}
+{"utterance": "Alpha wing scans west tower while reserve wing holds it."}
+{"utterance": "Bravo wing, inspect west tower as reserve wing remains there."}
+{"utterance": "Charlie team surveys west tower; reserve wing keeps that same post."}
+{"utterance": "Delta scout searches west tower alongside reserve wing holding it."}
+{"utterance": "Echo battery, west tower scan concurrent with reserve wing's hold there."}
+{"utterance": "Foxtrot patrol checks west tower while reserve wing secures that tower."}
+{"utterance": "Golf squad, sweep west tower; reserve wing holds it meanwhile."}
+{"utterance": "Hotel drone inspects west tower as reserve wing stays below."}
+{"utterance": "India unit scans west tower while reserve wing maintains the position."}
+{"utterance": "Juliet group, west tower survey simultaneous with reserve wing hold."}
+{"utterance": "Alpha wing, move north ridge, scan it, hold there, fire on green. Do not queue a separate watch task; there is no separate task completion; no fire until that signal."}
+{"utterance": "Bravo wing to north ridge; sweep, keep position, shoot at the horn. Do not open a separate watch task; there is no separate task completion; no fire before that cue."}
+{"utterance": "Charlie team, get north ridge, check it, stay there, fire when called. Don't start a separate watch task; there is no separate task completion; no fire until that cue."}
+{"utterance": "Delta scout, north ridge first; sensors, hold, then shoot on the flare. No fire until that signal; do not log a separate watch task; there is no separate task completion."}
+{"utterance": "Echo battery, take north ridge, scan, remain, fire at my signal. No fire before that cue; do not assign a separate watch task; there is no separate task completion."}
+{"utterance": "Foxtrot patrol, go north ridge, search, hold the ridge, fire on amber. No fire until that cue; don't register a separate watch task; there is no separate task completion."}
+{"utterance": "Golf squad, move north ridge and inspect; keep it; fire at the beep. There is no separate task completion; no fire until that signal; do not schedule a separate watch task."}
+{"utterance": "Hotel drone, fly north ridge, survey, hover, fire when the light changes. There is no separate task completion; no fire before that cue; do not create a separate watch task."}
+{"utterance": "India unit, north ridge move, scan, hold position, fire on my word. There is no separate task completion; no fire until that cue; don't add a separate watch task."}
+{"utterance": "Juliet group, reach north ridge, check the area, stay, fire at the ping. Do not activate a separate watch task; there is no separate task completion; no fire until that signal."}
+{"utterance": "Alpha wing to east bridge, sweep it, hold the span, fire on green. Do not queue an independent wait order; there is no separate task completion; no fire before that cue."}
+{"utterance": "Bravo wing, advance east bridge; scan, remain, shoot at the chime. Don't open an independent wait order; there is no separate task completion; no fire until that cue."}
+{"utterance": "Charlie team, east bridge, check it, stay there, fire when I call. No fire until that signal; do not start an independent wait order; there is no separate task completion."}
+{"utterance": "Delta scout, take east bridge, sensor pass, hold, then fire at the flash. No fire before that cue; do not log an independent wait order; there is no separate task completion."}
+{"utterance": "Echo battery, east bridge move, survey, keep station, fire on the tone. No fire until that cue; don't assign an independent wait order; there is no separate task completion."}
+{"utterance": "Foxtrot patrol, get east bridge, inspect, remain, fire at the code. There is no separate task completion; no fire until that signal; do not register an independent wait order."}
+{"utterance": "Golf squad, move east bridge and scan, hold it, fire on red smoke. There is no separate task completion; no fire before that cue; do not schedule an independent wait order."}
+{"utterance": "Hotel drone, fly east bridge, search, hover there, fire at my tap. There is no separate task completion; no fire until that cue; don't create an independent wait order."}
+{"utterance": "India unit, reach east bridge, sweep, maintain position, shoot on blue. Do not add an independent wait order; there is no separate task completion; no fire until that signal."}
+{"utterance": "Juliet group, east bridge first, sensors, hold, fire at the beacon. Do not activate an independent wait order; there is no separate task completion; no fire before that cue."}
+{"utterance": "Alpha wing, south gate, then scan; hold the gate; fire on green. Don't queue a standalone signal watch job; there is no separate task completion; no fire until that cue."}
+{"utterance": "Bravo wing to south gate, look it over, remain, shoot at the horn. No fire until that signal; do not open a standalone signal watch job; there is no separate task completion."}
+{"utterance": "Charlie team, take south gate, inspect, stay, fire at the signal. No fire before that cue; do not start a standalone signal watch job; there is no separate task completion."}
+{"utterance": "Delta scout, move south gate, sweep, hold there, fire at my word. No fire until that cue; don't log a standalone signal watch job; there is no separate task completion."}
+{"utterance": "Echo battery, south gate move, sensor pass, remain, fire on amber. There is no separate task completion; no fire until that signal; do not assign a standalone signal watch job."}
+{"utterance": "Foxtrot patrol, go south gate, scan, keep it, fire on the click. There is no separate task completion; no fire before that cue; do not register a standalone signal watch job."}
+{"utterance": "Golf squad, reach south gate, search, hold position, fire when called. There is no separate task completion; no fire until that cue; don't schedule a standalone signal watch job."}
+{"utterance": "Hotel drone, fly south gate, survey, hover, fire at the flare. Do not create a standalone signal watch job; there is no separate task completion; no fire until that signal."}
+{"utterance": "India unit, south gate first, check it, hold, fire at the beep. Do not add a standalone signal watch job; there is no separate task completion; no fire before that cue."}
+{"utterance": "Juliet group, move south gate, inspect, stay, fire on green light. Don't activate a standalone signal watch job; there is no separate task completion; no fire until that cue."}
+{"utterance": "Alpha wing, west tower, scan, hold there, fire on the horn. No fire until that signal; do not queue a separate signal wait entry; there is no separate task completion."}
+{"utterance": "Bravo wing to west tower; inspect it; stay; fire at the flash. No fire before that cue; do not open a separate signal wait entry; there is no separate task completion."}
+{"utterance": "Charlie team, get west tower, sweep, hold, shoot on my mark. No fire until that cue; don't start a separate signal wait entry; there is no separate task completion."}
+{"utterance": "Delta scout, move west tower, run sensors, remain, fire on the chime. There is no separate task completion; no fire until that signal; do not log a separate signal wait entry."}
+{"utterance": "Echo battery, take west tower, search it, hold position, fire at the tone. There is no separate task completion; no fire before that cue; do not assign a separate signal wait entry."}
+{"utterance": "Foxtrot patrol, west tower move, scan, stay, fire when the beacon blinks. There is no separate task completion; no fire until that cue; don't register a separate signal wait entry."}
+{"utterance": "Golf squad, reach west tower, check it, hold, fire at code red. Do not schedule a separate signal wait entry; there is no separate task completion; no fire until that signal."}
+{"utterance": "Hotel drone, fly west tower, survey, hover there, fire on my call. Do not create a separate signal wait entry; there is no separate task completion; no fire before that cue."}
+{"utterance": "India unit, west tower first, inspect, maintain station, fire at the ping. Don't add a separate signal wait entry; there is no separate task completion; no fire until that cue."}
+{"utterance": "Juliet group, advance west tower, sweep, hold that post, fire on green. No fire until that signal; do not activate a separate signal wait entry; there is no separate task completion."}
+{"utterance": "Alpha wing, north ridge, scan, hold, keep the green watch, then fire. Queue a separate watch task; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "Bravo wing to north ridge; sweep, stay, take horn watch, shoot afterward. Open a separate watch task; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "Charlie team, get north ridge, check it, hold, ride call watch, fire. Start a separate watch task; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Delta scout, north ridge, sensors, hold, flare watch, then shoot. There is no fire until separate task completion; log a separate watch task; do not fire until that signal."}
+{"utterance": "Echo battery, take north ridge, scan, remain, signal watch, fire when released. There is no fire until separate task completion; assign a separate watch task; do not fire before that cue."}
+{"utterance": "Foxtrot patrol, go north ridge, search, hold, amber watch, fire after. There is no fire until separate task completion; register a separate watch task; don't fire until that cue."}
+{"utterance": "Golf squad, move north ridge, inspect, hold, beep watch, then fire. Do not fire until that signal; schedule a separate watch task; there is no fire until separate task completion."}
+{"utterance": "Hotel drone, fly north ridge, survey, hover, light-change watch, then fire. Do not fire before that cue; create a separate watch task; there is no fire until separate task completion."}
+{"utterance": "India unit, north ridge move, scan, hold, my-word watch, fire afterward. Don't fire until that cue; add a separate watch task; there is no fire until separate task completion."}
+{"utterance": "Juliet group, reach north ridge, check, stay, ping watch, then fire. Activate a separate watch task; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "Alpha wing, east bridge, sweep, hold, green watch, then fire. Queue an independent wait order; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "Bravo wing, advance east bridge, scan, remain, chime watch, shoot after. Open an independent wait order; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Charlie team, east bridge, check, hold, call watch, then fire. There is no fire until separate task completion; start an independent wait order; do not fire until that signal."}
+{"utterance": "Delta scout, take east bridge, sensors, hold, flash watch, fire afterward. There is no fire until separate task completion; log an independent wait order; do not fire before that cue."}
+{"utterance": "Echo battery, east bridge move, survey, stay, tone watch, then fire. There is no fire until separate task completion; assign an independent wait order; don't fire until that cue."}
+{"utterance": "Foxtrot patrol, get east bridge, inspect, hold, code watch, fire later. Do not fire until that signal; register an independent wait order; there is no fire until separate task completion."}
+{"utterance": "Golf squad, move east bridge, scan, hold, red-smoke watch, then fire. Do not fire before that cue; schedule an independent wait order; there is no fire until separate task completion."}
+{"utterance": "Hotel drone, fly east bridge, search, hover, my-tap watch, fire after. Don't fire until that cue; create an independent wait order; there is no fire until separate task completion."}
+{"utterance": "India unit, reach east bridge, sweep, remain, blue watch, then shoot. Add an independent wait order; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "Juliet group, east bridge, sensors, hold, beacon watch, fire once done. Activate an independent wait order; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "Alpha wing, south gate, scan, hold, green watch, then fire. Queue a standalone signal watch job; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Bravo wing, go south gate, look it over, remain, horn watch, shoot after. There is no fire until separate task completion; open a standalone signal watch job; do not fire until that signal."}
+{"utterance": "Charlie team, take south gate, inspect, hold, signal watch, then fire. There is no fire until separate task completion; start a standalone signal watch job; do not fire before that cue."}
+{"utterance": "Delta scout, move south gate, sweep, hold, my-word watch, fire afterward. There is no fire until separate task completion; log a standalone signal watch job; don't fire until that cue."}
+{"utterance": "Echo battery, south gate move, sensors, remain, amber watch, fire after. Do not fire until that signal; assign a standalone signal watch job; there is no fire until separate task completion."}
+{"utterance": "Foxtrot patrol, get south gate, scan, hold, click watch, then fire. Do not fire before that cue; register a standalone signal watch job; there is no fire until separate task completion."}
+{"utterance": "Golf squad, reach south gate, search, hold, call watch, fire later. Don't fire until that cue; schedule a standalone signal watch job; there is no fire until separate task completion."}
+{"utterance": "Hotel drone, fly south gate, survey, hover, flare watch, then fire. Create a standalone signal watch job; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "India unit, south gate, check, hold, beep watch, fire after completion. Add a standalone signal watch job; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "Juliet group, move south gate, inspect, remain, green-light watch, then fire. Activate a standalone signal watch job; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Alpha wing, west tower, scan, hold, horn watch, fire afterward. There is no fire until separate task completion; queue a separate signal wait entry; do not fire until that signal."}
+{"utterance": "Bravo wing, west tower, inspect, stay, flash watch, then shoot. There is no fire until separate task completion; open a separate signal wait entry; do not fire before that cue."}
+{"utterance": "Charlie team, get west tower, sweep, hold, my-mark watch, fire after. There is no fire until separate task completion; start a separate signal wait entry; don't fire until that cue."}
+{"utterance": "Delta scout, move west tower, sensors, remain, chime watch, then fire. Do not fire until that signal; log a separate signal wait entry; there is no fire until separate task completion."}
+{"utterance": "Echo battery, take west tower, search, hold, tone watch, fire later. Do not fire before that cue; assign a separate signal wait entry; there is no fire until separate task completion."}
+{"utterance": "Foxtrot patrol, west tower move, scan, stay, beacon-blink watch, then fire. Don't fire until that cue; register a separate signal wait entry; there is no fire until separate task completion."}
+{"utterance": "Golf squad, reach west tower, check, hold, code-red watch, fire after. Schedule a separate signal wait entry; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "Hotel drone, fly west tower, survey, hover, my-call watch, then fire. Create a separate signal wait entry; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "India unit, west tower, inspect, remain, ping watch, fire afterward. Add a separate signal wait entry; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Juliet group, advance west tower, sweep, hold, green watch, then fire. There is no fire until separate task completion; activate a separate signal wait entry; do not fire until that signal."}
+{"utterance": "Alpha, stay on the clock for green; fire into north ridge when it comes. Do not queue a separate watch task; there is no separate task completion; no fire until that signal."}
+{"utterance": "Alpha, stay on the clock for green, then fire into north ridge. Queue a separate watch task; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "Bravo, take the go watch; once it clears, hit east bridge. Do not open a separate watch task; there is no separate task completion; no fire before that cue."}
+{"utterance": "Bravo, take the go watch; hit east bridge on its cue. Open a separate watch task; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "Charlie, ride out the flare watch and fire at south gate on the flare. Don't start a separate watch task; there is no separate task completion; no fire until that cue."}
+{"utterance": "Charlie, ride out the flare watch, then fire at south gate. Start a separate watch task; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Delta, hold a flare watch at west tower and shoot after it clears. No fire until that signal; do not log a separate watch task; there is no separate task completion."}
+{"utterance": "Delta, hold a flare watch at west tower; shoot when it clears. There is no fire until separate task completion; log a separate watch task; do not fire until that signal."}
+{"utterance": "Echo battery, keep a mark watch first; fire on upper deck on the mark. No fire before that cue; do not assign a separate watch task; there is no separate task completion."}
+{"utterance": "Echo battery, keep a mark watch first; upper deck gets fire at the release. There is no fire until separate task completion; assign a separate watch task; do not fire before that cue."}
+{"utterance": "Foxtrot, sit through the bell watch, then fire into lower tunnel. No fire until that cue; don't register a separate watch task; there is no separate task completion."}
+{"utterance": "Foxtrot, sit through the bell watch; fire into lower tunnel when it rings. There is no fire until separate task completion; register a separate watch task; don't fire until that cue."}
+{"utterance": "Golf, take a beacon watch, fire at river crossing on the blink. There is no separate task completion; no fire until that signal; do not schedule a separate watch task."}
+{"utterance": "Golf, take a beacon watch and fire at river crossing at its end. Do not fire until that signal; schedule a separate watch task; there is no fire until separate task completion."}
+{"utterance": "Hotel, hold on the signal clock, then fire on supply depot. There is no separate task completion; no fire before that cue; do not create a separate watch task."}
+{"utterance": "Hotel, hold on the signal clock; fire on supply depot at the signal. Do not fire before that cue; create a separate watch task; there is no fire until separate task completion."}
+{"utterance": "India unit, stay in the call watch, fire on radar mast when called. There is no separate task completion; no fire until that cue; don't add a separate watch task."}
+{"utterance": "India unit: stay in the call watch, then fire on radar mast. Don't fire until that cue; add a separate watch task; there is no fire until separate task completion."}
+{"utterance": "Juliet, remain on call watch, then fire at the landing zone. Do not activate a separate watch task; there is no separate task completion; no fire until that signal."}
+{"utterance": "Juliet, remain on call watch; fire at the landing zone on my call. Activate a separate watch task; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "Alpha, keep the green-light watch; open fire at east bridge on green. Do not queue an independent wait order; there is no separate task completion; no fire before that cue."}
+{"utterance": "Alpha, take the green-light watch; after it clears, open fire at east bridge. Queue an independent wait order; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "Bravo, wait out a red-smoke watch, then fire into south gate. Don't open an independent wait order; there is no separate task completion; no fire until that cue."}
+{"utterance": "Bravo, wait out a red-smoke watch; fire into south gate on smoke. Open an independent wait order; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Charlie, stay in a horn watch, fire on west tower when it sounds. No fire until that signal; do not start an independent wait order; there is no separate task completion."}
+{"utterance": "Charlie, stay in a horn watch before firing on west tower. There is no fire until separate task completion; start an independent wait order; do not fire until that signal."}
+{"utterance": "Delta, take a radio-ping watch; upper deck follows. No fire before that cue; do not log an independent wait order; there is no separate task completion."}
+{"utterance": "Delta, take a radio-ping watch; fire upper deck on the ping. There is no fire until separate task completion; log an independent wait order; do not fire before that cue."}
+{"utterance": "Echo, hold a two-flash watch, fire into lower tunnel at two flashes. No fire until that cue; don't assign an independent wait order; there is no separate task completion."}
+{"utterance": "Echo, hold a two-flash watch and then fire into lower tunnel. There is no fire until separate task completion; assign an independent wait order; don't fire until that cue."}
+{"utterance": "Foxtrot, keep the gate-lamp watch, then fire on river crossing. There is no separate task completion; no fire until that signal; do not register an independent wait order."}
+{"utterance": "Foxtrot, keep the gate-lamp watch; fire on river crossing if it flips. Do not fire until that signal; register an independent wait order; there is no fire until separate task completion."}
+{"utterance": "Golf, sit on a whistle watch, hit supply depot at the whistle. There is no separate task completion; no fire before that cue; do not schedule an independent wait order."}
+{"utterance": "Golf, sit on a whistle watch before you hit supply depot. Do not fire before that cue; schedule an independent wait order; there is no fire until separate task completion."}
+{"utterance": "Hotel, start a chirp watch; when that's done shoot radar mast. There is no separate task completion; no fire until that cue; don't create an independent wait order."}
+{"utterance": "Hotel, start a chirp watch; shoot radar mast on the chirp. Don't fire until that cue; create an independent wait order; there is no fire until separate task completion."}
+{"utterance": "India, keep a blue-flash watch, fire at landing zone on blue. Do not add an independent wait order; there is no separate task completion; no fire until that signal."}
+{"utterance": "India, keep a blue-flash watch first and fire at landing zone after. Add an independent wait order; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "Juliet, ride the green-signal watch and then fire on north ridge. Do not activate an independent wait order; there is no separate task completion; no fire before that cue."}
+{"utterance": "Juliet, ride the green-signal watch; fire on north ridge at green. Activate an independent wait order; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "Alpha to south gate, hold the green watch; shoot when green arrives. Don't queue a standalone signal watch job; there is no separate task completion; no fire until that cue."}
+{"utterance": "Alpha to south gate, hold the green watch, then shoot. Queue a standalone signal watch job; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Bravo, take a lamp watch before firing on west tower. No fire until that signal; do not open a standalone signal watch job; there is no separate task completion."}
+{"utterance": "Bravo, take a lamp watch and fire on west tower at the lamp. There is no fire until separate task completion; open a standalone signal watch job; do not fire until that signal."}
+{"utterance": "Charlie, keep a siren watch, fire on upper deck when it sounds. No fire before that cue; do not start a standalone signal watch job; there is no separate task completion."}
+{"utterance": "Charlie, keep a siren watch; once complete, fire on upper deck. There is no fire until separate task completion; start a standalone signal watch job; do not fire before that cue."}
+{"utterance": "Delta, remain on a courier watch, then fire into lower tunnel. No fire until that cue; don't log a standalone signal watch job; there is no separate task completion."}
+{"utterance": "Delta, remain on a courier watch; fire into lower tunnel on the clear call. There is no fire until separate task completion; log a standalone signal watch job; don't fire until that cue."}
+{"utterance": "Echo, keep a code-word watch, fire at river crossing on the word. There is no separate task completion; no fire until that signal; do not assign a standalone signal watch job."}
+{"utterance": "Echo, keep a code-word watch; at its release fire at river crossing. Do not fire until that signal; assign a standalone signal watch job; there is no fire until separate task completion."}
+{"utterance": "Foxtrot, sit through a code-yellow watch, then fire at supply depot. There is no separate task completion; no fire before that cue; do not register a standalone signal watch job."}
+{"utterance": "Foxtrot, sit through a code-yellow watch, fire at supply depot on yellow. Do not fire before that cue; register a standalone signal watch job; there is no fire until separate task completion."}
+{"utterance": "Golf, take a marker-drop watch; fire on radar mast at the drop. There is no separate task completion; no fire until that cue; don't schedule a standalone signal watch job."}
+{"utterance": "Golf, take a marker-drop watch before firing on radar mast. Don't fire until that cue; schedule a standalone signal watch job; there is no fire until separate task completion."}
+{"utterance": "Hotel, hold a second-tone watch and then fire at landing zone. Do not create a standalone signal watch job; there is no separate task completion; no fire until that signal."}
+{"utterance": "Hotel, hold a second-tone watch, fire at landing zone on tone two. Create a standalone signal watch job; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "India, stay on a click watch; fire north ridge on the click. Do not add a standalone signal watch job; there is no separate task completion; no fire before that cue."}
+{"utterance": "India, stay on a click watch; north ridge gets fire afterward. Add a standalone signal watch job; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "Juliet, keep a flag-rise watch before you fire east bridge. Don't activate a standalone signal watch job; there is no separate task completion; no fire until that cue."}
+{"utterance": "Juliet, keep a flag-rise watch, fire east bridge as it rises. Activate a standalone signal watch job; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Alpha, carry a sunrise watch; fire on west tower at sunrise. No fire until that signal; do not queue a separate signal wait entry; there is no separate task completion."}
+{"utterance": "Alpha, carry a sunrise watch and follow it with fire on west tower. There is no fire until separate task completion; queue a separate signal wait entry; do not fire until that signal."}
+{"utterance": "Bravo, take a scanner-beep watch, then shoot upper deck. No fire before that cue; do not open a separate signal wait entry; there is no separate task completion."}
+{"utterance": "Bravo, take a scanner-beep watch; shoot upper deck on its beep. There is no fire until separate task completion; open a separate signal wait entry; do not fire before that cue."}
+{"utterance": "Charlie, stay on my-tap watch; fire into lower tunnel on my tap. No fire until that cue; don't start a separate signal wait entry; there is no separate task completion."}
+{"utterance": "Charlie, stay on my-tap watch, then fire into lower tunnel. There is no fire until separate task completion; start a separate signal wait entry; don't fire until that cue."}
+{"utterance": "Delta, hold a signal-rocket watch before striking river crossing. There is no separate task completion; no fire until that signal; do not log a separate signal wait entry."}
+{"utterance": "Delta, hold a signal-rocket watch; strike river crossing as it rises. Do not fire until that signal; log a separate signal wait entry; there is no fire until separate task completion."}
+{"utterance": "Echo battery, keep amber watch; fire at supply depot on amber. There is no separate task completion; no fire before that cue; do not assign a separate signal wait entry."}
+{"utterance": "Echo battery, keep amber watch, then fire at supply depot. Do not fire before that cue; assign a separate signal wait entry; there is no fire until separate task completion."}
+{"utterance": "Foxtrot, hold a ready-transmission watch before firing radar mast. There is no separate task completion; no fire until that cue; don't register a separate signal wait entry."}
+{"utterance": "Foxtrot, hold a ready-transmission watch; fire radar mast when I transmit. Don't fire until that cue; register a separate signal wait entry; there is no fire until separate task completion."}
+{"utterance": "Golf, run a line-live watch, fire on landing zone when the line goes live. Do not schedule a separate signal wait entry; there is no separate task completion; no fire until that signal."}
+{"utterance": "Golf, run a line-live watch, then fire on landing zone. Schedule a separate signal wait entry; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "Hotel, take the signal-burst watch before firing north ridge. Do not create a separate signal wait entry; there is no separate task completion; no fire before that cue."}
+{"utterance": "Hotel, take the signal-burst watch; fire north ridge at the burst. Create a separate signal wait entry; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "India, keep a beacon-sweep watch; fire east bridge on the sweep. Don't add a separate signal wait entry; there is no separate task completion; no fire until that cue."}
+{"utterance": "India, keep a beacon-sweep watch and follow with fire east bridge. Add a separate signal wait entry; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Juliet, hold a call watch first, then fire south gate. No fire until that signal; do not activate a separate signal wait entry; there is no separate task completion."}
+{"utterance": "Juliet, hold a call watch, fire south gate when I call. There is no fire until separate task completion; activate a separate signal wait entry; do not fire until that signal."}
+{"utterance": "Alpha, after the scout scan, take the clear-report watch; fire north ridge on clear. No fire before that cue; do not queue a separate watch task; there is no separate task completion."}
+{"utterance": "Alpha, after the scout scan, take the clear-report watch, then fire north ridge. There is no fire until separate task completion; queue a separate watch task; do not fire before that cue."}
+{"utterance": "Bravo, after that sweep returns, ride the green watch and fire east bridge. No fire until that cue; don't open a separate watch task; there is no separate task completion."}
+{"utterance": "Bravo, after that sweep returns, ride the green watch; fire east bridge on green. There is no fire until separate task completion; open a separate watch task; don't fire until that cue."}
+{"utterance": "Charlie, queued scan first, horn watch second; fire south gate on the horn. There is no separate task completion; no fire until that signal; do not start a separate watch task."}
+{"utterance": "Charlie, queued scan first, horn watch second, then fire south gate. Do not fire until that signal; start a separate watch task; there is no fire until separate task completion."}
+{"utterance": "Delta, after the earlier scan, keep my-word watch, then fire west tower. There is no separate task completion; no fire before that cue; do not log a separate watch task."}
+{"utterance": "Delta, after the earlier scan, keep my-word watch; fire west tower on my word. Do not fire before that cue; log a separate watch task; there is no fire until separate task completion."}
+{"utterance": "Echo, once that scan finishes, stay on beacon watch; fire upper deck if lit. There is no separate task completion; no fire until that cue; don't assign a separate watch task."}
+{"utterance": "Echo, once that scan finishes, stay on beacon watch before firing upper deck. Don't fire until that cue; assign a separate watch task; there is no fire until separate task completion."}
+{"utterance": "Foxtrot, let the scan end, then take mark watch and fire lower tunnel. Do not register a separate watch task; there is no separate task completion; no fire until that signal."}
+{"utterance": "Foxtrot, let the scan end, then take mark watch; fire lower tunnel at my mark. Register a separate watch task; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "Golf, recon sweep first; flag watch after; fire river crossing when flag rises. Do not schedule a separate watch task; there is no separate task completion; no fire before that cue."}
+{"utterance": "Golf, recon sweep first; flag watch after; fire river crossing last. Schedule a separate watch task; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "Hotel, when the scan clears, hold a green-lamp watch, then fire supply depot. Don't create a separate watch task; there is no separate task completion; no fire until that cue."}
+{"utterance": "Hotel, when the scan clears, hold a green-lamp watch; fire supply depot on green. Create a separate watch task; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "India, wait out the old scan, keep a beep watch; hit radar mast at the beep. No fire until that signal; do not add a separate watch task; there is no separate task completion."}
+{"utterance": "India, wait out the old scan, keep a beep watch, and hit radar mast. There is no fire until separate task completion; add a separate watch task; do not fire until that signal."}
+{"utterance": "Juliet, after that scan, take code-blue watch before firing landing zone. No fire before that cue; do not activate a separate watch task; there is no separate task completion."}
+{"utterance": "Juliet, after that scan, take code-blue watch; fire landing zone on blue. There is no fire until separate task completion; activate a separate watch task; do not fire before that cue."}
+{"utterance": "Alpha, drone scan first, ready-call watch next; fire east bridge when ready. No fire until that cue; don't queue an independent wait order; there is no separate task completion."}
+{"utterance": "Alpha, drone scan first, ready-call watch next, east bridge fire afterward. There is no fire until separate task completion; queue an independent wait order; don't fire until that cue."}
+{"utterance": "Bravo, after the active scan, keep flare watch; south gate gets fire at release. There is no separate task completion; no fire until that signal; do not open an independent wait order."}
+{"utterance": "Bravo, after the active scan, keep flare watch; fire south gate as it rises. Do not fire until that signal; open an independent wait order; there is no fire until separate task completion."}
+{"utterance": "Charlie, scout scan completes, siren watch runs; fire west tower on the siren. There is no separate task completion; no fire before that cue; do not start an independent wait order."}
+{"utterance": "Charlie, scout scan completes, siren watch runs, then west tower fire. Do not fire before that cue; start an independent wait order; there is no fire until separate task completion."}
+{"utterance": "Delta, let the queued scan clear; take click watch; fire upper deck. There is no separate task completion; no fire until that cue; don't log an independent wait order."}
+{"utterance": "Delta, let the queued scan clear, take click watch; fire upper deck at the click. Don't fire until that cue; log an independent wait order; there is no fire until separate task completion."}
+{"utterance": "Echo, other team scans lower tunnel; take tone-drop watch and fire when it drops. Do not assign an independent wait order; there is no separate task completion; no fire until that signal."}
+{"utterance": "Echo, other team scans lower tunnel, then you take tone-drop watch and fire. Assign an independent wait order; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "Foxtrot, after the preordered survey, ride green watch, then fire river crossing. Do not register an independent wait order; there is no separate task completion; no fire before that cue."}
+{"utterance": "Foxtrot, after the preordered survey, ride green watch; fire river crossing on green. Register an independent wait order; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "Golf, finish the board sweep, hold radio-clear watch; fire supply depot on clear. Don't schedule an independent wait order; there is no separate task completion; no fire until that cue."}
+{"utterance": "Golf, finish the board sweep, hold radio-clear watch, fire supply depot. Schedule an independent wait order; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Hotel, earlier scan clears, beacon-flick watch follows, then radar mast fire. No fire until that signal; do not create an independent wait order; there is no separate task completion."}
+{"utterance": "Hotel, earlier scan clears, beacon-flick watch follows; fire radar mast at the flick. There is no fire until separate task completion; create an independent wait order; do not fire until that signal."}
+{"utterance": "India, current scan first, whistle watch next; fire landing zone at the whistle. No fire before that cue; do not add an independent wait order; there is no separate task completion."}
+{"utterance": "India, current scan first, whistle watch next, fire landing zone at release. There is no fire until separate task completion; add an independent wait order; do not fire before that cue."}
+{"utterance": "Juliet, when the running scan completes, take my-tap watch, then fire north ridge. No fire until that cue; don't activate an independent wait order; there is no separate task completion."}
+{"utterance": "Juliet, when the running scan completes, take my-tap watch; fire north ridge on tap. There is no fire until separate task completion; activate an independent wait order; don't fire until that cue."}
+{"utterance": "Alpha, assigned radar sweep, then amber watch; fire south gate when amber shows. There is no separate task completion; no fire until that signal; do not queue a standalone signal watch job."}
+{"utterance": "Alpha, assigned radar sweep, then amber watch, then fire south gate. Do not fire until that signal; queue a standalone signal watch job; there is no fire until separate task completion."}
+{"utterance": "Bravo, queued search ends, go watch begins, west tower fire follows. There is no separate task completion; no fire before that cue; do not open a standalone signal watch job."}
+{"utterance": "Bravo, queued search ends, go watch begins; fire west tower when I say go. Do not fire before that cue; open a standalone signal watch job; there is no fire until separate task completion."}
+{"utterance": "Charlie, after the live scan closes, keep burst watch; fire upper deck at the burst. There is no separate task completion; no fire until that cue; don't start a standalone signal watch job."}
+{"utterance": "Charlie, after the live scan closes, keep burst watch before firing upper deck. Don't fire until that cue; start a standalone signal watch job; there is no fire until separate task completion."}
+{"utterance": "Delta, previous scan, double-chirp watch, then lower tunnel fire. Do not log a standalone signal watch job; there is no separate task completion; no fire until that signal."}
+{"utterance": "Delta, previous scan, double-chirp watch; fire lower tunnel on chirp two. Log a standalone signal watch job; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "Echo, outstanding scan first, flag watch second; fire river crossing when flag rises. Do not assign a standalone signal watch job; there is no separate task completion; no fire before that cue."}
+{"utterance": "Echo, outstanding scan first, flag watch second, fire river crossing third. Assign a standalone signal watch job; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "Foxtrot, require the scan, hold green-lamp watch, then fire supply depot. Don't register a standalone signal watch job; there is no separate task completion; no fire until that cue."}
+{"utterance": "Foxtrot, require the scan, hold green-lamp watch; fire supply depot as it lights. Register a standalone signal watch job; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Golf, let the existing scan finish, keep tone watch; fire radar mast on tone. No fire until that signal; do not schedule a standalone signal watch job; there is no separate task completion."}
+{"utterance": "Golf, let the existing scan finish; keep tone watch; fire radar mast. There is no fire until separate task completion; schedule a standalone signal watch job; do not fire until that signal."}
+{"utterance": "Hotel, after the running survey, take code-silver watch, then fire landing zone. No fire before that cue; do not create a standalone signal watch job; there is no separate task completion."}
+{"utterance": "Hotel, after the running survey, take code-silver watch; fire landing zone on silver. There is no fire until separate task completion; create a standalone signal watch job; do not fire before that cue."}
+{"utterance": "India, pending scout sweep, green watch; fire north ridge on green. No fire until that cue; don't add a standalone signal watch job; there is no separate task completion."}
+{"utterance": "India, pending scout sweep, green watch, north ridge fire in that order. There is no fire until separate task completion; add a standalone signal watch job; don't fire until that cue."}
+{"utterance": "Juliet, scan already queued; after it, keep horn watch; fire east bridge. There is no separate task completion; no fire until that signal; do not activate a standalone signal watch job."}
+{"utterance": "Juliet, scan already queued; after it, keep horn watch; fire east bridge on horn. Do not fire until that signal; activate a standalone signal watch job; there is no fire until separate task completion."}
+{"utterance": "Alpha, standing scan reports, code watch runs; shoot west tower when code arrives. There is no separate task completion; no fire before that cue; do not queue a separate signal wait entry."}
+{"utterance": "Alpha, standing scan reports, code watch runs, shoot west tower afterward. Do not fire before that cue; queue a separate signal wait entry; there is no fire until separate task completion."}
+{"utterance": "Bravo, old scan ends; take signal watch; fire upper deck when it completes. There is no separate task completion; no fire until that cue; don't open a separate signal wait entry."}
+{"utterance": "Bravo, old scan ends, signal watch begins; fire upper deck on signal. Don't fire until that cue; open a separate signal wait entry; there is no fire until separate task completion."}
+{"utterance": "Charlie, scouting clears, blue watch follows; fire lower tunnel on blue. Do not start a separate signal wait entry; there is no separate task completion; no fire until that signal."}
+{"utterance": "Charlie, scouting clears, blue watch follows, then fire lower tunnel. Start a separate signal wait entry; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "Delta, active search resolves; whistle watch; river crossing fire. Do not log a separate signal wait entry; there is no separate task completion; no fire before that cue."}
+{"utterance": "Delta, active search resolves, whistle watch; fire river crossing on whistle. Log a separate signal wait entry; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "Echo, existing recon order first, ping watch second; fire supply depot on ping. Don't assign a separate signal wait entry; there is no separate task completion; no fire until that cue."}
+{"utterance": "Echo, existing recon order first, ping watch second, supply depot fire last. Assign a separate signal wait entry; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Foxtrot, queued scan resolves, blink watch runs, fire radar mast. No fire until that signal; do not register a separate signal wait entry; there is no separate task completion."}
+{"utterance": "Foxtrot, queued scan resolves, blink watch runs; fire radar mast at the blink. There is no fire until separate task completion; register a separate signal wait entry; do not fire until that signal."}
+{"utterance": "Golf, ordered scan then flag-rise watch; fire landing zone as flag rises. No fire before that cue; do not schedule a separate signal wait entry; there is no separate task completion."}
+{"utterance": "Golf, ordered scan then flag-rise watch, then fire landing zone. There is no fire until separate task completion; schedule a separate signal wait entry; do not fire before that cue."}
+{"utterance": "Hotel, scout sweep first, chime watch after, fire north ridge last. No fire until that cue; don't create a separate signal wait entry; there is no separate task completion."}
+{"utterance": "Hotel, scout sweep first, chime watch after; fire north ridge on chime. There is no fire until separate task completion; create a separate signal wait entry; don't fire until that cue."}
+{"utterance": "India, current scan, green watch; fire east bridge when green comes in. There is no separate task completion; no fire until that signal; do not add a separate signal wait entry."}
+{"utterance": "India, current scan, green watch, east bridge fire, in sequence. Do not fire until that signal; add a separate signal wait entry; there is no fire until separate task completion."}
+{"utterance": "Juliet, pending scan clears, code watch finishes, then fire south gate. There is no separate task completion; no fire before that cue; do not activate a separate signal wait entry."}
+{"utterance": "Juliet, pending scan clears, code watch finishes; fire south gate on code. Do not fire before that cue; activate a separate signal wait entry; there is no fire until separate task completion."}
+{"utterance": "Alpha, let the move finish, keep green watch; fire north ridge on green. There is no separate task completion; no fire until that cue; don't queue a separate watch task."}
+{"utterance": "Alpha, let the move finish, keep green watch, then fire north ridge. Don't fire until that cue; queue a separate watch task; there is no fire until separate task completion."}
+{"utterance": "Bravo, reach east bridge, ride a horn watch, then fire there. Do not open a separate watch task; there is no separate task completion; no fire until that signal."}
+{"utterance": "Bravo, reach east bridge, ride a horn watch; fire there when it sounds. Open a separate watch task; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "Charlie, active move to south gate, mark watch afterward; fire at my mark. Do not start a separate watch task; there is no separate task completion; no fire before that cue."}
+{"utterance": "Charlie, active move to south gate, mark watch afterward, then fire. Start a separate watch task; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "Delta, finish the current move, hold beacon watch, fire west tower. Don't log a separate watch task; there is no separate task completion; no fire until that cue."}
+{"utterance": "Delta, finish the current move, hold beacon watch; fire west tower on beacon. Log a separate watch task; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Echo, queued relocation first, signal watch second; fire upper deck at signal. No fire until that signal; do not assign a separate watch task; there is no separate task completion."}
+{"utterance": "Echo, queued relocation first, signal watch second, upper deck fire last. There is no fire until separate task completion; assign a separate watch task; do not fire until that signal."}
+{"utterance": "Foxtrot, move into lower tunnel, keep clear-call watch, then fire. No fire before that cue; do not register a separate watch task; there is no separate task completion."}
+{"utterance": "Foxtrot, move into lower tunnel, keep clear-call watch; fire when called clear. There is no fire until separate task completion; register a separate watch task; do not fire before that cue."}
+{"utterance": "Golf, advance to river crossing, take blue watch; fire on blue. No fire until that cue; don't schedule a separate watch task; there is no separate task completion."}
+{"utterance": "Golf, advance to river crossing, take blue watch, then fire. There is no fire until separate task completion; schedule a separate watch task; don't fire until that cue."}
+{"utterance": "Hotel, finish the old move to supply depot, hold ping watch, then fire. There is no separate task completion; no fire until that signal; do not create a separate watch task."}
+{"utterance": "Hotel, finish the old move to supply depot, hold ping watch; fire on ping. Do not fire until that signal; create a separate watch task; there is no fire until separate task completion."}
+{"utterance": "India, assigned relocation to radar mast, whistle watch; fire when it blows. There is no separate task completion; no fire before that cue; do not add a separate watch task."}
+{"utterance": "India, assigned relocation to radar mast, whistle watch, then fire. Do not fire before that cue; add a separate watch task; there is no fire until separate task completion."}
+{"utterance": "Juliet, active move to landing zone, second-tone watch, fire afterward. There is no separate task completion; no fire until that cue; don't activate a separate watch task."}
+{"utterance": "Juliet, active move to landing zone, second-tone watch; fire on tone two. Don't fire until that cue; activate a separate watch task; there is no fire until separate task completion."}
+{"utterance": "Alpha, queued bridge move, green watch; fire east bridge when green lights. Do not queue an independent wait order; there is no separate task completion; no fire until that signal."}
+{"utterance": "Alpha, queued bridge move, green watch, then fire east bridge. Queue an independent wait order; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "Bravo, old arrival at south gate, flare watch, then fire. Do not open an independent wait order; there is no separate task completion; no fire before that cue."}
+{"utterance": "Bravo, old arrival at south gate, flare watch; fire as flare rises. Open an independent wait order; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "Charlie, current move lands, siren watch runs; fire west tower on siren. Don't start an independent wait order; there is no separate task completion; no fire until that cue."}
+{"utterance": "Charlie, current move lands, siren watch runs, west tower fire follows. Start an independent wait order; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Delta, finish the scheduled upper-deck move, keep amber watch, then fire. No fire until that signal; do not log an independent wait order; there is no separate task completion."}
+{"utterance": "Delta, finish the scheduled upper-deck move, keep amber watch; fire on amber. There is no fire until separate task completion; log an independent wait order; do not fire until that signal."}
+{"utterance": "Echo, prior tunnel move finishes, radio-ready watch ends; fire lower tunnel on ready. No fire before that cue; do not assign an independent wait order; there is no separate task completion."}
+{"utterance": "Echo, prior tunnel move finishes, radio-ready watch ends, then fire. There is no fire until separate task completion; assign an independent wait order; do not fire before that cue."}
+{"utterance": "Foxtrot, crossing move, chime watch, then fire river crossing. No fire until that cue; don't register an independent wait order; there is no separate task completion."}
+{"utterance": "Foxtrot, crossing move, chime watch; fire river crossing at the chime. There is no fire until separate task completion; register an independent wait order; don't fire until that cue."}
+{"utterance": "Golf, finish supply-depot transfer, take lamp watch; fire when lit. There is no separate task completion; no fire until that signal; do not schedule an independent wait order."}
+{"utterance": "Golf, finish supply-depot transfer, take lamp watch, and fire. Do not fire until that signal; schedule an independent wait order; there is no fire until separate task completion."}
+{"utterance": "Hotel, queued move to radar mast, code-yellow watch, then fire. There is no separate task completion; no fire before that cue; do not create an independent wait order."}
+{"utterance": "Hotel, queued move to radar mast, code-yellow watch; fire on yellow. Do not fire before that cue; create an independent wait order; there is no fire until separate task completion."}
+{"utterance": "India, reposition into landing zone, two-tap watch; fire at tap two. There is no separate task completion; no fire until that cue; don't add an independent wait order."}
+{"utterance": "India, reposition into landing zone, two-tap watch, then fire. Don't fire until that cue; add an independent wait order; there is no fire until separate task completion."}
+{"utterance": "Juliet, existing move to north ridge, flash watch, fire afterward. Do not activate an independent wait order; there is no separate task completion; no fire until that signal."}
+{"utterance": "Juliet, existing move to north ridge, flash watch; fire on flash. Activate an independent wait order; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "Alpha, running move to south gate, burst watch; fire at the burst. Do not queue a standalone signal watch job; there is no separate task completion; no fire before that cue."}
+{"utterance": "Alpha, running move to south gate, burst watch, then fire. Queue a standalone signal watch job; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "Bravo, queued west-tower move, call watch, then shoot. Don't open a standalone signal watch job; there is no separate task completion; no fire until that cue."}
+{"utterance": "Bravo, queued west-tower move, call watch; shoot when I call. Open a standalone signal watch job; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Charlie, active upper-deck approach, click watch; fire at click. No fire until that signal; do not start a standalone signal watch job; there is no separate task completion."}
+{"utterance": "Charlie, active upper-deck approach, click watch, then fire. There is no fire until separate task completion; start a standalone signal watch job; do not fire until that signal."}
+{"utterance": "Delta, lower-tunnel move ends, blue-smoke watch runs, fire follows. No fire before that cue; do not log a standalone signal watch job; there is no separate task completion."}
+{"utterance": "Delta, lower-tunnel move ends, blue-smoke watch runs; fire on smoke. There is no fire until separate task completion; log a standalone signal watch job; do not fire before that cue."}
+{"utterance": "Echo, prior river-crossing move, signal watch; fire on the signal. No fire until that cue; don't assign a standalone signal watch job; there is no separate task completion."}
+{"utterance": "Echo, prior river-crossing move, signal watch, then fire. There is no fire until separate task completion; assign a standalone signal watch job; don't fire until that cue."}
+{"utterance": "Foxtrot, outstanding supply-depot move, green watch, fire at release. There is no separate task completion; no fire until that signal; do not register a standalone signal watch job."}
+{"utterance": "Foxtrot, outstanding supply-depot move, green watch; fire on green. Do not fire until that signal; register a standalone signal watch job; there is no fire until separate task completion."}
+{"utterance": "Golf, radar-mast transfer, tone watch; fire at tone. There is no separate task completion; no fire before that cue; do not schedule a standalone signal watch job."}
+{"utterance": "Golf, radar-mast transfer, tone watch, then fire. Do not fire before that cue; schedule a standalone signal watch job; there is no fire until separate task completion."}
+{"utterance": "Hotel, earlier landing-zone move first, whistle watch next, fire last. There is no separate task completion; no fire until that cue; don't create a standalone signal watch job."}
+{"utterance": "Hotel, earlier landing-zone move first, whistle watch next; fire on whistle. Don't fire until that cue; create a standalone signal watch job; there is no fire until separate task completion."}
+{"utterance": "India, live move to north ridge, marker-drop watch; shoot at the drop. Do not add a standalone signal watch job; there is no separate task completion; no fire until that signal."}
+{"utterance": "India, live move to north ridge, marker-drop watch, then shoot. Add a standalone signal watch job; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "Juliet, standing move to east bridge, amber watch, then fire. Do not activate a standalone signal watch job; there is no separate task completion; no fire before that cue."}
+{"utterance": "Juliet, standing move to east bridge, amber watch; fire on amber. Activate a standalone signal watch job; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "Alpha, previous west-tower move, red-flare watch; fire on flare. Don't queue a separate signal wait entry; there is no separate task completion; no fire until that cue."}
+{"utterance": "Alpha, previous west-tower move, red-flare watch, fire afterward. Queue a separate signal wait entry; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Bravo, current upper-deck move, my-beep watch, then fire. No fire until that signal; do not open a separate signal wait entry; there is no separate task completion."}
+{"utterance": "Bravo, current upper-deck move, my-beep watch; fire at my beep. There is no fire until separate task completion; open a separate signal wait entry; do not fire until that signal."}
+{"utterance": "Charlie, earlier lower-tunnel move, lamp watch; fire when lamp lights. No fire before that cue; do not start a separate signal wait entry; there is no separate task completion."}
+{"utterance": "Charlie, earlier lower-tunnel move, lamp watch, fire in that order. There is no fire until separate task completion; start a separate signal wait entry; do not fire before that cue."}
+{"utterance": "Delta, assigned crossing move, green-flag watch, then fire river crossing. No fire until that cue; don't log a separate signal wait entry; there is no separate task completion."}
+{"utterance": "Delta, assigned crossing move, green-flag watch; fire river crossing as flag rises. There is no fire until separate task completion; log a separate signal wait entry; don't fire until that cue."}
+{"utterance": "Echo, underway move to supply depot, ping watch; fire at the ping. There is no separate task completion; no fire until that signal; do not assign a separate signal wait entry."}
+{"utterance": "Echo, underway move to supply depot, ping watch, then fire. Do not fire until that signal; assign a separate signal wait entry; there is no fire until separate task completion."}
+{"utterance": "Foxtrot, radar-mast advance, code-white watch, then fire. There is no separate task completion; no fire before that cue; do not register a separate signal wait entry."}
+{"utterance": "Foxtrot, radar-mast advance, code-white watch; fire when white arrives. Do not fire before that cue; register a separate signal wait entry; there is no fire until separate task completion."}
+{"utterance": "Golf, active landing-zone move, beacon watch; fire there on beacon. There is no separate task completion; no fire until that cue; don't schedule a separate signal wait entry."}
+{"utterance": "Golf, active landing-zone move, beacon watch, fire there afterward. Don't fire until that cue; schedule a separate signal wait entry; there is no fire until separate task completion."}
+{"utterance": "Hotel, standing north-ridge move, chirp watch, then fire. Do not create a separate signal wait entry; there is no separate task completion; no fire until that signal."}
+{"utterance": "Hotel, standing north-ridge move, chirp watch; fire at the chirp. Create a separate signal wait entry; there is no fire until separate task completion; do not fire until that signal."}
+{"utterance": "India, live bridge relocation, burst watch; fire east bridge at burst. Do not add a separate signal wait entry; there is no separate task completion; no fire before that cue."}
+{"utterance": "India, live bridge relocation, burst watch, then fire east bridge. Add a separate signal wait entry; there is no fire until separate task completion; do not fire before that cue."}
+{"utterance": "Juliet, pending south-gate move, my-call watch, fire afterward. Don't activate a separate signal wait entry; there is no separate task completion; no fire until that cue."}
+{"utterance": "Juliet, pending south-gate move, my-call watch; fire when I call. Activate a separate signal wait entry; there is no fire until separate task completion; don't fire until that cue."}
+{"utterance": "Alpha wing's north ridge move, stop it. No follow-up."}
+{"utterance": "Bravo wing, never mind north ridge; stand by."}
+{"utterance": "Charlie team, rescind the north ridge order."}
+{"utterance": "Delta scout, that north ridge instruction is void."}
+{"utterance": "Echo battery, cancel your pending north ridge movement."}
+{"utterance": "Foxtrot patrol, hold off; north ridge has been withdrawn."}
+{"utterance": "Golf squad, I take back the north ridge command."}
+{"utterance": "Hotel drone, don't fly north ridge after all."}
+{"utterance": "India unit, erase that north ridge destination."}
+{"utterance": "Juliet group, drop the north ridge order entirely."}
+{"utterance": "Alpha wing, the east bridge move is withdrawn."}
+{"utterance": "Bravo wing, no go on east bridge now."}
+{"utterance": "Charlie team, strike the east bridge assignment."}
+{"utterance": "Delta scout, cancel the earlier east bridge directive."}
+{"utterance": "Echo battery, stand down; east bridge is revoked."}
+{"utterance": "Foxtrot patrol, never mind east bridge."}
+{"utterance": "Golf squad, east bridge isn't an order anymore."}
+{"utterance": "Hotel drone, abort the east bridge flight."}
+{"utterance": "India unit, take back my east bridge move instruction."}
+{"utterance": "Juliet group, disregard the east bridge destination."}
+{"utterance": "Alpha wing, I cancel your south gate move."}
+{"utterance": "Bravo wing, don't proceed south gate."}
+{"utterance": "Charlie team, south gate directive withdrawn."}
+{"utterance": "Delta scout, ignore my earlier south gate command."}
+{"utterance": "Echo battery, south gate is scratched from the queue."}
+{"utterance": "Foxtrot patrol, stop the planned south gate relocation."}
+{"utterance": "Golf squad, no south gate movement from that order."}
+{"utterance": "Hotel drone, abort the south gate trip."}
+{"utterance": "India unit, my south gate instruction no longer stands."}
+{"utterance": "Juliet group, withdraw from the south gate order."}
+{"utterance": "Alpha wing, disregard that west tower assignment."}
+{"utterance": "Bravo wing, the west tower move is off."}
+{"utterance": "Charlie team, stop before west tower; order cancelled."}
+{"utterance": "Delta scout, forget the west tower destination."}
+{"utterance": "Echo battery, delete the west tower move request."}
+{"utterance": "Foxtrot patrol, west tower no longer applies."}
+{"utterance": "Golf squad, cancel what I said about west tower."}
+{"utterance": "Hotel drone, stay put; west tower trip revoked."}
+{"utterance": "India unit, don't act on the west tower command."}
+{"utterance": "Juliet group, pull the west tower order."}
+{"utterance": "Alpha wing, upper deck was withdrawn."}
+{"utterance": "Bravo wing, scratch that upper deck instruction."}
+{"utterance": "Charlie team, stand down on upper deck."}
+{"utterance": "Delta scout, the upper deck task is cancelled."}
+{"utterance": "Echo battery, do not execute that upper deck move."}
+{"utterance": "Foxtrot patrol, no upper deck assignment anymore."}
+{"utterance": "Golf squad, I revoke the upper deck directive."}
+{"utterance": "Hotel drone, abort flight to upper deck."}
+{"utterance": "India unit, forget about the upper deck order."}
+{"utterance": "Juliet group, upper deck movement is off."}
+{"utterance": "Alpha wing, lower tunnel order is void."}
+{"utterance": "Bravo wing, stand by, lower tunnel cancelled."}
+{"utterance": "Charlie team, withdraw the lower tunnel move."}
+{"utterance": "Delta scout, stop the lower tunnel assignment."}
+{"utterance": "Echo battery, discard that lower tunnel command."}
+{"utterance": "Foxtrot patrol, the lower tunnel trip is off."}
+{"utterance": "Golf squad, no lower tunnel action now."}
+{"utterance": "Hotel drone, don't enter lower tunnel from that order."}
+{"utterance": "India unit, cancel the move into lower tunnel."}
+{"utterance": "Juliet group, lower tunnel no longer requested."}
+{"utterance": "Alpha wing, cancel river crossing. Stop."}
+{"utterance": "Bravo wing, revoke that river crossing route."}
+{"utterance": "Charlie team, withdraw the river crossing command."}
+{"utterance": "Delta scout, river crossing is off the queue."}
+{"utterance": "Echo battery, disregard the river crossing assignment."}
+{"utterance": "Foxtrot patrol, don't take river crossing after all."}
+{"utterance": "Golf squad, no movement to river crossing."}
+{"utterance": "Hotel drone, abort the river crossing flight."}
+{"utterance": "India unit, strike the river crossing order."}
+{"utterance": "Juliet group, my river crossing direction is withdrawn."}
+{"utterance": "Alpha wing, the supply depot order is cancelled."}
+{"utterance": "Bravo wing, stop; supply depot isn't active."}
+{"utterance": "Charlie team, rescind supply depot."}
+{"utterance": "Delta scout, delete the supply depot task."}
+{"utterance": "Echo battery, no go on supply depot."}
+{"utterance": "Foxtrot patrol, withdraw the supply depot move."}
+{"utterance": "Golf squad, ignore my supply depot instruction."}
+{"utterance": "Hotel drone, abort flight to supply depot."}
+{"utterance": "India unit, scratch the supply depot destination."}
+{"utterance": "Juliet group, cancel what I said about supply depot."}
+{"utterance": "Alpha wing, radar mast directive revoked."}
+{"utterance": "Bravo wing, radar mast no longer stands."}
+{"utterance": "Charlie team, retract the radar mast command."}
+{"utterance": "Delta scout, no radar mast move from me."}
+{"utterance": "Echo battery, stop the radar mast relocation."}
+{"utterance": "Foxtrot patrol, disregard radar mast entirely."}
+{"utterance": "Golf squad, the radar mast task is off."}
+{"utterance": "Hotel drone, abort the radar mast flight."}
+{"utterance": "India unit, cancel that radar mast assignment."}
+{"utterance": "Juliet group, hold off on radar mast; withdrawn."}
+{"utterance": "Alpha wing, forget the landing zone move."}
+{"utterance": "Bravo wing, landing zone has been cancelled."}
+{"utterance": "Charlie team, scratch the landing zone directive."}
+{"utterance": "Delta scout, don't act on landing zone."}
+{"utterance": "Echo battery, I take back that landing zone order."}
+{"utterance": "Foxtrot patrol, no go at landing zone."}
+{"utterance": "Golf squad, withdraw the landing zone instruction."}
+{"utterance": "Hotel drone, abort flight to landing zone."}
+{"utterance": "India unit, revoke the landing zone destination."}
+{"utterance": "Juliet group, the landing zone order is void."}
+{"utterance": "What time did Alpha wing last report north ridge?"}
+{"utterance": "Do you have Bravo wing's north ridge notes?"}
+{"utterance": "Was Charlie team near north ridge at noon?"}
+{"utterance": "How was Delta scout's north ridge visibility?"}
+{"utterance": "Is Echo battery stationed by north ridge now?"}
+{"utterance": "What did Foxtrot patrol hear near north ridge?"}
+{"utterance": "Has Golf squad ever visited north ridge?"}
+{"utterance": "Can Hotel drone see north ridge from there?"}
+{"utterance": "Where was India unit when north ridge lit up?"}
+{"utterance": "Did Juliet group mention north ridge in the log?"}
+{"utterance": "Is Alpha wing still east of east bridge?"}
+{"utterance": "What did Bravo wing say about east bridge traffic?"}
+{"utterance": "When did Charlie team last cross east bridge?"}
+{"utterance": "Do we know Delta scout's east bridge position?"}
+{"utterance": "Was Echo battery watching east bridge overnight?"}
+{"utterance": "Has Foxtrot patrol reported from east bridge?"}
+{"utterance": "Did Golf squad spot anyone at east bridge?"}
+{"utterance": "What does Hotel drone's east bridge feed show?"}
+{"utterance": "How long was India unit at east bridge?"}
+{"utterance": "Did Juliet group record east bridge damage?"}
+{"utterance": "Was Alpha wing south of south gate?"}
+{"utterance": "What's Bravo wing's latest south gate location?"}
+{"utterance": "Did Charlie team see the south gate guard?"}
+{"utterance": "Is Delta scout's south gate feed still live?"}
+{"utterance": "What did Echo battery report at south gate?"}
+{"utterance": "Has Foxtrot patrol passed south gate yet?"}
+{"utterance": "When did Golf squad leave south gate?"}
+{"utterance": "Can Hotel drone see south gate clearly?"}
+{"utterance": "Does India unit have a south gate estimate?"}
+{"utterance": "Was Juliet group at south gate yesterday?"}
+{"utterance": "Where is Alpha wing from west tower?"}
+{"utterance": "What did Bravo wing observe at west tower?"}
+{"utterance": "Did Charlie team reach west tower before dawn?"}
+{"utterance": "Is Delta scout watching west tower currently?"}
+{"utterance": "What was Echo battery's west tower report?"}
+{"utterance": "Has Foxtrot patrol checked west tower before?"}
+{"utterance": "Did Golf squad find the west tower empty?"}
+{"utterance": "Can Hotel drone see west tower roof?"}
+{"utterance": "When was India unit near west tower?"}
+{"utterance": "Did Juliet group log west tower movement?"}
+{"utterance": "How close is Alpha wing to upper deck?"}
+{"utterance": "What happened to Bravo wing on upper deck?"}
+{"utterance": "Was Charlie team already at upper deck?"}
+{"utterance": "Can Delta scout see the upper deck entrance?"}
+{"utterance": "Did Echo battery hear anything on upper deck?"}
+{"utterance": "What did Foxtrot patrol report from upper deck?"}
+{"utterance": "Has Golf squad been on upper deck today?"}
+{"utterance": "Is Hotel drone's upper deck view clear?"}
+{"utterance": "When did India unit leave upper deck?"}
+{"utterance": "Was Juliet group ever assigned upper deck?"}
+{"utterance": "What did Alpha wing find inside lower tunnel?"}
+{"utterance": "Has Bravo wing reached lower tunnel yet?"}
+{"utterance": "Did Charlie team mark a lower tunnel exit?"}
+{"utterance": "Can Delta scout's camera see lower tunnel?"}
+{"utterance": "Was Echo battery inside lower tunnel earlier?"}
+{"utterance": "How did Foxtrot patrol describe lower tunnel?"}
+{"utterance": "Did Golf squad radio from lower tunnel?"}
+{"utterance": "Where is Hotel drone relative to lower tunnel?"}
+{"utterance": "Is India unit still in lower tunnel?"}
+{"utterance": "What time did Juliet group enter lower tunnel?"}
+{"utterance": "Did Alpha wing report river crossing depth?"}
+{"utterance": "Where was Bravo wing at river crossing?"}
+{"utterance": "Has Charlie team crossed river crossing before?"}
+{"utterance": "Was Delta scout near river crossing this morning?"}
+{"utterance": "What did Echo battery see at river crossing?"}
+{"utterance": "Is Foxtrot patrol watching river crossing?"}
+{"utterance": "Did Golf squad mention river crossing hazards?"}
+{"utterance": "Can Hotel drone map river crossing now?"}
+{"utterance": "How far is India unit from river crossing?"}
+{"utterance": "Was Juliet group at river crossing on the last sweep?"}
+{"utterance": "Did Alpha wing count the supply depot crates?"}
+{"utterance": "Is Bravo wing inside supply depot?"}
+{"utterance": "What did Charlie team find by supply depot?"}
+{"utterance": "Was Delta scout's supply depot report complete?"}
+{"utterance": "How near is Echo battery to supply depot?"}
+{"utterance": "Did Foxtrot patrol see lights at supply depot?"}
+{"utterance": "Has Golf squad returned from supply depot?"}
+{"utterance": "What does Hotel drone show over supply depot?"}
+{"utterance": "When did India unit pass supply depot?"}
+{"utterance": "Is Juliet group still outside supply depot?"}
+{"utterance": "What did Alpha wing say about radar mast?"}
+{"utterance": "Has Bravo wing reached radar mast?"}
+{"utterance": "Was Charlie team near radar mast at dusk?"}
+{"utterance": "Can Delta scout read radar mast telemetry?"}
+{"utterance": "How old is Echo battery's radar mast report?"}
+{"utterance": "Did Foxtrot patrol notice radar mast movement?"}
+{"utterance": "Is Golf squad in sight of radar mast?"}
+{"utterance": "What can Hotel drone see at radar mast?"}
+{"utterance": "When was India unit at radar mast?"}
+{"utterance": "Did Juliet group mention radar mast power?"}
+{"utterance": "What was Alpha wing's landing zone ETA?"}
+{"utterance": "Is Bravo wing past landing zone already?"}
+{"utterance": "Did Charlie team see landing zone markers?"}
+{"utterance": "Does Delta scout have an unobstructed view of landing zone?"}
+{"utterance": "Was Echo battery near landing zone last night?"}
+{"utterance": "Did Foxtrot patrol report landing zone traffic?"}
+{"utterance": "Can Golf squad see landing zone from there?"}
+{"utterance": "What does Hotel drone show over landing zone?"}
+{"utterance": "When did India unit enter landing zone?"}
+{"utterance": "Has Juliet group left landing zone?"}
+{"utterance": "Cancel Alpha wing's old move; scan north ridge instead."}
+{"utterance": "Bravo wing, drop that earlier relocation, but sweep north ridge now."}
+{"utterance": "Charlie team, never mind the move; check north ridge."}
+{"utterance": "Delta scout, retract the old route, run sensors at north ridge."}
+{"utterance": "Echo battery, abort previous movement; survey north ridge as the replacement."}
+{"utterance": "Foxtrot patrol, scrap the move and search north ridge."}
+{"utterance": "Golf squad, stop the old order; inspect north ridge."}
+{"utterance": "Hotel drone, don't fly that route; scan north ridge instead."}
+{"utterance": "India unit, withdraw prior movement, check north ridge now."}
+{"utterance": "Juliet group, change of plan: cancel the move, sweep north ridge."}
+{"utterance": "Alpha wing, old movement cancelled; scan east bridge."}
+{"utterance": "Bravo wing, disregard the move but inspect east bridge."}
+{"utterance": "Charlie team, strike the previous route and check east bridge."}
+{"utterance": "Delta scout, abort relocation, survey east bridge now."}
+{"utterance": "Echo battery, move is off; run sensors at east bridge."}
+{"utterance": "Foxtrot patrol, forget the trip, search east bridge instead."}
+{"utterance": "Golf squad, cancel that move; sweep east bridge."}
+{"utterance": "Hotel drone, don't run the old route; scan east bridge."}
+{"utterance": "India unit, revoke the movement, inspect east bridge now."}
+{"utterance": "Juliet group, stand down from the move; check east bridge."}
+{"utterance": "Alpha wing, drop the prior move, scan south gate."}
+{"utterance": "Bravo wing, old destination revoked, sweep south gate."}
+{"utterance": "Charlie team, never mind moving; inspect south gate."}
+{"utterance": "Delta scout, cancel that relocation and survey south gate."}
+{"utterance": "Echo battery, previous move off, sensors on south gate now."}
+{"utterance": "Foxtrot patrol, scratch the route; search south gate."}
+{"utterance": "Golf squad, abort old movement, check south gate instead."}
+{"utterance": "Hotel drone, no old flight path; scan south gate."}
+{"utterance": "India unit, cancel earlier trip and inspect south gate."}
+{"utterance": "Juliet group, withdraw move request; sweep south gate now."}
+{"utterance": "Alpha wing, stop the old move; scan west tower."}
+{"utterance": "Bravo wing, cancel relocation, check west tower in its place."}
+{"utterance": "Charlie team, old route off, inspect west tower."}
+{"utterance": "Delta scout, discard the move; survey west tower."}
+{"utterance": "Echo battery, never mind movement, scan west tower instead."}
+{"utterance": "Foxtrot patrol, revoke that trip and search west tower."}
+{"utterance": "Golf squad, drop earlier move, sweep west tower."}
+{"utterance": "Hotel drone, old flight cancelled; scan west tower."}
+{"utterance": "India unit, scratch the relocation, check west tower."}
+{"utterance": "Juliet group, abort prior movement; inspect west tower now."}
