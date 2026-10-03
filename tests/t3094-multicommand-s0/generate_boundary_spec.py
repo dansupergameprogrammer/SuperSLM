@@ -25,43 +25,43 @@ SOURCE_COMMITS = (
 # These describe the scheduler semantics. They are never candidate utterances.
 MEANINGS = {
     ("pc2/simple_trigger", "T"): (
-        "One newly requested operation attacks the destination. An external cue "
+        "One newly requested operation attacks its assigned location. An external cue "
         "governs its execution; the player does not request independent monitoring "
-        "with a completion event."
+        "producing a completion event."
     ),
     ("pc2/simple_trigger", "W"): (
         "Begin an independently managed monitoring operation for an external cue. "
-        "Its completion authorizes a second, attacking operation."
+        "Its completion authorizes another attacking operation."
     ),
     ("pc2/dependency", "T"): (
-        "A survey is already in progress and is contextual history, not a newly "
+        "A survey is currently underway and is contextual history, not a newly "
         "issued command. Its completion and an external cue govern the sole new "
         "attack; no independent monitoring operation is added."
     ),
     ("pc2/dependency", "W"): (
-        "A survey already in progress is contextual history. Once it finishes, "
+        "A current survey is contextual history. Following its finish, "
         "initiate a new, independently managed monitoring operation for a cue; "
         "attack upon that operation's completion."
     ),
     ("pc2/ordering", "T"): (
-        "Relocation is already in progress and is contextual history. The sole "
+        "Relocation is currently underway and is contextual history. The sole "
         "new operation is an attack gated by relocation completion and an "
         "external cue; no independent monitoring is requested."
     ),
     ("pc2/ordering", "W"): (
-        "Relocation already in progress must finish before a newly requested "
+        "Relocation currently underway must finish before a newly requested "
         "monitoring operation begins. That operation is managed independently; "
         "its completion authorizes an attack."
     ),
     ("cap_boundary/at_cap", "T"): (
-        "Four new operations are requested in sequence: relocation, survey, "
-        "position maintenance, and attack. An external cue governs the last "
+        "Four new operations are requested consecutively: relocation, reconnaissance, "
+        "position maintenance, and attack. An external cue governs operation four "
         "operation without creating an independently managed monitor."
     ),
     ("cap_boundary/cap_plus_one", "W"): (
-        "Five new operations are requested in sequence: relocation, survey, "
+        "Five new operations are requested consecutively: relocation, reconnaissance, "
         "position maintenance, independent monitoring of an external cue, "
-        "and attack after that monitor completes."
+        "and attack following monitor completion."
     ),
 }
 
@@ -190,12 +190,12 @@ def main() -> None:
     prior = set()
     for utterance in old_utterances():
         tokens = words(utterance)
-        prior.update(tuple(tokens[i:i + 3]) for i in range(len(tokens) - 2))
+        prior.update(tuple(tokens[i:i + 2]) for i in range(len(tokens) - 1))
     overlap = sorted({" ".join(ngram) for text in MEANINGS.values()
                       for tokens in [words(text)]
-                      for ngram in (tuple(tokens[i:i + 3]) for i in range(len(tokens) - 2))
+                      for ngram in (tuple(tokens[i:i + 2]) for i in range(len(tokens) - 1))
                       if ngram in prior})
-    assert not overlap, f"meaning prose copied prior three-word fragments: {overlap}"
+    assert not overlap, f"meaning prose copied prior two-word fragments: {overlap}"
     output.sort(key=lambda record: (record["pair_id"], record["arm"]))
     DESTINATION.mkdir(parents=True, exist_ok=True)
     content = "".join(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
