@@ -1,0 +1,1164 @@
+{
+ "limits": {
+  "dfa_states": 4096,
+  "minItems": 8,
+  "nfa_states": 4096,
+  "recursion_depth": 8,
+  "section_bytes": 134217728,
+  "token_transitions": 8388608,
+  "tracked_bytes": 268435456
+ },
+ "pairs": [
+  {
+   "isolated": true,
+   "note": "",
+   "over": {
+    "accepting": 1,
+    "char_dfa_states": 44,
+    "dfa_states": 44,
+    "minItems": {
+     "$.a": 9
+    },
+    "nfa_byte_edges": 44,
+    "nfa_states": 44,
+    "recursion_depth": 3,
+    "section_bytes": 836644,
+    "token_transitions": 91,
+    "tracked_bytes": 851956
+   },
+   "over_crossings": [
+    "minItems"
+   ],
+   "over_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "a": {
+      "items": {
+       "enum": [
+        "x"
+       ],
+       "type": "string"
+      },
+      "minItems": 9,
+      "type": "array"
+     }
+    },
+    "required": [
+     "a"
+    ],
+    "type": "object"
+   },
+   "pair": "R_MIN_ROOT",
+   "target": "minItems",
+   "under": {
+    "accepting": 1,
+    "char_dfa_states": 40,
+    "dfa_states": 40,
+    "minItems": {
+     "$.a": 8
+    },
+    "nfa_byte_edges": 40,
+    "nfa_states": 40,
+    "recursion_depth": 3,
+    "section_bytes": 760596,
+    "token_transitions": 83,
+    "tracked_bytes": 775268
+   },
+   "under_crossings": [],
+   "under_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "a": {
+      "items": {
+       "enum": [
+        "x"
+       ],
+       "type": "string"
+      },
+      "minItems": 8,
+      "type": "array"
+     }
+    },
+    "required": [
+     "a"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "isolated": true,
+   "note": "",
+   "over": {
+    "accepting": 1,
+    "char_dfa_states": 52,
+    "dfa_states": 52,
+    "minItems": {
+     "$.a": 1,
+     "$.a[].b": 9
+    },
+    "nfa_byte_edges": 53,
+    "nfa_states": 52,
+    "recursion_depth": 5,
+    "section_bytes": 988796,
+    "token_transitions": 114,
+    "tracked_bytes": 1005516
+   },
+   "over_crossings": [
+    "minItems"
+   ],
+   "over_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "a": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "b": {
+         "items": {
+          "enum": [
+           "x"
+          ],
+          "type": "string"
+         },
+         "minItems": 9,
+         "type": "array"
+        }
+       },
+       "required": [
+        "b"
+       ],
+       "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "a"
+    ],
+    "type": "object"
+   },
+   "pair": "R_MIN_INNER",
+   "target": "minItems",
+   "under": {
+    "accepting": 1,
+    "char_dfa_states": 48,
+    "dfa_states": 48,
+    "minItems": {
+     "$.a": 1,
+     "$.a[].b": 8
+    },
+    "nfa_byte_edges": 49,
+    "nfa_states": 48,
+    "recursion_depth": 5,
+    "section_bytes": 912748,
+    "token_transitions": 106,
+    "tracked_bytes": 928828
+   },
+   "under_crossings": [],
+   "under_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "a": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "b": {
+         "items": {
+          "enum": [
+           "x"
+          ],
+          "type": "string"
+         },
+         "minItems": 8,
+         "type": "array"
+        }
+       },
+       "required": [
+        "b"
+       ],
+       "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "a"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "isolated": true,
+   "note": "",
+   "over": {
+    "accepting": 1,
+    "char_dfa_states": 52,
+    "dfa_states": 52,
+    "minItems": {},
+    "nfa_byte_edges": 51,
+    "nfa_states": 52,
+    "recursion_depth": 9,
+    "section_bytes": 988740,
+    "token_transitions": 107,
+    "tracked_bytes": 1005316
+   },
+   "over_crossings": [
+    "recursion_depth"
+   ],
+   "over_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "k": {
+      "additionalProperties": false,
+      "properties": {
+       "k": {
+        "additionalProperties": false,
+        "properties": {
+         "k": {
+          "additionalProperties": false,
+          "properties": {
+           "k": {
+            "additionalProperties": false,
+            "properties": {
+             "k": {
+              "additionalProperties": false,
+              "properties": {
+               "k": {
+                "additionalProperties": false,
+                "properties": {
+                 "k": {
+                  "additionalProperties": false,
+                  "properties": {
+                   "k": {
+                    "enum": [
+                     "x"
+                    ],
+                    "type": "string"
+                   }
+                  },
+                  "required": [
+                   "k"
+                  ],
+                  "type": "object"
+                 }
+                },
+                "required": [
+                 "k"
+                ],
+                "type": "object"
+               }
+              },
+              "required": [
+               "k"
+              ],
+              "type": "object"
+             }
+            },
+            "required": [
+             "k"
+            ],
+            "type": "object"
+           }
+          },
+          "required": [
+           "k"
+          ],
+          "type": "object"
+         }
+        },
+        "required": [
+         "k"
+        ],
+        "type": "object"
+       }
+      },
+      "required": [
+       "k"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "k"
+    ],
+    "type": "object"
+   },
+   "pair": "R_DEPTH",
+   "target": "recursion_depth",
+   "under": {
+    "accepting": 1,
+    "char_dfa_states": 46,
+    "dfa_states": 46,
+    "minItems": {},
+    "nfa_byte_edges": 45,
+    "nfa_states": 46,
+    "recursion_depth": 8,
+    "section_bytes": 874660,
+    "token_transitions": 94,
+    "tracked_bytes": 890260
+   },
+   "under_crossings": [],
+   "under_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "k": {
+      "additionalProperties": false,
+      "properties": {
+       "k": {
+        "additionalProperties": false,
+        "properties": {
+         "k": {
+          "additionalProperties": false,
+          "properties": {
+           "k": {
+            "additionalProperties": false,
+            "properties": {
+             "k": {
+              "additionalProperties": false,
+              "properties": {
+               "k": {
+                "additionalProperties": false,
+                "properties": {
+                 "k": {
+                  "enum": [
+                   "x"
+                  ],
+                  "type": "string"
+                 }
+                },
+                "required": [
+                 "k"
+                ],
+                "type": "object"
+               }
+              },
+              "required": [
+               "k"
+              ],
+              "type": "object"
+             }
+            },
+            "required": [
+             "k"
+            ],
+            "type": "object"
+           }
+          },
+          "required": [
+           "k"
+          ],
+          "type": "object"
+         }
+        },
+        "required": [
+         "k"
+        ],
+        "type": "object"
+       }
+      },
+      "required": [
+       "k"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "k"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "isolated": true,
+   "note": "",
+   "over": {
+    "accepting": 1,
+    "char_dfa_states": 839,
+    "dfa_states": 839,
+    "minItems": {},
+    "nfa_byte_edges": 4195,
+    "nfa_states": 4097,
+    "recursion_depth": 2,
+    "section_bytes": 15951816,
+    "token_transitions": 1760,
+    "tracked_bytes": 16357800
+   },
+   "over_crossings": [
+    "nfa_states"
+   ],
+   "over_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "kppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp": {
+      "enum": [
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq000",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq001",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq002",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq003",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq004",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq005",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq006",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq007",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq008",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq009",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq010",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq011",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq012",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq013",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq014",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq015",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq016",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq017",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq018",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq019",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq020",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq021",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq022",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq023",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq024",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq025",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq026",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq027",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq028",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq029",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq030",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq031",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq032",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq033",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq034",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq035",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq036",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq037",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq038",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq039",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq040",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq041",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq042",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq043",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq044",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq045",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq046",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq047",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq048",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq049",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq050",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq051",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq052",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq053",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq054",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq055",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq056",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq057",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq058",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq059",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq060",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq061",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq062",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq063",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq064",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq065",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq066",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq067",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq068",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq069",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq070",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq071",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq072",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq073",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq074",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq075",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq076",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq077",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq078",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq079",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq080",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq081",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq082",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq083",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq084",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq085",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq086",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq087",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq088",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq089",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq090",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq091",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq092",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq093",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq094",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq095",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq096",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq097",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq098",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq099"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "kppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+    ],
+    "type": "object"
+   },
+   "pair": "R_NFA",
+   "target": "nfa_states",
+   "under": {
+    "accepting": 1,
+    "char_dfa_states": 838,
+    "dfa_states": 838,
+    "minItems": {},
+    "nfa_byte_edges": 4194,
+    "nfa_states": 4096,
+    "recursion_depth": 2,
+    "section_bytes": 15932804,
+    "token_transitions": 1758,
+    "tracked_bytes": 16338628
+   },
+   "under_crossings": [],
+   "under_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "kpppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp": {
+      "enum": [
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq000",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq001",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq002",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq003",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq004",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq005",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq006",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq007",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq008",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq009",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq010",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq011",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq012",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq013",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq014",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq015",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq016",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq017",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq018",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq019",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq020",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq021",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq022",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq023",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq024",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq025",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq026",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq027",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq028",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq029",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq030",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq031",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq032",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq033",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq034",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq035",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq036",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq037",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq038",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq039",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq040",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq041",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq042",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq043",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq044",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq045",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq046",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq047",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq048",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq049",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq050",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq051",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq052",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq053",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq054",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq055",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq056",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq057",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq058",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq059",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq060",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq061",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq062",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq063",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq064",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq065",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq066",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq067",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq068",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq069",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq070",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq071",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq072",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq073",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq074",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq075",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq076",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq077",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq078",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq079",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq080",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq081",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq082",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq083",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq084",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq085",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq086",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq087",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq088",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq089",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq090",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq091",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq092",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq093",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq094",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq095",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq096",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq097",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq098",
+       "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq099"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "kpppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "injection_only": true,
+   "isolated": false,
+   "note": "pure literal family: DFA states equal NFA nodes here, so the over schema crosses both state guards (finding MX-8: injection-only at release limits)",
+   "over": {
+    "accepting": 1,
+    "char_dfa_states": 4097,
+    "dfa_states": 4097,
+    "minItems": {},
+    "nfa_byte_edges": 4096,
+    "nfa_states": 4097,
+    "recursion_depth": 2,
+    "section_bytes": 77892216,
+    "token_transitions": 8189,
+    "tracked_bytes": 78555864
+   },
+   "over_crossings": [
+    "nfa_states",
+    "dfa_states"
+   ],
+   "over_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "kzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz": {
+      "enum": [
+       "x"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "kzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+    ],
+    "type": "object"
+   },
+   "pair": "R_DFA",
+   "target": "dfa_states",
+   "under": {
+    "accepting": 1,
+    "char_dfa_states": 4096,
+    "dfa_states": 4096,
+    "minItems": {},
+    "nfa_byte_edges": 4095,
+    "nfa_states": 4096,
+    "recursion_depth": 2,
+    "section_bytes": 77873204,
+    "token_transitions": 8187,
+    "tracked_bytes": 78536692
+   },
+   "under_crossings": [],
+   "under_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "kzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz": {
+      "enum": [
+       "x"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "kzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "isolated": true,
+   "note": "",
+   "over": {
+    "accepting": 1,
+    "char_dfa_states": 816,
+    "dfa_states": 816,
+    "minItems": {},
+    "nfa_byte_edges": 25543,
+    "nfa_states": 816,
+    "recursion_depth": 2,
+    "section_bytes": 83122652,
+    "token_transitions": 8452728,
+    "tracked_bytes": 218874604
+   },
+   "over_crossings": [
+    "token_transitions"
+   ],
+   "over_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "s00": {
+      "type": "string"
+     },
+     "s01": {
+      "type": "string"
+     },
+     "s02": {
+      "type": "string"
+     },
+     "s03": {
+      "type": "string"
+     },
+     "s04": {
+      "type": "string"
+     },
+     "s05": {
+      "type": "string"
+     },
+     "s06": {
+      "type": "string"
+     },
+     "s07": {
+      "type": "string"
+     },
+     "s08": {
+      "type": "string"
+     },
+     "s09": {
+      "type": "string"
+     },
+     "s10": {
+      "type": "string"
+     },
+     "s11": {
+      "type": "string"
+     },
+     "s12": {
+      "type": "string"
+     },
+     "s13": {
+      "type": "string"
+     },
+     "s14": {
+      "type": "string"
+     },
+     "s15": {
+      "type": "string"
+     },
+     "s16": {
+      "type": "string"
+     },
+     "s17": {
+      "type": "string"
+     },
+     "s18": {
+      "type": "string"
+     },
+     "s19": {
+      "type": "string"
+     },
+     "s20": {
+      "type": "string"
+     },
+     "s21": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "s00",
+     "s01",
+     "s02",
+     "s03",
+     "s04",
+     "s05",
+     "s06",
+     "s07",
+     "s08",
+     "s09",
+     "s10",
+     "s11",
+     "s12",
+     "s13",
+     "s14",
+     "s15",
+     "s16",
+     "s17",
+     "s18",
+     "s19",
+     "s20",
+     "s21"
+    ],
+    "type": "object"
+   },
+   "pair": "R_TRANS",
+   "target": "token_transitions",
+   "under": {
+    "accepting": 1,
+    "char_dfa_states": 779,
+    "dfa_states": 779,
+    "minItems": {},
+    "nfa_byte_edges": 24382,
+    "nfa_states": 779,
+    "recursion_depth": 2,
+    "section_bytes": 79346048,
+    "token_transitions": 8068509,
+    "tracked_bytes": 208927776
+   },
+   "under_crossings": [],
+   "under_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "s00": {
+      "type": "string"
+     },
+     "s01": {
+      "type": "string"
+     },
+     "s02": {
+      "type": "string"
+     },
+     "s03": {
+      "type": "string"
+     },
+     "s04": {
+      "type": "string"
+     },
+     "s05": {
+      "type": "string"
+     },
+     "s06": {
+      "type": "string"
+     },
+     "s07": {
+      "type": "string"
+     },
+     "s08": {
+      "type": "string"
+     },
+     "s09": {
+      "type": "string"
+     },
+     "s10": {
+      "type": "string"
+     },
+     "s11": {
+      "type": "string"
+     },
+     "s12": {
+      "type": "string"
+     },
+     "s13": {
+      "type": "string"
+     },
+     "s14": {
+      "type": "string"
+     },
+     "s15": {
+      "type": "string"
+     },
+     "s16": {
+      "type": "string"
+     },
+     "s17": {
+      "type": "string"
+     },
+     "s18": {
+      "type": "string"
+     },
+     "s19": {
+      "type": "string"
+     },
+     "s20": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "s00",
+     "s01",
+     "s02",
+     "s03",
+     "s04",
+     "s05",
+     "s06",
+     "s07",
+     "s08",
+     "s09",
+     "s10",
+     "s11",
+     "s12",
+     "s13",
+     "s14",
+     "s15",
+     "s16",
+     "s17",
+     "s18",
+     "s19",
+     "s20"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "isolated": true,
+   "note": "",
+   "over": {
+    "accepting": 1,
+    "char_dfa_states": 3665,
+    "dfa_states": 3665,
+    "minItems": {},
+    "nfa_byte_edges": 27268,
+    "nfa_states": 3665,
+    "recursion_depth": 2,
+    "section_bytes": 134233992,
+    "token_transitions": 8076695,
+    "tracked_bytes": 264316104
+   },
+   "over_crossings": [
+    "section_bytes"
+   ],
+   "over_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "fabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqr": {
+      "enum": [
+       "x"
+      ],
+      "type": "string"
+     },
+     "s00": {
+      "type": "string"
+     },
+     "s01": {
+      "type": "string"
+     },
+     "s02": {
+      "type": "string"
+     },
+     "s03": {
+      "type": "string"
+     },
+     "s04": {
+      "type": "string"
+     },
+     "s05": {
+      "type": "string"
+     },
+     "s06": {
+      "type": "string"
+     },
+     "s07": {
+      "type": "string"
+     },
+     "s08": {
+      "type": "string"
+     },
+     "s09": {
+      "type": "string"
+     },
+     "s10": {
+      "type": "string"
+     },
+     "s11": {
+      "type": "string"
+     },
+     "s12": {
+      "type": "string"
+     },
+     "s13": {
+      "type": "string"
+     },
+     "s14": {
+      "type": "string"
+     },
+     "s15": {
+      "type": "string"
+     },
+     "s16": {
+      "type": "string"
+     },
+     "s17": {
+      "type": "string"
+     },
+     "s18": {
+      "type": "string"
+     },
+     "s19": {
+      "type": "string"
+     },
+     "s20": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "s00",
+     "s01",
+     "s02",
+     "s03",
+     "s04",
+     "s05",
+     "s06",
+     "s07",
+     "s08",
+     "s09",
+     "s10",
+     "s11",
+     "s12",
+     "s13",
+     "s14",
+     "s15",
+     "s16",
+     "s17",
+     "s18",
+     "s19",
+     "s20",
+     "fabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqr"
+    ],
+    "type": "object"
+   },
+   "pair": "R_SECTION",
+   "target": "section_bytes",
+   "under": {
+    "accepting": 1,
+    "char_dfa_states": 3664,
+    "dfa_states": 3664,
+    "minItems": {},
+    "nfa_byte_edges": 27267,
+    "nfa_states": 3664,
+    "recursion_depth": 2,
+    "section_bytes": 134214980,
+    "token_transitions": 8076693,
+    "tracked_bytes": 264296932
+   },
+   "under_crossings": [],
+   "under_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "fabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopq": {
+      "enum": [
+       "x"
+      ],
+      "type": "string"
+     },
+     "s00": {
+      "type": "string"
+     },
+     "s01": {
+      "type": "string"
+     },
+     "s02": {
+      "type": "string"
+     },
+     "s03": {
+      "type": "string"
+     },
+     "s04": {
+      "type": "string"
+     },
+     "s05": {
+      "type": "string"
+     },
+     "s06": {
+      "type": "string"
+     },
+     "s07": {
+      "type": "string"
+     },
+     "s08": {
+      "type": "string"
+     },
+     "s09": {
+      "type": "string"
+     },
+     "s10": {
+      "type": "string"
+     },
+     "s11": {
+      "type": "string"
+     },
+     "s12": {
+      "type": "string"
+     },
+     "s13": {
+      "type": "string"
+     },
+     "s14": {
+      "type": "string"
+     },
+     "s15": {
+      "type": "string"
+     },
+     "s16": {
+      "type": "string"
+     },
+     "s17": {
+      "type": "string"
+     },
+     "s18": {
+      "type": "string"
+     },
+     "s19": {
+      "type": "string"
+     },
+     "s20": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "s00",
+     "s01",
+     "s02",
+     "s03",
+     "s04",
+     "s05",
+     "s06",
+     "s07",
+     "s08",
+     "s09",
+     "s10",
+     "s11",
+     "s12",
+     "s13",
+     "s14",
+     "s15",
+     "s16",
+     "s17",
+     "s18",
+     "s19",
+     "s20",
+     "fabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopq"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "injection_only": true,
+   "isolated": false,
+   "note": "D-SLM8120: tracked = 64N + 16E + 48S + 8,224 + 16T + section, and the memory limit equals 16 x the transition limit + the section limit; with every other guard admitted, tracked exceeds its limit only within about 0.006% of the transition limit at full section bytes. Isolated by injected limits through the production guard.",
+   "pair": "R_MEM",
+   "target": "tracked_bytes"
+  }
+ ],
+ "seconds": 337.6
+}

@@ -1,0 +1,47 @@
+{
+ "counts_count_model_v2": {
+  "G1": {
+   "dfa_states": 399,
+   "nfa_states": 424,
+   "recursion_depth": 4,
+   "section_bytes": 22953415,
+   "token_transitions": 1921739,
+   "tracked_bytes": 53852695
+  },
+  "IntentDoc v2": {
+   "dfa_states": 635,
+   "nfa_states": 681,
+   "recursion_depth": 6,
+   "section_bytes": 36660995,
+   "token_transitions": 3074805,
+   "tracked_bytes": 86095411
+  }
+ },
+ "counts_equal_rev10_witness": true,
+ "freeze": "T-3103 S0 provisional resource limits (plan rev 15 s4.1, D-SLM8087 rule, D-SLM8095 values)",
+ "injection_only_reasons": {
+  "R_DFA": "finding MX-8: DFA states never exceed NFA nodes in this subset and both limits are 4,096",
+  "R_MEM": "D-SLM8120"
+ },
+ "isolation": {
+  "R_DEPTH": "isolated",
+  "R_DFA": "injection-only",
+  "R_MEM": "injection-only",
+  "R_MIN_INNER": "isolated",
+  "R_MIN_ROOT": "isolated",
+  "R_NFA": "isolated",
+  "R_SECTION": "isolated",
+  "R_TRANS": "isolated"
+ },
+ "limits": {
+  "dfa_states": 4096,
+  "minItems": 8,
+  "nfa_states": 4096,
+  "recursion_depth": 8,
+  "section_bytes": 134217728,
+  "token_transitions": 8388608,
+  "tracked_bytes": 268435456
+ },
+ "rule": "larger of the d865ee8 value and the next power of two at or above twice the larger of the IntentDoc v2 and G1 counts, capped by the loader bounds; minItems (per array) and depth are exact schema properties and keep their d865ee8 values",
+ "status": "provisional until S1's seven-limit must-admit cell and production-path pairs"
+}
