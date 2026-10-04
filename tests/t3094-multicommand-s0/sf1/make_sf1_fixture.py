@@ -1,8 +1,10 @@
 """Writes sf1-fixture.json and encoder-e1-reference.json (T-3103, plan rev 7 section 6 row 12).
 
-The SF1 batch is a hand-specified resolved batch: three immediate, independent commands. It
-carries no condition or cue (D-SLM8075 holds condition-bearing gold), and it is not the output
-of the game-side resolver, whose reference is held for the trigger revision.
+The SF1 batch is re-authored for plan rev 15 s6 row 12: an independently specified, ordered three-command
+batch of rev-9 resolved commands (action, subject, target, trigger as ResolvedCondition, after) with one
+ungated command, one with a two-entry start_all condition, and one durative hold with a numeric stop_any
+entry whose value is the exact rational 75/2. It is hand-specified, not resolver output.
+The encoder reference vectors (encoder-e1-reference.json, D-SLM8077) stay on their frozen legacy inputs.
 
 Cell SF1-ORTHO: three orthogonal unit rows in D = 3 (padded stride 4), deliberately permuted
 against the dimension order so a harness confusing rows with lanes fails. Its rows, probes,
@@ -21,9 +23,29 @@ import rvb_e1  # noqa: E402
 HERE = Path(__file__).resolve().parent
 ONE, ZERO = "3f800000", "00000000"
 
-BATCH_ID = "t3103-sf1-batch-0001"
-CATALOGUE, STATE = "catalogue-sf1-v1", "state-sf1-v1"
+BATCH_ID = "t3103-sf1-batch-0002"
+CATALOGUE, STATE = "act-sf1-1+obs-sf1-1", "state-sf1-1"
+EMPTY = {"start_all": [], "start_any": [], "stop_any": [], "during_all": []}
+
+
+def entry(instance, predicate, kind, cmp="none", value=None):
+    return {"instance": instance, "predicate": predicate, "kind": kind, "cmp": cmp, "value": value,
+            "negated": False, "binding": {"mode": "passive", "ref": None}}
+
+
 COMMANDS = [
+    {"action": "move", "subject": "alpha squad", "target": "north ridge", "trigger": dict(EMPTY), "after": []},
+    {"action": "fire", "subject": "bravo squad", "target": "east gate",
+     "trigger": {**EMPTY, "start_all": [entry("beacon-1", "Beacon.Lit", "state"),
+                                         entry("gate-east", "Gate.Open", "state")]}, "after": []},
+    {"action": "hold", "subject": "charlie squad", "target": "river ford",
+     "trigger": {**EMPTY, "stop_any": [entry("charlie squad", "Unit.Health", "numeric", "below",
+                                              {"num": 75, "den": 2})]}, "after": []},
+]
+PERMUTED = {**COMMANDS[1], "trigger": {**EMPTY, "start_all": list(reversed(COMMANDS[1]["trigger"]["start_all"]))}}
+STALE_LIVE_CATALOGUE = "act-sf1-1+obs-sf1-2"
+
+LEGACY_COMMANDS = [
     {"action": "move", "subject": "alpha squad", "target": "north ridge", "trigger": "immediate",
      "depends_on_previous": False},
     {"action": "scan", "subject": "bravo squad", "target": "east gate", "trigger": "immediate",
@@ -45,19 +67,19 @@ ORTHO = {
 }
 
 ENCODER_CASES = [
-    {"case": "sf1-ordinal-0", "command": COMMANDS[0]},
-    {"case": "sf1-ordinal-1", "command": COMMANDS[1]},
-    {"case": "sf1-ordinal-2", "command": COMMANDS[2]},
-    {"case": "key-order-insensitive", "command": dict(reversed(list(COMMANDS[0].items())))},
-    {"case": "nfd-cafe", "command": {**COMMANDS[1], "target": "cafe\u0301"}},
-    {"case": "nfc-cafe", "command": {**COMMANDS[1], "target": "caf\u00e9"}},
-    {"case": "dependency-true", "command": {**COMMANDS[2], "depends_on_previous": True}},
-    {"case": "structured-trigger-mechanism", "command": {**COMMANDS[0], "trigger": {"b": [1, None], "a": "x"}},
+    {"case": "sf1-ordinal-0", "command": LEGACY_COMMANDS[0]},
+    {"case": "sf1-ordinal-1", "command": LEGACY_COMMANDS[1]},
+    {"case": "sf1-ordinal-2", "command": LEGACY_COMMANDS[2]},
+    {"case": "key-order-insensitive", "command": dict(reversed(list(LEGACY_COMMANDS[0].items())))},
+    {"case": "nfd-cafe", "command": {**LEGACY_COMMANDS[1], "target": "cafe\u0301"}},
+    {"case": "nfc-cafe", "command": {**LEGACY_COMMANDS[1], "target": "caf\u00e9"}},
+    {"case": "dependency-true", "command": {**LEGACY_COMMANDS[2], "depends_on_previous": True}},
+    {"case": "structured-trigger-mechanism", "command": {**LEGACY_COMMANDS[0], "trigger": {"b": [1, None], "a": "x"}},
      "note": "encoder mechanism input only; not condition gold"},
-    {"case": "control-and-quote", "command": {**COMMANDS[0], "target": "line\n\"two\"\t\u0001"}},
+    {"case": "control-and-quote", "command": {**LEGACY_COMMANDS[0], "target": "line\n\"two\"\t\u0001"}},
 ]
 ENCODER_REFUSALS = [
-    {"case": "float-value", "command": {**COMMANDS[0], "depends_on_previous": 0.5},
+    {"case": "float-value", "command": {**LEGACY_COMMANDS[0], "depends_on_previous": 0.5},
      "status": "EncoderUnsupportedValue"},
     {"case": "empty-object", "command": {}, "status": "EncoderUnsupportedValue"},
 ]
@@ -77,6 +99,7 @@ def main() -> None:
         "expected_host_map": [{"batch_id": BATCH_ID, "ordinal": i, "command": c,
                                "catalogue_version": CATALOGUE, "state_version": STATE}
                               for i, c in enumerate(COMMANDS)],
+        "permuted_entry_command": PERMUTED, "stale_live_catalogue_version": STALE_LIVE_CATALOGUE,
         "metric": "dot", "quant": "float32", "query_k": 1,
         "cells": [ORTHO, e1],
         "superfaiss_observations": [

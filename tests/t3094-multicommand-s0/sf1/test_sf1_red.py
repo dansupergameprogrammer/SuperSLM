@@ -64,7 +64,7 @@ def _healthy():
     return batch, list(COMMANDS)
 
 
-def _status(batch, commands, cap=4, live=("catalogue-sf1-v1", "state-sf1-v1"), appends=None):
+def _status(batch, commands, cap=4, live=(FIXTURE["batch"]["catalogue_version"], FIXTURE["batch"]["state_version"]), appends=None):
     return rvb_e1.publish_status(batch, commands, cap=cap, live_catalogue_version=live[0],
                                  live_state_version=live[1], append_statuses=appends)
 
@@ -78,7 +78,7 @@ def test_rvb_healthy_control_publishes():
 
 def _mutate(kind):
     batch, commands = _healthy()
-    cap, live, appends = 4, ("catalogue-sf1-v1", "state-sf1-v1"), ["Ok"] * 3
+    cap, live, appends = 4, (FIXTURE["batch"]["catalogue_version"], FIXTURE["batch"]["state_version"]), ["Ok"] * 3
     if kind == "dropped_row":
         batch["rows"].pop()
     elif kind == "swapped_rows":
@@ -94,7 +94,7 @@ def _mutate(kind):
     elif kind == "partial_append":
         appends = ["Ok", "NonFiniteQuery", "Ok"]
     elif kind == "stale_state":
-        live = ("catalogue-sf1-v1", "state-sf1-v2")
+        live = (FIXTURE["batch"]["catalogue_version"], "state-sf1-2")
     elif kind == "over_cap_five_resolved":
         extra = [{**COMMANDS[0], "subject": "delta squad"}, {**COMMANDS[1], "subject": "echo squad"}]
         commands = commands + extra
@@ -164,3 +164,49 @@ def test_sf1_real_superfaiss_round_trip():
     assert RECEIPT.stat().st_mtime >= (HERE / "sf1-fixture.json").stat().st_mtime, "stale receipt"
     receipt = json.loads(RECEIPT.read_text(encoding="utf-8-sig"))
     assert sf1_check.check(FIXTURE, receipt) == []
+
+
+# ------------------------------------------------- rev-9 resolved-command cells (plan rev 15 s6 row 12)
+
+import resolved_condition as rc  # noqa: E402
+
+
+def test_sf1_batch_is_canonical_rev9_shape():
+    rc.guard_batch(COMMANDS)
+    assert [len(c["trigger"]["start_all"]) for c in COMMANDS] == [0, 2, 0]
+    assert COMMANDS[2]["trigger"]["stop_any"][0]["value"] == {"num": 75, "den": 2}
+    assert all(not any(c["trigger"].values()) for c in COMMANDS[:1])
+
+
+def test_permuted_entry_pair_changes_row_and_is_refused_before_encoding():
+    permuted = FIXTURE["permuted_entry_command"]
+    assert rvb_e1.encode_bits(permuted) != rvb_e1.encode_bits(COMMANDS[1])
+    with pytest.raises(rc.GuardRefusal) as caught:
+        rc.guard_batch([COMMANDS[0], permuted, COMMANDS[2]])
+    assert caught.value.status == "InvalidResolvedCommand"
+    assert rc.canonicalize(permuted["trigger"]) == COMMANDS[1]["trigger"]
+
+
+def test_observable_catalogue_change_alone_is_stale():
+    batch, commands = _healthy()
+    stale = FIXTURE["stale_live_catalogue_version"]
+    assert stale.split("+")[0] == FIXTURE["batch"]["catalogue_version"].split("+")[0]
+    assert _status(batch, commands, live=(stale, FIXTURE["batch"]["state_version"])) == "StaleContext"
+
+
+@pytest.mark.parametrize("damage", ["float_value", "unreduced", "duplicate", "wait_ref_later", "ref_on_passive"])
+def test_guard_refuses_non_canonical(damage):
+    cmds = copy.deepcopy(COMMANDS)
+    e = cmds[2]["trigger"]["stop_any"][0]
+    if damage == "float_value":
+        e["value"] = 37.5
+    elif damage == "unreduced":
+        e["value"] = {"num": 150, "den": 4}
+    elif damage == "duplicate":
+        cmds[1]["trigger"]["start_all"].append(copy.deepcopy(cmds[1]["trigger"]["start_all"][-1]))
+    elif damage == "wait_ref_later":
+        e["binding"] = {"mode": "wait", "ref": 2}
+    elif damage == "ref_on_passive":
+        e["binding"]["ref"] = 1
+    with pytest.raises(rc.GuardRefusal):
+        rc.guard_batch(cmds, wait_ordinals={0, 1, 2})
