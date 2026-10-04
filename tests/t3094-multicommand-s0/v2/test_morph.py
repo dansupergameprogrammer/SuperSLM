@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import morph  # noqa: E402
 
-TEST_LIST = ["close", "stop", "fall", "smolder", "beacon", "ferry"]
+TEST_LIST = ["close", "stop", "fall", "smolder", "beacon", "barge"]
 INDEX = morph.ReservedIndex(TEST_LIST)
 
 
@@ -21,7 +21,7 @@ INDEX = morph.ReservedIndex(TEST_LIST)
     ("scan once the convoy stopped", "stop"),               # consonant doubling (CA14-1)
     ("move when the wall has fallen", "fall"),              # irregular (CA14-1)
     ("fire when the ruins are smouldering", "smolder"),     # spelling variant (CA14-1)
-    ("watch the ferries", "ferry"),                         # -ies plural
+    ("watch the barges", "barge"),                           # plural
     ("the BEACON-TOWER is lit", "beacon"),                  # hyphenated compound component
     ("fire at the watchbeacon", "beacon"),                  # closed compound component
     ("the Beacon’s light", "beacon"),                  # typographic clitic, case
@@ -43,7 +43,7 @@ def test_expand_covers_regular_and_irregular_paradigms():
     assert {"fall", "falls", "fell", "fallen", "falling"} <= morph.expand("fall")
     assert {"smolder", "smoulder", "smouldering", "smoldered"} <= morph.expand("smolder")
     assert {"close", "closes", "closed", "closing"} <= morph.expand("close")
-    assert {"ferry", "ferries", "ferried"} <= morph.expand("ferry")
+    assert {"lorry", "lorries", "lorried"} <= morph.expand("lorry")
 
 
 def test_lexicon_names_no_reserved_marker():

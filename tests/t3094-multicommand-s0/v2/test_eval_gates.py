@@ -66,18 +66,18 @@ def test_examples_check_returns_eval_rows_to_rewrite():
 
 def test_reserved_refusal_reports_ids_only(tmp_path, capsys):
     sealed = tmp_path / "list.json"
-    sealed.write_text(json.dumps({"entity_lemmas": ["pennon"], "state_lemmas": ["capsize"]}), encoding="utf-8")
+    sealed.write_text(json.dumps({"entity_lemmas": ["pennon"], "state_lemmas": ["founder"]}), encoding="utf-8")
     rows = tmp_path / "tv.jsonl"
     rows.write_text("\n".join(json.dumps(r) for r in [
-        tv("t1", "fire when the pennons drop"), tv("t2", "scan once the boat capsized"),
-        tv("t3", "move to the dock", doc("move", "x", "y", [atom("ship", "capsizing")])),
+        tv("t1", "fire when the pennons drop"), tv("t2", "scan once the boat foundered"),
+        tv("t3", "move to the dock", doc("move", "x", "y", [atom("ship", "foundering")])),
         tv("t4", "hold the ford")]), encoding="utf-8")
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("Return the intents for the request.", encoding="utf-8")
     assert eg.main(["reserved", "--reserved", str(sealed), "--rows", str(rows), "--file", str(prompt)]) == 1
     text = capsys.readouterr().out
     assert "REFUSED t1" in text and "REFUSED t2" in text and "REFUSED t3" in text and "t4" not in text
-    assert "pennon" not in text and "capsiz" not in text
+    assert "pennon" not in text and "founder" not in text
 
 
 def _git(repo, *args):
