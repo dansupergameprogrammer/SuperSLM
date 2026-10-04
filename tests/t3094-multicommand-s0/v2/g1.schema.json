@@ -1,0 +1,98 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "title": "G1",
+ "type": "object",
+ "properties": {
+  "intent": {
+   "type": "object",
+   "properties": {
+    "action": {
+     "type": "string",
+     "enum": [
+      "fire",
+      "move",
+      "scan",
+      "hold",
+      "wait"
+     ]
+    },
+    "subject": {
+     "type": "string"
+    },
+    "target": {
+     "type": "string"
+    },
+    "condition": {
+     "type": "object",
+     "properties": {
+      "role": {
+       "type": "string",
+       "enum": [
+        "start",
+        "start_any",
+        "stop",
+        "during"
+       ]
+      },
+      "entity": {
+       "type": "string"
+      },
+      "state": {
+       "type": "string"
+      },
+      "cmp": {
+       "type": "string",
+       "enum": [
+        "none",
+        "below",
+        "above",
+        "at_most",
+        "at_least",
+        "reaches"
+       ]
+      },
+      "value": {
+       "type": "string"
+      },
+      "negated": {
+       "type": "boolean"
+      },
+      "watch": {
+       "type": "string",
+       "enum": [
+        "auto",
+        "reuse",
+        "new"
+       ]
+      }
+     },
+     "required": [
+      "role",
+      "entity",
+      "state",
+      "cmp",
+      "value",
+      "negated",
+      "watch"
+     ],
+     "additionalProperties": false
+    },
+    "depends_on_previous": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "action",
+    "subject",
+    "target",
+    "condition",
+    "depends_on_previous"
+   ],
+   "additionalProperties": false
+  }
+ },
+ "required": [
+  "intent"
+ ],
+ "additionalProperties": false
+}

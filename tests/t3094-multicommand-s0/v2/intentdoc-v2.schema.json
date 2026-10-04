@@ -1,0 +1,106 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "title": "IntentDoc v2",
+ "type": "object",
+ "properties": {
+  "intents": {
+   "type": "array",
+   "minItems": 1,
+   "items": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "fire",
+       "move",
+       "scan",
+       "hold",
+       "wait"
+      ]
+     },
+     "subject": {
+      "type": "string"
+     },
+     "target": {
+      "type": "string"
+     },
+     "conditions": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+       "type": "object",
+       "properties": {
+        "role": {
+         "type": "string",
+         "enum": [
+          "start",
+          "start_any",
+          "stop",
+          "during"
+         ]
+        },
+        "entity": {
+         "type": "string"
+        },
+        "state": {
+         "type": "string"
+        },
+        "cmp": {
+         "type": "string",
+         "enum": [
+          "none",
+          "below",
+          "above",
+          "at_most",
+          "at_least",
+          "reaches"
+         ]
+        },
+        "value": {
+         "type": "string"
+        },
+        "negated": {
+         "type": "boolean"
+        },
+        "watch": {
+         "type": "string",
+         "enum": [
+          "auto",
+          "reuse",
+          "new"
+         ]
+        }
+       },
+       "required": [
+        "role",
+        "entity",
+        "state",
+        "cmp",
+        "value",
+        "negated",
+        "watch"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "depends_on_previous": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "action",
+     "subject",
+     "target",
+     "conditions",
+     "depends_on_previous"
+    ],
+    "additionalProperties": false
+   }
+  }
+ },
+ "required": [
+  "intents"
+ ],
+ "additionalProperties": false
+}
