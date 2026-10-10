@@ -575,6 +575,41 @@ uint32_t LastCallRecordedDispatchCount();
 uint32_t LastCallRecordedBarrierCount();
 uint32_t LastCallTimestampQueryCount();
 
+// --- GPU per-token overhead plan rev 3.1 §3.2-3.3 (S2, S3): bracket-mode fusion. ---
+// Bracket mode's recorder issues one dispatch in place of each fused run; per-site mode never
+// fuses, under any configuration (its stream stays v1.11.0's, plan I2). The configuration names
+// what bracket mode fuses:
+// - `fuse_o_run` (S2): o tail, attn_residual and mlp_norm as one `fused_o_residual_norm_site`
+//   dispatch;
+// - `fuse_down_run` (S2): down tail, mlp_residual and commit as one
+//   `fused_down_residual_commit_site` dispatch;
+// - `s3` (S3): `None`; `TailOnly`, the up GEMM writing its row to WIDE_B through its own dispatch
+//   (`up_proj_gemm_wide_b_site`) and the gate and up tails as one `fused_gate_up_site` dispatch
+//   (-1 dispatch per layer); or `MergedGemm`, gate's and up's GEMMs as one `gate_up_gemm_site`
+//   dispatch over 2 x intermediate_size channels, then the one fused tail (-2).
+// Per layer, legacy / QK norm, bracket mode records: 24 / 25 unfused; 22 / 23 with one S2 run; 20 /
+// 21 with both; S3 then subtracts its variant's saving. Every dispatch is followed by its one
+// global UAV barrier in both modes, so barriers = dispatches.
+// Which configuration ships is B0.7's decision (plan §4.3); the build compiles in a default (the
+// full plan as built) and every bracket submission reads the process's configuration ONCE, at
+// entry, beside the timing mode (a chunk call once for all of its sub-chunk lists). The budget
+// unit (`DispatchesPerLayer`, below) does not change with it.
+// `SetGpuBracketFusionConfig` is the test and diagnostic seam that selects another configuration:
+// it accepts only a shippable one (`IsShippableGpuBracketFusionConfig`: S3 needs at least one S2
+// run fused, and only the variants this build carries), and returns false, leaving the
+// configuration unchanged, for any other. Additive internal C++ surface (plan I5).
+enum class GpuS3Fusion : uint32_t { None = 0, TailOnly = 1, MergedGemm = 2 };
+struct GpuBracketFusionConfig {
+	bool fuse_o_run = false;
+	bool fuse_down_run = false;
+	GpuS3Fusion s3 = GpuS3Fusion::None;
+	bool operator==(const GpuBracketFusionConfig&) const = default;
+};
+GpuBracketFusionConfig DefaultGpuBracketFusionConfig();
+bool IsShippableGpuBracketFusionConfig(const GpuBracketFusionConfig& config);
+bool SetGpuBracketFusionConfig(const GpuBracketFusionConfig& config);
+GpuBracketFusionConfig GetGpuBracketFusionConfig();
+
 #if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
 // Appends one line per recorded command of RecordOneTokenFullDepthDispatchBody (and the bracket/final
 // queries its callers write) to *sink while non-null. Test/diagnostic only.
@@ -586,6 +621,47 @@ uint32_t LastCallTimestampQueryCount();
 // cell 7.4 compares per-site mode's log with a v1.11.0 capture
 // (tests/support/gpu_record_log_fixtures.h).
 void SetGpuRecordLogSink(std::vector<std::string>* sink);
+
+// GPU per-token overhead plan rev 3.1 §7 cells 5.1, 5.2, 7.6, 11.1 (the absolute reference for the
+// moved bodies, which run in both modes): the LayerScratch probe. While enabled, every submission
+// creates its LayerScratch filled with `fill` (instead of uninitialised), and the single-token path
+// (`RunLayerLoopGpuSubmit`) reads the whole buffer back beside its SeqState readback;
+// `LastCallLayerScratchProbe` then returns the most recent such call's bytes, its region offsets,
+// and its raw sticky word, or false when that call read nothing back (probe off, a chunk call, or a
+// call that never reached its readback). A region no site wrote still holds the fill: the pre-call
+// snapshot a later body must leave untouched after an earlier body rejects. Test-only.
+struct GpuLayerScratchProbeLayout {
+	uint32_t normed = 0, normed_scale = 0;
+	uint32_t q_codes = 0, q_scale = 0;
+	uint32_t q_rot = 0;
+	uint32_t ctx_codes = 0, ctx_scale = 0;
+	uint32_t o_codes = 0, o_scale = 0;
+	uint32_t attn_stream = 0, attn_stream_scale = 0;
+	uint32_t gate_codes = 0, gate_scale = 0;
+	uint32_t up_codes = 0, up_scale = 0;
+	uint32_t act_codes = 0, act_scale = 0;
+	uint32_t down_codes = 0, down_scale = 0;
+	uint32_t stream_next = 0, stream_next_scale = 0;
+	uint32_t scores = 0;
+	uint32_t total = 0;
+};
+void SetGpuLayerScratchProbe(bool enabled, uint8_t fill);
+bool LastCallLayerScratchProbe(std::vector<uint8_t>* out_bytes, GpuLayerScratchProbeLayout* out_layout,
+                               int64_t* out_sticky_tag);
+
+// Plan §7 cell 1.1: how many times the composed-pipeline cache (d3d12_harness.h,
+// `GetOrBuildComposedPipeline`) has built the PSO named `name` in this process -- 1 once it is
+// built and reused, 0 if never fetched. Test-only.
+uint32_t ComposedPipelineBuildCount(const char* name);
+#endif
+
+#if defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
+// Plan §7 cell 5.3: arms a one-shot PSO-creation failure on the composed pipeline named `name` --
+// the next `GetOrBuildComposedPipeline(name)`, cache hit or not, throws the failure a failed
+// D3D12 call throws (`ThrowGpuHrFailure(E_FAIL)`), and disarms. `Clear...` disarms without firing.
+// Test-only.
+void ArmComposedPipelineBuildFailure(const char* name);
+void ClearComposedPipelineBuildFailure();
 #endif
 
 // An earlier always-declared LINK-RED form of this instrument (`ArmO11AllocationFailure

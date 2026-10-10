@@ -704,6 +704,39 @@ std::atomic<uint32_t>& GpuTimingModeAtomic() {
 	return mode;
 }
 
+// GPU per-token overhead plan rev 3.1 §3.2-3.3 (S2, S3): the compiled-in bracket fusion
+// configuration -- the full plan as this build carries it (S2: both runs fused). B0.7 (plan §4.3)
+// decides which configuration ships; this is the one line that changes with it. Held packed in one
+// atomic (bit 0 the o run, bit 1 the down run, bits 2-3 the S3 variant) so a submission's one read
+// at entry sees one whole configuration.
+constexpr GpuBracketFusionConfig kDefaultGpuBracketFusionConfig{true, true, GpuS3Fusion::None};
+constexpr uint32_t EncodeGpuBracketFusionConfig(const GpuBracketFusionConfig& c) {
+	return (c.fuse_o_run ? 1u : 0u) | (c.fuse_down_run ? 2u : 0u) | (static_cast<uint32_t>(c.s3) << 2);
+}
+GpuBracketFusionConfig DecodeGpuBracketFusionConfig(uint32_t v) {
+	GpuBracketFusionConfig c;
+	c.fuse_o_run = (v & 1u) != 0;
+	c.fuse_down_run = (v & 2u) != 0;
+	c.s3 = static_cast<GpuS3Fusion>((v >> 2) & 3u);
+	return c;
+}
+std::atomic<uint32_t> g_gpu_bracket_fusion_config{EncodeGpuBracketFusionConfig(kDefaultGpuBracketFusionConfig)};
+
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+// GPU per-token overhead plan rev 3.1 §7 cells 5.1, 5.2, 7.6, 11.1: the LayerScratch probe
+// (gpu_port.h). Enabled, every submission fills its LayerScratch with the fill byte at creation
+// and the single-token path reads it back whole; the last such read lands here at Finish.
+std::atomic<bool> g_layer_scratch_probe_enabled{false};
+std::atomic<uint32_t> g_layer_scratch_probe_fill{0};
+struct LayerScratchProbeResult {
+	bool valid = false;
+	std::vector<uint8_t> bytes;
+	GpuLayerScratchProbeLayout layout;
+	int64_t sticky_tag = 0;
+};
+LayerScratchProbeResult g_last_layer_scratch_probe;
+#endif
+
 #if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
 // GPU per-token overhead plan rev 3.1 §3.1/§4.1: the record-side log seam (gpu_port.h). Every
 // write sits beside the real command it describes and never changes what is recorded; with no
@@ -1629,6 +1662,12 @@ struct GpuLayerLoopInFlight {
 	// pre-existing caller).
 	Microsoft::WRL::ComPtr<ID3D12Resource> q_codes_readback;
 	size_t q_codes_readback_bytes = 0;
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	// GPU per-token overhead plan rev 3.1 §7 (the LayerScratch probe, gpu_port.h): the whole
+	// LayerScratch, read back beside SeqState when the probe is enabled; null otherwise.
+	Microsoft::WRL::ComPtr<ID3D12Resource> layer_scratch_probe_readback;
+	GpuLayerScratchProbeLayout layer_scratch_probe_layout;
+#endif
 
 	// T-2113 (B5): EVERY per-call GPU resource the recorded command list either reads
 	// throughout the dispatch chain or copies FROM, that is not independently kept
@@ -1717,6 +1756,15 @@ uint32_t Stage1LanesForRank(uint32_t rank) {
 // it leaves `dispatch_query_index` at 1 so the caller's unchanged final-query/resolve lines write
 // query 1 after the last barrier and resolve 2. `counts` accumulates what was recorded, across
 // every token a (sub-)chunk list records.
+//
+// GPU per-token overhead plan rev 3.1 §3.2-3.3 (S2, S3): `fusion` is the bracket fusion
+// configuration the submission read once at entry (`FusionForSubmission`, below: per-site mode
+// passes the unfused configuration, so it never fuses). Both modes are built from ONE site list
+// (`kLayerSites`, in v1.11.0's per-layer order -- per-site mode's whole stream): each site either
+// records its own dispatch, records the fused dispatch that replaces its run, or is skipped because
+// an earlier site's fused dispatch covers it. The fused shaders use the existing root signature
+// and the same constant layouts as the tails they replace (plan I4), so a fused dispatch is the
+// replaced run's first tail's `bind_and_dispatch_tail` with the fused pipeline.
 struct GpuRecordCounts {
 	uint32_t dispatches = 0;
 	uint32_t barriers = 0;
@@ -1729,7 +1777,8 @@ void RecordOneTokenFullDepthDispatchBody(
     uint32_t position_u32, uint32_t width_u32, const GpuScratchLayout& scratch_layout,
     uint64_t work_wide_a_off, uint64_t work_wide_b_off, uint64_t work_adapter_u_off,
     const GpuAdapterBridge* adapter_bridge, bool has_qk_norm,
-    uint32_t& dispatch_query_index, GpuTimingMode timing_mode, GpuRecordCounts& counts) {
+    uint32_t& dispatch_query_index, GpuTimingMode timing_mode, const GpuBracketFusionConfig& fusion,
+    GpuRecordCounts& counts) {
 	// T-2432 (Track A step 9): q_width = num_attention_heads * head_dim -- NQH is already
 	// correct by the time this function runs (Track A step 8 fixes its own derivation, at this
 	// function's own caller). Declared before the dispatch lambdas below so their `[&]` capture
@@ -1767,6 +1816,11 @@ void RecordOneTokenFullDepthDispatchBody(
 	const SitePipe gate_proj_gemm_pipe = site("gate_proj_gemm_site");
 	const SitePipe up_proj_gemm_pipe = site("up_proj_gemm_site");
 	const SitePipe down_proj_gemm_pipe = site("down_proj_gemm_site");
+	// GPU per-token overhead plan rev 3.1 §3.2 (S2): the fused pipelines, fetched only when this
+	// submission's configuration uses them -- per-site mode never fetches one.
+	const SitePipe fused_o_pipe = fusion.fuse_o_run ? site("fused_o_residual_norm_site") : SitePipe{nullptr, nullptr};
+	const SitePipe fused_down_pipe =
+	    fusion.fuse_down_run ? site("fused_down_residual_commit_site") : SitePipe{nullptr, nullptr};
 
 	D3D12_RESOURCE_BARRIER global_uav_barrier{};
 	global_uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -1904,52 +1958,129 @@ void RecordOneTokenFullDepthDispatchBody(
 		}
 	}
 
+	// GPU per-token overhead plan rev 3.1 §3.2-3.3: one layer's sites, in v1.11.0's order. Per-site
+	// mode (and bracket mode's unfused configuration) records each in turn -- byte for byte the
+	// pre-S2 sequence of calls, which plan cell 7.4 holds to the v1.11.0 capture; bracket mode's
+	// configuration rewrites runs of them (the switch below).
+	enum class Site {
+		AttnNorm, QGemm, QTail, KvGemm, KvTail, QkNorm, RopeGuard, RopeCommit, AttnScore, Softmax,
+		CtxAccumulate, CtxFold, OGemm, OTail, AttnResidual, MlpNorm, GateGemm, GateTail, UpGemm, UpTail,
+		MlpAct, DownGemm, DownTail, MlpResidual, Commit
+	};
+	static constexpr Site kLayerSites[] = {
+	    Site::AttnNorm,     Site::QGemm,       Site::QTail,      Site::KvGemm,       Site::KvTail,
+	    Site::QkNorm,       Site::RopeGuard,   Site::RopeCommit, Site::AttnScore,    Site::Softmax,
+	    Site::CtxAccumulate, Site::CtxFold,    Site::OGemm,      Site::OTail,        Site::AttnResidual,
+	    Site::MlpNorm,      Site::GateGemm,    Site::GateTail,   Site::UpGemm,       Site::UpTail,
+	    Site::MlpAct,       Site::DownGemm,    Site::DownTail,   Site::MlpResidual,  Site::Commit};
+	const uint32_t wide_a = static_cast<uint32_t>(work_wide_a_off);
+	const uint32_t wide_b = static_cast<uint32_t>(work_wide_b_off);
+
 	for (uint32_t i = 0; i < layers_to_record; ++i) {
 		const uint32_t l = start_layer + i;
-		bind_and_dispatch(attn_norm_pipe, l);
-		bind_and_dispatch(q_proj_gemm_pipe, l, q_proj_plan.groups, q_proj_plan.lanes);
-		bind_and_dispatch_tail(q_proj_pipe, l,
-		                        {{/*q=*/0, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(kv_proj_gemm_pipe, l, kv_proj_plan.groups, kv_proj_plan.lanes);
-		bind_and_dispatch_tail(
-		    kv_proj_pipe, l,
-		    {{/*k=*/5, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)},
-		     {/*v=*/6, scratch_layout.normed, static_cast<uint32_t>(work_wide_b_off)}});
-		// (design §3/§4/§6 Track B step 3): QK-norm's own dispatch -- strictly after K/V landing
-		// (kv_proj_pipe, above) and strictly before RoPE (rope_pipe, below), matching §3's own
-		// ordering resolution and the CPU forward's own call-site placement
-		// (forward_sites.cpp's ApplyQkNormSite call sites). ONE Dispatch call, NQH+NH thread
-		// groups (Q heads then K heads, SV_GroupID.x selects which). The mapped model loads this
-		// pipeline only when at least one layer carries QK norm, so legacy models issue no QK
-		// dispatch and retain their 24-dispatch budget contract. Per-layer presence flags still
-		// make a mixed model's individual non-QK layer a near-immediate no-op.
-		if (qk_norm_pipe.pipe) {
-			bind_and_dispatch(qk_norm_pipe, l, /*num_groups=*/NQH + NH);
+		for (const Site s : kLayerSites) {
+			switch (s) {
+				case Site::AttnNorm:
+					bind_and_dispatch(attn_norm_pipe, l);
+					break;
+				case Site::QGemm:
+					bind_and_dispatch(q_proj_gemm_pipe, l, q_proj_plan.groups, q_proj_plan.lanes);
+					break;
+				case Site::QTail:
+					bind_and_dispatch_tail(q_proj_pipe, l, {{/*q=*/0, scratch_layout.normed, wide_a}});
+					break;
+				case Site::KvGemm:
+					bind_and_dispatch(kv_proj_gemm_pipe, l, kv_proj_plan.groups, kv_proj_plan.lanes);
+					break;
+				case Site::KvTail:
+					bind_and_dispatch_tail(kv_proj_pipe, l,
+					                        {{/*k=*/5, scratch_layout.normed, wide_a},
+					                         {/*v=*/6, scratch_layout.normed, wide_b}});
+					break;
+				case Site::QkNorm:
+					// (design §3/§4/§6 Track B step 3): QK-norm's own dispatch -- strictly after K/V
+					// landing (kv_proj_pipe, above) and strictly before RoPE (rope_pipe, below),
+					// matching §3's own ordering resolution and the CPU forward's own call-site
+					// placement (forward_sites.cpp's ApplyQkNormSite call sites). ONE Dispatch call,
+					// NQH+NH thread groups (Q heads then K heads, SV_GroupID.x selects which). The
+					// mapped model loads this pipeline only when at least one layer carries QK norm,
+					// so legacy models issue no QK dispatch and retain their 24-dispatch budget
+					// contract. Per-layer presence flags still make a mixed model's individual non-QK
+					// layer a near-immediate no-op.
+					if (qk_norm_pipe.pipe) bind_and_dispatch(qk_norm_pipe, l, /*num_groups=*/NQH + NH);
+					break;
+				case Site::RopeGuard:
+					bind_and_dispatch(rope_pipe, l, rope_groups);
+					break;
+				case Site::RopeCommit:
+					bind_and_dispatch(rope_commit_pipe, l, rope_groups);
+					break;
+				case Site::AttnScore:
+					bind_and_dispatch(attention_score_pipe, l, attn_score_groups);
+					break;
+				case Site::Softmax:
+					bind_and_dispatch(softmax_pipe, l);
+					break;
+				case Site::CtxAccumulate:
+					bind_and_dispatch(context_accumulate_pipe, l, ctx_accum_groups);
+					break;
+				case Site::CtxFold:
+					bind_and_dispatch(ctx_fold_pipe, l);
+					break;
+				case Site::OGemm:
+					bind_and_dispatch(o_proj_gemm_pipe, l, o_proj_plan.groups, o_proj_plan.lanes);
+					break;
+				case Site::OTail:
+					// S2: the o run (o tail, attn_residual, mlp_norm) as one dispatch, carrying the o
+					// tail's one adapter slot in the same constant positions.
+					bind_and_dispatch_tail(fusion.fuse_o_run ? fused_o_pipe : o_proj_pipe, l,
+					                        {{/*o=*/1, scratch_layout.ctx_codes, wide_a}});
+					break;
+				case Site::AttnResidual:
+					if (!fusion.fuse_o_run) bind_and_dispatch(attn_residual_pipe, l);
+					break;
+				case Site::MlpNorm:
+					if (!fusion.fuse_o_run) bind_and_dispatch(mlp_norm_pipe, l);
+					break;
+				case Site::GateGemm:
+					bind_and_dispatch(gate_proj_gemm_pipe, l, gate_proj_plan.groups, gate_proj_plan.lanes);
+					break;
+				case Site::GateTail:
+					bind_and_dispatch_tail(gate_proj_pipe, l, {{/*gate=*/2, scratch_layout.normed, wide_a}});
+					break;
+				case Site::UpGemm:
+					bind_and_dispatch(up_proj_gemm_pipe, l, up_proj_plan.groups, up_proj_plan.lanes);
+					break;
+				case Site::UpTail:
+					bind_and_dispatch_tail(up_proj_pipe, l, {{/*up=*/3, scratch_layout.normed, wide_a}});
+					break;
+				case Site::MlpAct:
+					bind_and_dispatch(mlp_act_pipe, l);
+					break;
+				case Site::DownGemm:
+					bind_and_dispatch(down_proj_gemm_pipe, l, down_proj_plan.groups, down_proj_plan.lanes);
+					break;
+				case Site::DownTail:
+					// S2: the down run (down tail, mlp_residual, commit) as one dispatch, carrying
+					// the down tail's one adapter slot in the same constant positions.
+					bind_and_dispatch_tail(fusion.fuse_down_run ? fused_down_pipe : down_proj_pipe, l,
+					                        {{/*down=*/4, scratch_layout.act_codes, wide_a}});
+					break;
+				case Site::MlpResidual:
+					if (!fusion.fuse_down_run) bind_and_dispatch(mlp_residual_pipe, l);
+					break;
+				case Site::Commit:
+					if (!fusion.fuse_down_run) bind_and_dispatch(commit_pipe, l);
+					break;
+			}
 		}
-		bind_and_dispatch(rope_pipe, l, rope_groups);
-		bind_and_dispatch(rope_commit_pipe, l, rope_groups);
-		bind_and_dispatch(attention_score_pipe, l, attn_score_groups);
-		bind_and_dispatch(softmax_pipe, l);
-		bind_and_dispatch(context_accumulate_pipe, l, ctx_accum_groups);
-		bind_and_dispatch(ctx_fold_pipe, l);
-		bind_and_dispatch(o_proj_gemm_pipe, l, o_proj_plan.groups, o_proj_plan.lanes);
-		bind_and_dispatch_tail(o_proj_pipe, l,
-		                        {{/*o=*/1, scratch_layout.ctx_codes, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(attn_residual_pipe, l);
-		bind_and_dispatch(mlp_norm_pipe, l);
-		bind_and_dispatch(gate_proj_gemm_pipe, l, gate_proj_plan.groups, gate_proj_plan.lanes);
-		bind_and_dispatch_tail(gate_proj_pipe, l,
-		                        {{/*gate=*/2, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(up_proj_gemm_pipe, l, up_proj_plan.groups, up_proj_plan.lanes);
-		bind_and_dispatch_tail(up_proj_pipe, l,
-		                        {{/*up=*/3, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(mlp_act_pipe, l);
-		bind_and_dispatch(down_proj_gemm_pipe, l, down_proj_plan.groups, down_proj_plan.lanes);
-		bind_and_dispatch_tail(down_proj_pipe, l,
-		                        {{/*down=*/4, scratch_layout.act_codes, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(mlp_residual_pipe, l);
-		bind_and_dispatch(commit_pipe, l);
 	}
+}
+
+// GPU per-token overhead plan rev 3.1 §3.2-3.3: the fusion configuration one submission records
+// with, resolved once at its entry beside its timing mode. Per-site mode never fuses.
+GpuBracketFusionConfig FusionForSubmission(GpuTimingMode timing_mode) {
+	return timing_mode == GpuTimingMode::PerSite ? GpuBracketFusionConfig{} : GetGpuBracketFusionConfig();
 }
 
 // T-2169 (Rung 2b-prep, design Sec5.1, D-SLM3632/D-SLM3633): the guard ladder, the weight/rope/K-V
@@ -2053,6 +2184,9 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	g_last_call_recorded_dispatch_count.store(0, std::memory_order_relaxed);
 	g_last_call_recorded_barrier_count.store(0, std::memory_order_relaxed);
 	g_last_call_timestamp_query_count.store(0, std::memory_order_relaxed);
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	g_last_layer_scratch_probe.valid = false;
+#endif
 	// T-2052 (Claude/Poirot/36b9327-gpu-serial-port-reconfirmation-review.md,
 	// M1, correcting T-2049's own N1): CPU parity, corrected a SECOND time.
 	// T-2049's own comment here claimed "All eight [guards] now run here" --
@@ -2778,6 +2912,15 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	scratch_layout_buf = dev.Upload(scratch_layout_bytes.data(), scratch_layout_bytes.size());
 	seq_uav = MakeInitializedUav(dev, seq_bytes, upload_keep_alive);
 	// T-2101: no host content -- see the header comment at `kv_fast_hit`'s own declaration above.
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	// GPU per-token overhead plan rev 3.1 §7 (the LayerScratch probe, test builds only): a known
+	// fill instead, so a region no site wrote is recognisable in the readback.
+	if (g_layer_scratch_probe_enabled.load(std::memory_order_relaxed)) {
+		const std::vector<uint8_t> fill(scratch_layout.total,
+		                                static_cast<uint8_t>(g_layer_scratch_probe_fill.load(std::memory_order_relaxed)));
+		scratch_uav = MakeInitializedUav(dev, fill, upload_keep_alive);
+	} else
+#endif
 	scratch_uav = dev.MakeBuffer(scratch_layout.total, D3D12_HEAP_TYPE_DEFAULT,
 	                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
 	                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -3111,12 +3254,21 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	// the fence wait, via `inflight`).
 	Microsoft::WRL::ComPtr<ID3D12Resource> q_codes_readback;
 	size_t q_codes_readback_bytes = 0;
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	// GPU per-token overhead plan rev 3.1 §7 (the LayerScratch probe): same lifetime as the
+	// q_codes readback above.
+	Microsoft::WRL::ComPtr<ID3D12Resource> layer_scratch_probe_readback;
+	const bool want_layer_scratch_probe = g_layer_scratch_probe_enabled.load(std::memory_order_relaxed);
+#endif
 	std::vector<size_t> kv_row_offsets;
 	uint32_t dispatch_count_this_call = 0;
 	// GPU per-token overhead plan rev 3.1 §3.1 (S1): this submission's timing mode, read once, at
 	// entry -- for the chunk path, once per (sub-)chunk list, so bracket mode writes one bracket
 	// pair per list -- and what its list records, counted as it is recorded.
 	const GpuTimingMode timing_mode = GetGpuTimingMode();
+	// GPU per-token overhead plan rev 3.1 §3.2-3.3 (S2, S3): and its fusion configuration, read once
+	// beside the mode (per-site mode: unfused).
+	const GpuBracketFusionConfig fusion = FusionForSubmission(timing_mode);
 	GpuRecordCounts record_counts;
 	GpuLayerLoopChunkOpenState state;
 	const auto t_record_start = std::chrono::steady_clock::now();
@@ -3200,7 +3352,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	                                     context_cap_u32, position_u32, width_u32, state.scratch_layout,
 	                                     state.work_wide_a_off, state.work_wide_b_off,
 	                                     state.work_adapter_u_off, adapter_bridge, has_qk_norm,
-	                                     dispatch_query_index, timing_mode, record_counts);
+	                                     dispatch_query_index, timing_mode, fusion, record_counts);
 #if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
 	// T-2169 (Rung 2b): the SAME per-token-dispatch-body-invocation event
 	// SubmitChunkToFullDepthForG5Bridge's own identical increment counts (below), for the
@@ -3280,6 +3432,16 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		q_codes_readback = dev.MakeBuffer(q_codes_readback_bytes, D3D12_HEAP_TYPE_READBACK,
 		                                   D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
 	}
+	bool read_layer_scratch = want_q_codes;
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	// GPU per-token overhead plan rev 3.1 §7 (the LayerScratch probe): the whole buffer, beside the
+	// q_codes region's own copy and through the same transition.
+	if (want_layer_scratch_probe) {
+		layer_scratch_probe_readback = dev.MakeBuffer(state.scratch_layout.total, D3D12_HEAP_TYPE_READBACK,
+		                                              D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
+		read_layer_scratch = true;
+	}
+#endif
 	D3D12_RESOURCE_BARRIER pre_copy[3]{};
 	pre_copy[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 	pre_copy[0].Transition.pResource = seq_uav.Get();
@@ -3289,7 +3451,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	pre_copy[1] = pre_copy[0];
 	pre_copy[1].Transition.pResource = kv_uav.Get();
 	uint32_t pre_copy_count = 2;
-	if (want_q_codes) {
+	if (read_layer_scratch) {
 		pre_copy[2] = pre_copy[0];
 		pre_copy[2].Transition.pResource = scratch_uav.Get();
 		pre_copy_count = 3;
@@ -3312,6 +3474,12 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		                            state.scratch_layout.q_codes,
 		                            static_cast<UINT64>(q_codes_readback_bytes));
 	}
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	if (want_layer_scratch_probe) {
+		dev.list->CopyBufferRegion(layer_scratch_probe_readback.Get(), 0, scratch_uav.Get(), 0,
+		                            static_cast<UINT64>(state.scratch_layout.total));
+	}
+#endif
 	} catch (const GpuGemmGroupArithmeticError& e) {
 		// T-2101 (S4, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
 		// f7026db): a permanent coding-arithmetic bug, never a transient or size-dependent one --
@@ -3515,6 +3683,25 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		inflight->head_dim_hd = state.HD;
 		inflight->q_codes_readback = q_codes_readback;
 		inflight->q_codes_readback_bytes = q_codes_readback_bytes;
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+		inflight->layer_scratch_probe_readback = layer_scratch_probe_readback;
+		{
+			const GpuScratchLayout& L = state.scratch_layout;
+			GpuLayerScratchProbeLayout& P = inflight->layer_scratch_probe_layout;
+			P.normed = L.normed; P.normed_scale = L.normed_scale;
+			P.q_codes = L.q_codes; P.q_scale = L.q_scale; P.q_rot = L.q_rot;
+			P.ctx_codes = L.ctx_codes; P.ctx_scale = L.ctx_scale;
+			P.o_codes = L.o_codes; P.o_scale = L.o_scale;
+			P.attn_stream = L.attn_stream; P.attn_stream_scale = L.attn_stream_scale;
+			P.gate_codes = L.gate_codes; P.gate_scale = L.gate_scale;
+			P.up_codes = L.up_codes; P.up_scale = L.up_scale;
+			P.act_codes = L.act_codes; P.act_scale = L.act_scale;
+			P.down_codes = L.down_codes; P.down_scale = L.down_scale;
+			P.stream_next = L.stream_next; P.stream_next_scale = L.stream_next_scale;
+			P.scores = L.scores;
+			P.total = L.total;
+		}
+#endif
 		inflight->t_record_end = t_record_end;
 		// T-2113 (B5): extend every per-call GPU resource's lifetime to the fence, per
 		// GpuLayerLoopInFlight's own struct comment -- these ComPtr copies are what close
@@ -3622,8 +3809,9 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
     // call, below.
     uint64_t model_generation, bool model_has_qk_norm,
     // GPU per-token overhead plan rev 3.1 §3.1 (S1): the timing mode the public chunk call read
-    // once, at its entry, so every sub-chunk list of one call records in the same mode.
-    GpuTimingMode timing_mode) {
+    // once, at its entry, so every sub-chunk list of one call records in the same mode -- and
+    // (§3.2-3.3, S2/S3) the fusion configuration it resolved beside it.
+    GpuTimingMode timing_mode, const GpuBracketFusionConfig& fusion) {
 	if (out_inflight) *out_inflight = nullptr;
 	// T-2184 remedy S3 (Brunel fix round 1, D-SLM3662): this primitive's own catch clauses call
 	// the same file-scope `InvalidateResidencyCachesOnThrow()` `RunLayerLoopGpuSubmit`'s catch
@@ -3755,7 +3943,7 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		                                     width_u32, state.scratch_layout,
 		                                     state.work_wide_a_off, state.work_wide_b_off,
 		                                     state.work_adapter_u_off, adapter_bridge, has_qk_norm,
-		                                     dispatch_query_index, timing_mode, record_counts);
+		                                     dispatch_query_index, timing_mode, fusion, record_counts);
 		// T-2180/T-2183 (D-SLM3655/D-SLM3660): the tenth-failure-origin seam -- immediately after
 		// this token's own dispatches are recorded and before the loop advances (gpu_port.h's own
 		// header comment on ArmT2169ChunkRecordingFaultInjection carries the full account). Zero
@@ -4143,6 +4331,8 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 	// GPU per-token overhead plan rev 3.1 §3.1 (S1): read once per public chunk call, so one call
 	// never mixes modes across its sub-chunk lists.
 	const GpuTimingMode timing_mode = GetGpuTimingMode();
+	// GPU per-token overhead plan rev 3.1 §3.2-3.3 (S2, S3): likewise the fusion configuration.
+	const GpuBracketFusionConfig fusion = FusionForSubmission(timing_mode);
 	uint32_t submitted = 0;
 	while (submitted < chunk_len) {
 		const uint32_t remaining = chunk_len - submitted;
@@ -4157,7 +4347,7 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 		    external_kv_resident, io_external_kv_needs_resume_barrier, external_weights_resident,
 		    external_rope_cos_resident, external_rope_sin_resident, external_rope_has,
 		    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &inflight, q_width,
-		    model_generation, model_has_qk_norm, timing_mode);
+		    model_generation, model_has_qk_norm, timing_mode, fusion);
 		if (submit_status != superslm::SslmForwardStatus::Ok) {
 			return submit_status;
 		}
@@ -4373,6 +4563,23 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 	std::memcpy(&hi_u, seq_out.data() + SeqSatHiOff(H), 4);
 	std::memcpy(&ctxlen, seq_out.data() + SeqCtxLenOff(H), 8);
 	std::memcpy(&sticky_tag, seq_out.data() + SeqStickyOff(H), 8);
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	// GPU per-token overhead plan rev 3.1 §7 (the LayerScratch probe): the whole LayerScratch and
+	// the raw sticky word, for `LastCallLayerScratchProbe`.
+	if (owned->layer_scratch_probe_readback) {
+		LayerScratchProbeResult& probe = g_last_layer_scratch_probe;
+		probe.bytes.assign(owned->layer_scratch_probe_layout.total, 0);
+		void* p = nullptr;
+		D3D12_RANGE range{0, probe.bytes.size()};
+		SSLM_GPU_HR(owned->layer_scratch_probe_readback->Map(0, &range, &p));
+		std::memcpy(probe.bytes.data(), p, probe.bytes.size());
+		D3D12_RANGE none{0, 0};
+		owned->layer_scratch_probe_readback->Unmap(0, &none);
+		probe.layout = owned->layer_scratch_probe_layout;
+		probe.sticky_tag = sticky_tag;
+		probe.valid = true;
+	}
+#endif
 	(void)lidx32; (void)sat_lo32; (void)sat_hi32;
 	// (T-2577, D-SLM6280): the four per-site breakdowns, same lo/hi split as the aggregate
 	// immediately above.
@@ -4605,10 +4812,58 @@ uint32_t LastCallTimestampQueryCount() {
 	return g_last_call_timestamp_query_count.load(std::memory_order_relaxed);
 }
 
+GpuBracketFusionConfig DefaultGpuBracketFusionConfig() { return kDefaultGpuBracketFusionConfig; }
+
+// GPU per-token overhead plan rev 3.1 §3.2-3.3: a configuration can ship when this build carries
+// every mechanism it names. At S2 that is either S2 run, both, or neither (B0.7 may fuse neither),
+// with no S3 variant.
+bool IsShippableGpuBracketFusionConfig(const GpuBracketFusionConfig& config) {
+	return config.s3 == GpuS3Fusion::None;
+}
+
+bool SetGpuBracketFusionConfig(const GpuBracketFusionConfig& config) {
+	if (!IsShippableGpuBracketFusionConfig(config)) return false;
+	g_gpu_bracket_fusion_config.store(EncodeGpuBracketFusionConfig(config));
+	return true;
+}
+
+GpuBracketFusionConfig GetGpuBracketFusionConfig() {
+	return DecodeGpuBracketFusionConfig(g_gpu_bracket_fusion_config.load());
+}
+
 #if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
 void SetGpuRecordLogSink(std::vector<std::string>* sink) {
 	g_gpu_record_log_sink.store(sink, std::memory_order_relaxed);
 }
+
+void SetGpuLayerScratchProbe(bool enabled, uint8_t fill) {
+	g_layer_scratch_probe_fill.store(fill, std::memory_order_relaxed);
+	g_layer_scratch_probe_enabled.store(enabled, std::memory_order_relaxed);
+	if (!enabled) g_last_layer_scratch_probe = LayerScratchProbeResult{};
+}
+
+bool LastCallLayerScratchProbe(std::vector<uint8_t>* out_bytes, GpuLayerScratchProbeLayout* out_layout,
+                               int64_t* out_sticky_tag) {
+	const LayerScratchProbeResult& probe = g_last_layer_scratch_probe;
+	if (out_bytes) *out_bytes = probe.valid ? probe.bytes : std::vector<uint8_t>{};
+	if (out_layout) *out_layout = probe.valid ? probe.layout : GpuLayerScratchProbeLayout{};
+	if (out_sticky_tag) *out_sticky_tag = probe.valid ? probe.sticky_tag : 0;
+	return probe.valid;
+}
+
+uint32_t ComposedPipelineBuildCount(const char* name) {
+	const std::map<std::string, uint32_t>& counts = harness::ComposedPipelineBuildCounts();
+	const auto it = counts.find(name ? name : "");
+	return it == counts.end() ? 0u : it->second;
+}
+#endif
+
+#if defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
+void ArmComposedPipelineBuildFailure(const char* name) {
+	harness::ComposedPipelineBuildFailureName() = name ? name : "";
+}
+
+void ClearComposedPipelineBuildFailure() { harness::ComposedPipelineBuildFailureName().clear(); }
 #endif
 
 const int8_t* KeyRowGpu(const uint8_t* workspace, uint32_t layer, int64_t context_cap,

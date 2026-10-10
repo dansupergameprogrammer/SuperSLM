@@ -1100,7 +1100,32 @@ inline CachedPipeline& GetOrBuildPipeline(const std::string& name) {
 // 14 real per-layer dispatch shaders, attn_norm_site through commit_site). A
 // distinct cache from GetOrBuildPipeline's B1-shaped one-SRV-one-UAV pool
 // above, since the two families use different root signatures.
+#if defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
+// GPU per-token overhead plan rev 3.1 §7 cell 5.3: the composed pipeline armed to fail its next
+// fetch (gpu_port.h, `ArmComposedPipelineBuildFailure`), empty when none is. Test builds only.
+inline std::string& ComposedPipelineBuildFailureName() {
+	static std::string name;
+	return name;
+}
+#endif
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+// GPU per-token overhead plan rev 3.1 §7 cell 1.1: how many times each composed PSO was built
+// (gpu_port.h, `ComposedPipelineBuildCount`). Test builds only.
+inline std::map<std::string, uint32_t>& ComposedPipelineBuildCounts() {
+	static std::map<std::string, uint32_t> counts;
+	return counts;
+}
+#endif
+
 inline CachedPipeline& GetOrBuildComposedPipeline(const std::string& name) {
+#if defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
+	// Checked before the cache lookup, so an armed failure fires on a cache hit too: the cell
+	// injects into a pipeline the process may already hold.
+	if (!ComposedPipelineBuildFailureName().empty() && ComposedPipelineBuildFailureName() == name) {
+		ComposedPipelineBuildFailureName().clear();
+		ThrowGpuHrFailure(E_FAIL, __FILE__, __LINE__);
+	}
+#endif
 	static std::map<std::string, CachedPipeline> cache;
 	// ONE shared root-signature object across every composed-pipeline PSO --
 	// not a fresh MakeRootSigComposed() per shader. D3D12's command list binds
@@ -1122,6 +1147,9 @@ inline CachedPipeline& GetOrBuildComposedPipeline(const std::string& name) {
 	cp.pso = dev.MakePSO(cp.root_sig.Get(), cso);
 	auto [inserted, ok] = cache.emplace(name, std::move(cp));
 	(void)ok;
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	++ComposedPipelineBuildCounts()[name];
+#endif
 	return inserted->second;
 }
 
