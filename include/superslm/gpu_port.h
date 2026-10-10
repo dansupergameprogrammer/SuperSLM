@@ -544,8 +544,9 @@ std::vector<double> LastCallPerDispatchTimingsMs();
 //   the same-build oracle for code that only one mode runs.
 // The mode is one process-wide atomic, initialised once from `SSLM_GPU_PER_SITE_TIMING` (per-site
 // exactly when the variable's whole value is "1"; see `ParseGpuTimingModeEnv`). Each submission
-// reads it ONCE and stores it in its in-flight record, and its Finish interprets the timestamps by
-// that stored mode, so a mode set between a Submit and its Finish takes effect at the next Submit.
+// reads it ONCE (a chunk call once for all of its sub-chunk lists) and stores it in its in-flight
+// record, and its Finish interprets the timestamps by that stored mode, so a mode set between a
+// Submit and its Finish takes effect at the next Submit.
 // Additive internal C++ surface: no C ABI and no `gpu_1p0.h` change (plan I5).
 enum class GpuTimingMode : uint32_t { Bracket = 0, PerSite = 1 };
 void SetGpuTimingMode(GpuTimingMode mode);
@@ -567,7 +568,9 @@ GpuTimingMode ParseGpuTimingModeEnv(const char* value);
 // - `LastCallTimestampQueryCount()` -- EndQuery calls: 2 in bracket mode; dispatches + 1 in
 //   per-site mode while under the heap's slot cap.
 // All three are 0 after a call the guard ladder rejected before recording, and are reset by the
-// next submission's entry, exactly as `LastCallTiming()` is.
+// next submission's entry, exactly as `LastCallTiming()` is. Like `LastCallTiming()`, they are
+// read on the submitting thread after its call returns; they are relaxed atomics, so a read from
+// another thread is defined but not ordered with any particular call.
 uint32_t LastCallRecordedDispatchCount();
 uint32_t LastCallRecordedBarrierCount();
 uint32_t LastCallTimestampQueryCount();

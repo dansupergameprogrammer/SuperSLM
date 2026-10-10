@@ -687,10 +687,12 @@ std::vector<double> g_last_call_per_dispatch_ms;
 // GPU per-token overhead plan rev 3.1 §3.1 (S1): back the three record-count accessors
 // (`gpu_port.h`) -- what the most recent submission recorded into the last command list it
 // closed. Reset beside `g_last_call_timing` at every submission's entry (a guard-rejected call
-// reports 0), set when the list closes, beside `record_ms`.
-uint32_t g_last_call_recorded_dispatch_count = 0;
-uint32_t g_last_call_recorded_barrier_count = 0;
-uint32_t g_last_call_timestamp_query_count = 0;
+// reports 0), set when the list closes, beside `record_ms`. Relaxed atomics: the contract
+// (gpu_port.h) is a read on the submitting thread after its call returns, like `LastCallTiming()`;
+// the atomics only keep a read from another thread defined, not ordered.
+std::atomic<uint32_t> g_last_call_recorded_dispatch_count{0};
+std::atomic<uint32_t> g_last_call_recorded_barrier_count{0};
+std::atomic<uint32_t> g_last_call_timestamp_query_count{0};
 
 // GPU per-token overhead plan rev 3.1 §3.1 (S1): the process-wide timing mode, initialised once,
 // on first use, from `SSLM_GPU_PER_SITE_TIMING` through `ParseGpuTimingModeEnv` (the function-local
@@ -706,29 +708,36 @@ std::atomic<uint32_t>& GpuTimingModeAtomic() {
 // GPU per-token overhead plan rev 3.1 §3.1/§4.1: the record-side log seam (gpu_port.h). Every
 // write sits beside the real command it describes and never changes what is recorded; with no
 // sink installed each helper is a pointer test.
-std::vector<std::string>* g_gpu_record_log_sink = nullptr;
+// The sink pointer is a relaxed atomic for the same reason as the counts above; the vector it
+// names is written only by the recording thread.
+std::atomic<std::vector<std::string>*> g_gpu_record_log_sink{nullptr};
 
 void RecordLogQuery(uint32_t index) {
-	if (g_gpu_record_log_sink == nullptr) return;
-	g_gpu_record_log_sink->push_back("Q " + std::to_string(index));
+	std::vector<std::string>* sink = g_gpu_record_log_sink.load(std::memory_order_relaxed);
+	if (sink == nullptr) return;
+	sink->push_back("Q " + std::to_string(index));
 }
-void RecordLogDispatch(const std::string& pipeline_name, uint32_t groups, uint32_t count,
+void RecordLogDispatch(const char* pipeline_name, uint32_t groups, uint32_t count,
                        const uint32_t* consts) {
-	if (g_gpu_record_log_sink == nullptr) return;
-	std::string line = "D " + pipeline_name + " g=" + std::to_string(groups) + " c=" + std::to_string(count) + ":";
+	std::vector<std::string>* sink = g_gpu_record_log_sink.load(std::memory_order_relaxed);
+	if (sink == nullptr) return;
+	std::string line = std::string("D ") + pipeline_name + " g=" + std::to_string(groups) + " c=" +
+	                   std::to_string(count) + ":";
 	for (uint32_t i = 0; i < count; ++i) {
 		if (i != 0) line += ",";
 		line += std::to_string(consts[i]);
 	}
-	g_gpu_record_log_sink->push_back(line);
+	sink->push_back(line);
 }
 void RecordLogBarrier() {
-	if (g_gpu_record_log_sink == nullptr) return;
-	g_gpu_record_log_sink->push_back("B");
+	std::vector<std::string>* sink = g_gpu_record_log_sink.load(std::memory_order_relaxed);
+	if (sink == nullptr) return;
+	sink->push_back("B");
 }
 void RecordLogResolve(uint32_t first, uint32_t count) {
-	if (g_gpu_record_log_sink == nullptr) return;
-	g_gpu_record_log_sink->push_back("R " + std::to_string(first) + "," + std::to_string(count));
+	std::vector<std::string>* sink = g_gpu_record_log_sink.load(std::memory_order_relaxed);
+	if (sink == nullptr) return;
+	sink->push_back("R " + std::to_string(first) + "," + std::to_string(count));
 }
 #endif  // SUPERSLM_ENABLE_GPU_RECORD_LOG
 
@@ -2041,9 +2050,9 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// the honest "nothing was timed" answer `LastCallTiming()`'s own header comment documents.
 	g_last_call_timing = GpuCallTiming{};
 	g_last_call_per_dispatch_ms.clear();
-	g_last_call_recorded_dispatch_count = 0;
-	g_last_call_recorded_barrier_count = 0;
-	g_last_call_timestamp_query_count = 0;
+	g_last_call_recorded_dispatch_count.store(0, std::memory_order_relaxed);
+	g_last_call_recorded_barrier_count.store(0, std::memory_order_relaxed);
+	g_last_call_timestamp_query_count.store(0, std::memory_order_relaxed);
 	// T-2052 (Claude/Poirot/36b9327-gpu-serial-port-reconfirmation-review.md,
 	// M1, correcting T-2049's own N1): CPU parity, corrected a SECOND time.
 	// T-2049's own comment here claimed "All eight [guards] now run here" --
@@ -3468,9 +3477,9 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		const auto t_record_end = std::chrono::steady_clock::now();
 		g_last_call_timing.record_ms =
 		    std::chrono::duration<double, std::milli>(t_record_end - t_record_start).count();
-		g_last_call_recorded_dispatch_count = record_counts.dispatches;
-		g_last_call_recorded_barrier_count = record_counts.barriers;
-		g_last_call_timestamp_query_count = record_counts.queries;
+		g_last_call_recorded_dispatch_count.store(record_counts.dispatches, std::memory_order_relaxed);
+		g_last_call_recorded_barrier_count.store(record_counts.barriers, std::memory_order_relaxed);
+		g_last_call_timestamp_query_count.store(record_counts.queries, std::memory_order_relaxed);
 
 		// T-2101: `submit_wait_ms` is CPU time from submission to the fence signaling complete --
 		// submission overhead PLUS actual GPU execution PLUS driver/OS scheduling, NOT a GPU-only
@@ -3611,7 +3620,10 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
     // (T-2577 round 2, D-SLM6278): mirrors `RunLayerLoopGpuSubmit`'s own trailing
     // `model_generation` -- threaded into this call's own `PrepareGpuLayerLoopChunkOpenState`
     // call, below.
-    uint64_t model_generation, bool model_has_qk_norm) {
+    uint64_t model_generation, bool model_has_qk_norm,
+    // GPU per-token overhead plan rev 3.1 §3.1 (S1): the timing mode the public chunk call read
+    // once, at its entry, so every sub-chunk list of one call records in the same mode.
+    GpuTimingMode timing_mode) {
 	if (out_inflight) *out_inflight = nullptr;
 	// T-2184 remedy S3 (Brunel fix round 1, D-SLM3662): this primitive's own catch clauses call
 	// the same file-scope `InvalidateResidencyCachesOnThrow()` `RunLayerLoopGpuSubmit`'s catch
@@ -3632,10 +3644,9 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 	Microsoft::WRL::ComPtr<ID3D12Resource> chunk_embed_upload;
 	std::vector<size_t> kv_row_offsets;
 	uint32_t dispatch_count_this_call = 0;
-	// GPU per-token overhead plan rev 3.1 §3.1 (S1): this submission's timing mode, read once, at
-	// entry -- for the chunk path, once per (sub-)chunk list, so bracket mode writes one bracket
-	// pair per list -- and what its list records, counted as it is recorded.
-	const GpuTimingMode timing_mode = GetGpuTimingMode();
+	// GPU per-token overhead plan rev 3.1 §3.1 (S1): what this (sub-)chunk list records, counted as
+	// it is recorded; `timing_mode` is the public call's, read once at its entry (bracket mode
+	// still writes one bracket pair per list).
 	GpuRecordCounts record_counts;
 	GpuLayerLoopChunkOpenState state;
 	const auto t_record_start = std::chrono::steady_clock::now();
@@ -3918,9 +3929,9 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		const auto t_record_end = std::chrono::steady_clock::now();
 		g_last_call_timing.record_ms =
 		    std::chrono::duration<double, std::milli>(t_record_end - t_record_start).count();
-		g_last_call_recorded_dispatch_count = record_counts.dispatches;
-		g_last_call_recorded_barrier_count = record_counts.barriers;
-		g_last_call_timestamp_query_count = record_counts.queries;
+		g_last_call_recorded_dispatch_count.store(record_counts.dispatches, std::memory_order_relaxed);
+		g_last_call_recorded_barrier_count.store(record_counts.barriers, std::memory_order_relaxed);
+		g_last_call_timestamp_query_count.store(record_counts.queries, std::memory_order_relaxed);
 		ID3D12CommandList* lists[] = {dev.list.Get()};
 		dev.queue->ExecuteCommandLists(1, lists);
 		// `ExecuteCommandLists` is only reachable once `Close()` has succeeded (the statement
@@ -4129,6 +4140,9 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 		return superslm::SslmForwardStatus::Ok;
 	}
 	const size_t embed_block_bytes = static_cast<size_t>(SeqScaleOff(static_cast<uint32_t>(hidden_size))) + 16u;
+	// GPU per-token overhead plan rev 3.1 §3.1 (S1): read once per public chunk call, so one call
+	// never mixes modes across its sub-chunk lists.
+	const GpuTimingMode timing_mode = GetGpuTimingMode();
 	uint32_t submitted = 0;
 	while (submitted < chunk_len) {
 		const uint32_t remaining = chunk_len - submitted;
@@ -4143,7 +4157,7 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 		    external_kv_resident, io_external_kv_needs_resume_barrier, external_weights_resident,
 		    external_rope_cos_resident, external_rope_sin_resident, external_rope_has,
 		    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &inflight, q_width,
-		    model_generation, model_has_qk_norm);
+		    model_generation, model_has_qk_norm, timing_mode);
 		if (submit_status != superslm::SslmForwardStatus::Ok) {
 			return submit_status;
 		}
@@ -4579,14 +4593,22 @@ void SetGpuTimingMode(GpuTimingMode mode) { GpuTimingModeAtomic().store(static_c
 
 GpuTimingMode GetGpuTimingMode() { return static_cast<GpuTimingMode>(GpuTimingModeAtomic().load()); }
 
-uint32_t LastCallRecordedDispatchCount() { return g_last_call_recorded_dispatch_count; }
+uint32_t LastCallRecordedDispatchCount() {
+	return g_last_call_recorded_dispatch_count.load(std::memory_order_relaxed);
+}
 
-uint32_t LastCallRecordedBarrierCount() { return g_last_call_recorded_barrier_count; }
+uint32_t LastCallRecordedBarrierCount() {
+	return g_last_call_recorded_barrier_count.load(std::memory_order_relaxed);
+}
 
-uint32_t LastCallTimestampQueryCount() { return g_last_call_timestamp_query_count; }
+uint32_t LastCallTimestampQueryCount() {
+	return g_last_call_timestamp_query_count.load(std::memory_order_relaxed);
+}
 
 #if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
-void SetGpuRecordLogSink(std::vector<std::string>* sink) { g_gpu_record_log_sink = sink; }
+void SetGpuRecordLogSink(std::vector<std::string>* sink) {
+	g_gpu_record_log_sink.store(sink, std::memory_order_relaxed);
+}
 #endif
 
 const int8_t* KeyRowGpu(const uint8_t* workspace, uint32_t layer, int64_t context_cap,
