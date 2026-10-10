@@ -690,7 +690,13 @@ bool ApplyBiasReconcileRowGpuP(uint t, RWByteAddressBuffer scratch, uint wide_ba
         }
     }
     GroupMemoryBarrierWithGroupSync();
-    if (gBiasAnyOutOfDomain != 0)
+    const bool any_out_of_domain = gBiasAnyOutOfDomain != 0;
+    // Write-after-read guard: kv_proj_site.hlsl calls this twice back to back (K then V bias),
+    // and the second call's `if (t == 0) gBiasAnyOutOfDomain = 0` can land before a lagging
+    // wave of the first call has read the flag. Group-uniform: the barriers above are at this
+    // same function scope. Changes no value.
+    GroupMemoryBarrierWithGroupSync();
+    if (any_out_of_domain)
     {
         status_tag = kTagBiasReconcileProductOutOfDomain;
         return false;
@@ -749,6 +755,13 @@ bool PreflightRequantChainFullGpuP(uint t, RWByteAddressBuffer scratch, uint wid
             GroupMemoryBarrierWithGroupSync();
         }
         uint64_t d = gFunnelMax[0];
+        // Write-after-read guard: every caller follows this preflight with another
+        // gFunnelMax writer in the same dispatch (a second preflight, then
+        // RequantChainCheckedFullGpuP -- attn_residual/mlp_residual), whose first act is
+        // `gFunnelMax[t] = local`. Without this barrier thread 0 can overwrite slot 0 before a
+        // lagging wave has broadcast-read it. Group-uniform: the tree barriers above already
+        // sit in this same `if (!rejected)` block. Changes no value.
+        GroupMemoryBarrierWithGroupSync();
         if (d < 1ULL) d = 1ULL;
         d_prime = (d > 0x7FFFFFFFFFFFFFFFULL) ? 0x7FFFFFFFFFFFFFFFLL : (int64_t)d;
         if (d_prime > ((int64_t)1 << 31))

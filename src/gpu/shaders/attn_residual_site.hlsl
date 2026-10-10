@@ -70,7 +70,14 @@ bool BuildResidualCandidateGpu(uint t, int hidden_size, uint branch_codes_off, u
         }
     }
     GroupMemoryBarrierWithGroupSync();
-    status_tag = gResidualMagOutOfDomain != 0 ? kTagResidualReconciliationMagnitudeOutOfDomain : kTagOk;
+    const bool magnitude_out_of_domain = gResidualMagOutOfDomain != 0;
+    // Write-after-read guard: main() calls this function a second time (the other candidate)
+    // when the first is rejected, and that call's `if (t == 0) gResidualMagOutOfDomain = 0` can land
+    // before a lagging wave has read this call's flag -- which would then disagree with the
+    // rest of the group on `candidate_ok` and diverge around the preflight's barriers.
+    // Group-uniform: the barriers above are at this same function scope. Changes no value.
+    GroupMemoryBarrierWithGroupSync();
+    status_tag = magnitude_out_of_domain ? kTagResidualReconciliationMagnitudeOutOfDomain : kTagOk;
     return status_tag == kTagOk;
 }
 
