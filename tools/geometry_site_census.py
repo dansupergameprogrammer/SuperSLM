@@ -211,7 +211,11 @@ def _qow_hit(line: str) -> bool:
     return any(tok in line for tok in _QOW_TOKENS) or bool(_OUT_CHANNELS_RE.search(line))
 
 
-_SOURCE_GLOBS = (".cpp", ".h", ".hlsl", ".py")
+# GPU per-token overhead plan rev 3.1 §3.2: `.hlsli` added -- the site bodies GS-22, GS-30 and GS-31
+# mark moved out of their `.hlsl` files into `src/gpu/shaders/fused_site_bodies.hlsli`, and a sweep
+# that skipped `.hlsli` would see neither their markers nor the code the markers excuse. Run against
+# the pre-move tree with `.hlsli` added, the census was unchanged (PASS, 0 unmarked hits).
+_SOURCE_GLOBS = (".cpp", ".h", ".hlsl", ".hlsli", ".py")
 # Directories this census does not sweep -- generated/vendored/build output, never
 # hand-authored geometry logic.
 #

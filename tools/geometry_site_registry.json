@@ -428,10 +428,10 @@
     {
       "id": "GS-22",
       "family": "QOW",
-      "file": "src/gpu/shaders/down_proj_site.hlsl",
-      "function": "main (out_channels)",
+      "file": "src/gpu/shaders/fused_site_bodies.hlsli",
+      "function": "DownTailSiteBody (out_channels)",
       "status": "confirmed-correct",
-      "note": "Same as GS-21 (requant-only sibling shader).",
+      "note": "GPU per-token overhead plan rev 3.1 §3.2: the marked code moved verbatim, marker included, from src/gpu/shaders/down_proj_site.hlsl's own main into DownTailSiteBody in fused_site_bodies.hlsli (the .hlsl is now a thin wrapper). Same as GS-21 (requant-only sibling shader).",
       "expected_marker_count": 1
     },
     {
@@ -449,8 +449,8 @@
       "file": "src/gpu/shaders/up_proj_gemm_site.hlsl",
       "function": "main (GemmCoalescedGpu in/out width)",
       "status": "confirmed-correct",
-      "note": "Same as GS-23 (up_proj's own sibling GEMM).",
-      "expected_marker_count": 1
+      "note": "GPU per-token overhead plan rev 3.1 §3.3: two occurrences -- this file's and its bracket-mode copy src/gpu/shaders/up_proj_gemm_wide_b_site.hlsl, identical text except the output base (WIDE_B instead of 0u), so the same confirmed-correct widths and the same marker. Same as GS-23 (up_proj's own sibling GEMM).",
+      "expected_marker_count": 2
     },
     {
       "id": "GS-25",
@@ -572,19 +572,19 @@
     {
       "id": "GS-30",
       "family": "QOW",
-      "file": "src/gpu/shaders/gate_proj_site.hlsl",
-      "function": "main (hidden_size local + out_channels local)",
+      "file": "src/gpu/shaders/fused_site_bodies.hlsli",
+      "function": "GateTailSiteBody (hidden_size local + out_channels local)",
       "status": "confirmed-correct",
-      "note": "T-2509 widening byproduct: surfaced by the multi-line-window sweep as a co-occurrence of `hidden_size` and `out_channels` within a few physical lines, but the two are independent, both-correct local variables sharing this shader's own generic prelude -- `hidden_size` feeds only SeqStickyOffGpu's per-sequence tag-offset lookup, `out_channels` correctly equals g_intermediate_size (gate_proj's own real, unaffected output width, matching GS-23's confirmed-correct gate_proj_gemm_site.hlsl). Not a defect; registered so the widened census's own coverage has a place to land instead of flagging it.",
+      "note": "GPU per-token overhead plan rev 3.1 §3.2: the marked code moved verbatim, marker included, from src/gpu/shaders/gate_proj_site.hlsl's own main into GateTailSiteBody in fused_site_bodies.hlsli (the .hlsl is now a thin wrapper). T-2509 widening byproduct: surfaced by the multi-line-window sweep as a co-occurrence of `hidden_size` and `out_channels` within a few physical lines, but the two are independent, both-correct local variables sharing this shader's own generic prelude -- `hidden_size` feeds only SeqStickyOffGpu's per-sequence tag-offset lookup, `out_channels` correctly equals g_intermediate_size (gate_proj's own real, unaffected output width, matching GS-23's confirmed-correct gate_proj_gemm_site.hlsl). Not a defect; registered so the widened census's own coverage has a place to land instead of flagging it.",
       "expected_marker_count": 1
     },
     {
       "id": "GS-31",
       "family": "QOW",
-      "file": "src/gpu/shaders/up_proj_site.hlsl",
-      "function": "main (hidden_size local + out_channels local)",
+      "file": "src/gpu/shaders/fused_site_bodies.hlsli",
+      "function": "UpTailSiteBody (hidden_size local + out_channels local)",
       "status": "confirmed-correct",
-      "note": "T-2509 widening byproduct: identical shape and reasoning to GS-30, this shader's own up_proj sibling (out_channels correctly equals g_intermediate_size, up_proj's own real, unaffected output width, matching GS-24's confirmed-correct up_proj_gemm_site.hlsl).",
+      "note": "GPU per-token overhead plan rev 3.1 §3.2: the marked code moved verbatim, marker included, from src/gpu/shaders/up_proj_site.hlsl's own main into UpTailSiteBody in fused_site_bodies.hlsli (the .hlsl is now a thin wrapper). T-2509 widening byproduct: identical shape and reasoning to GS-30, this shader's own up_proj sibling (out_channels correctly equals g_intermediate_size, up_proj's own real, unaffected output width, matching GS-24's confirmed-correct up_proj_gemm_site.hlsl).",
       "expected_marker_count": 1
     },
     {

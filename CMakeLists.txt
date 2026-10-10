@@ -601,6 +601,12 @@ if(Python3_Interpreter_FOUND)
 	add_test(NAME geometry_site_census
 		COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/geometry_site_census.py
 			--repo-root ${CMAKE_SOURCE_DIR})
+	# GPU per-token overhead plan rev 3.1 Sec7 cell 7.7: the fused site shaders' in-group barrier
+	# between consecutive body calls, as a source check (pure Python, no GPU), with its own
+	# mutant self-test. Also run by build.bat and the fused-site-barrier-check CI job.
+	add_test(NAME check_fused_site_barriers
+		COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ci/check_fused_site_barriers.py
+			--self-test)
 	add_test(NAME check_matmul_avx_isolation
 		COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ci/check_matmul_avx_isolation.py
 			--cmakelists ${CMAKE_SOURCE_DIR}/CMakeLists.txt

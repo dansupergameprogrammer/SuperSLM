@@ -6,6 +6,13 @@
 // this layer. Rebuilt to the design's own production dispatch geometry
 // (Sec5.4/Sec5.5): numthreads(256,1,1), the sumsq reduction via the SCHEME-1
 // groupshared tree, the wide row streamed through WorkScratch.
+//
+// GPU per-token overhead plan rev 3.1 §3.2: this file is now a thin wrapper. Its cbuffer and
+// bindings are unchanged; `main`'s body moved verbatim into `fused_site_bodies.hlsli` as
+// `MlpNormSiteBody`, so the per-site dispatch (entry point, numthreads, groups, root constants) is
+// v1.11.0's -- the compiled container is byte-identical to v1.11.0's -- and the fused shaders run
+// the identical body text. The body reads this file's cbuffer fields and bindings by name, which
+// is why they are declared before the include.
 #include "site_common2.hlsli"
 
 cbuffer RootConstants : register(b0)
@@ -28,48 +35,12 @@ RWByteAddressBuffer LayerScratch   : register(u1);
 RWByteAddressBuffer KvCache        : register(u2);
 RWByteAddressBuffer WorkScratch    : register(u3);
 
-static const int kNormFracBitsGpu2 = 16;
+#define SSLM_FUSED_BODY_MLP_NORM_SITE
+#include "fused_site_bodies.hlsli"
 
 [numthreads(256, 1, 1)]
 void main(uint3 gtid : SV_GroupThreadID)
 {
     uint t = gtid.x;
-    int hidden_size = (int)g_hidden_size;
-    uint sticky_off = SeqStickyOffGpu(hidden_size);
-    int64_t sticky = SeqState.Load<int64_t>(sticky_off);
-    if (sticky != kTagOk) return;
-
-    uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
-    uint attn_stream_off = ScratchLayout.Load<uint>(9 * 4);
-
-    int64_t sumsq = RmsSumSqParallelGpu(t, LayerScratch, attn_stream_off, hidden_size);
-    int64_t root = ISqrtGpu(FloorDivI64Gpu(sumsq << (2 * kNormFracBitsGpu2), (int64_t)hidden_size));
-    root = (root > 1) ? root : 1;
-
-    uint off_gain = layer_base + Layout.Load<uint>(35 * 4);
-    for (int i = (int)t; i < hidden_size; i += 256)
-    {
-        int64_t hv = (int64_t)(int)LayerScratch.Load<int>(attn_stream_off + (uint)i * 4u);
-        int g = (int)LayerWeights.Load<int>(off_gain + (uint)i * 4u);
-        int64_t wv = FloorDivI64Gpu(hv << (2 * kNormFracBitsGpu2), root) * (int64_t)g;
-        WorkScratch.Store<int64_t>(0u + (uint)i * 8u, wv);
-    }
-    DeviceMemoryBarrierWithGroupSync();
-
-    uint off_site = layer_base + Layout.Load<uint>(36 * 4);
-    int64_t site_m = LayerWeights.Load<int64_t>(off_site + 0);
-    int64_t site_e = LayerWeights.Load<int64_t>(off_site + 8);
-    int64_t incoming_m[kMaxIncoming], incoming_e[kMaxIncoming];
-    [unroll] for (int z = 0; z < kMaxIncoming; ++z) { incoming_m[z] = 0; incoming_e[z] = 0; }
-
-    uint normed_off = ScratchLayout.Load<uint>(0 * 4);
-    uint normed_scale_off = ScratchLayout.Load<uint>(1 * 4);
-    int64_t status_tag;
-    RequantChainCheckedFullGpuP(t, WorkScratch, 0u, hidden_size, incoming_m, incoming_e, 0, site_m, site_e,
-                                 LayerScratch, normed_off, normed_scale_off, status_tag);
-    if (status_tag != kTagOk)
-    {
-        if (t == 0) SeqState.Store<int64_t>(sticky_off, status_tag);
-        return;
-    }
+    MlpNormSiteBody(t);
 }
