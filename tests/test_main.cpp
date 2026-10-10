@@ -12124,14 +12124,15 @@ static void TestSoftmaxRowQ15GuardsZeroWidthAgainstNullScoresWithoutCrashing() {
 	          "reading scores or writing out_probs");
 }
 
-// T-1324 (BLOCKING; D-SLM409; Poirot 72b0c7f-s3.3-rope-site-and-c32-softmax-
-// confirmation-2026-07-28.md, Significant 4): `m_usable` (src/intmath.cpp:566)
-// admits any M representable in int64_t and >= 1 -- it does not bound M against
-// `kSoftmaxRowMaxSafeExponent` (2**47), the ceiling intmath.h:521-528's own
-// contract attributes the `exps[k] << kProbFracBits` shift's safety to. Plan
-// Sec14.1 owes exactly this bound, "on `e[k] << PROB_FRAC_BITS`", before the
-// kernel greens; the kernel has greened and the bound is neither derived nor
-// enforced.
+// T-1324 (D-SLM409; Poirot 72b0c7f-s3.3-rope-site-and-c32-softmax-
+// confirmation-2026-07-28.md, Significant 4; closed at 703dca6, D-SLM412): `m_usable`
+// in SoftmaxRowQ15 (src/intmath.cpp) used to admit any M representable in int64_t
+// and >= 1 -- it did not bound M against `kSoftmaxRowMaxSafeExponent` (2**47), the
+// ceiling the header's own contract (intmath.h) attributes the
+// `exps[k] << kProbFracBits` shift's safety to, the bound plan Sec14.1 owes "on
+// `e[k] << PROB_FRAC_BITS`". The kernel now enforces it as `m_usable`'s third
+// conjunct, reusing the width gate's own named ceiling; this cell is the regression
+// guard that keeps it there.
 //
 // A width-gate rejection already exists for this M (CheckSoftmaxRowWidthDomain,
 // checked_chain_funnel.cpp:409) -- this cell reaches the kernel the way the
@@ -30019,8 +30020,8 @@ int main(int argc, char** argv) {
 	// confirmation-2026-07-31.md Significant 1, closed).
 	TestSoftmaxRowQ15GuardsZeroWidthAgainstNullScoresWithoutCrashing();
 
-	// T-1324 (BLOCKING; D-SLM409) -- Claude/Curie/72b0c7f-s3.3-rope-site-and-
-	// c32-softmax-confirmation-test-design-2026-07-28.md.
+	// T-1324 (D-SLM409; closed at 703dca6, D-SLM412) -- Claude/Curie/72b0c7f-s3.3-
+	// rope-site-and-c32-softmax-confirmation-test-design-2026-07-28.md.
 	TestSoftmaxRowQ15MustNotReportWellFormedWhenShiftedMaxElementExceedsTheSafeShiftCeiling();
 
 	// S3.3 -- the RoPE application site (D-SLM376, D-SLM383, D-SLM384,
