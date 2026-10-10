@@ -14,7 +14,17 @@
 // and the half-up nudge is `2*rem >= Dn` (2*rem < 2^32). This is an INDEPENDENT oracle,
 // not the runtime construction.
 //
-// Build: build_cert.bat (MSVC).  Run: out\cert_intmath.exe
+// C19 also reports, over the same sweep, the D-SLM729 saturation-cap figures: the
+// requant magnitude round_half_up(dn * r * 127 / 2^62) at the same-row ceiling clamps
+// past 127 only if dn*r exceeds 2^62 by 2^61/127 or more. dn*r < 2^63 for every dn in
+// the domain (r <= 2^32), so the excess is exact in int64, and so is 127*excess
+// (|excess| < dn < 2^31) -- the reported max deviation 127*excess/2^62 is exact
+// in double (127*excess < 2^53). MSVC S128 reference (D-SLM729): 0 clamps, max
+// deviation 2.9568589354767028e-08.
+//
+// Build: build_cert.bat (MSVC), or on gcc/clang (the native __int128 path) the
+// EXCLUDE_FROM_ALL CMake target: cmake --build <dir> --target cert_intmath (T-1694).
+// Run: out\cert_intmath.exe, or <dir>/cert_intmath.
 #include "superslm/intmath.h"
 
 #include <cstdint>
@@ -40,9 +50,17 @@ int main() {
 	            static_cast<long long>(kHi - kLo));
 	int64_t c19_mismatches = 0;
 	int64_t first_bad_dn = -1, first_got = 0, first_want = 0;
+	int64_t clamp_events = 0, max_excess = INT64_MIN, max_excess_dn = -1;
+	constexpr int64_t kNum = int64_t{1} << 62;
 	for (int64_t dn = kLo; dn < kHi; ++dn) {
 		int64_t got = DynamicScaleReciprocal(dn);
 		int64_t want = ReferenceReciprocal(dn);
+		const int64_t excess = dn * got - kNum;  // exact: dn*got < 2^63 (see header)
+		if (excess > max_excess) {
+			max_excess = excess;
+			max_excess_dn = dn;
+		}
+		if (127 * excess >= (kNum >> 1)) ++clamp_events;
 		if (got != want) {
 			if (c19_mismatches == 0) {
 				first_bad_dn = dn;
@@ -60,6 +78,12 @@ int main() {
 		            static_cast<long long>(c19_mismatches), static_cast<long long>(first_bad_dn),
 		            static_cast<long long>(first_got), static_cast<long long>(first_want));
 	}
+
+	std::printf("C19 saturation cap (D-SLM729): %lld clamp events; max deviation from 127.0 = "
+	            "%.17g at Dn=%lld (MSVC S128 reference: 0, 2.9568589354767028e-08).\n",
+	            static_cast<long long>(clamp_events),
+	            static_cast<double>(127 * max_excess) / static_cast<double>(kNum),
+	            static_cast<long long>(max_excess_dn));
 
 	// --- C21: exhaustive over D' in [1, 2^31] -----------------------------------
 	const int64_t kDMax = int64_t{1} << 31;  // 2^31 inclusive

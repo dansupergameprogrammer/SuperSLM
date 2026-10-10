@@ -143,6 +143,21 @@ else()
 	target_compile_options(sha256_portable_forced_tests PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 add_test(NAME sha256_portable_forced_tests COMMAND sha256_portable_forced_tests)
+
+# T-1694 (D-SLM733): the S2.1 exhaustive certifier (tests/cert_intmath.cpp) on gcc/clang's
+# native `__int128` path -- build_cert.bat builds it with MSVC's `cl` only, so the non-MSVC
+# branch of src/intmath.cpp had never been certified over its whole domain. Same three
+# sources as build_cert.bat, and the same pinned /O2 (here -O2): the sweep is ~3.2e9 calls,
+# impractical unoptimized whatever CMAKE_BUILD_TYPE is. EXCLUDE_FROM_ALL and no add_test: a
+# once-per-device-tier proof run, never part of the default build or ctest. Build and run:
+#   cmake --build <dir> --target cert_intmath && <dir>/cert_intmath
+add_executable(cert_intmath EXCLUDE_FROM_ALL tests/cert_intmath.cpp src/intmath.cpp src/matmul.cpp)
+target_include_directories(cert_intmath PRIVATE include)
+if(MSVC)
+	target_compile_options(cert_intmath PRIVATE /W4 /fp:precise /O2)
+else()
+	target_compile_options(cert_intmath PRIVATE -Wall -Wextra -ffp-contract=off -O2)
+endif()
 endif()
 
 # The §13 item 7 independent converter verifier (S-HARDEN-3, F13): loads a
