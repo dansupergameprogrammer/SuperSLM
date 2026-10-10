@@ -1257,6 +1257,23 @@ def test_worktrees_subtree_under_a_scratch_repo_root_is_not_swept(tmp_path):
     assert "excluded.h" not in names, ".worktrees must be excluded from the sweep"
 
 
+def test_scratch_and_any_hidden_subtree_under_a_scratch_repo_root_is_not_swept(tmp_path):
+    # T-2946 (D-SLM7634): an untracked `.scratch/<run>/` copy of src/ doubled every marker and
+    # turned 9 cells red. Planted under a scratch root (not the real checkout) so the cell's
+    # verdict does not depend on what this checkout happens to carry. `.venv` stands in for the
+    # rest of the class -- any hidden directory, not only the one name that recurred.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "kept.h").write_text("// kept\n", encoding="utf-8")
+    # The marker is assembled, not spelled, so this file does not itself carry one.
+    copied_marker = "// " + "SSLM-GEOMETRY-SITE" + ": GS-16 -- a copied marker\n"
+    for i, hidden in enumerate((".scratch/t2736-r2/src", ".venv/lib", "src/.cache")):
+        d = tmp_path / hidden
+        d.mkdir(parents=True)
+        (d / f"excluded_{i}.h").write_text(copied_marker, encoding="utf-8")
+    names = {os.path.basename(p) for p in census._iter_source_files(str(tmp_path))}
+    assert names == {"kept.h"}, f"a dot-prefixed directory was swept: {sorted(names)}"
+
+
 # --- S2 red-check: reverting `_part2_excise_excluded_text` to skip-whole-line-on-match (the
 # TEXT-keyed exclusion mechanism the reviewer's own mutation-proof reverted to -- `Claude/Brunel/
 # t2475-census-exclusion-class-2026-08-31.md` Sec10 records what was actually run; NOT a return

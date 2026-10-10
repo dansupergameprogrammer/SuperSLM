@@ -245,8 +245,21 @@ _SKIP_DIR_NAMES = {".git", "out", "build", "__pycache__", "node_modules", ".work
 _SKIP_DIR_PREFIXES = ("obj", "bin_")
 
 
+# T-2946 (D-SLM7634): an untracked `.scratch/` tree in a checkout (a release session's own
+# `.scratch/t2736-r2`, holding a full copy of src/ and include/) was swept like source, doubling
+# every marker it copied -- 9 cells red locally, green in CI, a verdict that depended on what
+# else happened to sit in the caller's checkout (the same shape as `.worktrees`, T-2518). Naming
+# `.scratch` alone would leave the next hidden scratch root (`.venv`, `.vs`, `.idea`, a tool's own
+# cache) to recur by hand, so the rule is structural: ANY dot-prefixed directory is skipped. The
+# only tracked dot-directory in this repository is `.github/`, which holds no file this census
+# reads (`git ls-files` confirms no `.cpp`/`.h`/`.hlsl`/`.py` under any dot-directory), so the
+# prefix can never exclude source -- `.git` and `.worktrees` stay named above for the record.
+_SKIP_DIR_HIDDEN_PREFIX = "."
+
+
 def _skip_dir(name: str) -> bool:
-    return name in _SKIP_DIR_NAMES or name.startswith(_SKIP_DIR_PREFIXES)
+    return (name in _SKIP_DIR_NAMES or name.startswith(_SKIP_DIR_PREFIXES)
+            or name.startswith(_SKIP_DIR_HIDDEN_PREFIX))
 
 # T-2432's own narrowing, stated rather than silently applied: the pattern-coverage half
 # (part 2) sweeps PRODUCTION source only -- src/, include/, and the shipped conversion
