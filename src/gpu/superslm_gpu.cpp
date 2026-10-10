@@ -25,6 +25,7 @@
 #include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable (T-2035 mlp_act_site upload)
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -683,6 +684,53 @@ GpuCallTiming g_last_call_timing;
 // `LastCallPerDispatchTimingsMs()` accessor (`gpu_port.h`) -- one GPU-measured millisecond figure
 // per dispatch this call issued, in dispatch order.
 std::vector<double> g_last_call_per_dispatch_ms;
+// GPU per-token overhead plan rev 3.1 §3.1 (S1): back the three record-count accessors
+// (`gpu_port.h`) -- what the most recent submission recorded into the last command list it
+// closed. Reset beside `g_last_call_timing` at every submission's entry (a guard-rejected call
+// reports 0), set when the list closes, beside `record_ms`.
+uint32_t g_last_call_recorded_dispatch_count = 0;
+uint32_t g_last_call_recorded_barrier_count = 0;
+uint32_t g_last_call_timestamp_query_count = 0;
+
+// GPU per-token overhead plan rev 3.1 §3.1 (S1): the process-wide timing mode, initialised once,
+// on first use, from `SSLM_GPU_PER_SITE_TIMING` through `ParseGpuTimingModeEnv` (the function-local
+// static makes that one read thread-safe). `SetGpuTimingMode` overrides it; each submission reads
+// it once (`GetGpuTimingMode`) and carries the value in its in-flight record.
+std::atomic<uint32_t>& GpuTimingModeAtomic() {
+	static std::atomic<uint32_t> mode{
+	    static_cast<uint32_t>(ParseGpuTimingModeEnv(std::getenv("SSLM_GPU_PER_SITE_TIMING")))};
+	return mode;
+}
+
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+// GPU per-token overhead plan rev 3.1 §3.1/§4.1: the record-side log seam (gpu_port.h). Every
+// write sits beside the real command it describes and never changes what is recorded; with no
+// sink installed each helper is a pointer test.
+std::vector<std::string>* g_gpu_record_log_sink = nullptr;
+
+void RecordLogQuery(uint32_t index) {
+	if (g_gpu_record_log_sink == nullptr) return;
+	g_gpu_record_log_sink->push_back("Q " + std::to_string(index));
+}
+void RecordLogDispatch(const std::string& pipeline_name, uint32_t groups, uint32_t count,
+                       const uint32_t* consts) {
+	if (g_gpu_record_log_sink == nullptr) return;
+	std::string line = "D " + pipeline_name + " g=" + std::to_string(groups) + " c=" + std::to_string(count) + ":";
+	for (uint32_t i = 0; i < count; ++i) {
+		if (i != 0) line += ",";
+		line += std::to_string(consts[i]);
+	}
+	g_gpu_record_log_sink->push_back(line);
+}
+void RecordLogBarrier() {
+	if (g_gpu_record_log_sink == nullptr) return;
+	g_gpu_record_log_sink->push_back("B");
+}
+void RecordLogResolve(uint32_t first, uint32_t count) {
+	if (g_gpu_record_log_sink == nullptr) return;
+	g_gpu_record_log_sink->push_back("R " + std::to_string(first) + "," + std::to_string(count));
+}
+#endif  // SUPERSLM_ENABLE_GPU_RECORD_LOG
 
 // T-2101 (throughput, D-SLM3301/D-SLM3294): the K/V workspace's own device residency, mirroring
 // ResidentWeights' shape exactly. Before this: `superslm_gpu.cpp`'s call site copied the WHOLE
@@ -1557,6 +1605,9 @@ struct GpuLayerLoopInFlight {
 	harness::Device* dev = nullptr;
 	uint64_t fence_val = 0;
 	uint32_t dispatch_count_this_call = 0;
+	// GPU per-token overhead plan rev 3.1 §3.1 (S1): the timing mode this submission read once
+	// and recorded in; Finish interprets the timestamps by it, never by the current mode.
+	GpuTimingMode timing_mode = GpuTimingMode::Bracket;
 	Microsoft::WRL::ComPtr<ID3D12Resource> seq_readback;
 	Microsoft::WRL::ComPtr<ID3D12Resource> kv_readback;
 	std::vector<size_t> kv_row_offsets;
@@ -1649,44 +1700,64 @@ uint32_t Stage1LanesForRank(uint32_t rank) {
 // reference so the timestamp-query boundary numbering stays contiguous across every token a
 // (sub-)chunk records, matching the pre-extraction single-call numbering exactly when only one
 // token is recorded (Rung 2's own refactor-safety cell, Sec5/Sec8, proves this).
+//
+// GPU per-token overhead plan rev 3.1 §3.1 (S1): `timing_mode` is the submission's own mode, read
+// once by the caller. In `PerSite` mode every dispatch is preceded by its timestamp query exactly
+// as before (the v1.11.0 stream, byte for byte); in `Bracket` mode the only query this function
+// writes is query 0, before the list's first dispatch (`dispatch_query_index == 0` on entry), and
+// it leaves `dispatch_query_index` at 1 so the caller's unchanged final-query/resolve lines write
+// query 1 after the last barrier and resolve 2. `counts` accumulates what was recorded, across
+// every token a (sub-)chunk list records.
+struct GpuRecordCounts {
+	uint32_t dispatches = 0;
+	uint32_t barriers = 0;
+	uint32_t queries = 0;
+};
+
 void RecordOneTokenFullDepthDispatchBody(
     harness::Device& dev, uint32_t start_layer, uint32_t layers_to_record, uint32_t H, uint32_t HD,
     uint32_t NH, uint32_t NQH, uint32_t I, uint32_t N, uint32_t context_cap_u32,
     uint32_t position_u32, uint32_t width_u32, const GpuScratchLayout& scratch_layout,
     uint64_t work_wide_a_off, uint64_t work_wide_b_off, uint64_t work_adapter_u_off,
     const GpuAdapterBridge* adapter_bridge, bool has_qk_norm,
-    uint32_t& dispatch_query_index) {
+    uint32_t& dispatch_query_index, GpuTimingMode timing_mode, GpuRecordCounts& counts) {
 	// T-2432 (Track A step 9): q_width = num_attention_heads * head_dim -- NQH is already
 	// correct by the time this function runs (Track A step 8 fixes its own derivation, at this
 	// function's own caller). Declared before the dispatch lambdas below so their `[&]` capture
 	// sees it.
 	const uint32_t Q_WIDTH = NQH * HD;
-	auto& attn_norm_pipe = harness::GetOrBuildComposedPipeline("attn_norm_site");
-	auto& q_proj_pipe = harness::GetOrBuildComposedPipeline("q_proj_site");
-	auto& kv_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("kv_proj_gemm_site");
-	auto& kv_proj_pipe = harness::GetOrBuildComposedPipeline("kv_proj_site");
-	harness::CachedPipeline* qk_norm_pipe =
-	    has_qk_norm ? &harness::GetOrBuildComposedPipeline("qk_norm_site") : nullptr;
-	auto& rope_pipe = harness::GetOrBuildComposedPipeline("rope_guard_site");
-	auto& rope_commit_pipe = harness::GetOrBuildComposedPipeline("rope_commit_site");
-	auto& attention_score_pipe = harness::GetOrBuildComposedPipeline("attention_score_site");
-	auto& softmax_pipe = harness::GetOrBuildComposedPipeline("softmax_site");
-	auto& context_accumulate_pipe = harness::GetOrBuildComposedPipeline("context_accumulate_site");
-	auto& ctx_fold_pipe = harness::GetOrBuildComposedPipeline("ctx_fold_site");
-	auto& o_proj_pipe = harness::GetOrBuildComposedPipeline("o_proj_site");
-	auto& attn_residual_pipe = harness::GetOrBuildComposedPipeline("attn_residual_site");
-	auto& mlp_norm_pipe = harness::GetOrBuildComposedPipeline("mlp_norm_site");
-	auto& gate_proj_pipe = harness::GetOrBuildComposedPipeline("gate_proj_site");
-	auto& up_proj_pipe = harness::GetOrBuildComposedPipeline("up_proj_site");
-	auto& mlp_act_pipe = harness::GetOrBuildComposedPipeline("mlp_act_site");
-	auto& down_proj_pipe = harness::GetOrBuildComposedPipeline("down_proj_site");
-	auto& mlp_residual_pipe = harness::GetOrBuildComposedPipeline("mlp_residual_site");
-	auto& commit_pipe = harness::GetOrBuildComposedPipeline("commit_site");
-	auto& q_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("q_proj_gemm_site");
-	auto& o_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("o_proj_gemm_site");
-	auto& gate_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("gate_proj_gemm_site");
-	auto& up_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("up_proj_gemm_site");
-	auto& down_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("down_proj_gemm_site");
+	// Every pipeline this body dispatches, fetched up front and carried with the name it was
+	// fetched by (the record log names each dispatch by it).
+	struct SitePipe {
+		const char* name;
+		harness::CachedPipeline* pipe;
+	};
+	auto site = [](const char* name) { return SitePipe{name, &harness::GetOrBuildComposedPipeline(name)}; };
+	const SitePipe attn_norm_pipe = site("attn_norm_site");
+	const SitePipe q_proj_pipe = site("q_proj_site");
+	const SitePipe kv_proj_gemm_pipe = site("kv_proj_gemm_site");
+	const SitePipe kv_proj_pipe = site("kv_proj_site");
+	const SitePipe qk_norm_pipe = has_qk_norm ? site("qk_norm_site") : SitePipe{nullptr, nullptr};
+	const SitePipe rope_pipe = site("rope_guard_site");
+	const SitePipe rope_commit_pipe = site("rope_commit_site");
+	const SitePipe attention_score_pipe = site("attention_score_site");
+	const SitePipe softmax_pipe = site("softmax_site");
+	const SitePipe context_accumulate_pipe = site("context_accumulate_site");
+	const SitePipe ctx_fold_pipe = site("ctx_fold_site");
+	const SitePipe o_proj_pipe = site("o_proj_site");
+	const SitePipe attn_residual_pipe = site("attn_residual_site");
+	const SitePipe mlp_norm_pipe = site("mlp_norm_site");
+	const SitePipe gate_proj_pipe = site("gate_proj_site");
+	const SitePipe up_proj_pipe = site("up_proj_site");
+	const SitePipe mlp_act_pipe = site("mlp_act_site");
+	const SitePipe down_proj_pipe = site("down_proj_site");
+	const SitePipe mlp_residual_pipe = site("mlp_residual_site");
+	const SitePipe commit_pipe = site("commit_site");
+	const SitePipe q_proj_gemm_pipe = site("q_proj_gemm_site");
+	const SitePipe o_proj_gemm_pipe = site("o_proj_gemm_site");
+	const SitePipe gate_proj_gemm_pipe = site("gate_proj_gemm_site");
+	const SitePipe up_proj_gemm_pipe = site("up_proj_gemm_site");
+	const SitePipe down_proj_gemm_pipe = site("down_proj_gemm_site");
 
 	D3D12_RESOURCE_BARRIER global_uav_barrier{};
 	global_uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -1698,12 +1769,31 @@ void RecordOneTokenFullDepthDispatchBody(
 		uint32_t wide_base;
 	};
 
-	auto bind_and_dispatch = [&](ID3D12PipelineState* pso, uint32_t layer_index, uint32_t num_groups = 1,
-	                              uint32_t lanes = 1) {
-		if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
-			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
+	// GPU per-token overhead plan rev 3.1 §3.1 (S1): the one place a dispatch's timestamp query is
+	// decided. PerSite: today's query before every dispatch, capped at the heap. Bracket: query 0
+	// before the list's first dispatch only.
+	auto emit_site_query = [&]() {
+		if (timing_mode == GpuTimingMode::PerSite) {
+			if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
+				dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
+				++counts.queries;
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+				RecordLogQuery(dispatch_query_index);
+#endif
+			}
+			++dispatch_query_index;
+		} else if (dispatch_query_index == 0) {
+			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+			++counts.queries;
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+			RecordLogQuery(0);
+#endif
+			dispatch_query_index = 1;
 		}
-		++dispatch_query_index;
+	};
+	auto bind_and_dispatch = [&](const SitePipe& pipe, uint32_t layer_index, uint32_t num_groups = 1,
+	                              uint32_t lanes = 1) {
+		emit_site_query();
 		// T-2432 (Track A step 9, GS-15/GS-17): Q_WIDTH appended as a 12th root constant --
 		// q_proj_gemm_site.hlsl and o_proj_gemm_site.hlsl each declare a 12th cbuffer field
 		// (g_q_width) to read it; every other shader driven through this lambda declares only
@@ -1713,16 +1803,21 @@ void RecordOneTokenFullDepthDispatchBody(
 		uint32_t consts[12] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
 		                        NQH,        width_u32, I,  N,  lanes,          Q_WIDTH};
 		dev.list->SetComputeRoot32BitConstants(0, 12, consts, 0);
-		dev.list->SetPipelineState(pso);
+		dev.list->SetPipelineState(pipe.pipe->pso.Get());
 		dev.list->Dispatch(num_groups, 1, 1);
+		++counts.dispatches;
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+		RecordLogDispatch(pipe.name, num_groups, 12, consts);
+#endif
 		dev.list->ResourceBarrier(1, &global_uav_barrier);
+		++counts.barriers;
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+		RecordLogBarrier();
+#endif
 	};
-	auto bind_and_dispatch_tail = [&](ID3D12PipelineState* pso, uint32_t layer_index,
+	auto bind_and_dispatch_tail = [&](const SitePipe& pipe, uint32_t layer_index,
 	                                   std::initializer_list<TailAdapterSlot> slots) {
-		if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
-			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
-		}
-		++dispatch_query_index;
+		emit_site_query();
 		// T-2432 (Track A step 9, GS-16): grown from 27 to 28 values -- index 27 (the NEW 28th
 		// value) carries Q_WIDTH for q_proj_site.hlsl's own bias/requant striding loop. Index 27
 		// was previously past this array's own end (27 values = indices 0-26); it does NOT
@@ -1764,9 +1859,17 @@ void RecordOneTokenFullDepthDispatchBody(
 		}
 		consts[27] = Q_WIDTH;
 		dev.list->SetComputeRoot32BitConstants(0, 28, consts, 0);
-		dev.list->SetPipelineState(pso);
+		dev.list->SetPipelineState(pipe.pipe->pso.Get());
 		dev.list->Dispatch(1, 1, 1);
+		++counts.dispatches;
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+		RecordLogDispatch(pipe.name, 1, 28, consts);
+#endif
 		dev.list->ResourceBarrier(1, &global_uav_barrier);
+		++counts.barriers;
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+		RecordLogBarrier();
+#endif
 	};
 
 	const uint32_t KV2 = 2u * NH * HD;
@@ -1794,13 +1897,13 @@ void RecordOneTokenFullDepthDispatchBody(
 
 	for (uint32_t i = 0; i < layers_to_record; ++i) {
 		const uint32_t l = start_layer + i;
-		bind_and_dispatch(attn_norm_pipe.pso.Get(), l);
-		bind_and_dispatch(q_proj_gemm_pipe.pso.Get(), l, q_proj_plan.groups, q_proj_plan.lanes);
-		bind_and_dispatch_tail(q_proj_pipe.pso.Get(), l,
+		bind_and_dispatch(attn_norm_pipe, l);
+		bind_and_dispatch(q_proj_gemm_pipe, l, q_proj_plan.groups, q_proj_plan.lanes);
+		bind_and_dispatch_tail(q_proj_pipe, l,
 		                        {{/*q=*/0, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(kv_proj_gemm_pipe.pso.Get(), l, kv_proj_plan.groups, kv_proj_plan.lanes);
+		bind_and_dispatch(kv_proj_gemm_pipe, l, kv_proj_plan.groups, kv_proj_plan.lanes);
 		bind_and_dispatch_tail(
-		    kv_proj_pipe.pso.Get(), l,
+		    kv_proj_pipe, l,
 		    {{/*k=*/5, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)},
 		     {/*v=*/6, scratch_layout.normed, static_cast<uint32_t>(work_wide_b_off)}});
 		// (design §3/§4/§6 Track B step 3): QK-norm's own dispatch -- strictly after K/V landing
@@ -1811,32 +1914,32 @@ void RecordOneTokenFullDepthDispatchBody(
 		// pipeline only when at least one layer carries QK norm, so legacy models issue no QK
 		// dispatch and retain their 24-dispatch budget contract. Per-layer presence flags still
 		// make a mixed model's individual non-QK layer a near-immediate no-op.
-		if (qk_norm_pipe) {
-			bind_and_dispatch(qk_norm_pipe->pso.Get(), l, /*num_groups=*/NQH + NH);
+		if (qk_norm_pipe.pipe) {
+			bind_and_dispatch(qk_norm_pipe, l, /*num_groups=*/NQH + NH);
 		}
-		bind_and_dispatch(rope_pipe.pso.Get(), l, rope_groups);
-		bind_and_dispatch(rope_commit_pipe.pso.Get(), l, rope_groups);
-		bind_and_dispatch(attention_score_pipe.pso.Get(), l, attn_score_groups);
-		bind_and_dispatch(softmax_pipe.pso.Get(), l);
-		bind_and_dispatch(context_accumulate_pipe.pso.Get(), l, ctx_accum_groups);
-		bind_and_dispatch(ctx_fold_pipe.pso.Get(), l);
-		bind_and_dispatch(o_proj_gemm_pipe.pso.Get(), l, o_proj_plan.groups, o_proj_plan.lanes);
-		bind_and_dispatch_tail(o_proj_pipe.pso.Get(), l,
+		bind_and_dispatch(rope_pipe, l, rope_groups);
+		bind_and_dispatch(rope_commit_pipe, l, rope_groups);
+		bind_and_dispatch(attention_score_pipe, l, attn_score_groups);
+		bind_and_dispatch(softmax_pipe, l);
+		bind_and_dispatch(context_accumulate_pipe, l, ctx_accum_groups);
+		bind_and_dispatch(ctx_fold_pipe, l);
+		bind_and_dispatch(o_proj_gemm_pipe, l, o_proj_plan.groups, o_proj_plan.lanes);
+		bind_and_dispatch_tail(o_proj_pipe, l,
 		                        {{/*o=*/1, scratch_layout.ctx_codes, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(attn_residual_pipe.pso.Get(), l);
-		bind_and_dispatch(mlp_norm_pipe.pso.Get(), l);
-		bind_and_dispatch(gate_proj_gemm_pipe.pso.Get(), l, gate_proj_plan.groups, gate_proj_plan.lanes);
-		bind_and_dispatch_tail(gate_proj_pipe.pso.Get(), l,
+		bind_and_dispatch(attn_residual_pipe, l);
+		bind_and_dispatch(mlp_norm_pipe, l);
+		bind_and_dispatch(gate_proj_gemm_pipe, l, gate_proj_plan.groups, gate_proj_plan.lanes);
+		bind_and_dispatch_tail(gate_proj_pipe, l,
 		                        {{/*gate=*/2, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(up_proj_gemm_pipe.pso.Get(), l, up_proj_plan.groups, up_proj_plan.lanes);
-		bind_and_dispatch_tail(up_proj_pipe.pso.Get(), l,
+		bind_and_dispatch(up_proj_gemm_pipe, l, up_proj_plan.groups, up_proj_plan.lanes);
+		bind_and_dispatch_tail(up_proj_pipe, l,
 		                        {{/*up=*/3, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(mlp_act_pipe.pso.Get(), l);
-		bind_and_dispatch(down_proj_gemm_pipe.pso.Get(), l, down_proj_plan.groups, down_proj_plan.lanes);
-		bind_and_dispatch_tail(down_proj_pipe.pso.Get(), l,
+		bind_and_dispatch(mlp_act_pipe, l);
+		bind_and_dispatch(down_proj_gemm_pipe, l, down_proj_plan.groups, down_proj_plan.lanes);
+		bind_and_dispatch_tail(down_proj_pipe, l,
 		                        {{/*down=*/4, scratch_layout.act_codes, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(mlp_residual_pipe.pso.Get(), l);
-		bind_and_dispatch(commit_pipe.pso.Get(), l);
+		bind_and_dispatch(mlp_residual_pipe, l);
+		bind_and_dispatch(commit_pipe, l);
 	}
 }
 
@@ -1938,6 +2041,9 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// the honest "nothing was timed" answer `LastCallTiming()`'s own header comment documents.
 	g_last_call_timing = GpuCallTiming{};
 	g_last_call_per_dispatch_ms.clear();
+	g_last_call_recorded_dispatch_count = 0;
+	g_last_call_recorded_barrier_count = 0;
+	g_last_call_timestamp_query_count = 0;
 	// T-2052 (Claude/Poirot/36b9327-gpu-serial-port-reconfirmation-review.md,
 	// M1, correcting T-2049's own N1): CPU parity, corrected a SECOND time.
 	// T-2049's own comment here claimed "All eight [guards] now run here" --
@@ -2998,6 +3104,11 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	size_t q_codes_readback_bytes = 0;
 	std::vector<size_t> kv_row_offsets;
 	uint32_t dispatch_count_this_call = 0;
+	// GPU per-token overhead plan rev 3.1 §3.1 (S1): this submission's timing mode, read once, at
+	// entry -- for the chunk path, once per (sub-)chunk list, so bracket mode writes one bracket
+	// pair per list -- and what its list records, counted as it is recorded.
+	const GpuTimingMode timing_mode = GetGpuTimingMode();
+	GpuRecordCounts record_counts;
 	GpuLayerLoopChunkOpenState state;
 	const auto t_record_start = std::chrono::steady_clock::now();
 	// T-2195 remedy S1, class sweep (D-SLM3702 arc; Claude/Poirot/
@@ -3080,7 +3191,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	                                     context_cap_u32, position_u32, width_u32, state.scratch_layout,
 	                                     state.work_wide_a_off, state.work_wide_b_off,
 	                                     state.work_adapter_u_off, adapter_bridge, has_qk_norm,
-	                                     dispatch_query_index);
+	                                     dispatch_query_index, timing_mode, record_counts);
 #if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
 	// T-2169 (Rung 2b): the SAME per-token-dispatch-body-invocation event
 	// SubmitChunkToFullDepthForG5Bridge's own identical increment counts (below), for the
@@ -3092,10 +3203,20 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	// this is boundary N for N dispatches, giving N per-dispatch deltas below. Resolved into a
 	// small readback buffer now, alongside the real readback work below, so the resolve itself
 	// costs one more small copy rather than a whole extra submit.
+	// GPU per-token overhead plan rev 3.1 §3.1 (S1): the same lines in both modes -- in bracket
+	// mode the body left `dispatch_query_index` at 1, so this is query 1 after the last barrier
+	// and a resolve of 2.
 	dispatch_count_this_call = std::min(dispatch_query_index, harness::Device::kMaxTimestampSlots - 1);
 	dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_count_this_call);
+	++record_counts.queries;
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	RecordLogQuery(dispatch_count_this_call);
+#endif
 	dev.list->ResolveQueryData(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0,
 	                            dispatch_count_this_call + 1, dev.timestamp_readback.Get(), 0);
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	RecordLogResolve(0, dispatch_count_this_call + 1);
+#endif
 
 	// --- Readback: SeqState (whole, small -- O(hidden_size)) + the K/V workspace's OWN newly
 	// written rows into `seq`/`workspace`. T-2101: not the whole 448 MiB workspace. Every dispatch
@@ -3347,6 +3468,9 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		const auto t_record_end = std::chrono::steady_clock::now();
 		g_last_call_timing.record_ms =
 		    std::chrono::duration<double, std::milli>(t_record_end - t_record_start).count();
+		g_last_call_recorded_dispatch_count = record_counts.dispatches;
+		g_last_call_recorded_barrier_count = record_counts.barriers;
+		g_last_call_timestamp_query_count = record_counts.queries;
 
 		// T-2101: `submit_wait_ms` is CPU time from submission to the fence signaling complete --
 		// submission overhead PLUS actual GPU execution PLUS driver/OS scheduling, NOT a GPU-only
@@ -3373,6 +3497,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		inflight->dev = &dev;
 		inflight->fence_val = dev.fence_val;
 		inflight->dispatch_count_this_call = dispatch_count_this_call;
+		inflight->timing_mode = timing_mode;
 		inflight->seq_readback = seq_readback;
 		inflight->kv_readback = kv_readback;
 		inflight->kv_row_offsets = kv_row_offsets;
@@ -3507,6 +3632,11 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 	Microsoft::WRL::ComPtr<ID3D12Resource> chunk_embed_upload;
 	std::vector<size_t> kv_row_offsets;
 	uint32_t dispatch_count_this_call = 0;
+	// GPU per-token overhead plan rev 3.1 §3.1 (S1): this submission's timing mode, read once, at
+	// entry -- for the chunk path, once per (sub-)chunk list, so bracket mode writes one bracket
+	// pair per list -- and what its list records, counted as it is recorded.
+	const GpuTimingMode timing_mode = GetGpuTimingMode();
+	GpuRecordCounts record_counts;
 	GpuLayerLoopChunkOpenState state;
 	const auto t_record_start = std::chrono::steady_clock::now();
 	// D-SLM3612 (2a): the chunk-open host mirror, read exactly ONCE, before any admitted
@@ -3614,7 +3744,7 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		                                     width_u32, state.scratch_layout,
 		                                     state.work_wide_a_off, state.work_wide_b_off,
 		                                     state.work_adapter_u_off, adapter_bridge, has_qk_norm,
-		                                     dispatch_query_index);
+		                                     dispatch_query_index, timing_mode, record_counts);
 		// T-2180/T-2183 (D-SLM3655/D-SLM3660): the tenth-failure-origin seam -- immediately after
 		// this token's own dispatches are recorded and before the loop advances (gpu_port.h's own
 		// header comment on ArmT2169ChunkRecordingFaultInjection carries the full account). Zero
@@ -3653,10 +3783,20 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 			}
 		}
 	}
+	// GPU per-token overhead plan rev 3.1 §3.1 (S1): the same lines in both modes -- in bracket
+	// mode the body left `dispatch_query_index` at 1, so this is query 1 after the last barrier
+	// and a resolve of 2.
 	dispatch_count_this_call = std::min(dispatch_query_index, harness::Device::kMaxTimestampSlots - 1);
 	dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_count_this_call);
+	++record_counts.queries;
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	RecordLogQuery(dispatch_count_this_call);
+#endif
 	dev.list->ResolveQueryData(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0,
 	                            dispatch_count_this_call + 1, dev.timestamp_readback.Get(), 0);
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	RecordLogResolve(0, dispatch_count_this_call + 1);
+#endif
 
 	// --- Readback: SeqState (whole, small) + every K/V row every admitted token's own
 	// dispatches wrote across the WHOLE chunk (D-SLM3631's own generalized enumeration,
@@ -3778,6 +3918,9 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		const auto t_record_end = std::chrono::steady_clock::now();
 		g_last_call_timing.record_ms =
 		    std::chrono::duration<double, std::milli>(t_record_end - t_record_start).count();
+		g_last_call_recorded_dispatch_count = record_counts.dispatches;
+		g_last_call_recorded_barrier_count = record_counts.barriers;
+		g_last_call_timestamp_query_count = record_counts.queries;
 		ID3D12CommandList* lists[] = {dev.list.Get()};
 		dev.queue->ExecuteCommandLists(1, lists);
 		// `ExecuteCommandLists` is only reachable once `Close()` has succeeded (the statement
@@ -3801,6 +3944,7 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		inflight->dev = &dev;
 		inflight->fence_val = dev.fence_val;
 		inflight->dispatch_count_this_call = dispatch_count_this_call;
+		inflight->timing_mode = timing_mode;
 		inflight->seq_readback = seq_readback;
 		inflight->kv_readback = kv_readback;
 		inflight->kv_row_offsets = kv_row_offsets;
@@ -4141,10 +4285,14 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 			const double freq = static_cast<double>(dev.timestamp_frequency);
 			g_last_call_timing.gpu_busy_ms =
 			    static_cast<double>(ts.back() - ts.front()) / freq * 1000.0;
-			g_last_call_per_dispatch_ms.resize(owned->dispatch_count_this_call);
-			for (uint32_t d = 0; d < owned->dispatch_count_this_call; ++d) {
-				g_last_call_per_dispatch_ms[d] =
-				    static_cast<double>(ts[d + 1] - ts[d]) / freq * 1000.0;
+			// GPU per-token overhead plan rev 3.1 §3.1 (S1): a bracket-mode submission's two
+			// timestamps are only the bracket, so its per-dispatch vector stays empty.
+			if (owned->timing_mode == GpuTimingMode::PerSite) {
+				g_last_call_per_dispatch_ms.resize(owned->dispatch_count_this_call);
+				for (uint32_t d = 0; d < owned->dispatch_count_this_call; ++d) {
+					g_last_call_per_dispatch_ms[d] =
+					    static_cast<double>(ts[d + 1] - ts[d]) / freq * 1000.0;
+				}
 			}
 		}
 	}
@@ -4421,6 +4569,25 @@ GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t
 GpuCallTiming LastCallTiming() { return g_last_call_timing; }
 
 std::vector<double> LastCallPerDispatchTimingsMs() { return g_last_call_per_dispatch_ms; }
+
+GpuTimingMode ParseGpuTimingModeEnv(const char* value) {
+	return value != nullptr && value[0] == '1' && value[1] == '\0' ? GpuTimingMode::PerSite
+	                                                               : GpuTimingMode::Bracket;
+}
+
+void SetGpuTimingMode(GpuTimingMode mode) { GpuTimingModeAtomic().store(static_cast<uint32_t>(mode)); }
+
+GpuTimingMode GetGpuTimingMode() { return static_cast<GpuTimingMode>(GpuTimingModeAtomic().load()); }
+
+uint32_t LastCallRecordedDispatchCount() { return g_last_call_recorded_dispatch_count; }
+
+uint32_t LastCallRecordedBarrierCount() { return g_last_call_recorded_barrier_count; }
+
+uint32_t LastCallTimestampQueryCount() { return g_last_call_timestamp_query_count; }
+
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+void SetGpuRecordLogSink(std::vector<std::string>* sink) { g_gpu_record_log_sink = sink; }
+#endif
 
 const int8_t* KeyRowGpu(const uint8_t* workspace, uint32_t layer, int64_t context_cap,
                          size_t num_kv_heads, size_t head_dim, size_t kv_head, int64_t position) {

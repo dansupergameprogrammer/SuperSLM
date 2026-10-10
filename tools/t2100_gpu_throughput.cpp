@@ -27,7 +27,12 @@
 // themselves -- D-SLM3314/D-SLM3315's own multi-group fix already moved that floor once.
 //
 // Throwaway harness, same precedent as tools/t2039_c5_harness.cpp.
-// Usage: t2100_gpu_throughput <model.sslm> [steps] [token_id]
+// Usage: t2100_gpu_throughput <model.sslm> [steps] [token_id] [--bracket]
+//
+// GPU per-token overhead plan rev 3.1 §3.1 (S1): the GPU side runs in per-site timing mode,
+// selected explicitly, so the per-site table below is measured; `--bracket` times the GPU side
+// in bracket mode instead (the default mode, one timestamp pair per call) and prints no per-site
+// table, since bracket mode records no per-dispatch timestamps.
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -58,13 +63,25 @@ double SecondsSince(const std::chrono::steady_clock::time_point& t0) {
 }  // namespace
 
 int main(int argc, char** argv) {
-	if (argc < 2) {
-		std::fprintf(stderr, "usage: %s <model.sslm> [steps] [token_id]\n", argv[0]);
+	std::vector<const char*> positional;
+	bool bracket = false;
+	for (int a = 1; a < argc; ++a) {
+		if (std::strcmp(argv[a], "--bracket") == 0) {
+			bracket = true;
+		} else {
+			positional.push_back(argv[a]);
+		}
+	}
+	if (positional.empty()) {
+		std::fprintf(stderr, "usage: %s <model.sslm> [steps] [token_id] [--bracket]\n", argv[0]);
 		return 2;
 	}
-	const std::string model_path = argv[1];
-	const int steps = argc >= 3 ? std::atoi(argv[2]) : 16;
-	const int32_t token_id = argc >= 4 ? std::atoi(argv[3]) : 0;
+	const std::string model_path = positional[0];
+	const int steps = positional.size() >= 2 ? std::atoi(positional[1]) : 16;
+	const int32_t token_id = positional.size() >= 3 ? std::atoi(positional[2]) : 0;
+	const bool per_site = !bracket;
+	superslm_gpu::SetGpuTimingMode(per_site ? superslm_gpu::GpuTimingMode::PerSite
+	                                        : superslm_gpu::GpuTimingMode::Bracket);
 	if (steps < 1) {
 		std::fprintf(stderr, "steps must be >= 1\n");
 		return 2;
@@ -139,7 +156,8 @@ int main(int argc, char** argv) {
 	                        num_kv_heads * head_dim * 2;
 	std::printf("workspace (KV cache) bytes = %zu (%.2f MiB)\n", kv_bytes,
 	            kv_bytes / (1024.0 * 1024.0));
-	std::printf("timing %d decode steps per side (1 warmup step each, discarded)\n\n", steps);
+	std::printf("timing %d decode steps per side (1 warmup step each, discarded); GPU timing mode: %s\n\n",
+	            steps, per_site ? "per-site" : "bracket (--bracket; no per-site table)");
 
 	// Each side runs its own persistent workspace so context_length advances across steps,
 	// exactly as a real decode loop does.
@@ -178,16 +196,33 @@ int main(int argc, char** argv) {
 	// constant (`superslm_gpu::kDispatchesPerLayer`, gpu_port.h) instead of repeating the
 	// number, so this table's own size and the real per-layer count cannot desync silently
 	// again. Summed across every timed GPU step below.
-	constexpr int kSitesPerLayer = static_cast<int>(superslm_gpu::kDispatchesPerLayer);
-	const char* const kSiteNames[kSitesPerLayer] = {
+	//
+	// GPU per-token overhead plan rev 3.1 §3.1 (S1): the table is the model's own -- 25 names
+	// (qk_norm between kv_proj and rope_guard) when any layer carries QK norm, the legacy 24
+	// otherwise; the 25-name table on a legacy model attributed every site after kv_proj to its
+	// neighbour. Its size is `DispatchesPerLayer(has_qk_norm)`, which equals the sites a layer
+	// records in per-site mode, the only mode this table is built in; each call's recorded count
+	// is checked against it from `LastCallRecordedDispatchCount()`.
+	bool has_qk_norm = false;
+	for (uint32_t l = 0; l < num_hidden_layers; ++l) {
+		if (layers[l].q_norm_gain != nullptr || layers[l].k_norm_gain != nullptr) has_qk_norm = true;
+	}
+	const int kSitesPerLayer = static_cast<int>(superslm_gpu::DispatchesPerLayer(has_qk_norm));
+	std::vector<const char*> kSiteNames = {
 	    "attn_norm",     "q_proj_gemm",     "q_proj",          "kv_proj_gemm",
-	    "kv_proj",       "qk_norm",         "rope_guard",      "rope_commit",
+	    "kv_proj",       "rope_guard",      "rope_commit",
 	    "attention_score", "softmax",       "context_accumulate", "ctx_fold",
 	    "o_proj_gemm",   "o_proj",          "attn_residual",   "mlp_norm",
 	    "gate_proj_gemm", "gate_proj",      "up_proj_gemm",    "up_proj",
 	    "mlp_act",       "down_proj_gemm",  "down_proj",       "mlp_residual",
 	    "commit"};
-	double site_ms_sum[kSitesPerLayer] = {0.0};
+	if (has_qk_norm) kSiteNames.insert(kSiteNames.begin() + 5, "qk_norm");
+	if (static_cast<int>(kSiteNames.size()) != kSitesPerLayer) {
+		std::fprintf(stderr, "FAILED: site table has %zu names for %d sites per layer\n",
+		             kSiteNames.size(), kSitesPerLayer);
+		return 1;
+	}
+	std::vector<double> site_ms_sum(static_cast<size_t>(kSitesPerLayer), 0.0);
 
 	double per_token[2] = {0.0, 0.0};
 	for (int s = 0; s < 2; ++s) {
@@ -243,9 +278,21 @@ int main(int argc, char** argv) {
 				gpu_submit_wait_ms_sum += timing.submit_wait_ms;
 				gpu_busy_ms_sum += timing.gpu_busy_ms;
 				gpu_readback_ms_sum += timing.readback_ms;
-				const auto per_dispatch = superslm_gpu::LastCallPerDispatchTimingsMs();
-				for (size_t d = 0; d < per_dispatch.size(); ++d) {
-					site_ms_sum[d % kSitesPerLayer] += per_dispatch[d];
+				if (per_site) {
+					const auto per_dispatch = superslm_gpu::LastCallPerDispatchTimingsMs();
+					const uint32_t recorded = superslm_gpu::LastCallRecordedDispatchCount();
+					if (recorded != static_cast<uint32_t>(kSitesPerLayer) * num_hidden_layers ||
+					    per_dispatch.size() != recorded) {
+						std::fprintf(stderr,
+						             "%s: step %d recorded %u dispatches with %zu per-site timings, "
+						             "want %d sites x %u layers\n",
+						             sides[s].name, i, recorded, per_dispatch.size(), kSitesPerLayer,
+						             num_hidden_layers);
+						return 1;
+					}
+					for (size_t d = 0; d < per_dispatch.size(); ++d) {
+						site_ms_sum[d % kSitesPerLayer] += per_dispatch[d];
+					}
 				}
 			}
 		}
@@ -302,89 +349,96 @@ int main(int argc, char** argv) {
 	    steps, mean_record_ms, mean_submit_wait_ms, mean_gpu_busy_ms, mean_readback_ms, mean_sum_ms,
 	    per_token[1] * 1000.0, roofline_ms, mean_gpu_busy_ms / roofline_ms);
 
-	// T-2101 follow-up (per-site decomposition, D-SLM3312's own follow-up): mean ms/token per site,
-	// summed across all 28 layers and averaged over the same `steps` timed GPU calls as everything
-	// above, sorted descending. Achieved bandwidth is reported for the six GEMM weight-matrix reads
-	// -- T-2101's own per-dispatch split (D-SLM3313's own follow-up) moved that read traffic into
-	// six `*_gemm` sites (q/o/kv/gate/up/down_proj_gemm -- T-2113 (B4) added `kv_proj_gemm`,
-	// re-derived from T-2101's own five since kv_proj no longer stays fused-and-single-dispatch) --
-	// the now-leaner requant/bias-only sites of the same base name touch only the already-computed
-	// wide row (O(out_channels) int64s, already counted nowhere near bandwidth-interesting) and get
-	// no bytes figure. Everything else touches only O(hidden_size) or O(context_length, still tiny
-	// this early in decode) data.
-	struct SiteRow {
-		int idx;
-		double ms;
-		double bytes_per_layer;  // 0 if not a GEMM site with a known dominant weight matrix
-	};
-	const size_t H = hidden_size, I = intermediate_size, KV = num_kv_heads * head_dim;
-	std::vector<SiteRow> rows(kSitesPerLayer);
-	for (int i = 0; i < kSitesPerLayer; ++i) {
-		double bytes_per_layer = 0.0;
-		const std::string name = kSiteNames[i];
-		if (name == "q_proj_gemm" || name == "o_proj_gemm") bytes_per_layer = static_cast<double>(H) * H;
-		else if (name == "kv_proj_gemm") bytes_per_layer = 2.0 * static_cast<double>(KV) * H;
-		else if (name == "gate_proj_gemm" || name == "up_proj_gemm")
-			bytes_per_layer = static_cast<double>(I) * H;
-		else if (name == "down_proj_gemm") bytes_per_layer = static_cast<double>(H) * I;
-		rows[i] = SiteRow{i, site_ms_sum[i] / steps, bytes_per_layer};
-	}
-	std::sort(rows.begin(), rows.end(), [](const SiteRow& a, const SiteRow& b) { return a.ms > b.ms; });
-	double site_ms_total = 0.0;
-	for (const auto& r : rows) site_ms_total += r.ms;
-	std::printf(
-	    "\nGPU per-site decomposition (mean ms/token, summed across %u layers, sorted descending; "
-	    "sum of all %d sites = %.3f ms against GPU-busy %.3f ms above):\n"
-	    "  %-20s %10s %8s %14s %12s\n",
-	    num_hidden_layers, kSitesPerLayer, site_ms_total, mean_gpu_busy_ms, "site", "ms/token", "share",
-	    "GB read/tok", "achieved GB/s");
-	for (const auto& r : rows) {
-		const double share_pct = 100.0 * r.ms / mean_gpu_busy_ms;
-		if (r.bytes_per_layer > 0.0) {
-			const double gb_per_token = r.bytes_per_layer * num_hidden_layers / 1e9;
-			const double achieved_gbps = r.ms > 0.0 ? (gb_per_token / (r.ms / 1000.0)) : 0.0;
-			std::printf("  %-20s %10.3f %7.1f%% %14.4f %12.2f\n", kSiteNames[r.idx], r.ms, share_pct,
-			            gb_per_token, achieved_gbps);
-		} else {
-			std::printf("  %-20s %10.3f %7.1f%% %14s %12s\n", kSiteNames[r.idx], r.ms, share_pct, "--",
-			            "--");
+	// GPU per-token overhead plan rev 3.1 §3.1 (S1): bracket mode records no per-dispatch
+	// timestamps, so it has no per-site table and no uniformity verdict.
+	if (!per_site) {
+		std::printf("\nGPU per-site decomposition: not measured (--bracket: bracket timing mode records "
+		            "one timestamp pair per call)\n");
+	} else {
+		// T-2101 follow-up (per-site decomposition, D-SLM3312's own follow-up): mean ms/token per site,
+		// summed across all 28 layers and averaged over the same `steps` timed GPU calls as everything
+		// above, sorted descending. Achieved bandwidth is reported for the six GEMM weight-matrix reads
+		// -- T-2101's own per-dispatch split (D-SLM3313's own follow-up) moved that read traffic into
+		// six `*_gemm` sites (q/o/kv/gate/up/down_proj_gemm -- T-2113 (B4) added `kv_proj_gemm`,
+		// re-derived from T-2101's own five since kv_proj no longer stays fused-and-single-dispatch) --
+		// the now-leaner requant/bias-only sites of the same base name touch only the already-computed
+		// wide row (O(out_channels) int64s, already counted nowhere near bandwidth-interesting) and get
+		// no bytes figure. Everything else touches only O(hidden_size) or O(context_length, still tiny
+		// this early in decode) data.
+		struct SiteRow {
+			int idx;
+			double ms;
+			double bytes_per_layer;  // 0 if not a GEMM site with a known dominant weight matrix
+		};
+		const size_t H = hidden_size, I = intermediate_size, KV = num_kv_heads * head_dim;
+		std::vector<SiteRow> rows(kSitesPerLayer);
+		for (int i = 0; i < kSitesPerLayer; ++i) {
+			double bytes_per_layer = 0.0;
+			const std::string name = kSiteNames[i];
+			if (name == "q_proj_gemm" || name == "o_proj_gemm") bytes_per_layer = static_cast<double>(H) * H;
+			else if (name == "kv_proj_gemm") bytes_per_layer = 2.0 * static_cast<double>(KV) * H;
+			else if (name == "gate_proj_gemm" || name == "up_proj_gemm")
+				bytes_per_layer = static_cast<double>(I) * H;
+			else if (name == "down_proj_gemm") bytes_per_layer = static_cast<double>(H) * I;
+			rows[i] = SiteRow{i, site_ms_sum[i] / steps, bytes_per_layer};
 		}
+		std::sort(rows.begin(), rows.end(), [](const SiteRow& a, const SiteRow& b) { return a.ms > b.ms; });
+		double site_ms_total = 0.0;
+		for (const auto& r : rows) site_ms_total += r.ms;
+		std::printf(
+		    "\nGPU per-site decomposition (mean ms/token, summed across %u layers, sorted descending; "
+		    "sum of all %d sites = %.3f ms against GPU-busy %.3f ms above):\n"
+		    "  %-20s %10s %8s %14s %12s\n",
+		    num_hidden_layers, kSitesPerLayer, site_ms_total, mean_gpu_busy_ms, "site", "ms/token", "share",
+		    "GB read/tok", "achieved GB/s");
+		for (const auto& r : rows) {
+			const double share_pct = 100.0 * r.ms / mean_gpu_busy_ms;
+			if (r.bytes_per_layer > 0.0) {
+				const double gb_per_token = r.bytes_per_layer * num_hidden_layers / 1e9;
+				const double achieved_gbps = r.ms > 0.0 ? (gb_per_token / (r.ms / 1000.0)) : 0.0;
+				std::printf("  %-20s %10.3f %7.1f%% %14.4f %12.2f\n", kSiteNames[r.idx], r.ms, share_pct,
+				            gb_per_token, achieved_gbps);
+			} else {
+				std::printf("  %-20s %10.3f %7.1f%% %14s %12s\n", kSiteNames[r.idx], r.ms, share_pct, "--",
+				            "--");
+			}
+		}
+		// Uniformity verdict: coefficient of variation across the `kSitesPerLayer` (T-2551: 25,
+		// re-derived from T-2113 B4's own 24, itself re-derived from T-2101's own 22) site means.
+		// Low CoV = spread ~uniformly (per-dispatch fixed
+		// cost dominates); high CoV = concentrated in specific sites (those sites' own kernels are
+		// genuinely slow).
+		//
+		// T-2101 (O1, code review 6d9e04e-t2101-gpu-throughput-review.md; M4, confirmation pass @
+		// f7026db, correcting this paragraph's own inverted direction): this threshold's own
+		// `site_cov > 1.0` cutoff was set (D-SLM3313) against a 17-site population. T-2101's own fix
+		// round split five sites' GEMM step into its own `*_gemm` dispatch -- THOSE five carry the real
+		// GEMM cost and are the population's own HEAVY rows (down_proj_gemm alone was 36.3% of GPU-busy
+		// time in round 1, D-SLM3314's own §34.2); it is the ORIGINAL-NAME requant-only sites (q_proj,
+		// o_proj, gate_proj, up_proj, down_proj) that became near-zero, since their own GEMM work moved
+		// out from under them. Adding five near-zero values (the requant sites) to a population whose
+		// heavy rows did not shrink pulls the MEAN down without proportionally shrinking the stdev,
+		// which mechanically RAISES CoV relative to what the same underlying concentration would have
+		// read against the original 17 -- the conclusion (marking rather than recalibrating) survives
+		// this correction unchanged, only the stated MECHANISM was backwards. Every run this ticket
+		// executed (D-SLM3313's own 1.82, T-2101's own 1.76 and 1.42) reads well clear of the 1.0
+		// cutoff either way, so the verdict itself has not flipped -- but a future population change
+		// close to the threshold should re-derive the cutoff rather than trust this one across another
+		// headcount change.
+		double site_mean = site_ms_total / kSitesPerLayer, site_var = 0.0;
+		for (int i = 0; i < kSitesPerLayer; ++i) {
+			const double d = (site_ms_sum[i] / steps) - site_mean;
+			site_var += d * d;
+		}
+		const double site_stdev = std::sqrt(site_var / kSitesPerLayer);
+		const double site_cov = site_mean > 0.0 ? site_stdev / site_mean : 0.0;
+		std::printf(
+		    "\nUniformity: mean %.4f ms/site/token, stdev %.4f ms, coefficient of variation %.2f -- "
+		    "%s\n",
+		    site_mean, site_stdev, site_cov,
+		    site_cov > 1.0 ? "CONCENTRATED (a small number of sites dominate; see the top rows above)"
+		                   : "roughly UNIFORM (no small subset of sites dominates)");
 	}
-	// Uniformity verdict: coefficient of variation across the `kSitesPerLayer` (T-2551: 25,
-	// re-derived from T-2113 B4's own 24, itself re-derived from T-2101's own 22) site means.
-	// Low CoV = spread ~uniformly (per-dispatch fixed
-	// cost dominates); high CoV = concentrated in specific sites (those sites' own kernels are
-	// genuinely slow).
-	//
-	// T-2101 (O1, code review 6d9e04e-t2101-gpu-throughput-review.md; M4, confirmation pass @
-	// f7026db, correcting this paragraph's own inverted direction): this threshold's own
-	// `site_cov > 1.0` cutoff was set (D-SLM3313) against a 17-site population. T-2101's own fix
-	// round split five sites' GEMM step into its own `*_gemm` dispatch -- THOSE five carry the real
-	// GEMM cost and are the population's own HEAVY rows (down_proj_gemm alone was 36.3% of GPU-busy
-	// time in round 1, D-SLM3314's own §34.2); it is the ORIGINAL-NAME requant-only sites (q_proj,
-	// o_proj, gate_proj, up_proj, down_proj) that became near-zero, since their own GEMM work moved
-	// out from under them. Adding five near-zero values (the requant sites) to a population whose
-	// heavy rows did not shrink pulls the MEAN down without proportionally shrinking the stdev,
-	// which mechanically RAISES CoV relative to what the same underlying concentration would have
-	// read against the original 17 -- the conclusion (marking rather than recalibrating) survives
-	// this correction unchanged, only the stated MECHANISM was backwards. Every run this ticket
-	// executed (D-SLM3313's own 1.82, T-2101's own 1.76 and 1.42) reads well clear of the 1.0
-	// cutoff either way, so the verdict itself has not flipped -- but a future population change
-	// close to the threshold should re-derive the cutoff rather than trust this one across another
-	// headcount change.
-	double site_mean = site_ms_total / kSitesPerLayer, site_var = 0.0;
-	for (int i = 0; i < kSitesPerLayer; ++i) {
-		const double d = (site_ms_sum[i] / steps) - site_mean;
-		site_var += d * d;
-	}
-	const double site_stdev = std::sqrt(site_var / kSitesPerLayer);
-	const double site_cov = site_mean > 0.0 ? site_stdev / site_mean : 0.0;
-	std::printf(
-	    "\nUniformity: mean %.4f ms/site/token, stdev %.4f ms, coefficient of variation %.2f -- "
-	    "%s\n",
-	    site_mean, site_stdev, site_cov,
-	    site_cov > 1.0 ? "CONCENTRATED (a small number of sites dominate; see the top rows above)"
-	                   : "roughly UNIFORM (no small subset of sites dominates)");
 	// T-2101 (S2, code review 6d9e04e-t2101-gpu-throughput-review.md): this NOTE used to claim
 	// RunLayerLoopGpu reads the complete K/V workspace back every call -- true when T-2100 wrote it,
 	// false since commit d79f6b7 (this same arc, T-2101's own device-resident K/V fix), which made

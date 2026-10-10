@@ -26399,6 +26399,13 @@ static void TestT2101_KvDeviceResidency_TwoStepBitMatchesCpu() {
 // reading (the exact class of bug `LastWeightUploadWasSkipped()` was already corrected for once,
 // T-2055/T-2080 above).
 static void TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject() {
+	// GPU per-token overhead plan rev 3.1 §3.1 (S1): the per-dispatch vector below exists only in
+	// per-site timing mode, so this cell selects it explicitly (and restores the process's mode).
+	struct PerSiteForThisCell {
+		superslm_gpu::GpuTimingMode previous = superslm_gpu::GetGpuTimingMode();
+		PerSiteForThisCell() { superslm_gpu::SetGpuTimingMode(superslm_gpu::GpuTimingMode::PerSite); }
+		~PerSiteForThisCell() { superslm_gpu::SetGpuTimingMode(previous); }
+	} per_site;
 	NLayerFixture<8> fixture;
 	SequenceLayerState seq;
 	int8_t codes[2] = {5, -5};
@@ -26432,11 +26439,19 @@ static void TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject() {
 	// legacy 24-dispatch count; QK-bearing fixtures add qk_norm_site.hlsl and use 25. One
 	// GPU-measured figure per dispatch, every one non-negative, summing to (approximately)
 	// gpu_busy_ms above.
+	// (S1: the recorded count is read from its seam, `LastCallRecordedDispatchCount()`; in per-site
+	// mode it equals the budget unit times the layers, and the vector carries one entry per
+	// recorded dispatch.)
 	const auto per_dispatch_ok = superslm_gpu::LastCallPerDispatchTimingsMs();
-	CHECK_MSG(per_dispatch_ok.size() == 8 * superslm_gpu::kLegacyDispatchesPerLayer,
-	          "T2101/T2113 per-dispatch timing (legacy success call): %zu entries, want 8*%u=%u",
-	          per_dispatch_ok.size(), superslm_gpu::kLegacyDispatchesPerLayer,
+	const uint32_t recorded_ok = superslm_gpu::LastCallRecordedDispatchCount();
+	CHECK_MSG(recorded_ok == 8 * superslm_gpu::kLegacyDispatchesPerLayer,
+	          "T2101/T2113 recorded dispatches (legacy success call, per-site): %u, want 8*%u=%u",
+	          recorded_ok, superslm_gpu::kLegacyDispatchesPerLayer,
 	          8 * superslm_gpu::kLegacyDispatchesPerLayer);
+	CHECK_MSG(per_dispatch_ok.size() == recorded_ok,
+	          "T2101/T2113 per-dispatch timing (legacy success call, per-site): %zu entries, want "
+	          "one per recorded dispatch (%u)",
+	          per_dispatch_ok.size(), recorded_ok);
 	double per_dispatch_sum = 0.0;
 	bool all_non_negative = true;
 	for (double v : per_dispatch_ok) {
@@ -28343,6 +28358,13 @@ static void TestT2576_GpuKvSaturationAndKvRowMatchCpuOnRopeSaturationFixtureN100
 
 	int count_divergences = 0, byte_divergences = 0;
 	uint64_t first_gpu = 0, worst = 0;
+	// GPU per-token overhead plan rev 3.1 §3.1 (S1): the per-dispatch vector read below exists only
+	// in per-site timing mode, so the GPU arm selects it explicitly (and restores the mode).
+	struct PerSiteForThisArm {
+		superslm_gpu::GpuTimingMode previous = superslm_gpu::GetGpuTimingMode();
+		PerSiteForThisArm() { superslm_gpu::SetGpuTimingMode(superslm_gpu::GpuTimingMode::PerSite); }
+		~PerSiteForThisArm() { superslm_gpu::SetGpuTimingMode(previous); }
+	} per_site;
 	uint8_t worst_ws[kWorkspaceSize] = {};
 	for (int i = 0; i < kRepeats; ++i) {
 		RopeSaturationFixture fixture;
@@ -28361,11 +28383,20 @@ static void TestT2576_GpuKvSaturationAndKvRowMatchCpuOnRopeSaturationFixtureN100
 			continue;
 		}
 		if (i == 0) {
-			CHECK_MSG(superslm_gpu::LastCallPerDispatchTimingsMs().size() ==
+			// GPU per-token overhead plan rev 3.1 §3.1 (S1): the recorded count is read from its
+			// seam; the per-dispatch vector (per-site mode, selected above) has one entry per
+			// recorded dispatch.
+			CHECK_MSG(superslm_gpu::LastCallRecordedDispatchCount() ==
 			              superslm_gpu::kLegacyDispatchesPerLayer,
-			          "non-QK-norm layer recorded %zu dispatches, want exactly %u",
-			          superslm_gpu::LastCallPerDispatchTimingsMs().size(),
+			          "non-QK-norm layer recorded %u dispatches, want exactly %u",
+			          superslm_gpu::LastCallRecordedDispatchCount(),
 			          superslm_gpu::kLegacyDispatchesPerLayer);
+			CHECK_MSG(superslm_gpu::LastCallPerDispatchTimingsMs().size() ==
+			              superslm_gpu::LastCallRecordedDispatchCount(),
+			          "non-QK-norm layer (per-site): %zu per-dispatch entries, want one per recorded "
+			          "dispatch (%u)",
+			          superslm_gpu::LastCallPerDispatchTimingsMs().size(),
+			          superslm_gpu::LastCallRecordedDispatchCount());
 		}
 		if (i == 0) first_gpu = seq.kv_saturation_count;
 		if (seq.kv_saturation_count != cpu_count) {

@@ -88,6 +88,11 @@ constexpr uint64_t kModelGeneration = 1;
 // comment): a stale, too-low per-layer count under-counts the true dispatches a chunk will
 // issue, silently admitting a chunk one dispatch closer to a real TDR timeout than intended.
 // Reads the named constant directly now; no local shadow.
+//
+// GPU per-token overhead plan rev 3.1 §3.1 (S1): that constant is the dispatch-budget UNIT, which
+// equals the dispatches a layer records only in per-site timing mode (and is 25 even for a legacy
+// model's 24). The rate fit below therefore divides by the RECORDED count each measured call
+// reports (`LastCallRecordedDispatchCount()`), and this constant now only labels the budget.
 constexpr uint32_t kDispatchesPerLayer = superslm_gpu::kDispatchesPerLayer;
 
 uint32_t Align8U32(uint32_t v) { return (v + 7u) & ~7u; }
@@ -215,7 +220,7 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 	const uint32_t num_hidden_layers = model_view.config.num_hidden_layers;
-	std::printf("model loaded: hidden_size=%u layers=%u dispatches/token=%u\n",
+	std::printf("model loaded: hidden_size=%u layers=%u budget units/token=%u\n",
 	            model_view.config.hidden_size, num_hidden_layers, num_hidden_layers * kDispatchesPerLayer);
 
 	PreflightScanWscFolds(model_view);
@@ -275,13 +280,20 @@ int main(int argc, char** argv) {
 	// exercise and bit-identity-verify the split path itself.
 	const uint32_t sizes[] = {2, 3, 4};
 	double total_ms_per_dispatch = 0.0;
+	double total_dispatches_per_token = 0.0;
 	int fits = 0;
 	for (uint32_t sz : sizes) {
 		double gpu_busy_ms = 0.0;
 		if (!MeasureOneChunkSize(model_view, layers, embed_w, embed_site_constant, sz, &gpu_busy_ms)) {
 			return 1;
 		}
-		const uint32_t dispatches = sz * num_hidden_layers * kDispatchesPerLayer;
+		// S1: the dispatches this call's (single) list actually recorded, from its seam.
+		const uint32_t dispatches = superslm_gpu::LastCallRecordedDispatchCount();
+		if (dispatches == 0) {
+			std::fprintf(stderr, "FAILED: chunk_tokens=%u reported no recorded dispatches\n", sz);
+			return 1;
+		}
+		total_dispatches_per_token += static_cast<double>(dispatches) / static_cast<double>(sz);
 		const double ms_per_dispatch = gpu_busy_ms / static_cast<double>(dispatches);
 		std::printf("chunk_tokens=%u dispatches=%u gpu_busy_ms=%.4f ms/dispatch=%.6f\n", sz, dispatches,
 		            gpu_busy_ms, ms_per_dispatch);
@@ -291,7 +303,7 @@ int main(int argc, char** argv) {
 	const double mean_ms_per_dispatch = total_ms_per_dispatch / fits;
 	std::printf("measured mean: %.6f ms/dispatch (over chunk_tokens={2,3,4})\n", mean_ms_per_dispatch);
 
-	const double dispatches_per_token = static_cast<double>(num_hidden_layers) * kDispatchesPerLayer;
+	const double dispatches_per_token = total_dispatches_per_token / fits;
 	const double tdr_bound_exact = tdr_budget_ms / (mean_ms_per_dispatch * dispatches_per_token);
 	std::printf(
 	    "\nTDR-ARITHMETIC-ONLY BOUND (NOT what is shipped): %.1f tokens would fit under half this "

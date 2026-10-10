@@ -291,6 +291,9 @@ int main(int argc, char** argv) {
 	gpu_seq.layer_index = 0;
 	std::vector<uint8_t> gpu_ws(kv_bytes, 0);
 	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+	// GPU per-token overhead plan rev 3.1 §3.1 (S1): the dispatch-count check below also reads the
+	// per-dispatch vector, which exists only in per-site timing mode -- selected explicitly here.
+	superslm_gpu::SetGpuTimingMode(superslm_gpu::GpuTimingMode::PerSite);
 	const SslmForwardStatus gpu_submit_status = superslm_gpu::RunLayerLoopGpuSubmit(
 	    gpu_seq, layers.data(), num_hidden_layers, /*layer_budget=*/num_hidden_layers, hidden_size,
 	    head_dim, num_kv_heads, intermediate_size, context_cap, model_view.rope_tables, gpu_ws.data(),
@@ -312,11 +315,20 @@ int main(int argc, char** argv) {
 	const size_t expected_dispatches =
 	    static_cast<size_t>(superslm_gpu::DispatchesPerLayer(layers_with_qk_norm > 0)) *
 	    num_hidden_layers;
-	const size_t observed_dispatches = superslm_gpu::LastCallPerDispatchTimingsMs().size();
+	// (S1: the recorded count is read from its seam; in per-site mode it equals the budget unit
+	// times the layers, and the per-dispatch vector carries one entry per recorded dispatch.)
+	const size_t observed_dispatches = superslm_gpu::LastCallRecordedDispatchCount();
+	const size_t observed_timings = superslm_gpu::LastCallPerDispatchTimingsMs().size();
 	if (observed_dispatches != expected_dispatches) {
 		std::printf("DIVERGENCE: dispatch count: observed=%zu expected=%zu (%s model)\n",
 		            observed_dispatches, expected_dispatches,
 		            layers_with_qk_norm > 0 ? "QK-norm" : "legacy non-QK-norm");
+		all_match = false;
+	}
+	if (observed_timings != observed_dispatches) {
+		std::printf("DIVERGENCE: per-site per-dispatch timings: %zu entries for %zu recorded "
+		            "dispatches\n",
+		            observed_timings, observed_dispatches);
 		all_match = false;
 	}
 	if (cpu_status != gpu_status) {

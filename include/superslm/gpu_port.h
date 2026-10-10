@@ -12,6 +12,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+#include <string>
+#endif
 #include <vector>
 
 #include "superslm/checked_chain_funnel.h"
@@ -506,21 +509,81 @@ GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t
                                                   uint32_t q_width = UINT32_MAX);
 
 // One GPU-measured millisecond figure per dispatch the most recent
-// `RunLayerLoopGpu` call issued, in dispatch order (empty if the call was rejected before
-// recording, or timed by fewer than one dispatch). Dispatch `d` within this call corresponds to
-// layer `d / 24` and that layer's own `d % 24`-th call in the fixed, unconditional per-layer order
-// `RunLayerLoopGpu` issues them: attn_norm, q_proj_gemm, q_proj, kv_proj_gemm, kv_proj,
-// rope_guard, rope_commit, attention_score, softmax, context_accumulate, ctx_fold, o_proj_gemm,
-// o_proj, attn_residual, mlp_norm, gate_proj_gemm, gate_proj, up_proj_gemm, up_proj, mlp_act,
-// down_proj_gemm, down_proj, mlp_residual, commit (24 sites/layer -- re-derived (design
-// Sec3/Sec6.1) from the 22-site count previously shipped: `kv_proj_gemm` is a NEW
-// dispatch (kv_proj no longer fused-and-single-dispatch, `kv_proj_gemm_site.hlsl`'s own header
-// comment states why the split is now sound) and RoPE's own commit phase is a second, separate
-// dispatch (`rope_commit_site.hlsl`) rather than a group-barrier-separated phase inside one).
-// Summing every `d` with the same `d % 24` across however many layers a call processed gives
-// that SITE's own total GPU time for the call -- `tools/t2100_gpu_throughput.cpp`'s own
-// per-site table is exactly this sum.
+// `RunLayerLoopGpu` call issued, in dispatch order -- PER-SITE TIMING MODE ONLY (GPU per-token
+// overhead plan rev 3.1 §3.1): a call submitted in bracket mode, the default, writes no
+// per-dispatch timestamps and leaves this EMPTY, as does a call rejected before recording. A
+// caller that reads this vector selects per-site mode first (`SetGpuTimingMode`, below, or
+// `SSLM_GPU_PER_SITE_TIMING=1`), and reads the dispatch COUNT from
+// `LastCallRecordedDispatchCount()`, never from this vector's size. In per-site mode, dispatch
+// `d` within this call corresponds to layer `d / S` and that layer's own `d % S`-th call, where
+// S is the recorded sites per layer: 24 for a legacy model, in the fixed per-layer order
+// attn_norm, q_proj_gemm, q_proj, kv_proj_gemm, kv_proj, rope_guard, rope_commit,
+// attention_score, softmax, context_accumulate, ctx_fold, o_proj_gemm, o_proj, attn_residual,
+// mlp_norm, gate_proj_gemm, gate_proj, up_proj_gemm, up_proj, mlp_act, down_proj_gemm,
+// down_proj, mlp_residual, commit; 25 for a model with QK norm on any layer, which records
+// qk_norm between kv_proj and rope_guard. (24 was re-derived (design Sec3/Sec6.1) from the 22-site
+// count previously shipped: `kv_proj_gemm` is a NEW dispatch (kv_proj no longer
+// fused-and-single-dispatch, `kv_proj_gemm_site.hlsl`'s own header comment states why the split
+// is now sound) and RoPE's own commit phase is a second, separate dispatch
+// (`rope_commit_site.hlsl`) rather than a group-barrier-separated phase inside one.) Summing
+// every `d` with the same `d % S` across however many layers a call processed gives that SITE's
+// own total GPU time for the call -- `tools/t2100_gpu_throughput.cpp`'s own per-site table is
+// exactly this sum.
 std::vector<double> LastCallPerDispatchTimingsMs();
+
+// --- GPU per-token overhead plan rev 3.1 §3.1 (S1): two timing (recording) modes. ---
+// Every per-token GPU submission (`RunLayerLoopGpuSubmit`, the chunk bridge
+// `SubmitChunkToFullDepthForG5Bridge`, and every 1.0 API call built on them) records in one of
+// two modes:
+// - `Bracket` (the default): one timestamp query immediately before the command list's first
+//   dispatch and one immediately after its last barrier, resolved as 2 entries.
+//   `LastCallTiming().gpu_busy_ms` is their difference -- the same first-dispatch-to-last bracket
+//   it always measured -- and `LastCallPerDispatchTimingsMs()` is empty.
+// - `PerSite` (the diagnostic): the v1.11.0 command stream byte for byte -- a query before every
+//   dispatch, the same final query and resolve -- and the per-dispatch vector filled. It is also
+//   the same-build oracle for code that only one mode runs.
+// The mode is one process-wide atomic, initialised once from `SSLM_GPU_PER_SITE_TIMING` (per-site
+// exactly when the variable's whole value is "1"; see `ParseGpuTimingModeEnv`). Each submission
+// reads it ONCE and stores it in its in-flight record, and its Finish interprets the timestamps by
+// that stored mode, so a mode set between a Submit and its Finish takes effect at the next Submit.
+// Additive internal C++ surface: no C ABI and no `gpu_1p0.h` change (plan I5).
+enum class GpuTimingMode : uint32_t { Bracket = 0, PerSite = 1 };
+void SetGpuTimingMode(GpuTimingMode mode);
+GpuTimingMode GetGpuTimingMode();
+// The parse the process-level read uses, a function of its own so every value can be checked
+// without a process each: `PerSite` exactly when `value` is the one-character string "1"; nullptr,
+// empty, "0", "10", "1 ", and anything else select `Bracket`. Not the `buf[0] == '1'` prefix test
+// `SSLM_GPU_ENABLE_DEBUG_LAYER` uses (d3d12_harness.h).
+GpuTimingMode ParseGpuTimingModeEnv(const char* value);
+
+// What the most recent submission recorded into the last command list it closed (for a chunk
+// split into sub-chunk lists, the last sub-chunk's list), counted at record time:
+// - `LastCallRecordedDispatchCount()` -- Dispatch calls. THIS, not
+//   `DispatchesPerLayer(...) * layers` and not the per-dispatch vector's size, is the recorded
+//   count: the budget unit (`DispatchesPerLayer`, below) stays the budget unit when bracket mode
+//   records fewer dispatches per layer than it (plan §3.2-3.3).
+// - `LastCallRecordedBarrierCount()` -- the dispatch chain's global UAV barriers (one after every
+//   dispatch; the readback transitions are not counted).
+// - `LastCallTimestampQueryCount()` -- EndQuery calls: 2 in bracket mode; dispatches + 1 in
+//   per-site mode while under the heap's slot cap.
+// All three are 0 after a call the guard ladder rejected before recording, and are reset by the
+// next submission's entry, exactly as `LastCallTiming()` is.
+uint32_t LastCallRecordedDispatchCount();
+uint32_t LastCallRecordedBarrierCount();
+uint32_t LastCallTimestampQueryCount();
+
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+// Appends one line per recorded command of RecordOneTokenFullDepthDispatchBody (and the bracket/final
+// queries its callers write) to *sink while non-null. Test/diagnostic only.
+// Line formats (unsigned decimal, constants comma-separated, no spaces inside lists):
+//   `Q <index>` (timestamp query), `D <pipeline-name> g=<groups> c=<count>:<c0>,<c1>,...`
+//   (dispatch: the composed pipeline's name, its group count, and every root constant written),
+//   `B` (the global UAV barrier), `R <first>,<count>` (the timestamp resolve).
+// The log write happens beside each real command and never changes what is recorded. Plan §7
+// cell 7.4 compares per-site mode's log with a v1.11.0 capture
+// (tests/support/gpu_record_log_fixtures.h).
+void SetGpuRecordLogSink(std::vector<std::string>* sink);
+#endif
 
 // An earlier always-declared LINK-RED form of this instrument (`ArmO11AllocationFailure
 // Injection`/`ClearO11AllocationInjection`, undefined) was UNGATED, so merging it broke the
@@ -710,15 +773,21 @@ const int8_t* ValueRowGpu(const uint8_t* workspace, uint32_t layer, int64_t cont
 // --- B7 (Sec5.8, Sec11 B7): the dispatch_budget contract, whole-
 // layer quanta. This is the ARITHMETIC/policy half of `sslm_decode_step_gpu`'s own
 // contract -- how many layers a call at a given budget will record, and what status
-// it returns -- and is testable without a device. Legacy models retain 24 dispatches
+// it returns -- and is testable without a device. Legacy models cost 24 budget units
 // per layer. A model carrying QK norm adds qk_norm_site.hlsl between kv_proj_site and
-// rope_guard_site and therefore uses 25. The caller passes the model-derived divisor;
+// rope_guard_site and therefore costs 25 (the units equal the dispatches a layer records in
+// per-site timing mode; see `DispatchesPerLayer` below). The caller passes the model-derived divisor;
 // floor division means a budget one below that divisor makes no progress, and a
 // partial layer is never recorded. ---
 enum class SslmGpuStatus { Ok, DispatchBudgetTooSmall, Busy };
 
-// The one source for both model shapes' real per-layer dispatch counts. Model mapping
-// records the appropriate value and both planning and batch budget spending consume it.
+// The dispatch-budget UNIT for both model shapes: how many units of `dispatch_budget` one
+// layer costs. Model mapping records the appropriate value and both planning and batch budget
+// spending consume it. It is a public unit the plugin computes its budgets from, and it does not
+// change. GPU per-token overhead plan rev 3.1 (I5, decision 3): it equals the number of
+// dispatches a layer RECORDS only in per-site timing mode; bracket mode may record fewer per layer
+// (plan §3.2-3.3), so a caller that needs the recorded count reads
+// `LastCallRecordedDispatchCount()` (above), never this constant times the layers.
 constexpr uint32_t kLegacyDispatchesPerLayer = 24;
 constexpr uint32_t kQkNormDispatchesPerLayer = 25;
 // Compatibility name for callers whose model is already known to carry QK norm.
