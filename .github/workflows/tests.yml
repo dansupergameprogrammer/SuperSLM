@@ -139,6 +139,38 @@ jobs:
         env:
           SUPERSLM_FP_SCAN_BUILD_DIR: build
 
+  # The two Windows checks build.bat runs that no hosted leg ran before these two jobs:
+  # the CPU-only BUILD_TESTING=OFF configuration (tests/cmake-cpu-only/run_windows.bat, build.bat's
+  # first gate) and T-2807 cell X2, the SUPERSLM_API export-slot check
+  # (tests/t2807-api-slot/build_x2.ps1). Both are invoked exactly as build.bat invokes them, so the
+  # scripts stay the single definition of each check. Both run on windows-2022 for the reason
+  # fp-free-scan-gate gives above: run_windows.bat names the "Visual Studio 17 2022" generator, and
+  # X2's verdict is commissioned against the VS 2022 toolset. Neither needs a resolve step:
+  # the VS generator finds its own instance, and build_x2.ps1 dot-sources vsenv.ps1, which imports
+  # VsDevCmd.bat from the instance vswhere reports.
+  windows-cpu-only-config:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      # Builds the DEFAULT target with BUILD_TESTING=OFF, SUPERSLM_BUILD_GPU=OFF and a DXC path
+      # that does not exist, then fails if a superslm_tests or superslm_test_injection target or
+      # superslm_tests.exe was produced. The script's exit code is the verdict.
+      - name: CPU-only BUILD_TESTING=OFF default build (tests/cmake-cpu-only/run_windows.bat)
+        shell: cmd
+        run: call tests\cmake-cpu-only\run_windows.bat
+
+  windows-t2807-x2-export-slot:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      # Builds the core sources as sslm_engine.dll with SUPERSLM_API=dllexport and a consumer DLL
+      # against it, then requires CVERBS, EXPORTS, CONSUMER-LINK, IMPORTS and RUN all to pass.
+      # Exit 0 pass, 1 fail, 2 environment error; any nonzero fails this step. Windows PowerShell
+      # (powershell.exe, not pwsh) with the same flags build.bat passes.
+      - name: T-2807 X2 export-slot check (tests/t2807-api-slot/build_x2.ps1)
+        shell: cmd
+        run: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\t2807-api-slot\build_x2.ps1 -Out "%CD%\out\t2807-x2"
+
   linux-x64:
     runs-on: ubuntu-latest
     env:
@@ -160,6 +192,32 @@ jobs:
       # Decode-threading plan rev 1.2 §8 7.4: no new heap allocation per token (its own binary,
       # because it replaces the global operator new).
       - run: ./build/superslm_decode_threading_alloc
+
+  # The Linux counterpart of windows-cpu-only-config: the CPU-only BUILD_TESTING=OFF configuration
+  # configures and builds its DEFAULT target with no DXC and no test target, and neither
+  # superslm_tests nor superslm_test_injection is defined. The default target is built on purpose:
+  # an explicit --target superslm build would hide a test target that the default build still
+  # tries to link (run_windows.bat's own reason).
+  linux-x64-cpu-only-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - run: cmake -S . -B build-cpu-only -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DSUPERSLM_BUILD_GPU=OFF "-DSUPERSLM_DXC_EXECUTABLE=$PWD/build-cpu-only/must-not-exist/dxc"
+      - run: cmake --build build-cpu-only --parallel
+      - name: No test target exists and no test binary was produced
+        run: |
+          targets=$(cmake --build build-cpu-only --target help)
+          for t in superslm_tests superslm_test_injection; do
+            if printf '%s\n' "$targets" | grep -qx "\.\.\. $t"; then
+              echo "::error::CPU-only regression: target $t exists with BUILD_TESTING=OFF"
+              exit 1
+            fi
+          done
+          if [ -e build-cpu-only/superslm_tests ]; then
+            echo "::error::CPU-only regression: superslm_tests was produced"
+            exit 1
+          fi
+          echo "CPU-only default CMake build: PASS -- no DXC, GPU, or test target required."
 
   linux-x64-asan:
     runs-on: ubuntu-latest
