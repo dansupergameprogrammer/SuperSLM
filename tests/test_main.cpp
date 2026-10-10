@@ -29461,6 +29461,8 @@ inline void ZeroMlpResidualSite(superslm::LayerWeights& l) { l.mlp_residual_site
 inline void PoisonCtxFoldSite(superslm::LayerWeights& l) { l.ctx_fold_site_constant.m = kOutOfInt32; }
 inline void PoisonMlpActSite(superslm::LayerWeights& l) { l.mlp_act_site_constant.m = kOutOfInt32; }
 inline void NoMutation(superslm::LayerWeights&) {}
+inline void PoisonGateSite(superslm::LayerWeights& l) { l.gate_site_constant.m = kOutOfInt32; }
+inline void PoisonUpSite(superslm::LayerWeights& l) { l.up_site_constant.m = kOutOfInt32; }
 
 // S2's rows: the o run (o tail, attn_residual, mlp_norm) and the down run (down tail,
 // mlp_residual, commit), plus cell 11.1's one-site-before rows for each run.
@@ -29541,6 +29543,41 @@ inline const std::vector<std::string>& S2RejectionGaps() {
 	    "CommitSiteBody: raises no tag",
 	};
 	return gaps;
+}
+
+// S3's rows: fused_gate_up_site's two bodies (gate tail, then up tail -- the first body is gate's
+// in both S3 variants), plus 11.1's one-site-before row for that run (mlp_norm, the last tail
+// before it; the GEMM dispatch between them raises no tag).
+inline const std::vector<RejectionRow>& S3RejectionRows() {
+	using S = SslmForwardStatus;
+	static const std::vector<RejectionRow> rows = {
+	    {"gate.mantissa", "GateTailSiteBody", "RequantChainCheckedFullGpuP (site_m outside int32)",
+	     FusedRun::GateUp, S::CarriedScaleMantissaOutOfDomain, "mlp_norm", "gate_proj.requant", 0, false,
+	     true, false, PoisonGateSite, kInitialScale},
+	    {"up.mantissa", "UpTailSiteBody", "RequantChainCheckedFullGpuP (site_m outside int32)",
+	     FusedRun::GateUp, S::CarriedScaleMantissaOutOfDomain, "gate_proj.requant", "up_proj.requant", 0,
+	     false, false, false, PoisonUpSite, kInitialScale},
+	    {"before_gate_up_run.mlp_norm", "(mlp_norm, the last tail before the gate+up run)",
+	     "the gate+up run's first body stops at its entry sticky check", FusedRun::GateUp,
+	     S::CarriedScaleMantissaOutOfDomain, "attn_residual", "mlp_norm", 0, false, false, true,
+	     PoisonMlpNormSite, kInitialScale},
+	};
+	return rows;
+}
+
+inline const std::vector<std::string>& S3RejectionGaps() {
+	static const std::vector<std::string> gaps = {
+	    "GateTailSiteBody / UpTailSiteBody kTagChainInputOutOfDomain: normed codes x int8 weights "
+	    "over 2 channels (<= 2 x 127 x 127), far below 2^31",
+	};
+	return gaps;
+}
+
+// Every row the GPU cells run: S2's and S3's.
+inline std::vector<RejectionRow> AllRejectionRows() {
+	std::vector<RejectionRow> rows = S2RejectionRows();
+	rows.insert(rows.end(), S3RejectionRows().begin(), S3RejectionRows().end());
+	return rows;
 }
 
 struct CpuRun {
@@ -29626,7 +29663,7 @@ void BindAdapterEveryLayer(NLayerFixture<N>& fixture, const superslm::LayerAdapt
 // reaching its tag fails here, off the box, before it can make a GPU cell vacuous.
 static void TestGpuOverheadS2S3_5_1_RejectionFixturesReachTheirTagOnTheCpu() {
 	using namespace gpu_overhead_s2s3_fixtures;
-	for (const RejectionRow& row : S2RejectionRows()) {
+	for (const RejectionRow& row : AllRejectionRows()) {
 		for (uint32_t k : RowPositions(row)) {
 			NLayerFixture<kLayers> fixture;
 			row.mutate(fixture.layers[k]);
@@ -29644,7 +29681,8 @@ static void TestGpuOverheadS2S3_5_1_RejectionFixturesReachTheirTagOnTheCpu() {
 			          row.id, k, at, row.cpu_site, at, row.cpu_prev_site);
 		}
 	}
-	CHECK_MSG(!S2RejectionGaps().empty(), "S2/S3 5.1: the gap list must name the unreached tags");
+	CHECK_MSG(!S2RejectionGaps().empty() && !S3RejectionGaps().empty(),
+	          "S2/S3 5.1: the gap lists must name the unreached tags");
 }
 
 // Cells 8.1 and 7.11, CPU half (runs everywhere): the fused-tail adapter is live on the CPU oracle
@@ -31022,7 +31060,9 @@ static void TestGpuOverheadS2S3_7_8_BracketStreamIsTheFusedPerSiteStream() {
 // the 8-layer token; a 1-layer model; a QK-norm layer; slices of 1, 4, 5 and all 8 layers; a
 // position at the context cap minus one; the chunk bridge at 1, 4 and 8 tokens. The CPU trace
 // judges every LayerScratch region (the absolute anchor for the moved bodies on the success path).
-// 7.5's mutant (attn_residual and mlp_norm swapped in the fused body order) fails the bytes here.
+// 7.5's mutant (attn_residual and mlp_norm swapped in the fused body order) fails the bytes here,
+// and so does 7.10's (S3: up's accumulator written at base 0, where it collides with gate's row in
+// the merged GEMM and the tail-only variant alike).
 static void TestGpuOverheadS2S3_6_1_BracketBytesEqualPerSiteAndTheCpuOracle() {
 	using namespace gpu_overhead_s2s3;
 #if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
@@ -31167,7 +31207,7 @@ static void TestGpuOverheadS2S3_5_1_EveryFusedBodyRejectionMatchesTheCpuAndPerSi
 	          "LayerScratch probe needs; build.bat and CMakeLists.txt define it for superslm_tests");
 #else
 	ScopedLayerScratchProbe probe(kProbeFill);
-	for (const RejectionRow& row : S2RejectionRows()) {
+	for (const RejectionRow& row : AllRejectionRows()) {
 		const char* cells = row.before_run ? "11.1" : row.first_body ? "5.1/5.2/7.6" : "5.1/7.6";
 		for (uint32_t k : RowPositions(row)) {
 			NLayerFixture<kLayers> fixture;
@@ -31240,7 +31280,8 @@ static void TestGpuOverheadS2S3_1_1_FusedPipelinesAreBuiltOnceAndReused() {
 			(void)superslm_gpu::RunLayerLoopGpu(s, &qk.layer, 1, 1, 2, 2, 1, 2, 1, qk.view.rope_tables, ws, sizeof(ws));
 		}
 	}
-	const char* fused[] = {"fused_o_residual_norm_site", "fused_down_residual_commit_site"};
+	const char* fused[] = {"fused_o_residual_norm_site", "fused_down_residual_commit_site", "gate_up_gemm_site",
+	                       "up_proj_gemm_wide_b_site", "fused_gate_up_site"};
 	for (const char* name : fused) {
 		const uint32_t built = superslm_gpu::ComposedPipelineBuildCount(name);
 		CHECK_MSG(built == 1,
@@ -31271,6 +31312,9 @@ static void TestGpuOverheadS2S3_5_3_FusedPipelineFailureMapsLikeAnExistingOne() 
 	const Pair pairs[] = {
 	    {"fused_o_residual_norm_site", "o_proj_site", GpuBracketFusionConfig{true, false, GpuS3Fusion::None}},
 	    {"fused_down_residual_commit_site", "down_proj_site", GpuBracketFusionConfig{false, true, GpuS3Fusion::None}},
+	    {"fused_gate_up_site", "gate_proj_site", GpuBracketFusionConfig{true, true, GpuS3Fusion::MergedGemm}},
+	    {"gate_up_gemm_site", "gate_proj_gemm_site", GpuBracketFusionConfig{true, true, GpuS3Fusion::MergedGemm}},
+	    {"up_proj_gemm_wide_b_site", "up_proj_gemm_site", GpuBracketFusionConfig{true, true, GpuS3Fusion::TailOnly}},
 	};
 	for (const Pair& pair : pairs) {
 		SslmForwardStatus existing_status = SslmForwardStatus::Ok;
@@ -31490,6 +31534,67 @@ static void TestGpuOverheadS2S3_8_2_SaveBetweenSlicesRestoresAndContinues() {
 	}
 }
 
+
+// Cell 11.2 (S3): the new "gate and up plans cover 2 x I" check, through its test seam
+// (CheckGateUpGemmPlans, the same function the recorder calls beside its coverage throw): real
+// plans at the 0.5B's and the 1.5B's dimensions pass; a short up plan is refused with
+// GpuGemmGroupArithmeticInvalid (the status the recorder's GpuGemmGroupArithmeticError maps to) --
+// a variant that checks only the gate plan passes it and fails here; a short gate plan and a short
+// merged plan are refused too; and gate and up planned at different lane counts are refused (the
+// merged GEMM passes ONE lanes constant, plan §3.3). Also the GateUpProj plan itself: 2 x I
+// channels, 256 threads, 32 lanes, ceil(2I / 8) groups.
+static void TestGpuOverheadS3_11_2_GateUpPlansMustCoverTwiceIAndShareLanes() {
+	using superslm_gpu::ComputeGpuGemmSiteGroupPlan;
+	using superslm_gpu::GpuGemmSiteGroupPlan;
+	using superslm_gpu::GpuGemmSplitSite;
+	struct Dims {
+		const char* label;
+		uint32_t hidden, kv2, inter;
+	};
+	const Dims dims[] = {{"0.5B", 896, 256, 4864}, {"1.5B", 1536, 512, 8960}, {"synthetic", 2, 4, 2}};
+	for (const Dims& d : dims) {
+		const GpuGemmSiteGroupPlan gate = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::GateProj, d.hidden, d.kv2, d.inter);
+		const GpuGemmSiteGroupPlan up = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::UpProj, d.hidden, d.kv2, d.inter);
+		const GpuGemmSiteGroupPlan gate_up =
+		    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::GateUpProj, d.hidden, d.kv2, d.inter);
+		const uint32_t want_groups = (2u * d.inter + 7u) / 8u;
+		CHECK_MSG(gate_up.out_channels == 2u * d.inter && gate_up.threads_per_group == 256u && gate_up.lanes == 32u &&
+		              gate_up.channels_per_group == 8u && gate_up.groups == want_groups,
+		          "S3 11.2 %s: GateUpProj plan is out=%u threads=%u lanes=%u per_group=%u groups=%u; want 2I=%u, "
+		          "256, 32, 8, %u",
+		          d.label, gate_up.out_channels, gate_up.threads_per_group, gate_up.lanes,
+		          gate_up.channels_per_group, gate_up.groups, 2u * d.inter, want_groups);
+		CHECK_MSG(superslm_gpu::CheckGateUpGemmPlans(gate, up, gate_up, d.inter) == SslmForwardStatus::Ok,
+		          "S3 11.2 %s: the real gate, up and gate+up plans must pass", d.label);
+		GpuGemmSiteGroupPlan short_up = up;
+		short_up.groups = (d.inter - 1u) / short_up.channels_per_group;  // covers fewer than I channels
+		CHECK_MSG(superslm_gpu::CheckGateUpGemmPlans(gate, short_up, gate_up, d.inter) ==
+		              SslmForwardStatus::GpuGemmGroupArithmeticInvalid,
+		          "S3 11.2 %s: an up plan covering %u of %u channels must be refused -- a check of the gate "
+		          "plan alone passes it",
+		          d.label, short_up.groups * short_up.channels_per_group, d.inter);
+		GpuGemmSiteGroupPlan short_gate = gate;
+		short_gate.groups = (d.inter - 1u) / short_gate.channels_per_group;
+		CHECK_MSG(superslm_gpu::CheckGateUpGemmPlans(short_gate, up, gate_up, d.inter) ==
+		              SslmForwardStatus::GpuGemmGroupArithmeticInvalid,
+		          "S3 11.2 %s: a gate plan covering fewer than I channels must be refused", d.label);
+		GpuGemmSiteGroupPlan short_merged = gate_up;
+		short_merged.groups = (2u * d.inter - 1u) / short_merged.channels_per_group;
+		CHECK_MSG(superslm_gpu::CheckGateUpGemmPlans(gate, up, short_merged, d.inter) ==
+		              SslmForwardStatus::GpuGemmGroupArithmeticInvalid,
+		          "S3 11.2 %s: a merged plan covering fewer than 2 x I channels must be refused", d.label);
+		GpuGemmSiteGroupPlan other_lanes = up;
+		other_lanes.lanes = up.lanes / 2u;
+		other_lanes.channels_per_group = other_lanes.threads_per_group / other_lanes.lanes;
+		other_lanes.groups = (d.inter + other_lanes.channels_per_group - 1u) / other_lanes.channels_per_group;
+		CHECK_MSG(superslm_gpu::CheckGateUpGemmPlans(gate, other_lanes, gate_up, d.inter) ==
+		              SslmForwardStatus::GpuGemmGroupArithmeticInvalid,
+		          "S3 11.2 %s: gate at %u lanes and up at %u must be refused (the merged GEMM has one lanes "
+		          "constant)",
+		          d.label, gate.lanes, other_lanes.lanes);
+	}
+}
+
 // Runs the S2/S3 cells above. Called from the GPU-serial-port block after the S1 cells.
 static void RunGpuOverheadS2S3Cells() {
 	TestGpuOverheadS2S3_ConfigSeam_DefaultShippableAndRefused();
@@ -31501,6 +31606,7 @@ static void RunGpuOverheadS2S3Cells() {
 	TestGpuOverheadS2S3_5_3_FusedPipelineFailureMapsLikeAnExistingOne();
 	TestGpuOverheadS2S3_8_1_FusedTailAdapterMatchesTheCpuAdapterPath();
 	TestGpuOverheadS2S3_8_2_SaveBetweenSlicesRestoresAndContinues();
+	TestGpuOverheadS3_11_2_GateUpPlansMustCoverTwiceIAndShareLanes();
 }
 #endif  // _WIN32
 

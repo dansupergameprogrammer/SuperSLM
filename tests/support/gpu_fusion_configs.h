@@ -42,9 +42,9 @@ struct ConfigRow {
 // configuration the S1 cells that assert S1's bracket counts and stream shape pin.
 inline constexpr GpuBracketFusionConfig kUnfused{false, false, GpuS3Fusion::None};
 
-// The compiled-in default at this slice: the full plan as far as it is built. At S2 that is both
-// runs and no S3 variant.
-inline constexpr GpuBracketFusionConfig kSliceDefault{true, true, GpuS3Fusion::None};
+// The compiled-in default at this slice: the full plan as far as it is built. From S3 on that is
+// both runs and the merged gate+up GEMM.
+inline constexpr GpuBracketFusionConfig kSliceDefault{true, true, GpuS3Fusion::MergedGemm};
 
 // Every configuration that can ship at this slice, with its counts.
 inline const std::vector<ConfigRow>& ShippableConfigs() {
@@ -53,22 +53,23 @@ inline const std::vector<ConfigRow>& ShippableConfigs() {
 	    {"S2 o run", GpuBracketFusionConfig{true, false, GpuS3Fusion::None}, 22, 23},
 	    {"S2 down run", GpuBracketFusionConfig{false, true, GpuS3Fusion::None}, 22, 23},
 	    {"S2 both runs", GpuBracketFusionConfig{true, true, GpuS3Fusion::None}, 20, 21},
+	    {"S3 merged, both runs", GpuBracketFusionConfig{true, true, GpuS3Fusion::MergedGemm}, 18, 19},
+	    {"S3 merged, o run", GpuBracketFusionConfig{true, false, GpuS3Fusion::MergedGemm}, 20, 21},
+	    {"S3 merged, down run", GpuBracketFusionConfig{false, true, GpuS3Fusion::MergedGemm}, 20, 21},
+	    {"S3 tail-only, both runs", GpuBracketFusionConfig{true, true, GpuS3Fusion::TailOnly}, 19, 20},
+	    {"S3 tail-only, o run", GpuBracketFusionConfig{true, false, GpuS3Fusion::TailOnly}, 21, 22},
+	    {"S3 tail-only, down run", GpuBracketFusionConfig{false, true, GpuS3Fusion::TailOnly}, 21, 22},
 	};
 	return rows;
 }
 
-// Every configuration `SetGpuBracketFusionConfig` must refuse at this slice: at S2, every S3
-// variant (no S3 recorder exists yet).
+// Every configuration `SetGpuBracketFusionConfig` must refuse: an S3 variant with neither S2 run
+// fused (the coordinator's ruling: S3 is priced on top of S2, never alone).
 inline const std::vector<GpuBracketFusionConfig>& RefusedConfigs() {
-	static const std::vector<GpuBracketFusionConfig> rows = [] {
-		std::vector<GpuBracketFusionConfig> out;
-		for (GpuS3Fusion s3 : {GpuS3Fusion::TailOnly, GpuS3Fusion::MergedGemm}) {
-			for (int o = 0; o < 2; ++o) {
-				for (int d = 0; d < 2; ++d) out.push_back(GpuBracketFusionConfig{o != 0, d != 0, s3});
-			}
-		}
-		return out;
-	}();
+	static const std::vector<GpuBracketFusionConfig> rows = {
+	    GpuBracketFusionConfig{false, false, GpuS3Fusion::TailOnly},
+	    GpuBracketFusionConfig{false, false, GpuS3Fusion::MergedGemm},
+	};
 	return rows;
 }
 

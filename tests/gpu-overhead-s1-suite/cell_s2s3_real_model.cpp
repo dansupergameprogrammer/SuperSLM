@@ -316,7 +316,8 @@ int main(int argc, char** argv) {
 #if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
 	// 1.1: every fused pipeline any configuration used was built exactly once across every model,
 	// sequence and configuration above.
-	for (const char* name : {"fused_o_residual_norm_site", "fused_down_residual_commit_site"}) {
+	for (const char* name : {"fused_o_residual_norm_site", "fused_down_residual_commit_site", "gate_up_gemm_site",
+	                         "up_proj_gemm_wide_b_site", "fused_gate_up_site"}) {
 		const uint32_t built = superslm_gpu::ComposedPipelineBuildCount(name);
 		CHECK_MSG(g_model_0p5b_path.empty() || built == 1, "1.1: %s was built %u times across models, want once",
 		          name, built);
