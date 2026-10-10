@@ -7,6 +7,13 @@
 // own third-largest consumer, 28.7% of GPU-busy time) now runs in its OWN multi-group dispatch,
 // `up_proj_gemm_site.hlsl`, issued immediately before this one. This shader is requant-only now --
 // see `down_proj_site.hlsl`'s own header comment for the full account.
+//
+// GPU per-token overhead plan rev 3.1 §3.2: this file is now a thin wrapper. Its cbuffer and
+// bindings are unchanged; `main`'s body moved verbatim into `fused_site_bodies.hlsli` as
+// `UpTailSiteBody`, so the per-site dispatch (entry point, numthreads, groups, root constants) is
+// v1.11.0's -- the compiled container is byte-identical to v1.11.0's -- and the fused shaders run
+// the identical body text. The body reads this file's cbuffer fields and bindings by name, which
+// is why they are declared before the include.
 #include "site_common2.hlsli"
 
 cbuffer RootConstants : register(b0)
@@ -45,54 +52,16 @@ RWByteAddressBuffer WorkScratch    : register(u3);
 ByteAddressBuffer LoraAB : register(t8);
 ByteAddressBuffer Fold   : register(t9);
 
+// The up body reads its adapter slot through SSLM_UP_BODY_ADAPTER (fused_site_bodies.hlsli's
+// header comment says why it is a macro): per-site, that is this file's own `g_adapter_*` fields,
+// and the accumulator base is the literal 0u, both exactly v1.11.0's.
+#define SSLM_UP_BODY_ADAPTER(field) g_adapter_##field
+#define SSLM_FUSED_BODY_UP_PROJ_SITE
+#include "fused_site_bodies.hlsli"
+
 [numthreads(256, 1, 1)]
 void main(uint3 gtid : SV_GroupThreadID)
 {
     uint t = gtid.x;
-    // SSLM-GEOMETRY-SITE: GS-31
-    // T-2509 (widening byproduct, geometry_site_census.py's own multi-line window sweep):
-    // `hidden_size` here and `out_channels` two lines below are TWO INDEPENDENT, both-correct
-    // local variables that happen to share this shader's own generic prelude, not one standing
-    // in for the other -- `hidden_size` feeds only SeqStickyOffGpu's per-sequence tag-offset
-    // lookup (unrelated to any projection's width), and `out_channels` correctly equals
-    // g_intermediate_size, up_proj's own real, unaffected output width (matching
-    // up_proj_gemm_site.hlsl's own confirmed-correct GS-24). Registered, not fixed: no code here
-    // assumes hidden_size == num_attention_heads * head_dim.
-    int hidden_size = (int)g_hidden_size;
-    int out_channels = (int)g_intermediate_size;
-    uint sticky_off = SeqStickyOffGpu(hidden_size);
-    int64_t sticky = SeqState.Load<int64_t>(sticky_off);
-    if (sticky != kTagOk) return;
-
-    // T-2113 (B10 lever 1): the fused adapter-delta -- up's own slot (up=3), inserted before
-    // this shader's own requant read of WorkScratch at g_adapter_wide_base. No-op when rank == 0.
-    ApplyFusedAdapterDeltaGpu(t, WorkScratch, LayerScratch, LoraAB, Fold, (int)g_hidden_size,
-                               out_channels, (int)g_adapter_rank, g_adapter_a_offset,
-                               g_adapter_b_offset, g_adapter_fold_offset, g_adapter_u_off,
-                               g_adapter_in_base, g_adapter_wide_base, (int)g_adapter_stage1_lanes);
-
-    uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
-
-    uint normed_scale_off = ScratchLayout.Load<uint>(1 * 4);
-    int64_t in_scale_m = LayerScratch.Load<int64_t>(normed_scale_off + 0);
-    int64_t in_scale_e = LayerScratch.Load<int64_t>(normed_scale_off + 8);
-
-    uint off_site = layer_base + Layout.Load<uint>(46 * 4);
-
-    int64_t incoming_m[kMaxIncoming], incoming_e[kMaxIncoming];
-    [unroll] for (int z = 0; z < kMaxIncoming; ++z) { incoming_m[z] = 0; incoming_e[z] = 0; }
-    incoming_m[0] = in_scale_m; incoming_e[0] = in_scale_e;
-    int64_t site_m = LayerWeights.Load<int64_t>(off_site + 0);
-    int64_t site_e = LayerWeights.Load<int64_t>(off_site + 8);
-
-    uint up_codes_off = ScratchLayout.Load<uint>(13 * 4);
-    uint up_scale_off = ScratchLayout.Load<uint>(14 * 4);
-    int64_t status_tag;
-    RequantChainCheckedFullGpuP(t, WorkScratch, 0u, out_channels, incoming_m, incoming_e, 1, site_m,
-                                 site_e, LayerScratch, up_codes_off, up_scale_off, status_tag);
-    if (status_tag != kTagOk)
-    {
-        if (t == 0) SeqState.Store<int64_t>(sticky_off, status_tag);
-        return;
-    }
+    UpTailSiteBody(t, /*acc_base=*/0u);
 }

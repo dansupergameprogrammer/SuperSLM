@@ -1274,6 +1274,20 @@ jobs:
       - name: Fail the build if any geometry site is missing its marker, unmarked in production source, or has a fixed site's own required token missing from its marker's scope
         run: python tools/geometry_site_census.py
 
+  # GPU per-token overhead plan rev 3.1 Sec7 cell 7.7: every fused site shader's `main` has a
+  # DeviceMemoryBarrierWithGroupSync() between consecutive body calls. A source check because a
+  # deleted in-group barrier opens a race no GPU cell reliably catches; `--self-test` proves each
+  # barrier-deletion mutant is reported. Same shape as geometry-site-census above.
+  fused-site-barrier-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      - name: Fail the build if a fused site shader lacks the in-group barrier between two body calls
+        run: python tests/ci/check_fused_site_barriers.py --self-test
+
   # S-HARDEN-3 (F13): the converter's validate/serialize/verify transaction and
   # its proof manifest. Builds `sslm_verify` (the §13 item 7 independent C++
   # verifier) so tools/test_sslm_convert_loader_join.py (§17.3 cell 2) and

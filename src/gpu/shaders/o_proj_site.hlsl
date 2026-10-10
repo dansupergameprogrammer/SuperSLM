@@ -10,6 +10,13 @@
 // own fifth-largest consumer, 4.9% of GPU-busy time) now runs in its OWN multi-group dispatch,
 // `o_proj_gemm_site.hlsl`, issued immediately before this one. This shader is requant-only now --
 // see `down_proj_site.hlsl`'s own header comment for the full account.
+//
+// GPU per-token overhead plan rev 3.1 §3.2: this file is now a thin wrapper. Its cbuffer and
+// bindings are unchanged; `main`'s body moved verbatim into `fused_site_bodies.hlsli` as
+// `OTailSiteBody`, so the per-site dispatch (entry point, numthreads, groups, root constants) is
+// v1.11.0's -- the compiled container is byte-identical to v1.11.0's -- and the fused shaders run
+// the identical body text. The body reads this file's cbuffer fields and bindings by name, which
+// is why they are declared before the include.
 #include "site_common2.hlsli"
 
 cbuffer RootConstants : register(b0)
@@ -48,44 +55,12 @@ RWByteAddressBuffer WorkScratch    : register(u3);
 ByteAddressBuffer LoraAB : register(t8);
 ByteAddressBuffer Fold   : register(t9);
 
+#define SSLM_FUSED_BODY_O_PROJ_SITE
+#include "fused_site_bodies.hlsli"
+
 [numthreads(256, 1, 1)]
 void main(uint3 gtid : SV_GroupThreadID)
 {
     uint t = gtid.x;
-    int hidden_size = (int)g_hidden_size;
-    uint sticky_off = SeqStickyOffGpu(hidden_size);
-    int64_t sticky = SeqState.Load<int64_t>(sticky_off);
-    if (sticky != kTagOk) return;
-
-    // T-2113 (B10 lever 1): the fused adapter-delta -- o's own slot (o=1), inserted before this
-    // shader's own requant read of WorkScratch at g_adapter_wide_base. No-op when rank == 0.
-    ApplyFusedAdapterDeltaGpu(t, WorkScratch, LayerScratch, LoraAB, Fold, (int)g_hidden_size,
-                               (int)g_hidden_size, (int)g_adapter_rank, g_adapter_a_offset,
-                               g_adapter_b_offset, g_adapter_fold_offset, g_adapter_u_off,
-                               g_adapter_in_base, g_adapter_wide_base, (int)g_adapter_stage1_lanes);
-
-    uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
-
-    uint ctx_scale_off = ScratchLayout.Load<uint>(6 * 4);
-    int64_t in_scale_m = LayerScratch.Load<int64_t>(ctx_scale_off + 0);
-    int64_t in_scale_e = LayerScratch.Load<int64_t>(ctx_scale_off + 8);
-
-    uint off_site = layer_base + Layout.Load<uint>(29 * 4);
-
-    int64_t incoming_m[kMaxIncoming], incoming_e[kMaxIncoming];
-    [unroll] for (int z = 0; z < kMaxIncoming; ++z) { incoming_m[z] = 0; incoming_e[z] = 0; }
-    incoming_m[0] = in_scale_m; incoming_e[0] = in_scale_e;
-    int64_t site_m = LayerWeights.Load<int64_t>(off_site + 0);
-    int64_t site_e = LayerWeights.Load<int64_t>(off_site + 8);
-
-    uint o_codes_off = ScratchLayout.Load<uint>(7 * 4);
-    uint o_scale_off = ScratchLayout.Load<uint>(8 * 4);
-    int64_t status_tag;
-    RequantChainCheckedFullGpuP(t, WorkScratch, 0u, hidden_size, incoming_m, incoming_e, /*n_incoming=*/1,
-                                 site_m, site_e, LayerScratch, o_codes_off, o_scale_off, status_tag);
-    if (status_tag != kTagOk)
-    {
-        if (t == 0) SeqState.Store<int64_t>(sticky_off, status_tag);
-        return;
-    }
+    OTailSiteBody(t);
 }

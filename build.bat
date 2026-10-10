@@ -2300,6 +2300,14 @@ if not errorlevel 1 (
 		echo check_gpu_timing_mode_abi_unchanged.py FAILED -- see output above
 		set ec=1
 	)
+	rem GPU per-token overhead plan rev 3.1 Sec7 cell 7.7: every fused site shader's own main has a
+	rem DeviceMemoryBarrierWithGroupSync() between consecutive body calls -- the in-group barrier a
+	rem GPU cell cannot reliably catch missing. --self-test also proves each deletion mutant is reported.
+	python tests\ci\check_fused_site_barriers.py --self-test
+	if errorlevel 1 (
+		echo check_fused_site_barriers.py FAILED -- see output above
+		set ec=1
+	)
 	rem T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Significant 3, D-SLM5437): the
 	rem geometry site census (design Claude/Vitruvius/t2408-superslm-ask5-qwen3-arch-design-
 	rem 2026-08-29.md Sec2.5) is specified as "run as a test-suite cell, not a human step" --
