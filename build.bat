@@ -51,7 +51,7 @@ for %%f in (src\gpu\shaders\*.hlsl) do (
 	)
 )
 
-cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_ENABLE_MATVEC_TEST_SEAMS /DSUPERSLM_O11_ALLOC_INJECTION /DSUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION ^
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_ENABLE_MATVEC_TEST_SEAMS /DSUPERSLM_O11_ALLOC_INJECTION /DSUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION /DSUPERSLM_ENABLE_GPU_RECORD_LOG ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
 	src\sslm_abi.cpp src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp src\damped_greedy_phaseD_loop.cpp ^
@@ -2250,6 +2250,18 @@ out\superslm_tests.exe
 set ec=%errorlevel%
 if not %b1_ec%==0 set ec=%b1_ec%
 
+rem GPU per-token overhead plan rev 3.1, section 7 cell 6.1 (per-mode wiring): the run above is
+rem bracket mode, the default. The GPU-serial-port block runs again here in per-site mode, set the
+rem way a consumer sets it (SSLM_GPU_PER_SITE_TIMING=1), so every GPU cell in it runs once per
+rem mode. --gpu-serial-cells-only runs that block alone; the CPU cells do not depend on the mode.
+set SSLM_GPU_PER_SITE_TIMING=1
+out\superslm_tests.exe --gpu-serial-cells-only
+if errorlevel 1 (
+	echo superslm_tests --gpu-serial-cells-only FAILED in per-site mode -- see output above
+	set ec=1
+)
+set SSLM_GPU_PER_SITE_TIMING=
+
 rem T-2091 (O30's own local-half closure, Claude/Poirot/2aceac3-gpu-serial-port-ship-candidate-
 rem review.md; build log §27): this script ran no Python at all until now, so the O11 gate-flag pin
 rem and the rest of tests/ci/check_gpu_guard_status_parity.py's own structural population never
@@ -2279,6 +2291,13 @@ if not errorlevel 1 (
 	python tests\ci\check_gemm_site_thread_width_parity.py
 	if errorlevel 1 (
 		echo check_gemm_site_thread_width_parity.py FAILED -- see output above
+		set ec=1
+	)
+	rem GPU per-token overhead plan rev 3.1, section 7 cell 7.9: the timing-mode work changes no public
+	rem ABI -- gpu_1p0.h and the C ABI verb list stay byte-identical to v1.11.0.
+	python tests\ci\check_gpu_timing_mode_abi_unchanged.py
+	if errorlevel 1 (
+		echo check_gpu_timing_mode_abi_unchanged.py FAILED -- see output above
 		set ec=1
 	)
 	rem T-2441 (Poirot 327ee29-t2438-ask5-tracka-review.md, Significant 3, D-SLM5437): the

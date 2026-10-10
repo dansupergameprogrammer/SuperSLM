@@ -121,7 +121,10 @@ endif()
 # than a suite-side transcription. build.bat carries the identical source pair.
 if(WIN32)
 	target_sources(superslm_tests PRIVATE src/gpu/superslm_gpu.cpp src/gpu/gpu_1p0.cpp)
-	target_compile_definitions(superslm_tests PRIVATE SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
+	# GPU per-token overhead plan rev 3.1, cell 7.4: the record-log seam (gpu_port.h), test builds
+	# only -- build.bat's superslm_tests line defines it too.
+	target_compile_definitions(superslm_tests PRIVATE SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION
+		SUPERSLM_ENABLE_GPU_RECORD_LOG)
 	target_include_directories(superslm_tests PRIVATE src/gpu)
 	target_link_libraries(superslm_tests PRIVATE d3d12 dxgi dxguid)
 endif()
@@ -417,6 +420,8 @@ foreach(_sslm_tier SSE2 AVX2 AVX512)
 		target_sources(superslm_tests_${_sslm_tier_lower}_forced PRIVATE
 			src/gpu/superslm_gpu.cpp src/gpu/gpu_1p0.cpp)
 		target_include_directories(superslm_tests_${_sslm_tier_lower}_forced PRIVATE src/gpu)
+		target_compile_definitions(superslm_tests_${_sslm_tier_lower}_forced PRIVATE
+			SUPERSLM_ENABLE_GPU_RECORD_LOG)
 		target_link_libraries(superslm_tests_${_sslm_tier_lower}_forced PRIVATE d3d12 dxgi dxguid)
 	endif()
 

@@ -59,6 +59,7 @@
 #include "superslm/gpu_1p0.h"
 #include "superslm/gpu_1p0_bench_bridge.h"
 #include "../src/gpu/d3d12_harness.h"
+#include "support/gpu_record_log_fixtures.h"
 #endif
 
 #include <algorithm>
@@ -29346,6 +29347,860 @@ static void TestT2948_ShaderDirInvalidBeforeDeviceInit() {
 }
 #endif
 
+#ifdef _WIN32
+// ==============================================================================================
+// GPU per-token overhead plan rev 3.1, slice S1 (§3.1): two recording modes. These are the S1
+// cells of the plan's coverage model (§7) that run on the synthetic fixtures this file already
+// owns; the cells that need a real artifact (7.2's 0.5B lower bound, 7.3 through the public
+// budget, 8.2, 8.3, 9.1's v1.11.0 blob, 6.3) are in tests/gpu-overhead-s1-suite/, and 7.9 is
+// tests/ci/check_gpu_timing_mode_abi_unchanged.py. Cell numbers are the plan's §7 numbering.
+//
+// Bracket mode (the default) writes one timestamp before a list's first dispatch and one after its
+// last barrier and leaves the per-dispatch vector empty; per-site mode records the v1.11.0 command
+// stream exactly. The count seams (`LastCallRecordedDispatchCount`, `LastCallRecordedBarrierCount`,
+// `LastCallTimestampQueryCount`) report what the most recent submission recorded, for the last
+// command list it closed. Every cell here selects the mode it needs explicitly, so the suite's
+// second, per-site-by-environment run (build.bat, cell 6.1's per-mode wiring) reads the same.
+// ==============================================================================================
+namespace gpu_overhead_s1 {
+
+using superslm_gpu::GpuTimingMode;
+
+const char* ModeName(GpuTimingMode mode) {
+	return mode == GpuTimingMode::PerSite ? "per-site" : "bracket";
+}
+
+// Selects a mode for one cell and restores the process's mode on exit, so no cell leaks its
+// mode into the next.
+struct ScopedGpuTimingMode {
+	GpuTimingMode previous;
+	explicit ScopedGpuTimingMode(GpuTimingMode mode) : previous(superslm_gpu::GetGpuTimingMode()) {
+		superslm_gpu::SetGpuTimingMode(mode);
+	}
+	~ScopedGpuTimingMode() { superslm_gpu::SetGpuTimingMode(previous); }
+	ScopedGpuTimingMode(const ScopedGpuTimingMode&) = delete;
+	ScopedGpuTimingMode& operator=(const ScopedGpuTimingMode&) = delete;
+};
+
+// Everything one call leaves behind: its status, its timing and counts, and the output bytes.
+struct Reading {
+	SslmForwardStatus status = SslmForwardStatus::Ok;
+	superslm_gpu::GpuCallTiming timing{};
+	std::vector<double> per_dispatch;
+	uint32_t dispatches = 0, barriers = 0, queries = 0;
+	std::vector<int8_t> codes;
+	CarriedScale scale{};
+	uint32_t layer_index = 0;
+	int64_t context_length = 0;
+	uint64_t kv_saturation_count = 0;
+	std::vector<uint8_t> workspace;
+};
+
+void ReadSeams(Reading* r) {
+	r->timing = superslm_gpu::LastCallTiming();
+	r->per_dispatch = superslm_gpu::LastCallPerDispatchTimingsMs();
+	r->dispatches = superslm_gpu::LastCallRecordedDispatchCount();
+	r->barriers = superslm_gpu::LastCallRecordedBarrierCount();
+	r->queries = superslm_gpu::LastCallTimestampQueryCount();
+}
+
+void ReadOutputs(const SequenceLayerState& seq, const std::vector<uint8_t>& ws, size_t hidden,
+                 Reading* r) {
+	r->codes.assign(seq.hidden_codes, seq.hidden_codes + hidden);
+	r->scale = seq.hidden_scale;
+	r->layer_index = seq.layer_index;
+	r->context_length = seq.context_length;
+	r->kv_saturation_count = seq.kv_saturation_count;
+	r->workspace = ws;
+}
+
+bool SameOutputs(const Reading& a, const Reading& b) {
+	return a.status == b.status && a.codes == b.codes && a.scale.m == b.scale.m &&
+	       a.scale.e == b.scale.e && a.layer_index == b.layer_index &&
+	       a.context_length == b.context_length && a.kv_saturation_count == b.kv_saturation_count &&
+	       a.workspace == b.workspace;
+}
+
+// One token, full depth, through the async pair, on an N-layer synthetic fixture at context_cap
+// `cap`. `between` runs after Submit and before Finish (cell 3.1 toggles the mode there).
+template <uint32_t N, typename Between>
+Reading SubmitFinishOneToken(NLayerFixture<N>& fixture, int64_t cap, uint32_t layer_budget,
+                             Between between) {
+	Reading r;
+	int8_t codes[2] = {5, -5};
+	SequenceLayerState seq;
+	seq.hidden_codes = codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq.layer_index = 0;
+	std::vector<uint8_t> ws(static_cast<size_t>(N) * static_cast<size_t>(cap) * 1 * 2 * 2, 0);
+	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+	r.status = superslm_gpu::RunLayerLoopGpuSubmit(seq, fixture.layers, N, layer_budget, 2, 2, 1, 2,
+	                                               cap, fixture.view.rope_tables, ws.data(), ws.size(),
+	                                               /*external_kv_resident=*/nullptr,
+	                                               /*io_external_kv_needs_resume_barrier=*/nullptr,
+	                                               &inflight);
+	between();
+	if (r.status == SslmForwardStatus::Ok && inflight != nullptr) {
+		int32_t ready = 0;
+		r.status = superslm_gpu::RunLayerLoopGpuFinish(inflight, seq, ws.data(), /*block=*/1, &ready);
+	}
+	ReadSeams(&r);
+	ReadOutputs(seq, ws, 2, &r);
+	return r;
+}
+
+template <uint32_t N>
+Reading SubmitFinishOneToken(NLayerFixture<N>& fixture, int64_t cap, uint32_t layer_budget) {
+	return SubmitFinishOneToken(fixture, cap, layer_budget, [] {});
+}
+
+// `chunk_len` tokens through the chunk bridge (sub-chunks of at most kT2169TdrSafeMaxChunkTokens,
+// each its own command list) on the 8-layer fixture at context_cap 8.
+Reading RunChunk(NLayerFixture<8>& fixture, uint32_t chunk_len) {
+	constexpr int64_t kCap = 8;
+	Reading r;
+	int8_t codes[2] = {5, -5};
+	const CarriedScale scale{INT64_C(1073741824), 0};
+	SequenceLayerState seq;
+	seq.hidden_codes = codes;
+	seq.hidden_scale = scale;
+	seq.layer_index = 0;
+	std::vector<uint8_t> ws(8 * static_cast<size_t>(kCap) * 1 * 2 * 2, 0);
+	std::vector<uint8_t> blocks;
+	for (uint32_t t = 0; t < chunk_len; ++t) {
+		const std::vector<uint8_t> b = superslm_gpu_record_log::PackEmbeddingBlock(codes, 2, scale);
+		blocks.insert(blocks.end(), b.begin(), b.end());
+	}
+	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+	r.status = superslm_gpu::SubmitChunkToFullDepthForG5Bridge(
+	    seq, fixture.layers, 8, 2, 2, 1, 2, kCap, fixture.view.rope_tables, ws.data(), ws.size(),
+	    blocks.data(), chunk_len, /*external_kv_resident=*/nullptr,
+	    /*io_external_kv_needs_resume_barrier=*/nullptr, /*external_weights_resident=*/nullptr,
+	    /*external_rope_cos_resident=*/nullptr, /*external_rope_sin_resident=*/nullptr,
+	    /*external_rope_has=*/false, /*external_rope_cos_elems=*/0, /*external_rope_sin_elems=*/0,
+	    /*adapter_bridge=*/nullptr, &inflight);
+	if (r.status == SslmForwardStatus::Ok && inflight != nullptr) {
+		int32_t ready = 0;
+		r.status = superslm_gpu::RunLayerLoopGpuFinish(inflight, seq, ws.data(), /*block=*/1, &ready);
+	}
+	ReadSeams(&r);
+	ReadOutputs(seq, ws, 2, &r);
+	return r;
+}
+
+// The shape a reading must have to be a bracket-mode reading of a list that recorded `dispatches`
+// dispatches, or a per-site one.
+bool LooksLikeBracket(const Reading& r) { return r.per_dispatch.empty() && r.queries == 2; }
+bool LooksLikePerSite(const Reading& r, uint32_t dispatches) {
+	return r.per_dispatch.size() == dispatches && r.queries == dispatches + 1;
+}
+
+}  // namespace gpu_overhead_s1
+
+// Cell 2.1: `SSLM_GPU_PER_SITE_TIMING` selects per-site mode only when its whole value is exactly
+// "1". The parse is its own function, so every value is driven here without a process each; two
+// subprocesses (this executable, `--gpu-timing-mode-probe`) confirm the process-level read.
+static void TestGpuOverheadS1_2_1_ParseGpuTimingModeEnv_ExactlyOneSelectsPerSite() {
+	using superslm_gpu::GpuTimingMode;
+	using superslm_gpu::ParseGpuTimingModeEnv;
+	CHECK_MSG(ParseGpuTimingModeEnv("1") == GpuTimingMode::PerSite,
+	          "S1 2.1: ParseGpuTimingModeEnv(\"1\") must select per-site mode");
+	const std::string starts_with_one = "1" + std::string(4095, 'x');
+	std::string junk(4096, '\0');
+	for (size_t i = 0; i < junk.size(); ++i) junk[i] = static_cast<char>('!' + (i * 7) % 90);
+	struct Row {
+		const char* label;
+		const char* value;
+	};
+	const Row bracket_rows[] = {
+	    {"unset (nullptr)", nullptr},
+	    {"\"0\"", "0"},
+	    {"empty", ""},
+	    {"\"yes\"", "yes"},
+	    {"\"10\"", "10"},
+	    {"\"1 \"", "1 "},
+	    {"4 KiB beginning with '1'", starts_with_one.c_str()},
+	    {"4 KiB of junk", junk.c_str()},
+	};
+	for (const Row& row : bracket_rows) {
+		CHECK_MSG(ParseGpuTimingModeEnv(row.value) == GpuTimingMode::Bracket,
+		          "S1 2.1: ParseGpuTimingModeEnv(%s) selected per-site mode -- only the exact, "
+		          "length-1 value \"1\" may; a prefix test (the SSLM_GPU_ENABLE_DEBUG_LAYER idiom) "
+		          "is the mutant this row kills",
+		          row.label);
+	}
+
+	// The process-level read: a child of this executable with the variable set reports the mode
+	// it initialised from it.
+	const char* kVar = "SSLM_GPU_PER_SITE_TIMING";
+	char prev_buf[64] = {};
+	const DWORD prev_len = GetEnvironmentVariableA(kVar, prev_buf, sizeof(prev_buf));
+	const bool had_prev = prev_len > 0 && prev_len < sizeof(prev_buf);
+	auto probe_child = [&](const char* value) -> std::string {
+		_putenv_s(kVar, value);
+		const std::filesystem::path out_path =
+		    std::filesystem::temp_directory_path() /
+		    ("superslm_gpu_timing_mode_probe_" + std::to_string(CurrentProcessId()) + ".txt");
+		const std::string cmd = "\"\"" + GSelfPath + "\" --gpu-timing-mode-probe > \"" +
+		                        out_path.string() + "\" 2>&1\"";
+		const int rc = std::system(cmd.c_str());
+		std::string content;
+		{
+			std::ifstream f(out_path, std::ios::binary);
+			content.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+		}
+		std::error_code ec;
+		std::filesystem::remove(out_path, ec);
+		CHECK_MSG(rc == 0, "S1 2.1: the --gpu-timing-mode-probe child (%s=%s) exited %d", kVar, value,
+		          rc);
+		return content;
+	};
+	const std::string with_one = probe_child("1");
+	const std::string with_ten = probe_child("10");
+	_putenv_s(kVar, had_prev ? prev_buf : "");
+	CHECK_MSG(with_one.find("gpu_timing_mode=per-site") != std::string::npos,
+	          "S1 2.1: a process started with %s=1 must initialise per-site mode; the child said: %s",
+	          kVar, with_one.c_str());
+	CHECK_MSG(with_ten.find("gpu_timing_mode=bracket") != std::string::npos,
+	          "S1 2.1: a process started with %s=10 must initialise bracket mode; the child said: %s",
+	          kVar, with_ten.c_str());
+}
+
+// Cell 1.2: the mode switched between two whole calls takes effect at the next submit, and each
+// call's timing matches the mode it was submitted in.
+static void TestGpuOverheadS1_1_2_ModeSwitchTakesEffectAtTheNextSubmit() {
+	using namespace gpu_overhead_s1;
+	constexpr uint32_t kDispatches = 8 * superslm_gpu::kLegacyDispatchesPerLayer;
+	NLayerFixture<8> fixture;
+	const GpuTimingMode order[] = {GpuTimingMode::PerSite, GpuTimingMode::Bracket,
+	                               GpuTimingMode::Bracket, GpuTimingMode::PerSite};
+	for (size_t i = 0; i < 4; ++i) {
+		ScopedGpuTimingMode scoped(order[i]);
+		const Reading r = SubmitFinishOneToken(fixture, /*cap=*/1, /*layer_budget=*/8);
+		CHECK_MSG(r.status == SslmForwardStatus::Ok, "S1 1.2 call %zu (%s): status=%s, want Ok", i,
+		          ModeName(order[i]), superslm::SslmForwardStatusName(r.status));
+		const bool matches = order[i] == GpuTimingMode::Bracket ? LooksLikeBracket(r)
+		                                                        : LooksLikePerSite(r, kDispatches);
+		CHECK_MSG(matches,
+		          "S1 1.2 call %zu, submitted in %s mode: per-dispatch entries=%zu queries=%u -- want "
+		          "%s's shape (bracket: 0 entries, 2 queries; per-site: %u entries, %u queries)",
+		          i, ModeName(order[i]), r.per_dispatch.size(), r.queries, ModeName(order[i]),
+		          kDispatches, kDispatches + 1);
+		CHECK_MSG(r.dispatches == kDispatches && r.barriers == kDispatches,
+		          "S1 1.2 call %zu (%s): recorded %u dispatches and %u barriers, want %u of each", i,
+		          ModeName(order[i]), r.dispatches, r.barriers, kDispatches);
+	}
+}
+
+// Cell 3.1: the mode toggled after Submit and before Finish, in both directions. Finish reads the
+// submission's own mode, stored in its in-flight record, never the process's current one.
+static void TestGpuOverheadS1_3_1_FinishReadsTheSubmissionsOwnMode() {
+	using namespace gpu_overhead_s1;
+	constexpr uint32_t kDispatches = 8 * superslm_gpu::kLegacyDispatchesPerLayer;
+	NLayerFixture<8> fixture;
+	{
+		ScopedGpuTimingMode scoped(GpuTimingMode::Bracket);
+		const Reading r = SubmitFinishOneToken(fixture, 1, 8, [] {
+			superslm_gpu::SetGpuTimingMode(GpuTimingMode::PerSite);
+		});
+		CHECK_MSG(r.status == SslmForwardStatus::Ok, "S1 3.1 bracket->per-site: status=%s",
+		          superslm::SslmForwardStatusName(r.status));
+		CHECK_MSG(LooksLikeBracket(r),
+		          "S1 3.1 submitted in bracket mode, toggled to per-site before Finish: per-dispatch "
+		          "entries=%zu queries=%u -- want 0 entries and 2 queries (the submission's mode); "
+		          "a Finish that reads the current mode builds a vector from 2 timestamps",
+		          r.per_dispatch.size(), r.queries);
+		CHECK_MSG(r.timing.gpu_busy_ms > 0.0,
+		          "S1 3.1 bracket->per-site: gpu_busy_ms=%.6f, want > 0 (ts[1] - ts[0])",
+		          r.timing.gpu_busy_ms);
+	}
+	{
+		ScopedGpuTimingMode scoped(GpuTimingMode::PerSite);
+		const Reading r = SubmitFinishOneToken(fixture, 1, 8, [] {
+			superslm_gpu::SetGpuTimingMode(GpuTimingMode::Bracket);
+		});
+		CHECK_MSG(r.status == SslmForwardStatus::Ok, "S1 3.1 per-site->bracket: status=%s",
+		          superslm::SslmForwardStatusName(r.status));
+		CHECK_MSG(LooksLikePerSite(r, kDispatches),
+		          "S1 3.1 submitted in per-site mode, toggled to bracket before Finish: per-dispatch "
+		          "entries=%zu queries=%u -- want %u entries and %u queries (the submission's mode)",
+		          r.per_dispatch.size(), r.queries, kDispatches, kDispatches + 1);
+	}
+}
+
+// Cell 3.2 (best effort, plan §7: MSVC has no ThreadSanitizer; the code reviewer checks the mode is
+// a std::atomic): a plugin-shaped caller submits and finishes on its own thread while a second
+// thread toggles the mode. Every call's reading is wholly one mode's.
+static void TestGpuOverheadS1_3_2_ModeToggledFromAnotherThreadEveryCallIsOneMode() {
+	using namespace gpu_overhead_s1;
+	constexpr uint32_t kDispatches = 8 * superslm_gpu::kLegacyDispatchesPerLayer;
+	ScopedGpuTimingMode restore(superslm_gpu::GetGpuTimingMode());
+	NLayerFixture<8> fixture;
+	std::atomic<bool> stop{false};
+	std::thread toggler([&stop] {
+		uint32_t i = 0;
+		while (!stop.load()) {
+			superslm_gpu::SetGpuTimingMode((++i & 1u) ? GpuTimingMode::PerSite : GpuTimingMode::Bracket);
+			std::this_thread::yield();
+		}
+	});
+	int bracket_calls = 0, per_site_calls = 0, mixed_calls = 0, failed_calls = 0;
+	for (int i = 0; i < 40; ++i) {
+		const Reading r = SubmitFinishOneToken(fixture, 1, 8);
+		if (r.status != SslmForwardStatus::Ok) {
+			++failed_calls;
+		} else if (LooksLikeBracket(r) && r.dispatches == kDispatches) {
+			++bracket_calls;
+		} else if (LooksLikePerSite(r, kDispatches) && r.dispatches == kDispatches) {
+			++per_site_calls;
+		} else {
+			++mixed_calls;
+		}
+	}
+	stop.store(true);
+	toggler.join();
+	CHECK_MSG(failed_calls == 0, "S1 3.2: %d of 40 calls did not return Ok", failed_calls);
+	CHECK_MSG(mixed_calls == 0,
+	          "S1 3.2: %d of 40 calls read neither wholly bracket nor wholly per-site (%d bracket, %d "
+	          "per-site) -- a submission must read the mode once and carry it to its Finish",
+	          mixed_calls, bracket_calls, per_site_calls);
+}
+
+// Cell 5.4 (extends TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject): a
+// guard-rejected call reports zero timing, an empty vector and zero counts, in both modes, after a
+// successful call in the same mode.
+static void TestGpuOverheadS1_5_4_GuardRejectedCallReportsNothingInBothModes() {
+	using namespace gpu_overhead_s1;
+	NLayerFixture<8> fixture;
+	for (GpuTimingMode mode : {GpuTimingMode::Bracket, GpuTimingMode::PerSite}) {
+		ScopedGpuTimingMode scoped(mode);
+		const Reading ok = SubmitFinishOneToken(fixture, 1, 8);
+		CHECK_MSG(ok.status == SslmForwardStatus::Ok && ok.dispatches > 0,
+		          "S1 5.4 (%s): the priming call must succeed and record (status=%s, dispatches=%u)",
+		          ModeName(mode), superslm::SslmForwardStatusName(ok.status), ok.dispatches);
+		const Reading rejected = SubmitFinishOneToken(fixture, 1, /*layer_budget=*/0);
+		CHECK_MSG(rejected.status == SslmForwardStatus::InvalidLayerBudget,
+		          "S1 5.4 (%s): status=%s, want InvalidLayerBudget (this cell's own premise)",
+		          ModeName(mode), superslm::SslmForwardStatusName(rejected.status));
+		CHECK_MSG(rejected.timing.record_ms == 0.0 && rejected.timing.submit_wait_ms == 0.0 &&
+		              rejected.timing.gpu_busy_ms == 0.0 && rejected.timing.readback_ms == 0.0,
+		          "S1 5.4 (%s): a guard-rejected call's timing must read all-zero, got record=%.6f "
+		          "submit_wait=%.6f gpu_busy=%.6f readback=%.6f",
+		          ModeName(mode), rejected.timing.record_ms, rejected.timing.submit_wait_ms,
+		          rejected.timing.gpu_busy_ms, rejected.timing.readback_ms);
+		CHECK_MSG(rejected.per_dispatch.empty(),
+		          "S1 5.4 (%s): a guard-rejected call left %zu per-dispatch entries, want 0",
+		          ModeName(mode), rejected.per_dispatch.size());
+		CHECK_MSG(rejected.dispatches == 0 && rejected.barriers == 0 && rejected.queries == 0,
+		          "S1 5.4 (%s): a guard-rejected call reports %u dispatches, %u barriers, %u queries "
+		          "-- want 0, not the previous call's counts",
+		          ModeName(mode), rejected.dispatches, rejected.barriers, rejected.queries);
+	}
+}
+
+// Cells 6.1 / 6.2 / 9.1 on the synthetic fixtures: bracket mode's output bytes equal per-site
+// mode's, and both equal the CPU oracle's (the absolute anchor for code both modes share), on the
+// single-token path; bracket equals per-site on the chunk path; and the SLM5 blob saved after
+// either mode's call is byte-equal.
+static void TestGpuOverheadS1_6_1_BracketBytesEqualPerSiteBytesAndTheCpuOracle() {
+	using namespace gpu_overhead_s1;
+	using namespace t2019_b11;
+	NLayerFixture<8> fixture;
+	Reading by_mode[2];
+	const GpuTimingMode modes[2] = {GpuTimingMode::PerSite, GpuTimingMode::Bracket};
+	for (int m = 0; m < 2; ++m) {
+		ScopedGpuTimingMode scoped(modes[m]);
+		by_mode[m] = SubmitFinishOneToken(fixture, 1, 8);
+		CHECK_MSG(by_mode[m].status == SslmForwardStatus::Ok, "S1 6.1 single-token (%s): status=%s",
+		          ModeName(modes[m]), superslm::SslmForwardStatusName(by_mode[m].status));
+	}
+	CHECK_MSG(SameOutputs(by_mode[0], by_mode[1]),
+	          "S1 6.1 single-token: bracket mode's status, SequenceLayerState and workspace bytes "
+	          "must equal per-site mode's");
+
+	// CPU oracle (6.2): the same token through RunLayerLoop.
+	int8_t cpu_codes[2] = {5, -5};
+	SequenceLayerState cpu_seq;
+	cpu_seq.hidden_codes = cpu_codes;
+	cpu_seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	cpu_seq.layer_index = 0;
+	std::vector<uint8_t> cpu_ws(8 * kWsPerLayer, 0);
+	const auto cpu_st = RunLayerLoop(cpu_seq, fixture.layers, 8, 8, 2, 2, 1, 2, 1,
+	                                 fixture.view.rope_tables, cpu_ws.data(), cpu_ws.size());
+	Reading cpu;
+	cpu.status = cpu_st;
+	ReadOutputs(cpu_seq, cpu_ws, 2, &cpu);
+	CHECK_MSG(SameOutputs(cpu, by_mode[1]),
+	          "S1 6.2 single-token: bracket mode's status (%s), SequenceLayerState and workspace "
+	          "bytes must equal the CPU oracle's (%s)",
+	          superslm::SslmForwardStatusName(by_mode[1].status), superslm::SslmForwardStatusName(cpu_st));
+
+	// 9.1 (synthetic half): the SLM5 blob saved after each mode's call is byte-equal.
+	std::array<uint8_t, superslm::kIntegrityHashBytes> hash{};
+	std::vector<uint8_t> blobs[2];
+	for (int m = 0; m < 2; ++m) {
+		int8_t codes[2] = {by_mode[m].codes[0], by_mode[m].codes[1]};
+		SequenceLayerState seq;
+		seq.hidden_codes = codes;
+		seq.hidden_scale = by_mode[m].scale;
+		seq.layer_index = by_mode[m].layer_index;
+		seq.context_length = by_mode[m].context_length;
+		seq.kv_saturation_count = by_mode[m].kv_saturation_count;
+		size_t size = 0;
+		superslm_gpu::SaveGpuSequenceState(seq, 2, by_mode[m].workspace.data(),
+		                                   by_mode[m].workspace.size(), hash, -1, 0, false, nullptr,
+		                                   &size);
+		blobs[m].assign(size, 0);
+		const bool saved = superslm_gpu::SaveGpuSequenceState(
+		    seq, 2, by_mode[m].workspace.data(), by_mode[m].workspace.size(), hash, -1, 0, false,
+		    blobs[m].data(), &size);
+		CHECK_MSG(saved && size > 0, "S1 9.1 (%s): SaveGpuSequenceState failed", ModeName(modes[m]));
+	}
+	CHECK_MSG(blobs[0] == blobs[1],
+	          "S1 9.1: the SLM5 blob saved after a bracket-mode call must be byte-equal to the one "
+	          "saved after a per-site call");
+
+	// Chunk path, 2 tokens (one list) and 6 tokens (two lists).
+	for (uint32_t chunk_len : {2u, 6u}) {
+		Reading chunk[2];
+		for (int m = 0; m < 2; ++m) {
+			ScopedGpuTimingMode scoped(modes[m]);
+			chunk[m] = RunChunk(fixture, chunk_len);
+			CHECK_MSG(chunk[m].status == SslmForwardStatus::Ok, "S1 6.1 chunk of %u (%s): status=%s",
+			          chunk_len, ModeName(modes[m]), superslm::SslmForwardStatusName(chunk[m].status));
+		}
+		CHECK_MSG(SameOutputs(chunk[0], chunk[1]),
+		          "S1 6.1 chunk of %u tokens: bracket mode's outputs must equal per-site mode's",
+		          chunk_len);
+	}
+}
+
+// Cells 7.1 and 7.2 (synthetic halves): bracket mode writes two queries per command list, on the
+// single-token path and on the chunk path (one pair per sub-chunk list); gpu_busy_ms keeps its
+// meaning -- > 0 and <= submit_wait_ms -- in both modes, on both paths. 7.2's lower bound against
+// per-site mode is a 0.5B cell (tests/gpu-overhead-s1-suite/), where it means what the plan says.
+static void TestGpuOverheadS1_7_1_BracketWritesTwoQueriesPerListAndGpuBusyKeepsItsMeaning() {
+	using namespace gpu_overhead_s1;
+	constexpr uint32_t kPerToken = 8 * superslm_gpu::kLegacyDispatchesPerLayer;
+	NLayerFixture<8> fixture;
+	for (GpuTimingMode mode : {GpuTimingMode::Bracket, GpuTimingMode::PerSite}) {
+		ScopedGpuTimingMode scoped(mode);
+		struct Case {
+			const char* label;
+			Reading r;
+			uint32_t list_dispatches;
+		};
+		Case cases[3] = {
+		    {"single-token", SubmitFinishOneToken(fixture, 1, 8), kPerToken},
+		    {"chunk of 2 (one list)", RunChunk(fixture, 2), 2 * kPerToken},
+		    // 6 tokens = a 4-token list then a 2-token list; the seams report the last list.
+		    {"chunk of 6 (last of two lists)", RunChunk(fixture, 6), 2 * kPerToken},
+		};
+		for (const Case& c : cases) {
+			CHECK_MSG(c.r.status == SslmForwardStatus::Ok, "S1 7.1 %s (%s): status=%s", c.label,
+			          ModeName(mode), superslm::SslmForwardStatusName(c.r.status));
+			const uint32_t want_queries =
+			    mode == GpuTimingMode::Bracket ? 2u : c.list_dispatches + 1u;
+			CHECK_MSG(c.r.queries == want_queries,
+			          "S1 7.1 %s (%s): LastCallTimestampQueryCount()=%u, want %u -- bracket mode "
+			          "writes one pair per list; RED on a recorder that keeps the per-site queries",
+			          c.label, ModeName(mode), c.r.queries, want_queries);
+			const size_t want_entries = mode == GpuTimingMode::Bracket ? 0u : c.list_dispatches;
+			CHECK_MSG(c.r.per_dispatch.size() == want_entries,
+			          "S1 7.1 %s (%s): %zu per-dispatch entries, want %zu", c.label, ModeName(mode),
+			          c.r.per_dispatch.size(), want_entries);
+			CHECK_MSG(c.r.timing.gpu_busy_ms > 0.0 && c.r.timing.gpu_busy_ms <= c.r.timing.submit_wait_ms,
+			          "S1 7.2 %s (%s): gpu_busy_ms=%.6f submit_wait_ms=%.6f -- want 0 < gpu_busy <= "
+			          "submit_wait",
+			          c.label, ModeName(mode), c.r.timing.gpu_busy_ms, c.r.timing.submit_wait_ms);
+		}
+	}
+}
+
+// Cell 7.3 (synthetic half; S1 runs it as a regression only -- the plan's killing value is k = 12
+// at S2-B and S3-B): at dispatch_budget = k * DispatchesPerLayer, both modes advance exactly k
+// layers, and the recorded count is k layers' worth. The public-budget half (sslm_decode_step_gpu
+// on the 24-layer 0.5B) is in tests/gpu-overhead-s1-suite/.
+static void TestGpuOverheadS1_7_3_BudgetUnitAdvancesExactlyKLayersInBothModes() {
+	using namespace gpu_overhead_s1;
+	constexpr uint32_t kUnit = superslm_gpu::kLegacyDispatchesPerLayer;
+	NLayerFixture<24> fixture;
+	for (GpuTimingMode mode : {GpuTimingMode::Bracket, GpuTimingMode::PerSite}) {
+		ScopedGpuTimingMode scoped(mode);
+		for (uint32_t k : {1u, 4u, 24u}) {
+			uint32_t layers = 0;
+			const auto plan = superslm_gpu::PlanDispatchBudgetGpu(k * kUnit, 24, 0, &layers, kUnit);
+			CHECK_MSG(plan == superslm_gpu::SslmGpuStatus::Ok && layers == k,
+			          "S1 7.3 (%s) k=%u: PlanDispatchBudgetGpu(%u) planned %u layers, want %u",
+			          ModeName(mode), k, k * kUnit, layers, k);
+			const Reading r = SubmitFinishOneToken(fixture, 1, layers);
+			CHECK_MSG(r.status == SslmForwardStatus::Ok && r.layer_index == k,
+			          "S1 7.3 (%s) k=%u: status=%s layer_index=%u, want Ok and exactly %u layers",
+			          ModeName(mode), k, superslm::SslmForwardStatusName(r.status), r.layer_index, k);
+			CHECK_MSG(r.dispatches == k * kUnit,
+			          "S1 7.3 (%s) k=%u: recorded %u dispatches, want %u (at S1 the recorded count "
+			          "per layer equals the budget unit in both modes)",
+			          ModeName(mode), k, r.dispatches, k * kUnit);
+		}
+	}
+}
+
+// Cell 7.8 (S1 counts): exact counts per token through the seams. Per-site: layers x 24 (legacy) or
+// x 25 (QK norm) dispatches, as many barriers, dispatches + 1 queries. Bracket at S1: the same
+// dispatches and barriers, 2 queries. I3: bracket never records more than per-site.
+static void TestGpuOverheadS1_7_8_ExactCountsPerTokenInBothModes() {
+	using namespace gpu_overhead_s1;
+	struct Counts {
+		SslmForwardStatus status;
+		uint32_t dispatches, barriers, queries;
+	};
+	auto counts_of = [](const Reading& r) {
+		return Counts{r.status, r.dispatches, r.barriers, r.queries};
+	};
+	auto run_qk = []() {
+		QkNormWiringFixture fixture;
+		int8_t codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		uint8_t ws[4] = {};
+		Reading r;
+		r.status = superslm_gpu::RunLayerLoopGpu(seq, &fixture.layer, 1, 1, 2, 2, 1, 2, 1,
+		                                         fixture.view.rope_tables, ws, sizeof(ws));
+		ReadSeams(&r);
+		return r;
+	};
+	NLayerFixture<8> fixture;
+	struct Shape {
+		const char* label;
+		uint32_t dispatches;
+	};
+	const Shape shapes[3] = {{"legacy 8-layer token", 8 * superslm_gpu::kLegacyDispatchesPerLayer},
+	                         {"QK-norm 1-layer token", 1 * superslm_gpu::kQkNormDispatchesPerLayer},
+	                         {"legacy 8-layer chunk of 2", 2 * 8 * superslm_gpu::kLegacyDispatchesPerLayer}};
+	Counts seen[2][3];
+	const GpuTimingMode modes[2] = {GpuTimingMode::PerSite, GpuTimingMode::Bracket};
+	for (int m = 0; m < 2; ++m) {
+		ScopedGpuTimingMode scoped(modes[m]);
+		seen[m][0] = counts_of(SubmitFinishOneToken(fixture, 1, 8));
+		seen[m][1] = counts_of(run_qk());
+		seen[m][2] = counts_of(RunChunk(fixture, 2));
+		for (int s = 0; s < 3; ++s) {
+			const Counts& c = seen[m][s];
+			// The QK fixture's K landing is built to clamp; its status is the forward's business,
+			// and the counts are recorded before it runs.
+			CHECK_MSG(s == 1 || c.status == SslmForwardStatus::Ok, "S1 7.8 %s (%s): status=%s",
+			          shapes[s].label, ModeName(modes[m]), superslm::SslmForwardStatusName(c.status));
+			const uint32_t want_queries = modes[m] == GpuTimingMode::Bracket ? 2u : shapes[s].dispatches + 1u;
+			CHECK_MSG(c.dispatches == shapes[s].dispatches && c.barriers == shapes[s].dispatches &&
+			              c.queries == want_queries,
+			          "S1 7.8 %s (%s): dispatches=%u barriers=%u queries=%u, want %u / %u / %u",
+			          shapes[s].label, ModeName(modes[m]), c.dispatches, c.barriers, c.queries,
+			          shapes[s].dispatches, shapes[s].dispatches, want_queries);
+		}
+	}
+	for (int s = 0; s < 3; ++s) {
+		CHECK_MSG(seen[1][s].dispatches <= seen[0][s].dispatches &&
+		              seen[1][s].barriers <= seen[0][s].barriers && seen[1][s].queries <= seen[0][s].queries,
+		          "S1 7.8 / I3 %s: bracket recorded more than per-site (%u/%u/%u vs %u/%u/%u)",
+		          shapes[s].label, seen[1][s].dispatches, seen[1][s].barriers, seen[1][s].queries,
+		          seen[0][s].dispatches, seen[0][s].barriers, seen[0][s].queries);
+	}
+}
+
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+// The stream with its timestamp queries and resolve removed: what both modes must share at S1.
+static std::vector<std::string> GpuOverheadS1_WithoutQueries(const std::vector<std::string>& log) {
+	std::vector<std::string> out;
+	for (const std::string& line : log) {
+		if (line.rfind("Q ", 0) == 0 || line.rfind("R ", 0) == 0) continue;
+		out.push_back(line);
+	}
+	return out;
+}
+
+static std::string GpuOverheadS1_FirstDifference(const std::vector<std::string>& want,
+                                                 const std::vector<std::string>& got) {
+	const size_t n = std::min(want.size(), got.size());
+	for (size_t i = 0; i < n; ++i) {
+		if (want[i] != got[i]) {
+			return "line " + std::to_string(i + 1) + ": want \"" + want[i] + "\", got \"" + got[i] + "\"";
+		}
+	}
+	if (want.size() != got.size()) {
+		return "length: want " + std::to_string(want.size()) + " lines, got " + std::to_string(got.size());
+	}
+	return "none";
+}
+#endif
+
+// Cell 7.8, stream shape (S1 only; S2 and S3 change bracket mode's dispatches by design): on every
+// cell-7.4 fixture, bracket mode's stream is per-site mode's with the per-site queries removed --
+// query 0 first, then the identical dispatches, root constants and barriers, then query 1 and a
+// 2-entry resolve.
+static void TestGpuOverheadS1_7_8_BracketStreamIsPerSiteStreamWithoutSiteQueries() {
+#if !defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	CHECK_MSG(false,
+	          "S1 7.8 stream shape: this binary was built without SUPERSLM_ENABLE_GPU_RECORD_LOG; "
+	          "build.bat and CMakeLists.txt define it for superslm_tests");
+#else
+	using namespace gpu_overhead_s1;
+	for (const char* name : superslm_gpu_record_log::kFixtureNames) {
+		std::vector<std::string> logs[2];
+		const GpuTimingMode modes[2] = {GpuTimingMode::PerSite, GpuTimingMode::Bracket};
+		bool captured = true;
+		for (int m = 0; m < 2; ++m) {
+			ScopedGpuTimingMode scoped(modes[m]);
+			std::string err;
+			if (!superslm_gpu_record_log::CaptureRecordLog(name, &logs[m], &err)) {
+				CHECK_MSG(false, "S1 7.8 stream shape %s (%s): capture failed: %s", name,
+				          ModeName(modes[m]), err.c_str());
+				captured = false;
+			}
+		}
+		if (!captured) continue;
+		const std::vector<std::string>& bracket = logs[1];
+		const bool framed = bracket.size() >= 3 && bracket.front() == "Q 0" &&
+		                    bracket[bracket.size() - 2] == "Q 1" && bracket.back() == "R 0,2" &&
+		                    bracket[bracket.size() - 3] == "B";
+		CHECK_MSG(framed,
+		          "S1 7.8 stream shape %s: bracket mode must open with \"Q 0\" and close with \"B\", "
+		          "\"Q 1\", \"R 0,2\" (query 1 after the last barrier); got %zu lines, first \"%s\", "
+		          "last \"%s\"",
+		          name, bracket.size(), bracket.empty() ? "" : bracket.front().c_str(),
+		          bracket.empty() ? "" : bracket.back().c_str());
+		size_t bracket_queries = 0;
+		for (const std::string& line : bracket) bracket_queries += line.rfind("Q ", 0) == 0 ? 1 : 0;
+		CHECK_MSG(bracket_queries == 2, "S1 7.8 stream shape %s: bracket mode wrote %zu queries, want 2",
+		          name, bracket_queries);
+		const std::vector<std::string> per_site_core = GpuOverheadS1_WithoutQueries(logs[0]);
+		const std::vector<std::string> bracket_core = GpuOverheadS1_WithoutQueries(bracket);
+		CHECK_MSG(per_site_core == bracket_core,
+		          "S1 7.8 stream shape %s: without queries, bracket mode's dispatches, constants and "
+		          "barriers must equal per-site mode's at S1; first difference at %s",
+		          name, GpuOverheadS1_FirstDifference(per_site_core, bracket_core).c_str());
+	}
+#endif
+}
+
+// Cell 7.4: per-site mode's command stream equals the v1.11.0 capture (plan §4.2 B0.6, made from
+// v1.11.0 plus the record-log seam by driving tests/support/gpu_record_log_fixtures.h), fixture by
+// fixture, line by line. The capture is filed at tests/fixtures/gpu_record_log/v1p11/ with a
+// SHA256SUMS; until the box files it this cell is red, by name.
+static void TestGpuOverheadS1_7_4_PerSiteStreamEqualsTheV1p11Capture() {
+#if !defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	CHECK_MSG(false,
+	          "S1 7.4: this binary was built without SUPERSLM_ENABLE_GPU_RECORD_LOG; build.bat and "
+	          "CMakeLists.txt define it for superslm_tests");
+#else
+	using namespace gpu_overhead_s1;
+	const std::string sums_path = ResolveFixturePath("gpu_record_log/v1p11/SHA256SUMS");
+	if (sums_path.empty()) {
+		CHECK_MSG(false,
+		          "S1 7.4: capture not filed yet -- tests/fixtures/gpu_record_log/v1p11/SHA256SUMS is "
+		          "absent. The box makes it from v1.11.0 plus the record-log seam (plan §4.2 B0.6) by "
+		          "calling superslm_gpu_record_log::WriteRecordLogFixtures and files the four .log "
+		          "files with it; this cell stays red until then");
+		return;
+	}
+	std::vector<std::pair<std::string, std::string>> want_hash;  // (file name, hex digest)
+	{
+		std::ifstream f(sums_path, std::ios::binary);
+		std::string line;
+		while (std::getline(f, line)) {
+			if (!line.empty() && line.back() == '\r') line.pop_back();
+			if (line.size() < 67) continue;
+			want_hash.emplace_back(line.substr(66), line.substr(0, 64));
+		}
+	}
+	for (const char* name : superslm_gpu_record_log::kFixtureNames) {
+		const std::string file = std::string(name) + ".log";
+		const std::string path = ResolveFixturePath("gpu_record_log/v1p11/" + file);
+		std::string filed_hash;
+		for (const auto& entry : want_hash) {
+			if (entry.first == file) filed_hash = entry.second;
+		}
+		if (path.empty() || filed_hash.empty()) {
+			CHECK_MSG(false, "S1 7.4 %s: capture not filed yet -- %s or its SHA256SUMS entry is absent",
+			          name, file.c_str());
+			continue;
+		}
+		std::string bytes;
+		{
+			std::ifstream f(path, std::ios::binary);
+			bytes.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+		}
+		const std::string got_hash = superslm_gpu_record_log::Sha256Hex(bytes);
+		CHECK_MSG(got_hash == filed_hash,
+		          "S1 7.4 %s: the filed capture's SHA-256 is %s, SHA256SUMS says %s -- the capture was "
+		          "changed after it was filed (or checked out with converted line ends)",
+		          name, got_hash.c_str(), filed_hash.c_str());
+		std::vector<std::string> want;
+		{
+			std::istringstream in(bytes);
+			std::string line;
+			while (std::getline(in, line)) want.push_back(line);
+		}
+		std::vector<std::string> got;
+		std::string err;
+		bool captured = false;
+		{
+			ScopedGpuTimingMode scoped(GpuTimingMode::PerSite);
+			captured = superslm_gpu_record_log::CaptureRecordLog(name, &got, &err);
+		}
+		CHECK_MSG(captured, "S1 7.4 %s: capture on this build failed: %s", name, err.c_str());
+		if (!captured) continue;
+		CHECK_MSG(got == want,
+		          "S1 7.4 %s: per-site mode's stream (%zu lines) must equal the v1.11.0 capture (%zu "
+		          "lines) -- same dispatches, order, groups, root constants, barriers, queries and "
+		          "resolve; first difference at %s",
+		          name, got.size(), want.size(), GpuOverheadS1_FirstDifference(want, got).c_str());
+	}
+#endif
+}
+
+// Runs the S1 cells above. Called from the GPU-serial-port block, so build.bat's second,
+// per-site-by-environment run of that block runs them too.
+static void RunGpuOverheadS1Cells() {
+	TestGpuOverheadS1_2_1_ParseGpuTimingModeEnv_ExactlyOneSelectsPerSite();
+	TestGpuOverheadS1_1_2_ModeSwitchTakesEffectAtTheNextSubmit();
+	TestGpuOverheadS1_3_1_FinishReadsTheSubmissionsOwnMode();
+	TestGpuOverheadS1_3_2_ModeToggledFromAnotherThreadEveryCallIsOneMode();
+	TestGpuOverheadS1_5_4_GuardRejectedCallReportsNothingInBothModes();
+	TestGpuOverheadS1_6_1_BracketBytesEqualPerSiteBytesAndTheCpuOracle();
+	TestGpuOverheadS1_7_1_BracketWritesTwoQueriesPerListAndGpuBusyKeepsItsMeaning();
+	TestGpuOverheadS1_7_3_BudgetUnitAdvancesExactlyKLayersInBothModes();
+	TestGpuOverheadS1_7_8_ExactCountsPerTokenInBothModes();
+	TestGpuOverheadS1_7_8_BracketStreamIsPerSiteStreamWithoutSiteQueries();
+	TestGpuOverheadS1_7_4_PerSiteStreamEqualsTheV1p11Capture();
+}
+#endif  // _WIN32
+
+#ifdef _WIN32
+// The GPU-serial-port block of the suite, formerly inline in main(): every cell here is defined
+// only under _WIN32 above. Lifted into a function, unchanged, so it can also run alone
+// (`--gpu-serial-cells-only`): build.bat runs it a second time with SSLM_GPU_PER_SITE_TIMING=1,
+// which is GPU per-token overhead plan rev 3.1 §7 cell 6.1's per-mode wiring -- the battery's
+// GPU cells run once in bracket mode (the default) and once in per-site mode.
+static void RunGpuSerialPortCells() {
+	// T-2019/T-2024 -- Curie's red suite for T-1986 (GPU-serial port), amended
+	// design commit 2de2e388a6. See this file's own T-2019/T-2024 section above;
+	// Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md (records worktree)
+	// for the full test-design casebook and the T-2024 re-derivation section.
+	TestT2019_B1_DynamicScaleReciprocal_DomainSweep_GpuMatchesCpu();
+	TestT2019_B1_RequantTokenCodeWide_DomainSweep_GpuMatchesCpu();
+	TestT2019_B1_BiasReconcileWide_DomainSweep_GpuMatchesCpu();
+	TestT2019_B1_CombineCarriedScale_ExponentSaturationBoundary_GpuMatchesCpu();
+	TestT2019_B2_ComposedExponentGuard_RejectsOutOfDomain_GpuMatchesCpu();
+	TestT2019_B2_MantissaGuard_Step0AndStep5_RejectsOutOfDomain_GpuMatchesCpu();
+	TestT2019_B2_DPrimeGuard_RejectsAbove2Pow31_GpuMatchesCpu();
+	TestT2019_B2_ApplyBiasReconcileRow_KBiasVBias_ScalarGuard_GpuMatchesCpu();
+	TestT2019_B5_MaxAbsReduceWide_FixtureDomainAbove2Pow31_GpuMatchesCpu();
+	TestT2019_B7_DispatchBudget_EveryRemainderAndBoundary();
+	TestT2585_DispatchBudget_IsModelAwareAtExactBoundaries();
+#if defined(_WIN32) && defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
+	TestT2959_GpuOutputHandlesNullOnRefusal();
+	TestGpuPublicApiContainsInjectedAllocationFailuresAtBothHandlerEdges();
+#endif
+	TestT2019_B7_DispatchBudget_RejectingLayerStillRecordsFullQuantum();
+	TestT2019_Sec59_BusyOnEachOfTheFiveNamedCallsWhileSubmitted();
+	TestT2019_Sec59_ModelUnmapRequiresNoLiveSequences();
+	TestT2019_Sec59_GpuReadyDualRole();
+	TestT2019_B8_ContextLengthSuccessPathReadback_GpuMatchesCpu();
+	TestT2019_B8_SaveRestoreRoundTrip_GpuMatchesCpu();
+	TestT2019_B11_SequenceLayerStateComplete_QProj();
+	TestT2019_B11_SequenceLayerStateComplete_KvProj_KBiasAndVBias();
+	TestT2019_B11_KvProj_BothGuardsFail_StatusInvariantUnderPrecedence();
+	TestT2019_B11_SequenceLayerStateComplete_Rope();
+	TestT2019_B11_SequenceLayerStateComplete_PostKvProjSite_DownProj();
+	TestT2019_B11_SequenceLayerStateComplete_L2K0();
+	TestT2019_B3_DescriptorTableBinding_KnownPatternReadback();
+	TestT2019_B3_DescriptorHeapRegionCleanAfterHandleRelease();
+	TestT2019_B3_ResourceBindingTierFallback();
+	TestT2019_B12_InjectedFailureAtEveryAllocationIndex();
+	TestT2019_B12_LowBudgetPreflightSkipsAllAllocationCalls();
+
+	// T-2047 -- pins for the T-2045 fix round (Claude/Brunel/t2025-gpu-serial-
+	// build-2026-08-13.md Sec15, D-SLM3177). See this file's own T-2047
+	// section above; Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md
+	// (records worktree) "T-2047" section for the full derivation and
+	// executed proofs.
+	TestT2047_C2_ResumedCallMatchesUnconstrainedCall();
+	TestT2047_C2_LayerBudgetZeroGuard();
+	TestT2047_C2_ContextCapBelowOneGuard();
+	TestT2047_C2_SequenceAlreadyCompleteGuard();
+	TestT2047_S2_TierPreflightEnforcedOnForwardPath();
+	TestT2047_S3_ResidencyCacheIsContentKeyedNotPointerKeyed();
+	TestT2047_S6_SaveRestoreRoundTripsThroughRealDevice();
+
+	// T-2050 -- pins for the T-2049 fix round (Claude/Brunel/t2025-gpu-
+	// serial-build-2026-08-13.md Sec16, D-SLM3179, N1). See this file's own
+	// T-2050 section above; Claude/Curie/t2019-gpu-serial-red-suite-2026-08-
+	// 13.md (records worktree) "T-2050" section for the full derivation and
+	// executed proofs.
+	TestT2050_N1_EightGuardLadderMatchesCpuOrderAndStatus();
+	TestT2050_N1_GeometryGuardPrecedesSequenceAlreadyComplete();
+	TestT2050_N1_KvCapacityExhaustedLeavesWorkspaceUntouched();
+
+	// T-2053 -- pins for the T-2052 fix round (Claude/Brunel/t2025-gpu-
+	// serial-build-2026-08-13.md Sec17, D-SLM3182, M1/item-3). See this
+	// file's own T-2053 section above (and TestT2053_M1_
+	// NullHiddenCodesRejectedNotCrashed beside the other crash-probe cells);
+	// Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md (records
+	// worktree) "T-2053" section for the full derivation and executed
+	// proofs.
+	TestT2053_M1_TableWalkAgainstGuardsDef();
+	TestT2053_Item3_LastWeightUploadWasSkipped();
+	TestT2063_MA_LastWeightUploadWasSkipped_FalseOnGuardRejectAfterCacheHit();
+	TestT2101_KvDeviceResidency_TwoStepBitMatchesCpu();
+	TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject();
+	TestT2101_ComputeGpuGemmGroupCount_RealDimensionsAndFixtureScale();
+	TestT2101_ComputeGpuGemmSiteGroupPlan_RealDimensions();
+	TestT2101_GpuGemmGroupArithmeticInvalid_DistinctFromGpuAllocationFailed();
+	TestT2101_ComputeGpuGemmSiteGroupPlan_UnhandledSiteThrowsLoudly();
+	TestDim4_M2_RaggedPreconditions_LanesDivides256Exactly();
+	TestDim4_P2_RaggedFixtureBytePathTakenAndCorrect();
+#ifdef SUPERSLM_O11_ALLOC_INJECTION
+	TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse();
+	TestT2083_S1_WeightDefaultHeapAllocationThrow_ReturnsGpuAllocationFailed();
+#endif  // SUPERSLM_O11_ALLOC_INJECTION
+
+	// T-2116 fix round -- pins for SSLM_GPU_ADAPTER_INDEX (Claude/Poirot/
+	// d3cf252-t2116-adapter-selection.md S2/S4/S6). See this file's own T-2116
+	// section above.
+	TestAdapterIndexUnsetLeavesDefaultBehaviorAndPrintsNothing();
+	TestAdapterIndexValidOverrideStdoutStaysEmpty();
+	TestAdapterIndexValidOverridePrintsLabelOnStderr();
+	TestAdapterIndexNonexistentFailsLoudlyNamingTheIndex();
+	TestAdapterIndexMalformedNonIntegerRefusesSilentFallbackToZero();
+	TestAdapterIndexNegativeRefusesSilentFallback();
+	TestAdapterIndexTooLongRefusesRatherThanParsingTruncatedValue();
+	TestAdapterIndexSoftwareAdapterRefusedNotSilentlySelected();
+
+
+	// T-2575 (D-SLM6268) -- the shader-binary freshness guard, commissioned: one must-accept,
+	// two must-reject arms produced the way the measured defect was, the two unverifiable
+	// cases, and one real-workload sweep over the shaders this executable would dispatch.
+	TestT2575_ShaderStalenessGuard_AcceptsABinaryNewerThanEverySource();
+	TestT2575_ShaderStalenessGuard_RefusesABinaryOlderThanItsOwnHlsl();
+	TestT2575_ShaderStalenessGuard_RefusesABinaryOlderThanASharedHeader();
+	TestT2575_ShaderStalenessGuard_UnverifiableCasesAreNotRefusals();
+	TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath();
+	TestT2575_ShaderBinariesBesideThisExecutableAreCurrent();
+	TestT2948_ShaderDirInvalidBeforeDeviceInit<GpuContextConfig>();
+	TestT2576_GpuKvSaturationAndKvRowMatchCpuOnRopeSaturationFixtureN100();
+	TestT2577_S1_ModelGenerationGatesReadOnlyCachesWithoutWeakeningKvFreshness();
+	TestT2577_S1b_ModelGenerationReachesTheG5BridgeChunkEntryPoint();
+	TestT2577_O1_RopeKCountsOncePerKvHeadNotOncePerQueryHead();
+	TestT2578_S3_SaveRestorePreservesPerSiteSaturationCounters();
+	TestT2703_F3_QkNormLandingMagnitudeGpuMatchesCpuStatus();
+
+	// GPU per-token overhead plan rev 3.1, slice S1: the two recording modes' own cells.
+	RunGpuOverheadS1Cells();
+}
+#endif  // _WIN32
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1 && std::strcmp(argv[1], "--te399-adapter-index-only") == 0) {
@@ -29367,6 +30222,36 @@ int main(int argc, char** argv) {
 		TestAdapterIndexTooLongRefusesRatherThanParsingTruncatedValue();
 		TestAdapterIndexSoftwareAdapterRefusedNotSilentlySelected();
 		std::printf("te399 adapter-index section: %d checks, %d failures\n", GChecks, GFailures);
+		return GFailures == 0 ? 0 : 1;
+#else
+		return 2;
+#endif
+	}
+	if (argc > 1 && std::strcmp(argv[1], "--gpu-timing-mode-probe") == 0) {
+		// GPU per-token overhead plan rev 3.1 §7 cell 2.1's subprocess half: report the timing mode
+		// this process initialised from SSLM_GPU_PER_SITE_TIMING, and nothing else.
+#if defined(_WIN32)
+		std::printf("gpu_timing_mode=%s\n", superslm_gpu::GetGpuTimingMode() ==
+		                                         superslm_gpu::GpuTimingMode::PerSite
+		                                     ? "per-site"
+		                                     : "bracket");
+		return 0;
+#else
+		return 2;
+#endif
+	}
+	if (argc > 1 && std::strcmp(argv[1], "--gpu-serial-cells-only") == 0) {
+		// GPU per-token overhead plan rev 3.1 §7 cell 6.1's per-mode wiring: the GPU-serial-port
+		// block alone, so build.bat can run it a second time under SSLM_GPU_PER_SITE_TIMING=1
+		// without re-running every CPU cell. The stale-shader cell runs first here for the same
+		// reason it runs first in the full suite (the PSO cache, see main() below).
+#if defined(_WIN32)
+		TestT2577_S2_AStaleShaderOnTheRealDispatchPathReturnsTheNamedStatus();
+		RunGpuSerialPortCells();
+		std::printf("gpu-serial cells (timing mode from the environment: %s): %d checks, %d failures\n",
+		            superslm_gpu::GetGpuTimingMode() == superslm_gpu::GpuTimingMode::PerSite ? "per-site"
+		                                                                                 : "bracket",
+		            GChecks, GFailures);
 		return GFailures == 0 ? 0 : 1;
 #else
 		return 2;
@@ -30270,117 +31155,7 @@ int main(int argc, char** argv) {
 	// defined only under #ifdef _WIN32 above (the GPU-serial-port suite) -- guarded the same
 	// way here so the call list matches what actually exists in a non-Windows build.
 #ifdef _WIN32
-	// T-2019/T-2024 -- Curie's red suite for T-1986 (GPU-serial port), amended
-	// design commit 2de2e388a6. See this file's own T-2019/T-2024 section above;
-	// Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md (records worktree)
-	// for the full test-design casebook and the T-2024 re-derivation section.
-	TestT2019_B1_DynamicScaleReciprocal_DomainSweep_GpuMatchesCpu();
-	TestT2019_B1_RequantTokenCodeWide_DomainSweep_GpuMatchesCpu();
-	TestT2019_B1_BiasReconcileWide_DomainSweep_GpuMatchesCpu();
-	TestT2019_B1_CombineCarriedScale_ExponentSaturationBoundary_GpuMatchesCpu();
-	TestT2019_B2_ComposedExponentGuard_RejectsOutOfDomain_GpuMatchesCpu();
-	TestT2019_B2_MantissaGuard_Step0AndStep5_RejectsOutOfDomain_GpuMatchesCpu();
-	TestT2019_B2_DPrimeGuard_RejectsAbove2Pow31_GpuMatchesCpu();
-	TestT2019_B2_ApplyBiasReconcileRow_KBiasVBias_ScalarGuard_GpuMatchesCpu();
-	TestT2019_B5_MaxAbsReduceWide_FixtureDomainAbove2Pow31_GpuMatchesCpu();
-	TestT2019_B7_DispatchBudget_EveryRemainderAndBoundary();
-	TestT2585_DispatchBudget_IsModelAwareAtExactBoundaries();
-#if defined(_WIN32) && defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
-	TestT2959_GpuOutputHandlesNullOnRefusal();
-	TestGpuPublicApiContainsInjectedAllocationFailuresAtBothHandlerEdges();
-#endif
-	TestT2019_B7_DispatchBudget_RejectingLayerStillRecordsFullQuantum();
-	TestT2019_Sec59_BusyOnEachOfTheFiveNamedCallsWhileSubmitted();
-	TestT2019_Sec59_ModelUnmapRequiresNoLiveSequences();
-	TestT2019_Sec59_GpuReadyDualRole();
-	TestT2019_B8_ContextLengthSuccessPathReadback_GpuMatchesCpu();
-	TestT2019_B8_SaveRestoreRoundTrip_GpuMatchesCpu();
-	TestT2019_B11_SequenceLayerStateComplete_QProj();
-	TestT2019_B11_SequenceLayerStateComplete_KvProj_KBiasAndVBias();
-	TestT2019_B11_KvProj_BothGuardsFail_StatusInvariantUnderPrecedence();
-	TestT2019_B11_SequenceLayerStateComplete_Rope();
-	TestT2019_B11_SequenceLayerStateComplete_PostKvProjSite_DownProj();
-	TestT2019_B11_SequenceLayerStateComplete_L2K0();
-	TestT2019_B3_DescriptorTableBinding_KnownPatternReadback();
-	TestT2019_B3_DescriptorHeapRegionCleanAfterHandleRelease();
-	TestT2019_B3_ResourceBindingTierFallback();
-	TestT2019_B12_InjectedFailureAtEveryAllocationIndex();
-	TestT2019_B12_LowBudgetPreflightSkipsAllAllocationCalls();
-
-	// T-2047 -- pins for the T-2045 fix round (Claude/Brunel/t2025-gpu-serial-
-	// build-2026-08-13.md Sec15, D-SLM3177). See this file's own T-2047
-	// section above; Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md
-	// (records worktree) "T-2047" section for the full derivation and
-	// executed proofs.
-	TestT2047_C2_ResumedCallMatchesUnconstrainedCall();
-	TestT2047_C2_LayerBudgetZeroGuard();
-	TestT2047_C2_ContextCapBelowOneGuard();
-	TestT2047_C2_SequenceAlreadyCompleteGuard();
-	TestT2047_S2_TierPreflightEnforcedOnForwardPath();
-	TestT2047_S3_ResidencyCacheIsContentKeyedNotPointerKeyed();
-	TestT2047_S6_SaveRestoreRoundTripsThroughRealDevice();
-
-	// T-2050 -- pins for the T-2049 fix round (Claude/Brunel/t2025-gpu-
-	// serial-build-2026-08-13.md Sec16, D-SLM3179, N1). See this file's own
-	// T-2050 section above; Claude/Curie/t2019-gpu-serial-red-suite-2026-08-
-	// 13.md (records worktree) "T-2050" section for the full derivation and
-	// executed proofs.
-	TestT2050_N1_EightGuardLadderMatchesCpuOrderAndStatus();
-	TestT2050_N1_GeometryGuardPrecedesSequenceAlreadyComplete();
-	TestT2050_N1_KvCapacityExhaustedLeavesWorkspaceUntouched();
-
-	// T-2053 -- pins for the T-2052 fix round (Claude/Brunel/t2025-gpu-
-	// serial-build-2026-08-13.md Sec17, D-SLM3182, M1/item-3). See this
-	// file's own T-2053 section above (and TestT2053_M1_
-	// NullHiddenCodesRejectedNotCrashed beside the other crash-probe cells);
-	// Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md (records
-	// worktree) "T-2053" section for the full derivation and executed
-	// proofs.
-	TestT2053_M1_TableWalkAgainstGuardsDef();
-	TestT2053_Item3_LastWeightUploadWasSkipped();
-	TestT2063_MA_LastWeightUploadWasSkipped_FalseOnGuardRejectAfterCacheHit();
-	TestT2101_KvDeviceResidency_TwoStepBitMatchesCpu();
-	TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject();
-	TestT2101_ComputeGpuGemmGroupCount_RealDimensionsAndFixtureScale();
-	TestT2101_ComputeGpuGemmSiteGroupPlan_RealDimensions();
-	TestT2101_GpuGemmGroupArithmeticInvalid_DistinctFromGpuAllocationFailed();
-	TestT2101_ComputeGpuGemmSiteGroupPlan_UnhandledSiteThrowsLoudly();
-	TestDim4_M2_RaggedPreconditions_LanesDivides256Exactly();
-	TestDim4_P2_RaggedFixtureBytePathTakenAndCorrect();
-#ifdef SUPERSLM_O11_ALLOC_INJECTION
-	TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse();
-	TestT2083_S1_WeightDefaultHeapAllocationThrow_ReturnsGpuAllocationFailed();
-#endif  // SUPERSLM_O11_ALLOC_INJECTION
-
-	// T-2116 fix round -- pins for SSLM_GPU_ADAPTER_INDEX (Claude/Poirot/
-	// d3cf252-t2116-adapter-selection.md S2/S4/S6). See this file's own T-2116
-	// section above.
-	TestAdapterIndexUnsetLeavesDefaultBehaviorAndPrintsNothing();
-	TestAdapterIndexValidOverrideStdoutStaysEmpty();
-	TestAdapterIndexValidOverridePrintsLabelOnStderr();
-	TestAdapterIndexNonexistentFailsLoudlyNamingTheIndex();
-	TestAdapterIndexMalformedNonIntegerRefusesSilentFallbackToZero();
-	TestAdapterIndexNegativeRefusesSilentFallback();
-	TestAdapterIndexTooLongRefusesRatherThanParsingTruncatedValue();
-	TestAdapterIndexSoftwareAdapterRefusedNotSilentlySelected();
-
-
-	// T-2575 (D-SLM6268) -- the shader-binary freshness guard, commissioned: one must-accept,
-	// two must-reject arms produced the way the measured defect was, the two unverifiable
-	// cases, and one real-workload sweep over the shaders this executable would dispatch.
-	TestT2575_ShaderStalenessGuard_AcceptsABinaryNewerThanEverySource();
-	TestT2575_ShaderStalenessGuard_RefusesABinaryOlderThanItsOwnHlsl();
-	TestT2575_ShaderStalenessGuard_RefusesABinaryOlderThanASharedHeader();
-	TestT2575_ShaderStalenessGuard_UnverifiableCasesAreNotRefusals();
-	TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath();
-	TestT2575_ShaderBinariesBesideThisExecutableAreCurrent();
-	TestT2948_ShaderDirInvalidBeforeDeviceInit<GpuContextConfig>();
-	TestT2576_GpuKvSaturationAndKvRowMatchCpuOnRopeSaturationFixtureN100();
-	TestT2577_S1_ModelGenerationGatesReadOnlyCachesWithoutWeakeningKvFreshness();
-	TestT2577_S1b_ModelGenerationReachesTheG5BridgeChunkEntryPoint();
-	TestT2577_O1_RopeKCountsOncePerKvHeadNotOncePerQueryHead();
-	TestT2578_S3_SaveRestorePreservesPerSiteSaturationCounters();
-	TestT2703_F3_QkNormLandingMagnitudeGpuMatchesCpuStatus();
+	RunGpuSerialPortCells();
 #endif  // _WIN32
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);

@@ -36,3 +36,6 @@ tests/t2807-api-slot/recorded/*.tsv  -text
 # generators, which emit LF; pin them to LF so a Windows checkout matches.
 tests/attn_rowsite_golden_pin.h   text eol=lf
 tests/matmul_tiled_golden_pin.h   text eol=lf
+# GPU per-token overhead plan rev 3.1, cell 7.4: the v1.11.0 record-log capture is hashed in
+# SHA256SUMS byte for byte; no line-end conversion on any checkout.
+tests/fixtures/gpu_record_log/** -text
