@@ -468,7 +468,11 @@ uint32_t ComputeGpuGemmGroupCount(uint32_t out_channels, uint32_t threads_per_gr
 // its own multi-group dispatch (`kv_proj_gemm_site.hlsl`), as NEW production work (this
 // enumerator never existed in the pre-1.0 substrate; `kv_proj_site.hlsl`'s own header comment
 // named the second-dispatch remedy this enumerator realizes).
-enum class GpuGemmSplitSite { QProj, OProj, GateProj, UpProj, DownProj, KvProj };
+// GPU per-token overhead plan rev 3.1 §3.3 (S3): `GateUpProj` added -- gate_up_gemm_site.hlsl,
+// bracket mode's merged gate+up GEMM: channels [0, I) are gate's, [I, 2I) up's, so its plan covers
+// 2 x intermediate_size channels at gate's and up's own 32 lanes. Appended, so no existing
+// enumerator's value moves.
+enum class GpuGemmSplitSite { QProj, OProj, GateProj, UpProj, DownProj, KvProj, GateUpProj };
 
 struct GpuGemmSiteGroupPlan {
 	uint32_t out_channels = 0;
@@ -507,6 +511,19 @@ GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t
                                                   uint32_t kv_out_channels,
                                                   uint32_t intermediate_size,
                                                   uint32_t q_width = UINT32_MAX);
+
+// GPU per-token overhead plan rev 3.1 §3.3 (S3) and §7 cell 11.2: the check the recorder makes
+// beside its per-plan coverage throw whenever bracket mode fuses gate and up -- gate's plan and
+// up's plan each cover intermediate_size channels (together, 2 x I), the merged plan covers 2 x I,
+// and gate, up and the merged plan share one lane count (the merged GEMM passes ONE lanes root
+// constant for both halves). Inside the recorder a failure throws the same
+// GpuGemmGroupArithmeticError the coverage throw does, which the submission maps to
+// `GpuGemmGroupArithmeticInvalid`; this entry point is the test seam over that same check and
+// returns the status instead (it neither throws nor catches).
+superslm::SslmForwardStatus CheckGateUpGemmPlans(const GpuGemmSiteGroupPlan& gate,
+                                                 const GpuGemmSiteGroupPlan& up,
+                                                 const GpuGemmSiteGroupPlan& gate_up,
+                                                 uint32_t intermediate_size);
 
 // One GPU-measured millisecond figure per dispatch the most recent
 // `RunLayerLoopGpu` call issued, in dispatch order -- PER-SITE TIMING MODE ONLY (GPU per-token
@@ -591,7 +608,8 @@ uint32_t LastCallTimestampQueryCount();
 // 21 with both; S3 then subtracts its variant's saving. Every dispatch is followed by its one
 // global UAV barrier in both modes, so barriers = dispatches.
 // Which configuration ships is B0.7's decision (plan §4.3); the build compiles in a default (the
-// full plan as built) and every bracket submission reads the process's configuration ONCE, at
+// full plan: both S2 runs and the merged GEMM, 18 / 19 per layer) and every bracket submission
+// reads the process's configuration ONCE, at
 // entry, beside the timing mode (a chunk call once for all of its sub-chunk lists). The budget
 // unit (`DispatchesPerLayer`, below) does not change with it.
 // `SetGpuBracketFusionConfig` is the test and diagnostic seam that selects another configuration:

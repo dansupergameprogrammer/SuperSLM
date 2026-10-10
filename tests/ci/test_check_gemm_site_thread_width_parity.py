@@ -44,6 +44,10 @@ GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t
 			plan.out_channels = intermediate_size;
 			plan.threads_per_group = 256u;
 			break;
+		case GpuGemmSplitSite::GateUpProj:
+			plan.out_channels = 2u * intermediate_size;
+			plan.threads_per_group = 256u;
+			break;
 		default:
 			throw GpuGemmGroupArithmeticError("unhandled");
 	}
@@ -71,6 +75,10 @@ _HLSL_FIXTURES_CONSISTENT = {
     "gate_proj_gemm_site.hlsl": _hlsl_fixture(256),
     "up_proj_gemm_site.hlsl": _hlsl_fixture(256),
     "down_proj_gemm_site.hlsl": _hlsl_fixture(64),
+    # GPU per-token overhead plan rev 3.1 §3.3 (S3): the merged gate+up GEMM, and the tail-only
+    # variant's WIDE_B copy of the up GEMM (checked against UpProj's own width).
+    "gate_up_gemm_site.hlsl": _hlsl_fixture(256),
+    "up_proj_gemm_wide_b_site.hlsl": _hlsl_fixture(256),
 }
 
 
@@ -110,7 +118,7 @@ def test_parse_cpp_threads_per_group_by_site_attributes_grouped_case_labels():
     got = chk.parse_cpp_threads_per_group_by_site(_CPP_FIXTURE)
     assert got == {
         "QProj": 64, "OProj": 64, "DownProj": 64, "KvProj": 64,
-        "GateProj": 256, "UpProj": 256,
+        "GateProj": 256, "UpProj": 256, "GateUpProj": 256,
     }
 
 

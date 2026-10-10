@@ -62,6 +62,10 @@ GEMM_SPLIT_SITES: tuple[tuple[str, str], ...] = (
     ("GateProj", "gate_proj_gemm_site.hlsl"),
     ("UpProj", "up_proj_gemm_site.hlsl"),
     ("DownProj", "down_proj_gemm_site.hlsl"),
+    # GPU per-token overhead plan rev 3.1 §3.3 (S3): bracket mode's merged gate+up GEMM, and the
+    # tail-only variant's bracket copy of the up GEMM (planned with UpProj's own plan).
+    ("GateUpProj", "gate_up_gemm_site.hlsl"),
+    ("UpProj", "up_proj_gemm_wide_b_site.hlsl"),
 )
 
 

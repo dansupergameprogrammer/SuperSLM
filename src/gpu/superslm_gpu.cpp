@@ -705,11 +705,11 @@ std::atomic<uint32_t>& GpuTimingModeAtomic() {
 }
 
 // GPU per-token overhead plan rev 3.1 §3.2-3.3 (S2, S3): the compiled-in bracket fusion
-// configuration -- the full plan as this build carries it (S2: both runs fused). B0.7 (plan §4.3)
-// decides which configuration ships; this is the one line that changes with it. Held packed in one
-// atomic (bit 0 the o run, bit 1 the down run, bits 2-3 the S3 variant) so a submission's one read
-// at entry sees one whole configuration.
-constexpr GpuBracketFusionConfig kDefaultGpuBracketFusionConfig{true, true, GpuS3Fusion::None};
+// configuration -- the full plan as this build carries it (both S2 runs and S3's merged GEMM).
+// B0.7 (plan §4.3) decides which configuration ships; this is the one line that changes with it.
+// Held packed in one atomic (bit 0 the o run, bit 1 the down run, bits 2-3 the S3 variant) so a
+// submission's one read at entry sees one whole configuration.
+constexpr GpuBracketFusionConfig kDefaultGpuBracketFusionConfig{true, true, GpuS3Fusion::MergedGemm};
 constexpr uint32_t EncodeGpuBracketFusionConfig(const GpuBracketFusionConfig& c) {
 	return (c.fuse_o_run ? 1u : 0u) | (c.fuse_down_run ? 2u : 0u) | (static_cast<uint32_t>(c.s3) << 2);
 }
@@ -1771,6 +1771,36 @@ struct GpuRecordCounts {
 	uint32_t queries = 0;
 };
 
+// GPU per-token overhead plan rev 3.1 §3.3 (S3): the gate+up plan check (gpu_port.h,
+// `CheckGateUpGemmPlans`, is its test seam). Each half's plan covers I channels, the merged plan
+// covers 2 x I, and all three share one lane count -- the merged GEMM passes one lanes constant.
+// Throws the error the per-plan coverage throw below throws, so both map to one status.
+// Returns nullptr when the plans hold, else the defect -- no throw, so the public seam returns a
+// status without a catch site of its own.
+const char* GateUpGemmPlansDefect(const GpuGemmSiteGroupPlan& gate, const GpuGemmSiteGroupPlan& up,
+                                  const GpuGemmSiteGroupPlan& gate_up, uint32_t intermediate_size) {
+	auto covers = [](const GpuGemmSiteGroupPlan& plan, uint64_t channels) {
+		return static_cast<uint64_t>(plan.groups) * static_cast<uint64_t>(plan.channels_per_group) >= channels;
+	};
+	const uint64_t I = intermediate_size;
+	if (!covers(gate, I) || !covers(up, I) || !covers(gate_up, 2u * I)) {
+		return "CheckGateUpGemmPlans: the gate and up plans do not cover 2 x intermediate_size channels "
+		       "between them (or the merged gate+up plan does not)";
+	}
+	if (gate.lanes != up.lanes || gate_up.lanes != gate.lanes) {
+		return "CheckGateUpGemmPlans: gate, up and the merged gate+up plan must share one lane count -- "
+		       "the merged GEMM dispatch passes a single lanes root constant";
+	}
+	return nullptr;
+}
+
+void CheckGateUpGemmPlansOrThrow(const GpuGemmSiteGroupPlan& gate, const GpuGemmSiteGroupPlan& up,
+                                 const GpuGemmSiteGroupPlan& gate_up, uint32_t intermediate_size) {
+	if (const char* defect = GateUpGemmPlansDefect(gate, up, gate_up, intermediate_size)) {
+		throw GpuGemmGroupArithmeticError(defect);
+	}
+}
+
 void RecordOneTokenFullDepthDispatchBody(
     harness::Device& dev, uint32_t start_layer, uint32_t layers_to_record, uint32_t H, uint32_t HD,
     uint32_t NH, uint32_t NQH, uint32_t I, uint32_t N, uint32_t context_cap_u32,
@@ -1821,6 +1851,14 @@ void RecordOneTokenFullDepthDispatchBody(
 	const SitePipe fused_o_pipe = fusion.fuse_o_run ? site("fused_o_residual_norm_site") : SitePipe{nullptr, nullptr};
 	const SitePipe fused_down_pipe =
 	    fusion.fuse_down_run ? site("fused_down_residual_commit_site") : SitePipe{nullptr, nullptr};
+	// S3 (§3.3): the merged GEMM, or the tail-only variant's bracket copy of the up GEMM (output at
+	// WIDE_B), and the fused gate+up tail either way.
+	const bool merged_gate_up = fusion.s3 == GpuS3Fusion::MergedGemm;
+	const bool fused_gate_up = fusion.s3 != GpuS3Fusion::None;
+	const SitePipe gate_up_gemm_pipe = merged_gate_up ? site("gate_up_gemm_site") : SitePipe{nullptr, nullptr};
+	const SitePipe up_proj_gemm_wide_b_pipe =
+	    fusion.s3 == GpuS3Fusion::TailOnly ? site("up_proj_gemm_wide_b_site") : SitePipe{nullptr, nullptr};
+	const SitePipe fused_gate_up_pipe = fused_gate_up ? site("fused_gate_up_site") : SitePipe{nullptr, nullptr};
 
 	D3D12_RESOURCE_BARRIER global_uav_barrier{};
 	global_uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -1944,6 +1982,12 @@ void RecordOneTokenFullDepthDispatchBody(
 	const GpuGemmSiteGroupPlan up_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::UpProj, H, KV2, I);
 	const GpuGemmSiteGroupPlan down_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::DownProj, H, KV2, I);
 
+	// S3 (§3.3): the merged plan, and the check that holds it to gate's and up's (beside the
+	// per-plan coverage throw below) -- made only when bracket mode fuses gate and up.
+	const GpuGemmSiteGroupPlan gate_up_plan =
+	    fused_gate_up ? ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::GateUpProj, H, KV2, I) : GpuGemmSiteGroupPlan{};
+	if (fused_gate_up) CheckGateUpGemmPlansOrThrow(gate_proj_plan, up_proj_plan, gate_up_plan, I);
+
 	const uint32_t attn_score_groups = (NQH * width_u32 + 255u) / 256u;
 	const uint32_t ctx_accum_groups = (NQH * HD + 255u) / 256u;
 	const uint32_t rope_groups = (NQH * (HD / 2u) + 255u) / 256u;
@@ -2043,16 +2087,40 @@ void RecordOneTokenFullDepthDispatchBody(
 					if (!fusion.fuse_o_run) bind_and_dispatch(mlp_norm_pipe, l);
 					break;
 				case Site::GateGemm:
-					bind_and_dispatch(gate_proj_gemm_pipe, l, gate_proj_plan.groups, gate_proj_plan.lanes);
+					// S3 merged: gate's and up's GEMMs as one dispatch over 2 x I channels, with the
+					// gate GEMM's constants (lanes: gate's, which CheckGateUpGemmPlansOrThrow holds
+					// equal to up's); gate's row lands at WorkScratch 0, up's at WIDE_B.
+					if (merged_gate_up) {
+						bind_and_dispatch(gate_up_gemm_pipe, l, gate_up_plan.groups, gate_proj_plan.lanes);
+					} else {
+						bind_and_dispatch(gate_proj_gemm_pipe, l, gate_proj_plan.groups, gate_proj_plan.lanes);
+					}
 					break;
 				case Site::GateTail:
-					bind_and_dispatch_tail(gate_proj_pipe, l, {{/*gate=*/2, scratch_layout.normed, wide_a}});
+					// S3 (either variant): the gate tail runs inside fused_gate_up_site, at UpTail.
+					if (!fused_gate_up) {
+						bind_and_dispatch_tail(gate_proj_pipe, l, {{/*gate=*/2, scratch_layout.normed, wide_a}});
+					}
 					break;
 				case Site::UpGemm:
-					bind_and_dispatch(up_proj_gemm_pipe, l, up_proj_plan.groups, up_proj_plan.lanes);
+					// S3 tail-only: the up GEMM keeps its dispatch, writing its row to WIDE_B; merged:
+					// already recorded at GateGemm.
+					if (fusion.s3 == GpuS3Fusion::TailOnly) {
+						bind_and_dispatch(up_proj_gemm_wide_b_pipe, l, up_proj_plan.groups, up_proj_plan.lanes);
+					} else if (!merged_gate_up) {
+						bind_and_dispatch(up_proj_gemm_pipe, l, up_proj_plan.groups, up_proj_plan.lanes);
+					}
 					break;
 				case Site::UpTail:
-					bind_and_dispatch_tail(up_proj_pipe, l, {{/*up=*/3, scratch_layout.normed, wide_a}});
+					// S3: gate tail then up tail as one dispatch -- gate in slot 0, up in slot 1 with
+					// its adapter wide base at WIDE_B (the kv tail's two-slot, 28-constant layout).
+					if (fused_gate_up) {
+						bind_and_dispatch_tail(fused_gate_up_pipe, l,
+						                        {{/*gate=*/2, scratch_layout.normed, wide_a},
+						                         {/*up=*/3, scratch_layout.normed, wide_b}});
+					} else {
+						bind_and_dispatch_tail(up_proj_pipe, l, {{/*up=*/3, scratch_layout.normed, wide_a}});
+					}
 					break;
 				case Site::MlpAct:
 					bind_and_dispatch(mlp_act_pipe, l);
@@ -4750,6 +4818,14 @@ GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t
 			plan.threads_per_group = 256u;
 			plan.lanes = 32u;
 			break;
+		case GpuGemmSplitSite::GateUpProj:
+			// GPU per-token overhead plan rev 3.1 §3.3 (S3): gate_up_gemm_site.hlsl covers gate's
+			// channels [0, I) then up's [I, 2I), each at its own site's 32 lanes (GateProj's and
+			// UpProj's, above); CheckGateUpGemmPlansOrThrow holds the three plans together.
+			plan.out_channels = 2u * intermediate_size;
+			plan.threads_per_group = 256u;
+			plan.lanes = 32u;
+			break;
 		case GpuGemmSplitSite::KvProj:
 			// T-2113 (B4, D-SLM3341): the dispatch covers BOTH halves -- K's own kv_hidden_size
 			// channels and V's own -- packed into one grid, so the grid is sized over
@@ -4815,10 +4891,19 @@ uint32_t LastCallTimestampQueryCount() {
 GpuBracketFusionConfig DefaultGpuBracketFusionConfig() { return kDefaultGpuBracketFusionConfig; }
 
 // GPU per-token overhead plan rev 3.1 §3.2-3.3: a configuration can ship when this build carries
-// every mechanism it names. At S2 that is either S2 run, both, or neither (B0.7 may fuse neither),
-// with no S3 variant.
+// every mechanism it names: either S2 run, both, or neither (B0.7 may fuse neither), and an S3
+// variant only on top of at least one fused S2 run.
 bool IsShippableGpuBracketFusionConfig(const GpuBracketFusionConfig& config) {
-	return config.s3 == GpuS3Fusion::None;
+	return config.s3 == GpuS3Fusion::None || config.fuse_o_run || config.fuse_down_run;
+}
+
+superslm::SslmForwardStatus CheckGateUpGemmPlans(const GpuGemmSiteGroupPlan& gate,
+                                                 const GpuGemmSiteGroupPlan& up,
+                                                 const GpuGemmSiteGroupPlan& gate_up,
+                                                 uint32_t intermediate_size) {
+	return GateUpGemmPlansDefect(gate, up, gate_up, intermediate_size) == nullptr
+	           ? superslm::SslmForwardStatus::Ok
+	           : superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid;
 }
 
 bool SetGpuBracketFusionConfig(const GpuBracketFusionConfig& config) {
