@@ -52,10 +52,17 @@ RWByteAddressBuffer WorkScratch    : register(u3);
 ByteAddressBuffer LoraAB : register(t8);
 ByteAddressBuffer Fold   : register(t9);
 
-// The up body reads its adapter slot through SSLM_UP_BODY_ADAPTER (fused_site_bodies.hlsli's
-// header comment says why it is a macro): per-site, that is this file's own `g_adapter_*` fields,
+// The up body reads its adapter slot through the SSLM_UP_ADAPTER_* macros (fused_site_bodies.hlsli's
+// header comment says why they are macros): per-site, that is this file's own `g_adapter_*` fields,
 // and the accumulator base is the literal 0u, both exactly v1.11.0's.
-#define SSLM_UP_BODY_ADAPTER(field) g_adapter_##field
+#define SSLM_UP_ADAPTER_RANK g_adapter_rank
+#define SSLM_UP_ADAPTER_A_OFFSET g_adapter_a_offset
+#define SSLM_UP_ADAPTER_B_OFFSET g_adapter_b_offset
+#define SSLM_UP_ADAPTER_FOLD_OFFSET g_adapter_fold_offset
+#define SSLM_UP_ADAPTER_U_OFF g_adapter_u_off
+#define SSLM_UP_ADAPTER_IN_BASE g_adapter_in_base
+#define SSLM_UP_ADAPTER_WIDE_BASE g_adapter_wide_base
+#define SSLM_UP_ADAPTER_STAGE1_LANES g_adapter_stage1_lanes
 #define SSLM_FUSED_BODY_UP_PROJ_SITE
 #include "fused_site_bodies.hlsli"
 

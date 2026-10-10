@@ -22,10 +22,14 @@
 // declarations that sat between that file's bindings and its `main`, except:
 //   - The up body (S3) takes what the fused gate+up tail must change (plan §3.3, the kv tail's
 //     V-half arrangement): `acc_base`, its requant's accumulator base (v1.11.0's hard-coded `0u`),
-//     as a parameter; and its adapter slot through the macro `SSLM_UP_BODY_ADAPTER(field)`, which
-//     the includer defines -- `g_adapter_##field` in up_proj_site.hlsl (per-site, unchanged), slot
-//     1's `g_adapter_up_##field` (constants 19-26, wide base = WIDE_B) in fused_gate_up_site.hlsl.
-//     The slot is a macro, not eight more parameters, because parameters are evaluated at the call:
+//     as a parameter; and its adapter slot through eight object-like macros
+//     (`SSLM_UP_ADAPTER_RANK` ... `SSLM_UP_ADAPTER_STAGE1_LANES`, one per slot field), which the
+//     includer defines -- as its `g_adapter_<field>` cbuffer fields in up_proj_site.hlsl
+//     (per-site, unchanged), as slot 1's `g_adapter_up_<field>` fields (constants 19-26, wide base
+//     = WIDE_B) in fused_gate_up_site.hlsl. Eight names rather than one token-pasting
+//     `(field)` macro because tests/ci/check_no_library_stdout_write.py bans the paste operator in
+//     every scanned source, shaders included; the preprocessed text, and so the DXIL, is the same.
+//     The slot is macros, not eight more parameters, because parameters are evaluated at the call:
 //     dxc then hoists the eight cbuffer loads above the body's sticky check and the wrapper's DXIL
 //     stops being v1.11.0's (measured; the S2/S3 shader record has the diff). With the macro the
 //     wrapper's DXIL is byte-identical to v1.11.0's.
@@ -48,8 +52,12 @@
 #if defined(SSLM_FUSED_BODY_ATTN_RESIDUAL_SITE) && defined(SSLM_FUSED_BODY_MLP_RESIDUAL_SITE)
 #error "attn_residual's and mlp_residual's bodies each carry their own BuildResidualCandidateGpu"
 #endif
-#if defined(SSLM_FUSED_BODY_UP_PROJ_SITE) && !defined(SSLM_UP_BODY_ADAPTER)
-#error "the up body reads its adapter slot through SSLM_UP_BODY_ADAPTER(field); define it first"
+#if defined(SSLM_FUSED_BODY_UP_PROJ_SITE) &&                                                      \
+    (!defined(SSLM_UP_ADAPTER_RANK) || !defined(SSLM_UP_ADAPTER_A_OFFSET) ||                        \
+     !defined(SSLM_UP_ADAPTER_B_OFFSET) || !defined(SSLM_UP_ADAPTER_FOLD_OFFSET) ||                 \
+     !defined(SSLM_UP_ADAPTER_U_OFF) || !defined(SSLM_UP_ADAPTER_IN_BASE) ||                        \
+     !defined(SSLM_UP_ADAPTER_WIDE_BASE) || !defined(SSLM_UP_ADAPTER_STAGE1_LANES))
+#error "the up body reads its adapter slot through the eight SSLM_UP_ADAPTER_* macros; define them first"
 #endif
 
 #if defined(SSLM_FUSED_BODY_O_PROJ_SITE)
@@ -336,11 +344,11 @@ void UpTailSiteBody(uint t, uint acc_base)
     // T-2113 (B10 lever 1): the fused adapter-delta -- up's own slot (up=3), inserted before
     // this shader's own requant read of WorkScratch at g_adapter_wide_base. No-op when rank == 0.
     ApplyFusedAdapterDeltaGpu(t, WorkScratch, LayerScratch, LoraAB, Fold, (int)g_hidden_size,
-                               out_channels, (int)SSLM_UP_BODY_ADAPTER(rank),
-                               SSLM_UP_BODY_ADAPTER(a_offset), SSLM_UP_BODY_ADAPTER(b_offset),
-                               SSLM_UP_BODY_ADAPTER(fold_offset), SSLM_UP_BODY_ADAPTER(u_off),
-                               SSLM_UP_BODY_ADAPTER(in_base), SSLM_UP_BODY_ADAPTER(wide_base),
-                               (int)SSLM_UP_BODY_ADAPTER(stage1_lanes));
+                               out_channels, (int)SSLM_UP_ADAPTER_RANK,
+                               SSLM_UP_ADAPTER_A_OFFSET, SSLM_UP_ADAPTER_B_OFFSET,
+                               SSLM_UP_ADAPTER_FOLD_OFFSET, SSLM_UP_ADAPTER_U_OFF,
+                               SSLM_UP_ADAPTER_IN_BASE, SSLM_UP_ADAPTER_WIDE_BASE,
+                               (int)SSLM_UP_ADAPTER_STAGE1_LANES);
 
     uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
 

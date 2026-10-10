@@ -46,7 +46,7 @@ cbuffer RootConstants : register(b0)
     uint g_adapter_wide_base;
     uint g_adapter_stage1_lanes;
     // Slot 1: up's own adapter-delta slot (slot_p 3, positions 19-26), read by the up body
-    // through SSLM_UP_BODY_ADAPTER below.
+    // through the SSLM_UP_ADAPTER_* macros below.
     uint g_adapter_up_rank;
     uint g_adapter_up_a_offset;
     uint g_adapter_up_b_offset;
@@ -72,7 +72,14 @@ RWByteAddressBuffer WorkScratch    : register(u3);
 ByteAddressBuffer LoraAB : register(t8);
 ByteAddressBuffer Fold   : register(t9);
 
-#define SSLM_UP_BODY_ADAPTER(field) g_adapter_up_##field
+#define SSLM_UP_ADAPTER_RANK g_adapter_up_rank
+#define SSLM_UP_ADAPTER_A_OFFSET g_adapter_up_a_offset
+#define SSLM_UP_ADAPTER_B_OFFSET g_adapter_up_b_offset
+#define SSLM_UP_ADAPTER_FOLD_OFFSET g_adapter_up_fold_offset
+#define SSLM_UP_ADAPTER_U_OFF g_adapter_up_u_off
+#define SSLM_UP_ADAPTER_IN_BASE g_adapter_up_in_base
+#define SSLM_UP_ADAPTER_WIDE_BASE g_adapter_up_wide_base
+#define SSLM_UP_ADAPTER_STAGE1_LANES g_adapter_up_stage1_lanes
 #define SSLM_FUSED_BODY_GATE_PROJ_SITE
 #define SSLM_FUSED_BODY_UP_PROJ_SITE
 #include "fused_site_bodies.hlsli"
