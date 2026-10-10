@@ -60,6 +60,7 @@
 #include "superslm/gpu_1p0_bench_bridge.h"
 #include "../src/gpu/d3d12_harness.h"
 #include "support/gpu_record_log_fixtures.h"
+#include "support/gpu_fusion_configs.h"
 #endif
 
 #include <algorithm>
@@ -29378,6 +29379,320 @@ static void TestT2948_ShaderDirInvalidBeforeDeviceInit() {
 }
 #endif
 
+
+// ==============================================================================================
+// GPU per-token overhead plan rev 3.1, slices S2 and S3 (§3.2-3.3): the fixtures the S2/S3 cells
+// share, and the CPU-only half that runs everywhere. The GPU cells (bracket mode with each fusion
+// configuration against per-site mode and the CPU oracle) are in the _WIN32 block further down
+// (RunGpuOverheadS2S3Cells).
+//
+// The rejection table is §7 cell 5.1's enumeration: every rejection tag each fused body can raise,
+// read from src/gpu/shaders/fused_site_bodies.hlsli, with the fixture that drives it. The absolute
+// reference for each row is the CPU census (status plus the full SequenceLayerState) and the CPU's
+// own chain trace, which names the site that rejected: the row's `cpu_prev_site` is the last site
+// the CPU reached at the rejecting layer and `cpu_site` (the rejecting site) never emits. A tag no
+// fixture reaches is a gap, named in kFusedBodyRejectionGaps below.
+// ==============================================================================================
+namespace gpu_overhead_s2s3_fixtures {
+
+using superslm::CarriedScale;
+using superslm::SequenceLayerState;
+using superslm::SslmForwardStatus;
+
+constexpr uint32_t kLayers = 8;
+constexpr int64_t kOutOfInt32 = INT64_C(1099511627776);  // 2^40: outside every int32 mantissa check
+constexpr CarriedScale kInitialScale{INT64_C(1073741824), 0};
+
+// One CPU chain-trace record (forward_sites' `layer<l>.<site>` names), copied out of the hook.
+struct TraceRecord {
+	std::string site;
+	std::vector<int8_t> codes;
+	int64_t m = 0;
+	int64_t e = 0;
+};
+
+inline void CaptureTraceRecord(const superslm::SslmChainTraceRecord* chain,
+                               const superslm::SslmKvLandingTraceRecord*, void* user) {
+	if (chain == nullptr) return;
+	auto* out = static_cast<std::vector<TraceRecord>*>(user);
+	TraceRecord r;
+	r.site.assign(chain->site.data(), chain->site.size());
+	r.codes.assign(chain->codes.begin(), chain->codes.end());
+	r.m = chain->m_out;
+	r.e = chain->e_out;
+	out->push_back(std::move(r));
+}
+
+// Which fused shader a row exercises: the run its rejecting body belongs to, or (for cell 11.1)
+// the run whose first body must stop at its entry sticky check.
+enum class FusedRun { ORun, DownRun, GateUp };
+
+struct RejectionRow {
+	const char* id;
+	const char* body;    // the body (fused_site_bodies.hlsli function) that raises the tag
+	const char* anchor;  // where in that body the tag is raised
+	FusedRun run;
+	SslmForwardStatus want;
+	const char* cpu_prev_site;  // last site the CPU reaches at the rejecting layer
+	const char* cpu_site;       // the rejecting site: no trace record at the rejecting layer
+	uint32_t layer_offset;      // the rejection lands at layer k + layer_offset
+	bool layer0_only;           // the fixture is a restored stream state, so k = 0 only
+	bool first_body;            // raised by the run's first body (cell 5.2's rows)
+	bool before_run;            // raised one site before the run (cell 11.1's rows)
+	void (*mutate)(superslm::LayerWeights& layer);
+	CarriedScale initial_scale;
+};
+
+inline void PoisonOSite(superslm::LayerWeights& l) { l.o_site_constant.m = kOutOfInt32; }
+inline void ZeroOSite(superslm::LayerWeights& l) { l.o_site_constant.m = 0; }
+inline void PoisonAttnResidualSite(superslm::LayerWeights& l) { l.attn_residual_site_constant.m = kOutOfInt32; }
+inline void ZeroAttnResidualSite(superslm::LayerWeights& l) { l.attn_residual_site_constant.m = 0; }
+inline void PoisonMlpNormSite(superslm::LayerWeights& l) { l.mlp_norm_site_constant.m = kOutOfInt32; }
+inline void WidenMlpNormGain(superslm::LayerWeights& l) {
+	// The q_proj ChainInputOutOfDomain corner (TestT2019_B11_..._QProj), moved to mlp_norm's gain:
+	// the normalized row's wide value passes 2^31.
+	static int32_t gain[2] = {65536, 65536};
+	l.mlp_norm_gain = gain;
+}
+inline void PoisonDownSite(superslm::LayerWeights& l) { l.down_site_constant.m = kOutOfInt32; }
+inline void ZeroDownSite(superslm::LayerWeights& l) { l.down_site_constant.m = 0; }
+inline void PoisonMlpResidualSite(superslm::LayerWeights& l) { l.mlp_residual_site_constant.m = kOutOfInt32; }
+inline void ZeroMlpResidualSite(superslm::LayerWeights& l) { l.mlp_residual_site_constant.m = 0; }
+inline void PoisonCtxFoldSite(superslm::LayerWeights& l) { l.ctx_fold_site_constant.m = kOutOfInt32; }
+inline void PoisonMlpActSite(superslm::LayerWeights& l) { l.mlp_act_site_constant.m = kOutOfInt32; }
+inline void NoMutation(superslm::LayerWeights&) {}
+
+// S2's rows: the o run (o tail, attn_residual, mlp_norm) and the down run (down tail,
+// mlp_residual, commit), plus cell 11.1's one-site-before rows for each run.
+inline const std::vector<RejectionRow>& S2RejectionRows() {
+	using S = SslmForwardStatus;
+	static const std::vector<RejectionRow> rows = {
+	    {"o.mantissa", "OTailSiteBody", "RequantChainCheckedFullGpuP (site_m outside int32)",
+	     FusedRun::ORun, S::CarriedScaleMantissaOutOfDomain, "attn_ctx", "o_proj.requant", 0, false,
+	     true, false, PoisonOSite, kInitialScale},
+	    {"attn_residual.branch_scale_zero", "AttnResidualSiteBody",
+	     "branch_m == 0 -> kTagResidualReconciliationScaleOutOfDomain", FusedRun::ORun,
+	     S::ResidualReconciliationScaleOutOfDomain, "o_proj.requant", "attn_residual", 0, false, false,
+	     false, ZeroOSite, kInitialScale},
+	    {"attn_residual.stream_scale_zero", "AttnResidualSiteBody",
+	     "stream_m == 0 -> kTagResidualReconciliationScaleOutOfDomain (the layer after a zero "
+	     "mlp_residual scale)",
+	     FusedRun::ORun, S::ResidualReconciliationScaleOutOfDomain, "o_proj.requant", "attn_residual",
+	     1, false, false, false, ZeroMlpResidualSite, kInitialScale},
+	    {"attn_residual.stream_mantissa", "AttnResidualSiteBody",
+	     "stream_m outside int32 -> kTagCarriedScaleMantissaOutOfDomain (restored stream scale 2^31)",
+	     FusedRun::ORun, S::CarriedScaleMantissaOutOfDomain, "o_proj.requant", "attn_residual", 0, true,
+	     false, false, NoMutation, CarriedScale{INT64_C(2147483648), 0}},
+	    {"attn_residual.candidate_mantissa", "AttnResidualSiteBody",
+	     "candidate status from PreflightRequantChainFullGpuP (site_m outside int32)", FusedRun::ORun,
+	     S::CarriedScaleMantissaOutOfDomain, "o_proj.requant", "attn_residual", 0, false, false, false,
+	     PoisonAttnResidualSite, kInitialScale},
+	    {"mlp_norm.mantissa", "MlpNormSiteBody", "RequantChainCheckedFullGpuP (site_m outside int32)",
+	     FusedRun::ORun, S::CarriedScaleMantissaOutOfDomain, "attn_residual", "mlp_norm", 0, false,
+	     false, false, PoisonMlpNormSite, kInitialScale},
+	    {"mlp_norm.chain_input", "MlpNormSiteBody", "RequantChainCheckedFullGpuP (D' > 2^31)",
+	     FusedRun::ORun, S::ChainInputOutOfDomain, "attn_residual", "mlp_norm", 0, false, false, false,
+	     WidenMlpNormGain, kInitialScale},
+	    {"down.mantissa", "DownTailSiteBody", "RequantChainCheckedFullGpuP (site_m outside int32)",
+	     FusedRun::DownRun, S::CarriedScaleMantissaOutOfDomain, "mlp_act", "down_proj.requant", 0,
+	     false, true, false, PoisonDownSite, kInitialScale},
+	    {"mlp_residual.branch_scale_zero", "MlpResidualSiteBody",
+	     "branch_m == 0 -> kTagResidualReconciliationScaleOutOfDomain", FusedRun::DownRun,
+	     S::ResidualReconciliationScaleOutOfDomain, "down_proj.requant", "mlp_residual", 0, false,
+	     false, false, ZeroDownSite, kInitialScale},
+	    {"mlp_residual.stream_scale_zero", "MlpResidualSiteBody",
+	     "stream_m == 0 -> kTagResidualReconciliationScaleOutOfDomain (a zero attn_residual scale)",
+	     FusedRun::DownRun, S::ResidualReconciliationScaleOutOfDomain, "down_proj.requant",
+	     "mlp_residual", 0, false, false, false, ZeroAttnResidualSite, kInitialScale},
+	    {"mlp_residual.candidate_mantissa", "MlpResidualSiteBody",
+	     "candidate status from PreflightRequantChainFullGpuP (site_m outside int32)",
+	     FusedRun::DownRun, S::CarriedScaleMantissaOutOfDomain, "down_proj.requant", "mlp_residual", 0,
+	     false, false, false, PoisonMlpResidualSite, kInitialScale},
+	    {"before_o_run.ctx_fold", "(ctx_fold_site, one dispatch before o GEMM and the o run)",
+	     "the o run's first body stops at its entry sticky check", FusedRun::ORun,
+	     S::CarriedScaleMantissaOutOfDomain, "q_proj.requant", "attn_ctx", 0, false, false, true,
+	     PoisonCtxFoldSite, kInitialScale},
+	    {"before_down_run.mlp_act", "(mlp_act_site, one dispatch before down GEMM and the down run)",
+	     "the down run's first body stops at its entry sticky check", FusedRun::DownRun,
+	     S::CarriedScaleMantissaOutOfDomain, "up_proj.requant", "mlp_act", 0, false, false, true,
+	     PoisonMlpActSite, kInitialScale},
+	};
+	return rows;
+}
+
+// Every tag the S2 bodies can raise that no fixture here reaches, by name (§7 cell 5.1: "a tag no
+// fixture reaches is filed as a gap by name"). Each is the same moved body in both modes; the
+// reason it is unreached on these hidden-2 fixtures is stated.
+inline const std::vector<std::string>& S2RejectionGaps() {
+	static const std::vector<std::string> gaps = {
+	    "OTailSiteBody kTagChainInputOutOfDomain: o's wide row is ctx codes x int8 weights over 2 "
+	    "channels (<= 2 x 127 x 127), far below 2^31",
+	    "AttnResidualSiteBody kTagCarriedScaleMantissaOutOfDomain on branch_m: branch_m is o's "
+	    "chain output scale, which that chain already holds inside int32",
+	    "AttnResidualSiteBody / MlpResidualSiteBody kTagResidualReconciliationMagnitudeOutOfDomain: "
+	    "the second candidate lands the finer grid onto the coarser, which cannot exceed the "
+	    "magnitude bound; no initial-scale exponent in [-1100, 1100] reaches it here (swept on the "
+	    "CPU while building this table)",
+	    "AttnResidualSiteBody / MlpResidualSiteBody kTagChainInputOutOfDomain from the candidate "
+	    "preflight: the reconciled row stays inside 2^31 on hidden-2 fixtures",
+	    "MlpResidualSiteBody kTagCarriedScaleMantissaOutOfDomain on stream_m / branch_m: both are "
+	    "chain output scales (attn_residual's, down's), already inside int32",
+	    "DownTailSiteBody kTagChainInputOutOfDomain: act codes x int8 weights over 2 channels",
+	    "CommitSiteBody: raises no tag",
+	};
+	return gaps;
+}
+
+struct CpuRun {
+	SslmForwardStatus status = SslmForwardStatus::Ok;
+	int8_t codes[2] = {0, 0};
+	SequenceLayerState seq;
+	std::vector<uint8_t> workspace;
+	std::vector<TraceRecord> trace;
+};
+
+// One full-depth call on the CPU oracle, with the chain trace captured. `context_cap` 1 matches
+// the GPU cells' call shape (t2019_b11's).
+template <uint32_t N>
+CpuRun RunCpuTraced(NLayerFixture<N>& fixture, CarriedScale initial_scale) {
+	CpuRun r;
+	r.codes[0] = 5;
+	r.codes[1] = -5;
+	r.seq.hidden_codes = r.codes;
+	r.seq.hidden_scale = initial_scale;
+	r.seq.layer_index = 0;
+	r.workspace.assign(static_cast<size_t>(N) * 4u, 0);
+	superslm::SslmTraceHookState hook;
+	superslm::SslmSetTraceHook(hook, CaptureTraceRecord, &r.trace);
+	r.status = superslm::RunLayerLoop(r.seq, fixture.layers, N, N, 2, 2, 1, 2, /*context_cap=*/1,
+	                                  fixture.view.rope_tables, r.workspace.data(), r.workspace.size(),
+	                                  {}, 0, &hook);
+	r.seq.hidden_codes = r.codes;
+	return r;
+}
+
+inline bool HasTraceSite(const std::vector<TraceRecord>& trace, uint32_t layer, const char* site) {
+	const std::string name = "layer" + std::to_string(layer) + "." + site;
+	for (const TraceRecord& r : trace) {
+		if (r.site == name) return true;
+	}
+	return false;
+}
+
+inline std::vector<uint32_t> RowPositions(const RejectionRow& row) {
+	if (row.layer0_only) return {0u};
+	return {0u, 5u};
+}
+
+// Cell 8.1's adapter (and 7.11's): o, gate, up and down covered on every layer -- the four
+// projections whose tails the fused shaders carry (o in fused_o's one slot, down in fused_down's,
+// gate and up in fused_gate_up's two at S3) -- each with its own A and a non-zero B, through the
+// pass-through fold triples t2029_b1_fixtures wires. Rank 1 on every projection: the CPU oracle's
+// `LayerAdapter::rank` is one rank per layer, shared by every projection, so "gate and up at
+// different ranks" (plan §7 8.1) has no CPU reference; distinct A and B per projection is what
+// tells gate's slot from up's. `up_reads_gate` wires up's projection with gate's A and B -- the
+// CPU image of 7.11's mutant (the fused tail reading slot 0 for up).
+struct FusedTailAdapter {
+	static constexpr int8_t kA[4][2] = {{1, 2}, {2, -1}, {1, 3}, {-2, 1}};        // o, gate, up, down
+	// B chosen on this fixture so the forward stays Ok (larger gate/up deltas push mlp_act's
+	// composition out of domain) and the final codes move both with the adapter (76,-127 against
+	// base-only 127,-1) and under 7.11's mutant (-76,127).
+	static constexpr int8_t kB[4][2] = {{100, -100}, {1, -1}, {5, -4}, {-6, 9}};
+	superslm::LayerAdapter adapter;
+
+	explicit FusedTailAdapter(bool up_reads_gate = false) {
+		adapter.rank = 1;
+		superslm::LayerAdapterProjection* projs[4] = {&adapter.o, &adapter.gate, &adapter.up, &adapter.down};
+		for (int i = 0; i < 4; ++i) {
+			const int src = (up_reads_gate && i == 2) ? 1 : i;
+			t2029_b1_fixtures::WireAdaptedProjection(*projs[i], kB[src], &t2029_b1_fixtures::kDeltaFoldEntry,
+			                                         &t2029_b1_fixtures::kUFoldEntry);
+			projs[i]->a_weight = kA[src];
+		}
+	}
+	FusedTailAdapter(const FusedTailAdapter&) = delete;
+	FusedTailAdapter& operator=(const FusedTailAdapter&) = delete;
+};
+
+template <uint32_t N>
+void BindAdapterEveryLayer(NLayerFixture<N>& fixture, const superslm::LayerAdapter* adapter) {
+	for (uint32_t l = 0; l < N; ++l) fixture.layers[l].adapter = adapter;
+}
+
+}  // namespace gpu_overhead_s2s3_fixtures
+
+// Cell 5.1, CPU half (runs everywhere): every row of the rejection table reaches its tag on the CPU
+// oracle at the planned layer and site. The GPU cells use the same table, so a fixture that stops
+// reaching its tag fails here, off the box, before it can make a GPU cell vacuous.
+static void TestGpuOverheadS2S3_5_1_RejectionFixturesReachTheirTagOnTheCpu() {
+	using namespace gpu_overhead_s2s3_fixtures;
+	for (const RejectionRow& row : S2RejectionRows()) {
+		for (uint32_t k : RowPositions(row)) {
+			NLayerFixture<kLayers> fixture;
+			row.mutate(fixture.layers[k]);
+			const CpuRun cpu = RunCpuTraced(fixture, row.initial_scale);
+			const uint32_t at = k + row.layer_offset;
+			CHECK_MSG(cpu.status == row.want,
+			          "S2/S3 5.1 CPU %s @k=%u: status %s, want %s", row.id, k,
+			          superslm::SslmForwardStatusName(cpu.status), superslm::SslmForwardStatusName(row.want));
+			CHECK_MSG(cpu.seq.layer_index == at, "S2/S3 5.1 CPU %s @k=%u: layer_index %u, want %u",
+			          row.id, k, cpu.seq.layer_index, at);
+			CHECK_MSG(HasTraceSite(cpu.trace, at, row.cpu_prev_site) &&
+			              !HasTraceSite(cpu.trace, at, row.cpu_site),
+			          "S2/S3 5.1 CPU %s @k=%u: the rejection must land at layer%u.%s (after "
+			          "layer%u.%s) -- the trace says otherwise, so the row names the wrong body",
+			          row.id, k, at, row.cpu_site, at, row.cpu_prev_site);
+		}
+	}
+	CHECK_MSG(!S2RejectionGaps().empty(), "S2/S3 5.1: the gap list must name the unreached tags");
+}
+
+// Cells 8.1 and 7.11, CPU half (runs everywhere): the fused-tail adapter is live on the CPU oracle
+// -- the forward stays Ok, the adapter moves the output off the base-only run, and wiring up's
+// projection with gate's A and B (7.11's mutant, the fused tail reading slot 0 for up) moves it
+// again. Without the last, the GPU cell's comparison against this oracle could not see that mutant.
+static void TestGpuOverheadS2S3_8_1_FusedTailAdapterIsLiveOnTheCpu() {
+	using namespace gpu_overhead_s2s3_fixtures;
+	CpuRun runs[3];
+	const char* labels[3] = {"base-only", "fused-tail adapter", "adapter with up reading gate's slot"};
+	FusedTailAdapter adapter;
+	FusedTailAdapter mutant(/*up_reads_gate=*/true);
+	const superslm::LayerAdapter* bound[3] = {nullptr, &adapter.adapter, &mutant.adapter};
+	for (int i = 0; i < 3; ++i) {
+		NLayerFixture<kLayers> fixture;
+		BindAdapterEveryLayer(fixture, bound[i]);
+		runs[i] = RunCpuTraced(fixture, kInitialScale);
+		CHECK_MSG(runs[i].status == SslmForwardStatus::Ok, "S2/S3 8.1 CPU %s: status %s", labels[i],
+		          superslm::SslmForwardStatusName(runs[i].status));
+	}
+	auto same = [](const CpuRun& a, const CpuRun& b) {
+		return a.codes[0] == b.codes[0] && a.codes[1] == b.codes[1] && a.seq.hidden_scale.m == b.seq.hidden_scale.m &&
+		       a.seq.hidden_scale.e == b.seq.hidden_scale.e && a.workspace == b.workspace;
+	};
+	CHECK_MSG(!same(runs[0], runs[1]),
+	          "S2/S3 8.1 CPU: the fused-tail adapter must change the output (codes %d,%d) from the "
+	          "base-only run's -- an adapter with no effect cannot show a slot wired wrong",
+	          runs[1].codes[0], runs[1].codes[1]);
+	CHECK_MSG(!same(runs[1], runs[2]),
+	          "S2/S3 7.11 CPU: up reading gate's A and B must change the output (codes %d,%d), or the "
+	          "GPU cell cannot kill the mutant that reads slot 0 for up",
+	          runs[2].codes[0], runs[2].codes[1]);
+	// Each fused tail's own projection is live: its trace row differs from the base-only run's at
+	// layer 0.
+	for (const char* site : {"o_proj.requant", "gate_proj.requant", "up_proj.requant", "down_proj.requant"}) {
+		const std::string name = std::string("layer0.") + site;
+		const TraceRecord* rec[2] = {nullptr, nullptr};
+		for (int i = 0; i < 2; ++i) {
+			for (const TraceRecord& r : runs[i].trace) {
+				if (r.site == name) rec[i] = &r;
+			}
+		}
+		CHECK_MSG(rec[0] && rec[1] && (rec[0]->codes != rec[1]->codes || rec[0]->m != rec[1]->m || rec[0]->e != rec[1]->e),
+		          "S2/S3 8.1 CPU: %s's row must differ with the adapter bound -- its slot would "
+		          "otherwise carry no observable delta", name.c_str());
+	}
+}
+
 #ifdef _WIN32
 // ==============================================================================================
 // GPU per-token overhead plan rev 3.1, slice S1 (§3.1): two recording modes. These are the S1
@@ -29848,39 +30163,53 @@ static void TestGpuOverheadS1_7_1_BracketWritesTwoQueriesPerListAndGpuBusyKeepsI
 	}
 }
 
-// Cell 7.3 (synthetic half; S1 runs it as a regression only -- the plan's killing value is k = 12
-// at S2-B and S3-B): at dispatch_budget = k * DispatchesPerLayer, both modes advance exactly k
-// layers, and the recorded count is k layers' worth. The public-budget half (sslm_decode_step_gpu
-// on the 24-layer 0.5B) is in tests/gpu-overhead-s1-suite/.
+// Cell 7.3 (synthetic half): at dispatch_budget = k * DispatchesPerLayer, both modes advance
+// exactly k layers, and record k layers' worth: per-site k x 24, bracket k x the fusion
+// configuration's per-layer count, for every configuration that can ship (GPU per-token overhead
+// plan rev 3.1 §7 7.3, rev 3.1: "in every shippable configuration"). k = 12 is the plan's killing
+// value from S2 on -- but PlanDispatchBudgetGpu takes its unit from the caller and ignores the
+// mode, so this cell cannot see the mutant "unit = recorded count" (the 1.0 API's own unit choice);
+// it is a regression here. The kill runs through sslm_decode_step_gpu on the 0.5B and the QK model,
+// in tests/gpu-overhead-s1-suite/cell_s1_real_model.cpp's Cell7_3.
 static void TestGpuOverheadS1_7_3_BudgetUnitAdvancesExactlyKLayersInBothModes() {
 	using namespace gpu_overhead_s1;
+	using namespace superslm_gpu_fusion_configs;
 	constexpr uint32_t kUnit = superslm_gpu::kLegacyDispatchesPerLayer;
 	NLayerFixture<24> fixture;
-	for (GpuTimingMode mode : {GpuTimingMode::Bracket, GpuTimingMode::PerSite}) {
-		ScopedGpuTimingMode scoped(mode);
-		for (uint32_t k : {1u, 4u, 24u}) {
-			uint32_t layers = 0;
-			const auto plan = superslm_gpu::PlanDispatchBudgetGpu(k * kUnit, 24, 0, &layers, kUnit);
-			CHECK_MSG(plan == superslm_gpu::SslmGpuStatus::Ok && layers == k,
-			          "S1 7.3 (%s) k=%u: PlanDispatchBudgetGpu(%u) planned %u layers, want %u",
-			          ModeName(mode), k, k * kUnit, layers, k);
-			const Reading r = SubmitFinishOneToken(fixture, 1, layers);
-			CHECK_MSG(r.status == SslmForwardStatus::Ok && r.layer_index == k,
-			          "S1 7.3 (%s) k=%u: status=%s layer_index=%u, want Ok and exactly %u layers",
-			          ModeName(mode), k, superslm::SslmForwardStatusName(r.status), r.layer_index, k);
-			CHECK_MSG(r.dispatches == k * kUnit,
-			          "S1 7.3 (%s) k=%u: recorded %u dispatches, want %u (at S1 the recorded count "
-			          "per layer equals the budget unit in both modes)",
-			          ModeName(mode), k, r.dispatches, k * kUnit);
+	for (const ConfigRow& row : ShippableConfigs()) {
+		ScopedFusionConfig config(row.config);
+		CHECK_MSG(config.accepted, "S1 7.3 %s: configuration refused", row.name);
+		for (GpuTimingMode mode : {GpuTimingMode::Bracket, GpuTimingMode::PerSite}) {
+			ScopedGpuTimingMode scoped(mode);
+			for (uint32_t k : {1u, 4u, 12u, 24u}) {
+				uint32_t layers = 0;
+				const auto plan = superslm_gpu::PlanDispatchBudgetGpu(k * kUnit, 24, 0, &layers, kUnit);
+				CHECK_MSG(plan == superslm_gpu::SslmGpuStatus::Ok && layers == k,
+				          "S1 7.3 %s (%s) k=%u: PlanDispatchBudgetGpu(%u) planned %u layers, want %u", row.name,
+				          ModeName(mode), k, k * kUnit, layers, k);
+				const Reading r = SubmitFinishOneToken(fixture, 1, layers);
+				CHECK_MSG(r.status == SslmForwardStatus::Ok && r.layer_index == k,
+				          "S1 7.3 %s (%s) k=%u: status=%s layer_index=%u, want Ok and exactly %u layers", row.name,
+				          ModeName(mode), k, superslm::SslmForwardStatusName(r.status), r.layer_index, k);
+				const uint32_t want = k * (mode == GpuTimingMode::Bracket ? row.legacy_per_layer : kUnit);
+				CHECK_MSG(r.dispatches == want,
+				          "S1 7.3 %s %s (%s) k=%u: recorded %u dispatches, want %u -- the budget unit stays "
+				          "%u per layer while bracket mode records the configuration's count",
+				          row.name, ConfigName(row.config).c_str(), ModeName(mode), k, r.dispatches, want, kUnit);
+			}
 		}
 	}
 }
 
 // Cell 7.8 (S1 counts): exact counts per token through the seams. Per-site: layers x 24 (legacy) or
 // x 25 (QK norm) dispatches, as many barriers, dispatches + 1 queries. Bracket at S1: the same
-// dispatches and barriers, 2 queries. I3: bracket never records more than per-site.
+// dispatches and barriers, 2 queries. I3: bracket never records more than per-site. From S2 on,
+// S1's bracket counts are the unfused configuration's, which this cell pins; every configuration's
+// counts are TestGpuOverheadS2S3_7_8_ExactCountsPerConfiguration's.
 static void TestGpuOverheadS1_7_8_ExactCountsPerTokenInBothModes() {
 	using namespace gpu_overhead_s1;
+	superslm_gpu_fusion_configs::ScopedFusionConfig unfused(superslm_gpu_fusion_configs::kUnfused);
+	CHECK_MSG(unfused.accepted, "S1 7.8: the unfused configuration must be accepted");
 	struct Counts {
 		SslmForwardStatus status;
 		uint32_t dispatches, barriers, queries;
@@ -29969,7 +30298,8 @@ static std::string GpuOverheadS1_FirstDifference(const std::vector<std::string>&
 // Cell 7.8, stream shape (S1 only; S2 and S3 change bracket mode's dispatches by design): on every
 // cell-7.4 fixture, bracket mode's stream is per-site mode's with the per-site queries removed --
 // query 0 first, then the identical dispatches, root constants and barriers, then query 1 and a
-// 2-entry resolve.
+// 2-entry resolve. From S2 on this is the unfused configuration's stream, which this cell pins;
+// TestGpuOverheadS2S3_7_8_BracketStreamIsTheFusedPerSiteStream checks every configuration.
 static void TestGpuOverheadS1_7_8_BracketStreamIsPerSiteStreamWithoutSiteQueries() {
 #if !defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
 	CHECK_MSG(false,
@@ -29977,6 +30307,8 @@ static void TestGpuOverheadS1_7_8_BracketStreamIsPerSiteStreamWithoutSiteQueries
 	          "build.bat and CMakeLists.txt define it for superslm_tests");
 #else
 	using namespace gpu_overhead_s1;
+	superslm_gpu_fusion_configs::ScopedFusionConfig unfused(superslm_gpu_fusion_configs::kUnfused);
+	CHECK_MSG(unfused.accepted, "S1 7.8 stream shape: the unfused configuration must be accepted");
 	for (const char* name : superslm_gpu_record_log::kFixtureNames) {
 		std::vector<std::string> logs[2];
 		const GpuTimingMode modes[2] = {GpuTimingMode::PerSite, GpuTimingMode::Bracket};
@@ -30106,6 +30438,1070 @@ static void RunGpuOverheadS1Cells() {
 	TestGpuOverheadS1_7_8_BracketStreamIsPerSiteStreamWithoutSiteQueries();
 	TestGpuOverheadS1_7_4_PerSiteStreamEqualsTheV1p11Capture();
 }
+
+// ==============================================================================================
+// GPU per-token overhead plan rev 3.1, slices S2 and S3 (§3.2-3.3): bracket mode fuses runs of
+// single-group neighbours into one dispatch, under the fusion configuration
+// (`GpuBracketFusionConfig`, gpu_port.h; tests/support/gpu_fusion_configs.h lists every one that
+// can ship). Per-site mode never fuses. These are the S2/S3 cells of §7 that run on the synthetic
+// fixtures; the real-artifact cells (7.3's k = 12 through sslm_decode_step_gpu, 4.1-4.2 on the
+// 0.5B/1.5B/QK models, batch decode, 1.1 across models, 8.2 on a real blob) are in
+// tests/gpu-overhead-s1-suite/ (cell_s1_real_model.cpp's 7.3, cell_s2s3_real_model.cpp).
+//
+// Every cell runs every shippable configuration. Cells that judge a moved body's behaviour assert
+// an ABSOLUTE reference beside the per-site comparison (plan §7 "References"): the moved bodies
+// run in both modes, so a defect in one passes any mode-against-mode comparison. The absolute
+// reference here is the CPU oracle -- its status, the full SequenceLayerState census, the K/V
+// workspace, and, through the LayerScratch probe (`SetGpuLayerScratchProbe`), every LayerScratch
+// region the fused runs and their neighbours write, compared with the CPU chain trace's row for
+// the last site that wrote it. A region no site wrote holds the probe's fill byte: the pre-call
+// snapshot of plan cells 5.2, 7.6 and 11.1.
+// ==============================================================================================
+namespace gpu_overhead_s2s3 {
+
+using namespace gpu_overhead_s2s3_fixtures;
+using namespace superslm_gpu_fusion_configs;
+using gpu_overhead_s1::ModeName;
+using gpu_overhead_s1::Reading;
+using gpu_overhead_s1::ReadOutputs;
+using gpu_overhead_s1::ReadSeams;
+using gpu_overhead_s1::SameOutputs;
+using gpu_overhead_s1::ScopedGpuTimingMode;
+using superslm_gpu::GpuTimingMode;
+
+constexpr uint8_t kProbeFill = 0xA5;
+
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+// Fills LayerScratch with `fill` at every call's creation and reads the whole buffer back on the
+// single-token path, for the duration of one cell.
+struct ScopedLayerScratchProbe {
+	explicit ScopedLayerScratchProbe(uint8_t fill) { superslm_gpu::SetGpuLayerScratchProbe(true, fill); }
+	~ScopedLayerScratchProbe() { superslm_gpu::SetGpuLayerScratchProbe(false, 0); }
+	ScopedLayerScratchProbe(const ScopedLayerScratchProbe&) = delete;
+	ScopedLayerScratchProbe& operator=(const ScopedLayerScratchProbe&) = delete;
+};
+#endif
+
+// One call's outputs plus its LayerScratch probe (empty when the probe was off or the call never
+// reached its readback).
+struct ProbedReading {
+	Reading r;
+	bool probed = false;
+	std::vector<uint8_t> scratch;
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	superslm_gpu::GpuLayerScratchProbeLayout layout{};
+#endif
+	int64_t sticky_tag = 0;
+};
+
+void ReadProbe(ProbedReading* p) {
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	p->probed = superslm_gpu::LastCallLayerScratchProbe(&p->scratch, &p->layout, &p->sticky_tag);
+#else
+	(void)p;
+#endif
+}
+
+struct TokenCall {
+	int64_t cap = 1;
+	uint32_t layer_budget = 0;  // 0: the fixture's whole depth
+	CarriedScale initial_scale = kInitialScale;
+	int64_t context_length = 0;
+	const superslm_gpu::GpuAdapterBridge* adapter = nullptr;
+};
+
+// One token through the async pair on an N-layer synthetic fixture, resumed in slices of
+// `call.layer_budget` layers until the token completes or a call rejects; the probe reading is
+// the last call's.
+template <uint32_t N>
+ProbedReading RunToken(NLayerFixture<N>& fixture, const TokenCall& call) {
+	ProbedReading p;
+	int8_t codes[2] = {5, -5};
+	SequenceLayerState seq;
+	seq.hidden_codes = codes;
+	seq.hidden_scale = call.initial_scale;
+	seq.layer_index = 0;
+	seq.context_length = call.context_length;
+	std::vector<uint8_t> ws(static_cast<size_t>(N) * static_cast<size_t>(call.cap) * 1 * 2 * 2, 0);
+	const uint32_t budget = call.layer_budget == 0 ? N : call.layer_budget;
+	SslmForwardStatus st = SslmForwardStatus::Ok;
+	while (st == SslmForwardStatus::Ok && seq.layer_index < N) {
+		superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+		st = superslm_gpu::RunLayerLoopGpuSubmit(
+		    seq, fixture.layers, N, budget, 2, 2, 1, 2, call.cap, fixture.view.rope_tables, ws.data(),
+		    ws.size(), /*external_kv_resident=*/nullptr, /*io_external_kv_needs_resume_barrier=*/nullptr,
+		    &inflight, /*external_weights_resident=*/nullptr, /*external_rope_cos_resident=*/nullptr,
+		    /*external_rope_sin_resident=*/nullptr, /*external_rope_has=*/false,
+		    /*external_rope_cos_elems=*/0, /*external_rope_sin_elems=*/0, call.adapter);
+		if (st == SslmForwardStatus::Ok && inflight != nullptr) {
+			int32_t ready = 0;
+			st = superslm_gpu::RunLayerLoopGpuFinish(inflight, seq, ws.data(), /*block=*/1, &ready);
+		}
+		if (st != SslmForwardStatus::Ok || inflight == nullptr) break;
+	}
+	p.r.status = st;
+	ReadSeams(&p.r);
+	ReadOutputs(seq, ws, 2, &p.r);
+	ReadProbe(&p);
+	return p;
+}
+
+// The same token on the CPU oracle, traced.
+template <uint32_t N>
+Reading RunTokenOnCpu(NLayerFixture<N>& fixture, const TokenCall& call, std::vector<TraceRecord>* trace) {
+	Reading r;
+	int8_t codes[2] = {5, -5};
+	SequenceLayerState seq;
+	seq.hidden_codes = codes;
+	seq.hidden_scale = call.initial_scale;
+	seq.layer_index = 0;
+	seq.context_length = call.context_length;
+	std::vector<uint8_t> ws(static_cast<size_t>(N) * static_cast<size_t>(call.cap) * 1 * 2 * 2, 0);
+	superslm::SslmTraceHookState hook;
+	if (trace) superslm::SslmSetTraceHook(hook, CaptureTraceRecord, trace);
+	r.status = superslm::RunLayerLoop(seq, fixture.layers, N, N, 2, 2, 1, 2, call.cap,
+	                                  fixture.view.rope_tables, ws.data(), ws.size(), {}, 0,
+	                                  trace ? &hook : nullptr);
+	ReadOutputs(seq, ws, 2, &r);
+	return r;
+}
+
+std::string Describe(const Reading& r) {
+	char buf[192];
+	std::snprintf(buf, sizeof(buf), "status %s, codes %d,%d, scale {%lld,%lld}, layer %u, ctx %lld, sat %llu",
+	              superslm::SslmForwardStatusName(r.status), r.codes.size() > 0 ? r.codes[0] : 0,
+	              r.codes.size() > 1 ? r.codes[1] : 0, static_cast<long long>(r.scale.m),
+	              static_cast<long long>(r.scale.e), r.layer_index, static_cast<long long>(r.context_length),
+	              static_cast<unsigned long long>(r.kv_saturation_count));
+	return buf;
+}
+
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+// The LayerScratch regions the probe judges, each with the CPU trace sites that write it (in
+// site order; the region holds the LAST of them to have run).
+struct ProbeRegion {
+	const char* name;
+	uint32_t codes_off;
+	uint32_t scale_off;
+	uint32_t width;
+	std::vector<const char*> sites;
+};
+
+std::vector<ProbeRegion> ProbeRegions(const superslm_gpu::GpuLayerScratchProbeLayout& L) {
+	constexpr uint32_t kHidden = 2, kInter = 2, kQWidth = 2;
+	return {
+	    {"normed", L.normed, L.normed_scale, kHidden, {"attn_norm", "mlp_norm"}},
+	    {"ctx", L.ctx_codes, L.ctx_scale, kQWidth, {"attn_ctx"}},
+	    {"o", L.o_codes, L.o_scale, kHidden, {"o_proj.requant"}},
+	    {"attn_stream", L.attn_stream, L.attn_stream_scale, kHidden, {"attn_residual"}},
+	    {"gate", L.gate_codes, L.gate_scale, kInter, {"gate_proj.requant"}},
+	    {"up", L.up_codes, L.up_scale, kInter, {"up_proj.requant"}},
+	    {"act", L.act_codes, L.act_scale, kInter, {"mlp_act"}},
+	    {"down", L.down_codes, L.down_scale, kHidden, {"down_proj.requant"}},
+	    {"stream_next", L.stream_next, L.stream_next_scale, kHidden, {"mlp_residual"}},
+	};
+}
+
+// What `region` must hold after the call the CPU `trace` describes: the last traced row of any of
+// its sites, as LayerScratch stores it (one int32 per code, then the scale's m and e as int64), or
+// the fill byte throughout when no site wrote it.
+std::vector<uint8_t> ExpectedRegion(const std::vector<TraceRecord>& trace, const ProbeRegion& region,
+                                    std::string* source) {
+	const TraceRecord* last = nullptr;
+	for (const TraceRecord& r : trace) {
+		const size_t dot = r.site.find('.');
+		if (dot == std::string::npos) continue;
+		const std::string site = r.site.substr(dot + 1);
+		for (const char* s : region.sites) {
+			if (site == s) last = &r;
+		}
+	}
+	std::vector<uint8_t> out(static_cast<size_t>(region.width) * 4u + 16u, kProbeFill);
+	if (last == nullptr) {
+		*source = "the fill (no site wrote it)";
+		return out;
+	}
+	*source = last->site;
+	for (uint32_t i = 0; i < region.width; ++i) {
+		const int32_t v = i < last->codes.size() ? static_cast<int32_t>(last->codes[i]) : 0;
+		std::memcpy(out.data() + i * 4u, &v, 4);
+	}
+	std::memcpy(out.data() + region.width * 4u, &last->m, 8);
+	std::memcpy(out.data() + region.width * 4u + 8u, &last->e, 8);
+	return out;
+}
+
+// Checks every judged region of `p`'s probe against the CPU trace. `label` names the call.
+void CheckProbeAgainstTrace(const ProbedReading& p, const std::vector<TraceRecord>& trace, const std::string& label) {
+	CHECK_MSG(p.probed, "%s: the LayerScratch probe read nothing back", label.c_str());
+	if (!p.probed) return;
+	for (const ProbeRegion& region : ProbeRegions(p.layout)) {
+		std::string source;
+		const std::vector<uint8_t> want = ExpectedRegion(trace, region, &source);
+		std::vector<uint8_t> got(want.size(), 0);
+		const size_t codes_bytes = static_cast<size_t>(region.width) * 4u;
+		const bool in_range = static_cast<size_t>(region.codes_off) + codes_bytes <= p.scratch.size() &&
+		                      static_cast<size_t>(region.scale_off) + 16u <= p.scratch.size();
+		if (in_range) {
+			std::memcpy(got.data(), p.scratch.data() + region.codes_off, codes_bytes);
+			std::memcpy(got.data() + codes_bytes, p.scratch.data() + region.scale_off, 16);
+		}
+		CHECK_MSG(in_range && got == want,
+		          "%s: LayerScratch region %s must hold %s -- a later body that ran past an earlier "
+		          "body's rejection, or a body that wrote another's region, shows here",
+		          label.c_str(), region.name, source.c_str());
+	}
+}
+#endif
+
+// The absolute half every success- or rejection-path cell asserts on a GPU reading: status, the
+// SequenceLayerState census (t2019_b11's comparator) and the K/V workspace equal the CPU oracle's.
+void CheckAgainstCpu(const Reading& gpu, const Reading& cpu, const std::string& label) {
+	int8_t gpu_codes[2] = {gpu.codes.size() > 0 ? gpu.codes[0] : int8_t{0}, gpu.codes.size() > 1 ? gpu.codes[1] : int8_t{0}};
+	int8_t cpu_codes[2] = {cpu.codes.size() > 0 ? cpu.codes[0] : int8_t{0}, cpu.codes.size() > 1 ? cpu.codes[1] : int8_t{0}};
+	SequenceLayerState g, c;
+	g.hidden_codes = gpu_codes;
+	g.hidden_scale = gpu.scale;
+	g.layer_index = gpu.layer_index;
+	g.context_length = gpu.context_length;
+	g.kv_saturation_count = gpu.kv_saturation_count;
+	c.hidden_codes = cpu_codes;
+	c.hidden_scale = cpu.scale;
+	c.layer_index = cpu.layer_index;
+	c.context_length = cpu.context_length;
+	c.kv_saturation_count = cpu.kv_saturation_count;
+	int fields = 0;
+	const bool census = t2019_b11::CompareSequenceLayerStateComplete(c, g, &fields);
+	CHECK_MSG(fields == t2019_b11::kSequenceLayerStateFieldCount,
+	          "%s: the census compared %d fields, the X-macro names %d", label.c_str(), fields,
+	          static_cast<int>(t2019_b11::kSequenceLayerStateFieldCount));
+	CHECK_MSG(gpu.status == cpu.status && census && gpu.workspace == cpu.workspace,
+	          "%s: GPU (%s) must equal the CPU oracle (%s), workspace bytes included%s", label.c_str(),
+	          Describe(gpu).c_str(), Describe(cpu).c_str(), gpu.workspace == cpu.workspace ? "" : " (workspace differs)");
+}
+
+}  // namespace gpu_overhead_s2s3
+
+// The configuration seam itself: the compiled-in default is the full plan at this slice, every
+// shippable configuration is accepted and read back, every other one is refused and leaves the
+// configuration unchanged, and per-site mode's counts do not move under any configuration.
+static void TestGpuOverheadS2S3_ConfigSeam_DefaultShippableAndRefused() {
+	using namespace gpu_overhead_s2s3;
+	const GpuBracketFusionConfig def = superslm_gpu::DefaultGpuBracketFusionConfig();
+	CHECK_MSG(def == kSliceDefault, "S2/S3 config: the compiled-in default is %s, want %s (the full plan at this slice)",
+	          ConfigName(def).c_str(), ConfigName(kSliceDefault).c_str());
+	CHECK_MSG(superslm_gpu::GetGpuBracketFusionConfig() == def,
+	          "S2/S3 config: the process's configuration at this cell is %s, want the default %s -- an "
+	          "earlier cell leaked its configuration",
+	          ConfigName(superslm_gpu::GetGpuBracketFusionConfig()).c_str(), ConfigName(def).c_str());
+	for (const ConfigRow& row : ShippableConfigs()) {
+		CHECK_MSG(superslm_gpu::IsShippableGpuBracketFusionConfig(row.config),
+		          "S2/S3 config: %s %s must be shippable", row.name, ConfigName(row.config).c_str());
+		ScopedFusionConfig scoped(row.config);
+		CHECK_MSG(scoped.accepted && superslm_gpu::GetGpuBracketFusionConfig() == row.config,
+		          "S2/S3 config: SetGpuBracketFusionConfig(%s) must be accepted and read back",
+		          ConfigName(row.config).c_str());
+	}
+	for (const GpuBracketFusionConfig& refused : RefusedConfigs()) {
+		CHECK_MSG(!superslm_gpu::IsShippableGpuBracketFusionConfig(refused),
+		          "S2/S3 config: %s must not be shippable at this slice", ConfigName(refused).c_str());
+		const GpuBracketFusionConfig before = superslm_gpu::GetGpuBracketFusionConfig();
+		const bool accepted = superslm_gpu::SetGpuBracketFusionConfig(refused);
+		CHECK_MSG(!accepted && superslm_gpu::GetGpuBracketFusionConfig() == before,
+		          "S2/S3 config: SetGpuBracketFusionConfig(%s) must return false and leave %s in place",
+		          ConfigName(refused).c_str(), ConfigName(before).c_str());
+		if (accepted) superslm_gpu::SetGpuBracketFusionConfig(before);
+	}
+}
+
+// Cell 7.8 (S2/S3 counts), every configuration: exact dispatches, barriers and queries per token
+// through the seams. Bracket: layers x the configuration's per-layer count (legacy / QK norm),
+// barriers = dispatches, 2 queries per list. Per-site: layers x 24 / 25, as many barriers,
+// dispatches + 1 queries, whatever the configuration. I3: bracket never records more. Kills a
+// bracket recorder that never fuses, or fuses in per-site mode.
+static void TestGpuOverheadS2S3_7_8_ExactCountsPerConfiguration() {
+	using namespace gpu_overhead_s2s3;
+	struct Counts {
+		SslmForwardStatus status;
+		uint32_t dispatches, barriers, queries;
+	};
+	auto counts_of = [](const Reading& r) { return Counts{r.status, r.dispatches, r.barriers, r.queries}; };
+	auto run_qk = []() {
+		QkNormWiringFixture fixture;
+		int8_t codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = codes;
+		seq.hidden_scale = kInitialScale;
+		seq.layer_index = 0;
+		uint8_t ws[4] = {};
+		Reading r;
+		r.status = superslm_gpu::RunLayerLoopGpu(seq, &fixture.layer, 1, 1, 2, 2, 1, 2, 1,
+		                                         fixture.view.rope_tables, ws, sizeof(ws));
+		ReadSeams(&r);
+		return r;
+	};
+	NLayerFixture<8> fixture;
+	for (const ConfigRow& row : ShippableConfigs()) {
+		ScopedFusionConfig scoped(row.config);
+		CHECK_MSG(scoped.accepted, "S2/S3 7.8 %s: configuration refused", row.name);
+		struct Shape {
+			const char* label;
+			uint32_t layers;  // layers recorded into the one list
+			bool qk;
+		};
+		const Shape shapes[3] = {{"legacy 8-layer token", 8, false},
+		                         {"QK-norm 1-layer token", 1, true},
+		                         {"legacy 8-layer chunk of 2", 16, false}};
+		Counts seen[2][3];
+		const GpuTimingMode modes[2] = {GpuTimingMode::PerSite, GpuTimingMode::Bracket};
+		for (int m = 0; m < 2; ++m) {
+			ScopedGpuTimingMode mode(modes[m]);
+			seen[m][0] = counts_of(gpu_overhead_s1::SubmitFinishOneToken(fixture, 1, 8));
+			seen[m][1] = counts_of(run_qk());
+			seen[m][2] = counts_of(gpu_overhead_s1::RunChunk(fixture, 2));
+			for (int s = 0; s < 3; ++s) {
+				const Counts& c = seen[m][s];
+				CHECK_MSG(s == 1 || c.status == SslmForwardStatus::Ok, "S2/S3 7.8 %s %s (%s): status=%s",
+				          row.name, shapes[s].label, ModeName(modes[m]), superslm::SslmForwardStatusName(c.status));
+				const uint32_t per_layer = modes[m] == GpuTimingMode::Bracket
+				                               ? row.PerLayer(shapes[s].qk)
+				                               : superslm_gpu::DispatchesPerLayer(shapes[s].qk);
+				const uint32_t want = shapes[s].layers * per_layer;
+				const uint32_t want_queries = modes[m] == GpuTimingMode::Bracket ? 2u : want + 1u;
+				CHECK_MSG(c.dispatches == want && c.barriers == want && c.queries == want_queries,
+				          "S2/S3 7.8 %s %s %s (%s): dispatches=%u barriers=%u queries=%u, want %u / %u / %u",
+				          row.name, ConfigName(row.config).c_str(), shapes[s].label, ModeName(modes[m]),
+				          c.dispatches, c.barriers, c.queries, want, want, want_queries);
+			}
+		}
+		for (int s = 0; s < 3; ++s) {
+			CHECK_MSG(seen[1][s].dispatches <= seen[0][s].dispatches && seen[1][s].barriers <= seen[0][s].barriers &&
+			              seen[1][s].queries <= seen[0][s].queries,
+			          "S2/S3 7.8 / I3 %s %s: bracket recorded more than per-site (%u/%u/%u vs %u/%u/%u)",
+			          row.name, shapes[s].label, seen[1][s].dispatches, seen[1][s].barriers, seen[1][s].queries,
+			          seen[0][s].dispatches, seen[0][s].barriers, seen[0][s].queries);
+		}
+	}
+}
+
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+namespace gpu_overhead_s2s3 {
+
+// One `D` line of the record log, parsed.
+struct LogDispatch {
+	std::string name;
+	uint32_t groups = 0;
+	std::vector<uint32_t> consts;
+};
+
+bool ParseDispatch(const std::string& line, LogDispatch* d) {
+	if (line.rfind("D ", 0) != 0) return false;
+	const size_t g = line.find(" g=");
+	const size_t c = line.find(" c=");
+	const size_t colon = line.find(':', c == std::string::npos ? 0 : c);
+	if (g == std::string::npos || c == std::string::npos || colon == std::string::npos) return false;
+	d->name = line.substr(2, g - 2);
+	d->groups = static_cast<uint32_t>(std::stoul(line.substr(g + 3, c - g - 3)));
+	const uint32_t count = static_cast<uint32_t>(std::stoul(line.substr(c + 3, colon - c - 3)));
+	d->consts.clear();
+	size_t pos = colon + 1;
+	while (pos < line.size()) {
+		size_t comma = line.find(',', pos);
+		if (comma == std::string::npos) comma = line.size();
+		d->consts.push_back(static_cast<uint32_t>(std::stoul(line.substr(pos, comma - pos))));
+		pos = comma + 1;
+	}
+	return d->consts.size() == count;
+}
+
+std::string FormatDispatch(const LogDispatch& d) {
+	std::string line = "D " + d.name + " g=" + std::to_string(d.groups) + " c=" + std::to_string(d.consts.size()) + ":";
+	for (size_t i = 0; i < d.consts.size(); ++i) {
+		if (i != 0) line += ",";
+		line += std::to_string(d.consts[i]);
+	}
+	return line;
+}
+
+// The bracket stream a configuration must record, derived from per-site mode's stream (queries
+// and resolve removed) by the plan's own rules, independently of the recorder's site list:
+//   o run    (§3.2): o_proj_site, attn_residual_site, mlp_norm_site -> fused_o_residual_norm_site,
+//                    one group, o_proj_site's 28 constants (its one slot, 11-18, passes through);
+//   down run (§3.2): down_proj_site, mlp_residual_site, commit_site ->
+//                    fused_down_residual_commit_site, down_proj_site's 28 constants;
+//   S3 merged (§3.3): gate_proj_gemm_site, gate_proj_site, up_proj_gemm_site, up_proj_site ->
+//                    gate_up_gemm_site (gate GEMM's 12 constants, ceil(2I / (256 / lanes))
+//                    groups), then fused_gate_up_site;
+//   S3 tail-only:    gate_proj_gemm_site stays; gate_proj_site moves after the up GEMM, which
+//                    becomes up_proj_gemm_wide_b_site (same groups and constants); the two tails
+//                    become fused_gate_up_site.
+// fused_gate_up_site's constants are gate tail's 28 with up tail's slot (its 11-18) at 19-26 and
+// that slot's wide base (index 25) moved to WIDE_B -- the value kv_proj_site carries at its own
+// index 25 (its V slot) in the same layer.
+// Every dispatch is followed by exactly one barrier in both modes. False (with *why) when the
+// per-site stream does not have the shape the rules expect.
+bool ExpectedBracketCore(const std::vector<std::string>& per_site_core, const GpuBracketFusionConfig& cfg,
+                         std::vector<std::string>* out, std::string* why) {
+	std::vector<LogDispatch> ds;
+	for (size_t i = 0; i < per_site_core.size(); ++i) {
+		const std::string& line = per_site_core[i];
+		if (line == "B") continue;
+		LogDispatch d;
+		if (!ParseDispatch(line, &d)) {
+			*why = "unparsed line " + std::to_string(i + 1) + ": " + line;
+			return false;
+		}
+		if (i + 1 >= per_site_core.size() || per_site_core[i + 1] != "B") {
+			*why = "dispatch at line " + std::to_string(i + 1) + " is not followed by its barrier";
+			return false;
+		}
+		ds.push_back(std::move(d));
+	}
+	auto expect = [&](size_t at, const char* name) {
+		if (at >= ds.size() || ds[at].name != name) {
+			*why = std::string("expected ") + name + " at dispatch " + std::to_string(at) + ", found " +
+			       (at < ds.size() ? ds[at].name : std::string("the end"));
+			return false;
+		}
+		return true;
+	};
+	auto fused_gate_up = [&](const LogDispatch& gate_tail, const LogDispatch& up_tail, uint32_t wide_b) {
+		LogDispatch f = gate_tail;
+		f.name = "fused_gate_up_site";
+		f.groups = 1;
+		for (int i = 0; i < 8; ++i) f.consts[19 + i] = up_tail.consts[11 + i];
+		f.consts[25] = wide_b;
+		return f;
+	};
+	std::vector<LogDispatch> outd;
+	uint32_t wide_b = 0;
+	for (size_t i = 0; i < ds.size(); ++i) {
+		const LogDispatch& d = ds[i];
+		if (d.name == "kv_proj_site" && d.consts.size() == 28) wide_b = d.consts[25];
+		if (cfg.fuse_o_run && d.name == "o_proj_site") {
+			if (!expect(i + 1, "attn_residual_site") || !expect(i + 2, "mlp_norm_site")) return false;
+			LogDispatch f = d;
+			f.name = "fused_o_residual_norm_site";
+			outd.push_back(f);
+			i += 2;
+		} else if (cfg.fuse_down_run && d.name == "down_proj_site") {
+			if (!expect(i + 1, "mlp_residual_site") || !expect(i + 2, "commit_site")) return false;
+			LogDispatch f = d;
+			f.name = "fused_down_residual_commit_site";
+			outd.push_back(f);
+			i += 2;
+		} else if (cfg.s3 != GpuS3Fusion::None && d.name == "gate_proj_gemm_site") {
+			if (!expect(i + 1, "gate_proj_site") || !expect(i + 2, "up_proj_gemm_site") ||
+			    !expect(i + 3, "up_proj_site")) {
+				return false;
+			}
+			if (ds[i + 1].consts.size() != 28 || ds[i + 3].consts.size() != 28 || d.consts.size() < 11) {
+				*why = "gate/up tails must carry 28 constants and the gate GEMM at least 11";
+				return false;
+			}
+			if (cfg.s3 == GpuS3Fusion::MergedGemm) {
+				LogDispatch g = d;
+				g.name = "gate_up_gemm_site";
+				const uint32_t I = d.consts[8];
+				const uint32_t lanes = d.consts[10] == 0 ? 1u : d.consts[10];
+				const uint32_t per_group = 256u / lanes;
+				g.groups = (2u * I + per_group - 1u) / per_group;
+				outd.push_back(g);
+			} else {
+				outd.push_back(d);
+				LogDispatch up_gemm = ds[i + 2];
+				up_gemm.name = "up_proj_gemm_wide_b_site";
+				outd.push_back(up_gemm);
+			}
+			outd.push_back(fused_gate_up(ds[i + 1], ds[i + 3], wide_b));
+			i += 3;
+		} else {
+			outd.push_back(d);
+		}
+	}
+	out->clear();
+	for (const LogDispatch& d : outd) {
+		out->push_back(FormatDispatch(d));
+		out->push_back("B");
+	}
+	return true;
+}
+
+std::vector<std::string> WithoutQueries(const std::vector<std::string>& log) {
+	std::vector<std::string> out;
+	for (const std::string& line : log) {
+		if (line.rfind("Q ", 0) == 0 || line.rfind("R ", 0) == 0) continue;
+		out.push_back(line);
+	}
+	return out;
+}
+
+std::string FirstDifference(const std::vector<std::string>& want, const std::vector<std::string>& got) {
+	const size_t n = std::min(want.size(), got.size());
+	for (size_t i = 0; i < n; ++i) {
+		if (want[i] != got[i]) return "line " + std::to_string(i + 1) + ": want \"" + want[i] + "\", got \"" + got[i] + "\"";
+	}
+	if (want.size() != got.size()) {
+		return "length: want " + std::to_string(want.size()) + " lines, got " + std::to_string(got.size());
+	}
+	return "none";
+}
+
+}  // namespace gpu_overhead_s2s3
+#endif
+
+// Cells 7.8 (stream shape at S2/S3) and 7.4's re-run, every configuration, on every 7.4 fixture
+// (legacy, QK norm, a 2-token chunk, an adapter bound so the tail constants 11-27 are non-zero):
+//   - per-site mode's stream under the configuration is per-site mode's stream under the unfused
+//     one, line for line, queries included: fusion never leaks into per-site mode (7.4 itself
+//     compares that stream with the v1.11.0 capture);
+//   - bracket mode's stream is "Q 0", then the stream the plan's fusion rules derive from
+//     per-site mode's (ExpectedBracketCore: fused dispatch names, groups and every root constant,
+//     one barrier each), then "Q 1" and "R 0,2".
+static void TestGpuOverheadS2S3_7_8_BracketStreamIsTheFusedPerSiteStream() {
+#if !defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	CHECK_MSG(false,
+	          "S2/S3 7.8 stream shape: this binary was built without SUPERSLM_ENABLE_GPU_RECORD_LOG; "
+	          "build.bat and CMakeLists.txt define it for superslm_tests");
+#else
+	using namespace gpu_overhead_s2s3;
+	for (const char* name : superslm_gpu_record_log::kFixtureNames) {
+		std::vector<std::string> unfused_per_site;
+		std::string err;
+		{
+			ScopedFusionConfig scoped(kUnfused);
+			ScopedGpuTimingMode mode(GpuTimingMode::PerSite);
+			if (!superslm_gpu_record_log::CaptureRecordLog(name, &unfused_per_site, &err)) {
+				CHECK_MSG(false, "S2/S3 7.8 %s: per-site capture failed: %s", name, err.c_str());
+				continue;
+			}
+		}
+		for (const ConfigRow& row : ShippableConfigs()) {
+			ScopedFusionConfig scoped(row.config);
+			CHECK_MSG(scoped.accepted, "S2/S3 7.8 %s: configuration %s refused", name, row.name);
+			std::vector<std::string> logs[2];
+			const GpuTimingMode modes[2] = {GpuTimingMode::PerSite, GpuTimingMode::Bracket};
+			bool captured = true;
+			for (int m = 0; m < 2; ++m) {
+				ScopedGpuTimingMode mode(modes[m]);
+				if (!superslm_gpu_record_log::CaptureRecordLog(name, &logs[m], &err)) {
+					CHECK_MSG(false, "S2/S3 7.8 %s %s (%s): capture failed: %s", name, row.name,
+					          ModeName(modes[m]), err.c_str());
+					captured = false;
+				}
+			}
+			if (!captured) continue;
+			CHECK_MSG(logs[0] == unfused_per_site,
+			          "S2/S3 7.4 re-run %s under %s: per-site mode's stream must not depend on the fusion "
+			          "configuration; first difference at %s",
+			          name, ConfigName(row.config).c_str(), FirstDifference(unfused_per_site, logs[0]).c_str());
+			std::vector<std::string> want_core;
+			std::string why;
+			const bool derived = ExpectedBracketCore(WithoutQueries(logs[0]), row.config, &want_core, &why);
+			CHECK_MSG(derived, "S2/S3 7.8 %s under %s: per-site stream has an unexpected shape: %s", name,
+			          ConfigName(row.config).c_str(), why.c_str());
+			if (!derived) continue;
+			std::vector<std::string> want;
+			want.push_back("Q 0");
+			want.insert(want.end(), want_core.begin(), want_core.end());
+			want.push_back("Q 1");
+			want.push_back("R 0,2");
+			CHECK_MSG(logs[1] == want,
+			          "S2/S3 7.8 %s under %s %s: bracket mode's stream (%zu lines) must be the fused "
+			          "per-site stream (%zu lines); first difference at %s",
+			          name, row.name, ConfigName(row.config).c_str(), logs[1].size(), want.size(),
+			          FirstDifference(want, logs[1]).c_str());
+		}
+	}
+#endif
+}
+
+// Cells 6.1, 6.2, 4.1-4.3 (synthetic halves) and 7.5, every configuration: bracket mode's bytes --
+// status, SequenceLayerState, K/V workspace, and on the single-token path the whole LayerScratch
+// (the probe) and the sticky word -- equal per-site mode's, and both equal the CPU oracle, on:
+// the 8-layer token; a 1-layer model; a QK-norm layer; slices of 1, 4, 5 and all 8 layers; a
+// position at the context cap minus one; the chunk bridge at 1, 4 and 8 tokens. The CPU trace
+// judges every LayerScratch region (the absolute anchor for the moved bodies on the success path).
+// 7.5's mutant (attn_residual and mlp_norm swapped in the fused body order) fails the bytes here.
+static void TestGpuOverheadS2S3_6_1_BracketBytesEqualPerSiteAndTheCpuOracle() {
+	using namespace gpu_overhead_s2s3;
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	ScopedLayerScratchProbe probe(kProbeFill);
+#endif
+	struct Shape {
+		const char* label;
+		TokenCall call;
+		int depth;  // 8 or 1
+	};
+	TokenCall slice1, slice4, slice5, at_cap;
+	slice1.layer_budget = 1;
+	slice4.layer_budget = 4;
+	slice5.layer_budget = 5;
+	at_cap.cap = 4;
+	at_cap.context_length = 3;
+	const Shape shapes[] = {
+	    {"8-layer token", TokenCall{}, 8},       {"1-layer model", TokenCall{}, 1},
+	    {"slices of 1", slice1, 8},              {"slices of 4", slice4, 8},
+	    {"slices of 5", slice5, 8},              {"position cap-1 (cap 4, position 3)", at_cap, 8},
+	};
+	for (const Shape& shape : shapes) {
+		NLayerFixture<8> f8;
+		NLayerFixture<1> f1;
+		std::vector<TraceRecord> trace;
+		const Reading cpu = shape.depth == 8 ? RunTokenOnCpu(f8, shape.call, &trace) : RunTokenOnCpu(f1, shape.call, &trace);
+		CHECK_MSG(cpu.status == SslmForwardStatus::Ok, "S2/S3 6.2 %s: the CPU oracle must succeed here (%s)",
+		          shape.label, Describe(cpu).c_str());
+		ProbedReading per_site;
+		{
+			ScopedGpuTimingMode mode(GpuTimingMode::PerSite);
+			per_site = shape.depth == 8 ? RunToken(f8, shape.call) : RunToken(f1, shape.call);
+		}
+		CheckAgainstCpu(per_site.r, cpu, std::string("S2/S3 6.2 ") + shape.label + " (per-site)");
+		for (const ConfigRow& row : ShippableConfigs()) {
+			ScopedFusionConfig scoped(row.config);
+			ScopedGpuTimingMode mode(GpuTimingMode::Bracket);
+			const ProbedReading bracket = shape.depth == 8 ? RunToken(f8, shape.call) : RunToken(f1, shape.call);
+			const std::string label = std::string("S2/S3 6.1 ") + shape.label + " " + row.name;
+			CHECK_MSG(SameOutputs(per_site.r, bracket.r),
+			          "%s: bracket mode's outputs (%s) must equal per-site mode's (%s), workspace bytes included",
+			          label.c_str(), Describe(bracket.r).c_str(), Describe(per_site.r).c_str());
+			CHECK_MSG(bracket.scratch == per_site.scratch && bracket.sticky_tag == per_site.sticky_tag,
+			          "%s: bracket mode's LayerScratch (%zu bytes) and sticky word (%lld) must equal "
+			          "per-site mode's (%zu bytes, %lld)",
+			          label.c_str(), bracket.scratch.size(), static_cast<long long>(bracket.sticky_tag),
+			          per_site.scratch.size(), static_cast<long long>(per_site.sticky_tag));
+			CheckAgainstCpu(bracket.r, cpu, label + " vs CPU (6.2)");
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+			// The probe reads the LAST call of a sliced token; its regions then hold the slice's own
+			// layers, which the full-depth CPU trace covers (it ends at the same last layer).
+			CheckProbeAgainstTrace(bracket, trace, label + " LayerScratch vs CPU trace");
+#endif
+		}
+	}
+
+	// A QK-norm layer: per-site and bracket equal under every configuration, and equal the CPU
+	// oracle wherever per-site mode does (6.2's own wording).
+	auto run_qk_gpu = []() {
+		QkNormWiringFixture fixture;
+		int8_t codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = codes;
+		seq.hidden_scale = kInitialScale;
+		seq.layer_index = 0;
+		std::vector<uint8_t> ws(4, 0);
+		Reading r;
+		r.status = superslm_gpu::RunLayerLoopGpu(seq, &fixture.layer, 1, 1, 2, 2, 1, 2, 1,
+		                                         fixture.view.rope_tables, ws.data(), ws.size());
+		ReadOutputs(seq, ws, 2, &r);
+		return r;
+	};
+	Reading qk_cpu;
+	{
+		QkNormWiringFixture fixture;
+		int8_t codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = codes;
+		seq.hidden_scale = kInitialScale;
+		seq.layer_index = 0;
+		std::vector<uint8_t> ws(4, 0);
+		qk_cpu.status = superslm::RunLayerLoop(seq, &fixture.layer, 1, 1, 2, 2, 1, 2, 1,
+		                                       fixture.view.rope_tables, ws.data(), ws.size());
+		ReadOutputs(seq, ws, 2, &qk_cpu);
+	}
+	Reading qk_per_site;
+	{
+		ScopedGpuTimingMode mode(GpuTimingMode::PerSite);
+		qk_per_site = run_qk_gpu();
+	}
+	const bool per_site_matches_cpu = SameOutputs(qk_per_site, qk_cpu);
+	for (const ConfigRow& row : ShippableConfigs()) {
+		ScopedFusionConfig scoped(row.config);
+		ScopedGpuTimingMode mode(GpuTimingMode::Bracket);
+		const Reading qk_bracket = run_qk_gpu();
+		CHECK_MSG(SameOutputs(qk_per_site, qk_bracket),
+		          "S2/S3 6.1 QK-norm layer %s: bracket (%s) must equal per-site (%s)", row.name,
+		          Describe(qk_bracket).c_str(), Describe(qk_per_site).c_str());
+		CHECK_MSG(!per_site_matches_cpu || SameOutputs(qk_bracket, qk_cpu),
+		          "S2/S3 6.2 QK-norm layer %s: per-site mode equals the CPU oracle here, so bracket mode "
+		          "must too (%s vs %s)",
+		          row.name, Describe(qk_bracket).c_str(), Describe(qk_cpu).c_str());
+	}
+
+	// The chunk bridge at 1, 4 and 8 tokens (8 = two sub-chunk lists).
+	NLayerFixture<8> fixture;
+	for (uint32_t chunk_len : {1u, 4u, 8u}) {
+		Reading per_site_chunk;
+		{
+			ScopedGpuTimingMode mode(GpuTimingMode::PerSite);
+			per_site_chunk = gpu_overhead_s1::RunChunk(fixture, chunk_len);
+		}
+		CHECK_MSG(per_site_chunk.status == SslmForwardStatus::Ok, "S2/S3 6.1 chunk of %u (per-site): status=%s",
+		          chunk_len, superslm::SslmForwardStatusName(per_site_chunk.status));
+		for (const ConfigRow& row : ShippableConfigs()) {
+			ScopedFusionConfig scoped(row.config);
+			ScopedGpuTimingMode mode(GpuTimingMode::Bracket);
+			const Reading bracket = gpu_overhead_s1::RunChunk(fixture, chunk_len);
+			CHECK_MSG(SameOutputs(per_site_chunk, bracket),
+			          "S2/S3 6.1 chunk of %u %s: bracket (%s) must equal per-site (%s)", chunk_len, row.name,
+			          Describe(bracket).c_str(), Describe(per_site_chunk).c_str());
+		}
+	}
+}
+
+// Cells 5.1, 5.2, 7.6 and 11.1, every configuration: every rejection row of the table (one per tag
+// each fused body can raise that a fixture reaches, plus 11.1's one-site-before rows), at layer 0
+// and at layer 5 of the 8-layer fixture, in both modes. Asserted, per row and configuration:
+//   - status, SequenceLayerState census and K/V workspace equal the CPU oracle's (5.1's absolute
+//     anchor; the CPU half of this table proves each row reaches its tag at its body);
+//   - the whole LayerScratch and the sticky word equal per-site mode's (5.1's I1 half);
+//   - every judged LayerScratch region equals what the CPU trace says the last site to write it
+//     wrote, and a region no site wrote holds the fill byte. That is 5.2 for a rejection in a
+//     run's first body (every later body's outputs are the pre-call snapshot), 7.6 for any row
+//     (a later body whose sticky check is deleted runs and writes its region), and 11.1 for a
+//     rejection one site before a run (the run's first body stops at its entry check).
+static void TestGpuOverheadS2S3_5_1_EveryFusedBodyRejectionMatchesTheCpuAndPerSite() {
+	using namespace gpu_overhead_s2s3;
+#if !defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	CHECK_MSG(false,
+	          "S2/S3 5.1: this binary was built without SUPERSLM_ENABLE_GPU_RECORD_LOG, which the "
+	          "LayerScratch probe needs; build.bat and CMakeLists.txt define it for superslm_tests");
+#else
+	ScopedLayerScratchProbe probe(kProbeFill);
+	for (const RejectionRow& row : S2RejectionRows()) {
+		const char* cells = row.before_run ? "11.1" : row.first_body ? "5.1/5.2/7.6" : "5.1/7.6";
+		for (uint32_t k : RowPositions(row)) {
+			NLayerFixture<kLayers> fixture;
+			row.mutate(fixture.layers[k]);
+			TokenCall call;
+			call.initial_scale = row.initial_scale;
+			std::vector<TraceRecord> trace;
+			const Reading cpu = RunTokenOnCpu(fixture, call, &trace);
+			CHECK_MSG(cpu.status == row.want, "S2/S3 %s %s @k=%u: the CPU oracle gave %s, want %s", cells,
+			          row.id, k, superslm::SslmForwardStatusName(cpu.status),
+			          superslm::SslmForwardStatusName(row.want));
+			ProbedReading per_site;
+			{
+				ScopedGpuTimingMode mode(GpuTimingMode::PerSite);
+				per_site = RunToken(fixture, call);
+			}
+			char label[160];
+			std::snprintf(label, sizeof(label), "S2/S3 %s %s (%s) @k=%u per-site", cells, row.id, row.body, k);
+			CheckAgainstCpu(per_site.r, cpu, label);
+			CheckProbeAgainstTrace(per_site, trace, label);
+			for (const ConfigRow& cfg : ShippableConfigs()) {
+				ScopedFusionConfig scoped(cfg.config);
+				ScopedGpuTimingMode mode(GpuTimingMode::Bracket);
+				const ProbedReading bracket = RunToken(fixture, call);
+				std::snprintf(label, sizeof(label), "S2/S3 %s %s (%s) @k=%u bracket %s", cells, row.id,
+				              row.body, k, cfg.name);
+				CheckAgainstCpu(bracket.r, cpu, label);
+				CheckProbeAgainstTrace(bracket, trace, label);
+				CHECK_MSG(SameOutputs(per_site.r, bracket.r) && bracket.scratch == per_site.scratch &&
+				              bracket.sticky_tag == per_site.sticky_tag,
+				          "%s: status, outputs, LayerScratch and sticky word (%lld) must equal per-site "
+				          "mode's (%lld)",
+				          label, static_cast<long long>(bracket.sticky_tag), static_cast<long long>(per_site.sticky_tag));
+			}
+		}
+	}
+#endif
+}
+
+// Cell 1.1 (synthetic half): every fused pipeline is built once and reused across sequences and
+// across models (legacy -> QK norm -> legacy), every configuration, with bytes equal to per-site
+// mode throughout. The 0.5B -> 1.5B -> 0.5B half is in cell_s2s3_real_model.cpp.
+static void TestGpuOverheadS2S3_1_1_FusedPipelinesAreBuiltOnceAndReused() {
+#if !defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	CHECK_MSG(false, "S2/S3 1.1: this binary was built without SUPERSLM_ENABLE_GPU_RECORD_LOG, which "
+	                 "ComposedPipelineBuildCount needs");
+#else
+	using namespace gpu_overhead_s2s3;
+	NLayerFixture<8> legacy;
+	Reading per_site_legacy;
+	{
+		ScopedGpuTimingMode mode(GpuTimingMode::PerSite);
+		per_site_legacy = gpu_overhead_s1::SubmitFinishOneToken(legacy, 1, 8);
+	}
+	for (int round = 0; round < 2; ++round) {
+		for (const ConfigRow& row : ShippableConfigs()) {
+			ScopedFusionConfig scoped(row.config);
+			ScopedGpuTimingMode mode(GpuTimingMode::Bracket);
+			for (int seq = 0; seq < 2; ++seq) {
+				const Reading r = gpu_overhead_s1::SubmitFinishOneToken(legacy, 1, 8);
+				CHECK_MSG(SameOutputs(per_site_legacy, r), "S2/S3 1.1 round %d %s sequence %d: bytes must equal per-site mode's",
+				          round, row.name, seq);
+			}
+			QkNormWiringFixture qk;
+			int8_t codes[2] = {5, -5};
+			SequenceLayerState s;
+			s.hidden_codes = codes;
+			s.hidden_scale = kInitialScale;
+			uint8_t ws[4] = {};
+			(void)superslm_gpu::RunLayerLoopGpu(s, &qk.layer, 1, 1, 2, 2, 1, 2, 1, qk.view.rope_tables, ws, sizeof(ws));
+		}
+	}
+	const char* fused[] = {"fused_o_residual_norm_site", "fused_down_residual_commit_site"};
+	for (const char* name : fused) {
+		const uint32_t built = superslm_gpu::ComposedPipelineBuildCount(name);
+		CHECK_MSG(built == 1,
+		          "S2/S3 1.1: %s was built %u times across two rounds of every configuration, two "
+		          "sequences each, legacy and QK-norm models -- want exactly once",
+		          name, built);
+	}
+	CHECK_MSG(superslm_gpu::ComposedPipelineBuildCount("o_proj_site") == 1,
+	          "S2/S3 1.1: an existing site pipeline (o_proj_site) must also have been built exactly once");
+#endif
+}
+
+// Cell 5.3: a PSO creation failure injected on a fused pipeline maps to the same status as the same
+// failure injected on an existing site pipeline (the composed-pipeline fetch is one function for
+// both); the next call succeeds. Per-site mode never fetches a fused pipeline, so arming one there
+// leaves a per-site call untouched.
+static void TestGpuOverheadS2S3_5_3_FusedPipelineFailureMapsLikeAnExistingOne() {
+#if !defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
+	CHECK_MSG(false, "S2/S3 5.3: this binary was built without SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION");
+#else
+	using namespace gpu_overhead_s2s3;
+	NLayerFixture<8> fixture;
+	struct Pair {
+		const char* fused;
+		const char* existing;
+		GpuBracketFusionConfig config;
+	};
+	const Pair pairs[] = {
+	    {"fused_o_residual_norm_site", "o_proj_site", GpuBracketFusionConfig{true, false, GpuS3Fusion::None}},
+	    {"fused_down_residual_commit_site", "down_proj_site", GpuBracketFusionConfig{false, true, GpuS3Fusion::None}},
+	};
+	for (const Pair& pair : pairs) {
+		SslmForwardStatus existing_status = SslmForwardStatus::Ok;
+		{
+			ScopedGpuTimingMode mode(GpuTimingMode::PerSite);
+			superslm_gpu::ArmComposedPipelineBuildFailure(pair.existing);
+			existing_status = gpu_overhead_s1::SubmitFinishOneToken(fixture, 1, 8).status;
+			superslm_gpu::ClearComposedPipelineBuildFailure();
+		}
+		ScopedFusionConfig scoped(pair.config);
+		CHECK_MSG(scoped.accepted, "S2/S3 5.3: %s refused", ConfigName(pair.config).c_str());
+		SslmForwardStatus fused_status = SslmForwardStatus::Ok;
+		{
+			ScopedGpuTimingMode mode(GpuTimingMode::Bracket);
+			superslm_gpu::ArmComposedPipelineBuildFailure(pair.fused);
+			fused_status = gpu_overhead_s1::SubmitFinishOneToken(fixture, 1, 8).status;
+			superslm_gpu::ClearComposedPipelineBuildFailure();
+		}
+		CHECK_MSG(existing_status != SslmForwardStatus::Ok && fused_status == existing_status,
+		          "S2/S3 5.3 %s: an injected PSO failure on the fused pipeline gave %s; on %s it gives %s "
+		          "-- want the same non-Ok status",
+		          pair.fused, superslm::SslmForwardStatusName(fused_status), pair.existing,
+		          superslm::SslmForwardStatusName(existing_status));
+		{
+			ScopedGpuTimingMode mode(GpuTimingMode::Bracket);
+			const Reading after = gpu_overhead_s1::SubmitFinishOneToken(fixture, 1, 8);
+			CHECK_MSG(after.status == SslmForwardStatus::Ok, "S2/S3 5.3 %s: the call after the failure must succeed (%s)",
+			          pair.fused, superslm::SslmForwardStatusName(after.status));
+		}
+		{
+			ScopedGpuTimingMode mode(GpuTimingMode::PerSite);
+			superslm_gpu::ArmComposedPipelineBuildFailure(pair.fused);
+			const Reading per_site = gpu_overhead_s1::SubmitFinishOneToken(fixture, 1, 8);
+			superslm_gpu::ClearComposedPipelineBuildFailure();
+			CHECK_MSG(per_site.status == SslmForwardStatus::Ok,
+			          "S2/S3 5.3 %s: per-site mode must never fetch a fused pipeline, so arming it there "
+			          "must leave the call Ok (got %s)",
+			          pair.fused, superslm::SslmForwardStatusName(per_site.status));
+		}
+	}
+#endif
+}
+
+namespace gpu_overhead_s2s3 {
+
+// The GPU image of FusedTailAdapter: the adapter-delta bridge sslm_gpu_adapter_map would build for
+// it (gpu_1p0.cpp's packing -- per covered (layer, projection): A then B into the A/B buffer, the
+// delta-fold rows then the u-fold rows into the fold buffer, 12 bytes a row), uploaded through the
+// harness the way tests/support/gpu_record_log_fixtures.h's RecordLogAdapter is.
+struct FusedTailAdapterBridge {
+	Microsoft::WRL::ComPtr<ID3D12Resource> ab;
+	Microsoft::WRL::ComPtr<ID3D12Resource> fold;
+	std::vector<superslm_gpu::AdapterProjSlot> slots;
+	superslm_gpu::GpuAdapterBridge bridge{};
+
+	bool Build(const superslm::LayerAdapter& la, uint32_t layers, std::string* err) {
+		superslm_gpu::harness::Device& dev = superslm_gpu::harness::GetDevice();
+		if (!dev.available.load()) {
+			*err = "D3D12 device unavailable";
+			return false;
+		}
+		const superslm::LayerAdapterProjection* by_p[7] = {&la.q, &la.o, &la.gate, &la.up, &la.down, &la.k, &la.v};
+		const uint64_t in_channels[7] = {2, 2, 2, 2, 2, 2, 2};  // hidden = q_width = intermediate = 2
+		std::vector<uint8_t> ab_bytes, fold_bytes;
+		slots.assign(static_cast<size_t>(layers) * 7u, superslm_gpu::AdapterProjSlot{});
+		for (uint32_t l = 0; l < layers; ++l) {
+			for (int p = 0; p < 7; ++p) {
+				const superslm::LayerAdapterProjection& proj = *by_p[p];
+				if (!proj.a_weight || !proj.b_weight || !proj.delta_fold_entry || !proj.u_fold_entry) continue;
+				superslm_gpu::AdapterProjSlot& s = slots[static_cast<size_t>(l) * 7u + static_cast<size_t>(p)];
+				s.present = true;
+				s.rank = la.rank;
+				s.out_channels = static_cast<uint32_t>(proj.delta_fold_entry->row_count);
+				s.a_bytes = static_cast<uint64_t>(la.rank) * in_channels[p];
+				s.b_bytes = static_cast<uint64_t>(s.out_channels) * la.rank;
+				s.a_offset = ab_bytes.size();
+				ab_bytes.insert(ab_bytes.end(), reinterpret_cast<const uint8_t*>(proj.a_weight),
+				                reinterpret_cast<const uint8_t*>(proj.a_weight) + s.a_bytes);
+				s.b_offset = ab_bytes.size();
+				ab_bytes.insert(ab_bytes.end(), reinterpret_cast<const uint8_t*>(proj.b_weight),
+				                reinterpret_cast<const uint8_t*>(proj.b_weight) + s.b_bytes);
+				s.fold_offset = fold_bytes.size();
+				fold_bytes.insert(fold_bytes.end(), proj.delta_fold_entry->data,
+				                  proj.delta_fold_entry->data + proj.delta_fold_entry->row_count * 12u);
+				fold_bytes.insert(fold_bytes.end(), proj.u_fold_entry->data,
+				                  proj.u_fold_entry->data + proj.u_fold_entry->row_count * 12u);
+			}
+		}
+		if (ab_bytes.empty()) ab_bytes.resize(1, 0);
+		if (fold_bytes.empty()) fold_bytes.resize(1, 0);
+		try {
+			ab = dev.Upload(ab_bytes.data(), ab_bytes.size());
+			fold = dev.Upload(fold_bytes.data(), fold_bytes.size());
+		} catch (const std::exception& e) {
+			*err = std::string("adapter upload threw: ") + e.what();
+			return false;
+		}
+		bridge.lora_ab_resident = ab.Get();
+		bridge.fold_resident = fold.Get();
+		bridge.rank = la.rank;
+		bridge.slots = slots.data();
+		bridge.num_hidden_layers = layers;
+		return true;
+	}
+};
+
+}  // namespace gpu_overhead_s2s3
+
+// Cell 8.1 (synthetic), every configuration: an adapter covering o, gate, up and down on every
+// layer (each fused tail's slot non-zero, distinct A and B per projection), run in both modes and
+// against the CPU adapter path. Kills a fused shader that drops or misplaces its tail's slot; at
+// S3 also 7.11 (fused_gate_up's up body reading slot 0), which the CPU half shows moves the bytes.
+// The plan's "ADP1 built with BuildAdp1" is replaced by the bridge sslm_gpu_adapter_map would
+// upload for the same weights (the 1.0 map needs a full base artifact the synthetic fixture does
+// not have); gate and up share a rank because the CPU oracle has one rank per layer.
+static void TestGpuOverheadS2S3_8_1_FusedTailAdapterMatchesTheCpuAdapterPath() {
+	using namespace gpu_overhead_s2s3;
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+	ScopedLayerScratchProbe probe(kProbeFill);
+#endif
+	FusedTailAdapter adapter;
+	FusedTailAdapterBridge gpu_adapter;
+	std::string err;
+	if (!gpu_adapter.Build(adapter.adapter, kLayers, &err)) {
+		CHECK_MSG(false, "S2/S3 8.1: building the adapter bridge failed: %s", err.c_str());
+		return;
+	}
+	NLayerFixture<kLayers> fixture;
+	BindAdapterEveryLayer(fixture, &adapter.adapter);
+	TokenCall call;
+	call.adapter = &gpu_adapter.bridge;
+	std::vector<TraceRecord> trace;
+	const Reading cpu = RunTokenOnCpu(fixture, call, &trace);
+	CHECK_MSG(cpu.status == SslmForwardStatus::Ok, "S2/S3 8.1: the CPU adapter path must succeed (%s)", Describe(cpu).c_str());
+	ProbedReading per_site;
+	{
+		ScopedGpuTimingMode mode(GpuTimingMode::PerSite);
+		per_site = RunToken(fixture, call);
+	}
+	CheckAgainstCpu(per_site.r, cpu, "S2/S3 8.1 per-site");
+	for (const ConfigRow& row : ShippableConfigs()) {
+		ScopedFusionConfig scoped(row.config);
+		ScopedGpuTimingMode mode(GpuTimingMode::Bracket);
+		const ProbedReading bracket = RunToken(fixture, call);
+		const std::string label = std::string("S2/S3 8.1 bracket ") + row.name;
+		CheckAgainstCpu(bracket.r, cpu, label);
+		CHECK_MSG(SameOutputs(per_site.r, bracket.r) && bracket.scratch == per_site.scratch,
+		          "%s: outputs and LayerScratch must equal per-site mode's", label.c_str());
+#if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
+		CheckProbeAgainstTrace(bracket, trace, label + " LayerScratch vs CPU trace");
+#endif
+	}
+}
+
+// Cell 8.2 (synthetic), every configuration: save (SLM5) mid-token between two slices in bracket
+// mode, restore into a fresh state, continue: the mid-token blob, the outputs and the final blob
+// equal per-site mode's. Fusion is within one layer, so it never straddles the slice boundary.
+static void TestGpuOverheadS2S3_8_2_SaveBetweenSlicesRestoresAndContinues() {
+	using namespace gpu_overhead_s2s3;
+	struct Run {
+		bool ok = false;
+		std::vector<uint8_t> mid_blob, final_blob;
+		Reading out;
+	};
+	auto save = [](const SequenceLayerState& seq, const std::vector<uint8_t>& ws, std::vector<uint8_t>* blob) {
+		std::array<uint8_t, superslm::kIntegrityHashBytes> hash{};
+		size_t size = 0;
+		superslm_gpu::SaveGpuSequenceState(seq, 2, ws.data(), ws.size(), hash, -1, 0, false, nullptr, &size);
+		blob->assign(size, 0);
+		return size > 0 && superslm_gpu::SaveGpuSequenceState(seq, 2, ws.data(), ws.size(), hash, -1, 0, false,
+		                                                       blob->data(), &size);
+	};
+	auto run = [&](NLayerFixture<8>& fixture) {
+		Run r;
+		int8_t codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = codes;
+		seq.hidden_scale = kInitialScale;
+		std::vector<uint8_t> ws(8 * t2019_b11::kWsPerLayer, 0);
+		SslmForwardStatus st = superslm_gpu::RunLayerLoopGpu(seq, fixture.layers, 8, 4, 2, 2, 1, 2, 1,
+		                                                     fixture.view.rope_tables, ws.data(), ws.size());
+		if (st != SslmForwardStatus::Ok || seq.layer_index != 4 || !save(seq, ws, &r.mid_blob)) return r;
+		int8_t restored_codes[2] = {0, 0};
+		SequenceLayerState restored;
+		restored.hidden_codes = restored_codes;
+		std::vector<uint8_t> restored_ws(ws.size(), 0);
+		int32_t schema = 0;
+		uint32_t walk = 0;
+		bool ready = false;
+		if (!superslm_gpu::RestoreGpuSequenceState(r.mid_blob.data(), r.mid_blob.size(), &restored, 2,
+		                                           restored_ws.data(), restored_ws.size(), &schema, &walk, &ready)) {
+			return r;
+		}
+		st = superslm_gpu::RunLayerLoopGpu(restored, fixture.layers, 8, 4, 2, 2, 1, 2, 1, fixture.view.rope_tables,
+		                                   restored_ws.data(), restored_ws.size());
+		r.out.status = st;
+		ReadOutputs(restored, restored_ws, 2, &r.out);
+		r.ok = st == SslmForwardStatus::Ok && save(restored, restored_ws, &r.final_blob);
+		return r;
+	};
+	NLayerFixture<8> fixture;
+	Run per_site;
+	{
+		ScopedGpuTimingMode mode(GpuTimingMode::PerSite);
+		per_site = run(fixture);
+	}
+	CHECK_MSG(per_site.ok, "S2/S3 8.2 per-site: save / restore / continue failed (%s)", Describe(per_site.out).c_str());
+	for (const ConfigRow& row : ShippableConfigs()) {
+		ScopedFusionConfig scoped(row.config);
+		ScopedGpuTimingMode mode(GpuTimingMode::Bracket);
+		const Run bracket = run(fixture);
+		CHECK_MSG(bracket.ok && bracket.mid_blob == per_site.mid_blob && SameOutputs(bracket.out, per_site.out) &&
+		              bracket.final_blob == per_site.final_blob,
+		          "S2/S3 8.2 %s: the mid-token blob, the continued outputs (%s) and the final blob must "
+		          "equal per-site mode's (%s)",
+		          row.name, Describe(bracket.out).c_str(), Describe(per_site.out).c_str());
+	}
+}
+
+// Runs the S2/S3 cells above. Called from the GPU-serial-port block after the S1 cells.
+static void RunGpuOverheadS2S3Cells() {
+	TestGpuOverheadS2S3_ConfigSeam_DefaultShippableAndRefused();
+	TestGpuOverheadS2S3_7_8_ExactCountsPerConfiguration();
+	TestGpuOverheadS2S3_7_8_BracketStreamIsTheFusedPerSiteStream();
+	TestGpuOverheadS2S3_6_1_BracketBytesEqualPerSiteAndTheCpuOracle();
+	TestGpuOverheadS2S3_5_1_EveryFusedBodyRejectionMatchesTheCpuAndPerSite();
+	TestGpuOverheadS2S3_1_1_FusedPipelinesAreBuiltOnceAndReused();
+	TestGpuOverheadS2S3_5_3_FusedPipelineFailureMapsLikeAnExistingOne();
+	TestGpuOverheadS2S3_8_1_FusedTailAdapterMatchesTheCpuAdapterPath();
+	TestGpuOverheadS2S3_8_2_SaveBetweenSlicesRestoresAndContinues();
+}
 #endif  // _WIN32
 
 #ifdef _WIN32
@@ -30229,6 +31625,7 @@ static void RunGpuSerialPortCells() {
 
 	// GPU per-token overhead plan rev 3.1, slice S1: the two recording modes' own cells.
 	RunGpuOverheadS1Cells();
+	RunGpuOverheadS2S3Cells();
 }
 #endif  // _WIN32
 
@@ -31181,6 +32578,11 @@ int main(int argc, char** argv) {
 
 	TestAdapterLoaderPopulatedHandleDrivesRunLayerLoopBitIdenticalToHandWiredFixture();
 	TestSslmGenerateAdapterFlagSequenceEndToEndChangesOutputFromBaseOnly();
+
+	// GPU per-token overhead plan rev 3.1 §7 cell 5.1, CPU half: the S2/S3 rejection fixtures
+	// reach their tags on the CPU oracle (the GPU half is in RunGpuSerialPortCells below).
+	TestGpuOverheadS2S3_5_1_RejectionFixturesReachTheirTagOnTheCpu();
+	TestGpuOverheadS2S3_8_1_FusedTailAdapterIsLiveOnTheCpu();
 
 	// T-2152 (outside strike item 1): every cell called through the end of this block is
 	// defined only under #ifdef _WIN32 above (the GPU-serial-port suite) -- guarded the same

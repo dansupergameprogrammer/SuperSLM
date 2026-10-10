@@ -8,8 +8,9 @@
 //        0.5 x per-site on the same call shape, on calls that follow another call, on the
 //        single-token path and on the chunk path (one 4-token list). Kills a recorder that writes
 //        both bracket queries before the body. Margin unverified until B0.3 runs (plan §7 7.2).
-//   7.3  at dispatch_budget = k x DispatchesPerLayer, k in {1, 4, 24}, both modes advance exactly
-//        k layers through sslm_decode_step_gpu, and record k layers' worth (a regression at S1).
+//   7.3  at dispatch_budget = k x DispatchesPerLayer, k in {1, 4, 12, 24}, both modes advance
+//        exactly k layers through sslm_decode_step_gpu under every shippable fusion configuration,
+//        and record k x the configuration's per-layer count (k = 12 is S2/S3's killing value).
 //   8.2  save (SLM5) mid-token between two slices, restore, continue: the blob, every token and the
 //        final blob in bracket mode equal per-site mode's.
 //   8.3  the device-head finish (SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE) after a bracket-mode slice:
@@ -27,6 +28,7 @@
 #include <vector>
 
 #include "s1_real_model_common.h"
+#include "support/gpu_fusion_configs.h"
 
 using namespace gpu_overhead_s1_suite;
 using superslm_gpu::GpuTimingMode;
@@ -137,27 +139,41 @@ void Cell7_2(SslmGpuContext* ctx, const MappedModel& m) {
 	});
 }
 
+// 7.3: the budget unit stays DispatchesPerLayer while bracket mode records the fusion
+// configuration's per-layer count. At S1 the mutant "unit = recorded count" is equivalent (both are
+// 24/25), so k in {1, 4, 24} is a regression; from S2 on the killing value is k = 12 in every
+// shippable configuration (plan §7 7.3, rev 3.1): the mutant's floor(12 x unit / recorded) is 13-16
+// layers, never 12. This is the cell that can see it -- the budget goes through
+// sslm_decode_step_gpu, whose unit is the 1.0 API's own choice (PlanDispatchBudgetGpu takes its
+// unit from the caller and ignores the mode).
 void Cell7_3(SslmGpuContext* ctx, const MappedModel& m, const char* label) {
-	for (GpuTimingMode mode : {GpuTimingMode::Bracket, GpuTimingMode::PerSite}) {
-		ScopedMode scoped(mode);
-		for (uint32_t k : {1u, 4u, 24u}) {
-			if (k > m.layers) continue;
-			SslmGpuSequenceHandle* seq = nullptr;
-			CHECK_MSG(sslm_gpu_seq_create(ctx, m.handle, 64, &seq) == SSLM_OK && seq, "7.3: seq_create");
-			if (!seq) continue;
-			SslmGpuStatus st = sslm_gpu_seq_embed_token(ctx, seq, kProcedurePrompt[0]);
-			if (st == SSLM_OK) st = StepBlocking(ctx, seq, k * m.unit);
-			const uint32_t layer = *SslmGpuSeqHandleLayerIndexForBench(seq);
-			const uint32_t recorded = superslm_gpu::LastCallRecordedDispatchCount();
-			CHECK_MSG(st == SSLM_OK && layer == k,
-			          "7.3 %s (%s) k=%u: dispatch_budget %u -> status %d, layer_index %u; want exactly %u "
-			          "layers",
-			          label, ModeName(mode), k, k * m.unit, static_cast<int>(st), layer, k);
-			CHECK_MSG(recorded == k * m.unit,
-			          "7.3 %s (%s) k=%u: recorded %u dispatches, want %u (at S1 the recorded count per "
-			          "layer equals the unit in both modes)",
-			          label, ModeName(mode), k, recorded, k * m.unit);
-			sslm_gpu_seq_release(ctx, seq);
+	using namespace superslm_gpu_fusion_configs;
+	for (const ConfigRow& row : ShippableConfigs()) {
+		ScopedFusionConfig config(row.config);
+		CHECK_MSG(config.accepted, "7.3 %s: configuration %s refused", label, row.name);
+		for (GpuTimingMode mode : {GpuTimingMode::Bracket, GpuTimingMode::PerSite}) {
+			ScopedMode scoped(mode);
+			for (uint32_t k : {1u, 4u, 12u, 24u}) {
+				if (k > m.layers) continue;
+				SslmGpuSequenceHandle* seq = nullptr;
+				CHECK_MSG(sslm_gpu_seq_create(ctx, m.handle, 64, &seq) == SSLM_OK && seq, "7.3: seq_create");
+				if (!seq) continue;
+				SslmGpuStatus st = sslm_gpu_seq_embed_token(ctx, seq, kProcedurePrompt[0]);
+				if (st == SSLM_OK) st = StepBlocking(ctx, seq, k * m.unit);
+				const uint32_t layer = *SslmGpuSeqHandleLayerIndexForBench(seq);
+				const uint32_t recorded = superslm_gpu::LastCallRecordedDispatchCount();
+				CHECK_MSG(st == SSLM_OK && layer == k,
+				          "7.3 %s %s (%s) k=%u: dispatch_budget %u -> status %d, layer_index %u; want exactly "
+				          "%u layers",
+				          label, row.name, ModeName(mode), k, k * m.unit, static_cast<int>(st), layer, k);
+				const uint32_t want =
+				    k * (mode == GpuTimingMode::Bracket ? row.PerLayer(m.unit == superslm_gpu::kQkNormDispatchesPerLayer)
+				                                        : m.unit);
+				CHECK_MSG(recorded == want,
+				          "7.3 %s %s %s (%s) k=%u: recorded %u dispatches, want %u (the unit stays %u per layer)",
+				          label, row.name, ConfigName(row.config).c_str(), ModeName(mode), k, recorded, want, m.unit);
+				sslm_gpu_seq_release(ctx, seq);
+			}
 		}
 	}
 }

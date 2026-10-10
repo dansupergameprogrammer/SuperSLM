@@ -6,6 +6,10 @@ rem
 rem   build_and_run.bat --model0p5b=PATH [--modelqk=PATH] [--v1p11-blob=PATH] [--steps=N]
 rem       builds cell_s1_real_model.exe and runs it with the arguments given. Exit 0 = green,
 rem       1 = a cell failed, 2 = the build failed.
+rem   build_and_run.bat s2s3 --model0p5b=PATH [--model1p5b=PATH] [--modelqk=PATH]
+rem       builds cell_s2s3_real_model.exe (GPU per-token overhead plan rev 3.1, S2/S3: bit identity
+rem       on every path and model, every fusion configuration; 1.1 across models; 8.2) with
+rem       SUPERSLM_ENABLE_GPU_RECORD_LOG, which cell 1.1's build-count seam needs, and runs it.
 rem   build_and_run.bat writer --model0p5b=PATH --out=PATH
 rem       builds write_v1p11_blob.exe and runs it. Run this arm from a v1.11.0 tree (copy this
 rem       directory into it first): its blob is cell 9.1's v1.11.0 reference.
@@ -21,8 +25,13 @@ if not exist obj mkdir obj
 if exist ..\..\out\shaders xcopy /Y /I /Q ..\..\out\shaders obj\shaders >nul
 
 set TARGET=cell_s1_real_model
+set EXTRA_DEFS=
 if "%~1"=="writer" (
     set TARGET=write_v1p11_blob
+    shift
+) else if "%~1"=="s2s3" (
+    set TARGET=cell_s2s3_real_model
+    set EXTRA_DEFS=/DSUPERSLM_ENABLE_GPU_RECORD_LOG
     shift
 )
 set ARGS=
@@ -33,7 +42,7 @@ shift
 goto :collect
 
 :build
-cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /I%ENG%\include /I%ENG%\tests /I. ^
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc %EXTRA_DEFS% /I%ENG%\include /I%ENG%\tests /I. ^
     %ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp ^
     %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp ^
     %ENG%\src\trace_hook.cpp %ENG%\src\forward\checked_chain_funnel.cpp ^
