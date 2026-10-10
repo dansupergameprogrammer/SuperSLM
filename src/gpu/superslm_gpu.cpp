@@ -1983,10 +1983,11 @@ void RecordOneTokenFullDepthDispatchBody(
 	const GpuGemmSiteGroupPlan down_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::DownProj, H, KV2, I);
 
 	// S3 (§3.3): the merged plan, and the check that holds it to gate's and up's (beside the
-	// per-plan coverage throw below) -- made only when bracket mode fuses gate and up.
+	// per-plan coverage throw below) -- made only for the merged GEMM; the tail-only variant
+	// dispatches gate's and up's own plans and depends on neither.
 	const GpuGemmSiteGroupPlan gate_up_plan =
-	    fused_gate_up ? ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::GateUpProj, H, KV2, I) : GpuGemmSiteGroupPlan{};
-	if (fused_gate_up) CheckGateUpGemmPlansOrThrow(gate_proj_plan, up_proj_plan, gate_up_plan, I);
+	    merged_gate_up ? ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::GateUpProj, H, KV2, I) : GpuGemmSiteGroupPlan{};
+	if (merged_gate_up) CheckGateUpGemmPlansOrThrow(gate_proj_plan, up_proj_plan, gate_up_plan, I);
 
 	const uint32_t attn_score_groups = (NQH * width_u32 + 255u) / 256u;
 	const uint32_t ctx_accum_groups = (NQH * HD + 255u) / 256u;
@@ -4892,8 +4893,10 @@ GpuBracketFusionConfig DefaultGpuBracketFusionConfig() { return kDefaultGpuBrack
 
 // GPU per-token overhead plan rev 3.1 §3.2-3.3: a configuration can ship when this build carries
 // every mechanism it names: either S2 run, both, or neither (B0.7 may fuse neither), and an S3
-// variant only on top of at least one fused S2 run.
+// variant only on top of at least one fused S2 run. An s3 value outside the enumeration (a cast
+// from a wider integer) names no mechanism and is refused.
 bool IsShippableGpuBracketFusionConfig(const GpuBracketFusionConfig& config) {
+	if (static_cast<uint32_t>(config.s3) > static_cast<uint32_t>(GpuS3Fusion::MergedGemm)) return false;
 	return config.s3 == GpuS3Fusion::None || config.fuse_o_run || config.fuse_down_run;
 }
 

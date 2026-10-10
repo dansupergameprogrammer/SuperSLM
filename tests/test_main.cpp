@@ -29656,6 +29656,18 @@ void BindAdapterEveryLayer(NLayerFixture<N>& fixture, const superslm::LayerAdapt
 	for (uint32_t l = 0; l < N; ++l) fixture.layers[l].adapter = adapter;
 }
 
+// Cell 6.1's (and 7.10's) up weight. NLayerFixture wires gate and up identically (identity2x2,
+// equal site constants and folds), so their rows are equal and a mutant that writes up's
+// accumulator at base 0 -- onto gate's row, in the merged GEMM and the tail-only variant alike --
+// changes no byte. The swap makes up's row gate's channels reversed, so the two rows differ
+// wherever the normed row's two codes do.
+inline constexpr int8_t kSwap2x2[4] = {0, 1, 1, 0};
+
+template <uint32_t N>
+void DistinctUpWeights(NLayerFixture<N>& fixture) {
+	for (uint32_t l = 0; l < N; ++l) fixture.layers[l].up_weight = kSwap2x2;
+}
+
 }  // namespace gpu_overhead_s2s3_fixtures
 
 // Cell 5.1, CPU half (runs everywhere): every row of the rejection table reaches its tag on the CPU
@@ -29728,6 +29740,38 @@ static void TestGpuOverheadS2S3_8_1_FusedTailAdapterIsLiveOnTheCpu() {
 		CHECK_MSG(rec[0] && rec[1] && (rec[0]->codes != rec[1]->codes || rec[0]->m != rec[1]->m || rec[0]->e != rec[1]->e),
 		          "S2/S3 8.1 CPU: %s's row must differ with the adapter bound -- its slot would "
 		          "otherwise carry no observable delta", name.c_str());
+	}
+}
+
+// Cells 6.1 and 7.10, CPU half (runs everywhere): with DistinctUpWeights the forward stays Ok and
+// gate's and up's requantized rows differ at every layer, so the GPU 6.1 cell's LayerScratch
+// regions (and the outputs downstream of mlp_act) can tell up's row from gate's -- without it,
+// 7.10's mutant (up's accumulator at base 0) is invisible to the synthetic fixture.
+static void TestGpuOverheadS2S3_6_1_DistinctUpWeightsAreLiveOnTheCpu() {
+	using namespace gpu_overhead_s2s3_fixtures;
+	{
+		NLayerFixture<1> one;
+		DistinctUpWeights(one);
+		const CpuRun run = RunCpuTraced(one, kInitialScale);
+		CHECK_MSG(run.status == SslmForwardStatus::Ok, "S2/S3 6.1 CPU distinct up weights, 1-layer model: status %s",
+		          superslm::SslmForwardStatusName(run.status));
+	}
+	NLayerFixture<kLayers> fixture;
+	DistinctUpWeights(fixture);
+	const CpuRun run = RunCpuTraced(fixture, kInitialScale);
+	CHECK_MSG(run.status == SslmForwardStatus::Ok, "S2/S3 6.1 CPU distinct up weights: status %s",
+	          superslm::SslmForwardStatusName(run.status));
+	for (uint32_t l = 0; l < kLayers; ++l) {
+		const TraceRecord* gate = nullptr;
+		const TraceRecord* up = nullptr;
+		const std::string prefix = "layer" + std::to_string(l) + ".";
+		for (const TraceRecord& r : run.trace) {
+			if (r.site == prefix + "gate_proj.requant") gate = &r;
+			if (r.site == prefix + "up_proj.requant") up = &r;
+		}
+		CHECK_MSG(gate && up && gate->codes != up->codes,
+		          "S2/S3 6.1/7.10 CPU layer %u: gate's and up's rows must differ under DistinctUpWeights, "
+		          "or up's accumulator landing on gate's row changes nothing the GPU cell compares", l);
 	}
 }
 
@@ -30508,6 +30552,12 @@ using gpu_overhead_s1::ScopedGpuTimingMode;
 using superslm_gpu::GpuTimingMode;
 
 constexpr uint8_t kProbeFill = 0xA5;
+// The rejection table's second fill. 0xA5 makes an unwritten scale word's mantissa
+// 0xA5A5A5A5A5A5A5A5, outside int32, so a body whose sticky check is deleted (5.2, 7.6 and 11.1's
+// mutants) re-raises CarriedScaleMantissaOutOfDomain on its unwritten input and writes nothing --
+// the mutant hides. Under 0xFF the same word is m = -1, e = -1, inside every domain check, so the
+// mutant body proceeds and writes its region, which the trace anchor then sees.
+constexpr uint8_t kProbeFillInDomain = 0xFF;
 
 #if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
 // Fills LayerScratch with `fill` at every call's creation and reads the whole buffer back on the
@@ -30644,7 +30694,7 @@ std::vector<ProbeRegion> ProbeRegions(const superslm_gpu::GpuLayerScratchProbeLa
 // its sites, as LayerScratch stores it (one int32 per code, then the scale's m and e as int64), or
 // the fill byte throughout when no site wrote it.
 std::vector<uint8_t> ExpectedRegion(const std::vector<TraceRecord>& trace, const ProbeRegion& region,
-                                    std::string* source) {
+                                    std::string* source, uint8_t fill = kProbeFill) {
 	const TraceRecord* last = nullptr;
 	for (const TraceRecord& r : trace) {
 		const size_t dot = r.site.find('.');
@@ -30654,7 +30704,7 @@ std::vector<uint8_t> ExpectedRegion(const std::vector<TraceRecord>& trace, const
 			if (site == s) last = &r;
 		}
 	}
-	std::vector<uint8_t> out(static_cast<size_t>(region.width) * 4u + 16u, kProbeFill);
+	std::vector<uint8_t> out(static_cast<size_t>(region.width) * 4u + 16u, fill);
 	if (last == nullptr) {
 		*source = "the fill (no site wrote it)";
 		return out;
@@ -30669,13 +30719,15 @@ std::vector<uint8_t> ExpectedRegion(const std::vector<TraceRecord>& trace, const
 	return out;
 }
 
-// Checks every judged region of `p`'s probe against the CPU trace. `label` names the call.
-void CheckProbeAgainstTrace(const ProbedReading& p, const std::vector<TraceRecord>& trace, const std::string& label) {
+// Checks every judged region of `p`'s probe against the CPU trace. `label` names the call; `fill` is
+// the byte the probe filled LayerScratch with.
+void CheckProbeAgainstTrace(const ProbedReading& p, const std::vector<TraceRecord>& trace, const std::string& label,
+                            uint8_t fill = kProbeFill) {
 	CHECK_MSG(p.probed, "%s: the LayerScratch probe read nothing back", label.c_str());
 	if (!p.probed) return;
 	for (const ProbeRegion& region : ProbeRegions(p.layout)) {
 		std::string source;
-		const std::vector<uint8_t> want = ExpectedRegion(trace, region, &source);
+		const std::vector<uint8_t> want = ExpectedRegion(trace, region, &source, fill);
 		std::vector<uint8_t> got(want.size(), 0);
 		const size_t codes_bytes = static_cast<size_t>(region.width) * 4u;
 		const bool in_range = static_cast<size_t>(region.codes_off) + codes_bytes <= p.scratch.size() &&
@@ -31060,9 +31112,13 @@ static void TestGpuOverheadS2S3_7_8_BracketStreamIsTheFusedPerSiteStream() {
 // the 8-layer token; a 1-layer model; a QK-norm layer; slices of 1, 4, 5 and all 8 layers; a
 // position at the context cap minus one; the chunk bridge at 1, 4 and 8 tokens. The CPU trace
 // judges every LayerScratch region (the absolute anchor for the moved bodies on the success path).
-// 7.5's mutant (attn_residual and mlp_norm swapped in the fused body order) fails the bytes here,
-// and so does 7.10's (S3: up's accumulator written at base 0, where it collides with gate's row in
-// the merged GEMM and the tail-only variant alike).
+// 7.5's mutant (attn_residual and mlp_norm swapped in the fused body order) fails the bytes here.
+// So does 7.10's (S3: up's accumulator written at base 0, where it collides with gate's row in the
+// merged GEMM and the tail-only variant alike) -- but only because the single-token shapes run
+// with DistinctUpWeights: NLayerFixture's gate and up are identical, so on it the collision
+// changes no byte (TestGpuOverheadS2S3_6_1_DistinctUpWeightsAreLiveOnTheCpu proves the rows
+// differ). The chunk shapes keep the stock fixture and do not see 7.10; 8.1's distinct adapters
+// and the real-model 6.1 see it too.
 static void TestGpuOverheadS2S3_6_1_BracketBytesEqualPerSiteAndTheCpuOracle() {
 	using namespace gpu_overhead_s2s3;
 #if defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
@@ -31087,6 +31143,8 @@ static void TestGpuOverheadS2S3_6_1_BracketBytesEqualPerSiteAndTheCpuOracle() {
 	for (const Shape& shape : shapes) {
 		NLayerFixture<8> f8;
 		NLayerFixture<1> f1;
+		DistinctUpWeights(f8);
+		DistinctUpWeights(f1);
 		std::vector<TraceRecord> trace;
 		const Reading cpu = shape.depth == 8 ? RunTokenOnCpu(f8, shape.call, &trace) : RunTokenOnCpu(f1, shape.call, &trace);
 		CHECK_MSG(cpu.status == SslmForwardStatus::Ok, "S2/S3 6.2 %s: the CPU oracle must succeed here (%s)",
@@ -31199,6 +31257,9 @@ static void TestGpuOverheadS2S3_6_1_BracketBytesEqualPerSiteAndTheCpuOracle() {
 //     run's first body (every later body's outputs are the pre-call snapshot), 7.6 for any row
 //     (a later body whose sticky check is deleted runs and writes its region), and 11.1 for a
 //     rejection one site before a run (the run's first body stops at its entry check).
+// The table runs under two fills: 0xA5 and kProbeFillInDomain (0xFF). Under 0xA5 alone a deleted
+// sticky check stays hidden, because the mutant body re-raises on the fill's out-of-domain scale
+// word and writes nothing; under 0xFF it proceeds and writes, and the region check sees it.
 static void TestGpuOverheadS2S3_5_1_EveryFusedBodyRejectionMatchesTheCpuAndPerSite() {
 	using namespace gpu_overhead_s2s3;
 #if !defined(SUPERSLM_ENABLE_GPU_RECORD_LOG)
@@ -31206,7 +31267,8 @@ static void TestGpuOverheadS2S3_5_1_EveryFusedBodyRejectionMatchesTheCpuAndPerSi
 	          "S2/S3 5.1: this binary was built without SUPERSLM_ENABLE_GPU_RECORD_LOG, which the "
 	          "LayerScratch probe needs; build.bat and CMakeLists.txt define it for superslm_tests");
 #else
-	ScopedLayerScratchProbe probe(kProbeFill);
+	for (const uint8_t fill : {kProbeFill, kProbeFillInDomain}) {
+	ScopedLayerScratchProbe probe(fill);
 	for (const RejectionRow& row : AllRejectionRows()) {
 		const char* cells = row.before_run ? "11.1" : row.first_body ? "5.1/5.2/7.6" : "5.1/7.6";
 		for (uint32_t k : RowPositions(row)) {
@@ -31225,17 +31287,18 @@ static void TestGpuOverheadS2S3_5_1_EveryFusedBodyRejectionMatchesTheCpuAndPerSi
 				per_site = RunToken(fixture, call);
 			}
 			char label[160];
-			std::snprintf(label, sizeof(label), "S2/S3 %s %s (%s) @k=%u per-site", cells, row.id, row.body, k);
+			std::snprintf(label, sizeof(label), "S2/S3 %s %s (%s) @k=%u fill 0x%02X per-site", cells, row.id,
+			              row.body, k, static_cast<unsigned>(fill));
 			CheckAgainstCpu(per_site.r, cpu, label);
-			CheckProbeAgainstTrace(per_site, trace, label);
+			CheckProbeAgainstTrace(per_site, trace, label, fill);
 			for (const ConfigRow& cfg : ShippableConfigs()) {
 				ScopedFusionConfig scoped(cfg.config);
 				ScopedGpuTimingMode mode(GpuTimingMode::Bracket);
 				const ProbedReading bracket = RunToken(fixture, call);
-				std::snprintf(label, sizeof(label), "S2/S3 %s %s (%s) @k=%u bracket %s", cells, row.id,
-				              row.body, k, cfg.name);
+				std::snprintf(label, sizeof(label), "S2/S3 %s %s (%s) @k=%u fill 0x%02X bracket %s", cells,
+				              row.id, row.body, k, static_cast<unsigned>(fill), cfg.name);
 				CheckAgainstCpu(bracket.r, cpu, label);
-				CheckProbeAgainstTrace(bracket, trace, label);
+				CheckProbeAgainstTrace(bracket, trace, label, fill);
 				CHECK_MSG(SameOutputs(per_site.r, bracket.r) && bracket.scratch == per_site.scratch &&
 				              bracket.sticky_tag == per_site.sticky_tag,
 				          "%s: status, outputs, LayerScratch and sticky word (%lld) must equal per-site "
@@ -31244,6 +31307,7 @@ static void TestGpuOverheadS2S3_5_1_EveryFusedBodyRejectionMatchesTheCpuAndPerSi
 			}
 		}
 	}
+	}  // fill
 #endif
 }
 
@@ -32689,6 +32753,7 @@ int main(int argc, char** argv) {
 	// reach their tags on the CPU oracle (the GPU half is in RunGpuSerialPortCells below).
 	TestGpuOverheadS2S3_5_1_RejectionFixturesReachTheirTagOnTheCpu();
 	TestGpuOverheadS2S3_8_1_FusedTailAdapterIsLiveOnTheCpu();
+	TestGpuOverheadS2S3_6_1_DistinctUpWeightsAreLiveOnTheCpu();
 
 	// T-2152 (outside strike item 1): every cell called through the end of this block is
 	// defined only under #ifdef _WIN32 above (the GPU-serial-port suite) -- guarded the same

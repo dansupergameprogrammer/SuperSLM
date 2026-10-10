@@ -64,11 +64,15 @@ inline const std::vector<ConfigRow>& ShippableConfigs() {
 }
 
 // Every configuration `SetGpuBracketFusionConfig` must refuse: an S3 variant with neither S2 run
-// fused (the coordinator's ruling: S3 is priced on top of S2, never alone).
+// fused (the coordinator's ruling: S3 is priced on top of S2, never alone), and an s3 value past
+// the enumeration (3, the one value the packed word's two bits can still hold), with and without
+// S2 runs fused.
 inline const std::vector<GpuBracketFusionConfig>& RefusedConfigs() {
 	static const std::vector<GpuBracketFusionConfig> rows = {
 	    GpuBracketFusionConfig{false, false, GpuS3Fusion::TailOnly},
 	    GpuBracketFusionConfig{false, false, GpuS3Fusion::MergedGemm},
+	    GpuBracketFusionConfig{true, true, static_cast<GpuS3Fusion>(3)},
+	    GpuBracketFusionConfig{false, false, static_cast<GpuS3Fusion>(3)},
 	};
 	return rows;
 }
@@ -79,7 +83,10 @@ inline std::string ConfigName(const GpuBracketFusionConfig& c) {
 	s += " down:";
 	s += c.fuse_down_run ? "fused" : "-";
 	s += " s3:";
-	s += c.s3 == GpuS3Fusion::MergedGemm ? "merged" : c.s3 == GpuS3Fusion::TailOnly ? "tail-only" : "-";
+	s += c.s3 == GpuS3Fusion::MergedGemm ? "merged"
+	     : c.s3 == GpuS3Fusion::TailOnly ? "tail-only"
+	     : c.s3 == GpuS3Fusion::None     ? "-"
+	                                     : "invalid(" + std::to_string(static_cast<uint32_t>(c.s3)) + ")";
 	s += "}";
 	return s;
 }
