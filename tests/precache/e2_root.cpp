@@ -39,7 +39,7 @@ void SyntheticShapes41() {
         Fixture four;
         PKV_CHECK_MSG(pkv::legacy_a::PatchedBlockSizeTwin(*base,4,&four),
                       "4.1 failed to construct B=4 synthetic twin");
-        if(!four.ok) return;
+        if(!four.ok || !PinFixtureB(&four,4)) return;
         for(const auto& geometry : {std::pair<const Fixture*,int>{base.get(),16},{&four,4}}) {
         const Fixture& fx=*geometry.first;
         const int B=geometry.second;
@@ -143,6 +143,8 @@ void RoundTrip64() {
     Fixture bound;
     bound.model=model.model; model.model=nullptr;
     bound.geo={24,2,64,4096}; bound.vocab=256;
+    bound.stem="synthetic0p5-three-schema.sslm"; bound.ok=true;
+    if(!PinFixtureB(&bound,16)) return;  // 1.13.0: the rule, not CFG1, selects B (precache_common.h)
     Scene sc;
     PagePool& pool=sc.AddPool(bound.model,64);
     sslm_schema schema=nullptr;

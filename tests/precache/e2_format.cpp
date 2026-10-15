@@ -46,6 +46,8 @@ void Independent712() {
     fx.geo={24,2,64,4096};
     fx.vocab=256;
     fx.sha=Sha(model.bytes.p,model.size);
+    fx.stem="synthetic0p5-three-schema.sslm"; fx.ok=true;
+    if(!PinFixtureB(&fx,16)) return;  // 1.13.0: the rule, not CFG1, selects B (precache_common.h)
     Scene sc;
     PagePool& pool=sc.AddPool(fx.model,128);
     constexpr int L=65;
@@ -100,8 +102,8 @@ void Independent712() {
             const uint32_t page=table[size_t(pos/fx.B())];
             auto it=pages.find(page);
             if(it==pages.end()) it=pages.emplace(page,PeekPage(fx,pool.pool,page)).first;
-            const size_t from=((size_t(l)*2+half)*H+h)*size_t(fx.B())*D+
-                              size_t(pos%fx.B())*D;
+            // 1.13.0's rotated in-page address (paged-KV §3.1, T1), through pkv::PageRunOffset.
+            const size_t from=PageRunOffset(fx.geo.layers,fx.geo.kv_heads,D,fx.B(),l,half,h,pos);
             const size_t to=((size_t(l)*2+half)*H+h)*size_t(L)*D+size_t(pos)*D;
             PKV_CHECK_MSG(it->second.size()>=from+D,"7.12 page-index peek was short");
             if(it->second.size()<from+D) return;
@@ -173,7 +175,7 @@ void CrossView712() {
     Fixture four;
     PKV_CHECK_MSG(pkv::legacy_a::PatchedBlockSizeTwin(sixteen,4,&four),
                   "7.12 B=4 model view could not be constructed");
-    if(!four.ok) return;
+    if(!four.ok || !PinFixtureB(&four,4)) return;
     std::array<uint8_t,32> sixteen_integrity{},four_integrity{};
     const bool verified_sixteen=VerifiedArtifactIntegrity(sixteen.bytes.p,sixteen.size,
                                                           &sixteen_integrity);
@@ -215,8 +217,8 @@ void CrossView712() {
                 const uint32_t page=table[size_t(pos/fx.B())];
                 auto it=pages.find(page);
                 if(it==pages.end()) it=pages.emplace(page,PeekPage(fx,pool.pool,page)).first;
-                const size_t from=((size_t(l)*2+half)*H+h)*size_t(fx.B())*D+
-                                  size_t(pos%fx.B())*D;
+                // 1.13.0's rotated in-page address (paged-KV §3.1, T1), through pkv::PageRunOffset.
+                const size_t from=PageRunOffset(fx.geo.layers,fx.geo.kv_heads,D,fx.B(),l,half,h,pos);
                 const size_t to=((size_t(l)*2+half)*H+h)*size_t(L)*D+size_t(pos)*D;
                 if(it->second.size()<from+D) return View{};
                 std::memcpy(v.rows.data()+to,it->second.data()+from,D);

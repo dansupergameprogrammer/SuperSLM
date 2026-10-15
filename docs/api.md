@@ -1033,7 +1033,10 @@ mismatches have their distinct restore statuses. Every refusal clears `*out`.
 leading pages, while a null or nonmatching hint restores the same prefix
 privately when the pool has `ceil(length / B)` free pages. A private nested
 restore may return `SSLM_KV_POOL_EXHAUSTED` even where building the nested
-prefix against its parent was admitted. Releasing a hint while restore reads
+prefix against its parent was admitted. `B` is the restore pool's page size
+(the contiguous pool option's is the context cap). `SPX1` carries no page size,
+so a blob restores into a pool of any page size; the restored prefix is then
+adoptable only from pools of that page size, as for every prefix. Releasing a hint while restore reads
 it is caller undefined behavior.
 
 Every blob written by this library and restored by the same release version

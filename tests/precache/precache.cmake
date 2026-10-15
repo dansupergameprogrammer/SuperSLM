@@ -26,6 +26,10 @@ target_link_libraries(superslm_precache_e1 PRIVATE superslm_test_injection)
 target_include_directories(superslm_precache_e1 PRIVATE include src tests tests/paged-kv ${PC_DIR})
 target_compile_definitions(superslm_precache_e1 PRIVATE
     PKV_REFERENCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/paged-kv/reference")
+# SuperSLM 1.13.0: the page-size rule, not CFG1, selects B. The cells were written at B = 16 (and the
+# B = 4 twin), so the generated fixtures are pinned as the paged-KV C4/C5 suites pin theirs
+# (pkv_common.h, D-SLM8439), and precache_common.h's PinFixtureB pins the synthetic shapes.
+target_compile_definitions(superslm_precache_e1 PRIVATE PKV_PIN_GENERATED_FIXTURES=1)
 find_package(Python3 COMPONENTS Interpreter)
 set(PRECACHE_REFERENCE_LINE "origin/claude/shared-prefix-kv-build-wj8q9c" CACHE STRING
     "Line whose merge-base anchors licensed precache references")

@@ -9,11 +9,32 @@
 #include <fstream>
 #include <thread>
 
+// The paged-KV test-only pin (pkv_r9.h; superslm_test_injection only), for PinFixtureB below.
+extern "C" sslm_status KvPagesTestPinPagePositions(sslm_model model, int64_t page_positions);
+
 namespace pc {
 using namespace pkv;
 using namespace pkv::budget_a;
 constexpr size_t kHeader = 184;
 constexpr int kUnbuilt = 0x7fff;
+
+// SuperSLM 1.13.0 (paged-KV §3.1, T1): CFG1's kv_block_size no longer selects B; the page-size rule
+// does (B = 64 at the synthetic 0.5B and 1.5B shapes, 128 at pkv_def). These cells were written at
+// B = 16 and the B = 4 twin, so each fixture they map is pinned through the test-only pin, as the
+// paged-KV C4/C5 loaders pin theirs (D-SLM8439; GetFixture under PKV_PIN_GENERATED_FIXTURES). The
+// pin's SSLM_OK and the engine's B are both required; `pinned` makes Fixture::B() report it.
+inline bool PinFixtureB(Fixture* fx, int64_t B) {
+    if(!fx || !fx->ok) return false;
+    const sslm_status pin=KvPagesTestPinPagePositions(fx->model,B);
+    PKV_CHECK_MSG(pin==SSLM_OK,"the pin of %s to B = %lld is refused (%d)",fx->stem.c_str(),
+                  static_cast<long long>(B),int(pin));
+    PKV_CHECK_MSG(sslm_kv_page_positions(fx->model)==B,"%s runs at B = %lld after its pin, not %lld",
+                  fx->stem.c_str(),static_cast<long long>(sslm_kv_page_positions(fx->model)),
+                  static_cast<long long>(B));
+    if(pin!=SSLM_OK) return false;
+    fx->pinned=B;
+    return true;
+}
 
 // Read the residual width from this fixture's CFG1, independently of the
 // mapped model and SPX1 writer. The paged-KV harness's HiddenSize() is
@@ -222,6 +243,8 @@ inline const Fixture& SyntheticFixture(bool three_schemas = false) {
             const auto st = sslm_model_map(fx->bytes.p, fx->size, &fx->model);
             PKV_CHECK_MSG(st == SSLM_OK, "synthetic precache model map returned %d", int(st));
             fx->ok = st == SSLM_OK;
+            fx->stem = file;
+            PinFixtureB(fx.get(), 16);
         }
     }
     const Fixture& result = *fx;
@@ -248,6 +271,7 @@ inline std::unique_ptr<Fixture> LoadSyntheticShape(const char* filename,
     fx->vocab=256;
     fx->ok=sslm_model_map(fx->bytes.p,fx->size,&fx->model)==SSLM_OK;
     PKV_CHECK_MSG(fx->ok,"synthetic shape %s did not map",filename);
+    PinFixtureB(fx.get(),16);
     return fx;
 }
 

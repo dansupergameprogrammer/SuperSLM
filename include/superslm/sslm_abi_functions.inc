@@ -169,6 +169,9 @@ SUPERSLM_API sslm_status sslm_prefix_save(sslm_prefix prefix, void* buf, size_t*
 /* Restore an SPX1 prefix for this backend, engine producer, model and KV precision. The hint is
  * optional for fidelity. Without a matching hint, a nested prefix requires ceil(length/B) free
  * pages; exhaustion returns SSLM_KV_POOL_EXHAUSTED with no page drawn. Every refusal clears *out.
+ * B is `pool`'s page size (the contiguous option's is the cap): SPX1 carries no page size, so a
+ * blob restores into a pool of any page size, and the restored prefix is then adoptable only from
+ * pools of that page size, as every prefix is (sslm_seq_adopt_prefix).
  * The SHA-256 digest detects accidental change, not intentional editing: a recomputed digest can
  * admit schema and walk state within model bounds, length within the context cap, origin within
  * length, a valid current token, an int32 mantissa, any int64 exponent, any saturation counts,

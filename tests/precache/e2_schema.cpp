@@ -74,6 +74,8 @@ void Schema67() {
     model.model=nullptr; // Fixture owns the mapped handle from here.
     fx.geo={24,2,64,4096};
     fx.vocab=256;
+    fx.stem="synthetic0p5-three-schema.sslm"; fx.ok=true;
+    if(!PinFixtureB(&fx,16)) return;  // 1.13.0: the rule, not CFG1, selects B (precache_common.h)
     PagePool pool(fx.model,800); // two simultaneous legacy whole-cap adopters.
     Handles h;
     for(const char* name : {"schema_zero","schema_one","schema_two"}) {
@@ -172,6 +174,8 @@ void ExistingSsb5_214() {
     Fixture fx;
     fx.model=model.model; model.model=nullptr;
     fx.geo={24,2,64,4096}; fx.vocab=256;
+    fx.stem="synthetic0p5-three-schema.sslm"; fx.ok=true;
+    if(!PinFixtureB(&fx,16)) return;  // 1.13.0: the rule, not CFG1, selects B (precache_common.h)
     PagePool pool(fx.model,600); // Two legacy whole-cap reservations coexist.
     sslm_schema schema=nullptr;
     Status(sslm_schema_lookup(fx.model,"schema_two",&schema),SSLM_OK,"2.14 index-2 lookup");

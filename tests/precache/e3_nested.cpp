@@ -157,7 +157,7 @@ void Origins42() {
     Fixture four;
     PKV_CHECK_MSG(pkv::legacy_a::PatchedBlockSizeTwin(*base,4,&four),
                   "4.2 failed to construct B=4 synthetic twin");
-    if(!four.ok) return;
+    if(!four.ok || !PinFixtureB(&four,4)) return;
     for(const auto& geometry : {std::pair<const Fixture*,int>{base.get(),16},{&four,4}}) {
     const Fixture& fx=*geometry.first;
     const int B=geometry.second;

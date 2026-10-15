@@ -19,8 +19,9 @@ void PageRows(const Fixture& fx,sslm_kv_pool pool,sslm_prefix prefix,
             const uint32_t physical=table[size_t(pos/fx.B())];
             auto it=pages.find(physical);
             if(it==pages.end()) it=pages.emplace(physical,PeekPage(fx,pool,physical)).first;
-            const size_t page_off=((size_t(l)*2+half)*H+h)*size_t(fx.B())*D+
-                                  size_t(pos%fx.B())*D;
+            // 1.13.0 rotates every page's run slots (paged-KV §3.1, T1): the in-page address is
+            // pkv::PageRunOffset's, the one every test-side page read goes through.
+            const size_t page_off=PageRunOffset(fx.geo.layers,fx.geo.kv_heads,D,fx.B(),l,half,h,pos);
             const size_t blob_off=kHeader+ArtifactHiddenSize(fx)+
                 ((size_t(l)*2+half)*H+h)*size_t(L)*D+size_t(pos)*D;
             if(it->second.size()<page_off+D || blob.size()<blob_off+D ||
