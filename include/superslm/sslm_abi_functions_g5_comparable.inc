@@ -54,8 +54,8 @@ SUPERSLM_API sslm_status sslm_model_unmap(sslm_model model);
  * at the full context cap, across every layer -- num_hidden_layers * context_cap *
  * num_key_value_heads * head_dim * 2 (K+V) * kv_precision_width. Its value is unchanged in 1.12.0.
  * Since 1.12.0 the pool stores K/V in pages of sslm_kv_page_positions positions, and one block is
- * exactly ceil(cap/B) pages (B divides the cap, sslm_abi_functions.inc); a holder made by a
- * no-budget verb reserves that many pages, one block's worth. */
+ * exactly ceil(cap/B) pages where B divides the cap (sslm_abi_functions.inc gives B); at another cap
+ * the last page is partial and sslm_kv_pool_overhead_size carries its slack. A no-budget holder reserves ceil(cap/B) pages. */
 SUPERSLM_API size_t sslm_kv_block_size(sslm_model model);
 SUPERSLM_API size_t sslm_kv_pool_overhead_size(sslm_model model, uint32_t block_count);
 SUPERSLM_API size_t sslm_seq_state_size(sslm_model model);
@@ -92,8 +92,8 @@ SUPERSLM_API sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix)
 /* Save: a sequence made by a no-budget verb (sslm_seq_create, or a restore of a no-budget blob)
  * emits SSB5, byte-equal to the blob 1.11.0 writes for the same state, so 1.9.0 to 1.11.0 read
  * it. A budget-mode sequence (sslm_seq_create_budgeted, or a restore of a budget-mode SSB6)
- * emits SSB6 (1.12.0): SSB5's header plus kv_mode, budget and origin, and only the K/V rows the
- * sequence has written, so its size follows its live length; releases before 1.12.0 refuse it.
+ * emits SSB6 (1.12.0): SSB5's header plus kv_mode, budget and origin, and the K/V rows [0, live length),
+ * an adopted prefix's span included, so its size follows its live length; releases before 1.12.0 refuse it.
  * Restore accepts SSB6, SSB5 and the shipped SSB4, SSB3 and SSB2 predecessors; SSB2's absent
  * damped anti-LM state is restored as empty. SSB5 and SSB6 carry the sequence's saturation total
  * and the four per-site saturation counts that sum to it (kv_landing, k_channel_landing, rope_q,

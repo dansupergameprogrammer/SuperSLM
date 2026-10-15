@@ -91,11 +91,8 @@ def probe1(kind, ks):
 
 
 MUT = lambda m, **kw: dict({'PKV_DEBUNK_MUTANT': m}, **kw)  # noqa: E731
-T79 = '7.9/C6'
 T74 = '7.4/C6'
-T79F = '7.9/C6:fixtures'
 T74F = '7.4/C6:fixtures'
-COMMISSIONED = {'SUPERSLM_PAGED_KV_TIMING_COMMISSIONED': '1'}
 
 CONSTRUCTIONS = [
     # 1. byte-equality oracle ------------------------------------------------------------------
@@ -180,56 +177,25 @@ CONSTRUCTIONS = [
       [run('mutant', 'commission', ['CM.probe1:excess:k=256', 'CM.probe1:excess:k=258'], MUT('budget_edge'))],
       'as probe2.R5, for the one-state form', reasons=['one-state fill probe at k=']),
 
-    # 4. timing harness: cloud twins (fixtures; noisy, readings recorded) -------------------------
-    C('timing79.cloud.O1', 'timing79', 'observe', [run('pristine', 'c6', [T79F], COMMISSIONED)],
-      'cloud twin, unmutated: pkv_def (B = 16) against pkv_odd (one page)', platform_='cloud', timing=True),
-    C('timing79.cloud.R1', 'timing79', 'reject',
-      [run('mutant', 'c6', [T79F], MUT('decode_slow', PKV_DEBUNK_DECODE_SLOW='0.25', **COMMISSIONED))],
-      'cloud twin, paged decode slowed by a factor 1.25 (rate x 0.8: +20 points of slowdown)',
-      reasons=['paged decode is'], platform_='cloud', timing=True),
-    C('timing79.cloud.N1', 'timing79', 'noresult',
-      [run('mutant', 'c6', [T79F], MUT('decode_slow', PKV_DEBUNK_DECODE_SLOW='@SUBRES', **COMMISSIONED))],
-      'cloud twin, paged decode slowed by --subres-factor (~1%). Not a valid construction here: the cloud '
-      'twin compares two fixtures, so the effect also carries their real difference; readings only',
-      platform_='cloud', timing=True),
+    # 4. Current 7.4 instrument: fixed 2.0 bound, same-model cap pair.
+    # 7.9 is commissioned through tools/run_paged_kv_pairs.py and its own
+    # independent source-bound receipt; the retired C6 cells are never invoked.
     C('timing74.cloud.A1', 'timing74', 'accept',
-      [run('pristine', 'c6', [T74F], {'SUPERSLM_PAGED_KV_74_MAX_RATIO': '2.0'})],
-      'cloud twin, unmutated: reset and adopt at cap 32768 against cap 4096, bound 2.0: every ratio PASS',
+      [run('pristine', 'c6', [T74F])],
+      'same-geometry fixture pair, cap 4096 against cap 32768; four ratios must PASS',
       platform_='cloud', timing=True, verdicts=[('', {'PASS'})]),
     C('timing74.cloud.R1', 'timing74', 'reject',
-      [run('mutant', 'c6', [T74F], MUT('reset_capscale', SUPERSLM_PAGED_KV_74_MAX_RATIO='2.0'))],
-      'cloud twin, reset made cap-proportional (writes cap x 64 bytes), bound 2.0',
-      reasons=['reset: ratio'], platform_='cloud', timing=True),
-
-    # 4. timing harness: the box (real artifacts; quiet box required) -----------------------------
-    C('timing79.box.A1', 'timing79', 'accept',
-      [run('pristine', 'c6', [T79], {'SUPERSLM_PAGED_KV_79_OUT': '@BASE'}),
-       run('pristine', 'c6', [T79], dict({'SUPERSLM_PAGED_KV_79_BASELINE': '@BASE'}, **COMMISSIONED))],
-      'unmutated pair: the paged build graded against a run of itself (A/A): every target must read bar PASS '
-      '(meets the 5% bar, which needs a resolving power under 5%) and effect NO RESULT (no change between '
-      'identical builds is resolved)',
-      platform_='box', timing=True, verdicts=[('bar', {'PASS'}), ('effect', {'NO RESULT'})]),
-    C('timing79.box.R1', 'timing79', 'reject',
-      [run('pristine', 'c6', [T79], {'SUPERSLM_PAGED_KV_79_OUT': '@BASE'}),
-       run('mutant', 'c6', [T79], MUT('decode_slow', PKV_DEBUNK_DECODE_SLOW='0.25',
-                                      SUPERSLM_PAGED_KV_79_BASELINE='@BASE', **COMMISSIONED))],
-      'paged decode slowed by a factor 1.25 (20% slower, 4x the bar), graded against the unmutated run',
-      reasons=['paged decode is'], platform_='box', timing=True),
-    C('timing79.box.N1', 'timing79', 'noresult',
-      [run('pristine', 'c6', [T79], {'SUPERSLM_PAGED_KV_79_OUT': '@BASE'}),
-       run('mutant', 'c6', [T79], MUT('decode_slow', PKV_DEBUNK_DECODE_SLOW='@SUBRES',
-                                      SUPERSLM_PAGED_KV_79_BASELINE='@BASE', **COMMISSIONED))],
-      'paged decode slowed by --subres-factor (default 0.01, ~1%), below the run\'s resolving power: must be '
-      'reported as no result: the EFFECT verdict of every graded target must be NO RESULT', platform_='box',
-      timing=True),
+      [run('mutant', 'c6', [T74F], MUT('reset_capscale'))],
+      'independent cap-proportional reset mutation on the same fixture pair',
+      reasons=['ratio above 2.0'], platform_='cloud', timing=True),
     C('timing74.box.A1', 'timing74', 'accept',
-      [run('pristine', 'c6', [T74], {'SUPERSLM_PAGED_KV_74_MAX_RATIO': '@RATIO'})],
-      'unmutated: reset and adopt on the 0.5B (cap 4096) against the 1.5B (cap 32768), bound --max74-ratio: '
-      'every ratio PASS', platform_='box', timing=True, verdicts=[('', {'PASS'})]),
+      [run('pristine', 'c6', [T74])],
+      'same 0.5B artifact at caps 4096 and 32768; four ratios must PASS',
+      platform_='box', timing=True, verdicts=[('', {'PASS'})]),
     C('timing74.box.R1', 'timing74', 'reject',
-      [run('mutant', 'c6', [T74], MUT('reset_capscale', SUPERSLM_PAGED_KV_74_MAX_RATIO='@RATIO'))],
-      'reset made cap-proportional (writes cap x 64 bytes on every reset), bound --max74-ratio',
-      reasons=['reset: ratio'], platform_='box', timing=True),
+      [run('mutant', 'c6', [T74], MUT('reset_capscale'))],
+      'independent cap-proportional reset mutation on the same real-artifact pair',
+      reasons=['ratio above 2.0'], platform_='box', timing=True),
 ]
 
 SETS = {}
@@ -516,14 +482,13 @@ def idle_report():
 CELL_LINE = re.compile(r'^\[[^\]]+\] (\S+) (RED|green) \((\d+) checks, (\d+) failed\)$', re.M)
 FAIL_LINE = re.compile(r'^FAIL \[([^\]]+)\] (.*)$', re.M)
 SUMMARY = re.compile(r'^(\d+) cells, (\d+) red; (\d+) checks, (\d+) failures$', re.M)
-GRADE_79 = re.compile(r'^7\.9 (.*?): paged ([\d.]+) tok/s, one-page ([\d.]+) tok/s, slowdown (-?[\d.]+)%, resolving power ([\d.]+)%', re.M)
-VERDICT_LINE = re.compile(r'^(7\.[49]) (.+?): verdict (PASS|FAIL|NO RESULT|RESOLVED) \(', re.M)
+VERDICT_LINE = re.compile(r'^7\.4 (budget|whole_reserve) (adopt|reset) (PASS|FAIL|NO RESULT) r\(86\)=', re.M)
 
 
 def verdict_lines(out, kind):
     # (cell, target, verdict) for every timing verdict line whose target ends in `kind` ('' = all).
-    return [(m.group(1), m.group(2), m.group(3)) for m in VERDICT_LINE.finditer(out)
-            if not kind or m.group(2) == kind or m.group(2).endswith(' ' + kind)]
+    return [("7.4", m.group(1) + ' ' + m.group(2), m.group(3)) for m in VERDICT_LINE.finditer(out)
+            if not kind or m.group(2) == kind]
 
 
 def check_verdicts(c, out):
@@ -541,14 +506,14 @@ def check_verdicts(c, out):
 
 
 def substitute(value, args, base):
-    return value.replace('@BASE', base).replace('@SUBRES', args.subres_factor).replace('@RATIO', args.max74_ratio)
+    return value.replace('@BASE', base)
 
 
 def run_one(args, c, r, idx, base):
     exe = exe_path(args, r['variant'], r['binary'])
     env = dict(os.environ)
-    for k in ('PKV_DEBUNK_MUTANT', 'PKV_DEBUNK_DECODE_SLOW', 'SUPERSLM_PAGED_KV_79_OUT', 'SUPERSLM_PAGED_KV_79_BASELINE',
-              'SUPERSLM_PAGED_KV_TIMING_COMMISSIONED', 'SUPERSLM_PAGED_KV_74_MAX_RATIO'):
+    for k in ('PKV_DEBUNK_MUTANT', 'PKV_DEBUNK_DECODE_SLOW', 'SUPERSLM_PAGED_KV_74_FLOOR_CONTROL_TICKS',
+              'SUPERSLM_PAGED_KV_74_ORDER_BIAS_TICKS', 'SUPERSLM_PAGED_KV_74_CAP32768_FILE'):
         env.pop(k, None)
     if r['fixtures'] == 'tampered':
         env['SUPERSLM_PAGED_KV_FIXTURE_DIR'] = args.tampered_fixtures
@@ -627,39 +592,7 @@ def grade(c, code, out, args):
         for v in ('ACCEPTED', 'WRONG-REASON', 'NOT-REPORTED'):
             if v in verdicts:
                 return v, detail
-    if c['role'] == 'noresult':
-        g = GRADE_79.findall(out)
-        for target, paged, one, slow, res in g:
-            detail.append('%s: slowdown %s%%, resolving power %s%%' % (target, slow, res))
-        injected = 100.0 * (1.0 - 1.0 / (1.0 + float(args.subres_factor)))
-        if g and any(float(res) <= injected for (_, _, _, _, res) in g):
-            detail.append('INCONCLUSIVE: a resolving power at or below the injected %.2f%%; rerun with a smaller '
-                          '--subres-factor' % injected)
-            return 'INCONCLUSIVE', detail
-        # Graded on the EFFECT verdict lines only: a bar NO RESULT says nothing about whether the
-        # injected effect was resolved (a resolved 24.8% effect beside a 22.3% resolving power reads
-        # bar NO RESULT too).
-        effects = verdict_lines(out, 'effect')
-        for cell, target, v in effects:
-            detail.append('%s %s: verdict %s' % (cell, target, v))
-        for cell, target, v in verdict_lines(out, 'bar'):
-            detail.append('%s %s: verdict %s (not graded here)' % (cell, target, v))
-        if effects and all(v == 'NO RESULT' for _, _, v in effects):
-            return 'NO-RESULT', detail
-        if not effects:
-            detail.append('no effect verdict line in the output')
-            return 'NO-EFFECT-LINE', detail
-        return 'EFFECT-RESOLVED', detail
-    # observe
-    for target, paged, one, slow, res in GRADE_79.findall(out):
-        detail.append('%s: paged %s, one-page %s tok/s, slowdown %s%%, resolving power %s%%' % (target, paged, one, slow, res))
-    for line in out.splitlines():
-        if line.startswith('7.4 ') or line.startswith('7.9 '):
-            if not GRADE_79.match(line):
-                detail.append(line[:220])
-    red = [cid for cid in wanted if cells.get(cid) == 'RED']
-    return ('OBSERVED (cell RED: %s)' % '; '.join(sum((fails.get(cid, []) for cid in red), [])[:2]) if red else 'OBSERVED (cell green)'), detail
-
+    raise Infra('unsupported construction role: %s' % c['role'])
 
 def run_construction(args, c):
     if c['timing']:
@@ -702,8 +635,6 @@ def main():
     ap.add_argument('--build-only', action='store_true')
     ap.add_argument('--rebuild', action='store_true')
     ap.add_argument('--jobs', type=int, default=os.cpu_count() or 4)
-    ap.add_argument('--subres-factor', default='0.01')
-    ap.add_argument('--max74-ratio', default='2.0')
     ap.add_argument('--allow-busy', action='store_true', help='run timing constructions on a busy machine (cloud twin)')
     args = ap.parse_args()
     args.patch = os.path.join(HERE, 'mutants', 'debunk_mutants.patch')

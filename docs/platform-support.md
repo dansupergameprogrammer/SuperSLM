@@ -183,7 +183,7 @@ speed (`docs/attention-rowsites/s3/bench.md`).
 
 Attention's softmax row (`SoftmaxRowQ15`) turns a row of scores into Q15
 probabilities. On the AVX2 and AVX-512 tiers it first checks a row guard:
-width at most 2^14, q_ln2 >= 1, q_c >= 0, M = q_b^2 + q_c in [1, 2^47]
+width at most 32,767, q_ln2 >= 1, q_c >= 0, M = q_b^2 + q_c in [1, 2^47]
 (formed in 128 bits, as the 1.9.0 body forms it), q_ln2 <= 2 q_b + 1, and
 every score within 2^61. Inside the guard it computes the row 4 or 8
 elements at a time. Each element's quotient by q_ln2 and each
@@ -402,7 +402,8 @@ executed on the 1.1 candidate (run 32336576519), every leg green except
 the branch-coverage job's designed first-run red — that job records its
 own floor measurement and fails until the recorded number is committed,
 which the immediately following commit did. The matrix was also fully
-green on the 1.0 release commit. Between 2026-07-23 and 2026-08-20 hosted
+green on the 1.0 release commit, and on the 1.13.0 release head (run
+38652786607, 2026-10-14, all 39 jobs green). Between 2026-07-23 and 2026-08-20 hosted
 runs were capped by the account's spending limit and the same matrix was
 reproduced locally (`cmake`+`ctest` per platform, `build.bat` on Windows).
 Every number below states the device, the artifact, and the surface it was

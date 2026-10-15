@@ -37,6 +37,9 @@
 #include <vector>
 
 #include "d3d12_harness.h"
+#include "gpu_call_timing_snapshot.h"
+#include "shaders/kv_page_addr_model.h"
+#include "gpu_kv_pool_geometry.h"  // paged-KV G3: the coverage twin's chunk-wide form
 
 #include <shlwapi.h>  // PathIsRelativeW (shader-directory override validation)
 #pragma comment(lib, "shlwapi.lib")
@@ -676,13 +679,34 @@ ResidentWeights g_resident_weights;
 // it returns.
 bool g_last_weight_upload_was_skipped = false;
 
-// T-2101 (dispatch-overhead decomposition): backs the public `LastCallTiming()` accessor
-// (`gpu_port.h`) -- see that declaration's own header comment for what each field measures.
-GpuCallTiming g_last_call_timing;
-// T-2101 (per-site decomposition, follow-up to D-SLM3312): backs the public
-// `LastCallPerDispatchTimingsMs()` accessor (`gpu_port.h`) -- one GPU-measured millisecond figure
-// per dispatch this call issued, in dispatch order.
-std::vector<double> g_last_call_per_dispatch_ms;
+// T-2101 (dispatch-overhead decomposition, per-site decomposition): backs the public
+// `LastCallTiming()` and `LastCallPerDispatchTimingsMs()` accessors (`gpu_port.h`) -- see those
+// declarations' own header comments for what each field measures. From G3 (plan §4.4, decision 80)
+// a call's timing is per call: the layer-loop record carries its own GpuCallTiming and
+// per-dispatch vector, and the call's timing is published here, under the snapshot's one mutex, at
+// the finish tail's end and on the submit's and the tail's catch paths; every chunk open
+// publishes an empty snapshot (PrepareGpuLayerLoopChunkOpenState). The accessors copy it under
+// that mutex, so no finishing poller writes shared timing state unlocked.
+LastCallTimingSnapshot<GpuCallTiming> g_last_call_timing_snapshot;
+// The publishes the catch paths and the chunk open make. A catch path's publish allocates its
+// block, and a failed allocation there must not leave the catch clause by exception: the call
+// already returns its classified status, and a failed publish keeps the previous snapshot. The
+// chunk open's empty publish allocates nothing (LastCallTimingSnapshot::PublishEmpty). The finish
+// tail's success publish is not one of these: it calls Publish inside the tail's try, so a host
+// allocation failure there is the call's own SSLM_GPU_ALLOCATION_FAILED (gpu_1p0.h), never
+// swallowed into SSLM_OK.
+void PublishCallTimingNoThrow(const GpuCallTiming& timing, std::vector<double> per_dispatch_ms) noexcept {
+	try {
+		g_last_call_timing_snapshot.Publish(timing, std::move(per_dispatch_ms));
+	} catch (...) {
+	}
+}
+void PublishEmptyCallTimingNoThrow() noexcept {
+	try {
+		g_last_call_timing_snapshot.PublishEmpty();
+	} catch (...) {
+	}
+}
 
 // T-2101 (throughput, D-SLM3301/D-SLM3294): the K/V workspace's own device residency, mirroring
 // ResidentWeights' shape exactly. Before this: `superslm_gpu.cpp`'s call site copied the WHOLE
@@ -1056,19 +1080,15 @@ superslm::SslmForwardStatus DecodeStickyTag(int64_t tag) {
 // rope_buf already are by staying in the caller's own local scope.
 Microsoft::WRL::ComPtr<ID3D12Resource> MakeInitializedUav(
     harness::Device& dev, const std::vector<uint8_t>& init,
-    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& keep_alive) {
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& keep_alive,
+    const std::source_location at = std::source_location::current()) {
 	auto buf = dev.MakeBuffer(init.size(), D3D12_HEAP_TYPE_DEFAULT,
-	                           D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
-	auto upload = dev.Upload(init.data(), init.size());
-	dev.list->CopyResource(buf.Get(), upload.Get());
+	                           D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST, at);
+	auto upload = dev.Upload(init.data(), init.size(), at);
+	harness::RecordCopyResource(dev.list.Get(), buf.Get(), upload.Get());
 	keep_alive.push_back(upload);
-	D3D12_RESOURCE_BARRIER b{};
-	b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-	b.Transition.pResource = buf.Get();
-	b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-	b.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-	b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-	dev.list->ResourceBarrier(1, &b);
+	harness::RecordTransition(dev.list.Get(), buf.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+	                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 	return buf;
 }
 
@@ -1486,22 +1506,14 @@ inline void MaybeThrowInjectedT2169ChunkRecordingTailFault() {
 #endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 }
 
-// T-2192 finding M3: fires between `ExecuteCommandLists` and `Signal()` -- `ExecuteCommandLists`
-// has therefore already genuinely queued the recorded work to the GPU when this throws, the exact
-// "work is already in flight, only Signal() itself failed" state T-2192's own T2(b) remedy
-// (this file, `SubmitOneSubChunkToFullDepthForG5Bridge`'s tail) handles. `std::runtime_error`,
-// matching what `SSLM_GPU_HR` throws on a real `Signal()` failure.
-inline void MaybeThrowInjectedT2169ChunkRecordingTailSignalFault() {
-#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
-	if (g_t2169_chunk_recording_tail_signal_fault_armed) {
-		g_t2169_chunk_recording_tail_signal_fault_armed = false;
-		throw std::runtime_error(
-		    "T2192 T2(b): injected fault between ExecuteCommandLists and Signal(), simulating a "
-		    "failed Signal() after the recorded work was already queued to the GPU");
-	}
-#endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
-}
-
+// T-2192 finding M3; from G3 (plan §4.4) inside Submit(): the singleton's first Signal after the
+// seam is armed is not made, so `ExecuteCommandLists` has already genuinely queued the recorded
+// work when the Signal "fails" -- the "work is already in flight, only Signal() itself failed"
+// state. Submit() then retries at a fresh value and, recovered, drains it and rethrows this
+// failure through ThrowT2169ChunkRecordingTailSignalFault() below: a `std::runtime_error`,
+// matching what `SSLM_GPU_HR` throws on a real `Signal()` failure. The consume and the throw are
+// harness::Device's (d3d12_harness.h, SignalFence and ThrowSignalFailure); defined after the
+// anonymous namespace below because they read its armed flag.
 // T-2192 finding M3: fires immediately before `new GpuLayerLoopInFlight()`, after `Close()`,
 // `ExecuteCommandLists`, and `Signal()` have all genuinely succeeded -- the exact entry state the
 // existing `catch (const std::bad_alloc&)` clause documents. `std::bad_alloc`, matching the real
@@ -1515,6 +1527,21 @@ inline void MaybeThrowInjectedT2169ChunkRecordingTailBadAllocFault() {
 #endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 }
 }  // namespace
+
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+namespace harness {
+bool ConsumeT2169ChunkRecordingTailSignalFault() noexcept {
+	if (!g_t2169_chunk_recording_tail_signal_fault_armed) return false;
+	g_t2169_chunk_recording_tail_signal_fault_armed = false;  // single-shot
+	return true;
+}
+void ThrowT2169ChunkRecordingTailSignalFault() {
+	throw std::runtime_error(
+	    "T2192 T2(b): injected fault between ExecuteCommandLists and Signal(), simulating a "
+	    "failed Signal() after the recorded work was already queued to the GPU");
+}
+}  // namespace harness
+#endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 
 // External linkage, deliberately outside the anonymous namespace immediately above -- same
 // reasoning as `ArmO11AllocationFailureInjection` (this file, above): `tests/t2178-gpu-batched-
@@ -1549,13 +1576,44 @@ void ClearT2169ChunkRecordingTailBadAllocFaultInjection() {
 }
 #endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 
+// Paged-KV plan (rev 16.1) §4 item 2, step G2: the one constant table entry every one-page view
+// shares (the legacy dedicated sequences' "context-wide one-entry table {0}"), and the view itself.
+namespace {
+constexpr uint32_t kGpuOnePageTable[1] = {0u};
+}  // namespace
+
+superslm::KvPageView GpuOnePageView(uint8_t* workspace, size_t workspace_size, int64_t context_cap) {
+	return superslm::KvPageView{workspace, kGpuOnePageTable, 1u, context_cap, workspace_size};
+}
+
+namespace {
+// Paged-KV plan §4 item 6, step G2: the host's byte offset of (layer, half, kv_head, position) in the
+// buffer a view addresses -- the shaders' KvRowAddrGpu (site_common.hlsli) instantiated at size_t
+// (src/gpu/shaders/kv_page_addr_model.h), so the decode and chunk readback offset builders and
+// KeyRowGpu/ValueRowGpu read exactly the bytes the dispatches write. For the one-page view it is the
+// pre-G2 flat offset. The caller has the position inside the mapped pages (the ladder's coverage
+// guard).
+size_t KvViewRowOffset(const superslm::KvPageView& view, uint32_t layer, size_t half, size_t num_kv_heads,
+                       size_t head_dim, size_t kv_head, int64_t position) {
+	return kv_page_addr_model::KvRowAddrGpu<size_t>(
+	    view.page_table, view.page_bytes, static_cast<size_t>(view.page_positions), static_cast<size_t>(layer), half,
+	    num_kv_heads, head_dim, kv_head, static_cast<size_t>(position));
+}
+}  // namespace
+
 // T-2113 (B5, design Sec4.2/Sec6.2/Sec10 B5): the full definition of the opaque token
 // gpu_port.h forward-declares. Every field is FINISH-phase-only state that only exists
 // once Submit has recorded and closed the command list -- see gpu_port.h's own comment
 // on `RunLayerLoopGpuSubmit`/`RunLayerLoopGpuFinish` for the ownership contract.
-struct GpuLayerLoopInFlight {
-	harness::Device* dev = nullptr;
-	uint64_t fence_val = 0;
+//
+// From G3 (plan §4.4, *The finish made structural*): the record a GpuInFlightToken carries. It
+// derives from GpuInFlightPayload, which holds the GpuSubmission Submit() returned (so the fence
+// value lives there, not here), and only the token can construct it (GpuInFlightToken::Make). It
+// also carries the call's own timing (decision 80), published by the finish tail.
+struct GpuLayerLoopInFlight final : public GpuInFlightPayload {
+	harness::Device* const dev;
+	GpuCallTiming timing{};
+	std::vector<double> per_dispatch_ms;
 	uint32_t dispatch_count_this_call = 0;
 	Microsoft::WRL::ComPtr<ID3D12Resource> seq_readback;
 	Microsoft::WRL::ComPtr<ID3D12Resource> kv_readback;
@@ -1597,6 +1655,30 @@ struct GpuLayerLoopInFlight {
 	Microsoft::WRL::ComPtr<ID3D12Resource> work_scratch_uav;
 	Microsoft::WRL::ComPtr<ID3D12Resource> lw_upload_keep_alive;
 	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> upload_keep_alive;
+	// review-g23 F1: the caller-owned buffers the work binds (the K/V buffer, the model's weights and
+	// rope tables, the adapter's buffers, a pooled holder's table buffer). A handle is never released
+	// while Submitted, so these add nothing on a confirmed finish; when the record's wait strands, the
+	// record goes to the device's graveyard and these stay alive with it, whatever the handles do
+	// next. A fixed array, so filling it never allocates or throws.
+	Microsoft::WRL::ComPtr<ID3D12Resource> external_keep_alive[7];
+	void KeepExternalsAlive(ID3D12Resource* kv, ID3D12Resource* weights, ID3D12Resource* rope_cos,
+	                        ID3D12Resource* rope_sin, const GpuAdapterBridge* adapter,
+	                        const GpuPagedKvBinding* paged_kv) noexcept {
+		ID3D12Resource* const bufs[7] = {kv,
+		                                 weights,
+		                                 rope_cos,
+		                                 rope_sin,
+		                                 adapter ? adapter->lora_ab_resident : nullptr,
+		                                 adapter ? adapter->fold_resident : nullptr,
+		                                 paged_kv ? paged_kv->table_resident : nullptr};
+		for (int i = 0; i < 7; ++i) external_keep_alive[i] = bufs[i];
+	}
+
+private:
+	friend class harness::BasicGpuInFlightToken<GpuLayerLoopInFlight>;
+	GpuLayerLoopInFlight(harness::GpuSubmission&& submission, harness::Device* device,
+	                     const GpuCallTiming& call_timing) noexcept
+	    : GpuInFlightPayload(std::move(submission)), dev(device), timing(call_timing) {}
 };
 
 // T-2113 (B10 lever 1b): the group-cooperative lane count for the fused stage-1 reduction
@@ -1714,8 +1796,8 @@ void RecordOneTokenFullDepthDispatchBody(
 		                        NQH,        width_u32, I,  N,  lanes,          Q_WIDTH};
 		dev.list->SetComputeRoot32BitConstants(0, 12, consts, 0);
 		dev.list->SetPipelineState(pso);
-		dev.list->Dispatch(num_groups, 1, 1);
-		dev.list->ResourceBarrier(1, &global_uav_barrier);
+		harness::RecordDispatch(dev.list.Get(), num_groups, 1, 1);
+		harness::RecordBarriers(dev.list.Get(), 1, &global_uav_barrier);
 	};
 	auto bind_and_dispatch_tail = [&](ID3D12PipelineState* pso, uint32_t layer_index,
 	                                   std::initializer_list<TailAdapterSlot> slots) {
@@ -1765,8 +1847,8 @@ void RecordOneTokenFullDepthDispatchBody(
 		consts[27] = Q_WIDTH;
 		dev.list->SetComputeRoot32BitConstants(0, 28, consts, 0);
 		dev.list->SetPipelineState(pso);
-		dev.list->Dispatch(1, 1, 1);
-		dev.list->ResourceBarrier(1, &global_uav_barrier);
+		harness::RecordDispatch(dev.list.Get(), 1, 1, 1);
+		harness::RecordBarriers(dev.list.Get(), 1, &global_uav_barrier);
 	};
 
 	const uint32_t KV2 = 2u * NH * HD;
@@ -1878,11 +1960,30 @@ struct GpuLayerLoopChunkOpenState {
 	Microsoft::WRL::ComPtr<ID3D12Resource> scratch_layout_buf;
 	Microsoft::WRL::ComPtr<ID3D12Resource> lw_upload_keep_alive;
 	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> upload_keep_alive;
+	// A pooled holder's table buffer when this submission uploads it (null otherwise): the readback
+	// transitions it back to COMMON, its resting state, in the same list (see the upload below).
+	ID3D12Resource* kv_table_uploaded = nullptr;
 	// Set immediately after this call's command-list Reset succeeds, and never before: a throw
 	// that leaves it false reached no open list, so the recording window's cleanup
 	// (AbandonRecording) leaves the list alone.
 	bool list_opened = false;
 };
+
+// The readback's table barrier: when this submission uploaded a pooled holder's table buffer, the
+// transition that returns it to COMMON after the last dispatch read it (PrepareGpuLayerLoopChunkOpenState,
+// the table upload). Writes it to `*out` and returns 1, or returns 0 when the table was not uploaded.
+namespace {
+uint32_t TableBackToCommonBarrier(const GpuLayerLoopChunkOpenState& state, D3D12_RESOURCE_BARRIER* out) {
+	if (state.kv_table_uploaded == nullptr) return 0;
+	*out = D3D12_RESOURCE_BARRIER{};
+	out->Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	out->Transition.pResource = state.kv_table_uploaded;
+	out->Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+	out->Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
+	out->Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	return 1;
+}
+}  // namespace
 
 // `dev` is the process's submission device, obtained once by the caller (harness::GetDevice()), so
 // one submission makes at most one attempt at a first-time device setup: a setup that ran out of
@@ -1892,7 +1993,18 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
     superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
     uint32_t num_hidden_layers, uint32_t layer_budget, size_t hidden_size, size_t head_dim,
     size_t num_key_value_heads, size_t intermediate_size, int64_t context_cap,
-    const superslm::SslmTensorManifest& rope_tables, uint8_t* workspace, size_t workspace_size,
+    const superslm::SslmTensorManifest& rope_tables,
+    // Paged-KV plan (rev 16.1) §4 items 1, 2 and 6a: the K/V page view over the host mirror
+    // (`pool_base` is the mirror, `page_table` the table the shaders read as KvPageTable), and the
+    // mirror's size in bytes -- the size of the device K/V buffer the view addresses. A legacy caller
+    // passes GpuOnePageView(workspace, workspace_size, context_cap) and workspace_size.
+    const superslm::KvPageView& kv_view, size_t kv_host_bytes,
+    // Paged-KV plan §4 items 5 and 6a, step G3: a pooled holder's own per-sequence table buffer
+    // (null for every one-page view, which keeps the per-call upload of its one constant entry);
+    // whether this submission uploads the view's mapped entries into it at its head (the holder's
+    // mappings changed since its last submission); and the rows this call and the rest of its
+    // chunk write from `context_length` on, for the chunk-wide coverage twin (1 for a decode).
+    ID3D12Resource* kv_table_resident, bool kv_table_upload, uint32_t coverage_tokens,
     ID3D12Resource* external_kv_resident, bool* io_external_kv_needs_resume_barrier,
     ID3D12Resource* external_weights_resident, ID3D12Resource* external_rope_cos_resident,
     ID3D12Resource* external_rope_sin_resident, bool external_rope_has,
@@ -1936,8 +2048,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// rejected by any guard below never reaches the recording-window reset further down, and
 	// without this line would report the PREVIOUS successful call's own stale timing rather than
 	// the honest "nothing was timed" answer `LastCallTiming()`'s own header comment documents.
-	g_last_call_timing = GpuCallTiming{};
-	g_last_call_per_dispatch_ms.clear();
+	PublishEmptyCallTimingNoThrow();
 	// T-2052 (Claude/Poirot/36b9327-gpu-serial-port-reconfirmation-review.md,
 	// M1, correcting T-2049's own N1): CPU parity, corrected a SECOND time.
 	// T-2049's own comment here claimed "All eight [guards] now run here" --
@@ -1992,17 +2103,27 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// overflowing product returns CPU's own InvalidContextCap, never
 	// silently wrapping into a workspace_size comparison that could pass on
 	// a wrapped-small value.
+	//
+	// Paged-KV plan §4 item 6a (G2): guard 5's view meaning, the CPU's (§3.2 item 2, `RunLayerLoopImpl`
+	// (`forward_sites.cpp`)). The product is the PER-PAGE K/V size,
+	// `num_hidden_layers * page_positions * num_key_value_heads * head_dim * 2`, checked against the
+	// view's `page_bytes`; a page size below one position is refused with the overflow branch's own
+	// InvalidContextCap, and a null pool or table with WorkspaceTooSmall. For a legacy sequence's
+	// one-page view `page_positions` is its own cap and `page_bytes` its own buffer size, so the product,
+	// the statuses and their order are exactly the pre-G2 ones. A pool smaller than one whole-cap block is
+	// therefore not refused here (§4 item 6a). The page-size test rides inside the overflow branch's one
+	// return rather than adding a second.
 	{
 		size_t kv_bytes_needed = static_cast<size_t>(num_hidden_layers);
-		const size_t kv_factors[] = {static_cast<size_t>(context_cap), num_key_value_heads, head_dim, 2u};
+		const size_t kv_factors[] = {static_cast<size_t>(kv_view.page_positions), num_key_value_heads, head_dim, 2u};
 		for (size_t factor : kv_factors) {
-			if (factor != 0 && kv_bytes_needed > SIZE_MAX / factor) {
+			if (kv_view.page_positions < 1 || (factor != 0 && kv_bytes_needed > SIZE_MAX / factor)) {
 				return superslm::SslmForwardStatus::InvalidContextCap;  // WorkspaceSizeOrOverflow (overflow branch)
 			}
 			kv_bytes_needed *= factor;
 		}
-		if (workspace == nullptr) return superslm::SslmForwardStatus::WorkspaceTooSmall;  // WorkspaceSizeOrOverflow
-		if (workspace_size < kv_bytes_needed) return superslm::SslmForwardStatus::WorkspaceTooSmall;  // WorkspaceSizeOrOverflow
+		if (kv_view.pool_base == nullptr || kv_view.page_table == nullptr) return superslm::SslmForwardStatus::WorkspaceTooSmall;  // WorkspaceSizeOrOverflow
+		if (kv_view.page_bytes < kv_bytes_needed) return superslm::SslmForwardStatus::WorkspaceTooSmall;  // WorkspaceSizeOrOverflow
 	}
 	// HiddenCodesNull (the null-hidden_codes guard in `RunLayerLoopImpl`
 	// (`forward_sites.cpp`)) --
@@ -2027,15 +2148,19 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 		return superslm::SslmForwardStatus::KvCapacityExhausted;  // KvCapacityExhausted
 	}
 	// KvPageUnmapped (the coverage guard in `RunLayerLoopImpl` (`forward_sites.cpp`), paged-KV
-	// plan §3.2 item 5): the twin over this sequence's constant one-page view (`mapped_pages = 1`,
-	// `page_positions` = the sequence's own cap). KvCapacityExhausted above implies it, so it cannot
-	// fire until the GPU slice binds it to the sequence's page table (plan steps G2/G3).
-	{
-		const int64_t mapped_pages = 1;
-		const int64_t page_positions = context_cap;
-		if (seq.context_length + 1 > mapped_pages * page_positions) {
-			return superslm::SslmForwardStatus::KvPageUnmapped;  // KvPageUnmapped
-		}
+	// plan §3.2 items 4-5): from G2 the twin evaluates the call's real view (§4 item 6a). From G3 it is
+	// the CHUNK-WIDE form (§4 item 6a, before paged prefill): every row this call and the rest of its
+	// chunk write, `[context_length, context_length + coverage_tokens)` clamped to the cap, lies in a
+	// mapped logical page (kv_pool::CoverageRefused, src/gpu/gpu_kv_pool_geometry.h). For a decode
+	// (`coverage_tokens == 1`) that is the CPU's own single-row form, `context_length / page_positions
+	// < mapped_pages`. `context_length >= 0` and `page_positions >= 1` are established above. Checked
+	// before any recording, so a view one page short is refused before any dispatch and before the
+	// shaders could read a table entry past the mapped ones. For a legacy sequence's one-page view
+	// (one page of B = its own cap) KvCapacityExhausted above already implies it, and the cap clamp
+	// keeps it so for a chunk.
+	if (kv_pool::CoverageRefused(seq.context_length, coverage_tokens, context_cap, kv_view.page_positions,
+	                             kv_view.mapped_pages)) {
+		return superslm::SslmForwardStatus::KvPageUnmapped;  // KvPageUnmapped
 	}
 	static_assert(static_cast<int>(superslm_gpu::GpuLayerLoopGuard::kCount) == 10,
 	              "RunLayerLoopGpu's own guard ladder above must implement exactly as many guards "
@@ -2340,8 +2465,8 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	const bool kv_fast_hit = !external_kv && !fresh_sequence &&
 	                          SameModelFastPathAllowed(model_generation, fresh_sequence, g_resident_kv.generation) &&
 	                          g_resident_kv.valid &&
-	                          g_resident_kv.src_workspace == workspace &&
-	                          g_resident_kv.src_size == workspace_size;
+	                          g_resident_kv.src_workspace == kv_view.pool_base &&
+	                          g_resident_kv.src_size == kv_host_bytes;
 	g_last_kv_upload_was_skipped = kv_fast_hit;
 
 	// T-2039/T-2049 (N6, Claude/Poirot/34ef30f-gpu-serial-port-confirmation-
@@ -2541,8 +2666,11 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// window. (The zero-reset for a REJECTED call lives at this function's own entry, above,
 	// alongside `g_last_weight_upload_was_skipped`'s own -- not here, since a rejected call never
 	// reaches this line at all.)
-	SSLM_GPU_HR(dev.alloc->Reset());
-	SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
+	// From G3 the reset is the ledger's (plan §4.4): BeginRecording() refuses it, before resetting
+	// anything, on a stranded ledger (GpuSubmissionStrandedError, rule 0), inside a C ABI call that
+	// passed no EntrySubmitGuard, or while the device's last submission is unobserved
+	// (PoolSubmitContractError).
+	dev.BeginRecording();
 	out_state->list_opened = true;
 
 	// EVERY variable below this point that the command list's own GPU virtual addresses
@@ -2624,14 +2752,9 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 		Microsoft::WRL::ComPtr<ID3D12Resource> lw_default =
 		    dev.MakeBuffer(lw_bytes.size(), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_NONE,
 		                    D3D12_RESOURCE_STATE_COPY_DEST);
-		dev.list->CopyResource(lw_default.Get(), lw_upload_keep_alive.Get());
-		D3D12_RESOURCE_BARRIER lw_barrier{};
-		lw_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-		lw_barrier.Transition.pResource = lw_default.Get();
-		lw_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-		lw_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-		lw_barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-		dev.list->ResourceBarrier(1, &lw_barrier);
+		harness::RecordCopyResource(dev.list.Get(), lw_default.Get(), lw_upload_keep_alive.Get());
+		harness::RecordTransition(dev.list.Get(), lw_default.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+		                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 		lw_buf = lw_default;
 		g_resident_weights.lw_buf = lw_buf;
 		g_resident_weights.bytes = std::move(lw_bytes);
@@ -2672,11 +2795,44 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 		g_resident_rope.generation = model_generation;  // (T-2577)
 	}
 	scratch_layout_buf = dev.Upload(scratch_layout_bytes.data(), scratch_layout_bytes.size());
+	// Paged-KV plan §4 items 1-2 (G2): the K/V page table the shaders read as KvPageTable (t10) -- the
+	// view's `mapped_pages` entries, one uint physical page each. Uploaded per call on the same
+	// UPLOAD-heap idiom as every other per-call SRV above and kept alive to the fence the same way
+	// (`upload_keep_alive`). A legacy dedicated sequence's view is the one-page view, whose table is
+	// the one constant entry {0} (GpuOnePageView), so its addresses are the pre-G2 flat ones.
+	// G3 (§4 item 5): a pooled holder binds its own per-sequence table buffer instead. Its entries are
+	// uploaded here only when its mappings changed since its last submission (`kv_table_upload`): the
+	// staging copy is made now, and the copy into the table buffer is recorded at the head of the list,
+	// after its Reset (below). Otherwise the buffer already holds the view's entries and is bound as is.
+	Microsoft::WRL::ComPtr<ID3D12Resource> kv_page_table_buf;
+	if (kv_table_resident == nullptr || kv_table_upload) {
+		kv_page_table_buf =
+		    dev.Upload(kv_view.page_table, static_cast<size_t>(kv_view.mapped_pages) * sizeof(uint32_t));
+		upload_keep_alive.push_back(kv_page_table_buf);
+	}
+	if (kv_table_resident != nullptr && kv_table_upload) {
+		// The table buffer rests in COMMON between submissions: it is created there, and the submission
+		// that uploads it returns it there explicitly, at its readback (`kv_table_uploaded`). It does not
+		// rely on a buffer decaying to COMMON when its list completes: an explicit state persists across
+		// submissions, which is the premise of the K/V resume latch, so a table left in
+		// NON_PIXEL_SHADER_RESOURCE would make the next upload's copy write a buffer that is not in
+		// COPY_DEST (the box's GPU-based validation, 1.13 G4: every re-upload after a page was mapped).
+		// From COMMON the copy promotes it to COPY_DEST implicitly, and one transition leaves it readable
+		// by every dispatch below. A submission that does not upload it reads it from COMMON by implicit
+		// promotion, which ends with the submission.
+		harness::RecordCopyBufferRegion(dev.list.Get(), kv_table_resident, 0, kv_page_table_buf.Get(), 0,
+		                                static_cast<UINT64>(kv_view.mapped_pages) * sizeof(uint32_t));
+		harness::RecordTransition(dev.list.Get(), kv_table_resident, D3D12_RESOURCE_STATE_COPY_DEST,
+		                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		out_state->kv_table_uploaded = kv_table_resident;
+	}
 	seq_uav = MakeInitializedUav(dev, seq_bytes, upload_keep_alive);
+	harness::NameBuffer(seq_uav.Get(), L"SuperSLM SeqState");
 	// T-2101: no host content -- see the header comment at `kv_fast_hit`'s own declaration above.
 	scratch_uav = dev.MakeBuffer(scratch_layout.total, D3D12_HEAP_TYPE_DEFAULT,
 	                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
 	                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	harness::NameBuffer(scratch_uav.Get(), L"SuperSLM LayerScratch");
 	// T-2101 (D-SLM3301/D-SLM3294): device-resident K/V. A cache hit reuses the SAME DEFAULT-heap
 	// buffer every call -- no pack, no upload -- and only needs a state transition back to
 	// UNORDERED_ACCESS, since the previous call's own targeted readback (below) left it in
@@ -2696,31 +2852,22 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 		kv_uav = external_kv_resident;
 		const bool needs_resume =
 		    io_external_kv_needs_resume_barrier != nullptr && *io_external_kv_needs_resume_barrier;
-		if (needs_resume) {
-			D3D12_RESOURCE_BARRIER kv_resume_barrier{};
-			kv_resume_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-			kv_resume_barrier.Transition.pResource = kv_uav.Get();
-			kv_resume_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
-			kv_resume_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-			kv_resume_barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-			dev.list->ResourceBarrier(1, &kv_resume_barrier);
-		}
+		harness::RecordKvTransitionFromLatch(dev.list.Get(), kv_uav.Get(), needs_resume,
+		                                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 	} else if (kv_fast_hit) {
 		kv_uav = g_resident_kv.kv_buf;
-		D3D12_RESOURCE_BARRIER kv_resume_barrier{};
-		kv_resume_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-		kv_resume_barrier.Transition.pResource = kv_uav.Get();
-		kv_resume_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
-		kv_resume_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-		kv_resume_barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-		dev.list->ResourceBarrier(1, &kv_resume_barrier);
+		harness::RecordTransition(dev.list.Get(), kv_uav.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+		                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 	} else {
-		std::vector<uint8_t> kv_bytes(workspace, workspace + workspace_size);
+		// Paged-KV plan §4 item 2 (G2): this pre-1.0 process-wide path uploads the whole host buffer the
+		// view addresses (for its one-page view, the caller's flat workspace, as before) and is addressed
+		// through the same table as every other path.
+		std::vector<uint8_t> kv_bytes(kv_view.pool_base, kv_view.pool_base + kv_host_bytes);
 		kv_uav = MakeInitializedUav(dev, kv_bytes, upload_keep_alive);
 		g_resident_kv.kv_buf = kv_uav;
 		g_resident_kv.valid = true;
-		g_resident_kv.src_workspace = workspace;
-		g_resident_kv.src_size = workspace_size;
+		g_resident_kv.src_workspace = kv_view.pool_base;
+		g_resident_kv.src_size = kv_host_bytes;
 		g_resident_kv.generation = model_generation;  // (T-2577)
 	}
 	// T-2039: WorkScratch is transient, per-dispatch scratch -- every byte is
@@ -2748,6 +2895,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	work_scratch_uav = dev.MakeBuffer(work_total, D3D12_HEAP_TYPE_DEFAULT,
 	                                        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
 	                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	harness::NameBuffer(work_scratch_uav.Get(), L"SuperSLM WorkScratch");
 
 	auto& attn_norm_pipe = harness::GetOrBuildComposedPipeline("attn_norm_site");
 
@@ -2763,11 +2911,11 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// recording window opens and none is reassigned inside it. That removes
 	// 12 * 24 * layers_to_record API calls per call from `record_ms`, re-derived from
 	// Claude/Laplace/t2105-gpu-speed-ceiling-2026-08-14.md Sec2 change 2.
-	dev.list->SetComputeRootShaderResourceView(1, lw_buf->GetGPUVirtualAddress());
-	dev.list->SetComputeRootShaderResourceView(2, layout_buf->GetGPUVirtualAddress());
-	dev.list->SetComputeRootShaderResourceView(3, rope_buf->GetGPUVirtualAddress());
-	dev.list->SetComputeRootShaderResourceView(4, model_const_buf->GetGPUVirtualAddress());
-	dev.list->SetComputeRootShaderResourceView(5, silu_lut_buf->GetGPUVirtualAddress());
+	harness::BindRootSrv(dev.list.Get(), 1, lw_buf.Get());
+	harness::BindRootSrv(dev.list.Get(), 2, layout_buf.Get());
+	harness::BindRootSrv(dev.list.Get(), 3, rope_buf.Get());
+	harness::BindRootSrv(dev.list.Get(), 4, model_const_buf.Get());
+	harness::BindRootSrv(dev.list.Get(), 5, silu_lut_buf.Get());
 	// T-2113 (B5, design Sec6.2/Sec1): this IS the real async resume rebind -- every SEPARATE
 	// `sslm_decode_step_gpu` call reaches this same site fresh (its own `dev.list->Reset()`,
 	// above), unconditionally, exactly matching design Sec6.2's own "rebind never conditioned
@@ -2799,15 +2947,15 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 #endif
 	// The swapped-SRV-rebind violation pin (T-2106): cos/sin land in each other's slot.
 	if (b5_async_swap_srv_rebind) {
-		dev.list->SetComputeRootShaderResourceView(6, sin_table_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootShaderResourceView(7, cos_table_buf->GetGPUVirtualAddress());
+		harness::BindRootSrv(dev.list.Get(), 6, sin_table_buf.Get());
+		harness::BindRootSrv(dev.list.Get(), 7, cos_table_buf.Get());
 	} else {
-		dev.list->SetComputeRootShaderResourceView(6, cos_table_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootShaderResourceView(7, sin_table_buf->GetGPUVirtualAddress());
+		harness::BindRootSrv(dev.list.Get(), 6, cos_table_buf.Get());
+		harness::BindRootSrv(dev.list.Get(), 7, sin_table_buf.Get());
 	}
-	dev.list->SetComputeRootShaderResourceView(8, scratch_layout_buf->GetGPUVirtualAddress());
-	dev.list->SetComputeRootUnorderedAccessView(9, seq_uav->GetGPUVirtualAddress());
-	dev.list->SetComputeRootUnorderedAccessView(10, scratch_uav->GetGPUVirtualAddress());
+	harness::BindRootSrv(dev.list.Get(), 8, scratch_layout_buf.Get());
+	harness::BindRootUav(dev.list.Get(), 9, seq_uav.Get());
+	harness::BindRootUav(dev.list.Get(), 10, scratch_uav.Get());
 	// The dropped-UAV-rebind violation pin (T-2106): kv_uav's own rebind is replaced with a bind
 	// to a DIFFERENT, still-valid, still-live resource (work_scratch_uav) rather than left fully
 	// unbound -- a raw root UAV descriptor left undefined after SetComputeRootSignature is an
@@ -2816,9 +2964,8 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// own subsequent K/V reads/writes land in transient scratch instead of the persistent K/V
 	// store, a real and safely-producible wrong-answer (StandardsDocument.md Sec5.4's own
 	// must-reject construction discipline).
-	dev.list->SetComputeRootUnorderedAccessView(
-	    11, (b5_async_drop_uav_rebind ? work_scratch_uav : kv_uav)->GetGPUVirtualAddress());
-	dev.list->SetComputeRootUnorderedAccessView(12, work_scratch_uav->GetGPUVirtualAddress());
+	harness::BindRootUav(dev.list.Get(), 11, (b5_async_drop_uav_rebind ? work_scratch_uav : kv_uav).Get());
+	harness::BindRootUav(dev.list.Get(), 12, work_scratch_uav.Get());
 	// T-2113 (B6b, design Sec8): the adapter-delta dispatch's own two read-only inputs (t8
 	// LoraAB, t9 Fold), bound in the SAME once-per-call hoist as every other root SRV/UAV
 	// above -- every composed-pipeline root signature carries these two params now (B6b's own
@@ -2829,10 +2976,23 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// binds anyway -- never read by any PSO that does not itself declare t8/t9, i.e. never
 	// read at all when no adapter-delta dispatch is ever issued (see the per-layer loop
 	// below), so this fallback binding is inert, not merely unread-in-practice.
-	dev.list->SetComputeRootShaderResourceView(
-	    13, (adapter_bridge ? adapter_bridge->lora_ab_resident : model_const_buf.Get())->GetGPUVirtualAddress());
-	dev.list->SetComputeRootShaderResourceView(
-	    14, (adapter_bridge ? adapter_bridge->fold_resident : model_const_buf.Get())->GetGPUVirtualAddress());
+	harness::BindRootSrv(dev.list.Get(), 13,
+	                     adapter_bridge ? adapter_bridge->lora_ab_resident : model_const_buf.Get());
+	harness::BindRootSrv(dev.list.Get(), 14, adapter_bridge ? adapter_bridge->fold_resident : model_const_buf.Get());
+	// Paged-KV plan §4 item 1 (G2): the page table (t10) and the two page constants (b1), call-constant
+	// like every binding above, so set once here. `page_positions` is at most the cap (one page) and
+	// fits a uint as the cap does; `page_bytes` is the stride, read only through a nonzero table entry,
+	// and a pool whose bytes pass 2^32 is refused at create (§4 item 3), so the clamp below changes
+	// nothing a shader reads (a one-page view's table entry is 0).
+	harness::BindRootSrv(dev.list.Get(), harness::Device::kComposedRootParamKvPageTable,
+	                     kv_table_resident != nullptr ? kv_table_resident : kv_page_table_buf.Get());
+	{
+		const uint32_t page_constants[harness::Device::kComposedPageConstantCount] = {
+		    static_cast<uint32_t>(kv_view.page_positions),
+		    static_cast<uint32_t>(std::min<size_t>(kv_view.page_bytes, UINT32_MAX))};
+		dev.list->SetComputeRoot32BitConstants(harness::Device::kComposedRootParamKvPageConstants,
+		                                       harness::Device::kComposedPageConstantCount, page_constants, 0);
+	}
 
 	out_state->H = H;
 	out_state->HD = HD;
@@ -2873,6 +3033,14 @@ namespace {
 // file-scope statics `g_resident_weights`/`g_resident_kv`/`g_last_weight_upload_was_skipped`
 // already declared above), so this needed no parameters.
 void InvalidateResidencyCachesOnThrow() {
+	// review-g23 F1: on a stranded process device the executed work may still read the resident
+	// buffers, so the cache's references are leaked rather than released (the device is lost by
+	// contract, rule 0).
+	if (const harness::SubmissionLedger* ledger = harness::SingletonLedgerIfConstructed();
+	    ledger != nullptr && ledger->Stranded()) {
+		harness::Device& dev = harness::GetDevice();
+		dev.KeepResourcesAliveStranded(g_resident_weights.lw_buf, g_resident_kv.kv_buf);
+	}
 	g_resident_weights.lw_buf.Reset();
 	g_resident_weights.valid = false;
 	g_resident_kv.kv_buf.Reset();
@@ -2886,6 +3054,47 @@ void InvalidateResidencyCachesOnThrow() {
 	g_last_rope_upload_was_skipped = false;
 	g_last_kv_upload_was_skipped = false;
 }
+
+// review-g23 F1: a submitter's per-call resources, kept alive when the call executed work and left
+// the ledger stranded. Declared after the resources it names, so its destructor runs first on
+// every exit: once a Signal or a wait cannot be confirmed the GPU may still read and write them,
+// and the device is lost by contract (rule 0), so they are leaked rather than released. A call that
+// executed nothing, or whose submission is confirmed, keeps nothing.
+class StrandedTailKeepAlive {
+public:
+	using Local = const Microsoft::WRL::ComPtr<ID3D12Resource>*;
+	// `externals`: the caller-owned buffers the work binds (the model's weights and rope tables, the
+	// adapter's buffers, a pooled holder's table buffer), each null when not bound; a handle's
+	// teardown would otherwise release them under the stranded work.
+	StrandedTailKeepAlive(harness::Device& dev, uint64_t counter_before, const GpuLayerLoopChunkOpenState& state,
+	                      Local a, Local b, Local c, ID3D12Resource* weights, ID3D12Resource* rope_cos,
+	                      ID3D12Resource* rope_sin, const GpuAdapterBridge* adapter,
+	                      const GpuPagedKvBinding* paged_kv) noexcept
+	    : dev_(dev),
+	      counter_before_(counter_before),
+	      state_(state),
+	      locals_{a, b, c},
+	      externals_{weights, rope_cos, rope_sin, adapter ? adapter->lora_ab_resident : nullptr,
+	                 adapter ? adapter->fold_resident : nullptr, paged_kv ? paged_kv->table_resident : nullptr} {}
+	StrandedTailKeepAlive(const StrandedTailKeepAlive&) = delete;
+	StrandedTailKeepAlive& operator=(const StrandedTailKeepAlive&) = delete;
+	~StrandedTailKeepAlive() {
+		if (!dev_.StrandedSince(counter_before_)) return;
+		dev_.KeepResourcesAliveStranded(state_.seq_uav, state_.kv_uav, state_.scratch_uav, state_.work_scratch_uav,
+		                                state_.layout_buf, state_.rope_buf, state_.model_const_buf,
+		                                state_.silu_lut_buf, state_.scratch_layout_buf, state_.lw_upload_keep_alive);
+		for (const auto& buf : state_.upload_keep_alive) dev_.KeepResourcesAliveStranded(buf);
+		for (Local buf : locals_) dev_.KeepResourcesAliveStranded(*buf);
+		for (ID3D12Resource* buf : externals_) dev_.KeepOneResourceAliveStranded(buf);
+	}
+
+private:
+	harness::Device& dev_;
+	const uint64_t counter_before_;
+	const GpuLayerLoopChunkOpenState& state_;
+	const Local locals_[3];
+	ID3D12Resource* const externals_[6];
+};
 
 // The one cleanup every recording-window catch clause runs, whatever it caught: invalidate the
 // residency caches, then close the process's command list if this call opened it
@@ -2925,40 +3134,34 @@ superslm::SslmForwardStatus ClassifyForwardFault(harness::Device& dev, bool stra
 	    is_stranded, removed, kind == harness::GpuFaultKind::Allocation));
 }
 
-// The status for a fault in a submission tail -- the Close, ExecuteCommandLists, the fence Signal
-// and the in-flight token's allocation that follow a recording window -- shared by both tails.
-// Call only from inside a catch handler. Where the fault struck decides the stranded input:
+// The status for a fault in a submission tail -- the Close, the ledger's Submit() and the in-flight
+// token's construction that follow a recording window -- shared by both tails. Call only from
+// inside a catch handler, after the try's locals (the GpuSubmission or GpuInFlightToken the tail
+// made) have been destroyed: each drains its submission through the non-throwing drain as it is
+// destroyed. Where the fault struck decides the stranded input:
 //   - before the Close was attempted (the pre-Close pin seam): the list is still recording, so it
 //     is closed here through CloseListConfirmed;
 //   - at the Close (CloseListOrThrow): its exception already carries the list's confirmed state;
-//   - after ExecuteCommandLists, with the Signal done: the submission is waited out at its own
-//     fence value;
-//   - after ExecuteCommandLists, with the Signal failed: a FRESH fence value is signalled and
-//     waited out (T-2192 T2(b): a retry at the failed call's value may be a silent no-op).
+//   - after ExecuteCommandLists (`executed`: Submit() reached its execute): from G3 every recovery
+//     is the ledger's (plan §4.4, *The ledger on the fault paths*). Submit() has already retried a
+//     failed Signal at a fresh value and, recovered, drained it before rethrowing; a Submit() that
+//     could not recover threw GpuSubmissionStrandedError with the ledger stranded; and work that
+//     Submit() handed out was drained by its token's destructor during the unwinding. So nothing
+//     is left in flight here, and the ledger alone says whether the work's completion was
+//     confirmed. Decision (3.6g's M3, g1d's carried ambiguity): the caller's own tail
+//     `Wait(submitted_)` the fault-path table names is dropped as redundant -- every path that
+//     reaches this function has already observed or stranded the submission -- so 3.6g's
+//     still-blocked leg separates "Submit() rethrows without its drain" (M3).
 // Work whose completion cannot be confirmed is stranded (rule 0): the caller is about to release
 // resources that work reads. Otherwise the classifier decides by the exception's kind: a Signal
 // that failed with E_OUTOFMEMORY and recovered is rule 2, any other recovered failure rule 3.
 superslm::SslmForwardStatus SubmissionTailFaultStatus(harness::Device& dev, bool close_attempted,
-                                                      bool executed, bool signaled) {
+                                                      bool executed) {
 	bool stranded = false;
 	if (!executed) {
 		if (!close_attempted) stranded = !dev.CloseListConfirmed().closed;
 	} else {
-		UINT64 wait_value = dev.fence_val;
-		bool wait_possible = true;
-		if (!signaled) {
-			wait_value = ++dev.fence_val;
-			wait_possible = SUCCEEDED(dev.queue->Signal(dev.fence.Get(), wait_value));
-		}
-		if (!wait_possible) {
-			stranded = true;
-		} else if (dev.fence->GetCompletedValue() < wait_value) {
-			if (SUCCEEDED(dev.fence->SetEventOnCompletion(wait_value, dev.fence_event))) {
-				WaitForSingleObject(dev.fence_event, INFINITE);
-			} else {
-				stranded = true;
-			}
-		}
+		stranded = dev.ledger().Stranded();
 	}
 	return ClassifyForwardFault(dev, stranded);
 }
@@ -2984,12 +3187,13 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
     size_t num_key_value_heads, size_t intermediate_size, int64_t context_cap,
     const superslm::SslmTensorManifest& rope_tables, uint8_t* workspace, size_t workspace_size,
     ID3D12Resource* external_kv_resident, bool* io_external_kv_needs_resume_barrier,
-    GpuLayerLoopInFlight** out_inflight, ID3D12Resource* external_weights_resident,
+    GpuInFlightToken* out_inflight, ID3D12Resource* external_weights_resident,
     ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
     bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
     const GpuAdapterBridge* adapter_bridge, size_t q_width, uint8_t* out_q_codes,
-    size_t out_q_codes_capacity, uint64_t model_generation, bool model_has_qk_norm) {
-	if (out_inflight) *out_inflight = nullptr;
+    size_t out_q_codes_capacity, uint64_t model_generation, bool model_has_qk_norm,
+    const GpuPagedKvBinding* paged_kv) {
+	if (out_inflight) *out_inflight = GpuInFlightToken();
 	// T-2169 (Rung 2b-prep, D-SLM3632/D-SLM3633): the guard ladder, the weight/rope/K-V
 	// pack-and-residency decision, and the once-per-call root-signature/binding setup now live in
 	// PrepareGpuLayerLoopChunkOpenState (above) -- a mechanical extraction, called here exactly
@@ -3023,10 +3227,18 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	// the sibling does.
 	const bool kv_resume_barrier_entry_value =
 	    io_external_kv_needs_resume_barrier != nullptr && *io_external_kv_needs_resume_barrier;
+	// Paged-KV plan §4 items 2 and 6 (G2): this flat-workspace entry (every legacy dedicated sequence
+	// and every pre-1.0 caller) binds the one-page view of its workspace; the ladder, the shaders and
+	// the readback offsets below all address K/V through it. G3: a pooled holder passes its own view
+	// (`paged_kv`), over the pool's host mirror, which is `workspace`.
+	const superslm::KvPageView kv_view =
+	    paged_kv != nullptr ? paged_kv->view : GpuOnePageView(workspace, workspace_size, context_cap);
 	try {
 	const superslm::SslmForwardStatus prep_status = PrepareGpuLayerLoopChunkOpenState(
 	    dev, seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim, num_key_value_heads,
-	    intermediate_size, context_cap, rope_tables, workspace, workspace_size, external_kv_resident,
+	    intermediate_size, context_cap, rope_tables, kv_view, workspace_size,
+	    paged_kv != nullptr ? paged_kv->table_resident : nullptr, paged_kv != nullptr && paged_kv->upload_table,
+	    /*coverage_tokens=*/1u, external_kv_resident,
 	    io_external_kv_needs_resume_barrier, external_weights_resident, external_rope_cos_resident,
 	    external_rope_sin_resident, external_rope_has, external_rope_cos_elems,
 	    external_rope_sin_elems, adapter_bridge, &state, q_width, model_generation);
@@ -3113,23 +3325,18 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	// this call issued wrote at most one new K row and one new V row per (layer, kv_head) it
 	// processed, at `position_u32` (`kv_proj_site.hlsl`'s own write; `rope_guard_site.hlsl`'s own
 	// in-place K rotation touches the SAME row, never a different one) -- the identical
-	// `KvHalfOffsetGpu`/`KvRowOffsetWithinHalfGpu` addressing `KeyRowGpu`/`ValueRowGpu` below use
-	// host-side, so every offset computed here is exact, not an approximation of what changed. ---
+	// page-table addressing (site_common.hlsli KvRowAddrGpu, through this call's view; paged-KV
+	// plan §4 item 6) `KeyRowGpu`/`ValueRowGpu` below use host-side, so every offset computed here is
+	// exact, not an approximation of what changed. ---
 	seq_readback = dev.MakeBuffer(SeqTotalSize(H), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
 	                                    D3D12_RESOURCE_STATE_COPY_DEST);
+	// Paged-KV plan §4 item 6 (G2): through the call's page view, by the shaders' own formula.
 	kv_row_offsets.reserve(static_cast<size_t>(layers_to_record) * NH * 2u);
 	for (uint32_t i = 0; i < layers_to_record; ++i) {
 		const uint32_t l = start_layer + i;
-		const size_t half_off = static_cast<size_t>(l) * static_cast<size_t>(context_cap) *
-		                         static_cast<size_t>(NH) * static_cast<size_t>(HD) * 2u;
-		const size_t k_store_size =
-		    static_cast<size_t>(context_cap) * static_cast<size_t>(NH) * static_cast<size_t>(HD);
 		for (uint32_t h = 0; h < NH; ++h) {
-			const size_t row_off = static_cast<size_t>(h) * static_cast<size_t>(context_cap) *
-			                            static_cast<size_t>(HD) +
-			                        static_cast<size_t>(position_u32) * static_cast<size_t>(HD);
-			kv_row_offsets.push_back(half_off + row_off);                 // K row
-			kv_row_offsets.push_back(half_off + k_store_size + row_off);  // V row
+			kv_row_offsets.push_back(KvViewRowOffset(kv_view, l, 0u, NH, HD, h, position_u32));  // K row
+			kv_row_offsets.push_back(KvViewRowOffset(kv_view, l, 1u, NH, HD, h, position_u32));  // V row
 		}
 	}
 	const size_t kv_readback_bytes = kv_row_offsets.size() * static_cast<size_t>(HD);
@@ -3161,7 +3368,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		q_codes_readback = dev.MakeBuffer(q_codes_readback_bytes, D3D12_HEAP_TYPE_READBACK,
 		                                   D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
 	}
-	D3D12_RESOURCE_BARRIER pre_copy[3]{};
+	D3D12_RESOURCE_BARRIER pre_copy[4]{};
 	pre_copy[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 	pre_copy[0].Transition.pResource = seq_uav.Get();
 	pre_copy[0].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
@@ -3171,11 +3378,12 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	pre_copy[1].Transition.pResource = kv_uav.Get();
 	uint32_t pre_copy_count = 2;
 	if (want_q_codes) {
-		pre_copy[2] = pre_copy[0];
-		pre_copy[2].Transition.pResource = scratch_uav.Get();
-		pre_copy_count = 3;
+		pre_copy[pre_copy_count] = pre_copy[0];
+		pre_copy[pre_copy_count].Transition.pResource = scratch_uav.Get();
+		++pre_copy_count;
 	}
-	dev.list->ResourceBarrier(pre_copy_count, pre_copy);
+	pre_copy_count += TableBackToCommonBarrier(state, &pre_copy[pre_copy_count]);
+	harness::RecordBarriers(dev.list.Get(), pre_copy_count, pre_copy);
 	// T-2113 (B3): kv_uav (whichever buffer it names) is now COPY_SOURCE, same as the
 	// pre-existing g_resident_kv path already left it for kv_fast_hit's own resume
 	// barrier to find on the NEXT call -- latch that fact into the caller-owned flag on
@@ -3183,15 +3391,14 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	if (external_kv_resident != nullptr && io_external_kv_needs_resume_barrier != nullptr) {
 		*io_external_kv_needs_resume_barrier = true;
 	}
-	dev.list->CopyResource(seq_readback.Get(), seq_uav.Get());
+	harness::RecordCopyResource(dev.list.Get(), seq_readback.Get(), seq_uav.Get());
 	for (size_t r = 0; r < kv_row_offsets.size(); ++r) {
-		dev.list->CopyBufferRegion(kv_readback.Get(), r * static_cast<UINT64>(HD), kv_uav.Get(),
-		                            kv_row_offsets[r], HD);
+		harness::RecordCopyBufferRegion(dev.list.Get(), kv_readback.Get(), r * static_cast<UINT64>(HD), kv_uav.Get(),
+		                                kv_row_offsets[r], HD);
 	}
 	if (want_q_codes) {
-		dev.list->CopyBufferRegion(q_codes_readback.Get(), 0, scratch_uav.Get(),
-		                            state.scratch_layout.q_codes,
-		                            static_cast<UINT64>(q_codes_readback_bytes));
+		harness::RecordCopyBufferRegion(dev.list.Get(), q_codes_readback.Get(), 0, scratch_uav.Get(),
+		                                state.scratch_layout.q_codes, static_cast<UINT64>(q_codes_readback_bytes));
 	}
 	} catch (const GpuGemmGroupArithmeticError& e) {
 		// T-2101 (S4, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
@@ -3246,6 +3453,14 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		return ClassifyForwardFault(dev, /*stranded=*/!list_closed);
 	} catch (const std::length_error&) {
 		// A container asked for more than it can hold: an allocation failure, contained as above.
+		const bool list_closed = AbandonRecording(dev, state);
+		return ClassifyForwardFault(dev, /*stranded=*/!list_closed);
+	} catch (const harness::GpuSubmissionStrandedError&) {
+		// GPU paged-KV plan G3 (§4.4, the internal layer's duty): BeginRecording() refused the reset on
+		// a stranded ledger (rule 0) before the list was opened, so nothing was reset or recorded. The
+		// internal layer has no Busy channel; the refusal reaches the caller as the exception itself.
+		// A list this call did open is classified as the runtime_error clause below does.
+		if (!state.list_opened) throw;
 		const bool list_closed = AbandonRecording(dev, state);
 		return ClassifyForwardFault(dev, /*stranded=*/!list_closed);
 	} catch (const std::runtime_error&) {
@@ -3341,8 +3556,18 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	// came from CloseListOrThrow, which has already confirmed the list's state -- a typed HRESULT
 	// failure for a list it confirmed Closed, GpuSubmissionStrandedError for one it could not.
 	bool tail_close_attempted = false;
-	bool tail_executed = false;
-	bool tail_signaled = false;  // the Signal after ExecuteCommandLists succeeded
+	// From G3: whether ExecuteCommandLists ran is read off the ledger's submission counter, which
+	// Submit() advances only after its execute (each catch below compares it).
+	const uint64_t tail_counter_before = dev.submission_counter();
+	// std::addressof, never `&`: ComPtr's operator& releases what it holds.
+	const StrandedTailKeepAlive stranded_keep_alive(dev, tail_counter_before, state, std::addressof(seq_readback),
+	                                                std::addressof(kv_readback),
+	                                                std::addressof(q_codes_readback), external_weights_resident,
+	                                                external_rope_cos_resident, external_rope_sin_resident,
+	                                                adapter_bridge, paged_kv);  // review-g23 F1
+	// Decision 80: this call's own timing, carried by its record and published by the finish
+	// tail, or published here on a catch path as far as the call got.
+	GpuCallTiming call_timing{};
 	try {
 		// T-2195 pertoken pin (Curie): the SAME pre-Close pin seam
 		// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own tail already calls (this file, below) --
@@ -3356,33 +3581,28 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		dev.CloseListOrThrow();
 		tail_list_closed = true;
 		const auto t_record_end = std::chrono::steady_clock::now();
-		g_last_call_timing.record_ms =
+		call_timing.record_ms =
 		    std::chrono::duration<double, std::milli>(t_record_end - t_record_start).count();
 
 		// T-2101: `submit_wait_ms` is CPU time from submission to the fence signaling complete --
 		// submission overhead PLUS actual GPU execution PLUS driver/OS scheduling, NOT a GPU-only
 		// number. `gpu_busy_ms` (below, from the timestamp queries §31's own bracket placed around this
 		// call's first/last dispatch) is the GPU-only figure the roofline comparison is judged against.
-		ID3D12CommandList* lists[] = {dev.list.Get()};
-		dev.queue->ExecuteCommandLists(1, lists);
-		// `ExecuteCommandLists` is only reachable once `Close()` has succeeded (the statement order
-		// above), matching the sibling's own identical assertion.
+		// `Submit()` is only reachable once `Close()` has succeeded (the statement order above),
+		// matching the sibling's own identical assertion. From G3 (plan §4.4) the submission is the
+		// ledger's: ExecuteCommandLists, then a Signal at a fresh value with one fresh-value retry.
 		assert(tail_list_closed);
-		tail_executed = true;
-		SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
-		tail_signaled = true;
+		harness::GpuSubmission submission = dev.Submit();
 		// T-2113 (B5, design Sec6.2): NO fence-wait here -- "records ... submits ... and
 		// returns without waiting for the fence." Everything below used to run
 		// synchronously at this point (the wait, the GPU-timing readback, the SeqState/KV
 		// readback, the sticky-tag decode); it now lives in RunLayerLoopGpuFinish, driven
 		// by the in-flight token this call hands back. `record_ms` is still measured here
 		// (it is host-side recording time, already complete by this point); `submit_wait_ms`/
-		// `gpu_busy_ms`/`readback_ms` are now measured inside Finish, against the SAME
-		// `g_last_call_timing` global every existing caller of the synchronous
-		// `RunLayerLoopGpu` wrapper still reads after ITS OWN Submit+Finish pair completes.
-		std::unique_ptr<GpuLayerLoopInFlight> inflight(new GpuLayerLoopInFlight());
-		inflight->dev = &dev;
-		inflight->fence_val = dev.fence_val;
+		// `gpu_busy_ms`/`readback_ms` are measured inside Finish, into the record's own timing,
+		// which Finish publishes (decision 80).
+		GpuInFlightToken token = GpuInFlightToken::Make(std::move(submission), &dev, call_timing);
+		GpuLayerLoopInFlight* inflight = token.get();
 		inflight->dispatch_count_this_call = dispatch_count_this_call;
 		inflight->seq_readback = seq_readback;
 		inflight->kv_readback = kv_readback;
@@ -3408,26 +3628,31 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		inflight->work_scratch_uav = state.work_scratch_uav;
 		inflight->lw_upload_keep_alive = state.lw_upload_keep_alive;
 		inflight->upload_keep_alive = state.upload_keep_alive;
-		if (out_inflight) *out_inflight = inflight.release();
+		inflight->KeepExternalsAlive(state.kv_uav.Get(), external_weights_resident, external_rope_cos_resident,
+		                             external_rope_sin_resident, adapter_bridge, paged_kv);  // review-g23 F1
+		if (out_inflight) *out_inflight = std::move(token);
 		return superslm::SslmForwardStatus::Ok;
 	} catch (const std::bad_alloc&) {
-		// Reached after Close() and Signal() both succeeded (the in-flight token's allocation) --
-		// mirrors `SubmitOneSubChunkToFullDepthForG5Bridge`'s own identical `bad_alloc` clause
-		// exactly (this file, above): the GPU already has this submission queued against the fence
-		// value just signaled, so every resource this stack is about to release
-		// (`seq_readback`/`kv_readback`/every `state` buffer) must wait the fence out first, rather
-		// than let a GPU-referenced resource's last COM reference drop while the device may still be
-		// using it. SubmissionTailFaultStatus does the wait, and reports a wait it cannot confirm
-		// as a stranded submission.
+		// Reached after Close() (a host allocation failure in the token's construction or its
+		// fields, after Submit() handed its work out) -- mirrors
+		// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own identical `bad_alloc` clause exactly (this
+		// file, below). The GPU already has this submission queued, so every resource this stack is
+		// about to release (`seq_readback`/`kv_readback`/every `state` buffer) must wait the fence
+		// out first. From G3 the submission's own token did that as it was destroyed, during the
+		// unwinding into this clause; SubmissionTailFaultStatus reads the ledger and reports a wait
+		// that could not be confirmed as a stranded submission.
+		const bool tail_executed = dev.submission_counter() != tail_counter_before;
 		InvalidateResidencyCachesOnThrow();
 		if (!tail_executed && external_kv_resident != nullptr &&
 		    io_external_kv_needs_resume_barrier != nullptr) {
 			*io_external_kv_needs_resume_barrier = kv_resume_barrier_entry_value;
 		}
-		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed, tail_signaled);
+		PublishCallTimingNoThrow(call_timing, {});
+		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed);
 	} catch (const std::runtime_error&) {
-		// A failed Close() or Signal(), or the pre-Close pin seam -- mirrors the sibling's own
-		// identical clause exactly.
+		// A failed Close() or Signal() (Submit()'s recovered first failure, or its stranded error),
+		// or the pre-Close pin seam -- mirrors the sibling's own identical clause exactly.
+		const bool tail_executed = dev.submission_counter() != tail_counter_before;
 		InvalidateResidencyCachesOnThrow();
 		if (!tail_executed) {
 			// `ExecuteCommandLists` never ran. The caller-owned resume-barrier latch this function
@@ -3442,23 +3667,26 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		// 1.8.0 (TE-426): the list's confirmed state and the submission's confirmed completion decide
 		// rule 0, then the classifier decides by kind (SubmissionTailFaultStatus's own comment). A
 		// list still recording after Close, a retry and the confirm step refuses every later
-		// `dev.alloc->Reset()` in the process, so it is reported GpuDeviceRemoved (T-2192 T2(a)).
-		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed, tail_signaled);
+		// reset in the process, so it is reported GpuDeviceRemoved (T-2192 T2(a)).
+		PublishCallTimingNoThrow(call_timing, {});
+		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed);
 	} catch (...) {
 		// 1.8.0 (TE-432): any other exception type -- a std::length_error, or a non-standard type --
-		// from anywhere in the tail, the in-flight token's allocation after ExecuteCommandLists and
-		// Signal included. Without this clause it left the function with the submission still
-		// executing, and the unwinding released `seq_readback`/`kv_readback`/every `state` buffer
-		// the queued work reads and writes, which removes the device. The same containment as the
-		// two clauses above: restore the latch when nothing executed, then close the list or wait the
-		// submission out; work whose completion cannot be confirmed is rule 0, and the classifier
-		// decides the rest by kind (a non-standard type is rule 3).
+		// from anywhere in the tail, the in-flight token's construction after Submit() included.
+		// Without this clause it left the function with the submission still executing, and the
+		// unwinding released `seq_readback`/`kv_readback`/every `state` buffer the queued work reads
+		// and writes, which removes the device. The same containment as the two clauses above:
+		// restore the latch when nothing executed, then close the list (the submission's token has
+		// already drained it); work whose completion cannot be confirmed is rule 0, and the
+		// classifier decides the rest by kind (a non-standard type is rule 3).
+		const bool tail_executed = dev.submission_counter() != tail_counter_before;
 		InvalidateResidencyCachesOnThrow();
 		if (!tail_executed && external_kv_resident != nullptr &&
 		    io_external_kv_needs_resume_barrier != nullptr) {
 			*io_external_kv_needs_resume_barrier = kv_resume_barrier_entry_value;
 		}
-		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed, tail_signaled);
+		PublishCallTimingNoThrow(call_timing, {});
+		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed);
 	}
 }
 
@@ -3493,12 +3721,15 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
     bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
     ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
     bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
-    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight, size_t q_width,
+    const GpuAdapterBridge* adapter_bridge, GpuInFlightToken* out_inflight, size_t q_width,
     // (T-2577 round 2, D-SLM6278): mirrors `RunLayerLoopGpuSubmit`'s own trailing
     // `model_generation` -- threaded into this call's own `PrepareGpuLayerLoopChunkOpenState`
     // call, below.
-    uint64_t model_generation, bool model_has_qk_norm) {
-	if (out_inflight) *out_inflight = nullptr;
+    uint64_t model_generation, bool model_has_qk_norm,
+    // Paged-KV plan §4 items 5-6a, step G3: the pooled binding (null: the one-page view) and the rows
+    // the chunk writes from this sub-chunk's open to its end (the chunk-wide coverage twin).
+    const GpuPagedKvBinding* paged_kv, uint32_t coverage_tokens) {
+	if (out_inflight) *out_inflight = GpuInFlightToken();
 	// T-2184 remedy S3 (Brunel fix round 1, D-SLM3662): this primitive's own catch clauses call
 	// the same file-scope `InvalidateResidencyCachesOnThrow()` `RunLayerLoopGpuSubmit`'s catch
 	// clauses call (declared once, above `RunLayerLoopGpuSubmit`) -- previously a THIRD locally-
@@ -3539,11 +3770,16 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 	// resume-barrier read/write cycle) and this correctly captures `true`.
 	const bool kv_resume_barrier_entry_value =
 	    io_external_kv_needs_resume_barrier != nullptr && *io_external_kv_needs_resume_barrier;
+	// Paged-KV plan §4 items 2 and 6 (G2): as `RunLayerLoopGpuSubmit` -- the one-page view of the
+	// flat workspace, for the ladder, the shaders and the chunk's readback offsets.
+	const superslm::KvPageView kv_view =
+	    paged_kv != nullptr ? paged_kv->view : GpuOnePageView(workspace, workspace_size, context_cap);
 	try {
 	const superslm::SslmForwardStatus prep_status = PrepareGpuLayerLoopChunkOpenState(
 	    dev, seq, layers, num_hidden_layers, /*layer_budget=*/num_hidden_layers, hidden_size, head_dim,
-	    num_key_value_heads, intermediate_size, context_cap, rope_tables, workspace, workspace_size,
-	    external_kv_resident, io_external_kv_needs_resume_barrier, external_weights_resident,
+	    num_key_value_heads, intermediate_size, context_cap, rope_tables, kv_view, workspace_size,
+	    paged_kv != nullptr ? paged_kv->table_resident : nullptr, paged_kv != nullptr && paged_kv->upload_table,
+	    coverage_tokens, external_kv_resident, io_external_kv_needs_resume_barrier, external_weights_resident,
 	    external_rope_cos_resident, external_rope_sin_resident, external_rope_has,
 	    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &state, q_width,
 	    model_generation);
@@ -3594,20 +3830,12 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		// COPY_DEST, receives exactly this token's own byte range from the shared upload
 		// buffer at its own offset, transitions back to UNORDERED_ACCESS before this token's
 		// own dispatch chain reads it.
-		D3D12_RESOURCE_BARRIER to_copy_dest{};
-		to_copy_dest.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-		to_copy_dest.Transition.pResource = seq_uav.Get();
-		to_copy_dest.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-		to_copy_dest.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-		to_copy_dest.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-		dev.list->ResourceBarrier(1, &to_copy_dest);
-		dev.list->CopyBufferRegion(seq_uav.Get(), 0, chunk_embed_upload.Get(),
-		                            static_cast<UINT64>(t) * embed_block_bytes,
-		                            embed_block_bytes);
-		D3D12_RESOURCE_BARRIER to_uav = to_copy_dest;
-		to_uav.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-		to_uav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-		dev.list->ResourceBarrier(1, &to_uav);
+		harness::RecordTransition(dev.list.Get(), seq_uav.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+		                          D3D12_RESOURCE_STATE_COPY_DEST);
+		harness::RecordCopyBufferRegion(dev.list.Get(), seq_uav.Get(), 0, chunk_embed_upload.Get(),
+		                                static_cast<UINT64>(t) * embed_block_bytes, embed_block_bytes);
+		harness::RecordTransition(dev.list.Get(), seq_uav.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+		                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
 		// D-SLM3595: full-depth dispatch chain for this token -- the chunk primitive drives
 		// every admitted token to its complete layer count in one call, since chunking now
@@ -3650,17 +3878,11 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		// RunLayerLoopGpuSubmit's own readback section) to this token's own record-time
 		// position, growing `kv_row_offsets` to `admit_count * num_hidden_layers * NH * 2`
 		// entries across the whole chunk.
+		// Paged-KV plan §4 item 6 (G2): through the call's page view, by the shaders' own formula.
 		for (uint32_t l = 0; l < N; ++l) {
-			const size_t half_off = static_cast<size_t>(l) * static_cast<size_t>(context_cap) *
-			                         static_cast<size_t>(NH) * static_cast<size_t>(HD) * 2u;
-			const size_t k_store_size =
-			    static_cast<size_t>(context_cap) * static_cast<size_t>(NH) * static_cast<size_t>(HD);
 			for (uint32_t h = 0; h < NH; ++h) {
-				const size_t row_off = static_cast<size_t>(h) * static_cast<size_t>(context_cap) *
-				                            static_cast<size_t>(HD) +
-				                        static_cast<size_t>(position_u32) * static_cast<size_t>(HD);
-				kv_row_offsets.push_back(half_off + row_off);                 // K row
-				kv_row_offsets.push_back(half_off + k_store_size + row_off);  // V row
+				kv_row_offsets.push_back(KvViewRowOffset(kv_view, l, 0u, NH, HD, h, position_u32));  // K row
+				kv_row_offsets.push_back(KvViewRowOffset(kv_view, l, 1u, NH, HD, h, position_u32));  // V row
 			}
 		}
 	}
@@ -3678,7 +3900,7 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 	const size_t kv_readback_bytes = kv_row_offsets.size() * static_cast<size_t>(HD);
 	kv_readback = dev.MakeBuffer(kv_readback_bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
 	                              D3D12_RESOURCE_STATE_COPY_DEST);
-	D3D12_RESOURCE_BARRIER pre_copy[2]{};
+	D3D12_RESOURCE_BARRIER pre_copy[3]{};
 	pre_copy[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 	pre_copy[0].Transition.pResource = seq_uav.Get();
 	pre_copy[0].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
@@ -3686,14 +3908,15 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 	pre_copy[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 	pre_copy[1] = pre_copy[0];
 	pre_copy[1].Transition.pResource = kv_uav.Get();
-	dev.list->ResourceBarrier(2, pre_copy);
+	const uint32_t pre_copy_count = 2 + TableBackToCommonBarrier(state, &pre_copy[2]);
+	harness::RecordBarriers(dev.list.Get(), pre_copy_count, pre_copy);
 	if (external_kv_resident != nullptr && io_external_kv_needs_resume_barrier != nullptr) {
 		*io_external_kv_needs_resume_barrier = true;
 	}
-	dev.list->CopyResource(seq_readback.Get(), seq_uav.Get());
+	harness::RecordCopyResource(dev.list.Get(), seq_readback.Get(), seq_uav.Get());
 	for (size_t r = 0; r < kv_row_offsets.size(); ++r) {
-		dev.list->CopyBufferRegion(kv_readback.Get(), r * static_cast<UINT64>(HD), kv_uav.Get(),
-		                            kv_row_offsets[r], HD);
+		harness::RecordCopyBufferRegion(dev.list.Get(), kv_readback.Get(), r * static_cast<UINT64>(HD), kv_uav.Get(),
+		                                kv_row_offsets[r], HD);
 	}
 	} catch (const GpuGemmGroupArithmeticError& e) {
 		// D-SLM3634 (§5.1): a mid-recording infrastructural exception is CHUNK-scoped, not
@@ -3742,6 +3965,14 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 	} catch (const std::length_error&) {
 		const bool list_closed = AbandonRecording(dev, state);
 		return ClassifyForwardFault(dev, /*stranded=*/!list_closed);
+	} catch (const harness::GpuSubmissionStrandedError&) {
+		// GPU paged-KV plan G3 (§4.4, the internal layer's duty): BeginRecording() refused the reset on
+		// a stranded ledger (rule 0) before the list was opened, so nothing was reset or recorded. The
+		// internal layer has no Busy channel; the refusal reaches the caller as the exception itself.
+		// A list this call did open is classified as the runtime_error clause below does.
+		if (!state.list_opened) throw;
+		const bool list_closed = AbandonRecording(dev, state);
+		return ClassifyForwardFault(dev, /*stranded=*/!list_closed);
 	} catch (const std::runtime_error&) {
 		// D-SLM3634: the identical chunk-scoped discard, for the generic failure class
 		// RunLayerLoopGpuSubmit's own twin catch clause already handles (superslm_gpu.cpp, above)
@@ -3771,14 +4002,19 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 	// `dev.list->Close()`, then `GetDeviceRemovedReason()` picks the status) rather than inventing
 	// a new recovery shape.
 	bool tail_list_closed = false;
-	// T-2192 finding T2(b): tracks whether `ExecuteCommandLists` has already run -- the point past
-	// which the recorded work is genuinely queued to the GPU regardless of what throws next. Read
-	// by the `runtime_error` catch below to tell a `Close()` failure (nothing submitted) apart from
-	// a `Signal()` failure (submitted, only the fence signal failed).
-	bool tail_executed = false;
-	// 1.8.0 (TE-426): RunLayerLoopGpuSubmit's own twin flags (that tail, above, states their meaning).
+	// 1.8.0 (TE-426): RunLayerLoopGpuSubmit's own twin flags (that tail, above, states their
+	// meaning). T-2192 finding T2(b): whether `ExecuteCommandLists` has already run -- the point past
+	// which the recorded work is genuinely queued to the GPU regardless of what throws next -- is
+	// read off the ledger's submission counter (from G3), which Submit() advances only after its
+	// execute.
 	bool tail_close_attempted = false;
-	bool tail_signaled = false;
+	const uint64_t tail_counter_before = dev.submission_counter();
+	const StrandedTailKeepAlive stranded_keep_alive(dev, tail_counter_before, state, std::addressof(seq_readback),
+	                                                std::addressof(kv_readback),
+	                                                std::addressof(chunk_embed_upload), external_weights_resident,
+	                                                external_rope_cos_resident, external_rope_sin_resident,
+	                                                adapter_bridge, paged_kv);  // review-g23 F1
+	GpuCallTiming call_timing{};  // decision 80 (RunLayerLoopGpuSubmit's tail, above)
 	try {
 		// The pin seam fires here, throwing exactly the type `SSLM_GPU_HR` would on a real
 		// failure, unarmed cost zero.
@@ -3787,30 +4023,25 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		dev.CloseListOrThrow();
 		tail_list_closed = true;
 		const auto t_record_end = std::chrono::steady_clock::now();
-		g_last_call_timing.record_ms =
+		call_timing.record_ms =
 		    std::chrono::duration<double, std::milli>(t_record_end - t_record_start).count();
-		ID3D12CommandList* lists[] = {dev.list.Get()};
-		dev.queue->ExecuteCommandLists(1, lists);
-		// `ExecuteCommandLists` is only reachable once `Close()` has succeeded (the statement
-		// order above), so `tail_list_closed` is always true by this point -- asserted rather than
-		// left as a fact only the statement order documents, so a future reordering that broke it
-		// would fail loudly here instead of silently mis-branching the catch below.
+		// `Submit()` is only reachable once `Close()` has succeeded (the statement order above), so
+		// `tail_list_closed` is always true by this point -- asserted rather than left as a fact
+		// only the statement order documents. From G3 (plan §4.4) the submission is the ledger's:
+		// ExecuteCommandLists, then a Signal at a fresh value with one fresh-value retry. T-2192
+		// finding M3's Signal()-failure seam fires inside it (harness::Device::SignalFence), strictly
+		// after ExecuteCommandLists; a recovered retry is drained inside Submit() before the first
+		// failure is rethrown.
 		assert(tail_list_closed);
-		tail_executed = true;
-		// T-2192 finding M3: the Signal()-failure seam, unarmed cost zero -- fires here, strictly
-		// after ExecuteCommandLists so `tail_executed` is genuinely true when it throws.
-		MaybeThrowInjectedT2169ChunkRecordingTailSignalFault();
-		SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
-		tail_signaled = true;
-		// From here on, only `std::bad_alloc` from the `new` below can throw -- Close() and
-		// Signal() have both already succeeded, so the GPU already has this submission queued and
-		// fenced at `dev.fence_val`.
+		harness::GpuSubmission submission = dev.Submit();
+		// From here on, only `std::bad_alloc` from the token's construction can throw -- Close()
+		// and Submit() have both already succeeded, so the GPU already has this submission queued
+		// and fenced, held by `submission`, which drains it if anything below throws.
 		// T-2192 finding M3: the bad_alloc seam, unarmed cost zero -- fires immediately before the
 		// real allocation, after Close()/Execute/Signal have all genuinely succeeded.
 		MaybeThrowInjectedT2169ChunkRecordingTailBadAllocFault();
-		std::unique_ptr<GpuLayerLoopInFlight> inflight(new GpuLayerLoopInFlight());
-		inflight->dev = &dev;
-		inflight->fence_val = dev.fence_val;
+		GpuInFlightToken token = GpuInFlightToken::Make(std::move(submission), &dev, call_timing);
+		GpuLayerLoopInFlight* inflight = token.get();
 		inflight->dispatch_count_this_call = dispatch_count_this_call;
 		inflight->seq_readback = seq_readback;
 		inflight->kv_readback = kv_readback;
@@ -3829,28 +4060,30 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		inflight->work_scratch_uav = state.work_scratch_uav;
 		inflight->lw_upload_keep_alive = state.lw_upload_keep_alive;
 		inflight->upload_keep_alive = state.upload_keep_alive;
-		if (out_inflight) *out_inflight = inflight.release();
+		inflight->KeepExternalsAlive(state.kv_uav.Get(), external_weights_resident, external_rope_cos_resident,
+		                             external_rope_sin_resident, adapter_bridge, paged_kv);  // review-g23 F1
+		if (out_inflight) *out_inflight = std::move(token);
 		return superslm::SslmForwardStatus::Ok;
 	} catch (const std::bad_alloc&) {
-		// Reached only after Close() and Signal() both succeeded (the only throwing statement
-		// between here and the try's own start is the `new` above) -- the list is already Closed,
-		// and the GPU already has this submission queued against the fence value just signaled.
-		// Every resource this function's stack is about to release on the way out
-		// (`seq_readback`/`kv_readback`/`state`'s own buffers) is exactly what that recorded work
-		// reads from or writes to, so wait the fence out before releasing them -- the same
-		// SetEventOnCompletion/WaitForSingleObject idiom `RunLayerLoopGpuFinish`'s own blocking
-		// path uses (this file, below) -- rather than let a GPU-referenced resource's last COM
-		// reference drop while the device may still be using it. SubmissionTailFaultStatus does
-		// the wait, and reports a wait it cannot confirm as a stranded submission.
+		// Reached only after Close() and Submit() both succeeded -- the list is already Closed, and
+		// the GPU already has this submission queued. Every resource this function's stack is about
+		// to release on the way out (`seq_readback`/`kv_readback`/`state`'s own buffers) is exactly
+		// what that recorded work reads from or writes to, so the fence is waited out before they
+		// are released: from G3 by the submission's own token (`submission`, or `token`), drained as
+		// it was destroyed during the unwinding into this clause. SubmissionTailFaultStatus reads
+		// the ledger and reports a wait it could not confirm as a stranded submission.
+		const bool tail_executed = dev.submission_counter() != tail_counter_before;
 		InvalidateResidencyCachesOnThrow();
 		if (!tail_executed && external_kv_resident != nullptr &&
 		    io_external_kv_needs_resume_barrier != nullptr) {
 			*io_external_kv_needs_resume_barrier = kv_resume_barrier_entry_value;
 		}
-		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed, tail_signaled);
+		PublishCallTimingNoThrow(call_timing, {});
+		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed);
 	} catch (const std::runtime_error&) {
-		// A failed Close() or Signal() (or the pre-Close injected pin, which fires before either
-		// runs).
+		// A failed Close() or Signal() (Submit()'s recovered first failure, or its stranded error),
+		// or the pre-Close injected pin, which fires before either runs.
+		const bool tail_executed = dev.submission_counter() != tail_counter_before;
 		InvalidateResidencyCachesOnThrow();
 		if (!tail_executed) {
 			// `ExecuteCommandLists` never ran: either the pre-Close fault fired first, or Close()
@@ -3878,46 +4111,35 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 			}
 			// The RESULT of closing the list decides whether the context is honestly reusable
 			// (T-2192 finding T2(a)): a list still recording after Close, a retry and the confirm
-			// step refuses every later `dev.alloc->Reset()` in the process (T-2191 S6's own class),
-			// so it is reported GpuDeviceRemoved, never a status that implies a recovered, reusable
-			// list (SubmissionTailFaultStatus).
+			// step refuses every later reset in the process (T-2191 S6's own class), so it is
+			// reported GpuDeviceRemoved, never a status that implies a recovered, reusable list
+			// (SubmissionTailFaultStatus).
 		}
-		// If `ExecuteCommandLists` already ran -- the GPU has this submission queued, the identical
-		// situation the `bad_alloc` clause above documents. Whatever `dev.fence_val` holds right
-		// now may or may not already be the value the failed `Signal()` attempted (that increment
-		// is evaluated as part of constructing `Signal()`'s own argument, so a REAL `Signal()`
-		// failure leaves it already advanced; the injected pin fires as a separate statement
-		// strictly before that line, so on the injected path it is not) -- rather than depend on
-		// which case this is, mint a FRESH, unambiguously-unreached value here and signal that one.
-		// A stale retry at whatever `dev.fence_val` already held would be a near-guaranteed no-op
-		// (that value was very likely already reached by an earlier submission's own wait), which
-		// is exactly the silent non-wait T-2192 finding T2(b) exists to close -- reproduced by
-		// executing this cell against the real device before this fix: the retry skipped waiting
-		// entirely, the stack's buffers were released into work the GPU was still doing, and the
-		// device was confirmed removed on the very next call. This function's stack is about to
-		// release `seq_readback`/`kv_readback`/every `state` buffer the already-queued work reads
-		// from or writes to, so the fence must be made to signal -- or the wait skipped only
-		// because the device is confirmed gone -- before this function returns, the same
-		// requirement the `bad_alloc` clause above honors for the identical post-Execute situation.
-		// Direct HRESULT checks, not `SSLM_GPU_HR` -- a second throw here must not re-enter this
-		// same catch. 1.8.0 (TE-426): a recovery that fails, or a wait that cannot be confirmed,
-		// leaves the about-to-be-released resources racing whatever the GPU is still doing with
-		// them, so it is a stranded submission (rule 0), GpuDeviceRemoved whatever
+		// If `ExecuteCommandLists` already ran, the GPU had this submission queued. T-2192 finding
+		// T2(b) required a FRESH, unambiguously-unreached fence value to be signalled and waited
+		// out before this stack releases the buffers that work reads (a stale retry at an
+		// already-reached value is a silent non-wait, reproduced on the real device). From G3 that
+		// recovery is the ledger's own (plan §4.4, *The ledger on the fault paths*): Submit()
+		// retried at a fresh value and drained it before rethrowing the first failure, or left the
+		// ledger stranded and threw GpuSubmissionStrandedError. A recovery that failed, or a wait
+		// that could not be confirmed, is a stranded submission (rule 0), GpuDeviceRemoved whatever
 		// GetDeviceRemovedReason() reports; a recovery that was waited out is classified by what
-		// failed. All of it lives in SubmissionTailFaultStatus, shared with
-		// RunLayerLoopGpuSubmit's tail.
-		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed, tail_signaled);
+		// failed (SubmissionTailFaultStatus, shared with RunLayerLoopGpuSubmit's tail).
+		PublishCallTimingNoThrow(call_timing, {});
+		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed);
 	} catch (...) {
 		// 1.8.0 (TE-432): RunLayerLoopGpuSubmit's own twin catch-all (this file, above): any other
-		// exception type from anywhere in the tail, the in-flight token's allocation after
-		// ExecuteCommandLists and Signal included, is contained like the two clauses above -- the
-		// submission is waited out before this stack releases the buffers it uses.
+		// exception type from anywhere in the tail, the in-flight token's construction after
+		// Submit() included, is contained like the two clauses above -- the submission was drained
+		// by its token before this stack releases the buffers it uses.
+		const bool tail_executed = dev.submission_counter() != tail_counter_before;
 		InvalidateResidencyCachesOnThrow();
 		if (!tail_executed && external_kv_resident != nullptr &&
 		    io_external_kv_needs_resume_barrier != nullptr) {
 			*io_external_kv_needs_resume_barrier = kv_resume_barrier_entry_value;
 		}
-		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed, tail_signaled);
+		PublishCallTimingNoThrow(call_timing, {});
+		return SubmissionTailFaultStatus(dev, tail_close_attempted, tail_executed);
 	}
 }
 
@@ -3982,12 +4204,13 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
     bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
     ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
     bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
-    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight, size_t q_width,
+    const GpuAdapterBridge* adapter_bridge, GpuInFlightToken* out_inflight, size_t q_width,
     // (T-2577 round 2, D-SLM6278): mirrors `RunLayerLoopGpuSubmit`'s own trailing
     // `model_generation` -- forwarded to every `SubmitOneSubChunkToFullDepthForG5Bridge` call
     // this function's own sub-chunk-splitting loop makes, below.
-    uint64_t model_generation, bool model_has_qk_norm, bool* out_readback_guard_rejected) {
-	if (out_inflight) *out_inflight = nullptr;
+    uint64_t model_generation, bool model_has_qk_norm, bool* out_readback_guard_rejected,
+    const GpuPagedKvBinding* paged_kv) {
+	if (out_inflight) *out_inflight = GpuInFlightToken();
 	if (out_readback_guard_rejected) *out_readback_guard_rejected = false;
 	if (chunk_len == 0) {
 		// Nothing to submit -- no guard ladder has run, so this is not itself a rejection; the
@@ -3996,13 +4219,19 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 		return superslm::SslmForwardStatus::Ok;
 	}
 	const size_t embed_block_bytes = static_cast<size_t>(SeqScaleOff(static_cast<uint32_t>(hidden_size))) + 16u;
+	// G3 (§4 item 5): the pooled binding's table upload rides the first sub-chunk that reaches the
+	// device; once one has executed, the table buffer holds the entries and later sub-chunks bind it
+	// as is. A local copy, so the caller's binding is not written.
+	GpuPagedKvBinding paged_local{};
+	if (paged_kv != nullptr) paged_local = *paged_kv;
+	const GpuPagedKvBinding* paged_this = paged_kv != nullptr ? &paged_local : nullptr;
 	uint32_t submitted = 0;
 	while (submitted < chunk_len) {
 		const uint32_t remaining = chunk_len - submitted;
 		const uint32_t this_sub_chunk =
 		    remaining < kT2169TdrSafeMaxChunkTokens ? remaining : kT2169TdrSafeMaxChunkTokens;
 		const bool is_last = (submitted + this_sub_chunk) >= chunk_len;
-		GpuLayerLoopInFlight* inflight = nullptr;
+		GpuInFlightToken inflight;
 		const superslm::SslmForwardStatus submit_status = SubmitOneSubChunkToFullDepthForG5Bridge(
 		    seq, layers, num_hidden_layers, hidden_size, head_dim, num_key_value_heads,
 		    intermediate_size, context_cap, rope_tables, workspace, workspace_size,
@@ -4010,15 +4239,16 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 		    external_kv_resident, io_external_kv_needs_resume_barrier, external_weights_resident,
 		    external_rope_cos_resident, external_rope_sin_resident, external_rope_has,
 		    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &inflight, q_width,
-		    model_generation, model_has_qk_norm);
+		    model_generation, model_has_qk_norm, paged_this, /*coverage_tokens=*/remaining);
 		if (submit_status != superslm::SslmForwardStatus::Ok) {
 			return submit_status;
 		}
+		paged_local.upload_table = false;
 		if (is_last) {
 			// The caller's own async contract (design Sec4.2/Sec4.3): only the FINAL
 			// (sub-)chunk's own inflight token is handed back unfinished -- the caller drives
 			// its own Finish, exactly as it already does for the single-sub-chunk case.
-			if (out_inflight) *out_inflight = inflight;
+			if (out_inflight) *out_inflight = std::move(inflight);
 			return superslm::SslmForwardStatus::Ok;
 		}
 		// Every non-final sub-chunk is finished SYNCHRONOUSLY, here, before the next sub-chunk's
@@ -4031,7 +4261,7 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 		// done with the allocator the current list used, which the fence wait below guarantees.
 		int32_t ready = 0;
 		const superslm::SslmForwardStatus finish_status =
-		    RunLayerLoopGpuFinish(inflight, seq, workspace, /*block=*/1, &ready);
+		    RunLayerLoopGpuFinish(std::move(inflight), seq, workspace, /*block=*/1, &ready);
 		if (finish_status != superslm::SslmForwardStatus::Ok) {
 			// `RunLayerLoopGpuFinish` returns `GpuDeviceRemoved`/`GpuAllocationFailed`/
 			// `GpuOperationFailed` only from its catch (a fault in the fence wait or a readback
@@ -4077,7 +4307,7 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 // waits unconditionally (matching the old unconditional wait exactly); `block==0` polls
 // `GetCompletedValue()` and, if not yet signaled, returns immediately with `*out_ready=0`
 // and `inflight` untouched -- still owned by the caller, still pollable.
-superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight,
+superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuInFlightToken&& inflight,
                                                     superslm::SequenceLayerState& seq,
                                                     uint8_t* workspace, int32_t block,
                                                     int32_t* out_ready, uint8_t* out_q_codes) {
@@ -4089,10 +4319,11 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 		return superslm::SslmForwardStatus::GpuOperationFailed;
 	}
 	harness::Device& dev = *inflight->dev;
-	const bool signaled = dev.fence->GetCompletedValue() >= inflight->fence_val;
-	if (!signaled && !block) {
+	// From G3 (plan §4.4, *The not-ready poll*): the poll is the ledger's Poll(v), through the
+	// token, which raises observed_ once the fence has reached the token's value and never waits.
+	if (!block && !inflight.ReadyNoWait()) {
 		// Pure poll, nothing ready yet -- design Sec4.2: "*out_ready=0, no state change."
-		// `inflight` is NOT consumed; the caller polls again later against the SAME token.
+		// `inflight` is NOT moved from: the caller polls again later against the SAME token.
 		return superslm::SslmForwardStatus::Ok;
 	}
 #if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
@@ -4114,31 +4345,22 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 	// `GetDeviceRemovedReason()`-queried disposition Submit's own generic catch already
 	// uses for the analogous failure discovered during recording.
 	//
-	// `owned` takes ownership of `inflight` BEFORE the try block -- not after the wait,
-	// as an earlier draft had it -- specifically so RAII covers a throw from ANYWHERE
-	// in the try, including the wait itself, with no path that could reach the catch
-	// below still holding a naked, undeleted `inflight`, and no path where the catch
-	// would need to `delete` it manually (which risked a double-free against `owned`'s
-	// own destructor, on a throw AFTER `owned` had already taken ownership -- caught by
-	// this section's own review before it was ever exercised on real hardware).
-	std::unique_ptr<GpuLayerLoopInFlight> owned(inflight);  // consumed, exactly once, from here on
+	// From G3 (plan §4.4, *The finish made structural*): the finish moves from the token only
+	// here, once the fence has reached its value or the call blocks, and BEFORE the try block,
+	// so the local token frees the record on every exit from the try, the wait included.
+	GpuInFlightToken owned = std::move(inflight);  // consumed, exactly once, from here on
+	GpuLayerLoopInFlight* const rec = owned.get();
 	try {
-	if (!signaled) {
-		// A wait that cannot be confirmed leaves the submission's completion unknown: rule 0.
-		const HRESULT wait_hr = dev.fence->SetEventOnCompletion(inflight->fence_val, dev.fence_event);
-		if (FAILED(wait_hr)) {
-			std::fprintf(stderr, "superslm_gpu: SetEventOnCompletion failed 0x%08lx\n",
-			             static_cast<unsigned long>(wait_hr));
-			throw harness::GpuSubmissionStrandedError("D3D12 fence wait could not be confirmed");
-		}
-		WaitForSingleObject(dev.fence_event, INFINITE);
-	}
+	// The ledger's wait: returns without arming the event when the fence is already at the
+	// token's value; a wait that cannot be confirmed strands the ledger (lost_) and throws
+	// GpuSubmissionStrandedError, rule 0.
+	owned.Wait();
 	// From here down: BYTE-FOR-BYTE the old synchronous tail, reading from `inflight`'s
 	// own fields instead of this function's own locals (they were this function's own
 	// locals, in the pre-split RunLayerLoopGpu; Submit captured them into `inflight`
 	// immediately after recording, before this call ever ran).
 	const auto t_submit_wait_end = std::chrono::steady_clock::now();
-	g_last_call_timing.submit_wait_ms =
+	rec->timing.submit_wait_ms =
 	    std::chrono::duration<double, std::milli>(t_submit_wait_end - owned->t_record_end).count();
 
 	if (dev.timestamp_frequency > 0 && owned->dispatch_count_this_call > 0) {
@@ -4150,11 +4372,11 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 			D3D12_RANGE qnone{0, 0};
 			dev.timestamp_readback->Unmap(0, &qnone);
 			const double freq = static_cast<double>(dev.timestamp_frequency);
-			g_last_call_timing.gpu_busy_ms =
+			rec->timing.gpu_busy_ms =
 			    static_cast<double>(ts.back() - ts.front()) / freq * 1000.0;
-			g_last_call_per_dispatch_ms.resize(owned->dispatch_count_this_call);
+			rec->per_dispatch_ms.resize(owned->dispatch_count_this_call);
 			for (uint32_t d = 0; d < owned->dispatch_count_this_call; ++d) {
-				g_last_call_per_dispatch_ms[d] =
+				rec->per_dispatch_ms[d] =
 				    static_cast<double>(ts[d + 1] - ts[d]) / freq * 1000.0;
 			}
 		}
@@ -4204,9 +4426,14 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 		D3D12_RANGE none{0, 0};
 		owned->q_codes_readback->Unmap(0, &none);
 	}
-	g_last_call_timing.readback_ms =
+	rec->timing.readback_ms =
 	    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_readback_start)
 	        .count();
+	// Decision 80: the call's timing becomes the last call's, under the snapshot's one mutex. The
+	// publish allocates its block; a failure there is a host allocation failure of this call, so it
+	// throws into this try's catch (rule 2) before any `seq` field is written, and a prefill's
+	// derived count stays short. Every timing field is final here.
+	g_last_call_timing_snapshot.Publish(rec->timing, std::move(rec->per_dispatch_ms));
 
 	for (uint32_t i = 0; i < H; ++i) {
 		int32_t v = 0;
@@ -4255,8 +4482,11 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 		// E_OUTOFMEMORY, is rule 2, `GpuAllocationFailed`; a `Map` failing with any other
 		// HRESULT is rule 3, `GpuOperationFailed`. `owned` (declared BEFORE this try, above)
 		// frees `inflight` via its own destructor during stack unwinding, regardless of where
-		// inside the try the throw happened -- nothing here frees it a second time.
+		// inside the try the throw happened -- nothing here frees it a second time. A wait that
+		// stranded has instead handed the record to the device's stranded graveyard (review-g23
+		// F1), so `rec` stays valid here and is never freed while the device lives.
 		if (out_ready) *out_ready = 1;  // a terminal status, not a "still pending" one
+		PublishCallTimingNoThrow(rec->timing, std::move(rec->per_dispatch_ms));  // as far as it got
 		return ClassifyForwardFault(dev, /*stranded=*/false);
 	} catch (...) {
 		// 1.8.0 (TE-435): any other exception type -- a non-standard type from a host allocation
@@ -4266,6 +4496,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
 		// clause the exception left the function with the token freed and the handle Submitted,
 		// pointing at it.
 		if (out_ready) *out_ready = 1;
+		PublishCallTimingNoThrow(rec->timing, std::move(rec->per_dispatch_ms));
 		return ClassifyForwardFault(dev, /*stranded=*/false);
 	}
 }
@@ -4289,7 +4520,7 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              bool* io_external_kv_needs_resume_barrier,
 	                                         uint64_t model_generation,
 	                                         bool model_has_qk_norm) {
-	GpuLayerLoopInFlight* inflight = nullptr;
+	GpuInFlightToken inflight;
 	const superslm::SslmForwardStatus submit_status = RunLayerLoopGpuSubmit(
 	    seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim, num_key_value_heads,
 	    intermediate_size, context_cap, rope_tables, workspace, workspace_size, external_kv_resident,
@@ -4302,7 +4533,7 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		return submit_status;  // rejected (a guard, or an exception) before submission
 	}
 	int32_t ready = 0;
-	return RunLayerLoopGpuFinish(inflight, seq, workspace, /*block=*/1, &ready);
+	return RunLayerLoopGpuFinish(std::move(inflight), seq, workspace, /*block=*/1, &ready);
 }
 
 // T-2052 (item 3): the device-observable N3's own residency cache was
@@ -4429,31 +4660,75 @@ GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t
 	return plan;
 }
 
-GpuCallTiming LastCallTiming() { return g_last_call_timing; }
+GpuCallTiming LastCallTiming() { return g_last_call_timing_snapshot.CopyTiming(); }
 
-std::vector<double> LastCallPerDispatchTimingsMs() { return g_last_call_per_dispatch_ms; }
+// Paged-KV plan §4.4, step G3: the internal layer's drain (gpu_port.h). Reads the singleton
+// through the accessor, so a process with no device returns at once and constructs nothing.
+void DrainSubmissionsGpu() {
+	if (harness::SingletonLedgerIfConstructed() == nullptr) return;
+	harness::g_device_holder.device.Drain();
+}
+
+uint64_t BoundaryCheckReportsForTest() { return inflight::BoundaryCheckReportCount(); }
+uint64_t BoundaryCheckWalkedForTest() { return inflight::BoundaryCheckWalkedCount(); }
+
+#if defined(SUPERSLM_GPU_QUEUE_GATE_SEAM)
+// Plan §4.4, *The queue gate* (d3d12_harness.h, QueueGateState): the singleton only, both
+// injection builds. The arm constructs the singleton when the process has none, makes the gate
+// fence on its device the first time, and holds every later singleton submission at a fresh
+// target until the release; an arm while held keeps the current target. The release signals the
+// target from the host and is idempotent.
+void ArmQueueGateForTest() {
+	harness::Device& dev = harness::GetDevice();
+	if (!dev.available.load()) return;
+	harness::QueueGateState& gate = harness::QueueGate();
+	std::lock_guard<std::mutex> lock(gate.mutex);
+	if (gate.held) return;
+	if (!gate.fence) {
+		if (FAILED(dev.dev->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&gate.fence)))) {
+			gate.fence.Reset();
+			return;
+		}
+	}
+	gate.target = ++gate.counter;
+	gate.held = true;
+}
+void ReleaseQueueGateForTest() {
+	harness::QueueGateState& gate = harness::QueueGate();
+	std::lock_guard<std::mutex> lock(gate.mutex);
+	if (!gate.held) return;
+	gate.held = false;
+	if (gate.fence) (void)gate.fence->Signal(gate.target);
+}
+#endif  // SUPERSLM_GPU_QUEUE_GATE_SEAM
+
+std::vector<double> LastCallPerDispatchTimingsMs() { return g_last_call_timing_snapshot.CopyPerDispatchMs(); }
 
 const int8_t* KeyRowGpu(const uint8_t* workspace, uint32_t layer, int64_t context_cap,
                          size_t num_kv_heads, size_t head_dim, size_t kv_head, int64_t position) {
-	// T-2032: the KV cache twin's own addressing, bit-exact against
-	// superslm::KeyRow (forward_sites.cpp's S3.7 accessor block) -- real once
-	// RunLayerLoopGpu (above) has written it; site_common.hlsli's
-	// KvHalfOffsetGpu/KvRowOffsetWithinHalfGpu are the SAME formula, ported.
-	const size_t half_off = static_cast<size_t>(layer) * static_cast<size_t>(context_cap) * num_kv_heads *
-	                             head_dim * 2u;
-	const size_t row_off =
-	    kv_head * static_cast<size_t>(context_cap) * head_dim + static_cast<size_t>(position) * head_dim;
-	return reinterpret_cast<const int8_t*>(workspace) + half_off + row_off;
+	// T-2032: the KV cache twin's own addressing, bit-exact against superslm::KeyRow
+	// (forward_sites.cpp). Paged-KV plan §4 item 6 (G2): the flat form is the one-page view of
+	// `workspace`, addressed by the shaders' own KvRowAddrGpu formula (below).
+	return KeyRowGpu(GpuOnePageView(const_cast<uint8_t*>(workspace), 0, context_cap), layer, num_kv_heads, head_dim,
+	                 kv_head, position);
 }
 
 const int8_t* ValueRowGpu(const uint8_t* workspace, uint32_t layer, int64_t context_cap,
                            size_t num_kv_heads, size_t head_dim, size_t kv_head, int64_t position) {
-	const size_t half_off = static_cast<size_t>(layer) * static_cast<size_t>(context_cap) * num_kv_heads *
-	                             head_dim * 2u;
-	const size_t k_store_size = static_cast<size_t>(context_cap) * num_kv_heads * head_dim;
-	const size_t row_off =
-	    kv_head * static_cast<size_t>(context_cap) * head_dim + static_cast<size_t>(position) * head_dim;
-	return reinterpret_cast<const int8_t*>(workspace) + half_off + k_store_size + row_off;
+	return ValueRowGpu(GpuOnePageView(const_cast<uint8_t*>(workspace), 0, context_cap), layer, num_kv_heads,
+	                   head_dim, kv_head, position);
+}
+
+const int8_t* KeyRowGpu(const superslm::KvPageView& view, uint32_t layer, size_t num_kv_heads, size_t head_dim,
+                         size_t kv_head, int64_t position) {
+	return reinterpret_cast<const int8_t*>(view.pool_base) +
+	       KvViewRowOffset(view, layer, 0u, num_kv_heads, head_dim, kv_head, position);
+}
+
+const int8_t* ValueRowGpu(const superslm::KvPageView& view, uint32_t layer, size_t num_kv_heads, size_t head_dim,
+                           size_t kv_head, int64_t position) {
+	return reinterpret_cast<const int8_t*>(view.pool_base) +
+	       KvViewRowOffset(view, layer, 1u, num_kv_heads, head_dim, kv_head, position);
 }
 
 // ===========================================================================
@@ -4747,24 +5022,19 @@ bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::Seque
 		                                  D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
 		auto readback_buf = dev.MakeBuffer(workspace_size, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
 		                                    D3D12_RESOURCE_STATE_COPY_DEST);
-		SSLM_GPU_HR(dev.alloc->Reset());
-		SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
-		dev.list->CopyResource(device_buf.Get(), upload_buf.Get());
-		D3D12_RESOURCE_BARRIER b{};
-		b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-		b.Transition.pResource = device_buf.Get();
-		b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-		b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-		b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-		dev.list->ResourceBarrier(1, &b);
-		dev.list->CopyResource(readback_buf.Get(), device_buf.Get());
+		// G3: the ledger's reset (plan §4.4).
+		dev.BeginRecording();
+		harness::RecordCopyResource(dev.list.Get(), device_buf.Get(), upload_buf.Get());
+		harness::RecordTransition(dev.list.Get(), device_buf.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+		                          D3D12_RESOURCE_STATE_COPY_SOURCE);
+		harness::RecordCopyResource(dev.list.Get(), readback_buf.Get(), device_buf.Get());
 		// 1.8.0 (TE-426): the Close is confirmed (CloseListConfirmed), and the Signal, which has
 		// no retry here, and the wait are rule 0 on any failure -- each throws the typed error the
-		// caller's classifier (sslm_gpu_seq_restore, gpu_1p0.cpp) reads.
+		// caller's classifier (sslm_gpu_seq_restore, gpu_1p0.cpp) reads. From G3 the submission and
+		// the wait are the ledger's: Submit(no retry), then the submission's own Wait().
 		dev.CloseListOrThrow();
-		ID3D12CommandList* lists[] = {dev.list.Get()};
-		dev.queue->ExecuteCommandLists(1, lists);
-		dev.SignalAndWaitOrStrand();
+		// review-g23 F1: the three buffers are kept alive if the submission strands.
+		dev.SubmitAndWaitKeepingAlive(/*retry=*/false, upload_buf, device_buf, readback_buf);
 		void* p = nullptr;
 		D3D12_RANGE range{0, static_cast<SIZE_T>(workspace_size)};
 		SSLM_GPU_HR(readback_buf->Map(0, &range, &p));
@@ -4892,30 +5162,32 @@ bool RunDescriptorTableBind(const int8_t* const* array_pointers, const size_t* a
 		s_pso = dev.MakePSO(s_root_sig.Get(), cso);
 	}
 
-	SSLM_GPU_HR(dev.alloc->Reset());
-	SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), s_pso.Get()));
+	dev.BeginRecording();  // G3: the ledger's reset (plan §4.4); the PSO is set right after it
+	dev.list->SetPipelineState(s_pso.Get());
 	ID3D12DescriptorHeap* heaps[] = {heap.Get()};
 	dev.list->SetDescriptorHeaps(1, heaps);
 	dev.list->SetComputeRootSignature(s_root_sig.Get());
 	const uint32_t n_arrays_u32 = static_cast<uint32_t>(n_arrays);
 	dev.list->SetComputeRoot32BitConstants(0, 1, &n_arrays_u32, 0);
-	dev.list->SetComputeRootShaderResourceView(1, counts_buf->GetGPUVirtualAddress());
-	dev.list->SetComputeRootShaderResourceView(2, offsets_buf->GetGPUVirtualAddress());
+	harness::BindRootSrv(dev.list.Get(), 1, counts_buf.Get());
+	harness::BindRootSrv(dev.list.Get(), 2, offsets_buf.Get());
 	dev.list->SetComputeRootDescriptorTable(3, heap->GetGPUDescriptorHandleForHeapStart());
-	dev.list->SetComputeRootUnorderedAccessView(4, out_uav->GetGPUVirtualAddress());
-	dev.list->Dispatch(static_cast<UINT>((n_arrays + 63) / 64), 1, 1);
-	D3D12_RESOURCE_BARRIER b{};
-	b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-	b.Transition.pResource = out_uav.Get();
-	b.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-	b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-	b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-	dev.list->ResourceBarrier(1, &b);
-	dev.list->CopyResource(readback.Get(), out_uav.Get());
+	harness::BindRootUav(dev.list.Get(), 4, out_uav.Get());
+	harness::RecordDispatch(dev.list.Get(), static_cast<UINT>((n_arrays + 63) / 64), 1, 1);
+	harness::RecordTransition(dev.list.Get(), out_uav.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+	                          D3D12_RESOURCE_STATE_COPY_SOURCE);
+	harness::RecordCopyResource(dev.list.Get(), readback.Get(), out_uav.Get());
 	dev.CloseListOrThrow();
-	ID3D12CommandList* lists[] = {dev.list.Get()};
-	dev.queue->ExecuteCommandLists(1, lists);
-	dev.SignalAndWaitOrStrand();
+	{
+		// review-g23 F1: every buffer the work reads is kept alive if the submission strands.
+		const uint64_t counter_before = dev.submission_counter();
+		const harness::OnScopeExit keep_array_bufs{[&]() noexcept {
+			if (dev.StrandedSince(counter_before)) {
+				for (const auto& buf : array_bufs) dev.KeepResourcesAliveStranded(buf);
+			}
+		}};
+		dev.SubmitAndWaitKeepingAlive(/*retry=*/false, counts_buf, offsets_buf, out_uav, readback, heap);
+	}
 
 	out_widened->resize(total_elements);
 	void* p = nullptr;

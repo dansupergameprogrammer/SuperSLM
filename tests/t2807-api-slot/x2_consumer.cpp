@@ -2,7 +2,7 @@
 // C ABI by the T-2823 fold). Compiled with /DSUPERSLM_API=__declspec(dllimport) and linked against
 // sslm_engine.dll's import library ONLY, so every engine symbol it calls must cross the DLL boundary. It calls
 // every symbol of X2's expected set at least once and nothing else from the engine -- the 25 C++ entries of
-// consumed_symbols.txt and the 38 C verbs of c_abi_verbs.txt, 63 at v1.7.0: build_x2.ps1 checks that this
+// consumed_symbols.txt and the 49 C verbs of c_abi_verbs.txt, 74 at v1.12.0: build_x2.ps1 checks that this
 // DLL's import table from sslm_engine.dll EQUALS that set, so a call silently dropped here fails X2 (the
 // harness mutant, /DX2_DROP_CHUNK_BATCHED, proves it).
 //
@@ -29,11 +29,12 @@
 //   RunLayerLoopChunkBatched                      chunk_tokens 0 -> InvalidLayerBudget (checked at entry)
 //   ParseConfig                                   an empty section view -> BadConfigSize (the exact-size check
 //                                                 is the first check, src/model.cpp ParseConfigImpl)
-// The C verbs (38), each called with null handles and null out-pointers, which every verb's contract refuses
+// The original C verbs (38) use null handles and null out-pointers, which their contracts refuse
 // at entry: the 32 that return sslm_status return SSLM_INVALID_ARGUMENT; the six sizing verbs
 // (sslm_kv_block_size, sslm_kv_pool_overhead_size, sslm_seq_state_size, sslm_workspace_size,
 // sslm_adapter_residency, sslm_schema_count) return 0 for a null model or adapter. Each row below asserts
-// its refusal; sslm_workspace_set_parallel_for adds the new import.
+// its refusal; sslm_workspace_set_parallel_for adds the new import. The 11 paged-KV verbs below
+// check their documented null-model sizing and refusal behavior with caller-owned output storage.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -178,6 +179,8 @@ extern "C" __declspec(dllexport) int x2_run() {
 		sslm_detok_state ds{};
 		sslm_decode_params dp{};
 		sslm_stats_out so{};
+		sslm_kv_pool_stats_out pool_stats{};
+		sslm_seq_kv_stats_out seq_stats{};
 		int32_t n = 0;
 		size_t sz = 0;
 		char buf[8] = {};
@@ -188,21 +191,59 @@ extern "C" __declspec(dllexport) int x2_run() {
 		X2_INVALID(sslm_model_unmap(m));
 		X2_ZERO(sslm_kv_block_size(m));
 		X2_ZERO(sslm_kv_pool_overhead_size(m, 1));
+		X2_ZERO(sslm_kv_page_positions(m));
+		X2_ZERO(sslm_kv_page_size(m));
+		X2_ZERO(sslm_kv_pages_for_budget(m, 1));
+		X2_ZERO(sslm_kv_page_pool_overhead_size(m, 1));
+		X2_ZERO(sslm_kv_pool_contiguous_size(m, 1));
 		X2_ZERO(sslm_seq_state_size(m));
 		X2_INVALID(sslm_kv_pool_create(m, nullptr, 0, 1, nullptr));
+		kp = reinterpret_cast<sslm_kv_pool>(static_cast<uintptr_t>(1));
+		X2_CHECK(sslm_kv_page_pool_create(m, nullptr, 0, 1, &kp) == SSLM_INVALID_ARGUMENT && kp == nullptr,
+		         "sslm_kv_page_pool_create rejects null model and clears output");
+		kp = reinterpret_cast<sslm_kv_pool>(static_cast<uintptr_t>(1));
+		X2_CHECK(sslm_kv_pool_create_contiguous(m, nullptr, 0, 1, &kp) == SSLM_INVALID_ARGUMENT && kp == nullptr,
+		         "sslm_kv_pool_create_contiguous rejects null model and clears output");
+		kp = nullptr;
 		X2_INVALID(sslm_kv_pool_destroy(kp));
+		pool_stats.struct_size = sizeof pool_stats;
+		pool_stats.page_count = 17;
+		X2_CHECK(sslm_kv_pool_stats(kp, &pool_stats) == SSLM_INVALID_ARGUMENT && pool_stats.page_count == 17,
+		         "sslm_kv_pool_stats rejects null pool without writing counts");
 		X2_INVALID(sslm_workspace_destroy(ws));
 		X2_INVALID(sslm_workspace_set_parallel_for(ws, nullptr));
 		X2_INVALID(sslm_prefix_begin(m, nullptr, nullptr));
+		p = reinterpret_cast<sslm_prefix>(static_cast<uintptr_t>(1));
+		X2_CHECK(sslm_prefix_begin_budgeted(m, &kp, 1, &p) == SSLM_INVALID_ARGUMENT && p == nullptr,
+		         "sslm_prefix_begin_budgeted rejects null model and clears output");
+		p = reinterpret_cast<sslm_prefix>(static_cast<uintptr_t>(1));
+		X2_CHECK(sslm_prefix_begin_from(nullptr, 1, &p) == SSLM_INVALID_ARGUMENT && p == nullptr,
+		         "sslm_prefix_begin_from rejects null parent and clears output");
+		p = nullptr;
 		X2_INVALID(sslm_prefix_prefill(m, p, tok, 1, 1, SSLM_SPAN_PROMPT, ws, &n));
 		X2_INVALID(sslm_prefix_freeze(p));
 		X2_INVALID(sslm_prefix_release(p));
 		X2_INVALID(sslm_seq_create(m, nullptr, nullptr));
+		s = reinterpret_cast<sslm_seq>(static_cast<uintptr_t>(1));
+		X2_CHECK(sslm_seq_create_budgeted(m, &kp, 1, &s) == SSLM_INVALID_ARGUMENT && s == nullptr,
+		         "sslm_seq_create_budgeted rejects null model and clears output");
+		s = nullptr;
+		seq_stats.struct_size = sizeof seq_stats;
+		seq_stats.mode = 17;
+		X2_CHECK(sslm_seq_kv_stats(s, &seq_stats) == SSLM_INVALID_ARGUMENT && seq_stats.mode == 17,
+		         "sslm_seq_kv_stats rejects null sequence without writing mode");
 		X2_INVALID(sslm_seq_release(s));
 		X2_INVALID(sslm_seq_reset(s));
 		X2_INVALID(sslm_seq_adopt_prefix(s, p));
 		X2_INVALID(sslm_seq_save(s, nullptr, &sz));
 		X2_INVALID(sslm_seq_restore(m, nullptr, nullptr, 0, nullptr));
+		s = reinterpret_cast<sslm_seq>(static_cast<uintptr_t>(1));
+		uint32_t shared_pages = 17;
+		X2_CHECK(sslm_seq_restore_shared(m, &kp, nullptr, 0, nullptr, &s, &shared_pages) ==
+		                 SSLM_INVALID_ARGUMENT &&
+		             s == nullptr && shared_pages == 0,
+		         "sslm_seq_restore_shared rejects null model and clears both outputs");
+		s = nullptr;
 		X2_INVALID(sslm_seq_set_adapter(s, a));
 		X2_INVALID(sslm_adapter_map(nullptr, 0, m, nullptr));
 		X2_INVALID(sslm_adapter_release(a));

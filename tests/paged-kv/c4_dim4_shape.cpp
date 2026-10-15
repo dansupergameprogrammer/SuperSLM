@@ -97,21 +97,17 @@ void Cell42Legacy() {
 	                       Compare::kTokensRowsAndBlob);
 }
 
-// 4.4 [C4 legacy]. The B fallback (§3.1): pkv_odd is pkv_def re-emitted at cap 4100, which 16 does
-// not divide, so B = cap and a legacy holder has one page, today's block. Every R0 scenario's
-// legacy outputs equal v1.11.0's, blob included, and the one page holds the rows at B = 4,100 (the
-// one-page identity: the paged address formula with B = cap is today's flat layout).
+// 4.4 [C4 legacy]. pkv_odd is pkv_def re-emitted at cap 4100, which the rule's B does not divide. Every R0
+// scenario's legacy outputs equal v1.11.0's, blob included, and three blocks admit three legacy holders. Until T2 this
+// cell also asserted the one-page fallback (B = cap, one page a block, the rows at B = 4,100); that half retired with
+// the fallback (D-SLM8448; T-3189 §13), and 4.4/T2 asserts pkv_odd's 256-position pages and rows.
 void Cell44Legacy() {
 	const Fixture& fx = GetFixture("pkv_odd");
 	if (!fx.ok) return;
-	PKV_CHECK_EQ(fx.B(), 4100);
-	PKV_CHECK_EQ(fx.CapPages(), 1);
-	PKV_CHECK_EQ(fx.PageBytes(), sslm_kv_block_size(fx.model));  // one page is one block
 	// kills: B = kv_block_size taken without the divisibility test (257 pages a reservation,
 	// 256.25 pages a block: the scenarios' pools refuse their creates)
 	for (const char* sc : kAllScenarios)
 		ExpectMatchesReference("v1.11.0", fx, sc, RunScenario(fx, sc), Compare::kTokensRowsAndBlob);
-	PagesHoldReferenceRows(fx, fx.B(), fx);
 	LegacyPool pool(fx.model, 3);
 	PKV_CHECK_EQ(pool.status, SSLM_OK);
 	if (pool.pool) PKV_CHECK_EQ(CountLegacyCreates(fx.model, &pool.pool), 3);  // N blocks admit N handles (§3.5)
@@ -139,7 +135,7 @@ void Cell46Legacy() {
 // set kv_block_size = 1, and their flat engine paths stay in the existing suites, green at C4; this
 // cell names the geometry in the matrix and runs it through the legacy ABI, so a regression there is
 // attributed. The model is pkv_def with CFG1's kv_block_size patched to 1 (integrity hash
-// recomputed): §3.1 gives B = 1, while the weights, and so the tokens and K/V rows, are pkv_def's.
+// recomputed) and, from T1, pinned to 1: B = 1, while the weights, and so the tokens and K/V rows, are pkv_def's.
 // Tokens and rows equal pkv_def's v1.11.0 reference (the blobs carry the twin's own model hash, so
 // they are compared by rows, not whole), and the rows read from the pages at B = 1 equal them too.
 void Cell49() {
@@ -148,7 +144,19 @@ void Cell49() {
 	Fixture twin;
 	PKV_CHECK_MSG(PatchedBlockSizeTwin(def, 1, &twin), "pkv_def with kv_block_size 1 maps");
 	if (!twin.ok) return;
-	const int64_t B = 1;  // §3.1: kv_block_size 1 <= cap and divides it
+	// From T1 CFG1's kv_block_size no longer selects B (4.11), so the member is pkv_def pinned to 1 (plan §3.1, §25.6
+	// G-2; T-3198 §5.3), the loader pin's pattern (D-SLM8439): the pin's SSLM_OK is required once the T0 stub is gone,
+	// B == 1 always (on 2ebe5e3 the patched header gives it).
+	const sslm_status pin = KvPagesTestPinPagePositions(twin.model, 1);
+#if !defined(PKV_R9_STUB_PIN)
+	PKV_CHECK_MSG(pin == SSLM_OK, "the pin of the B = 1 twin is refused (%s)", AbiStatusName(pin));
+#else
+	(void)pin;
+#endif
+	twin.pinned = 1;
+	const int64_t B = 1;
+	PKV_CHECK_MSG(sslm_kv_page_positions(twin.model) == B, "the B = 1 twin runs at B = %lld",
+	              static_cast<long long>(sslm_kv_page_positions(twin.model)));
 	PKV_CHECK_EQ(sslm_kv_block_size(twin.model), sslm_kv_block_size(def.model));
 	// kills: page arithmetic that assumes B > 1 (a zero-size tail page, a +1 slack page drawn
 	// past cap / B, a page run of length 0) anywhere in prefill, decode, reset, copy adopt or save

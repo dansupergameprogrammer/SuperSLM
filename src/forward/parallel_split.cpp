@@ -7,6 +7,7 @@
 #include <new>
 
 #include "superslm/matmul.h"  // GemmInt8AccumulateRow, GemmInt8Accumulate
+#include "../gpu/gpu_inflight_registry.h"  // GpuTaskTrampoline (GPU paged-KV plan G3, decision 81)
 
 namespace superslm {
 
@@ -61,7 +62,14 @@ SslmForwardStatus RunExactlyOnce(const sslm_parallel_for& pf, size_t task_count,
 	std::atomic<uint8_t> state[SSLM_PARALLEL_FOR_MAX_TASKS];
 	std::atomic<bool> violation{false};
 	ExactlyOnceCtx c{body, ctx, static_cast<int32_t>(task_count), state, &violation};
-	pf.run(pf.host_ctx, static_cast<int32_t>(task_count), &ExactlyOnceTask, &c);
+	// GPU paged-KV plan G3 (decision 81, rev 14.2): the one `run` call site of the tree. The
+	// trampoline captures this thread's registry binding (list, call, depth; the empty binding when
+	// no C ABI scope is open) and installs it around every task invocation, restoring the worker's
+	// own on every exit, so a record a task moves re-registers under the calling SuperSLM call.
+	// D3D12-free; it lives in the calling frame, which `run` outlives every invocation of.
+	superslm_gpu::inflight::GpuTaskTrampoline tramp(&ExactlyOnceTask, &c);
+	pf.run(pf.host_ctx, static_cast<int32_t>(task_count), &superslm_gpu::inflight::GpuTaskTrampoline::Invoke,
+	       &tramp);
 
 	bool complete = !violation.load(std::memory_order_acquire);
 	for (size_t i = 0; complete && i < task_count; ++i) {

@@ -60,26 +60,26 @@ def test_byte_capture_preserves_invalid_utf8_as_a_decisive_witness():
 def test_current_manifest_accepts_the_rebuilt_compiled_diagnostics_before_execution():
     # Dev-box compiled diagnostics: present on the release machine, absent on CI runners. Skip rather than
     # fail when any is missing; when all are present, the check runs unchanged.
-    for required in (Path("D:/_artifacts/superslm/t3011-v1110-diag/layer-tracer/sslm_layer_trace.exe"),
-                     Path("D:/_artifacts/superslm/t3011-v1110-diag/retrieval-probe/build/Release/t2701_cpu_forward_probe.exe")):
+    for required in (Path("D:/_artifacts/superslm/t3011-v1120-diag/layer-tracer/sslm_layer_trace.exe"),
+                     Path("D:/_artifacts/superslm/t3011-v1120-diag/retrieval-probe/build/Release/t2701_cpu_forward_probe.exe")):
         if not required.is_file():
             pytest.skip(f"dev-box diagnostic absent: {required}")
     manifest = gate.load(_MANIFEST_PATH)
     records = gate.validate_compiled_diagnostic_provenance(manifest, _MANIFEST_PATH)
     assert records == {
         "baseline layer tracer": {
-            "path": "D:\\_artifacts\\superslm\\t3011-v1110-diag\\layer-tracer\\sslm_layer_trace.exe",
-            "source_commit": "445e20687cc1ccec1bbba6e98b6867e004292b0f",
+            "path": "D:\\_artifacts\\superslm\\t3011-v1120-diag\\layer-tracer\\sslm_layer_trace.exe",
+            "source_commit": "9d882b1bd46b6edd749f4284993b617b865eccd4",
             "build_command": ["cmd /c tools\\build_layer_trace.bat"],
-            "sha256": "4eb85753b1cf11a342e04457654850cd56cdf3e00cce6287cb425e2e62d0c5ad",
+            "sha256": "29c49765f84db38a694bd7766bd0761620dc6664631769a470642f9bd154b3c7",
         },
         "retrieval CPU probe": {
-            "path": "D:\\_artifacts\\superslm\\t3011-v1110-diag\\retrieval-probe\\build\\Release\\t2701_cpu_forward_probe.exe",
-            "source_commit": "445e20687cc1ccec1bbba6e98b6867e004292b0f",
+            "path": "D:\\_artifacts\\superslm\\t3011-v1120-diag\\retrieval-probe\\build\\Release\\t2701_cpu_forward_probe.exe",
+            "source_commit": "9d882b1bd46b6edd749f4284993b617b865eccd4",
             "build_command": [
-                "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe -S . -B D:/_artifacts/superslm/t3011-v1110-diag/retrieval-probe/build -DSUPERSLM_BUILD_GPU=ON -DBUILD_TESTING=OFF",
-                "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe --build D:/_artifacts/superslm/t3011-v1110-diag/retrieval-probe/build --config Release --target t2701_cpu_forward_probe",
+                "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe -S . -B D:/_artifacts/superslm/t3011-v1120-diag/retrieval-probe/build -DSUPERSLM_BUILD_GPU=ON -DBUILD_TESTING=OFF",
+                "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe --build D:/_artifacts/superslm/t3011-v1120-diag/retrieval-probe/build --config Release --target t2701_cpu_forward_probe",
             ],
-            "sha256": "85cdea3bcb99e0cc17791d82c3928ae0d71ce52325a041d8ab12cc59b1e084dc",
+            "sha256": "c2493ff7d910c90400ad51d16bf5b684cd94a58583f5801db9d1168f332f74c0",
         },
     }

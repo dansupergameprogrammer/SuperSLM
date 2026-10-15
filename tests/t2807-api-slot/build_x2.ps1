@@ -56,8 +56,10 @@ $want = @($cpp + $derived)
 $wantSet = New-Object 'System.Collections.Generic.HashSet[string]' ([string[]]$want), ([System.StringComparer]::Ordinal)
 Say ("X2 expected set: {0} C++ (consumed_symbols.txt) + {1} C (the headers) = {2}" -f $cpp.Count, $derived.Count, $want.Count)
 
-# The core sources, from CMakeLists.txt.
-$cm = Get-Content (Join-Path $Engine 'CMakeLists.txt') -Raw
+# The core sources, from CMakeLists.txt. CMake line comments are removed first: an entry may carry a trailing
+# `# ...` comment (GPU paged KV G3's gpu_inflight_registry.cpp line does), whose words are not sources and whose
+# parentheses would end the non-greedy match early.
+$cm = (Get-Content (Join-Path $Engine 'CMakeLists.txt') | ForEach-Object { $_ -replace '#.*$', '' }) -join "`n"
 if ($cm -notmatch '(?s)set\(SUPERSLM_CORE_SOURCES\s+(.*?)\)') { Write-Output 'X2 ENV: SUPERSLM_CORE_SOURCES not found'; exit 2 }
 $sources = @($Matches[1] -split '\s+' | Where-Object { $_ } | ForEach-Object { Join-Path $Engine $_ })
 $inc = @()

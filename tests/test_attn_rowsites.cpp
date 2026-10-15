@@ -1350,6 +1350,7 @@ void TestS4Grid() {
 		const char* what;
 	} corners[] = {
 	    {1, 0, INT64_C(1) << 47, size_t{1} << 14, 5, true, "q_ln2 = 1 with M = 2^47 at width 2^14 is inside"},
+	    {1, 0, INT64_C(1) << 47, 32767, 5, true, "q_ln2 = 1 with M = 2^47 at width 32,767 is inside (cell 6.9)"},
 	    {1, 0, (INT64_C(1) << 47) + 1, 1, 0, false, "M = 2^47 + 1 is outside"},
 	    {3, 1, 0, 1, 0, true, "M = 1 is inside"},
 	    {1, 0, 0, 1, 0, false, "M = 0 is outside"},
@@ -1359,7 +1360,7 @@ void TestS4Grid() {
 	    {9, 4, 0, 1, -(INT64_C(1) << 61), true, "a score of -2^61 is inside"},
 	    {9, 4, 0, 1, (INT64_C(1) << 61) + 1, false, "a score of 2^61 + 1 is outside"},
 	    {10, 4, 0, 1, 0, false, "q_ln2 = 2 q_b + 2 is outside"},
-	    {9, 4, 0, (size_t{1} << 14) + 1, 0, false, "width 2^14 + 1 is outside"},
+	    {9, 4, 0, 32768, 0, false, "width 32,768 is outside (cell 6.9)"},
 	};
 	for (const auto& k : corners) {
 		std::vector<int64_t> row(k.width, 0);
@@ -1429,6 +1430,48 @@ void TestS4ReplicaPremise() {
 }
 
 // ---- 6.3: the S4 golden pin (the v1.9.0 tag's hash over the softmax input set) ------------------------
+
+// ---- 6.9: the guard's width cap at 32,767 (paged-KV plan rev 16.23, D-SLM8429, D-SLM8435) ------------------
+//
+// The rows are the S4 set's "6.9" members and its 32,767 twins (tests/support/attention_cases.h,
+// ForEachSoftmaxCapCase); TestS4Grid has already run every one through RunSm, so each call's bool and every
+// probability equal the v1.9.0 body (RefSoftmax), and the softmax counters moved by exactly what the guard copy
+// names: fast +1 at widths 16,385 to 32,767 and fallback +1 at 32,768, on the tier the build dispatches (the
+// scalar and SSE2 forced suites expect no fast counter at all, ExpectedSmDelta). This cell asserts the set
+// carries what 6.9 names, so a generator that drifted cannot leave a width or a correction untested, and that the
+// guard copy moved with the cap. Mutants: the cap left at 2^14 (fallback +1 at 16,385 where the copy says fast),
+// the cap at 32,768 (the AVX2 body writes 2 in every lane of the equal-score row at 32,768; fast +1 on both
+// bodies where the copy says fallback), and each p correction skipped (the correction rows).
+void TestS4Cap() {
+	using superslm_attention_cases::kSmMaxWidth;
+	CHECK_MSG(kSmMaxWidth == 32767, "6.9: the guard copy's cap is %zu, 32,767 owed", kSmMaxWidth);
+	std::map<size_t, int> shapes, p_down, p_up;
+	int outside = 0, outside_fast = 0, inside_slow = 0, twins = 0;
+	superslm_attention_cases::ForEachSoftmaxCase([&](const SmCase& c) {
+		const std::string label(c.label);
+		const size_t w = c.scores.size();
+		if (label == "4.S4 grid, width 32,767" || label.find("twin of the 2^14 corner") != std::string::npos) ++twins;
+		if (label.rfind("6.9", 0) != 0) return;
+		const bool fast = TestSoftmaxGuard(c.scores.data(), w, c.q_ln2, c.q_b, c.q_c).Fast();
+		if (w > kSmMaxWidth) {
+			++outside;
+			outside_fast += fast ? 1 : 0;
+			return;
+		}
+		if (!fast) ++inside_slow;
+		if (label.rfind("6.9 M = 2^47", 0) == 0) ++shapes[w];
+		if (label.find("p down") != std::string::npos) ++p_down[w];
+		if (label.find("p up") != std::string::npos) ++p_up[w];
+	});
+	for (size_t w : {size_t{16385}, size_t{24576}, size_t{32767}})
+		CHECK_MSG(shapes[w] == 3 && p_down[w] >= 1 && p_up[w] >= 1,
+		          "6.9 width %zu: %d M-ceiling shapes (3 owed), %d p-down and %d p-up correction rows (at least 1 each)", w,
+		          shapes[w], p_down[w], p_up[w]);
+	CHECK_MSG(outside == 2 && outside_fast == 0, "6.9: %d rows at width 32,768 (2 owed), %d of them inside the guard copy",
+	          outside, outside_fast);
+	CHECK_MSG(inside_slow == 0, "6.9: %d rows at widths up to 32,767 that the guard copy calls fallback", inside_slow);
+	CHECK_MSG(twins == 5, "6.9: %d twins at 32,767 (4 grid members and the inside corner owed)", twins);
+}
 
 void TestS4GoldenPin() {
 	superslm::Sha256 h;
@@ -2159,6 +2202,7 @@ void RunAttnRowsiteCells(int& checks, int& failures) {
 	TestS4ReplicaPremise();
 	TestS4Grid();
 	TestS4HostileRows();
+	TestS4Cap();               // 6.9 (paged-KV plan rev 16.23): the cap at 32,767
 	TestS4GoldenPin();
 	TestS5Grid();
 	TestS5GuardInsideRows();

@@ -119,11 +119,11 @@ static void TestCensus_S1_DfaRejection(SslmGpuContext* ctx, SslmGpuModelHandle* 
 	sslm_gpu_seq_release(ctx, seq);
 }
 
-// Source-grounded ordering (src/gpu/gpu_1p0.cpp:2202-2217): the DFA `Transition` check runs
-// BEFORE the `seq->state != Idle` busy check inside SslmGpuSeqPrefillSchemaContentForG5Bridge --
-// a token that is not DFA-reachable from the walk state's current position returns
-// SSLM_SEQUENCE_REJECTED before the busy check is ever reached, which would make this cell
-// report the wrong exit path for the wrong reason. Finds a token the fixture's own schema
+// Ordering since v1.6.0 (663dd87; gpu_1p0.h's Status precedence): inside
+// SslmGpuSeqPrefillSchemaContentForG5Bridge an own-handle Submitted sequence returns SSLM_BUSY
+// first, and only an idle one reaches the DFA `Transition` check, where a token that is not
+// DFA-reachable from the walk state's position returns SSLM_SEQUENCE_REJECTED. A cell aimed at
+// one branch must not be decided by the other. Finds a token the fixture's own schema
 // actually admits from a fresh walk state, on a throwaway probe sequence, so the real cell below
 // exercises the busy branch specifically. SKIPs (never asserts a false claim) if none of the
 // probed range is DFA-reachable on this schema/fixture pairing.
@@ -231,14 +231,20 @@ static void TestCensus_S5_AllAdmittedSuccess(SslmGpuContext* ctx, SslmGpuModelHa
 	sslm_gpu_seq_release(ctx, seq);
 }
 
-// --- T-2184 M1 (Brunel fix round 1, Claude/Poirot/efeb9ba-t2184-t2169-gpu-batched-prefill-
-// review.md; D-SLM3662): a sequence left `Submitted` whose FIRST token in the next schema-prefill
-// call is DFA-unreachable must return `SSLM_SEQUENCE_REJECTED`, matching the shipped per-token
-// loop's own ordering (`e35edc1`: `Transition` checked, on failure `SSLM_SEQUENCE_REJECTED`, THEN
-// the busy check) -- not `SSLM_BUSY`, which the busy-check-first ordering this fix corrects would
-// have returned instead. S2 above cannot see this: it deliberately finds a DFA-REACHABLE token so
-// the busy branch is isolated from DFA rejection. This cell needs the opposite token and isolates
-// the ordering INTERACTION S2 cannot. ---
+// --- T-2184 M1, re-pinned to the shipped ordering. T-2184 (D-SLM3662) first pinned the per-token
+// loop's order -- `Transition(tokens[0])`, then the busy check -- so a Submitted sequence whose
+// first token is DFA-unreachable returned `SSLM_SEQUENCE_REJECTED`. v1.6.0's bind-eligibility
+// change (663dd87, D-SLM7625) moved the own-handle `Submitted` -> `SSLM_BUSY` refusal to the
+// entry, ahead of the `bind_eligible` revocation, so a Busy call changes nothing; this cell was
+// not updated with it and has expected the pre-1.6.0 order ever since (the suite's build gate
+// links it but never runs it against a fixture). The shipped contract is now written down:
+// gpu_1p0.h's "Status precedence" puts the own-handle Submitted refusal before the entry guard
+// and lists the unreachable first token among the exits after it, and the paged-KV plan's Sec4.4
+// at-source table rules the same (own handle Submitted: `SSLM_BUSY`, before the guard;
+// unreachable first token: `SSLM_SEQUENCE_REJECTED`, after it). So a Submitted sequence returns
+// `SSLM_BUSY` here, and the same call once drained returns `SSLM_SEQUENCE_REJECTED`. S2 above
+// cannot see this: it uses a DFA-REACHABLE token. This cell needs the opposite token and pins the
+// ordering INTERACTION S2 cannot. ---
 static bool FindDfaUnreachableFirstToken(SslmGpuContext* ctx, SslmGpuModelHandle* model,
                                           int32_t schema_index, int32_t vocab_size,
                                           int32_t* out_token) {
@@ -264,7 +270,7 @@ static bool FindDfaUnreachableFirstToken(SslmGpuContext* ctx, SslmGpuModelHandle
 	return false;
 }
 
-static void TestCensus_M1_RejectedBeforeBusyOnSubmittedWithUnreachableFirstToken(
+static void TestCensus_M1_BusyBeforeRejectedOnSubmittedWithUnreachableFirstToken(
     SslmGpuContext* ctx, SslmGpuModelHandle* model, int32_t schema_index, int32_t vocab_size) {
 	int32_t reachable_token = 0;
 	int32_t unreachable_token = 0;
@@ -285,16 +291,25 @@ static void TestCensus_M1_RejectedBeforeBusyOnSubmittedWithUnreachableFirstToken
 	const SslmGpuStatus submit_st = sslm_decode_step_gpu(ctx, seq, /*adapter=*/nullptr, kDispatchBudget);
 	CHECK_MSG(submit_st == SSLM_OK, "Census M1: primary submit failed: %s", GpuStatusName(submit_st));
 	std::vector<int32_t> chunk = {unreachable_token};
-	int32_t consumed = 0;
+	int32_t consumed = -1;
 	const SslmGpuStatus st = SslmGpuSeqPrefillSchemaContentForG5Bridge(
 	    ctx, seq, chunk.data(), 1, kDispatchBudget, &consumed);
-	CHECK_MSG(st == SSLM_SEQUENCE_REJECTED,
+	CHECK_MSG(st == SSLM_BUSY && consumed == 0,
 	          "Census M1: a schema-prefill call whose FIRST token is DFA-unreachable, against a "
-	          "still-Submitted sequence, returned %s, expected SSLM_SEQUENCE_REJECTED -- the shipped "
-	          "per-token loop checks Transition before the busy check; a busy-check-first ordering "
-	          "would wrongly return SSLM_BUSY here",
-	          GpuStatusName(st));
+	          "still-Submitted sequence, returned %s (consumed=%d), expected SSLM_BUSY with "
+	          "consumed=0 -- the own-handle Submitted refusal precedes the unreachable-first-token "
+	          "refusal (gpu_1p0.h, Status precedence; paged-KV plan Sec4.4 at-source table)",
+	          GpuStatusName(st), consumed);
 	CHECK(Drain(ctx, seq) == SSLM_OK);
+	// Drained (Idle), the identical call reaches the reachability probe: the Busy above changed
+	// nothing, and the token is refused for the reason it was chosen.
+	consumed = -1;
+	const SslmGpuStatus st_idle = SslmGpuSeqPrefillSchemaContentForG5Bridge(
+	    ctx, seq, chunk.data(), 1, kDispatchBudget, &consumed);
+	CHECK_MSG(st_idle == SSLM_SEQUENCE_REJECTED && consumed == 0,
+	          "Census M1: the same call after the drain returned %s (consumed=%d), expected "
+	          "SSLM_SEQUENCE_REJECTED with consumed=0",
+	          GpuStatusName(st_idle), consumed);
 	sslm_gpu_seq_release(ctx, seq);
 }
 
@@ -409,7 +424,7 @@ int main(int argc, char** argv) {
 	volatile void* a4 = (void*)&TestCensus_S5_AllAdmittedSuccess; (void)a4;
 	volatile void* a5 = (void*)&TestCensus_TenthOrigin_ChunkScopeInfrastructuralFault; (void)a5;
 	volatile void* a6 =
-	    (void*)&TestCensus_M1_RejectedBeforeBusyOnSubmittedWithUnreachableFirstToken; (void)a6;
+	    (void*)&TestCensus_M1_BusyBeforeRejectedOnSubmittedWithUnreachableFirstToken; (void)a6;
 
 	SslmGpuContext* ctx = nullptr;
 	CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
@@ -450,7 +465,7 @@ int main(int argc, char** argv) {
 				TestCensus_S1_DfaRejection(ctx, model, schema_index);
 				TestCensus_S2_BusyOnSchema(ctx, model, schema_index, vocab_size);
 				TestCensus_S5_AllAdmittedSuccess(ctx, model, schema_index, vocab_size);
-				TestCensus_M1_RejectedBeforeBusyOnSubmittedWithUnreachableFirstToken(
+				TestCensus_M1_BusyBeforeRejectedOnSubmittedWithUnreachableFirstToken(
 				    ctx, model, schema_index, vocab_size);
 			}
 			CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);

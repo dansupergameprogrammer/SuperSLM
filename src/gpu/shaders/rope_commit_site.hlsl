@@ -102,7 +102,6 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
 
     uint row_offset = g_position * pairs;
     uint group = (g_num_kv_heads > 0u) ? (g_num_attention_heads / g_num_kv_heads) : 1u;
-    uint kv_half_off = KvHalfOffsetGpu(g_layer_index, g_context_cap, g_num_kv_heads, (uint)g_head_dim);
     uint rope_stage_base = ScratchLayout.Load<uint>(26 * 4);
 
     uint items = g_num_attention_heads * pairs;
@@ -118,7 +117,8 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
     if (LayerWeights.Load<int64_t>(g_layer_index * Layout.Load<uint>(56 * 4) + Layout.Load<uint>(60 * 4)) == 0 && t < items) {
         uint h2 = t / pairs;
         uint kv_head2 = h2 / max(group, 1u);
-        uint row_off2 = KvRowOffsetWithinHalfGpu(g_context_cap, (uint)g_head_dim, kv_head2, g_position);
+        // Paged-KV plan §4 item 1: the K row through the page table (site_common.hlsli KvRowAddrGpu).
+        uint row_off2 = KvRowAddrGpu(g_layer_index, 0u, g_num_kv_heads, (uint)g_head_dim, kv_head2, g_position);
         uint stage2 = rope_stage_base + h2 * (uint)g_head_dim * 4u;
         {
             uint p2 = t % pairs;
@@ -150,8 +150,8 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
             bool only_representative_head = (h2 % max(group, 1u)) == 0u;
             if (only_representative_head && (rkx < -127 || rkx > 127)) InterlockedAdd(gRopeCommitClamps, 1u);
             if (only_representative_head && (rky < -127 || rky > 127)) InterlockedAdd(gRopeCommitClamps, 1u);
-            StoreSignedByteGpu(KvCache, kv_half_off + row_off2 + 2u * p2, (int)ClampRopeCodeGpu(rkx));
-            StoreSignedByteGpu(KvCache, kv_half_off + row_off2 + 2u * p2 + 1u, (int)ClampRopeCodeGpu(rky));
+            StoreSignedByteGpu(KvCache, row_off2 + 2u * p2, (int)ClampRopeCodeGpu(rkx));
+            StoreSignedByteGpu(KvCache, row_off2 + 2u * p2 + 1u, (int)ClampRopeCodeGpu(rky));
         }
     }
 

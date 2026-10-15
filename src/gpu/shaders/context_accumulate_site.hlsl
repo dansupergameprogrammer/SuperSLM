@@ -61,8 +61,6 @@ void main(uint3 dtid : SV_DispatchThreadID)
     uint group = (g_num_kv_heads > 0u) ? (g_num_attention_heads / g_num_kv_heads) : 1u;
 
     uint scores_base_all = ScratchLayout.Load<uint>(25 * 4);
-    uint kv_half_off = KvHalfOffsetGpu(g_layer_index, g_context_cap, g_num_kv_heads, (uint)g_head_dim);
-    uint v_half_off = kv_half_off + g_context_cap * g_num_kv_heads * (uint)g_head_dim;
 
     uint off_ctx_id = layer_base + Layout.Load<uint>(30 * 4);
     uint off_ctx_mult = layer_base + Layout.Load<uint>(31 * 4);
@@ -87,13 +85,28 @@ void main(uint3 dtid : SV_DispatchThreadID)
         int cshift = (int)LayerWeights.Load<int>(off_ctx_shift + h * 4u);
 
         {
+            // Paged-KV plan §4 item 1: the width-long reduction as page runs. Each run is the rows
+            // [p0, p0 + rows) of one page, so it reads the page table once and strides head_dim bytes
+            // inside the page. The int64 terms p * V are the pre-G2 loop's, summed in the same ascending
+            // k order, so the sum is exact and identical; a legacy one-page view (B = context_cap) runs
+            // the outer loop once with rows = width. The loop bounds are transliterated in
+            // gpu/shaders/kv_page_addr_model.h (ForEachKvPageRunGpu).
+            uint page_positions = g_page_positions;
+            uint width_u = (uint)width;
+            uint v_in_page_base = KvInPageRowOffsetGpu(g_layer_index, 1u, g_num_kv_heads, (uint)g_head_dim, kv_head,
+                                                       page_positions, 0u) + (uint)d;
             int64_t ctx_acc_d = 0;
-            for (int k = 0; k < width; ++k)
+            for (uint p0 = 0u; p0 < width_u; p0 += page_positions)  // SSLM-KV-ADDR:page-run-loop
             {
-                uint v_row_off = KvRowOffsetWithinHalfGpu(g_context_cap, (uint)g_head_dim, kv_head, (uint)k);
-                int64_t p = LayerScratch.Load<int64_t>(my_scores_base + (uint)k * 8u);
-                int vv = LoadSignedByteGpu(KvCache, v_half_off + v_row_off + (uint)d);
-                ctx_acc_d += p * (int64_t)vv;
+                uint rows = min(page_positions, width_u - p0);  // SSLM-KV-ADDR:page-run-rows
+                uint run_base = KvPhysPageBaseGpu(p0 / page_positions) + v_in_page_base;
+                for (uint r = 0u; r < rows; ++r)
+                {
+                    uint k = p0 + r;
+                    int64_t p = LayerScratch.Load<int64_t>(my_scores_base + k * 8u);
+                    int vv = LoadSignedByteGpu(KvCache, run_base + r * (uint)g_head_dim);
+                    ctx_acc_d += p * (int64_t)vv;
+                }
             }
             int64_t folded = ApplyWeightScaleFoldGpu(ctx_acc_d, cid, cmult, cshift);
             WorkScratch.Store<int64_t>(0u + (h * (uint)g_head_dim + (uint)d) * 8u, folded);

@@ -294,6 +294,17 @@ inline const char* StatusName(SslmGpuStatus s) {
 		case 16: return "SSLM_GPU_ALLOCATION_FAILED";
 		case 17: return "SSLM_OUTPUT_BUFFER_TOO_SMALL";
 		case 18: return "SSLM_PREFILL_HIDDEN_UNAVAILABLE";
+		case 19: return "SSLM_GPU_SHADER_DIR_INVALID";
+		case 20: return "SSLM_GPU_SHADER_DIR_CONFLICT";
+		case 21: return "SSLM_GPU_PARALLEL_FOR_INVALID";
+		case 22: return "SSLM_GPU_PARALLEL_FOR_INCOMPLETE";
+		case 23: return "SSLM_GPU_RESIDENCY_FLAGS_INVALID";
+		case 24: return "SSLM_GPU_KV_BUDGET_EXCEEDED";
+		case 25: return "SSLM_GPU_KV_POOL_EXHAUSTED";
+		case 26: return "SSLM_GPU_KV_POOL_TOO_LARGE";
+		case 27: return "SSLM_GPU_HOLDER_MODE_MISMATCH";
+		case 28: return "SSLM_GPU_PREFIX_REJECTED";
+		case 29: return "SSLM_GPU_PREFIX_SCHEMA_MISMATCH";
 		default: return "UNKNOWN_STATUS";
 	}
 }

@@ -42,6 +42,12 @@
 static_assert(SSLM_KV_BUDGET_EXCEEDED == PKV_KV_BUDGET_EXCEEDED, "§3.6: SSLM_KV_BUDGET_EXCEEDED is ordinal 29");
 #endif
 
+#if defined(PKV_PIN_GENERATED_FIXTURES) || defined(PKV_FIXTURE_B_FROM_RULE)
+// The test-only pin (paged-KV plan §3.1, D-SLM8440; declared beside the R9 surface in pkv_r9.h): the C4 and C5 loader
+// pins (D-SLM8439), and 7.4/C6 pins its own mappings (D-SLM8447).
+extern "C" sslm_status KvPagesTestPinPagePositions(sslm_model model, int64_t page_positions);
+#endif
+
 namespace pkv {
 
 // ---- the registry and the checks -------------------------------------------------------------
@@ -73,7 +79,12 @@ struct RunState {
 	int cell_failures = 0;
 	// When set, Fail also appends each failure's complete stderr line, without its newline. The
 	// precache runner's per-case checkpoint journal records them (tests/precache/precache_checkpoint.h).
+	// A MUTED failure (below) is not a failure and is never journalled.
 	std::vector<std::string>* failure_lines = nullptr;
+	// A vitality member runs a cell's checks against a deliberate mutant with `muted` set: each failing check is
+	// counted in muted_failures and printed as MUTED, not FAIL, and the member grades the count itself.
+	int muted = 0;
+	int muted_failures = 0;
 };
 
 inline RunState& State() {
@@ -83,12 +94,16 @@ inline RunState& State() {
 
 inline void Fail(const char* file, int line, const char* fmt, ...) {
 	RunState& s = State();
-	++s.failures;
-	++s.cell_failures;
-	std::fprintf(stderr, "FAIL [%s] %s:%d: ", s.cell, file, line);
+	if (s.muted) ++s.muted_failures;
+	else {
+		++s.failures;
+		++s.cell_failures;
+	}
+	std::FILE* to = s.muted ? stdout : stderr;
+	std::fprintf(to, "%s [%s] %s:%d: ", s.muted ? "MUTED" : "FAIL", s.cell, file, line);
 	va_list ap;
 	va_start(ap, fmt);
-	if (s.failure_lines) {
+	if (s.failure_lines && !s.muted) {
 		std::string text = std::string("FAIL [") + s.cell + "] " + file + ":" + std::to_string(line) + ": ";
 		va_list measure;
 		va_copy(measure, ap);
@@ -104,9 +119,9 @@ inline void Fail(const char* file, int line, const char* fmt, ...) {
 		}
 		s.failure_lines->push_back(std::move(text));
 	}
-	std::vfprintf(stderr, fmt, ap);
+	std::vfprintf(to, fmt, ap);
 	va_end(ap);
-	std::fputc('\n', stderr);
+	std::fputc('\n', to);
 }
 
 #define PKV_CHECK(cond)                                                    \
@@ -164,6 +179,38 @@ struct AlignedBuf {
 	}
 };
 
+// ---- §3.1's page-size rule and in-page address, written once for every suite (rev 16.24) ------------
+
+// The page-size rule (§3.1), written here: S = 4 KiB when D <= 64 and cap <= 4,096, else 8 KiB; B is the smallest
+// power of two >= 16 with B * D * elem >= S, and the cap when that exceeds it. tests/paged-kv/pkv_r9.h's RuleB
+// carries the same rule with its mutants; the C6 cells read B from this one (D-SLM8447).
+inline int64_t PageRuleB(uint64_t D, uint64_t cap, uint64_t elem) {
+	const uint64_t S = (D <= 64 && cap <= 4096) ? 4096 : 8192;
+	uint64_t B = 16;
+	while (B * D * elem < S) B *= 2;
+	return static_cast<int64_t>(B > cap ? cap : B);
+}
+
+// Every page is rotated at every B, pinned or not (§3.1, T1): run r = (layer * 2 + half) * kv_heads + h of logical page
+// j = pos / B sits in slot (r + j) mod runs, runs = layers * 2 * kv_heads. Until T1 this was a switch
+// (SUPERSLM_PKV_T1_ROTATED_LAYOUT, D-SLM8449) so the suites stayed green on 2ebe5e3, whose pages sat in slot r. The
+// switch is retired (T-3202 F-7): the engine has rotated unconditionally since T1, so the unrotated branch described no
+// build that exists, and the option was a CMake cache variable, so a build directory configured before T1 kept it OFF
+// and turned every C2 to C6 raw-byte read red with nothing to say why. The R9 cells that need the unrotated layout
+// (6.6a's and 7.9-MR-OPT's) name it explicitly through PageRunOffset's `rotated` argument.
+constexpr bool kRotatedLayout = true;
+
+// The byte offset of (layer, half, h, pos) inside its page at page size B, rows of `row_bytes` (head_dim * elem):
+// §3.1's formula. Every test-side in-page address in tests/paged-kv goes through this function (the census is the
+// test author's record, T-3189 §7); `rotated` defaults to the T1 switch.
+inline size_t PageRunOffset(uint32_t layers, uint32_t kv_heads, size_t row_bytes, int64_t B, uint32_t layer,
+                            uint32_t half, size_t h, int64_t pos, bool rotated = kRotatedLayout) {
+	const uint64_t runs = uint64_t{layers} * 2u * kv_heads;
+	uint64_t slot = (uint64_t{layer} * 2u + half) * kv_heads + h;
+	if (rotated && runs) slot = (slot + static_cast<uint64_t>(pos / B)) % runs;
+	return static_cast<size_t>(slot * static_cast<uint64_t>(B) * row_bytes + static_cast<uint64_t>(pos % B) * row_bytes);
+}
+
 // ---- fixtures -------------------------------------------------------------------------------
 
 // The four fixtures of tools/gen_paged_kv_fixture.py, by stem: "pkv_def", "pkv_qk", "pkv_odd",
@@ -177,9 +224,23 @@ struct Fixture {
 	Geometry geo{};
 	std::string sha;  // the file's SHA-256, matched against each .ref header
 	int32_t vocab = 256;
-	int64_t block_size_override = 0;  // test-only patched CFG1 view; 0 preserves legacy fixtures
-	int64_t B() const { return block_size_override ? block_size_override :
-		(geo.context_cap % 16 == 0 ? 16 : geo.context_cap); }  // §3.1, written here
+	// A B read back from the engine after a test-only pin on this fixture's own mapping (7.4/C6, D-SLM8447); 0: none.
+	int64_t pinned = 0;
+	// The page size the cells were written at.
+	// - A pinned fixture: the pinned value.
+	// - The C6 suite (PKV_FIXTURE_B_FROM_RULE, D-SLM8447): §3.1's rule, PageRuleB, never a pinned 16. Its cloud twins
+	//   run the box cells' own code at the B the box runs, so they are red on 2ebe5e3 (B = 16) and green from T1.
+	// - Otherwise, the C2 to C5 cells: 16 on the generated fixtures, which the loader pins in the C4 and C5 suites (rev
+	//   16.23, D-SLM8439), and on pkv_odd the rule's 256. Until T2, pkv_odd read the cap (the one-page fallback) behind
+	//   the switch SUPERSLM_PKV_T2_FALLBACK_RETIRED (D-SLM8448), retired with the fallback (T-3189 §13).
+	int64_t B() const {
+		if (pinned > 0) return pinned;
+#if defined(PKV_FIXTURE_B_FROM_RULE)
+		return PageRuleB(geo.head_dim, static_cast<uint64_t>(geo.context_cap), 1);
+#else
+		return geo.context_cap % 16 == 0 ? 16 : PageRuleB(geo.head_dim, static_cast<uint64_t>(geo.context_cap), 1);
+#endif
+	}
 	int64_t CapPages() const { return (geo.context_cap + B() - 1) / B(); }
 	// §3.4's R(budget), written here: min(ceil(budget / B) + 1, ceil(cap / B)).
 	int64_t R(int64_t budget) const {
@@ -232,6 +293,21 @@ inline const Fixture& GetFixture(const char* stem) {
 		const sslm_status st = sslm_model_map(f->bytes.p, f->size, &f->model);
 		PKV_CHECK_MSG(st == SSLM_OK, "sslm_model_map(%s) == %d", stem, static_cast<int>(st));
 		f->ok = st == SSLM_OK;
+#if defined(PKV_PIN_GENERATED_FIXTURES)
+		// D-SLM8439: the C4 and C5 suites' generated fixtures run at B = 16, the page size their assertions are
+		// written at. CFG1's kv_block_size 16 gives it on 2ebe5e3; from T1 the rule ignores CFG1, and the test-only
+		// pin gives it. The pin's SSLM_OK is required only once the T0 stub is gone; B == 16 is required always.
+		if (f->ok && std::string(stem) != "pkv_odd") {
+			const sslm_status pin = KvPagesTestPinPagePositions(f->model, 16);
+#if !defined(PKV_R9_STUB_PIN)
+			PKV_CHECK_MSG(pin == SSLM_OK, "the pin of %s to B = 16 is refused (%d)", stem, static_cast<int>(pin));
+#else
+			(void)pin;
+#endif
+			PKV_CHECK_MSG(sslm_kv_page_positions(f->model) == 16, "%s runs at B = %lld after the loader's pin, not 16", stem,
+			              static_cast<long long>(sslm_kv_page_positions(f->model)));
+		}
+#endif
 	} else {
 		PKV_CHECK_MSG(false, "fixture %s/%s.sslm not found or empty", dir ? dir : "(unset)", stem);
 	}
@@ -339,28 +415,35 @@ inline const RefRecord* RefLookup(const RefFile& ref, const std::string& scenari
 // against the blob= digest of its own record ("<scenario> <stage>" in <tag>_pkv_def.ref): a pin that
 // does not match its reference is a failed check here, before any cell restores it. The decoded bytes
 // are returned either way, so the cell's own comparison still reports what the corrupt pin does.
-inline std::vector<uint8_t> Pin(const char* tag, const char* scenario, const char* stage) {
+// PinFor takes the fixture stem (rev 16.22 §24.6: cell 9.2b reads pkv_odd's pins); Pin is pkv_def's.
+inline std::vector<uint8_t> PinFor(const char* tag, const char* stem, const char* scenario, const char* stage) {
 	std::vector<uint8_t> enc, out;
-	const std::string path = std::string(PKV_REFERENCE_DIR) + "/pins/" + tag + "_pkv_def_" + scenario + "_" + stage + ".zrl";
+	const std::string path =
+	    std::string(PKV_REFERENCE_DIR) + "/pins/" + tag + "_" + stem + "_" + scenario + "_" + stage + ".zrl";
 	const bool ok = ReadAll(path, &enc) && ZrlDecode(enc, &out);
 	PKV_CHECK_MSG(ok, "pinned blob %s missing or malformed", path.c_str());
 	if (!ok) return out;
-	const Fixture& fx = GetFixture("pkv_def");
+	const Fixture& fx = GetFixture(stem);
 	const RefRecord* rec = RefLookup(Reference(tag, fx), scenario, stage);
 	if (!rec) return out;
 	const std::string got = Sha(out.data(), out.size());
 	// kills: a corrupt or substituted pin read as the reference (caught only by a later replay)
-	PKV_CHECK_MSG(got == rec->blob_sha, "pinned blob %s does not match its reference: sha256 %s, the %s_pkv_def.ref record "
-	              "'%s %s' has blob=%s", path.c_str(), got.c_str(), tag, scenario, stage, rec->blob_sha.c_str());
+	PKV_CHECK_MSG(got == rec->blob_sha, "pinned blob %s does not match its reference: sha256 %s, the %s_%s.ref record "
+	              "'%s %s' has blob=%s", path.c_str(), got.c_str(), tag, stem, scenario, stage, rec->blob_sha.c_str());
 	return out;
+}
+
+inline std::vector<uint8_t> Pin(const char* tag, const char* scenario, const char* stage) {
+	return PinFor(tag, "pkv_def", scenario, stage);
 }
 
 // Runs one of pkv_scenarios.h's scenarios on the build under test (legacy verbs only) and returns
 // its records. A scenario failure is a failed check.
-inline std::vector<Record> RunScenario(const Fixture& fx, const char* scenario) {
+inline std::vector<Record> RunScenario(const Fixture& fx, const char* scenario, int pool_fill = -1) {
 	Driver d;
 	d.model = fx.model;
 	d.geo = fx.geo;
+	d.pool_fill = pool_fill;
 	size_t n = 0;
 	const Scenario* sc = Scenarios(&n);
 	for (size_t i = 0; i < n; ++i)
@@ -764,13 +847,6 @@ inline const char* TimingVerdictName(TimingVerdict v) {
 			return "RESOLVED";
 	}
 	return "?";
-}
-
-// SUPERSLM_PAGED_KV_TIMING_COMMISSIONED=1: the timing harness is commissioned (§8), so 7.9's verdict
-// is asserted; otherwise its readings are quarantined (recorded, never acted on).
-inline bool TimingCommissioned() {
-	const char* c = std::getenv("SUPERSLM_PAGED_KV_TIMING_COMMISSIONED");
-	return c && std::string(c) == "1";
 }
 
 // Grades `value` against `bound` with a resolving power, all three in one unit: a verdict is drawn only

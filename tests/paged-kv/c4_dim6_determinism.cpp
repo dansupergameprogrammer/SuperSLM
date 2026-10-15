@@ -145,9 +145,11 @@ void Cell61Legacy() {
 		// (a) the ABI half, against the reference record for record.
 		for (const char* sc : {"widths", "prefix_lengths", "long_prefill"})
 			ExpectMatchesReference("v1.11.0", fx, sc, RunScenario(fx, sc), Compare::kTokensRowsAndBlob);
-		// (b) the layout half, on B = 16 (pkv_def) and B = cap (pkv_odd: one page per holder, the
-		// one-page identity of §3.1). pkv_qk's geometry differs only in head_dim, which (a) covers.
+		// (b) the layout half, on B = 16 (pkv_def). pkv_qk's geometry differs only in head_dim, which (a) covers;
+		// pkv_odd's half asserted the one-page fallback and retired with it (D-SLM8448; T-3189 §13): 4.4/T2 and 10.9/T2
+		// carry pkv_odd's layout at B = 256.
 		if (std::strcmp(stem, "pkv_qk") == 0) continue;
+		if (std::strcmp(stem, "pkv_odd") == 0) continue;
 		const RefFile& ref = Reference("v1.11.0", fx);
 		LayoutHalfWidths(fx, ref);
 		LayoutHalfPrefixLengths(fx, ref);

@@ -39,8 +39,7 @@ void CheckPageLayout(const Fixture& fx, sslm_kv_pool pool, sslm_seq s, int64_t L
 					const uint32_t page = table[static_cast<size_t>(p / B)];
 					auto it = pages.find(page);
 					if (it == pages.end()) it = pages.emplace(page, PeekPage(pool, fx, page)).first;
-					const size_t off = ((size_t{l} * 2 + half) * H + h) * static_cast<size_t>(B) * D +
-					                   static_cast<size_t>(p % B) * D;
+					const size_t off = PageRunOffset(fx.geo.layers, static_cast<uint32_t>(H), D, B, l, half, h, p);
 					if (it->second.size() < off + D || std::memcmp(it->second.data() + off, rows.data() + at, D) != 0) ++bad;
 					at += D;
 				}
@@ -98,9 +97,8 @@ void Cell61Budget() {
 	// kills: per-page attention that mis-chains a run at a page boundary (W = B-1, B, B+1, 2B);
 	// a guard or map that stops one short of the limit (W = cap - 1 and cap are the last writes)
 	ExpectMatchesReference("v1.11.0", fx, "widths", BudgetWidths(fx), Compare::kTokensAndRows);
-	// The B = cap fallback runs the same widths at one page per holder (§3.1).
-	const Fixture& odd = GetFixture("pkv_odd");
-	if (odd.ok) ExpectMatchesReference("v1.11.0", odd, "widths", BudgetWidths(odd), Compare::kTokensAndRows);
+	// (pkv_odd's widths at one page per holder asserted the B = cap fallback and retired with it, D-SLM8448; 4.4/T2's
+	// budget member carries pkv_odd.)
 	// 4.2: budget prefix x budget share adopt at every prefix length.
 	// kills: share adopt that maps the tail page instead of copying it (1,000), or copies a tail an
 	// aligned prefix does not have (1,008, 16); an empty prefix adopted as a one-row prefix (0)
@@ -200,7 +198,7 @@ void Cell64aSsb6() {
 	if (table.size() > 2) {
 		const std::vector<uint8_t> page = PeekPage(reused_pool.pool, fx, table[2]);
 		const size_t D = fx.geo.head_dim, H = fx.geo.kv_heads, B = static_cast<size_t>(fx.B());
-		const size_t off = ((1 * 2 + 0) * H + 0) * B * D + (40 % B) * D;
+		const size_t off = PageRunOffset(fx.geo.layers, static_cast<uint32_t>(H), D, static_cast<int64_t>(B), 1, 0, 0, 40);
 		bool nonzero = false;
 		for (size_t d = 0; d < D && off + d < page.size(); ++d) nonzero = nonzero || page[off + d] != 0;
 		PKV_CHECK_MSG(nonzero, "construction: row 40 layer 1 holds zero bytes in memory, so the mutant cannot separate");

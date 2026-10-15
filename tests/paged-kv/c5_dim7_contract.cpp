@@ -377,22 +377,18 @@ void Cell76Budget() {
 // to be) have a failing cell where cheap. One block per verb, each named for its sentence.
 void Cell78Budget() {
 	const Fixture& fx = GetFixture("pkv_def");
-	const Fixture& odd = GetFixture("pkv_odd");
 	const Fixture& big = GetFixture("pkv_32k");
-	if (!fx.ok || !odd.ok || !big.ok) return;
+	if (!fx.ok || !big.ok) return;  // (pkv_odd's fallback lines retired, D-SLM8448; T-3189 §13)
 	const int32_t cap = static_cast<int32_t>(fx.geo.context_cap);
 
 	// sslm_kv_page_positions: "B (§3.1); 0 on a null model".
 	PKV_CHECK_EQ(sslm_kv_page_positions(nullptr), 0);
 	PKV_CHECK_EQ(sslm_kv_page_positions(fx.model), 16);
 	PKV_CHECK_EQ(sslm_kv_page_positions(big.model), 16);
-	PKV_CHECK_EQ(sslm_kv_page_positions(odd.model), 4100);  // kills: B = kv_block_size when it does not divide cap
 
 	// sslm_kv_page_size: "page_bytes; 0 on null/overflow". page_bytes = L * 2 * H_kv * B * D, written here.
 	PKV_CHECK_EQ(sslm_kv_page_size(nullptr), 0u);
 	PKV_CHECK_EQ(sslm_kv_page_size(fx.model), fx.PageBytes());
-	PKV_CHECK_EQ(sslm_kv_page_size(odd.model), odd.PageBytes());  // one page is the whole block there
-	PKV_CHECK_EQ(sslm_kv_page_size(odd.model), sslm_kv_block_size(odd.model));
 
 	// sslm_kv_pages_for_budget: "R(budget); 0 for a budget outside [1, cap]".
 	for (int32_t b : {1, 15, 16, 17, 512, 1000, 3200, 4079, 4080, 4081, 4096})
@@ -402,7 +398,6 @@ void Cell78Budget() {
 	for (int32_t b : {0, -1, cap + 1, INT32_MAX, INT32_MIN})
 		PKV_CHECK_MSG(sslm_kv_pages_for_budget(fx.model, b) == 0, "pages_for_budget(%d) is not 0", b);
 	PKV_CHECK_EQ(sslm_kv_pages_for_budget(nullptr, 16), 0u);
-	PKV_CHECK_EQ(sslm_kv_pages_for_budget(odd.model, 1), 1u);  // B = cap: ceil(cap/B) = 1 clamps
 
 	// sslm_kv_page_pool_overhead_size: "same saturating convention as the block verb": 0 for a null
 	// model, never decreasing in page_count, and never wrapping to a smaller value.

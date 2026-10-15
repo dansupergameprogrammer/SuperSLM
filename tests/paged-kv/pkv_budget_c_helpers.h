@@ -254,8 +254,7 @@ inline uint32_t SeqMapped(sslm_seq s) {
 
 // Byte offset of (layer, half, head, pos % B, 0) inside a page (§3.1).
 inline size_t InPage(const Fixture& fx, uint32_t layer, uint32_t half, uint32_t head, int64_t pos) {
-	const size_t B = static_cast<size_t>(fx.B()), D = fx.geo.head_dim;
-	return ((size_t{layer} * 2 + half) * fx.geo.kv_heads + head) * B * D + static_cast<size_t>(pos % fx.B()) * D;
+	return PageRunOffset(fx.geo.layers, fx.geo.kv_heads, fx.geo.head_dim, fx.B(), layer, half, head, pos);
 }
 
 // The canonical SSB6 row (layer, half, head, pos) of a blob: [layer][K|V][head][pos < L'][d] (§3.7).

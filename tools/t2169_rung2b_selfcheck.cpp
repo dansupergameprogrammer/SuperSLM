@@ -34,11 +34,13 @@
 // Usage: t2169_rung2b_selfcheck <model.sslm>
 #include <cstdio>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 #include "superslm/artifact.h"
 #include "superslm/forward_sites.h"
 #include "superslm/gpu_port.h"
+#include "../src/gpu/gpu_inflight_token.h"  // GpuInFlightToken (plan G3): complete for construction/destruction
 #include "superslm/model.h"
 #include "sslm_marshal.h"
 
@@ -159,7 +161,7 @@ bool RunSelfCheck(const char* label, const SslmModelView& model_view,
 		PackEmbeddingBlock(embed_codes.data(), hidden_size, embed_scale, &block);
 		std::memcpy(chunk_bytes.data() + i * block_bytes, block.data(), block_bytes);
 	}
-	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+	superslm_gpu::GpuInFlightToken inflight;
 	const SslmForwardStatus submit_status = superslm_gpu::SubmitChunkToFullDepthForG5Bridge(
 	    cand_seq, layers.data(), num_hidden_layers, hidden_size, head_dim, num_kv_heads,
 	    intermediate_size, context_cap, model_view.rope_tables, cand_ws.data(), cand_ws.size(),
@@ -172,7 +174,7 @@ bool RunSelfCheck(const char* label, const SslmModelView& model_view,
 	}
 	int32_t ready = 0;
 	const SslmForwardStatus finish_status =
-	    superslm_gpu::RunLayerLoopGpuFinish(inflight, cand_seq, cand_ws.data(), /*block=*/1, &ready);
+	    superslm_gpu::RunLayerLoopGpuFinish(std::move(inflight), cand_seq, cand_ws.data(), /*block=*/1, &ready);
 	if (finish_status != SslmForwardStatus::Ok) {
 		std::printf("[%s] FAILED at stage=cand_finish status=%s\n", label,
 		            SslmForwardStatusName(finish_status));

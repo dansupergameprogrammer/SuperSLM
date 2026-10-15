@@ -153,7 +153,11 @@ PageStatus HolderCreate(PagePool* pool, uint32_t table_entries, uint32_t reserve
 	std::unique_ptr<PageHolder> h;
 	try {
 		h.reset(new PageHolder);
-		// Uninitialized: create fills nothing, so its time does not scale with the cap.
+		// Uninitialized: create writes no table entry, so the table costs nothing per entry. Create's
+		// time still scales with `reserve_pages`: the draw below moves each reserved page from the free
+		// list one by one, and a no-budget (whole_reserve) holder reserves the whole cap, so its create
+		// is linear in the cap; a budget holder's create scales with its budget instead. (The test seams'
+		// table sentinel, below, also fills every entry when it is on.)
 		h->table.reset(new uint32_t[table_entries]);
 		h->reserve.reserve(reserve_pages);
 	} catch (const std::bad_alloc&) {

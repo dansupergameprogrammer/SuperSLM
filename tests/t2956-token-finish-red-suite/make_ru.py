@@ -7,6 +7,7 @@ All generated files live below this suite's ignored out/ directory.
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -85,7 +86,17 @@ def decode(backend: str, path: Path, steps=16):
     return [int(x) for x in lines[0].split()[1:]]
 
 
+def parse_args(argv=None):
+    """`--verifier <path>` names the independent verifier handed to the converter. Without it the
+    converter searches for the verifier as it does by default."""
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--verifier", default=None,
+                    help="path of the independent verifier executable (sslm_verify)")
+    return ap.parse_args(argv)
+
+
 def main():
+    args = parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     for seed in range(32):
         checkpoint = OUT / "checkpoint"
@@ -106,7 +117,8 @@ def main():
         )
         subprocess.run(
             [sys.executable, str(ROOT / "tools" / "convert_model.py"),
-             "--artifact", str(calibrated), "--out", str(artifact), "--skip-verify"],
+             "--artifact", str(calibrated), "--out", str(artifact)]
+            + (["--verifier", args.verifier] if args.verifier else []),
             cwd=ROOT, check=True, timeout=120,
         )
         substituted(artifact, shadow)

@@ -140,6 +140,7 @@ struct ThreadResult {
 	int cycles_completed = 0;
 	int first_bad_status = -1;  // -1 == no failure observed
 	const char* failed_at = "";
+	long long busy_retries = 0;  // GPU paged-KV plan G3 (decision 68): decodes refused SSLM_BUSY, retried
 };
 
 static void ConcurrentWorker(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
@@ -152,6 +153,17 @@ static void ConcurrentWorker(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
 		{
 			// Submit-only critical section -- matches design Sec5.4's own requirement exactly,
 			// and nothing more: sslm_gpu_ready below runs OUTSIDE this lock, on purpose.
+			std::lock_guard<std::mutex> lock(g_submit_only_mutex);
+			st = sslm_decode_step_gpu(ctx, seq, adapter, 24u);
+		}
+		// GPU paged-KV plan G3 (decision 68): from 1.13.0 a singleton-reaching decode made while the
+		// other thread's submission is unobserved returns SSLM_BUSY and changes nothing, where it used
+		// to reset the shared allocator under the executing list. Retry it (the lock is released
+		// between attempts, so the other thread's unlocked ready can observe its fence) and count each
+		// retry; the ready stays outside the lock, as before.
+		while (st == SSLM_BUSY) {
+			++out->busy_retries;
+			std::this_thread::yield();
 			std::lock_guard<std::mutex> lock(g_submit_only_mutex);
 			st = sslm_decode_step_gpu(ctx, seq, adapter, 24u);
 		}
@@ -211,6 +223,8 @@ static int RunConcurrentRace(const superslm::SslmModelView& mview,
 	std::printf("[concurrent] thread 2: %d/%d cycles completed%s%s\n", r2.cycles_completed,
 	            kIterationsPerThread, r2.first_bad_status >= 0 ? " -- first failure at " : "",
 	            r2.first_bad_status >= 0 ? r2.failed_at : "");
+	std::printf("[concurrent] busy retries: thread 1 %lld, thread 2 %lld, total %lld\n", r1.busy_retries,
+	            r2.busy_retries, r1.busy_retries + r2.busy_retries);
 
 	if (r1.cycles_completed == 0 && r2.cycles_completed == 0) {
 		std::printf("[concurrent] BLOCKED before either thread completed one cycle -- "

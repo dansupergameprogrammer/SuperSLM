@@ -475,17 +475,57 @@ uint SeqRopeQSatHiOffGpu(int hidden_size) { return SeqRopeQSatLoOffGpu(hidden_si
 uint SeqRopeKSatLoOffGpu(int hidden_size) { return SeqRopeQSatHiOffGpu(hidden_size) + 4u; }
 uint SeqRopeKSatHiOffGpu(int hidden_size) { return SeqRopeKSatLoOffGpu(hidden_size) + 4u; }
 
-// forward_sites.cpp's S3.7 KV addressing (KvHalfOffset / KvRowOffsetWithinHalf),
-// bit-exact -- so KeyRowGpu/ValueRowGpu (superslm_gpu.cpp, CPU-side pointer
-// arithmetic reading the same `workspace`) address the identical byte this
-// dispatch writes.
-uint KvHalfOffsetGpu(uint layer, uint context_cap, uint num_kv_heads, uint head_dim)
+// Paged-KV plan (rev 16.1) §3.1 and §4 item 1: K/V is addressed through a page table. The store is
+// logical pages of `g_page_positions` (B) positions; logical page i lives at physical page
+// `KvPageTable[i]` of the K/V buffer (root UAV u2), `g_page_bytes` apart. Page layout
+// [layer][K|V][kv_head][pos_in_page][d], int8 elements, so the row of (layer, half, kv_head, pos) is
+//   KvPageTable[pos / B] * page_bytes + ((layer * 2 + half) * H_kv + kv_head) * B * D + (pos % B) * D
+// with half 0 for K and 1 for V -- forward_sites.cpp's KvPageView accessors (KeyRow/ValueRow on a
+// view) term for term, so KeyRowGpu/ValueRowGpu and the host readback offsets (superslm_gpu.cpp)
+// address the byte this dispatch writes. A legacy dedicated sequence binds the one-page view (table
+// {0}, B = its create-time context_cap, §4 item 2), where the formula is the pre-G2 flat layout term
+// for term (§3.1's one-page identity), so its output is byte-identical through this one path.
+// Offsets stay uint: the pool's size is refused above 2^32 (§4 item 3), and below that no intermediate
+// here reaches 2^32. The C++ transliteration is gpu/shaders/kv_page_addr_model.h: each line tagged
+// SSLM-KV-ADDR:<name> must read the same there (tests/gpu_kv_page_addr_tests.cpp checks it).
+// Both bindings belong to the composed root signature (d3d12_harness.h, MakeRootSigComposed):
+// KvPageTable is root SRV t10, the two page constants are their own root-constant block at b1. A
+// shader that never calls the helpers below does not reference them, and the compiler drops them.
+ByteAddressBuffer KvPageTable : register(t10);
+cbuffer KvPageConstants : register(b1)
 {
-    return (layer * context_cap * num_kv_heads * head_dim) * 2u;
+    uint g_page_positions;  // B: positions per page (>= 1, the GPU ladder's guard 5 twin checks it)
+    uint g_page_bytes;      // the stride between physical pages
+};
+
+// The byte offset of (layer, half, kv_head, pos_in_page) inside one page.
+uint KvInPageRowOffsetGpu(uint layer, uint half, uint num_kv_heads, uint head_dim, uint kv_head, uint page_positions,
+                          uint pos_in_page)
+{
+    return ((layer * 2u + half) * num_kv_heads + kv_head) * page_positions * head_dim + pos_in_page * head_dim;  // SSLM-KV-ADDR:in-page
 }
-uint KvRowOffsetWithinHalfGpu(uint context_cap, uint head_dim, uint kv_head, uint position)
+
+// The row's byte address, given the physical page its logical page maps to.
+uint KvPageRowAddrGpu(uint phys_page, uint page_bytes, uint page_positions, uint layer, uint half, uint num_kv_heads,
+                      uint head_dim, uint kv_head, uint pos)
 {
-    return kv_head * context_cap * head_dim + position * head_dim;
+    return phys_page * page_bytes + KvInPageRowOffsetGpu(layer, half, num_kv_heads, head_dim, kv_head, page_positions, pos % page_positions);  // SSLM-KV-ADDR:row
+}
+
+// The physical byte base of logical page `logical_page`: one table read.
+uint KvPhysPageBaseGpu(uint logical_page)
+{
+    return KvPageTable.Load(logical_page * 4u) * g_page_bytes;
+}
+
+// The plan's KvRowAddrGpu(layer, half, kv_head, pos): the K/V geometry is passed explicitly, as the
+// pre-G2 helpers took it, because each shader declares its own b0 block after including this file.
+// One table read per call; a loop over positions reads the table once per page run instead
+// (context_accumulate_site.hlsl).
+uint KvRowAddrGpu(uint layer, uint half, uint num_kv_heads, uint head_dim, uint kv_head, uint pos)
+{
+    return KvPageRowAddrGpu(KvPageTable.Load((pos / g_page_positions) * 4u), g_page_bytes, g_page_positions, layer,
+                            half, num_kv_heads, head_dim, kv_head, pos);
 }
 
 // ===========================================================================
@@ -676,6 +716,10 @@ bool ApplyBiasReconcileRowGpuP(uint t, RWByteAddressBuffer scratch, uint wide_ba
     }
     int64_t r_a = DynamicScaleReciprocalSharedGpu(in_scale_m);
 
+    // Every thread must finish reading the previous call's gBiasAnyOutOfDomain before thread 0 resets it:
+    // this function runs twice per dispatch, and without this barrier a thread still between the
+    // previous call's closing barrier and its read can observe the reset value instead.
+    GroupMemoryBarrierWithGroupSync();
     if (t == 0) gBiasAnyOutOfDomain = 0;
     GroupMemoryBarrierWithGroupSync();
     for (int i = (int)t; i < out_channels; i += 256)
@@ -741,6 +785,9 @@ bool PreflightRequantChainFullGpuP(uint t, RWByteAddressBuffer scratch, uint wid
             uint64_t a = (xi < 0) ? (~(uint64_t)xi + 1ULL) : (uint64_t)xi;
             if (a > local) local = a;
         }
+        // A previous reduction in this dispatch ends with every thread reading slot 0; thread 0 must
+        // not overwrite it until they all have.
+        GroupMemoryBarrierWithGroupSync();
         gFunnelMax[t] = local;
         GroupMemoryBarrierWithGroupSync();
         for (uint s = 128; s > 0; s >>= 1)
@@ -871,6 +918,9 @@ void RequantChainCheckedFullGpuP(uint t, RWByteAddressBuffer scratch, uint wide_
             uint64_t a = (xi < 0) ? (~(uint64_t)xi + 1ULL) : (uint64_t)xi;
             if (a > local) local = a;
         }
+        // A previous reduction in this dispatch ends with every thread reading slot 0; thread 0 must
+        // not overwrite it until they all have.
+        GroupMemoryBarrierWithGroupSync();
         gFunnelMax[t] = local;
         GroupMemoryBarrierWithGroupSync();
         for (uint s = 128; s > 0; s >>= 1)
@@ -1023,6 +1073,9 @@ void RequantChainCheckedFullGpuP1024(uint t, RWByteAddressBuffer scratch, uint w
             uint64_t a = (xi < 0) ? (~(uint64_t)xi + 1ULL) : (uint64_t)xi;
             if (a > local) local = a;
         }
+        // A previous reduction in this dispatch ends with every thread reading slot 0; thread 0 must
+        // not overwrite it until they all have.
+        GroupMemoryBarrierWithGroupSync();
         gFunnelMax1024[t] = local;
         GroupMemoryBarrierWithGroupSync();
         for (uint s = 512; s > 0; s >>= 1)

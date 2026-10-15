@@ -1,8 +1,18 @@
-param([Parameter(Mandatory=$true)][string]$Id)
+# -Id unmutated: apply_mutant.py reset, then the unfocused cell_alloc_faults run (every kind, every
+# counted allocation, the removed-device legs) against the scratch tree's own unmutated build, linked and
+# staged exactly as the mutants are; it must PASS. -Tree/-ExpectHead drive a linked worktree other than
+# D:\_t2956-mutants\src (apply_mutant.py --scratch-tree); -Root moves logs\, bin\ and build\. Keep -Root
+# outside every checkout: a cell executable that sits below a directory holding src\gpu\shaders has its
+# .cso files compared against THAT checkout's .hlsl/.hlsli times (ShaderPath's staleness refusal), not the
+# tree that built the library.
+param([Parameter(Mandatory=$true)][string]$Id,
+      [string]$Tree = 'D:\_t2956-mutants\src',
+      [string]$ExpectHead = '',
+      [string]$Root = 'D:\_t2956-mutants')
 $ErrorActionPreference = 'Continue' # MSVC setup and deliberate fault cells write to stderr
 $suite = Split-Path -Parent $MyInvocation.MyCommand.Path
-$tree = 'D:\_t2956-mutants\src'
-$log = Join-Path 'D:\_t2956-mutants\logs' $Id
+$tree = $Tree
+$log = Join-Path (Join-Path $Root 'logs') $Id
 New-Item -ItemType Directory -Path $log -Force | Out-Null
 $python = 'C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe'
 $aex = 'D:\hf_cache\superslm_artifacts\example\qwen2.5-0.5b-instruct-cap4096-aex-tok.sslm'
@@ -13,12 +23,16 @@ $base = Join-Path $suite 'out\cell_real_decode_base.exe'
 $cpu = Join-Path $tree 'build\t2956-mutant\superslm.lib'
 $gpu = Join-Path $tree 'build\t2956-mutant\superslm_gpu.lib'
 $shaders = Join-Path $tree 'build\t2956-mutant\gpu-shaders-staged'
-$bin = Join-Path 'D:\_t2956-mutants\bin' $Id
+$bin = Join-Path (Join-Path $Root 'bin') $Id
+$applyArgs = @('--tree', $tree)
+if ($tree -ne 'D:\_t2956-mutants\src') { $applyArgs += '--scratch-tree' }
+if ($ExpectHead) { $applyArgs += @('--expect-head', $ExpectHead) }
+$applyId = if ($Id -eq 'unmutated') { 'reset' } else { $Id }
 
-& $python (Join-Path $suite 'apply_mutant.py') $Id *> (Join-Path $log 'mutation.txt')
+& $python (Join-Path $suite 'apply_mutant.py') $applyId @applyArgs *> (Join-Path $log 'mutation.txt')
 if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $log 'mutation.txt'); exit 2 }
 if ($Id -in @('q_cpu','q_gpu')) {
-    $out = Join-Path 'D:\_t2956-mutants\build' "allmasked_$Id"
+    $out = Join-Path (Join-Path $Root 'build') "allmasked_$Id"
     & cmd /c (Join-Path $suite 'build_all_masked.bat') $tree $out candidate *> (Join-Path $log 'build.txt')
     if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $log 'build.txt') -Tail 30; exit 3 }
     $env:T2956_ALL_MASKED = '1'
@@ -60,6 +74,7 @@ elseif ($Id -in @('j','k','n','n2_upload','n3_upload','n2_restore','n3_restore')
     if ($Id -eq 'n3_restore') { $cellArgs += @('sequence_restore','4') }
 }
 elseif ($Id -eq 'p') { $cell = 'cell_close_faults'; $cellArgs = @() }
+elseif ($Id -eq 'unmutated') { $cell = 'cell_alloc_faults'; $cellArgs = @($r15,$adapter) }
 else { throw "No cell mapping for mutant $Id" }
 
 & cmd /c (Join-Path $suite 'build_one.bat') $cell $cpu $gpu $bin $shaders *> (Join-Path $log 'link.txt')
@@ -83,6 +98,14 @@ Get-Content (Join-Path $log 'mutation.txt')
 Write-Output "MUTANT $Id build=0 link=0 cell_exit=$cellExit"
 $cellText = Get-Content -Raw (Join-Path $log 'cell.txt')
 ($cellText -split "`r?`n") | Where-Object { $_ -match 'FAIL ' } | Select-Object -First 3
+if ($Id -eq 'unmutated') {
+    if ($cellExit -ne 0 -or $cellText -notmatch 'PASS all counted allocations faulted') {
+        Write-Output "UNEXPECTED UNMUTATED READING expected=PASS"
+        Get-Content (Join-Path $log 'cell.txt') -Tail 20
+        exit 1
+    }
+    exit 0
+}
 $expected = switch -Regex ($Id) {
     '^a$' { 'FAIL rows vector=0 max_tasks=3'; break }
     '^b$' { 'FAIL malformed CPU omit0'; break }

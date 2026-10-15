@@ -77,7 +77,6 @@ void main(uint3 dtid : SV_DispatchThreadID)
 
     uint q_rot_off = ScratchLayout.Load<uint>(4 * 4);
     uint scores_base_all = ScratchLayout.Load<uint>(25 * 4);
-    uint kv_half_off = KvHalfOffsetGpu(g_layer_index, g_context_cap, g_num_kv_heads, (uint)g_head_dim);
     uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
     bool direct_qk = LayerWeights.Load<int64_t>(layer_base + Layout.Load<uint>(60 * 4)) != 0;
     uint qkc_block = g_num_kv_heads * (uint)g_head_dim * 8u;
@@ -94,12 +93,14 @@ void main(uint3 dtid : SV_DispatchThreadID)
         uint my_scores_base = scores_base_all + h * g_context_cap * 8u;
         {
             int k = (int)(t % (uint)width);
-            uint k_row_off = KvRowOffsetWithinHalfGpu(g_context_cap, (uint)g_head_dim, kv_head, (uint)k);
+            // Paged-KV plan §4 item 1: one work item is one K row, which lies in one page, so the
+            // item reads the page table once (site_common.hlsli KvRowAddrGpu).
+            uint k_row_addr = KvRowAddrGpu(g_layer_index, 0u, g_num_kv_heads, (uint)g_head_dim, kv_head, (uint)k);
             int64_t dot = 0;
             for (int d = 0; d < head_dim; ++d)
             {
                 int qv = (int)LayerScratch.Load<int>(q_rot_off + (h * (uint)g_head_dim + (uint)d) * 4u);
-                int kv = LoadSignedByteGpu(KvCache, kv_half_off + k_row_off + (uint)d);
+                int kv = LoadSignedByteGpu(KvCache, k_row_addr + (uint)d);
                 int64_t term = (int64_t)qv * (int64_t)kv;
                 if (direct_qk) {
                     uint ratio_off = layer_base + Layout.Load<uint>(65 * 4) +

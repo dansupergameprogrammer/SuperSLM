@@ -7,11 +7,13 @@
 #include <cstring>
 #include <fstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "superslm/artifact.h"
 #include "superslm/forward_sites.h"
 #include "superslm/gpu_port.h"
+#include "../src/gpu/gpu_inflight_token.h"  // GpuInFlightToken (plan G3): complete for construction/destruction
 #include "superslm/model.h"
 #include "superslm/sha256.h"
 #include "superslm/trace_hook.h"
@@ -394,16 +396,16 @@ int main(int argc, char** argv) {
 			for (size_t i = 0; i < tokens.size(); ++i)
 				PackEmbeddingBlock(chunk_codes.data() + i * hidden, hidden, chunk_scales[i],
 				                   blocks.data() + i * block_bytes);
-			superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+			superslm_gpu::GpuInFlightToken inflight;
 			st = superslm_gpu::SubmitChunkToFullDepthForG5Bridge(
 			    seq, layers.data(), layers_n, hidden, head_dim, kv_heads, model.config.intermediate_size,
 			    context_cap, model.rope_tables, workspace.data(), workspace.size(), blocks.data(),
 			    static_cast<uint32_t>(tokens.size()), nullptr, nullptr, nullptr, nullptr, nullptr, false,
 			    0, 0, nullptr, &inflight, model.config.num_attention_heads * model.config.head_dim, 1,
 			    layers_n != 0 && layers[0].q_norm_gain != nullptr && layers[0].k_norm_gain != nullptr);
-			if (st == SslmForwardStatus::Ok && inflight != nullptr) {
+			if (st == SslmForwardStatus::Ok && inflight) {
 				int32_t ready = 0;
-				st = superslm_gpu::RunLayerLoopGpuFinish(inflight, seq, workspace.data(), 1, &ready);
+				st = superslm_gpu::RunLayerLoopGpuFinish(std::move(inflight), seq, workspace.data(), 1, &ready);
 			}
 		} else {
 			st = RunLayerLoopChunkBatched(chunk_codes.data(), chunk_scales.data(), tokens.size(), layers.data(),
@@ -426,16 +428,16 @@ int main(int argc, char** argv) {
 		seq.hidden_scale = token_scale;
 		seq.layer_index = 0;
 		if (use_gpu || raw_k_gpu || no_qnorm_gpu) {
-			superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+			superslm_gpu::GpuInFlightToken inflight;
 			st = superslm_gpu::RunLayerLoopGpuSubmit(
 			    seq, layers.data(), layers_n, layer_budget, hidden, head_dim, kv_heads,
 			    model.config.intermediate_size, context_cap, model.rope_tables, workspace.data(), workspace.size(),
 			    nullptr, nullptr, &inflight, nullptr, nullptr, nullptr, false, 0, 0, nullptr,
 			    gpu_q_codes.size(), gpu_q_codes.data(), gpu_q_codes.size(), 1,
 			    layers[0].q_norm_gain != nullptr && layers[0].k_norm_gain != nullptr);
-			if (st == SslmForwardStatus::Ok && inflight != nullptr) {
+			if (st == SslmForwardStatus::Ok && inflight) {
 				int32_t ready = 0;
-				st = superslm_gpu::RunLayerLoopGpuFinish(inflight, seq, workspace.data(), 1, &ready,
+				st = superslm_gpu::RunLayerLoopGpuFinish(std::move(inflight), seq, workspace.data(), 1, &ready,
 				                                         gpu_q_codes.data());
 			}
 		} else {

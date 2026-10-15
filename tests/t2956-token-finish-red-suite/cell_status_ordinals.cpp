@@ -9,6 +9,12 @@ static_assert(SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE == 1u);
 static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_PARALLEL_FOR_INVALID) == 21);
 static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_PARALLEL_FOR_INCOMPLETE) == 22);
 static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_RESIDENCY_FLAGS_INVALID) == 23);
+static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_KV_BUDGET_EXCEEDED) == 24);
+static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_KV_POOL_EXHAUSTED) == 25);
+static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_KV_POOL_TOO_LARGE) == 26);
+static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_HOLDER_MODE_MISMATCH) == 27);
+static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_PREFIX_REJECTED) == 28);
+static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_PREFIX_SCHEMA_MISMATCH) == 29);
 static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_SHADER_DIR_INVALID) == 19);
 static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_SHADER_DIR_CONFLICT) == 20);
 
@@ -39,9 +45,15 @@ constexpr bool AllNamed(SslmGpuStatus status) {
         case SslmGpuStatus::SSLM_GPU_PARALLEL_FOR_INVALID:
         case SslmGpuStatus::SSLM_GPU_PARALLEL_FOR_INCOMPLETE:
         case SslmGpuStatus::SSLM_GPU_RESIDENCY_FLAGS_INVALID:
+        case SslmGpuStatus::SSLM_GPU_KV_BUDGET_EXCEEDED:
+        case SslmGpuStatus::SSLM_GPU_KV_POOL_EXHAUSTED:
+        case SslmGpuStatus::SSLM_GPU_KV_POOL_TOO_LARGE:
+        case SslmGpuStatus::SSLM_GPU_HOLDER_MODE_MISMATCH:
+        case SslmGpuStatus::SSLM_GPU_PREFIX_REJECTED:
+        case SslmGpuStatus::SSLM_GPU_PREFIX_SCHEMA_MISMATCH:
             return true;
     }
     return false;
 }
-static_assert(AllNamed(SslmGpuStatus::SSLM_GPU_RESIDENCY_FLAGS_INVALID));
+static_assert(AllNamed(SslmGpuStatus::SSLM_GPU_PREFIX_SCHEMA_MISMATCH));
 int main() { return 0; }

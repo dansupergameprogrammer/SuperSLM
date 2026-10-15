@@ -20,7 +20,7 @@ set HEREDIR=%~dp0
 set ENG=%HEREDIR%..\..
 set TESTS=%ENG%\tests
 set MODELARG=--model=%~1
-set MUTDIR=D:\_t2961-mutants\bounds
+set MUTDIR=%HEREDIR%obj_t2916_s3\mut_bounds
 set "SHADERDIR=%ENG%\out\shaders"
 if not "%~2"=="" set "SHADERDIR=%~2"
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 -no_logo
@@ -32,12 +32,12 @@ if exist bin_t2916_s3\shaders rmdir /s /q bin_t2916_s3\shaders
 mkdir bin_t2916_s3\shaders
 xcopy /I /Q /Y "%SHADERDIR%\*.cso" bin_t2916_s3\shaders\ >nul
 if errorlevel 1 (echo SHADER COPY FAILED: "%SHADERDIR%" & exit /b 1)
-if not exist %MUTDIR% mkdir %MUTDIR%
+if not exist "%MUTDIR%" mkdir "%MUTDIR%"
 
 set SRC_NOABI=%ENG%\src\kv_pages.cpp %ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp ^
     %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp ^
     %ENG%\src\trace_hook.cpp %ENG%\src\forward\checked_chain_funnel.cpp ^
-    %ENG%\src\forward\forward_sites.cpp %ENG%\src\forward\parallel_split.cpp %ENG%\src\decode_digest.cpp ^
+    %ENG%\src\forward\forward_sites.cpp %ENG%\src\forward\parallel_split.cpp %ENG%\src\gpu\gpu_inflight_registry.cpp %ENG%\src\decode_digest.cpp ^
     %ENG%\src\damped_greedy_antilm.cpp %ENG%\src\damped_greedy_topk.cpp ^
     %ENG%\src\damped_greedy_phaseD.cpp %ENG%\src\damped_greedy_phaseD_loop.cpp
 
@@ -66,6 +66,8 @@ cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I%ENG%\include /I%ENG%\src\gpu 
 echo ================= Generating two MUT_SLM5 variants of gpu_1p0.cpp =================
 if not defined SSLM_PYTHON set SSLM_PYTHON=C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe
 for %%c in (WALKSTATE UNBOUNDWALK) do (
+    if exist "%MUTDIR%\gpu_1p0_mut_%%c.cpp" del /q "%MUTDIR%\gpu_1p0_mut_%%c.cpp"
+    if exist "obj_t2916_s3\gpu_mut_%%c" rmdir /s /q "obj_t2916_s3\gpu_mut_%%c"
     "%SSLM_PYTHON%" make_mut_slm5_bounds.py %%c "%ENG%\src\gpu\gpu_1p0.cpp" "%MUTDIR%\gpu_1p0_mut_%%c.cpp" ^
         > "obj_t2916_s3\make_mut_%%c.log" 2>&1
     if errorlevel 1 (

@@ -53,8 +53,17 @@ PIN(SSLM_GPU_PARALLEL_FOR_INVALID, 21);
 PIN(SSLM_GPU_PARALLEL_FOR_INCOMPLETE, 22);
 PIN(SSLM_GPU_RESIDENCY_FLAGS_INVALID, 23);
 
+// The six paged-KV statuses (1.13.0), appended last in the order the paged-KV plan §4 item 9 lists them.
+PIN(SSLM_GPU_KV_BUDGET_EXCEEDED, 24);
+PIN(SSLM_GPU_KV_POOL_EXHAUSTED, 25);
+PIN(SSLM_GPU_KV_POOL_TOO_LARGE, 26);
+PIN(SSLM_GPU_HOLDER_MODE_MISMATCH, 27);
+PIN(SSLM_GPU_PREFIX_REJECTED, 28);
+PIN(SSLM_GPU_PREFIX_SCHEMA_MISMATCH, 29);
+
 // "Last": a switch over every named enumerator with no default compiles warning-free under
-// /W4 /we4062 only if the list below is complete. The appended T-2851 values are 21..23.
+// /W4 /we4062 only if the list below is complete. The appended T-2851 values are 21..23, the
+// paged-KV values 24..29.
 #pragma warning(error : 4062)  // enumerator not handled in switch: fails the build here
 constexpr int AllNamed(SslmGpuStatus s) {
 	switch (s) {
@@ -82,13 +91,19 @@ constexpr int AllNamed(SslmGpuStatus s) {
 		case SSLM_GPU_PARALLEL_FOR_INVALID:
 		case SSLM_GPU_PARALLEL_FOR_INCOMPLETE:
 		case SSLM_GPU_RESIDENCY_FLAGS_INVALID:
+		case SSLM_GPU_KV_BUDGET_EXCEEDED:
+		case SSLM_GPU_KV_POOL_EXHAUSTED:
+		case SSLM_GPU_KV_POOL_TOO_LARGE:
+		case SSLM_GPU_HOLDER_MODE_MISMATCH:
+		case SSLM_GPU_PREFIX_REJECTED:
+		case SSLM_GPU_PREFIX_SCHEMA_MISMATCH:
 			return 1;
 	}
 	return 0;
 }
-static_assert(AllNamed(SSLM_GPU_RESIDENCY_FLAGS_INVALID) == 1, "the switch above names every status");
+static_assert(AllNamed(SSLM_GPU_PREFIX_SCHEMA_MISMATCH) == 1, "the switch above names every status");
 
 int main() {
-	std::printf("cell_status_ordinals: 24 ordinals pinned at compile time -> PASS\n");
+	std::printf("cell_status_ordinals: 30 ordinals pinned at compile time -> PASS\n");
 	return 0;
 }

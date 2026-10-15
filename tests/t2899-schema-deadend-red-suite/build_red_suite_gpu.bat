@@ -43,7 +43,7 @@ if errorlevel 1 (echo SHADER COPY FAILED: "%SHADERDIR%" & exit /b 1)
 set SRC_NOABI=%ENG%\src\kv_pages.cpp %ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp ^
     %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp ^
     %ENG%\src\trace_hook.cpp %ENG%\src\forward\checked_chain_funnel.cpp ^
-    %ENG%\src\forward\forward_sites.cpp %ENG%\src\forward\parallel_split.cpp %ENG%\src\decode_digest.cpp ^
+    %ENG%\src\forward\forward_sites.cpp %ENG%\src\forward\parallel_split.cpp %ENG%\src\gpu\gpu_inflight_registry.cpp %ENG%\src\decode_digest.cpp ^
     %ENG%\src\damped_greedy_antilm.cpp %ENG%\src\damped_greedy_topk.cpp ^
     %ENG%\src\damped_greedy_phaseD.cpp %ENG%\src\damped_greedy_phaseD_loop.cpp
 
@@ -95,34 +95,39 @@ rem (SUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION above is a second, independent r
 rem is no longer "unmodified"). Reusing it here would both fail to compile (the v5 tail
 rem parameters gpu_port.h now declares) and, if it somehow linked, would write 'SLM5' regardless
 rem of the source file's own intent -- defeating the one property this configuration exists for.
-rem The pristine base is `git show`'d fresh into a SCRATCH root outside this repo
-rem (`D:\_t2961-mutants\pristine_pre_slm5\`, a build-time OUTPUT cache, not a source dependency -- every
-rem byte in it is regenerated from tracked git history on every run, never read back as an input
-rem to anything else), from commit `ccf87c1` on this same branch (the tip immediately before
-rem T-2905's GPU fold; confirmed zero 'SLM5'/kGpuSeqBlobMagicV5 occurrences) -- NOT checked into
-rem the tracked tree: a first attempt did check it in, and tests\ci\test_geometry_site_census.py's
-rem own tree-wide GS-marker sweep (tools\geometry_site_census.py, unnarrowed by design outside
-rem `_SKIP_DIR_NAMES`) then double-counted every GS marker superslm_gpu.cpp carries, since a
-rem byte-identical copy of a production file inside the tracked test tree is exactly what that
-rem census exists to catch. Regenerated every run so it always tracks the pinned commit, never a
-rem stale local copy.
+rem The pristine base is carried in this directory as data: five files of commit `ccf87c1` (the
+rem tip immediately before T-2905's GPU fold; confirmed zero 'SLM5'/kGpuSeqBlobMagicV5
+rem occurrences) under pristine_pre_slm5\, each with a `.ccf87c1` suffix, and a manifest of their
+rem SHA-256 values. stage_pristine_pre_slm5.py checks each copy against the manifest, writes them
+rem under this script's own obj_gpu\pristine_pre_slm5\ and checks each again after writing, so the
+rem step needs no git history (a release archive carries none) and reads nothing an earlier run left
+rem behind. The suffix keeps tools\geometry_site_census.py, which reads .cpp, .h, .hlsl and .py, from
+rem counting a commit's history as live GS markers; the census prunes every directory named obj* or
+rem bin_*, which is where the staged copies go. The staging directory is removed before every run,
+rem and a configuration whose staging or generation failed is not compiled.
 rem T-2916 (TE-370 M1): the checked-return+rearm fix itself, previously `D:\_te338\
 rem gpu_1p0_fixed.cpp` (a hand-patched, out-of-repo, unversioned single file), is now applied to
 rem the SAME `ccf87c1` pristine base by `make_gpu_fixed_noslm5.py`, anchored on the unique
 rem unconditional-Transition block that commit still carries -- confirmed by execution to produce
 rem code byte-identical to the retired external file (comments only differ).
-set "PRISTINE=D:\_t2961-mutants\pristine_pre_slm5"
-if not exist "%PRISTINE%\superslm" mkdir "%PRISTINE%\superslm"
-git -C "%ENG%" show ccf87c1:src/gpu/superslm_gpu.cpp > "%PRISTINE%\superslm_gpu_pristine.cpp"
-git -C "%ENG%" show ccf87c1:src/gpu/d3d12_harness.h > "%PRISTINE%\d3d12_harness.h"
-git -C "%ENG%" show ccf87c1:include/superslm/gpu_port.h > "%PRISTINE%\superslm\gpu_port.h"
-git -C "%ENG%" show ccf87c1:src/gpu/gpu_1p0.cpp > "%PRISTINE%\gpu_1p0_pristine.cpp"
-"%SSLM_PYTHON%" make_gpu_fixed_noslm5.py "%PRISTINE%\gpu_1p0_pristine.cpp" "%PRISTINE%\gpu_1p0_fixed.cpp" ^
-    > obj_gpu\make_gpu_fixed_noslm5.log 2>&1 || (echo GENERATE FAILED: gpu_fixed_noslm5 & type obj_gpu\make_gpu_fixed_noslm5.log & set OVERALL_OK=0)
-if not exist obj_gpu\gpu_fixed_noslm5 mkdir obj_gpu\gpu_fixed_noslm5
-cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I"%PRISTINE%" /I%ENG%\include /I%ENG%\src\gpu ^
-    /c "%PRISTINE%\gpu_1p0_fixed.cpp" "%PRISTINE%\superslm_gpu_pristine.cpp" /Fo"obj_gpu\gpu_fixed_noslm5\\" ^
-    > obj_gpu\gpu_fixed_noslm5.buildlog 2>&1 || (echo BUILD FAILED: gpu_fixed_noslm5 & type obj_gpu\gpu_fixed_noslm5.buildlog & set OVERALL_OK=0)
+set "PRISTINE=%HEREDIR%obj_gpu\pristine_pre_slm5"
+set PRISTINE_OK=1
+if exist "%PRISTINE%" rmdir /s /q "%PRISTINE%"
+"%SSLM_PYTHON%" stage_pristine_pre_slm5.py > obj_gpu\stage_pristine_pre_slm5.log 2>&1 || (echo STAGING FAILED: pristine_pre_slm5 & type obj_gpu\stage_pristine_pre_slm5.log & set OVERALL_OK=0& set PRISTINE_OK=0)
+if "%PRISTINE_OK%"=="1" (
+    "%SSLM_PYTHON%" make_gpu_fixed_noslm5.py "%PRISTINE%\gpu_1p0_pristine.cpp" "%PRISTINE%\gpu_1p0_fixed.cpp" ^
+        > obj_gpu\make_gpu_fixed_noslm5.log 2>&1 || (echo GENERATE FAILED: gpu_fixed_noslm5 & type obj_gpu\make_gpu_fixed_noslm5.log & set OVERALL_OK=0& set PRISTINE_OK=0)
+)
+rem The configuration's objects are removed before the step that writes them, and a failed compile
+rem clears PRISTINE_OK as a failed staging or generation does (the 1.12.0 review): the slm4_dump
+rem link below then never runs, and never on objects an earlier run wrote.
+if exist obj_gpu\gpu_fixed_noslm5 rmdir /s /q obj_gpu\gpu_fixed_noslm5
+if "%PRISTINE_OK%"=="1" (
+    mkdir obj_gpu\gpu_fixed_noslm5
+    cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc /I"%PRISTINE%" /I%ENG%\include /I%ENG%\src\gpu ^
+        /c "%PRISTINE%\gpu_1p0_fixed.cpp" "%PRISTINE%\superslm_gpu_pristine.cpp" /Fo"obj_gpu\gpu_fixed_noslm5\\" ^
+        > obj_gpu\gpu_fixed_noslm5.buildlog 2>&1 || (echo BUILD FAILED: gpu_fixed_noslm5 & type obj_gpu\gpu_fixed_noslm5.buildlog & set OVERALL_OK=0& set PRISTINE_OK=0)
+)
 
 rem MUT_CHECKEDRETURN / MUT_NOREARM (T-2916, TE-370 M1): single-line reverts, generated fresh
 rem from the LIVE TIP's own gpu_1p0.cpp by `make_mut_gpu_checkedreturn_seam.py`/
@@ -479,50 +484,60 @@ rem ---- cell_gpu_slm4_dump (checked-return-FIXED/no-SLM5 -- must genuinely dead
 rem real legacy 'SLM4' blob; T-2903 fix, see gpu_fixed_noslm5 above -- gpu_asbuilt alone cannot
 rem dead-end at all, so linking against it made the pre-save assertion below unwinnable) /
 rem cell_gpu_slm4_restore (FIXED only) ----
+rem The object is removed before its compile, so a failed compile leaves none for the link below to
+rem pick up from an earlier run (the save-speed fix's final review).
+if exist obj_gpu\slm4_dump.obj del /f /q obj_gpu\slm4_dump.obj
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /c cell_gpu_slm4_dump.cpp /Fo"obj_gpu\slm4_dump.obj" ^
     > obj_gpu\slm4_dump.buildlog 2>&1 || (echo BUILD FAILED: slm4_dump.obj & type obj_gpu\slm4_dump.buildlog & set OVERALL_OK=0)
-link /nologo /OUT:"bin_gpu\slm4_dump.exe" obj_gpu\slm4_dump.obj obj_gpu\gpu_fixed_noslm5\gpu_1p0_fixed.obj obj_gpu\gpu_fixed_noslm5\superslm_gpu_pristine.obj !CPU_COMMON_OBJS! %SYSLIBS% ^
-    > obj_gpu\slm4_dump.linklog 2>&1 || (echo LINK FAILED: slm4_dump & type obj_gpu\slm4_dump.linklog & set OVERALL_OK=0)
-echo ===== cell_gpu_slm4_dump [FIXED, pre-SLM5 -- checked-return fix only, T-2903] =====
-"bin_gpu\slm4_dump.exe" %MODELARG% --out=obj_gpu\slm4_blob.bin > obj_gpu\slm4_dump.runlog 2>&1
-type obj_gpu\slm4_dump.runlog
-set SUMMARY_LINE=
-for /f "delims=" %%s in ('findstr /R "^checks=[0-9]* failures=[0-9]*" obj_gpu\slm4_dump.runlog') do set SUMMARY_LINE=%%s
-if "!SUMMARY_LINE!"=="" (
-    echo    CRASHED OR NO SUMMARY LINE
-    set OVERALL_OK=0
-) else (
-    set TOK_CHECKS=
-    set TOK_FAILURES=
-    set TOK_SKIPS=
-    for /f "tokens=1,2,3 delims= " %%a in ("!SUMMARY_LINE!") do (set TOK_CHECKS=%%a& set TOK_FAILURES=%%b& set TOK_SKIPS=%%c)
-    set "FAILN=!TOK_FAILURES:~9!"
-    set "SKIPN=!TOK_SKIPS:~6!"
-    if not "!FAILN!"=="0" (echo    FAILURES=!FAILN! -- a red cell ^(obj_gpu\slm4_dump.runlog^)& set OVERALL_OK=0)
-    if not "!SKIPN!"=="0" (echo    SKIPS=!SKIPN! -- a skipped cell fails the run ^(obj_gpu\slm4_dump.runlog^)& set OVERALL_OK=0)
+rem The blob is removed before the dump that writes it, so slm4_restore below reads only a blob this
+rem run's dump wrote, or none (the 1.12.0 review).
+if exist obj_gpu\slm4_blob.bin del /f /q obj_gpu\slm4_blob.bin
+if "!PRISTINE_OK!"=="1" (
+    link /nologo /OUT:"bin_gpu\slm4_dump.exe" obj_gpu\slm4_dump.obj obj_gpu\gpu_fixed_noslm5\gpu_1p0_fixed.obj obj_gpu\gpu_fixed_noslm5\superslm_gpu_pristine.obj !CPU_COMMON_OBJS! %SYSLIBS% ^
+        > obj_gpu\slm4_dump.linklog 2>&1 || (echo LINK FAILED: slm4_dump & type obj_gpu\slm4_dump.linklog & set OVERALL_OK=0)
+    echo ===== cell_gpu_slm4_dump [FIXED, pre-SLM5 -- checked-return fix only, T-2903] =====
+    "bin_gpu\slm4_dump.exe" %MODELARG% --out=obj_gpu\slm4_blob.bin > obj_gpu\slm4_dump.runlog 2>&1
+    type obj_gpu\slm4_dump.runlog
+    set SUMMARY_LINE=
+    for /f "delims=" %%s in ('findstr /R "^checks=[0-9]* failures=[0-9]*" obj_gpu\slm4_dump.runlog') do set SUMMARY_LINE=%%s
+    if "!SUMMARY_LINE!"=="" (
+        echo    CRASHED OR NO SUMMARY LINE
+        set OVERALL_OK=0
+    ) else (
+        set TOK_CHECKS=
+        set TOK_FAILURES=
+        set TOK_SKIPS=
+        for /f "tokens=1,2,3 delims= " %%a in ("!SUMMARY_LINE!") do (set TOK_CHECKS=%%a& set TOK_FAILURES=%%b& set TOK_SKIPS=%%c)
+        set "FAILN=!TOK_FAILURES:~9!"
+        set "SKIPN=!TOK_SKIPS:~6!"
+        if not "!FAILN!"=="0" (echo    FAILURES=!FAILN! -- a red cell ^(obj_gpu\slm4_dump.runlog^)& set OVERALL_OK=0)
+        if not "!SKIPN!"=="0" (echo    SKIPS=!SKIPN! -- a skipped cell fails the run ^(obj_gpu\slm4_dump.runlog^)& set OVERALL_OK=0)
+    )
 )
 
 cl /nologo /std:c++20 /O2 /W3 /fp:precise /EHsc %STOCKINC% /c cell_gpu_slm4_restore.cpp /Fo"obj_gpu\slm4_restore.obj" ^
     > obj_gpu\slm4_restore.buildlog 2>&1 || (echo BUILD FAILED: slm4_restore.obj & type obj_gpu\slm4_restore.buildlog & set OVERALL_OK=0)
 link /nologo /OUT:"bin_gpu\slm4_restore.exe" obj_gpu\slm4_restore.obj obj_gpu\gpu_asbuilt\gpu_1p0.obj obj_gpu\gpu_asbuilt\superslm_gpu.obj !CPU_COMMON_OBJS! %SYSLIBS% ^
     > obj_gpu\slm4_restore.linklog 2>&1 || (echo LINK FAILED: slm4_restore & type obj_gpu\slm4_restore.linklog & set OVERALL_OK=0)
-echo ===== cell_gpu_slm4_restore [FIXED, reading the ASBUILT-written blob] =====
-"bin_gpu\slm4_restore.exe" %MODELARG% --in=obj_gpu\slm4_blob.bin > obj_gpu\slm4_restore.runlog 2>&1
-type obj_gpu\slm4_restore.runlog
-set SUMMARY_LINE=
-for /f "delims=" %%s in ('findstr /R "^checks=[0-9]* failures=[0-9]*" obj_gpu\slm4_restore.runlog') do set SUMMARY_LINE=%%s
-if "!SUMMARY_LINE!"=="" (
-    echo    CRASHED OR NO SUMMARY LINE
-    set OVERALL_OK=0
-) else (
-    set TOK_CHECKS=
-    set TOK_FAILURES=
-    set TOK_SKIPS=
-    for /f "tokens=1,2,3 delims= " %%a in ("!SUMMARY_LINE!") do (set TOK_CHECKS=%%a& set TOK_FAILURES=%%b& set TOK_SKIPS=%%c)
-    set "FAILN=!TOK_FAILURES:~9!"
-    set "SKIPN=!TOK_SKIPS:~6!"
-    if not "!FAILN!"=="0" (echo    FAILURES=!FAILN! -- a red cell ^(obj_gpu\slm4_restore.runlog^)& set OVERALL_OK=0)
-    if not "!SKIPN!"=="0" (echo    SKIPS=!SKIPN! -- a skipped cell fails the run ^(obj_gpu\slm4_restore.runlog^)& set OVERALL_OK=0)
+if "!PRISTINE_OK!"=="1" (
+    echo ===== cell_gpu_slm4_restore [FIXED, reading the ASBUILT-written blob] =====
+    "bin_gpu\slm4_restore.exe" %MODELARG% --in=obj_gpu\slm4_blob.bin > obj_gpu\slm4_restore.runlog 2>&1
+    type obj_gpu\slm4_restore.runlog
+    set SUMMARY_LINE=
+    for /f "delims=" %%s in ('findstr /R "^checks=[0-9]* failures=[0-9]*" obj_gpu\slm4_restore.runlog') do set SUMMARY_LINE=%%s
+    if "!SUMMARY_LINE!"=="" (
+        echo    CRASHED OR NO SUMMARY LINE
+        set OVERALL_OK=0
+    ) else (
+        set TOK_CHECKS=
+        set TOK_FAILURES=
+        set TOK_SKIPS=
+        for /f "tokens=1,2,3 delims= " %%a in ("!SUMMARY_LINE!") do (set TOK_CHECKS=%%a& set TOK_FAILURES=%%b& set TOK_SKIPS=%%c)
+        set "FAILN=!TOK_FAILURES:~9!"
+        set "SKIPN=!TOK_SKIPS:~6!"
+        if not "!FAILN!"=="0" (echo    FAILURES=!FAILN! -- a red cell ^(obj_gpu\slm4_restore.runlog^)& set OVERALL_OK=0)
+        if not "!SKIPN!"=="0" (echo    SKIPS=!SKIPN! -- a skipped cell fails the run ^(obj_gpu\slm4_restore.runlog^)& set OVERALL_OK=0)
+    )
 )
 
 echo DEBUG_OVERALL_OK=[%OVERALL_OK%]

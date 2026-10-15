@@ -980,7 +980,8 @@ RopePair RopeApplyPair(int32_t x, int32_t y, int32_t cos_q30, int32_t sin_q30) {
 // it the shipped body below runs unchanged.
 //
 // The guard, checked once per row in dependency order (each step makes the next one's arithmetic defined):
-//   1. width in [1, 2^14] (width >= 1 is the caller's early return);
+//   1. width in [1, 32,767] (width >= 1 is the caller's early return): the largest width at which both bodies'
+//      probability pass is exact at the M ceiling (the bound is stated with that pass, below);
 //   2. q_ln2 >= 1;
 //   3. q_c >= 0;
 //   4. M = q_b^2 + q_c, formed in 128 bits exactly as the shipped body forms it, in [1, 2^47]
@@ -998,15 +999,20 @@ RopePair RopeApplyPair(int32_t x, int32_t y, int32_t cos_q30, int32_t sin_q30) {
 //      floor or one below it: the upward correction (r >= q_ln2) is live, the downward one (r < 0) cannot fire and
 //      is kept as defensive code (§5.4 step 3). r = a - z q_ln2 is then q_p's negation; base = q_b - r;
 //      e = (base^2 + q_c) >> z, base^2 < 2^47 from a signed 32x32 multiply.
-//   p: estimate (e * R) >> 47, R = round(2^62 / denom), denom = Sum e in [M, 2^14 M] (the max element's e is M).
-//      e * R <= 2^62 + 2^46 < 2^63, and |error| <= e / 2^48 <= 1/2, so the estimate is the floor or one either
-//      side: both corrections are live (§5.4 step 4). Every product is below 2^63: p * denom <= e 2^15 + denom <=
-//      2^62 + 2^61 (the width guard is what bounds denom).
+//   p: estimate (e * R) >> 47, R = round(2^62 / denom), denom = Sum e in [M, W M] (the max element's e is M;
+//      W <= 32,767). e * R <= 2^62 + 2^46 < 2^63, and |error| <= e / 2^48 <= 1/2, so the estimate is the floor or
+//      one either side: both corrections are live (§5.4 step 4). The width guard is what bounds the corrections'
+//      operands. The AVX2 body compares p * denom and p * denom + denom against e 2^15 signed in 64-bit lanes;
+//      each is at most e 2^15 + denom <= M (2^15 + W) = 2^63 - 2^47 at M = 2^47 and W = 32,767, so it is exact
+//      while M (2^15 + W) < 2^63, and at width 32,768 the equal-score row's sum reaches 2^63 and wraps. The
+//      AVX-512 body decides by the sign of an exact difference in [-denom, denom), so it needs only W M < 2^63.
+//      One guard serves both bodies, so the width cap is the smaller bound, 32,767 (paged-KV plan §25.1,
+//      D-SLM8435; probes/softmax_cap_32767.py).
 // Each pass reads element k before writing element k, so scores == out_probs stays correct (cell 4.S4, aliased).
 #if SUPERSLM_MATMUL_HAVE_SIMD_X64
 namespace {
 
-constexpr size_t kSoftmaxFastMaxWidth = size_t{1} << 14;
+constexpr size_t kSoftmaxFastMaxWidth = 32767;
 constexpr int64_t kSoftmaxFastScoreLimit = int64_t{1} << 61;
 
 // The row guard (steps 1-6 above) for a row of width >= 1; on success, the row's maximum.

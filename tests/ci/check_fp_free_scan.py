@@ -846,6 +846,23 @@ _X86_VEC_MOVE_ALLOW = {
     "vextractf128", "vextractf32x4", "vextractf64x2", "vextractf64x4",
     "vinserti128", "vinserti32x4", "vinserti64x2", "vinserti64x4",
     "vinsertf128", "vinsertf32x4", "vinsertf64x2", "vinsertf64x4",
+    # Dan, 2026-10-14 (decision ID pending: ID-PENDING), an explicit, reviewed
+    # addition under design Sec4.1's own vetting law (fold round 8,
+    # D-SLM4374). The measured reject: the 1.13.0 save gather's streaming
+    # stores (`BlockCopy`/`BlockZero` in `src/sslm_abi.cpp`, `_mm_stream_si128`),
+    # which compile to `movntdq` in `GatherFlatBlock`. Intel SDM Vol. 2B,
+    # `MOVNTDQ -- Store Packed Integers Using Non-Temporal Hint`: a 128-bit
+    # store of packed integers from an xmm register to memory, with a cache
+    # hint. It is `movdqa`'s store with a different memory-ordering hint: no
+    # rounding, no MXCSR read or write, no SIMD floating-point exception, and
+    # no operand read as a floating-point value. The `sfence` that orders the
+    # weakly-ordered stores is already on `_X86_GPR_ALLOW` and is unchanged.
+    #
+    # Exactly this one. `movntps`/`movntpd` (the same store, typed as packed
+    # single/double) are deliberately NOT added and still REJECT; nor is the
+    # VEX form `vmovntdq`, which no build emits -- a future corpus that emits
+    # one brings its own reviewed addition.
+    "movntdq",
 }
 
 # 3DNow int->float (genuinely arithmetic) plus the AVX-512 BF16 dot-product/

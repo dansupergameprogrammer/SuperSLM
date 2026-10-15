@@ -63,6 +63,12 @@
 // stable-count cell states the engine's own scratch cost as disclosed and data-independent, never
 // a zero requirement) -- correctly, permanently out of this ABI layer's own scope per the design's
 // own text quoted above.
+// Cell 7.9's must-reject mutant (PageRuleB, below) builds only as the superslm_mr_opt target, which defines the
+// acknowledgement beside it (tests/paged-kv/paged_kv.cmake). A mutant definition that reaches any other compile, by a
+// global flag or the CL environment variable, is refused here (T-3202 F-4).
+#if defined(SUPERSLM_MUTANT_PKV_MR_OPT) && !defined(SUPERSLM_MUTANT_PKV_MR_OPT_TARGET)
+#error "SUPERSLM_MUTANT_PKV_MR_OPT is 7.9-MR-OPT's mutant: only the superslm_mr_opt target builds it"
+#endif
 #include "superslm/sslm_abi.h"
 #include "superslm/sslm_version.h"
 #include "superslm/sha256.h"
@@ -81,6 +87,9 @@
 #include <unordered_set>
 #include "detail/int_hash.h"
 #include <vector>
+#if (defined(_M_X64) && !defined(_M_ARM64EC)) || defined(__x86_64__)
+#include <emmintrin.h>  // GatherFlatBlock's streaming stores (SSE2, baseline on x64; not ARM64EC)
+#endif
 
 #include "superslm/adapter_marshal.h"
 #include "superslm/forward_sites.h"
@@ -182,6 +191,16 @@ struct sslm_model_s {
 	int64_t damped_greedy_q_ln2 = 0;
 	int64_t damped_greedy_q_b = 0;
 	int64_t damped_greedy_q_c = 0;
+	// Paged-KV plan §3.1: the test-only pin's B (KvPagesTestPinPagePositions, below; 0: none, the rule's B),
+	// and the pools that exist on this model, which the pin refuses to change B under. Geometry queries read
+	// the pin's B, so it is an atomic; the pool count is read only by the pin. The pin is a test seam, and
+	// a pin racing a pool create on another thread is the caller's error. The pool count is a counter the model and each pool co-own
+	// (a pool copies the pointer at create and decrements through its own copy at destroy), so a pool
+	// destroyed after sslm_model_unmap, which does not refuse while a pool lives, writes only to the
+	// counter and never to the freed model. Set once in sslm_model_map before the handle is published and
+	// never reassigned, so concurrent copies of it are reads of an immutable member.
+	std::atomic<int64_t> pinned_page_positions{0};
+	std::shared_ptr<std::atomic<uint32_t>> live_pools;
 };
 
 // T-2700 converter-only observation binding.  This intentionally remains
@@ -247,10 +266,11 @@ superslm::GemmThreading MatvecThreading(const sslm_workspace_s* ws) {
 
 // C1/C3. A caller-owned KV region. Paged-KV plan (rev 16.1) §3.6, step C4: the region is a page
 // pool (src/kv_pages.h) of `block_count * cap_pages` pages of `page_bytes` bytes, B positions each
-// (§3.1), in the same buffer the block pool used: B divides the cap, so `block_count` blocks are
-// exactly that many pages. The page module owns the free list, the refcounts and the pool mutex.
-// `block_count` and `block_size` keep their old meaning for sslm_kv_block_size's callers and the
-// block-index peek seam. `live_refs` is the SSLM_POOL_HAS_LIVE_HANDLES guard's own bookkeeping
+// (§3.1), in the buffer the block pool used: a block is ceil(cap/B) pages, which exceed 1.11.0's flat
+// block by the last page's slack where B does not divide the cap, and sslm_kv_pool_overhead_size
+// carries that slack (rev 16.22, D-SLM8427). The page module owns the free list, the refcounts and the
+// pool mutex. `block_size` keeps 1.11.0's meaning (the flat block: the legacy save's K/V section and
+// adopt's cap guard); `block_count` bounds the block-index peek seam, which strides by cap_pages pages. `live_refs` is the SSLM_POOL_HAS_LIVE_HANDLES guard's own bookkeeping
 // (design Sec6): one per live holder (sequence or prefix) drawn from this pool.
 struct sslm_kv_pool_s {
 	// C2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): the owning model, bound at
@@ -270,7 +290,11 @@ struct sslm_kv_pool_s {
 	int64_t page_positions = 0;  // B (§3.1)
 	size_t page_bytes = 0;
 	uint32_t cap_pages = 0;      // ceil(cap / B): a whole_reserve holder's reservation and table size
+	uint32_t runs = 0;           // L * 2 * H_kv: the slots a page's runs rotate through (§3.1)
 	std::atomic<uint32_t> live_refs{0};
+	// The model's pool counter, co-owned: bound once the pool is counted (the three create verbs), and
+	// decremented by sslm_kv_pool_destroy through this pointer so destroy never reads `model`.
+	std::shared_ptr<std::atomic<uint32_t>> model_live_pools;
 	~sslm_kv_pool_s() { superslm::kv_pages::PoolDestroy(pages); }
 };
 
@@ -670,25 +694,55 @@ size_t KvElementBytes(superslm::SslmKvPrecision p) {
 	return p == superslm::SslmKvPrecision::Int16 ? 2 : 1;
 }
 
-// Paged-KV plan (rev 16.1) §3.1: the page geometry, a pure function of the model. B is CFG1's
-// kv_block_size when it is at most the cap and divides it, else the cap (one page per sequence,
-// today's block). page_bytes = L * 2 * H_kv * B * D * elem; cap_pages = cap / B, exact by the
-// choice of B, so cap_pages * page_bytes == sslm_kv_block_size. `ok` is false on a null model or
-// an overflowing product.
+// Paged-KV plan §3.1 (rev 16.15, D-SLM8289, D-SLM8294; rev 16.18, D-SLM8332): the page size B, a pure
+// function of (head_dim D, context_cap, K/V element width elem). The run target S is 4 KiB when D <= 64
+// and cap <= 4,096, and 8 KiB otherwise; B is the smallest power of two with B >= 16 and B * D * elem >= S;
+// a cap below one rule page takes B = cap (a holder is then one page, D-SLM8412). CFG1's kv_block_size is
+// validated nonzero at load and no longer selects B. The product is formed in 64 bits: D is a u32 and
+// elem at most 2, so B * D * elem < 2^14 * 2^32 * 2 before the loop stops at S <= 2^13.
+// At a cap B does not divide, B is still the rule's: a whole-cap holder has ceil(cap/B) pages and its last
+// page carries ceil(cap/B) * B - cap positions of slack, never addressed, because KvCapacityExhausted fires
+// at the cap (§21.1, D-SLM8396; the one-page fallback is removed).
+int64_t PageRuleB(uint64_t head_dim, uint64_t context_cap, uint64_t elem) {
+	const uint64_t target = (head_dim <= 64 && context_cap <= 4096) ? 4096 : 8192;
+	uint64_t B = 16;
+#if defined(SUPERSLM_MUTANT_PKV_MR_OPT)
+	// Cell 7.9's must-reject, 7.9-MR-OPT (D-SLM8423): the shipped 1.11.0-era page size, B = 16, in the R9 tree. Built
+	// only into the superslm_mr_opt library (tests/paged-kv/paged_kv.cmake). The production library refuses the
+	// definition twice: at configure time (CMakeLists.txt's check of the superslm target's definitions and options,
+	// the directory's definitions and every configuration's C and C++ flags), and at compile time (the #error at the
+	// top of this file and in forward_sites.h, for a definition CMake cannot see, such as the CL environment variable).
+	(void)target;
+	(void)elem;
+	(void)head_dim;
+#else
+	while (B * head_dim * elem < target) B *= 2;
+#endif
+	if (B > context_cap) B = context_cap;
+	return static_cast<int64_t>(B);
+}
+
+// The page geometry of a config (§3.1), the one function every geometry and sizing verb, the pool
+// creates and the geometry seam compute through. `pinned` is the test-only pin's B (0: none), which
+// replaces the rule's B and is only ever a value the pin admitted (it divides the cap). page_bytes =
+// L * 2 * H_kv * B * D * elem; cap_pages = ceil(cap / B), a whole-cap holder's pages (the last one partial
+// where B does not divide the cap); runs = L * 2 * H_kv, the slots rotation reduces by. `ok` is false on a
+// zero cap or an overflowing product.
 struct PageGeometry {
 	bool ok = false;
 	int64_t page_positions = 0;
 	size_t page_bytes = 0;
 	uint32_t cap_pages = 0;
+	uint32_t runs = 0;
 };
 
-PageGeometry ComputePageGeometry(const sslm_model_s* model) {
+PageGeometry ComputePageGeometry(const superslm::SslmModelConfig& c, int64_t pinned) {
 	PageGeometry g;
-	if (!model) return g;
-	const superslm::SslmModelConfig& c = model->view.config;
 	if (c.context_cap == 0) return g;
-	const uint32_t kvbs = c.kv_block_size;
-	const uint32_t B = (kvbs >= 1 && kvbs <= c.context_cap && c.context_cap % kvbs == 0) ? kvbs : c.context_cap;
+	const int64_t B = pinned > 0 ? pinned
+	                             : PageRuleB(c.head_dim, c.context_cap, KvElementBytes(c.kv_precision));
+	if (B <= 0 || static_cast<uint64_t>(B) > c.context_cap) return g;
+	if (pinned > 0 && c.context_cap % static_cast<uint64_t>(pinned) != 0) return g;  // the pin's domain (§3.1)
 	size_t v = static_cast<size_t>(c.num_hidden_layers);
 	for (size_t f : {size_t{2}, static_cast<size_t>(c.num_key_value_heads), static_cast<size_t>(B),
 	                 static_cast<size_t>(c.head_dim), KvElementBytes(c.kv_precision)}) {
@@ -697,11 +751,94 @@ PageGeometry ComputePageGeometry(const sslm_model_s* model) {
 		v = out;
 	}
 	if (v == 0) return g;
+	const uint64_t runs = uint64_t{c.num_hidden_layers} * 2u * c.num_key_value_heads;
+	if (runs > UINT32_MAX) return g;
 	g.ok = true;
 	g.page_positions = B;
 	g.page_bytes = v;
-	g.cap_pages = c.context_cap / B;
+	g.cap_pages = static_cast<uint32_t>((uint64_t{c.context_cap} + static_cast<uint64_t>(B) - 1) / static_cast<uint64_t>(B));
+	g.runs = static_cast<uint32_t>(runs);
 	return g;
+}
+
+PageGeometry ComputePageGeometry(const sslm_model_s* model) {
+	if (!model) return PageGeometry{};
+	return ComputePageGeometry(model->view.config, model->pinned_page_positions.load(std::memory_order_acquire));
+}
+
+// §3.6's flat block: one sequence's K/V at the full cap, L * cap * H_kv * D * 2 * elem, 1.11.0's value at
+// every cap (rev 16.22, D-SLM8427), saturating to SIZE_MAX on overflow. sslm_kv_block_size's body.
+size_t FlatBlockSize(const superslm::SslmModelConfig& c) {
+	// num_hidden_layers * context_cap * num_key_value_heads * head_dim * 2 (K+V) *
+	// kv_precision_width -- the exact formula the KeyRow/ValueRow accessor comment
+	// (forward_sites.h) states for one sequence's own contiguous KV span. A pure product chain
+	// (not a sum-of-products), so chained CheckedMulSizeT rather than SaturatingAccumulator
+	// (which composes sum-of-products, not a running product).
+	size_t v = static_cast<size_t>(c.num_hidden_layers);
+	bool overflowed = false;
+	auto Mul = [&](size_t factor) {
+		size_t out = 0;
+		if (!CheckedMulSizeT(v, factor, &out)) overflowed = true;
+		v = overflowed ? kSizeMax : out;
+	};
+	Mul(static_cast<size_t>(c.context_cap));
+	Mul(static_cast<size_t>(c.num_key_value_heads));
+	Mul(static_cast<size_t>(c.head_dim));
+	Mul(2);
+	Mul(KvElementBytes(c.kv_precision));
+	return v;
+}
+
+// The block pool's sizing for `block_count` blocks of a config: what sslm_kv_block_size,
+// sslm_kv_pool_overhead_size and sslm_kv_pool_create read, and what the geometry seam reports, from one
+// computation. `page_count_fits`: block_count * cap_pages <= UINT32_MAX (page indices are u32; exactly
+// UINT32_MAX is admissible, decision 24). `overhead`: a free-list slot and a refcount slot per block, a
+// 32-byte header, and each block's slack, N * (ceil(cap/B) * B - cap) * q bytes with q = L * 2 * H_kv * D *
+// elem (rev 16.22, D-SLM8427: the flat block stays 1.11.0's, so the pages beyond it are charged here);
+// formed with checked arithmetic, and SIZE_MAX wherever the page count does not fit or any product or sum
+// cannot be represented. block_count * block_size + overhead is then exactly block_count * ceil(cap/B)
+// pages plus 1.11.0's 8 * block_count + 32.
+// `requirement_fits`: block_count * block_size + overhead is representable (overhead not saturated).
+struct PoolSizing {
+	PageGeometry geo;
+	size_t block_size = 0;
+	size_t overhead = kSizeMax;
+	bool page_count_fits = false;
+	bool requirement_fits = false;
+	size_t required = 0;
+};
+
+PoolSizing ComputePoolSizing(const superslm::SslmModelConfig& c, int64_t pinned, uint32_t block_count) {
+	PoolSizing s;
+	s.geo = ComputePageGeometry(c, pinned);
+	s.block_size = FlatBlockSize(c);
+	s.page_count_fits =
+	    s.geo.ok && static_cast<uint64_t>(block_count) * s.geo.cap_pages <= static_cast<uint64_t>(UINT32_MAX);
+	if (s.page_count_fits) {
+		const uint64_t slack = uint64_t{s.geo.cap_pages} * static_cast<uint64_t>(s.geo.page_positions) - c.context_cap;
+		// One block's slack bytes, slack * q (q = page_bytes / B, one position's K/V bytes, as in the comment above),
+		// then N blocks' slack.
+		size_t block_slack_bytes = 0, slack_bytes = 0;
+		const bool slack_ok = CheckedMulSizeT(s.geo.page_bytes / static_cast<size_t>(s.geo.page_positions),
+		                                      static_cast<size_t>(slack), &block_slack_bytes) &&
+		                      CheckedMulSizeT(block_slack_bytes, static_cast<size_t>(block_count), &slack_bytes);
+		SaturatingAccumulator acc;
+		acc.AddProduct(static_cast<size_t>(block_count), sizeof(uint32_t) * 2);
+		size_t total = 0, with_slack = 0;
+		if (slack_ok && !acc.overflowed && CheckedAddSizeT(acc.value, 32, &total) &&
+		    CheckedAddSizeT(total, slack_bytes, &with_slack))
+			s.overhead = with_slack;
+	}
+	size_t blocks_bytes = 0;
+	s.requirement_fits = s.overhead != kSizeMax &&
+	                     CheckedMulSizeT(static_cast<size_t>(block_count), s.block_size, &blocks_bytes) &&
+	                     CheckedAddSizeT(blocks_bytes, s.overhead, &s.required);
+	return s;
+}
+
+PoolSizing ComputePoolSizing(const sslm_model_s* model, uint32_t block_count) {
+	return ComputePoolSizing(model->view.config, model->pinned_page_positions.load(std::memory_order_acquire),
+	                         block_count);
 }
 
 // Paged-KV plan §3.4 (C5): R(budget) = min(ceil(budget / B) + 1, ceil(cap / B)) -- a budget
@@ -714,6 +851,18 @@ uint32_t ReservationPages(const sslm_model_s* model, int32_t budget) {
 	}
 	const int64_t pages = (static_cast<int64_t>(budget) + geo.page_positions - 1) / geo.page_positions + 1;
 	return static_cast<uint32_t>(std::min<int64_t>(pages, geo.cap_pages));
+}
+
+// The same R(budget) in a given pool, by the POOL's page size and pages per cap: what a budget holder
+// created, begun or restored in that pool actually reserves. A page pool's B is the model's (the pin is
+// refused once a pool exists), so it answers as ReservationPages; the contiguous option's page is the cap,
+// so a budget holder there reserves one page (§21.2; T-3195's lesser plane). 0 for a budget outside [1, cap].
+uint32_t ReservationPagesIn(const sslm_kv_pool_s* pool, int32_t budget) {
+	const sslm_model_s* model = pool->model;
+	if (budget < 1 || static_cast<int64_t>(budget) > static_cast<int64_t>(model->view.config.context_cap)) return 0;
+	const int64_t B = pool->page_positions;
+	const int64_t pages = (static_cast<int64_t>(budget) + B - 1) / B + 1;
+	return static_cast<uint32_t>(std::min<int64_t>(pages, pool->cap_pages));
 }
 
 // §3.4: limit = min(origin + budget, cap) for a budget holder; the cap for a whole_reserve one.
@@ -995,32 +1144,16 @@ extern "C" size_t sslm_workspace_size(sslm_model model, const sslm_config* confi
 // CORRECTED to the ruled unit (design Sec7.2, Brunel T-2139 Sec4, design commit fab235c1c6): a
 // "block" is one sequence's KV footprint at the full cap across every layer -- exactly the byte
 // count RunLayerLoop's own flat workspace/workspace_size parameter needs for one sequence. Since
-// 1.12.0 (paged-KV plan Sec3.1) the pool stores K/V in pages of B positions and a block is
-// exactly ceil(cap/B) of them: the unit a no-budget holder reserves, not a unit of storage. CFG1's own `kv_block_size` field (SslmModelConfig, a
+// 1.12.0 (paged-KV plan Sec3.1) the pool stores K/V in pages of B positions; a no-budget holder
+// reserves ceil(cap/B) of them, this block plus the last page's slack where B does not divide the cap,
+// and sslm_kv_pool_overhead_size carries the slack (rev 16.22, D-SLM8427), so this value stays 1.11.0's
+// at every cap and keeps sizing the legacy save and sslm_seq_state_size. CFG1's own `kv_block_size` field (SslmModelConfig, a
 // tokens-per-page count) plays NO role in this formula under the ruling; this function's own
 // name is now a slight misnomer relative to that unrelated CFG1 field, which the ruling itself
 // notes is model metadata this ABI's block unit does not consume.
 extern "C" size_t sslm_kv_block_size(sslm_model model) {
 	if (!model) return 0;
-	const superslm::SslmModelConfig& c = model->view.config;
-	// num_hidden_layers * context_cap * num_key_value_heads * head_dim * 2 (K+V) *
-	// kv_precision_width -- the exact formula the KeyRow/ValueRow accessor comment
-	// (forward_sites.h) states for one sequence's own contiguous KV span. A pure product chain
-	// (not a sum-of-products), so chained CheckedMulSizeT rather than SaturatingAccumulator
-	// (which composes sum-of-products, not a running product).
-	size_t v = static_cast<size_t>(c.num_hidden_layers);
-	bool overflowed = false;
-	auto Mul = [&](size_t factor) {
-		size_t out = 0;
-		if (!CheckedMulSizeT(v, factor, &out)) overflowed = true;
-		v = overflowed ? kSizeMax : out;
-	};
-	Mul(static_cast<size_t>(c.context_cap));
-	Mul(static_cast<size_t>(c.num_key_value_heads));
-	Mul(static_cast<size_t>(c.head_dim));
-	Mul(2);
-	Mul(KvElementBytes(c.kv_precision));
-	return v;
+	return FlatBlockSize(model->view.config);
 }
 
 extern "C" size_t sslm_kv_pool_overhead_size(sslm_model model, uint32_t block_count) {
@@ -1035,16 +1168,7 @@ extern "C" size_t sslm_kv_pool_overhead_size(sslm_model model, uint32_t block_co
 	// saturates for exactly the counts sslm_kv_pool_create refuses for that reason: page totals above
 	// UINT32_MAX. A total of exactly UINT32_MAX is a real pool (indices 0 .. UINT32_MAX - 1 never meet
 	// the page module's kNoPage sentinel) and is sized like any other (decision 24).
-	const PageGeometry geo = ComputePageGeometry(model);
-	if (!geo.ok ||
-	    static_cast<uint64_t>(block_count) * geo.cap_pages > static_cast<uint64_t>(UINT32_MAX)) {
-		return kSizeMax;
-	}
-	SaturatingAccumulator acc;
-	acc.AddProduct(static_cast<size_t>(block_count), sizeof(uint32_t) * 2);
-	size_t total = 0;
-	CheckedAddSizeT(acc.value, 32, &total);
-	return acc.overflowed ? kSizeMax : total;
+	return ComputePoolSizing(model, block_count).overhead;
 }
 
 extern "C" size_t sslm_seq_state_size(sslm_model model) {
@@ -1167,28 +1291,23 @@ extern "C" sslm_status sslm_kv_pool_create(sslm_model model, void* buf, size_t b
 	*out = nullptr;
 	if (!model || !buf) return SSLM_INVALID_ARGUMENT;
 	if (block_count == 0) return SSLM_INVALID_ARGUMENT;
-	const size_t block_size = sslm_kv_block_size(model);
-	if (block_size == 0) return SSLM_INVALID_ARGUMENT;
 	// Paged-KV plan §3.6 (C4): the pool is block_count * ceil(cap/B) pages, and page indices are
 	// u32, so a count above UINT32_MAX is refused here, with the overflow refusals, before the
-	// buffer-size check (sslm_kv_pool_overhead_size saturates for the same counts, just below).
-	// Exactly UINT32_MAX is admissible: its indices stop at UINT32_MAX - 1, below the page module's
-	// kNoPage sentinel, and PoolCreate admits it (decision 24).
-	const PageGeometry geo = ComputePageGeometry(model);
+	// buffer-size check (sslm_kv_pool_overhead_size saturates for the same counts). Exactly
+	// UINT32_MAX is admissible: its indices stop at UINT32_MAX - 1, below the page module's kNoPage
+	// sentinel, and PoolCreate admits it (decision 24). Every quantity below is ComputePoolSizing's,
+	// the computation the sizing verbs and the geometry seam read.
+	const PoolSizing sizing = ComputePoolSizing(model, block_count);
+	const PageGeometry& geo = sizing.geo;
+	const size_t block_size = sizing.block_size;
+	if (block_size == 0) return SSLM_INVALID_ARGUMENT;
 	if (!geo.ok) return SSLM_INVALID_ARGUMENT;
+	if (!sizing.page_count_fits) return SSLM_INVALID_ARGUMENT;
 	const uint64_t page_count64 = static_cast<uint64_t>(block_count) * geo.cap_pages;
-	if (page_count64 > static_cast<uint64_t>(UINT32_MAX)) return SSLM_INVALID_ARGUMENT;
-	const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
-	if (overhead == kSizeMax) return SSLM_INVALID_ARGUMENT;  // saturated: no real buffer suffices
-	size_t blocks_bytes = 0;
-	if (!CheckedMulSizeT(static_cast<size_t>(block_count), block_size, &blocks_bytes)) {
-		return SSLM_INVALID_ARGUMENT;  // overflow before the multiplication is trusted (dim2)
-	}
-	size_t required = 0;
-	if (!CheckedAddSizeT(blocks_bytes, overhead, &required)) {
-		return SSLM_INVALID_ARGUMENT;
-	}
-	if (buf_size < required) return SSLM_BUFFER_TOO_SMALL;
+	if (sizing.overhead == kSizeMax) return SSLM_INVALID_ARGUMENT;  // saturated: no real buffer suffices
+	// The product and the sum, each checked before it is trusted (dim2).
+	if (!sizing.requirement_fits) return SSLM_INVALID_ARGUMENT;
+	if (buf_size < sizing.required) return SSLM_BUFFER_TOO_SMALL;
 	// S2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): design Sec6 names "Sec7.1's
 	// workspace/pool construction verbs" as the ones that check alignment explicitly, and
 	// sslm_workspace_create (above) already does. Checked AFTER the size check, matching
@@ -1208,6 +1327,7 @@ extern "C" sslm_status sslm_kv_pool_create(sslm_model model, void* buf, size_t b
 	h->page_positions = geo.page_positions;
 	h->page_bytes = geo.page_bytes;
 	h->cap_pages = geo.cap_pages;
+	h->runs = geo.runs;
 	// P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, third confirmation pass): the
 	// page module's free list, refcount and dirty arrays are heap vectors; PoolCreate catches its
 	// own std::bad_alloc and reports it, and CatchAllocationFailure is the boundary for anything
@@ -1224,6 +1344,8 @@ extern "C" sslm_status sslm_kv_pool_create(sslm_model model, void* buf, size_t b
 		delete h;
 		return fill_st;
 	}
+	h->model_live_pools = model->live_pools;
+	h->model_live_pools->fetch_add(1, std::memory_order_acq_rel);
 	*out = h;
 	return SSLM_OK;
 }
@@ -1231,6 +1353,7 @@ extern "C" sslm_status sslm_kv_pool_create(sslm_model model, void* buf, size_t b
 extern "C" sslm_status sslm_kv_pool_destroy(sslm_kv_pool pool) {
 	if (!pool) return SSLM_INVALID_ARGUMENT;
 	if (pool->live_refs.load(std::memory_order_acquire) != 0) return SSLM_POOL_HAS_LIVE_HANDLES;
+	if (pool->model_live_pools) pool->model_live_pools->fetch_sub(1, std::memory_order_acq_rel);
 	delete pool;
 	return SSLM_OK;
 }
@@ -1304,6 +1427,7 @@ extern "C" sslm_status sslm_kv_page_pool_create(sslm_model model, void* buf, siz
 	h->page_positions = geo.page_positions;
 	h->page_bytes = geo.page_bytes;
 	h->cap_pages = geo.cap_pages;
+	h->runs = geo.runs;
 	const sslm_status fill_st = CatchAllocationFailure([&]() -> sslm_status {
 		const superslm::kv_pages::PageStatus ps = superslm::kv_pages::PoolCreate(
 		    static_cast<uint8_t*>(buf), page_count, geo.page_bytes, geo.page_positions, &h->pages);
@@ -1320,6 +1444,81 @@ extern "C" sslm_status sslm_kv_page_pool_create(sslm_model model, void* buf, siz
 		delete h;  // ~sslm_kv_pool_s destroys the page pool, if it was made
 		return fill_st;
 	}
+	h->model_live_pools = model->live_pools;
+	h->model_live_pools->fetch_add(1, std::memory_order_acq_rel);
+	*out = h;
+	return SSLM_OK;
+}
+
+// Paged-KV plan §21.2 (D-SLM8398): the contiguous pool option. A pool whose page is `cap` positions, one page
+// per block, through the same page module: every holder in it is one page (1.11.0's layout), and every verb works
+// on it as on a page pool with B = cap. Its size is block_count * (block + 8) + 32: 1.11.0's flat block per block,
+// plus the page module's 8 bytes a page and 32 (§3.6). 0 on a null model, a zero count, or where the product or the
+// sum overflows. The product N * (block + 8) is checked first; at cell 4.14's geometry it binds (D-SLM8499).
+namespace {
+size_t ContiguousSize(const sslm_model_s* model, uint32_t block_count) {
+	if (!model || block_count == 0) return 0;
+	const size_t block = FlatBlockSize(model->view.config);
+	if (block == 0 || block == kSizeMax) return 0;
+	size_t per = 0, product = 0, total = 0;
+	if (!CheckedAddSizeT(block, sizeof(uint32_t) * 2, &per)) return 0;
+	if (!CheckedMulSizeT(static_cast<size_t>(block_count), per, &product)) return 0;
+	if (!CheckedAddSizeT(product, 32, &total)) return 0;
+	return total;
+}
+}  // namespace
+
+extern "C" size_t sslm_kv_pool_contiguous_size(sslm_model model, uint32_t block_count) {
+	return ContiguousSize(model, block_count);
+}
+
+// The refusals of sslm_kv_pool_create, in its order: a null `out` (nothing written), then `*out` nulled; a null
+// model or buffer or a zero count; an overflowing size; a buffer below the size (before the alignment, so a
+// buffer both too small and misaligned is SSLM_BUFFER_TOO_SMALL); a misaligned buffer; heap failure. No refusal
+// writes into the caller's buffer.
+extern "C" sslm_status sslm_kv_pool_create_contiguous(sslm_model model, void* buf, size_t buf_size, uint32_t block_count,
+                                                      sslm_kv_pool* out) {
+	if (!out) return SSLM_INVALID_ARGUMENT;
+	*out = nullptr;
+	if (!model || !buf) return SSLM_INVALID_ARGUMENT;
+	if (block_count == 0) return SSLM_INVALID_ARGUMENT;
+	const size_t required = ContiguousSize(model, block_count);
+	if (required == 0) return SSLM_INVALID_ARGUMENT;  // the product or the sum overflows
+	const PageGeometry geo = ComputePageGeometry(model);
+	if (!geo.ok) return SSLM_INVALID_ARGUMENT;
+	if (buf_size < required) return SSLM_BUFFER_TOO_SMALL;
+	if (!IsAligned(buf)) return SSLM_MISALIGNED_BUFFER;
+	const superslm::SslmModelConfig& c = model->view.config;
+	const size_t block = FlatBlockSize(c);
+	sslm_kv_pool_s* h = new (std::nothrow) sslm_kv_pool_s();
+	if (!h) return SSLM_ALLOCATION_FAILED;
+	h->model = model;
+	h->buf = buf;
+	h->buf_size = buf_size;
+	h->block_count = block_count;
+	h->block_size = block;
+	h->page_positions = static_cast<int64_t>(c.context_cap);  // one page per block: the cap
+	h->page_bytes = block;
+	h->cap_pages = 1;
+	h->runs = geo.runs;
+	const sslm_status fill_st = CatchAllocationFailure([&]() -> sslm_status {
+		const superslm::kv_pages::PageStatus ps = superslm::kv_pages::PoolCreate(
+		    static_cast<uint8_t*>(buf), block_count, block, h->page_positions, &h->pages);
+		if (ps != superslm::kv_pages::PageStatus::kOk) {
+			return ps == superslm::kv_pages::PageStatus::kAllocationFailed ? SSLM_ALLOCATION_FAILED
+			                                                                : SSLM_INVALID_ARGUMENT;
+		}
+		// Cell 5.6: the allocation-failure seam, consulted after the pool's heap state exists, as the page-pool
+		// create does, so an injected failure unwinds a real construction.
+		superslm::internal::MaybeThrowInjectedBadAllocFault();
+		return SSLM_OK;
+	});
+	if (fill_st != SSLM_OK) {
+		delete h;  // ~sslm_kv_pool_s destroys the page pool, if it was made
+		return fill_st;
+	}
+	h->model_live_pools = model->live_pools;
+	h->model_live_pools->fetch_add(1, std::memory_order_acq_rel);
 	*out = h;
 	return SSLM_OK;
 }
@@ -1343,12 +1542,12 @@ extern "C" sslm_status sslm_kv_pool_stats(sslm_kv_pool pool, sslm_kv_pool_stats_
 // SslmModel::Load, plus the D-SLM32 lifecycle-symmetry guard.
 // -----------------------------------------------------------------------------------------
 
-extern "C" sslm_status sslm_model_map(const void* data, size_t size, sslm_model* out) {
-	if (!out) return SSLM_INVALID_ARGUMENT;
-	*out = nullptr;
-	if (!data) return SSLM_INVALID_ARGUMENT;
-
-	superslm::SslmModelView view;
+namespace {
+// sslm_model_map's load of `size` bytes at `data` into `view`, and the status it returns for them:
+// SSLM_OK when SslmModel::Load admits the artifact, else the refusal below. The geometry seam
+// (KvPagesTestPoolGeometry, paged-KV plan §3.1, D-SLM8446) returns this function's status for a
+// refused load, so the two cannot disagree on any bytes.
+sslm_status LoadModelView(const void* data, size_t size, superslm::SslmModelView& view) {
 	std::string err;
 	// N3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3): SslmModel::Load "throws only
 	// std::bad_alloc" (model.h's own contract, S-HARDEN-7) -- previously left uncaught here on
@@ -1419,6 +1618,18 @@ extern "C" sslm_status sslm_model_map(const void* data, size_t size, sslm_model*
 		// out-parameter) -- discarded here, not silently invented a channel for.
 		return SSLM_ARTIFACT_REJECTED;
 	}
+	return SSLM_OK;
+}
+}  // namespace
+
+extern "C" sslm_status sslm_model_map(const void* data, size_t size, sslm_model* out) {
+	if (!out) return SSLM_INVALID_ARGUMENT;
+	*out = nullptr;
+	if (!data) return SSLM_INVALID_ARGUMENT;
+
+	superslm::SslmModelView view;
+	const sslm_status load_st = LoadModelView(data, size, view);
+	if (load_st != SSLM_OK) return load_st;
 
 	sslm_model_s* h = new (std::nothrow) sslm_model_s{std::move(view)};
 	// N3 -- see sslm_workspace_create's own identical comment.
@@ -1456,6 +1667,7 @@ extern "C" sslm_status sslm_model_map(const void* data, size_t size, sslm_model*
 	// fact about the PLAIN shared slot it arms: that one still always trips Load's own
 	// consultation first, by design -- the two pins now exercise the two independent slots.
 	const sslm_status cache_st = CatchAllocationFailure([&]() -> sslm_status {
+		h->live_pools = std::make_shared<std::atomic<uint32_t>>(0);
 		if (!BuildEngineCache(h)) return SSLM_ARTIFACT_REJECTED;
 		h->damped_greedy_free_text_mask.assign(
 		    (static_cast<size_t>(h->view.config.vocab_size) + 7) / 8, 0xFF);
@@ -1635,7 +1847,7 @@ sslm_status ReleaseHolder(sslm_kv_pool_s* pool, superslm::kv_pages::PageHolder* 
 // pages of B positions, page_bytes apart.
 superslm::KvPageView ViewOf(const sslm_kv_pool_s* pool, const superslm::kv_pages::PageHolder* holder) {
 	return superslm::KvPageView{pool->pages->base, holder->table.get(), holder->mapped, pool->page_positions,
-	                            pool->page_bytes};
+	                            pool->page_bytes, pool->runs};
 }
 
 // The hot-path map (§3.6): maps pages from the holder's own reserve until the table covers
@@ -1657,16 +1869,19 @@ sslm_status MapPagesFor(const sslm_kv_pool_s* pool, superslm::kv_pages::PageHold
 	return SSLM_OK;
 }
 
-// The address of (layer, half, kv_head, position)'s row in a holder's pages, by §3.1's formula,
-// reading the table through the module's address path (which traps under the test library's
-// table sentinel when the entry is at or above `mapped`, cell 7.13). Every ABI read or write of a
-// holder's rows outside the engine goes through here.
+// The address of run `run`'s row at `position` in a holder's pages, by §3.1's formula with rotation
+// (superslm::KvPageInPageOffset, the engine accessors' own): slot (run + j) mod runs of logical page
+// j = position / B. The table is read through the module's address path (which traps under the test
+// library's table sentinel when the entry is at or above `mapped`, cell 7.13). Every ABI read or write
+// of a holder's rows outside the engine goes through here; a run's B rows within one page are
+// contiguous from the row at the page's first position.
 uint8_t* HolderRow(const sslm_kv_pool_s* pool, const superslm::kv_pages::PageHolder* holder, size_t run,
                    int64_t position, size_t head_dim) {
 	const int64_t B = pool->page_positions;
 	const uint32_t page = superslm::kv_pages::HolderTableEntryForAddress(holder, static_cast<uint32_t>(position / B));
-	return superslm::kv_pages::PageBase(pool->pages, page) + run * static_cast<size_t>(B) * head_dim +
-	       static_cast<size_t>(position % B) * head_dim;
+	return superslm::kv_pages::PageBase(pool->pages, page) +
+	       superslm::KvPageInPageOffset(run, pool->runs, static_cast<size_t>(B), head_dim,
+	                                    static_cast<size_t>(position));
 }
 
 // The K/V section of 1.9.0's SSB5 (§3.7 Writers, rev 16): the whole block in the flat layout
@@ -1677,6 +1892,76 @@ uint8_t* HolderRow(const sslm_kv_pool_s* pool, const superslm::kv_pages::PageHol
 size_t KvRuns(const superslm::SslmModelConfig& c) {
 	// One run = one (layer, half, kv_head) triple, in the flat and canonical order.
 	return static_cast<size_t>(c.num_hidden_layers) * 2u * c.num_key_value_heads;
+}
+
+// The block writes of GatherFlatBlock. A save writes a whole SSB5 block (24 MiB at 0.5B and cap
+// 4,096, 448 MiB at 1.5B and cap 32,768) that the save itself never reads back. 1.11.0 wrote it with
+// one memcpy of the block, which C runtimes perform with non-temporal stores above a cache-sized
+// threshold. The paged gather writes the same bytes as one copy per (page, run) slab (4 or 8 KiB)
+// and one fill per run tail, each small enough that the runtime takes the cached path, so every
+// destination line is read for ownership first and the block is pushed through the cache: a
+// full-length save took 1.88 to 1.93 times 1.11.0's (docs/releases/1.12.0.md, *Speed*). For a block
+// of kGatherStreamBytes or more, these two write with SSE2 streaming stores on x64 and
+// GatherFlatBlock fences once before returning. They stream whole 64-byte lines only, four 16-byte
+// stores per line: the head up to the first line boundary and the tail past the last whole line are
+// plain memcpy or memset. A line written partly by streaming and partly by plain stores (a 16-byte
+// alignment, where a slab boundary falls inside a line) measured 5 to 10 per cent slower than
+// memcpy at 12 of the 16 offsets mod 64; with 64-byte alignment every offset measured faster than
+// memcpy. For a smaller block, which a cache holds, they are memcpy and memset, which measured
+// faster there. On every other target, ARM64EC included, they are memcpy and memset. The threshold is a fixed size, not a query of the cache; test libraries
+// can lower it (sslm_pkv_test_only_set_gather_stream_bytes) so the CPU suites, whose fixtures'
+// blocks are all below it, run the streaming path. The bytes are the same either way.
+constexpr size_t kGatherStreamBytes = size_t{16} << 20;
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+std::atomic<size_t> g_gather_stream_bytes{kGatherStreamBytes};
+size_t GatherStreamBytes() { return g_gather_stream_bytes.load(std::memory_order_relaxed); }
+#else
+constexpr size_t GatherStreamBytes() { return kGatherStreamBytes; }
+#endif
+
+void BlockCopy(uint8_t* dst, const uint8_t* src, size_t n, bool stream) {
+#if (defined(_M_X64) && !defined(_M_ARM64EC)) || defined(__x86_64__)
+	if (stream) {
+		const size_t head = std::min(n, (64u - (reinterpret_cast<uintptr_t>(dst) & 63u)) & 63u);
+		std::memcpy(dst, src, head);
+		size_t i = head;
+		for (; i + 64 <= n; i += 64) {
+			_mm_stream_si128(reinterpret_cast<__m128i*>(dst + i),
+			                 _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i)));
+			_mm_stream_si128(reinterpret_cast<__m128i*>(dst + i + 16),
+			                 _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i + 16)));
+			_mm_stream_si128(reinterpret_cast<__m128i*>(dst + i + 32),
+			                 _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i + 32)));
+			_mm_stream_si128(reinterpret_cast<__m128i*>(dst + i + 48),
+			                 _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i + 48)));
+		}
+		std::memcpy(dst + i, src + i, n - i);
+		return;
+	}
+#endif
+	(void)stream;
+	std::memcpy(dst, src, n);
+}
+
+void BlockZero(uint8_t* dst, size_t n, bool stream) {
+#if (defined(_M_X64) && !defined(_M_ARM64EC)) || defined(__x86_64__)
+	if (stream) {
+		const size_t head = std::min(n, (64u - (reinterpret_cast<uintptr_t>(dst) & 63u)) & 63u);
+		std::memset(dst, 0, head);
+		size_t i = head;
+		const __m128i zero = _mm_setzero_si128();  // xorps or pxor; the FP-free scan accepts both
+		for (; i + 64 <= n; i += 64) {
+			_mm_stream_si128(reinterpret_cast<__m128i*>(dst + i), zero);
+			_mm_stream_si128(reinterpret_cast<__m128i*>(dst + i + 16), zero);
+			_mm_stream_si128(reinterpret_cast<__m128i*>(dst + i + 32), zero);
+			_mm_stream_si128(reinterpret_cast<__m128i*>(dst + i + 48), zero);
+		}
+		std::memset(dst + i, 0, n - i);
+		return;
+	}
+#endif
+	(void)stream;
+	std::memset(dst, 0, n);
 }
 
 void GatherFlatBlock(const sslm_kv_pool_s* pool, const sslm_seq_s* seq, const superslm::SslmModelConfig& c,
@@ -1690,14 +1975,19 @@ void GatherFlatBlock(const sslm_kv_pool_s* pool, const sslm_seq_s* seq, const su
 	const size_t runs = KvRuns(c);
 	const size_t run_bytes = cap * D;
 	const size_t slab = static_cast<size_t>(B) * D;  // one run's rows within one page
-	// Rows [0, L), page by page: each page is read once, front to back, one memcpy per run (a page
-	// holds every run's B rows, run-major, so a page's slabs for consecutive runs are adjacent in the
-	// source and cap * D apart in the block). The table is read once per page, through the address path.
+	const bool stream = block_size >= GatherStreamBytes();
+	// Rows [0, L), page by page: each page is read once, one memcpy per run (a page holds every run's
+	// B rows in its own slot, (r + j) mod runs by §3.1's rotation, and the runs are cap * D apart in
+	// the block). The table is read once per page, through the address path; run r's slab is the
+	// slot's, KvPageRunSlot, the same function every page address goes through.
 	for (int64_t p0 = 0; p0 < L; p0 += B) {
 		const size_t n = static_cast<size_t>(std::min<int64_t>(B, L - p0)) * D;
-		const uint8_t* src = HolderRow(pool, seq->kv, 0, p0, D);
+		const size_t j = static_cast<size_t>(p0 / B);
+		const uint8_t* page = superslm::kv_pages::PageBase(
+		    pool->pages, superslm::kv_pages::HolderTableEntryForAddress(seq->kv, static_cast<uint32_t>(j)));
 		uint8_t* out = dst + static_cast<size_t>(p0) * D;
-		for (size_t r = 0; r < runs; ++r) std::memcpy(out + r * run_bytes, src + r * slab, n);
+		for (size_t r = 0; r < runs; ++r)
+			BlockCopy(out + r * run_bytes, page + superslm::KvPageRunSlot(r, j, pool->runs) * slab, n, stream);
 	}
 	// Every byte past row L of every run is zero, except the mid-token row's layers below
 	// layer_index, which were written this token. No byte is written twice, so the block is filled
@@ -1710,10 +2000,13 @@ void GatherFlatBlock(const sslm_kv_pool_s* pool, const sslm_seq_s* seq, const su
 			std::memcpy(run_dst + live, HolderRow(pool, seq->kv, r, L, D), D);
 			from += D;
 		}
-		if (from < run_bytes) std::memset(run_dst + from, 0, run_bytes - from);
+		if (from < run_bytes) BlockZero(run_dst + from, run_bytes - from, stream);
 	}
 	// block_size is runs * cap * D for a one-byte element; any bytes past the runs are zero too.
-	if (runs * run_bytes < block_size) std::memset(dst + runs * run_bytes, 0, block_size - runs * run_bytes);
+	if (runs * run_bytes < block_size) BlockZero(dst + runs * run_bytes, block_size - runs * run_bytes, stream);
+#if (defined(_M_X64) && !defined(_M_ARM64EC)) || defined(__x86_64__)
+	if (stream) _mm_sfence();  // the streaming stores are ordered before the save returns
+#endif
 }
 
 // The K/V section of 'SSB6' (§3.7, C5): rows [0, L') of every run in canonical layout
@@ -2186,7 +2479,7 @@ extern "C" sslm_status sslm_prefix_begin_budgeted(sslm_model model, sslm_kv_pool
 	if (p->model != model) return SSLM_INVALID_ARGUMENT;
 	if (!BudgetInDomain(model, budget)) return SSLM_INVALID_ARGUMENT;
 	superslm::kv_pages::PageHolder* kv = nullptr;
-	const sslm_status draw_st = CreateHolder(p, ReservationPages(model, budget), &kv);
+	const sslm_status draw_st = CreateHolder(p, ReservationPagesIn(p, budget), &kv);
 	if (draw_st != SSLM_OK) return draw_st;
 	return FinishPrefix(model, p, kv, KvHolderMode::kBudget, budget, 0, true, out);
 }
@@ -2208,7 +2501,7 @@ extern "C" sslm_status sslm_prefix_begin_from(sslm_prefix parent, int32_t budget
 	const int64_t len = parent->state.context_length;
 	const uint32_t full = static_cast<uint32_t>(len / B);
 	const uint32_t tail = (len % B) != 0 ? 1u : 0u;
-	const uint32_t reserve = ReservationPages(model, budget);
+	const uint32_t reserve = ReservationPagesIn(p, budget);
 	if (full + tail > p->cap_pages || full + tail > superslm::kv_pages::HolderMapped(parent->kv) || tail > reserve) {
 		return SSLM_INVALID_ARGUMENT;  // unreachable for a frozen parent of this pool (its table covers len)
 	}
@@ -2401,7 +2694,7 @@ extern "C" sslm_status sslm_seq_create_budgeted(sslm_model model, sslm_kv_pool* 
 	if (p->model != model) return SSLM_INVALID_ARGUMENT;
 	if (!BudgetInDomain(model, budget)) return SSLM_INVALID_ARGUMENT;
 	superslm::kv_pages::PageHolder* kv = nullptr;
-	const sslm_status draw_st = CreateHolder(p, ReservationPages(model, budget), &kv);
+	const sslm_status draw_st = CreateHolder(p, ReservationPagesIn(p, budget), &kv);
 	if (draw_st != SSLM_OK) return draw_st;
 	return FinishSeq(model, p, kv, KvHolderMode::kBudget, budget, true, out);
 }
@@ -2533,6 +2826,9 @@ extern "C" superslm::SequenceLayerState* SslmPrefixLiveStateForTest(sslm_prefix 
 // counted under the pool mutex) and copies at most its one partial tail page. Neither draws from
 // the pool. Both are bit-identical in what the sequence then reads: context_length gates what
 // RunLayerLoop treats as valid history, and every write lands at or after the prefix's length.
+// Both copies are page-whole, so they are exact only between pools of one page geometry: an adopt whose
+// two pools' page_positions differ (a page pool and the contiguous option of one model, above one rule
+// page) is refused before any state change (paged-KV plan §3.5, §25.4, D-SLM8434).
 extern "C" sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix) {
 	if (!seq) return SSLM_INVALID_ARGUMENT;
 	if (!prefix) return SSLM_INVALID_ARGUMENT;
@@ -2551,6 +2847,11 @@ extern "C" sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix) {
 	// once sslm_kv_pool_s is itself bound to one model, below).
 	if (seq->model != prefix->model) return SSLM_INVALID_ARGUMENT;  // different models
 	if (seq->block_size != prefix->block_size) return SSLM_INVALID_ARGUMENT;
+	// Paged-KV plan §3.5 (rev 16.23, D-SLM8434): the block check guards the legacy layout's cap; equal blocks
+	// no longer mean equal pages. A copy between pools of two page geometries would copy one geometry's pages
+	// as the other's, so it is refused here, with the model and block checks, before the bind permission is
+	// revoked or any state moves (A22, cell 4.15). Equal page_positions mean one page_bytes and one formula.
+	if (seq->pool->page_positions != prefix->pool->page_positions) return SSLM_INVALID_ARGUMENT;
 	// Paged-KV plan §3.5 (C5): the adopter's mode decides. A budget adopter share-adopts, which maps
 	// the prefix's own pages, so a prefix of another pool is refused here, with the model check and
 	// before any state change (A16; the bind permission is not revoked). A whole_reserve adopter
@@ -4182,7 +4483,7 @@ static sslm_status SeqRestoreImpl(sslm_model model, sslm_kv_pool* pool, const vo
 	if (budget_restore) {
 		const int64_t B = pool_ptr->page_positions;
 		const uint32_t full = static_cast<uint32_t>(saved_origin / B);
-		reserve_pages = ReservationPages(model, saved_budget);
+		reserve_pages = ReservationPagesIn(pool_ptr, saved_budget);
 		if (handle && SharingHandleMatches(handle, model, pool_ptr, saved_origin, kv_block_count_ptr + kv_count_bytes,
 		                                   kv_stride)) {
 			share_pages = full;
@@ -4740,7 +5041,8 @@ extern "C" sslm_status sslm_g5_test_only_apply_mask_and_argmax(const int32_t* lo
 // WHY THIS EXISTS: T-2132's leak guard (Sec7 dim1: "no content from the PRIOR sequence survives
 // release") needs a read path that does not run through a live holder, so a test can observe the
 // release-time poison fill directly rather than trust the source. It reads `n` raw bytes of the
-// pool's backing buffer at `block_index * block_size`.
+// pool's backing buffer at `block_index * cap_pages * page_bytes` (rev 16.22, D-SLM8427: the flat block
+// is not a pool stride where B does not divide the cap; a block's pages are ceil(cap/B) * page_bytes).
 //
 // Paged-KV plan (rev 16.1) §3.6, step C4: the buffer is now a page pool -- block `i` is pages
 // [i*cap_pages, (i+1)*cap_pages) -- and a page is poisoned with 0xCD on release iff it was mapped
@@ -4754,9 +5056,9 @@ extern "C" sslm_status sslm_g5_test_only_peek_kv_block_bytes(sslm_kv_pool pool,
                                                                size_t n) {
 	if (!pool || !out_buf) return SSLM_INVALID_ARGUMENT;
 	if (block_index >= pool->block_count) return SSLM_INVALID_ARGUMENT;
-	if (n > pool->block_size) return SSLM_INVALID_ARGUMENT;
-	const uint8_t* src =
-	    static_cast<const uint8_t*>(pool->buf) + static_cast<size_t>(block_index) * pool->block_size;
+	const size_t stride = static_cast<size_t>(pool->cap_pages) * pool->page_bytes;
+	if (n > stride) return SSLM_INVALID_ARGUMENT;
+	const uint8_t* src = static_cast<const uint8_t*>(pool->buf) + static_cast<size_t>(block_index) * stride;
 	std::memcpy(out_buf, src, n);
 	return SSLM_OK;
 }
@@ -4857,3 +5159,86 @@ extern "C" sslm_status sslm_pc_test_only_set_current_token(sslm_prefix prefix, i
 	return SSLM_OK;
 }
 #endif
+
+// The save-speed fix's streaming threshold (GatherFlatBlock): from the next save on, a whole_reserve
+// holder's SSB5 block is written with streaming stores when it is `bytes` or larger; 0 restores
+// kGatherStreamBytes (16 MiB). Process-wide. Every CPU fixture's block is below 16 MiB, so without
+// this no CPU suite runs the streaming path (cell 9.3s). Returns 1 where the threshold is adjustable
+// (the test libraries, SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS) and 0 elsewhere, where it is a constant
+// and the call changes nothing, so a cell can tell it did not run the path rather than pass vacuously.
+extern "C" int sslm_pkv_test_only_set_gather_stream_bytes(size_t bytes) {
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+	g_gather_stream_bytes.store(bytes == 0 ? kGatherStreamBytes : bytes, std::memory_order_relaxed);
+	return 1;
+#else
+	(void)bytes;
+	return 0;
+#endif
+}
+
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+// Paged-KV plan §3.1 (rev 16.15, D-SLM8295; rev 16.23, D-SLM8440): the test-only pin. It sets a mapped
+// model's B before any pool is made on it, so a cell can run at a page size the rule would not choose
+// (16 for the generated-fixture cells, 1 for the hand-built geometry, the cap for the one-page view).
+// It admits a B that divides the cap (the cap itself included) and refuses everything else with
+// SSLM_INVALID_ARGUMENT, the model unchanged: a null model, B < 1, B > cap, a B that does not divide the
+// cap, a B whose page product overflows, and any pin while a pool exists on the model. Compiled only into
+// the test libraries (SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS); the production library has no such symbol
+// (cell 4.12). The argument is signed 64-bit so -1 and 2^31 reach the refusal rather than a narrowing.
+extern "C" sslm_status KvPagesTestPinPagePositions(sslm_model model, int64_t page_positions) {
+	if (!model) return SSLM_INVALID_ARGUMENT;
+	const int64_t cap = static_cast<int64_t>(model->view.config.context_cap);
+	if (page_positions < 1 || page_positions > cap || cap % page_positions != 0) return SSLM_INVALID_ARGUMENT;
+	if (model->live_pools->load(std::memory_order_acquire) != 0) return SSLM_INVALID_ARGUMENT;
+	if (!ComputePageGeometry(model->view.config, page_positions).ok) return SSLM_INVALID_ARGUMENT;
+	model->pinned_page_positions.store(page_positions, std::memory_order_release);
+	return SSLM_OK;
+}
+
+// The geometry seam's out struct (rev 16.23, D-SLM8437; rev 16.24, D-SLM8446). tests/paged-kv/pkv_r9.h
+// declares the same layout as the seam's surface; the two must stay identical.
+extern "C" {
+typedef struct KvPagesTestPoolGeometryOut {
+	int64_t page_positions;
+	size_t page_size;
+	size_t block_size;
+	size_t overhead;
+	int32_t page_count_fits;   // 1 or 0
+	int32_t requirement_fits;  // 1 or 0
+} KvPagesTestPoolGeometryOut;
+}
+static_assert(offsetof(KvPagesTestPoolGeometryOut, page_size) == 8 &&
+                  offsetof(KvPagesTestPoolGeometryOut, overhead) == 8 + 2 * sizeof(size_t) &&
+                  offsetof(KvPagesTestPoolGeometryOut, requirement_fits) == 8 + 3 * sizeof(size_t) + 4,
+              "KvPagesTestPoolGeometryOut's layout is pkv_r9.h's");
+
+// The geometry seam (§3.1). It loads `artifact` exactly as sslm_model_map does (LoadModelView), never
+// maps it, and writes what the geometry and sizing verbs would return for it, computed by the one
+// function they compute through (ComputePoolSizing over the loaded config, unpinned): page_positions
+// (sslm_kv_page_positions), page_size (sslm_kv_page_size), block_size (sslm_kv_block_size), overhead
+// (sslm_kv_pool_overhead_size(block_count)), page_count_fits (block_count * cap_pages <= UINT32_MAX)
+// and requirement_fits (block_count * block_size + overhead representable). It exists for geometries no
+// artifact can map (2.9d, 4.10's hostile rows). Statuses: SSLM_INVALID_ARGUMENT for a null `out` or a
+// null `artifact`, before the load; for a refused load, the status sslm_model_map returns for the same
+// bytes; SSLM_OK otherwise, every field the verbs' value (their 0 for an overflowing geometry included).
+// Every refusal leaves `*out` untouched.
+extern "C" sslm_status KvPagesTestPoolGeometry(const void* artifact, size_t size, uint32_t block_count,
+                                               KvPagesTestPoolGeometryOut* out) {
+	if (!out || !artifact) return SSLM_INVALID_ARGUMENT;
+	return CatchAllocationFailure([&]() -> sslm_status {
+		superslm::SslmModelView view;
+		const sslm_status load_st = LoadModelView(artifact, size, view);
+		if (load_st != SSLM_OK) return load_st;
+		const PoolSizing s = ComputePoolSizing(view.config, 0, block_count);
+		KvPagesTestPoolGeometryOut g{};
+		g.page_positions = s.geo.ok ? s.geo.page_positions : 0;
+		g.page_size = s.geo.ok ? s.geo.page_bytes : 0;
+		g.block_size = s.block_size;
+		g.overhead = s.overhead;
+		g.page_count_fits = s.page_count_fits ? 1 : 0;
+		g.requirement_fits = s.requirement_fits ? 1 : 0;
+		*out = g;
+		return SSLM_OK;
+	});
+}
+#endif  // SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS

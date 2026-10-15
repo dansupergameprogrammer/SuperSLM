@@ -291,52 +291,13 @@ void Cell29() {
 	if (pool2 && pool2 != OutSentinel<sslm_kv_pool>()) sslm_kv_pool_destroy(pool2);
 }
 
-// ---- 2.9b [C4, review M1; review S1] -------------------------------------------------------------
-
-// 2.9b [C4]. The exact u32 boundary that 2.9 cannot reach: there cap_pages = 2048, so no block_count
-// makes the page count exactly UINT32_MAX. On pkv_odd (cap 4100, B = cap, one page per block) the
-// page count IS block_count, so the boundary is exact. §3.6 and decision 24 refuse only a page count
-// that EXCEEDS UINT32_MAX: a pool of exactly UINT32_MAX pages has indices 0 .. UINT32_MAX - 1, so the
-// page module's kNoPage sentinel (UINT32_MAX) never names a real page, and the count is admissible.
-// block_count = UINT32_MAX therefore passes the u32 refusal and reaches the buffer-size check
-// (SSLM_BUFFER_TOO_SMALL against a deliberately tiny buffer, nothing drawn, the buffer untouched), and
-// the overhead verb sizes it without saturating. UINT32_MAX - 1 behaves the same. (Review S1: an
-// earlier fix refused the exact maximum too; its module twin is "2.9b/C3" in superslm_pkv_c3.)
-void Cell29b() {
-	const Fixture& fx = GetFixture("pkv_odd");
-	if (!fx.ok) return;
-	PKV_CHECK_EQ(static_cast<int64_t>(fx.B()), static_cast<int64_t>(fx.geo.context_cap));
-	PKV_CHECK_EQ(fx.CapPages(), 1);
-	const size_t block = sslm_kv_block_size(fx.model);
-	PKV_CHECK_MSG(block > 0 && size_t{UINT32_MAX} <= SIZE_MAX / block,
-	              "block_count * block_size does not overflow at UINT32_MAX");
-
-	const size_t ov_max = sslm_kv_pool_overhead_size(fx.model, UINT32_MAX);
-	const size_t ov_below = sslm_kv_pool_overhead_size(fx.model, UINT32_MAX - 1u);
-	// kills: the overhead verb saturating at >= UINT32_MAX (the exact maximum sized as unsatisfiable)
-	PKV_CHECK_MSG(ov_max != SIZE_MAX, "overhead at block_count UINT32_MAX saturates; decision 24 refuses only > UINT32_MAX");
-	PKV_CHECK(ov_below != SIZE_MAX);
-	PKV_CHECK_MSG(ov_max > ov_below, "overhead grows from UINT32_MAX - 1 to UINT32_MAX blocks");
-
-	for (const uint32_t n : {UINT32_MAX, UINT32_MAX - 1u}) {
-		AlignedBuf buf(4096, 0x77);
-		sslm_kv_pool pool = OutSentinel<sslm_kv_pool>();  // non-null; the verb must null it on the refusal
-		const sslm_status st = sslm_kv_pool_create(fx.model, buf.p, buf.n, n, &pool);
-		// kills: the u32 refusal at >= UINT32_MAX, which refuses the exact maximum with
-		// SSLM_INVALID_ARGUMENT before the size check; an off-by-one that refuses the last count below
-		PKV_CHECK_MSG(st == SSLM_BUFFER_TOO_SMALL, "block_count %u -> %d, want SSLM_BUFFER_TOO_SMALL (admissible by page count)",
-		              n, static_cast<int>(st));
-		PKV_CHECK(pool == nullptr);  // kills: a refusal that returns before writing *out
-		if (pool && pool != OutSentinel<sslm_kv_pool>()) sslm_kv_pool_destroy(pool);
-		bool untouched = true;
-		for (size_t i = 0; i < buf.n; ++i) untouched = untouched && buf.p[i] == 0x77;
-		PKV_CHECK_MSG(untouched, "the refused create (block_count %u) wrote nothing into the caller's buffer", n);
-	}
-}
+// 2.9b [C4] is retired with the one-page fallback (D-SLM8448; the switch itself retired after T-3202 F-7,
+// T-3189 §13). It asserted that on pkv_odd one page is one block, so that UINT32_MAX blocks are exactly
+// UINT32_MAX pages; since T2 pkv_odd has 17 pages a block. 2.9c/T2 carries the exact u32 page boundary
+// (252,645,135 blocks admitted, one more refused).
 
 PKV_CELL("2.3/C4", "C4", Cell23Legacy);
 PKV_CELL("2.4", "C4", Cell24);
 PKV_CELL("2.9", "C4", Cell29);
-PKV_CELL("2.9b", "C4", Cell29b);
 
 }  // namespace

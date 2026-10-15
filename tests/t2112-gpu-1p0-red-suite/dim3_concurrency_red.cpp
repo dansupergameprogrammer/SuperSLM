@@ -21,8 +21,20 @@
 // concurrency oracle is real (per-step bit-equality against the CPU oracle, not merely "the call
 // returned Ok") rather than the "FEATURE ORACLE ... wired here once..." stand-in this file used
 // to carry (build log Sec22.10's own named sweep).
+//
+// 1.13 (paged-KV G3, the box finding on M2): M2 is no longer an unguarded residual. On the box the
+// unguarded race died with heap corruption under the D3D12 debug layer (0xC0000374, 2 of 2) and,
+// with the layer off, left one call Ok and the sequence Submitted, which this cell then released
+// unfinished, so seq_release, model_unmap and context_destroy all refused. The cloud's software GPU
+// reproduces both (a winevulkan abort, and the teardown refusals), on 1.12 as well as 1.13: the
+// handle's Idle check, EntrySubmitGuard and BeginRecording()'s ledger check are unlocked reads, so
+// two threads on one handle could pass all three and record into the singleton's one command list
+// at once. The decode now takes a per-handle claim (SslmGpuSequenceHandle::decode_claimed,
+// gpu_1p0.cpp) before its state read, so M2's measured outcome is exact: one call Ok, the other
+// SSLM_BUSY, every repetition, and a clean teardown once the Ok call is finished.
 #include "fixture_common.h"
 
+#include <atomic>
 #include <thread>
 
 using namespace superslm;
@@ -92,38 +104,76 @@ static void TestDim3_M1_TwoThreadsDisjointSequencesMatchSerial(SslmGpuContext* c
 // driving sslm_decode_step_gpu against the SAME sequence handle concurrently, DELIBERATELY with
 // no mutex (this is the one cell in this file that must NOT use SubmitAndDrainSerialized -- it
 // exists to prove what actually happens without the documented discipline, not to demonstrate the
-// discipline itself). Proves what actually happens, not that it is safe. ---
+// discipline itself). Proves what actually happens, not that it is safe.
+//
+// 1.13 (the box finding; see this file's header): the decode's same-sequence claim makes the
+// collision a guarded one. Per repetition: both threads start together off one flag; exactly one
+// call returns SSLM_OK and the other SSLM_BUSY (the claim, or the Submitted state the winner left,
+// refused it before it touched anything); the Ok call is then finished through
+// sslm_gpu_ready(block=1), as the API requires before a release, and the release returns SSLM_OK.
+// One repetition rarely overlaps the two calls, so the race runs kReps times. Before the claim the
+// software GPU showed, within 12 repetitions: Ok + SSLM_DEVICE_LOST (the loser's allocator Reset
+// refused under the winner's recording list), a silent Ok/Ok (1.12), and a winevulkan abort (two
+// threads recording one command list) -- each one fails this cell or ends its process. ---
 static void TestDim3_M2_SameSequenceConcurrentAccessResidualObserved(SslmGpuContext* ctx,
                                                                       SslmGpuModelHandle* model) {
-	SslmGpuSequenceHandle* seq = nullptr;
-	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
-	CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
-	SslmGpuStatus r1 = SSLM_OK, r2 = SSLM_OK;
-	std::thread ta([&] { r1 = sslm_decode_step_gpu(ctx, seq, nullptr, 24u); });
-	std::thread tb([&] { r2 = sslm_decode_step_gpu(ctx, seq, nullptr, 24u); });
-	ta.join();
-	tb.join();
-	// Per design Sec5.4/Sec11 dim3: this is NOT required to be `Ok`/`Ok` -- the residual is
-	// "a data race the toolchain's sanitizer flags, or a wrong-but-deterministic corruption",
-	// asserted as a MEASURED FACT, not an assumption. The one thing this cell forbids is silent
-	// undetected corruption with BOTH calls reporting Ok AND divergent output with no signal --
-	// the minimal machine-checkable form of that: at least one of the two calls is observably
-	// non-Ok (Busy, the state machine's own existing collision signal) OR the sanitizer build
-	// (see build_link_red.bat) flags the race. A hard device fault (a real, uncatchable process
-	// exit) is ALSO a legitimate realization of "not silently Ok/Ok with no signal" -- the exact
-	// outcome the casebook's own re-run reproduced (Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-
-	// build-review.md Sec14.2) -- so this cell's own CHECK below is what runs when the process
-	// survives; a hard fault is itself the observed signal when it does not.
-	// D-SLM4120 finding 1 (confirmation pass): on this toolchain the unsynchronized race
-	// collides on the process-global command allocator/list and both submits return
-	// SSLM_DEVICE_LOST -- observably rejected, which is the signal this cell exists to
-	// measure; only silent Ok/Ok is forbidden. Accepted as the measured realization beside
-	// Busy-or-divergent.
-	CHECK_MSG(r1 == SSLM_BUSY || r2 == SSLM_BUSY || r1 != r2 ||
-	          (r1 != SSLM_OK && r2 != SSLM_OK),
-	          "same-sequence concurrent access produced Ok/Ok with no observable collision "
-	          "signal -- residual unmeasured (r1=%d r2=%d)", (int)r1, (int)r2);
-	CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
+	constexpr int kReps = 16;
+	for (int rep = 0; rep < kReps; ++rep) {
+		SslmGpuSequenceHandle* seq = nullptr;
+		CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
+		if (seq == nullptr) return;
+		CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
+		SslmGpuStatus r1 = SSLM_OK, r2 = SSLM_OK;
+		std::atomic<bool> go{false};
+		std::thread ta([&] {
+			while (!go.load(std::memory_order_acquire)) {
+			}
+			r1 = sslm_decode_step_gpu(ctx, seq, nullptr, 24u);
+		});
+		std::thread tb([&] {
+			while (!go.load(std::memory_order_acquire)) {
+			}
+			r2 = sslm_decode_step_gpu(ctx, seq, nullptr, 24u);
+		});
+		go.store(true, std::memory_order_release);
+		ta.join();
+		tb.join();
+		// Per design Sec5.4/Sec11 dim3: this is NOT required to be `Ok`/`Ok` -- the residual is
+		// "a data race the toolchain's sanitizer flags, or a wrong-but-deterministic corruption",
+		// asserted as a MEASURED FACT, not an assumption. The one thing this cell forbids is silent
+		// undetected corruption with BOTH calls reporting Ok AND divergent output with no signal --
+		// the minimal machine-checkable form of that: at least one of the two calls is observably
+		// non-Ok (Busy, the state machine's own existing collision signal) OR the sanitizer build
+		// (see build_link_red.bat) flags the race. A hard device fault (a real, uncatchable process
+		// exit) is ALSO a legitimate realization of "not silently Ok/Ok with no signal" -- the exact
+		// outcome the casebook's own re-run reproduced (Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-
+		// build-review.md Sec14.2) -- so this cell's own CHECK below is what runs when the process
+		// survives; a hard fault is itself the observed signal when it does not.
+		// D-SLM4120 finding 1 (confirmation pass): on this toolchain the unsynchronized race
+		// collides on the process-global command allocator/list and both submits return
+		// SSLM_DEVICE_LOST -- observably rejected, which is the signal this cell exists to
+		// measure; only silent Ok/Ok is forbidden. Accepted as the measured realization beside
+		// Busy-or-divergent.
+		// The original measured-fact check, kept: never a silent Ok/Ok.
+		CHECK_MSG(r1 == SSLM_BUSY || r2 == SSLM_BUSY || r1 != r2 ||
+		          (r1 != SSLM_OK && r2 != SSLM_OK),
+		          "rep %d: same-sequence concurrent access produced Ok/Ok with no observable "
+		          "collision signal -- residual unmeasured (r1=%d r2=%d)", rep, (int)r1, (int)r2);
+		// 1.13: the exact outcome the claim gives -- one Ok, one Busy.
+		CHECK_MSG((r1 == SSLM_OK && r2 == SSLM_BUSY) || (r1 == SSLM_BUSY && r2 == SSLM_OK),
+		          "rep %d: expected one SSLM_OK and one SSLM_BUSY from the same-sequence claim "
+		          "(r1=%d r2=%d)", rep, (int)r1, (int)r2);
+		if (r1 == SSLM_OK || r2 == SSLM_OK) {
+			int32_t ready = 0;
+			SslmGpuStatus status = SSLM_DEVICE_LOST;
+			CHECK(sslm_gpu_ready(ctx, seq, /*block=*/1, &ready, &status) == SSLM_OK);
+			CHECK_MSG(ready == 1 && status == SSLM_OK,
+			          "rep %d: the Ok call did not finish cleanly (ready=%d status=%d)", rep, (int)ready,
+			          (int)status);
+		}
+		CHECK_MSG(sslm_gpu_seq_release(ctx, seq) == SSLM_OK,
+		          "rep %d: release of the raced sequence refused after it was finished", rep);
+	}
 }
 
 // --- Product cell: two real sequences, real 1.5B artifact, decoded concurrently on two threads

@@ -20,7 +20,10 @@
 //     capture sink alike.
 // Every tier of every build must reproduce every hash (tests/test_attn_rowsites.cpp, cell 6.3), so
 // the reference takes no input from the code it grades. One hash per slice, so no later slice
-// regenerates an earlier one's.
+// regenerates an earlier one's, with one exception: a change that moves a slice's own input set
+// regenerates that slice's hash, at the same tag, and records it in the slice's golden.txt. The one
+// so far is S4, regenerated 2026-10-09 when the paged-KV plan's cell 6.9 moved the softmax fast tier's
+// cap to width 32,767 (D-SLM8435; docs/attention-rowsites/s4/golden.txt, with its MSVC recipe).
 //
 // Recipe (the one used for the committed pin; see docs/attention-rowsites/s1/golden.txt, s2/golden.txt,
 // s3/golden.txt, s4/golden.txt and s5/golden.txt):

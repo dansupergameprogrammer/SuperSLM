@@ -115,6 +115,12 @@ void sslm_pkv_test_only_set_table_sentinel(int enabled);
  * so the next map below `limit` finds an empty reserve. */
 sslm_status sslm_pkv_test_only_drain_reserve(sslm_seq seq);
 
+/* Cell 9.3s: the save's streaming threshold (src/sslm_abi.cpp, GatherFlatBlock). From the next save on, a
+ * whole_reserve holder's SSB5 block is written with streaming stores when it is `bytes` or larger; 0
+ * restores the library's 16 MiB. Process-wide. Returns 1 in the test libraries, where the threshold is
+ * adjustable, and 0 elsewhere (a constant; nothing changes). */
+int sslm_pkv_test_only_set_gather_stream_bytes(size_t bytes);
+
 #ifdef __cplusplus
 }
 #endif

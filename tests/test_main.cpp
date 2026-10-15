@@ -13,6 +13,7 @@
 #include "superslm/decode_digest.h"
 #include "superslm/forward_sites.h"
 #include "superslm/gpu_port.h"
+#include "../src/gpu/gpu_inflight_token.h"  // GpuInFlightToken (plan G3): complete for construction/destruction
 #include "superslm/intmath.h"
 #include "superslm/layer_marshal.h"
 #include "superslm/matmul.h"
@@ -81,6 +82,7 @@
 #ifdef _WIN32
 using enum SslmGpuStatus;
 #endif
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -28270,6 +28272,9 @@ static void TestT2572_M2_MarshalLayerAcceptsArmCsNonQkNormOutput() {
 // because they call the C ABI, whose unscoped sslm_status enumerators collide with this
 // file's `using enum SslmGpuStatus;` on Windows. Adds its own counts to the two passed in.
 void RunSlm18xSaturationCensusCells(int& checks, int& failures);
+// Pool teardown order (map, create pool, unmap, destroy pool) and the pin seam's refusal while a pool
+// lives, defined in the same unit (T-3262).
+void RunPoolTeardownOrderCells(int& checks, int& failures);
 // 1.9.x schema-constrained and damped-greedy decoding cells
 // (tests/test_slm19x_schema_damped_greedy.cpp), a separate unit for the same reason.
 void RunSlm19xSchemaDampedGreedyCells(int& checks, int& failures);
@@ -28280,6 +28285,9 @@ void RunAttnRowsiteCells(int& checks, int& failures);
 // Decode-threading plan: its steps' cells (tests/test_decode_threading.cpp).
 void RunDecodeThreadingCells(int& checks, int& failures);
 void RunDecodeThreadingD1Cells(int& checks, int& failures);
+// GPU paged-KV plan step G3: cell 3.6h and the ledger's host-only cells
+// (tests/gpu-g3-core/g3_superslm_tests_adapter.cpp).
+void RunGpuLedgerG3Cells(int& checks, int& failures);
 
 #ifdef _WIN32  // resumes the Windows/D3D12 block closed above T-2572
 
@@ -28592,7 +28600,7 @@ static void TestT2577_S1b_ModelGenerationReachesTheG5BridgeChunkEntryPoint() {
 		uint8_t ws[kWorkspaceSize] = {};
 		const CarriedScale scale{INT64_C(1073741824), 0};
 		const std::vector<uint8_t> block = pack_block(hidden_codes, 2, scale);
-		superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+		superslm_gpu::GpuInFlightToken inflight;
 		const auto submit_st = superslm_gpu::SubmitChunkToFullDepthForG5Bridge(
 		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*hidden_size=*/2, /*head_dim=*/2,
 		    /*num_key_value_heads=*/1, /*intermediate_size=*/2, /*context_cap=*/1,
@@ -28602,14 +28610,14 @@ static void TestT2577_S1b_ModelGenerationReachesTheG5BridgeChunkEntryPoint() {
 		    /*external_rope_sin_resident=*/nullptr, /*external_rope_has=*/false,
 		    /*external_rope_cos_elems=*/0, /*external_rope_sin_elems=*/0, /*adapter_bridge=*/nullptr,
 		    &inflight, /*q_width=*/0, generation);
-		CHECK_MSG(submit_st == SslmForwardStatus::Ok && inflight != nullptr,
+		CHECK_MSG(submit_st == SslmForwardStatus::Ok && inflight,
 		          "SubmitChunkToFullDepthForG5Bridge(generation=%llu) status == %s, want Ok "
 		          "with a live inflight token",
 		          (unsigned long long)generation, SslmForwardStatusName(submit_st));
 		if (submit_st != SslmForwardStatus::Ok || !inflight) return false;
 		int32_t ready = 0;
 		const auto finish_st =
-		    superslm_gpu::RunLayerLoopGpuFinish(inflight, seq, ws, /*block=*/1, &ready);
+		    superslm_gpu::RunLayerLoopGpuFinish(std::move(inflight), seq, ws, /*block=*/1, &ready);
 		CHECK_MSG(finish_st == SslmForwardStatus::Ok,
 		          "RunLayerLoopGpuFinish after the G5-bridge submit status == %s, want Ok",
 		          SslmForwardStatusName(finish_st));
@@ -30150,11 +30158,13 @@ int main(int argc, char** argv) {
 	TestT2572_S2_RunLayerLoopWiresRopeSaturationCounterThroughBothPaths();
 	TestT2572_M2_MarshalLayerAcceptsArmCsNonQkNormOutput();
 	RunSlm18xSaturationCensusCells(GChecks, GFailures);
+	RunPoolTeardownOrderCells(GChecks, GFailures);
 	RunSlm19xSchemaDampedGreedyCells(GChecks, GFailures);
 	RunTiledGemmCells(GChecks, GFailures);
 	RunAttnRowsiteCells(GChecks, GFailures);
 	RunDecodeThreadingCells(GChecks, GFailures);
 	RunDecodeThreadingD1Cells(GChecks, GFailures);
+	RunGpuLedgerG3Cells(GChecks, GFailures);
 	TestKvStoreEarlyWriteSurvivesLateReadAcrossEightFurtherPositions();
 	TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast();
 	TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition();

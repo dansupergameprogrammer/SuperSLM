@@ -176,8 +176,8 @@ void main(uint3 gtid : SV_GroupThreadID)
         return;  // neither K nor V lands -- fused dispatch, no partial commit
     }
 
-    uint kv_half_off = KvHalfOffsetGpu(g_layer_index, g_context_cap, (uint)num_kv_heads, (uint)head_dim);
-    uint v_half_off = kv_half_off + g_context_cap * (uint)num_kv_heads * (uint)head_dim;
+    // Paged-KV plan §4 item 1: the landing row is addressed through the page table
+    // (site_common.hlsli KvRowAddrGpu); the K and V rows of one (head, position) lie in the same page.
 
     if (t == 0) gTotalClamps = 0;
     GroupMemoryBarrierWithGroupSync();
@@ -190,7 +190,8 @@ void main(uint3 gtid : SV_GroupThreadID)
         int64_t e_t_k = LayerWeights.Load<int64_t>(off_etk + (uint)h * 8u);
         int64_t r_t_v = LayerWeights.Load<int64_t>(off_rtv + (uint)h * 8u);
         int64_t e_t_v = LayerWeights.Load<int64_t>(off_etv + (uint)h * 8u);
-        uint row_off = KvRowOffsetWithinHalfGpu(g_context_cap, (uint)head_dim, (uint)h, g_position);
+        uint k_row_addr = KvRowAddrGpu(g_layer_index, 0u, (uint)num_kv_heads, (uint)head_dim, (uint)h, g_position);
+        uint v_row_addr = KvRowAddrGpu(g_layer_index, 1u, (uint)num_kv_heads, (uint)head_dim, (uint)h, g_position);
 
         int64_t kacc_i = WorkScratch.Load<int64_t>(0u + (uint)i * 8u);
         int64_t vacc_i = WorkScratch.Load<int64_t>(wide_b_off + (uint)i * 8u);
@@ -200,14 +201,14 @@ void main(uint3 gtid : SV_GroupThreadID)
                                            k_mag_exceeded);
         if (k_clamp) InterlockedAdd(gTotalClamps, 1u);
         int64_t k_val = ClampRopeCodeGpu(k_raw);
-        StoreSignedByteGpu(KvCache, kv_half_off + row_off + (uint)d, (int)k_val);
+        StoreSignedByteGpu(KvCache, k_row_addr + (uint)d, (int)k_val);
 
         bool v_clamp, v_mag_exceeded;
         int64_t v_raw = LandingRescaleGpu(vacc_i, normed_scale_m, r_t_v, normed_scale_e, e_t_v, 0, v_clamp,
                                            v_mag_exceeded);
         if (v_clamp) InterlockedAdd(gTotalClamps, 1u);
         int64_t v_val = ClampRopeCodeGpu(v_raw);
-        StoreSignedByteGpu(KvCache, v_half_off + row_off + (uint)d, (int)v_val);
+        StoreSignedByteGpu(KvCache, v_row_addr + (uint)d, (int)v_val);
     }
     GroupMemoryBarrierWithGroupSync();
 

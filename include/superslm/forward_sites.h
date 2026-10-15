@@ -17,6 +17,12 @@
 // src/forward/forward_sites.cpp.
 #ifndef SUPERSLM_FORWARD_SITES_H
 #define SUPERSLM_FORWARD_SITES_H
+// Cell 7.9's must-reject mutant (KvPageRunSlot, below) builds only as the superslm_mr_opt target, which defines the
+// acknowledgement beside it (tests/paged-kv/paged_kv.cmake). A mutant definition that reaches any other compile, by a
+// global flag or the CL environment variable, is refused here (T-3202 F-4).
+#if defined(SUPERSLM_MUTANT_PKV_MR_OPT) && !defined(SUPERSLM_MUTANT_PKV_MR_OPT_TARGET)
+#error "SUPERSLM_MUTANT_PKV_MR_OPT is 7.9-MR-OPT's mutant: only the superslm_mr_opt target builds it"
+#endif
 #include "superslm/api.h"
 
 #include <cstddef>
@@ -1117,19 +1123,25 @@ struct GemmThreading {
 	const sslm_parallel_for* batched = nullptr;
 };
 
-// Paged-KV plan (rev 16.1) §3.1/§3.2 item 1: a K/V page view. The K/V store is `mapped_pages`
-// logical pages of `page_positions` (B) positions each; logical page `i` is the physical page
-// `page_table[i]` of the pool at `pool_base`, `page_bytes` apart. Page layout
-// `[layer][K|V][kv_head][pos_in_page][d]` (int8 K/V), so the row of (layer, half, kv_head, pos) is at
-//   pool_base + page_table[pos / B] * page_bytes
-//             + ((layer * 2 + half) * num_kv_heads + kv_head) * B * head_dim + (pos % B) * head_dim.
-// The flat workspace is the one-page view: `pool_base = workspace`, `page_table = {0}`,
-// `mapped_pages = 1`, `page_positions = context_cap`, `page_bytes = workspace_size` -- the formula
-// then reduces to the flat accessors' own (§3.1's one-page identity), and the flat overloads of the
-// layer loops are thin wrappers that build exactly that view. `page_bytes` is used only as the
-// stride between pages, so a one-entry table never reads it for addressing; the layer loops check it
-// against the per-page product `L * 2 * H_kv * B * D` (guard 5's view meaning). Every pointer is the
-// caller's; the view owns nothing.
+// Paged-KV plan §3.1/§3.2 item 1: a K/V page view. The K/V store is `mapped_pages` logical pages of
+// `page_positions` (B) positions each; logical page `j` is the physical page `page_table[j]` of the
+// pool at `pool_base`, `page_bytes` apart. A page holds `runs = L * 2 * H_kv` runs of B rows, one per
+// (layer, K|V, kv_head), each row `head_dim` one-byte codes, and the runs rotate (§3.1, D-SLM8285): run
+// `r = (layer * 2 + half) * num_kv_heads + kv_head` of logical page `j = pos / B` sits in slot
+// `(r + j) mod runs`, so successive pages' copies of one run land on different cache sets. The row of
+// (layer, half, kv_head, pos) is at
+//   pool_base + page_table[j] * page_bytes + ((r + j) mod runs) * B * head_dim + (pos % B) * head_dim,
+// which KvPageInPageOffset (below) computes for every address site: these accessors, the ABI's holder
+// row and its legacy gather. The flat workspace is the one-page view: `pool_base = workspace`,
+// `page_table = {0}`, `mapped_pages = 1`, `page_positions = context_cap`, `page_bytes =
+// workspace_size`. Its `j` is 0 at every position, so its slot is `r` whatever `runs` holds and the
+// formula reduces to the flat accessors' own term for term (§3.1's one-page identity); the flat
+// overloads of the layer loops are thin wrappers that build exactly that view. `runs` is the slot
+// count rotation reduces by; 0 or 1 leaves every slot at `r` (a view built without it is unrotated,
+// which only the one-page view may be). `page_bytes` is used only as the stride between pages, so a
+// one-entry table never reads it for addressing; the layer loops check it against the per-page
+// product `L * 2 * H_kv * B * D` (guard 5's view meaning). Every pointer is the caller's; the view
+// owns nothing.
 #define SUPERSLM_HAS_KV_PAGE_VIEW 1
 struct KvPageView {
 	uint8_t* pool_base;
@@ -1137,7 +1149,33 @@ struct KvPageView {
 	uint32_t mapped_pages;
 	int64_t page_positions;
 	size_t page_bytes;
+	uint32_t runs;
 };
+
+// §3.1's rotation: the slot of run `run` on logical page `logical_page`, `(run + logical_page) mod
+// runs` for `run < runs`, and `run` itself when `runs` is 0 or 1. Neither operand of the sum reaches
+// `runs`, so it cannot wrap.
+inline size_t KvPageRunSlot(size_t run, size_t logical_page, size_t runs) noexcept {
+#if defined(SUPERSLM_MUTANT_PKV_MR_OPT)
+	// Cell 7.9's must-reject, 7.9-MR-OPT (D-SLM8423): the slot ignores the logical page (the unrotated layout). Built
+	// only into the superslm_mr_opt library. The production library refuses the definition at configure time
+	// (CMakeLists.txt) and at compile time (the #error at the top of this header and of src/sslm_abi.cpp).
+	(void)logical_page;
+	(void)runs;
+	return run;
+#else
+	return runs > 1 ? (run + logical_page % runs) % runs : run;
+#endif
+}
+
+// §3.1's in-page byte offset of run `run` at `position`, pages of `page_positions` (B) positions and
+// rows of `head_dim` bytes: `((run + j) mod runs) * B * head_dim + (position % B) * head_dim`, with
+// `j = position / B`. The one formula every page address goes through.
+inline size_t KvPageInPageOffset(size_t run, size_t runs, size_t page_positions, size_t head_dim,
+                                 size_t position) noexcept {
+	return KvPageRunSlot(run, position / page_positions, runs) * page_positions * head_dim +
+	       (position % page_positions) * head_dim;
+}
 
 // The threaded overloads of the two layer loops (§3.4): the same parameters as the overloads
 // above, all of them explicit, plus a trailing `threading` with no default. New overloads rather

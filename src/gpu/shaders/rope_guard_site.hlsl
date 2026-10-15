@@ -138,7 +138,6 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
 
     uint row_offset = g_position * pairs;
     uint group = (g_num_kv_heads > 0u) ? (g_num_attention_heads / g_num_kv_heads) : 1u;
-    uint kv_half_off = KvHalfOffsetGpu(g_layer_index, g_context_cap, g_num_kv_heads, (uint)g_head_dim);
 
     uint q_codes_off = ScratchLayout.Load<uint>(2 * 4);
     uint q_rot_off = ScratchLayout.Load<uint>(4 * 4);
@@ -209,12 +208,13 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
         {
             uint h1 = t / pairs;
             uint kv_head1 = h1 / max(group, 1u);
-            uint row_off1 = KvRowOffsetWithinHalfGpu(g_context_cap, (uint)g_head_dim, kv_head1, g_position);
+            // Paged-KV plan §4 item 1: the K row through the page table (site_common.hlsli KvRowAddrGpu).
+            uint row_off1 = KvRowAddrGpu(g_layer_index, 0u, g_num_kv_heads, (uint)g_head_dim, kv_head1, g_position);
             uint stage1 = rope_stage_base + h1 * (uint)g_head_dim * 4u;
             {
                 uint p1 = t % pairs;
-                int kx = LoadSignedByteGpu(KvCache, kv_half_off + row_off1 + 2u * p1);
-                int ky = LoadSignedByteGpu(KvCache, kv_half_off + row_off1 + 2u * p1 + 1u);
+                int kx = LoadSignedByteGpu(KvCache, row_off1 + 2u * p1);
+                int ky = LoadSignedByteGpu(KvCache, row_off1 + 2u * p1 + 1u);
                 WorkScratch.Store<int>(stage1 + 2u * p1 * 4u, kx);
                 WorkScratch.Store<int>(stage1 + (2u * p1 + 1u) * 4u, ky);
             }

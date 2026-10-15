@@ -52,11 +52,13 @@
 // Usage: t2432_geometry_harness <model.sslm> [token_id]
 #include <cstdio>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 #include "superslm/artifact.h"
 #include "superslm/forward_sites.h"
 #include "superslm/gpu_port.h"
+#include "../src/gpu/gpu_inflight_token.h"  // GpuInFlightToken (plan G3): complete for construction/destruction
 #include "superslm/model.h"
 #include "superslm/trace_hook.h"
 #include "sslm_marshal.h"
@@ -229,7 +231,7 @@ int main(int argc, char** argv) {
 	gpu_seq.layer_index = 0;
 	std::vector<uint8_t> gpu_ws(kv_bytes, 0);
 	std::vector<uint8_t> gpu_q_codes(q_width, 0xEE);  // poison value: FAILED-to-fire is visible
-	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+	superslm_gpu::GpuInFlightToken inflight;
 	const SslmForwardStatus gpu_submit_status = superslm_gpu::RunLayerLoopGpuSubmit(
 	    gpu_seq, layers.data(), num_hidden_layers, /*layer_budget=*/num_hidden_layers, hidden_size,
 	    head_dim, num_kv_heads, intermediate_size, context_cap, model_view.rope_tables, gpu_ws.data(),
@@ -241,7 +243,7 @@ int main(int argc, char** argv) {
 	SslmForwardStatus gpu_status = gpu_submit_status;
 	if (inflight) {
 		int32_t ready = 0;
-		gpu_status = superslm_gpu::RunLayerLoopGpuFinish(inflight, gpu_seq, gpu_ws.data(), /*block=*/1,
+		gpu_status = superslm_gpu::RunLayerLoopGpuFinish(std::move(inflight), gpu_seq, gpu_ws.data(), /*block=*/1,
 		                                                  &ready, gpu_q_codes.data());
 	}
 	std::printf("GPU port:   status=%s layer_index=%u\n", SslmForwardStatusName(gpu_status),

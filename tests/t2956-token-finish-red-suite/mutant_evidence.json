@@ -1,45 +1,37 @@
 {
-  "builder_commit": "c9081e0fd33fccabf52e3fb247ad2f51efb74e6e",
+  "builder_commit": "f73fc3b5f442df1d7326192316f7c949284cd4f7",
   "mutants": [
     {
       "id": "a",
       "landing": "forward_sites.cpp:2838",
-      "source": "src/forward/forward_sites.cpp",
-      "source_sha256": "baa8b84cf08046dc432b7a20b1edc11ec5513bea31813c641d55fc3f878a6c7d",
-      "reading": "FAIL rows vector=0 max_tasks=3 status=2 calls=1",
-      "classification": "executed production mutant killed"
+      "classification": "target_gone",
+      "reason": "apply_mutant.py --check at D:\\_scratch\\pkv-gpu-113\\t2956-src: src/forward/forward_sites.cpp: expected one landing, found 0: 'const size_t task_count = (vocab_size + rows_per_task - 1) /'"
     },
     {
       "id": "b",
       "landing": "forward_sites.cpp:2848-2851",
-      "source": "src/forward/forward_sites.cpp",
-      "source_sha256": "14a0df1be816fd8ebbbd8d0574c2d7721c16f1ce0f0aa5632b96a288097484c2",
-      "reading": "FAIL malformed CPU omit0 rep=0 status=0 token=60785",
-      "classification": "executed production mutant killed"
+      "classification": "target_gone",
+      "reason": "apply_mutant.py --check at D:\\_scratch\\pkv-gpu-113\\t2956-src: src/forward/forward_sites.cpp: expected one landing, found 0: 'if (!complete) return SslmForwardStatus::ParallelForIncomple'"
     },
     {
       "id": "b2",
       "landing": "forward_sites.cpp:2848-2851",
-      "source": "src/forward/forward_sites.cpp",
-      "source_sha256": "f420abc2b354b3cf2a8a1d9261997e2f28e757930a606f8ab5432612657f047d",
-      "reading": "FAIL malformed CPU dupinplace rep=0 status=0 token=3555",
-      "classification": "executed production mutant killed"
+      "classification": "target_gone",
+      "reason": "apply_mutant.py --check at D:\\_scratch\\pkv-gpu-113\\t2956-src: src/forward/forward_sites.cpp: expected one landing, found 0: 'std::atomic<bool>* violation;'; src/forward/forward_sites.cpp: expected one landing, found 0: '\\tuint8_t expected = 0;\\n\\tif (!c.state[task_index].compare_exc'; src/forward/forward_sites.cpp: expected one landing, found 0: 'std::atomic<bool> violation{false};'; src/forward/forward_sites.cpp: expected one landing, found 0: 'static_cast<int32_t>(task_count), state, &violation};'; src/forward/forward_sites.cpp: expected one landing, found 0: '\\tfor (size_t i = 0; complete && i < task_count; ++i) {\\n\\t\\tcom'"
     },
     {
       "id": "c",
       "landing": "forward_sites.cpp:2792-2802 (semantic proxy only)",
       "source": "src/forward/forward_sites.cpp",
-      "source_sha256": "3b00401884b54be9b9e20ee8d981838f6362e70277cb3e9b2bcef4d7bfdf7df8",
+      "source_sha256": "63359abd4fc83cde2f302320e6f821bbbf8d030ad4b29188564cac7f570ea054",
       "reading": "FAIL tie max_tasks=0 got=64 expected=0",
       "classification": "semantic proxy only"
     },
     {
       "id": "c_exact",
       "landing": "forward_sites.cpp:2792-2864 (task-local argmax, last-wins merge)",
-      "source": "src/forward/forward_sites.cpp",
-      "source_sha256": "9f105d5fdc47adacc227d3cc2128922b1d58f06fbd8b9aac119f2e38d97e3935",
-      "reading": "FAIL integrated tie cpu/T3 got=[64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64] baseline=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]",
-      "classification": "executed exact task-local mutant killed"
+      "classification": "target_gone",
+      "reason": "apply_mutant.py --check at D:\\_scratch\\pkv-gpu-113\\t2956-src: src/forward/forward_sites.cpp: expected one landing, found 0: '\\tstd::atomic<bool>* violation;\\n};\\n\\nvoid LogitsTask'; src/forward/forward_sites.cpp: expected one landing, found 0: '\\t                      end - begin, c.wide_logits + begin);\\n'; src/forward/forward_sites.cpp: expected one landing, found 0: '\\tstd::atomic<bool> violation{false};\\n\\tLogitsTaskCtx ctx{'; src/forward/forward_sites.cpp: expected one landing, found 0: 'static_cast<int32_t>(task_count), state, &violation};'; src/forward/forward_sites.cpp: expected one landing, found 0: '\\tif (!complete) return SslmForwardStatus::ParallelForIncompl'"
     },
     {
       "id": "d",
@@ -53,7 +45,7 @@
       "id": "e",
       "landing": "gpu_1p0.cpp:985-988",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "8aecd4b76202b4b0286037b34456a46e45016c340e2e8a4565fa4d9ef274bab5",
+      "source_sha256": "2cde11d37494012b9c33ca385b152e043544036ca384a52bfb7145966129c344",
       "reading": "FAIL VRAM D:\\hf_cache\\superslm_artifacts\\example\\qwen2.5-0.5b-instruct-cap4096-aex-tok.sslm extra=0 expected=137494528",
       "classification": "executed production mutant killed"
     },
@@ -61,15 +53,15 @@
       "id": "f",
       "landing": "gpu_1p0.cpp:985-988",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "4a23d6e9757ad051d2e8da40f27a2c949d4e7ef7ad552cd0e703caf5afb40a4a",
-      "reading": "FAIL unknown bit 1 status=0 handle=00000161E34A2770",
+      "source_sha256": "aeaf96709f21627fb9d67a0ff2da63c53386aaa65a3399653f76747f2711c1a2",
+      "reading": "FAIL unknown bit 1 status=0 handle=000001A53CDC0A20",
       "classification": "executed production mutant killed"
     },
     {
       "id": "g",
       "landing": "sslm_abi.cpp prefill path",
       "source": "src/sslm_abi.cpp",
-      "source_sha256": "0d2d57ca430edd4eb407ed3d5f17704d109761bcd7badf359dfa179f67eb57aa",
+      "source_sha256": "e8f2ff25e2c9075e52118cad24652e7287cb5004867918834965be70f35ec857",
       "reading": "FAIL schema-content prefill hook calls a=2 b=0 consumed=1",
       "classification": "executed production mutant killed"
     },
@@ -77,7 +69,7 @@
       "id": "h",
       "landing": "gpu_1p0.cpp:1180",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "020a93cb476954e65b3a704d8ddd9537f66dd962a5f2db2572336d8e068e4cd4",
+      "source_sha256": "9fdeb8e07a65a60b5fdfd3194b7fe92f55ae916ccf1fb696f9918a650274b4d7",
       "reading": "FAIL RU device tokens=[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2] baseline=[38, 37, 22, 27, 23, 38, 37, 22, 27, 23, 38, 37, 22, 27, 23, 38]",
       "classification": "executed production mutant killed"
     },
@@ -85,7 +77,7 @@
       "id": "h2",
       "landing": "gpu_1p0.cpp:1200-1207",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "ed7d213965f26e77333e2fd5a626870aed882b0d5862c7b91cd57bf66fc5cb7b",
+      "source_sha256": "1d0c34177930db1f25f37cb425bbb88f584892e710035790d8e6987e915b820e",
       "reading": "FAIL RU host tokens=[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2] baseline=[38, 37, 22, 27, 23, 38, 37, 22, 27, 23, 38, 37, 22, 27, 23, 38]",
       "classification": "executed production mutant killed"
     },
@@ -93,7 +85,7 @@
       "id": "i",
       "landing": "gpu_1p0.cpp:2944-2951",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "dd38c1a47e57e1da15798f5733b411e455c7393d497290526aa293ca917bbf29",
+      "source_sha256": "6684e06903571532048034548f0e5f0f9a06e1822e359e13638edc67df8473f2",
       "reading": "FAIL overflow status=0 token=3555",
       "classification": "executed production mutant killed"
     },
@@ -101,15 +93,15 @@
       "id": "j",
       "landing": "gpu_1p0.cpp:851-858",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "a833fa6381064d8298a6aa75a583ffac838b5d80bda0f08e3075cea46670327a",
-      "reading": "FAIL model_head k=7 got=8 want=16 handle=0000000000000000",
+      "source_sha256": "0448833e6427dcf212cbd2e396f531fa7980de97320dfec3cc34c618899621b9",
+      "reading": "FAIL model_head k=7 got=8 want=16 handle=0000000000000000 (device-logits bundle)",
       "classification": "executed production mutant killed"
     },
     {
       "id": "k",
       "landing": "gpu_1p0.cpp:851-858",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "5724a1456a62006ce9ed838cae2702f04e52862309f8e552eab684637b75327b",
+      "source_sha256": "8305effd3905496aae3605f9012ce2e4c7810f5c13da2412274f649b0ab37131",
       "reading": "FAIL removed model_head k=8 got=16 expected=8 handle=0000000000000000",
       "classification": "executed production mutant killed"
     },
@@ -117,63 +109,63 @@
       "id": "l1",
       "landing": "gpu_1p0.cpp:851, bundle allocation 1",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "fa9a517b3663374be9e793a850c2a9f6061b576957c961db4a52c6096a4b195f",
-      "reading": "FAIL model_head k=7 got=8 want=16 handle=0000000000000000",
+      "source_sha256": "6d681a15408249213382d942df6bd12ecd20024fda0fcc24f46e6776630613cc",
+      "reading": "FAIL model_head k=7 got=8 want=16 handle=0000000000000000 (device-logits bundle)",
       "classification": "executed production mutant killed"
     },
     {
       "id": "l2",
       "landing": "gpu_1p0.cpp:851, bundle allocation 2",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "601f8755c9d1301cf36484dbdeda2c4b66100526a579f2dc3533522dff4e41a5",
-      "reading": "FAIL model_head k=8 got=8 want=16 handle=0000000000000000",
+      "source_sha256": "fecdb862817aeb47e867bc01a0e5c009f7ef70d4dc4b4e0e8f8d734a3fb43ccf",
+      "reading": "FAIL model_head k=8 got=8 want=16 handle=0000000000000000 (device-logits bundle)",
       "classification": "executed production mutant killed"
     },
     {
       "id": "l3",
       "landing": "gpu_1p0.cpp:851, bundle allocation 3",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "978f0200bd255634b296f1486f6d3c7ec5acd98a084453f74b33d8748d75c071",
-      "reading": "FAIL model_head k=9 got=8 want=16 handle=0000000000000000",
+      "source_sha256": "721f8321d4099c3acc865f27638637fca47e521727e1ad7a386b45308495d752",
+      "reading": "FAIL model_head k=9 got=8 want=16 handle=0000000000000000 (device-logits bundle)",
       "classification": "executed production mutant killed"
     },
     {
       "id": "l4",
       "landing": "gpu_1p0.cpp:851, bundle allocation 4",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "bd59fc714a562c7185a17e861e55d9c81367ad8bdd7cd30b8f7d56b453d9f524",
-      "reading": "FAIL model_head k=10 got=8 want=16 handle=0000000000000000",
+      "source_sha256": "1616a3430e97f5c535023fdfd72f97fe555cc30f3f57bdd02b1d15dee9a4c46d",
+      "reading": "FAIL model_head k=10 got=8 want=16 handle=0000000000000000 (device-logits bundle)",
       "classification": "executed production mutant killed"
     },
     {
       "id": "l5",
       "landing": "gpu_1p0.cpp:851, bundle allocation 5",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "746c9cbab81788bae0e3bae08abdf6dda990b49b4e03ac15e9e38a98d1e08275",
-      "reading": "FAIL model_head k=11 got=8 want=16 handle=0000000000000000",
+      "source_sha256": "2f98bb5bad4b8a7f1c0bb9398b496eb75b7c536a9040bcb9be79213f99551a4d",
+      "reading": "FAIL model_head k=11 got=8 want=16 handle=0000000000000000 (device-logits bundle)",
       "classification": "executed production mutant killed"
     },
     {
       "id": "l6",
       "landing": "gpu_1p0.cpp:851, bundle allocation 6",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "4aafbbedbe621c99098f5485c0453543d64303ef98e815ffcfe3f0d36b89294f",
-      "reading": "FAIL model_head k=12 got=8 want=16 handle=0000000000000000",
+      "source_sha256": "2804ec151cdb93016213526953c6c1cdef29f5b02a00b1882fd7536720ea90db",
+      "reading": "FAIL model_head k=12 got=8 want=16 handle=0000000000000000 (device-logits bundle)",
       "classification": "executed production mutant killed"
     },
     {
       "id": "m",
       "landing": "gpu_1p0.cpp:1200-1207",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "e460574115ed7376e7a6b3b3d93bfa19def86209c552a63e0d2d311526e66491",
-      "reading": "FAIL head copy D:\\hf_cache\\superslm_artifacts\\example\\qwen2.5-0.5b-instruct-cap4096-aex-tok.sslm clear=136134656 expected=0",
+      "source_sha256": "1385582e1cc855ee508152366b60ea908e7233a012fc09383b5f177cc0df0b04",
+      "reading": "FAIL head copy D:\\hf_cache\\superslm_artifacts\\example\\qwen2.5-0.5b-instruct-cap4096-aex-tok.sslm clear=136134656",
       "classification": "executed production mutant killed"
     },
     {
       "id": "n",
       "landing": "gpu_1p0.cpp:890",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "15d5fc4205f777f3645a214b4e8a296ff1aefa48195865632c29d6c80d08ddb2",
+      "source_sha256": "2c9cb8ab0d376498dd13d0c9f2f557f834510074b0190a4485847cefe653fb76",
       "reading": "FAIL retry model_head k=7 status=8 count=2 expected=12",
       "classification": "executed production mutant killed"
     },
@@ -181,7 +173,7 @@
       "id": "n2_upload",
       "landing": "gpu_1p0.cpp:618-633",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "47e859fb3cdcb67a9ba869f1486c4339634b32f3aec351652dc6c77464536511",
+      "source_sha256": "08a9821fe5d5490a5a663b63118d3fa437467a54b11d129a6d166ed5fd05dede",
       "reading": "FAIL retry model_clear k=1 status=8 count=0 expected=6",
       "classification": "executed production mutant killed"
     },
@@ -189,7 +181,7 @@
       "id": "n2_restore",
       "landing": "superslm_gpu.cpp:4587-4596",
       "source": "src/gpu/superslm_gpu.cpp",
-      "source_sha256": "c9acbe661632ad6ee15fd989c83371e9b0fe62b02c11d19d54540953a7e2e18c",
+      "source_sha256": "4096032ab3a6da858fc33ab90404757d194d0b6395354d63809ab09f258a70a2",
       "reading": "FAIL retry sequence_restore k=5 status=8 count=2 expected=7",
       "classification": "executed production mutant killed"
     },
@@ -197,7 +189,7 @@
       "id": "n3_upload",
       "landing": "gpu_1p0.cpp:618-633",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "0ea3de9f2a33d22d526759f6b6e63ddee262a9bf38a68e51a092b0774cc4467b",
+      "source_sha256": "ba7818f8c8a27461299818ee79ad1d1dc21fed66f61bf711abc7e6f16a9746c0",
       "reading": "FAIL retry model_clear k=2 status=8 count=1 expected=6",
       "classification": "executed production mutant killed"
     },
@@ -205,7 +197,7 @@
       "id": "n3_restore",
       "landing": "superslm_gpu.cpp:4587-4596",
       "source": "src/gpu/superslm_gpu.cpp",
-      "source_sha256": "90298660d566a8374bcec09df6b45834143a4807f2d80a6695fa76ee00523701",
+      "source_sha256": "f651dac142d262f16a2f5bbdc6cbd138cc552973c73b1ae4a35b417b63a1be15",
       "reading": "FAIL retry sequence_restore k=4 status=8 count=3 expected=7",
       "classification": "executed production mutant killed"
     },
@@ -213,7 +205,7 @@
       "id": "o",
       "landing": "gpu_1p0.cpp:922",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "9fe25d2b214d049886e264d9b1a2bc8c101b52a171c7df0d036bcfa37c559589",
+      "source_sha256": "a7990779b43d739527c7420f3c878d0a0f8dd154c7d2d11e3cf216b0732076c4",
       "reading": "FAIL finish device allocations=1",
       "classification": "executed production mutant killed"
     },
@@ -221,7 +213,7 @@
       "id": "o2",
       "landing": "gpu_1p0.cpp:4142",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "13fe0036a556baca7ff357bcb5e5452975881ef515d758aeb46e0411481ea0b5",
+      "source_sha256": "fe7863bab63d4d57ad2cc600bc4bfc49d0ffa80083165c3e3c28f94688765e40",
       "reading": "FAIL device run V=151936 H=896 trial=0 status=0 allocations=6",
       "classification": "executed production mutant killed"
     },
@@ -229,7 +221,7 @@
       "id": "p",
       "landing": "d3d12_harness.h:412-418",
       "source": "src/gpu/d3d12_harness.h",
-      "source_sha256": "6ca7499a8997f0ac88fcdbcfd463fc3c8dfa92a728c0fb4a38e7cadd3c17a96e",
+      "source_sha256": "73403a86b9c40cc8e551ce22bc6e1065869d5bb87dc4db01b11c4cb22ffbbc4d",
       "reading": "FAIL Close creation: one failure made same context unusable",
       "classification": "executed production mutant killed"
     },
@@ -237,7 +229,7 @@
       "id": "q_cpu",
       "landing": "sslm_abi.cpp:2592 (all-masked injection disconnected)",
       "source": "src/sslm_abi.cpp",
-      "source_sha256": "e6dcba9edeac18c604333c848043d79978692479abd45e8ac57f54970e3b2946",
+      "source_sha256": "ef943e341aefb4a4c9631c9e452c88904f6f56077dd7ee1ec1afa0f915c88488",
       "reading": "FAIL all-masked CPU status=0 token=4913 walk_same=0",
       "classification": "executed production mutant killed"
     },
@@ -245,7 +237,7 @@
       "id": "q_gpu",
       "landing": "gpu_1p0.cpp:2970 (all-masked injection disconnected)",
       "source": "src/gpu/gpu_1p0.cpp",
-      "source_sha256": "062e7b6f6ca4a7315473d519b0535ffdca8d00e1c720278f21b52c20cde07c51",
+      "source_sha256": "856ed5a566a180a6f8cb0a84e2a784f71d0952e7883fc07369b695a4799d3f69",
       "reading": "FAIL all-masked GPU status=0 token=4913 walk_same=1",
       "classification": "executed production mutant killed"
     }

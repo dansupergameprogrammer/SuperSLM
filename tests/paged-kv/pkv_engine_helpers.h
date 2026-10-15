@@ -34,6 +34,8 @@
 #include <memory>
 #include <string>
 #include <tuple>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace pkv_engine {
@@ -139,6 +141,19 @@ inline const EngineFixture& GetEngineFixture(const char* stem) {
 
 // ---- the test's own pages ---------------------------------------------------------------------
 
+// KvPageView gains `runs` at T1 (§3.2 item 1). Set by detection, so this compiles against 2ebe5e3's struct (no field)
+// and the R9 struct alike; with no field there is nothing to set.
+template <class V, class = void>
+struct ViewHasRuns : std::false_type {};
+template <class V>
+struct ViewHasRuns<V, std::void_t<decltype(std::declval<V&>().runs)>> : std::true_type {};
+template <class V>
+inline void SetViewRuns(V& view, uint32_t runs) {
+	if constexpr (ViewHasRuns<V>::value) view.runs = runs;
+	(void)view;
+	(void)runs;
+}
+
 // `logical` = ceil(cap / B) pages addressed through `table` (a fixed shuffle of physical pages
 // [0, logical)); physical page `logical` is the foreign page, never in the table. All of it is
 // the test's memory, pre-filled with kFill.
@@ -174,13 +189,16 @@ struct PagedKv {
 	// The pages a call that ends at `positions` must see mapped: ceil(positions / B).
 	uint32_t PagesFor(int64_t positions) const { return static_cast<uint32_t>((positions + B - 1) / B); }
 	KvPageView View(uint32_t mapped) const {
-		return KvPageView{mem.p, table.data(), mapped, B, page_bytes};
+		KvPageView v{mem.p, table.data(), mapped, B, page_bytes};
+		// T1 adds the run count to the view (§3.2 item 1); set where the struct has it, under the T1 switch
+		if (pkv::kRotatedLayout) SetViewRuns(v, L * 2u * static_cast<uint32_t>(H));
+		return v;
 	}
-	// §3.1's address of (l, half, h, pos, 0), written here:
-	//   pool_base + table[pos / B] * page_bytes + ((l*2 + half)*H_kv + h)*B*D + (pos % B)*D.
+	// §3.1's address of (l, half, h, pos, 0), written here: pool_base + table[pos / B] * page_bytes + the in-page
+	// offset of pkv::PageRunOffset (rotated from the T1 switch, D-SLM8449).
 	size_t Offset(uint32_t l, uint32_t half, size_t h, int64_t pos) const {
 		return size_t{table[static_cast<size_t>(pos / B)]} * page_bytes +
-		       ((size_t{l} * 2u + half) * H + h) * static_cast<size_t>(B) * D + static_cast<size_t>(pos % B) * D;
+		       pkv::PageRunOffset(L, static_cast<uint32_t>(H), D, B, l, half, h, pos);
 	}
 	const uint8_t* Row(uint32_t l, uint32_t half, size_t h, int64_t pos) const { return mem.p + Offset(l, half, h, pos); }
 	// Rows [0, n) in pkv_scenarios.h's position-major order (position, layer, K then V, head), so the

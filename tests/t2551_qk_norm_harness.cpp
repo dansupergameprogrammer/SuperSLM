@@ -54,11 +54,13 @@
 // Usage: t2551_qk_norm_harness <model.sslm> [token_id]
 #include <cstdio>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 #include "superslm/artifact.h"
 #include "superslm/forward_sites.h"
 #include "superslm/gpu_port.h"
+#include "../src/gpu/gpu_inflight_token.h"  // GpuInFlightToken (plan G3): complete for construction/destruction
 #include "superslm/model.h"
 #include "superslm/trace_hook.h"
 #include "sslm_marshal.h"
@@ -290,7 +292,7 @@ int main(int argc, char** argv) {
 	gpu_seq.hidden_scale = embed_scale;
 	gpu_seq.layer_index = 0;
 	std::vector<uint8_t> gpu_ws(kv_bytes, 0);
-	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+	superslm_gpu::GpuInFlightToken inflight;
 	const SslmForwardStatus gpu_submit_status = superslm_gpu::RunLayerLoopGpuSubmit(
 	    gpu_seq, layers.data(), num_hidden_layers, /*layer_budget=*/num_hidden_layers, hidden_size,
 	    head_dim, num_kv_heads, intermediate_size, context_cap, model_view.rope_tables, gpu_ws.data(),
@@ -302,7 +304,7 @@ int main(int argc, char** argv) {
 	SslmForwardStatus gpu_status = gpu_submit_status;
 	if (inflight) {
 		int32_t ready = 0;
-		gpu_status = superslm_gpu::RunLayerLoopGpuFinish(inflight, gpu_seq, gpu_ws.data(), /*block=*/1,
+		gpu_status = superslm_gpu::RunLayerLoopGpuFinish(std::move(inflight), gpu_seq, gpu_ws.data(), /*block=*/1,
 		                                                  &ready, /*out_q_codes=*/nullptr);
 	}
 	std::printf("GPU port (RunLayerLoopGpuSubmit/Finish): status=%s layer_index=%u\n",
@@ -587,7 +589,7 @@ int main(int argc, char** argv) {
 				if (st != SslmForwardStatus::Ok) return st;
 				seq.hidden_scale = sc;
 				seq.layer_index = 0;
-				superslm_gpu::GpuLayerLoopInFlight* inflight2 = nullptr;
+				superslm_gpu::GpuInFlightToken inflight2;
 				st = superslm_gpu::RunLayerLoopGpuSubmit(
 				    seq, layers.data(), num_hidden_layers, /*layer_budget=*/num_hidden_layers,
 				    hidden_size, head_dim, num_kv_heads, intermediate_size, context_cap,
@@ -600,7 +602,7 @@ int main(int argc, char** argv) {
 				    /*out_q_codes_capacity=*/0, kModelGeneration);
 				if (inflight2) {
 					int32_t ready = 0;
-					st = superslm_gpu::RunLayerLoopGpuFinish(inflight2, seq, ws.data(), /*block=*/1,
+					st = superslm_gpu::RunLayerLoopGpuFinish(std::move(inflight2), seq, ws.data(), /*block=*/1,
 					                                          &ready, /*out_q_codes=*/nullptr);
 				}
 				if (st != SslmForwardStatus::Ok) return st;
@@ -828,7 +830,7 @@ int main(int argc, char** argv) {
 					if (st != SslmForwardStatus::Ok) return st;
 					seq.hidden_scale = sc;
 					seq.layer_index = 0;
-					superslm_gpu::GpuLayerLoopInFlight* infl = nullptr;
+					superslm_gpu::GpuInFlightToken infl;
 					st = superslm_gpu::RunLayerLoopGpuSubmit(
 					    seq, layers.data(), num_hidden_layers, num_hidden_layers, hidden_size, head_dim,
 					    num_kv_heads, intermediate_size, context_cap, model_view.rope_tables, ws.data(),
@@ -839,7 +841,7 @@ int main(int argc, char** argv) {
 					}
 					if (infl) {
 						int32_t ready = 0;
-						st = superslm_gpu::RunLayerLoopGpuFinish(infl, seq, ws.data(), 1, &ready, nullptr);
+						st = superslm_gpu::RunLayerLoopGpuFinish(std::move(infl), seq, ws.data(), 1, &ready, nullptr);
 					}
 					if (st != SslmForwardStatus::Ok) return st;
 				}

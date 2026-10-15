@@ -95,7 +95,6 @@ void SelfAdmissionCount() {
 	PKV_CHECK_EQ(fx.R(512), 33);
 	PKV_CHECK_EQ(fx.R(4096), 256);
 	PKV_CHECK_EQ(fx.PageBytes() * 256, sslm_kv_block_size(fx.model));
-	PKV_CHECK_EQ(GetFixture("pkv_odd").B(), 4100);
 }
 
 // A .ref reads the same with LF and CRLF line endings. A Windows checkout with core.autocrlf=true

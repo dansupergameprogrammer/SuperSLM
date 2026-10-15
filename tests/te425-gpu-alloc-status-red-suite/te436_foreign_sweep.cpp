@@ -41,7 +41,9 @@
 // engine makes at least one allocation on some calls and not others, which shifts every later number
 // (observed at c3b5412: 99 and 100 sites on two identical prompt loops). --site=K names the K-th site
 // of the counting pass, which every process reaches with the same history; --select names sites by what
-// they are, which is how the commissioning constructions name another seat's legs.
+// they are, which is how the commissioning constructions name another seat's legs. The seam build's own
+// record of buffer creations is emptied before every pass (Begin()), so its growth, which no product
+// build has, is never counted as a site.
 //
 // TIMING, MADE DETERMINISTIC. A site is OUTSTANDING when the last ExecuteCommandLists has been signalled
 // and the engine has not yet observed that submission complete (neither GetCompletedValue at or past its
@@ -449,7 +451,20 @@ int SetupFail(const char* cell, const char* what) {
 	return 3;
 }
 
+// Called immediately before every counted and every armed call. It also empties the seam build's own
+// record of device-buffer creations (SslmGpuAllocCounterResetForTest): from 1.13 (paged-KV G3, cell
+// 11.4's seam legs) Device::TryMakeBuffer appends each creation's size and heap to two process-wide
+// vectors, beside the in-bundle record 1.12 already kept, and an append that crosses a vector's
+// capacity calls operator new from inside the engine's call. That call is not the engine's: the
+// record is compiled only into the fault-injection build, so no product build has the site. It is
+// also never reachable again in the same process: the vectors only grow, so the crossing a counting
+// pass saw does not recur in the armed pass at the same label, and four attempts read INVALID
+// (1.13's box run: the two creations' reallocations, side by side, right after a list Reset, on every
+// route). Emptying the record keeps each vector's capacity, which is already at least a whole call's
+// creations (the fixture ran the route's call twice before the first pass), so no measured call
+// crosses one and every counted site is again the engine's own.
 void Begin() {
+	SslmGpuAllocCounterResetForTest();
 	g_ev_ord.store(0);
 	g_ev_last.store(EV_NONE);
 	g_since.store(0);

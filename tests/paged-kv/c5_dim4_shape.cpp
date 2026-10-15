@@ -134,75 +134,14 @@ void Cell43() {
 	PKV_CHECK_MSG(bad == 0, "4.3: %d of %lld cases wrong; first: %s", bad, static_cast<long long>(2 * B * 5), first.c_str());
 }
 
-// ---- 4.4 [C5 budget] ----------------------------------------------------------------------------
-// The B fallback in budget mode: pkv_odd (cap 4,100, which 16 does not divide) has B = cap, so every
-// R(budget) is 1 page. The budget lifecycle and prefix-length twins equal the v1.11.0 pkv_odd
-// reference; in a 4-page pool a budget world, a begin_from child and two budget holders (one at the
-// whole cap) are admitted and a fifth create is refused; the child's adopter equals an unshared twin.
-//
-// The fill probe is not used here: its create sizes are 2 to ceil(cap/B) pages (§8), and at
-// ceil(cap/B) = 1 no create spans 2 pages, so it cannot run at B = cap. Admission counts grade instead.
-void Cell44Budget() {
-	const Fixture& fx = GetFixture("pkv_odd");
-	if (!fx.ok) return;
-	PKV_CHECK_EQ(fx.B(), fx.geo.context_cap);
-	PKV_CHECK_EQ(sslm_kv_page_positions(fx.model), fx.geo.context_cap);  // §3.1's fallback
-	for (int32_t b : {1, 512, 4100}) PKV_CHECK_EQ(sslm_kv_pages_for_budget(fx.model, b), fx.R(b));  // = 1: the clamp
-	{
-		PagePool pool(fx.model, 4);
-		BRun d(fx);
-		BudgetLifecycle(d, &pool.pool, 128, 300);
-		PKV_CHECK_MSG(d.fail.empty(), "4.4 lifecycle on pkv_odd: %s", d.fail.c_str());
-		ExpectMatchesReference("v1.11.0", fx, "lifecycle", d.records, Compare::kTokensAndRows);
-	}
-	{
-		PagePool pool(fx.model, 4);
-		BRun d(fx);
-		BudgetPrefixLengths(d, &pool.pool, 32);
-		PKV_CHECK_MSG(d.fail.empty(), "4.4 prefix lengths on pkv_odd: %s", d.fail.c_str());
-		ExpectMatchesReference("v1.11.0", fx, "prefix_lengths", d.records, Compare::kTokensAndRows);
-	}
-	Scene sc;
-	PagePool& pool = sc.AddPool(fx.model, 4);
-	sslm_prefix world = FrozenBudgetPrefix(fx, &pool.pool, Stream(51, 100, fx.vocab), sc.h, 512);
-	sslm_prefix child = nullptr;
-	PKV_CHECK_EQ(world ? sslm_prefix_begin_from(world, 512, &child) : SSLM_INVALID_ARGUMENT, SSLM_OK);
-	if (child) {
-		sc.h.prefixes.push_back(child);
-		PKV_CHECK_EQ(PrefixPrefillAll(fx.model, child, Stream(52, 10, fx.vocab), 64), SSLM_OK);
-		PKV_CHECK_EQ(sslm_prefix_freeze(child), SSLM_OK);
-	}
-	sslm_seq s1 = BudgetSeq(fx, &pool.pool, 512, sc.h);
-	sslm_seq s2 = BudgetSeq(fx, &pool.pool, static_cast<int32_t>(fx.geo.context_cap), sc.h);
-	PKV_CHECK(s1 && s2);  // kills: R unclamped (ceil(budget/B) + 1 = 2 pages per holder: the third holder refused)
-	sslm_seq extra = nullptr;
-	PKV_CHECK_EQ(sslm_seq_create_budgeted(fx.model, &pool.pool, 1, &extra), SSLM_KV_POOL_EXHAUSTED);  // kills: R = 0
-	if (extra) sc.h.seqs.push_back(extra);
-	if (s2) ReleaseSeq(sc.h, s2);
-	PKV_CHECK(BudgetSeq(fx, &pool.pool, 1, sc.h) != nullptr);  // the released page is admitted again
-	std::vector<int32_t> got, want;
-	PKV_CHECK_EQ(s1 && child ? sslm_seq_adopt_prefix(s1, child) : SSLM_INVALID_ARGUMENT, SSLM_OK);
-	if (s1) DecodeN(fx.model, s1, 8, &got);
-	{
-		Scene tw;
-		PagePool& tp = tw.AddPool(fx.model, 1);
-		sslm_seq t = BudgetSeq(fx, &tp.pool, static_cast<int32_t>(fx.geo.context_cap), tw.h);
-		std::vector<int32_t> prompt = Stream(51, 100, fx.vocab);
-		const std::vector<int32_t> c = Stream(52, 10, fx.vocab);
-		prompt.insert(prompt.end(), c.begin(), c.end());
-		if (t) {
-			PrefillAll(fx.model, t, prompt, 64);
-			DecodeN(fx.model, t, 8, &want);
-		}
-	}
-	// kills: begin_from at B = cap sharing a page it should copy (the child's writes land in the world).
-	PKV_CHECK_MSG(got.size() == 8 && got == want, "4.4: the begin_from child's adopter differs from the unshared twin");
-}
+// ---- 4.4 [C5 budget] -------------------------------------------------------------------------
+// Retired with the one-page fallback (D-SLM8448; T-3189 §13): it asserted pkv_odd at B = cap, every
+// R(budget) one page. 4.4/T2's budget member and 10.9/T2 carry pkv_odd's budget admissions at B = 256.
 
 // ---- 4.5 [C5] -----------------------------------------------------------------------------------
 // Page pools of 1 page, of exactly one reservation, and of the maximum.
 //  - 1 page: created; on pkv_def every create and begin is refused (no reservation is below 2
-//    pages); on pkv_odd (B = cap) it admits exactly one budget holder, which runs.
+//    pages). Its pkv_odd member (B = cap: one budget holder admitted) retired with the fallback (D-SLM8448).
 //  - one reservation, R(512) = 33 pages: one budget-512 holder is admitted and runs its whole budget
 //    (resting ready at c = 1 it emits 1 + (512 - 1) tokens), a second create is refused while it
 //    lives, and after its release the fill probe admits exactly 33. Likewise R(cap) = 256 pages and one
@@ -215,8 +154,7 @@ void Cell44Budget() {
 //    below kNoPage): the page module's acceptance of it is 2.9b/C3, the legacy verb's 2.9b [C4].
 void Cell45() {
 	const Fixture& fx = GetFixture("pkv_def");
-	const Fixture& odd = GetFixture("pkv_odd");
-	if (!fx.ok || !odd.ok) return;
+	if (!fx.ok) return;
 	{
 		Scene sc;
 		PagePool& pool = sc.AddPool(fx.model, 1);
@@ -228,21 +166,6 @@ void Cell45() {
 		PKV_CHECK_EQ(sslm_prefix_begin_budgeted(fx.model, &pool.pool, 1, &p), SSLM_KV_POOL_EXHAUSTED);
 		PKV_CHECK_EQ(sslm_seq_create(fx.model, &pool.pool, &s), SSLM_KV_POOL_EXHAUSTED);
 		PKV_CHECK_EQ(sslm_prefix_begin(fx.model, &pool.pool, &p), SSLM_KV_POOL_EXHAUSTED);
-	}
-	{
-		Scene sc;
-		PagePool& pool = sc.AddPool(odd.model, 1);
-		PKV_CHECK_EQ(pool.status, SSLM_OK);
-		sslm_seq s = BudgetSeq(odd, &pool.pool, 512, sc.h);
-		PKV_CHECK(s != nullptr);
-		if (s) {
-			PKV_CHECK_EQ(PrefillAll(odd.model, s, Stream(1, 100, odd.vocab), 64), SSLM_OK);
-			PKV_CHECK_EQ(DecodeN(odd.model, s, 4, nullptr), SSLM_OK);
-		}
-		sslm_seq t = nullptr;
-		PKV_CHECK_EQ(sslm_seq_create_budgeted(odd.model, &pool.pool, 1, &t), SSLM_KV_POOL_EXHAUSTED);
-		if (s) ReleaseSeq(sc.h, s);
-		PKV_CHECK(BudgetSeq(odd, &pool.pool, 1, sc.h) != nullptr);
 	}
 	{
 		const uint32_t pages = static_cast<uint32_t>(fx.R(512));
@@ -340,7 +263,6 @@ void Cell47() {
 PKV_CELL("4.1/C5", "C5", Cell41Budget);
 PKV_CELL("4.2/C5", "C5", Cell42Budget);
 PKV_CELL("4.3/C5", "C5", Cell43);
-PKV_CELL("4.4/C5", "C5", Cell44Budget);
 PKV_CELL("4.5/C5", "C5", Cell45);
 PKV_CELL("4.7/C5", "C5", Cell47);
 

@@ -12,7 +12,7 @@
 # Usage:
 #   pwsh -NoProfile -File tests\paged-kv\commissioning\run_commissioning.ps1 -Set oracle-reject
 #       [-Scratch D:\_scratch\pkv-commission] [-Fixtures DIR] [-ArtifactDir DIR] [-Python python]
-#       [-SubresFactor 0.01] [-Max74Ratio 2.0] [-Construction ID] [-Rebuild] [-BuildOnly] [-List]
+#       [-Construction ID] [-Rebuild] [-BuildOnly] [-List]
 param(
     [string[]]$Set = @(),
     [string[]]$Construction = @(),
@@ -20,8 +20,6 @@ param(
     [string]$Fixtures = '',
     [string]$ArtifactDir = 'D:\_scratch\pkv-c6\artifacts',
     [string]$Python = 'python',
-    [string]$SubresFactor = '0.01',
-    [string]$Max74Ratio = '2.0',
     [switch]$Rebuild,
     [switch]$BuildOnly,
     [switch]$List
@@ -51,8 +49,7 @@ try {
         & $Python $gen $Fixtures | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "gen_paged_kv_fixture.py exited $LASTEXITCODE" }
     }
-    $pyArgs = @($runner, '--scratch', $Scratch, '--fixtures', $Fixtures, '--subres-factor', $SubresFactor,
-        '--max74-ratio', $Max74Ratio)
+    $pyArgs = @($runner, '--scratch', $Scratch, '--fixtures', $Fixtures)
     if ($ArtifactDir) { $pyArgs += @('--artifacts', $ArtifactDir) }
     foreach ($s in $Set) { $pyArgs += @('--set', $s) }
     foreach ($c in $Construction) { $pyArgs += @('--construction', $c) }

@@ -1770,25 +1770,28 @@ int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
 }
 
 namespace {
-// Paged-KV plan (rev 16.1) §3.1: the address of (layer, half, kv_head, position) through a page view,
-//   page_table[pos / B] * page_bytes + ((layer * 2 + half) * H_kv + kv_head) * B * D + (pos % B) * D.
-// For the one-page view (table {0}, B = context_cap) the first term is 0 and the rest is
-// KvHalfOffset + (half ? cap * H_kv * D : 0) + KvRowOffsetWithinHalf, term for term (§3.1's identity).
+// Paged-KV plan §3.1: the address of (layer, half, kv_head, position) through a page view,
+//   page_table[j] * page_bytes + ((r + j) mod runs) * B * D + (pos % B) * D,
+// with r = (layer * 2 + half) * H_kv + kv_head and j = pos / B (KvPageInPageOffset, forward_sites.h).
+// For the one-page view (table {0}, B = context_cap) j is 0, the slot is r, the first term is 0 and
+// the rest is KvHalfOffset + (half ? cap * H_kv * D : 0) + KvRowOffsetWithinHalf, term for term
+// (§3.1's identity).
 inline size_t KvPageRowOffset(const KvPageView& view, uint32_t layer, size_t half, size_t num_kv_heads,
                               size_t head_dim, size_t kv_head, int64_t position) {
 	const size_t page_positions = static_cast<size_t>(view.page_positions);
 	const size_t pos = static_cast<size_t>(position);
 	return static_cast<size_t>(view.page_table[pos / page_positions]) * view.page_bytes +
-	       ((static_cast<size_t>(layer) * 2u + half) * num_kv_heads + kv_head) * page_positions * head_dim +
-	       (pos % page_positions) * head_dim;
+	       KvPageInPageOffset((static_cast<size_t>(layer) * 2u + half) * num_kv_heads + kv_head, view.runs,
+	                          page_positions, head_dim, pos);
 }
 
 // Paged-KV plan §3.2 item 2: the flat workspace as the one-page view -- pool_base = workspace,
 // table {0}, one mapped page, B = context_cap, page_bytes = workspace_size. Every flat entry point
-// builds this and runs the view code path; nothing is allocated.
+// builds this and runs the view code path; nothing is allocated. Its `runs` is 0: with one page every
+// position has j = 0, so no slot rotates (§3.1).
 constexpr uint32_t kOnePageTable[1] = {0};
 inline KvPageView OnePageView(uint8_t* workspace, size_t workspace_size, int64_t context_cap) {
-	return KvPageView{workspace, kOnePageTable, 1u, context_cap, workspace_size};
+	return KvPageView{workspace, kOnePageTable, 1u, context_cap, workspace_size, 0u};
 }
 }  // namespace
 

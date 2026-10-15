@@ -44,3 +44,7 @@ tests/t2807-api-slot/recorded/*.tsv  -text
 # generators, which emit LF; pin them to LF so a Windows checkout matches.
 tests/attn_rowsite_golden_pin.h   text eol=lf
 tests/matmul_tiled_golden_pin.h   text eol=lf
+
+# The pre-SLM5 GPU base the T-2899 suite compiles (five files of commit ccf87c1, hashed by their manifest): byte-exact on
+# every platform, so a checkout and `git archive` keep the bytes the manifest's SHA-256 values describe.
+tests/t2899-schema-deadend-red-suite/pristine_pre_slm5/** -text

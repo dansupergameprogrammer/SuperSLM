@@ -14,11 +14,30 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **1.12.0**. On the CPU, K/V memory is stored in pages. A sequence can declare a
+Current release: **1.13.0** (not yet released). The GPU backend gets the same shared prompt prefixes
+and budgeted sequences the CPU got in 1.12.0: a cast of characters that share a world and persona
+prompt can keep that prompt in GPU memory once, and each character reserves only the memory its own
+reply budget needs. Existing GPU code keeps working, with two changes to calls that were undefined
+before (a second GPU submission while earlier work is unobserved, and two threads decoding one
+sequence, now return `SSLM_BUSY`), and the shader set must be redeployed. On the CPU, large saves on x64
+are now written with streaming stores, aimed at 1.12.0's save slowdown; the saved bytes are the same.
+On the test machine a full-length save is faster than in 1.12.0 but still slower than in 1.11.0
+(about 27% slower with the 0.5B model and 14% with the 1.5B model; single readings, not settled
+results). Decoding through the new GPU memory pool stays within 5% of the old layout's speed on the
+one card measured: about 1% faster with the 0.5B model and 3.7% slower with the 1.5B model at a
+16,384-token context. It is not a speed-up. The GPU work is checked on the NVIDIA RTX 2080 SUPER
+only so far, and some test runs are still open (the release note lists them). See
+[Shared prompt prefixes and budgeted sequences](#shared-prompt-prefixes-and-budgeted-sequences)
+and the [1.13.0 release note](docs/releases/1.13.0.md).
+
+1.12.0: on the CPU, K/V memory is stored in pages. A sequence can declare a
 token budget and reserve only what that budget needs, and sequences that start from the same prompt
 prefix can share the prefix's memory instead of each holding a copy. Every output stays
-bit-identical, and code written for 1.11.0 needs no changes (the release note lists the few
-behaviour changes). See
+bit-identical to 1.11.0 (read on Windows x64 with MSVC), and code written for 1.11.0 needs no
+changes, but its saves are slower: `sslm_seq_save` of a no-budget sequence takes 1.14 to 2.00 times
+as long as in 1.11.0 on the release code, at every length measured (24 of 24 readings across four
+captures; readings, not resolved changes), and a later release is planned to fix that (the release
+note lists the behaviour changes). See
 [Shared prompt prefixes and budgeted sequences](#shared-prompt-prefixes-and-budgeted-sequences)
 and the [1.12.0 release note](docs/releases/1.12.0.md).
 
@@ -214,7 +233,8 @@ documented in [docs/api.md](docs/api.md) and
 description, then a persona, then their own conversation. SuperSLM already lets you run a shared
 prefix once and have every sequence adopt it instead of re-reading it. From 1.12.0 the CPU backend
 can also keep that prefix in memory once, however many sequences use it, and size each sequence by
-what it will actually generate rather than by the model's whole context length.
+what it will actually generate rather than by the model's whole context length. Sharing and sizing
+by budget hold at a context cap of more than one page.
 
 - **Budgeted sequences.** Create a sequence with `sslm_seq_create_budgeted` and a budget: the number
   of tokens it may add itself. It reserves memory for that budget up front, so it never runs out of
@@ -222,10 +242,12 @@ what it will actually generate rather than by the model's whole context length.
   `SSLM_KV_BUDGET_EXCEEDED` instead of writing anything. Reset it and reuse it without going back to
   the pool.
 - **Shared prefixes.** Build a prefix once, freeze it, and adopt it into budgeted sequences: they
-  read the prefix's memory instead of copying it. `sslm_prefix_begin_from` stacks prefixes, so a
+  read the prefix's memory instead of copying it, at a context cap of more than one page (at a cap
+  that fits in one page a sequence is a single page, so adopt copies it). `sslm_prefix_begin_from`
+  stacks prefixes, so a
   persona prefix can sit on a world prefix and a conversation on the persona.
-- **Smaller saves.** A budgeted sequence's save holds only the tokens it has, and
-  `sslm_seq_restore_shared` reconnects a restored sequence to its live prefix, so a reloaded cast
+- **Smaller saves.** A budgeted sequence's save holds its live tokens, an adopted prefix's included,
+  so its size follows its live length, and `sslm_seq_restore_shared` reconnects a restored sequence to its live prefix, so a reloaded cast
   shares memory again. Pass the prefix handle when you restore; without it, each restored sequence
   holds a private copy of its prefix until it is reset.
 - **Size your pool from what it holds.** `sslm_kv_page_pool_create` sizes a pool in pages, and
@@ -234,14 +256,57 @@ what it will actually generate rather than by the model's whole context length.
 
 As an example, at Qwen2.5-0.5B with a 4,096-token context, a cast of 50 characters sharing one
 1,000-token world and 10 200-token personas, each with up to 512 tokens of its own, fits in a pool of
-173 MiB, where whole-context sequences need 1,440 MiB (the pool figure is confirmed on the real
+189.4 MiB, where whole-context sequences need 1,440 MiB (the pool figure is confirmed on the real
 0.5B artifact). The cast and its numbers are an illustration, not a measured game workload.
 
 Existing code needs no changes: `sslm_seq_create`, `sslm_prefix_begin` and the other 1.11.0 calls
-behave as before and save in the same format, which older releases can read. The savings apply only
-to budgeted sequences, the context cap is still the cap, and GPU sequences are not paged yet. This
-release makes no speed claim; see the release note for measured figures. The full contract is in
+behave as before in what they return and save in the same format, which older releases can read.
+One call differs in speed: `sslm_seq_save` of a no-budget sequence takes 1.14 to 2.00 times as long
+as in 1.11.0 on the release code, at every length measured (24 of 24 readings across four captures;
+readings, not resolved changes), and 1.13.0 changes how large saves are written to address it. The savings apply only
+to budgeted sequences, and the context cap is still the cap. Speed
+is claimed for single-conversation decode on Windows x64 CPU only, at ordinary background load: paged decode is held to within 5%
+of the contiguous cache of the same build, to the 0.5B model's 4,096-token cap and to width 18,682 at
+1.5B (measured with whole-token calls and no host parallel-for hook, on the AVX2 tier), and reset
+and adopt cost does not grow with the context cap (no more than 2.0 times higher at an eightfold
+larger cap), measured with the page size held equal at the two caps (except that at head_dim 64 or below, a cap above 4,096 doubles the page and its one-page
+tail copy). Batched decode works and stays bit-identical, with no speed claim. The release note has the
+figures. The full contract is in
 [docs/api.md](docs/api.md#paged-kv-memory-1120).
+
+**On the GPU, from 1.13.0.** The same cast can live in GPU memory. Create a GPU page pool with
+`sslm_gpu_kv_pool_create`, build the world and persona prefixes in it (`sslm_gpu_prefix_begin`,
+`sslm_gpu_prefix_begin_from`, `sslm_gpu_prefix_prefill`, `sslm_gpu_prefix_freeze`), and give each
+character a budgeted sequence (`sslm_gpu_seq_create_budgeted`) that adopts its persona
+(`sslm_gpu_seq_adopt_prefix`). Decode, batch and finish them with the calls you already use.
+
+- A budgeted GPU sequence stops with `SSLM_GPU_KV_BUDGET_EXCEEDED` at its budget (a prompt
+  that runs past the budget keeps the tokens that fit and returns the same status), and a pool that
+  cannot hold another reservation refuses the create with `SSLM_GPU_KV_POOL_EXHAUSTED`, so you find
+  out at create time, not mid-reply.
+- Its save is a new format, `SLM6`, sized by its live tokens. Restore it with
+  `sslm_gpu_seq_restore_into_pool` and pass the persona's prefix handle so it shares again. Older
+  releases cannot read `SLM6`.
+- Sequences made by `sslm_gpu_seq_create` keep their own buffer, sized by the context cap you pass,
+  and keep saving `SLM5`, as before.
+- The GPU's page is smaller than the CPU's (16 positions for converted models), so the same cast
+  takes a different number of pages on each backend: in the example above, 1,842 GPU pages (172.7
+  MiB). Fifty ordinary GPU sequences would take 1,200 MiB at the full 4,096-token context, or about
+  502 MiB if each is created with only the 1,712 positions it needs, so the pool's saving depends on
+  how you would have sized them. The 1,842-page admission is confirmed on the real 0.5B artifact on
+  the RTX 2080 SUPER.
+
+What it costs: on the RTX 2080 SUPER, decoding one sequence through the page pool was measured
+against a whole-context sequence of the same build, and stayed within the 5% bar this release holds
+it to: a 0.5B cast member at 1,712 tokens read about 1% faster, and a 1.5B sequence at 16,384 tokens
+about 3.7% slower. Neither is a promised speed-up or a promised cost beyond the bar. Nothing is
+measured on the AMD card, at other context lengths or for batched decode yet. Two older GPU
+behaviours now return
+`SSLM_BUSY` instead of being undefined: a second GPU submission while earlier work has not been
+seen to complete (call `sslm_gpu_ready` before the next submission, or use the batch call), and two
+threads decoding the same sequence. The
+[1.13.0 release note](docs/releases/1.13.0.md) has the figures and what was checked where, and
+[docs/api.md](docs/api.md#paged-kv-memory-on-the-gpu-1130) the summary of the calls.
 
 ## Status
 
@@ -389,11 +454,11 @@ and closed forks remain permitted.
 
 Named follow-on work after 1.5:
 
-- **Shared-prefix KV memory on the GPU.** 1.12.0 pages the CPU backend's K/V
-  memory, so budgeted sequences that share a prompt prefix share its memory
-  instead of each holding a copy (see
-  [Shared prompt prefixes and budgeted sequences](#shared-prompt-prefixes-and-budgeted-sequences)).
-  The same paging for GPU sequences is the next step.
+- **Paged GPU memory on the AMD card.** 1.12.0 paged the CPU backend's K/V
+  memory and 1.13.0 the GPU's (see
+  [Shared prompt prefixes and budgeted sequences](#shared-prompt-prefixes-and-budgeted-sequences)),
+  checked so far on the certified NVIDIA GPU only. Running the same checks on
+  the certified AMD GPU is the next step for it.
 - **Async-wrapper overhead reduction.** The API's convenience wrapper
   around the dispatch path measurably costs throughput versus the raw
   dispatch path — see the Direct dispatch vs. Async wrapper API rows in

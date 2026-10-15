@@ -829,12 +829,12 @@ jobs:
   # are measured, never invented -- tools/ci/check_branch_coverage_floors.py
   # fails the build if any file's measured branch percentage drops below its
   # pinned floor, once that floor exists. tools/ci/branch_coverage_floors.json
-  # is committed: nineteen floors are pinned as of this commit -- thirteen
+  # is committed: twenty-one floors are pinned as of this commit -- thirteen
   # landed at 2809d73 (measured from this job's own artifact run 32113553479;
   # d73f131 removed src/matmul.cpp's then-entry, see the file's own
   # _measured_cell comment), and src/matmul.cpp's fourteenth landed from this
   # job's own run 32336576519 per the ruled record-then-commit sequence, and five more (src/sslm_abi.cpp and
-  # the four files it links in) landed from the v1.8.1 tag run 36163807227 -- the design's own step 1, "the
+  # the four files it links in) landed from the v1.8.1 tag run 36163807227, and two more (src/kv_pages.cpp and include/superslm/forward_sites.h, new in 1.12.0) landed from the 1.12.0 pre-tag run 38291256571 -- the design's own step 1, "the
   # first run of this gate records the actual per-file percentages", has
   # already happened. This leg always records its own measurement to a build
   # artifact via `--record-floors-to` (design Sec4.3 step 1); a human copies
@@ -872,10 +872,24 @@ jobs:
   # allowance and a partial-profile merge claim -- both predate the exit-status trap
   # below, which is this file's single, correct description of how the AVX-512-forced
   # binary's expected failure is handled.)
+  # Paged-KV CPU suites: src/kv_pages.cpp and the paged half of src/sslm_abi.cpp are exercised by
+  # the paged-KV suites (tests/paged-kv/paged_kv.cmake), not by superslm_tests, so this job also
+  # builds and runs the five CPU suites that need no real artifact -- superslm_pkv_r0, _c2, _c3,
+  # _c4 and _c5, every cell of each -- and merges their profiles with the five binaries above.
+  # Their cells read only tools/gen_paged_kv_fixture.py's four generated fixtures.
+  # Not built here: superslm_pkv_c6 (achievement and timing cells, real artifacts, the box timing
+  # lock; tools/run_paged_kv_c6_box.ps1 runs it), superslm_pkv_r9_box (every cell reads
+  # SUPERSLM_PAGED_KV_REAL_ARTIFACT_DIR), the pair, MR-OPT and lifecycle constructions (the C6
+  # driver runs them on the box), and superslm_pkv_r9. R9 needs no real artifact, but its fixture
+  # r9_d1024_c64 (tests/paged-kv/r9_gen_fixtures.py) was killed by the out-of-memory killer at
+  # about 13.5 GB resident on a 15 GB Linux machine, three times, so it is not known to generate
+  # on a 16 GB hosted runner; without it six R9 cells fail. Measured on that machine, R9 added no
+  # src/kv_pages.cpp branch beyond the five suites (it adds src/sslm_abi.cpp branches).
   branch-coverage:
     runs-on: ubuntu-latest
     env:
       SUPERSLM_DECODE_THREADING_FIXTURE_DIR: ${{ github.workspace }}/dt-fixtures
+      SUPERSLM_PAGED_KV_FIXTURE_DIR: ${{ github.workspace }}/pkv-fixtures
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
@@ -886,6 +900,10 @@ jobs:
       # a missing fixture fails the cell. The generator needs numpy only.
       - name: Generate the decode-threading fixtures
         run: python tools/gen_decode_threading_fixture.py dt-fixtures
+      # Paged-KV plan §8: the paged-KV suites' cloud fixtures, generated fresh and never committed;
+      # the generator checks its own output against the hashes the committed references record.
+      - name: Generate the paged-KV fixtures
+        run: python tools/gen_paged_kv_fixture.py pkv-fixtures
       - name: Build with source-coverage instrumentation
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -894,7 +912,8 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="-fprofile-instr-generate"
           cmake --build build --target superslm_tests superslm_tests_sse2_forced \
             superslm_tests_avx2_forced superslm_tests_avx512_forced \
-            sslm_axis_digest_scalar_forced
+            sslm_axis_digest_scalar_forced \
+            superslm_pkv_r0 superslm_pkv_c2 superslm_pkv_c3 superslm_pkv_c4 superslm_pkv_c5
       # T-2149 design §10 dimension 7 item (h), fold round 5 (D-SLM3584): every
       # binary's exit status is trapped explicitly rather than relying on `bash -e`'s
       # implicit stop-on-error (which cannot distinguish which exit code killed the
@@ -941,10 +960,27 @@ jobs:
           fi
 
           exit $fail
+      # The paged-KV suites take the same explicit exit trap: any non-zero exit fails the leg
+      # (pkv_main.cpp exits 0 only when every check of every cell passed).
+      - name: Run the paged-KV CPU suites under instrumentation
+        run: |
+          set +e
+          fail=0
+          for suite in r0 c2 c3 c4 c5; do
+            LLVM_PROFILE_FILE=build/pkv_${suite}.profraw ./build/superslm_pkv_${suite}
+            ec=$?
+            if [ "$ec" -ne 0 ]; then
+              echo "::error::superslm_pkv_${suite} exited ${ec} (any non-zero exit fails this leg)"
+              fail=1
+            fi
+          done
+          exit $fail
       - name: Merge the raw profiles
         run: |
           llvm-profdata-18 merge -sparse build/nonforced.profraw build/sse2.profraw \
             build/avx2.profraw build/scalar_digest.profraw build/avx512.profraw \
+            build/pkv_r0.profraw build/pkv_c2.profraw build/pkv_c3.profraw \
+            build/pkv_c4.profraw build/pkv_c5.profraw \
             -o build/superslm_tests.profdata
       - name: Export per-file branch coverage
         run: |
@@ -955,6 +991,11 @@ jobs:
             -object ./build/superslm_tests_avx2_forced \
             -object ./build/superslm_tests_avx512_forced \
             -object ./build/sslm_axis_digest_scalar_forced \
+            -object ./build/superslm_pkv_r0 \
+            -object ./build/superslm_pkv_c2 \
+            -object ./build/superslm_pkv_c3 \
+            -object ./build/superslm_pkv_c4 \
+            -object ./build/superslm_pkv_c5 \
             -- src/*.cpp include/superslm/*.h \
             > build/coverage.json
       # T-2149 design §10 dimension 7 item (h), fold round 6 (D-SLM3603): the record
@@ -1118,6 +1159,11 @@ jobs:
       # GPU forward-status site in the source is in the committed census with a disposition.
       - name: Fail on any GPU status site the census does not list
         run: python tests/ci/check_gpu_status_site_census.py
+      # GPU paged-KV plan G3 (§4.4, the token lint): no device, allocator or queue is created, and no
+      # list is executed, outside src/gpu/d3d12_harness.h, where the submission ledger keeps P1. The
+      # submit-guard census in the same script is advisory and needs the plan; it is not run here.
+      - name: Fail on any D3D12 sink call outside the harness (token lint)
+        run: python tests/ci/check_gpu_pool_submit_guard.py --lint-only
       # TE-435: the census sees the catch clauses that exist, never one that is missing. This gate
       # refuses any outermost `try` under src/gpu whose handlers do not end in `catch (...)`, so no
       # exception type can leave a site that holds a command list, submitted work or handle state.
@@ -1321,7 +1367,10 @@ jobs:
       # actually rejects a tampered vendored file, not merely that a clean
       # tree passes. Import-independent of the cross-tree spike, same as
       # everything else this job already runs.
-      - run: python -m pytest tools/ tests/reference/ -v
+      # The paged-KV tool tests named below need a Windows build of the paged-KV targets
+      # (PKV_BFR and its sibling variables) or PowerShell, and fail, never skip, without them.
+      # They are run on the build box with that environment set, not on this runner.
+      - run: python -m pytest tools/ tests/reference/ -v --ignore=tools/test_paged_kv_74_lock.py --ignore=tools/test_paged_kv_74_measured_floor.py --ignore=tools/test_paged_kv_74_real_geometry.py --ignore=tools/test_paged_kv_74_refusals.py --ignore=tools/test_paged_kv_c6_confirmation_docs.py --ignore=tools/test_paged_kv_cache_executable.py --ignore=tools/test_paged_kv_lifecycle_guards.py --ignore=tools/test_paged_kv_lifecycle_publication.py --ignore=tools/test_paged_kv_ma_run.py --ignore=tools/test_paged_kv_pair_identity.py --ignore=tools/test_paged_kv_pair_link.py --ignore=tools/test_paged_kv_pair_production.py --ignore=tools/test_paged_kv_relinked_bar.py --ignore=tools/test_paged_kv_row_digest_exits.py --ignore=tools/test_paged_kv_t6_guards.py --ignore=tools/test_paged_kv_timing_lock.py --ignore=tools/test_run_paged_kv_pairs.py
 
   # T-2149 design §10 dimension 7 item (d), fold round 6 (D-SLM3604, Poirot
   # T-2174 Critical 2): check_matmul_avx_isolation and its population
@@ -1403,14 +1452,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
-      - name: branch_coverage_floors.json is committed and pins exactly nineteen numeric floors
+      - name: branch_coverage_floors.json is committed and pins exactly twenty-one numeric floors
         run: |
           python3 -c "
           import json
           with open('tools/ci/branch_coverage_floors.json') as f:
               floors = json.load(f)
           numeric = [k for k in floors if not k.startswith('_')]
-          assert len(numeric) == 19, (
+          assert len(numeric) == 21, (
               'tests.yml\'s branch-coverage comment states the pinned-floor count; '
               'update both together (measured: {})'.format(len(numeric))
           )

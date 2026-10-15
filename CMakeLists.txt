@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(superslm VERSION 1.12.0 LANGUAGES CXX)
+project(superslm VERSION 1.13.0 LANGUAGES CXX)
 
 # C++20: the S-LoRA delta path is specified at -std=c++20 (SuperSLM_Plan.md §19),
 # and the core carries wide-integer (int64) composition arithmetic throughout. One
@@ -27,6 +27,8 @@ set(SUPERSLM_INSTALL_GPU_SHADER_DIR "${CMAKE_INSTALL_DATADIR}/superslm/gpu-shade
 
 # The core library. Layer 1 is independently embeddable — no Unreal, no third-party
 # runtime dependency in its graph (DecisionLog D-SLM13). Standard library only.
+# src/gpu/gpu_inflight_registry.cpp is GPU paged-KV plan G3's run-site task trampoline, D3D12-free.
+# Keep comments out of the list below: tools and tests read it with plain text parsers.
 set(SUPERSLM_CORE_SOURCES
 	src/artifact.cpp
 	src/sha256.cpp
@@ -40,6 +42,7 @@ set(SUPERSLM_CORE_SOURCES
 	src/forward/checked_chain_funnel.cpp
 	src/forward/forward_sites.cpp
 	src/forward/parallel_split.cpp
+	src/gpu/gpu_inflight_registry.cpp
 	src/decode_digest.cpp
 	src/kv_pages.cpp
 	src/sslm_abi.cpp
@@ -112,6 +115,8 @@ endif()
 
 # Paged-KV plan (rev 16.1) step C1: the red suite's per-step executables, all EXCLUDE_FROM_ALL.
 include(tests/paged-kv/paged_kv.cmake)
+# GPU paged-KV plan (rev 16) step G3: the D3D12-free core's host-only cells.
+include(tests/gpu-g3-core/g3_core.cmake)
 include(tests/precache/precache.cmake)
 
 # T-2152 (outside strike item 1): tests/test_main.cpp's own T-2019/T-2024 GPU-serial-port
@@ -152,6 +157,34 @@ else()
 	target_compile_options(sha256_portable_forced_tests PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 add_test(NAME sha256_portable_forced_tests COMMAND sha256_portable_forced_tests)
+
+# Paged-KV plan (rev 16.1) step G2: the GPU K/V page-table addressing, checked on the host. CPU-only:
+# it runs src/gpu/shaders/kv_page_addr_model.h (the C++ transliteration of site_common.hlsli's
+# KvRowAddrGpu and of the page-run loop bounds) against the pre-G2 flat layout, the CPU engine's own
+# KvPageView accessors and the uint ceiling, and checks the transliteration reads as the shader text.
+add_executable(gpu_kv_page_addr_tests tests/gpu_kv_page_addr_tests.cpp)
+target_link_libraries(gpu_kv_page_addr_tests PRIVATE superslm)
+target_include_directories(gpu_kv_page_addr_tests PRIVATE src)
+target_compile_definitions(gpu_kv_page_addr_tests PRIVATE SSLM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+if(MSVC)
+	target_compile_options(gpu_kv_page_addr_tests PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(gpu_kv_page_addr_tests PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+add_test(NAME gpu_kv_page_addr_tests COMMAND gpu_kv_page_addr_tests)
+
+# Paged-KV plan (rev 16.1) step G3: the GPU page pool's host-only arithmetic (src/gpu/
+# gpu_kv_pool_geometry.h: page geometry, the 2^32 size refusal, R(budget), the zero-fill's staging
+# chunks, the chunk-wide coverage twin) and §4 item 6b on the kv_pages module the pool reuses.
+add_executable(gpu_kv_pool_geometry_tests tests/gpu_kv_pool_geometry_tests.cpp)
+target_link_libraries(gpu_kv_pool_geometry_tests PRIVATE superslm)
+target_include_directories(gpu_kv_pool_geometry_tests PRIVATE src)
+if(MSVC)
+	target_compile_options(gpu_kv_pool_geometry_tests PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(gpu_kv_pool_geometry_tests PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+add_test(NAME gpu_kv_pool_geometry_tests COMMAND gpu_kv_pool_geometry_tests)
 endif()
 
 # The §13 item 7 independent converter verifier (S-HARDEN-3, F13): loads a
@@ -378,6 +411,11 @@ foreach(_sslm_tier SSE2 AVX2 AVX512)
 	# Decode-threading plan §3.9 / §8 4.5: the forced full suites run the D1 cells too, so each
 	# forced library carries the same seams superslm_test_injection has (above).
 	target_compile_definitions(superslm_${_sslm_tier_lower}_forced PUBLIC SUPERSLM_ENABLE_MATVEC_TEST_SEAMS)
+	# Paged-KV plan §3.1 (R9 step T1, D-SLM8439): the forced paged-KV legs (superslm_pkv_c5_<tier>_forced,
+	# superslm_pkv_r9_<tier>_forced) pin their fixtures through the test-only pin and read the geometry seam,
+	# which, with the page module's seams, are compiled only under this macro; superslm_test_injection's own
+	# PUBLIC definition (above) is the precedent.
+	target_compile_definitions(superslm_${_sslm_tier_lower}_forced PUBLIC SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS)
 	# Both the bad-alloc-injection seam above (src/bad_alloc_wrap.h) and the dispatch-
 	# instrument seam below (src/matmul.cpp) #include "support/*.h" headers that resolve
 	# against a "tests" search directory -- the same PRIVATE include superslm_test_injection
@@ -428,6 +466,12 @@ foreach(_sslm_tier SSE2 AVX2 AVX512)
 		target_include_directories(superslm_tests_${_sslm_tier_lower}_forced PRIVATE src/gpu)
 		target_link_libraries(superslm_tests_${_sslm_tier_lower}_forced PRIVATE d3d12 dxgi dxguid)
 	endif()
+	# test_main.cpp calls the G3 ledger cells, so each forced suite carries the same adapter,
+	# include path and whole-target SUPERSLM_LEDGER_YIELD_HOOK as superslm_tests (g3_core.cmake).
+	target_sources(superslm_tests_${_sslm_tier_lower}_forced PRIVATE
+		tests/gpu-g3-core/g3_superslm_tests_adapter.cpp tests/gpu-g3-core/g3_cells_ledger.cpp)
+	target_include_directories(superslm_tests_${_sslm_tier_lower}_forced PRIVATE tests/gpu-g3-core src/gpu)
+	target_compile_definitions(superslm_tests_${_sslm_tier_lower}_forced PRIVATE SUPERSLM_LEDGER_YIELD_HOOK)
 
 	# The forced digest executable (design §8.3), mirroring sslm_axis_digest_scalar_forced.
 	add_executable(sslm_axis_digest_${_sslm_tier_lower}_forced EXCLUDE_FROM_ALL tools/ci/sslm_axis_digest.cpp)
@@ -1122,3 +1166,29 @@ install(FILES
 	"${CMAKE_CURRENT_BINARY_DIR}/superslmConfigVersion.cmake"
 	DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/superslm
 )
+
+# Paged-KV cell 7.9's must-reject mutant (SUPERSLM_MUTANT_PKV_MR_OPT: B = 16, unrotated) builds only as the
+# superslm_mr_opt target (tests/paged-kv/paged_kv.cmake). At configure time this checks four places for the text
+# SUPERSLM_MUTANT: the superslm target's COMPILE_DEFINITIONS and COMPILE_OPTIONS, the top directory's
+# COMPILE_DEFINITIONS, and CMAKE_C_FLAGS and CMAKE_CXX_FLAGS with every configuration's variants (T-3202 F-4). It does
+# not check the directory's COMPILE_OPTIONS (add_compile_options), definitions inherited through linked targets'
+# INTERFACE_COMPILE_DEFINITIONS, or anything CMake cannot see (the CL environment variable). The #error in
+# src/sslm_abi.cpp and include/superslm/forward_sites.h refuses every one of those at compile time unless
+# SUPERSLM_MUTANT_PKV_MR_OPT_TARGET, the superslm_mr_opt target's acknowledgement, is defined with it.
+get_target_property(_sslm_prod_defs superslm COMPILE_DEFINITIONS)
+get_target_property(_sslm_prod_opts superslm COMPILE_OPTIONS)
+get_directory_property(_sslm_dir_defs COMPILE_DEFINITIONS)
+set(_sslm_flags "${CMAKE_C_FLAGS} ${CMAKE_CXX_FLAGS}")
+foreach(_sslm_cfg IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL ${CMAKE_CONFIGURATION_TYPES} ${CMAKE_BUILD_TYPE})
+	string(TOUPPER "${_sslm_cfg}" _sslm_cfg)
+	string(APPEND _sslm_flags " ${CMAKE_C_FLAGS_${_sslm_cfg}} ${CMAKE_CXX_FLAGS_${_sslm_cfg}}")
+endforeach()
+if("${_sslm_prod_defs};${_sslm_prod_opts};${_sslm_dir_defs};${_sslm_flags}" MATCHES "SUPERSLM_MUTANT")
+	message(FATAL_ERROR "a SUPERSLM_MUTANT_* definition reaches the production superslm library; only the "
+		"superslm_mr_opt target may build 7.9-MR-OPT")
+endif()
+unset(_sslm_prod_defs)
+unset(_sslm_prod_opts)
+unset(_sslm_dir_defs)
+unset(_sslm_flags)
+unset(_sslm_cfg)

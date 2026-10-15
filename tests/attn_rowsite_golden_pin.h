@@ -29,8 +29,8 @@ inline constexpr uint64_t kAttnRowsiteS3GoldenValues = 3567018ULL;
 
 // Slice S4: SoftmaxRowQ15 over RunSoftmaxCases.
 inline constexpr const char* kAttnRowsiteS4GoldenHash =
-    "2e47ea3c27774db43d9c952972325a5c19d901ba6871f0bd124c8c874f6a55d9";
-inline constexpr uint64_t kAttnRowsiteS4GoldenValues = 268078ULL;
+    "ad6e11b1cb3133560632532e11cbb17ae53e432a79c6b0fca6e0cd24ebcaa847";
+inline constexpr uint64_t kAttnRowsiteS4GoldenValues = 882516ULL;
 
 // Slice S5: QkQ31Score per key over RunQ31Cases.
 inline constexpr const char* kAttnRowsiteS5GoldenHash =

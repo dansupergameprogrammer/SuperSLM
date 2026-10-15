@@ -143,7 +143,7 @@ docstring and in the T-2333 case file):
   7  T-2271's eight-object classifier construction (fold round 7)            -- test_population_07_fpblind_classifier
   8  real v1.2.1 whole-corpus sweep (fold rounds 7/8); registered OPEN, T-2404
      R5 -- discharged operationally by the CI gate, not gradable by a unit
-     cell; this cell verifies its own source-manifest premise only          -- test_population_08_source_manifest_resolves_seventeen_real_files
+     cell; this cell verifies its own source-manifest premise only          -- test_population_08_source_manifest_resolves_its_real_files
   9  T-2272's funclet, membership rule (fold round 8)                       -- test_population_09_funclet_membership
   10 T-2273's AArch64 differential control (fold round 9, historical) --
      split T-2403 R6 into a hard cell and a disclosed xfail(strict=True)
@@ -200,14 +200,14 @@ anywhere in this tree. Six new cell groups, filed at the end of this file
       (test_population_16_vxorps_differing_operands_now_accepts_per_fold39)
   (3) the p/vp-prefix rule's vitality pin, D-SLM4999 --
       test_check_a_p_vp_structural_accept_census_and_violation,
-      test_check_a_p_vp_rule_fails_open_on_a_future_fp_mnemonic,
-      test_check_a_p_prefix_exclude_list_is_load_bearing
+      test_check_a_p_vp_structural_only_set_is_pinned_against_vocabulary_growth,
+      test_check_a_p_vp_naming_convention_vocabulary_is_pinned_against_growth
   (4) D-SLM4359's seven switch-jump-table symbols, D-SLM4988's void
       narrowing -- test_dslm4359_seven_switch_jump_table_symbols_must_not_block_gate
   (5) scan_build_output.py's fail-closed membership discipline, design Sec7
       dim 11's thirty-sixth population --
       test_scan_build_output_zero_objects_exits_2_not_a_pass,
-      test_scan_build_output_real_build_finds_exactly_seventeen_objects
+      test_scan_build_output_real_build_finds_exactly_its_objects
   (6) CI reachability -- filed in a new sibling file,
       test_ci_gate_wiring.py, per this suite's writable scope
       ("tests/t2296-fp-free-open-red-suite/ and any new test file it
@@ -282,7 +282,7 @@ def _run_gate(build_dir, target="superslm", isa="x86-64"):
         sys.argv = saved_argv
 
 
-# T-2368 (Curie), D-SLM5008: the real 17-object corpus (CMake target
+# T-2368 (Curie), D-SLM5008: the real 19-object corpus (CMake target
 # superslm, MSBuild/Release layout) is no longer read from a hand-configured,
 # unversioned directory named by a literal path here. Every cell below that
 # needs a real-build leg takes the `real_build_dir` fixture (conftest.py,
@@ -874,11 +874,11 @@ def test_population_07_fpblind_classifier(tier, extra_flags):
 # plainly, rather than recorded as covered by a cell that could not pass.
 # The cell is renamed to what it actually checks: the source manifest this
 # population's own claim depends on.
-def test_population_08_source_manifest_resolves_seventeen_real_files():
+def test_population_08_source_manifest_resolves_its_real_files():
     """This population is a claim about the REAL, currently-committed engine
     source (SUPERSLM_CORE_SOURCES, CMakeLists.txt) -- not a constructed
     fixture. Verified here: the real source list resolves to a non-vacuous
-    17-file population, and every named file exists on disk. This is the
+    19-file population, and every named file exists on disk. This is the
     whole of what this cell checks -- population eight's own claim (a
     full-corpus build-and-scan) is CI-scale, not gradable by any unit cell,
     and is registered OPEN rather than COVERED (design Sec7 dim 11): the
@@ -920,8 +920,9 @@ def test_population_08_source_manifest_resolves_seventeen_real_files():
     block = text[start:end]
     sources = [line.strip() for line in block.splitlines()[1:] if line.strip()]
     # Decode threading D0 added src/forward/parallel_split.cpp: 18 from D0 on (design Sec4.1 said 17).
-    assert len(sources) == 18, (
-        "SUPERSLM_CORE_SOURCES names 18 translation units from decode threading D0 on (design "
+    # GPU paged KV G3 added src/gpu/gpu_inflight_registry.cpp: 20 from then on.
+    assert len(sources) == 20, (
+        "SUPERSLM_CORE_SOURCES names 20 translation units from GPU paged KV G3 on, 19 from the paged-KV page module on, 18 from decode threading D0 on (design "
         "Sec4.1's own text states 17); CMakeLists.txt currently names {}: {}".format(len(sources), sources)
     )
     missing = [s for s in sources if not os.path.exists(os.path.join(engine_root, s))]
@@ -2863,7 +2864,7 @@ def test_derive_core_sources_control_ordinary_manifest_unaffected():
     two declared sources -- the completeness self-check must not become a
     false-REFUSE on the overwhelming majority of ordinary manifests,
     including the real CMakeLists.txt this suite's own population eight reads
-    (17 sources, no comment inside the block's own span, confirmed at source).
+    (19 sources, no comment inside the block's own span, confirmed at source).
     """
     manifest = os.path.join(_DSLM4887_FIXTURES, "manifest_control_clean.cmake.txt")
     result = scan.derive_core_sources(manifest)
@@ -2872,12 +2873,13 @@ def test_derive_core_sources_control_ordinary_manifest_unaffected():
         "got {}".format(result)
     )
     # The real, currently-committed CMakeLists.txt must also be unaffected --
-    # population eight's own 17-source claim depends on this.
+    # population eight's own 20-source claim depends on this.
     engine_root = os.path.dirname(_TESTS_ROOT)
     real_cmake = os.path.join(engine_root, "CMakeLists.txt")
     real_result = scan.derive_core_sources(real_cmake)
-    # Decode threading D0 added src/forward/parallel_split.cpp: 18 from D0 on.
-    assert len(real_result) == 18, (
+    # The paged-KV page module added src/kv_pages.cpp: 19 from then on; decode threading D0 added src/forward/parallel_split.cpp: 18 from D0 on.
+    # GPU paged KV G3 added src/gpu/gpu_inflight_registry.cpp: 20 from then on.
+    assert len(real_result) == 20, (
         "the completeness self-check must not regress the real, currently-"
         "committed CMakeLists.txt -- got {} sources: {}".format(
             len(real_result), real_result)
@@ -3003,7 +3005,7 @@ def test_population_16_vxorps_self_zeroing_must_accept():
 
 def test_population_16_vxorps_differing_operands_now_accepts_per_fold39():
     """SUPERSEDED, fold round 39 (D-SLM4987) -- was
-    test_population_16_vxorps_differing_operands_must_reject, asserting
+    a must-reject cell for differing operands, asserting
     REJECT; the assertion below is the corrected one, not a new cell, and
     the old function is not left standing alongside it under a different
     name (`StandardsDocument.md` Sec6.6: HEAD holds only current truth).
@@ -4029,7 +4031,7 @@ def test_check_a_p_vp_structural_accept_census_and_violation():
     D-SLM5009b's own open question (whether check (A) should be made
     fail-closed over the p/vp class) is closed (D-SLM5155/D-SLM5156); the
     cell that pinned it as open,
-    test_check_a_p_vp_structural_only_nonempty_violates_fail_closed_claim,
+    the xfail-marked fail-closed cell,
     is retired (R7, same commit as R3) rather than left describing a
     decision that has since been made.
 
@@ -4040,6 +4042,12 @@ def test_check_a_p_vp_structural_accept_census_and_violation():
     land in structural_only, 454 -> 457 -- the same filing the sixteen
     `_X86_BITWISE_FP_FAMILY` members already get. Recomputed by running
     this census, not derived by hand.
+
+    Rebaselined again 2026-10-14 (Dan's decision, ID-PENDING): `movntdq`
+    (the save gather's streaming store) added to `_X86_VEC_MOVE_ALLOW`
+    moves accept_a 574 -> 575 and named_accept 117 -> 118; structural_only
+    stays 457, since the census files a `_X86_VEC_MOVE_ALLOW` member as
+    named. Recomputed by running this census, not derived by hand.
     """
     if not _SCAN_AVAILABLE:
         _fail_absent("(D-SLM4999 p/vp vitality pin, census)", "")
@@ -4049,18 +4057,20 @@ def test_check_a_p_vp_structural_accept_census_and_violation():
         "reproduced 1523 -- this suite's own capstone version may have "
         "changed; got {}".format(len(vocabulary))
     )
-    assert len(accept_a) == 574, (
+    assert len(accept_a) == 575, (
         "check (A)'s own ACCEPT count on a vector operand changed from the "
-        "reproduced 574 (555 pre-D-SLM5037 + 16 vextract/vinsert "
+        "reproduced 575 (555 pre-D-SLM5037 + 16 vextract/vinsert "
         "lane-movement mnemonics D-SLM5037 widened + 3 _X86_INTEGER_HASH_ALLOW "
-        "SHA-256 mnemonics, 2026-09-29); got {}".format(len(accept_a))
+        "SHA-256 mnemonics, 2026-09-29 + movntdq, 2026-10-14); got "
+        "{}".format(len(accept_a))
     )
-    assert len(named_accept) == 117, (
+    assert len(named_accept) == 118, (
         "check (A)'s own explicitly-allow-listed ACCEPT count changed from "
-        "the reproduced 117 (101 pre-D-SLM5037 + 16 -- D-SLM5037's own "
-        "sixteen-mnemonic widening is an EXPLICIT _X86_VEC_MOVE_ALLOW "
-        "addition, unlike D-SLM4987's structural-rule accept, so this count "
-        "moves with it); got {}".format(len(named_accept))
+        "the reproduced 118 (101 pre-D-SLM5037 + 16 + movntdq, 2026-10-14 -- "
+        "D-SLM5037's own sixteen-mnemonic widening and the movntdq addition "
+        "are EXPLICIT _X86_VEC_MOVE_ALLOW additions, unlike D-SLM4987's "
+        "structural-rule accept, so this count moves with them); got "
+        "{}".format(len(named_accept))
     )
     assert len(structural_only) == 457, (
         "check (A)'s own structural-only (not on _X86_VEC_MOVE_ALLOW) ACCEPT "
@@ -4073,7 +4083,7 @@ def test_check_a_p_vp_structural_accept_census_and_violation():
 
 
 # R7 (T-2404): the cell that formerly stood here,
-# test_check_a_p_vp_structural_only_nonempty_violates_fail_closed_claim,
+# the xfail-marked fail-closed cell,
 # pinned design Sec5.4/Sec5.5's fail-closed guarantee as an open question
 # under xfail(strict=True), reason "OPEN, waiting on Dan." Dan ruled it
 # closed 2026-08-29 (D-SLM5155) and D-SLM5156 specified the closure
@@ -4108,7 +4118,7 @@ def _load_pinned_p_vp_structural_only():
 def test_check_a_p_vp_structural_only_set_is_pinned_against_vocabulary_growth():
     """T-2368 (Curie), D-SLM5001 item (5)/D-SLM5009b -- the vitality cell
     D-SLM5001 item (5) actually specified, replacing
-    test_check_a_p_vp_rule_fails_open_on_a_future_fp_mnemonic (retired: it
+    the retired fabricated-mnemonic cell (retired: it
     asserted a FABRICATED mnemonic, 'vpfoobaraddps', must REJECT under
     check (A) -- demanding a production change no decision authorizes,
     since check (A)'s p/vp branch is a structural, deny-list-guarded rule
@@ -4266,7 +4276,7 @@ def test_check_a_p_vp_naming_convention_vocabulary_is_pinned_against_growth():
 
 
 # T-2404 (Brunel), a self-found consequence of building R3: the cell that
-# formerly stood here, test_check_a_p_prefix_exclude_list_is_load_bearing,
+# formerly stood here, the deny-list load-bearing cell,
 # proved `_X86_P_PREFIX_EXCLUDE` (the deny list) was load-bearing by
 # showing that removing an entry from it flipped the verdict to ACCEPT.
 # D-SLM5156 rules that this deny list is "no longer load-bearing as a
@@ -4446,9 +4456,9 @@ def test_scan_build_output_zero_objects_exits_2_not_a_pass():
         )
 
 
-def test_scan_build_output_real_build_finds_exactly_seventeen_objects(real_build_dir):
+def test_scan_build_output_real_build_finds_exactly_its_objects(real_build_dir):
     """Must-accept leg: the real superslm CMake target's own build output
-    resolves to exactly 17 objects, no configuration supplied. Uses a real
+    resolves to exactly 19 objects, no configuration supplied. Uses a real
     corpus built fresh by this session's own `real_build_dir` fixture
     (conftest.py, T-2368, D-SLM5008 -- never a hand-configured, unversioned
     directory).
@@ -4457,8 +4467,9 @@ def test_scan_build_output_real_build_finds_exactly_seventeen_objects(real_build
         _fail_absent("(thirty-sixth population, must-accept)", "")
     objects = scan_build_output.find_target_objects(real_build_dir, "superslm")
     # Decode threading D0 added src/forward/parallel_split.cpp: 18 from D0 on.
-    assert len(objects) == 18, (
-        "the real build emits exactly 18 objects for the superslm target from decode "
+    # GPU paged KV G3 added src/gpu/gpu_inflight_registry.cpp: 20 from then on.
+    assert len(objects) == 20, (
+        "the real build emits exactly 20 objects for the superslm target from GPU paged KV G3 on, 19 from the paged-KV page module on, 18 from decode "
         "threading D0 on (design Sec4.1 said 17); found {}: {}".format(
             len(objects), objects)
     )
@@ -4897,6 +4908,66 @@ def test_check_a_still_rejects_neighbouring_sha1_mnemonic(mnemonic):
     assert scan._x86_check_a(mnemonic, "xmm1, xmm2") is None, (
         "{} was never reviewed onto any check (A) list and must still REJECT "
         "as unknown -- the SHA-256 addition must not widen to it".format(mnemonic)
+    )
+    assert not scan._x86_check_b(mnemonic), (
+        "{} must not be on check (B)'s GPR allow-list either".format(mnemonic)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dan, 2026-10-14 (decision ID pending: ID-PENDING): `movntdq` joins
+# `_X86_VEC_MOVE_ALLOW` -- the 1.13.0 save gather's streaming store
+# (`_mm_stream_si128` in `BlockCopy`/`BlockZero`, emitted in
+# `GatherFlatBlock`). The cells below pin that the addition is exactly
+# scoped: movntdq ACCEPTs with the movement list's own reason, it is the only
+# non-temporal store any check (A) list names, and its FP-typed siblings
+# (`movntps`/`movntpd`), its unreviewed VEX form, and an FP arithmetic op
+# still REJECT.
+# ---------------------------------------------------------------------------
+
+_NONTEMPORAL_STORE_FAMILY = (
+    "movntdq", "movntps", "movntpd", "movntdqa", "movnti", "movntq",
+    "movntsd", "movntss", "vmovntdq", "vmovntps", "vmovntpd", "vmovntdqa",
+)
+
+
+def test_check_a_accepts_movntdq_streaming_store():
+    if not _SCAN_AVAILABLE:
+        _fail_absent("(movntdq, must-accept)", "")
+    for ops in ("xmmword ptr [rax], xmm0", "xmmword ptr [rcx + rdx + 0x10], xmm7",
+                "xmmword ptr [r8 + 0x30], xmm15"):
+        assert scan._x86_check_a("movntdq", ops) == "vec_move_allow", (
+            "movntdq {} must ACCEPT under check (A) via _X86_VEC_MOVE_ALLOW; "
+            "got {!r}".format(ops, scan._x86_check_a("movntdq", ops))
+        )
+
+
+def test_movntdq_is_the_only_nontemporal_store_on_any_check_a_list():
+    if not _SCAN_AVAILABLE:
+        _fail_absent("(movntdq, exact scope)", "")
+    for name in ("_X86_VEC_MOVE_ALLOW", "_X86_P_VP_STRUCTURAL_ALLOW",
+                 "_X86_BITWISE_FP_FAMILY", "_X86_INTEGER_HASH_ALLOW"):
+        named = set(getattr(scan, name)) & set(_NONTEMPORAL_STORE_FAMILY)
+        expected = {"movntdq"} if name == "_X86_VEC_MOVE_ALLOW" else set()
+        assert named == expected, (
+            "{} names non-temporal mnemonics {}; only movntdq, on "
+            "_X86_VEC_MOVE_ALLOW, was reviewed (2026-10-14)".format(name, sorted(named))
+        )
+
+
+@pytest.mark.parametrize("mnemonic,ops", (
+    ("movntps", "xmmword ptr [rax], xmm0"),
+    ("movntpd", "xmmword ptr [rax], xmm0"),
+    ("vmovntdq", "xmmword ptr [rax], xmm0"),
+    ("addps", "xmm0, xmm1"),
+))
+def test_check_a_still_rejects_movntdq_neighbour(mnemonic, ops):
+    if not _SCAN_AVAILABLE:
+        _fail_absent("(movntdq, must-reject neighbour)", "")
+    assert scan._x86_check_a(mnemonic, ops) is None, (
+        "{} {} must still REJECT under check (A) -- the movntdq addition must "
+        "not widen to the FP-typed stores, the unreviewed VEX form, or FP "
+        "arithmetic".format(mnemonic, ops)
     )
     assert not scan._x86_check_b(mnemonic), (
         "{} must not be on check (B)'s GPR allow-list either".format(mnemonic)

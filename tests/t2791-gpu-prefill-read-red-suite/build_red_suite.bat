@@ -94,7 +94,7 @@ echo ===== engine: CPU sources =====
 cl /c %CLF% /Fo"%OUT%\cpu\\" "%ENG%\src\artifact.cpp" "%ENG%\src\sha256.cpp" "%ENG%\src\tokenizer.cpp" ^
     "%ENG%\src\model.cpp" "%ENG%\src\intmath.cpp" "%ENG%\src\silu_lut.cpp" "%ENG%\src\matmul.cpp" ^
     "%ENG%\src\proof_manifest.cpp" "%ENG%\src\trace_hook.cpp" "%ENG%\src\forward\checked_chain_funnel.cpp" ^
-    "%ENG%\src\forward\forward_sites.cpp" "%ENG%\src\forward\parallel_split.cpp" "%ENG%\src\decode_digest.cpp" > "%OUT%\cpu\build.log" 2>&1
+    "%ENG%\src\forward\forward_sites.cpp" "%ENG%\src\forward\parallel_split.cpp" "%ENG%\src\gpu\gpu_inflight_registry.cpp" "%ENG%\src\decode_digest.cpp" "%ENG%\src\kv_pages.cpp" > "%OUT%\cpu\build.log" 2>&1
 if errorlevel 1 ( type "%OUT%\cpu\build.log" & echo ENGINE CPU BUILD FAILED & exit /b 3 )
 call :mklib cpu || exit /b 3
 :cpu_done
@@ -153,7 +153,12 @@ if "%CELL%"=="cell_env_pins_shipping_leg" set VARIANT=gpu_plain
 if "%CELL%"=="cell_prompt_guard_removal" set VARIANT=gpu_plain
 set CELLINC=
 findstr /R /C:"^ *# *include *\"d3d12_harness.h\"" "%HEREDIR%%CELL%.cpp" >nul && set CELLINC=/I"%GPUDIR%"
-cl /c %CLF% !CELLINC! /DSUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION /Fo"%OUT%\cells\%CELL%.obj" "%HEREDIR%%CELL%.cpp" > "%OUT%\cells\%CELL%.log" 2>&1
+rem The cell is compiled with its library's definitions: since GPU paged KV G3, d3d12_harness.h's inline
+rem Device::SignalFence and ThrowSignalFailure call the T2169 signal seam under the define, and only the
+rem fault-injection library defines it, so a shipping-build cell compiled with it does not link.
+set CELLDEF=/DSUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+if "!VARIANT!"=="gpu_plain" set CELLDEF=
+cl /c %CLF% !CELLINC! !CELLDEF! /Fo"%OUT%\cells\%CELL%.obj" "%HEREDIR%%CELL%.cpp" > "%OUT%\cells\%CELL%.log" 2>&1
 if errorlevel 1 (
     echo    RED BY COMPILE:
     findstr /R /C:"error C[0-9]*" "%OUT%\cells\%CELL%.log"

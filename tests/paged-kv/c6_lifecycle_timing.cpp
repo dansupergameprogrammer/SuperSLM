@@ -1,4 +1,4 @@
-// Paged-KV plan (rev 16.2) step C6: the lifecycle timings (§8's timing harness; §9's C6 row, "run ...
+// Paged-KV plan (rev 16.7) step C6: the lifecycle timings (§8's timing harness; §9's C6 row, "run ...
 // the lifecycle timings on both binaries. Record the executed worst-setting figures (§5 a)").
 //
 // The cost of create, reset, adopt, save, restore and release, timed on the v1.11.0 binary (the plan's
@@ -9,18 +9,17 @@
 // by at least the reported amount"; §10 R9 states a bar for decode throughput (7.9) only. So this cell
 // records figures and asserts no verdict on them: per verb it prints the baseline, the paged figure, the
 // change and the resolving power, and a verdict line in the timing cells' shared vocabulary (pkv_common.h):
-// NO RESULT when the change is below the resolving power (§8, R9), RESOLVED otherwise (there is no bar,
-// so never PASS or FAIL).
-// The readings are always marked quarantined (§8: recorded, never acted on or headlined): this cell
-// has no instrument registry entry and no commissioning (the registered timing instruments are
-// PKV-TIMING-74-C6 and PKV-TIMING-79-C6), so no variable lifts its quarantine, including
-// SUPERSLM_PAGED_KV_TIMING_COMMISSIONED, which is 7.9's alone.
+// NO RESULT below a 4x ratio in either direction, RESOLVED at or above 4x. There is no
+// lifecycle performance bar, so neither line is PASS or FAIL.
+// Readings stand only with the independent PKV-LIFECYCLE-C6 registry receipt and the box runner's
+// SUPERSLM_PAGED_KV_LIFE_COMMISSIONED=1. This changes provenance and the quarantine label, not the
+// plan's lack of a lifecycle performance bar. The 7.9 commissioning variable remains separate.
 //
-// This file calls legacy verbs only, so it builds against the v1.11.0 library and against the paged
-// build (a legacy holder in a page pool), like c6_dim7_throughput.cpp. The box run is two runs of it:
-//   1. built against v1.11.0, with SUPERSLM_PAGED_KV_LIFE_OUT=<file>: writes one line per reading,
+// This file calls legacy verbs through the paged production library. The v1.11.0 baseline is a cited
+// historical reading; its old binary has no current source-bound receipt. The box run consumes:
+//   1. the cited v1.11.0 SUPERSLM_PAGED_KV_LIFE_OUT=<file>: one line per reading,
 //      "<target>:<verb> <median ns> <relative spread>";
-//   2. built as superslm_pkv_c6, with SUPERSLM_PAGED_KV_LIFE_BASELINE=<that file>: measures the same
+//   2. superslm_pkv_lifecycle_prod with SUPERSLM_PAGED_KV_LIFE_BASELINE=<that file>: measures the same
 //      readings and prints each against its baseline.
 // The cloud twin ("lifecycle/C6:fixtures", on pkv_def and pkv_32k) reads the same two variables, so the
 // two-binary flow runs on the fixtures too; without them it prints the figures alone.
@@ -46,11 +45,20 @@
 // interleaved across all readings so a drift reaches every reading alike. The resolving power of a
 // change is the larger of the two sides' spreads.
 
+#if defined(PKV_LIFECYCLE_PRODUCTION_LEG) && \
+    (defined(SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS) || defined(SUPERSLM_ENABLE_BAD_ALLOC_INJECTION) || \
+     defined(SUPERSLM_ENABLE_MATVEC_TEST_SEAMS) || defined(SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT) || \
+     defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT) || defined(SUPERSLM_ENABLE_GPU_BENCH_PRE_BATCHING) || \
+     defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION) || defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION) || \
+     defined(SUPERSLM_FORCE_SCALAR_MATMUL))
+#error A paged lifecycle production leg with a seam or injection definition cannot publish a result.
+#endif
 #include "pkv_budget_c_helpers.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -87,7 +95,9 @@ double Ns(clock_type::time_point a, clock_type::time_point b) { return std::chro
 // One target's readings, in print order. Each sample appends to the current batch of its reading.
 class Lifecycle {
 public:
-	Lifecycle(const Fixture& fx, std::string target, bool synth_cap) : fx_(fx), target_(std::move(target)), synth_cap_(synth_cap) {}
+	Lifecycle(const Fixture& fx, std::string target, bool synth_cap,
+	          const std::map<std::string, Reading>* baseline = nullptr)
+	    : fx_(fx), target_(std::move(target)), baseline_(baseline), synth_cap_(synth_cap) {}
 
 	// Returns readings keyed "<target>:<verb>", in the order measured.
 	std::vector<std::pair<std::string, Reading>> Run() {
@@ -262,6 +272,11 @@ private:
 		if (rs != SSLM_OK) return void(Fail("sslm_seq_restore", rs));
 		const auto t0 = clock_type::now();
 		const sslm_status r = sslm_seq_reset(s);
+		const auto reset_done = clock_type::now();
+		if (std::getenv("SUPERSLM_PAGED_KV_LIFE_RESET_MUTANT")) {
+			// Fixed injected work. The reference being graded must never size its challenger.
+			while (Ns(reset_done, clock_type::now()) < 64'000'000.0) {}
+		}
 		const auto t1 = clock_type::now();
 		sslm_seq_release(s);
 		if (r != SSLM_OK) return void(Fail("sslm_seq_reset", r));
@@ -280,6 +295,7 @@ private:
 
 	const Fixture& fx_;
 	std::string target_;
+	const std::map<std::string, Reading>* baseline_;
 	bool synth_cap_;
 	bool ok_ = true;
 	std::vector<int64_t> lengths_, prefix_lengths_;
@@ -298,24 +314,70 @@ std::string Us(double ns) {
 	return b;
 }
 
-// Prints one reading against its baseline, then its verdict in the timing cells' shared vocabulary
-// (pkv_common.h): NO RESULT when |change| is below the resolving power, RESOLVED otherwise. No bar exists
-// for a lifecycle verb, so there is no PASS or FAIL and nothing is asserted.
-void Report(const std::string& key, const Reading& paged, const Reading* base) {
-	if (!base) {
-		std::printf("lifecycle %s: %s, spread %.2f%% (no baseline given) [quarantined: lifecycle instrument not commissioned]\n",
-		            key.c_str(), Us(paged.median).c_str(), paged.spread * 100);
-		return;
+bool ChangeResolved(const Reading& paged, const Reading& base) {
+	return base.ok && paged.ok && std::isfinite(base.median) && std::isfinite(paged.median) &&
+	       base.median > 0 && paged.median > 0 &&
+	       (paged.median / base.median >= 4.0 || base.median / paged.median >= 4.0);
+}
+double RelativeChange(const Reading& paged, const Reading& base) { return paged.median / base.median - 1.0; }
+double ResolvingPower(const Reading& paged, const Reading& base) { return std::max(paged.spread, base.spread); }
+
+bool Report(const std::string& key, const Reading& paged, const Reading* base);
+void CellLifecycleConstructions() {
+	const Reading baseline{true, 1000.0, .02};
+	PKV_CHECK(RelativeChange(baseline, baseline) == 0.0);
+	for (double spread : {.02, .05, .30, 1.0}) {
+		for (double ratio : {1.0, 1.5, 2.0, 2.804, 3.9}) {
+			const Reading candidate{true, baseline.median * ratio, spread};
+			PKV_CHECK(std::abs(ResolvingPower(candidate, baseline) - std::max(spread, .02)) < 1e-12);
+			PKV_CHECK(!ChangeResolved(candidate, baseline));
+			PKV_CHECK(!Report("boundary-no-change", candidate, &baseline));
+		}
 	}
-	const double change = paged.median / base->median - 1.0;  // positive: the paged build is slower
-	const double resolving = std::max(paged.spread, base->spread);
-	const bool resolved = std::fabs(change) >= resolving;
+	PKV_CHECK(RelativeChange(Reading{true, 4000.0, .30}, baseline) == 3.0);
+	PKV_CHECK(RelativeChange(Reading{true, 250.0, .30}, baseline) == -.75);
+	PKV_CHECK(Report("boundary-exact-4", Reading{true, 4000.0, .30}, &baseline));
+	PKV_CHECK(Report("boundary-below-quarter", Reading{true, 250.0, .30}, &baseline));
+	PKV_CHECK(Report("reset-64-to-1", Reading{true, 64000.0, 2.804}, &baseline));
+	// LC-5: a large ratio cannot authorize publication when either reading
+	// is invalid. Infinity and false ok are independent guard operands.
+	const Reading infinite{true, std::numeric_limits<double>::infinity(), .02};
+	const Reading failed{false, 4000.0, .02};
+	const Reading failed_base{false, 1000.0, .02};
+	PKV_CHECK(!ChangeResolved(infinite, baseline) && !Report("invalid-infinite", infinite, &baseline));
+	PKV_CHECK(!ChangeResolved(failed, baseline) && !Report("invalid-paged-ok", failed, &baseline));
+	PKV_CHECK(!ChangeResolved(Reading{true, 4000.0, .02}, failed_base) &&
+	          !Report("invalid-base-ok", Reading{true, 4000.0, .02}, &failed_base));
+}
+
+// Prints one reading against its baseline. A ratio below 4 is within the observed load
+// envelope; publication starts at 4 in either direction. No pass/fail bar exists for a
+// lifecycle verb, so neither output asserts a performance target.
+bool Report(const std::string& key, const Reading& paged, const Reading* base) {
+	const char* commissioned = std::getenv("SUPERSLM_PAGED_KV_LIFE_COMMISSIONED");
+	const bool standing = commissioned && std::string(commissioned) == "1";
+	if (!base) {
+		std::printf("lifecycle %s: %s, spread %.2f%% (baseline capture)%s\n", key.c_str(),
+		            Us(paged.median).c_str(), paged.spread * 100,
+		            standing ? "" : " [quarantined: lifecycle instrument not commissioned]");
+		return false;
+	}
+#ifndef PKV_LIFECYCLE_PRODUCTION_LEG
+	PKV_CHECK_MSG(false, "lifecycle publication refused: seam/injection or frozen baseline build definitions");
+	return false;
+#endif
+	const double change = RelativeChange(paged, *base);  // positive: the paged build is slower
+	const double resolving = ResolvingPower(paged, *base);
+	const bool resolved = ChangeResolved(paged, *base);
 	std::printf("lifecycle %s: baseline %s, paged %s, change %+.2f%%, resolving power %.2f%%\n", key.c_str(), Us(base->median).c_str(),
 	            Us(paged.median).c_str(), change * 100, resolving * 100);
 	PrintTimingVerdict("lifecycle", key, resolved ? TimingVerdict::kResolved : TimingVerdict::kNoResult,
-	                   resolved ? Fmt("change %+.2f%% at resolving power %.2f%%; no bar for a lifecycle verb", change * 100, resolving * 100)
-	                            : Fmt("|change| %.2f%% is below the resolving power %.2f%%", std::fabs(change) * 100, resolving * 100),
-	                   /*asserting=*/false);  // never commissioned: always the quarantine label
+	                   resolved ? Fmt("published change %+.2f%% at old/new ratio %.3f; production seam/injection definitions=none", change * 100,
+	                                  std::max(paged.median / base->median, base->median / paged.median))
+	                            : Fmt("within load envelope; no change claimed (ratio %.3f < 4.0; spread %.2f%%)",
+	                                  std::max(paged.median / base->median, base->median / paged.median), resolving * 100),
+	                   /*asserting=*/standing);  // no lifecycle bar: even with standing, nothing is asserted
+	return resolved;
 }
 
 struct Target {
@@ -335,10 +397,14 @@ void RunTargets(const std::vector<Target>& targets, bool box) {
 			std::istringstream ls(line);
 			std::string key;
 			Reading r;
-			if (ls >> key >> r.median >> r.spread) {
-				r.ok = true;
-				baseline[key] = r;
+			std::string extra;
+			if (!(ls >> key >> r.median >> r.spread) || (ls >> extra) ||
+			    !std::isfinite(r.median) || r.median <= 0 || !std::isfinite(r.spread) || r.spread < 0 || baseline.count(key)) {
+				PKV_CHECK_MSG(false, "lifecycle: malformed baseline row: %s", line.c_str());
+				return;
 			}
+			r.ok = true;
+			baseline[key] = r;
 		}
 		PKV_CHECK_MSG(!baseline.empty(), "lifecycle: baseline file %s holds no readings", in_path);
 	}
@@ -346,7 +412,7 @@ void RunTargets(const std::vector<Target>& targets, bool box) {
 	std::ofstream out;
 	if (out_path) out.open(out_path);
 	for (const auto& t : targets) {
-		for (const auto& kr : Lifecycle(*t.fx, t.name, t.synth_cap).Run()) {
+		for (const auto& kr : Lifecycle(*t.fx, t.name, t.synth_cap, &baseline).Run()) {
 			if (out) out << kr.first << " " << kr.second.median << " " << kr.second.spread << "\n";
 			auto it = baseline.find(kr.first);
 			if (in_path) PKV_CHECK_MSG(it != baseline.end(), "lifecycle %s: no baseline reading (was the v1.11.0 run complete?)", kr.first.c_str());
@@ -376,10 +442,18 @@ void CellLifecycleBox() {
 
 // pkv_def runs the prefilled cap state and pkv_32k the derived one, so the cloud covers both paths.
 void CellLifecycleFixtures() {
+	if (std::getenv("SUPERSLM_PAGED_KV_LIFE_PUBLICATION_PROBE")) {
+		const Reading base{true,1000.0,.02}, paged{true,1500.0,.02};
+		Report("publication-probe",paged,&base);
+		return;
+	}
 	RunTargets({{&GetFixture("pkv_def"), "pkv_def", false}, {&GetFixture("pkv_32k"), "pkv_32k", !PrefillCap()}}, false);
 }
 
 PKV_CELL("lifecycle/C6", "C6", CellLifecycleBox);
 PKV_CELL("lifecycle/C6:fixtures", "C6", CellLifecycleFixtures);
+#ifdef PKV_LIFECYCLE_PRODUCTION_LEG
+PKV_CELL("lifecycle/C6:constructions", "C6", CellLifecycleConstructions);
+#endif
 
 }  // namespace

@@ -50,7 +50,7 @@ def fields(line):
 
 POPULATION = {
     "TE-422 S-2 site 1 (InvokeGpuApiBoundary, T11)":
-        lambda k, f, fn, t: k == "catch" and fn.endswith("InvokeGpuApiBoundary"),
+        lambda k, f, fn, t: k == "catch" and fn.endswith(("InvokeGpuApiBoundary", "ContainGpuApiCall")),  # G3: moved into ContainGpuApiCall
     "TE-422 S-2 site 2 (SubmitAdmittedChunkForG5Bridge's runtime_error clause, T10)":
         lambda k, f, fn, t: k == "catch" and fn.endswith("SubmitAdmittedChunkForG5Bridge") and t == "std::runtime_error",
     "TE-422 S-2 site 3 (RunDeviceLogits, T2)":

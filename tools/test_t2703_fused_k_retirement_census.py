@@ -81,6 +81,9 @@ def _allowlisted(relative_path: str, term: str) -> bool:
         return term == "k_norm" + "_landing"  # named test-fixture backing only
     if relative_path == "src/gpu/superslm_gpu.cpp":
         return term == "k_norm" + "_landing"  # historical diagnostic comparison
+    if relative_path == "tests/t2899-schema-deadend-red-suite/pristine_pre_slm5/superslm_gpu.cpp.ccf87c1":
+        # the frozen pre-SLM5 copy of src/gpu/superslm_gpu.cpp: the same historical diagnostic comparison, one exact path
+        return term == "k_norm" + "_landing"
     if relative_path == "include/superslm/checked_chain_funnel.h":
         return term == "k_norm" + "_landing"  # historical diagnostic comparison
     return False

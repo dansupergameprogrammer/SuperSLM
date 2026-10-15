@@ -82,10 +82,23 @@ def recipe_texts():
     if build_bat.exists():
         texts.append(_strip_comment_lines(
             build_bat.read_text(encoding="utf-8", errors="replace"), ("rem ", "::")))
-    cmakelists = REPO_ROOT / "CMakeLists.txt"
-    if cmakelists.exists():
-        texts.append(_strip_comment_lines(
-            cmakelists.read_text(encoding="utf-8", errors="replace"), ("#",)))
+    # CMakeLists may include the actual target declarations in a tracked
+    # .cmake file. Follow only literal include edges, so a dormant fragment
+    # cannot certify a source with no reachable build target.
+    seen = set()
+    def cmake_recipe(path):
+        path = path.resolve()
+        if path in seen or not path.is_file() or REPO_ROOT.resolve() not in path.parents:
+            return
+        seen.add(path)
+        body = _strip_comment_lines(path.read_text(encoding="utf-8", errors="replace"), ("#",))
+        texts.append(body)
+        for name in re.findall(r'^\s*include\s*\(\s*["\']?([A-Za-z0-9_./-]+\.cmake)["\']?', body, re.M | re.I):
+            child = path.parent / name
+            if not child.is_file():
+                child = REPO_ROOT / name
+            cmake_recipe(child)
+    cmake_recipe(REPO_ROOT / "CMakeLists.txt")
     for p in (REPO_ROOT / "tests").glob("*/build_link_red.bat"):
         texts.append(_strip_comment_lines(
             p.read_text(encoding="utf-8", errors="replace"), ("rem ", "::")))

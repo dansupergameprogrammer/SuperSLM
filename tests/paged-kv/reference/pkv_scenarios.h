@@ -117,6 +117,10 @@ struct Driver {
 	std::string fail;
 	std::vector<Record> records;
 	std::vector<int32_t> pending;  // tokens decoded since the last record
+	// When 0..255, every pool buffer is filled with this byte before its create (cell 9.2b fills 0xCD,
+	// so a gather that copies page bytes past L' instead of zeros changes the blob). -1, the default,
+	// leaves the buffer as allocated, as the reference tool always has.
+	int pool_fill = -1;
 
 	bool Ok(sslm_status s, const char* what) {
 		if (s == SSLM_OK) return true;
@@ -137,6 +141,7 @@ struct Driver {
 		const size_t size = sslm_kv_block_size(model) * blocks + sslm_kv_pool_overhead_size(model, blocks);
 		const size_t rounded = (size + 63) / 64 * 64;
 		out->mem = ::operator new(rounded, std::align_val_t(64));  // std::aligned_alloc is absent on MSVC
+		if (pool_fill >= 0) std::memset(out->mem, pool_fill, rounded);
 		return Ok(sslm_kv_pool_create(model, out->mem, rounded, blocks, &out->pool), "pool_create");
 	}
 

@@ -4,14 +4,117 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
-## [1.12.0] - Unreleased
+## [1.13.0] - 2026-10-14
 
-Not yet tagged; the date is filled at the tag (TODO-BOX). The CPU backend stores K/V in pages of
-`B` positions (`sslm_kv_page_positions`; 16 for every converted artifact on record), reached
-through a per-holder page table. Tokens, K/V values and the axis digest are bit-identical to
-1.11.0 on every path. A host that calls only the 1.11.0 verbs keeps their behaviour, admission
-counts and save blobs, apart from the changes listed below; the memory savings come only from the
-new budget-mode verbs. Eleven C verbs and one status are added (49 C verbs in all); no signature,
+The GPU backend gains 1.12.0's paged K/V memory: GPU page pools, budgeted GPU sequences and prefixes,
+shared prefix pages, and the `SLM6` save blob. `gpu_1p0.h` adds 12 verbs, 2 handle types, 2 test-only
+verbs and 6 statuses (ordinals 24 to 29); no existing declaration, struct layout or ordinal of
+`gpu_1p0.h` changes. The installed internal header `superslm/gpu_port.h` does change: three existing
+declarations (`RunLayerLoopGpuSubmit`, `RunLayerLoopGpuFinish`, `SubmitChunkToFullDepthForG5Bridge`)
+now hand in-flight work through `GpuInFlightToken` and two gain a defaulted `paged_kv` parameter, so
+code calling them as 1.12.0 declared them does not compile, and a reset while a submission is
+unobserved throws. The CPU C ABI is unchanged. GPU sequences made by `sslm_gpu_seq_create` keep a whole-cap buffer and
+keep saving `SLM5`; they now address K/V through a one-page table, the old flat layout by
+construction. Verified on the NVIDIA RTX 2080 SUPER only: the AMD RX 7900 XTX legs are a known gap,
+to run on their own machine before any AMD statement. The shipped shaders changed: deploy the whole 1.13.0 shader set. Folds in
+the planned 1.12.1 fixes. `docs/api.md` (*Paged KV memory on the GPU*) summarizes the surface,
+`gpu_1p0.h` is the contract, and `docs/releases/1.13.0.md` is the release note.
+- **GPU page pools.** `sslm_gpu_kv_pool_create`, `sslm_gpu_kv_pool_destroy`, `sslm_gpu_kv_pool_stats`.
+  A GPU page is `kv_block_size` positions when it divides the cap, else the cap (16 for converted
+  artifacts at cap 4,096; 96 KiB at Qwen2.5-0.5B), not the CPU's page. A pool above 2^32 bytes is
+  `SSLM_GPU_KV_POOL_TOO_LARGE`.
+- **Budgeted GPU sequences.** `sslm_gpu_seq_create_budgeted` reserves
+  `R(budget) = min(ceil(budget/B) + 1, ceil(cap/B))` pages, or returns `SSLM_GPU_KV_POOL_EXHAUSTED`
+  with nothing drawn; its cap is the model's context cap. At `min(origin + budget, cap)` below the
+  cap a decode returns `SSLM_GPU_KV_BUDGET_EXCEEDED` with no row written, and a prefill commits the
+  tokens below the limit and returns the same status (the next bridge decode finishes the last one).
+- **Shared GPU prefixes.** `sslm_gpu_prefix_begin`, `sslm_gpu_prefix_begin_from`,
+  `sslm_gpu_prefix_set_schema`, `sslm_gpu_prefix_prefill`, `sslm_gpu_prefix_freeze`,
+  `sslm_gpu_prefix_release` and `sslm_gpu_seq_adopt_prefix`: full pages shared, the partial last
+  page copied, the CPU adopt's field and schema rules. Refusals: `SSLM_GPU_PREFIX_REJECTED` (not
+  frozen, or another pool of the same model), `SSLM_GPU_PREFIX_SCHEMA_MISMATCH`,
+  `SSLM_GPU_HOLDER_MODE_MISMATCH` for a dedicated sequence, and `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`
+  for another model's prefix. A failed upload of the prefix's partial page leaves the sequence reset.
+- **`SLM6`.** A pooled sequence saves `SLM6` (the `SLM5` header and tail, mode, budget, origin, the
+  residual, then rows `[0, L')`), restored by `sslm_gpu_seq_restore_into_pool` with an optional
+  prefix handle that re-shares the prefix's pages when it matches. `sslm_gpu_seq_restore` refuses
+  `SLM6` and `sslm_gpu_seq_restore_into_pool` refuses `SLM5` and `SLM4`, each with
+  `SSLM_GPU_HOLDER_MODE_MISMATCH`. 1.12.0 and earlier refuse `SLM6` on its magic with
+  `SSLM_SEQUENCE_KV_BUFFER_MISMATCH` (cell 9.8 on the release machine, at `845918e` and again at
+  `05e09d8`, 21 checks and 14 in the leg with a reader built from a 1.12.0 development commit whose
+  `src/gpu/` equals the tag's).
+- **Work in flight.** `gpu_1p0.h` states that no command allocator is reset while work on it is
+  unobserved, that a guarded verb returns `SSLM_BUSY` (or `SSLM_DEVICE_LOST` once a submission is
+  stranded) instead, which device each verb submits on, and each guarded verb's refusal order.
+- **Behaviour changes for every GPU host:** two decode calls raced on one sequence handle
+  (`sslm_decode_step_gpu`, a batch slot, `SslmGpuSeqDecodeStepForG5Bridge` or
+  `SslmGpuSeqFinishTokenForG5Bridge`, in any pairing): one runs, the other returns `SSLM_BUSY`
+  having changed nothing (was undefined, and could corrupt the heap). Checked for every pairing on
+  the software GPU and on the release machine (debug layer on). A second call that reaches
+  the process's submission device while earlier work is unobserved (decode A, then decode B before
+  `sslm_gpu_ready(A)`) returns `SSLM_BUSY` (was undefined). A stranded submission makes every later
+  such guarded verb return `SSLM_DEVICE_LOST`. The external-serialization rule now lists every verb
+  that resets or submits on a device, not only the two decodes and the blocking `sslm_gpu_ready`.
+  `SslmGpuSeqPrefillSchemaContentForG5Bridge` on a Submitted sequence returns `SSLM_BUSY` before its
+  first-token reachability refusal, unchanged since 1.6.0 and now documented.
+- **Fixed: a barrier race in the shipped shaders.** The residual candidate (attention and MLP
+  residual sites), the bias reconcile and the funnel maximum reset a shared flag or slot for their
+  second run in a dispatch without a barrier after the first run's reads. Found on a software
+  Vulkan device, where it fired every run (16 GPU-against-CPU mismatches in `superslm_tests`); the
+  certified GPUs' certification runs were byte-identical to the CPU. No output is meant to change;
+  `superslm_tests` with its GPU cells passes with the fix on the RTX 2080 SUPER.
+- **Fixed: live-handle counts under two threads.** A context's and a model's live-handle counts were
+  plain integers changed by calls allowed to run at once on different handles (two releases, and
+  from this release a budgeted create beside another create); a lost update could free a model a
+  sequence still used, or refuse a context's destroy for ever. They are now atomic.
+- **Fixed: no-budget CPU save speed.** A no-budget `sslm_seq_save` of a block of 16 MiB or more
+  writes with streaming stores on x64; the bytes are unchanged (equal to 1.11.0's and 1.12.0's at 9
+  lengths, and at every destination offset 0 to 63 against the pinned 1.11.0 blobs). Smaller blocks
+  and non-x64 targets keep 1.12.0's copy. On the release machine (lifecycle cell at `e30db83`,
+  MSVC 14.44, commissioned instrument, 66 checks green), save time against 1.11.0 reads: 0.5B
+  (cap 4,096) −19.7% at length 16, −18.7% at 1,000, +27.0% at the cap; 1.5B (cap 32,768) −21.1%,
+  −20.4%, +13.8% at the cap. All are readings, NO RESULT under the 4-times rule. Full-length saves
+  are faster than 1.12.0's (1.88 to 1.93 times 1.11.0's, read in another run) but still slower
+  than 1.11.0's. The FP-free scan's check (A) accepts `movntdq`, the
+  streaming store this compiles to, on `_X86_VEC_MOVE_ALLOW` in `check_fp_free_scan.py`: a store
+  of packed integers with a non-temporal hint (no rounding, no MXCSR, no floating-point operand).
+  `movntps`, `movntpd` and `vmovntdq` stay rejected.
+- **Speed (GPU, reading against a bar).** On the release machine's RTX 2080 SUPER (one card, one
+  driver, debug layer off), single-sequence paged decode against the same build's dedicated
+  one-page view, s = paged time / legacy time − 1, five processes of 104 pairs per row, a
+  commissioned harness (a paged arm slowed 17.65% on purpose is rejected): Qwen2.5-0.5B, cap 4,096,
+  a cohort member at width 1,712, process medians −1.14, −1.11, −1.17, −0.94, −1.33% (about 31
+  tok/s); Qwen2.5-1.5B, cap 32,768, a pooled sequence restored without a prefix at width 16,384,
+  +3.78, +3.59, +3.74, +3.73, +3.68% (about 6.2 tok/s). Between-process SD 0.14 and 0.08 points.
+  The bar, no more than 5% slower by the largest process median, passes on both rows. This is
+  within the bar, not a speed-up: the 0.5B reads about 1% faster, the 1.5B about 3.7% slower. Not
+  measured: the AMD card, other widths and caps, other pool occupancies, batched decode, the debug
+  layer, and any comparison with 1.12.0's GPU decode. Run at `03a2088` on NVIDIA driver
+  32.0.15.6094; the harness was commissioned on 2026-10-14 and its records are filed. The AMD legs
+  belong to their own machine and are not run.
+- **Memory (by admission, 0.5B, cap 4,096, 1.12.0's example cohort):** a GPU pool of 1,842 pages
+  (172.7 MiB) admits the cohort and 1,841 refuses exactly the 50th create. By arithmetic, 50
+  dedicated sequences hold 1,200 MiB at cap 4,096, or 501.6 MiB sized to the 1,712 positions each
+  needs (`sslm_gpu_seq_create` takes the cap); restored with prefix handles the cohort fits in 1,842 pages,
+  without them 5,592 until each re-adopts, then 113 more; every sequence's tokens equal the CPU's.
+  Confirmed on the real artifact on the RTX 2080 SUPER, debug layer on, at `845918e` and again at
+  `05e09d8`, whose library code is the release's (cells 10.3, 10.5, 10.7: 280, 217 and 793 checks,
+  0 failures), and their fixture legs again after the last library fixes; not run on the AMD card.
+- **Not in this release:** memory savings for dedicated GPU sequences, a GPU page larger than
+  `kv_block_size`, cross-backend save blobs, and the items 1.12.0 left out (a removed cap,
+  automatic prefix matching, adapter-shaped prefixes, batched shared-prefix attention).
+
+## [1.12.0] - 2026-10-12
+
+The CPU backend stores K/V in pages of
+`B` positions (`sslm_kv_page_positions`; `B` follows from the model's head dimension, context cap
+and K/V element width, and is 64 for Qwen2.5-0.5B at cap 4,096 and for Qwen2.5-1.5B at cap 32,768),
+reached through a per-holder page table. Tokens and K/V values are bit-identical to 1.11.0 on every
+path, as read on Windows x64 with MSVC. A host that calls only the 1.11.0 verbs keeps their results,
+admission counts and save blobs, apart from the changes listed below, but not their save speed:
+`sslm_seq_save` of a no-budget sequence takes 1.14 to 2.00 times as long as in 1.11.0 on the release
+code, at every length measured (24 of 24 readings across four captures; readings, not resolved
+changes), and a later release is planned to fix that. The memory savings come only from the new budget-mode verbs. Thirteen C verbs and one status are added (51 C verbs in all); no signature,
 struct layout or existing ordinal changes. The GPU API is unchanged. `docs/api.md` (*Paged KV
 memory*) is the contract and `docs/releases/1.12.0.md` the release note.
 - **Budget mode.** `sslm_seq_create_budgeted` and `sslm_prefix_begin_budgeted` take a budget,
@@ -28,28 +131,80 @@ memory*) is the contract and `docs/releases/1.12.0.md` the release note.
   or re-adopted.
 - **Pools and diagnostics.** `sslm_kv_page_pool_create`, `sslm_kv_page_size` and
   `sslm_kv_page_pool_overhead_size` size a pool in pages; `sslm_kv_pool_create` builds
-  `block_count * ceil(cap/B)` pages in the same buffer. `sslm_kv_pool_stats` and
-  `sslm_seq_kv_stats` report pages, mode, origin, budget and limit. `kv_blocks_resident` stays 1.
+  `block_count * ceil(cap/B)` pages in the same buffer at a cap `B` divides. `sslm_kv_pool_stats`
+  and `sslm_seq_kv_stats` report pages, mode, origin, budget and limit. `kv_blocks_resident` stays 1.
+- **Contiguous pool option (CPU).** `sslm_kv_pool_contiguous_size` and
+  `sslm_kv_pool_create_contiguous` build a pool whose page is the whole context cap, 1.11.0's
+  contiguous layout. Adopt and `sslm_prefix_begin_from` in it copy and share no page; saves are the
+  same in every pool kind. It is the reference decode speed is measured against.
+- **Softmax fast path.** On the AVX2 and AVX-512 tiers, `SoftmaxRowQ15`'s fast path admits rows up
+  to width 32,767 (was 2^14); every probability and the returned bool stay bit-identical to the
+  1.9.0 body. No speed figure is claimed for it.
 - **Save format `SSB6`** for budget holders only: the `SSB5` header plus `kv_mode`, `budget` and
-  `origin` (172 bytes), the residual and history, then `kv_positions` and only the written rows, so
-  its size follows the live length. No-budget holders keep writing `SSB5`, byte-equal to 1.11.0's.
+  `origin` (172 bytes), the residual and history, then `kv_positions` and the rows from position 0 to
+  the live length, a shared prefix's span included, so its size follows the live length. No-budget holders keep writing `SSB5`, byte-equal to 1.11.0's.
   Restore reads `SSB6` through `SSB2`, keeps a budget holder's budget, origin and limit, and requires
   an `SSB6` blob's exact size. `sslm_seq_restore_shared` re-shares a live prefix handle's pages when
   its bytes match the blob's exactly, and otherwise restores privately with `SSLM_OK`.
 - **Memory (by admission, 0.5B, cap 4096, example cohort of a 1,000-token world, 10 personas and 50
-  budget-512 sequences):** a pool of 1,842 pages (173 MiB) admits the cohort and 1,841 refuses
-  exactly one create, against 60 blocks (1,440 MiB) in 1.11.0. Reproduced in the cloud on a
-  synthetic fixture with the 0.5B page arithmetic; the 1,842 and 1,841 page admissions are
-  confirmed on the real artifact on the release machine (cell 10.4).
-- **Speed:** no figure is promised. Decode against 1.11.0: TODO-BOX (cell 7.9). Lifecycle verbs:
-  TODO-BOX (the lifecycle timing cell on both binaries).
+  budget-512 sequences):** a pool of 505 pages (189.4 MiB) admits the cohort and 504 refuses
+  exactly one create, against 60 blocks (1,440 MiB) in 1.11.0's layout (arithmetic from the block
+  size, not a 1.11.0 run). The 505 and 504 page admissions are
+  confirmed on the real artifact on the release machine (cell 10.4), and 1.11.0-style blocks in the
+  same bytes admit 7 sequences. Restored with their prefix handles, the cohort fits in the same 505
+  pages (cell 10.6); restored without them it needs 1,405 pages until each sequence re-adopts, after
+  which 100 more budget-512 sequences are admitted (cell 10.8).
+- **Speed** (Windows x64 CPU only, at the ordinary background load of the release machine, an AMD
+  Ryzen 9 3950X with AVX2 and without AVX-512, Windows 10.0.19045; decode speed for
+  single-conversation generation only; nothing is claimed under load, on the GPU or for batched
+  decode). Single-conversation decode is no more than 5% slower than the contiguous cache at both
+  targets, to the 0.5B cap of 4,096 and to width 18,682 at 1.5B, with 7.9b reported; the contiguous
+  cache is the contiguous pool option of the same build, not 1.11.0 (cell 7.9; whole-token calls, no
+  host parallel-for hook, AVX2 tier). Largest of five
+  process medians, in percent slower, with the SD of the five: Qwen2.5-0.5B at cap 4,096, restored
+  at 1,200, 2,044 and 3,988 tokens: +1.001 (0.067), +1.706 (0.098), +2.682 (0.089); Qwen2.5-1.5B at
+  cap 32,768, restored at 8,188, 15,872 and 18,678 tokens: +1.310 (0.178), +3.349 (0.520), +3.861
+  (0.439). At 0.5B the mean of the five medians is 0.941 ± 0.083, 1.629 ± 0.122 and 2.582 ± 0.110
+  (95% half-width of the mean). The 1.5B figures carry a zero-point offset of about one point in
+  this measuring session (an A/A run of two identical contiguous arms read +1.16 and +1.13 at the rows restored
+  at 15,872 and 18,678, +0.05 at the 0.5B row restored at 3,988; the 1.5B row restored at 8,188 has
+  none of its own, and the offset covers it by extension) and are not resolved finer. Shared-prefix
+  decode, reported (cell 7.9b, Qwen2.5-0.5B): +1.063% median, sign interval +0.990% to +1.130%.
+  Reset and adopt cost does not grow with the context cap, except that at head_dim <= 64 a cap
+  above 4,096 doubles the page and its one-page tail copy (0.5B: 384 KiB at caps up to 4,096, 768
+  KiB above), at a cap of more than one page (cell 7.4, cap 32,768 against cap 4,096 with the page
+  size pinned to 64 positions at both caps, so the doubled page was not timed; bound 2.0: the
+  86th and 120th smallest of 205 ratios were 0.996 and 1.004 for budget adopt, 1.000 and 1.000 for
+  budget reset, 0.950 and 1.018 for no-budget adopt, 1.188 and 1.750 for no-budget reset). Lifecycle
+  changes against 1.11.0 (no-budget holders, Qwen2.5-0.5B at cap 4,096 and Qwen2.5-1.5B at cap
+  32,768, taken on 2026-10-03 for 1.11.0 and 2026-10-11 for 1.12.0, published as a change only where
+  the two builds' medians differ by a factor of at least 4): 22 of 34 readings are resolved, all
+  speed-ups, from 6.811 times faster (restore of a 1,000-token state at 0.5B) to 9864.84 times
+  (release of a fresh holder at 1.5B). The other 12 are not resolved at that factor, and this release
+  claims no size or direction of change for them except save (next bullet). The release note has the
+  tables.
+- **Save is slower than 1.11.0.** `sslm_seq_save` of a no-budget sequence writes the same bytes as in
+  1.11.0 and is slower at every length measured: 24 of 24 readings across four captures on the
+  release machine. Three captures of the release code read 1.14 to 2.00 times as long (the graded
+  run, 1.21 to 1.93: Qwen2.5-0.5B, cap 4,096, 1.30, 1.35 and 1.93 times at 16, 1,000 and 4,096 live
+  tokens; Qwen2.5-1.5B, cap 32,768, 1.21, 1.24 and 1.88 times at 16, 1,000 and 32,768); an earlier
+  build read up to 2.23. These are readings, not resolved changes: the lifecycle comparison
+  resolves a change only at 4 times or more and graded all six not resolved. A later release is
+  planned to remove the slowdown. The release note has the readings.
+- **Batched decode** works and stays bit-identical to each sequence's solo run (cell 8.1; on the
+  release machine it is one of the 70 cells of `superslm_pkv_c5`, which ran green: 70 cells, 0 red,
+  74,052 checks). No batched speed is measured or claimed.
 - **Behaviour changes for every host:** `sslm_seq_state_size` is 20 bytes larger (fixed part 180,
   was 160). `sslm_kv_pool_create` refuses a `block_count` whose page total exceeds `UINT32_MAX`.
+  `sslm_kv_pool_overhead_size` is larger at a cap the page size does not divide, by `block_count *
+  (ceil(cap/B) * B - cap)` positions of K/V; `sslm_kv_block_size` and the no-budget save blob are
+  unchanged at every cap.
   The first `sslm_prefix_freeze` returns the prefix's unused pages to the pool, so a pool can
   admit more handles than before, never fewer. `sslm_seq_reset` no longer zero-fills K/V memory
   (nothing reads it, and saves are unchanged). Restore refuses a blob of any format that is
-  mid-token at the context cap, which no save produces.
-- **Not in this release:** GPU paging (planned for 1.13.0), memory savings for the 1.11.0 verbs,
+  mid-token at the context cap, which no save produces. The axis digest tool's attention section
+  now covers softmax rows up to width 32,767, so its GLOBAL hash differs from 1.11.0's.
+- **Not in this release:** GPU paging (planned for a later release), memory savings for the 1.11.0 verbs,
   removal of the context cap, automatic prefix matching, adapter-shaped prefixes and batched
   shared-prefix attention.
 

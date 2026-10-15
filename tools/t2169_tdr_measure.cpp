@@ -22,11 +22,13 @@
 // Usage: t2169_tdr_measure <model.sslm>
 #include <cstdio>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 #include "superslm/artifact.h"
 #include "superslm/forward_sites.h"
 #include "superslm/gpu_port.h"
+#include "../src/gpu/gpu_inflight_token.h"  // GpuInFlightToken (plan G3): complete for construction/destruction
 #include "superslm/model.h"
 #include "sslm_marshal.h"
 
@@ -66,7 +68,7 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
     bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
     ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
     bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
-    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight);
+    const GpuAdapterBridge* adapter_bridge, GpuInFlightToken* out_inflight);
 #endif
 }  // namespace superslm_gpu
 
@@ -161,7 +163,7 @@ bool MeasureOneChunkSize(const SslmModelView& model_view, const std::vector<Laye
 		std::memcpy(chunk_bytes.data() + static_cast<size_t>(i) * block_bytes, block.data(), block_bytes);
 	}
 
-	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+	superslm_gpu::GpuInFlightToken inflight;
 #if defined(SUPERSLM_T2169_VALIDATE_UNSPLIT_CRASH_REPRO)
 	// D-SLM3649's own owed evidence: the UNSPLIT primitive, replaying the exact original crashing
 	// shape (one command list, no internal split) under the D3D12 debug layer.
@@ -183,7 +185,7 @@ bool MeasureOneChunkSize(const SslmModelView& model_view, const std::vector<Laye
 	}
 	int32_t ready = 0;
 	const SslmForwardStatus finish_status =
-	    superslm_gpu::RunLayerLoopGpuFinish(inflight, seq, ws.data(), /*block=*/1, &ready);
+	    superslm_gpu::RunLayerLoopGpuFinish(std::move(inflight), seq, ws.data(), /*block=*/1, &ready);
 	if (finish_status != SslmForwardStatus::Ok) {
 		std::fprintf(stderr, "FAILED at stage=finish chunk_tokens=%u status=%s\n", chunk_tokens,
 		             SslmForwardStatusName(finish_status));

@@ -30,6 +30,10 @@
 #include <string>
 #include <vector>
 
+#include "submission_ledger.h"
+#include "gpu_inflight_token.h"
+#include "gpu_resource_state_tracker.h"
+
 namespace superslm_gpu {
 namespace harness {
 
@@ -55,6 +59,14 @@ struct GpuTestSeamState {
 	uint32_t device_logits_scope = 0;  // > 0 while CreateDeviceLogitsBuffers or RunDeviceLogits runs
 	uint32_t close_failures = 0;     // phase-B Close failures still to inject, inside that scope
 	bool map_removed_query = false;  // the next DeviceReportedRemoved query reports removed
+	// Paged-KV plan §4 item 3, step G3 (cell 11.4's seam legs): each counted TryMakeBuffer call's
+	// requested size and heap type, beside `alloc_in_bundle` (SslmGpuAllocRecordForTest), and the
+	// pool create's zero-fill Close seam: while `pool_zero_fill_scope` > 0, the next
+	// `pool_zero_fill_close_failures` Close attempts fail without closing.
+	std::vector<uint64_t> alloc_bytes;
+	std::vector<uint32_t> alloc_heap;
+	uint32_t pool_zero_fill_scope = 0;
+	uint32_t pool_zero_fill_close_failures = 0;
 	bool readback_override_armed = false;
 	int32_t readback_override_row = 0;
 	int64_t readback_override_value = 0;
@@ -77,14 +89,9 @@ private:
 	HRESULT hr_;
 };
 
-// A submission the engine cannot confirm recovered: a command list that could not be confirmed
-// Closed, or submitted work whose completion could not be confirmed (a failed fence Signal with no
-// successful retry, or a failed SetEventOnCompletion). Every catch site reads it as rule 0 of the
-// fault classification below, whatever else is true.
-class GpuSubmissionStrandedError : public std::runtime_error {
-public:
-	explicit GpuSubmissionStrandedError(const char* what) : std::runtime_error(what) {}
-};
+// GpuSubmissionStrandedError (a submission the engine cannot confirm recovered; rule 0 of the fault
+// classification below) is declared in submission_ledger.h from G3, so the D3D12-free ledger can
+// throw it.
 
 // SSLM_GPU_HR's failure branch: E_OUTOFMEMORY throws GpuAllocationError, every other failing
 // HRESULT a plain std::runtime_error.
@@ -143,15 +150,64 @@ inline GpuFaultRule ClassifyGpuFault(bool stranded, bool device_removed, bool al
 // Other for every other cause (final).
 enum class SetupFailure { None, Allocation, Other };
 
-struct Device {
+// Runs `f` when the scope ends, however it ends (review-g23 F1's keep-alive guards). `f` must not throw.
+template <class F>
+struct OnScopeExit {
+	F f;
+	explicit OnScopeExit(F fn) noexcept : f(std::move(fn)) {}
+	OnScopeExit(const OnScopeExit&) = delete;
+	OnScopeExit& operator=(const OnScopeExit&) = delete;
+	~OnScopeExit() { f(); }
+};
+template <class F>
+OnScopeExit(F) -> OnScopeExit<F>;
+
+// From G3 (plan §4.4, *The submission ledger*) a Device is a SubmissionDevice: its queue, command
+// allocator, fence and fence event are private, and the only ways to reset, submit and wait are
+// the base's BeginRecording(), Submit(), Wait(v), Poll(v) and Drain(), which keep the ledger. The
+// command list stays public: recording into it is not a submission.
+struct Device final : public SubmissionDevice {
+	Device() noexcept = default;
+	// review-g23 F1: a stranded submission's graveyard is abandoned, never freed. The queue may
+	// still be executing that submission when the device goes (nothing confirmed its fence), and the
+	// device is lost by contract, so its keep-alives are a deliberate leak. (Releasing them after a
+	// last confirmed fence value was tried: on the software GPU it made the process crash at exit
+	// more often, not less, while vkd3d-proton still counted the stranded list as pending.)
+	~Device() override { AbandonStrandedKeepAlives(); }
+
+	// review-g23 F1: keeps `keep...` alive for ever, a deliberate reference leak, because a stranded
+	// submission's work may still read or write them (the device is lost by contract, rule 0).
+	template <class... T>
+	void KeepResourcesAliveStranded(const ComPtr<T>&... keep) noexcept {
+		(KeepOneResourceAliveStranded(keep.Get()), ...);
+	}
+	// True when work was executed since `counter_before` (a submission_counter() reading) and the
+	// ledger is now stranded: that work may still be running, so what it uses must stay alive.
+	bool StrandedSince(uint64_t counter_before) const noexcept {
+		return fence_value_counter() != counter_before && ledger().Stranded();
+	}
+	// A synchronous site's submission and wait (Submit(retry), then the submission's Wait()), with the
+	// site's per-call resources kept alive when either strands: once the Signal or the wait cannot be
+	// confirmed, the GPU may still use them, so they are not released on the way out (review-g23 F1).
+	// Throws what Submit() or Wait() throws. (A scope guard, not a catch: the library's outermost try
+	// blocks all end in catch (...), and this is not one.)
+	template <class... T>
+	void SubmitAndWaitKeepingAlive(bool retry, const ComPtr<T>&... keep) {
+		const uint64_t counter_before = submission_counter();
+		const OnScopeExit keep_on_strand{[&]() noexcept {
+			if (StrandedSince(counter_before)) KeepResourcesAliveStranded(keep...);
+		}};
+		Submit(retry).Wait();
+	}
+	void KeepOneResourceAliveStranded(IUnknown* p) noexcept {
+		if (p == nullptr) return;
+		p->AddRef();  // never Released: see KeepResourcesAliveStranded
+		NoteStrandedKeepAlive();
+	}
+
 	ComPtr<IDXGIAdapter1> adapter;
 	ComPtr<ID3D12Device> dev;
-	ComPtr<ID3D12CommandQueue> queue;
-	ComPtr<ID3D12CommandAllocator> alloc;
 	ComPtr<ID3D12GraphicsCommandList> list;
-	ComPtr<ID3D12Fence> fence;
-	HANDLE fence_event = nullptr;
-	UINT64 fence_val = 0;
 	// Set last by a successful Init() and never cleared. Every other field is written only while
 	// this is false (by Init(), and for the process's device by GetDevice() under its mutex), so a
 	// reader that sees true sees a Device that no longer changes; every reader checks it first.
@@ -327,7 +383,6 @@ struct Device {
 			fence_event = nullptr;
 		}
 		fence.Reset();
-		fence_val = 0;
 		list.Reset();
 		alloc.Reset();
 		queue.Reset();
@@ -339,9 +394,62 @@ struct Device {
 		create_device_out_of_memory_ = false;
 	}
 
+	// The fence value of this device's last attempted Signal (the base's counter; today's
+	// fence_val). A tail's catch compares it with the value it read before Submit() to learn
+	// whether ExecuteCommandLists ran. Read only by the thread that submits (P1).
+	uint64_t submission_counter() const noexcept { return fence_value_counter(); }
+
+	// True for the process's submission device (GetDevice()'s, below): the queue gate is consulted
+	// only there.
+	bool IsProcessSingleton() const noexcept;
+
 private:
 	// True when a D3D12CreateDevice call in this Init() returned E_OUTOFMEMORY.
 	bool create_device_out_of_memory_ = false;
+
+	// The ledger's private primitives (plan §4.4): nothing outside the base's submission surface
+	// reaches the queue, the allocator or the fence.
+	ComPtr<ID3D12CommandQueue> queue;
+	ComPtr<ID3D12CommandAllocator> alloc;
+	ComPtr<ID3D12Fence> fence;
+	HANDLE fence_event = nullptr;
+
+	void ResetAllocatorAndList() override {
+		SSLM_GPU_HR(alloc->Reset());
+		SSLM_GPU_HR(list->Reset(alloc.Get(), nullptr));
+#if defined(SUPERSLM_GPU_STATE_TRACKING)
+		state_tracking::OnReset(list.Get());  // whatever the list held unexecuted is discarded
+#endif
+	}
+	// The queue gate's wait (fault-injection builds, the singleton only), then ExecuteCommandLists.
+	// Defined after GetDevice() below.
+	void ExecuteRecordedList() override;
+	// queue->Signal(fence, v). In the T2169 chunk-recording build the signal-fault seam fires here
+	// (inside Submit(), after ExecuteCommandLists): the armed Signal is not made, and
+	// ThrowSignalFailure reports it with the seam's own message. Defined below GetDevice().
+	bool SignalFence(uint64_t value, int32_t* failure) noexcept override;
+	[[noreturn]] void ThrowSignalFailure(int32_t failure) override;
+	uint64_t CompletedFenceValue() noexcept override {
+		const uint64_t v = fence->GetCompletedValue();
+#if defined(SUPERSLM_GPU_STATE_TRACKING)
+		state_tracking::OnCompleted(list.Get(), v);  // the submissions signalled at or below `v` are done
+#endif
+		return v;
+	}
+	// A failed SetEventOnCompletion means the wait cannot be confirmed (the ledger's lost_).
+	bool WaitFenceEvent(uint64_t value) noexcept override {
+		const HRESULT hr = fence->SetEventOnCompletion(value, fence_event);
+		if (FAILED(hr)) {
+			std::fprintf(stderr, "superslm_gpu: SetEventOnCompletion failed 0x%08lx\n",
+			             static_cast<unsigned long>(hr));
+			return false;
+		}
+		WaitForSingleObject(fence_event, INFINITE);
+#if defined(SUPERSLM_GPU_STATE_TRACKING)
+		state_tracking::OnCompleted(list.Get(), value);
+#endif
+		return true;
+	}
 
 	void InitSteps() {
 		// T-2169 (D-SLM3649's own owed evidence, Dan's review): SSLM_GPU_ENABLE_DEBUG_LAYER, when
@@ -484,7 +592,7 @@ private:
 			// Only when SSLM_GPU_ADAPTER_INDEX was set -- see the Init() header comment (S2).
 			DXGI_ADAPTER_DESC1 d;
 			adapter->GetDesc1(&d);
-			std::fwprintf(stderr, L"# adapter: %s\n", d.Description);
+			std::fwprintf(stderr, L"# adapter: %ls\n", d.Description);
 			std::fflush(stderr);
 		}
 		D3D12_COMMAND_QUEUE_DESC qd{};
@@ -512,10 +620,13 @@ public:
 
 	// Throwing wrapper over TryMakeBuffer, through SSLM_GPU_HR: GpuAllocationError for
 	// E_OUTOFMEMORY, a plain std::runtime_error for every other failing HRESULT.
+	// `at` is the creating call, recorded by the resource-state tracker (gpu_resource_state_tracker.h)
+	// in a tracking build and unused otherwise.
 	ComPtr<ID3D12Resource> MakeBuffer(UINT64 bytes, D3D12_HEAP_TYPE heap, D3D12_RESOURCE_FLAGS flags,
-	                                   D3D12_RESOURCE_STATES state) {
+	                                   D3D12_RESOURCE_STATES state,
+	                                   const std::source_location at = std::source_location::current()) {
 		ComPtr<ID3D12Resource> r;
-		SSLM_GPU_HR(TryMakeBuffer(bytes, heap, flags, state, &r));
+		SSLM_GPU_HR(TryMakeBuffer(bytes, heap, flags, state, &r, at));
 		return r;
 	}
 
@@ -526,7 +637,8 @@ public:
 	// through here: MakeBuffer wraps it and Upload calls MakeBuffer. In test builds it counts every
 	// call and can fail a chosen occurrence (GpuTestSeamState above).
 	HRESULT TryMakeBuffer(UINT64 bytes, D3D12_HEAP_TYPE heap, D3D12_RESOURCE_FLAGS flags,
-	                      D3D12_RESOURCE_STATES state, ComPtr<ID3D12Resource>* out) {
+	                      D3D12_RESOURCE_STATES state, ComPtr<ID3D12Resource>* out,
+	                      const std::source_location at = std::source_location::current()) {
 		out->Reset();
 #if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
 		{
@@ -535,6 +647,8 @@ public:
 			seam.alloc_count += 1;
 			if (seam.alloc_in_bundle.size() < (1u << 20)) {
 				seam.alloc_in_bundle.push_back(seam.bundle_scope > 0);
+				seam.alloc_bytes.push_back(bytes);
+				seam.alloc_heap.push_back(static_cast<uint32_t>(heap));
 			}
 			if (seam.alloc_fault_countdown != 0 && --seam.alloc_fault_countdown == 0) {
 				return seam.alloc_fault_hr;
@@ -553,8 +667,13 @@ public:
 		rd.SampleDesc.Count = 1;
 		rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 		rd.Flags = flags;
-		return dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, state, nullptr,
-		                                    IID_PPV_ARGS(out->ReleaseAndGetAddressOf()));
+		const HRESULT hr = dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, state, nullptr,
+		                                                IID_PPV_ARGS(out->ReleaseAndGetAddressOf()));
+#if defined(SUPERSLM_GPU_STATE_TRACKING)
+		if (SUCCEEDED(hr)) state_tracking::OnCreate(out->Get(), bytes, heap, state, at);
+#endif
+		if (SUCCEEDED(hr) && debug_layer_enabled) NameBufferBySite(out->Get(), at, heap);
+		return hr;
 	}
 
 	// What CloseListConfirmed found: the first Close's HRESULT, and whether the list ended Closed.
@@ -587,6 +706,9 @@ public:
 			out.closed = true;
 			how = "closed by the retry";
 		} else if (SUCCEEDED(list->Reset(alloc.Get(), nullptr)) && SUCCEEDED(list->Close())) {
+#if defined(SUPERSLM_GPU_STATE_TRACKING)
+			state_tracking::OnReset(list.Get());  // the confirm step discarded the recording
+#endif
 			out.closed = true;
 			how = "confirmed closed";
 		}
@@ -608,33 +730,6 @@ public:
 		ThrowGpuHrFailure(close.first_hr, __FILE__, __LINE__);
 	}
 
-	// Waits for the fence to reach fence_val. A failed SetEventOnCompletion means the wait cannot
-	// be confirmed, so the submitted work's completion is unknown: GpuSubmissionStrandedError.
-	void WaitForFenceOrStrand() {
-		if (fence->GetCompletedValue() < fence_val) {
-			const HRESULT hr = fence->SetEventOnCompletion(fence_val, fence_event);
-			if (FAILED(hr)) {
-				std::fprintf(stderr, "superslm_gpu: SetEventOnCompletion failed 0x%08lx\n",
-				             static_cast<unsigned long>(hr));
-				throw GpuSubmissionStrandedError("D3D12 fence wait could not be confirmed");
-			}
-			WaitForSingleObject(fence_event, INFINITE);
-		}
-	}
-
-	// Signals the fence at a fresh value after ExecuteCommandLists, with no retry, and waits for
-	// it. A failed Signal leaves submitted work whose completion cannot be confirmed:
-	// GpuSubmissionStrandedError.
-	void SignalAndWaitOrStrand() {
-		const HRESULT hr = queue->Signal(fence.Get(), ++fence_val);
-		if (FAILED(hr)) {
-			std::fprintf(stderr, "superslm_gpu: fence Signal failed 0x%08lx\n",
-			             static_cast<unsigned long>(hr));
-			throw GpuSubmissionStrandedError("D3D12 fence Signal failed after ExecuteCommandLists");
-		}
-		WaitForFenceOrStrand();
-	}
-
 	HRESULT CloseListOnce() {
 #if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
 		{
@@ -644,14 +739,19 @@ public:
 				seam.close_failures -= 1;
 				return E_FAIL;  // injected: the list is not closed
 			}
+			if (seam.pool_zero_fill_scope > 0 && seam.pool_zero_fill_close_failures > 0) {
+				seam.pool_zero_fill_close_failures -= 1;
+				return E_FAIL;  // injected (paged KV G3): the pool zero-fill's list is not closed
+			}
 		}
 #endif
 		return list->Close();
 	}
 
-	ComPtr<ID3D12Resource> Upload(const void* data, UINT64 bytes) {
+	ComPtr<ID3D12Resource> Upload(const void* data, UINT64 bytes,
+	                              const std::source_location at = std::source_location::current()) {
 		auto r = MakeBuffer(bytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE,
-		                     D3D12_RESOURCE_STATE_GENERIC_READ);
+		                     D3D12_RESOURCE_STATE_GENERIC_READ, at);
 		void* p = nullptr;
 		D3D12_RANGE none{0, 0};
 		SSLM_GPU_HR(r->Map(0, &none, &p));
@@ -775,17 +875,37 @@ public:
 	// root signature carries, the same "subset usage" already proven by every GEMM-only
 	// dispatch shader that skips t3-t6 (ModelConstants/SiluLut/RopeCosTable/RopeSinTable)
 	// while sharing this identical signature.
-	static constexpr UINT kComposedResourceBindingCount = 14;  // 10 SRV + 4 UAV
+	// Paged-KV plan (rev 16.1) §4 item 1, step G2: 14 -> 15 (11 SRV + 4 UAV). The new SRV, t10
+	// KvPageTable, is the K/V page table site_common.hlsli's KvRowAddrGpu reads (one uint physical page
+	// per logical page); only the six K/V shaders declare it.
+	static constexpr UINT kComposedResourceBindingCount = 15;  // 11 SRV + 4 UAV
+	// The two root-constant blocks: b0 (28 values, below) and, from G2, b1 (g_page_positions,
+	// g_page_bytes), its own block so that no shader's b0 layout moves.
+	static constexpr UINT kComposedRootConstantCount = 28;
+	static constexpr UINT kComposedPageConstantCount = 2;
+	// The root parameter indices of the two G2 bindings (after b0 at 0 and the 14 pre-G2 descriptors
+	// at 1-14).
+	static constexpr UINT kComposedRootParamKvPageTable = 15;     // t10 KvPageTable (root SRV)
+	static constexpr UINT kComposedRootParamKvPageConstants = 16;  // b1 KvPageConstants (2 constants)
+	// The composed root signature's size in DWORDs (paged-KV plan §4 item 1 and §2 G34; recorded at G2):
+	// one DWORD per root constant and two per root descriptor -- 28 + 2 + 15 * 2 = 60 of D3D12's 64
+	// (56 before G2: 28 + 14 * 2). Four DWORDs of headroom remain; if a later arc needs more before
+	// this one lands, the two page constants move into the ModelConstants SRV, which costs none.
+	static constexpr UINT kComposedRootSignatureDwords =
+	    kComposedRootConstantCount + kComposedPageConstantCount + 2u * kComposedResourceBindingCount;
+	static_assert(kComposedRootSignatureDwords == 60,
+	              "paged-KV plan §4 item 1 records the composed root signature at 60 DWORDs");
+	static_assert(kComposedRootSignatureDwords <= 64, "D3D12 caps a root signature at 64 DWORDs");
 
 	ComPtr<ID3D12RootSignature> MakeRootSigComposed() {
-		D3D12_ROOT_PARAMETER ps[1 + kComposedResourceBindingCount]{};
+		D3D12_ROOT_PARAMETER ps[1 + kComposedResourceBindingCount + 1]{};
 		ps[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
 		// T-2432 (Track A step 9): grown 27 -> 28. The 28th value (index 27) carries Q_WIDTH
 		// (num_attention_heads * head_dim) for q_proj_gemm_site.hlsl/o_proj_gemm_site.hlsl
 		// (plain `bind_and_dispatch`, at index 11 of ITS OWN 12-value block) and
 		// q_proj_site.hlsl (tail `bind_and_dispatch_tail`, at index 27) -- see
 		// superslm_gpu.cpp's own bind_and_dispatch/bind_and_dispatch_tail lambdas.
-		ps[0].Constants.Num32BitValues = 28;  // 10th: num_hidden_layers (commit_site.hlsl only);
+		ps[0].Constants.Num32BitValues = kComposedRootConstantCount;  // 28. 10th: num_hidden_layers (commit_site.hlsl only);
 		                                      // 11th: T-2113 (B4) GEMM lanes (the six
 		                                      // <site>_gemm_site.hlsl dispatches only);
 		                                      // 12th-19th/20th-27th: T-2113 (B10 lever 1b) two
@@ -835,9 +955,19 @@ public:
 		ps[13].Descriptor.ShaderRegister = 8;  // t8 LoraAB (adapter lora_A+lora_B bytes)
 		ps[14].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
 		ps[14].Descriptor.ShaderRegister = 9;  // t9 Fold (adapter DeltaFoldScales+UFoldScales)
+		// Paged-KV plan §4 item 1 (G2): the K/V page table and the two page constants.
+		ps[kComposedRootParamKvPageTable].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+		ps[kComposedRootParamKvPageTable].Descriptor.ShaderRegister = 10;  // t10 KvPageTable
+		ps[kComposedRootParamKvPageConstants].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+		ps[kComposedRootParamKvPageConstants].Constants.Num32BitValues = kComposedPageConstantCount;
+		ps[kComposedRootParamKvPageConstants].Constants.ShaderRegister = 1;  // b1 KvPageConstants
+		ps[kComposedRootParamKvPageConstants].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+		static_assert(kComposedRootParamKvPageTable == 1 + kComposedResourceBindingCount - 1 &&
+		                  kComposedRootParamKvPageConstants == 1 + kComposedResourceBindingCount,
+		              "the G2 parameters follow the 14 pre-G2 descriptors, in this order");
 
 		D3D12_ROOT_SIGNATURE_DESC rs{};
-		rs.NumParameters = 1 + kComposedResourceBindingCount;
+		rs.NumParameters = 1 + kComposedResourceBindingCount + 1;
 		rs.pParameters = ps;
 		ComPtr<ID3DBlob> blob, err;
 		HRESULT hr = D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err);
@@ -893,24 +1023,17 @@ public:
 		                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 		auto readback = MakeBuffer(out_bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
 		                            D3D12_RESOURCE_STATE_COPY_DEST);
-		SSLM_GPU_HR(alloc->Reset());
-		SSLM_GPU_HR(list->Reset(alloc.Get(), pso));
+		BeginRecording();
+		list->SetPipelineState(pso);
 		list->SetComputeRootSignature(rs);
-		list->SetComputeRootShaderResourceView(0, in_buf->GetGPUVirtualAddress());
-		list->SetComputeRootUnorderedAccessView(1, uav->GetGPUVirtualAddress());
-		list->Dispatch(1, 1, 1);
-		D3D12_RESOURCE_BARRIER b{};
-		b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-		b.Transition.pResource = uav.Get();
-		b.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-		b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-		b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-		list->ResourceBarrier(1, &b);
-		list->CopyResource(readback.Get(), uav.Get());
+		BindRootSrv(list.Get(), 0, in_buf.Get());
+		BindRootUav(list.Get(), 1, uav.Get());
+		RecordDispatch(list.Get(), 1, 1, 1);
+		RecordTransition(list.Get(), uav.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+		                 D3D12_RESOURCE_STATE_COPY_SOURCE);
+		RecordCopyResource(list.Get(), readback.Get(), uav.Get());
 		CloseListOrThrow();
-		ID3D12CommandList* lists[] = {list.Get()};
-		queue->ExecuteCommandLists(1, lists);
-		SignalAndWaitOrStrand();
+		SubmitAndWaitKeepingAlive(/*retry=*/false, in_buf, uav, readback);
 		std::vector<uint8_t> out(out_bytes);
 		void* p = nullptr;
 		D3D12_RANGE range{0, (SIZE_T)out_bytes};
@@ -935,8 +1058,13 @@ struct DeviceHolder {
 	bool setup_attempted = false;
 };
 
+// Plan §4.4 (*The ledger term never constructs the device*): the holder lives at namespace scope,
+// not inside GetDevice(), so SingletonLedgerIfConstructed() below can read the device's
+// `available` flag without constructing or setting up anything.
+inline DeviceHolder g_device_holder;
+
 inline Device& GetDevice() noexcept {
-	static DeviceHolder holder;
+	DeviceHolder& holder = g_device_holder;
 	if (holder.device.available.load()) return holder.device;
 	std::lock_guard<std::mutex> lock(holder.mutex);
 	if (!holder.setup_attempted) {
@@ -948,6 +1076,90 @@ inline Device& GetDevice() noexcept {
 		holder.device.Init();
 	}
 	return holder.device;
+}
+
+// The guard's ledger term (plan §4.4, *Scope*): the singleton's ledger when the process's device is
+// set up, null otherwise (no device: nothing was ever submitted on it, which the term reads as
+// observed). Never constructs or sets up the device. `available` is stored last by a successful
+// Init() and never cleared, so a reader that loads true sees a ledger that is never replaced.
+inline const SubmissionLedger* SingletonLedgerIfConstructed() noexcept {
+	Device& d = g_device_holder.device;
+	return d.available.load(std::memory_order_acquire) ? &d.ledger() : nullptr;
+}
+
+inline bool Device::IsProcessSingleton() const noexcept { return this == &g_device_holder.device; }
+
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION) || defined(SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION)
+#define SUPERSLM_GPU_QUEUE_GATE_SEAM 1
+// Plan §4.4, *The queue gate*: a test seam in both injection builds. While `held`, every Submit()
+// on the singleton makes its queue wait on `fence` at `target` before ExecuteCommandLists, so the
+// submission stays incomplete until ReleaseQueueGateForTest() signals the gate from the host. A
+// per-context device is never gated. ArmQueueGateForTest() / ReleaseQueueGateForTest() (gpu_port.h,
+// defined in gpu_1p0.cpp) hold and release it; the release is idempotent, and an arm after a
+// release holds the next submission at a fresh target.
+struct QueueGateState {
+	std::mutex mutex;
+	ComPtr<ID3D12Fence> fence;  // made on the singleton's device (a gate fence is waited on only there)
+	uint64_t counter = 0;
+	uint64_t target = 0;
+	bool held = false;
+};
+inline QueueGateState& QueueGate() {
+	static QueueGateState state;
+	return state;
+}
+#endif
+
+#if defined(SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION)
+// The T2169 build's signal-fault seam (superslm_gpu.cpp, ArmT2169ChunkRecordingTailSignalFaultInjection),
+// moved inside Submit() at G3 (plan §4.4, *Costs on today's paths*): single-shot; consumed by the
+// singleton's first Signal after it is armed, which is then not made. Defined in superslm_gpu.cpp.
+bool ConsumeT2169ChunkRecordingTailSignalFault() noexcept;
+[[noreturn]] void ThrowT2169ChunkRecordingTailSignalFault();
+// The failure code SignalFence reports for the seam: a success HRESULT, so never a real Signal
+// failure's.
+constexpr int32_t kT2169SignalSeamFailure = 0x00005EA1;
+#endif
+
+inline void Device::ExecuteRecordedList() {
+#if defined(SUPERSLM_GPU_QUEUE_GATE_SEAM)
+	if (IsProcessSingleton()) {
+		QueueGateState& gate = QueueGate();
+		std::lock_guard<std::mutex> lock(gate.mutex);
+		if (gate.held && gate.fence) SSLM_GPU_HR(queue->Wait(gate.fence.Get(), gate.target));
+	}
+#endif
+	ID3D12CommandList* lists[] = {list.Get()};
+	queue->ExecuteCommandLists(1, lists);
+#if defined(SUPERSLM_GPU_STATE_TRACKING)
+	state_tracking::OnExecute(list.Get());  // the list's pending states become the buffers' states
+#endif
+}
+
+inline bool Device::SignalFence(uint64_t value, int32_t* failure) noexcept {
+#if defined(SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION)
+	if (IsProcessSingleton() && ConsumeT2169ChunkRecordingTailSignalFault()) {
+		*failure = kT2169SignalSeamFailure;
+		return false;
+	}
+#endif
+	const HRESULT hr = queue->Signal(fence.Get(), value);
+	if (FAILED(hr)) {
+		std::fprintf(stderr, "superslm_gpu: fence Signal failed 0x%08lx\n", static_cast<unsigned long>(hr));
+		*failure = static_cast<int32_t>(hr);
+		return false;
+	}
+#if defined(SUPERSLM_GPU_STATE_TRACKING)
+	state_tracking::OnSignal(list.Get(), value);  // what the execute touched is reachable until `value` completes
+#endif
+	return true;
+}
+
+inline void Device::ThrowSignalFailure(int32_t failure) {
+#if defined(SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION)
+	if (failure == kT2169SignalSeamFailure) ThrowT2169ChunkRecordingTailSignalFault();
+#endif
+	ThrowGpuHrFailure(static_cast<HRESULT>(failure), __FILE__, __LINE__);
 }
 
 // Whether `dev` reports itself removed, the fault classifier's rule-1 input. A Device that was

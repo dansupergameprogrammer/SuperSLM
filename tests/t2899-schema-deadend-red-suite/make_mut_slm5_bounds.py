@@ -1,6 +1,7 @@
 """T-2916/T-2917 (Curie/Brunel) -- generates one of two MUT_SLM5 variants of `gpu_1p0.cpp` FROM
 THE LIVE TIP, each deleting one of TE-370 S3's two remaining unpinned bounds checks in
-`sslm_gpu_seq_restoreImpl` (`src/gpu/gpu_1p0.cpp`, around lines 2200-2220):
+`RestoredSchemaBindingValid` (`src/gpu/gpu_1p0.cpp`; until paged-KV step G5 these sat inline in
+`sslm_gpu_seq_restoreImpl`), which both GPU restore verbs call:
 
   WALKSTATE    -- `if (!resolved_entry || restored_walk_state >= resolved_entry->state_count) { ... }`
   UNBOUNDWALK  -- `else if (restored_walk_state != 0xFFFFFFFFu) { ... }` (the symmetric
@@ -26,7 +27,13 @@ Usage: python make_mut_slm5_bounds.py <WALKSTATE|UNBOUNDWALK> <path-to-gpu_1p0.c
 """
 import sys
 
-# Exact text, extracted verbatim from src/gpu/gpu_1p0.cpp at T-2917 (tabs, not spaces).
+# Exact text, extracted verbatim from src/gpu/gpu_1p0.cpp (tabs, not spaces). Paged KV step G5
+# (plan §9.2: "G5 re-runs it and re-anchors its patch"): the two checks moved, unchanged, out of
+# `sslm_gpu_seq_restoreImpl` into `RestoredSchemaBindingValid`, which both GPU restore verbs call
+# (the dedicated restore after its round trip, `sslm_gpu_seq_restore_into_pool` before it draws). The
+# anchor is that helper's body; each refusal there is `return false`, which the dedicated restore maps
+# to releasing `fresh` and SSLM_SEQUENCE_KV_BUFFER_MISMATCH exactly as before. Each mutant therefore
+# deletes its check from both verbs at once.
 _ORIGINAL = (
     "\tif (restored_schema_index >= 0) {\n"
     "\t\t// T-2917 (folding TE-370 S3, D-SLM7600): the `>= model->schemas.Count()` pre-check\n"
@@ -41,14 +48,12 @@ _ORIGINAL = (
     "\t\tconst superslm::SchemaEntry* resolved_entry =\n"
     "\t\t    model->schemas.ByIndex(static_cast<size_t>(restored_schema_index));\n"
     "\t\tif (!resolved_entry || restored_walk_state >= resolved_entry->state_count) {\n"
-    "\t\t\tsslm_gpu_seq_release(ctx, fresh);\n"
-    "\t\t\treturn SSLM_SEQUENCE_KV_BUFFER_MISMATCH;\n"
+    "\t\t\treturn false;\n"
     "\t\t}\n"
     "\t} else if (restored_walk_state != 0xFFFFFFFFu) {\n"
     "\t\t// Symmetric malformation, mirroring sslm_seq_restore's own identical check: an unbound\n"
     "\t\t// blob (schema index < 0) must carry the unused-walk sentinel, never a real state id.\n"
-    "\t\tsslm_gpu_seq_release(ctx, fresh);\n"
-    "\t\treturn SSLM_SEQUENCE_KV_BUFFER_MISMATCH;\n"
+    "\t\treturn false;\n"
     "\t}\n"
 )
 
@@ -61,8 +66,7 @@ _REPLACEMENTS = {
         "\t\t    model->schemas.ByIndex(static_cast<size_t>(restored_schema_index));\n"
         "\t\t(void)resolved_entry;\n"
         "\t} else if (restored_walk_state != 0xFFFFFFFFu) {\n"
-        "\t\tsslm_gpu_seq_release(ctx, fresh);\n"
-        "\t\treturn SSLM_SEQUENCE_KV_BUFFER_MISMATCH;\n"
+        "\t\treturn false;\n"
         "\t}\n"
     ),
     "UNBOUNDWALK": (
@@ -70,8 +74,7 @@ _REPLACEMENTS = {
         "\t\tconst superslm::SchemaEntry* resolved_entry =\n"
         "\t\t    model->schemas.ByIndex(static_cast<size_t>(restored_schema_index));\n"
         "\t\tif (!resolved_entry || restored_walk_state >= resolved_entry->state_count) {\n"
-        "\t\t\tsslm_gpu_seq_release(ctx, fresh);\n"
-        "\t\t\treturn SSLM_SEQUENCE_KV_BUFFER_MISMATCH;\n"
+        "\t\t\treturn false;\n"
         "\t\t}\n"
         "\t}\n"
         "\t// T-2916 MUT_UNBOUNDWALK: the symmetric unbound-carries-a-real-walk check deleted.\n"

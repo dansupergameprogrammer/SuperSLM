@@ -165,8 +165,7 @@ struct SizedLegacyPool {
 
 // §3.1's address, written here: the byte offset of (layer, half, kv_head, pos % B) inside a page.
 inline size_t InPageOffset(const Fixture& fx, uint32_t layer, uint32_t half, uint32_t h, int64_t pos) {
-	const size_t B = static_cast<size_t>(fx.B()), D = fx.geo.head_dim;
-	return ((size_t{layer} * 2 + half) * fx.geo.kv_heads + h) * B * D + static_cast<size_t>(pos % fx.B()) * D;
+	return PageRunOffset(fx.geo.layers, fx.geo.kv_heads, fx.geo.head_dim, fx.B(), layer, half, h, pos);
 }
 
 // Rows [0, L) of a live legacy sequence, read through the page-index peek and the table-entry

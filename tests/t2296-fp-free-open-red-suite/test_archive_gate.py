@@ -27,7 +27,7 @@ Sec4.1's resolving-power clause (D-SLM5066): the smallest unit-count change
 the population's own cells are built to separate. Most cells here resolve
 membership/classification at the finest available grain (one member, one
 mnemonic); nothing in this file tests the composition stage's own
-resolving power over the full 1..18 position sweep -- that is
+resolving power over the full 1..20 position sweep -- that is
 test_archive_composition.py's own subject.
 """
 from __future__ import annotations
@@ -162,24 +162,26 @@ def _run_scan_build_output(build_dir):
 # ===========================================================================
 
 def test_dslm5055_real_coff_archive_member_counts(real_coff_archive):
-    """D-SLM5055: the real Windows/lib.exe archive is 20 members
-    (2 SYMTAB + 1 LONGNAMES + 17 OBJECT). Fixture verification only
+    """D-SLM5055: the real Windows/lib.exe archive is 22 members
+    (2 SYMTAB + 1 LONGNAMES + 20 OBJECT). Fixture verification only
     (archive_fixtures.raw_member_counts, NOT the production reader) --
     confirms the real archive this session's own build produced genuinely
     has the shape the thirty-seventh/-eighth populations' own must-accept
     claims, independent of whether the production reader exists yet."""
     total, counts = af.raw_member_counts(real_coff_archive)
     # Decode threading D0 added src/forward/parallel_split.cpp: 18 objects, 21 members from D0 on.
-    assert total == 21, "expected 21 total members, found {} ({})".format(total, counts)
+    # The paged-KV page module added src/kv_pages.cpp: 19 objects, 22 members from then on.
+    # GPU paged KV G3 added src/gpu/gpu_inflight_registry.cpp: 20 objects, 23 members from then on.
+    assert total == 23, "expected 23 total members, found {} ({})".format(total, counts)
     assert counts.get("SYMTAB") == 2, counts
     assert counts.get("LONGNAMES") == 1, counts
-    assert counts.get("OBJECT") == 18, counts
+    assert counts.get("OBJECT") == 20, counts
 
 
 def test_dslm5055_real_elf_archive_member_counts(real_elf_archive):
     """D-SLM5055's own correction: GNU ar writes ONE symbol-table member
     where lib.exe writes two -- the real ELF archive is 19 members
-    (1 SYMTAB + 1 LONGNAMES + 17 OBJECT), not the Windows archive's 20.
+    (1 SYMTAB + 1 LONGNAMES + 17 OBJECT), not the Windows archive's 22.
     Fixture verification only."""
     total, counts = af.raw_member_counts(real_elf_archive)
     # A fixed, pre-built archive (see real_elf_archive), not this tree's build: it stays at 17
@@ -278,12 +280,14 @@ def test_dslm5071_current_scan_object_signature_keeps_corpus_symbols():
 # member is affected, only whether the container itself is trustworthy.
 # ===========================================================================
 
-def test_pop37_must_accept_real_archive_enumerates_seventeen_objects(real_coff_archive):
+def test_pop37_must_accept_real_archive_enumerates_its_objects(real_coff_archive):
     """Must-accept: the real, unmodified archive -- enumerate_archive_objects
-    yields exactly 17 OBJECT members, magic and all 20 headers well-formed."""
+    yields exactly 20 OBJECT members, magic and all 23 headers well-formed."""
     objs = scan.enumerate_archive_objects(real_coff_archive)
     # Decode threading D0 added src/forward/parallel_split.cpp: 18 from D0 on.
-    assert len(objs) == 18, "expected 18 real object members, got {}".format(len(objs))
+    # The paged-KV page module added src/kv_pages.cpp: 19 from then on.
+    # GPU paged KV G3 added src/gpu/gpu_inflight_registry.cpp: 20 from then on.
+    assert len(objs) == 20, "expected 20 real object members, got {}".format(len(objs))
 
 
 def test_pop37_must_reject_bad_magic(malformed_archives):
@@ -374,12 +378,12 @@ def test_pop37_38_malformed_archive_exits_2_at_composition_level(label, malforme
 
 def test_pop38_must_accept_no_fourth_branch(real_coff_archive):
     """Must-accept: the real archive's own two symbol-table members, its
-    longnames member, and its seventeen object members, each classified to
+    longnames member, and its twenty object members, each classified to
     its correct kind, no fourth branch -- the OBJECT-only view
-    (enumerate_archive_objects) must yield exactly 17, matching the
-    fixture-verified total member breakdown (test_dslm5055_... above, 2+1+17)."""
+    (enumerate_archive_objects) must yield exactly 20, matching the
+    fixture-verified total member breakdown (test_dslm5055_... above, 2+1+20)."""
     objs = scan.enumerate_archive_objects(real_coff_archive)
-    assert len(objs) == 18  # 17 until decode threading D0 added src/forward/parallel_split.cpp
+    assert len(objs) == 20  # 19 until src/gpu/gpu_inflight_registry.cpp; 18 until src/kv_pages.cpp; 17 until decode threading D0 added src/forward/parallel_split.cpp
 
 
 def test_pop38_must_reject_bad_member_name(malformed_archives):
@@ -392,15 +396,15 @@ def test_pop38_must_reject_bad_member_name(malformed_archives):
 
 
 # ===========================================================================
-# Population 39 -- zero-object-member archive. Resolving power: Δn = 17
-# (seventeen objects present versus zero) -- coarser than the forty-eighth
+# Population 39 -- zero-object-member archive. Resolving power: Δn = 20
+# (twenty objects present versus zero) -- coarser than the forty-eighth
 # population below, and does not by itself resolve a driver that silently
-# omits exactly one of the seventeen.
+# omits exactly one of the twenty.
 # ===========================================================================
 
-def test_pop39_must_accept_seventeen_objects_found(real_coff_archive):
-    """Must-accept: the real archive, seventeen object members found."""
-    assert len(scan.enumerate_archive_objects(real_coff_archive)) == 18  # 17 before decode threading D0
+def test_pop39_must_accept_its_objects_found(real_coff_archive):
+    """Must-accept: the real archive, its object members found."""
+    assert len(scan.enumerate_archive_objects(real_coff_archive)) == 20  # 19 before src/gpu/gpu_inflight_registry.cpp; 18 before src/kv_pages.cpp; 17 before decode threading D0
 
 
 def test_pop39_must_reject_zero_object_archive_at_reader_level(malformed_archives):
@@ -463,7 +467,7 @@ def test_pop40_no_archive_clean_directory_exits_2(tmp_path, real_build_dir):
     """Must-reject-shaped control 1 -- clean directory (D-SLM5103). A build
     directory with no archive at any of find_target_archive's four
     candidate locations, whose <target>.dir holds the real build's own
-    seventeen clean objects, must exit 2. A driver retaining the removed
+    nineteen clean objects, must exit 2. A driver retaining the removed
     fallback would scan the directory, find 0 REJECT / 0 REFUSE, and exit
     0 -- a false PASS over a corpus that is not the shipped artifact."""
     objects = scan_build_output.find_target_objects(real_build_dir, "superslm")

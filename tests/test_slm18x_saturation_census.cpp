@@ -15,10 +15,19 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <new>
 #include <string>
 #include <vector>
+
+#if defined(_WIN32)
+#include <malloc.h>
+#elif defined(__APPLE__)
+#include <malloc/malloc.h>
+#elif defined(__linux__)
+#include <malloc.h>
+#endif
 
 #include "superslm/forward_sites.h"
 #include "superslm/layer_marshal.h"
@@ -389,6 +398,335 @@ static void TestSlm19x_LegacySsb4RestoreAndTruncatedSsb5() {
 	CHECK_MSG(sslm_seq_restore(f.model, &f.pool, ssb5.data(), 150, &rt) == SSLM_INVALID_ARGUMENT,
 	          "an SSB5 blob cut at 150 bytes rejects SSLM_INVALID_ARGUMENT");
 	CHECK(rt == nullptr);
+}
+
+// ---------------------------------------------------------------------------------------------
+// T-3262: pool teardown order (C7 code review S-1, D-SLM8593) and the pin seam's guarantee.
+//
+// This unit hosts the cells because it is the translation unit of superslm_tests that can call
+// the C ABI and already carries the fixture-model helpers; the cells are about pool teardown, not
+// the saturation census.
+//
+// The order under test uses 1.11.0 calls only: map a model, create a pool on it, unmap the model
+// while the pool lives (sslm_model_unmap checks sequences, not pools, and returns SSLM_OK), then
+// destroy the pool. The defect this guards against is a pool destroy that writes into the model it
+// was made on: after sslm_model_unmap freed the model, that write lands in freed memory. The fix
+// (D-SLM8593) leaves the model alone in production pool destroy and keeps unmap accepting, so the
+// cell asserts unmap == SSLM_OK as the 1.11.0 behaviour and asserts that the destroy writes nothing
+// into the freed model.
+//
+// Two observers, each failing on the defect:
+//  - A sanitizer build (the linux-x64-asan job): AddressSanitizer reports the write as a
+//    heap-use-after-free inside sslm_kv_pool_destroy and the process aborts
+//    (-fno-sanitize-recover=all). The deterministic observer below stands down there, because the
+//    sanitizer's allocator keeps the freed block from being reissued; it stands down under
+//    ThreadSanitizer too, whose allocator need not reissue the block (the ASan job catches the defect).
+//  - Every other build: the freed model block is reissued to the test. The cell reads the model's
+//    block size (the allocator's own usable size, taken while the model is live), allocates blocks
+//    of that size after the unmap until one is placed at the freed model's address, zero-fills all
+//    of them, destroys the pool, and requires every byte still zero. A write into the freed model
+//    lands in the reissued block as a nonzero byte (a uint32 decremented from zero is 0xFFFFFFFF
+//    in the counter's own bytes, whatever its offset). The blocks belong to the test when the write
+//    happens, so the observation itself performs no invalid access. If no block lands on the freed
+//    model's address in an attempt, the observer saw nothing in that attempt; the attempt is repeated
+//    (up to 64 times: the Windows heap does not hand a freed block back every time) and the cell
+//    fails if no attempt lands, because a pass would be a cell that cannot fail. The observer has been
+//    run on Linux (glibc) and Windows (MSVC) allocators. On any other platform (macOS) an attempt
+//    that never lands is reported as a NOTE and does not fail the cell.
+// ---------------------------------------------------------------------------------------------
+
+#if defined(SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS)
+// The pin seam exists only where the library is built with the seam macro (superslm_test_injection
+// and the forced-tier libraries); build.bat's source list does not define it, so the seam cell is
+// compiled out there rather than left unresolved at link.
+extern "C" sslm_status KvPagesTestPinPagePositions(sslm_model model, int64_t page_positions);
+#endif
+
+// A sanitizer allocator (AddressSanitizer or ThreadSanitizer, GCC or Clang) quarantines or relocates
+// freed blocks, so the deterministic observer below cannot rely on a reissued block there.
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define SSLM_T3262_SANITIZER 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+#define SSLM_T3262_SANITIZER 1
+#endif
+#endif
+
+namespace {
+
+#if defined(SSLM_T3262_SANITIZER)
+constexpr bool kT3262Sanitizer = true;
+#else
+constexpr bool kT3262Sanitizer = false;
+#endif
+
+// Platforms where the deterministic observer has been run and must find its block.
+#if defined(_WIN32) || defined(__linux__)
+constexpr bool kT3262ObserverVerified = true;
+#else
+constexpr bool kT3262ObserverVerified = false;
+#endif
+
+// The allocator's usable size of a live block obtained from plain operator new, or 0 where it
+// cannot be read. sslm_model_map allocates its model with plain `new`.
+size_t T3262HeapBlockSize(void* p) {
+#if defined(_WIN32)
+	return _msize(p);
+#elif defined(__APPLE__)
+	return malloc_size(p);
+#elif defined(__linux__)
+	return malloc_usable_size(p);
+#else
+	(void)p;
+	return 0;
+#endif
+}
+
+enum class T3262Verb { kBlock, kPage, kContiguous };
+
+const char* T3262VerbName(T3262Verb v) {
+	switch (v) {
+		case T3262Verb::kBlock: return "sslm_kv_pool_create";
+		case T3262Verb::kPage: return "sslm_kv_page_pool_create";
+		case T3262Verb::kContiguous: return "sslm_kv_pool_create_contiguous";
+	}
+	return "?";
+}
+
+constexpr uint32_t kT3262Blocks = 2;
+
+struct T3262Model {
+	std::vector<uint8_t> bytes;
+	sslm_model model = nullptr;
+	int64_t cap = 0;
+
+	bool Open() {
+		const std::string path = ResolveFixturePath("t2572_arm_c_non_qknorm_fixture.sslm");
+		CHECK_MSG(!path.empty(), "fixture t2572_arm_c_non_qknorm_fixture.sslm not found");
+		if (path.empty()) return false;
+		CHECK_MSG(superslm_marshal::ReadFile(path.c_str(), bytes), "failed to read %s", path.c_str());
+		if (bytes.empty()) return false;
+		superslm::SslmModelView view;
+		std::string err;
+		if (superslm::SslmModel::Load(bytes.data(), bytes.size(), view, &err) !=
+		    superslm::SslmModelStatus::Ok) {
+			CHECK_MSG(false, "SslmModel::Load(fixture) failed: %s", err.c_str());
+			return false;
+		}
+		cap = static_cast<int64_t>(view.config.context_cap);
+		const sslm_status ms = sslm_model_map(bytes.data(), bytes.size(), &model);
+		CHECK_MSG(ms == SSLM_OK, "sslm_model_map(fixture) == %d, want SSLM_OK", static_cast<int>(ms));
+		return ms == SSLM_OK;
+	}
+};
+
+struct T3262Pool {
+	void* buf = nullptr;
+	sslm_kv_pool pool = nullptr;
+
+	bool Create(sslm_model model, int64_t cap, T3262Verb verb) {
+		size_t size = 0;
+		uint32_t page_count = 0;
+		switch (verb) {
+			case T3262Verb::kBlock:
+				size = kT3262Blocks * sslm_kv_block_size(model) +
+				       sslm_kv_pool_overhead_size(model, kT3262Blocks);
+				break;
+			case T3262Verb::kPage: {
+				const int64_t b = sslm_kv_page_positions(model);
+				page_count = static_cast<uint32_t>(kT3262Blocks * (cap / b));
+				size = static_cast<size_t>(page_count) * sslm_kv_page_size(model) +
+				       sslm_kv_page_pool_overhead_size(model, page_count);
+				break;
+			}
+			case T3262Verb::kContiguous:
+				size = sslm_kv_pool_contiguous_size(model, kT3262Blocks);
+				break;
+		}
+		CHECK_MSG(size != 0 && size != SIZE_MAX, "%s: pool size %zu is unusable", T3262VerbName(verb), size);
+		if (size == 0 || size == SIZE_MAX) return false;
+		buf = ::operator new(size, std::align_val_t(SSLM_ABI_ALIGNMENT_BYTES));
+		sslm_status st = SSLM_INVALID_ARGUMENT;
+		switch (verb) {
+			case T3262Verb::kBlock: st = sslm_kv_pool_create(model, buf, size, kT3262Blocks, &pool); break;
+			case T3262Verb::kPage: st = sslm_kv_page_pool_create(model, buf, size, page_count, &pool); break;
+			case T3262Verb::kContiguous:
+				st = sslm_kv_pool_create_contiguous(model, buf, size, kT3262Blocks, &pool);
+				break;
+		}
+		CHECK_MSG(st == SSLM_OK, "%s == %d, want SSLM_OK", T3262VerbName(verb), static_cast<int>(st));
+		return st == SSLM_OK;
+	}
+	void Free() {
+		if (buf) ::operator delete(buf, std::align_val_t(SSLM_ABI_ALIGNMENT_BYTES));
+		buf = nullptr;
+	}
+};
+
+}  // namespace
+
+// One attempt: map -> create pool -> unmap -> destroy pool, on one pool-create verb. Returns whether a
+// reissued block landed on the freed model's address (false where the observer stands down). A write
+// into the freed model that reached a reissued block fails the cell here.
+static bool T3262TeardownAttempt(T3262Verb verb) {
+	T3262Model m;
+	if (!m.Open()) return false;
+	T3262Pool p;
+	if (!p.Create(m.model, m.cap, verb)) {
+		if (m.model) sslm_model_unmap(m.model);
+		p.Free();
+		return false;
+	}
+	const uintptr_t model_addr = reinterpret_cast<uintptr_t>(m.model);
+	const size_t model_block = T3262HeapBlockSize(m.model);  // read while the model is live
+
+	// 1.11.0 behaviour kept: unmap does not refuse while a pool lives.
+	const sslm_status us = sslm_model_unmap(m.model);
+	CHECK_MSG(us == SSLM_OK, "%s: sslm_model_unmap with a live pool == %d, want SSLM_OK (1.11.0)",
+	          T3262VerbName(verb), static_cast<int>(us));
+	m.model = nullptr;
+	if (us != SSLM_OK) {
+		// The model is still live; tear down in the valid order so the process stays sound.
+		CHECK(sslm_kv_pool_destroy(p.pool) == SSLM_OK);
+		p.Free();
+		return false;
+	}
+
+	// Reissue the freed model block to the test, so a write into it is observable without any
+	// invalid access on the test's side. Skipped under AddressSanitizer: its quarantine keeps the
+	// block from being reissued, and the sanitizer is the observer there.
+	constexpr size_t kMaxModelBlock = 64 * 1024;
+	constexpr int kGroomBlocks = 8192;
+	std::vector<unsigned char*> groom;
+	bool landed = false;
+	const bool observe = !kT3262Sanitizer && model_block != 0 && model_block <= kMaxModelBlock;
+	if (observe) {
+		groom.reserve(kGroomBlocks);
+		for (int i = 0; i < kGroomBlocks; ++i) {
+			unsigned char* b = static_cast<unsigned char*>(::operator new(model_block));
+			std::memset(b, 0, model_block);
+			groom.push_back(b);
+			if (reinterpret_cast<uintptr_t>(b) == model_addr) landed = true;
+		}
+	}
+
+	const sslm_status ds = sslm_kv_pool_destroy(p.pool);  // the write, at 1.12.0
+	CHECK_MSG(ds == SSLM_OK, "%s: sslm_kv_pool_destroy == %d, want SSLM_OK", T3262VerbName(verb),
+	          static_cast<int>(ds));
+
+	if (observe) {
+		size_t dirty_bytes = 0;
+		size_t dirty_blocks = 0;
+		for (const unsigned char* b : groom) {
+			size_t d = 0;
+			for (size_t i = 0; i < model_block; ++i) d += (b[i] != 0);
+			dirty_bytes += d;
+			dirty_blocks += (d != 0);
+		}
+		CHECK_MSG(dirty_bytes == 0,
+		          "%s: sslm_kv_pool_destroy after sslm_model_unmap wrote %zu byte(s) in %zu block(s) of "
+		          "the freed model's memory (model block %zu bytes)",
+		          T3262VerbName(verb), dirty_bytes, dirty_blocks, model_block);
+	} else if (!kT3262Sanitizer) {
+		CHECK_MSG(false, "%s: model block size %zu is unreadable or above %zu; the write observer is off",
+		          T3262VerbName(verb), model_block, kMaxModelBlock);
+	}
+	for (unsigned char* b : groom) ::operator delete(b);
+	p.Free();
+	return landed;
+}
+
+// Runs attempts on one verb until the reissued block lands on the freed model, so the observation is
+// never vacuous. Windows' low-fragmentation heap does not hand a freed block back deterministically
+// (measured: some attempts land, some do not), hence the retry; a landing attempt that sees the write
+// fails the cell, and an attempt that does not land cannot pass the cell on its own. Under a sanitizer
+// one attempt is made and the sanitizer observes.
+static void TestT3262_PoolDestroyAfterModelUnmapWritesNothingIntoTheFreedModel(T3262Verb verb) {
+	constexpr int kMaxAttempts = 64;
+	if (kT3262Sanitizer) {
+		T3262TeardownAttempt(verb);
+		return;
+	}
+	for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+		const int failures_before = GFailures;
+		if (T3262TeardownAttempt(verb)) return;
+		if (GFailures != failures_before) return;  // a refusal or setup failure: more attempts add noise only
+	}
+	if (kT3262ObserverVerified) {
+		CHECK_MSG(false,
+		          "%s: no reissued block landed on the freed model's address in %d attempts; the write "
+		          "observer cannot see the destroy, so a pass here would be vacuous",
+		          T3262VerbName(verb), kMaxAttempts);
+	} else {
+		std::printf("NOTE %s: write observer unverified on this allocator and found no landing block in %d "
+		            "attempts\n",
+		            T3262VerbName(verb), kMaxAttempts);
+	}
+}
+
+static void TestT3262_PoolDestroyAfterModelUnmapAllVerbs() {
+	TestT3262_PoolDestroyAfterModelUnmapWritesNothingIntoTheFreedModel(T3262Verb::kBlock);
+	TestT3262_PoolDestroyAfterModelUnmapWritesNothingIntoTheFreedModel(T3262Verb::kPage);
+	TestT3262_PoolDestroyAfterModelUnmapWritesNothingIntoTheFreedModel(T3262Verb::kContiguous);
+}
+
+#if defined(SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS)
+// The seam guarantee that survives the fix: a test build's KvPagesTestPinPagePositions refuses a pin
+// while any pool made on the model lives, leaves B unchanged on the refusal, keeps refusing until the
+// LAST pool is destroyed, and then admits the pin. Run once per pool-create verb.
+static void TestT3262_PinRefusedWhileAPoolLivesOnEveryCreateVerb(T3262Verb verb) {
+	T3262Model m;
+	if (!m.Open()) return;
+	const char* name = T3262VerbName(verb);
+	const int64_t b0 = sslm_kv_page_positions(m.model);
+	const int64_t pin = (b0 == m.cap) ? 1 : m.cap;
+	CHECK_MSG(b0 >= 1 && pin != b0, "%s: default B %lld, pin target %lld", name, static_cast<long long>(b0),
+	          static_cast<long long>(pin));
+	T3262Pool first, second;
+	if (first.Create(m.model, m.cap, verb) && second.Create(m.model, m.cap, verb)) {
+		// Two pools live: refused, B unchanged.
+		CHECK_MSG(KvPagesTestPinPagePositions(m.model, pin) == SSLM_INVALID_ARGUMENT,
+		          "%s: a pin with two pools live must be refused", name);
+		CHECK(sslm_kv_page_positions(m.model) == b0);
+		// One destroyed, one live: still refused.
+		CHECK(sslm_kv_pool_destroy(first.pool) == SSLM_OK);
+		first.pool = nullptr;
+		CHECK_MSG(KvPagesTestPinPagePositions(m.model, pin) == SSLM_INVALID_ARGUMENT,
+		          "%s: a pin with one pool still live must be refused", name);
+		CHECK(sslm_kv_page_positions(m.model) == b0);
+		// None live: admitted, and B is the pin.
+		CHECK(sslm_kv_pool_destroy(second.pool) == SSLM_OK);
+		second.pool = nullptr;
+		CHECK_MSG(KvPagesTestPinPagePositions(m.model, pin) == SSLM_OK,
+		          "%s: a pin with no pool live must be admitted", name);
+		CHECK_MSG(sslm_kv_page_positions(m.model) == pin, "%s: B after the pin == %lld, want %lld", name,
+		          static_cast<long long>(sslm_kv_page_positions(m.model)), static_cast<long long>(pin));
+	}
+	if (first.pool) CHECK(sslm_kv_pool_destroy(first.pool) == SSLM_OK);
+	if (second.pool) CHECK(sslm_kv_pool_destroy(second.pool) == SSLM_OK);
+	first.Free();
+	second.Free();
+	if (m.model) CHECK(sslm_model_unmap(m.model) == SSLM_OK);
+}
+
+static void TestT3262_PinRefusedWhileAPoolLivesAllVerbs() {
+	TestT3262_PinRefusedWhileAPoolLivesOnEveryCreateVerb(T3262Verb::kBlock);
+	TestT3262_PinRefusedWhileAPoolLivesOnEveryCreateVerb(T3262Verb::kPage);
+	TestT3262_PinRefusedWhileAPoolLivesOnEveryCreateVerb(T3262Verb::kContiguous);
+}
+
+#endif  // SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+
+// Entry point for the T-3262 cells (called from tests/test_main.cpp beside the census cells).
+void RunPoolTeardownOrderCells(int& checks, int& failures) {
+	GChecks = 0;
+	GFailures = 0;
+	TestT3262_PoolDestroyAfterModelUnmapAllVerbs();
+#if defined(SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS)
+	TestT3262_PinRefusedWhileAPoolLivesAllVerbs();
+#endif
+	checks += GChecks;
+	failures += GFailures;
 }
 
 void RunSlm18xSaturationCensusCells(int& checks, int& failures) {

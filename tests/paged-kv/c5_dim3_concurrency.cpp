@@ -5,10 +5,11 @@
 // one-state form (§8, rev 6): creates totalling k - 1 admitted, a 2-page create refused, one admitted
 // create of r pages released and r + 1 admitted. Each race runs RaceReps() times (100, the planner
 // default of §8), and the verdict needs every run's probe to pass. Tokens are compared with serial
-// runs of the same construction. The data-race verdict is the TSan leg's: the cloud's linux-clang
-// TSan job builds superslm_pkv_c5 with -fsanitize=thread and runs these cells; here they run, and
-// grade, without it. Threads never call the CHECK macros; each records what it saw and the main
-// thread checks.
+// runs of the same construction. These cells grade states, not data races: no CI job builds
+// superslm_pkv_c5 under ThreadSanitizer (the linux-x64-tsan job in .github/workflows/tests.yml
+// builds and runs superslm_tests only), so a data-race verdict on them needs superslm_pkv_c5 built
+// with -fsanitize=thread, which nothing runs yet. Threads never call the CHECK macros; each records
+// what it saw and the main thread checks.
 
 #include "pkv_budget_a_helpers.h"
 

@@ -42,6 +42,10 @@ bool BuildResidualCandidateGpu(uint t, int hidden_size, uint branch_codes_off, u
     int64_t reciprocal, normalization_shift;
     CarriedScaleNormalizedReciprocalSharedGpu(AbsUnsignedI64Gpu(selected_m), reciprocal, normalization_shift);
 
+    // Every thread must finish reading the previous call's gResidualMagOutOfDomain2 before thread 0 resets it:
+    // this function runs twice per dispatch, and without this barrier a thread still between the
+    // previous call's closing barrier and its read can observe the reset value instead.
+    GroupMemoryBarrierWithGroupSync();
     if (t == 0) gResidualMagOutOfDomain2 = 0;
     GroupMemoryBarrierWithGroupSync();
     for (int i = (int)t; i < hidden_size; i += 256)

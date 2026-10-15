@@ -28,6 +28,20 @@ int64_t* SslmGpuSeqHandleContextLengthForBench(SslmGpuSequenceHandle* seq);
 size_t SslmGpuSeqHandleHiddenSizeForBench(SslmGpuSequenceHandle* seq);
 int64_t SslmGpuSeqHandleContextCapForBench(SslmGpuSequenceHandle* seq);  // T-2113 (N1)
 
+// Paged-KV plan step G3: the test seams the GPU red suite (group g1a) names and the plan does not.
+// Table entry i (< mapped) of a pooled GPU sequence; i at or past `mapped`, a dedicated sequence or
+// a null `out_page` is SSLM_SEQUENCE_KV_BUFFER_MISMATCH. `out_mapped` (optional) gets `mapped`.
+SslmGpuStatus sslm_gpu_test_only_seq_table_entry(const SslmGpuSequenceHandle* seq, uint32_t i, uint32_t* out_page,
+                                                 uint32_t* out_mapped) noexcept;
+// Arms a one-shot fault on the view the pooled `seq`'s next submission hands the GPU ladder: 1 the
+// table one page short, 2 page_bytes one byte short, 3 a null pool base, 4 page_positions = 2^61;
+// 0 disarms. A dedicated sequence or another value: SSLM_SEQUENCE_KV_BUFFER_MISMATCH.
+SslmGpuStatus sslm_gpu_test_only_arm_view_fault(SslmGpuSequenceHandle* seq, uint32_t fault) noexcept;
+// The superslm::SslmForwardStatus the ladder returned for `seq`'s last refused submission, as an
+// integer; Ok when its last submission was not refused before recording.
+SslmGpuStatus sslm_gpu_test_only_last_ladder_status(const SslmGpuSequenceHandle* seq,
+                                                    int32_t* out_forward_status) noexcept;
+
 #if defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
 enum class SslmGpuApiFailureInjectionPoint { BeforeHandler, AfterHandler };
 void ArmSslmGpuApiFailureInjection(const char* api_name,

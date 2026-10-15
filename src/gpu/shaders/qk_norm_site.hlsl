@@ -28,8 +28,8 @@ void main(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID) {
     uint gain_off = layer_base + (is_q ? Layout.Load<uint>(58 * 4) : Layout.Load<uint>(61 * 4));
     uint q_codes_off = ScratchLayout.Load<uint>(2 * 4), q_scale_off = ScratchLayout.Load<uint>(3 * 4);
     uint wide_base = ScratchLayout.Load<uint>(27 * 4) + group * (uint)head_dim * 8u;
-    uint kv_half_off = KvHalfOffsetGpu(g_layer_index, g_context_cap, g_num_kv_heads, (uint)head_dim);
-    uint k_row_off = kv_half_off + KvRowOffsetWithinHalfGpu(g_context_cap, (uint)head_dim, head, g_position), q_row_off = q_codes_off + head * (uint)head_dim * 4u;
+    // Paged-KV plan §4 item 1: the K row through the page table (site_common.hlsli KvRowAddrGpu). Only a K group reads it.
+    uint k_row_off = is_q ? 0u : KvRowAddrGpu(g_layer_index, 0u, g_num_kv_heads, (uint)head_dim, head, g_position), q_row_off = q_codes_off + head * (uint)head_dim * 4u;
     int64_t sumsq;
     if (is_q) sumsq = RmsSumSqParallelGpu(t, LayerScratch, q_row_off, head_dim);
     else { int64_t local = 0; for (int i = (int)t; i < head_dim; i += 256) { int64_t v = LoadSignedByteGpu(KvCache, k_row_off + (uint)i); local += v * v; } gSumSq[t] = local; GroupMemoryBarrierWithGroupSync(); for (uint a = 128; a > 0; a >>= 1) { if (t < a) gSumSq[t] += gSumSq[t + a]; GroupMemoryBarrierWithGroupSync(); } sumsq = gSumSq[0]; }

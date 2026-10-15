@@ -5,6 +5,7 @@ of the T=3 partition. The embedding remains independent of the head.
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 from pathlib import Path
 import struct
@@ -45,7 +46,17 @@ def head_location(data: bytes) -> tuple[int, int, tuple[int, int]]:
     raise ValueError("untied lm_head was not found")
 
 
+def parse_args(argv=None):
+    """`--verifier <path>` names the independent verifier handed to the converter. Without it the
+    converter searches for the verifier as it does by default."""
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--verifier", default=None,
+                    help="path of the independent verifier executable (sslm_verify)")
+    return ap.parse_args(argv)
+
+
 def main() -> None:
+    args = parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     checkpoint = OUT / "checkpoint"
     calibrated = OUT / "calibrated"
@@ -58,7 +69,8 @@ def main() -> None:
                     "--checkpoint", str(checkpoint), "--out", str(calibrated)],
                    cwd=ROOT, check=True, timeout=120)
     subprocess.run([sys.executable, str(ROOT / "tools" / "convert_model.py"),
-                    "--artifact", str(calibrated), "--out", str(artifact), "--skip-verify"],
+                    "--artifact", str(calibrated), "--out", str(artifact)]
+                   + (["--verifier", args.verifier] if args.verifier else []),
                    cwd=ROOT, check=True, timeout=120)
     data = bytearray(artifact.read_bytes())
     offset, elements, shape = head_location(data)

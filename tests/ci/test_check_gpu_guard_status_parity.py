@@ -1487,7 +1487,7 @@ def test_wiring_vitality_check_lwuws_path_count_disable_stops_catching_a_corrupt
     with tempfile.TemporaryDirectory() as tmp:
         with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
             real_text = f.read()
-        corrupted = real_text.replace("catch, thirty-four paths", "catch, seventeen paths", 1)
+        corrupted = real_text.replace("catch, thirty-six paths", "catch, seventeen paths", 1)
         assert corrupted != real_text, "sanity: the exact phrase must exist in the real file"
         gph_path = os.path.join(tmp, "corrupted_before_word_gpu_port.h")
         with open(gph_path, "w", encoding="utf-8") as f:
@@ -1512,7 +1512,7 @@ def test_wiring_vitality_gpu_port_h_path_disable_stops_catching_a_corrupted_word
     with tempfile.TemporaryDirectory() as tmp:
         with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
             real_text = f.read()
-        corrupted = real_text.replace("alike, forty-one", "alike, twenty-three", 1)
+        corrupted = real_text.replace("alike, forty-three", "alike, twenty-three", 1)
         assert corrupted != real_text, "sanity: the exact phrase must exist in the real file"
         gph_path = os.path.join(tmp, "corrupted_total_word_gpu_port.h")
         with open(gph_path, "w", encoding="utf-8") as f:
@@ -1752,7 +1752,7 @@ def test_derive_before_count_raises_when_the_residency_statement_is_absent_with_
         assert "no boundary to cut on" in str(e)
 
 
-def test_the_real_tree_lwuws_before_count_is_thirty_four():
+def test_the_real_tree_lwuws_before_count_is_thirty_six():
     # T-2101's own two real catch clauses on RunLayerLoopGpuSubmit (GpuGemmGroupArithmeticError's,
     # one literal return; the generic std::runtime_error's, one ternary return), PLUS (T-2184, S3,
     # D-SLM3662) SubmitOneSubChunkToFullDepthForG5Bridge's own original pair of catch clauses
@@ -1809,14 +1809,17 @@ def test_the_real_tree_lwuws_before_count_is_thirty_four():
     submit_catch_bodies = chk.extract_catch_block_bodies(submit_body)
     subchunk_body = chk.strip_comments(chk.extract_function_body(gpu_text, chk.SUBCHUNK_FUNC_SIGNATURE, label="x"))
     subchunk_catch_bodies = chk.extract_catch_block_bodies(subchunk_body)
-    assert len(submit_catch_bodies) == 10
-    assert len(subchunk_catch_bodies) == 10
+    # GPU paged-KV plan G3: each recording window gains a GpuSubmissionStrandedError clause (a stranded
+    # ledger's refusal rethrown before the list opens; one classified return), 10 -> 11 clauses and returns.
+    assert len(submit_catch_bodies) == 11
+    assert len(subchunk_catch_bodies) == 11
     assert chk.count_any_return_statements(before) == 14  # paged-KV step M1: 13 + the coverage guard
-    assert sum(chk.count_any_return_statements(b) for b in submit_catch_bodies) == 10
-    assert sum(chk.count_any_return_statements(b) for b in subchunk_catch_bodies) == 10
+    assert sum(chk.count_any_return_statements(b) for b in submit_catch_bodies) == 11
+    assert sum(chk.count_any_return_statements(b) for b in subchunk_catch_bodies) == 11
     # Paged-KV plan step M1: the coverage guard adds one return to the ladder (13 -> 14): 14 + 10 + 10
     # = 34.
-    assert chk.derive_lwuws_before_decision_count(gpu_text) == 34
+    # GPU paged-KV plan G3: 14 + 11 + 11 = 36.
+    assert chk.derive_lwuws_before_decision_count(gpu_text) == 36
 
 
 def test_the_real_tree_lwuws_after_count_is_seven():
@@ -1836,7 +1839,7 @@ def test_the_real_tree_lwuws_after_count_is_seven():
     assert chk.derive_lwuws_after_decision_count(gpu_text) == 7
 
 
-def test_the_real_tree_lwuws_total_is_forty_one():
+def test_the_real_tree_lwuws_total_is_forty_three():
     # CORRECTED 2026-09-03 (T-2577, D-SLM6279): 27 + 6 = 33 was gpu_port.h's own prose before
     # this ticket; two new catch clauses (GpuShaderBinaryStaleError's, one per function) move the
     # before-count from 27 to 29, unchanged after-count of 6: 29 + 6 = 35.
@@ -1852,9 +1855,9 @@ def test_the_real_tree_lwuws_total_is_forty_one():
     # Paged-KV plan step M1: the coverage guard's return sits before the decision: 34 + 7 = 41,
     # gpu_port.h's "forty-one".
     assert (chk.derive_lwuws_before_decision_count(gpu_text)
-            + chk.derive_lwuws_after_decision_count(gpu_text)) == 41
+            + chk.derive_lwuws_after_decision_count(gpu_text)) == 43   # GPU paged-KV plan G3: 36 + 7
     with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
-        assert chk.parse_lwuws_path_counts(f.read()) == (34, 41)
+        assert chk.parse_lwuws_path_counts(f.read()) == (36, 43)
 
 
 # --- M2: O34's successor residual is a MEASURED property, not a claim about one ---

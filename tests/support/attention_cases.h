@@ -183,7 +183,11 @@ struct SoftmaxGuard {
 	int Failing() const { return !width_ok + !q_ln2_ge1 + !q_c_ge0 + !m_ge1 + !m_le + !ratio + !scores_ok; }
 };
 
-inline constexpr size_t kSmMaxWidth = size_t{1} << 14;
+// The guard's width cap: 32,767 from the R9 build (paged-KV plan rev 16.23, D-SLM8429, D-SLM8435, cell 6.9); 2^14
+// before it. kSmOldMaxWidth keeps the rows the set chose at the old cap where they are, so the cap's move adds
+// rows to the set without reshuffling the ones it had.
+inline constexpr size_t kSmMaxWidth = 32767;
+inline constexpr size_t kSmOldMaxWidth = size_t{1} << 14;
 inline constexpr int64_t kSmMaxM = int64_t{1} << 47;
 inline constexpr int64_t kSmScoreLimit = int64_t{1} << 61;
 
@@ -374,7 +378,7 @@ inline void SmSteeredPDownRows(int64_t q_ln2, int64_t q_b, int64_t q_c, const st
 			for (int64_t j = 0; j < 8 && kept < per_k; ++j) {
 				const int64_t D = (M * 32768 + N - 1) / N + j;  // M 2^15 <= 2^62
 				const int64_t n = D / M;
-				if (n < 1 || static_cast<size_t>(n) > kSmMaxWidth) continue;
+				if (n < 1 || static_cast<size_t>(n) > kSmOldMaxWidth) continue;
 				const uint64_t R = ((uint64_t{1} << 62) + (static_cast<uint64_t>(D) >> 1)) / static_cast<uint64_t>(D);
 				const uint64_t p_est = (static_cast<uint64_t>(M) * R) >> 47;
 				if (!(p_est * static_cast<uint64_t>(D) > (static_cast<uint64_t>(M) << 15))) continue;
@@ -398,11 +402,88 @@ inline void SmSteeredPDownRows(int64_t q_ln2, int64_t q_b, int64_t q_c, const st
 					if (((b * b + q_c) >> 29) != rem || b > q_b || q_b - b >= q_ln2) ok = false;
 					else s.push_back(elem(b, 29));
 				}
-				if (!ok || s.size() > kSmMaxWidth) continue;
+				if (!ok || s.size() > kSmOldMaxWidth) continue;
 				out.push_back(SmCase{label, q_ln2, q_b, q_c, std::move(s), false});
 				++kept;
 			}
 		}
+	}
+}
+
+// Cell 6.9 (paged-KV plan rev 16.23, D-SLM8429, D-SLM8435): the guard's cap at 32,767. Its own generator and
+// seed, so the rows the S4 set already had keep their values. Rows at the M ceiling (q_ln2 = 1, q_b = 0,
+// q_c = 2^47: an element a = peak - score below the peak, a in [0, 30], has e = q_c >> a) at widths 16,385,
+// 24,576 and 32,767, three shapes each; the 2^14 grid member's and inside corner's twins at 32,767; correction
+// rows with q_c in [2^46, 2^47] where the replica says the p downward or upward correction fires and decides the
+// row, at least one of each per width; and width 32,768, outside the guard, on the equal-score row and one
+// correction-row shape. Labels begin "6.9" (the grid twin keeps its 4.S4 label family).
+inline constexpr size_t kSmCapWidths[] = {16385, 24576, 32767};
+
+inline std::vector<int64_t> SmCapRow(size_t w, int shape, Rng& rng) {
+	std::vector<int64_t> s(w, 0);
+	for (size_t k = 0; k < w; ++k) {
+		if (shape == 0) s[k] = 0;                                                  // equal scores: every e = M
+		else if (shape == 1) s[k] = (rng.Next() % 4 != 0) ? 0 : -rng.InRange(1, 30);  // three quarters at the peak
+		else s[k] = k == 0 ? 0 : -rng.InRange(0, 30);                              // one peak, the rest 0 to 30 below
+	}
+	return s;
+}
+
+template <class Fn>
+void ForEachSoftmaxCapCase(Fn&& fn) {
+	Rng rng(0x36392D4341503332ULL);  // "69-CAP32"
+	{
+		const std::vector<std::array<int64_t, 3>> triples = SmRealisticConstants(rng, 2);
+		for (int kind = 0; kind < 4; ++kind) {
+			const auto& t = triples[static_cast<size_t>(rng.Next() % triples.size())];
+			fn(SmCase{"4.S4 grid, width 32,767", t[0], t[1], t[2], SmScoreRow(kSmMaxWidth, kind, t[0], rng), kind == 1});
+		}
+	}
+	fn(SmCase{"6.9 inside: M = 2^47, width 32,767, equal scores (twin of the 2^14 corner)", 1, 0, kSmMaxM,
+	          std::vector<int64_t>(kSmMaxWidth, 5), false});
+	static const char* const kShape[] = {"6.9 M = 2^47: equal scores", "6.9 M = 2^47: three quarters at the peak",
+	                                     "6.9 M = 2^47: one peak"};
+	for (size_t w : kSmCapWidths)
+		for (int shape = 0; shape < 3; ++shape) fn(SmCase{kShape[shape], 1, 0, kSmMaxM, SmCapRow(w, shape, rng), false});
+	// Correction rows: the replica keeps a row where the named p correction fires and the row without it differs.
+	std::vector<int64_t> good, skipped;
+	std::vector<int64_t> outside_correction;
+	int64_t outside_qc = 0;
+	for (size_t w : kSmCapWidths) {
+		bool down = false, up = false;
+		for (int it = 0; it < 400 && !(down && up); ++it) {
+			const int64_t qc = rng.InRange(int64_t{1} << 46, kSmMaxM);
+			const uint64_t frac = (rng.Next() % 3 == 0) ? 2 : (rng.Next() % 2 == 0 ? 4 : 10);  // 1/2, 3/4 or 9/10 at the peak
+			std::vector<int64_t> s(w, 0);
+			for (size_t k = 0; k < w; ++k) s[k] = (rng.Next() % frac != 0) ? 0 : -rng.InRange(1, 30);
+			good.assign(w, 0);
+			SoftmaxCorrections c;
+			if (!SoftmaxEstimateReplica(s.data(), w, 1, 0, qc, good.data(), &c)) continue;
+			const auto decides = [&](int skip) {
+				SoftmaxCorrections unused;
+				skipped.assign(w, 0);
+				SoftmaxEstimateReplica(s.data(), w, 1, 0, qc, skipped.data(), &unused, skip);
+				return skipped != good;
+			};
+			if (!down && c.p_down > 0 && decides(3)) {
+				down = true;
+				fn(SmCase{"6.9 correction row: p down (cap widths)", 1, 0, qc, s, false});
+				if (w == kSmMaxWidth) {
+					outside_correction = s;
+					outside_qc = qc;
+				}
+			} else if (!up && c.p_up > 0 && decides(2)) {
+				up = true;
+				fn(SmCase{"6.9 correction row: p up (cap widths)", 1, 0, qc, s, false});
+			}
+		}
+	}
+	// Width 32,768 stays scalar: the equal-score row at the M ceiling and a correction-row shape one wider.
+	fn(SmCase{"6.9 outside: width 32,768, M = 2^47, equal scores", 1, 0, kSmMaxM, std::vector<int64_t>(kSmMaxWidth + 1, 0),
+	          false});
+	if (!outside_correction.empty()) {
+		outside_correction.push_back(0);
+		fn(SmCase{"6.9 outside: width 32,768, a correction-row shape", 1, 0, outside_qc, outside_correction, false});
 	}
 }
 
@@ -424,7 +505,7 @@ void ForEachSoftmaxCase(Fn&& fn) {
 	for (int kind = 0; kind < 4; ++kind) {
 		const auto& t = triples[static_cast<size_t>(rng.Next() % triples.size())];
 		fn(SmCase{"4.S4 grid, width 1,024", t[0], t[1], t[2], SmScoreRow(1024, kind, t[0], rng), kind == 3});
-		fn(SmCase{"4.S4 grid, width 2^14", t[0], t[1], t[2], SmScoreRow(kSmMaxWidth, kind, t[0], rng), kind == 1});
+		fn(SmCase{"4.S4 grid, width 2^14", t[0], t[1], t[2], SmScoreRow(kSmOldMaxWidth, kind, t[0], rng), kind == 1});
 	}
 	// 4.S4: total = 1 (M = 1 and every other element clipped to e = 0) and one element equal to total
 	// (p = 2^15); z at 0 and 30 on every clip-heavy row above.
@@ -432,7 +513,7 @@ void ForEachSoftmaxCase(Fn&& fn) {
 	fn(SmCase{"4.S4 total = 1, p = 2^15, aliased", 3, 1, 0, {0, -1000, -2000}, true});
 	// 4.S4 inside corners, each fast.
 	fn(SmCase{"4.S4 inside: M = 2^47, width 2^14, equal scores (denom = 2^61)", 1, 0, kSmMaxM,
-	          std::vector<int64_t>(kSmMaxWidth, 5), false});
+	          std::vector<int64_t>(kSmOldMaxWidth, 5), false});
 	{
 		const int64_t qb = 636211, qc = 212166321733;  // the -49 triple's q_b and q_c, q_ln2 at its ceiling
 		fn(SmCase{"4.S4 inside: q_ln2 = 2 q_b + 1, realistic spread", 2 * qb + 1, qb, qc,
@@ -502,7 +583,7 @@ void ForEachSoftmaxCase(Fn&& fn) {
 	fn(SmCase{"2.S4 M = 0 (q_b 0, q_c 0, q_ln2 1), width 3", 1, 0, 0, {0, 0, 0}, false});
 	fn(SmCase{"2.S4 M = 2^47 + 1", 1, 0, kSmMaxM + 1, {0, -1}, false});
 	fn(SmCase{"2.S4 q_ln2 = 2 q_b + 2 (q_b 4, q_ln2 10)", 10, 4, 0, {0, -9}, false});
-	fn(SmCase{"2.S4 width 2^14 + 1", rt[0], rt[1], rt[2], SmScoreRow(kSmMaxWidth + 1, 0, rt[0], rng), false});
+	fn(SmCase{"2.S4 width 32,768", rt[0], rt[1], rt[2], SmScoreRow(kSmMaxWidth + 1, 0, rt[0], rng), false});
 	{
 		std::vector<int64_t> s(64, 0);
 		s[17] = kSmScoreLimit + 1;
@@ -515,6 +596,7 @@ void ForEachSoftmaxCase(Fn&& fn) {
 	// conjunct (q_c >= 0, M >= 1 and q_ln2 <= 2 q_b + 1), so it kills no single-conjunct mutant.
 	fn(SmCase{"2.S4 off-ratio witness", INT64_C(3000000001), 10, -100, {0, INT64_C(-3000000000), INT64_C(-2999999999)},
 	          false});
+	ForEachSoftmaxCapCase(fn);
 }
 
 // The whole S4 set through SoftmaxRowQ15: per call, width, the bool and every output value (the output

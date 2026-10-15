@@ -11,6 +11,7 @@
 
 #include "pkv_legacy_b_helpers.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 
@@ -276,6 +277,117 @@ void Cell93OldReaderNewData() {
 					PKV_CHECK_MSG(false, "9.3: cannot write %s", path.c_str());
 				}
 			}
+		}
+	}
+}
+
+// ---- 9.3s [C4] ---------------------------------------------------------------------------------
+//
+// The save-speed fix's streaming path, run by a CPU suite. GatherFlatBlock (src/sslm_abi.cpp) writes
+// an SSB5 block of 16 MiB or more with SSE2 streaming stores on x64 -- whole 64-byte lines, the head
+// before the first line boundary and the tail after the last whole line by memcpy/memset -- and every
+// CPU fixture's block is below that (pkv_32k's is 12 MiB), so 9.3 and the rest only ever run the plain
+// path. This cell lowers the threshold to 1 byte through the test-only seam
+// (sslm_pkv_test_only_set_gather_stream_bytes), so every block is streamed, and holds the streamed
+// bytes to the reference layout:
+//   (a) 9.3's pinned states, rebuilt live, equal v1.11.0's pins byte for byte (1.11.0's one-memcpy
+//       contiguous block);
+//   (b) each v1.11.0 SSB5 pin of 9.2, restored as whole_reserve, re-saves equal to the pin into a
+//       destination at every offset 0..63 from a 64-byte boundary. The block starts kSsb5Header +
+//       residual + 4 * history_count + 4 bytes in, so its alignment follows the anti-LM history count
+//       and the buffer. A run (cap * 48 bytes) and a slab (16 * 48 = 768) are whole 64-byte lines, so
+//       every span of a block starts at the block's own alignment: the 64 offsets reach every head
+//       length 0..63, and the partial last pages and run tails give short spans and ragged tails;
+//   (c) 9.1's states, resting and mid-token (the mid-token row's plain copy between streamed spans),
+//       in pools pre-filled with 0x5A, on pkv_def and pkv_32k: the streamed save equals the same
+//       holder's plain save, which 9.1 and 9.3 hold to 1.9.0's layout.
+// On a non-x64 target the streamed and plain writers are the same memcpy/memset, and the cell checks
+// that. The threshold is restored on every exit. A library without the seam (the production one)
+// returns 0, and the cell fails rather than pass without streaming.
+// Mutants killed: a streaming head, line loop or tail that skips, repeats or misplaces a byte at any
+// destination alignment (a 16-byte head, a missing tail, a loop bound of i + 16 over 64-byte steps).
+
+struct StreamThreshold {
+	bool ok;
+	explicit StreamThreshold(size_t bytes) : ok(sslm_pkv_test_only_set_gather_stream_bytes(bytes) == 1) {}
+	~StreamThreshold() { sslm_pkv_test_only_set_gather_stream_bytes(0); }
+};
+
+// `s`'s save written at `offset` bytes past a 64-byte boundary; empty on a refusal.
+std::vector<uint8_t> SaveAtOffset(sslm_seq s, size_t offset) {
+	size_t need = 0;
+	if (sslm_seq_save(s, nullptr, &need) != SSLM_BUFFER_TOO_SMALL || need == 0) return {};
+	std::vector<uint8_t> raw(need + 128, 0xEE);
+	const uintptr_t base = reinterpret_cast<uintptr_t>(raw.data());
+	uint8_t* dst = raw.data() + ((64u - (base & 63u)) & 63u) + offset;
+	size_t wrote = need;
+	if (sslm_seq_save(s, dst, &wrote) != SSLM_OK) return {};
+	return std::vector<uint8_t>(dst, dst + wrote);
+}
+
+void Cell93sStreamingSave() {
+	const Fixture& fx = GetFixture("pkv_def");
+	if (!fx.ok) return;
+	StreamThreshold streamed(1);
+	// kills: a run where the seam did not lower the threshold, so nothing below streamed
+	PKV_CHECK_MSG(streamed.ok, "9.3s: the library has no streaming-threshold seam");
+	if (!streamed.ok) return;
+
+	// (a) The pinned states, every block streamed.
+	Driver d;
+	d.model = fx.model;
+	d.geo = fx.geo;
+	size_t n = 0;
+	const Scenario* scs = Scenarios(&n);
+	for (const char* sc : {"lifecycle", "persist", "saturating"}) {
+		std::vector<Pinned> pins;
+		Driver dd = d;
+		for (size_t i = 0; i < n; ++i)
+			if (std::strcmp(scs[i].name, sc) == 0) scs[i].run(dd, &pins);
+		PKV_CHECK_MSG(dd.fail.empty(), "9.3s %s: %s", sc, dd.fail.c_str());
+		PKV_CHECK_MSG(!pins.empty(), "9.3s %s: no pinned state", sc);
+		for (const Pinned& p : pins)
+			// kills: a streamed block that is not byte-equal to 1.11.0's contiguous block
+			PKV_CHECK_MSG(p.blob == Pin("v1.11.0", sc, p.stage.c_str()),
+			              "9.3s %s/%s: the streamed SSB5 differs from v1.11.0's bytes", sc, p.stage.c_str());
+	}
+
+	// (b) Every destination alignment, against the pins.
+	for (const PinCase& pc : kPins) {
+		const std::vector<uint8_t> pin = Pin("v1.11.0", pc.scenario, pc.stage);
+		PKV_CHECK_MSG(IsMagic(pin, "SSB5"), "9.3s %s/%s: pin", pc.scenario, pc.stage);
+		if (!IsMagic(pin, "SSB5")) continue;
+		LegacyPool pool(fx.model, 1, 0x5A);
+		sslm_seq r = nullptr;
+		PKV_CHECK_MSG(Restore(fx, &pool.pool, pin, &r) == SSLM_OK, "9.3s %s/%s: restore", pc.scenario, pc.stage);
+		if (!r) continue;
+		for (size_t offset = 0; offset < 64; ++offset)
+			// kills: a head, line loop or tail wrong at this destination alignment
+			PKV_CHECK_MSG(SaveAtOffset(r, offset) == pin, "9.3s %s/%s: the streamed re-save at offset %zu is not the pin",
+			              pc.scenario, pc.stage, offset);
+		sslm_seq_release(r);
+	}
+
+	// (c) Streamed against plain, resting and mid-token, at both caps.
+	for (const char* stem : {"pkv_def", "pkv_32k"}) {
+		const Fixture& f = GetFixture(stem);
+		if (!f.ok) continue;
+		for (const State91& st : kStates91) {
+			LegacyPool pool(f.model, 2, 0x5A);  // 2: the adopted states' prefix holds a block too
+			sslm_seq s = st.build(f, &pool.pool);
+			if (!s) continue;
+			std::vector<uint8_t> plain, stream;
+			sslm_pkv_test_only_set_gather_stream_bytes(SIZE_MAX);
+			PKV_CHECK(SaveBlob(s, &plain));
+			sslm_pkv_test_only_set_gather_stream_bytes(1);
+			PKV_CHECK(SaveBlob(s, &stream));
+			PKV_CHECK_MSG(IsMagic(plain, "SSB5"), "9.3s %s %s: magic", stem, st.name);
+			// kills: a streamed save that differs from the plain save of the same holder
+			PKV_CHECK_MSG(stream == plain, "9.3s %s %s: the streamed save differs from the plain save", stem, st.name);
+			for (size_t offset : {size_t{4}, size_t{36}, size_t{60}})
+				PKV_CHECK_MSG(SaveAtOffset(s, offset) == plain, "9.3s %s %s: the streamed save at offset %zu differs", stem,
+				              st.name, offset);
+			sslm_seq_release(s);
 		}
 	}
 }
@@ -577,6 +689,7 @@ void Cell914LegacyRows() {
 PKV_CELL("9.1/C4", "C4", Cell91LegacyRoundTrip);
 PKV_CELL("9.2/C4", "C4", Cell92PinnedBlobs);
 PKV_CELL("9.3/C4", "C4", Cell93OldReaderNewData);
+PKV_CELL("9.3s/C4", "C4", Cell93sStreamingSave);
 PKV_CELL("9.5/C4", "C4", Cell95StateSizeWorstCase);
 PKV_CELL("9.7/C4", "C4", Cell97MustAccept);
 PKV_CELL("9.14/C4", "C4", Cell914LegacyRows);
