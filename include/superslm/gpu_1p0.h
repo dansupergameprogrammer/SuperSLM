@@ -962,7 +962,8 @@ SslmGpuStatus sslm_gpu_prefix_set_schema(SslmGpuContext* ctx, SslmGpuPrefixHandl
  * or schema-content (`kind` 1, SSLM_SPAN_SCHEMA_CONTENT's value) prefill bridge, adapter unbound:
  * prefixes are base-only. `*consumed` counts the admitted tokens, as the bridges' partial
  * consumption. After freeze: SSLM_GPU_PREFIX_REJECTED. A call that lands tokens and then returns
- * SSLM_GPU_KV_BUDGET_EXCEEDED also refreshes the prefix's prefill snapshot (the one an adopter reads
+ * SSLM_GPU_KV_BUDGET_EXCEEDED, or (kind 1) lands tokens and then returns SSLM_SEQUENCE_REJECTED because the
+ * schema's DFA rejected the next one, also refreshes the prefix's prefill snapshot (the one an adopter reads
  * through sslm_gpu_seq_read_prefill_final_hidden), as a successful prefill does, so a saved and
  * restored copy gives its adopters the same snapshot. */
 SslmGpuStatus sslm_gpu_prefix_prefill(SslmGpuContext* ctx, SslmGpuPrefixHandle* prefix,
