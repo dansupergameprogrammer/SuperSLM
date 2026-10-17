@@ -6160,6 +6160,27 @@ SslmGpuStatus sslm_gpu_seq_restore_into_pool(SslmGpuContext* ctx, SslmGpuModelHa
 	});
 }
 
+// Precached prefixes (1.15.0): save and restore a frozen GPU prefix ('SPX1'). F1 stubs: declared
+// and linked so the GPU red suite runs red at run time; the build step defines them.
+SslmGpuStatus sslm_gpu_prefix_save(SslmGpuContext* ctx, const SslmGpuPrefixHandle* prefix, void* out_blob,
+                                   size_t* out_blob_size) noexcept {
+	(void)ctx, (void)prefix, (void)out_blob, (void)out_blob_size;
+	return SSLM_DEVICE_LOST;
+}
+SslmGpuStatus sslm_gpu_prefix_restore(SslmGpuContext* ctx, SslmGpuModelHandle* model, SslmGpuKvPoolHandle* pool,
+                                      const void* blob, size_t blob_size, SslmGpuPrefixHandle* parent_or_null,
+                                      SslmGpuPrefixHandle** out_prefix, uint32_t* out_shared_pages) noexcept {
+	(void)ctx, (void)model, (void)pool, (void)blob, (void)blob_size, (void)parent_or_null;
+	ClearOutputHandle(out_prefix);
+	if (out_shared_pages) *out_shared_pages = 0;
+	return SSLM_DEVICE_LOST;
+}
+SslmGpuStatus sslm_gpu_test_only_prefix_table_entry(const SslmGpuPrefixHandle* prefix, uint32_t i, uint32_t* out_page,
+                                                    uint32_t* out_mapped) noexcept {
+	(void)prefix, (void)i, (void)out_page, (void)out_mapped;
+	return SSLM_DEVICE_LOST;
+}
+
 // G3 test seams the GPU red suite names (gpu_1p0_bench_bridge.h). Host-only reads and one flag;
 // none submits, allocates or throws.
 SslmGpuStatus sslm_gpu_test_only_seq_table_entry(const SslmGpuSequenceHandle* seq, uint32_t i, uint32_t* out_page,
@@ -6220,6 +6241,13 @@ void ArmGpuPoolZeroFillCloseFaultForTest(uint32_t consecutive_failures) noexcept
 }
 
 // review-g23 F2's pin: a refcount underflow at the pooled sequence's release.
+void ArmGpuPrefixRestoreFaultForTest(int position, int share_refusal) noexcept {
+	(void)position, (void)share_refusal;  // F1 stub
+}
+bool GpuPrefixRestoreFaultFiredForTest(uint32_t* out_shared_at_fire) noexcept {
+	if (out_shared_at_fire) *out_shared_at_fire = 0;
+	return false;  // F1 stub
+}
 bool ZeroGpuPooledSeqReservePageRefcountForTest(SslmGpuSequenceHandle* seq) noexcept {
 	if (seq == nullptr || seq->pool == nullptr || seq->holder == nullptr || seq->holder->reserve.empty()) return false;
 	superslm::kv_pages::PagePool* pages = seq->pool->pages;

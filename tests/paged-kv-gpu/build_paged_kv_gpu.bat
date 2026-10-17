@@ -147,6 +147,11 @@ call :exe g1e_cell_10_3 plain G6 "g1e_cell_10_3" ""
 call :exe g1e_cell_10_5 plain G6 "g1e_cell_10_5" ""
 call :exe g1e_cell_10_7 plain G6 "g1e_cell_10_7" ""
 call :exe pkvg_g6_decode_timing plain G6 "pkvg_g6_decode_timing" ""
+call :exe pcg_cell_format plain F2 "..\precache-gpu\pcg_cell_format" ""
+call :exe pcg_cell_pool plain F2 "..\precache-gpu\pcg_cell_pool" ""
+call :exe pcg_cell_busy plain F2 "..\precache-gpu\pcg_cell_busy" ""
+call :exe pcg_cell_faults alloc F2 "..\precache-gpu\pcg_cell_faults" ""
+call :exe pcg_cell_schema plain F2 "..\precache-gpu\pcg_cell_schema" ""
 :only_old
 if defined OLDTREE call :oldreader
 echo PKVG BUILD: %NLINKED% linked, %NRED% red by link, %NCOMPILE% red by compile or unexpected link failure
