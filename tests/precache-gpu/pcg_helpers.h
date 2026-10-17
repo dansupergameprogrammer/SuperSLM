@@ -17,8 +17,7 @@
 // nothing, so every cell links and is red at run: the first save or restore a cell grades reads
 // SSLM_DEVICE_LOST where it expects SSLM_OK or a named refusal. The new status
 // SSLM_RESTORE_PRODUCER_MISMATCH is compared through the test-side constant kProducerMismatch (ordinal 30,
-// plan §4 item 3 step 6), which F2's enumerator must equal (the static_assert below, compiled once the
-// enumerator exists).
+// plan §4 item 3 step 6), which F2's enumerator must equal (the static_assert below).
 #ifndef SSLM_PCG_HELPERS_H
 #define SSLM_PCG_HELPERS_H
 
@@ -44,9 +43,7 @@ using namespace g1e;
 
 // Plan §4 item 3 step 6: SSLM_RESTORE_PRODUCER_MISMATCH, appended to SslmGpuStatus after paged KV's six.
 constexpr SslmGpuStatus kProducerMismatch = static_cast<SslmGpuStatus>(30);
-#if defined(SSLM_GPU_HAS_PREFIX_SAVE_ABI)
 static_assert(kProducerMismatch == SslmGpuStatus::SSLM_RESTORE_PRODUCER_MISMATCH, "plan §4 item 3: ordinal 30");
-#endif
 
 inline const char* Name(GS s) { return s == kProducerMismatch ? "SSLM_RESTORE_PRODUCER_MISMATCH" : StatusName(s); }
 
@@ -164,7 +161,7 @@ inline SchemaInfo Schema(const Env& e, size_t index) {
 
 // The adapter the engine's submission device uses, read here through DXGI the way the harness selects
 // it (SSLM_GPU_ADAPTER_INDEX when set, else the first non-software adapter by high-performance
-// preference): the vendor and device ids a GPU save must carry (plan §3.2, PC-5).
+// preference): the vendor and device ids a GPU save must carry (plan §3.2).
 inline bool AdapterIds(uint32_t* vendor, uint32_t* device) {
 	Microsoft::WRL::ComPtr<IDXGIFactory6> f;
 	if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&f)))) return false;

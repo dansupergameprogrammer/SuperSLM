@@ -322,7 +322,9 @@ void ArgumentRefusals(const Env& e, Rig& rig, const std::vector<uint8_t>& b) {
 	if (sslm_gpu_context_create(GpuContextConfig{}, &ctx2) == GS::SSLM_OK && ctx2) {
 		{
 			GpuModelFixture m2;
-			if (m2.Open(e.fx.path, ctx2)) {
+			const bool opened = m2.Open(e.fx.path, ctx2);
+			CHECK_MSG(opened, "2.7: the model did not map on a second context");
+			if (opened) {
 				Rig r2(e, 16, ctx2, m2.model);
 				Refused(RestorePrefix(rig, b, nullptr, nullptr, m2.model, nullptr), KV, "2.7 a model of another context");
 				Refused(RestorePrefix(rig, b, nullptr, nullptr, nullptr, r2.pool), KV, "2.7 a pool of another context");
@@ -376,30 +378,25 @@ void Pairs(const Env& e, Rig& rig, const std::vector<uint8_t>& b, const std::vec
 	// Steps 3, 4 and 5 while a sequence is Submitted -> SSLM_BUSY (step 2 precedes them); a cross-context pool
 	// while Submitted -> SSLM_SEQUENCE_KV_BUFFER_MISMATCH (step 1 precedes the guard).
 	{
+		// The cross-context pool is made before anything is Submitted: a model map is itself refused Busy.
+		SslmGpuContext* ctx2 = nullptr;
+		GpuModelFixture m2;
+		SslmGpuKvPoolHandle* p2 = nullptr;
+		const bool have2 = sslm_gpu_context_create(GpuContextConfig{}, &ctx2) == GS::SSLM_OK && ctx2 &&
+		                   m2.Open(e.fx.path, ctx2) && sslm_gpu_kv_pool_create(ctx2, m2.model, 8, &p2) == GS::SSLM_OK;
+		CHECK_MSG(have2, "5.7 GPU: the second context, its model and its pool did not come up");
 		SubmittedSeq sub = MakeSubmitted(rig);
 		if (sub.ok) {
 			Refused(RestorePrefix(rig, magic), GS::SSLM_BUSY, "5.7 GPU: step 3 (magic) + Submitted");
 			Refused(RestorePrefix(rig, digest), GS::SSLM_BUSY, "5.7 GPU: step 4 (digest) + Submitted");
 			Refused(RestorePrefix(rig, backend), GS::SSLM_BUSY, "5.7 GPU: step 5 (backend) + Submitted");
-			SslmGpuContext* ctx2 = nullptr;
-			if (sslm_gpu_context_create(GpuContextConfig{}, &ctx2) == GS::SSLM_OK && ctx2) {
-				{
-					GpuModelFixture m2;
-					if (m2.Open(e.fx.path, ctx2)) {
-						SslmGpuKvPoolHandle* p2 = nullptr;
-						if (sslm_gpu_kv_pool_create(ctx2, m2.model, 8, &p2) == GS::SSLM_OK) {
-							Refused(RestorePrefix(rig, b, nullptr, nullptr, nullptr, p2), KV,
-							        "5.7 GPU: a cross-context pool + Submitted");
-							sslm_gpu_kv_pool_destroy(ctx2, p2);
-						}
-					}
-					m2.Close();
-				}
-				sslm_gpu_context_destroy(ctx2);
-			}
+			if (have2) Refused(RestorePrefix(rig, b, nullptr, nullptr, nullptr, p2), KV, "5.7 GPU: a cross-context pool + Submitted");
 			CHECK(Drain(e, sub.h) == GS::SSLM_OK);
 			rig.ReleaseSeq(sub.h);
 		}
+		if (p2) sslm_gpu_kv_pool_destroy(ctx2, p2);
+		m2.Close();
+		if (ctx2) sslm_gpu_context_destroy(ctx2);
 	}
 }
 

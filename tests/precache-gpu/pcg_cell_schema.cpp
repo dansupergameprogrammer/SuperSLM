@@ -1,5 +1,5 @@
-// Precached-prefixes plan §7 cells 2.13 and 11.6, their GPU legs [F2]: PC-12's two parser refusals fire at the
-// GPU model map. The GPU map parses the schema section through the CPU's parser (SchemaMasksTable::Parse,
+// Precached-prefixes plan §7 cells 2.13 and 11.6, their GPU legs [F2]: the schema parser's two refusals
+// (a duplicate and a zero name hash) fire at the GPU model map. The GPU map parses the schema section through the CPU's parser (SchemaMasksTable::Parse,
 // src/gpu/gpu_1p0.cpp's model map), and a section the parser refuses is a malformed artifact there, which the
 // GPU map reports as SSLM_DEVICE_LOST with no handle (its convention for every marshal failure). The parser's
 // reason (DuplicateSchemaNameHash, ZeroSchemaNameHash) is graded by the CPU cell (tests/precache/e2_schema.cpp);
@@ -9,7 +9,7 @@
 // must-reject-zero-hash.sslm, must-accept-renamed-pair.sslm) in $SUPERSLM_PRECACHE_E0_ARTIFACT_DIR, the same
 // bytes the CPU leg reads. They are box inputs: a missing directory is a failed check, never a skip.
 //
-// RED AT F1: no product change is needed for this leg (PC-12 landed at E2 and the GPU map already parses
+// RED AT F1: no product change is needed for this leg (the parser rule landed at E2 and the GPU map already parses
 // through it), so it is green as soon as its inputs exist; it is in F1's suite so F2's gate runs it.
 //
 // Run: pcg_cell_schema.exe (with SUPERSLM_PRECACHE_E0_ARTIFACT_DIR set).
@@ -48,7 +48,7 @@ int main() {
 				if (c.accept) {
 					CHECK_MSG(st == GS::SSLM_OK && Real(m), "2.13 GPU: %s must map: %s", c.file, StatusName(st));
 				} else {
-					CHECK_MSG(st != GS::SSLM_OK && m == nullptr, "2.13/11.6 GPU: %s mapped on the GPU (%s): PC-12 does not hold there",
+					CHECK_MSG(st != GS::SSLM_OK && m == nullptr, "2.13/11.6 GPU: %s mapped on the GPU (%s): the parser rule does not hold there",
 					          c.file, StatusName(st));
 					std::printf("2.13 GPU: %s refused at map with %s\n", c.file, StatusName(st));
 				}

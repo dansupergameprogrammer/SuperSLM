@@ -365,10 +365,26 @@ writes the size it needs to `*out_blob_size` and returns the status the
 - 1.12.0 and earlier refuse `SLM6` on its magic with
   `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`. GPU and CPU blobs are separate
   formats; neither backend restores the other's.
+- `sslm_gpu_prefix_save(ctx, prefix, blob, &size)` (1.15.0) writes a frozen
+  prefix as an `SPX1` blob, the CPU's precached-prefix layout with backend 1
+  and the adapter's vendor and device IDs as producer. It reads the pool's
+  host mirror and submits nothing. An unfrozen prefix, or one not at rest
+  after a whole token, is `SSLM_GPU_PREFIX_REJECTED`; a short buffer is
+  `SSLM_OUTPUT_BUFFER_TOO_SMALL` with the size written.
+- `sslm_gpu_prefix_restore(ctx, model, pool, blob, size, parent_or_null,
+  &prefix, &shared)` (1.15.0) validates the whole blob first (arguments,
+  Busy, size and magic, digest, backend, producer
+  (`SSLM_RESTORE_PRODUCER_MISMATCH`), model (`SSLM_RESTORE_MODEL_MISMATCH`),
+  then kv precision, schema and field domains, each
+  `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`), then draws `ceil(L/B) - s` pages
+  (`SSLM_GPU_KV_POOL_EXHAUSTED`, nothing drawn) and shares the parent's `s`
+  leading pages when it is a frozen prefix of this pool holding exactly the
+  blob's origin with equal rows; otherwise `s = 0`. A blob restores only on
+  the engine version and adapter that wrote it.
 
 **In flight.** `sslm_gpu_kv_pool_create`, `sslm_gpu_prefix_prefill`,
-`sslm_gpu_prefix_begin_from`, `sslm_gpu_seq_adopt_prefix` and
-`sslm_gpu_seq_restore_into_pool` submit GPU work: they are serialized as
+`sslm_gpu_prefix_begin_from`, `sslm_gpu_seq_adopt_prefix`,
+`sslm_gpu_seq_restore_into_pool` and `sslm_gpu_prefix_restore` submit GPU work: they are serialized as
 every submitting call is (below), and each returns `SSLM_BUSY`, changing
 nothing, while any sequence in the process is Submitted. Every guarded call
 on a pooled sequence has the same any-sequence scope, and a guarded call on
@@ -498,6 +514,12 @@ refused on the prefix's state (not frozen, another pool of the same model, prefi
 freeze, a schema bind it can no longer take); and
 `SSLM_GPU_PREFIX_SCHEMA_MISMATCH`, an adopt whose schema binding does not
 match the prefix's.
+
+One covers precached prefixes (1.15.0, ordinal 30):
+`SSLM_RESTORE_PRODUCER_MISMATCH`, an `SPX1` blob given to
+`sslm_gpu_prefix_restore` that another engine version wrote, or that was
+written on another adapter (its vendor or device ID differs from the
+context's). Nothing is drawn.
 
 `SslmGpuSeqPrefillPromptForG5Bridge` and `SslmGpuSeqPrefillSchemaContentForG5Bridge`
 diverge on one refusal: when a device-side domain guard refuses one of the admitted

@@ -46,6 +46,21 @@ bool FreeIs(const Env& e, Rig& rig, int64_t k, const std::string& what) {
 	PoolState s(rig.ctx, rig.model, rig.pool);
 	return ProbeExactlyFreeOneState(e, s, k, what.c_str());
 }
+// Exactly one page free, where the one-state probe (k >= 3) cannot read: a 2-page create is refused for
+// capacity (at most 1 free), and the restore of a one-position blob, which draws exactly one page, is
+// admitted (at least 1 free) and released again.
+bool FreeIsOne(const Env& e, Rig& rig, const std::vector<uint8_t>& one, const std::string& what) {
+	PoolState ps(rig.ctx, rig.model, rig.pool);
+	const bool at_most = !TwoPageCreateAdmitted(e, ps);
+	CHECK_MSG(at_most, "%s: a 2-page create was admitted: more than one page free", what.c_str());
+	const RestoredPrefix r = RestorePrefix(rig, one);
+	CHECK_MSG(r.status == GS::SSLM_OK && r.p, "%s: a one-page restore returned %s: no page free", what.c_str(), Name(r.status));
+	if (r.p) {
+		rig.prefixes.pop_back();
+		sslm_gpu_prefix_release(rig.ctx, r.p);
+	}
+	return at_most && r.p != nullptr;
+}
 
 // A blob's rows of positions [p0, p1), every layer, half and head, concatenated.
 std::vector<uint8_t> Rows(const Env& e, const std::vector<uint8_t>& b, int64_t p0, int64_t p1) {
@@ -184,6 +199,18 @@ void Nested(const Env& e) {
 	RestoredPrefix wm = RestorePrefix(mrig, wblob);
 	CHECK_MSG(wq.p && wm.p, "nested: the worlds of pool Q (%s) and of another model (%s)", Name(wq.status), Name(wm.status));
 	if (!wq.p || !wm.p) return;
+	// A one-position blob (from pool Q), the one-page probe's operand.
+	std::vector<uint8_t> one;
+	{
+		SslmGpuPrefixHandle* p1 = Prefix(q, Stream(5, 1, kVocab));
+		if (p1) {
+			one = SavePrefix(e, p1);
+			q.prefixes.pop_back();
+			sslm_gpu_prefix_release(q.ctx, p1);  // pool Q back to world + 8 free
+		}
+		CHECK_MSG(!one.empty(), "nested: the one-position blob");
+		if (one.empty()) return;
+	}
 
 	// Fill pool P to exactly R(200) free (5.10's construction).
 	const int64_t held = 3 * world_pages + e.geo.R(kWorld) + 1;  // + the 1,001-token parent's own page
@@ -238,7 +265,7 @@ void Nested(const Env& e) {
 		const RestoredPrefix r = RestorePrefix(rig, cblob, world);
 		CHECK_MSG(r.status == GS::SSLM_OK && r.p, "5.10: the matching hint at 14 free: %s", Name(r.status));
 		if (r.p) {
-			FreeIs(e, rig, R200 - (child_pages - s), "5.10: the matching hint drew ceil(L/B) - s = 13");
+			FreeIsOne(e, rig, one, "5.10: the matching hint drew ceil(L/B) - s = 13");
 			const std::vector<uint8_t> re = SavePrefix(e, r.p);
 			CHECK_MSG(re == cblob, "X3: the shared restore re-saves byte-identical");
 			rig.prefixes.pop_back();

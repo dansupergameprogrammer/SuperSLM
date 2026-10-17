@@ -67,6 +67,8 @@ static_assert(sizeof(GpuResidencyConfig) == 4 && offsetof(GpuResidencyConfig, fl
 #include "superslm/gpu_port.h"       // T-2113 B2: GpuLayerLayout/ComputeLayerLayout/PackLayerWeightsBytes
 #include "superslm/layer_marshal.h"  // T-2113 B2: MarshalLayer/LayerBacking (relocated, tools/sslm_marshal.h)
 #include "superslm/model.h"          // T-2113 B2: the REAL superslm::SslmModelView this TU needs by value
+#include "superslm/sha256.h"         // precached prefixes: the SPX1 digest
+#include "superslm/sslm_version.h"   // precached prefixes: the SPX1 producer version
 #include "superslm/schema_masks.h"   // G5-5 (T-2132): SchemaMasksTable -- the SAME SCM1 reader the CPU
                                       // ABI (sslm_abi.cpp) already uses, reused here, not re-derived.
 
@@ -417,6 +419,8 @@ struct SslmGpuModelHandle {
 	std::vector<int8_t> embed_weights;
 	superslm::CarriedScale embed_site_constant{};
 	int32_t vocab_size = 0;
+	// Precached prefixes: the artifact's kv_precision, the SPX1 header field a restore checks.
+	uint32_t kv_precision = 0;
 
 	// G5-5 (T-2132, Brunel): mask-page residency on device (design Sec6 G5-5's own "Builds"
 	// list, VRAM, alongside weights/scales per the existing GPU-tenancy model, Sec8.4) --
@@ -1694,6 +1698,7 @@ SslmGpuStatus sslm_gpu_model_mapImpl(SslmGpuContext* ctx, const SslmModelView* b
 
 	h->ctx = ctx;
 	h->content_hash = base->RawIntegrityHash();
+	h->kv_precision = static_cast<uint32_t>(base->config.kv_precision);
 	h->has_rope_tables = has_rope;
 	h->rope_cos_elem_count = cos_t != nullptr ? cos_t->elem_count : 0;
 	h->rope_sin_elem_count = sin_t != nullptr ? sin_t->elem_count : 0;
@@ -5167,6 +5172,9 @@ struct SslmGpuPrefixHandle {
 	SslmGpuKvPoolHandle* pool = nullptr;
 	SslmGpuSequenceHandle* seq = nullptr;
 	bool frozen = false;
+	// The last token prefilled (the CPU prefix's current_token): -1 while empty; copied by begin_from,
+	// written by prefill, read by save, set by restore.
+	int32_t current_token = -1;
 
 	SslmGpuPrefixHandle() = default;
 	SslmGpuPrefixHandle(const SslmGpuPrefixHandle&) = delete;
@@ -5270,11 +5278,14 @@ void CheckPoolUploadRegions(const SslmGpuKvPoolHandle* pool, const std::vector<s
 //
 // G5: `extra_pages` more pages in the same draw (restore-into-pool's E materialized pages, §3.7), so the
 // draw of R(budget) + E is refused whole, with nothing drawn.
+// Precached prefixes: with `reserve_exact`, the draw is exactly `extra_pages` (the prefix restore's
+// ceil(L/B) - s), and `budget` only sets the handle's budget.
 SslmGpuStatus MakePooledSeqUnpublished(SslmGpuContext* ctx, SslmGpuModelHandle* model, SslmGpuKvPoolHandle* pool,
                                        int32_t budget, std::unique_ptr<SslmGpuSequenceHandle>* out,
-                                       uint32_t extra_pages = 0) {
+                                       uint32_t extra_pages = 0, bool reserve_exact = false) {
 	const uint32_t reserve =
-	    superslm_gpu::kv_pool::ReservationPages(budget, pool->geo, model->context_cap) + extra_pages;
+	    reserve_exact ? extra_pages
+	                  : superslm_gpu::kv_pool::ReservationPages(budget, pool->geo, model->context_cap) + extra_pages;
 	std::unique_ptr<SslmGpuSequenceHandle> h(new SslmGpuSequenceHandle());
 	h->hidden_codes.assign(model->hidden_size, 0);
 	h->prefill_hidden_codes.assign(model->hidden_size, 0);
@@ -5490,6 +5501,7 @@ SslmGpuStatus sslm_gpu_prefix_begin_fromImpl(SslmGpuContext* ctx, SslmGpuPrefixH
 	p->ctx = ctx;
 	p->model = model;
 	p->pool = pool;
+	p->current_token = parent->current_token;
 	p->seq = PublishPooledSeq(std::move(h));
 	*out_prefix = p.release();
 	return SSLM_OK;
@@ -5541,11 +5553,13 @@ SslmGpuStatus sslm_gpu_prefix_prefillImpl(SslmGpuContext* ctx, SslmGpuPrefixHand
 		const SslmGpuStatus st = SslmGpuSeqPrefillPromptForG5BridgeImpl(ctx, seq, tokens, n, per_token);
 		const int64_t landed = seq->context_length - before;
 		*consumed = landed <= 0 ? 0 : (landed >= n ? n : static_cast<int32_t>(landed));
+		if (*consumed > 0) prefix->current_token = tokens[*consumed - 1];
 		return st;
 	}
 	int32_t landed = 0;
 	const SslmGpuStatus st = SslmGpuSeqPrefillSchemaContentForG5BridgeImpl(ctx, seq, tokens, n, per_token, &landed);
 	*consumed = landed;
+	if (landed > 0) prefix->current_token = tokens[landed - 1];
 	return st;
 }
 
@@ -5839,6 +5853,379 @@ SslmGpuStatus sslm_gpu_seq_restore_into_poolImpl(SslmGpuContext* ctx, SslmGpuMod
 	SetGpuSeqState(h.get(), superslm_gpu::SslmSequenceGpuState::Idle, nullptr);  // a fresh handle: Idle, no count
 	if (out_shared_pages) *out_shared_pages = share_pages;
 	*out_seq = PublishPooledSeq(std::move(h));
+	return SSLM_OK;
+}
+
+// Precached prefixes (1.15.0, plan §4): the GPU twin of sslm_prefix_save / sslm_prefix_restore over the
+// same 'SPX1' layout (§3.2): a 184-byte header, the residual, then rows [0, L) in canonical order
+// [layer][K|V][kv_head][pos < L][d]. backend = 1 and the producer adapter's VendorId/DeviceId at 20/24.
+namespace {
+
+constexpr uint8_t kSpx1Magic[4] = {'S', 'P', 'X', '1'};
+constexpr size_t kSpx1HeaderBytes = 184;
+constexpr uint32_t kSpx1BackendGpu = 1;
+constexpr uint32_t kSpx1WalkUnbound = 0xFFFFFFFFu;
+
+void Spx1Put32(uint8_t* p, size_t off, uint32_t v) {
+	for (int i = 0; i < 4; ++i) p[off + i] = static_cast<uint8_t>(v >> (8 * i));
+}
+void Spx1Put64(uint8_t* p, size_t off, uint64_t v) {
+	for (int i = 0; i < 8; ++i) p[off + i] = static_cast<uint8_t>(v >> (8 * i));
+}
+uint32_t Spx1Get32(const uint8_t* p, size_t off) {
+	uint32_t v = 0;
+	for (int i = 0; i < 4; ++i) v |= static_cast<uint32_t>(p[off + i]) << (8 * i);
+	return v;
+}
+uint64_t Spx1Get64(const uint8_t* p, size_t off) {
+	uint64_t v = 0;
+	for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(p[off + i]) << (8 * i);
+	return v;
+}
+
+// The blob size for L positions: header + residual + L rows of every run, or false on overflow.
+bool Spx1Size(const SslmGpuModelHandle* model, uint64_t length, size_t* out) {
+	const uint64_t per_position = static_cast<uint64_t>(GpuKvRuns(model)) * model->head_dim;
+	const uint64_t fixed = kSpx1HeaderBytes + uint64_t{model->hidden_size};
+	if (per_position != 0 && length > (SIZE_MAX - fixed) / per_position) return false;
+	*out = static_cast<size_t>(fixed + length * per_position);
+	return true;
+}
+
+// The context's adapter identity (the producer field): DXGI_ADAPTER_DESC1's VendorId and DeviceId.
+bool ContextAdapterIds(SslmGpuContext* ctx, uint32_t* vendor, uint32_t* device) {
+	if (ctx->device.adapter == nullptr) return false;
+	DXGI_ADAPTER_DESC1 desc{};
+	if (FAILED(ctx->device.adapter->GetDesc1(&desc))) return false;
+	*vendor = desc.VendorId;
+	*device = desc.DeviceId;
+	return true;
+}
+
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+// The restore fault slot (cells 5.11 and 5.7, GPU halves), per calling thread: position 1 replaces the
+// share with a refusal (2: kInvalidArgument, 3: kRefcountUnderflow); position 2 returns the reserve just
+// before the private pages are mapped; position 3 fails the restore with SSLM_GPU_ALLOCATION_FAILED once
+// everything is drawn, shared and mapped. Each records the holder's shared-entry count when it fires.
+struct GpuPrefixRestoreFault {
+	int position = 0;
+	int share_refusal = 0;
+	bool fired = false;
+	uint32_t shared_at_fire = 0;
+};
+thread_local GpuPrefixRestoreFault g_gpu_prefix_restore_fault;
+bool FireGpuPrefixRestoreFault(int position, const superslm::kv_pages::PageHolder* holder) {
+	if (g_gpu_prefix_restore_fault.position != position) return false;
+	g_gpu_prefix_restore_fault.position = 0;
+	g_gpu_prefix_restore_fault.fired = true;
+	g_gpu_prefix_restore_fault.shared_at_fire = holder->shared;
+	return true;
+}
+#endif
+
+}  // namespace
+
+// §4 item 1. Refusals, each writing nothing: a null size slot, a null context or prefix, or a prefix of
+// another context (SSLM_SEQUENCE_KV_BUFFER_MISMATCH); a prefix that is not frozen, or not at rest on a
+// token boundary (SSLM_GPU_PREFIX_REJECTED); a null or short buffer (SSLM_OUTPUT_BUFFER_TOO_SMALL, the
+// size written). Rows come from the pool's host mirror; nothing is submitted, so there is no guard.
+SslmGpuStatus sslm_gpu_prefix_saveImpl(SslmGpuContext* ctx, const SslmGpuPrefixHandle* prefix, void* out_blob,
+                                       size_t* out_blob_size) {
+	if (!out_blob_size) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	if (!ctx || !prefix || prefix->ctx != ctx || prefix->seq == nullptr) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	if (!prefix->frozen) return SSLM_GPU_PREFIX_REJECTED;
+	const SslmGpuSequenceHandle* seq = prefix->seq;
+	const SslmGpuModelHandle* model = prefix->model;
+	const SslmGpuKvPoolHandle* pool = prefix->pool;
+	const superslm::SequenceLayerState& st = seq->live_state;
+	const int64_t L = st.context_length;
+	const int32_t token = prefix->current_token;
+	// The rest a prefix reaches: empty (layer 0, not ready, no token) or after a completed token (full
+	// depth, ready, a token of the vocabulary). The blob carries no layer index, so nothing else saves.
+	const bool rest = L == 0 ? (st.layer_index == 0 && !seq->ready_for_logits && token == -1)
+	                         : (L > 0 && L <= model->context_cap && st.layer_index == model->num_hidden_layers &&
+	                            seq->ready_for_logits && token >= 0 && token < model->vocab_size);
+	if (!rest) return SSLM_GPU_PREFIX_REJECTED;
+	size_t required = 0;
+	if (!Spx1Size(model, static_cast<uint64_t>(L), &required)) return SSLM_GPU_PREFIX_REJECTED;
+	if (!out_blob || *out_blob_size < required) {
+		*out_blob_size = required;
+		return SSLM_OUTPUT_BUFFER_TOO_SMALL;
+	}
+	const int64_t B = pool->geo.page_positions;
+	if (seq->holder == nullptr ||
+	    superslm_gpu::kv_pool::PagesToCover(L, B) > superslm::kv_pages::HolderMapped(seq->holder)) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // unreachable: a frozen prefix maps ceil(L/B) pages
+	}
+	uint64_t schema_hash = 0;
+	if (seq->bound_schema_index >= 0) {
+		const superslm::SchemaEntry* entry = model->schemas.ByIndex(static_cast<size_t>(seq->bound_schema_index));
+		if (entry == nullptr) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // unreachable: bound through the table
+		schema_hash = entry->name_hash;
+	}
+	uint32_t vendor = 0, device = 0;
+	if (!ContextAdapterIds(ctx, &vendor, &device)) return SSLM_DEVICE_LOST;
+	uint8_t* p = static_cast<uint8_t*>(out_blob);
+	std::memcpy(p, kSpx1Magic, 4);
+	Spx1Put32(p, 4, kSpx1BackendGpu);
+	Spx1Put32(p, 8, SUPERSLM_VERSION_MAJOR);
+	Spx1Put32(p, 12, SUPERSLM_VERSION_MINOR);
+	Spx1Put32(p, 16, SUPERSLM_VERSION_PATCH);
+	Spx1Put32(p, 20, vendor);
+	Spx1Put32(p, 24, device);
+	std::memset(p + 28, 0, 32);
+	std::memcpy(p + 60, model->content_hash.data(), 32);
+	Spx1Put32(p, 92, model->kv_precision);
+	Spx1Put64(p, 96, schema_hash);
+	Spx1Put32(p, 104, seq->dfa_walk_state);
+	Spx1Put32(p, 108, static_cast<uint32_t>(token));
+	Spx1Put64(p, 112, static_cast<uint64_t>(L));
+	Spx1Put64(p, 120, static_cast<uint64_t>(seq->origin));
+	Spx1Put64(p, 128, static_cast<uint64_t>(st.hidden_scale.m));
+	Spx1Put64(p, 136, static_cast<uint64_t>(st.hidden_scale.e));
+	Spx1Put64(p, 144, st.kv_saturation_count);
+	Spx1Put64(p, 152, st.kv_landing_saturation_count);
+	Spx1Put64(p, 160, st.k_channel_landing_saturation_count);
+	Spx1Put64(p, 168, st.rope_q_saturation_count);
+	Spx1Put64(p, 176, st.rope_k_saturation_count);
+	const size_t residual = model->hidden_size;
+	if (residual) std::memcpy(p + kSpx1HeaderBytes, seq->hidden_codes.data(), residual);
+	uint8_t* rows = p + kSpx1HeaderBytes + residual;
+	const size_t D = model->head_dim;
+	for (size_t r = 0; r < GpuKvRuns(model); ++r) {
+		uint8_t* run_dst = rows + r * static_cast<size_t>(L) * D;
+		for (int64_t p0 = 0; p0 < L; p0 += B) {
+			const int64_t n = std::min<int64_t>(B, L - p0);
+			std::memcpy(run_dst + static_cast<size_t>(p0) * D, PooledMirrorRow(pool, seq->holder, r, p0, D),
+			            static_cast<size_t>(n) * D);
+		}
+	}
+	superslm::Sha256Hash(p, required, p + 28);
+	*out_blob_size = required;
+	return SSLM_OK;
+}
+
+// §4 items 2 and 3: validate everything in §4 item 3's order, then draw ceil(L/B) - s pages, share the
+// hint's s = floor(origin/B) leading pages when conditions (a)-(f) hold (else s = 0), map the rest,
+// scatter rows [s*B, L) into the host mirror and upload only those pages (the pool upload on the
+// process's device, after the guard). The returned prefix is frozen and rests as the saved one did.
+// A share refusal after the draw returns the draw (SSLM_SEQUENCE_KV_BUFFER_MISMATCH, as begin_from's);
+// an upload failure returns every drawn page and shared refcount and is classified as every handle create's.
+SslmGpuStatus sslm_gpu_prefix_restoreImpl(SslmGpuContext* ctx, SslmGpuModelHandle* model, SslmGpuKvPoolHandle* pool,
+                                          const void* blob, size_t n, SslmGpuPrefixHandle* parent_or_null,
+                                          SslmGpuPrefixHandle** out_prefix, uint32_t* out_shared_pages) {
+	if (out_shared_pages) *out_shared_pages = 0;
+	if (!out_prefix) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	*out_prefix = nullptr;
+	// 1. The checked arguments. The hint is not one of them.
+	if (!ctx || !model || !pool || !blob || model->ctx != ctx || pool->ctx != ctx || pool->model != model ||
+	    pool->pages == nullptr) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	// 2. EntrySubmitGuard (§4.4): the pool upload reaches the singleton; scope any sequence; after the
+	// argument refusals, before the blob is read.
+	if (const SslmGpuStatus g = EntrySubmitGuard(GuardScope::kAny, GuardDevice::kReachesSingleton); g != SSLM_OK) {
+		return g;
+	}
+	const uint8_t* p = static_cast<const uint8_t*>(blob);
+	// 3. Size and magic.
+	if (n < kSpx1HeaderBytes || std::memcmp(p, kSpx1Magic, 4) != 0) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	// 4. The digest, over the blob with its digest field zeroed.
+	{
+		uint8_t digest[32];
+		static constexpr uint8_t zeros[32] = {};
+		superslm::Sha256 hasher;
+		hasher.Update(p, 28);
+		hasher.Update(zeros, 32);
+		hasher.Update(p + 60, n - 60);
+		hasher.Final(digest);
+		if (std::memcmp(digest, p + 28, 32) != 0) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	// 5. The backend.
+	if (Spx1Get32(p, 4) != kSpx1BackendGpu) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	// 6. The producer: engine version, adapter vendor and device, so a blob restores only on the device that wrote it.
+	uint32_t vendor = 0, device = 0;
+	if (!ContextAdapterIds(ctx, &vendor, &device)) return SSLM_DEVICE_LOST;
+	if (Spx1Get32(p, 8) != SUPERSLM_VERSION_MAJOR || Spx1Get32(p, 12) != SUPERSLM_VERSION_MINOR ||
+	    Spx1Get32(p, 16) != SUPERSLM_VERSION_PATCH || Spx1Get32(p, 20) != vendor || Spx1Get32(p, 24) != device) {
+		return SSLM_RESTORE_PRODUCER_MISMATCH;
+	}
+	// 7. The model.
+	if (std::memcmp(p + 60, model->content_hash.data(), 32) != 0) return SSLM_RESTORE_MODEL_MISMATCH;
+	// 8. kv_precision.
+	if (Spx1Get32(p, 92) != model->kv_precision) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	// 9. The schema, by name hash (unique under the parser's rule); the walk within its states, or the
+	// unbound sentinel when no schema is named.
+	const uint64_t schema_hash = Spx1Get64(p, 96);
+	const uint32_t walk = Spx1Get32(p, 104);
+	int32_t schema_index = -1;
+	if (schema_hash != 0) {
+		size_t idx = 0;
+		const superslm::SchemaEntry* entry = model->schemas.ByNameHash(schema_hash, &idx);
+		if (entry == nullptr || walk >= entry->state_count) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+		schema_index = static_cast<int32_t>(idx);
+	} else if (walk != kSpx1WalkUnbound) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	// 10. The domains, in §3.4 step 8's order.
+	const int64_t L = static_cast<int64_t>(Spx1Get64(p, 112));
+	size_t required = 0;
+	if (L < 0 || L > model->context_cap || !Spx1Size(model, static_cast<uint64_t>(L), &required) || n != required) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	const int64_t origin = static_cast<int64_t>(Spx1Get64(p, 120));
+	if (origin < 0 || origin > L) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	const int32_t token = static_cast<int32_t>(Spx1Get32(p, 108));
+	if ((L == 0 && token != -1) || (L > 0 && (token < 0 || token >= model->vocab_size))) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	const int64_t m = static_cast<int64_t>(Spx1Get64(p, 128));
+	if (m < INT32_MIN || m > INT32_MAX) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	const int64_t e = static_cast<int64_t>(Spx1Get64(p, 136));
+
+	const superslm_gpu::kv_pool::GpuPageGeometry& geo = pool->geo;
+	const int64_t B = geo.page_positions;
+	const size_t D = model->head_dim;
+	const size_t runs = GpuKvRuns(model);
+	const size_t residual = model->hidden_size;
+	const uint8_t* rows = p + kSpx1HeaderBytes + residual;
+	const uint32_t needed = superslm_gpu::kv_pool::PagesToCover(L, B);
+	const uint32_t full = static_cast<uint32_t>(origin / B);
+	if (needed > geo.cap_pages || full > needed) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // unreachable: L <= cap
+	// The sharing hint, conditions (a)-(f), read before anything is drawn: (a) a nested blob (origin > 0),
+	// (b) a frozen hint, (c) of this model, (d) of this pool, (e) holding exactly `origin` positions, and
+	// (f) its host-mirror rows [0, full * B), every run, equal to the blob's. (e) precedes (f), so a
+	// shorter hint's table is never read past what it maps.
+	const SslmGpuSequenceHandle* src = parent_or_null != nullptr ? parent_or_null->seq : nullptr;
+	bool share = full > 0 && src != nullptr && parent_or_null->frozen &&                    // (a), (b)
+	             parent_or_null->ctx == ctx && parent_or_null->model == model &&             // (c)
+	             parent_or_null->pool == pool && src->holder != nullptr &&                   // (d)
+	             src->context_length == origin &&                                            // (e)
+	             full <= superslm::kv_pages::HolderMapped(src->holder);
+	if (share) {  // (f)
+		const size_t span_bytes = static_cast<size_t>(B) * D;
+		for (size_t r = 0; share && r < runs; ++r) {
+			const uint8_t* run_src = rows + r * static_cast<size_t>(L) * D;
+			for (uint32_t pg = 0; pg < full; ++pg) {
+				const int64_t p0 = static_cast<int64_t>(pg) * B;
+				if (std::memcmp(PooledMirrorRow(pool, src->holder, r, p0, D), run_src + static_cast<size_t>(p0) * D,
+				                span_bytes) != 0) {
+					share = false;
+					break;
+				}
+			}
+		}
+	}
+	const uint32_t s = share ? full : 0u;
+	const int32_t budget = static_cast<int32_t>(model->context_cap);
+	// Everything the success path allocates on the host, before the draw.
+	std::unique_ptr<SslmGpuPrefixHandle> out(new SslmGpuPrefixHandle());
+	std::vector<superslm_gpu::PoolUploadRegion> regions;
+	regions.reserve(needed - s);
+
+	// 11. The draw: exactly ceil(L/B) - s pages and the table buffer; SSLM_GPU_KV_POOL_EXHAUSTED with
+	// nothing drawn.
+	std::unique_ptr<SslmGpuSequenceHandle> h;
+	if (const SslmGpuStatus st = MakePooledSeqUnpublished(ctx, model, pool, budget, &h, needed - s, true); st != SSLM_OK) {
+		return st;
+	}
+	superslm::kv_pages::PageHolder* kv = h->holder;
+	// The share, in its own pool-mutex section after the draw.
+	if (s > 0) {
+		superslm::kv_pages::PageStatus ps = superslm::kv_pages::PageStatus::kOk;
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+		if (FireGpuPrefixRestoreFault(1, kv)) {
+			ps = g_gpu_prefix_restore_fault.share_refusal == 3 ? superslm::kv_pages::PageStatus::kRefcountUnderflow
+			                                                   : superslm::kv_pages::PageStatus::kInvalidArgument;
+		} else
+#endif
+		{
+			ps = superslm::kv_pages::HolderShareLeading(kv, src->holder, s);
+		}
+		if (ps != superslm::kv_pages::PageStatus::kOk) {
+			superslm::kv_pages::HolderRelease(kv);
+			return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+		}
+	}
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+	if (g_gpu_prefix_restore_fault.position == 2) {
+		superslm::kv_pages::HolderReturnReserve(kv, nullptr);
+		FireGpuPrefixRestoreFault(2, kv);
+	}
+#endif
+	while (superslm::kv_pages::HolderMapped(kv) < needed) {
+		const superslm::kv_pages::PageStatus ps = superslm::kv_pages::HolderMapNext(kv);
+		if (ps != superslm::kv_pages::PageStatus::kOk) {
+			superslm::kv_pages::HolderRelease(kv);
+			return ps == superslm::kv_pages::PageStatus::kExhausted ? SSLM_GPU_KV_POOL_EXHAUSTED
+			                                                        : SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+		}
+	}
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+	if (FireGpuPrefixRestoreFault(3, kv)) {
+		superslm::kv_pages::HolderRelease(kv);
+		return SSLM_GPU_ALLOCATION_FAILED;
+	}
+#endif
+	// The scatter into the host mirror: rows [s*B, L) of every run.
+	for (size_t r = 0; r < runs; ++r) {
+		const uint8_t* run_src = rows + r * static_cast<size_t>(L) * D;
+		for (int64_t p0 = static_cast<int64_t>(s) * B; p0 < L; p0 += B) {
+			const int64_t c = std::min<int64_t>(B, L - p0);
+			std::memcpy(PooledMirrorRow(pool, kv, r, p0, D), run_src + static_cast<size_t>(p0) * D,
+			            static_cast<size_t>(c) * D);
+		}
+	}
+	for (uint32_t i = s; i < needed; ++i) {
+		regions.push_back(superslm_gpu::PoolUploadRegion{superslm::kv_pages::HolderTableEntryForAddress(kv, i), 0u,
+		                                                 static_cast<uint64_t>(geo.page_bytes)});
+	}
+	// 12. The pool upload of the pages written, on the process's device.
+	superslm_gpu::harness::Device& dev = superslm_gpu::harness::GetDevice();
+	try {
+		superslm_gpu::UploadPoolRegionsSync(dev, pool, regions);
+	} catch (...) {
+		const SslmGpuStatus fault = ClassifyHandleFault(&dev);
+		superslm::kv_pages::HolderRelease(kv);
+		return fault;
+	}
+	// The prefix as saved: at rest (full depth and ready after a token, or empty), its prefill snapshot
+	// the residual, its schema binding and walk, frozen; bind permission only while empty.
+	const bool ready = L > 0;
+	h->table_dirty = true;
+	h->budget = budget;
+	h->origin = origin;
+	h->limit = superslm_gpu::kv_pool::HolderLimit(origin, budget, model->context_cap);
+	if (residual) std::memcpy(h->hidden_codes.data(), p + kSpx1HeaderBytes, residual);
+	const superslm::CarriedScale scale{m, e};
+	const uint32_t layer_index = ready ? model->num_hidden_layers : 0u;
+	h->hidden_scale = scale;
+	h->layer_index = layer_index;
+	h->kv_saturation_count = Spx1Get64(p, 144);
+	h->context_length = L;
+	h->live_state.hidden_scale = scale;
+	h->live_state.layer_index = layer_index;
+	h->live_state.kv_saturation_count = Spx1Get64(p, 144);
+	h->live_state.kv_landing_saturation_count = Spx1Get64(p, 152);
+	h->live_state.k_channel_landing_saturation_count = Spx1Get64(p, 160);
+	h->live_state.rope_q_saturation_count = Spx1Get64(p, 168);
+	h->live_state.rope_k_saturation_count = Spx1Get64(p, 176);
+	h->live_state.context_length = L;
+	h->bound_schema_index = schema_index;
+	h->dfa_walk_state = walk;
+	h->ready_for_logits = ready;
+	h->prefill_hidden_codes = h->hidden_codes;
+	h->prefill_hidden_valid = ready;
+	h->bind_eligible = !ready;
+	SetGpuSeqState(h.get(), superslm_gpu::SslmSequenceGpuState::Idle, nullptr);  // a fresh handle: Idle, no count
+	out->ctx = ctx;
+	out->model = model;
+	out->pool = pool;
+	out->frozen = true;
+	out->current_token = token;
+	out->seq = PublishPooledSeq(std::move(h));
+	if (out_shared_pages) *out_shared_pages = s;
+	*out_prefix = out.release();
 	return SSLM_OK;
 }
 
@@ -6160,25 +6547,25 @@ SslmGpuStatus sslm_gpu_seq_restore_into_pool(SslmGpuContext* ctx, SslmGpuModelHa
 	});
 }
 
-// Precached prefixes (1.15.0): save and restore a frozen GPU prefix ('SPX1'). F1 stubs: declared
-// and linked so the GPU red suite runs red at run time; the build step defines them.
+// Precached prefixes (1.15.0): save and restore a frozen GPU prefix ('SPX1'), through the boundary.
 SslmGpuStatus sslm_gpu_prefix_save(SslmGpuContext* ctx, const SslmGpuPrefixHandle* prefix, void* out_blob,
                                    size_t* out_blob_size) noexcept {
-	(void)ctx, (void)prefix, (void)out_blob, (void)out_blob_size;
-	return SSLM_DEVICE_LOST;
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_prefix_saveImpl(ctx, prefix, out_blob, out_blob_size); });
 }
 SslmGpuStatus sslm_gpu_prefix_restore(SslmGpuContext* ctx, SslmGpuModelHandle* model, SslmGpuKvPoolHandle* pool,
                                       const void* blob, size_t blob_size, SslmGpuPrefixHandle* parent_or_null,
                                       SslmGpuPrefixHandle** out_prefix, uint32_t* out_shared_pages) noexcept {
-	(void)ctx, (void)model, (void)pool, (void)blob, (void)blob_size, (void)parent_or_null;
 	ClearOutputHandle(out_prefix);
 	if (out_shared_pages) *out_shared_pages = 0;
-	return SSLM_DEVICE_LOST;
+	return InvokeGpuApiBoundary(__func__, [&] {
+		return sslm_gpu_prefix_restoreImpl(ctx, model, pool, blob, blob_size, parent_or_null, out_prefix,
+		                                   out_shared_pages);
+	});
 }
 SslmGpuStatus sslm_gpu_test_only_prefix_table_entry(const SslmGpuPrefixHandle* prefix, uint32_t i, uint32_t* out_page,
                                                     uint32_t* out_mapped) noexcept {
-	(void)prefix, (void)i, (void)out_page, (void)out_mapped;
-	return SSLM_DEVICE_LOST;
+	if (!prefix || prefix->seq == nullptr) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	return sslm_gpu_test_only_seq_table_entry(prefix->seq, i, out_page, out_mapped);
 }
 
 // G3 test seams the GPU red suite names (gpu_1p0_bench_bridge.h). Host-only reads and one flag;
@@ -6240,14 +6627,18 @@ void ArmGpuPoolZeroFillCloseFaultForTest(uint32_t consecutive_failures) noexcept
 	seam.pool_zero_fill_close_failures = consecutive_failures;  // 0 disarms
 }
 
-// review-g23 F2's pin: a refcount underflow at the pooled sequence's release.
+// Precached prefixes: the restore fault slot of the calling thread (cells 5.11 and 5.7, GPU halves).
+// Arming clears the fired flag; position 0 disarms.
 void ArmGpuPrefixRestoreFaultForTest(int position, int share_refusal) noexcept {
-	(void)position, (void)share_refusal;  // F1 stub
+	g_gpu_prefix_restore_fault = GpuPrefixRestoreFault{};
+	g_gpu_prefix_restore_fault.position = position;
+	g_gpu_prefix_restore_fault.share_refusal = share_refusal;
 }
 bool GpuPrefixRestoreFaultFiredForTest(uint32_t* out_shared_at_fire) noexcept {
-	if (out_shared_at_fire) *out_shared_at_fire = 0;
-	return false;  // F1 stub
+	if (out_shared_at_fire) *out_shared_at_fire = g_gpu_prefix_restore_fault.shared_at_fire;
+	return g_gpu_prefix_restore_fault.fired;
 }
+// review-g23 F2's pin: a refcount underflow at the pooled sequence's release.
 bool ZeroGpuPooledSeqReservePageRefcountForTest(SslmGpuSequenceHandle* seq) noexcept {
 	if (seq == nullptr || seq->pool == nullptr || seq->holder == nullptr || seq->holder->reserve.empty()) return false;
 	superslm::kv_pages::PagePool* pages = seq->pool->pages;

@@ -298,7 +298,11 @@ enum class SslmGpuStatus : uint32_t {
     /* sslm_gpu_seq_adopt_prefix: the sequence's schema binding does not match the prefix's (the
      * CPU's SSLM_PREFIX_SCHEMA_MISMATCH rule). Every check runs before any state change, so the
      * sequence keeps its binding and its bind eligibility. */
-    SSLM_GPU_PREFIX_SCHEMA_MISMATCH
+    SSLM_GPU_PREFIX_SCHEMA_MISMATCH,
+    /* sslm_gpu_prefix_restore (1.15.0): the 'SPX1' blob was written by another engine version or on
+     * another adapter (its VendorId or DeviceId differs from this context's). Appended LAST, as every
+     * GPU status before it; nothing changes and nothing is drawn. */
+    SSLM_RESTORE_PRODUCER_MISMATCH
 };
 
 /* Output handles: sslm_gpu_context_create, sslm_gpu_model_map, sslm_gpu_adapter_map,
@@ -1046,6 +1050,8 @@ SslmGpuStatus sslm_gpu_test_only_wait_in_flight(SslmGpuContext* ctx, SslmGpuSequ
  * domain: SSLM_SEQUENCE_KV_BUFFER_MISMATCH; (11) fewer than ceil(L/B) - s free pages:
  * SSLM_GPU_KV_POOL_EXHAUSTED with nothing drawn; (12) the upload's device statuses
  * (SSLM_GPU_ALLOCATION_FAILED, SSLM_DEVICE_LOST), every drawn page and shared refcount returned.
+ * The share runs after the draw, in its own pool-mutex section; if the page allocator refuses it
+ * (an internal fault), the draw is returned and the status is SSLM_SEQUENCE_KV_BUFFER_MISMATCH.
  * `parent_or_null` is a sharing hint, never a requirement and never a checked argument: when it is
  * frozen, of `model` and `pool`, its length is the blob's origin and its host-mirror rows
  * [0, s * B) equal the blob's, its s = floor(origin / B) full pages are shared and only the rest are
