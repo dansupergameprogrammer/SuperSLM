@@ -1029,9 +1029,16 @@ precision must match exactly.
 Restore accepts only a blob from this backend and producer. A producer version
 mismatch returns `SSLM_RESTORE_PRODUCER_MISMATCH`; model, precision, and schema
 mismatches have their distinct restore statuses. Every refusal clears `*out`.
-`parent_or_null` is a sharing hint: a matching frozen parent can provide full
-leading pages, while a null or nonmatching hint restores the same prefix
-privately when the pool has `ceil(length / B)` free pages. A private nested
+`parent_or_null` is a sharing hint. A nested blob (origin above 0) shares the
+hint's leading `floor(origin / B)` pages only when the hint is frozen, belongs
+to the same model and the same pool, holds exactly `origin` positions, and its
+rows over those pages, every layer, K and V, are byte-equal to the blob's. The
+restore then draws `ceil(length / B) - floor(origin / B)` pages and fills them
+from the blob, the parent's partial last page included, and reports the shared
+count through `*out_shared_pages`. A null or nonmatching hint, or a root blob,
+restores the same prefix privately (`SSLM_OK`, 0 shared) when the pool has
+`ceil(length / B)` free pages. The restored child holds its own references to
+the shared pages, so the parent may be released afterwards. A private nested
 restore may return `SSLM_KV_POOL_EXHAUSTED` even where building the nested
 prefix against its parent was admitted. `B` is the restore pool's page size
 (the contiguous pool option's is the context cap). `SPX1` carries no page size,

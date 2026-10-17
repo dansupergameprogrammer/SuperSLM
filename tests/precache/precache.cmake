@@ -30,12 +30,12 @@ target_compile_definitions(superslm_precache_e1 PRIVATE
 # B = 4 twin), so the generated fixtures are pinned as the paged-KV C4/C5 suites pin theirs
 # (pkv_common.h, D-SLM8439), and precache_common.h's PinFixtureB pins the synthetic shapes.
 target_compile_definitions(superslm_precache_e1 PRIVATE PKV_PIN_GENERATED_FIXTURES=1)
-# Plan revs 1.13-1.17 (§7 preamble): the unpinned E2 cells (4.7, 8.13, 9.8, 7.12's pool-kind leg) run at each model's
-# rule B. They build in a target of their own, with PKV_FIXTURE_B_FROM_RULE and without PKV_PIN_GENERATED_FIXTURES, so
+# Plan revs 1.13-1.17 (§7 preamble): the unpinned E2 cells (4.7, 8.13, 9.8, 7.12's pool-kind leg) and E3's nested legs
+# of 4.7 and 9.8 run at each model's rule B. They build in a target of their own, with PKV_FIXTURE_B_FROM_RULE and without PKV_PIN_GENERATED_FIXTURES, so
 # Fixture::B() and every helper built on it read the rule. The define never goes on superslm_precache_e1, whole or per
 # file (rev 1.15, R1): the sources sit in unpinned/, outside the e*.cpp glob above.
 set(PC_UNPINNED_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/tests/paged-kv/pkv_main.cpp
-    ${PC_DIR}/precache_stubs.cpp ${PC_DIR}/unpinned/e2_unpinned.cpp)
+    ${PC_DIR}/precache_stubs.cpp ${PC_DIR}/unpinned/e2_unpinned.cpp ${PC_DIR}/unpinned/e3_unpinned.cpp)
 add_executable(superslm_precache_unpinned EXCLUDE_FROM_ALL ${PC_UNPINNED_SOURCES})
 # The plan's receipt for that rule: the same cells with the paged-KV fixtures taken through GetFixture under the e1
 # target's pin. Expected red: 9.8 on pkv_def reads B = 16, not the rule's 128, at its first assertion.

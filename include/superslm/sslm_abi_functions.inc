@@ -167,8 +167,14 @@ SUPERSLM_API sslm_status sslm_prefix_begin_from(sslm_prefix parent, int32_t budg
  * saves of a frozen prefix are allowed; releasing it during a save is caller undefined behavior. */
 SUPERSLM_API sslm_status sslm_prefix_save(sslm_prefix prefix, void* buf, size_t* n);
 /* Restore an SPX1 prefix for this backend, engine producer, model and KV precision. The hint is
- * optional for fidelity. Without a matching hint, a nested prefix requires ceil(length/B) free
- * pages; exhaustion returns SSLM_KV_POOL_EXHAUSTED with no page drawn. Every refusal clears *out.
+ * optional for fidelity. A nested blob (origin > 0) shares the hint's leading floor(origin/B) pages
+ * only when the hint is frozen, of `model` and of `*pool`, holds exactly origin positions, and its
+ * rows over those pages equal the blob's; the rest are drawn and filled from the blob, so the
+ * restore draws ceil(length/B) - floor(origin/B) pages. Any other hint, a null one, or a root blob
+ * restores privately (SSLM_OK, 0 shared). *out_shared_pages, when non-null, receives the count
+ * shared. Without a matching hint, a nested prefix requires ceil(length/B) free pages; exhaustion
+ * returns SSLM_KV_POOL_EXHAUSTED with no page drawn. Every refusal clears *out and returns every
+ * page drawn and every shared reference taken. The parent may be released after the restore.
  * B is `pool`'s page size (the contiguous option's is the cap): SPX1 carries no page size, so a
  * blob restores into a pool of any page size, and the restored prefix is then adoptable only from
  * pools of that page size, as every prefix is (sslm_seq_adopt_prefix).

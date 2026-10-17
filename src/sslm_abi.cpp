@@ -4105,7 +4105,6 @@ bool SharingHandleMatches(const sslm_prefix_s* handle, const sslm_model_s* model
 extern "C" sslm_status sslm_prefix_restore(sslm_model model, sslm_kv_pool* pool, const void* buf, size_t n,
                                             sslm_prefix parent_or_null, sslm_prefix* out,
                                             uint32_t* out_shared_pages) {
-	(void)parent_or_null;  // E3 evaluates the optional sharing hint.
 	if (!out) return SSLM_INVALID_ARGUMENT;
 	*out = nullptr;
 	if (out_shared_pages) *out_shared_pages = 0;
@@ -4159,11 +4158,42 @@ extern "C" sslm_status sslm_prefix_restore(sslm_model model, sslm_kv_pool* pool,
 	if (m < INT32_MIN || m > INT32_MAX) return SSLM_INVALID_ARGUMENT;
 	const int64_t e = static_cast<int64_t>(ReadLE64(p + 136));
 	auto* pool_ptr = *pool;
-	const uint32_t pages = static_cast<uint32_t>((length + pool_ptr->page_positions - 1) /
-	                                              pool_ptr->page_positions);
+	const size_t residual = static_cast<size_t>(c.hidden_size);
+	const uint8_t* rows = p + kPrefixBlobHeaderBytes + residual;
+	// The optional sharing hint, evaluated after every field is validated and before any draw. A
+	// nested blob (origin > 0) shares the hint's floor(origin/B) full pages only when the hint is
+	// frozen, of this model and this pool, holds exactly `origin` positions, and its rows over those
+	// pages equal the blob's; anything else is a private restore with SSLM_OK. B is the restore
+	// pool's page size in every operand: the share count, the compared span and the scatter start.
+	// The rows from s*B on (the parent's partial tail page included) always come from the blob.
+	const int64_t B = pool_ptr->page_positions;
+	uint32_t share = 0;
+	if (parent_or_null && origin > 0 &&
+	    SharingHandleMatches(parent_or_null, model, pool_ptr, origin, rows, length)) {
+		share = static_cast<uint32_t>(origin / B);
+	}
+	const uint32_t pages = static_cast<uint32_t>((length + B - 1) / B);
+	// Draw first, under its own pool-mutex section, so a refusal here has drawn nothing and taken
+	// no refcount; then share, under a second section, before any private page is mapped.
 	superslm::kv_pages::PageHolder* holder = nullptr;
-	const sslm_status draw = CreateHolder(pool_ptr, pages, &holder);
+	const sslm_status draw = CreateHolder(pool_ptr, pages - share, &holder);
 	if (draw != SSLM_OK) return draw;
+	if (share > 0) {
+		superslm::kv_pages::PageStatus shared_st = superslm::kv_pages::PageStatus::kOk;
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+		if (g_prefix_restore_fault.position == 1) {
+			FirePrefixRestoreFault(1, pool_ptr, holder);
+			shared_st = g_prefix_restore_fault.page_status == 2 ?
+			            superslm::kv_pages::PageStatus::kRefcountUnderflow :
+			            superslm::kv_pages::PageStatus::kInvalidArgument;
+		} else
+#endif
+		shared_st = superslm::kv_pages::HolderShareLeading(holder, parent_or_null->kv, share);
+		if (shared_st != superslm::kv_pages::PageStatus::kOk) {
+			ReleaseHolder(pool_ptr, holder);
+			return MapPageStatus(shared_st);
+		}
+	}
 #ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
 	if (g_prefix_restore_fault.position == 2) {
 		superslm::kv_pages::HolderReturnReserve(holder, nullptr);
@@ -4186,7 +4216,6 @@ extern "C" sslm_status sslm_prefix_restore(sslm_model model, sslm_kv_pool* pool,
 	const sslm_status allocated = FinishPrefix(model, pool_ptr, holder, KvHolderMode::kBudget,
 	                                            static_cast<int32_t>(c.context_cap), origin, false, &prefix);
 	if (allocated != SSLM_OK) return allocated;  // FinishPrefix releases the holder on refusal.
-	const size_t residual = static_cast<size_t>(c.hidden_size);
 	if (residual) std::memcpy(prefix->hidden_codes_storage.data(), p + kPrefixBlobHeaderBytes, residual);
 	prefix->state.hidden_codes = prefix->hidden_codes_storage.data();
 	prefix->state.hidden_scale = superslm::CarriedScale{m, e};
@@ -4201,8 +4230,9 @@ extern "C" sslm_status sslm_prefix_restore(sslm_model model, sslm_kv_pool* pool,
 	prefix->bound_schema = schema;
 	prefix->dfa_walk_state = walk;
 	prefix->frozen = true;
-	ScatterRows(pool_ptr, holder, c, p + kPrefixBlobHeaderBytes + residual, length, 0, length);
+	ScatterRows(pool_ptr, holder, c, rows, length, static_cast<int64_t>(share) * B, length);
 	*out = prefix;
+	if (out_shared_pages) *out_shared_pages = share;
 	return SSLM_OK;
 }
 

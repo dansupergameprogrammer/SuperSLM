@@ -1,19 +1,20 @@
-"""The named mutants of the unpinned E2 cells (plan revs 1.13-1.17: 4.7, 8.13, 9.8, 7.12's pool-kind leg).
+"""The named mutants of the unpinned cells (plan revs 1.13-1.17: 4.7, 8.13, 9.8, 7.12's pool-kind leg) and of the
+E3 restore hint (4.7's and 9.8's nested legs, and the e1 suite's [E3] cells).
 
 usage: apply_mutant.py <path to src/sslm_abi.cpp> <mutant>
 
 Applies one mutant to the engine source in place, by exact single-occurrence replacement (it refuses when the
 anchor text is missing or repeated). Build superslm_precache_unpinned, run the cell, then restore the file with
-`git checkout -- src/sslm_abi.cpp`. Never commit a mutated tree. build/e2-ruleb-cells.md carries the receipts."""
+`git checkout -- src/sslm_abi.cpp`. Never commit a mutated tree. build/e2-ruleb-cells.md and
+build/e3-nested-cloud-2026-10-17.md carry the receipts."""
 import sys
 path, name = sys.argv[1], sys.argv[2]
 src = open(path).read()
 M = {
  # 4.7: the restore's draw computed as floor(L/B)
  "draw-floor": [(
-"""	const uint32_t pages = static_cast<uint32_t>((length + pool_ptr->page_positions - 1) /
-	                                              pool_ptr->page_positions);""",
-"""	const uint32_t pages = static_cast<uint32_t>(length / pool_ptr->page_positions);  // MUTANT draw-floor""")],
+"""	const uint32_t pages = static_cast<uint32_t>((length + B - 1) / B);""",
+"""	const uint32_t pages = static_cast<uint32_t>(length / B);  // MUTANT draw-floor""")],
  # 4.7: PKV's MapPagesFor table bound computed as cap / B, truncating (premise mutant)
  "table-cap-div-b": [(
 """	if (needed > holder->table_entries) return SSLM_INVALID_ARGUMENT;""",
@@ -68,10 +69,47 @@ M = {
 """	// MUTANT adopt-no-page-size-check: A22 removed""")],
  # 9.8: the restore takes B from the model's geometry rather than from the pool
  "restore-b-from-model": [(
-"""	const uint32_t pages = static_cast<uint32_t>((length + pool_ptr->page_positions - 1) /
-	                                              pool_ptr->page_positions);""",
+"""	const uint32_t pages = static_cast<uint32_t>((length + B - 1) / B);""",
 """	const int64_t model_B = ComputePageGeometry(model).page_positions;  // MUTANT restore-b-from-model
 	const uint32_t pages = static_cast<uint32_t>((length + model_B - 1) / model_B);""")],
+ # ---- E3: the restore hint (plan §3.5) ----
+ # E3 baseline: the hint ignored (s = 0 always), the E2 private restore
+ "hint-ignored": [(
+"""	if (parent_or_null && origin > 0 &&""",
+"""	if (false && parent_or_null && origin > 0 &&  // MUTANT hint-ignored""")],
+ # 9.8 nested leg (named): the hint's s from the model's rule B rather than the restore pool's B
+ "hint-s-from-model": [(
+"""		share = static_cast<uint32_t>(origin / B);""",
+"""		share = static_cast<uint32_t>(origin / ComputePageGeometry(model).page_positions);  // MUTANT hint-s-from-model""")],
+ # 9.8 nested leg (named, second form): (f)'s span from the model's rule B rather than the pool's
+ "hint-span-from-model": [(
+"""	const int64_t B = pool->page_positions;
+	const int64_t span = (origin / B) * B;""",
+"""	const int64_t B = ComputePageGeometry(model).page_positions;  // MUTANT hint-span-from-model
+	const int64_t span = (origin / B) * B;""")],
+ # 4.7 nested leg: the draw ignores the shared pages (ceil(L/B) drawn, not ceil(L/B) - s)
+ "hint-draw-whole": [(
+"""	const sslm_status draw = CreateHolder(pool_ptr, pages - share, &holder);""",
+"""	const sslm_status draw = CreateHolder(pool_ptr, pages, &holder);  // MUTANT hint-draw-whole""")],
+ # 4.7 nested leg: the parent's partial tail page shared too (s = ceil(origin/B))
+ "hint-share-ceil": [(
+"""		share = static_cast<uint32_t>(origin / B);""",
+"""		share = static_cast<uint32_t>((origin + B - 1) / B);  // MUTANT hint-share-ceil""")],
+ # 4.7 nested leg: the scatter starts at origin, not at s*B (the private partial page's rows [s*B, origin) unwritten)
+ "hint-scatter-from-origin": [(
+"""	ScatterRows(pool_ptr, holder, c, rows, length, static_cast<int64_t>(share) * B, length);""",
+"""	ScatterRows(pool_ptr, holder, c, rows, length, share ? origin : 0, length);  // MUTANT hint-scatter-from-origin""")],
+ # 7.5: (f) compares only layer 0
+ "hint-f-layer0": [(
+"""	for (size_t r = 0; r < runs; ++r) {  // (f)""",
+"""	for (size_t r = 0; r < 2u * c.num_key_value_heads; ++r) {  // (f) MUTANT hint-f-layer0""")],
+ # 5.11/E3: a refused share returns without releasing the holder (drawn pages leak)
+ "hint-share-refusal-leaks": [(
+"""		if (shared_st != superslm::kv_pages::PageStatus::kOk) {
+			ReleaseHolder(pool_ptr, holder);
+			return MapPageStatus(shared_st);""",
+"""		if (shared_st != superslm::kv_pages::PageStatus::kOk) {
+			return MapPageStatus(shared_st);  // MUTANT hint-share-refusal-leaks""")],
 }
 for old, new in M[name]:
     n = src.count(old)
