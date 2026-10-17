@@ -110,6 +110,36 @@ M = {
 			return MapPageStatus(shared_st);""",
 """		if (shared_st != superslm::kv_pages::PageStatus::kOk) {
 			return MapPageStatus(shared_st);  // MUTANT hint-share-refusal-leaks""")],
+ # 5.2/E3: the post-map allocation failure returns only the reserve (HolderReturnReserve), not the holder: the
+ # private pages stay mapped and the shared references stay taken (T-3027 F13's form, on the nested restore)
+ "alloc-fail-reserve-only": [(
+"""		FirePrefixRestoreFault(3, pool_ptr, holder);
+		ReleaseHolder(pool_ptr, holder);""",
+"""		FirePrefixRestoreFault(3, pool_ptr, holder);
+		superslm::kv_pages::HolderReturnReserve(holder, nullptr);  // MUTANT alloc-fail-reserve-only""")],
+ # 2.6 / 5.10 (T-3060 F8): a private restore that underdraws by the s a matching hint would have shared
+ "hint-underdraw-private": [(
+"""	const sslm_status draw = CreateHolder(pool_ptr, pages - share, &holder);""",
+"""	const sslm_status draw = CreateHolder(pool_ptr, pages - static_cast<uint32_t>(origin / B), &holder);  // MUTANT hint-underdraw-private""")],
+ # 5.2/E3 (T-3060 F5): the post-map allocation failure releases nothing (the holder, its private pages and its shared
+ # references all leak)
+ "alloc-fail-leak-holder": [(
+"""		FirePrefixRestoreFault(3, pool_ptr, holder);
+		ReleaseHolder(pool_ptr, holder);""",
+"""		FirePrefixRestoreFault(3, pool_ptr, holder);  // MUTANT alloc-fail-leak-holder""")],
+ # 5.11/E3 (T-3060 F5): the map refusal returns without releasing the holder (the shared references leak)
+ "map-refusal-leaks": [(
+"""	if (mapped != SSLM_OK) {
+		ReleaseHolder(pool_ptr, holder);
+		return mapped;
+	}
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+	if (g_prefix_restore_fault.position == 3) {""",
+"""	if (mapped != SSLM_OK) {
+		return mapped;  // MUTANT map-refusal-leaks
+	}
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+	if (g_prefix_restore_fault.position == 3) {""")],
 }
 for old, new in M[name]:
     n = src.count(old)
