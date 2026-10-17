@@ -152,6 +152,7 @@ call :exe pcg_cell_pool plain F2 "..\precache-gpu\pcg_cell_pool" ""
 call :exe pcg_cell_busy plain F2 "..\precache-gpu\pcg_cell_busy" ""
 call :exe pcg_cell_faults alloc F2 "..\precache-gpu\pcg_cell_faults" ""
 call :exe pcg_cell_schema plain F2 "..\precache-gpu\pcg_cell_schema" ""
+call :exe pcg_cell_budget_snapshot plain F2 "..\precache-gpu\pcg_cell_budget_snapshot" ""
 :only_old
 if defined OLDTREE call :oldreader
 echo PKVG BUILD: %NLINKED% linked, %NRED% red by link, %NCOMPILE% red by compile or unexpected link failure

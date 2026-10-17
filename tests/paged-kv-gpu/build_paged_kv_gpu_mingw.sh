@@ -91,6 +91,7 @@ pcg_cell_pool|plain|F2|../precache-gpu/pcg_cell_pool|
 pcg_cell_busy|plain|F2|../precache-gpu/pcg_cell_busy|
 pcg_cell_faults|alloc|F2|../precache-gpu/pcg_cell_faults|
 pcg_cell_schema|plain|F2|../precache-gpu/pcg_cell_schema|
+pcg_cell_budget_snapshot|plain|F2|../precache-gpu/pcg_cell_budget_snapshot|
 '
 # Host-only programs (no engine): the suite's process runner.
 HOST_TABLE="pkvg_suite"

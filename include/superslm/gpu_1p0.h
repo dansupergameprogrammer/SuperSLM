@@ -961,7 +961,10 @@ SslmGpuStatus sslm_gpu_prefix_set_schema(SslmGpuContext* ctx, SslmGpuPrefixHandl
 /* Prefills `count` tokens into the prefix through the prompt (`kind` 0, SSLM_SPAN_PROMPT's value)
  * or schema-content (`kind` 1, SSLM_SPAN_SCHEMA_CONTENT's value) prefill bridge, adapter unbound:
  * prefixes are base-only. `*consumed` counts the admitted tokens, as the bridges' partial
- * consumption. After freeze: SSLM_GPU_PREFIX_REJECTED. */
+ * consumption. After freeze: SSLM_GPU_PREFIX_REJECTED. A call that lands tokens and then returns
+ * SSLM_GPU_KV_BUDGET_EXCEEDED also refreshes the prefix's prefill snapshot (the one an adopter reads
+ * through sslm_gpu_seq_read_prefill_final_hidden), as a successful prefill does, so a saved and
+ * restored copy gives its adopters the same snapshot. */
 SslmGpuStatus sslm_gpu_prefix_prefill(SslmGpuContext* ctx, SslmGpuPrefixHandle* prefix,
                                       const int32_t* tokens, int32_t count, int32_t kind,
                                       uint32_t dispatch_budget, int32_t* consumed) noexcept;

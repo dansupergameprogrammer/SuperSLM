@@ -5528,6 +5528,17 @@ SslmGpuStatus sslm_gpu_prefix_set_schemaImpl(SslmGpuContext* ctx, SslmGpuPrefixH
 // the tokens that landed (the schema bridge's own count, or the prompt bridge's context-length advance).
 // A call that admitted n < count tokens and landed all n returns SSLM_OK with `*consumed` = n, resumable,
 // as the CPU twin's chunk_budget (cell 5.8). Repeated calls of any count are allowed (gap 4c).
+// A prefix's prefill that landed tokens and then stopped at the budget (SSLM_GPU_KV_BUDGET_EXCEEDED) leaves the
+// prefix ready at full depth, so it can freeze, be adopted and be saved. Its prefill snapshot is that
+// residual: the restore rebuilds the snapshot from the saved residual whenever the prefix is ready, so the
+// original must hold the same, or its adopters and a restored copy's adopters would read different
+// snapshots. Prefix-only: a sequence's own snapshot keeps the successful-prefill rule of gpu_1p0.h.
+static void RefreshPrefixSnapshotOnBudgetStop(SslmGpuSequenceHandle* seq, SslmGpuStatus st, int64_t landed) {
+	if (st != SSLM_GPU_KV_BUDGET_EXCEEDED || landed <= 0 || !seq->ready_for_logits) return;
+	seq->prefill_hidden_codes = seq->hidden_codes;
+	seq->prefill_hidden_valid = true;
+}
+
 SslmGpuStatus sslm_gpu_prefix_prefillImpl(SslmGpuContext* ctx, SslmGpuPrefixHandle* prefix, const int32_t* tokens,
                                           int32_t count, int32_t kind, uint32_t dispatch_budget, int32_t* consumed) {
 	if (!consumed) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
@@ -5553,12 +5564,14 @@ SslmGpuStatus sslm_gpu_prefix_prefillImpl(SslmGpuContext* ctx, SslmGpuPrefixHand
 		const int64_t landed = seq->context_length - before;
 		*consumed = landed <= 0 ? 0 : (landed >= n ? n : static_cast<int32_t>(landed));
 		if (*consumed > 0) prefix->current_token = tokens[*consumed - 1];
+		RefreshPrefixSnapshotOnBudgetStop(seq, st, *consumed);
 		return st;
 	}
 	int32_t landed = 0;
 	const SslmGpuStatus st = SslmGpuSeqPrefillSchemaContentForG5BridgeImpl(ctx, seq, tokens, n, per_token, &landed);
 	*consumed = landed;
 	if (landed > 0) prefix->current_token = tokens[landed - 1];
+	RefreshPrefixSnapshotOnBudgetStop(seq, st, landed);
 	return st;
 }
 
