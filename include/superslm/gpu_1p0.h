@@ -1048,8 +1048,9 @@ SslmGpuStatus sslm_gpu_test_only_wait_in_flight(SslmGpuContext* ctx, SslmGpuSequ
  * model: SSLM_RESTORE_MODEL_MISMATCH; (8) another kv_precision, (9) a schema the model does not
  * resolve or a walk state out of its range, (10) a length, size, origin, token or scale out of
  * domain: SSLM_SEQUENCE_KV_BUFFER_MISMATCH; (11) fewer than ceil(L/B) - s free pages:
- * SSLM_GPU_KV_POOL_EXHAUSTED with nothing drawn; (12) the upload's device statuses
- * (SSLM_GPU_ALLOCATION_FAILED, SSLM_DEVICE_LOST), every drawn page and shared refcount returned.
+ * SSLM_GPU_KV_POOL_EXHAUSTED with nothing drawn; (12) the device statuses of the page table's
+ * buffer (allocated with the draw) and of the upload (SSLM_GPU_ALLOCATION_FAILED, SSLM_DEVICE_LOST),
+ * every drawn page and shared refcount returned.
  * The share runs after the draw, in its own pool-mutex section; if the page allocator refuses it
  * (an internal fault), the draw is returned and the status is SSLM_SEQUENCE_KV_BUFFER_MISMATCH.
  * `parent_or_null` is a sharing hint, never a requirement and never a checked argument: when it is

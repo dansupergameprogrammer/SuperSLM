@@ -205,19 +205,21 @@ set "DFLAG="
 if not "%D%"=="" set "TAG=%D:#=_%"
 if not "%D%"=="" set "D=%D:#==%"
 if not "%D%"=="" set "DFLAG=/D%D%"
+rem A source outside this folder (..\precache-gpu\NAME) keeps its object and log in ODIR under its file name.
+for %%F in ("%SRC%") do set "OBJN=%%~nF"
 set "ODIR=%OUT%\cells\%CFG%_%TAG%"
 if not exist "%ODIR%" mkdir "%ODIR%"
-if exist "%ODIR%\%SRC%.obj" goto :cell_have
-cl /c %CLF% !DEF_%CFG%! %DFLAG% /Fo"%ODIR%\%SRC%.obj" "%HEREDIR%%SRC%.cpp" > "%ODIR%\%SRC%.log" 2>&1
+if exist "%ODIR%\%OBJN%.obj" goto :cell_have
+cl /c %CLF% !DEF_%CFG%! %DFLAG% /Fo"%ODIR%\%OBJN%.obj" "%HEREDIR%%SRC%.cpp" > "%ODIR%\%OBJN%.log" 2>&1
 if errorlevel 1 (
     echo [%STEP%] %EXE%: RED BY COMPILE in %SRC%.cpp
-    findstr /R /C:"error C[0-9]*" "%ODIR%\%SRC%.log"
+    findstr /R /C:"error C[0-9]*" "%ODIR%\%OBJN%.log"
     set /a NCOMPILE+=1
     set CELLFAIL=1
     exit /b 0
 )
 :cell_have
-set OBJS=%OBJS% "%ODIR%\%SRC%.obj"
+set OBJS=%OBJS% "%ODIR%\%OBJN%.obj"
 exit /b 0
 
 rem ---- :gpulib CONFIG: every GPU source of build.bat's list, with the configuration's definitions ----------------
