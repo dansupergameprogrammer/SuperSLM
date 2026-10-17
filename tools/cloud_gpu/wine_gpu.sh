@@ -70,7 +70,7 @@ cmd_setup() {
 # build.bat's own superslm_tests source list and defines (cl line after the dxc loop).
 SRCS="src/artifact.cpp src/sha256.cpp src/tokenizer.cpp src/model.cpp src/intmath.cpp src/silu_lut.cpp
 src/matmul.cpp src/proof_manifest.cpp src/trace_hook.cpp src/forward/checked_chain_funnel.cpp
-src/forward/forward_sites.cpp src/forward/parallel_split.cpp src/decode_digest.cpp src/kv_pages.cpp
+src/forward/forward_sites.cpp src/forward/parallel_split.cpp src/decode_digest.cpp src/kv_pages.cpp src/spx1_format.cpp
 src/sslm_abi.cpp src/damped_greedy_antilm.cpp src/damped_greedy_topk.cpp src/damped_greedy_phaseD.cpp
 src/damped_greedy_phaseD_loop.cpp src/gpu/superslm_gpu.cpp src/gpu/gpu_1p0.cpp tests/test_main.cpp
 tests/test_slm18x_saturation_census.cpp tests/test_slm19x_schema_damped_greedy.cpp tests/test_tiled_gemm.cpp

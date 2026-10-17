@@ -45,6 +45,7 @@ set(SUPERSLM_CORE_SOURCES
 	src/gpu/gpu_inflight_registry.cpp
 	src/decode_digest.cpp
 	src/kv_pages.cpp
+	src/spx1_format.cpp
 	src/sslm_abi.cpp
 	src/damped_greedy_antilm.cpp
 	src/damped_greedy_topk.cpp

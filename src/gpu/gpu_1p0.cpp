@@ -67,8 +67,7 @@ static_assert(sizeof(GpuResidencyConfig) == 4 && offsetof(GpuResidencyConfig, fl
 #include "superslm/gpu_port.h"       // T-2113 B2: GpuLayerLayout/ComputeLayerLayout/PackLayerWeightsBytes
 #include "superslm/layer_marshal.h"  // T-2113 B2: MarshalLayer/LayerBacking (relocated, tools/sslm_marshal.h)
 #include "superslm/model.h"          // T-2113 B2: the REAL superslm::SslmModelView this TU needs by value
-#include "superslm/sha256.h"         // precached prefixes: the SPX1 digest
-#include "superslm/sslm_version.h"   // precached prefixes: the SPX1 producer version
+#include "../spx1_format.h"          // precached prefixes: the SPX1 writer and reader both backends use
 #include "superslm/schema_masks.h"   // G5-5 (T-2132): SchemaMasksTable -- the SAME SCM1 reader the CPU
                                       // ABI (sslm_abi.cpp) already uses, reused here, not re-derived.
 
@@ -5858,39 +5857,9 @@ SslmGpuStatus sslm_gpu_seq_restore_into_poolImpl(SslmGpuContext* ctx, SslmGpuMod
 
 // Precached prefixes (1.15.0, plan §4): the GPU twin of sslm_prefix_save / sslm_prefix_restore over the
 // same 'SPX1' layout (§3.2): a 184-byte header, the residual, then rows [0, L) in canonical order
-// [layer][K|V][kv_head][pos < L][d]. backend = 1 and the producer adapter's VendorId/DeviceId at 20/24.
+// [layer][K|V][kv_head][pos < L][d]. backend = 1 and the producer adapter's VendorId/DeviceId at 20/24. The
+// bytes and the reader's check order are src/spx1_format's, the same writer and reader the CPU verbs use.
 namespace {
-
-constexpr uint8_t kSpx1Magic[4] = {'S', 'P', 'X', '1'};
-constexpr size_t kSpx1HeaderBytes = 184;
-constexpr uint32_t kSpx1BackendGpu = 1;
-constexpr uint32_t kSpx1WalkUnbound = 0xFFFFFFFFu;
-
-void Spx1Put32(uint8_t* p, size_t off, uint32_t v) {
-	for (int i = 0; i < 4; ++i) p[off + i] = static_cast<uint8_t>(v >> (8 * i));
-}
-void Spx1Put64(uint8_t* p, size_t off, uint64_t v) {
-	for (int i = 0; i < 8; ++i) p[off + i] = static_cast<uint8_t>(v >> (8 * i));
-}
-uint32_t Spx1Get32(const uint8_t* p, size_t off) {
-	uint32_t v = 0;
-	for (int i = 0; i < 4; ++i) v |= static_cast<uint32_t>(p[off + i]) << (8 * i);
-	return v;
-}
-uint64_t Spx1Get64(const uint8_t* p, size_t off) {
-	uint64_t v = 0;
-	for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(p[off + i]) << (8 * i);
-	return v;
-}
-
-// The blob size for L positions: header + residual + L rows of every run, or false on overflow.
-bool Spx1Size(const SslmGpuModelHandle* model, uint64_t length, size_t* out) {
-	const uint64_t per_position = static_cast<uint64_t>(GpuKvRuns(model)) * model->head_dim;
-	const uint64_t fixed = kSpx1HeaderBytes + uint64_t{model->hidden_size};
-	if (per_position != 0 && length > (SIZE_MAX - fixed) / per_position) return false;
-	*out = static_cast<size_t>(fixed + length * per_position);
-	return true;
-}
 
 // The context's adapter identity (the producer field): DXGI_ADAPTER_DESC1's VendorId and DeviceId.
 bool ContextAdapterIds(SslmGpuContext* ctx, uint32_t* vendor, uint32_t* device) {
@@ -5900,6 +5869,10 @@ bool ContextAdapterIds(SslmGpuContext* ctx, uint32_t* vendor, uint32_t* device) 
 	*vendor = desc.VendorId;
 	*device = desc.DeviceId;
 	return true;
+}
+// The same, as the SPX1 reader's producer callback (`user` is the context).
+bool ContextAdapterIdsForReader(void* user, uint32_t* vendor, uint32_t* device) {
+	return ContextAdapterIds(static_cast<SslmGpuContext*>(user), vendor, device);
 }
 
 #if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
@@ -5947,7 +5920,10 @@ SslmGpuStatus sslm_gpu_prefix_saveImpl(SslmGpuContext* ctx, const SslmGpuPrefixH
 	                            seq->ready_for_logits && token >= 0 && token < model->vocab_size);
 	if (!rest) return SSLM_GPU_PREFIX_REJECTED;
 	size_t required = 0;
-	if (!Spx1Size(model, static_cast<uint64_t>(L), &required)) return SSLM_GPU_PREFIX_REJECTED;
+	if (!superslm::spx1::BlobSize(GpuKvRuns(model), model->head_dim, model->hidden_size, static_cast<uint64_t>(L),
+	                              &required)) {
+		return SSLM_GPU_PREFIX_REJECTED;
+	}
 	if (!out_blob || *out_blob_size < required) {
 		*out_blob_size = required;
 		return SSLM_OUTPUT_BUFFER_TOO_SMALL;
@@ -5966,31 +5942,28 @@ SslmGpuStatus sslm_gpu_prefix_saveImpl(SslmGpuContext* ctx, const SslmGpuPrefixH
 	uint32_t vendor = 0, device = 0;
 	if (!ContextAdapterIds(ctx, &vendor, &device)) return SSLM_DEVICE_LOST;
 	uint8_t* p = static_cast<uint8_t*>(out_blob);
-	std::memcpy(p, kSpx1Magic, 4);
-	Spx1Put32(p, 4, kSpx1BackendGpu);
-	Spx1Put32(p, 8, SUPERSLM_VERSION_MAJOR);
-	Spx1Put32(p, 12, SUPERSLM_VERSION_MINOR);
-	Spx1Put32(p, 16, SUPERSLM_VERSION_PATCH);
-	Spx1Put32(p, 20, vendor);
-	Spx1Put32(p, 24, device);
-	std::memset(p + 28, 0, 32);
-	std::memcpy(p + 60, model->content_hash.data(), 32);
-	Spx1Put32(p, 92, model->kv_precision);
-	Spx1Put64(p, 96, schema_hash);
-	Spx1Put32(p, 104, seq->dfa_walk_state);
-	Spx1Put32(p, 108, static_cast<uint32_t>(token));
-	Spx1Put64(p, 112, static_cast<uint64_t>(L));
-	Spx1Put64(p, 120, static_cast<uint64_t>(seq->origin));
-	Spx1Put64(p, 128, static_cast<uint64_t>(st.hidden_scale.m));
-	Spx1Put64(p, 136, static_cast<uint64_t>(st.hidden_scale.e));
-	Spx1Put64(p, 144, st.kv_saturation_count);
-	Spx1Put64(p, 152, st.kv_landing_saturation_count);
-	Spx1Put64(p, 160, st.k_channel_landing_saturation_count);
-	Spx1Put64(p, 168, st.rope_q_saturation_count);
-	Spx1Put64(p, 176, st.rope_k_saturation_count);
+	superslm::spx1::Header hdr;
+	hdr.backend = superslm::spx1::kBackendGpu;
+	hdr.adapter_vendor = vendor;
+	hdr.adapter_device = device;
+	std::memcpy(hdr.model_hash.data(), model->content_hash.data(), 32);
+	hdr.kv_precision = model->kv_precision;
+	hdr.schema_hash = schema_hash;
+	hdr.walk = seq->dfa_walk_state;
+	hdr.current_token = token;
+	hdr.length = L;
+	hdr.origin = seq->origin;
+	hdr.scale_m = st.hidden_scale.m;
+	hdr.scale_e = st.hidden_scale.e;
+	hdr.kv_saturation_count = st.kv_saturation_count;
+	hdr.kv_landing_saturation_count = st.kv_landing_saturation_count;
+	hdr.k_channel_landing_saturation_count = st.k_channel_landing_saturation_count;
+	hdr.rope_q_saturation_count = st.rope_q_saturation_count;
+	hdr.rope_k_saturation_count = st.rope_k_saturation_count;
+	superslm::spx1::WriteHeader(p, hdr);
 	const size_t residual = model->hidden_size;
-	if (residual) std::memcpy(p + kSpx1HeaderBytes, seq->hidden_codes.data(), residual);
-	uint8_t* rows = p + kSpx1HeaderBytes + residual;
+	if (residual) std::memcpy(superslm::spx1::Residual(p), seq->hidden_codes.data(), residual);
+	uint8_t* rows = superslm::spx1::Rows(p, residual);
 	const size_t D = model->head_dim;
 	for (size_t r = 0; r < GpuKvRuns(model); ++r) {
 		uint8_t* run_dst = rows + r * static_cast<size_t>(L) * D;
@@ -6000,7 +5973,7 @@ SslmGpuStatus sslm_gpu_prefix_saveImpl(SslmGpuContext* ctx, const SslmGpuPrefixH
 			            static_cast<size_t>(n) * D);
 		}
 	}
-	superslm::Sha256Hash(p, required, p + 28);
+	superslm::spx1::Seal(p, required);
 	*out_blob_size = required;
 	return SSLM_OK;
 }
@@ -6027,68 +6000,44 @@ SslmGpuStatus sslm_gpu_prefix_restoreImpl(SslmGpuContext* ctx, SslmGpuModelHandl
 	if (const SslmGpuStatus g = EntrySubmitGuard(GuardScope::kAny, GuardDevice::kReachesSingleton); g != SSLM_OK) {
 		return g;
 	}
-	const uint8_t* p = static_cast<const uint8_t*>(blob);
-	// 3. Size and magic.
-	if (n < kSpx1HeaderBytes || std::memcmp(p, kSpx1Magic, 4) != 0) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
-	// 4. The digest, over the blob with its digest field zeroed.
-	{
-		uint8_t digest[32];
-		static constexpr uint8_t zeros[32] = {};
-		superslm::Sha256 hasher;
-		hasher.Update(p, 28);
-		hasher.Update(zeros, 32);
-		hasher.Update(p + 60, n - 60);
-		hasher.Final(digest);
-		if (std::memcmp(digest, p + 28, 32) != 0) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	// 3-10. The blob, through the SPX1 reader, in §4 item 3's order: size and magic, the digest, the backend,
+	// the producer (engine version, adapter vendor and device, so a blob restores only on the device that wrote
+	// it), the model, kv_precision, the schema (by name hash; the walk within its states, or the unbound value
+	// when no schema is named), then the domains in §3.4 step 8's order.
+	superslm::spx1::Expect expect;
+	expect.backend = superslm::spx1::kBackendGpu;
+	expect.adapter_ids = &ContextAdapterIdsForReader;
+	expect.adapter_user = ctx;
+	expect.model_hash = model->content_hash.data();
+	expect.kv_precision = model->kv_precision;
+	expect.schemas = &model->schemas;
+	expect.context_cap = model->context_cap;
+	expect.vocab_size = static_cast<uint64_t>(model->vocab_size);
+	expect.runs = GpuKvRuns(model);
+	expect.head_dim = model->head_dim;
+	expect.hidden_size = model->hidden_size;
+	superslm::spx1::Fields f;
+	switch (superslm::spx1::Read(static_cast<const uint8_t*>(blob), n, expect, &f)) {
+		case superslm::spx1::Verdict::kOk: break;
+		case superslm::spx1::Verdict::kAdapterUnavailable: return SSLM_DEVICE_LOST;
+		case superslm::spx1::Verdict::kProducer: return SSLM_RESTORE_PRODUCER_MISMATCH;
+		case superslm::spx1::Verdict::kModel: return SSLM_RESTORE_MODEL_MISMATCH;
+		default: return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // size, magic, digest, backend, kv_precision, schema, a domain
 	}
-	// 5. The backend.
-	if (Spx1Get32(p, 4) != kSpx1BackendGpu) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
-	// 6. The producer: engine version, adapter vendor and device, so a blob restores only on the device that wrote it.
-	uint32_t vendor = 0, device = 0;
-	if (!ContextAdapterIds(ctx, &vendor, &device)) return SSLM_DEVICE_LOST;
-	if (Spx1Get32(p, 8) != SUPERSLM_VERSION_MAJOR || Spx1Get32(p, 12) != SUPERSLM_VERSION_MINOR ||
-	    Spx1Get32(p, 16) != SUPERSLM_VERSION_PATCH || Spx1Get32(p, 20) != vendor || Spx1Get32(p, 24) != device) {
-		return SSLM_RESTORE_PRODUCER_MISMATCH;
-	}
-	// 7. The model.
-	if (std::memcmp(p + 60, model->content_hash.data(), 32) != 0) return SSLM_RESTORE_MODEL_MISMATCH;
-	// 8. kv_precision.
-	if (Spx1Get32(p, 92) != model->kv_precision) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
-	// 9. The schema, by name hash (unique under the parser's rule); the walk within its states, or the
-	// unbound sentinel when no schema is named.
-	const uint64_t schema_hash = Spx1Get64(p, 96);
-	const uint32_t walk = Spx1Get32(p, 104);
-	int32_t schema_index = -1;
-	if (schema_hash != 0) {
-		size_t idx = 0;
-		const superslm::SchemaEntry* entry = model->schemas.ByNameHash(schema_hash, &idx);
-		if (entry == nullptr || walk >= entry->state_count) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
-		schema_index = static_cast<int32_t>(idx);
-	} else if (walk != kSpx1WalkUnbound) {
-		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
-	}
-	// 10. The domains, in §3.4 step 8's order.
-	const int64_t L = static_cast<int64_t>(Spx1Get64(p, 112));
-	size_t required = 0;
-	if (L < 0 || L > model->context_cap || !Spx1Size(model, static_cast<uint64_t>(L), &required) || n != required) {
-		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
-	}
-	const int64_t origin = static_cast<int64_t>(Spx1Get64(p, 120));
-	if (origin < 0 || origin > L) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
-	const int32_t token = static_cast<int32_t>(Spx1Get32(p, 108));
-	if ((L == 0 && token != -1) || (L > 0 && (token < 0 || token >= model->vocab_size))) {
-		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
-	}
-	const int64_t m = static_cast<int64_t>(Spx1Get64(p, 128));
-	if (m < INT32_MIN || m > INT32_MAX) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
-	const int64_t e = static_cast<int64_t>(Spx1Get64(p, 136));
+	const int64_t L = f.header.length;
+	const int64_t origin = f.header.origin;
+	const int32_t token = f.header.current_token;
+	const uint32_t walk = f.header.walk;
+	const int32_t schema_index = f.schema_index;
+	const int64_t m = f.header.scale_m;
+	const int64_t e = f.header.scale_e;
 
 	const superslm_gpu::kv_pool::GpuPageGeometry& geo = pool->geo;
 	const int64_t B = geo.page_positions;
 	const size_t D = model->head_dim;
 	const size_t runs = GpuKvRuns(model);
 	const size_t residual = model->hidden_size;
-	const uint8_t* rows = p + kSpx1HeaderBytes + residual;
+	const uint8_t* rows = f.rows;
 	const uint32_t needed = superslm_gpu::kv_pool::PagesToCover(L, B);
 	const uint32_t full = static_cast<uint32_t>(origin / B);
 	if (needed > geo.cap_pages || full > needed) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // unreachable: L <= cap
@@ -6196,20 +6145,20 @@ SslmGpuStatus sslm_gpu_prefix_restoreImpl(SslmGpuContext* ctx, SslmGpuModelHandl
 	h->budget = budget;
 	h->origin = origin;
 	h->limit = superslm_gpu::kv_pool::HolderLimit(origin, budget, model->context_cap);
-	if (residual) std::memcpy(h->hidden_codes.data(), p + kSpx1HeaderBytes, residual);
+	if (residual) std::memcpy(h->hidden_codes.data(), f.residual, residual);
 	const superslm::CarriedScale scale{m, e};
 	const uint32_t layer_index = ready ? model->num_hidden_layers : 0u;
 	h->hidden_scale = scale;
 	h->layer_index = layer_index;
-	h->kv_saturation_count = Spx1Get64(p, 144);
+	h->kv_saturation_count = f.header.kv_saturation_count;
 	h->context_length = L;
 	h->live_state.hidden_scale = scale;
 	h->live_state.layer_index = layer_index;
-	h->live_state.kv_saturation_count = Spx1Get64(p, 144);
-	h->live_state.kv_landing_saturation_count = Spx1Get64(p, 152);
-	h->live_state.k_channel_landing_saturation_count = Spx1Get64(p, 160);
-	h->live_state.rope_q_saturation_count = Spx1Get64(p, 168);
-	h->live_state.rope_k_saturation_count = Spx1Get64(p, 176);
+	h->live_state.kv_saturation_count = f.header.kv_saturation_count;
+	h->live_state.kv_landing_saturation_count = f.header.kv_landing_saturation_count;
+	h->live_state.k_channel_landing_saturation_count = f.header.k_channel_landing_saturation_count;
+	h->live_state.rope_q_saturation_count = f.header.rope_q_saturation_count;
+	h->live_state.rope_k_saturation_count = f.header.rope_k_saturation_count;
 	h->live_state.context_length = L;
 	h->bound_schema_index = schema_index;
 	h->dfa_walk_state = walk;

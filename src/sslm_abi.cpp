@@ -100,6 +100,7 @@
 #include "superslm/sslm_phaseD.h"         // T-2199 Phase D: ValidateDampedGreedyParams
 #include "forward/parallel_split.h"       // ParallelForHookValid, SaturationCounters (decode threading)
 #include "kv_pages.h"                     // Paged-KV plan §3.3: the page module (C3), legacy holders (C4)
+#include "spx1_format.h"                  // precached prefixes: the SPX1 writer and reader both backends use
 
 #include "bad_alloc_wrap.h"  // N3 pin (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3):
                               // superslm::internal::MaybeThrowInjectedBadAllocFault(), the same
@@ -3828,8 +3829,6 @@ constexpr size_t kSeqBlobV4FixedHeaderBytes = 124;
 constexpr size_t kSeqBlobV5FixedHeaderBytes = 156;
 // 'SSB6': the 'SSB5' fixed header plus kv_mode, budget and origin at 156, 160 and 164.
 constexpr size_t kSeqBlobV6FixedHeaderBytes = 172;
-constexpr uint8_t kPrefixBlobMagic[4] = {'S', 'P', 'X', '1'};
-constexpr size_t kPrefixBlobHeaderBytes = 184;
 
 // The restore fault belongs to the test-injection library and to its calling thread.
 #ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
@@ -4027,44 +4026,37 @@ extern "C" sslm_status sslm_prefix_save(sslm_prefix prefix, void* buf, size_t* n
 	const auto& c = prefix->model->view.config;
 	const int64_t length = prefix->state.context_length;
 	if (length < 0 || length > static_cast<int64_t>(c.context_cap)) return SSLM_INVALID_ARGUMENT;
-	size_t row_bytes = 0, required = kPrefixBlobHeaderBytes;
-	if (!CheckedMulSizeT(KvRuns(c), static_cast<size_t>(c.head_dim), &row_bytes) ||
-	    !CheckedMulSizeT(row_bytes, static_cast<size_t>(length), &row_bytes) ||
-	    !CheckedAddSizeT(required, static_cast<size_t>(c.hidden_size), &required) ||
-	    !CheckedAddSizeT(required, row_bytes, &required)) return SSLM_INVALID_ARGUMENT;
+	const size_t residual = static_cast<size_t>(c.hidden_size);
+	size_t required = 0;
+	if (!superslm::spx1::BlobSize(KvRuns(c), static_cast<size_t>(c.head_dim), residual,
+	                              static_cast<uint64_t>(length), &required)) return SSLM_INVALID_ARGUMENT;
 	if (!buf || *n < required) {
 		*n = required;
 		return SSLM_BUFFER_TOO_SMALL;
 	}
 	auto* p = static_cast<uint8_t*>(buf);
-	std::memcpy(p, kPrefixBlobMagic, 4);
-	WriteLE32(p + 4, 0);  // CPU backend
-	WriteLE32(p + 8, SUPERSLM_VERSION_MAJOR);
-	WriteLE32(p + 12, SUPERSLM_VERSION_MINOR);
-	WriteLE32(p + 16, SUPERSLM_VERSION_PATCH);
-	WriteLE32(p + 20, 0);
-	WriteLE32(p + 24, 0);
-	std::memset(p + 28, 0, 32);
+	superslm::spx1::Header h;
+	h.backend = superslm::spx1::kBackendCpu;
 	const auto model_hash = prefix->model->view.RawIntegrityHash();
-	std::memcpy(p + 60, model_hash.data(), 32);
-	WriteLE32(p + 92, static_cast<uint32_t>(c.kv_precision));
-	WriteLE64(p + 96, prefix->bound_schema ?
-	          prefix->model->schemas.ByIndex(prefix->bound_schema->index)->name_hash : 0);
-	WriteLE32(p + 104, prefix->dfa_walk_state);
-	WriteLE32(p + 108, static_cast<uint32_t>(prefix->current_token));
-	WriteLE64(p + 112, static_cast<uint64_t>(length));
-	WriteLE64(p + 120, static_cast<uint64_t>(prefix->kv_origin));
-	WriteLE64(p + 128, static_cast<uint64_t>(prefix->state.hidden_scale.m));
-	WriteLE64(p + 136, static_cast<uint64_t>(prefix->state.hidden_scale.e));
-	WriteLE64(p + 144, prefix->state.kv_saturation_count);
-	WriteLE64(p + 152, prefix->state.kv_landing_saturation_count);
-	WriteLE64(p + 160, prefix->state.k_channel_landing_saturation_count);
-	WriteLE64(p + 168, prefix->state.rope_q_saturation_count);
-	WriteLE64(p + 176, prefix->state.rope_k_saturation_count);
-	const size_t residual = static_cast<size_t>(c.hidden_size);
-	if (residual) std::memcpy(p + kPrefixBlobHeaderBytes, prefix->hidden_codes_storage.data(), residual);
-	GatherPrefixRows(prefix, c, p + kPrefixBlobHeaderBytes + residual);
-	superslm::Sha256Hash(p, required, p + 28);
+	std::memcpy(h.model_hash.data(), model_hash.data(), 32);
+	h.kv_precision = static_cast<uint32_t>(c.kv_precision);
+	h.schema_hash = prefix->bound_schema ?
+	                prefix->model->schemas.ByIndex(prefix->bound_schema->index)->name_hash : 0;
+	h.walk = prefix->dfa_walk_state;
+	h.current_token = prefix->current_token;
+	h.length = length;
+	h.origin = prefix->kv_origin;
+	h.scale_m = prefix->state.hidden_scale.m;
+	h.scale_e = prefix->state.hidden_scale.e;
+	h.kv_saturation_count = prefix->state.kv_saturation_count;
+	h.kv_landing_saturation_count = prefix->state.kv_landing_saturation_count;
+	h.k_channel_landing_saturation_count = prefix->state.k_channel_landing_saturation_count;
+	h.rope_q_saturation_count = prefix->state.rope_q_saturation_count;
+	h.rope_k_saturation_count = prefix->state.rope_k_saturation_count;
+	superslm::spx1::WriteHeader(p, h);
+	if (residual) std::memcpy(superslm::spx1::Residual(p), prefix->hidden_codes_storage.data(), residual);
+	GatherPrefixRows(prefix, c, superslm::spx1::Rows(p, residual));
+	superslm::spx1::Seal(p, required);
 	*n = required;
 	return SSLM_OK;
 }
@@ -4109,57 +4101,37 @@ extern "C" sslm_status sslm_prefix_restore(sslm_model model, sslm_kv_pool* pool,
 	*out = nullptr;
 	if (out_shared_pages) *out_shared_pages = 0;
 	if (!model || !pool || !*pool || !buf || (*pool)->model != model) return SSLM_INVALID_ARGUMENT;
-	if (n < kPrefixBlobHeaderBytes) return SSLM_INVALID_ARGUMENT;
-	const auto* p = static_cast<const uint8_t*>(buf);
-	if (std::memcmp(p, kPrefixBlobMagic, 4) != 0) return SSLM_INVALID_ARGUMENT;
-	uint8_t digest[32];
-	static constexpr uint8_t zeros[32] = {};
-	superslm::Sha256 hasher;
-	hasher.Update(p, 28);
-	hasher.Update(zeros, 32);
-	hasher.Update(p + 60, n - 60);
-	hasher.Final(digest);
-	if (std::memcmp(digest, p + 28, 32) != 0) return SSLM_INVALID_ARGUMENT;
-	if (ReadLE32(p + 4) != 0) return SSLM_INVALID_ARGUMENT;
-	if (ReadLE32(p + 8) != SUPERSLM_VERSION_MAJOR ||
-	    ReadLE32(p + 12) != SUPERSLM_VERSION_MINOR ||
-	    ReadLE32(p + 16) != SUPERSLM_VERSION_PATCH ||
-	    ReadLE32(p + 20) != 0 || ReadLE32(p + 24) != 0) return SSLM_RESTORE_PRODUCER_MISMATCH;
-	const auto model_hash = model->view.RawIntegrityHash();
-	if (std::memcmp(p + 60, model_hash.data(), 32) != 0) return SSLM_RESTORE_MODEL_MISMATCH;
 	const auto& c = model->view.config;
-	if (ReadLE32(p + 92) != static_cast<uint32_t>(c.kv_precision)) return SSLM_RESTORE_KV_MISMATCH;
-	const uint64_t schema_hash = ReadLE64(p + 96);
-	const uint32_t walk = ReadLE32(p + 104);
-	sslm_schema schema = nullptr;
-	if (schema_hash) {
-		size_t idx = 0;
-		if (!model->schemas.ByNameHash(schema_hash, &idx)) return SSLM_RESTORE_SCHEMA_MISMATCH;
-		const auto* entry = model->schemas.ByIndex(idx);
-		if (!entry || walk >= entry->state_count) return SSLM_RESTORE_SCHEMA_MISMATCH;
-		schema = &model->schema_handles[idx];
-	} else if (walk != kDfaWalkStateUnused) {
-		return SSLM_RESTORE_SCHEMA_MISMATCH;
+	const auto model_hash = model->view.RawIntegrityHash();
+	superslm::spx1::Expect expect;
+	expect.backend = superslm::spx1::kBackendCpu;
+	expect.model_hash = model_hash.data();
+	expect.kv_precision = static_cast<uint32_t>(c.kv_precision);
+	expect.schemas = &model->schemas;
+	expect.context_cap = static_cast<int64_t>(c.context_cap);
+	expect.vocab_size = c.vocab_size;
+	expect.runs = KvRuns(c);
+	expect.head_dim = static_cast<size_t>(c.head_dim);
+	expect.hidden_size = static_cast<size_t>(c.hidden_size);
+	superslm::spx1::Fields f;
+	switch (superslm::spx1::Read(static_cast<const uint8_t*>(buf), n, expect, &f)) {
+		case superslm::spx1::Verdict::kOk: break;
+		case superslm::spx1::Verdict::kProducer: return SSLM_RESTORE_PRODUCER_MISMATCH;
+		case superslm::spx1::Verdict::kModel: return SSLM_RESTORE_MODEL_MISMATCH;
+		case superslm::spx1::Verdict::kKvPrecision: return SSLM_RESTORE_KV_MISMATCH;
+		case superslm::spx1::Verdict::kSchema: return SSLM_RESTORE_SCHEMA_MISMATCH;
+		default: return SSLM_INVALID_ARGUMENT;  // size, magic, digest, backend, a domain
 	}
-	const int64_t length = static_cast<int64_t>(ReadLE64(p + 112));
-	if (length < 0 || length > static_cast<int64_t>(c.context_cap)) return SSLM_INVALID_ARGUMENT;
-	size_t row_bytes = 0, required = kPrefixBlobHeaderBytes;
-	if (!CheckedMulSizeT(KvRuns(c), static_cast<size_t>(c.head_dim), &row_bytes) ||
-	    !CheckedMulSizeT(row_bytes, static_cast<size_t>(length), &row_bytes) ||
-	    !CheckedAddSizeT(required, static_cast<size_t>(c.hidden_size), &required) ||
-	    !CheckedAddSizeT(required, row_bytes, &required) || n != required) return SSLM_INVALID_ARGUMENT;
-	const int64_t origin = static_cast<int64_t>(ReadLE64(p + 120));
-	if (origin < 0 || origin > length) return SSLM_INVALID_ARGUMENT;
-	const int32_t token = static_cast<int32_t>(ReadLE32(p + 108));
-	if ((length == 0 && token != -1) ||
-	    (length > 0 && (token < 0 || static_cast<uint32_t>(token) >= c.vocab_size)))
-		return SSLM_INVALID_ARGUMENT;
-	const int64_t m = static_cast<int64_t>(ReadLE64(p + 128));
-	if (m < INT32_MIN || m > INT32_MAX) return SSLM_INVALID_ARGUMENT;
-	const int64_t e = static_cast<int64_t>(ReadLE64(p + 136));
+	const int64_t length = f.header.length;
+	const int64_t origin = f.header.origin;
+	const int32_t token = f.header.current_token;
+	const uint32_t walk = f.header.walk;
+	const int64_t m = f.header.scale_m;
+	const int64_t e = f.header.scale_e;
+	const sslm_schema schema = f.schema_index >= 0 ? &model->schema_handles[static_cast<size_t>(f.schema_index)] : nullptr;
 	auto* pool_ptr = *pool;
 	const size_t residual = static_cast<size_t>(c.hidden_size);
-	const uint8_t* rows = p + kPrefixBlobHeaderBytes + residual;
+	const uint8_t* rows = f.rows;
 	// The optional sharing hint, evaluated after every field is validated and before any draw. A
 	// nested blob (origin > 0) shares the hint's floor(origin/B) full pages only when the hint is
 	// frozen, of this model and this pool, holds exactly `origin` positions, and its rows over those
@@ -4216,16 +4188,16 @@ extern "C" sslm_status sslm_prefix_restore(sslm_model model, sslm_kv_pool* pool,
 	const sslm_status allocated = FinishPrefix(model, pool_ptr, holder, KvHolderMode::kBudget,
 	                                            static_cast<int32_t>(c.context_cap), origin, false, &prefix);
 	if (allocated != SSLM_OK) return allocated;  // FinishPrefix releases the holder on refusal.
-	if (residual) std::memcpy(prefix->hidden_codes_storage.data(), p + kPrefixBlobHeaderBytes, residual);
+	if (residual) std::memcpy(prefix->hidden_codes_storage.data(), f.residual, residual);
 	prefix->state.hidden_codes = prefix->hidden_codes_storage.data();
 	prefix->state.hidden_scale = superslm::CarriedScale{m, e};
 	prefix->state.layer_index = 0;
 	prefix->state.context_length = length;
-	prefix->state.kv_saturation_count = ReadLE64(p + 144);
-	prefix->state.kv_landing_saturation_count = ReadLE64(p + 152);
-	prefix->state.k_channel_landing_saturation_count = ReadLE64(p + 160);
-	prefix->state.rope_q_saturation_count = ReadLE64(p + 168);
-	prefix->state.rope_k_saturation_count = ReadLE64(p + 176);
+	prefix->state.kv_saturation_count = f.header.kv_saturation_count;
+	prefix->state.kv_landing_saturation_count = f.header.kv_landing_saturation_count;
+	prefix->state.k_channel_landing_saturation_count = f.header.k_channel_landing_saturation_count;
+	prefix->state.rope_q_saturation_count = f.header.rope_q_saturation_count;
+	prefix->state.rope_k_saturation_count = f.header.rope_k_saturation_count;
 	prefix->current_token = token;
 	prefix->bound_schema = schema;
 	prefix->dfa_walk_state = walk;
