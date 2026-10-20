@@ -64,8 +64,9 @@
 extern "C" void ArmCpuFinishDegenerateLogitRowInjection();
 #endif
 
-static int GChecks = 0;
-static int GFailures = 0;
+// Atomic: cells 3.2 and 3.3 check from worker threads.
+static std::atomic<int> GChecks{0};
+static std::atomic<int> GFailures{0};
 
 #define CHECK_MSG(cond, ...) \
 	do { \
@@ -3180,7 +3181,7 @@ void RunSchemaFastDecodeCells(int& checks, int& failures) {
 	run("10.2", Cell_10_2);
 	run("11.2", Cell_11_2);
 	run("11.3", Cell_11_3);
-	std::printf("schema fast-decode (M1, J1) cells: %d checks, %d failures\n", GChecks, GFailures);
+	std::printf("schema fast-decode (M1, J1) cells: %d checks, %d failures\n", GChecks.load(), GFailures.load());
 	checks += GChecks;
 	failures += GFailures;
 }
