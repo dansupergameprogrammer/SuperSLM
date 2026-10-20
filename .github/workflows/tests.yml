@@ -215,6 +215,9 @@ jobs:
       # Decode-threading plan rev 1.2 §8 7.4: no new heap allocation per token (its own binary,
       # because it replaces the global operator new).
       - run: ./build/superslm_decode_threading_alloc
+      # Schema fast-decode cells 5.2 and 8.6 (vi): a real allocation failure at every allocation of one
+      # verb call (its own binary, because it replaces the global operator new).
+      - run: ./build/superslm_schema_fast_decode_alloc
 
   linux-x64-asan:
     if: github.event_name != 'workflow_dispatch' || inputs.suite == 'all'
@@ -239,6 +242,9 @@ jobs:
       - run: cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all"
       - run: cmake --build build
       - run: ./build/superslm_tests
+      # Schema fast-decode cells 5.2 and 8.6 (vi): the allocation sweep under ASan, where a dangling
+      # anti-LM pointer after a failed create is a use-after-free on save and a double free on release.
+      - run: ./build/superslm_schema_fast_decode_alloc
 
   macos-arm64:
     if: github.event_name != 'workflow_dispatch' || inputs.suite == 'all'
