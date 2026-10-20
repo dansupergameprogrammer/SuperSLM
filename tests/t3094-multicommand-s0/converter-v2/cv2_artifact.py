@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import struct
 
-TOKENIZER, SCHEMA_MASKS, SIGMOID_LUT, CONFIG = 20, 30, 12, 0
+TOKENIZER, UNICODE_TABLES, SCHEMA_MASKS, SIGMOID_LUT, CONFIG = 20, 22, 30, 12, 0
 
 
 def read_container(raw: bytes) -> dict:

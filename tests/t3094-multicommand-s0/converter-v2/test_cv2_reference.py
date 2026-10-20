@@ -297,3 +297,29 @@ def test_loop_documents_are_accepted_by_oracle_b():
     for label, make in M.LOOP_CASES.items():
         schema, document = make()
         assert B.accepts(schema, document(schema)), label
+
+
+@pytest.mark.parametrize("name", ("nfa_states", "dfa_states", "token_transitions", "serialized_mask_bytes",
+                                  "tracked_temporary_bytes"))
+def test_injection_pair_isolates_its_target_at_pinned_vocabulary(name, real_vocab):
+    """The attach cells' pairs (I.pair_pinned): under crosses nothing, over crosses only its target, each by a
+    factor of at least 1.5, with every other limit at release, all under count model v2 at the pinned vocabulary."""
+    import cv2_injection as I
+    pieces = real_vocab[1]
+    under, over, key, limit = I.pair_pinned(name, pieces)
+    lim = I.limits(key, limit)
+    cu, co = I.counts_pinned(under, pieces), I.counts_pinned(over, pieces)
+    assert not I.crossing(cu, lim), I.crossing(cu, lim)
+    assert I.crossing(co, lim) == [key], I.crossing(co, lim)
+    assert limit >= 1.5 * cu[key] and co[key] >= 1.5 * limit, (cu[key], limit, co[key])
+
+
+def test_spelled_special_pieces_are_valid_string_content(real_vocab):
+    """M17's fixture: every spelled special piece is valid free-string content under Oracle B, so a converter
+    that did not exclude special ids would admit them inside a string value."""
+    import test_cv2_language as L
+    vocab, _ = real_vocab
+    pieces = L.spelled_special_pieces(vocab)
+    for i in vocab.special:
+        raw = C.ONE.replace(b'"alpha wing"', b'"' + pieces[i] + b'"')
+        assert B.accepts(F.INTENTDOC, raw), pieces[i]

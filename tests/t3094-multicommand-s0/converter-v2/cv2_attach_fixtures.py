@@ -52,8 +52,16 @@ def _synthetic_base(SF, TokenizerTables, ckpt):
         weight_scales={k: v for k, v in model.weight_scales.items() if not k.endswith((".q_norm.gain", ".k_norm.gain"))},
     )
     sections, _ = CM.build_sections(model)
-    sections.append(SF.Section(SF.SectionType.TOKENIZER, bytes(TokenizerTables(str(ckpt)).serialize_tokenizer())))
+    tables = TokenizerTables(str(ckpt))
+    # The format pairs TOKENIZER with UNICODE_TABLES: the verifier rejects an artifact carrying one without the
+    # other (src/model.cpp, "TokenizerRejected"), so a base with TOKENIZER alone is invalid on its own.
+    sections.append(SF.Section(SF.SectionType.TOKENIZER, bytes(tables.serialize_tokenizer())))
+    sections.append(SF.Section(SF.SectionType.UNICODE_TABLES, bytes(tables.u.serialize())))
     return sections, CM.artifact_flags_for_model(model)
+
+
+def TOKENIZER_PAIR(SF):
+    return (SF.SectionType.TOKENIZER, SF.SectionType.UNICODE_TABLES)
 
 
 def build(workdir: Path) -> dict:
@@ -74,7 +82,7 @@ def build(workdir: Path) -> dict:
         return path
 
     out = {"ckpt": ckpt, "base": write("base.sslm", sections)}
-    out["model_only"] = write("model-only.sslm", [s for s in sections if s.type != SF.SectionType.TOKENIZER])
+    out["model_only"] = write("model-only.sslm", [s for s in sections if s.type not in TOKENIZER_PAIR(SF)])
 
     import sslm_convert_schema as SC
     from t2132_build_g5_fixture import _serialize_scm1

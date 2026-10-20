@@ -222,6 +222,33 @@ def test_real_vocab_no_special_id_in_any_row(real_vocab):
     assert not hits, f"special ids admitted at {len(hits)} states"
 
 
+def spelled_special_pieces(vocab):
+    """The pinned vocabulary with every added (special) token spelled as its literal content bytes, the way a
+    raw tokenizer table carries it. count_model_v2.load_vocab blanks those pieces, so a cell compiling the
+    `real_vocab` pieces cannot see whether the converter excludes special ids itself (S1 builder finding, M17)."""
+    import json
+    pieces = list(vocab.pieces)
+    for added in json.loads((F.TOKENIZER_DIR / "tokenizer.json").read_text(encoding="utf-8"))["added_tokens"]:
+        if added["id"] < len(pieces):
+            pieces[added["id"]] = added["content"].encode("utf-8")
+    return pieces
+
+
+def test_real_vocab_spelled_special_ids_excluded_by_the_converter(real_vocab):
+    """§4.1: special ids are excluded structurally by the converter, from whatever bytes the caller passes.
+    With the specials spelled out (ordinary printable bytes, valid free-string content), no row admits one."""
+    vocab, _ = real_vocab
+    P.healthy_real(F.INTENTDOC, vocab)
+    pieces = spelled_special_pieces(vocab)
+    assert all(pieces[i] for i in vocab.special)
+    try:
+        mp = P.compile_schema_to_mask_pages(F.INTENTDOC, pieces, special_ids=vocab.special)
+    except P.SchemaCompileError as error:
+        pytest.fail(f"{P.RED_ARRAY}: {error}")
+    hits = sorted({t for row in mp.transitions.values() for t in row} & vocab.special)
+    assert not hits, f"special ids {hits[:5]} admitted (of {len(vocab.special)})"
+
+
 def test_real_vocab_random_compiled_outputs_pass_oracle_b_token_rules(real_vocab):
     vocab, _ = real_vocab
     mp = P.healthy_real(F.INTENTDOC, vocab)

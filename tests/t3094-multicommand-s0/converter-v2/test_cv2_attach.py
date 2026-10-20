@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -23,7 +24,10 @@ import cv2_fixtures as F
 import cv2_injection as I
 import count_model_v2 as cm
 
-TOOL = F.TOOLS / "sslm_attach_schema.py"
+import os  # noqa: E402
+
+# The command under test; CV2_ATTACH_TOOL points the cells at a mutant copy (mutant runs only).
+TOOL = Path(os.environ.get("CV2_ATTACH_TOOL", F.TOOLS / "sslm_attach_schema.py"))
 RED = "red-unimplemented: the supported offline schema attachment command tools/sslm_attach_schema.py is absent"
 
 
@@ -42,9 +46,21 @@ def built(tmp_path_factory):
 
 
 @pytest.fixture
-def fx(built):
-    """Product cells: the command must exist before any fixture is built (red-unimplemented otherwise)."""
-    return lambda: (_assert_tool(), built())[1]
+def fx(built, tmp_path_factory):
+    """Product cells: the command must exist before any fixture is built (red-unimplemented otherwise), and
+    the healthy attach of IntentDoc v2 to the base must succeed first, so that no refusal cell is satisfied
+    by a base the command (or its verifier) rejects on its own."""
+    def get():
+        _assert_tool()
+        fixtures = built()
+        if "healthy" not in _BUILT:
+            out = tmp_path_factory.mktemp("healthy") / "healthy.sslm"
+            result = run(fixtures["base"], fixtures["ckpt"], [("intents", fixtures["intentdoc"])], out)
+            _BUILT["healthy"] = (result.returncode, out.exists(), result.stderr.decode("utf-8", "replace")[-800:])
+        code, written, stderr = _BUILT["healthy"]
+        assert code == 0 and written, f"healthy control: attaching IntentDoc v2 to the base failed: {stderr}"
+        return fixtures
+    return get
 
 
 def _assert_tool():
@@ -63,9 +79,11 @@ def test_reference_fixtures_have_their_stated_properties(built):
         len(TokenizerTables(str(fx["ckpt"])).id_to_bytes)
     assert R.config_vocab_size(base) == F.REAL_VOCAB_SIZE
     assert not any(s["type"] in (R.SCHEMA_MASKS,) for s in base["sections"])
+    assert sum(s["type"] == R.UNICODE_TABLES for s in base["sections"]) == 1, "TOKENIZER without UNICODE_TABLES"
     only = R.read_container(fx["model_only"].read_bytes())
-    assert not any(s["type"] == R.TOKENIZER for s in only["sections"])
-    assert [s for s in only["sections"]] == [s for s in base["sections"] if s["type"] != R.TOKENIZER]
+    assert not any(s["type"] in (R.TOKENIZER, R.UNICODE_TABLES) for s in only["sections"])
+    assert [s for s in only["sections"]] == [s for s in base["sections"]
+                                             if s["type"] not in (R.TOKENIZER, R.UNICODE_TABLES)]
     with_scm1 = R.read_container(fx["with_scm1"].read_bytes())
     scm = [s["data"] for s in with_scm1["sections"] if s["type"] == R.SCHEMA_MASKS]
     assert len(scm) == 1 and set(R.parse_scm1(scm[0])["schemas"]) == {b"g5_minimal_one_field"}
@@ -73,6 +91,23 @@ def test_reference_fixtures_have_their_stated_properties(built):
     diff = [(a["type"]) for a, b in zip(base["sections"], bad["sections"]) if a != b]
     assert diff == [R.SIGMOID_LUT]
     assert R.fnv1a64(R.ZERO_HASH_NAME) == 0 and R.fnv1a64(b"intents") != 0
+
+
+VERIFIERS = [F.ROOT / "build" / "sslm_verify", F.ROOT / "build" / "Release" / "sslm_verify",
+             F.ROOT / "build" / "sslm_verify.exe", F.ROOT / "build" / "Release" / "sslm_verify.exe"]
+
+
+def test_reference_base_fixtures_are_accepted_by_the_verifier(built, tmp_path):
+    """Reference control: the base and every fixture meant to differ only in one named way are accepted by the
+    independent verifier (C++ loader), so a refusal of them is the command's, not the verifier's."""
+    verifier = next((v for v in VERIFIERS if v.is_file()), None)
+    if verifier is None:
+        pytest.skip("sslm_verify not built (cmake --build build --target sslm_verify)")
+    fx = built()
+    for name in ("base", "with_scm1"):
+        result = subprocess.run([str(verifier), str(fx[name]), str(tmp_path / f"{name}.manifest.json")],
+                                capture_output=True, timeout=600)
+        assert result.returncode == 0, f"{name}: {result.stdout.decode()[-400:]} {result.stderr.decode()[-400:]}"
 
 
 def run(base, ckpt, schemas, out, *extra):
@@ -211,9 +246,10 @@ def test_verifier_runs_before_success(fx, tmp_path):
 
 
 @pytest.mark.parametrize("name", tuple(I.PAIRS))
-def test_resource_refusal_through_attach_leaves_no_artifact(fx, tmp_path, name):
+def test_resource_refusal_through_attach_leaves_no_artifact(fx, tmp_path, name, real_vocab):
+    """The attach path compiles at the pinned vocabulary, so the limits are derived there (I.pair_pinned)."""
     fx = fx()
-    under, over, key, limit = I.pair(name)
+    under, over, key, limit = I.pair_pinned(name, real_vocab[1])
     limits = tmp_path / "limits.json"
     limits.write_text(json.dumps({key: limit}), encoding="utf-8")
     u, o = tmp_path / "under.json", tmp_path / "over.json"

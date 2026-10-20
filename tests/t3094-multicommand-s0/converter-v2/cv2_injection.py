@@ -74,3 +74,48 @@ def pair(name):
     else:
         limit = int(math.sqrt(counts(under)[key] * counts(over)[key]))
     return under, over, key, limit
+
+
+# ------------------------------------------------------------------ the same pairs at the pinned vocabulary
+#
+# The attach command compiles at the checkpoint's (pinned) vocabulary, so its injected limits are derived there
+# (S1 builder finding: the byte-vocabulary limits for transitions, section and tracked bytes sit below the
+# under schema's pinned counts, so no correct converter could admit it). minItems and depth do not depend on the
+# vocabulary and keep their byte pairs. At the pinned vocabulary the byte over schemas for section and tracked
+# bytes also cross the release transition limit, so those two get over schemas that grow mask pages
+# (enum values: states with few transitions) instead; test_cv2_reference checks every pair's isolation.
+
+def _with_enum(schema, location, n, width=40):
+    letters = "abcdefghijklmnopqrstuvwxyz"
+    leaf = F.node(schema, location)
+    leaf["enum"] = list(leaf["enum"]) + [
+        f"{i:02d}" + "".join(letters[(i * 7 + j * 3) % 26] for j in range(width)) for i in range(n)]
+    return schema
+
+
+PINNED_OVER = {
+    "serialized_mask_bytes": lambda: _with_enum(F.fresh(), "watch", 33),
+    "tracked_temporary_bytes": lambda: _with_enum(_extra_strings("intent", 10), "watch", 15),
+}
+_PINNED_COUNTS = {}
+
+
+def counts_pinned(schema, pieces):
+    import json
+    key = json.dumps(schema)
+    if key not in _PINNED_COUNTS:
+        c = cm.count(schema, "intents", pieces, F.REAL_VOCAB_SIZE)
+        out = F.model_counts_to_contract(c)
+        out["minItems"] = max(c["minItems"].values(), default=0)
+        _PINNED_COUNTS[key] = out
+    return _PINNED_COUNTS[key]
+
+
+def pair_pinned(name, pieces):
+    make_under, make_over, key, rule = PAIRS[name]
+    if rule == "exact":
+        return pair(name)
+    under = make_under()
+    over = PINNED_OVER.get(key, make_over)()
+    limit = int(math.sqrt(counts_pinned(under, pieces)[key] * counts_pinned(over, pieces)[key]))
+    return under, over, key, limit
