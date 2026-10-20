@@ -375,6 +375,7 @@ struct XVerbRec {
 	std::vector<bool> rows_check;  // S-ROWS entries written during the call: their check tags
 	std::vector<uint64_t> rows;    // and their row counts
 	int64_t ctx_before = 0, ctx_after = 0;
+	int64_t limit_before = 0;  // sslm_seq_kv_stats' limit before the call (the holder's K/V budget, or the cap)
 	std::vector<uint8_t> blob_before, blob_after;
 };
 
@@ -464,6 +465,11 @@ XRun RunExactOn(const Sfd& f, const XSpec& sp, const XOff& off, const XPlan& pla
 		if (plan.before_verb) plan.before_verb(pos - 1, env, s);
 		v.blob_before = env.rig->Save(s);
 		v.ctx_before = ParseBlob(v.blob_before).ctx;
+		{
+			sslm_seq_kv_stats_out kv{};
+			kv.struct_size = sizeof(kv);
+			if (sslm_seq_kv_stats(s, &kv) == SSLM_OK) v.limit_before = kv.limit;
+		}
 		const sslm_decode_params vp = XParams(*env.rig, XOrderAt(sp, pos));
 		const sslm_decode_params* vpp = sp.order > 0 || sp.order2 > 0 ? &vp : nullptr;
 		sfd::RowsLogReset();
@@ -1246,7 +1252,8 @@ struct XGuarded {
 // -1, V and INT32_MAX; a special id; a byteless id; a draft that runs past the accepting state; and draft_count
 // far above chunk_budget - 1 with a buffer of exactly chunk_budget - 1 elements ending at a guard page. The verb
 // returns SSLM_OK for every one, no illegal token is embedded (S-LAYERROWS: one pass of 1 + the legal prefix;
-// §5.10.3 makes a call whose prefix is empty a no-op, so 0 or 1 rows there), and the run equals off.
+// an empty legal prefix leaves k = 0 after the truncation, a no-op with no pass and the blob unchanged, by the
+// conductor's G-4 ruling), and the run equals off.
 void Cell_X_2_2() {
 	if (!XLive("2.X2")) return;
 	const Sfd& f = GetSfd();
@@ -1298,12 +1305,15 @@ void Cell_X_2_2() {
 		const size_t legal = XLegalPrefix(f, sp.schema, off.walk_after[c.at], c.d.data(), c.d.size(), 7);
 		uint64_t rows = 0;
 		for (const sfd::LayerRowsEntry& e : passes) rows += e.rows;
-		const bool rows_ok = legal > 0 ? rows == 1 + legal : rows <= 1;
+		// k is taken after the clips and the truncation (the conductor's G-4 ruling): an empty legal prefix is a
+		// no-op, so exactly no pass runs; otherwise exactly one pass of 1 + the legal prefix.
+		const bool rows_ok = legal > 0 ? rows == 1 + legal : rows == 0;
+		const bool noop_ok = legal > 0 || (j.count == 0 && rr.env->rig->Save(s) == off.obs[c.at].blob);
 		int32_t t = -100;
 		const sslm_status st = rr.env->rig->Decode1(s, rr.env->rig->Greedy(), rr.env->W(sp), &t);
 		const size_t at = c.at + size_t(std::max(j.count, 0)) + 1;
 		const XObs ob = XObserve(*rr.env->rig, s, static_cast<int>(st), t);
-		CHECK_MSG(j.st == SSLM_OK && rows_ok && size_t(std::max(j.count, 0)) <= legal && at < off.obs.size() &&
+		CHECK_MSG(j.st == SSLM_OK && rows_ok && noop_ok && size_t(std::max(j.count, 0)) <= legal && at < off.obs.size() &&
 		              XDiff(ob, off.obs[at], kXCmpTok | kXCmpBlob).empty(),
 		          "[2.X2 %s] status %d count %d, S-LAYERROWS rows %llu (legal prefix %zu); then %s", c.name,
 		          static_cast<int>(j.st), j.count, static_cast<unsigned long long>(rows), legal,
@@ -1510,8 +1520,9 @@ void Cell_X_4_1() {
 
 // 4.X2 [J1-X] Draft and budget extremes, each at one thread, under Q6 C's split (bit 1, max_tasks 4) and at bit
 // 1 with max_tasks 1: k = 0 in both forms (a non-NULL draft with draft_count 0 is a no-op that leaves the pending
-// token pending; NULL drafts the canonical chain), k = 1, k = chunk_budget - 1, chunk_budget 1 (a pending-only
-// admission), chunk_budget 2, and M = 7, 8 and 9+ on LONGKEY. Each equals off.
+// token pending; NULL drafts the canonical chain), k = 1, k = chunk_budget - 1, chunk_budget 1 (k clipped to 0: a
+// no-op, by the conductor's G-4 ruling that k is taken after the clips), chunk_budget 2, and M = 7, 8 and 9+ on
+// LONGKEY. Each equals off.
 void Cell_X_4_2() {
 	if (!XLive("4.X2")) return;
 	const Sfd& f = GetSfd();
@@ -1552,10 +1563,13 @@ void Cell_X_4_2() {
 					          "not a no-op", c.name, hook, v.pos);
 				}
 				if (c.budget == 1) {
-					const Blob a = ParseBlob(v.blob_after);
-					CHECK_MSG(v.j.count == 0 && v.ctx_after == v.ctx_before + 1 && a.ready == 1, "[4.X2 %s, hook %d] the "
-					          "budget-1 call at %zu: count %d, ctx +%lld, ready %u", c.name, hook, v.pos, v.j.count,
-					          static_cast<long long>(v.ctx_after - v.ctx_before), a.ready);
+					// The conductor's G-4 ruling: k is taken after the clips, so chunk_budget 1 clips the draft to
+					// k = 0 and the call is a no-op returning OK; the pending token stays pending (C13 at h = 0 alike).
+					CHECK_MSG(v.j.st == SSLM_OK && v.j.count == 0 && v.blob_after == v.blob_before,
+					          "[4.X2 %s, hook %d] the budget-1 call at %zu (k clipped to 0) must be a no-op: status %d count "
+					          "%d, ctx +%lld, blob %s", c.name, hook, v.pos, static_cast<int>(v.j.st), v.j.count,
+					          static_cast<long long>(v.ctx_after - v.ctx_before),
+					          v.blob_after == v.blob_before ? "unchanged" : "changed");
 				}
 			}
 			if (c.kind == XDraft::kPerfect && c.budget >= 7) {
@@ -1652,11 +1666,26 @@ void Cell_X_5_2() {
 			for (const XVerbRec& v : run.verbs) {
 				size_t checks = 0;
 				for (bool c : v.rows_check) checks += c ? 1 : 0;
-				const int64_t h = v.ctx_after - v.ctx_before;
-				CHECK_MSG(int64_t(checks) <= std::max<int64_t>(int64_t(v.draft.size()), 0) && (h > 0 || v.blob_after == v.blob_before),
-				          "[5.X2 %s, %s] the call at %zu: %zu check rows for %lld admitted, blob %s", sp.Name().c_str(),
-				          XDraftName(kind), v.pos, checks, static_cast<long long>(h),
-				          v.blob_after == v.blob_before ? "unchanged" : "changed");
+				// h from the holder's limit and the context before the call (§5.10.3): the draft clipped to
+				// chunk_budget - 1 and to the headroom less the pending row. k is taken after the clips (the
+				// conductor's G-4 ruling), so k <= 0 is a no-op: no rows, no check row, the blob unchanged.
+				const int64_t headroom = v.limit_before - v.ctx_before;
+				const int64_t k_draft = v.null_draft ? int64_t(v.budget) - 1 : int64_t(v.draft.size());
+				const int64_t k = std::min({k_draft, int64_t(v.budget) - 1, headroom - 1});
+				const int64_t admitted = v.ctx_after - v.ctx_before;
+				if (k <= 0) {
+					CHECK_MSG(checks == 0 && admitted == 0 && v.blob_after == v.blob_before,
+					          "[5.X2 %s, %s] the call at %zu (headroom %lld, k after the clips %lld) must be a no-op: %zu "
+					          "check rows, %lld admitted, blob %s", sp.Name().c_str(), XDraftName(kind), v.pos,
+					          static_cast<long long>(headroom), static_cast<long long>(k), checks,
+					          static_cast<long long>(admitted), v.blob_after == v.blob_before ? "unchanged" : "changed");
+				} else {
+					CHECK_MSG(int64_t(checks) <= k && admitted <= 1 + k,
+					          "[5.X2 %s, %s] the call at %zu: %zu check rows and %lld rows admitted; h = 1 + k = %lld "
+					          "(headroom %lld), so at most h - 1 check rows", sp.Name().c_str(), XDraftName(kind), v.pos,
+					          checks, static_cast<long long>(admitted), static_cast<long long>(1 + k),
+					          static_cast<long long>(headroom));
+				}
 			}
 		}
 	}
@@ -1685,6 +1714,53 @@ void Cell_X_5_3() {
 			for (bool persistent : {false, true}) {
 				const std::string tag = std::string(path == 0 ? "hook" : path == 1 ? "refused" : "!ok") + ", r " +
 				                        std::to_string(r) + (persistent ? ", persistent" : ", one-shot");
+				// The reference, built the same way as the run (a fresh rig, off's blob at p restored, so the holder's
+				// pages compare): off decodes r times to the run's position, then the decode the run makes after the
+				// call (with the same failure armed when persistent), then, persistent, the retry with it gone.
+				XObs ref1, ref2;
+				bool ref_ok = false;
+				{
+					XRestoreRig r2(f, sp);
+					CountingHook h2;
+					h2.max_tasks = 4;
+					sslm_seq q = r2.ok() ? r2.At(off, p) : nullptr;
+					if (q && (path != 0 || Install(r2.env->rig->W(), &h2, 0))) {
+						const sslm_decode_params vp0 = XParams(*r2.env->rig, sp.order);
+						bool good = true;
+						for (int32_t i = 0; i < r && good; ++i) {
+							int32_t u = -100;
+							good = r2.env->rig->Decode1(q, vp0, r2.env->W(sp), &u) == SSLM_OK && u >= 0;
+						}
+						if (good) {
+							if (persistent) {
+								if (path == 0) {
+									h2.Clear();
+									h2.hostile = Hostile::kOmit;
+									h2.hostile_call = 0;
+									h2.hostile_persistent = true;
+								} else {
+									sfd::ArmFinishExit(path == 1 ? sfd::FinishExit::kDampedRefused : sfd::FinishExit::kDampedNotOk, 0);
+								}
+							}
+							int32_t u = -100;
+							const sslm_status us = r2.env->rig->Decode1(q, vp0, r2.env->W(sp), &u);
+							ref1 = XObserve(*r2.env->rig, q, static_cast<int>(us), u);
+							if (persistent) {
+								h2.Clear();
+								h2.hostile = Hostile::kNone;
+								sfd::DisarmFinishExit();
+								int32_t u2 = -100;
+								const sslm_status us2 = r2.env->rig->Decode1(q, vp0, r2.env->W(sp), &u2);
+								ref2 = XObserve(*r2.env->rig, q, static_cast<int>(us2), u2);
+							}
+							ref_ok = true;
+						}
+						if (path == 0) Install(r2.env->rig->W(), nullptr, 0);
+					}
+					if (q) r2.env->rig->Release(q);
+				}
+				CHECK_MSG(ref_ok, "[5.X3 %s] setup: the off reference did not build", tag.c_str());
+				if (!ref_ok) continue;
 				XRestoreRig rr(f, sp);
 				if (!rr.ok()) continue;
 				CountingHook h;
@@ -1712,7 +1788,6 @@ void Cell_X_5_3() {
 				sfd::DisarmSatRow();
 				CHECK_MSG(j.st == SSLM_OK && j.count == r, "[5.X3 %s] the verb: status %d count %d; want OK with rows 0..%d "
 				          "committed (count %d)", tag.c_str(), static_cast<int>(j.st), j.count, r, r);
-				const size_t at = p + size_t(std::max(j.count, 0)) + 1;
 				if (!persistent) arm(false);
 				else if (path == 0) {
 					h.Clear();  // the next decode's first finish call is call 0 again: still hostile
@@ -1724,27 +1799,20 @@ void Cell_X_5_3() {
 				int32_t t = -100;
 				const sslm_status st = rr.env->rig->Decode1(s, vp, rr.env->W(sp), &t);
 				const XObs ob = XObserve(*rr.env->rig, s, static_cast<int>(st), t);
+				// Pages and stats too (kXCmpAll): the rows the check stopped short of had pages mapped (XE21).
 				if (!persistent) {
-					CHECK_MSG(at < off.obs.size() && XDiff(ob, off.obs[at], kXCmpTok | kXCmpBlob).empty(),
-					          "[5.X3 %s] the next decode against off's never-failed decode: %s", tag.c_str(),
-					          at < off.obs.size() ? XDiff(ob, off.obs[at], kXCmpTok | kXCmpBlob).c_str() : "past off's end");
+					CHECK_MSG(XDiff(ob, ref1).empty(), "[5.X3 %s] the next decode against off's never-failed decode: %s",
+					          tag.c_str(), XDiff(ob, ref1).c_str());
 				} else {
-					// off at the same position with the same failure armed
-					sslm_seq q = rr.At(off, at - 1);
-					int32_t u = -100;
-					const sslm_status us = q ? rr.env->rig->Decode1(q, vp, rr.env->W(sp), &u) : SSLM_INVALID_ARGUMENT;
-					const XObs offf = q ? XObserve(*rr.env->rig, q, static_cast<int>(us), u) : XObs{};
-					CHECK_MSG(st != SSLM_OK && XDiff(ob, offf, kXCmpTok | kXCmpBlob).empty(),
+					CHECK_MSG(st != SSLM_OK && XDiff(ob, ref1).empty(),
 					          "[5.X3 %s] the failing decode: status %d; off's at that position %d; %s", tag.c_str(),
-					          static_cast<int>(st), static_cast<int>(us), XDiff(ob, offf, kXCmpTok | kXCmpBlob).c_str());
-					if (q) rr.env->rig->Release(q);
+					          static_cast<int>(st), ref1.st, XDiff(ob, ref1).c_str());
 					arm(false);
 					int32_t t2 = -100;
 					const sslm_status st2 = rr.env->rig->Decode1(s, vp, rr.env->W(sp), &t2);
 					const XObs ob2 = XObserve(*rr.env->rig, s, static_cast<int>(st2), t2);
-					CHECK_MSG(at < off.obs.size() && XDiff(ob2, off.obs[at], kXCmpTok | kXCmpBlob).empty(),
-					          "[5.X3 %s] the retry with the failure gone: %s", tag.c_str(),
-					          at < off.obs.size() ? XDiff(ob2, off.obs[at], kXCmpTok | kXCmpBlob).c_str() : "past off's end");
+					CHECK_MSG(XDiff(ob2, ref2).empty(), "[5.X3 %s] the retry with the failure gone: %s", tag.c_str(),
+					          XDiff(ob2, ref2).c_str());
 				}
 				arm(false);
 				if (path == 0) Install(rr.env->rig->W(), nullptr, 0);
@@ -2166,8 +2234,9 @@ void Cell_X_8_5() {
 
 // 8.X6 [J1-X; XE10, XE11] Damped anti-LM. (a) After every decode_step the history equals off's, at one order and
 // after an order change between calls (the blob carries both). (b) On a sequence holding an order-3 history, a
-// refused call, a no-op call and an h = 1 call at order 2 each leave the history and order right after the verb
-// equal to the history before the call.
+// refused call, a no-op call and a budget-1 call at order 2 each leave the history and order right after the verb
+// equal to the history before the call. By the conductor's G-4 ruling (k is taken after the clips) the budget-1
+// call is a no-op, so no exact call has h = 1; that arm is the clipped no-op, and every arm leaves the blob equal.
 void Cell_X_8_6() {
 	if (!XLive("8.X6")) return;
 	const Sfd& f = GetSfd();
@@ -2205,16 +2274,22 @@ void Cell_X_8_6() {
 	};
 	const Case cases[] = {{"refused", XOpts(SSLM_JUMP_EXACT, nullptr, 0, 0), 8},
 	                      {"no-op (empty draft)", XExact(&empty), 8},
-	                      {"h = 1 (budget 1)", XExact(&d), 1}};
+	                      {"budget 1 (k clipped to 0: a no-op)", XExact(&d), 1}};
 	for (const Case& c : cases) {
 		sslm_seq s = rr.At(off, p);
 		if (!s) continue;
+		const std::vector<uint8_t> blob_before = rr.env->rig->Save(s);
 		const Blob before = rr.env->rig->State(s);
-		XJump(rr.env->m, s, c.budget, &p2, &c.o, rr.env->W(sp));
+		const Jump j = XJump(rr.env->m, s, c.budget, &p2, &c.o, rr.env->W(sp));
 		const Blob after = rr.env->rig->State(s);
 		CHECK_MSG(before.order == 3 && after.order == before.order && after.hist == before.hist,
 		          "[8.X6 (b) %s] right after the call: order %d -> %d, history %s -> %s", c.name, before.order, after.order,
 		          Str(before.hist).c_str(), Str(after.hist).c_str());
+		// Each call changes nothing (the conductor's G-4 ruling makes the budget-1 call a no-op, as the empty draft):
+		// the whole blob is byte-equal, and the two non-refused calls return OK with count 0.
+		CHECK_MSG(rr.env->rig->Save(s) == blob_before && (std::string(c.name) == "refused" || (j.st == SSLM_OK && j.count == 0)),
+		          "[8.X6 (b) %s] the call: status %d count %d, blob %s", c.name, static_cast<int>(j.st), j.count,
+		          rr.env->rig->Save(s) == blob_before ? "unchanged" : "changed");
 		rr.env->rig->Release(s);
 	}
 }
@@ -2254,9 +2329,47 @@ void Cell_X_8_7() {
 // 9.X1 [J1-X] A blob saved right after an exact call restores (into this build, as the canonical build would)
 // and continues by plain decode to the off stream; and a blob saved mid-generation by off continues under exact
 // mode to the off stream.
+// The canonical J1 build's pending-only commit at TF's N (arm (c'): N decodes, then the canonical verb at budget
+// 1), pinned as a digest computed on the canonical build (the J1 tip, 2af41659), as 9.1 pins kMainBlobDigest. An
+// exact j = 0 commit at N must save this very blob (§5.10.3's commit shape), so the canonical build restores it.
+sslm_seq XTfBuildExact(TfRig& x, int j_want, int32_t* j_out = nullptr);  // below, with TF's (d) arms
+struct XCanonPin {
+	TfCfg cfg;
+	size_t size;
+	const char* digest;
+};
+constexpr XCanonPin kXCanonPins[] = {
+    {TfCfg{false, false}, 32992, "9951c60aad55491745d441eda7361780c34f317097c3f64dfd7e3b75ee92059c"},
+    {TfCfg{true, false}, 33008, "07808d189ed86c6c9730e07c89bc68fa16d6ccd5471e1645248edc8c44710b47"},
+};
+
 void Cell_X_9_1() {
-	if (!XLive("9.X1")) return;
 	const Sfd& f = GetSfd();
+	if (!f.ok) return;
+	// The pin's own half, green on the canonical build: (c')'s blob still has the pinned digest.
+	for (const XCanonPin& pin : kXCanonPins) {
+		TfRig x(f, pin.cfg);
+		if (!x.Setup()) continue;
+		sslm_seq s = x.Build(TfArm::kCanonPending);
+		const std::vector<uint8_t> b = s ? x.rig.Save(s) : std::vector<uint8_t>{};
+		if (s) x.rig.Release(s);
+		CHECK_MSG(!b.empty() && b.size() == pin.size && BytesDigest(b) == pin.digest,
+		          "[9.X1 canonical pin %s] (c')'s blob at N: %zu bytes, digest %s; pinned %zu, %s", TfCfgName(pin.cfg).c_str(),
+		          b.size(), BytesDigest(b).c_str(), pin.size, pin.digest);
+	}
+	if (!XLive("9.X1")) return;
+	// Across builds: an exact j = 0 commit at N saves the blob the canonical build pinned.
+	for (const XCanonPin& pin : kXCanonPins) {
+		TfRig x(f, pin.cfg);
+		if (!x.Setup()) continue;
+		sslm_seq s = XTfBuildExact(x, 0);
+		const std::vector<uint8_t> b = s ? x.rig.Save(s) : std::vector<uint8_t>{};
+		if (s) x.rig.Release(s);
+		CHECK_MSG(!b.empty() && b.size() == pin.size && BytesDigest(b) == pin.digest,
+		          "[9.X1 across builds %s] the exact j = 0 commit at N saved %zu bytes, digest %s; the canonical build's "
+		          "pinned (c') blob is %zu, %s", TfCfgName(pin.cfg).c_str(), b.size(), BytesDigest(b).c_str(), pin.size,
+		          pin.digest);
+	}
 	XSpec sp;
 	const XOff off = RunOff(f, sp);
 	{
@@ -2512,7 +2625,7 @@ void Cell_X_11_3() {
 
 // The (d) arms: after an exact call that committed j = 0 (p alone) or j >= 2 rows, the target decode runs the
 // ready branch. Built on TfRig's POTION sequence at N (TF.2's construction).
-sslm_seq XTfBuildExact(TfRig& x, int j_want) {
+sslm_seq XTfBuildExact(TfRig& x, int j_want, int32_t* j_out) {
 	sslm_seq s = x.Build(TfArm::kLayer);  // N decodes: t_{N-1} pending
 	if (!s) return nullptr;
 	// off's never-failed stream continues with stream[N], stream[N + 1], ...
@@ -2546,20 +2659,25 @@ sslm_seq XTfBuildExact(TfRig& x, int j_want) {
 		x.rig.Release(s);
 		return nullptr;
 	}
+	if (j_out) *j_out = j.count;
 	return s;
 }
 
-// TF.2d [TF + J1-X; XF1] TF.2's status exits in exact mode's arms (d0) and (d2): the failed decode rests at its
+// TF.2d [TF + J1-X; XF1] TF.2's status exits (all four, damped ones under damped) in exact mode's arms (d0) and
+// (d2), greedy and damped@2, with a workspace and without one: the failed decode rests at its
 // entry (byte-equal to the blob before the call), the refusal repeats on two retries with the blob unchanged,
 // and disarmed, the next three decodes equal the never-failed run from the same state.
 void Cell_X_TF_2d() {
 	if (!XLive("TF.2d")) return;
 	const Sfd& f = GetSfd();
-	for (const TfCfg c : {TfCfg{false, true}, TfCfg{true, false}}) {
+	for (const TfCfg c : {TfCfg{false, false}, TfCfg{false, true}, TfCfg{true, false}, TfCfg{true, true}}) {
 		TfRig x(f, c);
 		if (!x.Setup()) continue;
 		std::vector<sfd::FinishExit> exits = {sfd::FinishExit::kFinalNorm, sfd::FinishExit::kLogitsReject};
-		if (c.damped) exits.push_back(sfd::FinishExit::kDampedRefused);
+		if (c.damped) {
+			exits.push_back(sfd::FinishExit::kDampedNotOk);
+			exits.push_back(sfd::FinishExit::kDampedRefused);
+		}
 		for (int jw : {0, 2}) {
 			for (const sfd::FinishExit ex : exits) {
 				TfRig::Run ref;
@@ -2595,34 +2713,39 @@ void Cell_X_TF_2d() {
 }
 
 // TF.4 (b) X [TF + J1-X] At a dead end the prepared re-key is installed in exact mode as in off: the -2 decode at
-// order 3 after an exact j = 0 commit rests byte-equal to off's -2 decode at the same output position (off's layer
-// branch, arm (a)).
+// order 3 after an exact commit rests byte-equal to off's -2 decode at the same output position (off's layer
+// branch, arm (a), at that position): after a j = 0 commit (d0) at N, and after a j >= 2 commit (d2) at N + j.
 void Cell_X_TF_4b() {
 	if (!XLive("TF.4b X")) return;
 	const Sfd& f = GetSfd();
 	for (const TfCfg c : {TfCfg{true, false}, TfCfg{true, true}}) {
 		TfRig x(f, c);
 		if (!x.Setup()) continue;
-		std::vector<uint8_t> blobs[2];
-		for (int arm = 0; arm < 2; ++arm) {
-			sslm_seq s = arm == 0 ? x.Build(TfArm::kLayer) : XTfBuildExact(x, 0);
-			if (!s) continue;
-			const Blob b = x.rig.State(s);
-			int32_t illegal = -1;
-			for (int32_t t = 0; t < kTokVocab && illegal < 0; ++t) {
-				uint32_t nx = 0;
-				if (!f.Step(kPotion, b.walk, t, &nx)) illegal = t;
+		for (int jw : {0, 2}) {
+			std::vector<uint8_t> blobs[2];
+			int32_t j = -1;
+			sslm_seq e = XTfBuildExact(x, jw, &j);
+			if (!e) continue;
+			for (int arm = 0; arm < 2; ++arm) {
+				sslm_seq s = arm == 0 ? x.Build(TfArm::kLayer, x.n + j) : e;
+				if (!s) continue;
+				const Blob b = x.rig.State(s);
+				int32_t illegal = -1;
+				for (int32_t t = 0; t < kTokVocab && illegal < 0; ++t) {
+					uint32_t nx = 0;
+					if (!f.Step(kPotion, b.walk, t, &nx)) illegal = t;
+				}
+				sfd::ArmChoice(illegal);
+				int32_t t = -100;
+				const sslm_status st = x.Decode(s, 3, &t);
+				sfd::DisarmChoice();
+				CHECK_MSG(st == SSLM_OK && t == -2, "[TF.4 (b) X (d%d) %s, %s] the dead end: status %d token %d", jw,
+				          TfCfgName(c).c_str(), arm ? "exact" : "off", static_cast<int>(st), t);
+				blobs[arm] = x.rig.Save(s);
+				x.rig.Release(s);
 			}
-			sfd::ArmChoice(illegal);
-			int32_t t = -100;
-			const sslm_status st = x.Decode(s, 3, &t);
-			sfd::DisarmChoice();
-			CHECK_MSG(st == SSLM_OK && t == -2, "[TF.4 (b) X %s, %s] the dead end: status %d token %d", TfCfgName(c).c_str(),
-			          arm ? "exact" : "off", static_cast<int>(st), t);
-			blobs[arm] = x.rig.Save(s);
-			x.rig.Release(s);
+			CHECK_MSG(!blobs[0].empty() && blobs[0] == blobs[1], "[TF.4 (b) X (d%d) %s] after the -2 decode, exact %s; off %s",
+			          jw, TfCfgName(c).c_str(), TfFields(blobs[1]).c_str(), TfFields(blobs[0]).c_str());
 		}
-		CHECK_MSG(!blobs[0].empty() && blobs[0] == blobs[1], "[TF.4 (b) X %s] after the -2 decode, exact %s; off %s",
-		          TfCfgName(c).c_str(), TfFields(blobs[1]).c_str(), TfFields(blobs[0]).c_str());
 	}
 }
