@@ -270,22 +270,24 @@ def test_refusal_peak_shrinks_with_the_injected_limit(key, real_vocab):
 
 def test_section_refusal_before_emission(real_vocab):
     """§4.1 l.446 (R_SECTION row): the section guard refuses "before section emission". (L.450's refuse-at-
-    the-crossing rule binds only the tracked budget; S0a recheck.) IntentDoc v2 on the pinned vocabulary with
-    the section limit injected at L = 2/3 of its count model v2 section size: the refused call's traced peak
-    above a successful release compile's peak is under half that section size, so no section was emitted."""
-    vocab, pieces = real_vocab
-    P.healthy_real(F.INTENTDOC, vocab)
+    the-crossing rule binds only the tracked budget; S0a recheck.) The frozen R_DFA under schema on the pinned
+    vocabulary (4,096 states, its section almost all mask pages, admitted at release) with the section limit
+    injected at 2/3 of its frozen section size: the refused call's traced peak above the trivial schema's
+    compile peak (the vocabulary trie) is under half that section, so no section was emitted before refusal."""
+    vocab, _ = real_vocab
+    P.healthy_bytes(F.INTENTDOC)
     key = "serialized_mask_bytes"
-    section = F.model_counts_to_contract(cm.count(F.INTENTDOC, "intents", pieces, F.REAL_VOCAB_SIZE))[key]
-    good, good_peak, _ = _traced(lambda: P.compile_schema_to_mask_pages(F.INTENTDOC, vocab.pieces,
+    p = F.pair("R_DFA")
+    schema, section = p["under_schema"], p["under"]["section_bytes"]
+    base, base_peak, _ = _traced(lambda: P.compile_schema_to_mask_pages(TRIVIAL, vocab.pieces,
                                                                        special_ids=vocab.special))
-    assert not isinstance(good, Exception), f"release compile refused: {good}"
+    assert not isinstance(base, Exception), f"trivial control refused: {base}"
     outcome, peak, _ = _traced(lambda: P.compile_schema_to_mask_pages(
-        F.INTENTDOC, vocab.pieces, special_ids=vocab.special, limits={key: section * 2 // 3}))
+        schema, vocab.pieces, special_ids=vocab.special, limits={key: section * 2 // 3}))
     assert isinstance(outcome, P.SchemaCompileError) and F.DIAGNOSTICS[key] in str(outcome), \
         f"not refused by the section guard: {outcome!r}"
-    assert peak - good_peak < section / 2, \
-        f"refused-call peak {peak:,} B is {peak - good_peak:,} B above the release compile's {good_peak:,} B; " \
+    assert peak - base_peak < section / 2, \
+        f"refused-call peak {peak:,} B is {peak - base_peak:,} B above the trivial compile's {base_peak:,} B; " \
         f"half the section is {section // 2:,} B (section emitted before the refusal)"
 
 
