@@ -21,7 +21,13 @@
 // LastCallTiming keeps only the last of its M submissions. Ratios are per pair: chunk / singles and
 // batch / one-row slices, with the median, IQR and the n = 15 sign-test interval [R(4), R(12)].
 //
+//   slices  (--slices-only, instead of the two above) one one-row sslm_decode_step_gpu slice of L layers per sample,
+//           L in --slice-layers (default 4,8,12,24), the layers [N-L, N) after an untimed run to N-L: the slice's wall
+//           time against its own gpu_busy_ms, which gives the per-submit overhead at that slice depth. `pairs` rounds
+//           after `warmup`, L rotated by one per round.
+//
 // Usage: sslm_schema_fast_decode_gx3_bench <model.sslm> [--pairs 15] [--warmup 1] [--json PATH]
+//                                           [--slices-only [--slice-layers 4,8,12,24]]
 // The compiled shaders must sit in a shaders\ folder beside the executable (superslm_gpu ShaderPath).
 #include <algorithm>
 #include <chrono>
@@ -134,6 +140,15 @@ int main(int argc, char** argv) {
 	const int pairs = std::atoi(Arg(argc, argv, "--pairs", "15"));
 	const int warmup = std::atoi(Arg(argc, argv, "--warmup", "1"));
 	const char* json_path = Arg(argc, argv, "--json", nullptr);
+	bool slices_only = false;
+	for (int i = 2; i < argc; ++i)
+		if (std::strcmp(argv[i], "--slices-only") == 0) slices_only = true;
+	std::vector<int> slice_layers;
+	for (const char* p = Arg(argc, argv, "--slice-layers", "4,8,12,24"); *p;) {
+		slice_layers.push_back(std::atoi(p));
+		while (*p && *p != ',') ++p;
+		if (*p == ',') ++p;
+	}
 
 	std::vector<uint8_t> bytes;
 	superslm::SslmModelView view;
@@ -167,6 +182,44 @@ int main(int argc, char** argv) {
 		Ok(SslmGpuSeqPrefillPromptForG5Bridge(ctx, s, prefix.data(), kPrefixTokens, 0xFFFFFFFFu), "prefix prefill");
 	};
 
+	// ---- slices (--slices-only): one one-row decode slice of L layers, layers [N-L, N), against its own GPU time ----
+	// The sequence takes a token and runs untimed to layer N-L; the timed slice is one sslm_decode_step_gpu of L layers
+	// and its blocking sslm_gpu_ready. L rotates by one per round; the context grows by one token per sample.
+	struct SliceRow {
+		std::vector<double> wall, gpu, overhead;
+	};
+	std::vector<SliceRow> slices(slice_layers.size());
+	if (slices_only) {
+		for (int l : slice_layers) {
+			if (l < 1 || static_cast<uint32_t>(l) > layers) {
+				std::fprintf(stderr, "--slice-layers %d is outside 1..%u\n", l, layers);
+				return 2;
+			}
+		}
+		fresh(seqs[0]);
+		int32_t next = 0;
+		for (int round = 0; round < warmup + pairs; ++round) {
+			for (size_t q = 0; q < slice_layers.size(); ++q) {
+				const size_t si = (q + static_cast<size_t>(round)) % slice_layers.size();
+				const uint32_t l = static_cast<uint32_t>(slice_layers[si]);
+				Ok(sslm_gpu_seq_embed_token(ctx, seqs[0], SpanToken(next++)), "slice embed");
+				if (l < layers) {
+					Ok(sslm_decode_step_gpu(ctx, seqs[0], nullptr, BudgetFor(layers - l)), "slice park");
+					Ok(Drain(ctx, seqs[0]), "slice park drain");
+				}
+				const auto t0 = Clock::now();
+				Ok(sslm_decode_step_gpu(ctx, seqs[0], nullptr, BudgetFor(l)), "slice decode");
+				Ok(Drain(ctx, seqs[0]), "slice drain");
+				const double wall = MsSince(t0);
+				const double gpu = superslm_gpu::LastCallTiming().gpu_busy_ms;
+				if (round < warmup) continue;
+				slices[si].wall.push_back(wall);
+				slices[si].gpu.push_back(gpu);
+				slices[si].overhead.push_back(wall - gpu);
+			}
+		}
+	}
+
 	// ---- chunk: M = 1..4 tokens in one prompt-bridge call against M one-token calls ----
 	const std::vector<int> chunk_sizes = {1, 2, 3, 4};
 	struct ChunkRow {
@@ -194,7 +247,7 @@ int main(int argc, char** argv) {
 			*gpu += superslm_gpu::LastCallTiming().gpu_busy_ms;
 		}
 	};
-	for (int round = 0; round < warmup + pairs; ++round) {
+	for (int round = 0; !slices_only && round < warmup + pairs; ++round) {
 		for (size_t q = 0; q < chunk_sizes.size(); ++q) {
 			const size_t si = (q + static_cast<size_t>(round)) % chunk_sizes.size();
 			const int m = chunk_sizes[si];
@@ -228,7 +281,7 @@ int main(int argc, char** argv) {
 		Ok(sslm_decode_step_gpu(ctx, s, nullptr, BudgetFor(park)), "park decode");
 		Ok(Drain(ctx, s), "park drain");
 	};
-	for (int i = 0; i < kMaxSeqs; ++i) fresh(seqs[i]);
+	if (!slices_only) for (int i = 0; i < kMaxSeqs; ++i) fresh(seqs[i]);
 	const std::vector<int> batch_sizes = {1, 2, 3, 4, 5, 6};
 	struct BatchRow {
 		std::vector<double> batch_wall, one_wall, one_gpu, r_wall;
@@ -260,7 +313,7 @@ int main(int argc, char** argv) {
 			*gpu += superslm_gpu::LastCallTiming().gpu_busy_ms;
 		}
 	};
-	for (int round = 0; round < warmup + pairs; ++round) {
+	for (int round = 0; !slices_only && round < warmup + pairs; ++round) {
 		for (size_t q = 0; q < batch_sizes.size(); ++q) {
 			const size_t si = (q + static_cast<size_t>(round)) % batch_sizes.size();
 			const int m = batch_sizes[si];
@@ -285,6 +338,29 @@ int main(int argc, char** argv) {
 	sslm_gpu_model_unmap(ctx, model);
 	sslm_gpu_context_destroy(ctx);
 
+	if (slices_only) {
+		std::string sj = "{\"mode\":\"gx3-slices\",\"rounds\":" + std::to_string(pairs) + ",\"warmup\":" + std::to_string(warmup) +
+		                 ",\"layers\":" + std::to_string(layers) + ",\"prefix_tokens\":" + std::to_string(kPrefixTokens) + ",\"slices\":[";
+		std::printf("slices (one one-row slice of L layers, layers [N-L, N)): L | wall ms | gpu_busy ms | wall - gpu_busy ms\n");
+		for (size_t i = 0; i < slice_layers.size(); ++i) {
+			const Stat w = Summarize(slices[i].wall), g = Summarize(slices[i].gpu), o = Summarize(slices[i].overhead);
+			std::printf("  L=%d | %.3f [%.3f, %.3f] | %.3f [%.3f, %.3f] | %.3f [%.3f, %.3f]\n", slice_layers[i], w.median, w.lo, w.hi,
+			            g.median, g.lo, g.hi, o.median, o.lo, o.hi);
+			sj += std::string(i ? "," : "") + "{\"L\":" + std::to_string(slice_layers[i]) + ",\"wall_ms\":" + JStat(w) +
+			      ",\"gpu_busy_ms\":" + JStat(g) + ",\"overhead_ms\":" + JStat(o) + "}";
+		}
+		sj += "]}";
+		if (json_path) {
+			std::FILE* f = std::fopen(json_path, "wb");
+			if (!f) {
+				std::fprintf(stderr, "cannot write %s\n", json_path);
+				return 4;
+			}
+			std::fwrite(sj.data(), 1, sj.size(), f);
+			std::fclose(f);
+		}
+		return 0;
+	}
 	std::string js = "{\"mode\":\"gx3\",\"pairs\":" + std::to_string(pairs) + ",\"warmup\":" + std::to_string(warmup) +
 	                 ",\"layers\":" + std::to_string(layers) + ",\"prefix_tokens\":" + std::to_string(kPrefixTokens) +
 	                 ",\"sub_chunk_max_tokens\":" + std::to_string(superslm_gpu::kT2169TdrSafeMaxChunkTokens) + ",\"chunk\":[";

@@ -62,3 +62,25 @@ Headless, a GPU submission costs about 3.6-3.7 ms beyond its GPU work on this bo
 until the GPU path gains M-row dispatches; the GPU work per token does not change with M today. These are headless readings: in-game the slice's GPU window also
 holds the scene's own rendering (the README's 3.4 ms at 4 layers), and the per-submit cost inside a running game was
 not measured here.
+
+## Slice depth: one one-row slice at 4, 8, 12 and 24 layers (`gx3-slices.*`)
+
+The README's GPU columns run 4, 8, 12 and 24 layers per frame. The bench's `--slices-only` mode times one
+`sslm_decode_step_gpu` slice of L layers (layers [24 − L, 24), after an untimed run to 24 − L) with its blocking
+`sslm_gpu_ready`, against that slice's own `gpu_busy_ms`; L rotates per round, 15 rounds after one warm-up. Built from
+`tools/schema_fast_decode_gx3_bench.cpp` as committed with these results (bench sha256 `c20af5d4…`, `run-gx3-slices.ps1`).
+
+| L (layers per slice) | wall ms [interval] | gpu_busy ms [interval] | wall − gpu_busy ms [interval] | slices per token | wall per token ms | GPU share of wall |
+|---|---|---|---|---|---|---|
+| 4 | 4.70 [4.58, 4.78] | 1.11 [1.10, 1.13] | 3.60 [3.47, 3.65] | 6 | 28.2 | 24 % |
+| 8 | 5.87 [5.80, 5.94] | 2.19 [2.18, 2.22] | 3.66 [3.58, 3.77] | 3 | 17.6 | 37 % |
+| 12 | 7.14 [7.05, 7.30] | 3.32 [3.29, 3.37] | 3.85 [3.80, 3.89] | 2 | 14.3 | 46 % |
+| 24 | 10.93 [10.84, 11.08] | 6.57 [6.49, 6.75] | 4.34 [4.27, 4.42] | 1 | 10.9 | 60 % |
+
+(Wall per token is slices per token × the slice's median wall time; GPU share is gpu_busy / wall.)
+
+The fixed cost outside the GPU's window is nearly flat across depth (3.6 to 4.3 ms per slice; it grows a little with
+L, in recording and readback), while the GPU work is about 0.27 ms per layer. So the slice count per token, not the
+layers, sets most of a headless token's cost: a whole token as one 24-layer slice takes 10.9 ms of wall time against
+28.2 ms as six 4-layer slices, for the same 6.6-6.7 ms of GPU work. In a game at a frame cap, one slice per frame means
+the slice count also sets the frames per token; the in-game frame-time check measures that separately.

@@ -1,0 +1,6 @@
+artifact D:\_artifacts\SuperSLM\aex\qwen2.5-0.5b-instruct-cap4096-aex-pr.sslm layers 24 context_cap 4096 dispatches_per_layer_budget 25
+slices (one one-row slice of L layers, layers [N-L, N)): L | wall ms | gpu_busy ms | wall - gpu_busy ms
+  L=4 | 4.699 [4.582, 4.778] | 1.113 [1.096, 1.129] | 3.599 [3.469, 3.649]
+  L=8 | 5.871 [5.796, 5.943] | 2.190 [2.179, 2.216] | 3.655 [3.576, 3.765]
+  L=12 | 7.140 [7.053, 7.295] | 3.315 [3.289, 3.373] | 3.851 [3.797, 3.891]
+  L=24 | 10.925 [10.835, 11.075] | 6.568 [6.492, 6.746] | 4.340 [4.265, 4.416]
