@@ -4658,6 +4658,45 @@ void Cell_TF_4b() {
 // J1-X (plan rev 1.3.3 §5.10, §11.4): the exact jump-forward cells.
 #include "schema_fast_decode/sfd_cells_x.inc"
 
+// Q6C.7 [Q6 C] One thread, no hook (the box's 1-thread jump-forward-on arm; A/B 2026-10-20): the §5.6 host
+// loop on POTION and LONGKEY at budget 64, with the workspace and with ws = NULL. Every verb call that admits
+// M >= 1 rows makes exactly one S-LAYERROWS entry, a batched pass of M rows, and the stream is the
+// reference rule's.
+void Cell_Q6C_7() {
+	const Sfd& f = GetSfd();
+	if (!f.ok) return;
+	for (const char* schema : {kPotion, kLongKey}) {
+		for (int with_ws = 0; with_ws < 2; ++with_ws) {
+			Rig rig(f.m1->m);
+			JfOpts o = GreedyOpts(rig);
+			if (!with_ws) o.w = nullptr;
+			int bad = 0, calls = 0, multi = 0;
+			std::string first_bad;
+			o.after = [&](sslm_seq&, const JfStep& st) {
+				if (st.kind == 0 && st.st == SSLM_OK) {
+					const size_t m = st.toks.size() + (st.embedded_pending ? 1 : 0);
+					const std::vector<sfd::LayerRowsEntry> passes = Q6cPasses();
+					if (m >= 1) {
+						++calls;
+						if (m >= 2) ++multi;
+						if (!Q6cShapeIs(passes, m, false) && bad++ == 0)
+							first_bad = "M " + std::to_string(m) + ": " + Q6cShape(passes);
+					}
+				}
+				sfd::LayerRowsLogReset();
+			};
+			sslm_seq s = rig.NewSeq(schema);
+			if (!s || !rig.PromptOk(s, f.prompt_potion)) continue;
+			sfd::LayerRowsLogReset();
+			const JfRun r = RunJf(rig.m, s, o);
+			CheckStreamIsReference("Q6C.7", f, schema, r);
+			CHECK_MSG(calls > 0 && multi > 0 && bad == 0, "[Q6C.7] %s, %s, no hook: %d of %d verb calls (%d of M >= 2) "
+			          "did not make exactly one batched pass of M rows (first: %s)", schema, with_ws ? "workspace" : "ws NULL",
+			          bad, calls, multi, first_bad.c_str());
+		}
+	}
+}
+
 // Prints the values cell 6.6 pins, computed by the reference replay on main (SUPERSLM_SFD_PRINT_GOLDENS=1).
 void PrintGoldens() {
 	const Sfd& f = GetSfd();
@@ -4755,6 +4794,7 @@ void RunSchemaFastDecodeCells(int& checks, int& failures) {
 	run("Q6C.4", Cell_Q6C_4);
 	run("Q6C.5", Cell_Q6C_5);
 	run("Q6C.6", Cell_Q6C_6);
+	run("Q6C.7", Cell_Q6C_7);
 	// TF (plan rev 1.3.3 §11.5; TF.1, TF.3-TF.7 are in the allocation sweep, TF.8 is the cells above)
 	run("TF.2", Cell_TF_2);
 	run("TF.4b", Cell_TF_4b);
