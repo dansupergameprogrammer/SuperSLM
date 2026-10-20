@@ -85,6 +85,22 @@ endif()
 # (src/bad_alloc_wrap.h #ifdef-gates it out entirely -- Layer 1 stays
 # independently embeddable, D-SLM13).
 if(BUILD_TESTING)
+# Schema fast-decode plan (rev 1.2.1) §9, slices M1 and J1: the red suite
+# (tests/test_schema_fast_decode.cpp) runs inside every full-suite binary. Until M1 and J1 land, the
+# surface it calls is defined by tests/schema_fast_decode/sfd_red_stubs.cpp (no behaviour, so every
+# cell is red at its assertion). The builder defines the real symbols in the library and turns this
+# option OFF in the same commit; left ON beside them, the link refuses the duplicate symbols.
+option(SUPERSLM_SFD_RED_STUBS "Link the schema fast-decode red suite's no-behaviour stubs (until M1/J1 land)" ON)
+function(superslm_add_schema_fast_decode_cells _sfd_target)
+	target_sources(${_sfd_target} PRIVATE tests/test_schema_fast_decode.cpp
+		tests/schema_fast_decode/sfd_red_stubs.cpp)
+	target_include_directories(${_sfd_target} PRIVATE tests)
+	# The source tree, for cell 9.2's reads of the ABI inventory and the project version.
+	target_compile_definitions(${_sfd_target} PRIVATE SFD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+	if(SUPERSLM_SFD_RED_STUBS)
+		target_compile_definitions(${_sfd_target} PRIVATE SUPERSLM_SFD_RED_STUBS)
+	endif()
+endfunction()
 add_library(superslm_test_injection STATIC ${SUPERSLM_CORE_SOURCES})
 target_include_directories(superslm_test_injection PUBLIC include)
 target_include_directories(superslm_test_injection PRIVATE tests)
@@ -97,6 +113,12 @@ target_compile_definitions(superslm_test_injection PUBLIC SUPERSLM_ENABLE_MATVEC
 # seams (src/kv_pages.h). Test library only; the production address read is a plain load. PUBLIC so
 # a cell that includes src/kv_pages.h sees the seam declarations.
 target_compile_definitions(superslm_test_injection PUBLIC SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS)
+# Schema fast-decode plan (rev 1.2.1) §11.0: the M1/J1 test-only seams (S-ROWS, S-LAYERROWS, S-ROW,
+# S-CHOICE, S-BOUND, S-WALK, the forced-table read and overwrite; tests/schema_fast_decode/sfd_api.h),
+# and the CPU degenerate-finish-row seam cells 5.4 and 8.8 arm (src/sslm_abi.cpp, the T-2899
+# precedent). Test libraries only; PUBLIC so the suite's own compile sees the seam declarations.
+target_compile_definitions(superslm_test_injection PUBLIC SUPERSLM_ENABLE_SCHEMA_FAST_DECODE_TEST_SEAMS
+	SUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION)
 if(MSVC)
 	target_compile_options(superslm_test_injection PRIVATE /W4 /fp:precise)
 else()
@@ -107,6 +129,7 @@ add_executable(superslm_tests tests/test_main.cpp tests/test_slm18x_saturation_c
 	tests/test_slm19x_schema_damped_greedy.cpp tests/test_tiled_gemm.cpp tests/test_attn_rowsites.cpp
 	tests/test_decode_threading.cpp tests/test_decode_threading_d1.cpp)
 target_link_libraries(superslm_tests PRIVATE superslm_test_injection)
+superslm_add_schema_fast_decode_cells(superslm_tests)
 if(MSVC)
 	target_compile_options(superslm_tests PRIVATE /W4 /fp:precise)
 else()
@@ -330,19 +353,28 @@ add_library(superslm_scalar_forced_seams STATIC EXCLUDE_FROM_ALL ${SUPERSLM_CORE
 target_include_directories(superslm_scalar_forced_seams PUBLIC include)
 target_include_directories(superslm_scalar_forced_seams PRIVATE tests)
 target_compile_definitions(superslm_scalar_forced_seams PUBLIC SUPERSLM_FORCE_SCALAR_MATMUL
-	SUPERSLM_ENABLE_MATVEC_TEST_SEAMS)
+	SUPERSLM_ENABLE_MATVEC_TEST_SEAMS SUPERSLM_ENABLE_SCHEMA_FAST_DECODE_TEST_SEAMS
+	SUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION)
 target_compile_definitions(superslm_scalar_forced_seams PRIVATE SUPERSLM_ENABLE_BAD_ALLOC_INJECTION)
 add_executable(superslm_decode_threading_scalar_forced EXCLUDE_FROM_ALL
 	tests/decode_threading_standalone_main.cpp tests/test_decode_threading.cpp
 	tests/test_decode_threading_d1.cpp)
 target_link_libraries(superslm_decode_threading_scalar_forced PRIVATE superslm_scalar_forced_seams)
 target_include_directories(superslm_decode_threading_scalar_forced PRIVATE tests)
+# Schema fast-decode plan (rev 1.2.1) §9: the scalar tier's run of the M1/J1 red suite, on the same
+# seam-enabled scalar library. Excluded from `all`; the SSE2-forced CI leg builds and runs it.
+add_executable(superslm_schema_fast_decode_scalar_forced EXCLUDE_FROM_ALL
+	tests/schema_fast_decode_standalone_main.cpp)
+target_link_libraries(superslm_schema_fast_decode_scalar_forced PRIVATE superslm_scalar_forced_seams)
+superslm_add_schema_fast_decode_cells(superslm_schema_fast_decode_scalar_forced)
 if(MSVC)
 	target_compile_options(superslm_scalar_forced_seams PRIVATE /W4 /fp:precise)
 	target_compile_options(superslm_decode_threading_scalar_forced PRIVATE /W4 /fp:precise)
+	target_compile_options(superslm_schema_fast_decode_scalar_forced PRIVATE /W4 /fp:precise)
 else()
 	target_compile_options(superslm_scalar_forced_seams PRIVATE -Wall -Wextra -ffp-contract=off)
 	target_compile_options(superslm_decode_threading_scalar_forced PRIVATE -Wall -Wextra -ffp-contract=off)
+	target_compile_options(superslm_schema_fast_decode_scalar_forced PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 # Decode-threading plan §8 7.4 (F12): no new heap allocation per decode token. Its own executable,
 # because it replaces the global operator new (the dim7_contract_red.cpp pattern). It links
@@ -415,6 +447,9 @@ foreach(_sslm_tier SSE2 AVX2 AVX512)
 	# which, with the page module's seams, are compiled only under this macro; superslm_test_injection's own
 	# PUBLIC definition (above) is the precedent.
 	target_compile_definitions(superslm_${_sslm_tier_lower}_forced PUBLIC SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS)
+	# Schema fast-decode plan §11.0: the forced full suites run the M1/J1 cells too.
+	target_compile_definitions(superslm_${_sslm_tier_lower}_forced PUBLIC SUPERSLM_ENABLE_SCHEMA_FAST_DECODE_TEST_SEAMS
+		SUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION)
 	# Both the bad-alloc-injection seam above (src/bad_alloc_wrap.h) and the dispatch-
 	# instrument seam below (src/matmul.cpp) #include "support/*.h" headers that resolve
 	# against a "tests" search directory -- the same PRIVATE include superslm_test_injection
@@ -453,6 +488,7 @@ foreach(_sslm_tier SSE2 AVX2 AVX512)
 		tests/test_tiled_gemm.cpp tests/test_attn_rowsites.cpp tests/test_decode_threading.cpp
 		tests/test_decode_threading_d1.cpp)
 	target_link_libraries(superslm_tests_${_sslm_tier_lower}_forced PRIVATE superslm_${_sslm_tier_lower}_forced)
+	superslm_add_schema_fast_decode_cells(superslm_tests_${_sslm_tier_lower}_forced)
 	target_include_directories(superslm_tests_${_sslm_tier_lower}_forced PRIVATE tests)
 	if(MSVC)
 		target_compile_options(superslm_tests_${_sslm_tier_lower}_forced PRIVATE /W4 /fp:precise)
