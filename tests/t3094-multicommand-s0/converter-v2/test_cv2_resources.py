@@ -236,7 +236,7 @@ def _traced(fn, seconds=None):
 
 
 TRIVIAL = F.obj({"k": {"type": "string", "enum": ["x"]}})
-PEAK_KEYS = ("tracked_temporary_bytes", "serialized_mask_bytes")
+PEAK_KEYS = ("tracked_temporary_bytes",)  # the section guard has its own cell below (S0a recheck)
 
 
 @pytest.mark.parametrize("key", PEAK_KEYS)
@@ -268,8 +268,28 @@ def test_refusal_peak_shrinks_with_the_injected_limit(key, real_vocab):
         f"(built before the guard spoke)"
 
 
+def test_section_refusal_before_emission(real_vocab):
+    """§4.1 l.446 (R_SECTION row): the section guard refuses "before section emission". (L.450's refuse-at-
+    the-crossing rule binds only the tracked budget; S0a recheck.) IntentDoc v2 on the pinned vocabulary with
+    the section limit injected at L = 2/3 of its count model v2 section size: the refused call's traced peak
+    above a successful release compile's peak is under half that section size, so no section was emitted."""
+    vocab, pieces = real_vocab
+    P.healthy_real(F.INTENTDOC, vocab)
+    key = "serialized_mask_bytes"
+    section = F.model_counts_to_contract(cm.count(F.INTENTDOC, "intents", pieces, F.REAL_VOCAB_SIZE))[key]
+    good, good_peak, _ = _traced(lambda: P.compile_schema_to_mask_pages(F.INTENTDOC, vocab.pieces,
+                                                                       special_ids=vocab.special))
+    assert not isinstance(good, Exception), f"release compile refused: {good}"
+    outcome, peak, _ = _traced(lambda: P.compile_schema_to_mask_pages(
+        F.INTENTDOC, vocab.pieces, special_ids=vocab.special, limits={key: section * 2 // 3}))
+    assert isinstance(outcome, P.SchemaCompileError) and F.DIAGNOSTICS[key] in str(outcome), \
+        f"not refused by the section guard: {outcome!r}"
+    assert peak - good_peak < section / 2, \
+        f"refused-call peak {peak:,} B is {peak - good_peak:,} B above the release compile's {good_peak:,} B; " \
+        f"half the section is {section // 2:,} B (section emitted before the refusal)"
+
+
 NFA_FAR_OVER_FACTOR = 100
-FAR_OVER_PEAK_MARGIN = 32 * 2 ** 20  # bytes above the trivial compile's peak
 FAR_OVER_TIME_MARGIN = 10.0  # seconds above the trivial compile's time
 
 
@@ -281,22 +301,20 @@ def far_over_nfa_schema():
 
 def test_far_over_nfa_schema_refused_before_determinization(real_vocab):
     """§4.1 l.450, §6 row 11: a schema 100x over its NFA limit at the pinned vocabulary is refused by the NFA
-    guard inside a stated budget: traced peak at most the trivial schema's compile peak + 32 MiB, time at most
-    its time + 10 s. Building the NFA through and then determinizing it (the post-hoc construction) takes
-    hundreds of MiB and tens of seconds, so it is over budget even though its refusal is named correctly."""
+    guard within the trivial schema's compile time + 10 s. Building the whole NFA and checking it before
+    determinization is allowed (S0a recheck); determinizing it first (the post-hoc construction) takes tens of
+    seconds, so it is over budget even though its refusal is named correctly."""
     vocab, _ = real_vocab
     P.healthy_bytes(F.INTENTDOC)
-    base, base_peak, base_time = _traced(lambda: P.compile_schema_to_mask_pages(TRIVIAL, vocab.pieces,
+    base, _, base_time = _traced(lambda: P.compile_schema_to_mask_pages(TRIVIAL, vocab.pieces,
                                                                                special_ids=vocab.special))
     assert not isinstance(base, Exception), f"trivial control refused: {base}"
     budget = base_time + FAR_OVER_TIME_MARGIN
-    outcome, peak, elapsed = _traced(lambda: P.compile_schema_to_mask_pages(
+    outcome, _, elapsed = _traced(lambda: P.compile_schema_to_mask_pages(
         far_over_nfa_schema(), vocab.pieces, special_ids=vocab.special), seconds=budget + 1)
     assert not isinstance(outcome, _OverTime), f"still compiling after {budget:.1f} s: no refusal at the crossing"
     assert isinstance(outcome, P.SchemaCompileError) and F.DIAGNOSTICS["nfa_states"] in str(outcome), \
         f"not refused by the NFA guard: {outcome!r}"
-    assert peak <= base_peak + FAR_OVER_PEAK_MARGIN, \
-        f"refused-call peak {peak:,} B over budget {base_peak + FAR_OVER_PEAK_MARGIN:,} B (built past the crossing)"
     assert elapsed <= budget, f"refused after {elapsed:.1f} s, budget {budget:.1f} s"
 
 
