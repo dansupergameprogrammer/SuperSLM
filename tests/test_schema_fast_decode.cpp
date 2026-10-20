@@ -1103,6 +1103,7 @@ struct CountingHook {
 	int32_t max_tasks = 4;
 	Hostile hostile = Hostile::kNone;
 	int hostile_call = 0;
+	bool threads = false;  // run each honest call's tasks on their own threads (the Q6C cells, under TSan)
 	std::mutex mu;
 	std::vector<int32_t> counts;
 	sslm_parallel_for Pf(uint32_t bits) { return sslm_parallel_for{&Run, this, max_tasks, bits}; }
@@ -1142,6 +1143,12 @@ struct CountingHook {
 			case Hostile::kNone:
 				break;
 			}
+		}
+		if (h.threads) {
+			std::vector<std::thread> workers;
+			for (int32_t i = 0; i < task_count; ++i) workers.emplace_back([task, task_ctx, i] { task(task_ctx, i); });
+			for (std::thread& t : workers) t.join();
+			return;
 		}
 		for (int32_t i = 0; i < task_count; ++i) task(task_ctx, i);
 	}
@@ -3849,15 +3856,17 @@ struct SpanRun {
 
 // A LONGKEY sequence resting ready for logits at `state` (the prompt, then the reference path as content,
 // with no workspace and so no hook), then one verb call at `budget` under `arm`. `kv_room` >= 0 makes the
-// holder a budget holder with that many positions past the path.
+// holder a budget holder with that many positions past the path; `threads` runs the hook's tasks on their
+// own threads.
 SpanRun Q6cSpan(const Sfd& f, uint32_t state, int32_t budget, Q6cArm arm, const sslm_decode_params* params = nullptr,
-                int32_t kv_room = -1) {
+                int32_t kv_room = -1, bool threads = false) {
 	SpanRun o;
 	const RefSchema& r = f.R(kLongKey);
 	if (state >= r.st.size()) return o;
 	Rig rig(f.m1->m);
 	CountingHook h;
 	h.max_tasks = 4;
+	h.threads = threads;
 	if (!rig.ok) return o;
 	if (arm != Q6cArm::kNoHook && !Install(rig.W(), &h, arm == Q6cArm::kBit1 ? SSLM_PARALLEL_FOR_MATVEC : 0u)) return o;
 	sslm_seq s = kv_room < 0 ? rig.NewSeq(kLongKey)
@@ -3893,7 +3902,8 @@ uint32_t Q6cLongestState(const Sfd& f) {
 // chain is M) and as a chunk_budget-bounded piece (budget M at the longest chain). Under bit 1 the status,
 // forced ids and whole blob equal the batched pass's (no hook, and bit 0) and the token-by-token reference
 // (the same tokens as explicit content, one per prefill call); 7 splits into seven threaded one-row passes,
-// 8 stays one serial pass of eight. Bit 0 keeps one pass at every M and never calls `run`.
+// 8 stays one serial pass of eight. Bit 0 keeps one pass at every M and never calls `run`. The bit-1 arm's
+// hook runs its tasks on real threads, so the cell is also the split path's TSan cell.
 void Cell_Q6C_1() {
 	const MinWorkScope min_work(kSmallMinWork);
 	const Sfd& f = GetSfd();
@@ -3910,7 +3920,7 @@ void Cell_Q6C_1() {
 			if (at == UINT32_MAX) continue;
 			const std::vector<int32_t> want(r.st[at].chain.begin(), r.st[at].chain.begin() + std::ptrdiff_t(m));
 			const char* how = piece ? "piece" : "span";
-			const SpanRun bit1 = Q6cSpan(f, at, budget, Q6cArm::kBit1);
+			const SpanRun bit1 = Q6cSpan(f, at, budget, Q6cArm::kBit1, nullptr, -1, /*threads=*/true);
 			const SpanRun plain = Q6cSpan(f, at, budget, Q6cArm::kNoHook);
 			const SpanRun bit0 = Q6cSpan(f, at, budget, Q6cArm::kBit0);
 			for (const SpanRun* x : {&bit1, &plain, &bit0}) {

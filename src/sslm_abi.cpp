@@ -2612,7 +2612,7 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
                                     sslm_workspace_s* ws, sslm_span_kind kind,
                                     sslm_schema bound_schema, uint32_t* walk_state,
                                     int64_t* forced_token_count, int32_t prewalked_prefix,
-                                    PrefillPrePassFn pre_pass, void* pre_pass_ctx) {
+                                    PrefillPrePassFn pre_pass, void* pre_pass_ctx, int32_t split_max_rows) {
 	const superslm::SslmModelConfig& c = model->view.config;
 	const int32_t n = count < chunk_budget ? count : chunk_budget;
 	const superslm::SchemaEntry* schema_entry =
@@ -2745,27 +2745,39 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
 			hidden_scales[static_cast<size_t>(i)] = embed_scale;
 		}
 
-		// T-2432 (Track A step 2/3): q_width threaded explicitly -- this is the real production
-		// path `sslm_prefill` drives (T-2425's own finding: RunLayerLoopChunkBatched is the ONLY
-		// path sslm_prefill reaches), so a non-square candidate's real num_attention_heads must
-		// reach this call, not fall back to the `q_width == hidden_size` default.
-		SfdLogLayerRows(/*kLayerRowsBatched=*/0, static_cast<uint64_t>(admit_count));
-		const superslm::SslmForwardStatus st = superslm::RunLayerLoopChunkBatched(
-		    embed_codes, hidden_scales.data(), static_cast<size_t>(admit_count), layers,
-		    c.num_hidden_layers, c.hidden_size, c.head_dim, c.num_key_value_heads,
-		    c.intermediate_size, c.context_cap, state.context_length, model->view.rope_tables,
-		    ViewOf(kv_pool, kv), /*option_g_fused_k_landing=*/false, &state.kv_saturation_count,
-		    /*site_prefix=*/{}, nullptr,
-		    /*q_width=*/static_cast<size_t>(c.num_attention_heads) * c.head_dim,
-		    // The per-site census the total sums, filled here as RunLayerLoop's decode path
-		    // already fills it, so a prefilled sequence's census still sums to its total unless
-		    // its history since its last reset includes an 'SSB4', 'SSB3' or 'SSB2' restore.
-		    &state.kv_landing_saturation_count, &state.k_channel_landing_saturation_count,
-		    &state.rope_q_saturation_count, &state.rope_k_saturation_count,
-		    // Decode-threading plan §3.4: `admit_count` is the chunk's M, so a call that admits
-		    // exactly one token takes the one-row split whatever `count` the caller sent.
-		    MatvecThreading(ws));
-		if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
+		// Decode-threading plan §3.4: `admit_count` is the chunk's M, so a call that admits
+		// exactly one token takes the one-row split whatever `count` the caller sent.
+		const superslm::GemmThreading threading = MatvecThreading(ws);
+		// Schema fast-decode plan §16 Q6 C: under bit 1, a caller that passes `split_max_rows`
+		// (sslm_seq_jump_forward only) runs an admission of 2..split_max_rows rows as that many
+		// one-row passes, each taking the threaded one-row split. Bit-identical by chunk invariance
+		// (§5.6): each row is its own EmbedEntry, and row i's pass reads exactly the K/V rows
+		// [0, context_length + i) the batched pass would. `state` moves only after the last row, so
+		// a row that fails leaves the call uncommitted, as a failed batched pass does.
+		const size_t pass_rows =
+		    (threading.row != nullptr && admit_count >= 2 && admit_count <= split_max_rows)
+		        ? 1u
+		        : static_cast<size_t>(admit_count);
+		for (size_t r0 = 0; r0 < static_cast<size_t>(admit_count); r0 += pass_rows) {
+			// T-2432 (Track A step 2/3): q_width threaded explicitly -- this is the real production
+			// path `sslm_prefill` drives (T-2425's own finding: RunLayerLoopChunkBatched is the ONLY
+			// path sslm_prefill reaches), so a non-square candidate's real num_attention_heads must
+			// reach this call, not fall back to the `q_width == hidden_size` default.
+			SfdLogLayerRows(/*kLayerRowsBatched=*/0, static_cast<uint64_t>(pass_rows));
+			const superslm::SslmForwardStatus st = superslm::RunLayerLoopChunkBatched(
+			    embed_codes + r0 * c.hidden_size, hidden_scales.data() + r0, pass_rows, layers,
+			    c.num_hidden_layers, c.hidden_size, c.head_dim, c.num_key_value_heads,
+			    c.intermediate_size, c.context_cap, state.context_length + static_cast<int64_t>(r0),
+			    model->view.rope_tables, ViewOf(kv_pool, kv), /*option_g_fused_k_landing=*/false,
+			    &state.kv_saturation_count, /*site_prefix=*/{}, nullptr,
+			    /*q_width=*/static_cast<size_t>(c.num_attention_heads) * c.head_dim,
+			    // The per-site census the total sums, filled here as RunLayerLoop's decode path
+			    // already fills it, so a prefilled sequence's census still sums to its total unless
+			    // its history since its last reset includes an 'SSB4', 'SSB3' or 'SSB2' restore.
+			    &state.kv_landing_saturation_count, &state.k_channel_landing_saturation_count,
+			    &state.rope_q_saturation_count, &state.rope_k_saturation_count, threading);
+			if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
+		}
 
 		// forward_sites.h: "a sequence resting between whole tokens carries a marker at layer
 		// 0" -- the batched call above leaves every admitted token's own layer stack fully run;
@@ -2803,7 +2815,7 @@ sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState
                                 sslm_workspace_s* ws, sslm_span_kind kind, sslm_schema bound_schema,
                                 uint32_t* walk_state, int64_t* forced_token_count,
                                 int32_t prewalked_prefix = 0, PrefillPrePassFn pre_pass = nullptr,
-                                void* pre_pass_ctx = nullptr) {
+                                void* pre_pass_ctx = nullptr, int32_t split_max_rows = 0) {
 	// Decode-threading plan §3.6, the prefill guard: a call that fails before committing a token
 	// -- a hook that broke exactly-once, an allocation failure (the exception arm, through
 	// CatchAllocationFailure), or any rejection -- has moved saturation counters that no K/V
@@ -2816,7 +2828,7 @@ sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState
 		return PrefillWholeTokensImpl(model, state, kv_pool, kv, limit, tokens, count,
 		                               chunk_budget, consumed, out_last_token, adapter, ws, kind,
 		                               bound_schema, walk_state, forced_token_count, prewalked_prefix,
-		                               pre_pass, pre_pass_ctx);
+		                               pre_pass, pre_pass_ctx, split_max_rows);
 	});
 	if (st != SSLM_OK && state.context_length == context_length_before) {
 		counters_before.RestoreTo(state);
@@ -4401,6 +4413,12 @@ sslm_status JumpPrePass(void* ctx, int32_t admit_count) {
 	return SSLM_OK;
 }
 
+// Schema fast-decode plan §16 Q6 C (chosen), k from B3: under bit 1 (SSLM_PARALLEL_FOR_MATVEC) the
+// verb runs a pass of M = 2..k rows as M one-row threaded passes. k = 7 by the box scorecard's rule 3.10
+// (2026-10-20): on cell Z at 4 tasks, batched passes of M = 2..7 lose 5.4-8.6 ms to one-token threaded
+// admissions and M = 8 wins by 29 ms. At one thread there is no loss, so without bit 1 nothing splits.
+constexpr int32_t kJumpForwardSplitMaxTokens = 7;
+
 sslm_status SeqJumpForwardImpl(sslm_model model, sslm_seq seq, int32_t chunk_budget,
                                const sslm_decode_params* params, sslm_workspace ws, int32_t* out_forced,
                                int32_t cap, int32_t* out_forced_count) {
@@ -4440,7 +4458,7 @@ sslm_status SeqJumpForwardImpl(sslm_model model, sslm_seq seq, int32_t chunk_bud
 	    model, seq->state, seq->pool, seq->kv, HolderLimit(model, seq->kv_mode, seq->kv_budget, seq->kv_origin),
 	    tokens.data(), count, count, &consumed, &seq->current_token, seq->adapter_handle, ws,
 	    SSLM_SPAN_SCHEMA_CONTENT, seq->bound_schema, &seq->dfa_walk_state, &seq->forced_token_count, pending,
-	    &JumpPrePass, &ctx);
+	    &JumpPrePass, &ctx, kJumpForwardSplitMaxTokens);
 	if (consumed > 0) {
 		// As sslm_prefill on consumed > 0 (G8): the last admitted token ran every layer, so the next
 		// decode_step finishes it with no re-embed. Partial admissions rest here too (§5.5).

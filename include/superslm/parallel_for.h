@@ -15,6 +15,8 @@
  *   calling thread. A fixed minimum of weight bytes caps the task count by the group's total
  *   weight bytes; it is not a floor on each task, and the last task can be smaller (docs/api.md
  *   gives the rule).
+ *   sslm_seq_jump_forward runs an admission of 2 to 7 tokens as that many one-token passes,
+ *   each split the same way (byte-identical output).
  * - Every other step, and every step of a prefill call that admits more than one token, ignores it.
  * A setter rejects any `reserved` bit this library does not implement, so a host that asks for a
  * step this build lacks is told so rather than silently ignored. The GPU backend accepts the

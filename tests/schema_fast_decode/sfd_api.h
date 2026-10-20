@@ -85,7 +85,8 @@ uint64_t RowsLogAt(size_t i) noexcept;  // 0 past the end
 
 // S-LAYERROWS: one entry per layer pass, in call order. kind 0: a batched pass
 // (RunLayerLoopChunkBatched, from sslm_prefill, sslm_prefix_prefill or sslm_seq_jump_forward), rows =
-// its token count M. kind 1: a decode step that runs the layer loop for a sequence (one entry per
+// its token count M (under bit 1 the verb runs an admission of M = 2..7 rows as M such passes of one
+// row each, §16 Q6 C). kind 1: a decode step that runs the layer loop for a sequence (one entry per
 // sequence per decode call that embeds or runs any layer), rows = 1. A finish-only decode (on
 // ready_for_logits) logs nothing.
 enum : int32_t { kLayerRowsBatched = 0, kLayerRowsDecode = 1 };
