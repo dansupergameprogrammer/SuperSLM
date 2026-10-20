@@ -1048,6 +1048,54 @@ already has for an unconstrained span. The determinism guarantee is
 unchanged by any of this — a schema-constrained decode is exactly as
 reproducible, on the same certified platform, as an unconstrained one.
 
+#### Compiling and attaching a schema
+
+`tools/sslm_attach_schema.py` compiles one or more JSON Schemas and attaches them
+to a completed artifact as its `SchemaMasks` section:
+
+```
+python tools/sslm_attach_schema.py --base <model>.sslm --ckpt <tokenizer checkpoint dir> \
+  --schema <name>:<schema>.json [--schema <name>:<schema>.json ...] --out <output>.sslm \
+  [--limits-json <limits>.json] [--verifier build/sslm_verify]
+```
+
+- `--base` is an artifact that carries its own tokenizer sections. `--ckpt` is the
+  exact tokenizer checkpoint it was built from: its serialized tokenizer tables must
+  equal the artifact's, byte for byte, because a schema is compiled against token ids.
+- Each `--schema` names the schema as `sslm_schema_lookup` will find it. Names must be
+  non-empty and unique, and their FNV-1a-64 hash must not be zero.
+- Every section and header flag of the base is carried over unchanged. The command
+  refuses a base that already has a `SchemaMasks` section, because no merge policy is
+  defined.
+- The new artifact is checked by the independent verifier (`sslm_verify`, built by
+  `cmake --build build --target sslm_verify`) before success is reported.
+- A refusal exits non-zero, prints its reason, and writes nothing at `--out`.
+
+The compilable subset is objects with required keys in `properties` order and
+`additionalProperties: false`, enums, booleans, free-text strings, and arrays.
+
+- An array takes one `items` schema and an optional `minItems`, which defaults to 0. It
+  accepts that many items or more, comma-separated, with no whitespace.
+- Arrays can nest. `maxItems` is refused, as is every other keyword the compiler does
+  not enforce. Annotations (`title`, `description` and the like) are ignored.
+
+The compiler refuses a schema that exceeds one of seven resource limits. Each refusal
+names its limit.
+
+| Limit | Release value | Diagnostic |
+|---|---:|---|
+| `minItems`, per array | 8 | `minItems limit`, naming the array's JSON pointer |
+| `recursion_depth` | 8 | `recursion depth limit` |
+| `nfa_states` | 4,096 | `NFA state limit` |
+| `dfa_states` | 4,096 | `DFA state limit` |
+| `token_transitions` | 8,388,608 | `token transition limit` |
+| `serialized_mask_bytes` | 134,217,728 | `serialized mask byte limit` |
+| `tracked_temporary_bytes` | 268,435,456 | `tracked temporary memory limit` |
+
+- `--limits-json` takes a JSON object that replaces the named limits for that run.
+- The compiler also refuses a schema if the vocabulary leaves some reachable state
+  unable to finish a document.
+
 ### Status causes
 
 `sslm_status` carries one success value (`SSLM_OK`) plus 29 distinct
