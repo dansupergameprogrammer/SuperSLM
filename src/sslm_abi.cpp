@@ -2748,16 +2748,23 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
 		// Decode-threading plan §3.4: `admit_count` is the chunk's M, so a call that admits
 		// exactly one token takes the one-row split whatever `count` the caller sent.
 		const superslm::GemmThreading threading = MatvecThreading(ws);
-		// Schema fast-decode plan §16 Q6 C: under bit 1, a caller that passes `split_max_rows`
+		// Schema fast-decode plan §16 Q6 C: a caller that passes `split_max_rows`
 		// (sslm_seq_jump_forward only) runs an admission of 2..split_max_rows rows as that many
-		// one-row passes, each taking the threaded one-row split. Bit-identical by chunk invariance
-		// (§5.6): each row is its own EmbedEntry, and row i's pass reads exactly the K/V rows
-		// [0, context_length + i) the batched pass would. `state` moves only after the last row, so
-		// a row that fails leaves the call uncommitted, as a failed batched pass does.
-		const size_t pass_rows =
-		    (threading.row != nullptr && admit_count >= 2 && admit_count <= split_max_rows)
-		        ? 1u
-		        : static_cast<size_t>(admit_count);
+		// one-row passes when a one-row pass would actually thread -- GemmDispatch's own rule,
+		// MatvecGroupSplit's task_count >= 2, for the chunk path's largest one-row projection
+		// (gate, up and down each carry hidden_size * intermediate_size weight bytes). A hook with
+		// max_tasks < 2 or no `run`, or a model below the minimum work per task, would run the
+		// one-row passes serially, which is slower than the batched pass, so it keeps the batched
+		// pass. Bit-identical by chunk invariance (§5.6): each row is its own EmbedEntry, and row
+		// i's pass reads exactly the K/V rows [0, context_length + i) the batched pass would.
+		// `state` moves only after the last row, so a row that fails leaves the call uncommitted,
+		// as a failed batched pass does.
+		const bool one_row_threads =
+		    threading.row != nullptr &&
+		    superslm::MatvecGroupSplit(threading.row, c.hidden_size, c.intermediate_size).task_count >= 2;
+		const size_t pass_rows = (one_row_threads && admit_count >= 2 && admit_count <= split_max_rows)
+		                             ? 1u
+		                             : static_cast<size_t>(admit_count);
 		for (size_t r0 = 0; r0 < static_cast<size_t>(admit_count); r0 += pass_rows) {
 			// T-2432 (Track A step 2/3): q_width threaded explicitly -- this is the real production
 			// path `sslm_prefill` drives (T-2425's own finding: RunLayerLoopChunkBatched is the ONLY
@@ -4413,10 +4420,12 @@ sslm_status JumpPrePass(void* ctx, int32_t admit_count) {
 	return SSLM_OK;
 }
 
-// Schema fast-decode plan §16 Q6 C (chosen), k from B3: under bit 1 (SSLM_PARALLEL_FOR_MATVEC) the
-// verb runs a pass of M = 2..k rows as M one-row threaded passes. k = 7 by the box scorecard's rule 3.10
-// (2026-10-20): on cell Z at 4 tasks, batched passes of M = 2..7 lose 5.4-8.6 ms to one-token threaded
-// admissions and M = 8 wins by 29 ms. At one thread there is no loss, so without bit 1 nothing splits.
+// Schema fast-decode plan §16 Q6 C (chosen), k from B3: when a one-row pass would thread (bit 1
+// (SSLM_PARALLEL_FOR_MATVEC) set, and the one-row split of the largest projection reaching two or more
+// tasks; PrefillWholeTokensImpl), the verb runs a pass of M = 2..k rows as M one-row threaded passes.
+// k = 7 by the box scorecard's rule 3.10 (2026-10-20): on cell Z at 4 tasks, batched passes of M = 2..7
+// lose 5.4-8.6 ms to one-token threaded admissions and M = 8 wins by 29 ms. Where a one-row pass would
+// run serially there is no loss to recover (r(M) < M), so nothing splits.
 constexpr int32_t kJumpForwardSplitMaxTokens = 7;
 
 sslm_status SeqJumpForwardImpl(sslm_model model, sslm_seq seq, int32_t chunk_budget,

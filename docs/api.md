@@ -1099,12 +1099,15 @@ chain is that token, then the chain of the state it leads to. The table costs
   pending. The pending token is not walked again (the decode step walked it).
   `ws` may be NULL and supplies the parallel-for hook as for `sslm_prefill`,
   so a one-token admission threads under `SSLM_PARALLEL_FOR_MATVEC` exactly as
-  a one-token prefill does. Under that bit an admission of 2 to 7 tokens runs
-  as that many one-token passes, each threaded the same way; the output is
-  byte-identical to the batched pass (chunk invariance), only faster on a
-  threaded host. Eight or more tokens, and any call without the bit, run the
-  one batched pass. After any admission the sequence is ready for
-  logits, and `forced_token_count` rises by the chain tokens admitted only.
+  a one-token prefill does. When a one-token pass would actually split across
+  `run` (the bit is set, and the task-count rule under *The token finish*
+  gives the model's largest projection, hidden size × intermediate size, two
+  or more tasks), an admission of 2 to 7 tokens runs as that many one-token
+  passes, each split the same way; the output is byte-identical to the
+  batched pass (chunk invariance). Eight or more tokens, and any call where a
+  one-token pass would run on the calling thread alone, run the one batched
+  pass. After any admission the sequence is ready for logits, and
+  `forced_token_count` rises by the chain tokens admitted only.
   - **Refusals** change nothing: `SSLM_INVALID_ARGUMENT` for `chunk_budget <
     1`, `cap < chunk_budget`, a null `out_forced_count` or `out_forced`, or a
     sequence mid-token (`layer_index != 0`); `SSLM_ARTIFACT_REJECTED` when the
