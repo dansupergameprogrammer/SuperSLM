@@ -1,0 +1,15 @@
+[2026-10-20T10:16:15.4573980-07:00] start pid 16040
+[2026-10-20T10:16:15.5100441-07:00] worktree D:\SuperSLM\.worktrees\schema-fast-decode at 36fe4b37d6d6cd715182884d6b22d43a68682cdb
+[2026-10-20T10:16:21.4441432-07:00] build ok; bench sha256 8c9c69fc60d60afac6fa541a37a601c710abb5059f6bdcb3d3ad35e4dd1be7fb lib sha256 5b3692d23d55d689fc9a941c3e7b54cd5bd31ef87eeb8399606d9331ab0d26de
+[2026-10-20T10:16:22.0349785-07:00] model sha256 9ccf7e378bbe47aa0ffd3810aa82875926cbe51af1bdfa08393c3fae657463da
+[2026-10-20T10:16:22.0459789-07:00] pass-t4 start: pass --example --sizes 1,2,3,4,5,6,7,8,9 --pairs 15 --warmup 1 --tasks 4
+[2026-10-20T10:27:12.0608086-07:00] spans-t4 done
+[2026-10-20T10:27:57.0698436-07:00] pass-t2 start: pass --example --sizes 1,2,3,4,5,6,7,8,9 --pairs 15 --warmup 1 --tasks 2
+[2026-10-20T10:30:58.9668554-07:00] pass-t2 done
+[2026-10-20T10:31:43.9827165-07:00] spans-t2 start: spans potion_shop_order --example --pairs 15 --tasks 2
+[2026-10-20T10:32:14.8743166-07:00] spans-t2 done
+[2026-10-20T10:32:59.8755092-07:00] jf-t1 start: extract potion_shop_order --example --max-new 64 --pair off,on --pairs 15 --warmup 1
+[2026-10-20T10:33:40.5194319-07:00] jf-t1 done
+[2026-10-20T10:34:25.5343399-07:00] jf-t4 start: extract potion_shop_order --example --max-new 64 --pair off,on --pairs 15 --warmup 1 --tasks 4
+[2026-10-20T10:34:58.9613980-07:00] jf-t4 done
+[2026-10-20T10:34:58.9623983-07:00] end PASS
