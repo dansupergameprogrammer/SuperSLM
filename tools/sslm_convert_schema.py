@@ -74,11 +74,10 @@ Sec4.1, Wizard repo) compiles to a cyclic item automaton:
 - **Construction.** `_groups()` emits an array as a one-element group holding an `_ArrayGroup`
   sentinel; `_char_dfa()` wires the byte NFA recursively (epsilon-free) and determinizes it by the same
   subset construction every schema already uses. `_token_targets`, the special-id exclusion and the
-  `MaskPages` representation are unchanged. A schema without an array compiles to the same table as
-  v1.13.1 **only when every release limit admits it**: `RELEASE_LIMITS` binds every schema, so an
-  array-free schema v1.13.1 compiled is now refused when it crosses a limit (an `enum` whose literals
-  total more than 4,096 NFA nodes, an object chain nested 9 deep, a table above the transition or
-  section limit). Whether the limits bind array-free schemas is open (S1 code review, finding 1).
+  `MaskPages` representation are unchanged. The release limits bind only a schema that contains an
+  array (S1 fix round 1, R1): a schema without an array compiles to the same table and SCM1 bytes as
+  v1.13.1, however large, because no release limit is applied to it. Limits injected through
+  `limits=` bind every schema.
 - **Refused.** `maxItems` is refused by name even where a small value could be flattened (Sec4.1).
 - **Resource admission.** Seven limits (`RELEASE_LIMITS`, the frozen provisional release values of the
   T-3094 S0 limits freeze) are checked at their counting stage, each with its own named diagnostic
@@ -87,9 +86,9 @@ Sec4.1, Wizard repo) compiles to a cyclic item automaton:
   states, token transitions, SCM1 section bytes and tracked temporary bytes as the token table grows. The
   tracked budget is reserved before each charged structure is allocated (NFA nodes and edges, byte-DFA
   states, token states, and each token row's staging bound of one transition per vocabulary id), so a
-  refusal stops at the crossing rather than after the whole table exists. The vocabulary trie is the
-  exception: it is charged a fixed model constant (`_CHARGE_TRIE`, 8,224 B), not its built size (about
-  79 MB at a 151,936-id vocabulary); per-node trie charging is open (S1 code review, finding 3). `limits=` replaces named limits for one call only;
+  refusal stops at the crossing rather than after the whole table exists. The vocabulary trie is
+  charged its measured storage node by node as it is built (about 79.4 MB at a 151,936-id
+  vocabulary), reserved before each node is created. `limits=` replaces named limits for one call only;
   the compiled artifact reports every count in `MaskPages.resource_counts`.
 - **Every reachable state can finish.** The empty-row refusal (G-7a) is the zero-step case of the class
   rule this compiler enforces: a schema whose token DFA has a reachable state from which no accepting
@@ -126,6 +125,7 @@ row at each state) -- not a runtime primitive, used only by this suite's own G5-
 from __future__ import annotations
 
 import json
+import sys
 from collections import deque
 from collections.abc import Hashable
 from typing import Any, Callable, Mapping, Sequence
@@ -807,7 +807,30 @@ class _TrieNode:
         self.token_id: int | None = None
 
 
-def _vocab_trie(vocab: Sequence[bytes]) -> _TrieNode:
+_TRIE_STORAGE: list[int] = []
+
+
+def _trie_storage() -> tuple[int, int]:
+    """(bytes of one new node with its empty child table, bytes a child table grows on its first
+    insertion), measured once from the interpreter's own objects (`sys.getsizeof`)."""
+    if not _TRIE_STORAGE:
+        node = _TrieNode()
+        _TRIE_STORAGE.append(sys.getsizeof(node) + sys.getsizeof(node.children))
+        probe: dict[int, Any] = {}
+        before = sys.getsizeof(probe)
+        probe[0] = None
+        _TRIE_STORAGE.append(sys.getsizeof(probe) - before)
+    return _TRIE_STORAGE[0], _TRIE_STORAGE[1]
+
+
+def _vocab_trie(vocab: Sequence[bytes], admission: "_Admission | None" = None) -> _TrieNode:
+    """The vocabulary trie. With `admission` (S1 fix round 1), its storage is charged as it is
+    actually held: before each node is created, the node, its empty child table and a bound on its
+    parent table's growth are reserved; the unused part of the bound is returned once the parent's
+    new size is known, and a token id object the trie keeps alive is charged before it is stored."""
+    node_bytes, first_growth = _trie_storage()
+    if admission is not None:
+        admission.trie_storage(node_bytes)
     root = _TrieNode()
     for token_id, piece in enumerate(vocab):
         if not piece:
@@ -816,10 +839,24 @@ def _vocab_trie(vocab: Sequence[bytes]) -> _TrieNode:
         for byte_val in piece:
             child = node.children.get(byte_val)
             if child is None:
-                child = _TrieNode()
-                node.children[byte_val] = child
+                if admission is None:
+                    child = _TrieNode()
+                    node.children[byte_val] = child
+                else:
+                    table_before = sys.getsizeof(node.children)
+                    bound = node_bytes + table_before + first_growth
+                    admission.trie_storage(bound)
+                    child = _TrieNode()
+                    node.children[byte_val] = child
+                    used = node_bytes + sys.getsizeof(node.children) - table_before
+                    if used <= bound:
+                        admission.release(bound - used)
+                    else:  # a table grew past its bound: charge the rest (refused if over)
+                        admission.trie_storage(used - bound)
             node = child
         if node.token_id is None:  # first (lowest-index) token spelling this piece wins
+            if admission is not None and not -5 <= token_id <= 256:  # not an interpreter-cached int
+                admission.trie_storage(sys.getsizeof(token_id))
             node.token_id = token_id
     return root
 
@@ -974,8 +1011,10 @@ class MaskPages:
 
 # --- resource admission (T-3094 S1, plan Sec4.1 resource admission contract) ---------------------
 
-# The frozen provisional release limits (T-3103 S0 limits freeze, D-SLM8087 rule, D-SLM8095 values;
-# keys use the T-3094 names). A count equal to its limit is admitted; a count above it is refused.
+# The release limits (T-3103 S0 limits freeze, D-SLM8087 rule, D-SLM8095 values; keys use the T-3094
+# names; tracked bytes finalized in S1, below). A count equal to its limit is admitted; a count above it
+# is refused. They bind only a schema that contains an array (S1 fix round 1, R1); injected `limits=`
+# keys bind every schema.
 RELEASE_LIMITS: dict[str, int] = {
     "minItems": 8,                              # per array, every array independently
     "recursion_depth": 8,                       # a leaf is 1; an object or array is 1 + its deepest child
@@ -983,8 +1022,14 @@ RELEASE_LIMITS: dict[str, int] = {
     "dfa_states": 4_096,                        # token-DFA states (one SCM1 mask page each)
     "token_transitions": 8_388_608,             # (state, token) entries in the token table
     "serialized_mask_bytes": 134_217_728,       # this schema's SCM1 section, name included
-    "tracked_temporary_bytes": 268_435_456,     # the compiler's charged allocations (below)
+    "tracked_temporary_bytes": 536_870_912,     # the compiler's charged allocations (below)
 }
+# tracked_temporary_bytes was 268,435,456 in the S0 freeze, derived with the trie charged a 8,224 B
+# constant. S1 fix round 1 charges the trie's measured storage (about 79.4 MB at the pinned 151,936-id
+# vocabulary) and finalizes the limit by the D-SLM8087 rule: the next power of two at or above twice
+# the larger measured count of IntentDoc v2 (165,514,483 B) and G1 (133,260,439 B) at the pinned
+# vocabulary, i.e. 2 x 165,514,483 = 331,028,966 -> 536,870,912. The loader has no tracked-memory
+# bound (`include/superslm/schema_masks.h` bounds states and transitions only), so no cap applies.
 
 LIMIT_DIAGNOSTICS: dict[str, str] = {
     "minItems": "minItems limit",
@@ -1004,20 +1049,39 @@ _SCM1_DESCRIPTOR_BYTES = 56
 
 # Tracked-allocation charges, per structure, of the frozen allocation model the limits were derived
 # from (T-3094 S0 `resource_pairs.py`, plan Sec4.1 memory paragraph): an NFA node, an NFA byte edge,
-# a DFA state (charged for every byte-DFA state and every token-DFA state), the vocabulary trie's
-# root table, a token transition's staging entry, plus the SCM1 section bytes the table will occupy.
+# a DFA state (charged for every byte-DFA state and every token-DFA state), a token transition's
+# staging entry, plus the SCM1 section bytes the table will occupy. The vocabulary trie is charged its
+# measured storage instead (`_vocab_trie`; S1 fix round 1 replaced the frozen 257 * 32 B constant).
 _CHARGE_NFA_NODE = 64
 _CHARGE_NFA_EDGE = 16
 _CHARGE_DFA_STATE = 48
-_CHARGE_TRIE = 257 * 32
 _CHARGE_TRANSITION = 16
 
 
-def _resolve_limits(limits: Mapping[str, int] | None) -> dict[str, int]:
-    """A fresh per-call copy of `RELEASE_LIMITS` with `limits` replacing only the keys it names
+_UNBOUNDED = sys.maxsize
+
+
+def _contains_array(node: Any) -> bool:
+    """Whether a schema has an array anywhere (`"type": "array"`, or a type list naming it)."""
+    stack = [node]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, Mapping):
+            kind = item.get("type")
+            if kind == "array" or (isinstance(kind, list) and "array" in kind):
+                return True
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return False
+
+
+def _resolve_limits(limits: Mapping[str, int] | None, release: bool = True) -> dict[str, int]:
+    """A fresh per-call copy of the base limits with `limits` replacing only the keys it names
     (the test harness and the attachment command inject smaller limits through the same guard).
-    Nothing persists past the call that received it."""
-    active = dict(RELEASE_LIMITS)
+    The base is `RELEASE_LIMITS` when `release`, otherwise unbounded. Nothing persists past the
+    call that received it."""
+    active = dict(RELEASE_LIMITS) if release else {key: _UNBOUNDED for key in RELEASE_LIMITS}
     for key, value in (limits or {}).items():
         if key not in active:
             raise ValueError(f"unknown resource limit {key!r}; the limits are {sorted(active)}")
@@ -1098,8 +1162,8 @@ class _Admission:
     def byte_dfa_state(self) -> None:
         self._reserve(_CHARGE_DFA_STATE, "one more byte-DFA subset state")
 
-    def trie(self) -> None:
-        self._reserve(_CHARGE_TRIE, "the vocabulary trie")
+    def trie_storage(self, nbytes: int) -> None:
+        self._reserve(nbytes, "one more vocabulary-trie node")
 
     def section_header(self, name_bytes: int) -> None:
         fixed = _SCM1_HEADER_BYTES + _SCM1_DESCRIPTOR_BYTES + name_bytes + 4  # + the closing CSR offset
@@ -1173,8 +1237,9 @@ def compile_schema_to_mask_pages(
     state with a non-empty row from which no accepting state can be reached (a cyclic table
     whose exit no token spells) is refused by name, with no artifact.
 
-    `limits` (T-3094 S1) replaces the named `RELEASE_LIMITS` for this call only; a count above
-    its limit raises `SchemaCompileError` whose message starts with that limit's
+    `limits` (T-3094 S1) replaces the named `RELEASE_LIMITS` for this call only. The release
+    limits apply only when `schema` contains an array; an array-free schema is bound only by the
+    keys `limits` names (S1 fix round 1, R1). A count above its limit raises `SchemaCompileError` whose message starts with that limit's
     `LIMIT_DIAGNOSTICS` string. `name` is the SCM1 schema name this table will be attached
     under; the section-byte count includes it (an omitted name counts as zero bytes, so the
     attachment command, which always names the schema, is where that count is exact). The
@@ -1187,7 +1252,10 @@ def compile_schema_to_mask_pages(
                 "Sequence[bytes] (each token's own undecoded bytes), not Sequence[str]. Encode "
                 "each vocabulary piece to bytes before calling (T-2908's byte-level port)."
             )
-    active = _resolve_limits(limits)
+    # R1 (S1 fix round 1): the release limits bind only a schema that contains an array, which
+    # v1.13.1 refused; an array-free schema compiles exactly as v1.13.1 compiled it. Injected
+    # `limits=` keys bind every schema.
+    active = _resolve_limits(limits, release=_contains_array(schema))
     name_bytes = b"" if name is None else (name.encode("utf-8") if isinstance(name, str) else bytes(name))
     vocab = tuple(zero_special_ids(vocab, special_ids))
 
@@ -1198,8 +1266,7 @@ def compile_schema_to_mask_pages(
 
     admission = _Admission(active, len(vocab))
     char_dfa, char_start, char_accepting, content_states = _char_dfa(groups, admission)
-    admission.trie()
-    trie = _vocab_trie(vocab)
+    trie = _vocab_trie(vocab, admission)
     admission.section_header(len(name_bytes))
 
     admission.token_state()

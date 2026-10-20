@@ -3,11 +3,10 @@
 
 The rule this checks: every schema the baseline revision of `tools/sslm_convert_schema.py` (default
 `origin/main`, which is v1.13.1's converter) compiles must still compile, to the same `MaskPages` table and
-the same SCM1 bytes. The current converter does NOT yet meet it for every array-free schema: its release
-limits bind every schema, so an array-free schema at or above a limit, which the baseline compiles, is
-refused (S1 code review, finding 1; the limit scope is open). The at-limit corpus below exists to show
-exactly that, and reports those cases as DIFFERENT until the scope is ruled. This script compiles every
-case through both converters and compares:
+the same SCM1 bytes. The current converter meets it because its release limits bind only schemas that
+contain an array (S1 fix round 1, R1); the at-limit corpus below holds array-free schemas at or above
+every release limit, so a limit that leaks onto them shows as DIFFERENT. This script compiles every case
+through both converters and compares:
 
 - the table: `start`, `accepting`, every state's row (`transitions`) and every state's packed mask page;
 - the SCM1 section: the baseline's own writer (`tools/t2132_build_g5_fixture.py::_serialize_scm1` at the

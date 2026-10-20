@@ -1094,15 +1094,21 @@ names its limit.
 | `dfa_states` | 4,096 | `DFA state limit` |
 | `token_transitions` | 8,388,608 | `token transition limit` |
 | `serialized_mask_bytes` | 134,217,728 | `serialized mask byte limit` |
-| `tracked_temporary_bytes` | 268,435,456 | `tracked temporary memory limit` |
+| `tracked_temporary_bytes` | 536,870,912 | `tracked temporary memory limit` |
 
 - The limits are per schema, like the runtime loader's own bounds. Each `--schema` is
   compiled under its own limits, and the command sets no cap on the combined
   `SchemaMasks` section of several schemas.
-- The limits apply to every schema, including one without an array. An array-free
-  schema that 1.13.1 compiled, such as a large `enum` or an object chain nested more
-  than 8 deep, is refused when it crosses a limit.
+- The release limits apply only to a schema that contains an array. A schema without
+  an array compiles exactly as it did in 1.13.1, to the same table and the same
+  `SchemaMasks` bytes, however large it is. Limits given in `--limits-json` (or
+  `limits=`) apply to every schema.
 - `--limits-json` takes a JSON object that replaces the named limits for that run.
+- Tracked temporary memory includes the vocabulary trie at its measured size, about
+  79 MB for a 151,936-token vocabulary. IntentDoc v2 measures about 165.5 MB there.
+- Known limit: an array or object value inside `enum` is matched only in Python's
+  default `json.dumps` spacing, `[1, 2]` and `{"k": 1}`, as in 1.13.1. For the compact
+  form, write the array or object schema itself instead of an `enum` of arrays.
 - The compiler also refuses a schema if the vocabulary leaves some reachable state
   unable to finish a document.
 
