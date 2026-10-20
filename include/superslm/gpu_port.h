@@ -1124,6 +1124,15 @@ void ArmGpuPoolZeroFillCloseFaultForTest(uint32_t consecutive_failures) noexcept
 // pool mutex, so that sequence's release meets a refcount underflow (cell 11.3's class). False when
 // `seq` is not pooled or its holder has no reserve page.
 bool ZeroGpuPooledSeqReservePageRefcountForTest(SslmGpuSequenceHandle* seq) noexcept;
+// Precached prefixes (1.16.0, unreleased): the GPU prefix restore's fault slot, the CPU restore-site slot's
+// twin. One-shot, on the calling thread. `position` 1 (share): the share refuses before any count
+// changes, as kv_pages' share refusal `share_refusal` (2 an invalid argument, 3 a refcount underflow);
+// 2 (map): the holder's reserve is returned before the map, so the map finds it short; 3
+// (allocation): the restore fails as an allocation failure after the draw, the share and the map.
+// 0 disarms. GpuPrefixRestoreFaultFiredForTest: whether the armed slot fired since it was armed, and
+// the holder's shared-entry count when it fired.
+void ArmGpuPrefixRestoreFaultForTest(int position, int share_refusal) noexcept;
+bool GpuPrefixRestoreFaultFiredForTest(uint32_t* out_shared_at_fire) noexcept;
 // The model handle's host lm_head copy, in bytes: 0 for a tied head or a device-resident head,
 // vocab_size x hidden_size for an untied head mapped without the flag.
 size_t SslmGpuHeadWeightCopySizeForTest(const SslmGpuModelHandle* model) noexcept;

@@ -3717,15 +3717,18 @@ void Cell_9_2() {
 	}
 	CHECK_MSG(!version.empty() && version != "1.13.1", "[9.2] the project version is still %s",
 	          version.empty() ? "(CMakeLists.txt not found)" : version.c_str());
-	// No new status (§5.3; rev 1.2.2, audit M-2): the status list's entry count equals main's (30), and
-	// the existing ordinals are unchanged.
+	// No new status (§5.3; rev 1.2.2, audit M-2): the status list's entry count equals the base this line
+	// builds on, and the existing ordinals are unchanged. That base is main's 30 plus the one status the
+	// merged precached-prefixes line appends (SSLM_RESTORE_PRODUCER_MISMATCH, ordinal 30): 31. Schema
+	// fast-decode itself still adds none.
 	{
 		int n = 0;
 #define SFD_COUNT_STATUS(name) ++n;
 		SSLM_STATUS_ENUM_LIST(SFD_COUNT_STATUS)
 #undef SFD_COUNT_STATUS
-		CHECK_MSG(n == 30, "[9.2] the status list has %d entries; main has 30", n);
+		CHECK_MSG(n == 31, "[9.2] the status list has %d entries; main plus precached prefixes has 31", n);
 	}
+	CHECK_MSG(static_cast<int>(SSLM_RESTORE_PRODUCER_MISMATCH) == 30, "[9.2] the precache status ordinal moved");
 	CHECK_MSG(static_cast<int>(SSLM_KV_BUDGET_EXCEEDED) == 29 && static_cast<int>(SSLM_ALLOCATION_FAILED) == 25 &&
 	              static_cast<int>(SSLM_SCHEMA_SPAN_UNREACHABLE) == 23 && static_cast<int>(SSLM_ARTIFACT_REJECTED) == 4,
 	          "[9.2] a status ordinal moved");

@@ -161,6 +161,31 @@ SUPERSLM_API sslm_status sslm_prefix_begin_budgeted(sslm_model model, sslm_kv_po
  * copied, and its state copied (including its schema binding and walk state); origin = the
  * parent's length. A child of a non-empty parent cannot bind a schema of its own. */
 SUPERSLM_API sslm_status sslm_prefix_begin_from(sslm_prefix parent, int32_t budget, sslm_prefix* out);
+/* Save a frozen prefix as canonical SPX1 bytes. A null or short buffer reports the exact size
+ * through *n and returns SSLM_BUFFER_TOO_SMALL. Null handles, an unfrozen prefix, or a prefix
+ * with nonzero layer_index return SSLM_INVALID_ARGUMENT without writing the buffer. Concurrent
+ * saves of a frozen prefix are allowed; releasing it during a save is caller undefined behavior. */
+SUPERSLM_API sslm_status sslm_prefix_save(sslm_prefix prefix, void* buf, size_t* n);
+/* Restore an SPX1 prefix for this backend, engine producer, model and KV precision. The hint is
+ * optional for fidelity. A nested blob (origin > 0) shares the hint's leading floor(origin/B) pages
+ * only when the hint is frozen, of `model` and of `*pool`, holds exactly origin positions, and its
+ * rows over those pages equal the blob's; the rest are drawn and filled from the blob, so the
+ * restore draws ceil(length/B) - floor(origin/B) pages. Any other hint, a null one, or a root blob
+ * restores privately (SSLM_OK, 0 shared). *out_shared_pages, when non-null, receives the count
+ * shared. Without a matching hint, a nested prefix requires ceil(length/B) free pages; exhaustion
+ * returns SSLM_KV_POOL_EXHAUSTED with no page drawn. Every refusal clears *out and returns every
+ * page drawn and every shared reference taken. The parent may be released after the restore.
+ * B is `pool`'s page size (the contiguous option's is the cap): SPX1 carries no page size, so a
+ * blob restores into a pool of any page size, and the restored prefix is then adoptable only from
+ * pools of that page size, as every prefix is (sslm_seq_adopt_prefix).
+ * The SHA-256 digest detects accidental change, not intentional editing: a recomputed digest can
+ * admit schema and walk state within model bounds, length within the context cap, origin within
+ * length, a valid current token, an int32 mantissa, any int64 exponent, any saturation counts,
+ * and arbitrary residual and KV bytes. Magic, backend, producer, model identity and precision
+ * must match exactly. Releasing a hint while restore reads it is caller undefined behavior. */
+SUPERSLM_API sslm_status sslm_prefix_restore(sslm_model model, sslm_kv_pool* pool, const void* buf,
+                                              size_t n, sslm_prefix parent_or_null, sslm_prefix* out,
+                                              uint32_t* out_shared_pages);
 /* Page counts of a pool (either create verb): page_count, free_pages, shared_pages and B. The
  * caller sets out->struct_size. A diagnostic for sizing admissions, read under the pool lock. */
 SUPERSLM_API sslm_status sslm_kv_pool_stats(sslm_kv_pool pool, sslm_kv_pool_stats_out* out);

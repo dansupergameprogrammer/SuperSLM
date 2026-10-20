@@ -136,7 +136,9 @@ typedef enum SslmGpuStatus {
     SSLM_GPU_KV_POOL_TOO_LARGE,
     SSLM_GPU_HOLDER_MODE_MISMATCH,
     SSLM_GPU_PREFIX_REJECTED,
-    SSLM_GPU_PREFIX_SCHEMA_MISMATCH
+    SSLM_GPU_PREFIX_SCHEMA_MISMATCH,
+    /* Precached prefixes (1.16.0, unreleased), appended LAST: 30. */
+    SSLM_RESTORE_PRODUCER_MISMATCH
 } SslmGpuStatus;
 
 /* --- Sec4.1.1: context create/destroy --- */

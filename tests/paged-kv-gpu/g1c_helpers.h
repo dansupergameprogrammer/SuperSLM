@@ -154,6 +154,7 @@ inline const char* St(SslmGpuStatus s) {
 		case 27: return "SSLM_GPU_HOLDER_MODE_MISMATCH";
 		case 28: return "SSLM_GPU_PREFIX_REJECTED";
 		case 29: return "SSLM_GPU_PREFIX_SCHEMA_MISMATCH";
+		case 30: return "SSLM_RESTORE_PRODUCER_MISMATCH";
 		default: return "UNKNOWN_STATUS";
 	}
 }
