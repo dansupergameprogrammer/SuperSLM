@@ -112,3 +112,18 @@ call, as before; the off arm and the prompt prefill, which also run `PrefillWhol
 the jump-forward-on arm costs about 93 ms more from d7ec81b on, with the same tokens, by a cause the source reading does not
 show. Not yet examined: whether a span really takes the one-row passes at one thread (the `SfdLogLayerRows` record would
 show the rows per pass), and the generated code of `PrefillWholeTokensImpl` before and after.
+
+### The fix (`ab/ab-fix/`)
+
+2af4165 restores the pre-Q6 C single batched call whenever a span does not split. Same measurement and script
+(`ab/run-abn.ps1`), three arms interleaved, 15 rounds: the 79e5b92 and d7ec81b benches above (both fresh builds, reused
+as built) and 2af4165 built fresh (bench sha256 `b1260b8f…`). All 48 processes logged the same aex-pr model
+(`9ccf7e37…`, 24 layers, tasks 0).
+
+| Arm | on, generation ms [interval] | 79e5b92 / arm [interval] | Digest |
+|---|---|---|---|
+| 79e5b92 | 458.6 [457.6, 459.2] | 1 | `8ad5ea7961656cef` |
+| d7ec81b | 552.0 [551.8, 552.5] | 0.831 [0.829, 0.832] | `8ad5ea7961656cef` |
+| 2af4165 | 458.6 [458.2, 459.0] | 0.999 [0.999, 1.002] | `8ad5ea7961656cef` |
+
+At one thread 2af4165 is as fast as 79e5b92, with the same tokens: the slowdown d7ec81b introduced is gone.
