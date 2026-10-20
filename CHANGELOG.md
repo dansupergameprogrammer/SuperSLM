@@ -6,7 +6,8 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 Version 1.16.0 in progress (schema fast-decode plan rev 1.2.1, slices M1 and J1, and rev 1.3.3, slices TF
 and J1-X; CPU backend only). Two C verbs are appended (53 C verbs in all); no released declaration, struct
-layout, status ordinal or save format changes, and no artifact needs reconversion.
+layout, status ordinal or save format changes, and no artifact needs reconversion. Until its release commit the build
+carries the last released version (CMake and `sslm_version.h`: 1.13.1).
 
 - **Masked finish.** Under a bound schema, when the model's hidden size is at most 131,071 (computed once
   at `sslm_model_map`), the token finish computes only the head rows of the tokens the schema allows at

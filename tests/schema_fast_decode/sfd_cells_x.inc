@@ -2425,7 +2425,8 @@ void Cell_X_9_1() {
 }
 
 // 9.X2 [J1-X] The ABI inventory carries sslm_jump_options and sslm_jump_mode; sslm_seq_jump_forward keeps its
-// ordinal in the verb list; the version is bumped past J1's; the status list's entry count equals main's (30).
+// ordinal in the verb list; the version is bumped past J1's; the status list's entry count equals the base this
+// line builds on: main's 30 plus the merged precached-prefixes line's SSLM_RESTORE_PRODUCER_MISMATCH, 31 (as 9.2).
 void Cell_X_9_2() {
 	if (!XLive("9.X2")) return;
 	const std::string abi = ReadRepoFile("include/superslm/sslm_abi.h");
@@ -2456,7 +2457,7 @@ void Cell_X_9_2() {
 #define SFD_X_COUNT_STATUS(name) ++n;
 	SSLM_STATUS_ENUM_LIST(SFD_X_COUNT_STATUS)
 #undef SFD_X_COUNT_STATUS
-	CHECK_MSG(n == 30, "[9.X2] the status list has %d entries; main has 30", n);
+	CHECK_MSG(n == 31, "[9.X2] the status list has %d entries; main plus precached prefixes has 31", n);
 }
 
 // ==========================================================================================================
