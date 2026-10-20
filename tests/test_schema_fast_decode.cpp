@@ -3857,18 +3857,25 @@ struct SpanRun {
 // A LONGKEY sequence resting ready for logits at `state` (the prompt, then the reference path as content,
 // with no workspace and so no hook), then one verb call at `budget` under `arm`. `kv_room` >= 0 makes the
 // holder a budget holder with that many positions past the path; `threads` runs the hook's tasks on their
-// own threads.
+// own threads; `max_tasks` and `null_run` shape the hook (Q6C.5).
 SpanRun Q6cSpan(const Sfd& f, uint32_t state, int32_t budget, Q6cArm arm, const sslm_decode_params* params = nullptr,
-                int32_t kv_room = -1, bool threads = false) {
+                int32_t kv_room = -1, bool threads = false, int32_t max_tasks = 4, bool null_run = false) {
 	SpanRun o;
 	const RefSchema& r = f.R(kLongKey);
 	if (state >= r.st.size()) return o;
 	Rig rig(f.m1->m);
 	CountingHook h;
-	h.max_tasks = 4;
+	h.max_tasks = max_tasks;
 	h.threads = threads;
 	if (!rig.ok) return o;
-	if (arm != Q6cArm::kNoHook && !Install(rig.W(), &h, arm == Q6cArm::kBit1 ? SSLM_PARALLEL_FOR_MATVEC : 0u)) return o;
+	if (arm != Q6cArm::kNoHook) {
+		sslm_parallel_for pf = h.Pf(arm == Q6cArm::kBit1 ? SSLM_PARALLEL_FOR_MATVEC : 0u);
+		if (null_run) pf.run = nullptr;
+		const sslm_status st = sslm_workspace_set_parallel_for(rig.W(), &pf);
+		CHECK_MSG(st == SSLM_OK, "[Q6C] installing a hook (max_tasks %d, run %s) == %d", max_tasks,
+		          null_run ? "null" : "set", static_cast<int>(st));
+		if (st != SSLM_OK) return o;
+	}
 	sslm_seq s = kv_room < 0 ? rig.NewSeq(kLongKey)
 	                         : rig.NewBudgeted(int32_t(f.prompt_potion.size() + r.st[state].path.size()) + kv_room, kLongKey);
 	if (!s || !rig.PromptOk(s, f.prompt_potion) || !rig.ContentOk(s, r.st[state].path)) return o;
@@ -4142,11 +4149,13 @@ void Cell_Q6C_3() {
 	CHECK_MSG(split_calls == 3, "[Q6C.3 (b)] %d of 3 calls ran as three threaded one-row passes", split_calls);
 }
 
-// Q6C.4 [Q6 C] A failure inside a split span. A hostile hook (kOmit) breaks exactly-once on the last `run`
-// call of a 3-row split under damped params, so rows 1 and 2 have run and written K/V and the third row
-// fails: the call returns SSLM_INVALID_ARGUMENT with nothing admitted, the anti-LM order and history and the
-// whole save blob are unchanged (the K/V rows past context_length are not in it, the saturation census is
-// restored), and a retry with an honest hook gives the blob of a call that never failed.
+// Q6C.4 [Q6 C] A failure inside a split span. A hostile hook (omit, then duplicate) breaks exactly-once on
+// one `run` call of a 3-row split under damped params: the first call (row 1), a call in the middle of row
+// 2, and the last call (row 3). Review round 1, finding 2: a build that checks only the last pass's status
+// passes the last-call arm, so the first two arms are the ones that kill it. In every arm the call returns
+// SSLM_INVALID_ARGUMENT with nothing admitted, the anti-LM order and history and the whole save blob are
+// unchanged (the K/V rows past context_length are not in it, the saturation census is restored), and a
+// retry with an honest hook gives the blob of a call that never failed.
 void Cell_Q6C_4() {
 	const MinWorkScope min_work(kSmallMinWork);
 	const Sfd& f = GetSfd();
@@ -4169,37 +4178,156 @@ void Cell_Q6C_4() {
 		sfd::LayerRowsLogReset();
 		const Jump j = JumpForward(rig.m, s, 3, &p, rig.W());
 		calls = h.Counts().size();
-		CHECK_MSG(j.st == SSLM_OK && j.count == 3 && Q6cShapeIs(Q6cPasses(), 3, true) && calls >= 3,
+		CHECK_MSG(j.st == SSLM_OK && j.count == 3 && Q6cShapeIs(Q6cPasses(), 3, true) && calls >= 3 && calls % 3 == 0,
 		          "[Q6C.4] the never-failed call: status %d count %d, S-LAYERROWS %s, %zu run calls; want three "
-		          "threaded one-row passes", static_cast<int>(j.st), j.count, Q6cShape(Q6cPasses()).c_str(), calls);
+		          "threaded one-row passes with the same run calls each", static_cast<int>(j.st), j.count,
+		          Q6cShape(Q6cPasses()).c_str(), calls);
 		ref_after = rig.Save(s);
 	}
-	if (calls < 3) return;
-	Rig rig(f.m1->m);
-	CountingHook h;
-	h.max_tasks = 4;
-	h.hostile = Hostile::kOmit;
-	h.hostile_call = static_cast<int>(calls) - 1;
-	if (!rig.ok || !Install(rig.W(), &h, SSLM_PARALLEL_FOR_MATVEC)) return;
-	const sslm_decode_params p = rig.Damped(2);
-	sslm_seq s = ReachState(rig, f, kLongKey, at, f.prompt_potion);
-	if (!s) return;
-	const std::vector<uint8_t> before = rig.Save(s);
-	h.Clear();
-	const Jump j = JumpForward(rig.m, s, 3, &p, rig.W());
-	CHECK_MSG(h.Counts().size() == calls && j.st == SSLM_INVALID_ARGUMENT && j.count == 0, "[Q6C.4] the hostile last run "
-	          "call: %zu run calls (want %zu), status %d count %d; want SSLM_INVALID_ARGUMENT and nothing admitted",
-	          h.Counts().size(), calls, static_cast<int>(j.st), j.count);
-	const std::vector<uint8_t> after = rig.Save(s);
-	const Blob b0 = ParseBlob(before), b1 = ParseBlob(after);
-	CHECK_MSG(after == before, "[Q6C.4] the failed call changed the save blob (order %d -> %d, history %s -> %s, "
-	          "context %lld -> %lld)", b0.order, b1.order, Str(b0.hist).c_str(), Str(b1.hist).c_str(),
-	          static_cast<long long>(b0.ctx), static_cast<long long>(b1.ctx));
-	h.hostile = Hostile::kNone;
-	const Jump retry = JumpForward(rig.m, s, 3, &p, rig.W());
-	CHECK_MSG(retry.st == SSLM_OK && retry.count == 3 && rig.Save(s) == ref_after, "[Q6C.4] the retry: status %d count %d, "
-	          "the blob %s the never-failed call's", static_cast<int>(retry.st), retry.count,
-	          rig.Save(s) == ref_after ? "equals" : "differs from");
+	if (calls < 3 || calls % 3 != 0) return;
+	const size_t per_row = calls / 3;
+	struct Where {
+		const char* name;
+		size_t call;
+	};
+	const Where wheres[] = {{"first call (row 1)", 0}, {"middle of row 2", per_row + per_row / 2}, {"last call (row 3)", calls - 1}};
+	for (Hostile kind : {Hostile::kOmit, Hostile::kDuplicate}) {
+		const char* kname = kind == Hostile::kOmit ? "omit" : "duplicate";
+		for (const Where& w : wheres) {
+			Rig rig(f.m1->m);
+			CountingHook h;
+			h.max_tasks = 4;
+			h.hostile = kind;
+			h.hostile_call = static_cast<int>(w.call);
+			if (!rig.ok || !Install(rig.W(), &h, SSLM_PARALLEL_FOR_MATVEC)) continue;
+			const sslm_decode_params p = rig.Damped(2);
+			sslm_seq s = ReachState(rig, f, kLongKey, at, f.prompt_potion);
+			if (!s) continue;
+			const std::vector<uint8_t> before = rig.Save(s);
+			h.Clear();
+			const Jump j = JumpForward(rig.m, s, 3, &p, rig.W());
+			CHECK_MSG(h.Counts().size() > w.call && j.st == SSLM_INVALID_ARGUMENT && j.count == 0, "[Q6C.4 %s, %s] %zu "
+			          "run calls (the hostile one is %zu), status %d count %d; want SSLM_INVALID_ARGUMENT and nothing "
+			          "admitted", kname, w.name, h.Counts().size(), w.call, static_cast<int>(j.st), j.count);
+			const std::vector<uint8_t> after = rig.Save(s);
+			const Blob b0 = ParseBlob(before), b1 = ParseBlob(after);
+			CHECK_MSG(after == before, "[Q6C.4 %s, %s] the failed call changed the save blob (order %d -> %d, history %s "
+			          "-> %s, context %lld -> %lld)", kname, w.name, b0.order, b1.order, Str(b0.hist).c_str(),
+			          Str(b1.hist).c_str(), static_cast<long long>(b0.ctx), static_cast<long long>(b1.ctx));
+			h.hostile = Hostile::kNone;
+			const Jump retry = JumpForward(rig.m, s, 3, &p, rig.W());
+			CHECK_MSG(retry.st == SSLM_OK && retry.count == 3 && rig.Save(s) == ref_after, "[Q6C.4 %s, %s] the retry: "
+			          "status %d count %d, the blob %s the never-failed call's", kname, w.name, static_cast<int>(retry.st),
+			          retry.count, rig.Save(s) == ref_after ? "equals" : "differs from");
+		}
+	}
+}
+
+// Q6C.5 [Q6 C] Review round 1, finding 1: bit 1 on a host where a one-row pass cannot thread keeps the one
+// batched pass, because M serial one-row passes cost more than one batched pass (r(M) < M). The split keys
+// on GemmDispatch's own rule (MatvecGroupSplit's task_count >= 2 over the largest one-row projection), not
+// on the bit. Three such hosts, at M = 2 and 7: max_tasks 1, max_tasks 0 with a null `run` (both with the
+// minimum work lowered), and max_tasks 4 at the shipped minimum work, below which F-SFD's projections fall.
+// Each gives one pass of M rows, no `run` call, and the no-hook blob. The control (max_tasks 4, minimum work
+// lowered) splits.
+void Cell_Q6C_5() {
+	const Sfd& f = GetSfd();
+	if (!f.ok) return;
+	struct Host {
+		const char* name;
+		int32_t max_tasks;
+		bool null_run;
+		bool small_min_work;
+		bool splits;
+	};
+	const Host hosts[] = {{"max_tasks 1", 1, false, true, false},
+	                      {"max_tasks 0, run null", 0, true, true, false},
+	                      {"max_tasks 4, shipped minimum work", 4, false, false, false},
+	                      {"max_tasks 4, minimum work lowered (control)", 4, false, true, true}};
+	for (size_t m : {size_t{2}, size_t{7}}) {
+		const uint32_t at = Q6cChainState(f, m);
+		CHECK_MSG(at != UINT32_MAX, "[Q6C.5] LONGKEY has no chain of exactly %zu", m);
+		if (at == UINT32_MAX) continue;
+		const SpanRun plain = Q6cSpan(f, at, 64, Q6cArm::kNoHook);
+		for (const Host& h : hosts) {
+			std::unique_ptr<MinWorkScope> min_work;
+			if (h.small_min_work) min_work = std::make_unique<MinWorkScope>(kSmallMinWork);
+			const SpanRun x = Q6cSpan(f, at, 64, Q6cArm::kBit1, nullptr, -1, false, h.max_tasks, h.null_run);
+			CHECK_MSG(x.ok && x.j.st == SSLM_OK && x.j.count == int32_t(m) && x.blob == plain.blob, "[Q6C.5 M %zu, %s] "
+			          "status %d count %d, the blob %s the no-hook pass's", m, h.name, static_cast<int>(x.j.st),
+			          x.j.count, x.blob == plain.blob ? "equals" : "differs from");
+			if (h.splits) {
+				CHECK_MSG(Q6cShapeIs(x.passes, m, true) && x.run_calls > 0, "[Q6C.5 M %zu, %s] S-LAYERROWS %s, %zu run "
+				          "calls; want %zu threaded one-row passes", m, h.name, Q6cShape(x.passes).c_str(), x.run_calls, m);
+			} else {
+				CHECK_MSG(Q6cShapeIs(x.passes, m, false) && x.run_calls == 0, "[Q6C.5 M %zu, %s] S-LAYERROWS %s, %zu run "
+				          "calls; want one batched pass of %zu rows and none", m, h.name, Q6cShape(x.passes).c_str(),
+				          x.run_calls, m);
+			}
+		}
+	}
+}
+
+// Q6C.6 [Q6 C] Review round 1, finding 3: the split is the verb's alone. Under bit 1 on a host whose one-row
+// passes thread (max_tasks 4, minimum work lowered), sslm_prefill (schema content and prompt) and
+// sslm_prefix_prefill of M = 2..7 tokens each run one pass of M rows and never call `run`, and the prefill's
+// blob equals the no-hook prefill's.
+void Cell_Q6C_6() {
+	const MinWorkScope min_work(kSmallMinWork);
+	const Sfd& f = GetSfd();
+	if (!f.ok) return;
+	const RefSchema& r = f.R(kLongKey);
+	const uint32_t at = Q6cLongestState(f);
+	if (at == UINT32_MAX || r.st[at].chain.size() < kQ6cSplitMax) return;
+	for (size_t m = 2; m <= kQ6cSplitMax; ++m) {
+		const std::vector<int32_t> content(r.st[at].chain.begin(), r.st[at].chain.begin() + std::ptrdiff_t(m));
+		const std::vector<int32_t> prompt(f.prompt_potion.begin(), f.prompt_potion.begin() + std::ptrdiff_t(m));
+		for (sslm_span_kind kind : {SSLM_SPAN_SCHEMA_CONTENT, SSLM_SPAN_PROMPT}) {
+			const char* kname = kind == SSLM_SPAN_PROMPT ? "prompt" : "schema content";
+			const std::vector<int32_t>& toks = kind == SSLM_SPAN_PROMPT ? prompt : content;
+			std::vector<uint8_t> blobs[2];
+			for (int hooked = 0; hooked < 2; ++hooked) {
+				Rig rig(f.m1->m);
+				CountingHook h;
+				h.max_tasks = 4;
+				if (!rig.ok || (hooked && !Install(rig.W(), &h, SSLM_PARALLEL_FOR_MATVEC))) continue;
+				sslm_seq s = kind == SSLM_SPAN_PROMPT ? rig.NewSeq(kLongKey) : ReachState(rig, f, kLongKey, at, f.prompt_potion);
+				if (!s) continue;
+				h.Clear();
+				sfd::LayerRowsLogReset();
+				int32_t consumed = 0;
+				const sslm_status st = sslm_prefill(rig.m, s, toks.data(), int32_t(m), int32_t(m), kind, rig.W(), &consumed);
+				const std::vector<sfd::LayerRowsEntry> passes = Q6cPasses();
+				if (hooked) {
+					CHECK_MSG(st == SSLM_OK && consumed == int32_t(m) && Q6cShapeIs(passes, m, false) && h.Counts().empty(),
+					          "[Q6C.6 sslm_prefill %s, M %zu, bit 1] status %d consumed %d, S-LAYERROWS %s, %zu run calls; "
+					          "want one pass of M rows and none", kname, m, static_cast<int>(st), consumed,
+					          Q6cShape(passes).c_str(), h.Counts().size());
+				}
+				blobs[hooked] = rig.Save(s);
+			}
+			CHECK_MSG(!blobs[0].empty() && blobs[0] == blobs[1], "[Q6C.6 sslm_prefill %s, M %zu] the blob under bit 1 %s "
+			          "the no-hook prefill's", kname, m, blobs[0] == blobs[1] ? "equals" : "differs from");
+		}
+		Rig rig(f.m1->m);
+		CountingHook h;
+		h.max_tasks = 4;
+		if (!rig.ok || !Install(rig.W(), &h, SSLM_PARALLEL_FOR_MATVEC)) continue;
+		sslm_prefix p = nullptr;
+		CHECK_MSG(sslm_prefix_begin(rig.m, &rig.pool, &p) == SSLM_OK && p, "[Q6C.6] prefix begin");
+		if (!p) continue;
+		h.Clear();
+		sfd::LayerRowsLogReset();
+		int32_t consumed = 0;
+		const sslm_status st =
+		    sslm_prefix_prefill(rig.m, p, prompt.data(), int32_t(m), int32_t(m), SSLM_SPAN_PROMPT, rig.W(), &consumed);
+		const std::vector<sfd::LayerRowsEntry> passes = Q6cPasses();
+		CHECK_MSG(st == SSLM_OK && consumed == int32_t(m) && Q6cShapeIs(passes, m, false) && h.Counts().empty(),
+		          "[Q6C.6 sslm_prefix_prefill, M %zu, bit 1] status %d consumed %d, S-LAYERROWS %s, %zu run calls; want "
+		          "one pass of M rows and none", m, static_cast<int>(st), consumed, Q6cShape(passes).c_str(),
+		          h.Counts().size());
+		sslm_prefix_release(p);
+	}
 }
 
 // Prints the values cell 6.6 pins, computed by the reference replay on main (SUPERSLM_SFD_PRINT_GOLDENS=1).
@@ -4297,6 +4425,8 @@ void RunSchemaFastDecodeCells(int& checks, int& failures) {
 	run("Q6C.2", Cell_Q6C_2);
 	run("Q6C.3", Cell_Q6C_3);
 	run("Q6C.4", Cell_Q6C_4);
+	run("Q6C.5", Cell_Q6C_5);
+	run("Q6C.6", Cell_Q6C_6);
 	std::printf("schema fast-decode (M1, J1) cells: %d checks, %d failures\n", GChecks.load(), GFailures.load());
 	checks += GChecks;
 	failures += GFailures;
