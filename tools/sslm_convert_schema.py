@@ -74,10 +74,12 @@ Sec4.1, Wizard repo) compiles to a cyclic item automaton:
 - **Construction.** `_groups()` emits an array as a one-element group holding an `_ArrayGroup`
   sentinel; `_char_dfa()` wires the byte NFA recursively (epsilon-free) and determinizes it by the same
   subset construction every schema already uses. `_token_targets`, the special-id exclusion and the
-  `MaskPages` representation are unchanged. The release limits bind only a schema that contains an
-  array (S1 fix round 1, R1): a schema without an array compiles to the same table and SCM1 bytes as
-  v1.13.1, however large, because no release limit is applied to it. Limits injected through
-  `limits=` bind every schema.
+  `MaskPages` representation are unchanged. The release limits bind only a schema the compiler builds
+  an array for (S1 fix round 1, R1; `_contains_array`): a schema without one compiles to the same
+  table and SCM1 bytes as v1.13.1, however large, because no release limit is applied to it --
+  unless its table has a reachable state that cannot finish, which is refused by name (the
+  dead-state refusal below outranks R1: such a table could never complete a document). Limits
+  injected through `limits=` bind every schema.
 - **Refused.** `maxItems` is refused by name even where a small value could be flattened (Sec4.1).
 - **Resource admission.** Seven limits (`RELEASE_LIMITS`, the frozen provisional release values of the
   T-3094 S0 limits freeze) are checked at their counting stage, each with its own named diagnostic
@@ -1061,18 +1063,22 @@ _CHARGE_TRANSITION = 16
 _UNBOUNDED = sys.maxsize
 
 
-def _contains_array(node: Any) -> bool:
-    """Whether a schema has an array anywhere (`"type": "array"`, or a type list naming it)."""
-    stack = [node]
+def _contains_array(schema: Any) -> bool:
+    """Whether the compiler will build an array automaton for `schema`: a node with
+    `"type": "array"` and no `enum`, reached only along the edges `_groups` descends (an object
+    node's `properties` values; nothing below an array is needed). `enum` values, annotations,
+    `default`, `examples` and every other value are data, never schema, so an array spelled inside
+    them does not count (S1 confirmation pass 1, C1)."""
+    stack = [schema]
     while stack:
-        item = stack.pop()
-        if isinstance(item, Mapping):
-            kind = item.get("type")
-            if kind == "array" or (isinstance(kind, list) and "array" in kind):
-                return True
-            stack.extend(item.values())
-        elif isinstance(item, list):
-            stack.extend(item)
+        node = stack.pop()
+        if not isinstance(node, Mapping) or "enum" in node:
+            continue
+        kind = node.get("type")
+        if kind == "array":
+            return True
+        if kind == "object" and isinstance(node.get("properties"), Mapping):
+            stack.extend(node["properties"].values())
     return False
 
 
@@ -1238,8 +1244,9 @@ def compile_schema_to_mask_pages(
     whose exit no token spells) is refused by name, with no artifact.
 
     `limits` (T-3094 S1) replaces the named `RELEASE_LIMITS` for this call only. The release
-    limits apply only when `schema` contains an array; an array-free schema is bound only by the
-    keys `limits` names (S1 fix round 1, R1). A count above its limit raises `SchemaCompileError` whose message starts with that limit's
+    limits apply only when the compiler builds an array for `schema`; an array-free schema is bound
+    only by the keys `limits` names (S1 fix round 1, R1), and is otherwise compiled exactly as
+    v1.13.1 compiled it unless the dead-state refusal applies. A count above its limit raises `SchemaCompileError` whose message starts with that limit's
     `LIMIT_DIAGNOSTICS` string. `name` is the SCM1 schema name this table will be attached
     under; the section-byte count includes it (an omitted name counts as zero bytes, so the
     attachment command, which always names the schema, is where that count is exact). The

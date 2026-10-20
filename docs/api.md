@@ -1099,10 +1099,13 @@ names its limit.
 - The limits are per schema, like the runtime loader's own bounds. Each `--schema` is
   compiled under its own limits, and the command sets no cap on the combined
   `SchemaMasks` section of several schemas.
-- The release limits apply only to a schema that contains an array. A schema without
-  an array compiles exactly as it did in 1.13.1, to the same table and the same
-  `SchemaMasks` bytes, however large it is. Limits given in `--limits-json` (or
-  `limits=`) apply to every schema.
+- The release limits apply only to a schema that contains an array, counting only
+  arrays the compiler builds (an array spelled inside `enum`, `default` or an annotation
+  does not count). A schema without an array compiles exactly as it did in 1.13.1, to
+  the same table and the same `SchemaMasks` bytes, however large it is, unless its
+  table has a reachable state that cannot finish. That schema is refused by name,
+  because generation from it could never complete. Limits given in `--limits-json`
+  (or `limits=`) apply to every schema.
 - `--limits-json` takes a JSON object that replaces the named limits for that run.
 - Tracked temporary memory includes the vocabulary trie at its measured size, about
   79 MB for a 151,936-token vocabulary. IntentDoc v2 measures about 165.5 MB there.

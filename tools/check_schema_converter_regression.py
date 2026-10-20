@@ -3,16 +3,22 @@
 
 The rule this checks: every schema the baseline revision of `tools/sslm_convert_schema.py` (default
 `origin/main`, which is v1.13.1's converter) compiles must still compile, to the same `MaskPages` table and
-the same SCM1 bytes. The current converter meets it because its release limits bind only schemas that
-contain an array (S1 fix round 1, R1); the at-limit corpus below holds array-free schemas at or above
-every release limit, so a limit that leaks onto them shows as DIFFERENT. This script compiles every case
-through both converters and compares:
+the same SCM1 bytes -- unless its table has a reachable state that cannot finish, which the current
+converter refuses by name (the dead-state refusal outranks R1: generation from such a table could never
+complete a document). The current converter meets it because its release limits bind only schemas the
+compiler builds an array for (S1 fix round 1, R1); the at-limit corpus below holds array-free schemas at
+or above every release limit, including ones that spell `{"type": "array"}` inside `enum`, `examples` or
+`default`, so a limit that leaks onto them shows as DIFFERENT. This script compiles every case through
+both converters and compares:
 
 - the table: `start`, `accepting`, every state's row (`transitions`) and every state's packed mask page;
 - the SCM1 section: the baseline's own writer (`tools/t2132_build_g5_fixture.py::_serialize_scm1` at the
   baseline revision) over the baseline table, against both that writer and the current
   `sslm_convert_schema.serialize_scm1` over the current table;
-- a refusal: where the baseline refuses a case, the current converter must refuse it too.
+- a refusal: where the baseline refuses a case, the current converter must refuse it too;
+- a dead-state refusal (`dead-state-refused`): the baseline compiles, the current converter refuses with
+  its dead-end diagnostic, and the baseline's own table is checked here, independently, to have a
+  reachable state from which no accepting state is reachable. Anything else is DIFFERENT.
 
 Cases come from two sources:
 
@@ -166,6 +172,11 @@ def fixed_corpus(tokenizer_dir: Path):
             over = _in_required_order(pair.get("over_schema"))
             if over is not None and not has_array(over):
                 out.append((f"at_limit/{pair['pair']}_over@pinned", over, pinned[0], pinned[1]))
+    # Confirmation pass 1, C2: a string leaf whose closing quote no token can follow to an accepting
+    # state ('}' is spelled, but the content loop has no exit the vocabulary completes) -- the baseline
+    # compiles a table that can never finish; the current converter refuses it by name.
+    out.append(("dead_state/c2_brace_key@own", _obj({"{": {"type": "string"}}),
+                (b"{", b'"', b":", b"}", b" "), frozenset()))
     one_token = (b'{"ok":true}',) + tuple(f"<unused-{i}>".encode("ascii") for i in range(1, 64))
     out.append(("s8_decode_threading_one_token@own", G5.MINIMAL_ONE_FIELD_SCHEMA, one_token, frozenset()))
     return out, pinned is not None
@@ -193,16 +204,21 @@ def _obj(props: dict) -> dict:
 def at_limit_schemas():
     """(label, schema): array-free schemas at or above a release limit that the baseline compiles."""
     letters = "abcdefghijklmnopqrstuvwxyz"
+    enum200 = [f"xxxxxxxxxxxxxxxxxxxx{i:03d}" for i in range(200)]
     chain = {"type": "boolean"}
     for _ in range(9):
         chain = _obj({"k": chain})
     return [
-        ("enum_200x23", _obj({"a": {"enum": [f"xxxxxxxxxxxxxxxxxxxx{i:03d}" for i in range(200)]}})),
+        ("enum_200x23", _obj({"a": {"enum": enum200}})),
         ("object_chain_9_deep", chain),
         ("enum_64x80_shared_prefix", _obj({"a": {"type": "string",
                                                  "enum": ["p" * 70 + f"{i:02d}" + "q" * 8 for i in range(64)]}})),
         ("enum_42x100_distinct", _obj({"a": {"type": "string", "enum": [
             "".join(letters[(i * 7 + j * 3) % 26] for j in range(98)) + f"{i:02d}" for i in range(42)]}})),
+        ("c1_enum_200_examples_array", _obj({"a": {"enum": enum200, "examples": [{"type": "array"}]}})),
+        ("c1_enum_200_default_array", _obj({"a": {"enum": enum200},
+                                            "b": {"type": "boolean", "default": {"type": "array"}}})),
+        ("c1_enum_200_enum_of_array_schema", _obj({"a": {"enum": enum200}, "b": {"enum": [{"type": "array"}]}})),
         ("enum_compound_array", {"type": "array", "enum": [[1, 2]]}),
         ("enum_compound_untyped", {"enum": [[1, 2], {"k": 1}]}),
         ("enum_compound_object", {"type": "object", "enum": [{"k": 1}]}),
@@ -288,8 +304,33 @@ def _outcome(module, schema, vocab, special):
         return None, f"{type(error).__name__}: {error}"
 
 
+EXPECTED = {"dead_state/c2_brace_key@own": "dead-state-refused"}
+DEAD_END = "cannot reach an accepting state (dead end)"
+
+
+def _cannot_finish(mp) -> list[int]:
+    """Reachable states of a baseline table from which no accepting state is reachable."""
+    reach, frontier = {mp.start}, [mp.start]
+    while frontier:
+        for target in mp.transitions.get(frontier.pop(), {}).values():
+            if target not in reach:
+                reach.add(target)
+                frontier.append(target)
+    back = {}
+    for state, row in mp.transitions.items():
+        for target in row.values():
+            back.setdefault(target, set()).add(state)
+    live, frontier = set(mp.accepting), list(mp.accepting)
+    while frontier:
+        for source in back.get(frontier.pop(), ()):
+            if source not in live:
+                live.add(source)
+                frontier.append(source)
+    return sorted(reach - live)
+
+
 def compare(label, schema, vocab, special, baseline, baseline_writer, current) -> tuple[str, str]:
-    """('identical' | 'both-refuse' | 'DIFFERENT', detail)."""
+    """('identical' | 'both-refuse' | 'dead-state-refused' | 'DIFFERENT', detail)."""
     old, old_error = _outcome(baseline, schema, vocab, special)
     new, new_error = _outcome(current, schema, vocab, special)
     if old is None:
@@ -297,6 +338,10 @@ def compare(label, schema, vocab, special, baseline, baseline_writer, current) -
             return "both-refuse", f"baseline {old_error[:120]!r} / current {new_error[:120]!r}"
         return "DIFFERENT", f"baseline refused ({old_error[:200]}) but the current converter compiles"
     if new is None:
+        stuck = _cannot_finish(old)
+        if DEAD_END in new_error and stuck:
+            return "dead-state-refused", (f"baseline table has {len(stuck)} reachable state(s) that cannot finish "
+                                          f"(e.g. {stuck[0]}); current refuses: {new_error[:160]}")
         return "DIFFERENT", f"baseline compiles but the current converter refuses: {new_error[:300]}"
     if (old.start, old.accepting) != (new.start, new.accepting):
         return "DIFFERENT", "start or accepting set differs"
@@ -337,12 +382,14 @@ def main(argv=None) -> int:
         for index, (schema, vkey, special) in enumerate(recorded["calls"]):
             corpus.append((f"recorded#{index}", schema, recorded["vocabs"][vkey], special))
 
-    tally = {"identical": 0, "both-refuse": 0, "DIFFERENT": 0, "skipped-array": 0}
+    tally = {"identical": 0, "both-refuse": 0, "dead-state-refused": 0, "DIFFERENT": 0, "skipped-array": 0}
     for label, schema, vocab, special in corpus:
         if has_array(schema) and _outcome(baseline, schema, vocab, special)[0] is None:
             tally["skipped-array"] += 1  # the baseline refuses it: an array schema, outside the rule
             continue
         verdict, detail = compare(label, schema, vocab, special, baseline, baseline_writer, current)
+        if label in EXPECTED and verdict != EXPECTED[label]:
+            verdict, detail = "DIFFERENT", f"expected {EXPECTED[label]}, got {verdict}: {detail}"
         tally[verdict] += 1
         if verdict == "DIFFERENT" or args.verbose or not label.startswith("recorded#"):
             print(f"{verdict:12} {label}: {detail}")
