@@ -16,9 +16,13 @@
 //      the test libraries only, under SUPERSLM_ENABLE_SCHEMA_FAST_DECODE_TEST_SEAMS (CMakeLists.txt
 //      defines it on every library a suite binary links), and are absent from the production library.
 //
-// M1 and J1 define every symbol below in the library. The red round's no-behaviour stubs
+// M1 and J1 define every symbol in groups 1-3 in the library. The red round's no-behaviour stubs
 // (sfd_red_stubs.cpp) and their CMake option SUPERSLM_SFD_RED_STUBS were removed when the slices
 // landed (CHANGELOG.md, CMakeLists.txt), so a missing definition is now a link error.
+//
+// Plan rev 1.3.3's slice TF is red first by the same pattern: group 4, its seams, defined with no
+// behaviour by sfd_red_stubs_tf.cpp under option SUPERSLM_SFD_TF_RED_STUBS. The TF build defines them
+// and turns the option OFF.
 #ifndef SUPERSLM_TESTS_SCHEMA_FAST_DECODE_SFD_API_H
 #define SUPERSLM_TESTS_SCHEMA_FAST_DECODE_SFD_API_H
 
@@ -134,6 +138,35 @@ sslm_status ForcedTableEntry(sslm_model model, int32_t schema_index, uint32_t st
 // unchanged. Test-only; the production table is immutable after map. Same refusals as the read.
 sslm_status CorruptForcedTableEntry(sslm_model model, int32_t schema_index, uint32_t state,
                                     int32_t next_forced) noexcept;
+
+// ---- 4. The TF seams (plan rev 1.3.3 §4.5, §11.5) ------------------------------------------------
+// Slice TF makes the decode step's finish a transaction. Its cells (TF.2, TF.7) need two seams the
+// plan names by what they do (TF.2: "by seam or by construction"; TF.7: "the guard stubbed through a
+// seam"); the signatures are the suite's. Until TF lands they are defined with no behaviour by
+// sfd_red_stubs_tf.cpp (CMake option SUPERSLM_SFD_TF_RED_STUBS, default ON); the TF build defines them
+// in the library beside the §11.0 seams and turns the option OFF in the same commit.
+
+// S-FINISHEXIT (TF.2, TF.6). The finish's four status exits, none reachable by construction on F-SFD:
+//   kFinalNorm     the final norm returns a non-Ok forward status (the decode step's existing
+//                  `if (fst != Ok) return MapForwardStatus(fst)` after RmsNormSite);
+//   kLogitsReject  the logits site (full or legal-row) returns a non-Ok forward status other than
+//                  ParallelForIncomplete, as NarrowRowChecked's row reject does;
+//   kDampedNotOk   damped greedy's scorer returns ok = false (the decode returns SSLM_INVALID_ARGUMENT);
+//   kDampedRefused damped greedy's scorer sets `refused` (the decode returns the refusal's status).
+// Armed, the seam lets `skip` finishes that reach the exit's site run normally, then fails every later
+// one there, until DisarmFinishExit. It is persistent on purpose: TF.2's deterministic refusal must
+// repeat on two retries. The damped exits are reached only by damped finishes, and a greedy finish
+// does not count toward `skip` for them. "A finish" is one sequence's finish in a decode step (in a
+// batch, one per sequence that reaches it, in batch order) and, once J1-X lands, each check row's
+// FinishRow (plan §5.10.3: the decode step's own finish, factored and shared).
+enum class FinishExit : int32_t { kNone = 0, kFinalNorm = 1, kLogitsReject = 2, kDampedNotOk = 3, kDampedRefused = 4 };
+void ArmFinishExit(FinishExit exit, int32_t skip) noexcept;
+void DisarmFinishExit() noexcept;
+uint64_t FinishExitFired() noexcept;  // finishes the seam has failed since the last ArmFinishExit
+
+// The TF guard, stubbed (TF.7). While disabled, a failed finish leaves whatever its exit leaves with
+// no rest at the finish's entry (main's behaviour before TF); enabled is the default.
+void SetFinishGuardDisabled(bool disabled) noexcept;
 
 }  // namespace sfd
 }  // namespace test

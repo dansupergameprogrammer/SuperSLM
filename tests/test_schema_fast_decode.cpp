@@ -4330,6 +4330,309 @@ void Cell_Q6C_6() {
 	}
 }
 
+// ===================================================================================================
+// Plan rev 1.3.3, slice TF (§4.5, C16, §11.5): the decode step's finish as a transaction. TF.1 and TF.3-TF.7
+// are allocation-failure cells and live in the allocation sweep (sfd_alloc_main.cpp), which can fail
+// allocation k of one call; TF.2 and TF.4 (b) are here. TF.8 ("unchanged behaviour") is no new cell: it is
+// the decode-threading suite's ParallelForIncomplete cells and every M1 and J1 success-path cell above,
+// run unchanged.
+//
+// The arms (§11.5), on POTION from the suite's prompt, at greedy and at damped order 2, with a workspace
+// and without one:
+//   (a)  the layer branch: N decodes, then the target decode embeds t_{N-1}, runs the layers and finishes;
+//   (b)  the ready branch, off: the first decode after the prompt;
+//   (c)  canonical J1 after a span: the §5.6 drain, a choice, the drain again, then the target decode;
+//   (c') canonical at budget 1 after N decodes: the verb admits the pending t_{N-1} alone (exact mode's
+//        j = 0 commit shape), and the target decode runs the ready branch at (a)'s output position. Its
+//        blob before the target decode is (a)'s finish entry, which (a) cannot observe inside its call.
+// Exact mode's arms, (d) after a j = 0 and a j >= 2 commit, are J1-X cells (TF.2d, TF.4 (b) X) and land with
+// that slice. N is the first position >= 3 whose state after t_{N-1} is forced with a canonical first
+// token other than t_N (so the budget-1 verb in (c') admits t_{N-1} and nothing else).
+// ===================================================================================================
+
+enum class TfArm { kLayer, kReady, kCanonSpan, kCanonPending };
+const char* TfArmName(TfArm a) {
+	switch (a) {
+	case TfArm::kLayer: return "(a) layer branch";
+	case TfArm::kReady: return "(b) first token after the prompt";
+	case TfArm::kCanonSpan: return "(c) canonical after a span";
+	case TfArm::kCanonPending: return "(c') canonical pending-only at N";
+	}
+	return "?";
+}
+constexpr TfArm kTfArms[] = {TfArm::kLayer, TfArm::kReady, TfArm::kCanonSpan, TfArm::kCanonPending};
+
+struct TfCfg {
+	bool damped = false;
+	bool ws = false;
+};
+std::string TfCfgName(const TfCfg& c) {
+	return std::string(c.damped ? "damped@2" : "greedy") + (c.ws ? ", workspace" : ", no workspace");
+}
+
+struct TfRig {
+	Rig rig;
+	const Sfd& f;
+	TfCfg c;
+	std::vector<int32_t> stream;  // off's never-failed stream from the prompt
+	int n = -1;
+	bool ok = false;
+
+	TfRig(const Sfd& fsfd, const TfCfg& cfg) : rig(fsfd.m1->m, 1, 16), f(fsfd), c(cfg) {}
+	sslm_workspace W() const { return c.ws ? rig.W() : nullptr; }
+	sslm_decode_params P(int32_t order = 2) const { return c.damped ? rig.Damped(order) : rig.Greedy(); }
+	sslm_status Decode(sslm_seq s, int32_t order, int32_t* out) { return rig.Decode1(s, P(order), W(), out); }
+	// The canonical verb with the decode's own params (NULL under greedy, §5.8).
+	Jump Verb(sslm_seq s, int32_t budget) {
+		const sslm_decode_params p = P(2);
+		return JumpForward(rig.m, s, budget, c.damped ? &p : nullptr, W());
+	}
+	bool Drain(sslm_seq s) {
+		for (int guard = 0; guard < 16; ++guard) {
+			const Query q = QueryForced(rig.m, s, 0);
+			if (q.st != SSLM_OK) return false;
+			if (q.count == 0) return true;
+			if (Verb(s, 64).st != SSLM_OK) return false;
+		}
+		return false;
+	}
+	sslm_seq Fresh() {
+		sslm_seq s = rig.NewSeq(kPotion);
+		if (s && !rig.PromptOk(s, f.prompt_potion)) {
+			rig.Release(s);
+			return nullptr;
+		}
+		return s;
+	}
+	// The arm's sequence, resting at the target decode's entry; null on a setup failure. `at` overrides N.
+	sslm_seq Build(TfArm arm, int at = -1) {
+		const int k = at >= 0 ? at : n;
+		sslm_seq s = Fresh();
+		if (!s) return nullptr;
+		bool good = true;
+		int32_t t = -100;
+		switch (arm) {
+		case TfArm::kReady: break;
+		case TfArm::kLayer:
+		case TfArm::kCanonPending:
+			for (int i = 0; i < k && good; ++i) good = Decode(s, 2, &t) == SSLM_OK && t >= 0;
+			if (good && arm == TfArm::kCanonPending) {
+				const Jump j = Verb(s, 1);
+				good = j.st == SSLM_OK && j.count == 0 && !ReadShape(rig.m, s).pending;
+			}
+			break;
+		case TfArm::kCanonSpan:
+			good = Drain(s) && Decode(s, 2, &t) == SSLM_OK && t >= 0 && Drain(s);
+			break;
+		}
+		if (!good) {
+			rig.Release(s);
+			return nullptr;
+		}
+		return s;
+	}
+	// Status, token and blob of `count` decodes at `order`.
+	struct Run {
+		std::vector<int> st;
+		std::vector<int32_t> tok;
+		std::vector<std::vector<uint8_t>> blob;
+		bool operator==(const Run& o) const { return st == o.st && tok == o.tok && blob == o.blob; }
+	};
+	Run Continue(sslm_seq s, int32_t order, int count) {
+		Run r;
+		for (int i = 0; i < count; ++i) {
+			int32_t t = -100;
+			r.st.push_back(static_cast<int>(Decode(s, order, &t)));
+			r.tok.push_back(t);
+			r.blob.push_back(rig.Save(s));
+		}
+		return r;
+	}
+	bool Setup() {
+		if (!rig.ok) return false;
+		sslm_seq s = Fresh();
+		if (!s) return false;
+		for (int i = 0; i < 64; ++i) {
+			int32_t t = -100;
+			if (Decode(s, 2, &t) != SSLM_OK || t < 0) break;
+			stream.push_back(t);
+		}
+		rig.Release(s);
+		for (int k = 3; k + 1 < static_cast<int>(stream.size()) && n < 0; ++k) {
+			sslm_seq q = Build(TfArm::kLayer, k);
+			if (!q) continue;
+			const Query fq = QueryForced(rig.m, q, 1);
+			if (fq.st == SSLM_OK && fq.count > 0 && !fq.ids.empty() && fq.ids[0] != stream[size_t(k)]) n = k;
+			rig.Release(q);
+		}
+		ok = n >= 3;
+		CHECK_MSG(ok, "[TF %s] no target position: off's stream has %zu tokens and no position n >= 3 whose state is "
+		          "forced with a canonical first token other than the model's", TfCfgName(c).c_str(), stream.size());
+		return ok;
+	}
+};
+std::string Str(const TfRig::Run& r) {
+	std::string s = "{";
+	for (size_t i = 0; i < r.st.size(); ++i) s += (i ? "," : "") + std::to_string(r.st[i]) + ":" + std::to_string(r.tok[i]);
+	return s + "}";
+}
+std::string TfFields(const std::vector<uint8_t>& b) {
+	const Blob o = ParseBlob(b);
+	if (!o.ok) return "<no blob>";
+	char buf[200];
+	std::snprintf(buf, sizeof buf, "walk %u ctx %lld layer %d current %d ready %u order %d history %zu", o.walk,
+	              static_cast<long long>(o.ctx), o.layer, o.current, o.ready, o.order, o.hist.size());
+	return buf;
+}
+
+const char* TfExitName(sfd::FinishExit x) {
+	switch (x) {
+	case sfd::FinishExit::kFinalNorm: return "final norm";
+	case sfd::FinishExit::kLogitsReject: return "logits row reject";
+	case sfd::FinishExit::kDampedNotOk: return "damped !ok";
+	case sfd::FinishExit::kDampedRefused: return "damped refused";
+	case sfd::FinishExit::kNone: break;
+	}
+	return "none";
+}
+
+// TF.2 [TF, F-SFD POTION; XF1] The finish's status exits, through S-FINISHEXIT (none is reachable by
+// construction on F-SFD): the final norm's status and a logits row reject in every cfg, damped !ok and
+// damped refused in the damped cfgs, in each arm. The failed decode rests as TF.1 does ((b), (c), (c'):
+// byte-equal to the blob before the call; (a): byte-equal to (c')'s blob before its target decode, the
+// layer branch's finish entry); the deterministic refusal returns the same status on two retries with the
+// blob unchanged; S-FINISHEXIT failed all three finishes; and with the exit disarmed the next three decodes
+// equal the never-failed run of the same arm (statuses, tokens, blobs).
+void Cell_TF_2() {
+	const Sfd& f = GetSfd();
+	if (!f.ok) return;
+	for (const TfCfg c : {TfCfg{false, false}, TfCfg{false, true}, TfCfg{true, false}, TfCfg{true, true}}) {
+		TfRig x(f, c);
+		if (!x.Setup()) continue;
+		const std::string cn = TfCfgName(c);
+		std::vector<uint8_t> twin_before;
+		if (sslm_seq t = x.Build(TfArm::kCanonPending)) {
+			twin_before = x.rig.Save(t);
+			x.rig.Release(t);
+		}
+		CHECK_MSG(!twin_before.empty(), "[TF.2 %s] setup: arm (c') did not build at N %d", cn.c_str(), x.n);
+		std::vector<sfd::FinishExit> exits = {sfd::FinishExit::kFinalNorm, sfd::FinishExit::kLogitsReject};
+		if (c.damped) {
+			exits.push_back(sfd::FinishExit::kDampedNotOk);
+			exits.push_back(sfd::FinishExit::kDampedRefused);
+		}
+		for (const sfd::FinishExit ex : exits) {
+			for (const TfArm arm : kTfArms) {
+				const char* an = TfArmName(arm);
+				const char* xn = TfExitName(ex);
+				TfRig::Run ref;
+				if (sslm_seq r = x.Build(arm)) {
+					ref = x.Continue(r, 2, 3);
+					x.rig.Release(r);
+				}
+				sslm_seq s = x.Build(arm);
+				CHECK_MSG(s != nullptr && ref.st.size() == 3 && ref.st[0] == SSLM_OK,
+				          "[TF.2 %s, %s, %s] setup: the arm did not build, or its never-failed decode failed", cn.c_str(),
+				          xn, an);
+				if (!s || ref.st.size() != 3) {
+					if (s) x.rig.Release(s);
+					continue;
+				}
+				const std::vector<uint8_t> before = x.rig.Save(s);
+				sfd::ArmFinishExit(ex, 0);
+				int32_t t = -100;
+				const sslm_status st = x.Decode(s, 2, &t);
+				const std::vector<uint8_t> rest = x.rig.Save(s);
+				const uint64_t fired = sfd::FinishExitFired();
+				if (st == SSLM_OK || fired == 0) {
+					sfd::DisarmFinishExit();
+					CHECK_MSG(false, "[TF.2 %s, %s, %s] the exit was not taken: status %d token %d, S-FINISHEXIT fired "
+					          "%llu (the seam is unimplemented, or the finish never reached this exit)", cn.c_str(), xn,
+					          an, static_cast<int>(st), t, static_cast<unsigned long long>(fired));
+					x.rig.Release(s);
+					continue;
+				}
+				const std::vector<uint8_t>& entry = arm == TfArm::kLayer ? twin_before : before;
+				CHECK_MSG(rest == entry, "[TF.2 %s, %s, %s] status %d; the failed finish does not rest at its entry: %s, "
+				          "entry %s", cn.c_str(), xn, an, static_cast<int>(st), TfFields(rest).c_str(),
+				          TfFields(entry).c_str());
+				int32_t t2 = -100, t3 = -100;
+				const sslm_status st2 = x.Decode(s, 2, &t2);
+				const std::vector<uint8_t> rest2 = x.rig.Save(s);
+				const sslm_status st3 = x.Decode(s, 2, &t3);
+				const std::vector<uint8_t> rest3 = x.rig.Save(s);
+				const uint64_t fired3 = sfd::FinishExitFired();
+				sfd::DisarmFinishExit();
+				CHECK_MSG(st2 == st && st3 == st && rest2 == rest && rest3 == rest && fired3 == 3,
+				          "[TF.2 %s, %s, %s] the two retries: status %d, %d (first %d), blob unchanged %d, %d, S-FINISHEXIT "
+				          "fired %llu (want 3)", cn.c_str(), xn, an, static_cast<int>(st2), static_cast<int>(st3),
+				          static_cast<int>(st), rest2 == rest, rest3 == rest, static_cast<unsigned long long>(fired3));
+				const TfRig::Run cont = x.Continue(s, 2, 3);
+				CHECK_MSG(cont == ref, "[TF.2 %s, %s, %s] disarmed, the next three decodes %s; never-failed %s (blobs %s)",
+				          cn.c_str(), xn, an, Str(cont).c_str(), Str(ref).c_str(),
+				          cont.blob == ref.blob ? "equal" : "differ");
+				x.rig.Release(s);
+			}
+		}
+	}
+}
+
+// TF.4 (b) [TF, F-SFD POTION; XF4's dead-end half] (rev 1.3.3) At a dead end the prepared re-key is
+// installed, as today: the target decode names order 3 on a sequence whose anti-LM state is at order 2
+// ((b): no state yet, so the prepared state is a create), and its finish dead-ends (S-CHOICE armed with a
+// token illegal at the walk state takes the dead-end path, §11.0). The decode returns OK with -2 and rests
+// ready at layer 0 with the walk unchanged, its anti-LM state at order 3 with an empty history, the pin
+// consumed; the next decode at order 3 emits a legal token. Off's half; exact mode's equality with it is a
+// J1-X cell (TF.4 (b) X). Green on the tip by design: it pins today's behaviour so TF keeps it.
+void Cell_TF_4b() {
+	const Sfd& f = GetSfd();
+	if (!f.ok) return;
+	for (const TfCfg c : {TfCfg{true, false}, TfCfg{true, true}}) {
+		TfRig x(f, c);
+		if (!x.Setup()) continue;
+		const std::string cn = TfCfgName(c);
+		for (const TfArm arm : kTfArms) {
+			const char* an = TfArmName(arm);
+			sslm_seq s = x.Build(arm);
+			CHECK_MSG(s != nullptr, "[TF.4 (b) %s, %s] setup: the arm did not build", cn.c_str(), an);
+			if (!s) continue;
+			const std::vector<uint8_t> bb = x.rig.Save(s);
+			const Blob b = ParseBlob(bb);
+			int32_t illegal = -1;
+			for (int32_t t = 0; t < kTokVocab && illegal < 0; ++t) {
+				uint32_t nx = 0;
+				if (!f.Step(kPotion, b.walk, t, &nx)) illegal = t;
+			}
+			CHECK_MSG(b.ok && illegal >= 0, "[TF.4 (b) %s, %s] setup: no illegal token at walk %u", cn.c_str(), an, b.walk);
+			if (!b.ok || illegal < 0) {
+				x.rig.Release(s);
+				continue;
+			}
+			sfd::ArmChoice(illegal);
+			int32_t t = -100;
+			const sslm_status st = x.Decode(s, 3, &t);
+			const bool pin_left = sfd::ChoiceArmed();
+			sfd::DisarmChoice();
+			const Blob a = x.rig.State(s);
+			const int64_t ctx = b.ctx + (arm == TfArm::kLayer ? 1 : 0);
+			CHECK_MSG(st == SSLM_OK && t == -2 && !pin_left, "[TF.4 (b) %s, %s] the dead end: status %d token %d, pin left "
+			          "%d", cn.c_str(), an, static_cast<int>(st), t, pin_left);
+			CHECK_MSG(a.ok && a.order == 3 && a.hist.empty() && a.ready == 1 && a.layer == 0 && a.walk == b.walk &&
+			              a.ctx == ctx,
+			          "[TF.4 (b) %s, %s] after the -2 decode: %s; want order 3, empty history, ready, layer 0, walk %u, "
+			          "ctx %lld (before %s)", cn.c_str(), an, TfFields(x.rig.Save(s)).c_str(), b.walk,
+			          static_cast<long long>(ctx), TfFields(bb).c_str());
+			int32_t nt = -100;
+			uint32_t nx = 0;
+			const sslm_status ns = x.Decode(s, 3, &nt);
+			CHECK_MSG(ns == SSLM_OK && nt >= 0 && f.Step(kPotion, b.walk, nt, &nx) && x.rig.State(s).order == 3,
+			          "[TF.4 (b) %s, %s] the next decode at order 3: status %d token %d", cn.c_str(), an,
+			          static_cast<int>(ns), nt);
+			x.rig.Release(s);
+		}
+	}
+}
+
 // Prints the values cell 6.6 pins, computed by the reference replay on main (SUPERSLM_SFD_PRINT_GOLDENS=1).
 void PrintGoldens() {
 	const Sfd& f = GetSfd();
@@ -4427,7 +4730,10 @@ void RunSchemaFastDecodeCells(int& checks, int& failures) {
 	run("Q6C.4", Cell_Q6C_4);
 	run("Q6C.5", Cell_Q6C_5);
 	run("Q6C.6", Cell_Q6C_6);
-	std::printf("schema fast-decode (M1, J1) cells: %d checks, %d failures\n", GChecks.load(), GFailures.load());
+	// TF (plan rev 1.3.3 §11.5; TF.1, TF.3-TF.7 are in the allocation sweep, TF.8 is the cells above)
+	run("TF.2", Cell_TF_2);
+	run("TF.4b", Cell_TF_4b);
+	std::printf("schema fast-decode (M1, J1, TF) cells: %d checks, %d failures\n", GChecks.load(), GFailures.load());
 	checks += GChecks;
 	failures += GFailures;
 }

@@ -90,11 +90,24 @@ endif()
 # (tests/test_schema_fast_decode.cpp) runs inside every full-suite binary, against the real M1/J1
 # symbols and the §11.0 seams the test libraries define (src/sslm_abi.cpp). The red round's
 # no-behaviour stubs (and their SUPERSLM_SFD_RED_STUBS option) were removed when M1 and J1 landed.
+# Plan rev 1.3.3, slice TF (§4.5, §11.5): the TF cells' two seams are defined with no behaviour by
+# tests/schema_fast_decode/sfd_red_stubs_tf.cpp until TF lands, so every TF cell is red at its
+# assertion. The TF build defines the seams in the library and turns this option OFF in the same
+# commit; left ON beside them, the link refuses the duplicate symbols.
+option(SUPERSLM_SFD_TF_RED_STUBS "Link the schema fast-decode TF red cells' no-behaviour seam stubs (until TF lands)" ON)
+function(superslm_add_schema_fast_decode_stubs _sfd_target)
+	target_sources(${_sfd_target} PRIVATE tests/schema_fast_decode/sfd_red_stubs_tf.cpp)
+	target_include_directories(${_sfd_target} PRIVATE tests)
+	if(SUPERSLM_SFD_TF_RED_STUBS)
+		target_compile_definitions(${_sfd_target} PRIVATE SUPERSLM_SFD_TF_RED_STUBS)
+	endif()
+endfunction()
 function(superslm_add_schema_fast_decode_cells _sfd_target)
 	target_sources(${_sfd_target} PRIVATE tests/test_schema_fast_decode.cpp)
 	target_include_directories(${_sfd_target} PRIVATE tests)
 	# The source tree, for cell 9.2's reads of the ABI inventory and the project version.
 	target_compile_definitions(${_sfd_target} PRIVATE SFD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+	superslm_add_schema_fast_decode_stubs(${_sfd_target})
 endfunction()
 if(BUILD_TESTING)
 add_library(superslm_test_injection STATIC ${SUPERSLM_CORE_SOURCES})
@@ -388,8 +401,11 @@ if(BUILD_TESTING)
 	# Schema fast-decode cells 5.2 and 8.6 (vi), fix round 3: a real allocation failure at every allocation
 	# one sslm_seq_jump_forward call makes, after its anti-LM re-key, on a sequence with a prior damped
 	# state. Its own executable for the same reason (it replaces the global operator new).
+	# Plan rev 1.3.3: it also sweeps the decode step's finish (cells TF.1 and TF.3-TF.7), which call the TF
+	# seams and S-CHOICE.
 	add_executable(superslm_schema_fast_decode_alloc tests/schema_fast_decode/sfd_alloc_main.cpp)
 	target_link_libraries(superslm_schema_fast_decode_alloc PRIVATE superslm_test_injection)
+	superslm_add_schema_fast_decode_stubs(superslm_schema_fast_decode_alloc)
 	add_test(NAME superslm_schema_fast_decode_alloc COMMAND superslm_schema_fast_decode_alloc)
 	if(MSVC)
 		target_compile_options(superslm_schema_fast_decode_alloc PRIVATE /W4 /fp:precise)
