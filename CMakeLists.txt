@@ -95,8 +95,21 @@ endif()
 # assertion. The TF build defines the seams in the library and turns this option OFF in the same
 # commit; left ON beside them, the link refuses the duplicate symbols.
 option(SUPERSLM_SFD_TF_RED_STUBS "Link the schema fast-decode TF red cells' no-behaviour seam stubs (until TF lands)" ON)
+# Plan rev 1.3.3, slice J1-X (§5.10, §11.4): the same for exact mode. While ON, the suite calls the
+# shipped 8-argument verb, and sfd_red_stubs_x.cpp defines a no-behaviour 9-argument overload (returning
+# SSLM_STATUS_NEXT_FREE) and the J1-X seams (tests/schema_fast_decode/sfd_api.h groups 1x and 5). The
+# J1-X build gives the library the 9-argument verb and the seams, and turns this option OFF in the same
+# commit; sfd_api.h then declares that verb and routes every canonical call through it with NULL opts.
+# The define is directory-wide, not per target: the test libraries include sfd_api.h too (for the
+# §11.0 seams), and the header's declaration of the verb must match the library's signature in every
+# translation unit. Only sfd_api.h and the stubs read it.
+option(SUPERSLM_SFD_X_RED_STUBS "Link the schema fast-decode J1-X red cells' no-behaviour verb and seam stubs (until J1-X lands)" ON)
+if(SUPERSLM_SFD_X_RED_STUBS)
+	add_compile_definitions(SUPERSLM_SFD_X_RED_STUBS)
+endif()
 function(superslm_add_schema_fast_decode_stubs _sfd_target)
-	target_sources(${_sfd_target} PRIVATE tests/schema_fast_decode/sfd_red_stubs_tf.cpp)
+	target_sources(${_sfd_target} PRIVATE tests/schema_fast_decode/sfd_red_stubs_tf.cpp
+		tests/schema_fast_decode/sfd_red_stubs_x.cpp)
 	target_include_directories(${_sfd_target} PRIVATE tests)
 	if(SUPERSLM_SFD_TF_RED_STUBS)
 		target_compile_definitions(${_sfd_target} PRIVATE SUPERSLM_SFD_TF_RED_STUBS)
@@ -361,9 +374,11 @@ endif()
 add_library(superslm_scalar_forced_seams STATIC EXCLUDE_FROM_ALL ${SUPERSLM_CORE_SOURCES})
 target_include_directories(superslm_scalar_forced_seams PUBLIC include)
 target_include_directories(superslm_scalar_forced_seams PRIVATE tests)
+# Plan rev 1.3.3 §11.4: the J1-X cells pin the page size to 2 (KvPagesTestPinPagePositions), which the
+# paged-KV test seams define; the scalar tier's run of the suite needs them as every other suite library has.
 target_compile_definitions(superslm_scalar_forced_seams PUBLIC SUPERSLM_FORCE_SCALAR_MATMUL
 	SUPERSLM_ENABLE_MATVEC_TEST_SEAMS SUPERSLM_ENABLE_SCHEMA_FAST_DECODE_TEST_SEAMS
-	SUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION)
+	SUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS)
 target_compile_definitions(superslm_scalar_forced_seams PRIVATE SUPERSLM_ENABLE_BAD_ALLOC_INJECTION)
 add_executable(superslm_decode_threading_scalar_forced EXCLUDE_FROM_ALL
 	tests/decode_threading_standalone_main.cpp tests/test_decode_threading.cpp

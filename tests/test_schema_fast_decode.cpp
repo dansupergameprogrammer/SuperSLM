@@ -57,6 +57,15 @@
 #include "support/bad_alloc_injection.h"
 #include "../src/forward/parallel_split.h"  // the minimum-work seam (cells 3.3, 8.2)
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>  // VirtualAlloc: cell 2.X2's guarded draft
+#else
+#include <sys/mman.h>  // mmap: cell 2.X2's guarded draft
+#endif
+
 #if !defined(SUPERSLM_ENABLE_SCHEMA_FAST_DECODE_TEST_SEAMS)
 #error "test_schema_fast_decode.cpp needs a library built with SUPERSLM_ENABLE_SCHEMA_FAST_DECODE_TEST_SEAMS"
 #endif
@@ -64,6 +73,18 @@
 #if defined(SUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION)
 extern "C" void ArmCpuFinishDegenerateLogitRowInjection();
 #endif
+
+// The paged-KV test seams the J1-X cells read (src/sslm_abi.cpp; tests/paged-kv/pkv_abi.h declares the same).
+// The pin exists only where the library defines the paged-KV seam macro (build.bat's list does not; the
+// J1-X cells then run their page-size-2 arms at F-SFD's own page size and say so, as test_slm18x does).
+#if defined(SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS)
+extern "C" sslm_status KvPagesTestPinPagePositions(sslm_model model, int64_t page_positions);
+#endif
+extern "C" sslm_status sslm_pkv_test_only_seq_table_entry(sslm_seq seq, uint32_t i, uint32_t* out_page,
+                                                         uint32_t* out_mapped);
+extern "C" sslm_status sslm_pkv_test_only_peek_page_bytes(sslm_kv_pool pool, uint32_t page_index, uint8_t* out_buf,
+                                                          size_t n);
+extern "C" sslm_status sslm_pkv_test_only_drain_reserve(sslm_seq seq);
 
 // Atomic: cells 3.2 and 3.3 check from worker threads.
 static std::atomic<int> GChecks{0};
@@ -809,7 +830,7 @@ Jump JumpForward(sslm_model m, sslm_seq s, int32_t budget, const sslm_decode_par
 	Jump j;
 	const int32_t c = cap < 0 ? budget : cap;
 	std::vector<int32_t> buf(size_t(c > 0 ? c : 1), -7);
-	j.st = sslm_seq_jump_forward(m, s, budget, params, w, buf.data(), c, &j.count);
+	j.st = sfd::JumpCanonical(m, s, budget, params, w, buf.data(), c, &j.count);
 	if (j.st == SSLM_OK || (j.count > 0 && j.count <= c)) {
 		if (j.count > 0 && j.count <= c) j.forced.assign(buf.begin(), buf.begin() + j.count);
 	}
@@ -1103,6 +1124,7 @@ struct CountingHook {
 	int32_t max_tasks = 4;
 	Hostile hostile = Hostile::kNone;
 	int hostile_call = 0;
+	bool hostile_persistent = false;  // hostile on every call from hostile_call on (J1-X cell 5.X3)
 	bool threads = false;  // run each honest call's tasks on their own threads (the Q6C cells, under TSan)
 	std::mutex mu;
 	std::vector<int32_t> counts;
@@ -1123,7 +1145,7 @@ struct CountingHook {
 			call = static_cast<int>(h.counts.size());
 			h.counts.push_back(task_count);
 		}
-		if (h.hostile != Hostile::kNone && call == h.hostile_call) {
+		if (h.hostile != Hostile::kNone && (h.hostile_persistent ? call >= h.hostile_call : call == h.hostile_call)) {
 			switch (h.hostile) {
 			case Hostile::kDuplicate:
 				for (int32_t i = 0; i < task_count; ++i) task(task_ctx, i);
@@ -2042,13 +2064,13 @@ void Cell_2_2() {
 	for (const Case& c : cases) {
 		count = -9;
 		const sslm_status st =
-		    sslm_seq_jump_forward(rig.m, s, c.budget, nullptr, rig.W(), buf, c.cap, c.null_count ? nullptr : &count);
+		    sfd::JumpCanonical(rig.m, s, c.budget, nullptr, rig.W(), buf, c.cap, c.null_count ? nullptr : &count);
 		CHECK_MSG(st == SSLM_INVALID_ARGUMENT, "[2.2] %s: status %d, want SSLM_INVALID_ARGUMENT", c.what, static_cast<int>(st));
 		CHECK_MSG(rig.Save(s) == before, "[2.2] %s changed the sequence", c.what);
 	}
 	sslm_seq fresh = rig.NewSeq(kPotion);
 	if (!fresh) return;
-	const sslm_status st = sslm_seq_jump_forward(rig.m, fresh, 0, nullptr, rig.W(), buf, 64, &count);
+	const sslm_status st = sfd::JumpCanonical(rig.m, fresh, 0, nullptr, rig.W(), buf, 64, &count);
 	CHECK_MSG(st == SSLM_INVALID_ARGUMENT, "[2.2] budget 0 on a fresh sequence: status %d", static_cast<int>(st));
 	CHECK_MSG(rig.TryBind(fresh, kLongKey) == SSLM_OK, "[2.2] a refused call cleared bind eligibility");
 }
@@ -4633,6 +4655,9 @@ void Cell_TF_4b() {
 	}
 }
 
+// J1-X (plan rev 1.3.3 §5.10, §11.4): the exact jump-forward cells.
+#include "schema_fast_decode/sfd_cells_x.inc"
+
 // Prints the values cell 6.6 pins, computed by the reference replay on main (SUPERSLM_SFD_PRINT_GOLDENS=1).
 void PrintGoldens() {
 	const Sfd& f = GetSfd();
@@ -4669,7 +4694,7 @@ void RunSchemaFastDecodeCells(int& checks, int& failures) {
 		const auto t0 = std::chrono::steady_clock::now();
 		fn();
 		const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-		std::printf("[schema fast-decode] cell %-5s %s (%.0f ms)\n", id, GFailures == before ? "green" : "RED", ms);
+		std::printf("[schema fast-decode] cell %-6s %s (%.0f ms)\n", id, GFailures == before ? "green" : "RED", ms);
 	};
 	const char* print = std::getenv("SUPERSLM_SFD_PRINT_GOLDENS");
 	if (print && *print == '1') PrintGoldens();
@@ -4733,7 +4758,48 @@ void RunSchemaFastDecodeCells(int& checks, int& failures) {
 	// TF (plan rev 1.3.3 §11.5; TF.1, TF.3-TF.7 are in the allocation sweep, TF.8 is the cells above)
 	run("TF.2", Cell_TF_2);
 	run("TF.4b", Cell_TF_4b);
-	std::printf("schema fast-decode (M1, J1, TF) cells: %d checks, %d failures\n", GChecks.load(), GFailures.load());
+	// J1-X (plan rev 1.3.3 §5.10, §11.4; red until exact mode lands: sfd_red_stubs_x.cpp)
+	run("6.X1", Cell_X_6_1);
+	run("6.X2", Cell_X_6_2);
+	run("6.X3", Cell_X_6_3);
+	run("6.X5", Cell_X_6_5);
+	run("6.X6", Cell_X_6_6);
+	run("6.X7", Cell_X_6_7);
+	run("1.X1", Cell_X_1_1);
+	run("1.X2", Cell_X_1_2);
+	run("1.X3", Cell_X_1_3);
+	run("1.X4", Cell_X_1_4);
+	run("2.X1", Cell_X_2_1);
+	run("2.X2", Cell_X_2_2);
+	run("2.X3", Cell_X_2_3);
+	run("3.X1", Cell_X_3_1);
+	run("3.X2", Cell_X_3_2);
+	run("3.X3", Cell_X_3_3);
+	run("4.X1", Cell_X_4_1);
+	run("4.X2", Cell_X_4_2);
+	run("5.X1", Cell_X_5_1);
+	run("5.X2", Cell_X_5_2);
+	run("5.X3", Cell_X_5_3);
+	run("5.X4", Cell_X_5_4);
+	run("5.X5", Cell_X_5_5);
+	run("5.X6", Cell_X_5_6);
+	run("5.X7", Cell_X_5_7);
+	run("8.X1", Cell_X_8_1);
+	run("8.X2", Cell_X_8_2);
+	run("8.X3", Cell_X_8_3);
+	run("8.X4", Cell_X_8_4);
+	run("8.X5", Cell_X_8_5);
+	run("8.X6", Cell_X_8_6);
+	run("8.X7", Cell_X_8_7);
+	run("9.X1", Cell_X_9_1);
+	run("9.X2", Cell_X_9_2);
+	run("10.X1", Cell_X_10_1);
+	run("11.X1", Cell_X_11_1);
+	run("11.X2", Cell_X_11_2);
+	run("11.X3", Cell_X_11_3);
+	run("TF.2d", Cell_X_TF_2d);
+	run("TF.4bX", Cell_X_TF_4b);
+	std::printf("schema fast-decode (M1, J1, TF, J1-X) cells: %d checks, %d failures\n", GChecks.load(), GFailures.load());
 	checks += GChecks;
 	failures += GFailures;
 }
