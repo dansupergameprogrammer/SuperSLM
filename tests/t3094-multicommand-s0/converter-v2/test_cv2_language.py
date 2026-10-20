@@ -5,6 +5,7 @@ table. Expected verdicts come from Oracle B (cv2_oracle), never from converter o
 from __future__ import annotations
 
 import random
+import re
 
 import pytest
 
@@ -92,19 +93,53 @@ def test_byte_vocab_random_compiled_outputs_pass_oracles_b_and_a():
 
 
 def test_byte_vocab_every_reachable_state_can_finish_and_accepting_ends_document():
-    """G-7a retained (§4.1: nonaccepting-empty-row refusal): no reachable state is a dead end; the
-    canonical language is prefix-free, so an accepting state admits no further token (whole-document
-    termination, §6 row 7)."""
+    """§4.1 l.422 and §6 row 5 (dead end), S0a fold 3a: every reachable state reaches an accepting state, not
+    merely has a non-empty row (a cycle with no exit has non-empty rows); the canonical language is
+    prefix-free, so an accepting state admits no further token (whole-document termination, §6 row 7)."""
     mp = P.healthy_bytes(F.INTENTDOC)
-    reach, frontier = {mp.start}, [mp.start]
-    while frontier:
-        s = frontier.pop()
-        for t in mp.transitions.get(s, {}).values():
-            if t not in reach:
-                reach.add(t)
-                frontier.append(t)
-    assert all(mp.transitions.get(s) or s in mp.accepting for s in reach)
-    assert all(not mp.transitions.get(s) for s in mp.accepting & reach)
+    dead = P.cannot_finish(mp)
+    assert not dead, f"{len(dead)} reachable states cannot reach an accepting state"
+    assert all(not mp.transitions.get(s) for s in mp.accepting & P.reachable(mp))
+
+
+# ------------------------------------------------------------------ fold 3b: unsatisfiable tables are refused
+#
+# Conductor ruling (brief-s0-fold1, 3b): §4.1's "nonaccepting-empty-row refusal" is read at the class level:
+# the converter refuses, by name and with no artifact, any schema whose token DFA has a reachable state from
+# which no accepting state is reachable; the empty row is its zero-step case. Contract assumed for the name: the
+# message says the state cannot reach acceptance, matched by DEAD_END (and names no resource guard).
+
+DEAD_END = re.compile(r"accept|dead[ -]?end|unsatisfiable|empty valid-token", re.IGNORECASE)
+NO_CLOSE = tuple(b"" if i == ord("]") else p for i, p in enumerate(F.BYTE_VOCAB))
+UNSPELLABLE_EXIT = {"close_bracket_zeroed": NO_CLOSE, "close_bracket_only_in_close_brace": NO_CLOSE + (b"]}",)}
+
+
+@pytest.mark.parametrize("label", tuple(UNSPELLABLE_EXIT))
+def test_unspellable_array_exit_refused_by_name(label):
+    """IntentDoc v2 over a vocabulary that cannot spell the conditions array's exit: the table would loop on
+    `,` with no accepting state reachable (checked by test_cv2_reference), so the compile is refused."""
+    P.healthy_bytes(F.INTENTDOC)
+    with pytest.raises(P.SchemaCompileError) as info:
+        P.compile_schema_to_mask_pages(F.INTENTDOC, UNSPELLABLE_EXIT[label], special_ids=frozenset())
+    message = str(info.value)
+    assert "unsupported construct" not in message, f"{P.RED_ARRAY}: {message}"
+    assert DEAD_END.search(message), f"refusal does not say the table cannot reach acceptance: {message}"
+    assert not any(d in message for d in F.DIAGNOSTICS.values()), message
+
+
+@pytest.mark.parametrize("schema_name", ("intentdoc_v2", "g1"))
+@pytest.mark.parametrize("level", ("byte", "pinned"))
+def test_admitted_tables_can_always_finish(schema_name, level, request):
+    """The other side of fold 3b: IntentDoc v2 and G1 are admitted at both vocabularies, and every reachable
+    state of the admitted table reaches an accepting state."""
+    P.healthy_bytes(F.INTENTDOC)
+    schema = F.INTENTDOC if schema_name == "intentdoc_v2" else F.G1
+    if level == "byte":
+        mp = P.healthy_bytes(schema)
+    else:
+        mp = P.healthy_real(schema, request.getfixturevalue("real_vocab")[0])
+    dead = P.cannot_finish(mp)
+    assert not dead, f"{schema_name} at {level}: {len(dead)} reachable states cannot reach acceptance"
 
 
 @pytest.mark.parametrize("case", T.CASES, ids=[c[0] for c in T.CASES])

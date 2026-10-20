@@ -82,3 +82,53 @@ def accepts_ids(mp, token_ids):
 
 def accepts_raw_bytes(mp, raw):
     return accepts_ids(mp, list(raw))
+
+
+RED_NAME = "red-unimplemented: the converter takes no section name argument"
+
+
+def compile_named(schema, pieces, special, name, limits=None):
+    """Compile with the section name the section-byte count depends on (fold 4: the model counts the name
+    blob, so a compile-time section-byte count needs the name). `limits` is passed only when given."""
+    kw = {"special_ids": special, "name": name}
+    if limits:
+        kw["limits"] = limits
+    try:
+        return compile_schema_to_mask_pages(schema, pieces, **kw)
+    except TypeError as error:
+        pytest.fail(f"{RED_NAME}: {error}")
+    except SchemaCompileError as error:
+        if "unsupported construct" in str(error):
+            pytest.fail(f"{RED_ARRAY}: {error}")
+        raise AssertionError(f"a schema the cell must admit was refused: {error}") from error
+
+
+def table_size(mp):
+    """(states, transitions) of the table the artifact actually carries."""
+    return len(mp.transitions), sum(map(len, mp.transitions.values()))
+
+
+def reachable(mp):
+    seen, frontier = {mp.start}, [mp.start]
+    while frontier:
+        for t in mp.transitions.get(frontier.pop(), {}).values():
+            if t not in seen:
+                seen.add(t)
+                frontier.append(t)
+    return seen
+
+
+def cannot_finish(mp):
+    """Reachable states from which no accepting state is reachable (fold 3a)."""
+    reach = reachable(mp)
+    back = {}
+    for s in reach:
+        for t in mp.transitions.get(s, {}).values():
+            back.setdefault(t, set()).add(s)
+    live, frontier = set(mp.accepting & reach), list(mp.accepting & reach)
+    while frontier:
+        for s in back.get(frontier.pop(), ()):
+            if s not in live:
+                live.add(s)
+                frontier.append(s)
+    return reach - live

@@ -96,6 +96,9 @@ def test_min_items_limit_over_refused_naming_its_array(level):
         assert F.names_pointer(message, F.INNER_POINTERS), message
 
 
+FROZEN_POINTERS = {"R_MIN_ROOT": "/properties/a", "R_MIN_INNER": "/properties/a/items/properties/b"}
+
+
 @pytest.mark.parametrize("name", ("R_MIN_ROOT", "R_MIN_INNER"))
 def test_frozen_min_pairs_at_byte_vocabulary(name):
     """The frozen S0 pairs (resource-pairs-v2.json): minItems is a schema property, so the byte vocabulary
@@ -106,8 +109,10 @@ def test_frozen_min_pairs_at_byte_vocabulary(name):
     def raw(n):
         return B.serialize(p["under_schema"], {"a": [{"b": ["x"] * n}]} if inner else {"a": ["x"] * n})
     assert P.accepts_raw_bytes(mp, raw(8)) and P.accepts_raw_bytes(mp, raw(9)) and not P.accepts_raw_bytes(mp, raw(7))
-    with pytest.raises(P.SchemaCompileError, match=F.diagnostic_regex("minItems")):
+    with pytest.raises(P.SchemaCompileError, match=F.diagnostic_regex("minItems")) as info:
         P.compile_bytes(p["over_schema"])
+    assert F.names_pointer(str(info.value), (FROZEN_POINTERS[name],)), \
+        f"{name}: the refusal does not name the RFC 6901 pointer {FROZEN_POINTERS[name]}: {info.value}"
 
 
 # ------------------------------------------------------------------ the next nesting depth
@@ -176,3 +181,45 @@ def test_item_object_named_refusal(location, defect, expected):
         item["additionalProperties"] = True
     with pytest.raises(P.SchemaCompileError, match=expected):
         P.compile_bytes(schema)
+
+
+# ------------------------------------------------------------------ fold 1: the loop after the minimum
+#
+# §4.1 l.422: after the minimum, the array loops. A converter that unrolls a minimum m into m+2 positional
+# copies passes every cell that stops at m+2, so each minimum is also walked at 2m+5 items.
+
+def _long(m):
+    return 2 * m + 5
+
+
+LOOP_CASES = {
+    **{f"root_{m}": (lambda m=m: (F.with_min(m, 0), lambda s: B.serialize(s, F.doc(*F.intents(_long(m), 0)))))
+       for m in (1, 2, 3, 5)},
+    **{f"inner_{m}": (lambda m=m: (F.with_min(1, m), lambda s: B.serialize(s, F.doc(*F.intents(2, _long(m))))))
+       for m in (0, 1, 2, 8)},
+    "R_MIN_ROOT": lambda: (F.pair("R_MIN_ROOT")["under_schema"], lambda s: B.serialize(s, {"a": ["x"] * _long(8)})),
+    "R_MIN_INNER": lambda: (F.pair("R_MIN_INNER")["under_schema"],
+                            lambda s: B.serialize(s, {"a": [{"b": ["x"] * _long(8)}, {"b": ["x"] * 8}]})),
+    "triple_a": lambda: (F.triple_array(), lambda s: B.serialize(s, {"a": [{"b": []}] * _long(1)})),
+    "triple_b": lambda: (F.triple_array(), lambda s: B.serialize(s, {"a": [{"b": [{"c": [{"d": "x"}] * 2}] * _long(0)}]})),
+    "triple_c": lambda: (F.triple_array(), lambda s: B.serialize(s, {"a": [{"b": [{"c": [{"d": "x"}] * _long(2)}]}]})),
+}
+
+
+@pytest.mark.parametrize("label", tuple(LOOP_CASES))
+def test_min_items_loops_past_twice_the_minimum(label):
+    P.healthy_bytes(F.INTENTDOC)
+    schema, document = LOOP_CASES[label]()
+    raw = document(schema)
+    assert B.accepts(schema, raw)  # Oracle B precondition
+    mp = P.healthy_bytes(schema)
+    assert P.accepts_raw_bytes(mp, raw), f"{label}: 2m+5 items refused (minimum unrolled without its loop)"
+
+
+@pytest.mark.parametrize("name", ("R_MIN_ROOT", "R_MIN_INNER"))
+def test_frozen_min_pairs_loop_on_pinned_vocabulary(name, real_vocab):
+    vocab, _ = real_vocab
+    P.healthy_bytes(F.INTENTDOC)
+    schema, document = LOOP_CASES[name]()
+    mp = P.healthy_real(schema, vocab)
+    assert P.accepts_ids(mp, vocab.bytewise(document(schema))), f"{name}: 21 items refused on the pinned vocabulary"

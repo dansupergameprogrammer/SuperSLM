@@ -6,6 +6,8 @@ Nothing here imports converter code. The product contract the cells assume, stat
   harness may inject smaller numeric limits through the same production guard"). Admission is
   count <= limit; a count above its limit raises `SchemaCompileError` whose message contains that
   limit's DIAGNOSTICS string (the T-3094 strings, kept so one converter serves both suites).
+- name: `compile_schema_to_mask_pages(..., name=NAME)` gives the section name, which the section-byte count
+  includes (S0a fold 4); the cells that reconcile section bytes pass it.
 - counts: the returned `MaskPages` carries `resource_counts`, a mapping with every LIMIT_KEYS key; its
   `minItems` value maps each array's location to its minimum (§4.1 must-admit: "its actual minItems at
   each array, depth, NFA states, DFA states, transitions, section bytes and tracked bytes are recorded").
@@ -54,15 +56,15 @@ PAIR_TARGET = {"R_MIN_ROOT": "minItems", "R_MIN_INNER": "minItems", "R_DEPTH": "
                "R_NFA": "nfa_states", "R_DFA": "dfa_states", "R_TRANS": "token_transitions",
                "R_SECTION": "serialized_mask_bytes", "R_MEM": "tracked_temporary_bytes"}
 
-# Accepted spellings of an array's location in a minItems diagnostic (plan §4.1 "names the array's JSON
-# pointer"; the spelling is not fixed by the plan, see the record). Root and inner must be distinguishable.
-ROOT_POINTERS = ("/properties/intents", "$.intents")
-INNER_POINTERS = ("/properties/intents/items/properties/conditions", "$.intents[].conditions",
-                  "$.intents[*].conditions", "/intents/*/conditions", "/intents/-/conditions")
+# The array's location in a minItems diagnostic: an RFC 6901 JSON pointer into the schema (plan §4.1 l.424
+# "names the array's JSON pointer"; pinned by the coverage auditor's ruling, S0a fold 7). A pointer is
+# matched whole: it may not continue into a longer pointer, so the root pointer does not match the inner one.
+ROOT_POINTERS = ("/properties/intents",)
+INNER_POINTERS = ("/properties/intents/items/properties/conditions",)
 
 
 def names_pointer(message: str, pointers) -> bool:
-    return any(p in message for p in pointers)
+    return any(re.search(re.escape(p) + r"(?![A-Za-z0-9_~/])", message) for p in pointers)
 
 
 def fresh(schema=INTENTDOC):

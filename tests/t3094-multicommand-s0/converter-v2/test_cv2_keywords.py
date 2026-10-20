@@ -14,13 +14,32 @@ import cv2_product as P
 from keyword_catalogue import VALUES
 
 
+CONTROL = "vendorUnknownConstraint"
+
+
+def _occurrences(keyword, message):
+    """Occurrences of `keyword` as a whole token: not inside a longer identifier (S0a fold 6)."""
+    return len(re.findall(r"(?<![A-Za-z0-9_$])" + re.escape(keyword) + r"(?![A-Za-z0-9_])", message))
+
+
+def _refusal(location, keyword):
+    schema = F.fresh()
+    F.node(schema, location)[keyword] = VALUES.get(keyword, 1)
+    with pytest.raises(P.SchemaCompileError) as info:
+        P.compile_bytes(schema)
+    return str(info.value)
+
+
 @pytest.mark.parametrize("location,keyword", K.REFUSALS, ids=[f"{l}-{k}" for l, k in K.REFUSALS])
 def test_unsupported_keyword_refused_by_name_at_node(location, keyword):
+    """§6 row 2: a named compile refusal. The keyword must occur as a whole token, and more often than in the
+    refusal of a different unsupported keyword at the same node, so a refusal phrased "... not supported at
+    ..." does not name `not` by accident."""
     P.healthy_bytes(F.INTENTDOC)
-    schema = F.fresh()
-    F.node(schema, location)[keyword] = VALUES[keyword]
-    with pytest.raises(P.SchemaCompileError, match=re.escape(keyword)):
-        P.compile_bytes(schema)
+    message = _refusal(location, keyword)
+    control = _refusal(location, CONTROL) if keyword != CONTROL else ""
+    assert _occurrences(keyword, message) > _occurrences(keyword, control), \
+        f"refusal does not name {keyword!r}: {message!r} (control: {control!r})"
 
 
 @pytest.mark.parametrize("location,annotation", K.ANNOTATION_PLACEMENTS,

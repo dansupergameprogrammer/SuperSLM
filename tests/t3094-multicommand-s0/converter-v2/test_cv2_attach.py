@@ -15,6 +15,9 @@ import sys
 import pytest
 
 import cv2_artifact as R
+import cv2_cases as C
+import cv2_oracle as B
+import cv2_tokens as T
 import cv2_attach_fixtures as AF
 import cv2_fixtures as F
 import cv2_injection as I
@@ -113,6 +116,44 @@ def test_attach_intentdoc_v2_preserves_base_and_reconciles(fx, tmp_path, real_vo
         model["dfa_states"], model["token_transitions"], model["accepting"])
     assert len(scm[0]["data"]) == model["section_bytes"]
     assert not any(set(row) & vocab.special for row in entry["rows"].values()), "a special id is admitted"
+
+
+def _walk_rows(entry, ids):
+    state = 0
+    for tid in ids:
+        if tid not in entry["rows"][state]:
+            return False, state
+        state = entry["rows"][state][tid]
+    return True, state
+
+
+def test_attached_scm1_walks_as_intentdoc_v2(fx, tmp_path, real_vocab):
+    """S0a fold 5 (§6 row 6 "wrong state-offset or accepting-state index"; §7): through the independently
+    parsed rows (start state 0, the parsed accepting set), every named document tokenized one byte per
+    pinned-vocabulary id, `eight_intents_eight_atoms_each` among them, gets Oracle B's verdict, and the 21
+    real-id boundary cases hold. A serializer that shifts accepting ids or permutes CSR offsets keeps every
+    count and passes the reconciliation cell; it fails here."""
+    fx = fx()
+    vocab, _ = real_vocab
+    out = tmp_path / "walk.sslm"
+    result = run(fx["base"], fx["ckpt"], [("intents", fx["intentdoc"])], out)
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")[-800:]
+    scm = next(s["data"] for s in R.read_container(out.read_bytes())["sections"] if s["type"] == R.SCHEMA_MASKS)
+    entry = R.parse_scm1(scm)["schemas"][b"intents"]
+    assert any(name == "eight_intents_eight_atoms_each" for name, _ in C.ACCEPT)
+    for name, raw in C.ACCEPT + C.REJECT:
+        ok, state = _walk_rows(entry, vocab.bytewise(raw))
+        assert (ok and state in entry["accepting"]) == B.accepts(F.INTENTDOC, raw), name
+    for name, raw, offset, piece, verdict in T.CASES:
+        ok, state = _walk_rows(entry, vocab.bytewise(raw[:offset]))
+        assert ok, f"{name}: prefix refused"
+        tid = vocab.id_of(piece)
+        if verdict:
+            ok, end = _walk_rows(entry, vocab.ids(T.pieces(raw, offset, piece)))
+            assert ok and end in entry["accepting"], f"{name}: boundary token {piece!r} path refused"
+        else:
+            assert tid not in entry["rows"][state], f"{name}: opening token {piece!r} admitted"
+            assert vocab.id_of(piece[:1]) in entry["rows"][state], f"{name}: one-byte control masked"
 
 
 def test_attach_repeatable_schemas(fx, tmp_path, real_vocab):

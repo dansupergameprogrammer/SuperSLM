@@ -225,3 +225,75 @@ def test_byte_vocabulary_counts_of_the_fixture_family_admit():
     assert I.crossing(I.counts(F.with_min(1, 9)), dict(F.RELEASE)) == ["minItems"]
     assert I.crossing(I.counts(F.deepen_value(3)), dict(F.RELEASE)) == ["recursion_depth"]
     assert I.crossing(I.counts(F.triple_array(True)), dict(F.RELEASE)) == ["recursion_depth"]
+
+
+# ------------------------------------------------------------------ S0a folds: the fixtures are what the cells say
+
+def _model_table(schema, pieces):
+    """Count model v2's token table (its own construction, not the converter's)."""
+    from collections import deque
+    nfa = cm.NFA()
+    accept = nfa.schema(schema, 0, "$", {})
+    dfa, acc, content = cm.char_dfa(nfa, accept)
+    trie = cm.build_trie(list(pieces))
+    ids, q, rows, accepting = {0: 0}, deque([0]), {}, set()
+    while q:
+        cur = q.popleft()
+        if cur in acc:
+            accepting.add(ids[cur])
+        row = {}
+        for tid, target in cm.token_targets(dfa, cur, trie, content).items():
+            if target not in ids:
+                ids[target] = len(ids)
+                q.append(target)
+            row[tid] = ids[target]
+        rows[ids[cur]] = row
+    return rows, accepting
+
+
+def _dead(rows, accepting):
+    back = {}
+    for s, row in rows.items():
+        for t in row.values():
+            back.setdefault(t, set()).add(s)
+    live, frontier = set(accepting), list(accepting)
+    while frontier:
+        for s in back.get(frontier.pop(), ()):
+            if s not in live:
+                live.add(s)
+                frontier.append(s)
+    return set(rows) - live
+
+
+def test_unspellable_exit_vocabularies_have_unfinishable_states():
+    """Fold 3b's fixtures: over the byte vocabulary IntentDoc v2's table has no unfinishable state; with `]`
+    zeroed, or spelled only inside `]}`, reachable states exist from which no accepting state is reachable."""
+    import test_cv2_language as L
+    assert not _dead(*_model_table(F.INTENTDOC, F.BYTE_VOCAB))
+    for label, vocab in L.UNSPELLABLE_EXIT.items():
+        rows, accepting = _model_table(F.INTENTDOC, vocab)
+        assert rows and _dead(rows, accepting), label
+
+
+def test_far_over_nfa_schema_is_a_hundred_times_over():
+    import test_cv2_resources as RS
+    nfa = cm.NFA()
+    nfa.schema(RS.far_over_nfa_schema(), 0, "$", {})
+    assert len(nfa.edges) >= RS.NFA_FAR_OVER_FACTOR * F.RELEASE["nfa_states"]
+
+
+def test_under_side_fixtures_are_admitted_by_count_model_v2():
+    """Fold 1's byte-vocabulary under schemas cross no limit (injected or release) under count model v2."""
+    import cv2_injection as I
+    import test_cv2_resources as RS
+    for label, make in RS.BYTE_UNDER.items():
+        under, _, key, limit = make()
+        lim = I.limits(key, limit) if key else dict(F.RELEASE)
+        assert not I.crossing(I.counts(under), lim), label
+
+
+def test_loop_documents_are_accepted_by_oracle_b():
+    import test_cv2_min_items as M
+    for label, make in M.LOOP_CASES.items():
+        schema, document = make()
+        assert B.accepts(schema, document(schema)), label
