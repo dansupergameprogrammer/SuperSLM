@@ -256,6 +256,24 @@ typedef struct sslm_decode_params {
     int64_t q_c;                /* damped-greedy only: runtime i-exp scale constant */
 } sslm_decode_params;
 
+/* Schema jump-forward options (1.16.0, sslm_seq_jump_forward). NULL options, or mode CANONICAL,
+ * is the 1.15.0 verb exactly. EXACT is a verified jump-forward: the pending choice token and a
+ * draft are admitted in one pass, every drafted token is checked with the decode step's own
+ * finish, and only the tokens the model would itself have produced are kept, so the output equals
+ * a run that never calls the verb (docs/api.md). In EXACT mode `draft` holds `draft_count` token
+ * ids (NULL with draft_count 0: the forced chain from the state after the pending token); the verb
+ * reads at most chunk_budget - 1 of them and keeps no reference to the buffer. struct_size must be
+ * sizeof(sslm_jump_options); an unknown mode, a negative draft_count, a NULL draft with a positive
+ * draft_count, or a draft in CANONICAL mode is SSLM_INVALID_ARGUMENT with nothing changed. */
+typedef enum sslm_jump_mode { SSLM_JUMP_CANONICAL = 0, SSLM_JUMP_EXACT = 1 } sslm_jump_mode;
+
+typedef struct sslm_jump_options {
+    uint32_t       struct_size;  /* sizeof(sslm_jump_options) */
+    int32_t        mode;         /* sslm_jump_mode */
+    const int32_t* draft;        /* EXACT only. NULL: the canonical chain from the state after the pending token */
+    int32_t        draft_count;  /* EXACT only. >= 0; at most chunk_budget - 1 tokens are used */
+} sslm_jump_options;
+
 typedef struct sslm_stats_out {
     int64_t decode_step_ceiling;
     int64_t decode_step_actual;

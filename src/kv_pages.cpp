@@ -333,6 +333,21 @@ PageStatus HolderUnmapAll(PageHolder* holder) {
 	return status;
 }
 
+// The exact jump-forward's rollback of pages mapped for rows it did not keep (§5.10.4).
+PageStatus HolderUnmapTail(PageHolder* holder, uint32_t keep) {
+	if (!holder) return PageStatus::kInvalidArgument;
+	uint32_t floor = holder->shared + holder->materialized;
+	if (floor < keep) floor = keep;
+	if (floor >= holder->mapped) return PageStatus::kOk;
+	for (uint32_t i = holder->mapped; i-- > floor;) holder->reserve.push_back(holder->table[i]);
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+	if (TableSentinelOn())
+		for (uint32_t i = floor; i < holder->mapped; ++i) holder->table[i] = kNoPage;
+#endif
+	holder->mapped = floor;
+	return PageStatus::kOk;
+}
+
 // Release: every mapped page −= 1 (a private page 1 -> 0 and freed; a shared page freed only by its
 // last reference, so a prefix's release frees none of the pages its adopters still share); the
 // unmapped reserve pages := 0 and freed. The holder is destroyed. Allocates nothing.

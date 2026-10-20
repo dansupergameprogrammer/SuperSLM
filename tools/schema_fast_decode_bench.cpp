@@ -606,7 +606,7 @@ Arm RunOn(Engine& e, const char* schema, const std::vector<int32_t>& prompt, int
 			const int32_t room = std::min<int32_t>(budget, static_cast<int32_t>(max_new - a.stream.size()) + (pending ? 1 : 0));
 			if (room < 1 || static_cast<int>(a.stream.size()) >= max_new) break;  // the cap is reached
 			const auto v0 = Clock::now();
-			const sslm_status st = sslm_seq_jump_forward(e.model, s, room, nullptr, e.ws, buf.data(), budget, &forced);
+			const sslm_status st = sslm_seq_jump_forward(e.model, s, room, nullptr, /*opts=*/nullptr, e.ws, buf.data(), budget, &forced);
 			const double v_ms = MsSince(v0);
 			if (st != SSLM_OK) {
 				std::fprintf(stderr, "jump_forward status %d\n", static_cast<int>(st));
@@ -1146,7 +1146,8 @@ int Finish(Engine& e, int argc, char** argv) {
 				for (;;) {
 					int32_t count = 0, acc = 0, forced = 0;
 					if (sslm_seq_forced_tokens(e.model, s, nullptr, 0, &count, &acc) != SSLM_OK || count == 0) break;
-					if (sslm_seq_jump_forward(e.model, s, 64, mi ? &modes[mi] : nullptr, e.ws, buf.data(), 64, &forced) != SSLM_OK) break;
+					if (sslm_seq_jump_forward(e.model, s, 64, mi ? &modes[mi] : nullptr, /*opts=*/nullptr, e.ws, buf.data(), 64,
+					                          &forced) != SSLM_OK) break;
 					if (forced == 0) break;
 				}
 				int32_t t = -100;

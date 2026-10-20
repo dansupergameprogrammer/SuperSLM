@@ -219,6 +219,9 @@ struct sslm_model_s {
 	};
 	bool forced_table_present = false;
 	std::vector<std::vector<ForcedEntry>> forced_table;
+	// Plan rev 1.3.3 §5.10.3, slice J1-X: per token id, 1 when an exact-mode draft may carry it (not
+	// a special id, and it has bytes). Built with the forced table, so present exactly when it is.
+	std::vector<uint8_t> draftable;
 };
 
 // T-2700 converter-only observation binding.  This intentionally remains
@@ -495,11 +498,23 @@ int32_t g_exit = 0;  // a FinishExit value; 0: disarmed
 int32_t g_exit_skip = 0;
 uint64_t g_exit_fired = 0;
 bool g_guard_off = false;
+// The J1-X seams (plan rev 1.3.3 §11.4; sfd_api.h group 5).
+int32_t g_verify = 0;   // a VerifyForce value
+int32_t g_satrow = -1;  // S-SATROW's row; -1: disarmed
+bool g_rows_check[kLogCap];  // S-ROWS entry i was written by the exact check
+int32_t g_check_row[kRowCap];
+size_t g_check_row_v = 0;
+bool g_walk_legality_off = false;
+bool g_unmap_tail_stubbed = false;
 }  // namespace sfd_seam
 
-void SfdLogRows(uint64_t rows) noexcept {
+// S-ROWS. `check`: the entry is the exact check's (plan rev 1.3.3 §5.10.3, the check tag).
+void SfdLogRows(uint64_t rows, bool check = false) noexcept {
 	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
-	if (sfd_seam::g_rows_n < sfd_seam::kLogCap) sfd_seam::g_rows[sfd_seam::g_rows_n] = rows;
+	if (sfd_seam::g_rows_n < sfd_seam::kLogCap) {
+		sfd_seam::g_rows[sfd_seam::g_rows_n] = rows;
+		sfd_seam::g_rows_check[sfd_seam::g_rows_n] = check;
+	}
 	++sfd_seam::g_rows_n;
 }
 
@@ -512,8 +527,14 @@ void SfdLogLayerRows(int32_t kind, uint64_t rows) noexcept {
 	++sfd_seam::g_layer_rows_n;
 }
 
-void SfdCaptureRow(const int32_t* row, size_t v) noexcept {
+// S-ROW. The exact check's capture goes to its own slot (§5.10.3), so the decode finish's is kept.
+void SfdCaptureRow(const int32_t* row, size_t v, bool check = false) noexcept {
 	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	if (check) {
+		std::memcpy(sfd_seam::g_check_row, row, std::min(v, sfd_seam::kRowCap) * sizeof(int32_t));
+		sfd_seam::g_check_row_v = v;
+		return;
+	}
 	std::memcpy(sfd_seam::g_row, row, std::min(v, sfd_seam::kRowCap) * sizeof(int32_t));
 	sfd_seam::g_row_v = v;
 }
@@ -558,6 +579,32 @@ size_t SfdHiddenBound() noexcept {
 void SfdCountWalk() noexcept {
 	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
 	++sfd_seam::g_walk;
+}
+
+// S-VERIFY: 0 none, 1 every check row confirms, 2 none does.
+int32_t SfdVerifyForce() noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	return sfd_seam::g_verify;
+}
+
+// S-SATROW: true (and the seam spent) iff its row is one of the pass's rows [first, first + rows);
+// *row is that row.
+bool SfdTakeSatRow(int32_t first, int32_t rows, int32_t* row) noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	if (sfd_seam::g_satrow < first || sfd_seam::g_satrow >= first + rows) return false;
+	*row = sfd_seam::g_satrow;
+	sfd_seam::g_satrow = -1;
+	return true;
+}
+
+bool SfdDraftWalkLegalityDisabled() noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	return sfd_seam::g_walk_legality_off;
+}
+
+bool SfdHolderUnmapTailStubbed() noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	return sfd_seam::g_unmap_tail_stubbed;
 }
 }  // namespace
 
@@ -693,14 +740,60 @@ void SetFinishGuardDisabled(bool disabled) noexcept {
 	sfd_seam::g_guard_off = disabled;
 }
 
+void SetVerifyForce(VerifyForce force) noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	sfd_seam::g_verify = static_cast<int32_t>(force);
+}
+void ArmSatRow(int32_t row) noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	sfd_seam::g_satrow = row >= 0 ? row : -1;
+}
+void DisarmSatRow() noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	sfd_seam::g_satrow = -1;
+}
+bool SatRowArmed() noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	return sfd_seam::g_satrow >= 0;
+}
+bool RowsLogIsCheck(size_t i) noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	return i < sfd_seam::g_rows_n && i < sfd_seam::kLogCap && sfd_seam::g_rows_check[i];
+}
+void LastCheckRowReset() noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	sfd_seam::g_check_row_v = 0;
+}
+size_t LastCheckRow(int32_t* out, size_t cap) noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	if (sfd_seam::g_check_row_v == 0) return 0;
+	if (out) {
+		const size_t k = std::min({cap, sfd_seam::g_check_row_v, sfd_seam::kRowCap});
+		std::memcpy(out, sfd_seam::g_check_row, k * sizeof(int32_t));
+	}
+	return sfd_seam::g_check_row_v;
+}
+void SetDraftWalkLegalityDisabled(bool disabled) noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	sfd_seam::g_walk_legality_off = disabled;
+}
+void SetHolderUnmapTailStubbed(bool stubbed) noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	sfd_seam::g_unmap_tail_stubbed = stubbed;
+}
+
 }  // namespace sfd
 }  // namespace test
 }  // namespace superslm
 #else
 namespace {
-inline void SfdLogRows(uint64_t) noexcept {}
+inline void SfdLogRows(uint64_t, bool = false) noexcept {}
 inline void SfdLogLayerRows(int32_t, uint64_t) noexcept {}
-inline void SfdCaptureRow(const int32_t*, size_t) noexcept {}
+inline void SfdCaptureRow(const int32_t*, size_t, bool = false) noexcept {}
+inline int32_t SfdVerifyForce() noexcept { return 0; }
+inline bool SfdTakeSatRow(int32_t, int32_t, int32_t*) noexcept { return false; }
+inline bool SfdDraftWalkLegalityDisabled() noexcept { return false; }
+inline bool SfdHolderUnmapTailStubbed() noexcept { return false; }
 inline bool SfdPeekChoice(int32_t*) noexcept { return false; }
 inline void SfdConsumeChoice() noexcept {}
 inline bool SfdFinishExitFails(int32_t) noexcept { return false; }
@@ -709,6 +802,26 @@ inline size_t SfdHiddenBound() noexcept { return SIZE_MAX; }
 inline void SfdCountWalk() noexcept {}
 }  // namespace
 #endif  // SUPERSLM_ENABLE_SCHEMA_FAST_DECODE_TEST_SEAMS
+
+namespace {
+// S-SATROW's effect (plan rev 1.3.3 §11.4): a layer pass over rows [first, first + rows) that the seam
+// names adds one count to each of the sequence's five saturation counters, and to that row's share in
+// `row_counts` (5 per row, from `first`) when the pass attributes per row. Nothing in a production
+// library, where the seam is absent.
+inline void SfdApplySatRow(superslm::SequenceLayerState& state, int32_t first, int32_t rows,
+                           uint64_t* row_counts) noexcept {
+	int32_t row = -1;
+	if (!SfdTakeSatRow(first, rows, &row)) return;
+	state.kv_saturation_count += 1;
+	state.kv_landing_saturation_count += 1;
+	state.k_channel_landing_saturation_count += 1;
+	state.rope_q_saturation_count += 1;
+	state.rope_k_saturation_count += 1;
+	if (row_counts) {
+		for (size_t k = 0; k < 5; ++k) row_counts[static_cast<size_t>(row - first) * 5 + k] += 1;
+	}
+}
+}  // namespace
 
 // T-2199 Phase D3 fix, corrected a SECOND time (Sec9 dim3, GATE, D-SLM3719): the first two
 // corrections (moving the batch lock earlier, then earlier still) both STILL crashed under
@@ -2041,6 +2154,12 @@ void BuildForcedTables(sslm_model_s* h) {
 			is_special[static_cast<size_t>(sp.second)] = 1;
 		}
 	}
+	h->draftable.assign(tt.vocab_count, 0);
+	for (uint32_t id = 0; id < tt.vocab_count; ++id) {
+		const uint8_t* p = nullptr;
+		size_t len = 0;
+		h->draftable[id] = !is_special[id] && TokenBytes(tt, id, &p, &len) ? 1 : 0;
+	}
 	h->forced_table.resize(h->schemas.Count());
 	for (size_t i = 0; i < h->schemas.Count(); ++i) {
 		BuildForcedTableForSchema(h, *h->schemas.ByIndex(i), tt, is_special, &h->forced_table[i]);
@@ -2666,9 +2785,18 @@ sslm_status RunJumpSplitPasses(const sslm_model_s* model, superslm::SequenceLaye
 		    &state.k_channel_landing_saturation_count, &state.rope_q_saturation_count,
 		    &state.rope_k_saturation_count, threading);
 		if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
+		SfdApplySatRow(state, static_cast<int32_t>(r), 1, nullptr);
 	}
 	return SSLM_OK;
 }
+
+// Plan rev 1.3.3 §5.10.3 (slice J1-X): the exact jump-forward's pass, check and commit, after
+// PrefillWholeTokensImpl's pre-scan, page map and embed. Defined with the verb (below).
+struct ExactPass;
+sslm_status RunExactPasses(const sslm_model_s* model, superslm::SequenceLayerState& state, sslm_kv_pool_s* kv_pool,
+                           superslm::kv_pages::PageHolder* kv, const superslm::LayerWeights* layers,
+                           int8_t* embed_codes, superslm::CarriedScale* hidden_scales, int32_t admit_count,
+                           const sslm_workspace_s* ws, ExactPass* x);
 
 // Shared whole-token prefill loop -- design Sec8.1's "every layer" prefill semantics, the SAME
 // EmbedEntry+RunLayerLoop composition RunGreedyDecodeLoop's own RunWholeToken lambda uses for
@@ -2706,7 +2834,8 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
                                     sslm_workspace_s* ws, sslm_span_kind kind,
                                     sslm_schema bound_schema, uint32_t* walk_state,
                                     int64_t* forced_token_count, int32_t prewalked_prefix,
-                                    PrefillPrePassFn pre_pass, void* pre_pass_ctx, int32_t split_max_rows) {
+                                    PrefillPrePassFn pre_pass, void* pre_pass_ctx, int32_t split_max_rows,
+                                    ExactPass* exact) {
 	const superslm::SslmModelConfig& c = model->view.config;
 	const int32_t n = count < chunk_budget ? count : chunk_budget;
 	const superslm::SchemaEntry* schema_entry =
@@ -2838,6 +2967,12 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
 			if (est != superslm::SslmForwardStatus::Ok) return MapForwardStatus(est);
 			hidden_scales[static_cast<size_t>(i)] = embed_scale;
 		}
+		// Plan rev 1.3.3 §5.10.3: the exact jump-forward's pass, check and commit are their own
+		// (out of line, so the path below is unchanged).
+		if (exact) {
+			return RunExactPasses(model, state, kv_pool, kv, layers, embed_codes, hidden_scales.data(), admit_count,
+			                      ws, exact);
+		}
 
 		// Schema fast-decode plan §16 Q6 C: the split runs only where JumpSplitEngages says so
 		// (sslm_seq_jump_forward's short admissions on a host whose one-row pass threads), and in
@@ -2871,6 +3006,7 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
 			    // exactly one token takes the one-row split whatever `count` the caller sent.
 			    MatvecThreading(ws));
 			if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
+			SfdApplySatRow(state, 0, admit_count, nullptr);
 		}
 
 		// forward_sites.h: "a sequence resting between whole tokens carries a marker at layer
@@ -2909,7 +3045,8 @@ sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState
                                 sslm_workspace_s* ws, sslm_span_kind kind, sslm_schema bound_schema,
                                 uint32_t* walk_state, int64_t* forced_token_count,
                                 int32_t prewalked_prefix = 0, PrefillPrePassFn pre_pass = nullptr,
-                                void* pre_pass_ctx = nullptr, int32_t split_max_rows = 0) {
+                                void* pre_pass_ctx = nullptr, int32_t split_max_rows = 0,
+                                ExactPass* exact = nullptr) {
 	// Decode-threading plan §3.6, the prefill guard: a call that fails before committing a token
 	// -- a hook that broke exactly-once, an allocation failure (the exception arm, through
 	// CatchAllocationFailure), or any rejection -- has moved saturation counters that no K/V
@@ -2922,7 +3059,7 @@ sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState
 		return PrefillWholeTokensImpl(model, state, kv_pool, kv, limit, tokens, count,
 		                               chunk_budget, consumed, out_last_token, adapter, ws, kind,
 		                               bound_schema, walk_state, forced_token_count, prewalked_prefix,
-		                               pre_pass, pre_pass_ctx, split_max_rows);
+		                               pre_pass, pre_pass_ctx, split_max_rows, exact);
 	});
 	if (st != SSLM_OK && state.context_length == context_length_before) {
 		counters_before.RestoreTo(state);
@@ -3676,11 +3813,13 @@ inline bool MaybeInjectCpuFinishDegenerateLogitRow(int32_t* logit_row, int32_t v
 }
 
 inline void ConsumeCpuFinishDegenerateLogitRow() noexcept { g_cpu_g5_finish_row_fault_armed = false; }
+inline bool CpuFinishDegenerateLogitRowArmed() noexcept { return g_cpu_g5_finish_row_fault_armed; }
 
 extern "C" void ArmCpuFinishDegenerateLogitRowInjection() { g_cpu_g5_finish_row_fault_armed = true; }
 #else
 inline bool MaybeInjectCpuFinishDegenerateLogitRow(int32_t*, int32_t) { return false; }
 inline void ConsumeCpuFinishDegenerateLogitRow() noexcept {}
+inline bool CpuFinishDegenerateLogitRowArmed() noexcept { return false; }
 #endif  // SUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION
 
 // Schema fast-decode plan rev 1.3.3 §4.5 (slice TF, C16): the decode step's finish is a transaction.
@@ -3708,6 +3847,178 @@ public:
 private:
 	sslm_seq_s* seq_;
 };
+
+// Plan rev 1.3.3 §5.10.3 (slice J1-X): the decode step's finish, factored so the exact check runs the
+// same code. From a final hidden state at a walk state: the final norm, the logits (the legal-row
+// finish under a bound schema on a model with the exactness flag, M1; the full finish otherwise), then
+// greedy masked argmax or the damped-greedy mask and scorer, under `params` (NULL: greedy). Writes
+// only the scratch in `fs`, `*fresh` and the seams' logs; the caller commits.
+// - Damped: the anti-LM create or re-key is prepared into `*fresh` (PrepareAntiLm), and the scorer
+//   reads the state the commit will install; FinishOut::antilm is that state.
+// - `check`: the exact check's row. Its S-ROWS entry carries the check tag, its S-ROW capture goes
+//   to the check slot, and the CPU degenerate-row seam is never presented (the check runs only with
+//   no decode-only seam armed).
+// - The status exits are the decode step's own (S-FINISHEXIT included); `pfi` marks a
+//   ParallelForIncomplete from the logits hook, which the decode step rests explicitly.
+// Throws only std::bad_alloc (the no-workspace damped scorer, a fallback scratch).
+struct FinishScratch {
+	int8_t* final_codes = nullptr;
+	int64_t* wide_logits = nullptr;
+	int32_t* logit_row = nullptr;
+	int64_t* rms_wide = nullptr;       // nullptr: RmsNormSite's own scratch
+	int32_t* damped_indices = nullptr;
+	bool damped_scratch = false;       // the damped scorer's scratch is the workspace's
+};
+
+struct FinishOut {
+	sslm_status st = SSLM_OK;
+	bool pfi = false;
+	bool degenerate = false;  // the CPU degenerate-row seam presented its row (decode only)
+	int32_t token = -1;
+	superslm::AntiLmState* antilm = nullptr;  // damped: the state the scorer read
+};
+
+FinishOut FinishRow(const sslm_model_s* model, const sslm_seq_s* seq, const int8_t* hidden_codes,
+                    superslm::CarriedScale hidden_scale, uint32_t walk_state, const sslm_decode_params* params,
+                    const FinishScratch& fs, const sslm_workspace_s* ws, bool check, AntiLmPtr* fresh) {
+	FinishOut out;
+	const superslm::SslmModelConfig& c = model->view.config;
+	int32_t* const logit_row = fs.logit_row;
+	superslm::CarriedScale final_scale{};
+	// T-2139 closing round: rms_wide (carved from the workspace when supplied, nullptr otherwise)
+	// eliminates the ready_for_logits path's own last disclosed allocation (RmsNormSite's internal
+	// `wide` scratch, design commit 959336ad64's own recalibrated zero-allocation ruling).
+	superslm::SslmForwardStatus fst =
+	    superslm::RmsNormSite(hidden_codes, model->engine.final_norm_gain.data(), c.hidden_size, hidden_scale,
+	                          model->engine.final_norm_site_constant, fs.final_codes, &final_scale, "final_norm",
+	                          /*token_index=*/0, /*trace_hook_state=*/nullptr, fs.rms_wide);
+	if (fst == superslm::SslmForwardStatus::Ok && SfdFinishExitFails(/*kFinalNorm=*/1)) {
+		fst = superslm::SslmForwardStatus::CarriedScaleMantissaOutOfDomain;  // S-FINISHEXIT
+	}
+	if (fst != superslm::SslmForwardStatus::Ok) {
+		out.st = MapForwardStatus(fst);
+		return out;
+	}
+
+	// T-2851: the logits rows go through the workspace's parallel-for hook when one is installed;
+	// with none (or no workspace), LogitsSiteParallel runs LogitsSite itself.
+	//
+	// Schema fast-decode plan (rev 1.2.1) §4.1, slice M1: under a bound schema and the model's
+	// exactness flag, only the walk state's legal rows are computed (LogitsSiteLegalRows over the
+	// state's CSR ids, split over that list when a hook is installed). The positions it does not
+	// compute are overwritten with INT32_MIN by either masker below before anything reads them,
+	// because the mask page equals the CSR row. Unbound decode, and a model whose flag is clear, keep
+	// the full finish.
+	uint64_t finish_rows = 0;
+	if (seq->bound_schema && model->legal_row_finish) {
+		using superslm::schema_masks_detail::ReadLE32;
+		const uint32_t si = seq->bound_schema->index;
+		const superslm::SchemaEntry* fin_entry = model->schemas.ByIndex(si);
+		const uint32_t rb = ReadLE32(fin_entry->state_offsets_le + static_cast<size_t>(walk_state) * 4);
+		const uint32_t re = ReadLE32(fin_entry->state_offsets_le + static_cast<size_t>(walk_state + 1) * 4);
+		finish_rows = re - rb;
+		fst = superslm::LogitsSiteLegalRows(fs.final_codes, c.hidden_size, model->engine.head_weights,
+		                                    static_cast<size_t>(c.vocab_size), model->legal_ids[si].data() + rb,
+		                                    re - rb, fs.wide_logits, logit_row, ws ? &ws->parallel_for : nullptr);
+	} else {
+		finish_rows = c.vocab_size;
+		fst = superslm::LogitsSiteParallel(fs.final_codes, c.hidden_size, model->engine.head_weights,
+		                                   static_cast<int32_t>(c.vocab_size), fs.wide_logits, logit_row,
+		                                   ws ? &ws->parallel_for : nullptr);
+	}
+	if (fst == superslm::SslmForwardStatus::Ok) SfdLogRows(finish_rows, check);
+	if (fst == superslm::SslmForwardStatus::Ok && SfdFinishExitFails(/*kLogitsReject=*/2)) {
+		fst = superslm::SslmForwardStatus::LogitNarrowingOverflow;  // S-FINISHEXIT
+	}
+	if (fst != superslm::SslmForwardStatus::Ok) {
+		out.pfi = fst == superslm::SslmForwardStatus::ParallelForIncomplete;
+		out.st = MapForwardStatus(fst);
+		return out;
+	}
+
+	if (params && params->mode == SSLM_DECODE_MODE_DAMPED_GREEDY) {
+		const uint8_t* mask_bits;
+		if (seq->bound_schema) {
+			const superslm::SchemaEntry* entry = model->schemas.ByIndex(seq->bound_schema->index);
+			mask_bits = entry->mask_pages + static_cast<size_t>(walk_state) * model->schemas.MaskPageBytes();
+		} else {
+			// Sec6: free-text mode's mask is all-ones by construction and is built once at
+			// model-map time, never allocated or re-filled on the decode path.
+			mask_bits = model->damped_greedy_free_text_mask.data();
+		}
+		// Mask-first: narrow masked positions to INT32_MIN in place, matching ApplyMaskAndArgmax's
+		// own masking half exactly (superslm::ApplyMaskAndArgmax, forward_sites.cpp) -- damped greedy
+		// never sees a row this step has not already applied.
+		//
+		// T-2199 Phase D review fix M3 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): free-text's
+		// mask is all-ones by construction, so the loop is skipped when no schema is bound; run only
+		// when a real, possibly-non-all-ones schema mask page is in play. `mask_bits` itself is kept
+		// unconditionally -- it is still a required argument to DampedGreedyScoreAndArgmax below.
+		if (seq->bound_schema) {
+			for (uint32_t t = 0; t < c.vocab_size; ++t) {
+				if (!((mask_bits[static_cast<size_t>(t) >> 3] >> (t & 7)) & 1u)) logit_row[t] = INT32_MIN;
+			}
+		}
+		SfdCaptureRow(logit_row, c.vocab_size, check);
+		// Schema fast-decode plan §5.8: the create-or-re-key block, shared with the J1 verb. Plan
+		// rev 1.3.3 §4.5: prepared here, installed at the decode step's commit, so a finish that
+		// fails leaves the live state (and its order) as the call found it. The scorer reads the
+		// state the commit will install.
+		{
+			const sslm_status ast = PrepareAntiLm(seq, params->anti_lm_max_order, /*from_verb=*/false, fresh);
+			if (ast != SSLM_OK) {
+				out.st = ast;
+				return out;
+			}
+		}
+		superslm::AntiLmState* const antilm = *fresh ? fresh->get() : seq->damped_greedy_antilm;
+		int32_t produced_dg = -1;
+		bool refused = false;
+		const bool ok = fs.damped_scratch
+		                    ? superslm::DampedGreedyScoreAndArgmaxWithScratch(
+		                          logit_row, mask_bits, static_cast<int32_t>(c.vocab_size), params->top_k, antilm,
+		                          params->alpha_q15, params->q_ln2, params->q_b, params->q_c, fs.damped_indices,
+		                          fs.wide_logits, &produced_dg, &refused)
+		                    : superslm::DampedGreedyScoreAndArgmax(
+		                          logit_row, mask_bits, static_cast<int32_t>(c.vocab_size), params->top_k, antilm,
+		                          params->alpha_q15, params->q_ln2, params->q_b, params->q_c, &produced_dg,
+		                          &refused);
+		const bool exit_not_ok = SfdFinishExitFails(/*kDampedNotOk=*/3);     // S-FINISHEXIT
+		const bool exit_refused = SfdFinishExitFails(/*kDampedRefused=*/4);  // S-FINISHEXIT
+		// T-2199 Phase D review fix M4: in a batch these returns fire after earlier sequences may
+		// have advanced (the decode step's per-sequence rule); plan rev 1.3.3 §4.5's guard rests
+		// this one at its finish's entry.
+		if (!ok || exit_not_ok) {
+			out.st = SSLM_INVALID_ARGUMENT;  // domain rejection (k/vocab_size), plan Sec8 D1
+			return out;
+		}
+		if (refused || exit_refused) {
+			// Plan Sec7.5's own adopted refusal policy: abort this sequence's generation for this
+			// call rather than fall back to plain argmax, matching the shipped attention call site's
+			// SoftmaxKernelRefusedAfterGateAccepted precedent.
+			out.st = MapForwardStatus(superslm::SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted);
+			return out;
+		}
+		out.token = produced_dg;
+		out.antilm = antilm;
+		return out;
+	}
+
+	// G5-2 (design Sec4, T-2132): masking applies to int32 logits BEFORE argmax, indexed by the walk
+	// state; SSLM_SCHEMA_NONE keeps the plain ArgmaxLowestIndexTieBreak call.
+	int32_t produced = -1;
+	if (seq->bound_schema) {
+		const superslm::SchemaEntry* entry = model->schemas.ByIndex(seq->bound_schema->index);
+		const uint8_t* page = entry->mask_pages + static_cast<size_t>(walk_state) * model->schemas.MaskPageBytes();
+		if (!check) out.degenerate = MaybeInjectCpuFinishDegenerateLogitRow(logit_row, static_cast<int32_t>(c.vocab_size));
+		superslm::ApplyMaskAndArgmax(logit_row, page, static_cast<int32_t>(c.vocab_size), &produced);
+	} else {
+		produced = superslm::ArgmaxLowestIndexTieBreak(logit_row, static_cast<size_t>(c.vocab_size));
+	}
+	SfdCaptureRow(logit_row, c.vocab_size, check);
+	out.token = produced;
+	return out;
+}
 
 // P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, third confirmation pass): renamed
 // to *Impl and wrapped (same rename-and-wrap convention as PrefillWholeTokens/*Impl, above) --
@@ -3992,6 +4303,7 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 			    /*q_width=*/static_cast<size_t>(c.num_attention_heads) * c.head_dim,
 			    MatvecThreading(ws));
 			if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
+			SfdApplySatRow(seq->state, 0, 1, nullptr);
 
 			if (seq->state.layer_index < c.num_hidden_layers) {
 				// The requested layer_budget did not reach the end of this token -- pending,
@@ -4010,56 +4322,18 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 		// FinishGuard). Nothing below writes the sequence until the commit, except the explicit
 		// ParallelForIncomplete rest, which the guard repeats.
 		FinishGuard guard(seq);
-		superslm::CarriedScale final_scale{};
-		// T-2139 closing round: rms_wide (carved from the workspace when supplied, nullptr
-		// otherwise -- see this function's own carving block above) eliminates the ready_for_logits
-		// path's own last disclosed allocation (RmsNormSite's internal `wide` scratch, design
-		// commit 959336ad64's own recalibrated zero-allocation ruling for this specific path).
-		superslm::SslmForwardStatus fst =
-		    superslm::RmsNormSite(seq->state.hidden_codes, model->engine.final_norm_gain.data(),
-		                           c.hidden_size, seq->state.hidden_scale,
-		                           model->engine.final_norm_site_constant, final_codes,
-		                           &final_scale, "final_norm", /*token_index=*/0,
-		                           /*trace_hook_state=*/nullptr, rms_wide);
-		if (fst == superslm::SslmForwardStatus::Ok && SfdFinishExitFails(/*kFinalNorm=*/1)) {
-			fst = superslm::SslmForwardStatus::CarriedScaleMantissaOutOfDomain;  // S-FINISHEXIT
-		}
-		if (fst != superslm::SslmForwardStatus::Ok) return MapForwardStatus(fst);
-
-		// T-2851: the logits rows go through the workspace's parallel-for hook when one is
-		// installed; with none (or no workspace), LogitsSiteParallel runs LogitsSite itself.
-		//
-		// Schema fast-decode plan (rev 1.2.1) §4.1, slice M1: under a bound schema and the model's
-		// exactness flag, only the current state's legal rows are computed (LogitsSiteLegalRows over
-		// the state's CSR ids, split over that list when a hook is installed). The positions it does
-		// not compute are overwritten with INT32_MIN by either masker below before anything reads
-		// them, because the mask page equals the CSR row. Unbound decode, and a model whose flag is
-		// clear, keep the full finish.
-		uint64_t finish_rows = 0;
-		if (seq->bound_schema && model->legal_row_finish) {
-			using superslm::schema_masks_detail::ReadLE32;
-			const uint32_t si = seq->bound_schema->index;
-			const superslm::SchemaEntry* fin_entry = model->schemas.ByIndex(si);
-			const uint32_t rb =
-			    ReadLE32(fin_entry->state_offsets_le + static_cast<size_t>(seq->dfa_walk_state) * 4);
-			const uint32_t re =
-			    ReadLE32(fin_entry->state_offsets_le + static_cast<size_t>(seq->dfa_walk_state + 1) * 4);
-			finish_rows = re - rb;
-			fst = superslm::LogitsSiteLegalRows(final_codes, c.hidden_size, model->engine.head_weights,
-			                                    static_cast<size_t>(c.vocab_size),
-			                                    model->legal_ids[si].data() + rb, re - rb, wide_logits,
-			                                    logit_row, ws ? &ws->parallel_for : nullptr);
-		} else {
-			finish_rows = c.vocab_size;
-			fst = superslm::LogitsSiteParallel(final_codes, c.hidden_size, model->engine.head_weights,
-			                                    static_cast<int32_t>(c.vocab_size), wide_logits,
-			                                    logit_row, ws ? &ws->parallel_for : nullptr);
-		}
-		if (fst == superslm::SslmForwardStatus::Ok) SfdLogRows(finish_rows);
-		if (fst == superslm::SslmForwardStatus::Ok && SfdFinishExitFails(/*kLogitsReject=*/2)) {
-			fst = superslm::SslmForwardStatus::LogitNarrowingOverflow;  // S-FINISHEXIT
-		}
-		if (fst == superslm::SslmForwardStatus::ParallelForIncomplete) {
+		// Plan rev 1.3.3 §5.10.3: the finish proper is FinishRow, which the exact check runs too.
+		FinishScratch fs;
+		fs.final_codes = final_codes;
+		fs.wide_logits = wide_logits;
+		fs.logit_row = logit_row;
+		fs.rms_wide = rms_wide;
+		fs.damped_indices = damped_indices;
+		fs.damped_scratch = ws_usable;
+		AntiLmPtr fresh = NoAntiLm();
+		const FinishOut fo = FinishRow(model, seq, seq->state.hidden_codes, seq->state.hidden_scale,
+		                               seq->dfa_walk_state, params, fs, ws, /*check=*/false, &fresh);
+		if (fo.pfi) {
 			// The host's run omitted, repeated or invented a task index; no token was produced.
 			// Rest the sequence exactly as the dead end does -- final hidden state kept,
 			// layer_index 0, ready_for_logits re-armed, walk state and current_token untouched --
@@ -4068,9 +4342,9 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 			// refusal in this function.
 			seq->state.layer_index = 0;
 			seq->ready_for_logits = true;
-			return MapForwardStatus(fst);
+			return fo.st;
 		}
-		if (fst != superslm::SslmForwardStatus::Ok) return MapForwardStatus(fst);
+		if (fo.st != SSLM_OK) return fo.st;
 
 		// T-2199 Phase D2 (plan Sec8 D2, Sec6 "mask-first"): damped-greedy mode operates on the
 		// SAME masked row the schema branch below produces -- the mask is resolved FIRST (the
@@ -4081,79 +4355,8 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 		// byte-for-byte unchanged for mode=SSLM_DECODE_MODE_GREEDY (Poirot-style no-regression
 		// discipline, this ticket's own build log).
 		if (params->mode == SSLM_DECODE_MODE_DAMPED_GREEDY) {
-			const uint8_t* mask_bits;
-			if (seq->bound_schema) {
-				const superslm::SchemaEntry* entry = model->schemas.ByIndex(seq->bound_schema->index);
-				mask_bits = entry->mask_pages +
-				            static_cast<size_t>(seq->dfa_walk_state) * model->schemas.MaskPageBytes();
-			} else {
-				// Sec6: free-text mode's mask is all-ones by construction and is built once at
-				// model-map time, never allocated or re-filled on the decode path.
-				mask_bits = model->damped_greedy_free_text_mask.data();
-			}
-			// Mask-first: narrow masked positions to INT32_MIN in place, matching
-			// ApplyMaskAndArgmax's own masking half exactly (superslm::ApplyMaskAndArgmax,
-			// forward_sites.cpp) -- damped greedy never sees a row this step has not already
-			// applied.
-			//
-			// T-2199 Phase D review fix M3 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): free-
-			// text's mask is all-ones by construction (immediately above) -- every bit test in
-			// this loop is provably false in that case, so the loop narrows nothing while still
-			// paying a full O(vocab_size) bit-test pass per sequence per token (~151,936 tests at
-			// the real target vocab). Skipped entirely when `seq->bound_schema` is null; run only
-			// when a real, possibly-non-all-ones schema mask page is in play. `mask_bits` itself
-			// (the model-owned ~19 KB free-text mask) is kept unconditionally -- it is still a
-			// required argument to DampedGreedyScoreAndArgmax below, whichever branch built it.
-			if (seq->bound_schema) {
-				for (uint32_t t = 0; t < c.vocab_size; ++t) {
-					if (!((mask_bits[static_cast<size_t>(t) >> 3] >> (t & 7)) & 1u)) {
-						logit_row[t] = INT32_MIN;
-					}
-				}
-			}
-			SfdCaptureRow(logit_row, c.vocab_size);
-			// Schema fast-decode plan §5.8: the create-or-re-key block, shared with the J1 verb. Plan
-			// rev 1.3.3 §4.5: prepared here, installed at the commit, so a finish that fails below
-			// leaves the live state (and its order) as this call found it. The scorer reads the state
-			// the commit will install.
-			AntiLmPtr fresh = NoAntiLm();
-			{
-				const sslm_status ast = PrepareAntiLm(seq, params->anti_lm_max_order, /*from_verb=*/false, &fresh);
-				if (ast != SSLM_OK) return ast;
-			}
-			superslm::AntiLmState* const antilm = fresh ? fresh.get() : seq->damped_greedy_antilm;
-			int32_t produced_dg = -1;
-			bool refused = false;
-			const bool ok = ws_usable
-			                    ? superslm::DampedGreedyScoreAndArgmaxWithScratch(
-			                          logit_row, mask_bits, static_cast<int32_t>(c.vocab_size),
-			                          params->top_k, antilm, params->alpha_q15,
-			                          params->q_ln2, params->q_b, params->q_c, damped_indices,
-			                          wide_logits, &produced_dg, &refused)
-			                    : superslm::DampedGreedyScoreAndArgmax(
-			                          logit_row, mask_bits, static_cast<int32_t>(c.vocab_size),
-			                          params->top_k, antilm, params->alpha_q15,
-			                          params->q_ln2, params->q_b, params->q_c, &produced_dg,
-			                          &refused);
-			// T-2199 Phase D review fix M4 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): this
-			// return (and `refused` below) fires from INSIDE the per-sequence loop, after earlier
-			// sequences in this same batch may already have had current_token/state.layer_index/
-			// dfa_walk_state written -- this function's own "reject leaves state unperturbed"
-			// language (this function's top, above the pre-loop validation block) was never a
-			// promise this deep in the loop: every pre-existing `MapForwardStatus`-routed return in
-			// this same per-sequence body (EmbedEntry/RunLayerLoop/RmsNormSite/LogitsSite failures,
-			// above) already breaks it identically -- this is that SAME pre-existing pattern, not a
-			// new one Phase D introduced. Named per the review because the surrounding comments
-			// assert the contract more broadly than this function has ever actually delivered it.
-			const bool exit_not_ok = SfdFinishExitFails(/*kDampedNotOk=*/3);     // S-FINISHEXIT
-			const bool exit_refused = SfdFinishExitFails(/*kDampedRefused=*/4);  // S-FINISHEXIT
-			if (!ok || exit_not_ok) return SSLM_INVALID_ARGUMENT;  // domain rejection (k/vocab_size), plan Sec8 D1
-			if (refused || exit_refused) {
-				// Plan Sec7.5's own adopted refusal policy: abort this sequence's generation for
-				// this call rather than fall back to plain argmax, matching the shipped attention
-				// call site's SoftmaxKernelRefusedAfterGateAccepted precedent.
-				return MapForwardStatus(superslm::SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted);
-			}
+			int32_t produced_dg = fo.token;
+			superslm::AntiLmState* const antilm = fo.antilm;
 			// S-CHOICE (test seam): peeked here, spent at the commit, so a failure below keeps it armed.
 			const bool pinned_dg = seq->bound_schema && SfdPeekChoice(&produced_dg);
 			bool dead_end_dg = false;
@@ -4203,15 +4406,10 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 		// the sequence's own DFA-walk-state (design Sec4's architecture table) -- SSLM_SCHEMA_NONE
 		// (bound_schema == nullptr) is byte-for-byte unchanged from pre-G5 output (no masking, the
 		// existing ArgmaxLowestIndexTieBreak call, unmodified).
-		int32_t produced;
+		int32_t produced = fo.token;
 		if (seq->bound_schema) {
 			const superslm::SchemaEntry* entry = model->schemas.ByIndex(seq->bound_schema->index);
-			const uint8_t* page = entry->mask_pages +
-			                       static_cast<size_t>(seq->dfa_walk_state) * model->schemas.MaskPageBytes();
-			const bool degenerate =
-			    MaybeInjectCpuFinishDegenerateLogitRow(logit_row, static_cast<int32_t>(c.vocab_size));
-			superslm::ApplyMaskAndArgmax(logit_row, page, static_cast<int32_t>(c.vocab_size), &produced);
-			SfdCaptureRow(logit_row, c.vocab_size);
+			const bool degenerate = fo.degenerate;
 			const bool pinned = SfdPeekChoice(&produced);  // S-CHOICE (test seam), spent at the commit
 			// S2/D-SLM3476 (design Sec14.1, Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): the walk
 			// advances to whatever state `produced` reaches ONLY when a matching CSR transition
@@ -4262,9 +4460,6 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 				continue;
 			}
 			seq->dfa_walk_state = next_state;
-		} else {
-			produced = superslm::ArgmaxLowestIndexTieBreak(logit_row, static_cast<size_t>(c.vocab_size));
-			SfdCaptureRow(logit_row, c.vocab_size);
 		}
 		out_tokens[i] = produced;
 		seq->current_token = produced;
@@ -4581,10 +4776,298 @@ sslm_status JumpPrePass(void* ctx, int32_t admit_count) {
 // run serially there is no loss to recover (r(M) < M), so nothing splits.
 constexpr int32_t kJumpForwardSplitMaxTokens = 7;
 
+// ---------------------------------------------------------------------------------------------------
+// Plan rev 1.3.3 §5.10 (slice J1-X): exact mode.
+// ---------------------------------------------------------------------------------------------------
+
+// One exact call's pass: what the verb's draft walk fixed, the anti-LM state the pre-pass prepared, and
+// what the commit kept. `tokens` and `walk_after` hold the h rows [p, d1..dk]; walk_after[r] is the walk
+// state after row r's token (walk_after[0] is the state after p, the sequence's own).
+struct ExactPass {
+	sslm_seq_s* seq = nullptr;
+	const sslm_decode_params* params = nullptr;  // null: greedy
+	const int32_t* tokens = nullptr;
+	const uint32_t* walk_after = nullptr;
+	int32_t split_max_rows = 0;
+	// ExactPrePass: §5.10.7's prepare, under damped params and h >= 2 only.
+	AntiLmPtr fresh = NoAntiLm();
+	bool damped = false;
+	// The commit: rows 0 .. confirmed (the pending token and `confirmed` drafted tokens).
+	bool committed = false;
+	int32_t confirmed = 0;
+};
+
+// §5.10.7: the prepare, after every refusal check and before any row runs, so a failed prepare returns
+// its status with nothing changed (cell 5.X7). The pass's bad-alloc slot is consulted after it (cell 5.X1),
+// as JumpPrePass consults it.
+sslm_status ExactPrePass(void* ctx, int32_t admit_count) {
+	ExactPass& x = *static_cast<ExactPass*>(ctx);
+	if (admit_count >= 2 && x.params && x.params->mode == SSLM_DECODE_MODE_DAMPED_GREEDY) {
+		x.damped = true;
+		const sslm_status st = PrepareAntiLm(x.seq, x.params->anti_lm_max_order, /*from_verb=*/true, &x.fresh);
+		if (st != SSLM_OK) return st;
+	}
+	superslm::internal::MaybeThrowInjectedJumpForwardPassAllocFault();
+	return SSLM_OK;
+}
+
+// §5.10.3/§5.10.4/§5.10.6: the h admitted rows' pass, the check between rows and the commit of rows
+// 0 .. j. Called by PrefillWholeTokensImpl once its pre-scan has admitted h = admit_count rows, their
+// pages are mapped and their embeddings are in `embed_codes`. Everything the check needs is allocated
+// before the first row runs. Returns a non-OK status, with nothing committed, only when no row is kept
+// (the batched pass, or under the split row 0's pass, failed); the caller's guard then restores the
+// counters. Otherwise commits and returns OK, whatever the check found. Kept out of line so the
+// prefill path's unexact code is unchanged.
+#if defined(_MSC_VER)
+__declspec(noinline)
+#elif defined(__GNUC__)
+__attribute__((noinline))
+#endif
+sslm_status RunExactPasses(const sslm_model_s* model, superslm::SequenceLayerState& state, sslm_kv_pool_s* kv_pool,
+                           superslm::kv_pages::PageHolder* kv, const superslm::LayerWeights* layers,
+                           int8_t* embed_codes, superslm::CarriedScale* hidden_scales, int32_t admit_count,
+                           const sslm_workspace_s* ws, ExactPass* x) {
+	const superslm::SslmModelConfig& c = model->view.config;
+	const int32_t h = admit_count;
+	const size_t H = c.hidden_size;
+	sslm_seq_s* const seq = x->seq;
+
+	// Per-row counts (§5.10.4) and the check's finish scratch, the decode step's own carving.
+	std::vector<uint64_t> row_counts(static_cast<size_t>(h) * 5, 0);
+	const WorkspaceLayout layout = ws ? ComputeWorkspaceLayout(model, ws->config) : WorkspaceLayout{};
+	const bool ws_usable = ws && !layout.overflowed && ws->buf_size >= layout.total_bytes;
+	std::vector<int8_t> final_codes_fallback;
+	std::vector<int64_t> wide_logits_fallback;
+	std::vector<int32_t> logit_row_fallback;
+	FinishScratch fs;
+	if (ws_usable) {
+		uint8_t* const base = static_cast<uint8_t*>(ws->buf);
+		fs.final_codes = reinterpret_cast<int8_t*>(base + layout.final_codes_offset);
+		fs.wide_logits = reinterpret_cast<int64_t*>(base + layout.wide_logits_offset);
+		fs.logit_row = reinterpret_cast<int32_t*>(base + layout.logit_row_offset);
+		fs.rms_wide = reinterpret_cast<int64_t*>(base + layout.rms_wide_offset);
+		fs.damped_indices = layout.damped_indices_bytes > 0
+		                        ? reinterpret_cast<int32_t*>(base + layout.damped_indices_offset)
+		                        : nullptr;
+		fs.damped_scratch = true;
+	} else if (h >= 2) {
+		final_codes_fallback.assign(H, 0);
+		wide_logits_fallback.assign(static_cast<size_t>(c.vocab_size), 0);
+		logit_row_fallback.assign(static_cast<size_t>(c.vocab_size), 0);
+		fs.final_codes = final_codes_fallback.data();
+		fs.wide_logits = wide_logits_fallback.data();
+		fs.logit_row = logit_row_fallback.data();
+	}
+	const superslm::SaturationCounters before = superslm::SaturationCounters::Snapshot(state);
+	const int32_t verify = SfdVerifyForce();
+
+	// Row r's check: the decode step's finish at row r (its final codes and scale, the walk state after
+	// its token), against d_{r+1}. False on a mismatch or a failure (a status, or std::bad_alloc).
+	auto check_row = [&](int32_t r) -> bool {
+		AntiLmPtr unused = NoAntiLm();
+		FinishOut fo;
+		try {
+			fo = FinishRow(model, seq, embed_codes + static_cast<size_t>(r) * H, hidden_scales[r], x->walk_after[r],
+			               x->params, fs, ws, /*check=*/true, &unused);
+		} catch (const std::bad_alloc&) {
+			return false;
+		}
+		if (fo.st != SSLM_OK) return false;
+		if (verify == 1) return true;   // S-VERIFY: every check row confirms
+		if (verify == 2) return false;  // S-VERIFY: none does
+		return fo.token == x->tokens[r + 1];
+	};
+	// §5.10.7: a confirmed token enters the history once its row's pass has succeeded. False (nothing fed)
+	// on an allocation failure, which ends the check before that row.
+	auto feed = [&](int32_t tok) -> bool {
+		if (!x->damped || !seq->damped_greedy_antilm) return true;
+		superslm::AntiLmPendingUpdate update;
+		try {
+			superslm::AntiLmReserveUpdate(seq->damped_greedy_antilm, tok, &update);
+		} catch (const std::bad_alloc&) {
+			return false;
+		}
+		superslm::AntiLmApplyUpdate(seq->damped_greedy_antilm, &update);
+		return true;
+	};
+	auto install = [&]() {
+		if (x->damped) InstallAntiLm(seq, std::move(x->fresh), x->params->anti_lm_max_order);
+	};
+
+	const superslm::GemmThreading threading = MatvecThreading(ws);
+	int32_t jj = 0;
+	if (JumpSplitEngages(c, ws, h, x->split_max_rows)) {
+		// §5.10.6: the check runs between the one-row passes, so no rejected row is computed.
+		for (int32_t r = 0; r < h; ++r) {
+			SfdLogLayerRows(/*kLayerRowsBatched=*/0, 1);
+			sslm_status st = SSLM_OK;
+			try {
+				const superslm::SslmForwardStatus fst = superslm::RunLayerLoopChunkBatched(
+				    embed_codes + static_cast<size_t>(r) * H, hidden_scales + r, 1, layers, c.num_hidden_layers,
+				    c.hidden_size, c.head_dim, c.num_key_value_heads, c.intermediate_size, c.context_cap,
+				    state.context_length + r, model->view.rope_tables, ViewOf(kv_pool, kv),
+				    /*option_g_fused_k_landing=*/false, &state.kv_saturation_count, /*site_prefix=*/{}, nullptr,
+				    /*q_width=*/static_cast<size_t>(c.num_attention_heads) * c.head_dim,
+				    &state.kv_landing_saturation_count, &state.k_channel_landing_saturation_count,
+				    &state.rope_q_saturation_count, &state.rope_k_saturation_count, threading,
+				    row_counts.data() + static_cast<size_t>(r) * 5);
+				if (fst != superslm::SslmForwardStatus::Ok) st = MapForwardStatus(fst);
+			} catch (const std::bad_alloc&) {
+				st = SSLM_ALLOCATION_FAILED;
+			}
+			if (st != SSLM_OK) {
+				if (r == 0) return st;  // no row kept
+				break;                  // rows 0 .. r - 1 are kept (§5.10.3)
+			}
+			SfdApplySatRow(state, r, 1, row_counts.data() + static_cast<size_t>(r) * 5);
+			if (r == 0) {
+				install();
+			} else if (!feed(x->tokens[r])) {
+				break;
+			}
+			jj = r;
+			if (r == h - 1 || !check_row(r)) break;
+		}
+	} else {
+		SfdLogLayerRows(/*kLayerRowsBatched=*/0, static_cast<uint64_t>(h));
+		const superslm::SslmForwardStatus fst = superslm::RunLayerLoopChunkBatched(
+		    embed_codes, hidden_scales, static_cast<size_t>(h), layers, c.num_hidden_layers, c.hidden_size,
+		    c.head_dim, c.num_key_value_heads, c.intermediate_size, c.context_cap, state.context_length,
+		    model->view.rope_tables, ViewOf(kv_pool, kv), /*option_g_fused_k_landing=*/false,
+		    &state.kv_saturation_count, /*site_prefix=*/{}, nullptr,
+		    /*q_width=*/static_cast<size_t>(c.num_attention_heads) * c.head_dim, &state.kv_landing_saturation_count,
+		    &state.k_channel_landing_saturation_count, &state.rope_q_saturation_count,
+		    &state.rope_k_saturation_count, threading, row_counts.data());
+		if (fst != superslm::SslmForwardStatus::Ok) return MapForwardStatus(fst);
+		SfdApplySatRow(state, 0, h, row_counts.data());
+		install();
+		for (int32_t r = 0; r + 1 < h; ++r) {
+			if (!check_row(r) || !feed(x->tokens[r + 1])) break;
+			jj = r + 1;
+		}
+	}
+
+	// The commit (§5.10.3): rows 0 .. jj. No-throw from here.
+	std::memcpy(state.hidden_codes, embed_codes + static_cast<size_t>(jj) * H, H);
+	state.hidden_scale = hidden_scales[jj];
+	state.layer_index = 0;
+	state.context_length += jj + 1;
+	superslm::SaturationCounters kept = before;
+	for (int32_t r = 0; r <= jj; ++r) {
+		const uint64_t* rc = row_counts.data() + static_cast<size_t>(r) * 5;
+		kept.kv += rc[0];
+		kept.kv_landing += rc[1];
+		kept.k_channel_landing += rc[2];
+		kept.rope_q += rc[3];
+		kept.rope_k += rc[4];
+	}
+	kept.RestoreTo(state);
+	seq->dfa_walk_state = x->walk_after[jj];
+	x->confirmed = jj;
+	x->committed = true;
+	return SSLM_OK;
+}
+
+// The exact verb past canonical mode's shared checks (sequence locked, layer_index 0, bind eligibility
+// cleared, a schema bound). §5.10.3's precondition, the draft walk, the pass and the rollback.
+sslm_status SeqJumpExact(const sslm_model_s* model, sslm_seq_s* seq, int32_t chunk_budget,
+                         const sslm_decode_params* params, const sslm_jump_options* opts, sslm_workspace ws,
+                         int32_t* out_forced, int32_t* out_forced_count) {
+	// No pending choice token (after the prompt): decode_step produces the first token.
+	if (seq->ready_for_logits || seq->current_token < 0) return SSLM_OK;
+	// §5.10.8: without the exactness predicate a check row would need the full finish; a no-op.
+	if (!model->legal_row_finish) return SSLM_OK;
+	const superslm::SslmModelConfig& c = model->view.config;
+	const int64_t limit = HolderLimit(model, seq->kv_mode, seq->kv_budget, seq->kv_origin);
+	const int64_t headroom = limit - seq->state.context_length;
+	if (headroom <= 0) return SSLM_OK;  // h = 0: the next decode_step returns the limit status
+	// G-4: k is evaluated after the clip; a clipped k = 0 is a no-op.
+	const int64_t kmax64 = std::min<int64_t>(static_cast<int64_t>(chunk_budget) - 1, headroom - 1);
+	if (kmax64 <= 0) return SSLM_OK;
+	const int32_t kmax = static_cast<int32_t>(kmax64);
+	const uint32_t si = seq->bound_schema->index;
+	const superslm::SchemaEntry* entry = model->schemas.ByIndex(si);
+
+	std::vector<int32_t> tokens(static_cast<size_t>(kmax) + 1);
+	std::vector<uint32_t> walk_after(static_cast<size_t>(kmax) + 1);
+	tokens[0] = seq->current_token;
+	walk_after[0] = seq->dfa_walk_state;
+	int32_t avail;
+	if (opts->draft) {
+		avail = std::min(opts->draft_count, kmax);
+		for (int32_t i = 0; i < avail; ++i) tokens[static_cast<size_t>(i) + 1] = opts->draft[i];
+	} else {
+		avail = std::min(ForcedChain(model, si, seq->dfa_walk_state, tokens.data() + 1, kmax), kmax);
+	}
+	// The draft walk: truncated at the first token out of range, special, byteless or illegal at its
+	// walk state, keeping the state after each drafted token.
+	const bool legality = !SfdDraftWalkLegalityDisabled();
+	int32_t k = 0;
+	uint32_t w = seq->dfa_walk_state;
+	for (; k < avail; ++k) {
+		const int32_t t = tokens[static_cast<size_t>(k) + 1];
+		if (t < 0 || static_cast<uint32_t>(t) >= c.vocab_size) break;
+		uint32_t nx = w;
+		if (legality) {
+			if (static_cast<size_t>(t) >= model->draftable.size() || !model->draftable[static_cast<size_t>(t)]) break;
+			if (!model->schemas.Transition(*entry, w, static_cast<uint32_t>(t), &nx)) break;
+		} else {
+			(void)model->schemas.Transition(*entry, w, static_cast<uint32_t>(t), &nx);
+		}
+		w = nx;
+		walk_after[static_cast<size_t>(k) + 1] = w;
+	}
+	if (k == 0) return SSLM_OK;  // the pending token stays pending
+	// The seam rule (G27): S-CHOICE and the degenerate-row injection belong to decode_step; with either
+	// armed the check confirms nothing and the call commits p alone.
+	{
+		int32_t unused = -1;
+		if (SfdPeekChoice(&unused) || CpuFinishDegenerateLogitRowArmed()) k = 0;
+	}
+
+	ExactPass x;
+	x.seq = seq;
+	x.params = params;
+	x.tokens = tokens.data();
+	x.walk_after = walk_after.data();
+	x.split_max_rows = kJumpForwardSplitMaxTokens;
+	const uint32_t mapped_before = superslm::kv_pages::HolderMapped(seq->kv);
+	const int32_t h = k + 1;
+	int32_t consumed = 0;
+	uint32_t walk = seq->dfa_walk_state;
+	const sslm_status st = PrefillWholeTokens(
+	    const_cast<sslm_model_s*>(model), seq->state, seq->pool, seq->kv, limit, tokens.data(), h, h, &consumed,
+	    nullptr, seq->adapter_handle, ws, SSLM_SPAN_SCHEMA_CONTENT, seq->bound_schema, &walk, nullptr,
+	    /*prewalked_prefix=*/1, &ExactPrePass, &x, kJumpForwardSplitMaxTokens, &x);
+	// §5.10.4: the pages above the committed context go back, on every exit.
+	if (!SfdHolderUnmapTailStubbed()) {
+		const int64_t B = seq->pool->page_positions;
+		const uint32_t cover = static_cast<uint32_t>((seq->state.context_length + B - 1) / B);
+		(void)superslm::kv_pages::HolderUnmapTail(seq->kv, std::max(mapped_before, cover));
+	}
+	if (!x.committed) return st == SSLM_OK ? SSLM_OK : st;
+	seq->ready_for_logits = true;
+	seq->current_token = tokens[static_cast<size_t>(x.confirmed)];
+	for (int32_t i = 0; i < x.confirmed; ++i) out_forced[i] = tokens[static_cast<size_t>(i) + 1];
+	*out_forced_count = x.confirmed;
+	return SSLM_OK;
+}
+
 sslm_status SeqJumpForwardImpl(sslm_model model, sslm_seq seq, int32_t chunk_budget,
-                               const sslm_decode_params* params, sslm_workspace ws, int32_t* out_forced,
-                               int32_t cap, int32_t* out_forced_count) {
+                               const sslm_decode_params* params, const sslm_jump_options* opts, sslm_workspace ws,
+                               int32_t* out_forced, int32_t cap, int32_t* out_forced_count) {
 	if (!out_forced_count) return SSLM_INVALID_ARGUMENT;
+	// Plan rev 1.3.3 §5.10.2: the options' refusals come first, with nothing changed (the count unwritten,
+	// the sequence still bindable).
+	bool exact = false;
+	if (opts) {
+		if (opts->struct_size != sizeof(sslm_jump_options)) return SSLM_INVALID_ARGUMENT;
+		if (opts->mode != SSLM_JUMP_CANONICAL && opts->mode != SSLM_JUMP_EXACT) return SSLM_INVALID_ARGUMENT;
+		if (opts->draft_count < 0) return SSLM_INVALID_ARGUMENT;
+		if (!opts->draft && opts->draft_count > 0) return SSLM_INVALID_ARGUMENT;
+		if (opts->mode == SSLM_JUMP_CANONICAL && (opts->draft || opts->draft_count != 0)) return SSLM_INVALID_ARGUMENT;
+		exact = opts->mode == SSLM_JUMP_EXACT;
+	}
 	*out_forced_count = 0;
 	if (!model || !seq || chunk_budget < 1 || cap < chunk_budget || !out_forced) return SSLM_INVALID_ARGUMENT;
 	if (params) {
@@ -4600,6 +5083,7 @@ sslm_status SeqJumpForwardImpl(sslm_model model, sslm_seq seq, int32_t chunk_bud
 	// call included.
 	seq->bind_eligible = false;
 	if (!seq->bound_schema) return SSLM_OK;  // no-op: nothing is forced without a schema
+	if (exact) return SeqJumpExact(model, seq, chunk_budget, params, opts, ws, out_forced, out_forced_count);
 	const uint32_t si = seq->bound_schema->index;
 	// §5.4: the pending choice token -- produced (and walked) by the last decode, not yet embedded.
 	const int32_t pending =
@@ -4660,10 +5144,11 @@ extern "C" sslm_status sslm_seq_forced_tokens(sslm_model model, sslm_seq seq, in
 }
 
 extern "C" sslm_status sslm_seq_jump_forward(sslm_model model, sslm_seq seq, int32_t chunk_budget,
-                                             const sslm_decode_params* params, sslm_workspace ws,
-                                             int32_t* out_forced, int32_t cap, int32_t* out_forced_count) {
+                                             const sslm_decode_params* params, const sslm_jump_options* opts,
+                                             sslm_workspace ws, int32_t* out_forced, int32_t cap,
+                                             int32_t* out_forced_count) {
 	return CatchAllocationFailure([&]() -> sslm_status {
-		return SeqJumpForwardImpl(model, seq, chunk_budget, params, ws, out_forced, cap, out_forced_count);
+		return SeqJumpForwardImpl(model, seq, chunk_budget, params, opts, ws, out_forced, cap, out_forced_count);
 	});
 }
 

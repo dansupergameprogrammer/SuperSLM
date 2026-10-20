@@ -1238,6 +1238,10 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 // page_positions`, and for the chunk `context_length_start + chunk_tokens <= mapped_pages *
 // page_positions` -- else `KvPageUnmapped`. Attention reads the K/V rows one page run at a time
 // (§3.2 item 3); for the one-page view that is one run of the whole width, the call made before.
+// Schema fast-decode plan rev 1.3.3 §5.10.4: the chunk overload's appended `out_row_saturation_counts`,
+// when non-null, receives each row's share of the five saturation counters, 5 per row in the order kv,
+// kv_landing, k_channel_landing, rope_q, rope_k (`chunk_tokens * 5` entries, added to, so the caller
+// zeroes them). The totals are moved exactly as without it. Default nullptr: every caller is unchanged.
 SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers, uint32_t num_hidden_layers,
                                uint32_t layer_budget, size_t hidden_size, size_t head_dim,
                                size_t num_key_value_heads, size_t intermediate_size, int64_t context_cap,
@@ -1256,7 +1260,8 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
                                            size_t q_width, uint64_t* out_kv_landing_saturation_count,
                                            uint64_t* out_k_channel_landing_saturation_count,
                                            uint64_t* out_rope_q_saturation_count,
-                                           uint64_t* out_rope_k_saturation_count, const GemmThreading& threading);
+                                           uint64_t* out_rope_k_saturation_count, const GemmThreading& threading,
+                                           uint64_t* out_row_saturation_counts = nullptr);
 
 // (design Sec31.2's own "int64-input, __int128-intermediate sibling of
 // the RoPE pair primitive, Q2.30 tables unchanged" -- Sec12 "Wide-RoPE

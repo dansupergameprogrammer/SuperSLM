@@ -4,9 +4,9 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
-Version 1.15.0 in progress (schema fast-decode plan rev 1.2.1, slices M1 and J1; CPU backend only). Two C
-verbs are appended (53 C verbs in all); no existing declaration, struct layout, status ordinal or save
-format changes, and no artifact needs reconversion.
+Version 1.16.0 in progress (schema fast-decode plan rev 1.2.1, slices M1 and J1, and rev 1.3.3, slices TF
+and J1-X; CPU backend only). Two C verbs are appended (53 C verbs in all); no released declaration, struct
+layout, status ordinal or save format changes, and no artifact needs reconversion.
 
 - **Masked finish.** Under a bound schema, when the model's hidden size is at most 131,071 (computed once
   at `sslm_model_map`), the token finish computes only the head rows of the tokens the schema allows at
@@ -49,13 +49,25 @@ format changes, and no artifact needs reconversion.
   retry recomputes the finish only and equals a run that never failed; a deterministic refusal returns
   the same status on every retry and changes nothing. In a batch, earlier sequences keep their advance,
   as before. Success paths, tokens and save blobs are unchanged. There is no option to keep the old rest.
+- **Exact jump-forward (1.16.0; plan rev 1.3.3, slice J1-X).** `sslm_seq_jump_forward` gains a
+  `const sslm_jump_options* opts` argument after `params` (the verb is unreleased, so it changes in place;
+  NULL options keep the behaviour above). New: `sslm_jump_mode` and `sslm_jump_options`; no existing struct,
+  status ordinal or save format changes. In exact mode the verb admits the pending token and a draft (the
+  host's, or the forced chain), checks each drafted token with the decode step's own finish, and keeps
+  only the tokens the model would have produced, so the output equals a run that never calls the verb.
+  It returns `SSLM_OK` for any draft; rejected rows' pages go back to the sequence's reserve and their
+  saturation counts are dropped. `docs/api.md` gives the refusals, the no-op cases and the threading cost.
+  Internally, `RunLayerLoopChunkBatched` gains an optional per-row saturation-count output and the page
+  module gains `HolderUnmapTail`.
 - **Tools:** `sslm_schema_fast_decode_bench` (`tools/schema_fast_decode_bench.cpp`), the box steps'
   bench: extraction arms in interleaved pairs (off, on, the AA/2X/CB1 controls), cross-process pooling for
   `main` against M1, span sizes, the batched pass for M tokens, the finish at chosen legal-row counts, and
   the B4 quality runs (the on arm sealed apart); `tools/schema_fast_decode_box/run_box_step.ps1` drives
   §10's steps B0-B4 on the box, one resumable step at a time.
 - **Tests:** the M1/J1 suite (`tests/test_schema_fast_decode.cpp`) runs against the real symbols; the
-  red round's stubs and the `SUPERSLM_SFD_RED_STUBS` option are removed.
+  red round's stubs and the `SUPERSLM_SFD_RED_STUBS` option are removed. The TF and J1-X cells run against the real
+  symbols too; `SUPERSLM_SFD_TF_RED_STUBS` and `SUPERSLM_SFD_X_RED_STUBS` default to OFF (their stub files
+  compile empty).
 
 ## [1.13.1] - 2026-10-19
 

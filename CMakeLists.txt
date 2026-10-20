@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(superslm VERSION 1.15.0 LANGUAGES CXX)
+project(superslm VERSION 1.16.0 LANGUAGES CXX)
 
 # C++20: the S-LoRA delta path is specified at -std=c++20 (SuperSLM_Plan.md §19),
 # and the core carries wide-integer (int64) composition arithmetic throughout. One
@@ -102,8 +102,9 @@ option(SUPERSLM_SFD_TF_RED_STUBS "Link the schema fast-decode TF red cells' no-b
 # commit; sfd_api.h then declares that verb and routes every canonical call through it with NULL opts.
 # The define is directory-wide, not per target: the test libraries include sfd_api.h too (for the
 # §11.0 seams), and the header's declaration of the verb must match the library's signature in every
-# translation unit. Only sfd_api.h and the stubs read it.
-option(SUPERSLM_SFD_X_RED_STUBS "Link the schema fast-decode J1-X red cells' no-behaviour verb and seam stubs (until J1-X lands)" ON)
+# translation unit. Only sfd_api.h and the stubs read it. J1-X has landed: the library has the 9-argument
+# verb and the seams, and this option is OFF (the stub file compiles empty).
+option(SUPERSLM_SFD_X_RED_STUBS "Link the schema fast-decode J1-X red cells' no-behaviour verb and seam stubs (until J1-X lands)" OFF)
 if(SUPERSLM_SFD_X_RED_STUBS)
 	add_compile_definitions(SUPERSLM_SFD_X_RED_STUBS)
 endif()

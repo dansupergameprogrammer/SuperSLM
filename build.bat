@@ -57,8 +57,8 @@ rem Schema fast-decode plan (rev 1.2.1), slices M1 and J1: the suite (tests\test
 rem its seams and the CPU degenerate-finish-row seam (the red round's stubs were removed when M1 and J1 landed).
 rem Plan rev 1.3.3, slice TF: the TF seams' no-behaviour stubs (sfd_red_stubs_tf.cpp) compile empty now that TF
 rem has landed (its define, SUPERSLM_SFD_TF_RED_STUBS, removed as CMakeLists.txt's option is OFF). Slice J1-X likewise (sfd_red_stubs_x.cpp,
-rem SUPERSLM_SFD_X_RED_STUBS): the J1-X build removes that define.
-cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Isrc\gpu /Itests\gpu-g3-core /DSUPERSLM_LEDGER_YIELD_HOOK /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_ENABLE_MATVEC_TEST_SEAMS /DSUPERSLM_O11_ALLOC_INJECTION /DSUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION /DSUPERSLM_ENABLE_SCHEMA_FAST_DECODE_TEST_SEAMS /DSUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION /DSUPERSLM_SFD_X_RED_STUBS ^
+rem SUPERSLM_SFD_X_RED_STUBS): J1-X has landed and that define is removed too.
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Isrc\gpu /Itests\gpu-g3-core /DSUPERSLM_LEDGER_YIELD_HOOK /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_ENABLE_MATVEC_TEST_SEAMS /DSUPERSLM_O11_ALLOC_INJECTION /DSUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION /DSUPERSLM_ENABLE_SCHEMA_FAST_DECODE_TEST_SEAMS /DSUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\decode_digest.cpp ^
 	src\kv_pages.cpp src\sslm_abi.cpp src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp src\damped_greedy_phaseD_loop.cpp ^

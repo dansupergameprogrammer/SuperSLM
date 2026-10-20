@@ -1101,8 +1101,10 @@ chain is that token, then the chain of the state it leads to. The table costs
   is unforced. `accepting` is 1 iff the walk state is accepting. It changes
   nothing, bind eligibility included. A null `out_count` or `out_accepting`, a
   negative `cap`, or NULL ids with `cap > 0` is `SSLM_INVALID_ARGUMENT`.
-- `sslm_seq_jump_forward(model, seq, chunk_budget, params, ws, out_forced,
-  cap, &forced_count)` admits the *pending* choice token, if there is one,
+- `sslm_seq_jump_forward(model, seq, chunk_budget, params, opts, ws,
+  out_forced, cap, &forced_count)` (`opts` NULL, or mode
+  `SSLM_JUMP_CANONICAL`: *canonical mode*, described here; mode
+  `SSLM_JUMP_EXACT`: *exact mode*, below) admits the *pending* choice token, if there is one,
   then chain tokens, up to `chunk_budget` tokens in all, in one batched layer
   pass through the prefill path, and writes the admitted chain ids (never the
   pending token) to `out_forced`. A token is pending when the last
@@ -1161,6 +1163,56 @@ chain is that token, then the chain of the state it leads to. The table costs
   - **Concurrency.** The verb takes decode's posture on the sequence (it
     consumes the token a concurrent `decode_step` would): a concurrent
     `sslm_seq_release` or `decode_step` of the same sequence waits for it.
+
+**Exact mode** (1.16.0; `sslm_jump_options` with mode `SSLM_JUMP_EXACT`) is a
+verified jump-forward: its output, tokens and save blobs included, equals a run
+that never calls the verb.
+- **Options.** `struct_size` must be `sizeof(sslm_jump_options)`. `draft`
+  holds `draft_count` token ids, read during the call only; `draft` NULL with
+  `draft_count` 0 means the forced chain from the state after the pending
+  token, and a non-NULL `draft` with `draft_count` 0 is an empty draft. A
+  wrong `struct_size`, an unknown mode, a negative `draft_count`, a NULL
+  `draft` with `draft_count` > 0, or a draft in canonical mode is
+  `SSLM_INVALID_ARGUMENT`, checked before every other refusal, with nothing
+  changed (`*out_forced_count` unwritten, bind eligibility kept). The other
+  refusals are canonical mode's, in its order.
+- **What it does.** With a pending token p, the draft is clipped to
+  `chunk_budget - 1` tokens and to the rows the context cap and the KV budget
+  leave after p, then cut at its first token that is out of range, a special
+  id, byteless, or not allowed by the schema at its walk state. p and the k
+  drafted tokens left run in one pass; then the decode step's own finish
+  (greedy, or damped greedy under `params`) runs at each row in turn, and the
+  call keeps p and the drafted tokens up to the first one the model would not
+  have produced. Those confirmed tokens are written to `out_forced`
+  (`*out_forced_count` of them; never p). The sequence then rests ready for
+  logits at the last kept row, and the next `decode_step` produces the
+  model's own next token, its correction at a mismatch. `forced_token_count`
+  does not change: the kept tokens are the model's own. Rows the call did not
+  keep leave nothing behind: their pages go back to the sequence's reserve,
+  and their saturation counts are not added.
+- **Status.** `SSLM_OK` for any draft. It is a no-op (OK, count 0, nothing
+  changed but bind eligibility) when no schema is bound, no token is pending,
+  the model lacks the exact legal-row finish (`legal_row_finish`), no row is
+  left for p (the next `decode_step` returns the limit status), or the
+  clipped draft is empty (p stays pending). A failure before any row is kept
+  (an allocation failure, a broken parallel-for `run`, a page-map refusal, a
+  failed anti-LM create) returns its status with nothing changed. A failure
+  after a row is kept, inside a check's finish or a later one-row pass, ends
+  the check there: the verified rows are kept and the call returns `SSLM_OK`.
+- **Decode parameters.** As for canonical mode; pass `decode_step` the same
+  ones. Under damped parameters the anti-LM state is created or re-keyed only
+  when the pass has two or more rows, installed once the first row has run,
+  and fed each confirmed token only, so after the next `decode_step` the
+  history equals a run without the verb.
+- **Threading.** Under the one-token split (see above), the call runs as
+  one-token passes with the check between them, so no rejected row is
+  computed; each confirmed token then costs about what a decode step costs.
+  A draft of 7 or more tokens gives a batched pass of 8 or more rows with
+  rollback instead, which the replay puts at 0.94-0.95x against a run without
+  the verb under that split. A draft pays at one thread, where the model must
+  accept about 60% or more of the drafted tokens to gain.
+- **No host loop is needed.** Any interleaving of the verb and `decode_step`,
+  and any `chunk_budget`, gives the output of a run without the verb.
 
 **The host loop.** On a sequence that uses jump-forward, call
 `sslm_seq_jump_forward` until `sslm_seq_forced_tokens` reports a count of 0
