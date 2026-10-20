@@ -1,9 +1,13 @@
 """check_schema_converter_regression.py -- byte-for-byte no-regression check for the schema compiler
 (T-3094 S1, plan of record `Claude/Plans/superslm-multicommand-array/plan.md` Sec4.1, Wizard repo).
 
-The array converter must leave every schema without an array exactly as it was: the same `MaskPages`
-table and the same SCM1 bytes as a baseline revision of `tools/sslm_convert_schema.py` (default
-`origin/main`). This script compiles every case through both converters and compares:
+The rule this checks: every schema the baseline revision of `tools/sslm_convert_schema.py` (default
+`origin/main`, which is v1.13.1's converter) compiles must still compile, to the same `MaskPages` table and
+the same SCM1 bytes. The current converter does NOT yet meet it for every array-free schema: its release
+limits bind every schema, so an array-free schema at or above a limit, which the baseline compiles, is
+refused (S1 code review, finding 1; the limit scope is open). The at-limit corpus below exists to show
+exactly that, and reports those cases as DIFFERENT until the scope is ruled. This script compiles every
+case through both converters and compares:
 
 - the table: `start`, `accepting`, every state's row (`transitions`) and every state's packed mask page;
 - the SCM1 section: the baseline's own writer (`tools/t2132_build_g5_fixture.py::_serialize_scm1` at the
@@ -17,13 +21,20 @@ Cases come from two sources:
    T-2922/T-2909 string-leaf schema, and the S8/decode-threading one-token schema with its own
    vocabulary; each schema at the 256-byte vocabulary and, when present, at the pinned real tokenizer
    (`--tokenizer-dir`, special ids excluded).
+   Plus the at-limit corpus, array-free schemas at or above each release limit that the baseline
+   compiles: the code review's 200-value enum (23-byte values, 4,600 literal bytes), a 9-deep object
+   chain, a 5,120-byte shared-prefix enum, a 4,200-byte distinct-prefix enum (over the DFA-state
+   limit), compound (array and object) enum values, and the frozen array-free resource-pair over
+   schemas (`tests/t3094-multicommand-s0/v2/resource-pairs-v2.json`: depth, NFA, DFA, transitions,
+   section) at the pinned vocabulary.
 2. Every `compile_schema_to_mask_pages` call an existing test suite makes, recorded by running that
    suite under pytest with the compiler wrapped under both import names it is loaded by
    (`sslm_convert_schema` and `tools.sslm_convert_schema`) (`--record`; default suites below). Each distinct
    (schema, vocabulary, special ids) call is replayed through both converters.
 
-Schemas containing an array anywhere are counted and skipped: the baseline refuses them, and the
-byte-identity rule is about the schemas it compiles.
+A schema containing an array that the baseline refuses is counted and skipped: the rule is about the
+schemas the baseline compiles. One the baseline compiles (an `enum` of array values under
+`"type": "array"`) is compared like any other.
 
     python tools/check_schema_converter_regression.py [--baseline-ref origin/main] [--record]
         [--suite PATH ...] [--tokenizer-dir DIR]
@@ -146,9 +157,58 @@ def fixed_corpus(tokenizer_dir: Path):
         out.append((f"{label}@bytes", schema, byte_vocab, frozenset()))
         if pinned is not None:
             out.append((f"{label}@pinned", schema, pinned[0], pinned[1]))
+    for label, schema in at_limit_schemas():
+        out.append((f"at_limit/{label}@bytes", schema, byte_vocab, frozenset()))
+        if pinned is not None:
+            out.append((f"at_limit/{label}@pinned", schema, pinned[0], pinned[1]))
+    if pinned is not None:
+        pairs = json.loads((v2 / "resource-pairs-v2.json").read_text(encoding="utf-8"))["pairs"]
+        for pair in pairs:
+            over = _in_required_order(pair.get("over_schema"))
+            if over is not None and not has_array(over):
+                out.append((f"at_limit/{pair['pair']}_over@pinned", over, pinned[0], pinned[1]))
     one_token = (b'{"ok":true}',) + tuple(f"<unused-{i}>".encode("ascii") for i in range(1, 64))
     out.append(("s8_decode_threading_one_token@own", G5.MINIMAL_ONE_FIELD_SCHEMA, one_token, frozenset()))
     return out, pinned is not None
+
+
+def _in_required_order(node):
+    """The frozen pair file stores properties key-sorted; the converter reads them in `required` order
+    (the suite's `cv2_fixtures.in_required_order` does the same)."""
+    if isinstance(node, list):
+        return [_in_required_order(v) for v in node]
+    if not isinstance(node, dict):
+        return node
+    out = {k: _in_required_order(v) for k, v in node.items()}
+    if isinstance(out.get("properties"), dict) and isinstance(out.get("required"), list):
+        props = out["properties"]
+        out["properties"] = {k: props[k] for k in out["required"] if k in props}
+        out["properties"].update({k: v for k, v in props.items() if k not in out["properties"]})
+    return out
+
+
+def _obj(props: dict) -> dict:
+    return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
+
+
+def at_limit_schemas():
+    """(label, schema): array-free schemas at or above a release limit that the baseline compiles."""
+    letters = "abcdefghijklmnopqrstuvwxyz"
+    chain = {"type": "boolean"}
+    for _ in range(9):
+        chain = _obj({"k": chain})
+    return [
+        ("enum_200x23", _obj({"a": {"enum": [f"xxxxxxxxxxxxxxxxxxxx{i:03d}" for i in range(200)]}})),
+        ("object_chain_9_deep", chain),
+        ("enum_64x80_shared_prefix", _obj({"a": {"type": "string",
+                                                 "enum": ["p" * 70 + f"{i:02d}" + "q" * 8 for i in range(64)]}})),
+        ("enum_42x100_distinct", _obj({"a": {"type": "string", "enum": [
+            "".join(letters[(i * 7 + j * 3) % 26] for j in range(98)) + f"{i:02d}" for i in range(42)]}})),
+        ("enum_compound_array", {"type": "array", "enum": [[1, 2]]}),
+        ("enum_compound_untyped", {"enum": [[1, 2], {"k": 1}]}),
+        ("enum_compound_object", {"type": "object", "enum": [{"k": 1}]}),
+        ("enum_compound_in_property", _obj({"a": {"enum": [[1], {"b": None}]}})),
+    ]
 
 
 def record_suite_calls(suites, record_path: Path) -> dict:
@@ -280,8 +340,8 @@ def main(argv=None) -> int:
 
     tally = {"identical": 0, "both-refuse": 0, "DIFFERENT": 0, "skipped-array": 0}
     for label, schema, vocab, special in corpus:
-        if has_array(schema):
-            tally["skipped-array"] += 1
+        if has_array(schema) and _outcome(baseline, schema, vocab, special)[0] is None:
+            tally["skipped-array"] += 1  # the baseline refuses it: an array schema, outside the rule
             continue
         verdict, detail = compare(label, schema, vocab, special, baseline, baseline_writer, current)
         tally[verdict] += 1
